@@ -35,6 +35,7 @@ const (
 	viewStateRemotes
 	viewStateSetup
 	viewStatePicker
+	viewStateVSCodeError
 )
 
 type panelMode int
@@ -88,6 +89,7 @@ type Model struct {
 	tmuxOutput    string
 	activeSession string
 	termCloser    io.Closer
+	lastError     string
 }
 
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session) Model {
@@ -104,6 +106,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "attach full terminal")),
 			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle preview/terminal")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
+			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 		}
 	}
 
@@ -314,9 +317,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if sel := m.list.SelectedItem(); sel != nil {
 					s := sel.(item).session
 					if s.LocalPath != "" {
-						exec.Command("code", s.LocalPath).Start()
+						_, err := exec.LookPath("code")
+						if err != nil {
+							m.lastError = "The VS Code CLI 'code' was not found in your PATH."
+							m.state = viewStateVSCodeError
+							return m, nil
+						}
+						err = exec.Command("code", s.LocalPath).Start()
+						if err != nil {
+							m.lastError = fmt.Sprintf("Failed to start VS Code: %v", err)
+							m.state = viewStateVSCodeError
+							return m, nil
+						}
 					}
 				}
+			}
+			if msg.String() == "r" {
+				// Re-init remotes scan to refresh
+				m.state = viewStateRemotes
+				m.remotes = NewRemotesModel(m.cfg)
+				// Automatically trigger scan if we have an active remote
+				if m.cfg.ActiveRemote != "" {
+					var remote config.Remote
+					for _, r := range m.cfg.Remotes {
+						if r.Host == m.cfg.ActiveRemote {
+							remote = r
+							break
+						}
+					}
+					return m, scanRemote(remote.Host, remote.User, remote.Root)
+				}
+				return m, nil
 			}
 		}
 		
@@ -412,6 +443,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setup.saved = false // Reset
 			m.state = viewStateMenu
 		}
+
+	case viewStateVSCodeError:
+		if _, ok := msg.(tea.KeyMsg); ok {
+			m.state = viewStateMain
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -438,7 +474,10 @@ func (m Model) View() string {
 			mainPanel.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
 			mainPanel.WriteString(fmt.Sprintf("Path: %s\n", s.WorktreePath))
 			if s.MutagenSyncID != "" {
-				mainPanel.WriteString(fmt.Sprintf("Sync: %s (ID: %s)\n", s.LocalPath, s.MutagenSyncID))
+				mainPanel.WriteString(fmt.Sprintf("Local Sync: %s\n", successStyle.Render(s.LocalPath)))
+				mainPanel.WriteString(fmt.Sprintf("Mutagen ID: %s\n", s.MutagenSyncID))
+			} else {
+				mainPanel.WriteString("Local Sync: " + failStyle.Render("None") + "\n")
 			}
 			if s.IssueKey != "" {
 				mainPanel.WriteString(fmt.Sprintf("JIRA: %s\n", s.IssueKey))
@@ -501,6 +540,25 @@ func (m Model) View() string {
 
 	case viewStateSetup:
 		return docStyle.Render(m.setup.View())
+
+	case viewStateVSCodeError:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("VS Code CLI Error") + "\n\n")
+		b.WriteString(m.lastError + "\n\n")
+		b.WriteString("To fix this on macOS:\n")
+		b.WriteString("1. Open VS Code.\n")
+		b.WriteString("2. Press Cmd+Shift+P.\n")
+		b.WriteString("3. Type 'shell command' and select:\n")
+		b.WriteString("   'Shell Command: Install \"code\" command in PATH'.\n\n")
+		b.WriteString("Press any key to return.")
+		
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(lipgloss.Color("205")).
+			Padding(1, 2).
+			Width(60)
+			
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
 	}
 	return ""
 }

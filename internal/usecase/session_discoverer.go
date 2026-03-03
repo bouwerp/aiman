@@ -65,12 +65,27 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 
 		// 6. Cross-reference with mutagen
 		if cwd != "" {
+			normalizedCWD := strings.TrimSuffix(cwd, "/")
 			for _, ms := range mutagenSessions {
-				// Mutagen remote path might be user@host:path or just path depending on how it was created
-				// We do a simple suffix check or contains check for now
-				if strings.Contains(ms.RemotePath, cwd) {
+				// Normalized remote path from mutagen
+				normalizedRemote := strings.TrimSuffix(ms.RemotePath, "/")
+				normalizedLocal := strings.TrimSuffix(ms.LocalPath, "/")
+
+				// DEBUG: fmt.Printf("Checking CWD %s against Alpha: %s, Beta: %s\n", normalizedCWD, normalizedLocal, normalizedRemote)
+
+				// In Mutagen, either Alpha or Beta could be the remote.
+				if normalizedRemote == normalizedCWD || normalizedLocal == normalizedCWD || 
+				   strings.HasSuffix(normalizedRemote, normalizedCWD) || strings.HasSuffix(normalizedLocal, normalizedCWD) {
+					
+					// We need to identify which one is actually local (starts with /Users or /) 
+					// and doesn't look like a connection string
+					if !strings.Contains(ms.LocalPath, ":") {
+						session.LocalPath = ms.LocalPath
+					} else if !strings.Contains(ms.RemotePath, ":") {
+						session.LocalPath = ms.RemotePath
+					}
+
 					session.MutagenSyncID = ms.ID
-					session.LocalPath = ms.LocalPath
 					session.Status = domain.SessionStatusSyncing
 					break
 				}

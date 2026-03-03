@@ -20,7 +20,19 @@ func NewTerminalModel(rw io.ReadWriter, w, h int) TerminalModel {
 	
 	// Read from the reader into the terminal
 	go func() {
-		io.Copy(term, rw)
+		// Create a buffer to read into
+		buf := make([]byte, 4096)
+		for {
+			n, err := rw.Read(buf)
+			if n > 0 {
+				term.Lock()
+				term.Write(buf[:n])
+				term.Unlock()
+			}
+			if err != nil {
+				break
+			}
+		}
 	}()
 
 	return TerminalModel{
@@ -45,18 +57,27 @@ func (m TerminalModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w = msg.Width
 		m.h = msg.Height
+		m.term.Lock()
 		m.term.Resize(m.w, m.h)
+		m.term.Unlock()
 	}
 	return m, nil
 }
 
 func (m TerminalModel) View() string {
 	var b strings.Builder
-	rows, cols := m.term.Size()
+	m.term.Lock()
+	defer m.term.Unlock()
+	
+	cols, rows := m.term.Size()
 	for y := 0; y < rows; y++ {
 		for x := 0; x < cols; x++ {
 			cell := m.term.Cell(x, y)
-			b.WriteRune(cell.Char)
+			ch := cell.Char
+			if ch == 0 {
+				ch = ' '
+			}
+			b.WriteRune(ch)
 		}
 		if y < rows-1 {
 			b.WriteRune('\n')

@@ -39,7 +39,7 @@
 - [ ] **Repo/Branch Wizard**: Interactive selection of target repository and automatic slug generation for branches.
 - [ ] **SQLite Persistence**: Fully wire the existing `internal/infra/sqlite` repository to save discovered and manually created sessions.
 - [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths.
-- [ ] **Agent Orchestration**: Implement the `AgentRunner` interfaces for Claude/Gemini CLI wrappers.
+- [ ] **Agent Orchestration**: Implement the `AgentRunner` interfaces for Claude, Gemini, **Cursor-Agent**, and **opencode** (or `opencode-cli` on Linux) CLI wrappers.
 - [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency connections.
 
 ## 4. Architectural Strategy (Reminder)
