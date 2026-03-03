@@ -14,6 +14,10 @@ func ExtractKey(s string) string {
 
 type IssueStatus string
 
+func (s IssueStatus) String() string {
+	return string(s)
+}
+
 const (
 	IssueStatusTodo       IssueStatus = "TODO"
 	IssueStatusInProgress IssueStatus = "IN_PROGRESS"

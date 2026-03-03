@@ -15,6 +15,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/git"
+	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
@@ -36,6 +38,9 @@ const (
 	viewStateSetup
 	viewStatePicker
 	viewStateVSCodeError
+	viewStateIssuePicker
+	viewStateBranchInput
+	viewStateRepoPicker
 )
 
 type panelMode int
@@ -82,6 +87,8 @@ type Model struct {
 	remotes       RemotesModel
 	setup         SetupModel
 	picker        RepoPickerModel
+	issuePicker   IssuePickerModel
+	branchInput   BranchInputModel
 	doctorResults []usecase.CheckResult
 	width, height int
 	viewport      viewport.Model
@@ -102,6 +109,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	l.Title = "Aiman Dashboard - Active Sessions"
 	l.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
+			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new session")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
 			key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "attach full terminal")),
 			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle preview/terminal")),
@@ -199,6 +207,39 @@ func (m *Model) initTerminal(session domain.Session) tea.Cmd {
 	return nil
 }
 
+func (m *Model) searchJira(query string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		jiraProvider := jira.NewProvider(jira.Config{
+			URL:      m.cfg.Integrations.Jira.URL,
+			Email:    m.cfg.Integrations.Jira.Email,
+			APIToken: m.cfg.Integrations.Jira.APIToken,
+		})
+		
+		issues, err := jiraProvider.SearchIssues(ctx, query)
+		return jiraIssuesMsg{issues: issues, err: err}
+	}
+}
+
+type jiraIssuesMsg struct {
+	issues []domain.Issue
+	err    error
+}
+
+func (m *Model) fetchRepos() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		gitManager := git.NewManager()
+		repos, err := gitManager.ListRepos(ctx)
+		return reposMsg{repos: repos, err: err}
+	}
+}
+
+type reposMsg struct {
+	repos []domain.Repo
+	err   error
+}
+
 func (m Model) Init() tea.Cmd {
 	return tickTmux()
 }
@@ -219,6 +260,10 @@ func (m *Model) SetSize(width, height int) {
 	// Viewport takes up the bottom part of the main panel
 	m.viewport.Width = width - (width/3) - h - 4
 	m.viewport.Height = mainHeight - 11 // Reserve 11 lines for details
+	
+	if m.issuePicker.list.Title != "" {
+		m.issuePicker.SetSize(width, height)
+	}
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -270,6 +315,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.GotoBottom()
 			}
 		case tea.KeyMsg:
+			if msg.String() == "n" {
+				m.state = viewStateIssuePicker
+				m.issuePicker = NewIssuePickerModel(nil)
+				m.issuePicker.SetSize(m.width, m.height)
+				return m, m.searchJira("")
+			}
 			if msg.String() == "m" {
 				m.state = viewStateMenu
 				return m, nil
@@ -448,6 +499,88 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if _, ok := msg.(tea.KeyMsg); ok {
 			m.state = viewStateMain
 		}
+
+	case viewStateIssuePicker:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			if m.issuePicker.list.FilterState() != list.Filtering {
+				m.state = viewStateMain
+				return m, nil
+			}
+		}
+
+		if msg, ok := msg.(jiraIssuesMsg); ok {
+			if msg.err != nil {
+				m.lastError = fmt.Sprintf("Failed to fetch JIRA issues: %v", msg.err)
+				m.state = viewStateVSCodeError
+				return m, nil
+			}
+			m.issuePicker = NewIssuePickerModel(msg.issues)
+			m.issuePicker.SetSize(m.width, m.height)
+			return m, nil
+		}
+
+		var subModel tea.Model
+		subModel, cmd = m.issuePicker.Update(msg)
+		m.issuePicker = subModel.(IssuePickerModel)
+		cmds = append(cmds, cmd)
+
+		if m.issuePicker.selected != nil {
+			// Issue selected, transition to branch input
+			slug := m.issuePicker.selected.Slug()
+			m.state = viewStateBranchInput
+			m.branchInput = NewBranchInputModel(slug)
+			return m, nil
+		}
+
+	case viewStateBranchInput:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			m.state = viewStateIssuePicker
+			return m, nil
+		}
+
+		var subModel tea.Model
+		subModel, cmd = m.branchInput.Update(msg)
+		m.branchInput = subModel.(BranchInputModel)
+		cmds = append(cmds, cmd)
+
+		if m.branchInput.Confirmed {
+			m.state = viewStateRepoPicker
+			m.picker = NewRepoPickerModel(nil)
+			return m, m.fetchRepos()
+		}
+
+	case viewStateRepoPicker:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			if m.picker.list.FilterState() != list.Filtering {
+				m.state = viewStateBranchInput
+				return m, nil
+			}
+		}
+
+		if msg, ok := msg.(reposMsg); ok {
+			if msg.err != nil {
+				m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
+				m.state = viewStateVSCodeError
+				return m, nil
+			}
+			m.picker = NewRepoPickerModel(msg.repos)
+			// Resize picker
+			h, v := docStyle.GetFrameSize()
+			m.picker.list.SetSize(m.width-h, m.height-v)
+			return m, nil
+		}
+
+		var subModel tea.Model
+		subModel, cmd = m.picker.Update(msg)
+		m.picker = subModel.(RepoPickerModel)
+		cmds = append(cmds, cmd)
+
+		if m.picker.selected != nil {
+			// Repo selected
+			// TODO: Step 5: Remote Execution Orchestration
+			m.state = viewStateMain
+			return m, nil
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -559,6 +692,15 @@ func (m Model) View() string {
 			Width(60)
 			
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateIssuePicker:
+		return docStyle.Render(m.issuePicker.View())
+
+	case viewStateBranchInput:
+		return m.branchInput.View()
+
+	case viewStateRepoPicker:
+		return docStyle.Render(m.picker.View())
 	}
 	return ""
 }

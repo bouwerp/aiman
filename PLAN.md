@@ -34,13 +34,26 @@
 
 ## 3. Immediate TODOs 🚀
 
-- [ ] **Flow Manager Implementation**: Wire up the 11-step orchestration logic to create *new* sessions (currently we only discover existing ones).
-- [ ] **JIRA Picker**: Create a TUI component to search and select JIRA issues to start new work.
-- [ ] **Repo/Branch Wizard**: Interactive selection of target repository and automatic slug generation for branches.
-- [ ] **SQLite Persistence**: Fully wire the existing `internal/infra/sqlite` repository to save discovered and manually created sessions.
-- [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths.
-- [ ] **Agent Orchestration**: Implement the `AgentRunner` interfaces for Claude, Gemini, **Cursor-Agent**, and **opencode** (or `opencode-cli` on Linux) CLI wrappers.
-- [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency connections.
+- [ ] **Flow Manager Implementation (The Core Workflow)**:
+    1.  **Initiation**: Bind `n` key on the dashboard to start the new session wizard.
+    2.  **JIRA Issue Selector**: Provide a searchable/browsable list of assigned or recent JIRA issues.
+    3.  **Branch Generation**: Automatically propose a git branch name based on the selected issue key and title. Present a text input for the user to edit or accept this proposed name.
+    4.  **Repo Selection**: Present a list of accessible Git repositories (via `gh repo list`).
+    5.  **Remote Execution Orchestration**:
+        *   Verify if the selected repository is cloned on the active remote server's configured `root` path.
+        *   If missing, execute `git clone`.
+        *   If present, fetch and ensure the base repository is updated on the `main` branch.
+        *   Check for an existing git worktree matching the proposed branch name.
+        *   If missing, execute `git worktree add ../<branch-name> <branch-name>`.
+    6.  **Scope Selection**: Provide a directory picker to select a specific sub-directory within the newly created worktree (essential for monorepos) to serve as the agent's working directory.
+    7.  **Agent Selection**: Prompt the user to select the desired coding agent (Claude, Gemini, Cursor-Agent, opencode).
+    8.  **Session Bootstrapping**:
+        *   Launch a new `tmux` session named after the issue key/branch.
+        *   Start the selected agent CLI within that tmux session, scoped to the chosen directory.
+    9.  **Local Sync**: Automatically establish a `mutagen` sync session, mirroring the remote worktree directory to a local path (e.g., `~/.aiman/work/<session-name>`), enabling immediate local IDE access.
+- [ ] **SQLite Persistence**: Fully wire the existing `internal/infra/sqlite` repository to save both discovered and newly created sessions, tracking their full lifecycle.
+- [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths before agent launch.
+- [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency interactive connections.
 
 ## 4. Architectural Strategy (Reminder)
 Keep following the **Clean Architecture** pattern. Ensure that the `internal/usecase` layer remains the only place where domain entities are coordinated, and keep infrastructure-specific logic (like `mutagen` or `ssh` CLI flags) strictly within `internal/infra`.
