@@ -1,0 +1,25 @@
+# Binaries
+aiman
+aiman.exe
+*.test
+*.out
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+go.work
+go.work.sum
+
+# Local Configuration & Data
+.env
+.aiman/
+aiman.db
