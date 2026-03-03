@@ -362,14 +362,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if msg.String() == "esc" {
-				m.state = viewStateMain
-				return m, nil
+				if m.menu.FilterState() != list.Filtering {
+					m.state = viewStateMain
+					return m, nil
+				}
 			}
 		}
 		m.menu, cmd = m.menu.Update(msg)
 		cmds = append(cmds, cmd)
 
 	case viewStateRemotes:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			if m.remotes.list.FilterState() != list.Filtering {
+				m.state = viewStateMenu
+				return m, nil
+			}
+		}
+
 		var subModel tea.Model
 		subModel, cmd = m.remotes.Update(msg)
 		m.remotes = subModel.(RemotesModel)
@@ -387,13 +396,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateMain
 			return m, nil
 		}
-		
-		// Check for exit from sub-model
-		if _, ok := msg.(tea.KeyMsg); ok && msg.(tea.KeyMsg).String() == "esc" {
-			m.state = viewStateMenu
-		}
 
 	case viewStateSetup:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			m.state = viewStateMenu
+			return m, nil
+		}
+
 		var subModel tea.Model
 		subModel, cmd = m.setup.Update(msg)
 		m.setup = subModel.(SetupModel)
@@ -401,9 +410,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		
 		if m.setup.saved {
 			m.setup.saved = false // Reset
-			m.state = viewStateMenu
-		}
-		if _, ok := msg.(tea.KeyMsg); ok && msg.(tea.KeyMsg).String() == "esc" {
 			m.state = viewStateMenu
 		}
 	}
