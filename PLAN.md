@@ -25,6 +25,7 @@
 - **Session Discovery**: Engine to map remote tmux sessions -> CWD -> Git Repos -> JIRA keys.
 - **Doctor Checks**: Automated validation of environment and credentials on startup.
 - **Flow Wizard (Partial)**: Issue -> Branch -> Repo -> Directory -> Agent scan -> Summary.
+- **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 
 ## 2. Technical Gotchas ⚠️
 
@@ -53,7 +54,7 @@
         *   Launch a new `tmux` session named after the issue key/branch. ✅
         *   Start the selected agent CLI within that tmux session, scoped to the chosen directory. ✅
     10. **Local Sync**: Establish a `mutagen` sync session to a local path. ✅
-- [ ] **Session Termination** (Key: `ctrl+k`):
+- [x] **Session Termination** (Key: `ctrl+k`):
     - Terminate mutagen sync session.
     - Stop the agent process running in the tmux session.
     - Kill the tmux session.

@@ -62,25 +62,23 @@ func (e *Engine) ListSyncSessions(ctx context.Context) ([]domain.SyncSession, er
 			continue
 		}
 
-		if strings.HasPrefix(line, "Identifier:") {
+		// Name comes first in the output, start a new session
+		if strings.HasPrefix(line, "Name:") {
 			if current != nil {
 				sessions = append(sessions, *current)
 			}
 			current = &domain.SyncSession{
-				ID: strings.TrimSpace(strings.TrimPrefix(line, "Identifier:")),
+				Name: strings.TrimSpace(strings.TrimPrefix(line, "Name:")),
 			}
-			continue
-		}
-
-		if strings.HasPrefix(line, "Name:") {
-			if current == nil {
-				current = &domain.SyncSession{}
-			}
-			current.Name = strings.TrimSpace(strings.TrimPrefix(line, "Name:"))
 			continue
 		}
 
 		if current == nil {
+			continue
+		}
+
+		if strings.HasPrefix(line, "Identifier:") {
+			current.ID = strings.TrimSpace(strings.TrimPrefix(line, "Identifier:"))
 			continue
 		}
 

@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +35,7 @@ var (
 	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00"))
 	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
 	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
-	promptRegex  = regexp.MustCompile(`(?m)[\w\-@~/:\.]\s*(\$|#|>)\s*$|(?m)^\s*([❯➜])\s*$`)
+	promptRegex  = regexp.MustCompile(`^[\w\-@~/:\.]+\s*(\$|#|>)\s*$`)
 )
 
 type viewState int
@@ -81,29 +83,37 @@ type item struct {
 }
 
 func (i item) Title() string {
+	prefix := ""
+	if i.needsInput {
+		prefix = "! "
+	} else if i.activity == "idle" {
+		prefix = "o "
+	} else if i.activity == "busy" {
+		prefix = "> "
+	}
 	activity := ""
-	if i.activity != "" {
-		if i.activity == "input" {
-			activity = " ⚠ input"
-		} else if i.activity == "idle" {
+	if i.needsInput {
+		activity = " ⚠ input"
+	} else if i.activity != "" {
+		if i.activity == "idle" {
 			activity = " • idle"
 		} else if i.activity == "busy" {
 			activity = " • busy"
 		}
 	}
 	if i.session.IssueKey != "" {
-		if i.needsInput {
-			return fmt.Sprintf("%s (%s) ⚠ input", i.session.IssueKey, i.session.TmuxSession)
-		}
-		return fmt.Sprintf("%s (%s)%s", i.session.IssueKey, i.session.TmuxSession, activity)
+		return fmt.Sprintf("%s%s (%s)%s", prefix, i.session.IssueKey, i.session.TmuxSession, activity)
 	}
-	if i.needsInput {
-		return fmt.Sprintf("%s ⚠ input", i.session.TmuxSession)
-	}
-	return fmt.Sprintf("%s%s", i.session.TmuxSession, activity)
+	return fmt.Sprintf("%s%s%s", prefix, i.session.TmuxSession, activity)
 }
 
 func (i item) Description() string {
+	if i.needsInput {
+		return fmt.Sprintf("Repo: %s | Host: %s | State: input", i.session.RepoName, i.session.RemoteHost)
+	}
+	if i.activity != "" {
+		return fmt.Sprintf("Repo: %s | Host: %s | State: %s", i.session.RepoName, i.session.RemoteHost, i.activity)
+	}
 	return fmt.Sprintf("Repo: %s | Host: %s", i.session.RepoName, i.session.RemoteHost)
 }
 
@@ -112,37 +122,38 @@ func (i item) FilterValue() string {
 }
 
 type Model struct {
-	cfg              *config.Config
-	state            viewState
-	panelMode        panelMode
-	list             list.Model
-	menu             list.Model
-	remotes          RemotesModel
-	setup            SetupModel
-	gitSetup         GitSetupModel
-	generalSetup     GeneralSetupModel
-	picker           RepoPickerModel
-	issuePicker      IssuePickerModel
-	branchInput      BranchInputModel
-	dirPicker        DirPickerModel
-	agentPicker      AgentPickerModel
-	summary          SummaryModel
-	doctorResults    []usecase.CheckResult
-	width, height    int
-	viewport         viewport.Model
-	terminal         *TerminalModel
-	tmuxOutput       string
-	activeSession    string
-	termCloser       io.Closer
-	lastError        string
-	loadingMsg       string
-	sessionCfg       SessionConfig
-	loadingNext      viewState
-	initialLoad      bool
-	terminateSession domain.Session
-	terminateSteps   []string
-	terminateErrors  []string
-	terminateIndex   int
+	cfg                    *config.Config
+	state                  viewState
+	panelMode              panelMode
+	list                   list.Model
+	menu                   list.Model
+	remotes                RemotesModel
+	setup                  SetupModel
+	gitSetup               GitSetupModel
+	generalSetup           GeneralSetupModel
+	picker                 RepoPickerModel
+	issuePicker            IssuePickerModel
+	branchInput            BranchInputModel
+	dirPicker              DirPickerModel
+	agentPicker            AgentPickerModel
+	summary                SummaryModel
+	doctorResults          []usecase.CheckResult
+	width, height          int
+	viewport               viewport.Model
+	terminal               *TerminalModel
+	tmuxOutput             string
+	activeSession          string
+	termCloser             io.Closer
+	lastError              string
+	loadingMsg             string
+	sessionCfg             SessionConfig
+	loadingNext            viewState
+	initialLoad            bool
+	terminateSession       domain.Session
+	terminateSteps         []string
+	terminateErrors        []string
+	terminateIndex         int
+	terminatePrecheckError string
 }
 
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session) *Model {
@@ -161,6 +172,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle preview/terminal")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
+			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 		}
 	}
@@ -210,6 +222,61 @@ type inputHintMsg struct {
 type tmuxTerminalMsg struct {
 	stream io.ReadWriteCloser
 	err    error
+}
+
+func (m *Model) validateTerminationPreconditions(s domain.Session) error {
+	if s.WorktreePath == "" {
+		return nil
+	}
+
+	remote, ok := resolveRemote(m.cfg, s)
+	if !ok {
+		return fmt.Errorf("no remote configured")
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	ctx := context.Background()
+
+	statusOut, err := mgr.Execute(ctx, fmt.Sprintf("git -C %q status --porcelain --untracked-files=no", s.WorktreePath))
+	if err != nil {
+		// If git is broken/corrupted (exit 128), allow cleanup to proceed
+		// Check if error indicates corrupted repo
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "exit status 128") ||
+		   strings.Contains(errMsg, "not a git repository") ||
+		   strings.Contains(errMsg, "fatal:") {
+			// Repository is corrupted, allow cleanup
+			return nil
+		}
+		return fmt.Errorf("failed to verify git status before termination: %w", err)
+	}
+	if strings.TrimSpace(statusOut) != "" {
+		return fmt.Errorf("session has uncommitted changes; commit or stash before terminating")
+	}
+
+	aheadOut, err := mgr.Execute(ctx, fmt.Sprintf("if git -C %q rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then git -C %q rev-list --count '@{upstream}..HEAD'; else echo NO_UPSTREAM; fi", s.WorktreePath, s.WorktreePath))
+	if err != nil {
+		// If git is broken/corrupted, allow cleanup to proceed
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "exit status 128") ||
+		   strings.Contains(errMsg, "not a git repository") ||
+		   strings.Contains(errMsg, "fatal:") {
+			return nil
+		}
+		return fmt.Errorf("failed to verify upstream commits before termination: %w", err)
+	}
+	ahead := strings.TrimSpace(aheadOut)
+	if ahead == "NO_UPSTREAM" {
+		return fmt.Errorf("branch has no upstream; push and set upstream before terminating")
+	}
+	aheadCount, convErr := strconv.Atoi(ahead)
+	if convErr != nil {
+		return fmt.Errorf("failed to parse upstream check output: %s", ahead)
+	}
+	if aheadCount > 0 {
+		return fmt.Errorf("session has %d unpushed commit(s); push before terminating", aheadCount)
+	}
+
+	return nil
 }
 
 func tickTmux() tea.Cmd {
@@ -286,12 +353,38 @@ func detectSessionActivity(output string) (string, bool) {
 		}
 	}
 
+	// Busy patterns (Claude/Gemini style status lines)
+	busyPatterns := []string{
+		"thinking",
+		"tokens",
+		"marinating",
+		"processing",
+		"generating",
+	}
+	for _, p := range busyPatterns {
+		if strings.Contains(text, p) {
+			return "busy", false
+		}
+	}
+
 	// Idle prompt patterns (shell prompt characters)
-	if promptRegex.MatchString(output) {
+	if promptRegex.MatchString(lastNonEmptyLine(output)) {
 		return "idle", false
 	}
 
-	return "busy", false
+	// Unknown/undetermined
+	return "", false
+}
+
+func lastNonEmptyLine(output string) string {
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, bool) {
@@ -394,6 +487,71 @@ type attachDoneMsg struct{}
 type terminateStepMsg struct {
 	index int
 	err   error
+}
+
+type recreateMutagenMsg struct {
+	session domain.Session
+	err     error
+}
+
+func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return recreateMutagenMsg{err: fmt.Errorf("no remote configured")}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+
+		remoteSyncDir := s.WorktreePath
+		if s.TmuxSession != "" {
+			if cwd, err := mgr.GetTmuxSessionCWD(ctx, s.TmuxSession); err == nil && strings.TrimSpace(cwd) != "" {
+				remoteSyncDir = strings.TrimSpace(cwd)
+			}
+		}
+		if remoteSyncDir == "" {
+			return recreateMutagenMsg{err: fmt.Errorf("session has no remote working directory")}
+		}
+
+		target := remote.Host
+		if remote.User != "" {
+			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
+		}
+
+		syncName := s.TmuxSession
+		if syncName == "" {
+			syncName = filepath.Base(s.WorktreePath)
+		}
+		home, _ := os.UserHomeDir()
+		localPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, syncName)
+
+		terminateCandidates := []string{
+			s.MutagenSyncID,
+			s.TmuxSession,
+			filepath.Base(s.LocalPath),
+			syncName,
+		}
+		terminated := map[string]bool{}
+		for _, candidate := range terminateCandidates {
+			if candidate == "" || terminated[candidate] {
+				continue
+			}
+			terminated[candidate] = true
+			_, _ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", candidate).CombinedOutput()
+		}
+
+		mutagenEngine := mutagen.NewEngine()
+		remoteSyncPath := fmt.Sprintf("%s:%s", target, remoteSyncDir)
+		if err := mutagenEngine.StartSync(ctx, localPath, remoteSyncPath); err != nil {
+			return recreateMutagenMsg{err: fmt.Errorf("failed to recreate mutagen sync: %w", err)}
+		}
+
+		s.LocalPath = localPath
+		s.WorktreePath = remoteSyncDir
+		s.MutagenSyncID = syncName
+		return recreateMutagenMsg{session: s}
+	}
 }
 
 func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
@@ -540,7 +698,7 @@ func (m *Model) createSession() tea.Cmd {
 		if remote.User != "" {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
 		}
-		remoteSyncPath := fmt.Sprintf("%s:%s", target, resolvedWorktreePath)
+		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
 		if err := mutagenEngine.StartSync(ctx, localSyncPath, remoteSyncPath); err != nil {
 			return sessionCreateMsg{err: fmt.Errorf("failed to start mutagen sync: %w", err)}
 		}
@@ -784,19 +942,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.GotoBottom()
 			}
 		case inputHintMsg:
-			// Update list items with input hint
-			items := m.list.Items()
-			for idx, it := range items {
-				if sessItem, ok := it.(item); ok {
-					if sessItem.session.TmuxSession == msg.session {
-						sessItem.needsInput = msg.needsInput
-						sessItem.activity = msg.activity
-						items[idx] = sessItem
-						break
+			// Update list items with input hint when enabled
+			if m.cfg.Features.InputPromptDetection {
+				items := m.list.Items()
+				for idx, it := range items {
+					if sessItem, ok := it.(item); ok {
+						if sessItem.session.TmuxSession == msg.session {
+							sessItem.needsInput = msg.needsInput
+							sessItem.activity = msg.activity
+							items[idx] = sessItem
+							break
+						}
 					}
 				}
+				m.list.SetItems(items)
 			}
-			m.list.SetItems(items)
 		case tea.KeyMsg:
 			if msg.String() == "n" {
 				m.state = viewStateIssuePicker
@@ -894,8 +1054,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			if msg.String() == "ctrl+y" {
+				if sel := m.list.SelectedItem(); sel != nil {
+					m.loadingMsg = "Recreating mutagen sync..."
+					m.loadingNext = viewStateMain
+					m.state = viewStateLoading
+					return m, m.recreateMutagenSync(sel.(item).session)
+				}
+			}
 			if msg.String() == "ctrl+k" {
 				if sel := m.list.SelectedItem(); sel != nil {
+					m.terminatePrecheckError = ""
 					m.state = viewStateTerminateConfirm
 					return m, nil
 				}
@@ -1212,11 +1381,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if km, ok := msg.(tea.KeyMsg); ok {
 			switch km.String() {
 			case "esc", "n":
+				m.terminatePrecheckError = ""
 				m.state = viewStateMain
 				return m, nil
 			case "y":
 				if sel := m.list.SelectedItem(); sel != nil {
 					s := sel.(item).session
+					if err := m.validateTerminationPreconditions(s); err != nil {
+						m.terminatePrecheckError = err.Error()
+						return m, nil
+					}
+					m.terminatePrecheckError = ""
 					m.terminateSession = s
 					m.terminateSteps = []string{
 						"Stopping mutagen sync",
@@ -1268,6 +1443,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		case attachDoneMsg:
 			m.state = viewStateMain
+			m.panelMode = panelModePreview
+			// Force refresh of the current session
+			if sel := m.list.SelectedItem(); sel != nil {
+				s := sel.(item).session
+				m.activeSession = s.TmuxSession
+				m.tmuxOutput = "Loading..."
+				m.viewport.SetContent(m.tmuxOutput)
+				return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, s))
+			}
 			return m, tickTmux()
 		case tmuxTerminalMsg:
 			if msg.err != nil {
@@ -1299,6 +1483,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dirPicker = NewDirPickerModel(msg.dirs, m.sessionCfg.Repo)
 			h, v := docStyle.GetFrameSize()
 			m.dirPicker.SetSize(m.width-h, m.height-v)
+			m.state = m.loadingNext
+			return m, nil
+		case recreateMutagenMsg:
+			if msg.err != nil {
+				m.lastError = fmt.Sprintf("Failed to recreate mutagen sync: %v", msg.err)
+				m.state = viewStateVSCodeError
+				return m, nil
+			}
+			items := m.list.Items()
+			for i, it := range items {
+				if sessItem, ok := it.(item); ok && sessItem.session.TmuxSession == msg.session.TmuxSession {
+					sessItem.session.LocalPath = msg.session.LocalPath
+					sessItem.session.MutagenSyncID = msg.session.MutagenSyncID
+					items[i] = sessItem
+					break
+				}
+			}
+			m.list.SetItems(items)
 			m.state = m.loadingNext
 			return m, nil
 		case agent.ScanAgentsMsg:
@@ -1470,6 +1672,9 @@ func (m *Model) View() string {
 			b.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
 			b.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
 			b.WriteString(fmt.Sprintf("Branch: %s\n\n", s.Branch))
+			if m.terminatePrecheckError != "" {
+				b.WriteString(failStyle.Render("Blocked: "+m.terminatePrecheckError) + "\n\n")
+			}
 			b.WriteString("This will:\n")
 			b.WriteString("  - Stop mutagen sync\n")
 			b.WriteString("  - Kill tmux session\n")

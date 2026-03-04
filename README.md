@@ -129,6 +129,8 @@ aiman
 | `Ctrl+T` | **Toggle** between preview and terminal mode |
 | `v` | **Open in VS Code** (local synced directory) |
 | `r` | **Refresh** session list |
+| `Ctrl+Y` | **Recreate Mutagen Sync** for selected session |
+| `Ctrl+K` | **Terminate Session** (with git safety checks) |
 | `Ctrl+C` | Quit |
 
 ### Creating a New Session
@@ -144,6 +146,18 @@ aiman
 7. **Summary**: Review selected issue/branch/repo/dir/agent before creation
 
 Note: Session creation is now wired. If you hit an error, check your remote SSH config and `mutagen` availability.
+
+### Terminating a Session
+
+Press `Ctrl+K` from the dashboard, then confirm with `y`.
+
+Before termination runs, Aiman checks the session worktree and blocks termination when:
+- there are uncommitted tracked changes, or
+- the current branch has commits not pushed to its upstream (or has no upstream yet).
+
+### Recreating Mutagen Sync
+
+Press `Ctrl+Y` on a selected session to recreate its mutagen sync binding using that session's current remote agent working directory and the canonical local path `~/.aiman/work/<session-name>`.
 
 ### Administrative Menu
 

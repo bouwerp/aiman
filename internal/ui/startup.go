@@ -141,7 +141,7 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.width > 0 && m.height > 0 {
 			mainModel.SetSize(m.width, m.height)
 		}
-		return mainModel, nil
+		return mainModel, mainModel.Init()
 	}
 
 	return m, nil
