@@ -25,7 +25,9 @@ type StartupModel struct {
 	ready         bool
 	err           error
 	width, height int
-	step          int
+	checks        map[string]*usecase.CheckResult
+	discoveryDone bool
+	pending       int
 }
 
 func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor) StartupModel {
@@ -38,60 +40,74 @@ func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor) StartupModel {
 		doctor:     doctor,
 		spinner:    s,
 		loadingMsg: "Initializing Aiman...",
-		step:       0,
+		checks:     make(map[string]*usecase.CheckResult),
+		pending:    4,
 	}
 }
 
 type checkResultMsg usecase.CheckResult
 type discoveryResultMsg []domain.Session
 
-func runNextCheck(m StartupModel) tea.Cmd {
+func runCheckJira(doctor *usecase.Doctor) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		switch m.step {
-		case 0:
-			return checkResultMsg(m.doctor.CheckJira(ctx))
-		case 1:
-			return checkResultMsg(m.doctor.CheckGit(ctx))
-		case 2:
-			return checkResultMsg(m.doctor.CheckSSH(ctx))
-		case 3:
-			if m.cfg.ActiveRemote == "" {
-				return discoveryResultMsg{}
-			}
-			// Find remote config
-			var remote config.Remote
-			for _, r := range m.cfg.Remotes {
-				if r.Host == m.cfg.ActiveRemote {
-					remote = r
-					break
-				}
-			}
-			if remote.Host == "" {
-				return discoveryResultMsg{}
-			}
+		return checkResultMsg(doctor.CheckJira(ctx))
+	}
+}
 
-			mgr := ssh.NewManager(ssh.Config{
-				Host: remote.Host,
-				User: remote.User,
-				Root: remote.Root,
-			})
-			if err := mgr.Connect(ctx); err != nil {
-				return discoveryResultMsg{}
-			}
-			discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
-			sessions, _ := discoverer.Discover(ctx, remote.Host)
-			return discoveryResultMsg(sessions)
-		default:
-			return nil
+func runCheckGit(doctor *usecase.Doctor) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		return checkResultMsg(doctor.CheckGit(ctx))
+	}
+}
+
+func runCheckSSH(doctor *usecase.Doctor) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		return checkResultMsg(doctor.CheckSSH(ctx))
+	}
+}
+
+func runDiscovery(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if cfg.ActiveRemote == "" {
+			return discoveryResultMsg{}
 		}
+		// Find remote config
+		var remote config.Remote
+		for _, r := range cfg.Remotes {
+			if r.Host == cfg.ActiveRemote {
+				remote = r
+				break
+			}
+		}
+		if remote.Host == "" {
+			return discoveryResultMsg{}
+		}
+
+		mgr := ssh.NewManager(ssh.Config{
+			Host: remote.Host,
+			User: remote.User,
+			Root: remote.Root,
+		})
+		if err := mgr.Connect(ctx); err != nil {
+			return discoveryResultMsg{}
+		}
+		discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
+		sessions, _ := discoverer.Discover(ctx, remote.Host)
+		return discoveryResultMsg(sessions)
 	}
 }
 
 func (m StartupModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
-		runNextCheck(m),
+		runCheckJira(m.doctor),
+		runCheckGit(m.doctor),
+		runCheckSSH(m.doctor),
+		runDiscovery(m.cfg),
 	)
 }
 
@@ -106,20 +122,26 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 	case checkResultMsg:
-		m.results = append(m.results, usecase.CheckResult(msg))
-		m.step++
-		return m, runNextCheck(m)
+		res := usecase.CheckResult(msg)
+		m.checks[res.Name] = &res
+		m.results = append(m.results, res)
+		m.pending--
 	case discoveryResultMsg:
 		m.sessions = msg
+		m.discoveryDone = true
+		m.pending--
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+	}
+
+	if m.pending == 0 {
 		m.ready = true
 		mainModel := NewModel(m.cfg, m.results, m.sessions)
 		if m.width > 0 && m.height > 0 {
 			mainModel.SetSize(m.width, m.height)
 		}
 		return mainModel, nil
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
 	}
 
 	return m, nil
@@ -129,26 +151,28 @@ func (m StartupModel) View() string {
 	var b strings.Builder
 	b.WriteString("\n\n")
 
-	currentAction := ""
-	switch m.step {
-	case 0:
-		currentAction = "Checking JIRA connectivity..."
-	case 1:
-		currentAction = "Verifying GitHub credentials..."
-	case 2:
-		currentAction = "Probing remote dev servers..."
-	case 3:
-		currentAction = "Discovering remote sessions & repositories..."
-	}
+	b.WriteString(fmt.Sprintf("  %s %s\n\n", m.spinner.View(), "Running startup checks..."))
 
-	b.WriteString(fmt.Sprintf("  %s %s\n\n", m.spinner.View(), currentAction))
-
-	for _, res := range m.results {
+	// Fixed order display
+	order := []string{"JIRA", "Git", "SSH"}
+	for _, name := range order {
+		res := m.checks[name]
+		if res == nil {
+			b.WriteString(fmt.Sprintf("  %s %-10s: pending...\n", statusStyle.Render("…"), name))
+			continue
+		}
 		status := successStyle.Render("✓")
 		if !res.Passed {
 			status = failStyle.Render("✗")
 		}
 		b.WriteString(fmt.Sprintf("  %s %-10s: %s\n", status, res.Name, res.Message))
+	}
+
+	// Discovery status
+	if m.discoveryDone {
+		b.WriteString(fmt.Sprintf("  %s %-10s: %s\n", successStyle.Render("✓"), "Discover", "sessions loaded"))
+	} else {
+		b.WriteString(fmt.Sprintf("  %s %-10s: pending...\n", statusStyle.Render("…"), "Discover"))
 	}
 
 	return b.String()

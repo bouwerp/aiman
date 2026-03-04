@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ var (
 	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00"))
 	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
 	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	promptRegex  = regexp.MustCompile(`(?m)[\w\-@~/:\.]\s*(\$|#|>)\s*$|(?m)^\s*([❯➜])\s*$`)
 )
 
 type viewState int
@@ -42,6 +44,7 @@ const (
 	viewStateRemotes
 	viewStateSetup
 	viewStateGitSetup
+	viewStateGeneralSettings
 	viewStatePicker
 	viewStateVSCodeError
 	viewStateIssuePicker
@@ -72,14 +75,32 @@ func (i menuItem) Description() string { return i.desc }
 func (i menuItem) FilterValue() string { return i.title }
 
 type item struct {
-	session domain.Session
+	session    domain.Session
+	needsInput bool
+	activity   string
 }
 
 func (i item) Title() string {
-	if i.session.IssueKey != "" {
-		return fmt.Sprintf("%s (%s)", i.session.IssueKey, i.session.TmuxSession)
+	activity := ""
+	if i.activity != "" {
+		if i.activity == "input" {
+			activity = " ⚠ input"
+		} else if i.activity == "idle" {
+			activity = " • idle"
+		} else if i.activity == "busy" {
+			activity = " • busy"
+		}
 	}
-	return i.session.TmuxSession
+	if i.session.IssueKey != "" {
+		if i.needsInput {
+			return fmt.Sprintf("%s (%s) ⚠ input", i.session.IssueKey, i.session.TmuxSession)
+		}
+		return fmt.Sprintf("%s (%s)%s", i.session.IssueKey, i.session.TmuxSession, activity)
+	}
+	if i.needsInput {
+		return fmt.Sprintf("%s ⚠ input", i.session.TmuxSession)
+	}
+	return fmt.Sprintf("%s%s", i.session.TmuxSession, activity)
 }
 
 func (i item) Description() string {
@@ -99,6 +120,7 @@ type Model struct {
 	remotes          RemotesModel
 	setup            SetupModel
 	gitSetup         GitSetupModel
+	generalSetup     GeneralSetupModel
 	picker           RepoPickerModel
 	issuePicker      IssuePickerModel
 	branchInput      BranchInputModel
@@ -126,7 +148,7 @@ type Model struct {
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session) *Model {
 	items := make([]list.Item, len(initialSessions))
 	for i, s := range initialSessions {
-		items[i] = item{session: s}
+		items[i] = item{session: s, needsInput: false, activity: ""}
 	}
 
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
@@ -147,6 +169,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "Manage Remote Servers", desc: "Select active, add new, or scan suggestions", action: viewStateRemotes},
 		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
+		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
 	m.Title = "Administrative Menu"
@@ -165,6 +188,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		remotes:       NewRemotesModel(cfg),
 		setup:         NewSetupModel(cfg),
 		gitSetup:      NewGitSetupModel(cfg),
+		generalSetup:  NewGeneralSetupModel(cfg),
 		doctorResults: doctorResults,
 		viewport:      vp,
 	}
@@ -175,6 +199,12 @@ type tmuxOutputMsg struct {
 	session string
 	output  string
 	err     error
+}
+
+type inputHintMsg struct {
+	session    string
+	needsInput bool
+	activity   string
 }
 
 type tmuxTerminalMsg struct {
@@ -204,6 +234,64 @@ func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
 			err:     err,
 		}
 	}
+}
+
+func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		if !cfg.Features.InputPromptDetection {
+			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
+		}
+		remote, ok := resolveRemote(cfg, session)
+		if !ok {
+			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		out, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		if err != nil {
+			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
+		}
+		activity, needs := detectSessionActivity(out)
+		return inputHintMsg{session: session.TmuxSession, needsInput: needs, activity: activity}
+	}
+}
+
+func detectSessionActivity(output string) (string, bool) {
+	text := strings.ToLower(output)
+
+	// Input prompt patterns
+	inputPatterns := []string{
+		"press any key",
+		"press enter",
+		"password:",
+		"passphrase",
+		"enter to continue",
+		"allow execution",
+		"action required",
+		"allow once",
+		"allow for this session",
+		"no, suggest changes",
+		"[y/n]",
+		"(y/n)",
+		"[y/n]",
+		"(y/n)",
+		"[y/n]",
+		"(y/n)",
+		"confirm",
+		"are you sure",
+	}
+
+	for _, p := range inputPatterns {
+		if strings.Contains(text, p) {
+			return "input", true
+		}
+	}
+
+	// Idle prompt patterns (shell prompt characters)
+	if promptRegex.MatchString(output) {
+		return "idle", false
+	}
+
+	return "busy", false
 }
 
 func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, bool) {
@@ -674,6 +762,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.tmuxOutput = "Loading..."
 						m.viewport.SetContent(m.tmuxOutput)
 						cmds = append(cmds, fetchTmuxPane(m.cfg, s))
+						cmds = append(cmds, checkInputHint(m.cfg, s))
 					}
 				}
 			} else if sel := m.list.SelectedItem(); sel != nil {
@@ -682,6 +771,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activeSession = s.TmuxSession
 				}
 				cmds = append(cmds, fetchTmuxPane(m.cfg, s))
+				cmds = append(cmds, checkInputHint(m.cfg, s))
 			}
 		case tmuxOutputMsg:
 			if msg.session == m.activeSession {
@@ -693,6 +783,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(m.tmuxOutput)
 				m.viewport.GotoBottom()
 			}
+		case inputHintMsg:
+			// Update list items with input hint
+			items := m.list.Items()
+			for idx, it := range items {
+				if sessItem, ok := it.(item); ok {
+					if sessItem.session.TmuxSession == msg.session {
+						sessItem.needsInput = msg.needsInput
+						sessItem.activity = msg.activity
+						items[idx] = sessItem
+						break
+					}
+				}
+			}
+			m.list.SetItems(items)
 		case tea.KeyMsg:
 			if msg.String() == "n" {
 				m.state = viewStateIssuePicker
@@ -843,6 +947,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.state = i.action
 						return m, m.gitSetup.Init()
 					}
+					if i.action == viewStateGeneralSettings {
+						m.generalSetup = NewGeneralSetupModel(m.cfg)
+						m.state = i.action
+						return m, m.generalSetup.Init()
+					}
 					m.state = i.action
 					return m, nil
 				}
@@ -912,6 +1021,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.gitSetup.saved {
 			m.gitSetup.saved = false // Reset
+			m.state = viewStateMenu
+		}
+
+	case viewStateGeneralSettings:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			m.state = viewStateMenu
+			return m, nil
+		}
+
+		var subModel tea.Model
+		subModel, cmd = m.generalSetup.Update(msg)
+		m.generalSetup = subModel.(GeneralSetupModel)
+		cmds = append(cmds, cmd)
+
+		if m.generalSetup.saved {
+			m.generalSetup.saved = false // Reset
 			m.state = viewStateMenu
 		}
 
@@ -1195,7 +1320,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Add new session to list
 			items := m.list.Items()
-			items = append(items, item{session: msg.session})
+			items = append(items, item{session: msg.session, needsInput: false, activity: ""})
 			m.list.SetItems(items)
 			m.state = m.loadingNext
 			return m, nil
@@ -1295,6 +1420,9 @@ func (m *Model) View() string {
 
 	case viewStateGitSetup:
 		return docStyle.Render(m.gitSetup.View())
+
+	case viewStateGeneralSettings:
+		return m.generalSetup.View()
 
 	case viewStateVSCodeError:
 		var b strings.Builder

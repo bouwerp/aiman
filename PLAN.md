@@ -75,6 +75,8 @@
 - [ ] **EC2 Provisioning**:
     - Spin up and terminate EC2 instances to use as remote servers.
     - Wire instance lifecycle to Aiman’s remote registry.
+- [ ] **Dev Console Panel**:
+    - Collapsible dev console panel to view logs and debug output in-app.
 
 ## 4. Architectural Strategy (Reminder)
 Keep following the **Clean Architecture** pattern. Ensure that the `internal/usecase` layer remains the only place where domain entities are coordinated, and keep infrastructure-specific logic (like `mutagen` or `ssh` CLI flags) strictly within `internal/infra`.

@@ -17,6 +17,7 @@ const (
 type Config struct {
 	Integrations Integrations `yaml:"integrations"`
 	Git          GitConfig    `yaml:"git,omitempty"`
+	Features     FeatureFlags `yaml:"features,omitempty"`
 	Remotes      []Remote     `yaml:"remotes"`
 	ActiveRemote string       `yaml:"active_remote"`
 }
@@ -30,6 +31,10 @@ type GitConfig struct {
 	IncludeOrgs     []string `yaml:"include_orgs,omitempty"`
 	IncludePatterns []string `yaml:"include_patterns,omitempty"`
 	ExcludePatterns []string `yaml:"exclude_patterns,omitempty"`
+}
+
+type FeatureFlags struct {
+	InputPromptDetection bool `yaml:"input_prompt_detection,omitempty"`
 }
 
 type JiraConfig struct {
