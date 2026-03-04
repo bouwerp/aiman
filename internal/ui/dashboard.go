@@ -1095,7 +1095,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.panelMode == panelModeTerminal && m.terminal != nil {
 			var tModel tea.Model
 			tModel, cmd = m.terminal.Update(msg)
-			m.terminal = tModel.(*TerminalModel)
+			if tm, ok := tModel.(TerminalModel); ok {
+				m.terminal = &tm
+			}
 			cmds = append(cmds, cmd)
 		} else {
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -1466,6 +1468,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.termCloser = msg.stream
 			term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
 			m.terminal = &term
+			m.panelMode = panelModeTerminal
+			m.state = viewStateMain
+			return m, nil
 		case reposMsg:
 			if msg.err != nil {
 				m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
@@ -1527,8 +1532,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items := m.list.Items()
 			items = append(items, item{session: msg.session, needsInput: false, activity: ""})
 			m.list.SetItems(items)
+
+			// Select the newly created session and fetch its preview
+			m.list.Select(len(items) - 1)
+			m.activeSession = msg.session.TmuxSession
+			m.tmuxOutput = "Loading..."
+			m.viewport.SetContent(m.tmuxOutput)
 			m.state = m.loadingNext
-			return m, nil
+
+			return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session))
 		}
 	}
 
