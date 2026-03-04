@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -176,15 +177,9 @@ func tickTmux() tea.Cmd {
 
 func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
 	return func() tea.Msg {
-		if cfg.ActiveRemote == "" {
-			return nil
-		}
-		var remote config.Remote
-		for _, r := range cfg.Remotes {
-			if r.Host == cfg.ActiveRemote {
-				remote = r
-				break
-			}
+		remote, ok := resolveRemote(cfg, session)
+		if !ok {
+			return tmuxOutputMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
 		}
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
@@ -196,6 +191,32 @@ func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
 			err:     err,
 		}
 	}
+}
+
+func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, bool) {
+	if cfg == nil {
+		return config.Remote{}, false
+	}
+
+	// Prefer active remote if set
+	if cfg.ActiveRemote != "" {
+		for _, r := range cfg.Remotes {
+			if r.Host == cfg.ActiveRemote {
+				return r, true
+			}
+		}
+	}
+
+	// Fallback to session's remote host
+	if session.RemoteHost != "" {
+		for _, r := range cfg.Remotes {
+			if r.Host == session.RemoteHost {
+				return r, true
+			}
+		}
+	}
+
+	return config.Remote{}, false
 }
 
 func (m *Model) initTerminal(session domain.Session) tea.Cmd {
@@ -406,9 +427,8 @@ func (m *Model) createSession() tea.Cmd {
 
 		// Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()
-		localPath, _ := config.GetDBPath()
-		localBase := strings.TrimSuffix(localPath, "/aiman.db")
-		localSyncPath := fmt.Sprintf("%s/work/%s", localBase, tmuxName)
+		home, _ := os.UserHomeDir()
+		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, tmuxName)
 		target := remote.Host
 		if remote.User != "" {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)

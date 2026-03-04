@@ -68,6 +68,19 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		if cwd != "" {
 			normalizedCWD := normalizePath(cwd)
 			for _, ms := range mutagenSessions {
+				// Prefer name-based match if present
+				if session.TmuxSession != "" && ms.Name == session.TmuxSession {
+					// We need to identify which one is actually local
+					if !strings.Contains(ms.LocalPath, ":") {
+						session.LocalPath = normalizePath(ms.LocalPath)
+					} else if !strings.Contains(ms.RemotePath, ":") {
+						session.LocalPath = normalizePath(ms.RemotePath)
+					}
+					session.MutagenSyncID = ms.ID
+					session.Status = domain.SessionStatusSyncing
+					break
+				}
+
 				// Normalized remote path from mutagen
 				normalizedRemote := normalizePath(ms.RemotePath)
 				normalizedLocal := normalizePath(ms.LocalPath)

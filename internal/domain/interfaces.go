@@ -45,6 +45,7 @@ type SyncEngine interface {
 // SyncSession represents a file synchronization session.
 type SyncSession struct {
 	ID         string
+	Name       string
 	LocalPath  string
 	RemotePath string
 	Status     string

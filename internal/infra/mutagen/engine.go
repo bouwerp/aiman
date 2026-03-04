@@ -29,7 +29,7 @@ func (e *Engine) StartSync(ctx context.Context, localPath, remotePath string) er
 	}
 
 	name := filepath.Base(localPath)
-	cmd := exec.CommandContext(ctx, "mutagen", "sync", "create", "--name", name, localPath, remotePath)
+	cmd := exec.CommandContext(ctx, "mutagen", "sync", "create", "--name", name, "--label", "session="+name, localPath, remotePath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create mutagen sync: %w, output: %s", err, string(output))
@@ -69,6 +69,14 @@ func (e *Engine) ListSyncSessions(ctx context.Context) ([]domain.SyncSession, er
 			current = &domain.SyncSession{
 				ID: strings.TrimSpace(strings.TrimPrefix(line, "Identifier:")),
 			}
+			continue
+		}
+
+		if strings.HasPrefix(line, "Name:") {
+			if current == nil {
+				current = &domain.SyncSession{}
+			}
+			current.Name = strings.TrimSpace(strings.TrimPrefix(line, "Name:"))
 			continue
 		}
 
