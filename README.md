@@ -12,7 +12,7 @@ Aiman automates the entire development workflow:
 4. **Choose Subdirectory** - Pick a repo sub-folder (monorepo-friendly)
 5. **Scan Agents** - Detect available agents on the remote
 6. **Review Summary** - Confirm settings before creation
-7. **Create Session** - Worktree + tmux + agent launch (in progress)
+7. **Create Session** - Worktree + tmux + agent launch + mutagen sync
 
 ## ✨ Features
 
@@ -143,7 +143,7 @@ aiman
 6. **Agent Selection**: Choose your AI coding assistant (Claude, Gemini, etc.)
 7. **Summary**: Review selected issue/branch/repo/dir/agent before creation
 
-Note: Session creation (worktree, tmux, agent launch, sync) is in progress.
+Note: Session creation is now wired. If you hit an error, check your remote SSH config and `mutagen` availability.
 
 ### Administrative Menu
 

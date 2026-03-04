@@ -169,6 +169,11 @@ type tmuxOutputMsg struct {
 	err     error
 }
 
+type tmuxTerminalMsg struct {
+	stream io.ReadWriteCloser
+	err    error
+}
+
 func tickTmux() tea.Cmd {
 	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
 		return tmuxTickMsg(t)
@@ -220,30 +225,25 @@ func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, b
 }
 
 func (m *Model) initTerminal(session domain.Session) tea.Cmd {
-	if m.termCloser != nil {
-		m.termCloser.Close()
-		m.termCloser = nil
-	}
-
-	var remote config.Remote
-	for _, r := range m.cfg.Remotes {
-		if r.Host == m.cfg.ActiveRemote {
-			remote = r
-			break
+	return func() tea.Msg {
+		if m.termCloser != nil {
+			m.termCloser.Close()
+			m.termCloser = nil
 		}
-	}
 
-	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-	stream, err := mgr.StreamTmuxSession(context.Background(), session.TmuxSession)
-	if err != nil {
-		m.tmuxOutput = failStyle.Render("Failed to stream session: " + err.Error())
-		return nil
-	}
+		remote, ok := resolveRemote(m.cfg, session)
+		if !ok {
+			return tmuxTerminalMsg{err: fmt.Errorf("no remote configured")}
+		}
 
-	m.termCloser = stream
-	term := NewTerminalModel(stream, m.viewport.Width, m.viewport.Height)
-	m.terminal = &term
-	return nil
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		stream, err := mgr.StreamTmuxSession(context.Background(), session.TmuxSession)
+		if err != nil {
+			return tmuxTerminalMsg{err: err}
+		}
+
+		return tmuxTerminalMsg{stream: stream}
+	}
 }
 
 func (m *Model) searchJira(query string) tea.Cmd {
@@ -288,6 +288,12 @@ type sessionCreateMsg struct {
 	session domain.Session
 	err     error
 }
+
+type attachMsg struct {
+	cmd *exec.Cmd
+}
+
+type attachDoneMsg struct{}
 
 func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 	return func() tea.Msg {
@@ -551,6 +557,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.state {
 	case viewStateMain:
 		switch msg := msg.(type) {
+		case attachMsg:
+			return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
+				return tmuxTickMsg(time.Now())
+			})
+		case tmuxTerminalMsg:
+			if msg.err != nil {
+				m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
+				m.panelMode = panelModePreview
+				m.state = viewStateMain
+				return m, nil
+			}
+			m.termCloser = msg.stream
+			term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
+			m.terminal = &term
+			m.panelMode = panelModeTerminal
+			m.state = viewStateMain
+			return m, nil
 		case tmuxTickMsg:
 			cmds = append(cmds, tickTmux())
 			if sel := m.list.SelectedItem(); sel != nil {
@@ -590,9 +613,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if msg.String() == "ctrl+t" {
 				if m.panelMode == panelModePreview {
-					m.panelMode = panelModeTerminal
 					if sel := m.list.SelectedItem(); sel != nil {
-						cmds = append(cmds, m.initTerminal(sel.(item).session))
+						m.loadingMsg = fmt.Sprintf("Connecting to session %s...", sel.(item).session.TmuxSession)
+						m.loadingNext = viewStateMain
+						m.state = viewStateLoading
+						return m, tea.Sequence(
+							tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+								return m.initTerminal(sel.(item).session)()
+							}),
+						)
 					}
 				} else {
 					m.panelMode = panelModePreview
@@ -615,10 +644,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 					c := mgr.AttachTmuxSession(s.TmuxSession)
-					return m, tea.ExecProcess(c, func(err error) tea.Msg {
-						// Resume and refresh after detaching
-						return tmuxTickMsg(time.Now())
-					})
+					m.loadingMsg = fmt.Sprintf("Connecting to session %s...", s.TmuxSession)
+					m.loadingNext = viewStateMain
+					m.state = viewStateLoading
+					return m, tea.Sequence(
+						tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+							return attachMsg{cmd: c}
+						}),
+					)
 				}
 			}
 			if msg.String() == "v" {
@@ -946,6 +979,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case viewStateLoading:
 		switch msg := msg.(type) {
+		case attachMsg:
+			return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
+				return attachDoneMsg{}
+			})
+		case attachDoneMsg:
+			m.state = viewStateMain
+			return m, tickTmux()
+		case tmuxTerminalMsg:
+			if msg.err != nil {
+				m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
+				m.panelMode = panelModePreview
+				m.state = viewStateMain
+				return m, nil
+			}
+			m.termCloser = msg.stream
+			term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
+			m.terminal = &term
+			m.panelMode = panelModeTerminal
+			m.state = viewStateMain
+			return m, nil
 		case reposMsg:
 			if msg.err != nil {
 				m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
