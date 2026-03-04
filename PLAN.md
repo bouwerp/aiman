@@ -68,6 +68,13 @@
     - Building executables for macOS (Intel & Apple Silicon), Linux, and Windows.
     - Creating GitHub releases with all platform binaries as artifacts.
     - Automatic versioning based on git tags.
+- [ ] **Remote VM Bootstrapper**:
+    - Connect to a new remote VM and install baseline tooling (git, tmux, go, nodejs, npm, curl, claude, cursor, gemini, opencode, acli).
+    - Configure SSH keys and git SSH auth.
+    - Authenticate Atlassian (acli) and supported coding agents.
+- [ ] **EC2 Provisioning**:
+    - Spin up and terminate EC2 instances to use as remote servers.
+    - Wire instance lifecycle to Aiman’s remote registry.
 
 ## 4. Architectural Strategy (Reminder)
 Keep following the **Clean Architecture** pattern. Ensure that the `internal/usecase` layer remains the only place where domain entities are coordinated, and keep infrastructure-specific logic (like `mutagen` or `ssh` CLI flags) strictly within `internal/infra`.

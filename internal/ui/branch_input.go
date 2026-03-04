@@ -84,6 +84,9 @@ func (m BranchInputModel) sanitizeInput(s string) string {
 	// Replace spaces with dashes
 	s = strings.ReplaceAll(s, " ", "-")
 
+	// Replace underscores with dashes (mutagen compatibility)
+	s = strings.ReplaceAll(s, "_", "-")
+
 	// Remove invalid characters
 	invalidPattern := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!]`)
 	s = invalidPattern.ReplaceAllString(s, "")
@@ -99,6 +102,15 @@ func (m BranchInputModel) sanitizeInput(s string) string {
 
 	// Collapse multiple dashes
 	s = regexp.MustCompile(`-+`).ReplaceAllString(s, "-")
+
+	// Limit length for mutagen label compatibility
+	const maxLen = 63
+	if len(s) > maxLen {
+		s = s[:maxLen]
+	}
+
+	// Remove trailing dashes after truncation
+	s = strings.TrimRight(s, "-")
 
 	return s
 }

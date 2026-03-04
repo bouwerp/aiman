@@ -51,6 +51,8 @@ const (
 	viewStateAgentPicker
 	viewStateSummary
 	viewStateLoading
+	viewStateTerminateConfirm
+	viewStateTerminateProgress
 )
 
 type panelMode int
@@ -89,31 +91,36 @@ func (i item) FilterValue() string {
 }
 
 type Model struct {
-	cfg           *config.Config
-	state         viewState
-	panelMode     panelMode
-	list          list.Model
-	menu          list.Model
-	remotes       RemotesModel
-	setup         SetupModel
-	gitSetup      GitSetupModel
-	picker        RepoPickerModel
-	issuePicker   IssuePickerModel
-	branchInput   BranchInputModel
-	dirPicker     DirPickerModel
-	agentPicker   AgentPickerModel
-	summary       SummaryModel
-	doctorResults []usecase.CheckResult
-	width, height int
-	viewport      viewport.Model
-	terminal      *TerminalModel
-	tmuxOutput    string
-	activeSession string
-	termCloser    io.Closer
-	lastError     string
-	loadingMsg    string
-	sessionCfg    SessionConfig
-	loadingNext   viewState
+	cfg              *config.Config
+	state            viewState
+	panelMode        panelMode
+	list             list.Model
+	menu             list.Model
+	remotes          RemotesModel
+	setup            SetupModel
+	gitSetup         GitSetupModel
+	picker           RepoPickerModel
+	issuePicker      IssuePickerModel
+	branchInput      BranchInputModel
+	dirPicker        DirPickerModel
+	agentPicker      AgentPickerModel
+	summary          SummaryModel
+	doctorResults    []usecase.CheckResult
+	width, height    int
+	viewport         viewport.Model
+	terminal         *TerminalModel
+	tmuxOutput       string
+	activeSession    string
+	termCloser       io.Closer
+	lastError        string
+	loadingMsg       string
+	sessionCfg       SessionConfig
+	loadingNext      viewState
+	initialLoad      bool
+	terminateSession domain.Session
+	terminateSteps   []string
+	terminateErrors  []string
+	terminateIndex   int
 }
 
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session) *Model {
@@ -132,6 +139,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle preview/terminal")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
+			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 		}
 	}
 
@@ -294,6 +302,11 @@ type attachMsg struct {
 }
 
 type attachDoneMsg struct{}
+
+type terminateStepMsg struct {
+	index int
+	err   error
+}
 
 func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 	return func() tea.Msg {
@@ -473,6 +486,92 @@ func (m *Model) createSession() tea.Cmd {
 	}
 }
 
+func (m *Model) runTerminateStepCmd(index int) tea.Cmd {
+	return func() tea.Msg {
+		return terminateStepMsg{index: index, err: m.runTerminateStep(index)}
+	}
+}
+
+func (m *Model) runTerminateStep(index int) error {
+	ctx := context.Background()
+	s := m.terminateSession
+
+	switch index {
+	case 0: // Stop mutagen sync
+		name := s.MutagenSyncID
+		if name == "" {
+			name = s.TmuxSession
+		}
+		if name == "" {
+			return nil
+		}
+		cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", name)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// Try fallback using tmux session name if different
+			if s.TmuxSession != "" && s.TmuxSession != name {
+				fallback := exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession)
+				if _, fbErr := fallback.CombinedOutput(); fbErr == nil {
+					return nil
+				}
+			}
+			return fmt.Errorf("mutagen terminate failed: %w, output: %s", err, string(out))
+		}
+		return nil
+	case 1: // Kill tmux session
+		if s.TmuxSession == "" {
+			return nil
+		}
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return fmt.Errorf("no remote configured")
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		_, err := mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
+		return err
+	case 2: // Stop agent process (tmux kill already handles this)
+		return nil
+	case 3: // Remove git worktree
+		if s.WorktreePath == "" {
+			return nil
+		}
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return fmt.Errorf("no remote configured")
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		_, err := mgr.Execute(ctx, fmt.Sprintf("git -C %q worktree remove -f %q", s.WorktreePath, s.WorktreePath))
+		if err != nil {
+			_, rmErr := mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", s.WorktreePath))
+			if rmErr != nil {
+				return err
+			}
+		}
+		return nil
+	case 4: // Clean up local files
+		if s.LocalPath == "" {
+			return nil
+		}
+		return os.RemoveAll(s.LocalPath)
+	case 5: // Update session status in database
+		if s.ID == "" {
+			return nil
+		}
+		s.Status = domain.SessionStatusCleanup
+		s.UpdatedAt = time.Now()
+		dbPath, err := config.GetDBPath()
+		if err != nil {
+			return err
+		}
+		repo, err := sqlite.NewRepository(dbPath)
+		if err != nil {
+			return err
+		}
+		return repo.Save(ctx, &s)
+	default:
+		return nil
+	}
+}
+
 func extractRepoName(fullName string) string {
 	// Extract just the repo name from "org/repo" format
 	parts := strings.Split(fullName, "/")
@@ -483,35 +582,8 @@ func extractRepoName(fullName string) string {
 }
 
 func (m *Model) Init() tea.Cmd {
-	// Don't select anything initially - wait for UI to fully render
-	m.list.Select(-1)
-	
-	var cmds []tea.Cmd
-	cmds = append(cmds, tickTmux())
-	
-	// Defer initial session selection to after first render
-	cmds = append(cmds, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-		return initSelectMsg{}
-	}))
-
-	return tea.Batch(cmds...)
-}
-
-type initSelectMsg struct{}
-
-func (m *Model) handleInitSelect() tea.Cmd {
-	// Now select the first item and fetch its preview
-	if m.list.Items() != nil && len(m.list.Items()) > 0 {
-		m.list.Select(0)
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			m.activeSession = s.TmuxSession
-			m.tmuxOutput = "Loading..."
-			m.viewport.SetContent(m.tmuxOutput)
-			return fetchTmuxPane(m.cfg, s)
-		}
-	}
-	return nil
+	m.initialLoad = true
+	return tickTmux()
 }
 
 func (m *Model) SetSize(width, height int) {
@@ -587,17 +659,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.termCloser = msg.stream
 			term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
 			m.terminal = &term
-		case initSelectMsg:
-			cmd := m.handleInitSelect()
-			if cmd != nil {
-				return m, cmd
-			}
-			m.panelMode = panelModeTerminal
-			m.state = viewStateMain
 			return m, nil
 		case tmuxTickMsg:
 			cmds = append(cmds, tickTmux())
-			if sel := m.list.SelectedItem(); sel != nil {
+
+			// On first tick, force-select the first session if nothing is active
+			if m.initialLoad {
+				m.initialLoad = false
+				if len(m.list.Items()) > 0 {
+					m.list.Select(0)
+					if sel := m.list.SelectedItem(); sel != nil {
+						s := sel.(item).session
+						m.activeSession = s.TmuxSession
+						m.tmuxOutput = "Loading..."
+						m.viewport.SetContent(m.tmuxOutput)
+						cmds = append(cmds, fetchTmuxPane(m.cfg, s))
+					}
+				}
+			} else if sel := m.list.SelectedItem(); sel != nil {
 				s := sel.(item).session
 				if m.activeSession != s.TmuxSession {
 					m.activeSession = s.TmuxSession
@@ -710,6 +789,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, scanRemote(remote.Host, remote.User, remote.Root)
 				}
 				return m, nil
+			}
+			if msg.String() == "ctrl+k" {
+				if sel := m.list.SelectedItem(); sel != nil {
+					m.state = viewStateTerminateConfirm
+					return m, nil
+				}
 			}
 		}
 
@@ -998,6 +1083,58 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.createSession()
 		}
 
+	case viewStateTerminateConfirm:
+		if km, ok := msg.(tea.KeyMsg); ok {
+			switch km.String() {
+			case "esc", "n":
+				m.state = viewStateMain
+				return m, nil
+			case "y":
+				if sel := m.list.SelectedItem(); sel != nil {
+					s := sel.(item).session
+					m.terminateSession = s
+					m.terminateSteps = []string{
+						"Stopping mutagen sync",
+						"Killing tmux session",
+						"Stopping agent process",
+						"Removing git worktree",
+						"Cleaning local files",
+						"Updating session status",
+					}
+					m.terminateErrors = make([]string, len(m.terminateSteps))
+					m.terminateIndex = 0
+					m.state = viewStateTerminateProgress
+					return m, m.runTerminateStepCmd(0)
+				}
+			}
+		}
+
+	case viewStateTerminateProgress:
+		if msg, ok := msg.(terminateStepMsg); ok {
+			if msg.err != nil {
+				m.terminateErrors[msg.index] = msg.err.Error()
+			}
+			next := msg.index + 1
+			if next < len(m.terminateSteps) {
+				m.terminateIndex = next
+				return m, m.runTerminateStepCmd(next)
+			}
+
+			// Remove session from list
+			items := []list.Item{}
+			for _, it := range m.list.Items() {
+				if sessItem, ok := it.(item); ok {
+					if sessItem.session.TmuxSession == m.terminateSession.TmuxSession {
+						continue
+					}
+				}
+				items = append(items, it)
+			}
+			m.list.SetItems(items)
+			m.state = viewStateMain
+			return m, nil
+		}
+
 	case viewStateLoading:
 		switch msg := msg.(type) {
 		case attachMsg:
@@ -1017,14 +1154,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.termCloser = msg.stream
 			term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
 			m.terminal = &term
-		case initSelectMsg:
-			cmd := m.handleInitSelect()
-			if cmd != nil {
-				return m, cmd
-			}
-			m.panelMode = panelModeTerminal
-			m.state = viewStateMain
-			return m, nil
 		case reposMsg:
 			if msg.err != nil {
 				m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
@@ -1203,6 +1332,55 @@ func (m *Model) View() string {
 
 	case viewStateSummary:
 		return m.summary.View()
+
+	case viewStateTerminateConfirm:
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			var b strings.Builder
+			b.WriteString(failStyle.Render("Terminate session?") + "\n\n")
+			b.WriteString(fmt.Sprintf("Session: %s\n", s.TmuxSession))
+			b.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
+			b.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
+			b.WriteString(fmt.Sprintf("Branch: %s\n\n", s.Branch))
+			b.WriteString("This will:\n")
+			b.WriteString("  - Stop mutagen sync\n")
+			b.WriteString("  - Kill tmux session\n")
+			b.WriteString("  - Remove git worktree\n")
+			b.WriteString("  - Clean up local files\n\n")
+			b.WriteString(activeStyle.Render("[y]") + " Confirm  " + activeStyle.Render("[n]") + " Cancel")
+
+			dialog := lipgloss.NewStyle().
+				Border(lipgloss.DoubleBorder()).
+				BorderForeground(lipgloss.Color("196")).
+				Padding(1, 2).
+				Width(60)
+
+			return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+		}
+		return ""
+
+	case viewStateTerminateProgress:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("Terminating session...") + "\n\n")
+		for i, step := range m.terminateSteps {
+			status := "[ ]"
+			if i < m.terminateIndex {
+				status = successStyle.Render("[✓]")
+			} else if i == m.terminateIndex {
+				status = activeStyle.Render("[→]")
+			}
+			b.WriteString(fmt.Sprintf("%s %s\n", status, step))
+			if m.terminateErrors != nil && i < len(m.terminateErrors) && m.terminateErrors[i] != "" {
+				b.WriteString("    " + failStyle.Render(m.terminateErrors[i]) + "\n")
+			}
+		}
+
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(1, 2).
+			Width(60)
+
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
 
 	case viewStateLoading:
 		msg := m.loadingMsg

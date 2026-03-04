@@ -39,11 +39,33 @@ type Issue struct {
 func (i Issue) Slug() string {
 	// Sanitize summary for git branch name compatibility
 	summary := sanitizeGitBranchName(i.Summary)
-	return i.Key + "-" + summary
+	return truncateBranchName(i.Key, summary)
+}
+
+func truncateBranchName(key, summary string) string {
+	const maxLen = 63
+	if key == "" {
+		if len(summary) > maxLen {
+			return summary[:maxLen]
+		}
+		return summary
+	}
+	base := key + "-"
+	maxSummary := maxLen - len(base)
+	if maxSummary <= 0 {
+		return key
+	}
+	if len(summary) > maxSummary {
+		summary = summary[:maxSummary]
+	}
+	branch := base + summary
+	branch = strings.TrimRight(branch, "-")
+	return branch
 }
 
 // sanitizeGitBranchName converts a string to a valid git branch name
 // - Replaces spaces with dashes
+// - Replaces underscores with dashes (mutagen compatibility)
 // - Removes invalid characters: ~^:\ and control characters
 // - Removes consecutive dots
 // - Ensures it doesn't start with a dash
@@ -55,6 +77,9 @@ func sanitizeGitBranchName(s string) string {
 
 	// Replace spaces with dashes
 	s = strings.ReplaceAll(s, " ", "-")
+
+	// Replace underscores with dashes (mutagen compatibility)
+	s = strings.ReplaceAll(s, "_", "-")
 
 	// Remove invalid characters: ~^:\ and control characters
 	// Also remove other problematic chars
