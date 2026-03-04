@@ -483,19 +483,35 @@ func extractRepoName(fullName string) string {
 }
 
 func (m *Model) Init() tea.Cmd {
+	// Don't select anything initially - wait for UI to fully render
+	m.list.Select(-1)
+	
 	var cmds []tea.Cmd
 	cmds = append(cmds, tickTmux())
-
-	// Trigger initial fetch for the first selected session
-	if sel := m.list.SelectedItem(); sel != nil {
-		s := sel.(item).session
-		m.activeSession = s.TmuxSession
-		m.tmuxOutput = "Loading..."
-		m.viewport.SetContent(m.tmuxOutput)
-		cmds = append(cmds, fetchTmuxPane(m.cfg, s))
-	}
+	
+	// Defer initial session selection to after first render
+	cmds = append(cmds, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return initSelectMsg{}
+	}))
 
 	return tea.Batch(cmds...)
+}
+
+type initSelectMsg struct{}
+
+func (m *Model) handleInitSelect() tea.Cmd {
+	// Now select the first item and fetch its preview
+	if m.list.Items() != nil && len(m.list.Items()) > 0 {
+		m.list.Select(0)
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			m.activeSession = s.TmuxSession
+			m.tmuxOutput = "Loading..."
+			m.viewport.SetContent(m.tmuxOutput)
+			return fetchTmuxPane(m.cfg, s)
+		}
+	}
+	return nil
 }
 
 func (m *Model) SetSize(width, height int) {
@@ -571,6 +587,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.termCloser = msg.stream
 			term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
 			m.terminal = &term
+		case initSelectMsg:
+			cmd := m.handleInitSelect()
+			if cmd != nil {
+				return m, cmd
+			}
 			m.panelMode = panelModeTerminal
 			m.state = viewStateMain
 			return m, nil
@@ -996,6 +1017,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.termCloser = msg.stream
 			term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
 			m.terminal = &term
+		case initSelectMsg:
+			cmd := m.handleInitSelect()
+			if cmd != nil {
+				return m, cmd
+			}
 			m.panelMode = panelModeTerminal
 			m.state = viewStateMain
 			return m, nil
