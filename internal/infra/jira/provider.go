@@ -27,7 +27,7 @@ func NewProvider(config Config) *Provider {
 	return &Provider{
 		config: config,
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: 30 * time.Second,
 		},
 	}
 }
@@ -35,8 +35,8 @@ func NewProvider(config Config) *Provider {
 type jiraIssue struct {
 	Key    string `json:"key"`
 	Fields struct {
-		Summary     string `json:"summary"`
-		Description string `json:"description"`
+		Summary     string      `json:"summary"`
+		Description interface{} `json:"description"`
 		Status      struct {
 			Name string `json:"name"`
 		} `json:"status"`
@@ -53,8 +53,14 @@ type jiraSearchResponse struct {
 }
 
 func (p *Provider) SearchIssues(ctx context.Context, query string) ([]domain.Issue, error) {
-	// Simple JQL search based on the query. For now, assuming query is part of the summary.
-	jql := fmt.Sprintf("summary ~ %q", query)
+	var jql string
+	if query == "" {
+		// Find most recently updated issues that aren't closed
+		jql = "statusCategory != \"Done\" ORDER BY updated DESC"
+	} else {
+		// Search both summary (quoted) and key (unquoted) if query is provided
+		jql = fmt.Sprintf("(summary ~ %q OR key = %s) ORDER BY updated DESC", query, query)
+	}
 	
 	u, err := url.Parse(p.config.URL + "/rest/api/3/search/jql")
 	if err != nil {
@@ -63,6 +69,8 @@ func (p *Provider) SearchIssues(ctx context.Context, query string) ([]domain.Iss
 
 	params := url.Values{}
 	params.Add("jql", jql)
+	params.Add("fields", "summary,description,status,assignee,created,updated")
+	params.Add("maxResults", "50")
 	u.RawQuery = params.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -131,17 +139,29 @@ func (p *Provider) GetIssue(ctx context.Context, key string) (domain.Issue, erro
 }
 
 func (p *Provider) toDomainIssue(ji jiraIssue) domain.Issue {
-	created, _ := time.Parse(time.RFC3339, ji.Fields.Created)
-	updated, _ := time.Parse(time.RFC3339, ji.Fields.Updated)
+	// JIRA v3 uses a specific ISO8601 format: 2026-03-03T12:45:19.036-0600
+	created, _ := time.Parse("2006-01-02T15:04:05.000-0700", ji.Fields.Created)
+	updated, _ := time.Parse("2006-01-02T15:04:05.000-0700", ji.Fields.Updated)
+
+	assignee := "Unassigned"
+	if ji.Fields.Assignee.DisplayName != "" {
+		assignee = ji.Fields.Assignee.DisplayName
+	}
+
+	desc := ""
+	if ji.Fields.Description != nil {
+		desc = "(Rich Text Content)"
+	}
 
 	return domain.Issue{
 		ID:          ji.Key,
 		Key:         ji.Key,
 		Summary:     ji.Fields.Summary,
-		Description: ji.Fields.Description,
+		Description: desc,
 		Status:      domain.IssueStatus(ji.Fields.Status.Name),
-		Assignee:    ji.Fields.Assignee.DisplayName,
+		Assignee:    assignee,
 		CreatedAt:   created,
 		UpdatedAt:   updated,
 	}
 }
+

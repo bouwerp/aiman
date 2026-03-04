@@ -49,13 +49,13 @@ func (d *Doctor) CheckJira(ctx context.Context) CheckResult {
 		return CheckResult{Name: "JIRA", Passed: false, Message: "JIRA URL not configured"}
 	}
 
-	// Try to search for a dummy issue or just check auth
-	_, err := d.jiraProvider.SearchIssues(ctx, "test")
+	// Search with empty query to get recent issues (better connectivity test)
+	issues, err := d.jiraProvider.SearchIssues(ctx, "")
 	if err != nil {
 		return CheckResult{Name: "JIRA", Passed: false, Message: fmt.Sprintf("Authentication failed: %v", err)}
 	}
 
-	return CheckResult{Name: "JIRA", Passed: true, Message: "Authenticated successfully"}
+	return CheckResult{Name: "JIRA", Passed: true, Message: fmt.Sprintf("Authenticated successfully (%d recent issues)", len(issues))}
 }
 
 func (d *Doctor) CheckGit(ctx context.Context) CheckResult {

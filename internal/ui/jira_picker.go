@@ -3,9 +3,10 @@ package ui
 import (
 	"fmt"
 
+	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/bouwerp/aiman/internal/domain"
 )
 
 type jiraItem struct {
@@ -30,10 +31,19 @@ func NewIssuePickerModel(issues []domain.Issue) IssuePickerModel {
 
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Select JIRA Issue"
-	
+
+	// Enable VSCode-style search/filter
+	l.SetShowFilter(true)
+	l.FilterInput.Placeholder = "Type to filter issues..."
+	l.FilterInput.Focus()
+
+	// Disable the default "n/p" bindings so they don't interfere with typing
+	l.KeyMap.NextPage = key.Binding{}
+	l.KeyMap.PrevPage = key.Binding{}
+
 	return IssuePickerModel{
 		list:    l,
-		loading: len(issues) == 0,
+		loading: false,
 	}
 }
 
@@ -65,6 +75,9 @@ func (m IssuePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m IssuePickerModel) View() string {
 	if m.loading && len(m.list.Items()) == 0 {
 		return "\n  Loading issues from JIRA..."
+	}
+	if !m.loading && len(m.list.Items()) == 0 {
+		return "\n  No JIRA issues found.\n  Press ESC to go back."
 	}
 	return m.list.View()
 }

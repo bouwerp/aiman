@@ -1,9 +1,10 @@
 package ui
 
 import (
+	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/bouwerp/aiman/internal/domain"
 )
 
 type RepoItem struct {
@@ -28,6 +29,15 @@ func NewRepoPickerModel(repos []domain.Repo) RepoPickerModel {
 
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Select a Repository"
+
+	// Enable VSCode-style search/filter
+	l.SetShowFilter(true)
+	l.FilterInput.Placeholder = "Type to filter repositories..."
+	l.FilterInput.Focus()
+
+	// Disable the default "n/p" bindings so they don't interfere with typing
+	l.KeyMap.NextPage = key.Binding{}
+	l.KeyMap.PrevPage = key.Binding{}
 
 	return RepoPickerModel{
 		list: l,

@@ -1,95 +1,343 @@
 # Aiman
 
-**Aiman** is a high-performance terminal UI (TUI) orchestrator built in Go. It simplifies the lifecycle of remote, agent-assisted coding sessions by turning JIRA tickets into ready-to-code environments on remote dev servers in seconds.
+**Aiman** is a high-performance terminal UI (TUI) orchestrator built in Go. It manages the lifecycle of remote, agent-assisted coding sessions, turning a JIRA ticket into a ready-to-code environment in seconds.
 
-## 🚀 General Functionality
+## 🚀 What It Does
 
-Aiman automates the "prep work" for agentic development:
-- **JIRA Integration**: Search and select JIRA issues directly from the TUI.
-- **Git Orchestration**: Automatically creates slugs for branches and sets up git worktrees.
-- **Remote Dev Support**: Manages SSH connections (with multiplexing) to remote dev servers.
-- **GitHub Integration**: Lists and filters your accessible repositories via the GitHub CLI (`gh`).
-- **Health Checks**: Built-in "Doctor" checks verify your JIRA, Git, and SSH connectivity on startup.
-- **Persistence**: Stores session states and history in a local SQLite database.
+Aiman automates the entire development workflow:
 
-## 🛠 Getting Started
+1. **Select a JIRA Issue** - Search and filter your assigned issues
+2. **Generate Branch Name** - Auto-creates git-compatible branch names
+3. **Pick a Repository** - Browse your GitHub repos
+4. **Connect to Remote** - SSH to your dev server with multiplexing
+5. **Create Worktree** - Isolated git worktree for the branch
+6. **Launch Agent** - Start Claude, Gemini, or other AI agents in tmux
+7. **Sync Locally** - Mutagen sync for local IDE access
 
-### Prerequisites
+## ✨ Features
 
-- **Go 1.25+**
-- **GitHub CLI (`gh`)**: Authenticated (`gh auth login`).
-- **SSH**: Configured with key-based authentication for your remote servers.
-- **JIRA API Token**: Generate one at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens).
+### Core Workflow
+- **JIRA Integration**: Real-time search with VSCode-style filtering
+- **Smart Branch Names**: Auto-sanitizes issue titles for git compatibility
+- **Git Worktrees**: Isolated environments per branch
+- **Multi-Agent Support**: Launch Claude Code, Gemini CLI, GitHub Copilot, or OpenCode
+- **Session Management**: Track active sessions with live tmux previews
 
-### Installation
+### Remote Development
+- **SSH Multiplexing**: High-performance connections with ControlMaster
+- **MOSH Support**: Handoff to MOSH for high-latency connections (coming soon)
+- **Mutagen Sync**: Real-time file sync between local and remote
+- **Tmux Integration**: Native tmux session management
 
-1. Clone the repository:
-   ```bash
-   git clone git@github.com:bouwerp/aiman.git
-   cd aiman
-   ```
+### User Experience
+- **Interactive TUI**: Built with Bubble Tea for a modern terminal UI
+- **Real-time Previews**: Live tmux pane capture in the dashboard
+- **VS Code Integration**: Open synced directories directly in VS Code (`v` key)
+- **Health Checks**: Built-in "Doctor" validates all integrations on startup
+- **Fuzzy Search**: Find issues, repos, and sessions quickly
 
-2. Build and install:
-   ```bash
-   go install ./cmd/aiman
-   ```
+### Configuration
+- **YAML-based Config**: Simple `~/.aiman/config.yaml` configuration
+- **SQLite Persistence**: Session state and history tracking
+- **Secure Token Storage**: JIRA API tokens stored in config (use `op` or similar for production)
+
+## 🛠 Installation
+
+### Quick Install
+
+```bash
+# Download and run the installer
+curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash
+
+# Or install to a custom location
+curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --prefix ~/bin
+
+# Or install for current user only
+curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --user
+```
+
+### Update
+
+```bash
+# Update to the latest version
+./scripts/update.sh
+
+# Or force update even if on latest version
+./scripts/update.sh --force
+```
+
+### Manual Build
+
+```bash
+# Clone and build
+git clone git@github.com:bouwerp/aiman.git
+cd aiman
+go build -o aiman ./cmd/aiman
+
+# Install to PATH
+sudo mv aiman /usr/local/bin/
+```
+
+## 📋 Prerequisites
+
+- **Go 1.26+** (for building from source)
+- **GitHub CLI (`gh`)**: Authenticated with `gh auth login`
+- **SSH**: Key-based authentication configured for remote servers
+- **JIRA API Token**: Generate at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens)
+- **Optional**: 
+  - `tmux` for session management
+  - `mutagen` for file syncing
+  - `code` (VS Code CLI) for IDE integration
+  - `mosh` for high-latency connections
+
+## 🎮 Usage
 
 ### Initial Setup
 
-Run the initialization wizard to configure your JIRA instance:
+Run the initialization wizard to configure JIRA and remote servers:
 
 ```bash
 aiman init
 ```
 
-This will guide you through setting up your JIRA URL, Email, and API Token. Configuration is stored in `~/.aiman/config.yaml`.
+This will guide you through:
+- JIRA URL, Email, and API Token
+- Remote server configuration (scan `known_hosts` or manual entry)
+- Testing SSH connectivity
 
-## 💻 How To Use
+Configuration is stored in `~/.aiman/config.yaml`.
 
-### Launching the Dashboard
+### Main Dashboard
 
-Simply run `aiman` to launch the main TUI:
+Launch the TUI:
 
 ```bash
 aiman
 ```
 
-Upon startup, Aiman runs a series of **Doctor Checks** to ensure your integrations are healthy.
+**Keyboard Shortcuts:**
 
-### Administrative Tasks (Context Menu)
+| Key | Action |
+|-----|--------|
+| `n` | **New Session** - Start the workflow wizard |
+| `m` | **Admin Menu** - Configure remotes, JIRA, etc. |
+| `↑/↓` | Navigate sessions |
+| `Enter` | Select item |
+| `ESC` | Go back / Cancel |
+| `Ctrl+S` | **Attach** to tmux session (full terminal) |
+| `Ctrl+T` | **Toggle** between preview and terminal mode |
+| `v` | **Open in VS Code** (local synced directory) |
+| `r` | **Refresh** session list |
+| `Ctrl+C` | Quit |
 
-From the main dashboard, press **`m`** to open the **Administrative Menu**. From here you can:
+### Creating a New Session
 
-1.  **Configure Remote Servers**:
-    - **Scan**: Aiman can scan your `known_hosts` file to suggest servers.
-    - **Manual**: Add a new server by IP/Hostname and Username.
-    - **Test**: Aiman automatically tests the SSH connection before adding it to your config.
-2.  **JIRA Configuration**: Re-run the setup wizard to update your JIRA credentials.
+1. Press `n` on the dashboard
+2. **Select JIRA Issue**: Type to filter your issues in real-time
+3. **Confirm Branch Name**: Edit the auto-generated git-compatible branch name
+   - Invalid characters are blocked
+   - Spaces automatically become dashes
+4. **Select Repository**: Pick from your GitHub repos
+5. **Agent Selection**: Choose your AI coding assistant (Claude, Gemini, etc.)
+6. **Sync Setup**: Automatic mutagen sync to local directory
 
-### Managing Repositories
+### Administrative Menu
 
-You can quickly browse and filter your GitHub repositories:
+Press `m` to access:
+- **Manage Remote Servers**: Add, scan, or test SSH connections
+- **JIRA Configuration**: Update credentials
+- **Health Checks**: Re-run doctor checks
+
+### Git Repository Configuration
+
+By default, Aiman shows your personal GitHub repositories. You can customize which repositories appear in the picker by editing `~/.aiman/config.yaml`:
+
+```yaml
+git:
+  # Include your personal repositories (default: true)
+  include_personal: true
+  
+  # Include repositories from specific organizations
+  include_orgs:
+    - "mycompany"
+    - "opensource-org"
+  
+  # Include only repos matching these patterns (optional)
+  # Supports regex. If empty, includes all repos not excluded
+  include_patterns:
+    - "^mycompany/.*"
+    - "^important-"
+  
+  # Exclude repos matching these patterns (optional)
+  # Supports regex
+  exclude_patterns:
+    - "^personal/"
+    - ".*\.github\.io$"
+```
+
+**Examples:**
+
+Show only repos from your company org:
+```yaml
+git:
+  include_personal: false
+  include_orgs:
+    - "mycompany"
+```
+
+Include personal repos and filter out forks:
+```yaml
+git:
+  include_personal: true
+  exclude_patterns:
+    - ".*-fork$"
+```
+
+Include only specific repos by exact name:
+```yaml
+git:
+  include_personal: true
+  include_patterns:
+    - "^mycompany/backend-api$"
+    - "^mycompany/frontend-app$"
+```
+
+### Repository Browser
+
+Quickly browse GitHub repositories:
 
 ```bash
 aiman repos
 ```
 
-This uses a fuzzy-search interface to help you find the right repository for your next task.
+## 📁 Configuration
 
-## 📁 Configuration & Data
+All data is stored in `~/.aiman/`:
 
-Aiman keeps all its data in a hidden directory in your home folder:
+```
+~/.aiman/
+├── config.yaml          # Main configuration
+├── aiman.db             # SQLite database
+└── sockets/             # SSH ControlMaster sockets
+```
 
-- **Config**: `~/.aiman/config.yaml`
-- **Database**: `~/.aiman/aiman.db`
+### Example Config
+
+```yaml
+integrations:
+  jira:
+    url: "https://company.atlassian.net"
+    email: "you@company.com"
+    api_token: "ATATT..."
+
+# Git Repository Configuration
+git:
+  # Include your personal repositories (default: true)
+  include_personal: true
+  
+  # Include repositories from specific organizations
+  include_orgs:
+    - "mycompany"
+    - "opensource-org"
+  
+  # Include only repos matching these patterns (optional)
+  # Supports regex. If empty, includes all repos not excluded
+  include_patterns:
+    - "^mycompany/.*"
+    - "^important-"
+  
+  # Exclude repos matching these patterns (optional)
+  # Supports regex
+  exclude_patterns:
+    - "^personal/"
+    - ".*\.github\.io$"
+
+remotes:
+  - name: devbox
+    host: devbox.company.com
+    user: developer
+    root: /home/developer/repos
+
+active_remote: devbox
+```
 
 ## 🏗 Architecture
 
-Aiman follows a strict **Clean Architecture** approach:
-- **Domain**: Core business logic and entities.
-- **Usecase**: Orchestrators for the development workflow.
-- **Infrastructure**: Adapters for JIRA, Git, SSH, and SQLite.
-- **UI**: Interactive TUI components built with `charmbracelet/bubbletea`.
+Aiman follows **Clean Architecture** principles:
+
+```
+┌─────────────────────────────────────────┐
+│  UI (Bubble Tea)                        │
+│  - Dashboard, Pickers, Inputs           │
+├─────────────────────────────────────────┤
+│  Use Cases                              │
+│  - Doctor, Session Discovery, Flow      │
+├─────────────────────────────────────────┤
+│  Domain                                 │
+│  - Session, Issue, Repository           │
+├─────────────────────────────────────────┤
+│  Infrastructure                         │
+│  - JIRA, Git, SSH, SQLite, Mutagen     │
+└─────────────────────────────────────────┘
+```
+
+### Key Components
+
+- **`JiraProvider`**: JIRA Cloud API v3 integration
+- **`GitSlugger`**: Branch name sanitization
+- **`SSHManager`**: ControlMaster multiplexing
+- **`WorktreeManager`**: Git worktree operations
+- **`MutagenBridge`**: File synchronization
+- **`TmuxManager`**: Session lifecycle management
+- **`SkillEngine`**: Agent configuration injection
+
+## 🔄 Development Workflow
+
+```
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+│  JIRA    │───▶│  Branch  │───▶│  Repo    │───▶│  Connect │
+│  Issue   │    │  Name    │    │  Select  │    │   SSH    │
+└──────────┘    └──────────┘    └──────────┘    └──────────┘
+                                                        │
+┌──────────┐    ┌──────────┐    ┌──────────┐           │
+│   Sync   │◀───│  Launch  │◀───│  Tmux    │◀──────────┘
+│ Mutagen  │    │  Agent   │    │ Session  │
+└──────────┘    └──────────┘    └──────────┘
+```
+
+## 🚧 Roadmap
+
+- [x] JIRA issue search with filtering
+- [x] Git branch name sanitization
+- [x] SSH multiplexing
+- [x] Tmux session management
+- [x] Real-time pane previews
+- [x] VS Code integration
+- [ ] MOSH support
+- [ ] SQLite persistence for sessions
+- [ ] Skill injection system
+- [ ] Claude Code integration
+- [ ] Gemini CLI integration
+- [ ] GitHub Copilot CLI support
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Commit your changes: `git commit -m 'Add amazing feature'`
+4. Push to the branch: `git push origin feature/amazing-feature`
+5. Open a Pull Request
+
+## 📄 License
+
+MIT License - see LICENSE file for details
+
+## 🙏 Acknowledgments
+
+- Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) by Charm
+- Inspired by [Claude Code](https://claude.ai/code) and other agentic tools
+- Uses [Mutagen](https://mutagen.io/) for file synchronization
 
 ---
-*Built with ❤️ in Go.*
+
+*Built with ❤️ in Go by Pieter Bouwer*

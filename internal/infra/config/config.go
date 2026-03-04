@@ -16,12 +16,20 @@ const (
 
 type Config struct {
 	Integrations Integrations `yaml:"integrations"`
+	Git          GitConfig    `yaml:"git,omitempty"`
 	Remotes      []Remote     `yaml:"remotes"`
 	ActiveRemote string       `yaml:"active_remote"`
 }
 
 type Integrations struct {
 	Jira JiraConfig `yaml:"jira"`
+}
+
+type GitConfig struct {
+	IncludePersonal bool     `yaml:"include_personal,omitempty"`
+	IncludeOrgs     []string `yaml:"include_orgs,omitempty"`
+	IncludePatterns []string `yaml:"include_patterns,omitempty"`
+	ExcludePatterns []string `yaml:"exclude_patterns,omitempty"`
 }
 
 type JiraConfig struct {

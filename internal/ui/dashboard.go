@@ -8,17 +8,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usecase"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 var (
@@ -168,7 +168,7 @@ func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
 				break
 			}
 		}
-		
+
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		// We use a background context as this is just a quick capture
 		out, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
@@ -215,7 +215,7 @@ func (m *Model) searchJira(query string) tea.Cmd {
 			Email:    m.cfg.Integrations.Jira.Email,
 			APIToken: m.cfg.Integrations.Jira.APIToken,
 		})
-		
+
 		issues, err := jiraProvider.SearchIssues(ctx, query)
 		return jiraIssuesMsg{issues: issues, err: err}
 	}
@@ -229,7 +229,7 @@ type jiraIssuesMsg struct {
 func (m *Model) fetchRepos() tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		gitManager := git.NewManager()
+		gitManager := git.NewManager(&m.cfg.Git)
 		repos, err := gitManager.ListRepos(ctx)
 		return reposMsg{repos: repos, err: err}
 	}
@@ -241,26 +241,36 @@ type reposMsg struct {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tickTmux()
+	var cmds []tea.Cmd
+	cmds = append(cmds, tickTmux())
+
+	// Trigger initial fetch for the first selected session
+	if sel := m.list.SelectedItem(); sel != nil {
+		s := sel.(item).session
+		m.activeSession = s.TmuxSession
+		cmds = append(cmds, fetchTmuxPane(m.cfg, s))
+	}
+
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	h, v := docStyle.GetFrameSize()
-	
+
 	mainHeight := height - v - len(m.doctorResults) - 10
-	
+
 	m.list.SetSize(width/3-h, mainHeight) // Sidebar width
 	m.menu.SetSize(width-h, height-v)
 	m.remotes.list.SetSize(width-h-4, height-v-14)
 	m.remotes.width = width
 	m.remotes.height = height
-	
+
 	// Viewport takes up the bottom part of the main panel
-	m.viewport.Width = width - (width/3) - h - 4
+	m.viewport.Width = width - (width / 3) - h - 4
 	m.viewport.Height = mainHeight - 11 // Reserve 11 lines for details
-	
+
 	if m.issuePicker.list.Title != "" {
 		m.issuePicker.SetSize(width, height)
 	}
@@ -278,15 +288,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.terminal.h = m.viewport.Height
 			m.terminal.term.Resize(m.viewport.Width, m.viewport.Height)
 		}
-		
+
 		// Propagate to sub-models
 		var subCmd tea.Cmd
 		var tm tea.Model
-		
+
 		tm, subCmd = m.remotes.Update(msg)
 		m.remotes = tm.(RemotesModel)
 		cmds = append(cmds, subCmd)
-		
+
 		tm, subCmd = m.setup.Update(msg)
 		m.setup = tm.(SetupModel)
 		cmds = append(cmds, subCmd)
@@ -318,6 +328,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.String() == "n" {
 				m.state = viewStateIssuePicker
 				m.issuePicker = NewIssuePickerModel(nil)
+				m.issuePicker.loading = true
 				m.issuePicker.SetSize(m.width, m.height)
 				return m, m.searchJira("")
 			}
@@ -401,13 +412,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		
+
 		// Capture list selection changes to trigger immediate fetch
 		oldSel := m.list.SelectedItem()
 		m.list, cmd = m.list.Update(msg)
 		cmds = append(cmds, cmd)
 		newSel := m.list.SelectedItem()
-		
+
 		if oldSel != newSel && newSel != nil {
 			s := newSel.(item).session
 			m.activeSession = s.TmuxSession
@@ -419,7 +430,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, fetchTmuxPane(m.cfg, s))
 			}
 		}
-		
+
 		if m.panelMode == panelModeTerminal && m.terminal != nil {
 			var tModel tea.Model
 			tModel, cmd = m.terminal.Update(msg)
@@ -465,7 +476,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		subModel, cmd = m.remotes.Update(msg)
 		m.remotes = subModel.(RemotesModel)
 		cmds = append(cmds, cmd)
-		
+
 		if m.remotes.done {
 			// Populate list with discovered sessions
 			items := make([]list.Item, len(m.remotes.DiscoveredSessions))
@@ -473,7 +484,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				items[i] = item{session: s}
 			}
 			m.list.SetItems(items)
-			
+
 			m.remotes.done = false // Reset
 			m.state = viewStateMain
 			return m, nil
@@ -489,7 +500,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		subModel, cmd = m.setup.Update(msg)
 		m.setup = subModel.(SetupModel)
 		cmds = append(cmds, cmd)
-		
+
 		if m.setup.saved {
 			m.setup.saved = false // Reset
 			m.state = viewStateMenu
@@ -617,7 +628,7 @@ func (m Model) View() string {
 			}
 			mainPanel.WriteString(fmt.Sprintf("\nStatus: %s\n", s.Status))
 			mainPanel.WriteString(fmt.Sprintf("Created: %s\n", s.CreatedAt.Format("2006-01-02 15:04:05")))
-			
+
 			// Add separator and Viewport for Tmux Output
 			mainPanel.WriteString("\n" + strings.Repeat("─", mainWidth-4) + "\n")
 			modeName := "PREVIEW"
@@ -625,7 +636,7 @@ func (m Model) View() string {
 				modeName = "TERMINAL"
 			}
 			mainPanel.WriteString(activeStyle.Render(modeName) + " (ctrl+t toggle, ctrl+s full screen)\n\n")
-			
+
 			if m.panelMode == panelModeTerminal && m.terminal != nil {
 				mainPanel.WriteString(m.terminal.View())
 			} else {
@@ -653,14 +664,14 @@ func (m Model) View() string {
 			}
 			doctorOutput.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
 		}
-		
+
 		var activeHost string
 		if m.cfg.ActiveRemote != "" {
 			activeHost = successStyle.Render(m.cfg.ActiveRemote)
 		} else {
 			activeHost = failStyle.Render("None")
 		}
-		
+
 		footer := "\nActive Remote: " + activeHost + "\n\n" + doctorOutput.String()
 
 		return docStyle.Render(content + "\n" + footer)
@@ -684,13 +695,13 @@ func (m Model) View() string {
 		b.WriteString("3. Type 'shell command' and select:\n")
 		b.WriteString("   'Shell Command: Install \"code\" command in PATH'.\n\n")
 		b.WriteString("Press any key to return.")
-		
+
 		dialog := lipgloss.NewStyle().
 			Border(lipgloss.DoubleBorder()).
 			BorderForeground(lipgloss.Color("205")).
 			Padding(1, 2).
 			Width(60)
-			
+
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
 
 	case viewStateIssuePicker:
