@@ -3,7 +3,10 @@ package mutagen
 import (
 	"bufio"
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -17,6 +20,20 @@ func NewEngine() *Engine {
 
 func (e *Engine) StartSync(ctx context.Context, localPath, remotePath string) error {
 	// mutagen sync create --name <id> localPath remotePath
+	if localPath == "" || remotePath == "" {
+		return fmt.Errorf("invalid sync paths")
+	}
+
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		return fmt.Errorf("failed to create local sync directory: %w", err)
+	}
+
+	name := filepath.Base(localPath)
+	cmd := exec.CommandContext(ctx, "mutagen", "sync", "create", "--name", name, localPath, remotePath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create mutagen sync: %w, output: %s", err, string(output))
+	}
 	return nil
 }
 

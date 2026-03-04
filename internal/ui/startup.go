@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usecase"
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type StartupModel struct {
@@ -128,7 +128,7 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m StartupModel) View() string {
 	var b strings.Builder
 	b.WriteString("\n\n")
-	
+
 	currentAction := ""
 	switch m.step {
 	case 0:
@@ -142,7 +142,7 @@ func (m StartupModel) View() string {
 	}
 
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", m.spinner.View(), currentAction))
-	
+
 	for _, res := range m.results {
 		status := successStyle.Render("✓")
 		if !res.Passed {
@@ -150,6 +150,6 @@ func (m StartupModel) View() string {
 		}
 		b.WriteString(fmt.Sprintf("  %s %-10s: %s\n", status, res.Name, res.Message))
 	}
-	
+
 	return b.String()
 }

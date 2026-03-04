@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -44,7 +45,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		// 3. Get CWD
 		cwd, err := d.remoteExecutor.GetTmuxSessionCWD(ctx, name)
 		if err == nil {
-			session.WorktreePath = cwd
+			session.WorktreePath = normalizePath(cwd)
 		}
 
 		// 4. Extract JIRA key from session name
@@ -65,24 +66,24 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 
 		// 6. Cross-reference with mutagen
 		if cwd != "" {
-			normalizedCWD := strings.TrimSuffix(cwd, "/")
+			normalizedCWD := normalizePath(cwd)
 			for _, ms := range mutagenSessions {
 				// Normalized remote path from mutagen
-				normalizedRemote := strings.TrimSuffix(ms.RemotePath, "/")
-				normalizedLocal := strings.TrimSuffix(ms.LocalPath, "/")
+				normalizedRemote := normalizePath(ms.RemotePath)
+				normalizedLocal := normalizePath(ms.LocalPath)
 
 				// DEBUG: fmt.Printf("Checking CWD %s against Alpha: %s, Beta: %s\n", normalizedCWD, normalizedLocal, normalizedRemote)
 
 				// In Mutagen, either Alpha or Beta could be the remote.
-				if normalizedRemote == normalizedCWD || normalizedLocal == normalizedCWD || 
-				   strings.HasSuffix(normalizedRemote, normalizedCWD) || strings.HasSuffix(normalizedLocal, normalizedCWD) {
-					
-					// We need to identify which one is actually local (starts with /Users or /) 
+				if normalizedRemote == normalizedCWD || normalizedLocal == normalizedCWD ||
+					strings.HasSuffix(normalizedRemote, normalizedCWD) || strings.HasSuffix(normalizedLocal, normalizedCWD) {
+
+					// We need to identify which one is actually local (starts with /Users or /)
 					// and doesn't look like a connection string
 					if !strings.Contains(ms.LocalPath, ":") {
-						session.LocalPath = ms.LocalPath
+						session.LocalPath = normalizePath(ms.LocalPath)
 					} else if !strings.Contains(ms.RemotePath, ":") {
-						session.LocalPath = ms.RemotePath
+						session.LocalPath = normalizePath(ms.RemotePath)
 					}
 
 					session.MutagenSyncID = ms.ID
@@ -96,4 +97,11 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 	}
 
 	return sessions, nil
+}
+
+func normalizePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	return filepath.Clean(strings.TrimSpace(p))
 }

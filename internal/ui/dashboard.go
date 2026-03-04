@@ -13,6 +13,8 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
+	"github.com/bouwerp/aiman/internal/infra/mutagen"
+	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usecase"
 	"github.com/charmbracelet/bubbles/key"
@@ -20,6 +22,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 )
 
 var (
@@ -112,7 +115,7 @@ type Model struct {
 	loadingNext   viewState
 }
 
-func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session) Model {
+func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session) *Model {
 	items := make([]list.Item, len(initialSessions))
 	for i, s := range initialSessions {
 		items[i] = item{session: s}
@@ -144,7 +147,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		Border(lipgloss.NormalBorder(), true, false, false, false). // Top border
 		PaddingTop(1)
 
-	return Model{
+	return &Model{
 		cfg:           cfg,
 		state:         viewStateMain,
 		panelMode:     panelModePreview,
@@ -260,6 +263,11 @@ type dirsMsg struct {
 	err  error
 }
 
+type sessionCreateMsg struct {
+	session domain.Session
+	err     error
+}
+
 func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -326,6 +334,119 @@ func (m *Model) fetchAgents() tea.Cmd {
 	}
 }
 
+func (m *Model) createSession() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Find remote config
+		var remote config.Remote
+		for _, r := range m.cfg.Remotes {
+			if r.Host == m.cfg.ActiveRemote {
+				remote = r
+				break
+			}
+		}
+
+		if remote.Host == "" {
+			return sessionCreateMsg{err: fmt.Errorf("no active remote configured")}
+		}
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+
+		repoName := extractRepoName(m.sessionCfg.Repo.Name)
+		repoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
+
+		// Ensure repo exists
+		if err := mgr.ValidateDir(ctx, repoPath); err != nil {
+			_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remote.Root, m.sessionCfg.Repo.URL, repoName))
+			if cloneErr != nil {
+				return sessionCreateMsg{err: fmt.Errorf("failed to clone repository: %w", cloneErr)}
+			}
+		}
+
+		// Fetch latest
+		_, fetchErr := mgr.Execute(ctx, fmt.Sprintf("git -C %s fetch origin", repoPath))
+		if fetchErr != nil {
+			return sessionCreateMsg{err: fmt.Errorf("failed to fetch repo: %w", fetchErr)}
+		}
+
+		branch := m.sessionCfg.Branch
+		worktreeDir := strings.ReplaceAll(branch, "/", "-")
+		worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
+
+		// Create worktree from origin/main
+		worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s ../%s origin/main", repoPath, branch, worktreeDir)
+		_, worktreeErr := mgr.Execute(ctx, worktreeCmd)
+		if worktreeErr != nil {
+			return sessionCreateMsg{err: fmt.Errorf("failed to create worktree: %w", worktreeErr)}
+		}
+
+		// Resolve worktree path on remote to avoid ../ in paths
+		resolvedWorktreePath := worktreePath
+		if out, err := mgr.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
+			resolvedWorktreePath = strings.TrimSpace(out)
+		} else if out, err := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q", worktreePath)); err == nil {
+			resolvedWorktreePath = strings.TrimSpace(out)
+		}
+
+		// Working directory
+		workingDir := resolvedWorktreePath
+		if m.sessionCfg.Directory != "" && m.sessionCfg.Directory != "." {
+			workingDir = fmt.Sprintf("%s/%s", resolvedWorktreePath, m.sessionCfg.Directory)
+		}
+
+		// Start tmux session and agent
+		tmuxName := worktreeDir
+		agentCmd := m.sessionCfg.Agent.Command
+		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q %q", tmuxName, workingDir, agentCmd)
+		_, tmuxErr := mgr.Execute(ctx, startCmd)
+		if tmuxErr != nil {
+			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}
+		}
+
+		// Start mutagen sync
+		mutagenEngine := mutagen.NewEngine()
+		localPath, _ := config.GetDBPath()
+		localBase := strings.TrimSuffix(localPath, "/aiman.db")
+		localSyncPath := fmt.Sprintf("%s/work/%s", localBase, tmuxName)
+		target := remote.Host
+		if remote.User != "" {
+			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
+		}
+		remoteSyncPath := fmt.Sprintf("%s:%s", target, resolvedWorktreePath)
+		if err := mutagenEngine.StartSync(ctx, localSyncPath, remoteSyncPath); err != nil {
+			return sessionCreateMsg{err: fmt.Errorf("failed to start mutagen sync: %w", err)}
+		}
+
+		session := domain.Session{
+			ID:            uuid.New().String(),
+			IssueKey:      m.sessionCfg.IssueKey,
+			Branch:        branch,
+			RepoName:      m.sessionCfg.Repo.Name,
+			RemoteHost:    remote.Host,
+			WorktreePath:  resolvedWorktreePath,
+			TmuxSession:   tmuxName,
+			MutagenSyncID: tmuxName,
+			LocalPath:     localSyncPath,
+			AgentName:     m.sessionCfg.Agent.Name,
+			Status:        domain.SessionStatusSyncing,
+			CreatedAt:     time.Now(),
+			UpdatedAt:     time.Now(),
+		}
+
+		// Persist session
+		dbPath, err := config.GetDBPath()
+		if err == nil {
+			repo, repoErr := sqlite.NewRepository(dbPath)
+			if repoErr == nil {
+				_ = repo.Save(ctx, &session)
+			}
+		}
+
+		return sessionCreateMsg{session: session}
+	}
+}
+
 func extractRepoName(fullName string) string {
 	// Extract just the repo name from "org/repo" format
 	parts := strings.Split(fullName, "/")
@@ -335,7 +456,7 @@ func extractRepoName(fullName string) string {
 	return fullName
 }
 
-func (m Model) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	cmds = append(cmds, tickTmux())
 
@@ -343,6 +464,8 @@ func (m Model) Init() tea.Cmd {
 	if sel := m.list.SelectedItem(); sel != nil {
 		s := sel.(item).session
 		m.activeSession = s.TmuxSession
+		m.tmuxOutput = "Loading..."
+		m.viewport.SetContent(m.tmuxOutput)
 		cmds = append(cmds, fetchTmuxPane(m.cfg, s))
 	}
 
@@ -377,7 +500,7 @@ func (m *Model) SetSize(width, height int) {
 	m.summary.SetSize(width, height)
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
 
@@ -795,9 +918,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 		if m.summary.IsConfirmed() {
-			// TODO: Step 8: Session Bootstrapping
-			m.state = viewStateMain
-			return m, nil
+			m.loadingMsg = "Creating session..."
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, m.createSession()
 		}
 
 	case viewStateLoading:
@@ -835,13 +959,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.agentPicker.SetSize(m.width-h, m.height-v)
 			m.state = m.loadingNext
 			return m, nil
+		case sessionCreateMsg:
+			if msg.err != nil {
+				m.lastError = fmt.Sprintf("Failed to create session: %v", msg.err)
+				m.state = viewStateVSCodeError
+				return m, nil
+			}
+			// Add new session to list
+			items := m.list.Items()
+			items = append(items, item{session: msg.session})
+			m.list.SetItems(items)
+			m.state = m.loadingNext
+			return m, nil
 		}
 	}
 
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) View() string {
+func (m *Model) View() string {
 	switch m.state {
 	case viewStateMain:
 		// Split View
