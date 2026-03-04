@@ -236,7 +236,7 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 	ctx := context.Background()
 
-	statusOut, err := mgr.Execute(ctx, fmt.Sprintf("git -C %q status --porcelain --untracked-files=no", s.WorktreePath))
+	statusOut, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q status --porcelain --untracked-files=no'", s.WorktreePath))
 	if err != nil {
 		// If git is broken/corrupted (exit 128), allow cleanup to proceed
 		// Check if error indicates corrupted repo
@@ -253,7 +253,7 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 		return fmt.Errorf("session has uncommitted changes; commit or stash before terminating")
 	}
 
-	aheadOut, err := mgr.Execute(ctx, fmt.Sprintf("if git -C %q rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then git -C %q rev-list --count '@{upstream}..HEAD'; else echo NO_UPSTREAM; fi", s.WorktreePath, s.WorktreePath))
+	aheadOut, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'if git -C %q rev-parse --abbrev-ref --symbolic-full-name @{upstream} >/dev/null 2>&1; then git -C %q rev-list --count @{upstream}..HEAD; else echo NO_UPSTREAM; fi'", s.WorktreePath, s.WorktreePath))
 	if err != nil {
 		// If git is broken/corrupted, allow cleanup to proceed
 		errMsg := err.Error()
@@ -785,14 +785,17 @@ func (m *Model) runTerminateStep(index int) error {
 			return fmt.Errorf("no remote configured")
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		_, err := mgr.Execute(ctx, fmt.Sprintf("git -C %q worktree remove -f %q", s.WorktreePath, s.WorktreePath))
-		if err != nil {
-			_, rmErr := mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", s.WorktreePath))
-			if rmErr != nil {
-				return err
-			}
+
+		// Try to remove via git worktree (needs to run from main repo)
+		if s.RepoName != "" {
+			repoName := extractRepoName(s.RepoName)
+			mainRepoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
+			_, _ = mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
 		}
-		return nil
+
+		// Force remove the directory regardless (worktree remove might fail if corrupted)
+		_, err := mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", s.WorktreePath))
+		return err
 	case 4: // Clean up local files
 		if s.LocalPath == "" {
 			return nil
