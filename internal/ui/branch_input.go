@@ -28,7 +28,7 @@ func NewBranchInputModel(proposed string) BranchInputModel {
 
 	// Sanitize the proposed value before setting it
 	sanitized := m.sanitizeInput(proposed)
-	ti.SetValue(sanitized)
+	m.textInput.SetValue(sanitized)
 
 	return m
 }
