@@ -18,14 +18,19 @@ type BranchInputModel struct {
 func NewBranchInputModel(proposed string) BranchInputModel {
 	ti := textinput.New()
 	ti.Placeholder = "Branch Name"
-	ti.SetValue(proposed)
 	ti.Focus()
 	ti.CharLimit = 156
 	ti.Width = 40
 
-	return BranchInputModel{
+	m := BranchInputModel{
 		textInput: ti,
 	}
+
+	// Sanitize the proposed value before setting it
+	sanitized := m.sanitizeInput(proposed)
+	ti.SetValue(sanitized)
+
+	return m
 }
 
 func (m BranchInputModel) Init() tea.Cmd {
