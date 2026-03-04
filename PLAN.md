@@ -51,6 +51,13 @@
         *   Launch a new `tmux` session named after the issue key/branch.
         *   Start the selected agent CLI within that tmux session, scoped to the chosen directory.
     9.  **Local Sync**: Automatically establish a `mutagen` sync session, mirroring the remote worktree directory to a local path (e.g., `~/.aiman/work/<session-name>`), enabling immediate local IDE access.
+- [ ] **Session Termination** (Key: `ctrl+k`):
+    - Terminate mutagen sync session.
+    - Stop the agent process running in the tmux session.
+    - Kill the tmux session.
+    - Remove the associated git worktree.
+    - Clean up local sync directory.
+    - Update session status in database.
 - [ ] **SQLite Persistence**: Fully wire the existing `internal/infra/sqlite` repository to save both discovered and newly created sessions, tracking their full lifecycle.
 - [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths before agent launch.
 - [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency interactive connections.

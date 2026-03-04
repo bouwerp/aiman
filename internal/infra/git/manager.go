@@ -158,3 +158,24 @@ func (m *Manager) SetupWorktree(ctx context.Context, repo domain.Repo, branch st
 		Branch: branch,
 	}, nil
 }
+
+// FetchOrganizations returns a list of organizations the user has access to
+func FetchOrganizations(ctx context.Context) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "gh", "org", "list", "--limit", "100")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list organizations: %w, output: %s", err, string(output))
+	}
+
+	// Parse output - each line is an org name
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var orgs []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			orgs = append(orgs, line)
+		}
+	}
+
+	return orgs, nil
+}

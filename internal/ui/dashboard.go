@@ -36,11 +36,13 @@ const (
 	viewStateMenu
 	viewStateRemotes
 	viewStateSetup
+	viewStateGitSetup
 	viewStatePicker
 	viewStateVSCodeError
 	viewStateIssuePicker
 	viewStateBranchInput
 	viewStateRepoPicker
+	viewStateDirPicker
 )
 
 type panelMode int
@@ -86,9 +88,11 @@ type Model struct {
 	menu          list.Model
 	remotes       RemotesModel
 	setup         SetupModel
+	gitSetup      GitSetupModel
 	picker        RepoPickerModel
 	issuePicker   IssuePickerModel
 	branchInput   BranchInputModel
+	dirPicker     DirPickerModel
 	doctorResults []usecase.CheckResult
 	width, height int
 	viewport      viewport.Model
@@ -121,6 +125,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	menuItems := []list.Item{
 		menuItem{title: "Manage Remote Servers", desc: "Select active, add new, or scan suggestions", action: viewStateRemotes},
 		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
+		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
 	m.Title = "Administrative Menu"
@@ -138,6 +143,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menu:          m,
 		remotes:       NewRemotesModel(cfg),
 		setup:         NewSetupModel(cfg),
+		gitSetup:      NewGitSetupModel(cfg),
 		doctorResults: doctorResults,
 		viewport:      vp,
 	}
@@ -240,6 +246,65 @@ type reposMsg struct {
 	err   error
 }
 
+type dirsMsg struct {
+	dirs []string
+	err  error
+}
+
+func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Find remote config
+		var remote config.Remote
+		for _, r := range m.cfg.Remotes {
+			if r.Host == m.cfg.ActiveRemote {
+				remote = r
+				break
+			}
+		}
+
+		if remote.Host == "" {
+			return dirsMsg{err: fmt.Errorf("no active remote configured")}
+		}
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+
+		// Extract just the repo name (not org/repo)
+		repoName := extractRepoName(repo.Name)
+		repoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
+
+		// Check if repo exists on remote, clone if not
+		if err := mgr.ValidateDir(ctx, repoPath); err != nil {
+			// Repo doesn't exist, need to clone it
+			_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remote.Root, repo.URL, repoName))
+			if cloneErr != nil {
+				return dirsMsg{err: fmt.Errorf("failed to clone repository: %w", cloneErr)}
+			}
+		}
+
+		// Scan directories up to depth 3
+		dirs, err := mgr.ScanDirectories(ctx, repoPath, 3)
+		if err != nil {
+			return dirsMsg{err: err}
+		}
+
+		// Always add root as an option
+		dirs = append([]string{"."}, dirs...)
+
+		return dirsMsg{dirs: dirs, err: nil}
+	}
+}
+
+func extractRepoName(fullName string) string {
+	// Extract just the repo name from "org/repo" format
+	parts := strings.Split(fullName, "/")
+	if len(parts) > 1 {
+		return parts[len(parts)-1]
+	}
+	return fullName
+}
+
 func (m Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	cmds = append(cmds, tickTmux())
@@ -300,6 +365,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		tm, subCmd = m.setup.Update(msg)
 		m.setup = tm.(SetupModel)
 		cmds = append(cmds, subCmd)
+
+		m.gitSetup.SetSize(msg.Width, msg.Height)
 	}
 
 	switch m.state {
@@ -449,6 +516,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if i.action == viewStateRemotes {
 						// Re-init remotes model to pick up new config/status
 						m.remotes = NewRemotesModel(m.cfg)
+						m.state = i.action
+						return m, nil
+					}
+					if i.action == viewStateGitSetup {
+						// Re-init git setup model and trigger org fetch
+						m.gitSetup = NewGitSetupModel(m.cfg)
+						m.state = i.action
+						return m, m.gitSetup.Init()
 					}
 					m.state = i.action
 					return m, nil
@@ -503,6 +578,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.setup.saved {
 			m.setup.saved = false // Reset
+			m.state = viewStateMenu
+		}
+
+	case viewStateGitSetup:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			m.state = viewStateMenu
+			return m, nil
+		}
+
+		var subModel tea.Model
+		subModel, cmd = m.gitSetup.Update(msg)
+		m.gitSetup = subModel.(GitSetupModel)
+		cmds = append(cmds, cmd)
+
+		if m.gitSetup.saved {
+			m.gitSetup.saved = false // Reset
 			m.state = viewStateMenu
 		}
 
@@ -587,8 +678,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 		if m.picker.selected != nil {
-			// Repo selected
-			// TODO: Step 5: Remote Execution Orchestration
+			// Repo selected, now fetch directories
+			m.state = viewStateDirPicker
+			return m, m.fetchRepoDirectories(m.picker.selected)
+		}
+
+	case viewStateDirPicker:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			if m.dirPicker.list.FilterState() != list.Filtering {
+				m.state = viewStateRepoPicker
+				return m, nil
+			}
+		}
+
+		if msg, ok := msg.(dirsMsg); ok {
+			if msg.err != nil {
+				m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
+				m.state = viewStateVSCodeError
+				return m, nil
+			}
+			m.dirPicker = NewDirPickerModel(msg.dirs, *m.picker.selected)
+			// Resize picker
+			h, v := docStyle.GetFrameSize()
+			m.dirPicker.SetSize(m.width-h, m.height-v)
+			return m, nil
+		}
+
+		var subModel tea.Model
+		subModel, cmd = m.dirPicker.Update(msg)
+		m.dirPicker = subModel.(DirPickerModel)
+		cmds = append(cmds, cmd)
+
+		if m.dirPicker.selected != "" {
+			// Directory selected
+			// TODO: Step 7: Agent Selection
 			m.state = viewStateMain
 			return m, nil
 		}
@@ -685,6 +808,9 @@ func (m Model) View() string {
 	case viewStateSetup:
 		return docStyle.Render(m.setup.View())
 
+	case viewStateGitSetup:
+		return docStyle.Render(m.gitSetup.View())
+
 	case viewStateVSCodeError:
 		var b strings.Builder
 		b.WriteString(activeStyle.Render("VS Code CLI Error") + "\n\n")
@@ -712,6 +838,9 @@ func (m Model) View() string {
 
 	case viewStateRepoPicker:
 		return docStyle.Render(m.picker.View())
+
+	case viewStateDirPicker:
+		return docStyle.Render(m.dirPicker.View())
 	}
 	return ""
 }

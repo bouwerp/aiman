@@ -41,7 +41,7 @@ func (m *Manager) controlPath() string {
 	home, _ := os.UserHomeDir()
 	// Use a hash of the target to keep path length reasonable and unique
 	target := m.target()
-	return filepath.Join(home, ".aiman", "sockets", strings.ReplaceAll(target, "@", "-") + ".sock")
+	return filepath.Join(home, ".aiman", "sockets", strings.ReplaceAll(target, "@", "-")+".sock")
 }
 
 func (m *Manager) Connect(ctx context.Context) error {
@@ -56,20 +56,20 @@ func (m *Manager) Connect(ctx context.Context) error {
 func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	target := m.target()
 	cp := m.controlPath()
-	
+
 	// Ensure sockets directory exists
 	os.MkdirAll(filepath.Dir(cp), 0700)
 
 	// We use ControlMaster=auto and ControlPersist to handle multiplexing automatically.
 	// This is more robust than manual management with -f.
-	cmd := exec.CommandContext(ctx, "ssh", 
-		"-o", "BatchMode=yes", 
-		"-o", "ConnectTimeout=10", 
-		"-o", "ControlMaster=auto", 
-		"-o", "ControlPersist=10m", 
-		"-S", cp, 
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPersist=10m",
+		"-S", cp,
 		target, cmdStr)
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("remote command failed on %s: %w\nOutput: %s", target, err, string(output))
@@ -176,7 +176,7 @@ func (m *Manager) StreamTmuxSession(ctx context.Context, sessionName string) (io
 	target := m.target()
 	// -t for TTY, tmux attach to the session
 	cmd := exec.CommandContext(ctx, "ssh", "-t", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
-	
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -185,11 +185,11 @@ func (m *Manager) StreamTmuxSession(ctx context.Context, sessionName string) (io
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	
+
 	return &commandStream{
 		cmd:    cmd,
 		stdin:  stdin,
@@ -225,6 +225,46 @@ func (m *Manager) StartTmuxSession(ctx context.Context, name string) error {
 	cmdStr := fmt.Sprintf("tmux new-session -d -s %s", name)
 	_, err := m.Execute(ctx, cmdStr)
 	return err
+}
+
+func (m *Manager) ScanDirectories(ctx context.Context, rootPath string, maxDepth int) ([]string, error) {
+	// Use find to list directories up to maxDepth
+	// Exclude .git directories and common non-code directories
+	excludeDirs := []string{".git", "node_modules", "vendor", ".next", "dist", "build", "target"}
+
+	pruneExpr := ""
+	for _, dir := range excludeDirs {
+		if pruneExpr != "" {
+			pruneExpr += " -o "
+		}
+		pruneExpr += fmt.Sprintf("-name %q -prune", dir)
+	}
+
+	var cmdStr string
+	if pruneExpr != "" {
+		cmdStr = fmt.Sprintf("find %q -maxdepth %d -type d \\( %s \\) -o -type d -print", rootPath, maxDepth, pruneExpr)
+	} else {
+		cmdStr = fmt.Sprintf("find %q -maxdepth %d -type d", rootPath, maxDepth)
+	}
+
+	output, err := m.Execute(ctx, cmdStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan directories: %w", err)
+	}
+
+	dirs := []string{}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && line != rootPath {
+			// Return relative paths (remove the rootPath prefix)
+			relPath := strings.TrimPrefix(line, rootPath)
+			relPath = strings.TrimPrefix(relPath, "/")
+			if relPath != "" {
+				dirs = append(dirs, relPath)
+			}
+		}
+	}
+	return dirs, nil
 }
 
 func (m *Manager) Close() error {
