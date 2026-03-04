@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
@@ -43,6 +44,9 @@ const (
 	viewStateBranchInput
 	viewStateRepoPicker
 	viewStateDirPicker
+	viewStateAgentPicker
+	viewStateSummary
+	viewStateLoading
 )
 
 type panelMode int
@@ -93,6 +97,8 @@ type Model struct {
 	issuePicker   IssuePickerModel
 	branchInput   BranchInputModel
 	dirPicker     DirPickerModel
+	agentPicker   AgentPickerModel
+	summary       SummaryModel
 	doctorResults []usecase.CheckResult
 	width, height int
 	viewport      viewport.Model
@@ -101,6 +107,9 @@ type Model struct {
 	activeSession string
 	termCloser    io.Closer
 	lastError     string
+	loadingMsg    string
+	sessionCfg    SessionConfig
+	loadingNext   viewState
 }
 
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session) Model {
@@ -296,6 +305,27 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 	}
 }
 
+func (m *Model) fetchAgents() tea.Cmd {
+	return func() tea.Msg {
+		// Find remote config
+		var remote config.Remote
+		for _, r := range m.cfg.Remotes {
+			if r.Host == m.cfg.ActiveRemote {
+				remote = r
+				break
+			}
+		}
+
+		if remote.Host == "" {
+			return agent.ScanAgentsMsg{Err: fmt.Errorf("no active remote configured")}
+		}
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		scanner := agent.NewScanner(mgr)
+		return agent.ScanCmd(scanner)()
+	}
+}
+
 func extractRepoName(fullName string) string {
 	// Extract just the repo name from "org/repo" format
 	parts := strings.Split(fullName, "/")
@@ -339,6 +369,12 @@ func (m *Model) SetSize(width, height int) {
 	if m.issuePicker.list.Title != "" {
 		m.issuePicker.SetSize(width, height)
 	}
+
+	if m.agentPicker.list.Title != "" {
+		m.agentPicker.SetSize(width, height)
+	}
+
+	m.summary.SetSize(width, height)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -629,6 +665,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.issuePicker.selected != nil {
 			// Issue selected, transition to branch input
 			slug := m.issuePicker.selected.Slug()
+			m.sessionCfg.IssueKey = m.issuePicker.selected.Key
 			m.state = viewStateBranchInput
 			m.branchInput = NewBranchInputModel(slug)
 			return m, nil
@@ -646,7 +683,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 		if m.branchInput.Confirmed {
-			m.state = viewStateRepoPicker
+			m.sessionCfg.Branch = m.branchInput.Value()
+			m.loadingMsg = "Loading repositories..."
+			m.loadingNext = viewStateRepoPicker
+			m.state = viewStateLoading
 			m.picker = NewRepoPickerModel(nil)
 			return m, m.fetchRepos()
 		}
@@ -679,7 +719,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.picker.selected != nil {
 			// Repo selected, now fetch directories
-			m.state = viewStateDirPicker
+			m.sessionCfg.Repo = *m.picker.selected
+			m.loadingMsg = "Scanning directories..."
+			m.loadingNext = viewStateDirPicker
+			m.state = viewStateLoading
 			return m, m.fetchRepoDirectories(m.picker.selected)
 		}
 
@@ -711,8 +754,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.dirPicker.selected != "" {
 			// Directory selected
-			// TODO: Step 7: Agent Selection
+			m.sessionCfg.Directory = m.dirPicker.selected
+			m.loadingMsg = "Scanning available agents..."
+			m.loadingNext = viewStateAgentPicker
+			m.state = viewStateLoading
+			return m, m.fetchAgents()
+		}
+
+	case viewStateAgentPicker:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			if m.agentPicker.list.FilterState() != list.Filtering {
+				m.state = viewStateDirPicker
+				return m, nil
+			}
+		}
+
+		var subModel tea.Model
+		subModel, cmd = m.agentPicker.Update(msg)
+		m.agentPicker = subModel.(AgentPickerModel)
+		cmds = append(cmds, cmd)
+
+		if m.agentPicker.selected != nil {
+			m.sessionCfg.Agent = m.agentPicker.selected
+			m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
+			m.summary.SetAgent(m.sessionCfg.Agent)
+			m.summary.SetSize(m.width, m.height)
+			m.state = viewStateSummary
+			return m, nil
+		}
+
+	case viewStateSummary:
+		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+			m.state = viewStateAgentPicker
+			return m, nil
+		}
+
+		var subModel tea.Model
+		subModel, cmd = m.summary.Update(msg)
+		m.summary = subModel.(SummaryModel)
+		cmds = append(cmds, cmd)
+
+		if m.summary.IsConfirmed() {
+			// TODO: Step 8: Session Bootstrapping
 			m.state = viewStateMain
+			return m, nil
+		}
+
+	case viewStateLoading:
+		switch msg := msg.(type) {
+		case reposMsg:
+			if msg.err != nil {
+				m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
+				m.state = viewStateVSCodeError
+				return m, nil
+			}
+			m.picker = NewRepoPickerModel(msg.repos)
+			h, v := docStyle.GetFrameSize()
+			m.picker.list.SetSize(m.width-h, m.height-v)
+			m.state = m.loadingNext
+			return m, nil
+		case dirsMsg:
+			if msg.err != nil {
+				m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
+				m.state = viewStateVSCodeError
+				return m, nil
+			}
+			m.dirPicker = NewDirPickerModel(msg.dirs, m.sessionCfg.Repo)
+			h, v := docStyle.GetFrameSize()
+			m.dirPicker.SetSize(m.width-h, m.height-v)
+			m.state = m.loadingNext
+			return m, nil
+		case agent.ScanAgentsMsg:
+			if msg.Err != nil {
+				m.lastError = fmt.Sprintf("Failed to scan agents: %v", msg.Err)
+				m.state = viewStateVSCodeError
+				return m, nil
+			}
+			m.agentPicker = NewAgentPickerModel(msg.Agents)
+			h, v := docStyle.GetFrameSize()
+			m.agentPicker.SetSize(m.width-h, m.height-v)
+			m.state = m.loadingNext
 			return m, nil
 		}
 	}
@@ -841,6 +962,23 @@ func (m Model) View() string {
 
 	case viewStateDirPicker:
 		return docStyle.Render(m.dirPicker.View())
+
+	case viewStateAgentPicker:
+		return docStyle.Render(m.agentPicker.View())
+
+	case viewStateSummary:
+		return m.summary.View()
+
+	case viewStateLoading:
+		msg := m.loadingMsg
+		if msg == "" {
+			msg = "Loading..."
+		}
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(1, 2).
+			Width(50)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(msg))
 	}
 	return ""
 }

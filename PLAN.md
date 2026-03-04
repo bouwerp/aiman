@@ -61,6 +61,11 @@
 - [ ] **SQLite Persistence**: Fully wire the existing `internal/infra/sqlite` repository to save both discovered and newly created sessions, tracking their full lifecycle.
 - [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths before agent launch.
 - [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency interactive connections.
+- [ ] **CI/CD Pipeline & Releases**: GitHub Actions workflow for:
+    - Running tests, linting, and type checking on PRs.
+    - Building executables for macOS (Intel & Apple Silicon), Linux, and Windows.
+    - Creating GitHub releases with all platform binaries as artifacts.
+    - Automatic versioning based on git tags.
 
 ## 4. Architectural Strategy (Reminder)
 Keep following the **Clean Architecture** pattern. Ensure that the `internal/usecase` layer remains the only place where domain entities are coordinated, and keep infrastructure-specific logic (like `mutagen` or `ssh` CLI flags) strictly within `internal/infra`.
