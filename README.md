@@ -9,18 +9,18 @@ Aiman automates the entire development workflow:
 1. **Select a JIRA Issue** - Search and filter your assigned issues
 2. **Generate Branch Name** - Auto-creates git-compatible branch names
 3. **Pick a Repository** - Browse your GitHub repos
-4. **Connect to Remote** - SSH to your dev server with multiplexing
-5. **Create Worktree** - Isolated git worktree for the branch
-6. **Launch Agent** - Start Claude, Gemini, or other AI agents in tmux
-7. **Sync Locally** - Mutagen sync for local IDE access
+4. **Choose Subdirectory** - Pick a repo sub-folder (monorepo-friendly)
+5. **Scan Agents** - Detect available agents on the remote
+6. **Review Summary** - Confirm settings before creation
+7. **Create Session** - Worktree + tmux + agent launch (in progress)
 
 ## ✨ Features
 
 ### Core Workflow
 - **JIRA Integration**: Real-time search with VSCode-style filtering
 - **Smart Branch Names**: Auto-sanitizes issue titles for git compatibility
-- **Git Worktrees**: Isolated environments per branch
-- **Multi-Agent Support**: Launch Claude Code, Gemini CLI, GitHub Copilot, or OpenCode
+- **Repo & Directory Picker**: Choose repo + subdirectory from the remote
+- **Multi-Agent Support**: Scan and select Claude Code, Gemini CLI, GitHub Copilot, or OpenCode
 - **Session Management**: Track active sessions with live tmux previews
 
 ### Remote Development
@@ -35,6 +35,7 @@ Aiman automates the entire development workflow:
 - **VS Code Integration**: Open synced directories directly in VS Code (`v` key)
 - **Health Checks**: Built-in "Doctor" validates all integrations on startup
 - **Fuzzy Search**: Find issues, repos, and sessions quickly
+- **Progress Loading**: Dedicated loaders between flow steps
 
 ### Configuration
 - **YAML-based Config**: Simple `~/.aiman/config.yaml` configuration
@@ -138,8 +139,11 @@ aiman
    - Invalid characters are blocked
    - Spaces automatically become dashes
 4. **Select Repository**: Pick from your GitHub repos
-5. **Agent Selection**: Choose your AI coding assistant (Claude, Gemini, etc.)
-6. **Sync Setup**: Automatic mutagen sync to local directory
+5. **Select Subdirectory**: Choose a repo subdirectory (or `.` for root)
+6. **Agent Selection**: Choose your AI coding assistant (Claude, Gemini, etc.)
+7. **Summary**: Review selected issue/branch/repo/dir/agent before creation
+
+Note: Session creation (worktree, tmux, agent launch, sync) is in progress.
 
 ### Administrative Menu
 

@@ -24,6 +24,7 @@
 ### Use Cases
 - **Session Discovery**: Engine to map remote tmux sessions -> CWD -> Git Repos -> JIRA keys.
 - **Doctor Checks**: Automated validation of environment and credentials on startup.
+- **Flow Wizard (Partial)**: Issue -> Branch -> Repo -> Directory -> Agent scan -> Summary.
 
 ## 2. Technical Gotchas ⚠️
 
@@ -35,22 +36,24 @@
 ## 3. Immediate TODOs 🚀
 
 - [ ] **Flow Manager Implementation (The Core Workflow)**:
-    1.  **Initiation**: Bind `n` key on the dashboard to start the new session wizard.
-    2.  **JIRA Issue Selector**: Provide a searchable/browsable list of assigned or recent JIRA issues.
-    3.  **Branch Generation**: Automatically propose a git branch name based on the selected issue key and title. Present a text input for the user to edit or accept this proposed name.
-    4.  **Repo Selection**: Present a list of accessible Git repositories (via `gh repo list`).
+- [ ] **Flow Manager Implementation (The Core Workflow)**:
+    1.  **Initiation**: Bind `n` key on the dashboard to start the new session wizard. ✅
+    2.  **JIRA Issue Selector**: Searchable/browsable list of assigned or recent JIRA issues. ✅
+    3.  **Branch Generation**: Auto-propose git-compatible branch name + editable input. ✅
+    4.  **Repo Selection**: List accessible Git repositories (via `gh repo list`). ✅
     5.  **Remote Execution Orchestration**:
-        *   Verify if the selected repository is cloned on the active remote server's configured `root` path.
-        *   If missing, execute `git clone`.
-        *   If present, fetch and ensure the base repository is updated on the `main` branch.
-        *   Check for an existing git worktree matching the proposed branch name.
-        *   If missing, execute `git worktree add ../<branch-name> <branch-name>`.
-    6.  **Scope Selection**: Provide a directory picker to select a specific sub-directory within the newly created worktree (essential for monorepos) to serve as the agent's working directory.
-    7.  **Agent Selection**: Prompt the user to select the desired coding agent (Claude, Gemini, Cursor-Agent, opencode).
-    8.  **Session Bootstrapping**:
-        *   Launch a new `tmux` session named after the issue key/branch.
-        *   Start the selected agent CLI within that tmux session, scoped to the chosen directory.
-    9.  **Local Sync**: Automatically establish a `mutagen` sync session, mirroring the remote worktree directory to a local path (e.g., `~/.aiman/work/<session-name>`), enabling immediate local IDE access.
+        *   Verify if the selected repository is cloned on the active remote server's configured `root` path. ✅
+        *   If missing, execute `git clone`. ✅
+        *   If present, fetch and ensure the base repository is updated on the `main` branch. ⏳
+        *   Check for an existing git worktree matching the proposed branch name. ⏳
+        *   If missing, execute `git worktree add ../<branch-name> <branch-name>`. ⏳
+    6.  **Scope Selection**: Directory picker to select a sub-directory within the repo. ✅
+    7.  **Agent Selection**: Scan remote and select agent (Claude, Gemini, OpenCode, Copilot). ✅
+    8.  **Summary Confirmation**: Show selected issue/branch/repo/dir/agent before creation. ✅
+    9.  **Session Bootstrapping**:
+        *   Launch a new `tmux` session named after the issue key/branch. ⏳
+        *   Start the selected agent CLI within that tmux session, scoped to the chosen directory. ⏳
+    10. **Local Sync**: Establish a `mutagen` sync session to a local path. ⏳
 - [ ] **Session Termination** (Key: `ctrl+k`):
     - Terminate mutagen sync session.
     - Stop the agent process running in the tmux session.
