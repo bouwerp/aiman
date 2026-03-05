@@ -46,8 +46,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ steps.get_version.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
           body_path: /tmp/changelog.txt
           draft: false
           prerelease: false
@@ -97,15 +97,8 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
+          CGO_ENABLED: 0
         run: |
-          # Install cross-compilation tools for CGO if needed
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            sudo apt-get update
-            sudo apt-get install -y gcc-mingw-w64
-            export CC=x86_64-w64-mingw32-gcc
-          fi
-
           go build -v -ldflags="-s -w -X main.version=${{ needs.release.outputs.version }}" -o ${{ matrix.name }} ./cmd/aiman
 
       - name: Create tarball (Unix)

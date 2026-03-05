@@ -66,4 +66,4 @@ jobs:
           cache: true
 
       - name: Build binary
-        run: go build -v ./cmd/aiman
+        run: CGO_ENABLED=0 go build -v ./cmd/aiman
