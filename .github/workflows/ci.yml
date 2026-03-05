@@ -50,12 +50,7 @@ jobs:
           cache: true
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        env:
-          GOLANGCI_LINT_IGNORE_GO_VERSION: 1
-        with:
-          version: latest
-          args: --timeout=5m
+        run: go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5 run --timeout=5m
 
   build:
     name: Build
@@ -72,6 +67,3 @@ jobs:
 
       - name: Build binary
         run: go build -v ./cmd/aiman
-
-      - name: Run aiman --help
-        run: ./aiman --help || echo "Help command not implemented yet"
