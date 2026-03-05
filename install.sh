@@ -7,6 +7,7 @@ set -e
 REPO_URL="https://github.com/bouwerp/aiman"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="aiman"
+GITHUB_API="https://api.github.com/repos/bouwerp/aiman/releases/latest"
 
 # Colors
 RED='\033[0;31m'
@@ -43,6 +44,80 @@ detect_platform() {
     esac
     
     echo -e "${GREEN}Detected platform: $PLATFORM${NC}"
+}
+
+# Get the binary name for the current platform
+get_binary_name() {
+    case "$OS" in
+        darwin)
+            RELEASE_NAME="aiman-darwin-${ARCH}"
+            ARCHIVE_EXT="tar.gz"
+            ;;
+        linux)
+            RELEASE_NAME="aiman-linux-${ARCH}"
+            ARCHIVE_EXT="tar.gz"
+            ;;
+        windows|mingw*|msys*)
+            RELEASE_NAME="aiman-windows-${ARCH}.exe"
+            ARCHIVE_EXT="zip"
+            ;;
+    esac
+}
+
+# Download pre-built binary from GitHub releases
+download_binary() {
+    echo "Checking for pre-built binary..."
+
+    get_binary_name
+
+    # Get latest release info
+    if ! RELEASE_DATA=$(curl -sf "$GITHUB_API" 2>/dev/null); then
+        echo -e "${YELLOW}No release found, will build from source${NC}"
+        return 1
+    fi
+
+    # Extract download URL for the correct architecture
+    DOWNLOAD_URL=$(echo "$RELEASE_DATA" | grep "browser_download_url.*${RELEASE_NAME}.${ARCHIVE_EXT}\"" | cut -d '"' -f 4)
+
+    if [ -z "$DOWNLOAD_URL" ]; then
+        echo -e "${YELLOW}Pre-built binary not available for $PLATFORM, will build from source${NC}"
+        return 1
+    fi
+
+    VERSION=$(echo "$RELEASE_DATA" | grep '"tag_name"' | cut -d '"' -f 4)
+    echo -e "${GREEN}Found release: $VERSION${NC}"
+    echo "Downloading $RELEASE_NAME..."
+
+    TEMP_DIR=$(mktemp -d)
+    cd "$TEMP_DIR"
+
+    if ! curl -sfL "$DOWNLOAD_URL" -o "${RELEASE_NAME}.${ARCHIVE_EXT}"; then
+        echo -e "${RED}Download failed${NC}"
+        return 1
+    fi
+
+    # Extract archive
+    echo "Extracting binary..."
+    case "$ARCHIVE_EXT" in
+        tar.gz)
+            tar -xzf "${RELEASE_NAME}.${ARCHIVE_EXT}"
+            ;;
+        zip)
+            unzip -q "${RELEASE_NAME}.${ARCHIVE_EXT}"
+            ;;
+    esac
+
+    if [ ! -f "$RELEASE_NAME" ]; then
+        echo -e "${RED}Binary not found in archive${NC}"
+        return 1
+    fi
+
+    # Rename to standard binary name
+    mv "$RELEASE_NAME" "$BINARY_NAME"
+    chmod +x "$BINARY_NAME"
+
+    echo -e "${GREEN}Download successful!${NC}"
+    return 0
 }
 
 # Check if required tools are available
@@ -181,14 +256,22 @@ trap cleanup EXIT
 main() {
     echo "=== Aiman Installation Script ==="
     echo ""
-    
+
     detect_platform
-    check_prerequisites
     setup_config
-    clone_repo
-    build_binary
-    install_binary
-    
+
+    # Try to download pre-built binary first
+    if download_binary; then
+        install_binary
+    else
+        echo ""
+        echo -e "${YELLOW}Falling back to building from source...${NC}"
+        check_prerequisites
+        clone_repo
+        build_binary
+        install_binary
+    fi
+
     echo ""
     echo -e "${GREEN}Installation complete!${NC}"
 }

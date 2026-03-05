@@ -36,7 +36,7 @@
 
 ## 3. Immediate TODOs 🚀
 
-- [ ] **Flow Manager Implementation (The Core Workflow)**:
+- [x] **Flow Manager Implementation (The Core Workflow)**:
     1.  **Initiation**: Bind `n` key on the dashboard to start the new session wizard. ✅
     2.  **JIRA Issue Selector**: Searchable/browsable list of assigned or recent JIRA issues. ✅
     3.  **Branch Generation**: Auto-propose git-compatible branch name + editable input. ✅
@@ -74,7 +74,7 @@
     - Similar UX to lazygit but integrated into the dashboard
 - [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths before agent launch.
 - [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency interactive connections.
-- [ ] **CI/CD Pipeline & Releases**: GitHub Actions workflow for:
+- [x] **CI/CD Pipeline & Releases**: GitHub Actions workflow for:
     - Running tests, linting, and type checking on PRs.
     - Building executables for macOS (Intel & Apple Silicon), Linux, and Windows.
     - Creating GitHub releases with all platform binaries as artifacts.

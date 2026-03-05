@@ -46,6 +46,8 @@ Aiman automates the entire development workflow:
 
 ### Quick Install
 
+The installer automatically downloads the correct pre-built binary for your platform (macOS Intel/ARM, Linux amd64/arm64, Windows). If no pre-built binary is available, it falls back to building from source.
+
 ```bash
 # Download and run the installer
 curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash
@@ -56,6 +58,11 @@ curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash
 # Or install for current user only
 curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --user
 ```
+
+**Supported Platforms:**
+- macOS (Intel & Apple Silicon)
+- Linux (amd64 & arm64)
+- Windows (amd64)
 
 ### Update
 
@@ -81,15 +88,17 @@ sudo mv aiman /usr/local/bin/
 
 ## 📋 Prerequisites
 
-- **Go 1.26+** (for building from source)
+### Required
 - **GitHub CLI (`gh`)**: Authenticated with `gh auth login`
 - **SSH**: Key-based authentication configured for remote servers
 - **JIRA API Token**: Generate at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens)
-- **Optional**: 
-  - `tmux` for session management
-  - `mutagen` for file syncing
-  - `code` (VS Code CLI) for IDE integration
-  - `mosh` for high-latency connections
+
+### Optional
+- **Go 1.26+**: Only needed if building from source (not required for pre-built binaries)
+- **tmux**: For session management on remote servers
+- **mutagen**: For local/remote file syncing
+- **code** (VS Code CLI): For IDE integration
+- **mosh**: For high-latency connections
 
 ## 🎮 Usage
 
@@ -331,20 +340,115 @@ Aiman follows **Clean Architecture** principles:
 - [x] Tmux session management
 - [x] Real-time pane previews
 - [x] VS Code integration
+- [x] SQLite persistence for sessions
+- [ ] Git intelligence panel
 - [ ] MOSH support
-- [ ] SQLite persistence for sessions
 - [ ] Skill injection system
 - [ ] Claude Code integration
 - [ ] Gemini CLI integration
 - [ ] GitHub Copilot CLI support
 
+## 🔧 Development
+
+### Prerequisites
+
+- Go 1.26 or later
+- Make (optional, but recommended)
+- golangci-lint (for linting)
+
+### Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/bouwerp/aiman.git
+cd aiman
+
+# Build the binary
+make build
+
+# Or use go directly
+go build -o aiman ./cmd/aiman
+```
+
+### Running Tests
+
+```bash
+# Run all tests with coverage
+make test
+
+# Run tests for a specific package
+go test -v ./internal/domain
+```
+
+### Linting
+
+```bash
+# Install golangci-lint (if not already installed)
+brew install golangci-lint
+
+# Run the linter
+make lint
+```
+
+### Development Workflow
+
+```bash
+# Format code
+make fmt
+
+# Run all CI checks locally (format + vet + test + lint)
+make ci
+
+# Clean build artifacts
+make clean
+```
+
+### CI/CD Pipeline
+
+Aiman uses GitHub Actions for continuous integration and releases:
+
+#### Pull Request Checks
+Every PR automatically runs:
+- **Tests** with race detection and coverage reporting
+- **Linting** using golangci-lint
+- **Build verification** across platforms
+
+#### Releases
+To create a new release:
+
+1. Tag the commit with a semantic version:
+   ```bash
+   git tag -a v1.0.0 -m "Release v1.0.0"
+   git push origin v1.0.0
+   ```
+
+2. GitHub Actions automatically:
+   - Builds binaries for:
+     - macOS (Intel & Apple Silicon)
+     - Linux (amd64 & arm64)
+     - Windows (amd64)
+   - Creates a GitHub release with changelog
+   - Attaches all binaries with SHA256 checksums
+
 ## 🤝 Contributing
+
+Contributions are welcome! Please follow these steps:
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m 'Add amazing feature'`
-4. Push to the branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
+3. Make your changes with tests (all code changes must include tests)
+4. Run the CI checks locally: `make ci`
+5. Commit your changes: `git commit -m 'Add amazing feature'`
+6. Push to the branch: `git push origin feature/amazing-feature`
+7. Open a Pull Request
+
+### Contribution Guidelines
+
+- **All code changes must include unit tests**
+- Code must pass `make ci` before submission
+- Follow Go best practices and idioms
+- Keep commits atomic and messages descriptive
+- Update documentation for user-facing changes
 
 ## 📄 License
 

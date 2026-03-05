@@ -8,6 +8,7 @@ REPO_URL="https://github.com/bouwerp/aiman"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="aiman"
 BACKUP_SUFFIX=".backup.$(date +%Y%m%d_%H%M%S)"
+GITHUB_API="https://api.github.com/repos/bouwerp/aiman/releases/latest"
 
 # Colors
 RED='\033[0;31m'
@@ -67,6 +68,87 @@ backup_current() {
     BACKUP_PATH="${AIMAN_PATH}${BACKUP_SUFFIX}"
     cp "$AIMAN_PATH" "$BACKUP_PATH"
     echo -e "${GREEN}Backup created: $BACKUP_PATH${NC}"
+}
+
+# Detect platform
+detect_platform() {
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    ARCH=$(uname -m)
+
+    case "$ARCH" in
+        x86_64) ARCH="amd64" ;;
+        arm64|aarch64) ARCH="arm64" ;;
+    esac
+
+    case "$OS" in
+        darwin)
+            RELEASE_NAME="aiman-darwin-${ARCH}"
+            ARCHIVE_EXT="tar.gz"
+            ;;
+        linux)
+            RELEASE_NAME="aiman-linux-${ARCH}"
+            ARCHIVE_EXT="tar.gz"
+            ;;
+        windows|mingw*|msys*)
+            RELEASE_NAME="aiman-windows-${ARCH}.exe"
+            ARCHIVE_EXT="zip"
+            ;;
+    esac
+}
+
+# Download pre-built binary from GitHub releases
+download_binary() {
+    echo "Attempting to download pre-built binary..."
+
+    detect_platform
+
+    # Get latest release info
+    if ! RELEASE_DATA=$(curl -sf "$GITHUB_API" 2>/dev/null); then
+        echo -e "${YELLOW}No release found, will build from source${NC}"
+        return 1
+    fi
+
+    # Extract version and download URL
+    LATEST_VERSION=$(echo "$RELEASE_DATA" | grep '"tag_name"' | cut -d '"' -f 4)
+    DOWNLOAD_URL=$(echo "$RELEASE_DATA" | grep "browser_download_url.*${RELEASE_NAME}.${ARCHIVE_EXT}\"" | cut -d '"' -f 4)
+
+    if [ -z "$DOWNLOAD_URL" ]; then
+        echo -e "${YELLOW}Pre-built binary not available for ${OS}-${ARCH}, will build from source${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}Downloading version: $LATEST_VERSION${NC}"
+
+    TEMP_DIR=$(mktemp -d)
+    cd "$TEMP_DIR"
+
+    if ! curl -sfL "$DOWNLOAD_URL" -o "${RELEASE_NAME}.${ARCHIVE_EXT}"; then
+        echo -e "${RED}Download failed${NC}"
+        return 1
+    fi
+
+    # Extract archive
+    echo "Extracting binary..."
+    case "$ARCHIVE_EXT" in
+        tar.gz)
+            tar -xzf "${RELEASE_NAME}.${ARCHIVE_EXT}"
+            ;;
+        zip)
+            unzip -q "${RELEASE_NAME}.${ARCHIVE_EXT}"
+            ;;
+    esac
+
+    if [ ! -f "$RELEASE_NAME" ]; then
+        echo -e "${RED}Binary not found in archive${NC}"
+        return 1
+    fi
+
+    # Rename to standard binary name
+    mv "$RELEASE_NAME" "$BINARY_NAME"
+    chmod +x "$BINARY_NAME"
+
+    echo -e "${GREEN}Download successful!${NC}"
+    return 0
 }
 
 # Clone or update repository
@@ -174,16 +256,25 @@ show_changelog() {
 main() {
     echo "=== Aiman Update Script ==="
     echo ""
-    
+
     find_installation
     get_latest_version
     backup_current
-    fetch_source
-    show_changelog
-    build_new_version
-    install_new_version
+
+    # Try to download pre-built binary first
+    if download_binary; then
+        install_new_version
+    else
+        echo ""
+        echo -e "${YELLOW}Falling back to building from source...${NC}"
+        fetch_source
+        show_changelog
+        build_new_version
+        install_new_version
+    fi
+
     cleanup_old_backups
-    
+
     echo ""
     echo -e "${GREEN}Update complete!${NC}"
     echo ""
