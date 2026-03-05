@@ -171,6 +171,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "attach full terminal")),
 			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle preview/terminal")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
+			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "open local terminal")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
@@ -1039,6 +1040,67 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
+			}
+			if msg.String() == "t" {
+				// Don't intercept 't' if the list is in filtering mode
+				if m.list.FilterState() == list.Filtering {
+					break
+				}
+
+				if sel := m.list.SelectedItem(); sel != nil {
+					s := sel.(item).session
+					if s.LocalPath == "" {
+						m.lastError = "No local sync path available for this session"
+						m.state = viewStateVSCodeError
+						return m, nil
+					}
+
+					// Detect current terminal app and open a new window there
+					termProgram := os.Getenv("TERM_PROGRAM")
+					var script string
+
+					switch termProgram {
+					case "iTerm.app":
+						// iTerm2
+						script = fmt.Sprintf(`tell application "iTerm"
+	create window with default profile
+	tell current session of current window
+		write text "cd %q && clear"
+	end tell
+end tell`, s.LocalPath)
+					case "WarpTerminal":
+						// Warp
+						script = fmt.Sprintf(`tell application "Warp"
+	activate
+end tell
+tell application "System Events"
+	keystroke "t" using command down
+	delay 0.3
+	keystroke "cd %q && clear"
+	keystroke return
+end tell`, s.LocalPath)
+					case "Apple_Terminal":
+						// Terminal.app
+						script = fmt.Sprintf(`tell application "Terminal"
+	do script "cd %q && clear"
+	activate
+end tell`, s.LocalPath)
+					default:
+						// Fallback: try Terminal.app
+						script = fmt.Sprintf(`tell application "Terminal"
+	do script "cd %q && clear"
+	activate
+end tell`, s.LocalPath)
+					}
+
+					err := exec.Command("osascript", "-e", script).Start()
+					if err != nil {
+						m.lastError = fmt.Sprintf("Failed to open terminal: %v", err)
+						m.state = viewStateVSCodeError
+						return m, nil
+					}
+				}
+				return m, nil
 			}
 			if msg.String() == "r" {
 				// Re-init remotes scan to refresh

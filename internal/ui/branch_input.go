@@ -92,8 +92,8 @@ func (m BranchInputModel) sanitizeInput(s string) string {
 	// Replace underscores with dashes (mutagen compatibility)
 	s = strings.ReplaceAll(s, "_", "-")
 
-	// Remove invalid characters
-	invalidPattern := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!]`)
+	// Remove invalid characters including smart quotes
+	invalidPattern := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!\u2018\u2019\u201C\u201D]`)
 	s = invalidPattern.ReplaceAllString(s, "")
 
 	// Remove consecutive dots

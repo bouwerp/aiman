@@ -82,8 +82,8 @@ func sanitizeGitBranchName(s string) string {
 	s = strings.ReplaceAll(s, "_", "-")
 
 	// Remove invalid characters: ~^:\ and control characters
-	// Also remove other problematic chars
-	invalidChars := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!]`)
+	// Also remove other problematic chars including smart quotes
+	invalidChars := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!\u2018\u2019\u201C\u201D]`)
 	s = invalidChars.ReplaceAllString(s, "")
 
 	// Remove consecutive dots
