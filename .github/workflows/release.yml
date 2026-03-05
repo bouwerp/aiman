@@ -9,52 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      version: ${{ steps.get_version.outputs.version }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Get version from tag
-        id: get_version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          # Get previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -z "$PREV_TAG" ]; then
-            # If no previous tag, get all commits
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
-          else
-            # Get commits since previous tag
-            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
-          fi
-          # Save to file to handle multiline
-          echo "$CHANGELOG" > /tmp/changelog.txt
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
-          body_path: /tmp/changelog.txt
-          draft: false
-          prerelease: false
-
   build:
-    name: Build Binaries
-    needs: release
+    name: Build and Release
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -86,6 +42,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -99,60 +57,26 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          go build -v -ldflags="-s -w -X main.version=${{ needs.release.outputs.version }}" -o ${{ matrix.name }} ./cmd/aiman
+          go build -v -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ${{ matrix.name }} ./cmd/aiman
 
-      - name: Create tarball (Unix)
+      - name: Create package (Unix)
         if: matrix.goos != 'windows'
         run: |
           tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
           shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
 
-      - name: Create zip (Windows)
+      - name: Create package (Windows)
         if: matrix.goos == 'windows'
         run: |
           zip ${{ matrix.name }}.zip ${{ matrix.name }}
           shasum -a 256 ${{ matrix.name }}.zip > ${{ matrix.name }}.zip.sha256
 
-      - name: Upload Release Asset (Unix)
-        if: matrix.goos != 'windows'
-        uses: actions/upload-release-asset@v1
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            aiman-*
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: ./${{ matrix.name }}.tar.gz
-          asset_name: ${{ matrix.name }}.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload Release Asset Checksum (Unix)
-        if: matrix.goos != 'windows'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: ./${{ matrix.name }}.tar.gz.sha256
-          asset_name: ${{ matrix.name }}.tar.gz.sha256
-          asset_content_type: text/plain
-
-      - name: Upload Release Asset (Windows)
-        if: matrix.goos == 'windows'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: ./${{ matrix.name }}.zip
-          asset_name: ${{ matrix.name }}.zip
-          asset_content_type: application/zip
-
-      - name: Upload Release Asset Checksum (Windows)
-        if: matrix.goos == 'windows'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: ./${{ matrix.name }}.zip.sha256
-          asset_name: ${{ matrix.name }}.zip.sha256
-          asset_content_type: text/plain
