@@ -51,6 +51,8 @@ jobs:
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
+        env:
+          GOLANGCI_LINT_IGNORE_GO_VERSION: 1
         with:
           version: latest
           args: --timeout=5m
