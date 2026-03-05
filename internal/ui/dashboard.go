@@ -154,6 +154,9 @@ type Model struct {
 	terminateErrors        []string
 	terminateIndex         int
 	terminatePrecheckError string
+	consoleOpen            bool
+	consoleLog             []string
+	consoleViewport        viewport.Model
 }
 
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session) *Model {
@@ -171,10 +174,11 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "attach full terminal")),
 			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle preview/terminal")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
-			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "open local terminal")),
+			key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "copy local path")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
+			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 		}
 	}
 
@@ -836,6 +840,52 @@ func (m *Model) Init() tea.Cmd {
 	return tickTmux()
 }
 
+func (m *Model) log(format string, args ...interface{}) {
+	msg := fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
+	m.consoleLog = append(m.consoleLog, msg)
+	// Keep only last 100 messages
+	if len(m.consoleLog) > 100 {
+		m.consoleLog = m.consoleLog[len(m.consoleLog)-100:]
+	}
+}
+
+func (m *Model) renderWithConsole(baseView string) string {
+	consoleHeight := m.height / 3
+	if consoleHeight < 5 {
+		consoleHeight = 5
+	}
+	if consoleHeight > 20 {
+		consoleHeight = 20
+	}
+
+	// Update viewport content with latest logs
+	m.consoleViewport.SetContent(strings.Join(m.consoleLog, "\n"))
+
+	// Build console content
+	consoleStyle := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), true, false, false, false).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(0, 1).
+		Width(m.width - 4)
+
+	var consoleContent strings.Builder
+	consoleContent.WriteString(activeStyle.Render("Debug Console") + " (` to close, ↑↓ to scroll)\n\n")
+	consoleContent.WriteString(m.consoleViewport.View())
+
+	consoleBox := consoleStyle.Render(consoleContent.String())
+
+	// Split baseView into lines
+	baseLines := strings.Split(baseView, "\n")
+
+	// Truncate base view to make room for console
+	maxBaseLines := m.height - consoleHeight - 2
+	if len(baseLines) > maxBaseLines {
+		baseLines = baseLines[:maxBaseLines]
+	}
+
+	return strings.Join(baseLines, "\n") + "\n" + consoleBox
+}
+
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
@@ -962,6 +1012,41 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.list.SetItems(items)
 			}
 		case tea.KeyMsg:
+			if msg.String() == "`" {
+				m.consoleOpen = !m.consoleOpen
+				m.log("Console toggled: %v", m.consoleOpen)
+				if m.consoleOpen {
+					// Initialize console viewport
+					consoleHeight := m.height / 3
+					if consoleHeight < 5 {
+						consoleHeight = 5
+					}
+					if consoleHeight > 20 {
+						consoleHeight = 20
+					}
+					m.consoleViewport = viewport.New(m.width-6, consoleHeight-4)
+					m.consoleViewport.SetContent(strings.Join(m.consoleLog, "\n"))
+					m.consoleViewport.GotoBottom()
+				}
+				return m, nil
+			}
+			// Handle console scrolling when open
+			if m.consoleOpen {
+				switch msg.String() {
+				case "up", "k":
+					m.consoleViewport.LineUp(1)
+					return m, nil
+				case "down", "j":
+					m.consoleViewport.LineDown(1)
+					return m, nil
+				case "pgup":
+					m.consoleViewport.ViewUp()
+					return m, nil
+				case "pgdown":
+					m.consoleViewport.ViewDown()
+					return m, nil
+				}
+			}
 			if msg.String() == "n" {
 				m.state = viewStateIssuePicker
 				m.issuePicker = NewIssuePickerModel(nil)
@@ -1041,15 +1126,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			if msg.String() == "t" {
-				// Don't intercept 't' if the list is in filtering mode
-				if m.list.FilterState() == list.Filtering {
-					break
-				}
-
+			if msg.String() == "ctrl+l" {
+				m.log("ctrl+l pressed")
 				if sel := m.list.SelectedItem(); sel != nil {
 					s := sel.(item).session
+					m.log("Selected session: %s, LocalPath: %s", s.TmuxSession, s.LocalPath)
 					if s.LocalPath == "" {
+						m.log("ERROR: No local path")
 						m.lastError = "No local sync path available for this session"
 						m.state = viewStateVSCodeError
 						return m, nil
@@ -1057,6 +1140,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					// Detect current terminal app and open a new window there
 					termProgram := os.Getenv("TERM_PROGRAM")
+					m.log("Terminal program: %s", termProgram)
 					var script string
 
 					switch termProgram {
@@ -1069,16 +1153,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	end tell
 end tell`, s.LocalPath)
 					case "WarpTerminal":
-						// Warp
-						script = fmt.Sprintf(`tell application "Warp"
-	activate
-end tell
-tell application "System Events"
-	keystroke "t" using command down
-	delay 0.3
-	keystroke "cd %q && clear"
-	keystroke return
-end tell`, s.LocalPath)
+						// Warp - just copy the local path to clipboard
+						script = fmt.Sprintf(`do shell script "printf '%s' | pbcopy"
+display notification "Local path copied to clipboard" with title "Aiman"`, strings.ReplaceAll(s.LocalPath, "'", "'\\''"))
 					case "Apple_Terminal":
 						// Terminal.app
 						script = fmt.Sprintf(`tell application "Terminal"
@@ -1093,12 +1170,23 @@ end tell`, s.LocalPath)
 end tell`, s.LocalPath)
 					}
 
-					err := exec.Command("osascript", "-e", script).Start()
+					m.log("Executing AppleScript for %s...", termProgram)
+					m.log("Script: %s", script)
+					cmd := exec.Command("osascript", "-e", script)
+					output, err := cmd.CombinedOutput()
 					if err != nil {
-						m.lastError = fmt.Sprintf("Failed to open terminal: %v", err)
+						m.log("ERROR: osascript failed: %v", err)
+						m.log("Output: %s", string(output))
+						m.lastError = fmt.Sprintf("Failed to open terminal: %v\nOutput: %s", err, string(output))
 						m.state = viewStateVSCodeError
 						return m, nil
 					}
+					if len(output) > 0 {
+						m.log("osascript output: %s", string(output))
+					}
+					m.log("Terminal command completed successfully")
+				} else {
+					m.log("ERROR: No session selected")
 				}
 				return m, nil
 			}
@@ -1610,6 +1698,17 @@ end tell`, s.LocalPath)
 }
 
 func (m *Model) View() string {
+	baseView := m.renderView()
+
+	// Overlay console if open
+	if m.consoleOpen {
+		return m.renderWithConsole(baseView)
+	}
+
+	return baseView
+}
+
+func (m *Model) renderView() string {
 	switch m.state {
 	case viewStateMain:
 		// Split View
