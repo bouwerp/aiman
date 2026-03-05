@@ -298,13 +298,14 @@ func (m GitSetupModel) View() string {
 		label = activeStyle.Render(label)
 	}
 	b.WriteString(label + "\n")
-	if m.loading {
+	switch {
+	case m.loading:
 		b.WriteString("  Loading organizations from GitHub...\n")
-	} else if m.err != nil {
+	case m.err != nil:
 		b.WriteString(fmt.Sprintf("  Error: %v\n", m.err))
-	} else if len(m.loadedOrgs) == 0 {
+	case len(m.loadedOrgs) == 0:
 		b.WriteString("  No organizations found\n")
-	} else {
+	default:
 		b.WriteString(m.orgsList.View())
 	}
 	b.WriteString("\n")

@@ -17,7 +17,7 @@ type TerminalModel struct {
 func NewTerminalModel(rw io.ReadWriter, w, h int) TerminalModel {
 	term := vt10x.New()
 	term.Resize(w, h)
-	
+
 	// Read from the reader into the terminal
 	go func() {
 		// Create a buffer to read into
@@ -26,7 +26,7 @@ func NewTerminalModel(rw io.ReadWriter, w, h int) TerminalModel {
 			n, err := rw.Read(buf)
 			if n > 0 {
 				term.Lock()
-				term.Write(buf[:n])
+				_, _ = term.Write(buf[:n])
 				term.Unlock()
 			}
 			if err != nil {
@@ -52,7 +52,7 @@ func (m TerminalModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// Forward keys to the writer
 		if m.rw != nil {
-			m.rw.Write([]byte(msg.String()))
+			_, _ = m.rw.Write([]byte(msg.String()))
 		}
 	case tea.WindowSizeMsg:
 		m.w = msg.Width
@@ -68,7 +68,7 @@ func (m TerminalModel) View() string {
 	var b strings.Builder
 	m.term.Lock()
 	defer m.term.Unlock()
-	
+
 	cols, rows := m.term.Size()
 	for y := 0; y < rows; y++ {
 		for x := 0; x < cols; x++ {

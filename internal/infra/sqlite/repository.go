@@ -44,8 +44,8 @@ func NewRepository(dbPath string) (*Repository, error) {
 	}
 
 	// Add missing columns if they don't exist (for existing databases)
-	db.Exec("ALTER TABLE sessions ADD COLUMN mutagen_sync_id TEXT")
-	db.Exec("ALTER TABLE sessions ADD COLUMN local_path TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN mutagen_sync_id TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN local_path TEXT")
 
 	return &Repository{
 		db: db,

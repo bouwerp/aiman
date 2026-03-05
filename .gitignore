@@ -1,6 +1,6 @@
 # Binaries
-aiman
-aiman.exe
+/aiman
+/aiman.exe
 *.test
 *.out
 

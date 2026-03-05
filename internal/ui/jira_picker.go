@@ -57,8 +57,7 @@ func (m *IssuePickerModel) SetSize(width, height int) {
 }
 
 func (m IssuePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		if msg.String() == "enter" {
 			if i, ok := m.list.SelectedItem().(jiraItem); ok {
 				m.selected = &i.issue

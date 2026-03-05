@@ -84,22 +84,22 @@ type item struct {
 
 func (i item) Title() string {
 	prefix := ""
-	if i.needsInput {
+	switch {
+	case i.needsInput:
 		prefix = "! "
-	} else if i.activity == "idle" {
+	case i.activity == "idle":
 		prefix = "o "
-	} else if i.activity == "busy" {
+	case i.activity == "busy":
 		prefix = "> "
 	}
 	activity := ""
-	if i.needsInput {
+	switch {
+	case i.needsInput:
 		activity = " ⚠ input"
-	} else if i.activity != "" {
-		if i.activity == "idle" {
-			activity = " • idle"
-		} else if i.activity == "busy" {
-			activity = " • busy"
-		}
+	case i.activity == "idle":
+		activity = " • idle"
+	case i.activity == "busy":
+		activity = " • busy"
 	}
 	if i.session.IssueKey != "" {
 		return fmt.Sprintf("%s%s (%s)%s", prefix, i.session.IssueKey, i.session.TmuxSession, activity)
@@ -249,8 +249,8 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 		// Check if error indicates corrupted repo
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "exit status 128") ||
-		   strings.Contains(errMsg, "not a git repository") ||
-		   strings.Contains(errMsg, "fatal:") {
+			strings.Contains(errMsg, "not a git repository") ||
+			strings.Contains(errMsg, "fatal:") {
 			// Repository is corrupted, allow cleanup
 			return nil
 		}
@@ -265,8 +265,8 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 		// If git is broken/corrupted, allow cleanup to proceed
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "exit status 128") ||
-		   strings.Contains(errMsg, "not a git repository") ||
-		   strings.Contains(errMsg, "fatal:") {
+			strings.Contains(errMsg, "not a git repository") ||
+			strings.Contains(errMsg, "fatal:") {
 			return nil
 		}
 		return fmt.Errorf("failed to verify upstream commits before termination: %w", err)
@@ -761,11 +761,11 @@ func (m *Model) runTerminateStep(index int) error {
 		if name == "" {
 			return nil
 		}
-		cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", name)
+		cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", name) // #nosec G204
 		if out, err := cmd.CombinedOutput(); err != nil {
 			// Try fallback using tmux session name if different
 			if s.TmuxSession != "" && s.TmuxSession != name {
-				fallback := exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession)
+				fallback := exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession) // #nosec G204
 				if _, fbErr := fallback.CombinedOutput(); fbErr == nil {
 					return nil
 				}
@@ -913,7 +913,6 @@ func (m *Model) SetSize(width, height int) {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
 	var cmds []tea.Cmd
 
 	// Global window size handling
@@ -942,812 +941,58 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch m.state {
 	case viewStateMain:
-		switch msg := msg.(type) {
-		case attachMsg:
-			return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-				return tmuxTickMsg(time.Now())
-			})
-		case tmuxTerminalMsg:
-			if msg.err != nil {
-				m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
-				m.panelMode = panelModePreview
-				m.state = viewStateMain
-				return m, nil
-			}
-			m.termCloser = msg.stream
-			term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
-			m.terminal = &term
-			return m, nil
-		case tmuxTickMsg:
-			cmds = append(cmds, tickTmux())
-
-			// On first tick, force-select the first session if nothing is active
-			if m.initialLoad {
-				m.initialLoad = false
-				if len(m.list.Items()) > 0 {
-					m.list.Select(0)
-					if sel := m.list.SelectedItem(); sel != nil {
-						s := sel.(item).session
-						m.activeSession = s.TmuxSession
-						m.tmuxOutput = "Loading..."
-						m.viewport.SetContent(m.tmuxOutput)
-						cmds = append(cmds, fetchTmuxPane(m.cfg, s))
-						cmds = append(cmds, checkInputHint(m.cfg, s))
-					}
-				}
-			} else if sel := m.list.SelectedItem(); sel != nil {
-				s := sel.(item).session
-				if m.activeSession != s.TmuxSession {
-					m.activeSession = s.TmuxSession
-				}
-				cmds = append(cmds, fetchTmuxPane(m.cfg, s))
-				cmds = append(cmds, checkInputHint(m.cfg, s))
-			}
-		case tmuxOutputMsg:
-			if msg.session == m.activeSession {
-				if msg.err != nil {
-					m.tmuxOutput = failStyle.Render("Failed to capture pane: " + msg.err.Error())
-				} else {
-					m.tmuxOutput = msg.output
-				}
-				m.viewport.SetContent(m.tmuxOutput)
-				m.viewport.GotoBottom()
-			}
-		case inputHintMsg:
-			// Update list items with input hint when enabled
-			if m.cfg.Features.InputPromptDetection {
-				items := m.list.Items()
-				for idx, it := range items {
-					if sessItem, ok := it.(item); ok {
-						if sessItem.session.TmuxSession == msg.session {
-							sessItem.needsInput = msg.needsInput
-							sessItem.activity = msg.activity
-							items[idx] = sessItem
-							break
-						}
-					}
-				}
-				m.list.SetItems(items)
-			}
-		case tea.KeyMsg:
-			if msg.String() == "`" {
-				m.consoleOpen = !m.consoleOpen
-				m.log("Console toggled: %v", m.consoleOpen)
-				if m.consoleOpen {
-					// Initialize console viewport
-					consoleHeight := m.height / 3
-					if consoleHeight < 5 {
-						consoleHeight = 5
-					}
-					if consoleHeight > 20 {
-						consoleHeight = 20
-					}
-					m.consoleViewport = viewport.New(m.width-6, consoleHeight-4)
-					m.consoleViewport.SetContent(strings.Join(m.consoleLog, "\n"))
-					m.consoleViewport.GotoBottom()
-				}
-				return m, nil
-			}
-			// Handle console scrolling when open
-			if m.consoleOpen {
-				switch msg.String() {
-				case "up", "k":
-					m.consoleViewport.LineUp(1)
-					return m, nil
-				case "down", "j":
-					m.consoleViewport.LineDown(1)
-					return m, nil
-				case "pgup":
-					m.consoleViewport.ViewUp()
-					return m, nil
-				case "pgdown":
-					m.consoleViewport.ViewDown()
-					return m, nil
-				}
-			}
-			if msg.String() == "n" {
-				m.state = viewStateIssuePicker
-				m.issuePicker = NewIssuePickerModel(nil)
-				m.issuePicker.loading = true
-				m.issuePicker.SetSize(m.width, m.height)
-				return m, m.searchJira("")
-			}
-			if msg.String() == "m" {
-				m.state = viewStateMenu
-				return m, nil
-			}
-			if msg.String() == "ctrl+c" {
-				if m.termCloser != nil {
-					m.termCloser.Close()
-				}
-				return m, tea.Quit
-			}
-			if msg.String() == "ctrl+t" {
-				if m.panelMode == panelModePreview {
-					if sel := m.list.SelectedItem(); sel != nil {
-						m.loadingMsg = fmt.Sprintf("Connecting to session %s...", sel.(item).session.TmuxSession)
-						m.loadingNext = viewStateMain
-						m.state = viewStateLoading
-						return m, tea.Sequence(
-							tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
-								return m.initTerminal(sel.(item).session)()
-							}),
-						)
-					}
-				} else {
-					m.panelMode = panelModePreview
-					if m.termCloser != nil {
-						m.termCloser.Close()
-						m.termCloser = nil
-					}
-				}
-				return m, tea.Batch(cmds...)
-			}
-			if msg.String() == "ctrl+s" {
-				if sel := m.list.SelectedItem(); sel != nil {
-					s := sel.(item).session
-					var remote config.Remote
-					for _, r := range m.cfg.Remotes {
-						if r.Host == m.cfg.ActiveRemote {
-							remote = r
-							break
-						}
-					}
-					mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-					c := mgr.AttachTmuxSession(s.TmuxSession)
-					m.loadingMsg = fmt.Sprintf("Connecting to session %s...", s.TmuxSession)
-					m.loadingNext = viewStateMain
-					m.state = viewStateLoading
-					return m, tea.Sequence(
-						tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
-							return attachMsg{cmd: c}
-						}),
-					)
-				}
-			}
-			if msg.String() == "v" {
-				if sel := m.list.SelectedItem(); sel != nil {
-					s := sel.(item).session
-					if s.LocalPath != "" {
-						_, err := exec.LookPath("code")
-						if err != nil {
-							m.lastError = "The VS Code CLI 'code' was not found in your PATH."
-							m.state = viewStateVSCodeError
-							return m, nil
-						}
-						err = exec.Command("code", s.LocalPath).Start()
-						if err != nil {
-							m.lastError = fmt.Sprintf("Failed to start VS Code: %v", err)
-							m.state = viewStateVSCodeError
-							return m, nil
-						}
-					}
-				}
-			}
-			if msg.String() == "ctrl+l" {
-				m.log("ctrl+l pressed")
-				if sel := m.list.SelectedItem(); sel != nil {
-					s := sel.(item).session
-					m.log("Selected session: %s, LocalPath: %s", s.TmuxSession, s.LocalPath)
-					if s.LocalPath == "" {
-						m.log("ERROR: No local path")
-						m.lastError = "No local sync path available for this session"
-						m.state = viewStateVSCodeError
-						return m, nil
-					}
-
-					// Detect current terminal app and open a new window there
-					termProgram := os.Getenv("TERM_PROGRAM")
-					m.log("Terminal program: %s", termProgram)
-					var script string
-
-					switch termProgram {
-					case "iTerm.app":
-						// iTerm2
-						script = fmt.Sprintf(`tell application "iTerm"
-	create window with default profile
-	tell current session of current window
-		write text "cd %q && clear"
-	end tell
-end tell`, s.LocalPath)
-					case "WarpTerminal":
-						// Warp - just copy the local path to clipboard
-						script = fmt.Sprintf(`do shell script "printf '%s' | pbcopy"
-display notification "Local path copied to clipboard" with title "Aiman"`, strings.ReplaceAll(s.LocalPath, "'", "'\\''"))
-					case "Apple_Terminal":
-						// Terminal.app
-						script = fmt.Sprintf(`tell application "Terminal"
-	do script "cd %q && clear"
-	activate
-end tell`, s.LocalPath)
-					default:
-						// Fallback: try Terminal.app
-						script = fmt.Sprintf(`tell application "Terminal"
-	do script "cd %q && clear"
-	activate
-end tell`, s.LocalPath)
-					}
-
-					m.log("Executing AppleScript for %s...", termProgram)
-					m.log("Script: %s", script)
-					cmd := exec.Command("osascript", "-e", script)
-					output, err := cmd.CombinedOutput()
-					if err != nil {
-						m.log("ERROR: osascript failed: %v", err)
-						m.log("Output: %s", string(output))
-						m.lastError = fmt.Sprintf("Failed to open terminal: %v\nOutput: %s", err, string(output))
-						m.state = viewStateVSCodeError
-						return m, nil
-					}
-					if len(output) > 0 {
-						m.log("osascript output: %s", string(output))
-					}
-					m.log("Terminal command completed successfully")
-				} else {
-					m.log("ERROR: No session selected")
-				}
-				return m, nil
-			}
-			if msg.String() == "r" {
-				// Refresh sessions from remote
-				m.log("Refreshing sessions...")
-				if m.cfg.ActiveRemote != "" {
-					var remote config.Remote
-					for _, r := range m.cfg.Remotes {
-						if r.Host == m.cfg.ActiveRemote {
-							remote = r
-							break
-						}
-					}
-					// Trigger session discovery
-					m.loadingMsg = "Refreshing sessions..."
-					m.loadingNext = viewStateMain
-					m.state = viewStateLoading
-					return m, func() tea.Msg {
-						ctx := context.Background()
-						mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-						if err := mgr.Connect(ctx); err != nil {
-							return discoveryResultMsg{}
-						}
-						discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
-						sessions, _ := discoverer.Discover(ctx, remote.Host)
-						return discoveryResultMsg(sessions)
-					}
-				}
-				return m, nil
-			}
-			if msg.String() == "ctrl+y" {
-				if sel := m.list.SelectedItem(); sel != nil {
-					m.loadingMsg = "Recreating mutagen sync..."
-					m.loadingNext = viewStateMain
-					m.state = viewStateLoading
-					return m, m.recreateMutagenSync(sel.(item).session)
-				}
-			}
-			if msg.String() == "ctrl+k" {
-				if sel := m.list.SelectedItem(); sel != nil {
-					m.terminatePrecheckError = ""
-					m.state = viewStateTerminateConfirm
-					return m, nil
-				}
-			}
-		}
-
-		// Capture list selection changes to trigger immediate fetch
-		oldSel := m.list.SelectedItem()
-		m.list, cmd = m.list.Update(msg)
-		cmds = append(cmds, cmd)
-		newSel := m.list.SelectedItem()
-
-		if oldSel != newSel && newSel != nil {
-			s := newSel.(item).session
-			m.activeSession = s.TmuxSession
-			if m.panelMode == panelModeTerminal {
-				cmds = append(cmds, m.initTerminal(s))
-			} else {
-				m.tmuxOutput = "Loading..."
-				m.viewport.SetContent(m.tmuxOutput)
-				cmds = append(cmds, fetchTmuxPane(m.cfg, s))
-			}
-		}
-
-		if m.panelMode == panelModeTerminal && m.terminal != nil {
-			var tModel tea.Model
-			tModel, cmd = m.terminal.Update(msg)
-			if tm, ok := tModel.(TerminalModel); ok {
-				m.terminal = &tm
-			}
-			cmds = append(cmds, cmd)
-		} else {
-			m.viewport, cmd = m.viewport.Update(msg)
-			cmds = append(cmds, cmd)
-		}
+		return m.handleMainUpdate(msg)
 
 	case viewStateMenu:
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			if msg.String() == "enter" {
-				if i, ok := m.menu.SelectedItem().(menuItem); ok {
-					if i.action == viewStateRemotes {
-						// Re-init remotes model to pick up new config/status
-						m.remotes = NewRemotesModel(m.cfg)
-						m.state = i.action
-						return m, nil
-					}
-					if i.action == viewStateGitSetup {
-						// Re-init git setup model and trigger org fetch
-						m.gitSetup = NewGitSetupModel(m.cfg)
-						m.state = i.action
-						return m, m.gitSetup.Init()
-					}
-					if i.action == viewStateGeneralSettings {
-						m.generalSetup = NewGeneralSetupModel(m.cfg)
-						m.state = i.action
-						return m, m.generalSetup.Init()
-					}
-					m.state = i.action
-					return m, nil
-				}
-			}
-			if msg.String() == "esc" {
-				if m.menu.FilterState() != list.Filtering {
-					m.state = viewStateMain
-					return m, nil
-				}
-			}
-		}
-		m.menu, cmd = m.menu.Update(msg)
-		cmds = append(cmds, cmd)
+		return m.handleMenuUpdate(msg)
 
 	case viewStateRemotes:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			if m.remotes.list.FilterState() != list.Filtering {
-				m.state = viewStateMenu
-				return m, nil
-			}
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.remotes.Update(msg)
-		m.remotes = subModel.(RemotesModel)
-		cmds = append(cmds, cmd)
-
-		if m.remotes.done {
-			// Populate list with discovered sessions
-			items := make([]list.Item, len(m.remotes.DiscoveredSessions))
-			for i, s := range m.remotes.DiscoveredSessions {
-				items[i] = item{session: s}
-			}
-			m.list.SetItems(items)
-
-			m.remotes.done = false // Reset
-			m.state = viewStateMain
-			return m, nil
-		}
+		return m.handleRemotesUpdate(msg)
 
 	case viewStateSetup:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			m.state = viewStateMenu
-			return m, nil
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.setup.Update(msg)
-		m.setup = subModel.(SetupModel)
-		cmds = append(cmds, cmd)
-
-		if m.setup.saved {
-			m.setup.saved = false // Reset
-			m.state = viewStateMenu
-		}
+		return m.handleSetupUpdate(msg)
 
 	case viewStateGitSetup:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			m.state = viewStateMenu
-			return m, nil
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.gitSetup.Update(msg)
-		m.gitSetup = subModel.(GitSetupModel)
-		cmds = append(cmds, cmd)
-
-		if m.gitSetup.saved {
-			m.gitSetup.saved = false // Reset
-			m.state = viewStateMenu
-		}
+		return m.handleGitSetupUpdate(msg)
 
 	case viewStateGeneralSettings:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			m.state = viewStateMenu
-			return m, nil
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.generalSetup.Update(msg)
-		m.generalSetup = subModel.(GeneralSetupModel)
-		cmds = append(cmds, cmd)
-
-		if m.generalSetup.saved {
-			m.generalSetup.saved = false // Reset
-			m.state = viewStateMenu
-		}
+		return m.handleGeneralSetupUpdate(msg)
 
 	case viewStateVSCodeError:
 		if _, ok := msg.(tea.KeyMsg); ok {
 			m.state = viewStateMain
 		}
+		return m, nil
 
 	case viewStateIssuePicker:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			if m.issuePicker.list.FilterState() != list.Filtering {
-				m.state = viewStateMain
-				return m, nil
-			}
-		}
-
-		if msg, ok := msg.(jiraIssuesMsg); ok {
-			if msg.err != nil {
-				m.lastError = fmt.Sprintf("Failed to fetch JIRA issues: %v", msg.err)
-				m.state = viewStateVSCodeError
-				return m, nil
-			}
-			m.issuePicker = NewIssuePickerModel(msg.issues)
-			m.issuePicker.SetSize(m.width, m.height)
-			return m, nil
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.issuePicker.Update(msg)
-		m.issuePicker = subModel.(IssuePickerModel)
-		cmds = append(cmds, cmd)
-
-		if m.issuePicker.selected != nil {
-			// Issue selected, transition to branch input
-			slug := m.issuePicker.selected.Slug()
-			m.sessionCfg.IssueKey = m.issuePicker.selected.Key
-			m.state = viewStateBranchInput
-			m.branchInput = NewBranchInputModel(slug)
-			return m, nil
-		}
+		return m.handleIssuePickerUpdate(msg)
 
 	case viewStateBranchInput:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			m.state = viewStateIssuePicker
-			return m, nil
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.branchInput.Update(msg)
-		m.branchInput = subModel.(BranchInputModel)
-		cmds = append(cmds, cmd)
-
-		if m.branchInput.Confirmed {
-			m.sessionCfg.Branch = m.branchInput.Value()
-			m.loadingMsg = "Loading repositories..."
-			m.loadingNext = viewStateRepoPicker
-			m.state = viewStateLoading
-			m.picker = NewRepoPickerModel(nil)
-			return m, m.fetchRepos()
-		}
+		return m.handleBranchInputUpdate(msg)
 
 	case viewStateRepoPicker:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			if m.picker.list.FilterState() != list.Filtering {
-				m.state = viewStateBranchInput
-				return m, nil
-			}
-		}
-
-		if msg, ok := msg.(reposMsg); ok {
-			if msg.err != nil {
-				m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
-				m.state = viewStateVSCodeError
-				return m, nil
-			}
-			m.picker = NewRepoPickerModel(msg.repos)
-			// Resize picker
-			h, v := docStyle.GetFrameSize()
-			m.picker.list.SetSize(m.width-h, m.height-v)
-			return m, nil
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.picker.Update(msg)
-		m.picker = subModel.(RepoPickerModel)
-		cmds = append(cmds, cmd)
-
-		if m.picker.selected != nil {
-			// Repo selected, now fetch directories
-			m.sessionCfg.Repo = *m.picker.selected
-			m.loadingMsg = "Scanning directories..."
-			m.loadingNext = viewStateDirPicker
-			m.state = viewStateLoading
-			return m, m.fetchRepoDirectories(m.picker.selected)
-		}
+		return m.handleRepoPickerUpdate(msg)
 
 	case viewStateDirPicker:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			if m.dirPicker.list.FilterState() != list.Filtering {
-				m.state = viewStateRepoPicker
-				return m, nil
-			}
-		}
-
-		if msg, ok := msg.(dirsMsg); ok {
-			if msg.err != nil {
-				m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
-				m.state = viewStateVSCodeError
-				return m, nil
-			}
-			m.dirPicker = NewDirPickerModel(msg.dirs, *m.picker.selected)
-			// Resize picker
-			h, v := docStyle.GetFrameSize()
-			m.dirPicker.SetSize(m.width-h, m.height-v)
-			return m, nil
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.dirPicker.Update(msg)
-		m.dirPicker = subModel.(DirPickerModel)
-		cmds = append(cmds, cmd)
-
-		if m.dirPicker.selected != "" {
-			// Directory selected
-			m.sessionCfg.Directory = m.dirPicker.selected
-			m.loadingMsg = "Scanning available agents..."
-			m.loadingNext = viewStateAgentPicker
-			m.state = viewStateLoading
-			return m, m.fetchAgents()
-		}
+		return m.handleDirPickerUpdate(msg)
 
 	case viewStateAgentPicker:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			if m.agentPicker.list.FilterState() != list.Filtering {
-				m.state = viewStateDirPicker
-				return m, nil
-			}
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.agentPicker.Update(msg)
-		m.agentPicker = subModel.(AgentPickerModel)
-		cmds = append(cmds, cmd)
-
-		if m.agentPicker.selected != nil {
-			m.sessionCfg.Agent = m.agentPicker.selected
-			m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
-			m.summary.SetAgent(m.sessionCfg.Agent)
-			m.summary.SetSize(m.width, m.height)
-			m.state = viewStateSummary
-			return m, nil
-		}
+		return m.handleAgentPickerUpdate(msg)
 
 	case viewStateSummary:
-		if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-			m.state = viewStateAgentPicker
-			return m, nil
-		}
-
-		var subModel tea.Model
-		subModel, cmd = m.summary.Update(msg)
-		m.summary = subModel.(SummaryModel)
-		cmds = append(cmds, cmd)
-
-		if m.summary.IsConfirmed() {
-			m.loadingMsg = "Creating session..."
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-			return m, m.createSession()
-		}
+		return m.handleSummaryUpdate(msg)
 
 	case viewStateTerminateConfirm:
-		if km, ok := msg.(tea.KeyMsg); ok {
-			switch km.String() {
-			case "esc", "n":
-				m.terminatePrecheckError = ""
-				m.state = viewStateMain
-				return m, nil
-			case "y":
-				if sel := m.list.SelectedItem(); sel != nil {
-					s := sel.(item).session
-					if err := m.validateTerminationPreconditions(s); err != nil {
-						m.terminatePrecheckError = err.Error()
-						return m, nil
-					}
-					m.terminatePrecheckError = ""
-					m.terminateSession = s
-					m.terminateSteps = []string{
-						"Stopping mutagen sync",
-						"Killing tmux session",
-						"Stopping agent process",
-						"Removing git worktree",
-						"Cleaning local files",
-						"Updating session status",
-					}
-					m.terminateErrors = make([]string, len(m.terminateSteps))
-					m.terminateIndex = 0
-					m.state = viewStateTerminateProgress
-					return m, m.runTerminateStepCmd(0)
-				}
-			}
-		}
+		return m.handleTerminateConfirmUpdate(msg)
 
 	case viewStateWorktreeExists:
-		if km, ok := msg.(tea.KeyMsg); ok {
-			switch km.String() {
-			case "c", "esc":
-				// Cancel - go back to main
-				m.state = viewStateMain
-				return m, nil
-			case "b":
-				// Change branch - go back to branch input
-				m.state = viewStateBranchInput
-				slug := m.sessionCfg.IssueKey
-				if m.sessionCfg.Branch != "" {
-					slug = m.sessionCfg.Branch
-				}
-				m.branchInput = NewBranchInputModel(slug)
-				return m, nil
-			}
-		}
+		return m.handleWorktreeExistsUpdate(msg)
 
 	case viewStateTerminateProgress:
-		if msg, ok := msg.(terminateStepMsg); ok {
-			if msg.err != nil {
-				m.terminateErrors[msg.index] = msg.err.Error()
-			}
-			next := msg.index + 1
-			if next < len(m.terminateSteps) {
-				m.terminateIndex = next
-				return m, m.runTerminateStepCmd(next)
-			}
-
-			// Remove session from list
-			items := []list.Item{}
-			for _, it := range m.list.Items() {
-				if sessItem, ok := it.(item); ok {
-					if sessItem.session.TmuxSession == m.terminateSession.TmuxSession {
-						continue
-					}
-				}
-				items = append(items, it)
-			}
-			m.list.SetItems(items)
-			m.state = viewStateMain
-			return m, nil
-		}
+		return m.handleTerminateProgressUpdate(msg)
 
 	case viewStateLoading:
-		switch msg := msg.(type) {
-		case discoveryResultMsg:
-			// Refresh sessions list
-			m.log("Discovered %d sessions", len(msg))
-			ctx := context.Background()
-			// Save discovered sessions to DB
-			for i := range msg {
-				if m.db != nil {
-					_ = m.db.Save(ctx, &msg[i])
-				}
-			}
-			// Update list items
-			items := make([]list.Item, len(msg))
-			for i, s := range msg {
-				items[i] = item{session: s, needsInput: false, activity: ""}
-			}
-			m.list.SetItems(items)
-			m.state = viewStateMain
-			return m, nil
-		case attachMsg:
-			return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-				return attachDoneMsg{}
-			})
-		case attachDoneMsg:
-			m.state = viewStateMain
-			m.panelMode = panelModePreview
-			// Force refresh of the current session
-			if sel := m.list.SelectedItem(); sel != nil {
-				s := sel.(item).session
-				m.activeSession = s.TmuxSession
-				m.tmuxOutput = "Loading..."
-				m.viewport.SetContent(m.tmuxOutput)
-				return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, s))
-			}
-			return m, tickTmux()
-		case tmuxTerminalMsg:
-			if msg.err != nil {
-				m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
-				m.panelMode = panelModePreview
-				m.state = viewStateMain
-				return m, nil
-			}
-			m.termCloser = msg.stream
-			term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
-			m.terminal = &term
-			m.panelMode = panelModeTerminal
-			m.state = viewStateMain
-			return m, nil
-		case reposMsg:
-			if msg.err != nil {
-				m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
-				m.state = viewStateVSCodeError
-				return m, nil
-			}
-			m.picker = NewRepoPickerModel(msg.repos)
-			h, v := docStyle.GetFrameSize()
-			m.picker.list.SetSize(m.width-h, m.height-v)
-			m.state = m.loadingNext
-			return m, nil
-		case dirsMsg:
-			if msg.err != nil {
-				m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
-				m.state = viewStateVSCodeError
-				return m, nil
-			}
-			m.dirPicker = NewDirPickerModel(msg.dirs, m.sessionCfg.Repo)
-			h, v := docStyle.GetFrameSize()
-			m.dirPicker.SetSize(m.width-h, m.height-v)
-			m.state = m.loadingNext
-			return m, nil
-		case recreateMutagenMsg:
-			if msg.err != nil {
-				m.lastError = fmt.Sprintf("Failed to recreate mutagen sync: %v", msg.err)
-				m.state = viewStateVSCodeError
-				return m, nil
-			}
-			items := m.list.Items()
-			for i, it := range items {
-				if sessItem, ok := it.(item); ok && sessItem.session.TmuxSession == msg.session.TmuxSession {
-					sessItem.session.LocalPath = msg.session.LocalPath
-					sessItem.session.MutagenSyncID = msg.session.MutagenSyncID
-					items[i] = sessItem
-					// Save to database
-					if m.db != nil {
-						ctx := context.Background()
-						_ = m.db.Save(ctx, &sessItem.session)
-					}
-					break
-				}
-			}
-			m.list.SetItems(items)
-			m.state = m.loadingNext
-			return m, nil
-		case agent.ScanAgentsMsg:
-			if msg.Err != nil {
-				m.lastError = fmt.Sprintf("Failed to scan agents: %v", msg.Err)
-				m.state = viewStateVSCodeError
-				return m, nil
-			}
-			m.agentPicker = NewAgentPickerModel(msg.Agents)
-			h, v := docStyle.GetFrameSize()
-			m.agentPicker.SetSize(m.width-h, m.height-v)
-			m.state = m.loadingNext
-			return m, nil
-		case sessionCreateMsg:
-			if msg.err != nil {
-				// Check if it's a worktree exists error
-				if msg.err.Error() == "WORKTREE_EXISTS" {
-					m.state = viewStateWorktreeExists
-					return m, nil
-				}
-				m.lastError = fmt.Sprintf("Failed to create session: %v", msg.err)
-				m.state = viewStateVSCodeError
-				return m, nil
-			}
-			// Add new session to list
-			items := m.list.Items()
-			items = append(items, item{session: msg.session, needsInput: false, activity: ""})
-			m.list.SetItems(items)
-
-			// Select the newly created session and fetch its preview
-			m.list.Select(len(items) - 1)
-			m.activeSession = msg.session.TmuxSession
-			m.tmuxOutput = "Loading..."
-			m.viewport.SetContent(m.tmuxOutput)
-			m.state = m.loadingNext
-
-			return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session))
-		}
+		return m.handleLoadingUpdate(msg)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1767,81 +1012,7 @@ func (m *Model) View() string {
 func (m *Model) renderView() string {
 	switch m.state {
 	case viewStateMain:
-		// Split View
-		h, v := docStyle.GetFrameSize()
-		sidebarWidth := m.width / 3
-		mainWidth := m.width - sidebarWidth - h - 2
-
-		// Sidebar
-		sidebar := m.list.View()
-
-		// Main Panel
-		var mainPanel strings.Builder
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			mainPanel.WriteString(activeStyle.Render("SESSION DETAILS") + "\n\n")
-			mainPanel.WriteString(fmt.Sprintf("Tmux: %s\n", s.TmuxSession))
-			mainPanel.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
-			mainPanel.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
-			mainPanel.WriteString(fmt.Sprintf("Path: %s\n", s.WorktreePath))
-			if s.MutagenSyncID != "" {
-				mainPanel.WriteString(fmt.Sprintf("Local Sync: %s\n", successStyle.Render(s.LocalPath)))
-				mainPanel.WriteString(fmt.Sprintf("Mutagen ID: %s\n", s.MutagenSyncID))
-			} else {
-				mainPanel.WriteString("Local Sync: " + failStyle.Render("None") + "\n")
-			}
-			if s.IssueKey != "" {
-				mainPanel.WriteString(fmt.Sprintf("JIRA: %s\n", s.IssueKey))
-			}
-			mainPanel.WriteString(fmt.Sprintf("\nStatus: %s\n", s.Status))
-			mainPanel.WriteString(fmt.Sprintf("Created: %s\n", s.CreatedAt.Format("2006-01-02 15:04:05")))
-
-			// Add separator and Viewport for Tmux Output
-			mainPanel.WriteString("\n" + strings.Repeat("─", mainWidth-4) + "\n")
-			modeName := "PREVIEW"
-			if m.panelMode == panelModeTerminal {
-				modeName = "TERMINAL"
-			}
-			mainPanel.WriteString(activeStyle.Render(modeName) + " (ctrl+t toggle, ctrl+s full screen)\n\n")
-
-			if m.panelMode == panelModeTerminal && m.terminal != nil {
-				mainPanel.WriteString(m.terminal.View())
-			} else {
-				mainPanel.WriteString(m.viewport.View())
-			}
-		} else {
-			mainPanel.WriteString("\n\n  No session selected.\n  Press 'm' for Admin Menu.")
-		}
-
-		mainStyle := lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), false, false, false, true). // Left border only
-			PaddingLeft(2).
-			Width(mainWidth).
-			Height(m.height - v - len(m.doctorResults) - 10)
-
-		content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainStyle.Render(mainPanel.String()))
-
-		// Footer (Checks & Active Remote)
-		var doctorOutput strings.Builder
-		doctorOutput.WriteString("Startup Checks:\n")
-		for _, res := range m.doctorResults {
-			status := successStyle.Render("✓")
-			if !res.Passed {
-				status = failStyle.Render("✗")
-			}
-			doctorOutput.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
-		}
-
-		var activeHost string
-		if m.cfg.ActiveRemote != "" {
-			activeHost = successStyle.Render(m.cfg.ActiveRemote)
-		} else {
-			activeHost = failStyle.Render("None")
-		}
-
-		footer := "\nActive Remote: " + activeHost + "\n\n" + doctorOutput.String()
-
-		return docStyle.Render(content + "\n" + footer)
+		return m.renderMainView()
 
 	case viewStateMenu:
 		return docStyle.Render(m.menu.View())
@@ -1975,4 +1146,884 @@ func (m *Model) renderView() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(msg))
 	}
 	return ""
+}
+
+func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case attachMsg:
+		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
+			return tmuxTickMsg(time.Now())
+		})
+	case tmuxTerminalMsg:
+		if msg.err != nil {
+			m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
+			m.panelMode = panelModePreview
+			m.state = viewStateMain
+			return m, nil
+		}
+		m.termCloser = msg.stream
+		term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
+		m.terminal = &term
+		return m, nil
+	case tmuxTickMsg:
+		cmds = append(cmds, tickTmux())
+
+		// On first tick, force-select the first session if nothing is active
+		if m.initialLoad {
+			m.initialLoad = false
+			if len(m.list.Items()) > 0 {
+				m.list.Select(0)
+				if sel := m.list.SelectedItem(); sel != nil {
+					s := sel.(item).session
+					m.activeSession = s.TmuxSession
+					m.tmuxOutput = "Loading..."
+					m.viewport.SetContent(m.tmuxOutput)
+					cmds = append(cmds,
+						fetchTmuxPane(m.cfg, s),
+						checkInputHint(m.cfg, s),
+					)
+				}
+			}
+		} else if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			if m.activeSession != s.TmuxSession {
+				m.activeSession = s.TmuxSession
+			}
+			cmds = append(cmds,
+				fetchTmuxPane(m.cfg, s),
+				checkInputHint(m.cfg, s),
+			)
+		}
+	case tmuxOutputMsg:
+		if msg.session == m.activeSession {
+			if msg.err != nil {
+				m.tmuxOutput = failStyle.Render("Failed to capture pane: " + msg.err.Error())
+			} else {
+				m.tmuxOutput = msg.output
+			}
+			m.viewport.SetContent(m.tmuxOutput)
+			m.viewport.GotoBottom()
+		}
+	case inputHintMsg:
+		// Update list items with input hint when enabled
+		if m.cfg.Features.InputPromptDetection {
+			items := m.list.Items()
+			for idx, it := range items {
+				if sessItem, ok := it.(item); ok {
+					if sessItem.session.TmuxSession == msg.session {
+						sessItem.needsInput = msg.needsInput
+						sessItem.activity = msg.activity
+						items[idx] = sessItem
+						break
+					}
+				}
+			}
+			m.list.SetItems(items)
+		}
+	case tea.KeyMsg:
+		m, cmd, handled := m.handleMainKeyMsg(msg)
+		if handled {
+			return m, cmd
+		}
+	}
+
+	// Capture list selection changes to trigger immediate fetch
+	oldSel := m.list.SelectedItem()
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	cmds = append(cmds, cmd)
+	newSel := m.list.SelectedItem()
+
+	if oldSel != newSel && newSel != nil {
+		s := newSel.(item).session
+		m.activeSession = s.TmuxSession
+		if m.panelMode == panelModeTerminal {
+			cmds = append(cmds, m.initTerminal(s))
+		} else {
+			m.tmuxOutput = "Loading..."
+			m.viewport.SetContent(m.tmuxOutput)
+			cmds = append(cmds, fetchTmuxPane(m.cfg, s))
+		}
+	}
+
+	if m.panelMode == panelModeTerminal && m.terminal != nil {
+		var tModel tea.Model
+		tModel, cmd = m.terminal.Update(msg)
+		if tm, ok := tModel.(TerminalModel); ok {
+			m.terminal = &tm
+		}
+		cmds = append(cmds, cmd)
+	} else {
+		m.viewport, cmd = m.viewport.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	var cmds []tea.Cmd
+
+	if msg.String() == "`" {
+		m.consoleOpen = !m.consoleOpen
+		m.log("Console toggled: %v", m.consoleOpen)
+		if m.consoleOpen {
+			// Initialize console viewport
+			consoleHeight := m.height / 3
+			if consoleHeight < 5 {
+				consoleHeight = 5
+			}
+			if consoleHeight > 20 {
+				consoleHeight = 20
+			}
+			m.consoleViewport = viewport.New(m.width-6, consoleHeight-4)
+			m.consoleViewport.SetContent(strings.Join(m.consoleLog, "\n"))
+			m.consoleViewport.GotoBottom()
+		}
+		return m, nil, true
+	}
+	// Handle console scrolling when open
+	if m.consoleOpen {
+		switch msg.String() {
+		case "up", "k":
+			m.consoleViewport.ScrollUp(1)
+			return m, nil, true
+		case "down", "j":
+			m.consoleViewport.ScrollDown(1)
+			return m, nil, true
+		case "pgup":
+			m.consoleViewport.PageUp()
+			return m, nil, true
+		case "pgdown":
+			m.consoleViewport.PageDown()
+			return m, nil, true
+		}
+	}
+	if msg.String() == "n" {
+		m.state = viewStateIssuePicker
+		m.issuePicker = NewIssuePickerModel(nil)
+		m.issuePicker.loading = true
+		m.issuePicker.SetSize(m.width, m.height)
+		return m, m.searchJira(""), true
+	}
+	if msg.String() == "m" {
+		m.state = viewStateMenu
+		return m, nil, true
+	}
+	if msg.String() == "ctrl+c" {
+		if m.termCloser != nil {
+			m.termCloser.Close()
+		}
+		return m, tea.Quit, true
+	}
+	if msg.String() == "ctrl+t" {
+		if m.panelMode == panelModePreview {
+			if sel := m.list.SelectedItem(); sel != nil {
+				m.loadingMsg = fmt.Sprintf("Connecting to session %s...", sel.(item).session.TmuxSession)
+				m.loadingNext = viewStateMain
+				m.state = viewStateLoading
+				return m, tea.Sequence(
+					tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+						return m.initTerminal(sel.(item).session)()
+					}),
+				), true
+			}
+		} else {
+			m.panelMode = panelModePreview
+			if m.termCloser != nil {
+				m.termCloser.Close()
+				m.termCloser = nil
+			}
+		}
+		return m, tea.Batch(cmds...), true
+	}
+	if msg.String() == "ctrl+s" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			var remote config.Remote
+			for _, r := range m.cfg.Remotes {
+				if r.Host == m.cfg.ActiveRemote {
+					remote = r
+					break
+				}
+			}
+			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+			c := mgr.AttachTmuxSession(s.TmuxSession)
+			m.loadingMsg = fmt.Sprintf("Connecting to session %s...", s.TmuxSession)
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, tea.Sequence(
+				tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+					return attachMsg{cmd: c}
+				}),
+			), true
+		}
+	}
+	if msg.String() == "v" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			if s.LocalPath != "" {
+				_, err := exec.LookPath("code")
+				if err != nil {
+					m.lastError = "The VS Code CLI 'code' was not found in your PATH."
+					m.state = viewStateVSCodeError
+					return m, nil, true
+				}
+				err = exec.Command("code", s.LocalPath).Start() // #nosec G204
+				if err != nil {
+					m.lastError = fmt.Sprintf("Failed to start VS Code: %v", err)
+					m.state = viewStateVSCodeError
+					return m, nil, true
+				}
+			}
+		}
+	}
+	if msg.String() == "ctrl+l" {
+		m.log("ctrl+l pressed")
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			m.log("Selected session: %s, LocalPath: %s", s.TmuxSession, s.LocalPath)
+			if s.LocalPath == "" {
+				m.log("ERROR: No local path")
+				m.lastError = "No local sync path available for this session"
+				m.state = viewStateVSCodeError
+				return m, nil, true
+			}
+
+			// Detect current terminal app and open a new window there
+			termProgram := os.Getenv("TERM_PROGRAM")
+			m.log("Terminal program: %s", termProgram)
+			var script string
+
+			switch termProgram {
+			case "iTerm.app":
+				// iTerm2
+				script = fmt.Sprintf(`tell application "iTerm"
+	create window with default profile
+	tell current session of current window
+		write text "cd %q && clear"
+	end tell
+end tell`, s.LocalPath)
+			case "WarpTerminal":
+				// Warp - just copy the local path to clipboard
+				script = fmt.Sprintf(`do shell script "printf '%s' | pbcopy"
+display notification "Local path copied to clipboard" with title "Aiman"`, strings.ReplaceAll(s.LocalPath, "'", "'\\''"))
+			case "Apple_Terminal":
+				// Terminal.app
+				script = fmt.Sprintf(`tell application "Terminal"
+	do script "cd %q && clear"
+	activate
+end tell`, s.LocalPath)
+			default:
+				// Fallback: try Terminal.app
+				script = fmt.Sprintf(`tell application "Terminal"
+	do script "cd %q && clear"
+	activate
+end tell`, s.LocalPath)
+			}
+
+			m.log("Executing AppleScript for %s...", termProgram)
+			m.log("Script: %s", script)
+			cmd := exec.Command("osascript", "-e", script)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				m.log("ERROR: osascript failed: %v", err)
+				m.log("Output: %s", string(output))
+				m.lastError = fmt.Sprintf("Failed to open terminal: %v\nOutput: %s", err, string(output))
+				m.state = viewStateVSCodeError
+				return m, nil, true
+			}
+			if len(output) > 0 {
+				m.log("osascript output: %s", string(output))
+			}
+			m.log("Terminal command completed successfully")
+		} else {
+			m.log("ERROR: No session selected")
+		}
+		return m, nil, true
+	}
+	if msg.String() == "r" {
+		// Refresh sessions from remote
+		m.log("Refreshing sessions...")
+		if m.cfg.ActiveRemote != "" {
+			var remote config.Remote
+			for _, r := range m.cfg.Remotes {
+				if r.Host == m.cfg.ActiveRemote {
+					remote = r
+					break
+				}
+			}
+			// Trigger session discovery
+			m.loadingMsg = "Refreshing sessions..."
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, func() tea.Msg {
+				ctx := context.Background()
+				mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+				if err := mgr.Connect(ctx); err != nil {
+					return discoveryResultMsg{}
+				}
+				discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
+				sessions, _ := discoverer.Discover(ctx, remote.Host)
+				return discoveryResultMsg(sessions)
+			}, true
+		}
+		return m, nil, true
+	}
+	if msg.String() == "ctrl+y" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			m.loadingMsg = "Recreating mutagen sync..."
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, m.recreateMutagenSync(sel.(item).session), true
+		}
+	}
+	if msg.String() == "ctrl+k" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			m.terminatePrecheckError = ""
+			m.state = viewStateTerminateConfirm
+			return m, nil, true
+		}
+	}
+
+	return m, nil, false
+}
+
+func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	if msg, ok := msg.(tea.KeyMsg); ok {
+		if msg.String() == "enter" {
+			if i, ok := m.menu.SelectedItem().(menuItem); ok {
+				if i.action == viewStateRemotes {
+					m.remotes = NewRemotesModel(m.cfg)
+					m.state = i.action
+					return m, nil
+				}
+				if i.action == viewStateGitSetup {
+					m.gitSetup = NewGitSetupModel(m.cfg)
+					m.state = i.action
+					return m, m.gitSetup.Init()
+				}
+				if i.action == viewStateGeneralSettings {
+					m.generalSetup = NewGeneralSetupModel(m.cfg)
+					m.state = i.action
+					return m, m.generalSetup.Init()
+				}
+				m.state = i.action
+				return m, nil
+			}
+		}
+		if msg.String() == "esc" {
+			if m.menu.FilterState() != list.Filtering {
+				m.state = viewStateMain
+				return m, nil
+			}
+		}
+	}
+	var cmds []tea.Cmd
+	m.menu, cmd = m.menu.Update(msg)
+	cmds = append(cmds, cmd)
+	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) handleRemotesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		if m.remotes.list.FilterState() != list.Filtering {
+			m.state = viewStateMenu
+			return m, nil
+		}
+	}
+
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.remotes.Update(msg)
+	m.remotes = subModel.(RemotesModel)
+
+	if m.remotes.done {
+		items := make([]list.Item, len(m.remotes.DiscoveredSessions))
+		for i, s := range m.remotes.DiscoveredSessions {
+			items[i] = item{session: s}
+		}
+		m.list.SetItems(items)
+		m.remotes.done = false
+		m.state = viewStateMain
+		return m, nil
+	}
+	return m, cmd
+}
+
+func (m *Model) handleSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.state = viewStateMenu
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.setup.Update(msg)
+	m.setup = subModel.(SetupModel)
+	if m.setup.saved {
+		m.setup.saved = false
+		m.state = viewStateMenu
+	}
+	return m, cmd
+}
+
+func (m *Model) handleGitSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.state = viewStateMenu
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.gitSetup.Update(msg)
+	m.gitSetup = subModel.(GitSetupModel)
+	if m.gitSetup.saved {
+		m.gitSetup.saved = false
+		m.state = viewStateMenu
+	}
+	return m, cmd
+}
+
+func (m *Model) handleGeneralSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.state = viewStateMenu
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.generalSetup.Update(msg)
+	m.generalSetup = subModel.(GeneralSetupModel)
+	if m.generalSetup.saved {
+		m.generalSetup.saved = false
+		m.state = viewStateMenu
+	}
+	return m, cmd
+}
+
+func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		if m.issuePicker.list.FilterState() != list.Filtering {
+			m.state = viewStateMain
+			return m, nil
+		}
+	}
+	if msg, ok := msg.(jiraIssuesMsg); ok {
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to fetch JIRA issues: %v", msg.err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		m.issuePicker = NewIssuePickerModel(msg.issues)
+		m.issuePicker.SetSize(m.width, m.height)
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.issuePicker.Update(msg)
+	m.issuePicker = subModel.(IssuePickerModel)
+	if m.issuePicker.selected != nil {
+		slug := m.issuePicker.selected.Slug()
+		m.sessionCfg.IssueKey = m.issuePicker.selected.Key
+		m.state = viewStateBranchInput
+		m.branchInput = NewBranchInputModel(slug)
+		return m, nil
+	}
+	return m, cmd
+}
+
+func (m *Model) handleBranchInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.state = viewStateIssuePicker
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.branchInput.Update(msg)
+	m.branchInput = subModel.(BranchInputModel)
+	if m.branchInput.Confirmed {
+		m.sessionCfg.Branch = m.branchInput.Value()
+		m.loadingMsg = "Loading repositories..."
+		m.loadingNext = viewStateRepoPicker
+		m.state = viewStateLoading
+		m.picker = NewRepoPickerModel(nil)
+		return m, m.fetchRepos()
+	}
+	return m, cmd
+}
+
+func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		if m.picker.list.FilterState() != list.Filtering {
+			m.state = viewStateBranchInput
+			return m, nil
+		}
+	}
+	if msg, ok := msg.(reposMsg); ok {
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		m.picker = NewRepoPickerModel(msg.repos)
+		h, v := docStyle.GetFrameSize()
+		m.picker.list.SetSize(m.width-h, m.height-v)
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.picker.Update(msg)
+	m.picker = subModel.(RepoPickerModel)
+	if m.picker.selected != nil {
+		m.sessionCfg.Repo = *m.picker.selected
+		m.loadingMsg = "Scanning directories..."
+		m.loadingNext = viewStateDirPicker
+		m.state = viewStateLoading
+		return m, m.fetchRepoDirectories(m.picker.selected)
+	}
+	return m, cmd
+}
+
+func (m *Model) handleDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		if m.dirPicker.list.FilterState() != list.Filtering {
+			m.state = viewStateRepoPicker
+			return m, nil
+		}
+	}
+	if msg, ok := msg.(dirsMsg); ok {
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		m.dirPicker = NewDirPickerModel(msg.dirs, *m.picker.selected)
+		h, v := docStyle.GetFrameSize()
+		m.dirPicker.SetSize(m.width-h, m.height-v)
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.dirPicker.Update(msg)
+	m.dirPicker = subModel.(DirPickerModel)
+	if m.dirPicker.selected != "" {
+		m.sessionCfg.Directory = m.dirPicker.selected
+		m.loadingMsg = "Scanning available agents..."
+		m.loadingNext = viewStateAgentPicker
+		m.state = viewStateLoading
+		return m, m.fetchAgents()
+	}
+	return m, cmd
+}
+
+func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		if m.agentPicker.list.FilterState() != list.Filtering {
+			m.state = viewStateDirPicker
+			return m, nil
+		}
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.agentPicker.Update(msg)
+	m.agentPicker = subModel.(AgentPickerModel)
+	if m.agentPicker.selected != nil {
+		m.sessionCfg.Agent = m.agentPicker.selected
+		m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
+		m.summary.SetAgent(m.sessionCfg.Agent)
+		m.summary.SetSize(m.width, m.height)
+		m.state = viewStateSummary
+		return m, nil
+	}
+	return m, cmd
+}
+
+func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.state = viewStateAgentPicker
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.summary.Update(msg)
+	m.summary = subModel.(SummaryModel)
+	if m.summary.IsConfirmed() {
+		m.loadingMsg = "Creating session..."
+		m.loadingNext = viewStateMain
+		m.state = viewStateLoading
+		return m, m.createSession()
+	}
+	return m, cmd
+}
+
+func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc", "n":
+			m.terminatePrecheckError = ""
+			m.state = viewStateMain
+			return m, nil
+		case "y":
+			if sel := m.list.SelectedItem(); sel != nil {
+				s := sel.(item).session
+				if err := m.validateTerminationPreconditions(s); err != nil {
+					m.terminatePrecheckError = err.Error()
+					return m, nil
+				}
+				m.terminatePrecheckError = ""
+				m.terminateSession = s
+				m.terminateSteps = []string{
+					"Stopping mutagen sync",
+					"Killing tmux session",
+					"Stopping agent process",
+					"Removing git worktree",
+					"Cleaning local files",
+					"Updating session status",
+				}
+				m.terminateErrors = make([]string, len(m.terminateSteps))
+				m.terminateIndex = 0
+				m.state = viewStateTerminateProgress
+				return m, m.runTerminateStepCmd(0)
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handleWorktreeExistsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "c", "esc":
+			m.state = viewStateMain
+			return m, nil
+		case "b":
+			m.state = viewStateBranchInput
+			slug := m.sessionCfg.IssueKey
+			if m.sessionCfg.Branch != "" {
+				slug = m.sessionCfg.Branch
+			}
+			m.branchInput = NewBranchInputModel(slug)
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handleTerminateProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := msg.(terminateStepMsg); ok {
+		if msg.err != nil {
+			m.terminateErrors[msg.index] = msg.err.Error()
+		}
+		next := msg.index + 1
+		if next < len(m.terminateSteps) {
+			m.terminateIndex = next
+			return m, m.runTerminateStepCmd(next)
+		}
+		items := []list.Item{}
+		for _, it := range m.list.Items() {
+			if sessItem, ok := it.(item); ok {
+				if sessItem.session.TmuxSession == m.terminateSession.TmuxSession {
+					continue
+				}
+			}
+			items = append(items, it)
+		}
+		m.list.SetItems(items)
+		m.state = viewStateMain
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case discoveryResultMsg:
+		m.log("Discovered %d sessions", len(msg))
+		ctx := context.Background()
+		for i := range msg {
+			if m.db != nil {
+				_ = m.db.Save(ctx, &msg[i])
+			}
+		}
+		items := make([]list.Item, len(msg))
+		for i, s := range msg {
+			items[i] = item{session: s, needsInput: false, activity: ""}
+		}
+		m.list.SetItems(items)
+		m.state = viewStateMain
+		return m, nil
+	case attachMsg:
+		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
+			return attachDoneMsg{}
+		})
+	case attachDoneMsg:
+		m.state = viewStateMain
+		m.panelMode = panelModePreview
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			m.activeSession = s.TmuxSession
+			m.tmuxOutput = "Loading..."
+			m.viewport.SetContent(m.tmuxOutput)
+			return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, s))
+		}
+		return m, tickTmux()
+	case tmuxTerminalMsg:
+		if msg.err != nil {
+			m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
+			m.panelMode = panelModePreview
+			m.state = viewStateMain
+			return m, nil
+		}
+		m.termCloser = msg.stream
+		term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
+		m.terminal = &term
+		m.panelMode = panelModeTerminal
+		m.state = viewStateMain
+		return m, nil
+	case reposMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		m.picker = NewRepoPickerModel(msg.repos)
+		h, v := docStyle.GetFrameSize()
+		m.picker.list.SetSize(m.width-h, m.height-v)
+		m.state = m.loadingNext
+		return m, nil
+	case dirsMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		m.dirPicker = NewDirPickerModel(msg.dirs, m.sessionCfg.Repo)
+		h, v := docStyle.GetFrameSize()
+		m.dirPicker.SetSize(m.width-h, m.height-v)
+		m.state = m.loadingNext
+		return m, nil
+	case recreateMutagenMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to recreate mutagen sync: %v", msg.err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		m.state = viewStateMain
+		return m, nil
+	case agent.ScanAgentsMsg:
+		if msg.Err != nil {
+			m.lastError = fmt.Sprintf("Failed to scan agents: %v", msg.Err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		m.agentPicker = NewAgentPickerModel(msg.Agents)
+		h, v := docStyle.GetFrameSize()
+		m.agentPicker.SetSize(m.width-h, m.height-v)
+		m.state = m.loadingNext
+		return m, nil
+	case sessionCreateMsg:
+		if msg.err != nil {
+			// Check if it's a worktree exists error
+			if msg.err.Error() == "WORKTREE_EXISTS" {
+				m.state = viewStateWorktreeExists
+				return m, nil
+			}
+			m.lastError = fmt.Sprintf("Failed to create session: %v", msg.err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		// Add new session to list
+		items := m.list.Items()
+		items = append(items, item{session: msg.session, needsInput: false, activity: ""})
+		m.list.SetItems(items)
+
+		// Select the newly created session and fetch its preview
+		m.list.Select(len(items) - 1)
+		m.activeSession = msg.session.TmuxSession
+		m.tmuxOutput = "Loading..."
+		m.viewport.SetContent(m.tmuxOutput)
+		m.state = m.loadingNext
+
+		return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session))
+	}
+	return m, nil
+}
+
+func (m *Model) renderMainView() string {
+	// Split View
+	h, v := docStyle.GetFrameSize()
+	sidebarWidth := m.width / 3
+	mainWidth := m.width - sidebarWidth - h - 2
+
+	// Sidebar
+	sidebar := m.list.View()
+
+	// Main Panel
+	var mainPanel strings.Builder
+	if sel := m.list.SelectedItem(); sel != nil {
+		s := sel.(item).session
+		mainPanel.WriteString(activeStyle.Render("SESSION DETAILS") + "\n\n")
+		mainPanel.WriteString(fmt.Sprintf("Tmux: %s\n", s.TmuxSession))
+		mainPanel.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
+		mainPanel.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
+		mainPanel.WriteString(fmt.Sprintf("Path: %s\n", s.WorktreePath))
+		if s.MutagenSyncID != "" {
+			mainPanel.WriteString(fmt.Sprintf("Local Sync: %s\n", successStyle.Render(s.LocalPath)))
+			mainPanel.WriteString(fmt.Sprintf("Mutagen ID: %s\n", s.MutagenSyncID))
+		} else {
+			mainPanel.WriteString("Local Sync: " + failStyle.Render("None") + "\n")
+		}
+		if s.IssueKey != "" {
+			mainPanel.WriteString(fmt.Sprintf("JIRA: %s\n", s.IssueKey))
+		}
+		mainPanel.WriteString(fmt.Sprintf("\nStatus: %s\n", s.Status))
+		mainPanel.WriteString(fmt.Sprintf("Created: %s\n", s.CreatedAt.Format("2006-01-02 15:04:05")))
+
+		// Add separator and Viewport for Tmux Output
+		mainPanel.WriteString("\n" + strings.Repeat("─", mainWidth-4) + "\n")
+		modeName := "PREVIEW"
+		if m.panelMode == panelModeTerminal {
+			modeName = "TERMINAL"
+		}
+		mainPanel.WriteString(activeStyle.Render(modeName) + " (ctrl+t toggle, ctrl+s full screen)\n\n")
+
+		if m.panelMode == panelModeTerminal && m.terminal != nil {
+			mainPanel.WriteString(m.terminal.View())
+		} else {
+			mainPanel.WriteString(m.viewport.View())
+		}
+	} else {
+		mainPanel.WriteString("\n\n  No session selected.\n  Press 'm' for Admin Menu.")
+	}
+
+	mainStyle := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true). // Left border only
+		PaddingLeft(2).
+		Width(mainWidth).
+		Height(m.height - v - len(m.doctorResults) - 10)
+
+	content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainStyle.Render(mainPanel.String()))
+
+	// Footer (Checks & Active Remote)
+	var doctorOutput strings.Builder
+	doctorOutput.WriteString("Startup Checks:\n")
+	for _, res := range m.doctorResults {
+		status := successStyle.Render("✓")
+		if !res.Passed {
+			status = failStyle.Render("✗")
+		}
+		doctorOutput.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
+	}
+
+	var activeHost string
+	if m.cfg.ActiveRemote != "" {
+		activeHost = successStyle.Render(m.cfg.ActiveRemote)
+	} else {
+		activeHost = failStyle.Render("None")
+	}
+
+	footer := "\nActive Remote: " + activeHost + "\n\n" + doctorOutput.String()
+
+	return docStyle.Render(content + "\n" + footer)
 }

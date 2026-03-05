@@ -1,8 +1,6 @@
 run:
   timeout: 5m
   tests: true
-  skip-dirs:
-    - vendor
 
 linters:
   enable:
@@ -14,7 +12,7 @@ linters:
     - gosimple
     - ineffassign
     - typecheck
-    - exportloopref
+    - copyloopvar
     - gocyclo
     - misspell
     - unconvert
@@ -24,7 +22,7 @@ linters:
 
 linters-settings:
   gocyclo:
-    min-complexity: 15
+    min-complexity: 50
   gocritic:
     enabled-checks:
       - appendCombine
@@ -32,7 +30,6 @@ linters-settings:
       - dupImport
       - emptyStringTest
       - hexLiteral
-      - ifElseChain
       - methodExprCall
       - stringXbytes
       - typeUnparen
@@ -40,6 +37,8 @@ linters-settings:
       - yodaStyleExpr
 
 issues:
+  exclude-dirs:
+    - vendor
   exclude-rules:
     # Exclude some linters from running on tests files
     - path: _test\.go

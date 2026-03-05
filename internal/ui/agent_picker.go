@@ -53,8 +53,7 @@ func (m *AgentPickerModel) SetSize(width, height int) {
 }
 
 func (m AgentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		if msg.String() == "enter" {
 			if i, ok := m.list.SelectedItem().(agentItem); ok {
 				m.selected = &i.agent

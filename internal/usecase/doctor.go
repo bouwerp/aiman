@@ -32,14 +32,11 @@ func NewDoctor(cfg *config.Config, jiraProvider domain.IssueProvider, gitManager
 func (d *Doctor) RunAll(ctx context.Context) []CheckResult {
 	results := []CheckResult{}
 
-	// 1. JIRA Check
-	results = append(results, d.CheckJira(ctx))
-
-	// 2. Git/GH Check
-	results = append(results, d.CheckGit(ctx))
-
-	// 3. SSH Check
-	results = append(results, d.CheckSSH(ctx))
+	results = append(results,
+		d.CheckJira(ctx),
+		d.CheckGit(ctx),
+		d.CheckSSH(ctx),
+	)
 
 	return results
 }

@@ -13,10 +13,10 @@ import (
 
 // mockSessionRepo implements domain.SessionRepository for testing
 type mockSessionRepo struct {
-	sessions []domain.Session
-	saveErr  error
-	getErr   error
-	listErr  error
+	sessions  []domain.Session
+	saveErr   error
+	getErr    error
+	listErr   error
 	deleteErr error
 }
 
@@ -65,10 +65,10 @@ func TestWorktreeExistsErrorHandling(t *testing.T) {
 // TestWorktreeExistsStateKeyHandling tests keyboard input in viewStateWorktreeExists
 func TestWorktreeExistsStateKeyHandling(t *testing.T) {
 	tests := []struct {
-		name           string
-		key            string
-		expectedState  viewState
-		setupBranch    string
+		name          string
+		key           string
+		expectedState viewState
+		setupBranch   string
 	}{
 		{
 			name:          "Cancel with 'c' returns to main",

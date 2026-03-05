@@ -52,53 +52,7 @@ func (e *Engine) ListSyncSessions(ctx context.Context) ([]domain.SyncSession, er
 		return nil, nil
 	}
 
-	var sessions []domain.SyncSession
-	var current *domain.SyncSession
-
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "-") {
-			continue
-		}
-
-		// Name comes first in the output, start a new session
-		if strings.HasPrefix(line, "Name:") {
-			if current != nil {
-				sessions = append(sessions, *current)
-			}
-			current = &domain.SyncSession{
-				Name: strings.TrimSpace(strings.TrimPrefix(line, "Name:")),
-			}
-			continue
-		}
-
-		if current == nil {
-			continue
-		}
-
-		if strings.HasPrefix(line, "Identifier:") {
-			current.ID = strings.TrimSpace(strings.TrimPrefix(line, "Identifier:"))
-			continue
-		}
-
-		if strings.HasPrefix(line, "URL:") {
-			url := strings.TrimSpace(strings.TrimPrefix(line, "URL:"))
-			if current.LocalPath == "" {
-				current.LocalPath = url
-			} else {
-				current.RemotePath = url
-			}
-		}
-
-		if strings.HasPrefix(line, "Status:") {
-			current.Status = strings.TrimSpace(strings.TrimPrefix(line, "Status:"))
-		}
-	}
-
-	if current != nil {
-		sessions = append(sessions, *current)
-	}
+	sessions := e.parseSyncListOutput(string(output))
 
 	// Post-process to fix Local vs Remote paths
 	for i := range sessions {
@@ -114,4 +68,51 @@ func (e *Engine) ListSyncSessions(ctx context.Context) ([]domain.SyncSession, er
 	}
 
 	return sessions, nil
+}
+
+func (e *Engine) parseSyncListOutput(output string) []domain.SyncSession {
+	var sessions []domain.SyncSession
+	var current *domain.SyncSession
+
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "-") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "Name:") {
+			if current != nil {
+				sessions = append(sessions, *current)
+			}
+			current = &domain.SyncSession{
+				Name: strings.TrimSpace(strings.TrimPrefix(line, "Name:")),
+			}
+			continue
+		}
+
+		if current == nil {
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "Identifier:"):
+			current.ID = strings.TrimSpace(strings.TrimPrefix(line, "Identifier:"))
+		case strings.HasPrefix(line, "URL:"):
+			url := strings.TrimSpace(strings.TrimPrefix(line, "URL:"))
+			if current.LocalPath == "" {
+				current.LocalPath = url
+			} else {
+				current.RemotePath = url
+			}
+		case strings.HasPrefix(line, "Status:"):
+			current.Status = strings.TrimSpace(strings.TrimPrefix(line, "Status:"))
+		}
+	}
+
+	if current != nil {
+		sessions = append(sessions, *current)
+	}
+
+	return sessions
 }

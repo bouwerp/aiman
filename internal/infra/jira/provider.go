@@ -61,7 +61,7 @@ func (p *Provider) SearchIssues(ctx context.Context, query string) ([]domain.Iss
 		// Search both summary (quoted) and key (unquoted) if query is provided
 		jql = fmt.Sprintf("(summary ~ %q OR key = %s) ORDER BY updated DESC", query, query)
 	}
-	
+
 	u, err := url.Parse(p.config.URL + "/rest/api/3/search/jql")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse jira url: %w", err)
@@ -164,4 +164,3 @@ func (p *Provider) toDomainIssue(ji jiraIssue) domain.Issue {
 		UpdatedAt:   updated,
 	}
 }
-

@@ -6,15 +6,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/google/uuid"
 )
 
 type FlowManager struct {
-	jiraProvider  domain.IssueProvider
-	gitManager    domain.RepositoryManager
-	sshManager    domain.RemoteExecutor
-	slugger       domain.Slugger
+	jiraProvider domain.IssueProvider
+	gitManager   domain.RepositoryManager
+	sshManager   domain.RemoteExecutor
+	slugger      domain.Slugger
 }
 
 func NewFlowManager(

@@ -7,15 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usecase"
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type remotesFocus int
@@ -231,7 +231,7 @@ func (m RemotesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if i.isConfig {
 							// Select as active and scan
 							m.cfg.ActiveRemote = i.host
-							m.cfg.Save()
+							_ = m.cfg.Save()
 							m.testingHost = i.host
 							m.testingUser = i.user
 							m.testingRoot = i.root
@@ -253,7 +253,8 @@ func (m RemotesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if m.focus == remotesFocusList {
+		switch m.focus {
+		case remotesFocusList:
 			m.list, cmd = m.list.Update(msg)
 			cmds = append(cmds, cmd)
 
@@ -262,10 +263,10 @@ func (m RemotesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.userInput.SetValue(i.user)
 				m.rootInput.SetValue(i.root)
 			}
-		} else if m.focus == remotesFocusHost {
+		case remotesFocusHost:
 			m.hostInput, cmd = m.hostInput.Update(msg)
 			cmds = append(cmds, cmd)
-		} else if m.focus == remotesFocusUser {
+		case remotesFocusUser:
 			oldUser := m.userInput.Value()
 			m.userInput, cmd = m.userInput.Update(msg)
 			cmds = append(cmds, cmd)
@@ -273,7 +274,7 @@ func (m RemotesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.userInput.Value() != oldUser && m.rootInput.Value() == "/home/"+oldUser {
 				m.rootInput.SetValue("/home/" + m.userInput.Value())
 			}
-		} else if m.focus == remotesFocusRoot {
+		case remotesFocusRoot:
 			m.rootInput, cmd = m.rootInput.Update(msg)
 			cmds = append(cmds, cmd)
 		}
@@ -304,7 +305,7 @@ func (m RemotesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cfg.Remotes[existingIdx].Root = res.root
 				}
 				m.cfg.ActiveRemote = res.host
-				m.cfg.Save()
+				_ = m.cfg.Save()
 
 				// Transition to scanning
 				m.state = remotesStateScanning

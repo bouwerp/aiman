@@ -24,7 +24,6 @@ type StartupModel struct {
 	results       []usecase.CheckResult
 	sessions      []domain.Session
 	ready         bool
-	err           error
 	width, height int
 	checks        map[string]*usecase.CheckResult
 	discoveryDone bool

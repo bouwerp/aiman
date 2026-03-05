@@ -48,8 +48,7 @@ func (m *SummaryModel) SetSize(width, height int) {
 }
 
 func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -125,12 +124,13 @@ func (m SummaryModel) View() string {
 
 	// Create button
 	buttonLabel := "[ Create Session ]"
-	if m.agent == nil {
+	switch {
+	case m.agent == nil:
 		buttonLabel = "[ Select Agent First ]"
 		b.WriteString(failStyle.Render(buttonLabel) + "\n")
-	} else if m.focusIndex == 0 {
+	case m.focusIndex == 0:
 		b.WriteString(activeStyle.Render(buttonLabel) + "\n")
-	} else {
+	default:
 		b.WriteString(buttonLabel + "\n")
 	}
 

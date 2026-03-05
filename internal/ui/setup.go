@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
 type SetupModel struct {
@@ -56,8 +56,7 @@ func (m SetupModel) Init() tea.Cmd {
 }
 
 func (m SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit

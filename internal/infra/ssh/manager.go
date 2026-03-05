@@ -58,7 +58,9 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	cp := m.controlPath()
 
 	// Ensure sockets directory exists
-	os.MkdirAll(filepath.Dir(cp), 0700)
+	if err := os.MkdirAll(filepath.Dir(cp), 0700); err != nil {
+		return "", fmt.Errorf("failed to create sockets directory: %w", err)
+	}
 
 	// We use ControlMaster=auto and ControlPersist to handle multiplexing automatically.
 	// This is more robust than manual management with -f.

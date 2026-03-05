@@ -38,8 +38,7 @@ func (m BranchInputModel) Init() tea.Cmd {
 }
 
 func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "enter":
 			// Sanitize and validate before confirming

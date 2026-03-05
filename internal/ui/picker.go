@@ -18,7 +18,6 @@ func (i RepoItem) FilterValue() string { return i.repo.Name }
 type RepoPickerModel struct {
 	list     list.Model
 	selected *domain.Repo
-	err      error
 }
 
 func NewRepoPickerModel(repos []domain.Repo) RepoPickerModel {

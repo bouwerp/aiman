@@ -61,8 +61,7 @@ func (m *DirPickerModel) SetSize(width, height int) {
 }
 
 func (m DirPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		if msg.String() == "enter" {
 			if i, ok := m.list.SelectedItem().(dirItem); ok {
 				m.selected = i.path

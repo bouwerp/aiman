@@ -82,24 +82,18 @@ func sanitizeGitBranchName(s string) string {
 	s = strings.ReplaceAll(s, "_", "-")
 
 	// Remove invalid characters: ~^:\ and control characters
-	// Also remove other problematic chars including smart quotes
-	invalidChars := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!\u2018\u2019\u201C\u201D]`)
+	// Also remove other problematic chars including smart quotes and dashes
+	invalidChars := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!\x{2018}\x{2019}\x{201C}\x{201D}\x{2013}\x{2014}]`)
 	s = invalidChars.ReplaceAllString(s, "")
 
 	// Remove consecutive dots
 	s = regexp.MustCompile(`\.\.+`).ReplaceAllString(s, ".")
 
-	// Remove leading dashes (git branch names cannot start with -)
-	s = strings.TrimLeft(s, "-")
-
-	// Remove trailing dots (git branch names cannot end with .)
-	s = strings.TrimRight(s, ".")
-
-	// Remove leading/trailing whitespace (just in case)
-	s = strings.TrimSpace(s)
-
 	// Collapse multiple dashes into one
 	s = regexp.MustCompile(`-+`).ReplaceAllString(s, "-")
+
+	// Remove leading/trailing dashes (git branch names cannot start/end with -)
+	s = strings.Trim(s, "-")
 
 	return s
 }
