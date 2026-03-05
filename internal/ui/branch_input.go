@@ -93,7 +93,8 @@ func (m BranchInputModel) sanitizeInput(s string) string {
 	s = strings.ReplaceAll(s, "_", "-")
 
 	// Remove invalid characters including smart quotes
-	invalidPattern := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!\u2018\u2019\u201C\u201D]`)
+	// Note: \u escape sequences must be in string literals, not regex patterns
+	invalidPattern := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!\x{2018}\x{2019}\x{201C}\x{201D}]`)
 	s = invalidPattern.ReplaceAllString(s, "")
 
 	// Remove consecutive dots

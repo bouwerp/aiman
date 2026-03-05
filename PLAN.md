@@ -45,7 +45,7 @@
         *   Verify if the selected repository is cloned on the active remote server's configured `root` path. ✅
         *   If missing, execute `git clone`. ✅
         *   If present, fetch and ensure the base repository is updated on the `main` branch. ✅
-        *   Check for an existing git worktree matching the proposed branch name. ⏳
+        *   Check for an existing git worktree matching the proposed branch name. ✅
         *   If missing, execute `git worktree add ../<branch-name> <branch-name>`. ✅
     6.  **Scope Selection**: Directory picker to select a sub-directory within the repo. ✅
     7.  **Agent Selection**: Scan remote and select agent (Claude, Gemini, OpenCode, Copilot). ✅
@@ -61,7 +61,17 @@
     - Remove the associated git worktree.
     - Clean up local sync directory.
     - Update session status in database.
-- [ ] **SQLite Persistence**: Fully wire the existing `internal/infra/sqlite` repository to save both discovered and newly created sessions, tracking their full lifecycle.
+- [x] **SQLite Persistence**: Fully wire the existing `internal/infra/sqlite` repository to save both discovered and newly created sessions, tracking their full lifecycle.
+- [ ] **Git Intelligence Panel**: Comprehensive git status display for each session showing:
+    - Associated pull request (if exists) with link and status
+    - PR review state: approved, changes requested, pending reviews
+    - Open review comments count
+    - Uncommitted changes (staged/unstaged)
+    - Un-pushed commits count
+    - Untracked files list
+    - Changed files list with diff stats
+    - Branch tracking status (ahead/behind remote)
+    - Similar UX to lazygit but integrated into the dashboard
 - [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths before agent launch.
 - [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency interactive connections.
 - [ ] **CI/CD Pipeline & Releases**: GitHub Actions workflow for:
@@ -76,8 +86,8 @@
 - [ ] **EC2 Provisioning**:
     - Spin up and terminate EC2 instances to use as remote servers.
     - Wire instance lifecycle to Aiman’s remote registry.
-- [ ] **Dev Console Panel**:
-    - Collapsible dev console panel to view logs and debug output in-app.
+- [x] **Dev Console Panel**:
+    - Collapsible dev console panel to view logs and debug output in-app (toggle with backtick key).
 
 ## 4. Architectural Strategy (Reminder)
 Keep following the **Clean Architecture** pattern. Ensure that the `internal/usecase` layer remains the only place where domain entities are coordinated, and keep infrastructure-specific logic (like `mutagen` or `ssh` CLI flags) strictly within `internal/infra`.

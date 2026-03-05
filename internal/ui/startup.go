@@ -18,6 +18,7 @@ import (
 type StartupModel struct {
 	cfg           *config.Config
 	doctor        *usecase.Doctor
+	db            domain.SessionRepository
 	spinner       spinner.Model
 	loadingMsg    string
 	results       []usecase.CheckResult
@@ -30,7 +31,7 @@ type StartupModel struct {
 	pending       int
 }
 
-func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor) StartupModel {
+func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor, db domain.SessionRepository) StartupModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -38,6 +39,7 @@ func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor) StartupModel {
 	return StartupModel{
 		cfg:        cfg,
 		doctor:     doctor,
+		db:         db,
 		spinner:    s,
 		loadingMsg: "Initializing Aiman...",
 		checks:     make(map[string]*usecase.CheckResult),
@@ -137,7 +139,30 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.pending == 0 {
 		m.ready = true
-		mainModel := NewModel(m.cfg, m.results, m.sessions)
+
+		// Load sessions from database and merge with discovered sessions
+		ctx := context.Background()
+		dbSessions, err := m.db.List(ctx)
+		if err == nil && len(dbSessions) > 0 {
+			// Merge: discovered sessions override DB sessions (they're more current)
+			sessMap := make(map[string]domain.Session)
+			for _, s := range dbSessions {
+				sessMap[s.TmuxSession] = s
+			}
+			for _, s := range m.sessions {
+				sessMap[s.TmuxSession] = s
+				// Save discovered sessions to DB
+				_ = m.db.Save(ctx, &s)
+			}
+			// Convert back to slice
+			merged := make([]domain.Session, 0, len(sessMap))
+			for _, s := range sessMap {
+				merged = append(merged, s)
+			}
+			m.sessions = merged
+		}
+
+		mainModel := NewModel(m.cfg, m.results, m.sessions, m.db)
 		if m.width > 0 && m.height > 0 {
 			mainModel.SetSize(m.width, m.height)
 		}

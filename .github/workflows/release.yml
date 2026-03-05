@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            # If no previous tag, get all commits
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            # Get commits since previous tag
+            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+          # Save to file to handle multiline
+          echo "$CHANGELOG" > /tmp/changelog.txt
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ steps.get_version.outputs.version }}
+          body_path: /tmp/changelog.txt
+          draft: false
+          prerelease: false
+
+  build:
+    name: Build Binaries
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # macOS builds
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            name: aiman-darwin-amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            name: aiman-darwin-arm64
+          # Linux builds
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            name: aiman-linux-amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            name: aiman-linux-arm64
+          # Windows builds
+          - os: ubuntu-latest
+            goos: windows
+            goarch: amd64
+            name: aiman-windows-amd64.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          # Install cross-compilation tools for CGO if needed
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            sudo apt-get update
+            sudo apt-get install -y gcc-mingw-w64
+            export CC=x86_64-w64-mingw32-gcc
+          fi
+
+          go build -v -ldflags="-s -w -X main.version=${{ needs.release.outputs.version }}" -o ${{ matrix.name }} ./cmd/aiman
+
+      - name: Create tarball (Unix)
+        if: matrix.goos != 'windows'
+        run: |
+          tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
+          shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
+
+      - name: Create zip (Windows)
+        if: matrix.goos == 'windows'
+        run: |
+          zip ${{ matrix.name }}.zip ${{ matrix.name }}
+          shasum -a 256 ${{ matrix.name }}.zip > ${{ matrix.name }}.zip.sha256
+
+      - name: Upload Release Asset (Unix)
+        if: matrix.goos != 'windows'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: ./${{ matrix.name }}.tar.gz
+          asset_name: ${{ matrix.name }}.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload Release Asset Checksum (Unix)
+        if: matrix.goos != 'windows'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: ./${{ matrix.name }}.tar.gz.sha256
+          asset_name: ${{ matrix.name }}.tar.gz.sha256
+          asset_content_type: text/plain
+
+      - name: Upload Release Asset (Windows)
+        if: matrix.goos == 'windows'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: ./${{ matrix.name }}.zip
+          asset_name: ${{ matrix.name }}.zip
+          asset_content_type: application/zip
+
+      - name: Upload Release Asset Checksum (Windows)
+        if: matrix.goos == 'windows'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: ./${{ matrix.name }}.zip.sha256
+          asset_name: ${{ matrix.name }}.zip.sha256
+          asset_content_type: text/plain

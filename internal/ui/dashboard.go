@@ -18,7 +18,6 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
-	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usecase"
 	"github.com/charmbracelet/bubbles/key"
@@ -58,6 +57,7 @@ const (
 	viewStateLoading
 	viewStateTerminateConfirm
 	viewStateTerminateProgress
+	viewStateWorktreeExists
 )
 
 type panelMode int
@@ -123,6 +123,7 @@ func (i item) FilterValue() string {
 
 type Model struct {
 	cfg                    *config.Config
+	db                     domain.SessionRepository
 	state                  viewState
 	panelMode              panelMode
 	list                   list.Model
@@ -159,7 +160,7 @@ type Model struct {
 	consoleViewport        viewport.Model
 }
 
-func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session) *Model {
+func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository) *Model {
 	items := make([]list.Item, len(initialSessions))
 	for i, s := range initialSessions {
 		items[i] = item{session: s, needsInput: false, activity: ""}
@@ -198,6 +199,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 
 	return &Model{
 		cfg:           cfg,
+		db:            db,
 		state:         viewStateMain,
 		panelMode:     panelModePreview,
 		list:          l,
@@ -665,6 +667,13 @@ func (m *Model) createSession() tea.Cmd {
 		worktreeDir := strings.ReplaceAll(branch, "/", "-")
 		worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
 
+		// Check if worktree already exists
+		checkCmd := fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)
+		checkOut, _ := mgr.Execute(ctx, checkCmd)
+		if strings.Contains(checkOut, "EXISTS") {
+			return sessionCreateMsg{err: fmt.Errorf("WORKTREE_EXISTS")}
+		}
+
 		// Create worktree from origin/main
 		worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s ../%s origin/main", repoPath, branch, worktreeDir)
 		_, worktreeErr := mgr.Execute(ctx, worktreeCmd)
@@ -725,12 +734,8 @@ func (m *Model) createSession() tea.Cmd {
 		}
 
 		// Persist session
-		dbPath, err := config.GetDBPath()
-		if err == nil {
-			repo, repoErr := sqlite.NewRepository(dbPath)
-			if repoErr == nil {
-				_ = repo.Save(ctx, &session)
-			}
+		if m.db != nil {
+			_ = m.db.Save(ctx, &session)
 		}
 
 		return sessionCreateMsg{session: session}
@@ -806,21 +811,14 @@ func (m *Model) runTerminateStep(index int) error {
 			return nil
 		}
 		return os.RemoveAll(s.LocalPath)
-	case 5: // Update session status in database
+	case 5: // Delete session from database
 		if s.ID == "" {
 			return nil
 		}
-		s.Status = domain.SessionStatusCleanup
-		s.UpdatedAt = time.Now()
-		dbPath, err := config.GetDBPath()
-		if err != nil {
-			return err
+		if m.db != nil {
+			return m.db.Delete(ctx, s.ID)
 		}
-		repo, err := sqlite.NewRepository(dbPath)
-		if err != nil {
-			return err
-		}
-		return repo.Save(ctx, &s)
+		return nil
 	default:
 		return nil
 	}
@@ -1191,10 +1189,8 @@ end tell`, s.LocalPath)
 				return m, nil
 			}
 			if msg.String() == "r" {
-				// Re-init remotes scan to refresh
-				m.state = viewStateRemotes
-				m.remotes = NewRemotesModel(m.cfg)
-				// Automatically trigger scan if we have an active remote
+				// Refresh sessions from remote
+				m.log("Refreshing sessions...")
 				if m.cfg.ActiveRemote != "" {
 					var remote config.Remote
 					for _, r := range m.cfg.Remotes {
@@ -1203,7 +1199,20 @@ end tell`, s.LocalPath)
 							break
 						}
 					}
-					return m, scanRemote(remote.Host, remote.User, remote.Root)
+					// Trigger session discovery
+					m.loadingMsg = "Refreshing sessions..."
+					m.loadingNext = viewStateMain
+					m.state = viewStateLoading
+					return m, func() tea.Msg {
+						ctx := context.Background()
+						mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+						if err := mgr.Connect(ctx); err != nil {
+							return discoveryResultMsg{}
+						}
+						discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
+						sessions, _ := discoverer.Discover(ctx, remote.Host)
+						return discoveryResultMsg(sessions)
+					}
 				}
 				return m, nil
 			}
@@ -1564,6 +1573,25 @@ end tell`, s.LocalPath)
 			}
 		}
 
+	case viewStateWorktreeExists:
+		if km, ok := msg.(tea.KeyMsg); ok {
+			switch km.String() {
+			case "c", "esc":
+				// Cancel - go back to main
+				m.state = viewStateMain
+				return m, nil
+			case "b":
+				// Change branch - go back to branch input
+				m.state = viewStateBranchInput
+				slug := m.sessionCfg.IssueKey
+				if m.sessionCfg.Branch != "" {
+					slug = m.sessionCfg.Branch
+				}
+				m.branchInput = NewBranchInputModel(slug)
+				return m, nil
+			}
+		}
+
 	case viewStateTerminateProgress:
 		if msg, ok := msg.(terminateStepMsg); ok {
 			if msg.err != nil {
@@ -1592,6 +1620,24 @@ end tell`, s.LocalPath)
 
 	case viewStateLoading:
 		switch msg := msg.(type) {
+		case discoveryResultMsg:
+			// Refresh sessions list
+			m.log("Discovered %d sessions", len(msg))
+			ctx := context.Background()
+			// Save discovered sessions to DB
+			for i := range msg {
+				if m.db != nil {
+					_ = m.db.Save(ctx, &msg[i])
+				}
+			}
+			// Update list items
+			items := make([]list.Item, len(msg))
+			for i, s := range msg {
+				items[i] = item{session: s, needsInput: false, activity: ""}
+			}
+			m.list.SetItems(items)
+			m.state = viewStateMain
+			return m, nil
 		case attachMsg:
 			return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
 				return attachDoneMsg{}
@@ -1655,6 +1701,11 @@ end tell`, s.LocalPath)
 					sessItem.session.LocalPath = msg.session.LocalPath
 					sessItem.session.MutagenSyncID = msg.session.MutagenSyncID
 					items[i] = sessItem
+					// Save to database
+					if m.db != nil {
+						ctx := context.Background()
+						_ = m.db.Save(ctx, &sessItem.session)
+					}
 					break
 				}
 			}
@@ -1674,6 +1725,11 @@ end tell`, s.LocalPath)
 			return m, nil
 		case sessionCreateMsg:
 			if msg.err != nil {
+				// Check if it's a worktree exists error
+				if msg.err.Error() == "WORKTREE_EXISTS" {
+					m.state = viewStateWorktreeExists
+					return m, nil
+				}
 				m.lastError = fmt.Sprintf("Failed to create session: %v", msg.err)
 				m.state = viewStateVSCodeError
 				return m, nil
@@ -1886,6 +1942,22 @@ func (m *Model) renderView() string {
 
 		dialog := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
+			Padding(1, 2).
+			Width(60)
+
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateWorktreeExists:
+		var b strings.Builder
+		b.WriteString(failStyle.Render("Worktree Already Exists") + "\n\n")
+		b.WriteString(fmt.Sprintf("A git worktree already exists for branch:\n%s\n\n", m.sessionCfg.Branch))
+		b.WriteString("This usually means there's an existing session.\n\n")
+		b.WriteString(activeStyle.Render("[b]") + " Change Branch Name\n")
+		b.WriteString(activeStyle.Render("[c]") + " Cancel")
+
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(lipgloss.Color("196")).
 			Padding(1, 2).
 			Width(60)
 

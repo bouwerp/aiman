@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -62,4 +63,13 @@ func (s *Session) Transition(target SessionStatus) error {
 		}
 	}
 	return ErrInvalidTransition
+}
+
+// SessionRepository defines the interface for session persistence
+type SessionRepository interface {
+	Save(ctx context.Context, s *Session) error
+	Get(ctx context.Context, id string) (*Session, error)
+	List(ctx context.Context) ([]Session, error)
+	Delete(ctx context.Context, id string) error
+	Close() error
 }
