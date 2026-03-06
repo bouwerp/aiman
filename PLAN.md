@@ -72,6 +72,10 @@
     - Changed files list with diff stats
     - Branch tracking status (ahead/behind remote)
     - Similar UX to lazygit but integrated into the dashboard
+- [ ] **Agentic Patterns**:
+    - Develop robust agentic patterns (e.g., Orchestrator-Worker-Validator).
+    - Logic to translate these patterns for various supported coding tools.
+    - Synchronize patterns to the remote dev server.
 - [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths before agent launch.
 - [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency interactive connections.
 - [x] **CI/CD Pipeline & Releases**: GitHub Actions workflow for:
@@ -83,6 +87,9 @@
     - Connect to a new remote VM and install baseline tooling (git, tmux, go, nodejs, npm, curl, claude, cursor, gemini, opencode, acli).
     - Configure SSH keys and git SSH auth.
     - Authenticate Atlassian (acli) and supported coding agents.
+- [ ] **AI Compute Monitoring**:
+    - Provider subscription/usage monitoring (Anthropic, Google, OpenAI, etc.)
+    - Credit balances and general usage tracking (via APIs or MCP servers).
 - [ ] **EC2 Provisioning**:
     - Spin up and terminate EC2 instances to use as remote servers.
     - Wire instance lifecycle to Aiman’s remote registry.

@@ -70,7 +70,7 @@ func run() error {
 			if err != nil {
 				return fmt.Errorf("failed to list repos: %w", err)
 			}
-			p := tea.NewProgram(ui.NewRepoPickerModel(repos), tea.WithAltScreen())
+			p := tea.NewProgram(ui.NewRepoPickerModel(repos, &cfg.Git), tea.WithAltScreen())
 			if _, err := p.Run(); err != nil {
 				return fmt.Errorf("alas, there's been an error: %w", err)
 			}

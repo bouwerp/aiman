@@ -32,6 +32,17 @@ type ghRepo struct {
 	NameWithOwner string `json:"nameWithOwner"`
 }
 
+type ghPR struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	State   string `json:"state"`
+	URL     string `json:"url"`
+	Reviews []struct {
+		State string `json:"state"`
+	} `json:"reviews"`
+	Comments []interface{} `json:"comments"`
+}
+
 func (m *Manager) ListRepos(ctx context.Context) ([]domain.Repo, error) {
 	var allRepos []domain.Repo
 
@@ -178,4 +189,99 @@ func FetchOrganizations(ctx context.Context) ([]string, error) {
 	}
 
 	return orgs, nil
+}
+
+func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor, path string) (domain.GitStatus, error) {
+	status := domain.GitStatus{}
+
+	// 1. Get branch and counts via git status --porcelain=v2 --branch
+	// v2 is easier to parse for these specific requirements
+	cmd := fmt.Sprintf("git -C %s status --porcelain=v2 --branch", path)
+	output, err := remote.Execute(ctx, cmd)
+	if err != nil {
+		return status, fmt.Errorf("failed to get git status: %w", err)
+	}
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "# branch.head "):
+			status.Branch = strings.TrimPrefix(line, "# branch.head ")
+		case strings.HasPrefix(line, "# branch.upstream "):
+			status.TrackingRemote = strings.TrimPrefix(line, "# branch.upstream ")
+			status.HasUpstream = true
+		case strings.HasPrefix(line, "# branch.ab "):
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				_, _ = fmt.Sscanf(parts[2], "+%d", &status.Ahead)
+				_, _ = fmt.Sscanf(parts[3], "-%d", &status.Behind)
+			}
+		case strings.HasPrefix(line, "? "):
+			status.UntrackedCount++
+		case len(line) > 3:
+			// v2 porcelain lines start with 1 (tracked) or 2 (renamed/copied)
+			// Character at index 2 is staged change, index 3 is unstaged change
+			if line[0] == '1' || line[0] == '2' {
+				if line[2] != '.' {
+					status.StagedCount++
+				}
+				if line[3] != '.' {
+					status.UnstagedCount++
+				}
+			}
+		}
+	}
+
+	// 2. Get unpushed commits count (more reliable than porcelain if multiple remotes involved)
+	if status.HasUpstream {
+		cmd = fmt.Sprintf("git -C %s rev-list --count @{u}..HEAD", path)
+		out, err := remote.Execute(ctx, cmd)
+		if err == nil {
+			_, _ = fmt.Sscanf(strings.TrimSpace(out), "%d", &status.UnpushedCommits)
+		}
+	}
+
+	// 3. Get PR info via gh CLI
+	cmd = fmt.Sprintf("gh -C %s pr view --json number,title,state,url,reviews,comments", path)
+	out, err := remote.Execute(ctx, cmd)
+	if err == nil {
+		var pr ghPR
+		if err := json.Unmarshal([]byte(out), &pr); err == nil {
+			status.PullRequest = &domain.PullRequest{
+				Number:       pr.Number,
+				Title:        pr.Title,
+				State:        pr.State,
+				URL:          pr.URL,
+				CommentCount: len(pr.Comments),
+			}
+
+			// Determine review status
+			if len(pr.Reviews) > 0 {
+				approved := false
+				changesRequested := false
+				for _, r := range pr.Reviews {
+					if r.State == "APPROVED" {
+						approved = true
+					} else if r.State == "CHANGES_REQUESTED" {
+						changesRequested = true
+					}
+				}
+				switch {
+				case changesRequested:
+					status.PullRequest.ReviewStatus = "changes_requested"
+				case approved:
+					status.PullRequest.ReviewStatus = "approved"
+				default:
+					status.PullRequest.ReviewStatus = "pending"
+				}
+			} else {
+				status.PullRequest.ReviewStatus = "none"
+			}
+		}
+	}
+
+	return status, nil
 }

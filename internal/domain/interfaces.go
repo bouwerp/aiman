@@ -16,6 +16,7 @@ type IssueProvider interface {
 type RepositoryManager interface {
 	ListRepos(ctx context.Context) ([]Repo, error)
 	SetupWorktree(ctx context.Context, repo Repo, branch string) (Worktree, error)
+	GetGitStatus(ctx context.Context, remote RemoteExecutor, path string) (GitStatus, error)
 }
 
 // RemoteExecutor manages remote connections and command execution.
@@ -53,8 +54,9 @@ type SyncSession struct {
 
 // Repo represents a git repository.
 type Repo struct {
-	Name string
-	URL  string
+	Name  string
+	URL   string
+	IsNew bool
 }
 
 // Worktree represents a git worktree.

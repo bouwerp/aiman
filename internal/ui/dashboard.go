@@ -158,6 +158,8 @@ type Model struct {
 	consoleOpen            bool
 	consoleLog             []string
 	consoleViewport        viewport.Model
+	gitStatus              domain.GitStatus
+	lastGitStatusUpdate    time.Time
 }
 
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository) *Model {
@@ -231,6 +233,14 @@ type tmuxTerminalMsg struct {
 	err    error
 }
 
+type gitStatusMsg struct {
+	session string
+	status  domain.GitStatus
+	err     error
+}
+
+type gitTickMsg time.Time
+
 func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 	if s.WorktreePath == "" {
 		return nil
@@ -287,9 +297,42 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 }
 
 func tickTmux() tea.Cmd {
-	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return tmuxTickMsg(t)
 	})
+}
+
+func tickGit() tea.Cmd {
+	return tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
+		return gitTickMsg(t)
+	})
+}
+
+func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		if s.WorktreePath == "" {
+			return gitStatusMsg{session: s.TmuxSession, err: fmt.Errorf("no worktree path")}
+		}
+
+		remote, ok := resolveRemote(cfg, s)
+		if !ok {
+			return gitStatusMsg{session: s.TmuxSession, err: fmt.Errorf("no remote found")}
+		}
+
+		ctx := context.Background()
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		if err := mgr.Connect(ctx); err != nil {
+			return gitStatusMsg{session: s.TmuxSession, err: err}
+		}
+
+		gitMgr := git.NewManager(&cfg.Git)
+		status, err := gitMgr.GetGitStatus(ctx, mgr, s.WorktreePath)
+		return gitStatusMsg{
+			session: s.TmuxSession,
+			status:  status,
+			err:     err,
+		}
+	}
 }
 
 func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
@@ -649,6 +692,44 @@ func (m *Model) createSession() tea.Cmd {
 		repoName := extractRepoName(m.sessionCfg.Repo.Name)
 		repoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
 
+		// Create repo if it's new
+		if m.sessionCfg.Repo.IsNew {
+			m.log("Creating new repository: %s", m.sessionCfg.Repo.Name)
+			// gh repo create <name> --public --add-readme (or similar)
+			// We'll create it and push an initial commit if needed
+			createCmd := fmt.Sprintf("gh repo create %s --public", m.sessionCfg.Repo.Name)
+			_, err := mgr.Execute(ctx, createCmd)
+			if err != nil {
+				return sessionCreateMsg{err: fmt.Errorf("failed to create repository: %w", err)}
+			}
+
+			// Get the URL of the new repo
+			urlCmd := fmt.Sprintf("gh repo view %s --json url -q .url", m.sessionCfg.Repo.Name)
+			url, err := mgr.Execute(ctx, urlCmd)
+			if err != nil {
+				return sessionCreateMsg{err: fmt.Errorf("failed to get repository URL: %w", err)}
+			}
+			m.sessionCfg.Repo.URL = strings.TrimSpace(url)
+
+			// Initialize the repo locally on remote if it doesn't exist as a directory yet
+			if err := mgr.ValidateDir(ctx, repoPath); err != nil {
+				// Use environment variables for the initial commit to avoid "Author identity unknown" errors
+				// We use the email from JIRA config as a reasonable default
+				authorName := "Aiman Bot"
+				authorEmail := m.cfg.Integrations.Jira.Email
+				if authorEmail == "" {
+					authorEmail = "aiman@example.com"
+				}
+
+				initCmd := fmt.Sprintf("mkdir -p %s && cd %s && git init && git remote add origin %s && touch README.md && git add README.md && GIT_AUTHOR_NAME=%q GIT_AUTHOR_EMAIL=%q GIT_COMMITTER_NAME=%q GIT_COMMITTER_EMAIL=%q git commit -m 'Initial commit' && git branch -M main && git push -u origin main",
+					repoPath, repoPath, m.sessionCfg.Repo.URL, authorName, authorEmail, authorName, authorEmail)
+				_, err := mgr.Execute(ctx, initCmd)
+				if err != nil {
+					return sessionCreateMsg{err: fmt.Errorf("failed to initialize repository: %w", err)}
+				}
+			}
+		}
+
 		// Ensure repo exists
 		if err := mgr.ValidateDir(ctx, repoPath); err != nil {
 			_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remote.Root, m.sessionCfg.Repo.URL, repoName))
@@ -674,8 +755,37 @@ func (m *Model) createSession() tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("WORKTREE_EXISTS")}
 		}
 
-		// Create worktree from origin/main
-		worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s ../%s origin/main", repoPath, branch, worktreeDir)
+		// Determine base branch
+		var baseBranch string
+		for _, b := range []string{"origin/main", "origin/master", "main", "master"} {
+			if _, err := mgr.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --verify %s", repoPath, b)); err == nil {
+				baseBranch = b
+				break
+			}
+		}
+
+		if baseBranch == "" {
+			// No branches found, this is likely an empty repository
+			m.log("No base branch found, initializing main branch")
+			authorName := "Aiman Bot"
+			authorEmail := m.cfg.Integrations.Jira.Email
+			if authorEmail == "" {
+				authorEmail = "aiman@example.com"
+			}
+
+			// Initialize with an initial commit if repo is truly empty
+			initCmd := fmt.Sprintf("cd %s && git checkout -b main && touch .gitignore && git add .gitignore && GIT_AUTHOR_NAME=%q GIT_AUTHOR_EMAIL=%q GIT_COMMITTER_NAME=%q GIT_COMMITTER_EMAIL=%q git commit -m 'Initial commit' && git push -u origin main",
+				repoPath, authorName, authorEmail, authorName, authorEmail)
+			if _, err := mgr.Execute(ctx, initCmd); err == nil {
+				baseBranch = "main"
+			} else {
+				// If that also fails, we're in trouble, but let's try one last thing
+				baseBranch = "master"
+			}
+		}
+
+		// Create worktree from determined base
+		worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s ../%s %s", repoPath, branch, worktreeDir, baseBranch)
 		_, worktreeErr := mgr.Execute(ctx, worktreeCmd)
 		if worktreeErr != nil {
 			return sessionCreateMsg{err: fmt.Errorf("failed to create worktree: %w", worktreeErr)}
@@ -693,6 +803,12 @@ func (m *Model) createSession() tea.Cmd {
 		workingDir := resolvedWorktreePath
 		if m.sessionCfg.Directory != "" && m.sessionCfg.Directory != "." {
 			workingDir = fmt.Sprintf("%s/%s", resolvedWorktreePath, m.sessionCfg.Directory)
+		}
+
+		// Ensure working directory exists (it might be a new folder defined by user)
+		_, mkdirErr := mgr.Execute(ctx, fmt.Sprintf("mkdir -p %q", workingDir))
+		if mkdirErr != nil {
+			return sessionCreateMsg{err: fmt.Errorf("failed to create working directory: %w", mkdirErr)}
 		}
 
 		// Start tmux session and agent
@@ -835,7 +951,10 @@ func extractRepoName(fullName string) string {
 
 func (m *Model) Init() tea.Cmd {
 	m.initialLoad = true
-	return tickTmux()
+	return tea.Batch(
+		tickTmux(),
+		tickGit(),
+	)
 }
 
 func (m *Model) log(format string, args ...interface{}) {
@@ -899,7 +1018,7 @@ func (m *Model) SetSize(width, height int) {
 
 	// Viewport takes up the bottom part of the main panel
 	m.viewport.Width = width - (width / 3) - h - 4
-	m.viewport.Height = mainHeight - 11 // Reserve 11 lines for details
+	m.viewport.Height = mainHeight - 15 // Reserve more lines for split details panel
 
 	if m.issuePicker.list.Title != "" {
 		m.issuePicker.SetSize(width, height)
@@ -1183,6 +1302,7 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds,
 						fetchTmuxPane(m.cfg, s),
 						checkInputHint(m.cfg, s),
+						fetchGitStatus(m.cfg, s),
 					)
 				}
 			}
@@ -1194,7 +1314,23 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds,
 				fetchTmuxPane(m.cfg, s),
 				checkInputHint(m.cfg, s),
+				fetchGitStatus(m.cfg, s),
 			)
+		}
+	case gitTickMsg:
+		cmds = append(cmds, tickGit())
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			cmds = append(cmds, fetchGitStatus(m.cfg, s))
+		}
+	case gitStatusMsg:
+		if msg.session == m.activeSession {
+			if msg.err == nil {
+				m.gitStatus = msg.status
+				m.lastGitStatusUpdate = time.Now()
+			} else {
+				m.log("Git status error for %s: %v", msg.session, msg.err)
+			}
 		}
 	case tmuxOutputMsg:
 		if msg.session == m.activeSession {
@@ -1203,8 +1339,16 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.tmuxOutput = msg.output
 			}
+
+			// Sticky scroll: only go to bottom if we were already at the bottom.
+			// For first load, AtBottom() is true by default (YOffset 0).
+			wasAtBottom := m.viewport.AtBottom()
+
 			m.viewport.SetContent(m.tmuxOutput)
-			m.viewport.GotoBottom()
+
+			if wasAtBottom {
+				m.viewport.GotoBottom()
+			}
 		}
 	case inputHintMsg:
 		// Update list items with input hint when enabled
@@ -1239,12 +1383,13 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if oldSel != newSel && newSel != nil {
 		s := newSel.(item).session
 		m.activeSession = s.TmuxSession
+		m.gitStatus = domain.GitStatus{} // Clear old status
+		m.tmuxOutput = "Loading..."
+		m.viewport.SetContent(m.tmuxOutput)
 		if m.panelMode == panelModeTerminal {
-			cmds = append(cmds, m.initTerminal(s))
+			cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s))
 		} else {
-			m.tmuxOutput = "Loading..."
-			m.viewport.SetContent(m.tmuxOutput)
-			cmds = append(cmds, fetchTmuxPane(m.cfg, s))
+			cmds = append(cmds, fetchTmuxPane(m.cfg, s), fetchGitStatus(m.cfg, s))
 		}
 	}
 
@@ -1647,7 +1792,7 @@ func (m *Model) handleBranchInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadingMsg = "Loading repositories..."
 		m.loadingNext = viewStateRepoPicker
 		m.state = viewStateLoading
-		m.picker = NewRepoPickerModel(nil)
+		m.picker = NewRepoPickerModel(nil, &m.cfg.Git)
 		return m, m.fetchRepos()
 	}
 	return m, cmd
@@ -1666,7 +1811,7 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateVSCodeError
 			return m, nil
 		}
-		m.picker = NewRepoPickerModel(msg.repos)
+		m.picker = NewRepoPickerModel(msg.repos, &m.cfg.Git)
 		h, v := docStyle.GetFrameSize()
 		m.picker.list.SetSize(m.width-h, m.height-v)
 		return m, nil
@@ -1676,7 +1821,18 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	subModel, cmd = m.picker.Update(msg)
 	m.picker = subModel.(RepoPickerModel)
 	if m.picker.selected != nil {
+		// Repo selected, now fetch directories
 		m.sessionCfg.Repo = *m.picker.selected
+
+		if m.sessionCfg.Repo.IsNew {
+			// It's a new repo, skip directory scan
+			m.sessionCfg.Directory = "."
+			m.loadingMsg = "Scanning available agents..."
+			m.loadingNext = viewStateAgentPicker
+			m.state = viewStateLoading
+			return m, m.fetchAgents()
+		}
+
 		m.loadingMsg = "Scanning directories..."
 		m.loadingNext = viewStateDirPicker
 		m.state = viewStateLoading
@@ -1887,7 +2043,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateVSCodeError
 			return m, nil
 		}
-		m.picker = NewRepoPickerModel(msg.repos)
+		m.picker = NewRepoPickerModel(msg.repos, &m.cfg.Git)
 		h, v := docStyle.GetFrameSize()
 		m.picker.list.SetSize(m.width-h, m.height-v)
 		m.state = m.loadingNext
@@ -1952,7 +2108,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) renderMainView() string {
 	// Split View
-	h, v := docStyle.GetFrameSize()
+	h, _ := docStyle.GetFrameSize()
 	sidebarWidth := m.width / 3
 	mainWidth := m.width - sidebarWidth - h - 2
 
@@ -1960,50 +2116,104 @@ func (m *Model) renderMainView() string {
 	sidebar := m.list.View()
 
 	// Main Panel
-	var mainPanel strings.Builder
+	var mainContent string
 	if sel := m.list.SelectedItem(); sel != nil {
 		s := sel.(item).session
-		mainPanel.WriteString(activeStyle.Render("SESSION DETAILS") + "\n\n")
-		mainPanel.WriteString(fmt.Sprintf("Tmux: %s\n", s.TmuxSession))
-		mainPanel.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
-		mainPanel.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
-		mainPanel.WriteString(fmt.Sprintf("Path: %s\n", s.WorktreePath))
+
+		// 1. Session Details (Left Column)
+		var sessionDetails strings.Builder
+		sessionDetails.WriteString(activeStyle.Render("SESSION DETAILS") + "\n\n")
+		sessionDetails.WriteString(fmt.Sprintf("Tmux: %s\n", s.TmuxSession))
+		sessionDetails.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
+		sessionDetails.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
+		sessionDetails.WriteString(fmt.Sprintf("Path: %s\n", s.WorktreePath))
 		if s.MutagenSyncID != "" {
-			mainPanel.WriteString(fmt.Sprintf("Local Sync: %s\n", successStyle.Render(s.LocalPath)))
-			mainPanel.WriteString(fmt.Sprintf("Mutagen ID: %s\n", s.MutagenSyncID))
+			sessionDetails.WriteString(fmt.Sprintf("Local Sync: %s\n", successStyle.Render(s.LocalPath)))
 		} else {
-			mainPanel.WriteString("Local Sync: " + failStyle.Render("None") + "\n")
+			sessionDetails.WriteString("Local Sync: " + failStyle.Render("None") + "\n")
 		}
 		if s.IssueKey != "" {
-			mainPanel.WriteString(fmt.Sprintf("JIRA: %s\n", s.IssueKey))
+			sessionDetails.WriteString(fmt.Sprintf("JIRA: %s\n", s.IssueKey))
 		}
-		mainPanel.WriteString(fmt.Sprintf("\nStatus: %s\n", s.Status))
-		mainPanel.WriteString(fmt.Sprintf("Created: %s\n", s.CreatedAt.Format("2006-01-02 15:04:05")))
+		sessionDetails.WriteString(fmt.Sprintf("\nStatus: %s\n", s.Status))
+		sessionDetails.WriteString(fmt.Sprintf("Created: %s\n", s.CreatedAt.Format("2006-01-02 15:04:05")))
 
-		// Add separator and Viewport for Tmux Output
-		mainPanel.WriteString("\n" + strings.Repeat("─", mainWidth-4) + "\n")
+		// 2. Git Intelligence (Right Column)
+		var gitDetails strings.Builder
+		gitDetails.WriteString(activeStyle.Render("GIT INTELLIGENCE") + "\n\n")
+		if m.gitStatus.Branch != "" {
+			gitDetails.WriteString(fmt.Sprintf("Branch: %s", m.gitStatus.Branch))
+			if m.gitStatus.Ahead > 0 || m.gitStatus.Behind > 0 {
+				gitDetails.WriteString(fmt.Sprintf(" (↑%d ↓%d)", m.gitStatus.Ahead, m.gitStatus.Behind))
+			}
+			gitDetails.WriteString("\n")
+
+			if m.gitStatus.StagedCount > 0 || m.gitStatus.UnstagedCount > 0 || m.gitStatus.UntrackedCount > 0 {
+				gitDetails.WriteString(fmt.Sprintf("Changes: %d staged, %d unstaged, %d untracked\n",
+					m.gitStatus.StagedCount, m.gitStatus.UnstagedCount, m.gitStatus.UntrackedCount))
+			} else {
+				gitDetails.WriteString("Changes: clean\n")
+			}
+
+			if m.gitStatus.PullRequest != nil {
+				pr := m.gitStatus.PullRequest
+				gitDetails.WriteString(fmt.Sprintf("PR: #%d %s (%s)\n", pr.Number, pr.Title, pr.State))
+				reviewColor := "#7D7D7D" // grey
+				switch pr.ReviewStatus {
+				case "approved":
+					reviewColor = "#00FF00" // green
+				case "changes_requested":
+					reviewColor = "#FF0000" // red
+				case "pending":
+					reviewColor = "#FFA500" // orange
+				}
+				gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(reviewColor)).Render(fmt.Sprintf("Review: %s", pr.ReviewStatus)))
+				if pr.CommentCount > 0 {
+					gitDetails.WriteString(fmt.Sprintf(" (%d comments)", pr.CommentCount))
+				}
+				gitDetails.WriteString("\n")
+			} else {
+				gitDetails.WriteString("PR: none\n")
+			}
+		} else {
+			gitDetails.WriteString("Loading git status...\n")
+		}
+
+		// Combine columns
+		colWidth := (mainWidth - 4) / 2
+		leftCol := lipgloss.NewStyle().Width(colWidth).Render(sessionDetails.String())
+		rightCol := lipgloss.NewStyle().Width(colWidth).PaddingLeft(2).
+			Border(lipgloss.NormalBorder(), false, false, false, true). // Left border for separator
+			Render(gitDetails.String())
+
+		infoPanel := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, rightCol)
+
+		// 3. Tmux Output (Bottom)
+		var outputPanel strings.Builder
+		outputPanel.WriteString("\n" + strings.Repeat("─", mainWidth-4) + "\n")
 		modeName := "PREVIEW"
 		if m.panelMode == panelModeTerminal {
 			modeName = "TERMINAL"
 		}
-		mainPanel.WriteString(activeStyle.Render(modeName) + " (ctrl+t toggle, ctrl+s full screen)\n\n")
+		outputPanel.WriteString(activeStyle.Render(modeName) + " (ctrl+t toggle, ctrl+s full screen)\n\n")
 
 		if m.panelMode == panelModeTerminal && m.terminal != nil {
-			mainPanel.WriteString(m.terminal.View())
+			outputPanel.WriteString(m.terminal.View())
 		} else {
-			mainPanel.WriteString(m.viewport.View())
+			outputPanel.WriteString(m.viewport.View())
 		}
+
+		mainContent = infoPanel + outputPanel.String()
 	} else {
-		mainPanel.WriteString("\n\n  No session selected.\n  Press 'm' for Admin Menu.")
+		mainContent = "\n\n  No session selected.\n  Press 'm' for Admin Menu."
 	}
 
 	mainStyle := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder(), false, false, false, true). // Left border only
 		PaddingLeft(2).
-		Width(mainWidth).
-		Height(m.height - v - len(m.doctorResults) - 10)
+		Width(mainWidth)
 
-	content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainStyle.Render(mainPanel.String()))
+	content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainStyle.Render(mainContent))
 
 	// Footer (Checks & Active Remote)
 	var doctorOutput strings.Builder

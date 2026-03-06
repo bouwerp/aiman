@@ -69,7 +69,7 @@ func (m AgentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m AgentPickerModel) View() string {
 	if len(m.list.Items()) == 0 {
-		return "\n  No AI agents found on the remote server.\n  Please install at least one of: Claude Code, Gemini CLI, OpenCode, or GitHub Copilot CLI.\n\n  Press ESC to go back."
+		return "\n  No AI agents found on the remote server.\n  Please install at least one of: Claude Code, Gemini CLI, Cursor, OpenCode, or GitHub Copilot CLI.\n\n  Press ESC to go back."
 	}
 	return m.list.View()
 }

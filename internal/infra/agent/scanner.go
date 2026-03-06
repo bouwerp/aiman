@@ -30,6 +30,11 @@ var knownAgents = []domain.Agent{
 		Command:     "gh copilot",
 		Description: "GitHub Copilot in the CLI",
 	},
+	{
+		Name:        "Cursor",
+		Command:     "cursor",
+		Description: "Cursor AI Code Editor CLI",
+	},
 }
 
 // Executor defines the interface for executing remote commands.

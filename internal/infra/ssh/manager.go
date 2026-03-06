@@ -160,11 +160,21 @@ func (m *Manager) GetTmuxSessionCWD(ctx context.Context, sessionName string) (st
 }
 
 func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (string, error) {
-	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -t %s", sessionName)
+	// Capture the visible pane and scrollback buffer (-S -)
+	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S - -t %s", sessionName)
 	output, err := m.Execute(ctx, cmdStr)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture tmux pane: %w", err)
 	}
+
+	// Trim trailing empty lines for cleaner preview
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return strings.Join(lines[:i+1], "\n"), nil
+		}
+	}
+
 	return output, nil
 }
 

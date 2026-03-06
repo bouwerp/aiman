@@ -32,6 +32,29 @@ type Session struct {
 	UpdatedAt     time.Time
 }
 
+type GitStatus struct {
+	Branch          string
+	Ahead           int
+	Behind          int
+	UntrackedCount  int
+	StagedCount     int
+	UnstagedCount   int
+	PullRequest     *PullRequest
+	UnpushedCommits int
+	TrackingRemote  string
+	HasUpstream     bool
+}
+
+type PullRequest struct {
+	ID           int
+	Number       int
+	Title        string
+	State        string
+	URL          string
+	ReviewStatus string // approved, changes_requested, pending
+	CommentCount int
+}
+
 var ErrInvalidTransition = errors.New("invalid session state transition")
 
 func (s *Session) Transition(target SessionStatus) error {
