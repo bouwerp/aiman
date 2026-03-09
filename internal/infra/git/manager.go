@@ -40,7 +40,12 @@ type ghPR struct {
 	Reviews []struct {
 		State string `json:"state"`
 	} `json:"reviews"`
-	Comments []interface{} `json:"comments"`
+	Comments          []interface{} `json:"comments"`
+	StatusCheckRollup []struct {
+		Context string `json:"context"`
+		State   string `json:"state"`
+		Status  string `json:"status"`
+	} `json:"statusCheckRollup"`
 }
 
 func (m *Manager) ListRepos(ctx context.Context) ([]domain.Repo, error) {
@@ -245,7 +250,7 @@ func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor
 	}
 
 	// 3. Get PR info via gh CLI
-	cmd = fmt.Sprintf("gh -C %s pr view --json number,title,state,url,reviews,comments", path)
+	cmd = fmt.Sprintf("gh -C %s pr view --json number,title,state,url,reviews,comments,statusCheckRollup", path)
 	out, err := remote.Execute(ctx, cmd)
 	if err == nil {
 		var pr ghPR
@@ -279,6 +284,34 @@ func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor
 				}
 			} else {
 				status.PullRequest.ReviewStatus = "none"
+			}
+
+			// Determine check status
+			if len(pr.StatusCheckRollup) > 0 {
+				passed := 0
+				failed := 0
+				pending := 0
+				for _, c := range pr.StatusCheckRollup {
+					switch c.State {
+					case "SUCCESS":
+						passed++
+					case "FAILURE", "ERROR":
+						failed++
+					case "PENDING", "IN_PROGRESS":
+						pending++
+					}
+				}
+				status.PullRequest.ChecksSummary = fmt.Sprintf("%d/%d passed", passed, len(pr.StatusCheckRollup))
+				switch {
+				case failed > 0:
+					status.PullRequest.ChecksStatus = "failure"
+				case pending > 0:
+					status.PullRequest.ChecksStatus = "pending"
+				default:
+					status.PullRequest.ChecksStatus = "success"
+				}
+			} else {
+				status.PullRequest.ChecksStatus = "none"
 			}
 		}
 	}

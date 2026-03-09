@@ -46,13 +46,15 @@ type GitStatus struct {
 }
 
 type PullRequest struct {
-	ID           int
-	Number       int
-	Title        string
-	State        string
-	URL          string
-	ReviewStatus string // approved, changes_requested, pending
-	CommentCount int
+	ID            int
+	Number        int
+	Title         string
+	State         string
+	URL           string
+	ReviewStatus  string // approved, changes_requested, pending
+	CommentCount  int
+	ChecksStatus  string // success, failure, pending
+	ChecksSummary string // e.g. "10/12 passed"
 }
 
 var ErrInvalidTransition = errors.New("invalid session state transition")

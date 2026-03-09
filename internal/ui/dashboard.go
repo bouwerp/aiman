@@ -2172,6 +2172,21 @@ func (m *Model) renderMainView() string {
 					gitDetails.WriteString(fmt.Sprintf(" (%d comments)", pr.CommentCount))
 				}
 				gitDetails.WriteString("\n")
+
+				// Checks status
+				if pr.ChecksStatus != "none" {
+					checkColor := "#7D7D7D" // grey
+					switch pr.ChecksStatus {
+					case "success":
+						checkColor = "#00FF00" // green
+					case "failure":
+						checkColor = "#FF0000" // red
+					case "pending":
+						checkColor = "#FFA500" // orange
+					}
+					gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(checkColor)).Render(fmt.Sprintf("Checks: %s", pr.ChecksSummary)))
+					gitDetails.WriteString("\n")
+				}
 			} else {
 				gitDetails.WriteString("PR: none\n")
 			}
