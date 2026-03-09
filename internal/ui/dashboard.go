@@ -623,17 +623,23 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
-		// Extract just the repo name (not org/repo)
-		repoName := extractRepoName(repo.Name)
-		repoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
+		var repoPath string
+		if repo != nil && repo.URL != "" {
+			// Extract just the repo name (not org/repo)
+			repoName := extractRepoName(repo.Name)
+			repoPath = fmt.Sprintf("%s/%s", remote.Root, repoName)
 
-		// Check if repo exists on remote, clone if not
-		if err := mgr.ValidateDir(ctx, repoPath); err != nil {
-			// Repo doesn't exist, need to clone it
-			_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remote.Root, repo.URL, repoName))
-			if cloneErr != nil {
-				return dirsMsg{err: fmt.Errorf("failed to clone repository: %w", cloneErr)}
+			// Check if repo exists on remote, clone if not
+			if err := mgr.ValidateDir(ctx, repoPath); err != nil {
+				// Repo doesn't exist, need to clone it
+				_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remote.Root, repo.URL, repoName))
+				if cloneErr != nil {
+					return dirsMsg{err: fmt.Errorf("failed to clone repository: %w", cloneErr)}
+				}
 			}
+		} else {
+			// No repository, scan from remote root
+			repoPath = remote.Root
 		}
 
 		// Scan directories up to depth 3
@@ -689,120 +695,134 @@ func (m *Model) createSession() tea.Cmd {
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
-		repoName := extractRepoName(m.sessionCfg.Repo.Name)
-		repoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
+		var resolvedWorktreePath string
+		var tmuxName string
+		branch := m.sessionCfg.Branch
+		worktreeDir := strings.ReplaceAll(branch, "/", "-")
+		tmuxName = worktreeDir
 
-		// Create repo if it's new
-		if m.sessionCfg.Repo.IsNew {
-			m.log("Creating new repository: %s", m.sessionCfg.Repo.Name)
-			// gh repo create <name> --public --add-readme (or similar)
-			// We'll create it and push an initial commit if needed
-			createCmd := fmt.Sprintf("gh repo create %s --public", m.sessionCfg.Repo.Name)
-			_, err := mgr.Execute(ctx, createCmd)
-			if err != nil {
-				return sessionCreateMsg{err: fmt.Errorf("failed to create repository: %w", err)}
+		if m.sessionCfg.Repo.URL != "" {
+			repoName := extractRepoName(m.sessionCfg.Repo.Name)
+			repoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
+
+			// Create repo if it's new
+			if m.sessionCfg.Repo.IsNew {
+				m.log("Creating new repository: %s", m.sessionCfg.Repo.Name)
+				// gh repo create <name> --public --add-readme (or similar)
+				// We'll create it and push an initial commit if needed
+				createCmd := fmt.Sprintf("gh repo create %s --public", m.sessionCfg.Repo.Name)
+				_, err := mgr.Execute(ctx, createCmd)
+				if err != nil {
+					return sessionCreateMsg{err: fmt.Errorf("failed to create repository: %w", err)}
+				}
+
+				// Get the URL of the new repo
+				urlCmd := fmt.Sprintf("gh repo view %s --json url -q .url", m.sessionCfg.Repo.Name)
+				url, err := mgr.Execute(ctx, urlCmd)
+				if err != nil {
+					return sessionCreateMsg{err: fmt.Errorf("failed to get repository URL: %w", err)}
+				}
+				m.sessionCfg.Repo.URL = strings.TrimSpace(url)
+
+				// Initialize the repo locally on remote if it doesn't exist as a directory yet
+				if err := mgr.ValidateDir(ctx, repoPath); err != nil {
+					// Use environment variables for the initial commit to avoid "Author identity unknown" errors
+					// We use the email from JIRA config as a reasonable default
+					authorName := "Aiman Bot"
+					authorEmail := m.cfg.Integrations.Jira.Email
+					if authorEmail == "" {
+						authorEmail = "aiman@example.com"
+					}
+
+					initCmd := fmt.Sprintf("mkdir -p %s && cd %s && git init && git remote add origin %s && touch README.md && git add README.md && GIT_AUTHOR_NAME=%q GIT_AUTHOR_EMAIL=%q GIT_COMMITTER_NAME=%q GIT_COMMITTER_EMAIL=%q git commit -m 'Initial commit' && git branch -M main && git push -u origin main",
+						repoPath, repoPath, m.sessionCfg.Repo.URL, authorName, authorEmail, authorName, authorEmail)
+					_, err := mgr.Execute(ctx, initCmd)
+					if err != nil {
+						return sessionCreateMsg{err: fmt.Errorf("failed to initialize repository: %w", err)}
+					}
+				}
 			}
 
-			// Get the URL of the new repo
-			urlCmd := fmt.Sprintf("gh repo view %s --json url -q .url", m.sessionCfg.Repo.Name)
-			url, err := mgr.Execute(ctx, urlCmd)
-			if err != nil {
-				return sessionCreateMsg{err: fmt.Errorf("failed to get repository URL: %w", err)}
-			}
-			m.sessionCfg.Repo.URL = strings.TrimSpace(url)
-
-			// Initialize the repo locally on remote if it doesn't exist as a directory yet
+			// Ensure repo exists
 			if err := mgr.ValidateDir(ctx, repoPath); err != nil {
-				// Use environment variables for the initial commit to avoid "Author identity unknown" errors
-				// We use the email from JIRA config as a reasonable default
+				_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remote.Root, m.sessionCfg.Repo.URL, repoName))
+				if cloneErr != nil {
+					return sessionCreateMsg{err: fmt.Errorf("failed to clone repository: %w", cloneErr)}
+				}
+			}
+
+			// Fetch latest
+			_, fetchErr := mgr.Execute(ctx, fmt.Sprintf("git -C %s fetch origin", repoPath))
+			if fetchErr != nil {
+				return sessionCreateMsg{err: fmt.Errorf("failed to fetch repo: %w", fetchErr)}
+			}
+
+			worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
+
+			// Check if worktree already exists
+			checkCmd := fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)
+			checkOut, _ := mgr.Execute(ctx, checkCmd)
+			if strings.Contains(checkOut, "EXISTS") {
+				return sessionCreateMsg{err: fmt.Errorf("WORKTREE_EXISTS")}
+			}
+
+			// Determine base branch
+			var baseBranch string
+			for _, b := range []string{"origin/main", "origin/master", "main", "master"} {
+				if _, err := mgr.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --verify %s", repoPath, b)); err == nil {
+					baseBranch = b
+					break
+				}
+			}
+
+			if baseBranch == "" {
+				// No branches found, this is likely an empty repository
+				m.log("No base branch found, initializing main branch")
 				authorName := "Aiman Bot"
 				authorEmail := m.cfg.Integrations.Jira.Email
 				if authorEmail == "" {
 					authorEmail = "aiman@example.com"
 				}
 
-				initCmd := fmt.Sprintf("mkdir -p %s && cd %s && git init && git remote add origin %s && touch README.md && git add README.md && GIT_AUTHOR_NAME=%q GIT_AUTHOR_EMAIL=%q GIT_COMMITTER_NAME=%q GIT_COMMITTER_EMAIL=%q git commit -m 'Initial commit' && git branch -M main && git push -u origin main",
-					repoPath, repoPath, m.sessionCfg.Repo.URL, authorName, authorEmail, authorName, authorEmail)
-				_, err := mgr.Execute(ctx, initCmd)
-				if err != nil {
-					return sessionCreateMsg{err: fmt.Errorf("failed to initialize repository: %w", err)}
+				// Initialize with an initial commit if repo is truly empty
+				initCmd := fmt.Sprintf("cd %s && git checkout -b main && touch .gitignore && git add .gitignore && GIT_AUTHOR_NAME=%q GIT_AUTHOR_EMAIL=%q GIT_COMMITTER_NAME=%q GIT_COMMITTER_EMAIL=%q git commit -m 'Initial commit' && git push -u origin main",
+					repoPath, authorName, authorEmail, authorName, authorEmail)
+				if _, err := mgr.Execute(ctx, initCmd); err == nil {
+					baseBranch = "main"
+				} else {
+					// If that also fails, we're in trouble, but let's try one last thing
+					baseBranch = "master"
 				}
 			}
-		}
 
-		// Ensure repo exists
-		if err := mgr.ValidateDir(ctx, repoPath); err != nil {
-			_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remote.Root, m.sessionCfg.Repo.URL, repoName))
-			if cloneErr != nil {
-				return sessionCreateMsg{err: fmt.Errorf("failed to clone repository: %w", cloneErr)}
-			}
-		}
-
-		// Fetch latest
-		_, fetchErr := mgr.Execute(ctx, fmt.Sprintf("git -C %s fetch origin", repoPath))
-		if fetchErr != nil {
-			return sessionCreateMsg{err: fmt.Errorf("failed to fetch repo: %w", fetchErr)}
-		}
-
-		branch := m.sessionCfg.Branch
-		worktreeDir := strings.ReplaceAll(branch, "/", "-")
-		worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
-
-		// Check if worktree already exists
-		checkCmd := fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)
-		checkOut, _ := mgr.Execute(ctx, checkCmd)
-		if strings.Contains(checkOut, "EXISTS") {
-			return sessionCreateMsg{err: fmt.Errorf("WORKTREE_EXISTS")}
-		}
-
-		// Determine base branch
-		var baseBranch string
-		for _, b := range []string{"origin/main", "origin/master", "main", "master"} {
-			if _, err := mgr.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --verify %s", repoPath, b)); err == nil {
-				baseBranch = b
-				break
-			}
-		}
-
-		if baseBranch == "" {
-			// No branches found, this is likely an empty repository
-			m.log("No base branch found, initializing main branch")
-			authorName := "Aiman Bot"
-			authorEmail := m.cfg.Integrations.Jira.Email
-			if authorEmail == "" {
-				authorEmail = "aiman@example.com"
+			// Create worktree from determined base
+			worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s ../%s %s", repoPath, branch, worktreeDir, baseBranch)
+			_, worktreeErr := mgr.Execute(ctx, worktreeCmd)
+			if worktreeErr != nil {
+				return sessionCreateMsg{err: fmt.Errorf("failed to create worktree: %w", worktreeErr)}
 			}
 
-			// Initialize with an initial commit if repo is truly empty
-			initCmd := fmt.Sprintf("cd %s && git checkout -b main && touch .gitignore && git add .gitignore && GIT_AUTHOR_NAME=%q GIT_AUTHOR_EMAIL=%q GIT_COMMITTER_NAME=%q GIT_COMMITTER_EMAIL=%q git commit -m 'Initial commit' && git push -u origin main",
-				repoPath, authorName, authorEmail, authorName, authorEmail)
-			if _, err := mgr.Execute(ctx, initCmd); err == nil {
-				baseBranch = "main"
-			} else {
-				// If that also fails, we're in trouble, but let's try one last thing
-				baseBranch = "master"
+			// Resolve worktree path on remote to avoid ../ in paths
+			resolvedWorktreePath = worktreePath
+			if out, err := mgr.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
+				resolvedWorktreePath = strings.TrimSpace(out)
+			} else if out, err := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q", worktreePath)); err == nil {
+				resolvedWorktreePath = strings.TrimSpace(out)
 			}
-		}
-
-		// Create worktree from determined base
-		worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s ../%s %s", repoPath, branch, worktreeDir, baseBranch)
-		_, worktreeErr := mgr.Execute(ctx, worktreeCmd)
-		if worktreeErr != nil {
-			return sessionCreateMsg{err: fmt.Errorf("failed to create worktree: %w", worktreeErr)}
-		}
-
-		// Resolve worktree path on remote to avoid ../ in paths
-		resolvedWorktreePath := worktreePath
-		if out, err := mgr.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
-			resolvedWorktreePath = strings.TrimSpace(out)
-		} else if out, err := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q", worktreePath)); err == nil {
-			resolvedWorktreePath = strings.TrimSpace(out)
+		} else {
+			// Ad-hoc session without a repository
+			resolvedWorktreePath = remote.Root
 		}
 
 		// Working directory
 		workingDir := resolvedWorktreePath
 		if m.sessionCfg.Directory != "" && m.sessionCfg.Directory != "." {
-			workingDir = fmt.Sprintf("%s/%s", resolvedWorktreePath, m.sessionCfg.Directory)
+			if m.sessionCfg.Repo.URL != "" {
+				workingDir = fmt.Sprintf("%s/%s", resolvedWorktreePath, m.sessionCfg.Directory)
+			} else {
+				// For no-repo sessions, Directory is relative to remote root
+				workingDir = fmt.Sprintf("%s/%s", remote.Root, m.sessionCfg.Directory)
+			}
 		}
 
 		// Ensure working directory exists (it might be a new folder defined by user)
@@ -812,7 +832,6 @@ func (m *Model) createSession() tea.Cmd {
 		}
 
 		// Start tmux session and agent
-		tmuxName := worktreeDir
 		agentCmd := m.sessionCfg.Agent.Command
 		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q %q", tmuxName, workingDir, agentCmd)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
@@ -1768,6 +1787,13 @@ func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	subModel, cmd = m.issuePicker.Update(msg)
 	m.issuePicker = subModel.(IssuePickerModel)
+	if m.issuePicker.AdHoc {
+		m.sessionCfg.IssueKey = ""
+		m.sessionCfg.Branch = ""
+		m.state = viewStateBranchInput
+		m.branchInput = NewBranchInputModel("adhoc-session")
+		return m, nil
+	}
 	if m.issuePicker.selected != nil {
 		slug := m.issuePicker.selected.Slug()
 		m.sessionCfg.IssueKey = m.issuePicker.selected.Key
@@ -1820,6 +1846,13 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	subModel, cmd = m.picker.Update(msg)
 	m.picker = subModel.(RepoPickerModel)
+	if m.picker.Skip {
+		m.sessionCfg.Repo = domain.Repo{Name: "No Repository", URL: ""}
+		m.loadingMsg = "Scanning remote root..."
+		m.loadingNext = viewStateDirPicker
+		m.state = viewStateLoading
+		return m, m.fetchRepoDirectories(nil)
+	}
 	if m.picker.selected != nil {
 		// Repo selected, now fetch directories
 		m.sessionCfg.Repo = *m.picker.selected

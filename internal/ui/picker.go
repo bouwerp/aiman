@@ -45,6 +45,7 @@ type RepoPickerModel struct {
 	input         textinput.Model
 	selectedOwner string
 	config        *config.GitConfig
+	Skip          bool
 }
 
 func NewRepoPickerModel(repos []domain.Repo, cfg *config.GitConfig) RepoPickerModel {
@@ -126,6 +127,9 @@ func (m RepoPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = repoStateOwnerPicker
 				m.initOwnersList()
 				return m, nil
+			case "ctrl+a":
+				m.Skip = true
+				return m, nil
 			}
 
 		case repoStateOwnerPicker:
@@ -188,7 +192,7 @@ func (m RepoPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m RepoPickerModel) View() string {
 	switch m.state {
 	case repoStateList:
-		return docStyle.Render(m.list.View()) + "\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("ctrl+n: create new repository")
+		return docStyle.Render(m.list.View()) + "\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("ctrl+n: create new repository • ctrl+a: skip (no repository)")
 
 	case repoStateOwnerPicker:
 		return docStyle.Render(m.ownersList.View())
