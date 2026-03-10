@@ -161,7 +161,7 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 
 	cmd := agent.Command
 	if promptFree {
-		cmd = fmt.Sprintf("%s --yes", cmd)
+		cmd = fmt.Sprintf("%s --dangerously-skip-permissions", cmd)
 	}
 
 	if len(prompts) == 0 {
