@@ -14,6 +14,7 @@ const (
 	SessionStatusSyncing      SessionStatus = "SYNCING"
 	SessionStatusCleanup      SessionStatus = "CLEANUP"
 	SessionStatusError        SessionStatus = "ERROR"
+	SessionStatusInactive     SessionStatus = "INACTIVE"
 )
 
 type Session struct {
@@ -61,7 +62,7 @@ var ErrInvalidTransition = errors.New("invalid session state transition")
 
 func (s *Session) Transition(target SessionStatus) error {
 	switch s.Status {
-	case "":
+	case "", SessionStatusInactive:
 		if target == SessionStatusProvisioning {
 			s.Status = target
 			return nil

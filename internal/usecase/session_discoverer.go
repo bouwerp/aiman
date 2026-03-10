@@ -33,9 +33,110 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 	mutagenSessions, _ := d.syncEngine.ListSyncSessions(ctx)
 
 	sessions := []domain.Session{}
+	seenWorktrees := make(map[string]bool)
+	seenMutagenIDs := make(map[string]bool)
+
+	// Process tmux sessions
 	for _, name := range tmuxSessions {
 		session := d.discoverSession(ctx, host, name, mutagenSessions)
+		if session.WorktreePath != "" {
+			seenWorktrees[session.WorktreePath] = true
+		}
+		if session.MutagenSyncID != "" {
+			seenMutagenIDs[session.MutagenSyncID] = true
+		}
 		sessions = append(sessions, session)
+	}
+
+	// 3. Scan for orphaned worktrees
+	repos, err := d.remoteExecutor.ScanGitRepos(ctx)
+	if err == nil {
+		for _, repoPath := range repos {
+			worktrees, err := d.remoteExecutor.ScanWorktrees(ctx, repoPath)
+			if err == nil {
+				for _, wtPath := range worktrees {
+					normalizedWT := normalizePath(wtPath)
+					if !seenWorktrees[normalizedWT] {
+						// Found an orphaned worktree
+						session := domain.Session{
+							TmuxSession:  filepath.Base(normalizedWT),
+							RemoteHost:   host,
+							Status:       domain.SessionStatusInactive,
+							WorktreePath: normalizedWT,
+							CreatedAt:    time.Now(),
+						}
+
+						// Try to determine repo name
+						parts := strings.Split(repoPath, "/")
+						if len(parts) > 0 {
+							session.RepoName = parts[len(parts)-1]
+						}
+
+						// Extract JIRA key
+						session.IssueKey = domain.ExtractKey(session.TmuxSession)
+						if session.IssueKey == "" {
+							session.IssueKey = domain.ExtractKey(normalizedWT)
+						}
+
+						// Cross-reference with mutagen
+						for _, ms := range mutagenSessions {
+							if !seenMutagenIDs[ms.ID] && d.isSessionMatch(session, ms, normalizedWT) {
+								if !strings.Contains(ms.LocalPath, ":") {
+									session.LocalPath = normalizePath(ms.LocalPath)
+								} else if !strings.Contains(ms.RemotePath, ":") {
+									session.LocalPath = normalizePath(ms.RemotePath)
+								}
+								session.MutagenSyncID = ms.ID
+								seenMutagenIDs[ms.ID] = true
+								break
+							}
+						}
+
+						sessions = append(sessions, session)
+						seenWorktrees[normalizedWT] = true
+					}
+				}
+			}
+		}
+	}
+
+	// 4. Scan for orphaned mutagen syncs that don't match any worktree
+	for _, ms := range mutagenSessions {
+		if !seenMutagenIDs[ms.ID] {
+			// This sync session doesn't match any tmux session or worktree we found
+			remotePath := ""
+			if strings.Contains(ms.RemotePath, ":") {
+				// ms.RemotePath is the remote URL
+				parts := strings.SplitN(ms.RemotePath, ":", 2)
+				if len(parts) > 1 {
+					remotePath = normalizePath(parts[1])
+				}
+			} else if strings.Contains(ms.LocalPath, ":") {
+				// ms.LocalPath is the remote URL
+				parts := strings.SplitN(ms.LocalPath, ":", 2)
+				if len(parts) > 1 {
+					remotePath = normalizePath(parts[1])
+				}
+			}
+
+			if remotePath != "" {
+				session := domain.Session{
+					TmuxSession:   ms.Name,
+					RemoteHost:    host,
+					Status:        domain.SessionStatusInactive,
+					WorktreePath:  remotePath,
+					MutagenSyncID: ms.ID,
+					CreatedAt:     time.Now(),
+				}
+				if !strings.Contains(ms.LocalPath, ":") {
+					session.LocalPath = normalizePath(ms.LocalPath)
+				} else if !strings.Contains(ms.RemotePath, ":") {
+					session.LocalPath = normalizePath(ms.RemotePath)
+				}
+				session.IssueKey = domain.ExtractKey(ms.Name)
+				sessions = append(sessions, session)
+			}
+		}
 	}
 
 	return sessions, nil
