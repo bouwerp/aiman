@@ -935,15 +935,23 @@ func (m *Model) runTerminateStep(index int) error {
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
+		m.log("Terminating session: removing worktree %s", s.WorktreePath)
+
 		// Try to remove via git worktree (needs to run from main repo)
 		if s.RepoName != "" {
 			repoName := extractRepoName(s.RepoName)
 			mainRepoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
-			_, _ = mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
+			out, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
+			if err != nil {
+				m.log("Warning: git worktree remove failed: %v, output: %s", err, out)
+			}
 		}
 
 		// Force remove the directory regardless (worktree remove might fail if corrupted)
-		_, err := mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", s.WorktreePath))
+		out, err := mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", s.WorktreePath))
+		if err != nil {
+			m.log("Error: rm -rf worktree failed: %v, output: %s", err, out)
+		}
 		return err
 	case 4: // Clean up local files
 		if s.LocalPath == "" {

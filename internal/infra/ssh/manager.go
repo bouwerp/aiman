@@ -140,10 +140,15 @@ func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string,
 	}
 
 	worktrees := []string{}
+	cleanRepoPath := filepath.Clean(repoPath)
+
 	for _, line := range strings.Split(output, "\n") {
 		if strings.HasPrefix(line, "worktree ") {
 			worktreePath := strings.TrimPrefix(line, "worktree ")
-			worktrees = append(worktrees, worktreePath)
+			worktreePath = strings.TrimSpace(worktreePath)
+			if filepath.Clean(worktreePath) != cleanRepoPath {
+				worktrees = append(worktrees, worktreePath)
+			}
 		}
 	}
 	return worktrees, nil

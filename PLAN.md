@@ -23,9 +23,12 @@
 
 ### Use Cases
 - **Session Discovery**: Engine to map remote tmux sessions -> CWD -> Git Repos -> JIRA keys.
+- **Orphan Discovery**: Discovery of orphaned git worktrees and mutagen sync sessions.
 - **Doctor Checks**: Automated validation of environment and credentials on startup.
-- **Flow Wizard (Partial)**: Issue -> Branch -> Repo -> Directory -> Agent scan -> Summary.
+- **Flow Wizard**: Issue -> Branch -> Repo -> Directory -> Agent scan -> Summary.
+- **Session Restart**: Restart existing or inactive sessions with a new agent selection.
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
+- **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
 ## 2. Technical Gotchas ⚠️
 
@@ -62,16 +65,16 @@
     - Clean up local sync directory.
     - Update session status in database.
 - [x] **SQLite Persistence**: Fully wire the existing `internal/infra/sqlite` repository to save both discovered and newly created sessions, tracking their full lifecycle.
-- [ ] **Git Intelligence Panel**: Comprehensive git status display for each session showing:
+- [x] **Git Intelligence Panel**: Comprehensive git status display for each session showing:
     - Associated pull request (if exists) with link and status
     - PR review state: approved, changes requested, pending reviews
     - Open review comments count
+    - PR check status (CI/CD passes/fails)
     - Uncommitted changes (staged/unstaged)
     - Un-pushed commits count
     - Untracked files list
-    - Changed files list with diff stats
     - Branch tracking status (ahead/behind remote)
-    - Similar UX to lazygit but integrated into the dashboard
+    - Similar UX to lazygit but integrated into the dashboard ✅
 - [ ] **Agentic Patterns**:
     - Develop robust agentic patterns (e.g., Orchestrator-Worker-Validator).
     - Logic to translate these patterns for various supported coding tools.

@@ -212,5 +212,12 @@ func normalizePath(p string) string {
 	if p == "" {
 		return ""
 	}
-	return filepath.Clean(strings.TrimSpace(p))
+	// Use forward slashes for remote paths regardless of local OS
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = strings.TrimSpace(p)
+	// Remove trailing slash if not root
+	if len(p) > 1 && strings.HasSuffix(p, "/") {
+		p = p[:len(p)-1]
+	}
+	return p
 }
