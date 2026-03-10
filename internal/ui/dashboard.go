@@ -156,6 +156,7 @@ type Model struct {
 	terminateErrors        []string
 	terminateIndex         int
 	terminatePrecheckError string
+	terminateForced        bool
 	consoleOpen            bool
 	consoleLog             []string
 	consoleViewport        viewport.Model
@@ -324,7 +325,9 @@ func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
 			return gitStatusMsg{session: s.TmuxSession, err: fmt.Errorf("no remote found")}
 		}
 
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		if err := mgr.Connect(ctx); err != nil {
 			return gitStatusMsg{session: s.TmuxSession, err: err}
@@ -763,6 +766,27 @@ func (m *Model) runTerminateStep(index int) error {
 			return fmt.Errorf("mutagen terminate failed: %w, output: %s", err, string(out))
 		}
 		return nil
+	}
+
+	effectiveIndex := index
+	if m.terminateForced {
+		if index == 1 {
+			// Forced discard
+			if s.WorktreePath == "" {
+				return nil
+			}
+			remote, ok := resolveRemote(m.cfg, s)
+			if !ok {
+				return fmt.Errorf("no remote configured")
+			}
+			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+			_, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q reset --hard HEAD && git -C %q clean -fd'", s.WorktreePath, s.WorktreePath))
+			return err
+		}
+		effectiveIndex--
+	}
+
+	switch effectiveIndex {
 	case 1: // Kill tmux session
 		if s.TmuxSession == "" {
 			return nil
@@ -1108,7 +1132,7 @@ func (m *Model) renderView() string {
 			b.WriteString("  - Kill tmux session\n")
 			b.WriteString("  - Remove git worktree\n")
 			b.WriteString("  - Clean up local files\n\n")
-			b.WriteString(activeStyle.Render("[y]") + " Confirm  " + activeStyle.Render("[n]") + " Cancel")
+			b.WriteString(activeStyle.Render("[y]") + " Confirm  " + activeStyle.Render("[f]") + " Force (discard changes)  " + activeStyle.Render("[n]") + " Cancel")
 
 			dialog := lipgloss.NewStyle().
 				Border(lipgloss.DoubleBorder()).
@@ -1863,6 +1887,26 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.terminatePrecheckError = ""
 			m.state = viewStateMain
 			return m, nil
+		case "f":
+			if sel := m.list.SelectedItem(); sel != nil {
+				s := sel.(item).session
+				m.terminateForced = true
+				m.terminatePrecheckError = ""
+				m.terminateSession = s
+				m.terminateSteps = []string{
+					"Stopping mutagen sync",
+					"Discarding changes (force)",
+					"Killing tmux session",
+					"Stopping agent process",
+					"Removing git worktree",
+					"Cleaning local files",
+					"Updating session status",
+				}
+				m.terminateErrors = make([]string, len(m.terminateSteps))
+				m.terminateIndex = 0
+				m.state = viewStateTerminateProgress
+				return m, m.runTerminateStepCmd(0)
+			}
 		case "y":
 			if sel := m.list.SelectedItem(); sel != nil {
 				s := sel.(item).session
@@ -1870,6 +1914,7 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.terminatePrecheckError = err.Error()
 					return m, nil
 				}
+				m.terminateForced = false
 				m.terminatePrecheckError = ""
 				m.terminateSession = s
 				m.terminateSteps = []string{
