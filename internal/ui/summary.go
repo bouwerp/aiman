@@ -16,6 +16,7 @@ type SummaryModel struct {
 	repo          domain.Repo
 	directory     string
 	agent         *domain.Agent
+	promptFree    bool
 	confirmed     bool
 	focusIndex    int
 	inputs        []textinput.Model
@@ -26,9 +27,10 @@ func NewSummaryModel(issueKey, branch string, repo domain.Repo, directory string
 	m := SummaryModel{
 		issueKey:  issueKey,
 		branch:    branch,
-		repo:      repo,
-		directory: directory,
-		inputs:    make([]textinput.Model, 0),
+		repo:       repo,
+		directory:  directory,
+		promptFree: true,
+		inputs:     make([]textinput.Model, 0),
 	}
 
 	return m
@@ -68,6 +70,9 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusIndex = 0
 			}
 
+			return m, nil
+		case "p":
+			m.promptFree = !m.promptFree
 			return m, nil
 		case "enter":
 			if m.agent != nil {
@@ -120,6 +125,13 @@ func (m SummaryModel) View() string {
 		b.WriteString(fmt.Sprintf("%-15s %s\n", "Agent:", failStyle.Render("None selected")))
 	}
 
+	// Prompt Free
+	pfStatus := "Disabled"
+	if m.promptFree {
+		pfStatus = successStyle.Render("Enabled")
+	}
+	b.WriteString(fmt.Sprintf("%-15s %s\n", "Prompt Free:", pfStatus))
+
 	b.WriteString("\n")
 
 	// Create button
@@ -134,7 +146,7 @@ func (m SummaryModel) View() string {
 		b.WriteString(buttonLabel + "\n")
 	}
 
-	b.WriteString("\n(enter to create, esc to go back, tab to navigate)\n")
+	b.WriteString("\n(enter to create, esc to go back, p to toggle prompt-free)\n")
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -155,10 +167,11 @@ func (m SummaryModel) GetAgent() *domain.Agent {
 
 func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 	return domain.SessionConfig{
-		IssueKey:  m.issueKey,
-		Branch:    m.branch,
-		Repo:      m.repo,
-		Directory: m.directory,
-		Agent:     m.agent,
+		IssueKey:   m.issueKey,
+		Branch:     m.branch,
+		Repo:       m.repo,
+		Directory:  m.directory,
+		Agent:      m.agent,
+		PromptFree: m.promptFree,
 	}
 }

@@ -108,4 +108,5 @@ type SessionConfig struct {
 	Directory string
 	Agent     *Agent
 	Skills    []Skill
+	PromptFree bool
 }

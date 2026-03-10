@@ -1524,10 +1524,11 @@ end tell`, s.LocalPath)
 			s := sel.(item).session
 			m.restartingSession = &s
 			m.sessionCfg = domain.SessionConfig{
-				IssueKey:  s.IssueKey,
-				Branch:    s.Branch,
-				Repo:      domain.Repo{Name: s.RepoName, URL: ""},
-				Directory: "",
+				IssueKey:   s.IssueKey,
+				Branch:     s.Branch,
+				Repo:       domain.Repo{Name: s.RepoName, URL: ""},
+				Directory:  "",
+				PromptFree: true,
 			}
 
 			// If session is active or syncing, ask for confirmation
@@ -2311,6 +2312,13 @@ func (m *Model) restartSession() tea.Cmd {
 
 		// 3. Start tmux session and agent
 		agentCmd := m.sessionCfg.Agent.Command
+		if m.flowManager != nil && m.flowManager.SkillEngine != nil {
+			preparedCmd, err := m.flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *m.sessionCfg.Agent, m.sessionCfg.Skills, m.sessionCfg.PromptFree)
+			if err == nil {
+				agentCmd = preparedCmd
+			}
+		}
+
 		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q %q", s.TmuxSession, workingDir, agentCmd)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {

@@ -101,26 +101,22 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 	return skills, err
 }
 
-func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill) (string, error) {
-	if len(selectedSkills) == 0 {
-		return agent.Command, nil
-	}
-
+func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool) (string, error) {
 	// For Claude Code, we can create a custom .clauderc on the remote side
 	if strings.Contains(strings.ToLower(agent.Name), "claude") {
-		return e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills)
+		return e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree)
 	}
 
 	// For Gemini, we can set environment variables or initial prompts
 	if strings.Contains(strings.ToLower(agent.Name), "gemini") {
-		return e.prepareGemini(ctx, remote, worktreePath, agent, selectedSkills)
+		return e.prepareGemini(ctx, remote, worktreePath, agent, selectedSkills, promptFree)
 	}
 
 	// Default: No special injection implemented yet for this agent
 	return agent.Command, nil
 }
 
-func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill) (string, error) {
+func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool) (string, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -131,8 +127,13 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 		}
 	}
 
+	cmd := agent.Command
+	if promptFree {
+		cmd = fmt.Sprintf("%s --yes", cmd)
+	}
+
 	if len(prompts) == 0 {
-		return agent.Command, nil
+		return cmd, nil
 	}
 
 	// Concatenate prompts and escape for shell
@@ -140,8 +141,8 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 	
 	// Create a remote file with the system prompt
 	remotePromptPath := filepath.Join(worktreePath, ".aiman_prompt")
-	cmd := fmt.Sprintf("printf %%s %q > %s", systemPrompt, remotePromptPath)
-	if _, err := remote.Execute(ctx, cmd); err != nil {
+	uploadCmd := fmt.Sprintf("printf %%s %q > %s", systemPrompt, remotePromptPath)
+	if _, err := remote.Execute(ctx, uploadCmd); err != nil {
 		return "", fmt.Errorf("failed to upload system prompt to remote: %w", err)
 	}
 
@@ -149,10 +150,10 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 	// Assuming `claude --prompt-file .aiman_prompt` or similar.
 	// If not supported, we can inject it into stdin, but that's harder for an interactive CLI.
 	// For now, let's assume it's an environment variable.
-	return fmt.Sprintf("SYSTEM_PROMPT_FILE=%s %s", remotePromptPath, agent.Command), nil
+	return fmt.Sprintf("SYSTEM_PROMPT_FILE=%s %s", remotePromptPath, cmd), nil
 }
 
-func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill) (string, error) {
+func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool) (string, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -163,16 +164,21 @@ func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor
 		}
 	}
 
+	cmd := agent.Command
+	if promptFree {
+		cmd = "NON_INTERACTIVE=true " + cmd
+	}
+
 	if len(prompts) == 0 {
-		return agent.Command, nil
+		return cmd, nil
 	}
 
 	systemPrompt := strings.Join(prompts, "\n\n")
 	remotePromptPath := filepath.Join(worktreePath, ".aiman_gemini_prompt")
-	cmd := fmt.Sprintf("printf %%s %q > %s", systemPrompt, remotePromptPath)
-	if _, err := remote.Execute(ctx, cmd); err != nil {
+	uploadCmd := fmt.Sprintf("printf %%s %q > %s", systemPrompt, remotePromptPath)
+	if _, err := remote.Execute(ctx, uploadCmd); err != nil {
 		return "", fmt.Errorf("failed to upload gemini prompt to remote: %w", err)
 	}
 
-	return fmt.Sprintf("GEMINI_SYSTEM_INSTRUCTION_FILE=%s %s", remotePromptPath, agent.Command), nil
+	return fmt.Sprintf("GEMINI_SYSTEM_INSTRUCTION_FILE=%s %s", remotePromptPath, cmd), nil
 }

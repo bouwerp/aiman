@@ -15,7 +15,7 @@ type FlowManager struct {
 	gitManager   domain.RepositoryManager
 	sshManager   domain.RemoteExecutor
 	slugger      domain.Slugger
-	skillEngine  domain.SkillEngine
+	SkillEngine  domain.SkillEngine
 }
 
 func NewFlowManager(
@@ -30,7 +30,7 @@ func NewFlowManager(
 		gitManager:   gitManager,
 		sshManager:   sshManager,
 		slugger:      slugger,
-		skillEngine:  skillEngine,
+		SkillEngine:  skillEngine,
 	}
 }
 
@@ -75,8 +75,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	// Step 9 & 10: Skills & Agent
 	agentCmd := config.Agent.Command
-	if m.skillEngine != nil {
-		preparedCmd, err := m.skillEngine.PrepareSession(ctx, m.sshManager, workingDir, *config.Agent, config.Skills)
+	if m.SkillEngine != nil {
+		preparedCmd, err := m.SkillEngine.PrepareSession(ctx, m.sshManager, workingDir, *config.Agent, config.Skills, config.PromptFree)
 		if err == nil {
 			agentCmd = preparedCmd
 		}

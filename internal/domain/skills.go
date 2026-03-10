@@ -29,5 +29,5 @@ type SkillEngine interface {
 	
 	// PrepareSession prepares the remote environment with the selected skills.
 	// It returns the command to launch the agent with the skills injected.
-	PrepareSession(ctx context.Context, remote RemoteExecutor, worktreePath string, agent Agent, selectedSkills []Skill) (string, error)
+	PrepareSession(ctx context.Context, remote RemoteExecutor, worktreePath string, agent Agent, selectedSkills []Skill, promptFree bool) (string, error)
 }
