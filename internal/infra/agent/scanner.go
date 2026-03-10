@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	tea "github.com/charmbracelet/bubbletea"
@@ -60,11 +61,88 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 	var available []domain.Agent
 
 	for _, agent := range knownAgents {
-		// Check if the command exists by running "which" or "command -v"
-		checkCmd := fmt.Sprintf("command -v %s", agent.Command)
+		// We try multiple ways to find the agent:
+		// 1. Using a login shell (to load user profiles like .bashrc, .zshrc)
+		// 2. Direct command check (in case login shell fails or is limited)
+		
+		found := false
+		baseCmd := strings.Split(agent.Command, " ")[0]
+		
+		// Try login shell first
+		checkCmd := fmt.Sprintf("bash -lc 'command -v %s'", baseCmd)
 		_, err := s.executor.Execute(ctx, checkCmd)
 		if err == nil {
-			// Command exists in PATH
+			found = true
+		} else {
+			// Try direct check as fallback
+			checkCmd = fmt.Sprintf("command -v %s", baseCmd)
+			_, err = s.executor.Execute(ctx, checkCmd)
+			if err == nil {
+				found = true
+			}
+		}
+
+		if found {
+			// If it's a multi-word command like "gh copilot", we should verify the extension exists
+			if strings.Contains(agent.Command, " ") {
+				// Try verifying with a simple flag
+				verifyCmd := fmt.Sprintf("bash -lc '%s --version'", agent.Command)
+				_, err = s.executor.Execute(ctx, verifyCmd)
+				if err != nil {
+					// Try without login shell
+					verifyCmd = fmt.Sprintf("%s --version", agent.Command)
+					_, err = s.executor.Execute(ctx, verifyCmd)
+					if err != nil {
+						found = false
+					}
+				}
+			}
+		}
+
+		// Special fallbacks for Claude Code
+		if !found && agent.Name == "Claude Code" {
+			fallbacks := []string{"claude-code", "claude"}
+			for _, fb := range fallbacks {
+				if fb == agent.Command {
+					continue
+				}
+				// Try both login and direct for each fallback
+				for _, wrapper := range []string{"bash -lc 'command -v %s'", "command -v %s"} {
+					_, err := s.executor.Execute(ctx, fmt.Sprintf(wrapper, fb))
+					if err == nil {
+						agent.Command = fb
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+		}
+
+		// Special fallbacks for Cursor
+		if !found && agent.Name == "Cursor" {
+			fallbacks := []string{"cursor-tui", "cursor"}
+			for _, fb := range fallbacks {
+				if fb == agent.Command {
+					continue
+				}
+				for _, wrapper := range []string{"bash -lc 'command -v %s'", "command -v %s"} {
+					_, err := s.executor.Execute(ctx, fmt.Sprintf(wrapper, fb))
+					if err == nil {
+						agent.Command = fb
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+		}
+
+		if found {
 			available = append(available, agent)
 		}
 	}
