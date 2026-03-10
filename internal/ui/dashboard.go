@@ -58,6 +58,8 @@ const (
 	viewStateTerminateConfirm
 	viewStateTerminateProgress
 	viewStateWorktreeExists
+	viewStateRestartAgentPicker
+	viewStateRestartConfirm
 )
 
 type panelMode int
@@ -160,6 +162,7 @@ type Model struct {
 	consoleViewport        viewport.Model
 	gitStatus              domain.GitStatus
 	lastGitStatusUpdate    time.Time
+	restartingSession      *domain.Session
 }
 
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository) *Model {
@@ -173,6 +176,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	l.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new session")),
+			key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restart session")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
 			key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "attach full terminal")),
 			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle preview/terminal")),
@@ -1117,6 +1121,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateAgentPicker:
 		return m.handleAgentPickerUpdate(msg)
 
+	case viewStateRestartAgentPicker:
+		return m.handleRestartAgentPickerUpdate(msg)
+
+	case viewStateRestartConfirm:
+		return m.handleRestartConfirmUpdate(msg)
+
 	case viewStateSummary:
 		return m.handleSummaryUpdate(msg)
 
@@ -1200,6 +1210,24 @@ func (m *Model) renderView() string {
 
 	case viewStateAgentPicker:
 		return docStyle.Render(m.agentPicker.View())
+
+	case viewStateRestartAgentPicker:
+		return docStyle.Render(m.agentPicker.View())
+
+	case viewStateRestartConfirm:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("Confirm Session Restart") + "\n\n")
+		b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TmuxSession))
+		b.WriteString("Restarting will kill the existing tmux session and agent.\n\n")
+		b.WriteString("Do you want to proceed?\n\n")
+		b.WriteString(activeStyle.Render("[y]") + " Yes  " + activeStyle.Render("[n]") + " No")
+
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(1, 2).
+			Width(60)
+
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
 
 	case viewStateSummary:
 		return m.summary.View()
@@ -1607,6 +1635,29 @@ end tell`, s.LocalPath)
 			m.log("ERROR: No session selected")
 		}
 		return m, nil, true
+	}
+	if msg.String() == "ctrl+r" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			m.restartingSession = &s
+			m.sessionCfg = SessionConfig{
+				IssueKey:  s.IssueKey,
+				Branch:    s.Branch,
+				Repo:      domain.Repo{Name: s.RepoName, URL: ""},
+				Directory: "",
+			}
+
+			// If session is active or syncing, ask for confirmation
+			if s.Status == domain.SessionStatusActive || s.Status == domain.SessionStatusSyncing {
+				m.state = viewStateRestartConfirm
+				return m, nil, true
+			}
+
+			m.loadingMsg = "Scanning available agents..."
+			m.loadingNext = viewStateRestartAgentPicker
+			m.state = viewStateLoading
+			return m, m.fetchAgents(), true
+		}
 	}
 	if msg.String() == "r" {
 		// Refresh sessions from remote
@@ -2118,17 +2169,31 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = viewStateWorktreeExists
 				return m, nil
 			}
-			m.lastError = fmt.Sprintf("Failed to create session: %v", msg.err)
+			m.lastError = fmt.Sprintf("Failed to create/restart session: %v", msg.err)
 			m.state = viewStateVSCodeError
 			return m, nil
 		}
-		// Add new session to list
+
 		items := m.list.Items()
-		items = append(items, item{session: msg.session, needsInput: false, activity: ""})
+		if m.restartingSession != nil {
+			// Update existing session in the list
+			for i, it := range items {
+				if sessItem, ok := it.(item); ok && sessItem.session.TmuxSession == msg.session.TmuxSession {
+					sessItem.session = msg.session
+					items[i] = sessItem
+					m.list.Select(i)
+					break
+				}
+			}
+			m.restartingSession = nil
+		} else {
+			// Add new session to list
+			items = append(items, item{session: msg.session, needsInput: false, activity: ""})
+			m.list.Select(len(items) - 1)
+		}
 		m.list.SetItems(items)
 
-		// Select the newly created session and fetch its preview
-		m.list.Select(len(items) - 1)
+		// Fetch preview for the session
 		m.activeSession = msg.session.TmuxSession
 		m.tmuxOutput = "Loading..."
 		m.viewport.SetContent(m.tmuxOutput)
@@ -2284,4 +2349,110 @@ func (m *Model) renderMainView() string {
 	footer := "\nActive Remote: " + activeHost + "\n\n" + doctorOutput.String()
 
 	return docStyle.Render(content + "\n" + footer)
+}
+
+func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		if m.agentPicker.list.FilterState() != list.Filtering {
+			m.state = viewStateMain
+			m.restartingSession = nil
+			return m, nil
+		}
+	}
+
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.agentPicker.Update(msg)
+	m.agentPicker = subModel.(AgentPickerModel)
+
+	if m.agentPicker.selected != nil {
+		m.sessionCfg.Agent = m.agentPicker.selected
+		m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
+		m.loadingNext = viewStateMain
+		m.state = viewStateLoading
+		return m, m.restartSession()
+	}
+
+	return m, cmd
+}
+
+func (m *Model) restartSession() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		s := m.restartingSession
+		if s == nil {
+			return sessionCreateMsg{err: fmt.Errorf("no session to restart")}
+		}
+
+		remote, ok := resolveRemote(m.cfg, *s)
+		if !ok {
+			return sessionCreateMsg{err: fmt.Errorf("no active remote configured")}
+		}
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+
+		// Ensure working directory exists
+		workingDir := s.WorktreePath
+		if err := mgr.ValidateDir(ctx, workingDir); err != nil {
+			return sessionCreateMsg{err: fmt.Errorf("working directory not found: %w", err)}
+		}
+
+		// 1. Kill existing tmux session if it exists
+		mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %s", s.TmuxSession))
+
+		// 2. Terminate existing mutagen sync if it exists
+		// We ignore errors here because it might not exist
+		mutagenCmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession)
+		_ = mutagenCmd.Run()
+
+		// 3. Start tmux session and agent
+		agentCmd := m.sessionCfg.Agent.Command
+		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q %q", s.TmuxSession, workingDir, agentCmd)
+		_, tmuxErr := mgr.Execute(ctx, startCmd)
+		if tmuxErr != nil {
+			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}
+		}
+
+		// 4. Start mutagen sync
+		mutagenEngine := mutagen.NewEngine()
+		home, _ := os.UserHomeDir()
+		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, s.TmuxSession)
+		target := remote.Host
+		if remote.User != "" {
+			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
+		}
+		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
+		if err := mutagenEngine.StartSync(ctx, localSyncPath, remoteSyncPath); err != nil {
+			// We continue even if sync fails, but log it
+			m.log("Warning: failed to restart mutagen sync: %v", err)
+		}
+
+		// Update session status
+		s.Status = domain.SessionStatusSyncing
+		s.AgentName = m.sessionCfg.Agent.Name
+		s.UpdatedAt = time.Now()
+
+		if m.db != nil {
+			_ = m.db.Save(ctx, s)
+		}
+
+		return sessionCreateMsg{session: *s, err: nil}
+	}
+}
+
+func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "y":
+			m.loadingMsg = "Scanning available agents..."
+			m.loadingNext = viewStateRestartAgentPicker
+			m.state = viewStateLoading
+			return m, m.fetchAgents()
+		case "n", "esc":
+			m.state = viewStateMain
+			m.restartingSession = nil
+			return m, nil
+		}
+	}
+	return m, nil
 }
