@@ -102,18 +102,50 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 }
 
 func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool) (string, error) {
-	// For Claude Code, we can create a custom .clauderc on the remote side
-	if strings.Contains(strings.ToLower(agent.Name), "claude") {
+	name := strings.ToLower(agent.Name)
+	
+	// For Claude Code
+	if strings.Contains(name, "claude") {
 		return e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree)
 	}
 
-	// For Gemini, we can set environment variables or initial prompts
-	if strings.Contains(strings.ToLower(agent.Name), "gemini") {
+	// For Gemini
+	if strings.Contains(name, "gemini") {
 		return e.prepareGemini(ctx, remote, worktreePath, agent, selectedSkills, promptFree)
 	}
 
-	// Default: No special injection implemented yet for this agent
-	return agent.Command, nil
+	// For OpenCode
+	if strings.Contains(name, "opencode") {
+		cmd := agent.Command
+		if promptFree {
+			cmd = fmt.Sprintf("%s --yolo", cmd)
+		}
+		return cmd, nil
+	}
+
+	// For Cursor
+	if strings.Contains(name, "cursor") {
+		cmd := agent.Command
+		if promptFree {
+			// Assuming cursor-agent might have a similar flag or just needs to be non-interactive
+			cmd = fmt.Sprintf("%s --yes", cmd)
+		}
+		return cmd, nil
+	}
+
+	// Default: Apply prompt-free flag if it's a known pattern
+	cmd := agent.Command
+	if promptFree {
+		if strings.Contains(name, "copilot") {
+			// gh copilot doesn't have a standard yolo flag for the chat, 
+			// but we'll leave it as is or add --yes if we suspect it works.
+		} else {
+			// Generic fallback for unknown agents
+			cmd = fmt.Sprintf("%s --yes", cmd)
+		}
+	}
+
+	return cmd, nil
 }
 
 func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool) (string, error) {

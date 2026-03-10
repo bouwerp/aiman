@@ -107,8 +107,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 // Deprecated: Use CreateSession instead
 func (m *FlowManager) StartNewFlow(ctx context.Context, issueKey string, repoName string) (*domain.Session, error) {
 	return m.CreateSession(ctx, domain.SessionConfig{
-		IssueKey: issueKey,
-		Repo:     domain.Repo{Name: repoName},
-		Agent:    &domain.Agent{Name: "Claude Code", Command: "claude"}, // Default
+		IssueKey:   issueKey,
+		Repo:       domain.Repo{Name: repoName},
+		Agent:      &domain.Agent{Name: "Claude Code", Command: "claude"}, // Default
+		PromptFree: true,
 	})
 }
