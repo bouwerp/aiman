@@ -42,6 +42,11 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		if err == nil {
 			branch = m.slugger.Slugify(issue.Key, issue.Summary)
 		}
+	} else if branch != "" {
+		// Ensure manually provided branch is sanitized
+		// Note: we don't have a shared sanitizer here yet, 
+		// but we should at least remove commas as requested.
+		branch = strings.ReplaceAll(branch, ",", "-")
 	}
 
 	// Create Session record

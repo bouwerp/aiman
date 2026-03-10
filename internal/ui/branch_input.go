@@ -75,7 +75,7 @@ func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // isInvalidChar checks if a character is invalid for git branch names
 func (m BranchInputModel) isInvalidChar(s string) bool {
-	invalidChars := `~^:\@{}[]*?|<>'!` + "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f"
+	invalidChars := `~^:\@{}[]*?|<>'!,` + "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f"
 	return strings.ContainsAny(s, invalidChars)
 }
 
@@ -90,6 +90,9 @@ func (m BranchInputModel) sanitizeInput(s string) string {
 
 	// Replace underscores with dashes (mutagen compatibility)
 	s = strings.ReplaceAll(s, "_", "-")
+
+	// Replace commas with dashes
+	s = strings.ReplaceAll(s, ",", "-")
 
 	// Remove invalid characters including smart quotes
 	// Note: \u escape sequences must be in string literals, not regex patterns

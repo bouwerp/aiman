@@ -35,6 +35,12 @@ func TestGitSlugger_Slugify(t *testing.T) {
 			summary:  "Refactor BubbleTea components",
 			expected: "UI-101/refactor-bubbletea-components",
 		},
+		{
+			name:     "Title with comma",
+			key:      "COM-123",
+			summary:  "Fix bugs, add features",
+			expected: "COM-123/fix-bugs-add-features",
+		},
 	}
 
 	slugger := NewGitSlugger()
