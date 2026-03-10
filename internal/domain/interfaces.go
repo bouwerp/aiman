@@ -16,17 +16,20 @@ type IssueProvider interface {
 type RepositoryManager interface {
 	ListRepos(ctx context.Context) ([]Repo, error)
 	SetupWorktree(ctx context.Context, repo Repo, branch string) (Worktree, error)
+	SetupRemoteWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
 	GetGitStatus(ctx context.Context, remote RemoteExecutor, path string) (GitStatus, error)
 }
 
 // RemoteExecutor manages remote connections and command execution.
 type RemoteExecutor interface {
 	Connect(ctx context.Context) error
+	GetRoot() string
 	Execute(ctx context.Context, cmd string) (string, error)
 	ValidateDir(ctx context.Context, path string) error
 	ScanTmuxSessions(ctx context.Context) ([]string, error)
 	ScanGitRepos(ctx context.Context) ([]string, error)
 	ScanWorktrees(ctx context.Context, repoPath string) ([]string, error)
+	GetGitRoot(ctx context.Context, path string) (string, error)
 	GetTmuxSessionCWD(ctx context.Context, sessionName string) (string, error)
 	CaptureTmuxPane(ctx context.Context, sessionName string) (string, error)
 	AttachTmuxSession(sessionName string) *exec.Cmd

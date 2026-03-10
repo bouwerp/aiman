@@ -1,0 +1,178 @@
+package skills
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
+)
+
+type Engine struct {
+	cfg *config.Config
+}
+
+func NewEngine(cfg *config.Config) *Engine {
+	// Default skills path if not set
+	if cfg.Skills.Path == "" {
+		home, _ := os.UserHomeDir()
+		cfg.Skills.Path = filepath.Join(home, config.DirName, "skills")
+	}
+	return &Engine{
+		cfg: cfg,
+	}
+}
+
+func (e *Engine) Sync(ctx context.Context) error {
+	if e.cfg.Skills.Repo == "" {
+		return nil // No skills repo configured
+	}
+
+	skillsPath := e.cfg.Skills.Path
+	if _, err := os.Stat(skillsPath); os.IsNotExist(err) {
+		// Clone the repo
+		if err := os.MkdirAll(filepath.Dir(skillsPath), 0755); err != nil {
+			return fmt.Errorf("failed to create skills directory: %w", err)
+		}
+		cmd := exec.CommandContext(ctx, "git", "clone", e.cfg.Skills.Repo, skillsPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to clone skills repo: %w\nOutput: %s", err, string(output))
+		}
+	} else {
+		// Update the repo
+		cmd := exec.CommandContext(ctx, "git", "-C", skillsPath, "pull")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to update skills repo: %w\nOutput: %s", err, string(output))
+		}
+	}
+
+	return nil
+}
+
+func (e *Engine) ListSkills() ([]domain.Skill, error) {
+	skillsPath := e.cfg.Skills.Path
+	if _, err := os.Stat(skillsPath); os.IsNotExist(err) {
+		return nil, nil // Skills repo not yet synced
+	}
+
+	var skills []domain.Skill
+
+	// Read directories to find skills
+	err := filepath.Walk(skillsPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Detect skill type by extension
+		ext := filepath.Ext(path)
+		var skillType domain.SkillType
+		switch ext {
+		case ".md", ".txt":
+			skillType = domain.SkillTypePrompt
+		case ".sh":
+			skillType = domain.SkillTypeAlias
+		case ".json":
+			skillType = domain.SkillTypeTool
+		default:
+			return nil // Unknown extension
+		}
+
+		relPath, _ := filepath.Rel(skillsPath, path)
+		skills = append(skills, domain.Skill{
+			Name:        strings.TrimSuffix(info.Name(), ext),
+			Path:        path,
+			Description: fmt.Sprintf("%s skill from %s", skillType, relPath),
+			Type:        skillType,
+		})
+
+		return nil
+	})
+
+	return skills, err
+}
+
+func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill) (string, error) {
+	if len(selectedSkills) == 0 {
+		return agent.Command, nil
+	}
+
+	// For Claude Code, we can create a custom .clauderc on the remote side
+	if strings.Contains(strings.ToLower(agent.Name), "claude") {
+		return e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills)
+	}
+
+	// For Gemini, we can set environment variables or initial prompts
+	if strings.Contains(strings.ToLower(agent.Name), "gemini") {
+		return e.prepareGemini(ctx, remote, worktreePath, agent, selectedSkills)
+	}
+
+	// Default: No special injection implemented yet for this agent
+	return agent.Command, nil
+}
+
+func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill) (string, error) {
+	var prompts []string
+	for _, s := range selectedSkills {
+		if s.Type == domain.SkillTypePrompt {
+			content, err := os.ReadFile(s.Path)
+			if err == nil {
+				prompts = append(prompts, string(content))
+			}
+		}
+	}
+
+	if len(prompts) == 0 {
+		return agent.Command, nil
+	}
+
+	// Concatenate prompts and escape for shell
+	systemPrompt := strings.Join(prompts, "\n\n")
+	
+	// Create a remote file with the system prompt
+	remotePromptPath := filepath.Join(worktreePath, ".aiman_prompt")
+	cmd := fmt.Sprintf("printf %%s %q > %s", systemPrompt, remotePromptPath)
+	if _, err := remote.Execute(ctx, cmd); err != nil {
+		return "", fmt.Errorf("failed to upload system prompt to remote: %w", err)
+	}
+
+	// Wrap the agent command. For Claude Code, it might use a CLI flag to load a system prompt.
+	// Assuming `claude --prompt-file .aiman_prompt` or similar.
+	// If not supported, we can inject it into stdin, but that's harder for an interactive CLI.
+	// For now, let's assume it's an environment variable.
+	return fmt.Sprintf("SYSTEM_PROMPT_FILE=%s %s", remotePromptPath, agent.Command), nil
+}
+
+func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill) (string, error) {
+	var prompts []string
+	for _, s := range selectedSkills {
+		if s.Type == domain.SkillTypePrompt {
+			content, err := os.ReadFile(s.Path)
+			if err == nil {
+				prompts = append(prompts, string(content))
+			}
+		}
+	}
+
+	if len(prompts) == 0 {
+		return agent.Command, nil
+	}
+
+	systemPrompt := strings.Join(prompts, "\n\n")
+	remotePromptPath := filepath.Join(worktreePath, ".aiman_gemini_prompt")
+	cmd := fmt.Sprintf("printf %%s %q > %s", systemPrompt, remotePromptPath)
+	if _, err := remote.Execute(ctx, cmd); err != nil {
+		return "", fmt.Errorf("failed to upload gemini prompt to remote: %w", err)
+	}
+
+	return fmt.Sprintf("GEMINI_SYSTEM_INSTRUCTION_FILE=%s %s", remotePromptPath, agent.Command), nil
+}

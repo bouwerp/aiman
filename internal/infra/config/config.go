@@ -18,8 +18,14 @@ type Config struct {
 	Integrations Integrations `yaml:"integrations"`
 	Git          GitConfig    `yaml:"git,omitempty"`
 	Features     FeatureFlags `yaml:"features,omitempty"`
+	Skills       SkillsConfig `yaml:"skills,omitempty"`
 	Remotes      []Remote     `yaml:"remotes"`
 	ActiveRemote string       `yaml:"active_remote"`
+}
+
+type SkillsConfig struct {
+	Repo string `yaml:"repo"`
+	Path string `yaml:"path,omitempty"`
 }
 
 type Integrations struct {

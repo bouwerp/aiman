@@ -153,41 +153,12 @@ func (m SummaryModel) GetAgent() *domain.Agent {
 	return m.agent
 }
 
-func (m SummaryModel) GetSessionConfig() SessionConfig {
-	return SessionConfig{
+func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
+	return domain.SessionConfig{
 		IssueKey:  m.issueKey,
 		Branch:    m.branch,
 		Repo:      m.repo,
 		Directory: m.directory,
 		Agent:     m.agent,
 	}
-}
-
-// SessionConfig holds the configuration for creating a new session.
-type SessionConfig struct {
-	IssueKey  string
-	Branch    string
-	Repo      domain.Repo
-	Directory string
-	Agent     *domain.Agent
-}
-
-func (c SessionConfig) String() string {
-	var parts []string
-	if c.IssueKey != "" {
-		parts = append(parts, fmt.Sprintf("issue=%s", c.IssueKey))
-	}
-	if c.Branch != "" {
-		parts = append(parts, fmt.Sprintf("branch=%s", c.Branch))
-	}
-	if c.Repo.Name != "" {
-		parts = append(parts, fmt.Sprintf("repo=%s", c.Repo.Name))
-	}
-	if c.Directory != "" {
-		parts = append(parts, fmt.Sprintf("dir=%s", c.Directory))
-	}
-	if c.Agent != nil {
-		parts = append(parts, fmt.Sprintf("agent=%s", c.Agent.Name))
-	}
-	return strings.Join(parts, ", ")
 }

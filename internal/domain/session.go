@@ -99,3 +99,13 @@ type SessionRepository interface {
 	Delete(ctx context.Context, id string) error
 	Close() error
 }
+
+// SessionConfig holds the configuration for creating a new session.
+type SessionConfig struct {
+	IssueKey  string
+	Branch    string
+	Repo      Repo
+	Directory string
+	Agent     *Agent
+	Skills    []Skill
+}

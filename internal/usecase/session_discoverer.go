@@ -34,6 +34,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 
 	sessions := []domain.Session{}
 	seenWorktrees := make(map[string]bool)
+	seenTmuxNames := make(map[string]bool)
 	seenMutagenIDs := make(map[string]bool)
 
 	// Process tmux sessions
@@ -41,6 +42,9 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		session := d.discoverSession(ctx, host, name, mutagenSessions)
 		if session.WorktreePath != "" {
 			seenWorktrees[session.WorktreePath] = true
+		}
+		if session.TmuxSession != "" {
+			seenTmuxNames[session.TmuxSession] = true
 		}
 		if session.MutagenSyncID != "" {
 			seenMutagenIDs[session.MutagenSyncID] = true
@@ -56,10 +60,11 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 			if err == nil {
 				for _, wtPath := range worktrees {
 					normalizedWT := normalizePath(wtPath)
-					if !seenWorktrees[normalizedWT] {
+					wtBase := filepath.Base(normalizedWT)
+					if !seenWorktrees[normalizedWT] && !seenTmuxNames[wtBase] {
 						// Found an orphaned worktree
 						session := domain.Session{
-							TmuxSession:  filepath.Base(normalizedWT),
+							TmuxSession:  wtBase,
 							RemoteHost:   host,
 							Status:       domain.SessionStatusInactive,
 							WorktreePath: normalizedWT,
@@ -94,6 +99,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 
 						sessions = append(sessions, session)
 						seenWorktrees[normalizedWT] = true
+						seenTmuxNames[wtBase] = true
 					}
 				}
 			}
@@ -150,33 +156,40 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 		CreatedAt:   time.Now(), // Approximate
 	}
 
-	// 3. Get CWD
+	// 3. Get CWD and Git Root
 	cwd, err := d.remoteExecutor.GetTmuxSessionCWD(ctx, name)
 	if err == nil {
-		session.WorktreePath = normalizePath(cwd)
+		normalizedCWD := normalizePath(cwd)
+		// Try to find the git root of the CWD
+		gitRoot, err := d.remoteExecutor.GetGitRoot(ctx, normalizedCWD)
+		if err == nil {
+			session.WorktreePath = normalizePath(gitRoot)
+		} else {
+			session.WorktreePath = normalizedCWD
+		}
 	}
 
 	// 4. Extract JIRA key from session name
 	key := domain.ExtractKey(name)
-	if key == "" && cwd != "" {
-		// Try extracting from CWD path
-		key = domain.ExtractKey(cwd)
+	if key == "" && session.WorktreePath != "" {
+		// Try extracting from WorktreePath
+		key = domain.ExtractKey(session.WorktreePath)
 	}
 	session.IssueKey = key
 
-	// 5. Try to determine repo name from CWD
-	if cwd != "" {
-		parts := strings.Split(cwd, "/")
+	// 5. Try to determine repo name from WorktreePath
+	if session.WorktreePath != "" {
+		parts := strings.Split(session.WorktreePath, "/")
 		if len(parts) > 0 {
 			session.RepoName = parts[len(parts)-1]
 		}
 	}
 
 	// 6. Cross-reference with mutagen
-	if cwd != "" {
-		normalizedCWD := normalizePath(cwd)
+	if session.WorktreePath != "" {
+		normalizedPath := session.WorktreePath
 		for _, ms := range mutagenSessions {
-			if d.isSessionMatch(session, ms, normalizedCWD) {
+			if d.isSessionMatch(session, ms, normalizedPath) {
 				// We need to identify which one is actually local
 				if !strings.Contains(ms.LocalPath, ":") {
 					session.LocalPath = normalizePath(ms.LocalPath)
@@ -193,7 +206,7 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 	return session
 }
 
-func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.SyncSession, normalizedCWD string) bool {
+func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.SyncSession, normalizedPath string) bool {
 	// Prefer name-based match if present
 	if session.TmuxSession != "" && ms.Name == session.TmuxSession {
 		return true
@@ -204,8 +217,8 @@ func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.Syn
 	normalizedLocal := normalizePath(ms.LocalPath)
 
 	// In Mutagen, either Alpha or Beta could be the remote.
-	return normalizedRemote == normalizedCWD || normalizedLocal == normalizedCWD ||
-		strings.HasSuffix(normalizedRemote, normalizedCWD) || strings.HasSuffix(normalizedLocal, normalizedCWD)
+	return normalizedRemote == normalizedPath || normalizedLocal == normalizedPath ||
+		strings.HasSuffix(normalizedRemote, normalizedPath) || strings.HasSuffix(normalizedLocal, normalizedPath)
 }
 
 func normalizePath(p string) string {

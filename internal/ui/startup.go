@@ -19,6 +19,7 @@ type StartupModel struct {
 	cfg           *config.Config
 	doctor        *usecase.Doctor
 	db            domain.SessionRepository
+	flowManager   *usecase.FlowManager
 	spinner       spinner.Model
 	loadingMsg    string
 	results       []usecase.CheckResult
@@ -30,19 +31,20 @@ type StartupModel struct {
 	pending       int
 }
 
-func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor, db domain.SessionRepository) StartupModel {
+func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor, db domain.SessionRepository, flowManager *usecase.FlowManager) StartupModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	return StartupModel{
-		cfg:        cfg,
-		doctor:     doctor,
-		db:         db,
-		spinner:    s,
-		loadingMsg: "Initializing Aiman...",
-		checks:     make(map[string]*usecase.CheckResult),
-		pending:    4,
+		cfg:         cfg,
+		doctor:      doctor,
+		db:          db,
+		flowManager: flowManager,
+		spinner:     s,
+		loadingMsg:  "Initializing Aiman...",
+		checks:      make(map[string]*usecase.CheckResult),
+		pending:     4,
 	}
 }
 
@@ -136,7 +138,7 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 	}
 
-	if m.pending == 0 {
+	if m.pending <= 0 {
 		m.ready = true
 
 		// Load sessions from database and merge with discovered sessions
@@ -161,7 +163,7 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessions = merged
 		}
 
-		mainModel := NewModel(m.cfg, m.results, m.sessions, m.db)
+		mainModel := NewModel(m.cfg, m.results, m.sessions, m.db, m.flowManager)
 		if m.width > 0 && m.height > 0 {
 			mainModel.SetSize(m.width, m.height)
 		}

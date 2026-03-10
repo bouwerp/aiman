@@ -25,7 +25,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/google/uuid"
 )
 
 var (
@@ -149,7 +148,7 @@ type Model struct {
 	termCloser             io.Closer
 	lastError              string
 	loadingMsg             string
-	sessionCfg             SessionConfig
+	sessionCfg             domain.SessionConfig
 	loadingNext            viewState
 	initialLoad            bool
 	terminateSession       domain.Session
@@ -163,9 +162,10 @@ type Model struct {
 	gitStatus              domain.GitStatus
 	lastGitStatusUpdate    time.Time
 	restartingSession      *domain.Session
+	flowManager            *usecase.FlowManager
 }
 
-func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository) *Model {
+func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager) *Model {
 	items := make([]list.Item, len(initialSessions))
 	for i, s := range initialSessions {
 		items[i] = item{session: s, needsInput: false, activity: ""}
@@ -206,6 +206,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	return &Model{
 		cfg:           cfg,
 		db:            db,
+		flowManager:   flowManager,
 		state:         viewStateMain,
 		panelMode:     panelModePreview,
 		list:          l,
@@ -683,8 +684,22 @@ func (m *Model) fetchAgents() tea.Cmd {
 func (m *Model) createSession() tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
+		
+		// Use FlowManager to create the session
+		session, err := m.flowManager.CreateSession(ctx, m.sessionCfg)
+		if err != nil {
+			return sessionCreateMsg{err: err}
+		}
 
-		// Find remote config
+		// Mutagen sync still needs to be handled here or in FlowManager
+		// For now, let's keep it here but we could move it to FlowManager too.
+		// Start mutagen sync
+		mutagenEngine := mutagen.NewEngine()
+		home, _ := os.UserHomeDir()
+		tmuxName := session.TmuxSession
+		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, tmuxName)
+		
+		// Find remote config for mutagen
 		var remote config.Remote
 		for _, r := range m.cfg.Remotes {
 			if r.Host == m.cfg.ActiveRemote {
@@ -692,192 +707,28 @@ func (m *Model) createSession() tea.Cmd {
 				break
 			}
 		}
-
-		if remote.Host == "" {
-			return sessionCreateMsg{err: fmt.Errorf("no active remote configured")}
-		}
-
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-
-		var resolvedWorktreePath string
-		var tmuxName string
-		branch := m.sessionCfg.Branch
-		worktreeDir := strings.ReplaceAll(branch, "/", "-")
-		tmuxName = worktreeDir
-
-		if m.sessionCfg.Repo.URL != "" {
-			repoName := extractRepoName(m.sessionCfg.Repo.Name)
-			repoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
-
-			// Create repo if it's new
-			if m.sessionCfg.Repo.IsNew {
-				m.log("Creating new repository: %s", m.sessionCfg.Repo.Name)
-				// gh repo create <name> --public --add-readme (or similar)
-				// We'll create it and push an initial commit if needed
-				createCmd := fmt.Sprintf("gh repo create %s --public", m.sessionCfg.Repo.Name)
-				_, err := mgr.Execute(ctx, createCmd)
-				if err != nil {
-					return sessionCreateMsg{err: fmt.Errorf("failed to create repository: %w", err)}
-				}
-
-				// Get the URL of the new repo
-				urlCmd := fmt.Sprintf("gh repo view %s --json url -q .url", m.sessionCfg.Repo.Name)
-				url, err := mgr.Execute(ctx, urlCmd)
-				if err != nil {
-					return sessionCreateMsg{err: fmt.Errorf("failed to get repository URL: %w", err)}
-				}
-				m.sessionCfg.Repo.URL = strings.TrimSpace(url)
-
-				// Initialize the repo locally on remote if it doesn't exist as a directory yet
-				if err := mgr.ValidateDir(ctx, repoPath); err != nil {
-					// Use environment variables for the initial commit to avoid "Author identity unknown" errors
-					// We use the email from JIRA config as a reasonable default
-					authorName := "Aiman Bot"
-					authorEmail := m.cfg.Integrations.Jira.Email
-					if authorEmail == "" {
-						authorEmail = "aiman@example.com"
-					}
-
-					initCmd := fmt.Sprintf("mkdir -p %s && cd %s && git init && git remote add origin %s && touch README.md && git add README.md && GIT_AUTHOR_NAME=%q GIT_AUTHOR_EMAIL=%q GIT_COMMITTER_NAME=%q GIT_COMMITTER_EMAIL=%q git commit -m 'Initial commit' && git branch -M main && git push -u origin main",
-						repoPath, repoPath, m.sessionCfg.Repo.URL, authorName, authorEmail, authorName, authorEmail)
-					_, err := mgr.Execute(ctx, initCmd)
-					if err != nil {
-						return sessionCreateMsg{err: fmt.Errorf("failed to initialize repository: %w", err)}
-					}
-				}
-			}
-
-			// Ensure repo exists
-			if err := mgr.ValidateDir(ctx, repoPath); err != nil {
-				_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remote.Root, m.sessionCfg.Repo.URL, repoName))
-				if cloneErr != nil {
-					return sessionCreateMsg{err: fmt.Errorf("failed to clone repository: %w", cloneErr)}
-				}
-			}
-
-			// Fetch latest
-			_, fetchErr := mgr.Execute(ctx, fmt.Sprintf("git -C %s fetch origin", repoPath))
-			if fetchErr != nil {
-				return sessionCreateMsg{err: fmt.Errorf("failed to fetch repo: %w", fetchErr)}
-			}
-
-			worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
-
-			// Check if worktree already exists
-			checkCmd := fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)
-			checkOut, _ := mgr.Execute(ctx, checkCmd)
-			if strings.Contains(checkOut, "EXISTS") {
-				return sessionCreateMsg{err: fmt.Errorf("WORKTREE_EXISTS")}
-			}
-
-			// Determine base branch
-			var baseBranch string
-			for _, b := range []string{"origin/main", "origin/master", "main", "master"} {
-				if _, err := mgr.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --verify %s", repoPath, b)); err == nil {
-					baseBranch = b
-					break
-				}
-			}
-
-			if baseBranch == "" {
-				// No branches found, this is likely an empty repository
-				m.log("No base branch found, initializing main branch")
-				authorName := "Aiman Bot"
-				authorEmail := m.cfg.Integrations.Jira.Email
-				if authorEmail == "" {
-					authorEmail = "aiman@example.com"
-				}
-
-				// Initialize with an initial commit if repo is truly empty
-				initCmd := fmt.Sprintf("cd %s && git checkout -b main && touch .gitignore && git add .gitignore && GIT_AUTHOR_NAME=%q GIT_AUTHOR_EMAIL=%q GIT_COMMITTER_NAME=%q GIT_COMMITTER_EMAIL=%q git commit -m 'Initial commit' && git push -u origin main",
-					repoPath, authorName, authorEmail, authorName, authorEmail)
-				if _, err := mgr.Execute(ctx, initCmd); err == nil {
-					baseBranch = "main"
-				} else {
-					// If that also fails, we're in trouble, but let's try one last thing
-					baseBranch = "master"
-				}
-			}
-
-			// Create worktree from determined base
-			worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s ../%s %s", repoPath, branch, worktreeDir, baseBranch)
-			_, worktreeErr := mgr.Execute(ctx, worktreeCmd)
-			if worktreeErr != nil {
-				return sessionCreateMsg{err: fmt.Errorf("failed to create worktree: %w", worktreeErr)}
-			}
-
-			// Resolve worktree path on remote to avoid ../ in paths
-			resolvedWorktreePath = worktreePath
-			if out, err := mgr.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
-				resolvedWorktreePath = strings.TrimSpace(out)
-			} else if out, err := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q", worktreePath)); err == nil {
-				resolvedWorktreePath = strings.TrimSpace(out)
-			}
-		} else {
-			// Ad-hoc session without a repository
-			resolvedWorktreePath = remote.Root
-		}
-
-		// Working directory
-		workingDir := resolvedWorktreePath
-		if m.sessionCfg.Directory != "" && m.sessionCfg.Directory != "." {
-			if m.sessionCfg.Repo.URL != "" {
-				workingDir = fmt.Sprintf("%s/%s", resolvedWorktreePath, m.sessionCfg.Directory)
-			} else {
-				// For no-repo sessions, Directory is relative to remote root
-				workingDir = fmt.Sprintf("%s/%s", remote.Root, m.sessionCfg.Directory)
-			}
-		}
-
-		// Ensure working directory exists (it might be a new folder defined by user)
-		_, mkdirErr := mgr.Execute(ctx, fmt.Sprintf("mkdir -p %q", workingDir))
-		if mkdirErr != nil {
-			return sessionCreateMsg{err: fmt.Errorf("failed to create working directory: %w", mkdirErr)}
-		}
-
-		// Start tmux session and agent
-		agentCmd := m.sessionCfg.Agent.Command
-		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q %q", tmuxName, workingDir, agentCmd)
-		_, tmuxErr := mgr.Execute(ctx, startCmd)
-		if tmuxErr != nil {
-			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}
-		}
-
-		// Start mutagen sync
-		mutagenEngine := mutagen.NewEngine()
-		home, _ := os.UserHomeDir()
-		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, tmuxName)
+		
 		target := remote.Host
 		if remote.User != "" {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
 		}
-		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
-		if err := mutagenEngine.StartSync(ctx, localSyncPath, remoteSyncPath); err != nil {
-			return sessionCreateMsg{err: fmt.Errorf("failed to start mutagen sync: %w", err)}
+
+		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorktreePath)
+		syncErr := mutagenEngine.StartSync(ctx, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorktreePath))
+		if syncErr == nil {
+			session.MutagenSyncID = tmuxName
+			session.LocalPath = localSyncPath
+			_ = session.Transition(domain.SessionStatusSyncing)
+		} else {
+			m.log("Warning: failed to start mutagen sync: %v", syncErr)
 		}
 
-		session := domain.Session{
-			ID:            uuid.New().String(),
-			IssueKey:      m.sessionCfg.IssueKey,
-			Branch:        branch,
-			RepoName:      m.sessionCfg.Repo.Name,
-			RemoteHost:    remote.Host,
-			WorktreePath:  resolvedWorktreePath,
-			TmuxSession:   tmuxName,
-			MutagenSyncID: tmuxName,
-			LocalPath:     localSyncPath,
-			AgentName:     m.sessionCfg.Agent.Name,
-			Status:        domain.SessionStatusSyncing,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
-		}
-
-		// Persist session
+		// Save to DB
 		if m.db != nil {
-			_ = m.db.Save(ctx, &session)
+			_ = m.db.Save(ctx, session)
 		}
 
-		return sessionCreateMsg{session: session}
+		return sessionCreateMsg{session: *session}
 	}
 }
 
@@ -1648,7 +1499,7 @@ end tell`, s.LocalPath)
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
 			m.restartingSession = &s
-			m.sessionCfg = SessionConfig{
+			m.sessionCfg = domain.SessionConfig{
 				IssueKey:  s.IssueKey,
 				Branch:    s.Branch,
 				Repo:      domain.Repo{Name: s.RepoName, URL: ""},

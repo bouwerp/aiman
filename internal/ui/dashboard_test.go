@@ -45,7 +45,7 @@ func TestWorktreeExistsErrorHandling(t *testing.T) {
 	cfg := &config.Config{}
 	db := &mockSessionRepo{}
 
-	model := NewModel(cfg, []usecase.CheckResult{}, []domain.Session{}, db)
+	model := NewModel(cfg, []usecase.CheckResult{}, []domain.Session{}, db, nil)
 	model.state = viewStateLoading // Set initial state
 
 	// Simulate receiving a sessionCreateMsg with WORKTREE_EXISTS error
@@ -95,7 +95,7 @@ func TestWorktreeExistsStateKeyHandling(t *testing.T) {
 			cfg := &config.Config{}
 			db := &mockSessionRepo{}
 
-			model := NewModel(cfg, []usecase.CheckResult{}, []domain.Session{}, db)
+			model := NewModel(cfg, []usecase.CheckResult{}, []domain.Session{}, db, nil)
 			model.state = viewStateWorktreeExists
 			model.sessionCfg.Branch = tt.setupBranch
 
@@ -131,7 +131,7 @@ func TestWorktreeExistsOtherKeysIgnored(t *testing.T) {
 	cfg := &config.Config{}
 	db := &mockSessionRepo{}
 
-	model := NewModel(cfg, []usecase.CheckResult{}, []domain.Session{}, db)
+	model := NewModel(cfg, []usecase.CheckResult{}, []domain.Session{}, db, nil)
 	model.state = viewStateWorktreeExists
 	model.sessionCfg.Branch = "feature/test"
 
@@ -152,7 +152,7 @@ func TestNonWorktreeExistsErrorHandling(t *testing.T) {
 	cfg := &config.Config{}
 	db := &mockSessionRepo{}
 
-	model := NewModel(cfg, []usecase.CheckResult{}, []domain.Session{}, db)
+	model := NewModel(cfg, []usecase.CheckResult{}, []domain.Session{}, db, nil)
 	model.state = viewStateLoading
 
 	// Simulate receiving a sessionCreateMsg with a different error

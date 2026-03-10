@@ -175,6 +175,84 @@ func (m *Manager) SetupWorktree(ctx context.Context, repo domain.Repo, branch st
 	}, nil
 }
 
+func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
+	worktreeDir := strings.ReplaceAll(branch, "/", "-")
+	repoName := extractRepoName(repo.Name)
+	remoteRoot := remote.GetRoot()
+	if remoteRoot == "" {
+		return domain.Worktree{}, fmt.Errorf("remote root not configured")
+	}
+
+	repoPath := fmt.Sprintf("%s/%s", remoteRoot, repoName)
+	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
+
+	// Ensure repo exists
+	if err := remote.ValidateDir(ctx, repoPath); err != nil {
+		if repo.URL != "" {
+			_, cloneErr := remote.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remoteRoot, repo.URL, repoName))
+			if cloneErr != nil {
+				return domain.Worktree{}, fmt.Errorf("failed to clone repository: %w", cloneErr)
+			}
+		} else {
+			return domain.Worktree{}, fmt.Errorf("repository %s not found on remote and no URL provided", repoName)
+		}
+	}
+
+	// Fetch latest
+	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s fetch origin", repoPath))
+
+	// Check if worktree already exists
+	checkCmd := fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)
+	checkOut, _ := remote.Execute(ctx, checkCmd)
+	if strings.Contains(checkOut, "EXISTS") {
+		// Use realpath to resolve worktree path
+		resolvedPath := worktreePath
+		if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
+			resolvedPath = strings.TrimSpace(out)
+		}
+		return domain.Worktree{
+			Path:   resolvedPath,
+			Branch: branch,
+		}, nil
+	}
+
+	// Determine base branch
+	var baseBranch string
+	for _, b := range []string{"origin/main", "origin/master", "main", "master"} {
+		if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --verify %s", repoPath, b)); err == nil {
+			baseBranch = b
+			break
+		}
+	}
+
+	if baseBranch == "" {
+		baseBranch = "main" // Fallback
+	}
+
+	// Create worktree
+	worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s ../%s %s", repoPath, branch, worktreeDir, baseBranch)
+	_, worktreeErr := remote.Execute(ctx, worktreeCmd)
+	if worktreeErr != nil {
+		return domain.Worktree{}, fmt.Errorf("failed to create worktree: %w", worktreeErr)
+	}
+
+	// Resolve worktree path
+	resolvedPath := worktreePath
+	if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
+		resolvedPath = strings.TrimSpace(out)
+	}
+
+	return domain.Worktree{
+		Path:   resolvedPath,
+		Branch: branch,
+	}, nil
+}
+
+func extractRepoName(fullName string) string {
+	parts := strings.Split(fullName, "/")
+	return parts[len(parts)-1]
+}
+
 // FetchOrganizations returns a list of organizations the user has access to
 func FetchOrganizations(ctx context.Context) ([]string, error) {
 	cmd := exec.CommandContext(ctx, "gh", "org", "list", "--limit", "100")

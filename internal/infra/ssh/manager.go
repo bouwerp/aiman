@@ -53,6 +53,10 @@ func (m *Manager) Connect(ctx context.Context) error {
 	return nil
 }
 
+func (m *Manager) GetRoot() string {
+	return m.config.Root
+}
+
 func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	target := m.target()
 	cp := m.controlPath()
@@ -152,6 +156,16 @@ func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string,
 		}
 	}
 	return worktrees, nil
+}
+
+func (m *Manager) GetGitRoot(ctx context.Context, path string) (string, error) {
+	// git -C <path> rev-parse --show-toplevel
+	cmd := fmt.Sprintf("git -C %q rev-parse --show-toplevel", path)
+	output, err := m.Execute(ctx, cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to get git root for %s: %w", path, err)
+	}
+	return strings.TrimSpace(output), nil
 }
 
 func (m *Manager) GetTmuxSessionCWD(ctx context.Context, sessionName string) (string, error) {

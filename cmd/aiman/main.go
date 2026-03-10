@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
+	"github.com/bouwerp/aiman/internal/infra/skills"
+	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/ui"
 	"github.com/bouwerp/aiman/internal/usecase"
@@ -56,7 +59,24 @@ func run() error {
 	gitManager := git.NewManager(&cfg.Git)
 	doctor := usecase.NewDoctor(cfg, jiraProvider, gitManager)
 
-	// 5. Handle commands
+	// 5. Initialize Flow Manager and Skill Engine
+	var remote config.Remote
+	for _, r := range cfg.Remotes {
+		if r.Host == cfg.ActiveRemote {
+			remote = r
+			break
+		}
+	}
+	sshManager := ssh.NewManager(ssh.Config{
+		Host: remote.Host,
+		User: remote.User,
+		Root: remote.Root,
+	})
+	skillEngine := skills.NewEngine(cfg)
+	slugger := domain.NewGitSlugger()
+	flowManager := usecase.NewFlowManager(jiraProvider, gitManager, sshManager, slugger, skillEngine)
+
+	// 6. Handle commands
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "init":
@@ -78,8 +98,8 @@ func run() error {
 		}
 	}
 
-	// 6. Start TUI with StartupModel (Splash screen)
-	p := tea.NewProgram(ui.NewStartupModel(cfg, doctor, db), tea.WithAltScreen())
+	// 7. Start TUI with StartupModel (Splash screen)
+	p := tea.NewProgram(ui.NewStartupModel(cfg, doctor, db, flowManager), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("alas, there's been an error: %w", err)
 	}
