@@ -116,11 +116,7 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 
 	// For OpenCode
 	if strings.Contains(name, "opencode") {
-		cmd := agent.Command
-		if promptFree {
-			cmd = fmt.Sprintf("%s --yolo", cmd)
-		}
-		return cmd, nil
+		return agent.Command, nil
 	}
 
 	// For Cursor
@@ -137,11 +133,7 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	cmd := agent.Command
 	if promptFree {
 		if strings.Contains(name, "copilot") {
-			// gh copilot doesn't have a standard yolo flag for the chat, 
-			// but we'll leave it as is or add --yes if we suspect it works.
-		} else {
-			// Generic fallback for unknown agents
-			cmd = fmt.Sprintf("%s --yes", cmd)
+			// gh copilot doesn't have a standard yolo flag for the chat
 		}
 	}
 
