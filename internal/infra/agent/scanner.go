@@ -33,7 +33,7 @@ var knownAgents = []domain.Agent{
 	},
 	{
 		Name:        "Cursor",
-		Command:     "cursor",
+		Command:     "cursor-agent",
 		Description: "Cursor AI Code Editor CLI",
 	},
 }
@@ -123,7 +123,7 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 
 		// Special fallbacks for Cursor
 		if !found && agent.Name == "Cursor" {
-			fallbacks := []string{"cursor-tui", "cursor"}
+			fallbacks := []string{"cursor-agent", "cursor-tui", "cursor"}
 			for _, fb := range fallbacks {
 				if fb == agent.Command {
 					continue
