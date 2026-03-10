@@ -2319,7 +2319,7 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
-		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q %q", s.TmuxSession, workingDir, agentCmd)
+		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q \"bash -lc %q\"", s.TmuxSession, workingDir, agentCmd)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}

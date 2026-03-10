@@ -83,6 +83,44 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	return string(output), nil
 }
 
+func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) error {
+	target := m.target()
+	cp := m.controlPath()
+
+	// Ensure sockets directory exists
+	if err := os.MkdirAll(filepath.Dir(cp), 0700); err != nil {
+		return fmt.Errorf("failed to create sockets directory: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPersist=10m",
+		"-S", cp,
+		target, fmt.Sprintf("cat > %q", path))
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdin pipe for ssh: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start ssh for WriteFile: %w", err)
+	}
+
+	if _, err := stdin.Write(content); err != nil {
+		return fmt.Errorf("failed to write content to ssh stdin: %w", err)
+	}
+	stdin.Close()
+
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("ssh Wait failed for WriteFile: %w", err)
+	}
+
+	return nil
+}
+
 func (m *Manager) ValidateDir(ctx context.Context, path string) error {
 	// Use 'test -d' which is more standard. Quote the path to handle spaces.
 	cmd := fmt.Sprintf("test -d %q", path)

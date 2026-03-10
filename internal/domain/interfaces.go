@@ -25,6 +25,7 @@ type RemoteExecutor interface {
 	Connect(ctx context.Context) error
 	GetRoot() string
 	Execute(ctx context.Context, cmd string) (string, error)
+	WriteFile(ctx context.Context, path string, content []byte) error
 	ValidateDir(ctx context.Context, path string) error
 	ScanTmuxSessions(ctx context.Context) ([]string, error)
 	ScanGitRepos(ctx context.Context) ([]string, error)

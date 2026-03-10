@@ -165,8 +165,7 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 	
 	// Create a remote file with the system prompt
 	remotePromptPath := filepath.Join(worktreePath, ".aiman_prompt")
-	uploadCmd := fmt.Sprintf("printf %%s %q > %s", systemPrompt, remotePromptPath)
-	if _, err := remote.Execute(ctx, uploadCmd); err != nil {
+	if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
 		return "", fmt.Errorf("failed to upload system prompt to remote: %w", err)
 	}
 
@@ -199,8 +198,7 @@ func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor
 
 	systemPrompt := strings.Join(prompts, "\n\n")
 	remotePromptPath := filepath.Join(worktreePath, ".aiman_gemini_prompt")
-	uploadCmd := fmt.Sprintf("printf %%s %q > %s", systemPrompt, remotePromptPath)
-	if _, err := remote.Execute(ctx, uploadCmd); err != nil {
+	if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
 		return "", fmt.Errorf("failed to upload gemini prompt to remote: %w", err)
 	}
 
