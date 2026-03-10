@@ -2303,7 +2303,7 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		// 1. Kill existing tmux session if it exists
-		mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %s", s.TmuxSession))
+		mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
 
 		// 2. Terminate existing mutagen sync if it exists
 		// We ignore errors here because it might not exist
@@ -2319,7 +2319,7 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
-		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q \"bash -lc %q\"", s.TmuxSession, workingDir, agentCmd)
+		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q 'bash -lc %s'", s.TmuxSession, workingDir, strconv.Quote(agentCmd))
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}

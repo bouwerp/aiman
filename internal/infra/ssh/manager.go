@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -208,7 +209,7 @@ func (m *Manager) GetGitRoot(ctx context.Context, path string) (string, error) {
 
 func (m *Manager) GetTmuxSessionCWD(ctx context.Context, sessionName string) (string, error) {
 	// tmux display-message -p -F "#{pane_current_path}" -t <sessionName>
-	cmd := fmt.Sprintf("tmux display-message -p -F '#{pane_current_path}' -t %s", sessionName)
+	cmd := fmt.Sprintf("tmux display-message -p -F '#{pane_current_path}' -t %q", sessionName)
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to get tmux session CWD: %w", err)
@@ -218,10 +219,31 @@ func (m *Manager) GetTmuxSessionCWD(ctx context.Context, sessionName string) (st
 
 func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (string, error) {
 	// Capture the visible pane and scrollback buffer (-S -)
-	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S - -t %s", sessionName)
-	output, err := m.Execute(ctx, cmdStr)
+	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S - -t %q", sessionName)
+	
+	var output string
+	var err error
+	
+	// Retry up to 3 times with small delay if session is not found
+	// This handles race conditions where tmux session was just created
+	for i := 0; i < 3; i++ {
+		output, err = m.Execute(ctx, cmdStr)
+		if err == nil {
+			break
+		}
+		if !strings.Contains(output, "can't find pane") && !strings.Contains(output, "failed to connect to server") {
+			return "", fmt.Errorf("failed to capture tmux pane: %w", err)
+		}
+		// Wait a bit before retry
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	
 	if err != nil {
-		return "", fmt.Errorf("failed to capture tmux pane: %w", err)
+		return "", fmt.Errorf("failed to capture tmux pane after retries: %w", err)
 	}
 
 	// Trim trailing empty lines for cleaner preview

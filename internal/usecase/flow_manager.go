@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,7 +92,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
 	// Start tmux session with the agent wrapped in a login shell
 	// This ensures env vars like SYSTEM_PROMPT_FILE and path to binaries are handled correctly.
-	startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q \"bash -lc %q\"", tmuxName, workingDir, agentCmd)
+	startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q 'bash -lc %s'", tmuxName, workingDir, strconv.Quote(agentCmd))
 	_, err = m.sshManager.Execute(ctx, startCmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start tmux session: %w", err)
