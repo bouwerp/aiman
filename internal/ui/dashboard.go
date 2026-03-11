@@ -628,7 +628,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		mutagenEngine := mutagen.NewEngine()
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, remoteSyncDir)
 		labels := map[string]string{"aiman-id": s.ID}
-		if err := mutagenEngine.StartSync(ctx, localPath, remoteSyncPath, labels); err != nil {
+		if err := mutagenEngine.StartSync(ctx, syncName, localPath, remoteSyncPath, labels); err != nil {
 			return recreateMutagenMsg{err: fmt.Errorf("failed to recreate mutagen sync: %w", err)}
 		}
 
@@ -780,7 +780,7 @@ func (m *Model) createSession() tea.Cmd {
 
 		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorkingDirectory)
 		labels := map[string]string{"aiman-id": session.ID}
-		syncErr := mutagenEngine.StartSync(ctx, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory), labels)
+		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory), labels)
 		if syncErr == nil {
 			session.MutagenSyncID = syncName
 			session.LocalPath = localSyncPath
@@ -2540,7 +2540,7 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
 		labels := map[string]string{"aiman-id": s.ID}
-		if err := mutagenEngine.StartSync(ctx, localSyncPath, remoteSyncPath, labels); err != nil {
+		if err := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels); err != nil {
 			// We continue even if sync fails, but log it
 			m.log("Warning: failed to restart mutagen sync: %v", err)
 		}

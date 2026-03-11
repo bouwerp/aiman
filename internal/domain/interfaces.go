@@ -42,7 +42,7 @@ type RemoteExecutor interface {
 
 // SyncEngine manages file synchronization between local and remote.
 type SyncEngine interface {
-	StartSync(ctx context.Context, localPath, remotePath string, labels map[string]string) error
+	StartSync(ctx context.Context, name, localPath, remotePath string, labels map[string]string) error
 	StopSync(ctx context.Context) error
 	GetStatus(ctx context.Context) (string, error)
 	ListSyncSessions(ctx context.Context) ([]SyncSession, error)

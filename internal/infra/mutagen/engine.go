@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -19,7 +18,7 @@ func NewEngine() *Engine {
 	return &Engine{}
 }
 
-func (e *Engine) StartSync(ctx context.Context, localPath, remotePath string, labels map[string]string) error {
+func (e *Engine) StartSync(ctx context.Context, name, localPath, remotePath string, labels map[string]string) error {
 	// mutagen sync create --name <id> localPath remotePath
 	if localPath == "" || remotePath == "" {
 		return fmt.Errorf("invalid sync paths")
@@ -29,8 +28,6 @@ func (e *Engine) StartSync(ctx context.Context, localPath, remotePath string, la
 		return fmt.Errorf("failed to create local sync directory: %w", err)
 	}
 
-	name := filepath.Base(localPath)
-	
 	args := []string{"sync", "create", "--name", name}
 	for k, v := range labels {
 		// Label values must be no more than 63 characters and contain only alphanumeric, hyphens, and underscores.
