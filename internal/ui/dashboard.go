@@ -2236,23 +2236,26 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		items := m.list.Items()
-		if m.restartingSession != nil {
-			// Update existing session in the list
-			for i, it := range items {
-				if sessItem, ok := it.(item); ok && sessItem.session.TmuxSession == msg.session.TmuxSession {
-					sessItem.session = msg.session
-					items[i] = sessItem
-					m.list.Select(i)
-					break
-				}
+		found := false
+		// Update existing session in the list if it already exists (matches by ID)
+		for i, it := range items {
+			if sessItem, ok := it.(item); ok && sessItem.session.ID == msg.session.ID {
+				sessItem.session = msg.session
+				items[i] = sessItem
+				m.list.Select(i)
+				found = true
+				break
 			}
-			m.restartingSession = nil
-		} else {
+		}
+
+		if !found {
 			// Add new session to list
 			items = append(items, item{session: msg.session, needsInput: false, activity: ""})
 			m.list.Select(len(items) - 1)
 		}
+		
 		m.list.SetItems(items)
+		m.restartingSession = nil
 
 		// Fetch preview for the session
 		m.activeSession = msg.session.TmuxSession
