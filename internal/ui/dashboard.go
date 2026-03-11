@@ -566,12 +566,19 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
-		remoteSyncDir := s.WorktreePath
-		if s.TmuxSession != "" {
-			if cwd, err := mgr.GetTmuxSessionCWD(ctx, s.TmuxSession); err == nil && strings.TrimSpace(cwd) != "" {
-				remoteSyncDir = strings.TrimSpace(cwd)
+		// Use persisted WorkingDirectory if available, otherwise try to fetch from tmux or fallback to worktree
+		remoteSyncDir := s.WorkingDirectory
+		if remoteSyncDir == "" {
+			remoteSyncDir = s.WorktreePath
+			if s.TmuxSession != "" {
+				fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				if cwd, err := mgr.GetTmuxSessionCWD(fetchCtx, s.TmuxSession); err == nil && strings.TrimSpace(cwd) != "" {
+					remoteSyncDir = strings.TrimSpace(cwd)
+				}
+				cancel()
 			}
 		}
+
 		if remoteSyncDir == "" {
 			return recreateMutagenMsg{err: fmt.Errorf("session has no remote working directory")}
 		}
@@ -581,18 +588,27 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
 		}
 
-		syncName := s.TmuxSession
-		if syncName == "" {
-			syncName = filepath.Base(s.WorktreePath)
+		tmuxName := s.TmuxSession
+		if tmuxName == "" {
+			tmuxName = filepath.Base(s.WorktreePath)
 		}
+
+		// Use timestamped directory to prevent conflicts and data loss
+		timestamp := time.Now().Format("20060102-150405")
+		syncName := fmt.Sprintf("%s-%s", tmuxName, timestamp)
 		home, _ := os.UserHomeDir()
 		localPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, syncName)
+
+		m.log("Creating local sync path: %s", localPath)
+		if err := os.MkdirAll(localPath, 0755); err != nil {
+			m.log("Warning: failed to create local sync path: %v", err)
+		}
 
 		terminateCandidates := []string{
 			s.MutagenSyncID,
 			s.TmuxSession,
 			filepath.Base(s.LocalPath),
-			syncName,
+			tmuxName,
 		}
 		terminated := map[string]bool{}
 		for _, candidate := range terminateCandidates {
@@ -610,7 +626,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		}
 
 		s.LocalPath = localPath
-		s.WorktreePath = remoteSyncDir
+		s.WorkingDirectory = remoteSyncDir
 		s.MutagenSyncID = syncName
 		return recreateMutagenMsg{session: s}
 	}
@@ -1449,6 +1465,9 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.state = viewStateMenu
 		return m, nil, true
 	}
+	if msg.String() == "q" {
+		return m, tea.Quit, true
+	}
 	if msg.String() == "ctrl+c" {
 		if m.termCloser != nil {
 			m.termCloser.Close()
@@ -1603,10 +1622,10 @@ end tell`, s.LocalPath)
 			m.loadingNext = viewStateRestartAgentPicker
 			m.state = viewStateLoading
 			return m, m.fetchAgents(), true
-			}
-			}
-			if msg.String() == "c" {
-			if sel := m.list.SelectedItem(); sel != nil {
+		}
+	}
+	if msg.String() == "c" {
+		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
 			m.changingDirSession = &s
 			m.loadingMsg = "Scanning directories..."
@@ -1614,9 +1633,9 @@ end tell`, s.LocalPath)
 			m.state = viewStateLoading
 			// Fetch directories from the session's worktree root
 			return m, m.fetchDirectories(s.WorktreePath), true
-			}
-			}
-			if msg.String() == "m" {
+		}
+	}
+	if msg.String() == "m" {
 
 		// Refresh sessions from remote
 		m.log("Refreshing sessions...")
@@ -2377,7 +2396,12 @@ func (m *Model) renderMainView() string {
 
 	footer := "\nActive Remote: " + activeHost + "\n\n" + doctorOutput.String()
 
-	return docStyle.Render(content + "\n" + footer)
+	helpBar := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		MarginTop(1).
+		Render("n: new • c: scope • ctrl+r: restart • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+t: term • q: quit")
+
+	return docStyle.Render(content + "\n" + footer + "\n" + helpBar)
 }
 
 func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
