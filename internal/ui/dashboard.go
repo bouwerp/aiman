@@ -729,6 +729,13 @@ func (m *Model) createSession() tea.Cmd {
 		tmuxName := session.TmuxSession
 		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, tmuxName)
 		
+		// Ensure local directory is clean to avoid conflicts from previous syncs or scope changes
+		m.log("Cleaning local sync path: %s", localSyncPath)
+		_ = os.RemoveAll(localSyncPath)
+		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
+			m.log("Warning: failed to create local sync path: %v", err)
+		}
+		
 		// Find remote config for mutagen
 		var remote config.Remote
 		for _, r := range m.cfg.Remotes {
@@ -2448,6 +2455,14 @@ func (m *Model) restartSession() tea.Cmd {
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
 		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, s.TmuxSession)
+		
+		// Ensure local directory is clean to avoid conflicts from previous syncs or scope changes
+		m.log("Cleaning local sync path: %s", localSyncPath)
+		_ = os.RemoveAll(localSyncPath)
+		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
+			m.log("Warning: failed to create local sync path: %v", err)
+		}
+
 		target := remote.Host
 		if remote.User != "" {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
