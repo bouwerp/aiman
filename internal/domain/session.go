@@ -24,6 +24,7 @@ type Session struct {
 	RepoName      string
 	RemoteHost    string
 	WorktreePath  string
+	WorkingDirectory string
 	TmuxSession   string
 	MutagenSyncID string
 	LocalPath     string

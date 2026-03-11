@@ -76,7 +76,15 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 7: Scope (Directory)
 	workingDir := session.WorktreePath
 	if config.Directory != "" && config.Directory != "." {
-		workingDir = fmt.Sprintf("%s/%s", session.WorktreePath, config.Directory)
+		// Remove leading/trailing slashes from config.Directory to avoid path issues
+		cleanDir := strings.Trim(config.Directory, "/")
+		workingDir = fmt.Sprintf("%s/%s", session.WorktreePath, cleanDir)
+	}
+	session.WorkingDirectory = workingDir
+
+	// Ensure working directory exists (it might be a new folder defined by user)
+	if _, err := m.sshManager.Execute(ctx, fmt.Sprintf("mkdir -p %q", workingDir)); err != nil {
+		return nil, fmt.Errorf("failed to create working directory: %w", err)
 	}
 
 	// Step 9 & 10: Skills & Agent

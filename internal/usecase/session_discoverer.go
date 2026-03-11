@@ -68,6 +68,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 							RemoteHost:   host,
 							Status:       domain.SessionStatusInactive,
 							WorktreePath: normalizedWT,
+							WorkingDirectory: normalizedWT,
 							CreatedAt:    time.Now(),
 						}
 
@@ -131,6 +132,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 					RemoteHost:    host,
 					Status:        domain.SessionStatusInactive,
 					WorktreePath:  remotePath,
+					WorkingDirectory: remotePath,
 					MutagenSyncID: ms.ID,
 					CreatedAt:     time.Now(),
 				}
@@ -160,6 +162,7 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 	cwd, err := d.remoteExecutor.GetTmuxSessionCWD(ctx, name)
 	if err == nil {
 		normalizedCWD := normalizePath(cwd)
+		session.WorkingDirectory = normalizedCWD
 		// Try to find the git root of the CWD
 		gitRoot, err := d.remoteExecutor.GetGitRoot(ctx, normalizedCWD)
 		if err == nil {

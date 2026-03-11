@@ -343,15 +343,21 @@ func (m *Manager) ScanDirectories(ctx context.Context, rootPath string, maxDepth
 		return nil, fmt.Errorf("failed to scan directories: %w", err)
 	}
 
+	// Ensure rootPath doesn't have trailing slash for consistent prefix trimming
+	rootPathClean := strings.TrimRight(rootPath, "/")
+
 	dirs := []string{}
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" && line != rootPath {
-			// Return relative paths (remove the rootPath prefix)
-			relPath := strings.TrimPrefix(line, rootPath)
-			relPath = strings.TrimPrefix(relPath, "/")
-			if relPath != "" {
-				dirs = append(dirs, relPath)
+		if line != "" {
+			lineClean := strings.TrimRight(line, "/")
+			if lineClean != rootPathClean {
+				// Return relative paths (remove the rootPath prefix)
+				relPath := strings.TrimPrefix(lineClean, rootPathClean)
+				relPath = strings.TrimPrefix(relPath, "/")
+				if relPath != "" {
+					dirs = append(dirs, relPath)
+				}
 			}
 		}
 	}

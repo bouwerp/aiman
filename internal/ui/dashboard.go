@@ -2129,7 +2129,14 @@ func (m *Model) renderMainView() string {
 		sessionDetails.WriteString(fmt.Sprintf("Tmux: %s\n", s.TmuxSession))
 		sessionDetails.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
 		sessionDetails.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
-		sessionDetails.WriteString(fmt.Sprintf("Path: %s\n", s.WorktreePath))
+		sessionDetails.WriteString(fmt.Sprintf("Worktree: %s\n", s.WorktreePath))
+		if s.WorkingDirectory != "" && s.WorkingDirectory != s.WorktreePath {
+			scope := s.WorkingDirectory
+			if strings.HasPrefix(scope, s.WorktreePath) {
+				scope = "." + strings.TrimPrefix(scope, s.WorktreePath)
+			}
+			sessionDetails.WriteString(fmt.Sprintf("Scope: %s\n", scope))
+		}
 		if s.MutagenSyncID != "" {
 			sessionDetails.WriteString(fmt.Sprintf("Local Sync: %s\n", successStyle.Render(s.LocalPath)))
 		} else {
@@ -2297,7 +2304,11 @@ func (m *Model) restartSession() tea.Cmd {
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
 		// Ensure working directory exists
-		workingDir := s.WorktreePath
+		workingDir := s.WorkingDirectory
+		if workingDir == "" {
+			workingDir = s.WorktreePath
+		}
+		
 		if err := mgr.ValidateDir(ctx, workingDir); err != nil {
 			return sessionCreateMsg{err: fmt.Errorf("working directory not found: %w", err)}
 		}
