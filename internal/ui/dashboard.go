@@ -621,7 +621,8 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 
 		mutagenEngine := mutagen.NewEngine()
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, remoteSyncDir)
-		if err := mutagenEngine.StartSync(ctx, localPath, remoteSyncPath); err != nil {
+		labels := map[string]string{"aiman-id": s.ID}
+		if err := mutagenEngine.StartSync(ctx, localPath, remoteSyncPath, labels); err != nil {
 			return recreateMutagenMsg{err: fmt.Errorf("failed to recreate mutagen sync: %w", err)}
 		}
 
@@ -769,7 +770,8 @@ func (m *Model) createSession() tea.Cmd {
 		}
 
 		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorkingDirectory)
-		syncErr := mutagenEngine.StartSync(ctx, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory))
+		labels := map[string]string{"aiman-id": session.ID}
+		syncErr := mutagenEngine.StartSync(ctx, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory), labels)
 		if syncErr == nil {
 			session.MutagenSyncID = syncName
 			session.LocalPath = localSyncPath
@@ -2454,6 +2456,11 @@ func (m *Model) restartSession() tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("working directory not found: %w", err)}
 		}
 
+		// Write .aiman-id file to worktree
+		if s.WorktreePath != "" {
+			_, _ = mgr.Execute(ctx, fmt.Sprintf("echo %q > %q/.aiman-id", s.ID, s.WorktreePath))
+		}
+
 		// 1. Kill existing tmux session if it exists
 		mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
 
@@ -2471,7 +2478,7 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
-		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q 'bash -lc %s'", s.TmuxSession, workingDir, strconv.Quote(agentCmd))
+		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q -e AIMAN_ID=%q 'bash -lc %s'", s.TmuxSession, workingDir, s.ID, strconv.Quote(agentCmd))
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}
@@ -2496,7 +2503,8 @@ func (m *Model) restartSession() tea.Cmd {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
 		}
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
-		if err := mutagenEngine.StartSync(ctx, localSyncPath, remoteSyncPath); err != nil {
+		labels := map[string]string{"aiman-id": s.ID}
+		if err := mutagenEngine.StartSync(ctx, localSyncPath, remoteSyncPath, labels); err != nil {
 			// We continue even if sync fails, but log it
 			m.log("Warning: failed to restart mutagen sync: %v", err)
 		}

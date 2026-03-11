@@ -72,6 +72,12 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 							CreatedAt:    time.Now(),
 						}
 
+						// Try to read .aiman-id from worktree root
+						id, err := d.remoteExecutor.Execute(ctx, fmt.Sprintf("cat %s/.aiman-id", normalizedWT))
+						if err == nil {
+							session.ID = strings.TrimSpace(id)
+						}
+
 						// Try to determine repo name
 						parts := strings.Split(repoPath, "/")
 						if len(parts) > 0 {
@@ -158,6 +164,12 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 		CreatedAt:   time.Now(), // Approximate
 	}
 
+	// 2. Get AIMAN_ID from tmux env
+	aimanID, _ := d.remoteExecutor.GetTmuxSessionEnv(ctx, name, "AIMAN_ID")
+	if aimanID != "" {
+		session.ID = aimanID
+	}
+
 	// 3. Get CWD and Git Root
 	cwd, err := d.remoteExecutor.GetTmuxSessionCWD(ctx, name)
 	if err == nil {
@@ -172,7 +184,15 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 		}
 	}
 
-	// 4. Extract JIRA key from session name
+	// 4. Try reading .aiman-id from worktree root if not found in env
+	if session.WorktreePath != "" && session.ID == "" {
+		id, err := d.remoteExecutor.Execute(ctx, fmt.Sprintf("cat %s/.aiman-id", session.WorktreePath))
+		if err == nil {
+			session.ID = strings.TrimSpace(id)
+		}
+	}
+
+	// 5. Extract JIRA key from session name
 	key := domain.ExtractKey(name)
 	if key == "" && session.WorktreePath != "" {
 		// Try extracting from WorktreePath
@@ -180,7 +200,7 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 	}
 	session.IssueKey = key
 
-	// 5. Try to determine repo name from WorktreePath
+	// 6. Try to determine repo name from WorktreePath
 	if session.WorktreePath != "" {
 		parts := strings.Split(session.WorktreePath, "/")
 		if len(parts) > 0 {
@@ -188,7 +208,7 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 		}
 	}
 
-	// 6. Cross-reference with mutagen
+	// 7. Cross-reference with mutagen
 	if session.WorktreePath != "" {
 		normalizedPath := session.WorktreePath
 		for _, ms := range mutagenSessions {
@@ -210,6 +230,13 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 }
 
 func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.SyncSession, normalizedPath string) bool {
+	// 1. Explicit ID match via labels
+	if session.ID != "" && ms.Labels != nil {
+		if aid, ok := ms.Labels["aiman-id"]; ok && aid != "" {
+			return aid == session.ID
+		}
+	}
+
 	// Prefer name-based match if present
 	if session.TmuxSession != "" {
 		if ms.Name == session.TmuxSession || strings.HasPrefix(ms.Name, session.TmuxSession+"-") {

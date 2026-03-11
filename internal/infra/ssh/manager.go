@@ -217,6 +217,21 @@ func (m *Manager) GetTmuxSessionCWD(ctx context.Context, sessionName string) (st
 	return strings.TrimSpace(output), nil
 }
 
+func (m *Manager) GetTmuxSessionEnv(ctx context.Context, sessionName, envVar string) (string, error) {
+	// tmux show-environment -t <sessionName> <envVar>
+	// Output is usually "VAR=value", so we need to strip the prefix
+	cmd := fmt.Sprintf("tmux show-environment -t %q %s", sessionName, envVar)
+	output, err := m.Execute(ctx, cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to get tmux session env: %w", err)
+	}
+	prefix := envVar + "="
+	if strings.HasPrefix(output, prefix) {
+		return strings.TrimPrefix(output, prefix), nil
+	}
+	return strings.TrimSpace(output), nil
+}
+
 func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (string, error) {
 	// Capture the visible pane and scrollback buffer (-S -)
 	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S - -t %q", sessionName)

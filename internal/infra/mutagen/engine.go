@@ -19,7 +19,7 @@ func NewEngine() *Engine {
 	return &Engine{}
 }
 
-func (e *Engine) StartSync(ctx context.Context, localPath, remotePath string) error {
+func (e *Engine) StartSync(ctx context.Context, localPath, remotePath string, labels map[string]string) error {
 	// mutagen sync create --name <id> localPath remotePath
 	if localPath == "" || remotePath == "" {
 		return fmt.Errorf("invalid sync paths")
@@ -31,18 +31,21 @@ func (e *Engine) StartSync(ctx context.Context, localPath, remotePath string) er
 
 	name := filepath.Base(localPath)
 	
-	// Label values must be no more than 63 characters and contain only alphanumeric, hyphens, and underscores.
-	// We use the name as the base but sanitize it.
-	labelValue := name
-	reg := regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-	labelValue = reg.ReplaceAllString(labelValue, "-")
-	if len(labelValue) > 63 {
-		labelValue = labelValue[:63]
+	args := []string{"sync", "create", "--name", name}
+	for k, v := range labels {
+		// Label values must be no more than 63 characters and contain only alphanumeric, hyphens, and underscores.
+		labelValue := v
+		reg := regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+		labelValue = reg.ReplaceAllString(labelValue, "-")
+		if len(labelValue) > 63 {
+			labelValue = labelValue[:63]
+		}
+		labelValue = strings.Trim(labelValue, "-_")
+		args = append(args, "--label", fmt.Sprintf("%s=%s", k, labelValue))
 	}
-	// Ensure it doesn't start or end with a hyphen/underscore if needed (Mutagen might be picky)
-	labelValue = strings.Trim(labelValue, "-_")
 	
-	cmd := exec.CommandContext(ctx, "mutagen", "sync", "create", "--name", name, "--label", "session="+labelValue, localPath, remotePath)
+	args = append(args, localPath, remotePath)
+	cmd := exec.CommandContext(ctx, "mutagen", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create mutagen sync: %w, output: %s", err, string(output))
@@ -86,6 +89,7 @@ func (e *Engine) ListSyncSessions(ctx context.Context) ([]domain.SyncSession, er
 func (e *Engine) parseSyncListOutput(output string) []domain.SyncSession {
 	var sessions []domain.SyncSession
 	var current *domain.SyncSession
+	var inLabels bool
 
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
@@ -101,6 +105,7 @@ func (e *Engine) parseSyncListOutput(output string) []domain.SyncSession {
 			current = &domain.SyncSession{
 				Name: strings.TrimSpace(strings.TrimPrefix(line, "Name:")),
 			}
+			inLabels = false
 			continue
 		}
 
@@ -111,6 +116,12 @@ func (e *Engine) parseSyncListOutput(output string) []domain.SyncSession {
 		switch {
 		case strings.HasPrefix(line, "Identifier:"):
 			current.ID = strings.TrimSpace(strings.TrimPrefix(line, "Identifier:"))
+			inLabels = false
+		case strings.HasPrefix(line, "Labels:"):
+			inLabels = true
+			current.Labels = make(map[string]string)
+		case strings.HasPrefix(line, "Alpha:"), strings.HasPrefix(line, "Beta:"):
+			inLabels = false
 		case strings.HasPrefix(line, "URL:"):
 			url := strings.TrimSpace(strings.TrimPrefix(line, "URL:"))
 			if current.LocalPath == "" {
@@ -118,8 +129,17 @@ func (e *Engine) parseSyncListOutput(output string) []domain.SyncSession {
 			} else {
 				current.RemotePath = url
 			}
+			inLabels = false
 		case strings.HasPrefix(line, "Status:"):
 			current.Status = strings.TrimSpace(strings.TrimPrefix(line, "Status:"))
+			inLabels = false
+		default:
+			if inLabels && strings.Contains(line, ":") {
+				parts := strings.SplitN(line, ":", 2)
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				current.Labels[key] = value
+			}
 		}
 	}
 

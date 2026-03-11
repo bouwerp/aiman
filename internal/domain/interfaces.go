@@ -32,6 +32,7 @@ type RemoteExecutor interface {
 	ScanWorktrees(ctx context.Context, repoPath string) ([]string, error)
 	GetGitRoot(ctx context.Context, path string) (string, error)
 	GetTmuxSessionCWD(ctx context.Context, sessionName string) (string, error)
+	GetTmuxSessionEnv(ctx context.Context, sessionName, envVar string) (string, error)
 	CaptureTmuxPane(ctx context.Context, sessionName string) (string, error)
 	AttachTmuxSession(sessionName string) *exec.Cmd
 	StreamTmuxSession(ctx context.Context, sessionName string) (io.ReadWriteCloser, error)
@@ -41,7 +42,7 @@ type RemoteExecutor interface {
 
 // SyncEngine manages file synchronization between local and remote.
 type SyncEngine interface {
-	StartSync(ctx context.Context, localPath, remotePath string) error
+	StartSync(ctx context.Context, localPath, remotePath string, labels map[string]string) error
 	StopSync(ctx context.Context) error
 	GetStatus(ctx context.Context) (string, error)
 	ListSyncSessions(ctx context.Context) ([]SyncSession, error)
@@ -54,6 +55,7 @@ type SyncSession struct {
 	LocalPath  string
 	RemotePath string
 	Status     string
+	Labels     map[string]string
 }
 
 // Repo represents a git repository.
