@@ -593,11 +593,13 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			tmuxName = filepath.Base(s.WorktreePath)
 		}
 
+		s.ID = strings.TrimSpace(s.ID)
 		if s.ID == "" {
-			return recreateMutagenMsg{err: fmt.Errorf("session ID is empty, cannot safely create sync path")}
+			return recreateMutagenMsg{err: fmt.Errorf("session ID is empty (%q), cannot safely create sync path", s.ID)}
 		}
 
 		syncName := "aiman-sync-" + s.ID
+		m.log("Recreating sync %q", syncName)
 		home, _ := os.UserHomeDir()
 		localPath := filepath.Join(home, config.DirName, "work", s.ID)
 
@@ -744,8 +746,9 @@ func (m *Model) createSession() tea.Cmd {
 			return sessionCreateMsg{err: err}
 		}
 
+		session.ID = strings.TrimSpace(session.ID)
 		if session.ID == "" {
-			return sessionCreateMsg{err: fmt.Errorf("session ID is empty, cannot safely create sync path")}
+			return sessionCreateMsg{err: fmt.Errorf("session ID is empty (%q), cannot safely create sync path", session.ID)}
 		}
 
 		// Start mutagen sync
@@ -753,6 +756,7 @@ func (m *Model) createSession() tea.Cmd {
 		home, _ := os.UserHomeDir()
 		
 		syncName := "aiman-sync-" + session.ID
+		m.log("Creating sync %q", syncName)
 		localSyncPath := filepath.Join(home, config.DirName, "work", session.ID)
 		
 		m.log("Cleaning up local sync path: %s", localSyncPath)
@@ -2469,8 +2473,9 @@ func (m *Model) restartSession() tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("no session to restart")}
 		}
 
+		s.ID = strings.TrimSpace(s.ID)
 		if s.ID == "" {
-			return sessionCreateMsg{err: fmt.Errorf("session ID is empty, cannot safely restart session")}
+			return sessionCreateMsg{err: fmt.Errorf("session ID is empty (%q), cannot safely restart session", s.ID)}
 		}
 
 		remote, ok := resolveRemote(m.cfg, *s)
@@ -2523,6 +2528,7 @@ func (m *Model) restartSession() tea.Cmd {
 		home, _ := os.UserHomeDir()
 		
 		syncName := "aiman-sync-" + s.ID
+		m.log("Creating sync %q", syncName)
 		localSyncPath := filepath.Join(home, config.DirName, "work", s.ID)
 		
 		m.log("Cleaning up local sync path: %s", localSyncPath)

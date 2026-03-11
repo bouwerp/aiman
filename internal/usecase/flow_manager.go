@@ -105,7 +105,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
 	// Start tmux session with the agent wrapped in a login shell
 	// This ensures env vars like SYSTEM_PROMPT_FILE and path to binaries are handled correctly.
-	startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q -e AIMAN_ID=%q 'bash -lc %s'", tmuxName, workingDir, session.ID, strconv.Quote(agentCmd))
+	startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q -e AIMAN_ID=%q 'bash -lc %s'", tmuxName, workingDir, strings.TrimSpace(session.ID), strconv.Quote(agentCmd))
 	_, err = m.sshManager.Execute(ctx, startCmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start tmux session: %w", err)

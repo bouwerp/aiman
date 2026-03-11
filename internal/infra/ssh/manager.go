@@ -79,9 +79,9 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(output), fmt.Errorf("remote command failed on %s: %w\nOutput: %s", target, err, string(output))
+		return strings.TrimSpace(string(output)), fmt.Errorf("remote command failed on %s: %w\nOutput: %s", target, err, strings.TrimSpace(string(output)))
 	}
-	return string(output), nil
+	return strings.TrimSpace(string(output)), nil
 }
 
 func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) error {

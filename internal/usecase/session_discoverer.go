@@ -178,7 +178,7 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 	// 2. Get AIMAN_ID from tmux env
 	aimanID, _ := d.remoteExecutor.GetTmuxSessionEnv(ctx, name, "AIMAN_ID")
 	if aimanID != "" {
-		session.ID = aimanID
+		session.ID = strings.TrimSpace(aimanID)
 	}
 
 	// 3. Get CWD and Git Root
