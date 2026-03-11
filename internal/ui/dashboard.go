@@ -2517,8 +2517,8 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
-		debugCmd := fmt.Sprintf("%s || (echo; echo 'Agent exited with code $?'; sleep 10)", agentCmd)
-		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q -e AIMAN_ID=%q 'bash -lc %s'", s.TmuxSession, workingDir, s.ID, strconv.Quote(debugCmd))
+		debugCmd := fmt.Sprintf("export AIMAN_ID=%q; %s || (echo; echo 'Agent exited with code $?'; sleep 10)", strings.TrimSpace(s.ID), agentCmd)
+		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q 'bash -lc %s'", s.TmuxSession, workingDir, strconv.Quote(debugCmd))
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}
