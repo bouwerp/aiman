@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -29,7 +30,19 @@ func (e *Engine) StartSync(ctx context.Context, localPath, remotePath string) er
 	}
 
 	name := filepath.Base(localPath)
-	cmd := exec.CommandContext(ctx, "mutagen", "sync", "create", "--name", name, "--label", "session="+name, localPath, remotePath)
+	
+	// Label values must be no more than 63 characters and contain only alphanumeric, hyphens, and underscores.
+	// We use the name as the base but sanitize it.
+	labelValue := name
+	reg := regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+	labelValue = reg.ReplaceAllString(labelValue, "-")
+	if len(labelValue) > 63 {
+		labelValue = labelValue[:63]
+	}
+	// Ensure it doesn't start or end with a hyphen/underscore if needed (Mutagen might be picky)
+	labelValue = strings.Trim(labelValue, "-_")
+	
+	cmd := exec.CommandContext(ctx, "mutagen", "sync", "create", "--name", name, "--label", "session="+labelValue, localPath, remotePath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create mutagen sync: %w, output: %s", err, string(output))
