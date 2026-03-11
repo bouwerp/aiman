@@ -2517,12 +2517,13 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
-		debugCmd := fmt.Sprintf("export AIMAN_ID=%q; %s || (echo; echo 'Agent exited with code $?'; sleep 10)", strings.TrimSpace(s.ID), agentCmd)
-		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q 'bash -lc %s'", s.TmuxSession, workingDir, strconv.Quote(debugCmd))
+		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q \"export AIMAN_ID=%q; %s\"", s.TmuxSession, workingDir, strings.TrimSpace(s.ID), agentCmd)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}
 		}
+		// Set remain-on-exit so the window doesn't disappear if the agent fails
+		_, _ = mgr.Execute(ctx, fmt.Sprintf("tmux set-option -t %q remain-on-exit on", s.TmuxSession))
 
 		// 4. Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()

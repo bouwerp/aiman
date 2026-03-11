@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -103,16 +102,17 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
-	// Start tmux session with the agent wrapped in a login shell
-	// This ensures env vars like SYSTEM_PROMPT_FILE and path to binaries are handled correctly.
-	// We append a sleep to the command so if the agent fails immediately, the tmux window stays open long enough to see why.
-	// We set AIMAN_ID inside the shell wrapper for better portability across tmux versions.
-	debugCmd := fmt.Sprintf("export AIMAN_ID=%q; %s || (echo; echo 'Agent exited with code $?'; sleep 10)", strings.TrimSpace(session.ID), agentCmd)
-	startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q 'bash -lc %s'", tmuxName, workingDir, strconv.Quote(debugCmd))
+	// Start tmux session with the agent command directly.
+	// We use remain-on-exit so if the agent fails, the window stays open to see the error.
+	// We set AIMAN_ID environment variable for the session.
+	startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q \"export AIMAN_ID=%q; %s\"", tmuxName, workingDir, strings.TrimSpace(session.ID), agentCmd)
 	_, err = m.sshManager.Execute(ctx, startCmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start tmux session: %w", err)
 	}
+	// Set remain-on-exit so the window doesn't disappear if the agent fails
+	_, _ = m.sshManager.Execute(ctx, fmt.Sprintf("tmux set-option -t %q remain-on-exit on", tmuxName))
+	
 	session.TmuxSession = tmuxName
 
 	if err := session.Transition(domain.SessionStatusActive); err != nil {
