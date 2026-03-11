@@ -2192,6 +2192,24 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateVSCodeError
 			return m, nil
 		}
+		
+		// Update the session in the list
+		items := m.list.Items()
+		for i, it := range items {
+			if sessItem, ok := it.(item); ok && sessItem.session.ID == msg.session.ID {
+				sessItem.session = msg.session
+				items[i] = sessItem
+				break
+			}
+		}
+		m.list.SetItems(items)
+
+		// Persist the updated session (with new sync ID and local path)
+		if m.db != nil {
+			ctx := context.Background()
+			_ = m.db.Save(ctx, &msg.session)
+		}
+
 		m.state = viewStateMain
 		return m, nil
 	case agent.ScanAgentsMsg:
