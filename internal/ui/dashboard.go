@@ -59,6 +59,8 @@ const (
 	viewStateWorktreeExists
 	viewStateRestartAgentPicker
 	viewStateRestartConfirm
+	viewStateChangeDirPicker
+	viewStateChangeDirConfirm
 )
 
 type panelMode int
@@ -163,6 +165,7 @@ type Model struct {
 	gitStatus              domain.GitStatus
 	lastGitStatusUpdate    time.Time
 	restartingSession      *domain.Session
+	changingDirSession     *domain.Session
 	flowManager            *usecase.FlowManager
 }
 
@@ -178,6 +181,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new session")),
 			key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restart session")),
+			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
 			key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "attach full terminal")),
 			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle preview/terminal")),
@@ -612,6 +616,38 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 	}
 }
 
+func (m *Model) fetchDirectories(basePath string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Find remote config
+		var remote config.Remote
+		for _, r := range m.cfg.Remotes {
+			if r.Host == m.cfg.ActiveRemote {
+				remote = r
+				break
+			}
+		}
+
+		if remote.Host == "" {
+			return dirsMsg{err: fmt.Errorf("no active remote configured")}
+		}
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+
+		// Scan directories up to depth 3
+		dirs, err := mgr.ScanDirectories(ctx, basePath, 3)
+		if err != nil {
+			return dirsMsg{err: err}
+		}
+
+		// Always add root as an option
+		dirs = append([]string{"."}, dirs...)
+
+		return dirsMsg{dirs: dirs, err: nil}
+	}
+}
+
 func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -650,16 +686,7 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 			repoPath = remote.Root
 		}
 
-		// Scan directories up to depth 3
-		dirs, err := mgr.ScanDirectories(ctx, repoPath, 3)
-		if err != nil {
-			return dirsMsg{err: err}
-		}
-
-		// Always add root as an option
-		dirs = append([]string{"."}, dirs...)
-
-		return dirsMsg{dirs: dirs, err: nil}
+		return m.fetchDirectories(repoPath)()
 	}
 }
 
@@ -716,8 +743,8 @@ func (m *Model) createSession() tea.Cmd {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
 		}
 
-		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorktreePath)
-		syncErr := mutagenEngine.StartSync(ctx, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorktreePath))
+		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorkingDirectory)
+		syncErr := mutagenEngine.StartSync(ctx, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory))
 		if syncErr == nil {
 			session.MutagenSyncID = tmuxName
 			session.LocalPath = localSyncPath
@@ -1010,6 +1037,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateRestartConfirm:
 		return m.handleRestartConfirmUpdate(msg)
 
+	case viewStateChangeDirPicker:
+		return m.handleChangeDirPickerUpdate(msg)
+
+	case viewStateChangeDirConfirm:
+		return m.handleChangeDirConfirmUpdate(msg)
+
 	case viewStateSummary:
 		return m.handleSummaryUpdate(msg)
 
@@ -1104,6 +1137,26 @@ func (m *Model) renderView() string {
 		b.WriteString("Restarting will kill the existing tmux session and agent.\n\n")
 		b.WriteString("Do you want to proceed?\n\n")
 		b.WriteString(activeStyle.Render("[y]") + " Yes  " + activeStyle.Render("[n]") + " No")
+
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(1, 2).
+			Width(60)
+
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateChangeDirPicker:
+		return docStyle.Render(m.dirPicker.View())
+
+	case viewStateChangeDirConfirm:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("Confirm Scope Change") + "\n\n")
+		b.WriteString(fmt.Sprintf("Session: %s\n", m.changingDirSession.TmuxSession))
+		b.WriteString(fmt.Sprintf("New Scope: %s\n\n", m.sessionCfg.Directory))
+		b.WriteString("Changing the scope requires restarting the Mutagen sync and the agent.\n")
+		b.WriteString("The agent will be restarted in the new subdirectory.\n\n")
+		b.WriteString("Do you want to proceed?\n\n")
+		b.WriteString(activeStyle.Render("[y]") + " Yes, Restart  " + activeStyle.Render("[n]") + " Cancel")
 
 		dialog := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -1541,9 +1594,21 @@ end tell`, s.LocalPath)
 			m.loadingNext = viewStateRestartAgentPicker
 			m.state = viewStateLoading
 			return m, m.fetchAgents(), true
-		}
-	}
-	if msg.String() == "r" {
+			}
+			}
+			if msg.String() == "c" {
+			if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			m.changingDirSession = &s
+			m.loadingMsg = "Scanning directories..."
+			m.loadingNext = viewStateChangeDirPicker
+			m.state = viewStateLoading
+			// Fetch directories from the session's worktree root
+			return m, m.fetchDirectories(s.WorktreePath), true
+			}
+			}
+			if msg.String() == "m" {
+
 		// Refresh sessions from remote
 		m.log("Refreshing sessions...")
 		if m.cfg.ActiveRemote != "" {
@@ -1838,6 +1903,49 @@ func (m *Model) handleDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = viewStateLoading
 		return m, m.fetchAgents()
 	}
+	return m, cmd
+}
+
+func (m *Model) handleChangeDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		if m.dirPicker.list.FilterState() != list.Filtering {
+			m.state = viewStateMain
+			m.changingDirSession = nil
+			return m, nil
+		}
+	}
+
+	if msg, ok := msg.(dirsMsg); ok {
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		// When changing scope, we use the session's repo name if available
+		repo := domain.Repo{Name: m.changingDirSession.RepoName}
+		m.dirPicker = NewDirPickerModel(msg.dirs, repo)
+		h, v := docStyle.GetFrameSize()
+		m.dirPicker.SetSize(m.width-h, m.height-v)
+		return m, nil
+	}
+
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.dirPicker.Update(msg)
+	m.dirPicker = subModel.(DirPickerModel)
+
+	if m.dirPicker.selected != "" {
+		m.sessionCfg = domain.SessionConfig{
+			IssueKey:   m.changingDirSession.IssueKey,
+			Branch:     m.changingDirSession.Branch,
+			Repo:       domain.Repo{Name: m.changingDirSession.RepoName},
+			Directory:  m.dirPicker.selected,
+			PromptFree: true,
+		}
+		m.state = viewStateChangeDirConfirm
+		return m, nil
+	}
+
 	return m, cmd
 }
 
@@ -2361,6 +2469,43 @@ func (m *Model) restartSession() tea.Cmd {
 
 		return sessionCreateMsg{session: *s, err: nil}
 	}
+}
+
+func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "y":
+			m.loadingMsg = "Restarting session with new scope..."
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			
+			// We need to update the session's WorkingDirectory
+			m.changingDirSession.WorkingDirectory = m.sessionCfg.Directory
+			if !strings.HasPrefix(m.changingDirSession.WorkingDirectory, m.changingDirSession.WorktreePath) {
+				m.changingDirSession.WorkingDirectory = filepath.Join(m.changingDirSession.WorktreePath, m.sessionCfg.Directory)
+			}
+			
+			// Reuse restartSession but it will use the updated WorkingDirectory
+			m.restartingSession = m.changingDirSession
+			m.changingDirSession = nil
+			
+			// We need to ensure sessionCfg has an agent. 
+			// If not set, use the session's current agent if we can find it, or ask.
+			// For now, we'll try to find it in the scanner list.
+			if m.sessionCfg.Agent == nil {
+				m.loadingMsg = "Scanning agents..."
+				m.loadingNext = viewStateRestartAgentPicker
+				return m, m.fetchAgents()
+			}
+			
+			return m, m.restartSession()
+		case "n", "esc":
+			m.state = viewStateMain
+			m.changingDirSession = nil
+			return m, nil
+		}
+	}
+	return m, nil
 }
 
 func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
