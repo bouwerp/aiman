@@ -211,8 +211,10 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 
 func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.SyncSession, normalizedPath string) bool {
 	// Prefer name-based match if present
-	if session.TmuxSession != "" && ms.Name == session.TmuxSession {
-		return true
+	if session.TmuxSession != "" {
+		if ms.Name == session.TmuxSession || strings.HasPrefix(ms.Name, session.TmuxSession+"-") {
+			return true
+		}
 	}
 
 	// Normalized remote path from mutagen

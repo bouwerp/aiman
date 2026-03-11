@@ -727,11 +727,13 @@ func (m *Model) createSession() tea.Cmd {
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
 		tmuxName := session.TmuxSession
-		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, tmuxName)
 		
-		// Ensure local directory is clean to avoid conflicts from previous syncs or scope changes
-		m.log("Cleaning local sync path: %s", localSyncPath)
-		_ = os.RemoveAll(localSyncPath)
+		// Use timestamped directory to prevent conflicts and data loss
+		timestamp := time.Now().Format("20060102-150405")
+		syncName := fmt.Sprintf("%s-%s", tmuxName, timestamp)
+		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, syncName)
+		
+		m.log("Creating local sync path: %s", localSyncPath)
 		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
@@ -753,7 +755,7 @@ func (m *Model) createSession() tea.Cmd {
 		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorkingDirectory)
 		syncErr := mutagenEngine.StartSync(ctx, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory))
 		if syncErr == nil {
-			session.MutagenSyncID = tmuxName
+			session.MutagenSyncID = syncName
 			session.LocalPath = localSyncPath
 			_ = session.Transition(domain.SessionStatusSyncing)
 		} else {
@@ -2454,11 +2456,13 @@ func (m *Model) restartSession() tea.Cmd {
 		// 4. Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
-		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, s.TmuxSession)
 		
-		// Ensure local directory is clean to avoid conflicts from previous syncs or scope changes
-		m.log("Cleaning local sync path: %s", localSyncPath)
-		_ = os.RemoveAll(localSyncPath)
+		// Use timestamped directory to prevent conflicts and data loss
+		timestamp := time.Now().Format("20060102-150405")
+		syncName := fmt.Sprintf("%s-%s", s.TmuxSession, timestamp)
+		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, syncName)
+		
+		m.log("Creating local sync path: %s", localSyncPath)
 		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
@@ -2474,6 +2478,8 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		// Update session status
+		s.MutagenSyncID = syncName
+		s.LocalPath = localSyncPath
 		s.Status = domain.SessionStatusSyncing
 		s.AgentName = m.sessionCfg.Agent.Name
 		s.UpdatedAt = time.Now()
