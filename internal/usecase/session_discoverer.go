@@ -237,7 +237,12 @@ func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.Syn
 		}
 	}
 
-	// Prefer name-based match if present
+	// 2. Stable name match
+	if session.ID != "" && ms.Name == "aiman-sync-"+session.ID {
+		return true
+	}
+
+	// 3. Fallback for older sessions: name-based match
 	if session.TmuxSession != "" {
 		if ms.Name == session.TmuxSession || strings.HasPrefix(ms.Name, session.TmuxSession+"-") {
 			return true

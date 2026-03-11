@@ -593,16 +593,18 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			tmuxName = filepath.Base(s.WorktreePath)
 		}
 
-		// Use timestamped directory to prevent conflicts and data loss
-		timestamp := time.Now().Format("20060102-150405")
-		syncName := fmt.Sprintf("%s-%s", tmuxName, timestamp)
+		syncName := "aiman-sync-" + s.ID
 		home, _ := os.UserHomeDir()
-		localPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, syncName)
+		localPath := filepath.Join(home, config.DirName, "work", s.ID)
 
-		m.log("Creating local sync path: %s", localPath)
+		m.log("Cleaning up local sync path: %s", localPath)
+		_ = os.RemoveAll(localPath)
 		if err := os.MkdirAll(localPath, 0755); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
+
+		m.log("Terminating existing sync: %s", syncName)
+		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
 
 		terminateCandidates := []string{
 			s.MutagenSyncID,
@@ -610,7 +612,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			filepath.Base(s.LocalPath),
 			tmuxName,
 		}
-		terminated := map[string]bool{}
+		terminated := map[string]bool{syncName: true}
 		for _, candidate := range terminateCandidates {
 			if candidate == "" || terminated[candidate] {
 				continue
@@ -738,19 +740,15 @@ func (m *Model) createSession() tea.Cmd {
 			return sessionCreateMsg{err: err}
 		}
 
-		// Mutagen sync still needs to be handled here or in FlowManager
-		// For now, let's keep it here but we could move it to FlowManager too.
 		// Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
-		tmuxName := session.TmuxSession
 		
-		// Use timestamped directory to prevent conflicts and data loss
-		timestamp := time.Now().Format("20060102-150405")
-		syncName := fmt.Sprintf("%s-%s", tmuxName, timestamp)
-		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, syncName)
+		syncName := "aiman-sync-" + session.ID
+		localSyncPath := filepath.Join(home, config.DirName, "work", session.ID)
 		
-		m.log("Creating local sync path: %s", localSyncPath)
+		m.log("Cleaning up local sync path: %s", localSyncPath)
+		_ = os.RemoveAll(localSyncPath)
 		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
@@ -768,6 +766,9 @@ func (m *Model) createSession() tea.Cmd {
 		if remote.User != "" {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
 		}
+
+		m.log("Terminating existing sync: %s", syncName)
+		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
 
 		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorkingDirectory)
 		labels := map[string]string{"aiman-id": session.ID}
@@ -2509,15 +2510,17 @@ func (m *Model) restartSession() tea.Cmd {
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
 		
-		// Use timestamped directory to prevent conflicts and data loss
-		timestamp := time.Now().Format("20060102-150405")
-		syncName := fmt.Sprintf("%s-%s", s.TmuxSession, timestamp)
-		localSyncPath := fmt.Sprintf("%s/%s/work/%s", home, config.DirName, syncName)
+		syncName := "aiman-sync-" + s.ID
+		localSyncPath := filepath.Join(home, config.DirName, "work", s.ID)
 		
-		m.log("Creating local sync path: %s", localSyncPath)
+		m.log("Cleaning up local sync path: %s", localSyncPath)
+		_ = os.RemoveAll(localSyncPath)
 		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
+
+		m.log("Terminating existing sync: %s", syncName)
+		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
 
 		target := remote.Host
 		if remote.User != "" {
