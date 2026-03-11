@@ -116,15 +116,20 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 
 	// For OpenCode
 	if strings.Contains(name, "opencode") {
-		return agent.Command, nil
+		cmd := agent.Command
+		if promptFree {
+			// User previously said --yolo doesn't exist, but if they want "yolo" mode, 
+			// let's see if there's any other flag. For now, we'll keep it as is 
+			// or add a flag if known. The user specifically mentioned Gemini and Cursor now.
+		}
+		return cmd, nil
 	}
 
 	// For Cursor
 	if strings.Contains(name, "cursor") {
 		cmd := agent.Command
 		if promptFree {
-			// Assuming cursor-agent might have a similar flag or just needs to be non-interactive
-			cmd = fmt.Sprintf("%s --yes", cmd)
+			cmd = fmt.Sprintf("%s --force", cmd)
 		}
 		return cmd, nil
 	}
@@ -189,7 +194,7 @@ func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor
 
 	cmd := agent.Command
 	if promptFree {
-		cmd = "NON_INTERACTIVE=true " + cmd
+		cmd = fmt.Sprintf("%s --yolo", cmd)
 	}
 
 	if len(prompts) == 0 {
