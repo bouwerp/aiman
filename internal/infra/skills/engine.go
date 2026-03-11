@@ -129,7 +129,9 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	if strings.Contains(name, "cursor") {
 		cmd := agent.Command
 		if promptFree {
-			cmd = fmt.Sprintf("%s --force", cmd)
+			cmd = fmt.Sprintf("%s --force .", cmd)
+		} else {
+			cmd = fmt.Sprintf("%s .", cmd)
 		}
 		return cmd, nil
 	}
