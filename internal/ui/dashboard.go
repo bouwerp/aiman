@@ -593,6 +593,10 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			tmuxName = filepath.Base(s.WorktreePath)
 		}
 
+		if s.ID == "" {
+			return recreateMutagenMsg{err: fmt.Errorf("session ID is empty, cannot safely create sync path")}
+		}
+
 		syncName := "aiman-sync-" + s.ID
 		home, _ := os.UserHomeDir()
 		localPath := filepath.Join(home, config.DirName, "work", s.ID)
@@ -738,6 +742,10 @@ func (m *Model) createSession() tea.Cmd {
 		session, err := m.flowManager.CreateSession(ctx, m.sessionCfg)
 		if err != nil {
 			return sessionCreateMsg{err: err}
+		}
+
+		if session.ID == "" {
+			return sessionCreateMsg{err: fmt.Errorf("session ID is empty, cannot safely create sync path")}
 		}
 
 		// Start mutagen sync
@@ -2459,6 +2467,10 @@ func (m *Model) restartSession() tea.Cmd {
 		s := m.restartingSession
 		if s == nil {
 			return sessionCreateMsg{err: fmt.Errorf("no session to restart")}
+		}
+
+		if s.ID == "" {
+			return sessionCreateMsg{err: fmt.Errorf("session ID is empty, cannot safely restart session")}
 		}
 
 		remote, ok := resolveRemote(m.cfg, *s)

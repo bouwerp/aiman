@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/google/uuid"
 )
 
 type SessionDiscoverer struct {
@@ -77,6 +78,10 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 						if err == nil {
 							session.ID = strings.TrimSpace(id)
 						}
+						
+						if session.ID == "" {
+							session.ID = uuid.New().String()
+						}
 
 						// Try to determine repo name
 						parts := strings.Split(repoPath, "/")
@@ -141,6 +146,12 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 					WorkingDirectory: remotePath,
 					MutagenSyncID: ms.ID,
 					CreatedAt:     time.Now(),
+				}
+				
+				if aid, ok := ms.Labels["aiman-id"]; ok && aid != "" {
+					session.ID = aid
+				} else {
+					session.ID = uuid.New().String()
 				}
 				if !strings.Contains(ms.LocalPath, ":") {
 					session.LocalPath = normalizePath(ms.LocalPath)
@@ -224,6 +235,11 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 				break
 			}
 		}
+	}
+
+	// 8. If session ID is still empty (e.g., legacy session), generate a new one
+	if session.ID == "" {
+		session.ID = uuid.New().String()
 	}
 
 	return session
