@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -176,20 +177,30 @@ func (m *Manager) SetupWorktree(ctx context.Context, repo domain.Repo, branch st
 }
 
 func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
-	worktreeDir := strings.ReplaceAll(branch, "/", "-")
 	repoName := extractRepoName(repo.Name)
 	remoteRoot := remote.GetRoot()
 	if remoteRoot == "" {
 		return domain.Worktree{}, fmt.Errorf("remote root not configured")
 	}
 
-	repoPath := fmt.Sprintf("%s/%s", remoteRoot, repoName)
+	var repoPath string
+	cleanRoot := strings.TrimRight(remoteRoot, "/")
+	if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
+		repoPath = cleanRoot
+	} else {
+		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
+	}
+
+	worktreeDir := strings.ReplaceAll(branch, "/", "-")
+	// Worktree is placed alongside the main repository
 	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
 
 	// Ensure repo exists
 	if err := remote.ValidateDir(ctx, repoPath); err != nil {
 		if repo.URL != "" {
-			_, cloneErr := remote.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remoteRoot, repo.URL, repoName))
+			// Get parent of repoPath for cloning
+			parentDir := filepath.Dir(repoPath)
+			_, cloneErr := remote.Execute(ctx, fmt.Sprintf("mkdir -p %s && cd %s && git clone %s %s", parentDir, parentDir, repo.URL, repoName))
 			if cloneErr != nil {
 				return domain.Worktree{}, fmt.Errorf("failed to clone repository: %w", cloneErr)
 			}

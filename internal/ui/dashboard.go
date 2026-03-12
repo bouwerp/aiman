@@ -696,7 +696,14 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 		if repo != nil && repo.URL != "" {
 			// Extract just the repo name (not org/repo)
 			repoName := extractRepoName(repo.Name)
-			repoPath = fmt.Sprintf("%s/%s", remote.Root, repoName)
+			
+			// Handle case where remote.Root might already end with the repo name
+			cleanRoot := strings.TrimRight(remote.Root, "/")
+			if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
+				repoPath = cleanRoot
+			} else {
+				repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
+			}
 
 			// Check if repo exists on remote, clone if not
 			if err := mgr.ValidateDir(ctx, repoPath); err != nil {
@@ -2437,7 +2444,24 @@ func (m *Model) renderMainView() string {
 		MarginTop(1).
 		Render("n: new • c: scope • ctrl+r: restart • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+t: term • q: quit")
 
-	return docStyle.Render(content + "\n" + footer + "\n" + helpBar)
+	// PR Buttons (matching Figma)
+	var prButtons string
+	if sel := m.list.SelectedItem(); sel != nil {
+		if m.gitStatus.PullRequest != nil {
+			btnStyle := lipgloss.NewStyle().
+				Padding(0, 1).
+				MarginRight(1).
+				Background(lipgloss.Color("235"))
+
+			reviewBtn := btnStyle.Render("Review PR")
+			approveBtn := btnStyle.Foreground(lipgloss.Color("#00FF00")).Render("Approved")
+			requestBtn := btnStyle.Foreground(lipgloss.Color("#FF0000")).Render("Request Changes")
+
+			prButtons = "\n\n" + reviewBtn + approveBtn + requestBtn
+		}
+	}
+
+	return docStyle.Render(content + "\n" + footer + prButtons + "\n" + helpBar)
 }
 
 func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
