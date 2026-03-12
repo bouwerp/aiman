@@ -2524,9 +2524,15 @@ func (m *Model) restartSession() tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("working directory not found: %w", err)}
 		}
 
-		// Write .aiman-id file to worktree
+		// Write session ID to git metadata (safe from git status/commits)
 		if s.WorktreePath != "" {
-			_, _ = mgr.Execute(ctx, fmt.Sprintf("echo %q > %q/.aiman-id", s.ID, s.WorktreePath))
+			m.log("Ensuring session ID is persisted in git metadata")
+			idCmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -d \"$git_dir\" ]; then echo %q > \"$git_dir/aiman-id\"; fi",
+				s.WorktreePath, strings.TrimSpace(s.ID))
+			_, _ = mgr.Execute(ctx, idCmd)
+			
+			// Optional: cleanup old file if it exists at root
+			_, _ = mgr.Execute(ctx, fmt.Sprintf("rm -f %q/.aiman-id", s.WorktreePath))
 		}
 
 		// 1. Kill existing tmux session if it exists

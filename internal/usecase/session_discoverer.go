@@ -73,10 +73,17 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 							CreatedAt:    time.Now(),
 						}
 
-						// Try to read .aiman-id from worktree root
-						id, err := d.remoteExecutor.Execute(ctx, fmt.Sprintf("cat %s/.aiman-id", normalizedWT))
-						if err == nil {
+						// Try to read session ID from git metadata or root
+						idCmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -f \"$git_dir/aiman-id\" ]; then cat \"$git_dir/aiman-id\"; elif [ -f %q/.aiman-id ]; then cat %q/.aiman-id; fi",
+							normalizedWT, normalizedWT, normalizedWT)
+						id, err := d.remoteExecutor.Execute(ctx, idCmd)
+						if err == nil && strings.TrimSpace(id) != "" {
 							session.ID = strings.TrimSpace(id)
+							
+							// Auto-migration
+							migrationCmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -f %q/.aiman-id ] && [ -d \"$git_dir\" ]; then mv %q/.aiman-id \"$git_dir/aiman-id\"; fi",
+								normalizedWT, normalizedWT, normalizedWT)
+							_, _ = d.remoteExecutor.Execute(ctx, migrationCmd)
 						}
 						
 						if session.ID == "" {
@@ -195,11 +202,21 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 		}
 	}
 
-	// 4. Try reading .aiman-id from worktree root if not found in env
+	// 4. Try reading session ID from git metadata or worktree root
 	if session.WorktreePath != "" && session.ID == "" {
-		id, err := d.remoteExecutor.Execute(ctx, fmt.Sprintf("cat %s/.aiman-id", session.WorktreePath))
-		if err == nil {
+		// New robust location: inside .git metadata
+		// Old fallback: root of worktree
+		cmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -f \"$git_dir/aiman-id\" ]; then cat \"$git_dir/aiman-id\"; elif [ -f %q/.aiman-id ]; then cat %q/.aiman-id; fi", 
+			session.WorktreePath, session.WorktreePath, session.WorktreePath)
+		
+		id, err := d.remoteExecutor.Execute(ctx, cmd)
+		if err == nil && strings.TrimSpace(id) != "" {
 			session.ID = strings.TrimSpace(id)
+			
+			// Auto-migration: Move old file to new location if it exists at root
+			migrationCmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -f %q/.aiman-id ] && [ -d \"$git_dir\" ]; then mv %q/.aiman-id \"$git_dir/aiman-id\"; fi",
+				session.WorktreePath, session.WorktreePath, session.WorktreePath)
+			_, _ = d.remoteExecutor.Execute(ctx, migrationCmd)
 		}
 	}
 

@@ -72,8 +72,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		session.WorktreePath = m.sshManager.GetRoot()
 	}
 
-	// Step 6.1: Persist Session ID in worktree
-	if _, err = m.sshManager.Execute(ctx, fmt.Sprintf("echo %q > %q/.aiman-id", session.ID, session.WorktreePath)); err != nil {
+	// Step 6.1: Persist Session ID in git metadata (safe from git status/commits)
+	if _, err = m.sshManager.Execute(ctx, fmt.Sprintf("id_file=$(git -C %q rev-parse --git-dir)/aiman-id && echo %q > \"$id_file\"", session.WorktreePath, session.ID)); err != nil {
 		return nil, fmt.Errorf("failed to write session ID: %w", err)
 	}
 
