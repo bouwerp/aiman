@@ -167,6 +167,7 @@ type Model struct {
 	restartingSession      *domain.Session
 	changingDirSession     *domain.Session
 	flowManager            *usecase.FlowManager
+	firstLoad              map[string]bool
 }
 
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager) *Model {
@@ -222,6 +223,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		generalSetup:  NewGeneralSetupModel(cfg),
 		doctorResults: doctorResults,
 		viewport:      vp,
+		firstLoad:     make(map[string]bool),
 	}
 }
 
@@ -1370,9 +1372,12 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tmuxOutput = msg.output
 			}
 
-			// Sticky scroll: only go to bottom if we were already at the bottom.
-			// For first load, AtBottom() is true by default (YOffset 0).
+			// Sticky scroll: only go to bottom if we were already at the bottom OR if it's the first load for this session.
 			wasAtBottom := m.viewport.AtBottom()
+			if !m.firstLoad[msg.session] && m.tmuxOutput != "Loading..." && msg.err == nil {
+				wasAtBottom = true
+				m.firstLoad[msg.session] = true
+			}
 
 			m.viewport.SetContent(m.tmuxOutput)
 
