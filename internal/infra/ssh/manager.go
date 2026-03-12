@@ -75,6 +75,7 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPersist=10m",
 		"-S", cp,
+		"-X",
 		target, cmdStr)
 
 	output, err := cmd.CombinedOutput()
@@ -99,6 +100,7 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPersist=10m",
 		"-S", cp,
+		"-X",
 		target, fmt.Sprintf("cat > %q", path))
 
 	stdin, err := cmd.StdinPipe()
@@ -274,14 +276,14 @@ func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (stri
 
 func (m *Manager) AttachTmuxSession(sessionName string) *exec.Cmd {
 	target := m.target()
-	// Use -t for interactive tty allocation
-	return exec.Command("ssh", "-t", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
+	// Use -t for interactive tty allocation, and -X for X11 forwarding (clipboard)
+	return exec.Command("ssh", "-t", "-X", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
 }
 
 func (m *Manager) StreamTmuxSession(ctx context.Context, sessionName string) (io.ReadWriteCloser, error) {
 	target := m.target()
-	// -t for TTY, tmux attach to the session
-	cmd := exec.CommandContext(ctx, "ssh", "-t", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
+	// -t for TTY, -X for X11 forwarding, tmux attach to the session
+	cmd := exec.CommandContext(ctx, "ssh", "-t", "-X", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
