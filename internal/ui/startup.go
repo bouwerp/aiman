@@ -147,8 +147,13 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err == nil {
 			// Merge logic:
 			// 1. Start with discovered sessions (most accurate current state)
-			// 2. Link them to DB entries if IDs match to preserve RepoName/IssueKey
+			// 2. Link them to DB entries if IDs match to preserve user-chosen metadata
 			// 3. Add any DB sessions that weren't discovered (orphaned from perspective of this machine)
+			//
+			// Key principle: DB fields that represent user intent (WorkingDirectory,
+			// RepoName in org/repo format, IssueKey, Branch, AgentName) are
+			// authoritative. Discovery fields that represent live state (Status,
+			// TmuxSession, WorktreePath) should win.
 			
 			sessMap := make(map[string]domain.Session)
 			for _, s := range dbSessions {
@@ -161,15 +166,25 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// First, process all discovered sessions
 			for _, s := range m.sessions {
 				if dbSess, ok := sessMap[s.ID]; ok {
-					// Discovered session exists in DB, merge them
-					// Keep discovered paths/sync but preserve DB metadata
-					if s.RepoName == "" { s.RepoName = dbSess.RepoName }
+					// WorkingDirectory from DB is the user's chosen subdirectory
+					// scope. Discovery gets tmux CWD which drifts as the agent
+					// navigates. Always prefer the DB value.
+					if dbSess.WorkingDirectory != "" {
+						s.WorkingDirectory = dbSess.WorkingDirectory
+					}
+					// Prefer DB's org/repo format over discovery's basename
+					if dbSess.RepoName != "" && (s.RepoName == "" || (!strings.Contains(s.RepoName, "/") && strings.Contains(dbSess.RepoName, "/"))) {
+						s.RepoName = dbSess.RepoName
+					}
 					if s.IssueKey == "" { s.IssueKey = dbSess.IssueKey }
 					if s.Branch == "" { s.Branch = dbSess.Branch }
+					if s.AgentName == "" { s.AgentName = dbSess.AgentName }
+					if s.MutagenSyncID == "" { s.MutagenSyncID = dbSess.MutagenSyncID }
+					if s.LocalPath == "" { s.LocalPath = dbSess.LocalPath }
 				}
 				merged = append(merged, s)
 				seenInMerged[s.ID] = true
-				// Update DB with latest discovered state
+				// Update DB with latest merged state
 				_ = m.db.Save(ctx, &s)
 			}
 			

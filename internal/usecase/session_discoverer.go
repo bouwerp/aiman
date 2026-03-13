@@ -104,13 +104,13 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 
 						// Cross-reference with mutagen
 						for _, ms := range mutagenSessions {
-							if !seenMutagenIDs[ms.ID] && d.isSessionMatch(session, ms, normalizedWT) {
-								if !strings.Contains(ms.LocalPath, ":") {
-									session.LocalPath = normalizePath(ms.LocalPath)
-								} else if !strings.Contains(ms.RemotePath, ":") {
-									session.LocalPath = normalizePath(ms.RemotePath)
+							if !seenMutagenIDs[ms.ID] && d.isSessionMatch(session, ms) {
+								session.LocalPath = normalizePath(ms.LocalPath)
+								if ms.Name != "" {
+									session.MutagenSyncID = ms.Name
+								} else {
+									session.MutagenSyncID = ms.ID
 								}
-								session.MutagenSyncID = ms.ID
 								seenMutagenIDs[ms.ID] = true
 								break
 							}
@@ -125,45 +125,35 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		}
 	}
 
-	// 4. Scan for orphaned mutagen syncs that don't match any worktree
+	// 4. Scan for orphaned mutagen syncs that don't match any worktree.
+	// After ListSyncSessions post-processing, RemotePath is already the
+	// remote filesystem path (host: prefix stripped) and LocalPath is the
+	// local filesystem path.
 	for _, ms := range mutagenSessions {
 		if !seenMutagenIDs[ms.ID] {
-			// This sync session doesn't match any tmux session or worktree we found
-			remotePath := ""
-			if strings.Contains(ms.RemotePath, ":") {
-				// ms.RemotePath is the remote URL
-				parts := strings.SplitN(ms.RemotePath, ":", 2)
-				if len(parts) > 1 {
-					remotePath = normalizePath(parts[1])
-				}
-			} else if strings.Contains(ms.LocalPath, ":") {
-				// ms.LocalPath is the remote URL
-				parts := strings.SplitN(ms.LocalPath, ":", 2)
-				if len(parts) > 1 {
-					remotePath = normalizePath(parts[1])
-				}
-			}
+			remotePath := normalizePath(ms.RemotePath)
 
 			if remotePath != "" {
-				session := domain.Session{
-					TmuxSession:   ms.Name,
-					RemoteHost:    host,
-					Status:        domain.SessionStatusInactive,
-					WorktreePath:  remotePath,
-					WorkingDirectory: remotePath,
-					MutagenSyncID: ms.ID,
-					CreatedAt:     time.Now(),
+				syncName := ms.Name
+				if syncName == "" {
+					syncName = ms.ID
 				}
-				
+
+				session := domain.Session{
+					TmuxSession:      ms.Name,
+					RemoteHost:       host,
+					Status:           domain.SessionStatusInactive,
+					WorktreePath:     remotePath,
+					WorkingDirectory: remotePath,
+					MutagenSyncID:    syncName,
+					LocalPath:        normalizePath(ms.LocalPath),
+					CreatedAt:        time.Now(),
+				}
+
 				if aid, ok := ms.Labels["aiman-id"]; ok && aid != "" {
 					session.ID = aid
 				} else {
 					session.ID = uuid.New().String()
-				}
-				if !strings.Contains(ms.LocalPath, ":") {
-					session.LocalPath = normalizePath(ms.LocalPath)
-				} else if !strings.Contains(ms.RemotePath, ":") {
-					session.LocalPath = normalizePath(ms.RemotePath)
 				}
 				session.IssueKey = domain.ExtractKey(ms.Name)
 				sessions = append(sessions, session)
@@ -228,14 +218,13 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 	}
 	session.IssueKey = key
 
-	// 6. Try to determine repo name from WorktreePath
+	// 6. Try to determine repo name from remote URL (most accurate for worktrees)
 	if session.WorktreePath != "" {
-		// Use the git root to determine the repo name accurately
-		gitRoot, err := d.remoteExecutor.GetGitRoot(ctx, session.WorktreePath)
-		if err == nil {
-			session.RepoName = filepath.Base(normalizePath(gitRoot))
-		} else {
-			// Fallback to simple path base
+		remoteURL, err := d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", session.WorktreePath))
+		if err == nil && strings.TrimSpace(remoteURL) != "" {
+			session.RepoName = extractRepoNameFromURL(strings.TrimSpace(remoteURL))
+		}
+		if session.RepoName == "" {
 			parts := strings.Split(session.WorktreePath, "/")
 			if len(parts) > 0 {
 				session.RepoName = parts[len(parts)-1]
@@ -245,16 +234,16 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 
 	// 7. Cross-reference with mutagen
 	if session.WorktreePath != "" {
-		normalizedPath := session.WorktreePath
 		for _, ms := range mutagenSessions {
-			if d.isSessionMatch(session, ms, normalizedPath) {
-				// We need to identify which one is actually local
-				if !strings.Contains(ms.LocalPath, ":") {
-					session.LocalPath = normalizePath(ms.LocalPath)
-				} else if !strings.Contains(ms.RemotePath, ":") {
-					session.LocalPath = normalizePath(ms.RemotePath)
+			if d.isSessionMatch(session, ms) {
+				// After ListSyncSessions post-processing, LocalPath is the
+				// local filesystem path (no `:`) and RemotePath is the remote path.
+				session.LocalPath = normalizePath(ms.LocalPath)
+				if ms.Name != "" {
+					session.MutagenSyncID = ms.Name
+				} else {
+					session.MutagenSyncID = ms.ID
 				}
-				session.MutagenSyncID = ms.ID
 				session.Status = domain.SessionStatusSyncing
 				break
 			}
@@ -269,8 +258,8 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 	return session
 }
 
-func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.SyncSession, normalizedPath string) bool {
-	// 1. Explicit ID match via labels
+func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.SyncSession) bool {
+	// 1. Explicit ID match via labels (most reliable)
 	if session.ID != "" && ms.Labels != nil {
 		if aid, ok := ms.Labels["aiman-id"]; ok && aid != "" {
 			return aid == session.ID
@@ -289,13 +278,38 @@ func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.Syn
 		}
 	}
 
-	// Normalized remote path from mutagen
+	// 4. Path-based matching against mutagen's remote path.
+	// After ListSyncSessions post-processing, RemotePath is the remote
+	// filesystem path with the host: prefix already stripped.
 	normalizedRemote := normalizePath(ms.RemotePath)
-	normalizedLocal := normalizePath(ms.LocalPath)
+	if normalizedRemote == "" {
+		return false
+	}
 
-	// In Mutagen, either Alpha or Beta could be the remote.
-	return normalizedRemote == normalizedPath || normalizedLocal == normalizedPath ||
-		strings.HasSuffix(normalizedRemote, normalizedPath) || strings.HasSuffix(normalizedLocal, normalizedPath)
+	// Compare against both WorktreePath (git root) and WorkingDirectory
+	// (user-chosen subdirectory scope). Mutagen syncs are created pointing
+	// to WorkingDirectory, which may differ from WorktreePath.
+	for _, sessionPath := range []string{
+		normalizePath(session.WorktreePath),
+		normalizePath(session.WorkingDirectory),
+	} {
+		if sessionPath == "" {
+			continue
+		}
+		if normalizedRemote == sessionPath {
+			return true
+		}
+		// Mutagen syncs a subdirectory within the session's scope
+		if strings.HasPrefix(normalizedRemote, sessionPath+"/") {
+			return true
+		}
+		// Session scope is a subdirectory of what mutagen syncs
+		if strings.HasPrefix(sessionPath, normalizedRemote+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 func normalizePath(p string) string {
@@ -310,4 +324,32 @@ func normalizePath(p string) string {
 		p = p[:len(p)-1]
 	}
 	return p
+}
+
+// extractRepoNameFromURL parses a git remote URL and returns the "org/repo" name.
+// Handles both SSH (git@github.com:org/repo.git) and HTTPS (https://github.com/org/repo.git).
+func extractRepoNameFromURL(remoteURL string) string {
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		return ""
+	}
+
+	// HTTPS URL: https://github.com/org/repo.git
+	if strings.Contains(remoteURL, "://") {
+		cleaned := strings.TrimSuffix(remoteURL, ".git")
+		parts := strings.Split(cleaned, "/")
+		if len(parts) >= 2 {
+			return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+		}
+		return ""
+	}
+
+	// SSH URL: git@github.com:org/repo.git
+	if idx := strings.Index(remoteURL, ":"); idx > 0 {
+		name := remoteURL[idx+1:]
+		name = strings.TrimSuffix(name, ".git")
+		return name
+	}
+
+	return ""
 }
