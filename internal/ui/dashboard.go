@@ -1629,18 +1629,20 @@ end tell`, s.LocalPath)
 	}
 	if msg.String() == "ctrl+r" {
 		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			m.restartingSession = &s
+			selectedSess := sel.(item).session
+			m.restartingSession = &selectedSess
 			m.sessionCfg = domain.SessionConfig{
-				IssueKey:   s.IssueKey,
-				Branch:     s.Branch,
-				Repo:       domain.Repo{Name: s.RepoName, URL: ""},
+				IssueKey:   selectedSess.IssueKey,
+				Branch:     selectedSess.Branch,
+				Repo:       domain.Repo{Name: selectedSess.RepoName, URL: ""},
 				Directory:  "",
 				PromptFree: true,
 			}
 
+			m.log("Preparing to restart session %q (ID: %s)", selectedSess.TmuxSession, selectedSess.ID)
+
 			// If session is active or syncing, ask for confirmation
-			if s.Status == domain.SessionStatusActive || s.Status == domain.SessionStatusSyncing {
+			if selectedSess.Status == domain.SessionStatusActive || selectedSess.Status == domain.SessionStatusSyncing {
 				m.state = viewStateRestartConfirm
 				return m, nil, true
 			}
@@ -2515,13 +2517,18 @@ func (m *Model) restartSession() tea.Cmd {
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
 		// Ensure working directory exists
+		m.log("Restarting: WorktreePath=%q, WorkingDirectory=%q", s.WorktreePath, s.WorkingDirectory)
 		workingDir := s.WorkingDirectory
 		if workingDir == "" {
 			workingDir = s.WorktreePath
 		}
 		
+		if workingDir == "" {
+			return sessionCreateMsg{err: fmt.Errorf("session has no working directory or worktree path defined")}
+		}
+
 		if err := mgr.ValidateDir(ctx, workingDir); err != nil {
-			return sessionCreateMsg{err: fmt.Errorf("working directory not found: %w", err)}
+			return sessionCreateMsg{err: fmt.Errorf("working directory not found (%q): %w", workingDir, err)}
 		}
 
 		// Write session ID to git metadata (safe from git status/commits)
