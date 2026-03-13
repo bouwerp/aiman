@@ -230,9 +230,16 @@ func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, na
 
 	// 6. Try to determine repo name from WorktreePath
 	if session.WorktreePath != "" {
-		parts := strings.Split(session.WorktreePath, "/")
-		if len(parts) > 0 {
-			session.RepoName = parts[len(parts)-1]
+		// Use the git root to determine the repo name accurately
+		gitRoot, err := d.remoteExecutor.GetGitRoot(ctx, session.WorktreePath)
+		if err == nil {
+			session.RepoName = filepath.Base(normalizePath(gitRoot))
+		} else {
+			// Fallback to simple path base
+			parts := strings.Split(session.WorktreePath, "/")
+			if len(parts) > 0 {
+				session.RepoName = parts[len(parts)-1]
+			}
 		}
 	}
 

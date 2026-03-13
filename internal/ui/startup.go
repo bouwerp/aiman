@@ -144,22 +144,42 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Load sessions from database and merge with discovered sessions
 		ctx := context.Background()
 		dbSessions, err := m.db.List(ctx)
-		if err == nil && len(dbSessions) > 0 {
-			// Merge: discovered sessions override DB sessions (they're more current)
+		if err == nil {
+			// Merge logic:
+			// 1. Start with discovered sessions (most accurate current state)
+			// 2. Link them to DB entries if IDs match to preserve RepoName/IssueKey
+			// 3. Add any DB sessions that weren't discovered (orphaned from perspective of this machine)
+			
 			sessMap := make(map[string]domain.Session)
 			for _, s := range dbSessions {
-				sessMap[s.TmuxSession] = s
+				sessMap[s.ID] = s
 			}
+			
+			merged := []domain.Session{}
+			seenInMerged := make(map[string]bool)
+			
+			// First, process all discovered sessions
 			for _, s := range m.sessions {
-				sessMap[s.TmuxSession] = s
-				// Save discovered sessions to DB
+				if dbSess, ok := sessMap[s.ID]; ok {
+					// Discovered session exists in DB, merge them
+					// Keep discovered paths/sync but preserve DB metadata
+					if s.RepoName == "" { s.RepoName = dbSess.RepoName }
+					if s.IssueKey == "" { s.IssueKey = dbSess.IssueKey }
+					if s.Branch == "" { s.Branch = dbSess.Branch }
+				}
+				merged = append(merged, s)
+				seenInMerged[s.ID] = true
+				// Update DB with latest discovered state
 				_ = m.db.Save(ctx, &s)
 			}
-			// Convert back to slice
-			merged := make([]domain.Session, 0, len(sessMap))
-			for _, s := range sessMap {
-				merged = append(merged, s)
+			
+			// Then add any remaining DB sessions
+			for id, s := range sessMap {
+				if !seenInMerged[id] {
+					merged = append(merged, s)
+				}
 			}
+			
 			m.sessions = merged
 		}
 
