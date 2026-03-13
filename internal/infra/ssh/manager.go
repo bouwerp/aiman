@@ -157,8 +157,9 @@ func (m *Manager) ScanGitRepos(ctx context.Context) ([]string, error) {
 		return nil, nil
 	}
 
-	// find <root> -maxdepth 2 -name .git -type d -prune
-	cmd := fmt.Sprintf("find %q -maxdepth 2 -name .git -type d -prune", m.config.Root)
+	// Use find to look for .git directories up to 2 levels deep
+	// This will find repos at <root>/repo or <root>/org/repo
+	cmd := fmt.Sprintf("find %q -maxdepth 3 -name .git -type d -prune", m.config.Root)
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan for git repos: %w", err)
@@ -178,7 +179,7 @@ func (m *Manager) ScanGitRepos(ctx context.Context) ([]string, error) {
 
 func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string, error) {
 	// git -C <repoPath> worktree list --porcelain
-	cmd := fmt.Sprintf("git -C %s worktree list --porcelain", repoPath)
+	cmd := fmt.Sprintf("git -C %s worktree list", repoPath)
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan worktrees for %s: %w", repoPath, err)
@@ -188,12 +189,22 @@ func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string,
 	cleanRepoPath := filepath.Clean(repoPath)
 
 	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		worktreePath := ""
 		if strings.HasPrefix(line, "worktree ") {
-			worktreePath := strings.TrimPrefix(line, "worktree ")
-			worktreePath = strings.TrimSpace(worktreePath)
-			if filepath.Clean(worktreePath) != cleanRepoPath {
-				worktrees = append(worktrees, worktreePath)
-			}
+			// Porcelain format
+			worktreePath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		} else {
+			// Standard format (usually path is the first field)
+			worktreePath = strings.Fields(line)[0]
+		}
+		
+		if worktreePath != "" && filepath.Clean(worktreePath) != cleanRepoPath {
+			worktrees = append(worktrees, worktreePath)
 		}
 	}
 	return worktrees, nil
