@@ -129,7 +129,10 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	if strings.Contains(name, "cursor") {
 		cmd := agent.Command
 		if promptFree {
-			cmd = fmt.Sprintf("%s --force .", cmd)
+			// --force: Auto-approve shell commands
+			// --trust: Auto-trust the workspace
+			// --approve-mcps: Auto-approve MCP connections
+			cmd = fmt.Sprintf("%s --force --trust --approve-mcps .", cmd)
 		} else {
 			cmd = fmt.Sprintf("%s .", cmd)
 		}
