@@ -52,7 +52,7 @@ type GitSetupModel struct {
 func NewGitSetupModel(cfg *config.Config) GitSetupModel {
 	m := GitSetupModel{
 		cfg:            cfg,
-		personalToggle: cfg.Git.IncludePersonal,
+		personalToggle: config.PersonalReposEnabled(&cfg.Git),
 		loading:        true,
 	}
 
@@ -230,7 +230,8 @@ func (m GitSetupModel) save() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.cfg.Git.IncludePersonal = m.personalToggle
+	p := m.personalToggle
+	m.cfg.Git.IncludePersonal = &p
 	m.cfg.Git.IncludeOrgs = selectedOrgs
 	m.cfg.Git.IncludePatterns = parseCommaList(m.includeInput.Value())
 	m.cfg.Git.ExcludePatterns = parseCommaList(m.excludeInput.Value())

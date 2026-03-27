@@ -33,10 +33,20 @@ type Integrations struct {
 }
 
 type GitConfig struct {
-	IncludePersonal bool     `yaml:"include_personal,omitempty"`
+	// IncludePersonal, when nil, means true (include your GitHub account repos).
+	// Omitted keys in YAML must not disable personal repos; use explicit false to opt out.
+	IncludePersonal *bool    `yaml:"include_personal,omitempty"`
 	IncludeOrgs     []string `yaml:"include_orgs,omitempty"`
 	IncludePatterns []string `yaml:"include_patterns,omitempty"`
 	ExcludePatterns []string `yaml:"exclude_patterns,omitempty"`
+}
+
+// PersonalReposEnabled returns whether repos under the authenticated GitHub user should be listed.
+func PersonalReposEnabled(g *GitConfig) bool {
+	if g == nil || g.IncludePersonal == nil {
+		return true
+	}
+	return *g.IncludePersonal
 }
 
 type FeatureFlags struct {

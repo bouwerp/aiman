@@ -81,7 +81,7 @@ func NewRepoPickerModel(repos []domain.Repo, cfg *config.GitConfig) RepoPickerMo
 
 func (m *RepoPickerModel) initOwnersList() {
 	var items []list.Item
-	if m.config.IncludePersonal {
+	if config.PersonalReposEnabled(m.config) {
 		items = append(items, ownerItem{name: "Personal (your account)"})
 	}
 	for _, org := range m.config.IncludeOrgs {

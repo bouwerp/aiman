@@ -19,10 +19,8 @@ type Manager struct {
 
 func NewManager(cfg *config.GitConfig) *Manager {
 	if cfg == nil {
-		// Default: include personal repos, no orgs, no filtering
-		cfg = &config.GitConfig{
-			IncludePersonal: true,
-		}
+		yes := true
+		cfg = &config.GitConfig{IncludePersonal: &yes}
 	}
 	return &Manager{cfg: cfg}
 }
@@ -52,8 +50,8 @@ type ghPR struct {
 func (m *Manager) ListRepos(ctx context.Context) ([]domain.Repo, error) {
 	var allRepos []domain.Repo
 
-	// Fetch personal repos if enabled (default true)
-	if m.cfg.IncludePersonal {
+	// Fetch repos owned by the authenticated user (default on; see config.PersonalReposEnabled).
+	if config.PersonalReposEnabled(m.cfg) {
 		personalRepos, err := m.fetchPersonalRepos(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch personal repos: %w", err)
@@ -79,7 +77,9 @@ func (m *Manager) ListRepos(ctx context.Context) ([]domain.Repo, error) {
 }
 
 func (m *Manager) fetchPersonalRepos(ctx context.Context) ([]domain.Repo, error) {
-	cmd := exec.CommandContext(ctx, "gh", "repo", "list", "--limit", "100", "--json", "name,url,nameWithOwner")
+	// No owner argument: lists repos for the authenticated GitHub user (not orgs).
+	// --limit is above gh's default (30).
+	cmd := exec.CommandContext(ctx, "gh", "repo", "list", "--limit", "200", "--json", "name,url,nameWithOwner")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list personal repositories: %w, output: %s", err, string(output))
@@ -89,7 +89,7 @@ func (m *Manager) fetchPersonalRepos(ctx context.Context) ([]domain.Repo, error)
 }
 
 func (m *Manager) fetchOrgRepos(ctx context.Context, org string) ([]domain.Repo, error) {
-	cmd := exec.CommandContext(ctx, "gh", "repo", "list", org, "--limit", "100", "--json", "name,url,nameWithOwner")
+	cmd := exec.CommandContext(ctx, "gh", "repo", "list", org, "--limit", "200", "--json", "name,url,nameWithOwner")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list org repositories for %s: %w, output: %s", org, err, string(output))
