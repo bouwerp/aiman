@@ -57,10 +57,14 @@ const (
 	viewStateTerminateConfirm
 	viewStateTerminateProgress
 	viewStateWorktreeExists
+	viewStateBranchPicker
+	viewStateModePicker
 	viewStateRestartAgentPicker
 	viewStateRestartConfirm
 	viewStateChangeDirPicker
 	viewStateChangeDirConfirm
+	viewStateError        // generic error dialog (press any key to dismiss)
+	viewStateRemotePicker // select remote for new session
 )
 
 type panelMode int
@@ -83,6 +87,7 @@ type item struct {
 	session    domain.Session
 	needsInput bool
 	activity   string
+	remoteName string // short name of the remote for display
 }
 
 func (i item) Title() string {
@@ -104,10 +109,14 @@ func (i item) Title() string {
 	case i.activity == "busy":
 		activity = " • busy"
 	}
-	if i.session.IssueKey != "" {
-		return fmt.Sprintf("%s%s (%s)%s", prefix, i.session.IssueKey, i.session.TmuxSession, activity)
+	remoteTag := ""
+	if i.remoteName != "" {
+		remoteTag = " [" + i.remoteName + "]"
 	}
-	return fmt.Sprintf("%s%s%s", prefix, i.session.TmuxSession, activity)
+	if i.session.IssueKey != "" {
+		return fmt.Sprintf("%s%s (%s)%s%s", prefix, i.session.IssueKey, i.session.TmuxSession, activity, remoteTag)
+	}
+	return fmt.Sprintf("%s%s%s%s", prefix, i.session.TmuxSession, activity, remoteTag)
 }
 
 func (i item) Description() string {
@@ -121,7 +130,7 @@ func (i item) Description() string {
 }
 
 func (i item) FilterValue() string {
-	return i.session.IssueKey + " " + i.session.TmuxSession + " " + i.session.RepoName
+	return i.session.IssueKey + " " + i.session.TmuxSession + " " + i.session.RepoName + " " + i.remoteName
 }
 
 type Model struct {
@@ -138,6 +147,7 @@ type Model struct {
 	picker                 RepoPickerModel
 	issuePicker            IssuePickerModel
 	branchInput            BranchInputModel
+	branchPicker           BranchPickerModel
 	dirPicker              DirPickerModel
 	agentPicker            AgentPickerModel
 	summary                SummaryModel
@@ -168,12 +178,49 @@ type Model struct {
 	changingDirSession     *domain.Session
 	flowManager            *usecase.FlowManager
 	firstLoad              map[string]bool
+	selectedRemote         config.Remote  // remote chosen for the current new-session wizard
+	remoteFilter           string         // "" = all remotes, otherwise a Remote.Host to filter by
+	allSessions            []domain.Session // unfiltered master session list
 }
 
-func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager) *Model {
+func remoteNameForHost(cfg *config.Config, host string) string {
+	for _, r := range cfg.Remotes {
+		if r.Host == host {
+			if r.Name != "" {
+				return r.Name
+			}
+			return r.Host
+		}
+	}
+	return host
+}
+
+func (m *Model) makeItem(s domain.Session) item {
+	return item{
+		session:    s,
+		remoteName: remoteNameForHost(m.cfg, s.RemoteHost),
+	}
+}
+
+func (m *Model) applyRemoteFilter() {
+	var filtered []list.Item
+	for _, s := range m.allSessions {
+		if m.remoteFilter == "" || s.RemoteHost == m.remoteFilter {
+			filtered = append(filtered, m.makeItem(s))
+		}
+	}
+	m.list.SetItems(filtered)
+	if m.remoteFilter == "" {
+		m.list.Title = "Aiman Dashboard - Active Sessions"
+	} else {
+		m.list.Title = "Sessions [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
+	}
+}
+
+func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager, initialLogs ...string) *Model {
 	items := make([]list.Item, len(initialSessions))
 	for i, s := range initialSessions {
-		items[i] = item{session: s, needsInput: false, activity: ""}
+		items[i] = item{session: s, remoteName: remoteNameForHost(cfg, s.RemoteHost)}
 	}
 
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
@@ -185,18 +232,18 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
 			key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "attach full terminal")),
-			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "toggle preview/terminal")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
 			key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "copy local path")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
+			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 		}
 	}
 
 	menuItems := []list.Item{
-		menuItem{title: "Manage Remote Servers", desc: "Select active, add new, or scan suggestions", action: viewStateRemotes},
+		menuItem{title: "Manage Remote Servers", desc: "Add, edit, or remove remote dev servers", action: viewStateRemotes},
 		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
@@ -209,7 +256,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		Border(lipgloss.NormalBorder(), true, false, false, false). // Top border
 		PaddingTop(1)
 
-	return &Model{
+	model := &Model{
 		cfg:           cfg,
 		db:            db,
 		flowManager:   flowManager,
@@ -224,7 +271,12 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		doctorResults: doctorResults,
 		viewport:      vp,
 		firstLoad:     make(map[string]bool),
+		allSessions:   initialSessions,
 	}
+	for _, log := range initialLogs {
+		model.consoleLog = append(model.consoleLog, log)
+	}
+	return model
 }
 
 type tmuxTickMsg time.Time
@@ -309,7 +361,7 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 }
 
 func tickTmux() tea.Cmd {
-	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 		return tmuxTickMsg(t)
 	})
 }
@@ -456,7 +508,18 @@ func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, b
 		return config.Remote{}, false
 	}
 
-	// Prefer active remote if set
+	// Prefer the session's own remote host — this is the authoritative source for
+	// existing sessions and enables multi-remote support.
+	if session.RemoteHost != "" {
+		for _, r := range cfg.Remotes {
+			if r.Host == session.RemoteHost {
+				return r, true
+			}
+		}
+	}
+
+	// Fallback for legacy sessions with empty RemoteHost: try ActiveRemote
+	// (for backward compat with existing configs) then first configured remote.
 	if cfg.ActiveRemote != "" {
 		for _, r := range cfg.Remotes {
 			if r.Host == cfg.ActiveRemote {
@@ -464,14 +527,8 @@ func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, b
 			}
 		}
 	}
-
-	// Fallback to session's remote host
-	if session.RemoteHost != "" {
-		for _, r := range cfg.Remotes {
-			if r.Host == session.RemoteHost {
-				return r, true
-			}
-		}
+	if len(cfg.Remotes) > 0 {
+		return cfg.Remotes[0], true
 	}
 
 	return config.Remote{}, false
@@ -532,6 +589,11 @@ type reposMsg struct {
 	err   error
 }
 
+type branchesMsg struct {
+	branches []string
+	err      error
+}
+
 type dirsMsg struct {
 	dirs []string
 	err  error
@@ -570,19 +632,18 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 
 		// Use persisted WorkingDirectory if available, otherwise try to fetch from tmux or fallback to worktree
 		remoteSyncDir := s.WorkingDirectory
+		if remoteSyncDir == "" && s.TmuxSession != "" {
+			fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			if cwd, err := mgr.GetTmuxSessionCWD(fetchCtx, s.TmuxSession); err == nil && strings.TrimSpace(cwd) != "" {
+				remoteSyncDir = strings.TrimSpace(cwd)
+			}
+			cancel()
+		}
 		if remoteSyncDir == "" {
 			remoteSyncDir = s.WorktreePath
-			if s.TmuxSession != "" {
-				fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-				if cwd, err := mgr.GetTmuxSessionCWD(fetchCtx, s.TmuxSession); err == nil && strings.TrimSpace(cwd) != "" {
-					remoteSyncDir = strings.TrimSpace(cwd)
-				}
-				cancel()
-			}
 		}
-
 		if remoteSyncDir == "" {
-			return recreateMutagenMsg{err: fmt.Errorf("session has no remote working directory")}
+			return recreateMutagenMsg{err: fmt.Errorf("session has no remote working directory (WorkingDirectory, WorktreePath, and tmux CWD are all empty)")}
 		}
 
 		target := remote.Host
@@ -643,21 +704,34 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 	}
 }
 
-func (m *Model) fetchDirectories(basePath string) tea.Cmd {
+func (m *Model) fetchBranches(repo domain.Repo) tea.Cmd {
+	remote := m.selectedRemote
 	return func() tea.Msg {
 		ctx := context.Background()
 
-		// Find remote config
-		var remote config.Remote
-		for _, r := range m.cfg.Remotes {
-			if r.Host == m.cfg.ActiveRemote {
-				remote = r
-				break
-			}
+		if remote.Host == "" {
+			return branchesMsg{err: fmt.Errorf("no remote selected")}
 		}
 
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		if err := mgr.Connect(ctx); err != nil {
+			return branchesMsg{err: fmt.Errorf("failed to connect to remote: %w", err)}
+		}
+		defer mgr.Close()
+
+		gitMgr := git.NewManager(&m.cfg.Git)
+		branches, err := gitMgr.ListRemoteBranches(ctx, mgr, repo)
+		return branchesMsg{branches: branches, err: err}
+	}
+}
+
+func (m *Model) fetchDirectories(basePath string) tea.Cmd {
+	remote := m.selectedRemote
+	return func() tea.Msg {
+		ctx := context.Background()
+
 		if remote.Host == "" {
-			return dirsMsg{err: fmt.Errorf("no active remote configured")}
+			return dirsMsg{err: fmt.Errorf("no remote selected")}
 		}
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
@@ -676,20 +750,12 @@ func (m *Model) fetchDirectories(basePath string) tea.Cmd {
 }
 
 func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
+	remote := m.selectedRemote
 	return func() tea.Msg {
 		ctx := context.Background()
 
-		// Find remote config
-		var remote config.Remote
-		for _, r := range m.cfg.Remotes {
-			if r.Host == m.cfg.ActiveRemote {
-				remote = r
-				break
-			}
-		}
-
 		if remote.Host == "" {
-			return dirsMsg{err: fmt.Errorf("no active remote configured")}
+			return dirsMsg{err: fmt.Errorf("no remote selected")}
 		}
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
@@ -725,18 +791,10 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 }
 
 func (m *Model) fetchAgents() tea.Cmd {
+	remote := m.selectedRemote
 	return func() tea.Msg {
-		// Find remote config
-		var remote config.Remote
-		for _, r := range m.cfg.Remotes {
-			if r.Host == m.cfg.ActiveRemote {
-				remote = r
-				break
-			}
-		}
-
 		if remote.Host == "" {
-			return agent.ScanAgentsMsg{Err: fmt.Errorf("no active remote configured")}
+			return agent.ScanAgentsMsg{Err: fmt.Errorf("no remote selected")}
 		}
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
@@ -746,11 +804,23 @@ func (m *Model) fetchAgents() tea.Cmd {
 }
 
 func (m *Model) createSession() tea.Cmd {
+	// Resolve the active remote at dispatch time (before goroutine runs)
+	sessionCfg := m.sessionCfg
+	remote := m.selectedRemote
+	if remote.Host != "" {
+		sessionCfg.SSHManager = ssh.NewManager(ssh.Config{
+			Host: remote.Host,
+			User: remote.User,
+			Root: remote.Root,
+		})
+		sessionCfg.RemoteHost = remote.Host
+	}
+
 	return func() tea.Msg {
 		ctx := context.Background()
-		
+
 		// Use FlowManager to create the session
-		session, err := m.flowManager.CreateSession(ctx, m.sessionCfg)
+		session, err := m.flowManager.CreateSession(ctx, sessionCfg)
 		if err != nil {
 			return sessionCreateMsg{err: err}
 		}
@@ -760,29 +830,23 @@ func (m *Model) createSession() tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("session ID is empty (%q), cannot safely create sync path", session.ID)}
 		}
 
+		// Tag the session with the remote it was created on
+		session.RemoteHost = sessionCfg.RemoteHost
+
 		// Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
-		
+
 		syncName := "aiman-sync-" + session.ID
 		m.log("Creating sync %q", syncName)
 		localSyncPath := filepath.Join(home, config.DirName, "work", session.ID)
-		
+
 		m.log("Cleaning up local sync path: %s", localSyncPath)
 		_ = os.RemoveAll(localSyncPath)
 		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
-		
-		// Find remote config for mutagen
-		var remote config.Remote
-		for _, r := range m.cfg.Remotes {
-			if r.Host == m.cfg.ActiveRemote {
-				remote = r
-				break
-			}
-		}
-		
+
 		target := remote.Host
 		if remote.User != "" {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
@@ -823,24 +887,42 @@ func (m *Model) runTerminateStep(index int) error {
 
 	switch index {
 	case 0: // Stop mutagen sync
-		name := s.MutagenSyncID
-		if name == "" {
-			name = s.TmuxSession
+		// Build a list of candidate names to try. The canonical name is
+		// "aiman-sync-{session-id}" but older sessions or DB rows may store
+		// the mutagen UUID, tmux session name, or nothing at all.
+		var candidates []string
+		if s.ID != "" {
+			candidates = append(candidates, "aiman-sync-"+s.ID)
 		}
-		if name == "" {
-			return nil
+		if s.MutagenSyncID != "" {
+			candidates = append(candidates, s.MutagenSyncID)
 		}
-		cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", name) // #nosec G204
-		if out, err := cmd.CombinedOutput(); err != nil {
-			// Try fallback using tmux session name if different
-			if s.TmuxSession != "" && s.TmuxSession != name {
-				fallback := exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession) // #nosec G204
-				if _, fbErr := fallback.CombinedOutput(); fbErr == nil {
-					return nil
-				}
+		if s.TmuxSession != "" {
+			candidates = append(candidates, s.TmuxSession)
+		}
+		if s.LocalPath != "" {
+			candidates = append(candidates, filepath.Base(s.LocalPath))
+		}
+
+		tried := map[string]bool{}
+		for _, name := range candidates {
+			if name == "" || tried[name] {
+				continue
 			}
-			return fmt.Errorf("mutagen terminate failed: %w, output: %s", err, string(out))
+			tried[name] = true
+			cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", name) // #nosec G204
+			if _, err := cmd.CombinedOutput(); err == nil {
+				return nil // successfully terminated
+			}
 		}
+		// Also try terminating by label if we have a session ID.
+		if s.ID != "" {
+			cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", "--label-selector", "aiman-id="+s.ID) // #nosec G204
+			if _, err := cmd.CombinedOutput(); err == nil {
+				return nil
+			}
+		}
+		// Not finding a sync is fine — it may have been cleaned up already.
 		return nil
 	}
 
@@ -948,6 +1030,31 @@ func (m *Model) log(format string, args ...interface{}) {
 	}
 }
 
+// wrapLines wraps each log line to width and joins them with newlines.
+func wrapLines(lines []string, width int) string {
+	if width <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	var sb strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		for len(line) > width {
+			// Try to break at the last space before width
+			cut := width
+			if idx := strings.LastIndex(line[:width], " "); idx > 0 {
+				cut = idx + 1
+			}
+			sb.WriteString(line[:cut])
+			sb.WriteByte('\n')
+			line = line[cut:]
+		}
+		sb.WriteString(line)
+	}
+	return sb.String()
+}
+
 func (m *Model) renderWithConsole(baseView string) string {
 	consoleHeight := m.height / 3
 	if consoleHeight < 5 {
@@ -957,8 +1064,16 @@ func (m *Model) renderWithConsole(baseView string) string {
 		consoleHeight = 20
 	}
 
-	// Update viewport content with latest logs
-	m.consoleViewport.SetContent(strings.Join(m.consoleLog, "\n"))
+	// Update viewport content without losing scroll position.
+	// If already at the bottom, follow new content; otherwise stay put.
+	atBottom := m.consoleViewport.AtBottom()
+	yOffset := m.consoleViewport.YOffset
+	m.consoleViewport.SetContent(wrapLines(m.consoleLog, m.consoleViewport.Width))
+	if atBottom {
+		m.consoleViewport.GotoBottom()
+	} else {
+		m.consoleViewport.SetYOffset(yOffset)
+	}
 
 	// Build console content
 	consoleStyle := lipgloss.NewStyle().
@@ -994,7 +1109,7 @@ func (m *Model) SetSize(width, height int) {
 
 	m.list.SetSize(width/3-h, mainHeight) // Sidebar width
 	m.menu.SetSize(width-h, height-v)
-	m.remotes.list.SetSize(width-h-4, height-v-14)
+	m.remotes.list.SetSize(width-h-4, height-v-6)
 	m.remotes.width = width
 	m.remotes.height = height
 
@@ -1059,7 +1174,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateGeneralSettings:
 		return m.handleGeneralSetupUpdate(msg)
 
-	case viewStateVSCodeError:
+	case viewStateVSCodeError, viewStateError:
 		if _, ok := msg.(tea.KeyMsg); ok {
 			m.state = viewStateMain
 		}
@@ -1100,6 +1215,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case viewStateWorktreeExists:
 		return m.handleWorktreeExistsUpdate(msg)
+
+	case viewStateBranchPicker:
+		return m.handleBranchPickerUpdate(msg)
+
+	case viewStateRemotePicker:
+		return m.handleRemotePickerUpdate(msg)
+
+	case viewStateModePicker:
+		return m.handleModePickerUpdate(msg)
 
 	case viewStateTerminateProgress:
 		return m.handleTerminateProgressUpdate(msg)
@@ -1161,6 +1285,20 @@ func (m *Model) renderView() string {
 
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
 
+	case viewStateError:
+		var b strings.Builder
+		b.WriteString(failStyle.Render("Error") + "\n\n")
+		b.WriteString(m.lastError + "\n\n")
+		b.WriteString("Press any key to return.")
+
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(lipgloss.Color("196")).
+			Padding(1, 2).
+			Width(60)
+
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
 	case viewStateIssuePicker:
 		return docStyle.Render(m.issuePicker.View())
 
@@ -1175,6 +1313,50 @@ func (m *Model) renderView() string {
 
 	case viewStateAgentPicker:
 		return docStyle.Render(m.agentPicker.View())
+
+	case viewStateBranchPicker:
+		return docStyle.Render(m.branchPicker.View())
+
+	case viewStateRemotePicker:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("Select Remote Server") + "\n\n")
+		for i, r := range m.cfg.Remotes {
+			label := r.Name
+			if label == "" {
+				label = r.Host
+			}
+			b.WriteString(fmt.Sprintf("  %s  %s (%s@%s)\n", activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host))
+		}
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("  esc: cancel"))
+
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("205")).
+			Padding(1, 2).
+			Width(60)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateModePicker:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("New Session") + "\n\n")
+		if m.selectedRemote.Host != "" {
+			remoteLabel := m.selectedRemote.Name
+			if remoteLabel == "" {
+				remoteLabel = m.selectedRemote.Host
+			}
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Remote: ") +
+				lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(remoteLabel) + "\n\n")
+		}
+		b.WriteString("How would you like to start?\n\n")
+		b.WriteString(activeStyle.Render("[1]") + "  From JIRA Issue      — link session to a JIRA ticket\n")
+		b.WriteString(activeStyle.Render("[2]") + "  New Branch           — start with a custom branch name\n")
+		b.WriteString(activeStyle.Render("[3]") + "  Existing Branch      — check out an existing remote branch\n")
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: cancel"))
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(2, 4).
+			Width(62)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
 
 	case viewStateRestartAgentPicker:
 		return docStyle.Render(m.agentPicker.View())
@@ -1274,7 +1456,11 @@ func (m *Model) renderView() string {
 		b.WriteString(failStyle.Render("Worktree Already Exists") + "\n\n")
 		b.WriteString(fmt.Sprintf("A git worktree already exists for branch:\n%s\n\n", m.sessionCfg.Branch))
 		b.WriteString("This usually means there's an existing session.\n\n")
-		b.WriteString(activeStyle.Render("[b]") + " Change Branch Name\n")
+		if m.sessionCfg.ExistingBranch {
+			b.WriteString(activeStyle.Render("[b]") + " Pick a Different Branch\n")
+		} else {
+			b.WriteString(activeStyle.Render("[b]") + " Change Branch Name\n")
+		}
 		b.WriteString(activeStyle.Render("[c]") + " Cancel")
 
 		dialog := lipgloss.NewStyle().
@@ -1366,23 +1552,31 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tmuxOutputMsg:
 		if msg.session == m.activeSession {
+			var newOutput string
 			if msg.err != nil {
-				m.tmuxOutput = failStyle.Render("Failed to capture pane: " + msg.err.Error())
+				newOutput = failStyle.Render("Failed to capture pane: " + msg.err.Error())
 			} else {
-				m.tmuxOutput = msg.output
+				newOutput = msg.output
 			}
 
 			// Sticky scroll: only go to bottom if we were already at the bottom OR if it's the first load for this session.
 			wasAtBottom := m.viewport.AtBottom()
-			if !m.firstLoad[msg.session] && m.tmuxOutput != "Loading..." && msg.err == nil {
+			yOffset := m.viewport.YOffset
+			isFirstLoad := !m.firstLoad[msg.session] && newOutput != "Loading..." && msg.err == nil
+			if isFirstLoad {
 				wasAtBottom = true
 				m.firstLoad[msg.session] = true
 			}
 
-			m.viewport.SetContent(m.tmuxOutput)
-
-			if wasAtBottom {
-				m.viewport.GotoBottom()
+			// Only update viewport content when it actually changed.
+			if newOutput != m.tmuxOutput || isFirstLoad {
+				m.tmuxOutput = newOutput
+				m.viewport.SetContent(m.tmuxOutput)
+				if wasAtBottom {
+					m.viewport.GotoBottom()
+				} else {
+					m.viewport.SetYOffset(yOffset)
+				}
 			}
 		}
 	case inputHintMsg:
@@ -1444,8 +1638,6 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	var cmds []tea.Cmd
-
 	if msg.String() == "`" {
 		m.consoleOpen = !m.consoleOpen
 		m.log("Console toggled: %v", m.consoleOpen)
@@ -1459,7 +1651,7 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 				consoleHeight = 20
 			}
 			m.consoleViewport = viewport.New(m.width-6, consoleHeight-4)
-			m.consoleViewport.SetContent(strings.Join(m.consoleLog, "\n"))
+			m.consoleViewport.SetContent(wrapLines(m.consoleLog, m.width-6))
 			m.consoleViewport.GotoBottom()
 		}
 		return m, nil, true
@@ -1482,11 +1674,34 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 	}
 	if msg.String() == "n" {
-		m.state = viewStateIssuePicker
-		m.issuePicker = NewIssuePickerModel(nil)
-		m.issuePicker.loading = true
-		m.issuePicker.SetSize(m.width, m.height)
-		return m, m.searchJira(""), true
+		m.sessionCfg = domain.SessionConfig{}
+		if len(m.cfg.Remotes) > 1 {
+			m.state = viewStateRemotePicker
+		} else if len(m.cfg.Remotes) == 1 {
+			m.selectedRemote = m.cfg.Remotes[0]
+			m.sessionCfg.RemoteHost = m.selectedRemote.Host
+			m.state = viewStateModePicker
+		} else {
+			m.lastError = "No remote servers configured. Go to Admin Menu to add one."
+			m.state = viewStateError
+		}
+		return m, nil, true
+	}
+	if msg.String() == "f" && len(m.cfg.Remotes) > 1 {
+		hosts := []string{""} // "" = all
+		for _, r := range m.cfg.Remotes {
+			hosts = append(hosts, r.Host)
+		}
+		idx := 0
+		for i, h := range hosts {
+			if h == m.remoteFilter {
+				idx = i
+				break
+			}
+		}
+		m.remoteFilter = hosts[(idx+1)%len(hosts)]
+		m.applyRemoteFilter()
+		return m, nil, true
 	}
 	if msg.String() == "m" {
 		m.state = viewStateMenu
@@ -1501,36 +1716,12 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, tea.Quit, true
 	}
-	if msg.String() == "ctrl+t" {
-		if m.panelMode == panelModePreview {
-			if sel := m.list.SelectedItem(); sel != nil {
-				m.loadingMsg = fmt.Sprintf("Connecting to session %s...", sel.(item).session.TmuxSession)
-				m.loadingNext = viewStateMain
-				m.state = viewStateLoading
-				return m, tea.Sequence(
-					tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
-						return m.initTerminal(sel.(item).session)()
-					}),
-				), true
-			}
-		} else {
-			m.panelMode = panelModePreview
-			if m.termCloser != nil {
-				m.termCloser.Close()
-				m.termCloser = nil
-			}
-		}
-		return m, tea.Batch(cmds...), true
-	}
 	if msg.String() == "ctrl+s" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
-			var remote config.Remote
-			for _, r := range m.cfg.Remotes {
-				if r.Host == m.cfg.ActiveRemote {
-					remote = r
-					break
-				}
+			remote, ok := resolveRemote(m.cfg, s)
+			if !ok {
+				return m, nil, true
 			}
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 			c := mgr.AttachTmuxSession(s.TmuxSession)
@@ -1666,29 +1857,31 @@ end tell`, s.LocalPath)
 	}
 	if msg.String() == "m" {
 
-		// Refresh sessions from remote
+		// Refresh sessions from all remotes
 		m.log("Refreshing sessions...")
-		if m.cfg.ActiveRemote != "" {
-			var remote config.Remote
-			for _, r := range m.cfg.Remotes {
-				if r.Host == m.cfg.ActiveRemote {
-					remote = r
-					break
-				}
-			}
-			// Trigger session discovery
+		if len(m.cfg.Remotes) > 0 {
+			remotes := m.cfg.Remotes // capture for closure
 			m.loadingMsg = "Refreshing sessions..."
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
 			return m, func() tea.Msg {
 				ctx := context.Background()
-				mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-				if err := mgr.Connect(ctx); err != nil {
-					return discoveryResultMsg{}
+				var allSessions []domain.Session
+				scannedHosts := make(map[string]bool)
+				for _, r := range remotes {
+					mgr := ssh.NewManager(ssh.Config{Host: r.Host, User: r.User, Root: r.Root})
+					if err := mgr.Connect(ctx); err != nil {
+						continue
+					}
+					discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
+					sessions, _ := discoverer.Discover(ctx, r.Host)
+					allSessions = append(allSessions, sessions...)
+					scannedHosts[r.Host] = true
 				}
-				discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
-				sessions, _ := discoverer.Discover(ctx, remote.Host)
-				return discoveryResultMsg(sessions)
+				return discoveryResultMsg{
+					sessions:     allSessions,
+					scannedHosts: scannedHosts,
+				}
 			}, true
 		}
 		return m, nil, true
@@ -1719,6 +1912,10 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if i, ok := m.menu.SelectedItem().(menuItem); ok {
 				if i.action == viewStateRemotes {
 					m.remotes = NewRemotesModel(m.cfg)
+					m.remotes.width = m.width
+					m.remotes.height = m.height
+					h, v := docStyle.GetFrameSize()
+					m.remotes.list.SetSize(m.width-h-4, m.height-v-6)
 					m.state = i.action
 					return m, nil
 				}
@@ -1751,7 +1948,7 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleRemotesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-		if m.remotes.list.FilterState() != list.Filtering {
+		if m.remotes.IsAtTopLevel() {
 			m.state = viewStateMenu
 			return m, nil
 		}
@@ -1763,11 +1960,8 @@ func (m *Model) handleRemotesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.remotes = subModel.(RemotesModel)
 
 	if m.remotes.done {
-		items := make([]list.Item, len(m.remotes.DiscoveredSessions))
-		for i, s := range m.remotes.DiscoveredSessions {
-			items[i] = item{session: s}
-		}
-		m.list.SetItems(items)
+		m.allSessions = m.remotes.DiscoveredSessions
+		m.applyRemoteFilter()
 		m.remotes.done = false
 		m.state = viewStateMain
 		return m, nil
@@ -1823,10 +2017,62 @@ func (m *Model) handleGeneralSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) handleRemotePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc":
+			m.state = viewStateMain
+			return m, nil
+		default:
+			idx := 0
+			if n, err := strconv.Atoi(km.String()); err == nil {
+				idx = n
+			}
+			if idx >= 1 && idx <= len(m.cfg.Remotes) {
+				r := m.cfg.Remotes[idx-1]
+				m.selectedRemote = r
+				m.sessionCfg.RemoteHost = r.Host
+				m.state = viewStateModePicker
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc":
+			m.state = viewStateMain
+			return m, nil
+		case "1":
+			m.sessionCfg = domain.SessionConfig{}
+			m.issuePicker = NewIssuePickerModel(nil)
+			m.issuePicker.loading = true
+			m.issuePicker.SetSize(m.width, m.height)
+			m.state = viewStateIssuePicker
+			return m, m.searchJira("")
+		case "2":
+			m.sessionCfg = domain.SessionConfig{}
+			m.state = viewStateBranchInput
+			m.branchInput = NewBranchInputModel("")
+			return m, nil
+		case "3":
+			m.sessionCfg = domain.SessionConfig{ExistingBranch: true}
+			m.loadingMsg = "Loading repositories..."
+			m.loadingNext = viewStateRepoPicker
+			m.state = viewStateLoading
+			m.picker = NewRepoPickerModel(nil, &m.cfg.Git)
+			return m, m.fetchRepos()
+		}
+	}
+	return m, nil
+}
+
 func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
 		if m.issuePicker.list.FilterState() != list.Filtering {
-			m.state = viewStateMain
+			m.state = viewStateModePicker
 			return m, nil
 		}
 	}
@@ -1844,16 +2090,10 @@ func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	subModel, cmd = m.issuePicker.Update(msg)
 	m.issuePicker = subModel.(IssuePickerModel)
-	if m.issuePicker.AdHoc {
-		m.sessionCfg.IssueKey = ""
-		m.sessionCfg.Branch = ""
-		m.state = viewStateBranchInput
-		m.branchInput = NewBranchInputModel("adhoc-session")
-		return m, nil
-	}
 	if m.issuePicker.selected != nil {
 		slug := m.issuePicker.selected.Slug()
 		m.sessionCfg.IssueKey = m.issuePicker.selected.Key
+		m.sessionCfg.Issue = m.issuePicker.selected
 		m.state = viewStateBranchInput
 		m.branchInput = NewBranchInputModel(slug)
 		return m, nil
@@ -1861,9 +2101,49 @@ func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) handleBranchPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		if m.branchPicker.list.FilterState() != list.Filtering {
+			m.state = viewStateRepoPicker
+			return m, nil
+		}
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.branchPicker.Update(msg)
+	m.branchPicker = subModel.(BranchPickerModel)
+	if m.branchPicker.selected != "" {
+		branch := m.branchPicker.selected
+		// Check DB for active sessions with the same branch + repo
+		if m.db != nil {
+			ctx := context.Background()
+			if sessions, err := m.db.List(ctx); err == nil {
+				for _, s := range sessions {
+					if s.Branch == branch && s.RepoName == m.sessionCfg.Repo.Name &&
+						(s.Status == domain.SessionStatusActive || s.Status == domain.SessionStatusSyncing) {
+						m.sessionCfg.Branch = branch
+						m.state = viewStateWorktreeExists
+						return m, nil
+					}
+				}
+			}
+		}
+		m.sessionCfg.Branch = branch
+		m.loadingMsg = "Scanning directories..."
+		m.loadingNext = viewStateDirPicker
+		m.state = viewStateLoading
+		return m, m.fetchRepoDirectories(&m.sessionCfg.Repo)
+	}
+	return m, cmd
+}
+
 func (m *Model) handleBranchInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-		m.state = viewStateIssuePicker
+		if m.sessionCfg.IssueKey != "" {
+			m.state = viewStateIssuePicker
+		} else {
+			m.state = viewStateModePicker
+		}
 		return m, nil
 	}
 	var subModel tea.Model
@@ -1884,7 +2164,11 @@ func (m *Model) handleBranchInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
 		if m.picker.list.FilterState() != list.Filtering {
-			m.state = viewStateBranchInput
+			if m.sessionCfg.ExistingBranch {
+				m.state = viewStateModePicker
+			} else {
+				m.state = viewStateBranchInput
+			}
 			return m, nil
 		}
 	}
@@ -1911,8 +2195,15 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetchRepoDirectories(nil)
 	}
 	if m.picker.selected != nil {
-		// Repo selected, now fetch directories
+		// Repo selected, now fetch directories (or branches for existing branch mode)
 		m.sessionCfg.Repo = *m.picker.selected
+
+		if m.sessionCfg.ExistingBranch {
+			m.loadingMsg = "Loading remote branches..."
+			m.loadingNext = viewStateBranchPicker
+			m.state = viewStateLoading
+			return m, m.fetchBranches(*m.picker.selected)
+		}
 
 		if m.sessionCfg.Repo.IsNew {
 			// It's a new repo, skip directory scan
@@ -2019,6 +2310,7 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.agentPicker = subModel.(AgentPickerModel)
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
+		m.sessionCfg.PromptFree = true
 		m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
 		m.summary.SetAgent(m.sessionCfg.Agent)
 		m.summary.SetSize(m.width, m.height)
@@ -2108,12 +2400,18 @@ func (m *Model) handleWorktreeExistsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateMain
 			return m, nil
 		case "b":
-			m.state = viewStateBranchInput
-			slug := m.sessionCfg.IssueKey
-			if m.sessionCfg.Branch != "" {
-				slug = m.sessionCfg.Branch
+			if m.sessionCfg.ExistingBranch {
+				// Go back to branch picker and reset selection
+				m.branchPicker.selected = ""
+				m.state = viewStateBranchPicker
+			} else {
+				m.state = viewStateBranchInput
+				slug := m.sessionCfg.IssueKey
+				if m.sessionCfg.Branch != "" {
+					slug = m.sessionCfg.Branch
+				}
+				m.branchInput = NewBranchInputModel(slug)
 			}
-			m.branchInput = NewBranchInputModel(slug)
 			return m, nil
 		}
 	}
@@ -2130,16 +2428,15 @@ func (m *Model) handleTerminateProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) 
 			m.terminateIndex = next
 			return m, m.runTerminateStepCmd(next)
 		}
-		items := []list.Item{}
-		for _, it := range m.list.Items() {
-			if sessItem, ok := it.(item); ok {
-				if sessItem.session.TmuxSession == m.terminateSession.TmuxSession {
-					continue
-				}
+		// Remove terminated session from allSessions and refresh list
+		var remaining []domain.Session
+		for _, s := range m.allSessions {
+			if s.TmuxSession != m.terminateSession.TmuxSession {
+				remaining = append(remaining, s)
 			}
-			items = append(items, it)
 		}
-		m.list.SetItems(items)
+		m.allSessions = remaining
+		m.applyRemoteFilter()
 		m.state = viewStateMain
 		return m, nil
 	}
@@ -2149,18 +2446,65 @@ func (m *Model) handleTerminateProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) 
 func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case discoveryResultMsg:
-		m.log("Discovered %d sessions", len(msg))
+		m.log("Discovered %d sessions", len(msg.sessions))
 		ctx := context.Background()
-		for i := range msg {
+
+		// Save all discovered sessions to DB
+		for i := range msg.sessions {
 			if m.db != nil {
-				_ = m.db.Save(ctx, &msg[i])
+				_ = m.db.Save(ctx, &msg.sessions[i])
 			}
 		}
-		items := make([]list.Item, len(msg))
-		for i, s := range msg {
-			items[i] = item{session: s, needsInput: false, activity: ""}
+
+		// Load DB as the authoritative set of known sessions
+		dbSessions := make(map[string]domain.Session)
+		if m.db != nil {
+			if list, err := m.db.List(ctx); err == nil {
+				for _, s := range list {
+					dbSessions[s.ID] = s
+				}
+			}
 		}
-		m.list.SetItems(items)
+
+		// Merge: discovered sessions win for live state; DB fills in sessions
+		// from remotes we couldn't reach this scan. Sessions from scanned remotes
+		// that weren't discovered are dead — skip them.
+		seenID := make(map[string]bool)
+		seenTmux := make(map[string]bool)
+		merged := []domain.Session{}
+		for _, s := range msg.sessions {
+			if seenID[s.ID] {
+				continue
+			}
+			if s.TmuxSession != "" && seenTmux[s.TmuxSession] {
+				continue
+			}
+			merged = append(merged, s)
+			seenID[s.ID] = true
+			if s.TmuxSession != "" {
+				seenTmux[s.TmuxSession] = true
+			}
+		}
+		for id, s := range dbSessions {
+			if seenID[id] {
+				continue
+			}
+			if s.TmuxSession != "" && seenTmux[s.TmuxSession] {
+				continue
+			}
+			// Skip sessions from remotes that were successfully scanned — they're dead
+			if s.RemoteHost != "" && msg.scannedHosts[s.RemoteHost] {
+				continue
+			}
+			merged = append(merged, s)
+			seenID[id] = true
+			if s.TmuxSession != "" {
+				seenTmux[s.TmuxSession] = true
+			}
+		}
+
+		m.allSessions = merged
+		m.applyRemoteFilter()
 		m.state = viewStateMain
 		return m, nil
 	case attachMsg:
@@ -2202,6 +2546,17 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.picker.list.SetSize(m.width-h, m.height-v)
 		m.state = m.loadingNext
 		return m, nil
+	case branchesMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to fetch branches: %v", msg.err)
+			m.state = viewStateVSCodeError
+			return m, nil
+		}
+		m.branchPicker = NewBranchPickerModel(msg.branches)
+		h, v := docStyle.GetFrameSize()
+		m.branchPicker.SetSize(m.width-h, m.height-v)
+		m.state = m.loadingNext
+		return m, nil
 	case dirsMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
@@ -2216,7 +2571,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case recreateMutagenMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to recreate mutagen sync: %v", msg.err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 		
@@ -2276,11 +2631,20 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if !found {
-			// Add new session to list
-			items = append(items, item{session: msg.session, needsInput: false, activity: ""})
+			// Add new session to allSessions and list
+			m.allSessions = append(m.allSessions, msg.session)
+			items = append(items, m.makeItem(msg.session))
 			m.list.Select(len(items) - 1)
+		} else {
+			// Update in allSessions too
+			for i, s := range m.allSessions {
+				if s.ID == msg.session.ID {
+					m.allSessions[i] = msg.session
+					break
+				}
+			}
 		}
-		
+
 		m.list.SetItems(items)
 		m.restartingSession = nil
 
@@ -2406,7 +2770,7 @@ func (m *Model) renderMainView() string {
 		if m.panelMode == panelModeTerminal {
 			modeName = "TERMINAL"
 		}
-		outputPanel.WriteString(activeStyle.Render(modeName) + " (ctrl+t toggle, ctrl+s full screen)\n\n")
+		outputPanel.WriteString(activeStyle.Render(modeName) + " (ctrl+s full screen)\n\n")
 
 		if m.panelMode == panelModeTerminal && m.terminal != nil {
 			outputPanel.WriteString(m.terminal.View())
@@ -2437,19 +2801,17 @@ func (m *Model) renderMainView() string {
 		doctorOutput.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
 	}
 
-	var activeHost string
-	if m.cfg.ActiveRemote != "" {
-		activeHost = successStyle.Render(m.cfg.ActiveRemote)
-	} else {
-		activeHost = failStyle.Render("None")
+	remoteInfo := fmt.Sprintf("Remotes: %d configured", len(m.cfg.Remotes))
+	if m.remoteFilter != "" {
+		remoteInfo += " | Filter: " + activeStyle.Render(remoteNameForHost(m.cfg, m.remoteFilter))
 	}
 
-	footer := "\nActive Remote: " + activeHost + "\n\n" + doctorOutput.String()
+	footer := "\n" + remoteInfo + "\n\n" + doctorOutput.String()
 
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • c: scope • ctrl+r: restart • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+t: term • q: quit")
+		Render("n: new • f: filter • c: scope • ctrl+r: restart • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s: term • q: quit")
 
 	// PR Buttons (matching Figma)
 	var prButtons string
@@ -2552,20 +2914,33 @@ func (m *Model) restartSession() tea.Cmd {
 
 		// 3. Start tmux session and agent
 		agentCmd := m.sessionCfg.Agent.Command
+		var sendKeysPrompt string
 		if m.flowManager != nil && m.flowManager.SkillEngine != nil {
-			preparedCmd, err := m.flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *m.sessionCfg.Agent, m.sessionCfg.Skills, m.sessionCfg.PromptFree)
+			prepared, err := m.flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *m.sessionCfg.Agent, m.sessionCfg.Skills, m.sessionCfg.PromptFree, m.sessionCfg.Issue)
 			if err == nil {
-				agentCmd = preparedCmd
+				agentCmd = prepared.Command
+				sendKeysPrompt = prepared.InitialPrompt
 			}
 		}
 
-		startCmd := fmt.Sprintf("tmux new-session -d -s %q -c %q \"export AIMAN_ID=%q; %s\"", s.TmuxSession, workingDir, strings.TrimSpace(s.ID), agentCmd)
+		startCmd := fmt.Sprintf(
+			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
+			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), agentCmd, s.TmuxSession,
+		)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}
 		}
-		// Set remain-on-exit so the window doesn't disappear if the agent fails
-		_, _ = mgr.Execute(ctx, fmt.Sprintf("tmux set-option -t %q remain-on-exit on", s.TmuxSession))
+
+		// For agents that don't support inline initial prompts, send it via
+		// tmux send-keys after the agent has had time to start up.
+		if sendKeysPrompt != "" {
+			sendCmd := fmt.Sprintf(
+				"sleep 3 && tmux send-keys -t %q %q Enter",
+				s.TmuxSession, sendKeysPrompt,
+			)
+			_, _ = mgr.Execute(ctx, fmt.Sprintf("nohup bash -c %q >/dev/null 2>&1 &", sendCmd))
+		}
 
 		// 4. Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()

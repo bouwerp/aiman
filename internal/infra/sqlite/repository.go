@@ -86,8 +86,10 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 
 	var s domain.Session
 	var statusStr string
+	var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName sql.NullString
+	var createdAt, updatedAt sql.NullTime
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&s.ID, &s.IssueKey, &s.Branch, &s.RepoName, &s.RemoteHost, &s.WorktreePath, &s.WorkingDirectory, &s.TmuxSession, &s.MutagenSyncID, &s.LocalPath, &s.AgentName, &statusStr, &s.CreatedAt, &s.UpdatedAt)
+		&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &statusStr, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("session not found: %w", err)
@@ -95,7 +97,19 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
 
+	s.IssueKey = issueKey.String
+	s.Branch = branch.String
+	s.RepoName = repoName.String
+	s.RemoteHost = remoteHost.String
+	s.WorktreePath = worktreePath.String
+	s.WorkingDirectory = workingDir.String
+	s.TmuxSession = tmuxSession.String
+	s.MutagenSyncID = mutagenSyncID.String
+	s.LocalPath = localPath.String
+	s.AgentName = agentName.String
 	s.Status = domain.SessionStatus(statusStr)
+	s.CreatedAt = createdAt.Time
+	s.UpdatedAt = updatedAt.Time
 	return &s, nil
 }
 
@@ -112,11 +126,25 @@ func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 	for rows.Next() {
 		var s domain.Session
 		var statusStr string
-		err := rows.Scan(&s.ID, &s.IssueKey, &s.Branch, &s.RepoName, &s.RemoteHost, &s.WorktreePath, &s.WorkingDirectory, &s.TmuxSession, &s.MutagenSyncID, &s.LocalPath, &s.AgentName, &statusStr, &s.CreatedAt, &s.UpdatedAt)
+		var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName sql.NullString
+		var createdAt, updatedAt sql.NullTime
+		err := rows.Scan(&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &statusStr, &createdAt, &updatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan session: %w", err)
 		}
+		s.IssueKey = issueKey.String
+		s.Branch = branch.String
+		s.RepoName = repoName.String
+		s.RemoteHost = remoteHost.String
+		s.WorktreePath = worktreePath.String
+		s.WorkingDirectory = workingDir.String
+		s.TmuxSession = tmuxSession.String
+		s.MutagenSyncID = mutagenSyncID.String
+		s.LocalPath = localPath.String
+		s.AgentName = agentName.String
 		s.Status = domain.SessionStatus(statusStr)
+		s.CreatedAt = createdAt.Time
+		s.UpdatedAt = updatedAt.Time
 		sessions = append(sessions, s)
 	}
 

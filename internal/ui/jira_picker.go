@@ -22,7 +22,6 @@ type IssuePickerModel struct {
 	list     list.Model
 	selected *domain.Issue
 	loading  bool
-	AdHoc    bool
 }
 
 func NewIssuePickerModel(issues []domain.Issue) IssuePickerModel {
@@ -66,9 +65,6 @@ func (m IssuePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = &i.issue
 				return m, nil
 			}
-		case "ctrl+a":
-			m.AdHoc = true
-			return m, nil
 		}
 	}
 
@@ -82,7 +78,7 @@ func (m IssuePickerModel) View() string {
 		return "\n  Loading issues from JIRA..."
 	}
 	if !m.loading && len(m.list.Items()) == 0 {
-		return "\n  No JIRA issues found.\n  Press ctrl+a for Ad-hoc session (no JIRA), or ESC to go back."
+		return "\n  No JIRA issues found.\n  Press ESC to go back."
 	}
-	return m.list.View() + "\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("ctrl+a: ad-hoc session (skip JIRA)")
+	return m.list.View() + "\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("enter: select issue")
 }

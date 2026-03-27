@@ -34,23 +34,44 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 	mutagenSessions, _ := d.syncEngine.ListSyncSessions(ctx)
 
 	sessions := []domain.Session{}
+	seenIDs := make(map[string]bool)
 	seenWorktrees := make(map[string]bool)
 	seenTmuxNames := make(map[string]bool)
 	seenMutagenIDs := make(map[string]bool)
 
+	addSession := func(s domain.Session) {
+		if seenIDs[s.ID] {
+			return
+		}
+		if s.TmuxSession != "" && seenTmuxNames[s.TmuxSession] {
+			return
+		}
+		seenIDs[s.ID] = true
+		if s.WorktreePath != "" {
+			seenWorktrees[s.WorktreePath] = true
+		}
+		if s.TmuxSession != "" {
+			seenTmuxNames[s.TmuxSession] = true
+		}
+		sessions = append(sessions, s)
+	}
+
 	// Process tmux sessions
 	for _, name := range tmuxSessions {
 		session := d.discoverSession(ctx, host, name, mutagenSessions)
-		if session.WorktreePath != "" {
-			seenWorktrees[session.WorktreePath] = true
-		}
-		if session.TmuxSession != "" {
-			seenTmuxNames[session.TmuxSession] = true
-		}
 		if session.MutagenSyncID != "" {
 			seenMutagenIDs[session.MutagenSyncID] = true
+			// Also mark by the mutagen session's internal UUID so the orphaned-sync
+			// section (which checks ms.ID) doesn't re-add the same sync.
+			for _, ms := range mutagenSessions {
+				if ms.Name == session.MutagenSyncID || ms.ID == session.MutagenSyncID {
+					seenMutagenIDs[ms.ID] = true
+					seenMutagenIDs[ms.Name] = true
+					break
+				}
+			}
 		}
-		sessions = append(sessions, session)
+		addSession(session)
 	}
 
 	// 3. Scan for orphaned worktrees
@@ -116,49 +137,52 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 							}
 						}
 
-						sessions = append(sessions, session)
-						seenWorktrees[normalizedWT] = true
-						seenTmuxNames[wtBase] = true
+						addSession(session)
 					}
 				}
 			}
 		}
 	}
 
-	// 4. Scan for orphaned mutagen syncs that don't match any worktree.
-	// After ListSyncSessions post-processing, RemotePath is already the
-	// remote filesystem path (host: prefix stripped) and LocalPath is the
-	// local filesystem path.
+	// 4. Scan for orphaned mutagen syncs that don't match any tmux session.
+	// If a sync has an aiman-id label it came from a managed session; if
+	// the corresponding tmux session is gone the sync is a leftover from a
+	// terminated session — auto-terminate it instead of surfacing a ghost.
 	for _, ms := range mutagenSessions {
-		if !seenMutagenIDs[ms.ID] {
-			remotePath := normalizePath(ms.RemotePath)
-
-			if remotePath != "" {
-				syncName := ms.Name
-				if syncName == "" {
-					syncName = ms.ID
-				}
-
-				session := domain.Session{
-					TmuxSession:      ms.Name,
-					RemoteHost:       host,
-					Status:           domain.SessionStatusInactive,
-					WorktreePath:     remotePath,
-					WorkingDirectory: remotePath,
-					MutagenSyncID:    syncName,
-					LocalPath:        normalizePath(ms.LocalPath),
-					CreatedAt:        time.Now(),
-				}
-
-				if aid, ok := ms.Labels["aiman-id"]; ok && aid != "" {
-					session.ID = aid
-				} else {
-					session.ID = uuid.New().String()
-				}
-				session.IssueKey = domain.ExtractKey(ms.Name)
-				sessions = append(sessions, session)
-			}
+		if seenMutagenIDs[ms.ID] || seenMutagenIDs[ms.Name] {
+			continue
 		}
+
+		// If the sync has an aiman-id label but no tmux session exists for
+		// it, this is a leftover from a terminated session. Clean it up.
+		if aid, ok := ms.Labels["aiman-id"]; ok && aid != "" {
+			d.syncEngine.TerminateSync(ctx, ms.Name)
+			continue
+		}
+
+		remotePath := normalizePath(ms.RemotePath)
+		if remotePath == "" {
+			continue
+		}
+
+		syncName := ms.Name
+		if syncName == "" {
+			syncName = ms.ID
+		}
+
+		session := domain.Session{
+			TmuxSession:      ms.Name,
+			RemoteHost:       host,
+			Status:           domain.SessionStatusInactive,
+			WorktreePath:     remotePath,
+			WorkingDirectory: remotePath,
+			MutagenSyncID:    syncName,
+			LocalPath:        normalizePath(ms.LocalPath),
+			CreatedAt:        time.Now(),
+			ID:               uuid.New().String(),
+		}
+		session.IssueKey = domain.ExtractKey(ms.Name)
+		addSession(session)
 	}
 
 	return sessions, nil

@@ -101,28 +101,38 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 	return skills, err
 }
 
-func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool) (string, error) {
+// initialPrompt is the instruction sent to the agent when a JIRA issue is attached.
+// The detailed context lives in .aiman_task.md which is written to the worktree.
+const initialPrompt = `Read .aiman_task.md for the JIRA issue details. Gather necessary codebase context and prepare an implementation plan.`
+
+func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
 	name := strings.ToLower(agent.Name)
-	
+
+	// Write JIRA task file if an issue is provided.
+	if issue != nil {
+		if err := writeTaskFile(ctx, remote, worktreePath, issue); err != nil {
+			return domain.PreparedSession{}, fmt.Errorf("failed to write task file: %w", err)
+		}
+	}
+
 	// For Claude Code
 	if strings.Contains(name, "claude") {
-		return e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree)
+		return e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
 	}
 
 	// For Gemini
 	if strings.Contains(name, "gemini") {
-		return e.prepareGemini(ctx, remote, worktreePath, agent, selectedSkills, promptFree)
+		return e.prepareGemini(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
 	}
 
 	// For OpenCode
 	if strings.Contains(name, "opencode") {
 		cmd := agent.Command
-		if promptFree {
-			// User previously said --yolo doesn't exist, but if they want "yolo" mode, 
-			// let's see if there's any other flag. For now, we'll keep it as is 
-			// or add a flag if known. The user specifically mentioned Gemini and Cursor now.
+		result := domain.PreparedSession{Command: cmd}
+		if issue != nil {
+			result.InitialPrompt = initialPrompt
 		}
-		return cmd, nil
+		return result, nil
 	}
 
 	// For Cursor
@@ -133,21 +143,45 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 		} else {
 			cmd = fmt.Sprintf("%s .", cmd)
 		}
-		return cmd, nil
-	}
-
-	// Default: Apply prompt-free flag if it's a known pattern
-	cmd := agent.Command
-	if promptFree {
-		if strings.Contains(name, "copilot") {
-			// gh copilot doesn't have a standard yolo flag for the chat
+		result := domain.PreparedSession{Command: cmd}
+		if issue != nil {
+			result.InitialPrompt = initialPrompt
 		}
+		return result, nil
 	}
 
-	return cmd, nil
+	// Default
+	cmd := agent.Command
+	result := domain.PreparedSession{Command: cmd}
+	if issue != nil {
+		result.InitialPrompt = initialPrompt
+	}
+	return result, nil
 }
 
-func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool) (string, error) {
+// writeTaskFile writes the JIRA issue context to .aiman_task.md in the worktree.
+// This file is referenced by the agent's initial prompt so it can load the full
+// issue details without shell-escaping concerns.
+func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, issue *domain.Issue) error {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# %s: %s\n\n", issue.Key, issue.Summary))
+	sb.WriteString(fmt.Sprintf("**Status:** %s\n", issue.Status))
+	if issue.Assignee != "" {
+		sb.WriteString(fmt.Sprintf("**Assignee:** %s\n", issue.Assignee))
+	}
+	sb.WriteString("\n## Description\n\n")
+	if issue.Description != "" {
+		sb.WriteString(issue.Description)
+	} else {
+		sb.WriteString("_No description provided._")
+	}
+	sb.WriteString("\n")
+
+	taskPath := filepath.Join(worktreePath, ".aiman_task.md")
+	return remote.WriteFile(ctx, taskPath, []byte(sb.String()))
+}
+
+func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -163,27 +197,33 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 		cmd = fmt.Sprintf("%s --dangerously-skip-permissions", cmd)
 	}
 
+	// Use tmux send-keys for the initial prompt rather than a positional arg.
+	// Although Claude Code supports `claude "msg"` interactively, embedding
+	// quoted text inside the tmux "bash -l -c '...'" wrapper causes nested
+	// quoting breakage. send-keys avoids this entirely.
+	result := domain.PreparedSession{Command: cmd}
+	if issue != nil {
+		result.InitialPrompt = initialPrompt
+	}
+
 	if len(prompts) == 0 {
-		return cmd, nil
+		return result, nil
 	}
 
 	// Concatenate prompts and escape for shell
 	systemPrompt := strings.Join(prompts, "\n\n")
-	
+
 	// Create a remote file with the system prompt
 	remotePromptPath := filepath.Join(worktreePath, ".aiman_prompt")
 	if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
-		return "", fmt.Errorf("failed to upload system prompt to remote: %w", err)
+		return domain.PreparedSession{}, fmt.Errorf("failed to upload system prompt to remote: %w", err)
 	}
 
-	// Wrap the agent command. For Claude Code, it might use a CLI flag to load a system prompt.
-	// Assuming `claude --prompt-file .aiman_prompt` or similar.
-	// If not supported, we can inject it into stdin, but that's harder for an interactive CLI.
-	// For now, let's assume it's an environment variable.
-	return fmt.Sprintf("SYSTEM_PROMPT_FILE=%s %s", remotePromptPath, cmd), nil
+	result.Command = fmt.Sprintf("SYSTEM_PROMPT_FILE=%s %s", remotePromptPath, cmd)
+	return result, nil
 }
 
-func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool) (string, error) {
+func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -199,15 +239,23 @@ func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor
 		cmd = fmt.Sprintf("%s --yolo", cmd)
 	}
 
+	// Gemini's positional arg behavior is not confirmed to stay interactive,
+	// so we use tmux send-keys via InitialPrompt instead.
+	result := domain.PreparedSession{Command: cmd}
+	if issue != nil {
+		result.InitialPrompt = initialPrompt
+	}
+
 	if len(prompts) == 0 {
-		return cmd, nil
+		return result, nil
 	}
 
 	systemPrompt := strings.Join(prompts, "\n\n")
 	remotePromptPath := filepath.Join(worktreePath, ".aiman_gemini_prompt")
 	if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
-		return "", fmt.Errorf("failed to upload gemini prompt to remote: %w", err)
+		return domain.PreparedSession{}, fmt.Errorf("failed to upload gemini prompt to remote: %w", err)
 	}
 
-	return fmt.Sprintf("GEMINI_SYSTEM_INSTRUCTION_FILE=%s %s", remotePromptPath, cmd), nil
+	result.Command = fmt.Sprintf("GEMINI_SYSTEM_INSTRUCTION_FILE=%s %s", remotePromptPath, cmd)
+	return result, nil
 }

@@ -103,11 +103,15 @@ type SessionRepository interface {
 
 // SessionConfig holds the configuration for creating a new session.
 type SessionConfig struct {
-	IssueKey  string
-	Branch    string
-	Repo      Repo
-	Directory string
-	Agent     *Agent
-	Skills    []Skill
-	PromptFree bool
+	IssueKey       string
+	Issue          *Issue         // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
+	Branch         string
+	Repo           Repo
+	Directory      string
+	Agent          *Agent
+	Skills         []Skill
+	PromptFree     bool
+	ExistingBranch bool           // start from an existing remote branch instead of creating a new one
+	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
+	RemoteHost     string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
 }

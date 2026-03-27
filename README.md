@@ -341,6 +341,7 @@ Aiman follows **Clean Architecture** principles:
 - [x] Real-time pane previews
 - [x] VS Code integration
 - [x] SQLite persistence for sessions
+- [x] JIRA-driven initial prompt injection (auto-generates `.aiman_task.md` and seeds agent with task context)
 - [ ] Git intelligence panel
 - [ ] MOSH support
 - [ ] Skill injection system

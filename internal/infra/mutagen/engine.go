@@ -54,6 +54,13 @@ func (e *Engine) StopSync(ctx context.Context) error {
 	return nil
 }
 
+func (e *Engine) TerminateSync(ctx context.Context, name string) {
+	if name == "" {
+		return
+	}
+	_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", name).Run() // #nosec G204
+}
+
 func (e *Engine) GetStatus(ctx context.Context) (string, error) {
 	return "", nil
 }

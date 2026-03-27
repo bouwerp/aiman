@@ -53,15 +53,37 @@ type jiraSearchResponse struct {
 }
 
 func (p *Provider) SearchIssues(ctx context.Context, query string) ([]domain.Issue, error) {
-	var jql string
-	if query == "" {
-		// Find most recently updated issues that aren't closed
-		jql = "statusCategory != \"Done\" ORDER BY updated DESC"
-	} else {
-		// Search both summary (quoted) and key (unquoted) if query is provided
-		jql = fmt.Sprintf("(summary ~ %q OR key = %s) ORDER BY updated DESC", query, query)
+	if query != "" {
+		// Search by summary or key across all statuses (so Done issues are findable too)
+		jql := fmt.Sprintf("(summary ~ %q OR key = %s) ORDER BY created DESC", query, query)
+		return p.fetchIssues(ctx, jql, 100)
 	}
 
+	// Default: fetch the user's own open issues, then append recent open issues
+	// from others so the list is comprehensive but the user's work comes first.
+	myIssues, err := p.fetchIssues(ctx,
+		"assignee = currentUser() AND statusCategory != \"Done\" ORDER BY created DESC", 100)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool, len(myIssues))
+	for _, issue := range myIssues {
+		seen[issue.Key] = true
+	}
+
+	otherIssues, _ := p.fetchIssues(ctx,
+		"assignee != currentUser() AND statusCategory != \"Done\" ORDER BY created DESC", 50)
+	for _, issue := range otherIssues {
+		if !seen[issue.Key] {
+			myIssues = append(myIssues, issue)
+		}
+	}
+
+	return myIssues, nil
+}
+
+func (p *Provider) fetchIssues(ctx context.Context, jql string, maxResults int) ([]domain.Issue, error) {
 	u, err := url.Parse(p.config.URL + "/rest/api/3/search/jql")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse jira url: %w", err)
@@ -70,7 +92,7 @@ func (p *Provider) SearchIssues(ctx context.Context, query string) ([]domain.Iss
 	params := url.Values{}
 	params.Add("jql", jql)
 	params.Add("fields", "summary,description,status,assignee,created,updated")
-	params.Add("maxResults", "50")
+	params.Add("maxResults", fmt.Sprintf("%d", maxResults))
 	u.RawQuery = params.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)

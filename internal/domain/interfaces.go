@@ -15,8 +15,10 @@ type IssueProvider interface {
 // RepositoryManager manages git repositories and worktrees.
 type RepositoryManager interface {
 	ListRepos(ctx context.Context) ([]Repo, error)
+	ListRemoteBranches(ctx context.Context, remote RemoteExecutor, repo Repo) ([]string, error)
 	SetupWorktree(ctx context.Context, repo Repo, branch string) (Worktree, error)
 	SetupRemoteWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
+	SetupRemoteWorktreeFromBranch(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
 	GetGitStatus(ctx context.Context, remote RemoteExecutor, path string) (GitStatus, error)
 }
 
@@ -46,6 +48,9 @@ type SyncEngine interface {
 	StopSync(ctx context.Context) error
 	GetStatus(ctx context.Context) (string, error)
 	ListSyncSessions(ctx context.Context) ([]SyncSession, error)
+	// TerminateSync terminates a sync session by name. Errors are ignored
+	// since the sync may already be gone.
+	TerminateSync(ctx context.Context, name string)
 }
 
 // SyncSession represents a file synchronization session.

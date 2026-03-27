@@ -252,21 +252,23 @@ func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (stri
 	var output string
 	var err error
 	
-	// Retry up to 3 times with small delay if session is not found
-	// This handles race conditions where tmux session was just created
-	for i := 0; i < 3; i++ {
+	// Retry up to 5 times with increasing delay if session/server is not yet available.
+	// This handles the race where the tmux server hasn't fully started yet.
+	for i := 0; i < 5; i++ {
 		output, err = m.Execute(ctx, cmdStr)
 		if err == nil {
 			break
 		}
-		if !strings.Contains(output, "can't find pane") && !strings.Contains(output, "failed to connect to server") {
+		if !strings.Contains(output, "can't find pane") &&
+			!strings.Contains(output, "failed to connect to server") &&
+			!strings.Contains(output, "no server running") {
 			return "", fmt.Errorf("failed to capture tmux pane: %w", err)
 		}
 		// Wait a bit before retry
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(time.Duration(300*(i+1)) * time.Millisecond):
 		}
 	}
 	

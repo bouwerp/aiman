@@ -60,17 +60,16 @@ func run() error {
 	doctor := usecase.NewDoctor(cfg, jiraProvider, gitManager)
 
 	// 5. Initialize Flow Manager and Skill Engine
-	var remote config.Remote
-	for _, r := range cfg.Remotes {
-		if r.Host == cfg.ActiveRemote {
-			remote = r
-			break
-		}
+	// Use the first configured remote as a default for FlowManager's SSH manager.
+	// Per-session overrides (SessionConfig.SSHManager) take precedence at creation time.
+	var defaultRemote config.Remote
+	if len(cfg.Remotes) > 0 {
+		defaultRemote = cfg.Remotes[0]
 	}
 	sshManager := ssh.NewManager(ssh.Config{
-		Host: remote.Host,
-		User: remote.User,
-		Root: remote.Root,
+		Host: defaultRemote.Host,
+		User: defaultRemote.User,
+		Root: defaultRemote.Root,
 	})
 	skillEngine := skills.NewEngine(cfg)
 	slugger := domain.NewGitSlugger()

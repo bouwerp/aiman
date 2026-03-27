@@ -36,6 +36,11 @@ var knownAgents = []domain.Agent{
 		Command:     "cursor-agent",
 		Description: "Cursor AI Code Editor CLI",
 	},
+	{
+		Name:        "Pi",
+		Command:     "pi",
+		Description: "Pi Coding Agent (shittycodingagent.ai)",
+	},
 }
 
 // Executor defines the interface for executing remote commands.

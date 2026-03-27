@@ -79,6 +79,7 @@
     - Develop robust agentic patterns (e.g., Orchestrator-Worker-Validator).
     - Logic to translate these patterns for various supported coding tools.
     - Synchronize patterns to the remote dev server.
+- [x] **JIRA-Driven Initial Prompt**: When launching a session from a JIRA issue, the issue description is written to `.aiman_task.md` in the worktree and the agent receives an initial prompt to read it, gather context, and prepare a plan. Works for Claude Code, Gemini, Cursor, and OpenCode.
 - [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths before agent launch.
 - [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency interactive connections.
 - [x] **CI/CD Pipeline & Releases**: GitHub Actions workflow for:

@@ -259,6 +259,112 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	}, nil
 }
 
+func (m *Manager) ListRemoteBranches(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo) ([]string, error) {
+	repoName := extractRepoName(repo.Name)
+	remoteRoot := remote.GetRoot()
+	if remoteRoot == "" {
+		return nil, fmt.Errorf("remote root not configured")
+	}
+
+	cleanRoot := strings.TrimRight(remoteRoot, "/")
+	var repoPath string
+	if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
+		repoPath = cleanRoot
+	} else {
+		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
+	}
+
+	if err := remote.ValidateDir(ctx, repoPath); err != nil {
+		return nil, fmt.Errorf("repository %s not found on remote", repoName)
+	}
+
+	// Fetch latest to ensure remote branches are up to date
+	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s fetch origin 2>/dev/null", repoPath))
+
+	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %s branch -r", repoPath))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list remote branches: %w", err)
+	}
+
+	var branches []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.Contains(line, "->") {
+			continue
+		}
+		branch := strings.TrimPrefix(line, "origin/")
+		branches = append(branches, branch)
+	}
+	return branches, nil
+}
+
+func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
+	repoName := extractRepoName(repo.Name)
+	remoteRoot := remote.GetRoot()
+	if remoteRoot == "" {
+		return domain.Worktree{}, fmt.Errorf("remote root not configured")
+	}
+
+	cleanRoot := strings.TrimRight(remoteRoot, "/")
+	var repoPath string
+	if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
+		repoPath = cleanRoot
+	} else {
+		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
+	}
+
+	if err := remote.ValidateDir(ctx, repoPath); err != nil {
+		return domain.Worktree{}, fmt.Errorf("repository %s not found on remote", repoName)
+	}
+
+	// Fetch latest
+	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s fetch origin", repoPath))
+
+	worktreeDir := strings.ReplaceAll(branch, "/", "-")
+	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
+
+	// Check for existing worktree for this branch via git worktree list
+	listOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s worktree list --porcelain", repoPath))
+	for _, line := range strings.Split(listOut, "\n") {
+		if strings.TrimSpace(line) == "branch refs/heads/"+branch {
+			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
+		}
+	}
+
+	// Check if worktree directory already exists
+	checkOut, _ := remote.Execute(ctx, fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath))
+	if strings.Contains(checkOut, "EXISTS") {
+		return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
+	}
+
+	// Create worktree from existing remote branch.
+	// First try creating a new local branch tracking the remote (-b). If the local
+	// branch already exists (was fetched previously), fall back to checking it out
+	// directly without -b.
+	worktreeCmd := fmt.Sprintf("git -C %s worktree add -b %s ../%s origin/%s", repoPath, branch, worktreeDir, branch)
+	if out, err := remote.Execute(ctx, worktreeCmd); err != nil {
+		if !strings.Contains(out, "already exists") {
+			return domain.Worktree{}, fmt.Errorf("failed to create worktree from branch %s: %w", branch, err)
+		}
+		// Local branch exists — check it out into the worktree directly
+		worktreeCmd = fmt.Sprintf("git -C %s worktree add ../%s %s", repoPath, worktreeDir, branch)
+		if _, err2 := remote.Execute(ctx, worktreeCmd); err2 != nil {
+			return domain.Worktree{}, fmt.Errorf("failed to create worktree from branch %s: %w", branch, err2)
+		}
+	}
+
+	// Resolve worktree path
+	resolvedPath := worktreePath
+	if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
+		resolvedPath = strings.TrimSpace(out)
+	}
+
+	return domain.Worktree{
+		Path:   resolvedPath,
+		Branch: branch,
+	}, nil
+}
+
 func extractRepoName(fullName string) string {
 	parts := strings.Split(fullName, "/")
 	return parts[len(parts)-1]

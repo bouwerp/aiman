@@ -24,6 +24,7 @@ type StartupModel struct {
 	loadingMsg    string
 	results       []usecase.CheckResult
 	sessions      []domain.Session
+	scannedHosts  map[string]bool
 	ready         bool
 	width, height int
 	checks        map[string]*usecase.CheckResult
@@ -49,7 +50,13 @@ func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor, db domain.Sessi
 }
 
 type checkResultMsg usecase.CheckResult
-type discoveryResultMsg []domain.Session
+
+type discoveryResult struct {
+	sessions     []domain.Session
+	scannedHosts map[string]bool // remotes that were successfully connected and scanned
+}
+
+type discoveryResultMsg discoveryResult
 
 func runCheckJira(doctor *usecase.Doctor) tea.Cmd {
 	return func() tea.Msg {
@@ -75,32 +82,30 @@ func runCheckSSH(doctor *usecase.Doctor) tea.Cmd {
 func runDiscovery(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		if cfg.ActiveRemote == "" {
-			return discoveryResultMsg{}
-		}
-		// Find remote config
-		var remote config.Remote
-		for _, r := range cfg.Remotes {
-			if r.Host == cfg.ActiveRemote {
-				remote = r
-				break
-			}
-		}
-		if remote.Host == "" {
-			return discoveryResultMsg{}
+		result := discoveryResult{scannedHosts: make(map[string]bool)}
+		if len(cfg.Remotes) == 0 {
+			return discoveryResultMsg(result)
 		}
 
-		mgr := ssh.NewManager(ssh.Config{
-			Host: remote.Host,
-			User: remote.User,
-			Root: remote.Root,
-		})
-		if err := mgr.Connect(ctx); err != nil {
-			return discoveryResultMsg{}
+		for _, remote := range cfg.Remotes {
+			if remote.Host == "" {
+				continue
+			}
+			mgr := ssh.NewManager(ssh.Config{
+				Host: remote.Host,
+				User: remote.User,
+				Root: remote.Root,
+			})
+			if err := mgr.Connect(ctx); err != nil {
+				// Skip unreachable remotes — don't block startup
+				continue
+			}
+			result.scannedHosts[remote.Host] = true
+			discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
+			sessions, _ := discoverer.Discover(ctx, remote.Host)
+			result.sessions = append(result.sessions, sessions...)
 		}
-		discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
-		sessions, _ := discoverer.Discover(ctx, remote.Host)
-		return discoveryResultMsg(sessions)
+		return discoveryResultMsg(result)
 	}
 }
 
@@ -130,7 +135,8 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.results = append(m.results, res)
 		m.pending--
 	case discoveryResultMsg:
-		m.sessions = msg
+		m.sessions = msg.sessions
+		m.scannedHosts = msg.scannedHosts
 		m.discoveryDone = true
 		m.pending--
 	case tea.WindowSizeMsg:
@@ -144,61 +150,91 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Load sessions from database and merge with discovered sessions
 		ctx := context.Background()
 		dbSessions, err := m.db.List(ctx)
-		if err == nil {
-			// Merge logic:
-			// 1. Start with discovered sessions (most accurate current state)
-			// 2. Link them to DB entries if IDs match to preserve user-chosen metadata
-			// 3. Add any DB sessions that weren't discovered (orphaned from perspective of this machine)
-			//
-			// Key principle: DB fields that represent user intent (WorkingDirectory,
-			// RepoName in org/repo format, IssueKey, Branch, AgentName) are
-			// authoritative. Discovery fields that represent live state (Status,
-			// TmuxSession, WorktreePath) should win.
-			
-			sessMap := make(map[string]domain.Session)
-			for _, s := range dbSessions {
-				sessMap[s.ID] = s
-			}
-			
-			merged := []domain.Session{}
-			seenInMerged := make(map[string]bool)
-			
-			// First, process all discovered sessions
-			for _, s := range m.sessions {
-				if dbSess, ok := sessMap[s.ID]; ok {
-					// WorkingDirectory from DB is the user's chosen subdirectory
-					// scope. Discovery gets tmux CWD which drifts as the agent
-					// navigates. Always prefer the DB value.
-					if dbSess.WorkingDirectory != "" {
-						s.WorkingDirectory = dbSess.WorkingDirectory
-					}
-					// Prefer DB's org/repo format over discovery's basename
-					if dbSess.RepoName != "" && (s.RepoName == "" || (!strings.Contains(s.RepoName, "/") && strings.Contains(dbSess.RepoName, "/"))) {
-						s.RepoName = dbSess.RepoName
-					}
-					if s.IssueKey == "" { s.IssueKey = dbSess.IssueKey }
-					if s.Branch == "" { s.Branch = dbSess.Branch }
-					if s.AgentName == "" { s.AgentName = dbSess.AgentName }
-					if s.MutagenSyncID == "" { s.MutagenSyncID = dbSess.MutagenSyncID }
-					if s.LocalPath == "" { s.LocalPath = dbSess.LocalPath }
-				}
-				merged = append(merged, s)
-				seenInMerged[s.ID] = true
-				// Update DB with latest merged state
-				_ = m.db.Save(ctx, &s)
-			}
-			
-			// Then add any remaining DB sessions
-			for id, s := range sessMap {
-				if !seenInMerged[id] {
-					merged = append(merged, s)
-				}
-			}
-			
-			m.sessions = merged
+		startupLogs := []string{
+			fmt.Sprintf("[startup] discovered=%d db=%d err=%v", len(m.sessions), len(dbSessions), err),
+		}
+		for _, s := range m.sessions {
+			startupLogs = append(startupLogs, fmt.Sprintf("[startup] disc: id=%s tmux=%s worktree=%s", s.ID, s.TmuxSession, s.WorktreePath))
+		}
+		for _, s := range dbSessions {
+			startupLogs = append(startupLogs, fmt.Sprintf("[startup] db:   id=%s tmux=%s worktree=%s", s.ID, s.TmuxSession, s.WorktreePath))
+		}
+		// Merge logic (always runs — dedup discovered sessions even if DB failed):
+		// 1. Start with discovered sessions (most accurate current state)
+		// 2. Link them to DB entries if IDs match to preserve user-chosen metadata
+		// 3. Add any DB sessions that weren't discovered (orphaned from perspective of this machine)
+		//
+		// Key principle: DB fields that represent user intent (WorkingDirectory,
+		// RepoName in org/repo format, IssueKey, Branch, AgentName) are
+		// authoritative. Discovery fields that represent live state (Status,
+		// TmuxSession, WorktreePath) should win.
+		sessMap := make(map[string]domain.Session)
+		for _, s := range dbSessions {
+			sessMap[s.ID] = s
 		}
 
-		mainModel := NewModel(m.cfg, m.results, m.sessions, m.db, m.flowManager)
+		merged := []domain.Session{}
+		seenInMerged := make(map[string]bool)  // keyed by ID
+		seenTmuxNames := make(map[string]bool) // keyed by TmuxSession name
+
+		// First, process all discovered sessions
+		for _, s := range m.sessions {
+			if seenInMerged[s.ID] {
+				continue // same ID seen already
+			}
+			if s.TmuxSession != "" && seenTmuxNames[s.TmuxSession] {
+				continue // different ID but same tmux session — phantom duplicate
+			}
+			if dbSess, ok := sessMap[s.ID]; ok {
+				// WorkingDirectory from DB is the user's chosen subdirectory
+				// scope. Discovery gets tmux CWD which drifts as the agent
+				// navigates. Always prefer the DB value.
+				if dbSess.WorkingDirectory != "" {
+					s.WorkingDirectory = dbSess.WorkingDirectory
+				}
+				// Prefer DB's org/repo format over discovery's basename
+				if dbSess.RepoName != "" && (s.RepoName == "" || (!strings.Contains(s.RepoName, "/") && strings.Contains(dbSess.RepoName, "/"))) {
+					s.RepoName = dbSess.RepoName
+				}
+				if s.IssueKey == "" { s.IssueKey = dbSess.IssueKey }
+				if s.Branch == "" { s.Branch = dbSess.Branch }
+				if s.AgentName == "" { s.AgentName = dbSess.AgentName }
+				if s.MutagenSyncID == "" { s.MutagenSyncID = dbSess.MutagenSyncID }
+				if s.LocalPath == "" { s.LocalPath = dbSess.LocalPath }
+			}
+			merged = append(merged, s)
+			seenInMerged[s.ID] = true
+			if s.TmuxSession != "" {
+				seenTmuxNames[s.TmuxSession] = true
+			}
+			// Update DB with latest merged state
+			_ = m.db.Save(ctx, &s)
+		}
+
+		// Then add any remaining DB sessions from remotes we couldn't reach.
+		// Sessions from remotes we DID scan but didn't discover are dead — skip them.
+		for id, s := range sessMap {
+			if seenInMerged[id] {
+				continue
+			}
+			if s.TmuxSession != "" && seenTmuxNames[s.TmuxSession] {
+				continue
+			}
+			// Skip if the session's remote was successfully scanned — it's dead
+			if s.RemoteHost != "" && m.scannedHosts[s.RemoteHost] {
+				continue
+			}
+			merged = append(merged, s)
+		}
+
+		m.sessions = merged
+
+		startupLogs = append(startupLogs, fmt.Sprintf("[startup] merged=%d", len(m.sessions)))
+		for _, s := range m.sessions {
+			startupLogs = append(startupLogs, fmt.Sprintf("[startup] final: id=%s tmux=%s worktree=%s", s.ID, s.TmuxSession, s.WorktreePath))
+		}
+
+		mainModel := NewModel(m.cfg, m.results, m.sessions, m.db, m.flowManager, startupLogs...)
 		if m.width > 0 && m.height > 0 {
 			mainModel.SetSize(m.width, m.height)
 		}
