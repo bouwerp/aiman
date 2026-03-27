@@ -37,8 +37,7 @@ type Issue struct {
 }
 
 func (i Issue) Slug() string {
-	// Sanitize summary for git branch name compatibility
-	summary := sanitizeGitBranchName(i.Summary)
+	summary := sanitizeBranchSegment(i.Summary)
 	return truncateBranchName(i.Key, summary)
 }
 
@@ -61,39 +60,4 @@ func truncateBranchName(key, summary string) string {
 	branch := base + summary
 	branch = strings.TrimRight(branch, "-")
 	return branch
-}
-
-// sanitizeGitBranchName converts a string to a valid git branch name
-// - Replaces spaces with dashes
-// - Replaces underscores with dashes (mutagen compatibility)
-// - Removes invalid characters: ~^:\ and control characters
-// - Removes consecutive dots
-// - Ensures it doesn't start with a dash
-// - Ensures it doesn't end with a dot
-func sanitizeGitBranchName(s string) string {
-	if s == "" {
-		return ""
-	}
-
-	// Replace spaces with dashes
-	s = strings.ReplaceAll(s, " ", "-")
-
-	// Replace underscores with dashes (mutagen compatibility)
-	s = strings.ReplaceAll(s, "_", "-")
-
-	// Remove invalid characters: ~^:\ and control characters
-	// Also remove other problematic chars including smart quotes and dashes
-	invalidChars := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!\x{2018}\x{2019}\x{201C}\x{201D}\x{2013}\x{2014}]`)
-	s = invalidChars.ReplaceAllString(s, "")
-
-	// Remove consecutive dots
-	s = regexp.MustCompile(`\.\.+`).ReplaceAllString(s, ".")
-
-	// Collapse multiple dashes into one
-	s = regexp.MustCompile(`-+`).ReplaceAllString(s, "-")
-
-	// Remove leading/trailing dashes (git branch names cannot start/end with -)
-	s = strings.Trim(s, "-")
-
-	return s
 }

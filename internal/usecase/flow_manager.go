@@ -54,8 +54,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 				}
 			}
 		} else if branch != "" {
-			// Ensure manually provided branch is sanitized
-			branch = strings.ReplaceAll(branch, ",", "-")
+			branch = domain.SanitizeBranchName(branch)
 		}
 	}
 

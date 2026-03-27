@@ -26,6 +26,6 @@ func (s *GitSlugger) Slugify(key, summary string) string {
 	// 3. Trim hyphens from both ends
 	summary = strings.Trim(summary, "-")
 
-	// 4. Combine with key
-	return key + "/" + summary
+	// 4. Combine with key and enforce full ref rules (slashes, .lock, pasted junk)
+	return SanitizeBranchName(key + "/" + summary)
 }

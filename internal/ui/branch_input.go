@@ -2,9 +2,9 @@ package ui
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -73,54 +73,24 @@ func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// isInvalidChar checks if a character is invalid for git branch names
+// isInvalidChar blocks typing chars that can never appear in a sanitized branch
+// (everything else is normalized on update via domain.SanitizeBranchName).
 func (m BranchInputModel) isInvalidChar(s string) bool {
-	invalidChars := `~^:\@{}[]*?|<>'!,` + "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f"
+	invalidChars := `~^:\@{}[]*?<>'!,` + "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f"
 	return strings.ContainsAny(s, invalidChars)
 }
 
-// sanitizeInput sanitizes the branch name input
+// sanitizeInput normalizes branch names to git-safe characters (see domain.SanitizeBranchName).
 func (m BranchInputModel) sanitizeInput(s string) string {
+	s = domain.SanitizeBranchName(s)
 	if s == "" {
 		return ""
 	}
-
-	// Replace spaces with dashes
-	s = strings.ReplaceAll(s, " ", "-")
-
-	// Replace underscores with dashes (mutagen compatibility)
-	s = strings.ReplaceAll(s, "_", "-")
-
-	// Replace commas with dashes
-	s = strings.ReplaceAll(s, ",", "-")
-
-	// Remove invalid characters including smart quotes
-	// Note: \u escape sequences must be in string literals, not regex patterns
-	invalidPattern := regexp.MustCompile(`[\x00-\x1f\x7f~^:\\@\{\}\[\]\*\?\|<>"'!\x{2018}\x{2019}\x{201C}\x{201D}]`)
-	s = invalidPattern.ReplaceAllString(s, "")
-
-	// Remove consecutive dots
-	s = regexp.MustCompile(`\.\.+`).ReplaceAllString(s, ".")
-
-	// Remove leading dashes
-	s = strings.TrimLeft(s, "-")
-
-	// Remove trailing dots
-	s = strings.TrimRight(s, ".")
-
-	// Collapse multiple dashes
-	s = regexp.MustCompile(`-+`).ReplaceAllString(s, "-")
-
-	// Limit length for mutagen label compatibility
 	const maxLen = 63
 	if len(s) > maxLen {
 		s = s[:maxLen]
 	}
-
-	// Remove trailing dashes after truncation
-	s = strings.TrimRight(s, "-")
-
-	return s
+	return strings.TrimRight(s, "-")
 }
 
 func (m BranchInputModel) View() string {
