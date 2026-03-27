@@ -1821,13 +1821,21 @@ end tell`, s.LocalPath)
 	if msg.String() == "ctrl+r" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			selectedSess := sel.(item).session
+			if remote, ok := resolveRemote(m.cfg, selectedSess); ok {
+				m.selectedRemote = remote
+				m.sessionCfg.RemoteHost = remote.Host
+			}
 			m.restartingSession = &selectedSess
 			m.sessionCfg = domain.SessionConfig{
 				IssueKey:   selectedSess.IssueKey,
 				Branch:     selectedSess.Branch,
 				Repo:       domain.Repo{Name: selectedSess.RepoName, URL: ""},
+				RemoteHost: selectedSess.RemoteHost,
 				Directory:  "",
 				PromptFree: true,
+			}
+			if m.selectedRemote.Host != "" {
+				m.sessionCfg.RemoteHost = m.selectedRemote.Host
 			}
 
 			m.log("Preparing to restart session %q (ID: %s)", selectedSess.TmuxSession, selectedSess.ID)
@@ -1847,6 +1855,10 @@ end tell`, s.LocalPath)
 	if msg.String() == "c" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
+			if remote, ok := resolveRemote(m.cfg, s); ok {
+				m.selectedRemote = remote
+				m.sessionCfg.RemoteHost = remote.Host
+			}
 			m.changingDirSession = &s
 			m.loadingMsg = "Scanning directories..."
 			m.loadingNext = viewStateChangeDirPicker
@@ -2079,7 +2091,7 @@ func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(jiraIssuesMsg); ok {
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch JIRA issues: %v", msg.err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 		m.issuePicker = NewIssuePickerModel(msg.issues)
@@ -2175,7 +2187,7 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(reposMsg); ok {
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 		m.picker = NewRepoPickerModel(msg.repos, &m.cfg.Git)
@@ -2232,7 +2244,7 @@ func (m *Model) handleDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(dirsMsg); ok {
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 		m.dirPicker = NewDirPickerModel(msg.dirs, *m.picker.selected)
@@ -2266,7 +2278,7 @@ func (m *Model) handleChangeDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(dirsMsg); ok {
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 		// When changing scope, we use the session's repo name if available
@@ -2538,7 +2550,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reposMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 		m.picker = NewRepoPickerModel(msg.repos, &m.cfg.Git)
@@ -2549,7 +2561,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case branchesMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch branches: %v", msg.err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 		m.branchPicker = NewBranchPickerModel(msg.branches)
@@ -2560,7 +2572,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dirsMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 		m.dirPicker = NewDirPickerModel(msg.dirs, m.sessionCfg.Repo)
@@ -2597,7 +2609,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agent.ScanAgentsMsg:
 		if msg.Err != nil {
 			m.lastError = fmt.Sprintf("Failed to scan agents: %v", msg.Err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 		m.agentPicker = NewAgentPickerModel(msg.Agents)
@@ -2613,7 +2625,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.lastError = fmt.Sprintf("Failed to create/restart session: %v", msg.err)
-			m.state = viewStateVSCodeError
+			m.state = viewStateError
 			return m, nil
 		}
 
