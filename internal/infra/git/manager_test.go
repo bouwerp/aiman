@@ -183,3 +183,24 @@ func TestSetupRemoteWorktreeFromBranch_DirectoryAlreadyExists(t *testing.T) {
 		t.Errorf("expected 'WORKTREE_EXISTS', got: %v", err)
 	}
 }
+
+func TestAimanTaskGitignoreBashScript_ContainsWTAndRules(t *testing.T) {
+	s := aimanTaskGitignoreBashScript("/home/dev/wt")
+	if !strings.Contains(s, ".aiman_task.md") {
+		t.Fatalf("missing ignore line: %s", s)
+	}
+	if !strings.Contains(s, "/home/dev/wt") {
+		t.Fatalf("missing worktree path: %s", s)
+	}
+	if !strings.Contains(s, "grep -qxF") {
+		t.Fatal("missing idempotency guard")
+	}
+}
+
+func TestEnsureAimanTaskGitignored_EmptyPath(t *testing.T) {
+	mgr := NewManager(nil)
+	err := mgr.EnsureAimanTaskGitignored(context.Background(), &mockRemote{}, "   ")
+	if err != nil {
+		t.Fatal(err)
+	}
+}

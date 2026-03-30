@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -29,22 +30,6 @@ type ghRepo struct {
 	Name          string `json:"name"`
 	URL           string `json:"url"`
 	NameWithOwner string `json:"nameWithOwner"`
-}
-
-type ghPR struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	State   string `json:"state"`
-	URL     string `json:"url"`
-	Reviews []struct {
-		State string `json:"state"`
-	} `json:"reviews"`
-	Comments          []interface{} `json:"comments"`
-	StatusCheckRollup []struct {
-		Context string `json:"context"`
-		State   string `json:"state"`
-		Status  string `json:"status"`
-	} `json:"statusCheckRollup"`
 }
 
 func (m *Manager) ListRepos(ctx context.Context) ([]domain.Repo, error) {
@@ -170,10 +155,50 @@ func (m *Manager) SetupWorktree(ctx context.Context, repo domain.Repo, branch st
 		return domain.Worktree{}, fmt.Errorf("failed to setup worktree: %w, output: %s", err, string(output))
 	}
 
+	wt, err := filepath.Abs(worktreePath)
+	if err != nil {
+		wt = worktreePath
+	}
+	_ = m.ensureAimanTaskGitignoredLocal(ctx, wt)
+
 	return domain.Worktree{
 		Path:   worktreePath,
 		Branch: branch,
 	}, nil
+}
+
+const aimanTaskIgnoreLine = ".aiman_task.md"
+const aimanTaskIgnoreComment = "# Aiman: session-local JIRA/task stub (do not commit)"
+
+func aimanTaskGitignoreBashScript(worktreePath string) string {
+	return fmt.Sprintf(`wt=%s
+git -C "$wt" rev-parse --git-dir >/dev/null 2>&1 || exit 0
+ign="$wt/.gitignore"
+com=%s
+line=%s
+if [ -f "$ign" ] && grep -qxF "$line" "$ign"; then exit 0; fi
+if [ ! -f "$ign" ]; then
+  { echo "$com"; echo "$line"; } > "$ign"
+else
+  { echo ""; echo "$com"; echo "$line"; } >> "$ign"
+fi`, strconv.Quote(worktreePath), strconv.Quote(aimanTaskIgnoreComment), strconv.Quote(aimanTaskIgnoreLine))
+}
+
+// EnsureAimanTaskGitignored appends .aiman_task.md to the worktree's .gitignore when absent.
+func (m *Manager) EnsureAimanTaskGitignored(ctx context.Context, remote domain.RemoteExecutor, worktreePath string) error {
+	if strings.TrimSpace(worktreePath) == "" {
+		return nil
+	}
+	script := aimanTaskGitignoreBashScript(worktreePath)
+	_, err := remote.Execute(ctx, "bash -ce "+strconv.Quote(script))
+	return err
+}
+
+func (m *Manager) ensureAimanTaskGitignoredLocal(ctx context.Context, worktreePath string) error {
+	script := aimanTaskGitignoreBashScript(worktreePath)
+	cmd := exec.CommandContext(ctx, "bash", "-ce", script)
+	_, err := cmd.CombinedOutput()
+	return err
 }
 
 func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
@@ -396,7 +421,7 @@ func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor
 
 	// 1. Get branch and counts via git status --porcelain=v2 --branch
 	// v2 is easier to parse for these specific requirements
-	cmd := fmt.Sprintf("git -C %s status --porcelain=v2 --branch", path)
+	cmd := fmt.Sprintf("git -C %q status --porcelain=v2 --branch", path)
 	output, err := remote.Execute(ctx, cmd)
 	if err != nil {
 		return status, fmt.Errorf("failed to get git status: %w", err)
@@ -437,79 +462,17 @@ func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor
 
 	// 2. Get unpushed commits count (more reliable than porcelain if multiple remotes involved)
 	if status.HasUpstream {
-		cmd = fmt.Sprintf("git -C %s rev-list --count @{u}..HEAD", path)
+		cmd = fmt.Sprintf("git -C %q rev-list --count @{u}..HEAD", path)
 		out, err := remote.Execute(ctx, cmd)
 		if err == nil {
 			_, _ = fmt.Sscanf(strings.TrimSpace(out), "%d", &status.UnpushedCommits)
 		}
 	}
 
-	// 3. Get PR info via gh CLI
-	cmd = fmt.Sprintf("gh -C %s pr view --json number,title,state,url,reviews,comments,statusCheckRollup", path)
-	out, err := remote.Execute(ctx, cmd)
-	if err == nil {
-		var pr ghPR
-		if err := json.Unmarshal([]byte(out), &pr); err == nil {
-			status.PullRequest = &domain.PullRequest{
-				Number:       pr.Number,
-				Title:        pr.Title,
-				State:        pr.State,
-				URL:          pr.URL,
-				CommentCount: len(pr.Comments),
-			}
-
-			// Determine review status
-			if len(pr.Reviews) > 0 {
-				approved := false
-				changesRequested := false
-				for _, r := range pr.Reviews {
-					if r.State == "APPROVED" {
-						approved = true
-					} else if r.State == "CHANGES_REQUESTED" {
-						changesRequested = true
-					}
-				}
-				switch {
-				case changesRequested:
-					status.PullRequest.ReviewStatus = "changes_requested"
-				case approved:
-					status.PullRequest.ReviewStatus = "approved"
-				default:
-					status.PullRequest.ReviewStatus = "pending"
-				}
-			} else {
-				status.PullRequest.ReviewStatus = "none"
-			}
-
-			// Determine check status
-			if len(pr.StatusCheckRollup) > 0 {
-				passed := 0
-				failed := 0
-				pending := 0
-				for _, c := range pr.StatusCheckRollup {
-					switch c.State {
-					case "SUCCESS":
-						passed++
-					case "FAILURE", "ERROR":
-						failed++
-					case "PENDING", "IN_PROGRESS":
-						pending++
-					}
-				}
-				status.PullRequest.ChecksSummary = fmt.Sprintf("%d/%d passed", passed, len(pr.StatusCheckRollup))
-				switch {
-				case failed > 0:
-					status.PullRequest.ChecksStatus = "failure"
-				case pending > 0:
-					status.PullRequest.ChecksStatus = "pending"
-				default:
-					status.PullRequest.ChecksStatus = "success"
-				}
-			} else {
-				status.PullRequest.ChecksStatus = "none"
-			}
-		}
-	}
+	// 3. Pull request via gh (current branch, with --repo/--head fallback)
+	originOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin", path))
+	owner, repo, ok := parseGitHubOwnerRepo(strings.TrimSpace(originOut))
+	status.PullRequest = resolvePullRequestForBranch(ctx, remote, path, owner, repo, ok, status.Branch)
 
 	return status, nil
 }

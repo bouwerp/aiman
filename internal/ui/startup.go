@@ -87,7 +87,7 @@ func runDiscovery(cfg *config.Config) tea.Cmd {
 			return discoveryResultMsg(result)
 		}
 
-		for _, remote := range cfg.Remotes {
+		for _, remote := range config.UniqueRemotes(cfg.Remotes) {
 			if remote.Host == "" {
 				continue
 			}
@@ -175,15 +175,19 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		merged := []domain.Session{}
 		seenInMerged := make(map[string]bool)  // keyed by ID
-		seenTmuxNames := make(map[string]bool) // keyed by TmuxSession name
+		seenTmuxNames := make(map[string]bool) // keyed by RemoteHost + TmuxSession
 
 		// First, process all discovered sessions
 		for _, s := range m.sessions {
 			if seenInMerged[s.ID] {
 				continue // same ID seen already
 			}
-			if s.TmuxSession != "" && seenTmuxNames[s.TmuxSession] {
-				continue // different ID but same tmux session — phantom duplicate
+			tmuxKey := ""
+			if s.TmuxSession != "" {
+				tmuxKey = s.RemoteHost + "\x00" + s.TmuxSession
+			}
+			if tmuxKey != "" && seenTmuxNames[tmuxKey] {
+				continue // same host + tmux session — phantom duplicate
 			}
 			if dbSess, ok := sessMap[s.ID]; ok {
 				// WorkingDirectory from DB is the user's chosen subdirectory
@@ -196,16 +200,26 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if dbSess.RepoName != "" && (s.RepoName == "" || (!strings.Contains(s.RepoName, "/") && strings.Contains(dbSess.RepoName, "/"))) {
 					s.RepoName = dbSess.RepoName
 				}
-				if s.IssueKey == "" { s.IssueKey = dbSess.IssueKey }
-				if s.Branch == "" { s.Branch = dbSess.Branch }
-				if s.AgentName == "" { s.AgentName = dbSess.AgentName }
-				if s.MutagenSyncID == "" { s.MutagenSyncID = dbSess.MutagenSyncID }
-				if s.LocalPath == "" { s.LocalPath = dbSess.LocalPath }
+				if s.IssueKey == "" {
+					s.IssueKey = dbSess.IssueKey
+				}
+				if s.Branch == "" {
+					s.Branch = dbSess.Branch
+				}
+				if s.AgentName == "" {
+					s.AgentName = dbSess.AgentName
+				}
+				if s.MutagenSyncID == "" {
+					s.MutagenSyncID = dbSess.MutagenSyncID
+				}
+				if s.LocalPath == "" {
+					s.LocalPath = dbSess.LocalPath
+				}
 			}
 			merged = append(merged, s)
 			seenInMerged[s.ID] = true
-			if s.TmuxSession != "" {
-				seenTmuxNames[s.TmuxSession] = true
+			if tmuxKey != "" {
+				seenTmuxNames[tmuxKey] = true
 			}
 			// Update DB with latest merged state
 			_ = m.db.Save(ctx, &s)
@@ -217,7 +231,11 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if seenInMerged[id] {
 				continue
 			}
-			if s.TmuxSession != "" && seenTmuxNames[s.TmuxSession] {
+			tk := ""
+			if s.TmuxSession != "" {
+				tk = s.RemoteHost + "\x00" + s.TmuxSession
+			}
+			if tk != "" && seenTmuxNames[tk] {
 				continue
 			}
 			// Skip if the session's remote was successfully scanned — it's dead
@@ -225,6 +243,10 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				continue
 			}
 			merged = append(merged, s)
+			seenInMerged[id] = true
+			if tk != "" {
+				seenTmuxNames[tk] = true
+			}
 		}
 
 		m.sessions = merged

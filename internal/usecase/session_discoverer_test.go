@@ -1,10 +1,98 @@
 package usecase
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
+
+type recordingSyncEngine struct {
+	terminated []string
+}
+
+func (r *recordingSyncEngine) StartSync(context.Context, string, string, string, map[string]string) error {
+	return nil
+}
+func (r *recordingSyncEngine) StopSync(context.Context) error            { return nil }
+func (r *recordingSyncEngine) GetStatus(context.Context) (string, error) { return "", nil }
+func (r *recordingSyncEngine) ListSyncSessions(context.Context) ([]domain.SyncSession, error) {
+	return nil, nil
+}
+func (r *recordingSyncEngine) TerminateSync(_ context.Context, name string) {
+	r.terminated = append(r.terminated, name)
+}
+
+func TestHandleOrphanAimanNamedSync_TerminatesWhenNoTmuxPathMatch(t *testing.T) {
+	rec := &recordingSyncEngine{}
+	d := &SessionDiscoverer{syncEngine: rec}
+	ms := domain.SyncSession{
+		Name:       aimanSyncNamePrefix + "abc",
+		RemotePath: "/home/code/repos/feature/backend",
+	}
+	if !d.handleOrphanAimanNamedSync(context.Background(), "", ms, nil) {
+		t.Fatal("expected handler to take this mutagen session")
+	}
+	if len(rec.terminated) != 1 || rec.terminated[0] != ms.Name {
+		t.Fatalf("expected terminate %q, got %v", ms.Name, rec.terminated)
+	}
+}
+
+func TestHandleOrphanAimanNamedSync_NoTerminateWhenTmuxMatchesPath(t *testing.T) {
+	rec := &recordingSyncEngine{}
+	d := &SessionDiscoverer{syncEngine: rec}
+	ms := domain.SyncSession{
+		Name:       aimanSyncNamePrefix + "abc",
+		RemotePath: "/home/code/repos/feature/backend",
+	}
+	tmux := []domain.Session{{
+		WorktreePath:     "/home/code/repos/feature",
+		WorkingDirectory: "/home/code/repos/feature/backend",
+	}}
+	if !d.handleOrphanAimanNamedSync(context.Background(), "", ms, tmux) {
+		t.Fatal("expected handler to take this mutagen session")
+	}
+	if len(rec.terminated) != 0 {
+		t.Fatalf("should not terminate when tmux paths match sync, got %v", rec.terminated)
+	}
+}
+
+func TestHandleOrphanAimanNamedSync_NoTerminateWhenRemotePathEmpty(t *testing.T) {
+	rec := &recordingSyncEngine{}
+	d := &SessionDiscoverer{syncEngine: rec}
+	ms := domain.SyncSession{Name: aimanSyncNamePrefix + "abc", RemotePath: ""}
+	if !d.handleOrphanAimanNamedSync(context.Background(), "", ms, nil) {
+		t.Fatal("expected handler to take this mutagen session")
+	}
+	if len(rec.terminated) != 0 {
+		t.Fatalf("should not terminate without remote path, got %v", rec.terminated)
+	}
+}
+
+func TestHandleOrphanAimanNamedSync_WrongDiscoverHostSkipsTerminate(t *testing.T) {
+	rec := &recordingSyncEngine{}
+	d := &SessionDiscoverer{syncEngine: rec}
+	ms := domain.SyncSession{
+		Name:           aimanSyncNamePrefix + "orphan",
+		RemoteEndpoint: "code@otherbox",
+		RemotePath:     "/home/x",
+	}
+	if !d.handleOrphanAimanNamedSync(context.Background(), "regent0", ms, nil) {
+		t.Fatal("expected handler to consume aiman-sync entry")
+	}
+	if len(rec.terminated) != 0 {
+		t.Fatalf("must not terminate another host's sync, got %v", rec.terminated)
+	}
+}
+
+func TestHandleOrphanAimanNamedSync_NotOurPrefix(t *testing.T) {
+	rec := &recordingSyncEngine{}
+	d := &SessionDiscoverer{syncEngine: rec}
+	ms := domain.SyncSession{Name: "other-sync", RemotePath: "/x"}
+	if d.handleOrphanAimanNamedSync(context.Background(), "", ms, nil) {
+		t.Fatal("expected false for non-aiman sync names")
+	}
+}
 
 func TestIsSessionMatch_LabelMatch(t *testing.T) {
 	d := &SessionDiscoverer{}
@@ -205,11 +293,30 @@ func TestNormalizePath(t *testing.T) {
 		{"  /home/dev/repos  ", "/home/dev/repos"},
 		{"C:\\Users\\dev\\repos", "C:/Users/dev/repos"},
 		{"/", "/"},
+		{"/home//foo/../bar", "/home/bar"},
 	}
 	for _, tt := range tests {
 		result := normalizePath(tt.input)
 		if result != tt.expected {
 			t.Errorf("normalizePath(%q) = %q, want %q", tt.input, result, tt.expected)
 		}
+	}
+}
+
+func TestDedupeDiscoveredSessions_DropsAimanSyncGhostsAndOrphanDup(t *testing.T) {
+	host := "regent0"
+	wt := "/home/dev/wt-branch"
+	sessions := []domain.Session{
+		{RemoteHost: host, TmuxSession: "wt-branch", Status: domain.SessionStatusActive, WorktreePath: wt, WorkingDirectory: wt},
+		{RemoteHost: host, TmuxSession: "wt-branch", Status: domain.SessionStatusInactive, WorktreePath: wt, ID: "other-id"},
+		{RemoteHost: host, TmuxSession: "aiman-sync-abc", WorktreePath: wt},
+		{RemoteHost: host, TmuxSession: "wt-branch", Status: domain.SessionStatusInactive, WorktreePath: wt, WorkingDirectory: wt},
+	}
+	out := dedupeDiscoveredSessions(sessions)
+	if len(out) != 1 {
+		t.Fatalf("want 1 session, got %d: %+v", len(out), out)
+	}
+	if out[0].Status != domain.SessionStatusActive {
+		t.Fatalf("expected active session kept")
 	}
 }

@@ -3,7 +3,9 @@ package skills
 import (
 	"context"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,16 +23,16 @@ func newMockRemote() *mockRemote {
 	return &mockRemote{writtenFiles: make(map[string][]byte), root: "/home/user/code"}
 }
 
-func (m *mockRemote) Connect(ctx context.Context) error                        { return nil }
-func (m *mockRemote) GetRoot() string                                          { return m.root }
-func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error)  { return "", nil }
+func (m *mockRemote) Connect(ctx context.Context) error                       { return nil }
+func (m *mockRemote) GetRoot() string                                         { return m.root }
+func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error) { return "", nil }
 func (m *mockRemote) WriteFile(ctx context.Context, path string, content []byte) error {
 	m.writtenFiles[path] = content
 	return nil
 }
-func (m *mockRemote) ValidateDir(ctx context.Context, path string) error       { return nil }
-func (m *mockRemote) ScanTmuxSessions(ctx context.Context) ([]string, error)   { return nil, nil }
-func (m *mockRemote) ScanGitRepos(ctx context.Context) ([]string, error)       { return nil, nil }
+func (m *mockRemote) ValidateDir(ctx context.Context, path string) error     { return nil }
+func (m *mockRemote) ScanTmuxSessions(ctx context.Context) ([]string, error) { return nil, nil }
+func (m *mockRemote) ScanGitRepos(ctx context.Context) ([]string, error)     { return nil, nil }
 func (m *mockRemote) ScanWorktrees(ctx context.Context, repoPath string) ([]string, error) {
 	return nil, nil
 }
@@ -44,7 +46,7 @@ func (m *mockRemote) GetTmuxSessionEnv(ctx context.Context, name, envVar string)
 func (m *mockRemote) CaptureTmuxPane(ctx context.Context, name string) (string, error) {
 	return "", nil
 }
-func (m *mockRemote) AttachTmuxSession(name string) *exec.Cmd                      { return nil }
+func (m *mockRemote) AttachTmuxSession(name string) *exec.Cmd { return nil }
 func (m *mockRemote) StreamTmuxSession(ctx context.Context, name string) (io.ReadWriteCloser, error) {
 	return nil, nil
 }
@@ -264,6 +266,9 @@ func TestWriteTaskFile_Content(t *testing.T) {
 	content := string(remote.writtenFiles["/work/repo/.aiman_task.md"])
 
 	expected := []string{
+		"DO NOT COMMIT",
+		"Aiman adds .aiman_task.md",
+		"Do not commit this file to version control",
 		"# DATA-7: Optimize query performance",
 		"**Status:** TODO",
 		"**Assignee:** alice",
@@ -277,6 +282,58 @@ func TestWriteTaskFile_Content(t *testing.T) {
 			t.Errorf("task file should contain %q, got:\n%s", s, content)
 		}
 	}
+}
+
+func TestExpandUserPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := expandUserPath("~/foo/bar"); got != filepath.Join(home, "foo", "bar") {
+		t.Errorf("expandUserPath(~/foo/bar) = %q, want %q", got, filepath.Join(home, "foo", "bar"))
+	}
+	if got := expandUserPath("/abs/path"); got != "/abs/path" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestListSkills_SKILLMdUsesParentDirName(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "jira"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "jira", "SKILL.md"), []byte("# jira"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.md"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Skills: config.SkillsConfig{Path: root}}
+	engine := NewEngine(cfg)
+	list, err := engine.ListSkills()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, s := range list {
+		names = append(names, s.Name)
+	}
+	if !contains(names, "jira") {
+		t.Errorf("expected skill name jira, got %v", names)
+	}
+	if !contains(names, "notes") {
+		t.Errorf("expected skill name notes, got %v", names)
+	}
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestWriteTaskFile_NoDescription(t *testing.T) {
@@ -295,6 +352,9 @@ func TestWriteTaskFile_NoDescription(t *testing.T) {
 	}
 
 	content := string(remote.writtenFiles["/work/repo/.aiman_task.md"])
+	if !strings.Contains(content, "DO NOT COMMIT") {
+		t.Errorf("expected do-not-commit notice, got:\n%s", content)
+	}
 	if !strings.Contains(content, "_No description provided._") {
 		t.Errorf("expected placeholder for empty description, got:\n%s", content)
 	}

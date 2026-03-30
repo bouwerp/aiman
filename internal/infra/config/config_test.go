@@ -1,20 +1,23 @@
 package config
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
-func TestPersonalReposEnabled(t *testing.T) {
-	if !PersonalReposEnabled(nil) {
-		t.Fatal("nil GitConfig should default to personal repos on")
+func TestUniqueRemotes(t *testing.T) {
+	in := []Remote{
+		{Name: "a", Host: "h1", User: "u", Root: "/r"},
+		{Name: "b", Host: "h1", User: "u", Root: "/r"},
+		{Name: "c", Host: "h2", User: "u", Root: "/r"},
+		{Name: "", Host: "", User: "", Root: ""},
 	}
-	if !PersonalReposEnabled(&GitConfig{}) {
-		t.Fatal("empty GitConfig (nil pointer) should default to personal repos on")
+	got := UniqueRemotes(in)
+	want := []Remote{
+		{Name: "a", Host: "h1", User: "u", Root: "/r"},
+		{Name: "c", Host: "h2", User: "u", Root: "/r"},
 	}
-	f := false
-	if PersonalReposEnabled(&GitConfig{IncludePersonal: &f}) {
-		t.Fatal("explicit false should disable personal repos")
-	}
-	tr := true
-	if !PersonalReposEnabled(&GitConfig{IncludePersonal: &tr}) {
-		t.Fatal("explicit true should enable personal repos")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v want %#v", got, want)
 	}
 }

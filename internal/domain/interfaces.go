@@ -19,6 +19,8 @@ type RepositoryManager interface {
 	SetupWorktree(ctx context.Context, repo Repo, branch string) (Worktree, error)
 	SetupRemoteWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
 	SetupRemoteWorktreeFromBranch(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
+	// EnsureAimanTaskGitignored appends .aiman_task.md to the worktree .gitignore if missing. No-op if path is not a git worktree.
+	EnsureAimanTaskGitignored(ctx context.Context, remote RemoteExecutor, worktreePath string) error
 	GetGitStatus(ctx context.Context, remote RemoteExecutor, path string) (GitStatus, error)
 }
 
@@ -55,12 +57,13 @@ type SyncEngine interface {
 
 // SyncSession represents a file synchronization session.
 type SyncSession struct {
-	ID         string
-	Name       string
-	LocalPath  string
-	RemotePath string
-	Status     string
-	Labels     map[string]string
+	ID             string
+	Name           string
+	LocalPath      string
+	RemotePath     string
+	RemoteEndpoint string // e.g. code@regent0 when Beta URL is user@host:/path (before path strip)
+	Status         string
+	Labels         map[string]string
 }
 
 // Repo represents a git repository.

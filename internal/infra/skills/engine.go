@@ -21,10 +21,34 @@ func NewEngine(cfg *config.Config) *Engine {
 	if cfg.Skills.Path == "" {
 		home, _ := os.UserHomeDir()
 		cfg.Skills.Path = filepath.Join(home, config.DirName, "skills")
+	} else {
+		cfg.Skills.Path = expandUserPath(cfg.Skills.Path)
 	}
 	return &Engine{
 		cfg: cfg,
 	}
+}
+
+// expandUserPath replaces a leading "~" or "~/" with the user's home directory.
+func expandUserPath(p string) string {
+	if p == "" || p == "~" {
+		if p == "~" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return p
+			}
+			return home
+		}
+		return p
+	}
+	if strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return p
+		}
+		return filepath.Join(home, strings.TrimPrefix(p, "~/"))
+	}
+	return p
 }
 
 func (e *Engine) Sync(ctx context.Context) error {
@@ -88,8 +112,15 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 		}
 
 		relPath, _ := filepath.Rel(skillsPath, path)
+		name := strings.TrimSuffix(info.Name(), ext)
+		// OpenCode-style layout: skills/<id>/SKILL.md
+		if strings.EqualFold(info.Name(), "SKILL.md") || strings.EqualFold(info.Name(), "SKILL.txt") {
+			if parent := filepath.Base(filepath.Dir(path)); parent != "" && parent != "." {
+				name = parent
+			}
+		}
 		skills = append(skills, domain.Skill{
-			Name:        strings.TrimSuffix(info.Name(), ext),
+			Name:        name,
 			Path:        path,
 			Description: fmt.Sprintf("%s skill from %s", skillType, relPath),
 			Type:        skillType,
@@ -103,7 +134,7 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 
 // initialPrompt is the instruction sent to the agent when a JIRA issue is attached.
 // The detailed context lives in .aiman_task.md which is written to the worktree.
-const initialPrompt = `Read .aiman_task.md for the JIRA issue details. Gather necessary codebase context and prepare an implementation plan.`
+const initialPrompt = `Read .aiman_task.md for the JIRA issue details. That file is session-only scaffolding: do not commit it or add it to the repo. Gather necessary codebase context and prepare an implementation plan.`
 
 func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
 	name := strings.ToLower(agent.Name)
@@ -164,6 +195,13 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 // issue details without shell-escaping concerns.
 func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, issue *domain.Issue) error {
 	var sb strings.Builder
+	sb.WriteString("<!--\n")
+	sb.WriteString("DO NOT COMMIT — This file is local/session scaffolding from Aiman, not part of the product.\n")
+	sb.WriteString("Aiman adds .aiman_task.md to this worktree's .gitignore when the session is created; do not commit it if it still appears as tracked.\n")
+	sb.WriteString("-->\n\n")
+	sb.WriteString("> **Do not commit this file to version control.** It is generated only for this Aiman agent session. ")
+	sb.WriteString("Exclude it from commits (see `.gitignore` in the worktree root).\n\n")
+	sb.WriteString("---\n\n")
 	sb.WriteString(fmt.Sprintf("# %s: %s\n\n", issue.Key, issue.Summary))
 	sb.WriteString(fmt.Sprintf("**Status:** %s\n", issue.Status))
 	if issue.Assignee != "" {

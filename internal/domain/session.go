@@ -18,20 +18,20 @@ const (
 )
 
 type Session struct {
-	ID            string
-	IssueKey      string
-	Branch        string
-	RepoName      string
-	RemoteHost    string
-	WorktreePath  string
+	ID               string
+	IssueKey         string
+	Branch           string
+	RepoName         string
+	RemoteHost       string
+	WorktreePath     string
 	WorkingDirectory string
-	TmuxSession   string
-	MutagenSyncID string
-	LocalPath     string
-	AgentName     string
-	Status        SessionStatus
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	TmuxSession      string
+	MutagenSyncID    string
+	LocalPath        string
+	AgentName        string
+	Status           SessionStatus
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type GitStatus struct {
@@ -48,15 +48,23 @@ type GitStatus struct {
 }
 
 type PullRequest struct {
-	ID            int
-	Number        int
-	Title         string
-	State         string
-	URL           string
-	ReviewStatus  string // approved, changes_requested, pending
-	CommentCount  int
-	ChecksStatus  string // success, failure, pending
-	ChecksSummary string // e.g. "10/12 passed"
+	ID                      int
+	Number                  int
+	Title                   string
+	State                   string // OPEN / CLOSED / MERGED (API raw when available)
+	DisplayState            string // open, draft, merged, closed — for UI
+	IsDraft                 bool
+	Merged                  bool
+	URL                     string
+	ReviewStatus            string // approved, changes_requested, pending, none
+	ReviewDecision          string // APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, etc.
+	CommentCount            int    // top-level PR comments from gh (approximate)
+	UnresolvedReviewThreads int    // open review threads; -1 if unknown
+	HasMergeConflict        bool   // true when GitHub reports merge conflicts
+	Mergeable               string // MERGEABLE, CONFLICTING, UNKNOWN (raw)
+	MergeStateStatus        string // e.g. CLEAN, DIRTY, UNSTABLE (raw)
+	ChecksStatus            string // success, failure, pending, none
+	ChecksSummary           string // e.g. "10/12 passed"
 }
 
 var ErrInvalidTransition = errors.New("invalid session state transition")
@@ -104,7 +112,7 @@ type SessionRepository interface {
 // SessionConfig holds the configuration for creating a new session.
 type SessionConfig struct {
 	IssueKey       string
-	Issue          *Issue         // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
+	Issue          *Issue // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
 	Branch         string
 	Repo           Repo
 	Directory      string

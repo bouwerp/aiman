@@ -56,3 +56,17 @@ Status: Watching for changes
 		t.Errorf("expected %v, got %v", expected, sessions)
 	}
 }
+
+func TestPostProcessMutagenSessions_RemoteEndpoint(t *testing.T) {
+	sessions := []domain.SyncSession{{
+		LocalPath:  "/Users/dev/.aiman/work/uuid",
+		RemotePath: "code@regent0:/home/code/repos/proj",
+	}}
+	postProcessMutagenSessions(sessions)
+	if sessions[0].RemotePath != "/home/code/repos/proj" {
+		t.Errorf("RemotePath = %q", sessions[0].RemotePath)
+	}
+	if sessions[0].RemoteEndpoint != "code@regent0" {
+		t.Errorf("RemoteEndpoint = %q", sessions[0].RemoteEndpoint)
+	}
+}

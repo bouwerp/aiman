@@ -178,8 +178,8 @@ type Model struct {
 	changingDirSession     *domain.Session
 	flowManager            *usecase.FlowManager
 	firstLoad              map[string]bool
-	selectedRemote         config.Remote  // remote chosen for the current new-session wizard
-	remoteFilter           string         // "" = all remotes, otherwise a Remote.Host to filter by
+	selectedRemote         config.Remote    // remote chosen for the current new-session wizard
+	remoteFilter           string           // "" = all remotes, otherwise a Remote.Host to filter by
 	allSessions            []domain.Session // unfiltered master session list
 }
 
@@ -764,7 +764,7 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 		if repo != nil && repo.URL != "" {
 			// Extract just the repo name (not org/repo)
 			repoName := extractRepoName(repo.Name)
-			
+
 			// Handle case where remote.Root might already end with the repo name
 			cleanRoot := strings.TrimRight(remote.Root, "/")
 			if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
@@ -1529,10 +1529,10 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeSession != s.TmuxSession {
 				m.activeSession = s.TmuxSession
 			}
+			// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
 			cmds = append(cmds,
 				fetchTmuxPane(m.cfg, s),
 				checkInputHint(m.cfg, s),
-				fetchGitStatus(m.cfg, s),
 			)
 		}
 	case gitTickMsg:
@@ -1613,6 +1613,7 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s := newSel.(item).session
 		m.activeSession = s.TmuxSession
 		m.gitStatus = domain.GitStatus{} // Clear old status
+		m.lastGitStatusUpdate = time.Time{}
 		m.tmuxOutput = "Loading..."
 		m.viewport.SetContent(m.tmuxOutput)
 		if m.panelMode == panelModeTerminal {
@@ -1880,7 +1881,7 @@ end tell`, s.LocalPath)
 				ctx := context.Background()
 				var allSessions []domain.Session
 				scannedHosts := make(map[string]bool)
-				for _, r := range remotes {
+				for _, r := range config.UniqueRemotes(remotes) {
 					mgr := ssh.NewManager(ssh.Config{Host: r.Host, User: r.User, Root: r.Root})
 					if err := mgr.Connect(ctx); err != nil {
 						continue
@@ -2488,20 +2489,28 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if seenID[s.ID] {
 				continue
 			}
-			if s.TmuxSession != "" && seenTmux[s.TmuxSession] {
+			tk := ""
+			if s.TmuxSession != "" {
+				tk = s.RemoteHost + "\x00" + s.TmuxSession
+			}
+			if tk != "" && seenTmux[tk] {
 				continue
 			}
 			merged = append(merged, s)
 			seenID[s.ID] = true
-			if s.TmuxSession != "" {
-				seenTmux[s.TmuxSession] = true
+			if tk != "" {
+				seenTmux[tk] = true
 			}
 		}
 		for id, s := range dbSessions {
 			if seenID[id] {
 				continue
 			}
-			if s.TmuxSession != "" && seenTmux[s.TmuxSession] {
+			tk := ""
+			if s.TmuxSession != "" {
+				tk = s.RemoteHost + "\x00" + s.TmuxSession
+			}
+			if tk != "" && seenTmux[tk] {
 				continue
 			}
 			// Skip sessions from remotes that were successfully scanned — they're dead
@@ -2510,8 +2519,8 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			merged = append(merged, s)
 			seenID[id] = true
-			if s.TmuxSession != "" {
-				seenTmux[s.TmuxSession] = true
+			if tk != "" {
+				seenTmux[tk] = true
 			}
 		}
 
@@ -2586,7 +2595,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateError
 			return m, nil
 		}
-		
+
 		// Update the session in the list
 		items := m.list.Items()
 		for i, it := range items {
@@ -2713,6 +2722,9 @@ func (m *Model) renderMainView() string {
 		// 2. Git Intelligence (Right Column)
 		var gitDetails strings.Builder
 		gitDetails.WriteString(activeStyle.Render("GIT INTELLIGENCE") + "\n\n")
+		if !m.lastGitStatusUpdate.IsZero() {
+			gitDetails.WriteString(fmt.Sprintf("PR info updated: %s (every 30s)\n\n", m.lastGitStatusUpdate.Format("15:04:05")))
+		}
 		if m.gitStatus.Branch != "" {
 			gitDetails.WriteString(fmt.Sprintf("Branch: %s", m.gitStatus.Branch))
 			if m.gitStatus.Ahead > 0 || m.gitStatus.Behind > 0 {
@@ -2729,38 +2741,88 @@ func (m *Model) renderMainView() string {
 
 			if m.gitStatus.PullRequest != nil {
 				pr := m.gitStatus.PullRequest
-				gitDetails.WriteString(fmt.Sprintf("PR: #%d %s (%s)\n", pr.Number, pr.Title, pr.State))
-				reviewColor := "#7D7D7D" // grey
+				stateLabel := pr.DisplayState
+				if stateLabel == "" {
+					stateLabel = strings.ToLower(pr.State)
+				}
+				gitDetails.WriteString(fmt.Sprintf("PR: #%d %s\n", pr.Number, pr.Title))
+				gitDetails.WriteString(fmt.Sprintf("  Status: %s", strings.ToUpper(stateLabel)))
+				if pr.IsDraft {
+					gitDetails.WriteString(" (draft)")
+				}
+				if pr.Merged {
+					gitDetails.WriteString(" (merged)")
+				}
+				gitDetails.WriteString("\n")
+				if pr.URL != "" {
+					gitDetails.WriteString(fmt.Sprintf("  %s\n", pr.URL))
+				}
+
+				reviewColor := "#7D7D7D"
 				switch pr.ReviewStatus {
 				case "approved":
-					reviewColor = "#00FF00" // green
+					reviewColor = "#00FF00"
 				case "changes_requested":
-					reviewColor = "#FF0000" // red
+					reviewColor = "#FF0000"
 				case "pending":
-					reviewColor = "#FFA500" // orange
+					reviewColor = "#FFA500"
 				}
-				gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(reviewColor)).Render(fmt.Sprintf("Review: %s", pr.ReviewStatus)))
+				line := fmt.Sprintf("  Review: %s", pr.ReviewStatus)
+				if pr.ReviewDecision != "" {
+					line += fmt.Sprintf(" (%s)", pr.ReviewDecision)
+				}
+				gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(reviewColor)).Render(line))
 				if pr.CommentCount > 0 {
-					gitDetails.WriteString(fmt.Sprintf(" (%d comments)", pr.CommentCount))
+					gitDetails.WriteString(fmt.Sprintf(" — %d PR comment(s)", pr.CommentCount))
 				}
 				gitDetails.WriteString("\n")
 
-				// Checks status
+				if pr.UnresolvedReviewThreads >= 0 {
+					threadColor := "#7D7D7D"
+					if pr.UnresolvedReviewThreads > 0 {
+						threadColor = "#FFA500"
+					}
+					gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(threadColor)).Render(
+						fmt.Sprintf("  Unresolved review threads: %d", pr.UnresolvedReviewThreads)))
+					gitDetails.WriteString("\n")
+				} else {
+					gitDetails.WriteString("  Unresolved review threads: (unavailable)\n")
+				}
+
+				mergeColor := "#7D7D7D"
+				mergeLine := "  Merge: unknown"
+				switch strings.ToUpper(strings.TrimSpace(pr.Mergeable)) {
+				case "CONFLICTING":
+					mergeColor = "#FF0000"
+					mergeLine = "  Merge: conflicting"
+				case "MERGEABLE":
+					mergeColor = "#00FF00"
+					mergeLine = "  Merge: clean (mergeable)"
+				case "UNKNOWN":
+					mergeLine = "  Merge: unknown (GitHub still computing)"
+				}
+				if pr.HasMergeConflict || strings.EqualFold(pr.MergeStateStatus, "DIRTY") {
+					mergeColor = "#FF0000"
+					mergeLine = "  Merge: conflicts"
+				}
+				gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(mergeColor)).Render(mergeLine))
+				gitDetails.WriteString("\n")
+
 				if pr.ChecksStatus != "none" {
-					checkColor := "#7D7D7D" // grey
+					checkColor := "#7D7D7D"
 					switch pr.ChecksStatus {
 					case "success":
-						checkColor = "#00FF00" // green
+						checkColor = "#00FF00"
 					case "failure":
-						checkColor = "#FF0000" // red
+						checkColor = "#FF0000"
 					case "pending":
-						checkColor = "#FFA500" // orange
+						checkColor = "#FFA500"
 					}
-					gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(checkColor)).Render(fmt.Sprintf("Checks: %s", pr.ChecksSummary)))
+					gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(checkColor)).Render(fmt.Sprintf("  Checks: %s", pr.ChecksSummary)))
 					gitDetails.WriteString("\n")
 				}
 			} else {
-				gitDetails.WriteString("PR: none\n")
+				gitDetails.WriteString("PR: none (no open PR for this branch, or gh not available)\n")
 			}
 		} else {
 			gitDetails.WriteString("Loading git status...\n")
@@ -2896,7 +2958,7 @@ func (m *Model) restartSession() tea.Cmd {
 		if workingDir == "" {
 			workingDir = s.WorktreePath
 		}
-		
+
 		if workingDir == "" {
 			return sessionCreateMsg{err: fmt.Errorf("session has no working directory or worktree path defined")}
 		}
@@ -2911,7 +2973,7 @@ func (m *Model) restartSession() tea.Cmd {
 			idCmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -d \"$git_dir\" ]; then echo %q > \"$git_dir/aiman-id\"; fi",
 				s.WorktreePath, strings.TrimSpace(s.ID))
 			_, _ = mgr.Execute(ctx, idCmd)
-			
+
 			// Optional: cleanup old file if it exists at root
 			_, _ = mgr.Execute(ctx, fmt.Sprintf("rm -f %q/.aiman-id", s.WorktreePath))
 		}
@@ -2957,11 +3019,11 @@ func (m *Model) restartSession() tea.Cmd {
 		// 4. Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
-		
+
 		syncName := "aiman-sync-" + s.ID
 		m.log("Creating sync %q", syncName)
 		localSyncPath := filepath.Join(home, config.DirName, "work", s.ID)
-		
+
 		m.log("Cleaning up local sync path: %s", localSyncPath)
 		_ = os.RemoveAll(localSyncPath)
 		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
@@ -3004,18 +3066,18 @@ func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadingMsg = "Restarting session with new scope..."
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
-			
+
 			// We need to update the session's WorkingDirectory
 			m.changingDirSession.WorkingDirectory = m.sessionCfg.Directory
 			if !strings.HasPrefix(m.changingDirSession.WorkingDirectory, m.changingDirSession.WorktreePath) {
 				m.changingDirSession.WorkingDirectory = filepath.Join(m.changingDirSession.WorktreePath, m.sessionCfg.Directory)
 			}
-			
+
 			// Reuse restartSession but it will use the updated WorkingDirectory
 			m.restartingSession = m.changingDirSession
 			m.changingDirSession = nil
-			
-			// We need to ensure sessionCfg has an agent. 
+
+			// We need to ensure sessionCfg has an agent.
 			// If not set, use the session's current agent if we can find it, or ask.
 			// For now, we'll try to find it in the scanner list.
 			if m.sessionCfg.Agent == nil {
@@ -3023,7 +3085,7 @@ func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loadingNext = viewStateRestartAgentPicker
 				return m, m.fetchAgents()
 			}
-			
+
 			return m, m.restartSession()
 		case "n", "esc":
 			m.state = viewStateMain

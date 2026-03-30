@@ -40,7 +40,7 @@ func (e *Engine) StartSync(ctx context.Context, name, localPath, remotePath stri
 		labelValue = strings.Trim(labelValue, "-_")
 		args = append(args, "--label", fmt.Sprintf("%s=%s", k, labelValue))
 	}
-	
+
 	args = append(args, localPath, remotePath)
 	cmd := exec.CommandContext(ctx, "mutagen", args...)
 	output, err := cmd.CombinedOutput()
@@ -73,21 +73,24 @@ func (e *Engine) ListSyncSessions(ctx context.Context) ([]domain.SyncSession, er
 	}
 
 	sessions := e.parseSyncListOutput(string(output))
+	postProcessMutagenSessions(sessions)
+	return sessions, nil
+}
 
-	// Post-process to fix Local vs Remote paths
+func postProcessMutagenSessions(sessions []domain.SyncSession) {
 	for i := range sessions {
 		s := &sessions[i]
 		// Ensure RemotePath is the one with the colon
 		if !strings.Contains(s.RemotePath, ":") && strings.Contains(s.LocalPath, ":") {
 			s.LocalPath, s.RemotePath = s.RemotePath, s.LocalPath
 		}
-		// Strip connection prefix from RemotePath
-		if parts := strings.SplitN(s.RemotePath, ":", 2); len(parts) > 1 {
+		// Strip user@host: prefix from RemotePath only for SSH-style URLs (must contain @).
+		// Avoid splitting on colons in ordinary paths or schemes like https://.
+		if parts := strings.SplitN(s.RemotePath, ":", 2); len(parts) > 1 && strings.Contains(parts[0], "@") {
+			s.RemoteEndpoint = parts[0]
 			s.RemotePath = parts[1]
 		}
 	}
-
-	return sessions, nil
 }
 
 func (e *Engine) parseSyncListOutput(output string) []domain.SyncSession {

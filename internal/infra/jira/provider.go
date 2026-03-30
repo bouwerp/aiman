@@ -170,10 +170,7 @@ func (p *Provider) toDomainIssue(ji jiraIssue) domain.Issue {
 		assignee = ji.Fields.Assignee.DisplayName
 	}
 
-	desc := ""
-	if ji.Fields.Description != nil {
-		desc = "(Rich Text Content)"
-	}
+	desc := formatIssueDescription(ji.Fields.Description)
 
 	return domain.Issue{
 		ID:          ji.Key,

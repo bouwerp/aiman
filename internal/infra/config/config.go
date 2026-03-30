@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -64,6 +65,29 @@ type Remote struct {
 	Host string `yaml:"host"`
 	User string `yaml:"user"`
 	Root string `yaml:"root"`
+}
+
+// UniqueRemotes returns remotes with duplicate SSH targets (same host, user, root) removed.
+// The first entry in the config order is kept. Prevents scanning the same machine twice,
+// which duplicated sessions and mutagen handling.
+func UniqueRemotes(remotes []Remote) []Remote {
+	if len(remotes) <= 1 {
+		return remotes
+	}
+	seen := make(map[string]bool, len(remotes))
+	out := make([]Remote, 0, len(remotes))
+	for _, r := range remotes {
+		key := strings.TrimSpace(r.Host) + "\x00" + strings.TrimSpace(r.User) + "\x00" + strings.TrimSpace(r.Root)
+		if r.Host == "" {
+			continue
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, r)
+	}
+	return out
 }
 
 // GetConfigPath returns the path to the configuration file.
