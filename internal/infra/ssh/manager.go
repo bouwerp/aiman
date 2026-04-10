@@ -1,5 +1,4 @@
 package ssh
-
 import (
 	"context"
 	"fmt"
@@ -9,7 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/bouwerp/aiman/internal/domain"
 )
+
 
 type Config struct {
 	Host string
@@ -67,25 +69,80 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 		return "", fmt.Errorf("failed to create sockets directory: %w", err)
 	}
 
-	// We use ControlMaster=auto and ControlPersist to handle multiplexing automatically.
-	// This is more robust than manual management with -f.
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=10",
-		"-o", "ControlMaster=auto",
-		"-o", "ControlPersist=10m",
-		"-S", cp,
-		"-X",
-		target, cmdStr)
+	run := func() (string, error) {
+		// We use ControlMaster=auto and ControlPersist to handle multiplexing automatically.
+		// This is more robust than manual management with -f.
+		cmd := exec.CommandContext(ctx, "ssh",
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=10",
+			"-o", "ControlMaster=auto",
+			"-o", "ControlPersist=10m",
+			"-S", cp,
+			"-A",
+			"-X",
+			target, cmdStr)
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return strings.TrimSpace(string(output)), fmt.Errorf("remote command failed on %s: %w\nOutput: %s", target, err, strings.TrimSpace(string(output)))
+		output, err := cmd.CombinedOutput()
+		outStr := strings.TrimSpace(string(output))
+		if err != nil {
+			return outStr, fmt.Errorf("remote command failed on %s: %w\nOutput: %s", target, err, outStr)
+		}
+		return outStr, nil
 	}
-	return strings.TrimSpace(string(output)), nil
+
+	runDirect := func() (string, error) {
+		// Final fallback without SSH multiplexing, for cases where the control
+		// socket/session is flaky but direct SSH still works.
+		cmd := exec.CommandContext(ctx, "ssh",
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=10",
+			"-o", "ControlMaster=no",
+			"-A",
+			target, cmdStr)
+
+		output, err := cmd.CombinedOutput()
+		outStr := strings.TrimSpace(string(output))
+		if err != nil {
+			return outStr, fmt.Errorf("remote command failed on %s: %w\nOutput: %s", target, err, outStr)
+		}
+		return outStr, nil
+	}
+
+	out, err := run()
+	if err == nil || !isRetriableSSHTransportError(err.Error()) {
+		return out, err
+	}
+
+	// Stale/broken control socket or dropped SSH transport.
+	// Clear the socket and retry with a fresh multiplexed connection.
+	for i := 0; i < 2; i++ {
+		_ = os.Remove(cp)
+		out, err = run()
+		if err == nil || !isRetriableSSHTransportError(err.Error()) {
+			return out, err
+		}
+	}
+
+	// Last resort: bypass multiplexing entirely for this command.
+	return runDirect()
+}
+
+func isRetriableSSHTransportError(errText string) bool {
+	s := strings.ToLower(errText)
+	return strings.Contains(s, "permission denied") ||
+		strings.Contains(s, "connection closed by") ||
+		strings.Contains(s, "mux_client_request_session") ||
+		strings.Contains(s, "control socket connect") ||
+		strings.Contains(s, "broken pipe")
 }
 
 func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) error {
+	// Safety check: refuse to write to critical user config files unless explicitly scoped
+	base := filepath.Base(path)
+	if base == ".bashrc" || base == ".profile" || base == ".bash_profile" || base == ".zshrc" {
+		return fmt.Errorf("refusing to overwrite critical user configuration file: %s", path)
+	}
+
 	target := m.target()
 	cp := m.controlPath()
 
@@ -100,6 +157,7 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPersist=10m",
 		"-S", cp,
+		"-A",
 		"-X",
 		target, fmt.Sprintf("cat > %q", path))
 
@@ -246,8 +304,8 @@ func (m *Manager) GetTmuxSessionEnv(ctx context.Context, sessionName, envVar str
 }
 
 func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (string, error) {
-	// Capture the visible pane and scrollback buffer (-S -)
-	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S - -t %q", sessionName)
+	// Capture the visible pane and last 1000 lines of scrollback buffer
+	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S -1000 -t %q", sessionName)
 	
 	var output string
 	var err error
@@ -289,14 +347,14 @@ func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (stri
 
 func (m *Manager) AttachTmuxSession(sessionName string) *exec.Cmd {
 	target := m.target()
-	// Use -t for interactive tty allocation, and -X for X11 forwarding (clipboard)
-	return exec.Command("ssh", "-t", "-X", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
+	// Use -t for interactive tty allocation, -A for agent forwarding, and -X for X11 forwarding (clipboard)
+	return exec.Command("ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
 }
 
 func (m *Manager) StreamTmuxSession(ctx context.Context, sessionName string) (io.ReadWriteCloser, error) {
 	target := m.target()
-	// -t for TTY, -X for X11 forwarding, tmux attach to the session
-	cmd := exec.CommandContext(ctx, "ssh", "-t", "-X", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
+	// -t for TTY, -A for agent forwarding, -X for X11 forwarding, tmux attach to the session
+	cmd := exec.CommandContext(ctx, "ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -346,6 +404,33 @@ func (m *Manager) StartTmuxSession(ctx context.Context, name string) error {
 	cmdStr := fmt.Sprintf("tmux new-session -d -s %s", name)
 	_, err := m.Execute(ctx, cmdStr)
 	return err
+}
+
+func (m *Manager) ProvisionRemote(ctx context.Context, steps []domain.ProvisionStep, progress chan<- domain.ProvisionProgress) error {
+	for _, step := range steps {
+		progress <- domain.ProvisionProgress{
+			StepID:  step.ID,
+			Status:  "running",
+			Message: fmt.Sprintf("Executing: %s", step.Name),
+		}
+
+		_, err := m.Execute(ctx, step.Command)
+		if err != nil {
+			progress <- domain.ProvisionProgress{
+				StepID:  step.ID,
+				Status:  "error",
+				Message: err.Error(),
+			}
+			return err
+		}
+
+		progress <- domain.ProvisionProgress{
+			StepID:  step.ID,
+			Status:  "success",
+			Message: fmt.Sprintf("Completed: %s", step.Name),
+		}
+	}
+	return nil
 }
 
 func (m *Manager) ScanDirectories(ctx context.Context, rootPath string, maxDepth int) ([]string, error) {

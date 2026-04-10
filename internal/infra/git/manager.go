@@ -7,8 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -29,7 +31,10 @@ func NewManager(cfg *config.GitConfig) *Manager {
 type ghRepo struct {
 	Name          string `json:"name"`
 	URL           string `json:"url"`
+	SSHUrl        string `json:"sshUrl"`
 	NameWithOwner string `json:"nameWithOwner"`
+	PushedAt      string `json:"pushedAt"`
+	UpdatedAt     string `json:"updatedAt"`
 }
 
 func (m *Manager) ListRepos(ctx context.Context) ([]domain.Repo, error) {
@@ -57,6 +62,7 @@ func (m *Manager) ListRepos(ctx context.Context) ([]domain.Repo, error) {
 
 	// Apply include/exclude filters
 	filteredRepos := m.applyFilters(allRepos)
+	sortReposByRecentActivity(filteredRepos)
 
 	return filteredRepos, nil
 }
@@ -64,7 +70,7 @@ func (m *Manager) ListRepos(ctx context.Context) ([]domain.Repo, error) {
 func (m *Manager) fetchPersonalRepos(ctx context.Context) ([]domain.Repo, error) {
 	// No owner argument: lists repos for the authenticated GitHub user (not orgs).
 	// --limit is above gh's default (30).
-	cmd := exec.CommandContext(ctx, "gh", "repo", "list", "--limit", "200", "--json", "name,url,nameWithOwner")
+	cmd := exec.CommandContext(ctx, "gh", "repo", "list", "--limit", "200", "--json", "name,url,sshUrl,nameWithOwner,pushedAt,updatedAt")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list personal repositories: %w, output: %s", err, string(output))
@@ -74,7 +80,7 @@ func (m *Manager) fetchPersonalRepos(ctx context.Context) ([]domain.Repo, error)
 }
 
 func (m *Manager) fetchOrgRepos(ctx context.Context, org string) ([]domain.Repo, error) {
-	cmd := exec.CommandContext(ctx, "gh", "repo", "list", org, "--limit", "200", "--json", "name,url,nameWithOwner")
+	cmd := exec.CommandContext(ctx, "gh", "repo", "list", org, "--limit", "200", "--json", "name,url,sshUrl,nameWithOwner,pushedAt,updatedAt")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list org repositories for %s: %w, output: %s", org, err, string(output))
@@ -96,13 +102,50 @@ func (m *Manager) parseGhRepos(output []byte) ([]domain.Repo, error) {
 		if displayName == "" {
 			displayName = r.Name
 		}
+		// Prefer SSH URL if available, as it's often more reliable on remote hosts (assuming keys are set up)
+		repoURL := r.SSHUrl
+		if repoURL == "" {
+			repoURL = r.URL
+		}
 		repos[i] = domain.Repo{
-			Name: displayName,
-			URL:  r.URL,
+			Name:           displayName,
+			URL:            repoURL,
+			LastActivityAt: githubRepoActivityTime(r.PushedAt, r.UpdatedAt),
 		}
 	}
 
 	return repos, nil
+}
+
+func githubRepoActivityTime(pushedAt, updatedAt string) time.Time {
+	var pushed, updated time.Time
+	if pushedAt != "" {
+		if t, err := time.Parse(time.RFC3339, pushedAt); err == nil {
+			pushed = t
+		}
+	}
+	if updatedAt != "" {
+		if t, err := time.Parse(time.RFC3339, updatedAt); err == nil {
+			updated = t
+		}
+	}
+	switch {
+	case !pushed.IsZero() && (pushed.After(updated) || updated.IsZero()):
+		return pushed
+	case !updated.IsZero():
+		return updated
+	default:
+		return time.Time{}
+	}
+}
+
+func sortReposByRecentActivity(repos []domain.Repo) {
+	slices.SortStableFunc(repos, func(a, b domain.Repo) int {
+		if c := b.LastActivityAt.Compare(a.LastActivityAt); c != 0 {
+			return c
+		}
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
 }
 
 func (m *Manager) applyFilters(repos []domain.Repo) []domain.Repo {

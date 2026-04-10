@@ -55,9 +55,10 @@ type FeatureFlags struct {
 }
 
 type JiraConfig struct {
-	URL      string `yaml:"url"`
-	Email    string `yaml:"email"`
-	APIToken string `yaml:"api_token"`
+	URL              string `yaml:"url"`
+	Email            string `yaml:"email"`
+	APIToken         string `yaml:"api_token"`
+	TransitionStatus string `yaml:"transition_status,omitempty"` // Status to move issue to when starting (e.g. "In Development")
 }
 
 type Remote struct {
@@ -65,6 +66,24 @@ type Remote struct {
 	Host string `yaml:"host"`
 	User string `yaml:"user"`
 	Root string `yaml:"root"`
+	// AWSDelegation describes a named profile (assume-role) to merge into ~/.aws/config on this remote.
+	// No secrets are stored here; source_profile must already exist on the server.
+	AWSDelegation *AWSDelegation `yaml:"aws_delegation,omitempty"`
+}
+
+// AWSDelegation is stored in aiman config; role_arn on the remote is derived from
+// account_id + role_name. account_id is resolved via local `aws sts get-caller-identity`
+// for source_profile when saving; Profile defaults to "default" in the TUI.
+//
+//	[default]
+//	role_arn = arn:aws:iam::ACCOUNT:role/RoleName   (generated)
+//	source_profile = their-long-lived-profile
+type AWSDelegation struct {
+	Profile         string `yaml:"profile,omitempty"`          // defaults to "default" in UI
+	AccountID       string `yaml:"account_id,omitempty"`       // from local AWS CLI
+	RoleName        string `yaml:"role_name,omitempty"`        // empty → TemporaryDelegatedRole in generated ARN
+	SourceProfile   string `yaml:"source_profile,omitempty"`   // local profile used for account lookup; must exist on remote
+	SyncCredentials bool   `yaml:"sync_credentials,omitempty"` // whether to push temporary session tokens to the remote
 }
 
 // UniqueRemotes returns remotes with duplicate SSH targets (same host, user, root) removed.

@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/google/uuid"
 )
 
 type FlowManager struct {
 	jiraProvider domain.IssueProvider
+	jiraConfig   *config.JiraConfig
 	gitManager   domain.RepositoryManager
 	sshManager   domain.RemoteExecutor
 	slugger      domain.Slugger
@@ -20,6 +22,7 @@ type FlowManager struct {
 
 func NewFlowManager(
 	jiraProvider domain.IssueProvider,
+	jiraConfig *config.JiraConfig,
 	gitManager domain.RepositoryManager,
 	sshManager domain.RemoteExecutor,
 	slugger domain.Slugger,
@@ -27,6 +30,7 @@ func NewFlowManager(
 ) *FlowManager {
 	return &FlowManager{
 		jiraProvider: jiraProvider,
+		jiraConfig:   jiraConfig,
 		gitManager:   gitManager,
 		sshManager:   sshManager,
 		slugger:      slugger,
@@ -154,6 +158,19 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	}
 
 	session.TmuxSession = tmuxName
+
+	// Trust the directory (Git safe.directory and Claude trust)
+	// This ensures agents and tools can operate without permission prompts.
+	trustCmd := fmt.Sprintf("git config --global --add safe.directory %q", workingDir)
+	_, _ = sshMgr.Execute(ctx, trustCmd)
+
+	claudeTrustCmd := fmt.Sprintf("cd %q && if command -v claude >/dev/null; then claude trust . >/dev/null 2>&1; fi", workingDir)
+	_, _ = sshMgr.Execute(ctx, claudeTrustCmd)
+
+	// Transition JIRA issue if configured
+	if session.IssueKey != "" && m.jiraConfig != nil && m.jiraConfig.TransitionStatus != "" {
+		_ = m.jiraProvider.TransitionIssue(ctx, session.IssueKey, m.jiraConfig.TransitionStatus)
+	}
 
 	if err := session.Transition(domain.SessionStatusActive); err != nil {
 		return nil, err

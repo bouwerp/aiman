@@ -73,13 +73,13 @@ func run() error {
 	})
 	skillEngine := skills.NewEngine(cfg)
 	slugger := domain.NewGitSlugger()
-	flowManager := usecase.NewFlowManager(jiraProvider, gitManager, sshManager, slugger, skillEngine)
+	flowManager := usecase.NewFlowManager(jiraProvider, &cfg.Integrations.Jira, gitManager, sshManager, slugger, skillEngine)
 
 	// 6. Handle commands
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "init":
-			p := tea.NewProgram(ui.NewSetupModel(cfg), tea.WithAltScreen())
+			p := tea.NewProgram(ui.NewSetupModel(cfg), tea.WithAltScreen(), tea.WithMouseAllMotion())
 			if _, err := p.Run(); err != nil {
 				return fmt.Errorf("alas, there's been an error: %w", err)
 			}
@@ -89,7 +89,7 @@ func run() error {
 			if err != nil {
 				return fmt.Errorf("failed to list repos: %w", err)
 			}
-			p := tea.NewProgram(ui.NewRepoPickerModel(repos, &cfg.Git), tea.WithAltScreen())
+			p := tea.NewProgram(ui.NewRepoPickerModel(repos, &cfg.Git), tea.WithAltScreen(), tea.WithMouseAllMotion())
 			if _, err := p.Run(); err != nil {
 				return fmt.Errorf("alas, there's been an error: %w", err)
 			}
@@ -98,7 +98,7 @@ func run() error {
 	}
 
 	// 7. Start TUI with StartupModel (Splash screen)
-	p := tea.NewProgram(ui.NewStartupModel(cfg, doctor, db, flowManager), tea.WithAltScreen())
+	p := tea.NewProgram(ui.NewStartupModel(cfg, doctor, db, flowManager), tea.WithAltScreen(), tea.WithMouseAllMotion())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("alas, there's been an error: %w", err)
 	}

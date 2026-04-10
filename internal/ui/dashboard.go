@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -22,9 +23,11 @@ import (
 	"github.com/bouwerp/aiman/internal/usecase"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var (
@@ -32,9 +35,75 @@ var (
 	statusStyle  = lipgloss.NewStyle().PaddingLeft(2).Italic(true).Foreground(lipgloss.Color("#7D7D7D"))
 	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00"))
 	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
+	titleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("62")).Bold(true).Underline(true)
 	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
 	promptRegex  = regexp.MustCompile(`^[\w\-@~/:\.]+\s*(\$|#|>)\s*$`)
 )
+
+// copyStringToSystemClipboard writes text to the OS clipboard when a native helper exists.
+func copyStringToSystemClipboard(s string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(s)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("pbcopy: %w", err)
+		}
+		return nil
+	case "linux":
+		if path, err := exec.LookPath("wl-copy"); err == nil {
+			cmd := exec.Command(path)
+			cmd.Stdin = strings.NewReader(s)
+			return cmd.Run()
+		}
+		if path, err := exec.LookPath("xclip"); err == nil {
+			cmd := exec.Command(path, "-selection", "clipboard")
+			cmd.Stdin = strings.NewReader(s)
+			return cmd.Run()
+		}
+		return fmt.Errorf("install wl-copy or xclip for clipboard support on Linux")
+	default:
+		return fmt.Errorf("clipboard copy not implemented on %s", runtime.GOOS)
+	}
+}
+
+// normalizeMultiline trims trailing spaces per line and leading/trailing blank lines.
+func normalizeMultiline(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// yankSessionOutputToClipboard copies visible or full preview buffer to the OS clipboard.
+// Mouse selection in alternate-screen TUIs often does not reach the system clipboard; use y / Y instead.
+func (m *Model) yankSessionOutputToClipboard(fullBuffer bool) bool {
+	if m.list.SelectedItem() == nil {
+		return false
+	}
+	var raw string
+	if m.panelMode == panelModeTerminal && m.terminal != nil {
+		raw = m.terminal.View()
+	} else if fullBuffer {
+		raw = m.tmuxOutput
+	} else {
+		raw = m.viewport.View()
+	}
+	text := normalizeMultiline(ansi.Strip(raw))
+	if text == "" {
+		m.lastError = "Nothing to copy from this session view yet."
+		m.state = viewStateVSCodeError
+		return true
+	}
+	if err := copyStringToSystemClipboard(text); err != nil {
+		m.lastError = fmt.Sprintf("Could not copy to clipboard: %v", err)
+		m.state = viewStateVSCodeError
+		return true
+	}
+	m.log("Copied session output to clipboard (%d chars)", len(text))
+	return true
+}
 
 type viewState int
 
@@ -63,6 +132,8 @@ const (
 	viewStateRestartConfirm
 	viewStateChangeDirPicker
 	viewStateChangeDirConfirm
+	viewStateProvisioningRemotePicker
+	viewStateProvisioningProgress
 	viewStateError        // generic error dialog (press any key to dismiss)
 	viewStateRemotePicker // select remote for new session
 )
@@ -181,6 +252,12 @@ type Model struct {
 	selectedRemote         config.Remote    // remote chosen for the current new-session wizard
 	remoteFilter           string           // "" = all remotes, otherwise a Remote.Host to filter by
 	allSessions            []domain.Session // unfiltered master session list
+	mouseEnabled           bool
+	provisionSteps         []domain.ProvisionStep
+	provisioningIdx        int
+	provisioningError      string
+	provisioningStatus     string
+	provisionSpinner       spinner.Model
 }
 
 func remoteNameForHost(cfg *config.Config, host string) string {
@@ -228,12 +305,14 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	l.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new session")),
-			key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "restart session")),
+			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart session")),
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
-			key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "attach full terminal")),
+			key.NewBinding(key.WithKeys("ctrl+s", "a"), key.WithHelp("a", "attach full terminal")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
 			key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "copy local path")),
+			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy session output (visible)")),
+			key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy session output (full preview)")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
@@ -244,6 +323,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 
 	menuItems := []list.Item{
 		menuItem{title: "Manage Remote Servers", desc: "Add, edit, or remove remote dev servers", action: viewStateRemotes},
+		menuItem{title: "Provision Remote Server", desc: "100% setup: install gh, agents, node, and skills", action: viewStateProvisioningRemotePicker},
 		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
@@ -252,6 +332,8 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	m.Title = "Administrative Menu"
 
 	vp := viewport.New(0, 0)
+	vp.MouseWheelEnabled = true
+	vp.MouseWheelDelta = 10
 	vp.Style = lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder(), true, false, false, false). // Top border
 		PaddingTop(1)
@@ -272,7 +354,11 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		viewport:      vp,
 		firstLoad:     make(map[string]bool),
 		allSessions:   initialSessions,
+		mouseEnabled:  true,
 	}
+	model.provisionSpinner = spinner.New()
+	model.provisionSpinner.Spinner = spinner.Dot
+	model.provisionSpinner.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	for _, log := range initialLogs {
 		model.consoleLog = append(model.consoleLog, log)
 	}
@@ -570,6 +656,74 @@ func (m *Model) searchJira(query string) tea.Cmd {
 	}
 }
 
+type provisionProgressMsg struct {
+	progress domain.ProvisionProgress
+}
+
+type provisionDoneMsg struct {
+	err error
+}
+
+type provisionConnectMsg struct {
+	err error
+}
+
+type provisionStepDoneMsg struct {
+	idx int
+	err error
+}
+
+func (m *Model) provisionConnectCmd(remote config.Remote) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		return provisionConnectMsg{err: mgr.Connect(ctx)}
+	}
+}
+
+func (m *Model) provisionStepCmd(remote config.Remote, idx int, step domain.ProvisionStep) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		_, err := mgr.Execute(ctx, step.Command)
+		return provisionStepDoneMsg{idx: idx, err: err}
+	}
+}
+
+func (m *Model) provisionRemoteCmd(remote config.Remote) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		if err := mgr.Connect(ctx); err != nil {
+			return provisionDoneMsg{err: err}
+		}
+
+		provisioner := usecase.NewProvisioner(mgr)
+		progressChan := make(chan domain.ProvisionProgress)
+
+		// Start provisioning in a goroutine
+		go func() {
+			_ = provisioner.Provision(ctx, progressChan)
+			close(progressChan)
+			// The final done message is handled separately or we could send it here
+			// but we need to ensure we don't send to a closed program.
+			// Bubble Tea handles this better via returning Cmds.
+		}()
+
+		// This approach is tricky with Bubble Tea's functional style.
+		// We'll simplify: just run the steps and return results.
+		// For a truly "streaming" UI, we'd need a more complex setup.
+		// Let's do a sequence of commands for each step instead.
+		return provisionDoneMsg{err: provisioner.Provision(ctx, nil)} // Simplified for now
+	}
+}
+
 type jiraIssuesMsg struct {
 	issues []domain.Issue
 	err    error
@@ -608,7 +762,9 @@ type attachMsg struct {
 	cmd *exec.Cmd
 }
 
-type attachDoneMsg struct{}
+type attachDoneMsg struct {
+	err error
+}
 
 type terminateStepMsg struct {
 	index int
@@ -759,6 +915,9 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 		}
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		if err := mgr.Connect(ctx); err != nil {
+			return dirsMsg{err: fmt.Errorf("failed to connect to remote: %w", err)}
+		}
 
 		var repoPath string
 		if repo != nil && repo.URL != "" {
@@ -773,10 +932,13 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 				repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
 			}
 
-			// Check if repo exists on remote, clone if not
-			if err := mgr.ValidateDir(ctx, repoPath); err != nil {
-				// Repo doesn't exist, need to clone it
-				_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %s && git clone %s %s", remote.Root, repo.URL, repoName))
+			// Distinguish "missing repo" from connectivity/auth failures.
+			existsOut, existsErr := mgr.Execute(ctx, fmt.Sprintf("if test -d %q; then echo EXISTS; else echo MISSING; fi", repoPath))
+			if existsErr != nil {
+				return dirsMsg{err: fmt.Errorf("failed to check remote repository path: %w", existsErr)}
+			}
+			if strings.TrimSpace(existsOut) == "MISSING" {
+				_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %q && git clone %q %q", remote.Root, repo.URL, repoName))
 				if cloneErr != nil {
 					return dirsMsg{err: fmt.Errorf("failed to clone repository: %w", cloneErr)}
 				}
@@ -1018,6 +1180,7 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		tickTmux(),
 		tickGit(),
+		tea.EnableMouseCellMotion,
 	)
 }
 
@@ -1115,7 +1278,9 @@ func (m *Model) SetSize(width, height int) {
 
 	// Viewport takes up the bottom part of the main panel
 	m.viewport.Width = width - (width / 3) - h - 4
-	m.viewport.Height = mainHeight - 15 // Reserve more lines for split details panel
+	// Compact stacked session/git strip (~6–9 lines) + thin preview chrome; rest for tmux/terminal.
+	const compactMainUpperBudget = 12
+	m.viewport.Height = max(6, mainHeight-compactMainUpperBudget)
 
 	if m.issuePicker.list.Title != "" {
 		m.issuePicker.SetSize(width, height)
@@ -1153,6 +1318,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, subCmd)
 
 		m.gitSetup.SetSize(msg.Width, msg.Height)
+	}
+
+	// Global viewState handling (e.g. from tea.Tick)
+	if s, ok := msg.(viewState); ok {
+		m.state = s
+		return m, nil
 	}
 
 	switch m.state {
@@ -1228,6 +1399,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateTerminateProgress:
 		return m.handleTerminateProgressUpdate(msg)
 
+	case viewStateProvisioningRemotePicker:
+		return m.handleProvisioningRemotePickerUpdate(msg)
+
+	case viewStateProvisioningProgress:
+		return m.handleProvisioningProgressUpdate(msg)
+
 	case viewStateLoading:
 		return m.handleLoadingUpdate(msg)
 	}
@@ -1281,6 +1458,58 @@ func (m *Model) renderView() string {
 			Border(lipgloss.DoubleBorder()).
 			BorderForeground(lipgloss.Color("205")).
 			Padding(1, 2).
+			Width(60)
+
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateProvisioningRemotePicker:
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			m.remotes.list.View())
+
+	case viewStateProvisioningProgress:
+		var b strings.Builder
+		b.WriteString(titleStyle.Render("Provisioning Remote Server: "+m.selectedRemote.Host) + "\n\n")
+
+		if m.provisioningStatus != "" {
+			statusLine := m.provisioningStatus
+			if m.provisioningError == "" && m.provisioningIdx < len(m.provisionSteps) {
+				statusLine = fmt.Sprintf("%s %s", m.provisionSpinner.View(), statusLine)
+			}
+			b.WriteString(statusStyle.Render(statusLine) + "\n\n")
+		}
+
+		for i, step := range m.provisionSteps {
+			status := "○" // Pending
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+			if m.provisioningIdx >= 0 && i < m.provisioningIdx {
+				status = "✔" // Success
+				style = successStyle
+			} else if m.provisioningIdx >= 0 && i == m.provisioningIdx {
+				if m.provisioningError != "" {
+					status = "✘" // Error
+					style = failStyle
+				} else {
+					status = "●" // Running
+					style = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+				}
+			}
+
+			b.WriteString(style.Render(fmt.Sprintf("%s %s", status, step.Name)) + "\n")
+		}
+
+		if m.provisioningError != "" {
+			b.WriteString("\n" + failStyle.Render("Error: "+m.provisioningError) + "\n")
+			b.WriteString("\nPress esc to return.")
+		} else if m.provisioningIdx >= len(m.provisionSteps) {
+			b.WriteString("\n" + successStyle.Render("Provisioning Complete!") + "\n")
+			b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Note: Run 'gh auth login' manually in your first session."))
+		}
+
+		dialog := lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(1, 4).
 			Width(60)
 
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
@@ -1491,8 +1720,24 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case attachMsg:
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-			return tmuxTickMsg(time.Now())
+			return attachDoneMsg{err: err}
 		})
+	case attachDoneMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
+			m.state = viewStateError
+			return m, nil
+		}
+		m.state = viewStateMain
+		m.panelMode = panelModePreview
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			m.activeSession = s.TmuxSession
+			m.tmuxOutput = "Loading..."
+			m.viewport.SetContent(m.tmuxOutput)
+			cmds = append(cmds, tickTmux(), fetchTmuxPane(m.cfg, s))
+		}
+		return m, tea.Batch(cmds...)
 	case tmuxTerminalMsg:
 		if msg.err != nil {
 			m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
@@ -1605,10 +1850,45 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Capture list selection changes to trigger immediate fetch
 	oldSel := m.list.SelectedItem()
 	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	cmds = append(cmds, cmd)
-	newSel := m.list.SelectedItem()
 
+	// If it's a mouse event, only forward to the component under the cursor
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		m.log("Mouse X: %d, Y: %d, Type: %v, Width: %d", mouseMsg.X, mouseMsg.Y, mouseMsg.Type, m.width)
+		if mouseMsg.X < (m.width/3 + 4) {
+			m.list, cmd = m.list.Update(msg)
+			cmds = append(cmds, cmd)
+		} else {
+			if m.panelMode == panelModeTerminal && m.terminal != nil {
+				var tModel tea.Model
+				tModel, cmd = m.terminal.Update(msg)
+				if tm, ok := tModel.(TerminalModel); ok {
+					m.terminal = &tm
+				}
+				cmds = append(cmds, cmd)
+			} else {
+				m.viewport, cmd = m.viewport.Update(msg)
+				cmds = append(cmds, cmd)
+			}
+		}
+	} else {
+		// Non-mouse messages go to both (keys are usually handled by focused component)
+		m.list, cmd = m.list.Update(msg)
+		cmds = append(cmds, cmd)
+
+		if m.panelMode == panelModeTerminal && m.terminal != nil {
+			var tModel tea.Model
+			tModel, cmd = m.terminal.Update(msg)
+			if tm, ok := tModel.(TerminalModel); ok {
+				m.terminal = &tm
+			}
+			cmds = append(cmds, cmd)
+		} else {
+			m.viewport, cmd = m.viewport.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	newSel := m.list.SelectedItem()
 	if oldSel != newSel && newSel != nil {
 		s := newSel.(item).session
 		m.activeSession = s.TmuxSession
@@ -1621,18 +1901,6 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			cmds = append(cmds, fetchTmuxPane(m.cfg, s), fetchGitStatus(m.cfg, s))
 		}
-	}
-
-	if m.panelMode == panelModeTerminal && m.terminal != nil {
-		var tModel tea.Model
-		tModel, cmd = m.terminal.Update(msg)
-		if tm, ok := tModel.(TerminalModel); ok {
-			m.terminal = &tm
-		}
-		cmds = append(cmds, cmd)
-	} else {
-		m.viewport, cmd = m.viewport.Update(msg)
-		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1672,6 +1940,17 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		case "pgdown":
 			m.consoleViewport.PageDown()
 			return m, nil, true
+		}
+	}
+	if msg.String() == "ctrl+m" {
+		m.mouseEnabled = !m.mouseEnabled
+		m.viewport.MouseWheelEnabled = m.mouseEnabled
+		if m.mouseEnabled {
+			m.log("Mouse reporting enabled (scrolling active)")
+			return m, tea.EnableMouseCellMotion, true
+		} else {
+			m.log("Mouse reporting disabled (native selection unlocked)")
+			return m, tea.DisableMouse, true
 		}
 	}
 	if msg.String() == "n" {
@@ -1717,7 +1996,7 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, tea.Quit, true
 	}
-	if msg.String() == "ctrl+s" {
+	if msg.String() == "ctrl+s" || msg.String() == "a" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
 			remote, ok := resolveRemote(m.cfg, s)
@@ -1755,6 +2034,16 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			}
 		}
 	}
+	if msg.String() == "y" {
+		if m.yankSessionOutputToClipboard(false) {
+			return m, nil, true
+		}
+	}
+	if msg.String() == "Y" {
+		if m.yankSessionOutputToClipboard(true) {
+			return m, nil, true
+		}
+	}
 	if msg.String() == "ctrl+l" {
 		m.log("ctrl+l pressed")
 		if sel := m.list.SelectedItem(); sel != nil {
@@ -1767,7 +2056,15 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 				return m, nil, true
 			}
 
-			// Detect current terminal app and open a new window there
+			if err := copyStringToSystemClipboard(s.LocalPath); err != nil {
+				m.log("ERROR: clipboard: %v", err)
+				m.lastError = fmt.Sprintf("Could not copy to clipboard: %v", err)
+				m.state = viewStateVSCodeError
+				return m, nil, true
+			}
+			m.log("Copied local path to clipboard: %s", s.LocalPath)
+
+			// Detect current terminal app and open a new window there (Warp: copy only + notification)
 			termProgram := os.Getenv("TERM_PROGRAM")
 			m.log("Terminal program: %s", termProgram)
 			var script string
@@ -1775,51 +2072,51 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			switch termProgram {
 			case "iTerm.app":
 				// iTerm2
+				cmd := fmt.Sprintf("cd %q && clear", s.LocalPath)
 				script = fmt.Sprintf(`tell application "iTerm"
 	create window with default profile
 	tell current session of current window
-		write text "cd %q && clear"
+		write text %q
 	end tell
-end tell`, s.LocalPath)
+end tell`, cmd)
 			case "WarpTerminal":
-				// Warp - just copy the local path to clipboard
-				script = fmt.Sprintf(`do shell script "printf '%s' | pbcopy"
-display notification "Local path copied to clipboard" with title "Aiman"`, strings.ReplaceAll(s.LocalPath, "'", "'\\''"))
+				// Path is already on clipboard; optional desktop notification
+				script = `display notification "Local path copied to clipboard" with title "Aiman"`
 			case "Apple_Terminal":
 				// Terminal.app
+				cmd := fmt.Sprintf("cd %q && clear", s.LocalPath)
 				script = fmt.Sprintf(`tell application "Terminal"
-	do script "cd %q && clear"
+	do script %q
 	activate
-end tell`, s.LocalPath)
+end tell`, cmd)
 			default:
-				// Fallback: try Terminal.app
-				script = fmt.Sprintf(`tell application "Terminal"
-	do script "cd %q && clear"
-	activate
-end tell`, s.LocalPath)
+				// Copy only (e.g. Cursor/VS Code integrated terminal, SSH, tmux) — do not spawn Terminal.app
+				script = ""
 			}
 
-			m.log("Executing AppleScript for %s...", termProgram)
-			m.log("Script: %s", script)
-			cmd := exec.Command("osascript", "-e", script)
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				m.log("ERROR: osascript failed: %v", err)
-				m.log("Output: %s", string(output))
-				m.lastError = fmt.Sprintf("Failed to open terminal: %v\nOutput: %s", err, string(output))
-				m.state = viewStateVSCodeError
-				return m, nil, true
+			if runtime.GOOS == "darwin" && script != "" {
+				m.log("Executing AppleScript for %s...", termProgram)
+				m.log("Script: %s", script)
+				cmd := exec.Command("osascript", "-e", script)
+				output, err := cmd.CombinedOutput()
+				if err != nil {
+					m.log("ERROR: osascript failed: %v", err)
+					m.log("Output: %s", string(output))
+					m.lastError = fmt.Sprintf("Failed to open terminal: %v\nOutput: %s", err, string(output))
+					m.state = viewStateVSCodeError
+					return m, nil, true
+				}
+				if len(output) > 0 {
+					m.log("osascript output: %s", string(output))
+				}
+				m.log("AppleScript completed successfully")
 			}
-			if len(output) > 0 {
-				m.log("osascript output: %s", string(output))
-			}
-			m.log("Terminal command completed successfully")
 		} else {
 			m.log("ERROR: No session selected")
 		}
 		return m, nil, true
 	}
-	if msg.String() == "ctrl+r" {
+	if msg.String() == "ctrl+r" || msg.String() == "s" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			selectedSess := sel.(item).session
 			if remote, ok := resolveRemote(m.cfg, selectedSess); ok {
@@ -1868,7 +2165,7 @@ end tell`, s.LocalPath)
 			return m, m.fetchDirectories(s.WorktreePath), true
 		}
 	}
-	if msg.String() == "m" {
+	if msg.String() == "r" {
 
 		// Refresh sessions from all remotes
 		m.log("Refreshing sessions...")
@@ -1932,6 +2229,15 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, nil
 				}
+				if i.action == viewStateProvisioningRemotePicker {
+					m.remotes = NewRemotesModel(m.cfg)
+					m.remotes.width = m.width
+					m.remotes.height = m.height
+					h, v := docStyle.GetFrameSize()
+					m.remotes.list.SetSize(m.width-h-4, m.height-v-6)
+					m.state = i.action
+					return m, nil
+				}
 				if i.action == viewStateGitSetup {
 					m.gitSetup = NewGitSetupModel(m.cfg)
 					m.state = i.action
@@ -1957,6 +2263,82 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.menu, cmd = m.menu.Update(msg)
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) handleProvisioningRemotePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc":
+			m.state = viewStateMenu
+			return m, nil
+		case "enter", " ":
+			if i, ok := m.remotes.list.SelectedItem().(remoteItem); ok && i.isConfig {
+				m.selectedRemote = config.Remote{
+					Name: i.name,
+					Host: i.host,
+					User: i.user,
+					Root: i.root,
+				}
+				m.provisionSteps = usecase.NewProvisioner(nil).GetSteps()
+				m.provisioningIdx = -1
+				m.provisioningError = ""
+				m.provisioningStatus = fmt.Sprintf("Connecting to %s@%s...", i.user, i.host)
+				m.state = viewStateProvisioningProgress
+				return m, tea.Batch(m.provisionConnectCmd(m.selectedRemote), m.provisionSpinner.Tick)
+			}
+		}
+	}
+	var cmd tea.Cmd
+	m.remotes.list, cmd = m.remotes.list.Update(msg)
+	return m, cmd
+}
+
+func (m *Model) handleProvisioningProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "esc" && (m.provisioningError != "" || m.provisioningIdx >= len(m.provisionSteps)) {
+			m.state = viewStateMenu
+			return m, nil
+		}
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.provisionSpinner, cmd = m.provisionSpinner.Update(msg)
+		if m.provisioningError == "" && m.provisioningIdx < len(m.provisionSteps) {
+			return m, cmd
+		}
+		return m, nil
+	case provisionConnectMsg:
+		if msg.err != nil {
+			m.provisioningError = msg.err.Error()
+			m.provisioningStatus = "Connection failed."
+			return m, nil
+		}
+		if len(m.provisionSteps) == 0 {
+			m.provisioningIdx = 0
+			m.provisioningStatus = "No provisioning steps configured."
+			return m, nil
+		}
+		m.provisioningIdx = 0
+		m.provisioningStatus = fmt.Sprintf("Running: %s", m.provisionSteps[0].Name)
+		return m, m.provisionStepCmd(m.selectedRemote, 0, m.provisionSteps[0])
+	case provisionStepDoneMsg:
+		if msg.err != nil {
+			m.provisioningError = msg.err.Error()
+			if msg.idx >= 0 && msg.idx < len(m.provisionSteps) {
+				m.provisioningStatus = fmt.Sprintf("Failed: %s", m.provisionSteps[msg.idx].Name)
+			}
+			return m, nil
+		}
+		next := msg.idx + 1
+		m.provisioningIdx = next
+		if next < len(m.provisionSteps) {
+			m.provisioningStatus = fmt.Sprintf("Running: %s", m.provisionSteps[next].Name)
+			return m, m.provisionStepCmd(m.selectedRemote, next, m.provisionSteps[next])
+		}
+		m.provisioningStatus = "Provisioning complete."
+		return m, nil
+	}
+	return m, nil
 }
 
 func (m *Model) handleRemotesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -2530,9 +2912,14 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case attachMsg:
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-			return attachDoneMsg{}
+			return attachDoneMsg{err: err}
 		})
 	case attachDoneMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
+			m.state = viewStateError
+			return m, nil
+		}
 		m.state = viewStateMain
 		m.panelMode = panelModePreview
 		if sel := m.list.SelectedItem(); sel != nil {
@@ -2680,6 +3067,33 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max <= 1 {
+		return "…"
+	}
+	return string(r[:max-1]) + "…"
+}
+
+func prReviewForeground(status string) lipgloss.Color {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "approved":
+		return lipgloss.Color("#00FF00")
+	case "changes_requested":
+		return lipgloss.Color("#FF0000")
+	case "pending":
+		return lipgloss.Color("#FFA500")
+	default:
+		return lipgloss.Color("#7D7D7D")
+	}
+}
+
 func (m *Model) renderMainView() string {
 	// Split View
 	h, _ := docStyle.GetFrameSize()
@@ -2693,158 +3107,159 @@ func (m *Model) renderMainView() string {
 	var mainContent string
 	if sel := m.list.SelectedItem(); sel != nil {
 		s := sel.(item).session
+		contentW := mainWidth - 4
+		if contentW < 20 {
+			contentW = 20
+		}
 
-		// 1. Session Details (Left Column)
-		var sessionDetails strings.Builder
-		sessionDetails.WriteString(activeStyle.Render("SESSION DETAILS") + "\n\n")
-		sessionDetails.WriteString(fmt.Sprintf("Tmux: %s\n", s.TmuxSession))
-		sessionDetails.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
-		sessionDetails.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
-		sessionDetails.WriteString(fmt.Sprintf("Worktree: %s\n", s.WorktreePath))
+		maxPath := min(contentW, 80)
+		wtDisp := truncateRunes(s.WorktreePath, maxPath)
+		sum := fmt.Sprintf("%s · %s · %s · %s", s.TmuxSession, s.RemoteHost, s.RepoName, s.Status)
+		sum = truncateRunes(sum, max(10, contentW-12))
+		sessionLines := []string{
+			activeStyle.Render("Session") + "  " + sum,
+			wtDisp,
+		}
+		var meta []string
 		if s.WorkingDirectory != "" && s.WorkingDirectory != s.WorktreePath {
 			scope := s.WorkingDirectory
 			if strings.HasPrefix(scope, s.WorktreePath) {
 				scope = "." + strings.TrimPrefix(scope, s.WorktreePath)
 			}
-			sessionDetails.WriteString(fmt.Sprintf("Scope: %s\n", scope))
+			meta = append(meta, truncateRunes(scope, 28))
 		}
 		if s.MutagenSyncID != "" {
-			sessionDetails.WriteString(fmt.Sprintf("Local Sync: %s\n", successStyle.Render(s.LocalPath)))
+			meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32)))
 		} else {
-			sessionDetails.WriteString("Local Sync: " + failStyle.Render("None") + "\n")
+			meta = append(meta, failStyle.Render("no sync"))
 		}
 		if s.IssueKey != "" {
-			sessionDetails.WriteString(fmt.Sprintf("JIRA: %s\n", s.IssueKey))
+			meta = append(meta, s.IssueKey)
 		}
-		sessionDetails.WriteString(fmt.Sprintf("\nStatus: %s\n", s.Status))
-		sessionDetails.WriteString(fmt.Sprintf("Created: %s\n", s.CreatedAt.Format("2006-01-02 15:04:05")))
+		meta = append(meta, s.CreatedAt.Format("2006-01-02 15:04"))
+		sessionLines = append(sessionLines, strings.Join(meta, " · "))
 
-		// 2. Git Intelligence (Right Column)
-		var gitDetails strings.Builder
-		gitDetails.WriteString(activeStyle.Render("GIT INTELLIGENCE") + "\n\n")
-		if !m.lastGitStatusUpdate.IsZero() {
-			gitDetails.WriteString(fmt.Sprintf("PR info updated: %s (every 30s)\n\n", m.lastGitStatusUpdate.Format("15:04:05")))
-		}
-		if m.gitStatus.Branch != "" {
-			gitDetails.WriteString(fmt.Sprintf("Branch: %s", m.gitStatus.Branch))
+		var gitLines []string
+		if m.gitStatus.Branch == "" {
+			gitLines = append(gitLines, activeStyle.Render("Git")+"  "+statusStyle.Render("Loading…"))
+		} else {
+			br := m.gitStatus.Branch
 			if m.gitStatus.Ahead > 0 || m.gitStatus.Behind > 0 {
-				gitDetails.WriteString(fmt.Sprintf(" (↑%d ↓%d)", m.gitStatus.Ahead, m.gitStatus.Behind))
+				br += fmt.Sprintf(" ↑%d↓%d", m.gitStatus.Ahead, m.gitStatus.Behind)
 			}
-			gitDetails.WriteString("\n")
-
+			var ch string
 			if m.gitStatus.StagedCount > 0 || m.gitStatus.UnstagedCount > 0 || m.gitStatus.UntrackedCount > 0 {
-				gitDetails.WriteString(fmt.Sprintf("Changes: %d staged, %d unstaged, %d untracked\n",
-					m.gitStatus.StagedCount, m.gitStatus.UnstagedCount, m.gitStatus.UntrackedCount))
+				ch = fmt.Sprintf("%ds · %du · %d?",
+					m.gitStatus.StagedCount, m.gitStatus.UnstagedCount, m.gitStatus.UntrackedCount)
 			} else {
-				gitDetails.WriteString("Changes: clean\n")
+				ch = "clean"
 			}
+			gitHead := activeStyle.Render("Git") + "  " + br + " · " + ch
+			if !m.lastGitStatusUpdate.IsZero() {
+				gitHead += statusStyle.Render(" · PR@" + m.lastGitStatusUpdate.Format("15:04:05"))
+			}
+			gitLines = append(gitLines, gitHead)
 
-			if m.gitStatus.PullRequest != nil {
-				pr := m.gitStatus.PullRequest
+			if pr := m.gitStatus.PullRequest; pr != nil {
 				stateLabel := pr.DisplayState
 				if stateLabel == "" {
 					stateLabel = strings.ToLower(pr.State)
 				}
-				gitDetails.WriteString(fmt.Sprintf("PR: #%d %s\n", pr.Number, pr.Title))
-				gitDetails.WriteString(fmt.Sprintf("  Status: %s", strings.ToUpper(stateLabel)))
+				titleMax := contentW - 24
+				if titleMax < 14 {
+					titleMax = 14
+				}
+				prLine := fmt.Sprintf("  #%d %s · %s", pr.Number, truncateRunes(pr.Title, titleMax), strings.ToUpper(stateLabel))
 				if pr.IsDraft {
-					gitDetails.WriteString(" (draft)")
+					prLine += " · draft"
 				}
 				if pr.Merged {
-					gitDetails.WriteString(" (merged)")
+					prLine += " · merged"
 				}
-				gitDetails.WriteString("\n")
-				if pr.URL != "" {
-					gitDetails.WriteString(fmt.Sprintf("  %s\n", pr.URL))
-				}
-
-				reviewColor := "#7D7D7D"
-				switch pr.ReviewStatus {
-				case "approved":
-					reviewColor = "#00FF00"
-				case "changes_requested":
-					reviewColor = "#FF0000"
-				case "pending":
-					reviewColor = "#FFA500"
-				}
-				line := fmt.Sprintf("  Review: %s", pr.ReviewStatus)
-				if pr.ReviewDecision != "" {
-					line += fmt.Sprintf(" (%s)", pr.ReviewDecision)
-				}
-				gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(reviewColor)).Render(line))
 				if pr.CommentCount > 0 {
-					gitDetails.WriteString(fmt.Sprintf(" — %d PR comment(s)", pr.CommentCount))
+					prLine += fmt.Sprintf(" · %dc", pr.CommentCount)
 				}
-				gitDetails.WriteString("\n")
+				gitLines = append(gitLines, truncateRunes(prLine, contentW))
 
-				if pr.UnresolvedReviewThreads >= 0 {
-					threadColor := "#7D7D7D"
-					if pr.UnresolvedReviewThreads > 0 {
-						threadColor = "#FFA500"
+				revKey := pr.ReviewStatus
+				if revKey == "" && pr.ReviewDecision != "" {
+					revKey = strings.ToLower(pr.ReviewDecision)
+				}
+				revLabel := "R:" + revKey
+				if revLabel == "R:" {
+					revLabel = "R:—"
+				}
+				effRev := pr.ReviewStatus
+				if effRev == "" {
+					switch strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)) {
+					case "APPROVED":
+						effRev = "approved"
+					case "CHANGES_REQUESTED":
+						effRev = "changes_requested"
 					}
-					gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(threadColor)).Render(
-						fmt.Sprintf("  Unresolved review threads: %d", pr.UnresolvedReviewThreads)))
-					gitDetails.WriteString("\n")
+				}
+				revStyled := lipgloss.NewStyle().Foreground(prReviewForeground(effRev)).Render(revLabel)
+
+				var thStyled string
+				if pr.UnresolvedReviewThreads >= 0 {
+					thStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D7D7D"))
+					if pr.UnresolvedReviewThreads > 0 {
+						thStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500"))
+					}
+					thStyled = thStyle.Render(fmt.Sprintf("threads:%d", pr.UnresolvedReviewThreads))
 				} else {
-					gitDetails.WriteString("  Unresolved review threads: (unavailable)\n")
+					thStyled = statusStyle.Render("threads:?")
 				}
 
-				mergeColor := "#7D7D7D"
-				mergeLine := "  Merge: unknown"
+				mergeColor := lipgloss.Color("#7D7D7D")
+				mergeTxt := "merge:?"
 				switch strings.ToUpper(strings.TrimSpace(pr.Mergeable)) {
 				case "CONFLICTING":
-					mergeColor = "#FF0000"
-					mergeLine = "  Merge: conflicting"
+					mergeColor = lipgloss.Color("#FF0000")
+					mergeTxt = "merge:conflict"
 				case "MERGEABLE":
-					mergeColor = "#00FF00"
-					mergeLine = "  Merge: clean (mergeable)"
+					mergeColor = lipgloss.Color("#00FF00")
+					mergeTxt = "merge:ok"
 				case "UNKNOWN":
-					mergeLine = "  Merge: unknown (GitHub still computing)"
+					mergeTxt = "merge:…"
 				}
 				if pr.HasMergeConflict || strings.EqualFold(pr.MergeStateStatus, "DIRTY") {
-					mergeColor = "#FF0000"
-					mergeLine = "  Merge: conflicts"
+					mergeColor = lipgloss.Color("#FF0000")
+					mergeTxt = "merge:dirty"
 				}
-				gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(mergeColor)).Render(mergeLine))
-				gitDetails.WriteString("\n")
+				mergeStyled := lipgloss.NewStyle().Foreground(mergeColor).Render(mergeTxt)
 
-				if pr.ChecksStatus != "none" {
-					checkColor := "#7D7D7D"
+				var parts []string
+				parts = append(parts, revStyled, thStyled, mergeStyled)
+				if pr.ChecksStatus != "none" && pr.ChecksSummary != "" {
+					chkColor := lipgloss.Color("#7D7D7D")
 					switch pr.ChecksStatus {
 					case "success":
-						checkColor = "#00FF00"
+						chkColor = lipgloss.Color("#00FF00")
 					case "failure":
-						checkColor = "#FF0000"
+						chkColor = lipgloss.Color("#FF0000")
 					case "pending":
-						checkColor = "#FFA500"
+						chkColor = lipgloss.Color("#FFA500")
 					}
-					gitDetails.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(checkColor)).Render(fmt.Sprintf("  Checks: %s", pr.ChecksSummary)))
-					gitDetails.WriteString("\n")
+					parts = append(parts, lipgloss.NewStyle().Foreground(chkColor).Render("CI:"+pr.ChecksSummary))
 				}
+				gitLines = append(gitLines, "  "+strings.Join(parts, "  "))
 			} else {
-				gitDetails.WriteString("PR: none (no open PR for this branch, or gh not available)\n")
+				gitLines = append(gitLines, "  "+statusStyle.Render("No open PR (or gh unavailable)"))
 			}
-		} else {
-			gitDetails.WriteString("Loading git status...\n")
 		}
 
-		// Combine columns
-		colWidth := (mainWidth - 4) / 2
-		leftCol := lipgloss.NewStyle().Width(colWidth).Render(sessionDetails.String())
-		rightCol := lipgloss.NewStyle().Width(colWidth).PaddingLeft(2).
-			Border(lipgloss.NormalBorder(), false, false, false, true). // Left border for separator
-			Render(gitDetails.String())
+		sep := statusStyle.Render(strings.Repeat("─", contentW))
+		infoRaw := strings.Join(sessionLines, "\n") + "\n" + sep + "\n" + strings.Join(gitLines, "\n")
+		infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
 
-		infoPanel := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, rightCol)
-
-		// 3. Tmux Output (Bottom)
 		var outputPanel strings.Builder
-		outputPanel.WriteString("\n" + strings.Repeat("─", mainWidth-4) + "\n")
-		modeName := "PREVIEW"
+		outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
+		modeName := "Preview"
 		if m.panelMode == panelModeTerminal {
-			modeName = "TERMINAL"
+			modeName = "Terminal"
 		}
-		outputPanel.WriteString(activeStyle.Render(modeName) + " (ctrl+s full screen)\n\n")
+		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + "\n")
 
 		if m.panelMode == panelModeTerminal && m.terminal != nil {
 			outputPanel.WriteString(m.terminal.View())
@@ -2885,7 +3300,7 @@ func (m *Model) renderMainView() string {
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • f: filter • c: scope • ctrl+r: restart • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s: term • q: quit")
+		Render("n: new • f: filter • c: scope • s: restart • y: copy view • r: refresh • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
 
 	// PR Buttons (matching Figma)
 	var prButtons string

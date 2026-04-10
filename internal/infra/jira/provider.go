@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -59,10 +60,10 @@ func (p *Provider) SearchIssues(ctx context.Context, query string) ([]domain.Iss
 		return p.fetchIssues(ctx, jql, 100)
 	}
 
-	// Default: fetch the user's own open issues, then append recent open issues
-	// from others so the list is comprehensive but the user's work comes first.
+	// Default: fetch the user's own open issues and 'Dev Ready' issues, 
+	// then append recent open issues from others.
 	myIssues, err := p.fetchIssues(ctx,
-		"assignee = currentUser() AND statusCategory != \"Done\" ORDER BY created DESC", 100)
+		"(assignee = currentUser() OR status = \"Dev Ready\") AND statusCategory != \"Done\" ORDER BY created DESC", 100)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +126,100 @@ func (p *Provider) fetchIssues(ctx context.Context, jql string, maxResults int) 
 	}
 
 	return issues, nil
+}
+
+type jiraTransition struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	To   struct {
+		Name string `json:"name"`
+	} `json:"to"`
+}
+
+type jiraTransitionsResponse struct {
+	Transitions []jiraTransition `json:"transitions"`
+}
+
+type jiraTransitionRequest struct {
+	Transition struct {
+		ID string `json:"id"`
+	} `json:"transition"`
+}
+
+func (p *Provider) TransitionIssue(ctx context.Context, key string, status string) error {
+	if status == "" {
+		return nil
+	}
+
+	// 1. Fetch available transitions
+	u, err := url.Parse(fmt.Sprintf("%s/rest/api/3/issue/%s/transitions", p.config.URL, key))
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(p.config.Email, p.config.APIToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to get transitions: %s", string(body))
+	}
+
+	var transResp jiraTransitionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&transResp); err != nil {
+		return err
+	}
+
+	// 2. Find transition that moves to the target status name
+	var targetID string
+	for _, t := range transResp.Transitions {
+		// Match against the destination status name OR the transition name itself
+		if strings.EqualFold(t.To.Name, status) || strings.EqualFold(t.Name, status) {
+			targetID = t.ID
+			break
+		}
+	}
+
+	if targetID == "" {
+		// Not found is not necessarily an error (could already be in that status),
+		// but we can log or return it if it's considered a misconfiguration.
+		return fmt.Errorf("no transition found for status %q", status)
+	}
+
+	// 3. Trigger transition
+	var transReq jiraTransitionRequest
+	transReq.Transition.ID = targetID
+	body, _ := json.Marshal(transReq)
+
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(p.config.Email, p.config.APIToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to transition issue: %s", string(body))
+	}
+
+	return nil
 }
 
 func (p *Provider) GetIssue(ctx context.Context, key string) (domain.Issue, error) {

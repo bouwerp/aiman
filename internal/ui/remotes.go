@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usecase"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -25,13 +27,15 @@ import (
 type remotesState int
 
 const (
-	remotesStateList     remotesState = iota // main list
-	remotesStateAdd                          // modal: add new remote
-	remotesStateEdit                         // modal: edit selected remote
-	remotesStateDelete                       // modal: confirm delete
-	remotesStateTesting                      // testing connection (overlay)
-	remotesStateScanning                     // scanning remote (overlay)
-	remotesStateResult                       // show scan/test result
+	remotesStateList       remotesState = iota // main list
+	remotesStateAdd                            // modal: add new remote
+	remotesStateEdit                           // modal: edit selected remote
+	remotesStateDelete                         // modal: confirm delete
+	remotesStateTesting                        // testing connection (overlay)
+	remotesStateScanning                       // scanning remote (overlay)
+	remotesStateResult                         // show scan/test result
+	remotesStateAWS                            // configure delegated AWS profile for selected remote
+	remotesStateAWSPushing                     // applying ~/.aws/config on remote
 )
 
 type dialogFocus int
@@ -41,6 +45,16 @@ const (
 	dialogFocusUser
 	dialogFocusRoot
 	dialogFocusCount // sentinel for modular arithmetic
+)
+
+type awsDialogFocus int
+
+const (
+	awsFocusProfile awsDialogFocus = iota
+	awsFocusRoleName
+	awsFocusSource
+	awsFocusSync
+	awsFocusCount
 )
 
 // ---------------------------------------------------------------------------
@@ -92,16 +106,49 @@ type RemotesModel struct {
 	testingUser string
 	testingRoot string
 	scanResults *scanResults
+	spinner     spinner.Model
 
 	DiscoveredSessions []domain.Session
 	done               bool
 	width, height      int
+
+	awsRemoteIdx        int
+	awsFocus            awsDialogFocus
+	awsLocalProfiles    []string
+	awsLocalPick        int
+	awsProfile          textinput.Model
+	awsRoleName         textinput.Model
+	awsSource           textinput.Model
+	awsDerivedAccountID string
+	awsAccountLookupErr string
+	awsAccountResolving bool
+	awsSyncCreds        bool
 }
 
 type scanResults struct {
 	sessions []domain.Session
 	repos    []string
 	err      error
+}
+
+type awsPushMsg struct {
+	err         error
+	profile     string
+	syncedCreds bool
+}
+
+type awsAccountLookupMsg struct {
+	accountID string
+	err       error
+}
+
+func lookupAWSAccountIDCmd(profile string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		id, err := awsdelegation.AccountIDFromLocalProfile(ctx, profile)
+		return awsAccountLookupMsg{accountID: id, err: err}
+	}
 }
 
 // IsAtTopLevel returns true when esc should leave the remotes screen entirely.
@@ -114,10 +161,15 @@ func (m RemotesModel) IsAtTopLevel() bool {
 // ---------------------------------------------------------------------------
 
 func NewRemotesModel(cfg *config.Config) RemotesModel {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
 	m := RemotesModel{
 		cfg:          cfg,
 		state:        remotesStateList,
 		editingIndex: -1,
+		spinner:      s,
 	}
 	m.list = m.buildList()
 	return m
@@ -203,6 +255,129 @@ func (m *RemotesModel) initDialog(host, user, root string) {
 	m.dialogFocus = dialogFocusHost
 }
 
+func (m *RemotesModel) initAWSDialog() {
+	var d *config.AWSDelegation
+	if m.awsRemoteIdx >= 0 && m.awsRemoteIdx < len(m.cfg.Remotes) {
+		d = m.cfg.Remotes[m.awsRemoteIdx].AWSDelegation
+	}
+
+	names, _ := awsdelegation.ListLocalAWSProfileNames()
+	m.awsLocalProfiles = names
+	m.awsLocalPick = -1
+	if len(names) > 0 {
+		m.awsLocalPick = 0
+		for i, n := range names {
+			if n == "default" {
+				m.awsLocalPick = i
+				break
+			}
+		}
+	}
+
+	m.awsProfile = textinput.New()
+	m.awsProfile.Placeholder = awsdelegation.DefaultDelegatedProfileName
+	m.awsProfile.CharLimit = 80
+	m.awsProfile.Width = 56
+	if d != nil && strings.TrimSpace(d.Profile) != "" {
+		m.awsProfile.SetValue(d.Profile)
+	} else {
+		m.awsProfile.SetValue(awsdelegation.DefaultDelegatedProfileName)
+	}
+
+	m.awsDerivedAccountID = ""
+	m.awsAccountLookupErr = ""
+	m.awsAccountResolving = false
+	m.awsSyncCreds = false
+	if d != nil {
+		if strings.TrimSpace(d.AccountID) != "" {
+			m.awsDerivedAccountID = d.AccountID
+		}
+		m.awsSyncCreds = d.SyncCredentials
+	}
+
+	m.awsRoleName = textinput.New()
+	m.awsRoleName.Placeholder = awsdelegation.DefaultDelegatedRoleName + " (default if empty)"
+	m.awsRoleName.CharLimit = 64
+	m.awsRoleName.Width = 56
+	if d != nil {
+		m.awsRoleName.SetValue(d.RoleName)
+	}
+
+	m.awsSource = textinput.New()
+	m.awsSource.Placeholder = "source profile (default is recommended)"
+	m.awsSource.CharLimit = 120
+	m.awsSource.Width = 56
+	if d != nil && strings.TrimSpace(d.SourceProfile) != "" {
+		m.awsSource.SetValue(d.SourceProfile)
+		for i, n := range m.awsLocalProfiles {
+			if n == d.SourceProfile {
+				m.awsLocalPick = i
+				break
+			}
+		}
+	} else if m.awsLocalPick >= 0 {
+		m.awsSource.SetValue(m.awsLocalProfiles[m.awsLocalPick])
+	}
+
+	m.awsFocus = awsFocusProfile
+	m.awsProfile.Focus()
+	m.awsRoleName.Blur()
+	m.awsSource.Blur()
+}
+
+func (m RemotesModel) applyAWSFocus() (RemotesModel, tea.Cmd) {
+	m.awsProfile.Blur()
+	m.awsRoleName.Blur()
+	m.awsSource.Blur()
+	switch m.awsFocus {
+	case awsFocusProfile:
+		return m, m.awsProfile.Focus()
+	case awsFocusRoleName:
+		return m, m.awsRoleName.Focus()
+	case awsFocusSource:
+		m = m.onEnterSourceFocus()
+		src := strings.TrimSpace(m.awsSource.Value())
+		focusCmd := m.awsSource.Focus()
+		m.awsAccountResolving = true
+		m.awsAccountLookupErr = ""
+		return m, tea.Batch(focusCmd, lookupAWSAccountIDCmd(src))
+	}
+	return m, nil
+}
+
+// onEnterSourceFocus seeds source_profile from ~/.aws on this Mac when empty (same name is usually used on the remote).
+func (m RemotesModel) onEnterSourceFocus() RemotesModel {
+	if len(m.awsLocalProfiles) == 0 {
+		return m
+	}
+	if m.awsLocalPick < 0 {
+		m.awsLocalPick = 0
+	}
+	if m.awsLocalPick >= len(m.awsLocalProfiles) {
+		m.awsLocalPick = len(m.awsLocalProfiles) - 1
+	}
+	if strings.TrimSpace(m.awsSource.Value()) == "" {
+		m.awsSource.SetValue(m.awsLocalProfiles[m.awsLocalPick])
+	}
+	return m
+}
+
+func (m RemotesModel) cycleLocalProfile(delta int) RemotesModel {
+	if len(m.awsLocalProfiles) == 0 {
+		return m
+	}
+	if m.awsLocalPick < 0 {
+		m.awsLocalPick = 0
+	}
+	m.awsLocalPick += delta
+	for m.awsLocalPick < 0 {
+		m.awsLocalPick += len(m.awsLocalProfiles)
+	}
+	m.awsLocalPick %= len(m.awsLocalProfiles)
+	m.awsSource.SetValue(m.awsLocalProfiles[m.awsLocalPick])
+	return m
+}
+
 func (m RemotesModel) applyDialogFocus() (RemotesModel, tea.Cmd) {
 	m.hostInput.Blur()
 	m.userInput.Blur()
@@ -264,6 +439,54 @@ func scanRemote(host, user, root string) tea.Cmd {
 	}
 }
 
+func pushAWSDelegation(host, user, root string, d *config.AWSDelegation) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+
+		mgr := ssh.NewManager(ssh.Config{Host: host, User: user, Root: root})
+		if err := mgr.Connect(ctx); err != nil {
+			return awsPushMsg{err: err}
+		}
+		var p, roleARN, src string
+		if d != nil {
+			p = strings.TrimSpace(d.Profile)
+			src = strings.TrimSpace(d.SourceProfile)
+			if p != "" && strings.TrimSpace(d.AccountID) != "" {
+				var err error
+				roleARN, err = awsdelegation.RoleARNFromParts(d.AccountID, d.RoleName)
+				if err != nil {
+					return awsPushMsg{err: err, profile: p}
+				}
+			}
+		}
+
+		var syncedCreds bool
+		if d != nil && d.SyncCredentials {
+			// Get temporary credentials for the source profile.
+			// The local AWS CLI handles role assumption/SSO if configured.
+			creds, err := awsdelegation.GetTemporaryCredentials(ctx, src)
+			if err != nil {
+				return awsPushMsg{err: fmt.Errorf("local credentials: %w", err), profile: p}
+			}
+			if err := awsdelegation.ApplyDelegatedCredentials(ctx, mgr, p, creds); err != nil {
+				return awsPushMsg{err: fmt.Errorf("push credentials: %w", err), profile: p}
+			}
+			syncedCreds = true
+
+			// If we synced credentials, the remote doesn't need to know about the source_profile or role_arn.
+			roleARN = ""
+			src = ""
+		}
+
+		if err := awsdelegation.ApplyDelegatedProfile(ctx, mgr, p, roleARN, src); err != nil {
+			return awsPushMsg{err: err, profile: p}
+		}
+
+		return awsPushMsg{profile: p, syncedCreds: syncedCreds}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Init / Update
 // ---------------------------------------------------------------------------
@@ -275,6 +498,14 @@ func (m RemotesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.list.SetSize(msg.Width-4, msg.Height-6)
+		return m, nil
+	}
+	if msg, ok := msg.(spinner.TickMsg); ok {
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		if m.state == remotesStateTesting || m.state == remotesStateScanning || m.state == remotesStateAWSPushing {
+			return m, cmd
+		}
 		return m, nil
 	}
 
@@ -291,6 +522,10 @@ func (m RemotesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateScanning(msg)
 	case remotesStateResult:
 		return m.updateResult(msg)
+	case remotesStateAWS:
+		return m.updateAWS(msg)
+	case remotesStateAWSPushing:
+		return m.updateAWSPushing(msg)
 	}
 	return m, nil
 }
@@ -338,7 +573,28 @@ func (m RemotesModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.testingUser = i.user
 				m.testingRoot = i.root
 				m.state = remotesStateScanning
-				return m, scanRemote(i.host, i.user, i.root)
+				return m, tea.Batch(scanRemote(i.host, i.user, i.root), m.spinner.Tick)
+			}
+
+		case "w":
+			if i, ok := m.list.SelectedItem().(remoteItem); ok && i.isConfig {
+				m.awsRemoteIdx = -1
+				for idx, r := range m.cfg.Remotes {
+					if r.Host == i.host {
+						m.awsRemoteIdx = idx
+						break
+					}
+				}
+				if m.awsRemoteIdx < 0 {
+					return m, nil
+				}
+				m.initAWSDialog()
+				m.state = remotesStateAWS
+				m2, cmd := m.applyAWSFocus()
+				src := strings.TrimSpace(m2.awsSource.Value())
+				m2.awsAccountResolving = true
+				m2.awsAccountLookupErr = ""
+				return m2, tea.Batch(cmd, lookupAWSAccountIDCmd(src))
 			}
 		}
 	}
@@ -376,7 +632,7 @@ func (m RemotesModel) updateDialog(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.testingUser = user
 			m.testingRoot = root
 			m.state = remotesStateTesting
-			return m, testConnection(host, user, root)
+			return m, tea.Batch(testConnection(host, user, root), m.spinner.Tick)
 		}
 	}
 
@@ -450,7 +706,7 @@ func (m RemotesModel) updateTesting(msg tea.Msg) (tea.Model, tea.Cmd) {
 	_ = m.cfg.Save()
 
 	m.state = remotesStateScanning
-	return m, scanRemote(res.host, res.user, res.root)
+	return m, tea.Batch(scanRemote(res.host, res.user, res.root), m.spinner.Tick)
 }
 
 // --- Scanning ---
@@ -481,6 +737,156 @@ func (m RemotesModel) updateResult(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case awsAccountLookupMsg:
+		m.awsAccountResolving = false
+		if msg.err != nil {
+			m.awsAccountLookupErr = msg.err.Error()
+			m.awsDerivedAccountID = ""
+		} else {
+			m.awsAccountLookupErr = ""
+			m.awsDerivedAccountID = msg.accountID
+		}
+		return m, nil
+	}
+
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc":
+			m.state = remotesStateList
+			return m, nil
+		case "tab":
+			m.awsFocus = (m.awsFocus + 1) % awsFocusCount
+			return m.applyAWSFocus()
+		case "shift+tab":
+			m.awsFocus = (m.awsFocus - 1 + awsFocusCount) % awsFocusCount
+			return m.applyAWSFocus()
+		case "enter":
+			if m.awsFocus == awsFocusSync {
+				m.awsSyncCreds = !m.awsSyncCreds
+				return m, nil
+			}
+			return m.saveAWSAndPush()
+		case " ":
+			if m.awsFocus == awsFocusSync {
+				m.awsSyncCreds = !m.awsSyncCreds
+				return m, nil
+			}
+		}
+		if m.awsFocus == awsFocusSource {
+			switch km.String() {
+			case "left", "h":
+				m = m.cycleLocalProfile(-1)
+				src := strings.TrimSpace(m.awsSource.Value())
+				m.awsAccountResolving = true
+				m.awsAccountLookupErr = ""
+				m.awsDerivedAccountID = ""
+				return m, lookupAWSAccountIDCmd(src)
+			case "right", "l":
+				m = m.cycleLocalProfile(1)
+				src := strings.TrimSpace(m.awsSource.Value())
+				m.awsAccountResolving = true
+				m.awsAccountLookupErr = ""
+				m.awsDerivedAccountID = ""
+				return m, lookupAWSAccountIDCmd(src)
+			}
+		}
+	}
+	var cmd tea.Cmd
+	switch m.awsFocus {
+	case awsFocusProfile:
+		m.awsProfile, cmd = m.awsProfile.Update(msg)
+	case awsFocusRoleName:
+		m.awsRoleName, cmd = m.awsRoleName.Update(msg)
+	case awsFocusSource:
+		m.awsSource, cmd = m.awsSource.Update(msg)
+	}
+	return m, cmd
+}
+
+func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
+	rawProf := strings.TrimSpace(m.awsProfile.Value())
+	rn := strings.TrimSpace(m.awsRoleName.Value())
+	src := strings.TrimSpace(m.awsSource.Value())
+
+	if m.awsRemoteIdx < 0 || m.awsRemoteIdx >= len(m.cfg.Remotes) {
+		return m, nil
+	}
+
+	if rawProf == "" && rn == "" && src == "" {
+		m.cfg.Remotes[m.awsRemoteIdx].AWSDelegation = nil
+		_ = m.cfg.Save()
+		m.testResult = successStyle.Render("Cleared saved AWS delegation (remote ~/.aws/config not changed).")
+		m.scanResults = nil
+		m.state = remotesStateResult
+		return m, nil
+	}
+
+	prof := rawProf
+	if prof == "" {
+		prof = awsdelegation.DefaultDelegatedProfileName
+	}
+
+	var d *config.AWSDelegation
+	if rn == "" && src == "" && rawProf == "" {
+		d = &config.AWSDelegation{Profile: prof}
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		acct, err := awsdelegation.AccountIDFromLocalProfile(ctx, src)
+		cancel()
+		if err != nil {
+			msg := fmt.Sprintf("Could not derive account ID from local AWS CLI (profile %q): %v", src, err)
+			if src == "" {
+				msg = fmt.Sprintf("Could not derive account ID from local AWS CLI (using default credentials): %v", err)
+			}
+			m.testResult = failStyle.Render(msg)
+			m.scanResults = nil
+			m.state = remotesStateResult
+			return m, nil
+		}
+		if _, err := awsdelegation.RoleARNFromParts(acct, rn); err != nil {
+			m.testResult = failStyle.Render(err.Error())
+			m.scanResults = nil
+			m.state = remotesStateResult
+			return m, nil
+		}
+		d = &config.AWSDelegation{
+			Profile: prof, AccountID: acct, RoleName: rn, SourceProfile: src,
+			SyncCredentials: m.awsSyncCreds,
+		}
+	}
+	m.cfg.Remotes[m.awsRemoteIdx].AWSDelegation = d
+	_ = m.cfg.Save()
+
+	r := m.cfg.Remotes[m.awsRemoteIdx]
+	m.testingHost = r.Host
+	m.testingUser = r.User
+	m.testingRoot = r.Root
+	m.state = remotesStateAWSPushing
+	return m, tea.Batch(pushAWSDelegation(r.Host, r.User, r.Root, d), m.spinner.Tick)
+}
+
+func (m RemotesModel) updateAWSPushing(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if res, ok := msg.(awsPushMsg); ok {
+		if res.err != nil {
+			m.testResult = failStyle.Render(fmt.Sprintf("AWS push failed: %v", res.err))
+		} else {
+			msg := "Updated remote ~/.aws/config"
+			if res.profile != "" {
+				msg = fmt.Sprintf("Updated remote ~/.aws/config (profile %q)", res.profile)
+			}
+			if res.syncedCreds {
+				msg += " and ~/.aws/credentials"
+			}
+			m.testResult = successStyle.Render(msg + ".")
+		}
+		m.scanResults = nil
+		m.state = remotesStateResult
+	}
+	return m, nil
+}
+
 // ---------------------------------------------------------------------------
 // View
 // ---------------------------------------------------------------------------
@@ -491,10 +897,14 @@ func (m RemotesModel) View() string {
 		return m.viewOverlay(fmt.Sprintf("Testing connection to %s@%s...", m.testingUser, m.testingHost))
 	case remotesStateScanning:
 		return m.viewOverlay(fmt.Sprintf("Scanning %s@%s:%s...", m.testingUser, m.testingHost, m.testingRoot))
+	case remotesStateAWSPushing:
+		return m.viewOverlay(fmt.Sprintf("Writing ~/.aws/config on %s@%s...", m.testingUser, m.testingHost))
 	case remotesStateResult:
 		return m.viewResult()
 	case remotesStateAdd, remotesStateEdit:
 		return m.viewDialog()
+	case remotesStateAWS:
+		return m.viewAWS()
 	case remotesStateDelete:
 		return m.viewDeleteConfirm()
 	default:
@@ -510,6 +920,7 @@ func (m RemotesModel) viewList() string {
 	b.WriteString(activeStyle.Render("[e]") + " edit  ")
 	b.WriteString(activeStyle.Render("[d]") + " delete  ")
 	b.WriteString(activeStyle.Render("[space]") + " scan  ")
+	b.WriteString(activeStyle.Render("[w]") + " AWS profile  ")
 	b.WriteString(activeStyle.Render("[esc]") + " back")
 	return b.String()
 }
@@ -545,6 +956,80 @@ func (m RemotesModel) viewDialog() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
 }
 
+func (m RemotesModel) viewAWS() string {
+	label := func(title string, f awsDialogFocus) string {
+		if m.awsFocus == f {
+			return activeStyle.Render(title)
+		}
+		return title
+	}
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("Delegated AWS profile (remote ~/.aws/config)") + "\n\n")
+	b.WriteString(statusStyle.Render("  source_profile is written to the remote and must match a profile there with long-lived credentials.") + "\n")
+	b.WriteString(statusStyle.Render("  Account ID is derived locally via: aws sts get-caller-identity --profile <source_profile>.") + "\n")
+	b.WriteString(statusStyle.Render("  ←/→ on source_profile cycles names from this Mac’s ~/.aws.") + "\n\n")
+
+	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("Delegated profile name (remote, default "+awsdelegation.DefaultDelegatedProfileName+"):", awsFocusProfile), m.awsProfile.View()))
+	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("IAM role name (optional):", awsFocusRoleName), m.awsRoleName.View()))
+
+	pickHint := ""
+	if len(m.awsLocalProfiles) == 0 {
+		pickHint = statusStyle.Render("  (no profiles found locally — type source_profile by hand)") + "\n"
+	} else {
+		pickLine := "—"
+		showIdx := 0
+		if m.awsLocalPick >= 0 && m.awsLocalPick < len(m.awsLocalProfiles) {
+			pickLine = fmt.Sprintf("◀ %s ▶", m.awsLocalProfiles[m.awsLocalPick])
+			showIdx = m.awsLocalPick + 1
+		}
+		pickHint = fmt.Sprintf("  %s  %s  (%d/%d)\n",
+			statusStyle.Render("Local name picker:"),
+			pickLine,
+			showIdx,
+			len(m.awsLocalProfiles),
+		)
+	}
+	b.WriteString(pickHint)
+	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("source_profile (local CLI profile for account lookup):", awsFocusSource), m.awsSource.View()))
+
+	acctLine := "—"
+	if m.awsAccountResolving {
+		acctLine = "… (running aws sts get-caller-identity)"
+	} else if m.awsDerivedAccountID != "" {
+		acctLine = m.awsDerivedAccountID
+	}
+	b.WriteString("  " + statusStyle.Render("AWS account ID (from local CLI):") + " ")
+	b.WriteString(activeStyle.Render(acctLine) + "\n")
+	if m.awsAccountLookupErr != "" {
+		b.WriteString("  " + failStyle.Render(m.awsAccountLookupErr) + "\n")
+	}
+	b.WriteString("\n")
+
+	if arn, err := awsdelegation.RoleARNFromParts(m.awsDerivedAccountID, m.awsRoleName.Value()); err == nil {
+		b.WriteString("  " + statusStyle.Render("role_arn (generated by aiman): "+arn) + "\n\n")
+	}
+
+	syncCheck := "[ ]"
+	if m.awsSyncCreds {
+		syncCheck = "[x]"
+	}
+	b.WriteString(fmt.Sprintf("  %s %s\n\n", label(syncCheck+" Sync temporary credentials to remote ~/.aws/credentials", awsFocusSync), statusStyle.Render("(recommended if remote lacks credentials)")))
+
+	b.WriteString(statusStyle.Render("  Clear profile + source + role to drop saved delegation. Empty source+role removes the remote profile block only.") + "\n\n")
+	b.WriteString("  " + activeStyle.Render("[tab]") + " next field  ")
+	b.WriteString(activeStyle.Render("[space/enter]") + " toggle sync  ")
+	b.WriteString(activeStyle.Render("[enter]") + " save & push  ")
+	b.WriteString(activeStyle.Render("[esc]") + " cancel")
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("214")).
+		Padding(1, 2).
+		Width(76)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
 func (m RemotesModel) viewDeleteConfirm() string {
 	i, _ := m.list.SelectedItem().(remoteItem)
 
@@ -569,7 +1054,8 @@ func (m RemotesModel) viewOverlay(msg string) string {
 		BorderForeground(lipgloss.Color("240")).
 		Padding(1, 2).
 		Width(60)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(msg))
+	body := fmt.Sprintf("%s %s", m.spinner.View(), msg)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(body))
 }
 
 func (m RemotesModel) viewResult() string {

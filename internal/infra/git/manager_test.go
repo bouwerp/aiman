@@ -7,16 +7,17 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
 // mockRemote implements domain.RemoteExecutor for testing
 type mockRemote struct {
-	root     string
-	dirs     map[string]bool // paths that "exist"
-	outputs  map[string]string
-	errors   map[string]error
+	root    string
+	dirs    map[string]bool // paths that "exist"
+	outputs map[string]string
+	errors  map[string]error
 }
 
 func (m *mockRemote) GetRoot() string { return m.root }
@@ -52,8 +53,8 @@ func (m *mockRemote) GetTmuxSessionCWD(context.Context, string) (string, error) 
 func (m *mockRemote) GetTmuxSessionEnv(context.Context, string, string) (string, error) {
 	return "", nil
 }
-func (m *mockRemote) CaptureTmuxPane(context.Context, string) (string, error)     { return "", nil }
-func (m *mockRemote) AttachTmuxSession(string) *exec.Cmd                          { return nil }
+func (m *mockRemote) CaptureTmuxPane(context.Context, string) (string, error) { return "", nil }
+func (m *mockRemote) AttachTmuxSession(string) *exec.Cmd                      { return nil }
 func (m *mockRemote) StreamTmuxSession(context.Context, string) (io.ReadWriteCloser, error) {
 	return nil, nil
 }
@@ -64,8 +65,8 @@ func TestListRemoteBranches_Success(t *testing.T) {
 	branchOutput := "  origin/main\n  origin/feature-x\n  origin/HEAD -> origin/main\n"
 	mgr := NewManager(nil)
 	remote := &mockRemote{
-		root:  "/home/dev",
-		dirs:  map[string]bool{"/home/dev/myrepo": true},
+		root: "/home/dev",
+		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
 			"git -C /home/dev/myrepo branch -r": branchOutput,
 		},
@@ -116,7 +117,7 @@ func TestSetupRemoteWorktreeFromBranch_WorktreeAlreadyExists(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin": "",
+			"git -C /home/dev/myrepo fetch origin":              "",
 			"git -C /home/dev/myrepo worktree list --porcelain": worktreeListOutput,
 		},
 	}
@@ -141,11 +142,11 @@ func TestSetupRemoteWorktreeFromBranch_LocalBranchAlreadyExists_FallsBack(t *tes
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin":                "",
-			"git -C /home/dev/myrepo worktree list --porcelain":   "",
+			"git -C /home/dev/myrepo fetch origin":                                      "",
+			"git -C /home/dev/myrepo worktree list --porcelain":                         "",
 			`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`: "",
-			createWithBCmd:   "fatal: a branch named 'feature-x' already exists",
-			createDirectCmd:  "",
+			createWithBCmd:  "fatal: a branch named 'feature-x' already exists",
+			createDirectCmd: "",
 			`realpath "/home/dev/myrepo/../feature-x"`: "/home/dev/feature-x",
 		},
 		errors: map[string]error{
@@ -169,8 +170,8 @@ func TestSetupRemoteWorktreeFromBranch_DirectoryAlreadyExists(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin":                "",
-			"git -C /home/dev/myrepo worktree list --porcelain":   "",
+			"git -C /home/dev/myrepo fetch origin":                                      "",
+			"git -C /home/dev/myrepo worktree list --porcelain":                         "",
 			`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`: "EXISTS",
 		},
 	}
@@ -202,5 +203,79 @@ func TestEnsureAimanTaskGitignored_EmptyPath(t *testing.T) {
 	err := mgr.EnsureAimanTaskGitignored(context.Background(), &mockRemote{}, "   ")
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGithubRepoActivityTime(t *testing.T) {
+	old := "2025-01-01T00:00:00Z"
+	newer := "2026-03-31T12:00:00Z"
+	if got := githubRepoActivityTime(newer, old); !got.Equal(timeMustParse(t, newer)) {
+		t.Fatalf("expected pushed when newer: got %v", got)
+	}
+	if got := githubRepoActivityTime(old, newer); !got.Equal(timeMustParse(t, newer)) {
+		t.Fatalf("expected updated when newer than pushed: got %v", got)
+	}
+	if got := githubRepoActivityTime("", newer); !got.Equal(timeMustParse(t, newer)) {
+		t.Fatalf("expected updated when pushed empty: got %v", got)
+	}
+}
+
+func timeMustParse(t *testing.T, s string) time.Time {
+	t.Helper()
+	tt, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tt
+}
+
+func TestSortReposByRecentActivity(t *testing.T) {
+	t1 := timeMustParse(t, "2026-01-01T00:00:00Z")
+	t2 := timeMustParse(t, "2026-06-01T00:00:00Z")
+	t3 := timeMustParse(t, "2025-01-01T00:00:00Z")
+	repos := []domain.Repo{
+		{Name: "z-old", LastActivityAt: t3},
+		{Name: "m-mid", LastActivityAt: t1},
+		{Name: "a-new", LastActivityAt: t2},
+	}
+	sortReposByRecentActivity(repos)
+	want := []string{"a-new", "m-mid", "z-old"}
+	for i, name := range want {
+		if repos[i].Name != name {
+			t.Fatalf("index %d: want %q, got %q", i, name, repos[i].Name)
+		}
+	}
+}
+
+func TestSortReposByRecentActivity_TieBreakName(t *testing.T) {
+	ts := timeMustParse(t, "2026-01-01T00:00:00Z")
+	repos := []domain.Repo{
+		{Name: "Bbb", LastActivityAt: ts},
+		{Name: "aaa", LastActivityAt: ts},
+	}
+	sortReposByRecentActivity(repos)
+	if repos[0].Name != "aaa" || repos[1].Name != "Bbb" {
+		t.Fatalf("want alphabetical tie-break, got %q then %q", repos[0].Name, repos[1].Name)
+	}
+}
+
+func TestParseGhRepos_SetsLastActivityAt(t *testing.T) {
+	jsonOut := `[
+		{"name":"b","nameWithOwner":"o/b","url":"https://github.com/o/b","sshUrl":"git@github.com:o/b.git","pushedAt":"2025-06-01T00:00:00Z","updatedAt":"2025-01-01T00:00:00Z"},
+		{"name":"a","nameWithOwner":"o/a","url":"https://github.com/o/a","sshUrl":"git@github.com:o/a.git","pushedAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z"}
+	]`
+	repos, err := (&Manager{}).parseGhRepos([]byte(jsonOut))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 2 {
+		t.Fatalf("len=%d", len(repos))
+	}
+	// parse order preserved; ListRepos sorts after merge
+	if repos[0].Name != "o/b" || repos[0].URL != "git@github.com:o/b.git" || !repos[0].LastActivityAt.Equal(timeMustParse(t, "2025-06-01T00:00:00Z")) {
+		t.Fatalf("repo b: %+v", repos[0])
+	}
+	if repos[1].Name != "o/a" || repos[1].URL != "git@github.com:o/a.git" || !repos[1].LastActivityAt.Equal(timeMustParse(t, "2026-01-02T00:00:00Z")) {
+		t.Fatalf("repo a: want updatedAt as max, got %+v", repos[1])
 	}
 }

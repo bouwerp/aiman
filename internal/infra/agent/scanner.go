@@ -28,7 +28,7 @@ var knownAgents = []domain.Agent{
 	},
 	{
 		Name:        "GitHub Copilot CLI",
-		Command:     "gh copilot",
+		Command:     "copilot",
 		Description: "GitHub Copilot in the CLI",
 	},
 	{
@@ -66,42 +66,12 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 	var available []domain.Agent
 
 	for _, agent := range knownAgents {
-		// We try multiple ways to find the agent:
-		// 1. Using a login shell (to load user profiles like .bashrc, .zshrc)
-		// 2. Direct command check (in case login shell fails or is limited)
-		
 		found := false
 		baseCmd := strings.Split(agent.Command, " ")[0]
-		
-		// Try login shell first
-		checkCmd := fmt.Sprintf("bash -lc 'command -v %s'", baseCmd)
-		_, err := s.executor.Execute(ctx, checkCmd)
-		if err == nil {
-			found = true
-		} else {
-			// Try direct check as fallback
-			checkCmd = fmt.Sprintf("command -v %s", baseCmd)
-			_, err = s.executor.Execute(ctx, checkCmd)
-			if err == nil {
-				found = true
-			}
-		}
+		found = s.commandExists(ctx, baseCmd)
 
 		if found {
-			// If it's a multi-word command like "gh copilot", we should verify the extension exists
-			if strings.Contains(agent.Command, " ") {
-				// Try verifying with a simple flag
-				verifyCmd := fmt.Sprintf("bash -lc '%s --version'", agent.Command)
-				_, err = s.executor.Execute(ctx, verifyCmd)
-				if err != nil {
-					// Try without login shell
-					verifyCmd = fmt.Sprintf("%s --version", agent.Command)
-					_, err = s.executor.Execute(ctx, verifyCmd)
-					if err != nil {
-						found = false
-					}
-				}
-			}
+			found = s.verifyAgent(ctx, agent)
 		}
 
 		// Special fallbacks for Claude Code
@@ -111,14 +81,9 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 				if fb == agent.Command {
 					continue
 				}
-				// Try both login and direct for each fallback
-				for _, wrapper := range []string{"bash -lc 'command -v %s'", "command -v %s"} {
-					_, err := s.executor.Execute(ctx, fmt.Sprintf(wrapper, fb))
-					if err == nil {
-						agent.Command = fb
-						found = true
-						break
-					}
+				if s.commandExists(ctx, fb) {
+					agent.Command = fb
+					found = true
 				}
 				if found {
 					break
@@ -133,17 +98,60 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 				if fb == agent.Command {
 					continue
 				}
-				for _, wrapper := range []string{"bash -lc 'command -v %s'", "command -v %s"} {
-					_, err := s.executor.Execute(ctx, fmt.Sprintf(wrapper, fb))
-					if err == nil {
-						agent.Command = fb
-						found = true
-						break
-					}
+				if s.commandExists(ctx, fb) {
+					agent.Command = fb
+					found = true
 				}
 				if found {
 					break
 				}
+			}
+		}
+
+		// Support both OpenCode binary names.
+		if !found && agent.Name == "OpenCode" {
+			fallbacks := []string{"opencode-cli", "opencode"}
+			for _, fb := range fallbacks {
+				if fb == agent.Command {
+					continue
+				}
+				if s.commandExists(ctx, fb) {
+					agent.Command = fb
+					found = true
+				}
+				if found {
+					break
+				}
+			}
+		}
+
+		// Support both standalone Copilot CLI (`copilot`) and the gh extension (`gh copilot`).
+		if !found && strings.Contains(strings.ToLower(agent.Name), "copilot") {
+			candidates := []domain.Agent{
+				{Name: agent.Name, Command: "copilot", Description: agent.Description},
+				{Name: agent.Name, Command: "gh copilot", Description: agent.Description},
+				{Name: agent.Name, Command: "ghcs", Description: agent.Description},
+				{Name: agent.Name, Command: "github-copilot-cli", Description: agent.Description},
+			}
+			for _, cand := range candidates {
+				base := strings.Split(cand.Command, " ")[0]
+				if !s.commandExists(ctx, base) {
+					continue
+				}
+				// Keep copilot detection permissive to avoid false negatives due to
+				// shell/profile/auth differences on remote hosts.
+				if strings.Contains(cand.Command, " ") && !s.verifyAgent(ctx, cand) {
+					continue
+				}
+				agent.Command = cand.Command
+				found = true
+				break
+			}
+			// Last resort: if gh exists, expose gh copilot as an option even when
+			// strict checks fail (helps when remote gh copilot help exits non-zero).
+			if !found && s.commandExists(ctx, "gh") {
+				agent.Command = "gh copilot"
+				found = true
 			}
 		}
 
@@ -153,6 +161,61 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 	}
 
 	return available, nil
+}
+
+func (s *Scanner) commandExists(ctx context.Context, cmd string) bool {
+	checks := []string{
+		fmt.Sprintf("command -v %s >/dev/null 2>&1", cmd),
+		fmt.Sprintf("bash -lc 'command -v %s >/dev/null 2>&1'", cmd),
+		fmt.Sprintf("bash -ic 'command -v %s >/dev/null 2>&1'", cmd),
+		fmt.Sprintf("PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:/usr/local/bin:/opt/homebrew/bin\" command -v %s >/dev/null 2>&1", cmd),
+		fmt.Sprintf("bash -lc 'export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:/usr/local/bin:/opt/homebrew/bin\"; command -v %s >/dev/null 2>&1'", cmd),
+	}
+	for _, c := range checks {
+		if _, err := s.executor.Execute(ctx, c); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Scanner) verifyAgent(ctx context.Context, agent domain.Agent) bool {
+	// For simple binaries, existence is enough.
+	if !strings.Contains(agent.Command, " ") {
+		return true
+	}
+
+	// gh copilot needs extension verification, and --version is not reliable.
+	if agent.Command == "gh copilot" {
+		checks := []string{
+			"gh help copilot >/dev/null 2>&1",
+			"gh copilot -h >/dev/null 2>&1",
+			"gh copilot --help >/dev/null 2>&1",
+			"bash -lc 'gh help copilot >/dev/null 2>&1'",
+			"bash -lc 'gh copilot -h >/dev/null 2>&1'",
+			"bash -lc 'gh copilot --help >/dev/null 2>&1'",
+			"gh extension list 2>/dev/null | grep -Eq 'github/gh-copilot|\\bcopilot\\b'",
+			"bash -lc 'gh extension list 2>/dev/null | grep -Eq \"github/gh-copilot|\\\\bcopilot\\\\b\"'",
+		}
+		for _, c := range checks {
+			if _, err := s.executor.Execute(ctx, c); err == nil {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Generic multi-word fallback.
+	checks := []string{
+		fmt.Sprintf("%s --help >/dev/null 2>&1", agent.Command),
+		fmt.Sprintf("bash -lc '%s --help >/dev/null 2>&1'", agent.Command),
+	}
+	for _, c := range checks {
+		if _, err := s.executor.Execute(ctx, c); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // ScanAgentsMsg is a bubbletea message containing the scan results.

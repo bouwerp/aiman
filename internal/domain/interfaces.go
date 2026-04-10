@@ -4,12 +4,14 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"time"
 )
 
 // IssueProvider represents a source of JIRA issues.
 type IssueProvider interface {
 	SearchIssues(ctx context.Context, query string) ([]Issue, error)
 	GetIssue(ctx context.Context, key string) (Issue, error)
+	TransitionIssue(ctx context.Context, key string, status string) error
 }
 
 // RepositoryManager manages git repositories and worktrees.
@@ -41,7 +43,21 @@ type RemoteExecutor interface {
 	AttachTmuxSession(sessionName string) *exec.Cmd
 	StreamTmuxSession(ctx context.Context, sessionName string) (io.ReadWriteCloser, error)
 	StartTmuxSession(ctx context.Context, name string) error
+	ProvisionRemote(ctx context.Context, steps []ProvisionStep, progress chan<- ProvisionProgress) error
 	Close() error
+}
+
+type ProvisionStep struct {
+	ID          string
+	Name        string
+	Command     string
+	Description string
+}
+
+type ProvisionProgress struct {
+	StepID  string
+	Status  string // "pending", "running", "success", "error"
+	Message string
 }
 
 // SyncEngine manages file synchronization between local and remote.
@@ -71,6 +87,8 @@ type Repo struct {
 	Name  string
 	URL   string
 	IsNew bool
+	// LastActivityAt is the latest of pushedAt/updatedAt from `gh repo list` when the repo was listed; zero if unknown.
+	LastActivityAt time.Time
 }
 
 // Worktree represents a git worktree.
