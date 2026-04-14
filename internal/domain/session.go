@@ -30,8 +30,16 @@ type Session struct {
 	LocalPath        string
 	AgentName        string
 	Status           SessionStatus
+	Tunnels          []Tunnel
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+// Tunnel defines a local SSH port forward bound to a session.
+// Traffic flows from local 127.0.0.1:<LocalPort> to remote 127.0.0.1:<RemotePort>.
+type Tunnel struct {
+	LocalPort  int
+	RemotePort int
 }
 
 type GitStatus struct {

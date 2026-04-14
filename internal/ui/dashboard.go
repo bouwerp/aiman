@@ -24,6 +24,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -134,6 +135,10 @@ const (
 	viewStateChangeDirConfirm
 	viewStateProvisioningRemotePicker
 	viewStateProvisioningProgress
+	viewStateAuthRemotePicker
+	viewStateAuthWizard
+	viewStateTunnelManager
+	viewStateTunnelAdd
 	viewStateError        // generic error dialog (press any key to dismiss)
 	viewStateRemotePicker // select remote for new session
 )
@@ -204,6 +209,27 @@ func (i item) FilterValue() string {
 	return i.session.IssueKey + " " + i.session.TmuxSession + " " + i.session.RepoName + " " + i.remoteName
 }
 
+type tunnelItem struct {
+	tunnel  domain.Tunnel
+	running bool
+}
+
+func (i tunnelItem) Title() string {
+	state := failStyle.Render("stopped")
+	if i.running {
+		state = successStyle.Render("running")
+	}
+	return fmt.Sprintf("localhost:%d -> remote:%d  (%s)", i.tunnel.LocalPort, i.tunnel.RemotePort, state)
+}
+
+func (i tunnelItem) Description() string {
+	return "SSH local forward"
+}
+
+func (i tunnelItem) FilterValue() string {
+	return fmt.Sprintf("%d %d", i.tunnel.LocalPort, i.tunnel.RemotePort)
+}
+
 type Model struct {
 	cfg                    *config.Config
 	db                     domain.SessionRepository
@@ -258,6 +284,16 @@ type Model struct {
 	provisioningError      string
 	provisioningStatus     string
 	provisionSpinner       spinner.Model
+	authSteps              []authWizardStep
+	authStepIdx            int
+	authStepStatus         map[int]string
+	authStepDetails        map[int]string
+	authStatusMsg          string
+	authChecking           bool
+	tunnelList             list.Model
+	tunnelSession          *domain.Session
+	tunnelInput            textinput.Model
+	tunnelError            string
 }
 
 func remoteNameForHost(cfg *config.Config, host string) string {
@@ -307,6 +343,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new session")),
 			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart session")),
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
+			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "manage tunnels")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
 			key.NewBinding(key.WithKeys("ctrl+s", "a"), key.WithHelp("a", "attach full terminal")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
@@ -324,6 +361,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	menuItems := []list.Item{
 		menuItem{title: "Manage Remote Servers", desc: "Add, edit, or remove remote dev servers", action: viewStateRemotes},
 		menuItem{title: "Provision Remote Server", desc: "100% setup: install gh, agents, node, and skills", action: viewStateProvisioningRemotePicker},
+		menuItem{title: "Auth Setup Wizard", desc: "Guided auth checks and instructions per remote tool", action: viewStateAuthRemotePicker},
 		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
@@ -355,7 +393,9 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		firstLoad:     make(map[string]bool),
 		allSessions:   initialSessions,
 		mouseEnabled:  true,
+		tunnelList:    list.New(nil, list.NewDefaultDelegate(), 0, 0),
 	}
+	model.tunnelList.Title = "Session Tunnels"
 	model.provisionSpinner = spinner.New()
 	model.provisionSpinner.Spinner = spinner.Dot
 	model.provisionSpinner.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -390,6 +430,109 @@ type gitStatusMsg struct {
 }
 
 type gitTickMsg time.Time
+
+type tunnelStatesMsg struct {
+	sessionID string
+	items     []list.Item
+	err       error
+}
+
+type tunnelToggleMsg struct {
+	sessionID  string
+	localPort  int
+	remotePort int
+	running    bool
+	err        error
+}
+
+func parseTunnelSpec(spec string) (domain.Tunnel, error) {
+	raw := strings.TrimSpace(spec)
+	if raw == "" {
+		return domain.Tunnel{}, fmt.Errorf("enter tunnel as local:remote (e.g. 5173:5173)")
+	}
+	parts := strings.Split(raw, ":")
+	if len(parts) != 2 {
+		return domain.Tunnel{}, fmt.Errorf("invalid tunnel format %q (expected local:remote)", raw)
+	}
+	localPort, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || localPort <= 0 || localPort > 65535 {
+		return domain.Tunnel{}, fmt.Errorf("invalid local port: %q", parts[0])
+	}
+	remotePort, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || remotePort <= 0 || remotePort > 65535 {
+		return domain.Tunnel{}, fmt.Errorf("invalid remote port: %q", parts[1])
+	}
+	return domain.Tunnel{LocalPort: localPort, RemotePort: remotePort}, nil
+}
+
+func (m *Model) updateSessionInMemory(updated domain.Session) {
+	for i, s := range m.allSessions {
+		if s.ID == updated.ID {
+			m.allSessions[i] = updated
+			break
+		}
+	}
+	items := m.list.Items()
+	for i, it := range items {
+		sessItem, ok := it.(item)
+		if !ok {
+			continue
+		}
+		if sessItem.session.ID == updated.ID {
+			sessItem.session = updated
+			items[i] = sessItem
+			break
+		}
+	}
+	m.list.SetItems(items)
+}
+
+func (m *Model) refreshTunnelStatesCmd(s domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return tunnelStatesMsg{sessionID: s.ID, err: fmt.Errorf("no remote configured for session")}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		items := make([]list.Item, 0, len(s.Tunnels))
+		for _, t := range s.Tunnels {
+			items = append(items, tunnelItem{
+				tunnel:  t,
+				running: mgr.IsTunnelRunning(ctx, t.LocalPort, t.RemotePort),
+			})
+		}
+		return tunnelStatesMsg{sessionID: s.ID, items: items}
+	}
+}
+
+func (m *Model) toggleTunnelCmd(s domain.Session, t domain.Tunnel, start bool) tea.Cmd {
+	return func() tea.Msg {
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return tunnelToggleMsg{sessionID: s.ID, localPort: t.LocalPort, remotePort: t.RemotePort, err: fmt.Errorf("no remote configured for session")}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		var err error
+		if start {
+			err = mgr.StartTunnel(ctx, t.LocalPort, t.RemotePort)
+		} else {
+			err = mgr.StopTunnel(ctx, t.LocalPort, t.RemotePort)
+		}
+		return tunnelToggleMsg{
+			sessionID:  s.ID,
+			localPort:  t.LocalPort,
+			remotePort: t.RemotePort,
+			running:    start && err == nil,
+			err:        err,
+		}
+	}
+}
 
 func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 	if s.WorktreePath == "" {
@@ -664,6 +807,20 @@ type provisionDoneMsg struct {
 	err error
 }
 
+type authWizardStep struct {
+	Name        string
+	Scope       string // "local" or "remote"
+	Instruction string
+	CheckCmd    string
+}
+
+type authCheckDoneMsg struct {
+	idx    int
+	ok     bool
+	output string
+	err    error
+}
+
 type provisionConnectMsg struct {
 	err error
 }
@@ -691,6 +848,76 @@ func (m *Model) provisionStepCmd(remote config.Remote, idx int, step domain.Prov
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		_, err := mgr.Execute(ctx, step.Command)
 		return provisionStepDoneMsg{idx: idx, err: err}
+	}
+}
+
+func defaultAuthWizardSteps() []authWizardStep {
+	return []authWizardStep{
+		{
+			Name:        "GitHub CLI (remote)",
+			Scope:       "remote",
+			Instruction: "Run `gh auth login` on the remote if this check fails.",
+			CheckCmd:    "gh auth status >/dev/null 2>&1",
+		},
+		{
+			Name:        "GitHub Copilot (remote)",
+			Scope:       "remote",
+			Instruction: "Run `gh copilot login` or `copilot login` on the remote if this check fails.",
+			CheckCmd:    "if command -v copilot >/dev/null 2>&1; then copilot --help >/dev/null 2>&1; elif command -v gh >/dev/null 2>&1; then gh copilot -h >/dev/null 2>&1; else false; fi",
+		},
+		{
+			Name:        "Claude Code (remote)",
+			Scope:       "remote",
+			Instruction: "Run `claude login` on the remote if this check fails.",
+			CheckCmd:    "if command -v claude >/dev/null 2>&1; then claude --version >/dev/null 2>&1; else false; fi",
+		},
+		{
+			Name:        "Gemini CLI (remote)",
+			Scope:       "remote",
+			Instruction: "Run `gemini auth login` on the remote if this check fails.",
+			CheckCmd:    "if command -v gemini >/dev/null 2>&1; then gemini --help >/dev/null 2>&1; else false; fi",
+		},
+		{
+			Name:        "JIRA token (local config)",
+			Scope:       "local",
+			Instruction: "Set JIRA URL/email/token in Aiman config if this check fails.",
+			CheckCmd:    "test -n \"$HOME\"",
+		},
+	}
+}
+
+func (m *Model) authCheckCmd(remote config.Remote, idx int, step authWizardStep) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		if step.CheckCmd == "" {
+			return authCheckDoneMsg{idx: idx, ok: false, err: fmt.Errorf("no automated check command available")}
+		}
+
+		if step.Name == "JIRA token (local config)" {
+			ok := m.cfg.Integrations.Jira.URL != "" && m.cfg.Integrations.Jira.Email != "" && m.cfg.Integrations.Jira.APIToken != ""
+			if ok {
+				return authCheckDoneMsg{idx: idx, ok: true, output: "JIRA credentials are present in config."}
+			}
+			return authCheckDoneMsg{idx: idx, ok: false, err: fmt.Errorf("missing JIRA URL/email/token in config")}
+		}
+
+		if step.Scope == "local" {
+			cmd := exec.CommandContext(ctx, "bash", "-lc", step.CheckCmd)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return authCheckDoneMsg{idx: idx, ok: false, output: strings.TrimSpace(string(out)), err: err}
+			}
+			return authCheckDoneMsg{idx: idx, ok: true, output: strings.TrimSpace(string(out))}
+		}
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		out, err := mgr.Execute(ctx, step.CheckCmd)
+		if err != nil {
+			return authCheckDoneMsg{idx: idx, ok: false, output: out, err: err}
+		}
+		return authCheckDoneMsg{idx: idx, ok: true, output: strings.TrimSpace(out)}
 	}
 }
 
@@ -1405,6 +1632,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateProvisioningProgress:
 		return m.handleProvisioningProgressUpdate(msg)
 
+	case viewStateAuthRemotePicker:
+		return m.handleAuthRemotePickerUpdate(msg)
+
+	case viewStateAuthWizard:
+		return m.handleAuthWizardUpdate(msg)
+
+	case viewStateTunnelManager:
+		return m.handleTunnelManagerUpdate(msg)
+
+	case viewStateTunnelAdd:
+		return m.handleTunnelAddUpdate(msg)
+
 	case viewStateLoading:
 		return m.handleLoadingUpdate(msg)
 	}
@@ -1466,6 +1705,10 @@ func (m *Model) renderView() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			m.remotes.list.View())
 
+	case viewStateAuthRemotePicker:
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			m.remotes.list.View())
+
 	case viewStateProvisioningProgress:
 		var b strings.Builder
 		b.WriteString(titleStyle.Render("Provisioning Remote Server: "+m.selectedRemote.Host) + "\n\n")
@@ -1512,6 +1755,99 @@ func (m *Model) renderView() string {
 			Padding(1, 4).
 			Width(60)
 
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateAuthWizard:
+		var b strings.Builder
+		title := "Auth Setup Wizard"
+		if m.selectedRemote.Host != "" {
+			title = fmt.Sprintf("Auth Setup Wizard: %s@%s", m.selectedRemote.User, m.selectedRemote.Host)
+		}
+		b.WriteString(titleStyle.Render(title) + "\n\n")
+		if m.authStatusMsg != "" {
+			line := m.authStatusMsg
+			if m.authChecking {
+				line = fmt.Sprintf("%s %s", m.provisionSpinner.View(), line)
+			}
+			b.WriteString(statusStyle.Render(line) + "\n\n")
+		}
+
+		for i, step := range m.authSteps {
+			marker := "○"
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+			switch m.authStepStatus[i] {
+			case "ok":
+				marker = "✔"
+				style = successStyle
+			case "manual":
+				marker = "◐"
+				style = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+			case "fail":
+				marker = "✘"
+				style = failStyle
+			}
+			prefix := "  "
+			if i == m.authStepIdx {
+				prefix = "> "
+				style = style.Bold(true)
+			}
+			scope := strings.ToUpper(step.Scope)
+			b.WriteString(style.Render(fmt.Sprintf("%s%s %s (%s)", prefix, marker, step.Name, scope)) + "\n")
+		}
+
+		if len(m.authSteps) > 0 && m.authStepIdx >= 0 && m.authStepIdx < len(m.authSteps) {
+			step := m.authSteps[m.authStepIdx]
+			b.WriteString("\n" + activeStyle.Render("Instruction:") + " " + step.Instruction + "\n")
+			if d := strings.TrimSpace(m.authStepDetails[m.authStepIdx]); d != "" {
+				b.WriteString(statusStyle.Render("Detail: "+d) + "\n")
+			}
+		}
+		b.WriteString("\n" + statusStyle.Render("Keys: c=check  m=mark done  ↑/↓=select  esc=back") + "\n")
+
+		dialog := lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(1, 3).
+			Width(90)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateTunnelManager:
+		var b strings.Builder
+		title := "Session Tunnels"
+		if m.tunnelSession != nil {
+			title = fmt.Sprintf("Session Tunnels: %s", m.tunnelSession.TmuxSession)
+		}
+		b.WriteString(titleStyle.Render(title) + "\n\n")
+		if m.tunnelError != "" {
+			b.WriteString(failStyle.Render(m.tunnelError) + "\n\n")
+		}
+		if len(m.tunnelList.Items()) == 0 {
+			b.WriteString(statusStyle.Render("No tunnels configured for this session yet.") + "\n\n")
+		} else {
+			b.WriteString(m.tunnelList.View() + "\n")
+		}
+		b.WriteString(statusStyle.Render("Keys: a=add  enter=toggle start/stop  d=delete  r=refresh  esc=back"))
+		dialog := lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(1, 2).
+			Width(90)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateTunnelAdd:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("Add Session Tunnel") + "\n\n")
+		b.WriteString("Enter local:remote ports (example: 5173:5173)\n\n")
+		b.WriteString(m.tunnelInput.View() + "\n\n")
+		if m.tunnelError != "" {
+			b.WriteString(failStyle.Render(m.tunnelError) + "\n\n")
+		}
+		b.WriteString(statusStyle.Render("enter=save  esc=cancel"))
+		dialog := lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(1, 2).
+			Width(72)
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
 
 	case viewStateError:
@@ -1848,7 +2184,10 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Capture list selection changes to trigger immediate fetch
-	oldSel := m.list.SelectedItem()
+	oldSelID := ""
+	if oldSel, ok := m.list.SelectedItem().(item); ok {
+		oldSelID = oldSel.session.ID
+	}
 	var cmd tea.Cmd
 
 	// If it's a mouse event, only forward to the component under the cursor
@@ -1889,8 +2228,14 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	newSel := m.list.SelectedItem()
-	if oldSel != newSel && newSel != nil {
-		s := newSel.(item).session
+	var selItem item
+	newSelID := ""
+	if typedSel, ok := newSel.(item); ok {
+		selItem = typedSel
+		newSelID = selItem.session.ID
+	}
+	if oldSelID != newSelID && newSelID != "" {
+		s := selItem.session
 		m.activeSession = s.TmuxSession
 		m.gitStatus = domain.GitStatus{} // Clear old status
 		m.lastGitStatusUpdate = time.Time{}
@@ -2165,6 +2510,19 @@ end tell`, cmd)
 			return m, m.fetchDirectories(s.WorktreePath), true
 		}
 	}
+	if msg.String() == "t" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			m.tunnelSession = &s
+			m.tunnelError = ""
+			m.tunnelList = list.New(nil, list.NewDefaultDelegate(), 76, 12)
+			m.tunnelList.Title = "Tunnels"
+			m.tunnelList.SetShowStatusBar(false)
+			m.tunnelList.SetFilteringEnabled(false)
+			m.state = viewStateTunnelManager
+			return m, m.refreshTunnelStatesCmd(s), true
+		}
+	}
 	if msg.String() == "r" {
 
 		// Refresh sessions from all remotes
@@ -2238,6 +2596,15 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, nil
 				}
+				if i.action == viewStateAuthRemotePicker {
+					m.remotes = NewRemotesModel(m.cfg)
+					m.remotes.width = m.width
+					m.remotes.height = m.height
+					h, v := docStyle.GetFrameSize()
+					m.remotes.list.SetSize(m.width-h-4, m.height-v-6)
+					m.state = i.action
+					return m, nil
+				}
 				if i.action == viewStateGitSetup {
 					m.gitSetup = NewGitSetupModel(m.cfg)
 					m.state = i.action
@@ -2279,7 +2646,13 @@ func (m *Model) handleProvisioningRemotePickerUpdate(msg tea.Msg) (tea.Model, te
 					User: i.user,
 					Root: i.root,
 				}
-				m.provisionSteps = usecase.NewProvisioner(nil).GetSteps()
+				steps, err := usecase.NewProvisioner(nil).GetStepsWithLocalSSHKey()
+				if err != nil {
+					m.lastError = fmt.Sprintf("Failed to prepare provisioning steps: %v", err)
+					m.state = viewStateError
+					return m, nil
+				}
+				m.provisionSteps = steps
 				m.provisioningIdx = -1
 				m.provisioningError = ""
 				m.provisioningStatus = fmt.Sprintf("Connecting to %s@%s...", i.user, i.host)
@@ -2339,6 +2712,241 @@ func (m *Model) handleProvisioningProgressUpdate(msg tea.Msg) (tea.Model, tea.Cm
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m *Model) handleAuthRemotePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc":
+			m.state = viewStateMenu
+			return m, nil
+		case "enter", " ":
+			if i, ok := m.remotes.list.SelectedItem().(remoteItem); ok && i.isConfig {
+				m.selectedRemote = config.Remote{
+					Name: i.name,
+					Host: i.host,
+					User: i.user,
+					Root: i.root,
+				}
+				m.authSteps = defaultAuthWizardSteps()
+				m.authStepIdx = 0
+				m.authStepStatus = map[int]string{}
+				m.authStepDetails = map[int]string{}
+				m.authStatusMsg = "Select a step and press 'c' to run checks."
+				m.authChecking = false
+				m.state = viewStateAuthWizard
+				return m, nil
+			}
+		}
+	}
+	var cmd tea.Cmd
+	m.remotes.list, cmd = m.remotes.list.Update(msg)
+	return m, cmd
+}
+
+func (m *Model) handleAuthWizardUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.provisionSpinner, cmd = m.provisionSpinner.Update(msg)
+		if m.authChecking {
+			return m, cmd
+		}
+		return m, nil
+	case authCheckDoneMsg:
+		m.authChecking = false
+		if msg.ok {
+			m.authStepStatus[msg.idx] = "ok"
+			if strings.TrimSpace(msg.output) == "" {
+				m.authStepDetails[msg.idx] = "Check passed."
+			} else {
+				m.authStepDetails[msg.idx] = strings.TrimSpace(msg.output)
+			}
+			m.authStatusMsg = fmt.Sprintf("Passed: %s", m.authSteps[msg.idx].Name)
+		} else {
+			m.authStepStatus[msg.idx] = "fail"
+			detail := strings.TrimSpace(msg.output)
+			if msg.err != nil {
+				if detail != "" {
+					detail = fmt.Sprintf("%s (%v)", detail, msg.err)
+				} else {
+					detail = msg.err.Error()
+				}
+			}
+			if detail == "" {
+				detail = "Check failed."
+			}
+			m.authStepDetails[msg.idx] = detail
+			m.authStatusMsg = fmt.Sprintf("Failed: %s", m.authSteps[msg.idx].Name)
+		}
+		return m, nil
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.state = viewStateMenu
+			return m, nil
+		case "up", "k":
+			if m.authStepIdx > 0 {
+				m.authStepIdx--
+			}
+			return m, nil
+		case "down", "j":
+			if m.authStepIdx < len(m.authSteps)-1 {
+				m.authStepIdx++
+			}
+			return m, nil
+		case "m":
+			m.authStepStatus[m.authStepIdx] = "manual"
+			m.authStepDetails[m.authStepIdx] = "Marked done manually."
+			m.authStatusMsg = fmt.Sprintf("Marked done: %s", m.authSteps[m.authStepIdx].Name)
+			return m, nil
+		case "c":
+			if len(m.authSteps) == 0 || m.authStepIdx < 0 || m.authStepIdx >= len(m.authSteps) {
+				return m, nil
+			}
+			m.authChecking = true
+			m.authStatusMsg = fmt.Sprintf("Checking: %s...", m.authSteps[m.authStepIdx].Name)
+			return m, tea.Batch(
+				m.authCheckCmd(m.selectedRemote, m.authStepIdx, m.authSteps[m.authStepIdx]),
+				m.provisionSpinner.Tick,
+			)
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handleTunnelManagerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tunnelStatesMsg:
+		if m.tunnelSession == nil || msg.sessionID != m.tunnelSession.ID {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.tunnelError = msg.err.Error()
+			return m, nil
+		}
+		m.tunnelList.SetItems(msg.items)
+		return m, nil
+	case tunnelToggleMsg:
+		if m.tunnelSession == nil || msg.sessionID != m.tunnelSession.ID {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.tunnelError = msg.err.Error()
+		} else {
+			m.tunnelError = ""
+		}
+		return m, m.refreshTunnelStatesCmd(*m.tunnelSession)
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.state = viewStateMain
+			m.tunnelSession = nil
+			m.tunnelError = ""
+			return m, nil
+		case "r":
+			if m.tunnelSession != nil {
+				return m, m.refreshTunnelStatesCmd(*m.tunnelSession)
+			}
+			return m, nil
+		case "a":
+			m.tunnelError = ""
+			in := textinput.New()
+			in.Placeholder = "5173:5173"
+			in.Focus()
+			in.CharLimit = 24
+			in.Width = 30
+			m.tunnelInput = in
+			m.state = viewStateTunnelAdd
+			return m, nil
+		case "d":
+			if m.tunnelSession == nil {
+				return m, nil
+			}
+			it, ok := m.tunnelList.SelectedItem().(tunnelItem)
+			if !ok {
+				return m, nil
+			}
+			session := *m.tunnelSession
+			filtered := make([]domain.Tunnel, 0, len(session.Tunnels))
+			for _, t := range session.Tunnels {
+				if t.LocalPort == it.tunnel.LocalPort && t.RemotePort == it.tunnel.RemotePort {
+					continue
+				}
+				filtered = append(filtered, t)
+			}
+			session.Tunnels = filtered
+			if m.db != nil {
+				if err := m.db.Save(context.Background(), &session); err != nil {
+					m.tunnelError = fmt.Sprintf("failed to save tunnel removal: %v", err)
+					return m, nil
+				}
+			}
+			if remote, ok := resolveRemote(m.cfg, session); ok {
+				mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+				_ = mgr.StopTunnel(context.Background(), it.tunnel.LocalPort, it.tunnel.RemotePort)
+			}
+			m.tunnelSession = &session
+			m.updateSessionInMemory(session)
+			m.tunnelError = ""
+			return m, m.refreshTunnelStatesCmd(session)
+		case "enter":
+			if m.tunnelSession == nil {
+				return m, nil
+			}
+			it, ok := m.tunnelList.SelectedItem().(tunnelItem)
+			if !ok {
+				return m, nil
+			}
+			return m, m.toggleTunnelCmd(*m.tunnelSession, it.tunnel, !it.running)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.tunnelList, cmd = m.tunnelList.Update(msg)
+	return m, cmd
+}
+
+func (m *Model) handleTunnelAddUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc":
+			m.state = viewStateTunnelManager
+			return m, nil
+		case "enter":
+			if m.tunnelSession == nil {
+				m.state = viewStateMain
+				return m, nil
+			}
+			tunnel, err := parseTunnelSpec(m.tunnelInput.Value())
+			if err != nil {
+				m.tunnelError = err.Error()
+				return m, nil
+			}
+			session := *m.tunnelSession
+			for _, t := range session.Tunnels {
+				if t.LocalPort == tunnel.LocalPort && t.RemotePort == tunnel.RemotePort {
+					m.tunnelError = "that tunnel already exists on this session"
+					return m, nil
+				}
+			}
+			session.Tunnels = append(session.Tunnels, tunnel)
+			if m.db != nil {
+				if err := m.db.Save(context.Background(), &session); err != nil {
+					m.tunnelError = fmt.Sprintf("failed to save tunnel: %v", err)
+					return m, nil
+				}
+			}
+			m.tunnelSession = &session
+			m.updateSessionInMemory(session)
+			m.tunnelError = ""
+			m.state = viewStateTunnelManager
+			return m, m.refreshTunnelStatesCmd(session)
+		}
+	}
+	var cmd tea.Cmd
+	m.tunnelInput, cmd = m.tunnelInput.Update(msg)
+	return m, cmd
 }
 
 func (m *Model) handleRemotesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -3136,6 +3744,9 @@ func (m *Model) renderMainView() string {
 		if s.IssueKey != "" {
 			meta = append(meta, s.IssueKey)
 		}
+		if len(s.Tunnels) > 0 {
+			meta = append(meta, fmt.Sprintf("tunnels:%d", len(s.Tunnels)))
+		}
 		meta = append(meta, s.CreatedAt.Format("2006-01-02 15:04"))
 		sessionLines = append(sessionLines, strings.Join(meta, " · "))
 
@@ -3300,7 +3911,7 @@ func (m *Model) renderMainView() string {
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • f: filter • c: scope • s: restart • y: copy view • r: refresh • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
+		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • r: refresh • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
 
 	// PR Buttons (matching Figma)
 	var prButtons string
@@ -3404,17 +4015,29 @@ func (m *Model) restartSession() tea.Cmd {
 		// 3. Start tmux session and agent
 		agentCmd := m.sessionCfg.Agent.Command
 		var sendKeysPrompt string
+		issueForPrompt := m.sessionCfg.Issue
+		if issueForPrompt == nil && strings.TrimSpace(m.sessionCfg.IssueKey) != "" {
+			jiraProvider := jira.NewProvider(jira.Config{
+				URL:      m.cfg.Integrations.Jira.URL,
+				Email:    m.cfg.Integrations.Jira.Email,
+				APIToken: m.cfg.Integrations.Jira.APIToken,
+			})
+			if iss, err := jiraProvider.GetIssue(ctx, m.sessionCfg.IssueKey); err == nil {
+				issueForPrompt = &iss
+			}
+		}
 		if m.flowManager != nil && m.flowManager.SkillEngine != nil {
-			prepared, err := m.flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *m.sessionCfg.Agent, m.sessionCfg.Skills, m.sessionCfg.PromptFree, m.sessionCfg.Issue)
+			prepared, err := m.flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *m.sessionCfg.Agent, m.sessionCfg.Skills, m.sessionCfg.PromptFree, issueForPrompt)
 			if err == nil {
 				agentCmd = prepared.Command
 				sendKeysPrompt = prepared.InitialPrompt
 			}
 		}
 
+		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
 		startCmd := fmt.Sprintf(
 			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
-			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), agentCmd, s.TmuxSession,
+			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), agentBootstrap, s.TmuxSession,
 		)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
@@ -3425,11 +4048,18 @@ func (m *Model) restartSession() tea.Cmd {
 		// tmux send-keys after the agent has had time to start up.
 		if sendKeysPrompt != "" {
 			sendCmd := fmt.Sprintf(
-				"sleep 3 && tmux send-keys -t %q %q Enter",
+				"sleep 4 && tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
 				s.TmuxSession, sendKeysPrompt,
+				s.TmuxSession,
 			)
 			_, _ = mgr.Execute(ctx, fmt.Sprintf("nohup bash -c %q >/dev/null 2>&1 &", sendCmd))
 		}
+
+		// Trust the directory for common agents when supported.
+		_, _ = mgr.Execute(ctx, fmt.Sprintf("git config --global --add safe.directory %q", workingDir))
+		_, _ = mgr.Execute(ctx, fmt.Sprintf("cd %q && if command -v claude >/dev/null; then claude trust . >/dev/null 2>&1; fi", workingDir))
+		_, _ = mgr.Execute(ctx, fmt.Sprintf("cd %q && if command -v copilot >/dev/null; then copilot trust . >/dev/null 2>&1 || copilot trust add . >/dev/null 2>&1; fi", workingDir))
+		_, _ = mgr.Execute(ctx, fmt.Sprintf("cd %q && if command -v gh >/dev/null; then gh copilot trust . >/dev/null 2>&1 || gh copilot trust add . >/dev/null 2>&1; fi", workingDir))
 
 		// 4. Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()

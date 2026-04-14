@@ -51,7 +51,10 @@ func (m *mockRemote) StreamTmuxSession(ctx context.Context, name string) (io.Rea
 	return nil, nil
 }
 func (m *mockRemote) StartTmuxSession(ctx context.Context, name string) error { return nil }
-func (m *mockRemote) Close() error                                            { return nil }
+func (m *mockRemote) ProvisionRemote(ctx context.Context, steps []domain.ProvisionStep, progress chan<- domain.ProvisionProgress) error {
+	return nil
+}
+func (m *mockRemote) Close() error { return nil }
 
 func TestPrepareSession_ClaudeWithIssue_UsesSendKeys(t *testing.T) {
 	cfg := &config.Config{}
@@ -243,6 +246,71 @@ func TestPrepareSession_OpenCodeWithIssue_UsesSendKeys(t *testing.T) {
 	// Should use InitialPrompt for tmux send-keys
 	if result.InitialPrompt == "" {
 		t.Error("expected non-empty InitialPrompt for OpenCode (uses send-keys)")
+	}
+}
+
+func TestPrepareSession_CopilotPreservesLaunchCommand(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Command != "copilot" {
+		t.Errorf("expected copilot command to be preserved, got: %s", result.Command)
+	}
+}
+
+func TestPrepareSession_CopilotWithIssue_IncludesInitialTaskPrompt(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
+	issue := &domain.Issue{Key: "PROJ-7", Summary: "Wire startup prompt"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.InitialPrompt == "" {
+		t.Fatal("expected non-empty InitialPrompt for copilot with issue")
+	}
+	if !strings.Contains(result.InitialPrompt, ".aiman_task.md") {
+		t.Errorf("expected InitialPrompt to reference .aiman_task.md, got: %s", result.InitialPrompt)
+	}
+}
+
+func TestPrepareSession_GHCopilotWithIssue_WritesTaskAndPrompt(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "gh copilot"}
+	issue := &domain.Issue{Key: "PROJ-8", Summary: "Seed prompt via gh copilot path"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := remote.writtenFiles["/home/user/code/myrepo/.aiman_task.md"]; !ok {
+		t.Fatal("expected .aiman_task.md to be written")
+	}
+	if result.InitialPrompt == "" {
+		t.Fatal("expected non-empty InitialPrompt for gh copilot with issue")
+	}
+	if !strings.Contains(result.InitialPrompt, ".aiman_task.md") {
+		t.Errorf("expected InitialPrompt to reference .aiman_task.md, got: %s", result.InitialPrompt)
 	}
 }
 

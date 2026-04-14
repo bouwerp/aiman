@@ -181,6 +181,19 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 		return result, nil
 	}
 
+	// For GitHub Copilot CLI
+	// Keep command shaping conservative here: standalone `copilot` and
+	// `gh copilot` have different flags and interaction models.
+	if strings.Contains(name, "copilot") || strings.Contains(strings.ToLower(agent.Command), "copilot") {
+		cmd := agent.Command
+		result := domain.PreparedSession{Command: cmd}
+		if issue != nil {
+			// Use send-keys startup guidance so Copilot loads the generated task file.
+			result.InitialPrompt = initialPrompt
+		}
+		return result, nil
+	}
+
 	// Default
 	cmd := agent.Command
 	result := domain.PreparedSession{Command: cmd}

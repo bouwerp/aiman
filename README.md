@@ -136,6 +136,7 @@ aiman
 | `ESC` | Go back / Cancel |
 | `Ctrl+S` | **Attach** to tmux session (full terminal) |
 | `Ctrl+T` | **Toggle** between preview and terminal mode |
+| `t` | **Tunnels** - Manage per-session local↔remote port forwards |
 | `v` | **Open in VS Code** (local synced directory) |
 | `r` | **Refresh** session list |
 | `Ctrl+Y` | **Recreate Mutagen Sync** for selected session |

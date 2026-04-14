@@ -1,4 +1,5 @@
 package ssh
+
 import (
 	"context"
 	"fmt"
@@ -6,12 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
-
 
 type Config struct {
 	Host string
@@ -45,6 +46,25 @@ func (m *Manager) controlPath() string {
 	// Use a hash of the target to keep path length reasonable and unique
 	target := m.target()
 	return filepath.Join(home, ".aiman", "sockets", strings.ReplaceAll(target, "@", "-")+".sock")
+}
+
+func sanitizeSocketToken(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
+}
+
+func (m *Manager) tunnelControlPath(localPort, remotePort int) string {
+	home, _ := os.UserHomeDir()
+	target := sanitizeSocketToken(m.target())
+	name := "tunnel-" + target + "-L" + strconv.Itoa(localPort) + "-R" + strconv.Itoa(remotePort) + ".sock"
+	return filepath.Join(home, ".aiman", "tunnels", name)
 }
 
 func (m *Manager) Connect(ctx context.Context) error {
@@ -251,7 +271,7 @@ func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string,
 		if line == "" {
 			continue
 		}
-		
+
 		worktreePath := ""
 		if strings.HasPrefix(line, "worktree ") {
 			// Porcelain format
@@ -260,7 +280,7 @@ func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string,
 			// Standard format (usually path is the first field)
 			worktreePath = strings.Fields(line)[0]
 		}
-		
+
 		if worktreePath != "" && filepath.Clean(worktreePath) != cleanRepoPath {
 			worktrees = append(worktrees, worktreePath)
 		}
@@ -306,10 +326,10 @@ func (m *Manager) GetTmuxSessionEnv(ctx context.Context, sessionName, envVar str
 func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (string, error) {
 	// Capture the visible pane and last 1000 lines of scrollback buffer
 	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S -1000 -t %q", sessionName)
-	
+
 	var output string
 	var err error
-	
+
 	// Retry up to 5 times with increasing delay if session/server is not yet available.
 	// This handles the race where the tmux server hasn't fully started yet.
 	for i := 0; i < 5; i++ {
@@ -329,7 +349,7 @@ func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (stri
 		case <-time.After(time.Duration(300*(i+1)) * time.Millisecond):
 		}
 	}
-	
+
 	if err != nil {
 		return "", fmt.Errorf("failed to capture tmux pane after retries: %w", err)
 	}
@@ -431,6 +451,68 @@ func (m *Manager) ProvisionRemote(ctx context.Context, steps []domain.ProvisionS
 		}
 	}
 	return nil
+}
+
+func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) error {
+	cp := m.tunnelControlPath(localPort, remotePort)
+	if err := os.MkdirAll(filepath.Dir(cp), 0700); err != nil {
+		return fmt.Errorf("failed to create tunnel socket directory: %w", err)
+	}
+	_ = os.Remove(cp)
+
+	target := m.target()
+	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "ExitOnForwardFailure=yes",
+		"-o", "ControlMaster=yes",
+		"-o", "ControlPersist=10m",
+		"-S", cp,
+		"-f",
+		"-N",
+		"-L", forward,
+		target,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to start tunnel %s: %w\nOutput: %s", forward, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (m *Manager) StopTunnel(ctx context.Context, localPort, remotePort int) error {
+	cp := m.tunnelControlPath(localPort, remotePort)
+	target := m.target()
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-S", cp,
+		"-O", "exit",
+		target,
+	)
+	output, err := cmd.CombinedOutput()
+	_ = os.Remove(cp)
+	if err != nil {
+		out := strings.ToLower(strings.TrimSpace(string(output)))
+		if strings.Contains(out, "no such file") || strings.Contains(out, "does not exist") || strings.Contains(out, "control socket connect") {
+			return nil
+		}
+		return fmt.Errorf("failed to stop tunnel L%d->R%d: %w\nOutput: %s", localPort, remotePort, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (m *Manager) IsTunnelRunning(ctx context.Context, localPort, remotePort int) bool {
+	cp := m.tunnelControlPath(localPort, remotePort)
+	target := m.target()
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-S", cp,
+		"-O", "check",
+		target,
+	)
+	return cmd.Run() == nil
 }
 
 func (m *Manager) ScanDirectories(ctx context.Context, rootPath string, maxDepth int) ([]string, error) {

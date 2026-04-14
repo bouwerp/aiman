@@ -62,6 +62,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		}
 	}
 
+	// Ensure we have full issue context for task-file/prompt injection even when
+	// a branch was already provided (e.g. restart/existing-branch flows).
+	if config.Issue == nil && config.IssueKey != "" {
+		if issue, err := m.jiraProvider.GetIssue(ctx, config.IssueKey); err == nil {
+			config.Issue = &issue
+		}
+	}
+
 	// Create Session record
 	session := &domain.Session{
 		ID:        uuid.New().String(),
@@ -136,9 +144,12 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// UUID and produce duplicate session entries.
 	// The login shell (-l) ensures PATH is populated from ~/.bash_profile / ~/.profile
 	// so tools like claude that are installed in ~/.local/bin are found.
+	// We also append common user-local bin paths explicitly to avoid false
+	// "command not found" failures for tools installed outside default login PATH.
+	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
 	startCmd := fmt.Sprintf(
 		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
-		tmuxName, workingDir, strings.TrimSpace(session.ID), agentCmd, tmuxName,
+		tmuxName, workingDir, strings.TrimSpace(session.ID), agentBootstrap, tmuxName,
 	)
 	_, err = sshMgr.Execute(ctx, startCmd)
 	if err != nil {
@@ -150,8 +161,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// delay so the agent has time to start up interactively.
 	if sendKeysPrompt != "" {
 		sendCmd := fmt.Sprintf(
-			"sleep 3 && tmux send-keys -t %q %q Enter",
+			"sleep 4 && tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
 			tmuxName, sendKeysPrompt,
+			tmuxName,
 		)
 		// Fire-and-forget in the background; failure here is non-fatal.
 		_, _ = sshMgr.Execute(ctx, fmt.Sprintf("nohup bash -c %q >/dev/null 2>&1 &", sendCmd))
@@ -166,6 +178,12 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	claudeTrustCmd := fmt.Sprintf("cd %q && if command -v claude >/dev/null; then claude trust . >/dev/null 2>&1; fi", workingDir)
 	_, _ = sshMgr.Execute(ctx, claudeTrustCmd)
+
+	copilotTrustCmd := fmt.Sprintf("cd %q && if command -v copilot >/dev/null; then copilot trust . >/dev/null 2>&1 || copilot trust add . >/dev/null 2>&1; fi", workingDir)
+	_, _ = sshMgr.Execute(ctx, copilotTrustCmd)
+
+	ghCopilotTrustCmd := fmt.Sprintf("cd %q && if command -v gh >/dev/null; then gh copilot trust . >/dev/null 2>&1 || gh copilot trust add . >/dev/null 2>&1; fi", workingDir)
+	_, _ = sshMgr.Execute(ctx, ghCopilotTrustCmd)
 
 	// Transition JIRA issue if configured
 	if session.IssueKey != "" && m.jiraConfig != nil && m.jiraConfig.TransitionStatus != "" {
