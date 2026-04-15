@@ -73,4 +73,3 @@ region = x
 		t.Fatal(got)
 	}
 }
-

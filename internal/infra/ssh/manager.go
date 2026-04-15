@@ -2,6 +2,8 @@ package ssh
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -43,27 +45,21 @@ func (m *Manager) target() string {
 
 func (m *Manager) controlPath() string {
 	home, _ := os.UserHomeDir()
-	// Use a hash of the target to keep path length reasonable and unique
-	target := m.target()
-	return filepath.Join(home, ".aiman", "sockets", strings.ReplaceAll(target, "@", "-")+".sock")
+	// Keep unix socket path short to avoid OS length limits.
+	targetHash := shortTargetHash(m.target())
+	return filepath.Join(home, ".aiman", "sockets", "ssh-"+targetHash+".sock")
 }
 
-func sanitizeSocketToken(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('-')
-		}
-	}
-	return b.String()
+func shortTargetHash(target string) string {
+	sum := sha1.Sum([]byte(target))
+	// 16 hex chars is compact while still collision-resistant enough for this use.
+	return hex.EncodeToString(sum[:8])
 }
 
 func (m *Manager) tunnelControlPath(localPort, remotePort int) string {
 	home, _ := os.UserHomeDir()
-	target := sanitizeSocketToken(m.target())
-	name := "tunnel-" + target + "-L" + strconv.Itoa(localPort) + "-R" + strconv.Itoa(remotePort) + ".sock"
+	targetHash := shortTargetHash(m.target())
+	name := "t-" + targetHash + "-l" + strconv.Itoa(localPort) + "-r" + strconv.Itoa(remotePort) + ".sock"
 	return filepath.Join(home, ".aiman", "tunnels", name)
 }
 
@@ -151,6 +147,8 @@ func isRetriableSSHTransportError(errText string) bool {
 	s := strings.ToLower(errText)
 	return strings.Contains(s, "permission denied") ||
 		strings.Contains(s, "connection closed by") ||
+		strings.Contains(s, "connection reset by peer") ||
+		strings.Contains(s, "kex_exchange_identification") ||
 		strings.Contains(s, "mux_client_request_session") ||
 		strings.Contains(s, "control socket connect") ||
 		strings.Contains(s, "broken pipe")
@@ -466,8 +464,9 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "ExitOnForwardFailure=yes",
-		"-o", "ControlMaster=yes",
-		"-o", "ControlPersist=10m",
+		"-o", "ServerAliveInterval=30",
+		"-o", "ServerAliveCountMax=3",
+		"-M",
 		"-S", cp,
 		"-f",
 		"-N",
@@ -484,6 +483,12 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 
 func (m *Manager) StopTunnel(ctx context.Context, localPort, remotePort int) error {
 	cp := m.tunnelControlPath(localPort, remotePort)
+	if _, err := os.Stat(cp); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to stat tunnel socket: %w", err)
+	}
 	target := m.target()
 	cmd := exec.CommandContext(ctx, "ssh",
 		"-o", "BatchMode=yes",
@@ -505,6 +510,9 @@ func (m *Manager) StopTunnel(ctx context.Context, localPort, remotePort int) err
 
 func (m *Manager) IsTunnelRunning(ctx context.Context, localPort, remotePort int) bool {
 	cp := m.tunnelControlPath(localPort, remotePort)
+	if _, err := os.Stat(cp); err != nil {
+		return false
+	}
 	target := m.target()
 	cmd := exec.CommandContext(ctx, "ssh",
 		"-o", "BatchMode=yes",

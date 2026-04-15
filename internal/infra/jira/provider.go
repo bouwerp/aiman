@@ -60,7 +60,7 @@ func (p *Provider) SearchIssues(ctx context.Context, query string) ([]domain.Iss
 		return p.fetchIssues(ctx, jql, 100)
 	}
 
-	// Default: fetch the user's own open issues and 'Dev Ready' issues, 
+	// Default: fetch the user's own open issues and 'Dev Ready' issues,
 	// then append recent open issues from others.
 	myIssues, err := p.fetchIssues(ctx,
 		"(assignee = currentUser() OR status = \"Dev Ready\") AND statusCategory != \"Done\" ORDER BY created DESC", 100)

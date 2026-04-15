@@ -66,12 +66,12 @@ func TestResolvePullRequestForBranch_headRefNameFallback(t *testing.T) {
 
 	r := &mockRemote{
 		outputs: map[string]string{
-			cmdView0:     "",
-			cmdViewRepo:  "",
+			cmdView0:      "",
+			cmdViewRepo:   "",
 			cmdViewBranch: "",
-			cmdListHead:  "[]",
-			cmdScan:      `[{"number":77,"headRefName":"featurez","state":"OPEN"}]`,
-			cmdViewNum:   viewBody,
+			cmdListHead:   "[]",
+			cmdScan:       `[{"number":77,"headRefName":"featurez","state":"OPEN"}]`,
+			cmdViewNum:    viewBody,
 		},
 	}
 	pr := resolvePullRequestForBranch(ctx, r, repoPath, owner, repo, true, branch)

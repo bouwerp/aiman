@@ -347,9 +347,10 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
 			key.NewBinding(key.WithKeys("ctrl+s", "a"), key.WithHelp("a", "attach full terminal")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
-			key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "copy local path")),
+			key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "copy local path")),
 			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy session output (visible)")),
 			key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy session output (full preview)")),
+			key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G/end", "jump preview to latest")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
@@ -463,6 +464,21 @@ func parseTunnelSpec(spec string) (domain.Tunnel, error) {
 		return domain.Tunnel{}, fmt.Errorf("invalid remote port: %q", parts[1])
 	}
 	return domain.Tunnel{LocalPort: localPort, RemotePort: remotePort}, nil
+}
+
+func geminiGlobalTrustCmd(workingDir string) string {
+	return fmt.Sprintf(
+		`cd %q && if command -v gemini >/dev/null 2>&1; then `+
+			`mkdir -p "$HOME/.gemini"; `+
+			`tf="$HOME/.gemini/trustedFolders.json"; `+
+			`if [ ! -s "$tf" ]; then printf '{}' > "$tf"; fi; `+
+			`if command -v node >/dev/null 2>&1; then `+
+			`WORKDIR=%q TF="$tf" node -e "const fs=require('fs');const p=process.env.WORKDIR;const f=process.env.TF;let j={};try{j=JSON.parse(fs.readFileSync(f,'utf8')||'{}')}catch{j={}};j[p]='TRUST_FOLDER';fs.writeFileSync(f,JSON.stringify(j,null,2),{mode:0o600})" >/dev/null 2>&1 || true; `+
+			`fi; `+
+			`gemini config set --global security.folderTrust.enabled true >/dev/null 2>&1 || true; `+
+			`fi`,
+		workingDir, workingDir,
+	)
 }
 
 func (m *Model) updateSessionInMemory(updated domain.Session) {
@@ -2252,6 +2268,13 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	if msg.String() == "G" || msg.String() == "end" {
+		if m.panelMode == panelModePreview {
+			m.viewport.GotoBottom()
+			return m, nil, true
+		}
+	}
+
 	if msg.String() == "`" {
 		m.consoleOpen = !m.consoleOpen
 		m.log("Console toggled: %v", m.consoleOpen)
@@ -2389,8 +2412,8 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 	}
-	if msg.String() == "ctrl+l" {
-		m.log("ctrl+l pressed")
+	if msg.String() == "p" {
+		m.log("p pressed")
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
 			m.log("Selected session: %s, LocalPath: %s", s.TmuxSession, s.LocalPath)
@@ -3911,7 +3934,7 @@ func (m *Model) renderMainView() string {
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • r: refresh • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
+		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
 
 	// PR Buttons (matching Figma)
 	var prButtons string
@@ -4034,7 +4057,7 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
-		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
+		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
 		startCmd := fmt.Sprintf(
 			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
 			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), agentBootstrap, s.TmuxSession,
@@ -4048,7 +4071,14 @@ func (m *Model) restartSession() tea.Cmd {
 		// tmux send-keys after the agent has had time to start up.
 		if sendKeysPrompt != "" {
 			sendCmd := fmt.Sprintf(
-				"sleep 4 && tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
+				"attempt=0; "+
+					"while [ $attempt -lt 20 ]; do "+
+					"pane_cmd=$(tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true); "+
+					"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
+					"attempt=$((attempt+1)); sleep 1; "+
+					"done; "+
+					"tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
+				s.TmuxSession,
 				s.TmuxSession, sendKeysPrompt,
 				s.TmuxSession,
 			)
@@ -4060,6 +4090,7 @@ func (m *Model) restartSession() tea.Cmd {
 		_, _ = mgr.Execute(ctx, fmt.Sprintf("cd %q && if command -v claude >/dev/null; then claude trust . >/dev/null 2>&1; fi", workingDir))
 		_, _ = mgr.Execute(ctx, fmt.Sprintf("cd %q && if command -v copilot >/dev/null; then copilot trust . >/dev/null 2>&1 || copilot trust add . >/dev/null 2>&1; fi", workingDir))
 		_, _ = mgr.Execute(ctx, fmt.Sprintf("cd %q && if command -v gh >/dev/null; then gh copilot trust . >/dev/null 2>&1 || gh copilot trust add . >/dev/null 2>&1; fi", workingDir))
+		_, _ = mgr.Execute(ctx, geminiGlobalTrustCmd(workingDir))
 
 		// 4. Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()

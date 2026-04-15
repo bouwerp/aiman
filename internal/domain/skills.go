@@ -13,10 +13,10 @@ type Skill struct {
 type SkillType string
 
 const (
-	SkillTypePrompt SkillType = "prompt"  // Markdown/Text instructions
-	SkillTypeAlias  SkillType = "alias"   // Shell aliases or scripts
-	SkillTypeTool   SkillType = "tool"    // JSON tool definitions
-	SkillTypeEnv    SkillType = "env"     // Environment variables
+	SkillTypePrompt SkillType = "prompt" // Markdown/Text instructions
+	SkillTypeAlias  SkillType = "alias"  // Shell aliases or scripts
+	SkillTypeTool   SkillType = "tool"   // JSON tool definitions
+	SkillTypeEnv    SkillType = "env"    // Environment variables
 )
 
 // PreparedSession holds the agent launch command and an optional initial prompt

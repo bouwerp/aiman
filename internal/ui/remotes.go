@@ -763,10 +763,6 @@ func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.awsFocus = (m.awsFocus - 1 + awsFocusCount) % awsFocusCount
 			return m.applyAWSFocus()
 		case "enter":
-			if m.awsFocus == awsFocusSync {
-				m.awsSyncCreds = !m.awsSyncCreds
-				return m, nil
-			}
 			return m.saveAWSAndPush()
 		case " ":
 			if m.awsFocus == awsFocusSync {

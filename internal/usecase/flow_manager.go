@@ -20,6 +20,21 @@ type FlowManager struct {
 	SkillEngine  domain.SkillEngine
 }
 
+func geminiGlobalTrustCmd(workingDir string) string {
+	return fmt.Sprintf(
+		`cd %q && if command -v gemini >/dev/null 2>&1; then `+
+			`mkdir -p "$HOME/.gemini"; `+
+			`tf="$HOME/.gemini/trustedFolders.json"; `+
+			`if [ ! -s "$tf" ]; then printf '{}' > "$tf"; fi; `+
+			`if command -v node >/dev/null 2>&1; then `+
+			`WORKDIR=%q TF="$tf" node -e "const fs=require('fs');const p=process.env.WORKDIR;const f=process.env.TF;let j={};try{j=JSON.parse(fs.readFileSync(f,'utf8')||'{}')}catch{j={}};j[p]='TRUST_FOLDER';fs.writeFileSync(f,JSON.stringify(j,null,2),{mode:0o600})" >/dev/null 2>&1 || true; `+
+			`fi; `+
+			`gemini config set --global security.folderTrust.enabled true >/dev/null 2>&1 || true; `+
+			`fi`,
+		workingDir, workingDir,
+	)
+}
+
 func NewFlowManager(
 	jiraProvider domain.IssueProvider,
 	jiraConfig *config.JiraConfig,
@@ -146,7 +161,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// so tools like claude that are installed in ~/.local/bin are found.
 	// We also append common user-local bin paths explicitly to avoid false
 	// "command not found" failures for tools installed outside default login PATH.
-	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
+	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
 	startCmd := fmt.Sprintf(
 		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
 		tmuxName, workingDir, strings.TrimSpace(session.ID), agentBootstrap, tmuxName,
@@ -161,7 +176,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// delay so the agent has time to start up interactively.
 	if sendKeysPrompt != "" {
 		sendCmd := fmt.Sprintf(
-			"sleep 4 && tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
+			"attempt=0; "+
+				"while [ $attempt -lt 20 ]; do "+
+				"pane_cmd=$(tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true); "+
+				"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
+				"attempt=$((attempt+1)); sleep 1; "+
+				"done; "+
+				"tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
+			tmuxName,
 			tmuxName, sendKeysPrompt,
 			tmuxName,
 		)
@@ -184,6 +206,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	ghCopilotTrustCmd := fmt.Sprintf("cd %q && if command -v gh >/dev/null; then gh copilot trust . >/dev/null 2>&1 || gh copilot trust add . >/dev/null 2>&1; fi", workingDir)
 	_, _ = sshMgr.Execute(ctx, ghCopilotTrustCmd)
+
+	_, _ = sshMgr.Execute(ctx, geminiGlobalTrustCmd(workingDir))
 
 	// Transition JIRA issue if configured
 	if session.IssueKey != "" && m.jiraConfig != nil && m.jiraConfig.TransitionStatus != "" {

@@ -101,7 +101,7 @@ agents:
       bin: "opencode"
 
 skills:
-  repo: "git@github.com:org/agent-skills.git"
+  repo: "https://github.com/realfi-co/agent-skills.git"
 
 ---
 

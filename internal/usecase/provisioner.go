@@ -2,6 +2,10 @@ package usecase
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
@@ -31,7 +35,7 @@ func (p *Provisioner) GetSteps() []domain.ProvisionStep {
 		{
 			ID:      "claude-code",
 			Name:    "Install Claude Code",
-			Command: "if command -v claude >/dev/null 2>&1 || command -v claude-code >/dev/null 2>&1; then echo 'Claude Code already installed'; else sudo npm install -g @anthropic-ai/claude-code; fi",
+			Command: "if command -v claude >/dev/null 2>&1 || command -v claude-code >/dev/null 2>&1; then echo 'Claude Code already installed'; else npm install -g @anthropic-ai/claude-code || (mkdir -p ~/.npm-global && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code); fi",
 		},
 		{
 			ID:      "gh-cli",
@@ -40,13 +44,60 @@ func (p *Provisioner) GetSteps() []domain.ProvisionStep {
 		},
 		{
 			ID:      "skills-framework",
-			Name:    "Install Agentic Framework Skills",
-			Command: "mkdir -p ~/.aiman/skills && if [ ! -d ~/.aiman/skills/agentic-framework ]; then git clone git@github.com:bouwerp/agentic-framework.git ~/.aiman/skills/agentic-framework; else git -C ~/.aiman/skills/agentic-framework pull; fi",
+			Name:    "Install Agent Skills",
+			Command: "mkdir -p ~/.aiman/skills && if [ ! -d ~/.aiman/skills/agent-skills ]; then git clone https://github.com/realfi-co/agent-skills.git ~/.aiman/skills/agent-skills; else git -C ~/.aiman/skills/agent-skills pull; fi",
 		},
 	}
 }
 
+func (p *Provisioner) GetStepsWithLocalSSHKey() ([]domain.ProvisionStep, error) {
+	pubKey, err := findLocalPublicKey()
+	if err != nil {
+		return nil, err
+	}
+
+	steps := []domain.ProvisionStep{
+		{
+			ID:      "local-ssh-key",
+			Name:    "Authorize Local SSH Public Key",
+			Command: fmt.Sprintf("mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && (grep -qxF %q ~/.ssh/authorized_keys || printf '%%s\\n' %q >> ~/.ssh/authorized_keys)", pubKey, pubKey),
+		},
+	}
+	steps = append(steps, p.GetSteps()...)
+	return steps, nil
+}
+
 func (p *Provisioner) Provision(ctx context.Context, progress chan<- domain.ProvisionProgress) error {
-	steps := p.GetSteps()
+	steps, err := p.GetStepsWithLocalSSHKey()
+	if err != nil {
+		return err
+	}
 	return p.remoteExecutor.ProvisionRemote(ctx, steps, progress)
+}
+
+func findLocalPublicKey() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve home directory for SSH key lookup: %w", err)
+	}
+
+	candidates := []string{
+		filepath.Join(home, ".ssh", "id_ed25519.pub"),
+		filepath.Join(home, ".ssh", "id_rsa.pub"),
+		filepath.Join(home, ".ssh", "id_ecdsa.pub"),
+		filepath.Join(home, ".ssh", "id_dsa.pub"),
+	}
+
+	for _, p := range candidates {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		key := strings.TrimSpace(string(b))
+		if key != "" {
+			return key, nil
+		}
+	}
+
+	return "", fmt.Errorf("no local SSH public key found (looked for id_ed25519.pub, id_rsa.pub, id_ecdsa.pub, id_dsa.pub)")
 }

@@ -25,8 +25,8 @@ type SummaryModel struct {
 
 func NewSummaryModel(issueKey, branch string, repo domain.Repo, directory string) SummaryModel {
 	m := SummaryModel{
-		issueKey:  issueKey,
-		branch:    branch,
+		issueKey:   issueKey,
+		branch:     branch,
 		repo:       repo,
 		directory:  directory,
 		promptFree: true,
