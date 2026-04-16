@@ -15,11 +15,15 @@ func ProfileSectionHeader(profileName string) string {
 }
 
 // FormatProfileSection returns the body lines (no section header) for a delegated-role profile.
-func FormatProfileSection(roleARN, sourceProfile string) string {
+// region is optional; when non-empty it is written as "region = <value>".
+func FormatProfileSection(roleARN, sourceProfile, region string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("role_arn = %s\n", strings.TrimSpace(roleARN)))
 	if s := strings.TrimSpace(sourceProfile); s != "" {
 		b.WriteString(fmt.Sprintf("source_profile = %s\n", s))
+	}
+	if r := strings.TrimSpace(region); r != "" {
+		b.WriteString(fmt.Sprintf("region = %s\n", r))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -27,14 +31,14 @@ func FormatProfileSection(roleARN, sourceProfile string) string {
 // MergeProfileIntoConfig replaces or inserts a [profile NAME] block in an AWS shared config file.
 // If profileName or roleARN is empty, it removes an existing block for that profile only
 // (other content is preserved). Trailing newline is ensured.
-func MergeProfileIntoConfig(existing string, profileName, roleARN, sourceProfile string) string {
+func MergeProfileIntoConfig(existing string, profileName, roleARN, sourceProfile, region string) string {
 	name := strings.TrimSpace(profileName)
 	header := ProfileSectionHeader(name)
 	return mergeSection(existing, name, header, aimanHeader, func() string {
 		if strings.TrimSpace(roleARN) == "" {
 			return ""
 		}
-		return FormatProfileSection(roleARN, sourceProfile)
+		return FormatProfileSection(roleARN, sourceProfile, region)
 	})
 }
 

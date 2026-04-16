@@ -14,7 +14,8 @@ type RemoteRunner interface {
 
 // ApplyDelegatedProfile merges the delegated profile into $HOME/.aws/config on the remote.
 // Secrets are never written by this function.
-func ApplyDelegatedProfile(ctx context.Context, r RemoteRunner, profileName, roleARN, sourceProfile string) error {
+// region is optional; when non-empty it is written into the profile block.
+func ApplyDelegatedProfile(ctx context.Context, r RemoteRunner, profileName, roleARN, sourceProfile, region string) error {
 	home, err := getRemoteHome(ctx, r)
 	if err != nil {
 		return err
@@ -33,7 +34,7 @@ func ApplyDelegatedProfile(ctx context.Context, r RemoteRunner, profileName, rol
 		return fmt.Errorf("read remote ~/.aws/config: %w", err)
 	}
 
-	merged := MergeProfileIntoConfig(existing, profileName, roleARN, sourceProfile)
+	merged := MergeProfileIntoConfig(existing, profileName, roleARN, sourceProfile, region)
 	return r.WriteFile(ctx, configPath, []byte(merged))
 }
 

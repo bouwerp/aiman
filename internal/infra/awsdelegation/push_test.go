@@ -16,7 +16,7 @@ func (m *mockRemote) Execute(_ context.Context, cmd string) (string, error) {
 	if strings.Contains(cmd, `printf %s "$HOME"`) {
 		return m.home, nil
 	}
-	if strings.Contains(cmd, `mkdir -p "$HOME/.aws"`) {
+	if strings.Contains(cmd, "mkdir -p") && strings.Contains(cmd, ".aws") {
 		m.execOK = true
 		return "", nil
 	}
@@ -38,7 +38,7 @@ func (m *mockRemote) WriteFile(_ context.Context, path string, content []byte) e
 func TestApplyDelegatedProfile(t *testing.T) {
 	m := &mockRemote{home: "/home/dev", files: map[string]string{"config": "[default]\nregion = us-east-1\n"}}
 	err := ApplyDelegatedProfile(context.Background(), m, "delegated-access",
-		"arn:aws:iam::1:role/R", "base")
+		"arn:aws:iam::1:role/R", "base", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,9 +51,22 @@ func TestApplyDelegatedProfile(t *testing.T) {
 	}
 }
 
+func TestApplyDelegatedProfile_WithRegion(t *testing.T) {
+	m := &mockRemote{home: "/home/dev", files: map[string]string{}}
+	err := ApplyDelegatedProfile(context.Background(), m, "delegated-access",
+		"arn:aws:iam::1:role/R", "base", "eu-west-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := m.files["/.aws/config"]
+	if !strings.Contains(written, "region = eu-west-1") {
+		t.Fatalf("expected region line in config, got:\n%s", written)
+	}
+}
+
 func TestApplyDelegatedProfile_UsesHomePath(t *testing.T) {
 	m := &mockRemote{home: "/home/x", files: map[string]string{}}
-	_ = ApplyDelegatedProfile(context.Background(), m, "p", "arn:a", "s")
+	_ = ApplyDelegatedProfile(context.Background(), m, "p", "arn:a", "s", "")
 	// WriteFile path should be under home
 	if got := m.files["/.aws/config"]; !strings.Contains(got, "role_arn") {
 		t.Fatal(got)

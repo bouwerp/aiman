@@ -7,7 +7,7 @@ import (
 
 func TestMergeProfileIntoConfig_Insert(t *testing.T) {
 	got := MergeProfileIntoConfig("", "delegated-access",
-		"arn:aws:iam::111:role/TemporaryDelegatedRole", "their-default-profile")
+		"arn:aws:iam::111:role/TemporaryDelegatedRole", "their-default-profile", "")
 	if !strings.Contains(got, "[profile delegated-access]") {
 		t.Fatal(got)
 	}
@@ -16,6 +16,14 @@ func TestMergeProfileIntoConfig_Insert(t *testing.T) {
 	}
 	if !strings.Contains(got, "source_profile = their-default-profile") {
 		t.Fatal(got)
+	}
+}
+
+func TestMergeProfileIntoConfig_Insert_WithRegion(t *testing.T) {
+	got := MergeProfileIntoConfig("", "delegated-access",
+		"arn:aws:iam::111:role/R", "src", "ap-southeast-2")
+	if !strings.Contains(got, "region = ap-southeast-2") {
+		t.Fatalf("expected region line, got:\n%s", got)
 	}
 }
 
@@ -31,7 +39,7 @@ source_profile = oldsrc
 region = eu-west-1
 `
 	got := MergeProfileIntoConfig(before, "delegated-access",
-		"arn:aws:iam::NEW:role/New", "newsrc")
+		"arn:aws:iam::NEW:role/New", "newsrc", "")
 	if strings.Contains(got, "arn:aws:iam::OLD:role/Old") {
 		t.Fatalf("old block should be gone:\n%s", got)
 	}
@@ -48,7 +56,7 @@ region = eu-west-1
 
 func TestMergeProfileIntoConfig_DefaultProfile(t *testing.T) {
 	got := MergeProfileIntoConfig("", "default",
-		"arn:aws:iam::111:role/R", "src")
+		"arn:aws:iam::111:role/R", "src", "")
 	if !strings.Contains(got, "[default]") {
 		t.Errorf("expected [default] for profile name 'default', got:\n%s", got)
 	}
@@ -65,7 +73,7 @@ source_profile = s
 [default]
 region = x
 `
-	got := MergeProfileIntoConfig(before, "delegated-access", "", "")
+	got := MergeProfileIntoConfig(before, "delegated-access", "", "", "")
 	if strings.Contains(got, "delegated-access") {
 		t.Fatalf("profile should be removed:\n%s", got)
 	}

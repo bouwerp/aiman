@@ -78,12 +78,17 @@ type Remote struct {
 //	[default]
 //	role_arn = arn:aws:iam::ACCOUNT:role/RoleName   (generated)
 //	source_profile = their-long-lived-profile
+//	region = us-east-1                              (optional)
 type AWSDelegation struct {
 	Profile         string `yaml:"profile,omitempty"`          // defaults to "default" in UI
 	AccountID       string `yaml:"account_id,omitempty"`       // from local AWS CLI
 	RoleName        string `yaml:"role_name,omitempty"`        // empty → TemporaryDelegatedRole in generated ARN
 	SourceProfile   string `yaml:"source_profile,omitempty"`   // local profile used for account lookup; must exist on remote
 	SyncCredentials bool   `yaml:"sync_credentials,omitempty"` // whether to push temporary session tokens to the remote
+	// Optional restrictions applied when SyncCredentials is true.
+	Region          string `yaml:"region,omitempty"`           // written into the remote profile as "region = <value>"
+	SessionPolicy   string `yaml:"session_policy,omitempty"`   // inline JSON IAM policy passed to sts assume-role --policy
+	DurationSeconds int    `yaml:"duration_seconds,omitempty"` // credential lifetime 900–43200; 0 = AWS default
 }
 
 // UniqueRemotes returns remotes with duplicate SSH targets (same host, user, root) removed.
