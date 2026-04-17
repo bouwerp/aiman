@@ -86,9 +86,10 @@ type AWSDelegation struct {
 	SourceProfile   string `yaml:"source_profile,omitempty"`   // local profile used for account lookup; must exist on remote
 	SyncCredentials bool   `yaml:"sync_credentials,omitempty"` // whether to push temporary session tokens to the remote
 	// Optional restrictions applied when SyncCredentials is true.
-	Region          string `yaml:"region,omitempty"`           // written into the remote profile as "region = <value>"
-	SessionPolicy   string `yaml:"session_policy,omitempty"`   // inline JSON IAM policy passed to sts assume-role --policy
-	DurationSeconds int    `yaml:"duration_seconds,omitempty"` // credential lifetime 900–43200; 0 = AWS default
+	Region          string   `yaml:"region,omitempty"`           // written into the remote profile as "region = <value>"
+	Regions         []string `yaml:"regions,omitempty"`          // restrict credentials via aws:RequestedRegion condition policy; default ["us-east-2"] in UI
+	SessionPolicy   string   `yaml:"session_policy,omitempty"`   // inline JSON IAM policy passed to sts assume-role --policy
+	DurationSeconds int      `yaml:"duration_seconds,omitempty"` // credential lifetime 900–43200; 0 = AWS default
 }
 
 // UniqueRemotes returns remotes with duplicate SSH targets (same host, user, root) removed.

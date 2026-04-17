@@ -54,6 +54,7 @@ const (
 	awsFocusRoleName
 	awsFocusSource
 	awsFocusSync
+	awsFocusRegions      // comma-separated region restriction list (generates aws:RequestedRegion policy)
 	awsFocusRegion
 	awsFocusSessionPolicy
 	awsFocusDuration
@@ -122,6 +123,7 @@ type RemotesModel struct {
 	awsProfile          textinput.Model
 	awsRoleName         textinput.Model
 	awsSource           textinput.Model
+	awsRegions          textinput.Model // comma-separated region restriction list
 	awsRegion           textinput.Model
 	awsSessionPolicy    textinput.Model
 	awsDuration         textinput.Model
@@ -325,6 +327,16 @@ func (m *RemotesModel) initAWSDialog() {
 		m.awsSource.SetValue(m.awsLocalProfiles[m.awsLocalPick])
 	}
 
+	m.awsRegions = textinput.New()
+	m.awsRegions.Placeholder = "us-east-2 (comma-sep, empty = no restriction)"
+	m.awsRegions.CharLimit = 256
+	m.awsRegions.Width = 56
+	if d != nil && len(d.Regions) > 0 {
+		m.awsRegions.SetValue(strings.Join(d.Regions, ", "))
+	} else if d == nil {
+		m.awsRegions.SetValue("us-east-2")
+	}
+
 	m.awsRegion = textinput.New()
 	m.awsRegion.Placeholder = "us-east-1 (optional — sets default region in profile)"
 	m.awsRegion.CharLimit = 32
@@ -362,6 +374,7 @@ func (m RemotesModel) applyAWSFocus() (RemotesModel, tea.Cmd) {
 	m.awsProfile.Blur()
 	m.awsRoleName.Blur()
 	m.awsSource.Blur()
+	m.awsRegions.Blur()
 	m.awsRegion.Blur()
 	m.awsSessionPolicy.Blur()
 	m.awsDuration.Blur()
@@ -377,6 +390,8 @@ func (m RemotesModel) applyAWSFocus() (RemotesModel, tea.Cmd) {
 		m.awsAccountResolving = true
 		m.awsAccountLookupErr = ""
 		return m, tea.Batch(focusCmd, lookupAWSAccountIDCmd(src))
+	case awsFocusRegions:
+		return m, m.awsRegions.Focus()
 	case awsFocusRegion:
 		return m, m.awsRegion.Focus()
 	case awsFocusSessionPolicy:
@@ -505,13 +520,23 @@ func pushAWSDelegation(host, user, root string, d *config.AWSDelegation) tea.Cmd
 
 		var syncedCreds bool
 		if d != nil && d.SyncCredentials {
-			// Get temporary credentials for the source profile.
-			// When SessionPolicy, DurationSeconds, or RoleARN is set, assume-role
-			// is used so that inline policy and duration restrictions take effect.
+			// Build an aws:RequestedRegion inline policy from d.Regions when no
+			// custom session policy is provided.
+			sessionPolicy := d.SessionPolicy
+			if sessionPolicy == "" && len(d.Regions) > 0 {
+				sessionPolicy = awsdelegation.BuildRegionPolicy(d.Regions)
+			}
+			// Only include the role ARN when session policy or duration
+			// restrictions require assume-role. Without these, plain
+			// get-session-token is used (no AssumeRole permission needed).
+			scopedRoleARN := ""
+			if sessionPolicy != "" || d.DurationSeconds > 0 {
+				scopedRoleARN = roleARN
+			}
 			opts := awsdelegation.CredentialOptions{
-				SessionPolicy:   d.SessionPolicy,
+				SessionPolicy:   sessionPolicy,
 				DurationSeconds: d.DurationSeconds,
-				RoleARN:         roleARN,
+				RoleARN:         scopedRoleARN,
 				SessionName:     "aiman",
 			}
 			creds, err := awsdelegation.GetTemporaryCredentials(ctx, src, opts)
@@ -850,6 +875,8 @@ func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.awsRoleName, cmd = m.awsRoleName.Update(msg)
 	case awsFocusSource:
 		m.awsSource, cmd = m.awsSource.Update(msg)
+	case awsFocusRegions:
+		m.awsRegions, cmd = m.awsRegions.Update(msg)
 	case awsFocusRegion:
 		m.awsRegion, cmd = m.awsRegion.Update(msg)
 	case awsFocusSessionPolicy:
@@ -911,6 +938,17 @@ func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
 			SyncCredentials: m.awsSyncCreds,
 			Region:          strings.TrimSpace(m.awsRegion.Value()),
 			SessionPolicy:   strings.TrimSpace(m.awsSessionPolicy.Value()),
+		}
+		// Parse comma-separated region restriction list.
+		if raw := strings.TrimSpace(m.awsRegions.Value()); raw != "" {
+			parts := strings.Split(raw, ",")
+			regions := make([]string, 0, len(parts))
+			for _, p := range parts {
+				if r := strings.TrimSpace(p); r != "" {
+					regions = append(regions, r)
+				}
+			}
+			d.Regions = regions
 		}
 		if durStr := strings.TrimSpace(m.awsDuration.Value()); durStr != "" {
 			dur := 0
@@ -1084,6 +1122,8 @@ func (m RemotesModel) viewAWS() string {
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label(syncCheck+" Sync temporary credentials to remote ~/.aws/credentials", awsFocusSync), statusStyle.Render("(recommended if remote lacks credentials)")))
 
 	b.WriteString(statusStyle.Render("  — Optional restrictions (applied when syncing credentials) —") + "\n\n")
+	b.WriteString(fmt.Sprintf("  %s %s\n", label("Restrict to regions (comma-sep, empty = no restriction):", awsFocusRegions), m.awsRegions.View()))
+	b.WriteString(statusStyle.Render("    Generates an aws:RequestedRegion condition policy. Requires a role ARN (above) to take effect.") + "\n\n")
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("Region (written to profile):", awsFocusRegion), m.awsRegion.View()))
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("Session policy (inline JSON — narrows resource/action access):", awsFocusSessionPolicy), m.awsSessionPolicy.View()))
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("Duration seconds (900–43200):", awsFocusDuration), m.awsDuration.View()))
