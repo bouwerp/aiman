@@ -44,46 +44,40 @@ Aiman automates the entire development workflow:
 
 ## 🛠 Installation
 
-### Quick Install
+### Quick Install (recommended)
 
-The installer automatically downloads the correct pre-built binary for your platform (macOS Intel/ARM, Linux amd64/arm64, Windows). If no pre-built binary is available, it falls back to building from source.
+The installer downloads the correct pre-built binary for your platform, installs it to `~/.local/bin`, and ensures that directory is on your `PATH`. No `sudo` required.
 
 ```bash
-# Download and run the installer
 curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash
+```
 
-# Or install to a custom location
+To update, run the same command — it overwrites the existing binary with the latest release.
+
+**Options:**
+
+```bash
+# Install to a custom directory
 curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --prefix ~/bin
 
-# Or install for current user only
-curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --user
+# Install system-wide (requires sudo)
+curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --system
 ```
+
+If no pre-built binary is available for your platform, the installer falls back to building from source (requires Go 1.26+).
 
 **Supported Platforms:**
 - macOS (Intel & Apple Silicon)
 - Linux (amd64 & arm64)
 - Windows (amd64)
 
-### Update
-
-```bash
-# Update to the latest version
-./scripts/update.sh
-
-# Or force update even if on latest version
-./scripts/update.sh --force
-```
-
 ### Manual Build
 
 ```bash
-# Clone and build
 git clone git@github.com:bouwerp/aiman.git
 cd aiman
 go build -o aiman ./cmd/aiman
-
-# Install to PATH
-sudo mv aiman /usr/local/bin/
+mv aiman ~/.local/bin/
 ```
 
 ## 📋 Prerequisites
@@ -344,12 +338,16 @@ Aiman follows **Clean Architecture** principles:
 - [x] VS Code integration
 - [x] SQLite persistence for sessions
 - [x] JIRA-driven initial prompt injection (auto-generates `.aiman_task.md` and seeds agent with task context)
+- [x] Skill injection system
+- [x] Claude Code integration
+- [x] Gemini CLI integration
+- [x] GitHub Copilot CLI support
+- [x] OpenCode integration
+- [x] Cursor integration
+- [x] AWS credential delegation to remotes
+- [x] Session tunnel management (local port forwarding)
 - [ ] Git intelligence panel
 - [ ] MOSH support
-- [ ] Skill injection system
-- [ ] Claude Code integration
-- [ ] Gemini CLI integration
-- [ ] GitHub Copilot CLI support
 
 ## 🔧 Development
 
@@ -362,7 +360,6 @@ Aiman follows **Clean Architecture** principles:
 ### Building from Source
 
 ```bash
-# Clone the repository
 git clone https://github.com/bouwerp/aiman.git
 cd aiman
 
