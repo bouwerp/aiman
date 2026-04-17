@@ -5,7 +5,7 @@ set -e
 # Detects architecture and installs the app
 
 REPO_URL="https://github.com/bouwerp/aiman"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="aiman"
 GITHUB_API="https://api.github.com/repos/bouwerp/aiman/releases/latest"
 
@@ -204,7 +204,10 @@ build_binary() {
 # Install binary
 install_binary() {
     echo "Installing aiman to $INSTALL_DIR..."
-    
+
+    # Ensure install directory exists
+    mkdir -p "$INSTALL_DIR"
+
     # Check if we need sudo
     if [ -w "$INSTALL_DIR" ]; then
         mv "${BINARY_NAME}" "$INSTALL_DIR/"
@@ -212,22 +215,66 @@ install_binary() {
         echo -e "${YELLOW}Requesting sudo access to install to $INSTALL_DIR${NC}"
         sudo mv "${BINARY_NAME}" "$INSTALL_DIR/"
     fi
-    
+
     chmod +x "$INSTALL_DIR/$BINARY_NAME"
-    
+
+    # Ensure INSTALL_DIR is on PATH, adding a line to the shell profile if needed
+    ensure_path
+
     # Verify installation
-    if command -v aiman &> /dev/null; then
+    if command -v aiman &> /dev/null || [ -x "$INSTALL_DIR/$BINARY_NAME" ]; then
         echo -e "${GREEN}Installation successful!${NC}"
         echo ""
-        echo "aiman is now installed at: $(which aiman)"
+        echo "aiman is now installed at: $INSTALL_DIR/$BINARY_NAME"
+        echo ""
+        INSTALLED_VERSION=$("$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null || echo "unknown")
+        echo "Version: $INSTALLED_VERSION"
         echo ""
         echo "Next steps:"
         echo "  1. Run 'aiman init' to configure JIRA and remote servers"
         echo "  2. Run 'aiman' to start the TUI"
     else
-        echo -e "${YELLOW}Warning: aiman was installed but is not in your PATH${NC}"
-        echo "You may need to add $INSTALL_DIR to your PATH"
+        echo -e "${YELLOW}Warning: aiman was installed but could not be verified${NC}"
+        echo "Binary location: $INSTALL_DIR/$BINARY_NAME"
     fi
+}
+
+# Ensure INSTALL_DIR is on the user's PATH, appending to the shell profile if not.
+ensure_path() {
+    case ":$PATH:" in
+        *":$INSTALL_DIR:"*) return ;;  # already on PATH
+    esac
+
+    # Determine the shell profile to update
+    SHELL_NAME=$(basename "${SHELL:-/bin/bash}")
+    case "$SHELL_NAME" in
+        zsh)  PROFILE="$HOME/.zshrc" ;;
+        bash)
+            # Prefer .bash_profile on macOS, .bashrc on Linux
+            if [ "$OS" = "darwin" ] && [ -f "$HOME/.bash_profile" ]; then
+                PROFILE="$HOME/.bash_profile"
+            else
+                PROFILE="$HOME/.bashrc"
+            fi
+            ;;
+        *)    PROFILE="$HOME/.profile" ;;
+    esac
+
+    PATH_LINE="export PATH=\"\$PATH:$INSTALL_DIR\""
+
+    # Don't duplicate if the line already exists in the file
+    if [ -f "$PROFILE" ] && grep -qF "$INSTALL_DIR" "$PROFILE" 2>/dev/null; then
+        return
+    fi
+
+    echo "" >> "$PROFILE"
+    echo "# Added by aiman installer" >> "$PROFILE"
+    echo "$PATH_LINE" >> "$PROFILE"
+    echo -e "${GREEN}Added $INSTALL_DIR to PATH in $PROFILE${NC}"
+    echo -e "${YELLOW}Restart your shell or run: source $PROFILE${NC}"
+
+    # Make it available in the current session too
+    export PATH="$PATH:$INSTALL_DIR"
 }
 
 # Setup config directory
@@ -283,16 +330,16 @@ while [[ $# -gt 0 ]]; do
             INSTALL_DIR="$2"
             shift 2
             ;;
-        --user)
-            INSTALL_DIR="$HOME/.local/bin"
+        --system)
+            INSTALL_DIR="/usr/local/bin"
             shift
             ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --prefix DIR    Install to custom directory (default: /usr/local/bin)"
-            echo "  --user          Install to user's home directory (~/.local/bin)"
+            echo "  --prefix DIR    Install to custom directory (default: ~/.local/bin)"
+            echo "  --system        Install to /usr/local/bin (requires sudo)"
             echo "  -h, --help      Show this help message"
             exit 0
             ;;
