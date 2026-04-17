@@ -335,14 +335,25 @@ func TestWriteTaskFile_Content(t *testing.T) {
 
 	expected := []string{
 		"DO NOT COMMIT",
-		"Aiman adds .aiman_task.md",
-		"Do not commit this file to version control",
-		"# DATA-7: Optimize query performance",
+		"Do not commit this file",
+		"## DATA-7: Optimize query performance",
 		"**Status:** TODO",
 		"**Assignee:** alice",
-		"## Description",
+		"### Description",
 		"dashboard queries are slow",
 		"add indexes",
+		// Working guidelines sections
+		"# Working Guidelines",
+		"## Workflow",
+		"## Engineering Principles",
+		"## Guardrails",
+		"## Communication",
+		"Write tests first",
+		"TDD",
+		"SOLID",
+		"DDD",
+		"Simplicity over cleverness",
+		"Stay on scope",
 	}
 
 	for _, s := range expected {
