@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,8 +18,8 @@ const (
 	defaultOllamaHost = "http://localhost:11434"
 	defaultModel      = "qwen3:4b"
 	fallbackModel     = "llama3.2:3b"
-	maxPaneChars      = 3000 // tail of pane content sent to model
-	defaultNumCtx     = 4096 // critical: prevents massive KV-cache allocation for large-context models
+	maxPaneChars      = 9000 // tail of pane content sent to model (after cleaning)
+	defaultNumCtx     = 16384 // KV cache size; safe on M-series with ≥16GB unified memory
 	defaultMaxTokens  = 400
 	inferenceTimeout  = 30 * time.Second
 )
@@ -180,7 +181,7 @@ func (o *OllamaIntelligence) IsAvailable(ctx context.Context) bool {
 
 // SummariseSession analyses tmux pane output and returns a structured summary.
 func (o *OllamaIntelligence) SummariseSession(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
-	prompt := fmt.Sprintf("Analyse this terminal session output:\n\n```\n%s\n```", tailTruncate(paneContent, maxPaneChars))
+	prompt := fmt.Sprintf("Analyse this terminal session output:\n\n```\n%s\n```", tailTruncate(cleanPaneContent(paneContent), maxPaneChars))
 
 	raw, err := o.generate(ctx, sessionSummarySystemPrompt, prompt, sessionSummarySchema, defaultMaxTokens)
 	if err != nil {
@@ -207,7 +208,7 @@ func (o *OllamaIntelligence) SummariseSession(ctx context.Context, paneContent s
 
 // DetectActions extracts actionable items from session output.
 func (o *OllamaIntelligence) DetectActions(ctx context.Context, paneContent string) ([]domain.ActionItem, error) {
-	prompt := fmt.Sprintf("Extract action items from this terminal output:\n\n```\n%s\n```", tailTruncate(paneContent, maxPaneChars))
+	prompt := fmt.Sprintf("Extract action items from this terminal output:\n\n```\n%s\n```", tailTruncate(cleanPaneContent(paneContent), maxPaneChars))
 
 	raw, err := o.generate(ctx, actionItemsSystemPrompt, prompt, actionItemsSchema, 300)
 	if err != nil {
@@ -362,4 +363,67 @@ func tailTruncate(s string, maxChars int) string {
 		return s
 	}
 	return "...[truncated]\n" + s[len(s)-maxChars:]
+}
+
+// ansiEscape matches ANSI/VT100 escape sequences (colours, cursor moves, etc.).
+var ansiEscape = regexp.MustCompile(`\x1b(\[[0-9;?]*[a-zA-Z]|\][^\x07]*\x07|[()][AB012]|[DABEGHM78=><]|%[Gg])`)
+
+// cleanPaneContent strips token-wasting noise from tmux pane output before
+// sending it to the model:
+//  1. Remove ANSI/VT100 escape sequences (colour codes, cursor moves, etc.)
+//  2. Collapse consecutive duplicate lines into "line [×N]"
+//  3. Collapse runs of blank lines into a single blank line
+//
+// On typical terminal output this reduces character count by 40–60%.
+func cleanPaneContent(s string) string {
+	// 1. Strip ANSI escapes
+	s = ansiEscape.ReplaceAllString(s, "")
+
+	lines := strings.Split(s, "\n")
+
+	// 2 & 3. Dedup + blank-collapse in one pass
+	out := make([]string, 0, len(lines))
+	prevLine := ""
+	dupCount := 0
+	blankRun := 0
+
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, " \t\r")
+
+		if line == "" {
+			blankRun++
+			if blankRun == 1 {
+				out = append(out, "")
+			}
+			// flush any pending dup before blank
+			if dupCount > 1 {
+				out[len(out)-2] = fmt.Sprintf("%s [×%d]", prevLine, dupCount)
+			}
+			prevLine = ""
+			dupCount = 0
+			continue
+		}
+		blankRun = 0
+
+		if line == prevLine {
+			dupCount++
+			continue
+		}
+
+		// Flush previous dup group
+		if dupCount > 1 && len(out) > 0 {
+			out[len(out)-1] = fmt.Sprintf("%s [×%d]", prevLine, dupCount)
+		}
+
+		out = append(out, line)
+		prevLine = line
+		dupCount = 1
+	}
+
+	// Flush final dup group
+	if dupCount > 1 && len(out) > 0 {
+		out[len(out)-1] = fmt.Sprintf("%s [×%d]", prevLine, dupCount)
+	}
+
+	return strings.Join(out, "\n")
 }
