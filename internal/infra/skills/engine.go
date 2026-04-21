@@ -138,12 +138,12 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 // via tmux send-keys.
 const initialPrompt = `Read .aiman_task.md — it contains the task, acceptance criteria, and your working guidelines for this session. Start by presenting your implementation plan.`
 
-func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue, snapshot *domain.SessionSnapshot) (domain.PreparedSession, error) {
 	name := strings.ToLower(agent.Name)
 
 	// Write JIRA task file if an issue is provided.
 	if issue != nil {
-		if err := writeTaskFile(ctx, remote, worktreePath, issue); err != nil {
+		if err := writeTaskFile(ctx, remote, worktreePath, issue, snapshot); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to write task file: %w", err)
 		}
 	}
@@ -209,7 +209,7 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 // .aiman_task.md in the worktree. The agent's initial prompt tells it to
 // read this file, so all substantive instructions live here rather than in
 // the tmux send-keys string.
-func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, issue *domain.Issue) error {
+func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, issue *domain.Issue, snapshot *domain.SessionSnapshot) error {
 	var sb strings.Builder
 
 	// --- Housekeeping notice ---
@@ -271,6 +271,25 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 	sb.WriteString("- When making a design decision with trade-offs, briefly explain the options and why you chose the one you did.\n")
 	sb.WriteString("- If the task description is ambiguous or incomplete, state your interpretation and assumptions before proceeding.\n")
 	sb.WriteString("- If you get stuck or discover a blocker, explain what you tried and what went wrong rather than silently switching approaches.\n")
+
+	// --- Prior session context ---
+	if snapshot != nil && (snapshot.Summary != "" || len(snapshot.NextSteps) > 0) {
+		sb.WriteString("\n\n---\n\n")
+		sb.WriteString("# Prior Session Context\n\n")
+		sb.WriteString(fmt.Sprintf("_Captured on %s_\n\n", snapshot.CreatedAt.Format("2006-01-02 15:04")))
+		if snapshot.Summary != "" {
+			sb.WriteString("## What was done\n\n")
+			sb.WriteString(snapshot.Summary + "\n\n")
+		}
+		if len(snapshot.NextSteps) > 0 {
+			sb.WriteString("## Next steps\n\n")
+			for _, s := range snapshot.NextSteps {
+				sb.WriteString("- " + s + "\n")
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("> Continue from where the previous session left off. Review the above, then present your updated plan before writing code.\n")
+	}
 
 	taskPath := filepath.Join(worktreePath, ".aiman_task.md")
 	return remote.WriteFile(ctx, taskPath, []byte(sb.String()))

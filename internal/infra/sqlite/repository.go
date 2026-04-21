@@ -52,6 +52,25 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN working_directory TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN tunnels_json TEXT")
 
+	snapQuery := `
+	CREATE TABLE IF NOT EXISTS session_snapshots (
+		id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		issue_key TEXT,
+		branch TEXT,
+		repo_name TEXT,
+		agent_name TEXT,
+		summary TEXT,
+		next_steps_json TEXT,
+		agent_state TEXT,
+		pane_content TEXT,
+		injected_at DATETIME,
+		created_at DATETIME NOT NULL
+	);`
+	if _, err := db.Exec(snapQuery); err != nil {
+		return nil, fmt.Errorf("failed to create session_snapshots table: %w", err)
+	}
+
 	return &Repository{
 		db: db,
 	}, nil
@@ -185,4 +204,129 @@ func (r *Repository) Delete(ctx context.Context, id string) error {
 
 func (r *Repository) Close() error {
 	return r.db.Close()
+}
+
+// SaveSnapshot creates or replaces a session snapshot.
+func (r *Repository) SaveSnapshot(ctx context.Context, s *domain.SessionSnapshot) error {
+	stepsJSON, err := json.Marshal(s.NextSteps)
+	if err != nil {
+		return fmt.Errorf("failed to marshal next_steps: %w", err)
+	}
+	var injectedAt *time.Time
+	if s.InjectedAt != nil {
+		injectedAt = s.InjectedAt
+	}
+	query := `
+	INSERT OR REPLACE INTO session_snapshots
+		(id, session_id, issue_key, branch, repo_name, agent_name, summary, next_steps_json, agent_state, pane_content, injected_at, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+	_, err = r.db.ExecContext(ctx, query,
+		s.ID, s.SessionID, s.IssueKey, s.Branch, s.RepoName, s.AgentName,
+		s.Summary, string(stepsJSON), string(s.AgentState), s.PaneContent,
+		injectedAt, s.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save snapshot: %w", err)
+	}
+	return nil
+}
+
+// GetLatestSnapshot returns the most recent snapshot for a session, or nil.
+func (r *Repository) GetLatestSnapshot(ctx context.Context, sessionID string) (*domain.SessionSnapshot, error) {
+	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
+	          FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC LIMIT 1;`
+	row := r.db.QueryRowContext(ctx, query, sessionID)
+	s, err := scanSnapshot(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get latest snapshot: %w", err)
+	}
+	return s, nil
+}
+
+// ListSnapshots returns all snapshots for a session, newest first.
+func (r *Repository) ListSnapshots(ctx context.Context, sessionID string) ([]domain.SessionSnapshot, error) {
+	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
+	          FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC;`
+	rows, err := r.db.QueryContext(ctx, query, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list snapshots: %w", err)
+	}
+	defer rows.Close()
+	return scanSnapshots(rows)
+}
+
+// ListAllSnapshots returns all snapshots across sessions, newest first.
+func (r *Repository) ListAllSnapshots(ctx context.Context) ([]domain.SessionSnapshot, error) {
+	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
+	          FROM session_snapshots ORDER BY created_at DESC;`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list all snapshots: %w", err)
+	}
+	defer rows.Close()
+	return scanSnapshots(rows)
+}
+
+// MarkSnapshotInjected records the time a snapshot was injected for resume.
+func (r *Repository) MarkSnapshotInjected(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE session_snapshots SET injected_at = ? WHERE id = ?;", time.Now(), id)
+	if err != nil {
+		return fmt.Errorf("failed to mark snapshot injected: %w", err)
+	}
+	return nil
+}
+
+// DeleteSnapshot removes a snapshot by ID.
+func (r *Repository) DeleteSnapshot(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM session_snapshots WHERE id = ?;", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete snapshot: %w", err)
+	}
+	return nil
+}
+
+type snapshotScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSnapshot(row snapshotScanner) (*domain.SessionSnapshot, error) {
+	var s domain.SessionSnapshot
+	var stepsJSON string
+	var injectedAt sql.NullTime
+	var createdAt sql.NullTime
+	err := row.Scan(
+		&s.ID, &s.SessionID, &s.IssueKey, &s.Branch, &s.RepoName, &s.AgentName,
+		&s.Summary, &stepsJSON, &s.AgentState, &s.PaneContent, &injectedAt, &createdAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if injectedAt.Valid {
+		t := injectedAt.Time
+		s.InjectedAt = &t
+	}
+	if createdAt.Valid {
+		s.CreatedAt = createdAt.Time
+	}
+	if stepsJSON != "" {
+		if err := json.Unmarshal([]byte(stepsJSON), &s.NextSteps); err != nil {
+			s.NextSteps = nil
+		}
+	}
+	return &s, nil
+}
+
+func scanSnapshots(rows *sql.Rows) ([]domain.SessionSnapshot, error) {
+	var result []domain.SessionSnapshot
+	for rows.Next() {
+		s, err := scanSnapshot(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan snapshot: %w", err)
+		}
+		result = append(result, *s)
+	}
+	return result, rows.Err()
 }

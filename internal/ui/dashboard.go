@@ -298,9 +298,12 @@ type Model struct {
 	tunnelInput            textinput.Model
 	tunnelError            string
 	intelligence           domain.IntelligenceProvider
+	snapshotManager        *usecase.SnapshotManager
 	aiSummary              map[string]*domain.SessionSummary // keyed by TmuxSession
 	aiLoading              bool
 	aiError                string
+	snapshotToast          string
+	snapshotToastError     bool
 }
 
 func remoteNameForHost(cfg *config.Config, host string) string {
@@ -337,7 +340,7 @@ func (m *Model) applyRemoteFilter() {
 	}
 }
 
-func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager, intelligence domain.IntelligenceProvider, initialLogs ...string) *Model {
+func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager, intelligence domain.IntelligenceProvider, snapshotManager *usecase.SnapshotManager, initialLogs ...string) *Model {
 	items := make([]list.Item, len(initialSessions))
 	for i, s := range initialSessions {
 		items[i] = item{session: s, remoteName: remoteNameForHost(cfg, s.RemoteHost)}
@@ -360,6 +363,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G/end", "jump preview to latest")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "AI insight")),
+			key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "save snapshot")),
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
@@ -387,26 +391,27 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		PaddingTop(1)
 
 	model := &Model{
-		cfg:           cfg,
-		db:            db,
-		flowManager:   flowManager,
-		state:         viewStateMain,
-		panelMode:     panelModePreview,
-		list:          l,
-		menu:          m,
-		remotes:       NewRemotesModel(cfg),
-		setup:         NewSetupModel(cfg),
-		gitSetup:      NewGitSetupModel(cfg),
-		generalSetup:  NewGeneralSetupModel(cfg),
-		aiSetup:       NewAISetupModel(cfg),
-		doctorResults: doctorResults,
-		viewport:      vp,
-		firstLoad:     make(map[string]bool),
-		allSessions:   initialSessions,
-		mouseEnabled:  true,
-		tunnelList:    list.New(nil, list.NewDefaultDelegate(), 0, 0),
-		intelligence:  intelligence,
-		aiSummary:     make(map[string]*domain.SessionSummary),
+		cfg:             cfg,
+		db:              db,
+		flowManager:     flowManager,
+		state:           viewStateMain,
+		panelMode:       panelModePreview,
+		list:            l,
+		menu:            m,
+		remotes:         NewRemotesModel(cfg),
+		setup:           NewSetupModel(cfg),
+		gitSetup:        NewGitSetupModel(cfg),
+		generalSetup:    NewGeneralSetupModel(cfg),
+		aiSetup:         NewAISetupModel(cfg),
+		doctorResults:   doctorResults,
+		viewport:        vp,
+		firstLoad:       make(map[string]bool),
+		allSessions:     initialSessions,
+		mouseEnabled:    true,
+		tunnelList:      list.New(nil, list.NewDefaultDelegate(), 0, 0),
+		intelligence:    intelligence,
+		snapshotManager: snapshotManager,
+		aiSummary:       make(map[string]*domain.SessionSummary),
 	}
 	model.tunnelList.Title = "Session Tunnels"
 	model.provisionSpinner = spinner.New()
@@ -437,6 +442,15 @@ type aiSummaryMsg struct {
 	err     error
 }
 
+type snapshotSavedMsg struct {
+	snapshot *domain.SessionSnapshot
+	err      error
+}
+
+type snapshotToastMsg struct {
+	text    string
+	isError bool
+}
 type tmuxTerminalMsg struct {
 	stream io.ReadWriteCloser
 	err    error
@@ -699,6 +713,28 @@ func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, 
 		defer cancel()
 		summary, err := intel.SummariseSession(ctx, pane)
 		return aiSummaryMsg{session: session.TmuxSession, summary: summary, err: err}
+	}
+}
+
+// saveSnapshotCmd captures the tmux pane and saves an AI-summarised snapshot of the session.
+func saveSnapshotCmd(cfg *config.Config, snapMgr *usecase.SnapshotManager, session domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		if snapMgr == nil {
+			return snapshotSavedMsg{err: fmt.Errorf("snapshot manager unavailable")}
+		}
+		remote, ok := resolveRemote(cfg, session)
+		if !ok {
+			return snapshotSavedMsg{err: fmt.Errorf("no remote configured for session")}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		pane, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		if err != nil {
+			return snapshotSavedMsg{err: fmt.Errorf("capture pane: %w", err)}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		snap, err := snapMgr.SaveSnapshot(ctx, &session, pane)
+		return snapshotSavedMsg{snapshot: snap, err: err}
 	}
 }
 
@@ -2248,6 +2284,21 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.aiSummary[msg.session] = msg.summary
 			m.aiError = ""
 		}
+	case snapshotSavedMsg:
+		if msg.err != nil {
+			m.snapshotToast = fmt.Sprintf("❌ Snapshot failed: %v", msg.err)
+			m.snapshotToastError = true
+		} else {
+			m.snapshotToast = "📸 Snapshot saved"
+			m.snapshotToastError = false
+		}
+		// Clear toast after a short delay
+		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+			return snapshotToastMsg{text: "", isError: false}
+		})
+	case snapshotToastMsg:
+		m.snapshotToast = msg.text
+		m.snapshotToastError = msg.isError
 	case tea.KeyMsg:
 		m, cmd, handled := m.handleMainKeyMsg(msg)
 		if handled {
@@ -2650,6 +2701,14 @@ end tell`, cmd)
 			m.aiLoading = true
 			m.aiError = ""
 			return m, summariseSessionCmd(m.cfg, m.intelligence, s), true
+		}
+	}
+	if msg.String() == "ctrl+w" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			m.snapshotToast = "📸 Saving snapshot…"
+			m.snapshotToastError = false
+			return m, saveSnapshotCmd(m.cfg, m.snapshotManager, s), true
 		}
 	}
 	if msg.String() == "ctrl+k" {
@@ -3978,6 +4037,16 @@ func (m *Model) renderMainView() string {
 		// AI insight panel — shown below git status when available or loading
 		aiPanel := m.renderAIPanel(s, contentW)
 
+		// Snapshot toast
+		snapshotBar := ""
+		if m.snapshotToast != "" {
+			toastStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+			if m.snapshotToastError {
+				toastStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+			}
+			snapshotBar = "\n" + toastStyle.Render(m.snapshotToast) + "\n"
+		}
+
 		var outputPanel strings.Builder
 		outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
 		modeName := "Preview"
@@ -3992,7 +4061,7 @@ func (m *Model) renderMainView() string {
 			outputPanel.WriteString(m.viewport.View())
 		}
 
-		mainContent = infoPanel + aiPanel + outputPanel.String()
+		mainContent = infoPanel + aiPanel + snapshotBar + outputPanel.String()
 	} else {
 		mainContent = "\n\n  No session selected.\n  Press 'm' for Admin Menu."
 	}
@@ -4194,6 +4263,14 @@ func (m *Model) restartSession() tea.Cmd {
 		mutagenCmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession)
 		_ = mutagenCmd.Run()
 
+		// Load the latest snapshot for this session so the agent can resume context.
+		if m.snapshotManager != nil && m.sessionCfg.PriorSnapshot == nil {
+			if snap, err := m.snapshotManager.GetLatestSnapshot(ctx, s.ID); err == nil && snap != nil {
+				m.sessionCfg.PriorSnapshot = snap
+				_ = m.db.MarkSnapshotInjected(ctx, snap.ID)
+			}
+		}
+
 		// 3. Start tmux session and agent
 		agentCmd := m.sessionCfg.Agent.Command
 		var sendKeysPrompt string
@@ -4209,7 +4286,7 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 		if m.flowManager != nil && m.flowManager.SkillEngine != nil {
-			prepared, err := m.flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *m.sessionCfg.Agent, m.sessionCfg.Skills, m.sessionCfg.PromptFree, issueForPrompt)
+			prepared, err := m.flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *m.sessionCfg.Agent, m.sessionCfg.Skills, m.sessionCfg.PromptFree, issueForPrompt, m.sessionCfg.PriorSnapshot)
 			if err == nil {
 				agentCmd = prepared.Command
 				sendKeysPrompt = prepared.InitialPrompt

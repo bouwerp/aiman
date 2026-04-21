@@ -18,7 +18,7 @@ const (
 	defaultOllamaHost = "http://localhost:11434"
 	defaultModel      = "qwen3:4b"
 	fallbackModel     = "llama3.2:3b"
-	maxPaneChars      = 9000 // tail of pane content sent to model (after cleaning)
+	maxPaneChars      = 9000  // tail of pane content sent to model (after cleaning)
 	defaultNumCtx     = 16384 // KV cache size; safe on M-series with ≥16GB unified memory
 	defaultMaxTokens  = 400
 	inferenceTimeout  = 30 * time.Second

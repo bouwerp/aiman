@@ -72,7 +72,7 @@ func TestPrepareSession_ClaudeWithIssue_UsesSendKeys(t *testing.T) {
 
 	agent := domain.Agent{Name: "Claude Code", Command: "claude"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestPrepareSession_ClaudeWithoutIssue(t *testing.T) {
 
 	agent := domain.Agent{Name: "Claude Code", Command: "claude"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestPrepareSession_GeminiWithIssue_UsesSendKeys(t *testing.T) {
 
 	agent := domain.Agent{Name: "Gemini CLI", Command: "gemini"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestPrepareSession_CursorWithIssue_UsesSendKeys(t *testing.T) {
 
 	agent := domain.Agent{Name: "Cursor", Command: "cursor-agent"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestPrepareSession_OpenCodeWithIssue_UsesSendKeys(t *testing.T) {
 
 	agent := domain.Agent{Name: "OpenCode", Command: "opencode-cli"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestPrepareSession_CopilotPreservesLaunchCommand(t *testing.T) {
 
 	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestPrepareSession_CopilotWithIssue_IncludesInitialTaskPrompt(t *testing.T)
 	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
 	issue := &domain.Issue{Key: "PROJ-7", Summary: "Wire startup prompt"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestPrepareSession_GHCopilotWithIssue_WritesTaskAndPrompt(t *testing.T) {
 	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "gh copilot"}
 	issue := &domain.Issue{Key: "PROJ-8", Summary: "Seed prompt via gh copilot path"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestWriteTaskFile_Content(t *testing.T) {
 		Assignee:    "alice",
 	}
 
-	err := writeTaskFile(ctx, remote, "/work/repo", issue)
+	err := writeTaskFile(ctx, remote, "/work/repo", issue, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestWriteTaskFile_NoDescription(t *testing.T) {
 		Status:  domain.IssueStatusTodo,
 	}
 
-	err := writeTaskFile(ctx, remote, "/work/repo", issue)
+	err := writeTaskFile(ctx, remote, "/work/repo", issue, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -54,7 +54,7 @@ const (
 	awsFocusRoleName
 	awsFocusSource
 	awsFocusSync
-	awsFocusRegions      // comma-separated region restriction list (generates aws:RequestedRegion policy)
+	awsFocusRegions // comma-separated region restriction list (generates aws:RequestedRegion policy)
 	awsFocusRegion
 	awsFocusSessionPolicy
 	awsFocusDuration

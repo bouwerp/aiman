@@ -115,6 +115,14 @@ type SessionRepository interface {
 	List(ctx context.Context) ([]Session, error)
 	Delete(ctx context.Context, id string) error
 	Close() error
+
+	// Snapshot persistence
+	SaveSnapshot(ctx context.Context, s *SessionSnapshot) error
+	GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot, error)
+	ListSnapshots(ctx context.Context, sessionID string) ([]SessionSnapshot, error)
+	ListAllSnapshots(ctx context.Context) ([]SessionSnapshot, error)
+	MarkSnapshotInjected(ctx context.Context, id string) error
+	DeleteSnapshot(ctx context.Context, id string) error
 }
 
 // SessionConfig holds the configuration for creating a new session.
@@ -130,4 +138,8 @@ type SessionConfig struct {
 	ExistingBranch bool           // start from an existing remote branch instead of creating a new one
 	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
 	RemoteHost     string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
+	// PriorSnapshot is an optional snapshot from a previous session on the same branch/issue.
+	// When set, its summary and next steps are injected into the agent task file so the
+	// new session can continue from where the prior one left off.
+	PriorSnapshot *SessionSnapshot
 }

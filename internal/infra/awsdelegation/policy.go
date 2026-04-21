@@ -6,10 +6,10 @@ import (
 )
 
 type regionPolicyStatement struct {
-	Effect    string            `json:"Effect"`
-	Action    string            `json:"Action"`
-	Resource  string            `json:"Resource"`
-	Condition map[string]any    `json:"Condition"`
+	Effect    string         `json:"Effect"`
+	Action    string         `json:"Action"`
+	Resource  string         `json:"Resource"`
+	Condition map[string]any `json:"Condition"`
 }
 
 type regionPolicy struct {

@@ -42,5 +42,8 @@ type SkillEngine interface {
 	// It returns a PreparedSession containing the agent command and an optional
 	// initial prompt. If issue is non-nil, a task file (.aiman_task.md) is
 	// written to the worktree and the agent receives an initial prompt.
-	PrepareSession(ctx context.Context, remote RemoteExecutor, worktreePath string, agent Agent, selectedSkills []Skill, promptFree bool, issue *Issue) (PreparedSession, error)
+	// snapshot is an optional prior session snapshot; when non-nil its summary
+	// and next steps are injected as a "Prior Session Context" section in the
+	// task file so the agent can resume from where the last session left off.
+	PrepareSession(ctx context.Context, remote RemoteExecutor, worktreePath string, agent Agent, selectedSkills []Skill, promptFree bool, issue *Issue, snapshot *SessionSnapshot) (PreparedSession, error)
 }

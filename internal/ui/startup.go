@@ -16,38 +16,40 @@ import (
 )
 
 type StartupModel struct {
-	cfg           *config.Config
-	doctor        *usecase.Doctor
-	db            domain.SessionRepository
-	flowManager   *usecase.FlowManager
-	intelligence  domain.IntelligenceProvider
-	spinner       spinner.Model
-	loadingMsg    string
-	results       []usecase.CheckResult
-	sessions      []domain.Session
-	scannedHosts  map[string]bool
-	ready         bool
-	width, height int
-	checks        map[string]*usecase.CheckResult
-	discoveryDone bool
-	pending       int
+	cfg             *config.Config
+	doctor          *usecase.Doctor
+	db              domain.SessionRepository
+	flowManager     *usecase.FlowManager
+	intelligence    domain.IntelligenceProvider
+	snapshotManager *usecase.SnapshotManager
+	spinner         spinner.Model
+	loadingMsg      string
+	results         []usecase.CheckResult
+	sessions        []domain.Session
+	scannedHosts    map[string]bool
+	ready           bool
+	width, height   int
+	checks          map[string]*usecase.CheckResult
+	discoveryDone   bool
+	pending         int
 }
 
-func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor, db domain.SessionRepository, flowManager *usecase.FlowManager, intelligence domain.IntelligenceProvider) StartupModel {
+func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor, db domain.SessionRepository, flowManager *usecase.FlowManager, intelligence domain.IntelligenceProvider, snapshotManager *usecase.SnapshotManager) StartupModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	return StartupModel{
-		cfg:          cfg,
-		doctor:       doctor,
-		db:           db,
-		flowManager:  flowManager,
-		intelligence: intelligence,
-		spinner:      s,
-		loadingMsg:   "Initializing Aiman...",
-		checks:       make(map[string]*usecase.CheckResult),
-		pending:      4,
+		cfg:             cfg,
+		doctor:          doctor,
+		db:              db,
+		flowManager:     flowManager,
+		intelligence:    intelligence,
+		snapshotManager: snapshotManager,
+		spinner:         s,
+		loadingMsg:      "Initializing Aiman...",
+		checks:          make(map[string]*usecase.CheckResult),
+		pending:         4,
 	}
 }
 
@@ -258,7 +260,7 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			startupLogs = append(startupLogs, fmt.Sprintf("[startup] final: id=%s tmux=%s worktree=%s", s.ID, s.TmuxSession, s.WorktreePath))
 		}
 
-		mainModel := NewModel(m.cfg, m.results, m.sessions, m.db, m.flowManager, m.intelligence, startupLogs...)
+		mainModel := NewModel(m.cfg, m.results, m.sessions, m.db, m.flowManager, m.intelligence, m.snapshotManager, startupLogs...)
 		if m.width > 0 && m.height > 0 {
 			mainModel.SetSize(m.width, m.height)
 		}
