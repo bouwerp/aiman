@@ -60,16 +60,18 @@ func NewRepository(dbPath string) (*Repository, error) {
 		branch TEXT,
 		repo_name TEXT,
 		agent_name TEXT,
+		worktree_path TEXT,
 		summary TEXT,
 		next_steps_json TEXT,
 		agent_state TEXT,
-		pane_content TEXT,
+		pane_content BLOB,
 		injected_at DATETIME,
 		created_at DATETIME NOT NULL
 	);`
 	if _, err := db.Exec(snapQuery); err != nil {
 		return nil, fmt.Errorf("failed to create session_snapshots table: %w", err)
 	}
+	_, _ = db.Exec("ALTER TABLE session_snapshots ADD COLUMN worktree_path TEXT")
 
 	return &Repository{
 		db: db,
@@ -218,10 +220,10 @@ func (r *Repository) SaveSnapshot(ctx context.Context, s *domain.SessionSnapshot
 	}
 	query := `
 	INSERT OR REPLACE INTO session_snapshots
-		(id, session_id, issue_key, branch, repo_name, agent_name, summary, next_steps_json, agent_state, pane_content, injected_at, created_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		(id, session_id, issue_key, branch, repo_name, agent_name, worktree_path, summary, next_steps_json, agent_state, pane_content, injected_at, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	_, err = r.db.ExecContext(ctx, query,
-		s.ID, s.SessionID, s.IssueKey, s.Branch, s.RepoName, s.AgentName,
+		s.ID, s.SessionID, s.IssueKey, s.Branch, s.RepoName, s.AgentName, s.WorktreePath,
 		s.Summary, string(stepsJSON), string(s.AgentState), s.PaneContent,
 		injectedAt, s.CreatedAt,
 	)
@@ -233,7 +235,7 @@ func (r *Repository) SaveSnapshot(ctx context.Context, s *domain.SessionSnapshot
 
 // GetLatestSnapshot returns the most recent snapshot for a session, or nil.
 func (r *Repository) GetLatestSnapshot(ctx context.Context, sessionID string) (*domain.SessionSnapshot, error) {
-	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
+	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, worktree_path, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
 	          FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC LIMIT 1;`
 	row := r.db.QueryRowContext(ctx, query, sessionID)
 	s, err := scanSnapshot(row)
@@ -248,7 +250,7 @@ func (r *Repository) GetLatestSnapshot(ctx context.Context, sessionID string) (*
 
 // ListSnapshots returns all snapshots for a session, newest first.
 func (r *Repository) ListSnapshots(ctx context.Context, sessionID string) ([]domain.SessionSnapshot, error) {
-	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
+	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, worktree_path, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
 	          FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC;`
 	rows, err := r.db.QueryContext(ctx, query, sessionID)
 	if err != nil {
@@ -260,7 +262,7 @@ func (r *Repository) ListSnapshots(ctx context.Context, sessionID string) ([]dom
 
 // ListAllSnapshots returns all snapshots across sessions, newest first.
 func (r *Repository) ListAllSnapshots(ctx context.Context) ([]domain.SessionSnapshot, error) {
-	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
+	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, worktree_path, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
 	          FROM session_snapshots ORDER BY created_at DESC;`
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
@@ -298,7 +300,7 @@ func scanSnapshot(row snapshotScanner) (*domain.SessionSnapshot, error) {
 	var injectedAt sql.NullTime
 	var createdAt sql.NullTime
 	err := row.Scan(
-		&s.ID, &s.SessionID, &s.IssueKey, &s.Branch, &s.RepoName, &s.AgentName,
+		&s.ID, &s.SessionID, &s.IssueKey, &s.Branch, &s.RepoName, &s.AgentName, &s.WorktreePath,
 		&s.Summary, &stepsJSON, &s.AgentState, &s.PaneContent, &injectedAt, &createdAt,
 	)
 	if err != nil {

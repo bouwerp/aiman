@@ -15,8 +15,12 @@ type IntelligenceProvider interface {
 	// IsAvailable returns true if the backend is reachable and a suitable model is loaded.
 	IsAvailable(ctx context.Context) bool
 
-	// SummariseSession analyses tmux pane output and returns a structured summary
-	// with detected agent state and action items.
+	// SummariseBriefly produces a compact status summary for the session browser sidebar.
+	// Returns overview (1-2 sentences), agent state, and any immediate action items only.
+	SummariseBriefly(ctx context.Context, paneContent string) (*SessionSummary, error)
+
+	// SummariseSession produces a full structured summary for archiving.
+	// Returns overview, detail bullets, action items, next steps, and agent state.
 	SummariseSession(ctx context.Context, paneContent string) (*SessionSummary, error)
 
 	// DetectActions extracts actionable items from session output.
@@ -31,10 +35,17 @@ type IntelligenceProvider interface {
 
 // SessionSummary is the structured result of analysing a coding agent's tmux output.
 type SessionSummary struct {
-	// Summary is a concise description of what the agent has been doing (≤60 words).
+	// Summary is a single-sentence status used by the session browser sidebar.
 	Summary string `json:"summary"`
-	// Actions are concrete things requiring human attention.
+	// Overview is 2-4 sentences for the archive preview, each as a separate element
+	// so the UI can render them cleanly without mid-sentence line-wrapping.
+	Overview []string `json:"overview"`
+	// Details are specific bullet points: files changed, commands run, errors seen, test results, etc.
+	Details []string `json:"details"`
+	// Actions are concrete things requiring human attention right now.
 	Actions []string `json:"actions"`
+	// NextSteps are outstanding tasks the agent still needs to complete.
+	NextSteps []string `json:"next_steps"`
 	// AgentState describes the current agent activity level.
 	AgentState AgentState `json:"agent_state"`
 }

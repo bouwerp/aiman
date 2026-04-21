@@ -17,6 +17,7 @@ type SummaryModel struct {
 	directory     string
 	agent         *domain.Agent
 	promptFree    bool
+	adHoc         bool
 	confirmed     bool
 	focusIndex    int
 	inputs        []textinput.Model
@@ -34,6 +35,15 @@ func NewSummaryModel(issueKey, branch string, repo domain.Repo, directory string
 	}
 
 	return m
+}
+
+func NewAdHocSummaryModel(label string) SummaryModel {
+	return SummaryModel{
+		branch:     label,
+		adHoc:      true,
+		promptFree: true,
+		inputs:     make([]textinput.Model, 0),
+	}
 }
 
 func (m SummaryModel) Init() tea.Cmd {
@@ -87,36 +97,46 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m SummaryModel) View() string {
 	var b strings.Builder
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 
-	b.WriteString(activeStyle.Render("Session Summary") + "\n\n")
-
-	// Issue
-	if m.issueKey != "" {
-		b.WriteString(fmt.Sprintf("%-15s %s\n", "Issue:", successStyle.Render(m.issueKey)))
+	if m.adHoc {
+		b.WriteString(activeStyle.Render("Ad-hoc Session") + "\n\n")
+		label := m.branch
+		if label == "" {
+			label = muted.Render("(auto-generated)")
+		}
+		b.WriteString(fmt.Sprintf("%-15s %s\n", "Label:", label))
 	} else {
-		b.WriteString(fmt.Sprintf("%-15s %s\n", "Issue:", failStyle.Render("None")))
-	}
+		b.WriteString(activeStyle.Render("Session Summary") + "\n\n")
 
-	// Branch
-	if m.branch != "" {
-		b.WriteString(fmt.Sprintf("%-15s %s\n", "Branch:", m.branch))
-	} else {
-		b.WriteString(fmt.Sprintf("%-15s %s\n", "Branch:", failStyle.Render("None")))
-	}
+		// Issue
+		if m.issueKey != "" {
+			b.WriteString(fmt.Sprintf("%-15s %s\n", "Issue:", successStyle.Render(m.issueKey)))
+		} else {
+			b.WriteString(fmt.Sprintf("%-15s %s\n", "Issue:", failStyle.Render("None")))
+		}
 
-	// Repository
-	if m.repo.Name != "" {
-		b.WriteString(fmt.Sprintf("%-15s %s\n", "Repository:", m.repo.Name))
-	} else {
-		b.WriteString(fmt.Sprintf("%-15s %s\n", "Repository:", failStyle.Render("None")))
-	}
+		// Branch
+		if m.branch != "" {
+			b.WriteString(fmt.Sprintf("%-15s %s\n", "Branch:", m.branch))
+		} else {
+			b.WriteString(fmt.Sprintf("%-15s %s\n", "Branch:", failStyle.Render("None")))
+		}
 
-	// Directory
-	dir := m.directory
-	if dir == "" {
-		dir = "."
+		// Repository
+		if m.repo.Name != "" {
+			b.WriteString(fmt.Sprintf("%-15s %s\n", "Repository:", m.repo.Name))
+		} else {
+			b.WriteString(fmt.Sprintf("%-15s %s\n", "Repository:", failStyle.Render("None")))
+		}
+
+		// Directory
+		dir := m.directory
+		if dir == "" {
+			dir = "."
+		}
+		b.WriteString(fmt.Sprintf("%-15s %s\n", "Directory:", dir))
 	}
-	b.WriteString(fmt.Sprintf("%-15s %s\n", "Directory:", dir))
 
 	// Agent
 	if m.agent != nil {
@@ -125,12 +145,14 @@ func (m SummaryModel) View() string {
 		b.WriteString(fmt.Sprintf("%-15s %s\n", "Agent:", failStyle.Render("None selected")))
 	}
 
-	// Prompt Free
-	pfStatus := "Disabled"
-	if m.promptFree {
-		pfStatus = successStyle.Render("Enabled")
+	if !m.adHoc {
+		// Prompt Free
+		pfStatus := "Disabled"
+		if m.promptFree {
+			pfStatus = successStyle.Render("Enabled")
+		}
+		b.WriteString(fmt.Sprintf("%-15s %s\n", "Prompt Free:", pfStatus))
 	}
-	b.WriteString(fmt.Sprintf("%-15s %s\n", "Prompt Free:", pfStatus))
 
 	b.WriteString("\n")
 
@@ -146,7 +168,12 @@ func (m SummaryModel) View() string {
 		b.WriteString(buttonLabel + "\n")
 	}
 
-	b.WriteString("\n(enter to create, esc to go back, p to toggle prompt-free)\n")
+	hint := "(enter to create, esc to go back"
+	if !m.adHoc {
+		hint += ", p to toggle prompt-free"
+	}
+	hint += ")"
+	b.WriteString("\n" + hint + "\n")
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -173,5 +200,6 @@ func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 		Directory:  m.directory,
 		Agent:      m.agent,
 		PromptFree: m.promptFree,
+		AdHoc:      m.adHoc,
 	}
 }

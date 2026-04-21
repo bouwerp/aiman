@@ -18,6 +18,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Set via -ldflags at build time.
+var version = "dev"
+var buildTime = ""
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -79,6 +83,15 @@ func run() error {
 	// 6. Handle commands
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "--version", "-v", "version":
+			if buildTime != "" {
+				fmt.Printf("aiman %s (built %s)\n", version, buildTime)
+			} else {
+				fmt.Printf("aiman %s\n", version)
+			}
+			return nil
+		case "update":
+			return runUpdate(version)
 		case "init":
 			p := tea.NewProgram(ui.NewSetupModel(cfg), tea.WithAltScreen(), tea.WithMouseAllMotion())
 			if _, err := p.Run(); err != nil {

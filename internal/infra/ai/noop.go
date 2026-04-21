@@ -13,6 +13,10 @@ type NoopIntelligence struct{}
 
 func (n *NoopIntelligence) IsAvailable(_ context.Context) bool { return false }
 
+func (n *NoopIntelligence) SummariseBriefly(_ context.Context, _ string) (*domain.SessionSummary, error) {
+	return nil, domain.ErrIntelligenceUnavailable
+}
+
 func (n *NoopIntelligence) SummariseSession(_ context.Context, _ string) (*domain.SessionSummary, error) {
 	return nil, domain.ErrIntelligenceUnavailable
 }

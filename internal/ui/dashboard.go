@@ -21,6 +21,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/usecase"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -117,6 +118,8 @@ const (
 	viewStateGitSetup
 	viewStateGeneralSettings
 	viewStateAISettings
+	viewStateSnapshotBrowser
+	viewStateArchiveSession // sentinel: archive selected session from menu
 	viewStatePicker
 	viewStateVSCodeError
 	viewStateIssuePicker
@@ -133,6 +136,9 @@ const (
 	viewStateModePicker
 	viewStateRestartAgentPicker
 	viewStateRestartConfirm
+	viewStateSnapshotPreview
+	viewStateArchivePreview
+	viewStateArchiveProgress
 	viewStateChangeDirPicker
 	viewStateChangeDirConfirm
 	viewStateProvisioningRemotePicker
@@ -244,6 +250,7 @@ type Model struct {
 	gitSetup               GitSetupModel
 	generalSetup           GeneralSetupModel
 	aiSetup                AISetupModel
+	snapshotBrowser        SnapshotBrowserModel
 	picker                 RepoPickerModel
 	issuePicker            IssuePickerModel
 	branchInput            BranchInputModel
@@ -304,6 +311,37 @@ type Model struct {
 	aiError                string
 	snapshotToast          string
 	snapshotToastError     bool
+	priorSnapshotCandidate *domain.SessionSnapshot
+	archivePreview         *archivePreviewData
+	archivePreviewVP       viewport.Model
+	archiveSteps           []archiveStep
+	archiveStepIdx         int
+}
+
+// archivePreviewData holds the pre-computed data shown in the archive confirmation popup.
+type archivePreviewData struct {
+	session        domain.Session
+	summary        *domain.SessionSummary
+	rawPaneLen     int // chars captured from tmux (before cleaning)
+	cleanedPaneLen int // chars after pane.Clean() (before truncation)
+	compressedSize int // bytes of gzip-compressed cleaned pane
+	snapshot       *domain.SessionSnapshot
+}
+
+// archiveStep represents one step in the archive progress view.
+type archiveStep struct {
+	label string
+	done  bool
+	err   bool
+}
+
+// archiveStepMsg is sent from loadArchivePreviewCmd to advance the step indicator.
+type archiveStepMsg struct{ idx int }
+
+// archiveStepErrMsg signals that a step failed.
+type archiveStepErrMsg struct {
+	idx int
+	err error
 }
 
 func remoteNameForHost(cfg *config.Config, host string) string {
@@ -363,7 +401,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G/end", "jump preview to latest")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "AI insight")),
-			key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "save snapshot")),
+			key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "archive session")),
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
@@ -379,6 +417,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
+		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
 	m.Title = "Administrative Menu"
@@ -450,6 +489,10 @@ type snapshotSavedMsg struct {
 type snapshotToastMsg struct {
 	text    string
 	isError bool
+}
+
+type snapshotPreviewMsg struct {
+	snapshot *domain.SessionSnapshot // nil = no snapshot found
 }
 type tmuxTerminalMsg struct {
 	stream io.ReadWriteCloser
@@ -709,32 +752,131 @@ func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, 
 		if err != nil {
 			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("capture pane: %w", err)}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		summary, err := intel.SummariseSession(ctx, pane)
+		summary, err := intel.SummariseBriefly(ctx, pane)
 		return aiSummaryMsg{session: session.TmuxSession, summary: summary, err: err}
 	}
 }
 
-// saveSnapshotCmd captures the tmux pane and saves an AI-summarised snapshot of the session.
-func saveSnapshotCmd(cfg *config.Config, snapMgr *usecase.SnapshotManager, session domain.Session) tea.Cmd {
+// loadPriorSnapshotCmd looks up the latest snapshot for a session.
+// The result is delivered as snapshotPreviewMsg so the UI can show a preview.
+func loadPriorSnapshotCmd(snapMgr *usecase.SnapshotManager, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		if snapMgr == nil {
+			return snapshotPreviewMsg{snapshot: nil}
+		}
+		snap, err := snapMgr.GetLatestSnapshot(context.Background(), sessionID)
+		if err != nil || snap == nil {
+			return snapshotPreviewMsg{snapshot: nil}
+		}
+		return snapshotPreviewMsg{snapshot: snap}
+	}
+}
+
+// archivePreviewReadyMsg carries pre-computed archive preview data to the UI.
+type archivePreviewReadyMsg struct {
+	data *archivePreviewData
+	err  error
+}
+
+// archiveStepLabels are the human-readable labels for each archive step shown in the progress view.
+var archiveStepLabels = []string{
+	"Connecting to remote host",
+	"Capturing terminal session",
+	"Cleaning & compressing output",
+	"Generating AI summary",
+	"Ready for review",
+}
+
+// loadArchivePreviewCmd captures the pane, cleans it, measures the compressed
+// size, and asks the AI for a summary — but does NOT persist anything.
+// It sends archiveStepMsg messages as each step completes so the progress
+// view can update in real time.
+func loadArchivePreviewCmd(cfg *config.Config, snapMgr *usecase.SnapshotManager, session domain.Session) tea.Cmd {
+	return tea.Sequence(
+		// Step 0 — resolve remote (instant, but we still tick it so the UI starts in the right state)
+		func() tea.Msg { return archiveStepMsg{idx: 0} },
+		func() tea.Msg {
+			if snapMgr == nil {
+				return archiveStepErrMsg{idx: 0, err: fmt.Errorf("snapshot manager unavailable")}
+			}
+			if _, ok := resolveRemote(cfg, session); !ok {
+				return archiveStepErrMsg{idx: 0, err: fmt.Errorf("no remote configured for session")}
+			}
+			return archiveStepMsg{idx: 1} // step 0 done, start step 1
+		},
+		// Step 1 — capture pane
+		func() tea.Msg {
+			remote, _ := resolveRemote(cfg, session)
+			sshMgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+			rawPane, err := sshMgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+			if err != nil {
+				return archiveStepErrMsg{idx: 1, err: fmt.Errorf("capture pane: %w", err)}
+			}
+			return archivePaneCapturedMsg{rawPane: rawPane, rawPaneLen: len(rawPane)}
+		},
+	)
+}
+
+// archivePaneCapturedMsg carries the raw pane forward in the sequence.
+// The main Update uses this to fire the next steps.
+type archivePaneCapturedMsg struct {
+	rawPane    string
+	rawPaneLen int // len(rawPane) captured before passing along
+}
+
+// loadArchivePreviewContinueCmd runs steps 2–4 (clean/compress + AI summary)
+// after the pane has been captured. Called from the Update handler.
+func loadArchivePreviewContinueCmd(cfg *config.Config, snapMgr *usecase.SnapshotManager, session domain.Session, rawPane string, rawPaneLen int) tea.Cmd {
+	return tea.Sequence(
+		func() tea.Msg { return archiveStepMsg{idx: 2} }, // cleaning starts
+		func() tea.Msg {
+			// Step 2 is fast (CPU-only), so advance to step 3 when done
+			return archiveCleanedMsg{rawPane: rawPane, rawPaneLen: rawPaneLen}
+		},
+		func() tea.Msg { return archiveStepMsg{idx: 3} }, // AI summarise starts
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			snap, summary, compressedSize, err := snapMgr.PreviewSnapshot(ctx, &session, rawPane)
+			if err != nil {
+				return archiveStepErrMsg{idx: 3, err: err}
+			}
+			cleanedLen := len(pane.Clean(rawPane))
+			return archivePreviewReadyMsg{
+				data: &archivePreviewData{
+					session:        session,
+					summary:        summary,
+					rawPaneLen:     rawPaneLen,
+					cleanedPaneLen: cleanedLen,
+					compressedSize: compressedSize,
+					snapshot:       snap,
+				},
+			}
+		},
+	)
+}
+
+// archiveCleanedMsg is an internal progress step — not displayed but used to sequence commands.
+type archiveCleanedMsg struct {
+	rawPane    string
+	rawPaneLen int
+}
+
+// persistSnapshotCmd saves a pre-built snapshot to the database.
+func persistSnapshotCmd(snapMgr *usecase.SnapshotManager, snap *domain.SessionSnapshot) tea.Cmd {
 	return func() tea.Msg {
 		if snapMgr == nil {
 			return snapshotSavedMsg{err: fmt.Errorf("snapshot manager unavailable")}
 		}
-		remote, ok := resolveRemote(cfg, session)
-		if !ok {
-			return snapshotSavedMsg{err: fmt.Errorf("no remote configured for session")}
-		}
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		pane, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
-		if err != nil {
-			return snapshotSavedMsg{err: fmt.Errorf("capture pane: %w", err)}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		snap, err := snapMgr.SaveSnapshot(ctx, &session, pane)
-		return snapshotSavedMsg{snapshot: snap, err: err}
+		err := snapMgr.PersistSnapshot(ctx, snap)
+		if err != nil {
+			return snapshotSavedMsg{err: err}
+		}
+		return snapshotSavedMsg{snapshot: snap}
 	}
 }
 
@@ -1438,7 +1580,8 @@ func (m *Model) runTerminateStep(index int) error {
 	case 2: // Stop agent process (tmux kill already handles this)
 		return nil
 	case 3: // Remove git worktree
-		if s.WorktreePath == "" {
+		if s.WorktreePath == "" || s.RepoName == "" {
+			// Ad-hoc sessions have no worktree; skip removal.
 			return nil
 		}
 		remote, ok := resolveRemote(m.cfg, s)
@@ -1643,6 +1786,61 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Archive progress messages are handled globally so they reach the handler
+	// regardless of which sub-state is active during the pipeline.
+	switch msg := msg.(type) {
+	case archiveStepMsg:
+		if msg.idx < len(m.archiveSteps) {
+			if msg.idx > 0 {
+				m.archiveSteps[msg.idx-1].done = true
+			}
+			m.archiveStepIdx = msg.idx
+		}
+		return m, nil
+	case archiveStepErrMsg:
+		if msg.idx < len(m.archiveSteps) {
+			m.archiveSteps[msg.idx].err = true
+		}
+		m.snapshotToast = "❌ Archive failed: " + msg.err.Error()
+		m.snapshotToastError = true
+		m.state = viewStateMain
+		return m, nil
+	case archivePaneCapturedMsg:
+		if 1 < len(m.archiveSteps) {
+			m.archiveSteps[0].done = true
+			m.archiveStepIdx = 2
+		}
+		if m.archivePreview != nil {
+			sess := m.archivePreview.session
+			return m, loadArchivePreviewContinueCmd(m.cfg, m.snapshotManager, sess, msg.rawPane, msg.rawPaneLen)
+		}
+		return m, nil
+	case archiveCleanedMsg:
+		if 2 < len(m.archiveSteps) {
+			m.archiveSteps[1].done = true
+			m.archiveStepIdx = 3
+		}
+		return m, nil
+	case archivePreviewReadyMsg:
+		if msg.err != nil {
+			m.snapshotToast = "❌ Archive failed: " + msg.err.Error()
+			m.snapshotToastError = true
+			m.state = viewStateMain
+			return m, nil
+		}
+		for i := range m.archiveSteps {
+			m.archiveSteps[i].done = true
+		}
+		m.archivePreview = msg.data
+		dialogW := 76
+		inner := dialogW - 6
+		vpH := max(5, m.height-16) // 16 = border+padding+fixed header+footer lines
+		m.archivePreviewVP = viewport.New(inner, vpH)
+		m.archivePreviewVP.SetContent(buildArchivePreviewBody(msg.data, inner))
+		m.state = viewStateArchivePreview
+		return m, nil
+	}
+
 	switch m.state {
 	case viewStateMain:
 		return m.handleMainUpdate(msg)
@@ -1664,6 +1862,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case viewStateAISettings:
 		return m.handleAISetupUpdate(msg)
+
+	case viewStateSnapshotBrowser:
+		return m.handleSnapshotBrowserUpdate(msg)
 
 	case viewStateVSCodeError, viewStateError:
 		if _, ok := msg.(tea.KeyMsg); ok {
@@ -1691,6 +1892,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case viewStateRestartConfirm:
 		return m.handleRestartConfirmUpdate(msg)
+
+	case viewStateSnapshotPreview:
+		return m.handleSnapshotPreviewUpdate(msg)
+
+	case viewStateArchivePreview:
+		return m.handleArchivePreviewUpdate(msg)
+
+	case viewStateArchiveProgress:
+		return m.handleArchiveProgressUpdate(msg)
 
 	case viewStateChangeDirPicker:
 		return m.handleChangeDirPickerUpdate(msg)
@@ -1777,6 +1987,9 @@ func (m *Model) renderView() string {
 
 	case viewStateAISettings:
 		return m.aiSetup.View()
+
+	case viewStateSnapshotBrowser:
+		return docStyle.Render(m.snapshotBrowser.View())
 
 	case viewStateVSCodeError:
 		var b strings.Builder
@@ -2012,6 +2225,7 @@ func (m *Model) renderView() string {
 		b.WriteString(activeStyle.Render("[1]") + "  From JIRA Issue      — link session to a JIRA ticket\n")
 		b.WriteString(activeStyle.Render("[2]") + "  New Branch           — start with a custom branch name\n")
 		b.WriteString(activeStyle.Render("[3]") + "  Existing Branch      — check out an existing remote branch\n")
+		b.WriteString(activeStyle.Render("[4]") + "  Ad-hoc               — no git repo, no JIRA ticket\n")
 		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: cancel"))
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -2037,8 +2251,151 @@ func (m *Model) renderView() string {
 
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
 
+	case viewStateSnapshotPreview:
+		snap := m.priorSnapshotCandidate
+		dialogW := 72
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("📸 Prior Session Snapshot") + "\n\n")
+		if snap != nil {
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
+				fmt.Sprintf("Captured %s · %s", snap.CreatedAt.Format("2006-01-02 15:04"), snap.AgentName),
+			) + "\n\n")
+			if snap.Summary != "" {
+				b.WriteString(activeStyle.Render("What was done") + "\n")
+				wrapped := lipgloss.NewStyle().Width(dialogW - 6).Render(snap.Summary)
+				for _, l := range strings.Split(wrapped, "\n") {
+					b.WriteString("  " + l + "\n")
+				}
+				b.WriteString("\n")
+			}
+			if len(snap.NextSteps) > 0 {
+				b.WriteString(activeStyle.Render("Next steps") + "\n")
+				for _, s := range snap.NextSteps {
+					wrapped := lipgloss.NewStyle().Width(dialogW - 8).Render(s)
+					lines := strings.Split(wrapped, "\n")
+					b.WriteString("  • " + lines[0] + "\n")
+					for _, l := range lines[1:] {
+						b.WriteString("    " + l + "\n")
+					}
+				}
+				b.WriteString("\n")
+			}
+			if snap.InjectedAt != nil {
+				b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
+					fmt.Sprintf("Previously injected %s", snap.InjectedAt.Format("2006-01-02 15:04")),
+				) + "\n\n")
+			}
+		}
+		b.WriteString("Inject this context into the restarted session?\n\n")
+		b.WriteString(activeStyle.Render("[y]") + " Yes, inject context  " +
+			activeStyle.Render("[n]") + " Restart fresh  " +
+			activeStyle.Render("[esc]") + " Cancel")
+
+		dialog2 := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(1, 3).
+			Width(dialogW)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog2.Render(b.String()))
+
 	case viewStateChangeDirPicker:
 		return docStyle.Render(m.dirPicker.View())
+
+	case viewStateArchivePreview:
+		p := m.archivePreview
+		dialogW := 76
+		inner := dialogW - 6
+		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+
+		var header strings.Builder
+		header.WriteString(activeStyle.Render("📦 Archive Session") + "\n\n")
+		if p != nil {
+			meta := fmt.Sprintf("%s  ·  %s  ·  %s", p.session.TmuxSession, p.session.RepoName, p.session.AgentName)
+			if p.session.Branch != "" {
+				meta += "  ·  " + p.session.Branch
+			}
+			if p.session.WorktreePath != "" {
+				meta += "  ·  " + p.session.WorktreePath
+			}
+			header.WriteString(muted.Render(meta) + "\n")
+		}
+		header.WriteString(muted.Render(strings.Repeat("─", inner)) + "\n")
+
+		scrollPct := ""
+		if m.archivePreviewVP.TotalLineCount() > m.archivePreviewVP.Height {
+			pct := int(m.archivePreviewVP.ScrollPercent() * 100)
+			scrollPct = muted.Render(fmt.Sprintf(" (%d%%)", pct))
+		}
+
+		var footer strings.Builder
+		footer.WriteString(muted.Render(strings.Repeat("─", inner)) + "\n")
+		if p != nil {
+			var sizeStr string
+			switch {
+			case p.compressedSize >= 1024*1024:
+				sizeStr = fmt.Sprintf("%.1f MB", float64(p.compressedSize)/1024/1024)
+			case p.compressedSize >= 1024:
+				sizeStr = fmt.Sprintf("%.1f KB", float64(p.compressedSize)/1024)
+			default:
+				sizeStr = fmt.Sprintf("%d B", p.compressedSize)
+			}
+			rawKB := float64(p.rawPaneLen) / 1024
+			cleanedKB := float64(p.cleanedPaneLen) / 1024
+			footer.WriteString(muted.Render(fmt.Sprintf(
+				"%.1f KB raw  →  %.1f KB cleaned  →  %s compressed",
+				rawKB, cleanedKB, sizeStr,
+			)) + "\n\n")
+		}
+		footer.WriteString("Save this snapshot to the archive?\n\n")
+		footer.WriteString(activeStyle.Render("[enter]") + " Save  " +
+			activeStyle.Render("[esc]") + " Cancel" +
+			"  " + muted.Render("↑↓/pgup/pgdn: scroll") + scrollPct)
+
+		body := header.String() + m.archivePreviewVP.View() + "\n" + footer.String()
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(1, 3).
+			Width(dialogW)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(body))
+
+	case viewStateArchiveProgress:
+		dialogW := 60
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("📦 Archiving Session") + "\n\n")
+		if m.archivePreview != nil {
+			muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+			b.WriteString(muted.Render(fmt.Sprintf(
+				"%s  ·  %s", m.archivePreview.session.TmuxSession, m.archivePreview.session.RepoName,
+			)) + "\n\n")
+		}
+		checkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+		for i, step := range m.archiveSteps {
+			var prefix string
+			switch {
+			case step.err:
+				prefix = errStyle.Render("✗")
+			case step.done:
+				prefix = checkStyle.Render("✓")
+			case i == m.archiveStepIdx:
+				prefix = m.provisionSpinner.View()
+			default:
+				prefix = "○"
+			}
+			label := step.label
+			if i == m.archiveStepIdx && !step.done && !step.err {
+				label = lipgloss.NewStyle().Bold(true).Render(label)
+			} else if step.done {
+				label = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(label)
+			}
+			b.WriteString(fmt.Sprintf("  %s  %s\n", prefix, label))
+		}
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc to cancel"))
+
+		dialog2 := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(1, 3).
+			Width(dialogW)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog2.Render(b.String()))
 
 	case viewStateChangeDirConfirm:
 		var b strings.Builder
@@ -2299,6 +2656,35 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case snapshotToastMsg:
 		m.snapshotToast = msg.text
 		m.snapshotToastError = msg.isError
+	case snapshotPreviewMsg:
+		if msg.snapshot != nil {
+			// A prior snapshot exists — show the preview screen so the user can decide.
+			m.priorSnapshotCandidate = msg.snapshot
+			m.state = viewStateSnapshotPreview
+		} else {
+			// No snapshot — proceed directly to restart.
+			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, m.restartSession()
+		}
+	case snapshotBrowserLoadedMsg:
+		var sub tea.Model
+		var loadCmd tea.Cmd
+		sub, loadCmd = m.snapshotBrowser.Update(msg)
+		m.snapshotBrowser = sub.(SnapshotBrowserModel)
+		return m, loadCmd
+	case archivePreviewReadyMsg:
+		// Handled globally in Update() before state dispatch — should not reach here.
+		return m, nil
+	case archiveStepMsg:
+		return m, nil
+	case archiveStepErrMsg:
+		return m, nil
+	case archivePaneCapturedMsg:
+		return m, nil
+	case archiveCleanedMsg:
+		return m, nil
 	case tea.KeyMsg:
 		m, cmd, handled := m.handleMainKeyMsg(msg)
 		if handled {
@@ -2703,12 +3089,14 @@ end tell`, cmd)
 			return m, summariseSessionCmd(m.cfg, m.intelligence, s), true
 		}
 	}
-	if msg.String() == "ctrl+w" {
+	if msg.String() == "ctrl+a" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
-			m.snapshotToast = "📸 Saving snapshot…"
-			m.snapshotToastError = false
-			return m, saveSnapshotCmd(m.cfg, m.snapshotManager, s), true
+			m.archiveSteps = initArchiveSteps()
+			m.archiveStepIdx = 0
+			m.archivePreview = &archivePreviewData{session: s} // stash session early
+			m.state = viewStateArchiveProgress
+			return m, tea.Batch(loadArchivePreviewCmd(m.cfg, m.snapshotManager, s), m.provisionSpinner.Tick), true
 		}
 	}
 	if msg.String() == "ctrl+k" {
@@ -2768,6 +3156,23 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.aiSetup = NewAISetupModel(m.cfg)
 					m.state = i.action
 					return m, m.aiSetup.Init()
+				}
+				if i.action == viewStateSnapshotBrowser {
+					m.snapshotBrowser = NewSnapshotBrowserModel(m.width, m.height, m.snapshotManager)
+					m.state = i.action
+					return m, loadAllSnapshotsCmd(m.snapshotManager)
+				}
+				if i.action == viewStateArchiveSession {
+					// Go through the progress view, same as ctrl+a.
+					if sel := m.list.SelectedItem(); sel != nil {
+						s := sel.(item).session
+						m.archiveSteps = initArchiveSteps()
+						m.archiveStepIdx = 0
+						m.archivePreview = &archivePreviewData{session: s}
+						m.state = viewStateArchiveProgress
+						return m, tea.Batch(loadArchivePreviewCmd(m.cfg, m.snapshotManager, s), m.provisionSpinner.Tick)
+					}
+					return m, nil
 				}
 				m.state = i.action
 				return m, nil
@@ -3237,6 +3642,11 @@ func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateLoading
 			m.picker = NewRepoPickerModel(nil, &m.cfg.Git)
 			return m, m.fetchRepos()
+		case "4":
+			m.sessionCfg = domain.SessionConfig{AdHoc: true, PromptFree: true}
+			m.state = viewStateBranchInput
+			m.branchInput = NewAdHocLabelInputModel("")
+			return m, nil
 		}
 	}
 	return m, nil
@@ -3325,6 +3735,13 @@ func (m *Model) handleBranchInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.branchInput = subModel.(BranchInputModel)
 	if m.branchInput.Confirmed {
 		m.sessionCfg.Branch = m.branchInput.Value()
+		if m.sessionCfg.AdHoc {
+			// Skip repo picker entirely — go straight to agent selection.
+			m.loadingMsg = "Scanning available agents..."
+			m.loadingNext = viewStateAgentPicker
+			m.state = viewStateLoading
+			return m, m.fetchAgents()
+		}
 		m.loadingMsg = "Loading repositories..."
 		m.loadingNext = viewStateRepoPicker
 		m.state = viewStateLoading
@@ -3484,7 +3901,11 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
 		m.sessionCfg.PromptFree = true
-		m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
+		if m.sessionCfg.AdHoc {
+			m.summary = NewAdHocSummaryModel(m.sessionCfg.Branch)
+		} else {
+			m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
+		}
 		m.summary.SetAgent(m.sessionCfg.Agent)
 		m.summary.SetSize(m.width, m.height)
 		m.state = viewStateSummary
@@ -4200,10 +4621,9 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
-		m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
-		m.loadingNext = viewStateMain
-		m.state = viewStateLoading
-		return m, m.restartSession()
+		m.priorSnapshotCandidate = nil
+		// Check for a prior snapshot before restarting — let the user preview it.
+		return m, loadPriorSnapshotCmd(m.snapshotManager, m.restartingSession.ID)
 	}
 
 	return m, cmd
@@ -4262,14 +4682,6 @@ func (m *Model) restartSession() tea.Cmd {
 		// We ignore errors here because it might not exist
 		mutagenCmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession)
 		_ = mutagenCmd.Run()
-
-		// Load the latest snapshot for this session so the agent can resume context.
-		if m.snapshotManager != nil && m.sessionCfg.PriorSnapshot == nil {
-			if snap, err := m.snapshotManager.GetLatestSnapshot(ctx, s.ID); err == nil && snap != nil {
-				m.sessionCfg.PriorSnapshot = snap
-				_ = m.db.MarkSnapshotInjected(ctx, snap.ID)
-			}
-		}
 
 		// 3. Start tmux session and agent
 		agentCmd := m.sessionCfg.Agent.Command
@@ -4423,4 +4835,161 @@ func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) handleSnapshotPreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "y":
+			m.sessionCfg.PriorSnapshot = m.priorSnapshotCandidate
+			if m.priorSnapshotCandidate != nil {
+				_ = m.db.MarkSnapshotInjected(context.Background(), m.priorSnapshotCandidate.ID)
+			}
+			m.priorSnapshotCandidate = nil
+			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, m.restartSession()
+		case "n":
+			m.sessionCfg.PriorSnapshot = nil
+			m.priorSnapshotCandidate = nil
+			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, m.restartSession()
+		case "esc":
+			m.priorSnapshotCandidate = nil
+			m.restartingSession = nil
+			m.state = viewStateMain
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handleSnapshotBrowserUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		if km.String() == "esc" && !m.snapshotBrowser.showDetail {
+			m.state = viewStateMain
+			return m, nil
+		}
+	}
+	var sub tea.Model
+	var cmd tea.Cmd
+	sub, cmd = m.snapshotBrowser.Update(msg)
+	m.snapshotBrowser = sub.(SnapshotBrowserModel)
+	return m, cmd
+}
+
+func (m *Model) handleArchivePreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "enter":
+			p := m.archivePreview
+			m.archivePreview = nil
+			m.state = viewStateMain
+			if p != nil && p.snapshot != nil {
+				m.snapshotToast = "📸 Saving archive…"
+				m.snapshotToastError = false
+				return m, persistSnapshotCmd(m.snapshotManager, p.snapshot)
+			}
+			return m, nil
+		case "esc":
+			m.archivePreview = nil
+			m.state = viewStateMain
+			return m, nil
+		}
+	}
+	// Forward scroll events to the viewport.
+	var cmd tea.Cmd
+	m.archivePreviewVP, cmd = m.archivePreviewVP.Update(msg)
+	return m, cmd
+}
+
+// buildArchivePreviewBody renders the scrollable body of the archive preview dialog.
+func buildArchivePreviewBody(p *archivePreviewData, inner int) string {
+	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	bulletStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	wrapStyle := lipgloss.NewStyle().Width(inner - 4) // "  • " = 4 chars
+	sentWrap := lipgloss.NewStyle().Width(inner - 2)  // "  " indent = 2 chars
+
+	var b strings.Builder
+	if p == nil || p.summary == nil {
+		return ""
+	}
+
+	if len(p.summary.Overview) > 0 {
+		b.WriteString(sectionStyle.Render("Overview") + "\n")
+		for _, sentence := range p.summary.Overview {
+			for _, l := range strings.Split(sentWrap.Render(sentence), "\n") {
+				b.WriteString("  " + strings.TrimRight(l, " ") + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	if len(p.summary.Details) > 0 {
+		b.WriteString(sectionStyle.Render("Details") + "\n")
+		for _, d := range p.summary.Details {
+			lines := strings.Split(wrapStyle.Render(d), "\n")
+			b.WriteString("  " + bulletStyle.Render("•") + " " + strings.TrimRight(lines[0], " ") + "\n")
+			for _, l := range lines[1:] {
+				b.WriteString("    " + strings.TrimRight(l, " ") + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	if len(p.summary.Actions) > 0 {
+		b.WriteString(sectionStyle.Render("Needs Attention") + "\n")
+		for _, a := range p.summary.Actions {
+			lines := strings.Split(wrapStyle.Render(a), "\n")
+			b.WriteString("  " + warnStyle.Render("⚠") + " " + strings.TrimRight(lines[0], " ") + "\n")
+			for _, l := range lines[1:] {
+				b.WriteString("    " + strings.TrimRight(l, " ") + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	if len(p.summary.NextSteps) > 0 {
+		b.WriteString(sectionStyle.Render("Next Steps") + "\n")
+		for _, s := range p.summary.NextSteps {
+			lines := strings.Split(wrapStyle.Render(s), "\n")
+			b.WriteString("  " + bulletStyle.Render("→") + " " + strings.TrimRight(lines[0], " ") + "\n")
+			for _, l := range lines[1:] {
+				b.WriteString("    " + strings.TrimRight(l, " ") + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func initArchiveSteps() []archiveStep {
+	steps := make([]archiveStep, len(archiveStepLabels))
+	for i, l := range archiveStepLabels {
+		steps[i] = archiveStep{label: l}
+	}
+	return steps
+}
+
+func (m *Model) handleArchiveProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+switch msg := msg.(type) {
+case tea.KeyMsg:
+if msg.String() == "esc" || msg.String() == "ctrl+c" {
+m.archivePreview = nil
+m.archiveSteps = nil
+m.state = viewStateMain
+return m, nil
+}
+case spinner.TickMsg:
+var cmd tea.Cmd
+m.provisionSpinner, cmd = m.provisionSpinner.Update(msg)
+return m, cmd
+}
+// Forward all other msgs to main Update so step/ready messages are handled
+return m, nil
 }

@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/pane"
 )
 
 const (
@@ -20,8 +20,8 @@ const (
 	fallbackModel     = "llama3.2:3b"
 	maxPaneChars      = 9000  // tail of pane content sent to model (after cleaning)
 	defaultNumCtx     = 16384 // KV cache size; safe on M-series with ≥16GB unified memory
-	defaultMaxTokens  = 400
-	inferenceTimeout  = 30 * time.Second
+	defaultMaxTokens  = 1200
+	httpClientTimeout = 120 * time.Second // ceiling for individual HTTP requests to Ollama
 )
 
 // ollamaGenerateRequest is the payload for POST /api/generate.
@@ -51,14 +51,26 @@ type ollamaTagsResponse struct {
 
 // JSON schemas for structured output.
 var (
-	sessionSummarySchema = json.RawMessage(`{
+	sessionBriefSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
-    "summary":     {"type": "string"},
-    "actions":     {"type": "array", "items": {"type": "string"}},
+    "summary":    {"type": "string"},
+    "actions":    {"type": "array", "items": {"type": "string"}},
     "agent_state": {"type": "string", "enum": ["idle","working","waiting_input","errored","unknown"]}
   },
   "required": ["summary", "actions", "agent_state"]
+}`)
+
+	sessionSummarySchema = json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "overview":   {"type": "array", "items": {"type": "string"}},
+    "details":    {"type": "array", "items": {"type": "string"}},
+    "actions":    {"type": "array", "items": {"type": "string"}},
+    "next_steps": {"type": "array", "items": {"type": "string"}},
+    "agent_state": {"type": "string", "enum": ["idle","working","waiting_input","errored","unknown"]}
+  },
+  "required": ["overview", "details", "actions", "next_steps", "agent_state"]
 }`)
 
 	actionItemsSchema = json.RawMessage(`{
@@ -99,10 +111,17 @@ var (
 
 // System prompts for each use case.
 const (
-	sessionSummarySystemPrompt = `You are a terse technical assistant monitoring AI coding agent terminal sessions.
-Given tmux pane output, respond ONLY with valid JSON matching the schema.
-agent_state: "idle" (shell prompt shown, waiting), "working" (producing output), "waiting_input" (asking user a question), "errored" (error visible), "unknown".
-Keep summary under 60 words. Only list concrete action items in actions array.`
+	sessionBriefSystemPrompt = `You are monitoring an AI coding agent's tmux session. Respond ONLY with valid JSON.
+agent_state: idle|working|waiting_input|errored|unknown.
+summary: one sentence describing current status. Write in present participle, NO subject. NEVER start with "The agent", "It", or any noun/pronoun subject. WRONG: "The agent is running tests." RIGHT: "Running tests after fixing the auth middleware timeout." Include file names or error text if visible.
+actions: only items needing immediate human response (blocked on approval, unanswered question, unresolvable error). Empty array if none.`
+
+	sessionSummarySystemPrompt = `You are monitoring an AI coding agent's tmux session. Respond ONLY with valid JSON.
+agent_state: idle|working|waiting_input|errored|unknown.
+overview: array of 2-4 sentences, one per element. Write each in present participle — NO subject of any kind. NEVER use "The agent", "It", "The model", or any other subject. WRONG: "The agent implemented the archive flow." RIGHT: "Implemented the archive preview flow in dashboard.go." Cover goal, accomplishments, current status.
+details: array of 6-12 items — exact files created/modified/deleted, commands and outcomes, test pass/fail counts, errors verbatim, build and lint results. One sentence per item, no subject, present participle.
+actions: items needing immediate human response (blocked on approval, unanswered question, unresolvable error). Empty array if none.
+next_steps: concrete remaining tasks inferred from context. Empty array if none.`
 
 	actionItemsSystemPrompt = `You are a technical assistant monitoring AI coding agent terminal sessions.
 Extract any items requiring human attention from the terminal output.
@@ -141,7 +160,7 @@ func NewOllamaIntelligence(host, model string) *OllamaIntelligence {
 		host:  strings.TrimRight(host, "/"),
 		model: model,
 		client: &http.Client{
-			Timeout: inferenceTimeout + 5*time.Second,
+			Timeout: httpClientTimeout,
 		},
 	}
 }
@@ -179,11 +198,11 @@ func (o *OllamaIntelligence) IsAvailable(ctx context.Context) bool {
 	return false
 }
 
-// SummariseSession analyses tmux pane output and returns a structured summary.
-func (o *OllamaIntelligence) SummariseSession(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
-	prompt := fmt.Sprintf("Analyse this terminal session output:\n\n```\n%s\n```", tailTruncate(cleanPaneContent(paneContent), maxPaneChars))
+// SummariseBriefly produces a compact status summary for the session browser sidebar.
+func (o *OllamaIntelligence) SummariseBriefly(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
+	prompt := fmt.Sprintf("Terminal output:\n\n```\n%s\n```", tailTruncate(pane.Clean(paneContent), maxPaneChars))
 
-	raw, err := o.generate(ctx, sessionSummarySystemPrompt, prompt, sessionSummarySchema, defaultMaxTokens)
+	raw, err := o.generate(ctx, sessionBriefSystemPrompt, prompt, sessionBriefSchema, 200)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +213,7 @@ func (o *OllamaIntelligence) SummariseSession(ctx context.Context, paneContent s
 		AgentState domain.AgentState `json:"agent_state"`
 	}
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse session summary: %w (raw: %.200s)", err, raw)
+		return nil, fmt.Errorf("failed to parse brief summary: %w (raw: %.200s)", err, raw)
 	}
 	if result.AgentState == "" {
 		result.AgentState = domain.AgentStateUnknown
@@ -206,9 +225,40 @@ func (o *OllamaIntelligence) SummariseSession(ctx context.Context, paneContent s
 	}, nil
 }
 
+// SummariseSession produces a full structured summary for archiving.
+func (o *OllamaIntelligence) SummariseSession(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
+	prompt := fmt.Sprintf("Analyse this terminal session output:\n\n```\n%s\n```", tailTruncate(pane.Clean(paneContent), maxPaneChars))
+
+	raw, err := o.generate(ctx, sessionSummarySystemPrompt, prompt, sessionSummarySchema, defaultMaxTokens)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Overview   []string          `json:"overview"`
+		Details    []string          `json:"details"`
+		Actions    []string          `json:"actions"`
+		NextSteps  []string          `json:"next_steps"`
+		AgentState domain.AgentState `json:"agent_state"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse session summary: %w (raw: %.200s)", err, raw)
+	}
+	if result.AgentState == "" {
+		result.AgentState = domain.AgentStateUnknown
+	}
+	return &domain.SessionSummary{
+		Overview:   result.Overview,
+		Details:    result.Details,
+		Actions:    result.Actions,
+		NextSteps:  result.NextSteps,
+		AgentState: result.AgentState,
+	}, nil
+}
+
 // DetectActions extracts actionable items from session output.
 func (o *OllamaIntelligence) DetectActions(ctx context.Context, paneContent string) ([]domain.ActionItem, error) {
-	prompt := fmt.Sprintf("Extract action items from this terminal output:\n\n```\n%s\n```", tailTruncate(cleanPaneContent(paneContent), maxPaneChars))
+	prompt := fmt.Sprintf("Extract action items from this terminal output:\n\n```\n%s\n```", tailTruncate(pane.Clean(paneContent), maxPaneChars))
 
 	raw, err := o.generate(ctx, actionItemsSystemPrompt, prompt, actionItemsSchema, 300)
 	if err != nil {
@@ -298,9 +348,6 @@ func (o *OllamaIntelligence) GenerateCommitMessage(ctx context.Context, diff str
 
 // generate sends a single-turn generation request to Ollama.
 func (o *OllamaIntelligence) generate(ctx context.Context, system, prompt string, schema json.RawMessage, maxTokens int) (string, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, inferenceTimeout)
-	defer cancel()
-
 	payload := ollamaGenerateRequest{
 		Model:  o.model,
 		System: system,
@@ -320,7 +367,7 @@ func (o *OllamaIntelligence) generate(ctx context.Context, system, prompt string
 		return "", fmt.Errorf("failed to marshal ollama request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, o.host+"/api/generate", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.host+"/api/generate", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("failed to create ollama request: %w", err)
 	}
@@ -363,67 +410,4 @@ func tailTruncate(s string, maxChars int) string {
 		return s
 	}
 	return "...[truncated]\n" + s[len(s)-maxChars:]
-}
-
-// ansiEscape matches ANSI/VT100 escape sequences (colours, cursor moves, etc.).
-var ansiEscape = regexp.MustCompile(`\x1b(\[[0-9;?]*[a-zA-Z]|\][^\x07]*\x07|[()][AB012]|[DABEGHM78=><]|%[Gg])`)
-
-// cleanPaneContent strips token-wasting noise from tmux pane output before
-// sending it to the model:
-//  1. Remove ANSI/VT100 escape sequences (colour codes, cursor moves, etc.)
-//  2. Collapse consecutive duplicate lines into "line [×N]"
-//  3. Collapse runs of blank lines into a single blank line
-//
-// On typical terminal output this reduces character count by 40–60%.
-func cleanPaneContent(s string) string {
-	// 1. Strip ANSI escapes
-	s = ansiEscape.ReplaceAllString(s, "")
-
-	lines := strings.Split(s, "\n")
-
-	// 2 & 3. Dedup + blank-collapse in one pass
-	out := make([]string, 0, len(lines))
-	prevLine := ""
-	dupCount := 0
-	blankRun := 0
-
-	for _, raw := range lines {
-		line := strings.TrimRight(raw, " \t\r")
-
-		if line == "" {
-			blankRun++
-			if blankRun == 1 {
-				out = append(out, "")
-			}
-			// flush any pending dup before blank
-			if dupCount > 1 {
-				out[len(out)-2] = fmt.Sprintf("%s [×%d]", prevLine, dupCount)
-			}
-			prevLine = ""
-			dupCount = 0
-			continue
-		}
-		blankRun = 0
-
-		if line == prevLine {
-			dupCount++
-			continue
-		}
-
-		// Flush previous dup group
-		if dupCount > 1 && len(out) > 0 {
-			out[len(out)-1] = fmt.Sprintf("%s [×%d]", prevLine, dupCount)
-		}
-
-		out = append(out, line)
-		prevLine = line
-		dupCount = 1
-	}
-
-	// Flush final dup group
-	if dupCount > 1 && len(out) > 0 {
-		out[len(out)-1] = fmt.Sprintf("%s [×%d]", prevLine, dupCount)
-	}
-
-	return strings.Join(out, "\n")
 }

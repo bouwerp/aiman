@@ -322,8 +322,8 @@ func (m *Manager) GetTmuxSessionEnv(ctx context.Context, sessionName, envVar str
 }
 
 func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (string, error) {
-	// Capture the visible pane and last 1000 lines of scrollback buffer
-	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S -1000 -t %q", sessionName)
+	// Capture the full scrollback history (-S - means from the beginning of history)
+	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S - -t %q", sessionName)
 
 	var output string
 	var err error

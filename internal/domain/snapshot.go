@@ -9,20 +9,22 @@ import (
 // It is used to resume context across agent restarts or session recreation,
 // and as a searchable archive of completed work.
 type SessionSnapshot struct {
-	ID        string
-	SessionID string
-	IssueKey  string
-	Branch    string
-	RepoName  string
-	AgentName string
-	// Summary is a concise AI-generated description of what was accomplished (≤60 words).
+	ID           string
+	SessionID    string
+	IssueKey     string
+	Branch       string
+	RepoName     string
+	AgentName    string
+	WorktreePath string
+	// Summary is a concise AI-generated overview of what was accomplished.
 	Summary string
 	// NextSteps are AI-extracted items that remain to be done.
 	NextSteps []string
 	// AgentState is the detected state at capture time.
 	AgentState AgentState
-	// PaneContent is the cleaned terminal tail used to generate the summary.
-	PaneContent string
+	// PaneContent is the gzip-compressed, cleaned terminal tail used to generate
+	// the summary. Use DecompressPaneContent to recover the plaintext.
+	PaneContent []byte
 	// InjectedAt records when this snapshot was last injected into a task file.
 	// Nil means it has not been used for a resume yet.
 	InjectedAt *time.Time

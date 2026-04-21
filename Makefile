@@ -14,9 +14,13 @@ help:
 	@echo "  ci         - Run all CI checks (test + lint)"
 
 # Build the binary
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+BUILD_TIME := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+LDFLAGS := -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)
+
 build:
-	@echo "Building aiman..."
-	go build -v -o aiman ./cmd/aiman
+	@echo "Building aiman $(VERSION)..."
+	go build -v -ldflags "$(LDFLAGS)" -o aiman ./cmd/aiman
 
 # Run tests
 test:
@@ -57,7 +61,7 @@ clean:
 # Install to GOPATH/bin
 install:
 	@echo "Installing aiman..."
-	go install ./cmd/aiman
+	go install -ldflags "$(LDFLAGS)" ./cmd/aiman
 
 # Build and run
 run: build

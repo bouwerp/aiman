@@ -50,6 +50,13 @@ func (l *lazyIntelligence) IsAvailable(ctx context.Context) bool {
 	return l.checkOnce(ctx)
 }
 
+func (l *lazyIntelligence) SummariseBriefly(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
+	if !l.checkOnce(ctx) {
+		return nil, domain.ErrIntelligenceUnavailable
+	}
+	return l.delegate.SummariseBriefly(ctx, paneContent)
+}
+
 func (l *lazyIntelligence) SummariseSession(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
 	if !l.checkOnce(ctx) {
 		return nil, domain.ErrIntelligenceUnavailable

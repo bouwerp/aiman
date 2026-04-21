@@ -60,9 +60,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		sshMgr = config.SSHManager
 	}
 
-	// Step 2: Branch (Slugify if not provided, skip for existing branch sessions)
+	// Step 2: Branch / label derivation
 	branch := config.Branch
-	if !config.ExistingBranch {
+	if config.AdHoc {
+		// Ad-hoc: use the label as-is (already sanitized by UI), fall back to timestamp.
+		if branch == "" {
+			branch = "adhoc-" + time.Now().Format("20060102-1504")
+		}
+	} else if !config.ExistingBranch {
 		if branch == "" && config.IssueKey != "" {
 			issue, err := m.jiraProvider.GetIssue(ctx, config.IssueKey)
 			if err == nil {
@@ -79,7 +84,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	// Ensure we have full issue context for task-file/prompt injection even when
 	// a branch was already provided (e.g. restart/existing-branch flows).
-	if config.Issue == nil && config.IssueKey != "" {
+	if !config.AdHoc && config.Issue == nil && config.IssueKey != "" {
 		if issue, err := m.jiraProvider.GetIssue(ctx, config.IssueKey); err == nil {
 			config.Issue = &issue
 		}
@@ -98,7 +103,10 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 6: Isolate (Worktree)
 	var worktree domain.Worktree
 	var err error
-	if config.Repo.Name != "No Repository" && config.Repo.Name != "" {
+	if config.AdHoc {
+		// Ad-hoc sessions run in the SSH root; no git worktree needed.
+		session.WorktreePath = sshMgr.GetRoot()
+	} else if config.Repo.Name != "No Repository" && config.Repo.Name != "" {
 		if config.ExistingBranch {
 			worktree, err = m.gitManager.SetupRemoteWorktreeFromBranch(ctx, sshMgr, config.Repo, branch)
 		} else {
@@ -112,12 +120,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		session.WorktreePath = sshMgr.GetRoot()
 	}
 
-	// Ignore session-local task stub so it is not committed from the worktree.
-	_ = m.gitManager.EnsureAimanTaskGitignored(ctx, sshMgr, session.WorktreePath)
+	if !config.AdHoc {
+		// Ignore session-local task stub so it is not committed from the worktree.
+		_ = m.gitManager.EnsureAimanTaskGitignored(ctx, sshMgr, session.WorktreePath)
 
-	// Step 6.1: Persist Session ID in git metadata (safe from git status/commits)
-	if _, err = sshMgr.Execute(ctx, fmt.Sprintf("id_file=$(git -C %q rev-parse --git-dir)/aiman-id && echo %q > \"$id_file\"", session.WorktreePath, session.ID)); err != nil {
-		return nil, fmt.Errorf("failed to write session ID: %w", err)
+		// Step 6.1: Persist Session ID in git metadata (safe from git status/commits)
+		if _, err = sshMgr.Execute(ctx, fmt.Sprintf("id_file=$(git -C %q rev-parse --git-dir)/aiman-id && echo %q > \"$id_file\"", session.WorktreePath, session.ID)); err != nil {
+			return nil, fmt.Errorf("failed to write session ID: %w", err)
+		}
 	}
 
 	// Step 7: Scope (Directory)

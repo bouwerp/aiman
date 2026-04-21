@@ -57,7 +57,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          go build -v -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ${{ matrix.name }} ./cmd/aiman
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          go build -v -ldflags="-s -w -X main.version=${{ github.ref_name }} -X main.buildTime=${BUILD_TIME}" -o ${{ matrix.name }} ./cmd/aiman
 
       - name: Create package (Unix)
         if: matrix.goos != 'windows'

@@ -13,20 +13,33 @@ import (
 type BranchInputModel struct {
 	textInput textinput.Model
 	Confirmed bool
+	labelMode bool // true when collecting an ad-hoc session label rather than a git branch
 }
 
 func NewBranchInputModel(proposed string) BranchInputModel {
+	return newBranchInputModelMode(proposed, false)
+}
+
+func NewAdHocLabelInputModel(proposed string) BranchInputModel {
+	return newBranchInputModelMode(proposed, true)
+}
+
+func newBranchInputModelMode(proposed string, labelMode bool) BranchInputModel {
 	ti := textinput.New()
-	ti.Placeholder = "Branch Name"
+	if labelMode {
+		ti.Placeholder = "e.g. debug prod logs"
+	} else {
+		ti.Placeholder = "Branch Name"
+	}
 	ti.Focus()
 	ti.CharLimit = 156
 	ti.Width = 40
 
 	m := BranchInputModel{
 		textInput: ti,
+		labelMode: labelMode,
 	}
 
-	// Sanitize the proposed value before setting it
 	sanitized := m.sanitizeInput(proposed)
 	m.textInput.SetValue(sanitized)
 
@@ -96,9 +109,14 @@ func (m BranchInputModel) sanitizeInput(s string) string {
 func (m BranchInputModel) View() string {
 	style := lipgloss.NewStyle().Padding(1, 2).Border(lipgloss.RoundedBorder())
 
+	title := "Confirm Branch Name"
+	if m.labelMode {
+		title = "Session Label"
+	}
 	return lipgloss.Place(80, 10, lipgloss.Center, lipgloss.Center,
 		style.Render(fmt.Sprintf(
-			"Confirm Branch Name\n\n%s\n\n(enter to confirm, esc to cancel)",
+			"%s\n\n%s\n\n(enter to confirm, esc to cancel)",
+			title,
 			m.textInput.View(),
 		)))
 }
