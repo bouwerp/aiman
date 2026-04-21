@@ -116,6 +116,7 @@ const (
 	viewStateSetup
 	viewStateGitSetup
 	viewStateGeneralSettings
+	viewStateAISettings
 	viewStatePicker
 	viewStateVSCodeError
 	viewStateIssuePicker
@@ -242,6 +243,7 @@ type Model struct {
 	setup                  SetupModel
 	gitSetup               GitSetupModel
 	generalSetup           GeneralSetupModel
+	aiSetup                AISetupModel
 	picker                 RepoPickerModel
 	issuePicker            IssuePickerModel
 	branchInput            BranchInputModel
@@ -372,6 +374,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
+		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
 	m.Title = "Administrative Menu"
@@ -395,6 +398,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		setup:         NewSetupModel(cfg),
 		gitSetup:      NewGitSetupModel(cfg),
 		generalSetup:  NewGeneralSetupModel(cfg),
+		aiSetup:       NewAISetupModel(cfg),
 		doctorResults: doctorResults,
 		viewport:      vp,
 		firstLoad:     make(map[string]bool),
@@ -1622,6 +1626,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateGeneralSettings:
 		return m.handleGeneralSetupUpdate(msg)
 
+	case viewStateAISettings:
+		return m.handleAISetupUpdate(msg)
+
 	case viewStateVSCodeError, viewStateError:
 		if _, ok := msg.(tea.KeyMsg); ok {
 			m.state = viewStateMain
@@ -1731,6 +1738,9 @@ func (m *Model) renderView() string {
 
 	case viewStateGeneralSettings:
 		return m.generalSetup.View()
+
+	case viewStateAISettings:
+		return m.aiSetup.View()
 
 	case viewStateVSCodeError:
 		var b strings.Builder
@@ -2695,6 +2705,11 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, m.generalSetup.Init()
 				}
+				if i.action == viewStateAISettings {
+					m.aiSetup = NewAISetupModel(m.cfg)
+					m.state = i.action
+					return m, m.aiSetup.Init()
+				}
 				m.state = i.action
 				return m, nil
 			}
@@ -3095,6 +3110,22 @@ func (m *Model) handleGeneralSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.generalSetup = subModel.(GeneralSetupModel)
 	if m.generalSetup.saved {
 		m.generalSetup.saved = false
+		m.state = viewStateMenu
+	}
+	return m, cmd
+}
+
+func (m *Model) handleAISetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.state = viewStateMenu
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.aiSetup.Update(msg)
+	m.aiSetup = subModel.(AISetupModel)
+	if m.aiSetup.saved {
+		m.aiSetup.saved = false
 		m.state = viewStateMenu
 	}
 	return m, cmd
