@@ -4090,14 +4090,26 @@ func (m *Model) renderAIPanel(s domain.Session, contentW int) string {
 
 	// Summary text — word-wrapped to content width
 	if summary.Summary != "" {
-		lines = append(lines, "  "+truncateRunes(summary.Summary, contentW-4))
+		wrapW := contentW - 4
+		if wrapW < 20 {
+			wrapW = 20
+		}
+		wrapped := lipgloss.NewStyle().Width(wrapW).Render(summary.Summary)
+		for _, l := range strings.Split(wrapped, "\n") {
+			lines = append(lines, "  "+l)
+		}
 	}
 
 	// Action items
 	for _, action := range summary.Actions {
-		urgencyIcon := "·"
-		urgencyColor := lipgloss.Color("#7D7D7D")
-		lines = append(lines, "  "+lipgloss.NewStyle().Foreground(urgencyColor).Render(urgencyIcon+" "+truncateRunes(action, contentW-6)))
+		wrapW := contentW - 6
+		if wrapW < 20 {
+			wrapW = 20
+		}
+		actionStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D7D7D")).Width(wrapW).Render("· " + action)
+		for _, l := range strings.Split(actionStyled, "\n") {
+			lines = append(lines, "  "+l)
+		}
 	}
 
 	return sep + strings.Join(lines, "\n") + "\n"
