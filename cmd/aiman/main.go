@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/ai"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
@@ -98,7 +99,8 @@ func run() error {
 	}
 
 	// 7. Start TUI with StartupModel (Splash screen)
-	p := tea.NewProgram(ui.NewStartupModel(cfg, doctor, db, flowManager), tea.WithAltScreen(), tea.WithMouseAllMotion())
+	intelligence := ai.NewIntelligenceProvider(cfg)
+	p := tea.NewProgram(ui.NewStartupModel(cfg, doctor, db, flowManager, intelligence), tea.WithAltScreen(), tea.WithMouseAllMotion())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("alas, there's been an error: %w", err)
 	}

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -294,6 +295,10 @@ type Model struct {
 	tunnelSession          *domain.Session
 	tunnelInput            textinput.Model
 	tunnelError            string
+	intelligence           domain.IntelligenceProvider
+	aiSummary              map[string]*domain.SessionSummary // keyed by TmuxSession
+	aiLoading              bool
+	aiError                string
 }
 
 func remoteNameForHost(cfg *config.Config, host string) string {
@@ -330,7 +335,7 @@ func (m *Model) applyRemoteFilter() {
 	}
 }
 
-func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager, initialLogs ...string) *Model {
+func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager, intelligence domain.IntelligenceProvider, initialLogs ...string) *Model {
 	items := make([]list.Item, len(initialSessions))
 	for i, s := range initialSessions {
 		items[i] = item{session: s, remoteName: remoteNameForHost(cfg, s.RemoteHost)}
@@ -352,6 +357,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy session output (full preview)")),
 			key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G/end", "jump preview to latest")),
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
+			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "AI insight")),
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
@@ -395,6 +401,8 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		allSessions:   initialSessions,
 		mouseEnabled:  true,
 		tunnelList:    list.New(nil, list.NewDefaultDelegate(), 0, 0),
+		intelligence:  intelligence,
+		aiSummary:     make(map[string]*domain.SessionSummary),
 	}
 	model.tunnelList.Title = "Session Tunnels"
 	model.provisionSpinner = spinner.New()
@@ -417,6 +425,12 @@ type inputHintMsg struct {
 	session    string
 	needsInput bool
 	activity   string
+}
+
+type aiSummaryMsg struct {
+	session string
+	summary *domain.SessionSummary
+	err     error
 }
 
 type tmuxTerminalMsg struct {
@@ -661,6 +675,26 @@ func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
 			output:  out,
 			err:     err,
 		}
+	}
+}
+
+// summariseSessionCmd captures the current tmux pane and sends it to the local SLM
+// for analysis. Runs in a bubbletea goroutine — never blocks the TUI loop.
+func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, session domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		remote, ok := resolveRemote(cfg, session)
+		if !ok {
+			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		pane, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		if err != nil {
+			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("capture pane: %w", err)}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cancel()
+		summary, err := intel.SummariseSession(ctx, pane)
+		return aiSummaryMsg{session: session.TmuxSession, summary: summary, err: err}
 	}
 }
 
@@ -2192,6 +2226,18 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.list.SetItems(items)
 		}
+	case aiSummaryMsg:
+		m.aiLoading = false
+		if msg.err != nil {
+			if errors.Is(msg.err, domain.ErrIntelligenceUnavailable) {
+				m.aiError = "AI unavailable — enable in config and ensure Ollama is running (brew install ollama)"
+			} else {
+				m.aiError = fmt.Sprintf("AI error: %v", msg.err)
+			}
+		} else if msg.summary != nil && msg.session == m.activeSession {
+			m.aiSummary[msg.session] = msg.summary
+			m.aiError = ""
+		}
 	case tea.KeyMsg:
 		m, cmd, handled := m.handleMainKeyMsg(msg)
 		if handled {
@@ -2583,6 +2629,17 @@ end tell`, cmd)
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
 			return m, m.recreateMutagenSync(sel.(item).session), true
+		}
+	}
+	if msg.String() == "i" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			if m.aiLoading {
+				return m, nil, true
+			}
+			m.aiLoading = true
+			m.aiError = ""
+			return m, summariseSessionCmd(m.cfg, m.intelligence, s), true
 		}
 	}
 	if msg.String() == "ctrl+k" {
@@ -3887,6 +3944,9 @@ func (m *Model) renderMainView() string {
 		infoRaw := strings.Join(sessionLines, "\n") + "\n" + sep + "\n" + strings.Join(gitLines, "\n")
 		infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
 
+		// AI insight panel — shown below git status when available or loading
+		aiPanel := m.renderAIPanel(s, contentW)
+
 		var outputPanel strings.Builder
 		outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
 		modeName := "Preview"
@@ -3901,7 +3961,7 @@ func (m *Model) renderMainView() string {
 			outputPanel.WriteString(m.viewport.View())
 		}
 
-		mainContent = infoPanel + outputPanel.String()
+		mainContent = infoPanel + aiPanel + outputPanel.String()
 	} else {
 		mainContent = "\n\n  No session selected.\n  Press 'm' for Admin Menu."
 	}
@@ -3934,7 +3994,7 @@ func (m *Model) renderMainView() string {
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
+		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
 
 	// PR Buttons (matching Figma)
 	var prButtons string
@@ -3954,6 +4014,62 @@ func (m *Model) renderMainView() string {
 	}
 
 	return docStyle.Render(content + "\n" + footer + prButtons + "\n" + helpBar)
+}
+
+// renderAIPanel renders the AI insight section of the main panel.
+// It shows a loading indicator, the session summary, action items, or a hint
+// to press 'i' if no summary has been generated yet.
+func (m *Model) renderAIPanel(s domain.Session, contentW int) string {
+	aiHeader := activeStyle.Render("AI") + "  "
+	sep := "\n" + statusStyle.Render(strings.Repeat("─", contentW)) + "\n"
+
+	if m.aiLoading {
+		return sep + aiHeader + statusStyle.Render("Analysing session…") + "\n"
+	}
+
+	if m.aiError != "" {
+		return sep + aiHeader + failStyle.Render(m.aiError) + "\n"
+	}
+
+	summary, ok := m.aiSummary[s.TmuxSession]
+	if !ok {
+		if m.intelligence != nil {
+			hint := statusStyle.Render("Press i to get AI insight for this session")
+			return sep + aiHeader + hint + "\n"
+		}
+		return ""
+	}
+
+	var lines []string
+
+	// Agent state badge
+	stateColor := lipgloss.Color("#7D7D7D")
+	switch summary.AgentState {
+	case domain.AgentStateWorking:
+		stateColor = lipgloss.Color("#00FF00")
+	case domain.AgentStateWaitingInput:
+		stateColor = lipgloss.Color("#FFA500")
+	case domain.AgentStateErrored:
+		stateColor = lipgloss.Color("#FF0000")
+	case domain.AgentStateIdle:
+		stateColor = lipgloss.Color("#7D7D7D")
+	}
+	stateBadge := lipgloss.NewStyle().Foreground(stateColor).Render(string(summary.AgentState))
+	lines = append(lines, aiHeader+stateBadge)
+
+	// Summary text — word-wrapped to content width
+	if summary.Summary != "" {
+		lines = append(lines, "  "+truncateRunes(summary.Summary, contentW-4))
+	}
+
+	// Action items
+	for _, action := range summary.Actions {
+		urgencyIcon := "·"
+		urgencyColor := lipgloss.Color("#7D7D7D")
+		lines = append(lines, "  "+lipgloss.NewStyle().Foreground(urgencyColor).Render(urgencyIcon+" "+truncateRunes(action, contentW-6)))
+	}
+
+	return sep + strings.Join(lines, "\n") + "\n"
 }
 
 func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {

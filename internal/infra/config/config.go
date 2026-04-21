@@ -20,8 +20,20 @@ type Config struct {
 	Git          GitConfig    `yaml:"git,omitempty"`
 	Features     FeatureFlags `yaml:"features,omitempty"`
 	Skills       SkillsConfig `yaml:"skills,omitempty"`
+	AI           AIConfig     `yaml:"ai,omitempty"`
 	Remotes      []Remote     `yaml:"remotes"`
 	ActiveRemote string       `yaml:"active_remote"`
+}
+
+// AIConfig controls the local SLM intelligence features powered by Ollama.
+type AIConfig struct {
+	// Enabled turns on AI-powered features. When false, all intelligence calls
+	// return ErrIntelligenceUnavailable without contacting Ollama.
+	Enabled bool `yaml:"enabled"`
+	// OllamaHost is the base URL of the Ollama server. Defaults to http://localhost:11434.
+	OllamaHost string `yaml:"ollama_host,omitempty"`
+	// Model is the Ollama model name to use. Defaults to qwen3:4b.
+	Model string `yaml:"model,omitempty"`
 }
 
 type SkillsConfig struct {
