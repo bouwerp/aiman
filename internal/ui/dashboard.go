@@ -4765,7 +4765,7 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
-		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
+		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
 		startCmd := fmt.Sprintf(
 			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
 			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), agentBootstrap, s.TmuxSession,
@@ -4785,6 +4785,7 @@ func (m *Model) restartSession() tea.Cmd {
 					"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
 					"attempt=$((attempt+1)); sleep 1; "+
 					"done; "+
+					"sleep 3; "+
 					"tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
 				s.TmuxSession,
 				s.TmuxSession, sendKeysPrompt,

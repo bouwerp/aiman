@@ -209,6 +209,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 				"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
 				"attempt=$((attempt+1)); sleep 1; "+
 				"done; "+
+				"sleep 3; "+
 				"tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
 			tmuxName,
 			tmuxName, sendKeysPrompt,
