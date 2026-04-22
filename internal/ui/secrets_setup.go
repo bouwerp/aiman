@@ -82,7 +82,7 @@ func (m SecretsSetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmDelete(msg)
 		}
 	}
-	if m.mode == secretsModeAdd && len(m.inputs) > 0 {
+	if m.mode == secretsModeAdd && len(m.inputs) > 0 && m.inputFocus < len(m.inputs) {
 		var cmd tea.Cmd
 		m.inputs[m.inputFocus], cmd = m.inputs[m.inputFocus].Update(msg)
 		return m, cmd
@@ -146,7 +146,9 @@ func (m SecretsSetupModel) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	var cmd tea.Cmd
-	m.inputs[m.inputFocus], cmd = m.inputs[m.inputFocus].Update(msg)
+	if m.inputFocus < len(m.inputs) {
+		m.inputs[m.inputFocus], cmd = m.inputs[m.inputFocus].Update(msg)
+	}
 	return m, cmd
 }
 
