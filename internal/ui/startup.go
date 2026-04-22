@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -15,7 +16,35 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+var (
+	aimanLogo = []string{
+		`    _   ___ __  __   _   _  _ `,
+		`   /_\ |_ _|  \/  | /_\ | \| |`,
+		`  / _ \ | || |\/| |/ _ \| .` + "`" + `|`,
+		` /_/ \_\___|_|  |_/_/ \_\_|\_|`,
+	}
+	logoTagline = "AI coding agent manager"
+	logoPalette = []lipgloss.Color{
+		"#FF6B9D",
+		"#D45BFF",
+		"#7B9EFF",
+		"#5BFFE8",
+		"#5BFFA0",
+		"#FFD95B",
+		"#FF9A6B",
+	}
+)
+
+type logoTickMsg struct{}
+
+func logoTick() tea.Cmd {
+	return tea.Tick(90*time.Millisecond, func(_ time.Time) tea.Msg {
+		return logoTickMsg{}
+	})
+}
+
 type StartupModel struct {
+	logoFrame       int
 	cfg             *config.Config
 	doctor          *usecase.Doctor
 	db              domain.SessionRepository
@@ -116,6 +145,7 @@ func runDiscovery(cfg *config.Config) tea.Cmd {
 func (m StartupModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
+		logoTick(),
 		runCheckJira(m.doctor),
 		runCheckGit(m.doctor),
 		runCheckSSH(m.doctor),
@@ -129,6 +159,9 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+	case logoTickMsg:
+		m.logoFrame++
+		return m, logoTick()
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -270,10 +303,37 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m StartupModel) renderLogo() string {
+	var b strings.Builder
+	n := len(logoPalette)
+	for row, line := range aimanLogo {
+		for col, ch := range line {
+			// Wave: color index shifts diagonally (col + row*2) offset by frame
+			idx := ((col/2 + row*2) - m.logoFrame + n*100) % n
+			style := lipgloss.NewStyle().Foreground(logoPalette[idx]).Bold(true)
+			b.WriteString(style.Render(string(ch)))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func (m StartupModel) View() string {
 	var b strings.Builder
+	b.WriteString("\n")
+
+	// Animated logo
+	b.WriteString(m.renderLogo())
+
+	// Tagline
+	taglineStyle := lipgloss.NewStyle().
+		Foreground(logoPalette[m.logoFrame%len(logoPalette)]).
+		Italic(true).
+		PaddingLeft(1)
+	b.WriteString(taglineStyle.Render(logoTagline))
 	b.WriteString("\n\n")
 
+	// Spinner + label
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", m.spinner.View(), "Running startup checks..."))
 
 	// Fixed order display
