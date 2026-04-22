@@ -164,7 +164,7 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 }
 
 func (s *Scanner) commandExists(ctx context.Context, cmd string) bool {
-	pathSuffix := "$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:$HOME/go/bin:/usr/local/go/bin:/usr/local/bin:/opt/homebrew/bin"
+	pathSuffix := "$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:$HOME/go/bin:/usr/local/go/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin"
 	checks := []string{
 		fmt.Sprintf("command -v %s >/dev/null 2>&1", cmd),
 		fmt.Sprintf("bash -lc 'command -v %s >/dev/null 2>&1'", cmd),
