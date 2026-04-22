@@ -1254,6 +1254,41 @@ type refreshAWSMsg struct {
 	err error
 }
 
+type pushSecretsMsg struct {
+	err error
+}
+
+func (m *Model) pushSecretsCmd(s domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		secrets, err := m.db.ListSecrets(ctx)
+		if err != nil {
+			return pushSecretsMsg{err: fmt.Errorf("load secrets: %w", err)}
+		}
+		if len(secrets) == 0 {
+			return pushSecretsMsg{err: fmt.Errorf("no secrets configured")}
+		}
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return pushSecretsMsg{err: fmt.Errorf("remote %q not found", s.RemoteHost)}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		if err := mgr.Connect(ctx); err != nil {
+			return pushSecretsMsg{err: fmt.Errorf("SSH connect: %w", err)}
+		}
+		defer mgr.Close()
+		for _, secret := range secrets {
+			// Update the tmux session env table (new panes/windows will inherit it).
+			setEnvCmd := fmt.Sprintf("tmux set-environment -t %q %s %q 2>/dev/null || true", s.TmuxSession, secret.Key, secret.Value)
+			_, _ = mgr.Execute(ctx, setEnvCmd)
+			// Export into the currently active pane's shell.
+			sendKeysCmd := fmt.Sprintf("tmux send-keys -t %q %q Enter 2>/dev/null || true", s.TmuxSession, "export "+secret.Key+"="+secret.Value)
+			_, _ = mgr.Execute(ctx, sendKeysCmd)
+		}
+		return pushSecretsMsg{}
+	}
+}
+
 func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -1912,6 +1947,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshAWSMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("AWS credentials refresh failed: %v", msg.err)
+			m.state = viewStateError
+		} else {
+			m.state = viewStateMain
+		}
+		return m, nil
+	case pushSecretsMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Secrets push failed: %v", msg.err)
 			m.state = viewStateError
 		} else {
 			m.state = viewStateMain
@@ -3093,6 +3136,18 @@ end tell`, cmd)
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
 			return m, m.refreshAWSCredentialsCmd(s), true
+		}
+	}
+	if msg.String() == "e" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			if s.TmuxSession == "" {
+				return m, nil, true
+			}
+			m.loadingMsg = "Pushing secrets to session..."
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, m.pushSecretsCmd(s), true
 		}
 	}
 	if msg.String() == "c" {
@@ -4647,7 +4702,7 @@ func (m *Model) renderMainView() string {
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
+		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • e: push secrets • w: refresh AWS • y: copy view • G/end: latest • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
 
 	// PR Buttons (matching Figma)
 	var prButtons string
