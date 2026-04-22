@@ -4877,7 +4877,7 @@ func (m *Model) handleSnapshotPreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleSnapshotBrowserUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
-		if km.String() == "esc" && !m.snapshotBrowser.showDetail {
+		if km.String() == "esc" && m.snapshotBrowser.confirmDelete == nil {
 			m.state = viewStateMain
 			return m, nil
 		}

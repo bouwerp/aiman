@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/usecase"
@@ -12,6 +13,11 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+)
+
+const (
+	snapshotListRatio    = 35  // % of total width for left list pane
+	snapshotPreviewChars = 1500 // chars of head/tail to show in pane preview
 )
 
 // snapshotItem wraps a SessionSnapshot for use in a bubbletea list.
@@ -24,7 +30,7 @@ func (s snapshotItem) Title() string {
 	if title == "" {
 		title = s.snap.Branch
 	}
-	if title == "" {
+	if title == "" && len(s.snap.SessionID) >= 8 {
 		title = s.snap.SessionID[:8]
 	}
 	if s.snap.AgentName != "" {
@@ -35,9 +41,16 @@ func (s snapshotItem) Title() string {
 
 func (s snapshotItem) Description() string {
 	age := formatSnapshotAge(s.snap.CreatedAt)
-	summary := s.snap.Summary
-	if len(summary) > 80 {
-		summary = summary[:77] + "…"
+	// Prefer first overview sentence for the short description
+	summary := ""
+	if len(s.snap.Overview) > 0 {
+		summary = s.snap.Overview[0]
+	} else {
+		summary = s.snap.Summary
+	}
+	if utf8.RuneCountInString(summary) > 60 {
+		runes := []rune(summary)
+		summary = string(runes[:57]) + "…"
 	}
 	if summary == "" {
 		summary = "(no summary)"
@@ -71,20 +84,50 @@ type SnapshotBrowserModel struct {
 	snapMgr       *usecase.SnapshotManager
 	width         int
 	height        int
-	showDetail    bool
-	confirmDelete *domain.SessionSnapshot // non-nil when delete confirm dialog is open
+	focusLeft     bool // true = list focused, false = detail viewport focused
+	confirmDelete *domain.SessionSnapshot
 }
 
 func NewSnapshotBrowserModel(width, height int, snapMgr *usecase.SnapshotManager) SnapshotBrowserModel {
-	l := list.New(nil, list.NewDefaultDelegate(), width, height-4)
+	lw, dw, dh := snapshotPaneSizes(width, height)
+	l := list.New(nil, list.NewDefaultDelegate(), lw, height-4)
 	l.Title = "Session Snapshots"
-	l.SetShowHelp(true)
+	l.SetShowHelp(false)
 	return SnapshotBrowserModel{
-		list:    l,
-		detail:  viewport.New(width, height-6),
-		width:   width,
-		height:  height,
-		snapMgr: snapMgr,
+		list:      l,
+		detail:    viewport.New(dw, dh),
+		width:     width,
+		height:    height,
+		focusLeft: true,
+		snapMgr:   snapMgr,
+	}
+}
+
+// snapshotPaneSizes returns (listWidth, detailWidth, detailHeight).
+func snapshotPaneSizes(w, h int) (int, int, int) {
+	lw := w * snapshotListRatio / 100
+	if lw < 24 {
+		lw = 24
+	}
+	dw := w - lw - 1 // 1 for divider
+	if dw < 20 {
+		dw = 20
+	}
+	dh := h - 4
+	if dh < 4 {
+		dh = 4
+	}
+	return lw, dw, dh
+}
+
+// refreshDetail re-renders the detail viewport for the currently selected snapshot.
+func (m *SnapshotBrowserModel) refreshDetail() {
+	if sel := m.list.SelectedItem(); sel != nil {
+		snap := sel.(snapshotItem).snap
+		_, dw, _ := snapshotPaneSizes(m.width, m.height)
+		m.detail.SetContent(renderSnapshotDetail(snap, dw-2))
+	} else {
+		m.detail.SetContent(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("No snapshots saved."))
 	}
 }
 
@@ -128,14 +171,23 @@ func (m SnapshotBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.snapshots = msg.snapshots
 		m.list.SetItems(items)
+		m.refreshDetail()
 		return m, nil
 
 	case snapshotDeletedMsg:
-		// Reload the list regardless of error (error will surface via empty list).
 		return m, loadAllSnapshotsCmd(m.snapMgr)
 
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		lw, dw, dh := snapshotPaneSizes(m.width, m.height)
+		m.list.SetSize(lw, m.height-4)
+		m.detail = viewport.New(dw, dh)
+		m.refreshDetail()
+		return m, nil
+
 	case tea.KeyMsg:
-		// Delete confirmation dialog intercepts all keys first.
+		// Delete confirmation dialog intercepts all keys.
 		if m.confirmDelete != nil {
 			switch msg.String() {
 			case "y", "Y":
@@ -144,53 +196,43 @@ func (m SnapshotBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, deleteSnapshotCmd(m.snapMgr, id)
 			default:
 				m.confirmDelete = nil
-				return m, nil
 			}
+			return m, nil
 		}
 
 		switch msg.String() {
-		case "enter":
-			if sel := m.list.SelectedItem(); sel != nil && !m.showDetail {
-				m.showDetail = true
-				snap := sel.(snapshotItem).snap
-				m.detail.SetContent(renderSnapshotDetail(snap, m.width-4))
-				m.detail.GotoTop()
-				return m, nil
-			}
+		case "tab":
+			m.focusLeft = !m.focusLeft
+			return m, nil
 		case "d", "delete":
-			if !m.showDetail {
+			if m.focusLeft {
 				if sel := m.list.SelectedItem(); sel != nil {
 					snap := sel.(snapshotItem).snap
 					m.confirmDelete = &snap
-					return m, nil
 				}
 			}
-		case "esc", "backspace":
-			if m.showDetail {
-				m.showDetail = false
-				return m, nil
-			}
+			return m, nil
 		}
-
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.list.SetSize(msg.Width, msg.Height-4)
-		m.detail = viewport.New(msg.Width, msg.Height-6)
 	}
 
 	if m.confirmDelete != nil {
 		return m, nil
 	}
 
-	if m.showDetail {
+	if m.focusLeft {
+		prevIdx := m.list.Index()
 		var cmd tea.Cmd
-		m.detail, cmd = m.detail.Update(msg)
+		m.list, cmd = m.list.Update(msg)
+		if m.list.Index() != prevIdx {
+			m.detail.GotoTop()
+			m.refreshDetail()
+		}
 		return m, cmd
 	}
 
+	// Detail pane focused.
 	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
+	m.detail, cmd = m.detail.Update(msg)
 	return m, cmd
 }
 
@@ -198,13 +240,55 @@ func (m SnapshotBrowserModel) View() string {
 	if m.confirmDelete != nil {
 		return m.renderDeleteConfirm()
 	}
-	if m.showDetail {
-		header := activeStyle.Render("Snapshot Detail") + "  " +
-			lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: back • ↑↓: scroll")
-		return header + "\n" + m.detail.View()
+
+	lw, dw, dh := snapshotPaneSizes(m.width, m.height)
+
+	// Left pane — list
+	listStyle := lipgloss.NewStyle().Width(lw)
+	leftContent := listStyle.Render(m.list.View())
+
+	// Divider
+	dividerChar := "│"
+	dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("236"))
+	dividerLines := make([]string, dh+4)
+	for i := range dividerLines {
+		dividerLines[i] = dividerStyle.Render(dividerChar)
 	}
-	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("enter: detail • d: delete • esc: close")
-	return m.list.View() + "\n" + hint
+	divider := strings.Join(dividerLines, "\n")
+
+	// Right pane — detail viewport
+	detailBorder := lipgloss.NewStyle().Width(dw)
+	if !m.focusLeft {
+		detailBorder = detailBorder.BorderLeft(false)
+	}
+	detailHeader := m.renderDetailHeader(dw)
+	rightContent := detailBorder.Render(detailHeader + "\n" + m.detail.View())
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftContent, divider, rightContent)
+
+	focusHint := "tab: focus detail"
+	if !m.focusLeft {
+		focusHint = "tab: focus list"
+	}
+	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).
+		Render(fmt.Sprintf("↑↓: navigate • d: delete • %s • esc: close", focusHint))
+
+	return body + "\n" + hint
+}
+
+func (m SnapshotBrowserModel) renderDetailHeader(dw int) string {
+	scrollPct := ""
+	if !m.focusLeft {
+		scrollPct = fmt.Sprintf(" %d%%", int(m.detail.ScrollPercent()*100))
+	}
+	focusIndicator := ""
+	if !m.focusLeft {
+		focusIndicator = activeStyle.Render(" [DETAIL]")
+	}
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).
+		Width(dw).
+		Render("Session Detail" + focusIndicator + scrollPct)
+	return label
 }
 
 func (m SnapshotBrowserModel) renderDeleteConfirm() string {
@@ -213,7 +297,7 @@ func (m SnapshotBrowserModel) renderDeleteConfirm() string {
 	if title == "" {
 		title = snap.Branch
 	}
-	if title == "" {
+	if title == "" && len(snap.SessionID) >= 8 {
 		title = snap.SessionID[:8]
 	}
 
@@ -235,10 +319,18 @@ func (m SnapshotBrowserModel) renderDeleteConfirm() string {
 }
 
 func renderSnapshotDetail(snap domain.SessionSnapshot, width int) string {
-	wrap := lipgloss.NewStyle().Width(width)
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	heading := func(s string) string {
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33")).Render(s)
+	}
+	wrapStyle := lipgloss.NewStyle().Width(width)
+	bullet := "  • "
+	arrow := "  → "
+	warn := "  ⚠ "
+
 	var b strings.Builder
 
-	// Header
+	// ── Header ─────────────────────────────────────────────────────────────
 	title := snap.IssueKey
 	if title == "" {
 		title = snap.Branch
@@ -247,47 +339,30 @@ func renderSnapshotDetail(snap domain.SessionSnapshot, width int) string {
 		title = snap.SessionID
 	}
 	b.WriteString(activeStyle.Render(title) + "\n")
+
 	meta := []string{}
-	if snap.AgentName != "" {
-		meta = append(meta, snap.AgentName)
-	}
 	if snap.RepoName != "" {
 		meta = append(meta, snap.RepoName)
 	}
 	if snap.Branch != "" && snap.Branch != title {
-		meta = append(meta, snap.Branch)
+		meta = append(meta, "branch: "+snap.Branch)
+	}
+	if snap.WorktreePath != "" {
+		meta = append(meta, "worktree: "+snap.WorktreePath)
+	}
+	if snap.AgentName != "" {
+		meta = append(meta, snap.AgentName)
 	}
 	meta = append(meta, snap.CreatedAt.Format("2006-01-02 15:04"))
-	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(strings.Join(meta, " · ")) + "\n")
+	b.WriteString(muted.Render(strings.Join(meta, " · ")) + "\n")
 
-	injected := "never"
+	injected := "never injected"
 	if snap.InjectedAt != nil {
-		injected = snap.InjectedAt.Format("2006-01-02 15:04")
+		injected = "injected " + snap.InjectedAt.Format("2006-01-02 15:04")
 	}
-	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Injected: "+injected) + "\n\n")
+	b.WriteString(muted.Render(injected) + "\n\n")
 
-	// Summary
-	b.WriteString(activeStyle.Render("Summary") + "\n")
-	if snap.Summary != "" {
-		b.WriteString(wrap.Render(snap.Summary) + "\n\n")
-	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("(no summary)") + "\n\n")
-	}
-
-	// Next steps
-	if len(snap.NextSteps) > 0 {
-		b.WriteString(activeStyle.Render("Next Steps") + "\n")
-		for _, s := range snap.NextSteps {
-			lines := strings.Split(wrap.Width(width-4).Render(s), "\n")
-			b.WriteString("  • " + lines[0] + "\n")
-			for _, l := range lines[1:] {
-				b.WriteString("    " + l + "\n")
-			}
-		}
-		b.WriteString("\n")
-	}
-
-	// Agent state badge
+	// ── Agent state badge ──────────────────────────────────────────────────
 	stateColor := "2"
 	switch snap.AgentState {
 	case domain.AgentStateErrored:
@@ -297,9 +372,86 @@ func renderSnapshotDetail(snap domain.SessionSnapshot, width int) string {
 	case domain.AgentStateIdle:
 		stateColor = "241"
 	}
-	b.WriteString(activeStyle.Render("Agent State") + " " +
+	b.WriteString(heading("Agent State") + " " +
 		lipgloss.NewStyle().Foreground(lipgloss.Color(stateColor)).Render(string(snap.AgentState)) + "\n\n")
+
+	// ── Overview ──────────────────────────────────────────────────────────
+	if len(snap.Overview) > 0 {
+		b.WriteString(heading("Overview") + "\n")
+		for _, sentence := range snap.Overview {
+			b.WriteString(wrapStyle.Render(sentence) + "\n")
+		}
+		b.WriteString("\n")
+	} else if snap.Summary != "" {
+		b.WriteString(heading("Overview") + "\n")
+		b.WriteString(wrapStyle.Render(snap.Summary) + "\n\n")
+	}
+
+	// ── Details ───────────────────────────────────────────────────────────
+	if len(snap.Details) > 0 {
+		b.WriteString(heading("Details") + "\n")
+		for _, item := range snap.Details {
+			lines := strings.Split(wrapStyle.Width(width-len(bullet)).Render(item), "\n")
+			b.WriteString(bullet + lines[0] + "\n")
+			for _, l := range lines[1:] {
+				b.WriteString("    " + l + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// ── Actions (needs immediate attention) ───────────────────────────────
+	if len(snap.Actions) > 0 {
+		b.WriteString(heading("Actions Needed") + "\n")
+		for _, item := range snap.Actions {
+			lines := strings.Split(wrapStyle.Width(width-len(warn)).Render(item), "\n")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(warn+lines[0]) + "\n")
+			for _, l := range lines[1:] {
+				b.WriteString("    " + l + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// ── Next Steps ────────────────────────────────────────────────────────
+	if len(snap.NextSteps) > 0 {
+		b.WriteString(heading("Next Steps") + "\n")
+		for _, item := range snap.NextSteps {
+			lines := strings.Split(wrapStyle.Width(width-len(arrow)).Render(item), "\n")
+			b.WriteString(arrow + lines[0] + "\n")
+			for _, l := range lines[1:] {
+				b.WriteString("    " + l + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// ── Pane Content Preview ───────────────────────────────────────────────
+	if len(snap.PaneContent) > 0 {
+		b.WriteString(heading("Session Content Preview") + "\n")
+		text, err := usecase.DecompressPaneContent(snap.PaneContent)
+		if err != nil {
+			b.WriteString(muted.Render("  (preview unavailable)") + "\n\n")
+		} else {
+			runes := []rune(text)
+			total := len(runes)
+
+			if total <= snapshotPreviewChars*2 {
+				b.WriteString(muted.Render("── full ──") + "\n")
+				b.WriteString(text + "\n\n")
+			} else {
+				head := string(runes[:snapshotPreviewChars])
+				tail := string(runes[total-snapshotPreviewChars:])
+				b.WriteString(muted.Render("── start ──") + "\n")
+				b.WriteString(head + "\n")
+				b.WriteString(muted.Render(fmt.Sprintf("── … %d chars omitted … ──", total-snapshotPreviewChars*2)) + "\n")
+				b.WriteString(muted.Render("── end ──") + "\n")
+				b.WriteString(tail + "\n\n")
+			}
+		}
+	}
 
 	return b.String()
 }
+
 

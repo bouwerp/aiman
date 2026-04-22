@@ -72,6 +72,9 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create session_snapshots table: %w", err)
 	}
 	_, _ = db.Exec("ALTER TABLE session_snapshots ADD COLUMN worktree_path TEXT")
+	_, _ = db.Exec("ALTER TABLE session_snapshots ADD COLUMN overview_json TEXT")
+	_, _ = db.Exec("ALTER TABLE session_snapshots ADD COLUMN details_json TEXT")
+	_, _ = db.Exec("ALTER TABLE session_snapshots ADD COLUMN actions_json TEXT")
 
 	return &Repository{
 		db: db,
@@ -214,18 +217,24 @@ func (r *Repository) SaveSnapshot(ctx context.Context, s *domain.SessionSnapshot
 	if err != nil {
 		return fmt.Errorf("failed to marshal next_steps: %w", err)
 	}
+	overviewJSON, _ := json.Marshal(s.Overview)
+	detailsJSON, _ := json.Marshal(s.Details)
+	actionsJSON, _ := json.Marshal(s.Actions)
+
 	var injectedAt *time.Time
 	if s.InjectedAt != nil {
 		injectedAt = s.InjectedAt
 	}
 	query := `
 	INSERT OR REPLACE INTO session_snapshots
-		(id, session_id, issue_key, branch, repo_name, agent_name, worktree_path, summary, next_steps_json, agent_state, pane_content, injected_at, created_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		(id, session_id, issue_key, branch, repo_name, agent_name, worktree_path,
+		 summary, overview_json, details_json, actions_json, next_steps_json,
+		 agent_state, pane_content, injected_at, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	_, err = r.db.ExecContext(ctx, query,
 		s.ID, s.SessionID, s.IssueKey, s.Branch, s.RepoName, s.AgentName, s.WorktreePath,
-		s.Summary, string(stepsJSON), string(s.AgentState), s.PaneContent,
-		injectedAt, s.CreatedAt,
+		s.Summary, string(overviewJSON), string(detailsJSON), string(actionsJSON), string(stepsJSON),
+		string(s.AgentState), s.PaneContent, injectedAt, s.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save snapshot: %w", err)
@@ -233,10 +242,13 @@ func (r *Repository) SaveSnapshot(ctx context.Context, s *domain.SessionSnapshot
 	return nil
 }
 
+const snapshotSelectCols = `id, session_id, issue_key, branch, repo_name, agent_name, worktree_path,
+	summary, overview_json, details_json, actions_json, next_steps_json,
+	agent_state, pane_content, injected_at, created_at`
+
 // GetLatestSnapshot returns the most recent snapshot for a session, or nil.
 func (r *Repository) GetLatestSnapshot(ctx context.Context, sessionID string) (*domain.SessionSnapshot, error) {
-	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, worktree_path, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
-	          FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC LIMIT 1;`
+	query := `SELECT ` + snapshotSelectCols + ` FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC LIMIT 1;`
 	row := r.db.QueryRowContext(ctx, query, sessionID)
 	s, err := scanSnapshot(row)
 	if err == sql.ErrNoRows {
@@ -250,8 +262,7 @@ func (r *Repository) GetLatestSnapshot(ctx context.Context, sessionID string) (*
 
 // ListSnapshots returns all snapshots for a session, newest first.
 func (r *Repository) ListSnapshots(ctx context.Context, sessionID string) ([]domain.SessionSnapshot, error) {
-	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, worktree_path, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
-	          FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC;`
+	query := `SELECT ` + snapshotSelectCols + ` FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC;`
 	rows, err := r.db.QueryContext(ctx, query, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list snapshots: %w", err)
@@ -262,8 +273,7 @@ func (r *Repository) ListSnapshots(ctx context.Context, sessionID string) ([]dom
 
 // ListAllSnapshots returns all snapshots across sessions, newest first.
 func (r *Repository) ListAllSnapshots(ctx context.Context) ([]domain.SessionSnapshot, error) {
-	query := `SELECT id, session_id, issue_key, branch, repo_name, agent_name, worktree_path, summary, next_steps_json, agent_state, pane_content, injected_at, created_at
-	          FROM session_snapshots ORDER BY created_at DESC;`
+	query := `SELECT ` + snapshotSelectCols + ` FROM session_snapshots ORDER BY created_at DESC;`
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list all snapshots: %w", err)
@@ -296,12 +306,13 @@ type snapshotScanner interface {
 
 func scanSnapshot(row snapshotScanner) (*domain.SessionSnapshot, error) {
 	var s domain.SessionSnapshot
-	var stepsJSON string
+	var stepsJSON, overviewJSON, detailsJSON, actionsJSON string
 	var injectedAt sql.NullTime
 	var createdAt sql.NullTime
 	err := row.Scan(
 		&s.ID, &s.SessionID, &s.IssueKey, &s.Branch, &s.RepoName, &s.AgentName, &s.WorktreePath,
-		&s.Summary, &stepsJSON, &s.AgentState, &s.PaneContent, &injectedAt, &createdAt,
+		&s.Summary, &overviewJSON, &detailsJSON, &actionsJSON, &stepsJSON,
+		&s.AgentState, &s.PaneContent, &injectedAt, &createdAt,
 	)
 	if err != nil {
 		return nil, err
@@ -313,11 +324,15 @@ func scanSnapshot(row snapshotScanner) (*domain.SessionSnapshot, error) {
 	if createdAt.Valid {
 		s.CreatedAt = createdAt.Time
 	}
-	if stepsJSON != "" {
-		if err := json.Unmarshal([]byte(stepsJSON), &s.NextSteps); err != nil {
-			s.NextSteps = nil
+	unmarshalJSON := func(raw string, dest *[]string) {
+		if raw != "" && raw != "null" {
+			_ = json.Unmarshal([]byte(raw), dest)
 		}
 	}
+	unmarshalJSON(overviewJSON, &s.Overview)
+	unmarshalJSON(detailsJSON, &s.Details)
+	unmarshalJSON(actionsJSON, &s.Actions)
+	unmarshalJSON(stepsJSON, &s.NextSteps)
 	return &s, nil
 }
 

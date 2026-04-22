@@ -16,8 +16,14 @@ type SessionSnapshot struct {
 	RepoName     string
 	AgentName    string
 	WorktreePath string
-	// Summary is a concise AI-generated overview of what was accomplished.
+	// Summary is a one-line description for list subtitles (first overview sentence).
 	Summary string
+	// Overview contains the AI-generated overview sentences.
+	Overview []string
+	// Details contains the AI-generated detail bullet points.
+	Details []string
+	// Actions contains items that need immediate human attention.
+	Actions []string
 	// NextSteps are AI-extracted items that remain to be done.
 	NextSteps []string
 	// AgentState is the detected state at capture time.
