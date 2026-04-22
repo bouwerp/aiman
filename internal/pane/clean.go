@@ -15,12 +15,13 @@ var ansiEscape = regexp.MustCompile(`\x1b(\[[0-9;?]*[a-zA-Z]|\][^\x07]*\x07|[()]
 //  1. Strip ANSI/VT100 escape sequences
 //  2. Collapse consecutive duplicate lines into "line [×N]"
 //  3. Collapse runs of blank lines into a single blank line
-//  4. Structural compression: suppress known command log noise first,
-//     then keep only signal-rich lines (commands, errors, test results,
-//     git output, build diagnostics)
+//  4. Drop known high-volume/low-signal noise (package manager chatter,
+//     progress bars, timestamped application log lines, etc.) while
+//     preserving everything else — user prompts, agent conversation,
+//     commands, errors, build output, test results, etc.
 //
-// On typical agent terminal sessions this reduces character count by ~60–80%.
-// The result is human/LLM readable and safe to pass directly to the model.
+// The blacklist approach (drop noise, keep everything else) ensures user
+// prompts and agent responses are preserved for AI summarisation.
 func Clean(s string) string {
 	return structuralCompress(cleanLines(s))
 }
@@ -66,17 +67,8 @@ func cleanLines(s string) string {
 	return strings.Join(out, "\n")
 }
 
-var (
-	scCmdLine   = regexp.MustCompile(`^\$\s`)
-	scError     = regexp.MustCompile(`(?i)\b(error|fail|panic|fatal)\b|(?i)^(warn(ing)?|except(ion)?):?\s`)
-	scTestLine  = regexp.MustCompile(`^(ok\s|FAIL\s|---\s+(PASS|FAIL)|^PASS$|^FAIL$)`)
-	scGitLine   = regexp.MustCompile(`^(\[[\w/. ]+\]|\s+\w.*\|\s+\d|\s+\d+ file)`)
-	scBuildDiag = regexp.MustCompile(`^[\w./]+\.(go|ts|js|py|rs|cpp|c|java):\d+:`)
-)
-
 // scNoise matches lines that are high-volume command log output with little
-// signal value. These are suppressed even if they would otherwise match a
-// signal pattern (noise suppression takes precedence).
+// signal value. These are suppressed, keeping everything else.
 var scNoise = []*regexp.Regexp{
 	// npm / yarn / pnpm package manager chatter
 	regexp.MustCompile(`(?i)^npm (warn|notice)\s+(deprecated|EBADENGINE|peer|old lockfile|fund)\b`),
@@ -122,21 +114,18 @@ func isNoise(l string) bool {
 	return false
 }
 
-// structuralCompress is pass 4: drop noise, keep only signal-rich lines.
+// structuralCompress is pass 4: drop only known noise lines, keep everything else.
+// This preserves user prompts, agent conversation, and contextual content while
+// still removing high-volume low-signal patterns (package manager chatter,
+// progress bars, timestamped log entries, etc.).
 func structuralCompress(s string) string {
 	lines := strings.Split(s, "\n")
 	out := make([]string, 0, len(lines))
 	for _, l := range lines {
-		if l == "" {
-			continue
-		}
 		if isNoise(l) {
 			continue
 		}
-		if scCmdLine.MatchString(l) || scError.MatchString(l) || scTestLine.MatchString(l) ||
-			scGitLine.MatchString(l) || scBuildDiag.MatchString(l) {
-			out = append(out, l)
-		}
+		out = append(out, l)
 	}
 	return strings.Join(out, "\n")
 }

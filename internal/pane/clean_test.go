@@ -161,31 +161,32 @@ func TestNoise_DoesNotSuppressRealErrors(t *testing.T) {
 	}
 }
 
-// ── warn: tightened regex tests ─────────────────────────────────────────────
+// ── warn: these lines should survive the blacklist ──────────────────────────
 
-func TestScError_WarnRequiresLineStart(t *testing.T) {
-	// "warn" buried in the middle of a log line should NOT be a signal
-	// (since it would have been noise-suppressed anyway), but we verify
-	// the tightened regex doesn't accidentally keep junk lines.
-	keep := []string{
+func TestStructuralCompress_KeepsWarnings(t *testing.T) {
+	cases := []string{
 		"warning: unused variable `x` [-Wunused-variable]",
 		"warn: config key deprecated",
 		"WARNING: foo bar baz",
 	}
-	for _, l := range keep {
-		if !scError.MatchString(l) {
-			t.Errorf("expected scError to match %q", l)
+	for _, l := range cases {
+		out := structuralCompress(l)
+		if !strings.Contains(out, l) {
+			t.Errorf("expected warning line to be kept: %q", l)
 		}
 	}
+}
 
-	noKeep := []string{
-		// "warn" embedded inside a word or URL – should NOT be a signal line on its own
-		"download.example.com/reward/badge",
+// ── structuralCompress: user prompts and agent conversation kept ─────────────
+
+func TestStructuralCompress_KeepsUserPrompts(t *testing.T) {
+	input := "Please refactor the auth module to use JWT\nSure, I'll start by looking at the existing code."
+	out := structuralCompress(input)
+	if !strings.Contains(out, "Please refactor") {
+		t.Error("expected user prompt to be kept")
 	}
-	for _, l := range noKeep {
-		if scError.MatchString(l) {
-			t.Errorf("expected scError NOT to match %q", l)
-		}
+	if !strings.Contains(out, "Sure, I'll start") {
+		t.Error("expected agent response to be kept")
 	}
 }
 
@@ -215,6 +216,7 @@ func TestClean_Integration(t *testing.T) {
 	// Should keep
 	must := []string{
 		"$ npm install",
+		"added 1234 packages in 45s", // non-noise line: preserved under blacklist
 		"$ go build",
 		"$ go test",
 		"ok  \tgithub.com/bouwerp/aiman/internal/pane",

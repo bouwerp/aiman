@@ -324,6 +324,7 @@ type Model struct {
 type archivePreviewData struct {
 	session        domain.Session
 	summary        *domain.SessionSummary
+	rawPane        string // full raw pane capture (for inspection/dump)
 	rawPaneLen     int    // chars captured from tmux (before cleaning)
 	cleanedPaneLen int    // chars after pane.Clean() (before truncation)
 	compressedSize int    // bytes of gzip-compressed cleaned pane
@@ -854,6 +855,7 @@ func loadArchivePreviewContinueCmd(cfg *config.Config, snapMgr *usecase.Snapshot
 				data: &archivePreviewData{
 					session:        session,
 					summary:        summary,
+					rawPane:        rawPane,
 					rawPaneLen:     rawPaneLen,
 					cleanedPaneLen: len(cleaned),
 					compressedSize: compressedSize,
@@ -4936,6 +4938,18 @@ func (m *Model) handleArchivePreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.archivePreview = nil
 			m.state = viewStateMain
+			return m, nil
+		case "d":
+			// Dump raw and cleaned pane content to /tmp for inspection.
+			if p := m.archivePreview; p != nil {
+				name := p.session.TmuxSession
+				rawPath := filepath.Join(os.TempDir(), "aiman-"+name+"-raw.txt")
+				cleanedPath := filepath.Join(os.TempDir(), "aiman-"+name+"-cleaned.txt")
+				_ = os.WriteFile(rawPath, []byte(p.rawPane), 0600)
+				_ = os.WriteFile(cleanedPath, []byte(p.cleanedPane), 0600)
+				m.snapshotToast = fmt.Sprintf("📄 Dumped to /tmp/aiman-%s-{raw,cleaned}.txt", name)
+				m.snapshotToastError = false
+			}
 			return m, nil
 		}
 	}
