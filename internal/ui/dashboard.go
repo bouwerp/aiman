@@ -2678,6 +2678,10 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshotToast = msg.text
 		m.snapshotToastError = msg.isError
 	case snapshotPreviewMsg:
+		if m.restartingSession == nil {
+			// Stale message — no restart in progress, ignore.
+			return m, nil
+		}
 		if msg.snapshot != nil {
 			// A prior snapshot exists — show the preview screen so the user can decide.
 			m.priorSnapshotCandidate = msg.snapshot
