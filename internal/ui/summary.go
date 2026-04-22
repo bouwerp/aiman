@@ -68,15 +68,19 @@ func (m *SummaryModel) SetAWSDefaults(cfg *domain.AWSConfig) {
 	profileInput.Placeholder = "blank = AWS default credential chain"
 	profileInput.SetValue(cfg.SourceProfile)
 	profileInput.Width = 40
-	profileInput.Focus()
 
 	regionInput := textinput.New()
-	regionInput.Placeholder = "AWS region (e.g. us-east-1)"
-	regionInput.SetValue(cfg.Region)
+	regionInput.Placeholder = "AWS region (e.g. us-east-2)"
+	region := cfg.Region
+	if region == "" {
+		region = "us-east-2"
+	}
+	regionInput.SetValue(region)
 	regionInput.Width = 40
 
 	m.inputs = []textinput.Model{profileInput, regionInput}
-	m.focusIndex = awsProfileInputIdx
+	// Default focus to the Create button so the user can just press Enter.
+	m.focusIndex = m.buttonFocusIndex()
 }
 
 func (m SummaryModel) Init() tea.Cmd {
