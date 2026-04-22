@@ -15,13 +15,14 @@ import (
 )
 
 const (
-	defaultOllamaHost = "http://localhost:11434"
-	defaultModel      = "qwen3:4b"
-	fallbackModel     = "llama3.2:3b"
-	maxPaneChars      = 9000  // tail of pane content sent to model (after cleaning)
-	defaultNumCtx     = 16384 // KV cache size; safe on M-series with ≥16GB unified memory
-	defaultMaxTokens  = 1200
-	httpClientTimeout = 120 * time.Second // ceiling for individual HTTP requests to Ollama
+	defaultOllamaHost  = "http://localhost:11434"
+	defaultModel       = "qwen3:4b"
+	fallbackModel      = "llama3.2:3b"
+	maxPaneChars       = 7500 // tail of pane content sent to model (after cleaning)
+	maxHeadChars       = 1500 // head of pane content — captures the initial user prompt
+	defaultNumCtx      = 16384 // KV cache size; safe on M-series with ≥16GB unified memory
+	defaultMaxTokens   = 1200
+	httpClientTimeout  = 120 * time.Second // ceiling for individual HTTP requests to Ollama
 )
 
 // ollamaGenerateRequest is the payload for POST /api/generate.
@@ -117,8 +118,9 @@ summary: one sentence describing current status. Write in present participle, NO
 actions: only items needing immediate human response (blocked on approval, unanswered question, unresolvable error). Empty array if none.`
 
 	sessionSummarySystemPrompt = `You are monitoring an AI coding agent's tmux session. Respond ONLY with valid JSON.
+When SESSION START is provided, treat the initial user prompt there as the primary goal of the session — use it to anchor the overview.
 agent_state: idle|working|waiting_input|errored|unknown.
-overview: array of 2-4 sentences, one per element. Write each in present participle — NO subject of any kind. NEVER use "The agent", "It", "The model", or any other subject. WRONG: "The agent implemented the archive flow." RIGHT: "Implemented the archive preview flow in dashboard.go." Cover goal, accomplishments, current status.
+overview: array of 2-4 sentences, one per element. First sentence states the session goal (derived from the initial prompt). Remaining sentences cover accomplishments and current status. Write each in present participle — NO subject of any kind. NEVER use "The agent", "It", "The model", or any other subject. WRONG: "The agent implemented the archive flow." RIGHT: "Implemented the archive preview flow in dashboard.go."
 details: array of 6-12 items — exact files created/modified/deleted, commands and outcomes, test pass/fail counts, errors verbatim, build and lint results. One sentence per item, no subject, present participle.
 actions: items needing immediate human response (blocked on approval, unanswered question, unresolvable error). Empty array if none.
 next_steps: concrete remaining tasks inferred from context. Empty array if none.`
@@ -227,7 +229,19 @@ func (o *OllamaIntelligence) SummariseBriefly(ctx context.Context, paneContent s
 
 // SummariseSession produces a full structured summary for archiving.
 func (o *OllamaIntelligence) SummariseSession(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
-	prompt := fmt.Sprintf("Analyse this terminal session output:\n\n```\n%s\n```", tailTruncate(pane.Clean(paneContent), maxPaneChars))
+	head := headTruncate(paneContent, maxHeadChars)
+	tail := tailTruncate(paneContent, maxPaneChars)
+
+	var prompt string
+	if head != tail {
+		// Long session: show opening (initial task) + recent work separately.
+		prompt = fmt.Sprintf(
+			"SESSION START (initial task / first prompt):\n```\n%s\n```\n\nSESSION RECENT ACTIVITY:\n```\n%s\n```",
+			head, tail,
+		)
+	} else {
+		prompt = fmt.Sprintf("Analyse this terminal session output:\n\n```\n%s\n```", tail)
+	}
 
 	raw, err := o.generate(ctx, sessionSummarySystemPrompt, prompt, sessionSummarySchema, defaultMaxTokens)
 	if err != nil {
@@ -410,4 +424,12 @@ func tailTruncate(s string, maxChars int) string {
 		return s
 	}
 	return "...[truncated]\n" + s[len(s)-maxChars:]
+}
+
+// headTruncate returns the first maxChars characters of s.
+func headTruncate(s string, maxChars int) string {
+	if len(s) <= maxChars {
+		return s
+	}
+	return s[:maxChars] + "\n...[truncated]"
 }
