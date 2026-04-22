@@ -16,22 +16,31 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// aimanPixels is a 7-row pixel bitmap for the AIMAN logo.
+// 'X' = filled pixel, anything else = empty.
+// Letter widths are 5px each with 1px gaps: total 29px wide.
+//
+//	A (5)  I (5)  M (5)  A (5)  N (5)
+var aimanPixels = []string{
+	".XXX. .XXX. X...X .XXX. X...X",
+	"X...X ..X.. XX.XX X...X XX..X",
+	"X...X ..X.. X.X.X X...X X.X.X",
+	"XXXXX ..X.. X...X XXXXX X..XX",
+	"X...X ..X.. X...X X...X X...X",
+	"X...X ..X.. X...X X...X X...X",
+	"X...X .XXX. X...X X...X X...X",
+}
+
 var (
-	aimanLogo = []string{
-		`    _   ___ __  __   _   _  _ `,
-		`   /_\ |_ _|  \/  | /_\ | \| |`,
-		`  / _ \ | || |\/| |/ _ \| .` + "`" + `|`,
-		` /_/ \_\___|_|  |_/_/ \_\_|\_|`,
-	}
-	logoTagline = "AI coding agent manager"
+	logoTagline = "ai coding agent manager"
 	logoPalette = []lipgloss.Color{
-		"#FF6B9D",
-		"#D45BFF",
-		"#7B9EFF",
-		"#5BFFE8",
-		"#5BFFA0",
-		"#FFD95B",
-		"#FF9A6B",
+		"#FF6B9D", // pink
+		"#D45BFF", // purple
+		"#7B9EFF", // blue
+		"#5BFFE8", // teal
+		"#5BFFA0", // green
+		"#FFD95B", // gold
+		"#FF9A6B", // orange
 	}
 )
 
@@ -304,16 +313,60 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m StartupModel) renderLogo() string {
-	var b strings.Builder
 	n := len(logoPalette)
-	for row, line := range aimanLogo {
-		for col, ch := range line {
-			// Wave: color index shifts diagonally (col + row*2) offset by frame
-			idx := ((col/2 + row*2) - m.logoFrame + n*100) % n
-			style := lipgloss.NewStyle().Foreground(logoPalette[idx]).Bold(true)
-			b.WriteString(style.Render(string(ch)))
+	rows := aimanPixels
+	numRows := len(rows)
+
+	maxCol := 0
+	for _, r := range rows {
+		if len(r) > maxCol {
+			maxCol = len(r)
 		}
-		b.WriteString("\n")
+	}
+
+	indent := "  "
+	if m.width > maxCol+4 {
+		indent = strings.Repeat(" ", (m.width-maxCol)/2)
+	}
+
+	var b strings.Builder
+	// Process pixel rows in pairs → one half-block character row each
+	for i := 0; i < numRows; i += 2 {
+		b.WriteString(indent)
+		topRow := rows[i]
+		bottomRow := ""
+		if i+1 < numRows {
+			bottomRow = rows[i+1]
+		}
+
+		for col := 0; col < maxCol; col++ {
+			topOn := col < len(topRow) && topRow[col] == 'X'
+			bottomOn := col < len(bottomRow) && bottomRow[col] == 'X'
+
+			// Wave sweeps left→right: one colour step per pixel column, offset by frame
+			topIdx := ((col - m.logoFrame) % n + n*100) % n
+			// bottom row is one pixel row lower; shift colour slightly for depth
+			botIdx := ((col - m.logoFrame + 1) % n + n*100) % n
+
+			switch {
+			case !topOn && !bottomOn:
+				b.WriteRune(' ')
+			case topOn && bottomOn && topIdx == botIdx:
+				// same colour → solid block
+				b.WriteString(lipgloss.NewStyle().Foreground(logoPalette[topIdx]).Render("█"))
+			case topOn && bottomOn:
+				// different colours → ▀ with fg=top, bg=bottom
+				b.WriteString(lipgloss.NewStyle().
+					Foreground(logoPalette[topIdx]).
+					Background(logoPalette[botIdx]).
+					Render("▀"))
+			case topOn:
+				b.WriteString(lipgloss.NewStyle().Foreground(logoPalette[topIdx]).Render("▀"))
+			default: // bottomOn only
+				b.WriteString(lipgloss.NewStyle().Foreground(logoPalette[botIdx]).Render("▄"))
+			}
+		}
+		b.WriteRune('\n')
 	}
 	return b.String()
 }
@@ -322,21 +375,25 @@ func (m StartupModel) View() string {
 	var b strings.Builder
 	b.WriteString("\n")
 
-	// Animated logo
+	// Pixel-art logo with animated colour wave
 	b.WriteString(m.renderLogo())
 
-	// Tagline
+	// Tagline — centred, italicised, cycles through palette
+	tagline := logoTagline
 	taglineStyle := lipgloss.NewStyle().
 		Foreground(logoPalette[m.logoFrame%len(logoPalette)]).
-		Italic(true).
-		PaddingLeft(1)
-	b.WriteString(taglineStyle.Render(logoTagline))
+		Italic(true)
+	if m.width > len(tagline)+4 {
+		pad := strings.Repeat(" ", (m.width-len(tagline))/2)
+		b.WriteString(pad + taglineStyle.Render(tagline))
+	} else {
+		b.WriteString("  " + taglineStyle.Render(tagline))
+	}
 	b.WriteString("\n\n")
 
-	// Spinner + label
+	// Spinner + checks
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", m.spinner.View(), "Running startup checks..."))
 
-	// Fixed order display
 	order := []string{"JIRA", "Git", "SSH"}
 	for _, name := range order {
 		res := m.checks[name]
@@ -351,7 +408,6 @@ func (m StartupModel) View() string {
 		b.WriteString(fmt.Sprintf("  %s %-10s: %s\n", status, res.Name, res.Message))
 	}
 
-	// Discovery status
 	if m.discoveryDone {
 		b.WriteString(fmt.Sprintf("  %s %-10s: %s\n", successStyle.Render("✓"), "Discover", "sessions loaded"))
 	} else {
