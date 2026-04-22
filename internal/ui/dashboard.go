@@ -16,6 +16,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/infra/ai"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
@@ -322,9 +323,12 @@ type Model struct {
 type archivePreviewData struct {
 	session        domain.Session
 	summary        *domain.SessionSummary
-	rawPaneLen     int // chars captured from tmux (before cleaning)
-	cleanedPaneLen int // chars after pane.Clean() (before truncation)
-	compressedSize int // bytes of gzip-compressed cleaned pane
+	rawPaneLen     int    // chars captured from tmux (before cleaning)
+	cleanedPaneLen int    // chars after pane.Clean() (before truncation)
+	compressedSize int    // bytes of gzip-compressed cleaned pane
+	cleanedPane    string // full cleaned pane text (for head/tail preview)
+	promptHead     string // first N chars sent to the model (SESSION START)
+	promptTail     string // last M chars sent to the model (SESSION RECENT ACTIVITY)
 	snapshot       *domain.SessionSnapshot
 }
 
@@ -843,14 +847,18 @@ func loadArchivePreviewContinueCmd(cfg *config.Config, snapMgr *usecase.Snapshot
 			if err != nil {
 				return archiveStepErrMsg{idx: 3, err: err}
 			}
-			cleanedLen := len(pane.Clean(rawPane))
+			cleaned := pane.Clean(rawPane)
+			head, tail := promptHeadTail(cleaned)
 			return archivePreviewReadyMsg{
 				data: &archivePreviewData{
 					session:        session,
 					summary:        summary,
 					rawPaneLen:     rawPaneLen,
-					cleanedPaneLen: cleanedLen,
+					cleanedPaneLen: len(cleaned),
 					compressedSize: compressedSize,
+					cleanedPane:    cleaned,
+					promptHead:     head,
+					promptTail:     tail,
 					snapshot:       snap,
 				},
 			}
@@ -4965,7 +4973,50 @@ func buildArchivePreviewBody(p *archivePreviewData, inner int) string {
 		b.WriteString("\n")
 	}
 
+	// Prompt preview — shows exactly what was sent to the model.
+	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	if p.promptHead != "" || p.promptTail != "" {
+		b.WriteString(sectionStyle.Render("Prompt Preview") + "\n")
+		b.WriteString(codeStyle.Render(fmt.Sprintf(
+			"  head: %d chars sent  ·  tail: %d chars sent  ·  cleaned total: %d chars\n",
+			min(len(p.cleanedPane), ai.MaxHeadChars),
+			min(len(p.cleanedPane), ai.MaxTailChars),
+			len(p.cleanedPane),
+		)))
+		b.WriteString("\n")
+
+		headLabel := fmt.Sprintf("── SESSION START (first %d chars) ──", ai.MaxHeadChars)
+		b.WriteString(codeStyle.Render("  "+headLabel) + "\n")
+		for _, l := range strings.Split(p.promptHead, "\n") {
+			b.WriteString(codeStyle.Render("  "+l) + "\n")
+		}
+		b.WriteString("\n")
+
+		if len(p.cleanedPane) > ai.MaxHeadChars {
+			tailLabel := fmt.Sprintf("── SESSION RECENT ACTIVITY (last %d chars) ──", ai.MaxTailChars)
+			b.WriteString(codeStyle.Render("  "+tailLabel) + "\n")
+			for _, l := range strings.Split(p.promptTail, "\n") {
+				b.WriteString(codeStyle.Render("  "+l) + "\n")
+			}
+			b.WriteString("\n")
+		}
+	}
+
 	return b.String()
+}
+
+// promptHeadTail returns the head and tail of cleaned pane content that will be
+// sent to the AI, mirroring the logic in OllamaIntelligence.SummariseSession.
+func promptHeadTail(cleaned string) (head, tail string) {
+	head = cleaned
+	if len(cleaned) > ai.MaxHeadChars {
+		head = cleaned[:ai.MaxHeadChars] + "\n...[truncated]"
+	}
+	tail = cleaned
+	if len(cleaned) > ai.MaxTailChars {
+		tail = "...[truncated]\n" + cleaned[len(cleaned)-ai.MaxTailChars:]
+	}
+	return head, tail
 }
 
 func initArchiveSteps() []archiveStep {

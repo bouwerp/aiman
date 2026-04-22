@@ -15,14 +15,16 @@ import (
 )
 
 const (
-	defaultOllamaHost  = "http://localhost:11434"
-	defaultModel       = "qwen3:4b"
-	fallbackModel      = "llama3.2:3b"
-	maxPaneChars       = 7500 // tail of pane content sent to model (after cleaning)
-	maxHeadChars       = 1500 // head of pane content — captures the initial user prompt
-	defaultNumCtx      = 16384 // KV cache size; safe on M-series with ≥16GB unified memory
-	defaultMaxTokens   = 1200
-	httpClientTimeout  = 120 * time.Second // ceiling for individual HTTP requests to Ollama
+	defaultOllamaHost = "http://localhost:11434"
+	defaultModel      = "qwen3:4b"
+	fallbackModel     = "llama3.2:3b"
+	// MaxHeadChars and MaxTailChars are exported so the UI can show a preview
+	// of exactly what gets sent to the model.
+	MaxHeadChars     = 3000  // head of pane content — captures the initial user prompt
+	MaxTailChars     = 12000 // tail of pane content — most recent activity
+	defaultNumCtx    = 16384 // KV cache size; safe on M-series with ≥16GB unified memory
+	defaultMaxTokens = 1200
+	httpClientTimeout = 120 * time.Second // ceiling for individual HTTP requests to Ollama
 )
 
 // ollamaGenerateRequest is the payload for POST /api/generate.
@@ -202,7 +204,7 @@ func (o *OllamaIntelligence) IsAvailable(ctx context.Context) bool {
 
 // SummariseBriefly produces a compact status summary for the session browser sidebar.
 func (o *OllamaIntelligence) SummariseBriefly(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
-	prompt := fmt.Sprintf("Terminal output:\n\n```\n%s\n```", tailTruncate(pane.Clean(paneContent), maxPaneChars))
+	prompt := fmt.Sprintf("Terminal output:\n\n```\n%s\n```", tailTruncate(pane.Clean(paneContent), MaxTailChars))
 
 	raw, err := o.generate(ctx, sessionBriefSystemPrompt, prompt, sessionBriefSchema, 200)
 	if err != nil {
@@ -229,8 +231,8 @@ func (o *OllamaIntelligence) SummariseBriefly(ctx context.Context, paneContent s
 
 // SummariseSession produces a full structured summary for archiving.
 func (o *OllamaIntelligence) SummariseSession(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
-	head := headTruncate(paneContent, maxHeadChars)
-	tail := tailTruncate(paneContent, maxPaneChars)
+	head := headTruncate(paneContent, MaxHeadChars)
+	tail := tailTruncate(paneContent, MaxTailChars)
 
 	var prompt string
 	if head != tail {
@@ -272,7 +274,7 @@ func (o *OllamaIntelligence) SummariseSession(ctx context.Context, paneContent s
 
 // DetectActions extracts actionable items from session output.
 func (o *OllamaIntelligence) DetectActions(ctx context.Context, paneContent string) ([]domain.ActionItem, error) {
-	prompt := fmt.Sprintf("Extract action items from this terminal output:\n\n```\n%s\n```", tailTruncate(pane.Clean(paneContent), maxPaneChars))
+	prompt := fmt.Sprintf("Extract action items from this terminal output:\n\n```\n%s\n```", tailTruncate(pane.Clean(paneContent), MaxTailChars))
 
 	raw, err := o.generate(ctx, actionItemsSystemPrompt, prompt, actionItemsSchema, 300)
 	if err != nil {
