@@ -163,44 +163,33 @@ func downloadBinary(url, assetName string) (string, error) {
 }
 
 // replaceExecutable atomically replaces the running binary.
-// On POSIX systems: write new binary to a temp file beside the target, then rename.
+// Reads the new binary into memory, writes it to a staging file beside the
+// target with explicit 0755 permissions, then renames atomically.
 func replaceExecutable(target, newBinary string) error {
+	data, err := os.ReadFile(newBinary)
+	if err != nil {
+		return fmt.Errorf("read new binary: %w", err)
+	}
+
 	dir := filepath.Dir(target)
-	tmp, err := os.CreateTemp(dir, ".aiman-update-*")
-	if err != nil {
-		return fmt.Errorf("create staging file: %w", err)
-	}
-	tmpName := tmp.Name()
-	tmp.Close()
+	staged := filepath.Join(dir, ".aiman-update-staged")
+	// Remove any stale staging file so WriteFile creates fresh (with correct perms).
+	os.Remove(staged)
 
-	src, err := os.Open(newBinary)
-	if err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	dst, err := os.OpenFile(tmpName, os.O_WRONLY|os.O_TRUNC, 0755)
-	if err != nil {
-		src.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		src.Close()
-		dst.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("copy to staging: %w", err)
-	}
-	src.Close()
-	dst.Close()
-
-	if err := os.Chmod(tmpName, 0755); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("chmod staging file: %w", err)
+	if err := os.WriteFile(staged, data, 0755); err != nil {
+		os.Remove(staged)
+		return fmt.Errorf("write staged binary: %w", err)
 	}
 
-	if err := os.Rename(tmpName, target); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename staging to target: %w", err)
+	// Ensure executable bit is set regardless of umask.
+	if err := os.Chmod(staged, 0755); err != nil {
+		os.Remove(staged)
+		return fmt.Errorf("chmod staged binary: %w", err)
+	}
+
+	if err := os.Rename(staged, target); err != nil {
+		os.Remove(staged)
+		return fmt.Errorf("replace binary: %w", err)
 	}
 	return nil
 }
