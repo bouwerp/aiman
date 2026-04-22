@@ -6,13 +6,15 @@
 
 Aiman automates the entire development workflow:
 
-1. **Select a JIRA Issue** - Search and filter your assigned issues
-2. **Generate Branch Name** - Auto-creates git-compatible branch names
-3. **Pick a Repository** - Browse your GitHub repos
-4. **Choose Subdirectory** - Pick a repo sub-folder (monorepo-friendly)
-5. **Scan Agents** - Detect available agents on the remote
-6. **Review Summary** - Confirm settings before creation
-7. **Create Session** - Worktree + tmux + agent launch + mutagen sync
+1. **Select a JIRA Issue** — Search and filter your assigned issues
+2. **Generate Branch Name** — Auto-creates git-compatible branch names
+3. **Pick a Repository** — Browse your GitHub repos
+4. **Choose Subdirectory** — Pick a repo sub-folder (monorepo-friendly)
+5. **Scan Agents** — Detect available agents on the remote
+6. **Review Summary** — Confirm settings (and override AWS credentials) before creation
+7. **Create Session** — Worktree + tmux + agent launch + mutagen sync + AWS credentials
+
+Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 
 ## ✨ Features
 
@@ -20,14 +22,27 @@ Aiman automates the entire development workflow:
 - **JIRA Integration**: Real-time search with VSCode-style filtering
 - **Smart Branch Names**: Auto-sanitizes issue titles for git compatibility
 - **Repo & Directory Picker**: Choose repo + subdirectory from the remote
-- **Multi-Agent Support**: Scan and select Claude Code, Gemini CLI, GitHub Copilot, or OpenCode
-- **Session Management**: Track active sessions with live tmux previews
+- **Multi-Agent Support**: Scan and select Claude Code, Gemini CLI, GitHub Copilot, OpenCode, or Cursor
+- **Ad-hoc Sessions**: Create quick sessions without a JIRA issue, branch, or repo
+- **Session Management**: Track active sessions with live tmux pane previews
+
+### AI Intelligence
+- **Brief AI Summary**: Short summary shown in the session list sidebar (per active session)
+- **Long AI Summary**: Detailed summary with action items generated at archive time
+- **Session Archive**: Compress, AI-summarise, and persist a session snapshot in one step
+- **Snapshot Browser**: Browse, search, and preview archived sessions — shows full AI summary and session content head/tail
+- **Pane Debug Dump**: In the archive preview, press `d` to write raw and cleaned pane content to `/tmp/` for inspection
 
 ### Remote Development
 - **SSH Multiplexing**: High-performance connections with ControlMaster
-- **MOSH Support**: Handoff to MOSH for high-latency connections (coming soon)
 - **Mutagen Sync**: Real-time file sync between local and remote
 - **Tmux Integration**: Native tmux session management
+
+### AWS Credential Delegation
+- **Session-scoped AWS profiles**: Each session gets a unique AWS profile (`aiman-<id>`) on the remote, isolated from other sessions
+- **STS token push**: Fresh temporary credentials are pushed to the remote before the agent starts
+- **Per-session overrides**: At session creation, override the AWS profile and region independently per session (e.g. `dev`/`us-east-1` in one session, `prod`/`eu-west-1` in another)
+- **Automatic cleanup**: AWS profile removed from the remote when the session is terminated
 
 ### User Experience
 - **Interactive TUI**: Built with Bubble Tea for a modern terminal UI
@@ -35,11 +50,12 @@ Aiman automates the entire development workflow:
 - **VS Code Integration**: Open synced directories directly in VS Code (`v` key)
 - **Health Checks**: Built-in "Doctor" validates all integrations on startup
 - **Fuzzy Search**: Find issues, repos, and sessions quickly
-- **Progress Loading**: Dedicated loaders between flow steps
+- **Filter by Remote**: Show only sessions from a specific remote server (`f` key)
+- **Self-update**: `aiman update` downloads and installs the latest release in-place
 
 ### Configuration
 - **YAML-based Config**: Simple `~/.aiman/config.yaml` configuration
-- **SQLite Persistence**: Session state and history tracking
+- **SQLite Persistence**: Session state, history, and snapshot tracking
 - **Secure Token Storage**: JIRA API tokens stored in config (use `op` or similar for production)
 
 ## 🛠 Installation
@@ -51,8 +67,6 @@ The installer downloads the correct pre-built binary for your platform, installs
 ```bash
 curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash
 ```
-
-To update, run the same command — it overwrites the existing binary with the latest release.
 
 **Options:**
 
@@ -70,6 +84,16 @@ If no pre-built binary is available for your platform, the installer falls back 
 - macOS (Intel & Apple Silicon)
 - Linux (amd64 & arm64)
 - Windows (amd64)
+
+### Self-Update
+
+Once installed, keep aiman up to date with:
+
+```bash
+aiman update
+```
+
+This downloads the latest release binary and replaces the running binary in-place.
 
 ### Manual Build
 
@@ -92,7 +116,7 @@ mv aiman ~/.local/bin/
 - **tmux**: For session management on remote servers
 - **mutagen**: For local/remote file syncing
 - **code** (VS Code CLI): For IDE integration
-- **mosh**: For high-latency connections
+- **AWS CLI**: Required for AWS credential delegation (`aws sts`)
 
 ## 🎮 Usage
 
@@ -123,19 +147,27 @@ aiman
 
 | Key | Action |
 |-----|--------|
-| `n` | **New Session** - Start the workflow wizard |
-| `m` | **Admin Menu** - Configure remotes, JIRA, etc. |
+| `n` | **New Session** — Start the full JIRA-driven workflow wizard |
+| `m` | **Admin Menu** — Configure remotes, JIRA, browse snapshots |
 | `↑/↓` | Navigate sessions |
 | `Enter` | Select item |
 | `ESC` | Go back / Cancel |
-| `Ctrl+S` | **Attach** to tmux session (full terminal) |
-| `Ctrl+T` | **Toggle** between preview and terminal mode |
-| `t` | **Tunnels** - Manage per-session local↔remote port forwards |
+| `a` | **Attach** to tmux session (full terminal) |
+| `s` | **Restart** session (re-launch agent in existing tmux) |
+| `c` | **Change** directory scope for the session |
+| `t` | **Tunnels** — Manage per-session local↔remote port forwards |
 | `p` | **Copy local path** to clipboard |
 | `v` | **Open in VS Code** (local synced directory) |
-| `r` | **Refresh** session list |
-| `Ctrl+Y` | **Recreate Mutagen Sync** for selected session |
+| `y` | **Copy session output** (visible pane area) to clipboard |
+| `Y` | **Copy session output** (full preview) to clipboard |
+| `G` / `End` | Jump preview pane to latest output |
+| `i` | **AI Insight** — Generate a brief AI summary of the session |
+| `r` | **Refresh** session status |
+| `f` | **Filter** session list by remote |
+| `Ctrl+A` | **Archive Session** — AI-summarise and snapshot the session |
+| `Ctrl+Y` | **Recreate Mutagen Sync** for the selected session |
 | `Ctrl+K` | **Terminate Session** (with git safety checks) |
+| `` ` `` | Toggle debug console |
 | `Ctrl+C` | Quit |
 
 ### Creating a New Session
@@ -143,14 +175,24 @@ aiman
 1. Press `n` on the dashboard
 2. **Select JIRA Issue**: Type to filter your issues in real-time
 3. **Confirm Branch Name**: Edit the auto-generated git-compatible branch name
-   - Invalid characters are blocked
-   - Spaces automatically become dashes
+   - Invalid characters are blocked; spaces automatically become dashes
 4. **Select Repository**: Pick from your GitHub repos
 5. **Select Subdirectory**: Choose a repo subdirectory (or `.` for root)
-6. **Agent Selection**: Choose your AI coding assistant (Claude, Gemini, etc.)
+6. **Agent Selection**: Choose your AI coding assistant (Claude Code, Gemini CLI, Copilot, OpenCode, Cursor)
 7. **Summary**: Review selected issue/branch/repo/dir/agent before creation
+   - If AWS credential delegation is configured for the remote, editable **Profile** and **Region** fields appear — pre-filled with remote defaults, overridable per session (Tab cycles between fields)
 
-Note: Session creation is now wired. If you hit an error, check your remote SSH config and `mutagen` availability.
+### Creating an Ad-hoc Session
+
+Skip the JIRA/branch/repo flow and jump straight to agent selection:
+
+1. Press `n` on the dashboard
+2. When prompted for a JIRA issue, press `Tab` to switch to ad-hoc mode
+3. Optionally enter a label for the session, or leave blank for auto-generated
+4. **Agent Selection**: Choose your AI coding assistant
+5. **Summary**: Review and confirm
+
+Ad-hoc sessions still get their own tmux session, mutagen sync, and AWS credentials.
 
 ### Terminating a Session
 
@@ -159,6 +201,26 @@ Press `Ctrl+K` from the dashboard, then confirm with `y`.
 Before termination runs, Aiman checks the session worktree and blocks termination when:
 - there are uncommitted tracked changes, or
 - the current branch has commits not pushed to its upstream (or has no upstream yet).
+
+### Archiving a Session
+
+Press `Ctrl+A` on a selected session. Aiman will:
+
+1. Capture the full tmux pane scrollback
+2. Strip ANSI escape sequences and collapse noise (package manager spam, progress bars, timestamps)
+3. Preserve user prompts and agent conversation content
+4. Send to the AI model for a **long summary** (overview + action items) and a **short summary**
+5. Compress the cleaned content (gzip)
+6. Show a preview — press `Enter` to save, `ESC` to discard, `d` to dump raw/cleaned content to `/tmp/`
+
+### Browsing Archived Sessions
+
+Access the **Snapshot Browser** via the Admin Menu (`m`) → **Session Snapshots**:
+
+- Left pane: list of archived sessions with short AI summary
+- Right pane: full AI summary, git metadata, and a preview of the session head/tail
+- `Delete` / `d`: delete the selected snapshot
+- `ESC`: close the browser
 
 ### Recreating Mutagen Sync
 
@@ -170,59 +232,21 @@ Press `m` to access:
 - **Manage Remote Servers**: Add, scan, or test SSH connections
 - **JIRA Configuration**: Update credentials
 - **Health Checks**: Re-run doctor checks
+- **Session Snapshots**: Open the archive browser
 
 ### Git Repository Configuration
 
-By default, Aiman shows your personal GitHub repositories. You can customize which repositories appear in the picker by editing `~/.aiman/config.yaml`:
+By default, Aiman shows your personal GitHub repositories. Customize which repos appear in the picker via `~/.aiman/config.yaml`:
 
 ```yaml
 git:
-  # Include your personal repositories (default: true)
-  include_personal: true
-  
-  # Include repositories from specific organizations
+  include_personal: true     # include your own repos (default: true)
   include_orgs:
-    - "mycompany"
-    - "opensource-org"
-  
-  # Include only repos matching these patterns (optional)
-  # Supports regex. If empty, includes all repos not excluded
+    - "mycompany"            # include org repos
   include_patterns:
-    - "^mycompany/.*"
-    - "^important-"
-  
-  # Exclude repos matching these patterns (optional)
-  # Supports regex
+    - "^mycompany/.*"        # regex — only matching repos (optional)
   exclude_patterns:
-    - "^personal/"
-    - ".*\.github\.io$"
-```
-
-**Examples:**
-
-Show only repos from your company org:
-```yaml
-git:
-  include_personal: false
-  include_orgs:
-    - "mycompany"
-```
-
-Include personal repos and filter out forks:
-```yaml
-git:
-  include_personal: true
-  exclude_patterns:
-    - ".*-fork$"
-```
-
-Include only specific repos by exact name:
-```yaml
-git:
-  include_personal: true
-  include_patterns:
-    - "^mycompany/backend-api$"
-    - "^mycompany/frontend-app$"
+    - ".*\.github\.io$"      # regex — exclude matching repos (optional)
 ```
 
 ### Repository Browser
@@ -240,7 +264,7 @@ All data is stored in `~/.aiman/`:
 ```
 ~/.aiman/
 ├── config.yaml          # Main configuration
-├── aiman.db             # SQLite database
+├── aiman.db             # SQLite database (sessions + snapshots)
 └── sockets/             # SSH ControlMaster sockets
 ```
 
@@ -253,36 +277,45 @@ integrations:
     email: "you@company.com"
     api_token: "ATATT..."
 
-# Git Repository Configuration
 git:
-  # Include your personal repositories (default: true)
   include_personal: true
-  
-  # Include repositories from specific organizations
   include_orgs:
     - "mycompany"
-    - "opensource-org"
-  
-  # Include only repos matching these patterns (optional)
-  # Supports regex. If empty, includes all repos not excluded
-  include_patterns:
-    - "^mycompany/.*"
-    - "^important-"
-  
-  # Exclude repos matching these patterns (optional)
-  # Supports regex
-  exclude_patterns:
-    - "^personal/"
-    - ".*\.github\.io$"
 
 remotes:
   - name: devbox
     host: devbox.company.com
     user: developer
     root: /home/developer/repos
+    aws_delegation:
+      source_profile: my-local-aws-profile   # local ~/.aws profile with long-lived creds
+      role_name: TemporaryDelegatedRole        # IAM role to assume on the remote
+      account_id: "123456789012"               # 12-digit AWS account ID
+      region: us-east-1                        # default region written to remote profile
+      sync_credentials: true                   # push fresh STS tokens before each session
+      duration_seconds: 3600                   # credential lifetime (900–43200)
 
 active_remote: devbox
 ```
+
+### AWS Credential Delegation
+
+When `sync_credentials: true`, each new session on that remote gets:
+
+1. A unique AWS profile `aiman-<session-id>` on the remote
+2. Fresh STS tokens pushed before the agent starts
+3. `AWS_PROFILE=aiman-<id>` injected into the tmux session environment
+
+**Per-session overrides** are available in the session creation summary screen — edit the **Profile** and **Region** fields to override the remote defaults for just that session:
+
+```
+> Profile:  [dev                                    ]   ← tab to edit
+  Region:   [eu-west-1                              ]
+```
+
+The profile and region can differ per session; all other settings (role, account, session policy, duration) inherit from the remote config.
+
+AWS profiles are automatically removed from the remote when a session is terminated.
 
 ## 🏗 Architecture
 
@@ -295,12 +328,14 @@ Aiman follows **Clean Architecture** principles:
 ├─────────────────────────────────────────┤
 │  Use Cases                              │
 │  - Doctor, Session Discovery, Flow      │
+│  - SnapshotManager, IntelligenceLayer   │
 ├─────────────────────────────────────────┤
 │  Domain                                 │
-│  - Session, Issue, Repository           │
+│  - Session, Issue, Repository, Snapshot │
 ├─────────────────────────────────────────┤
 │  Infrastructure                         │
-│  - JIRA, Git, SSH, SQLite, Mutagen     │
+│  - JIRA, Git, SSH, SQLite, Mutagen      │
+│  - AI (Ollama), AWS Delegation          │
 └─────────────────────────────────────────┘
 ```
 
@@ -313,6 +348,9 @@ Aiman follows **Clean Architecture** principles:
 - **`MutagenBridge`**: File synchronization
 - **`TmuxManager`**: Session lifecycle management
 - **`SkillEngine`**: Agent configuration injection
+- **`SnapshotManager`**: Session archiving (capture → clean → compress → AI → persist)
+- **`IntelligenceProvider`**: AI summarisation via Ollama (local LLM)
+- **`AWSDelegation`**: Session-scoped AWS credential push and cleanup
 
 ## 🔄 Development Workflow
 
@@ -344,8 +382,12 @@ Aiman follows **Clean Architecture** principles:
 - [x] GitHub Copilot CLI support
 - [x] OpenCode integration
 - [x] Cursor integration
-- [x] AWS credential delegation to remotes
+- [x] Ad-hoc sessions (no JIRA issue required)
+- [x] AWS credential delegation to remotes (session-scoped, per-session overrides)
 - [x] Session tunnel management (local port forwarding)
+- [x] AI session summaries (brief + long) with action items
+- [x] Session archiving and snapshot browser
+- [x] Self-update (`aiman update`)
 - [ ] Git intelligence panel
 - [ ] MOSH support
 
@@ -418,15 +460,12 @@ To create a new release:
 
 1. Tag the commit with a semantic version:
    ```bash
-   git tag -a v1.0.0 -m "Release v1.0.0"
+   git tag v1.0.0
    git push origin v1.0.0
    ```
 
 2. GitHub Actions automatically:
-   - Builds binaries for:
-     - macOS (Intel & Apple Silicon)
-     - Linux (amd64 & arm64)
-     - Windows (amd64)
+   - Builds binaries for macOS (Intel & Apple Silicon), Linux (amd64 & arm64), and Windows (amd64)
    - Creates a GitHub release with changelog
    - Attaches all binaries with SHA256 checksums
 
@@ -452,7 +491,7 @@ Contributions are welcome! Please follow these steps:
 
 ## 📄 License
 
-MIT License - see LICENSE file for details
+MIT License — see LICENSE file for details
 
 ## 🙏 Acknowledgments
 
@@ -463,3 +502,4 @@ MIT License - see LICENSE file for details
 ---
 
 *Built with ❤️ in Go by Pieter Bouwer*
+
