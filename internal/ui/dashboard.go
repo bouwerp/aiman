@@ -1860,6 +1860,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.archivePreviewVP.SetContent(buildArchivePreviewBody(msg.data, inner))
 		m.state = viewStateArchivePreview
 		return m, nil
+	case snapshotPreviewMsg:
+		// Handled globally so it works regardless of which state dispatched loadPriorSnapshotCmd.
+		if m.restartingSession == nil {
+			return m, nil
+		}
+		if msg.snapshot != nil {
+			m.priorSnapshotCandidate = msg.snapshot
+			m.state = viewStateSnapshotPreview
+		} else {
+			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, m.restartSession()
+		}
+		return m, nil
 	}
 
 	switch m.state {
@@ -2677,22 +2692,6 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case snapshotToastMsg:
 		m.snapshotToast = msg.text
 		m.snapshotToastError = msg.isError
-	case snapshotPreviewMsg:
-		if m.restartingSession == nil {
-			// Stale message — no restart in progress, ignore.
-			return m, nil
-		}
-		if msg.snapshot != nil {
-			// A prior snapshot exists — show the preview screen so the user can decide.
-			m.priorSnapshotCandidate = msg.snapshot
-			m.state = viewStateSnapshotPreview
-		} else {
-			// No snapshot — proceed directly to restart.
-			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-			return m, m.restartSession()
-		}
 	case snapshotBrowserLoadedMsg:
 		var sub tea.Model
 		var loadCmd tea.Cmd
