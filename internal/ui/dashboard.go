@@ -1446,21 +1446,6 @@ func (m *Model) createSession() tea.Cmd {
 		sessionCfg.RemoteHost = remote.Host
 	}
 
-	// Inherit session-scoped AWS credentials from the remote's AWSDelegation config.
-	// Only activated when SyncCredentials is enabled on the remote.
-	if sessionCfg.AWSConfig == nil && remote.AWSDelegation != nil && remote.AWSDelegation.SyncCredentials {
-		d := remote.AWSDelegation
-		sessionCfg.AWSConfig = &domain.AWSConfig{
-			SourceProfile:   d.SourceProfile,
-			RoleName:        d.RoleName,
-			AccountID:       d.AccountID,
-			Region:          d.Region,
-			Regions:         d.Regions,
-			SessionPolicy:   d.SessionPolicy,
-			DurationSeconds: d.DurationSeconds,
-		}
-	}
-
 	return func() tea.Msg {
 		ctx := context.Background()
 
@@ -3942,6 +3927,19 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.summary.SetAgent(m.sessionCfg.Agent)
 		m.summary.SetSize(m.width, m.height)
+		// Populate AWS override fields when the remote has SyncCredentials enabled.
+		if remote := m.selectedRemote; remote.AWSDelegation != nil && remote.AWSDelegation.SyncCredentials {
+			d := remote.AWSDelegation
+			m.summary.SetAWSDefaults(&domain.AWSConfig{
+				SourceProfile:   d.SourceProfile,
+				RoleName:        d.RoleName,
+				AccountID:       d.AccountID,
+				Region:          d.Region,
+				Regions:         d.Regions,
+				SessionPolicy:   d.SessionPolicy,
+				DurationSeconds: d.DurationSeconds,
+			})
+		}
 		m.state = viewStateSummary
 		return m, nil
 	}
@@ -3958,6 +3956,11 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	subModel, cmd = m.summary.Update(msg)
 	m.summary = subModel.(SummaryModel)
 	if m.summary.IsConfirmed() {
+		// Merge the summary config (including per-session AWS overrides) into sessionCfg.
+		summaryCfg := m.summary.GetSessionConfig()
+		m.sessionCfg.Agent = summaryCfg.Agent
+		m.sessionCfg.PromptFree = summaryCfg.PromptFree
+		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
 		m.loadingMsg = "Creating session..."
 		m.loadingNext = viewStateMain
 		m.state = viewStateLoading
