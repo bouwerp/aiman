@@ -65,7 +65,7 @@ func (m *SummaryModel) SetAWSDefaults(cfg *domain.AWSConfig) {
 	m.awsDefaults = cfg
 
 	profileInput := textinput.New()
-	profileInput.Placeholder = "local AWS profile (e.g. default)"
+	profileInput.Placeholder = "blank = AWS default credential chain"
 	profileInput.SetValue(cfg.SourceProfile)
 	profileInput.Width = 40
 	profileInput.Focus()
@@ -296,9 +296,10 @@ func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 		overrideRegion := strings.TrimSpace(m.inputs[awsRegionInputIdx].Value())
 
 		aws := *m.awsDefaults // copy remote defaults
-		if overrideProfile != "" {
-			aws.SourceProfile = overrideProfile
-		}
+		// Always apply the field values — an empty profile means "use the AWS default
+		// credential chain" (omits --profile from CLI calls), allowing the user to clear
+		// a remote-configured profile to fall back to the local default.
+		aws.SourceProfile = overrideProfile
 		if overrideRegion != "" {
 			aws.Region = overrideRegion
 		}
