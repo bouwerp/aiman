@@ -163,7 +163,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// available to the agent from the very first command.
 	var awsProfileName string
 	if config.AWSConfig != nil && sshMgr != nil {
-		if pn, pushErr := pushSessionAWSCredentials(ctx, sshMgr, session.ID, config.AWSConfig); pushErr == nil {
+		if pn, pushErr := PushSessionAWSCredentials(ctx, sshMgr, session.ID, config.AWSConfig); pushErr == nil {
 			awsProfileName = pn
 			session.AWSProfileName = pn
 		}
@@ -185,13 +185,16 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// We also append common user-local bin paths explicitly to avoid false
 	// "command not found" failures for tools installed outside default login PATH.
 	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
-	awsEnvFlag := ""
+	extraEnvFlags := ""
 	if awsProfileName != "" {
-		awsEnvFlag = fmt.Sprintf(" -e AWS_PROFILE=%s", awsProfileName)
+		extraEnvFlags += fmt.Sprintf(" -e AWS_PROFILE=%s", awsProfileName)
+	}
+	if config.OpenRouterAPIKey != "" {
+		extraEnvFlags += fmt.Sprintf(" -e OPENROUTER_API_KEY=%s", config.OpenRouterAPIKey)
 	}
 	startCmd := fmt.Sprintf(
 		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
-		tmuxName, workingDir, strings.TrimSpace(session.ID), awsEnvFlag, agentBootstrap, tmuxName,
+		tmuxName, workingDir, strings.TrimSpace(session.ID), extraEnvFlags, agentBootstrap, tmuxName,
 	)
 	_, err = sshMgr.Execute(ctx, startCmd)
 	if err != nil {
@@ -259,10 +262,10 @@ func (m *FlowManager) StartNewFlow(ctx context.Context, issueKey string, repoNam
 	})
 }
 
-// pushSessionAWSCredentials generates a session-scoped AWS profile name, obtains
+// PushSessionAWSCredentials generates a session-scoped AWS profile name, obtains
 // temporary credentials locally, and pushes them to the remote under that profile.
 // Returns the profile name on success (e.g. "aiman-a1b2c3d4").
-func pushSessionAWSCredentials(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (string, error) {
+func PushSessionAWSCredentials(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (string, error) {
 	profileName := "aiman-" + sessionID[:8]
 
 	accountID := cfg.AccountID

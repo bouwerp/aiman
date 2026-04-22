@@ -149,4 +149,8 @@ type SessionConfig struct {
 	// AWS_PROFILE is injected into the tmux environment. Inherited from the remote's
 	// AWSDelegation config when nil (and the remote has SyncCredentials enabled).
 	AWSConfig *AWSConfig
+	// OpenRouterAPIKey is the API key to inject as OPENROUTER_API_KEY into the tmux session
+	// environment. Read from the local OPENROUTER_API_KEY env var by default; may be
+	// overridden in the session creation summary screen.
+	OpenRouterAPIKey string
 }

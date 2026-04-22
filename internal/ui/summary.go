@@ -10,11 +10,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const (
-	awsProfileInputIdx = 0
-	awsRegionInputIdx  = 1
-)
-
 type SummaryModel struct {
 	issueKey      string
 	branch        string
@@ -28,8 +23,10 @@ type SummaryModel struct {
 	inputs        []textinput.Model
 	width, height int
 	// AWS override fields — populated when the remote has SyncCredentials enabled
-	awsEnabled    bool
-	awsDefaults   *domain.AWSConfig // original remote defaults (non-editable fields)
+	awsEnabled        bool
+	awsDefaults       *domain.AWSConfig // original remote defaults (non-editable fields)
+	// OpenRouter key field
+	openRouterEnabled bool
 }
 
 func NewSummaryModel(issueKey, branch string, repo domain.Repo, directory string) SummaryModel {
@@ -78,7 +75,38 @@ func (m *SummaryModel) SetAWSDefaults(cfg *domain.AWSConfig) {
 	regionInput.SetValue(region)
 	regionInput.Width = 40
 
-	m.inputs = []textinput.Model{profileInput, regionInput}
+	// Preserve any existing OpenRouter input that was added before AWS defaults.
+	newInputs := []textinput.Model{profileInput, regionInput}
+	for _, in := range m.inputs {
+		if in.EchoMode == textinput.EchoPassword {
+			newInputs = append(newInputs, in)
+		}
+	}
+	m.inputs = newInputs
+	// Default focus to the Create button so the user can just press Enter.
+	m.focusIndex = m.buttonFocusIndex()
+}
+
+// SetOpenRouterKey enables the OpenRouter API key section, pre-filling it with
+// the provided key (typically from the local OPENROUTER_API_KEY env var).
+// If key is empty the field is still shown so the user can enter one manually.
+func (m *SummaryModel) SetOpenRouterKey(key string) {
+	m.openRouterEnabled = true
+
+	orInput := textinput.New()
+	orInput.Placeholder = "sk-or-... (OPENROUTER_API_KEY)"
+	orInput.EchoMode = textinput.EchoPassword
+	orInput.SetValue(key)
+	orInput.Width = 40
+
+	// Remove any stale openRouter input, then append the fresh one.
+	filtered := make([]textinput.Model, 0, len(m.inputs))
+	for _, in := range m.inputs {
+		if in.EchoMode != textinput.EchoPassword {
+			filtered = append(filtered, in)
+		}
+	}
+	m.inputs = append(filtered, orInput)
 	// Default focus to the Create button so the user can just press Enter.
 	m.focusIndex = m.buttonFocusIndex()
 }
@@ -96,12 +124,24 @@ func (m *SummaryModel) SetSize(width, height int) {
 	m.height = height
 }
 
-// buttonFocusIndex returns the focusIndex value that corresponds to the Create button.
-func (m SummaryModel) buttonFocusIndex() int {
+// awsProfileIdx returns the index of the AWS profile input in m.inputs.
+func (m SummaryModel) awsProfileIdx() int { return 0 }
+
+// awsRegionIdx returns the index of the AWS region input in m.inputs.
+func (m SummaryModel) awsRegionIdx() int { return 1 }
+
+// openRouterIdx returns the index of the OpenRouter key input in m.inputs.
+func (m SummaryModel) openRouterIdx() int {
 	if m.awsEnabled {
-		return len(m.inputs) // after all text inputs
+		return 2
 	}
 	return 0
+}
+
+// buttonFocusIndex returns the focusIndex value that corresponds to the Create button.
+// It always equals len(m.inputs) since the button lives after all text inputs.
+func (m SummaryModel) buttonFocusIndex() int {
+	return len(m.inputs)
 }
 
 func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -144,7 +184,7 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Move focus forward on enter in text inputs
-			if m.awsEnabled && m.focusIndex < m.buttonFocusIndex() {
+			if (m.awsEnabled || m.openRouterEnabled) && m.focusIndex < m.buttonFocusIndex() {
 				m.focusIndex++
 				for i := range m.inputs {
 					if i == m.focusIndex {
@@ -159,7 +199,7 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Delegate key events to the focused text input
-	if m.awsEnabled && m.focusIndex < len(m.inputs) {
+	if (m.awsEnabled || m.openRouterEnabled) && m.focusIndex < len(m.inputs) {
 		var cmd tea.Cmd
 		m.inputs[m.focusIndex], cmd = m.inputs[m.focusIndex].Update(msg)
 		return m, cmd
@@ -232,14 +272,24 @@ func (m SummaryModel) View() string {
 		b.WriteString("\n" + activeStyle.Render("AWS Credentials") + "\n")
 		profileLabel := "  Profile:"
 		regionLabel := "  Region: "
-		if m.focusIndex == awsProfileInputIdx {
+		if m.focusIndex == m.awsProfileIdx() {
 			profileLabel = activeStyle.Render("> Profile:")
 		}
-		if m.focusIndex == awsRegionInputIdx {
+		if m.focusIndex == m.awsRegionIdx() {
 			regionLabel = activeStyle.Render("> Region: ")
 		}
-		b.WriteString(fmt.Sprintf("%-15s %s\n", profileLabel, m.inputs[awsProfileInputIdx].View()))
-		b.WriteString(fmt.Sprintf("%-15s %s\n", regionLabel, m.inputs[awsRegionInputIdx].View()))
+		b.WriteString(fmt.Sprintf("%-15s %s\n", profileLabel, m.inputs[m.awsProfileIdx()].View()))
+		b.WriteString(fmt.Sprintf("%-15s %s\n", regionLabel, m.inputs[m.awsRegionIdx()].View()))
+	}
+
+	// OpenRouter API key
+	if m.openRouterEnabled {
+		b.WriteString("\n" + activeStyle.Render("OpenRouter") + "\n")
+		keyLabel := "  API Key: "
+		if m.focusIndex == m.openRouterIdx() {
+			keyLabel = activeStyle.Render("> API Key: ")
+		}
+		b.WriteString(fmt.Sprintf("%-15s %s\n", keyLabel, m.inputs[m.openRouterIdx()].View()))
 	}
 
 	b.WriteString("\n")
@@ -260,7 +310,7 @@ func (m SummaryModel) View() string {
 	if !m.adHoc {
 		hint += ", p to toggle prompt-free"
 	}
-	if m.awsEnabled {
+	if m.awsEnabled || m.openRouterEnabled {
 		hint += ", tab to cycle fields"
 	}
 	hint += ")"
@@ -296,8 +346,8 @@ func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 
 	// Merge per-session AWS overrides on top of the remote defaults.
 	if m.awsEnabled && m.awsDefaults != nil {
-		overrideProfile := strings.TrimSpace(m.inputs[awsProfileInputIdx].Value())
-		overrideRegion := strings.TrimSpace(m.inputs[awsRegionInputIdx].Value())
+		overrideProfile := strings.TrimSpace(m.inputs[m.awsProfileIdx()].Value())
+		overrideRegion := strings.TrimSpace(m.inputs[m.awsRegionIdx()].Value())
 
 		aws := *m.awsDefaults // copy remote defaults
 		// Always apply the field values — an empty profile means "use the AWS default
@@ -308,6 +358,11 @@ func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 			aws.Region = overrideRegion
 		}
 		cfg.AWSConfig = &aws
+	}
+
+	// OpenRouter API key
+	if m.openRouterEnabled {
+		cfg.OpenRouterAPIKey = strings.TrimSpace(m.inputs[m.openRouterIdx()].Value())
 	}
 
 	return cfg

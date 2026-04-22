@@ -1246,6 +1246,36 @@ type recreateMutagenMsg struct {
 	err     error
 }
 
+type refreshAWSMsg struct {
+	err error
+}
+
+func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok || remote.AWSDelegation == nil || !remote.AWSDelegation.SyncCredentials {
+			return refreshAWSMsg{err: fmt.Errorf("no AWS delegation configured for remote %q", s.RemoteHost)}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		if err := mgr.Connect(ctx); err != nil {
+			return refreshAWSMsg{err: fmt.Errorf("SSH connect: %w", err)}
+		}
+		d := remote.AWSDelegation
+		cfg := &domain.AWSConfig{
+			SourceProfile:   d.SourceProfile,
+			RoleName:        d.RoleName,
+			AccountID:       d.AccountID,
+			Region:          d.Region,
+			Regions:         d.Regions,
+			SessionPolicy:   d.SessionPolicy,
+			DurationSeconds: d.DurationSeconds,
+		}
+		_, err := usecase.PushSessionAWSCredentials(ctx, mgr, s.ID, cfg)
+		return refreshAWSMsg{err: err}
+	}
+}
+
 func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -1873,6 +1903,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
 			return m, m.restartSession()
+		}
+		return m, nil
+	case refreshAWSMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("AWS credentials refresh failed: %v", msg.err)
+			m.state = viewStateError
+		} else {
+			m.state = viewStateMain
 		}
 		return m, nil
 	}
@@ -3035,6 +3073,18 @@ end tell`, cmd)
 			return m, m.fetchAgents(), true
 		}
 	}
+	if msg.String() == "w" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			if s.AWSProfileName == "" {
+				return m, nil, true
+			}
+			m.loadingMsg = "Refreshing AWS credentials..."
+			m.loadingNext = viewStateMain
+			m.state = viewStateLoading
+			return m, m.refreshAWSCredentialsCmd(s), true
+		}
+	}
 	if msg.String() == "c" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
@@ -3945,6 +3995,8 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				DurationSeconds: d.DurationSeconds,
 			})
 		}
+		// Pre-fill OpenRouter API key from local environment (user can override).
+		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
 		m.state = viewStateSummary
 		return m, nil
 	}
@@ -3966,6 +4018,7 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionCfg.Agent = summaryCfg.Agent
 		m.sessionCfg.PromptFree = summaryCfg.PromptFree
 		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
+		m.sessionCfg.OpenRouterAPIKey = summaryCfg.OpenRouterAPIKey
 		m.loadingMsg = "Creating session..."
 		m.loadingNext = viewStateMain
 		m.state = viewStateLoading
@@ -4681,6 +4734,7 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
+		m.sessionCfg.OpenRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
 		m.priorSnapshotCandidate = nil
 		// Check for a prior snapshot before restarting — let the user preview it.
 		return m, loadPriorSnapshotCmd(m.snapshotManager, m.restartingSession.ID)
@@ -4766,9 +4820,13 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
+		extraEnvFlags := ""
+		if m.sessionCfg.OpenRouterAPIKey != "" {
+			extraEnvFlags += fmt.Sprintf(" -e OPENROUTER_API_KEY=%s", m.sessionCfg.OpenRouterAPIKey)
+		}
 		startCmd := fmt.Sprintf(
-			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
-			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), agentBootstrap, s.TmuxSession,
+			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
+			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap, s.TmuxSession,
 		)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
