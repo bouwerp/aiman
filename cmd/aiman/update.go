@@ -193,6 +193,11 @@ func replaceExecutable(target, newBinary string) error {
 	src.Close()
 	dst.Close()
 
+	if err := os.Chmod(tmpName, 0755); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("chmod staging file: %w", err)
+	}
+
 	if err := os.Rename(tmpName, target); err != nil {
 		os.Remove(tmpName)
 		return fmt.Errorf("rename staging to target: %w", err)
