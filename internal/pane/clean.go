@@ -11,13 +11,15 @@ import (
 // ansiEscape matches ANSI/VT100 escape sequences (colours, cursor moves, etc.).
 var ansiEscape = regexp.MustCompile(`\x1b(\[[0-9;?]*[a-zA-Z]|\][^\x07]*\x07|[()][AB012]|[DABEGHM78=><]|%[Gg])`)
 
-// Clean applies the full two-pass cleaning pipeline to raw tmux pane content:
+// Clean applies the full cleaning pipeline to raw tmux pane content:
 //  1. Strip ANSI/VT100 escape sequences
 //  2. Collapse consecutive duplicate lines into "line [×N]"
 //  3. Collapse runs of blank lines into a single blank line
-//  4. Structural compression: keep only signal-rich lines
+//  4. Structural compression: suppress known command log noise first,
+//     then keep only signal-rich lines (commands, errors, test results,
+//     git output, build diagnostics)
 //
-// On typical agent terminal sessions this reduces character count by ~30%.
+// On typical agent terminal sessions this reduces character count by ~60–80%.
 // The result is human/LLM readable and safe to pass directly to the model.
 func Clean(s string) string {
 	return structuralCompress(cleanLines(s))
@@ -66,18 +68,69 @@ func cleanLines(s string) string {
 
 var (
 	scCmdLine   = regexp.MustCompile(`^\$\s`)
-	scError     = regexp.MustCompile(`(?i)(error|fail|panic|fatal|warn|except)`)
+	scError     = regexp.MustCompile(`(?i)\b(error|fail|panic|fatal)\b|(?i)^(warn(ing)?|except(ion)?):?\s`)
 	scTestLine  = regexp.MustCompile(`^(ok\s|FAIL\s|---\s+(PASS|FAIL)|^PASS$|^FAIL$)`)
 	scGitLine   = regexp.MustCompile(`^(\[[\w/. ]+\]|\s+\w.*\|\s+\d|\s+\d+ file)`)
-	scBuildDiag = regexp.MustCompile(`^[\w./]+\.go:\d+:`)
+	scBuildDiag = regexp.MustCompile(`^[\w./]+\.(go|ts|js|py|rs|cpp|c|java):\d+:`)
 )
 
-// structuralCompress is pass 4: keep only signal-rich lines.
+// scNoise matches lines that are high-volume command log output with little
+// signal value. These are suppressed even if they would otherwise match a
+// signal pattern (noise suppression takes precedence).
+var scNoise = []*regexp.Regexp{
+	// npm / yarn / pnpm package manager chatter
+	regexp.MustCompile(`(?i)^npm (warn|notice)\s+(deprecated|EBADENGINE|peer|old lockfile|fund)\b`),
+	regexp.MustCompile(`(?i)^(yarn|pnpm) (warn|info)\s`),
+	regexp.MustCompile(`(?i)^\d+ packages? (are looking|fund)`),
+	regexp.MustCompile(`(?i)^Run \x60npm fund\x60`),
+
+	// Go module download / verify progress
+	regexp.MustCompile(`^go: (downloading|extracting|finding module providing|verifying)\s`),
+
+	// Cargo / Rust compilation progress (not errors)
+	regexp.MustCompile(`^\s+(Compiling|Downloaded|Downloading|Fetching|Checking|Updating|Locking)\s+\S`),
+
+	// pip / uv / poetry install progress
+	regexp.MustCompile(`^(Collecting |  Downloading |Downloading |Building |Preparing metadata|Installing collected packages|Requirement already satisfied|Obtaining )\S`),
+	regexp.MustCompile(`^Successfully installed\s`),
+
+	// Docker build layer noise
+	regexp.MustCompile(`^(Step \d+/\d+ :|Sending build context|  ---> |Removing intermediate container)\s*`),
+	regexp.MustCompile(`(?i)^(Pulling from|Pulling|Waiting|Verifying Checksum|Download complete|Pull complete|Extracting|Already exists|Digest:|Status: Downloaded)\s`),
+
+	// Timestamped application log entries (high-volume in long sessions)
+	regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}`),
+	regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2}`),
+	regexp.MustCompile(`^[A-Z]{3,5}\s+\d{4}-\d{2}-\d{2}`),
+
+	// Progress bars / spinners / percentage lines
+	regexp.MustCompile(`[|\\/#=]{4,}|\.{5,}|^\s*\d+%\s`),
+
+	// apt/apk/brew package manager progress
+	regexp.MustCompile(`^(Get:|Hit:|Ign:|Reading|Fetched|Preparing to|Selecting|Unpacking|Setting up|Processing triggers)\s`),
+	regexp.MustCompile(`^(==> |==> Downloading|==> Pouring|Already installed|Downloading https?://)\s*`),
+}
+
+// isNoise returns true if the line matches any known high-volume/low-signal
+// command log pattern. Noise takes precedence over signal patterns.
+func isNoise(l string) bool {
+	for _, re := range scNoise {
+		if re.MatchString(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// structuralCompress is pass 4: drop noise, keep only signal-rich lines.
 func structuralCompress(s string) string {
 	lines := strings.Split(s, "\n")
 	out := make([]string, 0, len(lines))
 	for _, l := range lines {
 		if l == "" {
+			continue
+		}
+		if isNoise(l) {
 			continue
 		}
 		if scCmdLine.MatchString(l) || scError.MatchString(l) || scTestLine.MatchString(l) ||
