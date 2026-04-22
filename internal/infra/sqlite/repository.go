@@ -53,6 +53,16 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN tunnels_json TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN aws_profile TEXT")
 
+	secretsQuery := `
+	CREATE TABLE IF NOT EXISTS secrets (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT ''
+	);`
+	if _, err := db.Exec(secretsQuery); err != nil {
+		return nil, fmt.Errorf("failed to create secrets table: %w", err)
+	}
+
 	snapQuery := `
 	CREATE TABLE IF NOT EXISTS session_snapshots (
 		id TEXT PRIMARY KEY,
@@ -350,4 +360,42 @@ func scanSnapshots(rows *sql.Rows) ([]domain.SessionSnapshot, error) {
 		result = append(result, *s)
 	}
 	return result, rows.Err()
+}
+
+// ListSecrets returns all globally stored secrets.
+func (r *Repository) ListSecrets(ctx context.Context) ([]domain.Secret, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT key, value, description FROM secrets ORDER BY key;")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list secrets: %w", err)
+	}
+	defer rows.Close()
+	var secrets []domain.Secret
+	for rows.Next() {
+		var s domain.Secret
+		if err := rows.Scan(&s.Key, &s.Value, &s.Description); err != nil {
+			return nil, fmt.Errorf("failed to scan secret: %w", err)
+		}
+		secrets = append(secrets, s)
+	}
+	return secrets, rows.Err()
+}
+
+// SaveSecret upserts a secret by key.
+func (r *Repository) SaveSecret(ctx context.Context, s domain.Secret) error {
+	_, err := r.db.ExecContext(ctx,
+		"INSERT INTO secrets (key, value, description) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, description = excluded.description;",
+		s.Key, s.Value, s.Description)
+	if err != nil {
+		return fmt.Errorf("failed to save secret: %w", err)
+	}
+	return nil
+}
+
+// DeleteSecret removes a secret by key.
+func (r *Repository) DeleteSecret(ctx context.Context, key string) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM secrets WHERE key = ?;", key)
+	if err != nil {
+		return fmt.Errorf("failed to delete secret: %w", err)
+	}
+	return nil
 }

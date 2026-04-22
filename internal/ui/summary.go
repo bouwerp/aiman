@@ -23,10 +23,13 @@ type SummaryModel struct {
 	inputs        []textinput.Model
 	width, height int
 	// AWS override fields — populated when the remote has SyncCredentials enabled
-	awsEnabled        bool
-	awsDefaults       *domain.AWSConfig // original remote defaults (non-editable fields)
+	awsEnabled  bool
+	awsDefaults *domain.AWSConfig // original remote defaults (non-editable fields)
 	// OpenRouter key field
 	openRouterEnabled bool
+	// Global secrets available for injection
+	allSecrets      []domain.Secret
+	selectedSecrets map[string]bool
 }
 
 func NewSummaryModel(issueKey, branch string, repo domain.Repo, directory string) SummaryModel {
@@ -141,7 +144,26 @@ func (m SummaryModel) openRouterIdx() int {
 // buttonFocusIndex returns the focusIndex value that corresponds to the Create button.
 // It always equals len(m.inputs) since the button lives after all text inputs.
 func (m SummaryModel) buttonFocusIndex() int {
+	return len(m.inputs) + len(m.allSecrets)
+}
+
+// secretFocusStart returns the focusIndex of the first secret toggle row.
+func (m SummaryModel) secretFocusStart() int {
 	return len(m.inputs)
+}
+
+// SetSecrets loads the globally available secrets and pre-selects all of them.
+func (m *SummaryModel) SetSecrets(secrets []domain.Secret) {
+	m.allSecrets = secrets
+	if m.selectedSecrets == nil {
+		m.selectedSecrets = make(map[string]bool)
+	}
+	for _, s := range secrets {
+		// Default: none selected; user opts in per session.
+		if _, exists := m.selectedSecrets[s.Key]; !exists {
+			m.selectedSecrets[s.Key] = false
+		}
+	}
 }
 
 func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -178,13 +200,38 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.promptFree = !m.promptFree
 			}
 			return m, nil
+		case "space", " ":
+			// Toggle secret selection when focused on a secret row.
+			if m.focusIndex >= m.secretFocusStart() && m.focusIndex < m.buttonFocusIndex() {
+				idx := m.focusIndex - m.secretFocusStart()
+				if idx < len(m.allSecrets) {
+					key := m.allSecrets[idx].Key
+					if m.selectedSecrets == nil {
+						m.selectedSecrets = make(map[string]bool)
+					}
+					m.selectedSecrets[key] = !m.selectedSecrets[key]
+				}
+			}
+			return m, nil
 		case "enter":
 			if m.focusIndex == m.buttonFocusIndex() && m.agent != nil {
 				m.confirmed = true
 				return m, nil
 			}
+			// Toggle secret on enter (same as space) when on a secret row.
+			if m.focusIndex >= m.secretFocusStart() && m.focusIndex < m.buttonFocusIndex() {
+				idx := m.focusIndex - m.secretFocusStart()
+				if idx < len(m.allSecrets) {
+					key := m.allSecrets[idx].Key
+					if m.selectedSecrets == nil {
+						m.selectedSecrets = make(map[string]bool)
+					}
+					m.selectedSecrets[key] = !m.selectedSecrets[key]
+				}
+				return m, nil
+			}
 			// Move focus forward on enter in text inputs
-			if (m.awsEnabled || m.openRouterEnabled) && m.focusIndex < m.buttonFocusIndex() {
+			if (m.awsEnabled || m.openRouterEnabled) && m.focusIndex < len(m.inputs) {
 				m.focusIndex++
 				for i := range m.inputs {
 					if i == m.focusIndex {
@@ -292,6 +339,27 @@ func (m SummaryModel) View() string {
 		b.WriteString(fmt.Sprintf("%-15s %s\n", keyLabel, m.inputs[m.openRouterIdx()].View()))
 	}
 
+	// Secrets multi-select
+	if len(m.allSecrets) > 0 {
+		b.WriteString("\n" + activeStyle.Render("Inject Secrets") + "\n")
+		for i, s := range m.allSecrets {
+			focusIdx := m.secretFocusStart() + i
+			checked := "[ ]"
+			if m.selectedSecrets[s.Key] {
+				checked = "[✓]"
+			}
+			label := s.Key
+			if s.Description != "" {
+				label += " — " + s.Description
+			}
+			line := fmt.Sprintf("  %s %s", checked, label)
+			if m.focusIndex == focusIdx {
+				line = activeStyle.Render(fmt.Sprintf("  %s %s", checked, label))
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+
 	b.WriteString("\n")
 
 	// Create button
@@ -312,6 +380,9 @@ func (m SummaryModel) View() string {
 	}
 	if m.awsEnabled || m.openRouterEnabled {
 		hint += ", tab to cycle fields"
+	}
+	if len(m.allSecrets) > 0 {
+		hint += ", space to toggle secret"
 	}
 	hint += ")"
 	b.WriteString("\n" + hint + "\n")
@@ -363,6 +434,13 @@ func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 	// OpenRouter API key
 	if m.openRouterEnabled {
 		cfg.OpenRouterAPIKey = strings.TrimSpace(m.inputs[m.openRouterIdx()].Value())
+	}
+
+	// Selected secrets
+	for _, s := range m.allSecrets {
+		if m.selectedSecrets[s.Key] {
+			cfg.EnvSecrets = append(cfg.EnvSecrets, s)
+		}
 	}
 
 	return cfg

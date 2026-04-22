@@ -54,6 +54,11 @@ func (m *mockSessionRepo) ListAllSnapshots(_ context.Context) ([]domain.SessionS
 }
 func (m *mockSessionRepo) MarkSnapshotInjected(_ context.Context, _ string) error { return nil }
 func (m *mockSessionRepo) DeleteSnapshot(_ context.Context, _ string) error       { return nil }
+func (m *mockSessionRepo) ListSecrets(_ context.Context) ([]domain.Secret, error) {
+	return nil, nil
+}
+func (m *mockSessionRepo) SaveSecret(_ context.Context, _ domain.Secret) error { return nil }
+func (m *mockSessionRepo) DeleteSecret(_ context.Context, _ string) error      { return nil }
 
 // TestWorktreeExistsErrorHandling tests that WORKTREE_EXISTS error transitions to the correct state
 func TestWorktreeExistsErrorHandling(t *testing.T) {

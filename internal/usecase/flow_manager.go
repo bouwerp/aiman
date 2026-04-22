@@ -199,6 +199,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	if config.OpenRouterAPIKey != "" {
 		extraEnvFlags += fmt.Sprintf(" -e OPENROUTER_API_KEY=%s", config.OpenRouterAPIKey)
 	}
+	for _, secret := range config.EnvSecrets {
+		extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
+	}
 	startCmd := fmt.Sprintf(
 		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
 		tmuxName, workingDir, strings.TrimSpace(session.ID), extraEnvFlags, agentBootstrap, tmuxName,

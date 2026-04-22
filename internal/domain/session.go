@@ -109,6 +109,13 @@ func (s *Session) Transition(target SessionStatus) error {
 	return ErrInvalidTransition
 }
 
+// Secret represents a named env-var secret that can be injected into sessions.
+type Secret struct {
+	Key         string // env var name, e.g. MY_API_KEY
+	Value       string
+	Description string // optional human-readable label
+}
+
 // SessionRepository defines the interface for session persistence
 type SessionRepository interface {
 	Save(ctx context.Context, s *Session) error
@@ -124,6 +131,11 @@ type SessionRepository interface {
 	ListAllSnapshots(ctx context.Context) ([]SessionSnapshot, error)
 	MarkSnapshotInjected(ctx context.Context, id string) error
 	DeleteSnapshot(ctx context.Context, id string) error
+
+	// Secret persistence
+	ListSecrets(ctx context.Context) ([]Secret, error)
+	SaveSecret(ctx context.Context, s Secret) error
+	DeleteSecret(ctx context.Context, key string) error
 }
 
 // SessionConfig holds the configuration for creating a new session.
@@ -153,4 +165,7 @@ type SessionConfig struct {
 	// environment. Read from the local OPENROUTER_API_KEY env var by default; may be
 	// overridden in the session creation summary screen.
 	OpenRouterAPIKey string
+	// EnvSecrets is the list of global secrets selected for injection into this session.
+	// Each secret is added as a -e KEY=VALUE flag to the tmux new-session command.
+	EnvSecrets []Secret
 }

@@ -149,6 +149,7 @@ const (
 	viewStateAuthWizard
 	viewStateTunnelManager
 	viewStateTunnelAdd
+	viewStateSecretsSetup // manage global secrets
 	viewStateError        // generic error dialog (press any key to dismiss)
 	viewStateRemotePicker // select remote for new session
 )
@@ -252,6 +253,7 @@ type Model struct {
 	gitSetup               GitSetupModel
 	generalSetup           GeneralSetupModel
 	aiSetup                AISetupModel
+	secretsSetup           SecretsSetupModel
 	snapshotBrowser        SnapshotBrowserModel
 	picker                 RepoPickerModel
 	issuePicker            IssuePickerModel
@@ -423,6 +425,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
+		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
@@ -448,6 +451,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		gitSetup:        NewGitSetupModel(cfg),
 		generalSetup:    NewGeneralSetupModel(cfg),
 		aiSetup:         NewAISetupModel(cfg),
+		secretsSetup:    NewSecretsSetupModel(db),
 		doctorResults:   doctorResults,
 		viewport:        vp,
 		firstLoad:       make(map[string]bool),
@@ -1937,6 +1941,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateAISettings:
 		return m.handleAISetupUpdate(msg)
 
+	case viewStateSecretsSetup:
+		return m.handleSecretsSetupUpdate(msg)
+
 	case viewStateSnapshotBrowser:
 		return m.handleSnapshotBrowserUpdate(msg)
 
@@ -2061,6 +2068,9 @@ func (m *Model) renderView() string {
 
 	case viewStateAISettings:
 		return m.aiSetup.View()
+
+	case viewStateSecretsSetup:
+		return m.secretsSetup.View()
 
 	case viewStateSnapshotBrowser:
 		return docStyle.Render(m.snapshotBrowser.View())
@@ -3231,6 +3241,11 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, m.aiSetup.Init()
 				}
+				if i.action == viewStateSecretsSetup {
+					m.secretsSetup = NewSecretsSetupModel(m.db)
+					m.state = i.action
+					return m, m.secretsSetup.Init()
+				}
 				if i.action == viewStateSnapshotBrowser {
 					m.snapshotBrowser = NewSnapshotBrowserModel(m.width, m.height, m.snapshotManager)
 					m.state = i.action
@@ -3669,6 +3684,22 @@ func (m *Model) handleAISetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) handleSecretsSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		if m.secretsSetup.mode != secretsModeList {
+			// Let the sub-model handle esc (cancel add/delete).
+		} else {
+			m.state = viewStateMenu
+			return m, nil
+		}
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.secretsSetup.Update(msg)
+	m.secretsSetup = subModel.(SecretsSetupModel)
+	return m, cmd
+}
+
 func (m *Model) handleRemotePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch km.String() {
@@ -3997,6 +4028,10 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Pre-fill OpenRouter API key from local environment (user can override).
 		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
+		// Load globally stored secrets so the user can select which to inject.
+		if secrets, err := m.db.ListSecrets(context.Background()); err == nil {
+			m.summary.SetSecrets(secrets)
+		}
 		m.state = viewStateSummary
 		return m, nil
 	}
@@ -4735,6 +4770,10 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
 		m.sessionCfg.OpenRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
+		// Inject all globally stored secrets on restart.
+		if secrets, err := m.db.ListSecrets(context.Background()); err == nil {
+			m.sessionCfg.EnvSecrets = secrets
+		}
 		m.priorSnapshotCandidate = nil
 		// Check for a prior snapshot before restarting — let the user preview it.
 		return m, loadPriorSnapshotCmd(m.snapshotManager, m.restartingSession.ID)
@@ -4828,6 +4867,9 @@ func (m *Model) restartSession() tea.Cmd {
 		extraEnvFlags := ""
 		if m.sessionCfg.OpenRouterAPIKey != "" {
 			extraEnvFlags += fmt.Sprintf(" -e OPENROUTER_API_KEY=%s", m.sessionCfg.OpenRouterAPIKey)
+		}
+		for _, secret := range m.sessionCfg.EnvSecrets {
+			extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 		}
 		startCmd := fmt.Sprintf(
 			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
