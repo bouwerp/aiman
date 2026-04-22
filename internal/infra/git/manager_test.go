@@ -59,7 +59,10 @@ func (m *mockRemote) StreamTmuxSession(context.Context, string) (io.ReadWriteClo
 	return nil, nil
 }
 func (m *mockRemote) StartTmuxSession(context.Context, string) error { return nil }
-func (m *mockRemote) Close() error                                   { return nil }
+func (m *mockRemote) ProvisionRemote(_ context.Context, _ []domain.ProvisionStep, _ chan<- domain.ProvisionProgress) error {
+	return nil
+}
+func (m *mockRemote) Close() error { return nil }
 
 func TestListRemoteBranches_Success(t *testing.T) {
 	branchOutput := "  origin/main\n  origin/feature-x\n  origin/HEAD -> origin/main\n"

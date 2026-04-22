@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	snapshotListRatio    = 35  // % of total width for left list pane
+	snapshotListRatio    = 35   // % of total width for left list pane
 	snapshotPreviewChars = 1500 // chars of head/tail to show in pane preview
 )
 
@@ -453,5 +453,3 @@ func renderSnapshotDetail(snap domain.SessionSnapshot, width int) string {
 
 	return b.String()
 }
-
-

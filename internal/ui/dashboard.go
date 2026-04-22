@@ -17,6 +17,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/ai"
+	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
@@ -1445,6 +1446,21 @@ func (m *Model) createSession() tea.Cmd {
 		sessionCfg.RemoteHost = remote.Host
 	}
 
+	// Inherit session-scoped AWS credentials from the remote's AWSDelegation config.
+	// Only activated when SyncCredentials is enabled on the remote.
+	if sessionCfg.AWSConfig == nil && remote.AWSDelegation != nil && remote.AWSDelegation.SyncCredentials {
+		d := remote.AWSDelegation
+		sessionCfg.AWSConfig = &domain.AWSConfig{
+			SourceProfile:   d.SourceProfile,
+			RoleName:        d.RoleName,
+			AccountID:       d.AccountID,
+			Region:          d.Region,
+			Regions:         d.Regions,
+			SessionPolicy:   d.SessionPolicy,
+			DurationSeconds: d.DurationSeconds,
+		}
+	}
+
 	return func() tea.Msg {
 		ctx := context.Background()
 
@@ -1621,7 +1637,17 @@ func (m *Model) runTerminateStep(index int) error {
 			return nil
 		}
 		return os.RemoveAll(s.LocalPath)
-	case 5: // Delete session from database
+	case 5: // Clean up session-scoped AWS credentials from the remote
+		if s.AWSProfileName == "" || s.RemoteHost == "" {
+			return nil
+		}
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return nil
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		return awsdelegation.RemoveSessionProfile(ctx, mgr, s.AWSProfileName)
+	case 6: // Delete session from database
 		if s.ID == "" {
 			return nil
 		}
@@ -3960,6 +3986,7 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					"Stopping agent process",
 					"Removing git worktree",
 					"Cleaning local files",
+					"Cleaning up AWS credentials",
 					"Updating session status",
 				}
 				m.terminateErrors = make([]string, len(m.terminateSteps))
@@ -3983,6 +4010,7 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					"Stopping agent process",
 					"Removing git worktree",
 					"Cleaning local files",
+					"Cleaning up AWS credentials",
 					"Updating session status",
 				}
 				m.terminateErrors = make([]string, len(m.terminateSteps))
@@ -5028,19 +5056,19 @@ func initArchiveSteps() []archiveStep {
 }
 
 func (m *Model) handleArchiveProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-switch msg := msg.(type) {
-case tea.KeyMsg:
-if msg.String() == "esc" || msg.String() == "ctrl+c" {
-m.archivePreview = nil
-m.archiveSteps = nil
-m.state = viewStateMain
-return m, nil
-}
-case spinner.TickMsg:
-var cmd tea.Cmd
-m.provisionSpinner, cmd = m.provisionSpinner.Update(msg)
-return m, cmd
-}
-// Forward all other msgs to main Update so step/ready messages are handled
-return m, nil
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "esc" || msg.String() == "ctrl+c" {
+			m.archivePreview = nil
+			m.archiveSteps = nil
+			m.state = viewStateMain
+			return m, nil
+		}
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.provisionSpinner, cmd = m.provisionSpinner.Update(msg)
+		return m, cmd
+	}
+	// Forward all other msgs to main Update so step/ready messages are handled
+	return m, nil
 }

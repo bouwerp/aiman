@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/google/uuid"
 )
@@ -157,6 +158,18 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
+
+	// Push session-scoped AWS credentials BEFORE starting tmux so AWS_PROFILE is
+	// available to the agent from the very first command.
+	var awsProfileName string
+	if config.AWSConfig != nil && sshMgr != nil {
+		if pn, pushErr := pushSessionAWSCredentials(ctx, sshMgr, session.ID, config.AWSConfig); pushErr == nil {
+			awsProfileName = pn
+			session.AWSProfileName = pn
+		}
+		// Non-fatal — session starts without session-scoped credentials on error.
+	}
+
 	// Start the session and immediately set remain-on-exit in a single SSH call to avoid
 	// a race condition: if the agent exits before the separate set-option call runs, the
 	// session (and server) would already be gone.
@@ -172,9 +185,13 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// We also append common user-local bin paths explicitly to avoid false
 	// "command not found" failures for tools installed outside default login PATH.
 	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
+	awsEnvFlag := ""
+	if awsProfileName != "" {
+		awsEnvFlag = fmt.Sprintf(" -e AWS_PROFILE=%s", awsProfileName)
+	}
 	startCmd := fmt.Sprintf(
-		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
-		tmuxName, workingDir, strings.TrimSpace(session.ID), agentBootstrap, tmuxName,
+		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
+		tmuxName, workingDir, strings.TrimSpace(session.ID), awsEnvFlag, agentBootstrap, tmuxName,
 	)
 	_, err = sshMgr.Execute(ctx, startCmd)
 	if err != nil {
@@ -239,4 +256,45 @@ func (m *FlowManager) StartNewFlow(ctx context.Context, issueKey string, repoNam
 		Agent:      &domain.Agent{Name: "Claude Code", Command: "claude"}, // Default
 		PromptFree: true,
 	})
+}
+
+// pushSessionAWSCredentials generates a session-scoped AWS profile name, obtains
+// temporary credentials locally, and pushes them to the remote under that profile.
+// Returns the profile name on success (e.g. "aiman-a1b2c3d4").
+func pushSessionAWSCredentials(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (string, error) {
+	profileName := "aiman-" + sessionID[:8]
+
+	accountID := cfg.AccountID
+	if accountID == "" {
+		var err error
+		accountID, err = awsdelegation.AccountIDFromLocalProfile(ctx, cfg.SourceProfile)
+		if err != nil {
+			return "", fmt.Errorf("aws: derive account ID: %w", err)
+		}
+	}
+
+	roleARN, err := awsdelegation.RoleARNFromParts(accountID, cfg.RoleName)
+	if err != nil {
+		return "", fmt.Errorf("aws: build role ARN: %w", err)
+	}
+
+	creds, err := awsdelegation.GetTemporaryCredentials(ctx, cfg.SourceProfile, awsdelegation.CredentialOptions{
+		RoleARN:         roleARN,
+		SessionName:     profileName,
+		SessionPolicy:   cfg.SessionPolicy,
+		DurationSeconds: cfg.DurationSeconds,
+	})
+	if err != nil {
+		return "", fmt.Errorf("aws: get temporary credentials: %w", err)
+	}
+
+	if err := awsdelegation.ApplyDelegatedCredentials(ctx, r, profileName, creds); err != nil {
+		return "", fmt.Errorf("aws: push credentials: %w", err)
+	}
+
+	if err := awsdelegation.ApplyDelegatedProfile(ctx, r, profileName, roleARN, cfg.SourceProfile, cfg.Region); err != nil {
+		return "", fmt.Errorf("aws: push profile: %w", err)
+	}
+
+	return profileName, nil
 }

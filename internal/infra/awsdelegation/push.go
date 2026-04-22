@@ -74,3 +74,36 @@ func getRemoteHome(ctx context.Context, r RemoteRunner) (string, error) {
 	}
 	return home, nil
 }
+
+// RemoveSessionProfile strips a session-scoped AWS profile from both
+// ~/.aws/credentials and ~/.aws/config on the remote host.
+// It is a no-op when the profile is not present in either file.
+func RemoveSessionProfile(ctx context.Context, r RemoteRunner, profileName string) error {
+	home, err := getRemoteHome(ctx, r)
+	if err != nil {
+		return err
+	}
+	if home == "" || home == "/" {
+		return fmt.Errorf("refusing to write to suspicious home directory: %q", home)
+	}
+
+	trimHome := strings.TrimRight(home, "/")
+
+	// Remove from ~/.aws/credentials
+	credsPath := fmt.Sprintf("%s/.aws/credentials", trimHome)
+	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/credentials && cat %q/.aws/credentials || true`, home, home))
+	if err == nil && strings.TrimSpace(existing) != "" {
+		cleaned := MergeCredentialsIntoConfig(existing, profileName, nil)
+		_ = r.WriteFile(ctx, credsPath, []byte(cleaned))
+	}
+
+	// Remove from ~/.aws/config
+	configPath := fmt.Sprintf("%s/.aws/config", trimHome)
+	existing, err = r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/config && cat %q/.aws/config || true`, home, home))
+	if err == nil && strings.TrimSpace(existing) != "" {
+		cleaned := MergeProfileIntoConfig(existing, profileName, "", "", "")
+		_ = r.WriteFile(ctx, configPath, []byte(cleaned))
+	}
+
+	return nil
+}

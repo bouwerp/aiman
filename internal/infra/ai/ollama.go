@@ -20,10 +20,10 @@ const (
 	fallbackModel     = "llama3.2:3b"
 	// MaxHeadChars and MaxTailChars are exported so the UI can show a preview
 	// of exactly what gets sent to the model.
-	MaxHeadChars     = 3000  // head of pane content — captures the initial user prompt
-	MaxTailChars     = 12000 // tail of pane content — most recent activity
-	defaultNumCtx    = 16384 // KV cache size; safe on M-series with ≥16GB unified memory
-	defaultMaxTokens = 1200
+	MaxHeadChars      = 3000  // head of pane content — captures the initial user prompt
+	MaxTailChars      = 12000 // tail of pane content — most recent activity
+	defaultNumCtx     = 16384 // KV cache size; safe on M-series with ≥16GB unified memory
+	defaultMaxTokens  = 1200
 	httpClientTimeout = 120 * time.Second // ceiling for individual HTTP requests to Ollama
 )
 

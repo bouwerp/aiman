@@ -31,6 +31,7 @@ type Session struct {
 	AgentName        string
 	Status           SessionStatus
 	Tunnels          []Tunnel
+	AWSProfileName   string // session-scoped AWS profile on the remote (e.g. "aiman-a1b2c3d4")
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -143,4 +144,9 @@ type SessionConfig struct {
 	// When set, its summary and next steps are injected into the agent task file so the
 	// new session can continue from where the prior one left off.
 	PriorSnapshot *SessionSnapshot
+	// AWSConfig specifies per-session AWS credentials to push to the remote at session start.
+	// When set, a session-scoped profile ("aiman-<id[:8]>") is created on the remote and
+	// AWS_PROFILE is injected into the tmux environment. Inherited from the remote's
+	// AWSDelegation config when nil (and the remote has SyncCredentials enabled).
+	AWSConfig *AWSConfig
 }
