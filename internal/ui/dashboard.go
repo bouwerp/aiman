@@ -4819,6 +4819,11 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
+		// Ensure OpenCode runs in yolo/auto-approve mode (permission: allow).
+		if strings.Contains(strings.ToLower(agentCmd), "opencode") {
+			usecase.EnsureOpenCodePermissions(ctx, mgr)
+		}
+
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
 		extraEnvFlags := ""
 		if m.sessionCfg.OpenRouterAPIKey != "" {

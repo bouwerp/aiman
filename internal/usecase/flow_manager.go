@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -184,6 +185,12 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// so tools like claude that are installed in ~/.local/bin are found.
 	// We also append common user-local bin paths explicitly to avoid false
 	// "command not found" failures for tools installed outside default login PATH.
+	// Ensure OpenCode runs in yolo/auto-approve mode (permission: allow) so it
+	// never pauses for tool confirmations. Non-fatal if the remote lacks python3.
+	if strings.Contains(strings.ToLower(config.Agent.Command), "opencode") {
+		EnsureOpenCodePermissions(ctx, sshMgr)
+	}
+
 	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
 	extraEnvFlags := ""
 	if awsProfileName != "" {
@@ -301,4 +308,32 @@ func PushSessionAWSCredentials(ctx context.Context, r domain.RemoteExecutor, ses
 	}
 
 	return profileName, nil
+}
+
+// EnsureOpenCodePermissions writes "permission": "allow" into
+// ~/.config/opencode/opencode.json on the remote if it is not already set.
+// This is the OpenCode equivalent of yolo/auto-approve mode: all tool calls
+// run without interruption. The function is non-fatal; errors are silently
+// ignored so a config-write failure never blocks session creation.
+func EnsureOpenCodePermissions(ctx context.Context, r domain.RemoteExecutor) {
+	// Python script that creates or merges the config file. Using base64
+	// encoding avoids all shell-quoting issues.
+	pyScript := `import json, os, sys
+p = os.path.expanduser("~/.config/opencode/opencode.json")
+os.makedirs(os.path.dirname(p), exist_ok=True)
+try:
+    with open(p) as f:
+        c = json.load(f)
+except Exception:
+    c = {}
+if c.get("permission") == "allow":
+    sys.exit(0)
+c.setdefault("$schema", "https://opencode.ai/config.json")
+c["permission"] = "allow"
+with open(p, "w") as f:
+    json.dump(c, f, indent=2)
+`
+	encoded := base64.StdEncoding.EncodeToString([]byte(pyScript))
+	cmd := fmt.Sprintf("echo %s | base64 -d | python3 2>/dev/null || true", encoded)
+	_, _ = r.Execute(ctx, cmd)
 }
