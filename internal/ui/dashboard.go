@@ -4619,7 +4619,23 @@ func (m *Model) renderAIPanel(s domain.Session, contentW int) string {
 	stateBadge := lipgloss.NewStyle().Foreground(stateColor).Render(string(summary.AgentState))
 	lines = append(lines, aiHeader+stateBadge)
 
-	// Summary text — word-wrapped to content width
+	// Topic — what the session is about (muted, above the status line)
+	if summary.Topic != "" {
+		wrapW := contentW - 4
+		if wrapW < 20 {
+			wrapW = 20
+		}
+		topicStyled := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("244")).
+			Italic(true).
+			Width(wrapW).
+			Render(summary.Topic)
+		for _, l := range strings.Split(topicStyled, "\n") {
+			lines = append(lines, "  "+l)
+		}
+	}
+
+	// Summary text — current status, word-wrapped to content width
 	if summary.Summary != "" {
 		wrapW := contentW - 4
 		if wrapW < 20 {

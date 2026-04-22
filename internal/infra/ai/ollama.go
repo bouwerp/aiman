@@ -57,11 +57,12 @@ var (
 	sessionBriefSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
+    "topic":      {"type": "string"},
     "summary":    {"type": "string"},
     "actions":    {"type": "array", "items": {"type": "string"}},
     "agent_state": {"type": "string", "enum": ["idle","working","waiting_input","errored","unknown"]}
   },
-  "required": ["summary", "actions", "agent_state"]
+  "required": ["topic", "summary", "actions", "agent_state"]
 }`)
 
 	sessionSummarySchema = json.RawMessage(`{
@@ -116,6 +117,7 @@ var (
 const (
 	sessionBriefSystemPrompt = `You are monitoring an AI coding agent's tmux session. Respond ONLY with valid JSON.
 agent_state: idle|working|waiting_input|errored|unknown.
+topic: ≤8 words describing what the session is about, derived from the initial user prompt at the start of SESSION START. Use noun phrases, no verbs. Examples: "AWS session-scoped credential isolation", "Auth module JWT refactor", "Fix pagination bug in orders API". If no clear initial prompt is visible, infer from the overall activity.
 summary: one sentence describing current status. Write in present participle, NO subject. NEVER start with "The agent", "It", or any noun/pronoun subject. WRONG: "The agent is running tests." RIGHT: "Running tests after fixing the auth middleware timeout." Include file names or error text if visible.
 actions: only items needing immediate human response (blocked on approval, unanswered question, unresolvable error). Empty array if none.`
 
@@ -204,14 +206,27 @@ func (o *OllamaIntelligence) IsAvailable(ctx context.Context) bool {
 
 // SummariseBriefly produces a compact status summary for the session browser sidebar.
 func (o *OllamaIntelligence) SummariseBriefly(ctx context.Context, paneContent string) (*domain.SessionSummary, error) {
-	prompt := fmt.Sprintf("Terminal output:\n\n```\n%s\n```", tailTruncate(pane.Clean(paneContent), MaxTailChars))
+	cleaned := pane.Clean(paneContent)
+	head := headTruncate(cleaned, MaxHeadChars)
+	tail := tailTruncate(cleaned, MaxTailChars)
 
-	raw, err := o.generate(ctx, sessionBriefSystemPrompt, prompt, sessionBriefSchema, 200)
+	var prompt string
+	if head != tail {
+		prompt = fmt.Sprintf(
+			"SESSION START (initial task / first prompt):\n```\n%s\n```\n\nSESSION RECENT ACTIVITY:\n```\n%s\n```",
+			head, tail,
+		)
+	} else {
+		prompt = fmt.Sprintf("Terminal output:\n\n```\n%s\n```", tail)
+	}
+
+	raw, err := o.generate(ctx, sessionBriefSystemPrompt, prompt, sessionBriefSchema, 250)
 	if err != nil {
 		return nil, err
 	}
 
 	var result struct {
+		Topic      string            `json:"topic"`
 		Summary    string            `json:"summary"`
 		Actions    []string          `json:"actions"`
 		AgentState domain.AgentState `json:"agent_state"`
@@ -223,6 +238,7 @@ func (o *OllamaIntelligence) SummariseBriefly(ctx context.Context, paneContent s
 		result.AgentState = domain.AgentStateUnknown
 	}
 	return &domain.SessionSummary{
+		Topic:      result.Topic,
 		Summary:    result.Summary,
 		Actions:    result.Actions,
 		AgentState: result.AgentState,

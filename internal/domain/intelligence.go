@@ -35,7 +35,10 @@ type IntelligenceProvider interface {
 
 // SessionSummary is the structured result of analysing a coding agent's tmux output.
 type SessionSummary struct {
-	// Summary is a single-sentence status used by the session browser sidebar.
+	// Topic is a short phrase (≤8 words) describing what the session is about,
+	// derived from the initial user prompt. Used in the sidebar above the status line.
+	Topic string `json:"topic"`
+	// Summary is a single-sentence current status used by the session browser sidebar.
 	Summary string `json:"summary"`
 	// Overview is 2-4 sentences for the archive preview, each as a separate element
 	// so the UI can render them cleanly without mid-sentence line-wrapping.
