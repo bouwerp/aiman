@@ -371,9 +371,8 @@ func (m StartupModel) renderLogo() string {
 	return b.String()
 }
 
-func (m StartupModel) View() string {
+func (m StartupModel) buildContent() string {
 	var b strings.Builder
-	b.WriteString("\n")
 
 	// Pixel-art logo with animated colour wave
 	b.WriteString(m.renderLogo())
@@ -391,28 +390,42 @@ func (m StartupModel) View() string {
 	}
 	b.WriteString("\n\n")
 
-	// Spinner + checks
-	b.WriteString(fmt.Sprintf("  %s %s\n\n", m.spinner.View(), "Running startup checks..."))
+	// Spinner + checks — centred horizontally
+	checkWidth := 36 // approximate width of a check line
+	checkIndent := "  "
+	if m.width > checkWidth+4 {
+		checkIndent = strings.Repeat(" ", (m.width-checkWidth)/2)
+	}
+
+	b.WriteString(fmt.Sprintf("%s%s %s\n\n", checkIndent, m.spinner.View(), "Running startup checks..."))
 
 	order := []string{"JIRA", "Git", "SSH"}
 	for _, name := range order {
 		res := m.checks[name]
 		if res == nil {
-			b.WriteString(fmt.Sprintf("  %s %-10s: pending...\n", statusStyle.Render("…"), name))
+			b.WriteString(fmt.Sprintf("%s%s %-10s: pending...\n", checkIndent, statusStyle.Render("…"), name))
 			continue
 		}
 		status := successStyle.Render("✓")
 		if !res.Passed {
 			status = failStyle.Render("✗")
 		}
-		b.WriteString(fmt.Sprintf("  %s %-10s: %s\n", status, res.Name, res.Message))
+		b.WriteString(fmt.Sprintf("%s%s %-10s: %s\n", checkIndent, status, res.Name, res.Message))
 	}
 
 	if m.discoveryDone {
-		b.WriteString(fmt.Sprintf("  %s %-10s: %s\n", successStyle.Render("✓"), "Discover", "sessions loaded"))
+		b.WriteString(fmt.Sprintf("%s%s %-10s: %s\n", checkIndent, successStyle.Render("✓"), "Discover", "sessions loaded"))
 	} else {
-		b.WriteString(fmt.Sprintf("  %s %-10s: pending...\n", statusStyle.Render("…"), "Discover"))
+		b.WriteString(fmt.Sprintf("%s%s %-10s: pending...\n", checkIndent, statusStyle.Render("…"), "Discover"))
 	}
 
 	return b.String()
+}
+
+func (m StartupModel) View() string {
+	content := m.buildContent()
+	if m.width > 0 && m.height > 0 {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	}
+	return "\n" + content
 }

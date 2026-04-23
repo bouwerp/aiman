@@ -1277,14 +1277,35 @@ func (m *Model) pushSecretsCmd(s domain.Session) tea.Cmd {
 			return pushSecretsMsg{err: fmt.Errorf("SSH connect: %w", err)}
 		}
 		defer mgr.Close()
+
+		// 1. Update tmux session environment table — all future panes/windows inherit these.
 		for _, secret := range secrets {
-			// Update the tmux session env table (new panes/windows will inherit it).
-			setEnvCmd := fmt.Sprintf("tmux set-environment -t %q %s %q 2>/dev/null || true", s.TmuxSession, secret.Key, secret.Value)
-			_, _ = mgr.Execute(ctx, setEnvCmd)
-			// Export into the currently active pane's shell.
-			sendKeysCmd := fmt.Sprintf("tmux send-keys -t %q %q Enter 2>/dev/null || true", s.TmuxSession, "export "+secret.Key+"="+secret.Value)
-			_, _ = mgr.Execute(ctx, sendKeysCmd)
+			setCmd := fmt.Sprintf("tmux set-environment -t %q %s %q 2>/dev/null || true", s.TmuxSession, secret.Key, secret.Value)
+			_, _ = mgr.Execute(ctx, setCmd)
 		}
+
+		// 2. Export into panes that are running a plain shell only.
+		//    This avoids typing into agent UIs (opencode, claude, aider, etc.).
+		shellNames := map[string]bool{"bash": true, "zsh": true, "sh": true, "fish": true, "dash": true}
+		listCmd := fmt.Sprintf("tmux list-panes -t %q -F '#{pane_id} #{pane_current_command}' 2>/dev/null", s.TmuxSession)
+		if out, execErr := mgr.Execute(ctx, listCmd); execErr == nil {
+			for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+				parts := strings.Fields(line)
+				if len(parts) != 2 {
+					continue
+				}
+				paneID, paneCmd := parts[0], parts[1]
+				if !shellNames[paneCmd] {
+					continue // skip agent / non-shell panes
+				}
+				for _, secret := range secrets {
+					sendCmd := fmt.Sprintf("tmux send-keys -t %q %q Enter 2>/dev/null || true",
+						paneID, "export "+secret.Key+"="+secret.Value)
+					_, _ = mgr.Execute(ctx, sendCmd)
+				}
+			}
+		}
+
 		return pushSecretsMsg{}
 	}
 }
