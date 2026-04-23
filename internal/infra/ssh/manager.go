@@ -322,29 +322,41 @@ func (m *Manager) GetTmuxSessionEnv(ctx context.Context, sessionName, envVar str
 }
 
 func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (string, error) {
+	if sessionName == "" {
+		return "", fmt.Errorf("capture pane: session name is empty")
+	}
 	// Capture the full scrollback history (-S - means from the beginning of history)
 	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S - -t %q", sessionName)
 
 	var output string
 	var err error
 
-	// Retry up to 5 times with increasing delay if session/server is not yet available.
-	// This handles the race where the tmux server hasn't fully started yet.
-	for i := 0; i < 5; i++ {
+	isTransient := func(out, errStr string) bool {
+		return strings.Contains(out, "can't find pane") ||
+			strings.Contains(errStr, "can't find pane") ||
+			strings.Contains(out, "failed to connect to server") ||
+			strings.Contains(errStr, "failed to connect to server") ||
+			strings.Contains(out, "no server running") ||
+			strings.Contains(errStr, "no server running")
+	}
+
+	// Retry up to 8 times with increasing delay if session/server is not yet available.
+	// This handles the race where the tmux server or pane hasn't fully started yet
+	// (e.g. immediately after a session restart).
+	for i := 0; i < 8; i++ {
 		output, err = m.Execute(ctx, cmdStr)
 		if err == nil {
 			break
 		}
-		if !strings.Contains(output, "can't find pane") &&
-			!strings.Contains(output, "failed to connect to server") &&
-			!strings.Contains(output, "no server running") {
+		errStr := err.Error()
+		if !isTransient(output, errStr) {
 			return "", fmt.Errorf("failed to capture tmux pane: %w", err)
 		}
 		// Wait a bit before retry
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(time.Duration(300*(i+1)) * time.Millisecond):
+		case <-time.After(time.Duration(400*(i+1)) * time.Millisecond):
 		}
 	}
 

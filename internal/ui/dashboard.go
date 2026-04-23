@@ -2680,12 +2680,26 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tmuxOutputMsg:
 		if msg.session == m.activeSession {
-			var newOutput string
 			if msg.err != nil {
-				newOutput = failStyle.Render("Failed to capture pane: " + msg.err.Error())
-			} else {
-				newOutput = msg.output
+				// Transient pane-unavailability errors (session restarting, tmux server
+				// starting up) are silently ignored — the next tick will retry.
+				errStr := msg.err.Error()
+				isTransient := strings.Contains(errStr, "can't find pane") ||
+					strings.Contains(errStr, "no server running") ||
+					strings.Contains(errStr, "failed to connect to server")
+				if isTransient {
+					break
+				}
+				// Non-transient errors are shown in the viewport.
+				newOutput := failStyle.Render("Failed to capture pane: " + errStr)
+				if newOutput != m.tmuxOutput {
+					m.tmuxOutput = newOutput
+					m.viewport.SetContent(m.tmuxOutput)
+				}
+				break
 			}
+
+			newOutput := msg.output
 
 			// Sticky scroll: only go to bottom if we were already at the bottom OR if it's the first load for this session.
 			wasAtBottom := m.viewport.AtBottom()
