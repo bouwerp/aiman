@@ -4882,7 +4882,7 @@ func (m *Model) restartSession() tea.Cmd {
 			extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 		}
 		startCmd := fmt.Sprintf(
-			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
+			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-window-option -t %q remain-on-exit on || true",
 			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap, s.TmuxSession,
 		)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)

@@ -204,7 +204,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 	}
 	startCmd := fmt.Sprintf(
-		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-option -p -t %q remain-on-exit on",
+		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-window-option -t %q remain-on-exit on || true",
 		tmuxName, workingDir, strings.TrimSpace(session.ID), extraEnvFlags, agentBootstrap, tmuxName,
 	)
 	_, err = sshMgr.Execute(ctx, startCmd)
