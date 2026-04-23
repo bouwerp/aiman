@@ -1278,34 +1278,36 @@ func (m *Model) pushSecretsCmd(s domain.Session) tea.Cmd {
 		}
 		defer mgr.Close()
 
-		// 1. Update tmux session environment table — all future panes/windows inherit these.
+		// 1. Update tmux session environment table.
+		//    New windows/panes spawned in this session will inherit these values.
 		for _, secret := range secrets {
 			setCmd := fmt.Sprintf("tmux set-environment -t %q %s %q 2>/dev/null || true", s.TmuxSession, secret.Key, secret.Value)
 			_, _ = mgr.Execute(ctx, setCmd)
 		}
 
-		// 2. Export into panes that are running a plain shell only.
-		//    This avoids typing into agent UIs (opencode, claude, aider, etc.).
+		// 2. Refresh shell panes so they pick up the new tmux env immediately.
+		//    We use `eval $(tmux show-environment -s)` which is safe for any shell;
+		//    it sets/unsets exactly what tmux's env table contains.
+		//    We ONLY target panes running a plain shell — agent TUIs are skipped.
 		shellNames := map[string]bool{"bash": true, "zsh": true, "sh": true, "fish": true, "dash": true}
 		listCmd := fmt.Sprintf("tmux list-panes -t %q -F '#{pane_id} #{pane_current_command}' 2>/dev/null", s.TmuxSession)
 		if out, execErr := mgr.Execute(ctx, listCmd); execErr == nil {
 			for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 				parts := strings.Fields(line)
-				if len(parts) != 2 {
+				if len(parts) != 2 || !shellNames[parts[1]] {
 					continue
 				}
-				paneID, paneCmd := parts[0], parts[1]
-				if !shellNames[paneCmd] {
-					continue // skip agent / non-shell panes
-				}
-				for _, secret := range secrets {
-					sendCmd := fmt.Sprintf("tmux send-keys -t %q %q Enter 2>/dev/null || true",
-						paneID, "export "+secret.Key+"="+secret.Value)
-					_, _ = mgr.Execute(ctx, sendCmd)
-				}
+				evalCmd := fmt.Sprintf(
+					`tmux send-keys -t %q 'eval "$(tmux show-environment -s -t %s)"' Enter 2>/dev/null || true`,
+					parts[0], s.TmuxSession,
+				)
+				_, _ = mgr.Execute(ctx, evalCmd)
 			}
 		}
 
+		// Note: running agent processes cannot have their environment updated
+		// without a restart. Use 's' to restart the agent; it will inherit the
+		// tmux env that was just set above.
 		return pushSecretsMsg{}
 	}
 }
@@ -1978,7 +1980,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastError = fmt.Sprintf("Secrets push failed: %v", msg.err)
 			m.state = viewStateError
 		} else {
-			m.state = viewStateMain
+			m.lastError = "Secrets pushed to tmux env. Press 's' to restart the agent and apply them."
+			m.state = viewStateError // reuses the info/error overlay to surface the message
 		}
 		return m, nil
 	}
