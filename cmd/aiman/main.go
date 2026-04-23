@@ -108,6 +108,16 @@ func run() error {
 				return fmt.Errorf("alas, there's been an error: %w", err)
 			}
 			return nil
+		default:
+			fmt.Fprintf(os.Stderr, "aiman: unknown command %q\n\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "Usage: aiman [command]\n\n")
+			fmt.Fprintf(os.Stderr, "Commands:\n")
+			fmt.Fprintf(os.Stderr, "  (none)           start the TUI\n")
+			fmt.Fprintf(os.Stderr, "  version, -v      print version information\n")
+			fmt.Fprintf(os.Stderr, "  update           update aiman to the latest release\n")
+			fmt.Fprintf(os.Stderr, "  init             run the configuration setup wizard\n")
+			fmt.Fprintf(os.Stderr, "  repos            open the repository picker\n")
+			os.Exit(1)
 		}
 	}
 
