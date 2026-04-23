@@ -324,15 +324,10 @@ func (m StartupModel) renderLogo() string {
 		}
 	}
 
-	indent := "  "
-	if m.width > maxCol+4 {
-		indent = strings.Repeat(" ", (m.width-maxCol)/2)
-	}
-
 	var b strings.Builder
-	// Process pixel rows in pairs → one half-block character row each
+	// Process pixel rows in pairs → one half-block character row each.
+	// No manual indent here — lipgloss.Place handles centering.
 	for i := 0; i < numRows; i += 2 {
-		b.WriteString(indent)
 		topRow := rows[i]
 		bottomRow := ""
 		if i+1 < numRows {
@@ -352,17 +347,15 @@ func (m StartupModel) renderLogo() string {
 			case !topOn && !bottomOn:
 				b.WriteRune(' ')
 			case topOn && bottomOn && topIdx == botIdx:
-				// same colour → solid block
 				b.WriteString(lipgloss.NewStyle().Foreground(logoPalette[topIdx]).Render("█"))
 			case topOn && bottomOn:
-				// different colours → ▀ with fg=top, bg=bottom
 				b.WriteString(lipgloss.NewStyle().
 					Foreground(logoPalette[topIdx]).
 					Background(logoPalette[botIdx]).
 					Render("▀"))
 			case topOn:
 				b.WriteString(lipgloss.NewStyle().Foreground(logoPalette[topIdx]).Render("▀"))
-			default: // bottomOn only
+			default:
 				b.WriteString(lipgloss.NewStyle().Foreground(logoPalette[botIdx]).Render("▄"))
 			}
 		}
@@ -372,54 +365,43 @@ func (m StartupModel) renderLogo() string {
 }
 
 func (m StartupModel) buildContent() string {
-	var b strings.Builder
+	// Logo — raw, no indent; Place will center the whole block
+	logo := m.renderLogo()
 
-	// Pixel-art logo with animated colour wave
-	b.WriteString(m.renderLogo())
-
-	// Tagline — centred, italicised, cycles through palette
-	tagline := logoTagline
+	// Tagline — centred to match the logo's visual width (29 pixel-cols)
+	logoVisualWidth := 29
 	taglineStyle := lipgloss.NewStyle().
 		Foreground(logoPalette[m.logoFrame%len(logoPalette)]).
 		Italic(true)
-	if m.width > len(tagline)+4 {
-		pad := strings.Repeat(" ", (m.width-len(tagline))/2)
-		b.WriteString(pad + taglineStyle.Render(tagline))
-	} else {
-		b.WriteString("  " + taglineStyle.Render(tagline))
-	}
-	b.WriteString("\n\n")
+	tagline := lipgloss.NewStyle().
+		Width(logoVisualWidth).
+		Align(lipgloss.Center).
+		Render(taglineStyle.Render(logoTagline))
 
-	// Spinner + checks — centred horizontally
-	checkWidth := 36 // approximate width of a check line
-	checkIndent := "  "
-	if m.width > checkWidth+4 {
-		checkIndent = strings.Repeat(" ", (m.width-checkWidth)/2)
-	}
-
-	b.WriteString(fmt.Sprintf("%s%s %s\n\n", checkIndent, m.spinner.View(), "Running startup checks..."))
+	// Checks — left-aligned lines inside a fixed-width block; Place centers the block
+	var checks strings.Builder
+	checks.WriteString(fmt.Sprintf("%s %s\n\n", m.spinner.View(), "Running startup checks..."))
 
 	order := []string{"JIRA", "Git", "SSH"}
 	for _, name := range order {
 		res := m.checks[name]
 		if res == nil {
-			b.WriteString(fmt.Sprintf("%s%s %-10s: pending...\n", checkIndent, statusStyle.Render("…"), name))
+			checks.WriteString(fmt.Sprintf("%s %-10s: pending...\n", statusStyle.Render("…"), name))
 			continue
 		}
 		status := successStyle.Render("✓")
 		if !res.Passed {
 			status = failStyle.Render("✗")
 		}
-		b.WriteString(fmt.Sprintf("%s%s %-10s: %s\n", checkIndent, status, res.Name, res.Message))
+		checks.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
 	}
-
 	if m.discoveryDone {
-		b.WriteString(fmt.Sprintf("%s%s %-10s: %s\n", checkIndent, successStyle.Render("✓"), "Discover", "sessions loaded"))
+		checks.WriteString(fmt.Sprintf("%s %-10s: %s\n", successStyle.Render("✓"), "Discover", "sessions loaded"))
 	} else {
-		b.WriteString(fmt.Sprintf("%s%s %-10s: pending...\n", checkIndent, statusStyle.Render("…"), "Discover"))
+		checks.WriteString(fmt.Sprintf("%s %-10s: pending...\n", statusStyle.Render("…"), "Discover"))
 	}
 
-	return b.String()
+	return logo + tagline + "\n\n" + checks.String()
 }
 
 func (m StartupModel) View() string {
