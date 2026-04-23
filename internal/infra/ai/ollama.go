@@ -124,7 +124,7 @@ actions: only items needing immediate human response (blocked on approval, unans
 	sessionSummarySystemPrompt = `You are monitoring an AI coding agent's tmux session. Respond ONLY with valid JSON.
 When SESSION START is provided, treat the initial user prompt there as the primary goal of the session — use it to anchor the overview.
 agent_state: idle|working|waiting_input|errored|unknown.
-overview: array of 2-4 sentences, one per element. First sentence states the session goal (derived from the initial prompt). Remaining sentences cover accomplishments and current status. Write each in present participle — NO subject of any kind. NEVER use "The agent", "It", "The model", or any other subject. WRONG: "The agent implemented the archive flow." RIGHT: "Implemented the archive preview flow in dashboard.go."
+overview: array of 2-4 sentences, one per element. First sentence states the session goal (derived from the initial prompt). Remaining sentences cover accomplishments and current status. Write each in present participle — NO subject of any kind. NEVER use "The agent", "It", "The model", or any other subject. WRONG: "The agent implemented the feature." RIGHT: "Implementing user authentication endpoints in the API layer."
 details: array of 6-12 items — exact files created/modified/deleted, commands and outcomes, test pass/fail counts, errors verbatim, build and lint results. One sentence per item, no subject, present participle.
 actions: items needing immediate human response (blocked on approval, unanswered question, unresolvable error). Empty array if none.
 next_steps: concrete remaining tasks inferred from context. Empty array if none.`
