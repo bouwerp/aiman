@@ -1258,22 +1258,32 @@ func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		remote, ok := resolveRemote(m.cfg, s)
-		if !ok || remote.AWSDelegation == nil || !remote.AWSDelegation.SyncCredentials {
-			return refreshAWSMsg{err: fmt.Errorf("no AWS delegation configured for remote %q", s.RemoteHost)}
+		if !ok {
+			return refreshAWSMsg{err: fmt.Errorf("no remote configured for session %q", s.RemoteHost)}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		if err := mgr.Connect(ctx); err != nil {
 			return refreshAWSMsg{err: fmt.Errorf("SSH connect: %w", err)}
 		}
-		d := remote.AWSDelegation
-		cfg := &domain.AWSConfig{
-			SourceProfile:   d.SourceProfile,
-			RoleName:        d.RoleName,
-			AccountID:       d.AccountID,
-			Region:          d.Region,
-			Regions:         d.Regions,
-			SessionPolicy:   d.SessionPolicy,
-			DurationSeconds: d.DurationSeconds,
+		// Prefer the session's own stored AWSConfig (captures per-session role/region overrides).
+		// Fall back to the remote's global delegation config if the session predates this feature.
+		var cfg *domain.AWSConfig
+		if s.AWSConfig != nil {
+			cfg = s.AWSConfig
+		} else if remote.AWSDelegation != nil && remote.AWSDelegation.SyncCredentials {
+			d := remote.AWSDelegation
+			cfg = &domain.AWSConfig{
+				SourceProfile:   d.SourceProfile,
+				RoleName:        d.RoleName,
+				AccountID:       d.AccountID,
+				Region:          d.Region,
+				Regions:         d.Regions,
+				SessionPolicy:   d.SessionPolicy,
+				DurationSeconds: d.DurationSeconds,
+			}
+		}
+		if cfg == nil {
+			return refreshAWSMsg{err: fmt.Errorf("no AWS delegation configured for remote %q", s.RemoteHost)}
 		}
 		_, err := usecase.PushSessionAWSCredentials(ctx, mgr, s.ID, cfg)
 		return refreshAWSMsg{err: err}

@@ -167,6 +167,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		if pn, pushErr := PushSessionAWSCredentials(ctx, sshMgr, session.ID, config.AWSConfig); pushErr == nil {
 			awsProfileName = pn
 			session.AWSProfileName = pn
+			session.AWSConfig = config.AWSConfig
 		}
 		// Non-fatal — session starts without session-scoped credentials on error.
 	}
