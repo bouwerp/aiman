@@ -190,12 +190,18 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	if awsProfileName != "" {
 		extraEnvFlags += fmt.Sprintf(" -e AWS_PROFILE=%s", awsProfileName)
 	}
-	// Inject auto-approve config for OpenCode via OPENCODE_CONFIG_CONTENT env var.
-	// Using the env var avoids touching the user's config file (which may be JSONC
-	// or contain provider keys). The permission object format {"*":"allow"} is the
-	// current OpenCode schema — the old string "allow" no longer works.
+	// Ensure OpenCode runs in auto-approve mode. Two mechanisms are used for
+	// maximum compatibility across versions:
+	//   1. OPENCODE_CONFIG=/tmp/opencode-aiman.json — works with all versions but
+	//      can be overridden by a project-level opencode.json (precedence 3 of 8).
+	//   2. OPENCODE_CONFIG_CONTENT — newer OpenCode versions only; highest user
+	//      precedence (position 6 of 8), overrides even project config.
+	// The correct top-level format for all-permissions is the string "allow", not
+	// an object like {"*":"allow"}.
 	if strings.Contains(strings.ToLower(agentCmd), "opencode") {
-		extraEnvFlags += ` -e 'OPENCODE_CONFIG_CONTENT={"permission":{"*":"allow"}}'`
+		_ = sshMgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
+		extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
+		extraEnvFlags += ` -e 'OPENCODE_CONFIG_CONTENT={"permission":"allow"}'`
 	}
 	if config.OpenRouterAPIKey != "" {
 		extraEnvFlags += fmt.Sprintf(" -e OPENROUTER_API_KEY=%s", config.OpenRouterAPIKey)

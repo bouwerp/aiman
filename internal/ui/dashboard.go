@@ -4884,12 +4884,13 @@ func (m *Model) restartSession() tea.Cmd {
 
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
 		extraEnvFlags := ""
-		// Ensure OpenCode runs in yolo/auto-approve mode via OPENCODE_CONFIG_CONTENT env var.
-		// The permission object format {"*":"allow"} is the current OpenCode schema.
-		// Using an env var avoids touching the user's config file (which may use JSONC
-		// or contain provider keys that we must not overwrite).
+		// Ensure OpenCode runs in auto-approve mode. Two mechanisms for max compatibility:
+		//   1. OPENCODE_CONFIG=/tmp/opencode-aiman.json — all versions (precedence 3/8)
+		//   2. OPENCODE_CONFIG_CONTENT — newer versions only, overrides project config (6/8)
 		if strings.Contains(strings.ToLower(agentCmd), "opencode") {
-			extraEnvFlags += ` -e 'OPENCODE_CONFIG_CONTENT={"permission":{"*":"allow"}}'`
+			_ = mgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
+			extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
+			extraEnvFlags += ` -e 'OPENCODE_CONFIG_CONTENT={"permission":"allow"}'`
 		}
 		if m.sessionCfg.OpenRouterAPIKey != "" {
 			extraEnvFlags += fmt.Sprintf(" -e OPENROUTER_API_KEY=%s", m.sessionCfg.OpenRouterAPIKey)
