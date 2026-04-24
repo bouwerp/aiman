@@ -31,8 +31,8 @@ type Session struct {
 	AgentName        string
 	Status           SessionStatus
 	Tunnels          []Tunnel
-	AWSProfileName   string      // session-scoped AWS profile on the remote (e.g. "aiman-a1b2c3d4")
-	AWSConfig        *AWSConfig  // role/region/policy used to create AWSProfileName; persisted for live refresh
+	AWSProfileName   string     // session-scoped AWS profile on the remote (e.g. "aiman-a1b2c3d4")
+	AWSConfig        *AWSConfig // role/region/policy used to create AWSProfileName; persisted for live refresh
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }

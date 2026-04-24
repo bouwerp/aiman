@@ -339,9 +339,9 @@ func (m StartupModel) renderLogo() string {
 			bottomOn := col < len(bottomRow) && bottomRow[col] == 'X'
 
 			// Wave sweeps left→right: one colour step per pixel column, offset by frame
-			topIdx := ((col - m.logoFrame) % n + n*100) % n
+			topIdx := ((col-m.logoFrame)%n + n*100) % n
 			// bottom row is one pixel row lower; shift colour slightly for depth
-			botIdx := ((col - m.logoFrame + 1) % n + n*100) % n
+			botIdx := ((col-m.logoFrame+1)%n + n*100) % n
 
 			switch {
 			case !topOn && !bottomOn:
