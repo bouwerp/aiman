@@ -17,6 +17,14 @@ const (
 	SessionStatusInactive     SessionStatus = "INACTIVE"
 )
 
+type SyncMode string
+
+const (
+	SyncModeTwoWay         SyncMode = "two-way-safe"
+	SyncModeOneWaySafe     SyncMode = "one-way-safe"
+	SyncModeOneWayReplica  SyncMode = "one-way-replica"
+)
+
 type Session struct {
 	ID               string
 	IssueKey         string

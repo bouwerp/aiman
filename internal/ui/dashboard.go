@@ -1290,6 +1290,26 @@ func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
 	}
 }
 
+func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngine, name string, timeout time.Duration) error {
+	start := time.Now()
+	for time.Since(start) < timeout {
+		sessions, err := engine.ListSyncSessions(ctx)
+		if err == nil {
+			for _, s := range sessions {
+				if s.Name == name && s.Status == "Watching" {
+					return nil
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(1 * time.Second):
+		}
+	}
+	return fmt.Errorf("timeout waiting for sync %q to reach Watching status", name)
+}
+
 func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -1363,8 +1383,26 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		mutagenEngine := mutagen.NewEngine()
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, remoteSyncDir)
 		labels := map[string]string{"aiman-id": s.ID}
-		if err := mutagenEngine.StartSync(ctx, syncName, localPath, remoteSyncPath, labels); err != nil {
-			return recreateMutagenMsg{err: fmt.Errorf("failed to recreate mutagen sync: %w", err)}
+
+		// Step 1: Initial pull (one-way-replica from remote to local)
+		m.log("Performing initial pull from remote: %s", remoteSyncPath)
+		if err := mutagenEngine.StartSync(ctx, syncName, localPath, remoteSyncPath, labels, domain.SyncModeOneWayReplica); err != nil {
+			return recreateMutagenMsg{err: fmt.Errorf("failed to start initial mutagen pull: %w", err)}
+		}
+
+		// Wait for initial sync to complete (reach "Watching" state)
+		waitCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		err := m.waitForSyncWatching(waitCtx, mutagenEngine, syncName, 60*time.Second)
+		cancel()
+		if err != nil {
+			m.log("Warning: timed out waiting for initial pull to complete: %v. Proceeding to two-way sync anyway.", err)
+		}
+
+		// Step 2: Switch to two-way sync
+		m.log("Switching to two-way sync: %s", syncName)
+		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
+		if err := mutagenEngine.StartSync(ctx, syncName, localPath, remoteSyncPath, labels, domain.SyncModeTwoWay); err != nil {
+			return recreateMutagenMsg{err: fmt.Errorf("failed to start two-way mutagen sync: %w", err)}
 		}
 
 		s.LocalPath = localPath
@@ -1533,7 +1571,7 @@ func (m *Model) createSession() tea.Cmd {
 
 		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorkingDirectory)
 		labels := map[string]string{"aiman-id": session.ID}
-		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory), labels)
+		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory), labels, domain.SyncModeTwoWay)
 		if syncErr == nil {
 			session.MutagenSyncID = syncName
 			session.LocalPath = localSyncPath
@@ -4956,7 +4994,7 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
 		labels := map[string]string{"aiman-id": s.ID}
-		if err := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels); err != nil {
+		if err := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeTwoWay); err != nil {
 			// We continue even if sync fails, but log it
 			m.log("Warning: failed to restart mutagen sync: %v", err)
 		}

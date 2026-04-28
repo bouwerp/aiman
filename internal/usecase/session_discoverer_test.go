@@ -11,7 +11,7 @@ type recordingSyncEngine struct {
 	terminated []string
 }
 
-func (r *recordingSyncEngine) StartSync(context.Context, string, string, string, map[string]string) error {
+func (r *recordingSyncEngine) StartSync(context.Context, string, string, string, map[string]string, domain.SyncMode) error {
 	return nil
 }
 func (r *recordingSyncEngine) StopSync(context.Context) error            { return nil }
