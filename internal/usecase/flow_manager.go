@@ -186,6 +186,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// We also append common user-local bin paths explicitly to avoid false
 	// "command not found" failures for tools installed outside default login PATH.
 	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
+	// Escape single quotes for bash -c '...'
+	agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
+
 	extraEnvFlags := ""
 	if awsProfileName != "" {
 		extraEnvFlags += fmt.Sprintf(" -e AWS_PROFILE=%s", awsProfileName)

@@ -4922,6 +4922,9 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
+		// Escape single quotes for bash -c '...'
+		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
+
 		extraEnvFlags := ""
 		// Ensure OpenCode runs in auto-approve mode. Two mechanisms for max compatibility:
 		//   1. OPENCODE_CONFIG=/tmp/opencode-aiman.json — all versions (precedence 3/8)
