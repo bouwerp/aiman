@@ -124,7 +124,7 @@ func run() error {
 	// 7. Start TUI with StartupModel (Splash screen)
 	intelligence := ai.NewIntelligenceProvider(cfg)
 	snapshotManager := usecase.NewSnapshotManager(db, intelligence)
-	p := tea.NewProgram(ui.NewStartupModel(cfg, doctor, db, flowManager, intelligence, snapshotManager), tea.WithAltScreen(), tea.WithMouseAllMotion())
+	p := tea.NewProgram(ui.NewStartupModel(cfg, doctor, db, flowManager, intelligence, snapshotManager, version), tea.WithAltScreen(), tea.WithMouseAllMotion())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("alas, there's been an error: %w", err)
 	}

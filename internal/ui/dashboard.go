@@ -242,6 +242,7 @@ func (i tunnelItem) FilterValue() string {
 }
 
 type Model struct {
+	version                string
 	cfg                    *config.Config
 	db                     domain.SessionRepository
 	state                  viewState
@@ -4699,7 +4700,7 @@ func (m *Model) renderMainView() string {
 		doctorOutput.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
 	}
 
-	remoteInfo := fmt.Sprintf("Remotes: %d configured", len(m.cfg.Remotes))
+	remoteInfo := fmt.Sprintf("Aiman %s | Remotes: %d configured", m.version, len(m.cfg.Remotes))
 	if m.remoteFilter != "" {
 		remoteInfo += " | Filter: " + activeStyle.Render(remoteNameForHost(m.cfg, m.remoteFilter))
 	}

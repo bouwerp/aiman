@@ -54,6 +54,7 @@ func logoTick() tea.Cmd {
 
 type StartupModel struct {
 	logoFrame       int
+	version         string
 	cfg             *config.Config
 	doctor          *usecase.Doctor
 	db              domain.SessionRepository
@@ -72,12 +73,14 @@ type StartupModel struct {
 	pending         int
 }
 
-func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor, db domain.SessionRepository, flowManager *usecase.FlowManager, intelligence domain.IntelligenceProvider, snapshotManager *usecase.SnapshotManager) StartupModel {
+func NewStartupModel(cfg *config.Config, doctor *usecase.Doctor, db domain.SessionRepository, flowManager *usecase.FlowManager, intelligence domain.IntelligenceProvider, snapshotManager *usecase.SnapshotManager, version string) StartupModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	return StartupModel{
+		logoFrame:       0,
+		version:         version,
 		cfg:             cfg,
 		doctor:          doctor,
 		db:              db,
@@ -303,6 +306,7 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		mainModel := NewModel(m.cfg, m.results, m.sessions, m.db, m.flowManager, m.intelligence, m.snapshotManager, startupLogs...)
+		mainModel.version = m.version
 		if m.width > 0 && m.height > 0 {
 			mainModel.SetSize(m.width, m.height)
 		}
@@ -378,6 +382,13 @@ func (m StartupModel) buildContent() string {
 		Align(lipgloss.Center).
 		Render(taglineStyle.Render(logoTagline))
 
+	// Version
+	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	version := lipgloss.NewStyle().
+		Width(logoVisualWidth).
+		Align(lipgloss.Center).
+		Render(versionStyle.Render(m.version))
+
 	// Checks — left-aligned lines inside a fixed-width block; Place centers the block
 	var checks strings.Builder
 	checks.WriteString(fmt.Sprintf("%s %s\n\n", m.spinner.View(), "Running startup checks..."))
@@ -401,7 +412,7 @@ func (m StartupModel) buildContent() string {
 		checks.WriteString(fmt.Sprintf("%s %-10s: pending...\n", statusStyle.Render("…"), "Discover"))
 	}
 
-	return logo + tagline + "\n\n" + checks.String()
+	return logo + tagline + "\n" + version + "\n\n" + checks.String()
 }
 
 func (m StartupModel) View() string {
