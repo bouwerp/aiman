@@ -1320,7 +1320,8 @@ func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngin
 
 func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
 
 		remote, ok := resolveRemote(m.cfg, s)
 		if !ok {
@@ -1331,11 +1332,11 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		// Use persisted WorkingDirectory if available, otherwise try to fetch from tmux or fallback to worktree
 		remoteSyncDir := s.WorkingDirectory
 		if remoteSyncDir == "" && s.TmuxSession != "" {
-			fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
 			if cwd, err := mgr.GetTmuxSessionCWD(fetchCtx, s.TmuxSession); err == nil && strings.TrimSpace(cwd) != "" {
 				remoteSyncDir = strings.TrimSpace(cwd)
 			}
-			cancel()
+			fetchCancel()
 		}
 		if remoteSyncDir == "" {
 			remoteSyncDir = s.WorktreePath
@@ -1366,15 +1367,21 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		home, _ := os.UserHomeDir()
 		localPath := filepath.Join(home, config.DirName, "work", s.ID)
 
-		m.log("Cleaning up local sync path: %s", localPath)
-		_ = os.RemoveAll(localPath)
+		// Ensure the local directory exists but do NOT wipe it — two-way-safe
+		// reconciles remote-only files without deleting remote content, so a
+		// clean-slate delete is unnecessary and causes an empty local dir if the
+		// sync hasn't completed yet.
 		if err := os.MkdirAll(localPath, 0755); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
 
 		m.log("Terminating existing syncs: %s, %s", syncName, tempSyncName)
-		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
-		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", tempSyncName).Run()
+		terminateCtx, terminateCancel := context.WithTimeout(ctx, 10*time.Second)
+		_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", syncName).Run()
+		terminateCancel()
+		terminateCtx, terminateCancel = context.WithTimeout(ctx, 10*time.Second)
+		_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", tempSyncName).Run()
+		terminateCancel()
 
 		terminateCandidates := []string{
 			s.MutagenSyncID,
@@ -1388,32 +1395,19 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 				continue
 			}
 			terminated[candidate] = true
-			_, _ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", candidate).CombinedOutput()
+			terminateCtx, terminateCancel = context.WithTimeout(ctx, 10*time.Second)
+			_, _ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", candidate).CombinedOutput()
+			terminateCancel()
 		}
 
 		mutagenEngine := mutagen.NewEngine()
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, remoteSyncDir)
 		labels := map[string]string{"aiman-id": s.ID}
 
-		// Step 1: Initial pull (one-way-replica from remote to local)
-		m.log("Performing initial pull from remote: %s (session: %s)", remoteSyncPath, tempSyncName)
-		if err := mutagenEngine.StartSync(ctx, tempSyncName, localPath, remoteSyncPath, labels, domain.SyncModeOneWayReplica); err != nil {
-			return recreateMutagenMsg{err: fmt.Errorf("failed to start initial mutagen pull: %w", err)}
-		}
-
-		// Wait for initial sync to complete (reach "Watching" state)
-		waitCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-		err := m.waitForSyncWatching(waitCtx, mutagenEngine, tempSyncName, 45*time.Second)
-		cancel()
-		if err != nil {
-			m.log("Warning: pull failed or timed out: %v. Proceeding to two-way sync anyway.", err)
-		}
-
-		// Step 2: Switch to two-way sync
-		m.log("Switching to two-way sync: %s", syncName)
-		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", tempSyncName).Run()
-		time.Sleep(500 * time.Millisecond) // Give mutagen a moment to release file handles
-
+		// Start two-way-safe directly — it pulls remote-only files locally
+		// without deleting remote content, making the initial one-way-replica
+		// pull step unnecessary (and risky if it times out).
+		m.log("Starting two-way sync: %s -> %s (session: %s)", remoteSyncPath, localPath, syncName)
 		if err := mutagenEngine.StartSync(ctx, syncName, localPath, remoteSyncPath, labels, domain.SyncModeTwoWay); err != nil {
 			return recreateMutagenMsg{err: fmt.Errorf("failed to start two-way mutagen sync: %w", err)}
 		}
