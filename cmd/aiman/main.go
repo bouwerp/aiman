@@ -124,7 +124,10 @@ func run() error {
 	// 7. Start TUI with StartupModel (Splash screen)
 	intelligence := ai.NewIntelligenceProvider(cfg)
 	snapshotManager := usecase.NewSnapshotManager(db, intelligence)
-	p := tea.NewProgram(ui.NewStartupModel(cfg, doctor, db, flowManager, intelligence, snapshotManager, version), tea.WithAltScreen(), tea.WithMouseAllMotion())
+	startup := ui.NewStartupModel(cfg, doctor, db, flowManager, intelligence, snapshotManager, version)
+	p := tea.NewProgram(startup, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	// Inject the program reference into the model via message once the event loop starts.
+	go func() { p.Send(ui.SetProgramMsg{Program: p}) }()
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("alas, there's been an error: %w", err)
 	}

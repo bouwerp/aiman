@@ -66,6 +66,8 @@ type SyncEngine interface {
 	StopSync(ctx context.Context) error
 	GetStatus(ctx context.Context) (string, error)
 	ListSyncSessions(ctx context.Context) ([]SyncSession, error)
+	// GetSyncStatus returns the status of a specific sync session.
+	GetSyncStatus(ctx context.Context, name string) (string, error)
 	// TerminateSync terminates a sync session by name. Errors are ignored
 	// since the sync may already be gone.
 	TerminateSync(ctx context.Context, name string)

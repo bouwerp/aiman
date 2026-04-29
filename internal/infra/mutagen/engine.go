@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
@@ -45,7 +46,12 @@ func (e *Engine) StartSync(ctx context.Context, name, localPath, remotePath stri
 	}
 
 	args = append(args, localPath, remotePath)
-	cmd := exec.CommandContext(ctx, "mutagen", args...)
+	
+	// Use a reasonable timeout for the command execution itself to avoid hanging if the daemon is stuck
+	cmdCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	
+	cmd := exec.CommandContext(cmdCtx, "mutagen", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create mutagen sync: %w, output: %s", err, string(output))
@@ -61,7 +67,9 @@ func (e *Engine) TerminateSync(ctx context.Context, name string) {
 	if name == "" {
 		return
 	}
-	_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", name).Run() // #nosec G204
+	cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(cmdCtx, "mutagen", "sync", "terminate", name).Run() // #nosec G204
 }
 
 func (e *Engine) GetStatus(ctx context.Context) (string, error) {
@@ -69,15 +77,34 @@ func (e *Engine) GetStatus(ctx context.Context) (string, error) {
 }
 
 func (e *Engine) ListSyncSessions(ctx context.Context) ([]domain.SyncSession, error) {
-	cmd := exec.CommandContext(ctx, "mutagen", "sync", "list")
+	cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "mutagen", "sync", "list")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("failed to list mutagen sessions: %w, output: %s", err, string(output))
 	}
 
 	sessions := e.parseSyncListOutput(string(output))
 	postProcessMutagenSessions(sessions)
 	return sessions, nil
+}
+
+func (e *Engine) GetSyncStatus(ctx context.Context, name string) (string, error) {
+	if name == "" {
+		return "", nil
+	}
+	sessions, err := e.ListSyncSessions(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range sessions {
+		if s.Name == name || s.ID == name {
+			return s.Status, nil
+		}
+	}
+	return "", fmt.Errorf("sync session %q not found", name)
 }
 
 func postProcessMutagenSessions(sessions []domain.SyncSession) {

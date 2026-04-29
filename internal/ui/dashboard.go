@@ -346,6 +346,11 @@ type archiveStep struct {
 	err   bool
 }
 
+// SetProgramMsg is sent once at startup to inject the *tea.Program reference
+// into the model so background goroutines can call p.Send() for intermediate
+// status updates.
+type SetProgramMsg struct{ Program *tea.Program }
+
 // archiveStepMsg is sent from loadArchivePreviewCmd to advance the step indicator.
 type archiveStepMsg struct{ idx int }
 
@@ -2831,6 +2836,9 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case archivePaneCapturedMsg:
 		return m, nil
 	case archiveCleanedMsg:
+		return m, nil
+	case SetProgramMsg:
+		m.Program = msg.Program
 		return m, nil
 	case tea.KeyMsg:
 		m, cmd, handled := m.handleMainKeyMsg(msg)

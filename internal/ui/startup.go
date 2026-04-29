@@ -61,6 +61,7 @@ type StartupModel struct {
 	flowManager     *usecase.FlowManager
 	intelligence    domain.IntelligenceProvider
 	snapshotManager *usecase.SnapshotManager
+	Program         *tea.Program
 	spinner         spinner.Model
 	loadingMsg      string
 	results         []usecase.CheckResult
@@ -171,6 +172,9 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+	case SetProgramMsg:
+		m.Program = msg.Program
+		return m, nil
 	case logoTickMsg:
 		m.logoFrame++
 		return m, logoTick()
@@ -307,6 +311,7 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		mainModel := NewModel(m.cfg, m.results, m.sessions, m.db, m.flowManager, m.intelligence, m.snapshotManager, startupLogs...)
 		mainModel.version = m.version
+		mainModel.Program = m.Program
 		if m.width > 0 && m.height > 0 {
 			mainModel.SetSize(m.width, m.height)
 		}
