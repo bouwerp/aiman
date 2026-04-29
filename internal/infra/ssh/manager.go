@@ -151,6 +151,7 @@ func isRetriableSSHTransportError(errText string) bool {
 		strings.Contains(s, "kex_exchange_identification") ||
 		strings.Contains(s, "mux_client_request_session") ||
 		strings.Contains(s, "control socket connect") ||
+		strings.Contains(s, "connect to new control master") ||
 		strings.Contains(s, "broken pipe")
 }
 
@@ -332,12 +333,11 @@ func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (stri
 	var err error
 
 	isTransient := func(out, errStr string) bool {
-		return strings.Contains(out, "can't find pane") ||
-			strings.Contains(errStr, "can't find pane") ||
-			strings.Contains(out, "failed to connect to server") ||
-			strings.Contains(errStr, "failed to connect to server") ||
-			strings.Contains(out, "no server running") ||
-			strings.Contains(errStr, "no server running")
+		combined := out + errStr
+		return strings.Contains(combined, "can't find pane") ||
+			strings.Contains(combined, "failed to connect to server") ||
+			strings.Contains(combined, "no server running") ||
+			strings.Contains(combined, "connect to new control master")
 	}
 
 	// Retry up to 8 times with increasing delay if session/server is not yet available.
