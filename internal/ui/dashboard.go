@@ -5006,7 +5006,11 @@ func (m *Model) restartSession() tea.Cmd {
 		home, _ := os.UserHomeDir()
 		localSyncPath := filepath.Join(home, config.DirName, "work", s.ID)
 
-		_ = os.RemoveAll(localSyncPath)
+		// On restart the remote worktree already exists. Keep the local sync dir
+		// as-is (or create it if missing) so we can go straight to two-way sync.
+		// two-way-safe will pull any remote changes down without deleting anything,
+		// making the previous one-way-replica "initial pull" step unnecessary and
+		// the primary cause of hangs on large repos.
 		_ = os.MkdirAll(localSyncPath, 0755)
 
 		target := remote.Host
@@ -5016,17 +5020,6 @@ func (m *Model) restartSession() tea.Cmd {
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
 		labels := map[string]string{"aiman-id": s.ID}
 
-		// Step 1: Initial pull
-		m.sendStatus("Performing initial pull from remote...")
-		if err := mutagenEngine.StartSync(ctx, tempSyncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeOneWayReplica); err == nil {
-			waitCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-			_ = m.waitForSyncWatching(waitCtx, mutagenEngine, tempSyncName, 45*time.Second)
-			cancel()
-			_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", tempSyncName).Run()
-			time.Sleep(500 * time.Millisecond)
-		}
-
-		// Step 2: Switch to two-way sync
 		m.sendStatus("Establishing two-way sync...")
 		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeTwoWay)
 		if syncErr == nil {

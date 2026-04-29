@@ -16,6 +16,9 @@ func (r *recordingSyncEngine) StartSync(context.Context, string, string, string,
 }
 func (r *recordingSyncEngine) StopSync(context.Context) error            { return nil }
 func (r *recordingSyncEngine) GetStatus(context.Context) (string, error) { return "", nil }
+func (r *recordingSyncEngine) GetSyncStatus(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
 func (r *recordingSyncEngine) ListSyncSessions(context.Context) ([]domain.SyncSession, error) {
 	return nil, nil
 }
