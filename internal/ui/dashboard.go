@@ -747,8 +747,9 @@ func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
 		}
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		// We use a background context as this is just a quick capture
-		out, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		out, err := mgr.CaptureTmuxPane(ctx, session.TmuxSession)
 		return tmuxOutputMsg{
 			session: session.TmuxSession,
 			output:  out,
@@ -2691,6 +2692,13 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tmuxTickMsg:
 		cmds = append(cmds, tickTmux())
 
+		// Don't make SSH calls while we're in a loading/provisioning state —
+		// the restart goroutine is already using the same ControlMaster socket
+		// and concurrent access causes "Failed to connect to new control master" races.
+		if m.state == viewStateLoading {
+			return m, tea.Batch(cmds...)
+		}
+
 		// On first tick, force-select the first session if nothing is active
 		if m.initialLoad {
 			m.initialLoad = false
@@ -2721,6 +2729,9 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case gitTickMsg:
 		cmds = append(cmds, tickGit())
+		if m.state == viewStateLoading {
+			return m, tea.Batch(cmds...)
+		}
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
 			cmds = append(cmds, fetchGitStatus(m.cfg, s))
@@ -4925,9 +4936,15 @@ func (m *Model) restartSession() tea.Cmd {
 		m.sendStatus("Cleaning up existing syncs...")
 		syncName := "aiman-sync-" + s.ID
 		tempSyncName := syncName + "-pull"
-		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
-		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", tempSyncName).Run()
-		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession).Run()
+		terminateCtx, terminateCancel := context.WithTimeout(ctx, 10*time.Second)
+		_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", syncName).Run()
+		terminateCancel()
+		terminateCtx, terminateCancel = context.WithTimeout(ctx, 10*time.Second)
+		_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", tempSyncName).Run()
+		terminateCancel()
+		terminateCtx, terminateCancel = context.WithTimeout(ctx, 10*time.Second)
+		_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", s.TmuxSession).Run()
+		terminateCancel()
 
 		// 3. Start tmux session and agent
 		agentCmd := m.sessionCfg.Agent.Command

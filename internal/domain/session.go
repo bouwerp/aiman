@@ -20,9 +20,9 @@ const (
 type SyncMode string
 
 const (
-	SyncModeTwoWay         SyncMode = "two-way-safe"
-	SyncModeOneWaySafe     SyncMode = "one-way-safe"
-	SyncModeOneWayReplica  SyncMode = "one-way-replica"
+	SyncModeTwoWay        SyncMode = "two-way-safe"
+	SyncModeOneWaySafe    SyncMode = "one-way-safe"
+	SyncModeOneWayReplica SyncMode = "one-way-replica"
 )
 
 type Session struct {

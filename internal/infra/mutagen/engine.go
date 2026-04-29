@@ -46,11 +46,11 @@ func (e *Engine) StartSync(ctx context.Context, name, localPath, remotePath stri
 	}
 
 	args = append(args, localPath, remotePath)
-	
+
 	// Use a reasonable timeout for the command execution itself to avoid hanging if the daemon is stuck
 	cmdCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	
+
 	cmd := exec.CommandContext(cmdCtx, "mutagen", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
