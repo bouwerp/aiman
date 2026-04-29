@@ -245,6 +245,7 @@ type Model struct {
 	version                string
 	cfg                    *config.Config
 	db                     domain.SessionRepository
+	Program                *tea.Program
 	state                  viewState
 	panelMode              panelMode
 	list                   list.Model
@@ -298,6 +299,7 @@ type Model struct {
 	provisioningIdx        int
 	provisioningError      string
 	provisioningStatus     string
+	provisioningStatusMsg  string // current detailed status message
 	provisionSpinner       spinner.Model
 	authSteps              []authWizardStep
 	authStepIdx            int
@@ -1231,6 +1233,7 @@ type dirsMsg struct {
 type sessionCreateMsg struct {
 	session domain.Session
 	err     error
+	status  string // optional progress message
 }
 
 type attachMsg struct {
@@ -1290,22 +1293,20 @@ func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
 		return refreshAWSMsg{err: err}
 	}
 }
-
 func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngine, name string, timeout time.Duration) error {
 	start := time.Now()
 	for time.Since(start) < timeout {
-		sessions, err := engine.ListSyncSessions(ctx)
+		status, err := engine.GetSyncStatus(ctx, name)
 		if err == nil {
-			for _, s := range sessions {
-				if s.Name == name && s.Status == "Watching" {
-					return nil
-				}
+			m.log("Sync %q status: %s", name, status)
+			if status == "Watching" || strings.Contains(status, "Conflicts") {
+				return nil
 			}
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(1 * time.Second):
+		case <-time.After(2 * time.Second):
 		}
 	}
 	return fmt.Errorf("timeout waiting for sync %q to reach Watching status", name)
@@ -1353,6 +1354,8 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		}
 
 		syncName := "aiman-sync-" + s.ID
+		tempSyncName := syncName + "-pull"
+
 		m.log("Recreating sync %q", syncName)
 		home, _ := os.UserHomeDir()
 		localPath := filepath.Join(home, config.DirName, "work", s.ID)
@@ -1363,8 +1366,9 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
 
-		m.log("Terminating existing sync: %s", syncName)
+		m.log("Terminating existing syncs: %s, %s", syncName, tempSyncName)
 		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
+		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", tempSyncName).Run()
 
 		terminateCandidates := []string{
 			s.MutagenSyncID,
@@ -1372,7 +1376,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			filepath.Base(s.LocalPath),
 			tmuxName,
 		}
-		terminated := map[string]bool{syncName: true}
+		terminated := map[string]bool{syncName: true, tempSyncName: true}
 		for _, candidate := range terminateCandidates {
 			if candidate == "" || terminated[candidate] {
 				continue
@@ -1386,22 +1390,24 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		labels := map[string]string{"aiman-id": s.ID}
 
 		// Step 1: Initial pull (one-way-replica from remote to local)
-		m.log("Performing initial pull from remote: %s", remoteSyncPath)
-		if err := mutagenEngine.StartSync(ctx, syncName, localPath, remoteSyncPath, labels, domain.SyncModeOneWayReplica); err != nil {
+		m.log("Performing initial pull from remote: %s (session: %s)", remoteSyncPath, tempSyncName)
+		if err := mutagenEngine.StartSync(ctx, tempSyncName, localPath, remoteSyncPath, labels, domain.SyncModeOneWayReplica); err != nil {
 			return recreateMutagenMsg{err: fmt.Errorf("failed to start initial mutagen pull: %w", err)}
 		}
 
 		// Wait for initial sync to complete (reach "Watching" state)
-		waitCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		err := m.waitForSyncWatching(waitCtx, mutagenEngine, syncName, 60*time.Second)
+		waitCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		err := m.waitForSyncWatching(waitCtx, mutagenEngine, tempSyncName, 45*time.Second)
 		cancel()
 		if err != nil {
-			m.log("Warning: timed out waiting for initial pull to complete: %v. Proceeding to two-way sync anyway.", err)
+			m.log("Warning: pull failed or timed out: %v. Proceeding to two-way sync anyway.", err)
 		}
 
 		// Step 2: Switch to two-way sync
 		m.log("Switching to two-way sync: %s", syncName)
-		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
+		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", tempSyncName).Run()
+		time.Sleep(500 * time.Millisecond) // Give mutagen a moment to release file handles
+
 		if err := mutagenEngine.StartSync(ctx, syncName, localPath, remoteSyncPath, labels, domain.SyncModeTwoWay); err != nil {
 			return recreateMutagenMsg{err: fmt.Errorf("failed to start two-way mutagen sync: %w", err)}
 		}
@@ -1502,6 +1508,12 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 		}
 
 		return m.fetchDirectories(repoPath)()
+	}
+}
+
+func (m *Model) sendStatus(msg string) {
+	if m.Program != nil {
+		m.Program.Send(sessionCreateMsg{status: msg})
 	}
 }
 
@@ -4408,6 +4420,11 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = m.loadingNext
 		return m, nil
 	case sessionCreateMsg:
+		if msg.status != "" {
+			m.loadingMsg = msg.status
+			m.provisioningStatusMsg = msg.status
+			return m, nil
+		}
 		if msg.err != nil {
 			// Check if it's a worktree exists error
 			if msg.err.Error() == "WORKTREE_EXISTS" {
@@ -4847,11 +4864,14 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 
 func (m *Model) restartSession() tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
 		s := m.restartingSession
 		if s == nil {
 			return sessionCreateMsg{err: fmt.Errorf("no session to restart")}
 		}
+
+		m.sendStatus("Initializing restart...")
 
 		s.ID = strings.TrimSpace(s.ID)
 		if s.ID == "" {
@@ -4866,7 +4886,6 @@ func (m *Model) restartSession() tea.Cmd {
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
 		// Ensure working directory exists
-		m.log("Restarting: WorktreePath=%q, WorkingDirectory=%q", s.WorktreePath, s.WorkingDirectory)
 		workingDir := s.WorkingDirectory
 		if workingDir == "" {
 			workingDir = s.WorktreePath
@@ -4876,34 +4895,38 @@ func (m *Model) restartSession() tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("session has no working directory or worktree path defined")}
 		}
 
+		m.sendStatus("Verifying remote directory...")
 		if err := mgr.ValidateDir(ctx, workingDir); err != nil {
 			return sessionCreateMsg{err: fmt.Errorf("working directory not found (%q): %w", workingDir, err)}
 		}
 
 		// Write session ID to git metadata (safe from git status/commits)
 		if s.WorktreePath != "" {
-			m.log("Ensuring session ID is persisted in git metadata")
+			m.sendStatus("Persisting session metadata...")
 			idCmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -d \"$git_dir\" ]; then echo %q > \"$git_dir/aiman-id\"; fi",
 				s.WorktreePath, strings.TrimSpace(s.ID))
 			_, _ = mgr.Execute(ctx, idCmd)
-
-			// Optional: cleanup old file if it exists at root
 			_, _ = mgr.Execute(ctx, fmt.Sprintf("rm -f %q/.aiman-id", s.WorktreePath))
 		}
 
 		// 1. Kill existing tmux session if it exists
+		m.sendStatus("Stopping existing tmux session...")
 		mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
 
 		// 2. Terminate existing mutagen sync if it exists
-		// We ignore errors here because it might not exist
-		mutagenCmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession)
-		_ = mutagenCmd.Run()
+		m.sendStatus("Cleaning up existing syncs...")
+		syncName := "aiman-sync-" + s.ID
+		tempSyncName := syncName + "-pull"
+		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
+		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", tempSyncName).Run()
+		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", s.TmuxSession).Run()
 
 		// 3. Start tmux session and agent
 		agentCmd := m.sessionCfg.Agent.Command
 		var sendKeysPrompt string
 		issueForPrompt := m.sessionCfg.Issue
 		if issueForPrompt == nil && strings.TrimSpace(m.sessionCfg.IssueKey) != "" {
+			m.sendStatus("Fetching JIRA issue context...")
 			jiraProvider := jira.NewProvider(jira.Config{
 				URL:      m.cfg.Integrations.Jira.URL,
 				Email:    m.cfg.Integrations.Jira.Email,
@@ -4913,6 +4936,8 @@ func (m *Model) restartSession() tea.Cmd {
 				issueForPrompt = &iss
 			}
 		}
+
+		m.sendStatus("Preparing session environment...")
 		if m.flowManager != nil && m.flowManager.SkillEngine != nil {
 			prepared, err := m.flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *m.sessionCfg.Agent, m.sessionCfg.Skills, m.sessionCfg.PromptFree, issueForPrompt, m.sessionCfg.PriorSnapshot)
 			if err == nil {
@@ -4922,13 +4947,9 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
-		// Escape single quotes for bash -c '...'
 		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
 		extraEnvFlags := ""
-		// Ensure OpenCode runs in auto-approve mode. Two mechanisms for max compatibility:
-		//   1. OPENCODE_CONFIG=/tmp/opencode-aiman.json — all versions (precedence 3/8)
-		//   2. OPENCODE_CONFIG_CONTENT — newer versions only, overrides project config (6/8)
 		if strings.Contains(strings.ToLower(agentCmd), "opencode") {
 			_ = mgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
 			extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
@@ -4940,6 +4961,8 @@ func (m *Model) restartSession() tea.Cmd {
 		for _, secret := range m.sessionCfg.EnvSecrets {
 			extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 		}
+
+		m.sendStatus("Starting agent in tmux...")
 		startCmd := fmt.Sprintf(
 			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-window-option -t %q remain-on-exit on || true",
 			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap, s.TmuxSession,
@@ -4949,8 +4972,6 @@ func (m *Model) restartSession() tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}
 		}
 
-		// For agents that don't support inline initial prompts, send it via
-		// tmux send-keys after the agent has had time to start up.
 		if sendKeysPrompt != "" {
 			sendCmd := fmt.Sprintf(
 				"attempt=0; "+
@@ -4961,36 +4982,24 @@ func (m *Model) restartSession() tea.Cmd {
 					"done; "+
 					"sleep 3; "+
 					"tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
-				s.TmuxSession,
-				s.TmuxSession, sendKeysPrompt,
-				s.TmuxSession,
+				s.TmuxSession, s.TmuxSession, sendKeysPrompt, s.TmuxSession,
 			)
 			_, _ = mgr.Execute(ctx, fmt.Sprintf("nohup bash -c %q >/dev/null 2>&1 &", sendCmd))
 		}
 
-		// Trust the directory for common agents when supported.
+		m.sendStatus("Configuring git safe.directory...")
 		_, _ = mgr.Execute(ctx, fmt.Sprintf("git config --global --add safe.directory %q", workingDir))
+		m.sendStatus("Configuring agent trust...")
 		_, _ = mgr.Execute(ctx, fmt.Sprintf("cd %q && if command -v claude >/dev/null; then claude trust . >/dev/null 2>&1; fi", workingDir))
-		_, _ = mgr.Execute(ctx, fmt.Sprintf("cd %q && if command -v copilot >/dev/null; then copilot trust . >/dev/null 2>&1 || copilot trust add . >/dev/null 2>&1; fi", workingDir))
-		_, _ = mgr.Execute(ctx, fmt.Sprintf("cd %q && if command -v gh >/dev/null; then gh copilot trust . >/dev/null 2>&1 || gh copilot trust add . >/dev/null 2>&1; fi", workingDir))
 		_, _ = mgr.Execute(ctx, geminiGlobalTrustCmd(workingDir))
 
 		// 4. Start mutagen sync
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
-
-		syncName := "aiman-sync-" + s.ID
-		m.log("Creating sync %q", syncName)
 		localSyncPath := filepath.Join(home, config.DirName, "work", s.ID)
 
-		m.log("Cleaning up local sync path: %s", localSyncPath)
 		_ = os.RemoveAll(localSyncPath)
-		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
-			m.log("Warning: failed to create local sync path: %v", err)
-		}
-
-		m.log("Terminating existing sync: %s", syncName)
-		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
+		_ = os.MkdirAll(localSyncPath, 0755)
 
 		target := remote.Host
 		if remote.User != "" {
@@ -4998,23 +5007,30 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
 		labels := map[string]string{"aiman-id": s.ID}
-		if err := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeTwoWay); err != nil {
-			// We continue even if sync fails, but log it
-			m.log("Warning: failed to restart mutagen sync: %v", err)
+
+		// Step 1: Initial pull
+		m.sendStatus("Performing initial pull from remote...")
+		if err := mutagenEngine.StartSync(ctx, tempSyncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeOneWayReplica); err == nil {
+			waitCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+			_ = m.waitForSyncWatching(waitCtx, mutagenEngine, tempSyncName, 45*time.Second)
+			cancel()
+			_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", tempSyncName).Run()
+			time.Sleep(500 * time.Millisecond)
 		}
 
-		// Update session status
-		s.MutagenSyncID = syncName
-		s.LocalPath = localSyncPath
-		s.Status = domain.SessionStatusSyncing
-		s.AgentName = m.sessionCfg.Agent.Name
-		s.UpdatedAt = time.Now()
+		// Step 2: Switch to two-way sync
+		m.sendStatus("Establishing two-way sync...")
+		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeTwoWay)
+		if syncErr == nil {
+			s.MutagenSyncID = syncName
+			s.LocalPath = localSyncPath
+			_ = s.Transition(domain.SessionStatusSyncing)
+		}
 
 		if m.db != nil {
 			_ = m.db.Save(ctx, s)
 		}
-
-		return sessionCreateMsg{session: *s, err: nil}
+		return sessionCreateMsg{session: *s}
 	}
 }
 
