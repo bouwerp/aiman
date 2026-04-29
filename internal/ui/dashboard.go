@@ -1412,6 +1412,13 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			return recreateMutagenMsg{err: fmt.Errorf("failed to start two-way mutagen sync: %w", err)}
 		}
 
+		// Wait for the initial sync to reach "Watching" state so files are present
+		// locally before we return. Uses the remaining time in the 5-minute context.
+		m.sendStatus("Waiting for initial sync to complete...")
+		if err := m.waitForSyncWatching(ctx, mutagenEngine, syncName, 5*time.Minute); err != nil {
+			m.log("Warning: sync did not reach Watching state: %v — files may still be syncing", err)
+		}
+
 		s.LocalPath = localPath
 		s.WorkingDirectory = remoteSyncDir
 		s.MutagenSyncID = syncName
