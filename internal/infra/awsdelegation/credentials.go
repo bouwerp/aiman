@@ -20,38 +20,48 @@ type getSessionTokenOutput struct {
 }
 
 // CredentialOptions carries optional restrictions for temporary credential minting.
-// When SessionPolicy or DurationSeconds are set, assume-role is used instead of
-// get-session-token, because get-session-token does not support inline policies.
+// When RoleARN or SessionPolicy are set, assume-role is used.
+// DurationSeconds alone (without RoleARN/SessionPolicy) passes --duration-seconds to get-session-token.
 type CredentialOptions struct {
 	// SessionPolicy is an inline JSON IAM policy that further restricts the
-	// temporary credentials. Passed as --policy to sts assume-role.
+	// temporary credentials. Requires RoleARN — get-session-token does not
+	// support inline session policies. Passed as --policy to sts assume-role.
 	SessionPolicy string
 	// DurationSeconds is the credential lifetime (900–43200). 0 means AWS default.
+	// When used alone (without RoleARN/SessionPolicy), passed to get-session-token.
 	DurationSeconds int
-	// RoleARN is required when SessionPolicy or DurationSeconds are set, so that
-	// assume-role is called with an explicit role to scope down.
+	// RoleARN, when set, causes assume-role to be used instead of get-session-token.
+	// Required when SessionPolicy is set.
 	RoleARN string
 	// SessionName is the role session name for assume-role (defaults to "aiman" when empty).
 	SessionName string
 }
 
 // GetTemporaryCredentials obtains temporary AWS credentials locally.
-// When opts specifies a SessionPolicy, DurationSeconds, or RoleARN, it calls
-// `aws sts assume-role`; otherwise it calls `aws sts get-session-token`.
+//
+// Decision table:
+//   - RoleARN set OR SessionPolicy set → `aws sts assume-role` (role must exist and trust caller).
+//     SessionPolicy alone without a RoleARN is rejected with an actionable error.
+//   - Only DurationSeconds set (no RoleARN, no SessionPolicy) → `aws sts get-session-token --duration-seconds`.
+//   - Nothing set → `aws sts get-session-token`.
 func GetTemporaryCredentials(ctx context.Context, profile string, opts ...CredentialOptions) (*SessionCredentials, error) {
 	var o CredentialOptions
 	if len(opts) > 0 {
 		o = opts[0]
 	}
 
-	useAssumeRole := strings.TrimSpace(o.RoleARN) != "" ||
-		strings.TrimSpace(o.SessionPolicy) != "" ||
-		o.DurationSeconds > 0
+	// assume-role is needed only when we are switching identity (RoleARN) or
+	// further restricting permissions via an inline session policy.
+	// DurationSeconds alone can be passed directly to get-session-token.
+	useAssumeRole := strings.TrimSpace(o.RoleARN) != "" || strings.TrimSpace(o.SessionPolicy) != ""
 
 	if useAssumeRole {
 		roleARN := strings.TrimSpace(o.RoleARN)
 		if roleARN == "" {
-			return nil, fmt.Errorf("assume-role requires a role ARN when session_policy or duration_seconds is set")
+			return nil, fmt.Errorf(
+				"session_policy requires a role_arn / account_id so that assume-role can be used " +
+					"(get-session-token does not support inline policies). " +
+					"Set account_id in the AWS delegation config or remove the regions / session_policy restriction.")
 		}
 		sessionName := strings.TrimSpace(o.SessionName)
 		if sessionName == "" {
@@ -65,12 +75,13 @@ func GetTemporaryCredentials(ctx context.Context, profile string, opts ...Creden
 	if p != "" {
 		args = append(args, "--profile", p)
 	}
+	if o.DurationSeconds > 0 {
+		args = append(args, "--duration-seconds", fmt.Sprintf("%d", o.DurationSeconds))
+	}
 
 	cmd := exec.CommandContext(ctx, "aws", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// If get-session-token fails, it might be because the profile is already an assumed role
-		// or using SSO. We don't try to handle every case, but we provide the error.
 		return nil, fmt.Errorf("aws sts get-session-token: %w — %s", err, strings.TrimSpace(string(out)))
 	}
 
@@ -106,7 +117,16 @@ func getAssumeRoleCreds(ctx context.Context, roleARN, sessionName, profile, sess
 	cmd := exec.CommandContext(ctx, "aws", args...) // #nosec G204
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("aws sts assume-role: %w — %s", err, strings.TrimSpace(string(out)))
+		errMsg := strings.TrimSpace(string(out))
+		if strings.Contains(errMsg, "AccessDenied") || strings.Contains(errMsg, "is not authorized") {
+			return nil, fmt.Errorf(
+				"aws sts assume-role: AccessDenied for role %s.\n"+
+					"The role must exist in the AWS account and its trust policy must allow your IAM principal.\n"+
+					"Either create the role with a trust policy granting your user sts:AssumeRole, "+
+					"or set a different role_name in the AWS delegation config.\n"+
+					"Original error: %s", roleARN, errMsg)
+		}
+		return nil, fmt.Errorf("aws sts assume-role: %w — %s", err, errMsg)
 	}
 
 	var o getSessionTokenOutput

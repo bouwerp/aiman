@@ -526,11 +526,12 @@ func pushAWSDelegation(host, user, root string, d *config.AWSDelegation) tea.Cmd
 			if sessionPolicy == "" && len(d.Regions) > 0 {
 				sessionPolicy = awsdelegation.BuildRegionPolicy(d.Regions)
 			}
-			// Only include the role ARN when session policy or duration
-			// restrictions require assume-role. Without these, plain
-			// get-session-token is used (no AssumeRole permission needed).
+			// assume-role is only required when a session policy is set (to further
+			// restrict permissions via an inline policy — get-session-token does not
+			// support inline policies). duration_seconds alone uses get-session-token
+			// directly and does NOT require sts:AssumeRole on any role.
 			scopedRoleARN := ""
-			if sessionPolicy != "" || d.DurationSeconds > 0 {
+			if sessionPolicy != "" {
 				scopedRoleARN = roleARN
 			}
 			opts := awsdelegation.CredentialOptions{
