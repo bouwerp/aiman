@@ -1306,7 +1306,7 @@ func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngin
 		if err == nil {
 			m.log("Sync %q status: %s", name, status)
 			m.sendStatus(fmt.Sprintf("Sync: %s", status))
-			if status == "Watching" || strings.Contains(status, "Conflicts") {
+			if strings.HasPrefix(status, "Watching") || strings.Contains(status, "Conflicts") {
 				return nil
 			}
 		}
