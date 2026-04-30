@@ -1,0 +1,1000 @@
+package ui
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/infra/ai"
+	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
+	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/git"
+	"github.com/bouwerp/aiman/internal/infra/jira"
+	"github.com/bouwerp/aiman/internal/infra/mutagen"
+	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/bouwerp/aiman/internal/pane"
+	"github.com/bouwerp/aiman/internal/usecase"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+)
+
+var (
+	docStyle     = lipgloss.NewStyle().Margin(1, 2)
+	statusStyle  = lipgloss.NewStyle().PaddingLeft(2).Italic(true).Foreground(lipgloss.Color("#7D7D7D"))
+	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00"))
+	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
+	titleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("62")).Bold(true).Underline(true)
+	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	promptRegex  = regexp.MustCompile(`^[\w\-@~/:\.]+\s*(\$|#|>)\s*$`)
+)
+
+// copyStringToSystemClipboard writes text to the OS clipboard when a native helper exists.
+func copyStringToSystemClipboard(s string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(s)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("pbcopy: %w", err)
+		}
+		return nil
+	case "linux":
+		if path, err := exec.LookPath("wl-copy"); err == nil {
+			cmd := exec.Command(path)
+			cmd.Stdin = strings.NewReader(s)
+			return cmd.Run()
+		}
+		if path, err := exec.LookPath("xclip"); err == nil {
+			cmd := exec.Command(path, "-selection", "clipboard")
+			cmd.Stdin = strings.NewReader(s)
+			return cmd.Run()
+		}
+		return fmt.Errorf("install wl-copy or xclip for clipboard support on Linux")
+	default:
+		return fmt.Errorf("clipboard copy not implemented on %s", runtime.GOOS)
+	}
+}
+
+// normalizeMultiline trims trailing spaces per line and leading/trailing blank lines.
+func normalizeMultiline(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// yankSessionOutputToClipboard copies visible or full preview buffer to the OS clipboard.
+// Mouse selection in alternate-screen TUIs often does not reach the system clipboard; use y / Y instead.
+func (m *Model) yankSessionOutputToClipboard(fullBuffer bool) bool {
+	if m.list.SelectedItem() == nil {
+		return false
+	}
+	var raw string
+	if m.panelMode == panelModeTerminal && m.terminal != nil {
+		raw = m.terminal.View()
+	} else if fullBuffer {
+		raw = m.tmuxOutput
+	} else {
+		raw = m.viewport.View()
+	}
+	text := normalizeMultiline(ansi.Strip(raw))
+	if text == "" {
+		m.lastError = "Nothing to copy from this session view yet."
+		m.state = viewStateVSCodeError
+		return true
+	}
+	if err := copyStringToSystemClipboard(text); err != nil {
+		m.lastError = fmt.Sprintf("Could not copy to clipboard: %v", err)
+		m.state = viewStateVSCodeError
+		return true
+	}
+	m.log("Copied session output to clipboard (%d chars)", len(text))
+	return true
+}
+
+type viewState int
+
+const (
+	viewStateMain viewState = iota
+	viewStateMenu
+	viewStateRemotes
+	viewStateSetup
+	viewStateGitSetup
+	viewStateGeneralSettings
+	viewStateAISettings
+	viewStateSnapshotBrowser
+	viewStateArchiveSession // sentinel: archive selected session from menu
+	viewStatePicker
+	viewStateVSCodeError
+	viewStateIssuePicker
+	viewStateBranchInput
+	viewStateRepoPicker
+	viewStateDirPicker
+	viewStateAgentPicker
+	viewStateSummary
+	viewStateLoading
+	viewStateTerminateConfirm
+	viewStateTerminateProgress
+	viewStateWorktreeExists
+	viewStateBranchPicker
+	viewStateModePicker
+	viewStateRestartAgentPicker
+	viewStateRestartConfirm
+	viewStateSnapshotPreview
+	viewStateArchivePreview
+	viewStateArchiveProgress
+	viewStateChangeDirPicker
+	viewStateChangeDirConfirm
+	viewStateProvisioningRemotePicker
+	viewStateProvisioningProgress
+	viewStateAuthRemotePicker
+	viewStateAuthWizard
+	viewStateTunnelManager
+	viewStateTunnelAdd
+	viewStateSecretsSetup // manage global secrets
+	viewStateError        // generic error dialog (press any key to dismiss)
+	viewStateRemotePicker // select remote for new session
+)
+
+type panelMode int
+
+const (
+	panelModePreview panelMode = iota
+	panelModeTerminal
+)
+
+type menuItem struct {
+	title, desc string
+	action      viewState
+}
+
+func (i menuItem) Title() string       { return i.title }
+func (i menuItem) Description() string { return i.desc }
+func (i menuItem) FilterValue() string { return i.title }
+
+type item struct {
+	session    domain.Session
+	needsInput bool
+	activity   string
+	remoteName string // short name of the remote for display
+}
+
+func (i item) Title() string {
+	prefix := ""
+	switch {
+	case i.needsInput:
+		prefix = "! "
+	case i.activity == "idle":
+		prefix = "o "
+	case i.activity == "busy":
+		prefix = "> "
+	}
+	activity := ""
+	switch {
+	case i.needsInput:
+		activity = " ⚠ input"
+	case i.activity == "idle":
+		activity = " • idle"
+	case i.activity == "busy":
+		activity = " • busy"
+	}
+	remoteTag := ""
+	if i.remoteName != "" {
+		remoteTag = " [" + i.remoteName + "]"
+	}
+	if i.session.IssueKey != "" {
+		return fmt.Sprintf("%s%s (%s)%s%s", prefix, i.session.IssueKey, i.session.TmuxSession, activity, remoteTag)
+	}
+	return fmt.Sprintf("%s%s%s%s", prefix, i.session.TmuxSession, activity, remoteTag)
+}
+
+func (i item) Description() string {
+	if i.needsInput {
+		return fmt.Sprintf("Repo: %s | Host: %s | State: input", i.session.RepoName, i.session.RemoteHost)
+	}
+	if i.activity != "" {
+		return fmt.Sprintf("Repo: %s | Host: %s | State: %s", i.session.RepoName, i.session.RemoteHost, i.activity)
+	}
+	return fmt.Sprintf("Repo: %s | Host: %s", i.session.RepoName, i.session.RemoteHost)
+}
+
+func (i item) FilterValue() string {
+	return i.session.IssueKey + " " + i.session.TmuxSession + " " + i.session.RepoName + " " + i.remoteName
+}
+
+type tunnelItem struct {
+	tunnel  domain.Tunnel
+	running bool
+}
+
+func (i tunnelItem) Title() string {
+	state := failStyle.Render("stopped")
+	if i.running {
+		state = successStyle.Render("running")
+	}
+	return fmt.Sprintf("localhost:%d -> remote:%d  (%s)", i.tunnel.LocalPort, i.tunnel.RemotePort, state)
+}
+
+func (i tunnelItem) Description() string {
+	return "SSH local forward"
+}
+
+func (i tunnelItem) FilterValue() string {
+	return fmt.Sprintf("%d %d", i.tunnel.LocalPort, i.tunnel.RemotePort)
+}
+
+type Model struct {
+	version                string
+	cfg                    *config.Config
+	db                     domain.SessionRepository
+	state                  viewState
+	panelMode              panelMode
+	list                   list.Model
+	menu                   list.Model
+	remotes                RemotesModel
+	setup                  SetupModel
+	gitSetup               GitSetupModel
+	generalSetup           GeneralSetupModel
+	aiSetup                AISetupModel
+	secretsSetup           SecretsSetupModel
+	snapshotBrowser        SnapshotBrowserModel
+	picker                 RepoPickerModel
+	issuePicker            IssuePickerModel
+	branchInput            BranchInputModel
+	branchPicker           BranchPickerModel
+	dirPicker              DirPickerModel
+	agentPicker            AgentPickerModel
+	summary                SummaryModel
+	doctorResults          []usecase.CheckResult
+	width, height          int
+	viewport               viewport.Model
+	terminal               *TerminalModel
+	tmuxOutput             string
+	activeSession          string
+	termCloser             io.Closer
+	lastError              string
+	loadingMsg             string
+	sessionCfg             domain.SessionConfig
+	loadingNext            viewState
+	initialLoad            bool
+	terminateSession       domain.Session
+	terminateSteps         []string
+	terminateErrors        []string
+	terminateIndex         int
+	terminatePrecheckError string
+	terminateForced        bool
+	consoleOpen            bool
+	consoleLog             []string
+	consoleViewport        viewport.Model
+	gitStatus              domain.GitStatus
+	lastGitStatusUpdate    time.Time
+	restartingSession      *domain.Session
+	changingDirSession     *domain.Session
+	flowManager            *usecase.FlowManager
+	firstLoad              map[string]bool
+	selectedRemote         config.Remote    // remote chosen for the current new-session wizard
+	remoteFilter           string           // "" = all remotes, otherwise a Remote.Host to filter by
+	allSessions            []domain.Session // unfiltered master session list
+	mouseEnabled           bool
+	provisionSteps         []domain.ProvisionStep
+	provisioningIdx        int
+	provisioningError      string
+	provisioningStatus     string
+	provisionSpinner       spinner.Model
+	authSteps              []authWizardStep
+	authStepIdx            int
+	authStepStatus         map[int]string
+	authStepDetails        map[int]string
+	authStatusMsg          string
+	authChecking           bool
+	tunnelList             list.Model
+	tunnelSession          *domain.Session
+	tunnelInput            textinput.Model
+	tunnelError            string
+	intelligence           domain.IntelligenceProvider
+	snapshotManager        *usecase.SnapshotManager
+	aiSummary              map[string]*domain.SessionSummary // keyed by TmuxSession
+	aiLoading              bool
+	aiError                string
+	snapshotToast          string
+	snapshotToastError     bool
+	priorSnapshotCandidate *domain.SessionSnapshot
+	archivePreview         *archivePreviewData
+	archivePreviewVP       viewport.Model
+	archiveSteps           []archiveStep
+	archiveStepIdx         int
+}
+
+// archivePreviewData holds the pre-computed data shown in the archive confirmation popup.
+type archivePreviewData struct {
+	session        domain.Session
+	summary        *domain.SessionSummary
+	rawPane        string // full raw pane capture (for inspection/dump)
+	rawPaneLen     int    // chars captured from tmux (before cleaning)
+	cleanedPaneLen int    // chars after pane.Clean() (before truncation)
+	compressedSize int    // bytes of gzip-compressed cleaned pane
+	cleanedPane    string // full cleaned pane text (for head/tail preview)
+	promptHead     string // first N chars sent to the model (SESSION START)
+	promptTail     string // last M chars sent to the model (SESSION RECENT ACTIVITY)
+	snapshot       *domain.SessionSnapshot
+}
+
+// archiveStep represents one step in the archive progress view.
+type archiveStep struct {
+	label string
+	done  bool
+	err   bool
+}
+
+// archiveStepMsg is sent from loadArchivePreviewCmd to advance the step indicator.
+type archiveStepMsg struct{ idx int }
+
+// archiveStepErrMsg signals that a step failed.
+type archiveStepErrMsg struct {
+	idx int
+	err error
+}
+
+func remoteNameForHost(cfg *config.Config, host string) string {
+	for _, r := range cfg.Remotes {
+		if r.Host == host {
+			if r.Name != "" {
+				return r.Name
+			}
+			return r.Host
+		}
+	}
+	return host
+}
+
+func (m *Model) makeItem(s domain.Session) item {
+	return item{
+		session:    s,
+		remoteName: remoteNameForHost(m.cfg, s.RemoteHost),
+	}
+}
+
+func (m *Model) applyRemoteFilter() {
+	var filtered []list.Item
+	for _, s := range m.allSessions {
+		if m.remoteFilter == "" || s.RemoteHost == m.remoteFilter {
+			filtered = append(filtered, m.makeItem(s))
+		}
+	}
+	m.list.SetItems(filtered)
+	if m.remoteFilter == "" {
+		m.list.Title = "Aiman Dashboard - Active Sessions"
+	} else {
+		m.list.Title = "Sessions [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
+	}
+}
+
+func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager, intelligence domain.IntelligenceProvider, snapshotManager *usecase.SnapshotManager, initialLogs ...string) *Model {
+	items := make([]list.Item, len(initialSessions))
+	for i, s := range initialSessions {
+		items[i] = item{session: s, remoteName: remoteNameForHost(cfg, s.RemoteHost)}
+	}
+
+	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
+	l.Title = "Aiman Dashboard - Active Sessions"
+	l.AdditionalFullHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new session")),
+			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart session")),
+			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
+			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "manage tunnels")),
+			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
+			key.NewBinding(key.WithKeys("ctrl+s", "a"), key.WithHelp("a", "attach full terminal")),
+			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
+			key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "copy local path")),
+			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy session output (visible)")),
+			key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy session output (full preview)")),
+			key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G/end", "jump preview to latest")),
+			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
+			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "AI insight")),
+			key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "archive session")),
+			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
+			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
+			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
+			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
+		}
+	}
+
+	menuItems := []list.Item{
+		menuItem{title: "Manage Remote Servers", desc: "Add, edit, or remove remote dev servers", action: viewStateRemotes},
+		menuItem{title: "Provision Remote Server", desc: "100% setup: install gh, agents, node, and skills", action: viewStateProvisioningRemotePicker},
+		menuItem{title: "Auth Setup Wizard", desc: "Guided auth checks and instructions per remote tool", action: viewStateAuthRemotePicker},
+		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
+		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
+		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
+		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
+		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
+		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
+	}
+	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
+	m.Title = "Administrative Menu"
+
+	vp := viewport.New(0, 0)
+	vp.MouseWheelEnabled = true
+	vp.MouseWheelDelta = 10
+	vp.Style = lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), true, false, false, false). // Top border
+		PaddingTop(1)
+
+	model := &Model{
+		cfg:             cfg,
+		db:              db,
+		flowManager:     flowManager,
+		state:           viewStateMain,
+		panelMode:       panelModePreview,
+		list:            l,
+		menu:            m,
+		remotes:         NewRemotesModel(cfg),
+		setup:           NewSetupModel(cfg),
+		gitSetup:        NewGitSetupModel(cfg),
+		generalSetup:    NewGeneralSetupModel(cfg),
+		aiSetup:         NewAISetupModel(cfg),
+		secretsSetup:    NewSecretsSetupModel(db),
+		doctorResults:   doctorResults,
+		viewport:        vp,
+		firstLoad:       make(map[string]bool),
+		allSessions:     initialSessions,
+		mouseEnabled:    true,
+		tunnelList:      list.New(nil, list.NewDefaultDelegate(), 0, 0),
+		intelligence:    intelligence,
+		snapshotManager: snapshotManager,
+		aiSummary:       make(map[string]*domain.SessionSummary),
+	}
+	model.tunnelList.Title = "Session Tunnels"
+	model.provisionSpinner = spinner.New()
+	model.provisionSpinner.Spinner = spinner.Dot
+	model.provisionSpinner.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	for _, log := range initialLogs {
+		model.consoleLog = append(model.consoleLog, log)
+	}
+	return model
+}
+
+type tmuxTickMsg time.Time
+type tmuxOutputMsg struct {
+	session string
+	output  string
+	err     error
+}
+
+type inputHintMsg struct {
+	session    string
+	needsInput bool
+	activity   string
+}
+
+type aiSummaryMsg struct {
+	session string
+	summary *domain.SessionSummary
+	err     error
+}
+
+type snapshotSavedMsg struct {
+	snapshot *domain.SessionSnapshot
+	err      error
+}
+
+type snapshotToastMsg struct {
+	text    string
+	isError bool
+}
+
+type snapshotPreviewMsg struct {
+	snapshot *domain.SessionSnapshot // nil = no snapshot found
+}
+type tmuxTerminalMsg struct {
+	stream io.ReadWriteCloser
+	err    error
+}
+
+type gitStatusMsg struct {
+	session string
+	status  domain.GitStatus
+	err     error
+}
+
+type gitTickMsg time.Time
+
+type tunnelStatesMsg struct {
+	sessionID string
+	items     []list.Item
+	err       error
+}
+
+type tunnelToggleMsg struct {
+	sessionID  string
+	localPort  int
+	remotePort int
+	running    bool
+	err        error
+}
+
+func parseTunnelSpec(spec string) (domain.Tunnel, error) {
+	raw := strings.TrimSpace(spec)
+	if raw == "" {
+		return domain.Tunnel{}, fmt.Errorf("enter tunnel as local:remote (e.g. 5173:5173)")
+	}
+	parts := strings.Split(raw, ":")
+	if len(parts) != 2 {
+		return domain.Tunnel{}, fmt.Errorf("invalid tunnel format %q (expected local:remote)", raw)
+	}
+	localPort, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || localPort <= 0 || localPort > 65535 {
+		return domain.Tunnel{}, fmt.Errorf("invalid local port: %q", parts[0])
+	}
+	remotePort, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || remotePort <= 0 || remotePort > 65535 {
+		return domain.Tunnel{}, fmt.Errorf("invalid remote port: %q", parts[1])
+	}
+	return domain.Tunnel{LocalPort: localPort, RemotePort: remotePort}, nil
+}
+
+func geminiGlobalTrustCmd(workingDir string) string {
+	return fmt.Sprintf(
+		`cd %q && if command -v gemini >/dev/null 2>&1; then `+
+			`mkdir -p "$HOME/.gemini"; `+
+			`tf="$HOME/.gemini/trustedFolders.json"; `+
+			`if [ ! -s "$tf" ]; then printf '{}' > "$tf"; fi; `+
+			`if command -v node >/dev/null 2>&1; then `+
+			`WORKDIR=%q TF="$tf" node -e "const fs=require('fs');const p=process.env.WORKDIR;const f=process.env.TF;let j={};try{j=JSON.parse(fs.readFileSync(f,'utf8')||'{}')}catch{j={}};j[p]='TRUST_FOLDER';fs.writeFileSync(f,JSON.stringify(j,null,2),{mode:0o600})" >/dev/null 2>&1 || true; `+
+			`fi; `+
+			`gemini config set --global security.folderTrust.enabled true >/dev/null 2>&1 || true; `+
+			`fi`,
+		workingDir, workingDir,
+	)
+}
+
+func (m *Model) updateSessionInMemory(updated domain.Session) {
+	for i, s := range m.allSessions {
+		if s.ID == updated.ID {
+			m.allSessions[i] = updated
+			break
+		}
+	}
+	items := m.list.Items()
+	for i, it := range items {
+		sessItem, ok := it.(item)
+		if !ok {
+			continue
+		}
+		if sessItem.session.ID == updated.ID {
+			sessItem.session = updated
+			items[i] = sessItem
+			break
+		}
+	}
+	m.list.SetItems(items)
+}
+
+func (m *Model) refreshTunnelStatesCmd(s domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return tunnelStatesMsg{sessionID: s.ID, err: fmt.Errorf("no remote configured for session")}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		items := make([]list.Item, 0, len(s.Tunnels))
+		for _, t := range s.Tunnels {
+			items = append(items, tunnelItem{
+				tunnel:  t,
+				running: mgr.IsTunnelRunning(ctx, t.LocalPort, t.RemotePort),
+			})
+		}
+		return tunnelStatesMsg{sessionID: s.ID, items: items}
+	}
+}
+
+func (m *Model) toggleTunnelCmd(s domain.Session, t domain.Tunnel, start bool) tea.Cmd {
+	return func() tea.Msg {
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return tunnelToggleMsg{sessionID: s.ID, localPort: t.LocalPort, remotePort: t.RemotePort, err: fmt.Errorf("no remote configured for session")}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		var err error
+		if start {
+			err = mgr.StartTunnel(ctx, t.LocalPort, t.RemotePort)
+		} else {
+			err = mgr.StopTunnel(ctx, t.LocalPort, t.RemotePort)
+		}
+		return tunnelToggleMsg{
+			sessionID:  s.ID,
+			localPort:  t.LocalPort,
+			remotePort: t.RemotePort,
+			running:    start && err == nil,
+			err:        err,
+		}
+	}
+}
+
+func (m *Model) validateTerminationPreconditions(s domain.Session) error {
+	if s.WorktreePath == "" {
+		return nil
+	}
+
+	remote, ok := resolveRemote(m.cfg, s)
+	if !ok {
+		return fmt.Errorf("no remote configured")
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	ctx := context.Background()
+
+	statusOut, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q status --porcelain --untracked-files=no'", s.WorktreePath))
+	if err != nil {
+		// If git is broken/corrupted (exit 128), allow cleanup to proceed
+		// Check if error indicates corrupted repo
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "exit status 128") ||
+			strings.Contains(errMsg, "not a git repository") ||
+			strings.Contains(errMsg, "fatal:") {
+			// Repository is corrupted, allow cleanup
+			return nil
+		}
+		return fmt.Errorf("failed to verify git status before termination: %w", err)
+	}
+	if strings.TrimSpace(statusOut) != "" {
+		return fmt.Errorf("session has uncommitted changes; commit or stash before terminating")
+	}
+
+	aheadOut, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'if git -C %q rev-parse --abbrev-ref --symbolic-full-name @{upstream} >/dev/null 2>&1; then git -C %q rev-list --count @{upstream}..HEAD; else echo NO_UPSTREAM; fi'", s.WorktreePath, s.WorktreePath))
+	if err != nil {
+		// If git is broken/corrupted, allow cleanup to proceed
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "exit status 128") ||
+			strings.Contains(errMsg, "not a git repository") ||
+			strings.Contains(errMsg, "fatal:") {
+			return nil
+		}
+		return fmt.Errorf("failed to verify upstream commits before termination: %w", err)
+	}
+	ahead := strings.TrimSpace(aheadOut)
+	if ahead == "NO_UPSTREAM" {
+		return fmt.Errorf("branch has no upstream; push and set upstream before terminating")
+	}
+	aheadCount, convErr := strconv.Atoi(ahead)
+	if convErr != nil {
+		return fmt.Errorf("failed to parse upstream check output: %s", ahead)
+	}
+	if aheadCount > 0 {
+		return fmt.Errorf("session has %d unpushed commit(s); push before terminating", aheadCount)
+	}
+
+	return nil
+}
+
+func tickTmux() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		return tmuxTickMsg(t)
+	})
+}
+
+func tickGit() tea.Cmd {
+	return tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
+		return gitTickMsg(t)
+	})
+}
+
+func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		if s.WorktreePath == "" {
+			return gitStatusMsg{session: s.TmuxSession, err: fmt.Errorf("no worktree path")}
+		}
+
+		remote, ok := resolveRemote(cfg, s)
+		if !ok {
+			return gitStatusMsg{session: s.TmuxSession, err: fmt.Errorf("no remote found")}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		if err := mgr.Connect(ctx); err != nil {
+			return gitStatusMsg{session: s.TmuxSession, err: err}
+		}
+
+		gitMgr := git.NewManager(&cfg.Git)
+		status, err := gitMgr.GetGitStatus(ctx, mgr, s.WorktreePath)
+		return gitStatusMsg{
+			session: s.TmuxSession,
+			status:  status,
+			err:     err,
+		}
+	}
+}
+
+func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		remote, ok := resolveRemote(cfg, session)
+		if !ok {
+			return tmuxOutputMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
+		}
+
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		// We use a background context as this is just a quick capture
+		out, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		return tmuxOutputMsg{
+			session: session.TmuxSession,
+			output:  out,
+			err:     err,
+		}
+	}
+}
+
+// summariseSessionCmd captures the current tmux pane and sends it to the local SLM
+// for analysis. Runs in a bubbletea goroutine — never blocks the TUI loop.
+func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, session domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		remote, ok := resolveRemote(cfg, session)
+		if !ok {
+			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		pane, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		if err != nil {
+			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("capture pane: %w", err)}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		summary, err := intel.SummariseBriefly(ctx, pane)
+		return aiSummaryMsg{session: session.TmuxSession, summary: summary, err: err}
+	}
+}
+
+// loadPriorSnapshotCmd looks up the latest snapshot for a session.
+// The result is delivered as snapshotPreviewMsg so the UI can show a preview.
+func loadPriorSnapshotCmd(snapMgr *usecase.SnapshotManager, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		if snapMgr == nil {
+			return snapshotPreviewMsg{snapshot: nil}
+		}
+		snap, err := snapMgr.GetLatestSnapshot(context.Background(), sessionID)
+		if err != nil || snap == nil {
+			return snapshotPreviewMsg{snapshot: nil}
+		}
+		return snapshotPreviewMsg{snapshot: snap}
+	}
+}
+
+// archivePreviewReadyMsg carries pre-computed archive preview data to the UI.
+type archivePreviewReadyMsg struct {
+	data *archivePreviewData
+	err  error
+}
+
+// archiveStepLabels are the human-readable labels for each archive step shown in the progress view.
+var archiveStepLabels = []string{
+	"Connecting to remote host",
+	"Capturing terminal session",
+	"Cleaning & compressing output",
+	"Generating AI summary",
+	"Ready for review",
+}
+
+// loadArchivePreviewCmd captures the pane, cleans it, measures the compressed
+// size, and asks the AI for a summary — but does NOT persist anything.
+// It sends archiveStepMsg messages as each step completes so the progress
+// view can update in real time.
+func loadArchivePreviewCmd(cfg *config.Config, snapMgr *usecase.SnapshotManager, session domain.Session) tea.Cmd {
+	return tea.Sequence(
+		// Step 0 — resolve remote (instant, but we still tick it so the UI starts in the right state)
+		func() tea.Msg { return archiveStepMsg{idx: 0} },
+		func() tea.Msg {
+			if snapMgr == nil {
+				return archiveStepErrMsg{idx: 0, err: fmt.Errorf("snapshot manager unavailable")}
+			}
+			if _, ok := resolveRemote(cfg, session); !ok {
+				return archiveStepErrMsg{idx: 0, err: fmt.Errorf("no remote configured for session")}
+			}
+			return archiveStepMsg{idx: 1} // step 0 done, start step 1
+		},
+		// Step 1 — capture pane
+		func() tea.Msg {
+			remote, _ := resolveRemote(cfg, session)
+			sshMgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+			rawPane, err := sshMgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+			if err != nil {
+				return archiveStepErrMsg{idx: 1, err: fmt.Errorf("capture pane: %w", err)}
+			}
+			return archivePaneCapturedMsg{rawPane: rawPane, rawPaneLen: len(rawPane)}
+		},
+	)
+}
+
+// archivePaneCapturedMsg carries the raw pane forward in the sequence.
+// The main Update uses this to fire the next steps.
+type archivePaneCapturedMsg struct {
+	rawPane    string
+	rawPaneLen int // len(rawPane) captured before passing along
+}
+
+// loadArchivePreviewContinueCmd runs steps 2–4 (clean/compress + AI summary)
+// after the pane has been captured. Called from the Update handler.
+func loadArchivePreviewContinueCmd(cfg *config.Config, snapMgr *usecase.SnapshotManager, session domain.Session, rawPane string, rawPaneLen int) tea.Cmd {
+	return tea.Sequence(
+		func() tea.Msg { return archiveStepMsg{idx: 2} }, // cleaning starts
+		func() tea.Msg {
+			// Step 2 is fast (CPU-only), so advance to step 3 when done
+			return archiveCleanedMsg{rawPane: rawPane, rawPaneLen: rawPaneLen}
+		},
+		func() tea.Msg { return archiveStepMsg{idx: 3} }, // AI summarise starts
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			snap, summary, compressedSize, err := snapMgr.PreviewSnapshot(ctx, &session, rawPane)
+			if err != nil {
+				return archiveStepErrMsg{idx: 3, err: err}
+			}
+			cleaned := pane.Clean(rawPane)
+			head, tail := promptHeadTail(cleaned)
+			return archivePreviewReadyMsg{
+				data: &archivePreviewData{
+					session:        session,
+					summary:        summary,
+					rawPane:        rawPane,
+					rawPaneLen:     rawPaneLen,
+					cleanedPaneLen: len(cleaned),
+					compressedSize: compressedSize,
+					cleanedPane:    cleaned,
+					promptHead:     head,
+					promptTail:     tail,
+					snapshot:       snap,
+				},
+			}
+		},
+	)
+}
+
+// archiveCleanedMsg is an internal progress step — not displayed but used to sequence commands.
+type archiveCleanedMsg struct {
+	rawPane    string
+	rawPaneLen int
+}
+
+// persistSnapshotCmd saves a pre-built snapshot to the database.
+func persistSnapshotCmd(snapMgr *usecase.SnapshotManager, snap *domain.SessionSnapshot) tea.Cmd {
+	return func() tea.Msg {
+		if snapMgr == nil {
+			return snapshotSavedMsg{err: fmt.Errorf("snapshot manager unavailable")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := snapMgr.PersistSnapshot(ctx, snap)
+		if err != nil {
+			return snapshotSavedMsg{err: err}
+		}
+		return snapshotSavedMsg{snapshot: snap}
+	}
+}
+
+func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		if !cfg.Features.InputPromptDetection {
+			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
+		}
+		remote, ok := resolveRemote(cfg, session)
+		if !ok {
+			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		out, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		if err != nil {
+			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
+		}
+		activity, needs := detectSessionActivity(out)
+		return inputHintMsg{session: session.TmuxSession, needsInput: needs, activity: activity}
+	}
+}
+
+func detectSessionActivity(output string) (string, bool) {
+	text := strings.ToLower(output)
+
+	// Input prompt patterns
+	inputPatterns := []string{
+		"press any key",
+		"press enter",
+		"password:",
+		"passphrase",
+		"enter to continue",
+		"allow execution",
+		"action required",
+		"allow once",
+		"allow for this session",
+		"no, suggest changes",
+		"[y/n]",
+		"(y/n)",
+		"[y/n]",
+		"(y/n)",
+		"[y/n]",
+		"(y/n)",
+		"confirm",
+		"are you sure",
+	}
+
+	for _, p := range inputPatterns {
+		if strings.Contains(text, p) {
+			return "input", true
+		}
+	}
+
+	// Busy patterns (Claude/Gemini style status lines)
+	busyPatterns := []string{
+		"thinking",
+		"tokens",
+		"marinating",
+		"processing",
+		"generating",
+	}
+	for _, p := range busyPatterns {
+		if strings.Contains(text, p) {
+			return "busy", false
+		}
+	}
+
+	// Idle prompt patterns (shell prompt characters)
+	if promptRegex.MatchString(lastNonEmptyLine(output)) {
+		return "idle", false
+	}
+
+	// Unknown/undetermined
+	return "", false
+}
+
+func lastNonEmptyLine(output string) string {
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, bool) {
+	if cfg == nil {
+		return config.Remote{}, false
+	}
+
+	// Prefer the session's own remote host — this is the authoritative source for
+	// existing sessions and enables multi-remote support.
+	if session.RemoteHost != "" {
+		for _, r := range cfg.Remotes {
+			if r.Host == session.RemoteHost {
+				return r, true
+			}
+		}
+	}
+
+	// Fallback for legacy sessions with empty RemoteHost: try ActiveRemote
+	// (for backward compat with existing configs) then first configured remote.
+	if cfg.ActiveRemote != "" {
