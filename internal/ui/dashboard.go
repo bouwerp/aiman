@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -1703,20 +1704,40 @@ func (m *Model) runTerminateStep(index int) error {
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
-		m.log("Terminating session: removing worktree %s", s.WorktreePath)
+		repoName := extractRepoName(s.RepoName)
+		mainRepoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
 
-		// Try to remove via git worktree (needs to run from main repo)
-		if s.RepoName != "" {
-			repoName := extractRepoName(s.RepoName)
-			mainRepoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
-			out, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
-			if err != nil {
-				m.log("Warning: git worktree remove failed: %v, output: %s", err, out)
+		// Safety: never delete the main repository itself.
+		// Resolve both paths on the remote to their canonical forms so that
+		// symlinks and `..` components don't bypass the check.
+		resolvedWorktree, resolveErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", s.WorktreePath, s.WorktreePath, s.WorktreePath))
+		resolvedMain, resolveMainErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", mainRepoPath, mainRepoPath, mainRepoPath))
+
+		if resolveErr == nil && resolveMainErr == nil {
+			if strings.TrimSpace(resolvedWorktree) == strings.TrimSpace(resolvedMain) {
+				m.log("ERROR: refusing to delete worktree %s — it resolves to the main repository %s", s.WorktreePath, mainRepoPath)
+				return fmt.Errorf("refusing to delete worktree %q: path resolves to the main repository — manual cleanup required", s.WorktreePath)
 			}
 		}
+		// Also guard against the worktree path being a parent of (or equal to) the remote root.
+		cleanWorktree := path.Clean(s.WorktreePath)
+		cleanRoot := path.Clean(remote.Root)
+		if cleanWorktree == cleanRoot || cleanWorktree == "/" || cleanWorktree == "." {
+			m.log("ERROR: refusing to delete worktree %s — unsafe path (equals root or remote root)", s.WorktreePath)
+			return fmt.Errorf("refusing to delete worktree %q: path is unsafe", s.WorktreePath)
+		}
 
-		// Force remove the directory regardless (worktree remove might fail if corrupted)
-		out, err := mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", s.WorktreePath))
+		m.log("Terminating session: removing worktree %s", s.WorktreePath)
+
+		// Try to remove via git worktree (needs to run from main repo).
+		// git itself refuses to remove the main worktree, providing an extra layer of safety.
+		out, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
+		if err != nil {
+			m.log("Warning: git worktree remove failed: %v, output: %s", err, out)
+		}
+
+		// Force remove the directory regardless (worktree remove might fail if corrupted).
+		out, err = mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", s.WorktreePath))
 		if err != nil {
 			m.log("Error: rm -rf worktree failed: %v, output: %s", err, out)
 		}
