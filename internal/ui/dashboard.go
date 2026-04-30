@@ -4910,6 +4910,7 @@ func (m *Model) restartSession() tea.Cmd {
 		if !ok {
 			return sessionCreateMsg{err: fmt.Errorf("no active remote configured")}
 		}
+		m.log("restartSession: session=%q id=%q remote=%q", s.TmuxSession, s.ID, remote.Host)
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
@@ -4924,9 +4925,12 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		m.sendStatus("Verifying remote directory...")
+		m.log("restartSession: verifying workingDir=%q", workingDir)
 		if err := mgr.ValidateDir(ctx, workingDir); err != nil {
+			m.log("restartSession: ValidateDir failed: %v", err)
 			return sessionCreateMsg{err: fmt.Errorf("working directory not found (%q): %w", workingDir, err)}
 		}
+		m.log("restartSession: workingDir OK")
 
 		// Write session ID to git metadata (safe from git status/commits)
 		if s.WorktreePath != "" {
@@ -4937,19 +4941,18 @@ func (m *Model) restartSession() tea.Cmd {
 			_, _ = mgr.Execute(ctx, fmt.Sprintf("rm -f %q/.aiman-id", s.WorktreePath))
 		}
 
-		// 1. Kill existing tmux session if it exists
+		// 1. Kill existing tmux session AND start the new one in a single SSH call.
+		// This prevents the race where kill-session via call A → tmux dies → call B fails.
+		// We also fix the && ... || true pattern which masks tmux new-session failures:
+		// the new form kills first (silently), then new-session failure propagates.
 		m.sendStatus("Stopping existing tmux session...")
-		mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
-		// Reset the ControlMaster after killing tmux — the tmux session may have
-		// been holding the SSH connection alive. A fresh master prevents retries
-		// from spending 30s each on a stale socket.
-		mgr.ResetControlSocket()
-		time.Sleep(200 * time.Millisecond)
+		// (kill happens inside startCmd below)
 
 		// 2. Terminate existing mutagen sync if it exists
 		m.sendStatus("Cleaning up existing syncs...")
 		syncName := "aiman-sync-" + s.ID
 		tempSyncName := syncName + "-pull"
+		m.log("restartSession: terminating syncs %q, %q, %q", syncName, tempSyncName, s.TmuxSession)
 		terminateCtx, terminateCancel := context.WithTimeout(ctx, 10*time.Second)
 		_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", syncName).Run()
 		terminateCancel()
@@ -4959,6 +4962,7 @@ func (m *Model) restartSession() tea.Cmd {
 		terminateCtx, terminateCancel = context.WithTimeout(ctx, 10*time.Second)
 		_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", s.TmuxSession).Run()
 		terminateCancel()
+		m.log("restartSession: sync cleanup done")
 
 		// 3. Start tmux session and agent
 		if m.sessionCfg.Agent == nil {
@@ -5005,14 +5009,21 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		m.sendStatus("Starting agent in tmux...")
+		m.log("restartSession: starting tmux %q in %q with cmd %q", s.TmuxSession, workingDir, agentCmd)
+		// Kill the old session first (silenced), then create the new one.
+		// Using a single SSH call avoids ControlMaster state issues between the two steps.
+		// Only || true on set-window-option so that new-session failures propagate correctly.
 		startCmd := fmt.Sprintf(
-			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && tmux set-window-option -t %q remain-on-exit on || true",
+			"(tmux kill-session -t %q 2>/dev/null || true); tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && (tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true)",
+			s.TmuxSession,
 			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap, s.TmuxSession,
 		)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
+			m.log("restartSession: tmux new-session failed: %v", tmuxErr)
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session: %w", tmuxErr)}
 		}
+		m.log("restartSession: tmux session started")
 
 		if sendKeysPrompt != "" {
 			sendCmd := fmt.Sprintf(
@@ -5055,13 +5066,17 @@ func (m *Model) restartSession() tea.Cmd {
 		labels := map[string]string{"aiman-id": s.ID}
 
 		m.sendStatus("Establishing two-way sync...")
+		m.log("restartSession: starting sync %q: %s -> %s", syncName, localSyncPath, remoteSyncPath)
 		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeTwoWay)
 		if syncErr == nil {
 			s.MutagenSyncID = syncName
 			s.LocalPath = localSyncPath
 			_ = s.Transition(domain.SessionStatusSyncing)
+		} else {
+			m.log("restartSession: sync start failed (non-fatal): %v", syncErr)
 		}
 
+		m.log("restartSession: complete, returning session")
 		if m.db != nil {
 			_ = m.db.Save(ctx, s)
 		}
