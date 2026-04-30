@@ -4932,6 +4932,8 @@ func (m *Model) restartSession() tea.Cmd {
 		// 1. Kill existing tmux session if it exists
 		m.sendStatus("Stopping existing tmux session...")
 		mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
+		// Brief pause to let the SSH ControlMaster settle after the tmux session dies.
+		time.Sleep(500 * time.Millisecond)
 
 		// 2. Terminate existing mutagen sync if it exists
 		m.sendStatus("Cleaning up existing syncs...")

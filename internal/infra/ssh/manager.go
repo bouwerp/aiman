@@ -76,6 +76,10 @@ func (m *Manager) GetRoot() string {
 	return m.config.Root
 }
 
+// sshCommandTimeout is the per-call deadline for individual SSH commands.
+// This prevents a single hung command from blocking the entire restart for minutes.
+const sshCommandTimeout = 30 * time.Second
+
 func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	target := m.target()
 	cp := m.controlPath()
@@ -86,11 +90,15 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	}
 
 	run := func() (string, error) {
+		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
+		defer cancel()
 		// We use ControlMaster=auto and ControlPersist to handle multiplexing automatically.
-		// This is more robust than manual management with -f.
-		cmd := exec.CommandContext(ctx, "ssh",
+		// ServerAliveInterval/CountMax ensure dead connections are detected within ~15s.
+		cmd := exec.CommandContext(callCtx, "ssh",
 			"-o", "BatchMode=yes",
 			"-o", "ConnectTimeout=10",
+			"-o", "ServerAliveInterval=5",
+			"-o", "ServerAliveCountMax=3",
 			"-o", "ControlMaster=auto",
 			"-o", "ControlPersist=10m",
 			"-S", cp,
@@ -107,11 +115,15 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	}
 
 	runDirect := func() (string, error) {
+		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
+		defer cancel()
 		// Final fallback without SSH multiplexing, for cases where the control
 		// socket/session is flaky but direct SSH still works.
-		cmd := exec.CommandContext(ctx, "ssh",
+		cmd := exec.CommandContext(callCtx, "ssh",
 			"-o", "BatchMode=yes",
 			"-o", "ConnectTimeout=10",
+			"-o", "ServerAliveInterval=5",
+			"-o", "ServerAliveCountMax=3",
 			"-o", "ControlMaster=no",
 			"-A",
 			target, cmdStr)
@@ -170,35 +182,59 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		return fmt.Errorf("failed to create sockets directory: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=10",
-		"-o", "ControlMaster=auto",
-		"-o", "ControlPersist=10m",
-		"-S", cp,
-		"-A",
-		"-X",
-		target, fmt.Sprintf("cat > %q", path))
+	doWrite := func(useControlMaster bool) error {
+		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
+		defer cancel()
 
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("failed to get stdin pipe for ssh: %w", err)
+		args := []string{
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=10",
+			"-o", "ServerAliveInterval=5",
+			"-o", "ServerAliveCountMax=3",
+		}
+		if useControlMaster {
+			args = append(args,
+				"-o", "ControlMaster=auto",
+				"-o", "ControlPersist=10m",
+				"-S", cp,
+			)
+		} else {
+			args = append(args, "-o", "ControlMaster=no")
+		}
+		args = append(args, "-A", "-X", target, fmt.Sprintf("cat > %q", path))
+
+		cmd := exec.CommandContext(callCtx, "ssh", args...)
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("failed to get stdin pipe for ssh: %w", err)
+		}
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start ssh for WriteFile: %w", err)
+		}
+		if _, err := stdin.Write(content); err != nil {
+			return fmt.Errorf("failed to write content to ssh stdin: %w", err)
+		}
+		stdin.Close()
+		if err := cmd.Wait(); err != nil {
+			return fmt.Errorf("ssh Wait failed for WriteFile: %w", err)
+		}
+		return nil
 	}
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start ssh for WriteFile: %w", err)
+	err := doWrite(true)
+	if err == nil || !isRetriableSSHTransportError(err.Error()) {
+		return err
 	}
 
-	if _, err := stdin.Write(content); err != nil {
-		return fmt.Errorf("failed to write content to ssh stdin: %w", err)
-	}
-	stdin.Close()
-
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("ssh Wait failed for WriteFile: %w", err)
+	// Stale/broken control socket — clear it and retry.
+	_ = os.Remove(cp)
+	err = doWrite(true)
+	if err == nil || !isRetriableSSHTransportError(err.Error()) {
+		return err
 	}
 
-	return nil
+	// Last resort: direct connection without multiplexing.
+	return doWrite(false)
 }
 
 func (m *Manager) ValidateDir(ctx context.Context, path string) error {
