@@ -1729,6 +1729,22 @@ func (m *Model) runTerminateStep(index int) error {
 
 		m.log("Terminating session: removing worktree %s", s.WorktreePath)
 
+		// Safety backup: tar the worktree into /tmp before deleting it.
+		// Uses maximum xz compression and a timestamped filename so it can be
+		// recovered if the deletion was a mistake.
+		wtBase := path.Base(strings.TrimSpace(resolvedWorktree))
+		if wtBase == "" || wtBase == "." || wtBase == "/" {
+			wtBase = path.Base(s.WorktreePath)
+		}
+		timestamp := time.Now().UTC().Format("20060102-150405")
+		tarName := fmt.Sprintf("/tmp/aiman-wt-%s-%s.tar.xz", wtBase, timestamp)
+		tarCmd := fmt.Sprintf("tar -C %q -cJf %q . 2>/dev/null && echo OK", s.WorktreePath, tarName)
+		if out, tarErr := mgr.Execute(ctx, tarCmd); tarErr != nil || strings.TrimSpace(out) != "OK" {
+			m.log("Warning: failed to backup worktree to %s: %v", tarName, tarErr)
+		} else {
+			m.log("Worktree backed up to %s on remote before deletion", tarName)
+		}
+
 		// Try to remove via git worktree (needs to run from main repo).
 		// git itself refuses to remove the main worktree, providing an extra layer of safety.
 		out, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
