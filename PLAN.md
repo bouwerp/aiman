@@ -30,7 +30,16 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
-## 2. Technical Gotchas ⚠️
+### Bug Fixes & Reliability (v0.6.43 – v0.6.57)
+- **Session restart**: Identified and fixed root causes of restart hangs and failures across many releases.
+  - Simplified `restartSession` from 8+ SSH calls to 1 (eliminate ValidateDir, git metadata, trust cmds).
+  - Fixed data race: capture `sessionCfg`, `db`, `flowManager` at goroutine dispatch time.
+  - Fixed stale-reference bug: `Save` on discovery was overwriting DB fields with empty live-discovered values (`worktree_path`, `working_directory`, `branch`, `agent_name`, `mutagen_sync_id`). Fixed with `COALESCE(NULLIF(excluded.field,''), sessions.field)` for all critical fields.
+  - Added per-call SSH timeouts (30 s) with `ServerAliveInterval`/`ServerAliveCountMax` to detect dead connections.
+  - Added `ResetControlSocket()` call before restart SSH command to clear stale ControlMaster state.
+- **Mutagen sync recreate** (`Ctrl+Y`): Added sync status/percentage progress display.
+
+
 
 - **SSH Backgrounding**: Avoid using `ssh -f` (backgrounding) inside Go's `os/exec` as it often receives a `SIGKILL` or `SIGHUP` when the parent Go process handles signals. Stick to `-o ControlMaster=auto` and `-o ControlPersist` for robust multiplexing.
 - **Bubbletea Versioning**: Do **not** mix `bubbletea` v1 and v2. Libraries like `bubbleterm` that require v2 will cause interface conflicts with standard `bubbles` components. If a terminal is needed, use `vt10x` to build a custom v1-compatible component.

@@ -222,7 +222,19 @@ Access the **Snapshot Browser** via the Admin Menu (`m`) → **Session Snapshots
 - `Delete` / `d`: delete the selected snapshot
 - `ESC`: close the browser
 
-### Recreating Mutagen Sync
+### Restarting a Session
+
+Press `s` on a selected session to restart it. You will be prompted to choose an agent. Aiman will:
+
+1. Terminate any existing mutagen syncs for the session
+2. Kill the existing tmux session
+3. Start a fresh tmux session in the **same working directory** (the git worktree is preserved)
+4. Launch the newly selected agent
+5. Re-establish mutagen sync
+
+The git worktree, branch, and all files are untouched — only the tmux process and agent are replaced.
+
+
 
 Press `Ctrl+Y` on a selected session to recreate its mutagen sync binding using that session's current remote agent working directory and the canonical local path `~/.aiman/work/<session-name>`.
 
@@ -265,7 +277,8 @@ All data is stored in `~/.aiman/`:
 ~/.aiman/
 ├── config.yaml          # Main configuration
 ├── aiman.db             # SQLite database (sessions + snapshots)
-└── sockets/             # SSH ControlMaster sockets
+├── sockets/             # SSH ControlMaster sockets (hashed filenames)
+└── work/                # Local mutagen sync roots — one subdirectory per session ID
 ```
 
 ### Example Config
@@ -343,7 +356,7 @@ Aiman follows **Clean Architecture** principles:
 
 - **`JiraProvider`**: JIRA Cloud API v3 integration
 - **`GitSlugger`**: Branch name sanitization
-- **`SSHManager`**: ControlMaster multiplexing
+- **`SSHManager`**: ControlMaster multiplexing with per-call 30s timeout and automatic retry/socket reset
 - **`WorktreeManager`**: Git worktree operations
 - **`MutagenBridge`**: File synchronization
 - **`TmuxManager`**: Session lifecycle management
@@ -351,6 +364,8 @@ Aiman follows **Clean Architecture** principles:
 - **`SnapshotManager`**: Session archiving (capture → clean → compress → AI → persist)
 - **`IntelligenceProvider`**: AI summarisation via Ollama (local LLM)
 - **`AWSDelegation`**: Session-scoped AWS credential push and cleanup
+
+> For a deep dive into implementation details, architectural decisions, and known gotchas relevant to contributors and AI agents, see [AGENTS.md](AGENTS.md).
 
 ## 🔄 Development Workflow
 
