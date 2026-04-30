@@ -4883,7 +4883,15 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 }
 
 func (m *Model) restartSession() tea.Cmd {
-	return func() tea.Msg {
+	return func() (retMsg tea.Msg) {
+		// Catch any panic inside the restart goroutine so we always return
+		// an error message rather than silently hanging the loading screen.
+		defer func() {
+			if r := recover(); r != nil {
+				retMsg = sessionCreateMsg{err: fmt.Errorf("restart panicked: %v", r)}
+			}
+		}()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		s := m.restartingSession
@@ -4932,8 +4940,11 @@ func (m *Model) restartSession() tea.Cmd {
 		// 1. Kill existing tmux session if it exists
 		m.sendStatus("Stopping existing tmux session...")
 		mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
-		// Brief pause to let the SSH ControlMaster settle after the tmux session dies.
-		time.Sleep(500 * time.Millisecond)
+		// Reset the ControlMaster after killing tmux — the tmux session may have
+		// been holding the SSH connection alive. A fresh master prevents retries
+		// from spending 30s each on a stale socket.
+		mgr.ResetControlSocket()
+		time.Sleep(200 * time.Millisecond)
 
 		// 2. Terminate existing mutagen sync if it exists
 		m.sendStatus("Cleaning up existing syncs...")
@@ -4950,6 +4961,9 @@ func (m *Model) restartSession() tea.Cmd {
 		terminateCancel()
 
 		// 3. Start tmux session and agent
+		if m.sessionCfg.Agent == nil {
+			return sessionCreateMsg{err: fmt.Errorf("no agent selected for restart")}
+		}
 		agentCmd := m.sessionCfg.Agent.Command
 		var sendKeysPrompt string
 		issueForPrompt := m.sessionCfg.Issue

@@ -237,6 +237,20 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 	return doWrite(false)
 }
 
+// ResetControlSocket gracefully exits the existing ControlMaster (if any)
+// and removes the socket file. Call this after disruptive operations like
+// tmux kill-session that may leave the SSH master in a broken state.
+// The next Execute/WriteFile call will establish a fresh ControlMaster.
+func (m *Manager) ResetControlSocket() {
+	cp := m.controlPath()
+	target := m.target()
+	// Ask the master to exit cleanly; ignore errors (socket may already be gone).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(ctx, "ssh", "-O", "exit", "-S", cp, target).Run()
+	_ = os.Remove(cp)
+}
+
 func (m *Manager) ValidateDir(ctx context.Context, path string) error {
 	// Use 'test -d' which is more standard. Quote the path to handle spaces.
 	cmd := fmt.Sprintf("test -d %q", path)
