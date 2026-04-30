@@ -4930,10 +4930,16 @@ func (m *Model) restartSession() tea.Cmd {
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
 		// Step 1: terminate any existing mutagen syncs (local commands, fast).
+		// Also terminate by the DB-stored MutagenSyncID in case it differs from
+		// the computed name (e.g. session was created by an older code version).
 		m.sendStatus("Cleaning up existing syncs...")
 		syncName := "aiman-sync-" + s.ID
 		tempSyncName := syncName + "-pull"
-		for _, name := range []string{syncName, tempSyncName, s.TmuxSession} {
+		toTerminate := []string{syncName, tempSyncName, s.TmuxSession}
+		if s.MutagenSyncID != "" && s.MutagenSyncID != syncName {
+			toTerminate = append(toTerminate, s.MutagenSyncID)
+		}
+		for _, name := range toTerminate {
 			terminateCtx, terminateCancel := context.WithTimeout(ctx, 10*time.Second)
 			_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", name).Run()
 			terminateCancel()
@@ -4964,7 +4970,11 @@ func (m *Model) restartSession() tea.Cmd {
 			extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 		}
 
-		// Step 3: kill the existing tmux session and start a fresh one (single SSH call).
+		// Step 3: reset the SSH ControlMaster socket so we get a fresh connection
+		// for the restart call, avoiding any stale multiplexer state.
+		mgr.ResetControlSocket()
+
+		// Step 4: kill the existing tmux session and start a fresh one (single SSH call).
 		// The worktree is preserved — only the tmux process is replaced.
 		m.sendStatus(fmt.Sprintf("Starting tmux session %q in %q...", s.TmuxSession, workingDir))
 		startCmd := fmt.Sprintf(
@@ -4977,7 +4987,7 @@ func (m *Model) restartSession() tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session %q in %q: %w", s.TmuxSession, workingDir, tmuxErr)}
 		}
 
-		// Step 4: re-establish mutagen sync.
+		// Step 5: re-establish mutagen sync.
 		m.sendStatus("Establishing sync...")
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
