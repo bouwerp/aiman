@@ -151,6 +151,7 @@ const (
 	viewStateTunnelManager
 	viewStateTunnelAdd
 	viewStateSecretsSetup // manage global secrets
+	viewStateAWSCredentials // manage AWS credential status and renewal
 	viewStateError        // generic error dialog (press any key to dismiss)
 	viewStateRemotePicker // select remote for new session
 )
@@ -257,6 +258,7 @@ type Model struct {
 	generalSetup           GeneralSetupModel
 	aiSetup                AISetupModel
 	secretsSetup           SecretsSetupModel
+	awsCredentials         AWSCredentialsModel
 	snapshotBrowser        SnapshotBrowserModel
 	picker                 RepoPickerModel
 	issuePicker            IssuePickerModel
@@ -435,6 +437,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
 		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
+		menuItem{title: "AWS Credentials", desc: "View and renew session-scoped AWS credentials", action: viewStateAWSCredentials},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
@@ -2049,6 +2052,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateSecretsSetup:
 		return m.handleSecretsSetupUpdate(msg)
 
+	case viewStateAWSCredentials:
+		return m.handleAWSCredentialsUpdate(msg)
+
 	case viewStateSnapshotBrowser:
 		return m.handleSnapshotBrowserUpdate(msg)
 
@@ -2176,6 +2182,9 @@ func (m *Model) renderView() string {
 
 	case viewStateSecretsSetup:
 		return m.secretsSetup.View()
+
+	case viewStateAWSCredentials:
+		return m.awsCredentials.View()
 
 	case viewStateSnapshotBrowser:
 		return docStyle.Render(m.snapshotBrowser.View())
@@ -3378,6 +3387,13 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, m.secretsSetup.Init()
 				}
+				if i.action == viewStateAWSCredentials {
+					m.awsCredentials = NewAWSCredentialsModel(m.cfg, m.db)
+					m.awsCredentials.width = m.width
+					m.awsCredentials.height = m.height
+					m.state = i.action
+					return m, m.awsCredentials.Init()
+				}
 				if i.action == viewStateSnapshotBrowser {
 					m.snapshotBrowser = NewSnapshotBrowserModel(m.width, m.height, m.snapshotManager)
 					m.state = i.action
@@ -3829,6 +3845,18 @@ func (m *Model) handleSecretsSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	subModel, cmd = m.secretsSetup.Update(msg)
 	m.secretsSetup = subModel.(SecretsSetupModel)
+	return m, cmd
+}
+
+func (m *Model) handleAWSCredentialsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.state = viewStateMenu
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.awsCredentials.Update(msg)
+	m.awsCredentials = subModel.(AWSCredentialsModel)
 	return m, cmd
 }
 
