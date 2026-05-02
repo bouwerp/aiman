@@ -8,11 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
-	"github.com/bouwerp/aiman/internal/usecase"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -31,24 +29,25 @@ const (
 
 // awsHostEntry is one row in the credentials manager — one per user@host.
 // Credentials are written to ~/.aws/credentials on the remote and are shared
-// by all sessions running as the same user on that host.
+// by all sessions running as the same user on that host. The profile name is
+// taken from AWSDelegation.Profile (not the per-session aiman-XXXX name).
 type awsHostEntry struct {
-	userAtHost    string        // e.g. "ubuntu@server.example.com"
-	localProfile  string        // source_profile used locally to assume the role
-	remoteProfile string        // profile name in remote ~/.aws/credentials
+	userAtHost    string // e.g. "ubuntu@server.example.com"
+	localProfile  string // source_profile used locally to assume the role
+	remoteProfile string // profile name in remote ~/.aws/credentials
 	status        awsCredStatus
 	err           error
-	// repSession is the session chosen to perform operations (probe / renew).
-	// When multiple sessions exist for the same host we pick the most recently
-	// updated one that has a known AWSConfig.
-	repSession domain.Session
+	// del is the delegation config for this remote, used for renewal.
+	del *config.AWSDelegation
+	// remote is the resolved config.Remote for SSH operations.
+	remote config.Remote
 }
 
 // AWSCredentialsModel lists one row per user@host and shows/manages AWS
 // credential validity for remotes that have SyncCredentials enabled.
 type AWSCredentialsModel struct {
 	cfg      *config.Config
-	db       domain.SessionRepository
+	db       interface{} // domain.SessionRepository — unused after load; kept for Init
 	entries  []awsHostEntry
 	cursor   int
 	width    int
@@ -74,7 +73,7 @@ type awsCredRenewResultMsg struct {
 
 // --- constructor ---
 
-func NewAWSCredentialsModel(cfg *config.Config, db domain.SessionRepository) AWSCredentialsModel {
+func NewAWSCredentialsModel(cfg *config.Config, db interface{}) AWSCredentialsModel {
 	return AWSCredentialsModel{
 		cfg:      cfg,
 		db:       db,
@@ -85,89 +84,47 @@ func NewAWSCredentialsModel(cfg *config.Config, db domain.SessionRepository) AWS
 // --- tea.Model ---
 
 func (m AWSCredentialsModel) Init() tea.Cmd {
-	return m.loadAndCheck()
+	return m.buildEntries()
 }
 
-// loadAndCheck fetches all sessions, collapses them to one entry per user@host
-// for remotes with SyncCredentials enabled, then fires credential probes.
-func (m AWSCredentialsModel) loadAndCheck() tea.Cmd {
+// buildEntries creates one entry per user@host for every remote that has
+// AWSDelegation with SyncCredentials enabled. No DB access needed — the
+// profile name and delegation config come entirely from the config file.
+func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 	return func() tea.Msg {
-		sessions, err := m.db.List(context.Background())
-		if err != nil {
-			return awsCredLoadedMsg{entries: nil}
-		}
-
-		// Index remotes by host.
-		type remoteInfo struct {
-			remote config.Remote
-			del    *config.AWSDelegation
-		}
-		remotes := map[string]remoteInfo{}
-		for _, r := range m.cfg.Remotes {
-			if r.AWSDelegation != nil && r.AWSDelegation.SyncCredentials {
-				remotes[r.Host] = remoteInfo{remote: r, del: r.AWSDelegation}
-			}
-		}
-
-		// Collapse sessions to one per user@host; prefer the session with the
-		// most recently updated AWSConfig / AWSProfileName.
-		type candidate struct {
-			session   domain.Session
-			userAtHost string
-			ri        remoteInfo
-		}
-		best := map[string]candidate{} // keyed by userAtHost
-
-		for _, s := range sessions {
-			if s.Status == domain.SessionStatusCleanup || s.Status == domain.SessionStatusError {
-				continue
-			}
-			remote, ok := resolveRemote(m.cfg, s)
-			if !ok {
-				continue
-			}
-			ri, has := remotes[remote.Host]
-			if !has {
-				continue
-			}
-			userAtHost := remote.Host
-			if remote.User != "" {
-				userAtHost = remote.User + "@" + remote.Host
-			}
-			prev, exists := best[userAtHost]
-			// Prefer sessions that have AWSConfig, breaking ties by UpdatedAt.
-			if !exists ||
-				(s.AWSConfig != nil && prev.session.AWSConfig == nil) ||
-				(s.AWSConfig != nil && s.UpdatedAt.After(prev.session.UpdatedAt)) ||
-				s.UpdatedAt.After(prev.session.UpdatedAt) {
-				best[userAtHost] = candidate{session: s, userAtHost: userAtHost, ri: ri}
-			}
-		}
-
 		var entries []awsHostEntry
-		for uah, c := range best {
-			s := c.session
-			del := c.ri.del
+		seen := map[string]bool{}
 
-			localProfile := ""
-			if s.AWSConfig != nil && s.AWSConfig.SourceProfile != "" {
-				localProfile = s.AWSConfig.SourceProfile
-			} else if del != nil && del.SourceProfile != "" {
-				localProfile = del.SourceProfile
+		for _, r := range m.cfg.Remotes {
+			d := r.AWSDelegation
+			if d == nil || !d.SyncCredentials {
+				continue
 			}
 
-			// Profile name is deterministic: "aiman-" + first 8 chars of session ID.
-			remoteProfile := s.AWSProfileName
+			userAtHost := r.Host
+			if r.User != "" {
+				userAtHost = r.User + "@" + r.Host
+			}
+			if seen[userAtHost] {
+				continue
+			}
+			seen[userAtHost] = true
+
+			// Profile name on the remote comes from AWSDelegation.Profile.
+			// This is the profile written by the remotes-config push, not the
+			// per-session "aiman-XXXX" profile.
+			remoteProfile := strings.TrimSpace(d.Profile)
 			if remoteProfile == "" {
-				remoteProfile = "aiman-" + s.ID[:8]
+				remoteProfile = "default"
 			}
 
 			entries = append(entries, awsHostEntry{
-				userAtHost:    uah,
-				localProfile:  localProfile,
+				userAtHost:    userAtHost,
+				localProfile:  strings.TrimSpace(d.SourceProfile),
 				remoteProfile: remoteProfile,
 				status:        awsCredStatusChecking,
-				repSession:    s,
+				del:           d,
+				remote:        r,
 			})
 		}
 
@@ -179,7 +136,7 @@ func (m AWSCredentialsModel) loadAndCheck() tea.Cmd {
 	}
 }
 
-// checkCredsCmd fires a credential probe for every entry currently in Checking state.
+// checkCredsCmd fires a credential probe for every entry in Checking state.
 func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 	var cmds []tea.Cmd
 	for _, e := range m.entries {
@@ -187,14 +144,9 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 			continue
 		}
 		uah := e.userAtHost
-		s := e.repSession
-		cfg := m.cfg
+		remote := e.remote
 		profile := e.remoteProfile
 		cmds = append(cmds, func() tea.Msg {
-			remote, ok := resolveRemote(cfg, s)
-			if !ok {
-				return awsCredCheckResultMsg{userAtHost: uah, status: awsCredStatusNoConf}
-			}
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
@@ -214,39 +166,68 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// renewCmd pushes fresh temporary credentials to the remote using the same
+// approach as the remotes-config page: AWSDelegation.SourceProfile locally
+// → ApplyDelegatedCredentials to AWSDelegation.Profile on remote.
 func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
-	cfg := m.cfg
-	s := e.repSession
 	uah := e.userAtHost
+	remote := e.remote
+	d := e.del
+	profile := e.remoteProfile
 	return func() tea.Msg {
-		remote, ok := resolveRemote(cfg, s)
-		if !ok {
-			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("no remote configured")}
+		if d == nil {
+			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("no AWS delegation config")}
 		}
+
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		var awsCfg *domain.AWSConfig
-		if s.AWSConfig != nil {
-			awsCfg = s.AWSConfig
-		} else if remote.AWSDelegation != nil {
-			d := remote.AWSDelegation
-			awsCfg = &domain.AWSConfig{
-				SourceProfile:   d.SourceProfile,
-				RoleName:        d.RoleName,
-				AccountID:       d.AccountID,
-				Region:          d.Region,
-				Regions:         d.Regions,
-				SessionPolicy:   d.SessionPolicy,
-				DurationSeconds: d.DurationSeconds,
+		src := strings.TrimSpace(d.SourceProfile)
+
+		sessionPolicy := d.SessionPolicy
+		if sessionPolicy == "" && len(d.Regions) > 0 {
+			sessionPolicy = awsdelegation.BuildRegionPolicy(d.Regions)
+		}
+
+		var roleARN string
+		if sessionPolicy != "" && strings.TrimSpace(d.AccountID) != "" {
+			var err error
+			roleARN, err = awsdelegation.RoleARNFromParts(d.AccountID, d.RoleName)
+			if err != nil {
+				return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("build role ARN: %w", err)}
 			}
 		}
-		if awsCfg == nil {
-			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("no AWS config found")}
+
+		opts := awsdelegation.CredentialOptions{
+			SessionPolicy:   sessionPolicy,
+			DurationSeconds: d.DurationSeconds,
+			RoleARN:         roleARN,
+			SessionName:     "aiman",
 		}
-		_, err := usecase.PushSessionAWSCredentials(ctx, mgr, s.ID, awsCfg)
-		return awsCredRenewResultMsg{userAtHost: uah, err: err}
+		creds, err := awsdelegation.GetTemporaryCredentials(ctx, src, opts)
+		if err != nil {
+			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("get temporary credentials: %w", err)}
+		}
+
+		if err := awsdelegation.ApplyDelegatedCredentials(ctx, mgr, profile, creds); err != nil {
+			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("push credentials: %w", err)}
+		}
+
+		// Re-apply the profile block (role_arn + source_profile) in ~/.aws/config.
+		configRoleARN := ""
+		configSrc := ""
+		if !d.SyncCredentials {
+			// Only embed role_arn/source_profile when NOT syncing creds
+			// (synced creds make those fields redundant and potentially confusing).
+			configRoleARN = roleARN
+			configSrc = src
+		}
+		if err := awsdelegation.ApplyDelegatedProfile(ctx, mgr, profile, configRoleARN, configSrc, d.Region); err != nil {
+			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("push profile config: %w", err)}
+		}
+
+		return awsCredRenewResultMsg{userAtHost: uah, err: nil}
 	}
 }
 
@@ -281,7 +262,7 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Re-probe to confirm rather than optimistically setting Valid.
 					m.entries[i].status = awsCredStatusChecking
 					m.entries[i].err = nil
-					m.message = fmt.Sprintf("Renewed %s — re-checking…", e.userAtHost)
+					m.message = fmt.Sprintf("Renewed %s — verifying…", e.userAtHost)
 				}
 				break
 			}
