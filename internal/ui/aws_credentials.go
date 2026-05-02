@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,22 +20,24 @@ import (
 type awsCredStatus int
 
 const (
-	awsCredStatusChecking awsCredStatus = iota
+	awsCredStatusChecking    awsCredStatus = iota
 	awsCredStatusValid
 	awsCredStatusExpired
-	awsCredStatusNoAWS  // session has no AWS profile
-	awsCredStatusNoConf // session has no delegation config
+	awsCredStatusNotPushed // session has delegation config but no profile was pushed yet
+	awsCredStatusNoConf    // remote has no delegation config
 )
 
-// awsCredEntry is one row in the credentials manager list.
+// awsCredEntry is one selectable row in the credentials manager list.
 type awsCredEntry struct {
-	session domain.Session
-	status  awsCredStatus
-	err     error
+	session       domain.Session
+	status        awsCredStatus
+	err           error
+	localProfile  string // source profile name on the local machine
+	remoteProfile string // aiman-xxxx profile on the remote machine
 }
 
 // AWSCredentialsModel is the standalone view that lists all sessions with their
-// AWS credential status and allows individual or bulk renewal.
+// AWS credential status, grouped by remote host, and allows individual or bulk renewal.
 type AWSCredentialsModel struct {
 	cfg      *config.Config
 	db       domain.SessionRepository
@@ -77,42 +80,84 @@ func (m AWSCredentialsModel) Init() tea.Cmd {
 	return m.loadAndCheck()
 }
 
+// loadAndCheck fetches all sessions and builds entries only for remotes that
+// have AWS delegation with SyncCredentials enabled.
 func (m AWSCredentialsModel) loadAndCheck() tea.Cmd {
 	return func() tea.Msg {
 		sessions, err := m.db.List(context.Background())
 		if err != nil {
 			return awsCredLoadedMsg{entries: nil}
 		}
+
+		// Index remotes by host for quick lookup.
+		remoteDel := map[string]*config.AWSDelegation{}
+		for _, r := range m.cfg.Remotes {
+			if r.AWSDelegation != nil && r.AWSDelegation.SyncCredentials {
+				remoteDel[r.Host] = r.AWSDelegation
+			}
+		}
+
 		var entries []awsCredEntry
 		for _, s := range sessions {
 			if s.Status == domain.SessionStatusCleanup || s.Status == domain.SessionStatusError {
 				continue
 			}
-			if s.AWSProfileName == "" {
-				entries = append(entries, awsCredEntry{session: s, status: awsCredStatusNoAWS})
+
+			remote, ok := resolveRemote(m.cfg, s)
+			if !ok {
 				continue
 			}
-			// Determine if delegation config is resolvable.
-			hasCfg := s.AWSConfig != nil
-			if !hasCfg {
-				for _, r := range m.cfg.Remotes {
-					if r.Host == s.RemoteHost && r.AWSDelegation != nil && r.AWSDelegation.SyncCredentials {
-						hasCfg = true
-						break
-					}
-				}
-			}
-			if !hasCfg {
-				entries = append(entries, awsCredEntry{session: s, status: awsCredStatusNoConf})
+
+			del, hasDelegation := remoteDel[remote.Host]
+			if !hasDelegation {
+				// Remote has no AWS delegation — skip entirely.
 				continue
 			}
-			entries = append(entries, awsCredEntry{session: s, status: awsCredStatusChecking})
+
+			// Determine the local (source) profile name.
+			localProfile := ""
+			if s.AWSConfig != nil && s.AWSConfig.SourceProfile != "" {
+				localProfile = s.AWSConfig.SourceProfile
+			} else if del != nil && del.SourceProfile != "" {
+				localProfile = del.SourceProfile
+			}
+
+			remoteProfile := s.AWSProfileName // e.g. "aiman-a1b2c3d4"
+
+			if remoteProfile == "" {
+				// Delegation is configured but credentials were never pushed.
+				entries = append(entries, awsCredEntry{
+					session:       s,
+					status:        awsCredStatusNotPushed,
+					localProfile:  localProfile,
+					remoteProfile: "",
+				})
+				continue
+			}
+
+			entries = append(entries, awsCredEntry{
+				session:       s,
+				status:        awsCredStatusChecking,
+				localProfile:  localProfile,
+				remoteProfile: remoteProfile,
+			})
 		}
+
+		// Sort by remote host so grouping is stable.
+		sort.Slice(entries, func(i, j int) bool {
+			hi := entries[i].session.RemoteHost
+			hj := entries[j].session.RemoteHost
+			if hi != hj {
+				return hi < hj
+			}
+			return entries[i].session.TmuxSession < entries[j].session.TmuxSession
+		})
+
 		return awsCredLoadedMsg{entries: entries}
 	}
 }
 
-// checkCredsCmd fires credential checks for all entries that are in Checking state.
+// checkCredsCmd fires credential checks for all entries in Checking state.
 func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 	var cmds []tea.Cmd
 	for _, e := range m.entries {
@@ -121,6 +166,7 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 		}
 		s := e.session
 		cfg := m.cfg
+		profile := e.remoteProfile
 		cmds = append(cmds, func() tea.Msg {
 			remote, ok := resolveRemote(cfg, s)
 			if !ok {
@@ -129,7 +175,7 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			err := awsdelegation.CheckCredentials(ctx, mgr, s.AWSProfileName)
+			err := awsdelegation.CheckCredentials(ctx, mgr, profile)
 			if err != nil {
 				return awsCredCheckResultMsg{sessionID: s.ID, status: awsCredStatusExpired, err: err}
 			}
@@ -203,6 +249,10 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.entries[i].status = awsCredStatusValid
 					m.entries[i].err = nil
+					// Update the remote profile name in case it changed.
+					if m.entries[i].remoteProfile == "" {
+						m.entries[i].remoteProfile = "aiman-" + e.session.ID[:8]
+					}
 					m.message = fmt.Sprintf("✓ Renewed %s", e.session.TmuxSession)
 				}
 				break
@@ -224,7 +274,7 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			if m.cursor < len(m.entries) {
 				e := m.entries[m.cursor]
-				if e.status != awsCredStatusNoAWS && e.status != awsCredStatusNoConf && !m.renewing[e.session.ID] {
+				if e.status != awsCredStatusNoConf && !m.renewing[e.session.ID] {
 					m.renewing[e.session.ID] = true
 					m.entries[m.cursor].status = awsCredStatusChecking
 					m.message = fmt.Sprintf("Renewing %s…", e.session.TmuxSession)
@@ -232,11 +282,11 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "R":
-			// Renew all expired sessions.
+			// Renew all expired (and not-yet-pushed) sessions.
 			var cmds []tea.Cmd
 			count := 0
 			for i, e := range m.entries {
-				if e.status == awsCredStatusExpired && !m.renewing[e.session.ID] {
+				if (e.status == awsCredStatusExpired || e.status == awsCredStatusNotPushed) && !m.renewing[e.session.ID] {
 					m.renewing[e.session.ID] = true
 					m.entries[i].status = awsCredStatusChecking
 					cmds = append(cmds, m.renewCmd(e.session))
@@ -244,14 +294,14 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if count > 0 {
-				m.message = fmt.Sprintf("Renewing %d expired session(s)…", count)
+				m.message = fmt.Sprintf("Renewing %d session(s)…", count)
 				return m, tea.Batch(cmds...)
 			}
-			m.message = "No expired sessions to renew."
+			m.message = "No expired or unprovisioned sessions to renew."
 		case "c":
-			// Re-check all.
+			// Re-check all sessions that have a remote profile.
 			for i := range m.entries {
-				if m.entries[i].status != awsCredStatusNoAWS && m.entries[i].status != awsCredStatusNoConf {
+				if m.entries[i].remoteProfile != "" {
 					m.entries[i].status = awsCredStatusChecking
 					m.entries[i].err = nil
 				}
@@ -268,53 +318,77 @@ func (m AWSCredentialsModel) View() string {
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	hostStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 	validStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	expiredStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
-	checkingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	selectedStyle := lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	selectedBg := lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	headerStyle := dimStyle.Copy()
 
 	b.WriteString("\n  " + titleStyle.Render("AWS Credential Status") + "\n\n")
 
 	if len(m.entries) == 0 {
-		b.WriteString(dimStyle.Render("  No sessions found.\n"))
+		b.WriteString(dimStyle.Render("  No sessions with AWS delegation found.\n"))
+		b.WriteString(dimStyle.Render("  (Remotes need aws_delegation.sync_credentials: true in config)\n"))
 	} else {
+		// Column header
+		hdr := fmt.Sprintf("  %-12s  %-28s  %-20s  %-20s",
+			"Status", "Session", "Local profile", "Remote profile")
+		b.WriteString(headerStyle.Render(hdr) + "\n")
+
+		lastHost := ""
 		for i, e := range m.entries {
-			label := e.session.TmuxSession
-			if label == "" {
-				label = e.session.ID[:8]
+			host := e.session.RemoteHost
+			if host == "" {
+				host = "(unknown host)"
 			}
-			profile := e.session.AWSProfileName
-			if profile == "" {
-				profile = "—"
+			if host != lastHost {
+				if lastHost != "" {
+					b.WriteString("\n")
+				}
+				b.WriteString("  " + hostStyle.Render("⬡ "+host) + "\n")
+				lastHost = host
 			}
 
 			var statusStr string
 			switch e.status {
 			case awsCredStatusValid:
-				statusStr = validStyle.Render("✓ Valid  ")
+				statusStr = validStyle.Render("✓ Valid     ")
 			case awsCredStatusExpired:
-				statusStr = expiredStyle.Render("✗ Expired")
+				statusStr = expiredStyle.Render("✗ Expired   ")
 			case awsCredStatusChecking:
 				if m.renewing[e.session.ID] {
-					statusStr = checkingStyle.Render("⟳ Renewing")
+					statusStr = warnStyle.Render("⟳ Renewing  ")
 				} else {
-					statusStr = checkingStyle.Render("· Checking")
+					statusStr = warnStyle.Render("· Checking  ")
 				}
-			case awsCredStatusNoAWS:
-				statusStr = dimStyle.Render("— No AWS ")
+			case awsCredStatusNotPushed:
+				statusStr = warnStyle.Render("! Not pushed")
 			case awsCredStatusNoConf:
-				statusStr = dimStyle.Render("? No config")
+				statusStr = dimStyle.Render("? No config ")
 			}
 
-			remote := e.session.RemoteHost
-			line := fmt.Sprintf("  %s  %-30s  %-24s  %s",
+			label := e.session.TmuxSession
+			if label == "" {
+				label = e.session.ID[:8]
+			}
+			localP := e.localProfile
+			if localP == "" {
+				localP = "—"
+			}
+			remoteP := e.remoteProfile
+			if remoteP == "" {
+				remoteP = "—"
+			}
+
+			line := fmt.Sprintf("  %s  %-28s  %-20s  %-20s",
 				statusStr,
-				truncateRunes(label, 30),
-				truncateRunes(profile, 24),
-				dimStyle.Render(truncateRunes(remote, 28)),
+				truncateRunes(label, 28),
+				truncateRunes(localP, 20),
+				truncateRunes(remoteP, 20),
 			)
 			if i == m.cursor {
-				line = selectedStyle.Render(line)
+				line = selectedBg.Render(line)
 			}
 			b.WriteString(line + "\n")
 		}
@@ -326,7 +400,7 @@ func (m AWSCredentialsModel) View() string {
 	}
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	b.WriteString(helpStyle.Render("  r renew selected  •  R renew all expired  •  c re-check all  •  ESC back") + "\n")
+	b.WriteString(helpStyle.Render("  r renew selected  •  R renew all expired/unprovisioned  •  c re-check all  •  ESC back") + "\n")
 
 	return b.String()
 }
