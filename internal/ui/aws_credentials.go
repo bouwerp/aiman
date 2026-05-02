@@ -115,9 +115,12 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 				remoteProfile = "default"
 			}
 
-			// Deduplicate by (user@host, profile) — multiple remote entries can
-			// share the same host+user but use different profiles (e.g. default + prod).
-			entryKey := userAtHost + "|" + remoteProfile
+			// Deduplicate by (user@host, localProfile, remoteProfile) — all three
+			// together form a unique credential identity. Two remotes on the same
+			// host can share a remote profile name but use different local source
+			// profiles (e.g. dev→default and prod→prod).
+			localProfile := strings.TrimSpace(d.SourceProfile)
+			entryKey := userAtHost + "|" + localProfile + "|" + remoteProfile
 			if seen[entryKey] {
 				continue
 			}
@@ -126,7 +129,7 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 			entries = append(entries, awsHostEntry{
 				key:           entryKey,
 				userAtHost:    userAtHost,
-				localProfile:  strings.TrimSpace(d.SourceProfile),
+				localProfile:  localProfile,
 				remoteProfile: remoteProfile,
 				status:        awsCredStatusChecking,
 				del:           d,
