@@ -27,11 +27,12 @@ const (
 	awsCredStatusSSHError  // SSH connection failed (can't reach remote)
 )
 
-// awsHostEntry is one row in the credentials manager — one per user@host.
+// awsHostEntry is one row in the credentials manager — one per (user@host, profile) pair.
 // Credentials are written to ~/.aws/credentials on the remote and are shared
 // by all sessions running as the same user on that host. The profile name is
 // taken from AWSDelegation.Profile (not the per-session aiman-XXXX name).
 type awsHostEntry struct {
+	key           string // unique key: "user@host|profile" — used for message routing
 	userAtHost    string // e.g. "ubuntu@server.example.com"
 	localProfile  string // source_profile used locally to assume the role
 	remoteProfile string // profile name in remote ~/.aws/credentials
@@ -43,7 +44,7 @@ type awsHostEntry struct {
 	remote config.Remote
 }
 
-// AWSCredentialsModel lists one row per user@host and shows/manages AWS
+// AWSCredentialsModel lists one row per (user@host, profile) pair and shows/manages AWS
 // credential validity for remotes that have SyncCredentials enabled.
 type AWSCredentialsModel struct {
 	cfg      *config.Config
@@ -52,7 +53,7 @@ type AWSCredentialsModel struct {
 	cursor   int
 	width    int
 	height   int
-	renewing map[string]bool // userAtHost keys currently being renewed
+	renewing map[string]bool // entry key values currently being renewed
 	message  string          // transient feedback line
 }
 
@@ -61,14 +62,14 @@ type AWSCredentialsModel struct {
 type awsCredLoadedMsg struct{ entries []awsHostEntry }
 
 type awsCredCheckResultMsg struct {
-	userAtHost string
-	status     awsCredStatus
-	err        error
+	key    string // "user@host|profile"
+	status awsCredStatus
+	err    error
 }
 
 type awsCredRenewResultMsg struct {
-	userAtHost string
-	err        error
+	key string // "user@host|profile"
+	err error
 }
 
 // --- constructor ---
@@ -87,8 +88,8 @@ func (m AWSCredentialsModel) Init() tea.Cmd {
 	return m.buildEntries()
 }
 
-// buildEntries creates one entry per user@host for every remote that has
-// AWSDelegation with SyncCredentials enabled. No DB access needed — the
+// buildEntries creates one entry per (user@host, profile) pair for every remote
+// that has AWSDelegation with SyncCredentials enabled. No DB access needed — the
 // profile name and delegation config come entirely from the config file.
 func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 	return func() tea.Msg {
@@ -105,10 +106,6 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 			if r.User != "" {
 				userAtHost = r.User + "@" + r.Host
 			}
-			if seen[userAtHost] {
-				continue
-			}
-			seen[userAtHost] = true
 
 			// Profile name on the remote comes from AWSDelegation.Profile.
 			// This is the profile written by the remotes-config push, not the
@@ -118,7 +115,16 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 				remoteProfile = "default"
 			}
 
+			// Deduplicate by (user@host, profile) — multiple remote entries can
+			// share the same host+user but use different profiles (e.g. default + prod).
+			entryKey := userAtHost + "|" + remoteProfile
+			if seen[entryKey] {
+				continue
+			}
+			seen[entryKey] = true
+
 			entries = append(entries, awsHostEntry{
+				key:           entryKey,
 				userAtHost:    userAtHost,
 				localProfile:  strings.TrimSpace(d.SourceProfile),
 				remoteProfile: remoteProfile,
@@ -143,7 +149,7 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 		if e.status != awsCredStatusChecking {
 			continue
 		}
-		uah := e.userAtHost
+		key := e.key
 		remote := e.remote
 		profile := e.remoteProfile
 		cmds = append(cmds, func() tea.Msg {
@@ -152,15 +158,15 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 			defer cancel()
 			err := awsdelegation.CheckCredentials(ctx, mgr, profile)
 			if err == nil {
-				return awsCredCheckResultMsg{userAtHost: uah, status: awsCredStatusValid}
+				return awsCredCheckResultMsg{key: key, status: awsCredStatusValid}
 			}
 			if errors.Is(err, awsdelegation.ErrProfileNotFound) {
-				return awsCredCheckResultMsg{userAtHost: uah, status: awsCredStatusNotPushed, err: err}
+				return awsCredCheckResultMsg{key: key, status: awsCredStatusNotPushed, err: err}
 			}
 			if errors.Is(err, awsdelegation.ErrSSHFailure) {
-				return awsCredCheckResultMsg{userAtHost: uah, status: awsCredStatusSSHError, err: err}
+				return awsCredCheckResultMsg{key: key, status: awsCredStatusSSHError, err: err}
 			}
-			return awsCredCheckResultMsg{userAtHost: uah, status: awsCredStatusExpired, err: err}
+			return awsCredCheckResultMsg{key: key, status: awsCredStatusExpired, err: err}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -170,13 +176,13 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 // approach as the remotes-config page: AWSDelegation.SourceProfile locally
 // → ApplyDelegatedCredentials to AWSDelegation.Profile on remote.
 func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
-	uah := e.userAtHost
+	key := e.key
 	remote := e.remote
 	d := e.del
 	profile := e.remoteProfile
 	return func() tea.Msg {
 		if d == nil {
-			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("no AWS delegation config")}
+			return awsCredRenewResultMsg{key: key, err: fmt.Errorf("no AWS delegation config")}
 		}
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
@@ -195,7 +201,7 @@ func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 			var err error
 			roleARN, err = awsdelegation.RoleARNFromParts(d.AccountID, d.RoleName)
 			if err != nil {
-				return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("build role ARN: %w", err)}
+				return awsCredRenewResultMsg{key: key, err: fmt.Errorf("build role ARN: %w", err)}
 			}
 		}
 
@@ -207,11 +213,11 @@ func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 		}
 		creds, err := awsdelegation.GetTemporaryCredentials(ctx, src, opts)
 		if err != nil {
-			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("get temporary credentials: %w", err)}
+			return awsCredRenewResultMsg{key: key, err: fmt.Errorf("get temporary credentials: %w", err)}
 		}
 
 		if err := awsdelegation.ApplyDelegatedCredentials(ctx, mgr, profile, creds); err != nil {
-			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("push credentials: %w", err)}
+			return awsCredRenewResultMsg{key: key, err: fmt.Errorf("push credentials: %w", err)}
 		}
 
 		// Re-apply the profile block (role_arn + source_profile) in ~/.aws/config.
@@ -224,10 +230,10 @@ func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 			configSrc = src
 		}
 		if err := awsdelegation.ApplyDelegatedProfile(ctx, mgr, profile, configRoleARN, configSrc, d.Region); err != nil {
-			return awsCredRenewResultMsg{userAtHost: uah, err: fmt.Errorf("push profile config: %w", err)}
+			return awsCredRenewResultMsg{key: key, err: fmt.Errorf("push profile config: %w", err)}
 		}
 
-		return awsCredRenewResultMsg{userAtHost: uah, err: nil}
+		return awsCredRenewResultMsg{key: key, err: nil}
 	}
 }
 
@@ -242,7 +248,7 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case awsCredCheckResultMsg:
 		for i, e := range m.entries {
-			if e.userAtHost == msg.userAtHost {
+			if e.key == msg.key {
 				m.entries[i].status = msg.status
 				m.entries[i].err = msg.err
 				break
@@ -251,18 +257,18 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case awsCredRenewResultMsg:
-		delete(m.renewing, msg.userAtHost)
+		delete(m.renewing, msg.key)
 		for i, e := range m.entries {
-			if e.userAtHost == msg.userAtHost {
+			if e.key == msg.key {
 				if msg.err != nil {
 					m.entries[i].status = awsCredStatusExpired
 					m.entries[i].err = msg.err
-					m.message = fmt.Sprintf("✗ Renew failed for %s: %v", e.userAtHost, msg.err)
+					m.message = fmt.Sprintf("✗ Renew failed for %s [%s]: %v", e.userAtHost, e.remoteProfile, msg.err)
 				} else {
 					// Re-probe to confirm rather than optimistically setting Valid.
 					m.entries[i].status = awsCredStatusChecking
 					m.entries[i].err = nil
-					m.message = fmt.Sprintf("Renewed %s — verifying…", e.userAtHost)
+					m.message = fmt.Sprintf("Renewed %s [%s] — verifying…", e.userAtHost, e.remoteProfile)
 				}
 				break
 			}
@@ -283,10 +289,10 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			if m.cursor < len(m.entries) {
 				e := m.entries[m.cursor]
-				if e.status != awsCredStatusNoConf && !m.renewing[e.userAtHost] {
-					m.renewing[e.userAtHost] = true
+				if e.status != awsCredStatusNoConf && !m.renewing[e.key] {
+					m.renewing[e.key] = true
 					m.entries[m.cursor].status = awsCredStatusChecking
-					m.message = fmt.Sprintf("Renewing %s…", e.userAtHost)
+					m.message = fmt.Sprintf("Renewing %s [%s]…", e.userAtHost, e.remoteProfile)
 					return m, m.renewCmd(e)
 				}
 			}
@@ -294,8 +300,8 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmds []tea.Cmd
 			count := 0
 			for i, e := range m.entries {
-				if (e.status == awsCredStatusExpired || e.status == awsCredStatusNotPushed) && !m.renewing[e.userAtHost] {
-					m.renewing[e.userAtHost] = true
+				if (e.status == awsCredStatusExpired || e.status == awsCredStatusNotPushed) && !m.renewing[e.key] {
+					m.renewing[e.key] = true
 					m.entries[i].status = awsCredStatusChecking
 					cmds = append(cmds, m.renewCmd(e))
 					count++
@@ -349,7 +355,7 @@ func (m AWSCredentialsModel) View() string {
 			case awsCredStatusExpired:
 				statusStr = expiredStyle.Render("✗ Expired   ")
 			case awsCredStatusChecking:
-				if m.renewing[e.userAtHost] {
+				if m.renewing[e.key] {
 					statusStr = warnStyle.Render("⟳ Renewing  ")
 				} else {
 					statusStr = warnStyle.Render("· Checking  ")
