@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -20,11 +21,11 @@ import (
 type awsCredStatus int
 
 const (
-	awsCredStatusChecking    awsCredStatus = iota
+	awsCredStatusChecking awsCredStatus = iota
 	awsCredStatusValid
 	awsCredStatusExpired
-	awsCredStatusNotPushed // session has delegation config but no profile was pushed yet
-	awsCredStatusNoConf    // remote has no delegation config
+	awsCredStatusNotFound // profile doesn't exist on the remote yet
+	awsCredStatusNoConf   // remote has no delegation config
 )
 
 // awsCredEntry is one selectable row in the credentials manager list.
@@ -34,6 +35,7 @@ type awsCredEntry struct {
 	err           error
 	localProfile  string // source profile name on the local machine
 	remoteProfile string // aiman-xxxx profile on the remote machine
+	userAtHost    string // user@host grouping key
 }
 
 // AWSCredentialsModel is the standalone view that lists all sessions with their
@@ -122,17 +124,15 @@ func (m AWSCredentialsModel) loadAndCheck() tea.Cmd {
 				localProfile = del.SourceProfile
 			}
 
-			remoteProfile := s.AWSProfileName // e.g. "aiman-a1b2c3d4"
-
+			// The remote profile name is deterministic even if the DB field was lost.
+			remoteProfile := s.AWSProfileName
 			if remoteProfile == "" {
-				// Delegation is configured but credentials were never pushed.
-				entries = append(entries, awsCredEntry{
-					session:       s,
-					status:        awsCredStatusNotPushed,
-					localProfile:  localProfile,
-					remoteProfile: "",
-				})
-				continue
+				remoteProfile = "aiman-" + s.ID[:8]
+			}
+
+			userAtHost := remote.Host
+			if remote.User != "" {
+				userAtHost = remote.User + "@" + remote.Host
 			}
 
 			entries = append(entries, awsCredEntry{
@@ -140,15 +140,14 @@ func (m AWSCredentialsModel) loadAndCheck() tea.Cmd {
 				status:        awsCredStatusChecking,
 				localProfile:  localProfile,
 				remoteProfile: remoteProfile,
+				userAtHost:    userAtHost,
 			})
 		}
 
-		// Sort by remote host so grouping is stable.
+		// Sort by user@host then session name so grouping is stable.
 		sort.Slice(entries, func(i, j int) bool {
-			hi := entries[i].session.RemoteHost
-			hj := entries[j].session.RemoteHost
-			if hi != hj {
-				return hi < hj
+			if entries[i].userAtHost != entries[j].userAtHost {
+				return entries[i].userAtHost < entries[j].userAtHost
 			}
 			return entries[i].session.TmuxSession < entries[j].session.TmuxSession
 		})
@@ -176,10 +175,13 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			err := awsdelegation.CheckCredentials(ctx, mgr, profile)
-			if err != nil {
-				return awsCredCheckResultMsg{sessionID: s.ID, status: awsCredStatusExpired, err: err}
+			if err == nil {
+				return awsCredCheckResultMsg{sessionID: s.ID, status: awsCredStatusValid}
 			}
-			return awsCredCheckResultMsg{sessionID: s.ID, status: awsCredStatusValid}
+			if errors.Is(err, awsdelegation.ErrProfileNotFound) {
+				return awsCredCheckResultMsg{sessionID: s.ID, status: awsCredStatusNotFound, err: err}
+			}
+			return awsCredCheckResultMsg{sessionID: s.ID, status: awsCredStatusExpired, err: err}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -282,11 +284,11 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "R":
-			// Renew all expired (and not-yet-pushed) sessions.
+			// Renew all expired and not-found sessions.
 			var cmds []tea.Cmd
 			count := 0
 			for i, e := range m.entries {
-				if (e.status == awsCredStatusExpired || e.status == awsCredStatusNotPushed) && !m.renewing[e.session.ID] {
+				if (e.status == awsCredStatusExpired || e.status == awsCredStatusNotFound) && !m.renewing[e.session.ID] {
 					m.renewing[e.session.ID] = true
 					m.entries[i].status = awsCredStatusChecking
 					cmds = append(cmds, m.renewCmd(e.session))
@@ -338,16 +340,19 @@ func (m AWSCredentialsModel) View() string {
 
 		lastHost := ""
 		for i, e := range m.entries {
-			host := e.session.RemoteHost
-			if host == "" {
-				host = "(unknown host)"
+			groupKey := e.userAtHost
+			if groupKey == "" {
+				groupKey = e.session.RemoteHost
 			}
-			if host != lastHost {
+			if groupKey == "" {
+				groupKey = "(unknown host)"
+			}
+			if groupKey != lastHost {
 				if lastHost != "" {
 					b.WriteString("\n")
 				}
-				b.WriteString("  " + hostStyle.Render("⬡ "+host) + "\n")
-				lastHost = host
+				b.WriteString("  " + hostStyle.Render("⬡ "+groupKey) + "\n")
+				lastHost = groupKey
 			}
 
 			var statusStr string
@@ -362,7 +367,7 @@ func (m AWSCredentialsModel) View() string {
 				} else {
 					statusStr = warnStyle.Render("· Checking  ")
 				}
-			case awsCredStatusNotPushed:
+			case awsCredStatusNotFound:
 				statusStr = warnStyle.Render("! Not pushed")
 			case awsCredStatusNoConf:
 				statusStr = dimStyle.Render("? No config ")
