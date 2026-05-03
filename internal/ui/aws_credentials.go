@@ -88,57 +88,115 @@ func (m AWSCredentialsModel) Init() tea.Cmd {
 	return m.buildEntries()
 }
 
-// buildEntries creates one entry per (user@host, profile) pair for every remote
-// that has AWSDelegation with SyncCredentials enabled. No DB access needed — the
-// profile name and delegation config come entirely from the config file.
+// buildEntries builds one row per (user@host, remoteProfile) found on the
+// remote by enumerating ~/.aws/credentials on each unique host. Profiles from
+// the config (AWSDelegation.Profile) are included even if not yet pushed.
+// The local source_profile is looked up from config by matching remoteProfile.
 func (m AWSCredentialsModel) buildEntries() tea.Cmd {
+	// Collect unique user@host entries that have SyncCredentials enabled,
+	// keeping the best representative remote config for each host.
+	type hostInfo struct {
+		userAtHost string
+		remote     config.Remote
+		// map remoteProfile → localProfile derived from config
+		configProfiles map[string]string
+		// delegation config keyed by remoteProfile (for renewal)
+		dels map[string]*config.AWSDelegation
+	}
+	hosts := map[string]*hostInfo{}
+
+	for _, r := range m.cfg.Remotes {
+		d := r.AWSDelegation
+		if d == nil || !d.SyncCredentials {
+			continue
+		}
+		userAtHost := r.Host
+		if r.User != "" {
+			userAtHost = r.User + "@" + r.Host
+		}
+		if _, ok := hosts[userAtHost]; !ok {
+			hosts[userAtHost] = &hostInfo{
+				userAtHost:     userAtHost,
+				remote:         r,
+				configProfiles: map[string]string{},
+				dels:           map[string]*config.AWSDelegation{},
+			}
+		}
+		hi := hosts[userAtHost]
+		remoteProfile := strings.TrimSpace(d.Profile)
+		if remoteProfile == "" {
+			remoteProfile = "default"
+		}
+		hi.configProfiles[remoteProfile] = strings.TrimSpace(d.SourceProfile)
+		hi.dels[remoteProfile] = d
+	}
+
+	if len(hosts) == 0 {
+		return func() tea.Msg { return awsCredLoadedMsg{} }
+	}
+
 	return func() tea.Msg {
 		var entries []awsHostEntry
-		seen := map[string]bool{}
 
-		for _, r := range m.cfg.Remotes {
-			d := r.AWSDelegation
-			if d == nil || !d.SyncCredentials {
-				continue
-			}
-
-			userAtHost := r.Host
-			if r.User != "" {
-				userAtHost = r.User + "@" + r.Host
-			}
-
-			// Profile name on the remote comes from AWSDelegation.Profile.
-			// This is the profile written by the remotes-config push, not the
-			// per-session "aiman-XXXX" profile.
-			remoteProfile := strings.TrimSpace(d.Profile)
-			if remoteProfile == "" {
-				remoteProfile = "default"
-			}
-
-			// Deduplicate by (user@host, localProfile, remoteProfile) — all three
-			// together form a unique credential identity. Two remotes on the same
-			// host can share a remote profile name but use different local source
-			// profiles (e.g. dev→default and prod→prod).
-			localProfile := strings.TrimSpace(d.SourceProfile)
-			entryKey := userAtHost + "|" + localProfile + "|" + remoteProfile
-			if seen[entryKey] {
-				continue
-			}
-			seen[entryKey] = true
-
-			entries = append(entries, awsHostEntry{
-				key:           entryKey,
-				userAtHost:    userAtHost,
-				localProfile:  localProfile,
-				remoteProfile: remoteProfile,
-				status:        awsCredStatusChecking,
-				del:           d,
-				remote:        r,
+		for _, hi := range hosts {
+			mgr := ssh.NewManager(ssh.Config{
+				Host: hi.remote.Host,
+				User: hi.remote.User,
+				Root: hi.remote.Root,
 			})
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			remoteProfiles, sshErr := awsdelegation.ListCredentialProfiles(ctx, mgr)
+			cancel()
+
+			// Build a set of all profiles to show:
+			// • every profile found on the remote
+			// • every profile declared in config (even if not pushed yet)
+			seen := map[string]bool{}
+			var profiles []string
+			for _, p := range remoteProfiles {
+				if !seen[p] {
+					seen[p] = true
+					profiles = append(profiles, p)
+				}
+			}
+			for p := range hi.configProfiles {
+				if !seen[p] {
+					seen[p] = true
+					profiles = append(profiles, p)
+				}
+			}
+			sort.Strings(profiles)
+
+			for _, p := range profiles {
+				localProfile := hi.configProfiles[p] // empty string if not in config
+				del := hi.dels[p]                    // nil if not in config
+
+				status := awsCredStatusChecking
+				if sshErr != nil {
+					status = awsCredStatusSSHError
+				} else if !seen[p] {
+					status = awsCredStatusNotPushed
+				}
+
+				entryKey := hi.userAtHost + "|" + localProfile + "|" + p
+				entries = append(entries, awsHostEntry{
+					key:           entryKey,
+					userAtHost:    hi.userAtHost,
+					localProfile:  localProfile,
+					remoteProfile: p,
+					status:        status,
+					err:           sshErr,
+					del:           del,
+					remote:        hi.remote,
+				})
+			}
 		}
 
 		sort.Slice(entries, func(i, j int) bool {
-			return entries[i].userAtHost < entries[j].userAtHost
+			if entries[i].userAtHost != entries[j].userAtHost {
+				return entries[i].userAtHost < entries[j].userAtHost
+			}
+			return entries[i].remoteProfile < entries[j].remoteProfile
 		})
 
 		return awsCredLoadedMsg{entries: entries}
@@ -292,7 +350,9 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			if m.cursor < len(m.entries) {
 				e := m.entries[m.cursor]
-				if e.status != awsCredStatusNoConf && !m.renewing[e.key] {
+				if e.del == nil {
+					m.message = fmt.Sprintf("Cannot renew [%s]: no local delegation config for this profile.", e.remoteProfile)
+				} else if e.status != awsCredStatusNoConf && !m.renewing[e.key] {
 					m.renewing[e.key] = true
 					m.entries[m.cursor].status = awsCredStatusChecking
 					m.message = fmt.Sprintf("Renewing %s [%s]…", e.userAtHost, e.remoteProfile)
@@ -303,6 +363,9 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmds []tea.Cmd
 			count := 0
 			for i, e := range m.entries {
+				if e.del == nil {
+					continue // can't renew without local config
+				}
 				if (e.status == awsCredStatusExpired || e.status == awsCredStatusNotPushed) && !m.renewing[e.key] {
 					m.renewing[e.key] = true
 					m.entries[i].status = awsCredStatusChecking
@@ -316,12 +379,8 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.message = "No expired or unprovisioned credentials to renew."
 		case "c":
-			for i := range m.entries {
-				m.entries[i].status = awsCredStatusChecking
-				m.entries[i].err = nil
-			}
-			m.message = "Re-checking all credentials…"
-			return m, m.checkCredsCmd()
+			m.message = "Re-scanning remote profiles…"
+			return m, m.buildEntries()
 		}
 	}
 	return m, nil

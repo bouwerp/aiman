@@ -56,6 +56,28 @@ func CheckCredentials(ctx context.Context, r RemoteRunner, profileName string) e
 	return nil
 }
 
+// ListCredentialProfiles returns the profile names present in
+// ~/.aws/credentials on the remote. Returns an empty slice (not an error)
+// when the file doesn't exist yet. Returns ErrSSHFailure if the SSH
+// connection itself could not be established.
+func ListCredentialProfiles(ctx context.Context, r RemoteRunner) ([]string, error) {
+	out, err := r.Execute(ctx, "grep -oP '(?<=\\[)[^\\]]+' ~/.aws/credentials 2>/dev/null || true")
+	lower := strings.ToLower(out)
+	if err != nil {
+		if !strings.Contains(lower, "arn:") && !strings.Contains(lower, "credentials") {
+			return nil, fmt.Errorf("%w: %v", ErrSSHFailure, err)
+		}
+	}
+	var profiles []string
+	for _, line := range strings.Split(out, "\n") {
+		p := strings.TrimSpace(line)
+		if p != "" {
+			profiles = append(profiles, p)
+		}
+	}
+	return profiles, nil
+}
+
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
