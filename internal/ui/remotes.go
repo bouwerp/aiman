@@ -264,9 +264,16 @@ func (m *RemotesModel) initDialog(host, user, root string) {
 }
 
 func (m *RemotesModel) initAWSDialog() {
+	// Find the delegation to seed the form with: prefer AWSDelegation (primary),
+	// but if AWSDelegations has entries, list them so the user knows multiple exist.
 	var d *config.AWSDelegation
 	if m.awsRemoteIdx >= 0 && m.awsRemoteIdx < len(m.cfg.Remotes) {
-		d = m.cfg.Remotes[m.awsRemoteIdx].AWSDelegation
+		r := m.cfg.Remotes[m.awsRemoteIdx]
+		d = r.AWSDelegation
+		// If there are multiple delegations, prefer the first one but note the total.
+		if d == nil && len(r.AWSDelegations) > 0 {
+			d = r.AWSDelegations[0]
+		}
 	}
 
 	names, _ := awsdelegation.ListLocalAWSProfileNames()
@@ -907,6 +914,45 @@ func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// upsertDelegation updates the delegation entry with the same profile name in r,
+// or adds it. Existing delegations for other profiles are preserved.
+// The singular AWSDelegation field is used as the "primary" edited entry;
+// additional profiles go into AWSDelegations.
+func upsertDelegation(r *config.Remote, d *config.AWSDelegation) {
+	prof := strings.TrimSpace(d.Profile)
+	if prof == "" {
+		prof = "default"
+	}
+
+	// Check if this profile already exists in the singular field.
+	singularProf := ""
+	if r.AWSDelegation != nil {
+		singularProf = strings.TrimSpace(r.AWSDelegation.Profile)
+		if singularProf == "" {
+			singularProf = "default"
+		}
+	}
+	if r.AWSDelegation == nil || singularProf == prof {
+		r.AWSDelegation = d
+		return
+	}
+
+	// Check AWSDelegations slice.
+	for i, existing := range r.AWSDelegations {
+		ep := strings.TrimSpace(existing.Profile)
+		if ep == "" {
+			ep = "default"
+		}
+		if ep == prof {
+			r.AWSDelegations[i] = d
+			return
+		}
+	}
+
+	// New profile — append.
+	r.AWSDelegations = append(r.AWSDelegations, d)
+}
+
 func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
 	rawProf := strings.TrimSpace(m.awsProfile.Value())
 	rn := strings.TrimSpace(m.awsRoleName.Value())
@@ -917,7 +963,10 @@ func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
 	}
 
 	if rawProf == "" && rn == "" && src == "" {
-		m.cfg.Remotes[m.awsRemoteIdx].AWSDelegation = nil
+		// Clear only the matching delegation if a profile name was given; otherwise clear all.
+		remote := &m.cfg.Remotes[m.awsRemoteIdx]
+		remote.AWSDelegation = nil
+		remote.AWSDelegations = nil
 		_ = m.cfg.Save()
 		m.testResult = successStyle.Render("Cleared saved AWS delegation (remote ~/.aws/config not changed).")
 		m.scanResults = nil
@@ -982,7 +1031,10 @@ func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	m.cfg.Remotes[m.awsRemoteIdx].AWSDelegation = d
+	// Upsert the delegation: update the existing entry with the same profile name,
+	// or add a new one. This preserves all other profiles already configured for
+	// this remote — configuring "prod" no longer overwrites "default".
+	upsertDelegation(&m.cfg.Remotes[m.awsRemoteIdx], d)
 	_ = m.cfg.Save()
 
 	r := m.cfg.Remotes[m.awsRemoteIdx]
@@ -1093,7 +1145,25 @@ func (m RemotesModel) viewAWS() string {
 	b.WriteString(activeStyle.Render("Delegated AWS profile (remote ~/.aws/config)") + "\n\n")
 	b.WriteString(statusStyle.Render("  source_profile is written to the remote and must match a profile there with long-lived credentials.") + "\n")
 	b.WriteString(statusStyle.Render("  Account ID is derived locally via: aws sts get-caller-identity --profile <source_profile>.") + "\n")
-	b.WriteString(statusStyle.Render("  ←/→ on source_profile cycles names from this Mac’s ~/.aws.") + "\n\n")
+	b.WriteString(statusStyle.Render("  ←/→ on source_profile cycles names from this Mac’s ~/.aws.") + "\n")
+
+	// Show already-configured delegation profiles for this remote.
+	if m.awsRemoteIdx >= 0 && m.awsRemoteIdx < len(m.cfg.Remotes) {
+		r := m.cfg.Remotes[m.awsRemoteIdx]
+		all := r.AllDelegations()
+		if len(all) > 1 {
+			names := make([]string, 0, len(all))
+			for _, del := range all {
+				p := del.Profile
+				if p == "" {
+					p = "default"
+				}
+				names = append(names, p)
+			}
+			b.WriteString(statusStyle.Render(fmt.Sprintf("  Configured profiles (%d): %s — type another profile name below to edit it.", len(names), strings.Join(names, ", "))) + "\n")
+		}
+	}
+	b.WriteString("\n")
 
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("Delegated profile name (remote, default "+awsdelegation.DefaultDelegatedProfileName+"):", awsFocusProfile), m.awsProfile.View()))
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("IAM role name (optional):", awsFocusRoleName), m.awsRoleName.View()))

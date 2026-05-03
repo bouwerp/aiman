@@ -19,7 +19,7 @@ import (
 type awsCredStatus int
 
 const (
-	awsCredStatusChecking  awsCredStatus = iota
+	awsCredStatusChecking awsCredStatus = iota
 	awsCredStatusValid
 	awsCredStatusExpired
 	awsCredStatusNotPushed // profile doesn't exist on the remote yet

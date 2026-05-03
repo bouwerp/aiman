@@ -150,10 +150,10 @@ const (
 	viewStateAuthWizard
 	viewStateTunnelManager
 	viewStateTunnelAdd
-	viewStateSecretsSetup // manage global secrets
+	viewStateSecretsSetup   // manage global secrets
 	viewStateAWSCredentials // manage AWS credential status and renewal
-	viewStateError        // generic error dialog (press any key to dismiss)
-	viewStateRemotePicker // select remote for new session
+	viewStateError          // generic error dialog (press any key to dismiss)
+	viewStateRemotePicker   // select remote for new session
 )
 
 type panelMode int
