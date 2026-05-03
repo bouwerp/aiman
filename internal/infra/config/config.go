@@ -100,6 +100,13 @@ type AWSDelegation struct {
 	RoleName        string `yaml:"role_name,omitempty"`        // empty → TemporaryDelegatedRole in generated ARN
 	SourceProfile   string `yaml:"source_profile,omitempty"`   // local profile used for account lookup; must exist on remote
 	SyncCredentials bool   `yaml:"sync_credentials,omitempty"` // whether to push temporary session tokens to the remote
+	// ManagedRole, when true, tells aiman to automatically create the IAM role
+	// (account_id + role_name) if it does not already exist, with a trust policy
+	// that allows the source_profile identity to assume it. The role is given a
+	// passthrough policy (Allow *:* on *) so effective permissions equal the
+	// intersection with the source_profile user's own permissions.
+	// TODO: add fine-grained permission configuration once the core flow is proven.
+	ManagedRole bool `yaml:"managed_role,omitempty"`
 	// Optional restrictions applied when SyncCredentials is true.
 	Region          string   `yaml:"region,omitempty"`           // written into the remote profile as "region = <value>"
 	Regions         []string `yaml:"regions,omitempty"`          // restrict credentials via aws:RequestedRegion condition policy; default ["us-east-2"] in UI

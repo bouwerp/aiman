@@ -247,6 +247,9 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 // renewCmd pushes fresh temporary credentials to the remote using the same
 // approach as the remotes-config page: AWSDelegation.SourceProfile locally
 // → ApplyDelegatedCredentials to AWSDelegation.Profile on remote.
+// When d.ManagedRole is true, the IAM role is created automatically if missing
+// before credentials are obtained — this is an entirely separate code path that
+// can be disabled by setting managed_role: false (the default).
 func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 	key := e.key
 	remote := e.remote
@@ -258,7 +261,7 @@ func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 		}
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 
 		src := strings.TrimSpace(d.SourceProfile)
@@ -269,7 +272,24 @@ func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 		}
 
 		var roleARN string
-		if sessionPolicy != "" && strings.TrimSpace(d.AccountID) != "" {
+
+		if d.ManagedRole {
+			// --- managed role path: create role automatically if missing ---
+			accountID := strings.TrimSpace(d.AccountID)
+			roleName := strings.TrimSpace(d.RoleName)
+			if accountID == "" {
+				return awsCredRenewResultMsg{key: key, err: fmt.Errorf("managed_role requires account_id")}
+			}
+			if roleName == "" {
+				return awsCredRenewResultMsg{key: key, err: fmt.Errorf("managed_role requires role_name")}
+			}
+			var err error
+			roleARN, err = awsdelegation.EnsureRole(ctx, src, accountID, roleName)
+			if err != nil {
+				return awsCredRenewResultMsg{key: key, err: fmt.Errorf("ensure managed role: %w", err)}
+			}
+		} else if sessionPolicy != "" && strings.TrimSpace(d.AccountID) != "" {
+			// --- existing path: use role ARN only when a session policy restricts it ---
 			var err error
 			roleARN, err = awsdelegation.RoleARNFromParts(d.AccountID, d.RoleName)
 			if err != nil {

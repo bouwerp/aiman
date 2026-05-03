@@ -526,13 +526,32 @@ func pushAWSDelegation(host, user, root string, d *config.AWSDelegation) tea.Cmd
 			if sessionPolicy == "" && len(d.Regions) > 0 {
 				sessionPolicy = awsdelegation.BuildRegionPolicy(d.Regions)
 			}
+
+			// --- managed role path (separate, can be disabled by setting managed_role: false) ---
+			if d.ManagedRole {
+				accountID := strings.TrimSpace(d.AccountID)
+				rn := strings.TrimSpace(d.RoleName)
+				if accountID == "" {
+					return awsPushMsg{err: fmt.Errorf("managed_role requires account_id"), profile: p}
+				}
+				if rn == "" {
+					return awsPushMsg{err: fmt.Errorf("managed_role requires role_name"), profile: p}
+				}
+				var err error
+				roleARN, err = awsdelegation.EnsureRole(ctx, src, accountID, rn)
+				if err != nil {
+					return awsPushMsg{err: fmt.Errorf("ensure managed role: %w", err), profile: p}
+				}
+			}
+
 			// assume-role is only required when a session policy is set (to further
 			// restrict permissions via an inline policy — get-session-token does not
 			// support inline policies). duration_seconds alone uses get-session-token
 			// directly and does NOT require sts:AssumeRole on any role.
-			scopedRoleARN := ""
-			if sessionPolicy != "" {
-				scopedRoleARN = roleARN
+			// When managed_role is true, always use assume-role with the managed role ARN.
+			scopedRoleARN := roleARN // managed role path already set roleARN above
+			if !d.ManagedRole && sessionPolicy == "" {
+				scopedRoleARN = "" // original path: no role unless session policy requires it
 			}
 			opts := awsdelegation.CredentialOptions{
 				SessionPolicy:   sessionPolicy,
