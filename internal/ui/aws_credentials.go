@@ -277,11 +277,11 @@ func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 			// --- managed role path: create role automatically if missing ---
 			accountID := strings.TrimSpace(d.AccountID)
 			roleName := strings.TrimSpace(d.RoleName)
+			if roleName == "" {
+				roleName = awsdelegation.DefaultDelegatedRoleName
+			}
 			if accountID == "" {
 				return awsCredRenewResultMsg{key: key, err: fmt.Errorf("managed_role requires account_id")}
-			}
-			if roleName == "" {
-				return awsCredRenewResultMsg{key: key, err: fmt.Errorf("managed_role requires role_name")}
 			}
 			var err error
 			roleARN, err = awsdelegation.EnsureRole(ctx, src, accountID, roleName)

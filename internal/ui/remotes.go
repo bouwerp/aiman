@@ -305,7 +305,7 @@ func (m *RemotesModel) initAWSDialog() {
 	m.awsAccountLookupErr = ""
 	m.awsAccountResolving = false
 	m.awsSyncCreds = false
-	m.awsManagedRole = false
+	m.awsManagedRole = true // default on; user can untick if not needed
 	if d != nil {
 		if strings.TrimSpace(d.AccountID) != "" {
 			m.awsDerivedAccountID = d.AccountID
@@ -542,11 +542,11 @@ func pushAWSDelegation(host, user, root string, d *config.AWSDelegation) tea.Cmd
 			if d.ManagedRole {
 				accountID := strings.TrimSpace(d.AccountID)
 				rn := strings.TrimSpace(d.RoleName)
+				if rn == "" {
+					rn = awsdelegation.DefaultDelegatedRoleName
+				}
 				if accountID == "" {
 					return awsPushMsg{err: fmt.Errorf("managed_role requires account_id"), profile: p}
-				}
-				if rn == "" {
-					return awsPushMsg{err: fmt.Errorf("managed_role requires role_name"), profile: p}
 				}
 				var err error
 				roleARN, err = awsdelegation.EnsureRole(ctx, src, accountID, rn)
@@ -874,10 +874,6 @@ func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.awsFocus == awsFocusSync {
 				m.awsSyncCreds = !m.awsSyncCreds
-				return m, nil
-			}
-			if m.awsFocus == awsFocusManagedRole {
-				m.awsManagedRole = !m.awsManagedRole
 				return m, nil
 			}
 			return m.saveAWSAndPush()
