@@ -45,6 +45,12 @@ func EnsureRole(ctx context.Context, sourceProfile, accountID, roleName string) 
 		return "", fmt.Errorf("ensure role exists: %w", err)
 	}
 
+	// Always update the trust policy — the role may have been created by a
+	// previous run with a different caller ARN, or the user's ARN may have changed.
+	if err := updateTrustPolicy(ctx, sourceProfile, roleName, trustPolicy); err != nil {
+		return "", fmt.Errorf("update trust policy: %w", err)
+	}
+
 	if err := putInlinePolicy(ctx, sourceProfile, roleName); err != nil {
 		return "", fmt.Errorf("put inline policy: %w", err)
 	}
@@ -142,6 +148,13 @@ func putInlinePolicy(ctx context.Context, profile, roleName string) error {
 		"--role-name", roleName,
 		"--policy-name", passthroughPolicyName,
 		"--policy-document", passthroughPolicy,
+	)
+}
+
+func updateTrustPolicy(ctx context.Context, profile, roleName, trustPolicy string) error {
+	return runIAM(ctx, profile, "update-assume-role-policy",
+		"--role-name", roleName,
+		"--policy-document", trustPolicy,
 	)
 }
 
