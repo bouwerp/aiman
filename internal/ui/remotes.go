@@ -54,6 +54,7 @@ const (
 	awsFocusRoleName
 	awsFocusSource
 	awsFocusSync
+	awsFocusManagedRole
 	awsFocusRegions // comma-separated region restriction list (generates aws:RequestedRegion policy)
 	awsFocusRegion
 	awsFocusSessionPolicy
@@ -131,6 +132,7 @@ type RemotesModel struct {
 	awsAccountLookupErr string
 	awsAccountResolving bool
 	awsSyncCreds        bool
+	awsManagedRole      bool
 }
 
 type scanResults struct {
@@ -303,11 +305,13 @@ func (m *RemotesModel) initAWSDialog() {
 	m.awsAccountLookupErr = ""
 	m.awsAccountResolving = false
 	m.awsSyncCreds = false
+	m.awsManagedRole = false
 	if d != nil {
 		if strings.TrimSpace(d.AccountID) != "" {
 			m.awsDerivedAccountID = d.AccountID
 		}
 		m.awsSyncCreds = d.SyncCredentials
+		m.awsManagedRole = d.ManagedRole
 	}
 
 	m.awsRoleName = textinput.New()
@@ -868,10 +872,22 @@ func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.awsFocus = (m.awsFocus - 1 + awsFocusCount) % awsFocusCount
 			return m.applyAWSFocus()
 		case "enter":
+			if m.awsFocus == awsFocusSync {
+				m.awsSyncCreds = !m.awsSyncCreds
+				return m, nil
+			}
+			if m.awsFocus == awsFocusManagedRole {
+				m.awsManagedRole = !m.awsManagedRole
+				return m, nil
+			}
 			return m.saveAWSAndPush()
 		case " ":
 			if m.awsFocus == awsFocusSync {
 				m.awsSyncCreds = !m.awsSyncCreds
+				return m, nil
+			}
+			if m.awsFocus == awsFocusManagedRole {
+				m.awsManagedRole = !m.awsManagedRole
 				return m, nil
 			}
 		}
@@ -1005,6 +1021,7 @@ func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
 		d = &config.AWSDelegation{
 			Profile: prof, AccountID: acct, RoleName: rn, SourceProfile: src,
 			SyncCredentials: m.awsSyncCreds,
+			ManagedRole:     m.awsManagedRole,
 			Region:          strings.TrimSpace(m.awsRegion.Value()),
 			SessionPolicy:   strings.TrimSpace(m.awsSessionPolicy.Value()),
 		}
@@ -1210,6 +1227,12 @@ func (m RemotesModel) viewAWS() string {
 		syncCheck = "[x]"
 	}
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label(syncCheck+" Sync temporary credentials to remote ~/.aws/credentials", awsFocusSync), statusStyle.Render("(recommended if remote lacks credentials)")))
+
+	managedCheck := "[ ]"
+	if m.awsManagedRole {
+		managedCheck = "[x]"
+	}
+	b.WriteString(fmt.Sprintf("  %s %s\n\n", label(managedCheck+" Use managed IAM role (aiman auto-creates the role via sts:assume-role)", awsFocusManagedRole), statusStyle.Render("(enables IAM API access on remote; requires account_id + role_name)")))
 
 	b.WriteString(statusStyle.Render("  — Optional restrictions (applied when syncing credentials) —") + "\n\n")
 	b.WriteString(fmt.Sprintf("  %s %s\n", label("Restrict to regions (comma-sep, empty = no restriction):", awsFocusRegions), m.awsRegions.View()))
