@@ -81,6 +81,9 @@ type Remote struct {
 	// AWSDelegation describes a named profile (assume-role) to merge into ~/.aws/config on this remote.
 	// No secrets are stored here; source_profile must already exist on the server.
 	AWSDelegation *AWSDelegation `yaml:"aws_delegation,omitempty"`
+	// AWSDelegations allows multiple delegation profiles per remote (e.g. default + prod).
+	// When both AWSDelegation and AWSDelegations are set, all entries are used.
+	AWSDelegations []*AWSDelegation `yaml:"aws_delegations,omitempty"`
 }
 
 // AWSDelegation is stored in aiman config; role_arn on the remote is derived from
@@ -102,6 +105,18 @@ type AWSDelegation struct {
 	Regions         []string `yaml:"regions,omitempty"`          // restrict credentials via aws:RequestedRegion condition policy; default ["us-east-2"] in UI
 	SessionPolicy   string   `yaml:"session_policy,omitempty"`   // inline JSON IAM policy passed to sts assume-role --policy
 	DurationSeconds int      `yaml:"duration_seconds,omitempty"` // credential lifetime 900–43200; 0 = AWS default
+}
+
+// AllDelegations returns all AWSDelegation entries for the remote, combining
+// both the singular AWSDelegation field and the AWSDelegations slice.
+// Entries with SyncCredentials=false are included; callers filter as needed.
+func (r Remote) AllDelegations() []*AWSDelegation {
+	var out []*AWSDelegation
+	if r.AWSDelegation != nil {
+		out = append(out, r.AWSDelegation)
+	}
+	out = append(out, r.AWSDelegations...)
+	return out
 }
 
 // UniqueRemotes returns remotes with duplicate SSH targets (same host, user, root) removed.

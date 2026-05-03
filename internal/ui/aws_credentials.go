@@ -106,13 +106,19 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 	hosts := map[string]*hostInfo{}
 
 	for _, r := range m.cfg.Remotes {
-		d := r.AWSDelegation
-		if d == nil || !d.SyncCredentials {
-			continue
-		}
 		userAtHost := r.Host
 		if r.User != "" {
 			userAtHost = r.User + "@" + r.Host
+		}
+		hasSyncEnabled := false
+		for _, d := range r.AllDelegations() {
+			if d.SyncCredentials {
+				hasSyncEnabled = true
+				break
+			}
+		}
+		if !hasSyncEnabled {
+			continue
 		}
 		if _, ok := hosts[userAtHost]; !ok {
 			hosts[userAtHost] = &hostInfo{
@@ -123,12 +129,17 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 			}
 		}
 		hi := hosts[userAtHost]
-		remoteProfile := strings.TrimSpace(d.Profile)
-		if remoteProfile == "" {
-			remoteProfile = "default"
+		for _, d := range r.AllDelegations() {
+			if !d.SyncCredentials {
+				continue
+			}
+			remoteProfile := strings.TrimSpace(d.Profile)
+			if remoteProfile == "" {
+				remoteProfile = "default"
+			}
+			hi.configProfiles[remoteProfile] = strings.TrimSpace(d.SourceProfile)
+			hi.dels[remoteProfile] = d
 		}
-		hi.configProfiles[remoteProfile] = strings.TrimSpace(d.SourceProfile)
-		hi.dels[remoteProfile] = d
 	}
 
 	if len(hosts) == 0 {
