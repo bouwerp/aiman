@@ -1817,6 +1817,17 @@ func (m *Model) log(format string, args ...interface{}) {
 	}
 }
 
+// appendDebugLog appends a line to /tmp/aiman-debug.log for tracing goroutine activity.
+func appendDebugLog(line string) error {
+	f, err := os.OpenFile("/tmp/aiman-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(line)
+	return err
+}
+
 // wrapLines wraps each log line to width and joins them with newlines.
 func wrapLines(lines []string, width int) string {
 	if width <= 0 {
@@ -2008,6 +2019,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.restartingSession == nil {
 			return m, nil
 		}
+		_ = appendDebugLog(fmt.Sprintf("[ui %s] snapshotPreviewMsg: hasSnapshot=%v\n", time.Now().Format("15:04:05.000"), msg.snapshot != nil))
 		if msg.snapshot != nil {
 			m.priorSnapshotCandidate = msg.snapshot
 			m.state = viewStateSnapshotPreview
@@ -3269,6 +3281,7 @@ end tell`, cmd)
 			}
 
 			m.log("Preparing to restart session %q (ID: %s)", selectedSess.TmuxSession, selectedSess.ID)
+			_ = appendDebugLog(fmt.Sprintf("[ui %s] restart triggered: session=%s status=%s\n", time.Now().Format("15:04:05.000"), selectedSess.TmuxSession, selectedSess.Status))
 
 			// If session is active or syncing, ask for confirmation
 			if selectedSess.Status == domain.SessionStatusActive || selectedSess.Status == domain.SessionStatusSyncing {
@@ -4480,6 +4493,10 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickTmux()
 	case tmuxTerminalMsg:
+		// Don't interrupt an in-progress restart with a stale terminal stream.
+		if m.restartingSession != nil {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
 			m.panelMode = panelModePreview
@@ -4552,6 +4569,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = viewStateMain
 		return m, nil
 	case agent.ScanAgentsMsg:
+		_ = appendDebugLog(fmt.Sprintf("[ui %s] ScanAgentsMsg: err=%v agents=%d state=%d loadingNext=%d\n", time.Now().Format("15:04:05.000"), msg.Err, len(msg.Agents), m.state, m.loadingNext))
 		if msg.Err != nil {
 			m.lastError = fmt.Sprintf("Failed to scan agents: %v", msg.Err)
 			m.state = viewStateError
@@ -4938,6 +4956,7 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
 		m.agentPicker.selected = nil // prevent re-dispatch on subsequent keypresses
+		_ = appendDebugLog(fmt.Sprintf("[ui %s] agent selected: %s\n", time.Now().Format("15:04:05.000"), m.sessionCfg.Agent.Name))
 		m.sessionCfg.OpenRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
 		// Inject all globally stored secrets on restart.
 		if secrets, err := m.db.ListSecrets(context.Background()); err == nil {
@@ -4965,11 +4984,22 @@ func (m *Model) restartSession() tea.Cmd {
 	flowManager := m.flowManager
 
 	return func() (retMsg tea.Msg) {
+		logf := func(format string, args ...interface{}) {
+			line := fmt.Sprintf("[restart %s] "+format+"\n", append([]interface{}{time.Now().Format("15:04:05.000")}, args...)...)
+			_ = appendDebugLog(line)
+		}
 		defer func() {
 			if r := recover(); r != nil {
 				retMsg = sessionCreateMsg{err: fmt.Errorf("restart panicked: %v", r)}
 			}
+			logf("goroutine done, retMsg=%T err=%v", retMsg, func() interface{} {
+				if sm, ok := retMsg.(sessionCreateMsg); ok {
+					return sm.err
+				}
+				return nil
+			}())
 		}()
+		logf("started")
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -5000,12 +5030,14 @@ func (m *Model) restartSession() tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("session has no working directory")}
 		}
 
+		logf("session=%s remote=%s@%s workingDir=%s agent=%s", s.TmuxSession, remote.User, remote.Host, workingDir, sessionCfg.Agent.Command)
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
 		// Step 1: terminate any existing mutagen syncs (local commands, fast).
 		// Also terminate by the DB-stored MutagenSyncID in case it differs from
 		// the computed name (e.g. session was created by an older code version).
 		m.sendStatus("Terminating existing syncs...")
+		logf("step1: terminating syncs")
 		syncName := "aiman-sync-" + s.ID
 		tempSyncName := syncName + "-pull"
 		toTerminate := []string{syncName, tempSyncName, s.TmuxSession}
@@ -5020,6 +5052,7 @@ func (m *Model) restartSession() tea.Cmd {
 
 		// Step 2: build the agent command (PrepareSession with nil issue avoids SSH task-file writes).
 		m.sendStatus(fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
+		logf("step2: preparing agent command")
 		agentCmd := sessionCfg.Agent.Command
 		if flowManager != nil && flowManager.SkillEngine != nil {
 			prepared, err := flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *sessionCfg.Agent, sessionCfg.Skills, sessionCfg.PromptFree, nil, sessionCfg.PriorSnapshot)
@@ -5047,6 +5080,7 @@ func (m *Model) restartSession() tea.Cmd {
 		// Step 3: reset the SSH ControlMaster socket so we get a fresh connection
 		// for the restart call, avoiding any stale multiplexer state.
 		m.sendStatus("Resetting SSH connection...")
+		logf("step3: resetting SSH socket")
 		mgr.ResetControlSocket()
 
 		// Step 4: kill the existing tmux session and start a fresh one (single SSH call).
@@ -5057,13 +5091,17 @@ func (m *Model) restartSession() tea.Cmd {
 			s.TmuxSession,
 			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap, s.TmuxSession,
 		)
+		logf("step4: running startCmd=%s", startCmd)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
+			logf("step4 FAILED: %v", tmuxErr)
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session %q in %q: %w", s.TmuxSession, workingDir, tmuxErr)}
 		}
+		logf("step4 ok")
 
 		// Step 5: re-establish mutagen sync.
 		m.sendStatus("Establishing file sync...")
+		logf("step5: starting mutagen sync %s", syncName)
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
 		localSyncPath := filepath.Join(home, config.DirName, "work", s.ID)
@@ -5079,11 +5117,16 @@ func (m *Model) restartSession() tea.Cmd {
 		var syncWarning string
 		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeTwoWay)
 		if syncErr == nil {
+			logf("step5 ok, sync=%s", syncName)
 			s.MutagenSyncID = syncName
 			s.LocalPath = localSyncPath
-			_ = s.Transition(domain.SessionStatusSyncing)
+			// Directly set status — Transition() enforces the provisioning state machine
+			// which doesn't support INACTIVE→Syncing; for restarts we bypass it.
+			s.Status = domain.SessionStatusSyncing
 		} else {
+			logf("step5 sync FAILED: %v", syncErr)
 			syncWarning = fmt.Sprintf("session restarted but sync failed: %v", syncErr)
+			s.Status = domain.SessionStatusActive
 		}
 
 		if db != nil {
