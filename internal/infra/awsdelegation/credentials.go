@@ -52,9 +52,6 @@ func GetTemporaryCredentials(ctx context.Context, profile string, opts ...Creden
 	if len(opts) > 0 {
 		o = opts[0]
 	}
-	if o.DurationSeconds <= 0 {
-		o.DurationSeconds = DefaultDurationSeconds
-	}
 
 	// assume-role is needed only when we are switching identity (RoleARN) or
 	// further restricting permissions via an inline session policy.
@@ -73,7 +70,16 @@ func GetTemporaryCredentials(ctx context.Context, profile string, opts ...Creden
 		if sessionName == "" {
 			sessionName = "aiman"
 		}
+		// Do NOT apply DefaultDurationSeconds for assume-role: the role's MaxSessionDuration
+		// (set in IAM, typically 1h) caps the value and would cause a ValidationError.
+		// Only pass --duration-seconds when the user explicitly configured it.
 		return getAssumeRoleCreds(ctx, roleARN, sessionName, profile, o.SessionPolicy, o.DurationSeconds)
+	}
+
+	// For get-session-token, default to DefaultDurationSeconds (12h) when not configured.
+	dur := o.DurationSeconds
+	if dur <= 0 {
+		dur = DefaultDurationSeconds
 	}
 
 	p := strings.TrimSpace(profile)
@@ -81,8 +87,8 @@ func GetTemporaryCredentials(ctx context.Context, profile string, opts ...Creden
 	if p != "" {
 		args = append(args, "--profile", p)
 	}
-	if o.DurationSeconds > 0 {
-		args = append(args, "--duration-seconds", fmt.Sprintf("%d", o.DurationSeconds))
+	if dur > 0 {
+		args = append(args, "--duration-seconds", fmt.Sprintf("%d", dur))
 	}
 
 	cmd := exec.CommandContext(ctx, "aws", args...)
