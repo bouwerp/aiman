@@ -111,7 +111,7 @@ type AWSDelegation struct {
 	Region          string   `yaml:"region,omitempty"`           // written into the remote profile as "region = <value>"
 	Regions         []string `yaml:"regions,omitempty"`          // restrict credentials via aws:RequestedRegion condition policy; default ["us-east-2"] in UI
 	SessionPolicy   string   `yaml:"session_policy,omitempty"`   // inline JSON IAM policy passed to sts assume-role --policy
-	DurationSeconds int      `yaml:"duration_seconds,omitempty"` // credential lifetime 900–43200; 0 = AWS default
+	DurationSeconds int      `yaml:"duration_seconds,omitempty"` // credential lifetime 900–43200; 0 = DefaultDurationSeconds (43200)
 }
 
 // AllDelegations returns all AWSDelegation entries for the remote, combining

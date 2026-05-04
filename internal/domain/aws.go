@@ -10,5 +10,5 @@ type AWSConfig struct {
 	Region          string   // written into the remote AWS profile as "region"
 	Regions         []string // restrict via aws:RequestedRegion condition policy
 	SessionPolicy   string   // inline JSON IAM policy passed to sts assume-role
-	DurationSeconds int      // credential lifetime 900–43200; 0 = AWS default
+	DurationSeconds int      // credential lifetime 900–43200; 0 = DefaultDurationSeconds (43200)
 }

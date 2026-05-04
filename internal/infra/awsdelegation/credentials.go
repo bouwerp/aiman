@@ -19,6 +19,9 @@ type getSessionTokenOutput struct {
 	Credentials SessionCredentials `json:"Credentials"`
 }
 
+// DefaultDurationSeconds is the credential lifetime used when no duration is configured (12 hours).
+const DefaultDurationSeconds = 43200
+
 // CredentialOptions carries optional restrictions for temporary credential minting.
 // When RoleARN or SessionPolicy are set, assume-role is used.
 // DurationSeconds alone (without RoleARN/SessionPolicy) passes --duration-seconds to get-session-token.
@@ -27,8 +30,7 @@ type CredentialOptions struct {
 	// temporary credentials. Requires RoleARN — get-session-token does not
 	// support inline session policies. Passed as --policy to sts assume-role.
 	SessionPolicy string
-	// DurationSeconds is the credential lifetime (900–43200). 0 means AWS default.
-	// When used alone (without RoleARN/SessionPolicy), passed to get-session-token.
+	// DurationSeconds is the credential lifetime (900–43200). 0 uses DefaultDurationSeconds (43200).
 	DurationSeconds int
 	// RoleARN, when set, causes assume-role to be used instead of get-session-token.
 	// Required when SessionPolicy is set.
@@ -42,12 +44,16 @@ type CredentialOptions struct {
 // Decision table:
 //   - RoleARN set OR SessionPolicy set → `aws sts assume-role` (role must exist and trust caller).
 //     SessionPolicy alone without a RoleARN is rejected with an actionable error.
-//   - Only DurationSeconds set (no RoleARN, no SessionPolicy) → `aws sts get-session-token --duration-seconds`.
-//   - Nothing set → `aws sts get-session-token`.
+//   - Otherwise → `aws sts get-session-token`.
+//
+// DurationSeconds defaults to DefaultDurationSeconds (43200 = 12 h) when not set.
 func GetTemporaryCredentials(ctx context.Context, profile string, opts ...CredentialOptions) (*SessionCredentials, error) {
 	var o CredentialOptions
 	if len(opts) > 0 {
 		o = opts[0]
+	}
+	if o.DurationSeconds <= 0 {
+		o.DurationSeconds = DefaultDurationSeconds
 	}
 
 	// assume-role is needed only when we are switching identity (RoleARN) or
