@@ -160,11 +160,16 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 			cancel()
 
 			// Build a set of all profiles to show:
-			// • every profile found on the remote
+			// • every profile found on the remote (excluding aiman-managed session profiles)
 			// • every profile declared in config (even if not pushed yet)
 			seen := map[string]bool{}
 			var profiles []string
 			for _, p := range remoteProfiles {
+				// Skip session-scoped profiles created by aiman (e.g. "aiman-a1b2c3d4").
+				// These are managed internally and are not user-configured delegation profiles.
+				if strings.HasPrefix(p, "aiman-") {
+					continue
+				}
 				if !seen[p] {
 					seen[p] = true
 					profiles = append(profiles, p)
