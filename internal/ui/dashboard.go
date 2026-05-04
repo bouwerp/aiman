@@ -1244,6 +1244,7 @@ type sessionCreateMsg struct {
 	session domain.Session
 	err     error
 	status  string // optional progress message
+	warning string // non-fatal warning to surface after completion
 }
 
 type attachMsg struct {
@@ -4552,6 +4553,11 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetItems(items)
 		m.restartingSession = nil
 
+		if msg.warning != "" {
+			m.snapshotToast = "⚠️  " + msg.warning
+			m.snapshotToastError = true
+		}
+
 		// Fetch preview for the session
 		m.activeSession = msg.session.TmuxSession
 		m.tmuxOutput = "Loading..."
@@ -4997,7 +5003,7 @@ func (m *Model) restartSession() tea.Cmd {
 		// Step 1: terminate any existing mutagen syncs (local commands, fast).
 		// Also terminate by the DB-stored MutagenSyncID in case it differs from
 		// the computed name (e.g. session was created by an older code version).
-		m.sendStatus("Cleaning up existing syncs...")
+		m.sendStatus("Terminating existing syncs...")
 		syncName := "aiman-sync-" + s.ID
 		tempSyncName := syncName + "-pull"
 		toTerminate := []string{syncName, tempSyncName, s.TmuxSession}
@@ -5006,11 +5012,12 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 		for _, name := range toTerminate {
 			terminateCtx, terminateCancel := context.WithTimeout(ctx, 10*time.Second)
-			_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", name).Run()
+			_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", name).Run() // #nosec G204
 			terminateCancel()
 		}
 
 		// Step 2: build the agent command (PrepareSession with nil issue avoids SSH task-file writes).
+		m.sendStatus(fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
 		agentCmd := sessionCfg.Agent.Command
 		if flowManager != nil && flowManager.SkillEngine != nil {
 			prepared, err := flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *sessionCfg.Agent, sessionCfg.Skills, sessionCfg.PromptFree, nil, sessionCfg.PriorSnapshot)
@@ -5037,11 +5044,12 @@ func (m *Model) restartSession() tea.Cmd {
 
 		// Step 3: reset the SSH ControlMaster socket so we get a fresh connection
 		// for the restart call, avoiding any stale multiplexer state.
+		m.sendStatus("Resetting SSH connection...")
 		mgr.ResetControlSocket()
 
 		// Step 4: kill the existing tmux session and start a fresh one (single SSH call).
 		// The worktree is preserved — only the tmux process is replaced.
-		m.sendStatus(fmt.Sprintf("Starting tmux session %q in %q...", s.TmuxSession, workingDir))
+		m.sendStatus(fmt.Sprintf("Starting %s in %q...", s.TmuxSession, workingDir))
 		startCmd := fmt.Sprintf(
 			"(tmux kill-session -t %q 2>/dev/null || true); tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && (tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true)",
 			s.TmuxSession,
@@ -5053,7 +5061,7 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		// Step 5: re-establish mutagen sync.
-		m.sendStatus("Establishing sync...")
+		m.sendStatus("Establishing file sync...")
 		mutagenEngine := mutagen.NewEngine()
 		home, _ := os.UserHomeDir()
 		localSyncPath := filepath.Join(home, config.DirName, "work", s.ID)
@@ -5066,17 +5074,20 @@ func (m *Model) restartSession() tea.Cmd {
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
 		labels := map[string]string{"aiman-id": s.ID}
 
+		var syncWarning string
 		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeTwoWay)
 		if syncErr == nil {
 			s.MutagenSyncID = syncName
 			s.LocalPath = localSyncPath
 			_ = s.Transition(domain.SessionStatusSyncing)
+		} else {
+			syncWarning = fmt.Sprintf("session restarted but sync failed: %v", syncErr)
 		}
 
 		if db != nil {
 			_ = db.Save(ctx, s)
 		}
-		return sessionCreateMsg{session: *s}
+		return sessionCreateMsg{session: *s, warning: syncWarning}
 	}
 }
 
@@ -5120,7 +5131,7 @@ func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch km.String() {
-		case "y":
+		case "y", "enter":
 			m.loadingMsg = "Scanning available agents..."
 			m.loadingNext = viewStateRestartAgentPicker
 			m.state = viewStateLoading
