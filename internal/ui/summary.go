@@ -214,32 +214,9 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			if m.focusIndex == m.buttonFocusIndex() && m.agent != nil {
+			// Always confirm immediately when an agent is selected.
+			if m.agent != nil {
 				m.confirmed = true
-				return m, nil
-			}
-			// Toggle secret on enter (same as space) when on a secret row.
-			if m.focusIndex >= m.secretFocusStart() && m.focusIndex < m.buttonFocusIndex() {
-				idx := m.focusIndex - m.secretFocusStart()
-				if idx < len(m.allSecrets) {
-					key := m.allSecrets[idx].Key
-					if m.selectedSecrets == nil {
-						m.selectedSecrets = make(map[string]bool)
-					}
-					m.selectedSecrets[key] = !m.selectedSecrets[key]
-				}
-				return m, nil
-			}
-			// Move focus forward on enter in text inputs
-			if (m.awsEnabled || m.openRouterEnabled) && m.focusIndex < len(m.inputs) {
-				m.focusIndex++
-				for i := range m.inputs {
-					if i == m.focusIndex {
-						m.inputs[i].Focus()
-					} else {
-						m.inputs[i].Blur()
-					}
-				}
 				return m, nil
 			}
 		}
