@@ -2026,6 +2026,63 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateMain
 		}
 		return m, nil
+	case sessionCreateMsg:
+		// Handled globally so that the result is never dropped if an unrelated message
+		// transitions the model out of viewStateLoading while the restart goroutine runs.
+		if msg.status != "" {
+			if m.state == viewStateLoading {
+				m.loadingMsg = msg.status
+			}
+			m.provisioningStatusMsg = msg.status
+			return m, nil
+		}
+		if msg.err != nil {
+			if msg.err.Error() == "WORKTREE_EXISTS" {
+				m.state = viewStateWorktreeExists
+				return m, nil
+			}
+			m.lastError = fmt.Sprintf("Failed to create/restart session: %v", msg.err)
+			m.state = viewStateError
+			return m, nil
+		}
+
+		items := m.list.Items()
+		found := false
+		for i, it := range items {
+			if sessItem, ok := it.(item); ok && sessItem.session.ID == msg.session.ID {
+				sessItem.session = msg.session
+				items[i] = sessItem
+				m.list.Select(i)
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.allSessions = append(m.allSessions, msg.session)
+			items = append(items, m.makeItem(msg.session))
+			m.list.Select(len(items) - 1)
+		} else {
+			for i, s := range m.allSessions {
+				if s.ID == msg.session.ID {
+					m.allSessions[i] = msg.session
+					break
+				}
+			}
+		}
+		m.list.SetItems(items)
+		m.restartingSession = nil
+
+		if msg.warning != "" {
+			m.snapshotToast = "⚠️  " + msg.warning
+			m.snapshotToastError = true
+		}
+
+		m.activeSession = msg.session.TmuxSession
+		m.tmuxOutput = "Loading..."
+		m.viewport.SetContent(m.tmuxOutput)
+		m.state = m.loadingNext
+
+		return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session))
 	}
 
 	switch m.state {
@@ -4505,66 +4562,6 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentPicker.SetSize(m.width-h, m.height-v)
 		m.state = m.loadingNext
 		return m, nil
-	case sessionCreateMsg:
-		if msg.status != "" {
-			m.loadingMsg = msg.status
-			m.provisioningStatusMsg = msg.status
-			return m, nil
-		}
-		if msg.err != nil {
-			// Check if it's a worktree exists error
-			if msg.err.Error() == "WORKTREE_EXISTS" {
-				m.state = viewStateWorktreeExists
-				return m, nil
-			}
-			m.lastError = fmt.Sprintf("Failed to create/restart session: %v", msg.err)
-			m.state = viewStateError
-			return m, nil
-		}
-
-		items := m.list.Items()
-		found := false
-		// Update existing session in the list if it already exists (matches by ID)
-		for i, it := range items {
-			if sessItem, ok := it.(item); ok && sessItem.session.ID == msg.session.ID {
-				sessItem.session = msg.session
-				items[i] = sessItem
-				m.list.Select(i)
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			// Add new session to allSessions and list
-			m.allSessions = append(m.allSessions, msg.session)
-			items = append(items, m.makeItem(msg.session))
-			m.list.Select(len(items) - 1)
-		} else {
-			// Update in allSessions too
-			for i, s := range m.allSessions {
-				if s.ID == msg.session.ID {
-					m.allSessions[i] = msg.session
-					break
-				}
-			}
-		}
-
-		m.list.SetItems(items)
-		m.restartingSession = nil
-
-		if msg.warning != "" {
-			m.snapshotToast = "⚠️  " + msg.warning
-			m.snapshotToastError = true
-		}
-
-		// Fetch preview for the session
-		m.activeSession = msg.session.TmuxSession
-		m.tmuxOutput = "Loading..."
-		m.viewport.SetContent(m.tmuxOutput)
-		m.state = m.loadingNext
-
-		return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session))
 	}
 	return m, nil
 }
@@ -4940,13 +4937,18 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
+		m.agentPicker.selected = nil // prevent re-dispatch on subsequent keypresses
 		m.sessionCfg.OpenRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
 		// Inject all globally stored secrets on restart.
 		if secrets, err := m.db.ListSecrets(context.Background()); err == nil {
 			m.sessionCfg.EnvSecrets = secrets
 		}
 		m.priorSnapshotCandidate = nil
-		// Check for a prior snapshot before restarting — let the user preview it.
+		// Transition to loading while we check for a prior snapshot; snapshotPreviewMsg
+		// is handled globally so it will be caught regardless of which state we're in.
+		m.loadingMsg = "Checking for prior snapshot..."
+		m.loadingNext = viewStateMain
+		m.state = viewStateLoading
 		return m, loadPriorSnapshotCmd(m.snapshotManager, m.restartingSession.ID)
 	}
 
@@ -5148,7 +5150,7 @@ func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleSnapshotPreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch km.String() {
-		case "y":
+		case "y", "enter":
 			m.sessionCfg.PriorSnapshot = m.priorSnapshotCandidate
 			if m.priorSnapshotCandidate != nil {
 				_ = m.db.MarkSnapshotInjected(context.Background(), m.priorSnapshotCandidate.ID)
