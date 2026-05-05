@@ -249,7 +249,7 @@ func TestPrepareSession_OpenCodeWithIssue_UsesSendKeys(t *testing.T) {
 	}
 }
 
-func TestPrepareSession_CopilotPreservesLaunchCommand(t *testing.T) {
+func TestPrepareSession_CopilotAddsAllowAll(t *testing.T) {
 	cfg := &config.Config{}
 	engine := NewEngine(cfg)
 	remote := newMockRemote()
@@ -262,8 +262,32 @@ func TestPrepareSession_CopilotPreservesLaunchCommand(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if result.Command != "copilot" {
-		t.Errorf("expected copilot command to be preserved, got: %s", result.Command)
+	if !strings.Contains(result.Command, "--allow-all") {
+		t.Errorf("expected --allow-all in command, got: %s", result.Command)
+	}
+	if strings.Contains(result.Command, "--autopilot") {
+		t.Errorf("expected no --autopilot when promptFree=false, got: %s", result.Command)
+	}
+}
+
+func TestPrepareSession_CopilotPromptFreeAddsAutopilot(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result.Command, "--allow-all") {
+		t.Errorf("expected --allow-all in command, got: %s", result.Command)
+	}
+	if !strings.Contains(result.Command, "--autopilot") {
+		t.Errorf("expected --autopilot when promptFree=true, got: %s", result.Command)
 	}
 }
 
