@@ -72,6 +72,10 @@ type awsCredRenewResultMsg struct {
 	err error
 }
 
+// awsCredBatchRenewResultMsg carries results for multiple profiles renewed sequentially
+// on the same remote host (used by renewHostCmd to avoid concurrent file write races).
+type awsCredBatchRenewResultMsg []awsCredRenewResultMsg
+
 // --- constructor ---
 
 func NewAWSCredentialsModel(cfg *config.Config, db interface{}) AWSCredentialsModel {
@@ -334,6 +338,96 @@ func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 	}
 }
 
+// renewHostCmd renews multiple profiles on the same remote host sequentially within a
+// single goroutine. This prevents the read-modify-write race that occurs when concurrent
+// goroutines all read ~/.aws/credentials, merge their own profile, and write back —
+// causing all but the last writer to be silently overwritten.
+func (m AWSCredentialsModel) renewHostCmd(entries []awsHostEntry) tea.Cmd {
+	if len(entries) == 0 {
+		return nil
+	}
+	remote := entries[0].remote
+	entriesCopy := append([]awsHostEntry(nil), entries...)
+	return func() tea.Msg {
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		timeout := time.Duration(len(entriesCopy)+1) * 90 * time.Second
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		results := make(awsCredBatchRenewResultMsg, 0, len(entriesCopy))
+		for _, e := range entriesCopy {
+			if e.del == nil {
+				results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("no AWS delegation config")})
+				continue
+			}
+			d := e.del
+			src := strings.TrimSpace(d.SourceProfile)
+
+			sessionPolicy := d.SessionPolicy
+			if sessionPolicy == "" && len(d.Regions) > 0 {
+				sessionPolicy = awsdelegation.BuildRegionPolicy(d.Regions)
+			}
+
+			var roleARN string
+			if d.ManagedRole {
+				accountID := strings.TrimSpace(d.AccountID)
+				roleName := strings.TrimSpace(d.RoleName)
+				if roleName == "" {
+					roleName = awsdelegation.DefaultDelegatedRoleName
+				}
+				if accountID == "" {
+					results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("managed_role requires account_id")})
+					continue
+				}
+				var err error
+				roleARN, err = awsdelegation.EnsureRole(ctx, src, accountID, roleName)
+				if err != nil {
+					results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("ensure managed role: %w", err)})
+					continue
+				}
+			} else if sessionPolicy != "" && strings.TrimSpace(d.AccountID) != "" {
+				var err error
+				roleARN, err = awsdelegation.RoleARNFromParts(d.AccountID, d.RoleName)
+				if err != nil {
+					results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("build role ARN: %w", err)})
+					continue
+				}
+			}
+
+			opts := awsdelegation.CredentialOptions{
+				SessionPolicy:   sessionPolicy,
+				DurationSeconds: d.DurationSeconds,
+				RoleARN:         roleARN,
+				SessionName:     "aiman",
+			}
+			creds, err := awsdelegation.GetTemporaryCredentials(ctx, src, opts)
+			if err != nil {
+				results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("get temporary credentials: %w", err)})
+				continue
+			}
+
+			if err := awsdelegation.ApplyDelegatedCredentials(ctx, mgr, e.remoteProfile, creds); err != nil {
+				results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("push credentials: %w", err)})
+				continue
+			}
+
+			configRoleARN := ""
+			configSrc := ""
+			if !d.SyncCredentials {
+				configRoleARN = roleARN
+				configSrc = src
+			}
+			if err := awsdelegation.ApplyDelegatedProfile(ctx, mgr, e.remoteProfile, configRoleARN, configSrc, d.Region); err != nil {
+				results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("push profile config: %w", err)})
+				continue
+			}
+
+			results = append(results, awsCredRenewResultMsg{key: e.key, err: nil})
+		}
+		return results
+	}
+}
+
 func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case awsCredLoadedMsg:
@@ -372,6 +466,31 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.checkCredsCmd()
 
+	case awsCredBatchRenewResultMsg:
+		var failMsgs []string
+		for _, r := range msg {
+			delete(m.renewing, r.key)
+			for i, e := range m.entries {
+				if e.key == r.key {
+					if r.err != nil {
+						m.entries[i].status = awsCredStatusExpired
+						m.entries[i].err = r.err
+						failMsgs = append(failMsgs, fmt.Sprintf("%s [%s]: %v", e.userAtHost, e.remoteProfile, r.err))
+					} else {
+						m.entries[i].status = awsCredStatusChecking
+						m.entries[i].err = nil
+					}
+					break
+				}
+			}
+		}
+		if len(failMsgs) > 0 {
+			m.message = "✗ " + strings.Join(failMsgs, "; ")
+		} else {
+			m.message = "Renewed — verifying…"
+		}
+		return m, m.checkCredsCmd()
+
 	case tea.KeyMsg:
 		m.message = ""
 		switch msg.String() {
@@ -396,21 +515,39 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "R":
-			var cmds []tea.Cmd
+			// Group entries by host so that profiles on the same remote are renewed
+			// sequentially — concurrent reads+writes to ~/.aws/credentials would race,
+			// leaving only the last writer's profile in the file.
+			type hostGroup struct{ entries []awsHostEntry }
+			hostOrder := []string{}
+			groups := map[string]*hostGroup{}
 			count := 0
 			for i, e := range m.entries {
 				if e.del == nil {
-					continue // can't renew without local config
+					continue
 				}
 				if (e.status == awsCredStatusExpired || e.status == awsCredStatusNotPushed) && !m.renewing[e.key] {
 					m.renewing[e.key] = true
 					m.entries[i].status = awsCredStatusChecking
-					cmds = append(cmds, m.renewCmd(e))
+					if _, ok := groups[e.userAtHost]; !ok {
+						groups[e.userAtHost] = &hostGroup{}
+						hostOrder = append(hostOrder, e.userAtHost)
+					}
+					groups[e.userAtHost].entries = append(groups[e.userAtHost].entries, e)
 					count++
 				}
 			}
 			if count > 0 {
-				m.message = fmt.Sprintf("Renewing %d host(s)…", count)
+				var cmds []tea.Cmd
+				for _, host := range hostOrder {
+					g := groups[host]
+					if len(g.entries) == 1 {
+						cmds = append(cmds, m.renewCmd(g.entries[0]))
+					} else {
+						cmds = append(cmds, m.renewHostCmd(g.entries))
+					}
+				}
+				m.message = fmt.Sprintf("Renewing %d credential(s)…", count)
 				return m, tea.Batch(cmds...)
 			}
 			m.message = "No expired or unprovisioned credentials to renew."
