@@ -1677,6 +1677,14 @@ func (m *Model) runTerminateStep(index int) error {
 				return fmt.Errorf("no remote configured")
 			}
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+
+			// Safety: never reset/clean the main repository itself.
+			gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
+			if strings.TrimSpace(gitDirOut) == ".git" {
+				m.log("ERROR: refusing to discard changes in %s — it is the main git repository", s.WorktreePath)
+				return fmt.Errorf("refusing to discard changes in %q: this is the main repository — manual cleanup required", s.WorktreePath)
+			}
+
 			_, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q reset --hard HEAD && git -C %q clean -fd'", s.WorktreePath, s.WorktreePath))
 			return err
 		}
@@ -1740,6 +1748,17 @@ func (m *Model) runTerminateStep(index int) error {
 				m.log("ERROR: refusing to delete worktree %s — resolved path %s is unsafe", s.WorktreePath, cleanResolvedWT)
 				return fmt.Errorf("refusing to delete worktree %q: resolved path is unsafe — manual cleanup required", s.WorktreePath)
 			}
+		}
+
+		// Definitive safety check: ask git whether this path is the main repository.
+		// git rev-parse --git-dir returns ".git" (relative) for main repos and an
+		// absolute path containing "/worktrees/" for linked worktrees. This is reliable
+		// regardless of how mainRepoPath was computed from config.
+		gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
+		gitDir := strings.TrimSpace(gitDirOut)
+		if gitDir == ".git" {
+			m.log("ERROR: refusing to delete %s — git identifies it as the main repository", s.WorktreePath)
+			return fmt.Errorf("refusing to delete %q: git identifies this as a main repository — manual cleanup required", s.WorktreePath)
 		}
 
 		m.log("Terminating session: removing worktree %s", s.WorktreePath)
