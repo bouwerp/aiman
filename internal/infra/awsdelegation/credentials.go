@@ -70,10 +70,19 @@ func GetTemporaryCredentials(ctx context.Context, profile string, opts ...Creden
 		if sessionName == "" {
 			sessionName = "aiman"
 		}
-		// Do NOT apply DefaultDurationSeconds for assume-role: the role's MaxSessionDuration
-		// (set in IAM, typically 1h) caps the value and would cause a ValidationError.
-		// Only pass --duration-seconds when the user explicitly configured it.
-		return getAssumeRoleCreds(ctx, roleARN, sessionName, profile, o.SessionPolicy, o.DurationSeconds)
+		// Apply DefaultDurationSeconds when no explicit duration is configured.
+		// If the role's MaxSessionDuration is shorter, AWS returns a ValidationError —
+		// in that case we retry without the flag so the role's own maximum is used.
+		dur := o.DurationSeconds
+		if dur <= 0 {
+			dur = DefaultDurationSeconds
+		}
+		creds, err := getAssumeRoleCreds(ctx, roleARN, sessionName, profile, o.SessionPolicy, dur)
+		if err != nil && strings.Contains(err.Error(), "MaxSessionDuration") && o.DurationSeconds <= 0 {
+			// Role's MaxSessionDuration is less than our default; fall back to the role's own max.
+			creds, err = getAssumeRoleCreds(ctx, roleARN, sessionName, profile, o.SessionPolicy, 0)
+		}
+		return creds, err
 	}
 
 	// For get-session-token, default to DefaultDurationSeconds (12h) when not configured.
