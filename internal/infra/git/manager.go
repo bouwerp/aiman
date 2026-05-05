@@ -263,6 +263,11 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	// Worktree is placed alongside the main repository
 	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
 
+	// Safety: if worktreeDir == repoName the computed path resolves to the main repo.
+	if filepath.Clean(filepath.Join(repoPath, "..", worktreeDir)) == filepath.Clean(repoPath) {
+		return domain.Worktree{}, fmt.Errorf("branch name %q would place the worktree inside the main repository directory — choose a different name", branch)
+	}
+
 	// Ensure repo exists
 	if err := remote.ValidateDir(ctx, repoPath); err != nil {
 		if repo.URL != "" {
@@ -390,6 +395,11 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 
 	worktreeDir := strings.ReplaceAll(branch, "/", "-")
 	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
+
+	// Safety: if worktreeDir == repoName the computed path resolves to the main repo.
+	if filepath.Clean(filepath.Join(repoPath, "..", worktreeDir)) == filepath.Clean(repoPath) {
+		return domain.Worktree{}, fmt.Errorf("branch name %q would place the worktree inside the main repository directory — choose a different name", branch)
+	}
 
 	// Check for existing worktree for this branch via git worktree list
 	listOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s worktree list --porcelain", repoPath))

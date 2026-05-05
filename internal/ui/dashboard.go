@@ -1711,24 +1711,35 @@ func (m *Model) runTerminateStep(index int) error {
 		repoName := extractRepoName(s.RepoName)
 		mainRepoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
 
-		// Safety: never delete the main repository itself.
-		// Resolve both paths on the remote to their canonical forms so that
-		// symlinks and `..` components don't bypass the check.
+		// Safety: never delete the main repository itself or the remote root.
+		// First apply path.Clean-based checks that work without a remote round-trip
+		// and that handle `../` components embedded in stored paths.
+		cleanWorktree := path.Clean(s.WorktreePath)
+		cleanRoot := path.Clean(remote.Root)
+		cleanMain := path.Clean(mainRepoPath)
+		switch {
+		case cleanWorktree == "/" || cleanWorktree == ".":
+			m.log("ERROR: refusing to delete %s — filesystem root or dot path", s.WorktreePath)
+			return fmt.Errorf("refusing to delete %q: path is unsafe", s.WorktreePath)
+		case cleanWorktree == cleanRoot:
+			m.log("ERROR: refusing to delete %s — equals remote root %s", s.WorktreePath, remote.Root)
+			return fmt.Errorf("refusing to delete %q: path is the remote root — manual cleanup required", s.WorktreePath)
+		case cleanWorktree == cleanMain:
+			m.log("ERROR: refusing to delete %s — equals main repository %s", s.WorktreePath, mainRepoPath)
+			return fmt.Errorf("refusing to delete %q: path is the main repository — manual cleanup required", s.WorktreePath)
+		}
+
+		// Secondary check: resolve both paths on the remote to catch symlinks.
 		resolvedWorktree, resolveErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", s.WorktreePath, s.WorktreePath, s.WorktreePath))
 		resolvedMain, resolveMainErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", mainRepoPath, mainRepoPath, mainRepoPath))
 
 		if resolveErr == nil && resolveMainErr == nil {
-			if strings.TrimSpace(resolvedWorktree) == strings.TrimSpace(resolvedMain) {
-				m.log("ERROR: refusing to delete worktree %s — it resolves to the main repository %s", s.WorktreePath, mainRepoPath)
-				return fmt.Errorf("refusing to delete worktree %q: path resolves to the main repository — manual cleanup required", s.WorktreePath)
+			cleanResolvedWT := path.Clean(strings.TrimSpace(resolvedWorktree))
+			cleanResolvedMain := path.Clean(strings.TrimSpace(resolvedMain))
+			if cleanResolvedWT == cleanResolvedMain || cleanResolvedWT == cleanRoot || cleanResolvedWT == "/" {
+				m.log("ERROR: refusing to delete worktree %s — resolved path %s is unsafe", s.WorktreePath, cleanResolvedWT)
+				return fmt.Errorf("refusing to delete worktree %q: resolved path is unsafe — manual cleanup required", s.WorktreePath)
 			}
-		}
-		// Also guard against the worktree path being a parent of (or equal to) the remote root.
-		cleanWorktree := path.Clean(s.WorktreePath)
-		cleanRoot := path.Clean(remote.Root)
-		if cleanWorktree == cleanRoot || cleanWorktree == "/" || cleanWorktree == "." {
-			m.log("ERROR: refusing to delete worktree %s — unsafe path (equals root or remote root)", s.WorktreePath)
-			return fmt.Errorf("refusing to delete worktree %q: path is unsafe", s.WorktreePath)
 		}
 
 		m.log("Terminating session: removing worktree %s", s.WorktreePath)

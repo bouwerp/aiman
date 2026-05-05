@@ -188,6 +188,46 @@ func TestSetupRemoteWorktreeFromBranch_DirectoryAlreadyExists(t *testing.T) {
 	}
 }
 
+func TestSetupRemoteWorktreeFromBranch_BranchNameEqualsRepoName(t *testing.T) {
+	mgr := NewManager(nil)
+
+	remote := &mockRemote{
+		root: "/home/dev",
+		dirs: map[string]bool{"/home/dev/myrepo": true},
+		outputs: map[string]string{
+			"git -C /home/dev/myrepo fetch origin": "",
+		},
+	}
+
+	_, err := mgr.SetupRemoteWorktreeFromBranch(context.Background(), remote, domain.Repo{Name: "myrepo"}, "myrepo")
+	if err == nil {
+		t.Fatal("expected error when branch name equals repo name, got nil")
+	}
+	if !strings.Contains(err.Error(), "main repository directory") {
+		t.Errorf("expected error about main repository directory, got: %v", err)
+	}
+}
+
+func TestSetupRemoteWorktree_BranchNameEqualsRepoName(t *testing.T) {
+	mgr := NewManager(nil)
+
+	remote := &mockRemote{
+		root: "/home/dev",
+		dirs: map[string]bool{"/home/dev/myrepo": true},
+		outputs: map[string]string{
+			"git -C /home/dev/myrepo fetch origin": "",
+		},
+	}
+
+	_, err := mgr.SetupRemoteWorktree(context.Background(), remote, domain.Repo{Name: "myrepo"}, "myrepo")
+	if err == nil {
+		t.Fatal("expected error when branch name equals repo name, got nil")
+	}
+	if !strings.Contains(err.Error(), "main repository directory") {
+		t.Errorf("expected error about main repository directory, got: %v", err)
+	}
+}
+
 func TestAimanTaskGitignoreBashScript_ContainsWTAndRules(t *testing.T) {
 	s := aimanTaskGitignoreBashScript("/home/dev/wt")
 	if !strings.Contains(s, ".aiman_task.md") {
