@@ -5159,21 +5159,52 @@ func (m *Model) restartSession() tea.Cmd {
 		logf("step3: resetting SSH socket")
 		mgr.ResetControlSocket()
 
-		// Step 4: kill the existing tmux session and start a fresh one (single SSH call).
-		// The worktree is preserved — only the tmux process is replaced.
+		// Step 4: verify the working directory exists, kill the existing tmux session,
+		// and start a fresh one. The worktree is preserved — only the tmux process is replaced.
+		m.sendStatus(fmt.Sprintf("Checking working directory %q...", workingDir))
+		logf("step4a: checking workingDir=%s", workingDir)
+		if _, dirErr := mgr.Execute(ctx, fmt.Sprintf("test -d %q", workingDir)); dirErr != nil {
+			logf("step4a FAILED: working directory does not exist: %v", dirErr)
+			return sessionCreateMsg{err: fmt.Errorf(
+				"working directory %q no longer exists on the remote (the worktree may have been deleted). "+
+					"Please delete this session and create a new one.", workingDir)}
+		}
+		logf("step4a ok: workingDir exists")
+
 		m.sendStatus(fmt.Sprintf("Starting %s in %q...", s.TmuxSession, workingDir))
+		// Use ; + explicit $RC to preserve new-session exit code while still
+		// setting remain-on-exit unconditionally — avoids the race where the
+		// pane exits between new-session and the && set-window-option call.
 		startCmd := fmt.Sprintf(
-			"(tmux kill-session -t %q 2>/dev/null || true); tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\" && (tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true)",
+			"(tmux kill-session -t %q 2>/dev/null || true); tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\"; _RC=$?; tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; exit $_RC",
 			s.TmuxSession,
 			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap, s.TmuxSession,
 		)
-		logf("step4: running startCmd=%s", startCmd)
+		logf("step4b: running startCmd=%s", startCmd)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
 		if tmuxErr != nil {
-			logf("step4 FAILED: %v", tmuxErr)
+			logf("step4b FAILED: %v", tmuxErr)
 			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session %q in %q: %w", s.TmuxSession, workingDir, tmuxErr)}
 		}
-		logf("step4 ok")
+		logf("step4b ok: new-session succeeded")
+
+		// Step 4c: verify the session actually exists (it can exit immediately if, e.g., the
+		// login shell profile contains an early `exit` or the agent command is misconfigured).
+		m.sendStatus(fmt.Sprintf("Verifying session %s...", s.TmuxSession))
+		logf("step4c: verifying session exists")
+		time.Sleep(800 * time.Millisecond)
+		if _, verifyErr := mgr.Execute(ctx, fmt.Sprintf("tmux has-session -t %q", s.TmuxSession)); verifyErr != nil {
+			logf("step4c FAILED: session disappeared after creation: %v", verifyErr)
+			// Capture whatever output is in the pane before giving up.
+			paneOut, _ := mgr.Execute(ctx, fmt.Sprintf("tmux capture-pane -p -t %q 2>/dev/null || echo '(session already gone)'", s.TmuxSession))
+			return sessionCreateMsg{err: fmt.Errorf(
+				"tmux session %q was created but exited immediately.\n"+
+					"Last output: %s\n\n"+
+					"Possible causes: login shell profile has early exit, "+
+					"agent command not found, or working directory not accessible.",
+				s.TmuxSession, strings.TrimSpace(paneOut))}
+		}
+		logf("step4c ok: session verified")
 
 		// Step 5: re-establish mutagen sync.
 		m.sendStatus("Establishing file sync...")
