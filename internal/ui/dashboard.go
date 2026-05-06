@@ -3105,6 +3105,24 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 	}
 
+	// Shift+arrow / Shift+PgUp/Down scroll the preview panel without moving the session list.
+	if m.panelMode == panelModePreview {
+		switch msg.String() {
+		case "shift+up":
+			m.viewport.ScrollUp(3)
+			return m, nil, true
+		case "shift+down":
+			m.viewport.ScrollDown(3)
+			return m, nil, true
+		case "shift+pgup":
+			m.viewport.PageUp()
+			return m, nil, true
+		case "shift+pgdown":
+			m.viewport.PageDown()
+			return m, nil, true
+		}
+	}
+
 	if msg.String() == "`" {
 		m.consoleOpen = !m.consoleOpen
 		m.log("Console toggled: %v", m.consoleOpen)
@@ -4846,7 +4864,11 @@ func (m *Model) renderMainView() string {
 		if m.panelMode == panelModeTerminal {
 			modeName = "Terminal"
 		}
-		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + "\n")
+		scrollHint := ""
+		if m.panelMode == panelModePreview {
+			scrollHint = "  " + statusStyle.Render("shift+↑↓ scroll")
+		}
+		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
 
 		if m.panelMode == panelModeTerminal && m.terminal != nil {
 			outputPanel.WriteString(m.terminal.View())
