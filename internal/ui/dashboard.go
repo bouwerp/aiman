@@ -1761,6 +1761,18 @@ func (m *Model) runTerminateStep(index int) error {
 			return fmt.Errorf("refusing to delete %q: git identifies this as a main repository — manual cleanup required", s.WorktreePath)
 		}
 
+		// Derive the real main repo path from git metadata — the config-computed path can be
+		// wrong when repos live in a subdirectory that isn't reflected in remote.Root.
+		// git rev-parse --git-common-dir returns ".git" (relative) for the main worktree and
+		// an absolute path like "/path/to/repo/.git" for linked worktrees.
+		gitCommonDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-common-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
+		gitCommonDir := strings.TrimSpace(gitCommonDirOut)
+		if path.IsAbs(gitCommonDir) && strings.HasSuffix(gitCommonDir, "/.git") {
+			derived := path.Dir(gitCommonDir)
+			m.log("Derived main repo path from git metadata: %s (was: %s)", derived, mainRepoPath)
+			mainRepoPath = derived
+		}
+
 		m.log("Terminating session: removing worktree %s", s.WorktreePath)
 
 		// Safety backup: tar the worktree into /tmp before deleting it.
@@ -1779,6 +1791,9 @@ func (m *Model) runTerminateStep(index int) error {
 			m.log("Worktree backed up to %s on remote before deletion", tarName)
 		}
 
+		// Unlock the worktree before removal — a stale lock file prevents git from pruning it.
+		_, _ = mgr.Execute(ctx, fmt.Sprintf("git -C %q worktree unlock %q 2>/dev/null || true", mainRepoPath, s.WorktreePath))
+
 		// Try to remove via git worktree (needs to run from main repo).
 		// git itself refuses to remove the main worktree, providing an extra layer of safety.
 		out, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
@@ -1791,6 +1806,15 @@ func (m *Model) runTerminateStep(index int) error {
 		if err != nil {
 			m.log("Error: rm -rf worktree failed: %v, output: %s", err, out)
 		}
+
+		// Always prune stale metadata from the main repo after deletion. This ensures git's
+		// bookkeeping is clean so future `git worktree add` for the same branch succeeds.
+		if pruneOut, pruneErr := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree prune --expire=now 2>&1 || true'", mainRepoPath)); pruneErr != nil {
+			m.log("Warning: git worktree prune failed: %v, output: %s", pruneErr, pruneOut)
+		} else {
+			m.log("git worktree prune completed: %s", pruneOut)
+		}
+
 		return err
 	case 4: // Clean up local files
 		if s.LocalPath == "" {

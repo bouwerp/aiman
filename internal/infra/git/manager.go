@@ -289,16 +289,29 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	checkCmd := fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)
 	checkOut, _ := remote.Execute(ctx, checkCmd)
 	if strings.Contains(checkOut, "EXISTS") {
-		// Use realpath to resolve worktree path
-		resolvedPath := worktreePath
-		if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
-			resolvedPath = strings.TrimSpace(out)
+		// Validate that git is actually working in this directory.
+		// A "stale" worktree (directory exists but .git/worktrees metadata is gone or corrupt)
+		// would fail here — we repair it instead of returning a broken path.
+		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
+		if strings.TrimSpace(gitCheck) != "BROKEN" {
+			// Use realpath to resolve worktree path
+			resolvedPath := worktreePath
+			if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
+				resolvedPath = strings.TrimSpace(out)
+			}
+			return domain.Worktree{
+				Path:   resolvedPath,
+				Branch: branch,
+			}, nil
 		}
-		return domain.Worktree{
-			Path:   resolvedPath,
-			Branch: branch,
-		}, nil
+		// Broken worktree directory — unlock, prune metadata, remove directory.
+		_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree unlock %q 2>/dev/null || true", repoPath, worktreePath))
+		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -rf %q", worktreePath))
 	}
+
+	// Prune stale worktree metadata before adding — ensures git worktree add succeeds
+	// even if a previous termination left stale entries behind.
+	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree prune --expire=now 2>/dev/null || true", repoPath))
 
 	// Determine base branch
 	var baseBranch string
@@ -401,19 +414,44 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 		return domain.Worktree{}, fmt.Errorf("branch name %q would place the worktree inside the main repository directory — choose a different name", branch)
 	}
 
-	// Check for existing worktree for this branch via git worktree list
+	// Check for existing worktree for this branch via git worktree list.
+	// Parse the porcelain output to find the registered path so we can validate its health.
 	listOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s worktree list --porcelain", repoPath))
+	var registeredWTPath string
+	var currentWTPath string
 	for _, line := range strings.Split(listOut, "\n") {
-		if strings.TrimSpace(line) == "branch refs/heads/"+branch {
-			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "worktree ") {
+			currentWTPath = strings.TrimPrefix(line, "worktree ")
+		} else if line == "branch refs/heads/"+branch {
+			registeredWTPath = currentWTPath
 		}
 	}
+	if registeredWTPath != "" {
+		// Branch is registered — check if git is healthy at that path.
+		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", registeredWTPath))
+		if strings.TrimSpace(gitCheck) != "BROKEN" {
+			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
+		}
+		// Stale/broken worktree — unlock so prune can remove it.
+		_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree unlock %q 2>/dev/null || true", repoPath, registeredWTPath))
+		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -rf %q", registeredWTPath))
+	}
 
-	// Check if worktree directory already exists
+	// Check if worktree directory already exists (not registered in git, but the dir is there)
 	checkOut, _ := remote.Execute(ctx, fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath))
 	if strings.Contains(checkOut, "EXISTS") {
-		return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
+		// Validate git health
+		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
+		if strings.TrimSpace(gitCheck) != "BROKEN" {
+			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
+		}
+		// Broken directory — remove it so worktree add can recreate it.
+		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -rf %q", worktreePath))
 	}
+
+	// Prune stale worktree metadata before adding.
+	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree prune --expire=now 2>/dev/null || true", repoPath))
 
 	// Create worktree from existing remote branch.
 	// First try creating a new local branch tracking the remote (-b). If the local
