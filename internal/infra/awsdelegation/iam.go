@@ -55,6 +55,12 @@ func EnsureRole(ctx context.Context, sourceProfile, accountID, roleName string) 
 		return "", fmt.Errorf("put inline policy: %w", err)
 	}
 
+	// Ensure the role allows 12-hour sessions. AWS defaults to 1 hour; update-role
+	// is idempotent so this is safe to call every time.
+	if err := ensureMaxSessionDuration(ctx, sourceProfile, roleName, DefaultDurationSeconds); err != nil {
+		return "", fmt.Errorf("set max session duration: %w", err)
+	}
+
 	return roleARN, nil
 }
 
@@ -132,6 +138,7 @@ func createRoleIfMissing(ctx context.Context, profile, roleName, trustPolicy str
 	err := runIAM(ctx, profile, "create-role",
 		"--role-name", roleName,
 		"--assume-role-policy-document", trustPolicy,
+		"--max-session-duration", fmt.Sprintf("%d", DefaultDurationSeconds),
 	)
 	if err == nil {
 		return nil
@@ -141,6 +148,13 @@ func createRoleIfMissing(ctx context.Context, profile, roleName, trustPolicy str
 		return nil
 	}
 	return err
+}
+
+func ensureMaxSessionDuration(ctx context.Context, profile, roleName string, durationSeconds int) error {
+	return runIAM(ctx, profile, "update-role",
+		"--role-name", roleName,
+		"--max-session-duration", fmt.Sprintf("%d", durationSeconds),
+	)
 }
 
 func putInlinePolicy(ctx context.Context, profile, roleName string) error {
