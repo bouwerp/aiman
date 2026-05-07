@@ -212,16 +212,23 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	for _, secret := range config.EnvSecrets {
 		extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 	}
-	// Use ; + explicit $_RC so remain-on-exit is set even if the agent exits quickly,
-	// avoiding the race where the pane exits between new-session and the && set-window call.
+	// Ensure the tmux server is running before touching global options
+	// (set-window-option -g fails silently if no server exists yet, leaving
+	// the default remain-on-exit=off that would cause the session to vanish
+	// the moment the pane process exits for any reason).
 	//
-	// The pane command is "bash -l -c '<agent>'; exec bash -i":
-	//   - bash -l -c '<agent>': runs the agent with login shell environment
-	//   - '; exec bash -i': at the outer shell level so it always runs after the agent
-	//     exits. -i forces interactive mode so the session stays alive regardless of
-	//     terminal state (e.g. if the agent left the terminal in a bad state).
+	// Also temporarily disable destroy-unattached in case ~/.tmux.conf sets
+	// it — that option kills sessions with no attached clients.
 	startCmd := fmt.Sprintf(
-		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s'; exec bash -i\"; _RC=$?; tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; exit $_RC",
+		"tmux start-server 2>/dev/null || true; "+
+			"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
+			"tmux set-window-option -g remain-on-exit on 2>/dev/null || true; "+
+			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s'; exec bash -i\"; "+
+			"_RC=$?; "+
+			"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
+			"tmux set-window-option -g remain-on-exit off 2>/dev/null || true; "+
+			"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
+			"exit $_RC",
 		tmuxName, workingDir, strings.TrimSpace(session.ID), extraEnvFlags, agentBootstrap, tmuxName,
 	)
 	_, err = sshMgr.Execute(ctx, startCmd)

@@ -5172,19 +5172,31 @@ func (m *Model) restartSession() tea.Cmd {
 		logf("step4a ok: workingDir exists")
 
 		m.sendStatus(fmt.Sprintf("Starting %s in %q...", s.TmuxSession, workingDir))
-		// Use ; + explicit $_RC to preserve new-session exit code while still
-		// setting remain-on-exit unconditionally — avoids the race where the
-		// pane exits between new-session and the && set-window-option call.
+		// Ensure the tmux server is running before touching global options
+		// (set-window-option -g fails silently if no server exists yet, leaving
+		// the default remain-on-exit=off that would cause the session to vanish
+		// the moment the pane process exits for any reason).
 		//
-		// The pane command is "bash -l -c '<agent>'; exec bash -i":
-		//   - bash -l -c '<agent>': runs the agent with the login shell environment
-		//   - '; exec bash -i': at the outer shell level (NOT inside -c), so it always
-		//     runs after the agent exits for any reason. The -i flag forces interactive
-		//     mode regardless of terminal state, ensuring the session stays alive.
+		// Also temporarily disable destroy-unattached in case ~/.tmux.conf sets
+		// it — that option kills sessions with no attached clients, which is
+		// exactly what we create with new-session -d.
+		//
+		// Restore all global defaults after new-session so we don't pollute the
+		// user's tmux environment.
 		startCmd := fmt.Sprintf(
-			"(tmux kill-session -t %q 2>/dev/null || true); tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s'; exec bash -i\"; _RC=$?; tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; exit $_RC",
+			"(tmux kill-session -t %q 2>/dev/null || true); "+
+				"tmux start-server 2>/dev/null || true; "+
+				"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
+				"tmux set-window-option -g remain-on-exit on 2>/dev/null || true; "+
+				"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s'; exec bash -i\"; "+
+				"_RC=$?; "+
+				"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
+				"tmux set-window-option -g remain-on-exit off 2>/dev/null || true; "+
+				"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
+				"exit $_RC",
 			s.TmuxSession,
-			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap, s.TmuxSession,
+			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap,
+			s.TmuxSession,
 		)
 		logf("step4b: running startCmd=%s", startCmd)
 		_, tmuxErr := mgr.Execute(ctx, startCmd)
@@ -5196,13 +5208,24 @@ func (m *Model) restartSession() tea.Cmd {
 
 		// Step 4c: verify the session actually exists (it can exit immediately if, e.g., the
 		// login shell profile contains an early `exit` or the agent command is misconfigured).
+		// Retry up to ~3 s to handle slow-starting agents.
 		m.sendStatus(fmt.Sprintf("Verifying session %s...", s.TmuxSession))
 		logf("step4c: verifying session exists")
-		time.Sleep(800 * time.Millisecond)
-		if _, verifyErr := mgr.Execute(ctx, fmt.Sprintf("tmux has-session -t %q", s.TmuxSession)); verifyErr != nil {
+		var verifyErr error
+		for attempt := 0; attempt < 6; attempt++ {
+			time.Sleep(500 * time.Millisecond)
+			_, verifyErr = mgr.Execute(ctx, fmt.Sprintf("tmux has-session -t %q", s.TmuxSession))
+			if verifyErr == nil {
+				break
+			}
+			logf("step4c attempt %d: session not found yet: %v", attempt+1, verifyErr)
+		}
+		if verifyErr != nil {
 			logf("step4c FAILED: session disappeared after creation: %v", verifyErr)
-			// Capture whatever output is in the pane before giving up.
+			// Capture pane output and tmux diagnostics to help understand why.
 			paneOut, _ := mgr.Execute(ctx, fmt.Sprintf("tmux capture-pane -p -t %q 2>/dev/null || echo '(session already gone)'", s.TmuxSession))
+			diagOut, _ := mgr.Execute(ctx, "tmux show-options -g destroy-unattached 2>/dev/null; tmux show-window-options -g remain-on-exit 2>/dev/null || true")
+			logf("step4c tmux diagnostics: %s", strings.TrimSpace(diagOut))
 			return sessionCreateMsg{err: fmt.Errorf(
 				"tmux session %q was created but exited immediately.\n"+
 					"Last output: %s\n\n"+
