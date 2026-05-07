@@ -1735,6 +1735,11 @@ func (m *Model) runTerminateStep(index int) error {
 		case cleanWorktree == cleanMain:
 			m.log("ERROR: refusing to delete %s — equals main repository %s", s.WorktreePath, mainRepoPath)
 			return fmt.Errorf("refusing to delete %q: path is the main repository — manual cleanup required", s.WorktreePath)
+		case !strings.HasPrefix(cleanWorktree, cleanRoot+"/"):
+			// The cleaned path does not sit strictly inside the configured remote root.
+			// This catches mis-stored paths and any remaining `..` traversals.
+			m.log("ERROR: refusing to delete %s — not strictly inside remote root %s", s.WorktreePath, remote.Root)
+			return fmt.Errorf("refusing to delete %q: path is not inside the remote root — manual cleanup required", s.WorktreePath)
 		}
 
 		// Secondary check: resolve both paths on the remote to catch symlinks.
@@ -1802,7 +1807,12 @@ func (m *Model) runTerminateStep(index int) error {
 		}
 
 		// Force remove the directory regardless (worktree remove might fail if corrupted).
-		out, err = mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", s.WorktreePath))
+		// Use the resolved path (with `..` eliminated) rather than the raw stored path.
+		rmPath := strings.TrimSpace(resolvedWorktree)
+		if resolveErr != nil || rmPath == "" {
+			rmPath = cleanWorktree
+		}
+		out, err = mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", rmPath))
 		if err != nil {
 			m.log("Error: rm -rf worktree failed: %v, output: %s", err, out)
 		}

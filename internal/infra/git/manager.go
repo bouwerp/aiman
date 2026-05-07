@@ -260,12 +260,27 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	}
 
 	worktreeDir := strings.ReplaceAll(branch, "/", "-")
+
+	// Validate: an empty worktreeDir (e.g. from a sanitized-away branch name) would
+	// produce worktreePath = "repoPath/../" which resolves to the repos root directory.
+	if worktreeDir == "" {
+		return domain.Worktree{}, fmt.Errorf("branch name %q produces an empty worktree directory name — choose a non-empty branch name", branch)
+	}
+
 	// Worktree is placed alongside the main repository
 	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
 
-	// Safety: if worktreeDir == repoName the computed path resolves to the main repo.
-	if filepath.Clean(filepath.Join(repoPath, "..", worktreeDir)) == filepath.Clean(repoPath) {
+	// Safety: the cleaned worktree path must be strictly inside the repos root —
+	// not equal to it (empty/dot worktreeDir), not above it, and not the main repo.
+	cleanedWT := filepath.Clean(filepath.Join(repoPath, "..", worktreeDir))
+	reposRoot := filepath.Clean(filepath.Dir(filepath.Clean(repoPath)))
+	switch {
+	case cleanedWT == filepath.Clean(repoPath):
 		return domain.Worktree{}, fmt.Errorf("branch name %q would place the worktree inside the main repository directory — choose a different name", branch)
+	case cleanedWT == reposRoot:
+		return domain.Worktree{}, fmt.Errorf("branch name %q resolves to the repos root directory — choose a different name", branch)
+	case !strings.HasPrefix(cleanedWT, reposRoot+"/"):
+		return domain.Worktree{}, fmt.Errorf("branch name %q would place the worktree outside the repos root — choose a different name", branch)
 	}
 
 	// Ensure repo exists
@@ -306,7 +321,9 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 		}
 		// Broken worktree directory — unlock, prune metadata, remove directory.
 		_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree unlock %q 2>/dev/null || true", repoPath, worktreePath))
-		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -rf %q", worktreePath))
+		if rmErr := safeRmWorktree(ctx, remote, worktreePath, repoPath); rmErr != nil {
+			return domain.Worktree{}, fmt.Errorf("failed to remove broken worktree directory: %w", rmErr)
+		}
 	}
 
 	// Prune stale worktree metadata before adding — ensures git worktree add succeeds
@@ -409,9 +426,21 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 	worktreeDir := strings.ReplaceAll(branch, "/", "-")
 	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
 
-	// Safety: if worktreeDir == repoName the computed path resolves to the main repo.
-	if filepath.Clean(filepath.Join(repoPath, "..", worktreeDir)) == filepath.Clean(repoPath) {
+	// Validate: empty worktreeDir would resolve to the repos root.
+	if worktreeDir == "" {
+		return domain.Worktree{}, fmt.Errorf("branch name %q produces an empty worktree directory name — choose a non-empty branch name", branch)
+	}
+
+	// Safety: the cleaned worktree path must be strictly inside the repos root.
+	cleanedWT := filepath.Clean(filepath.Join(repoPath, "..", worktreeDir))
+	reposRoot := filepath.Clean(filepath.Dir(filepath.Clean(repoPath)))
+	switch {
+	case cleanedWT == filepath.Clean(repoPath):
 		return domain.Worktree{}, fmt.Errorf("branch name %q would place the worktree inside the main repository directory — choose a different name", branch)
+	case cleanedWT == reposRoot:
+		return domain.Worktree{}, fmt.Errorf("branch name %q resolves to the repos root directory — choose a different name", branch)
+	case !strings.HasPrefix(cleanedWT, reposRoot+"/"):
+		return domain.Worktree{}, fmt.Errorf("branch name %q would place the worktree outside the repos root — choose a different name", branch)
 	}
 
 	// Check for existing worktree for this branch via git worktree list.
@@ -435,7 +464,9 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 		}
 		// Stale/broken worktree — unlock so prune can remove it.
 		_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree unlock %q 2>/dev/null || true", repoPath, registeredWTPath))
-		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -rf %q", registeredWTPath))
+		if rmErr := safeRmWorktree(ctx, remote, registeredWTPath, repoPath); rmErr != nil {
+			return domain.Worktree{}, fmt.Errorf("failed to remove stale worktree directory: %w", rmErr)
+		}
 	}
 
 	// Check if worktree directory already exists (not registered in git, but the dir is there)
@@ -447,7 +478,9 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
 		}
 		// Broken directory — remove it so worktree add can recreate it.
-		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -rf %q", worktreePath))
+		if rmErr := safeRmWorktree(ctx, remote, worktreePath, repoPath); rmErr != nil {
+			return domain.Worktree{}, fmt.Errorf("failed to remove broken worktree directory: %w", rmErr)
+		}
 	}
 
 	// Prune stale worktree metadata before adding.
@@ -484,6 +517,28 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 func extractRepoName(fullName string) string {
 	parts := strings.Split(fullName, "/")
 	return parts[len(parts)-1]
+}
+
+// safeRmWorktree executes `rm -rf path` on the remote only after verifying that
+// the cleaned path is strictly inside reposRoot (the parent directory of repoPath).
+// This prevents accidentally deleting the main repo, the repos root, or any ancestor
+// when path contains embedded `../` components or when stored paths are corrupted.
+func safeRmWorktree(ctx context.Context, remote domain.RemoteExecutor, path, repoPath string) error {
+	if path == "" {
+		return fmt.Errorf("refusing to rm -rf empty path")
+	}
+	reposRoot := filepath.Clean(filepath.Dir(filepath.Clean(repoPath)))
+	cleaned := filepath.Clean(path)
+	// Must be strictly inside reposRoot (not equal to it, not above it).
+	if cleaned == reposRoot || !strings.HasPrefix(cleaned, reposRoot+"/") {
+		return fmt.Errorf("refusing to rm -rf %q: path is not strictly inside repos root %q — manual cleanup required", path, reposRoot)
+	}
+	// Must not be the main repository itself.
+	if cleaned == filepath.Clean(repoPath) {
+		return fmt.Errorf("refusing to rm -rf %q: path is the main repository — manual cleanup required", path)
+	}
+	_, err := remote.Execute(ctx, fmt.Sprintf("rm -rf %q", path))
+	return err
 }
 
 // FetchOrganizations returns a list of organizations the user has access to
