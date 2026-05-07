@@ -5109,26 +5109,9 @@ func (m *Model) restartSession() tea.Cmd {
 		logf("session=%s remote=%s@%s workingDir=%s agent=%s", s.TmuxSession, remote.User, remote.Host, workingDir, sessionCfg.Agent.Command)
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
-		// Step 1: terminate any existing mutagen syncs (local commands, fast).
-		// Also terminate by the DB-stored MutagenSyncID in case it differs from
-		// the computed name (e.g. session was created by an older code version).
-		m.sendStatus("Terminating existing syncs...")
-		logf("step1: terminating syncs")
-		syncName := "aiman-sync-" + s.ID
-		tempSyncName := syncName + "-pull"
-		toTerminate := []string{syncName, tempSyncName, s.TmuxSession}
-		if s.MutagenSyncID != "" && s.MutagenSyncID != syncName {
-			toTerminate = append(toTerminate, s.MutagenSyncID)
-		}
-		for _, name := range toTerminate {
-			terminateCtx, terminateCancel := context.WithTimeout(ctx, 10*time.Second)
-			_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", name).Run() // #nosec G204
-			terminateCancel()
-		}
-
-		// Step 2: build the agent command (PrepareSession with nil issue avoids SSH task-file writes).
+		// Step 1: build the agent command.
 		m.sendStatus(fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
-		logf("step2: preparing agent command")
+		logf("step1: preparing agent command")
 		agentCmd := sessionCfg.Agent.Command
 		if flowManager != nil && flowManager.SkillEngine != nil {
 			prepared, err := flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *sessionCfg.Agent, sessionCfg.Skills, sessionCfg.PromptFree, nil, sessionCfg.PriorSnapshot)
@@ -5140,7 +5123,7 @@ func (m *Model) restartSession() tea.Cmd {
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
 		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
-		extraEnvFlags := ""
+		extraEnvFlags := fmt.Sprintf(" -e AIMAN_ID=%s", strings.TrimSpace(s.ID))
 		if strings.Contains(strings.ToLower(agentCmd), "opencode") {
 			_ = mgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
 			extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
@@ -5153,122 +5136,54 @@ func (m *Model) restartSession() tea.Cmd {
 			extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 		}
 
-		// Step 3: reset the SSH ControlMaster socket so we get a fresh connection
-		// for the restart call, avoiding any stale multiplexer state.
-		m.sendStatus("Resetting SSH connection...")
-		logf("step3: resetting SSH socket")
-		mgr.ResetControlSocket()
-
-		// Step 4: verify the working directory exists, kill the existing tmux session,
-		// and start a fresh one. The worktree is preserved — only the tmux process is replaced.
-		m.sendStatus(fmt.Sprintf("Checking working directory %q...", workingDir))
-		logf("step4a: checking workingDir=%s", workingDir)
-		if _, dirErr := mgr.Execute(ctx, fmt.Sprintf("test -d %q", workingDir)); dirErr != nil {
-			logf("step4a FAILED: working directory does not exist: %v", dirErr)
-			return sessionCreateMsg{err: fmt.Errorf(
-				"working directory %q no longer exists on the remote (the worktree may have been deleted). "+
-					"Please delete this session and create a new one.", workingDir)}
-		}
-		logf("step4a ok: workingDir exists")
-
-		m.sendStatus(fmt.Sprintf("Starting %s in %q...", s.TmuxSession, workingDir))
-		// Ensure the tmux server is running before touching global options
-		// (set-window-option -g fails silently if no server exists yet, leaving
-		// the default remain-on-exit=off that would cause the session to vanish
-		// the moment the pane process exits for any reason).
+		// Step 2: kill the current agent and start the new one.
 		//
-		// Also temporarily disable destroy-unattached in case ~/.tmux.conf sets
-		// it — that option kills sessions with no attached clients, which is
-		// exactly what we create with new-session -d.
+		// If the tmux session already exists (the common case — agent exited or
+		// user just wants a different agent), use respawn-pane -k to replace the
+		// running process in-place. This preserves the session, the mutagen sync,
+		// and the working directory without any teardown.
 		//
-		// Restore all global defaults after new-session so we don't pollute the
-		// user's tmux environment.
-		startCmd := fmt.Sprintf(
-			"(tmux kill-session -t %q 2>/dev/null || true); "+
+		// If the session is gone (remote reboot, manual kill, etc.) fall back to
+		// creating a fresh session with new-session, using start-server + global
+		// option guards to avoid the remain-on-exit race.
+		m.sendStatus(fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
+		logf("step2: restarting agent")
+		paneCmd := fmt.Sprintf("bash -l -c '%s'; exec bash -i", agentBootstrap)
+		restartCmd := fmt.Sprintf(
+			"if tmux has-session -t %q 2>/dev/null; then "+
+				"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
+				"tmux respawn-pane -k -t %q -c %q%s %q; "+
+			"else "+
 				"tmux start-server 2>/dev/null || true; "+
 				"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
 				"tmux set-window-option -g remain-on-exit on 2>/dev/null || true; "+
-				"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s'; exec bash -i\"; "+
+				"tmux new-session -d -s %q -c %q%s %q; "+
 				"_RC=$?; "+
 				"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
 				"tmux set-window-option -g remain-on-exit off 2>/dev/null || true; "+
 				"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
-				"exit $_RC",
+				"exit $_RC; "+
+			"fi",
+			// has-session
 			s.TmuxSession,
-			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap,
+			// respawn-pane branch
+			s.TmuxSession,
+			s.TmuxSession, workingDir, extraEnvFlags, paneCmd,
+			// new-session branch
+			s.TmuxSession, workingDir, extraEnvFlags, paneCmd,
 			s.TmuxSession,
 		)
-		logf("step4b: running startCmd=%s", startCmd)
-		_, tmuxErr := mgr.Execute(ctx, startCmd)
-		if tmuxErr != nil {
-			logf("step4b FAILED: %v", tmuxErr)
-			return sessionCreateMsg{err: fmt.Errorf("failed to start tmux session %q in %q: %w", s.TmuxSession, workingDir, tmuxErr)}
+		logf("step2: restartCmd=%s", restartCmd)
+		if _, err := mgr.Execute(ctx, restartCmd); err != nil {
+			logf("step2 FAILED: %v", err)
+			return sessionCreateMsg{err: fmt.Errorf("failed to restart agent in session %q: %w", s.TmuxSession, err)}
 		}
-		logf("step4b ok: new-session succeeded")
-
-		// Step 4c: verify the session actually exists (it can exit immediately if, e.g., the
-		// login shell profile contains an early `exit` or the agent command is misconfigured).
-		// Retry up to ~3 s to handle slow-starting agents.
-		m.sendStatus(fmt.Sprintf("Verifying session %s...", s.TmuxSession))
-		logf("step4c: verifying session exists")
-		var verifyErr error
-		for attempt := 0; attempt < 6; attempt++ {
-			time.Sleep(500 * time.Millisecond)
-			_, verifyErr = mgr.Execute(ctx, fmt.Sprintf("tmux has-session -t %q", s.TmuxSession))
-			if verifyErr == nil {
-				break
-			}
-			logf("step4c attempt %d: session not found yet: %v", attempt+1, verifyErr)
-		}
-		if verifyErr != nil {
-			logf("step4c FAILED: session disappeared after creation: %v", verifyErr)
-			// Capture pane output and tmux diagnostics to help understand why.
-			paneOut, _ := mgr.Execute(ctx, fmt.Sprintf("tmux capture-pane -p -t %q 2>/dev/null || echo '(session already gone)'", s.TmuxSession))
-			diagOut, _ := mgr.Execute(ctx, "tmux show-options -g destroy-unattached 2>/dev/null; tmux show-window-options -g remain-on-exit 2>/dev/null || true")
-			logf("step4c tmux diagnostics: %s", strings.TrimSpace(diagOut))
-			return sessionCreateMsg{err: fmt.Errorf(
-				"tmux session %q was created but exited immediately.\n"+
-					"Last output: %s\n\n"+
-					"Possible causes: login shell profile has early exit, "+
-					"agent command not found, or working directory not accessible.",
-				s.TmuxSession, strings.TrimSpace(paneOut))}
-		}
-		logf("step4c ok: session verified")
-
-		// Step 5: re-establish mutagen sync.
-		m.sendStatus("Establishing file sync...")
-		logf("step5: starting mutagen sync %s", syncName)
-		mutagenEngine := mutagen.NewEngine()
-		home, _ := os.UserHomeDir()
-		localSyncPath := filepath.Join(home, config.DirName, "work", s.ID)
-		_ = os.MkdirAll(localSyncPath, 0755)
-
-		target := remote.Host
-		if remote.User != "" {
-			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
-		}
-		remoteSyncPath := fmt.Sprintf("%s:%s", target, workingDir)
-		labels := map[string]string{"aiman-id": s.ID}
-
-		var syncWarning string
-		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, remoteSyncPath, labels, domain.SyncModeTwoWay)
-		if syncErr == nil {
-			logf("step5 ok, sync=%s", syncName)
-			s.MutagenSyncID = syncName
-			s.LocalPath = localSyncPath
-			// Directly set status — Transition() enforces the provisioning state machine
-			// which doesn't support INACTIVE→Syncing; for restarts we bypass it.
-			s.Status = domain.SessionStatusSyncing
-		} else {
-			logf("step5 sync FAILED: %v", syncErr)
-			syncWarning = fmt.Sprintf("session restarted but sync failed: %v", syncErr)
-			s.Status = domain.SessionStatusActive
-		}
+		logf("step2 ok")
 
 		if db != nil {
 			_ = db.Save(ctx, s)
 		}
-		return sessionCreateMsg{session: *s, warning: syncWarning}
+		return sessionCreateMsg{session: *s}
 	}
 }
 
