@@ -5172,11 +5172,17 @@ func (m *Model) restartSession() tea.Cmd {
 		logf("step4a ok: workingDir exists")
 
 		m.sendStatus(fmt.Sprintf("Starting %s in %q...", s.TmuxSession, workingDir))
-		// Use ; + explicit $RC to preserve new-session exit code while still
+		// Use ; + explicit $_RC to preserve new-session exit code while still
 		// setting remain-on-exit unconditionally — avoids the race where the
 		// pane exits between new-session and the && set-window-option call.
+		//
+		// The pane command is "bash -l -c '<agent>'; exec bash -i":
+		//   - bash -l -c '<agent>': runs the agent with the login shell environment
+		//   - '; exec bash -i': at the outer shell level (NOT inside -c), so it always
+		//     runs after the agent exits for any reason. The -i flag forces interactive
+		//     mode regardless of terminal state, ensuring the session stays alive.
 		startCmd := fmt.Sprintf(
-			"(tmux kill-session -t %q 2>/dev/null || true); tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\"; _RC=$?; tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; exit $_RC",
+			"(tmux kill-session -t %q 2>/dev/null || true); tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s'; exec bash -i\"; _RC=$?; tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; exit $_RC",
 			s.TmuxSession,
 			s.TmuxSession, workingDir, strings.TrimSpace(s.ID), extraEnvFlags, agentBootstrap, s.TmuxSession,
 		)

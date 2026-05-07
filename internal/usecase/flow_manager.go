@@ -214,8 +214,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	}
 	// Use ; + explicit $_RC so remain-on-exit is set even if the agent exits quickly,
 	// avoiding the race where the pane exits between new-session and the && set-window call.
+	//
+	// The pane command is "bash -l -c '<agent>'; exec bash -i":
+	//   - bash -l -c '<agent>': runs the agent with login shell environment
+	//   - '; exec bash -i': at the outer shell level so it always runs after the agent
+	//     exits. -i forces interactive mode so the session stays alive regardless of
+	//     terminal state (e.g. if the agent left the terminal in a bad state).
 	startCmd := fmt.Sprintf(
-		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s; exec bash'\"; _RC=$?; tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; exit $_RC",
+		"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s'; exec bash -i\"; _RC=$?; tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; exit $_RC",
 		tmuxName, workingDir, strings.TrimSpace(session.ID), extraEnvFlags, agentBootstrap, tmuxName,
 	)
 	_, err = sshMgr.Execute(ctx, startCmd)
