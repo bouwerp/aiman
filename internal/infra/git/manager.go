@@ -493,16 +493,20 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 //     Any failure (no .git, no remote, local changes, local commits not on
 //     remote, fetch errors) triggers a backup to /tmp then a fresh reclone.
 func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repoURL string) error {
+	repoName := filepath.Base(filepath.Clean(repoPath))
+
 	// Step 1: if directory is absent, clone.
 	if err := remote.ValidateDir(ctx, repoPath); err != nil {
 		if repoURL == "" {
 			return fmt.Errorf("repository not found at %s and no URL configured — please clone it manually", repoPath)
 		}
+		reportProgress(ctx, fmt.Sprintf("Repository %s not found — cloning from remote...", repoName))
 		return cloneRepo(ctx, remote, repoPath, repoURL)
 	}
 
 	// Step 2: directory exists — resolve the recovery URL before running checks
 	// so recoverRepo always has something to clone from.
+	reportProgress(ctx, fmt.Sprintf("Checking repository %s...", repoName))
 	effectiveURL := repoURL
 	if effectiveURL == "" {
 		if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath)); err == nil && strings.TrimSpace(out) != "" {
@@ -519,27 +523,36 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 
 	// Must be a valid git repo.
 	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir", repoPath)); err != nil {
+		reportProgress(ctx, fmt.Sprintf("Repository %s has no .git directory — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 	// Must have an origin remote.
 	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath)); err != nil {
+		reportProgress(ctx, fmt.Sprintf("Repository %s has no origin remote — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 	// Fetch must succeed.
+	reportProgress(ctx, fmt.Sprintf("Fetching latest changes for %s...", repoName))
 	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>/dev/null", repoPath)); err != nil {
+		reportProgress(ctx, fmt.Sprintf("Fetch failed for %s — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 	// No uncommitted local changes.
+	reportProgress(ctx, fmt.Sprintf("Checking %s for local changes...", repoName))
 	if statusOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q status --porcelain", repoPath)); strings.TrimSpace(statusOut) != "" {
+		reportProgress(ctx, fmt.Sprintf("Repository %s has uncommitted changes — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 	// No local commits that are not on origin.
+	reportProgress(ctx, fmt.Sprintf("Verifying %s is in sync with remote...", repoName))
 	extraOut, _ := remote.Execute(ctx, fmt.Sprintf(
 		"git -C %q rev-list origin/HEAD..HEAD --count 2>/dev/null || echo 0", repoPath))
 	if n, _ := strconv.Atoi(strings.TrimSpace(extraOut)); n > 0 {
+		reportProgress(ctx, fmt.Sprintf("Repository %s has local commits not on remote — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 
+	reportProgress(ctx, fmt.Sprintf("Repository %s is up to date ✓", repoName))
 	return nil
 }
 
@@ -547,9 +560,11 @@ func cloneRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repo
 	cleanedRepo := filepath.Clean(repoPath)
 	parentDir := filepath.Dir(cleanedRepo)
 	repoName := filepath.Base(cleanedRepo)
+	reportProgress(ctx, fmt.Sprintf("Cloning %s...", repoName))
 	if _, err := remote.Execute(ctx, fmt.Sprintf("mkdir -p %q && git -C %q clone %q %q", parentDir, parentDir, repoURL, repoName)); err != nil {
 		return fmt.Errorf("failed to clone %s from %s: %w", repoName, repoURL, err)
 	}
+	reportProgress(ctx, fmt.Sprintf("Cloned %s ✓", repoName))
 	return nil
 }
 
@@ -583,18 +598,22 @@ func recoverRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, re
 
 	timestamp := time.Now().UTC().Format("20060102-150405")
 	backupPath := fmt.Sprintf("/tmp/aiman-repo-backup-%s-%s.tar.gz", repoName, timestamp)
+	reportProgress(ctx, fmt.Sprintf("Backing up %s to %s...", repoName, backupPath))
 	backupCmd := fmt.Sprintf("tar -C %q -czf %q %q 2>/dev/null && echo OK", parentDir, backupPath, repoName)
 	if out, tarErr := remote.Execute(ctx, backupCmd); tarErr != nil || strings.TrimSpace(out) != "OK" {
 		return fmt.Errorf("repository at %s is unhealthy and backup to %s failed — aborting reclone to avoid data loss", repoPath, backupPath)
 	}
 
+	reportProgress(ctx, fmt.Sprintf("Removing corrupt %s...", repoName))
 	if _, rmErr := remote.Execute(ctx, fmt.Sprintf("rm -rf %q", cleanedRepo)); rmErr != nil {
 		return fmt.Errorf("failed to remove unhealthy repository %s (backed up to %s): %w", repoPath, backupPath, rmErr)
 	}
 
+	reportProgress(ctx, fmt.Sprintf("Recloning %s from %s...", repoName, url))
 	if _, cloneErr := remote.Execute(ctx, fmt.Sprintf("git -C %q clone %q %q", parentDir, url, repoName)); cloneErr != nil {
 		return fmt.Errorf("failed to reclone %s from %s (backup at %s): %w", repoName, url, backupPath, cloneErr)
 	}
+	reportProgress(ctx, fmt.Sprintf("Repository %s restored ✓", repoName))
 
 	return nil
 }
@@ -659,6 +678,20 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 	}
 
 	return domain.Worktree{}, fmt.Errorf("no existing healthy worktree found for branch %s", branch)
+}
+
+type progressKeyType struct{}
+
+// WithProgress attaches a progress callback to ctx. ensureHealthyRepo and
+// recoverRepo call it to report what they are doing in real time.
+func WithProgress(ctx context.Context, fn func(string)) context.Context {
+	return context.WithValue(ctx, progressKeyType{}, fn)
+}
+
+func reportProgress(ctx context.Context, msg string) {
+	if fn, ok := ctx.Value(progressKeyType{}).(func(string)); ok {
+		fn(msg)
+	}
 }
 
 func extractRepoName(fullName string) string {

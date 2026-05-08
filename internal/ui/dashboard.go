@@ -1232,6 +1232,7 @@ type reposMsg struct {
 
 type branchesMsg struct {
 	branches []string
+	status   string
 	err      error
 }
 
@@ -1435,6 +1436,11 @@ func (m *Model) fetchBranches(repo domain.Repo) tea.Cmd {
 	remote := m.selectedRemote
 	return func() tea.Msg {
 		ctx := context.Background()
+		ctx = git.WithProgress(ctx, func(s string) {
+			if m.Program != nil {
+				m.Program.Send(branchesMsg{status: s})
+			}
+		})
 
 		if remote.Host == "" {
 			return branchesMsg{err: fmt.Errorf("no remote selected")}
@@ -1557,6 +1563,11 @@ func (m *Model) createSession() tea.Cmd {
 
 	return func() tea.Msg {
 		ctx := context.Background()
+		ctx = git.WithProgress(ctx, func(s string) {
+			if m.Program != nil {
+				m.Program.Send(sessionCreateMsg{status: s})
+			}
+		})
 
 		// Use FlowManager to create the session
 		session, err := m.flowManager.CreateSession(ctx, sessionCfg)
@@ -4607,6 +4618,10 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = m.loadingNext
 		return m, nil
 	case branchesMsg:
+		if msg.status != "" {
+			m.loadingMsg = msg.status
+			return m, nil
+		}
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch branches: %v", msg.err)
 			m.state = viewStateError
