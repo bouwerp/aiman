@@ -1237,8 +1237,9 @@ type branchesMsg struct {
 }
 
 type dirsMsg struct {
-	dirs []string
-	err  error
+	dirs   []string
+	status string
+	err    error
 }
 
 type sessionCreateMsg struct {
@@ -1486,6 +1487,11 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 	remote := m.selectedRemote
 	return func() tea.Msg {
 		ctx := context.Background()
+		ctx = git.WithProgress(ctx, func(s string) {
+			if m.Program != nil {
+				m.Program.Send(dirsMsg{status: s})
+			}
+		})
 
 		if remote.Host == "" {
 			return dirsMsg{err: fmt.Errorf("no remote selected")}
@@ -1497,28 +1503,17 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 		}
 
 		var repoPath string
-		if repo != nil && repo.URL != "" {
-			// Extract just the repo name (not org/repo)
+		if repo != nil && repo.Name != "" && repo.Name != "No Repository" {
+			gitMgr := git.NewManager(&m.cfg.Git)
+			if err := gitMgr.EnsureHealthyRepo(ctx, mgr, *repo); err != nil {
+				return dirsMsg{err: fmt.Errorf("repository health check failed: %w", err)}
+			}
 			repoName := extractRepoName(repo.Name)
-
-			// Handle case where remote.Root might already end with the repo name
 			cleanRoot := strings.TrimRight(remote.Root, "/")
 			if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
 				repoPath = cleanRoot
 			} else {
 				repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
-			}
-
-			// Distinguish "missing repo" from connectivity/auth failures.
-			existsOut, existsErr := mgr.Execute(ctx, fmt.Sprintf("if test -d %q; then echo EXISTS; else echo MISSING; fi", repoPath))
-			if existsErr != nil {
-				return dirsMsg{err: fmt.Errorf("failed to check remote repository path: %w", existsErr)}
-			}
-			if strings.TrimSpace(existsOut) == "MISSING" {
-				_, cloneErr := mgr.Execute(ctx, fmt.Sprintf("cd %q && git clone %q %q", remote.Root, repo.URL, repoName))
-				if cloneErr != nil {
-					return dirsMsg{err: fmt.Errorf("failed to clone repository: %w", cloneErr)}
-				}
 			}
 		} else {
 			// No repository, scan from remote root
@@ -4633,6 +4628,10 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = m.loadingNext
 		return m, nil
 	case dirsMsg:
+		if msg.status != "" {
+			m.loadingMsg = msg.status
+			return m, nil
+		}
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch directories: %v", msg.err)
 			m.state = viewStateError

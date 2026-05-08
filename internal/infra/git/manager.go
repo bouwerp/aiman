@@ -485,6 +485,25 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 	}, nil
 }
 
+// EnsureHealthyRepo is the exported wrapper around ensureHealthyRepo. It
+// computes the repo path from the remote root and repo name, then calls
+// the full health check: clone-if-missing, verify-or-recover.
+func (m *Manager) EnsureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo) error {
+	repoName := extractRepoName(repo.Name)
+	remoteRoot := remote.GetRoot()
+	if remoteRoot == "" {
+		return fmt.Errorf("remote root not configured")
+	}
+	cleanRoot := strings.TrimRight(remoteRoot, "/")
+	var repoPath string
+	if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
+		repoPath = cleanRoot
+	} else {
+		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
+	}
+	return ensureHealthyRepo(ctx, remote, repoPath, repo.URL)
+}
+
 // ensureHealthyRepo is the single entry point for ensuring a git repository is
 // ready to use. It follows a simple two-step policy:
 //
