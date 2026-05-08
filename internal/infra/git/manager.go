@@ -376,6 +376,11 @@ func (m *Manager) ListRemoteBranches(ctx context.Context, remote domain.RemoteEx
 		return nil, fmt.Errorf("repository %s not found on remote", repoName)
 	}
 
+	// Validate (and if necessary recover) the git repository before listing branches.
+	if err := ensureHealthyRepo(ctx, remote, repoPath, repo.URL); err != nil {
+		return nil, err
+	}
+
 	// Fetch latest to ensure remote branches are up to date
 	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>/dev/null", repoPath))
 
