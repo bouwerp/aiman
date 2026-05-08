@@ -576,14 +576,14 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 		`git -C %q rev-list HEAD..origin/HEAD --count 2>/dev/null || git -C %q rev-list HEAD..origin/main --count 2>/dev/null || git -C %q rev-list HEAD..origin/master --count 2>/dev/null || echo 0`,
 		repoPath, repoPath, repoPath))
 	if n, _ := strconv.Atoi(strings.TrimSpace(behindOut)); n > 0 {
-		reportProgress(ctx, fmt.Sprintf("Repository %s is %d commit(s) behind remote — pulling...", repoName, n))
-		// Fast-forward pull; falls back across common default branch names.
-		pullOut, pullErr := remote.Execute(ctx, fmt.Sprintf(
-			`git -C %q pull --ff-only origin HEAD 2>&1 || git -C %q pull --ff-only origin main 2>&1 || git -C %q pull --ff-only origin master 2>&1`,
-			repoPath, repoPath, repoPath))
-		if pullErr != nil {
-			reportProgress(ctx, fmt.Sprintf("Fast-forward pull failed for %s — recovering...", repoName))
-			_ = pullOut
+		reportProgress(ctx, fmt.Sprintf("Repository %s is %d commit(s) behind remote — updating...", repoName, n))
+		// Reset to upstream tracking branch (@{u}), or fall back to common remote branch names.
+		// git reset --hard is safe here because the base repo must always remain clean.
+		resetOut, resetErr := remote.Execute(ctx, fmt.Sprintf(
+			`git -C %q reset --hard @{u} 2>&1 || git -C %q reset --hard origin/HEAD 2>&1 || git -C %q reset --hard origin/main 2>&1 || git -C %q reset --hard origin/master 2>&1`,
+			repoPath, repoPath, repoPath, repoPath))
+		if resetErr != nil {
+			reportProgress(ctx, fmt.Sprintf("Failed to update %s: %s — recovering...", repoName, strings.TrimSpace(resetOut)))
 			return recoverRepo(ctx, remote, repoPath, effectiveURL)
 		}
 		reportProgress(ctx, fmt.Sprintf("Repository %s updated ✓", repoName))
@@ -655,8 +655,15 @@ func recoverRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, re
 	}
 
 	reportProgress(ctx, fmt.Sprintf("Recloning %s from %s...", repoName, url))
-	if _, cloneErr := remote.Execute(ctx, fmt.Sprintf("git -C %q clone %q %q", parentDir, url, repoName)); cloneErr != nil {
-		return fmt.Errorf("failed to reclone %s from %s (backup at %s): %w", repoName, url, backupPath, cloneErr)
+	if cloneOut, cloneErr := remote.Execute(ctx, fmt.Sprintf("git -C %q clone %q %q 2>&1", parentDir, url, repoName)); cloneErr != nil {
+		// Clone failed — restore from backup so the directory isn't left empty.
+		reportProgress(ctx, fmt.Sprintf("Clone failed for %s: %s", repoName, strings.TrimSpace(cloneOut)))
+		reportProgress(ctx, fmt.Sprintf("Attempting to restore %s from backup...", repoName))
+		if restoreOut, restoreErr := remote.Execute(ctx, fmt.Sprintf(
+			`tar -C %q -xzf %q 2>&1 && echo OK`, parentDir, backupPath)); restoreErr != nil || !strings.Contains(restoreOut, "OK") {
+			return fmt.Errorf("failed to reclone %s from %s and backup restore also failed (backup at %s): %w", repoName, url, backupPath, cloneErr)
+		}
+		return fmt.Errorf("failed to reclone %s from %s — restored from backup at %s; check network/SSH access and try again: %w", repoName, url, backupPath, cloneErr)
 	}
 	reportProgress(ctx, fmt.Sprintf("Repository %s restored ✓", repoName))
 
