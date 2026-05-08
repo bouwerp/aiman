@@ -189,6 +189,8 @@ func (i item) Title() string {
 		prefix = "o "
 	case i.activity == "busy":
 		prefix = "> "
+	case i.activity == "stale":
+		prefix = "! "
 	}
 	activity := ""
 	switch {
@@ -198,6 +200,8 @@ func (i item) Title() string {
 		activity = " • idle"
 	case i.activity == "busy":
 		activity = " • busy"
+	case i.activity == "stale":
+		activity = " ⚠ thinking (stuck?)"
 	}
 	remoteTag := ""
 	if i.remoteName != "" {
@@ -212,6 +216,9 @@ func (i item) Title() string {
 func (i item) Description() string {
 	if i.needsInput {
 		return fmt.Sprintf("Repo: %s | Host: %s | State: input", i.session.RepoName, i.session.RemoteHost)
+	}
+	if i.activity == "stale" {
+		return fmt.Sprintf("Repo: %s | Host: %s | State: thinking (no progress >5m — may be stuck)", i.session.RepoName, i.session.RemoteHost)
 	}
 	if i.activity != "" {
 		return fmt.Sprintf("Repo: %s | Host: %s | State: %s", i.session.RepoName, i.session.RemoteHost, i.activity)
@@ -295,6 +302,7 @@ type Model struct {
 	changingDirSession     *domain.Session
 	flowManager            *usecase.FlowManager
 	firstLoad              map[string]bool
+	busySince              map[string]time.Time // when each session entered "busy" state
 	selectedRemote         config.Remote    // remote chosen for the current new-session wizard
 	remoteFilter           string           // "" = all remotes, otherwise a Remote.Host to filter by
 	allSessions            []domain.Session // unfiltered master session list
@@ -479,6 +487,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		doctorResults:   doctorResults,
 		viewport:        vp,
 		firstLoad:       make(map[string]bool),
+		busySince:       make(map[string]time.Time),
 		allSessions:     initialSessions,
 		mouseEnabled:    true,
 		tunnelList:      list.New(nil, list.NewDefaultDelegate(), 0, 0),
@@ -2994,6 +3003,21 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case inputHintMsg:
 		// Update list items with input hint when enabled
 		if m.cfg.Features.InputPromptDetection {
+			// Track how long this session has been continuously "busy".
+			// If it exceeds the liveness threshold, flag it as stale so the user
+			// knows the agent may be hung rather than actively thinking.
+			const livenessThreshold = 5 * time.Minute
+			if msg.activity == "busy" {
+				if _, tracked := m.busySince[msg.session]; !tracked {
+					m.busySince[msg.session] = time.Now()
+				} else if time.Since(m.busySince[msg.session]) > livenessThreshold {
+					msg.activity = "stale"
+				}
+			} else {
+				// Session is no longer busy — reset the watchdog clock.
+				delete(m.busySince, msg.session)
+			}
+
 			items := m.list.Items()
 			for idx, it := range items {
 				if sessItem, ok := it.(item); ok {

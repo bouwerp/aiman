@@ -107,8 +107,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	var worktree domain.Worktree
 	var err error
 	if config.AdHoc {
-		// Ad-hoc sessions run in the SSH root; no git worktree needed.
-		session.WorktreePath = sshMgr.GetRoot()
+		// Ad-hoc sessions get their own subdirectory under the repos root so
+		// they never run in the root itself.  Use the branch label (already
+		// sanitized by the UI) as the directory name.
+		adHocDir := branch
+		if adHocDir == "" {
+			adHocDir = "adhoc-" + time.Now().Format("20060102-1504")
+		}
+		session.WorktreePath = fmt.Sprintf("%s/%s", strings.TrimRight(sshMgr.GetRoot(), "/"), adHocDir)
 	} else if config.Repo.Name != "No Repository" && config.Repo.Name != "" {
 		if config.AttachExisting {
 			worktree, err = m.gitManager.FindExistingWorktree(ctx, sshMgr, config.Repo, branch)
@@ -127,7 +133,13 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		}
 		session.WorktreePath = worktree.Path
 	} else {
-		session.WorktreePath = sshMgr.GetRoot()
+		// No repository selected — create a named subdirectory under the root
+		// so the session never runs directly in the root.
+		subDir := branch
+		if subDir == "" {
+			subDir = "session-" + time.Now().Format("20060102-1504")
+		}
+		session.WorktreePath = fmt.Sprintf("%s/%s", strings.TrimRight(sshMgr.GetRoot(), "/"), subDir)
 	}
 
 	if !config.AdHoc {
