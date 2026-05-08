@@ -158,6 +158,7 @@ type SessionConfig struct {
 	Skills         []Skill
 	PromptFree     bool
 	ExistingBranch bool           // start from an existing remote branch instead of creating a new one
+	AttachExisting bool           // attach to an already-existing worktree without attempting git setup
 	AdHoc          bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
 	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
 	RemoteHost     string         // host identifier to tag the session with (e.g. "mydevbox.example.com")

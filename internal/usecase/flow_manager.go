@@ -108,7 +108,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		// Ad-hoc sessions run in the SSH root; no git worktree needed.
 		session.WorktreePath = sshMgr.GetRoot()
 	} else if config.Repo.Name != "No Repository" && config.Repo.Name != "" {
-		if config.ExistingBranch {
+		if config.AttachExisting {
+			worktree, err = m.gitManager.FindExistingWorktree(ctx, sshMgr, config.Repo, branch)
+		} else if config.ExistingBranch {
 			worktree, err = m.gitManager.SetupRemoteWorktreeFromBranch(ctx, sshMgr, config.Repo, branch)
 		} else {
 			worktree, err = m.gitManager.SetupRemoteWorktree(ctx, sshMgr, config.Repo, branch)

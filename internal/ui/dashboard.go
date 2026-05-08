@@ -2806,6 +2806,7 @@ func (m *Model) renderView() string {
 		b.WriteString(failStyle.Render("Worktree Already Exists") + "\n\n")
 		b.WriteString(fmt.Sprintf("A git worktree already exists for branch:\n%s\n\n", m.sessionCfg.Branch))
 		b.WriteString("This usually means there's an existing session.\n\n")
+		b.WriteString(activeStyle.Render("[u]") + " Use Existing Worktree\n")
 		if m.sessionCfg.ExistingBranch {
 			b.WriteString(activeStyle.Render("[b]") + " Pick a Different Branch\n")
 		} else {
@@ -4438,6 +4439,9 @@ func (m *Model) handleWorktreeExistsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c", "esc":
 			m.state = viewStateMain
 			return m, nil
+		case "u":
+			m.sessionCfg.AttachExisting = true
+			return m, m.createSession()
 		case "b":
 			if m.sessionCfg.ExistingBranch {
 				// Go back to branch picker and reset selection
