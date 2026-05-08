@@ -570,13 +570,23 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 	// Must not be behind origin — try origin/HEAD then origin/main then origin/master.
+	// Being behind just means new upstream commits; pull them rather than recovering.
 	reportProgress(ctx, fmt.Sprintf("Verifying %s is in sync with remote...", repoName))
 	behindOut, _ := remote.Execute(ctx, fmt.Sprintf(
 		`git -C %q rev-list HEAD..origin/HEAD --count 2>/dev/null || git -C %q rev-list HEAD..origin/main --count 2>/dev/null || git -C %q rev-list HEAD..origin/master --count 2>/dev/null || echo 0`,
 		repoPath, repoPath, repoPath))
 	if n, _ := strconv.Atoi(strings.TrimSpace(behindOut)); n > 0 {
-		reportProgress(ctx, fmt.Sprintf("Repository %s is %d commit(s) behind remote — recovering...", repoName, n))
-		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+		reportProgress(ctx, fmt.Sprintf("Repository %s is %d commit(s) behind remote — pulling...", repoName, n))
+		// Fast-forward pull; falls back across common default branch names.
+		pullOut, pullErr := remote.Execute(ctx, fmt.Sprintf(
+			`git -C %q pull --ff-only origin HEAD 2>&1 || git -C %q pull --ff-only origin main 2>&1 || git -C %q pull --ff-only origin master 2>&1`,
+			repoPath, repoPath, repoPath))
+		if pullErr != nil {
+			reportProgress(ctx, fmt.Sprintf("Fast-forward pull failed for %s — recovering...", repoName))
+			_ = pullOut
+			return recoverRepo(ctx, remote, repoPath, effectiveURL)
+		}
+		reportProgress(ctx, fmt.Sprintf("Repository %s updated ✓", repoName))
 	}
 	// Must not have local commits not on origin (diverged/ahead).
 	aheadOut, _ := remote.Execute(ctx, fmt.Sprintf(
