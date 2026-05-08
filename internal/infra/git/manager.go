@@ -283,27 +283,9 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 		return domain.Worktree{}, fmt.Errorf("branch name %q would place the worktree outside the repos root — choose a different name", branch)
 	}
 
-	// Ensure repo exists; auto-clone if a URL is configured and it's missing.
-	if err := remote.ValidateDir(ctx, repoPath); err != nil {
-		if repo.URL != "" {
-			parentDir := filepath.Dir(repoPath)
-			_, cloneErr := remote.Execute(ctx, fmt.Sprintf("mkdir -p %q && git -C %q clone %q %q", parentDir, parentDir, repo.URL, repoName))
-			if cloneErr != nil {
-				return domain.Worktree{}, fmt.Errorf("failed to clone repository: %w", cloneErr)
-			}
-		} else {
-			return domain.Worktree{}, fmt.Errorf("repository %s not found on remote and no URL provided", repoName)
-		}
-	}
-
-	// Validate (and if necessary recover) the git repository. A missing or corrupt
-	// repo is backed up to /tmp and recloned from the origin URL automatically.
 	if err := ensureHealthyRepo(ctx, remote, repoPath, repo.URL); err != nil {
 		return domain.Worktree{}, err
 	}
-
-	// Fetch latest
-	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin", repoPath))
 
 	// Check if worktree directory already exists.
 	checkCmd := fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)
@@ -372,17 +354,9 @@ func (m *Manager) ListRemoteBranches(ctx context.Context, remote domain.RemoteEx
 		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
 	}
 
-	if err := remote.ValidateDir(ctx, repoPath); err != nil {
-		return nil, fmt.Errorf("repository %s not found on remote", repoName)
-	}
-
-	// Validate (and if necessary recover) the git repository before listing branches.
 	if err := ensureHealthyRepo(ctx, remote, repoPath, repo.URL); err != nil {
 		return nil, err
 	}
-
-	// Fetch latest to ensure remote branches are up to date
-	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>/dev/null", repoPath))
 
 	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q branch -r", repoPath))
 	if err != nil {
@@ -416,17 +390,9 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
 	}
 
-	if err := remote.ValidateDir(ctx, repoPath); err != nil {
-		return domain.Worktree{}, fmt.Errorf("repository %s not found on remote", repoName)
-	}
-
-	// Validate (and if necessary recover) the git repository.
 	if err := ensureHealthyRepo(ctx, remote, repoPath, repo.URL); err != nil {
 		return domain.Worktree{}, err
 	}
-
-	// Fetch latest
-	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin", repoPath))
 
 	worktreeDir := strings.ReplaceAll(branch, "/", "-")
 	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
@@ -519,25 +485,82 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 	}, nil
 }
 
-// ensureHealthyRepo verifies that repoPath is a valid git repository. When the
-// directory exists but is not a valid repo (e.g. after an incomplete clone or
-// partial deletion), it attempts recovery: backs up the directory to /tmp, removes
-// it, then reclones from repoURL (or from the existing origin URL in .git/config).
-// Returns nil when the repo is (now) healthy.
+// ensureHealthyRepo is the single entry point for ensuring a git repository is
+// ready to use. It follows a simple two-step policy:
+//
+//  1. If the directory does not exist → clone from repoURL (error if no URL).
+//  2. If the directory exists → verify it is in sync with its origin remote.
+//     Any failure (no .git, no remote, local changes, local commits not on
+//     remote, fetch errors) triggers a backup to /tmp then a fresh reclone.
 func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repoURL string) error {
-	// Happy path: already a valid git repository.
-	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir", repoPath)); err == nil {
-		return nil
+	// Step 1: if directory is absent, clone.
+	if err := remote.ValidateDir(ctx, repoPath); err != nil {
+		if repoURL == "" {
+			return fmt.Errorf("repository not found at %s and no URL configured — please clone it manually", repoPath)
+		}
+		return cloneRepo(ctx, remote, repoPath, repoURL)
 	}
 
-	// Unhealthy — find a URL to clone from.
+	// Step 2: directory exists — resolve the recovery URL before running checks
+	// so recoverRepo always has something to clone from.
+	effectiveURL := repoURL
+	if effectiveURL == "" {
+		if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath)); err == nil && strings.TrimSpace(out) != "" {
+			effectiveURL = strings.TrimSpace(out)
+		}
+		if effectiveURL == "" {
+			if out, _ := remote.Execute(ctx, fmt.Sprintf(
+				`awk '/\[remote "origin"\]/{f=1} f && /url/{print $3; exit}' %q/.git/config 2>/dev/null`,
+				repoPath)); strings.TrimSpace(out) != "" {
+				effectiveURL = strings.TrimSpace(out)
+			}
+		}
+	}
+
+	// Must be a valid git repo.
+	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir", repoPath)); err != nil {
+		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+	}
+	// Must have an origin remote.
+	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath)); err != nil {
+		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+	}
+	// Fetch must succeed.
+	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>/dev/null", repoPath)); err != nil {
+		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+	}
+	// No uncommitted local changes.
+	if statusOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q status --porcelain", repoPath)); strings.TrimSpace(statusOut) != "" {
+		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+	}
+	// No local commits that are not on origin.
+	extraOut, _ := remote.Execute(ctx, fmt.Sprintf(
+		"git -C %q rev-list origin/HEAD..HEAD --count 2>/dev/null || echo 0", repoPath))
+	if n, _ := strconv.Atoi(strings.TrimSpace(extraOut)); n > 0 {
+		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+	}
+
+	return nil
+}
+
+func cloneRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repoURL string) error {
+	cleanedRepo := filepath.Clean(repoPath)
+	parentDir := filepath.Dir(cleanedRepo)
+	repoName := filepath.Base(cleanedRepo)
+	if _, err := remote.Execute(ctx, fmt.Sprintf("mkdir -p %q && git -C %q clone %q %q", parentDir, parentDir, repoURL, repoName)); err != nil {
+		return fmt.Errorf("failed to clone %s from %s: %w", repoName, repoURL, err)
+	}
+	return nil
+}
+
+// recoverRepo backs up repoPath to /tmp and reclones it from repoURL (or from the
+// URL discovered in the existing .git/config when repoURL is empty).
+func recoverRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repoURL string) error {
 	url := strings.TrimSpace(repoURL)
 	if url == "" {
-		// Try git first (works when .git/config is intact even if the working tree is broken).
 		if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath)); err == nil {
 			url = strings.TrimSpace(out)
 		}
-		// Fallback: parse .git/config directly (works when git itself is broken).
 		if url == "" {
 			if out, _ := remote.Execute(ctx, fmt.Sprintf(
 				`awk '/\[remote "origin"\]/{f=1} f && /url/{print $3; exit}' %q/.git/config 2>/dev/null`,
@@ -554,25 +577,21 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 	parentDir := filepath.Dir(cleanedRepo)
 	repoName := filepath.Base(cleanedRepo)
 
-	// Basic safety: refuse to rm if path has no sane parent.
 	if parentDir == cleanedRepo || parentDir == "/" || parentDir == "." {
-		return fmt.Errorf("repository at %s is corrupt but the path is unsafe to remove automatically — please reclone manually", repoPath)
+		return fmt.Errorf("repository at %s is unhealthy but the path is unsafe to remove automatically — please reclone manually", repoPath)
 	}
 
-	// Back up the corrupt directory before removing.
 	timestamp := time.Now().UTC().Format("20060102-150405")
 	backupPath := fmt.Sprintf("/tmp/aiman-repo-backup-%s-%s.tar.gz", repoName, timestamp)
 	backupCmd := fmt.Sprintf("tar -C %q -czf %q %q 2>/dev/null && echo OK", parentDir, backupPath, repoName)
 	if out, tarErr := remote.Execute(ctx, backupCmd); tarErr != nil || strings.TrimSpace(out) != "OK" {
-		return fmt.Errorf("repository at %s is corrupt and backup to %s failed — aborting reclone to avoid data loss", repoPath, backupPath)
+		return fmt.Errorf("repository at %s is unhealthy and backup to %s failed — aborting reclone to avoid data loss", repoPath, backupPath)
 	}
 
-	// Remove the corrupt directory.
 	if _, rmErr := remote.Execute(ctx, fmt.Sprintf("rm -rf %q", cleanedRepo)); rmErr != nil {
-		return fmt.Errorf("failed to remove corrupt repository %s (backed up to %s): %w", repoPath, backupPath, rmErr)
+		return fmt.Errorf("failed to remove unhealthy repository %s (backed up to %s): %w", repoPath, backupPath, rmErr)
 	}
 
-	// Reclone.
 	if _, cloneErr := remote.Execute(ctx, fmt.Sprintf("git -C %q clone %q %q", parentDir, url, repoName)); cloneErr != nil {
 		return fmt.Errorf("failed to reclone %s from %s (backup at %s): %w", repoName, url, backupPath, cloneErr)
 	}
@@ -595,10 +614,6 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 		repoPath = cleanRoot
 	} else {
 		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
-	}
-
-	if err := remote.ValidateDir(ctx, repoPath); err != nil {
-		return domain.Worktree{}, fmt.Errorf("repository %s not found on remote", repoName)
 	}
 
 	if err := ensureHealthyRepo(ctx, remote, repoPath, repo.URL); err != nil {
