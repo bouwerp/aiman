@@ -1742,6 +1742,16 @@ func (m *Model) runTerminateStep(index int) error {
 		if !ok {
 			return fmt.Errorf("no remote configured")
 		}
+
+		// Legacy ad-hoc sessions stored WorktreePath = remote root.
+		// Silently skip directory removal — we must never rm -rf the root.
+		cleanWorktreeEarly := path.Clean(s.WorktreePath)
+		cleanRootEarly := path.Clean(remote.Root)
+		if cleanWorktreeEarly == cleanRootEarly || cleanWorktreeEarly == "/" || cleanWorktreeEarly == "." {
+			m.log("Skipping worktree removal for legacy ad-hoc session: WorktreePath %q is the remote root", s.WorktreePath)
+			return nil
+		}
+
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
 		repoName := extractRepoName(s.RepoName)
