@@ -131,8 +131,12 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		updated_at = excluded.updated_at;
 	`
 
+	updatedAt := s.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
 	_, err := r.db.ExecContext(ctx, query,
-		s.ID, s.IssueKey, s.Branch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, s.MutagenSyncID, s.LocalPath, s.AgentName, string(s.Status), tunnelsJSON, s.AWSProfileName, awsConfigJSON, s.CreatedAt, time.Now())
+		s.ID, s.IssueKey, s.Branch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, s.MutagenSyncID, s.LocalPath, s.AgentName, string(s.Status), tunnelsJSON, s.AWSProfileName, awsConfigJSON, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}

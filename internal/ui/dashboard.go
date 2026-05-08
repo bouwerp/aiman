@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -383,6 +384,17 @@ func (m *Model) makeItem(s domain.Session) item {
 }
 
 func (m *Model) applyRemoteFilter() {
+	// Sort sessions: most recently updated first.
+	// Use max(UpdatedAt, CreatedAt) so sessions with zero UpdatedAt still sort by creation time.
+	effectiveTime := func(s domain.Session) time.Time {
+		if s.UpdatedAt.After(s.CreatedAt) {
+			return s.UpdatedAt
+		}
+		return s.CreatedAt
+	}
+	sort.Slice(m.allSessions, func(i, j int) bool {
+		return effectiveTime(m.allSessions[i]).After(effectiveTime(m.allSessions[j]))
+	})
 	var filtered []list.Item
 	for _, s := range m.allSessions {
 		if m.remoteFilter == "" || s.RemoteHost == m.remoteFilter {
@@ -1611,8 +1623,9 @@ func (m *Model) createSession() tea.Cmd {
 			m.log("Warning: failed to start mutagen sync: %v", syncErr)
 		}
 
-		// Save to DB
+		// Save to DB — stamp UpdatedAt so new/restarted sessions sort to top.
 		if m.db != nil {
+			session.UpdatedAt = time.Now()
 			_ = m.db.Save(ctx, session)
 		}
 
@@ -2153,6 +2166,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.list.SetItems(items)
 		m.restartingSession = nil
+		// Re-sort and rebuild list so new/restarted session appears at the top.
+		m.applyRemoteFilter()
 
 		if msg.warning != "" {
 			m.snapshotToast = "⚠️  " + msg.warning
@@ -4498,20 +4513,28 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.log("Discovered %d sessions", len(msg.sessions))
 		ctx := context.Background()
 
-		// Save all discovered sessions to DB
-		for i := range msg.sessions {
-			if m.db != nil {
-				_ = m.db.Save(ctx, &msg.sessions[i])
-			}
-		}
-
-		// Load DB as the authoritative set of known sessions
+		// Load DB to carry timestamps before saving (discovery must not clobber updated_at)
 		dbSessions := make(map[string]domain.Session)
 		if m.db != nil {
 			if list, err := m.db.List(ctx); err == nil {
 				for _, s := range list {
 					dbSessions[s.ID] = s
 				}
+			}
+		}
+
+		// Save all discovered sessions to DB, preserving existing timestamps.
+		for i := range msg.sessions {
+			if m.db != nil {
+				if existing, ok := dbSessions[msg.sessions[i].ID]; ok {
+					if !existing.UpdatedAt.IsZero() {
+						msg.sessions[i].UpdatedAt = existing.UpdatedAt
+					}
+					if msg.sessions[i].CreatedAt.IsZero() && !existing.CreatedAt.IsZero() {
+						msg.sessions[i].CreatedAt = existing.CreatedAt
+					}
+				}
+				_ = m.db.Save(ctx, &msg.sessions[i])
 			}
 		}
 

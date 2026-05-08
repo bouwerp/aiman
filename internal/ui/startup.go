@@ -268,6 +268,13 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if s.LocalPath == "" {
 					s.LocalPath = dbSess.LocalPath
 				}
+				// Preserve timestamps from DB so discovery saves do not clobber them.
+				if !dbSess.UpdatedAt.IsZero() {
+					s.UpdatedAt = dbSess.UpdatedAt
+				}
+				if s.CreatedAt.IsZero() && !dbSess.CreatedAt.IsZero() {
+					s.CreatedAt = dbSess.CreatedAt
+				}
 			}
 			merged = append(merged, s)
 			seenInMerged[s.ID] = true
