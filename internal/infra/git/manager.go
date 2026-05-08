@@ -674,6 +674,10 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 			if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", registeredWTPath)); err == nil {
 				resolvedPath = strings.TrimSpace(out)
 			}
+			// Never return the main repo itself as a worktree.
+			if filepath.Clean(resolvedPath) == filepath.Clean(repoPath) {
+				return domain.Worktree{}, fmt.Errorf("safety: found worktree path resolves to the main repository %q — sessions must use a worktree, not the main repo", repoPath)
+			}
 			return domain.Worktree{Path: resolvedPath, Branch: branch}, nil
 		}
 	}
@@ -688,6 +692,10 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 			resolvedPath := worktreePath
 			if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
 				resolvedPath = strings.TrimSpace(out)
+			}
+			// Never return the main repo itself.
+			if filepath.Clean(resolvedPath) == filepath.Clean(repoPath) {
+				return domain.Worktree{}, fmt.Errorf("safety: computed worktree path resolves to the main repository %q — sessions must use a worktree, not the main repo", repoPath)
 			}
 			return domain.Worktree{Path: resolvedPath, Branch: branch}, nil
 		}
@@ -713,6 +721,22 @@ func reportProgress(ctx context.Context, msg string) {
 func extractRepoName(fullName string) string {
 	parts := strings.Split(fullName, "/")
 	return parts[len(parts)-1]
+}
+
+// ComputeMainRepoPath returns the expected absolute path of the main (bare) repo
+// clone on the remote, given the remote root and the full repo name (owner/repo or just repo).
+// This is the directory that must never be used as a session working directory.
+func ComputeMainRepoPath(remoteRoot, repoFullName string) string {
+	return computeMainRepoPath(remoteRoot, repoFullName)
+}
+
+func computeMainRepoPath(remoteRoot, repoFullName string) string {
+	repoName := extractRepoName(repoFullName)
+	cleanRoot := strings.TrimRight(remoteRoot, "/")
+	if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
+		return filepath.Clean(cleanRoot)
+	}
+	return filepath.Clean(fmt.Sprintf("%s/%s", cleanRoot, repoName))
 }
 
 // safeRmWorktree executes `rm -rf path` on the remote only after verifying that

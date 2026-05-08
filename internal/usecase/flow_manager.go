@@ -3,12 +3,14 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	infraGit "github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/google/uuid"
 )
 
@@ -117,6 +119,11 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to setup worktree: %w", err)
+		}
+		// Safety: sessions must never run inside the main repository directory.
+		mainRepo := infraGit.ComputeMainRepoPath(sshMgr.GetRoot(), config.Repo.Name)
+		if filepath.Clean(worktree.Path) == mainRepo {
+			return nil, fmt.Errorf("safety: session working directory %q is the main repository — sessions must use a git worktree (a sibling directory), not the main repo itself", worktree.Path)
 		}
 		session.WorktreePath = worktree.Path
 	} else {
