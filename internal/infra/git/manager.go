@@ -533,8 +533,15 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 	}
 	// Fetch must succeed.
 	reportProgress(ctx, fmt.Sprintf("Fetching latest changes for %s...", repoName))
-	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>/dev/null", repoPath)); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>&1", repoPath)); err != nil {
 		reportProgress(ctx, fmt.Sprintf("Fetch failed for %s — recovering...", repoName))
+		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+	}
+	// HEAD must be a valid commit (empty/re-init'd repos have no commits).
+	headOut, _ := remote.Execute(ctx, fmt.Sprintf(
+		`git -C %q rev-parse HEAD 2>/dev/null || echo EMPTY`, repoPath))
+	if strings.TrimSpace(headOut) == "EMPTY" {
+		reportProgress(ctx, fmt.Sprintf("Repository %s has no local commits — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 	// No uncommitted local changes.
@@ -543,12 +550,21 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 		reportProgress(ctx, fmt.Sprintf("Repository %s has uncommitted changes — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
-	// No local commits that are not on origin.
+	// Must not be behind origin — try origin/HEAD then origin/main then origin/master.
 	reportProgress(ctx, fmt.Sprintf("Verifying %s is in sync with remote...", repoName))
-	extraOut, _ := remote.Execute(ctx, fmt.Sprintf(
-		"git -C %q rev-list origin/HEAD..HEAD --count 2>/dev/null || echo 0", repoPath))
-	if n, _ := strconv.Atoi(strings.TrimSpace(extraOut)); n > 0 {
-		reportProgress(ctx, fmt.Sprintf("Repository %s has local commits not on remote — recovering...", repoName))
+	behindOut, _ := remote.Execute(ctx, fmt.Sprintf(
+		`git -C %q rev-list HEAD..origin/HEAD --count 2>/dev/null || git -C %q rev-list HEAD..origin/main --count 2>/dev/null || git -C %q rev-list HEAD..origin/master --count 2>/dev/null || echo 0`,
+		repoPath, repoPath, repoPath))
+	if n, _ := strconv.Atoi(strings.TrimSpace(behindOut)); n > 0 {
+		reportProgress(ctx, fmt.Sprintf("Repository %s is %d commit(s) behind remote — recovering...", repoName, n))
+		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+	}
+	// Must not have local commits not on origin (diverged/ahead).
+	aheadOut, _ := remote.Execute(ctx, fmt.Sprintf(
+		`git -C %q rev-list origin/HEAD..HEAD --count 2>/dev/null || git -C %q rev-list origin/main..HEAD --count 2>/dev/null || git -C %q rev-list origin/master..HEAD --count 2>/dev/null || echo 0`,
+		repoPath, repoPath, repoPath))
+	if n, _ := strconv.Atoi(strings.TrimSpace(aheadOut)); n > 0 {
+		reportProgress(ctx, fmt.Sprintf("Repository %s has %d local commit(s) not on remote — recovering...", repoName, n))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 
