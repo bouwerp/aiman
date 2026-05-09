@@ -94,11 +94,16 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	}
 
 	// Create Session record
+	agentName := ""
+	if config.Agent != nil {
+		agentName = config.Agent.Name
+	}
 	session := &domain.Session{
 		ID:        uuid.New().String(),
 		IssueKey:  config.IssueKey,
 		Branch:    branch,
 		RepoName:  config.Repo.Name,
+		AgentName: agentName,
 		Status:    domain.SessionStatusProvisioning,
 		CreatedAt: time.Now(),
 	}
@@ -301,6 +306,11 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		_ = m.jiraProvider.TransitionIssue(ctx, session.IssueKey, m.jiraConfig.TransitionStatus)
 	}
 
+	// Detect the LLM model the agent will use — best-effort, non-fatal.
+	if config.Agent != nil {
+		session.AgentModel = detectAgentModel(ctx, sshMgr, config.Agent.Name)
+	}
+
 	if err := session.Transition(domain.SessionStatusActive); err != nil {
 		return nil, err
 	}
@@ -316,6 +326,31 @@ func (m *FlowManager) StartNewFlow(ctx context.Context, issueKey string, repoNam
 		Agent:      &domain.Agent{Name: "Claude Code", Command: "claude"}, // Default
 		PromptFree: true,
 	})
+}
+
+// detectAgentModel probes the remote for the LLM model the agent will use.
+// It is best-effort: returns an empty string if the model cannot be determined.
+func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentName string) string {
+	name := strings.ToLower(agentName)
+	var cmd string
+	switch {
+	case strings.Contains(name, "claude"):
+		// ANTHROPIC_MODEL env var takes precedence; claude config is a fallback.
+		cmd = `printenv ANTHROPIC_MODEL 2>/dev/null || claude config get model 2>/dev/null || echo ""`
+	case strings.Contains(name, "gemini"):
+		cmd = `printenv GEMINI_MODEL 2>/dev/null || gemini config get model 2>/dev/null || echo ""`
+	case strings.Contains(name, "opencode"):
+		cmd = `printenv OPENCODE_MODEL 2>/dev/null || echo ""`
+	case strings.Contains(name, "copilot"):
+		cmd = `printenv GITHUB_COPILOT_MODEL 2>/dev/null || echo ""`
+	default:
+		return ""
+	}
+	out, err := remote.Execute(ctx, cmd)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // PushSessionAWSCredentials generates a session-scoped AWS profile name, obtains

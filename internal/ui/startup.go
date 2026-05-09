@@ -262,6 +262,9 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if s.AgentName == "" {
 					s.AgentName = dbSess.AgentName
 				}
+				if s.AgentModel == "" {
+					s.AgentModel = dbSess.AgentModel
+				}
 				if s.MutagenSyncID == "" {
 					s.MutagenSyncID = dbSess.MutagenSyncID
 				}

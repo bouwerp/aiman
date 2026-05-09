@@ -214,16 +214,24 @@ func (i item) Title() string {
 }
 
 func (i item) Description() string {
+	agentLabel := i.session.AgentName
+	if i.session.AgentModel != "" {
+		agentLabel = fmt.Sprintf("%s (%s)", agentLabel, i.session.AgentModel)
+	}
+	agentPart := ""
+	if agentLabel != "" {
+		agentPart = " | Agent: " + agentLabel
+	}
 	if i.needsInput {
-		return fmt.Sprintf("Repo: %s | Host: %s | State: input", i.session.RepoName, i.session.RemoteHost)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: input", i.session.RepoName, i.session.RemoteHost, agentPart)
 	}
 	if i.activity == "stale" {
-		return fmt.Sprintf("Repo: %s | Host: %s | State: thinking (no progress >5m — may be stuck)", i.session.RepoName, i.session.RemoteHost)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: thinking (no progress >5m — may be stuck)", i.session.RepoName, i.session.RemoteHost, agentPart)
 	}
 	if i.activity != "" {
-		return fmt.Sprintf("Repo: %s | Host: %s | State: %s", i.session.RepoName, i.session.RemoteHost, i.activity)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: %s", i.session.RepoName, i.session.RemoteHost, agentPart, i.activity)
 	}
-	return fmt.Sprintf("Repo: %s | Host: %s", i.session.RepoName, i.session.RemoteHost)
+	return fmt.Sprintf("Repo: %s | Host: %s%s", i.session.RepoName, i.session.RemoteHost, agentPart)
 }
 
 func (i item) FilterValue() string {
@@ -303,9 +311,9 @@ type Model struct {
 	flowManager            *usecase.FlowManager
 	firstLoad              map[string]bool
 	busySince              map[string]time.Time // when each session entered "busy" state
-	selectedRemote         config.Remote    // remote chosen for the current new-session wizard
-	remoteFilter           string           // "" = all remotes, otherwise a Remote.Host to filter by
-	allSessions            []domain.Session // unfiltered master session list
+	selectedRemote         config.Remote        // remote chosen for the current new-session wizard
+	remoteFilter           string               // "" = all remotes, otherwise a Remote.Host to filter by
+	allSessions            []domain.Session     // unfiltered master session list
 	mouseEnabled           bool
 	provisionSteps         []domain.ProvisionStep
 	provisioningIdx        int
@@ -5238,7 +5246,7 @@ func (m *Model) restartSession() tea.Cmd {
 			"if tmux has-session -t %q 2>/dev/null; then "+
 				"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
 				"tmux respawn-pane -k -t %q -c %q%s %q; "+
-			"else "+
+				"else "+
 				"tmux start-server 2>/dev/null || true; "+
 				"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
 				"tmux set-window-option -g remain-on-exit on 2>/dev/null || true; "+
@@ -5248,7 +5256,7 @@ func (m *Model) restartSession() tea.Cmd {
 				"tmux set-window-option -g remain-on-exit off 2>/dev/null || true; "+
 				"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
 				"exit $_RC; "+
-			"fi",
+				"fi",
 			// has-session
 			s.TmuxSession,
 			// respawn-pane branch

@@ -37,6 +37,7 @@ type Session struct {
 	MutagenSyncID    string
 	LocalPath        string
 	AgentName        string
+	AgentModel       string // LLM model in use (e.g. "claude-opus-4-5"); detected at session creation
 	Status           SessionStatus
 	Tunnels          []Tunnel
 	AWSProfileName   string     // session-scoped AWS profile on the remote (e.g. "aiman-a1b2c3d4")

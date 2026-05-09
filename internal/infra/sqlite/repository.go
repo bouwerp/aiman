@@ -36,6 +36,7 @@ func NewRepository(dbPath string) (*Repository, error) {
 		mutagen_sync_id TEXT,
 		local_path TEXT,
 		agent_name TEXT,
+		agent_model TEXT,
 		status TEXT,
 		tunnels_json TEXT,
 		created_at DATETIME,
@@ -53,6 +54,7 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN tunnels_json TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN aws_profile TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN aws_config_json TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN agent_model TEXT")
 
 	secretsQuery := `
 	CREATE TABLE IF NOT EXISTS secrets (
@@ -111,8 +113,8 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 	}
 
 	query := `
-	INSERT INTO sessions (id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, status, tunnels_json, aws_profile, aws_config_json, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO sessions (id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, tunnels_json, aws_profile, aws_config_json, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		issue_key = COALESCE(NULLIF(excluded.issue_key, ''), sessions.issue_key),
 		branch = COALESCE(NULLIF(excluded.branch, ''), sessions.branch),
@@ -124,6 +126,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		mutagen_sync_id = COALESCE(NULLIF(excluded.mutagen_sync_id, ''), sessions.mutagen_sync_id),
 		local_path = COALESCE(NULLIF(excluded.local_path, ''), sessions.local_path),
 		agent_name = COALESCE(NULLIF(excluded.agent_name, ''), sessions.agent_name),
+		agent_model = COALESCE(NULLIF(excluded.agent_model, ''), sessions.agent_model),
 		status = excluded.status,
 		tunnels_json = COALESCE(excluded.tunnels_json, sessions.tunnels_json),
 		aws_profile = COALESCE(NULLIF(excluded.aws_profile, ''), sessions.aws_profile),
@@ -136,7 +139,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		updatedAt = time.Now()
 	}
 	_, err := r.db.ExecContext(ctx, query,
-		s.ID, s.IssueKey, s.Branch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, s.MutagenSyncID, s.LocalPath, s.AgentName, string(s.Status), tunnelsJSON, s.AWSProfileName, awsConfigJSON, s.CreatedAt, updatedAt)
+		s.ID, s.IssueKey, s.Branch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), tunnelsJSON, s.AWSProfileName, awsConfigJSON, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
@@ -144,14 +147,14 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 }
 
 func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error) {
-	query := "SELECT id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, status, tunnels_json, aws_profile, aws_config_json, created_at, updated_at FROM sessions WHERE id = ?;"
+	query := "SELECT id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, tunnels_json, aws_profile, aws_config_json, created_at, updated_at FROM sessions WHERE id = ?;"
 
 	var s domain.Session
 	var statusStr string
-	var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, tunnelsJSON, awsProfile, awsConfigJSON sql.NullString
+	var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, agentModel, tunnelsJSON, awsProfile, awsConfigJSON sql.NullString
 	var createdAt, updatedAt sql.NullTime
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &statusStr, &tunnelsJSON, &awsProfile, &awsConfigJSON, &createdAt, &updatedAt)
+		&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &agentModel, &statusStr, &tunnelsJSON, &awsProfile, &awsConfigJSON, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("session not found: %w", err)
@@ -169,6 +172,7 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 	s.MutagenSyncID = mutagenSyncID.String
 	s.LocalPath = localPath.String
 	s.AgentName = agentName.String
+	s.AgentModel = agentModel.String
 	s.Status = domain.SessionStatus(statusStr)
 	if tunnelsJSON.Valid && tunnelsJSON.String != "" {
 		if err := json.Unmarshal([]byte(tunnelsJSON.String), &s.Tunnels); err != nil {
@@ -188,7 +192,7 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 }
 
 func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
-	query := "SELECT id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, status, tunnels_json, aws_profile, aws_config_json, created_at, updated_at FROM sessions ORDER BY updated_at DESC;"
+	query := "SELECT id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, tunnels_json, aws_profile, aws_config_json, created_at, updated_at FROM sessions ORDER BY updated_at DESC;"
 
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
@@ -200,9 +204,9 @@ func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 	for rows.Next() {
 		var s domain.Session
 		var statusStr string
-		var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, tunnelsJSON, awsProfile, awsConfigJSON sql.NullString
+		var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, agentModel, tunnelsJSON, awsProfile, awsConfigJSON sql.NullString
 		var createdAt, updatedAt sql.NullTime
-		err := rows.Scan(&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &statusStr, &tunnelsJSON, &awsProfile, &awsConfigJSON, &createdAt, &updatedAt)
+		err := rows.Scan(&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &agentModel, &statusStr, &tunnelsJSON, &awsProfile, &awsConfigJSON, &createdAt, &updatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan session: %w", err)
 		}
@@ -216,6 +220,7 @@ func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 		s.MutagenSyncID = mutagenSyncID.String
 		s.LocalPath = localPath.String
 		s.AgentName = agentName.String
+		s.AgentModel = agentModel.String
 		s.Status = domain.SessionStatus(statusStr)
 		if tunnelsJSON.Valid && tunnelsJSON.String != "" {
 			if err := json.Unmarshal([]byte(tunnelsJSON.String), &s.Tunnels); err != nil {
