@@ -3179,13 +3179,15 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 	}
 
-	// Shift+arrow / Shift+PgUp/Down scroll the preview panel without moving the session list.
+	// Scroll the preview panel. Use [ / ] (or shift+arrow as fallback) so that
+	// the keybindings are not intercepted by the local terminal emulator.
+	// Plain pgup/pgdown also scroll the preview when the console is not open.
 	if m.panelMode == panelModePreview {
 		switch msg.String() {
-		case "shift+up":
+		case "[", "shift+up":
 			m.viewport.ScrollUp(3)
 			return m, nil, true
-		case "shift+down":
+		case "]", "shift+down":
 			m.viewport.ScrollDown(3)
 			return m, nil, true
 		case "shift+pgup":
@@ -3194,6 +3196,16 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		case "shift+pgdown":
 			m.viewport.PageDown()
 			return m, nil, true
+		case "pgup":
+			if !m.consoleOpen {
+				m.viewport.PageUp()
+				return m, nil, true
+			}
+		case "pgdown":
+			if !m.consoleOpen {
+				m.viewport.PageDown()
+				return m, nil, true
+			}
 		}
 	}
 
@@ -4959,7 +4971,7 @@ func (m *Model) renderMainView() string {
 		}
 		scrollHint := ""
 		if m.panelMode == panelModePreview {
-			scrollHint = "  " + statusStyle.Render("shift+↑↓ scroll")
+			scrollHint = "  " + statusStyle.Render("[/] scroll")
 		}
 		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
 
