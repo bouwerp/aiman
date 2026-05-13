@@ -155,6 +155,7 @@ const (
 	viewStateAWSCredentials // manage AWS credential status and renewal
 	viewStateError          // generic error dialog (press any key to dismiss)
 	viewStateRemotePicker   // select remote for new session
+	viewStateFullPreview    // full-screen scrollable pane preview
 )
 
 type panelMode int
@@ -343,6 +344,7 @@ type Model struct {
 	archivePreviewVP       viewport.Model
 	archiveSteps           []archiveStep
 	archiveStepIdx         int
+	fullPreviewVP          viewport.Model
 }
 
 // archivePreviewData holds the pre-computed data shown in the archive confirmation popup.
@@ -452,6 +454,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
+			key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "full-screen pane preview")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 		}
 	}
@@ -2049,6 +2052,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.terminal.h = m.viewport.Height
 			m.terminal.term.Resize(m.viewport.Width, m.viewport.Height)
 		}
+		if m.state == viewStateFullPreview {
+			m.fullPreviewVP.Width = msg.Width
+			m.fullPreviewVP.Height = msg.Height - 3
+		}
 
 		// Propagate to sub-models
 		var subCmd tea.Cmd
@@ -2323,6 +2330,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case viewStateLoading:
 		return m.handleLoadingUpdate(msg)
+
+	case viewStateFullPreview:
+		return m.handleFullPreviewUpdate(msg)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -2880,6 +2890,9 @@ func (m *Model) renderView() string {
 			Padding(1, 2).
 			Width(50)
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(msg))
+
+	case viewStateFullPreview:
+		return m.renderFullPreviewView()
 	}
 	return ""
 }
@@ -3175,6 +3188,17 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if msg.String() == "G" || msg.String() == "end" {
 		if m.panelMode == panelModePreview {
 			m.viewport.GotoBottom()
+			return m, nil, true
+		}
+	}
+
+	// z: open full-screen scrollable pane preview.
+	if msg.String() == "z" && m.panelMode == panelModePreview {
+		if sel := m.list.SelectedItem(); sel != nil {
+			m.fullPreviewVP = viewport.New(m.width, m.height-3)
+			m.fullPreviewVP.SetContent(m.tmuxOutput)
+			m.fullPreviewVP.GotoBottom()
+			m.state = viewStateFullPreview
 			return m, nil, true
 		}
 	}
@@ -4971,7 +4995,7 @@ func (m *Model) renderMainView() string {
 		}
 		scrollHint := ""
 		if m.panelMode == panelModePreview {
-			scrollHint = "  " + statusStyle.Render("[/] scroll")
+			scrollHint = "  " + statusStyle.Render("[/] scroll · z: full-screen")
 		}
 		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
 
@@ -5014,7 +5038,7 @@ func (m *Model) renderMainView() string {
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • w: refresh AWS • y: copy view • G/end: latest • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
+		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • w: refresh AWS • y: copy view • G/end: latest • z: full-screen • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
 
 	// PR Buttons (matching Figma)
 	var prButtons string
@@ -5556,4 +5580,61 @@ func (m *Model) handleArchiveProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	// Forward all other msgs to main Update so step/ready messages are handled
 	return m, nil
+}
+
+// handleFullPreviewUpdate handles input for the full-screen pane preview.
+func (m *Model) handleFullPreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "esc", "z":
+			m.state = viewStateMain
+			return m, nil
+		case "G", "end":
+			m.fullPreviewVP.GotoBottom()
+			return m, nil
+		case "g", "home":
+			m.fullPreviewVP.GotoTop()
+			return m, nil
+		case "up", "k", "[":
+			m.fullPreviewVP.ScrollUp(3)
+			return m, nil
+		case "down", "j", "]":
+			m.fullPreviewVP.ScrollDown(3)
+			return m, nil
+		case "pgup", "shift+pgup":
+			m.fullPreviewVP.PageUp()
+			return m, nil
+		case "pgdown", "shift+pgdown":
+			m.fullPreviewVP.PageDown()
+			return m, nil
+		}
+	case tea.MouseMsg:
+		var cmd tea.Cmd
+		m.fullPreviewVP, cmd = m.fullPreviewVP.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+// renderFullPreviewView renders the full-screen scrollable pane preview.
+func (m *Model) renderFullPreviewView() string {
+	var sessionLabel string
+	if sel := m.list.SelectedItem(); sel != nil {
+		s := sel.(item).session
+		sessionLabel = s.TmuxSession
+		if s.Branch != "" {
+			sessionLabel += " · " + s.Branch
+		}
+	}
+
+	pct := int(m.fullPreviewVP.ScrollPercent() * 100)
+	scrollInfo := fmt.Sprintf("%d%%", pct)
+
+	header := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
+		sessionLabel+" · "+scrollInfo+"  ↑↓/pgup/pgdn: scroll · g/G: top/bottom · z/esc/q: back",
+	)
+	divider := strings.Repeat("─", m.width)
+
+	return header + "\n" + divider + "\n" + m.fullPreviewVP.View()
 }
