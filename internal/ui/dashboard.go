@@ -3330,6 +3330,13 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 				return m, nil, true
 			}
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+			// Enable mouse mode on the session so scroll-wheel works in the attached terminal.
+			// Fired concurrently; the 150 ms tick gives it time to complete before attach.
+			go func(sessionName string) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, _ = mgr.Execute(ctx, fmt.Sprintf("tmux set-option -t %q mouse on", sessionName))
+			}(s.TmuxSession)
 			c := mgr.AttachTmuxSession(s.TmuxSession)
 			m.loadingMsg = fmt.Sprintf("Connecting to session %s...", s.TmuxSession)
 			m.loadingNext = viewStateMain
