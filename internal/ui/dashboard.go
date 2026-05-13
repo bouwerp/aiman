@@ -19,7 +19,6 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/ai"
-	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
@@ -1299,45 +1298,6 @@ type recreateMutagenMsg struct {
 	err     error
 }
 
-type refreshAWSMsg struct {
-	err error
-}
-
-func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
-	return func() tea.Msg {
-		ctx := context.Background()
-		remote, ok := resolveRemote(m.cfg, s)
-		if !ok {
-			return refreshAWSMsg{err: fmt.Errorf("no remote configured for session %q", s.RemoteHost)}
-		}
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		if err := mgr.Connect(ctx); err != nil {
-			return refreshAWSMsg{err: fmt.Errorf("SSH connect: %w", err)}
-		}
-		// Prefer the session's own stored AWSConfig (captures per-session role/region overrides).
-		// Fall back to the remote's global delegation config if the session predates this feature.
-		var cfg *domain.AWSConfig
-		if s.AWSConfig != nil {
-			cfg = s.AWSConfig
-		} else if remote.AWSDelegation != nil && remote.AWSDelegation.SyncCredentials {
-			d := remote.AWSDelegation
-			cfg = &domain.AWSConfig{
-				SourceProfile:   d.SourceProfile,
-				RoleName:        d.RoleName,
-				AccountID:       d.AccountID,
-				Region:          d.Region,
-				Regions:         d.Regions,
-				SessionPolicy:   d.SessionPolicy,
-				DurationSeconds: d.DurationSeconds,
-			}
-		}
-		if cfg == nil {
-			return refreshAWSMsg{err: fmt.Errorf("no AWS delegation configured for remote %q", s.RemoteHost)}
-		}
-		_, err := usecase.PushSessionAWSCredentials(ctx, mgr, s.ID, cfg)
-		return refreshAWSMsg{err: err}
-	}
-}
 func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngine, name string, timeout time.Duration) error {
 	start := time.Now()
 	for time.Since(start) < timeout {
@@ -1880,17 +1840,7 @@ func (m *Model) runTerminateStep(index int) error {
 			return nil
 		}
 		return os.RemoveAll(s.LocalPath)
-	case 5: // Clean up session-scoped AWS credentials from the remote
-		if s.AWSProfileName == "" || s.RemoteHost == "" {
-			return nil
-		}
-		remote, ok := resolveRemote(m.cfg, s)
-		if !ok {
-			return nil
-		}
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		return awsdelegation.RemoveSessionProfile(ctx, mgr, s.AWSProfileName)
-	case 6: // Delete session from database
+	case 5: // Delete session from database
 		if s.ID == "" {
 			return nil
 		}
@@ -2145,14 +2095,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
 			return m, m.restartSession()
-		}
-		return m, nil
-	case refreshAWSMsg:
-		if msg.err != nil {
-			m.lastError = fmt.Sprintf("AWS credentials refresh failed: %v", msg.err)
-			m.state = viewStateError
-		} else {
-			m.state = viewStateMain
 		}
 		return m, nil
 	case sessionCreateMsg:
@@ -3484,18 +3426,6 @@ end tell`, cmd)
 			return m, m.fetchAgents(), true
 		}
 	}
-	if msg.String() == "w" {
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			if s.AWSProfileName == "" {
-				return m, nil, true
-			}
-			m.loadingMsg = "Refreshing AWS credentials..."
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-			return m, m.refreshAWSCredentialsCmd(s), true
-		}
-	}
 	if msg.String() == "c" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
@@ -4433,19 +4363,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.summary.SetAgent(m.sessionCfg.Agent)
 		m.summary.SetSize(m.width, m.height)
-		// Populate AWS override fields when the remote has SyncCredentials enabled.
-		if remote := m.selectedRemote; remote.AWSDelegation != nil && remote.AWSDelegation.SyncCredentials {
-			d := remote.AWSDelegation
-			m.summary.SetAWSDefaults(&domain.AWSConfig{
-				SourceProfile:   d.SourceProfile,
-				RoleName:        d.RoleName,
-				AccountID:       d.AccountID,
-				Region:          d.Region,
-				Regions:         d.Regions,
-				SessionPolicy:   d.SessionPolicy,
-				DurationSeconds: d.DurationSeconds,
-			})
-		}
 		// Pre-fill OpenRouter API key from local environment (user can override).
 		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
 		// Load globally stored secrets so the user can select which to inject.
@@ -4472,7 +4389,6 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		summaryCfg := m.summary.GetSessionConfig()
 		m.sessionCfg.Agent = summaryCfg.Agent
 		m.sessionCfg.PromptFree = summaryCfg.PromptFree
-		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
 		m.sessionCfg.OpenRouterAPIKey = summaryCfg.OpenRouterAPIKey
 		m.loadingMsg = "Creating session..."
 		m.loadingNext = viewStateMain
@@ -4502,7 +4418,6 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					"Stopping agent process",
 					"Removing git worktree",
 					"Cleaning local files",
-					"Cleaning up AWS credentials",
 					"Updating session status",
 				}
 				m.terminateErrors = make([]string, len(m.terminateSteps))
@@ -4526,7 +4441,6 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					"Stopping agent process",
 					"Removing git worktree",
 					"Cleaning local files",
-					"Cleaning up AWS credentials",
 					"Updating session status",
 				}
 				m.terminateErrors = make([]string, len(m.terminateSteps))
@@ -5045,7 +4959,7 @@ func (m *Model) renderMainView() string {
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • w: refresh AWS • y: copy view • G/end: latest • z: full-screen • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
+		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • z: full-screen • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
 
 	// PR Buttons (matching Figma)
 	var prButtons string

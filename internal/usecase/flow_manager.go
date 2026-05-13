@@ -185,18 +185,6 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
 
-	// Push session-scoped AWS credentials BEFORE starting tmux so AWS_PROFILE is
-	// available to the agent from the very first command.
-	var awsProfileName string
-	if config.AWSConfig != nil && sshMgr != nil {
-		if pn, pushErr := PushSessionAWSCredentials(ctx, sshMgr, session.ID, config.AWSConfig); pushErr == nil {
-			awsProfileName = pn
-			session.AWSProfileName = pn
-			session.AWSConfig = config.AWSConfig
-		}
-		// Non-fatal — session starts without session-scoped credentials on error.
-	}
-
 	// Start the session and immediately set remain-on-exit in a single SSH call to avoid
 	// a race condition: if the agent exits before the separate set-option call runs, the
 	// session (and server) would already be gone.
@@ -216,9 +204,6 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
 	extraEnvFlags := ""
-	if awsProfileName != "" {
-		extraEnvFlags += fmt.Sprintf(" -e AWS_PROFILE=%s", awsProfileName)
-	}
 	// Ensure OpenCode runs in auto-approve mode. Two mechanisms are used for
 	// maximum compatibility across versions:
 	//   1. OPENCODE_CONFIG=/tmp/opencode-aiman.json — works with all versions but
@@ -353,9 +338,10 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 	return strings.TrimSpace(out)
 }
 
-// PushSessionAWSCredentials generates a session-scoped AWS profile name, obtains
-// temporary credentials locally, and pushes them to the remote under that profile.
-// Returns the profile name on success (e.g. "aiman-a1b2c3d4").
+// PushSessionAWSCredentials is retained for compatibility but no longer called
+// during session creation; credentials are managed globally via Settings.
+// Kept to avoid breaking any external callers that may reference this symbol.
+// Deprecated: use the AWS Credentials settings page instead.
 func PushSessionAWSCredentials(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (string, error) {
 	profileName := "aiman-" + sessionID[:8]
 
