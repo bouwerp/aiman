@@ -427,8 +427,14 @@ func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (stri
 
 func (m *Manager) AttachTmuxSession(sessionName string) *exec.Cmd {
 	target := m.target()
-	// Use -t for interactive tty allocation, -A for agent forwarding, and -X for X11 forwarding (clipboard)
-	return exec.Command("ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
+	// Enable mouse mode so the scroll wheel enters copy-mode automatically, then attach.
+	// Mouse mode is scoped to the session and is the standard tmux way to scroll.
+	// Users can also scroll with ctrl+b [ (copy-mode) then arrow/pgup/pgdn keys.
+	script := fmt.Sprintf(
+		"tmux set-option -t %q mouse on 2>/dev/null; tmux attach-session -t %q",
+		sessionName, sessionName,
+	)
+	return exec.Command("ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, "bash", "-c", script)
 }
 
 func (m *Manager) StreamTmuxSession(ctx context.Context, sessionName string) (io.ReadWriteCloser, error) {
