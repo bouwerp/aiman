@@ -20,6 +20,11 @@ type Manager struct {
 	cfg *config.GitConfig
 }
 
+// gitNetworkTimeout is the per-call deadline for git network operations
+// (git fetch, git clone). These can legitimately take several minutes for
+// large repositories, so a much longer timeout than the default 30s is needed.
+const gitNetworkTimeout = 5 * time.Minute
+
 func NewManager(cfg *config.GitConfig) *Manager {
 	if cfg == nil {
 		yes := true
@@ -485,6 +490,34 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 	}, nil
 }
 
+// EnsureRepoCloned ensures the repository directory exists on the remote,
+// cloning it if absent. Unlike EnsureHealthyRepo it does NOT fetch, verify
+// health, or trigger recovery — making it safe to call in latency-sensitive
+// paths (e.g. the directory picker) without risking a spurious reclone.
+func (m *Manager) EnsureRepoCloned(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo) error {
+	repoName := extractRepoName(repo.Name)
+	remoteRoot := remote.GetRoot()
+	if remoteRoot == "" {
+		return fmt.Errorf("remote root not configured")
+	}
+	cleanRoot := strings.TrimRight(remoteRoot, "/")
+	var repoPath string
+	if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
+		repoPath = cleanRoot
+	} else {
+		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
+	}
+	if err := remote.ValidateDir(ctx, repoPath); err == nil {
+		// Directory already exists — trust it.
+		return nil
+	}
+	if repo.URL == "" {
+		return fmt.Errorf("repository not found at %s and no URL configured — please clone it manually", repoPath)
+	}
+	reportProgress(ctx, fmt.Sprintf("Repository %s not found — cloning from remote...", repoName))
+	return cloneRepo(ctx, remote, repoPath, repo.URL)
+}
+
 // EnsureHealthyRepo is the exported wrapper around ensureHealthyRepo. It
 // computes the repo path from the remote root and repo name, then calls
 // the full health check: clone-if-missing, verify-or-recover.
@@ -550,9 +583,9 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 		reportProgress(ctx, fmt.Sprintf("Repository %s has no origin remote — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
-	// Fetch must succeed.
+	// Fetch must succeed. Use a long timeout — large repos can take several minutes.
 	reportProgress(ctx, fmt.Sprintf("Fetching latest changes for %s...", repoName))
-	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>&1", repoPath)); err != nil {
+	if _, err := remote.ExecuteTimeout(ctx, fmt.Sprintf("git -C %q fetch origin 2>&1", repoPath), gitNetworkTimeout); err != nil {
 		reportProgress(ctx, fmt.Sprintf("Fetch failed for %s — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
@@ -606,7 +639,8 @@ func cloneRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repo
 	parentDir := filepath.Dir(cleanedRepo)
 	repoName := filepath.Base(cleanedRepo)
 	reportProgress(ctx, fmt.Sprintf("Cloning %s...", repoName))
-	if _, err := remote.Execute(ctx, fmt.Sprintf("mkdir -p %q && git -C %q clone %q %q", parentDir, parentDir, repoURL, repoName)); err != nil {
+	// Use a long timeout — cloning a large repository can take several minutes.
+	if _, err := remote.ExecuteTimeout(ctx, fmt.Sprintf("mkdir -p %q && git -C %q clone %q %q", parentDir, parentDir, repoURL, repoName), gitNetworkTimeout); err != nil {
 		return fmt.Errorf("failed to clone %s from %s: %w", repoName, repoURL, err)
 	}
 	reportProgress(ctx, fmt.Sprintf("Cloned %s ✓", repoName))

@@ -40,6 +40,10 @@ func (m *mockRemote) Execute(_ context.Context, cmd string) (string, error) {
 	return out, nil
 }
 
+func (m *mockRemote) ExecuteTimeout(_ context.Context, cmd string, _ time.Duration) (string, error) {
+	return m.Execute(context.Background(), cmd)
+}
+
 // Stub all other RemoteExecutor methods
 func (m *mockRemote) Connect(context.Context) error                           { return nil }
 func (m *mockRemote) WriteFile(context.Context, string, []byte) error         { return nil }

@@ -1497,8 +1497,8 @@ func (m *Model) fetchRepoDirectories(repo *domain.Repo) tea.Cmd {
 		var repoPath string
 		if repo != nil && repo.Name != "" && repo.Name != "No Repository" {
 			gitMgr := git.NewManager(&m.cfg.Git)
-			if err := gitMgr.EnsureHealthyRepo(ctx, mgr, *repo); err != nil {
-				return dirsMsg{err: fmt.Errorf("repository health check failed: %w", err)}
+			if err := gitMgr.EnsureRepoCloned(ctx, mgr, *repo); err != nil {
+				return dirsMsg{err: fmt.Errorf("failed to fetch directories: %w", err)}
 			}
 			repoName := extractRepoName(repo.Name)
 			cleanRoot := strings.TrimRight(remote.Root, "/")

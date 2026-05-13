@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -26,6 +27,9 @@ func newMockRemote() *mockRemote {
 func (m *mockRemote) Connect(ctx context.Context) error                       { return nil }
 func (m *mockRemote) GetRoot() string                                         { return m.root }
 func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error) { return "", nil }
+func (m *mockRemote) ExecuteTimeout(ctx context.Context, cmd string, _ time.Duration) (string, error) {
+	return "", nil
+}
 func (m *mockRemote) WriteFile(ctx context.Context, path string, content []byte) error {
 	m.writtenFiles[path] = content
 	return nil

@@ -34,6 +34,10 @@ type RemoteExecutor interface {
 	Connect(ctx context.Context) error
 	GetRoot() string
 	Execute(ctx context.Context, cmd string) (string, error)
+	// ExecuteTimeout runs cmd on the remote with the given per-call timeout
+	// instead of the default 30-second cap. Use for long-running operations
+	// such as git clone or git fetch on large repositories.
+	ExecuteTimeout(ctx context.Context, cmd string, timeout time.Duration) (string, error)
 	WriteFile(ctx context.Context, path string, content []byte) error
 	ValidateDir(ctx context.Context, path string) error
 	ScanTmuxSessions(ctx context.Context) ([]string, error)

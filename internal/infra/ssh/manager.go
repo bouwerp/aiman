@@ -155,6 +155,40 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	return runDirect()
 }
 
+// ExecuteTimeout runs cmdStr with a caller-specified timeout instead of the
+// default 30-second cap. Use this for long-running git network operations
+// (git clone, git fetch) where the default timeout is too short.
+func (m *Manager) ExecuteTimeout(ctx context.Context, cmdStr string, timeout time.Duration) (string, error) {
+	target := m.target()
+	cp := m.controlPath()
+
+	if err := os.MkdirAll(filepath.Dir(cp), 0700); err != nil {
+		return "", fmt.Errorf("failed to create sockets directory: %w", err)
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(callCtx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "ServerAliveInterval=5",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPersist=10m",
+		"-S", cp,
+		"-A",
+		"-X",
+		target, cmdStr)
+
+	output, err := cmd.CombinedOutput()
+	outStr := strings.TrimSpace(string(output))
+	if err != nil {
+		return outStr, fmt.Errorf("remote command failed on %s: %w\nOutput: %s", target, err, outStr)
+	}
+	return outStr, nil
+}
+
 func isRetriableSSHTransportError(errText string) bool {
 	s := strings.ToLower(errText)
 	return strings.Contains(s, "permission denied") ||
