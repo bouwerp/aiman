@@ -359,8 +359,15 @@ func (m *Manager) ListRemoteBranches(ctx context.Context, remote domain.RemoteEx
 		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
 	}
 
-	if err := ensureHealthyRepo(ctx, remote, repoPath, repo.URL); err != nil {
-		return nil, err
+	// Use lightweight existence check — no fetch needed to list cached remote branches.
+	if err := remote.ValidateDir(ctx, repoPath); err != nil {
+		if repo.URL == "" {
+			return nil, fmt.Errorf("repository not found at %s and no URL configured — please clone it manually", repoPath)
+		}
+		reportProgress(ctx, fmt.Sprintf("Repository %s not found — cloning from remote...", repoName))
+		if err := cloneRepo(ctx, remote, repoPath, repo.URL); err != nil {
+			return nil, err
+		}
 	}
 
 	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q branch -r", repoPath))
@@ -596,14 +603,9 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 		reportProgress(ctx, fmt.Sprintf("Repository %s has no local commits — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
-	// No uncommitted local changes.
-	reportProgress(ctx, fmt.Sprintf("Checking %s for local changes...", repoName))
-	if statusOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q status --porcelain", repoPath)); strings.TrimSpace(statusOut) != "" {
-		reportProgress(ctx, fmt.Sprintf("Repository %s has uncommitted changes — recovering...", repoName))
-		return recoverRepo(ctx, remote, repoPath, effectiveURL)
-	}
-	// Must not be behind origin — try origin/HEAD then origin/main then origin/master.
-	// Being behind just means new upstream commits; pull them rather than recovering.
+	// Must be behind or in sync with origin — pull if behind.
+	// Being ahead or having uncommitted changes is NOT a health issue for a base
+	// repo used for worktrees; those states are intentional and should not trigger recovery.
 	reportProgress(ctx, fmt.Sprintf("Verifying %s is in sync with remote...", repoName))
 	behindOut, _ := remote.Execute(ctx, fmt.Sprintf(
 		`git -C %q rev-list HEAD..origin/HEAD --count 2>/dev/null || git -C %q rev-list HEAD..origin/main --count 2>/dev/null || git -C %q rev-list HEAD..origin/master --count 2>/dev/null || echo 0`,
@@ -620,14 +622,6 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 			return recoverRepo(ctx, remote, repoPath, effectiveURL)
 		}
 		reportProgress(ctx, fmt.Sprintf("Repository %s updated ✓", repoName))
-	}
-	// Must not have local commits not on origin (diverged/ahead).
-	aheadOut, _ := remote.Execute(ctx, fmt.Sprintf(
-		`git -C %q rev-list origin/HEAD..HEAD --count 2>/dev/null || git -C %q rev-list origin/main..HEAD --count 2>/dev/null || git -C %q rev-list origin/master..HEAD --count 2>/dev/null || echo 0`,
-		repoPath, repoPath, repoPath))
-	if n, _ := strconv.Atoi(strings.TrimSpace(aheadOut)); n > 0 {
-		reportProgress(ctx, fmt.Sprintf("Repository %s has %d local commit(s) not on remote — recovering...", repoName, n))
-		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 
 	reportProgress(ctx, fmt.Sprintf("Repository %s is up to date ✓", repoName))
