@@ -584,6 +584,14 @@ type tunnelToggleMsg struct {
 	err        error
 }
 
+// tunnelDiedMsg is sent by the watchTunnelCmd goroutine when a running tunnel
+// subprocess exits unexpectedly (i.e. after StartTunnel returned success).
+type tunnelDiedMsg struct {
+	sessionID  string
+	localPort  int
+	remotePort int
+}
+
 func parseTunnelSpec(spec string) (domain.Tunnel, error) {
 	raw := strings.TrimSpace(spec)
 	if raw == "" {
@@ -686,6 +694,20 @@ func (m *Model) toggleTunnelCmd(s domain.Session, t domain.Tunnel, start bool) t
 			running:    start && err == nil,
 			err:        err,
 		}
+	}
+}
+
+// watchTunnelCmd blocks until the tunnel subprocess exits, then triggers a
+// refresh so the UI can pick up the updated state and any stored error.
+func (m *Model) watchTunnelCmd(s domain.Session, t domain.Tunnel) tea.Cmd {
+	return func() tea.Msg {
+		remote, ok := resolveRemote(m.cfg, s)
+		if !ok {
+			return nil
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		mgr.WatchTunnel(context.Background(), t.LocalPort, t.RemotePort)
+		return tunnelDiedMsg{sessionID: s.ID, localPort: t.LocalPort, remotePort: t.RemotePort}
 	}
 }
 
@@ -3823,6 +3845,13 @@ func (m *Model) handleTunnelManagerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.tunnelList.SetItems(msg.items)
+		// If any tunnel has a recorded error, surface it in the error banner too.
+		for _, item := range msg.items {
+			if ti, ok := item.(tunnelItem); ok && ti.lastErr != "" {
+				m.tunnelError = fmt.Sprintf("Tunnel %d->%d: %s", ti.tunnel.LocalPort, ti.tunnel.RemotePort, ti.lastErr)
+				break
+			}
+		}
 		return m, nil
 	case tunnelToggleMsg:
 		if m.tunnelSession == nil || msg.sessionID != m.tunnelSession.ID {
@@ -3834,6 +3863,20 @@ func (m *Model) handleTunnelManagerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.tunnelError = ""
+		// Find the tunnel that was just started so we can watch it for unexpected exits.
+		var watchCmd tea.Cmd
+		for _, t := range m.tunnelSession.Tunnels {
+			if t.LocalPort == msg.localPort && t.RemotePort == msg.remotePort && msg.running {
+				watchCmd = m.watchTunnelCmd(*m.tunnelSession, t)
+				break
+			}
+		}
+		return m, tea.Batch(m.refreshTunnelStatesCmd(*m.tunnelSession), watchCmd)
+	case tunnelDiedMsg:
+		if m.tunnelSession == nil || msg.sessionID != m.tunnelSession.ID {
+			return m, nil
+		}
+		// Tunnel died after startup — refresh to show error from TunnelLastError.
 		return m, m.refreshTunnelStatesCmd(*m.tunnelSession)
 	case tea.KeyMsg:
 		switch msg.String() {

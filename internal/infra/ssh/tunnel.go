@@ -21,7 +21,8 @@ import (
 )
 
 type activeTunnel struct {
-	cmd *exec.Cmd
+	cmd    *exec.Cmd
+	doneCh chan struct{} // closed when the subprocess exits
 }
 
 var (
@@ -84,7 +85,7 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 		return fmt.Errorf("failed to start tunnel L%d->R%d: %w", localPort, remotePort, err)
 	}
 
-	t := &activeTunnel{cmd: cmd}
+	t := &activeTunnel{cmd: cmd, doneCh: make(chan struct{})}
 	tunnelsMu.Lock()
 	tunnels[key] = t
 	tunnelsMu.Unlock()
@@ -94,7 +95,7 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 	exitCh := make(chan error, 1)
 	go func() {
 		err := cmd.Wait()
-		detail := strings.TrimSpace(stderrBuf.String())
+		detail := sshErrorSummary(stderrBuf.String())
 		tunnelsMu.Lock()
 		if current, ok := tunnels[key]; ok && current == t {
 			delete(tunnels, key)
@@ -105,6 +106,7 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 				tunnelLastErrors[key] = err.Error()
 			}
 		}
+		close(t.doneCh)
 		tunnelsMu.Unlock()
 		exitCh <- err
 	}()
@@ -115,7 +117,7 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 		tunnelsMu.Lock()
 		delete(tunnels, key)
 		tunnelsMu.Unlock()
-		detail := strings.TrimSpace(stderrBuf.String())
+		detail := sshErrorSummary(stderrBuf.String())
 		if detail == "" && err != nil {
 			detail = err.Error()
 		}
@@ -173,4 +175,55 @@ func (m *Manager) IsTunnelRunning(_ context.Context, localPort, remotePort int) 
 	defer tunnelsMu.Unlock()
 	_, ok := tunnels[tunnelKey(localPort, remotePort)]
 	return ok
+}
+
+// WatchTunnel blocks until the tunnel subprocess exits (or ctx is cancelled).
+// Returns nil when the tunnel exits naturally. Intended for use as a tea.Cmd watcher:
+// call StartTunnel first, then call WatchTunnel to be notified when it dies.
+func (m *Manager) WatchTunnel(ctx context.Context, localPort, remotePort int) {
+	key := tunnelKey(localPort, remotePort)
+	tunnelsMu.Lock()
+	t, ok := tunnels[key]
+	tunnelsMu.Unlock()
+	if !ok {
+		return
+	}
+	select {
+	case <-t.doneCh:
+	case <-ctx.Done():
+	}
+}
+
+// sshErrorSummary extracts the meaningful lines from ssh -v stderr output,
+// stripping debug1/debug2/debug3 noise so only actual errors remain.
+func sshErrorSummary(stderr string) string {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return ""
+	}
+	lines := strings.Split(stderr, "\n")
+	var errLines []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		// Skip SSH verbose debug lines.
+		if strings.HasPrefix(l, "debug1:") ||
+			strings.HasPrefix(l, "debug2:") ||
+			strings.HasPrefix(l, "debug3:") ||
+			strings.HasPrefix(l, "OpenSSH_") ||
+			strings.HasPrefix(l, "Authenticated to") {
+			continue
+		}
+		errLines = append(errLines, l)
+	}
+	if len(errLines) == 0 {
+		// Nothing left — fall back to last 3 raw lines.
+		if len(lines) > 3 {
+			lines = lines[len(lines)-3:]
+		}
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(errLines, "\n")
 }
