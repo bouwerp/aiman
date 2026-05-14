@@ -239,9 +239,10 @@ func (i item) FilterValue() string {
 }
 
 type tunnelItem struct {
-	tunnel  domain.Tunnel
-	running bool
-	lastErr string
+	tunnel          domain.Tunnel
+	running         bool
+	lastErr         string
+	remoteListening *bool // nil=unknown, true=listening, false=nothing bound
 }
 
 func (i tunnelItem) Title() string {
@@ -261,6 +262,9 @@ func (i tunnelItem) Description() string {
 			lines = lines[len(lines)-3:]
 		}
 		return "⚠ " + strings.Join(lines, " | ")
+	}
+	if i.running && i.remoteListening != nil && !*i.remoteListening {
+		return fmt.Sprintf("⚠ nothing listening on remote port %d", i.tunnel.RemotePort)
 	}
 	return "SSH local forward"
 }
@@ -339,7 +343,9 @@ type Model struct {
 	authChecking           bool
 	tunnelList             list.Model
 	tunnelSession          *domain.Session
-	tunnelInput            textinput.Model
+	tunnelLocalInput       textinput.Model
+	tunnelRemoteInput      textinput.Model
+	tunnelAddFocus         int // 0 = local port, 1 = remote port
 	tunnelError            string
 	intelligence           domain.IntelligenceProvider
 	snapshotManager        *usecase.SnapshotManager
@@ -577,11 +583,12 @@ type tunnelStatesMsg struct {
 }
 
 type tunnelToggleMsg struct {
-	sessionID  string
-	localPort  int
-	remotePort int
-	running    bool
-	err        error
+	sessionID       string
+	localPort       int
+	remotePort      int
+	running         bool
+	remoteListening *bool // set when start succeeds; nil on stop or error
+	err             error
 }
 
 // tunnelDiedMsg is sent by the watchTunnelCmd goroutine when a running tunnel
@@ -678,7 +685,7 @@ func (m *Model) toggleTunnelCmd(s domain.Session, t domain.Tunnel, start bool) t
 			return tunnelToggleMsg{sessionID: s.ID, localPort: t.LocalPort, remotePort: t.RemotePort, err: fmt.Errorf("no remote configured for session")}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		var err error
@@ -687,13 +694,23 @@ func (m *Model) toggleTunnelCmd(s domain.Session, t domain.Tunnel, start bool) t
 		} else {
 			err = mgr.StopTunnel(ctx, t.LocalPort, t.RemotePort)
 		}
-		return tunnelToggleMsg{
+
+		msg := tunnelToggleMsg{
 			sessionID:  s.ID,
 			localPort:  t.LocalPort,
 			remotePort: t.RemotePort,
 			running:    start && err == nil,
 			err:        err,
 		}
+		// After a successful start, check whether the remote port is actually
+		// bound to a listening process. Use a short timeout for this check.
+		if start && err == nil {
+			checkCtx, checkCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer checkCancel()
+			listening := mgr.IsRemotePortListening(checkCtx, t.RemotePort)
+			msg.remoteListening = &listening
+		}
+		return msg
 	}
 }
 
@@ -2511,12 +2528,20 @@ func (m *Model) renderView() string {
 	case viewStateTunnelAdd:
 		var b strings.Builder
 		b.WriteString(activeStyle.Render("Add Session Tunnel") + "\n\n")
-		b.WriteString("Enter local:remote ports (example: 5173:5173)\n\n")
-		b.WriteString(m.tunnelInput.View() + "\n\n")
+
+		localLabel := "  Local port : "
+		remoteLabel := "  Remote port: "
+		if m.tunnelAddFocus == 0 {
+			localLabel = activeStyle.Render("▶ Local port : ")
+		} else {
+			remoteLabel = activeStyle.Render("▶ Remote port: ")
+		}
+		b.WriteString(localLabel + m.tunnelLocalInput.View() + "\n")
+		b.WriteString(remoteLabel + m.tunnelRemoteInput.View() + "\n\n")
 		if m.tunnelError != "" {
 			b.WriteString(failStyle.Render(m.tunnelError) + "\n\n")
 		}
-		b.WriteString(statusStyle.Render("enter=save  esc=cancel"))
+		b.WriteString(statusStyle.Render("tab/shift+tab=switch field  enter=save  esc=cancel"))
 		dialog := lipgloss.NewStyle().
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("62")).
@@ -3871,6 +3896,23 @@ func (m *Model) handleTunnelManagerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		// Immediately update the list item with running state + remote-listening status
+		// so the user gets instant feedback without waiting for the full refresh.
+		items := m.tunnelList.Items()
+		for i, item := range items {
+			if ti, ok := item.(tunnelItem); ok &&
+				ti.tunnel.LocalPort == msg.localPort && ti.tunnel.RemotePort == msg.remotePort {
+				ti.running = msg.running
+				ti.remoteListening = msg.remoteListening
+				ti.lastErr = ""
+				items[i] = ti
+			}
+		}
+		m.tunnelList.SetItems(items)
+		// Warn if tunnel is up but nothing is listening on the remote.
+		if msg.running && msg.remoteListening != nil && !*msg.remoteListening {
+			m.tunnelError = fmt.Sprintf("Tunnel started, but nothing is listening on remote port %d", msg.remotePort)
+		}
 		return m, tea.Batch(m.refreshTunnelStatesCmd(*m.tunnelSession), watchCmd)
 	case tunnelDiedMsg:
 		if m.tunnelSession == nil || msg.sessionID != m.tunnelSession.ID {
@@ -3892,12 +3934,18 @@ func (m *Model) handleTunnelManagerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "a":
 			m.tunnelError = ""
-			in := textinput.New()
-			in.Placeholder = "5173:5173"
-			in.Focus()
-			in.CharLimit = 24
-			in.Width = 30
-			m.tunnelInput = in
+			local := textinput.New()
+			local.Placeholder = "5173"
+			local.Focus()
+			local.CharLimit = 5
+			local.Width = 8
+			remote := textinput.New()
+			remote.Placeholder = "5173"
+			remote.CharLimit = 5
+			remote.Width = 8
+			m.tunnelLocalInput = local
+			m.tunnelRemoteInput = remote
+			m.tunnelAddFocus = 0
 			m.state = viewStateTunnelAdd
 			return m, nil
 		case "d":
@@ -3954,16 +4002,32 @@ func (m *Model) handleTunnelAddUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.state = viewStateTunnelManager
 			return m, nil
+		case "tab", "shift+tab":
+			// Switch focus between local and remote port fields.
+			if m.tunnelAddFocus == 0 {
+				m.tunnelAddFocus = 1
+				m.tunnelLocalInput.Blur()
+				return m, m.tunnelRemoteInput.Focus()
+			}
+			m.tunnelAddFocus = 0
+			m.tunnelRemoteInput.Blur()
+			return m, m.tunnelLocalInput.Focus()
 		case "enter":
 			if m.tunnelSession == nil {
 				m.state = viewStateMain
 				return m, nil
 			}
-			tunnel, err := parseTunnelSpec(m.tunnelInput.Value())
-			if err != nil {
-				m.tunnelError = err.Error()
+			localPort, localErr := strconv.Atoi(strings.TrimSpace(m.tunnelLocalInput.Value()))
+			remotePort, remoteErr := strconv.Atoi(strings.TrimSpace(m.tunnelRemoteInput.Value()))
+			if localErr != nil || localPort <= 0 || localPort > 65535 {
+				m.tunnelError = "invalid local port (1-65535)"
 				return m, nil
 			}
+			if remoteErr != nil || remotePort <= 0 || remotePort > 65535 {
+				m.tunnelError = "invalid remote port (1-65535)"
+				return m, nil
+			}
+			tunnel := domain.Tunnel{LocalPort: localPort, RemotePort: remotePort}
 			session := *m.tunnelSession
 			for _, t := range session.Tunnels {
 				if t.LocalPort == tunnel.LocalPort && t.RemotePort == tunnel.RemotePort {
@@ -3985,9 +4049,10 @@ func (m *Model) handleTunnelAddUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.refreshTunnelStatesCmd(session)
 		}
 	}
-	var cmd tea.Cmd
-	m.tunnelInput, cmd = m.tunnelInput.Update(msg)
-	return m, cmd
+	var cmd1, cmd2 tea.Cmd
+	m.tunnelLocalInput, cmd1 = m.tunnelLocalInput.Update(msg)
+	m.tunnelRemoteInput, cmd2 = m.tunnelRemoteInput.Update(msg)
+	return m, tea.Batch(cmd1, cmd2)
 }
 
 func (m *Model) handleRemotesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {

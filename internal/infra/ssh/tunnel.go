@@ -2,18 +2,21 @@ package ssh
 
 // SSH port-forwarding tunnels via a managed ssh -N -L subprocess.
 //
-// We start ssh -N -L as a subprocess (no -f), so we own the process lifetime:
+// We start ssh -N -L as a subprocess (no -f, no -S socket), so we own the
+// process lifetime and the tunnel is independent of the ControlMaster:
 //   - We can kill it explicitly on StopTunnel.
 //   - A background goroutine watches for unexpected exit and cleans up state.
 //   - Setsid isolates it from any SIGHUP sent to the parent process group.
-//   - The slave shares the existing ControlMaster connection (-S socket), so
-//     no new TCP handshake or auth is needed.
-//   - If the ControlMaster socket is stale, ssh falls back to a direct
-//     connection using ~/.ssh/config and the SSH agent.
+//   - SSH reads ~/.ssh/config and the SSH agent for auth automatically.
+//
+// Liveness check: after 5s we verify the local port is actually bound.
+// This catches silent failures where SSH exits after the TCP listen but
+// before the forwarding is confirmed.
 
 import (
 	"context"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 	"sync"
@@ -59,10 +62,6 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 
 	var stderrBuf strings.Builder
 
-	// Run as a standalone ssh -N -L process. Using a direct connection (no -S
-	// socket) avoids ControlMaster mux quirks and keeps the tunnel alive
-	// independently of the control master's ControlPersist lifetime.
-	// SSH reads ~/.ssh/config and the SSH agent for auth automatically.
 	cmd := exec.Command("ssh",
 		"-o", "BatchMode=yes",
 		"-o", "ExitOnForwardFailure=yes",
@@ -105,7 +104,8 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 		exitCh <- err
 	}()
 
-	// Give the process 2s to fail fast (port conflict, auth error, etc.).
+	// Wait up to 5s for a fast failure (port conflict, auth error, etc.).
+	// SSH takes 1-3s on a cold connection to bind the listening port.
 	select {
 	case err := <-exitCh:
 		tunnelsMu.Lock()
@@ -115,14 +115,49 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 		if detail == "" && err != nil {
 			detail = err.Error()
 		}
+		if detail == "" {
+			detail = "process exited without error output"
+		}
 		return fmt.Errorf("tunnel L%d->R%d failed: %s", localPort, remotePort, detail)
-	case <-time.After(2 * time.Second):
-		// Process is still running — tunnel is up; clear any previous error.
+	case <-time.After(5 * time.Second):
+		// Process is still alive after 5s — verify the local port is actually bound.
+		// If net.Listen succeeds, the port is NOT in use, meaning SSH started but
+		// failed to bind the forward (e.g. server has AllowTcpForwarding=no).
+		ln, listenErr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+		if listenErr == nil {
+			ln.Close()
+			_ = cmd.Process.Kill()
+			tunnelsMu.Lock()
+			delete(tunnels, key)
+			detail := sshErrorSummary(stderrBuf.String())
+			if detail == "" {
+				detail = fmt.Sprintf("SSH process running but port %d not bound — server may have AllowTcpForwarding disabled", localPort)
+			}
+			tunnelLastErrors[key] = detail
+			tunnelsMu.Unlock()
+			return fmt.Errorf("tunnel L%d->R%d failed: %s", localPort, remotePort, detail)
+		}
+		// Port IS bound — tunnel is up. Clear any stale error.
 		tunnelsMu.Lock()
 		delete(tunnelLastErrors, key)
 		tunnelsMu.Unlock()
 		return nil
 	}
+}
+
+// IsRemotePortListening checks whether anything is bound to the given port on
+// the remote host. Returns false (not an error) if the check cannot be run.
+func (m *Manager) IsRemotePortListening(ctx context.Context, port int) bool {
+	// ss is preferred; fall back to netstat on older systems.
+	cmd := fmt.Sprintf(
+		`ss -tln 2>/dev/null | grep -qE ':%d\b' || netstat -tln 2>/dev/null | grep -qE ':%d\b' && echo yes || echo no`,
+		port, port,
+	)
+	out, err := m.Execute(ctx, cmd)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) == "yes"
 }
 
 // TunnelLastError returns the last exit reason for a tunnel that died
@@ -172,8 +207,8 @@ func (m *Manager) IsTunnelRunning(_ context.Context, localPort, remotePort int) 
 }
 
 // WatchTunnel blocks until the tunnel subprocess exits (or ctx is cancelled).
-// Returns nil when the tunnel exits naturally. Intended for use as a tea.Cmd watcher:
-// call StartTunnel first, then call WatchTunnel to be notified when it dies.
+// Intended for use as a tea.Cmd watcher: call StartTunnel first, then call
+// WatchTunnel to be notified when the tunnel dies unexpectedly.
 func (m *Manager) WatchTunnel(ctx context.Context, localPort, remotePort int) {
 	key := tunnelKey(localPort, remotePort)
 	tunnelsMu.Lock()
@@ -188,7 +223,7 @@ func (m *Manager) WatchTunnel(ctx context.Context, localPort, remotePort int) {
 	}
 }
 
-// sshErrorSummary extracts the meaningful lines from ssh -v stderr output,
+// sshErrorSummary extracts meaningful lines from ssh stderr output,
 // stripping debug1/debug2/debug3 noise so only actual errors remain.
 func sshErrorSummary(stderr string) string {
 	stderr = strings.TrimSpace(stderr)
