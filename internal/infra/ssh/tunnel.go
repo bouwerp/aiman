@@ -1,210 +1,132 @@
 package ssh
 
+// SSH port-forwarding tunnels using the existing ControlMaster socket.
+//
+// ssh -O forward delegates the port-binding to the already-running master
+// process, which has the user's ~/.ssh/config applied and is already
+// authenticated. No new process is forked (no -f), so there are no
+// SIGHUP / lifecycle issues.
+
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
-	"os"
-	"path/filepath"
+	"os/exec"
+	"strings"
 	"sync"
-
-	gsssh "golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
-	"golang.org/x/crypto/ssh/knownhosts"
 )
-
-// activeTunnel holds the resources for a running port forward.
-type activeTunnel struct {
-	listener net.Listener
-	cancel   context.CancelFunc
-}
 
 var (
 	tunnelsMu sync.Mutex
-	tunnels   = make(map[string]*activeTunnel)
+	// tunnels tracks which local:remote port pairs we have active.
+	// The value is a placeholder; the ControlMaster owns the actual socket.
+	tunnels = make(map[string]struct{})
 )
 
 func tunnelKey(localPort, remotePort int) string {
 	return fmt.Sprintf("%d:%d", localPort, remotePort)
 }
 
-// StartTunnel establishes a native Go SSH tunnel that forwards
-// localhost:localPort on this machine to localhost:remotePort on the
-// SSH target. The tunnel runs entirely in goroutines — no external
-// ssh process is forked, so there are no SIGHUP/lifecycle issues.
+// StartTunnel asks the existing ControlMaster to forward
+// 127.0.0.1:localPort → 127.0.0.1:remotePort on the remote.
+//
+// The ControlMaster is kept alive by ControlPersist=10m; Execute calls from
+// the dashboard refresh cycle ensure it stays up. No goroutine is started here.
 func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) error {
 	key := tunnelKey(localPort, remotePort)
 
 	tunnelsMu.Lock()
 	if _, exists := tunnels[key]; exists {
 		tunnelsMu.Unlock()
-		return nil // already running
-	}
-	tunnelsMu.Unlock()
-
-	sshClient, err := dialSSH(m.config)
-	if err != nil {
-		return fmt.Errorf("failed to connect for tunnel: %w", err)
-	}
-
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
-	if err != nil {
-		sshClient.Close()
-		return fmt.Errorf("failed to bind local port %d: %w", localPort, err)
-	}
-
-	tCtx, cancel := context.WithCancel(context.Background())
-
-	tunnelsMu.Lock()
-	tunnels[key] = &activeTunnel{listener: ln, cancel: cancel}
-	tunnelsMu.Unlock()
-
-	go func() {
-		defer sshClient.Close()
-		defer ln.Close()
-		defer func() {
-			tunnelsMu.Lock()
-			delete(tunnels, key)
-			tunnelsMu.Unlock()
-		}()
-
-		for {
-			local, err := ln.Accept()
-			if err != nil {
-				select {
-				case <-tCtx.Done():
-				default:
-				}
-				return
-			}
-			go forwardConn(tCtx, sshClient, local, remotePort)
-		}
-	}()
-
-	return nil
-}
-
-// StopTunnel tears down a running tunnel.
-func (m *Manager) StopTunnel(_ context.Context, localPort, remotePort int) error {
-	key := tunnelKey(localPort, remotePort)
-	tunnelsMu.Lock()
-	t, ok := tunnels[key]
-	if ok {
-		delete(tunnels, key)
-	}
-	tunnelsMu.Unlock()
-
-	if !ok {
 		return nil
 	}
-	t.cancel()
-	t.listener.Close()
+	tunnelsMu.Unlock()
+
+	// Ensure the ControlMaster is up (it will auto-connect if needed).
+	if _, err := m.Execute(ctx, "true"); err != nil {
+		return fmt.Errorf("cannot connect to remote: %w", err)
+	}
+
+	cp := m.controlPath()
+	target := m.target()
+	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
+
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-S", cp,
+		"-O", "forward",
+		"-L", forward,
+		target,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to start tunnel L%d->R%d: %w\nOutput: %s",
+			localPort, remotePort, err, strings.TrimSpace(string(output)))
+	}
+
+	tunnelsMu.Lock()
+	tunnels[key] = struct{}{}
+	tunnelsMu.Unlock()
 	return nil
 }
 
-// IsTunnelRunning returns true if the tunnel is active.
-func (m *Manager) IsTunnelRunning(_ context.Context, localPort, remotePort int) bool {
+// StopTunnel cancels the port forward on the ControlMaster and removes it
+// from the in-memory set.
+func (m *Manager) StopTunnel(ctx context.Context, localPort, remotePort int) error {
+	key := tunnelKey(localPort, remotePort)
 	tunnelsMu.Lock()
-	defer tunnelsMu.Unlock()
-	_, ok := tunnels[tunnelKey(localPort, remotePort)]
-	return ok
-}
+	delete(tunnels, key)
+	tunnelsMu.Unlock()
 
-// forwardConn proxies a single local connection through the SSH client to the remote port.
-func forwardConn(ctx context.Context, client *gsssh.Client, local net.Conn, remotePort int) {
-	defer local.Close()
+	cp := m.controlPath()
+	target := m.target()
+	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
 
-	remote, err := client.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-S", cp,
+		"-O", "cancel",
+		"-L", forward,
+		target,
+	)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return
+		out := strings.ToLower(strings.TrimSpace(string(output)))
+		// Ignore "master not found" errors — the tunnel is effectively gone.
+		if strings.Contains(out, "no such file") ||
+			strings.Contains(out, "does not exist") ||
+			strings.Contains(out, "control socket") ||
+			strings.Contains(out, "no forward matching") {
+			return nil
+		}
+		return fmt.Errorf("failed to stop tunnel L%d->R%d: %w\nOutput: %s",
+			localPort, remotePort, err, strings.TrimSpace(string(output)))
 	}
-	defer remote.Close()
-
-	done := make(chan struct{}, 2)
-	go func() { io.Copy(remote, local); done <- struct{}{} }()
-	go func() { io.Copy(local, remote); done <- struct{}{} }()
-
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
+	return nil
 }
 
-// dialSSH opens a native Go SSH connection to the Manager's target host,
-// trying the SSH agent first then common key files.
-func dialSSH(cfg Config) (*gsssh.Client, error) {
-	user := cfg.User
-	if user == "" {
-		user = os.Getenv("USER")
-	}
-	if user == "" {
-		user = "root"
-	}
-
-	host := cfg.Host
-	if _, _, err := net.SplitHostPort(host); err != nil {
-		host = host + ":22"
+// IsTunnelRunning returns true if the tunnel is tracked in the in-memory set
+// AND the local port is actually bound (which would fail if the ControlMaster
+// died and took the forward with it).
+func (m *Manager) IsTunnelRunning(_ context.Context, localPort, remotePort int) bool {
+	key := tunnelKey(localPort, remotePort)
+	tunnelsMu.Lock()
+	_, ok := tunnels[key]
+	tunnelsMu.Unlock()
+	if !ok {
+		return false
 	}
 
-	authMethods := collectAuthMethods()
-	if len(authMethods) == 0 {
-		return nil, fmt.Errorf("no SSH authentication methods available (no agent and no key files found)")
-	}
-
-	hostKeyCallback, err := buildHostKeyCallback()
+	// Verify the local port is actually listening. If we can bind it, the
+	// forward is gone (ControlMaster died); clean up our state.
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
 	if err != nil {
-		// Fall back to insecure if known_hosts not readable — at least tunnel works.
-		hostKeyCallback = gsssh.InsecureIgnoreHostKey()
+		return true // port in use → tunnel alive
 	}
-
-	sshCfg := &gsssh.ClientConfig{
-		User:            user,
-		Auth:            authMethods,
-		HostKeyCallback: hostKeyCallback,
-	}
-
-	return gsssh.Dial("tcp", host, sshCfg)
-}
-
-// collectAuthMethods returns all available SSH auth methods in preference order:
-// SSH agent, then key files.
-func collectAuthMethods() []gsssh.AuthMethod {
-	var methods []gsssh.AuthMethod
-
-	// SSH agent
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if conn, err := net.Dial("unix", sock); err == nil {
-			methods = append(methods, gsssh.PublicKeysCallback(agent.NewClient(conn).Signers))
-		}
-	}
-
-	// Key files
-	home, _ := os.UserHomeDir()
-	keyFiles := []string{
-		filepath.Join(home, ".ssh", "id_ed25519"),
-		filepath.Join(home, ".ssh", "id_ecdsa"),
-		filepath.Join(home, ".ssh", "id_rsa"),
-		filepath.Join(home, ".ssh", "id_dsa"),
-	}
-	for _, kf := range keyFiles {
-		data, err := os.ReadFile(kf)
-		if err != nil {
-			continue
-		}
-		signer, err := gsssh.ParsePrivateKey(data)
-		if err != nil {
-			continue
-		}
-		methods = append(methods, gsssh.PublicKeys(signer))
-	}
-
-	return methods
-}
-
-// buildHostKeyCallback loads ~/.ssh/known_hosts for host key verification.
-func buildHostKeyCallback() (gsssh.HostKeyCallback, error) {
-	home, _ := os.UserHomeDir()
-	knownHostsFile := filepath.Join(home, ".ssh", "known_hosts")
-	return knownhosts.New(knownHostsFile)
+	ln.Close()
+	// Port was free — forward disappeared (ControlMaster cycled or crashed).
+	tunnelsMu.Lock()
+	delete(tunnels, key)
+	tunnelsMu.Unlock()
+	return false
 }
