@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -54,13 +53,6 @@ func shortTargetHash(target string) string {
 	sum := sha1.Sum([]byte(target))
 	// 16 hex chars is compact while still collision-resistant enough for this use.
 	return hex.EncodeToString(sum[:8])
-}
-
-func (m *Manager) tunnelControlPath(localPort, remotePort int) string {
-	home, _ := os.UserHomeDir()
-	targetHash := shortTargetHash(m.target())
-	name := "t-" + targetHash + "-l" + strconv.Itoa(localPort) + "-r" + strconv.Itoa(remotePort) + ".sock"
-	return filepath.Join(home, ".aiman", "tunnels", name)
 }
 
 func (m *Manager) Connect(ctx context.Context) error {
@@ -545,78 +537,6 @@ func (m *Manager) ProvisionRemote(ctx context.Context, steps []domain.ProvisionS
 		}
 	}
 	return nil
-}
-
-func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) error {
-	cp := m.tunnelControlPath(localPort, remotePort)
-	if err := os.MkdirAll(filepath.Dir(cp), 0700); err != nil {
-		return fmt.Errorf("failed to create tunnel socket directory: %w", err)
-	}
-	_ = os.Remove(cp)
-
-	target := m.target()
-	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=10",
-		"-o", "ExitOnForwardFailure=yes",
-		"-o", "ServerAliveInterval=30",
-		"-o", "ServerAliveCountMax=3",
-		"-M",
-		"-S", cp,
-		"-f",
-		"-N",
-		"-L", forward,
-		target,
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to start tunnel %s: %w\nOutput: %s", forward, err, strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
-func (m *Manager) StopTunnel(ctx context.Context, localPort, remotePort int) error {
-	cp := m.tunnelControlPath(localPort, remotePort)
-	if _, err := os.Stat(cp); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to stat tunnel socket: %w", err)
-	}
-	target := m.target()
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-o", "BatchMode=yes",
-		"-S", cp,
-		"-O", "exit",
-		target,
-	)
-	output, err := cmd.CombinedOutput()
-	_ = os.Remove(cp)
-	if err != nil {
-		out := strings.ToLower(strings.TrimSpace(string(output)))
-		if strings.Contains(out, "no such file") || strings.Contains(out, "does not exist") || strings.Contains(out, "control socket connect") {
-			return nil
-		}
-		return fmt.Errorf("failed to stop tunnel L%d->R%d: %w\nOutput: %s", localPort, remotePort, err, strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
-func (m *Manager) IsTunnelRunning(ctx context.Context, localPort, remotePort int) bool {
-	cp := m.tunnelControlPath(localPort, remotePort)
-	if _, err := os.Stat(cp); err != nil {
-		return false
-	}
-	target := m.target()
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-o", "BatchMode=yes",
-		"-S", cp,
-		"-O", "check",
-		target,
-	)
-	return cmd.Run() == nil
 }
 
 func (m *Manager) ScanDirectories(ctx context.Context, rootPath string, maxDepth int) ([]string, error) {
