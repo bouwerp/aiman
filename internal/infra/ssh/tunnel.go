@@ -1,37 +1,45 @@
 package ssh
 
-// SSH port-forwarding tunnels using the existing ControlMaster socket.
+// SSH port-forwarding tunnels via a managed ssh -N -L subprocess.
 //
-// ssh -O forward delegates the port-binding to the already-running master
-// process, which has the user's ~/.ssh/config applied and is already
-// authenticated. No new process is forked (no -f), so there are no
-// SIGHUP / lifecycle issues.
+// We start ssh -N -L as a subprocess (no -f), so we own the process lifetime:
+//   - We can kill it explicitly on StopTunnel.
+//   - A background goroutine watches for unexpected exit and cleans up state.
+//   - Setsid isolates it from any SIGHUP sent to the parent process group.
+//   - The slave shares the existing ControlMaster connection (-S socket), so
+//     no new TCP handshake or auth is needed.
+//   - If the ControlMaster socket is stale, ssh falls back to a direct
+//     connection using ~/.ssh/config and the SSH agent.
 
 import (
 	"context"
 	"fmt"
-	"net"
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
+
+type activeTunnel struct {
+	cmd *exec.Cmd
+}
 
 var (
 	tunnelsMu sync.Mutex
-	// tunnels tracks which local:remote port pairs we have active.
-	// The value is a placeholder; the ControlMaster owns the actual socket.
-	tunnels = make(map[string]struct{})
+	tunnels   = make(map[string]*activeTunnel)
 )
 
 func tunnelKey(localPort, remotePort int) string {
 	return fmt.Sprintf("%d:%d", localPort, remotePort)
 }
 
-// StartTunnel asks the existing ControlMaster to forward
-// 127.0.0.1:localPort → 127.0.0.1:remotePort on the remote.
+// StartTunnel launches an ssh -N -L subprocess that forwards
+// 127.0.0.1:localPort on this machine to 127.0.0.1:remotePort on the remote.
 //
-// The ControlMaster is kept alive by ControlPersist=10m; Execute calls from
-// the dashboard refresh cycle ensure it stays up. No goroutine is started here.
+// The subprocess inherits the environment (SSH_AUTH_SOCK etc.) and uses the
+// system ssh binary, which reads ~/.ssh/config. It runs in its own session
+// (Setsid) so it is not killed by SIGHUP on terminal close.
 func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) error {
 	key := tunnelKey(localPort, remotePort)
 
@@ -42,91 +50,94 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 	}
 	tunnelsMu.Unlock()
 
-	// Ensure the ControlMaster is up (it will auto-connect if needed).
+	// Ensure the ControlMaster is connected so the slave can reuse it.
 	if _, err := m.Execute(ctx, "true"); err != nil {
 		return fmt.Errorf("cannot connect to remote: %w", err)
 	}
 
+	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
 	cp := m.controlPath()
 	target := m.target()
-	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
 
-	cmd := exec.CommandContext(ctx, "ssh",
+	// Run as a slave of the existing ControlMaster: no new TCP connection,
+	// no auth round-trip. Falls back to direct connection if the master is gone.
+	cmd := exec.Command("ssh",
 		"-o", "BatchMode=yes",
 		"-S", cp,
-		"-O", "forward",
+		"-o", "ExitOnForwardFailure=yes",
+		"-o", "ServerAliveInterval=30",
+		"-o", "ServerAliveCountMax=3",
+		"-N",
 		"-L", forward,
 		target,
 	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to start tunnel L%d->R%d: %w\nOutput: %s",
-			localPort, remotePort, err, strings.TrimSpace(string(output)))
+	// Put the child in its own session so it is not affected by signals
+	// (SIGHUP, etc.) sent to our process group.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start tunnel L%d->R%d: %w", localPort, remotePort, err)
 	}
 
+	t := &activeTunnel{cmd: cmd}
 	tunnelsMu.Lock()
-	tunnels[key] = struct{}{}
-	tunnelsMu.Unlock()
-	return nil
-}
-
-// StopTunnel cancels the port forward on the ControlMaster and removes it
-// from the in-memory set.
-func (m *Manager) StopTunnel(ctx context.Context, localPort, remotePort int) error {
-	key := tunnelKey(localPort, remotePort)
-	tunnelsMu.Lock()
-	delete(tunnels, key)
+	tunnels[key] = t
 	tunnelsMu.Unlock()
 
-	cp := m.controlPath()
-	target := m.target()
-	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
-
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-o", "BatchMode=yes",
-		"-S", cp,
-		"-O", "cancel",
-		"-L", forward,
-		target,
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		out := strings.ToLower(strings.TrimSpace(string(output)))
-		// Ignore "master not found" errors — the tunnel is effectively gone.
-		if strings.Contains(out, "no such file") ||
-			strings.Contains(out, "does not exist") ||
-			strings.Contains(out, "control socket") ||
-			strings.Contains(out, "no forward matching") {
-			return nil
+	// Watch for unexpected tunnel death and clean up the map.
+	// Also used to detect immediate startup failures.
+	exitCh := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		tunnelsMu.Lock()
+		if current, ok := tunnels[key]; ok && current == t {
+			delete(tunnels, key)
 		}
-		return fmt.Errorf("failed to stop tunnel L%d->R%d: %w\nOutput: %s",
-			localPort, remotePort, err, strings.TrimSpace(string(output)))
+		tunnelsMu.Unlock()
+		exitCh <- err
+	}()
+
+	// Give the process 800ms to fail fast (port conflict, auth error, etc.).
+	select {
+	case err := <-exitCh:
+		tunnelsMu.Lock()
+		delete(tunnels, key)
+		tunnelsMu.Unlock()
+		if err != nil {
+			return fmt.Errorf("tunnel L%d->R%d failed: %w", localPort, remotePort, err)
+		}
+		return fmt.Errorf("tunnel L%d->R%d exited immediately (check port and SSH access)", localPort, remotePort)
+	case <-time.After(800 * time.Millisecond):
+		// Process is still running — tunnel is up.
+		return nil
+	}
+}
+
+// StopTunnel kills the ssh subprocess and removes the tunnel from the map.
+func (m *Manager) StopTunnel(_ context.Context, localPort, remotePort int) error {
+	key := tunnelKey(localPort, remotePort)
+	tunnelsMu.Lock()
+	t, ok := tunnels[key]
+	if ok {
+		delete(tunnels, key)
+	}
+	tunnelsMu.Unlock()
+
+	if !ok || t.cmd == nil || t.cmd.Process == nil {
+		return nil
+	}
+	if err := t.cmd.Process.Kill(); err != nil {
+		if !strings.Contains(err.Error(), "process already finished") {
+			return fmt.Errorf("failed to stop tunnel L%d->R%d: %w", localPort, remotePort, err)
+		}
 	}
 	return nil
 }
 
-// IsTunnelRunning returns true if the tunnel is tracked in the in-memory set
-// AND the local port is actually bound (which would fail if the ControlMaster
-// died and took the forward with it).
+// IsTunnelRunning returns true if the ssh subprocess is still alive.
 func (m *Manager) IsTunnelRunning(_ context.Context, localPort, remotePort int) bool {
-	key := tunnelKey(localPort, remotePort)
 	tunnelsMu.Lock()
-	_, ok := tunnels[key]
-	tunnelsMu.Unlock()
-	if !ok {
-		return false
-	}
-
-	// Verify the local port is actually listening. If we can bind it, the
-	// forward is gone (ControlMaster died); clean up our state.
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
-	if err != nil {
-		return true // port in use → tunnel alive
-	}
-	ln.Close()
-	// Port was free — forward disappeared (ControlMaster cycled or crashed).
-	tunnelsMu.Lock()
-	delete(tunnels, key)
-	tunnelsMu.Unlock()
-	return false
+	defer tunnelsMu.Unlock()
+	_, ok := tunnels[tunnelKey(localPort, remotePort)]
+	return ok
 }
