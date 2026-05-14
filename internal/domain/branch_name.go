@@ -45,14 +45,13 @@ func sanitizeBranchSegment(seg string) string {
 		return ""
 	}
 	seg = strings.ReplaceAll(seg, " ", "-")
-	seg = strings.ReplaceAll(seg, "_", "-")
 
 	var b strings.Builder
 	for _, r := range seg {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			b.WriteRune(r)
-		case r == '-', r == '.':
+		case r == '-', r == '.', r == '_':
 			b.WriteRune(r)
 		default:
 			b.WriteByte('-')

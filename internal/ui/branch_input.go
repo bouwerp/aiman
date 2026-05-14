@@ -55,7 +55,7 @@ func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "enter":
 			// Sanitize and validate before confirming
-			value := m.sanitizeInput(m.textInput.Value())
+			value := m.sanitizeFinal(m.textInput.Value())
 			m.textInput.SetValue(value)
 			if value != "" {
 				m.Confirmed = true
@@ -94,6 +94,7 @@ func (m BranchInputModel) isInvalidChar(s string) bool {
 }
 
 // sanitizeInput normalizes branch names to git-safe characters (see domain.SanitizeBranchName).
+// When finalizing (e.g. on enter), pass finalize=true to also strip trailing separators.
 func (m BranchInputModel) sanitizeInput(s string) string {
 	s = domain.SanitizeBranchName(s)
 	if s == "" {
@@ -103,7 +104,14 @@ func (m BranchInputModel) sanitizeInput(s string) string {
 	if len(s) > maxLen {
 		s = s[:maxLen]
 	}
-	return strings.TrimRight(s, "-")
+	return s
+}
+
+// sanitizeFinal applies sanitizeInput and also trims trailing separators (- and _)
+// that are invalid at the end of a branch name. Call only on confirmation.
+func (m BranchInputModel) sanitizeFinal(s string) string {
+	s = m.sanitizeInput(s)
+	return strings.TrimRight(s, "-_")
 }
 
 func (m BranchInputModel) View() string {
