@@ -54,23 +54,17 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 	}
 	tunnelsMu.Unlock()
 
-	// Ensure the ControlMaster is connected so the slave can reuse it.
-	if _, err := m.Execute(ctx, "true"); err != nil {
-		return fmt.Errorf("cannot connect to remote: %w", err)
-	}
-
 	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
-	cp := m.controlPath()
 	target := m.target()
 
 	var stderrBuf strings.Builder
 
-	// Run as a slave of the existing ControlMaster: no new TCP connection,
-	// no auth round-trip. Falls back to direct connection if the master is gone.
+	// Run as a standalone ssh -N -L process. Using a direct connection (no -S
+	// socket) avoids ControlMaster mux quirks and keeps the tunnel alive
+	// independently of the control master's ControlPersist lifetime.
+	// SSH reads ~/.ssh/config and the SSH agent for auth automatically.
 	cmd := exec.Command("ssh",
-		"-v",
 		"-o", "BatchMode=yes",
-		"-S", cp,
 		"-o", "ExitOnForwardFailure=yes",
 		"-o", "ServerAliveInterval=30",
 		"-o", "ServerAliveCountMax=3",
@@ -219,11 +213,8 @@ func sshErrorSummary(stderr string) string {
 		errLines = append(errLines, l)
 	}
 	if len(errLines) == 0 {
-		// Nothing left — fall back to last 3 raw lines.
-		if len(lines) > 3 {
-			lines = lines[len(lines)-3:]
-		}
-		return strings.Join(lines, "\n")
+		// All lines were debug noise — return empty so the caller uses exit error.
+		return ""
 	}
 	return strings.Join(errLines, "\n")
 }
