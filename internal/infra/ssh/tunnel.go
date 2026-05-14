@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -71,9 +70,7 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 		"-L", forward,
 		target,
 	)
-	// Put the child in its own session so it is not affected by signals
-	// (SIGHUP, etc.) sent to our process group.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = sysProcAttrSetsid()
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start tunnel L%d->R%d: %w", localPort, remotePort, err)
