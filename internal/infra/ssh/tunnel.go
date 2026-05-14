@@ -58,9 +58,12 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 	cp := m.controlPath()
 	target := m.target()
 
+	var stderrBuf strings.Builder
+
 	// Run as a slave of the existing ControlMaster: no new TCP connection,
 	// no auth round-trip. Falls back to direct connection if the master is gone.
 	cmd := exec.Command("ssh",
+		"-v",
 		"-o", "BatchMode=yes",
 		"-S", cp,
 		"-o", "ExitOnForwardFailure=yes",
@@ -70,6 +73,7 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 		"-L", forward,
 		target,
 	)
+	cmd.Stderr = &stderrBuf
 	cmd.SysProcAttr = sysProcAttrSetsid()
 
 	if err := cmd.Start(); err != nil {
@@ -100,10 +104,11 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 		tunnelsMu.Lock()
 		delete(tunnels, key)
 		tunnelsMu.Unlock()
-		if err != nil {
-			return fmt.Errorf("tunnel L%d->R%d failed: %w", localPort, remotePort, err)
+		detail := strings.TrimSpace(stderrBuf.String())
+		if detail == "" && err != nil {
+			detail = err.Error()
 		}
-		return fmt.Errorf("tunnel L%d->R%d exited immediately (check port and SSH access)", localPort, remotePort)
+		return fmt.Errorf("tunnel L%d->R%d failed: %s", localPort, remotePort, detail)
 	case <-time.After(800 * time.Millisecond):
 		// Process is still running — tunnel is up.
 		return nil
