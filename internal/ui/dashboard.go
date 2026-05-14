@@ -241,6 +241,7 @@ func (i item) FilterValue() string {
 type tunnelItem struct {
 	tunnel  domain.Tunnel
 	running bool
+	lastErr string
 }
 
 func (i tunnelItem) Title() string {
@@ -252,6 +253,15 @@ func (i tunnelItem) Title() string {
 }
 
 func (i tunnelItem) Description() string {
+	if i.lastErr != "" {
+		// Show the last few lines of the SSH error (trim verbose preamble).
+		lines := strings.Split(strings.TrimSpace(i.lastErr), "\n")
+		// Pick last 3 lines for brevity.
+		if len(lines) > 3 {
+			lines = lines[len(lines)-3:]
+		}
+		return "⚠ " + strings.Join(lines, " | ")
+	}
 	return "SSH local forward"
 }
 
@@ -646,6 +656,7 @@ func (m *Model) refreshTunnelStatesCmd(s domain.Session) tea.Cmd {
 			items = append(items, tunnelItem{
 				tunnel:  t,
 				running: mgr.IsTunnelRunning(ctx, t.LocalPort, t.RemotePort),
+				lastErr: mgr.TunnelLastError(t.LocalPort, t.RemotePort),
 			})
 		}
 		return tunnelStatesMsg{sessionID: s.ID, items: items}
@@ -3819,9 +3830,10 @@ func (m *Model) handleTunnelManagerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.tunnelError = msg.err.Error()
-		} else {
-			m.tunnelError = ""
+			// Don't refresh yet — keep the error visible. User can press 'r' to refresh.
+			return m, nil
 		}
+		m.tunnelError = ""
 		return m, m.refreshTunnelStatesCmd(*m.tunnelSession)
 	case tea.KeyMsg:
 		switch msg.String() {

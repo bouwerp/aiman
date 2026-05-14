@@ -27,6 +27,10 @@ type activeTunnel struct {
 var (
 	tunnelsMu sync.Mutex
 	tunnels   = make(map[string]*activeTunnel)
+	// tunnelLastErrors stores the last failure reason for a tunnel key so
+	// post-startup exits (after StartTunnel returned nil) can be surfaced in
+	// the next refresh cycle.
+	tunnelLastErrors = make(map[string]string)
 )
 
 func tunnelKey(localPort, remotePort int) string {
@@ -90,15 +94,22 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 	exitCh := make(chan error, 1)
 	go func() {
 		err := cmd.Wait()
+		detail := strings.TrimSpace(stderrBuf.String())
 		tunnelsMu.Lock()
 		if current, ok := tunnels[key]; ok && current == t {
 			delete(tunnels, key)
+			// Store the exit reason so the next refresh can surface it.
+			if detail != "" {
+				tunnelLastErrors[key] = detail
+			} else if err != nil {
+				tunnelLastErrors[key] = err.Error()
+			}
 		}
 		tunnelsMu.Unlock()
 		exitCh <- err
 	}()
 
-	// Give the process 800ms to fail fast (port conflict, auth error, etc.).
+	// Give the process 2s to fail fast (port conflict, auth error, etc.).
 	select {
 	case err := <-exitCh:
 		tunnelsMu.Lock()
@@ -109,10 +120,30 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 			detail = err.Error()
 		}
 		return fmt.Errorf("tunnel L%d->R%d failed: %s", localPort, remotePort, detail)
-	case <-time.After(800 * time.Millisecond):
-		// Process is still running — tunnel is up.
+	case <-time.After(2 * time.Second):
+		// Process is still running — tunnel is up; clear any previous error.
+		tunnelsMu.Lock()
+		delete(tunnelLastErrors, key)
+		tunnelsMu.Unlock()
 		return nil
 	}
+}
+
+// TunnelLastError returns the last exit reason for a tunnel that died
+// unexpectedly (either during startup or after). Empty string if none.
+func (m *Manager) TunnelLastError(localPort, remotePort int) string {
+	key := tunnelKey(localPort, remotePort)
+	tunnelsMu.Lock()
+	defer tunnelsMu.Unlock()
+	return tunnelLastErrors[key]
+}
+
+// ClearTunnelError clears the stored last-error for a tunnel key.
+func (m *Manager) ClearTunnelError(localPort, remotePort int) {
+	key := tunnelKey(localPort, remotePort)
+	tunnelsMu.Lock()
+	delete(tunnelLastErrors, key)
+	tunnelsMu.Unlock()
 }
 
 // StopTunnel kills the ssh subprocess and removes the tunnel from the map.
