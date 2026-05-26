@@ -71,11 +71,9 @@ func TestListRemoteBranches_Success(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			"git -C /home/dev/myrepo branch -r": branchOutput,
+			`git -C "/home/dev/myrepo" branch -r --sort=-committerdate`: branchOutput,
 		},
 	}
-	// Stub fetch (no error)
-	remote.outputs["git -C /home/dev/myrepo fetch origin 2>/dev/null"] = ""
 
 	branches, err := mgr.ListRemoteBranches(context.Background(), remote, domain.Repo{Name: "myrepo"})
 	if err != nil {
@@ -120,8 +118,7 @@ func TestSetupRemoteWorktreeFromBranch_WorktreeAlreadyExists(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin":              "",
-			"git -C /home/dev/myrepo worktree list --porcelain": worktreeListOutput,
+			`git -C "/home/dev/myrepo" worktree list --porcelain`: worktreeListOutput,
 		},
 	}
 
