@@ -358,7 +358,7 @@ func (m *Manager) ListRemoteBranches(ctx context.Context, remote domain.RemoteEx
 		return nil, err
 	}
 
-	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q branch -r", repoPath))
+	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q branch -r --sort=-committerdate", repoPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list remote branches: %w", err)
 	}
