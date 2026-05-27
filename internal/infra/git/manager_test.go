@@ -319,3 +319,148 @@ func TestParseGhRepos_SetsLastActivityAt(t *testing.T) {
 		t.Fatalf("repo a: want updatedAt as max, got %+v", repos[1])
 	}
 }
+
+type commandRecorderRemote struct {
+	mockRemote
+	commandsRun []string
+}
+
+func (c *commandRecorderRemote) Execute(ctx context.Context, cmd string) (string, error) {
+	c.commandsRun = append(c.commandsRun, cmd)
+	return c.mockRemote.Execute(ctx, cmd)
+}
+
+func TestEnsureHealthyRepo_HealthyRepo(t *testing.T) {
+	mgr := NewManager(nil)
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{"/home/dev/myrepo": true},
+			outputs: map[string]string{
+				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:        "git@github.com:owner/myrepo.git",
+				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                      ".git",
+				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                        "",
+				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`: "abc1234",
+			},
+		},
+	}
+
+	repo := domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}
+	err := mgr.EnsureHealthyRepo(context.Background(), remote, repo)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify no recovery/rm-rf/clone command was run
+	for _, cmd := range remote.commandsRun {
+		if strings.Contains(cmd, "rm -rf") || strings.Contains(cmd, "clone") {
+			t.Errorf("unexpected recovery/clone command run: %q", cmd)
+		}
+	}
+}
+
+func TestEnsureHealthyRepo_MissingOriginRemote(t *testing.T) {
+	mgr := NewManager(nil)
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{"/home/dev/myrepo": true},
+			outputs: map[string]string{
+				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                 ".git",
+				`git -C "/home/dev/myrepo" remote add origin "git@github.com:owner/myrepo.git"`: "",
+				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                   "",
+				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:            "abc1234",
+			},
+			errors: map[string]error{
+				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`: fmt.Errorf("exit status 1"),
+			},
+		},
+	}
+
+	repo := domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}
+	err := mgr.EnsureHealthyRepo(context.Background(), remote, repo)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify remote add origin was executed
+	foundAdd := false
+	for _, cmd := range remote.commandsRun {
+		if strings.Contains(cmd, "remote add origin") {
+			foundAdd = true
+			break
+		}
+	}
+	if !foundAdd {
+		t.Errorf("expected 'remote add origin' to be called, commands run: %v", remote.commandsRun)
+	}
+}
+
+func TestEnsureHealthyRepo_MismatchedRemoteURL(t *testing.T) {
+	mgr := NewManager(nil)
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{"/home/dev/myrepo": true},
+			outputs: map[string]string{
+				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                     "git@github.com:old/myrepo.git",
+				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                   ".git",
+				`git -C "/home/dev/myrepo" remote set-url origin "git@github.com:new/myrepo.git"`: "",
+				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                     "",
+				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:              "abc1234",
+			},
+		},
+	}
+
+	repo := domain.Repo{Name: "myrepo", URL: "git@github.com:new/myrepo.git"}
+	err := mgr.EnsureHealthyRepo(context.Background(), remote, repo)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify remote set-url origin was executed
+	foundSet := false
+	for _, cmd := range remote.commandsRun {
+		if strings.Contains(cmd, "remote set-url origin") {
+			foundSet = true
+			break
+		}
+	}
+	if !foundSet {
+		t.Errorf("expected 'remote set-url origin' to be called, commands run: %v", remote.commandsRun)
+	}
+}
+
+func TestEnsureHealthyRepo_FetchFailure(t *testing.T) {
+	mgr := NewManager(nil)
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{"/home/dev/myrepo": true},
+			outputs: map[string]string{
+				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`: "git@github.com:owner/myrepo.git",
+				`git -C "/home/dev/myrepo" rev-parse --git-dir`:               ".git",
+				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                 "fatal: Could not read from remote repository.",
+			},
+			errors: map[string]error{
+				`git -C "/home/dev/myrepo" fetch origin 2>&1`: fmt.Errorf("exit status 128"),
+			},
+		},
+	}
+
+	repo := domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}
+	err := mgr.EnsureHealthyRepo(context.Background(), remote, repo)
+	if err == nil {
+		t.Fatal("expected error on fetch failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to fetch from origin remote") {
+		t.Errorf("expected fetch failure error message, got: %v", err)
+	}
+
+	// Verify no recovery/rm-rf/clone command was run (repository is NOT deleted/recloned)
+	for _, cmd := range remote.commandsRun {
+		if strings.Contains(cmd, "rm -rf") || strings.Contains(cmd, "clone") {
+			t.Errorf("unexpected recovery/clone command run on fetch failure: %q", cmd)
+		}
+	}
+}

@@ -545,55 +545,45 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 		reportProgress(ctx, fmt.Sprintf("Repository %s has no .git directory — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
-	// Must have an origin remote.
+
+	// Ensure the repository has the correct origin remote.
 	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath)); err != nil {
-		reportProgress(ctx, fmt.Sprintf("Repository %s has no origin remote — recovering...", repoName))
-		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+		// Origin remote is missing. Try to add it if we have a URL.
+		if effectiveURL != "" {
+			reportProgress(ctx, fmt.Sprintf("Adding origin remote for %s...", repoName))
+			if _, addErr := remote.Execute(ctx, fmt.Sprintf("git -C %q remote add origin %q", repoPath, effectiveURL)); addErr != nil {
+				return fmt.Errorf("repository %s has no origin remote and failed to add it: %w", repoPath, addErr)
+			}
+		} else {
+			return fmt.Errorf("repository at %s has no origin remote and no remote URL configured — please configure origin manually", repoPath)
+		}
+	} else if repoURL != "" {
+		// Origin exists but check if URL matches repoURL, if not update it.
+		currentURLOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath))
+		currentURL := strings.TrimSpace(currentURLOut)
+		if currentURL != "" && currentURL != repoURL {
+			reportProgress(ctx, fmt.Sprintf("Updating origin remote URL for %s...", repoName))
+			if _, setErr := remote.Execute(ctx, fmt.Sprintf("git -C %q remote set-url origin %q", repoPath, repoURL)); setErr != nil {
+				// Fallback: remove and add
+				_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q remote remove origin 2>/dev/null", repoPath))
+				if _, addErr := remote.Execute(ctx, fmt.Sprintf("git -C %q remote add origin %q", repoPath, repoURL)); addErr != nil {
+					return fmt.Errorf("failed to update remote URL for %s: %w", repoName, addErr)
+				}
+			}
+		}
 	}
+
 	// Fetch must succeed.
 	reportProgress(ctx, fmt.Sprintf("Fetching latest changes for %s...", repoName))
-	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>&1", repoPath)); err != nil {
-		reportProgress(ctx, fmt.Sprintf("Fetch failed for %s — recovering...", repoName))
-		return recoverRepo(ctx, remote, repoPath, effectiveURL)
+	if fetchOut, err := remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>&1", repoPath)); err != nil {
+		return fmt.Errorf("failed to fetch from origin remote for %s (check network and SSH credentials):\n%s: %w", repoName, strings.TrimSpace(fetchOut), err)
 	}
+
 	// HEAD must be a valid commit (empty/re-init'd repos have no commits).
 	headOut, _ := remote.Execute(ctx, fmt.Sprintf(
 		`git -C %q rev-parse HEAD 2>/dev/null || echo EMPTY`, repoPath))
 	if strings.TrimSpace(headOut) == "EMPTY" {
 		reportProgress(ctx, fmt.Sprintf("Repository %s has no local commits — recovering...", repoName))
-		return recoverRepo(ctx, remote, repoPath, effectiveURL)
-	}
-	// No uncommitted local changes.
-	reportProgress(ctx, fmt.Sprintf("Checking %s for local changes...", repoName))
-	if statusOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q status --porcelain", repoPath)); strings.TrimSpace(statusOut) != "" {
-		reportProgress(ctx, fmt.Sprintf("Repository %s has uncommitted changes — recovering...", repoName))
-		return recoverRepo(ctx, remote, repoPath, effectiveURL)
-	}
-	// Must not be behind origin — try origin/HEAD then origin/main then origin/master.
-	// Being behind just means new upstream commits; pull them rather than recovering.
-	reportProgress(ctx, fmt.Sprintf("Verifying %s is in sync with remote...", repoName))
-	behindOut, _ := remote.Execute(ctx, fmt.Sprintf(
-		`git -C %q rev-list HEAD..origin/HEAD --count 2>/dev/null || git -C %q rev-list HEAD..origin/main --count 2>/dev/null || git -C %q rev-list HEAD..origin/master --count 2>/dev/null || echo 0`,
-		repoPath, repoPath, repoPath))
-	if n, _ := strconv.Atoi(strings.TrimSpace(behindOut)); n > 0 {
-		reportProgress(ctx, fmt.Sprintf("Repository %s is %d commit(s) behind remote — updating...", repoName, n))
-		// Reset to upstream tracking branch (@{u}), or fall back to common remote branch names.
-		// git reset --hard is safe here because the base repo must always remain clean.
-		resetOut, resetErr := remote.Execute(ctx, fmt.Sprintf(
-			`git -C %q reset --hard @{u} 2>&1 || git -C %q reset --hard origin/HEAD 2>&1 || git -C %q reset --hard origin/main 2>&1 || git -C %q reset --hard origin/master 2>&1`,
-			repoPath, repoPath, repoPath, repoPath))
-		if resetErr != nil {
-			reportProgress(ctx, fmt.Sprintf("Failed to update %s: %s — recovering...", repoName, strings.TrimSpace(resetOut)))
-			return recoverRepo(ctx, remote, repoPath, effectiveURL)
-		}
-		reportProgress(ctx, fmt.Sprintf("Repository %s updated ✓", repoName))
-	}
-	// Must not have local commits not on origin (diverged/ahead).
-	aheadOut, _ := remote.Execute(ctx, fmt.Sprintf(
-		`git -C %q rev-list origin/HEAD..HEAD --count 2>/dev/null || git -C %q rev-list origin/main..HEAD --count 2>/dev/null || git -C %q rev-list origin/master..HEAD --count 2>/dev/null || echo 0`,
-		repoPath, repoPath, repoPath))
-	if n, _ := strconv.Atoi(strings.TrimSpace(aheadOut)); n > 0 {
-		reportProgress(ctx, fmt.Sprintf("Repository %s has %d local commit(s) not on remote — recovering...", repoName, n))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
 
