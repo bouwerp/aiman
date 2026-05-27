@@ -10,12 +10,12 @@ Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full
 
 - Turns a JIRA ticket into a git worktree + tmux session + mutagen sync + AI agent in one flow
 - Tracks active sessions, provides live pane previews, git status, and AI summaries
-- Supports Claude Code, Gemini CLI, GitHub Copilot, OpenCode, and Cursor as agents
+- Supports Claude Code, Antigravity CLI, GitHub Copilot, OpenCode, and Cursor as agents
 
 Binary: `aiman` — built from `./cmd/aiman/main.go`  
 Module: `github.com/bouwerp/aiman`  
 Go: 1.26  
-Current release: **v0.6.57**
+Current release: **v0.7.26**
 
 ---
 
@@ -262,7 +262,7 @@ Key config fields:
 
 ## Remaining TODOs (from PLAN.md)
 
-- **Remote VM Bootstrapper**: Connect to a new VM and install baseline tooling (git, tmux, go, node, claude, cursor, gemini, opencode, acli), configure SSH keys, and authenticate agents.
+- **Remote VM Bootstrapper**: Connect to a new VM and install baseline tooling (git, tmux, go, node, claude, cursor, agy, opencode, acli), configure SSH keys, and authenticate agents.
 - **AI Compute Monitoring**: Provider subscription/usage monitoring (Anthropic, Google, OpenAI) — credit balances and usage tracking.
 - **EC2 Provisioning**: Spin up/terminate EC2 instances and wire to Aiman's remote registry.
 - **MOSH Support**: Hand off to MOSH for high-latency interactive connections.

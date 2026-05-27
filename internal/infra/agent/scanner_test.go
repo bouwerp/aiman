@@ -22,6 +22,34 @@ func (m *mockExecutor) Execute(_ context.Context, cmd string) (string, error) {
 	return "", fmt.Errorf("command failed")
 }
 
+func TestScanAgents_DetectsAntigravity(t *testing.T) {
+	exec := &mockExecutor{
+		canRun: func(cmd string) bool {
+			return strings.Contains(cmd, "agy")
+		},
+	}
+	scanner := NewScanner(exec)
+
+	agents, err := scanner.ScanAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ScanAgents returned error: %v", err)
+	}
+
+	found := false
+	for _, a := range agents {
+		if a.Name == "Antigravity CLI" {
+			found = true
+			if a.Command != "agy" {
+				t.Errorf("expected command to be agy, got %s", a.Command)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected Antigravity CLI to be detected as an available agent")
+	}
+}
+
 func TestScanAgents_DetectsOpenCode(t *testing.T) {
 	exec := &mockExecutor{
 		canRun: func(cmd string) bool {

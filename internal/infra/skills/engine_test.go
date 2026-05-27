@@ -141,7 +141,7 @@ func TestPrepareSession_ClaudeWithoutIssue(t *testing.T) {
 	}
 }
 
-func TestPrepareSession_GeminiWithIssue_UsesSendKeys(t *testing.T) {
+func TestPrepareSession_AntigravityWithIssue_UsesSendKeys(t *testing.T) {
 	cfg := &config.Config{}
 	engine := NewEngine(cfg)
 	remote := newMockRemote()
@@ -154,7 +154,7 @@ func TestPrepareSession_GeminiWithIssue_UsesSendKeys(t *testing.T) {
 		Status:      domain.IssueStatusInProgress,
 	}
 
-	agent := domain.Agent{Name: "Gemini CLI", Command: "gemini"}
+	agent := domain.Agent{Name: "Antigravity CLI", Command: "agy"}
 
 	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
 	if err != nil {
@@ -166,20 +166,61 @@ func TestPrepareSession_GeminiWithIssue_UsesSendKeys(t *testing.T) {
 		t.Fatal("expected .aiman_task.md to be written")
 	}
 
-	// Command should include --yolo but NOT the prompt (would cause headless exit)
-	if !strings.Contains(result.Command, "--yolo") {
-		t.Errorf("expected --yolo in command, got: %s", result.Command)
+	// Command should include --dangerously-skip-permissions but NOT the prompt.
+	if !strings.Contains(result.Command, "--dangerously-skip-permissions") {
+		t.Errorf("expected --dangerously-skip-permissions in command, got: %s", result.Command)
 	}
 	if strings.Contains(result.Command, ".aiman_task.md") {
-		t.Errorf("Gemini should NOT embed prompt in command (risk of headless exit), got: %s", result.Command)
+		t.Errorf("Antigravity should NOT embed prompt in command, got: %s", result.Command)
 	}
 
 	// Should use InitialPrompt for tmux send-keys instead
 	if result.InitialPrompt == "" {
-		t.Error("expected non-empty InitialPrompt for Gemini (uses send-keys)")
+		t.Error("expected non-empty InitialPrompt for Antigravity (uses send-keys)")
 	}
 	if !strings.Contains(result.InitialPrompt, ".aiman_task.md") {
 		t.Errorf("InitialPrompt should reference .aiman_task.md, got: %s", result.InitialPrompt)
+	}
+}
+
+func TestPrepareSession_AntigravityWithPromptSkills_WritesPromptFileAndUsesSendKeys(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	skillPath := filepath.Join(t.TempDir(), "review.md")
+	if err := os.WriteFile(skillPath, []byte("Always review existing patterns before coding."), 0o644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	agent := domain.Agent{Name: "Antigravity CLI", Command: "agy"}
+	skills := []domain.Skill{{
+		Name: "review",
+		Path: skillPath,
+		Type: domain.SkillTypePrompt,
+	}}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, true, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	promptContent, ok := remote.writtenFiles["/home/user/code/myrepo/.aiman_prompt"]
+	if !ok {
+		t.Fatal("expected .aiman_prompt to be written")
+	}
+	if !strings.Contains(string(promptContent), "Always review existing patterns before coding.") {
+		t.Errorf("prompt file should include selected skill content, got: %s", string(promptContent))
+	}
+	if result.InitialPrompt == "" {
+		t.Fatal("expected InitialPrompt when Antigravity prompt skills are selected")
+	}
+	if !strings.Contains(result.InitialPrompt, ".aiman_prompt") {
+		t.Errorf("expected InitialPrompt to reference .aiman_prompt, got: %s", result.InitialPrompt)
+	}
+	if strings.Contains(result.Command, "GEMINI_SYSTEM_INSTRUCTION_FILE") {
+		t.Errorf("Antigravity should not rely on Gemini-specific env vars, got: %s", result.Command)
 	}
 }
 

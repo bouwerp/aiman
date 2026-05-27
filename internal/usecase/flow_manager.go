@@ -23,21 +23,6 @@ type FlowManager struct {
 	SkillEngine  domain.SkillEngine
 }
 
-func geminiGlobalTrustCmd(workingDir string) string {
-	return fmt.Sprintf(
-		`cd %q && if command -v gemini >/dev/null 2>&1; then `+
-			`mkdir -p "$HOME/.gemini"; `+
-			`tf="$HOME/.gemini/trustedFolders.json"; `+
-			`if [ ! -s "$tf" ]; then printf '{}' > "$tf"; fi; `+
-			`if command -v node >/dev/null 2>&1; then `+
-			`WORKDIR=%q TF="$tf" node -e "const fs=require('fs');const p=process.env.WORKDIR;const f=process.env.TF;let j={};try{j=JSON.parse(fs.readFileSync(f,'utf8')||'{}')}catch{j={}};j[p]='TRUST_FOLDER';fs.writeFileSync(f,JSON.stringify(j,null,2),{mode:0o600})" >/dev/null 2>&1 || true; `+
-			`fi; `+
-			`gemini config set --global security.folderTrust.enabled true >/dev/null 2>&1 || true; `+
-			`fi`,
-		workingDir, workingDir,
-	)
-}
-
 func NewFlowManager(
 	jiraProvider domain.IssueProvider,
 	jiraConfig *config.JiraConfig,
@@ -299,8 +284,6 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	ghCopilotTrustCmd := fmt.Sprintf("cd %q && if command -v gh >/dev/null; then gh copilot trust . >/dev/null 2>&1 || gh copilot trust add . >/dev/null 2>&1; fi", workingDir)
 	_, _ = sshMgr.Execute(ctx, ghCopilotTrustCmd)
 
-	_, _ = sshMgr.Execute(ctx, geminiGlobalTrustCmd(workingDir))
-
 	// Transition JIRA issue if configured
 	if session.IssueKey != "" && m.jiraConfig != nil && m.jiraConfig.TransitionStatus != "" {
 		_ = m.jiraProvider.TransitionIssue(ctx, session.IssueKey, m.jiraConfig.TransitionStatus)
@@ -337,8 +320,6 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 	case strings.Contains(name, "claude"):
 		// ANTHROPIC_MODEL env var takes precedence; claude config is a fallback.
 		cmd = `printenv ANTHROPIC_MODEL 2>/dev/null || claude config get model 2>/dev/null || echo ""`
-	case strings.Contains(name, "gemini"):
-		cmd = `printenv GEMINI_MODEL 2>/dev/null || gemini config get model 2>/dev/null || echo ""`
 	case strings.Contains(name, "opencode"):
 		cmd = `printenv OPENCODE_MODEL 2>/dev/null || echo ""`
 	case strings.Contains(name, "copilot"):

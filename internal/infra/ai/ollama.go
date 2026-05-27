@@ -133,7 +133,7 @@ next_steps: concrete remaining tasks inferred from context. Empty array if none.
 Extract any items requiring human attention from the terminal output.
 Respond ONLY with a valid JSON array. Return an empty array [] if nothing needs attention.`
 
-	patternSuggestionsSystemPrompt = `You are an expert in AI coding agents (Claude Code, Gemini CLI, Aider, Cursor, OpenCode).
+	patternSuggestionsSystemPrompt = `You are an expert in AI coding agents (Claude Code, Antigravity CLI, Aider, Cursor, OpenCode).
 Given a JIRA issue summary and description, suggest 2-3 agentic orchestration patterns.
 Examples: "TDD Loop", "Explore-Plan-Implement", "Iterative Refinement", "Parallel Hypothesis Testing", "Spec-First".
 Respond ONLY with a valid JSON array matching the schema.`

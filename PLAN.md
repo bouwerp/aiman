@@ -60,7 +60,7 @@
         *   Check for an existing git worktree matching the proposed branch name. ✅
         *   If missing, execute `git worktree add ../<branch-name> <branch-name>`. ✅
     6.  **Scope Selection**: Directory picker to select a sub-directory within the repo. ✅
-    7.  **Agent Selection**: Scan remote and select agent (Claude, Gemini, OpenCode, Copilot). ✅
+    7.  **Agent Selection**: Scan remote and select agent (Claude, Antigravity, OpenCode, Copilot). ✅
     8.  **Summary Confirmation**: Show selected issue/branch/repo/dir/agent before creation. ✅
     9.  **Session Bootstrapping**:
         *   Launch a new `tmux` session named after the issue key/branch. ✅
@@ -88,7 +88,7 @@
     - Develop robust agentic patterns (e.g., Orchestrator-Worker-Validator).
     - Logic to translate these patterns for various supported coding tools.
     - Synchronize patterns to the remote dev server.
-- [x] **JIRA-Driven Initial Prompt**: When launching a session from a JIRA issue, the issue description is written to `.aiman_task.md` in the worktree and the agent receives an initial prompt to read it, gather context, and prepare a plan. Works for Claude Code, Gemini, Cursor, and OpenCode.
+- [x] **JIRA-Driven Initial Prompt**: When launching a session from a JIRA issue, the issue description is written to `.aiman_task.md` in the worktree and the agent receives an initial prompt to read it, gather context, and prepare a plan. Works for Claude Code, Antigravity, Cursor, and OpenCode.
 - [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths before agent launch.
 - [ ] **MOSH Support**: Add an option to hand off to MOSH for high-latency interactive connections.
 - [x] **CI/CD Pipeline & Releases**: GitHub Actions workflow for:
@@ -97,7 +97,7 @@
     - Creating GitHub releases with all platform binaries as artifacts.
     - Automatic versioning based on git tags.
 - [ ] **Remote VM Bootstrapper**:
-    - Connect to a new remote VM and install baseline tooling (git, tmux, go, nodejs, npm, curl, claude, cursor, gemini, opencode, acli).
+    - Connect to a new remote VM and install baseline tooling (git, tmux, go, nodejs, npm, curl, claude, cursor, agy, opencode, acli).
     - Configure SSH keys and git SSH auth.
     - Authenticate Atlassian (acli) and supported coding agents.
 - [ ] **AI Compute Monitoring**:

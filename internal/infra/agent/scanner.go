@@ -17,9 +17,9 @@ var knownAgents = []domain.Agent{
 		Description: "Anthropic's Claude Code CLI",
 	},
 	{
-		Name:        "Gemini CLI",
-		Command:     "gemini",
-		Description: "Google's Gemini CLI",
+		Name:        "Antigravity CLI",
+		Command:     "agy",
+		Description: "Google's Antigravity CLI",
 	},
 	{
 		Name:        "OpenCode",

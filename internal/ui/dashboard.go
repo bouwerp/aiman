@@ -592,21 +592,6 @@ func parseTunnelSpec(spec string) (domain.Tunnel, error) {
 	return domain.Tunnel{LocalPort: localPort, RemotePort: remotePort}, nil
 }
 
-func geminiGlobalTrustCmd(workingDir string) string {
-	return fmt.Sprintf(
-		`cd %q && if command -v gemini >/dev/null 2>&1; then `+
-			`mkdir -p "$HOME/.gemini"; `+
-			`tf="$HOME/.gemini/trustedFolders.json"; `+
-			`if [ ! -s "$tf" ]; then printf '{}' > "$tf"; fi; `+
-			`if command -v node >/dev/null 2>&1; then `+
-			`WORKDIR=%q TF="$tf" node -e "const fs=require('fs');const p=process.env.WORKDIR;const f=process.env.TF;let j={};try{j=JSON.parse(fs.readFileSync(f,'utf8')||'{}')}catch{j={}};j[p]='TRUST_FOLDER';fs.writeFileSync(f,JSON.stringify(j,null,2),{mode:0o600})" >/dev/null 2>&1 || true; `+
-			`fi; `+
-			`gemini config set --global security.folderTrust.enabled true >/dev/null 2>&1 || true; `+
-			`fi`,
-		workingDir, workingDir,
-	)
-}
-
 func (m *Model) updateSessionInMemory(updated domain.Session) {
 	for i, s := range m.allSessions {
 		if s.ID == updated.ID {
@@ -987,7 +972,7 @@ func detectSessionActivity(output string) (string, bool) {
 		}
 	}
 
-	// Busy patterns (Claude/Gemini style status lines)
+	// Busy patterns (Claude/Antigravity style status lines)
 	busyPatterns := []string{
 		"thinking",
 		"tokens",
@@ -1161,10 +1146,10 @@ func defaultAuthWizardSteps() []authWizardStep {
 			CheckCmd:    "if command -v claude >/dev/null 2>&1; then claude --version >/dev/null 2>&1; else false; fi",
 		},
 		{
-			Name:        "Gemini CLI (remote)",
+			Name:        "Antigravity CLI (remote)",
 			Scope:       "remote",
-			Instruction: "Run `gemini auth login` on the remote if this check fails.",
-			CheckCmd:    "if command -v gemini >/dev/null 2>&1; then gemini --help >/dev/null 2>&1; else false; fi",
+			Instruction: "Run `agy` on the remote and complete the sign-in flow if this check fails.",
+			CheckCmd:    "if command -v agy >/dev/null 2>&1; then agy --help >/dev/null 2>&1; else false; fi",
 		},
 		{
 			Name:        "JIRA token (local config)",

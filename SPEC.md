@@ -26,8 +26,8 @@
 | **6. Isolate** | `WorktreeManager` | `git worktree add ../<branch-name>`. |
 | **7. Scope** | `DirPicker` | Set the active working directory for the agent. |
 | **8. Session** | `TmuxManager` | `tmux new-session -d -s <branch>`. Forward SSH_AUTH_SOCK. |
-| **9. Skills** | `SkillEngine` | Sync Skill-Repo; map to `.clauderc`, `.geminirc`, or `gh` aliases. |
-| **10. Agent** | `AgentRunner` | Launch **Claude Code**, **Gemini**, **OpenCode**, or **Copilot CLI**. |
+| **9. Skills** | `SkillEngine` | Sync Skill-Repo; map to `.clauderc`, Antigravity prompt/context files, or `gh` aliases. |
+| **10. Agent** | `AgentRunner` | Launch **Claude Code**, **Antigravity**, **OpenCode**, or **Copilot CLI**. |
 | **11. Sync** | `MutagenBridge` | Start `mutagen` sync between local and remote worktree. |
 
 ---
@@ -40,9 +40,9 @@ Aiman provides specialized bootstrapping for the following tools:
 * **Strategy:** Manages the long-running interactive loop within tmux. 
 * **Context:** Injects skill-based instructions into the initial session prompt.
 
-### B. Gemini CLI (`gemini` / `gcloud`)
-* **Strategy:** Forwards Google Cloud credentials or API keys. 
-* **Context:** Loads "Skills" as system instructions via the CLI's configuration path.
+### B. Antigravity CLI (`agy`)
+* **Strategy:** Starts `agy --dangerously-skip-permissions` inside tmux for autonomous sessions.
+* **Context:** Stages generated prompt files in the worktree and has the interactive session read them after startup.
 
 ### C. GitHub Copilot CLI (`gh copilot`)
 * **Strategy:** Relies on the `gh` CLI. Aiman verifies the `copilot` extension is installed on the remote box (`gh extension install github/gh-copilot`).
@@ -62,7 +62,7 @@ Aiman treats skills as "Context Injection Units" synchronized via Git.
 * **Mapping Engine:**
     * `skills/refactor.md` -> Appended to **Claude's** system prompt.
     * `skills/k8s-expert.sh` -> Injected as an alias for **Copilot CLI** suggestions.
-    * `skills/unittest.json` -> Provided as a tool definition for **Gemini**.
+    * `skills/unittest.json` -> Staged as session context for **Antigravity**.
 
 ---
 
@@ -93,8 +93,8 @@ agents:
   supported:
     - name: "claude"
       bin: "claude"
-    - name: "gemini"
-      bin: "gemini-chat"
+    - name: "antigravity"
+      bin: "agy"
     - name: "copilot"
       bin: "gh copilot"
     - name: "opencode"

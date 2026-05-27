@@ -22,7 +22,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **JIRA Integration**: Real-time search with VSCode-style filtering
 - **Smart Branch Names**: Auto-sanitizes issue titles for git compatibility
 - **Repo & Directory Picker**: Choose repo + subdirectory from the remote
-- **Multi-Agent Support**: Scan and select Claude Code, Gemini CLI, GitHub Copilot, OpenCode, or Cursor
+- **Multi-Agent Support**: Scan and select Claude Code, Antigravity CLI, GitHub Copilot, OpenCode, or Cursor
 - **Ad-hoc Sessions**: Create quick sessions without a JIRA issue, branch, or repo
 - **Session Management**: Track active sessions with live tmux pane previews
 
@@ -178,7 +178,7 @@ aiman
    - Invalid characters are blocked; spaces automatically become dashes
 4. **Select Repository**: Pick from your GitHub repos
 5. **Select Subdirectory**: Choose a repo subdirectory (or `.` for root)
-6. **Agent Selection**: Choose your AI coding assistant (Claude Code, Gemini CLI, Copilot, OpenCode, Cursor)
+6. **Agent Selection**: Choose your AI coding assistant (Claude Code, Antigravity CLI, Copilot, OpenCode, Cursor)
 7. **Summary**: Review selected issue/branch/repo/dir/agent before creation
    - If AWS credential delegation is configured for the remote, editable **Profile** and **Region** fields appear — pre-filled with remote defaults, overridable per session (Tab cycles between fields)
 
@@ -393,7 +393,7 @@ Aiman follows **Clean Architecture** principles:
 - [x] JIRA-driven initial prompt injection (auto-generates `.aiman_task.md` and seeds agent with task context)
 - [x] Skill injection system
 - [x] Claude Code integration
-- [x] Gemini CLI integration
+- [x] Antigravity CLI integration
 - [x] GitHub Copilot CLI support
 - [x] OpenCode integration
 - [x] Cursor integration
@@ -517,4 +517,3 @@ MIT License — see LICENSE file for details
 ---
 
 *Built with ❤️ in Go by Pieter Bouwer*
-

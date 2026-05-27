@@ -138,8 +138,38 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 // via tmux send-keys.
 const initialPrompt = `Read .aiman_task.md — it contains the task, acceptance criteria, and your working guidelines for this session. Start by presenting your implementation plan.`
 
+func agentBaseCommand(cmd string) string {
+	fields := strings.Fields(strings.TrimSpace(strings.ToLower(cmd)))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+func ensureFlag(cmd, flag string) string {
+	if strings.Contains(cmd, flag) {
+		return cmd
+	}
+	return fmt.Sprintf("%s %s", cmd, flag)
+}
+
+func buildSessionPrompt(files []string) string {
+	switch len(files) {
+	case 0:
+		return ""
+	case 1:
+		if files[0] == ".aiman_task.md" {
+			return initialPrompt
+		}
+		return fmt.Sprintf("Read %s — it contains the active instructions for this session. Start by applying them before continuing.", files[0])
+	default:
+		return fmt.Sprintf("Read %s — the task file contains the task and acceptance criteria, and the prompt file contains the active skill instructions. Start by presenting your implementation plan.", strings.Join(files, " and "))
+	}
+}
+
 func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue, snapshot *domain.SessionSnapshot) (domain.PreparedSession, error) {
 	name := strings.ToLower(agent.Name)
+	baseCommand := agentBaseCommand(agent.Command)
 
 	// Write JIRA task file if an issue is provided.
 	if issue != nil {
@@ -153,9 +183,9 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 		return e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
 	}
 
-	// For Gemini
-	if strings.Contains(name, "gemini") {
-		return e.prepareGemini(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+	// For Antigravity
+	if strings.Contains(name, "antigravity") || baseCommand == "agy" {
+		return e.prepareAntigravity(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
 	}
 
 	// For OpenCode
@@ -339,7 +369,7 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 	return result, nil
 }
 
-func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -350,28 +380,28 @@ func (e *Engine) prepareGemini(ctx context.Context, remote domain.RemoteExecutor
 		}
 	}
 
-	cmd := agent.Command
-	if promptFree {
-		cmd = fmt.Sprintf("%s --yolo", cmd)
-	}
+	_ = promptFree
 
-	// Gemini's positional arg behavior is not confirmed to stay interactive,
-	// so we use tmux send-keys via InitialPrompt instead.
+	cmd := ensureFlag(agent.Command, "--dangerously-skip-permissions")
 	result := domain.PreparedSession{Command: cmd}
+	var promptFiles []string
+
 	if issue != nil {
-		result.InitialPrompt = initialPrompt
+		promptFiles = append(promptFiles, ".aiman_task.md")
 	}
 
-	if len(prompts) == 0 {
-		return result, nil
+	// Antigravity does not document a Gemini-style system-instruction env var, so
+	// we stage prompt skills in a workspace file and direct the interactive
+	// session to read it via tmux send-keys after startup.
+	if len(prompts) > 0 {
+		systemPrompt := strings.Join(prompts, "\n\n")
+		remotePromptPath := filepath.Join(worktreePath, ".aiman_prompt")
+		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+			return domain.PreparedSession{}, fmt.Errorf("failed to upload Antigravity prompt to remote: %w", err)
+		}
+		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
 	}
 
-	systemPrompt := strings.Join(prompts, "\n\n")
-	remotePromptPath := filepath.Join(worktreePath, ".aiman_gemini_prompt")
-	if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
-		return domain.PreparedSession{}, fmt.Errorf("failed to upload gemini prompt to remote: %w", err)
-	}
-
-	result.Command = fmt.Sprintf("GEMINI_SYSTEM_INSTRUCTION_FILE=%s %s", remotePromptPath, cmd)
+	result.InitialPrompt = buildSessionPrompt(promptFiles)
 	return result, nil
 }
