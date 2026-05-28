@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -227,7 +228,7 @@ func TestSetupRemoteWorktree_BranchNameEqualsRepoName(t *testing.T) {
 
 func TestAimanTaskGitignoreBashScript_ContainsWTAndRules(t *testing.T) {
 	s := aimanTaskGitignoreBashScript("/home/dev/wt")
-	if !strings.Contains(s, ".aiman_task.md") {
+	if !strings.Contains(s, domain.AimanGeneratedFileGlob) {
 		t.Fatalf("missing ignore line: %s", s)
 	}
 	if !strings.Contains(s, "/home/dev/wt") {
@@ -238,9 +239,9 @@ func TestAimanTaskGitignoreBashScript_ContainsWTAndRules(t *testing.T) {
 	}
 }
 
-func TestEnsureAimanTaskGitignored_EmptyPath(t *testing.T) {
+func TestEnsureAimanSessionFilesGitignored_EmptyPath(t *testing.T) {
 	mgr := NewManager(nil)
-	err := mgr.EnsureAimanTaskGitignored(context.Background(), &mockRemote{}, "   ")
+	err := mgr.EnsureAimanSessionFilesGitignored(context.Background(), &mockRemote{}, "   ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,5 +463,141 @@ func TestEnsureHealthyRepo_FetchFailure(t *testing.T) {
 		if strings.Contains(cmd, "rm -rf") || strings.Contains(cmd, "clone") {
 			t.Errorf("unexpected recovery/clone command run on fetch failure: %q", cmd)
 		}
+	}
+}
+
+func TestEnsureHealthyRepo_MissingRepoWithLinkedWorktrees_BlocksClone(t *testing.T) {
+	mgr := NewManager(nil)
+	repoPath := "/home/dev/myrepo"
+	scanCmd := "bash -ce " + strconv.Quote(linkedWorktreeScanScript(repoPath))
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{},
+			outputs: map[string]string{
+				scanCmd: "/home/dev/feature-x\n",
+			},
+		},
+	}
+
+	repo := domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}
+	err := mgr.EnsureHealthyRepo(context.Background(), remote, repo)
+	if err == nil {
+		t.Fatal("expected linked-worktree protection error, got nil")
+	}
+	if !strings.Contains(err.Error(), "linked worktrees still exist") {
+		t.Fatalf("expected linked-worktree protection error, got: %v", err)
+	}
+	for _, cmd := range remote.commandsRun {
+		if strings.Contains(cmd, " clone ") || strings.Contains(cmd, "rm -rf") {
+			t.Fatalf("unexpected destructive command when linked worktrees exist: %q", cmd)
+		}
+	}
+}
+
+func TestEnsureHealthyRepo_InvalidGitDirWithLinkedWorktrees_BlocksRecovery(t *testing.T) {
+	mgr := NewManager(nil)
+	repoPath := "/home/dev/myrepo"
+	scanCmd := "bash -ce " + strconv.Quote(linkedWorktreeScanScript(repoPath))
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{repoPath: true},
+			outputs: map[string]string{
+				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`: "git@github.com:owner/myrepo.git",
+				scanCmd: "/home/dev/feature-x\n",
+			},
+			errors: map[string]error{
+				`git -C "/home/dev/myrepo" rev-parse --git-dir`: fmt.Errorf("exit status 128"),
+			},
+		},
+	}
+
+	repo := domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}
+	err := mgr.EnsureHealthyRepo(context.Background(), remote, repo)
+	if err == nil {
+		t.Fatal("expected linked-worktree protection error, got nil")
+	}
+	if !strings.Contains(err.Error(), "linked worktrees still exist") {
+		t.Fatalf("expected linked-worktree protection error, got: %v", err)
+	}
+	for _, cmd := range remote.commandsRun {
+		if strings.Contains(cmd, " clone ") || strings.Contains(cmd, "rm -rf") {
+			t.Fatalf("unexpected destructive command when linked worktrees exist: %q", cmd)
+		}
+	}
+}
+
+func TestSetupRemoteWorktree_DisablesSparseCheckoutPerWorktree(t *testing.T) {
+	mgr := NewManager(nil)
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{"/home/dev/myrepo": true},
+			outputs: map[string]string{
+				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                              "git@github.com:owner/myrepo.git",
+				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                            ".git",
+				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                              "",
+				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:                       "abc1234",
+				`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`:                "",
+				`git -C "/home/dev/myrepo" rev-parse --verify origin/main`:                                 "abc1234",
+				`git -C "/home/dev/myrepo" worktree add -B feature-x ../feature-x origin/main`:             "",
+				`realpath "/home/dev/myrepo/../feature-x"`:                                                 "/home/dev/feature-x",
+				`git -C "/home/dev/feature-x" config --bool core.sparseCheckout 2>/dev/null || echo false`: "true",
+				`git -C "/home/dev/myrepo" config extensions.worktreeConfig true`:                          "",
+				`git -C "/home/dev/feature-x" sparse-checkout disable`:                                     "",
+			},
+		},
+	}
+
+	wt, err := mgr.SetupRemoteWorktree(context.Background(), remote, domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}, "feature-x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wt.Path != "/home/dev/feature-x" {
+		t.Fatalf("expected resolved path, got %q", wt.Path)
+	}
+
+	joined := strings.Join(remote.commandsRun, "\n")
+	if !strings.Contains(joined, `git -C "/home/dev/myrepo" config extensions.worktreeConfig true`) {
+		t.Fatalf("expected worktreeConfig enable command, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, `git -C "/home/dev/feature-x" sparse-checkout disable`) {
+		t.Fatalf("expected sparse-checkout disable command, got:\n%s", joined)
+	}
+}
+
+func TestFindExistingWorktree_DisablesSparseCheckoutForSparseWorktree(t *testing.T) {
+	mgr := NewManager(nil)
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{"/home/dev/myrepo": true},
+			outputs: map[string]string{
+				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                              "git@github.com:owner/myrepo.git",
+				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                            ".git",
+				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                              "",
+				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:                       "abc1234",
+				`git -C "/home/dev/myrepo" worktree list --porcelain`:                                      "worktree /home/dev/feature-x\nHEAD abc123\nbranch refs/heads/feature-x\n\n",
+				`git -C "/home/dev/feature-x" rev-parse --git-dir 2>/dev/null || echo BROKEN`:              ".git/worktrees/feature-x",
+				`realpath "/home/dev/feature-x"`:                                                           "/home/dev/feature-x",
+				`git -C "/home/dev/feature-x" config --bool core.sparseCheckout 2>/dev/null || echo false`: "true",
+				`git -C "/home/dev/myrepo" config extensions.worktreeConfig true`:                          "",
+				`git -C "/home/dev/feature-x" sparse-checkout disable`:                                     "",
+			},
+		},
+	}
+
+	wt, err := mgr.FindExistingWorktree(context.Background(), remote, domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}, "feature-x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wt.Path != "/home/dev/feature-x" {
+		t.Fatalf("expected resolved path, got %q", wt.Path)
+	}
+
+	joined := strings.Join(remote.commandsRun, "\n")
+	if !strings.Contains(joined, `git -C "/home/dev/feature-x" sparse-checkout disable`) {
+		t.Fatalf("expected sparse-checkout disable command, got:\n%s", joined)
 	}
 }

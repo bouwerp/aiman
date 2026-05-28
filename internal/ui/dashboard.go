@@ -2605,7 +2605,7 @@ func (m *Model) renderView() string {
 		var b strings.Builder
 		b.WriteString(activeStyle.Render("Confirm Session Restart") + "\n\n")
 		b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TmuxSession))
-		b.WriteString("Restarting will kill the existing tmux session and agent.\n\n")
+		b.WriteString("Restarting will ask the current agent to write a handoff first if it is still running, then stop it and start the newly selected agent.\n\n")
 		b.WriteString("Do you want to proceed?\n\n")
 		b.WriteString(activeStyle.Render("[y]") + " Yes  " + activeStyle.Render("[n]") + " No")
 
@@ -5199,14 +5199,41 @@ func (m *Model) restartSession() tea.Cmd {
 		logf("session=%s remote=%s@%s workingDir=%s agent=%s", s.TmuxSession, remote.User, remote.Host, workingDir, sessionCfg.Agent.Command)
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
-		// Step 1: build the agent command.
+		gitignoreRoot := s.WorktreePath
+		if gitignoreRoot == "" {
+			gitignoreRoot = workingDir
+		}
+		if err := git.NewManager(&cfg.Git).EnsureAimanSessionFilesGitignored(ctx, mgr, gitignoreRoot); err != nil {
+			logf("gitignore update skipped: %v", err)
+		}
+
+		// Step 1: ask the current agent for a restart handoff before replacing it.
+		summaryPath := filepath.Join(workingDir, domain.AimanSessionSummaryFileName)
+		m.sendStatus("Capturing restart handoff...")
+		logf("step1: capturing restart handoff to %s", summaryPath)
+		summaryCtx, summaryCancel := context.WithTimeout(ctx, 90*time.Second)
+		summaryCreated, err := usecase.CaptureRestartSessionSummary(summaryCtx, mgr, s.TmuxSession, summaryPath)
+		summaryCancel()
+		if err != nil {
+			logf("step1 FAILED: %v", err)
+			return sessionCreateMsg{err: fmt.Errorf("failed to capture restart handoff: %w", err)}
+		}
+		logf("step1 ok: summaryCreated=%t", summaryCreated)
+
+		// Step 2: build the new agent command after the restart handoff file exists.
 		m.sendStatus(fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
-		logf("step1: preparing agent command")
+		logf("step2: preparing agent command")
 		agentCmd := sessionCfg.Agent.Command
+		var sendKeysPrompt string
+		resumeSnapshot := sessionCfg.PriorSnapshot
+		if summaryCreated {
+			resumeSnapshot = nil
+		}
 		if flowManager != nil && flowManager.SkillEngine != nil {
-			prepared, err := flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *sessionCfg.Agent, sessionCfg.Skills, sessionCfg.PromptFree, nil, sessionCfg.PriorSnapshot)
+			prepared, err := flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *sessionCfg.Agent, sessionCfg.Skills, sessionCfg.PromptFree, nil, resumeSnapshot)
 			if err == nil {
 				agentCmd = prepared.Command
+				sendKeysPrompt = prepared.InitialPrompt
 			}
 		}
 
@@ -5226,7 +5253,7 @@ func (m *Model) restartSession() tea.Cmd {
 			extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 		}
 
-		// Step 2: kill the current agent and start the new one.
+		// Step 3: start the new agent in a fresh pane process.
 		//
 		// If the tmux session already exists (the common case — agent exited or
 		// user just wants a different agent), use respawn-pane -k to replace the
@@ -5237,7 +5264,7 @@ func (m *Model) restartSession() tea.Cmd {
 		// creating a fresh session with new-session, using start-server + global
 		// option guards to avoid the remain-on-exit race.
 		m.sendStatus(fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
-		logf("step2: restarting agent")
+		logf("step3: restarting agent")
 		paneCmd := fmt.Sprintf("bash -l -c '%s'; exec bash -i", agentBootstrap)
 		restartCmd := fmt.Sprintf(
 			"if tmux has-session -t %q 2>/dev/null; then "+
@@ -5263,12 +5290,29 @@ func (m *Model) restartSession() tea.Cmd {
 			s.TmuxSession, workingDir, extraEnvFlags, paneCmd,
 			s.TmuxSession,
 		)
-		logf("step2: restartCmd=%s", restartCmd)
+		logf("step3: restartCmd=%s", restartCmd)
 		if _, err := mgr.Execute(ctx, restartCmd); err != nil {
-			logf("step2 FAILED: %v", err)
+			logf("step3 FAILED: %v", err)
 			return sessionCreateMsg{err: fmt.Errorf("failed to restart agent in session %q: %w", s.TmuxSession, err)}
 		}
-		logf("step2 ok")
+		logf("step3 ok")
+
+		if sendKeysPrompt != "" {
+			sendCmd := fmt.Sprintf(
+				"attempt=0; "+
+					"while [ $attempt -lt 20 ]; do "+
+					"pane_cmd=$(tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true); "+
+					"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
+					"attempt=$((attempt+1)); sleep 1; "+
+					"done; "+
+					"sleep 3; "+
+					"tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
+				s.TmuxSession,
+				s.TmuxSession, sendKeysPrompt,
+				s.TmuxSession,
+			)
+			_, _ = mgr.Execute(ctx, fmt.Sprintf("nohup bash -c %q >/dev/null 2>&1 &", sendCmd))
+		}
 
 		if db != nil {
 			_ = db.Save(ctx, s)

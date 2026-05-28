@@ -136,7 +136,9 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 // The detailed context and working guidelines live in .aiman_task.md which is
 // written to the worktree. This trigger is kept short because it is delivered
 // via tmux send-keys.
-const initialPrompt = `Read .aiman_task.md — it contains the task, acceptance criteria, and your working guidelines for this session. Start by presenting your implementation plan.`
+const initialPrompt = `Read ` + domain.AimanTaskFileName + ` — it contains the task, acceptance criteria, and your working guidelines for this session. Start by presenting your implementation plan.`
+
+const sessionSummaryPrompt = `Read ` + domain.AimanSessionSummaryFileName + ` — it contains the latest session handoff, current state, and next steps. Continue from that state before making changes.`
 
 func agentBaseCommand(cmd string) string {
 	fields := strings.Fields(strings.TrimSpace(strings.ToLower(cmd)))
@@ -158,8 +160,11 @@ func buildSessionPrompt(files []string) string {
 	case 0:
 		return ""
 	case 1:
-		if files[0] == ".aiman_task.md" {
+		if files[0] == domain.AimanTaskFileName {
 			return initialPrompt
+		}
+		if files[0] == domain.AimanSessionSummaryFileName {
+			return sessionSummaryPrompt
 		}
 		return fmt.Sprintf("Read %s — it contains the active instructions for this session. Start by applying them before continuing.", files[0])
 	default:
@@ -178,63 +183,104 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 		}
 	}
 
+	summaryExists, err := ensureSessionSummaryFile(ctx, remote, worktreePath, issue, snapshot)
+	if err != nil {
+		return domain.PreparedSession{}, fmt.Errorf("failed to prepare session summary file: %w", err)
+	}
+
+	var result domain.PreparedSession
+
 	// For Claude Code
 	if strings.Contains(name, "claude") {
-		return e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
-	}
-
-	// For Antigravity
-	if strings.Contains(name, "antigravity") || baseCommand == "agy" {
-		return e.prepareAntigravity(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
-	}
-
-	// For OpenCode
-	if strings.Contains(name, "opencode") {
+		result, err = e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+	} else if strings.Contains(name, "antigravity") || baseCommand == "agy" {
+		// For Antigravity
+		result, err = e.prepareAntigravity(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+	} else if strings.Contains(name, "opencode") {
+		// For OpenCode
 		cmd := agent.Command
-		result := domain.PreparedSession{Command: cmd}
+		result = domain.PreparedSession{Command: cmd}
 		if issue != nil {
 			result.InitialPrompt = initialPrompt
 		}
-		return result, nil
-	}
-
-	// For Cursor
-	if strings.Contains(name, "cursor") {
+	} else if strings.Contains(name, "cursor") {
+		// For Cursor
 		cmd := agent.Command
 		if promptFree {
 			cmd = fmt.Sprintf("%s --force .", cmd)
 		} else {
 			cmd = fmt.Sprintf("%s .", cmd)
 		}
-		result := domain.PreparedSession{Command: cmd}
+		result = domain.PreparedSession{Command: cmd}
 		if issue != nil {
 			result.InitialPrompt = initialPrompt
 		}
-		return result, nil
-	}
-
-	// For GitHub Copilot CLI
-	if strings.Contains(name, "copilot") || strings.Contains(strings.ToLower(agent.Command), "copilot") {
+	} else if strings.Contains(name, "copilot") || strings.Contains(strings.ToLower(agent.Command), "copilot") {
+		// For GitHub Copilot CLI
 		cmd := agent.Command
 		// Always allow all tools/paths/URLs so permission prompts don't block an autonomous session.
 		cmd = fmt.Sprintf("%s --allow-all", cmd)
 		if promptFree {
 			cmd = fmt.Sprintf("%s --autopilot", cmd)
 		}
-		result := domain.PreparedSession{Command: cmd}
+		result = domain.PreparedSession{Command: cmd}
 		if issue != nil {
 			result.InitialPrompt = initialPrompt
 		}
-		return result, nil
+	} else {
+		// Default
+		cmd := agent.Command
+		result = domain.PreparedSession{Command: cmd}
+		if issue != nil {
+			result.InitialPrompt = initialPrompt
+		}
 	}
-
-	// Default
-	cmd := agent.Command
-	result := domain.PreparedSession{Command: cmd}
-	if issue != nil {
-		result.InitialPrompt = initialPrompt
+	if err != nil {
+		return domain.PreparedSession{}, err
+	}
+	if summaryExists {
+		result.InitialPrompt = appendPrompt(result.InitialPrompt, sessionSummaryPrompt)
 	}
 	return result, nil
+}
+
+func appendPrompt(existing, extra string) string {
+	existing = strings.TrimSpace(existing)
+	extra = strings.TrimSpace(extra)
+	switch {
+	case existing == "":
+		return extra
+	case extra == "":
+		return existing
+	default:
+		return existing + " Then read " + strings.TrimPrefix(extra, "Read ")
+	}
+}
+
+func ensureSessionSummaryFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, issue *domain.Issue, snapshot *domain.SessionSnapshot) (bool, error) {
+	summaryPath := filepath.Join(worktreePath, domain.AimanSessionSummaryFileName)
+	exists, err := remoteFileExists(ctx, remote, summaryPath)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return true, nil
+	}
+	if issue != nil || snapshot == nil {
+		return false, nil
+	}
+	if err := writeSessionSummaryFile(ctx, remote, worktreePath, snapshot); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func remoteFileExists(ctx context.Context, remote domain.RemoteExecutor, path string) (bool, error) {
+	out, err := remote.Execute(ctx, fmt.Sprintf("if [ -f %q ]; then printf 1; fi", path))
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "1", nil
 }
 
 // writeTaskFile writes the JIRA issue context and working guidelines to
@@ -292,7 +338,7 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 	// 3. Guardrails
 	sb.WriteString("## Guardrails\n\n")
 	sb.WriteString("- **Stay on scope.** Only make changes that directly serve the task. If you notice something unrelated that needs attention, note it but do not fix it in this session.\n")
-	sb.WriteString("- **Do not commit generated files.** This file (`.aiman_task.md`), `.aiman_prompt`, and any other files prefixed with `.aiman_` are session scaffolding. Never stage, commit, or include them in pull requests.\n")
+	sb.WriteString(fmt.Sprintf("- **Do not commit generated files.** This file (`%s`), `%s`, `%s`, and any other files prefixed with `.aiman_` are session scaffolding. Never stage, commit, or include them in pull requests.\n", domain.AimanTaskFileName, domain.AimanPromptFileName, domain.AimanSessionSummaryFileName))
 	sb.WriteString("- **No secrets or credentials in code.** Do not hardcode tokens, passwords, API keys, or other secrets.\n")
 	sb.WriteString("- **Preserve existing tests.** Do not delete, skip, or weaken existing tests to make your changes pass. If an existing test conflicts with the new behaviour, update it to reflect the correct new expectation and explain why.\n")
 	sb.WriteString("- **Respect the project structure.** Follow existing file layout, naming conventions, and patterns. When in doubt, look at how similar features are implemented in the codebase and stay consistent.\n\n")
@@ -323,8 +369,60 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 		sb.WriteString("> Continue from where the previous session left off. Review the above, then present your updated plan before writing code.\n")
 	}
 
-	taskPath := filepath.Join(worktreePath, ".aiman_task.md")
+	taskPath := filepath.Join(worktreePath, domain.AimanTaskFileName)
 	return remote.WriteFile(ctx, taskPath, []byte(sb.String()))
+}
+
+func writeSessionSummaryFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, snapshot *domain.SessionSnapshot) error {
+	var sb strings.Builder
+
+	sb.WriteString("<!--\n")
+	sb.WriteString("DO NOT COMMIT — session scaffolding generated by Aiman.\n")
+	sb.WriteString("-->\n\n")
+	sb.WriteString("> **Do not commit this file.** It is generated for session handoff only and is listed in `.gitignore`.\n\n")
+	sb.WriteString("---\n\n")
+	sb.WriteString("# Session Handoff\n\n")
+	sb.WriteString(fmt.Sprintf("_Captured on %s_\n\n", snapshot.CreatedAt.Format("2006-01-02 15:04")))
+
+	if snapshot.Summary != "" {
+		sb.WriteString("## Summary\n\n")
+		sb.WriteString(snapshot.Summary + "\n\n")
+	}
+	if len(snapshot.Overview) > 0 {
+		sb.WriteString("## Overview\n\n")
+		for _, item := range snapshot.Overview {
+			sb.WriteString("- " + item + "\n")
+		}
+		sb.WriteString("\n")
+	}
+	if len(snapshot.Details) > 0 {
+		sb.WriteString("## Details\n\n")
+		for _, item := range snapshot.Details {
+			sb.WriteString("- " + item + "\n")
+		}
+		sb.WriteString("\n")
+	}
+	if len(snapshot.Actions) > 0 {
+		sb.WriteString("## Actions Needed\n\n")
+		for _, item := range snapshot.Actions {
+			sb.WriteString("- " + item + "\n")
+		}
+		sb.WriteString("\n")
+	}
+	if len(snapshot.NextSteps) > 0 {
+		sb.WriteString("## Next Steps\n\n")
+		for _, item := range snapshot.NextSteps {
+			sb.WriteString("- " + item + "\n")
+		}
+		sb.WriteString("\n")
+	}
+	if snapshot.Summary == "" && len(snapshot.Overview) == 0 && len(snapshot.Details) == 0 && len(snapshot.Actions) == 0 && len(snapshot.NextSteps) == 0 {
+		sb.WriteString("_No prior session summary was available._\n\n")
+	}
+	sb.WriteString("> Continue from this handoff before making further changes.\n")
+
+	summaryPath := filepath.Join(worktreePath, domain.AimanSessionSummaryFileName)
+	return remote.WriteFile(ctx, summaryPath, []byte(sb.String()))
 }
 
 func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
@@ -360,7 +458,7 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 	systemPrompt := strings.Join(prompts, "\n\n")
 
 	// Create a remote file with the system prompt
-	remotePromptPath := filepath.Join(worktreePath, ".aiman_prompt")
+	remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
 	if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
 		return domain.PreparedSession{}, fmt.Errorf("failed to upload system prompt to remote: %w", err)
 	}
@@ -387,7 +485,7 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 	var promptFiles []string
 
 	if issue != nil {
-		promptFiles = append(promptFiles, ".aiman_task.md")
+		promptFiles = append(promptFiles, domain.AimanTaskFileName)
 	}
 
 	// Antigravity does not document a Gemini-style system-instruction env var, so
@@ -395,7 +493,7 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 	// session to read it via tmux send-keys after startup.
 	if len(prompts) > 0 {
 		systemPrompt := strings.Join(prompts, "\n\n")
-		remotePromptPath := filepath.Join(worktreePath, ".aiman_prompt")
+		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
 		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to upload Antigravity prompt to remote: %w", err)
 		}

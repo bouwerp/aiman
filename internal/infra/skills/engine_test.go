@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -23,9 +24,18 @@ func newMockRemote() *mockRemote {
 	return &mockRemote{writtenFiles: make(map[string][]byte), root: "/home/user/code"}
 }
 
-func (m *mockRemote) Connect(ctx context.Context) error                       { return nil }
-func (m *mockRemote) GetRoot() string                                         { return m.root }
-func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error) { return "", nil }
+func (m *mockRemote) Connect(ctx context.Context) error { return nil }
+func (m *mockRemote) GetRoot() string                   { return m.root }
+func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error) {
+	if strings.HasPrefix(cmd, "if [ -f ") {
+		for path := range m.writtenFiles {
+			if strings.Contains(cmd, path) {
+				return "1", nil
+			}
+		}
+	}
+	return "", nil
+}
 func (m *mockRemote) WriteFile(ctx context.Context, path string, content []byte) error {
 	m.writtenFiles[path] = content
 	return nil
@@ -351,6 +361,56 @@ func TestPrepareSession_CopilotWithIssue_IncludesInitialTaskPrompt(t *testing.T)
 	}
 	if !strings.Contains(result.InitialPrompt, ".aiman_task.md") {
 		t.Errorf("expected InitialPrompt to reference .aiman_task.md, got: %s", result.InitialPrompt)
+	}
+}
+
+func TestPrepareSession_CopilotWithSnapshot_WritesSessionSummaryFile(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
+	snapshot := &domain.SessionSnapshot{
+		Summary:   "Updated restart flow to preserve context.",
+		Details:   []string{"Added a restart summary helper."},
+		NextSteps: []string{"Wire the new prompt into the selected agent."},
+		CreatedAt: time.Date(2026, 5, 28, 10, 30, 0, 0, time.UTC),
+	}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil, snapshot)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	summaryContent, ok := remote.writtenFiles["/home/user/code/myrepo/"+domain.AimanSessionSummaryFileName]
+	if !ok {
+		t.Fatalf("expected %s to be written", domain.AimanSessionSummaryFileName)
+	}
+	if !strings.Contains(string(summaryContent), "Updated restart flow to preserve context.") {
+		t.Fatalf("expected snapshot summary in handoff file, got:\n%s", string(summaryContent))
+	}
+	if !strings.Contains(result.InitialPrompt, domain.AimanSessionSummaryFileName) {
+		t.Fatalf("expected initial prompt to reference %s, got: %s", domain.AimanSessionSummaryFileName, result.InitialPrompt)
+	}
+}
+
+func TestPrepareSession_UsesExistingSessionSummaryFilePrompt(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	remote.writtenFiles["/home/user/code/myrepo/"+domain.AimanSessionSummaryFileName] = []byte("existing handoff")
+	ctx := context.Background()
+
+	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result.InitialPrompt, domain.AimanSessionSummaryFileName) {
+		t.Fatalf("expected initial prompt to reference %s, got: %s", domain.AimanSessionSummaryFileName, result.InitialPrompt)
 	}
 }
 

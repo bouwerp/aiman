@@ -134,7 +134,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	if !config.AdHoc {
 		// Ignore session-local task stub so it is not committed from the worktree.
-		_ = m.gitManager.EnsureAimanTaskGitignored(ctx, sshMgr, session.WorktreePath)
+		_ = m.gitManager.EnsureAimanSessionFilesGitignored(ctx, sshMgr, session.WorktreePath)
 
 		// Step 6.1: Persist Session ID in git metadata (safe from git status/commits)
 		if _, err = sshMgr.Execute(ctx, fmt.Sprintf("id_file=$(git -C %q rev-parse --git-dir)/aiman-id && echo %q > \"$id_file\"", session.WorktreePath, session.ID)); err != nil {

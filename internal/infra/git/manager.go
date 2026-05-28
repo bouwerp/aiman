@@ -210,8 +210,8 @@ func (m *Manager) SetupWorktree(ctx context.Context, repo domain.Repo, branch st
 	}, nil
 }
 
-const aimanTaskIgnoreLine = ".aiman_task.md"
-const aimanTaskIgnoreComment = "# Aiman: session-local JIRA/task stub (do not commit)"
+const aimanTaskIgnoreLine = domain.AimanGeneratedFileGlob
+const aimanTaskIgnoreComment = "# Aiman: generated session scaffolding (do not commit)"
 
 func aimanTaskGitignoreBashScript(worktreePath string) string {
 	return fmt.Sprintf(`wt=%s
@@ -227,8 +227,8 @@ else
 fi`, strconv.Quote(worktreePath), strconv.Quote(aimanTaskIgnoreComment), strconv.Quote(aimanTaskIgnoreLine))
 }
 
-// EnsureAimanTaskGitignored appends .aiman_task.md to the worktree's .gitignore when absent.
-func (m *Manager) EnsureAimanTaskGitignored(ctx context.Context, remote domain.RemoteExecutor, worktreePath string) error {
+// EnsureAimanSessionFilesGitignored appends Aiman's generated session scaffolding ignore rule to the worktree's .gitignore when absent.
+func (m *Manager) EnsureAimanSessionFilesGitignored(ctx context.Context, remote domain.RemoteExecutor, worktreePath string) error {
 	if strings.TrimSpace(worktreePath) == "" {
 		return nil
 	}
@@ -331,6 +331,9 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	resolvedPath := worktreePath
 	if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
 		resolvedPath = strings.TrimSpace(out)
+	}
+	if err := prepareWorktreeForSession(ctx, remote, repoPath, resolvedPath); err != nil {
+		return domain.Worktree{}, err
 	}
 
 	return domain.Worktree{
@@ -478,6 +481,9 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 	if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
 		resolvedPath = strings.TrimSpace(out)
 	}
+	if err := prepareWorktreeForSession(ctx, remote, repoPath, resolvedPath); err != nil {
+		return domain.Worktree{}, err
+	}
 
 	return domain.Worktree{
 		Path:   resolvedPath,
@@ -511,11 +517,18 @@ func (m *Manager) EnsureHealthyRepo(ctx context.Context, remote domain.RemoteExe
 //  2. If the directory exists → verify it is in sync with its origin remote.
 //     Any failure (no .git, no remote, local changes, local commits not on
 //     remote, fetch errors) triggers a backup to /tmp then a fresh reclone.
+//
+// Automatic clone/recovery is blocked whenever sibling worktrees still point at
+// the repository's shared .git/worktrees metadata, because recloning the main
+// repository would invalidate those linked worktrees.
 func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repoURL string) error {
 	repoName := filepath.Base(filepath.Clean(repoPath))
 
 	// Step 1: if directory is absent, clone.
 	if err := remote.ValidateDir(ctx, repoPath); err != nil {
+		if err := blockWhenLinkedWorktreesExist(ctx, remote, repoPath, "cloned"); err != nil {
+			return err
+		}
 		if repoURL == "" {
 			return fmt.Errorf("repository not found at %s and no URL configured — please clone it manually", repoPath)
 		}
@@ -542,6 +555,9 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 
 	// Must be a valid git repo.
 	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir", repoPath)); err != nil {
+		if err := blockWhenLinkedWorktreesExist(ctx, remote, repoPath, "recovered"); err != nil {
+			return err
+		}
 		reportProgress(ctx, fmt.Sprintf("Repository %s has no .git directory — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
@@ -583,6 +599,9 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 	headOut, _ := remote.Execute(ctx, fmt.Sprintf(
 		`git -C %q rev-parse HEAD 2>/dev/null || echo EMPTY`, repoPath))
 	if strings.TrimSpace(headOut) == "EMPTY" {
+		if err := blockWhenLinkedWorktreesExist(ctx, remote, repoPath, "recovered"); err != nil {
+			return err
+		}
 		reportProgress(ctx, fmt.Sprintf("Repository %s has no local commits — recovering...", repoName))
 		return recoverRepo(ctx, remote, repoPath, effectiveURL)
 	}
@@ -704,6 +723,9 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 			if filepath.Clean(resolvedPath) == filepath.Clean(repoPath) {
 				return domain.Worktree{}, fmt.Errorf("safety: found worktree path resolves to the main repository %q — sessions must use a worktree, not the main repo", repoPath)
 			}
+			if err := prepareWorktreeForSession(ctx, remote, repoPath, resolvedPath); err != nil {
+				return domain.Worktree{}, err
+			}
 			return domain.Worktree{Path: resolvedPath, Branch: branch}, nil
 		}
 	}
@@ -722,6 +744,9 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 			// Never return the main repo itself.
 			if filepath.Clean(resolvedPath) == filepath.Clean(repoPath) {
 				return domain.Worktree{}, fmt.Errorf("safety: computed worktree path resolves to the main repository %q — sessions must use a worktree, not the main repo", repoPath)
+			}
+			if err := prepareWorktreeForSession(ctx, remote, repoPath, resolvedPath); err != nil {
+				return domain.Worktree{}, err
 			}
 			return domain.Worktree{Path: resolvedPath, Branch: branch}, nil
 		}
@@ -785,6 +810,63 @@ func safeRmWorktree(ctx context.Context, remote domain.RemoteExecutor, path, rep
 	}
 	_, err := remote.Execute(ctx, fmt.Sprintf("rm -rf %q", path))
 	return err
+}
+
+func prepareWorktreeForSession(ctx context.Context, remote domain.RemoteExecutor, repoPath, worktreePath string) error {
+	sparseOut, err := remote.Execute(ctx, fmt.Sprintf(`git -C %q config --bool core.sparseCheckout 2>/dev/null || echo false`, worktreePath))
+	if err != nil {
+		return fmt.Errorf("failed to inspect sparse-checkout state for worktree %s: %w", worktreePath, err)
+	}
+	if strings.TrimSpace(sparseOut) != "true" {
+		return nil
+	}
+	if _, err := remote.Execute(ctx, fmt.Sprintf(`git -C %q config extensions.worktreeConfig true`, repoPath)); err != nil {
+		return fmt.Errorf("failed to enable per-worktree git config for %s: %w", repoPath, err)
+	}
+	if _, err := remote.Execute(ctx, fmt.Sprintf(`git -C %q sparse-checkout disable`, worktreePath)); err != nil {
+		return fmt.Errorf("failed to disable sparse-checkout for worktree %s: %w", worktreePath, err)
+	}
+	return nil
+}
+
+func blockWhenLinkedWorktreesExist(ctx context.Context, remote domain.RemoteExecutor, repoPath, action string) error {
+	worktrees, err := findLinkedWorktrees(ctx, remote, repoPath)
+	if err != nil {
+		return err
+	}
+	if len(worktrees) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"repository at %s cannot be %s automatically because linked worktrees still exist: %s",
+		repoPath, action, strings.Join(worktrees, ", "),
+	)
+}
+
+func findLinkedWorktrees(ctx context.Context, remote domain.RemoteExecutor, repoPath string) ([]string, error) {
+	script := linkedWorktreeScanScript(repoPath)
+	out, err := remote.Execute(ctx, "bash -ce "+strconv.Quote(script))
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan for linked worktrees for %s: %w", repoPath, err)
+	}
+	var worktrees []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			worktrees = append(worktrees, line)
+		}
+	}
+	return worktrees, nil
+}
+
+func linkedWorktreeScanScript(repoPath string) string {
+	return fmt.Sprintf(`repo=%s
+parent=$(dirname "$repo")
+prefix="$repo/.git/worktrees/"
+if [ ! -d "$parent" ]; then exit 0; fi
+find "$parent" -mindepth 2 -maxdepth 2 -type f -name .git 2>/dev/null | while read -r gitfile; do
+  if grep -Fq "$prefix" "$gitfile"; then dirname "$gitfile"; fi
+done | sort -u`, strconv.Quote(filepath.Clean(repoPath)))
 }
 
 // FetchOrganizations returns a list of organizations the user has access to
