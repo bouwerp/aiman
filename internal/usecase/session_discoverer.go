@@ -91,6 +91,9 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 			if err == nil {
 				for _, wtPath := range worktrees {
 					normalizedWT := normalizePath(wtPath)
+					if !d.isDiscoverableOrphanWorktree(ctx, repoPath, normalizedWT) {
+						continue
+					}
 					wtBase := filepath.Base(normalizedWT)
 					if !seenWorktrees[normalizedWT] && !seenTmuxNames[wtBase] {
 						// Found an orphaned worktree
@@ -201,6 +204,22 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 	}
 
 	return dedupeDiscoveredSessions(sessions), nil
+}
+
+func (d *SessionDiscoverer) isDiscoverableOrphanWorktree(ctx context.Context, repoPath, worktreePath string) bool {
+	if worktreePath == "" {
+		return false
+	}
+	if err := d.remoteExecutor.ValidateDir(ctx, worktreePath); err != nil {
+		_, _ = d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %q worktree prune --expire=now 2>/dev/null || true", repoPath))
+		return false
+	}
+	gitCheck, err := d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
+	if err != nil || strings.TrimSpace(gitCheck) == "BROKEN" {
+		_, _ = d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %q worktree prune --expire=now 2>/dev/null || true", repoPath))
+		return false
+	}
+	return true
 }
 
 const aimanSyncNamePrefix = "aiman-sync-"

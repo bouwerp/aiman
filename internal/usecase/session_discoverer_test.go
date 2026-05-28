@@ -2,6 +2,10 @@ package usecase
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -26,6 +30,60 @@ func (r *recordingSyncEngine) TerminateSync(_ context.Context, name string) {
 	r.terminated = append(r.terminated, name)
 }
 
+type discovererRemote struct {
+	tmuxSessions    []string
+	repoPaths       []string
+	worktreesByRepo map[string][]string
+	validDirs       map[string]bool
+	outputs         map[string]string
+	errors          map[string]error
+	commands        []string
+}
+
+func (r *discovererRemote) Connect(context.Context) error { return nil }
+func (r *discovererRemote) GetRoot() string               { return "" }
+func (r *discovererRemote) Execute(_ context.Context, cmd string) (string, error) {
+	r.commands = append(r.commands, cmd)
+	out := r.outputs[cmd]
+	if err, ok := r.errors[cmd]; ok {
+		return out, err
+	}
+	return out, nil
+}
+func (r *discovererRemote) WriteFile(context.Context, string, []byte) error { return nil }
+func (r *discovererRemote) ValidateDir(_ context.Context, path string) error {
+	if r.validDirs[path] {
+		return nil
+	}
+	return fmt.Errorf("directory not found: %s", path)
+}
+func (r *discovererRemote) ScanTmuxSessions(context.Context) ([]string, error) {
+	return r.tmuxSessions, nil
+}
+func (r *discovererRemote) ScanGitRepos(context.Context) ([]string, error) { return r.repoPaths, nil }
+func (r *discovererRemote) ScanWorktrees(_ context.Context, repoPath string) ([]string, error) {
+	return r.worktreesByRepo[repoPath], nil
+}
+func (r *discovererRemote) GetGitRoot(context.Context, string) (string, error) {
+	return "", fmt.Errorf("no git root")
+}
+func (r *discovererRemote) GetTmuxSessionCWD(context.Context, string) (string, error) {
+	return "", fmt.Errorf("no tmux cwd")
+}
+func (r *discovererRemote) GetTmuxSessionEnv(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (r *discovererRemote) CaptureTmuxPane(context.Context, string) (string, error) { return "", nil }
+func (r *discovererRemote) AttachTmuxSession(string) *exec.Cmd                      { return nil }
+func (r *discovererRemote) StreamTmuxSession(context.Context, string) (io.ReadWriteCloser, error) {
+	return nil, nil
+}
+func (r *discovererRemote) StartTmuxSession(context.Context, string) error { return nil }
+func (r *discovererRemote) ProvisionRemote(context.Context, []domain.ProvisionStep, chan<- domain.ProvisionProgress) error {
+	return nil
+}
+func (r *discovererRemote) Close() error { return nil }
+
 func TestHandleOrphanAimanNamedSync_TerminatesWhenNoTmuxPathMatch(t *testing.T) {
 	rec := &recordingSyncEngine{}
 	d := &SessionDiscoverer{syncEngine: rec}
@@ -38,6 +96,65 @@ func TestHandleOrphanAimanNamedSync_TerminatesWhenNoTmuxPathMatch(t *testing.T) 
 	}
 	if len(rec.terminated) != 1 || rec.terminated[0] != ms.Name {
 		t.Fatalf("expected terminate %q, got %v", ms.Name, rec.terminated)
+	}
+}
+
+func TestDiscover_SkipsMissingOrphanWorktreeAndPrunesMetadata(t *testing.T) {
+	remote := &discovererRemote{
+		repoPaths: []string{"/home/dev/myrepo"},
+		worktreesByRepo: map[string][]string{
+			"/home/dev/myrepo": {"/home/dev/feature-x"},
+		},
+		validDirs: map[string]bool{},
+	}
+	rec := &recordingSyncEngine{}
+	d := NewSessionDiscoverer(remote, rec)
+
+	sessions, err := d.Discover(context.Background(), "regent0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions for missing orphaned worktree, got %+v", sessions)
+	}
+
+	joined := strings.Join(remote.commands, "\n")
+	if !strings.Contains(joined, `git -C "/home/dev/myrepo" worktree prune --expire=now 2>/dev/null || true`) {
+		t.Fatalf("expected stale metadata prune, got commands:\n%s", joined)
+	}
+}
+
+func TestDiscover_KeepsHealthyOrphanWorktree(t *testing.T) {
+	remote := &discovererRemote{
+		repoPaths: []string{"/home/dev/myrepo"},
+		worktreesByRepo: map[string][]string{
+			"/home/dev/myrepo": {"/home/dev/feature-x"},
+		},
+		validDirs: map[string]bool{"/home/dev/feature-x": true},
+		outputs: map[string]string{
+			`git -C "/home/dev/feature-x" rev-parse --git-dir 2>/dev/null || echo BROKEN`: ".git/worktrees/feature-x",
+			`git_dir=$(git -C "/home/dev/feature-x" rev-parse --git-dir 2>/dev/null) && if [ -f "$git_dir/aiman-id" ]; then cat "$git_dir/aiman-id"; elif [ -f "/home/dev/feature-x"/.aiman-id ]; then cat "/home/dev/feature-x"/.aiman-id; fi`: "",
+			`git -C "/home/dev/feature-x" remote get-url origin 2>/dev/null`: "git@github.com:owner/myrepo.git",
+		},
+	}
+	rec := &recordingSyncEngine{}
+	d := NewSessionDiscoverer(remote, rec)
+
+	sessions, err := d.Discover(context.Background(), "regent0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one healthy orphan worktree session, got %+v", sessions)
+	}
+	if sessions[0].WorktreePath != "/home/dev/feature-x" {
+		t.Fatalf("unexpected worktree path: %+v", sessions[0])
+	}
+	if sessions[0].TmuxSession != "feature-x" {
+		t.Fatalf("unexpected tmux/session label: %+v", sessions[0])
+	}
+	if sessions[0].Status != domain.SessionStatusInactive {
+		t.Fatalf("expected inactive synthetic session, got %+v", sessions[0])
 	}
 }
 

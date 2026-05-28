@@ -305,8 +305,10 @@ func (m *Manager) ScanGitRepos(ctx context.Context) ([]string, error) {
 }
 
 func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string, error) {
-	// git -C <repoPath> worktree list --porcelain
-	cmd := fmt.Sprintf("git -C %s worktree list", repoPath)
+	cmd := fmt.Sprintf(
+		"bash -lc %q",
+		fmt.Sprintf("git -C %q worktree prune --expire=now >/dev/null 2>&1 || true; git -C %q worktree list --porcelain", repoPath, repoPath),
+	)
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan worktrees for %s: %w", repoPath, err)
@@ -314,26 +316,39 @@ func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string,
 
 	worktrees := []string{}
 	cleanRepoPath := filepath.Clean(repoPath)
+	currentPath := ""
+	currentPrunable := false
+
+	flush := func() {
+		if currentPath == "" || currentPrunable {
+			currentPath = ""
+			currentPrunable = false
+			return
+		}
+		if filepath.Clean(currentPath) != cleanRepoPath {
+			worktrees = append(worktrees, currentPath)
+		}
+		currentPath = ""
+		currentPrunable = false
+	}
 
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
+			flush()
 			continue
 		}
 
-		worktreePath := ""
 		if strings.HasPrefix(line, "worktree ") {
-			// Porcelain format
-			worktreePath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-		} else {
-			// Standard format (usually path is the first field)
-			worktreePath = strings.Fields(line)[0]
+			flush()
+			currentPath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+			continue
 		}
-
-		if worktreePath != "" && filepath.Clean(worktreePath) != cleanRepoPath {
-			worktrees = append(worktrees, worktreePath)
+		if strings.HasPrefix(line, "prunable ") {
+			currentPrunable = true
 		}
 	}
+	flush()
 	return worktrees, nil
 }
 
