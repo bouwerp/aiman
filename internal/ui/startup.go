@@ -232,6 +232,9 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// First, process all discovered sessions
 		for _, s := range m.sessions {
+			if !shouldMergeDiscoveredSession(s, sessMap) {
+				continue
+			}
 			if seenInMerged[s.ID] {
 				continue // same ID seen already
 			}

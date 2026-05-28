@@ -440,16 +440,23 @@ func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (stri
 	return output, nil
 }
 
+func tmuxAttachRemoteCommand(sessionName string) string {
+	return fmt.Sprintf(
+		"tmux set-option -t %q mouse on >/dev/null 2>&1 || tmux set-option -g mouse on >/dev/null 2>&1; exec tmux attach -t %q",
+		sessionName, sessionName,
+	)
+}
+
 func (m *Manager) AttachTmuxSession(sessionName string) *exec.Cmd {
 	target := m.target()
 	// Use -t for interactive tty allocation, -A for agent forwarding, and -X for X11 forwarding (clipboard)
-	return exec.Command("ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
+	return exec.Command("ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, tmuxAttachRemoteCommand(sessionName))
 }
 
 func (m *Manager) StreamTmuxSession(ctx context.Context, sessionName string) (io.ReadWriteCloser, error) {
 	target := m.target()
 	// -t for TTY, -A for agent forwarding, -X for X11 forwarding, tmux attach to the session
-	cmd := exec.CommandContext(ctx, "ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, "tmux", "attach", "-t", sessionName)
+	cmd := exec.CommandContext(ctx, "ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, tmuxAttachRemoteCommand(sessionName))
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

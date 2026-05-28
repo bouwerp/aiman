@@ -4584,6 +4584,9 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		seenTmux := make(map[string]bool)
 		merged := []domain.Session{}
 		for _, s := range msg.sessions {
+			if !shouldMergeDiscoveredSession(s, dbSessions) {
+				continue
+			}
 			if seenID[s.ID] {
 				continue
 			}
