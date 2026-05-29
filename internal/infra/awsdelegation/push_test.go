@@ -10,13 +10,15 @@ type mockRemote struct {
 	home   string
 	files  map[string]string
 	execOK bool
+	cmds   []string
 }
 
 func (m *mockRemote) Execute(_ context.Context, cmd string) (string, error) {
+	m.cmds = append(m.cmds, cmd)
 	if strings.Contains(cmd, `printf %s "$HOME"`) {
 		return m.home, nil
 	}
-	if strings.Contains(cmd, "mkdir -p") && strings.Contains(cmd, ".aws") {
+	if strings.Contains(cmd, "mkdir -p") && (strings.Contains(cmd, ".aws") || strings.Contains(cmd, ".aiman/aws")) {
 		m.execOK = true
 		return "", nil
 	}
@@ -70,5 +72,45 @@ func TestApplyDelegatedProfile_UsesHomePath(t *testing.T) {
 	// WriteFile path should be under home
 	if got := m.files["/.aws/config"]; !strings.Contains(got, "role_arn") {
 		t.Fatal(got)
+	}
+}
+
+func TestWriteSessionCredentialFiles(t *testing.T) {
+	m := &mockRemote{home: "/home/dev", files: map[string]string{}}
+	files, err := WriteSessionCredentialFiles(context.Background(), m, "sess-1", &SessionCredentials{
+		AccessKeyID:     "AKIA123",
+		SecretAccessKey: "secret",
+		SessionToken:    "token",
+	}, "eu-west-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files.CredentialsPath != "/home/dev/.aiman/aws/sess-1/credentials" {
+		t.Fatalf("unexpected credentials path: %s", files.CredentialsPath)
+	}
+	if files.ConfigPath != "/home/dev/.aiman/aws/sess-1/config" {
+		t.Fatalf("unexpected config path: %s", files.ConfigPath)
+	}
+	if got := m.files["/.aiman/aws/sess-1/credentials"]; !strings.Contains(got, "[default]") || !strings.Contains(got, "aws_session_token = token") {
+		t.Fatalf("unexpected credentials file:\n%s", got)
+	}
+	if got := m.files["/.aiman/aws/sess-1/config"]; !strings.Contains(got, "[default]") || !strings.Contains(got, "region = eu-west-1") {
+		t.Fatalf("unexpected config file:\n%s", got)
+	}
+	if !m.execOK {
+		t.Fatal("expected session aws dir creation")
+	}
+	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, "chmod 600") {
+		t.Fatalf("expected chmod 600 for session AWS files, got:\n%s", joined)
+	}
+}
+
+func TestRemoveSessionCredentialFiles(t *testing.T) {
+	m := &mockRemote{home: "/home/dev", files: map[string]string{}}
+	if err := RemoveSessionCredentialFiles(context.Background(), m, "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `rm -rf "/home/dev/.aiman/aws/sess-1"`) {
+		t.Fatalf("expected session AWS dir removal, got:\n%s", joined)
 	}
 }

@@ -829,6 +829,33 @@ func prepareWorktreeForSession(ctx context.Context, remote domain.RemoteExecutor
 	return nil
 }
 
+// DisableSparseCheckoutLocal repairs a local synced worktree if it arrived in a
+// sparse state. It is a no-op when the path isn't a git worktree or isn't sparse.
+func DisableSparseCheckoutLocal(ctx context.Context, worktreePath string) error {
+	if strings.TrimSpace(worktreePath) == "" {
+		return nil
+	}
+
+	checkCmd := exec.CommandContext(ctx, "git", "-C", worktreePath, "rev-parse", "--is-inside-work-tree")
+	checkOut, err := checkCmd.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(checkOut)) != "true" {
+		return nil
+	}
+
+	sparseCmd := exec.CommandContext(ctx, "git", "-C", worktreePath, "config", "--bool", "core.sparseCheckout")
+	sparseOut, err := sparseCmd.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(sparseOut)) != "true" {
+		return nil
+	}
+
+	disableCmd := exec.CommandContext(ctx, "git", "-C", worktreePath, "sparse-checkout", "disable")
+	if disableOut, err := disableCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to disable sparse-checkout for local worktree %s: %w, output: %s", worktreePath, err, strings.TrimSpace(string(disableOut)))
+	}
+
+	return nil
+}
+
 func blockWhenLinkedWorktreesExist(ctx context.Context, remote domain.RemoteExecutor, repoPath, action string) error {
 	worktrees, err := findLinkedWorktrees(ctx, remote, repoPath)
 	if err != nil {

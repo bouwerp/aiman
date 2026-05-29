@@ -129,7 +129,10 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		agent_model = COALESCE(NULLIF(excluded.agent_model, ''), sessions.agent_model),
 		status = excluded.status,
 		tunnels_json = COALESCE(excluded.tunnels_json, sessions.tunnels_json),
-		aws_profile = COALESCE(NULLIF(excluded.aws_profile, ''), sessions.aws_profile),
+		aws_profile = CASE
+			WHEN excluded.aws_config_json IS NOT NULL THEN excluded.aws_profile
+			ELSE COALESCE(NULLIF(excluded.aws_profile, ''), sessions.aws_profile)
+		END,
 		aws_config_json = COALESCE(excluded.aws_config_json, sessions.aws_config_json),
 		updated_at = excluded.updated_at;
 	`

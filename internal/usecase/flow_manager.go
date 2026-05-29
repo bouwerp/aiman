@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -170,13 +171,13 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
 
-	// Push session-scoped AWS credentials BEFORE starting tmux so AWS_PROFILE is
-	// available to the agent from the very first command.
-	var awsProfileName string
+	// Push session-scoped AWS credential files BEFORE starting tmux so the agent
+	// sees isolated AWS credentials from the very first command.
+	awsEnv := map[string]string{}
 	if config.AWSConfig != nil && sshMgr != nil {
-		if pn, pushErr := PushSessionAWSCredentials(ctx, sshMgr, session.ID, config.AWSConfig); pushErr == nil {
-			awsProfileName = pn
-			session.AWSProfileName = pn
+		if sessionEnv, pushErr := PrepareSessionAWSEnv(ctx, sshMgr, session.ID, config.AWSConfig); pushErr == nil {
+			awsEnv = sessionEnv
+			session.AWSProfileName = ""
 			session.AWSConfig = config.AWSConfig
 		}
 		// Non-fatal — session starts without session-scoped credentials on error.
@@ -200,10 +201,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Escape single quotes for bash -c '...'
 	agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
-	extraEnvFlags := ""
-	if awsProfileName != "" {
-		extraEnvFlags += fmt.Sprintf(" -e AWS_PROFILE=%s", awsProfileName)
-	}
+	extraEnvFlags := tmuxEnvFlags(awsEnv)
 	// Ensure OpenCode runs in auto-approve mode. Two mechanisms are used for
 	// maximum compatibility across versions:
 	//   1. OPENCODE_CONFIG=/tmp/opencode-aiman.json — works with all versions but
@@ -334,9 +332,9 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 	return strings.TrimSpace(out)
 }
 
-// PushSessionAWSCredentials generates a session-scoped AWS profile name, obtains
-// temporary credentials locally, and pushes them to the remote under that profile.
-// Returns the profile name on success (e.g. "aiman-a1b2c3d4").
+// PushSessionAWSCredentials keeps the legacy profile-based AWS delegation path for
+// sessions that were already provisioned with AWS_PROFILE and still rely on it for
+// live credential refresh without a restart.
 func PushSessionAWSCredentials(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (string, error) {
 	profileName := "aiman-" + sessionID[:8]
 
@@ -373,4 +371,66 @@ func PushSessionAWSCredentials(ctx context.Context, r domain.RemoteExecutor, ses
 	}
 
 	return profileName, nil
+}
+
+// PrepareSessionAWSEnv writes isolated session-scoped AWS credential/config files
+// on the remote and returns the environment variables required to use them.
+func PrepareSessionAWSEnv(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (map[string]string, error) {
+	accountID := cfg.AccountID
+	if accountID == "" {
+		var err error
+		accountID, err = awsdelegation.AccountIDFromLocalProfile(ctx, cfg.SourceProfile)
+		if err != nil {
+			return nil, fmt.Errorf("aws: derive account ID: %w", err)
+		}
+	}
+
+	roleARN, err := awsdelegation.RoleARNFromParts(accountID, cfg.RoleName)
+	if err != nil {
+		return nil, fmt.Errorf("aws: build role ARN: %w", err)
+	}
+
+	creds, err := awsdelegation.GetTemporaryCredentials(ctx, cfg.SourceProfile, awsdelegation.CredentialOptions{
+		RoleARN:         roleARN,
+		SessionName:     "aiman-" + sessionID[:8],
+		SessionPolicy:   cfg.SessionPolicy,
+		DurationSeconds: cfg.DurationSeconds,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("aws: get temporary credentials: %w", err)
+	}
+
+	files, err := awsdelegation.WriteSessionCredentialFiles(ctx, r, sessionID, creds, cfg.Region)
+	if err != nil {
+		return nil, fmt.Errorf("aws: write session credential files: %w", err)
+	}
+
+	env := map[string]string{
+		"AWS_SHARED_CREDENTIALS_FILE": files.CredentialsPath,
+		"AWS_CONFIG_FILE":             files.ConfigPath,
+	}
+	if region := strings.TrimSpace(cfg.Region); region != "" {
+		env["AWS_REGION"] = region
+		env["AWS_DEFAULT_REGION"] = region
+	}
+	return env, nil
+}
+
+func tmuxEnvFlags(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, key := range keys {
+		if value := strings.TrimSpace(env[key]); value != "" {
+			b.WriteString(fmt.Sprintf(" -e %s=%s", key, value))
+		}
+	}
+	return b.String()
 }

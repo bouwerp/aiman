@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -600,4 +602,85 @@ func TestFindExistingWorktree_DisablesSparseCheckoutForSparseWorktree(t *testing
 	if !strings.Contains(joined, `git -C "/home/dev/feature-x" sparse-checkout disable`) {
 		t.Fatalf("expected sparse-checkout disable command, got:\n%s", joined)
 	}
+}
+
+func TestDisableSparseCheckoutLocal_DisablesSparseCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init")
+	runGit(t, repoPath, "config", "user.name", "Aiman Test")
+	runGit(t, repoPath, "config", "user.email", "aiman@example.com")
+
+	dashboardPath := filepath.Join(repoPath, "frontend", "app", "src", "pages", "Dashboard")
+	hooksPath := filepath.Join(repoPath, "frontend", "app", "src", "hooks")
+	if err := os.MkdirAll(dashboardPath, 0o755); err != nil {
+		t.Fatalf("mkdir dashboard path: %v", err)
+	}
+	if err := os.MkdirAll(hooksPath, 0o755); err != nil {
+		t.Fatalf("mkdir hooks path: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dashboardPath, "index.tsx"), []byte("export const Dashboard = () => null\n"), 0o644); err != nil {
+		t.Fatalf("write dashboard file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksPath, "useFoo.ts"), []byte("export const useFoo = () => null\n"), 0o644); err != nil {
+		t.Fatalf("write hooks file: %v", err)
+	}
+
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "seed")
+	runGit(t, repoPath, "sparse-checkout", "init", "--cone")
+	runGit(t, repoPath, "sparse-checkout", "set", "frontend/app/src/hooks")
+
+	if _, err := os.Stat(filepath.Join(dashboardPath, "index.tsx")); !os.IsNotExist(err) {
+		t.Fatalf("expected dashboard file to be absent in sparse checkout, err=%v", err)
+	}
+
+	if err := DisableSparseCheckoutLocal(context.Background(), repoPath); err != nil {
+		t.Fatalf("DisableSparseCheckoutLocal returned error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dashboardPath, "index.tsx")); err != nil {
+		t.Fatalf("expected dashboard file restored after disabling sparse checkout: %v", err)
+	}
+}
+
+func TestDisableSparseCheckoutLocal_NoOpForFullWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init")
+	runGit(t, repoPath, "config", "user.name", "Aiman Test")
+	runGit(t, repoPath, "config", "user.email", "aiman@example.com")
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGit(t, repoPath, "add", "README.md")
+	runGit(t, repoPath, "commit", "-m", "seed")
+
+	if err := DisableSparseCheckoutLocal(context.Background(), repoPath); err != nil {
+		t.Fatalf("DisableSparseCheckoutLocal returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(repoPath, "README.md"))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	if string(content) != "hello\n" {
+		t.Fatalf("unexpected README content: %q", string(content))
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(out))
+	}
+	return strings.TrimSpace(string(out))
 }

@@ -193,3 +193,32 @@ func TestNonWorktreeExistsErrorHandling(t *testing.T) {
 		t.Error("Expected lastError to be set for non-WORKTREE_EXISTS error")
 	}
 }
+
+func TestTmuxSessionEnvCommand_SetsProfileWhenPresent(t *testing.T) {
+	got := tmuxSessionEnvCommand("session-1", "AWS_PROFILE", "aiman-58f485ff")
+	want := `tmux set-environment -t "session-1" AWS_PROFILE "aiman-58f485ff" 2>/dev/null || true; `
+	if got != want {
+		t.Fatalf("unexpected command:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestTmuxSessionEnvCommand_UnsetsProfileWhenEmpty(t *testing.T) {
+	got := tmuxSessionEnvCommand("session-1", "AWS_PROFILE", "")
+	want := `tmux set-environment -t "session-1" -u AWS_PROFILE 2>/dev/null || true; `
+	if got != want {
+		t.Fatalf("unexpected command:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestTmuxSessionEnvCommands_OrdersUnsetThenSet(t *testing.T) {
+	got := tmuxSessionEnvCommands("session-1", map[string]string{
+		"AWS_CONFIG_FILE":             "/tmp/config",
+		"AWS_SHARED_CREDENTIALS_FILE": "/tmp/creds",
+	}, "AWS_PROFILE")
+	want := `tmux set-environment -t "session-1" -u AWS_PROFILE 2>/dev/null || true; ` +
+		`tmux set-environment -t "session-1" AWS_CONFIG_FILE "/tmp/config" 2>/dev/null || true; ` +
+		`tmux set-environment -t "session-1" AWS_SHARED_CREDENTIALS_FILE "/tmp/creds" 2>/dev/null || true; `
+	if got != want {
+		t.Fatalf("unexpected command chain:\nwant: %q\ngot:  %q", want, got)
+	}
+}

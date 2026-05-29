@@ -1316,7 +1316,11 @@ func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
 		if cfg == nil {
 			return refreshAWSMsg{err: fmt.Errorf("no AWS delegation configured for remote %q", s.RemoteHost)}
 		}
-		_, err := usecase.PushSessionAWSCredentials(ctx, mgr, s.ID, cfg)
+		if s.AWSProfileName != "" {
+			_, err := usecase.PushSessionAWSCredentials(ctx, mgr, s.ID, cfg)
+			return refreshAWSMsg{err: err}
+		}
+		_, err := usecase.PrepareSessionAWSEnv(ctx, mgr, s.ID, cfg)
 		return refreshAWSMsg{err: err}
 	}
 }
@@ -1338,6 +1342,60 @@ func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngin
 		}
 	}
 	return fmt.Errorf("timeout waiting for sync %q to reach Watching status", name)
+}
+
+func (m *Model) normalizeLocalSyncedWorktree(ctx context.Context, engine domain.SyncEngine, syncName, localPath string, timeout time.Duration) {
+	if err := m.waitForSyncWatching(ctx, engine, syncName, timeout); err != nil {
+		m.log("Warning: sync did not reach Watching state: %v — local checkout may still be incomplete", err)
+		return
+	}
+	if err := git.DisableSparseCheckoutLocal(ctx, localPath); err != nil {
+		m.log("Warning: failed to normalize local synced worktree %s: %v", localPath, err)
+	}
+}
+
+func tmuxSessionEnvCommand(sessionName, key, value string) string {
+	if value == "" {
+		return fmt.Sprintf("tmux set-environment -t %q -u %s 2>/dev/null || true; ", sessionName, key)
+	}
+	return fmt.Sprintf("tmux set-environment -t %q %s %q 2>/dev/null || true; ", sessionName, key, value)
+}
+
+func tmuxSessionEnvCommands(sessionName string, env map[string]string, unsetKeys ...string) string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	sort.Strings(unsetKeys)
+
+	var b strings.Builder
+	for _, key := range unsetKeys {
+		b.WriteString(tmuxSessionEnvCommand(sessionName, key, ""))
+	}
+	for _, key := range keys {
+		b.WriteString(tmuxSessionEnvCommand(sessionName, key, env[key]))
+	}
+	return b.String()
+}
+
+func tmuxExtraEnvFlags(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, key := range keys {
+		if value := strings.TrimSpace(env[key]); value != "" {
+			b.WriteString(fmt.Sprintf(" -e %s=%s", key, value))
+		}
+	}
+	return b.String()
 }
 
 func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
@@ -1434,11 +1492,9 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			return recreateMutagenMsg{err: fmt.Errorf("failed to start two-way mutagen sync: %w", err)}
 		}
 
-		// Wait for the initial sync to reach "Watching" state so files are present
-		// locally before we return. Uses the remaining time in the 5-minute context.
-		if err := m.waitForSyncWatching(ctx, mutagenEngine, syncName, 5*time.Minute); err != nil {
-			m.log("Warning: sync did not reach Watching state: %v — files may still be syncing", err)
-		}
+		// Wait for the initial sync to settle locally, then clear any sparse
+		// state that would leave the mirrored worktree missing directories.
+		m.normalizeLocalSyncedWorktree(ctx, mutagenEngine, syncName, localPath, 5*time.Minute)
 
 		s.LocalPath = localPath
 		s.WorkingDirectory = remoteSyncDir
@@ -1618,6 +1674,9 @@ func (m *Model) createSession() tea.Cmd {
 		labels := map[string]string{"aiman-id": session.ID}
 		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory), labels, domain.SyncModeTwoWay)
 		if syncErr == nil {
+			// Wait for the initial local mirror to settle, then repair any sparse
+			// checkout state before the user opens the mirrored worktree.
+			m.normalizeLocalSyncedWorktree(ctx, mutagenEngine, syncName, localSyncPath, 5*time.Minute)
 			session.MutagenSyncID = syncName
 			session.LocalPath = localSyncPath
 			_ = session.Transition(domain.SessionStatusSyncing)
@@ -1863,7 +1922,7 @@ func (m *Model) runTerminateStep(index int) error {
 		}
 		return os.RemoveAll(s.LocalPath)
 	case 5: // Clean up session-scoped AWS credentials from the remote
-		if s.AWSProfileName == "" || s.RemoteHost == "" {
+		if s.RemoteHost == "" {
 			return nil
 		}
 		remote, ok := resolveRemote(m.cfg, s)
@@ -1871,7 +1930,13 @@ func (m *Model) runTerminateStep(index int) error {
 			return nil
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		return awsdelegation.RemoveSessionProfile(ctx, mgr, s.AWSProfileName)
+		if err := awsdelegation.RemoveSessionCredentialFiles(ctx, mgr, s.ID); err != nil {
+			return err
+		}
+		if s.AWSProfileName != "" {
+			return awsdelegation.RemoveSessionProfile(ctx, mgr, s.AWSProfileName)
+		}
+		return nil
 	case 6: // Delete session from database
 		if s.ID == "" {
 			return nil
@@ -3441,7 +3506,7 @@ end tell`, cmd)
 	if msg.String() == "w" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
-			if s.AWSProfileName == "" {
+			if s.AWSConfig == nil && s.AWSProfileName == "" {
 				return m, nil, true
 			}
 			m.loadingMsg = "Refreshing AWS credentials..."
@@ -5243,7 +5308,35 @@ func (m *Model) restartSession() tea.Cmd {
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
 		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
-		extraEnvFlags := fmt.Sprintf(" -e AIMAN_ID=%s", strings.TrimSpace(s.ID))
+		awsEnv := map[string]string{}
+		awsCfg := s.AWSConfig
+		if sessionCfg.AWSConfig != nil {
+			awsCfg = sessionCfg.AWSConfig
+		}
+		if awsCfg != nil {
+			if sessionEnv, pushErr := usecase.PrepareSessionAWSEnv(ctx, mgr, s.ID, awsCfg); pushErr == nil {
+				s.AWSConfig = awsCfg
+				s.AWSProfileName = ""
+				awsEnv = sessionEnv
+			} else {
+				s.AWSProfileName = ""
+				logf("aws refresh skipped: %v", pushErr)
+			}
+		} else {
+			s.AWSProfileName = ""
+		}
+		awsEnv["AIMAN_ID"] = strings.TrimSpace(s.ID)
+		extraEnvFlags := tmuxExtraEnvFlags(awsEnv)
+		awsEnvCmd := tmuxSessionEnvCommands(
+			s.TmuxSession,
+			awsEnv,
+			"AWS_PROFILE",
+			"AWS_SHARED_CREDENTIALS_FILE",
+			"AWS_CONFIG_FILE",
+			"AWS_REGION",
+			"AWS_DEFAULT_REGION",
+			"AIMAN_ID",
+		)
 		if strings.Contains(strings.ToLower(agentCmd), "opencode") {
 			_ = mgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
 			extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
@@ -5271,6 +5364,7 @@ func (m *Model) restartSession() tea.Cmd {
 		paneCmd := fmt.Sprintf("bash -l -c '%s'; exec bash -i", agentBootstrap)
 		restartCmd := fmt.Sprintf(
 			"if tmux has-session -t %q 2>/dev/null; then "+
+				"%s"+
 				"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
 				"tmux respawn-pane -k -t %q -c %q%s %q; "+
 				"else "+
@@ -5279,6 +5373,7 @@ func (m *Model) restartSession() tea.Cmd {
 				"tmux set-window-option -g remain-on-exit on 2>/dev/null || true; "+
 				"tmux new-session -d -s %q -c %q%s %q; "+
 				"_RC=$?; "+
+				"%s"+
 				"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
 				"tmux set-window-option -g remain-on-exit off 2>/dev/null || true; "+
 				"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
@@ -5287,10 +5382,12 @@ func (m *Model) restartSession() tea.Cmd {
 			// has-session
 			s.TmuxSession,
 			// respawn-pane branch
+			awsEnvCmd,
 			s.TmuxSession,
 			s.TmuxSession, workingDir, extraEnvFlags, paneCmd,
 			// new-session branch
 			s.TmuxSession, workingDir, extraEnvFlags, paneCmd,
+			awsEnvCmd,
 			s.TmuxSession,
 		)
 		logf("step3: restartCmd=%s", restartCmd)

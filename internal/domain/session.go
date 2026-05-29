@@ -40,8 +40,8 @@ type Session struct {
 	AgentModel       string // LLM model in use (e.g. "claude-opus-4-5"); detected at session creation
 	Status           SessionStatus
 	Tunnels          []Tunnel
-	AWSProfileName   string     // session-scoped AWS profile on the remote (e.g. "aiman-a1b2c3d4")
-	AWSConfig        *AWSConfig // role/region/policy used to create AWSProfileName; persisted for live refresh
+	AWSProfileName   string     // legacy session-scoped AWS profile on the remote; only kept for backwards-compatible refresh/cleanup
+	AWSConfig        *AWSConfig // role/region/policy used to create isolated session AWS credential files; persisted for refresh
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -168,9 +168,10 @@ type SessionConfig struct {
 	// new session can continue from where the prior one left off.
 	PriorSnapshot *SessionSnapshot
 	// AWSConfig specifies per-session AWS credentials to push to the remote at session start.
-	// When set, a session-scoped profile ("aiman-<id[:8]>") is created on the remote and
-	// AWS_PROFILE is injected into the tmux environment. Inherited from the remote's
-	// AWSDelegation config when nil (and the remote has SyncCredentials enabled).
+	// When set, Aiman writes isolated session credential/config files on the remote and
+	// injects AWS_SHARED_CREDENTIALS_FILE / AWS_CONFIG_FILE into the tmux environment.
+	// Inherited from the remote's AWSDelegation config when nil (and the remote has
+	// SyncCredentials enabled).
 	AWSConfig *AWSConfig
 	// OpenRouterAPIKey is the API key to inject as OPENROUTER_API_KEY into the tmux session
 	// environment. Read from the local OPENROUTER_API_KEY env var by default; may be
