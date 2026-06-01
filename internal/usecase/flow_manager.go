@@ -332,47 +332,6 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 	return strings.TrimSpace(out)
 }
 
-// PushSessionAWSCredentials keeps the legacy profile-based AWS delegation path for
-// sessions that were already provisioned with AWS_PROFILE and still rely on it for
-// live credential refresh without a restart.
-func PushSessionAWSCredentials(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (string, error) {
-	profileName := "aiman-" + sessionID[:8]
-
-	accountID := cfg.AccountID
-	if accountID == "" {
-		var err error
-		accountID, err = awsdelegation.AccountIDFromLocalProfile(ctx, cfg.SourceProfile)
-		if err != nil {
-			return "", fmt.Errorf("aws: derive account ID: %w", err)
-		}
-	}
-
-	roleARN, err := awsdelegation.RoleARNFromParts(accountID, cfg.RoleName)
-	if err != nil {
-		return "", fmt.Errorf("aws: build role ARN: %w", err)
-	}
-
-	creds, err := awsdelegation.GetTemporaryCredentials(ctx, cfg.SourceProfile, awsdelegation.CredentialOptions{
-		RoleARN:         roleARN,
-		SessionName:     profileName,
-		SessionPolicy:   cfg.SessionPolicy,
-		DurationSeconds: cfg.DurationSeconds,
-	})
-	if err != nil {
-		return "", fmt.Errorf("aws: get temporary credentials: %w", err)
-	}
-
-	if err := awsdelegation.ApplyDelegatedCredentials(ctx, r, profileName, creds); err != nil {
-		return "", fmt.Errorf("aws: push credentials: %w", err)
-	}
-
-	if err := awsdelegation.ApplyDelegatedProfile(ctx, r, profileName, roleARN, cfg.SourceProfile, cfg.Region); err != nil {
-		return "", fmt.Errorf("aws: push profile: %w", err)
-	}
-
-	return profileName, nil
-}
-
 // PrepareSessionAWSEnv writes isolated session-scoped AWS credential/config files
 // on the remote and returns the environment variables required to use them.
 func PrepareSessionAWSEnv(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (map[string]string, error) {
@@ -392,7 +351,7 @@ func PrepareSessionAWSEnv(ctx context.Context, r domain.RemoteExecutor, sessionI
 
 	creds, err := awsdelegation.GetTemporaryCredentials(ctx, cfg.SourceProfile, awsdelegation.CredentialOptions{
 		RoleARN:         roleARN,
-		SessionName:     "aiman-" + sessionID[:8],
+		SessionName:     awsRoleSessionName(sessionID),
 		SessionPolicy:   cfg.SessionPolicy,
 		DurationSeconds: cfg.DurationSeconds,
 	})
@@ -414,6 +373,17 @@ func PrepareSessionAWSEnv(ctx context.Context, r domain.RemoteExecutor, sessionI
 		env["AWS_DEFAULT_REGION"] = region
 	}
 	return env, nil
+}
+
+func awsRoleSessionName(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if len(sessionID) > 8 {
+		sessionID = sessionID[:8]
+	}
+	if sessionID == "" {
+		return "session"
+	}
+	return "session-" + sessionID
 }
 
 func tmuxEnvFlags(env map[string]string) string {

@@ -40,7 +40,7 @@ type Session struct {
 	AgentModel       string // LLM model in use (e.g. "claude-opus-4-5"); detected at session creation
 	Status           SessionStatus
 	Tunnels          []Tunnel
-	AWSProfileName   string     // legacy session-scoped AWS profile on the remote; only kept for backwards-compatible refresh/cleanup
+	AWSProfileName   string     // legacy session-scoped AWS profile on the remote; only kept for migration detection and cleanup
 	AWSConfig        *AWSConfig // role/region/policy used to create isolated session AWS credential files; persisted for refresh
 	CreatedAt        time.Time
 	UpdatedAt        time.Time

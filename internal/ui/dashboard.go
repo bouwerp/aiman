@@ -1317,8 +1317,7 @@ func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
 			return refreshAWSMsg{err: fmt.Errorf("no AWS delegation configured for remote %q", s.RemoteHost)}
 		}
 		if s.AWSProfileName != "" {
-			_, err := usecase.PushSessionAWSCredentials(ctx, mgr, s.ID, cfg)
-			return refreshAWSMsg{err: err}
+			return refreshAWSMsg{err: fmt.Errorf("session still has legacy AWS profile state; restart it once to migrate off AWS_PROFILE")}
 		}
 		_, err := usecase.PrepareSessionAWSEnv(ctx, mgr, s.ID, cfg)
 		return refreshAWSMsg{err: err}

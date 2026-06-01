@@ -15,7 +15,7 @@ Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full
 Binary: `aiman` — built from `./cmd/aiman/main.go`  
 Module: `github.com/bouwerp/aiman`  
 Go: 1.26  
-Current release: **v0.7.31**
+Current release: **v0.7.32**
 
 ---
 
