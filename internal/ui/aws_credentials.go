@@ -72,6 +72,13 @@ type awsCredRenewResultMsg struct {
 	err error
 }
 
+type awsCredRemoveResultMsg struct {
+	key           string
+	userAtHost    string
+	remoteProfile string
+	err           error
+}
+
 // awsCredBatchRenewResultMsg carries results for multiple profiles renewed sequentially
 // on the same remote host (used by renewHostCmd to avoid concurrent file write races).
 type awsCredBatchRenewResultMsg []awsCredRenewResultMsg
@@ -338,6 +345,20 @@ func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 	}
 }
 
+func (m AWSCredentialsModel) removeCmd(e awsHostEntry) tea.Cmd {
+	key := e.key
+	remote := e.remote
+	profile := e.remoteProfile
+	userAtHost := e.userAtHost
+	return func() tea.Msg {
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := awsdelegation.RemoveSessionProfile(ctx, mgr, profile)
+		return awsCredRemoveResultMsg{key: key, userAtHost: userAtHost, remoteProfile: profile, err: err}
+	}
+}
+
 // renewHostCmd renews multiple profiles on the same remote host sequentially within a
 // single goroutine. This prevents the read-modify-write race that occurs when concurrent
 // goroutines all read ~/.aws/credentials, merge their own profile, and write back —
@@ -491,6 +512,15 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.checkCredsCmd()
 
+	case awsCredRemoveResultMsg:
+		delete(m.renewing, msg.key)
+		if msg.err != nil {
+			m.message = fmt.Sprintf("✗ Remove failed for %s [%s]: %v", msg.userAtHost, msg.remoteProfile, msg.err)
+			return m, nil
+		}
+		m.message = fmt.Sprintf("Removed %s [%s] from remote AWS config.", msg.userAtHost, msg.remoteProfile)
+		return m, m.buildEntries()
+
 	case tea.KeyMsg:
 		m.message = ""
 		switch msg.String() {
@@ -554,6 +584,17 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			m.message = "Re-scanning remote profiles…"
 			return m, m.buildEntries()
+		case "d":
+			if m.cursor < len(m.entries) {
+				e := m.entries[m.cursor]
+				if e.del != nil {
+					m.message = fmt.Sprintf("Cannot remove [%s] here: it is still managed by local settings.", e.remoteProfile)
+				} else if !m.renewing[e.key] {
+					m.renewing[e.key] = true
+					m.message = fmt.Sprintf("Removing %s [%s] from remote AWS config…", e.userAtHost, e.remoteProfile)
+					return m, m.removeCmd(e)
+				}
+			}
 		}
 	}
 	return m, nil
@@ -631,7 +672,7 @@ func (m AWSCredentialsModel) View() string {
 	}
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	b.WriteString(helpStyle.Render("  r renew selected  •  R renew all expired  •  c re-check all  •  ESC back") + "\n")
+	b.WriteString(helpStyle.Render("  r renew selected  •  d remove selected stale profile  •  R renew all expired  •  c re-check all  •  ESC back") + "\n")
 
 	return b.String()
 }
