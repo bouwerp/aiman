@@ -133,6 +133,7 @@ type RemotesModel struct {
 	awsAccountResolving bool
 	awsSyncCreds        bool
 	awsManagedRole      bool
+	awsResetting        bool
 }
 
 type scanResults struct {
@@ -145,6 +146,8 @@ type awsPushMsg struct {
 	err         error
 	profile     string
 	syncedCreds bool
+	reset       bool
+	removed     int
 }
 
 type awsAccountLookupMsg struct {
@@ -158,6 +161,56 @@ func lookupAWSAccountIDCmd(profile string) tea.Cmd {
 		defer cancel()
 		id, err := awsdelegation.AccountIDFromLocalProfile(ctx, profile)
 		return awsAccountLookupMsg{accountID: id, err: err}
+	}
+}
+
+func awsResetProfilesForRemote(r config.Remote, rawProfile string) []string {
+	seen := map[string]bool{}
+	var profiles []string
+	add := func(profile string) {
+		profile = strings.TrimSpace(profile)
+		if profile == "" {
+			profile = "default"
+		}
+		if seen[profile] {
+			return
+		}
+		seen[profile] = true
+		profiles = append(profiles, profile)
+	}
+
+	for _, d := range r.AllDelegations() {
+		if d != nil {
+			add(d.Profile)
+		}
+	}
+	if strings.TrimSpace(rawProfile) != "" {
+		add(rawProfile)
+	}
+	return profiles
+}
+
+func resetAWSDelegation(host, user, root string, profiles []string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+
+		mgr := ssh.NewManager(ssh.Config{Host: host, User: user, Root: root})
+		if err := mgr.Connect(ctx); err != nil {
+			return awsPushMsg{err: err, reset: true}
+		}
+
+		removed := 0
+		for _, profile := range profiles {
+			if err := awsdelegation.RemoveSessionProfile(ctx, mgr, profile); err != nil {
+				return awsPushMsg{err: fmt.Errorf("remove remote AWS profile %q: %w", profile, err), reset: true}
+			}
+			removed++
+		}
+		if err := awsdelegation.RemoveAllSessionCredentialFiles(ctx, mgr); err != nil {
+			return awsPushMsg{err: fmt.Errorf("remove session AWS files: %w", err), reset: true}
+		}
+		return awsPushMsg{reset: true, removed: removed}
 	}
 }
 
@@ -865,6 +918,21 @@ func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.state = remotesStateList
 			return m, nil
+		case "ctrl+r":
+			if m.awsRemoteIdx < 0 || m.awsRemoteIdx >= len(m.cfg.Remotes) {
+				return m, nil
+			}
+			r := &m.cfg.Remotes[m.awsRemoteIdx]
+			profiles := awsResetProfilesForRemote(*r, m.awsProfile.Value())
+			r.AWSDelegation = nil
+			r.AWSDelegations = nil
+			_ = m.cfg.Save()
+			m.testingHost = r.Host
+			m.testingUser = r.User
+			m.testingRoot = r.Root
+			m.awsResetting = true
+			m.state = remotesStateAWSPushing
+			return m, tea.Batch(resetAWSDelegation(r.Host, r.User, r.Root, profiles), m.spinner.Tick)
 		case "tab":
 			m.awsFocus = (m.awsFocus + 1) % awsFocusCount
 			return m.applyAWSFocus()
@@ -975,15 +1043,17 @@ func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
 	}
 
 	if rawProf == "" && rn == "" && src == "" {
-		// Clear only the matching delegation if a profile name was given; otherwise clear all.
 		remote := &m.cfg.Remotes[m.awsRemoteIdx]
+		profiles := awsResetProfilesForRemote(*remote, "")
 		remote.AWSDelegation = nil
 		remote.AWSDelegations = nil
 		_ = m.cfg.Save()
-		m.testResult = successStyle.Render("Cleared saved AWS delegation (remote ~/.aws/config not changed).")
-		m.scanResults = nil
-		m.state = remotesStateResult
-		return m, nil
+		m.testingHost = remote.Host
+		m.testingUser = remote.User
+		m.testingRoot = remote.Root
+		m.awsResetting = true
+		m.state = remotesStateAWSPushing
+		return m, tea.Batch(resetAWSDelegation(remote.Host, remote.User, remote.Root, profiles), m.spinner.Tick)
 	}
 
 	prof := rawProf
@@ -1054,6 +1124,7 @@ func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
 	m.testingHost = r.Host
 	m.testingUser = r.User
 	m.testingRoot = r.Root
+	m.awsResetting = false
 	m.state = remotesStateAWSPushing
 	return m, tea.Batch(pushAWSDelegation(r.Host, r.User, r.Root, d), m.spinner.Tick)
 }
@@ -1061,18 +1132,31 @@ func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
 func (m RemotesModel) updateAWSPushing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if res, ok := msg.(awsPushMsg); ok {
 		if res.err != nil {
-			m.testResult = failStyle.Render(fmt.Sprintf("AWS push failed: %v", res.err))
+			action := "AWS push"
+			if res.reset {
+				action = "AWS reset"
+			}
+			m.testResult = failStyle.Render(fmt.Sprintf("%s failed: %v", action, res.err))
 		} else {
-			msg := "Updated remote ~/.aws/config"
-			if res.profile != "" {
-				msg = fmt.Sprintf("Updated remote ~/.aws/config (profile %q)", res.profile)
+			if res.reset {
+				msg := "Reset remote AWS delegation state"
+				if res.removed > 0 {
+					msg = fmt.Sprintf("Reset remote AWS delegation state (%d profile(s) removed)", res.removed)
+				}
+				m.testResult = successStyle.Render(msg + ".")
+			} else {
+				msg := "Updated remote ~/.aws/config"
+				if res.profile != "" {
+					msg = fmt.Sprintf("Updated remote ~/.aws/config (profile %q)", res.profile)
+				}
+				if res.syncedCreds {
+					msg += " and ~/.aws/credentials"
+				}
+				m.testResult = successStyle.Render(msg + ".")
 			}
-			if res.syncedCreds {
-				msg += " and ~/.aws/credentials"
-			}
-			m.testResult = successStyle.Render(msg + ".")
 		}
 		m.scanResults = nil
+		m.awsResetting = false
 		m.state = remotesStateResult
 	}
 	return m, nil
@@ -1089,6 +1173,9 @@ func (m RemotesModel) View() string {
 	case remotesStateScanning:
 		return m.viewOverlay(fmt.Sprintf("Scanning %s@%s:%s...", m.testingUser, m.testingHost, m.testingRoot))
 	case remotesStateAWSPushing:
+		if m.awsResetting {
+			return m.viewOverlay(fmt.Sprintf("Resetting AWS state on %s@%s...", m.testingUser, m.testingHost))
+		}
 		return m.viewOverlay(fmt.Sprintf("Writing ~/.aws/config on %s@%s...", m.testingUser, m.testingHost))
 	case remotesStateResult:
 		return m.viewResult()
@@ -1237,10 +1324,12 @@ func (m RemotesModel) viewAWS() string {
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("Session policy (inline JSON — narrows resource/action access):", awsFocusSessionPolicy), m.awsSessionPolicy.View()))
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("Duration seconds (900–43200):", awsFocusDuration), m.awsDuration.View()))
 
-	b.WriteString(statusStyle.Render("  Clear profile + source + role to drop saved delegation. Empty source+role removes the remote profile block only.") + "\n\n")
+	b.WriteString(statusStyle.Render("  Clear profile + source + role and press enter to reset this remote AWS setup completely.") + "\n")
+	b.WriteString(statusStyle.Render("  ctrl+r also resets the configured remote profiles plus ~/.aiman/aws session files on that host.") + "\n\n")
 	b.WriteString("  " + activeStyle.Render("[tab]") + " next field  ")
 	b.WriteString(activeStyle.Render("[space/enter]") + " toggle sync  ")
 	b.WriteString(activeStyle.Render("[enter]") + " save & push  ")
+	b.WriteString(activeStyle.Render("[ctrl+r]") + " reset  ")
 	b.WriteString(activeStyle.Render("[esc]") + " cancel")
 
 	dialog := lipgloss.NewStyle().

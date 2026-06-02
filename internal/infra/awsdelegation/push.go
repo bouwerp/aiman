@@ -177,3 +177,17 @@ func RemoveSessionCredentialFiles(ctx context.Context, r RemoteRunner, sessionID
 	_, err = r.Execute(ctx, fmt.Sprintf(`rm -rf %q`, dir))
 	return err
 }
+
+func RemoveAllSessionCredentialFiles(ctx context.Context, r RemoteRunner) error {
+	home, err := getRemoteHome(ctx, r)
+	if err != nil {
+		return err
+	}
+	if home == "" || home == "/" {
+		return fmt.Errorf("refusing to write to suspicious home directory: %q", home)
+	}
+
+	dir := fmt.Sprintf("%s/.aiman/aws", strings.TrimRight(home, "/"))
+	_, err = r.Execute(ctx, fmt.Sprintf(`rm -rf %q`, dir))
+	return err
+}

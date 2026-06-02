@@ -114,3 +114,13 @@ func TestRemoveSessionCredentialFiles(t *testing.T) {
 		t.Fatalf("expected session AWS dir removal, got:\n%s", joined)
 	}
 }
+
+func TestRemoveAllSessionCredentialFiles(t *testing.T) {
+	m := &mockRemote{home: "/home/dev", files: map[string]string{}}
+	if err := RemoveAllSessionCredentialFiles(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `rm -rf "/home/dev/.aiman/aws"`) {
+		t.Fatalf("expected all session AWS dirs removal, got:\n%s", joined)
+	}
+}
