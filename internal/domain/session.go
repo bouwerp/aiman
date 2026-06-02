@@ -41,7 +41,7 @@ type Session struct {
 	Status           SessionStatus
 	Tunnels          []Tunnel
 	AWSProfileName   string     // legacy session-scoped AWS profile on the remote; only kept for migration detection and cleanup
-	AWSConfig        *AWSConfig // role/region/policy used to create isolated session AWS credential files; persisted for refresh
+	AWSConfig        *AWSConfig // role/region/policy used to refresh the shared remote AWS credential set; persisted for refresh
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -168,8 +168,8 @@ type SessionConfig struct {
 	// new session can continue from where the prior one left off.
 	PriorSnapshot *SessionSnapshot
 	// AWSConfig specifies per-session AWS credentials to push to the remote at session start.
-	// When set, Aiman writes isolated session credential/config files on the remote and
-	// injects AWS_SHARED_CREDENTIALS_FILE / AWS_CONFIG_FILE into the tmux environment.
+	// When set, Aiman refreshes the shared remote AWS credential/config files before
+	// starting or refreshing the session, and only injects region env when needed.
 	// Inherited from the remote's AWSDelegation config when nil (and the remote has
 	// SyncCredentials enabled).
 	AWSConfig *AWSConfig

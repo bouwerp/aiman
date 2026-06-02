@@ -80,6 +80,35 @@ func mergeSection(existing, name, header, topHeader string, bodyFn func() string
 	return finalizeConfig(without + "\n" + block)
 }
 
+func renameSection(existing, oldHeader, newHeader, newName string) (string, error) {
+	existing = strings.ReplaceAll(existing, "\r\n", "\n")
+	if strings.EqualFold(strings.TrimSpace(oldHeader), strings.TrimSpace(newHeader)) {
+		return existing, nil
+	}
+	if hasSection(existing, newHeader) {
+		return "", fmt.Errorf("profile %q already exists", strings.TrimSpace(newName))
+	}
+
+	body, found := extractSectionBody(existing, oldHeader)
+	if !found {
+		return existing, nil
+	}
+
+	without := stripSection(existing, oldHeader)
+	block := newHeader + "\n"
+	if strings.TrimRight(body, "\n") != "" {
+		block += strings.TrimRight(body, "\n") + "\n"
+	}
+
+	if strings.TrimSpace(without) == "" {
+		return block, nil
+	}
+	if !strings.HasSuffix(strings.TrimRight(without, "\n"), "\n") {
+		without += "\n"
+	}
+	return without + "\n" + block, nil
+}
+
 const aimanHeader = "# aiman: delegated profile below\n"
 
 func finalizeConfig(s string) string {
@@ -109,4 +138,33 @@ func stripSection(content, header string) string {
 		out = append(out, lines[i])
 	}
 	return strings.Join(out, "\n")
+}
+
+func hasSection(content, header string) bool {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if strings.EqualFold(strings.TrimSpace(line), header) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractSectionBody(content, header string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	for i := 0; i < len(lines); i++ {
+		if !strings.EqualFold(strings.TrimSpace(lines[i]), header) {
+			continue
+		}
+		start := i + 1
+		end := len(lines)
+		for j := start; j < len(lines); j++ {
+			if strings.HasPrefix(strings.TrimSpace(lines[j]), "[") {
+				end = j
+				break
+			}
+		}
+		return strings.Join(lines[start:end], "\n"), true
+	}
+	return "", false
 }

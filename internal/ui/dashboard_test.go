@@ -222,3 +222,18 @@ func TestTmuxSessionEnvCommands_OrdersUnsetThenSet(t *testing.T) {
 		t.Fatalf("unexpected command chain:\nwant: %q\ngot:  %q", want, got)
 	}
 }
+
+func TestTmuxSessionEnvCommands_MigratesSharedAWSMode(t *testing.T) {
+	got := tmuxSessionEnvCommands("session-1", map[string]string{
+		"AWS_REGION":         "eu-west-1",
+		"AWS_DEFAULT_REGION": "eu-west-1",
+	}, "AWS_PROFILE", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE")
+	want := `tmux set-environment -t "session-1" -u AWS_CONFIG_FILE 2>/dev/null || true; ` +
+		`tmux set-environment -t "session-1" -u AWS_PROFILE 2>/dev/null || true; ` +
+		`tmux set-environment -t "session-1" -u AWS_SHARED_CREDENTIALS_FILE 2>/dev/null || true; ` +
+		`tmux set-environment -t "session-1" AWS_DEFAULT_REGION "eu-west-1" 2>/dev/null || true; ` +
+		`tmux set-environment -t "session-1" AWS_REGION "eu-west-1" 2>/dev/null || true; `
+	if got != want {
+		t.Fatalf("unexpected shared AWS migration command chain:\nwant: %q\ngot:  %q", want, got)
+	}
+}

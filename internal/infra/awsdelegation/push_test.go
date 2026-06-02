@@ -22,7 +22,10 @@ func (m *mockRemote) Execute(_ context.Context, cmd string) (string, error) {
 		m.execOK = true
 		return "", nil
 	}
-	if strings.Contains(cmd, `cat "$HOME/.aws/config"`) {
+	if strings.Contains(cmd, ".aws/credentials") && strings.Contains(cmd, "cat") {
+		return m.files["credentials"], nil
+	}
+	if strings.Contains(cmd, ".aws/config") && strings.Contains(cmd, "cat") {
 		return m.files["config"], nil
 	}
 	return "", nil
@@ -122,5 +125,31 @@ func TestRemoveAllSessionCredentialFiles(t *testing.T) {
 	}
 	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `rm -rf "/home/dev/.aiman/aws"`) {
 		t.Fatalf("expected all session AWS dirs removal, got:\n%s", joined)
+	}
+}
+
+func TestRenameSessionProfile(t *testing.T) {
+	m := &mockRemote{home: "/home/dev", files: map[string]string{
+		"credentials": "[old]\naws_access_key_id = abc\naws_secret_access_key = def\n",
+		"config":      "[profile old]\nrole_arn = arn:aws:iam::1:role/R\nsource_profile = base\n",
+	}}
+	if err := RenameSessionProfile(context.Background(), m, "old", "new"); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.files["/.aws/credentials"]; !strings.Contains(got, "[new]") || strings.Contains(got, "[old]") {
+		t.Fatalf("unexpected renamed credentials:\n%s", got)
+	}
+	if got := m.files["/.aws/config"]; !strings.Contains(got, "[profile new]") || strings.Contains(got, "[profile old]") {
+		t.Fatalf("unexpected renamed config:\n%s", got)
+	}
+}
+
+func TestRenameSessionProfileRefusesOverwrite(t *testing.T) {
+	m := &mockRemote{home: "/home/dev", files: map[string]string{
+		"credentials": "[old]\naws_access_key_id = abc\n\n[new]\naws_access_key_id = xyz\n",
+		"config":      "[profile old]\nrole_arn = arn:aws:iam::1:role/R\n\n[profile new]\nrole_arn = arn:aws:iam::1:role/R2\n",
+	}}
+	if err := RenameSessionProfile(context.Background(), m, "old", "new"); err == nil {
+		t.Fatal("expected rename collision error")
 	}
 }

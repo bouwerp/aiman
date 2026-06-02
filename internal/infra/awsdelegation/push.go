@@ -160,6 +160,82 @@ func RemoveSessionProfile(ctx context.Context, r RemoteRunner, profileName strin
 	return nil
 }
 
+// RenameSessionProfile renames an AWS shared profile in both ~/.aws/credentials
+// and ~/.aws/config on the remote host. It preserves the existing section bodies
+// and refuses to overwrite an existing target profile.
+func RenameSessionProfile(ctx context.Context, r RemoteRunner, oldProfileName, newProfileName string) error {
+	oldProfileName = normalizeProfileName(oldProfileName)
+	newProfileName = normalizeProfileName(newProfileName)
+	if oldProfileName == newProfileName {
+		return nil
+	}
+	if newProfileName == "" {
+		return fmt.Errorf("new profile name is required")
+	}
+
+	home, err := getRemoteHome(ctx, r)
+	if err != nil {
+		return err
+	}
+	if home == "" || home == "/" {
+		return fmt.Errorf("refusing to write to suspicious home directory: %q", home)
+	}
+
+	trimHome := strings.TrimRight(home, "/")
+	credsPath := fmt.Sprintf("%s/.aws/credentials", trimHome)
+	configPath := fmt.Sprintf("%s/.aws/config", trimHome)
+
+	existingCreds, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/credentials && cat %q/.aws/credentials || true`, home, home))
+	if err != nil {
+		return fmt.Errorf("read remote ~/.aws/credentials: %w", err)
+	}
+	renamedCreds, err := renameCredentialsProfile(existingCreds, oldProfileName, newProfileName)
+	if err != nil {
+		return err
+	}
+
+	existingConfig, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/config && cat %q/.aws/config || true`, home, home))
+	if err != nil {
+		return fmt.Errorf("read remote ~/.aws/config: %w", err)
+	}
+	renamedConfig, err := renameConfigProfile(existingConfig, oldProfileName, newProfileName)
+	if err != nil {
+		return err
+	}
+
+	if err := r.WriteFile(ctx, credsPath, []byte(renamedCreds)); err != nil {
+		return fmt.Errorf("write remote ~/.aws/credentials: %w", err)
+	}
+	if err := r.WriteFile(ctx, configPath, []byte(renamedConfig)); err != nil {
+		return fmt.Errorf("write remote ~/.aws/config: %w", err)
+	}
+	return nil
+}
+
+func renameCredentialsProfile(existing, oldProfileName, newProfileName string) (string, error) {
+	renamed, err := renameSection(existing, fmt.Sprintf("[%s]", oldProfileName), fmt.Sprintf("[%s]", newProfileName), newProfileName)
+	if err != nil {
+		return "", err
+	}
+	return finalizeConfig(renamed), nil
+}
+
+func renameConfigProfile(existing, oldProfileName, newProfileName string) (string, error) {
+	renamed, err := renameSection(existing, ProfileSectionHeader(oldProfileName), ProfileSectionHeader(newProfileName), newProfileName)
+	if err != nil {
+		return "", err
+	}
+	return finalizeConfig(renamed), nil
+}
+
+func normalizeProfileName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "default"
+	}
+	return name
+}
+
 func RemoveSessionCredentialFiles(ctx context.Context, r RemoteRunner, sessionID string) error {
 	home, err := getRemoteHome(ctx, r)
 	if err != nil {

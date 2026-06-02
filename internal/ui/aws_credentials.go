@@ -11,6 +11,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -47,14 +48,17 @@ type awsHostEntry struct {
 // AWSCredentialsModel lists one row per (user@host, profile) pair and shows/manages AWS
 // credential validity for remotes that have SyncCredentials enabled.
 type AWSCredentialsModel struct {
-	cfg      *config.Config
-	db       interface{} // domain.SessionRepository — unused after load; kept for Init
-	entries  []awsHostEntry
-	cursor   int
-	width    int
-	height   int
-	renewing map[string]bool // entry key values currently being renewed
-	message  string          // transient feedback line
+	cfg         *config.Config
+	db          interface{} // domain.SessionRepository — unused after load; kept for Init
+	entries     []awsHostEntry
+	cursor      int
+	width       int
+	height      int
+	renewing    map[string]bool // entry key values currently being renewed
+	message     string          // transient feedback line
+	renaming    bool
+	renameKey   string
+	renameInput textinput.Model
 }
 
 // --- message types ---
@@ -79,6 +83,14 @@ type awsCredRemoveResultMsg struct {
 	err           error
 }
 
+type awsCredRenameResultMsg struct {
+	key        string
+	userAtHost string
+	oldProfile string
+	newProfile string
+	err        error
+}
+
 // awsCredBatchRenewResultMsg carries results for multiple profiles renewed sequentially
 // on the same remote host (used by renewHostCmd to avoid concurrent file write races).
 type awsCredBatchRenewResultMsg []awsCredRenewResultMsg
@@ -86,10 +98,14 @@ type awsCredBatchRenewResultMsg []awsCredRenewResultMsg
 // --- constructor ---
 
 func NewAWSCredentialsModel(cfg *config.Config, db interface{}) AWSCredentialsModel {
+	input := textinput.New()
+	input.Prompt = ""
+	input.CharLimit = 128
 	return AWSCredentialsModel{
-		cfg:      cfg,
-		db:       db,
-		renewing: make(map[string]bool),
+		cfg:         cfg,
+		db:          db,
+		renewing:    make(map[string]bool),
+		renameInput: input,
 	}
 }
 
@@ -359,6 +375,26 @@ func (m AWSCredentialsModel) removeCmd(e awsHostEntry) tea.Cmd {
 	}
 }
 
+func (m AWSCredentialsModel) renameCmd(e awsHostEntry, newProfile string) tea.Cmd {
+	key := e.key
+	remote := e.remote
+	oldProfile := e.remoteProfile
+	userAtHost := e.userAtHost
+	return func() tea.Msg {
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := awsdelegation.RenameSessionProfile(ctx, mgr, oldProfile, newProfile)
+		return awsCredRenameResultMsg{
+			key:        key,
+			userAtHost: userAtHost,
+			oldProfile: oldProfile,
+			newProfile: normalizeAWSProfileName(newProfile),
+			err:        err,
+		}
+	}
+}
+
 // renewHostCmd renews multiple profiles on the same remote host sequentially within a
 // single goroutine. This prevents the read-modify-write race that occurs when concurrent
 // goroutines all read ~/.aws/credentials, merge their own profile, and write back —
@@ -521,8 +557,64 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = fmt.Sprintf("Removed %s [%s] from remote AWS config.", msg.userAtHost, msg.remoteProfile)
 		return m, m.buildEntries()
 
+	case awsCredRenameResultMsg:
+		delete(m.renewing, msg.key)
+		m.renaming = false
+		m.renameKey = ""
+		m.renameInput.Blur()
+		if msg.err != nil {
+			m.message = fmt.Sprintf("✗ Rename failed for %s [%s → %s]: %v", msg.userAtHost, msg.oldProfile, msg.newProfile, msg.err)
+			return m, nil
+		}
+		if err := renameManagedDelegationProfile(m.cfg, m.entryByKey(msg.key), msg.oldProfile, msg.newProfile); err != nil {
+			m.message = fmt.Sprintf("✗ Renamed remote profile, but local settings update failed: %v", err)
+			return m, m.buildEntries()
+		}
+		m.message = fmt.Sprintf("Renamed %s [%s → %s].", msg.userAtHost, msg.oldProfile, msg.newProfile)
+		return m, m.buildEntries()
+
 	case tea.KeyMsg:
 		m.message = ""
+		if m.renaming {
+			switch msg.String() {
+			case "esc":
+				m.renaming = false
+				m.renameKey = ""
+				m.renameInput.Blur()
+				m.message = "Rename cancelled."
+				return m, nil
+			case "enter":
+				entry := m.entryByKey(m.renameKey)
+				if entry == nil {
+					m.renaming = false
+					m.renameKey = ""
+					m.renameInput.Blur()
+					m.message = "Rename target disappeared."
+					return m, nil
+				}
+				newProfile := normalizeAWSProfileName(m.renameInput.Value())
+				if newProfile == entry.remoteProfile {
+					m.renaming = false
+					m.renameKey = ""
+					m.renameInput.Blur()
+					m.message = "Profile name unchanged."
+					return m, nil
+				}
+				if err := validateRenameTarget(m.entries, *entry, newProfile); err != nil {
+					m.message = err.Error()
+					return m, nil
+				}
+				m.renaming = false
+				m.renameKey = ""
+				m.renameInput.Blur()
+				m.renewing[entry.key] = true
+				m.message = fmt.Sprintf("Renaming %s [%s → %s]…", entry.userAtHost, entry.remoteProfile, newProfile)
+				return m, m.renameCmd(*entry, newProfile)
+			}
+			var cmd tea.Cmd
+			m.renameInput, cmd = m.renameInput.Update(msg)
+			return m, cmd
+		}
 		switch msg.String() {
 		case "up", "k":
 			if m.cursor > 0 {
@@ -593,6 +685,19 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.renewing[e.key] = true
 					m.message = fmt.Sprintf("Removing %s [%s] from remote AWS config…", e.userAtHost, e.remoteProfile)
 					return m, m.removeCmd(e)
+				}
+			}
+		case "e":
+			if m.cursor < len(m.entries) {
+				e := m.entries[m.cursor]
+				if !m.renewing[e.key] {
+					m.renaming = true
+					m.renameKey = e.key
+					m.renameInput.SetValue(e.remoteProfile)
+					m.renameInput.CursorEnd()
+					m.renameInput.Focus()
+					m.message = fmt.Sprintf("Rename %s [%s] and press Enter.", e.userAtHost, e.remoteProfile)
+					return m, textinput.Blink
 				}
 			}
 		}
@@ -670,9 +775,107 @@ func (m AWSCredentialsModel) View() string {
 	if m.message != "" {
 		b.WriteString("  " + m.message + "\n\n")
 	}
+	if m.renaming {
+		b.WriteString("  New remote profile: " + m.renameInput.View() + "\n")
+		b.WriteString("  Press Enter to rename or Esc to cancel.\n\n")
+	}
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	b.WriteString(helpStyle.Render("  r renew selected  •  d remove selected stale profile  •  R renew all expired  •  c re-check all  •  ESC back") + "\n")
+	b.WriteString(helpStyle.Render("  r renew selected  •  e rename selected profile  •  d remove selected stale profile  •  R renew all expired  •  c re-check all  •  ESC back") + "\n")
 
 	return b.String()
+}
+
+func (m AWSCredentialsModel) entryByKey(key string) *awsHostEntry {
+	for i := range m.entries {
+		if m.entries[i].key == key {
+			return &m.entries[i]
+		}
+	}
+	return nil
+}
+
+func validateRenameTarget(entries []awsHostEntry, selected awsHostEntry, newProfile string) error {
+	if newProfile == "" {
+		return fmt.Errorf("profile name is required")
+	}
+	for _, e := range entries {
+		if e.key == selected.key {
+			continue
+		}
+		if e.userAtHost == selected.userAtHost && e.remoteProfile == newProfile {
+			return fmt.Errorf("cannot rename to [%s]: that profile already exists on %s", newProfile, selected.userAtHost)
+		}
+	}
+	return nil
+}
+
+func renameManagedDelegationProfile(cfg *config.Config, entry *awsHostEntry, oldProfile, newProfile string) error {
+	if cfg == nil || entry == nil || entry.del == nil {
+		return nil
+	}
+	targetRemote := entry.remote
+	targetOld := normalizeAWSProfileName(oldProfile)
+	targetNew := normalizeAWSProfileName(newProfile)
+
+	for i := range cfg.Remotes {
+		r := &cfg.Remotes[i]
+		if strings.TrimSpace(r.Host) != strings.TrimSpace(targetRemote.Host) ||
+			strings.TrimSpace(r.User) != strings.TrimSpace(targetRemote.User) ||
+			strings.TrimSpace(r.Root) != strings.TrimSpace(targetRemote.Root) {
+			continue
+		}
+		if hasDelegationProfile(r, targetNew) && targetOld != targetNew {
+			return fmt.Errorf("local settings already use profile %q on %s", targetNew, entry.userAtHost)
+		}
+
+		updated := false
+		if r.AWSDelegation != nil && normalizeAWSProfileName(r.AWSDelegation.Profile) == targetOld {
+			r.AWSDelegation.Profile = targetNew
+			updated = true
+		}
+		for _, d := range r.AWSDelegations {
+			if d != nil && normalizeAWSProfileName(d.Profile) == targetOld {
+				d.Profile = targetNew
+				updated = true
+			}
+		}
+		if !updated {
+			return nil
+		}
+		if err := cfg.Save(); err != nil {
+			if r.AWSDelegation != nil && normalizeAWSProfileName(r.AWSDelegation.Profile) == targetNew {
+				r.AWSDelegation.Profile = targetOld
+			}
+			for _, d := range r.AWSDelegations {
+				if d != nil && normalizeAWSProfileName(d.Profile) == targetNew {
+					d.Profile = targetOld
+				}
+			}
+			return err
+		}
+		return nil
+	}
+	return nil
+}
+
+func hasDelegationProfile(r *config.Remote, profile string) bool {
+	if r == nil {
+		return false
+	}
+	profile = normalizeAWSProfileName(profile)
+	for _, d := range r.AllDelegations() {
+		if d != nil && normalizeAWSProfileName(d.Profile) == profile {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAWSProfileName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "default"
+	}
+	return name
 }

@@ -171,8 +171,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
 
-	// Push session-scoped AWS credential files BEFORE starting tmux so the agent
-	// sees isolated AWS credentials from the very first command.
+	// Push shared remote AWS credentials BEFORE starting tmux so the agent sees
+	// the latest credentials from the very first command.
 	awsEnv := map[string]string{}
 	if config.AWSConfig != nil && sshMgr != nil {
 		if sessionEnv, pushErr := PrepareSessionAWSEnv(ctx, sshMgr, session.ID, config.AWSConfig); pushErr == nil {
@@ -332,8 +332,8 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 	return strings.TrimSpace(out)
 }
 
-// PrepareSessionAWSEnv writes isolated session-scoped AWS credential/config files
-// on the remote and returns the environment variables required to use them.
+// PrepareSessionAWSEnv refreshes the shared remote AWS credential/config files
+// and returns only the environment variables still needed by the agent process.
 func PrepareSessionAWSEnv(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (map[string]string, error) {
 	accountID := cfg.AccountID
 	if accountID == "" {
@@ -359,20 +359,13 @@ func PrepareSessionAWSEnv(ctx context.Context, r domain.RemoteExecutor, sessionI
 		return nil, fmt.Errorf("aws: get temporary credentials: %w", err)
 	}
 
-	files, err := awsdelegation.WriteSessionCredentialFiles(ctx, r, sessionID, creds, cfg.Region)
-	if err != nil {
-		return nil, fmt.Errorf("aws: write session credential files: %w", err)
+	if err := awsdelegation.ApplyDelegatedCredentials(ctx, r, "default", creds); err != nil {
+		return nil, fmt.Errorf("aws: write shared credentials: %w", err)
 	}
-
-	env := map[string]string{
-		"AWS_SHARED_CREDENTIALS_FILE": files.CredentialsPath,
-		"AWS_CONFIG_FILE":             files.ConfigPath,
+	if err := awsdelegation.ApplyDelegatedProfile(ctx, r, "default", "", "", cfg.Region); err != nil {
+		return nil, fmt.Errorf("aws: write shared profile config: %w", err)
 	}
-	if region := strings.TrimSpace(cfg.Region); region != "" {
-		env["AWS_REGION"] = region
-		env["AWS_DEFAULT_REGION"] = region
-	}
-	return env, nil
+	return sharedSessionAWSEnv(cfg.Region), nil
 }
 
 func awsRoleSessionName(sessionID string) string {
@@ -384,6 +377,15 @@ func awsRoleSessionName(sessionID string) string {
 		return "session"
 	}
 	return "session-" + sessionID
+}
+
+func sharedSessionAWSEnv(region string) map[string]string {
+	env := map[string]string{}
+	if region = strings.TrimSpace(region); region != "" {
+		env["AWS_REGION"] = region
+		env["AWS_DEFAULT_REGION"] = region
+	}
+	return env
 }
 
 func tmuxEnvFlags(env map[string]string) string {

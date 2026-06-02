@@ -465,7 +465,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
 		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
-		menuItem{title: "AWS Credentials", desc: "View and renew session-scoped AWS credentials", action: viewStateAWSCredentials},
+		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
@@ -1319,8 +1319,27 @@ func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
 		if s.AWSProfileName != "" {
 			return refreshAWSMsg{err: fmt.Errorf("session still has legacy AWS profile state; restart it once to migrate off AWS_PROFILE")}
 		}
-		_, err := usecase.PrepareSessionAWSEnv(ctx, mgr, s.ID, cfg)
-		return refreshAWSMsg{err: err}
+		sessionEnv, err := usecase.PrepareSessionAWSEnv(ctx, mgr, s.ID, cfg)
+		if err != nil {
+			return refreshAWSMsg{err: err}
+		}
+		if strings.TrimSpace(s.TmuxSession) != "" {
+			envCmd := tmuxSessionEnvCommands(
+				s.TmuxSession,
+				sessionEnv,
+				"AWS_PROFILE",
+				"AWS_SHARED_CREDENTIALS_FILE",
+				"AWS_CONFIG_FILE",
+				"AWS_REGION",
+				"AWS_DEFAULT_REGION",
+			)
+			if envCmd != "" {
+				if _, err := mgr.Execute(ctx, envCmd); err != nil {
+					return refreshAWSMsg{err: fmt.Errorf("refresh tmux AWS environment: %w", err)}
+				}
+			}
+		}
+		return refreshAWSMsg{err: nil}
 	}
 }
 func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngine, name string, timeout time.Duration) error {
@@ -1920,7 +1939,7 @@ func (m *Model) runTerminateStep(index int) error {
 			return nil
 		}
 		return os.RemoveAll(s.LocalPath)
-	case 5: // Clean up session-scoped AWS credentials from the remote
+	case 5: // Clean up legacy session-scoped AWS credentials from the remote
 		if s.RemoteHost == "" {
 			return nil
 		}
