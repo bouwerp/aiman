@@ -15,7 +15,7 @@ Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full
 Binary: `aiman` — built from `./cmd/aiman/main.go`  
 Module: `github.com/bouwerp/aiman`  
 Go: 1.26  
-Current release: **v0.7.35**
+Current release: **v0.7.36**
 
 ---
 
@@ -94,7 +94,7 @@ A `domain.Session` holds:
 | `AgentName` | agent binary name, e.g. `claude` |
 | `Status` | `PROVISIONING → ACTIVE → CLEANUP` (or `ERROR`/`INACTIVE`) |
 | `Tunnels` | local↔remote port forwards |
-| `AWSProfileName` | `aiman-<id[:8]>` scoped profile on the remote |
+| `AWSProfileName` | legacy scoped AWS profile name retained only for migration/cleanup |
 
 ---
 

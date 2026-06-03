@@ -65,6 +65,19 @@ func TestMergeProfileIntoConfig_DefaultProfile(t *testing.T) {
 	}
 }
 
+func TestMergeProfileIntoConfig_RegionOnly(t *testing.T) {
+	got := MergeProfileIntoConfig("", "default", "", "", "eu-west-1")
+	if !strings.Contains(got, "[default]") {
+		t.Fatalf("expected [default] block, got:\n%s", got)
+	}
+	if !strings.Contains(got, "region = eu-west-1") {
+		t.Fatalf("expected region-only block, got:\n%s", got)
+	}
+	if strings.Contains(got, "role_arn") {
+		t.Fatalf("did not expect role_arn in region-only block, got:\n%s", got)
+	}
+}
+
 func TestMergeProfileIntoConfig_Remove(t *testing.T) {
 	before := `[profile delegated-access]
 role_arn = arn:aws:iam::1:role/R

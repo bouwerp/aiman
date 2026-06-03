@@ -12,97 +12,52 @@ type RemoteRunner interface {
 	WriteFile(ctx context.Context, path string, content []byte) error
 }
 
-type SessionCredentialFiles struct {
-	CredentialsPath string
-	ConfigPath      string
-}
-
 // ApplyDelegatedProfile merges the delegated profile into $HOME/.aws/config on the remote.
 // Secrets are never written by this function.
 // region is optional; when non-empty it is written into the profile block.
 func ApplyDelegatedProfile(ctx context.Context, r RemoteRunner, profileName, roleARN, sourceProfile, region string) error {
-	home, err := getRemoteHome(ctx, r)
+	home, trimHome, err := ensureRemoteAWSDir(ctx, r)
 	if err != nil {
 		return err
 	}
-	if home == "" || home == "/" {
-		return fmt.Errorf("refusing to write to suspicious home directory: %q", home)
-	}
 
-	if _, err := r.Execute(ctx, fmt.Sprintf(`mkdir -p %q/.aws && chmod 700 %q/.aws`, home, home)); err != nil {
-		return fmt.Errorf("remote mkdir .aws: %w", err)
-	}
-
-	configPath := fmt.Sprintf("%s/.aws/config", strings.TrimRight(home, "/"))
+	configPath := fmt.Sprintf("%s/.aws/config", trimHome)
 	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/config && cat %q/.aws/config || true`, home, home))
 	if err != nil {
 		return fmt.Errorf("read remote ~/.aws/config: %w", err)
 	}
 
 	merged := MergeProfileIntoConfig(existing, profileName, roleARN, sourceProfile, region)
-	return r.WriteFile(ctx, configPath, []byte(merged))
+	if err := r.WriteFile(ctx, configPath, []byte(merged)); err != nil {
+		return fmt.Errorf("write remote ~/.aws/config: %w", err)
+	}
+	if _, err := r.Execute(ctx, fmt.Sprintf(`chmod 600 %q`, configPath)); err != nil {
+		return fmt.Errorf("chmod remote ~/.aws/config: %w", err)
+	}
+	return nil
 }
 
 // ApplyDelegatedCredentials merges temporary tokens into $HOME/.aws/credentials on the remote.
 func ApplyDelegatedCredentials(ctx context.Context, r RemoteRunner, profileName string, creds *SessionCredentials) error {
-	home, err := getRemoteHome(ctx, r)
+	home, trimHome, err := ensureRemoteAWSDir(ctx, r)
 	if err != nil {
 		return err
 	}
-	if home == "" || home == "/" {
-		return fmt.Errorf("refusing to write to suspicious home directory: %q", home)
-	}
 
-	if _, err := r.Execute(ctx, fmt.Sprintf(`mkdir -p %q/.aws && chmod 700 %q/.aws`, home, home)); err != nil {
-		return fmt.Errorf("remote mkdir .aws: %w", err)
-	}
-
-	credsPath := fmt.Sprintf("%s/.aws/credentials", strings.TrimRight(home, "/"))
+	credsPath := fmt.Sprintf("%s/.aws/credentials", trimHome)
 	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/credentials && cat %q/.aws/credentials || true`, home, home))
 	if err != nil {
 		return fmt.Errorf("read remote ~/.aws/credentials: %w", err)
 	}
 
 	merged := MergeCredentialsIntoConfig(existing, profileName, creds)
-	return r.WriteFile(ctx, credsPath, []byte(merged))
-}
-
-// WriteSessionCredentialFiles writes isolated session-scoped AWS credential/config
-// files under ~/.aiman/aws/<sessionID>/ using only the default profile.
-func WriteSessionCredentialFiles(ctx context.Context, r RemoteRunner, sessionID string, creds *SessionCredentials, region string) (SessionCredentialFiles, error) {
-	home, err := getRemoteHome(ctx, r)
-	if err != nil {
-		return SessionCredentialFiles{}, err
+	if err := r.WriteFile(ctx, credsPath, []byte(merged)); err != nil {
+		return fmt.Errorf("write remote ~/.aws/credentials: %w", err)
 	}
-	if home == "" || home == "/" {
-		return SessionCredentialFiles{}, fmt.Errorf("refusing to write to suspicious home directory: %q", home)
+	if _, err := r.Execute(ctx, fmt.Sprintf(`chmod 600 %q`, credsPath)); err != nil {
+		return fmt.Errorf("chmod remote ~/.aws/credentials: %w", err)
 	}
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return SessionCredentialFiles{}, fmt.Errorf("session ID is required for AWS credential files")
-	}
-
-	trimHome := strings.TrimRight(home, "/")
-	dir := fmt.Sprintf("%s/.aiman/aws/%s", trimHome, sessionID)
-	if _, err := r.Execute(ctx, fmt.Sprintf(`mkdir -p %q && chmod 700 %q %q %q`, dir, trimHome+"/.aiman", trimHome+"/.aiman/aws", dir)); err != nil {
-		return SessionCredentialFiles{}, fmt.Errorf("remote mkdir session aws dir: %w", err)
-	}
-
-	files := SessionCredentialFiles{
-		CredentialsPath: dir + "/credentials",
-		ConfigPath:      dir + "/config",
-	}
-	if err := r.WriteFile(ctx, files.CredentialsPath, []byte(MergeCredentialsIntoConfig("", "default", creds))); err != nil {
-		return SessionCredentialFiles{}, fmt.Errorf("write session credentials: %w", err)
-	}
-	if err := r.WriteFile(ctx, files.ConfigPath, []byte(formatSessionConfig(region))); err != nil {
-		return SessionCredentialFiles{}, fmt.Errorf("write session config: %w", err)
-	}
-	if _, err := r.Execute(ctx, fmt.Sprintf(`chmod 600 %q %q`, files.CredentialsPath, files.ConfigPath)); err != nil {
-		return SessionCredentialFiles{}, fmt.Errorf("chmod session AWS files: %w", err)
-	}
-
-	return files, nil
+	return nil
 }
 
 func getRemoteHome(ctx context.Context, r RemoteRunner) (string, error) {
@@ -118,13 +73,18 @@ func getRemoteHome(ctx context.Context, r RemoteRunner) (string, error) {
 	return home, nil
 }
 
-func formatSessionConfig(region string) string {
-	var b strings.Builder
-	b.WriteString("[default]\n")
-	if region = strings.TrimSpace(region); region != "" {
-		b.WriteString(fmt.Sprintf("region = %s\n", region))
+func ensureRemoteAWSDir(ctx context.Context, r RemoteRunner) (home string, trimHome string, err error) {
+	home, err = getRemoteHome(ctx, r)
+	if err != nil {
+		return "", "", err
 	}
-	return b.String()
+	if home == "" || home == "/" {
+		return "", "", fmt.Errorf("refusing to write to suspicious home directory: %q", home)
+	}
+	if _, err := r.Execute(ctx, fmt.Sprintf(`mkdir -p %q/.aws && chmod 700 %q/.aws`, home, home)); err != nil {
+		return "", "", fmt.Errorf("remote mkdir .aws: %w", err)
+	}
+	return home, strings.TrimRight(home, "/"), nil
 }
 
 // RemoveSessionProfile strips a session-scoped AWS profile from both
@@ -236,6 +196,8 @@ func normalizeProfileName(name string) string {
 	return name
 }
 
+// RemoveSessionCredentialFiles removes the legacy per-session ~/.aiman/aws/<sessionID>
+// directory from older releases. Current sync flows use ~/.aws/{credentials,config}.
 func RemoveSessionCredentialFiles(ctx context.Context, r RemoteRunner, sessionID string) error {
 	home, err := getRemoteHome(ctx, r)
 	if err != nil {
@@ -254,6 +216,8 @@ func RemoveSessionCredentialFiles(ctx context.Context, r RemoteRunner, sessionID
 	return err
 }
 
+// RemoveAllSessionCredentialFiles removes the legacy ~/.aiman/aws tree that older
+// releases used for isolated session credential files.
 func RemoveAllSessionCredentialFiles(ctx context.Context, r RemoteRunner) error {
 	home, err := getRemoteHome(ctx, r)
 	if err != nil {

@@ -29,13 +29,18 @@ func FormatProfileSection(roleARN, sourceProfile, region string) string {
 }
 
 // MergeProfileIntoConfig replaces or inserts a [profile NAME] block in an AWS shared config file.
-// If profileName or roleARN is empty, it removes an existing block for that profile only
+// When roleARN is empty but region is set, it writes a region-only profile block so sync-mode
+// callers can manage the shared default region without a role_arn/source_profile stanza.
+// If both roleARN and region are empty, it removes an existing block for that profile only
 // (other content is preserved). Trailing newline is ensured.
 func MergeProfileIntoConfig(existing string, profileName, roleARN, sourceProfile, region string) string {
 	name := strings.TrimSpace(profileName)
 	header := ProfileSectionHeader(name)
 	return mergeSection(existing, name, header, aimanHeader, func() string {
 		if strings.TrimSpace(roleARN) == "" {
+			if r := strings.TrimSpace(region); r != "" {
+				return fmt.Sprintf("region = %s", r)
+			}
 			return ""
 		}
 		return FormatProfileSection(roleARN, sourceProfile, region)

@@ -315,9 +315,9 @@ active_remote: devbox
 
 When `sync_credentials: true`, each new session on that remote gets:
 
-1. A unique AWS profile `aiman-<session-id>` on the remote
-2. Fresh STS tokens pushed before the agent starts
-3. `AWS_PROFILE=aiman-<id>` injected into the tmux session environment
+1. Fresh STS tokens pushed into the remote `~/.aws/credentials`
+2. The remote `~/.aws/config` updated for the managed profile/default region
+3. Only region env vars injected into tmux when needed (`AWS_REGION` / `AWS_DEFAULT_REGION`)
 
 **Per-session overrides** are available in the session creation summary screen — edit the **Profile** and **Region** fields to override the remote defaults for just that session:
 
@@ -328,7 +328,7 @@ When `sync_credentials: true`, each new session on that remote gets:
 
 The profile and region can differ per session; all other settings (role, account, session policy, duration) inherit from the remote config.
 
-AWS profiles are automatically removed from the remote when a session is terminated.
+Legacy `~/.aiman/aws/...` session files from older releases are cleaned up automatically when encountered, but current sync flows operate on `~/.aws/{credentials,config}` directly.
 
 ## 🏗 Architecture
 
@@ -398,7 +398,7 @@ Aiman follows **Clean Architecture** principles:
 - [x] OpenCode integration
 - [x] Cursor integration
 - [x] Ad-hoc sessions (no JIRA issue required)
-- [x] AWS credential delegation to remotes (session-scoped, per-session overrides)
+- [x] AWS credential delegation to remotes (`~/.aws`-based sync, per-session overrides)
 - [x] Session tunnel management (local port forwarding)
 - [x] AI session summaries (brief + long) with action items
 - [x] Session archiving and snapshot browser

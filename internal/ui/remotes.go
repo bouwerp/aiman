@@ -1325,7 +1325,7 @@ func (m RemotesModel) viewAWS() string {
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("Duration seconds (900–43200):", awsFocusDuration), m.awsDuration.View()))
 
 	b.WriteString(statusStyle.Render("  Clear profile + source + role and press enter to reset this remote AWS setup completely.") + "\n")
-	b.WriteString(statusStyle.Render("  ctrl+r also resets the configured remote profiles plus ~/.aiman/aws session files on that host.") + "\n\n")
+	b.WriteString(statusStyle.Render("  ctrl+r also clears managed ~/.aws entries and any legacy ~/.aiman/aws leftovers on that host.") + "\n\n")
 	b.WriteString("  " + activeStyle.Render("[tab]") + " next field  ")
 	b.WriteString(activeStyle.Render("[space/enter]") + " toggle sync  ")
 	b.WriteString(activeStyle.Render("[enter]") + " save & push  ")

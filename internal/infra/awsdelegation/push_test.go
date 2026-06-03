@@ -69,6 +69,21 @@ func TestApplyDelegatedProfile_WithRegion(t *testing.T) {
 	}
 }
 
+func TestApplyDelegatedProfile_RegionOnly(t *testing.T) {
+	m := &mockRemote{home: "/home/dev", files: map[string]string{}}
+	err := ApplyDelegatedProfile(context.Background(), m, "default", "", "", "eu-west-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := m.files["/.aws/config"]
+	if !strings.Contains(written, "[default]") || !strings.Contains(written, "region = eu-west-1") {
+		t.Fatalf("expected default region config, got:\n%s", written)
+	}
+	if strings.Contains(written, "role_arn") {
+		t.Fatalf("did not expect role_arn in sync config, got:\n%s", written)
+	}
+}
+
 func TestApplyDelegatedProfile_UsesHomePath(t *testing.T) {
 	m := &mockRemote{home: "/home/x", files: map[string]string{}}
 	_ = ApplyDelegatedProfile(context.Background(), m, "p", "arn:a", "s", "")
@@ -78,33 +93,35 @@ func TestApplyDelegatedProfile_UsesHomePath(t *testing.T) {
 	}
 }
 
-func TestWriteSessionCredentialFiles(t *testing.T) {
+func TestApplyDelegatedCredentials_ChmodsFile(t *testing.T) {
 	m := &mockRemote{home: "/home/dev", files: map[string]string{}}
-	files, err := WriteSessionCredentialFiles(context.Background(), m, "sess-1", &SessionCredentials{
+	err := ApplyDelegatedCredentials(context.Background(), m, "default", &SessionCredentials{
 		AccessKeyID:     "AKIA123",
 		SecretAccessKey: "secret",
 		SessionToken:    "token",
-	}, "eu-west-1")
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if files.CredentialsPath != "/home/dev/.aiman/aws/sess-1/credentials" {
-		t.Fatalf("unexpected credentials path: %s", files.CredentialsPath)
-	}
-	if files.ConfigPath != "/home/dev/.aiman/aws/sess-1/config" {
-		t.Fatalf("unexpected config path: %s", files.ConfigPath)
-	}
-	if got := m.files["/.aiman/aws/sess-1/credentials"]; !strings.Contains(got, "[default]") || !strings.Contains(got, "aws_session_token = token") {
+	if got := m.files["/.aws/credentials"]; !strings.Contains(got, "[default]") || !strings.Contains(got, "aws_session_token = token") {
 		t.Fatalf("unexpected credentials file:\n%s", got)
 	}
-	if got := m.files["/.aiman/aws/sess-1/config"]; !strings.Contains(got, "[default]") || !strings.Contains(got, "region = eu-west-1") {
-		t.Fatalf("unexpected config file:\n%s", got)
-	}
 	if !m.execOK {
-		t.Fatal("expected session aws dir creation")
+		t.Fatal("expected .aws dir creation")
 	}
-	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, "chmod 600") {
-		t.Fatalf("expected chmod 600 for session AWS files, got:\n%s", joined)
+	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `chmod 600 "/home/dev/.aws/credentials"`) {
+		t.Fatalf("expected chmod 600 for ~/.aws/credentials, got:\n%s", joined)
+	}
+}
+
+func TestApplyDelegatedProfile_ChmodsFile(t *testing.T) {
+	m := &mockRemote{home: "/home/dev", files: map[string]string{}}
+	err := ApplyDelegatedProfile(context.Background(), m, "default", "", "", "eu-west-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `chmod 600 "/home/dev/.aws/config"`) {
+		t.Fatalf("expected chmod 600 for ~/.aws/config, got:\n%s", joined)
 	}
 }
 
