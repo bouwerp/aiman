@@ -82,6 +82,63 @@ func TestWorktreeExistsErrorHandling(t *testing.T) {
 	}
 }
 
+func TestValidateTerminationPreconditions_AllowsMissingRemote(t *testing.T) {
+	cfg := &config.Config{
+		Remotes: []config.Remote{{Host: "other-host"}},
+	}
+	model := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+
+	err := model.validateTerminationPreconditions(domain.Session{
+		ID:           "stale",
+		RemoteHost:   "devbox",
+		WorktreePath: "/home/dev/PB-720",
+	})
+	if err != nil {
+		t.Fatalf("expected missing remote to be allowed for stale session cleanup, got %v", err)
+	}
+}
+
+func TestRunTerminateStep_SkipsRemoteCleanupWhenRemoteMissing(t *testing.T) {
+	cfg := &config.Config{
+		Remotes: []config.Remote{{Host: "other-host"}},
+	}
+	model := NewModel(cfg, nil, []domain.Session{{
+		ID:           "stale",
+		RemoteHost:   "devbox",
+		TmuxSession:  "PP12PB-720",
+		WorktreePath: "/home/dev/PB-720",
+		RepoName:     "org/repo",
+	}}, &mockSessionRepo{}, nil, nil, nil)
+	model.terminateSession = domain.Session{
+		ID:           "stale",
+		RemoteHost:   "devbox",
+		TmuxSession:  "PP12PB-720",
+		WorktreePath: "/home/dev/PB-720",
+		RepoName:     "org/repo",
+	}
+
+	if err := model.runTerminateStep(1); err != nil {
+		t.Fatalf("expected missing remote kill step to be skipped, got %v", err)
+	}
+	if err := model.runTerminateStep(3); err != nil {
+		t.Fatalf("expected missing remote worktree step to be skipped, got %v", err)
+	}
+}
+
+func TestResolveRemote_DoesNotFallbackForExplicitMissingHost(t *testing.T) {
+	cfg := &config.Config{
+		ActiveRemote: "other-host",
+		Remotes: []config.Remote{
+			{Host: "other-host"},
+		},
+	}
+
+	_, ok := resolveRemote(cfg, domain.Session{RemoteHost: "devbox"})
+	if ok {
+		t.Fatal("expected explicit missing host to fail resolution instead of falling back")
+	}
+}
+
 // TestWorktreeExistsStateKeyHandling tests keyboard input in viewStateWorktreeExists
 func TestWorktreeExistsStateKeyHandling(t *testing.T) {
 	tests := []struct {

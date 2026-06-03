@@ -668,7 +668,8 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 
 	remote, ok := resolveRemote(m.cfg, s)
 	if !ok {
-		return fmt.Errorf("no remote configured")
+		// Allow deleting stale sessions whose remote was removed from config.
+		return nil
 	}
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 	ctx := context.Background()
@@ -1019,6 +1020,7 @@ func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, b
 				return r, true
 			}
 		}
+		return config.Remote{}, false
 	}
 
 	// Fallback for legacy sessions with empty RemoteHost: try ActiveRemote
@@ -1772,7 +1774,7 @@ func (m *Model) runTerminateStep(index int) error {
 			}
 			remote, ok := resolveRemote(m.cfg, s)
 			if !ok {
-				return fmt.Errorf("no remote configured")
+				return nil
 			}
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
@@ -1796,7 +1798,7 @@ func (m *Model) runTerminateStep(index int) error {
 		}
 		remote, ok := resolveRemote(m.cfg, s)
 		if !ok {
-			return fmt.Errorf("no remote configured")
+			return nil
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		_, err := mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
@@ -1810,7 +1812,7 @@ func (m *Model) runTerminateStep(index int) error {
 		}
 		remote, ok := resolveRemote(m.cfg, s)
 		if !ok {
-			return fmt.Errorf("no remote configured")
+			return nil
 		}
 
 		// Legacy ad-hoc sessions stored WorktreePath = remote root.
@@ -4638,7 +4640,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Load DB to carry timestamps before saving (discovery must not clobber updated_at)
 		dbSessions := make(map[string]domain.Session)
 		if m.db != nil {
-			if list, err := m.db.List(ctx); err == nil {
+			if list, err := loadConfiguredSessions(ctx, m.cfg, m.db); err == nil {
 				for _, s := range list {
 					dbSessions[s.ID] = s
 				}

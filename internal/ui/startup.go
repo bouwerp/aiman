@@ -155,6 +155,27 @@ func runDiscovery(cfg *config.Config) tea.Cmd {
 	}
 }
 
+func loadConfiguredSessions(ctx context.Context, cfg *config.Config, db domain.SessionRepository) ([]domain.Session, error) {
+	if db == nil {
+		return nil, nil
+	}
+	sessions, err := db.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]domain.Session, 0, len(sessions))
+	for _, s := range sessions {
+		if s.RemoteHost != "" {
+			if _, ok := resolveRemote(cfg, s); !ok {
+				_ = db.Delete(ctx, s.ID)
+				continue
+			}
+		}
+		filtered = append(filtered, s)
+	}
+	return filtered, nil
+}
+
 func (m StartupModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
@@ -202,7 +223,7 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Load sessions from database and merge with discovered sessions
 		ctx := context.Background()
-		dbSessions, err := m.db.List(ctx)
+		dbSessions, err := loadConfiguredSessions(ctx, m.cfg, m.db)
 		startupLogs := []string{
 			fmt.Sprintf("[startup] discovered=%d db=%d err=%v", len(m.sessions), len(dbSessions), err),
 		}

@@ -15,7 +15,7 @@ Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full
 Binary: `aiman` — built from `./cmd/aiman/main.go`  
 Module: `github.com/bouwerp/aiman`  
 Go: 1.26  
-Current release: **v0.7.37**
+Current release: **v0.7.38**
 
 ---
 
@@ -131,6 +131,8 @@ field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 It does **not** read `Branch`, `AgentName`, `IssueKey`, `WorktreePath`, or `LocalPath` — those come from the DB.
 
 The `discoveryResultMsg` handler in `dashboard.go` (~line 4269) saves all discovered sessions to DB after each discovery cycle. This is where the stale-reference bug lived; it's now safe because of the COALESCE fix.
+
+Startup also prunes DB sessions whose explicit `RemoteHost` no longer matches any configured remote. This prevents deleted/retired remotes from resurrecting sticky orphaned sessions on restart.
 
 ---
 
@@ -271,7 +273,7 @@ Key config fields:
 
 ---
 
-## Recent History (Bug Fixes — v0.6.43 → v0.6.57)
+## Recent History (Bug Fixes)
 
 The session restart feature went through extensive debugging. Summary of root causes found and fixed:
 
@@ -291,3 +293,6 @@ The session restart feature went through extensive debugging. Summary of root ca
 | v0.6.55 | Atomic tmux restart; fix `\|\| true` masking errors |
 | v0.6.56 | **Simplify restartSession to 1 SSH call**; fix data race |
 | v0.6.57 | **Fix DB COALESCE** — prevent discovery from overwriting known-good session fields |
+| v0.7.36 | **Restore shared AWS credential sync** — sync directly manages `~/.aws/{credentials,config}` again |
+| v0.7.37 | **Namespace worktree paths** — use `<repo>@<branch>` to prevent cross-repo worktree collisions |
+| v0.7.38 | **Prune stale removed-remote sessions** — explicit `RemoteHost` entries no longer fall back and stale DB rows are deleted on load |
