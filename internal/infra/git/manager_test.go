@@ -136,21 +136,26 @@ func TestSetupRemoteWorktreeFromBranch_WorktreeAlreadyExists(t *testing.T) {
 
 func TestSetupRemoteWorktreeFromBranch_LocalBranchAlreadyExists_FallsBack(t *testing.T) {
 	mgr := NewManager(nil)
+	worktreeDir, err := scopedWorktreeDir("myrepo", "feature-x")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Simulate git worktree add -b failing with "already exists"
-	createWithBCmd := "git -C /home/dev/myrepo worktree add -b feature-x ../feature-x origin/feature-x"
-	createDirectCmd := "git -C /home/dev/myrepo worktree add ../feature-x feature-x"
+	createWithBCmd := fmt.Sprintf("git -C /home/dev/myrepo worktree add -b feature-x ../%s origin/feature-x", worktreeDir)
+	createDirectCmd := fmt.Sprintf("git -C /home/dev/myrepo worktree add ../%s feature-x", worktreeDir)
 
 	remote := &mockRemote{
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin":                                      "",
-			"git -C /home/dev/myrepo worktree list --porcelain":                         "",
-			`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`: "",
+			"git -C /home/dev/myrepo fetch origin":                                                         "",
+			"git -C /home/dev/myrepo worktree list --porcelain":                                            "",
+			fmt.Sprintf(`bash -c 'if [ -d "/home/dev/myrepo/../%s" ]; then echo EXISTS; fi'`, worktreeDir): "",
+			`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`:                    "",
 			createWithBCmd:  "fatal: a branch named 'feature-x' already exists",
 			createDirectCmd: "",
-			`realpath "/home/dev/myrepo/../feature-x"`: "/home/dev/feature-x",
+			fmt.Sprintf(`realpath "/home/dev/myrepo/../%s"`, worktreeDir): fmt.Sprintf("/home/dev/%s", worktreeDir),
 		},
 		errors: map[string]error{
 			createWithBCmd: fmt.Errorf("exit status 128"),
@@ -161,25 +166,29 @@ func TestSetupRemoteWorktreeFromBranch_LocalBranchAlreadyExists_FallsBack(t *tes
 	if err != nil {
 		t.Fatalf("expected fallback to succeed, got error: %v", err)
 	}
-	if wt.Path != "/home/dev/feature-x" {
-		t.Errorf("expected resolved path /home/dev/feature-x, got %q", wt.Path)
+	if wt.Path != fmt.Sprintf("/home/dev/%s", worktreeDir) {
+		t.Errorf("expected resolved path /home/dev/%s, got %q", worktreeDir, wt.Path)
 	}
 }
 
 func TestSetupRemoteWorktreeFromBranch_DirectoryAlreadyExists(t *testing.T) {
 	mgr := NewManager(nil)
+	worktreeDir, err := scopedWorktreeDir("myrepo", "feature-x")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	remote := &mockRemote{
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin":                                      "",
-			"git -C /home/dev/myrepo worktree list --porcelain":                         "",
-			`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`: "EXISTS",
+			"git -C /home/dev/myrepo fetch origin":                                                         "",
+			"git -C /home/dev/myrepo worktree list --porcelain":                                            "",
+			fmt.Sprintf(`bash -c 'if [ -d "/home/dev/myrepo/../%s" ]; then echo EXISTS; fi'`, worktreeDir): "EXISTS",
 		},
 	}
 
-	_, err := mgr.SetupRemoteWorktreeFromBranch(context.Background(), remote, domain.Repo{Name: "myrepo"}, "feature-x")
+	_, err = mgr.SetupRemoteWorktreeFromBranch(context.Background(), remote, domain.Repo{Name: "myrepo"}, "feature-x")
 	if err == nil {
 		t.Fatal("expected WORKTREE_EXISTS error, got nil")
 	}
@@ -188,43 +197,75 @@ func TestSetupRemoteWorktreeFromBranch_DirectoryAlreadyExists(t *testing.T) {
 	}
 }
 
-func TestSetupRemoteWorktreeFromBranch_BranchNameEqualsRepoName(t *testing.T) {
-	mgr := NewManager(nil)
-
-	remote := &mockRemote{
-		root: "/home/dev",
-		dirs: map[string]bool{"/home/dev/myrepo": true},
-		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin": "",
-		},
+func TestScopedWorktreeDir_NamespacesByRepo(t *testing.T) {
+	first, err := scopedWorktreeDir("org/repo-a", "feature-x")
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	_, err := mgr.SetupRemoteWorktreeFromBranch(context.Background(), remote, domain.Repo{Name: "myrepo"}, "myrepo")
-	if err == nil {
-		t.Fatal("expected error when branch name equals repo name, got nil")
+	second, err := scopedWorktreeDir("org/repo-b", "feature-x")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "main repository directory") {
-		t.Errorf("expected error about main repository directory, got: %v", err)
+	if first == second {
+		t.Fatalf("expected repo-scoped worktree dirs, got identical %q", first)
+	}
+	if first != "repo-a@feature-x" || second != "repo-b@feature-x" {
+		t.Fatalf("unexpected scoped worktree dirs: %q %q", first, second)
 	}
 }
 
-func TestSetupRemoteWorktree_BranchNameEqualsRepoName(t *testing.T) {
-	mgr := NewManager(nil)
+func TestScopedWorktreeDir_UsesCollisionSafeSeparator(t *testing.T) {
+	first, err := scopedWorktreeDir("org/foo--bar", "baz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := scopedWorktreeDir("org/foo", "bar--baz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("expected separator to avoid collisions, both were %q", first)
+	}
+}
 
-	remote := &mockRemote{
-		root: "/home/dev",
-		dirs: map[string]bool{"/home/dev/myrepo": true},
-		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin": "",
+func TestSetupRemoteWorktree_RejectsEmptyBranchDir(t *testing.T) {
+	if _, err := scopedWorktreeDir("myrepo", "   "); err == nil {
+		t.Fatal("expected empty branch name error")
+	}
+}
+
+func TestFindExistingWorktree_FallsBackToLegacyPathForSameRepo(t *testing.T) {
+	mgr := NewManager(nil)
+	worktreeDir, err := scopedWorktreeDir("myrepo", "feature-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{"/home/dev/myrepo": true},
+			outputs: map[string]string{
+				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                                  "git@github.com:owner/myrepo.git",
+				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                                ".git",
+				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                                  "",
+				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:                           "abc1234",
+				`git -C "/home/dev/myrepo" worktree list --porcelain`:                                          "",
+				fmt.Sprintf(`bash -c 'if [ -d "/home/dev/myrepo/../%s" ]; then echo EXISTS; fi'`, worktreeDir): "",
+				`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`:                    "EXISTS",
+				`git -C "/home/dev/myrepo/../feature-x" rev-parse --git-dir 2>/dev/null || echo BROKEN`:        ".git/worktrees/feature-x",
+				`git -C "/home/dev/myrepo/../feature-x" rev-parse --git-common-dir 2>/dev/null || echo BROKEN`: "/home/dev/myrepo/.git",
+				`realpath "/home/dev/myrepo/../feature-x"`:                                                     "/home/dev/feature-x",
+				`git -C "/home/dev/feature-x" config --bool core.sparseCheckout 2>/dev/null || echo false`:     "false",
+			},
 		},
 	}
 
-	_, err := mgr.SetupRemoteWorktree(context.Background(), remote, domain.Repo{Name: "myrepo"}, "myrepo")
-	if err == nil {
-		t.Fatal("expected error when branch name equals repo name, got nil")
+	wt, err := mgr.FindExistingWorktree(context.Background(), remote, domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}, "feature-x")
+	if err != nil {
+		t.Fatalf("expected legacy fallback to succeed, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "main repository directory") {
-		t.Errorf("expected error about main repository directory, got: %v", err)
+	if wt.Path != "/home/dev/feature-x" {
+		t.Fatalf("expected legacy resolved path, got %q", wt.Path)
 	}
 }
 
@@ -532,22 +573,27 @@ func TestEnsureHealthyRepo_InvalidGitDirWithLinkedWorktrees_BlocksRecovery(t *te
 
 func TestSetupRemoteWorktree_DisablesSparseCheckoutPerWorktree(t *testing.T) {
 	mgr := NewManager(nil)
+	worktreeDir, err := scopedWorktreeDir("myrepo", "feature-x")
+	if err != nil {
+		t.Fatal(err)
+	}
 	remote := &commandRecorderRemote{
 		mockRemote: mockRemote{
 			root: "/home/dev",
 			dirs: map[string]bool{"/home/dev/myrepo": true},
 			outputs: map[string]string{
-				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                              "git@github.com:owner/myrepo.git",
-				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                            ".git",
-				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                              "",
-				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:                       "abc1234",
-				`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`:                "",
-				`git -C "/home/dev/myrepo" rev-parse --verify origin/main`:                                 "abc1234",
-				`git -C "/home/dev/myrepo" worktree add -B feature-x ../feature-x origin/main`:             "",
-				`realpath "/home/dev/myrepo/../feature-x"`:                                                 "/home/dev/feature-x",
-				`git -C "/home/dev/feature-x" config --bool core.sparseCheckout 2>/dev/null || echo false`: "true",
-				`git -C "/home/dev/myrepo" config extensions.worktreeConfig true`:                          "",
-				`git -C "/home/dev/feature-x" sparse-checkout disable`:                                     "",
+				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                                                 "git@github.com:owner/myrepo.git",
+				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                                               ".git",
+				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                                                 "",
+				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:                                          "abc1234",
+				fmt.Sprintf(`bash -c 'if [ -d "/home/dev/myrepo/../%s" ]; then echo EXISTS; fi'`, worktreeDir):                "",
+				`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`:                                   "",
+				`git -C "/home/dev/myrepo" rev-parse --verify origin/main`:                                                    "abc1234",
+				fmt.Sprintf(`git -C "/home/dev/myrepo" worktree add -B feature-x ../%s origin/main`, worktreeDir):             "",
+				fmt.Sprintf(`realpath "/home/dev/myrepo/../%s"`, worktreeDir):                                                 fmt.Sprintf("/home/dev/%s", worktreeDir),
+				fmt.Sprintf(`git -C "/home/dev/%s" config --bool core.sparseCheckout 2>/dev/null || echo false`, worktreeDir): "true",
+				`git -C "/home/dev/myrepo" config extensions.worktreeConfig true`:                                             "",
+				fmt.Sprintf(`git -C "/home/dev/%s" sparse-checkout disable`, worktreeDir):                                     "",
 			},
 		},
 	}
@@ -556,7 +602,7 @@ func TestSetupRemoteWorktree_DisablesSparseCheckoutPerWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if wt.Path != "/home/dev/feature-x" {
+	if wt.Path != fmt.Sprintf("/home/dev/%s", worktreeDir) {
 		t.Fatalf("expected resolved path, got %q", wt.Path)
 	}
 
@@ -564,7 +610,7 @@ func TestSetupRemoteWorktree_DisablesSparseCheckoutPerWorktree(t *testing.T) {
 	if !strings.Contains(joined, `git -C "/home/dev/myrepo" config extensions.worktreeConfig true`) {
 		t.Fatalf("expected worktreeConfig enable command, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, `git -C "/home/dev/feature-x" sparse-checkout disable`) {
+	if !strings.Contains(joined, fmt.Sprintf(`git -C "/home/dev/%s" sparse-checkout disable`, worktreeDir)) {
 		t.Fatalf("expected sparse-checkout disable command, got:\n%s", joined)
 	}
 }

@@ -190,7 +190,11 @@ func (m *Manager) matchesAny(s string, patterns []string) bool {
 }
 
 func (m *Manager) SetupWorktree(ctx context.Context, repo domain.Repo, branch string) (domain.Worktree, error) {
-	worktreePath := fmt.Sprintf("../%s", strings.ReplaceAll(branch, "/", "-"))
+	worktreeDir, err := scopedWorktreeDir(repo.Name, branch)
+	if err != nil {
+		return domain.Worktree{}, err
+	}
+	worktreePath := fmt.Sprintf("../%s", worktreeDir)
 
 	cmd := exec.CommandContext(ctx, "git", "worktree", "add", worktreePath, branch)
 	output, err := cmd.CombinedOutput()
@@ -259,16 +263,18 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
 	}
 
-	worktreeDir := strings.ReplaceAll(branch, "/", "-")
-
-	// Validate: an empty worktreeDir (e.g. from a sanitized-away branch name) would
-	// produce worktreePath = "repoPath/../" which resolves to the repos root directory.
-	if worktreeDir == "" {
-		return domain.Worktree{}, fmt.Errorf("branch name %q produces an empty worktree directory name — choose a non-empty branch name", branch)
+	worktreeDir, err := scopedWorktreeDir(repo.Name, branch)
+	if err != nil {
+		return domain.Worktree{}, err
+	}
+	legacyDir, err := legacyWorktreeDir(branch)
+	if err != nil {
+		return domain.Worktree{}, err
 	}
 
 	// Worktree is placed alongside the main repository
 	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
+	legacyWorktreePath := fmt.Sprintf("%s/../%s", repoPath, legacyDir)
 
 	// Safety: the cleaned worktree path must be strictly inside the repos root —
 	// not equal to it (empty/dot worktreeDir), not above it, and not the main repo.
@@ -287,19 +293,27 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 		return domain.Worktree{}, err
 	}
 
-	// Check if worktree directory already exists.
-	checkCmd := fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)
-	checkOut, _ := remote.Execute(ctx, checkCmd)
-	if strings.Contains(checkOut, "EXISTS") {
+	// Check if the new namespaced worktree directory already exists.
+	if exists, _ := remote.Execute(ctx, fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)); strings.Contains(exists, "EXISTS") {
 		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
 		if strings.TrimSpace(gitCheck) != "BROKEN" {
-			// Healthy worktree already exists — surface this so the user can choose.
 			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
 		}
-		// Broken worktree directory — unlock, prune metadata, remove directory.
 		_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q worktree unlock %q 2>/dev/null || true", repoPath, worktreePath))
 		if rmErr := safeRmWorktree(ctx, remote, worktreePath, repoPath); rmErr != nil {
 			return domain.Worktree{}, fmt.Errorf("failed to remove broken worktree directory: %w", rmErr)
+		}
+	}
+
+	// Probe the legacy branch-only path for the same repo before creating a new worktree.
+	// This keeps pre-namespaced worktrees attachable while avoiding cross-repo path stomps.
+	if legacyWorktreePath != worktreePath {
+		owned, healthy, err := worktreePathBelongsToRepo(ctx, remote, repoPath, legacyWorktreePath)
+		if err != nil {
+			return domain.Worktree{}, err
+		}
+		if owned && healthy {
+			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
 		}
 	}
 
@@ -397,13 +411,16 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 		return domain.Worktree{}, err
 	}
 
-	worktreeDir := strings.ReplaceAll(branch, "/", "-")
-	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
-
-	// Validate: empty worktreeDir would resolve to the repos root.
-	if worktreeDir == "" {
-		return domain.Worktree{}, fmt.Errorf("branch name %q produces an empty worktree directory name — choose a non-empty branch name", branch)
+	worktreeDir, err := scopedWorktreeDir(repo.Name, branch)
+	if err != nil {
+		return domain.Worktree{}, err
 	}
+	legacyDir, err := legacyWorktreeDir(branch)
+	if err != nil {
+		return domain.Worktree{}, err
+	}
+	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
+	legacyWorktreePath := fmt.Sprintf("%s/../%s", repoPath, legacyDir)
 
 	// Safety: the cleaned worktree path must be strictly inside the repos root.
 	cleanedWT := filepath.Clean(filepath.Join(repoPath, "..", worktreeDir))
@@ -454,6 +471,15 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 		// Broken directory — remove it so worktree add can recreate it.
 		if rmErr := safeRmWorktree(ctx, remote, worktreePath, repoPath); rmErr != nil {
 			return domain.Worktree{}, fmt.Errorf("failed to remove broken worktree directory: %w", rmErr)
+		}
+	}
+	if legacyWorktreePath != worktreePath {
+		owned, healthy, err := worktreePathBelongsToRepo(ctx, remote, repoPath, legacyWorktreePath)
+		if err != nil {
+			return domain.Worktree{}, err
+		}
+		if owned && healthy {
+			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
 		}
 	}
 
@@ -730,26 +756,41 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 		}
 	}
 
-	// Fallback: check the computed worktree directory.
-	worktreeDir := strings.ReplaceAll(branch, "/", "-")
-	worktreePath := fmt.Sprintf("%s/../%s", repoPath, worktreeDir)
-	checkOut, _ := remote.Execute(ctx, fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath))
-	if strings.Contains(checkOut, "EXISTS") {
-		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
-		if strings.TrimSpace(gitCheck) != "BROKEN" {
-			resolvedPath := worktreePath
-			if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
-				resolvedPath = strings.TrimSpace(out)
-			}
-			// Never return the main repo itself.
-			if filepath.Clean(resolvedPath) == filepath.Clean(repoPath) {
-				return domain.Worktree{}, fmt.Errorf("safety: computed worktree path resolves to the main repository %q — sessions must use a worktree, not the main repo", repoPath)
-			}
-			if err := prepareWorktreeForSession(ctx, remote, repoPath, resolvedPath); err != nil {
-				return domain.Worktree{}, err
-			}
-			return domain.Worktree{Path: resolvedPath, Branch: branch}, nil
+	worktreeDir, err := scopedWorktreeDir(repo.Name, branch)
+	if err != nil {
+		return domain.Worktree{}, err
+	}
+	legacyDir, err := legacyWorktreeDir(branch)
+	if err != nil {
+		return domain.Worktree{}, err
+	}
+
+	// Fallback: check both the new namespaced path and the legacy branch-only path.
+	for _, candidate := range []string{
+		fmt.Sprintf("%s/../%s", repoPath, worktreeDir),
+		fmt.Sprintf("%s/../%s", repoPath, legacyDir),
+	} {
+		if candidate == "" {
+			continue
 		}
+		owned, healthy, err := worktreePathBelongsToRepo(ctx, remote, repoPath, candidate)
+		if err != nil {
+			return domain.Worktree{}, err
+		}
+		if !owned || !healthy {
+			continue
+		}
+		resolvedPath := candidate
+		if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", candidate)); err == nil {
+			resolvedPath = strings.TrimSpace(out)
+		}
+		if filepath.Clean(resolvedPath) == filepath.Clean(repoPath) {
+			return domain.Worktree{}, fmt.Errorf("safety: computed worktree path resolves to the main repository %q — sessions must use a worktree, not the main repo", repoPath)
+		}
+		if err := prepareWorktreeForSession(ctx, remote, repoPath, resolvedPath); err != nil {
+			return domain.Worktree{}, err
+		}
+		return domain.Worktree{Path: resolvedPath, Branch: branch}, nil
 	}
 
 	return domain.Worktree{}, fmt.Errorf("no existing healthy worktree found for branch %s", branch)
@@ -772,6 +813,32 @@ func reportProgress(ctx context.Context, msg string) {
 func extractRepoName(fullName string) string {
 	parts := strings.Split(fullName, "/")
 	return parts[len(parts)-1]
+}
+
+const worktreeDirSeparator = "@"
+
+func scopedWorktreeDir(repoFullName, branch string) (string, error) {
+	branchPart, err := worktreeBranchDir(branch)
+	if err != nil {
+		return "", err
+	}
+	repoName := extractRepoName(repoFullName)
+	if repoName == "" {
+		return "", fmt.Errorf("repository name is required to compute worktree path")
+	}
+	return repoName + worktreeDirSeparator + branchPart, nil
+}
+
+func legacyWorktreeDir(branch string) (string, error) {
+	return worktreeBranchDir(branch)
+}
+
+func worktreeBranchDir(branch string) (string, error) {
+	dir := strings.ReplaceAll(strings.TrimSpace(branch), "/", "-")
+	if dir == "" {
+		return "", fmt.Errorf("branch name %q produces an empty worktree directory name — choose a non-empty branch name", branch)
+	}
+	return dir, nil
 }
 
 // ComputeMainRepoPath returns the expected absolute path of the main (bare) repo
@@ -810,6 +877,31 @@ func safeRmWorktree(ctx context.Context, remote domain.RemoteExecutor, path, rep
 	}
 	_, err := remote.Execute(ctx, fmt.Sprintf("rm -rf %q", path))
 	return err
+}
+
+func worktreePathBelongsToRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, worktreePath string) (owned bool, healthy bool, err error) {
+	existsOut, err := remote.Execute(ctx, fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath))
+	if err != nil || !strings.Contains(existsOut, "EXISTS") {
+		return false, false, nil
+	}
+
+	gitDirOut, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
+	if err != nil || strings.TrimSpace(gitDirOut) == "BROKEN" {
+		return false, false, nil
+	}
+
+	commonDirOut, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-common-dir 2>/dev/null || echo BROKEN", worktreePath))
+	if err != nil {
+		return false, false, fmt.Errorf("failed to inspect git common dir for worktree %s: %w", worktreePath, err)
+	}
+	commonDir := strings.TrimSpace(commonDirOut)
+	if commonDir == "BROKEN" || commonDir == "" {
+		return false, false, nil
+	}
+	if commonDir == ".git" {
+		return filepath.Clean(worktreePath) == filepath.Clean(repoPath), true, nil
+	}
+	return filepath.Clean(commonDir) == filepath.Clean(filepath.Join(repoPath, ".git")), true, nil
 }
 
 func prepareWorktreeForSession(ctx context.Context, remote domain.RemoteExecutor, repoPath, worktreePath string) error {

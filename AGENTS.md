@@ -15,7 +15,7 @@ Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full
 Binary: `aiman` — built from `./cmd/aiman/main.go`  
 Module: `github.com/bouwerp/aiman`  
 Go: 1.26  
-Current release: **v0.7.36**
+Current release: **v0.7.37**
 
 ---
 
@@ -189,6 +189,7 @@ The TUI wizard (`n` key) drives the user through:
 `CreateSession` does:
 - git clone/fetch on remote
 - `git worktree add`
+- places worktrees in repo-scoped sibling directories named `<repo>@<branch>` to avoid cross-repo path collisions
 - trust the working directory for the agent
 - write `.aiman_task.md` (JIRA description + prior snapshot context)
 - `tmux new-session` with agent command
