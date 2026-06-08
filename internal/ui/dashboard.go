@@ -4487,10 +4487,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Pre-fill OpenRouter API key from local environment (user can override).
 		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
-		// Load globally stored secrets so the user can select which to inject.
-		if secrets, err := m.db.ListSecrets(context.Background()); err == nil {
-			m.summary.SetSecrets(secrets)
-		}
 		m.state = viewStateSummary
 		return m, nil
 	}
@@ -4513,6 +4509,7 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionCfg.PromptFree = summaryCfg.PromptFree
 		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
 		m.sessionCfg.OpenRouterAPIKey = summaryCfg.OpenRouterAPIKey
+		m.sessionCfg.InitialPrompt = summaryCfg.InitialPrompt
 		m.loadingMsg = "Creating session..."
 		m.loadingNext = viewStateMain
 		m.state = viewStateLoading

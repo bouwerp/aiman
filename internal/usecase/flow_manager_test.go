@@ -2,6 +2,27 @@ package usecase
 
 import "testing"
 
+func TestJoinPrompt(t *testing.T) {
+	cases := []struct {
+		name       string
+		base, user string
+		want       string
+	}{
+		{"both present", "base prompt", "extra", "base prompt extra"},
+		{"empty base", "", "extra", "extra"},
+		{"empty user", "base prompt", "", "base prompt"},
+		{"trims whitespace", "  base  ", "  extra  ", "base extra"},
+		{"both empty", "", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := joinPrompt(c.base, c.user); got != c.want {
+				t.Fatalf("joinPrompt(%q, %q) = %q, want %q", c.base, c.user, got, c.want)
+			}
+		})
+	}
+}
+
 func TestAWSRoleSessionName(t *testing.T) {
 	if got := awsRoleSessionName("12345678-90ab-cdef"); got != "session-12345678" {
 		t.Fatalf("unexpected aws role session name: %q", got)

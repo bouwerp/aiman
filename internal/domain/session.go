@@ -180,4 +180,8 @@ type SessionConfig struct {
 	// EnvSecrets is the list of global secrets selected for injection into this session.
 	// Each secret is added as a -e KEY=VALUE flag to the tmux new-session command.
 	EnvSecrets []Secret
+	// InitialPrompt is free-text entered in the session summary dialog. It is appended
+	// to the agent's initial prompt (after any JIRA task trigger) and delivered via
+	// tmux send-keys. Empty means no extra prompt text.
+	InitialPrompt string
 }

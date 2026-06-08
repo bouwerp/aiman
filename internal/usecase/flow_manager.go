@@ -42,6 +42,23 @@ func NewFlowManager(
 	}
 }
 
+// joinPrompt appends user-entered prompt text to a base agent prompt. The base is
+// typically the JIRA task trigger (empty for ad-hoc sessions). A single space
+// separates the two parts so the combined prompt is delivered as one line via
+// tmux send-keys (newlines are deliberately avoided — some agents submit on them).
+func joinPrompt(base, user string) string {
+	base = strings.TrimSpace(base)
+	user = strings.TrimSpace(user)
+	switch {
+	case base == "":
+		return user
+	case user == "":
+		return base
+	default:
+		return base + " " + user
+	}
+}
+
 func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionConfig) (*domain.Session, error) {
 	// Resolve which SSH manager to use (per-session remote overrides the default)
 	sshMgr := m.sshManager
@@ -167,6 +184,10 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 			sendKeysPrompt = prepared.InitialPrompt
 		}
 	}
+	// Append any free-text prompt entered in the summary dialog. For JIRA sessions
+	// this follows the "Read .aiman_task.md…" trigger; for ad-hoc sessions it becomes
+	// the entire prompt.
+	sendKeysPrompt = joinPrompt(sendKeysPrompt, config.InitialPrompt)
 
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
