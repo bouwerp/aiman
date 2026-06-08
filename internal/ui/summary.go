@@ -27,19 +27,27 @@ type SummaryModel struct {
 	awsDefaults *domain.AWSConfig // original remote defaults (non-editable fields)
 	// OpenRouter key field
 	openRouterEnabled bool
-	// Global secrets available for injection
-	allSecrets      []domain.Secret
-	selectedSecrets map[string]bool
+	// promptInput is a free-text initial prompt sent to the agent. Focused by default.
+	promptInput textinput.Model
+}
+
+func newPromptInput() textinput.Model {
+	ti := textinput.New()
+	ti.Placeholder = "Initial prompt (optional)"
+	ti.Width = 40
+	ti.Focus()
+	return ti
 }
 
 func NewSummaryModel(issueKey, branch string, repo domain.Repo, directory string) SummaryModel {
 	m := SummaryModel{
-		issueKey:   issueKey,
-		branch:     branch,
-		repo:       repo,
-		directory:  directory,
-		promptFree: true,
-		inputs:     make([]textinput.Model, 0),
+		issueKey:    issueKey,
+		branch:      branch,
+		repo:        repo,
+		directory:   directory,
+		promptFree:  true,
+		inputs:      make([]textinput.Model, 0),
+		promptInput: newPromptInput(),
 	}
 
 	return m
@@ -47,10 +55,11 @@ func NewSummaryModel(issueKey, branch string, repo domain.Repo, directory string
 
 func NewAdHocSummaryModel(label string) SummaryModel {
 	return SummaryModel{
-		branch:     label,
-		adHoc:      true,
-		promptFree: true,
-		inputs:     make([]textinput.Model, 0),
+		branch:      label,
+		adHoc:       true,
+		promptFree:  true,
+		inputs:      make([]textinput.Model, 0),
+		promptInput: newPromptInput(),
 	}
 }
 
@@ -86,8 +95,6 @@ func (m *SummaryModel) SetAWSDefaults(cfg *domain.AWSConfig) {
 		}
 	}
 	m.inputs = newInputs
-	// Default focus to the Create button so the user can just press Enter.
-	m.focusIndex = m.buttonFocusIndex()
 }
 
 // SetOpenRouterKey enables the OpenRouter API key section, pre-filling it with
@@ -110,8 +117,6 @@ func (m *SummaryModel) SetOpenRouterKey(key string) {
 		}
 	}
 	m.inputs = append(filtered, orInput)
-	// Default focus to the Create button so the user can just press Enter.
-	m.focusIndex = m.buttonFocusIndex()
 }
 
 func (m SummaryModel) Init() tea.Cmd {
@@ -141,29 +146,15 @@ func (m SummaryModel) openRouterIdx() int {
 	return 0
 }
 
+// Focus index 0 is always the initial-prompt input. The AWS/OpenRouter inputs in
+// m.inputs occupy focus indices 1..len(m.inputs); the Create button is last.
+
+// inputFocusIndex maps an index into m.inputs to its focusIndex value.
+func (m SummaryModel) inputFocusIndex(i int) int { return i + 1 }
+
 // buttonFocusIndex returns the focusIndex value that corresponds to the Create button.
-// It always equals len(m.inputs) since the button lives after all text inputs.
 func (m SummaryModel) buttonFocusIndex() int {
-	return len(m.inputs) + len(m.allSecrets)
-}
-
-// secretFocusStart returns the focusIndex of the first secret toggle row.
-func (m SummaryModel) secretFocusStart() int {
-	return len(m.inputs)
-}
-
-// SetSecrets loads the globally available secrets and pre-selects all of them.
-func (m *SummaryModel) SetSecrets(secrets []domain.Secret) {
-	m.allSecrets = secrets
-	if m.selectedSecrets == nil {
-		m.selectedSecrets = make(map[string]bool)
-	}
-	for _, s := range secrets {
-		// Default: none selected; user opts in per session.
-		if _, exists := m.selectedSecrets[s.Key]; !exists {
-			m.selectedSecrets[s.Key] = false
-		}
-	}
+	return len(m.inputs) + 1
 }
 
 func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -186,9 +177,14 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.focusIndex < 0 {
 				m.focusIndex = max
 			}
-			// Update input focus states
+			// Update focus states (focus index 0 = prompt input; 1.. = m.inputs).
+			if m.focusIndex == 0 {
+				m.promptInput.Focus()
+			} else {
+				m.promptInput.Blur()
+			}
 			for i := range m.inputs {
-				if i == m.focusIndex {
+				if m.inputFocusIndex(i) == m.focusIndex {
 					m.inputs[i].Focus()
 				} else {
 					m.inputs[i].Blur()
@@ -196,21 +192,10 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "p":
-			if !m.awsEnabled || m.focusIndex == m.buttonFocusIndex() {
+			if m.focusIndex == m.buttonFocusIndex() {
 				m.promptFree = !m.promptFree
-			}
-			return m, nil
-		case "space", " ":
-			// Toggle secret selection when focused on a secret row.
-			if m.focusIndex >= m.secretFocusStart() && m.focusIndex < m.buttonFocusIndex() {
-				idx := m.focusIndex - m.secretFocusStart()
-				if idx < len(m.allSecrets) {
-					key := m.allSecrets[idx].Key
-					if m.selectedSecrets == nil {
-						m.selectedSecrets = make(map[string]bool)
-					}
-					m.selectedSecrets[key] = !m.selectedSecrets[key]
-				}
+			} else {
+				break // let the key fall through to the focused text input
 			}
 			return m, nil
 		case "enter":
@@ -222,10 +207,16 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Delegate key events to the focused text input
-	if (m.awsEnabled || m.openRouterEnabled) && m.focusIndex < len(m.inputs) {
+	// Delegate key events to the focused text input.
+	if m.focusIndex == 0 {
 		var cmd tea.Cmd
-		m.inputs[m.focusIndex], cmd = m.inputs[m.focusIndex].Update(msg)
+		m.promptInput, cmd = m.promptInput.Update(msg)
+		return m, cmd
+	}
+	if (m.awsEnabled || m.openRouterEnabled) && m.focusIndex >= 1 && m.focusIndex <= len(m.inputs) {
+		idx := m.focusIndex - 1
+		var cmd tea.Cmd
+		m.inputs[idx], cmd = m.inputs[idx].Update(msg)
 		return m, cmd
 	}
 
@@ -291,15 +282,23 @@ func (m SummaryModel) View() string {
 		b.WriteString(fmt.Sprintf("%-15s %s\n", "Prompt Free:", pfStatus))
 	}
 
+	// Initial prompt
+	b.WriteString("\n" + activeStyle.Render("Initial Prompt") + "\n")
+	promptLabel := "  Prompt: "
+	if m.focusIndex == 0 {
+		promptLabel = activeStyle.Render("> Prompt: ")
+	}
+	b.WriteString(fmt.Sprintf("%-15s %s\n", promptLabel, m.promptInput.View()))
+
 	// AWS credential overrides
 	if m.awsEnabled {
 		b.WriteString("\n" + activeStyle.Render("AWS Credentials") + "\n")
 		profileLabel := "  Profile:"
 		regionLabel := "  Region: "
-		if m.focusIndex == m.awsProfileIdx() {
+		if m.focusIndex == m.inputFocusIndex(m.awsProfileIdx()) {
 			profileLabel = activeStyle.Render("> Profile:")
 		}
-		if m.focusIndex == m.awsRegionIdx() {
+		if m.focusIndex == m.inputFocusIndex(m.awsRegionIdx()) {
 			regionLabel = activeStyle.Render("> Region: ")
 		}
 		b.WriteString(fmt.Sprintf("%-15s %s\n", profileLabel, m.inputs[m.awsProfileIdx()].View()))
@@ -310,31 +309,10 @@ func (m SummaryModel) View() string {
 	if m.openRouterEnabled {
 		b.WriteString("\n" + activeStyle.Render("OpenRouter") + "\n")
 		keyLabel := "  API Key: "
-		if m.focusIndex == m.openRouterIdx() {
+		if m.focusIndex == m.inputFocusIndex(m.openRouterIdx()) {
 			keyLabel = activeStyle.Render("> API Key: ")
 		}
 		b.WriteString(fmt.Sprintf("%-15s %s\n", keyLabel, m.inputs[m.openRouterIdx()].View()))
-	}
-
-	// Secrets multi-select
-	if len(m.allSecrets) > 0 {
-		b.WriteString("\n" + activeStyle.Render("Inject Secrets") + "\n")
-		for i, s := range m.allSecrets {
-			focusIdx := m.secretFocusStart() + i
-			checked := "[ ]"
-			if m.selectedSecrets[s.Key] {
-				checked = "[✓]"
-			}
-			label := s.Key
-			if s.Description != "" {
-				label += " — " + s.Description
-			}
-			line := fmt.Sprintf("  %s %s", checked, label)
-			if m.focusIndex == focusIdx {
-				line = activeStyle.Render(fmt.Sprintf("  %s %s", checked, label))
-			}
-			b.WriteString(line + "\n")
-		}
 	}
 
 	b.WriteString("\n")
@@ -351,15 +329,9 @@ func (m SummaryModel) View() string {
 		b.WriteString(buttonLabel + "\n")
 	}
 
-	hint := "(enter to create, esc to go back"
+	hint := "(enter to create, esc to go back, tab to cycle fields"
 	if !m.adHoc {
-		hint += ", p to toggle prompt-free"
-	}
-	if m.awsEnabled || m.openRouterEnabled {
-		hint += ", tab to cycle fields"
-	}
-	if len(m.allSecrets) > 0 {
-		hint += ", space to toggle secret"
+		hint += ", p on Create to toggle prompt-free"
 	}
 	hint += ")"
 	b.WriteString("\n" + hint + "\n")
@@ -413,12 +385,8 @@ func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 		cfg.OpenRouterAPIKey = strings.TrimSpace(m.inputs[m.openRouterIdx()].Value())
 	}
 
-	// Selected secrets
-	for _, s := range m.allSecrets {
-		if m.selectedSecrets[s.Key] {
-			cfg.EnvSecrets = append(cfg.EnvSecrets, s)
-		}
-	}
+	// Initial prompt text entered by the user.
+	cfg.InitialPrompt = strings.TrimSpace(m.promptInput.Value())
 
 	return cfg
 }

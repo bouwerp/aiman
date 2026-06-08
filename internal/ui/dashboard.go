@@ -4487,10 +4487,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Pre-fill OpenRouter API key from local environment (user can override).
 		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
-		// Load globally stored secrets so the user can select which to inject.
-		if secrets, err := m.db.ListSecrets(context.Background()); err == nil {
-			m.summary.SetSecrets(secrets)
-		}
 		m.state = viewStateSummary
 		return m, nil
 	}
