@@ -184,6 +184,10 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 			sendKeysPrompt = prepared.InitialPrompt
 		}
 	}
+	// Append any free-text prompt entered in the summary dialog. For JIRA sessions
+	// this follows the "Read .aiman_task.md…" trigger; for ad-hoc sessions it becomes
+	// the entire prompt.
+	sendKeysPrompt = joinPrompt(sendKeysPrompt, config.InitialPrompt)
 
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
