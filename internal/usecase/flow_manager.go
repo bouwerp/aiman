@@ -59,6 +59,59 @@ func joinPrompt(base, user string) string {
 	}
 }
 
+// promptDeliverer is the narrow slice of RemoteExecutor that deliverInitialPrompt
+// needs. Keeping it small makes the delivery path independently testable.
+type promptDeliverer interface {
+	WriteFile(ctx context.Context, path string, content []byte) error
+	Execute(ctx context.Context, cmd string) (string, error)
+}
+
+// sendKeysScript builds the remote shell script that waits for the agent to come
+// up, types the prompt, submits it, then removes the prompt file. The prompt is
+// read from promptPath via command substitution ("$(cat ...)") rather than
+// interpolated into the command, so its contents are never parsed by any shell.
+func sendKeysScript(tmuxName, promptPath string) string {
+	return fmt.Sprintf(
+		"attempt=0; "+
+			"while [ $attempt -lt 20 ]; do "+
+			"pane_cmd=$(tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true); "+
+			"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
+			"attempt=$((attempt+1)); sleep 1; "+
+			"done; "+
+			"sleep 3; "+
+			"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter; "+
+			"rm -f %q",
+		tmuxName,
+		tmuxName, promptPath,
+		tmuxName,
+		promptPath,
+	)
+}
+
+// detachCommand wraps a script to run in the background via bash. The script is
+// single-quote escaped so the remote login shell passes it to bash verbatim
+// without interpreting its $(...) substitutions first.
+func detachCommand(script string) string {
+	escaped := strings.ReplaceAll(script, "'", `'\''`)
+	return fmt.Sprintf("nohup bash -c '%s' >/dev/null 2>&1 &", escaped)
+}
+
+// deliverInitialPrompt sends the initial prompt to a freshly-started agent via
+// tmux send-keys. The prompt is written to a temp file (raw bytes over stdin, no
+// shell parsing) and read back on the remote, so arbitrary user-entered text —
+// including shell metacharacters — can never be executed. Best-effort: a write
+// failure aborts delivery, and the background send itself is fire-and-forget.
+func deliverInitialPrompt(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, prompt string) {
+	if prompt == "" {
+		return
+	}
+	promptPath := fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
+	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
+		return
+	}
+	_, _ = remote.Execute(ctx, detachCommand(sendKeysScript(tmuxName, promptPath)))
+}
+
 func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionConfig) (*domain.Session, error) {
 	// Resolve which SSH manager to use (per-session remote overrides the default)
 	sshMgr := m.sshManager
@@ -269,23 +322,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// If the agent doesn't support an inline initial prompt (i.e. it would run
 	// headlessly and exit), we send the prompt via tmux send-keys after a short
 	// delay so the agent has time to start up interactively.
-	if sendKeysPrompt != "" {
-		sendCmd := fmt.Sprintf(
-			"attempt=0; "+
-				"while [ $attempt -lt 20 ]; do "+
-				"pane_cmd=$(tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true); "+
-				"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
-				"attempt=$((attempt+1)); sleep 1; "+
-				"done; "+
-				"sleep 3; "+
-				"tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
-			tmuxName,
-			tmuxName, sendKeysPrompt,
-			tmuxName,
-		)
-		// Fire-and-forget in the background; failure here is non-fatal.
-		_, _ = sshMgr.Execute(ctx, fmt.Sprintf("nohup bash -c %q >/dev/null 2>&1 &", sendCmd))
-	}
+	deliverInitialPrompt(ctx, sshMgr, tmuxName, session.ID, sendKeysPrompt)
 
 	session.TmuxSession = tmuxName
 
