@@ -4509,6 +4509,7 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionCfg.PromptFree = summaryCfg.PromptFree
 		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
 		m.sessionCfg.OpenRouterAPIKey = summaryCfg.OpenRouterAPIKey
+		m.sessionCfg.InitialPrompt = summaryCfg.InitialPrompt
 		m.loadingMsg = "Creating session..."
 		m.loadingNext = viewStateMain
 		m.state = viewStateLoading
