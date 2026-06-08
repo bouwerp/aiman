@@ -73,7 +73,7 @@ func TestDetachCommandEscapesSingleQuotes(t *testing.T) {
 func TestDeliverInitialPromptRoutesPromptThroughFile(t *testing.T) {
 	// A prompt containing shell metacharacters must never appear in the executed
 	// command — it is written to a file and read back via cat.
-	malicious := "do the thing $(touch /tmp/pwned) `id`"
+	malicious := "do the thing $(touch /tmp/pwned) `id` it's \"quoted\""
 	f := &fakePromptDeliverer{}
 	deliverInitialPrompt(context.Background(), f, "sess", "abc-123", malicious)
 
