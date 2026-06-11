@@ -70,3 +70,26 @@ func TestPostProcessMutagenSessions_RemoteEndpoint(t *testing.T) {
 		t.Errorf("RemoteEndpoint = %q", sessions[0].RemoteEndpoint)
 	}
 }
+
+func TestSanitizeLabelValue(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"1234-5678-90ab-cdef", "1234-5678-90ab-cdef"},
+		{"feature/My Branch!", "feature-My-Branch"},
+		{"--trimmed__", "trimmed"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := SanitizeLabelValue(tt.in); got != tt.want {
+			t.Errorf("SanitizeLabelValue(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+	long := make([]byte, 100)
+	for i := range long {
+		long[i] = 'a'
+	}
+	if got := SanitizeLabelValue(string(long)); len(got) != 63 {
+		t.Errorf("SanitizeLabelValue(long) length = %d, want 63", len(got))
+	}
+}

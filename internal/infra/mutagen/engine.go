@@ -34,15 +34,7 @@ func (e *Engine) StartSync(ctx context.Context, name, localPath, remotePath stri
 		args = append(args, "--mode", string(mode))
 	}
 	for k, v := range labels {
-		// Label values must be no more than 63 characters and contain only alphanumeric, hyphens, and underscores.
-		labelValue := v
-		reg := regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-		labelValue = reg.ReplaceAllString(labelValue, "-")
-		if len(labelValue) > 63 {
-			labelValue = labelValue[:63]
-		}
-		labelValue = strings.Trim(labelValue, "-_")
-		args = append(args, "--label", fmt.Sprintf("%s=%s", k, labelValue))
+		args = append(args, "--label", fmt.Sprintf("%s=%s", k, SanitizeLabelValue(v)))
 	}
 
 	args = append(args, localPath, remotePath)
@@ -70,6 +62,32 @@ func (e *Engine) TerminateSync(ctx context.Context, name string) {
 	cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	_ = exec.CommandContext(cmdCtx, "mutagen", "sync", "terminate", name).Run() // #nosec G204
+}
+
+// SanitizeLabelValue normalizes a string to a valid mutagen label value:
+// no more than 63 characters, containing only alphanumerics, hyphens, and
+// underscores. The same transformation is applied when creating labels and
+// when selecting by label, so values always round-trip.
+func SanitizeLabelValue(v string) string {
+	reg := regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+	v = reg.ReplaceAllString(v, "-")
+	if len(v) > 63 {
+		v = v[:63]
+	}
+	return strings.Trim(v, "-_")
+}
+
+// TerminateByLabel terminates every sync session carrying the given label.
+// This catches syncs created under older naming schemes or pointing at a
+// previous remote host, which name-based termination would miss.
+func (e *Engine) TerminateByLabel(ctx context.Context, key, value string) {
+	value = SanitizeLabelValue(value)
+	if key == "" || value == "" {
+		return
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(cmdCtx, "mutagen", "sync", "terminate", "--label-selector", fmt.Sprintf("%s=%s", key, value)).Run() // #nosec G204
 }
 
 func (e *Engine) GetStatus(ctx context.Context) (string, error) {
