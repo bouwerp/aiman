@@ -178,11 +178,16 @@ type item struct {
 	needsInput bool
 	activity   string
 	remoteName string // short name of the remote for display
+	syncStale  bool   // mutagen sync is missing/unhealthy/pointing at wrong host
 }
 
 func (i item) Title() string {
 	prefix := ""
 	switch {
+	case i.activity == "creating":
+		prefix = "~ "
+	case i.activity == "create-failed":
+		prefix = "! "
 	case i.needsInput:
 		prefix = "! "
 	case i.activity == "idle":
@@ -194,6 +199,10 @@ func (i item) Title() string {
 	}
 	activity := ""
 	switch {
+	case i.activity == "creating":
+		activity = " • creating…"
+	case i.activity == "create-failed":
+		activity = " ⚠ create failed"
 	case i.needsInput:
 		activity = " ⚠ input"
 	case i.activity == "idle":
@@ -202,6 +211,9 @@ func (i item) Title() string {
 		activity = " • busy"
 	case i.activity == "stale":
 		activity = " ⚠ thinking (stuck?)"
+	}
+	if i.syncStale {
+		activity += " ⚠ sync"
 	}
 	remoteTag := ""
 	if i.remoteName != "" {
@@ -221,6 +233,12 @@ func (i item) Description() string {
 	agentPart := ""
 	if agentLabel != "" {
 		agentPart = " | Agent: " + agentLabel
+	}
+	if i.activity == "creating" {
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creating in background…", i.session.RepoName, i.session.RemoteHost, agentPart)
+	}
+	if i.activity == "create-failed" {
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creation failed", i.session.RepoName, i.session.RemoteHost, agentPart)
 	}
 	if i.needsInput {
 		return fmt.Sprintf("Repo: %s | Host: %s%s | State: input", i.session.RepoName, i.session.RemoteHost, agentPart)
@@ -343,6 +361,9 @@ type Model struct {
 	archivePreviewVP       viewport.Model
 	archiveSteps           []archiveStep
 	archiveStepIdx         int
+	creatingSessions       map[string]*creatingSession // background session creations, keyed by placeholder session ID
+	syncHealth             map[string]syncHealth       // mutagen sync health per session ID
+	worktreeExistsID       string                      // placeholder ID of the background creation that hit WORKTREE_EXISTS
 }
 
 // archivePreviewData holds the pre-computed data shown in the archive confirmation popup.
@@ -393,10 +414,42 @@ func remoteNameForHost(cfg *config.Config, host string) string {
 }
 
 func (m *Model) makeItem(s domain.Session) item {
-	return item{
+	it := item{
 		session:    s,
 		remoteName: remoteNameForHost(m.cfg, s.RemoteHost),
 	}
+	if cs, ok := m.creatingSessions[s.ID]; ok {
+		if cs.failed {
+			it.activity = "create-failed"
+		} else {
+			it.activity = "creating"
+		}
+		return it
+	}
+	if h, ok := m.syncHealth[s.ID]; ok && h.stale {
+		it.syncStale = true
+	}
+	return it
+}
+
+// isCreatingPlaceholder reports whether the session is a background-creation
+// placeholder (no tmux session or remote state exists for it yet).
+func (m *Model) isCreatingPlaceholder(id string) bool {
+	_, ok := m.creatingSessions[id]
+	return ok
+}
+
+// removeCreatingPlaceholder drops a placeholder from the tracking map and the
+// session list.
+func (m *Model) removeCreatingPlaceholder(id string) {
+	delete(m.creatingSessions, id)
+	for i, s := range m.allSessions {
+		if s.ID == id {
+			m.allSessions = append(m.allSessions[:i], m.allSessions[i+1:]...)
+			break
+		}
+	}
+	m.applyRemoteFilter()
 }
 
 func (m *Model) applyRemoteFilter() {
@@ -479,29 +532,31 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		PaddingTop(1)
 
 	model := &Model{
-		cfg:             cfg,
-		db:              db,
-		flowManager:     flowManager,
-		state:           viewStateMain,
-		panelMode:       panelModePreview,
-		list:            l,
-		menu:            m,
-		remotes:         NewRemotesModel(cfg),
-		setup:           NewSetupModel(cfg),
-		gitSetup:        NewGitSetupModel(cfg),
-		generalSetup:    NewGeneralSetupModel(cfg),
-		aiSetup:         NewAISetupModel(cfg),
-		secretsSetup:    NewSecretsSetupModel(db),
-		doctorResults:   doctorResults,
-		viewport:        vp,
-		firstLoad:       make(map[string]bool),
-		busySince:       make(map[string]time.Time),
-		allSessions:     initialSessions,
-		mouseEnabled:    true,
-		tunnelList:      list.New(nil, list.NewDefaultDelegate(), 0, 0),
-		intelligence:    intelligence,
-		snapshotManager: snapshotManager,
-		aiSummary:       make(map[string]*domain.SessionSummary),
+		cfg:              cfg,
+		db:               db,
+		flowManager:      flowManager,
+		state:            viewStateMain,
+		panelMode:        panelModePreview,
+		list:             l,
+		menu:             m,
+		remotes:          NewRemotesModel(cfg),
+		setup:            NewSetupModel(cfg),
+		gitSetup:         NewGitSetupModel(cfg),
+		generalSetup:     NewGeneralSetupModel(cfg),
+		aiSetup:          NewAISetupModel(cfg),
+		secretsSetup:     NewSecretsSetupModel(db),
+		doctorResults:    doctorResults,
+		viewport:         vp,
+		firstLoad:        make(map[string]bool),
+		busySince:        make(map[string]time.Time),
+		allSessions:      initialSessions,
+		mouseEnabled:     true,
+		tunnelList:       list.New(nil, list.NewDefaultDelegate(), 0, 0),
+		intelligence:     intelligence,
+		snapshotManager:  snapshotManager,
+		aiSummary:        make(map[string]*domain.SessionSummary),
+		creatingSessions: make(map[string]*creatingSession),
+		syncHealth:       make(map[string]syncHealth),
 	}
 	model.tunnelList.Title = "Session Tunnels"
 	model.provisionSpinner = spinner.New()
@@ -1263,6 +1318,10 @@ type sessionCreateMsg struct {
 	err     error
 	status  string // optional progress message
 	warning string // non-fatal warning to surface after completion
+	// placeholderID identifies the background creation this message belongs
+	// to. Empty for foreground flows (e.g. session restart), which keep the
+	// blocking loading-screen behavior.
+	placeholderID string
 }
 
 type attachMsg struct {
@@ -1344,14 +1403,17 @@ func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
 		return refreshAWSMsg{err: nil}
 	}
 }
-func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngine, name string, timeout time.Duration) error {
+func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngine, name string, timeout time.Duration, status func(string)) error {
+	if status == nil {
+		status = m.sendStatus
+	}
 	start := time.Now()
 	for time.Since(start) < timeout {
-		status, err := engine.GetSyncStatus(ctx, name)
+		st, err := engine.GetSyncStatus(ctx, name)
 		if err == nil {
-			m.log("Sync %q status: %s", name, status)
-			m.sendStatus(fmt.Sprintf("Sync: %s", status))
-			if strings.HasPrefix(status, "Watching") || strings.Contains(status, "Conflicts") {
+			m.log("Sync %q status: %s", name, st)
+			status(fmt.Sprintf("Sync: %s", st))
+			if strings.HasPrefix(st, "Watching") || strings.Contains(st, "Conflicts") {
 				return nil
 			}
 		}
@@ -1364,8 +1426,8 @@ func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngin
 	return fmt.Errorf("timeout waiting for sync %q to reach Watching status", name)
 }
 
-func (m *Model) normalizeLocalSyncedWorktree(ctx context.Context, engine domain.SyncEngine, syncName, localPath string, timeout time.Duration) {
-	if err := m.waitForSyncWatching(ctx, engine, syncName, timeout); err != nil {
+func (m *Model) normalizeLocalSyncedWorktree(ctx context.Context, engine domain.SyncEngine, syncName, localPath string, timeout time.Duration, status func(string)) {
+	if err := m.waitForSyncWatching(ctx, engine, syncName, timeout, status); err != nil {
 		m.log("Warning: sync did not reach Watching state: %v — local checkout may still be incomplete", err)
 		return
 	}
@@ -1475,7 +1537,10 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
 
+		mutagenEngine := mutagen.NewEngine()
+
 		m.log("Terminating existing syncs: %s, %s", syncName, tempSyncName)
+		m.sendStatus("Terminating existing syncs...")
 		terminateCtx, terminateCancel := context.WithTimeout(ctx, 10*time.Second)
 		_ = exec.CommandContext(terminateCtx, "mutagen", "sync", "terminate", syncName).Run()
 		terminateCancel()
@@ -1500,7 +1565,27 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			terminateCancel()
 		}
 
-		mutagenEngine := mutagen.NewEngine()
+		// Name-based termination misses syncs created under older naming
+		// schemes or pointing at a previous host — terminate by label too.
+		mutagenEngine.TerminateByLabel(ctx, "aiman-id", s.ID)
+
+		// Verify nothing matching this session survived; a leftover sync
+		// would collide with (or shadow) the one we are about to create.
+		if syncs, listErr := mutagenEngine.ListSyncSessions(ctx); listErr == nil {
+			for _, leftover := range syncs {
+				if matchSyncSession(s, []domain.SyncSession{leftover}) == nil {
+					continue
+				}
+				m.log("Terminating leftover sync %s (%s)", leftover.Name, leftover.ID)
+				mutagenEngine.TerminateSync(ctx, leftover.ID)
+			}
+			if syncs, listErr = mutagenEngine.ListSyncSessions(ctx); listErr == nil {
+				if leftover := matchSyncSession(s, syncs); leftover != nil {
+					return recreateMutagenMsg{err: fmt.Errorf("stale sync %q could not be terminated; run 'mutagen sync terminate %s' manually", leftover.Name, leftover.ID)}
+				}
+			}
+		}
+
 		remoteSyncPath := fmt.Sprintf("%s:%s", target, remoteSyncDir)
 		labels := map[string]string{"aiman-id": s.ID}
 
@@ -1508,13 +1593,14 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		// without deleting remote content, making the initial one-way-replica
 		// pull step unnecessary (and risky if it times out).
 		m.log("Starting two-way sync: %s -> %s (session: %s)", remoteSyncPath, localPath, syncName)
+		m.sendStatus("Starting new sync...")
 		if err := mutagenEngine.StartSync(ctx, syncName, localPath, remoteSyncPath, labels, domain.SyncModeTwoWay); err != nil {
 			return recreateMutagenMsg{err: fmt.Errorf("failed to start two-way mutagen sync: %w", err)}
 		}
 
 		// Wait for the initial sync to settle locally, then clear any sparse
 		// state that would leave the mirrored worktree missing directories.
-		m.normalizeLocalSyncedWorktree(ctx, mutagenEngine, syncName, localPath, 5*time.Minute)
+		m.normalizeLocalSyncedWorktree(ctx, mutagenEngine, syncName, localPath, 5*time.Minute, nil)
 
 		s.LocalPath = localPath
 		s.WorkingDirectory = remoteSyncDir
@@ -1633,7 +1719,7 @@ func (m *Model) fetchAgents() tea.Cmd {
 	}
 }
 
-func (m *Model) createSession() tea.Cmd {
+func (m *Model) createSession(placeholderID string) tea.Cmd {
 	// Resolve the active remote at dispatch time (before goroutine runs)
 	sessionCfg := m.sessionCfg
 	remote := m.selectedRemote
@@ -1647,22 +1733,24 @@ func (m *Model) createSession() tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		ctx := context.Background()
-		ctx = git.WithProgress(ctx, func(s string) {
+		sendStatus := func(s string) {
 			if m.Program != nil {
-				m.Program.Send(sessionCreateMsg{status: s})
+				m.Program.Send(sessionCreateMsg{status: s, placeholderID: placeholderID})
 			}
-		})
+		}
+		ctx := context.Background()
+		ctx = git.WithProgress(ctx, sendStatus)
 
 		// Use FlowManager to create the session
+		sendStatus("Creating session...")
 		session, err := m.flowManager.CreateSession(ctx, sessionCfg)
 		if err != nil {
-			return sessionCreateMsg{err: err}
+			return sessionCreateMsg{err: err, placeholderID: placeholderID}
 		}
 
 		session.ID = strings.TrimSpace(session.ID)
 		if session.ID == "" {
-			return sessionCreateMsg{err: fmt.Errorf("session ID is empty (%q), cannot safely create sync path", session.ID)}
+			return sessionCreateMsg{err: fmt.Errorf("session ID is empty (%q), cannot safely create sync path", session.ID), placeholderID: placeholderID}
 		}
 
 		// Tag the session with the remote it was created on
@@ -1688,20 +1776,25 @@ func (m *Model) createSession() tea.Cmd {
 		}
 
 		m.log("Terminating existing sync: %s", syncName)
+		sendStatus("Preparing file sync...")
 		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
+		mutagenEngine.TerminateByLabel(ctx, "aiman-id", session.ID)
 
 		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorkingDirectory)
+		sendStatus("Starting file sync...")
 		labels := map[string]string{"aiman-id": session.ID}
 		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory), labels, domain.SyncModeTwoWay)
+		warning := ""
 		if syncErr == nil {
 			// Wait for the initial local mirror to settle, then repair any sparse
 			// checkout state before the user opens the mirrored worktree.
-			m.normalizeLocalSyncedWorktree(ctx, mutagenEngine, syncName, localSyncPath, 5*time.Minute)
+			m.normalizeLocalSyncedWorktree(ctx, mutagenEngine, syncName, localSyncPath, 5*time.Minute, sendStatus)
 			session.MutagenSyncID = syncName
 			session.LocalPath = localSyncPath
 			_ = session.Transition(domain.SessionStatusSyncing)
 		} else {
 			m.log("Warning: failed to start mutagen sync: %v", syncErr)
+			warning = fmt.Sprintf("Session created, but file sync failed: %v", syncErr)
 		}
 
 		// Save to DB — stamp UpdatedAt so new/restarted sessions sort to top.
@@ -1710,8 +1803,93 @@ func (m *Model) createSession() tea.Cmd {
 			_ = m.db.Save(ctx, session)
 		}
 
-		return sessionCreateMsg{session: *session}
+		return sessionCreateMsg{session: *session, warning: warning, placeholderID: placeholderID}
 	}
+}
+
+// handleBackgroundCreateMsg processes progress/result messages from a
+// background session creation, identified by its placeholder ID.
+func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.Cmd) {
+	cs, ok := m.creatingSessions[msg.placeholderID]
+	if !ok {
+		// Placeholder was dismissed. If the session finished anyway, still
+		// surface it in the list so the user doesn't lose a live session.
+		if msg.err == nil && msg.status == "" && msg.session.ID != "" {
+			m.allSessions = append(m.allSessions, msg.session)
+			m.applyRemoteFilter()
+		}
+		return m, nil
+	}
+
+	if msg.status != "" {
+		cs.addStep(msg.status)
+		return m, nil
+	}
+
+	if msg.err != nil {
+		if msg.err.Error() == "WORKTREE_EXISTS" {
+			m.worktreeExistsID = msg.placeholderID
+			m.state = viewStateWorktreeExists
+			return m, nil
+		}
+		cs.failed = true
+		cs.errMsg = msg.err.Error()
+		cs.placeholder.Status = domain.SessionStatusError
+		for i, s := range m.allSessions {
+			if s.ID == msg.placeholderID {
+				m.allSessions[i] = cs.placeholder
+				break
+			}
+		}
+		m.applyRemoteFilter()
+		return m, nil
+	}
+
+	// Success: swap the placeholder for the real session.
+	selectedWasPlaceholder := false
+	if sel := m.list.SelectedItem(); sel != nil {
+		if si, isItem := sel.(item); isItem && si.session.ID == msg.placeholderID {
+			selectedWasPlaceholder = true
+		}
+	}
+	delete(m.creatingSessions, msg.placeholderID)
+	replaced := false
+	for i, s := range m.allSessions {
+		if s.ID == msg.placeholderID {
+			m.allSessions[i] = msg.session
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		m.allSessions = append(m.allSessions, msg.session)
+	}
+	m.applyRemoteFilter()
+
+	if msg.warning != "" {
+		m.snapshotToast = "⚠️  " + msg.warning
+		m.snapshotToastError = true
+	} else {
+		m.snapshotToast = fmt.Sprintf("✅ Session %s is ready", msg.session.TmuxSession)
+		m.snapshotToastError = false
+	}
+
+	cmds := []tea.Cmd{checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...))}
+	if selectedWasPlaceholder {
+		// Follow the placeholder to the real session (the list was re-sorted).
+		items := m.list.Items()
+		for i, it := range items {
+			if si, isItem := it.(item); isItem && si.session.ID == msg.session.ID {
+				m.list.Select(i)
+				break
+			}
+		}
+		m.activeSession = msg.session.TmuxSession
+		m.tmuxOutput = "Loading..."
+		m.viewport.SetContent(m.tmuxOutput)
+		cmds = append(cmds, fetchTmuxPane(m.cfg, msg.session), fetchGitStatus(m.cfg, msg.session))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m *Model) runTerminateStepCmd(index int) tea.Cmd {
@@ -1984,6 +2162,8 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		tickTmux(),
 		tickGit(),
+		tickSyncHealth(),
+		checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...)),
 		tea.EnableMouseCellMotion,
 	)
 }
@@ -2218,7 +2398,36 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateMain
 		}
 		return m, nil
+	case syncTickMsg:
+		tickCmds := []tea.Cmd{tickSyncHealth()}
+		if len(m.allSessions) > 0 {
+			tickCmds = append(tickCmds, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...)))
+		}
+		return m, tea.Batch(tickCmds...)
+	case syncHealthMsg:
+		if msg.err != nil {
+			m.log("Sync health check failed: %v", msg.err)
+			return m, nil
+		}
+		m.syncHealth = msg.health
+		// Refresh stale markers in place; avoid applyRemoteFilter so the list
+		// selection and any active filter are not disturbed.
+		items := m.list.Items()
+		for i, it := range items {
+			if si, ok := it.(item); ok {
+				h, tracked := m.syncHealth[si.session.ID]
+				si.syncStale = tracked && h.stale
+				items[i] = si
+			}
+		}
+		m.list.SetItems(items)
+		return m, nil
 	case sessionCreateMsg:
+		// Background creations are correlated by placeholder ID and never
+		// touch the blocking loading screen.
+		if msg.placeholderID != "" {
+			return m.handleBackgroundCreateMsg(msg)
+		}
 		// Handled globally so that the result is never dropped if an unrelated message
 		// transitions the model out of viewStateLoading while the restart goroutine runs.
 		if msg.status != "" {
@@ -3021,11 +3230,15 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeSession != s.TmuxSession {
 				m.activeSession = s.TmuxSession
 			}
-			// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
-			cmds = append(cmds,
-				fetchTmuxPane(m.cfg, s),
-				checkInputHint(m.cfg, s),
-			)
+			// Placeholders for in-flight background creations have no tmux
+			// session to poll yet.
+			if !m.isCreatingPlaceholder(s.ID) {
+				// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
+				cmds = append(cmds,
+					fetchTmuxPane(m.cfg, s),
+					checkInputHint(m.cfg, s),
+				)
+			}
 		}
 	case gitTickMsg:
 		cmds = append(cmds, tickGit())
@@ -3034,7 +3247,9 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
-			cmds = append(cmds, fetchGitStatus(m.cfg, s))
+			if !m.isCreatingPlaceholder(s.ID) {
+				cmds = append(cmds, fetchGitStatus(m.cfg, s))
+			}
 		}
 	case gitStatusMsg:
 		if msg.session == m.activeSession {
@@ -3231,7 +3446,9 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastGitStatusUpdate = time.Time{}
 		m.tmuxOutput = "Loading..."
 		m.viewport.SetContent(m.tmuxOutput)
-		if m.panelMode == panelModeTerminal {
+		if m.isCreatingPlaceholder(s.ID) {
+			// Nothing to fetch yet — the preview panel shows creation steps.
+		} else if m.panelMode == panelModeTerminal {
 			cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s))
 		} else {
 			cmds = append(cmds, fetchTmuxPane(m.cfg, s), fetchGitStatus(m.cfg, s))
@@ -3242,6 +3459,27 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	// Background-creation placeholders have no tmux session, worktree, or
+	// sync yet — block session actions on them. ctrl+k dismisses a failed
+	// placeholder instead of running the terminate flow.
+	if sel := m.list.SelectedItem(); sel != nil {
+		if si, ok := sel.(item); ok {
+			if cs, creating := m.creatingSessions[si.session.ID]; creating {
+				switch msg.String() {
+				case "ctrl+k":
+					if cs.failed {
+						m.removeCreatingPlaceholder(si.session.ID)
+					}
+					return m, nil, true
+				case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y":
+					m.snapshotToast = "⚠️  This session is still being created — wait for it to finish."
+					m.snapshotToastError = true
+					return m, nil, true
+				}
+			}
+		}
+	}
+
 	if msg.String() == "G" || msg.String() == "end" {
 		if m.panelMode == panelModePreview {
 			m.viewport.GotoBottom()
@@ -4510,12 +4748,37 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
 		m.sessionCfg.OpenRouterAPIKey = summaryCfg.OpenRouterAPIKey
 		m.sessionCfg.InitialPrompt = summaryCfg.InitialPrompt
-		m.loadingMsg = "Creating session..."
-		m.loadingNext = viewStateMain
-		m.state = viewStateLoading
-		return m, m.createSession()
+		return m, m.startBackgroundCreate()
 	}
 	return m, cmd
+}
+
+// startBackgroundCreate inserts a "creating" placeholder into the session
+// list, returns the user to the dashboard immediately, and kicks off session
+// creation in the background. Progress steps stream into the placeholder's
+// preview panel; other sessions remain fully usable meanwhile.
+func (m *Model) startBackgroundCreate() tea.Cmd {
+	placeholder := newCreatingPlaceholder(m.sessionCfg, m.selectedRemote)
+	m.creatingSessions[placeholder.ID] = &creatingSession{
+		placeholder: placeholder,
+		cfg:         m.sessionCfg,
+		remote:      m.selectedRemote,
+	}
+	m.allSessions = append(m.allSessions, placeholder)
+	m.applyRemoteFilter()
+
+	// Select the placeholder so its creation steps are visible in the
+	// preview panel; the user can navigate away at any time.
+	items := m.list.Items()
+	for i, it := range items {
+		if si, ok := it.(item); ok && si.session.ID == placeholder.ID {
+			m.list.Select(i)
+			break
+		}
+	}
+	m.activeSession = placeholder.TmuxSession
+	m.state = viewStateMain
+	return m.createSession(placeholder.ID)
 }
 
 func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -4579,12 +4842,36 @@ func (m *Model) handleWorktreeExistsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch km.String() {
 		case "c", "esc":
+			// Creation was aborted — drop the background placeholder.
+			if m.worktreeExistsID != "" {
+				m.removeCreatingPlaceholder(m.worktreeExistsID)
+				m.worktreeExistsID = ""
+			}
 			m.state = viewStateMain
 			return m, nil
 		case "u":
+			// Retry, attaching to the existing worktree. Restore the config
+			// captured for this background creation so a concurrently started
+			// wizard can't have overwritten it.
+			placeholderID := m.worktreeExistsID
+			m.worktreeExistsID = ""
+			if cs, ok := m.creatingSessions[placeholderID]; ok {
+				m.sessionCfg = cs.cfg
+				m.selectedRemote = cs.remote
+				m.sessionCfg.AttachExisting = true
+				cs.cfg.AttachExisting = true
+				m.state = viewStateMain
+				return m, m.createSession(placeholderID)
+			}
+			// No tracked placeholder (e.g. it was dismissed) — start fresh.
 			m.sessionCfg.AttachExisting = true
-			return m, m.createSession()
+			return m, m.startBackgroundCreate()
 		case "b":
+			// Back into the wizard — the current background attempt is dead.
+			if m.worktreeExistsID != "" {
+				m.removeCreatingPlaceholder(m.worktreeExistsID)
+				m.worktreeExistsID = ""
+			}
 			if m.sessionCfg.ExistingBranch {
 				// Go back to branch picker and reset selection
 				m.branchPicker.selected = ""
@@ -4707,6 +4994,14 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Re-attach background-creation placeholders — they exist only in
+		// memory and would otherwise be dropped by the discovery merge.
+		for _, cs := range m.creatingSessions {
+			if !seenID[cs.placeholder.ID] {
+				merged = append(merged, cs.placeholder)
+			}
+		}
+
 		m.allSessions = merged
 		m.applyRemoteFilter()
 		m.state = viewStateMain
@@ -4796,16 +5091,26 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Update the session in the list
+		// Update the session in the list and the master session slice
 		items := m.list.Items()
 		for i, it := range items {
 			if sessItem, ok := it.(item); ok && sessItem.session.ID == msg.session.ID {
 				sessItem.session = msg.session
+				sessItem.syncStale = false
 				items[i] = sessItem
 				break
 			}
 		}
 		m.list.SetItems(items)
+		for i, s := range m.allSessions {
+			if s.ID == msg.session.ID {
+				m.allSessions[i] = msg.session
+				break
+			}
+		}
+		// The old health verdict is for the terminated sync — drop it and
+		// re-check so the stale marker clears (or reappears) promptly.
+		delete(m.syncHealth, msg.session.ID)
 
 		// Persist the updated session (with new sync ID and local path)
 		if m.db != nil {
@@ -4814,7 +5119,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.state = viewStateMain
-		return m, nil
+		return m, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...))
 	case agent.ScanAgentsMsg:
 		_ = appendDebugLog(fmt.Sprintf("[ui %s] ScanAgentsMsg: err=%v agents=%d state=%d loadingNext=%d\n", time.Now().Format("15:04:05.000"), msg.Err, len(msg.Agents), m.state, m.loadingNext))
 		if msg.Err != nil {
@@ -4893,7 +5198,13 @@ func (m *Model) renderMainView() string {
 			meta = append(meta, truncateRunes(scope, 28))
 		}
 		if s.MutagenSyncID != "" {
-			meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32)))
+			if h, tracked := m.syncHealth[s.ID]; tracked && h.stale {
+				meta = append(meta, failStyle.Render("⚠ sync STALE: "+truncateRunes(h.reason, 40))+statusStyle.Render(" ctrl+y to recreate"))
+			} else if tracked && h.status != "" {
+				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32))+statusStyle.Render(" ("+truncateRunes(h.status, 24)+")"))
+			} else {
+				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32)))
+			}
 		} else {
 			meta = append(meta, failStyle.Render("no sync"))
 		}
@@ -5051,7 +5362,13 @@ func (m *Model) renderMainView() string {
 			outputPanel.WriteString(m.viewport.View())
 		}
 
-		mainContent = infoPanel + aiPanel + snapshotBar + outputPanel.String()
+		if cs, creating := m.creatingSessions[s.ID]; creating {
+			// Background creation in progress (or failed): the preview panel
+			// shows the verbose creation steps instead of session panels.
+			mainContent = m.renderCreatingPanel(cs, contentW) + snapshotBar
+		} else {
+			mainContent = infoPanel + aiPanel + snapshotBar + outputPanel.String()
+		}
 	} else {
 		mainContent = "\n\n  No session selected.\n  Press 'm' for Admin Menu."
 	}
