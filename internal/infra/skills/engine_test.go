@@ -586,9 +586,9 @@ func TestPrepareSession_AgeniWithIssue_UsesSendKeys(t *testing.T) {
 		t.Fatal("expected .aiman_task.md to be written")
 	}
 
-	// Ageni v1 has no CLI flags — the command must be the bare binary.
-	if result.Command != "ageni" {
-		t.Errorf("expected bare ageni command, got: %s", result.Command)
+	// --new skips Ageni's session picker so the agent starts a fresh session.
+	if result.Command != "ageni --new" {
+		t.Errorf("expected 'ageni --new' command, got: %s", result.Command)
 	}
 	if result.InitialPrompt == "" || !strings.Contains(result.InitialPrompt, domain.AimanTaskFileName) {
 		t.Errorf("InitialPrompt should reference the task file, got: %s", result.InitialPrompt)
