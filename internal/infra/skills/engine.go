@@ -488,7 +488,8 @@ func (e *Engine) prepareAgeni(ctx context.Context, remote domain.RemoteExecutor,
 
 	_ = promptFree // Ageni v1 has no auto-approve flag.
 
-	result := domain.PreparedSession{Command: agent.Command}
+	// --new skips Ageni's session picker and starts a fresh session directly.
+	result := domain.PreparedSession{Command: ensureFlag(agent.Command, "--new")}
 	var promptFiles []string
 	if issue != nil {
 		promptFiles = append(promptFiles, domain.AimanTaskFileName)
