@@ -38,6 +38,11 @@ func (p *Provisioner) GetSteps() []domain.ProvisionStep {
 			Command: "if command -v claude >/dev/null 2>&1 || command -v claude-code >/dev/null 2>&1; then echo 'Claude Code already installed'; else npm install -g @anthropic-ai/claude-code || (mkdir -p ~/.npm-global && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code); fi",
 		},
 		{
+			ID:      "ageni",
+			Name:    "Install Ageni",
+			Command: "export PATH=\"$PATH:$HOME/.local/bin\"; if command -v ageni >/dev/null 2>&1; then echo 'Ageni already installed'; else curl -sSL https://raw.githubusercontent.com/bouwerp/ageni/main/install.sh | bash; fi",
+		},
+		{
 			ID:      "gh-cli",
 			Name:    "Install GitHub CLI",
 			Command: "if command -v gh >/dev/null 2>&1; then echo 'GitHub CLI already installed'; else (type -p wget >/dev/null || (sudo apt update && sudo apt-get install wget -y)) && sudo mkdir -p -m 755 /etc/apt/keyrings && wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null && sudo apt update && sudo apt install gh -y; fi",

@@ -132,3 +132,31 @@ func TestCommandExists_GoPathIncluded(t *testing.T) {
 		t.Error("expected commandExists to succeed when go/bin is in extended PATH")
 	}
 }
+
+func TestScanAgents_DetectsAgeni(t *testing.T) {
+	exec := &mockExecutor{
+		canRun: func(cmd string) bool {
+			return strings.Contains(cmd, "ageni")
+		},
+	}
+	scanner := NewScanner(exec)
+
+	agents, err := scanner.ScanAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ScanAgents returned error: %v", err)
+	}
+
+	found := false
+	for _, a := range agents {
+		if a.Name == "Ageni" {
+			found = true
+			if a.Command != "ageni" {
+				t.Errorf("expected command to be ageni, got %s", a.Command)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected Ageni to be detected as an available agent")
+	}
+}
