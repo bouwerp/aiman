@@ -134,7 +134,6 @@ const (
 	viewStateSummary
 	viewStateLoading
 	viewStateTerminateConfirm
-	viewStateTerminateProgress
 	viewStateWorktreeExists
 	viewStateBranchPicker
 	viewStateModePicker
@@ -188,6 +187,8 @@ func (i item) Title() string {
 		prefix = "~ "
 	case i.activity == "create-failed":
 		prefix = "! "
+	case i.activity == "terminating":
+		prefix = "x "
 	case i.needsInput:
 		prefix = "! "
 	case i.activity == "idle":
@@ -203,6 +204,8 @@ func (i item) Title() string {
 		activity = " • creating…"
 	case i.activity == "create-failed":
 		activity = " ⚠ create failed"
+	case i.activity == "terminating":
+		activity = " • terminating…"
 	case i.needsInput:
 		activity = " ⚠ input"
 	case i.activity == "idle":
@@ -239,6 +242,9 @@ func (i item) Description() string {
 	}
 	if i.activity == "create-failed" {
 		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creation failed", i.session.RepoName, i.session.RemoteHost, agentPart)
+	}
+	if i.activity == "terminating" {
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: terminating in background…", i.session.RepoName, i.session.RemoteHost, agentPart)
 	}
 	if i.needsInput {
 		return fmt.Sprintf("Repo: %s | Host: %s%s | State: input", i.session.RepoName, i.session.RemoteHost, agentPart)
@@ -313,12 +319,7 @@ type Model struct {
 	sessionCfg             domain.SessionConfig
 	loadingNext            viewState
 	initialLoad            bool
-	terminateSession       domain.Session
-	terminateSteps         []string
-	terminateErrors        []string
-	terminateIndex         int
 	terminatePrecheckError string
-	terminateForced        bool
 	consoleOpen            bool
 	consoleLog             []string
 	consoleViewport        viewport.Model
@@ -361,10 +362,11 @@ type Model struct {
 	archivePreviewVP       viewport.Model
 	archiveSteps           []archiveStep
 	archiveStepIdx         int
-	creatingSessions       map[string]*creatingSession // background session creations, keyed by placeholder session ID
-	syncHealth             map[string]syncHealth       // mutagen sync health per session ID
-	worktreeExistsID       string                      // placeholder ID of the background creation that hit WORKTREE_EXISTS
-	snapshotToastSeq       int                         // increments per toast; stale clear timers are ignored
+	creatingSessions       map[string]*creatingSession    // background session creations, keyed by placeholder session ID
+	terminatingSessions    map[string]*terminatingSession // background session terminations, keyed by session ID
+	syncHealth             map[string]syncHealth          // mutagen sync health per session ID
+	worktreeExistsID       string                         // placeholder ID of the background creation that hit WORKTREE_EXISTS
+	snapshotToastSeq       int                            // increments per toast; stale clear timers are ignored
 }
 
 // showToast displays a transient message in the toast bar and returns a
@@ -440,10 +442,21 @@ func (m *Model) makeItem(s domain.Session) item {
 		}
 		return it
 	}
+	if m.isTerminatingSession(s.ID) {
+		it.activity = "terminating"
+		return it
+	}
 	if h, ok := m.syncHealth[s.ID]; ok && h.stale {
 		it.syncStale = true
 	}
 	return it
+}
+
+// skipSessionPolling reports whether background SSH polling (tmux pane, git
+// status, input hints) should be skipped for a session — true for creation
+// placeholders and sessions being terminated.
+func (m *Model) skipSessionPolling(id string) bool {
+	return m.isCreatingPlaceholder(id) || m.isTerminatingSession(id)
 }
 
 // isCreatingPlaceholder reports whether the session is a background-creation
@@ -546,31 +559,32 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		PaddingTop(1)
 
 	model := &Model{
-		cfg:              cfg,
-		db:               db,
-		flowManager:      flowManager,
-		state:            viewStateMain,
-		panelMode:        panelModePreview,
-		list:             l,
-		menu:             m,
-		remotes:          NewRemotesModel(cfg),
-		setup:            NewSetupModel(cfg),
-		gitSetup:         NewGitSetupModel(cfg),
-		generalSetup:     NewGeneralSetupModel(cfg),
-		aiSetup:          NewAISetupModel(cfg),
-		secretsSetup:     NewSecretsSetupModel(db),
-		doctorResults:    doctorResults,
-		viewport:         vp,
-		firstLoad:        make(map[string]bool),
-		busySince:        make(map[string]time.Time),
-		allSessions:      initialSessions,
-		mouseEnabled:     true,
-		tunnelList:       list.New(nil, list.NewDefaultDelegate(), 0, 0),
-		intelligence:     intelligence,
-		snapshotManager:  snapshotManager,
-		aiSummary:        make(map[string]*domain.SessionSummary),
-		creatingSessions: make(map[string]*creatingSession),
-		syncHealth:       make(map[string]syncHealth),
+		cfg:                 cfg,
+		db:                  db,
+		flowManager:         flowManager,
+		state:               viewStateMain,
+		panelMode:           panelModePreview,
+		list:                l,
+		menu:                m,
+		remotes:             NewRemotesModel(cfg),
+		setup:               NewSetupModel(cfg),
+		gitSetup:            NewGitSetupModel(cfg),
+		generalSetup:        NewGeneralSetupModel(cfg),
+		aiSetup:             NewAISetupModel(cfg),
+		secretsSetup:        NewSecretsSetupModel(db),
+		doctorResults:       doctorResults,
+		viewport:            vp,
+		firstLoad:           make(map[string]bool),
+		busySince:           make(map[string]time.Time),
+		allSessions:         initialSessions,
+		mouseEnabled:        true,
+		tunnelList:          list.New(nil, list.NewDefaultDelegate(), 0, 0),
+		intelligence:        intelligence,
+		snapshotManager:     snapshotManager,
+		aiSummary:           make(map[string]*domain.SessionSummary),
+		creatingSessions:    make(map[string]*creatingSession),
+		terminatingSessions: make(map[string]*terminatingSession),
+		syncHealth:          make(map[string]syncHealth),
 	}
 	model.tunnelList.Title = "Session Tunnels"
 	model.provisionSpinner = spinner.New()
@@ -1348,8 +1362,9 @@ type attachDoneMsg struct {
 }
 
 type terminateStepMsg struct {
-	index int
-	err   error
+	sessionID string
+	index     int
+	err       error
 }
 
 type recreateMutagenMsg struct {
@@ -1906,15 +1921,14 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) runTerminateStepCmd(index int) tea.Cmd {
+func (m *Model) runTerminateStepCmd(s domain.Session, forced bool, index int) tea.Cmd {
 	return func() tea.Msg {
-		return terminateStepMsg{index: index, err: m.runTerminateStep(index)}
+		return terminateStepMsg{sessionID: s.ID, index: index, err: m.runTerminateStep(index, s, forced)}
 	}
 }
 
-func (m *Model) runTerminateStep(index int) error {
+func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error {
 	ctx := context.Background()
-	s := m.terminateSession
 
 	switch index {
 	case 0: // Stop mutagen sync
@@ -1958,7 +1972,7 @@ func (m *Model) runTerminateStep(index int) error {
 	}
 
 	effectiveIndex := index
-	if m.terminateForced {
+	if forced {
 		if index == 1 {
 			// Forced discard
 			if s.WorktreePath == "" {
@@ -2416,6 +2430,48 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.snapshotToastError = false
 		}
 		return m, nil
+	case terminateStepMsg:
+		// Handled globally so a background termination keeps progressing no
+		// matter which view the user is in.
+		ts, ok := m.terminatingSessions[msg.sessionID]
+		if !ok {
+			return m, nil
+		}
+		if msg.err != nil {
+			if msg.index < len(ts.errs) {
+				ts.errs[msg.index] = msg.err.Error()
+			}
+			m.log("Terminate %s — step %q failed: %v", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], msg.err)
+		}
+		next := msg.index + 1
+		if next < len(ts.steps) {
+			ts.idx = next
+			return m, m.runTerminateStepCmd(ts.session, ts.forced, next)
+		}
+		// All steps done — drop the session from the list.
+		delete(m.terminatingSessions, msg.sessionID)
+		var remaining []domain.Session
+		for _, s := range m.allSessions {
+			same := s.ID == ts.session.ID
+			if ts.session.ID == "" {
+				same = s.TmuxSession == ts.session.TmuxSession
+			}
+			if !same {
+				remaining = append(remaining, s)
+			}
+		}
+		m.allSessions = remaining
+		m.applyRemoteFilter()
+		errCount := 0
+		for _, e := range ts.errs {
+			if e != "" {
+				errCount++
+			}
+		}
+		if errCount > 0 {
+			return m, m.showToast(fmt.Sprintf("⚠️  Session %s terminated with %d error(s) — see console (`)", ts.session.TmuxSession, errCount), true, 8*time.Second)
+		}
+		return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated", ts.session.TmuxSession), false, 5*time.Second)
 	case syncTickMsg:
 		tickCmds := []tea.Cmd{tickSyncHealth()}
 		if len(m.allSessions) > 0 {
@@ -2596,9 +2652,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case viewStateModePicker:
 		return m.handleModePickerUpdate(msg)
-
-	case viewStateTerminateProgress:
-		return m.handleTerminateProgressUpdate(msg)
 
 	case viewStateProvisioningRemotePicker:
 		return m.handleProvisioningRemotePickerUpdate(msg)
@@ -3123,29 +3176,6 @@ func (m *Model) renderView() string {
 		}
 		return ""
 
-	case viewStateTerminateProgress:
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("Terminating session...") + "\n\n")
-		for i, step := range m.terminateSteps {
-			status := "[ ]"
-			if i < m.terminateIndex {
-				status = successStyle.Render("[✓]")
-			} else if i == m.terminateIndex {
-				status = activeStyle.Render("[→]")
-			}
-			b.WriteString(fmt.Sprintf("%s %s\n", status, step))
-			if m.terminateErrors != nil && i < len(m.terminateErrors) && m.terminateErrors[i] != "" {
-				b.WriteString("    " + failStyle.Render(m.terminateErrors[i]) + "\n")
-			}
-		}
-
-		dialog := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(1, 2).
-			Width(60)
-
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
 	case viewStateWorktreeExists:
 		var b strings.Builder
 		b.WriteString(failStyle.Render("Worktree Already Exists") + "\n\n")
@@ -3248,9 +3278,9 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeSession != s.TmuxSession {
 				m.activeSession = s.TmuxSession
 			}
-			// Placeholders for in-flight background creations have no tmux
-			// session to poll yet.
-			if !m.isCreatingPlaceholder(s.ID) {
+			// Skip sessions being created (no tmux yet) or terminated
+			// (tmux going away).
+			if !m.skipSessionPolling(s.ID) {
 				// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
 				cmds = append(cmds,
 					fetchTmuxPane(m.cfg, s),
@@ -3265,7 +3295,7 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
-			if !m.isCreatingPlaceholder(s.ID) {
+			if !m.skipSessionPolling(s.ID) {
 				cmds = append(cmds, fetchGitStatus(m.cfg, s))
 			}
 		}
@@ -3454,8 +3484,9 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastGitStatusUpdate = time.Time{}
 		m.tmuxOutput = "Loading..."
 		m.viewport.SetContent(m.tmuxOutput)
-		if m.isCreatingPlaceholder(s.ID) {
-			// Nothing to fetch yet — the preview panel shows creation steps.
+		if m.skipSessionPolling(s.ID) {
+			// Nothing to fetch — the preview panel shows creation or
+			// termination progress.
 		} else if m.panelMode == panelModeTerminal {
 			cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s))
 		} else {
@@ -3481,6 +3512,12 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 					return m, nil, true
 				case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y":
 					return m, m.showToast("⚠️  This session is still being created — wait for it to finish.", true, 4*time.Second), true
+				}
+			}
+			if m.isTerminatingSession(si.session.ID) {
+				switch msg.String() {
+				case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+k":
+					return m, m.showToast("⚠️  This session is being terminated.", true, 4*time.Second), true
 				}
 			}
 		}
@@ -4797,23 +4834,8 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f":
 			if sel := m.list.SelectedItem(); sel != nil {
 				s := sel.(item).session
-				m.terminateForced = true
 				m.terminatePrecheckError = ""
-				m.terminateSession = s
-				m.terminateSteps = []string{
-					"Stopping mutagen sync",
-					"Discarding changes (force)",
-					"Killing tmux session",
-					"Stopping agent process",
-					"Removing git worktree",
-					"Cleaning local files",
-					"Cleaning up AWS credentials",
-					"Updating session status",
-				}
-				m.terminateErrors = make([]string, len(m.terminateSteps))
-				m.terminateIndex = 0
-				m.state = viewStateTerminateProgress
-				return m, m.runTerminateStepCmd(0)
+				return m, m.startBackgroundTerminate(s, true)
 			}
 		case "y":
 			if sel := m.list.SelectedItem(); sel != nil {
@@ -4822,22 +4844,8 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.terminatePrecheckError = err.Error()
 					return m, nil
 				}
-				m.terminateForced = false
 				m.terminatePrecheckError = ""
-				m.terminateSession = s
-				m.terminateSteps = []string{
-					"Stopping mutagen sync",
-					"Killing tmux session",
-					"Stopping agent process",
-					"Removing git worktree",
-					"Cleaning local files",
-					"Cleaning up AWS credentials",
-					"Updating session status",
-				}
-				m.terminateErrors = make([]string, len(m.terminateSteps))
-				m.terminateIndex = 0
-				m.state = viewStateTerminateProgress
-				return m, m.runTerminateStepCmd(0)
+				return m, m.startBackgroundTerminate(s, false)
 			}
 		}
 	}
@@ -4892,31 +4900,6 @@ func (m *Model) handleWorktreeExistsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-	}
-	return m, nil
-}
-
-func (m *Model) handleTerminateProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(terminateStepMsg); ok {
-		if msg.err != nil {
-			m.terminateErrors[msg.index] = msg.err.Error()
-		}
-		next := msg.index + 1
-		if next < len(m.terminateSteps) {
-			m.terminateIndex = next
-			return m, m.runTerminateStepCmd(next)
-		}
-		// Remove terminated session from allSessions and refresh list
-		var remaining []domain.Session
-		for _, s := range m.allSessions {
-			if s.TmuxSession != m.terminateSession.TmuxSession {
-				remaining = append(remaining, s)
-			}
-		}
-		m.allSessions = remaining
-		m.applyRemoteFilter()
-		m.state = viewStateMain
-		return m, nil
 	}
 	return m, nil
 }
@@ -5372,6 +5355,9 @@ func (m *Model) renderMainView() string {
 			// Background creation in progress (or failed): the preview panel
 			// shows the verbose creation steps instead of session panels.
 			mainContent = m.renderCreatingPanel(cs, contentW) + snapshotBar
+		} else if ts, terminating := m.terminatingSessions[s.ID]; terminating {
+			// Background termination: show step progress in the preview panel.
+			mainContent = m.renderTerminatingPanel(ts, contentW) + snapshotBar
 		} else {
 			mainContent = infoPanel + aiPanel + snapshotBar + outputPanel.String()
 		}

@@ -109,7 +109,7 @@ func TestRunTerminateStep_SkipsRemoteCleanupWhenRemoteMissing(t *testing.T) {
 		WorktreePath: "/home/dev/PB-720",
 		RepoName:     "org/repo",
 	}}, &mockSessionRepo{}, nil, nil, nil)
-	model.terminateSession = domain.Session{
+	session := domain.Session{
 		ID:           "stale",
 		RemoteHost:   "devbox",
 		TmuxSession:  "PP12PB-720",
@@ -117,10 +117,10 @@ func TestRunTerminateStep_SkipsRemoteCleanupWhenRemoteMissing(t *testing.T) {
 		RepoName:     "org/repo",
 	}
 
-	if err := model.runTerminateStep(1); err != nil {
+	if err := model.runTerminateStep(1, session, false); err != nil {
 		t.Fatalf("expected missing remote kill step to be skipped, got %v", err)
 	}
-	if err := model.runTerminateStep(3); err != nil {
+	if err := model.runTerminateStep(3, session, false); err != nil {
 		t.Fatalf("expected missing remote worktree step to be skipped, got %v", err)
 	}
 }
