@@ -41,6 +41,11 @@ var knownAgents = []domain.Agent{
 		Command:     "pi",
 		Description: "Pi Coding Agent (shittycodingagent.ai)",
 	},
+	{
+		Name:        "Ageni",
+		Command:     "ageni",
+		Description: "Ageni multi-provider coding agent (github.com/bouwerp/ageni)",
+	},
 }
 
 // Executor defines the interface for executing remote commands.

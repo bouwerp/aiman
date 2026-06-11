@@ -380,6 +380,9 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 		cmd = `printenv OPENCODE_MODEL 2>/dev/null || echo ""`
 	case strings.Contains(name, "copilot"):
 		cmd = `printenv GITHUB_COPILOT_MODEL 2>/dev/null || echo ""`
+	case strings.Contains(name, "ageni"):
+		// Ageni stores its provider selection in ~/.ageni/.env.
+		cmd = `grep -s '^MASTER_PROVIDER=' ~/.ageni/.env 2>/dev/null | cut -d= -f2- || echo ""`
 	default:
 		return ""
 	}

@@ -563,3 +563,65 @@ func TestWriteTaskFile_NoDescription(t *testing.T) {
 		t.Errorf("expected placeholder for empty description, got:\n%s", content)
 	}
 }
+
+func TestPrepareSession_AgeniWithIssue_UsesSendKeys(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	issue := &domain.Issue{
+		Key:     "PROJ-7",
+		Summary: "Add ageni support",
+		Status:  domain.IssueStatusTodo,
+	}
+	agent := domain.Agent{Name: "Ageni", Command: "ageni"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := remote.writtenFiles["/home/user/code/myrepo/.aiman_task.md"]; !ok {
+		t.Fatal("expected .aiman_task.md to be written")
+	}
+
+	// Ageni v1 has no CLI flags — the command must be the bare binary.
+	if result.Command != "ageni" {
+		t.Errorf("expected bare ageni command, got: %s", result.Command)
+	}
+	if result.InitialPrompt == "" || !strings.Contains(result.InitialPrompt, domain.AimanTaskFileName) {
+		t.Errorf("InitialPrompt should reference the task file, got: %s", result.InitialPrompt)
+	}
+}
+
+func TestPrepareSession_AgeniWithPromptSkills_WritesPromptFileAndUsesSendKeys(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	skillFile := filepath.Join(t.TempDir(), "skill.md")
+	if err := os.WriteFile(skillFile, []byte("Always write tests first."), 0600); err != nil {
+		t.Fatal(err)
+	}
+	skills := []domain.Skill{{Name: "tdd", Type: domain.SkillTypePrompt, Path: skillFile}}
+	agent := domain.Agent{Name: "Ageni", Command: "ageni"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, true, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	promptPath := "/home/user/code/myrepo/" + domain.AimanPromptFileName
+	content, ok := remote.writtenFiles[promptPath]
+	if !ok {
+		t.Fatalf("expected %s to be written, files: %v", promptPath, remote.writtenFiles)
+	}
+	if !strings.Contains(string(content), "Always write tests first.") {
+		t.Errorf("prompt file should contain the skill content, got: %s", content)
+	}
+	if !strings.Contains(result.InitialPrompt, domain.AimanPromptFileName) {
+		t.Errorf("InitialPrompt should direct the agent to the prompt file, got: %s", result.InitialPrompt)
+	}
+}
