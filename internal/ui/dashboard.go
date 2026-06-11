@@ -364,6 +364,20 @@ type Model struct {
 	creatingSessions       map[string]*creatingSession // background session creations, keyed by placeholder session ID
 	syncHealth             map[string]syncHealth       // mutagen sync health per session ID
 	worktreeExistsID       string                      // placeholder ID of the background creation that hit WORKTREE_EXISTS
+	snapshotToastSeq       int                         // increments per toast; stale clear timers are ignored
+}
+
+// showToast displays a transient message in the toast bar and returns a
+// command that clears it after the given delay. Each call invalidates the
+// clear timers of earlier toasts.
+func (m *Model) showToast(text string, isError bool, delay time.Duration) tea.Cmd {
+	m.snapshotToast = text
+	m.snapshotToastError = isError
+	m.snapshotToastSeq++
+	seq := m.snapshotToastSeq
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return snapshotToastMsg{seq: seq}
+	})
 }
 
 // archivePreviewData holds the pre-computed data shown in the archive confirmation popup.
@@ -592,9 +606,10 @@ type snapshotSavedMsg struct {
 	err      error
 }
 
+// snapshotToastMsg clears the transient toast bar. seq guards against an
+// older timer wiping a newer toast that replaced it in the meantime.
 type snapshotToastMsg struct {
-	text    string
-	isError bool
+	seq int
 }
 
 type snapshotPreviewMsg struct {
@@ -1866,15 +1881,14 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 	}
 	m.applyRemoteFilter()
 
+	var toastCmd tea.Cmd
 	if msg.warning != "" {
-		m.snapshotToast = "⚠️  " + msg.warning
-		m.snapshotToastError = true
+		toastCmd = m.showToast("⚠️  "+msg.warning, true, 8*time.Second)
 	} else {
-		m.snapshotToast = fmt.Sprintf("✅ Session %s is ready", msg.session.TmuxSession)
-		m.snapshotToastError = false
+		toastCmd = m.showToast(fmt.Sprintf("✅ Session %s is ready", msg.session.TmuxSession), false, 5*time.Second)
 	}
 
-	cmds := []tea.Cmd{checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...))}
+	cmds := []tea.Cmd{toastCmd, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...))}
 	if selectedWasPlaceholder {
 		// Follow the placeholder to the real session (the list was re-sorted).
 		items := m.list.Items()
@@ -2336,10 +2350,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.idx < len(m.archiveSteps) {
 			m.archiveSteps[msg.idx].err = true
 		}
-		m.snapshotToast = "❌ Archive failed: " + msg.err.Error()
-		m.snapshotToastError = true
 		m.state = viewStateMain
-		return m, nil
+		return m, m.showToast("❌ Archive failed: "+msg.err.Error(), true, 8*time.Second)
 	case archivePaneCapturedMsg:
 		if 1 < len(m.archiveSteps) {
 			m.archiveSteps[0].done = true
@@ -2358,10 +2370,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case archivePreviewReadyMsg:
 		if msg.err != nil {
-			m.snapshotToast = "❌ Archive failed: " + msg.err.Error()
-			m.snapshotToastError = true
 			m.state = viewStateMain
-			return m, nil
+			return m, m.showToast("❌ Archive failed: "+msg.err.Error(), true, 8*time.Second)
 		}
 		for i := range m.archiveSteps {
 			m.archiveSteps[i].done = true
@@ -2396,6 +2406,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateError
 		} else {
 			m.state = viewStateMain
+		}
+		return m, nil
+	case snapshotToastMsg:
+		// Handled globally so toasts also clear while the user is in another
+		// view; only the most recent toast's timer may clear the bar.
+		if msg.seq == m.snapshotToastSeq {
+			m.snapshotToast = ""
+			m.snapshotToastError = false
 		}
 		return m, nil
 	case syncTickMsg:
@@ -2475,9 +2493,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-sort and rebuild list so new/restarted session appears at the top.
 		m.applyRemoteFilter()
 
+		var warnCmd tea.Cmd
 		if msg.warning != "" {
-			m.snapshotToast = "⚠️  " + msg.warning
-			m.snapshotToastError = true
+			warnCmd = m.showToast("⚠️  "+msg.warning, true, 8*time.Second)
 		}
 
 		m.activeSession = msg.session.TmuxSession
@@ -2485,7 +2503,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(m.tmuxOutput)
 		m.state = m.loadingNext
 
-		return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session))
+		return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session), warnCmd)
 	}
 
 	switch m.state {
@@ -3348,19 +3366,9 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case snapshotSavedMsg:
 		if msg.err != nil {
-			m.snapshotToast = fmt.Sprintf("❌ Snapshot failed: %v", msg.err)
-			m.snapshotToastError = true
-		} else {
-			m.snapshotToast = "📸 Snapshot saved"
-			m.snapshotToastError = false
+			return m, m.showToast(fmt.Sprintf("❌ Snapshot failed: %v", msg.err), true, 3*time.Second)
 		}
-		// Clear toast after a short delay
-		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-			return snapshotToastMsg{text: "", isError: false}
-		})
-	case snapshotToastMsg:
-		m.snapshotToast = msg.text
-		m.snapshotToastError = msg.isError
+		return m, m.showToast("📸 Snapshot saved", false, 3*time.Second)
 	case snapshotBrowserLoadedMsg:
 		var sub tea.Model
 		var loadCmd tea.Cmd
@@ -3472,9 +3480,7 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 					}
 					return m, nil, true
 				case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y":
-					m.snapshotToast = "⚠️  This session is still being created — wait for it to finish."
-					m.snapshotToastError = true
-					return m, nil, true
+					return m, m.showToast("⚠️  This session is still being created — wait for it to finish.", true, 4*time.Second), true
 				}
 			}
 		}
@@ -5861,9 +5867,8 @@ func (m *Model) handleArchivePreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.archivePreview = nil
 			m.state = viewStateMain
 			if p != nil && p.snapshot != nil {
-				m.snapshotToast = "📸 Saving archive…"
-				m.snapshotToastError = false
-				return m, persistSnapshotCmd(m.snapshotManager, p.snapshot)
+				// Auto-clear is a fallback; snapshotSavedMsg normally replaces this.
+				return m, tea.Batch(persistSnapshotCmd(m.snapshotManager, p.snapshot), m.showToast("📸 Saving archive…", false, 15*time.Second))
 			}
 			return m, nil
 		case "esc":
@@ -5878,8 +5883,7 @@ func (m *Model) handleArchivePreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cleanedPath := filepath.Join(os.TempDir(), "aiman-"+name+"-cleaned.txt")
 				_ = os.WriteFile(rawPath, []byte(p.rawPane), 0600)
 				_ = os.WriteFile(cleanedPath, []byte(p.cleanedPane), 0600)
-				m.snapshotToast = fmt.Sprintf("📄 Dumped to /tmp/aiman-%s-{raw,cleaned}.txt", name)
-				m.snapshotToastError = false
+				return m, m.showToast(fmt.Sprintf("📄 Dumped to /tmp/aiman-%s-{raw,cleaned}.txt", name), false, 6*time.Second)
 			}
 			return m, nil
 		}

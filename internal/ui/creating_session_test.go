@@ -168,3 +168,30 @@ func TestBackgroundCreate_PlaceholderSurvivesDiscovery(t *testing.T) {
 		t.Error("expected placeholder to survive a discovery refresh")
 	}
 }
+
+func TestBackgroundCreate_ReadyToastAutoClears(t *testing.T) {
+	model := newTestModelWithSummaryConfirmed(t)
+	_ = model.startBackgroundCreate()
+	id := model.allSessions[0].ID
+
+	updated, _ := model.Update(sessionCreateMsg{placeholderID: id, session: domain.Session{ID: "real-1", TmuxSession: "pb-1", RemoteHost: "devbox"}})
+	model = updated.(*Model)
+
+	if !strings.Contains(model.snapshotToast, "is ready") {
+		t.Fatalf("expected ready toast, got %q", model.snapshotToast)
+	}
+
+	// A stale clear timer (from an older toast) must not wipe the bar.
+	updated, _ = model.Update(snapshotToastMsg{seq: model.snapshotToastSeq - 1})
+	model = updated.(*Model)
+	if model.snapshotToast == "" {
+		t.Fatal("stale toast timer cleared a newer toast")
+	}
+
+	// The matching timer clears it.
+	updated, _ = model.Update(snapshotToastMsg{seq: model.snapshotToastSeq})
+	model = updated.(*Model)
+	if model.snapshotToast != "" {
+		t.Fatalf("expected toast cleared, still %q", model.snapshotToast)
+	}
+}
