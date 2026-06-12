@@ -16,8 +16,17 @@ type terminatingSession struct {
 	forced  bool
 	steps   []string
 	errs    []string // one slot per step; "" = no error
+	skips   []string // safety-skip notes (e.g. worktree left in place)
 	idx     int      // index of the step currently running
 }
+
+// skipReason marks a terminate step that was deliberately skipped by a
+// safety check (e.g. refusing to delete a main repository). It travels the
+// same error channel as real failures but is reported as an informational
+// note instead of a failed termination.
+type skipReason string
+
+func (s skipReason) Error() string { return string(s) }
 
 // isTerminatingSession reports whether the session is being terminated in
 // the background.

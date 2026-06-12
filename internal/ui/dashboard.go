@@ -1987,8 +1987,8 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 			// Safety: never reset/clean the main repository itself.
 			gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
 			if strings.TrimSpace(gitDirOut) == ".git" {
-				m.log("ERROR: refusing to discard changes in %s — it is the main git repository", s.WorktreePath)
-				return fmt.Errorf("refusing to discard changes in %q: this is the main repository — manual cleanup required", s.WorktreePath)
+				m.log("Skipping forced discard in %s — it is the main git repository", s.WorktreePath)
+				return skipReason(fmt.Sprintf("changes in %s left intact (main repository)", s.WorktreePath))
 			}
 
 			_, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q reset --hard HEAD && git -C %q clean -fd'", s.WorktreePath, s.WorktreePath))
@@ -2043,19 +2043,19 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 		cleanMain := path.Clean(mainRepoPath)
 		switch {
 		case cleanWorktree == "/" || cleanWorktree == ".":
-			m.log("ERROR: refusing to delete %s — filesystem root or dot path", s.WorktreePath)
-			return fmt.Errorf("refusing to delete %q: path is unsafe", s.WorktreePath)
+			m.log("Skipping worktree removal: %s is a filesystem root or dot path", s.WorktreePath)
+			return skipReason(fmt.Sprintf("worktree %s left in place (unsafe path)", s.WorktreePath))
 		case cleanWorktree == cleanRoot:
-			m.log("ERROR: refusing to delete %s — equals remote root %s", s.WorktreePath, remote.Root)
-			return fmt.Errorf("refusing to delete %q: path is the remote root — manual cleanup required", s.WorktreePath)
+			m.log("Skipping worktree removal: %s equals remote root %s", s.WorktreePath, remote.Root)
+			return skipReason(fmt.Sprintf("worktree %s left in place (remote root)", s.WorktreePath))
 		case cleanWorktree == cleanMain:
-			m.log("ERROR: refusing to delete %s — equals main repository %s", s.WorktreePath, mainRepoPath)
-			return fmt.Errorf("refusing to delete %q: path is the main repository — manual cleanup required", s.WorktreePath)
+			m.log("Skipping worktree removal: %s equals main repository %s", s.WorktreePath, mainRepoPath)
+			return skipReason(fmt.Sprintf("repository %s left in place (main repository)", s.WorktreePath))
 		case !strings.HasPrefix(cleanWorktree, cleanRoot+"/"):
 			// The cleaned path does not sit strictly inside the configured remote root.
 			// This catches mis-stored paths and any remaining `..` traversals.
-			m.log("ERROR: refusing to delete %s — not strictly inside remote root %s", s.WorktreePath, remote.Root)
-			return fmt.Errorf("refusing to delete %q: path is not inside the remote root — manual cleanup required", s.WorktreePath)
+			m.log("Skipping worktree removal: %s is not strictly inside remote root %s", s.WorktreePath, remote.Root)
+			return skipReason(fmt.Sprintf("worktree %s left in place (outside remote root)", s.WorktreePath))
 		}
 
 		// Secondary check: resolve both paths on the remote to catch symlinks.
@@ -2066,8 +2066,8 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 			cleanResolvedWT := path.Clean(strings.TrimSpace(resolvedWorktree))
 			cleanResolvedMain := path.Clean(strings.TrimSpace(resolvedMain))
 			if cleanResolvedWT == cleanResolvedMain || cleanResolvedWT == cleanRoot || cleanResolvedWT == "/" {
-				m.log("ERROR: refusing to delete worktree %s — resolved path %s is unsafe", s.WorktreePath, cleanResolvedWT)
-				return fmt.Errorf("refusing to delete worktree %q: resolved path is unsafe — manual cleanup required", s.WorktreePath)
+				m.log("Skipping worktree removal: %s resolves to unsafe path %s", s.WorktreePath, cleanResolvedWT)
+				return skipReason(fmt.Sprintf("worktree %s left in place (resolves to unsafe path)", s.WorktreePath))
 			}
 		}
 
@@ -2078,8 +2078,8 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 		gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
 		gitDir := strings.TrimSpace(gitDirOut)
 		if gitDir == ".git" {
-			m.log("ERROR: refusing to delete %s — git identifies it as the main repository", s.WorktreePath)
-			return fmt.Errorf("refusing to delete %q: git identifies this as a main repository — manual cleanup required", s.WorktreePath)
+			m.log("Skipping worktree removal: git identifies %s as a main repository", s.WorktreePath)
+			return skipReason(fmt.Sprintf("repository %s left in place (main repository)", s.WorktreePath))
 		}
 
 		// Derive the real main repo path from git metadata — the config-computed path can be
@@ -2438,10 +2438,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
-			if msg.index < len(ts.errs) {
-				ts.errs[msg.index] = msg.err.Error()
+			var skip skipReason
+			if errors.As(msg.err, &skip) {
+				// Safety skip, not a failure — the step declined to act
+				// (e.g. refusing to delete a main repository).
+				ts.skips = append(ts.skips, string(skip))
+				m.log("Terminate %s — step %q skipped: %s", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], string(skip))
+			} else {
+				if msg.index < len(ts.errs) {
+					ts.errs[msg.index] = msg.err.Error()
+				}
+				m.log("Terminate %s — step %q failed: %v", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], msg.err)
 			}
-			m.log("Terminate %s — step %q failed: %v", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], msg.err)
 		}
 		next := msg.index + 1
 		if next < len(ts.steps) {
@@ -2470,6 +2478,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if errCount > 0 {
 			return m, m.showToast(fmt.Sprintf("⚠️  Session %s terminated with %d error(s) — see console (`)", ts.session.TmuxSession, errCount), true, 8*time.Second)
+		}
+		if len(ts.skips) > 0 {
+			return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated — %s", ts.session.TmuxSession, ts.skips[0]), false, 8*time.Second)
 		}
 		return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated", ts.session.TmuxSession), false, 5*time.Second)
 	case syncTickMsg:
