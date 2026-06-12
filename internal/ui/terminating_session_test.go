@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -148,3 +149,51 @@ var errTest = errTestType{}
 type errTestType struct{}
 
 func (errTestType) Error() string { return "boom" }
+
+func TestRunTerminateStep_MainRepoWorktreeIsSkippedNotFailed(t *testing.T) {
+	cfg := &config.Config{Remotes: []config.Remote{{Host: "devbox", Root: "/home/code/repos"}}}
+	model := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	s := domain.Session{
+		ID:           "sess-2",
+		TmuxSession:  "confirmrdsdetails",
+		RemoteHost:   "devbox",
+		WorktreePath: "/home/code/repos/confirmrdsdetails",
+		RepoName:     "confirmrdsdetails",
+	}
+
+	err := model.runTerminateStep(3, s, false)
+	var skip skipReason
+	if err == nil || !errors.As(err, &skip) {
+		t.Fatalf("expected a skipReason for main-repository worktree, got %v", err)
+	}
+	if !strings.Contains(string(skip), "main repository") {
+		t.Errorf("skip reason should mention main repository, got %q", skip)
+	}
+}
+
+func TestBackgroundTerminate_SafetySkipIsNotAnError(t *testing.T) {
+	model, s := newTestModelWithTerminatableSession(t)
+	model.state = viewStateTerminateConfirm
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = updated.(*Model)
+	ts := model.terminatingSessions[s.ID]
+
+	for i := 0; i < len(ts.steps); i++ {
+		var err error
+		if i == 3 { // worktree removal declined by a safety check
+			err = skipReason("repository /home/dev/pb-1 left in place (main repository)")
+		}
+		updated, _ = model.Update(terminateStepMsg{sessionID: s.ID, index: i, err: err})
+		model = updated.(*Model)
+	}
+
+	if len(model.allSessions) != 0 {
+		t.Errorf("expected session removed from list, got %d", len(model.allSessions))
+	}
+	if model.snapshotToastError {
+		t.Errorf("safety skip must not produce an error toast, got %q", model.snapshotToast)
+	}
+	if !strings.Contains(model.snapshotToast, "left in place") {
+		t.Errorf("toast should mention the skipped cleanup, got %q", model.snapshotToast)
+	}
+}
