@@ -119,17 +119,27 @@ func TestAWSRoleSessionName(t *testing.T) {
 }
 
 func TestSharedSessionAWSEnv(t *testing.T) {
-	env := sharedSessionAWSEnv("eu-west-1")
+	env := sharedSessionAWSEnv("aiman-sess1234", "eu-west-1")
 	if got := env["AWS_REGION"]; got != "eu-west-1" {
 		t.Fatalf("unexpected AWS_REGION: %q", got)
 	}
 	if got := env["AWS_DEFAULT_REGION"]; got != "eu-west-1" {
 		t.Fatalf("unexpected AWS_DEFAULT_REGION: %q", got)
 	}
+	if got := env["AWS_PROFILE"]; got != "aiman-sess1234" {
+		t.Fatalf("expected AWS_PROFILE=aiman-sess1234, got %q", got)
+	}
 	if _, ok := env["AWS_SHARED_CREDENTIALS_FILE"]; ok {
 		t.Fatal("did not expect AWS_SHARED_CREDENTIALS_FILE in shared session env")
 	}
 	if _, ok := env["AWS_CONFIG_FILE"]; ok {
 		t.Fatal("did not expect AWS_CONFIG_FILE in shared session env")
+	}
+}
+
+func TestSharedSessionAWSEnvNoProfile(t *testing.T) {
+	env := sharedSessionAWSEnv("", "eu-west-1")
+	if _, ok := env["AWS_PROFILE"]; ok {
+		t.Fatal("did not expect AWS_PROFILE when profile name is empty")
 	}
 }
