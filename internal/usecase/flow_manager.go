@@ -420,13 +420,14 @@ func PrepareSessionAWSEnv(ctx context.Context, r domain.RemoteExecutor, sessionI
 		return nil, fmt.Errorf("aws: get temporary credentials: %w", err)
 	}
 
-	if err := awsdelegation.ApplyDelegatedCredentials(ctx, r, "default", creds); err != nil {
+	profileName := awsdelegation.SessionProfileName(sessionID)
+	if err := awsdelegation.ApplyDelegatedCredentials(ctx, r, profileName, creds); err != nil {
 		return nil, fmt.Errorf("aws: write shared credentials: %w", err)
 	}
-	if err := awsdelegation.ApplyDelegatedProfile(ctx, r, "default", "", "", cfg.Region); err != nil {
+	if err := awsdelegation.ApplyDelegatedProfile(ctx, r, profileName, "", "", cfg.Region); err != nil {
 		return nil, fmt.Errorf("aws: write shared profile config: %w", err)
 	}
-	return sharedSessionAWSEnv(cfg.Region), nil
+	return sharedSessionAWSEnv(profileName, cfg.Region), nil
 }
 
 func awsRoleSessionName(sessionID string) string {
@@ -440,8 +441,11 @@ func awsRoleSessionName(sessionID string) string {
 	return "session-" + sessionID
 }
 
-func sharedSessionAWSEnv(region string) map[string]string {
+func sharedSessionAWSEnv(profileName, region string) map[string]string {
 	env := map[string]string{}
+	if p := strings.TrimSpace(profileName); p != "" {
+		env["AWS_PROFILE"] = p
+	}
 	if region = strings.TrimSpace(region); region != "" {
 		env["AWS_REGION"] = region
 		env["AWS_DEFAULT_REGION"] = region

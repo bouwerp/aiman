@@ -2147,7 +2147,7 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 			return nil
 		}
 		return os.RemoveAll(s.LocalPath)
-	case 5: // Clean up legacy session-scoped AWS credentials from the remote
+	case 5: // Clean up AWS credentials managed by aiman for this session
 		if s.RemoteHost == "" {
 			return nil
 		}
@@ -2156,9 +2156,17 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 			return nil
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		// Remove legacy per-session directory (older releases)
 		if err := awsdelegation.RemoveSessionCredentialFiles(ctx, mgr, s.ID); err != nil {
 			return err
 		}
+		// Remove the aiman-managed named profile written by current releases
+		if s.ID != "" {
+			if err := awsdelegation.RemoveSessionProfile(ctx, mgr, awsdelegation.SessionProfileName(s.ID)); err != nil {
+				return err
+			}
+		}
+		// Remove any legacy stored profile name from older releases
 		if s.AWSProfileName != "" {
 			return awsdelegation.RemoveSessionProfile(ctx, mgr, s.AWSProfileName)
 		}

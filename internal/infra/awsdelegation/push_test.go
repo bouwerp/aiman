@@ -161,6 +161,33 @@ func TestRenameSessionProfile(t *testing.T) {
 	}
 }
 
+func TestSessionProfileName(t *testing.T) {
+	// 24-char UUID prefix → truncated to first 12
+	got := SessionProfileName("550e8400-e29b-41d4-a716")
+	if got != "aiman-550e8400-e29" {
+		t.Errorf("long ID: got %q, want aiman-550e8400-e29", got)
+	}
+	// Short ID → no truncation
+	got = SessionProfileName("short")
+	if got != "aiman-short" {
+		t.Errorf("short ID: got %q", got)
+	}
+	// 16-char ID → truncated to first 12
+	got = SessionProfileName("1234567890abcdef")
+	if got != "aiman-1234567890ab" {
+		t.Errorf("16-char ID: got %q, want aiman-1234567890ab", got)
+	}
+	// Empty ID
+	got = SessionProfileName("")
+	if got != "aiman-" {
+		t.Errorf("empty ID: got %q", got)
+	}
+	// Must never equal the default profile
+	if SessionProfileName("default") == "default" {
+		t.Fatal("profile name must not be 'default'")
+	}
+}
+
 func TestRenameSessionProfileRefusesOverwrite(t *testing.T) {
 	m := &mockRemote{home: "/home/dev", files: map[string]string{
 		"credentials": "[old]\naws_access_key_id = abc\n\n[new]\naws_access_key_id = xyz\n",
