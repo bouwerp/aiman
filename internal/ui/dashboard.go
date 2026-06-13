@@ -237,25 +237,29 @@ func (i item) Description() string {
 	if agentLabel != "" {
 		agentPart = " | Agent: " + agentLabel
 	}
+	createdPart := ""
+	if !i.session.CreatedAt.IsZero() {
+		createdPart = " | Created: " + i.session.CreatedAt.Format("2006-01-02 15:04")
+	}
 	if i.activity == "creating" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creating in background…", i.session.RepoName, i.session.RemoteHost, agentPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creating in background…%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.activity == "create-failed" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creation failed", i.session.RepoName, i.session.RemoteHost, agentPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creation failed%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.activity == "terminating" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: terminating in background…", i.session.RepoName, i.session.RemoteHost, agentPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: terminating in background…%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.needsInput {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: input", i.session.RepoName, i.session.RemoteHost, agentPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: input%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.activity == "stale" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: thinking (no progress >5m — may be stuck)", i.session.RepoName, i.session.RemoteHost, agentPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: thinking (no progress >5m — may be stuck)%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.activity != "" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: %s", i.session.RepoName, i.session.RemoteHost, agentPart, i.activity)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: %s%s", i.session.RepoName, i.session.RemoteHost, agentPart, i.activity, createdPart)
 	}
-	return fmt.Sprintf("Repo: %s | Host: %s%s", i.session.RepoName, i.session.RemoteHost, agentPart)
+	return fmt.Sprintf("Repo: %s | Host: %s%s%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
 }
 
 func (i item) FilterValue() string {
@@ -480,16 +484,10 @@ func (m *Model) removeCreatingPlaceholder(id string) {
 }
 
 func (m *Model) applyRemoteFilter() {
-	// Sort sessions: most recently updated first.
-	// Use max(UpdatedAt, CreatedAt) so sessions with zero UpdatedAt still sort by creation time.
-	effectiveTime := func(s domain.Session) time.Time {
-		if s.UpdatedAt.After(s.CreatedAt) {
-			return s.UpdatedAt
-		}
-		return s.CreatedAt
-	}
+	// Sort sessions: most recently created first. Using CreatedAt only keeps
+	// the list order stable as sessions are used (UpdatedAt would cause them to jump).
 	sort.Slice(m.allSessions, func(i, j int) bool {
-		return effectiveTime(m.allSessions[i]).After(effectiveTime(m.allSessions[j]))
+		return m.allSessions[i].CreatedAt.After(m.allSessions[j].CreatedAt)
 	})
 	var filtered []list.Item
 	for _, s := range m.allSessions {
