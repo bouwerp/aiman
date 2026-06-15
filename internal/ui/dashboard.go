@@ -154,6 +154,7 @@ const (
 	viewStateAWSCredentials // manage AWS credential status and renewal
 	viewStateError          // generic error dialog (press any key to dismiss)
 	viewStateRemotePicker   // select remote for new session
+	viewStateQuitConfirm    // confirm before exiting
 )
 
 type panelMode int
@@ -2658,6 +2659,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateTerminateConfirm:
 		return m.handleTerminateConfirmUpdate(msg)
 
+	case viewStateQuitConfirm:
+		return m.handleQuitConfirmUpdate(msg)
+
 	case viewStateWorktreeExists:
 		return m.handleWorktreeExistsUpdate(msg)
 
@@ -3193,6 +3197,21 @@ func (m *Model) renderView() string {
 		}
 		return ""
 
+	case viewStateQuitConfirm:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("Quit aiman?") + "\n\n")
+		b.WriteString("Any sessions creating or terminating in the background\n")
+		b.WriteString("will continue — only the dashboard closes.\n\n")
+		b.WriteString(activeStyle.Render("[y]") + " Quit  " + activeStyle.Render("[n / esc]") + " Cancel")
+
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("241")).
+			Padding(1, 2).
+			Width(54)
+
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
 	case viewStateWorktreeExists:
 		var b strings.Builder
 		b.WriteString(failStyle.Render("Worktree Already Exists") + "\n\n")
@@ -3657,8 +3676,9 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.state = viewStateMenu
 		return m, nil, true
 	}
-	if msg.String() == "q" {
-		return m, tea.Quit, true
+	if msg.String() == "q" || msg.String() == "esc" {
+		m.state = viewStateQuitConfirm
+		return m, nil, true
 	}
 	if msg.String() == "ctrl+c" {
 		if m.termCloser != nil {
@@ -4864,6 +4884,22 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.terminatePrecheckError = ""
 				return m, m.startBackgroundTerminate(s, false)
 			}
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handleQuitConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "y":
+			if m.termCloser != nil {
+				m.termCloser.Close()
+			}
+			return m, tea.Quit
+		case "n", "esc", "q":
+			m.state = viewStateMain
+			return m, nil
 		}
 	}
 	return m, nil
