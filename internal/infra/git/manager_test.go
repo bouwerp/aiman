@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -512,7 +511,7 @@ func TestEnsureHealthyRepo_FetchFailure(t *testing.T) {
 func TestEnsureHealthyRepo_MissingRepoWithLinkedWorktrees_BlocksClone(t *testing.T) {
 	mgr := NewManager(nil)
 	repoPath := "/home/dev/myrepo"
-	scanCmd := "bash -ce " + strconv.Quote(linkedWorktreeScanScript(repoPath))
+	scanCmd := "bash -ce " + shellSingleQuote(linkedWorktreeScanScript(repoPath))
 	remote := &commandRecorderRemote{
 		mockRemote: mockRemote{
 			root: "/home/dev",
@@ -541,7 +540,7 @@ func TestEnsureHealthyRepo_MissingRepoWithLinkedWorktrees_BlocksClone(t *testing
 func TestEnsureHealthyRepo_InvalidGitDirWithLinkedWorktrees_BlocksRecovery(t *testing.T) {
 	mgr := NewManager(nil)
 	repoPath := "/home/dev/myrepo"
-	scanCmd := "bash -ce " + strconv.Quote(linkedWorktreeScanScript(repoPath))
+	scanCmd := "bash -ce " + shellSingleQuote(linkedWorktreeScanScript(repoPath))
 	remote := &commandRecorderRemote{
 		mockRemote: mockRemote{
 			root: "/home/dev",

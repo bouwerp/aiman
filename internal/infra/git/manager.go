@@ -237,7 +237,7 @@ func (m *Manager) EnsureAimanSessionFilesGitignored(ctx context.Context, remote 
 		return nil
 	}
 	script := aimanTaskGitignoreBashScript(worktreePath)
-	_, err := remote.Execute(ctx, "bash -ce "+strconv.Quote(script))
+	_, err := remote.Execute(ctx, "bash -ce "+shellSingleQuote(script))
 	return err
 }
 
@@ -964,7 +964,7 @@ func blockWhenLinkedWorktreesExist(ctx context.Context, remote domain.RemoteExec
 
 func findLinkedWorktrees(ctx context.Context, remote domain.RemoteExecutor, repoPath string) ([]string, error) {
 	script := linkedWorktreeScanScript(repoPath)
-	out, err := remote.Execute(ctx, "bash -ce "+strconv.Quote(script))
+	out, err := remote.Execute(ctx, "bash -ce "+shellSingleQuote(script))
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan for linked worktrees for %s: %w", repoPath, err)
 	}
