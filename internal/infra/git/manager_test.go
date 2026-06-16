@@ -720,6 +720,72 @@ func TestDisableSparseCheckoutLocal_NoOpForFullWorktree(t *testing.T) {
 	}
 }
 
+func TestDetectBaseBranch_UsesOriginHEAD(t *testing.T) {
+	remote := &mockRemote{
+		root: "/home/dev",
+		outputs: map[string]string{
+			`git -C "/home/dev/myrepo" rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: "origin/develop",
+		},
+	}
+	got := detectBaseBranch(context.Background(), remote, "/home/dev/myrepo")
+	if got != "origin/develop" {
+		t.Errorf("expected origin/develop, got %q", got)
+	}
+}
+
+func TestDetectBaseBranch_FallsBackToWellKnownNames(t *testing.T) {
+	remote := &mockRemote{
+		root: "/home/dev",
+		outputs: map[string]string{
+			// origin/HEAD not set, origin/main not present, origin/master present
+			`git -C "/home/dev/myrepo" rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: "refs/remotes/origin/HEAD",
+			`git -C "/home/dev/myrepo" rev-parse --verify origin/master 2>/dev/null`:                "abc1234",
+		},
+		errors: map[string]error{
+			`git -C "/home/dev/myrepo" rev-parse --verify origin/main 2>/dev/null`: fmt.Errorf("exit 128"),
+		},
+	}
+	got := detectBaseBranch(context.Background(), remote, "/home/dev/myrepo")
+	if got != "origin/master" {
+		t.Errorf("expected origin/master, got %q", got)
+	}
+}
+
+func TestDetectBaseBranch_FallsBackToHEAD(t *testing.T) {
+	remote := &mockRemote{
+		root: "/home/dev",
+		errors: map[string]error{
+			`git -C "/home/dev/myrepo" rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: fmt.Errorf("exit 128"),
+			`git -C "/home/dev/myrepo" rev-parse --verify origin/main 2>/dev/null`:                  fmt.Errorf("exit 128"),
+			`git -C "/home/dev/myrepo" rev-parse --verify origin/master 2>/dev/null`:                fmt.Errorf("exit 128"),
+			`git -C "/home/dev/myrepo" rev-parse --verify main 2>/dev/null`:                         fmt.Errorf("exit 128"),
+			`git -C "/home/dev/myrepo" rev-parse --verify master 2>/dev/null`:                       fmt.Errorf("exit 128"),
+		},
+		outputs: map[string]string{
+			`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null`: "abc1234",
+		},
+	}
+	got := detectBaseBranch(context.Background(), remote, "/home/dev/myrepo")
+	if got != "HEAD" {
+		t.Errorf("expected HEAD fallback, got %q", got)
+	}
+}
+
+func TestDetectBaseBranch_EmptyRepoReturnsEmpty(t *testing.T) {
+	remote := &mockRemote{root: "/home/dev", errors: map[string]error{
+		`git -C "/home/dev/myrepo" rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: fmt.Errorf("exit 128"),
+		`git -C "/home/dev/myrepo" rev-parse --verify origin/main 2>/dev/null`:                  fmt.Errorf("exit 128"),
+		`git -C "/home/dev/myrepo" rev-parse --verify origin/master 2>/dev/null`:                fmt.Errorf("exit 128"),
+		`git -C "/home/dev/myrepo" rev-parse --verify main 2>/dev/null`:                         fmt.Errorf("exit 128"),
+		`git -C "/home/dev/myrepo" rev-parse --verify master 2>/dev/null`:                       fmt.Errorf("exit 128"),
+		`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null`:                                  fmt.Errorf("exit 128"),
+	}}
+	got := detectBaseBranch(context.Background(), remote, "/home/dev/myrepo")
+	if got != "" {
+		t.Errorf("expected empty string for empty repo, got %q", got)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
