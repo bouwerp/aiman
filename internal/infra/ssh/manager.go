@@ -449,7 +449,7 @@ func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (stri
 }
 
 func tmuxAttachRemoteCommand(sessionName string) string {
-	return fmt.Sprintf(
+	return remotePathPreamble + fmt.Sprintf(
 		"tmux set-option -t %q mouse on >/dev/null 2>&1 || tmux set-option -g mouse on >/dev/null 2>&1; exec tmux attach -t %q",
 		sessionName, sessionName,
 	)
