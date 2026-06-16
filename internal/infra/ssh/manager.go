@@ -80,6 +80,12 @@ func (m *Manager) GetRoot() string {
 // This prevents a single hung command from blocking the entire restart for minutes.
 const sshCommandTimeout = 30 * time.Second
 
+// remotePathPreamble prepends well-known tool directories to PATH before
+// every remote command. SSH non-interactive sessions do not source login
+// profiles, so Homebrew binaries (/opt/homebrew/bin on Apple Silicon,
+// /usr/local/bin on Intel) and ~/.local/bin are not in PATH by default.
+const remotePathPreamble = `export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:${HOME}/.local/bin:${PATH}"; `
+
 func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	target := m.target()
 	cp := m.controlPath()
@@ -88,6 +94,8 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(cp), 0700); err != nil {
 		return "", fmt.Errorf("failed to create sockets directory: %w", err)
 	}
+
+	fullCmd := remotePathPreamble + cmdStr
 
 	run := func() (string, error) {
 		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
@@ -104,7 +112,7 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 			"-S", cp,
 			"-A",
 			"-X",
-			target, cmdStr)
+			target, fullCmd)
 
 		output, err := cmd.CombinedOutput()
 		outStr := strings.TrimSpace(string(output))
@@ -126,7 +134,7 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 			"-o", "ServerAliveCountMax=3",
 			"-o", "ControlMaster=no",
 			"-A",
-			target, cmdStr)
+			target, fullCmd)
 
 		output, err := cmd.CombinedOutput()
 		outStr := strings.TrimSpace(string(output))
