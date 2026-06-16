@@ -321,17 +321,12 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	// even if a previous termination left stale entries behind.
 	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q worktree prune --expire=now 2>/dev/null || true", repoPath))
 
-	// Determine base branch
-	var baseBranch string
-	for _, b := range []string{"origin/main", "origin/master", "main", "master"} {
-		if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --verify %s", repoPath, b)); err == nil {
-			baseBranch = b
-			break
-		}
-	}
-
+	// Determine base branch. Try origin/HEAD first (set by git clone and always
+	// reflects the remote's actual default), then fall back to well-known names,
+	// then fall back to HEAD (works for repos with non-standard default branches).
+	baseBranch := detectBaseBranch(ctx, remote, repoPath)
 	if baseBranch == "" {
-		baseBranch = "main" // Fallback
+		return domain.Worktree{}, fmt.Errorf("failed to create worktree: cannot determine default branch for %s — the repository may have no commits", repoPath)
 	}
 
 	// Create worktree
@@ -976,6 +971,31 @@ func findLinkedWorktrees(ctx context.Context, remote domain.RemoteExecutor, repo
 		}
 	}
 	return worktrees, nil
+}
+
+// detectBaseBranch returns the best base ref to use for a new worktree.
+// It checks in order: origin/HEAD symbolic ref, well-known branch names,
+// then HEAD itself (useful for repos whose default branch has any name).
+func detectBaseBranch(ctx context.Context, remote domain.RemoteExecutor, repoPath string) string {
+	// origin/HEAD is set automatically by git clone and always points to the
+	// remote's real default branch — most reliable source.
+	if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null", repoPath)); err == nil {
+		if ref := strings.TrimSpace(out); ref != "" && ref != "refs/remotes/origin/HEAD" && strings.HasPrefix(ref, "origin/") {
+			return ref
+		}
+	}
+	// Well-known names as fallback for repos where origin/HEAD is unset.
+	for _, b := range []string{"origin/main", "origin/master", "main", "master"} {
+		if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --verify %s 2>/dev/null", repoPath, b)); err == nil {
+			return b
+		}
+	}
+	// Last resort: use whatever HEAD points to — works for any non-empty repo
+	// regardless of branch naming convention.
+	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse HEAD 2>/dev/null", repoPath)); err == nil {
+		return "HEAD"
+	}
+	return ""
 }
 
 func linkedWorktreeScanScript(repoPath string) string {
