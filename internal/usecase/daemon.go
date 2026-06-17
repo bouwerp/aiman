@@ -139,9 +139,9 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 				prompt += "Your task is to implement the fix or feature requested in this issue.\n"
 				prompt += "When you are finished:\n"
 				prompt += "1. Create a Pull Request (PR) with your changes.\n"
-				prompt += fmt.Sprintf("2. Comment on issue #%d with the PR link and close the issue.\n", issue.Number)
+				prompt += fmt.Sprintf("2. Summarise your session in detail and post it as a comment on issue #%d, including the PR link.\n", issue.Number)
 				prompt += fmt.Sprintf("3. If you need more information or clarification from the user, post a comment on issue #%d and wait for a reply. You must periodically check the issue for new comments using the gh cli.\n", issue.Number)
-				prompt += "Do NOT terminate your session until the PR has been merged or the user forces the session to end. You can monitor the PR status using the gh cli."
+				prompt += "4. Once the PR is open and you have commented on the issue, you may terminate your session."
 
 				cfg := domain.SessionConfig{
 					AdHoc:          false,
