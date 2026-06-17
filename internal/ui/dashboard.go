@@ -157,6 +157,9 @@ const (
 	viewStateError          // generic error dialog (press any key to dismiss)
 	viewStateRemotePicker   // select remote for new session
 	viewStateQuitConfirm    // confirm before exiting
+	viewStateAutonomousTriggerPicker
+	viewStateAutonomousLabelsInput
+	viewStateAutonomousConcurrencyInput
 )
 
 type panelMode int
@@ -316,6 +319,7 @@ type Model struct {
 	picker                 RepoPickerModel
 	issuePicker            IssuePickerModel
 	branchInput            BranchInputModel
+	genericInput           TextInputModel
 	branchPicker           BranchPickerModel
 	dirPicker              DirPickerModel
 	agentPicker            AgentPickerModel
@@ -2700,6 +2704,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateTunnelAdd:
 		return m.handleTunnelAddUpdate(msg)
 
+	case viewStateAutonomousTriggerPicker:
+		return m.handleAutonomousTriggerPickerUpdate(msg)
+
+	case viewStateAutonomousLabelsInput:
+		return m.handleAutonomousLabelsInputUpdate(msg)
+
+	case viewStateAutonomousConcurrencyInput:
+		return m.handleAutonomousConcurrencyInputUpdate(msg)
+
 	case viewStateLoading:
 		return m.handleLoadingUpdate(msg)
 	}
@@ -2931,6 +2944,24 @@ func (m *Model) renderView() string {
 			Width(60)
 
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateAutonomousTriggerPicker:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("Select Trigger Source") + "\n\n")
+		b.WriteString(activeStyle.Render("[1]") + "  GitHub Issues\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("[2]") + "  Sentry (Coming Soon)\n")
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: cancel"))
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(2, 4).
+			Width(62)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
+
+	case viewStateAutonomousLabelsInput:
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.View())
+
+	case viewStateAutonomousConcurrencyInput:
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.View())
 
 	case viewStateIssuePicker:
 		return docStyle.Render(m.issuePicker.View())
@@ -4554,21 +4585,79 @@ func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "5":
 			m.sessionCfg = domain.SessionConfig{
-				Mode:          domain.SessionModeAutonomous,
-				TriggerSource: "github",
+				Mode: domain.SessionModeAutonomous,
 				AutonomousConfig: &domain.AutonomousConfig{
-					TriggerType:       "github",
 					PollFrequencySecs: 300,
 				},
 			}
-			m.loadingMsg = "Loading repositories..."
-			m.loadingNext = viewStateRepoPicker
-			m.state = viewStateLoading
-			m.picker = NewRepoPickerModel(nil, &m.cfg.Git)
-			return m, m.fetchRepos()
+			m.state = viewStateAutonomousTriggerPicker
+			return m, nil
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) handleAutonomousTriggerPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc":
+			m.state = viewStateModePicker
+			return m, nil
+		case "1":
+			m.sessionCfg.TriggerSource = "github"
+			m.sessionCfg.AutonomousConfig.TriggerType = "github"
+			m.genericInput = NewTextInputModel("Filter Criteria", "e.g. bug,aiman-auto", "aiman-auto")
+			m.state = viewStateAutonomousLabelsInput
+			return m, m.genericInput.Init()
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handleAutonomousLabelsInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.state = viewStateAutonomousTriggerPicker
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.genericInput, cmd = m.genericInput.Update(msg)
+
+	if m.genericInput.Confirmed {
+		m.sessionCfg.AutonomousConfig.FilterLabels = m.genericInput.Value()
+		m.genericInput = NewTextInputModel("Max Concurrency", "e.g. 5", "5")
+		m.state = viewStateAutonomousConcurrencyInput
+		return m, m.genericInput.Init()
+	}
+	return m, cmd
+}
+
+func (m *Model) handleAutonomousConcurrencyInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.genericInput = NewTextInputModel("Filter Criteria", "e.g. bug,aiman-auto", m.sessionCfg.AutonomousConfig.FilterLabels)
+		m.state = viewStateAutonomousLabelsInput
+		return m, m.genericInput.Init()
+	}
+
+	var cmd tea.Cmd
+	m.genericInput, cmd = m.genericInput.Update(msg)
+
+	if m.genericInput.Confirmed {
+		val := m.genericInput.Value()
+
+		maxC, err := strconv.Atoi(val)
+		if err != nil || maxC < 1 {
+			maxC = 1 // fallback
+		}
+		m.sessionCfg.AutonomousConfig.MaxConcurrency = maxC
+
+		m.loadingMsg = "Loading repositories..."
+		m.loadingNext = viewStateRepoPicker
+		m.state = viewStateLoading
+		m.picker = NewRepoPickerModel(nil, &m.cfg.Git)
+		return m, m.fetchRepos()
+	}
+	return m, cmd
 }
 
 func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {

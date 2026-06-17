@@ -28,7 +28,8 @@ const (
 type AutonomousConfig struct {
 	TriggerType       string `json:"trigger_type"`        // "github" or "sentry"
 	GitHubRepo        string `json:"github_repo"`         // "owner/repo"
-	SentryProject     string `json:"sentry_project"`      // e.g. "my-frontend-app"
+	FilterLabels      string `json:"filter_labels"`       // e.g. "bug,aiman-auto"
+	MaxConcurrency    int    `json:"max_concurrency"`     // e.g. 5
 	PollFrequencySecs int    `json:"poll_frequency_secs"` // e.g. 300
 }
 

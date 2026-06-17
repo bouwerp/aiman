@@ -77,14 +77,30 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 
 		// TODO: Throttle polling per rule based on s.AutonomousConfig.PollFrequencySecs
 
+		// Calculate active concurrency for this repo trigger
+		activeCount := 0
+		for _, activeSess := range sessions {
+			if activeSess.Mode == domain.SessionModeAutonomous &&
+				activeSess.TriggerSource == "github" &&
+				activeSess.RepoName == s.AutonomousConfig.GitHubRepo &&
+				activeSess.TriggerEventID != "" &&
+				(activeSess.Status == domain.SessionStatusProvisioning || activeSess.Status == domain.SessionStatusActive || activeSess.Status == domain.SessionStatusReview) {
+				activeCount++
+			}
+		}
+
 		// 2. Poll the GitHub API via `gh` CLI
 		log.Printf("Polling GitHub repo %s for new issues...", s.AutonomousConfig.GitHubRepo)
-		cmd := exec.CommandContext(ctx, "gh", "issue", "list",
-			"--repo", s.AutonomousConfig.GitHubRepo,
-			"--label", "aiman-auto",
-			"--state", "open",
-			"--json", "number,title,body",
-		)
+		args := []string{"issue", "list", "--repo", s.AutonomousConfig.GitHubRepo, "--state", "open", "--json", "number,title,body"}
+		labels := strings.Split(s.AutonomousConfig.FilterLabels, ",")
+		for _, lbl := range labels {
+			lbl = strings.TrimSpace(lbl)
+			if lbl != "" {
+				args = append(args, "--label", lbl)
+			}
+		}
+
+		cmd := exec.CommandContext(ctx, "gh", args...)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		if err := cmd.Run(); err != nil {
@@ -104,6 +120,11 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 
 		// 3. For each issue, check if an ephemeral agent is already handling it
 		for _, issue := range issues {
+			if s.AutonomousConfig.MaxConcurrency > 0 && activeCount >= s.AutonomousConfig.MaxConcurrency {
+				log.Printf("Max concurrency %d reached for repo %s. Skipping remaining issues.", s.AutonomousConfig.MaxConcurrency, s.AutonomousConfig.GitHubRepo)
+				break
+			}
+
 			eventID := fmt.Sprintf("%d", issue.Number)
 			active, err := d.db.HasActiveSessionForEvent(ctx, "github", eventID)
 			if err != nil {
@@ -114,6 +135,14 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 			if !active {
 				log.Printf("Found new issue %d in %s! Spawning ephemeral agent...", issue.Number, s.AutonomousConfig.GitHubRepo)
 
+				prompt := fmt.Sprintf("You are an autonomous AI agent handling GitHub issue #%d - %s\n\nIssue Description:\n%s\n\n", issue.Number, issue.Title, issue.Body)
+				prompt += "Your task is to implement the fix or feature requested in this issue.\n"
+				prompt += "When you are finished:\n"
+				prompt += "1. Create a Pull Request (PR) with your changes.\n"
+				prompt += fmt.Sprintf("2. Comment on issue #%d with the PR link and close the issue.\n", issue.Number)
+				prompt += fmt.Sprintf("3. If you need more information or clarification from the user, post a comment on issue #%d and wait for a reply. You must periodically check the issue for new comments using the gh cli.\n", issue.Number)
+				prompt += "Do NOT terminate your session until the PR has been merged or the user forces the session to end. You can monitor the PR status using the gh cli."
+
 				cfg := domain.SessionConfig{
 					AdHoc:          false,
 					Repo:           domain.Repo{Name: s.AutonomousConfig.GitHubRepo},
@@ -122,7 +151,7 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 					TriggerSource:  "github",
 					TriggerEventID: eventID,
 					AWSConfig:      s.AWSConfig,
-					InitialPrompt:  fmt.Sprintf("Task: fix github issue %d - %s\n\n%s", issue.Number, issue.Title, issue.Body),
+					InitialPrompt:  prompt,
 					// TODO: Add agent mapping or default agent
 				}
 
