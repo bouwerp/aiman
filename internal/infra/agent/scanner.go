@@ -68,6 +68,12 @@ func NewScanner(executor Executor) *Scanner {
 // ScanAgents checks which agents are available on the remote server.
 // It returns a list of agents that have their binaries in PATH.
 func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
+	// Fast-fail if the remote host is completely unreachable or offline.
+	// This prevents hanging for several minutes as every agent command check times out.
+	if _, err := s.executor.Execute(ctx, "echo 1"); err != nil {
+		return nil, fmt.Errorf("remote host is unreachable: %w", err)
+	}
+
 	var available []domain.Agent
 
 	for _, agent := range knownAgents {

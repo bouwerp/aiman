@@ -16,6 +16,9 @@ type mockExecutor struct {
 
 func (m *mockExecutor) Execute(_ context.Context, cmd string) (string, error) {
 	m.commands = append(m.commands, cmd)
+	if cmd == "echo 1" {
+		return "1", nil
+	}
 	if m.canRun != nil && m.canRun(cmd) {
 		return "", nil
 	}
