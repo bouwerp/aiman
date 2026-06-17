@@ -44,6 +44,9 @@ func (m *startupSessionRepo) ListSecrets(context.Context) ([]domain.Secret, erro
 }
 func (m *startupSessionRepo) SaveSecret(context.Context, domain.Secret) error { return nil }
 func (m *startupSessionRepo) DeleteSecret(context.Context, string) error      { return nil }
+func (m *startupSessionRepo) HasActiveSessionForEvent(context.Context, string, string) (bool, error) {
+	return false, nil
+}
 
 func TestLoadConfiguredSessions_PrunesRemovedRemoteSessions(t *testing.T) {
 	repo := &startupSessionRepo{

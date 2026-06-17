@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/google/uuid"
 )
 
 var (
@@ -223,6 +225,9 @@ func (i item) Title() string {
 	if i.remoteName != "" {
 		remoteTag = " [" + i.remoteName + "]"
 	}
+	if i.session.Mode == domain.SessionModeAutonomous {
+		prefix = "🤖 " + prefix
+	}
 	if i.session.IssueKey != "" {
 		return fmt.Sprintf("%s%s (%s)%s%s", prefix, i.session.IssueKey, i.session.TmuxSession, activity, remoteTag)
 	}
@@ -256,6 +261,9 @@ func (i item) Description() string {
 	}
 	if i.activity == "stale" {
 		return fmt.Sprintf("Repo: %s | Host: %s%s | State: thinking (no progress >5m — may be stuck)%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+	}
+	if i.session.Mode == domain.SessionModeAutonomous && i.session.Status == domain.SessionStatusInactive {
+		return fmt.Sprintf("Trigger Rule: %s | Repo: %s | Host: %s | Poll: %ds%s", i.session.TriggerSource, i.session.RepoName, i.session.RemoteHost, i.session.AutonomousConfig.PollFrequencySecs, createdPart)
 	}
 	if i.activity != "" {
 		return fmt.Sprintf("Repo: %s | Host: %s%s | State: %s%s", i.session.RepoName, i.session.RemoteHost, agentPart, i.activity, createdPart)
@@ -2977,6 +2985,7 @@ func (m *Model) renderView() string {
 		b.WriteString(activeStyle.Render("[2]") + "  New Branch           — start with a custom branch name\n")
 		b.WriteString(activeStyle.Render("[3]") + "  Existing Branch      — check out an existing remote branch\n")
 		b.WriteString(activeStyle.Render("[4]") + "  Ad-hoc               — no git repo, no JIRA ticket\n")
+		b.WriteString(activeStyle.Render("[5]") + "  Autonomous Trigger   — configure a remote polling rule\n")
 		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: cancel"))
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -3881,6 +3890,20 @@ end tell`, cmd)
 			return m, m.refreshTunnelStatesCmd(s), true
 		}
 	}
+	if msg.String() == "T" {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			if s.Mode == domain.SessionModeAutonomous {
+				s.Mode = domain.SessionModeInteractive
+				m.loadingMsg = "Taking over autonomous session..."
+				m.loadingNext = viewStateMain
+				m.state = viewStateLoading
+				return m, m.recreateMutagenSync(s), true
+			} else {
+				return m, m.showToast("⚠️  Only autonomous sessions can be taken over.", true, 3*time.Second), true
+			}
+		}
+	}
 	if msg.String() == "r" {
 
 		// Refresh sessions from all remotes
@@ -4529,6 +4552,20 @@ func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateBranchInput
 			m.branchInput = NewAdHocLabelInputModel("")
 			return m, nil
+		case "5":
+			m.sessionCfg = domain.SessionConfig{
+				Mode:          domain.SessionModeAutonomous,
+				TriggerSource: "github",
+				AutonomousConfig: &domain.AutonomousConfig{
+					TriggerType:       "github",
+					PollFrequencySecs: 300,
+				},
+			}
+			m.loadingMsg = "Loading repositories..."
+			m.loadingNext = viewStateRepoPicker
+			m.state = viewStateLoading
+			m.picker = NewRepoPickerModel(nil, &m.cfg.Git)
+			return m, m.fetchRepos()
 		}
 	}
 	return m, nil
@@ -4675,6 +4712,15 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadingNext = viewStateBranchPicker
 			m.state = viewStateLoading
 			return m, m.fetchBranches(*m.picker.selected)
+		}
+
+		if m.sessionCfg.Mode == domain.SessionModeAutonomous {
+			m.sessionCfg.AutonomousConfig.GitHubRepo = m.sessionCfg.Repo.Name
+			// Skip directories for autonomous triggers, go straight to agent
+			m.loadingMsg = "Scanning available agents..."
+			m.loadingNext = viewStateAgentPicker
+			m.state = viewStateLoading
+			return m, m.fetchAgents()
 		}
 
 		if m.sessionCfg.Repo.IsNew {
@@ -4828,6 +4874,11 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
 		m.sessionCfg.OpenRouterAPIKey = summaryCfg.OpenRouterAPIKey
 		m.sessionCfg.InitialPrompt = summaryCfg.InitialPrompt
+
+		if m.sessionCfg.Mode == domain.SessionModeAutonomous {
+			return m, m.createAutonomousRule()
+		}
+
 		return m, m.startBackgroundCreate()
 	}
 	return m, cmd
@@ -4859,6 +4910,118 @@ func (m *Model) startBackgroundCreate() tea.Cmd {
 	m.activeSession = placeholder.TmuxSession
 	m.state = viewStateMain
 	return m.createSession(placeholder.ID)
+}
+
+func (m *Model) ensureRemoteDaemon(ctx context.Context, sshMgr *ssh.Manager) error {
+	// Ensure daemon is running
+	if _, err := sshMgr.Execute(ctx, "pgrep -f aiman-trigger > /dev/null"); err != nil {
+		// Not running. Install if missing.
+		if _, err := sshMgr.Execute(ctx, "test -x ~/.local/bin/aiman-trigger"); err != nil {
+			m.loadingMsg = "Downloading aiman-trigger to remote..."
+			// We can pass BINARY_NAME=aiman-trigger to the standard install script to install the daemon instead of aiman
+			installCmd := "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | BINARY_NAME=aiman-trigger sh"
+			if _, err := sshMgr.Execute(ctx, installCmd); err != nil {
+				return fmt.Errorf("failed to install aiman-trigger on remote: %w", err)
+			}
+		}
+		// Start it
+		m.loadingMsg = "Starting aiman-trigger on remote..."
+		_, _ = sshMgr.Execute(ctx, "mkdir -p ~/.aiman && nohup ~/.local/bin/aiman-trigger > ~/.aiman/trigger.log 2>&1 &")
+	}
+	return nil
+}
+
+func (m *Model) createAutonomousRule() tea.Cmd {
+	return func() tea.Msg {
+		agentName := ""
+		if m.sessionCfg.Agent != nil {
+			agentName = m.sessionCfg.Agent.Name
+		}
+		session := &domain.Session{
+			ID:               uuid.New().String(),
+			IssueKey:         m.sessionCfg.IssueKey, // usually empty for rules
+			RepoName:         m.sessionCfg.Repo.Name,
+			AgentName:        agentName,
+			Status:           domain.SessionStatusInactive, // Polling active but agent inactive
+			Mode:             domain.SessionModeAutonomous,
+			TriggerSource:    "github",
+			AutonomousConfig: m.sessionCfg.AutonomousConfig,
+			AWSConfig:        m.sessionCfg.AWSConfig,
+			RemoteHost:       m.sessionCfg.RemoteHost,
+			CreatedAt:        time.Now(),
+			UpdatedAt:        time.Now(),
+		}
+
+		if err := m.db.Save(context.Background(), session); err != nil {
+			return sessionCreateMsg{err: fmt.Errorf("failed to save trigger rule locally: %w", err), placeholderID: ""}
+		}
+
+		// Push to remote DB over SSH
+		remote := m.selectedRemote
+		if remote.Host != "" {
+			sshMgr := ssh.NewManager(ssh.Config{
+				Host: remote.Host,
+				User: remote.User,
+				Root: remote.Root,
+			})
+
+			acJSON := ""
+			if session.AutonomousConfig != nil {
+				b, _ := json.Marshal(session.AutonomousConfig)
+				acJSON = string(b)
+			}
+			awsJSON := ""
+			if session.AWSConfig != nil {
+				b, _ := json.Marshal(session.AWSConfig)
+				awsJSON = string(b)
+			}
+
+			escapeSQL := func(s string) string {
+				return strings.ReplaceAll(s, "'", "''")
+			}
+
+			query := fmt.Sprintf(`
+INSERT INTO sessions (
+	id, repo_name, agent_name, status, mode, trigger_source, remote_host,
+	autonomous_config_json, aws_config_json, created_at, updated_at
+) VALUES (
+	'%s', '%s', '%s', '%s', '%s', '%s', '%s',
+	'%s', '%s', current_timestamp, current_timestamp
+) ON CONFLICT(id) DO UPDATE SET
+	repo_name=excluded.repo_name,
+	agent_name=excluded.agent_name,
+	status=excluded.status,
+	mode=excluded.mode,
+	trigger_source=excluded.trigger_source,
+	remote_host=excluded.remote_host,
+	autonomous_config_json=excluded.autonomous_config_json,
+	aws_config_json=excluded.aws_config_json,
+	updated_at=excluded.updated_at;
+`,
+				escapeSQL(session.ID), escapeSQL(session.RepoName), escapeSQL(session.AgentName),
+				escapeSQL(string(session.Status)), escapeSQL(string(session.Mode)), escapeSQL(session.TriggerSource), escapeSQL(session.RemoteHost),
+				escapeSQL(acJSON), escapeSQL(awsJSON),
+			)
+
+			tmpPath := fmt.Sprintf("/tmp/aiman-rule-%s.sql", session.ID)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			if err := sshMgr.WriteFile(ctx, tmpPath, []byte(query)); err != nil {
+				return sessionCreateMsg{err: fmt.Errorf("failed to push trigger rule to remote: %w", err), placeholderID: ""}
+			}
+
+			if _, err := sshMgr.Execute(ctx, fmt.Sprintf("sqlite3 ~/.aiman/aiman.db < %s && rm %s", tmpPath, tmpPath)); err != nil {
+				return sessionCreateMsg{err: fmt.Errorf("failed to inject trigger rule on remote: %w", err), placeholderID: ""}
+			}
+
+			// Ensure daemon is running
+			_ = m.ensureRemoteDaemon(ctx, sshMgr)
+		}
+
+		// Use the sessionCreateMsg trick but we pass the actual session so it refreshes the list
+		return sessionCreateMsg{session: *session, placeholderID: ""}
+	}
 }
 
 func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {

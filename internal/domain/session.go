@@ -15,7 +15,22 @@ const (
 	SessionStatusCleanup      SessionStatus = "CLEANUP"
 	SessionStatusError        SessionStatus = "ERROR"
 	SessionStatusInactive     SessionStatus = "INACTIVE"
+	SessionStatusReview       SessionStatus = "REVIEW"
 )
+
+type SessionMode string
+
+const (
+	SessionModeInteractive SessionMode = "INTERACTIVE"
+	SessionModeAutonomous  SessionMode = "AUTONOMOUS"
+)
+
+type AutonomousConfig struct {
+	TriggerType       string `json:"trigger_type"`        // "github" or "sentry"
+	GitHubRepo        string `json:"github_repo"`         // "owner/repo"
+	SentryProject     string `json:"sentry_project"`      // e.g. "my-frontend-app"
+	PollFrequencySecs int    `json:"poll_frequency_secs"` // e.g. 300
+}
 
 type SyncMode string
 
@@ -39,6 +54,10 @@ type Session struct {
 	AgentName        string
 	AgentModel       string // LLM model in use (e.g. "claude-opus-4-5"); detected at session creation
 	Status           SessionStatus
+	Mode             SessionMode       // INTERACTIVE or AUTONOMOUS
+	TriggerSource    string            // e.g., github, sentry, jira
+	TriggerEventID   string            // ID of the event that triggered the autonomous session
+	AutonomousConfig *AutonomousConfig // Specific configuration for autonomous polling
 	Tunnels          []Tunnel
 	AWSProfileName   string     // legacy session-scoped AWS profile on the remote; only kept for migration detection and cleanup
 	AWSConfig        *AWSConfig // role/region/policy used to refresh the shared remote AWS credential set; persisted for refresh
@@ -101,7 +120,12 @@ func (s *Session) Transition(target SessionStatus) error {
 			return nil
 		}
 	case SessionStatusActive:
-		if target == SessionStatusSyncing || target == SessionStatusCleanup || target == SessionStatusError {
+		if target == SessionStatusSyncing || target == SessionStatusCleanup || target == SessionStatusError || target == SessionStatusReview {
+			s.Status = target
+			return nil
+		}
+	case SessionStatusReview:
+		if target == SessionStatusCleanup || target == SessionStatusError || target == SessionStatusActive {
 			s.Status = target
 			return nil
 		}
@@ -133,6 +157,7 @@ type SessionRepository interface {
 	List(ctx context.Context) ([]Session, error)
 	Delete(ctx context.Context, id string) error
 	Close() error
+	HasActiveSessionForEvent(ctx context.Context, source string, eventID string) (bool, error)
 
 	// Snapshot persistence
 	SaveSnapshot(ctx context.Context, s *SessionSnapshot) error
@@ -184,4 +209,11 @@ type SessionConfig struct {
 	// to the agent's initial prompt (after any JIRA task trigger) and delivered via
 	// tmux send-keys. Empty means no extra prompt text.
 	InitialPrompt string
+	// AutonomousConfig configures polling rules if Mode is AUTONOMOUS.
+	AutonomousConfig *AutonomousConfig
+
+	// Trigger metadata for ephemeral agents spawned from rules.
+	Mode           SessionMode
+	TriggerSource  string
+	TriggerEventID string
 }

@@ -6,7 +6,7 @@ set -e
 
 REPO_URL="https://github.com/bouwerp/aiman"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
-BINARY_NAME="aiman"
+BINARY_NAME="${BINARY_NAME:-aiman}"
 GITHUB_API="https://api.github.com/repos/bouwerp/aiman/releases/latest"
 
 # Colors
@@ -50,15 +50,15 @@ detect_platform() {
 get_binary_name() {
     case "$OS" in
         darwin)
-            RELEASE_NAME="aiman-darwin-${ARCH}"
+            RELEASE_NAME="${BINARY_NAME}-darwin-${ARCH}"
             ARCHIVE_EXT="tar.gz"
             ;;
         linux)
-            RELEASE_NAME="aiman-linux-${ARCH}"
+            RELEASE_NAME="${BINARY_NAME}-linux-${ARCH}"
             ARCHIVE_EXT="tar.gz"
             ;;
         windows|mingw*|msys*)
-            RELEASE_NAME="aiman-windows-${ARCH}.exe"
+            RELEASE_NAME="${BINARY_NAME}-windows-${ARCH}.exe"
             ARCHIVE_EXT="zip"
             ;;
     esac

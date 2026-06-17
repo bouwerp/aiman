@@ -154,14 +154,22 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	if config.Agent != nil {
 		agentName = config.Agent.Name
 	}
+	mode := config.Mode
+	if mode == "" {
+		mode = domain.SessionModeInteractive
+	}
+
 	session := &domain.Session{
-		ID:        uuid.New().String(),
-		IssueKey:  config.IssueKey,
-		Branch:    branch,
-		RepoName:  config.Repo.Name,
-		AgentName: agentName,
-		Status:    domain.SessionStatusProvisioning,
-		CreatedAt: time.Now(),
+		ID:             uuid.New().String(),
+		IssueKey:       config.IssueKey,
+		Branch:         branch,
+		RepoName:       config.Repo.Name,
+		AgentName:      agentName,
+		Status:         domain.SessionStatusProvisioning,
+		Mode:           mode,
+		TriggerSource:  config.TriggerSource,
+		TriggerEventID: config.TriggerEventID,
+		CreatedAt:      time.Now(),
 	}
 
 	// Step 6: Isolate (Worktree)

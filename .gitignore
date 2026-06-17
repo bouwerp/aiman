@@ -23,3 +23,6 @@ go.work.sum
 .env
 .aiman/
 aiman.db
+
+# Aiman: generated session scaffolding (do not commit)
+.aiman_*

@@ -40,6 +40,10 @@ func (m *mockSessionRepo) Close() error {
 	return nil
 }
 
+func (m *mockSessionRepo) HasActiveSessionForEvent(ctx context.Context, source, eventID string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockSessionRepo) SaveSnapshot(_ context.Context, _ *domain.SessionSnapshot) error {
 	return nil
 }

@@ -55,6 +55,10 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN aws_profile TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN aws_config_json TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN agent_model TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN mode TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN trigger_source TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN trigger_event_id TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN autonomous_config_json TEXT")
 
 	secretsQuery := `
 	CREATE TABLE IF NOT EXISTS secrets (
@@ -112,9 +116,16 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		}
 	}
 
+	var autonomousConfigJSON string
+	if s.AutonomousConfig != nil {
+		if b, err := json.Marshal(s.AutonomousConfig); err == nil {
+			autonomousConfigJSON = string(b)
+		}
+	}
+
 	query := `
-	INSERT INTO sessions (id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, tunnels_json, aws_profile, aws_config_json, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO sessions (id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_profile, aws_config_json, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		issue_key = COALESCE(NULLIF(excluded.issue_key, ''), sessions.issue_key),
 		branch = COALESCE(NULLIF(excluded.branch, ''), sessions.branch),
@@ -128,6 +139,10 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		agent_name = COALESCE(NULLIF(excluded.agent_name, ''), sessions.agent_name),
 		agent_model = COALESCE(NULLIF(excluded.agent_model, ''), sessions.agent_model),
 		status = excluded.status,
+		mode = COALESCE(NULLIF(excluded.mode, ''), sessions.mode),
+		trigger_source = COALESCE(NULLIF(excluded.trigger_source, ''), sessions.trigger_source),
+		trigger_event_id = COALESCE(NULLIF(excluded.trigger_event_id, ''), sessions.trigger_event_id),
+		autonomous_config_json = COALESCE(excluded.autonomous_config_json, sessions.autonomous_config_json),
 		tunnels_json = COALESCE(excluded.tunnels_json, sessions.tunnels_json),
 		aws_profile = CASE
 			WHEN excluded.aws_config_json IS NOT NULL THEN excluded.aws_profile
@@ -142,7 +157,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		updatedAt = time.Now()
 	}
 	_, err := r.db.ExecContext(ctx, query,
-		s.ID, s.IssueKey, s.Branch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), tunnelsJSON, s.AWSProfileName, awsConfigJSON, s.CreatedAt, updatedAt)
+		s.ID, s.IssueKey, s.Branch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, s.AWSProfileName, awsConfigJSON, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
@@ -150,14 +165,14 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 }
 
 func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error) {
-	query := "SELECT id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, tunnels_json, aws_profile, aws_config_json, created_at, updated_at FROM sessions WHERE id = ?;"
+	query := "SELECT id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_profile, aws_config_json, created_at, updated_at FROM sessions WHERE id = ?;"
 
 	var s domain.Session
-	var statusStr string
-	var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, agentModel, tunnelsJSON, awsProfile, awsConfigJSON sql.NullString
+	var statusStr, modeStr string
+	var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, agentModel, triggerSource, triggerEventID, autonomousConfigJSON, tunnelsJSON, awsProfile, awsConfigJSON sql.NullString
 	var createdAt, updatedAt sql.NullTime
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &agentModel, &statusStr, &tunnelsJSON, &awsProfile, &awsConfigJSON, &createdAt, &updatedAt)
+		&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &agentModel, &statusStr, &modeStr, &triggerSource, &triggerEventID, &autonomousConfigJSON, &tunnelsJSON, &awsProfile, &awsConfigJSON, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("session not found: %w", err)
@@ -177,6 +192,19 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 	s.AgentName = agentName.String
 	s.AgentModel = agentModel.String
 	s.Status = domain.SessionStatus(statusStr)
+	if modeStr == "" {
+		s.Mode = domain.SessionModeInteractive // Default for old sessions
+	} else {
+		s.Mode = domain.SessionMode(modeStr)
+	}
+	s.TriggerSource = triggerSource.String
+	s.TriggerEventID = triggerEventID.String
+	if autonomousConfigJSON.Valid && autonomousConfigJSON.String != "" {
+		var ac domain.AutonomousConfig
+		if err := json.Unmarshal([]byte(autonomousConfigJSON.String), &ac); err == nil {
+			s.AutonomousConfig = &ac
+		}
+	}
 	if tunnelsJSON.Valid && tunnelsJSON.String != "" {
 		if err := json.Unmarshal([]byte(tunnelsJSON.String), &s.Tunnels); err != nil {
 			return nil, fmt.Errorf("failed to decode session tunnels: %w", err)
@@ -195,7 +223,7 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 }
 
 func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
-	query := "SELECT id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, tunnels_json, aws_profile, aws_config_json, created_at, updated_at FROM sessions ORDER BY updated_at DESC;"
+	query := "SELECT id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_profile, aws_config_json, created_at, updated_at FROM sessions ORDER BY updated_at DESC;"
 
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
@@ -206,10 +234,10 @@ func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 	var sessions []domain.Session
 	for rows.Next() {
 		var s domain.Session
-		var statusStr string
-		var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, agentModel, tunnelsJSON, awsProfile, awsConfigJSON sql.NullString
+		var statusStr, modeStr string
+		var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, agentModel, triggerSource, triggerEventID, autonomousConfigJSON, tunnelsJSON, awsProfile, awsConfigJSON sql.NullString
 		var createdAt, updatedAt sql.NullTime
-		err := rows.Scan(&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &agentModel, &statusStr, &tunnelsJSON, &awsProfile, &awsConfigJSON, &createdAt, &updatedAt)
+		err := rows.Scan(&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &agentModel, &statusStr, &modeStr, &triggerSource, &triggerEventID, &autonomousConfigJSON, &tunnelsJSON, &awsProfile, &awsConfigJSON, &createdAt, &updatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan session: %w", err)
 		}
@@ -225,6 +253,19 @@ func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 		s.AgentName = agentName.String
 		s.AgentModel = agentModel.String
 		s.Status = domain.SessionStatus(statusStr)
+		if modeStr == "" {
+			s.Mode = domain.SessionModeInteractive // Default for old sessions
+		} else {
+			s.Mode = domain.SessionMode(modeStr)
+		}
+		s.TriggerSource = triggerSource.String
+		s.TriggerEventID = triggerEventID.String
+		if autonomousConfigJSON.Valid && autonomousConfigJSON.String != "" {
+			var ac domain.AutonomousConfig
+			if err := json.Unmarshal([]byte(autonomousConfigJSON.String), &ac); err == nil {
+				s.AutonomousConfig = &ac
+			}
+		}
 		if tunnelsJSON.Valid && tunnelsJSON.String != "" {
 			if err := json.Unmarshal([]byte(tunnelsJSON.String), &s.Tunnels); err != nil {
 				return nil, fmt.Errorf("failed to decode session tunnels: %w", err)
