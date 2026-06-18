@@ -159,6 +159,7 @@ const (
 	viewStateQuitConfirm    // confirm before exiting
 	viewStateAutonomousTriggerPicker
 	viewStateAutonomousLabelsInput
+	viewStateAutonomousReuseWorkspacePicker
 	viewStateAutonomousConcurrencyInput
 )
 
@@ -2710,6 +2711,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateAutonomousLabelsInput:
 		return m.handleAutonomousLabelsInputUpdate(msg)
 
+	case viewStateAutonomousReuseWorkspacePicker:
+		return m.handleAutonomousReuseWorkspacePickerUpdate(msg)
+
 	case viewStateAutonomousConcurrencyInput:
 		return m.handleAutonomousConcurrencyInputUpdate(msg)
 
@@ -2959,6 +2963,20 @@ func (m *Model) renderView() string {
 
 	case viewStateAutonomousLabelsInput:
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.View())
+
+	case viewStateAutonomousReuseWorkspacePicker:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("Workspace Mode") + "\n\n")
+		b.WriteString("Would you like to reuse the main repository workspace serially?\n")
+		b.WriteString("This preserves node_modules across sessions but limits concurrency to 1.\n\n")
+		b.WriteString(activeStyle.Render("[1]") + "  No, use parallel git worktrees (Default)\n")
+		b.WriteString(activeStyle.Render("[2]") + "  Yes, reuse workspace sequentially\n")
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: back"))
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(2, 4).
+			Width(75)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
 
 	case viewStateAutonomousConcurrencyInput:
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.View())
@@ -4625,18 +4643,41 @@ func (m *Model) handleAutonomousLabelsInputUpdate(msg tea.Msg) (tea.Model, tea.C
 
 	if m.genericInput.Confirmed {
 		m.sessionCfg.AutonomousConfig.FilterLabels = m.genericInput.Value()
-		m.genericInput = NewTextInputModel("Max Concurrency", "e.g. 5", "5")
-		m.state = viewStateAutonomousConcurrencyInput
-		return m, m.genericInput.Init()
+		m.state = viewStateAutonomousReuseWorkspacePicker
+		return m, nil
 	}
 	return m, cmd
 }
 
+func (m *Model) handleAutonomousReuseWorkspacePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc":
+			m.genericInput = NewTextInputModel("Filter Criteria", "e.g. bug,aiman-auto", m.sessionCfg.AutonomousConfig.FilterLabels)
+			m.state = viewStateAutonomousLabelsInput
+			return m, m.genericInput.Init()
+		case "1":
+			m.sessionCfg.AutonomousConfig.ReuseWorkspace = false
+			m.genericInput = NewTextInputModel("Max Concurrency", "e.g. 5", "5")
+			m.state = viewStateAutonomousConcurrencyInput
+			return m, m.genericInput.Init()
+		case "2":
+			m.sessionCfg.AutonomousConfig.ReuseWorkspace = true
+			m.sessionCfg.AutonomousConfig.MaxConcurrency = 1
+			m.loadingMsg = "Loading repositories..."
+			m.loadingNext = viewStateRepoPicker
+			m.state = viewStateLoading
+			m.picker = NewRepoPickerModel(nil, &m.cfg.Git)
+			return m, m.fetchRepos()
+		}
+	}
+	return m, nil
+}
+
 func (m *Model) handleAutonomousConcurrencyInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-		m.genericInput = NewTextInputModel("Filter Criteria", "e.g. bug,aiman-auto", m.sessionCfg.AutonomousConfig.FilterLabels)
-		m.state = viewStateAutonomousLabelsInput
-		return m, m.genericInput.Init()
+		m.state = viewStateAutonomousReuseWorkspacePicker
+		return m, nil
 	}
 
 	var cmd tea.Cmd

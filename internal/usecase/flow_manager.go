@@ -187,6 +187,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	} else if config.Repo.Name != "No Repository" && config.Repo.Name != "" {
 		if config.AttachExisting {
 			worktree, err = m.gitManager.FindExistingWorktree(ctx, sshMgr, config.Repo, branch)
+		} else if config.ReuseWorkspace {
+			worktree, err = m.gitManager.SetupSharedWorkspace(ctx, sshMgr, config.Repo, branch)
 		} else if config.ExistingBranch {
 			worktree, err = m.gitManager.SetupRemoteWorktreeFromBranch(ctx, sshMgr, config.Repo, branch)
 		} else {
@@ -196,9 +198,11 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 			return nil, fmt.Errorf("failed to setup worktree: %w", err)
 		}
 		// Safety: sessions must never run inside the main repository directory.
-		mainRepo := infraGit.ComputeMainRepoPath(sshMgr.GetRoot(), config.Repo.Name)
-		if filepath.Clean(worktree.Path) == mainRepo {
-			return nil, fmt.Errorf("safety: session working directory %q is the main repository — sessions must use a git worktree (a sibling directory), not the main repo itself", worktree.Path)
+		if !config.ReuseWorkspace {
+			mainRepo := infraGit.ComputeMainRepoPath(sshMgr.GetRoot(), config.Repo.Name)
+			if filepath.Clean(worktree.Path) == mainRepo {
+				return nil, fmt.Errorf("safety: session working directory %q is the main repository — sessions must use a git worktree (a sibling directory), not the main repo itself", worktree.Path)
+			}
 		}
 		session.WorktreePath = worktree.Path
 	} else {

@@ -26,10 +26,11 @@ const (
 )
 
 type AutonomousConfig struct {
-	TriggerType       string `json:"trigger_type"`        // "github" or "sentry"
-	GitHubRepo        string `json:"github_repo"`         // "owner/repo"
-	FilterLabels      string `json:"filter_labels"`       // e.g. "bug,aiman-auto"
-	MaxConcurrency    int    `json:"max_concurrency"`     // e.g. 5
+	TriggerType       string `json:"trigger_type"`    // "github" or "sentry"
+	GitHubRepo        string `json:"github_repo"`     // "owner/repo"
+	FilterLabels      string `json:"filter_labels"`   // e.g. "bug,aiman-auto"
+	MaxConcurrency    int    `json:"max_concurrency"` // e.g. 5
+	ReuseWorkspace    bool   `json:"reuse_workspace"`
 	PollFrequencySecs int    `json:"poll_frequency_secs"` // e.g. 300
 }
 
@@ -186,6 +187,7 @@ type SessionConfig struct {
 	PromptFree     bool
 	ExistingBranch bool           // start from an existing remote branch instead of creating a new one
 	AttachExisting bool           // attach to an already-existing worktree without attempting git setup
+	ReuseWorkspace bool           // bypass git worktree and execute directly in the main clone
 	AdHoc          bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
 	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
 	RemoteHost     string         // host identifier to tag the session with (e.g. "mydevbox.example.com")

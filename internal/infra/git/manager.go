@@ -247,6 +247,44 @@ func (m *Manager) ensureAimanTaskGitignoredLocal(ctx context.Context, worktreePa
 	_, err := cmd.CombinedOutput()
 	return err
 }
+func (m *Manager) SetupSharedWorkspace(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
+	repoName := extractRepoName(repo.Name)
+	remoteRoot := remote.GetRoot()
+	if remoteRoot == "" {
+		return domain.Worktree{}, fmt.Errorf("remote root not configured")
+	}
+
+	var repoPath string
+	cleanRoot := strings.TrimRight(remoteRoot, "/")
+	if strings.HasSuffix(cleanRoot, "/"+repoName) || cleanRoot == repoName {
+		repoPath = cleanRoot
+	} else {
+		repoPath = fmt.Sprintf("%s/%s", cleanRoot, repoName)
+	}
+
+	if err := m.EnsureHealthyRepo(ctx, remote, repo); err != nil {
+		return domain.Worktree{}, fmt.Errorf("failed to ensure repo exists: %w", err)
+	}
+
+	// We checkout the branch directly in the main clone directory.
+	script := fmt.Sprintf(`
+set -e
+cd %q
+git checkout main || git checkout master || git checkout -
+git pull
+git branch -D %q || true
+git checkout -b %q
+`, repoPath, branch, branch)
+
+	if _, err := remote.Execute(ctx, script); err != nil {
+		return domain.Worktree{}, fmt.Errorf("failed to prepare shared workspace branch %s: %w", branch, err)
+	}
+
+	return domain.Worktree{
+		Path:   repoPath,
+		Branch: branch,
+	}, nil
+}
 
 func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
 	repoName := extractRepoName(repo.Name)

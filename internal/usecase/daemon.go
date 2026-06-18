@@ -152,6 +152,7 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 					TriggerEventID: eventID,
 					AWSConfig:      s.AWSConfig,
 					InitialPrompt:  prompt,
+					ReuseWorkspace: s.AutonomousConfig.ReuseWorkspace,
 					// TODO: Add agent mapping or default agent
 				}
 

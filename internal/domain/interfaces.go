@@ -21,6 +21,7 @@ type RepositoryManager interface {
 	SetupWorktree(ctx context.Context, repo Repo, branch string) (Worktree, error)
 	SetupRemoteWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
 	SetupRemoteWorktreeFromBranch(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
+	SetupSharedWorkspace(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
 	// FindExistingWorktree returns the path to an already-registered healthy worktree
 	// without creating a new one. Used when the user explicitly attaches to an existing worktree.
 	FindExistingWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
