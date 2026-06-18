@@ -1445,6 +1445,26 @@ type branchesMsg struct {
 	err      error
 }
 
+type workspaceStatusMsg struct {
+	path   string
+	exists bool
+	err    error
+}
+
+func (m *Model) fetchWorkspaceStatus(remote *config.Remote, repoName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		mainRepoPath := git.ComputeMainRepoPath(remote.Root, repoName)
+		_, err := mgr.Execute(ctx, fmt.Sprintf("test -d %q", mainRepoPath))
+		if err != nil {
+			return workspaceStatusMsg{path: mainRepoPath, exists: false}
+		}
+		return workspaceStatusMsg{path: mainRepoPath, exists: true}
+	}
+}
+
 type dirsMsg struct {
 	dirs   []string
 	status string
@@ -2548,6 +2568,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq == m.snapshotToastSeq {
 			m.snapshotToast = ""
 			m.snapshotToastError = false
+		}
+		return m, nil
+	case workspaceStatusMsg:
+		if m.loadingNext == viewStateSummary {
+			m.summary.SetWorkspaceStatus(msg.path, msg.exists)
+			m.state = viewStateSummary
+			return m, nil
 		}
 		return m, nil
 	case terminateStepMsg:
@@ -5226,6 +5253,12 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Pre-fill OpenRouter API key from local environment (user can override).
 		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
+		if m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
+			m.loadingMsg = "Checking workspace..."
+			m.loadingNext = viewStateSummary
+			m.state = viewStateLoading
+			return m, m.fetchWorkspaceStatus(&m.selectedRemote, m.sessionCfg.Repo.Name)
+		}
 		m.state = viewStateSummary
 		return m, nil
 	}

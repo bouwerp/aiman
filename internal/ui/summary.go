@@ -29,6 +29,9 @@ type SummaryModel struct {
 	openRouterEnabled bool
 	// promptInput is a free-text initial prompt sent to the agent. Focused by default.
 	promptInput textinput.Model
+	// workspace fields
+	workspacePath   string
+	workspaceExists bool
 }
 
 func newPromptInput() textinput.Model {
@@ -130,6 +133,11 @@ func (m *SummaryModel) SetAgent(agent *domain.Agent) {
 func (m *SummaryModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+}
+
+func (m *SummaryModel) SetWorkspaceStatus(path string, exists bool) {
+	m.workspacePath = path
+	m.workspaceExists = exists
 }
 
 // awsProfileIdx returns the index of the AWS profile input in m.inputs.
@@ -264,6 +272,15 @@ func (m SummaryModel) View() string {
 			dir = "."
 		}
 		b.WriteString(fmt.Sprintf("%-15s %s\n", "Directory:", dir))
+
+		// Workspace Status
+		if m.workspacePath != "" {
+			status := "(Will be cloned)"
+			if m.workspaceExists {
+				status = successStyle.Render("(Already cloned)")
+			}
+			b.WriteString(fmt.Sprintf("%-15s %s %s\n", "Workspace:", m.workspacePath, status))
+		}
 	}
 
 	// Agent
