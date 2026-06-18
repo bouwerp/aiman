@@ -161,6 +161,7 @@ const (
 	viewStateAutonomousLabelsInput
 	viewStateAutonomousReuseWorkspacePicker
 	viewStateAutonomousConcurrencyInput
+	viewStateTriggerDetails
 )
 
 type mainTab int
@@ -399,6 +400,10 @@ type Model struct {
 	aiSummary              map[string]*domain.SessionSummary // keyed by TmuxSession
 	aiLoading              bool
 	aiError                string
+	triggerDetailsVP       viewport.Model
+	triggerDetailsLoading  bool
+	triggerDetails         string
+	triggerDetailsError    string
 	snapshotToast          string
 	snapshotToastError     bool
 	priorSnapshotCandidate *domain.SessionSnapshot
@@ -591,6 +596,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
+			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "view trigger details (autonomous)")),
 			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch tabs")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 		}
@@ -660,6 +666,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		daemonList:          dl,
 		daemons:             make(map[string]domain.Daemon),
 		currentTab:          tabSessions,
+		triggerDetailsVP:    viewport.New(0, 0),
 	}
 	model.tunnelList.Title = "Session Tunnels"
 	model.provisionSpinner = spinner.New()
@@ -687,6 +694,12 @@ type inputHintMsg struct {
 type aiSummaryMsg struct {
 	session string
 	summary *domain.SessionSummary
+	err     error
+}
+
+type triggerDetailsMsg struct {
+	session string
+	details string
 	err     error
 }
 
@@ -953,6 +966,27 @@ func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, 
 		defer cancel()
 		summary, err := intel.SummariseBriefly(ctx, pane)
 		return aiSummaryMsg{session: session.TmuxSession, summary: summary, err: err}
+	}
+}
+
+// fetchTriggerDetailsCmd fetches the GitHub issue details using gh
+func fetchTriggerDetailsCmd(cfg *config.Config, session domain.Session) tea.Cmd {
+	return func() tea.Msg {
+		if session.TriggerEventID == "" {
+			return triggerDetailsMsg{session: session.TmuxSession, err: fmt.Errorf("no trigger event ID")}
+		}
+		remote, ok := resolveRemote(cfg, session)
+		if !ok {
+			return triggerDetailsMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
+		}
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		
+		cmd := fmt.Sprintf("gh issue view %s --repo %s", session.TriggerEventID, session.RepoName)
+		out, err := mgr.Execute(context.Background(), cmd)
+		if err != nil {
+			return triggerDetailsMsg{session: session.TmuxSession, err: fmt.Errorf("failed to fetch issue: %w\nOutput: %s", err, out)}
+		}
+		return triggerDetailsMsg{session: session.TmuxSession, details: out, err: nil}
 	}
 }
 
@@ -2397,6 +2431,9 @@ func (m *Model) SetSize(width, height int) {
 	}
 
 	m.summary.SetSize(width, height)
+	
+	m.triggerDetailsVP.Width = width - 12
+	m.triggerDetailsVP.Height = height - 12
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -2780,6 +2817,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateAutonomousConcurrencyInput:
 		return m.handleAutonomousConcurrencyInputUpdate(msg)
 
+	case viewStateTriggerDetails:
+		return m.handleTriggerDetailsUpdate(msg)
+
 	case viewStateLoading:
 		return m.handleLoadingUpdate(msg)
 	}
@@ -3011,6 +3051,19 @@ func (m *Model) renderView() string {
 			Width(60)
 
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+
+	case viewStateTriggerDetails:
+		var b strings.Builder
+		b.WriteString(activeStyle.Render("Trigger Details") + "\n\n")
+		b.WriteString(m.triggerDetailsVP.View() + "\n\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc/q: back • up/down: scroll"))
+		
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(1, 2).
+			Width(m.width - 8).
+			Height(m.height - 8)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
 
 	case viewStateAutonomousTriggerPicker:
 		var b strings.Builder
@@ -3564,6 +3617,16 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.summary != nil && msg.session == m.activeSession {
 			m.aiSummary[msg.session] = msg.summary
 			m.aiError = ""
+		}
+	case triggerDetailsMsg:
+		m.triggerDetailsLoading = false
+		if msg.err != nil {
+			m.triggerDetailsError = msg.err.Error()
+			m.triggerDetailsVP.SetContent(failStyle.Render(m.triggerDetailsError))
+		} else {
+			m.triggerDetailsError = ""
+			m.triggerDetails = msg.details
+			m.triggerDetailsVP.SetContent(m.triggerDetails)
 		}
 	case snapshotSavedMsg:
 		if msg.err != nil {
@@ -4183,6 +4246,23 @@ end tell`, cmd)
 			m.terminatePrecheckError = ""
 			m.state = viewStateTerminateConfirm
 			return m, nil, true
+		}
+	}
+	if msg.String() == "d" {
+		if m.currentTab == tabSessions {
+			if sel := m.list.SelectedItem(); sel != nil {
+				s := sel.(item).session
+				if s.Mode == domain.SessionModeAutonomous && s.TriggerSource == "github" && s.TriggerEventID != "" {
+					m.triggerDetailsLoading = true
+					m.triggerDetailsError = ""
+					m.triggerDetails = "Fetching trigger details...\n\nRunning `gh issue view " + s.TriggerEventID + "`..."
+					m.triggerDetailsVP.SetContent(m.triggerDetails)
+					m.state = viewStateTriggerDetails
+					return m, fetchTriggerDetailsCmd(m.cfg, s), true
+				} else {
+					return m, m.showToast("⚠️  No remote trigger details available for this session.", true, 3*time.Second), true
+				}
+			}
 		}
 	}
 
@@ -5413,6 +5493,24 @@ func (m *Model) handleWorktreeExistsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) handleTriggerDetailsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "esc", "q":
+			m.state = viewStateMain
+			return m, nil
+		}
+	}
+
+	m.triggerDetailsVP, cmd = m.triggerDetailsVP.Update(msg)
+	cmds = append(cmds, cmd)
+
+	return m, tea.Batch(cmds...)
 }
 
 func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
