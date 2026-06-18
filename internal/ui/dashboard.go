@@ -163,6 +163,13 @@ const (
 	viewStateAutonomousConcurrencyInput
 )
 
+type mainTab int
+
+const (
+	tabSessions mainTab = iota
+	tabDaemons
+)
+
 type panelMode int
 
 const (
@@ -178,6 +185,22 @@ type menuItem struct {
 func (i menuItem) Title() string       { return i.title }
 func (i menuItem) Description() string { return i.desc }
 func (i menuItem) FilterValue() string { return i.title }
+
+type daemonItem struct {
+	daemon domain.Daemon
+}
+
+func (i daemonItem) Title() string {
+	return i.daemon.RemoteHost
+}
+
+func (i daemonItem) Description() string {
+	return string(i.daemon.Status)
+}
+
+func (i daemonItem) FilterValue() string {
+	return i.daemon.RemoteHost
+}
 
 type item struct {
 	session    domain.Session
@@ -308,6 +331,9 @@ type Model struct {
 	state                  viewState
 	panelMode              panelMode
 	list                   list.Model
+	daemonList             list.Model
+	daemons                map[string]domain.Daemon // Keyed by RemoteHost
+	currentTab             mainTab
 	menu                   list.Model
 	remotes                RemotesModel
 	setup                  SetupModel
@@ -504,16 +530,37 @@ func (m *Model) applyRemoteFilter() {
 		return m.allSessions[i].CreatedAt.After(m.allSessions[j].CreatedAt)
 	})
 	var filtered []list.Item
+	var daemonItems []list.Item
 	for _, s := range m.allSessions {
+		if s.TmuxSession == "aiman-trigger" {
+			continue // Skip daemon sessions in the main list
+		}
 		if m.remoteFilter == "" || s.RemoteHost == m.remoteFilter {
 			filtered = append(filtered, m.makeItem(s))
 		}
 	}
+
+	// Rebuild daemon list based on configured remotes and active daemon sessions
+	for _, r := range m.cfg.Remotes {
+		if m.remoteFilter != "" && r.Host != m.remoteFilter {
+			continue
+		}
+		d, exists := m.daemons[r.Host]
+		if !exists {
+			d = domain.Daemon{RemoteHost: r.Host, Status: domain.DaemonStatusStopped}
+		}
+		daemonItems = append(daemonItems, daemonItem{daemon: d})
+	}
+
 	m.list.SetItems(filtered)
+	m.daemonList.SetItems(daemonItems)
+
 	if m.remoteFilter == "" {
 		m.list.Title = "Aiman Dashboard - Active Sessions"
+		m.daemonList.Title = "Aiman Dashboard - Remote Daemons"
 	} else {
 		m.list.Title = "Sessions [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
+		m.daemonList.Title = "Daemons [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
 	}
 }
 
@@ -544,6 +591,19 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
+			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch tabs")),
+			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
+		}
+	}
+
+	dl := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	dl.Title = "Aiman Dashboard - Remote Daemons"
+	dl.AdditionalFullHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
+			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "start/restart daemon")),
+			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "kill daemon")),
+			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch tabs")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 		}
 	}
@@ -597,6 +657,9 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		creatingSessions:    make(map[string]*creatingSession),
 		terminatingSessions: make(map[string]*terminatingSession),
 		syncHealth:          make(map[string]syncHealth),
+		daemonList:          dl,
+		daemons:             make(map[string]domain.Daemon),
+		currentTab:          tabSessions,
 	}
 	model.tunnelList.Title = "Session Tunnels"
 	model.provisionSpinner = spinner.New()
@@ -3367,19 +3430,33 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					)
 				}
 			}
-		} else if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			if m.activeSession != s.TmuxSession {
-				m.activeSession = s.TmuxSession
+		} else if m.currentTab == tabSessions {
+			if sel := m.list.SelectedItem(); sel != nil {
+				s := sel.(item).session
+				if m.activeSession != s.TmuxSession {
+					m.activeSession = s.TmuxSession
+				}
+				// Skip sessions being created (no tmux yet) or terminated
+				// (tmux going away).
+				if !m.skipSessionPolling(s.ID) {
+					// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
+					cmds = append(cmds,
+						fetchTmuxPane(m.cfg, s),
+						checkInputHint(m.cfg, s),
+					)
+				}
 			}
-			// Skip sessions being created (no tmux yet) or terminated
-			// (tmux going away).
-			if !m.skipSessionPolling(s.ID) {
-				// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
-				cmds = append(cmds,
-					fetchTmuxPane(m.cfg, s),
-					checkInputHint(m.cfg, s),
-				)
+		} else if m.currentTab == tabDaemons {
+			if sel := m.daemonList.SelectedItem(); sel != nil {
+				d := sel.(daemonItem).daemon
+				if m.activeSession != "aiman-trigger" {
+					m.activeSession = "aiman-trigger"
+				}
+				s := domain.Session{
+					RemoteHost:  d.RemoteHost,
+					TmuxSession: "aiman-trigger",
+				}
+				cmds = append(cmds, fetchTmuxPane(m.cfg, s))
 			}
 		}
 	case gitTickMsg:
@@ -3522,16 +3599,25 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Capture list selection changes to trigger immediate fetch
 	oldSelID := ""
+	oldDaemonHost := ""
 	if oldSel, ok := m.list.SelectedItem().(item); ok {
 		oldSelID = oldSel.session.ID
 	}
+	if oldDaemon, ok := m.daemonList.SelectedItem().(daemonItem); ok {
+		oldDaemonHost = oldDaemon.daemon.RemoteHost
+	}
+
 	var cmd tea.Cmd
 
 	// If it's a mouse event, only forward to the component under the cursor
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
 		m.log("Mouse X: %d, Y: %d, Type: %v, Width: %d", mouseMsg.X, mouseMsg.Y, mouseMsg.Type, m.width)
 		if mouseMsg.X < (m.width/3 + 4) {
-			m.list, cmd = m.list.Update(msg)
+			if m.currentTab == tabSessions {
+				m.list, cmd = m.list.Update(msg)
+			} else {
+				m.daemonList, cmd = m.daemonList.Update(msg)
+			}
 			cmds = append(cmds, cmd)
 		} else {
 			if m.panelMode == panelModeTerminal && m.terminal != nil {
@@ -3548,7 +3634,11 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	} else {
 		// Non-mouse messages go to both (keys are usually handled by focused component)
-		m.list, cmd = m.list.Update(msg)
+		if m.currentTab == tabSessions {
+			m.list, cmd = m.list.Update(msg)
+		} else {
+			m.daemonList, cmd = m.daemonList.Update(msg)
+		}
 		cmds = append(cmds, cmd)
 
 		if m.panelMode == panelModeTerminal && m.terminal != nil {
@@ -3564,27 +3654,47 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	newSel := m.list.SelectedItem()
-	var selItem item
-	newSelID := ""
-	if typedSel, ok := newSel.(item); ok {
-		selItem = typedSel
-		newSelID = selItem.session.ID
-	}
-	if oldSelID != newSelID && newSelID != "" {
-		s := selItem.session
-		m.activeSession = s.TmuxSession
-		m.gitStatus = domain.GitStatus{} // Clear old status
-		m.lastGitStatusUpdate = time.Time{}
-		m.tmuxOutput = "Loading..."
-		m.viewport.SetContent(m.tmuxOutput)
-		if m.skipSessionPolling(s.ID) {
-			// Nothing to fetch — the preview panel shows creation or
-			// termination progress.
-		} else if m.panelMode == panelModeTerminal {
-			cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s))
-		} else {
-			cmds = append(cmds, fetchTmuxPane(m.cfg, s), fetchGitStatus(m.cfg, s))
+	if m.currentTab == tabSessions {
+		newSel := m.list.SelectedItem()
+		var selItem item
+		newSelID := ""
+		if typedSel, ok := newSel.(item); ok {
+			selItem = typedSel
+			newSelID = selItem.session.ID
+		}
+		if oldSelID != newSelID && newSelID != "" {
+			s := selItem.session
+			m.activeSession = s.TmuxSession
+			m.gitStatus = domain.GitStatus{} // Clear old status
+			m.lastGitStatusUpdate = time.Time{}
+			m.tmuxOutput = "Loading..."
+			m.viewport.SetContent(m.tmuxOutput)
+			if m.skipSessionPolling(s.ID) {
+				// Nothing to fetch — the preview panel shows creation or
+				// termination progress.
+			} else if m.panelMode == panelModeTerminal {
+				cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s))
+			} else {
+				cmds = append(cmds, fetchTmuxPane(m.cfg, s), fetchGitStatus(m.cfg, s))
+			}
+		}
+	} else if m.currentTab == tabDaemons {
+		newSel := m.daemonList.SelectedItem()
+		var selDaemon daemonItem
+		newDaemonHost := ""
+		if typedSel, ok := newSel.(daemonItem); ok {
+			selDaemon = typedSel
+			newDaemonHost = selDaemon.daemon.RemoteHost
+		}
+		if oldDaemonHost != newDaemonHost && newDaemonHost != "" {
+			m.activeSession = "aiman-trigger"
+			m.tmuxOutput = "Loading daemon logs..."
+			m.viewport.SetContent(m.tmuxOutput)
+			s := domain.Session{
+				RemoteHost:  selDaemon.daemon.RemoteHost,
+				TmuxSession: "aiman-trigger",
+			}
+			cmds = append(cmds, fetchTmuxPane(m.cfg, s))
 		}
 	}
 
@@ -3688,6 +3798,14 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.consoleViewport.PageDown()
 			return m, nil, true
 		}
+	}
+	if msg.String() == "tab" {
+		if m.currentTab == tabSessions {
+			m.currentTab = tabDaemons
+		} else {
+			m.currentTab = tabSessions
+		}
+		return m, nil, true
 	}
 	if msg.String() == "ctrl+m" {
 		m.mouseEnabled = !m.mouseEnabled
@@ -3865,7 +3983,31 @@ end tell`, cmd)
 		return m, nil, true
 	}
 	if msg.String() == "ctrl+r" || msg.String() == "s" {
-		if sel := m.list.SelectedItem(); sel != nil {
+		if m.currentTab == tabDaemons {
+			if sel := m.daemonList.SelectedItem(); sel != nil {
+				d := sel.(daemonItem).daemon
+				m.loadingMsg = "Starting daemon on " + d.RemoteHost + "..."
+				m.loadingNext = viewStateMain
+				m.state = viewStateLoading
+				return m, func() tea.Msg {
+					ctx := context.Background()
+					var remote *config.Remote
+					for _, r := range m.cfg.Remotes {
+						if r.Host == d.RemoteHost {
+							remote = &r
+							break
+						}
+					}
+					if remote == nil {
+						return attachDoneMsg{err: fmt.Errorf("remote config not found")}
+					}
+					mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+					mgr.Execute(ctx, "tmux kill-session -t aiman-trigger 2>/dev/null || true")
+					_, err := mgr.Execute(ctx, "tmux new-session -d -s aiman-trigger 'aiman-trigger'")
+					return attachDoneMsg{err: err}
+				}, true
+			}
+		} else if sel := m.list.SelectedItem(); sel != nil {
 			selectedSess := sel.(item).session
 			if remote, ok := resolveRemote(m.cfg, selectedSess); ok {
 				m.selectedRemote = remote
@@ -4014,7 +4156,30 @@ end tell`, cmd)
 		}
 	}
 	if msg.String() == "ctrl+k" {
-		if sel := m.list.SelectedItem(); sel != nil {
+		if m.currentTab == tabDaemons {
+			if sel := m.daemonList.SelectedItem(); sel != nil {
+				d := sel.(daemonItem).daemon
+				m.loadingMsg = "Killing daemon on " + d.RemoteHost + "..."
+				m.loadingNext = viewStateMain
+				m.state = viewStateLoading
+				return m, func() tea.Msg {
+					ctx := context.Background()
+					var remote *config.Remote
+					for _, r := range m.cfg.Remotes {
+						if r.Host == d.RemoteHost {
+							remote = &r
+							break
+						}
+					}
+					if remote == nil {
+						return attachDoneMsg{err: fmt.Errorf("remote config not found")}
+					}
+					mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+					_, err := mgr.Execute(ctx, "tmux kill-session -t aiman-trigger")
+					return attachDoneMsg{err: err}
+				}, true
+			}
+		} else if sel := m.list.SelectedItem(); sel != nil {
 			m.terminatePrecheckError = ""
 			m.state = viewStateTerminateConfirm
 			return m, nil, true
@@ -5338,6 +5503,27 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.allSessions = merged
+
+		// Update daemon status
+		for host := range msg.scannedHosts {
+			d, ok := m.daemons[host]
+			if !ok {
+				d = domain.Daemon{RemoteHost: host}
+			}
+			// Assume stopped unless found
+			d.Status = domain.DaemonStatusStopped
+
+			// If daemon is running, it will be in msg.sessions
+			for _, s := range msg.sessions {
+				if s.RemoteHost == host && s.TmuxSession == "aiman-trigger" {
+					d.Status = domain.DaemonStatusRunning
+					d.UpdatedAt = time.Now()
+					break
+				}
+			}
+			m.daemons[host] = d
+		}
+
 		m.applyRemoteFilter()
 		m.state = viewStateMain
 		return m, nil
@@ -5505,210 +5691,276 @@ func (m *Model) renderMainView() string {
 	mainWidth := m.width - sidebarWidth - h - 2
 
 	// Sidebar
-	sidebar := m.list.View()
+	var sidebar string
+	if m.currentTab == tabSessions {
+		sidebar = m.list.View()
+	} else {
+		sidebar = m.daemonList.View()
+	}
 
 	// Main Panel
 	var mainContent string
-	if sel := m.list.SelectedItem(); sel != nil {
-		s := sel.(item).session
-		contentW := mainWidth - 4
-		if contentW < 20 {
-			contentW = 20
-		}
-
-		maxPath := min(contentW, 80)
-		wtDisp := truncateRunes(s.WorktreePath, maxPath)
-		sum := fmt.Sprintf("%s · %s · %s · %s", s.TmuxSession, s.RemoteHost, s.RepoName, s.Status)
-		sum = truncateRunes(sum, max(10, contentW-12))
-		sessionLines := []string{
-			activeStyle.Render("Session") + "  " + sum,
-			wtDisp,
-		}
-		var meta []string
-		if s.WorkingDirectory != "" && s.WorkingDirectory != s.WorktreePath {
-			scope := s.WorkingDirectory
-			if strings.HasPrefix(scope, s.WorktreePath) {
-				scope = "." + strings.TrimPrefix(scope, s.WorktreePath)
+	if m.currentTab == tabSessions {
+		if sel := m.list.SelectedItem(); sel != nil {
+			s := sel.(item).session
+			contentW := mainWidth - 4
+			if contentW < 20 {
+				contentW = 20
 			}
-			meta = append(meta, truncateRunes(scope, 28))
-		}
-		if s.MutagenSyncID != "" {
-			if h, tracked := m.syncHealth[s.ID]; tracked && h.stale {
-				meta = append(meta, failStyle.Render("⚠ sync STALE: "+truncateRunes(h.reason, 40))+statusStyle.Render(" ctrl+y to recreate"))
-			} else if tracked && h.status != "" {
-				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32))+statusStyle.Render(" ("+truncateRunes(h.status, 24)+")"))
-			} else {
-				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32)))
-			}
-		} else {
-			meta = append(meta, failStyle.Render("no sync"))
-		}
-		if s.IssueKey != "" {
-			meta = append(meta, s.IssueKey)
-		}
-		if len(s.Tunnels) > 0 {
-			meta = append(meta, fmt.Sprintf("tunnels:%d", len(s.Tunnels)))
-		}
-		meta = append(meta, s.CreatedAt.Format("2006-01-02 15:04"))
-		sessionLines = append(sessionLines, strings.Join(meta, " · "))
 
-		var gitLines []string
-		if m.gitStatus.Branch == "" {
-			gitLines = append(gitLines, activeStyle.Render("Git")+"  "+statusStyle.Render("Loading…"))
-		} else {
-			br := m.gitStatus.Branch
-			if m.gitStatus.Ahead > 0 || m.gitStatus.Behind > 0 {
-				br += fmt.Sprintf(" ↑%d↓%d", m.gitStatus.Ahead, m.gitStatus.Behind)
+			maxPath := min(contentW, 80)
+			wtDisp := truncateRunes(s.WorktreePath, maxPath)
+			sum := fmt.Sprintf("%s · %s · %s · %s", s.TmuxSession, s.RemoteHost, s.RepoName, s.Status)
+			sum = truncateRunes(sum, max(10, contentW-12))
+			sessionLines := []string{
+				activeStyle.Render("Session") + "  " + sum,
+				wtDisp,
 			}
-			var ch string
-			if m.gitStatus.StagedCount > 0 || m.gitStatus.UnstagedCount > 0 || m.gitStatus.UntrackedCount > 0 {
-				ch = fmt.Sprintf("%ds · %du · %d?",
-					m.gitStatus.StagedCount, m.gitStatus.UnstagedCount, m.gitStatus.UntrackedCount)
-			} else {
-				ch = "clean"
+			var meta []string
+			if s.WorkingDirectory != "" && s.WorkingDirectory != s.WorktreePath {
+				scope := s.WorkingDirectory
+				if strings.HasPrefix(scope, s.WorktreePath) {
+					scope = "." + strings.TrimPrefix(scope, s.WorktreePath)
+				}
+				meta = append(meta, truncateRunes(scope, 28))
 			}
-			gitHead := activeStyle.Render("Git") + "  " + br + " · " + ch
-			if !m.lastGitStatusUpdate.IsZero() {
-				gitHead += statusStyle.Render(" · PR@" + m.lastGitStatusUpdate.Format("15:04:05"))
-			}
-			gitLines = append(gitLines, gitHead)
-
-			if pr := m.gitStatus.PullRequest; pr != nil {
-				stateLabel := pr.DisplayState
-				if stateLabel == "" {
-					stateLabel = strings.ToLower(pr.State)
-				}
-				titleMax := contentW - 24
-				if titleMax < 14 {
-					titleMax = 14
-				}
-				prLine := fmt.Sprintf("  #%d %s · %s", pr.Number, truncateRunes(pr.Title, titleMax), strings.ToUpper(stateLabel))
-				if pr.IsDraft {
-					prLine += " · draft"
-				}
-				if pr.Merged {
-					prLine += " · merged"
-				}
-				if pr.CommentCount > 0 {
-					prLine += fmt.Sprintf(" · %dc", pr.CommentCount)
-				}
-				gitLines = append(gitLines, truncateRunes(prLine, contentW))
-
-				revKey := pr.ReviewStatus
-				if revKey == "" && pr.ReviewDecision != "" {
-					revKey = strings.ToLower(pr.ReviewDecision)
-				}
-				revLabel := "R:" + revKey
-				if revLabel == "R:" {
-					revLabel = "R:—"
-				}
-				effRev := pr.ReviewStatus
-				if effRev == "" {
-					switch strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)) {
-					case "APPROVED":
-						effRev = "approved"
-					case "CHANGES_REQUESTED":
-						effRev = "changes_requested"
-					}
-				}
-				revStyled := lipgloss.NewStyle().Foreground(prReviewForeground(effRev)).Render(revLabel)
-
-				var thStyled string
-				if pr.UnresolvedReviewThreads >= 0 {
-					thStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D7D7D"))
-					if pr.UnresolvedReviewThreads > 0 {
-						thStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500"))
-					}
-					thStyled = thStyle.Render(fmt.Sprintf("threads:%d", pr.UnresolvedReviewThreads))
+			if s.MutagenSyncID != "" {
+				if h, tracked := m.syncHealth[s.ID]; tracked && h.stale {
+					meta = append(meta, failStyle.Render("⚠ sync STALE: "+truncateRunes(h.reason, 40))+statusStyle.Render(" ctrl+y to recreate"))
+				} else if tracked && h.status != "" {
+					meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32))+statusStyle.Render(" ("+truncateRunes(h.status, 24)+")"))
 				} else {
-					thStyled = statusStyle.Render("threads:?")
+					meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32)))
 				}
-
-				mergeColor := lipgloss.Color("#7D7D7D")
-				mergeTxt := "merge:?"
-				switch strings.ToUpper(strings.TrimSpace(pr.Mergeable)) {
-				case "CONFLICTING":
-					mergeColor = lipgloss.Color("#FF0000")
-					mergeTxt = "merge:conflict"
-				case "MERGEABLE":
-					mergeColor = lipgloss.Color("#00FF00")
-					mergeTxt = "merge:ok"
-				case "UNKNOWN":
-					mergeTxt = "merge:…"
-				}
-				if pr.HasMergeConflict || strings.EqualFold(pr.MergeStateStatus, "DIRTY") {
-					mergeColor = lipgloss.Color("#FF0000")
-					mergeTxt = "merge:dirty"
-				}
-				mergeStyled := lipgloss.NewStyle().Foreground(mergeColor).Render(mergeTxt)
-
-				var parts []string
-				parts = append(parts, revStyled, thStyled, mergeStyled)
-				if pr.ChecksStatus != "none" && pr.ChecksSummary != "" {
-					chkColor := lipgloss.Color("#7D7D7D")
-					switch pr.ChecksStatus {
-					case "success":
-						chkColor = lipgloss.Color("#00FF00")
-					case "failure":
-						chkColor = lipgloss.Color("#FF0000")
-					case "pending":
-						chkColor = lipgloss.Color("#FFA500")
-					}
-					parts = append(parts, lipgloss.NewStyle().Foreground(chkColor).Render("CI:"+pr.ChecksSummary))
-				}
-				gitLines = append(gitLines, "  "+strings.Join(parts, "  "))
 			} else {
-				gitLines = append(gitLines, "  "+statusStyle.Render("No open PR (or gh unavailable)"))
+				meta = append(meta, failStyle.Render("no sync"))
+			}
+			if s.IssueKey != "" {
+				meta = append(meta, s.IssueKey)
+			}
+			if len(s.Tunnels) > 0 {
+				meta = append(meta, fmt.Sprintf("tunnels:%d", len(s.Tunnels)))
+			}
+			meta = append(meta, s.CreatedAt.Format("2006-01-02 15:04"))
+			sessionLines = append(sessionLines, strings.Join(meta, " · "))
+
+			var gitLines []string
+			if m.gitStatus.Branch == "" {
+				gitLines = append(gitLines, activeStyle.Render("Git")+"  "+statusStyle.Render("Loading…"))
+			} else {
+				br := m.gitStatus.Branch
+				if m.gitStatus.Ahead > 0 || m.gitStatus.Behind > 0 {
+					br += fmt.Sprintf(" ↑%d↓%d", m.gitStatus.Ahead, m.gitStatus.Behind)
+				}
+				var ch string
+				if m.gitStatus.StagedCount > 0 || m.gitStatus.UnstagedCount > 0 || m.gitStatus.UntrackedCount > 0 {
+					ch = fmt.Sprintf("%ds · %du · %d?",
+						m.gitStatus.StagedCount, m.gitStatus.UnstagedCount, m.gitStatus.UntrackedCount)
+				} else {
+					ch = "clean"
+				}
+				gitHead := activeStyle.Render("Git") + "  " + br + " · " + ch
+				if !m.lastGitStatusUpdate.IsZero() {
+					gitHead += statusStyle.Render(" · PR@" + m.lastGitStatusUpdate.Format("15:04:05"))
+				}
+				gitLines = append(gitLines, gitHead)
+
+				if pr := m.gitStatus.PullRequest; pr != nil {
+					stateLabel := pr.DisplayState
+					if stateLabel == "" {
+						stateLabel = strings.ToLower(pr.State)
+					}
+					titleMax := contentW - 24
+					if titleMax < 14 {
+						titleMax = 14
+					}
+					prLine := fmt.Sprintf("  #%d %s · %s", pr.Number, truncateRunes(pr.Title, titleMax), strings.ToUpper(stateLabel))
+					if pr.IsDraft {
+						prLine += " · draft"
+					}
+					if pr.Merged {
+						prLine += " · merged"
+					}
+					if pr.CommentCount > 0 {
+						prLine += fmt.Sprintf(" · %dc", pr.CommentCount)
+					}
+					gitLines = append(gitLines, truncateRunes(prLine, contentW))
+
+					revKey := pr.ReviewStatus
+					if revKey == "" && pr.ReviewDecision != "" {
+						revKey = strings.ToLower(pr.ReviewDecision)
+					}
+					revLabel := "R:" + revKey
+					if revLabel == "R:" {
+						revLabel = "R:—"
+					}
+					effRev := pr.ReviewStatus
+					if effRev == "" {
+						switch strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)) {
+						case "APPROVED":
+							effRev = "approved"
+						case "CHANGES_REQUESTED":
+							effRev = "changes_requested"
+						}
+					}
+					revStyled := lipgloss.NewStyle().Foreground(prReviewForeground(effRev)).Render(revLabel)
+
+					var thStyled string
+					if pr.UnresolvedReviewThreads >= 0 {
+						thStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D7D7D"))
+						if pr.UnresolvedReviewThreads > 0 {
+							thStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500"))
+						}
+						thStyled = thStyle.Render(fmt.Sprintf("threads:%d", pr.UnresolvedReviewThreads))
+					} else {
+						thStyled = statusStyle.Render("threads:?")
+					}
+
+					mergeColor := lipgloss.Color("#7D7D7D")
+					mergeTxt := "merge:?"
+					switch strings.ToUpper(strings.TrimSpace(pr.Mergeable)) {
+					case "CONFLICTING":
+						mergeColor = lipgloss.Color("#FF0000")
+						mergeTxt = "merge:conflict"
+					case "MERGEABLE":
+						mergeColor = lipgloss.Color("#00FF00")
+						mergeTxt = "merge:ok"
+					case "UNKNOWN":
+						mergeTxt = "merge:…"
+					}
+					if pr.HasMergeConflict || strings.EqualFold(pr.MergeStateStatus, "DIRTY") {
+						mergeColor = lipgloss.Color("#FF0000")
+						mergeTxt = "merge:dirty"
+					}
+					mergeStyled := lipgloss.NewStyle().Foreground(mergeColor).Render(mergeTxt)
+
+					var parts []string
+					parts = append(parts, revStyled, thStyled, mergeStyled)
+					if pr.ChecksStatus != "none" && pr.ChecksSummary != "" {
+						chkColor := lipgloss.Color("#7D7D7D")
+						switch pr.ChecksStatus {
+						case "success":
+							chkColor = lipgloss.Color("#00FF00")
+						case "failure":
+							chkColor = lipgloss.Color("#FF0000")
+						case "pending":
+							chkColor = lipgloss.Color("#FFA500")
+						}
+						parts = append(parts, lipgloss.NewStyle().Foreground(chkColor).Render("CI:"+pr.ChecksSummary))
+					}
+					gitLines = append(gitLines, "  "+strings.Join(parts, "  "))
+				} else {
+					gitLines = append(gitLines, "  "+statusStyle.Render("No open PR (or gh unavailable)"))
+				}
+			}
+
+			sep := statusStyle.Render(strings.Repeat("─", contentW))
+			infoRaw := strings.Join(sessionLines, "\n") + "\n" + sep + "\n" + strings.Join(gitLines, "\n")
+			infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
+
+			// AI insight panel — shown below git status when available or loading
+			aiPanel := m.renderAIPanel(s, contentW)
+
+			// Snapshot toast
+			snapshotBar := ""
+			if m.snapshotToast != "" {
+				toastStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+				if m.snapshotToastError {
+					toastStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+				}
+				snapshotBar = "\n" + toastStyle.Render(m.snapshotToast) + "\n"
+			}
+
+			var outputPanel strings.Builder
+			outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
+			modeName := "Preview"
+			if m.panelMode == panelModeTerminal {
+				modeName = "Terminal"
+			}
+			scrollHint := ""
+			if m.panelMode == panelModePreview {
+				scrollHint = "  " + statusStyle.Render("[/] scroll")
+			}
+			outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
+
+			if m.panelMode == panelModeTerminal && m.terminal != nil {
+				outputPanel.WriteString(m.terminal.View())
+			} else {
+				outputPanel.WriteString(m.viewport.View())
+			}
+
+			if cs, creating := m.creatingSessions[s.ID]; creating {
+				// Background creation in progress (or failed): the preview panel
+				// shows the verbose creation steps instead of session panels.
+				mainContent = m.renderCreatingPanel(cs, contentW) + snapshotBar
+			} else if ts, terminating := m.terminatingSessions[s.ID]; terminating {
+				// Background termination: show step progress in the preview panel.
+				mainContent = m.renderTerminatingPanel(ts, contentW) + snapshotBar
+			} else {
+				mainContent = infoPanel + aiPanel + snapshotBar + outputPanel.String()
 			}
 		}
-
-		sep := statusStyle.Render(strings.Repeat("─", contentW))
-		infoRaw := strings.Join(sessionLines, "\n") + "\n" + sep + "\n" + strings.Join(gitLines, "\n")
-		infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
-
-		// AI insight panel — shown below git status when available or loading
-		aiPanel := m.renderAIPanel(s, contentW)
-
-		// Snapshot toast
-		snapshotBar := ""
-		if m.snapshotToast != "" {
-			toastStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-			if m.snapshotToastError {
-				toastStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	} else if m.currentTab == tabDaemons {
+		if sel := m.daemonList.SelectedItem(); sel != nil {
+			d := sel.(daemonItem).daemon
+			contentW := mainWidth - 4
+			if contentW < 20 {
+				contentW = 20
 			}
-			snapshotBar = "\n" + toastStyle.Render(m.snapshotToast) + "\n"
-		}
 
-		var outputPanel strings.Builder
-		outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
-		modeName := "Preview"
-		if m.panelMode == panelModeTerminal {
-			modeName = "Terminal"
-		}
-		scrollHint := ""
-		if m.panelMode == panelModePreview {
-			scrollHint = "  " + statusStyle.Render("[/] scroll")
-		}
-		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
+			statusLabel := string(d.Status)
+			if d.Status == domain.DaemonStatusRunning {
+				statusLabel = successStyle.Render(statusLabel)
+			} else if d.Status == domain.DaemonStatusStopped {
+				statusLabel = failStyle.Render(statusLabel)
+			}
 
-		if m.panelMode == panelModeTerminal && m.terminal != nil {
-			outputPanel.WriteString(m.terminal.View())
+			daemonLines := []string{
+				activeStyle.Render("Daemon") + "  " + d.RemoteHost,
+				"Status: " + statusLabel,
+			}
+			if !d.UpdatedAt.IsZero() {
+				daemonLines = append(daemonLines, "Last Seen: "+d.UpdatedAt.Format("15:04:05"))
+			}
+
+			var managed []string
+			for _, s := range m.allSessions {
+				if s.RemoteHost == d.RemoteHost && s.Mode == domain.SessionModeAutonomous {
+					managed = append(managed, fmt.Sprintf("- %s (%s)", s.IssueKey, s.Status))
+				}
+			}
+			if len(managed) > 0 {
+				daemonLines = append(daemonLines, "")
+				daemonLines = append(daemonLines, activeStyle.Render("Managed Sessions:"))
+				daemonLines = append(daemonLines, managed...)
+			} else {
+				daemonLines = append(daemonLines, "")
+				daemonLines = append(daemonLines, "No active autonomous sessions.")
+			}
+
+			sep := statusStyle.Render(strings.Repeat("─", contentW))
+			infoRaw := strings.Join(daemonLines, "\n") + "\n" + sep + "\n"
+			infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
+
+			var outputPanel strings.Builder
+			outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
+			outputPanel.WriteString(statusStyle.Render("Live Logs (aiman-trigger)") + "\n")
+			if d.Status == domain.DaemonStatusRunning {
+				outputPanel.WriteString(m.viewport.View())
+			} else {
+				outputPanel.WriteString("\n  Daemon is not running. Live logs unavailable.")
+			}
+
+			mainContent = infoPanel + outputPanel.String()
 		} else {
-			outputPanel.WriteString(m.viewport.View())
+			mainContent = "\n\n  No daemon selected."
 		}
+	}
 
-		if cs, creating := m.creatingSessions[s.ID]; creating {
-			// Background creation in progress (or failed): the preview panel
-			// shows the verbose creation steps instead of session panels.
-			mainContent = m.renderCreatingPanel(cs, contentW) + snapshotBar
-		} else if ts, terminating := m.terminatingSessions[s.ID]; terminating {
-			// Background termination: show step progress in the preview panel.
-			mainContent = m.renderTerminatingPanel(ts, contentW) + snapshotBar
-		} else {
-			mainContent = infoPanel + aiPanel + snapshotBar + outputPanel.String()
+	if mainContent == "" {
+		if m.currentTab == tabSessions {
+			mainContent = "\n\n  No session selected.\n  Press 'm' for Admin Menu."
 		}
-	} else {
-		mainContent = "\n\n  No session selected.\n  Press 'm' for Admin Menu."
 	}
 
 	mainStyle := lipgloss.NewStyle().
