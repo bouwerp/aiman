@@ -980,7 +980,7 @@ func fetchTriggerDetailsCmd(cfg *config.Config, session domain.Session) tea.Cmd 
 			return triggerDetailsMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		
+
 		cmd := fmt.Sprintf("gh issue view %s --repo %s", session.TriggerEventID, session.RepoName)
 		out, err := mgr.Execute(context.Background(), cmd)
 		if err != nil {
@@ -1501,67 +1501,6 @@ type recreateMutagenMsg struct {
 	err     error
 }
 
-type refreshAWSMsg struct {
-	err error
-}
-
-func (m *Model) refreshAWSCredentialsCmd(s domain.Session) tea.Cmd {
-	return func() tea.Msg {
-		ctx := context.Background()
-		remote, ok := resolveRemote(m.cfg, s)
-		if !ok {
-			return refreshAWSMsg{err: fmt.Errorf("no remote configured for session %q", s.RemoteHost)}
-		}
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		if err := mgr.Connect(ctx); err != nil {
-			return refreshAWSMsg{err: fmt.Errorf("SSH connect: %w", err)}
-		}
-		// Prefer the session's own stored AWSConfig (captures per-session role/region overrides).
-		// Fall back to the remote's global delegation config if the session predates this feature.
-		var cfg *domain.AWSConfig
-		if s.AWSConfig != nil {
-			cfg = s.AWSConfig
-		} else if remote.AWSDelegation != nil && remote.AWSDelegation.SyncCredentials {
-			d := remote.AWSDelegation
-			cfg = &domain.AWSConfig{
-				SourceProfile:   d.SourceProfile,
-				RoleName:        d.RoleName,
-				AccountID:       d.AccountID,
-				Region:          d.Region,
-				Regions:         d.Regions,
-				SessionPolicy:   d.SessionPolicy,
-				DurationSeconds: d.DurationSeconds,
-			}
-		}
-		if cfg == nil {
-			return refreshAWSMsg{err: fmt.Errorf("no AWS delegation configured for remote %q", s.RemoteHost)}
-		}
-		if s.AWSProfileName != "" {
-			return refreshAWSMsg{err: fmt.Errorf("session still has legacy AWS profile state; restart it once to migrate off AWS_PROFILE")}
-		}
-		sessionEnv, err := usecase.PrepareSessionAWSEnv(ctx, mgr, s.ID, cfg)
-		if err != nil {
-			return refreshAWSMsg{err: err}
-		}
-		if strings.TrimSpace(s.TmuxSession) != "" {
-			envCmd := tmuxSessionEnvCommands(
-				s.TmuxSession,
-				sessionEnv,
-				"AWS_PROFILE",
-				"AWS_SHARED_CREDENTIALS_FILE",
-				"AWS_CONFIG_FILE",
-				"AWS_REGION",
-				"AWS_DEFAULT_REGION",
-			)
-			if envCmd != "" {
-				if _, err := mgr.Execute(ctx, envCmd); err != nil {
-					return refreshAWSMsg{err: fmt.Errorf("refresh tmux AWS environment: %w", err)}
-				}
-			}
-		}
-		return refreshAWSMsg{err: nil}
-	}
-}
 func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngine, name string, timeout time.Duration, status func(string)) error {
 	if status == nil {
 		status = m.sendStatus
@@ -2451,7 +2390,7 @@ func (m *Model) SetSize(width, height int) {
 	}
 
 	m.summary.SetSize(width, height)
-	
+
 	m.triggerDetailsVP.Width = width - 12
 	m.triggerDetailsVP.Height = height - 12
 }
@@ -2552,14 +2491,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
 			return m, m.restartSession()
-		}
-		return m, nil
-	case refreshAWSMsg:
-		if msg.err != nil {
-			m.lastError = fmt.Sprintf("AWS credentials refresh failed: %v", msg.err)
-			m.state = viewStateError
-		} else {
-			m.state = viewStateMain
 		}
 		return m, nil
 	case snapshotToastMsg:
@@ -3084,7 +3015,7 @@ func (m *Model) renderView() string {
 		b.WriteString(activeStyle.Render("Trigger Details") + "\n\n")
 		b.WriteString(m.triggerDetailsVP.View() + "\n\n")
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc/q: back • up/down: scroll"))
-		
+
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			Padding(1, 2).
@@ -4131,18 +4062,7 @@ end tell`, cmd)
 			return m, m.fetchAgents(), true
 		}
 	}
-	if msg.String() == "w" {
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			if s.AWSConfig == nil && s.AWSProfileName == "" {
-				return m, nil, true
-			}
-			m.loadingMsg = "Refreshing AWS credentials..."
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-			return m, m.refreshAWSCredentialsCmd(s), true
-		}
-	}
+
 	if msg.String() == "c" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
@@ -6122,7 +6042,7 @@ func (m *Model) renderMainView() string {
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • w: refresh AWS • y: copy view • G/end: latest • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
+		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
 
 	// PR Buttons (matching Figma)
 	var prButtons string
@@ -6369,14 +6289,9 @@ func (m *Model) restartSession() tea.Cmd {
 			awsCfg = sessionCfg.AWSConfig
 		}
 		if awsCfg != nil {
-			if sessionEnv, pushErr := usecase.PrepareSessionAWSEnv(ctx, mgr, s.ID, awsCfg); pushErr == nil {
-				s.AWSConfig = awsCfg
-				s.AWSProfileName = ""
-				awsEnv = sessionEnv
-			} else {
-				s.AWSProfileName = ""
-				logf("aws refresh skipped: %v", pushErr)
-			}
+			awsEnv = usecase.SharedSessionAWSEnv(awsCfg.SourceProfile, awsCfg.Region)
+			s.AWSConfig = awsCfg
+			s.AWSProfileName = ""
 		} else {
 			s.AWSProfileName = ""
 		}

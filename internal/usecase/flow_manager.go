@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	infraGit "github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/google/uuid"
@@ -257,16 +256,12 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
 
-	// Push shared remote AWS credentials BEFORE starting tmux so the agent sees
-	// the latest credentials from the very first command.
+	// Set AWS environment variables using the globally synced profile.
 	awsEnv := map[string]string{}
 	if config.AWSConfig != nil && sshMgr != nil {
-		if sessionEnv, pushErr := PrepareSessionAWSEnv(ctx, sshMgr, session.ID, config.AWSConfig); pushErr == nil {
-			awsEnv = sessionEnv
-			session.AWSProfileName = ""
-			session.AWSConfig = config.AWSConfig
-		}
-		// Non-fatal — session starts without session-scoped credentials on error.
+		awsEnv = SharedSessionAWSEnv(config.AWSConfig.SourceProfile, config.AWSConfig.Region)
+		session.AWSProfileName = ""
+		session.AWSConfig = config.AWSConfig
 	}
 
 	// Start the session and immediately set remain-on-exit in a single SSH call to avoid
@@ -405,55 +400,7 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 	return strings.TrimSpace(out)
 }
 
-// PrepareSessionAWSEnv refreshes the shared remote AWS credential/config files
-// and returns only the environment variables still needed by the agent process.
-func PrepareSessionAWSEnv(ctx context.Context, r domain.RemoteExecutor, sessionID string, cfg *domain.AWSConfig) (map[string]string, error) {
-	accountID := cfg.AccountID
-	if accountID == "" {
-		var err error
-		accountID, err = awsdelegation.AccountIDFromLocalProfile(ctx, cfg.SourceProfile)
-		if err != nil {
-			return nil, fmt.Errorf("aws: derive account ID: %w", err)
-		}
-	}
-
-	roleARN, err := awsdelegation.RoleARNFromParts(accountID, cfg.RoleName)
-	if err != nil {
-		return nil, fmt.Errorf("aws: build role ARN: %w", err)
-	}
-
-	creds, err := awsdelegation.GetTemporaryCredentials(ctx, cfg.SourceProfile, awsdelegation.CredentialOptions{
-		RoleARN:         roleARN,
-		SessionName:     awsRoleSessionName(sessionID),
-		SessionPolicy:   cfg.SessionPolicy,
-		DurationSeconds: cfg.DurationSeconds,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("aws: get temporary credentials: %w", err)
-	}
-
-	profileName := awsdelegation.SessionProfileName(sessionID)
-	if err := awsdelegation.ApplyDelegatedCredentials(ctx, r, profileName, creds); err != nil {
-		return nil, fmt.Errorf("aws: write shared credentials: %w", err)
-	}
-	if err := awsdelegation.ApplyDelegatedProfile(ctx, r, profileName, "", "", cfg.Region); err != nil {
-		return nil, fmt.Errorf("aws: write shared profile config: %w", err)
-	}
-	return sharedSessionAWSEnv(profileName, cfg.Region), nil
-}
-
-func awsRoleSessionName(sessionID string) string {
-	sessionID = strings.TrimSpace(sessionID)
-	if len(sessionID) > 8 {
-		sessionID = sessionID[:8]
-	}
-	if sessionID == "" {
-		return "session"
-	}
-	return "session-" + sessionID
-}
-
-func sharedSessionAWSEnv(profileName, region string) map[string]string {
+func SharedSessionAWSEnv(profileName, region string) map[string]string {
 	env := map[string]string{}
 	if p := strings.TrimSpace(profileName); p != "" {
 		env["AWS_PROFILE"] = p
