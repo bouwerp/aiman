@@ -1926,9 +1926,48 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 
 	if msg.err != nil {
 		if msg.err.Error() == "WORKTREE_EXISTS" {
-			m.worktreeExistsID = msg.placeholderID
-			m.state = viewStateWorktreeExists
-			return m, nil
+			// Auto-resolve WORKTREE_EXISTS based on active sessions
+			isUsed := false
+			for _, s := range m.allSessions {
+				if s.ID == msg.placeholderID {
+					continue
+				}
+				if s.RepoName == cs.cfg.Repo.Name && s.Branch == cs.cfg.Branch && s.RemoteHost == cs.remote.Host && s.Status != domain.SessionStatusCleanup && s.Status != domain.SessionStatusError {
+					isUsed = true
+					break
+				}
+			}
+
+			if !isUsed {
+				// No session is actively using it. Automatically recycle it.
+				m.sessionCfg.AttachExisting = true
+				cs.cfg.AttachExisting = true
+				return m, m.createSession(msg.placeholderID)
+			} else {
+				// An active session is using it. Create another worktree with a suffix.
+				suffix := 1
+				for {
+					newBranch := fmt.Sprintf("%s-%d", cs.cfg.Branch, suffix)
+					used := false
+					for _, s := range m.allSessions {
+						if s.ID == msg.placeholderID {
+							continue
+						}
+						if s.RepoName == cs.cfg.Repo.Name && s.Branch == newBranch && s.RemoteHost == cs.remote.Host && s.Status != domain.SessionStatusCleanup && s.Status != domain.SessionStatusError {
+							used = true
+							break
+						}
+					}
+					if !used {
+						m.sessionCfg.Branch = newBranch
+						cs.cfg.Branch = newBranch
+						m.sessionCfg.AttachExisting = false
+						cs.cfg.AttachExisting = false
+						return m, m.createSession(msg.placeholderID)
+					}
+					suffix++
+				}
+			}
 		}
 		cs.failed = true
 		cs.errMsg = msg.err.Error()

@@ -133,7 +133,7 @@ func TestBackgroundCreate_SuccessReplacesPlaceholder(t *testing.T) {
 	}
 }
 
-func TestBackgroundCreate_WorktreeExistsShowsDialog(t *testing.T) {
+func TestBackgroundCreate_WorktreeExistsAutoRecycles(t *testing.T) {
 	model := newTestModelWithSummaryConfirmed(t)
 	_ = model.startBackgroundCreate()
 	id := model.allSessions[0].ID
@@ -141,11 +141,11 @@ func TestBackgroundCreate_WorktreeExistsShowsDialog(t *testing.T) {
 	updated, _ := model.Update(sessionCreateMsg{placeholderID: id, err: errors.New("WORKTREE_EXISTS")})
 	model = updated.(*Model)
 
-	if model.state != viewStateWorktreeExists {
-		t.Fatalf("expected worktree-exists dialog, got state %v", model.state)
+	if model.state == viewStateWorktreeExists {
+		t.Fatalf("expected worktree-exists to auto-resolve, but got dialog")
 	}
-	if model.worktreeExistsID != id {
-		t.Errorf("expected dialog to track placeholder %s, got %q", id, model.worktreeExistsID)
+	if !model.sessionCfg.AttachExisting {
+		t.Errorf("expected sessionCfg.AttachExisting to be true for auto-recycling")
 	}
 }
 
