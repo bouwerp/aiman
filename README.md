@@ -39,10 +39,9 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Tmux Integration**: Native tmux session management
 
 ### AWS Credential Delegation
-- **Session-scoped AWS profiles**: Each session gets a unique AWS profile (`aiman-<id>`) on the remote, isolated from other sessions
-- **STS token push**: Fresh temporary credentials are pushed to the remote before the agent starts
+- **Shared AWS credential sync**: Automatically syncs your local `~/.aws` configuration to the remote
+- **STS token push**: Fresh temporary credentials are pushed to the remote when requested
 - **Per-session overrides**: At session creation, override the AWS profile and region independently per session (e.g. `dev`/`us-east-1` in one session, `prod`/`eu-west-1` in another)
-- **Automatic cleanup**: AWS profile removed from the remote when the session is terminated
 
 ### User Experience
 - **Interactive TUI**: Built with Bubble Tea for a modern terminal UI
