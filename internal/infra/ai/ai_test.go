@@ -60,12 +60,8 @@ func TestFactoryReturnsNoopForNilConfig(t *testing.T) {
 // TestOllamaIntelligenceSummariseSession verifies the Ollama client parses a
 // well-formed JSON response from the /api/generate endpoint.
 func TestOllamaIntelligenceSummariseSession(t *testing.T) {
-	summary := domain.SessionSummary{
-		Summary:    "Agent is writing tests for the auth module.",
-		Actions:    []string{"Review generated tests"},
-		AgentState: domain.AgentStateWorking,
-	}
-	rawJSON, _ := json.Marshal(summary)
+	// SummariseSession parses overview/details/actions/next_steps/agent_state.
+	rawJSON := `{"overview":["Writing tests for the auth module."],"details":["Modified auth_test.go"],"actions":["Review generated tests"],"next_steps":[],"agent_state":"working"}`
 
 	// Fake Ollama server
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +70,7 @@ func TestOllamaIntelligenceSummariseSession(t *testing.T) {
 			return
 		}
 		resp := map[string]interface{}{
-			"response": string(rawJSON),
+			"response": rawJSON,
 			"done":     true,
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -87,14 +83,14 @@ func TestOllamaIntelligenceSummariseSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SummariseSession error: %v", err)
 	}
-	if result.Summary != summary.Summary {
-		t.Errorf("Summary: want %q, got %q", summary.Summary, result.Summary)
-	}
 	if result.AgentState != domain.AgentStateWorking {
 		t.Errorf("AgentState: want %q, got %q", domain.AgentStateWorking, result.AgentState)
 	}
 	if len(result.Actions) != 1 || result.Actions[0] != "Review generated tests" {
 		t.Errorf("Actions: unexpected %v", result.Actions)
+	}
+	if len(result.Overview) != 1 || result.Overview[0] != "Writing tests for the auth module." {
+		t.Errorf("Overview: unexpected %v", result.Overview)
 	}
 }
 

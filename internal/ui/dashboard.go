@@ -1963,6 +1963,16 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 						cs.cfg.Branch = newBranch
 						m.sessionCfg.AttachExisting = false
 						cs.cfg.AttachExisting = false
+						// Update the placeholder so the list shows the suffixed name while creating.
+						cs.placeholder.Branch = newBranch
+						cs.placeholder.TmuxSession = strings.ReplaceAll(newBranch, "/", "-")
+						for i, s := range m.allSessions {
+							if s.ID == msg.placeholderID {
+								m.allSessions[i] = cs.placeholder
+								break
+							}
+						}
+						m.applyRemoteFilter()
 						return m, m.createSession(msg.placeholderID)
 					}
 					suffix++

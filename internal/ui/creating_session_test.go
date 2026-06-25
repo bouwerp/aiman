@@ -149,6 +149,52 @@ func TestBackgroundCreate_WorktreeExistsAutoRecycles(t *testing.T) {
 	}
 }
 
+func TestBackgroundCreate_WorktreeExistsInUseGetsSuffix(t *testing.T) {
+	model := newTestModelWithSummaryConfirmed(t)
+
+	// Simulate an active session already using the same branch on the same remote.
+	existing := domain.Session{
+		ID:         "existing-1",
+		Branch:     "feature/pb-1",
+		RepoName:   "org/repo",
+		RemoteHost: "devbox",
+		Status:     domain.SessionStatusActive,
+	}
+	model.allSessions = append(model.allSessions, existing)
+
+	_ = model.startBackgroundCreate()
+	// After startBackgroundCreate, applyRemoteFilter sorts by CreatedAt desc.
+	// The placeholder (just created) is at index 0; existing session (zero CreatedAt) is last.
+	id := model.allSessions[0].ID
+
+	updated, _ := model.Update(sessionCreateMsg{placeholderID: id, err: errors.New("WORKTREE_EXISTS")})
+	model = updated.(*Model)
+
+	if model.state == viewStateWorktreeExists {
+		t.Fatalf("expected worktree-exists to auto-suffix, but got dialog")
+	}
+	if model.sessionCfg.Branch != "feature/pb-1-1" {
+		t.Errorf("expected branch suffixed to feature/pb-1-1, got %q", model.sessionCfg.Branch)
+	}
+	// The placeholder in allSessions must show the suffixed name.
+	var ph *domain.Session
+	for i, s := range model.allSessions {
+		if s.ID == id {
+			ph = &model.allSessions[i]
+			break
+		}
+	}
+	if ph == nil {
+		t.Fatal("placeholder not found in allSessions")
+	}
+	if ph.Branch != "feature/pb-1-1" {
+		t.Errorf("expected placeholder Branch suffixed to feature/pb-1-1, got %q", ph.Branch)
+	}
+	if ph.TmuxSession != "feature-pb-1-1" {
+		t.Errorf("expected placeholder TmuxSession to be feature-pb-1-1, got %q", ph.TmuxSession)
+	}
+}
+
 func TestBackgroundCreate_PlaceholderSurvivesDiscovery(t *testing.T) {
 	model := newTestModelWithSummaryConfirmed(t)
 	_ = model.startBackgroundCreate()
