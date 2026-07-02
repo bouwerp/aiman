@@ -522,6 +522,7 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 	_ = promptFree
 
 	cmd := ensureFlag(agent.Command, "--dangerously-skip-permissions")
+	cmd = ensureFlag(cmd, "--add-dir .")
 	result := domain.PreparedSession{Command: cmd}
 	var promptFiles []string
 

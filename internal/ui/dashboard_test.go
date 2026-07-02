@@ -63,6 +63,16 @@ func (m *mockSessionRepo) ListSecrets(_ context.Context) ([]domain.Secret, error
 }
 func (m *mockSessionRepo) SaveSecret(_ context.Context, _ domain.Secret) error { return nil }
 func (m *mockSessionRepo) DeleteSecret(_ context.Context, _ string) error      { return nil }
+func (m *mockSessionRepo) SaveScheduledPrompt(_ context.Context, _ *domain.ScheduledPrompt) error {
+	return nil
+}
+func (m *mockSessionRepo) GetScheduledPrompt(_ context.Context, _ string) (*domain.ScheduledPrompt, error) {
+	return nil, nil
+}
+func (m *mockSessionRepo) ListScheduledPrompts(_ context.Context) ([]domain.ScheduledPrompt, error) {
+	return nil, nil
+}
+func (m *mockSessionRepo) DeleteScheduledPrompt(_ context.Context, _ string) error { return nil }
 
 // TestWorktreeExistsErrorHandling tests that WORKTREE_EXISTS error transitions to the correct state
 func TestWorktreeExistsErrorHandling(t *testing.T) {

@@ -161,7 +161,6 @@ func TestRenameSessionProfile(t *testing.T) {
 	}
 }
 
-
 func TestRenameSessionProfileRefusesOverwrite(t *testing.T) {
 	m := &mockRemote{home: "/home/dev", files: map[string]string{
 		"credentials": "[old]\naws_access_key_id = abc\n\n[new]\naws_access_key_id = xyz\n",

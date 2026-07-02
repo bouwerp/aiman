@@ -94,6 +94,19 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE session_snapshots ADD COLUMN details_json TEXT")
 	_, _ = db.Exec("ALTER TABLE session_snapshots ADD COLUMN actions_json TEXT")
 
+	promptQuery := `
+	CREATE TABLE IF NOT EXISTS scheduled_prompts (
+		id TEXT PRIMARY KEY,
+		cron_expr TEXT NOT NULL,
+		prompt TEXT NOT NULL,
+		session_ids_json TEXT NOT NULL,
+		created_at DATETIME NOT NULL,
+		last_run_at DATETIME NOT NULL
+	);`
+	if _, err := db.Exec(promptQuery); err != nil {
+		return nil, fmt.Errorf("failed to create scheduled_prompts table: %w", err)
+	}
+
 	return &Repository{
 		db: db,
 	}, nil
@@ -468,4 +481,88 @@ func (r *Repository) DeleteSecret(ctx context.Context, key string) error {
 		return fmt.Errorf("failed to delete secret: %w", err)
 	}
 	return nil
+}
+
+// Scheduled Prompts persistence
+func (r *Repository) SaveScheduledPrompt(ctx context.Context, sp *domain.ScheduledPrompt) error {
+	idsJSON, err := json.Marshal(sp.SessionIDs)
+	if err != nil {
+		return fmt.Errorf("failed to encode session ids: %w", err)
+	}
+	query := `
+	INSERT INTO scheduled_prompts (id, cron_expr, prompt, session_ids_json, created_at, last_run_at)
+	VALUES (?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		cron_expr = excluded.cron_expr,
+		prompt = excluded.prompt,
+		session_ids_json = excluded.session_ids_json,
+		last_run_at = excluded.last_run_at;`
+
+	if sp.CreatedAt.IsZero() {
+		sp.CreatedAt = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, query, sp.ID, sp.CronExpr, sp.Prompt, string(idsJSON), sp.CreatedAt, sp.LastRunAt)
+	if err != nil {
+		return fmt.Errorf("failed to save scheduled prompt: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) GetScheduledPrompt(ctx context.Context, id string) (*domain.ScheduledPrompt, error) {
+	query := `SELECT id, cron_expr, prompt, session_ids_json, created_at, last_run_at FROM scheduled_prompts WHERE id = ?;`
+	row := r.db.QueryRowContext(ctx, query, id)
+	return scanScheduledPrompt(row)
+}
+
+func (r *Repository) ListScheduledPrompts(ctx context.Context) ([]domain.ScheduledPrompt, error) {
+	query := `SELECT id, cron_expr, prompt, session_ids_json, created_at, last_run_at FROM scheduled_prompts ORDER BY created_at DESC;`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list scheduled prompts: %w", err)
+	}
+	defer rows.Close()
+	var result []domain.ScheduledPrompt
+	for rows.Next() {
+		sp, err := scanScheduledPrompt(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan scheduled prompt: %w", err)
+		}
+		result = append(result, *sp)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) DeleteScheduledPrompt(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM scheduled_prompts WHERE id = ?;", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete scheduled prompt: %w", err)
+	}
+	return nil
+}
+
+type spScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanScheduledPrompt(row spScanner) (*domain.ScheduledPrompt, error) {
+	var sp domain.ScheduledPrompt
+	var idsJSON string
+	var createdAt, lastRunAt sql.NullTime
+	err := row.Scan(&sp.ID, &sp.CronExpr, &sp.Prompt, &idsJSON, &createdAt, &lastRunAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("scheduled prompt not found: %w", err)
+		}
+		return nil, err
+	}
+	if idsJSON != "" && idsJSON != "null" {
+		_ = json.Unmarshal([]byte(idsJSON), &sp.SessionIDs)
+	}
+	if createdAt.Valid {
+		sp.CreatedAt = createdAt.Time
+	}
+	if lastRunAt.Valid {
+		sp.LastRunAt = lastRunAt.Time
+	}
+	return &sp, nil
 }

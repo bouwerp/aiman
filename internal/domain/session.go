@@ -172,6 +172,12 @@ type SessionRepository interface {
 	ListSecrets(ctx context.Context) ([]Secret, error)
 	SaveSecret(ctx context.Context, s Secret) error
 	DeleteSecret(ctx context.Context, key string) error
+
+	// Scheduled Prompt persistence
+	SaveScheduledPrompt(ctx context.Context, sp *ScheduledPrompt) error
+	GetScheduledPrompt(ctx context.Context, id string) (*ScheduledPrompt, error)
+	ListScheduledPrompts(ctx context.Context) ([]ScheduledPrompt, error)
+	DeleteScheduledPrompt(ctx context.Context, id string) error
 }
 
 // SessionConfig holds the configuration for creating a new session.
@@ -218,4 +224,14 @@ type SessionConfig struct {
 	Mode           SessionMode
 	TriggerSource  string
 	TriggerEventID string
+}
+
+// ScheduledPrompt represents a cron-scheduled prompt to inject into a set of sessions.
+type ScheduledPrompt struct {
+	ID         string    `json:"id"`
+	CronExpr   string    `json:"cron_expr"`
+	Prompt     string    `json:"prompt"`
+	SessionIDs []string  `json:"session_ids"` // The sessions this schedule applies to
+	CreatedAt  time.Time `json:"created_at"`
+	LastRunAt  time.Time `json:"last_run_at"`
 }

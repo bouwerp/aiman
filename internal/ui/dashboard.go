@@ -125,6 +125,7 @@ const (
 	viewStateGeneralSettings
 	viewStateAISettings
 	viewStateSnapshotBrowser
+	viewStateScheduledPrompts
 	viewStateArchiveSession // sentinel: archive selected session from menu
 	viewStatePicker
 	viewStateVSCodeError
@@ -344,6 +345,7 @@ type Model struct {
 	secretsSetup           SecretsSetupModel
 	awsCredentials         AWSCredentialsModel
 	snapshotBrowser        SnapshotBrowserModel
+	scheduledPrompts       ScheduledPromptsModel
 	picker                 RepoPickerModel
 	issuePicker            IssuePickerModel
 	branchInput            BranchInputModel
@@ -625,6 +627,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
 		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
+		menuItem{title: "Scheduled Prompts", desc: "Manage periodic cron-scheduled prompt injections", action: viewStateScheduledPrompts},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
 	m.Title = "Administrative Menu"
@@ -650,6 +653,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		generalSetup:        NewGeneralSetupModel(cfg),
 		aiSetup:             NewAISetupModel(cfg),
 		secretsSetup:        NewSecretsSetupModel(db),
+		scheduledPrompts:    NewScheduledPromptsModel(db),
 		doctorResults:       doctorResults,
 		viewport:            vp,
 		firstLoad:           make(map[string]bool),
@@ -2721,6 +2725,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateSnapshotBrowser:
 		return m.handleSnapshotBrowserUpdate(msg)
 
+	case viewStateScheduledPrompts:
+		return m.handleScheduledPromptsUpdate(msg)
+
 	case viewStateVSCodeError, viewStateError:
 		if _, ok := msg.(tea.KeyMsg); ok {
 			m.state = viewStateMain
@@ -2866,6 +2873,9 @@ func (m *Model) renderView() string {
 
 	case viewStateSnapshotBrowser:
 		return docStyle.Render(m.snapshotBrowser.View())
+
+	case viewStateScheduledPrompts:
+		return docStyle.Render(m.scheduledPrompts.View())
 
 	case viewStateVSCodeError:
 		var b strings.Builder
@@ -4308,7 +4318,7 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.secretsSetup.Init()
 				}
 				if i.action == viewStateAWSCredentials {
-					m.awsCredentials = NewAWSCredentialsModel(m.cfg, m.db)
+					m.awsCredentials = NewAWSCredentialsModel(m.cfg, m.doctorResults)
 					m.awsCredentials.width = m.width
 					m.awsCredentials.height = m.height
 					m.state = i.action
@@ -4318,6 +4328,11 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.snapshotBrowser = NewSnapshotBrowserModel(m.width, m.height, m.snapshotManager)
 					m.state = i.action
 					return m, loadAllSnapshotsCmd(m.snapshotManager)
+				}
+				if i.action == viewStateScheduledPrompts {
+					m.scheduledPrompts = NewScheduledPromptsModel(m.db)
+					m.state = i.action
+					return m, m.scheduledPrompts.Init()
 				}
 				if i.action == viewStateArchiveSession {
 					// Go through the progress view, same as ctrl+a.
@@ -4765,6 +4780,20 @@ func (m *Model) handleSecretsSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	subModel, cmd = m.secretsSetup.Update(msg)
 	m.secretsSetup = subModel.(SecretsSetupModel)
+	return m, cmd
+}
+
+func (m *Model) handleScheduledPromptsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if m.scheduledPrompts.mode == spModeList && keyMsg.String() == "esc" {
+			m.state = viewStateMenu
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	newModel, cmd := m.scheduledPrompts.Update(msg)
+	m.scheduledPrompts = newModel.(ScheduledPromptsModel)
 	return m, cmd
 }
 

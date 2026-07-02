@@ -47,6 +47,16 @@ func (m *startupSessionRepo) DeleteSecret(context.Context, string) error      { 
 func (m *startupSessionRepo) HasActiveSessionForEvent(context.Context, string, string) (bool, error) {
 	return false, nil
 }
+func (m *startupSessionRepo) SaveScheduledPrompt(context.Context, *domain.ScheduledPrompt) error {
+	return nil
+}
+func (m *startupSessionRepo) GetScheduledPrompt(context.Context, string) (*domain.ScheduledPrompt, error) {
+	return nil, nil
+}
+func (m *startupSessionRepo) ListScheduledPrompts(context.Context) ([]domain.ScheduledPrompt, error) {
+	return nil, nil
+}
+func (m *startupSessionRepo) DeleteScheduledPrompt(context.Context, string) error { return nil }
 
 func TestLoadConfiguredSessions_PrunesRemovedRemoteSessions(t *testing.T) {
 	repo := &startupSessionRepo{

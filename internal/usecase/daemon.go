@@ -13,6 +13,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/local"
+	"github.com/robfig/cron/v3"
 )
 
 type Daemon struct {
@@ -57,6 +58,11 @@ func (d *Daemon) poll(ctx context.Context) error {
 	// 2. Monitor tmux panes for blocked agents
 	if err := d.monitorPanes(ctx); err != nil {
 		log.Printf("Pane monitoring error: %v", err)
+	}
+
+	// 3. Trigger Scheduled Prompts
+	if err := d.pollScheduledPrompts(ctx); err != nil {
+		log.Printf("Scheduled prompt polling error: %v", err)
 	}
 
 	return nil
@@ -252,4 +258,58 @@ func (d *Daemon) monitorPanes(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (d *Daemon) pollScheduledPrompts(ctx context.Context) error {
+	prompts, err := d.db.ListScheduledPrompts(ctx)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+
+	for _, p := range prompts {
+		schedule, err := parser.Parse(p.CronExpr)
+		if err != nil {
+			log.Printf("Invalid cron expr for prompt %s: %v", p.ID, err)
+			continue
+		}
+
+		lastRun := p.LastRunAt
+		if lastRun.IsZero() {
+			lastRun = p.CreatedAt
+		}
+
+		nextRun := schedule.Next(lastRun)
+		if !now.Before(nextRun) {
+			log.Printf("Triggering scheduled prompt %s", p.ID)
+			d.triggerPrompt(ctx, &p)
+
+			p.LastRunAt = now
+			d.db.SaveScheduledPrompt(ctx, &p)
+		}
+	}
+	return nil
+}
+
+func (d *Daemon) triggerPrompt(ctx context.Context, p *domain.ScheduledPrompt) {
+	for _, sessID := range p.SessionIDs {
+		s, err := d.db.Get(ctx, sessID)
+		if err != nil || s.TmuxSession == "" {
+			continue
+		}
+
+		var remoteRoot string
+		for _, r := range d.cfg.Remotes {
+			if r.Host == s.RemoteHost {
+				remoteRoot = r.Root
+				break
+			}
+		}
+		executor := local.NewExecutor(remoteRoot)
+
+		cmd := fmt.Sprintf("tmux send-keys -t %q %q Enter", s.TmuxSession, p.Prompt)
+		_, _ = executor.Execute(ctx, cmd)
+	}
 }

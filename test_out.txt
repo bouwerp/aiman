@@ -1,0 +1,17 @@
+?   	github.com/bouwerp/aiman/cmd/aiman	[no test files]
+?   	github.com/bouwerp/aiman/cmd/aiman-trigger	[no test files]
+ok  	github.com/bouwerp/aiman/internal/domain	0.005s
+ok  	github.com/bouwerp/aiman/internal/infra/agent	0.005s
+ok  	github.com/bouwerp/aiman/internal/infra/ai	0.009s
+ok  	github.com/bouwerp/aiman/internal/infra/awsdelegation	0.004s
+ok  	github.com/bouwerp/aiman/internal/infra/config	0.005s
+ok  	github.com/bouwerp/aiman/internal/infra/git	0.065s
+ok  	github.com/bouwerp/aiman/internal/infra/jira	0.005s
+?   	github.com/bouwerp/aiman/internal/infra/local	[no test files]
+ok  	github.com/bouwerp/aiman/internal/infra/mutagen	0.003s
+ok  	github.com/bouwerp/aiman/internal/infra/skills	0.004s
+ok  	github.com/bouwerp/aiman/internal/infra/sqlite	0.015s
+ok  	github.com/bouwerp/aiman/internal/infra/ssh	0.003s
+ok  	github.com/bouwerp/aiman/internal/pane	0.004s
+ok  	github.com/bouwerp/aiman/internal/ui	0.041s
+ok  	github.com/bouwerp/aiman/internal/usecase	0.013s
