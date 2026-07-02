@@ -22,7 +22,10 @@ const (
 	spModeConfirmDelete
 )
 
-type spLoadedMsg struct{ prompts []domain.ScheduledPrompt }
+type spLoadedMsg struct {
+	prompts  []domain.ScheduledPrompt
+	sessions []domain.Session
+}
 type spSavedMsg struct{ prompts []domain.ScheduledPrompt }
 type spDeletedMsg struct{ prompts []domain.ScheduledPrompt }
 
@@ -50,11 +53,9 @@ func (m ScheduledPromptsModel) Init() tea.Cmd {
 
 func (m ScheduledPromptsModel) loadPrompts() tea.Cmd {
 	return func() tea.Msg {
-		prompts, err := m.repo.ListScheduledPrompts(context.Background())
-		if err != nil {
-			return spLoadedMsg{prompts: nil}
-		}
-		return spLoadedMsg{prompts: prompts}
+		prompts, _ := m.repo.ListScheduledPrompts(context.Background())
+		sessions, _ := m.repo.List(context.Background())
+		return spLoadedMsg{prompts: prompts, sessions: sessions}
 	}
 }
 
@@ -62,6 +63,7 @@ func (m ScheduledPromptsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spLoadedMsg:
 		m.prompts = msg.prompts
+		m.allSessions = msg.sessions
 		if m.cursor >= len(m.prompts) && len(m.prompts) > 0 {
 			m.cursor = len(m.prompts) - 1
 		}
