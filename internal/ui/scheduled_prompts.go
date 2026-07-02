@@ -23,8 +23,7 @@ const (
 )
 
 type spLoadedMsg struct {
-	prompts  []domain.ScheduledPrompt
-	sessions []domain.Session
+	prompts []domain.ScheduledPrompt
 }
 type spSavedMsg struct{ prompts []domain.ScheduledPrompt }
 type spDeletedMsg struct{ prompts []domain.ScheduledPrompt }
@@ -54,8 +53,7 @@ func (m ScheduledPromptsModel) Init() tea.Cmd {
 func (m ScheduledPromptsModel) loadPrompts() tea.Cmd {
 	return func() tea.Msg {
 		prompts, _ := m.repo.ListScheduledPrompts(context.Background())
-		sessions, _ := m.repo.List(context.Background())
-		return spLoadedMsg{prompts: prompts, sessions: sessions}
+		return spLoadedMsg{prompts: prompts}
 	}
 }
 
@@ -63,7 +61,6 @@ func (m ScheduledPromptsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spLoadedMsg:
 		m.prompts = msg.prompts
-		m.allSessions = msg.sessions
 		if m.cursor >= len(m.prompts) && len(m.prompts) > 0 {
 			m.cursor = len(m.prompts) - 1
 		}
@@ -167,8 +164,6 @@ func (m ScheduledPromptsModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.inputFocus == len(m.inputs) {
 			// select sessions
 			m.mode = spModeSelectSessions
-			sessions, _ := m.repo.List(context.Background())
-			m.allSessions = sessions
 			m.sessionCursor = 0
 			return m, nil
 		}

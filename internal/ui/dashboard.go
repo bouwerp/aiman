@@ -4331,6 +4331,7 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if i.action == viewStateScheduledPrompts {
 					m.scheduledPrompts = NewScheduledPromptsModel(m.db)
+					m.scheduledPrompts.allSessions = m.allSessions
 					m.state = i.action
 					return m, m.scheduledPrompts.Init()
 				}
@@ -4792,6 +4793,7 @@ func (m *Model) handleScheduledPromptsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
+	m.scheduledPrompts.allSessions = m.allSessions
 	newModel, cmd := m.scheduledPrompts.Update(msg)
 	m.scheduledPrompts = newModel.(ScheduledPromptsModel)
 	return m, cmd
