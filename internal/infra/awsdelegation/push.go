@@ -12,17 +12,6 @@ type RemoteRunner interface {
 	WriteFile(ctx context.Context, path string, content []byte) error
 }
 
-// SessionProfileName returns the aiman-managed AWS profile name for a session.
-// The first 12 characters of the session ID provide uniqueness across sessions
-// on the same remote without exposing the full UUID.
-func SessionProfileName(sessionID string) string {
-	id := strings.TrimSpace(sessionID)
-	if len(id) > 12 {
-		id = id[:12]
-	}
-	return "aiman-" + id
-}
-
 // ApplyDelegatedProfile merges the delegated profile into $HOME/.aws/config on the remote.
 // Secrets are never written by this function.
 // region is optional; when non-empty it is written into the profile block.

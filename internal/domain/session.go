@@ -61,7 +61,6 @@ type Session struct {
 	TriggerEventID   string            // ID of the event that triggered the autonomous session
 	AutonomousConfig *AutonomousConfig // Specific configuration for autonomous polling
 	Tunnels          []Tunnel
-	AWSProfileName   string     // legacy session-scoped AWS profile on the remote; only kept for migration detection and cleanup
 	AWSConfig        *AWSConfig // role/region/policy used to refresh the shared remote AWS credential set; persisted for refresh
 	CreatedAt        time.Time
 	UpdatedAt        time.Time

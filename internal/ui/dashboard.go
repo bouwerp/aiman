@@ -2277,16 +2277,6 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 		if err := awsdelegation.RemoveSessionCredentialFiles(ctx, mgr, s.ID); err != nil {
 			return err
 		}
-		// Remove the aiman-managed named profile written by current releases
-		if s.ID != "" {
-			if err := awsdelegation.RemoveSessionProfile(ctx, mgr, awsdelegation.SessionProfileName(s.ID)); err != nil {
-				return err
-			}
-		}
-		// Remove any legacy stored profile name from older releases
-		if s.AWSProfileName != "" {
-			return awsdelegation.RemoveSessionProfile(ctx, mgr, s.AWSProfileName)
-		}
 		return nil
 	case 6: // Delete session from database
 		if s.ID == "" {
@@ -6340,9 +6330,6 @@ func (m *Model) restartSession() tea.Cmd {
 		if awsCfg != nil {
 			awsEnv = usecase.SharedSessionAWSEnv(awsCfg.SourceProfile, awsCfg.Region)
 			s.AWSConfig = awsCfg
-			s.AWSProfileName = ""
-		} else {
-			s.AWSProfileName = ""
 		}
 		awsEnv["AIMAN_ID"] = strings.TrimSpace(s.ID)
 		extraEnvFlags := tmuxExtraEnvFlags(awsEnv)

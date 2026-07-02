@@ -260,7 +260,6 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	awsEnv := map[string]string{}
 	if config.AWSConfig != nil && sshMgr != nil {
 		awsEnv = SharedSessionAWSEnv(config.AWSConfig.SourceProfile, config.AWSConfig.Region)
-		session.AWSProfileName = ""
 		session.AWSConfig = config.AWSConfig
 	}
 
