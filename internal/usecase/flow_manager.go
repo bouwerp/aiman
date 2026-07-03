@@ -191,7 +191,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		} else if config.ExistingBranch {
 			worktree, err = m.gitManager.SetupRemoteWorktreeFromBranch(ctx, sshMgr, config.Repo, branch)
 		} else {
-			worktree, err = m.gitManager.SetupRemoteWorktree(ctx, sshMgr, config.Repo, branch)
+			worktree, err = m.gitManager.SetupRemoteWorktree(ctx, sshMgr, config.Repo, branch, config.BaseBranch)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to setup worktree: %w", err)

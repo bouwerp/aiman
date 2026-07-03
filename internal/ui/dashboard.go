@@ -1963,6 +1963,8 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 						}
 					}
 					if !used {
+						m.sessionCfg.BaseBranch = cs.cfg.Branch
+						cs.cfg.BaseBranch = cs.cfg.Branch
 						m.sessionCfg.Branch = newBranch
 						cs.cfg.Branch = newBranch
 						m.sessionCfg.AttachExisting = false

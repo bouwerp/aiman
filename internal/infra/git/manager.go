@@ -286,7 +286,7 @@ git checkout -b %q
 	}, nil
 }
 
-func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
+func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string, baseBranch string) (domain.Worktree, error) {
 	repoName := extractRepoName(repo.Name)
 	remoteRoot := remote.GetRoot()
 	if remoteRoot == "" {
@@ -362,7 +362,9 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	// Determine base branch. Try origin/HEAD first (set by git clone and always
 	// reflects the remote's actual default), then fall back to well-known names,
 	// then fall back to HEAD (works for repos with non-standard default branches).
-	baseBranch := detectBaseBranch(ctx, remote, repoPath)
+	if baseBranch == "" {
+		baseBranch = detectBaseBranch(ctx, remote, repoPath)
+	}
 	if baseBranch == "" {
 		return domain.Worktree{}, fmt.Errorf("failed to create worktree: cannot determine default branch for %s — the repository may have no commits", repoPath)
 	}

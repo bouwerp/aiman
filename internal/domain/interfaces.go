@@ -19,7 +19,7 @@ type RepositoryManager interface {
 	ListRepos(ctx context.Context) ([]Repo, error)
 	ListRemoteBranches(ctx context.Context, remote RemoteExecutor, repo Repo) ([]string, error)
 	SetupWorktree(ctx context.Context, repo Repo, branch string) (Worktree, error)
-	SetupRemoteWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
+	SetupRemoteWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, branch string, baseBranch string) (Worktree, error)
 	SetupRemoteWorktreeFromBranch(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
 	SetupSharedWorkspace(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
 	// FindExistingWorktree returns the path to an already-registered healthy worktree

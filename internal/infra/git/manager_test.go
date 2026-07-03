@@ -597,7 +597,7 @@ func TestSetupRemoteWorktree_DisablesSparseCheckoutPerWorktree(t *testing.T) {
 		},
 	}
 
-	wt, err := mgr.SetupRemoteWorktree(context.Background(), remote, domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}, "feature-x")
+	wt, err := mgr.SetupRemoteWorktree(context.Background(), remote, domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}, "feature-x", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

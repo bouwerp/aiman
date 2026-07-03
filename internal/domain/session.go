@@ -192,6 +192,7 @@ type SessionConfig struct {
 	PromptFree     bool
 	ExistingBranch bool           // start from an existing remote branch instead of creating a new one
 	AttachExisting bool           // attach to an already-existing worktree without attempting git setup
+	BaseBranch     string         // clone from this branch instead of the repository default branch
 	ReuseWorkspace bool           // bypass git worktree and execute directly in the main clone
 	AdHoc          bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
 	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
