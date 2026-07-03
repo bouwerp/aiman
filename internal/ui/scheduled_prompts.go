@@ -386,7 +386,24 @@ func (m ScheduledPromptsModel) viewSelectSessions() string {
 			if m.selectedSessions[s.ID] {
 				check = "[x]"
 			}
-			line := fmt.Sprintf("%s %s (%s)", check, s.Branch, s.RepoName)
+
+			// Format similar to Dashboard item.Title()
+			var nameParts []string
+			if s.IssueKey != "" {
+				nameParts = append(nameParts, s.IssueKey)
+			}
+			if s.Branch != "" && s.Branch != s.IssueKey {
+				nameParts = append(nameParts, s.Branch)
+			}
+			if s.RepoName != "" {
+				nameParts = append(nameParts, "("+s.RepoName+")")
+			}
+			name := strings.Join(nameParts, " ")
+			if name == "" {
+				name = "unknown branch"
+			}
+
+			line := fmt.Sprintf("%s %s [%s]", check, s.TmuxSession, name)
 			if i == m.sessionCursor {
 				line = activeStyle.Render(line)
 			}

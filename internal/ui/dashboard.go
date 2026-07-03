@@ -5587,6 +5587,34 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if tk != "" && seenTmux[tk] {
 				continue
 			}
+
+			if dbSess, ok := dbSessions[s.ID]; ok {
+				if dbSess.WorkingDirectory != "" {
+					s.WorkingDirectory = dbSess.WorkingDirectory
+				}
+				if dbSess.RepoName != "" && (s.RepoName == "" || (!strings.Contains(s.RepoName, "/") && strings.Contains(dbSess.RepoName, "/"))) {
+					s.RepoName = dbSess.RepoName
+				}
+				if s.IssueKey == "" {
+					s.IssueKey = dbSess.IssueKey
+				}
+				if s.Branch == "" {
+					s.Branch = dbSess.Branch
+				}
+				if s.AgentName == "" {
+					s.AgentName = dbSess.AgentName
+				}
+				if s.AgentModel == "" {
+					s.AgentModel = dbSess.AgentModel
+				}
+				if s.WorktreePath == "" {
+					s.WorktreePath = dbSess.WorktreePath
+				}
+				if s.LocalPath == "" {
+					s.LocalPath = dbSess.LocalPath
+				}
+			}
+
 			merged = append(merged, s)
 			seenID[s.ID] = true
 			if tk != "" {
