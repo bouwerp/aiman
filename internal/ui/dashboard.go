@@ -1929,7 +1929,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 	}
 
 	if msg.err != nil {
-		if msg.err.Error() == "WORKTREE_EXISTS" {
+		if strings.Contains(msg.err.Error(), "WORKTREE_EXISTS") {
 			// Auto-resolve WORKTREE_EXISTS based on active sessions
 			isUsed := false
 			for _, s := range m.allSessions {
@@ -2644,7 +2644,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
-			if msg.err.Error() == "WORKTREE_EXISTS" {
+			if strings.Contains(msg.err.Error(), "WORKTREE_EXISTS") {
 				m.state = viewStateWorktreeExists
 				return m, nil
 			}
