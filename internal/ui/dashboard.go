@@ -6132,17 +6132,29 @@ func (m *Model) renderMainView() string {
 		doctorOutput.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
 	}
 
-	remoteInfo := fmt.Sprintf("Aiman %s | Remotes: %d configured", m.version, len(m.cfg.Remotes))
+	remoteInfo := fmt.Sprintf("Remotes: %d configured", len(m.cfg.Remotes))
 	if m.remoteFilter != "" {
 		remoteInfo += " | Filter: " + activeStyle.Render(remoteNameForHost(m.cfg, m.remoteFilter))
 	}
 
 	footer := "\n" + remoteInfo + "\n\n" + doctorOutput.String()
 
+	helpText := "n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit"
+	versionText := m.version
+
+	contentWidth := m.width - 4 // docStyle margins
+	var bottomLine string
+	if lipgloss.Width(helpText)+lipgloss.Width(versionText) <= contentWidth {
+		pad := contentWidth - lipgloss.Width(helpText) - lipgloss.Width(versionText)
+		bottomLine = helpText + strings.Repeat(" ", pad) + versionText
+	} else {
+		bottomLine = helpText + " | " + versionText
+	}
+
 	helpBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1).
-		Render("n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit")
+		Render(bottomLine)
 
 	// PR Buttons (matching Figma)
 	var prButtons string
