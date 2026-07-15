@@ -163,3 +163,59 @@ func TestScanAgents_DetectsAgeni(t *testing.T) {
 		t.Error("expected Ageni to be detected as an available agent")
 	}
 }
+
+func TestScanAgents_DetectsGrok(t *testing.T) {
+	exec := &mockExecutor{
+		canRun: func(cmd string) bool {
+			return strings.Contains(cmd, "grok")
+		},
+	}
+	scanner := NewScanner(exec)
+
+	agents, err := scanner.ScanAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ScanAgents returned error: %v", err)
+	}
+
+	found := false
+	for _, a := range agents {
+		if a.Name == "Grok Build CLI" {
+			found = true
+			if a.Command != "grok" {
+				t.Errorf("expected command to be grok, got %s", a.Command)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected Grok Build CLI to be detected as an available agent")
+	}
+}
+
+func TestScanAgents_DetectsGrokFallback(t *testing.T) {
+	exec := &mockExecutor{
+		canRun: func(cmd string) bool {
+			return strings.Contains(cmd, "grok-build")
+		},
+	}
+	scanner := NewScanner(exec)
+
+	agents, err := scanner.ScanAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ScanAgents returned error: %v", err)
+	}
+
+	found := false
+	for _, a := range agents {
+		if a.Name == "Grok Build CLI" {
+			found = true
+			if a.Command != "grok-build" {
+				t.Errorf("expected command to be grok-build, got %s", a.Command)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected Grok Build CLI to be detected via grok-build fallback")
+	}
+}

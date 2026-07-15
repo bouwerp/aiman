@@ -253,6 +253,22 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// the entire prompt.
 	sendKeysPrompt = joinPrompt(sendKeysPrompt, config.InitialPrompt)
 
+	// If the agent is Antigravity CLI (agy), we must pass the initial prompt
+	// via the --prompt-interactive flag instead of tmux send-keys, because
+	// agy's bubbletea TUI startup timing/input capturing breaks tmux send-keys.
+	if config.Agent != nil {
+		baseCommand := ""
+		fields := strings.Fields(strings.TrimSpace(strings.ToLower(agentCmd)))
+		if len(fields) > 0 {
+			baseCommand = fields[0]
+		}
+		isAntigravity := strings.Contains(strings.ToLower(config.Agent.Name), "antigravity") || baseCommand == "agy"
+		if isAntigravity && sendKeysPrompt != "" {
+			agentCmd = fmt.Sprintf("%s --prompt-interactive %q", agentCmd, sendKeysPrompt)
+			sendKeysPrompt = ""
+		}
+	}
+
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
 

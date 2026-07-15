@@ -206,6 +206,9 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	} else if strings.Contains(name, "ageni") || baseCommand == "ageni" {
 		// For Ageni
 		result, err = e.prepareAgeni(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+	} else if strings.Contains(name, "grok") || baseCommand == "grok" || baseCommand == "grok-build" {
+		// For Grok Build CLI
+		result, err = e.prepareGrok(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
 	} else if strings.Contains(name, "cursor") {
 		// For Cursor
 		cmd := agent.Command
@@ -538,6 +541,42 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
 		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to upload Antigravity prompt to remote: %w", err)
+		}
+		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
+	}
+
+	result.InitialPrompt = buildSessionPrompt(promptFiles)
+	return result, nil
+}
+
+func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+	var prompts []string
+	for _, s := range selectedSkills {
+		if s.Type == domain.SkillTypePrompt {
+			content, err := os.ReadFile(s.Path)
+			if err == nil {
+				prompts = append(prompts, string(content))
+			}
+		}
+	}
+
+	cmd := agent.Command
+	if promptFree {
+		cmd = ensureFlag(cmd, "--always-approve")
+	}
+
+	result := domain.PreparedSession{Command: cmd}
+	var promptFiles []string
+
+	if issue != nil {
+		promptFiles = append(promptFiles, domain.AimanTaskFileName)
+	}
+
+	if len(prompts) > 0 {
+		systemPrompt := strings.Join(prompts, "\n\n")
+		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
+		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+			return domain.PreparedSession{}, fmt.Errorf("failed to upload Grok prompt to remote: %w", err)
 		}
 		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
 	}

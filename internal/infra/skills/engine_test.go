@@ -625,3 +625,67 @@ func TestPrepareSession_AgeniWithPromptSkills_WritesPromptFileAndUsesSendKeys(t 
 		t.Errorf("InitialPrompt should direct the agent to the prompt file, got: %s", result.InitialPrompt)
 	}
 }
+
+func TestPrepareSession_GrokWithIssue_UsesAlwaysApproveAndSendKeys(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	issue := &domain.Issue{
+		Key:         "PROJ-123",
+		Summary:     "Grok test issue",
+		Description: "Check grok works.",
+		Status:      domain.IssueStatusTodo,
+	}
+
+	agent := domain.Agent{Name: "Grok Build CLI", Command: "grok"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := remote.writtenFiles["/home/user/code/myrepo/.aiman_task.md"]; !ok {
+		t.Fatal("expected .aiman_task.md to be written")
+	}
+
+	if !strings.Contains(result.Command, "--always-approve") {
+		t.Errorf("expected --always-approve in grok command, got: %s", result.Command)
+	}
+
+	if result.InitialPrompt == "" || !strings.Contains(result.InitialPrompt, domain.AimanTaskFileName) {
+		t.Errorf("InitialPrompt should reference the task file, got: %s", result.InitialPrompt)
+	}
+}
+
+func TestPrepareSession_GrokWithPromptSkills_WritesPromptFileAndUsesSendKeys(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	skillFile := filepath.Join(t.TempDir(), "skill.md")
+	if err := os.WriteFile(skillFile, []byte("Grok skill content."), 0600); err != nil {
+		t.Fatal(err)
+	}
+	skills := []domain.Skill{{Name: "grok-skill", Type: domain.SkillTypePrompt, Path: skillFile}}
+	agent := domain.Agent{Name: "Grok Build CLI", Command: "grok"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, true, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	promptPath := "/home/user/code/myrepo/" + domain.AimanPromptFileName
+	content, ok := remote.writtenFiles[promptPath]
+	if !ok {
+		t.Fatalf("expected %s to be written", promptPath)
+	}
+	if !strings.Contains(string(content), "Grok skill content.") {
+		t.Errorf("prompt file should contain the skill content, got: %s", content)
+	}
+	if !strings.Contains(result.InitialPrompt, domain.AimanPromptFileName) {
+		t.Errorf("InitialPrompt should direct the agent to the prompt file, got: %s", result.InitialPrompt)
+	}
+}

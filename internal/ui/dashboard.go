@@ -6392,6 +6392,19 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
+		if sessionCfg.Agent != nil {
+			baseCmd := ""
+			fields := strings.Fields(strings.TrimSpace(strings.ToLower(agentCmd)))
+			if len(fields) > 0 {
+				baseCmd = fields[0]
+			}
+			isAntigravity := strings.Contains(strings.ToLower(sessionCfg.Agent.Name), "antigravity") || baseCmd == "agy"
+			if isAntigravity && sendKeysPrompt != "" {
+				agentCmd = fmt.Sprintf("%s --prompt-interactive %q", agentCmd, sendKeysPrompt)
+				sendKeysPrompt = ""
+			}
+		}
+
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
 		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 

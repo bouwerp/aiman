@@ -22,6 +22,11 @@ var knownAgents = []domain.Agent{
 		Description: "Google's Antigravity CLI",
 	},
 	{
+		Name:        "Grok Build CLI",
+		Command:     "grok",
+		Description: "xAI's Grok Build CLI",
+	},
+	{
 		Name:        "OpenCode",
 		Command:     "opencode",
 		Description: "OpenCode interactive CLI",
@@ -88,6 +93,23 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 		// Special fallbacks for Claude Code
 		if !found && agent.Name == "Claude Code" {
 			fallbacks := []string{"claude-code", "claude"}
+			for _, fb := range fallbacks {
+				if fb == agent.Command {
+					continue
+				}
+				if s.commandExists(ctx, fb) {
+					agent.Command = fb
+					found = true
+				}
+				if found {
+					break
+				}
+			}
+		}
+
+		// Special fallbacks for Grok Build CLI
+		if !found && agent.Name == "Grok Build CLI" {
+			fallbacks := []string{"grok-build", "grok"}
 			for _, fb := range fallbacks {
 				if fb == agent.Command {
 					continue
