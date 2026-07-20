@@ -22,6 +22,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/ai"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/ec2"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
@@ -3169,6 +3170,7 @@ func (m *Model) renderView() string {
 		b.WriteString(activeStyle.Render("[3]") + "  Existing Branch      — check out an existing remote branch\n")
 		b.WriteString(activeStyle.Render("[4]") + "  Ad-hoc               — no git repo, no JIRA ticket\n")
 		b.WriteString(activeStyle.Render("[5]") + "  Autonomous Trigger   — configure a remote polling rule\n")
+		b.WriteString(activeStyle.Render("[6]") + "  EC2 Autonomous Loop  — launch on-demand AWS instance\n")
 		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: cancel"))
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -4898,6 +4900,14 @@ func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.state = viewStateAutonomousTriggerPicker
 			return m, nil
+		case "6":
+			m.sessionCfg = domain.SessionConfig{}
+			m.sessionCfg.IsEC2Loop = true
+			m.issuePicker = NewIssuePickerModel(nil)
+			m.issuePicker.loading = true
+			m.issuePicker.SetSize(m.width, m.height)
+			m.state = viewStateIssuePicker
+			return m, m.searchJira("")
 		}
 	}
 	return m, nil
@@ -5132,6 +5142,13 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fetchBranches(*m.picker.selected)
 		}
 
+		if m.sessionCfg.IsEC2Loop {
+			m.loadingMsg = "Scanning available agents..."
+			m.loadingNext = viewStateAgentPicker
+			m.state = viewStateLoading
+			return m, m.fetchAgents()
+		}
+
 		if m.sessionCfg.Mode == domain.SessionModeAutonomous {
 			m.sessionCfg.AutonomousConfig.GitHubRepo = m.sessionCfg.Repo.Name
 			// Skip directories for autonomous triggers, go straight to agent
@@ -5303,6 +5320,10 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.createAutonomousRule()
 		}
 
+		if m.sessionCfg.IsEC2Loop {
+			return m, m.createEC2LoopSession()
+		}
+
 		return m, m.startBackgroundCreate()
 	}
 	return m, cmd
@@ -5353,6 +5374,87 @@ func (m *Model) ensureRemoteDaemon(ctx context.Context, sshMgr *ssh.Manager) err
 		_, _ = sshMgr.Execute(ctx, "mkdir -p ~/.aiman && nohup ~/.local/bin/aiman-trigger > ~/.aiman/trigger.log 2>&1 &")
 	}
 	return nil
+}
+
+func (m *Model) createEC2LoopSession() tea.Cmd {
+	placeholderID := uuid.New().String()
+	placeholder := domain.Session{
+		ID:               placeholderID,
+		IssueKey:         m.sessionCfg.IssueKey,
+		RepoName:         m.sessionCfg.Repo.Name,
+		AgentName:        m.sessionCfg.Agent.Name,
+		Status:           domain.SessionStatusProvisioning,
+		Mode:             domain.SessionModeEC2Loop,
+		RemoteHost:       "aws-ec2", // Dummy host so it renders
+		TmuxSession:      "EC2 Loop: " + m.sessionCfg.Branch,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	}
+
+	m.allSessions = append(m.allSessions, placeholder)
+	m.applyRemoteFilter()
+	m.activeSession = placeholder.TmuxSession
+	m.state = viewStateMain
+	
+	items := m.list.Items()
+	for i, it := range items {
+		if si, ok := it.(item); ok && si.session.ID == placeholder.ID {
+			m.list.Select(i)
+			break
+		}
+	}
+
+	return func() tea.Msg {
+		ctx := context.Background()
+		ec2Mgr := ec2.NewManager()
+		sshFactory := func(host, user, root string) domain.RemoteExecutor {
+			return ssh.NewManager(ssh.Config{
+				Host: host,
+				User: user,
+				Root: root,
+			})
+		}
+		runner := usecase.NewEC2LoopRunner(ec2Mgr, sshFactory)
+
+		envVars := make(map[string]string)
+		if gh := os.Getenv("GITHUB_TOKEN"); gh != "" { envVars["GITHUB_TOKEN"] = gh }
+		if anth := os.Getenv("ANTHROPIC_API_KEY"); anth != "" { envVars["ANTHROPIC_API_KEY"] = anth }
+		if oai := os.Getenv("OPENAI_API_KEY"); oai != "" { envVars["OPENAI_API_KEY"] = oai }
+
+		spec := domain.EC2LaunchSpec{
+			AWSProfile:      m.cfg.EC2Loop.DefaultProfile,
+			Region:          m.cfg.EC2Loop.DefaultRegion,
+			InstanceType:    m.cfg.EC2Loop.DefaultInstanceType,
+			SubnetID:        m.cfg.EC2Loop.DefaultSubnetID,
+			SecurityGroupID: m.cfg.EC2Loop.DefaultSecurityGroup,
+			KeyName:         m.cfg.EC2Loop.DefaultKeyName,
+			Repositories:    []string{m.sessionCfg.Repo.URL},
+			IssueKey:        m.sessionCfg.IssueKey,
+			Branch:          m.sessionCfg.Branch,
+			AgentName:       m.sessionCfg.Agent.Name,
+			TaskDescription: m.sessionCfg.InitialPrompt,
+			EnvironmentVars: envVars,
+			SelfDestruct:    true,
+			TimeoutMinutes:  60,
+		}
+
+		progressChan := make(chan usecase.EC2LoopProgress, 100)
+		
+		go func() {
+			for p := range progressChan {
+				if m.Program != nil {
+					m.Program.Send(sessionCreateMsg{status: p.Message, placeholderID: placeholderID})
+				}
+			}
+		}()
+
+		_, err := runner.Run(ctx, spec, progressChan)
+		if err != nil {
+			return sessionCreateMsg{err: fmt.Errorf("ec2 loop failed: %w", err), placeholderID: placeholderID}
+		}
+
+		return sessionCreateMsg{session: placeholder, placeholderID: placeholderID}
+	}
 }
 
 func (m *Model) createAutonomousRule() tea.Cmd {

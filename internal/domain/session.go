@@ -23,6 +23,7 @@ type SessionMode string
 const (
 	SessionModeInteractive SessionMode = "INTERACTIVE"
 	SessionModeAutonomous  SessionMode = "AUTONOMOUS"
+	SessionModeEC2Loop     SessionMode = "EC2_LOOP"
 )
 
 type AutonomousConfig struct {
@@ -195,6 +196,7 @@ type SessionConfig struct {
 	BaseBranch     string         // clone from this branch instead of the repository default branch
 	ReuseWorkspace bool           // bypass git worktree and execute directly in the main clone
 	AdHoc          bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
+	IsEC2Loop      bool           // if true, launches an ephemeral EC2 instance and loops instead of a standard session
 	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
 	RemoteHost     string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
 	// PriorSnapshot is an optional snapshot from a previous session on the same branch/issue.
