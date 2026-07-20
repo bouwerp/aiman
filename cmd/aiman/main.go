@@ -109,6 +109,8 @@ func run() error {
 			}
 			return nil
 
+		case "ec2-loop":
+			return runEC2Loop(cfg, os.Args[2:])
 		default:
 			fmt.Fprintf(os.Stderr, "aiman: unknown command %q\n\n", os.Args[1])
 			fmt.Fprintf(os.Stderr, "Usage: aiman [command]\n\n")
@@ -119,6 +121,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  init             run the configuration setup wizard\n")
 			fmt.Fprintf(os.Stderr, "  repos            open the repository picker\n")
 			fmt.Fprintf(os.Stderr, "  schedule         schedule a prompt to be injected into a session\n")
+			fmt.Fprintf(os.Stderr, "  ec2-loop         launch autonomous loop agent on an on-demand EC2 instance\n")
 			os.Exit(1)
 		}
 	}

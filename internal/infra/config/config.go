@@ -16,13 +16,24 @@ const (
 )
 
 type Config struct {
-	Integrations Integrations `yaml:"integrations"`
-	Git          GitConfig    `yaml:"git,omitempty"`
-	Features     FeatureFlags `yaml:"features,omitempty"`
-	Skills       SkillsConfig `yaml:"skills,omitempty"`
-	AI           AIConfig     `yaml:"ai,omitempty"`
-	Remotes      []Remote     `yaml:"remotes"`
-	ActiveRemote string       `yaml:"active_remote"`
+	Integrations Integrations  `yaml:"integrations"`
+	Git          GitConfig     `yaml:"git,omitempty"`
+	Features     FeatureFlags  `yaml:"features,omitempty"`
+	Skills       SkillsConfig  `yaml:"skills,omitempty"`
+	AI           AIConfig      `yaml:"ai,omitempty"`
+	EC2Loop      EC2LoopConfig `yaml:"ec2_loop,omitempty"`
+	Remotes      []Remote      `yaml:"remotes"`
+	ActiveRemote string        `yaml:"active_remote"`
+}
+
+// EC2LoopConfig configures the default settings for launching EC2 autonomous loops.
+type EC2LoopConfig struct {
+	DefaultProfile       string `yaml:"default_profile,omitempty"`
+	DefaultRegion        string `yaml:"default_region,omitempty"`
+	DefaultInstanceType  string `yaml:"default_instance_type,omitempty"`
+	DefaultSubnetID      string `yaml:"default_subnet_id,omitempty"`
+	DefaultSecurityGroup string `yaml:"default_security_group,omitempty"`
+	DefaultKeyName       string `yaml:"default_key_name,omitempty"`
 }
 
 // AIConfig controls the local SLM intelligence features powered by Ollama.

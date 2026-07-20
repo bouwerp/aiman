@@ -135,6 +135,7 @@ const (
 	viewStateDirPicker
 	viewStateAgentPicker
 	viewStateSummary
+	viewStateEC2Settings
 	viewStateLoading
 	viewStateTerminateConfirm
 	viewStateWorktreeExists
@@ -347,6 +348,7 @@ type Model struct {
 	snapshotBrowser        SnapshotBrowserModel
 	scheduledPrompts       ScheduledPromptsModel
 	picker                 RepoPickerModel
+	ec2Setup               EC2SetupModel
 	issuePicker            IssuePickerModel
 	branchInput            BranchInputModel
 	genericInput           TextInputModel
@@ -626,6 +628,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
 		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
 		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
+		menuItem{title: "EC2 Loop Settings", desc: "Configure default settings for autonomous EC2 loops", action: viewStateEC2Settings},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 		menuItem{title: "Scheduled Prompts", desc: "Manage periodic cron-scheduled prompt injections", action: viewStateScheduledPrompts},
 	}
@@ -2721,6 +2724,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateSecretsSetup:
 		return m.handleSecretsSetupUpdate(msg)
 
+	case viewStateEC2Settings:
+		return m.handleEC2SetupUpdate(msg)
+
 	case viewStateAWSCredentials:
 		return m.handleAWSCredentialsUpdate(msg)
 
@@ -2869,6 +2875,9 @@ func (m *Model) renderView() string {
 
 	case viewStateSecretsSetup:
 		return m.secretsSetup.View()
+
+	case viewStateEC2Settings:
+		return docStyle.Render(m.ec2Setup.View())
 
 	case viewStateAWSCredentials:
 		return m.awsCredentials.View()
@@ -4319,6 +4328,11 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, m.secretsSetup.Init()
 				}
+				if i.action == viewStateEC2Settings {
+					m.ec2Setup = NewEC2SetupModel(m.cfg)
+					m.state = i.action
+					return m, m.ec2Setup.Init()
+				}
 				if i.action == viewStateAWSCredentials {
 					m.awsCredentials = NewAWSCredentialsModel(m.cfg, m.doctorResults)
 					m.awsCredentials.width = m.width
@@ -4783,6 +4797,16 @@ func (m *Model) handleSecretsSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	subModel, cmd = m.secretsSetup.Update(msg)
 	m.secretsSetup = subModel.(SecretsSetupModel)
+	return m, cmd
+}
+
+func (m *Model) handleEC2SetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "esc" {
+		m.state = viewStateMenu
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.ec2Setup, cmd = m.ec2Setup.Update(msg)
 	return m, cmd
 }
 
