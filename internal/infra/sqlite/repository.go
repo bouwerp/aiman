@@ -14,6 +14,9 @@ import (
 
 type Repository struct {
 	db *sql.DB
+	// clearedOnOpen records the legacy session-scoped AWS profiles the open-time
+	// migration removed, so callers can report them.
+	clearedOnOpen []LegacyAWSProfileRef
 }
 
 func NewRepository(dbPath string) (*Repository, error) {
@@ -59,6 +62,15 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN trigger_source TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN trigger_event_id TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN autonomous_config_json TEXT")
+
+	// Sessions created before v0.8.11 stored per-session "aiman-<id>" AWS profiles that
+	// are no longer written to ~/.aws. Drop them on open so those sessions stop
+	// exporting an AWS_PROFILE that cannot resolve. `aiman clear-aws-profiles` reports
+	// what this removed.
+	clearedAWSProfiles, err := clearLegacyAWSProfilesOnOpen(db)
+	if err != nil {
+		return nil, err
+	}
 
 	secretsQuery := `
 	CREATE TABLE IF NOT EXISTS secrets (
@@ -108,7 +120,8 @@ func NewRepository(dbPath string) (*Repository, error) {
 	}
 
 	return &Repository{
-		db: db,
+		db:            db,
+		clearedOnOpen: clearedAWSProfiles,
 	}, nil
 }
 

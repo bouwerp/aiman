@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	infraGit "github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/google/uuid"
@@ -415,10 +417,41 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 	return strings.TrimSpace(out)
 }
 
+// localAWSProfileNames is indirected so tests do not depend on the machine's ~/.aws.
+var localAWSProfileNames = awsdelegation.ListLocalAWSProfileNames
+
+// SanitizeSessionAWSProfile returns the profile name that is safe to export as
+// AWS_PROFILE for a session, given the profiles that exist locally.
+//
+// It drops two kinds of unusable names so the session falls back to the default
+// credential chain instead of pointing AWS_PROFILE at something that cannot resolve:
+// legacy session-scoped "aiman-<id>" profiles (removed in v0.8.11 but still present in
+// old session records), and any profile missing from ~/.aws. When known is empty the
+// local profiles could not be enumerated, so only the legacy rule applies.
+func SanitizeSessionAWSProfile(profileName string, known []string) string {
+	p := strings.TrimSpace(profileName)
+	if p == "" || domain.IsLegacyScopedAWSProfile(p) {
+		return ""
+	}
+	if len(known) == 0 {
+		return p
+	}
+	if slices.Contains(known, p) {
+		return p
+	}
+	return ""
+}
+
 func SharedSessionAWSEnv(profileName, region string) map[string]string {
 	env := map[string]string{}
 	if p := strings.TrimSpace(profileName); p != "" {
-		env["AWS_PROFILE"] = p
+		known, err := localAWSProfileNames()
+		if err != nil {
+			known = nil
+		}
+		if p = SanitizeSessionAWSProfile(p, known); p != "" {
+			env["AWS_PROFILE"] = p
+		}
 	}
 	if region = strings.TrimSpace(region); region != "" {
 		env["AWS_REGION"] = region

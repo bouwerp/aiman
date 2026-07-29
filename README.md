@@ -42,6 +42,9 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Shared AWS credential sync**: Automatically syncs your local `~/.aws` configuration to the remote
 - **STS token push**: Fresh temporary credentials are pushed to the remote when requested
 - **Per-session overrides**: At session creation, override the AWS profile and region independently per session (e.g. `dev`/`us-east-1` in one session, `prod`/`eu-west-1` in another)
+- **Time to expiry**: The credentials manager shows how long each remote profile has left, counting down live
+- **Refresh anything, any time**: `shift+R` re-mints and pushes every delegated profile regardless of its current status, from the credentials screen or straight from the dashboard
+- **Expiry warning banner**: The dashboard warns when any delegated credential is within an hour of expiry (red once expired)
 
 ### User Experience
 - **Interactive TUI**: Built with Bubble Tea for a modern terminal UI
@@ -328,6 +331,36 @@ When `sync_credentials: true`, each new session on that remote gets:
 The profile and region can differ per session; all other settings (role, account, session policy, duration) inherit from the remote config.
 
 Legacy `~/.aiman/aws/...` session files from older releases are cleaned up automatically when encountered, but current sync flows operate on `~/.aws/{credentials,config}` directly.
+
+A session's profile is validated before it is exported: legacy per-session `aiman-<id>` profiles (written before v0.8.11) and profiles missing from `~/.aws` are dropped, so the session uses the default credential chain instead of an `AWS_PROFILE` that cannot resolve. Stored copies of those names are cleared when aiman opens its database; to do it on demand and see what was removed:
+
+```bash
+aiman clear-aws-profiles
+```
+
+Affected sessions need a restart to pick up the change.
+
+#### Expiry tracking and refresh
+
+Every push records the STS expiry in the remote credentials file as `x_security_token_expires` (a key the AWS CLI ignores), so the credentials manager can show an **Expires in** column without calling STS:
+
+```
+  Status        Host                        Local profile   Remote profile   Expires in
+  ✓ Valid       ubuntu@worker.example.com   prod            default          9h13m
+  ✓ Valid       ubuntu@worker.example.com   dev             dev              36m
+  ✗ Expired     ec2-user@build.example.com  lab             lab              expired
+  ✓ Valid       ec2-user@build.example.com  —               aiman-58f485ff   ~2h59m
+```
+
+A `~` marks an estimate derived from the credentials file's age plus the configured `duration_seconds`, used for profiles pushed before aiman recorded expiry. Refreshing replaces it with the exact time.
+
+`shift+R` refreshes **all** delegated profiles regardless of status, from either the credentials screen or the main dashboard. Profiles on the same host are refreshed sequentially, since they share one `~/.aws/credentials`. The dashboard shows an amber banner when anything is within an hour of expiry, turning red once a credential has actually expired.
+
+Refreshes and status checks run in the background, so you can leave the credentials page while they finish:
+
+- A blue dashboard banner reports `Refreshing AWS credentials… (continues in the background)` while any refresh is in flight, wherever you started it.
+- Returning to the page while work is outstanding shows what is still running (`⟳ 2 refresh(es) and 1 check(s) in flight`) with per-row `⟳ Renewing` / `· Checking` status, instead of restarting the scan and losing it.
+- A refresh that completes while you are on another screen raises a toast, including a failure count if any profile did not renew.
 
 ## 🏗 Architecture
 

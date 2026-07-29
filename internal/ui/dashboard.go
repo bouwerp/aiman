@@ -421,6 +421,8 @@ type Model struct {
 	syncHealth             map[string]syncHealth          // mutagen sync health per session ID
 	worktreeExistsID       string                         // placeholder ID of the background creation that hit WORKTREE_EXISTS
 	snapshotToastSeq       int                            // increments per toast; stale clear timers are ignored
+	awsCredExpiry          []awsCredExpiryItem            // delegated AWS credential expiry per (host, profile), polled periodically
+	awsCredRefreshing      bool                           // a shift+R refresh-all is in flight
 }
 
 // showToast displays a transient message in the toast bar and returns a
@@ -2317,6 +2319,9 @@ func (m *Model) Init() tea.Cmd {
 		tickGit(),
 		tickSyncHealth(),
 		checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...)),
+		tickAWSCredExpiry(),
+		pollAWSCredExpiryCmd(m.cfg),
+		tickAWSCredTable(),
 		tea.EnableMouseCellMotion,
 	)
 }
@@ -2616,6 +2621,49 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tickCmds = append(tickCmds, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...)))
 		}
 		return m, tea.Batch(tickCmds...)
+	case awsCredExpiryTickMsg:
+		return m, tea.Batch(tickAWSCredExpiry(), pollAWSCredExpiryCmd(m.cfg))
+	case awsCredExpiryPollMsg:
+		m.awsCredExpiry = msg.items
+		return m, nil
+	case awsCredTickMsg:
+		// One long-lived repaint chain for the expiry countdown, owned here rather than
+		// by the credentials page so re-entering that page cannot stack up timers.
+		return m, tickAWSCredTable()
+	case awsCredLoadedMsg, awsCredCheckResultMsg, awsCredRenewResultMsg,
+		awsCredBatchRenewResultMsg, awsCredRemoveResultMsg, awsCredRenameResultMsg:
+		// Credential work runs as bubbletea commands, which keep running after the user
+		// leaves the credentials page. Route the results to that model whatever the
+		// current view, so a refresh started there always finishes (and is verified)
+		// instead of being dropped by the view-state dispatch below.
+		wasRefreshing := m.awsCredentials.Refreshing()
+		cmd := m.routeAWSCredentialsMsg(msg)
+		// The page shows its own result when it is open. When it is not, announce the
+		// end of a refresh wave — otherwise work the user started vanishes silently.
+		if wasRefreshing && !m.awsCredentials.Refreshing() && m.state != viewStateAWSCredentials {
+			toast := "🔑 AWS credential refresh finished"
+			isErr := false
+			if failures := m.awsCredentials.refreshFailures; failures > 0 {
+				toast = fmt.Sprintf("⚠️  AWS credential refresh finished with %d failure(s) — see Menu → AWS Credentials", failures)
+				isErr = true
+			}
+			return m, tea.Batch(cmd, m.showToast(toast, isErr, 8*time.Second), pollAWSCredExpiryCmd(m.cfg))
+		}
+		return m, cmd
+	case awsCredBulkRenewMsg:
+		m.awsCredRefreshing = false
+		m.awsCredentials.externalRefresh = false
+		if len(msg.failures) > 0 {
+			m.log("AWS credential refresh failures: %s", strings.Join(msg.failures, "; "))
+			return m, tea.Batch(
+				m.showToast(fmt.Sprintf("⚠️  Refreshed %d AWS credential(s), %d failed — see console (`)", msg.renewed, len(msg.failures)), true, 8*time.Second),
+				pollAWSCredExpiryCmd(m.cfg),
+			)
+		}
+		return m, tea.Batch(
+			m.showToast(fmt.Sprintf("🔑 Refreshed %d AWS credential(s)", msg.renewed), false, 5*time.Second),
+			pollAWSCredExpiryCmd(m.cfg),
+		)
 	case syncHealthMsg:
 		if msg.err != nil {
 			m.log("Sync health check failed: %v", msg.err)
@@ -4198,6 +4246,24 @@ end tell`, cmd)
 		}
 		return m, nil, true
 	}
+	// shift+R refreshes every delegated AWS credential, whatever its remaining lifetime,
+	// so the expiry banner is actionable without leaving the dashboard.
+	if msg.String() == "R" {
+		if m.awsCredRefreshing {
+			return m, m.showToast("🔑 AWS credential refresh already running…", false, 3*time.Second), true
+		}
+		targets := syncedDelegations(m.cfg)
+		if len(targets) == 0 {
+			return m, m.showToast("No remotes have aws_delegation.sync_credentials enabled.", true, 5*time.Second), true
+		}
+		m.awsCredRefreshing = true
+		m.awsCredentials.externalRefresh = true
+		m.log("Refreshing %d delegated AWS credential(s)...", len(targets))
+		return m, tea.Batch(
+			m.showToast(fmt.Sprintf("🔑 Refreshing %d AWS credential(s)…", len(targets)), false, 5*time.Second),
+			renewAllDelegatedCredentialsCmd(m.cfg),
+		), true
+	}
 	if msg.String() == "ctrl+y" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			m.loadingMsg = "Recreating mutagen sync..."
@@ -4336,11 +4402,7 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.ec2Setup.Init()
 				}
 				if i.action == viewStateAWSCredentials {
-					m.awsCredentials = NewAWSCredentialsModel(m.cfg, m.doctorResults)
-					m.awsCredentials.width = m.width
-					m.awsCredentials.height = m.height
-					m.state = i.action
-					return m, m.awsCredentials.Init()
+					return m, m.enterAWSCredentials()
 				}
 				if i.action == viewStateSnapshotBrowser {
 					m.snapshotBrowser = NewSnapshotBrowserModel(m.width, m.height, m.snapshotManager)
@@ -4825,6 +4887,32 @@ func (m *Model) handleScheduledPromptsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	newModel, cmd := m.scheduledPrompts.Update(msg)
 	m.scheduledPrompts = newModel.(ScheduledPromptsModel)
 	return m, cmd
+}
+
+// routeAWSCredentialsMsg feeds a message to the credentials model regardless of which
+// view is on screen, so in-flight renewals and checks complete in the background.
+func (m *Model) routeAWSCredentialsMsg(msg tea.Msg) tea.Cmd {
+	subModel, cmd := m.awsCredentials.Update(msg)
+	m.awsCredentials = subModel.(AWSCredentialsModel)
+	return cmd
+}
+
+// enterAWSCredentials opens the credentials manager. A model with work in flight is kept
+// as-is — rebuilding it would drop the renewals and checks already running — while a
+// settled one is rebuilt so the page opens with fresh state.
+func (m *Model) enterAWSCredentials() tea.Cmd {
+	m.state = viewStateAWSCredentials
+	if m.awsCredentials.Busy() {
+		m.awsCredentials.width = m.width
+		m.awsCredentials.height = m.height
+		m.awsCredentials.externalRefresh = m.awsCredRefreshing
+		return nil
+	}
+	m.awsCredentials = NewAWSCredentialsModel(m.cfg, m.doctorResults)
+	m.awsCredentials.width = m.width
+	m.awsCredentials.height = m.height
+	m.awsCredentials.externalRefresh = m.awsCredRefreshing
+	return m.awsCredentials.Init()
 }
 
 func (m *Model) handleAWSCredentialsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -5379,23 +5467,23 @@ func (m *Model) ensureRemoteDaemon(ctx context.Context, sshMgr *ssh.Manager) err
 func (m *Model) createEC2LoopSession() tea.Cmd {
 	placeholderID := uuid.New().String()
 	placeholder := domain.Session{
-		ID:               placeholderID,
-		IssueKey:         m.sessionCfg.IssueKey,
-		RepoName:         m.sessionCfg.Repo.Name,
-		AgentName:        m.sessionCfg.Agent.Name,
-		Status:           domain.SessionStatusProvisioning,
-		Mode:             domain.SessionModeEC2Loop,
-		RemoteHost:       "aws-ec2", // Dummy host so it renders
-		TmuxSession:      "EC2 Loop: " + m.sessionCfg.Branch,
-		CreatedAt:        time.Now(),
-		UpdatedAt:        time.Now(),
+		ID:          placeholderID,
+		IssueKey:    m.sessionCfg.IssueKey,
+		RepoName:    m.sessionCfg.Repo.Name,
+		AgentName:   m.sessionCfg.Agent.Name,
+		Status:      domain.SessionStatusProvisioning,
+		Mode:        domain.SessionModeEC2Loop,
+		RemoteHost:  "aws-ec2", // Dummy host so it renders
+		TmuxSession: "EC2 Loop: " + m.sessionCfg.Branch,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 
 	m.allSessions = append(m.allSessions, placeholder)
 	m.applyRemoteFilter()
 	m.activeSession = placeholder.TmuxSession
 	m.state = viewStateMain
-	
+
 	items := m.list.Items()
 	for i, it := range items {
 		if si, ok := it.(item); ok && si.session.ID == placeholder.ID {
@@ -5417,9 +5505,15 @@ func (m *Model) createEC2LoopSession() tea.Cmd {
 		runner := usecase.NewEC2LoopRunner(ec2Mgr, sshFactory)
 
 		envVars := make(map[string]string)
-		if gh := os.Getenv("GITHUB_TOKEN"); gh != "" { envVars["GITHUB_TOKEN"] = gh }
-		if anth := os.Getenv("ANTHROPIC_API_KEY"); anth != "" { envVars["ANTHROPIC_API_KEY"] = anth }
-		if oai := os.Getenv("OPENAI_API_KEY"); oai != "" { envVars["OPENAI_API_KEY"] = oai }
+		if gh := os.Getenv("GITHUB_TOKEN"); gh != "" {
+			envVars["GITHUB_TOKEN"] = gh
+		}
+		if anth := os.Getenv("ANTHROPIC_API_KEY"); anth != "" {
+			envVars["ANTHROPIC_API_KEY"] = anth
+		}
+		if oai := os.Getenv("OPENAI_API_KEY"); oai != "" {
+			envVars["OPENAI_API_KEY"] = oai
+		}
 
 		spec := domain.EC2LaunchSpec{
 			AWSProfile:      m.cfg.EC2Loop.DefaultProfile,
@@ -5439,7 +5533,7 @@ func (m *Model) createEC2LoopSession() tea.Cmd {
 		}
 
 		progressChan := make(chan usecase.EC2LoopProgress, 100)
-		
+
 		go func() {
 			for p := range progressChan {
 				if m.Program != nil {
@@ -6265,7 +6359,7 @@ func (m *Model) renderMainView() string {
 
 	footer := "\n" + remoteInfo + "\n\n" + doctorOutput.String()
 
-	helpText := "n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit"
+	helpText := "n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • R: AWS creds • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit"
 	versionText := m.version
 
 	contentWidth := m.width - 4 // docStyle margins
@@ -6299,7 +6393,46 @@ func (m *Model) renderMainView() string {
 		}
 	}
 
-	return docStyle.Render(content + "\n" + footer + prButtons + "\n" + helpBar)
+	body := content + "\n" + footer + prButtons + "\n" + helpBar
+	if banner := m.renderAWSCredExpiryBanner(); banner != "" {
+		body = banner + "\n" + body
+	}
+	return docStyle.Render(body)
+}
+
+// renderAWSCredExpiryBanner warns when any delegated AWS credential is within
+// awsCredExpiryWarnWindow of expiry (or already expired). Empty when all are healthy.
+func (m *Model) renderAWSCredExpiryBanner() string {
+	now := time.Now()
+
+	// A refresh started anywhere (here or on the credentials page) stays visible while it
+	// runs, even when nothing is near expiry — that is the only feedback the user gets
+	// once they leave the credentials page.
+	glyph := "⚠"
+	color := lipgloss.Color("3") // amber: expiry approaching
+	text := formatAWSCredExpiryBanner(m.awsCredExpiry, now)
+	switch {
+	case m.awsCredRefreshing || m.awsCredentials.Refreshing():
+		glyph = "🔑"
+		color = lipgloss.Color("4") // blue: work in progress, nothing wrong
+		text = "Refreshing AWS credentials… (continues in the background)"
+	case text == "":
+		return ""
+	default:
+		for _, it := range m.awsCredExpiry {
+			if urgencyOf(it.expiresAt, now) == expiryExpired {
+				color = lipgloss.Color("1") // red: already expired
+				break
+			}
+		}
+	}
+
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("0")).
+		Background(color).
+		Bold(true).
+		Padding(0, 1).
+		Render(glyph + "  " + text)
 }
 
 // renderAIPanel renders the AI insight section of the main panel.
