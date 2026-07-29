@@ -12,7 +12,7 @@ import (
 // stops working. It is the de-facto convention used by other credential tools
 // (aws-vault, granted); the AWS CLI ignores keys it does not know, so writing it is
 // inert for anything that only reads the access key, secret and session token.
-const ExpiryKey = "x_security_token_expires"
+const ExpiryKey = "x_security_token_expires" //nolint:gosec // G101: an INI key name, not a credential
 
 // credentialsPayloadMarker separates the mtime line from the file body in the single
 // remote command ReadCredentialExpirations runs, so one round trip yields both.
