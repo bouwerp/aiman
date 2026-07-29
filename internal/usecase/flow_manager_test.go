@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -110,21 +111,90 @@ func TestDeliverInitialPromptSkipsExecuteOnWriteError(t *testing.T) {
 }
 
 func TestSharedSessionAWSEnv(t *testing.T) {
-	env := SharedSessionAWSEnv("aiman-sess1234", "eu-west-1")
+	withLocalAWSProfiles(t, []string{"prod"})
+
+	env := SharedSessionAWSEnv("prod", "eu-west-1")
 	if got := env["AWS_REGION"]; got != "eu-west-1" {
 		t.Fatalf("unexpected AWS_REGION: %q", got)
 	}
 	if got := env["AWS_DEFAULT_REGION"]; got != "eu-west-1" {
 		t.Fatalf("unexpected AWS_DEFAULT_REGION: %q", got)
 	}
-	if got := env["AWS_PROFILE"]; got != "aiman-sess1234" {
-		t.Fatalf("expected AWS_PROFILE=aiman-sess1234, got %q", got)
+	if got := env["AWS_PROFILE"]; got != "prod" {
+		t.Fatalf("expected AWS_PROFILE=prod, got %q", got)
 	}
 	if _, ok := env["AWS_SHARED_CREDENTIALS_FILE"]; ok {
 		t.Fatal("did not expect AWS_SHARED_CREDENTIALS_FILE in shared session env")
 	}
 	if _, ok := env["AWS_CONFIG_FILE"]; ok {
 		t.Fatal("did not expect AWS_CONFIG_FILE in shared session env")
+	}
+}
+
+// withLocalAWSProfiles stubs the local ~/.aws profile lookup so tests never depend
+// on the machine's real AWS configuration.
+func withLocalAWSProfiles(t *testing.T, names []string) {
+	t.Helper()
+	prev := localAWSProfileNames
+	localAWSProfileNames = func() ([]string, error) { return names, nil }
+	t.Cleanup(func() { localAWSProfileNames = prev })
+}
+
+func TestSharedSessionAWSEnvDropsLegacyScopedProfile(t *testing.T) {
+	withLocalAWSProfiles(t, []string{"prod", "dev"})
+
+	env := SharedSessionAWSEnv("aiman-58f485ff", "eu-west-1")
+	if got, ok := env["AWS_PROFILE"]; ok {
+		t.Fatalf("legacy aiman-* profile must not be exported, got AWS_PROFILE=%q", got)
+	}
+	if got := env["AWS_REGION"]; got != "eu-west-1" {
+		t.Fatalf("region must survive profile sanitisation, got %q", got)
+	}
+}
+
+func TestSharedSessionAWSEnvDropsUnknownProfile(t *testing.T) {
+	withLocalAWSProfiles(t, []string{"prod", "dev"})
+
+	env := SharedSessionAWSEnv("staging", "eu-west-1")
+	if got, ok := env["AWS_PROFILE"]; ok {
+		t.Fatalf("profile absent from ~/.aws must not be exported, got AWS_PROFILE=%q", got)
+	}
+}
+
+func TestSharedSessionAWSEnvKeepsProfileWhenLookupFails(t *testing.T) {
+	prev := localAWSProfileNames
+	localAWSProfileNames = func() ([]string, error) { return nil, errors.New("boom") }
+	t.Cleanup(func() { localAWSProfileNames = prev })
+
+	env := SharedSessionAWSEnv("prod", "eu-west-1")
+	if got := env["AWS_PROFILE"]; got != "prod" {
+		t.Fatalf("expected AWS_PROFILE=prod when the profile list is unavailable, got %q", got)
+	}
+}
+
+func TestSanitizeSessionAWSProfile(t *testing.T) {
+	known := []string{"default", "dev", "prod"}
+	cases := []struct {
+		name    string
+		profile string
+		known   []string
+		want    string
+	}{
+		{"known profile passes through", "prod", known, "prod"},
+		{"whitespace trimmed", "  dev  ", known, "dev"},
+		{"empty stays empty", "", known, ""},
+		{"legacy scoped profile dropped", "aiman-58f485ff", known, ""},
+		{"legacy scoped profile dropped even if present locally", "aiman-58f485ff", []string{"aiman-58f485ff"}, ""},
+		{"unknown profile dropped", "staging", known, ""},
+		{"unknown profile kept when list is empty", "staging", nil, "staging"},
+		{"legacy profile dropped when list is empty", "aiman-58f485ff", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SanitizeSessionAWSProfile(tc.profile, tc.known); got != tc.want {
+				t.Fatalf("SanitizeSessionAWSProfile(%q, %v) = %q, want %q", tc.profile, tc.known, got, tc.want)
+			}
+		})
 	}
 }
 
