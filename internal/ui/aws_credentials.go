@@ -39,6 +39,11 @@ type awsHostEntry struct {
 	remoteProfile string // profile name in remote ~/.aws/credentials
 	status        awsCredStatus
 	err           error
+	// expiresAt is when the remote credentials stop working; zero when unknown.
+	// expiryApprox marks values derived from the credentials file's mtime plus the
+	// configured lifetime, for profiles pushed before aiman recorded expiry.
+	expiresAt    time.Time
+	expiryApprox bool
 	// del is the delegation config for this remote, used for renewal.
 	del *config.AWSDelegation
 	// remote is the resolved config.Remote for SSH operations.
@@ -59,6 +64,50 @@ type AWSCredentialsModel struct {
 	renaming    bool
 	renameKey   string
 	renameInput textinput.Model
+	// externalRefresh is true while a dashboard-triggered (shift+R) refresh-all is in
+	// flight. That path renews from config rather than from these rows, so it is
+	// reported separately instead of via the per-row renewing map.
+	externalRefresh bool
+	// refreshFailures counts failures in the current refresh wave, so a wave that
+	// finishes while this page is closed can be reported accurately. Reset when a new
+	// wave starts.
+	refreshFailures int
+}
+
+// Busy reports whether credential work is still running: a renewal in flight or a status
+// probe that has not come back yet. Renewals and probes are bubbletea commands owned by
+// the program, so they keep running when the user leaves this page; Busy is how the
+// dashboard and this view know to keep showing progress.
+func (m AWSCredentialsModel) Busy() bool {
+	if len(m.renewing) > 0 || m.externalRefresh {
+		return true
+	}
+	for _, e := range m.entries {
+		if e.status == awsCredStatusChecking {
+			return true
+		}
+	}
+	return false
+}
+
+// Refreshing reports whether credentials are actively being re-minted, as opposed to the
+// routine status probes Busy also counts. The dashboard uses this so its banner does not
+// announce a "refresh" for an ordinary re-check.
+func (m AWSCredentialsModel) Refreshing() bool {
+	return len(m.renewing) > 0 || m.externalRefresh
+}
+
+// inFlightCount returns how many rows are mid-renewal or mid-check.
+func (m AWSCredentialsModel) inFlightCount() (renewing, checking int) {
+	for _, e := range m.entries {
+		switch {
+		case m.renewing[e.key]:
+			renewing++
+		case e.status == awsCredStatusChecking:
+			checking++
+		}
+	}
+	return renewing, checking
 }
 
 // --- message types ---
@@ -72,9 +121,13 @@ type awsCredCheckResultMsg struct {
 }
 
 type awsCredRenewResultMsg struct {
-	key string // "user@host|profile"
-	err error
+	key       string // "user@host|profile"
+	err       error
+	expiresAt time.Time // expiry of the freshly pushed credentials; zero on failure
 }
+
+// awsCredTickMsg repaints the credentials table so the expiry countdown stays current.
+type awsCredTickMsg time.Time
 
 type awsCredRemoveResultMsg struct {
 	key           string
@@ -111,8 +164,20 @@ func NewAWSCredentialsModel(cfg *config.Config, db interface{}) AWSCredentialsMo
 
 // --- tea.Model ---
 
+// Init starts a fresh scan. The repaint tick is owned by the dashboard (a single
+// long-lived chain), so re-entering this page never stacks up timers.
 func (m AWSCredentialsModel) Init() tea.Cmd {
 	return m.buildEntries()
+}
+
+// awsCredTablePaintInterval is how often the expiry countdown is redrawn. No SSH work is
+// involved — the remaining time is recomputed from the stored expiry.
+const awsCredTablePaintInterval = 30 * time.Second
+
+func tickAWSCredTable() tea.Cmd {
+	return tea.Tick(awsCredTablePaintInterval, func(t time.Time) tea.Msg {
+		return awsCredTickMsg(t)
+	})
 }
 
 // buildEntries builds one row per (user@host, remoteProfile) found on the
@@ -186,17 +251,23 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 			remoteProfiles, sshErr := awsdelegation.ListCredentialProfiles(ctx, mgr)
 			cancel()
 
+			// Expiry comes from the remote credentials file itself, so it costs one extra
+			// round trip per host and needs no STS call.
+			var expiry awsdelegation.RemoteCredentialExpiry
+			if sshErr == nil {
+				ctx, cancel = context.WithTimeout(context.Background(), 20*time.Second)
+				expiry, _ = awsdelegation.ReadCredentialExpirations(ctx, mgr)
+				cancel()
+			}
+
 			// Build a set of all profiles to show:
-			// • every profile found on the remote (excluding aiman-managed session profiles)
+			// • every profile found on the remote, including leftover session-scoped
+			//   "aiman-<id>" profiles from before v0.8.11 — hiding those made stale
+			//   credentials invisible and unfixable from this screen
 			// • every profile declared in config (even if not pushed yet)
 			seen := map[string]bool{}
 			var profiles []string
 			for _, p := range remoteProfiles {
-				// Skip session-scoped profiles created by aiman (e.g. "aiman-a1b2c3d4").
-				// These are managed internally and are not user-configured delegation profiles.
-				if strings.HasPrefix(p, "aiman-") {
-					continue
-				}
 				if !seen[p] {
 					seen[p] = true
 					profiles = append(profiles, p)
@@ -221,6 +292,12 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 					status = awsCredStatusNotPushed
 				}
 
+				durationSeconds := 0
+				if del != nil {
+					durationSeconds = del.DurationSeconds
+				}
+				expiresAt, approx, _ := expiry.For(p, durationSeconds)
+
 				entryKey := hi.userAtHost + "|" + localProfile + "|" + p
 				entries = append(entries, awsHostEntry{
 					key:           entryKey,
@@ -229,6 +306,8 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 					remoteProfile: p,
 					status:        status,
 					err:           sshErr,
+					expiresAt:     expiresAt,
+					expiryApprox:  approx,
 					del:           del,
 					remote:        hi.remote,
 				})
@@ -276,88 +355,93 @@ func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// renewCmd pushes fresh temporary credentials to the remote using the same
-// approach as the remotes-config page: AWSDelegation.SourceProfile locally
-// → ApplyDelegatedCredentials to AWSDelegation.Profile on remote.
-// When d.ManagedRole is true, the IAM role is created automatically if missing
-// before credentials are obtained — this is an entirely separate code path that
-// can be disabled by setting managed_role: false (the default).
+// pushFreshCredentials mints temporary credentials locally from d.SourceProfile and pushes
+// them to remoteProfile on the remote, then re-applies the profile block in ~/.aws/config.
+// It returns the credentials' expiry as reported by STS.
+//
+// When d.ManagedRole is true, the IAM role is created automatically if missing before
+// credentials are obtained — an entirely separate code path that can be disabled by
+// setting managed_role: false (the default).
+//
+// This is the single mint-and-push path shared by renewing one entry, renewing every
+// entry on a host, and the dashboard's refresh-all.
+func pushFreshCredentials(ctx context.Context, mgr awsdelegation.RemoteRunner, d *config.AWSDelegation, remoteProfile string) (time.Time, error) {
+	if d == nil {
+		return time.Time{}, fmt.Errorf("no AWS delegation config")
+	}
+	src := strings.TrimSpace(d.SourceProfile)
+
+	sessionPolicy := d.SessionPolicy
+	if sessionPolicy == "" && len(d.Regions) > 0 {
+		sessionPolicy = awsdelegation.BuildRegionPolicy(d.Regions)
+	}
+
+	var roleARN string
+	if d.ManagedRole {
+		accountID := strings.TrimSpace(d.AccountID)
+		roleName := strings.TrimSpace(d.RoleName)
+		if roleName == "" {
+			roleName = awsdelegation.DefaultDelegatedRoleName
+		}
+		if accountID == "" {
+			return time.Time{}, fmt.Errorf("managed_role requires account_id")
+		}
+		var err error
+		roleARN, err = awsdelegation.EnsureRole(ctx, src, accountID, roleName)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("ensure managed role: %w", err)
+		}
+	} else if sessionPolicy != "" && strings.TrimSpace(d.AccountID) != "" {
+		// Use a role ARN only when a session policy restricts the credentials.
+		var err error
+		roleARN, err = awsdelegation.RoleARNFromParts(d.AccountID, d.RoleName)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("build role ARN: %w", err)
+		}
+	}
+
+	creds, err := awsdelegation.GetTemporaryCredentials(ctx, src, awsdelegation.CredentialOptions{
+		SessionPolicy:   sessionPolicy,
+		DurationSeconds: d.DurationSeconds,
+		RoleARN:         roleARN,
+		SessionName:     "aiman",
+	})
+	if err != nil {
+		return time.Time{}, fmt.Errorf("get temporary credentials: %w", err)
+	}
+
+	if err := awsdelegation.ApplyDelegatedCredentials(ctx, mgr, remoteProfile, creds); err != nil {
+		return time.Time{}, fmt.Errorf("push credentials: %w", err)
+	}
+
+	// Only embed role_arn/source_profile when NOT syncing creds (synced creds make those
+	// fields redundant and potentially confusing).
+	configRoleARN := ""
+	configSrc := ""
+	if !d.SyncCredentials {
+		configRoleARN = roleARN
+		configSrc = src
+	}
+	if err := awsdelegation.ApplyDelegatedProfile(ctx, mgr, remoteProfile, configRoleARN, configSrc, d.Region); err != nil {
+		return time.Time{}, fmt.Errorf("push profile config: %w", err)
+	}
+
+	return creds.Expiration, nil
+}
+
+// renewCmd pushes fresh temporary credentials for one entry.
 func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 	key := e.key
 	remote := e.remote
 	d := e.del
 	profile := e.remoteProfile
 	return func() tea.Msg {
-		if d == nil {
-			return awsCredRenewResultMsg{key: key, err: fmt.Errorf("no AWS delegation config")}
-		}
-
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 
-		src := strings.TrimSpace(d.SourceProfile)
-
-		sessionPolicy := d.SessionPolicy
-		if sessionPolicy == "" && len(d.Regions) > 0 {
-			sessionPolicy = awsdelegation.BuildRegionPolicy(d.Regions)
-		}
-
-		var roleARN string
-
-		if d.ManagedRole {
-			// --- managed role path: create role automatically if missing ---
-			accountID := strings.TrimSpace(d.AccountID)
-			roleName := strings.TrimSpace(d.RoleName)
-			if roleName == "" {
-				roleName = awsdelegation.DefaultDelegatedRoleName
-			}
-			if accountID == "" {
-				return awsCredRenewResultMsg{key: key, err: fmt.Errorf("managed_role requires account_id")}
-			}
-			var err error
-			roleARN, err = awsdelegation.EnsureRole(ctx, src, accountID, roleName)
-			if err != nil {
-				return awsCredRenewResultMsg{key: key, err: fmt.Errorf("ensure managed role: %w", err)}
-			}
-		} else if sessionPolicy != "" && strings.TrimSpace(d.AccountID) != "" {
-			// --- existing path: use role ARN only when a session policy restricts it ---
-			var err error
-			roleARN, err = awsdelegation.RoleARNFromParts(d.AccountID, d.RoleName)
-			if err != nil {
-				return awsCredRenewResultMsg{key: key, err: fmt.Errorf("build role ARN: %w", err)}
-			}
-		}
-
-		opts := awsdelegation.CredentialOptions{
-			SessionPolicy:   sessionPolicy,
-			DurationSeconds: d.DurationSeconds,
-			RoleARN:         roleARN,
-			SessionName:     "aiman",
-		}
-		creds, err := awsdelegation.GetTemporaryCredentials(ctx, src, opts)
-		if err != nil {
-			return awsCredRenewResultMsg{key: key, err: fmt.Errorf("get temporary credentials: %w", err)}
-		}
-
-		if err := awsdelegation.ApplyDelegatedCredentials(ctx, mgr, profile, creds); err != nil {
-			return awsCredRenewResultMsg{key: key, err: fmt.Errorf("push credentials: %w", err)}
-		}
-
-		// Re-apply the profile block (role_arn + source_profile) in ~/.aws/config.
-		configRoleARN := ""
-		configSrc := ""
-		if !d.SyncCredentials {
-			// Only embed role_arn/source_profile when NOT syncing creds
-			// (synced creds make those fields redundant and potentially confusing).
-			configRoleARN = roleARN
-			configSrc = src
-		}
-		if err := awsdelegation.ApplyDelegatedProfile(ctx, mgr, profile, configRoleARN, configSrc, d.Region); err != nil {
-			return awsCredRenewResultMsg{key: key, err: fmt.Errorf("push profile config: %w", err)}
-		}
-
-		return awsCredRenewResultMsg{key: key, err: nil}
+		expiresAt, err := pushFreshCredentials(ctx, mgr, d, profile)
+		return awsCredRenewResultMsg{key: key, err: err, expiresAt: expiresAt}
 	}
 }
 
@@ -413,73 +497,8 @@ func (m AWSCredentialsModel) renewHostCmd(entries []awsHostEntry) tea.Cmd {
 
 		results := make(awsCredBatchRenewResultMsg, 0, len(entriesCopy))
 		for _, e := range entriesCopy {
-			if e.del == nil {
-				results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("no AWS delegation config")})
-				continue
-			}
-			d := e.del
-			src := strings.TrimSpace(d.SourceProfile)
-
-			sessionPolicy := d.SessionPolicy
-			if sessionPolicy == "" && len(d.Regions) > 0 {
-				sessionPolicy = awsdelegation.BuildRegionPolicy(d.Regions)
-			}
-
-			var roleARN string
-			if d.ManagedRole {
-				accountID := strings.TrimSpace(d.AccountID)
-				roleName := strings.TrimSpace(d.RoleName)
-				if roleName == "" {
-					roleName = awsdelegation.DefaultDelegatedRoleName
-				}
-				if accountID == "" {
-					results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("managed_role requires account_id")})
-					continue
-				}
-				var err error
-				roleARN, err = awsdelegation.EnsureRole(ctx, src, accountID, roleName)
-				if err != nil {
-					results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("ensure managed role: %w", err)})
-					continue
-				}
-			} else if sessionPolicy != "" && strings.TrimSpace(d.AccountID) != "" {
-				var err error
-				roleARN, err = awsdelegation.RoleARNFromParts(d.AccountID, d.RoleName)
-				if err != nil {
-					results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("build role ARN: %w", err)})
-					continue
-				}
-			}
-
-			opts := awsdelegation.CredentialOptions{
-				SessionPolicy:   sessionPolicy,
-				DurationSeconds: d.DurationSeconds,
-				RoleARN:         roleARN,
-				SessionName:     "aiman",
-			}
-			creds, err := awsdelegation.GetTemporaryCredentials(ctx, src, opts)
-			if err != nil {
-				results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("get temporary credentials: %w", err)})
-				continue
-			}
-
-			if err := awsdelegation.ApplyDelegatedCredentials(ctx, mgr, e.remoteProfile, creds); err != nil {
-				results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("push credentials: %w", err)})
-				continue
-			}
-
-			configRoleARN := ""
-			configSrc := ""
-			if !d.SyncCredentials {
-				configRoleARN = roleARN
-				configSrc = src
-			}
-			if err := awsdelegation.ApplyDelegatedProfile(ctx, mgr, e.remoteProfile, configRoleARN, configSrc, d.Region); err != nil {
-				results = append(results, awsCredRenewResultMsg{key: e.key, err: fmt.Errorf("push profile config: %w", err)})
-				continue
-			}
-
-			results = append(results, awsCredRenewResultMsg{key: e.key, err: nil})
+			expiresAt, err := pushFreshCredentials(ctx, mgr, e.del, e.remoteProfile)
+			results = append(results, awsCredRenewResultMsg{key: e.key, err: err, expiresAt: expiresAt})
 		}
 		return results
 	}
@@ -506,6 +525,9 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case awsCredRenewResultMsg:
 		delete(m.renewing, msg.key)
+		if msg.err != nil {
+			m.refreshFailures++
+		}
 		for i, e := range m.entries {
 			if e.key == msg.key {
 				if msg.err != nil {
@@ -516,6 +538,8 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Re-probe to confirm rather than optimistically setting Valid.
 					m.entries[i].status = awsCredStatusChecking
 					m.entries[i].err = nil
+					m.entries[i].expiresAt = msg.expiresAt
+					m.entries[i].expiryApprox = false
 					m.message = fmt.Sprintf("Renewed %s [%s] — verifying…", e.userAtHost, e.remoteProfile)
 				}
 				break
@@ -527,6 +551,9 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var failMsgs []string
 		for _, r := range msg {
 			delete(m.renewing, r.key)
+			if r.err != nil {
+				m.refreshFailures++
+			}
 			for i, e := range m.entries {
 				if e.key == r.key {
 					if r.err != nil {
@@ -536,6 +563,8 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else {
 						m.entries[i].status = awsCredStatusChecking
 						m.entries[i].err = nil
+						m.entries[i].expiresAt = r.expiresAt
+						m.entries[i].expiryApprox = false
 					}
 					break
 				}
@@ -630,6 +659,9 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if e.del == nil {
 					m.message = fmt.Sprintf("Cannot renew [%s]: no local delegation config for this profile.", e.remoteProfile)
 				} else if e.status != awsCredStatusNoConf && !m.renewing[e.key] {
+					if len(m.renewing) == 0 {
+						m.refreshFailures = 0
+					}
 					m.renewing[e.key] = true
 					m.entries[m.cursor].status = awsCredStatusChecking
 					m.message = fmt.Sprintf("Renewing %s [%s]…", e.userAtHost, e.remoteProfile)
@@ -637,42 +669,45 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "R":
+			// Refresh everything renewable, whatever its current status — valid
+			// credentials included, so the user is never blocked from re-minting.
 			// Group entries by host so that profiles on the same remote are renewed
-			// sequentially — concurrent reads+writes to ~/.aws/credentials would race,
+			// sequentially: concurrent reads+writes to ~/.aws/credentials would race,
 			// leaving only the last writer's profile in the file.
-			type hostGroup struct{ entries []awsHostEntry }
+			targets := entriesToRenewAll(m.entries, m.renewing)
+			if len(targets) == 0 {
+				m.message = "Nothing to refresh — no profiles with a local delegation config."
+				break
+			}
+			if len(m.renewing) == 0 {
+				m.refreshFailures = 0
+			}
 			hostOrder := []string{}
-			groups := map[string]*hostGroup{}
-			count := 0
-			for i, e := range m.entries {
-				if e.del == nil {
-					continue
-				}
-				if (e.status == awsCredStatusExpired || e.status == awsCredStatusNotPushed) && !m.renewing[e.key] {
-					m.renewing[e.key] = true
-					m.entries[i].status = awsCredStatusChecking
-					if _, ok := groups[e.userAtHost]; !ok {
-						groups[e.userAtHost] = &hostGroup{}
-						hostOrder = append(hostOrder, e.userAtHost)
-					}
-					groups[e.userAtHost].entries = append(groups[e.userAtHost].entries, e)
-					count++
-				}
-			}
-			if count > 0 {
-				var cmds []tea.Cmd
-				for _, host := range hostOrder {
-					g := groups[host]
-					if len(g.entries) == 1 {
-						cmds = append(cmds, m.renewCmd(g.entries[0]))
-					} else {
-						cmds = append(cmds, m.renewHostCmd(g.entries))
+			groups := map[string][]awsHostEntry{}
+			for _, e := range targets {
+				m.renewing[e.key] = true
+				for i := range m.entries {
+					if m.entries[i].key == e.key {
+						m.entries[i].status = awsCredStatusChecking
+						break
 					}
 				}
-				m.message = fmt.Sprintf("Renewing %d credential(s)…", count)
-				return m, tea.Batch(cmds...)
+				if _, ok := groups[e.userAtHost]; !ok {
+					hostOrder = append(hostOrder, e.userAtHost)
+				}
+				groups[e.userAtHost] = append(groups[e.userAtHost], e)
 			}
-			m.message = "No expired or unprovisioned credentials to renew."
+			var cmds []tea.Cmd
+			for _, host := range hostOrder {
+				g := groups[host]
+				if len(g) == 1 {
+					cmds = append(cmds, m.renewCmd(g[0]))
+				} else {
+					cmds = append(cmds, m.renewHostCmd(g))
+				}
+			}
+			m.message = fmt.Sprintf("Refreshing %d credential(s)…", len(targets))
+			return m, tea.Batch(cmds...)
 		case "c":
 			m.message = "Re-scanning remote profiles…"
 			return m, m.buildEntries()
@@ -719,14 +754,35 @@ func (m AWSCredentialsModel) View() string {
 
 	b.WriteString("\n  " + titleStyle.Render("AWS Credential Status") + "\n\n")
 
+	// Renewals and probes keep running when this page is closed, so say what is still
+	// outstanding — both for work started here and for a dashboard-wide refresh.
+	if m.Busy() {
+		renewing, checking := m.inFlightCount()
+		var parts []string
+		if renewing > 0 {
+			parts = append(parts, fmt.Sprintf("%d refresh(es)", renewing))
+		}
+		if checking > 0 {
+			parts = append(parts, fmt.Sprintf("%d check(s)", checking))
+		}
+		if m.externalRefresh {
+			parts = append(parts, "a shift+R refresh of all profiles")
+		}
+		if len(parts) > 0 {
+			b.WriteString("  " + warnStyle.Render("⟳ "+strings.Join(parts, " and ")+" in flight — this continues in the background if you leave this page.") + "\n\n")
+		}
+	}
+
 	if len(m.entries) == 0 {
 		b.WriteString(dimStyle.Render("  No remotes with AWS delegation found.\n"))
 		b.WriteString(dimStyle.Render("  (Remotes need aws_delegation.sync_credentials: true in config)\n"))
 	} else {
-		hdr := fmt.Sprintf("  %-12s  %-30s  %-20s  %-20s",
-			"Status", "Host", "Local profile", "Remote profile")
+		hdr := fmt.Sprintf("  %-12s  %-30s  %-20s  %-20s  %-10s",
+			"Status", "Host", "Local profile", "Remote profile", "Expires in")
 		b.WriteString(headerStyle.Render(hdr) + "\n")
-		b.WriteString(headerStyle.Render("  "+strings.Repeat("─", 88)) + "\n")
+		b.WriteString(headerStyle.Render("  "+strings.Repeat("─", 102)) + "\n")
+
+		now := time.Now()
 
 		for i, e := range m.entries {
 			var statusStr string
@@ -758,11 +814,24 @@ func (m AWSCredentialsModel) View() string {
 				remoteP = "—"
 			}
 
-			line := fmt.Sprintf("  %s  %-30s  %-20s  %-20s",
+			expiresStr := fmt.Sprintf("%-10s", formatExpiresIn(e.expiresAt, e.expiryApprox, now))
+			switch urgencyOf(e.expiresAt, now) {
+			case expiryExpired:
+				expiresStr = expiredStyle.Render(expiresStr)
+			case expiryWarn:
+				expiresStr = warnStyle.Render(expiresStr)
+			case expiryOK:
+				expiresStr = validStyle.Render(expiresStr)
+			default:
+				expiresStr = dimStyle.Render(expiresStr)
+			}
+
+			line := fmt.Sprintf("  %s  %-30s  %-20s  %-20s  %s",
 				statusStr,
 				truncateRunes(e.userAtHost, 30),
 				truncateRunes(localP, 20),
 				truncateRunes(remoteP, 20),
+				expiresStr,
 			)
 			if i == m.cursor {
 				line = selectedBg.Render(line)
@@ -781,9 +850,24 @@ func (m AWSCredentialsModel) View() string {
 	}
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	b.WriteString(helpStyle.Render("  r renew selected  •  e rename selected profile  •  d remove selected stale profile  •  R renew all expired  •  c re-check all  •  ESC back") + "\n")
+	b.WriteString(helpStyle.Render("  r renew selected  •  shift+R refresh ALL  •  e rename selected profile  •  d remove selected stale profile  •  c re-check all  •  ESC back") + "\n")
+	b.WriteString(helpStyle.Render("  \"~\" marks an expiry estimated from the credentials file's age (pushed before aiman recorded expiry) — refresh to replace it with the exact time.") + "\n")
 
 	return b.String()
+}
+
+// entriesToRenewAll returns every entry shift+R should refresh: anything with a local
+// delegation config that is not already being renewed, regardless of current status.
+// Entries without a delegation config are skipped because there is nothing to mint from.
+func entriesToRenewAll(entries []awsHostEntry, renewing map[string]bool) []awsHostEntry {
+	var out []awsHostEntry
+	for _, e := range entries {
+		if e.del == nil || renewing[e.key] {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func (m AWSCredentialsModel) entryByKey(key string) *awsHostEntry {

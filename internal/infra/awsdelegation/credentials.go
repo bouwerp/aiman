@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // SessionCredentials matches the fields returned by `aws sts get-session-token` or `assume-role`.
@@ -13,6 +14,10 @@ type SessionCredentials struct {
 	AccessKeyID     string `json:"AccessKeyId"`
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken"`
+	// Expiration is when STS says these tokens stop working. It is recorded in the
+	// remote credentials file (see ExpiryKey) so the credentials manager can show a
+	// time-to-expiry without minting anything.
+	Expiration time.Time `json:"Expiration"`
 }
 
 type getSessionTokenOutput struct {
@@ -172,5 +177,8 @@ func FormatCredentialsSection(profileName string, creds *SessionCredentials) str
 	fmt.Fprintf(&b, "aws_access_key_id = %s\n", creds.AccessKeyID)
 	fmt.Fprintf(&b, "aws_secret_access_key = %s\n", creds.SecretAccessKey)
 	fmt.Fprintf(&b, "aws_session_token = %s\n", creds.SessionToken)
+	if !creds.Expiration.IsZero() {
+		fmt.Fprintf(&b, "%s = %s\n", ExpiryKey, creds.Expiration.UTC().Format(time.RFC3339))
+	}
 	return b.String()
 }

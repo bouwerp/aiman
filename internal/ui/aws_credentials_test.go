@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
 	tea "github.com/charmbracelet/bubbletea"
@@ -134,5 +135,115 @@ func TestRenameManagedDelegationProfile(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "profile: prod") {
 		t.Fatalf("expected saved config to contain renamed profile, got:\n%s", string(data))
+	}
+}
+
+func TestFormatExpiresIn(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name   string
+		at     time.Time
+		approx bool
+		want   string
+	}{
+		{"unknown", time.Time{}, false, "—"},
+		{"hours and minutes", now.Add(4*time.Hour + 12*time.Minute), false, "4h12m"},
+		{"minutes only", now.Add(42 * time.Minute), false, "42m"},
+		{"under a minute", now.Add(30 * time.Second), false, "<1m"},
+		{"approximate is marked", now.Add(3 * time.Hour), true, "~3h00m"},
+		{"expired", now.Add(-5 * time.Minute), false, "expired"},
+		{"expired exactly now", now, false, "expired"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatExpiresIn(tc.at, tc.approx, now); got != tc.want {
+				t.Fatalf("formatExpiresIn(%v, %v) = %q, want %q", tc.at, tc.approx, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExpiryUrgency(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		at   time.Time
+		want expiryUrgency
+	}{
+		{"unknown", time.Time{}, expiryUnknown},
+		{"comfortable", now.Add(6 * time.Hour), expiryOK},
+		{"just over the window", now.Add(time.Hour + time.Minute), expiryOK},
+		{"inside the window", now.Add(59 * time.Minute), expiryWarn},
+		{"expired", now.Add(-time.Second), expiryExpired},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := urgencyOf(tc.at, now); got != tc.want {
+				t.Fatalf("urgencyOf(%v) = %v, want %v", tc.at, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatAWSCredExpiryBanner(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+
+	if got := formatAWSCredExpiryBanner(nil, now); got != "" {
+		t.Fatalf("no items must produce no banner, got %q", got)
+	}
+
+	healthy := []awsCredExpiryItem{{userAtHost: "ubuntu@host", profile: "prod", expiresAt: now.Add(8 * time.Hour)}}
+	if got := formatAWSCredExpiryBanner(healthy, now); got != "" {
+		t.Fatalf("credentials far from expiry must not warn, got %q", got)
+	}
+
+	one := []awsCredExpiryItem{
+		{userAtHost: "ubuntu@host", profile: "prod", expiresAt: now.Add(42 * time.Minute)},
+		{userAtHost: "ubuntu@host", profile: "dev", expiresAt: now.Add(9 * time.Hour)},
+	}
+	got := formatAWSCredExpiryBanner(one, now)
+	if !strings.Contains(got, "42m") || !strings.Contains(got, "ubuntu@host") || !strings.Contains(got, "prod") {
+		t.Fatalf("expected the soonest profile named with its remaining time, got %q", got)
+	}
+	if strings.Contains(got, "dev") {
+		t.Fatalf("must not mention profiles outside the warning window, got %q", got)
+	}
+	if !strings.Contains(got, "shift+R") {
+		t.Fatalf("banner must tell the user how to refresh, got %q", got)
+	}
+
+	many := []awsCredExpiryItem{
+		{userAtHost: "a@h", profile: "p1", expiresAt: now.Add(10 * time.Minute)},
+		{userAtHost: "b@h", profile: "p2", expiresAt: now.Add(30 * time.Minute)},
+		{userAtHost: "c@h", profile: "p3", expiresAt: now.Add(-time.Minute)},
+	}
+	got = formatAWSCredExpiryBanner(many, now)
+	if !strings.Contains(got, "expired") {
+		t.Fatalf("an already-expired profile must be reported as expired, got %q", got)
+	}
+	if !strings.Contains(got, "+2 more") {
+		t.Fatalf("expected the remaining count, got %q", got)
+	}
+}
+
+func TestEntriesToRenewAllIncludesValidCredentials(t *testing.T) {
+	del := &config.AWSDelegation{Profile: "prod", SourceProfile: "prod", SyncCredentials: true}
+	entries := []awsHostEntry{
+		{key: "k1", status: awsCredStatusValid, del: del},
+		{key: "k2", status: awsCredStatusExpired, del: del},
+		{key: "k3", status: awsCredStatusNotPushed, del: del},
+		{key: "k4", status: awsCredStatusValid, del: nil}, // no delegation config — cannot renew
+		{key: "k5", status: awsCredStatusValid, del: del}, // already renewing
+		{key: "k6", status: awsCredStatusNoConf, del: del},
+	}
+	got := entriesToRenewAll(entries, map[string]bool{"k5": true})
+
+	var keys []string
+	for _, e := range got {
+		keys = append(keys, e.key)
+	}
+	want := []string{"k1", "k2", "k3", "k6"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("entriesToRenewAll selected %v, want %v", keys, want)
 	}
 }
