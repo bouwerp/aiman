@@ -219,3 +219,31 @@ func TestScanAgents_DetectsGrokFallback(t *testing.T) {
 		t.Error("expected Grok Build CLI to be detected via grok-build fallback")
 	}
 }
+
+func TestScanAgents_DetectsCodex(t *testing.T) {
+	exec := &mockExecutor{
+		canRun: func(cmd string) bool {
+			return strings.Contains(cmd, "codex")
+		},
+	}
+	scanner := NewScanner(exec)
+
+	agents, err := scanner.ScanAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ScanAgents returned error: %v", err)
+	}
+
+	found := false
+	for _, a := range agents {
+		if a.Name == "Codex CLI" {
+			found = true
+			if a.Command != "codex" {
+				t.Errorf("expected command to be codex, got %s", a.Command)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected Codex CLI to be detected as an available agent")
+	}
+}

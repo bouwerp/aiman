@@ -51,7 +51,7 @@ func (f *fakePromptDeliverer) Execute(_ context.Context, cmd string) (string, er
 func TestSendKeysScriptReadsPromptFromFile(t *testing.T) {
 	// The script must source the prompt from the file via command substitution
 	// so its contents are never interpolated into the command text.
-	script := sendKeysScript("my-session", "/tmp/aiman-prompt-abc")
+	script := sendKeysScript("my-session", "/tmp/aiman-prompt-abc", false)
 	if !strings.Contains(script, `-l -- "$(cat `) {
 		t.Fatalf("script does not read prompt via cat: %q", script)
 	}
@@ -76,7 +76,7 @@ func TestDeliverInitialPromptRoutesPromptThroughFile(t *testing.T) {
 	// command — it is written to a file and read back via cat.
 	malicious := "do the thing $(touch /tmp/pwned) `id` it's \"quoted\""
 	f := &fakePromptDeliverer{}
-	deliverInitialPrompt(context.Background(), f, "sess", "abc-123", malicious)
+	DeliverInitialPrompt(context.Background(), f, "sess", "abc-123", malicious, false)
 
 	if string(f.writeContent) != malicious {
 		t.Fatalf("prompt not written verbatim to file: %q", f.writeContent)
@@ -96,7 +96,7 @@ func TestDeliverInitialPromptRoutesPromptThroughFile(t *testing.T) {
 
 func TestDeliverInitialPromptSkipsEmpty(t *testing.T) {
 	f := &fakePromptDeliverer{}
-	deliverInitialPrompt(context.Background(), f, "sess", "abc-123", "")
+	DeliverInitialPrompt(context.Background(), f, "sess", "abc-123", "", false)
 	if f.writePath != "" || len(f.execCmds) != 0 {
 		t.Fatalf("empty prompt should not write or execute anything")
 	}
@@ -104,7 +104,7 @@ func TestDeliverInitialPromptSkipsEmpty(t *testing.T) {
 
 func TestDeliverInitialPromptSkipsExecuteOnWriteError(t *testing.T) {
 	f := &fakePromptDeliverer{writeErr: context.DeadlineExceeded}
-	deliverInitialPrompt(context.Background(), f, "sess", "abc-123", "hello")
+	DeliverInitialPrompt(context.Background(), f, "sess", "abc-123", "hello", false)
 	if len(f.execCmds) != 0 {
 		t.Fatalf("must not send-keys when the prompt file failed to write")
 	}
@@ -202,5 +202,57 @@ func TestSharedSessionAWSEnvNoProfile(t *testing.T) {
 	env := SharedSessionAWSEnv("", "eu-west-1")
 	if _, ok := env["AWS_PROFILE"]; ok {
 		t.Fatal("did not expect AWS_PROFILE when profile name is empty")
+	}
+}
+
+func TestSendKeysScript_AgyAcceptsTrustDialogThenDelivers(t *testing.T) {
+	script := sendKeysScript("agy-sess", "/tmp/aiman-prompt-1", true)
+	for _, want := range []string{
+		"capture-pane",
+		"trust this folder",
+		"send-keys -t \"agy-sess\" Enter",
+		"? for shortcuts",
+		`-- "$(cat `,
+		"rm -f",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("trust-aware agy script missing %q, got: %s", want, script)
+		}
+	}
+	// Pane-command-based readiness loop must NOT appear in the agy variant.
+	if strings.Contains(script, "pane_current_command") {
+		t.Error("agy trust script must not rely on pane_current_command (always bash for agy)")
+	}
+}
+
+func TestDeliverInitialPrompt_RunsTrustScriptWhenPromptEmpty(t *testing.T) {
+	f := &fakePromptDeliverer{}
+	DeliverInitialPrompt(context.Background(), f, "sess", "abc", "", true)
+	if len(f.execCmds) != 1 {
+		t.Fatalf("expected 1 exec call for trust-accept script even with empty prompt, got %d", len(f.execCmds))
+	}
+	if f.writePath != "" {
+		t.Errorf("should not write a prompt file when prompt is empty, wrote to %q", f.writePath)
+	}
+}
+
+func TestIsAntigravityAgent(t *testing.T) {
+	cases := []struct {
+		name, cmd string
+		want      bool
+	}{
+		{"Antigravity CLI", "agy", true},
+		{"Antigravity", "whatever", true},
+		{"Codex CLI", "codex", false},
+		{"Custom prompt wrapper", "agy --foo", true},
+		{"Claude Code", "claude", false},
+		{"Grok Build CLI", "grok", false},
+		{"Ageni", "ageni", false},
+		{"", "", false},
+	}
+	for _, c := range cases {
+		if got := IsAntigravityAgent(c.name, c.cmd); got != c.want {
+			t.Errorf("IsAntigravityAgent(%q,%q)=%v, want %v", c.name, c.cmd, got, c.want)
+		}
 	}
 }

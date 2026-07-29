@@ -290,6 +290,8 @@ func (r *EC2LoopRunner) runAutonomousLoop(ctx context.Context, sshMgr domain.Rem
 		agentCmd = fmt.Sprintf("cd %s && claude --dangerously-skip-permissions -p \"$(cat AUTONOMOUS_PROMPT.txt)\"", repoDir)
 	case "ageni":
 		agentCmd = fmt.Sprintf("cd %s && ageni run \"$(cat AUTONOMOUS_PROMPT.txt)\"", repoDir)
+	case "codex":
+		agentCmd = fmt.Sprintf("cd %s && codex exec --full-auto \"$(cat AUTONOMOUS_PROMPT.txt)\"", repoDir)
 	default:
 		agentCmd = fmt.Sprintf("cd %s && claude --dangerously-skip-permissions -p \"$(cat AUTONOMOUS_PROMPT.txt)\"", repoDir)
 	}

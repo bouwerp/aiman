@@ -689,3 +689,67 @@ func TestPrepareSession_GrokWithPromptSkills_WritesPromptFileAndUsesSendKeys(t *
 		t.Errorf("InitialPrompt should direct the agent to the prompt file, got: %s", result.InitialPrompt)
 	}
 }
+
+func TestPrepareSession_CodexWithIssue_UsesBypassAndSendKeys(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	issue := &domain.Issue{
+		Key:         "PROJ-321",
+		Summary:     "Codex test issue",
+		Description: "Check codex works.",
+		Status:      domain.IssueStatusTodo,
+	}
+
+	agent := domain.Agent{Name: "Codex CLI", Command: "codex"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := remote.writtenFiles["/home/user/code/myrepo/.aiman_task.md"]; !ok {
+		t.Fatal("expected .aiman_task.md to be written")
+	}
+
+	if !strings.Contains(result.Command, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Errorf("expected --dangerously-bypass-approvals-and-sandbox in codex command, got: %s", result.Command)
+	}
+
+	if result.InitialPrompt == "" || !strings.Contains(result.InitialPrompt, domain.AimanTaskFileName) {
+		t.Errorf("InitialPrompt should reference the task file, got: %s", result.InitialPrompt)
+	}
+}
+
+func TestPrepareSession_CodexWithPromptSkills_WritesPromptFileAndUsesSendKeys(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+
+	skillFile := filepath.Join(t.TempDir(), "skill.md")
+	if err := os.WriteFile(skillFile, []byte("Codex skill content."), 0600); err != nil {
+		t.Fatal(err)
+	}
+	skills := []domain.Skill{{Name: "codex-skill", Type: domain.SkillTypePrompt, Path: skillFile}}
+	agent := domain.Agent{Name: "Codex CLI", Command: "codex"}
+
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, false, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	promptPath := "/home/user/code/myrepo/" + domain.AimanPromptFileName
+	content, ok := remote.writtenFiles[promptPath]
+	if !ok {
+		t.Fatalf("expected %s to be written", promptPath)
+	}
+	if !strings.Contains(string(content), "Codex skill content.") {
+		t.Errorf("prompt file should contain the skill content, got: %s", content)
+	}
+	if !strings.Contains(result.InitialPrompt, domain.AimanPromptFileName) {
+		t.Errorf("InitialPrompt should direct the agent to the prompt file, got: %s", result.InitialPrompt)
+	}
+}

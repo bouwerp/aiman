@@ -27,6 +27,11 @@ var knownAgents = []domain.Agent{
 		Description: "xAI's Grok Build CLI",
 	},
 	{
+		Name:        "Codex CLI",
+		Command:     "codex",
+		Description: "OpenAI Codex CLI",
+	},
+	{
 		Name:        "OpenCode",
 		Command:     "opencode",
 		Description: "OpenCode interactive CLI",

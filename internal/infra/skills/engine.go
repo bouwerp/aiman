@@ -209,6 +209,9 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	} else if strings.Contains(name, "grok") || baseCommand == "grok" || baseCommand == "grok-build" {
 		// For Grok Build CLI
 		result, err = e.prepareGrok(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+	} else if strings.Contains(name, "codex") || baseCommand == "codex" {
+		// For OpenAI Codex CLI
+		result, err = e.prepareCodex(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
 	} else if strings.Contains(name, "cursor") {
 		// For Cursor
 		cmd := agent.Command
@@ -577,6 +580,46 @@ func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, 
 		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
 		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to upload Grok prompt to remote: %w", err)
+		}
+		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
+	}
+
+	result.InitialPrompt = buildSessionPrompt(promptFiles)
+	return result, nil
+}
+
+// prepareCodex prepares an OpenAI Codex CLI session. Codex has no reliable
+// cross-version system-prompt flag, so prompt skills are staged in a workspace
+// file and the interactive session is directed to read it (and the task file)
+// via tmux send-keys after startup. When promptFree is set the agent runs with
+// approvals and sandbox fully bypassed, matching aiman's autonomous semantics.
+func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+	var prompts []string
+	for _, s := range selectedSkills {
+		if s.Type == domain.SkillTypePrompt {
+			if content, err := os.ReadFile(s.Path); err == nil {
+				prompts = append(prompts, string(content))
+			}
+		}
+	}
+
+	cmd := agent.Command
+	if promptFree {
+		cmd = ensureFlag(cmd, "--dangerously-bypass-approvals-and-sandbox")
+	}
+
+	result := domain.PreparedSession{Command: cmd}
+	var promptFiles []string
+
+	if issue != nil {
+		promptFiles = append(promptFiles, domain.AimanTaskFileName)
+	}
+
+	if len(prompts) > 0 {
+		systemPrompt := strings.Join(prompts, "\n\n")
+		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
+		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+			return domain.PreparedSession{}, fmt.Errorf("failed to upload Codex prompt to remote: %w", err)
 		}
 		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
 	}

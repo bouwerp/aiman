@@ -71,21 +71,44 @@ type promptDeliverer interface {
 // up, types the prompt, submits it, then removes the prompt file. The prompt is
 // read from promptPath via command substitution ("$(cat ...)") rather than
 // interpolated into the command, so its contents are never parsed by any shell.
-func sendKeysScript(tmuxName, promptPath string) string {
-	return fmt.Sprintf(
+func sendKeysScript(tmuxName, promptPath string, acceptWorkspaceTrust bool) string {
+	wait := fmt.Sprintf(
 		"attempt=0; "+
 			"while [ $attempt -lt 20 ]; do "+
 			"pane_cmd=$(tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true); "+
 			"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
 			"attempt=$((attempt+1)); sleep 1; "+
 			"done; "+
-			"sleep 3; "+
-			"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter; "+
+			"sleep 3; ",
+		tmuxName,
+	)
+	if acceptWorkspaceTrust {
+		// agy is launched through a wrapper shell, so pane_current_command stays
+		// "bash" and the readiness loop above never breaks. Poll the rendered pane
+		// instead: accept the workspace-trust dialog if it appears (agy's
+		// --dangerously-skip-permissions flag does not dismiss it), otherwise break
+		// once the chat input is ready.
+		wait = fmt.Sprintf(
+			"attempt=0; "+
+				"while [ $attempt -lt 10 ]; do "+
+				"pane=$(tmux capture-pane -t %q -p 2>/dev/null || true); "+
+				"if printf '%%s' \"$pane\" | grep -qi 'trust this folder'; then "+
+				"tmux send-keys -t %q Enter; sleep 3; break; "+
+				"fi; "+
+				"if printf '%%s' \"$pane\" | grep -qi '? for shortcuts'; then break; fi; "+
+				"attempt=$((attempt+1)); sleep 1; "+
+				"done; "+
+				"sleep 1; ",
+			tmuxName, tmuxName,
+		)
+	}
+	if promptPath == "" {
+		return wait
+	}
+	return wait + fmt.Sprintf(
+		"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter; "+
 			"rm -f %q",
-		tmuxName,
-		tmuxName, promptPath,
-		tmuxName,
-		promptPath,
+		tmuxName, promptPath, tmuxName, promptPath,
 	)
 }
 
@@ -97,20 +120,46 @@ func detachCommand(script string) string {
 	return fmt.Sprintf("nohup bash -c '%s' >/dev/null 2>&1 &", escaped)
 }
 
-// deliverInitialPrompt sends the initial prompt to a freshly-started agent via
+// DeliverInitialPrompt sends the initial prompt to a freshly-started agent via
 // tmux send-keys. The prompt is written to a temp file (raw bytes over stdin, no
 // shell parsing) and read back on the remote, so arbitrary user-entered text —
 // including shell metacharacters — can never be executed. Best-effort: a write
-// failure aborts delivery, and the background send itself is fire-and-forget.
-func deliverInitialPrompt(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, prompt string) {
-	if prompt == "" {
+// failure aborts prompt delivery, and the background send itself is
+// fire-and-forget.
+//
+// When acceptWorkspaceTrust is set (Antigravity CLI / agy), the delivery script
+// also accepts agy's workspace-trust dialog before sending the prompt: agy shows
+// "Do you trust this folder?" on first run in a directory and its
+// --dangerously-skip-permissions flag does not dismiss it, so without this the
+// prompt lands in the dialog instead of the agent. The script still runs when
+// the prompt is empty in that case, so the dialog is cleared even for ad-hoc
+// agy sessions.
+func DeliverInitialPrompt(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, prompt string, acceptWorkspaceTrust bool) {
+	if prompt == "" && !acceptWorkspaceTrust {
 		return
 	}
-	promptPath := fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
-	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
-		return
+	var promptPath string
+	if prompt != "" {
+		promptPath = fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
+		if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
+			if !acceptWorkspaceTrust {
+				return
+			}
+			promptPath = "" // cannot deliver the prompt, but still clear the trust dialog
+		}
 	}
-	_, _ = remote.Execute(ctx, detachCommand(sendKeysScript(tmuxName, promptPath)))
+	_, _ = remote.Execute(ctx, detachCommand(sendKeysScript(tmuxName, promptPath, acceptWorkspaceTrust)))
+}
+
+// IsAntigravityAgent reports whether the agent is Antigravity CLI (agy). agy is
+// special-cased for prompt delivery because it presents a workspace-trust dialog
+// on first run that --dangerously-skip-permissions does not dismiss.
+func IsAntigravityAgent(name, command string) bool {
+	if strings.Contains(strings.ToLower(name), "antigravity") {
+		return true
+	}
+	fields := strings.Fields(strings.TrimSpace(strings.ToLower(command)))
+	return len(fields) > 0 && fields[0] == "agy"
 }
 
 func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionConfig) (*domain.Session, error) {
@@ -255,22 +304,6 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// the entire prompt.
 	sendKeysPrompt = joinPrompt(sendKeysPrompt, config.InitialPrompt)
 
-	// If the agent is Antigravity CLI (agy), we must pass the initial prompt
-	// via the --prompt-interactive flag instead of tmux send-keys, because
-	// agy's bubbletea TUI startup timing/input capturing breaks tmux send-keys.
-	if config.Agent != nil {
-		baseCommand := ""
-		fields := strings.Fields(strings.TrimSpace(strings.ToLower(agentCmd)))
-		if len(fields) > 0 {
-			baseCommand = fields[0]
-		}
-		isAntigravity := strings.Contains(strings.ToLower(config.Agent.Name), "antigravity") || baseCommand == "agy"
-		if isAntigravity && sendKeysPrompt != "" {
-			agentCmd = fmt.Sprintf("%s --prompt-interactive %q", agentCmd, sendKeysPrompt)
-			sendKeysPrompt = ""
-		}
-	}
-
 	// Step 8: Session (Tmux)
 	tmuxName := strings.ReplaceAll(branch, "/", "-")
 
@@ -346,7 +379,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// If the agent doesn't support an inline initial prompt (i.e. it would run
 	// headlessly and exit), we send the prompt via tmux send-keys after a short
 	// delay so the agent has time to start up interactively.
-	deliverInitialPrompt(ctx, sshMgr, tmuxName, session.ID, sendKeysPrompt)
+	acceptTrust := config.Agent != nil && IsAntigravityAgent(config.Agent.Name, config.Agent.Command)
+	DeliverInitialPrompt(ctx, sshMgr, tmuxName, session.ID, sendKeysPrompt, acceptTrust)
 
 	session.TmuxSession = tmuxName
 
@@ -407,6 +441,9 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 	case strings.Contains(name, "ageni"):
 		// Ageni stores its provider selection in ~/.ageni/.env.
 		cmd = `grep -s '^MASTER_PROVIDER=' ~/.ageni/.env 2>/dev/null | cut -d= -f2- || echo ""`
+	case strings.Contains(name, "codex"):
+		// Codex stores its model selection in ~/.codex/config.toml.
+		cmd = `printenv CODEX_MODEL 2>/dev/null || grep -s '^model[[:space:]]*=' ~/.codex/config.toml 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo ""`
 	default:
 		return ""
 	}

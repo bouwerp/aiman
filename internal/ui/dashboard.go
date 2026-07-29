@@ -6651,19 +6651,6 @@ func (m *Model) restartSession() tea.Cmd {
 			}
 		}
 
-		if sessionCfg.Agent != nil {
-			baseCmd := ""
-			fields := strings.Fields(strings.TrimSpace(strings.ToLower(agentCmd)))
-			if len(fields) > 0 {
-				baseCmd = fields[0]
-			}
-			isAntigravity := strings.Contains(strings.ToLower(sessionCfg.Agent.Name), "antigravity") || baseCmd == "agy"
-			if isAntigravity && sendKeysPrompt != "" {
-				agentCmd = fmt.Sprintf("%s --prompt-interactive %q", agentCmd, sendKeysPrompt)
-				sendKeysPrompt = ""
-			}
-		}
-
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
 		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
@@ -6748,22 +6735,8 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 		logf("step3 ok")
 
-		if sendKeysPrompt != "" {
-			sendCmd := fmt.Sprintf(
-				"attempt=0; "+
-					"while [ $attempt -lt 20 ]; do "+
-					"pane_cmd=$(tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true); "+
-					"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
-					"attempt=$((attempt+1)); sleep 1; "+
-					"done; "+
-					"sleep 3; "+
-					"tmux send-keys -t %q -l %q && sleep 1 && tmux send-keys -t %q Enter",
-				s.TmuxSession,
-				s.TmuxSession, sendKeysPrompt,
-				s.TmuxSession,
-			)
-			_, _ = mgr.Execute(ctx, fmt.Sprintf("nohup bash -c %q >/dev/null 2>&1 &", sendCmd))
-		}
+		acceptTrust := sessionCfg.Agent != nil && usecase.IsAntigravityAgent(sessionCfg.Agent.Name, sessionCfg.Agent.Command)
+		usecase.DeliverInitialPrompt(ctx, mgr, s.TmuxSession, s.ID, sendKeysPrompt, acceptTrust)
 
 		if db != nil {
 			_ = db.Save(ctx, s)
