@@ -67,6 +67,7 @@ func TestBackgroundCreate_StatusMessagesAccumulateSteps(t *testing.T) {
 	cs := model.creatingSessions[id]
 	if cs == nil {
 		t.Fatal("creation record missing")
+		return
 	}
 	// Immediate duplicates are collapsed.
 	if len(cs.steps) != 2 {
@@ -186,6 +187,7 @@ func TestBackgroundCreate_WorktreeExistsInUseGetsSuffix(t *testing.T) {
 	}
 	if ph == nil {
 		t.Fatal("placeholder not found in allSessions")
+		return
 	}
 	if ph.Branch != "feature/pb-1-1" {
 		t.Errorf("expected placeholder Branch suffixed to feature/pb-1-1, got %q", ph.Branch)

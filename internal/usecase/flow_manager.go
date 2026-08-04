@@ -225,7 +225,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 6: Isolate (Worktree)
 	var worktree domain.Worktree
 	var err error
-	if config.AdHoc {
+	switch {
+	case config.AdHoc:
 		// Ad-hoc sessions get their own subdirectory under the repos root so
 		// they never run in the root itself.  Use the branch label (already
 		// sanitized by the UI) as the directory name.
@@ -234,14 +235,15 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 			adHocDir = "adhoc-" + time.Now().Format("20060102-1504")
 		}
 		session.WorktreePath = fmt.Sprintf("%s/%s", strings.TrimRight(sshMgr.GetRoot(), "/"), adHocDir)
-	} else if config.Repo.Name != "No Repository" && config.Repo.Name != "" {
-		if config.AttachExisting {
+	case config.Repo.Name != "No Repository" && config.Repo.Name != "":
+		switch {
+		case config.AttachExisting:
 			worktree, err = m.gitManager.FindExistingWorktree(ctx, sshMgr, config.Repo, branch)
-		} else if config.ReuseWorkspace {
+		case config.ReuseWorkspace:
 			worktree, err = m.gitManager.SetupSharedWorkspace(ctx, sshMgr, config.Repo, branch)
-		} else if config.ExistingBranch {
+		case config.ExistingBranch:
 			worktree, err = m.gitManager.SetupRemoteWorktreeFromBranch(ctx, sshMgr, config.Repo, branch)
-		} else {
+		default:
 			worktree, err = m.gitManager.SetupRemoteWorktree(ctx, sshMgr, config.Repo, branch, config.BaseBranch)
 		}
 		if err != nil {
@@ -255,7 +257,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 			}
 		}
 		session.WorktreePath = worktree.Path
-	} else {
+
+	default:
 		// No repository selected — create a named subdirectory under the root
 		// so the session never runs directly in the root.
 		subDir := branch

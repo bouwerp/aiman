@@ -617,142 +617,154 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		m.message = ""
 		if m.renaming {
-			switch msg.String() {
-			case "esc":
-				m.renaming = false
-				m.renameKey = ""
-				m.renameInput.Blur()
-				m.message = "Rename cancelled."
-				return m, nil
-			case "enter":
-				entry := m.entryByKey(m.renameKey)
-				if entry == nil {
-					m.renaming = false
-					m.renameKey = ""
-					m.renameInput.Blur()
-					m.message = "Rename target disappeared."
-					return m, nil
-				}
-				newProfile := normalizeAWSProfileName(m.renameInput.Value())
-				if newProfile == entry.remoteProfile {
-					m.renaming = false
-					m.renameKey = ""
-					m.renameInput.Blur()
-					m.message = "Profile name unchanged."
-					return m, nil
-				}
-				if err := validateRenameTarget(m.entries, *entry, newProfile); err != nil {
-					m.message = err.Error()
-					return m, nil
-				}
-				m.renaming = false
-				m.renameKey = ""
-				m.renameInput.Blur()
-				m.renewing[entry.key] = true
-				m.message = fmt.Sprintf("Renaming %s [%s → %s]…", entry.userAtHost, entry.remoteProfile, newProfile)
-				return m, m.renameCmd(*entry, newProfile)
-			}
-			var cmd tea.Cmd
-			m.renameInput, cmd = m.renameInput.Update(msg)
-			return m, cmd
+			return m.updateRenameEditor(msg)
 		}
 		if m.editingLifetime {
 			return m.updateLifetimeEditor(msg)
 		}
-		switch msg.String() {
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down", "j":
-			if m.cursor < len(m.entries)-1 {
-				m.cursor++
-			}
-		case "r":
-			if m.cursor < len(m.entries) {
-				e := m.entries[m.cursor]
-				if e.del == nil {
-					m.message = fmt.Sprintf("Cannot renew [%s]: no local delegation config for this profile.", e.remoteProfile)
-				} else if e.status != awsCredStatusNoConf && !m.renewing[e.key] {
-					if len(m.renewing) == 0 {
-						m.refreshFailures = 0
-					}
-					m.renewing[e.key] = true
-					m.entries[m.cursor].status = awsCredStatusChecking
-					m.message = fmt.Sprintf("Renewing %s [%s]…", e.userAtHost, e.remoteProfile)
-					return m, m.renewCmd(e)
+		return m.handleCredentialTableKey(msg)
+	}
+	return m, nil
+}
+
+// updateRenameEditor handles keys while the profile-rename editor is open.
+func (m AWSCredentialsModel) updateRenameEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.renaming = false
+		m.renameKey = ""
+		m.renameInput.Blur()
+		m.message = "Rename cancelled."
+		return m, nil
+	case "enter":
+		entry := m.entryByKey(m.renameKey)
+		if entry == nil {
+			m.renaming = false
+			m.renameKey = ""
+			m.renameInput.Blur()
+			m.message = "Rename target disappeared."
+			return m, nil
+		}
+		newProfile := normalizeAWSProfileName(m.renameInput.Value())
+		if newProfile == entry.remoteProfile {
+			m.renaming = false
+			m.renameKey = ""
+			m.renameInput.Blur()
+			m.message = "Profile name unchanged."
+			return m, nil
+		}
+		if err := validateRenameTarget(m.entries, *entry, newProfile); err != nil {
+			m.message = err.Error()
+			return m, nil
+		}
+		m.renaming = false
+		m.renameKey = ""
+		m.renameInput.Blur()
+		m.renewing[entry.key] = true
+		m.message = fmt.Sprintf("Renaming %s [%s → %s]…", entry.userAtHost, entry.remoteProfile, newProfile)
+		return m, m.renameCmd(*entry, newProfile)
+	}
+	var cmd tea.Cmd
+	m.renameInput, cmd = m.renameInput.Update(msg)
+	return m, cmd
+}
+
+// handleCredentialTableKey handles keys for the table itself: moving the cursor, renewing,
+// re-checking, renaming, removing, and editing a profile's lifetime.
+func (m AWSCredentialsModel) handleCredentialTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.entries)-1 {
+			m.cursor++
+		}
+	case "r":
+		if m.cursor < len(m.entries) {
+			e := m.entries[m.cursor]
+			if e.del == nil {
+				m.message = fmt.Sprintf("Cannot renew [%s]: no local delegation config for this profile.", e.remoteProfile)
+			} else if e.status != awsCredStatusNoConf && !m.renewing[e.key] {
+				if len(m.renewing) == 0 {
+					m.refreshFailures = 0
 				}
-			}
-		case "R":
-			// Refresh everything renewable, whatever its current status — valid
-			// credentials included, so the user is never blocked from re-minting.
-			// Group entries by host so that profiles on the same remote are renewed
-			// sequentially: concurrent reads+writes to ~/.aws/credentials would race,
-			// leaving only the last writer's profile in the file.
-			targets := entriesToRenewAll(m.entries, m.renewing)
-			if len(targets) == 0 {
-				m.message = "Nothing to refresh — no profiles with a local delegation config."
-				break
-			}
-			if len(m.renewing) == 0 {
-				m.refreshFailures = 0
-			}
-			hostOrder := []string{}
-			groups := map[string][]awsHostEntry{}
-			for _, e := range targets {
 				m.renewing[e.key] = true
-				for i := range m.entries {
-					if m.entries[i].key == e.key {
-						m.entries[i].status = awsCredStatusChecking
-						break
-					}
-				}
-				if _, ok := groups[e.userAtHost]; !ok {
-					hostOrder = append(hostOrder, e.userAtHost)
-				}
-				groups[e.userAtHost] = append(groups[e.userAtHost], e)
+				m.entries[m.cursor].status = awsCredStatusChecking
+				m.message = fmt.Sprintf("Renewing %s [%s]…", e.userAtHost, e.remoteProfile)
+				return m, m.renewCmd(e)
 			}
-			var cmds []tea.Cmd
-			for _, host := range hostOrder {
-				g := groups[host]
-				if len(g) == 1 {
-					cmds = append(cmds, m.renewCmd(g[0]))
-				} else {
-					cmds = append(cmds, m.renewHostCmd(g))
-				}
-			}
-			m.message = fmt.Sprintf("Refreshing %d credential(s)…", len(targets))
-			return m, tea.Batch(cmds...)
-		case "c":
-			m.message = "Re-scanning remote profiles…"
-			return m, m.buildEntries()
-		case "d":
-			if m.cursor < len(m.entries) {
-				e := m.entries[m.cursor]
-				if e.del != nil {
-					m.message = fmt.Sprintf("Cannot remove [%s] here: it is still managed by local settings.", e.remoteProfile)
-				} else if !m.renewing[e.key] {
-					m.renewing[e.key] = true
-					m.message = fmt.Sprintf("Removing %s [%s] from remote AWS config…", e.userAtHost, e.remoteProfile)
-					return m, m.removeCmd(e)
+		}
+	case "R":
+		// Refresh everything renewable, whatever its current status — valid
+		// credentials included, so the user is never blocked from re-minting.
+		// Group entries by host so that profiles on the same remote are renewed
+		// sequentially: concurrent reads+writes to ~/.aws/credentials would race,
+		// leaving only the last writer's profile in the file.
+		targets := entriesToRenewAll(m.entries, m.renewing)
+		if len(targets) == 0 {
+			m.message = "Nothing to refresh — no profiles with a local delegation config."
+			break
+		}
+		if len(m.renewing) == 0 {
+			m.refreshFailures = 0
+		}
+		hostOrder := []string{}
+		groups := map[string][]awsHostEntry{}
+		for _, e := range targets {
+			m.renewing[e.key] = true
+			for i := range m.entries {
+				if m.entries[i].key == e.key {
+					m.entries[i].status = awsCredStatusChecking
+					break
 				}
 			}
-		case "t":
-			if m.cursor < len(m.entries) {
-				return m.openLifetimeEditor(m.entries[m.cursor])
+			if _, ok := groups[e.userAtHost]; !ok {
+				hostOrder = append(hostOrder, e.userAtHost)
 			}
-		case "e":
-			if m.cursor < len(m.entries) {
-				e := m.entries[m.cursor]
-				if !m.renewing[e.key] {
-					m.renaming = true
-					m.renameKey = e.key
-					m.renameInput.SetValue(e.remoteProfile)
-					m.renameInput.CursorEnd()
-					m.renameInput.Focus()
-					m.message = fmt.Sprintf("Rename %s [%s] and press Enter.", e.userAtHost, e.remoteProfile)
-					return m, textinput.Blink
-				}
+			groups[e.userAtHost] = append(groups[e.userAtHost], e)
+		}
+		var cmds []tea.Cmd
+		for _, host := range hostOrder {
+			g := groups[host]
+			if len(g) == 1 {
+				cmds = append(cmds, m.renewCmd(g[0]))
+			} else {
+				cmds = append(cmds, m.renewHostCmd(g))
+			}
+		}
+		m.message = fmt.Sprintf("Refreshing %d credential(s)…", len(targets))
+		return m, tea.Batch(cmds...)
+	case "c":
+		m.message = "Re-scanning remote profiles…"
+		return m, m.buildEntries()
+	case "d":
+		if m.cursor < len(m.entries) {
+			e := m.entries[m.cursor]
+			if e.del != nil {
+				m.message = fmt.Sprintf("Cannot remove [%s] here: it is still managed by local settings.", e.remoteProfile)
+			} else if !m.renewing[e.key] {
+				m.renewing[e.key] = true
+				m.message = fmt.Sprintf("Removing %s [%s] from remote AWS config…", e.userAtHost, e.remoteProfile)
+				return m, m.removeCmd(e)
+			}
+		}
+	case "t":
+		if m.cursor < len(m.entries) {
+			return m.openLifetimeEditor(m.entries[m.cursor])
+		}
+	case "e":
+		if m.cursor < len(m.entries) {
+			e := m.entries[m.cursor]
+			if !m.renewing[e.key] {
+				m.renaming = true
+				m.renameKey = e.key
+				m.renameInput.SetValue(e.remoteProfile)
+				m.renameInput.CursorEnd()
+				m.renameInput.Focus()
+				m.message = fmt.Sprintf("Rename %s [%s] and press Enter.", e.userAtHost, e.remoteProfile)
+				return m, textinput.Blink
 			}
 		}
 	}
@@ -769,7 +781,7 @@ func (m AWSCredentialsModel) View() string {
 	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	selectedBg := lipgloss.NewStyle().Background(lipgloss.Color("236"))
-	headerStyle := dimStyle.Copy()
+	headerStyle := dimStyle
 
 	b.WriteString("\n  " + titleStyle.Render("AWS Credential Status") + "\n\n")
 

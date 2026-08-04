@@ -93,11 +93,12 @@ func (m *Model) yankSessionOutputToClipboard(fullBuffer bool) bool {
 		return false
 	}
 	var raw string
-	if m.panelMode == panelModeTerminal && m.terminal != nil {
+	switch {
+	case m.panelMode == panelModeTerminal && m.terminal != nil:
 		raw = m.terminal.View()
-	} else if fullBuffer {
+	case fullBuffer:
 		raw = m.tmuxOutput
-	} else {
+	default:
 		raw = m.viewport.View()
 	}
 	text := normalizeMultiline(ansi.Strip(raw))
@@ -682,9 +683,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	model.provisionSpinner = spinner.New()
 	model.provisionSpinner.Spinner = spinner.Dot
 	model.provisionSpinner.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	for _, log := range initialLogs {
-		model.consoleLog = append(model.consoleLog, log)
-	}
+	model.consoleLog = append(model.consoleLog, initialLogs...)
 	return model
 }
 
@@ -1279,14 +1278,6 @@ func (m *Model) searchJira(query string) tea.Cmd {
 	}
 }
 
-type provisionProgressMsg struct {
-	progress domain.ProvisionProgress
-}
-
-type provisionDoneMsg struct {
-	err error
-}
-
 type authWizardStep struct {
 	Name        string
 	Scope       string // "local" or "remote"
@@ -1384,6 +1375,8 @@ func (m *Model) authCheckCmd(remote config.Remote, idx int, step authWizardStep)
 		}
 
 		if step.Scope == "local" {
+			// #nosec G204 -- step.CheckCmd is a literal from the authWizardSteps table in
+			// this file; nothing user-supplied reaches it.
 			cmd := exec.CommandContext(ctx, "bash", "-lc", step.CheckCmd)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
@@ -1398,36 +1391,6 @@ func (m *Model) authCheckCmd(remote config.Remote, idx int, step authWizardStep)
 			return authCheckDoneMsg{idx: idx, ok: false, output: out, err: err}
 		}
 		return authCheckDoneMsg{idx: idx, ok: true, output: strings.TrimSpace(out)}
-	}
-}
-
-func (m *Model) provisionRemoteCmd(remote config.Remote) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		if err := mgr.Connect(ctx); err != nil {
-			return provisionDoneMsg{err: err}
-		}
-
-		provisioner := usecase.NewProvisioner(mgr)
-		progressChan := make(chan domain.ProvisionProgress)
-
-		// Start provisioning in a goroutine
-		go func() {
-			_ = provisioner.Provision(ctx, progressChan)
-			close(progressChan)
-			// The final done message is handled separately or we could send it here
-			// but we need to ensure we don't send to a closed program.
-			// Bubble Tea handles this better via returning Cmds.
-		}()
-
-		// This approach is tricky with Bubble Tea's functional style.
-		// We'll simplify: just run the steps and return results.
-		// For a truly "streaming" UI, we'd need a more complex setup.
-		// Let's do a sequence of commands for each step instead.
-		return provisionDoneMsg{err: provisioner.Provision(ctx, nil)} // Simplified for now
 	}
 }
 
@@ -1459,7 +1422,6 @@ type branchesMsg struct {
 type workspaceStatusMsg struct {
 	path   string
 	exists bool
-	err    error
 }
 
 func (m *Model) fetchWorkspaceStatus(remote *config.Remote, repoName string) tea.Cmd {
@@ -2064,251 +2026,291 @@ func (m *Model) runTerminateStepCmd(s domain.Session, forced bool, index int) te
 	}
 }
 
+// runTerminateStep performs one step of session teardown. The steps are ordered so that
+// nothing destructive runs before the session has been detached: sync first, then tmux,
+// then the worktree, then local files, credentials, and finally the database row.
+//
+// A forced termination inserts a "discard local changes" step at index 1 and shifts the
+// rest down by one, which is why the index is remapped before dispatch.
 func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error {
 	ctx := context.Background()
 
-	switch index {
-	case 0: // Stop mutagen sync
-		// Build a list of candidate names to try. The canonical name is
-		// "aiman-sync-{session-id}" but older sessions or DB rows may store
-		// the mutagen UUID, tmux session name, or nothing at all.
-		var candidates []string
-		if s.ID != "" {
-			candidates = append(candidates, "aiman-sync-"+s.ID)
-		}
-		if s.MutagenSyncID != "" {
-			candidates = append(candidates, s.MutagenSyncID)
-		}
-		if s.TmuxSession != "" {
-			candidates = append(candidates, s.TmuxSession)
-		}
-		if s.LocalPath != "" {
-			candidates = append(candidates, filepath.Base(s.LocalPath))
-		}
-
-		tried := map[string]bool{}
-		for _, name := range candidates {
-			if name == "" || tried[name] {
-				continue
-			}
-			tried[name] = true
-			cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", name) // #nosec G204
-			if _, err := cmd.CombinedOutput(); err == nil {
-				return nil // successfully terminated
-			}
-		}
-		// Also try terminating by label if we have a session ID.
-		if s.ID != "" {
-			cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", "--label-selector", "aiman-id="+s.ID) // #nosec G204
-			if _, err := cmd.CombinedOutput(); err == nil {
-				return nil
-			}
-		}
-		// Not finding a sync is fine — it may have been cleaned up already.
-		return nil
+	if index == 0 {
+		return m.terminateStopSync(ctx, s)
 	}
 
 	effectiveIndex := index
 	if forced {
 		if index == 1 {
-			// Forced discard
-			if s.WorktreePath == "" {
-				return nil
-			}
-			remote, ok := resolveRemote(m.cfg, s)
-			if !ok {
-				return nil
-			}
-			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-
-			// Safety: never reset/clean the main repository itself.
-			gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
-			if strings.TrimSpace(gitDirOut) == ".git" {
-				m.log("Skipping forced discard in %s — it is the main git repository", s.WorktreePath)
-				return skipReason(fmt.Sprintf("changes in %s left intact (main repository)", s.WorktreePath))
-			}
-
-			_, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q reset --hard HEAD && git -C %q clean -fd'", s.WorktreePath, s.WorktreePath))
-			return err
+			return m.terminateDiscardChanges(ctx, s)
 		}
 		effectiveIndex--
 	}
 
 	switch effectiveIndex {
-	case 1: // Kill tmux session
-		if s.TmuxSession == "" {
-			return nil
-		}
-		remote, ok := resolveRemote(m.cfg, s)
-		if !ok {
-			return nil
-		}
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		_, err := mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
-		return err
-	case 2: // Stop agent process (tmux kill already handles this)
+	case 1:
+		return m.terminateKillTmux(ctx, s)
+	case 2:
+		// Stop agent process — killing the tmux session already did this.
 		return nil
-	case 3: // Remove git worktree
-		if s.WorktreePath == "" || s.RepoName == "" {
-			// Ad-hoc sessions have no worktree; skip removal.
-			return nil
-		}
-		remote, ok := resolveRemote(m.cfg, s)
-		if !ok {
-			return nil
-		}
-
-		// Legacy ad-hoc sessions stored WorktreePath = remote root.
-		// Silently skip directory removal — we must never rm -rf the root.
-		cleanWorktreeEarly := path.Clean(s.WorktreePath)
-		cleanRootEarly := path.Clean(remote.Root)
-		if cleanWorktreeEarly == cleanRootEarly || cleanWorktreeEarly == "/" || cleanWorktreeEarly == "." {
-			m.log("Skipping worktree removal for legacy ad-hoc session: WorktreePath %q is the remote root", s.WorktreePath)
-			return nil
-		}
-
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-
-		repoName := extractRepoName(s.RepoName)
-		mainRepoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
-
-		// Safety: never delete the main repository itself or the remote root.
-		// First apply path.Clean-based checks that work without a remote round-trip
-		// and that handle `../` components embedded in stored paths.
-		cleanWorktree := path.Clean(s.WorktreePath)
-		cleanRoot := path.Clean(remote.Root)
-		cleanMain := path.Clean(mainRepoPath)
-		switch {
-		case cleanWorktree == "/" || cleanWorktree == ".":
-			m.log("Skipping worktree removal: %s is a filesystem root or dot path", s.WorktreePath)
-			return skipReason(fmt.Sprintf("worktree %s left in place (unsafe path)", s.WorktreePath))
-		case cleanWorktree == cleanRoot:
-			m.log("Skipping worktree removal: %s equals remote root %s", s.WorktreePath, remote.Root)
-			return skipReason(fmt.Sprintf("worktree %s left in place (remote root)", s.WorktreePath))
-		case cleanWorktree == cleanMain:
-			m.log("Skipping worktree removal: %s equals main repository %s", s.WorktreePath, mainRepoPath)
-			return skipReason(fmt.Sprintf("repository %s left in place (main repository)", s.WorktreePath))
-		case !strings.HasPrefix(cleanWorktree, cleanRoot+"/"):
-			// The cleaned path does not sit strictly inside the configured remote root.
-			// This catches mis-stored paths and any remaining `..` traversals.
-			m.log("Skipping worktree removal: %s is not strictly inside remote root %s", s.WorktreePath, remote.Root)
-			return skipReason(fmt.Sprintf("worktree %s left in place (outside remote root)", s.WorktreePath))
-		}
-
-		// Secondary check: resolve both paths on the remote to catch symlinks.
-		resolvedWorktree, resolveErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", s.WorktreePath, s.WorktreePath, s.WorktreePath))
-		resolvedMain, resolveMainErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", mainRepoPath, mainRepoPath, mainRepoPath))
-
-		if resolveErr == nil && resolveMainErr == nil {
-			cleanResolvedWT := path.Clean(strings.TrimSpace(resolvedWorktree))
-			cleanResolvedMain := path.Clean(strings.TrimSpace(resolvedMain))
-			if cleanResolvedWT == cleanResolvedMain || cleanResolvedWT == cleanRoot || cleanResolvedWT == "/" {
-				m.log("Skipping worktree removal: %s resolves to unsafe path %s", s.WorktreePath, cleanResolvedWT)
-				return skipReason(fmt.Sprintf("worktree %s left in place (resolves to unsafe path)", s.WorktreePath))
-			}
-		}
-
-		// Definitive safety check: ask git whether this path is the main repository.
-		// git rev-parse --git-dir returns ".git" (relative) for main repos and an
-		// absolute path containing "/worktrees/" for linked worktrees. This is reliable
-		// regardless of how mainRepoPath was computed from config.
-		gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
-		gitDir := strings.TrimSpace(gitDirOut)
-		if gitDir == ".git" {
-			m.log("Skipping worktree removal: git identifies %s as a main repository", s.WorktreePath)
-			return skipReason(fmt.Sprintf("repository %s left in place (main repository)", s.WorktreePath))
-		}
-
-		// Derive the real main repo path from git metadata — the config-computed path can be
-		// wrong when repos live in a subdirectory that isn't reflected in remote.Root.
-		// git rev-parse --git-common-dir returns ".git" (relative) for the main worktree and
-		// an absolute path like "/path/to/repo/.git" for linked worktrees.
-		gitCommonDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-common-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
-		gitCommonDir := strings.TrimSpace(gitCommonDirOut)
-		if path.IsAbs(gitCommonDir) && strings.HasSuffix(gitCommonDir, "/.git") {
-			derived := path.Dir(gitCommonDir)
-			m.log("Derived main repo path from git metadata: %s (was: %s)", derived, mainRepoPath)
-			mainRepoPath = derived
-		}
-
-		m.log("Terminating session: removing worktree %s", s.WorktreePath)
-
-		// Safety backup: tar the worktree into /tmp before deleting it.
-		// Uses maximum xz compression and a timestamped filename so it can be
-		// recovered if the deletion was a mistake.
-		wtBase := path.Base(strings.TrimSpace(resolvedWorktree))
-		if wtBase == "" || wtBase == "." || wtBase == "/" {
-			wtBase = path.Base(s.WorktreePath)
-		}
-		timestamp := time.Now().UTC().Format("20060102-150405")
-		tarName := fmt.Sprintf("/tmp/aiman-wt-%s-%s.tar.xz", wtBase, timestamp)
-		tarCmd := fmt.Sprintf("tar -C %q -cJf %q . 2>/dev/null && echo OK", s.WorktreePath, tarName)
-		if out, tarErr := mgr.Execute(ctx, tarCmd); tarErr != nil || strings.TrimSpace(out) != "OK" {
-			m.log("Warning: failed to backup worktree to %s: %v", tarName, tarErr)
-		} else {
-			m.log("Worktree backed up to %s on remote before deletion", tarName)
-		}
-
-		// Unlock the worktree before removal — a stale lock file prevents git from pruning it.
-		_, _ = mgr.Execute(ctx, fmt.Sprintf("git -C %q worktree unlock %q 2>/dev/null || true", mainRepoPath, s.WorktreePath))
-
-		// Try to remove via git worktree (needs to run from main repo).
-		// git itself refuses to remove the main worktree, providing an extra layer of safety.
-		out, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
-		if err != nil {
-			m.log("Warning: git worktree remove failed: %v, output: %s", err, out)
-		}
-
-		// Force remove the directory regardless (worktree remove might fail if corrupted).
-		// Use the resolved path (with `..` eliminated) rather than the raw stored path.
-		rmPath := strings.TrimSpace(resolvedWorktree)
-		if resolveErr != nil || rmPath == "" {
-			rmPath = cleanWorktree
-		}
-		out, err = mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", rmPath))
-		if err != nil {
-			m.log("Error: rm -rf worktree failed: %v, output: %s", err, out)
-		}
-
-		// Always prune stale metadata from the main repo after deletion. This ensures git's
-		// bookkeeping is clean so future `git worktree add` for the same branch succeeds.
-		if pruneOut, pruneErr := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree prune --expire=now 2>&1 || true'", mainRepoPath)); pruneErr != nil {
-			m.log("Warning: git worktree prune failed: %v, output: %s", pruneErr, pruneOut)
-		} else {
-			m.log("git worktree prune completed: %s", pruneOut)
-		}
-
-		return err
-	case 4: // Clean up local files
-		if s.LocalPath == "" {
-			return nil
-		}
-		return os.RemoveAll(s.LocalPath)
-	case 5: // Clean up AWS credentials managed by aiman for this session
-		if s.RemoteHost == "" {
-			return nil
-		}
-		remote, ok := resolveRemote(m.cfg, s)
-		if !ok {
-			return nil
-		}
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		// Remove legacy per-session directory (older releases)
-		if err := awsdelegation.RemoveSessionCredentialFiles(ctx, mgr, s.ID); err != nil {
-			return err
-		}
-		return nil
-	case 6: // Delete session from database
-		if s.ID == "" {
-			return nil
-		}
-		if m.db != nil {
-			return m.db.Delete(ctx, s.ID)
-		}
-		return nil
+	case 3:
+		return m.terminateRemoveWorktree(ctx, s)
+	case 4:
+		return m.terminateRemoveLocalFiles(s)
+	case 5:
+		return m.terminateCleanCredentials(ctx, s)
+	case 6:
+		return m.terminateDeleteRecord(ctx, s)
 	default:
 		return nil
 	}
+}
+
+// terminateStopSync stops the mutagen session for s, trying every name it might have been
+// registered under. Not finding one is success: it may already have been cleaned up.
+func (m *Model) terminateStopSync(ctx context.Context, s domain.Session) error {
+	// Build a list of candidate names to try. The canonical name is
+	// "aiman-sync-{session-id}" but older sessions or DB rows may store
+	// the mutagen UUID, tmux session name, or nothing at all.
+	var candidates []string
+	if s.ID != "" {
+		candidates = append(candidates, "aiman-sync-"+s.ID)
+	}
+	if s.MutagenSyncID != "" {
+		candidates = append(candidates, s.MutagenSyncID)
+	}
+	if s.TmuxSession != "" {
+		candidates = append(candidates, s.TmuxSession)
+	}
+	if s.LocalPath != "" {
+		candidates = append(candidates, filepath.Base(s.LocalPath))
+	}
+
+	tried := map[string]bool{}
+	for _, name := range candidates {
+		if name == "" || tried[name] {
+			continue
+		}
+		tried[name] = true
+		cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", name) // #nosec G204
+		if _, err := cmd.CombinedOutput(); err == nil {
+			return nil // successfully terminated
+		}
+	}
+	// Also try terminating by label if we have a session ID.
+	if s.ID != "" {
+		cmd := exec.CommandContext(ctx, "mutagen", "sync", "terminate", "--label-selector", "aiman-id="+s.ID) // #nosec G204
+		if _, err := cmd.CombinedOutput(); err == nil {
+			return nil
+		}
+	}
+	// Not finding a sync is fine — it may have been cleaned up already.
+	return nil
+}
+
+// terminateDiscardChanges throws away uncommitted work in the worktree, used only when the
+// user has explicitly confirmed a forced termination.
+func (m *Model) terminateDiscardChanges(ctx context.Context, s domain.Session) error {
+	// Forced discard
+	if s.WorktreePath == "" {
+		return nil
+	}
+	remote, ok := resolveRemote(m.cfg, s)
+	if !ok {
+		return nil
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+
+	// Safety: never reset/clean the main repository itself.
+	gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
+	if strings.TrimSpace(gitDirOut) == ".git" {
+		m.log("Skipping forced discard in %s — it is the main git repository", s.WorktreePath)
+		return skipReason(fmt.Sprintf("changes in %s left intact (main repository)", s.WorktreePath))
+	}
+
+	_, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q reset --hard HEAD && git -C %q clean -fd'", s.WorktreePath, s.WorktreePath))
+	return err
+}
+
+func (m *Model) terminateKillTmux(ctx context.Context, s domain.Session) error {
+	if s.TmuxSession == "" {
+		return nil
+	}
+	remote, ok := resolveRemote(m.cfg, s)
+	if !ok {
+		return nil
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	_, err := mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
+	return err
+}
+
+// terminateRemoveWorktree deletes the session's worktree, refusing to touch the remote root
+// or a main repository and taking a compressed backup to /tmp first.
+func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) error {
+	if s.WorktreePath == "" || s.RepoName == "" {
+		// Ad-hoc sessions have no worktree; skip removal.
+		return nil
+	}
+	remote, ok := resolveRemote(m.cfg, s)
+	if !ok {
+		return nil
+	}
+
+	// Legacy ad-hoc sessions stored WorktreePath = remote root.
+	// Silently skip directory removal — we must never rm -rf the root.
+	cleanWorktreeEarly := path.Clean(s.WorktreePath)
+	cleanRootEarly := path.Clean(remote.Root)
+	if cleanWorktreeEarly == cleanRootEarly || cleanWorktreeEarly == "/" || cleanWorktreeEarly == "." {
+		m.log("Skipping worktree removal for legacy ad-hoc session: WorktreePath %q is the remote root", s.WorktreePath)
+		return nil
+	}
+
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+
+	repoName := extractRepoName(s.RepoName)
+	mainRepoPath := fmt.Sprintf("%s/%s", remote.Root, repoName)
+
+	// Safety: never delete the main repository itself or the remote root.
+	// First apply path.Clean-based checks that work without a remote round-trip
+	// and that handle `../` components embedded in stored paths.
+	cleanWorktree := path.Clean(s.WorktreePath)
+	cleanRoot := path.Clean(remote.Root)
+	cleanMain := path.Clean(mainRepoPath)
+	switch {
+	case cleanWorktree == "/" || cleanWorktree == ".":
+		m.log("Skipping worktree removal: %s is a filesystem root or dot path", s.WorktreePath)
+		return skipReason(fmt.Sprintf("worktree %s left in place (unsafe path)", s.WorktreePath))
+	case cleanWorktree == cleanRoot:
+		m.log("Skipping worktree removal: %s equals remote root %s", s.WorktreePath, remote.Root)
+		return skipReason(fmt.Sprintf("worktree %s left in place (remote root)", s.WorktreePath))
+	case cleanWorktree == cleanMain:
+		m.log("Skipping worktree removal: %s equals main repository %s", s.WorktreePath, mainRepoPath)
+		return skipReason(fmt.Sprintf("repository %s left in place (main repository)", s.WorktreePath))
+	case !strings.HasPrefix(cleanWorktree, cleanRoot+"/"):
+		// The cleaned path does not sit strictly inside the configured remote root.
+		// This catches mis-stored paths and any remaining `..` traversals.
+		m.log("Skipping worktree removal: %s is not strictly inside remote root %s", s.WorktreePath, remote.Root)
+		return skipReason(fmt.Sprintf("worktree %s left in place (outside remote root)", s.WorktreePath))
+	}
+
+	// Secondary check: resolve both paths on the remote to catch symlinks.
+	resolvedWorktree, resolveErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", s.WorktreePath, s.WorktreePath, s.WorktreePath))
+	resolvedMain, resolveMainErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", mainRepoPath, mainRepoPath, mainRepoPath))
+
+	if resolveErr == nil && resolveMainErr == nil {
+		cleanResolvedWT := path.Clean(strings.TrimSpace(resolvedWorktree))
+		cleanResolvedMain := path.Clean(strings.TrimSpace(resolvedMain))
+		if cleanResolvedWT == cleanResolvedMain || cleanResolvedWT == cleanRoot || cleanResolvedWT == "/" {
+			m.log("Skipping worktree removal: %s resolves to unsafe path %s", s.WorktreePath, cleanResolvedWT)
+			return skipReason(fmt.Sprintf("worktree %s left in place (resolves to unsafe path)", s.WorktreePath))
+		}
+	}
+
+	// Definitive safety check: ask git whether this path is the main repository.
+	// git rev-parse --git-dir returns ".git" (relative) for main repos and an
+	// absolute path containing "/worktrees/" for linked worktrees. This is reliable
+	// regardless of how mainRepoPath was computed from config.
+	gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
+	gitDir := strings.TrimSpace(gitDirOut)
+	if gitDir == ".git" {
+		m.log("Skipping worktree removal: git identifies %s as a main repository", s.WorktreePath)
+		return skipReason(fmt.Sprintf("repository %s left in place (main repository)", s.WorktreePath))
+	}
+
+	// Derive the real main repo path from git metadata — the config-computed path can be
+	// wrong when repos live in a subdirectory that isn't reflected in remote.Root.
+	// git rev-parse --git-common-dir returns ".git" (relative) for the main worktree and
+	// an absolute path like "/path/to/repo/.git" for linked worktrees.
+	gitCommonDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-common-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
+	gitCommonDir := strings.TrimSpace(gitCommonDirOut)
+	if path.IsAbs(gitCommonDir) && strings.HasSuffix(gitCommonDir, "/.git") {
+		derived := path.Dir(gitCommonDir)
+		m.log("Derived main repo path from git metadata: %s (was: %s)", derived, mainRepoPath)
+		mainRepoPath = derived
+	}
+
+	m.log("Terminating session: removing worktree %s", s.WorktreePath)
+
+	// Safety backup: tar the worktree into /tmp before deleting it.
+	// Uses maximum xz compression and a timestamped filename so it can be
+	// recovered if the deletion was a mistake.
+	wtBase := path.Base(strings.TrimSpace(resolvedWorktree))
+	if wtBase == "" || wtBase == "." || wtBase == "/" {
+		wtBase = path.Base(s.WorktreePath)
+	}
+	timestamp := time.Now().UTC().Format("20060102-150405")
+	tarName := fmt.Sprintf("/tmp/aiman-wt-%s-%s.tar.xz", wtBase, timestamp)
+	tarCmd := fmt.Sprintf("tar -C %q -cJf %q . 2>/dev/null && echo OK", s.WorktreePath, tarName)
+	if out, tarErr := mgr.Execute(ctx, tarCmd); tarErr != nil || strings.TrimSpace(out) != "OK" {
+		m.log("Warning: failed to backup worktree to %s: %v", tarName, tarErr)
+	} else {
+		m.log("Worktree backed up to %s on remote before deletion", tarName)
+	}
+
+	// Unlock the worktree before removal — a stale lock file prevents git from pruning it.
+	_, _ = mgr.Execute(ctx, fmt.Sprintf("git -C %q worktree unlock %q 2>/dev/null || true", mainRepoPath, s.WorktreePath))
+
+	// Try to remove via git worktree (needs to run from main repo).
+	// git itself refuses to remove the main worktree, providing an extra layer of safety.
+	out, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
+	if err != nil {
+		m.log("Warning: git worktree remove failed: %v, output: %s", err, out)
+	}
+
+	// Force remove the directory regardless (worktree remove might fail if corrupted).
+	// Use the resolved path (with `..` eliminated) rather than the raw stored path.
+	rmPath := strings.TrimSpace(resolvedWorktree)
+	if resolveErr != nil || rmPath == "" {
+		rmPath = cleanWorktree
+	}
+	out, err = mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", rmPath))
+	if err != nil {
+		m.log("Error: rm -rf worktree failed: %v, output: %s", err, out)
+	}
+
+	// Always prune stale metadata from the main repo after deletion. This ensures git's
+	// bookkeeping is clean so future `git worktree add` for the same branch succeeds.
+	if pruneOut, pruneErr := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree prune --expire=now 2>&1 || true'", mainRepoPath)); pruneErr != nil {
+		m.log("Warning: git worktree prune failed: %v, output: %s", pruneErr, pruneOut)
+	} else {
+		m.log("git worktree prune completed: %s", pruneOut)
+	}
+
+	return err
+}
+
+func (m *Model) terminateRemoveLocalFiles(s domain.Session) error {
+	if s.LocalPath == "" {
+		return nil
+	}
+	return os.RemoveAll(s.LocalPath)
+}
+
+func (m *Model) terminateCleanCredentials(ctx context.Context, s domain.Session) error {
+	if s.RemoteHost == "" {
+		return nil
+	}
+	remote, ok := resolveRemote(m.cfg, s)
+	if !ok {
+		return nil
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	// Remove legacy per-session directory (older releases)
+	if err := awsdelegation.RemoveSessionCredentialFiles(ctx, mgr, s.ID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Model) terminateDeleteRecord(ctx context.Context, s domain.Session) error {
+	if s.ID == "" {
+		return nil
+	}
+	if m.db != nil {
+		return m.db.Delete(ctx, s.ID)
+	}
+	return nil
 }
 
 func extractRepoName(fullName string) string {
@@ -2508,15 +2510,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = viewStateMain
 		return m, m.showToast("❌ Archive failed: "+msg.err.Error(), true, 8*time.Second)
 	case archivePaneCapturedMsg:
-		if 1 < len(m.archiveSteps) {
-			m.archiveSteps[0].done = true
-			m.archiveStepIdx = 2
-		}
-		if m.archivePreview != nil {
-			sess := m.archivePreview.session
-			return m, loadArchivePreviewContinueCmd(m.cfg, m.snapshotManager, sess, msg.rawPane, msg.rawPaneLen)
-		}
-		return m, nil
+		return m.applyArchivePaneCapturedMsg(msg, cmds)
 	case archiveCleanedMsg:
 		if 2 < len(m.archiveSteps) {
 			m.archiveSteps[1].done = true
@@ -2524,37 +2518,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case archivePreviewReadyMsg:
-		if msg.err != nil {
-			m.state = viewStateMain
-			return m, m.showToast("❌ Archive failed: "+msg.err.Error(), true, 8*time.Second)
-		}
-		for i := range m.archiveSteps {
-			m.archiveSteps[i].done = true
-		}
-		m.archivePreview = msg.data
-		dialogW := 76
-		inner := dialogW - 6
-		vpH := max(5, m.height-16) // 16 = border+padding+fixed header+footer lines
-		m.archivePreviewVP = viewport.New(inner, vpH)
-		m.archivePreviewVP.SetContent(buildArchivePreviewBody(msg.data, inner))
-		m.state = viewStateArchivePreview
-		return m, nil
+		return m.applyArchivePreviewReadyMsg(msg, cmds)
 	case snapshotPreviewMsg:
-		// Handled globally so it works regardless of which state dispatched loadPriorSnapshotCmd.
-		if m.restartingSession == nil {
-			return m, nil
-		}
-		_ = appendDebugLog(fmt.Sprintf("[ui %s] snapshotPreviewMsg: hasSnapshot=%v\n", time.Now().Format("15:04:05.000"), msg.snapshot != nil))
-		if msg.snapshot != nil {
-			m.priorSnapshotCandidate = msg.snapshot
-			m.state = viewStateSnapshotPreview
-		} else {
-			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-			return m, m.restartSession()
-		}
-		return m, nil
+		return m.applySnapshotPreviewMsg(msg, cmds)
 	case snapshotToastMsg:
 		// Handled globally so toasts also clear while the user is in another
 		// view; only the most recent toast's timer may clear the bar.
@@ -2571,58 +2537,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case terminateStepMsg:
-		// Handled globally so a background termination keeps progressing no
-		// matter which view the user is in.
-		ts, ok := m.terminatingSessions[msg.sessionID]
-		if !ok {
-			return m, nil
-		}
-		if msg.err != nil {
-			var skip skipReason
-			if errors.As(msg.err, &skip) {
-				// Safety skip, not a failure — the step declined to act
-				// (e.g. refusing to delete a main repository).
-				ts.skips = append(ts.skips, string(skip))
-				m.log("Terminate %s — step %q skipped: %s", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], string(skip))
-			} else {
-				if msg.index < len(ts.errs) {
-					ts.errs[msg.index] = msg.err.Error()
-				}
-				m.log("Terminate %s — step %q failed: %v", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], msg.err)
-			}
-		}
-		next := msg.index + 1
-		if next < len(ts.steps) {
-			ts.idx = next
-			return m, m.runTerminateStepCmd(ts.session, ts.forced, next)
-		}
-		// All steps done — drop the session from the list.
-		delete(m.terminatingSessions, msg.sessionID)
-		var remaining []domain.Session
-		for _, s := range m.allSessions {
-			same := s.ID == ts.session.ID
-			if ts.session.ID == "" {
-				same = s.TmuxSession == ts.session.TmuxSession
-			}
-			if !same {
-				remaining = append(remaining, s)
-			}
-		}
-		m.allSessions = remaining
-		m.applyRemoteFilter()
-		errCount := 0
-		for _, e := range ts.errs {
-			if e != "" {
-				errCount++
-			}
-		}
-		if errCount > 0 {
-			return m, m.showToast(fmt.Sprintf("⚠️  Session %s terminated with %d error(s) — see console (`)", ts.session.TmuxSession, errCount), true, 8*time.Second)
-		}
-		if len(ts.skips) > 0 {
-			return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated — %s", ts.session.TmuxSession, ts.skips[0]), false, 8*time.Second)
-		}
-		return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated", ts.session.TmuxSession), false, 5*time.Second)
+		return m.applyTerminateStepMsg(msg, cmds)
 	case syncTickMsg:
 		tickCmds := []tea.Cmd{tickSyncHealth()}
 		if len(m.allSessions) > 0 {
@@ -2659,241 +2574,409 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	case awsCredBulkRenewMsg:
-		m.awsCredRefreshing = false
-		m.awsCredentials.externalRefresh = false
-		if len(msg.failures) > 0 {
-			m.log("AWS credential refresh failures: %s", strings.Join(msg.failures, "; "))
-			return m, tea.Batch(
-				m.showToast(fmt.Sprintf("⚠️  Refreshed %d AWS credential(s), %d failed — see console (`)", msg.renewed, len(msg.failures)), true, 8*time.Second),
-				pollAWSCredExpiryCmd(m.cfg),
-			)
-		}
-		return m, tea.Batch(
-			m.showToast(fmt.Sprintf("🔑 Refreshed %d AWS credential(s)", msg.renewed), false, 5*time.Second),
-			pollAWSCredExpiryCmd(m.cfg),
-		)
+		return m.applyAWSCredBulkRenewMsg(msg, cmds)
 	case syncHealthMsg:
-		if msg.err != nil {
-			m.log("Sync health check failed: %v", msg.err)
-			return m, nil
-		}
-		m.syncHealth = msg.health
-		// Refresh stale markers in place; avoid applyRemoteFilter so the list
-		// selection and any active filter are not disturbed.
-		items := m.list.Items()
-		for i, it := range items {
-			if si, ok := it.(item); ok {
-				h, tracked := m.syncHealth[si.session.ID]
-				si.syncStale = tracked && h.stale
-				items[i] = si
-			}
-		}
-		m.list.SetItems(items)
-		return m, nil
+		return m.applySyncHealthMsg(msg, cmds)
 	case sessionCreateMsg:
-		// Background creations are correlated by placeholder ID and never
-		// touch the blocking loading screen.
-		if msg.placeholderID != "" {
-			return m.handleBackgroundCreateMsg(msg)
-		}
-		// Handled globally so that the result is never dropped if an unrelated message
-		// transitions the model out of viewStateLoading while the restart goroutine runs.
-		if msg.status != "" {
-			if m.state == viewStateLoading {
-				m.loadingMsg = msg.status
-			}
-			m.provisioningStatusMsg = msg.status
-			return m, nil
-		}
-		if msg.err != nil {
-			if strings.Contains(msg.err.Error(), "WORKTREE_EXISTS") {
-				m.state = viewStateWorktreeExists
-				return m, nil
-			}
-			m.lastError = fmt.Sprintf("Failed to create/restart session: %v", msg.err)
-			m.state = viewStateError
-			return m, nil
-		}
-
-		items := m.list.Items()
-		found := false
-		for i, it := range items {
-			if sessItem, ok := it.(item); ok && sessItem.session.ID == msg.session.ID {
-				sessItem.session = msg.session
-				items[i] = sessItem
-				m.list.Select(i)
-				found = true
-				break
-			}
-		}
-		if !found {
-			m.allSessions = append(m.allSessions, msg.session)
-			items = append(items, m.makeItem(msg.session))
-			m.list.Select(len(items) - 1)
-		} else {
-			for i, s := range m.allSessions {
-				if s.ID == msg.session.ID {
-					m.allSessions[i] = msg.session
-					break
-				}
-			}
-		}
-		m.list.SetItems(items)
-		m.restartingSession = nil
-		// Re-sort and rebuild list so new/restarted session appears at the top.
-		m.applyRemoteFilter()
-
-		var warnCmd tea.Cmd
-		if msg.warning != "" {
-			warnCmd = m.showToast("⚠️  "+msg.warning, true, 8*time.Second)
-		}
-
-		m.activeSession = msg.session.TmuxSession
-		m.tmuxOutput = "Loading..."
-		m.viewport.SetContent(m.tmuxOutput)
-		m.state = m.loadingNext
-
-		return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session), warnCmd)
+		return m.applySessionCreateMsg(msg, cmds)
 	}
 
+	if model, cmd, handled := m.updateByState(msg); handled {
+		return model, cmd
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+// updateByState routes a message to the handler for the screen currently on top. The bool
+// reports whether this state claimed the message; when false the caller falls through to
+// the batched commands collected earlier in Update.
+func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch m.state {
 	case viewStateMain:
-		return m.handleMainUpdate(msg)
+		model, cmd := m.handleMainUpdate(msg)
+		return model, cmd, true
 
 	case viewStateMenu:
-		return m.handleMenuUpdate(msg)
+		model, cmd := m.handleMenuUpdate(msg)
+		return model, cmd, true
 
 	case viewStateRemotes:
-		return m.handleRemotesUpdate(msg)
+		model, cmd := m.handleRemotesUpdate(msg)
+		return model, cmd, true
 
 	case viewStateSetup:
-		return m.handleSetupUpdate(msg)
+		model, cmd := m.handleSetupUpdate(msg)
+		return model, cmd, true
 
 	case viewStateGitSetup:
-		return m.handleGitSetupUpdate(msg)
+		model, cmd := m.handleGitSetupUpdate(msg)
+		return model, cmd, true
 
 	case viewStateGeneralSettings:
-		return m.handleGeneralSetupUpdate(msg)
+		model, cmd := m.handleGeneralSetupUpdate(msg)
+		return model, cmd, true
 
 	case viewStateAISettings:
-		return m.handleAISetupUpdate(msg)
+		model, cmd := m.handleAISetupUpdate(msg)
+		return model, cmd, true
 
 	case viewStateSecretsSetup:
-		return m.handleSecretsSetupUpdate(msg)
+		model, cmd := m.handleSecretsSetupUpdate(msg)
+		return model, cmd, true
 
 	case viewStateEC2Settings:
-		return m.handleEC2SetupUpdate(msg)
+		model, cmd := m.handleEC2SetupUpdate(msg)
+		return model, cmd, true
 
 	case viewStateAWSCredentials:
-		return m.handleAWSCredentialsUpdate(msg)
+		model, cmd := m.handleAWSCredentialsUpdate(msg)
+		return model, cmd, true
 
 	case viewStateSnapshotBrowser:
-		return m.handleSnapshotBrowserUpdate(msg)
+		model, cmd := m.handleSnapshotBrowserUpdate(msg)
+		return model, cmd, true
 
 	case viewStateScheduledPrompts:
-		return m.handleScheduledPromptsUpdate(msg)
+		model, cmd := m.handleScheduledPromptsUpdate(msg)
+		return model, cmd, true
 
 	case viewStateVSCodeError, viewStateError:
 		if _, ok := msg.(tea.KeyMsg); ok {
 			m.state = viewStateMain
 		}
-		return m, nil
+		return m, nil, true
 
 	case viewStateIssuePicker:
-		return m.handleIssuePickerUpdate(msg)
+		model, cmd := m.handleIssuePickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateBranchInput:
-		return m.handleBranchInputUpdate(msg)
+		model, cmd := m.handleBranchInputUpdate(msg)
+		return model, cmd, true
 
 	case viewStateRepoPicker:
-		return m.handleRepoPickerUpdate(msg)
+		model, cmd := m.handleRepoPickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateDirPicker:
-		return m.handleDirPickerUpdate(msg)
+		model, cmd := m.handleDirPickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateAgentPicker:
-		return m.handleAgentPickerUpdate(msg)
+		model, cmd := m.handleAgentPickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateRestartAgentPicker:
-		return m.handleRestartAgentPickerUpdate(msg)
+		model, cmd := m.handleRestartAgentPickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateRestartConfirm:
-		return m.handleRestartConfirmUpdate(msg)
+		model, cmd := m.handleRestartConfirmUpdate(msg)
+		return model, cmd, true
 
 	case viewStateSnapshotPreview:
-		return m.handleSnapshotPreviewUpdate(msg)
+		model, cmd := m.handleSnapshotPreviewUpdate(msg)
+		return model, cmd, true
 
 	case viewStateArchivePreview:
-		return m.handleArchivePreviewUpdate(msg)
+		model, cmd := m.handleArchivePreviewUpdate(msg)
+		return model, cmd, true
 
 	case viewStateArchiveProgress:
-		return m.handleArchiveProgressUpdate(msg)
+		model, cmd := m.handleArchiveProgressUpdate(msg)
+		return model, cmd, true
 
 	case viewStateChangeDirPicker:
-		return m.handleChangeDirPickerUpdate(msg)
+		model, cmd := m.handleChangeDirPickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateChangeDirConfirm:
-		return m.handleChangeDirConfirmUpdate(msg)
+		model, cmd := m.handleChangeDirConfirmUpdate(msg)
+		return model, cmd, true
 
 	case viewStateSummary:
-		return m.handleSummaryUpdate(msg)
+		model, cmd := m.handleSummaryUpdate(msg)
+		return model, cmd, true
 
 	case viewStateTerminateConfirm:
-		return m.handleTerminateConfirmUpdate(msg)
+		model, cmd := m.handleTerminateConfirmUpdate(msg)
+		return model, cmd, true
 
 	case viewStateQuitConfirm:
-		return m.handleQuitConfirmUpdate(msg)
+		model, cmd := m.handleQuitConfirmUpdate(msg)
+		return model, cmd, true
 
 	case viewStateWorktreeExists:
-		return m.handleWorktreeExistsUpdate(msg)
+		model, cmd := m.handleWorktreeExistsUpdate(msg)
+		return model, cmd, true
 
 	case viewStateBranchPicker:
-		return m.handleBranchPickerUpdate(msg)
+		model, cmd := m.handleBranchPickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateRunTargetPicker:
-		return m.handleRunTargetPickerUpdate(msg)
+		model, cmd := m.handleRunTargetPickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateModePicker:
-		return m.handleModePickerUpdate(msg)
+		model, cmd := m.handleModePickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateProvisioningRemotePicker:
-		return m.handleProvisioningRemotePickerUpdate(msg)
+		model, cmd := m.handleProvisioningRemotePickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateProvisioningProgress:
-		return m.handleProvisioningProgressUpdate(msg)
+		model, cmd := m.handleProvisioningProgressUpdate(msg)
+		return model, cmd, true
 
 	case viewStateAuthRemotePicker:
-		return m.handleAuthRemotePickerUpdate(msg)
+		model, cmd := m.handleAuthRemotePickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateAuthWizard:
-		return m.handleAuthWizardUpdate(msg)
+		model, cmd := m.handleAuthWizardUpdate(msg)
+		return model, cmd, true
 
 	case viewStateTunnelManager:
-		return m.handleTunnelManagerUpdate(msg)
+		model, cmd := m.handleTunnelManagerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateTunnelAdd:
-		return m.handleTunnelAddUpdate(msg)
+		model, cmd := m.handleTunnelAddUpdate(msg)
+		return model, cmd, true
 
 	case viewStateAutonomousTriggerPicker:
-		return m.handleAutonomousTriggerPickerUpdate(msg)
+		model, cmd := m.handleAutonomousTriggerPickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateAutonomousLabelsInput:
-		return m.handleAutonomousLabelsInputUpdate(msg)
+		model, cmd := m.handleAutonomousLabelsInputUpdate(msg)
+		return model, cmd, true
 
 	case viewStateAutonomousReuseWorkspacePicker:
-		return m.handleAutonomousReuseWorkspacePickerUpdate(msg)
+		model, cmd := m.handleAutonomousReuseWorkspacePickerUpdate(msg)
+		return model, cmd, true
 
 	case viewStateAutonomousConcurrencyInput:
-		return m.handleAutonomousConcurrencyInputUpdate(msg)
+		model, cmd := m.handleAutonomousConcurrencyInputUpdate(msg)
+		return model, cmd, true
 
 	case viewStateTriggerDetails:
-		return m.handleTriggerDetailsUpdate(msg)
+		model, cmd := m.handleTriggerDetailsUpdate(msg)
+		return model, cmd, true
 
 	case viewStateLoading:
-		return m.handleLoadingUpdate(msg)
+		model, cmd := m.handleLoadingUpdate(msg)
+		return model, cmd, true
+	}
+	return nil, nil, false
+}
+
+func (m *Model) applySessionCreateMsg(msg sessionCreateMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	// Background creations are correlated by placeholder ID and never
+	// touch the blocking loading screen.
+	if msg.placeholderID != "" {
+		return m.handleBackgroundCreateMsg(msg)
+	}
+	// Handled globally so that the result is never dropped if an unrelated message
+	// transitions the model out of viewStateLoading while the restart goroutine runs.
+	if msg.status != "" {
+		if m.state == viewStateLoading {
+			m.loadingMsg = msg.status
+		}
+		m.provisioningStatusMsg = msg.status
+		return m, nil
+	}
+	if msg.err != nil {
+		if strings.Contains(msg.err.Error(), "WORKTREE_EXISTS") {
+			m.state = viewStateWorktreeExists
+			return m, nil
+		}
+		m.lastError = fmt.Sprintf("Failed to create/restart session: %v", msg.err)
+		m.state = viewStateError
+		return m, nil
 	}
 
-	return m, tea.Batch(cmds...)
+	items := m.list.Items()
+	found := false
+	for i, it := range items {
+		if sessItem, ok := it.(item); ok && sessItem.session.ID == msg.session.ID {
+			sessItem.session = msg.session
+			items[i] = sessItem
+			m.list.Select(i)
+			found = true
+			break
+		}
+	}
+	if !found {
+		m.allSessions = append(m.allSessions, msg.session)
+		items = append(items, m.makeItem(msg.session))
+		m.list.Select(len(items) - 1)
+	} else {
+		for i, s := range m.allSessions {
+			if s.ID == msg.session.ID {
+				m.allSessions[i] = msg.session
+				break
+			}
+		}
+	}
+	m.list.SetItems(items)
+	m.restartingSession = nil
+	// Re-sort and rebuild list so new/restarted session appears at the top.
+	m.applyRemoteFilter()
+
+	var warnCmd tea.Cmd
+	if msg.warning != "" {
+		warnCmd = m.showToast("⚠️  "+msg.warning, true, 8*time.Second)
+	}
+
+	m.activeSession = msg.session.TmuxSession
+	m.tmuxOutput = "Loading..."
+	m.viewport.SetContent(m.tmuxOutput)
+	m.state = m.loadingNext
+
+	return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session), warnCmd)
+}
+
+func (m *Model) applyTerminateStepMsg(msg terminateStepMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	// Handled globally so a background termination keeps progressing no
+	// matter which view the user is in.
+	ts, ok := m.terminatingSessions[msg.sessionID]
+	if !ok {
+		return m, nil
+	}
+	if msg.err != nil {
+		var skip skipReason
+		if errors.As(msg.err, &skip) {
+			// Safety skip, not a failure — the step declined to act
+			// (e.g. refusing to delete a main repository).
+			ts.skips = append(ts.skips, string(skip))
+			m.log("Terminate %s — step %q skipped: %s", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], string(skip))
+		} else {
+			if msg.index < len(ts.errs) {
+				ts.errs[msg.index] = msg.err.Error()
+			}
+			m.log("Terminate %s — step %q failed: %v", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], msg.err)
+		}
+	}
+	next := msg.index + 1
+	if next < len(ts.steps) {
+		ts.idx = next
+		return m, m.runTerminateStepCmd(ts.session, ts.forced, next)
+	}
+	// All steps done — drop the session from the list.
+	delete(m.terminatingSessions, msg.sessionID)
+	var remaining []domain.Session
+	for _, s := range m.allSessions {
+		same := s.ID == ts.session.ID
+		if ts.session.ID == "" {
+			same = s.TmuxSession == ts.session.TmuxSession
+		}
+		if !same {
+			remaining = append(remaining, s)
+		}
+	}
+	m.allSessions = remaining
+	m.applyRemoteFilter()
+	errCount := 0
+	for _, e := range ts.errs {
+		if e != "" {
+			errCount++
+		}
+	}
+	if errCount > 0 {
+		return m, m.showToast(fmt.Sprintf("⚠️  Session %s terminated with %d error(s) — see console (`)", ts.session.TmuxSession, errCount), true, 8*time.Second)
+	}
+	if len(ts.skips) > 0 {
+		return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated — %s", ts.session.TmuxSession, ts.skips[0]), false, 8*time.Second)
+	}
+	return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated", ts.session.TmuxSession), false, 5*time.Second)
+}
+
+func (m *Model) applySyncHealthMsg(msg syncHealthMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.log("Sync health check failed: %v", msg.err)
+		return m, nil
+	}
+	m.syncHealth = msg.health
+	// Refresh stale markers in place; avoid applyRemoteFilter so the list
+	// selection and any active filter are not disturbed.
+	items := m.list.Items()
+	for i, it := range items {
+		if si, ok := it.(item); ok {
+			h, tracked := m.syncHealth[si.session.ID]
+			si.syncStale = tracked && h.stale
+			items[i] = si
+		}
+	}
+	m.list.SetItems(items)
+	return m, nil
+}
+
+func (m *Model) applySnapshotPreviewMsg(msg snapshotPreviewMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	// Handled globally so it works regardless of which state dispatched loadPriorSnapshotCmd.
+	if m.restartingSession == nil {
+		return m, nil
+	}
+	_ = appendDebugLog(fmt.Sprintf("[ui %s] snapshotPreviewMsg: hasSnapshot=%v\n", time.Now().Format("15:04:05.000"), msg.snapshot != nil))
+	if msg.snapshot != nil {
+		m.priorSnapshotCandidate = msg.snapshot
+		m.state = viewStateSnapshotPreview
+	} else {
+		m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
+		m.loadingNext = viewStateMain
+		m.state = viewStateLoading
+		return m, m.restartSession()
+	}
+	return m, nil
+}
+
+func (m *Model) applyArchivePreviewReadyMsg(msg archivePreviewReadyMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.state = viewStateMain
+		return m, m.showToast("❌ Archive failed: "+msg.err.Error(), true, 8*time.Second)
+	}
+	for i := range m.archiveSteps {
+		m.archiveSteps[i].done = true
+	}
+	m.archivePreview = msg.data
+	dialogW := 76
+	inner := dialogW - 6
+	vpH := max(5, m.height-16) // 16 = border+padding+fixed header+footer lines
+	m.archivePreviewVP = viewport.New(inner, vpH)
+	m.archivePreviewVP.SetContent(buildArchivePreviewBody(msg.data, inner))
+	m.state = viewStateArchivePreview
+	return m, nil
+}
+
+func (m *Model) applyAWSCredBulkRenewMsg(msg awsCredBulkRenewMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	m.awsCredRefreshing = false
+	m.awsCredentials.externalRefresh = false
+	if len(msg.failures) > 0 {
+		m.log("AWS credential refresh failures: %s", strings.Join(msg.failures, "; "))
+		return m, tea.Batch(
+			m.showToast(fmt.Sprintf("⚠️  Refreshed %d AWS credential(s), %d failed — see console (`)", msg.renewed, len(msg.failures)), true, 8*time.Second),
+			pollAWSCredExpiryCmd(m.cfg),
+		)
+	}
+	return m, tea.Batch(
+		m.showToast(fmt.Sprintf("🔑 Refreshed %d AWS credential(s)", msg.renewed), false, 5*time.Second),
+		pollAWSCredExpiryCmd(m.cfg),
+	)
+}
+
+func (m *Model) applyArchivePaneCapturedMsg(msg archivePaneCapturedMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if 1 < len(m.archiveSteps) {
+		m.archiveSteps[0].done = true
+		m.archiveStepIdx = 2
+	}
+	if m.archivePreview != nil {
+		sess := m.archivePreview.session
+		return m, loadArchivePreviewContinueCmd(m.cfg, m.snapshotManager, sess, msg.rawPane, msg.rawPaneLen)
+	}
+	return m, nil
 }
 
 func (m *Model) View() string {
@@ -2946,24 +3029,7 @@ func (m *Model) renderView() string {
 		return docStyle.Render(m.scheduledPrompts.View())
 
 	case viewStateVSCodeError:
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("VS Code CLI Error") + "\n\n")
-		b.WriteString(m.lastError + "\n\n")
-		b.WriteString("To fix this on macOS:\n")
-		b.WriteString("1. Open VS Code.\n")
-		b.WriteString("2. Press Cmd+Shift+P.\n")
-		b.WriteString("3. Type 'shell command' and select:\n")
-		b.WriteString("   'Shell Command: Install \"code\" command in PATH'.\n\n")
-		b.WriteString("Press any key to return.")
-
-		dialog := lipgloss.NewStyle().
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(lipgloss.Color("205")).
-			Padding(1, 2).
-			Width(60)
-
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderVSCodeError()
 	case viewStateProvisioningRemotePicker:
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			m.remotes.list.View())
@@ -2973,173 +3039,17 @@ func (m *Model) renderView() string {
 			m.remotes.list.View())
 
 	case viewStateProvisioningProgress:
-		var b strings.Builder
-		b.WriteString(titleStyle.Render("Provisioning Remote Server: "+m.selectedRemote.Host) + "\n\n")
-
-		if m.provisioningStatus != "" {
-			statusLine := m.provisioningStatus
-			if m.provisioningError == "" && m.provisioningIdx < len(m.provisionSteps) {
-				statusLine = fmt.Sprintf("%s %s", m.provisionSpinner.View(), statusLine)
-			}
-			b.WriteString(statusStyle.Render(statusLine) + "\n\n")
-		}
-
-		for i, step := range m.provisionSteps {
-			status := "○" // Pending
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-
-			if m.provisioningIdx >= 0 && i < m.provisioningIdx {
-				status = "✔" // Success
-				style = successStyle
-			} else if m.provisioningIdx >= 0 && i == m.provisioningIdx {
-				if m.provisioningError != "" {
-					status = "✘" // Error
-					style = failStyle
-				} else {
-					status = "●" // Running
-					style = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-				}
-			}
-
-			b.WriteString(style.Render(fmt.Sprintf("%s %s", status, step.Name)) + "\n")
-		}
-
-		if m.provisioningError != "" {
-			b.WriteString("\n" + failStyle.Render("Error: "+m.provisioningError) + "\n")
-			b.WriteString("\nPress esc to return.")
-		} else if m.provisioningIdx >= len(m.provisionSteps) {
-			b.WriteString("\n" + successStyle.Render("Provisioning Complete!") + "\n")
-			b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Note: Run 'gh auth login' manually in your first session."))
-		}
-
-		dialog := lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62")).
-			Padding(1, 4).
-			Width(60)
-
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderProvisioningProgress()
 	case viewStateAuthWizard:
-		var b strings.Builder
-		title := "Auth Setup Wizard"
-		if m.selectedRemote.Host != "" {
-			title = fmt.Sprintf("Auth Setup Wizard: %s@%s", m.selectedRemote.User, m.selectedRemote.Host)
-		}
-		b.WriteString(titleStyle.Render(title) + "\n\n")
-		if m.authStatusMsg != "" {
-			line := m.authStatusMsg
-			if m.authChecking {
-				line = fmt.Sprintf("%s %s", m.provisionSpinner.View(), line)
-			}
-			b.WriteString(statusStyle.Render(line) + "\n\n")
-		}
-
-		for i, step := range m.authSteps {
-			marker := "○"
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			switch m.authStepStatus[i] {
-			case "ok":
-				marker = "✔"
-				style = successStyle
-			case "manual":
-				marker = "◐"
-				style = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-			case "fail":
-				marker = "✘"
-				style = failStyle
-			}
-			prefix := "  "
-			if i == m.authStepIdx {
-				prefix = "> "
-				style = style.Bold(true)
-			}
-			scope := strings.ToUpper(step.Scope)
-			b.WriteString(style.Render(fmt.Sprintf("%s%s %s (%s)", prefix, marker, step.Name, scope)) + "\n")
-		}
-
-		if len(m.authSteps) > 0 && m.authStepIdx >= 0 && m.authStepIdx < len(m.authSteps) {
-			step := m.authSteps[m.authStepIdx]
-			b.WriteString("\n" + activeStyle.Render("Instruction:") + " " + step.Instruction + "\n")
-			if d := strings.TrimSpace(m.authStepDetails[m.authStepIdx]); d != "" {
-				b.WriteString(statusStyle.Render("Detail: "+d) + "\n")
-			}
-		}
-		b.WriteString("\n" + statusStyle.Render("Keys: c=check  m=mark done  ↑/↓=select  esc=back") + "\n")
-
-		dialog := lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62")).
-			Padding(1, 3).
-			Width(90)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderAuthWizardView()
 	case viewStateTunnelManager:
-		var b strings.Builder
-		title := "Session Tunnels"
-		if m.tunnelSession != nil {
-			title = fmt.Sprintf("Session Tunnels: %s", m.tunnelSession.TmuxSession)
-		}
-		b.WriteString(titleStyle.Render(title) + "\n\n")
-		if m.tunnelError != "" {
-			b.WriteString(failStyle.Render(m.tunnelError) + "\n\n")
-		}
-		if len(m.tunnelList.Items()) == 0 {
-			b.WriteString(statusStyle.Render("No tunnels configured for this session yet.") + "\n\n")
-		} else {
-			b.WriteString(m.tunnelList.View() + "\n")
-		}
-		b.WriteString(statusStyle.Render("Keys: a=add  enter=toggle start/stop  d=delete  r=refresh  esc=back"))
-		dialog := lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62")).
-			Padding(1, 2).
-			Width(90)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderTunnelManagerView()
 	case viewStateTunnelAdd:
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("Add Session Tunnel") + "\n\n")
-		b.WriteString("Enter local:remote ports (example: 5173:5173)\n\n")
-		b.WriteString(m.tunnelInput.View() + "\n\n")
-		if m.tunnelError != "" {
-			b.WriteString(failStyle.Render(m.tunnelError) + "\n\n")
-		}
-		b.WriteString(statusStyle.Render("enter=save  esc=cancel"))
-		dialog := lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62")).
-			Padding(1, 2).
-			Width(72)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderTunnelAdd()
 	case viewStateError:
-		var b strings.Builder
-		b.WriteString(failStyle.Render("Error") + "\n\n")
-		b.WriteString(m.lastError + "\n\n")
-		b.WriteString("Press any key to return.")
-
-		dialog := lipgloss.NewStyle().
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(lipgloss.Color("196")).
-			Padding(1, 2).
-			Width(60)
-
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderErrorDialog()
 	case viewStateTriggerDetails:
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("Trigger Details") + "\n\n")
-		b.WriteString(m.triggerDetailsVP.View() + "\n\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc/q: back • up/down: scroll"))
-
-		style := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(1, 2).
-			Width(m.width - 8).
-			Height(m.height - 8)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
-
+		return m.renderTriggerDetailsView()
 	case viewStateAutonomousTriggerPicker:
 		var b strings.Builder
 		b.WriteString(activeStyle.Render("Select Trigger Source") + "\n\n")
@@ -3191,293 +3101,308 @@ func (m *Model) renderView() string {
 		return docStyle.Render(m.branchPicker.View())
 
 	case viewStateRunTargetPicker:
-		var b strings.Builder
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-		b.WriteString(activeStyle.Render("Where should this session run?") + "\n\n")
-		for i, r := range m.cfg.Remotes {
-			label := r.Name
-			if label == "" {
-				label = r.Host
-			}
-			b.WriteString(fmt.Sprintf("  %s  %s (%s@%s)\n", activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host))
-		}
-		if len(m.cfg.Remotes) == 0 {
-			b.WriteString(dim.Render("  No remote servers configured — add one in Admin Menu.") + "\n")
-		}
-		b.WriteString("\n" + activeStyle.Render("  [e]") + "  EC2 Autonomous Loop — on-demand AWS instance\n")
-		b.WriteString("\n" + dim.Render("  esc: cancel"))
-
-		dialog := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("205")).
-			Padding(1, 2).
-			Width(60)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderRunTargetPicker()
 	case viewStateModePicker:
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("New Session") + "\n\n")
-		if m.selectedRemote.Host != "" {
-			remoteLabel := m.selectedRemote.Name
-			if remoteLabel == "" {
-				remoteLabel = m.selectedRemote.Host
-			}
-			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Remote: ") +
-				lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(remoteLabel) + "\n\n")
-		}
-		b.WriteString("How would you like to start?\n\n")
-		b.WriteString(activeStyle.Render("[1]") + "  From JIRA Issue      — link session to a JIRA ticket\n")
-		b.WriteString(activeStyle.Render("[2]") + "  New Branch           — start with a custom branch name\n")
-		b.WriteString(activeStyle.Render("[3]") + "  Existing Branch      — check out an existing remote branch\n")
-		b.WriteString(activeStyle.Render("[4]") + "  Ad-hoc               — no git repo, no JIRA ticket\n")
-		b.WriteString(activeStyle.Render("[5]") + "  Autonomous Trigger   — configure a remote polling rule\n")
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: back"))
-		style := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(2, 4).
-			Width(62)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
-
+		return m.renderModePicker()
 	case viewStateRestartAgentPicker:
 		return docStyle.Render(m.agentPicker.View())
 
 	case viewStateRestartConfirm:
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("Confirm Session Restart") + "\n\n")
-		b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TmuxSession))
-		b.WriteString("Restarting will ask the current agent to write a handoff first if it is still running, then stop it and start the newly selected agent.\n\n")
-		b.WriteString("Do you want to proceed?\n\n")
-		b.WriteString(activeStyle.Render("[y]") + " Yes  " + activeStyle.Render("[n]") + " No")
-
-		dialog := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(1, 2).
-			Width(60)
-
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderRestartConfirm()
 	case viewStateSnapshotPreview:
-		snap := m.priorSnapshotCandidate
-		dialogW := 72
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("📸 Prior Session Snapshot") + "\n\n")
-		if snap != nil {
-			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
-				fmt.Sprintf("Captured %s · %s", snap.CreatedAt.Format("2006-01-02 15:04"), snap.AgentName),
-			) + "\n\n")
-			if snap.Summary != "" {
-				b.WriteString(activeStyle.Render("What was done") + "\n")
-				wrapped := lipgloss.NewStyle().Width(dialogW - 6).Render(snap.Summary)
-				for _, l := range strings.Split(wrapped, "\n") {
-					b.WriteString("  " + l + "\n")
-				}
-				b.WriteString("\n")
-			}
-			if len(snap.NextSteps) > 0 {
-				b.WriteString(activeStyle.Render("Next steps") + "\n")
-				for _, s := range snap.NextSteps {
-					wrapped := lipgloss.NewStyle().Width(dialogW - 8).Render(s)
-					lines := strings.Split(wrapped, "\n")
-					b.WriteString("  • " + lines[0] + "\n")
-					for _, l := range lines[1:] {
-						b.WriteString("    " + l + "\n")
-					}
-				}
-				b.WriteString("\n")
-			}
-			if snap.InjectedAt != nil {
-				b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
-					fmt.Sprintf("Previously injected %s", snap.InjectedAt.Format("2006-01-02 15:04")),
-				) + "\n\n")
-			}
-		}
-		b.WriteString("Inject this context into the restarted session?\n\n")
-		b.WriteString(activeStyle.Render("[y]") + " Yes, inject context  " +
-			activeStyle.Render("[n]") + " Restart fresh  " +
-			activeStyle.Render("[esc]") + " Cancel")
-
-		dialog2 := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(1, 3).
-			Width(dialogW)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog2.Render(b.String()))
-
+		return m.renderSnapshotPreview()
 	case viewStateChangeDirPicker:
 		return docStyle.Render(m.dirPicker.View())
 
 	case viewStateArchivePreview:
-		p := m.archivePreview
-		dialogW := 76
-		inner := dialogW - 6
-		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-
-		var header strings.Builder
-		header.WriteString(activeStyle.Render("📦 Archive Session") + "\n\n")
-		if p != nil {
-			meta := fmt.Sprintf("%s  ·  %s  ·  %s", p.session.TmuxSession, p.session.RepoName, p.session.AgentName)
-			if p.session.Branch != "" {
-				meta += "  ·  " + p.session.Branch
-			}
-			if p.session.WorktreePath != "" {
-				meta += "  ·  " + p.session.WorktreePath
-			}
-			header.WriteString(muted.Render(meta) + "\n")
-		}
-		header.WriteString(muted.Render(strings.Repeat("─", inner)) + "\n")
-
-		scrollPct := ""
-		if m.archivePreviewVP.TotalLineCount() > m.archivePreviewVP.Height {
-			pct := int(m.archivePreviewVP.ScrollPercent() * 100)
-			scrollPct = muted.Render(fmt.Sprintf(" (%d%%)", pct))
-		}
-
-		var footer strings.Builder
-		footer.WriteString(muted.Render(strings.Repeat("─", inner)) + "\n")
-		if p != nil {
-			var sizeStr string
-			switch {
-			case p.compressedSize >= 1024*1024:
-				sizeStr = fmt.Sprintf("%.1f MB", float64(p.compressedSize)/1024/1024)
-			case p.compressedSize >= 1024:
-				sizeStr = fmt.Sprintf("%.1f KB", float64(p.compressedSize)/1024)
-			default:
-				sizeStr = fmt.Sprintf("%d B", p.compressedSize)
-			}
-			rawKB := float64(p.rawPaneLen) / 1024
-			cleanedKB := float64(p.cleanedPaneLen) / 1024
-			footer.WriteString(muted.Render(fmt.Sprintf(
-				"%.1f KB raw  →  %.1f KB cleaned  →  %s compressed",
-				rawKB, cleanedKB, sizeStr,
-			)) + "\n\n")
-		}
-		footer.WriteString("Save this snapshot to the archive?\n\n")
-		footer.WriteString(activeStyle.Render("[enter]") + " Save  " +
-			activeStyle.Render("[esc]") + " Cancel" +
-			"  " + muted.Render("↑↓/pgup/pgdn: scroll") + scrollPct)
-
-		body := header.String() + m.archivePreviewVP.View() + "\n" + footer.String()
-		dialog := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(1, 3).
-			Width(dialogW)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(body))
-
+		return m.renderArchivePreview()
 	case viewStateArchiveProgress:
-		dialogW := 60
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("📦 Archiving Session") + "\n\n")
-		if m.archivePreview != nil {
-			muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-			b.WriteString(muted.Render(fmt.Sprintf(
-				"%s  ·  %s", m.archivePreview.session.TmuxSession, m.archivePreview.session.RepoName,
-			)) + "\n\n")
-		}
-		checkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-		for i, step := range m.archiveSteps {
-			var prefix string
-			switch {
-			case step.err:
-				prefix = errStyle.Render("✗")
-			case step.done:
-				prefix = checkStyle.Render("✓")
-			case i == m.archiveStepIdx:
-				prefix = m.provisionSpinner.View()
-			default:
-				prefix = "○"
-			}
-			label := step.label
-			if i == m.archiveStepIdx && !step.done && !step.err {
-				label = lipgloss.NewStyle().Bold(true).Render(label)
-			} else if step.done {
-				label = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(label)
-			}
-			b.WriteString(fmt.Sprintf("  %s  %s\n", prefix, label))
-		}
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc to cancel"))
-
-		dialog2 := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(1, 3).
-			Width(dialogW)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog2.Render(b.String()))
-
+		return m.renderArchiveProgress()
 	case viewStateChangeDirConfirm:
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("Confirm Scope Change") + "\n\n")
-		b.WriteString(fmt.Sprintf("Session: %s\n", m.changingDirSession.TmuxSession))
-		b.WriteString(fmt.Sprintf("New Scope: %s\n\n", m.sessionCfg.Directory))
-		b.WriteString("Changing the scope requires restarting the Mutagen sync and the agent.\n")
-		b.WriteString("The agent will be restarted in the new subdirectory.\n\n")
-		b.WriteString("Do you want to proceed?\n\n")
-		b.WriteString(activeStyle.Render("[y]") + " Yes, Restart  " + activeStyle.Render("[n]") + " Cancel")
-
-		dialog := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(1, 2).
-			Width(60)
-
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderChangeDirConfirm()
 	case viewStateSummary:
 		return m.summary.View()
 
 	case viewStateTerminateConfirm:
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			var b strings.Builder
-			b.WriteString(failStyle.Render("Terminate session?") + "\n\n")
-			b.WriteString(fmt.Sprintf("Session: %s\n", s.TmuxSession))
-			b.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
-			b.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
-			b.WriteString(fmt.Sprintf("Branch: %s\n\n", s.Branch))
-			if m.terminatePrecheckError != "" {
-				b.WriteString(failStyle.Render("Blocked: "+m.terminatePrecheckError) + "\n\n")
-			}
-			b.WriteString("This will:\n")
-			b.WriteString("  - Stop mutagen sync\n")
-			b.WriteString("  - Kill tmux session\n")
-			b.WriteString("  - Remove git worktree\n")
-			b.WriteString("  - Clean up local files\n\n")
-			b.WriteString(activeStyle.Render("[y]") + " Confirm  " + activeStyle.Render("[f]") + " Force (discard changes)  " + activeStyle.Render("[n]") + " Cancel")
-
-			dialog := lipgloss.NewStyle().
-				Border(lipgloss.DoubleBorder()).
-				BorderForeground(lipgloss.Color("196")).
-				Padding(1, 2).
-				Width(60)
-
-			return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-		}
-		return ""
-
+		return m.renderTerminateConfirm()
 	case viewStateQuitConfirm:
-		var b strings.Builder
-		b.WriteString(activeStyle.Render("Quit aiman?") + "\n\n")
-		b.WriteString("Any sessions creating or terminating in the background\n")
-		b.WriteString("will continue — only the dashboard closes.\n\n")
-		b.WriteString(activeStyle.Render("[y]") + " Quit  " + activeStyle.Render("[n / esc]") + " Cancel")
-
-		dialog := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("241")).
-			Padding(1, 2).
-			Width(54)
-
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
+		return m.renderQuitConfirm()
 	case viewStateWorktreeExists:
-		var b strings.Builder
-		b.WriteString(failStyle.Render("Worktree Already Exists") + "\n\n")
-		b.WriteString(fmt.Sprintf("A git worktree already exists for branch:\n%s\n\n", m.sessionCfg.Branch))
-		b.WriteString("This usually means there's an existing session.\n\n")
-		b.WriteString(activeStyle.Render("[u]") + " Use Existing Worktree\n")
-		if m.sessionCfg.ExistingBranch {
-			b.WriteString(activeStyle.Render("[b]") + " Pick a Different Branch\n")
-		} else {
-			b.WriteString(activeStyle.Render("[b]") + " Change Branch Name\n")
+		return m.renderWorktreeExists()
+	case viewStateLoading:
+		return m.renderLoadingView()
+	}
+	return ""
+}
+
+func (m *Model) renderArchivePreview() string {
+	p := m.archivePreview
+	dialogW := 76
+	inner := dialogW - 6
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+
+	var header strings.Builder
+	header.WriteString(activeStyle.Render("📦 Archive Session") + "\n\n")
+	if p != nil {
+		meta := fmt.Sprintf("%s  ·  %s  ·  %s", p.session.TmuxSession, p.session.RepoName, p.session.AgentName)
+		if p.session.Branch != "" {
+			meta += "  ·  " + p.session.Branch
 		}
-		b.WriteString(activeStyle.Render("[c]") + " Cancel")
+		if p.session.WorktreePath != "" {
+			meta += "  ·  " + p.session.WorktreePath
+		}
+		header.WriteString(muted.Render(meta) + "\n")
+	}
+	header.WriteString(muted.Render(strings.Repeat("─", inner)) + "\n")
+
+	scrollPct := ""
+	if m.archivePreviewVP.TotalLineCount() > m.archivePreviewVP.Height {
+		pct := int(m.archivePreviewVP.ScrollPercent() * 100)
+		scrollPct = muted.Render(fmt.Sprintf(" (%d%%)", pct))
+	}
+
+	var footer strings.Builder
+	footer.WriteString(muted.Render(strings.Repeat("─", inner)) + "\n")
+	if p != nil {
+		var sizeStr string
+		switch {
+		case p.compressedSize >= 1024*1024:
+			sizeStr = fmt.Sprintf("%.1f MB", float64(p.compressedSize)/1024/1024)
+		case p.compressedSize >= 1024:
+			sizeStr = fmt.Sprintf("%.1f KB", float64(p.compressedSize)/1024)
+		default:
+			sizeStr = fmt.Sprintf("%d B", p.compressedSize)
+		}
+		rawKB := float64(p.rawPaneLen) / 1024
+		cleanedKB := float64(p.cleanedPaneLen) / 1024
+		footer.WriteString(muted.Render(fmt.Sprintf(
+			"%.1f KB raw  →  %.1f KB cleaned  →  %s compressed",
+			rawKB, cleanedKB, sizeStr,
+		)) + "\n\n")
+	}
+	footer.WriteString("Save this snapshot to the archive?\n\n")
+	footer.WriteString(activeStyle.Render("[enter]") + " Save  " +
+		activeStyle.Render("[esc]") + " Cancel" +
+		"  " + muted.Render("↑↓/pgup/pgdn: scroll") + scrollPct)
+
+	body := header.String() + m.archivePreviewVP.View() + "\n" + footer.String()
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 3).
+		Width(dialogW)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(body))
+}
+
+func (m *Model) renderAuthWizardView() string {
+	var b strings.Builder
+	title := "Auth Setup Wizard"
+	if m.selectedRemote.Host != "" {
+		title = fmt.Sprintf("Auth Setup Wizard: %s@%s", m.selectedRemote.User, m.selectedRemote.Host)
+	}
+	b.WriteString(titleStyle.Render(title) + "\n\n")
+	if m.authStatusMsg != "" {
+		line := m.authStatusMsg
+		if m.authChecking {
+			line = fmt.Sprintf("%s %s", m.provisionSpinner.View(), line)
+		}
+		b.WriteString(statusStyle.Render(line) + "\n\n")
+	}
+
+	for i, step := range m.authSteps {
+		marker := "○"
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+		switch m.authStepStatus[i] {
+		case "ok":
+			marker = "✔"
+			style = successStyle
+		case "manual":
+			marker = "◐"
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+		case "fail":
+			marker = "✘"
+			style = failStyle
+		}
+		prefix := "  "
+		if i == m.authStepIdx {
+			prefix = "> "
+			style = style.Bold(true)
+		}
+		scope := strings.ToUpper(step.Scope)
+		b.WriteString(style.Render(fmt.Sprintf("%s%s %s (%s)", prefix, marker, step.Name, scope)) + "\n")
+	}
+
+	if len(m.authSteps) > 0 && m.authStepIdx >= 0 && m.authStepIdx < len(m.authSteps) {
+		step := m.authSteps[m.authStepIdx]
+		b.WriteString("\n" + activeStyle.Render("Instruction:") + " " + step.Instruction + "\n")
+		if d := strings.TrimSpace(m.authStepDetails[m.authStepIdx]); d != "" {
+			b.WriteString(statusStyle.Render("Detail: "+d) + "\n")
+		}
+	}
+	b.WriteString("\n" + statusStyle.Render("Keys: c=check  m=mark done  ↑/↓=select  esc=back") + "\n")
+
+	dialog := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(1, 3).
+		Width(90)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderProvisioningProgress() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Provisioning Remote Server: "+m.selectedRemote.Host) + "\n\n")
+
+	if m.provisioningStatus != "" {
+		statusLine := m.provisioningStatus
+		if m.provisioningError == "" && m.provisioningIdx < len(m.provisionSteps) {
+			statusLine = fmt.Sprintf("%s %s", m.provisionSpinner.View(), statusLine)
+		}
+		b.WriteString(statusStyle.Render(statusLine) + "\n\n")
+	}
+
+	for i, step := range m.provisionSteps {
+		status := "○" // Pending
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+		if m.provisioningIdx >= 0 && i < m.provisioningIdx {
+			status = "✔" // Success
+			style = successStyle
+		} else if m.provisioningIdx >= 0 && i == m.provisioningIdx {
+			if m.provisioningError != "" {
+				status = "✘" // Error
+				style = failStyle
+			} else {
+				status = "●" // Running
+				style = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+			}
+		}
+
+		b.WriteString(style.Render(fmt.Sprintf("%s %s", status, step.Name)) + "\n")
+	}
+
+	if m.provisioningError != "" {
+		b.WriteString("\n" + failStyle.Render("Error: "+m.provisioningError) + "\n")
+		b.WriteString("\nPress esc to return.")
+	} else if m.provisioningIdx >= len(m.provisionSteps) {
+		b.WriteString("\n" + successStyle.Render("Provisioning Complete!") + "\n")
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Note: Run 'gh auth login' manually in your first session."))
+	}
+
+	dialog := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(1, 4).
+		Width(60)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderSnapshotPreview() string {
+	snap := m.priorSnapshotCandidate
+	dialogW := 72
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("📸 Prior Session Snapshot") + "\n\n")
+	if snap != nil {
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
+			fmt.Sprintf("Captured %s · %s", snap.CreatedAt.Format("2006-01-02 15:04"), snap.AgentName),
+		) + "\n\n")
+		if snap.Summary != "" {
+			b.WriteString(activeStyle.Render("What was done") + "\n")
+			wrapped := lipgloss.NewStyle().Width(dialogW - 6).Render(snap.Summary)
+			for _, l := range strings.Split(wrapped, "\n") {
+				b.WriteString("  " + l + "\n")
+			}
+			b.WriteString("\n")
+		}
+		if len(snap.NextSteps) > 0 {
+			b.WriteString(activeStyle.Render("Next steps") + "\n")
+			for _, s := range snap.NextSteps {
+				wrapped := lipgloss.NewStyle().Width(dialogW - 8).Render(s)
+				lines := strings.Split(wrapped, "\n")
+				b.WriteString("  • " + lines[0] + "\n")
+				for _, l := range lines[1:] {
+					b.WriteString("    " + l + "\n")
+				}
+			}
+			b.WriteString("\n")
+		}
+		if snap.InjectedAt != nil {
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
+				fmt.Sprintf("Previously injected %s", snap.InjectedAt.Format("2006-01-02 15:04")),
+			) + "\n\n")
+		}
+	}
+	b.WriteString("Inject this context into the restarted session?\n\n")
+	b.WriteString(activeStyle.Render("[y]") + " Yes, inject context  " +
+		activeStyle.Render("[n]") + " Restart fresh  " +
+		activeStyle.Render("[esc]") + " Cancel")
+
+	dialog2 := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 3).
+		Width(dialogW)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog2.Render(b.String()))
+}
+
+func (m *Model) renderArchiveProgress() string {
+	dialogW := 60
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("📦 Archiving Session") + "\n\n")
+	if m.archivePreview != nil {
+		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		b.WriteString(muted.Render(fmt.Sprintf(
+			"%s  ·  %s", m.archivePreview.session.TmuxSession, m.archivePreview.session.RepoName,
+		)) + "\n\n")
+	}
+	checkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	for i, step := range m.archiveSteps {
+		var prefix string
+		switch {
+		case step.err:
+			prefix = errStyle.Render("✗")
+		case step.done:
+			prefix = checkStyle.Render("✓")
+		case i == m.archiveStepIdx:
+			prefix = m.provisionSpinner.View()
+		default:
+			prefix = "○"
+		}
+		label := step.label
+		if i == m.archiveStepIdx && !step.done && !step.err {
+			label = lipgloss.NewStyle().Bold(true).Render(label)
+		} else if step.done {
+			label = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(label)
+		}
+		b.WriteString(fmt.Sprintf("  %s  %s\n", prefix, label))
+	}
+	b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc to cancel"))
+
+	dialog2 := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 3).
+		Width(dialogW)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog2.Render(b.String()))
+}
+
+func (m *Model) renderTerminateConfirm() string {
+	if sel := m.list.SelectedItem(); sel != nil {
+		s := sel.(item).session
+		var b strings.Builder
+		b.WriteString(failStyle.Render("Terminate session?") + "\n\n")
+		b.WriteString(fmt.Sprintf("Session: %s\n", s.TmuxSession))
+		b.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
+		b.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
+		b.WriteString(fmt.Sprintf("Branch: %s\n\n", s.Branch))
+		if m.terminatePrecheckError != "" {
+			b.WriteString(failStyle.Render("Blocked: "+m.terminatePrecheckError) + "\n\n")
+		}
+		b.WriteString("This will:\n")
+		b.WriteString("  - Stop mutagen sync\n")
+		b.WriteString("  - Kill tmux session\n")
+		b.WriteString("  - Remove git worktree\n")
+		b.WriteString("  - Clean up local files\n\n")
+		b.WriteString(activeStyle.Render("[y]") + " Confirm  " + activeStyle.Render("[f]") + " Force (discard changes)  " + activeStyle.Render("[n]") + " Cancel")
 
 		dialog := lipgloss.NewStyle().
 			Border(lipgloss.DoubleBorder()).
@@ -3486,19 +3411,232 @@ func (m *Model) renderView() string {
 			Width(60)
 
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
-
-	case viewStateLoading:
-		msg := m.loadingMsg
-		if msg == "" {
-			msg = "Loading..."
-		}
-		style := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(1, 2).
-			Width(50)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(msg))
 	}
 	return ""
+}
+
+func (m *Model) renderModePicker() string {
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("New Session") + "\n\n")
+	if m.selectedRemote.Host != "" {
+		remoteLabel := m.selectedRemote.Name
+		if remoteLabel == "" {
+			remoteLabel = m.selectedRemote.Host
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Remote: ") +
+			lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(remoteLabel) + "\n\n")
+	}
+	b.WriteString("How would you like to start?\n\n")
+	b.WriteString(activeStyle.Render("[1]") + "  From JIRA Issue      — link session to a JIRA ticket\n")
+	b.WriteString(activeStyle.Render("[2]") + "  New Branch           — start with a custom branch name\n")
+	b.WriteString(activeStyle.Render("[3]") + "  Existing Branch      — check out an existing remote branch\n")
+	b.WriteString(activeStyle.Render("[4]") + "  Ad-hoc               — no git repo, no JIRA ticket\n")
+	b.WriteString(activeStyle.Render("[5]") + "  Autonomous Trigger   — configure a remote polling rule\n")
+	b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: back"))
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(2, 4).
+		Width(62)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
+}
+
+func (m *Model) renderRunTargetPicker() string {
+	var b strings.Builder
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	b.WriteString(activeStyle.Render("Where should this session run?") + "\n\n")
+	for i, r := range m.cfg.Remotes {
+		label := r.Name
+		if label == "" {
+			label = r.Host
+		}
+		b.WriteString(fmt.Sprintf("  %s  %s (%s@%s)\n", activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host))
+	}
+	if len(m.cfg.Remotes) == 0 {
+		b.WriteString(dim.Render("  No remote servers configured — add one in Admin Menu.") + "\n")
+	}
+	b.WriteString("\n" + activeStyle.Render("  [e]") + "  EC2 Autonomous Loop — on-demand AWS instance\n")
+	b.WriteString("\n" + dim.Render("  esc: cancel"))
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("205")).
+		Padding(1, 2).
+		Width(60)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderTunnelManagerView() string {
+	var b strings.Builder
+	title := "Session Tunnels"
+	if m.tunnelSession != nil {
+		title = fmt.Sprintf("Session Tunnels: %s", m.tunnelSession.TmuxSession)
+	}
+	b.WriteString(titleStyle.Render(title) + "\n\n")
+	if m.tunnelError != "" {
+		b.WriteString(failStyle.Render(m.tunnelError) + "\n\n")
+	}
+	if len(m.tunnelList.Items()) == 0 {
+		b.WriteString(statusStyle.Render("No tunnels configured for this session yet.") + "\n\n")
+	} else {
+		b.WriteString(m.tunnelList.View() + "\n")
+	}
+	b.WriteString(statusStyle.Render("Keys: a=add  enter=toggle start/stop  d=delete  r=refresh  esc=back"))
+	dialog := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(1, 2).
+		Width(90)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderWorktreeExists() string {
+	var b strings.Builder
+	b.WriteString(failStyle.Render("Worktree Already Exists") + "\n\n")
+	b.WriteString(fmt.Sprintf("A git worktree already exists for branch:\n%s\n\n", m.sessionCfg.Branch))
+	b.WriteString("This usually means there's an existing session.\n\n")
+	b.WriteString(activeStyle.Render("[u]") + " Use Existing Worktree\n")
+	if m.sessionCfg.ExistingBranch {
+		b.WriteString(activeStyle.Render("[b]") + " Pick a Different Branch\n")
+	} else {
+		b.WriteString(activeStyle.Render("[b]") + " Change Branch Name\n")
+	}
+	b.WriteString(activeStyle.Render("[c]") + " Cancel")
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color("196")).
+		Padding(1, 2).
+		Width(60)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderVSCodeError() string {
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("VS Code CLI Error") + "\n\n")
+	b.WriteString(m.lastError + "\n\n")
+	b.WriteString("To fix this on macOS:\n")
+	b.WriteString("1. Open VS Code.\n")
+	b.WriteString("2. Press Cmd+Shift+P.\n")
+	b.WriteString("3. Type 'shell command' and select:\n")
+	b.WriteString("   'Shell Command: Install \"code\" command in PATH'.\n\n")
+	b.WriteString("Press any key to return.")
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color("205")).
+		Padding(1, 2).
+		Width(60)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderChangeDirConfirm() string {
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("Confirm Scope Change") + "\n\n")
+	b.WriteString(fmt.Sprintf("Session: %s\n", m.changingDirSession.TmuxSession))
+	b.WriteString(fmt.Sprintf("New Scope: %s\n\n", m.sessionCfg.Directory))
+	b.WriteString("Changing the scope requires restarting the Mutagen sync and the agent.\n")
+	b.WriteString("The agent will be restarted in the new subdirectory.\n\n")
+	b.WriteString("Do you want to proceed?\n\n")
+	b.WriteString(activeStyle.Render("[y]") + " Yes, Restart  " + activeStyle.Render("[n]") + " Cancel")
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(60)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderTunnelAdd() string {
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("Add Session Tunnel") + "\n\n")
+	b.WriteString("Enter local:remote ports (example: 5173:5173)\n\n")
+	b.WriteString(m.tunnelInput.View() + "\n\n")
+	if m.tunnelError != "" {
+		b.WriteString(failStyle.Render(m.tunnelError) + "\n\n")
+	}
+	b.WriteString(statusStyle.Render("enter=save  esc=cancel"))
+	dialog := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(1, 2).
+		Width(72)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderQuitConfirm() string {
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("Quit aiman?") + "\n\n")
+	b.WriteString("Any sessions creating or terminating in the background\n")
+	b.WriteString("will continue — only the dashboard closes.\n\n")
+	b.WriteString(activeStyle.Render("[y]") + " Quit  " + activeStyle.Render("[n / esc]") + " Cancel")
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("241")).
+		Padding(1, 2).
+		Width(54)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderRestartConfirm() string {
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("Confirm Session Restart") + "\n\n")
+	b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TmuxSession))
+	b.WriteString("Restarting will ask the current agent to write a handoff first if it is still running, then stop it and start the newly selected agent.\n\n")
+	b.WriteString("Do you want to proceed?\n\n")
+	b.WriteString(activeStyle.Render("[y]") + " Yes  " + activeStyle.Render("[n]") + " No")
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(60)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderErrorDialog() string {
+	var b strings.Builder
+	b.WriteString(failStyle.Render("Error") + "\n\n")
+	b.WriteString(m.lastError + "\n\n")
+	b.WriteString("Press any key to return.")
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color("196")).
+		Padding(1, 2).
+		Width(60)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m *Model) renderTriggerDetailsView() string {
+	var b strings.Builder
+	b.WriteString(activeStyle.Render("Trigger Details") + "\n\n")
+	b.WriteString(m.triggerDetailsVP.View() + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc/q: back • up/down: scroll"))
+
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(m.width - 8).
+		Height(m.height - 8)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
+}
+
+func (m *Model) renderLoadingView() string {
+	msg := m.loadingMsg
+	if msg == "" {
+		msg = "Loading..."
+	}
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(50)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(msg))
 }
 
 func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -3754,7 +3892,8 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// If it's a mouse event, only forward to the component under the cursor
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
-		m.log("Mouse X: %d, Y: %d, Type: %v, Width: %d", mouseMsg.X, mouseMsg.Y, mouseMsg.Type, m.width)
+		m.log("Mouse X: %d, Y: %d, Action: %v, Button: %v, Width: %d",
+			mouseMsg.X, mouseMsg.Y, mouseMsg.Action, mouseMsg.Button, m.width)
 		if mouseMsg.X < (m.width/3 + 4) {
 			if m.currentTab == tabSessions {
 				m.list, cmd = m.list.Update(msg)
@@ -4139,7 +4278,9 @@ end tell`, cmd)
 						return attachDoneMsg{err: fmt.Errorf("remote config not found")}
 					}
 					mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-					mgr.Execute(ctx, "tmux kill-session -t aiman-trigger 2>/dev/null || true")
+					// Best-effort teardown of any previous trigger session; the command
+					// swallows its own failure, so nothing here can be acted on.
+					_, _ = mgr.Execute(ctx, "tmux kill-session -t aiman-trigger 2>/dev/null || true")
 					_, err := mgr.Execute(ctx, "tmux new-session -d -s aiman-trigger 'aiman-trigger'")
 					return attachDoneMsg{err: err}
 				}, true
@@ -5798,143 +5939,7 @@ func (m *Model) handleTriggerDetailsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case discoveryResultMsg:
-		m.log("Discovered %d sessions", len(msg.sessions))
-		ctx := context.Background()
-
-		// Load DB to carry timestamps before saving (discovery must not clobber updated_at)
-		dbSessions := make(map[string]domain.Session)
-		if m.db != nil {
-			if list, err := loadConfiguredSessions(ctx, m.cfg, m.db); err == nil {
-				for _, s := range list {
-					dbSessions[s.ID] = s
-				}
-			}
-		}
-
-		// Save all discovered sessions to DB, preserving existing timestamps.
-		for i := range msg.sessions {
-			if m.db != nil {
-				if existing, ok := dbSessions[msg.sessions[i].ID]; ok {
-					if !existing.UpdatedAt.IsZero() {
-						msg.sessions[i].UpdatedAt = existing.UpdatedAt
-					}
-					if msg.sessions[i].CreatedAt.IsZero() && !existing.CreatedAt.IsZero() {
-						msg.sessions[i].CreatedAt = existing.CreatedAt
-					}
-				}
-				_ = m.db.Save(ctx, &msg.sessions[i])
-			}
-		}
-
-		// Merge: discovered sessions win for live state; DB fills in sessions
-		// from remotes we couldn't reach this scan. Sessions from scanned remotes
-		// that weren't discovered are dead — skip them.
-		seenID := make(map[string]bool)
-		seenTmux := make(map[string]bool)
-		merged := []domain.Session{}
-		for _, s := range msg.sessions {
-			if !shouldMergeDiscoveredSession(s, dbSessions) {
-				continue
-			}
-			if seenID[s.ID] {
-				continue
-			}
-			tk := ""
-			if s.TmuxSession != "" {
-				tk = s.RemoteHost + "\x00" + s.TmuxSession
-			}
-			if tk != "" && seenTmux[tk] {
-				continue
-			}
-
-			if dbSess, ok := dbSessions[s.ID]; ok {
-				if dbSess.WorkingDirectory != "" {
-					s.WorkingDirectory = dbSess.WorkingDirectory
-				}
-				if dbSess.RepoName != "" && (s.RepoName == "" || (!strings.Contains(s.RepoName, "/") && strings.Contains(dbSess.RepoName, "/"))) {
-					s.RepoName = dbSess.RepoName
-				}
-				if s.IssueKey == "" {
-					s.IssueKey = dbSess.IssueKey
-				}
-				if s.Branch == "" {
-					s.Branch = dbSess.Branch
-				}
-				if s.AgentName == "" {
-					s.AgentName = dbSess.AgentName
-				}
-				if s.AgentModel == "" {
-					s.AgentModel = dbSess.AgentModel
-				}
-				if s.WorktreePath == "" {
-					s.WorktreePath = dbSess.WorktreePath
-				}
-				if s.LocalPath == "" {
-					s.LocalPath = dbSess.LocalPath
-				}
-			}
-
-			merged = append(merged, s)
-			seenID[s.ID] = true
-			if tk != "" {
-				seenTmux[tk] = true
-			}
-		}
-		for id, s := range dbSessions {
-			if seenID[id] {
-				continue
-			}
-			tk := ""
-			if s.TmuxSession != "" {
-				tk = s.RemoteHost + "\x00" + s.TmuxSession
-			}
-			if tk != "" && seenTmux[tk] {
-				continue
-			}
-			// Skip sessions from remotes that were successfully scanned — they're dead
-			if s.RemoteHost != "" && msg.scannedHosts[s.RemoteHost] {
-				continue
-			}
-			merged = append(merged, s)
-			seenID[id] = true
-			if tk != "" {
-				seenTmux[tk] = true
-			}
-		}
-
-		// Re-attach background-creation placeholders — they exist only in
-		// memory and would otherwise be dropped by the discovery merge.
-		for _, cs := range m.creatingSessions {
-			if !seenID[cs.placeholder.ID] {
-				merged = append(merged, cs.placeholder)
-			}
-		}
-
-		m.allSessions = merged
-
-		// Update daemon status
-		for host := range msg.scannedHosts {
-			d, ok := m.daemons[host]
-			if !ok {
-				d = domain.Daemon{RemoteHost: host}
-			}
-			// Assume stopped unless found
-			d.Status = domain.DaemonStatusStopped
-
-			// If daemon is running, it will be in msg.sessions
-			for _, s := range msg.sessions {
-				if s.RemoteHost == host && s.TmuxSession == "aiman-trigger" {
-					d.Status = domain.DaemonStatusRunning
-					d.UpdatedAt = time.Now()
-					break
-				}
-			}
-			m.daemons[host] = d
-		}
-
-		m.applyRemoteFilter()
-		m.state = viewStateMain
-		return m, nil
+		return m.applyDiscoveryResult(msg)
 	case attachMsg:
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
 			return attachDoneMsg{err: err}
@@ -5956,22 +5961,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickTmux()
 	case tmuxTerminalMsg:
-		// Don't interrupt an in-progress restart with a stale terminal stream.
-		if m.restartingSession != nil {
-			return m, nil
-		}
-		if msg.err != nil {
-			m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
-			m.panelMode = panelModePreview
-			m.state = viewStateMain
-			return m, nil
-		}
-		m.termCloser = msg.stream
-		term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
-		m.terminal = &term
-		m.panelMode = panelModeTerminal
-		m.state = viewStateMain
-		return m, nil
+		return m.applyTmuxTerminal(msg)
 	case reposMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
@@ -6014,54 +6004,221 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = m.loadingNext
 		return m, nil
 	case recreateMutagenMsg:
-		if msg.err != nil {
-			m.lastError = fmt.Sprintf("Failed to recreate mutagen sync: %v", msg.err)
-			m.state = viewStateError
-			return m, nil
-		}
-
-		// Update the session in the list and the master session slice
-		items := m.list.Items()
-		for i, it := range items {
-			if sessItem, ok := it.(item); ok && sessItem.session.ID == msg.session.ID {
-				sessItem.session = msg.session
-				sessItem.syncStale = false
-				items[i] = sessItem
-				break
-			}
-		}
-		m.list.SetItems(items)
-		for i, s := range m.allSessions {
-			if s.ID == msg.session.ID {
-				m.allSessions[i] = msg.session
-				break
-			}
-		}
-		// The old health verdict is for the terminated sync — drop it and
-		// re-check so the stale marker clears (or reappears) promptly.
-		delete(m.syncHealth, msg.session.ID)
-
-		// Persist the updated session (with new sync ID and local path)
-		if m.db != nil {
-			ctx := context.Background()
-			_ = m.db.Save(ctx, &msg.session)
-		}
-
-		m.state = viewStateMain
-		return m, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...))
+		return m.applyRecreateMutagen(msg)
 	case agent.ScanAgentsMsg:
-		_ = appendDebugLog(fmt.Sprintf("[ui %s] ScanAgentsMsg: err=%v agents=%d state=%d loadingNext=%d\n", time.Now().Format("15:04:05.000"), msg.Err, len(msg.Agents), m.state, m.loadingNext))
-		if msg.Err != nil {
-			m.lastError = fmt.Sprintf("Failed to scan agents: %v", msg.Err)
-			m.state = viewStateError
-			return m, nil
+		return m.applyScanAgents(msg)
+	}
+	return m, nil
+}
+
+func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd) {
+	m.log("Discovered %d sessions", len(msg.sessions))
+	ctx := context.Background()
+
+	// Load DB to carry timestamps before saving (discovery must not clobber updated_at)
+	dbSessions := make(map[string]domain.Session)
+	if m.db != nil {
+		if list, err := loadConfiguredSessions(ctx, m.cfg, m.db); err == nil {
+			for _, s := range list {
+				dbSessions[s.ID] = s
+			}
 		}
-		m.agentPicker = NewAgentPickerModel(msg.Agents)
-		h, v := docStyle.GetFrameSize()
-		m.agentPicker.SetSize(m.width-h, m.height-v)
-		m.state = m.loadingNext
+	}
+
+	// Save all discovered sessions to DB, preserving existing timestamps.
+	for i := range msg.sessions {
+		if m.db != nil {
+			if existing, ok := dbSessions[msg.sessions[i].ID]; ok {
+				if !existing.UpdatedAt.IsZero() {
+					msg.sessions[i].UpdatedAt = existing.UpdatedAt
+				}
+				if msg.sessions[i].CreatedAt.IsZero() && !existing.CreatedAt.IsZero() {
+					msg.sessions[i].CreatedAt = existing.CreatedAt
+				}
+			}
+			_ = m.db.Save(ctx, &msg.sessions[i])
+		}
+	}
+
+	// Merge: discovered sessions win for live state; DB fills in sessions
+	// from remotes we couldn't reach this scan. Sessions from scanned remotes
+	// that weren't discovered are dead — skip them.
+	seenID := make(map[string]bool)
+	seenTmux := make(map[string]bool)
+	merged := []domain.Session{}
+	for _, s := range msg.sessions {
+		if !shouldMergeDiscoveredSession(s, dbSessions) {
+			continue
+		}
+		if seenID[s.ID] {
+			continue
+		}
+		tk := ""
+		if s.TmuxSession != "" {
+			tk = s.RemoteHost + "\x00" + s.TmuxSession
+		}
+		if tk != "" && seenTmux[tk] {
+			continue
+		}
+
+		if dbSess, ok := dbSessions[s.ID]; ok {
+			if dbSess.WorkingDirectory != "" {
+				s.WorkingDirectory = dbSess.WorkingDirectory
+			}
+			if dbSess.RepoName != "" && (s.RepoName == "" || (!strings.Contains(s.RepoName, "/") && strings.Contains(dbSess.RepoName, "/"))) {
+				s.RepoName = dbSess.RepoName
+			}
+			if s.IssueKey == "" {
+				s.IssueKey = dbSess.IssueKey
+			}
+			if s.Branch == "" {
+				s.Branch = dbSess.Branch
+			}
+			if s.AgentName == "" {
+				s.AgentName = dbSess.AgentName
+			}
+			if s.AgentModel == "" {
+				s.AgentModel = dbSess.AgentModel
+			}
+			if s.WorktreePath == "" {
+				s.WorktreePath = dbSess.WorktreePath
+			}
+			if s.LocalPath == "" {
+				s.LocalPath = dbSess.LocalPath
+			}
+		}
+
+		merged = append(merged, s)
+		seenID[s.ID] = true
+		if tk != "" {
+			seenTmux[tk] = true
+		}
+	}
+	for id, s := range dbSessions {
+		if seenID[id] {
+			continue
+		}
+		tk := ""
+		if s.TmuxSession != "" {
+			tk = s.RemoteHost + "\x00" + s.TmuxSession
+		}
+		if tk != "" && seenTmux[tk] {
+			continue
+		}
+		// Skip sessions from remotes that were successfully scanned — they're dead
+		if s.RemoteHost != "" && msg.scannedHosts[s.RemoteHost] {
+			continue
+		}
+		merged = append(merged, s)
+		seenID[id] = true
+		if tk != "" {
+			seenTmux[tk] = true
+		}
+	}
+
+	// Re-attach background-creation placeholders — they exist only in
+	// memory and would otherwise be dropped by the discovery merge.
+	for _, cs := range m.creatingSessions {
+		if !seenID[cs.placeholder.ID] {
+			merged = append(merged, cs.placeholder)
+		}
+	}
+
+	m.allSessions = merged
+
+	// Update daemon status
+	for host := range msg.scannedHosts {
+		d, ok := m.daemons[host]
+		if !ok {
+			d = domain.Daemon{RemoteHost: host}
+		}
+		// Assume stopped unless found
+		d.Status = domain.DaemonStatusStopped
+
+		// If daemon is running, it will be in msg.sessions
+		for _, s := range msg.sessions {
+			if s.RemoteHost == host && s.TmuxSession == "aiman-trigger" {
+				d.Status = domain.DaemonStatusRunning
+				d.UpdatedAt = time.Now()
+				break
+			}
+		}
+		m.daemons[host] = d
+	}
+
+	m.applyRemoteFilter()
+	m.state = viewStateMain
+	return m, nil
+}
+
+func (m *Model) applyRecreateMutagen(msg recreateMutagenMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.lastError = fmt.Sprintf("Failed to recreate mutagen sync: %v", msg.err)
+		m.state = viewStateError
 		return m, nil
 	}
+
+	// Update the session in the list and the master session slice
+	items := m.list.Items()
+	for i, it := range items {
+		if sessItem, ok := it.(item); ok && sessItem.session.ID == msg.session.ID {
+			sessItem.session = msg.session
+			sessItem.syncStale = false
+			items[i] = sessItem
+			break
+		}
+	}
+	m.list.SetItems(items)
+	for i, s := range m.allSessions {
+		if s.ID == msg.session.ID {
+			m.allSessions[i] = msg.session
+			break
+		}
+	}
+	// The old health verdict is for the terminated sync — drop it and
+	// re-check so the stale marker clears (or reappears) promptly.
+	delete(m.syncHealth, msg.session.ID)
+
+	// Persist the updated session (with new sync ID and local path)
+	if m.db != nil {
+		ctx := context.Background()
+		_ = m.db.Save(ctx, &msg.session)
+	}
+
+	m.state = viewStateMain
+	return m, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...))
+}
+
+func (m *Model) applyTmuxTerminal(msg tmuxTerminalMsg) (tea.Model, tea.Cmd) {
+	// Don't interrupt an in-progress restart with a stale terminal stream.
+	if m.restartingSession != nil {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
+		m.panelMode = panelModePreview
+		m.state = viewStateMain
+		return m, nil
+	}
+	m.termCloser = msg.stream
+	term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
+	m.terminal = &term
+	m.panelMode = panelModeTerminal
+	m.state = viewStateMain
+	return m, nil
+}
+
+func (m *Model) applyScanAgents(msg agent.ScanAgentsMsg) (tea.Model, tea.Cmd) {
+	_ = appendDebugLog(fmt.Sprintf("[ui %s] ScanAgentsMsg: err=%v agents=%d state=%d loadingNext=%d\n", time.Now().Format("15:04:05.000"), msg.Err, len(msg.Agents), m.state, m.loadingNext))
+	if msg.Err != nil {
+		m.lastError = fmt.Sprintf("Failed to scan agents: %v", msg.Err)
+		m.state = viewStateError
+		return m, nil
+	}
+	m.agentPicker = NewAgentPickerModel(msg.Agents)
+	h, v := docStyle.GetFrameSize()
+	m.agentPicker.SetSize(m.width-h, m.height-v)
+	m.state = m.loadingNext
 	return m, nil
 }
 
@@ -6109,260 +6266,9 @@ func (m *Model) renderMainView() string {
 	// Main Panel
 	var mainContent string
 	if m.currentTab == tabSessions {
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			contentW := mainWidth - 4
-			if contentW < 20 {
-				contentW = 20
-			}
-
-			maxPath := min(contentW, 80)
-			wtDisp := truncateRunes(s.WorktreePath, maxPath)
-			sum := fmt.Sprintf("%s · %s · %s · %s", s.TmuxSession, s.RemoteHost, s.RepoName, s.Status)
-			sum = truncateRunes(sum, max(10, contentW-12))
-			sessionLines := []string{
-				activeStyle.Render("Session") + "  " + sum,
-				wtDisp,
-			}
-			var meta []string
-			if s.WorkingDirectory != "" && s.WorkingDirectory != s.WorktreePath {
-				scope := s.WorkingDirectory
-				if strings.HasPrefix(scope, s.WorktreePath) {
-					scope = "." + strings.TrimPrefix(scope, s.WorktreePath)
-				}
-				meta = append(meta, truncateRunes(scope, 28))
-			}
-			if s.MutagenSyncID != "" {
-				if h, tracked := m.syncHealth[s.ID]; tracked && h.stale {
-					meta = append(meta, failStyle.Render("⚠ sync STALE: "+truncateRunes(h.reason, 40))+statusStyle.Render(" ctrl+y to recreate"))
-				} else if tracked && h.status != "" {
-					meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32))+statusStyle.Render(" ("+truncateRunes(h.status, 24)+")"))
-				} else {
-					meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32)))
-				}
-			} else {
-				meta = append(meta, failStyle.Render("no sync"))
-			}
-			if s.IssueKey != "" {
-				meta = append(meta, s.IssueKey)
-			}
-			if len(s.Tunnels) > 0 {
-				meta = append(meta, fmt.Sprintf("tunnels:%d", len(s.Tunnels)))
-			}
-			meta = append(meta, s.CreatedAt.Format("2006-01-02 15:04"))
-			sessionLines = append(sessionLines, strings.Join(meta, " · "))
-
-			var gitLines []string
-			if m.gitStatus.Branch == "" {
-				gitLines = append(gitLines, activeStyle.Render("Git")+"  "+statusStyle.Render("Loading…"))
-			} else {
-				br := m.gitStatus.Branch
-				if m.gitStatus.Ahead > 0 || m.gitStatus.Behind > 0 {
-					br += fmt.Sprintf(" ↑%d↓%d", m.gitStatus.Ahead, m.gitStatus.Behind)
-				}
-				var ch string
-				if m.gitStatus.StagedCount > 0 || m.gitStatus.UnstagedCount > 0 || m.gitStatus.UntrackedCount > 0 {
-					ch = fmt.Sprintf("%ds · %du · %d?",
-						m.gitStatus.StagedCount, m.gitStatus.UnstagedCount, m.gitStatus.UntrackedCount)
-				} else {
-					ch = "clean"
-				}
-				gitHead := activeStyle.Render("Git") + "  " + br + " · " + ch
-				if !m.lastGitStatusUpdate.IsZero() {
-					gitHead += statusStyle.Render(" · PR@" + m.lastGitStatusUpdate.Format("15:04:05"))
-				}
-				gitLines = append(gitLines, gitHead)
-
-				if pr := m.gitStatus.PullRequest; pr != nil {
-					stateLabel := pr.DisplayState
-					if stateLabel == "" {
-						stateLabel = strings.ToLower(pr.State)
-					}
-					titleMax := contentW - 24
-					if titleMax < 14 {
-						titleMax = 14
-					}
-					prLine := fmt.Sprintf("  #%d %s · %s", pr.Number, truncateRunes(pr.Title, titleMax), strings.ToUpper(stateLabel))
-					if pr.IsDraft {
-						prLine += " · draft"
-					}
-					if pr.Merged {
-						prLine += " · merged"
-					}
-					if pr.CommentCount > 0 {
-						prLine += fmt.Sprintf(" · %dc", pr.CommentCount)
-					}
-					gitLines = append(gitLines, truncateRunes(prLine, contentW))
-
-					revKey := pr.ReviewStatus
-					if revKey == "" && pr.ReviewDecision != "" {
-						revKey = strings.ToLower(pr.ReviewDecision)
-					}
-					revLabel := "R:" + revKey
-					if revLabel == "R:" {
-						revLabel = "R:—"
-					}
-					effRev := pr.ReviewStatus
-					if effRev == "" {
-						switch strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)) {
-						case "APPROVED":
-							effRev = "approved"
-						case "CHANGES_REQUESTED":
-							effRev = "changes_requested"
-						}
-					}
-					revStyled := lipgloss.NewStyle().Foreground(prReviewForeground(effRev)).Render(revLabel)
-
-					var thStyled string
-					if pr.UnresolvedReviewThreads >= 0 {
-						thStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D7D7D"))
-						if pr.UnresolvedReviewThreads > 0 {
-							thStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500"))
-						}
-						thStyled = thStyle.Render(fmt.Sprintf("threads:%d", pr.UnresolvedReviewThreads))
-					} else {
-						thStyled = statusStyle.Render("threads:?")
-					}
-
-					mergeColor := lipgloss.Color("#7D7D7D")
-					mergeTxt := "merge:?"
-					switch strings.ToUpper(strings.TrimSpace(pr.Mergeable)) {
-					case "CONFLICTING":
-						mergeColor = lipgloss.Color("#FF0000")
-						mergeTxt = "merge:conflict"
-					case "MERGEABLE":
-						mergeColor = lipgloss.Color("#00FF00")
-						mergeTxt = "merge:ok"
-					case "UNKNOWN":
-						mergeTxt = "merge:…"
-					}
-					if pr.HasMergeConflict || strings.EqualFold(pr.MergeStateStatus, "DIRTY") {
-						mergeColor = lipgloss.Color("#FF0000")
-						mergeTxt = "merge:dirty"
-					}
-					mergeStyled := lipgloss.NewStyle().Foreground(mergeColor).Render(mergeTxt)
-
-					var parts []string
-					parts = append(parts, revStyled, thStyled, mergeStyled)
-					if pr.ChecksStatus != "none" && pr.ChecksSummary != "" {
-						chkColor := lipgloss.Color("#7D7D7D")
-						switch pr.ChecksStatus {
-						case "success":
-							chkColor = lipgloss.Color("#00FF00")
-						case "failure":
-							chkColor = lipgloss.Color("#FF0000")
-						case "pending":
-							chkColor = lipgloss.Color("#FFA500")
-						}
-						parts = append(parts, lipgloss.NewStyle().Foreground(chkColor).Render("CI:"+pr.ChecksSummary))
-					}
-					gitLines = append(gitLines, "  "+strings.Join(parts, "  "))
-				} else {
-					gitLines = append(gitLines, "  "+statusStyle.Render("No open PR (or gh unavailable)"))
-				}
-			}
-
-			sep := statusStyle.Render(strings.Repeat("─", contentW))
-			infoRaw := strings.Join(sessionLines, "\n") + "\n" + sep + "\n" + strings.Join(gitLines, "\n")
-			infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
-
-			// AI insight panel — shown below git status when available or loading
-			aiPanel := m.renderAIPanel(s, contentW)
-
-			// Snapshot toast
-			snapshotBar := ""
-			if m.snapshotToast != "" {
-				toastStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-				if m.snapshotToastError {
-					toastStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-				}
-				snapshotBar = "\n" + toastStyle.Render(m.snapshotToast) + "\n"
-			}
-
-			var outputPanel strings.Builder
-			outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
-			modeName := "Preview"
-			if m.panelMode == panelModeTerminal {
-				modeName = "Terminal"
-			}
-			scrollHint := ""
-			if m.panelMode == panelModePreview {
-				scrollHint = "  " + statusStyle.Render("[/] scroll")
-			}
-			outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
-
-			if m.panelMode == panelModeTerminal && m.terminal != nil {
-				outputPanel.WriteString(m.terminal.View())
-			} else {
-				outputPanel.WriteString(m.viewport.View())
-			}
-
-			if cs, creating := m.creatingSessions[s.ID]; creating {
-				// Background creation in progress (or failed): the preview panel
-				// shows the verbose creation steps instead of session panels.
-				mainContent = m.renderCreatingPanel(cs, contentW) + snapshotBar
-			} else if ts, terminating := m.terminatingSessions[s.ID]; terminating {
-				// Background termination: show step progress in the preview panel.
-				mainContent = m.renderTerminatingPanel(ts, contentW) + snapshotBar
-			} else {
-				mainContent = infoPanel + aiPanel + snapshotBar + outputPanel.String()
-			}
-		}
+		mainContent = m.renderSessionPanel(mainWidth)
 	} else if m.currentTab == tabDaemons {
-		if sel := m.daemonList.SelectedItem(); sel != nil {
-			d := sel.(daemonItem).daemon
-			contentW := mainWidth - 4
-			if contentW < 20 {
-				contentW = 20
-			}
-
-			statusLabel := string(d.Status)
-			if d.Status == domain.DaemonStatusRunning {
-				statusLabel = successStyle.Render(statusLabel)
-			} else if d.Status == domain.DaemonStatusStopped {
-				statusLabel = failStyle.Render(statusLabel)
-			}
-
-			daemonLines := []string{
-				activeStyle.Render("Daemon") + "  " + d.RemoteHost,
-				"Status: " + statusLabel,
-			}
-			if !d.UpdatedAt.IsZero() {
-				daemonLines = append(daemonLines, "Last Seen: "+d.UpdatedAt.Format("15:04:05"))
-			}
-
-			var managed []string
-			for _, s := range m.allSessions {
-				if s.RemoteHost == d.RemoteHost && s.Mode == domain.SessionModeAutonomous {
-					managed = append(managed, fmt.Sprintf("- %s (%s)", s.IssueKey, s.Status))
-				}
-			}
-			if len(managed) > 0 {
-				daemonLines = append(daemonLines, "")
-				daemonLines = append(daemonLines, activeStyle.Render("Managed Sessions:"))
-				daemonLines = append(daemonLines, managed...)
-			} else {
-				daemonLines = append(daemonLines, "")
-				daemonLines = append(daemonLines, "No active autonomous sessions.")
-			}
-
-			sep := statusStyle.Render(strings.Repeat("─", contentW))
-			infoRaw := strings.Join(daemonLines, "\n") + "\n" + sep + "\n"
-			infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
-
-			var outputPanel strings.Builder
-			outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
-			outputPanel.WriteString(statusStyle.Render("Live Logs (aiman-trigger)") + "\n")
-			if d.Status == domain.DaemonStatusRunning {
-				outputPanel.WriteString(m.viewport.View())
-			} else {
-				outputPanel.WriteString("\n  Daemon is not running. Live logs unavailable.")
-			}
-
-			mainContent = infoPanel + outputPanel.String()
-		} else {
-			mainContent = "\n\n  No daemon selected."
-		}
+		mainContent = m.renderDaemonPanel(mainWidth)
 	}
 
 	if mainContent == "" {
@@ -6435,6 +6341,275 @@ func (m *Model) renderMainView() string {
 		body = banner + "\n" + body
 	}
 	return docStyle.Render(body)
+}
+
+// renderSessionPanel builds the right-hand panel for the currently selected row.
+func (m *Model) renderSessionPanel(mainWidth int) string {
+	var mainContent string
+	if sel := m.list.SelectedItem(); sel != nil {
+		s := sel.(item).session
+		contentW := mainWidth - 4
+		if contentW < 20 {
+			contentW = 20
+		}
+
+		maxPath := min(contentW, 80)
+		wtDisp := truncateRunes(s.WorktreePath, maxPath)
+		sum := fmt.Sprintf("%s · %s · %s · %s", s.TmuxSession, s.RemoteHost, s.RepoName, s.Status)
+		sum = truncateRunes(sum, max(10, contentW-12))
+		sessionLines := []string{
+			activeStyle.Render("Session") + "  " + sum,
+			wtDisp,
+		}
+		var meta []string
+		if s.WorkingDirectory != "" && s.WorkingDirectory != s.WorktreePath {
+			scope := s.WorkingDirectory
+			if strings.HasPrefix(scope, s.WorktreePath) {
+				scope = "." + strings.TrimPrefix(scope, s.WorktreePath)
+			}
+			meta = append(meta, truncateRunes(scope, 28))
+		}
+		if s.MutagenSyncID != "" {
+			if h, tracked := m.syncHealth[s.ID]; tracked && h.stale {
+				meta = append(meta, failStyle.Render("⚠ sync STALE: "+truncateRunes(h.reason, 40))+statusStyle.Render(" ctrl+y to recreate"))
+			} else if tracked && h.status != "" {
+				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32))+statusStyle.Render(" ("+truncateRunes(h.status, 24)+")"))
+			} else {
+				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32)))
+			}
+		} else {
+			meta = append(meta, failStyle.Render("no sync"))
+		}
+		if s.IssueKey != "" {
+			meta = append(meta, s.IssueKey)
+		}
+		if len(s.Tunnels) > 0 {
+			meta = append(meta, fmt.Sprintf("tunnels:%d", len(s.Tunnels)))
+		}
+		meta = append(meta, s.CreatedAt.Format("2006-01-02 15:04"))
+		sessionLines = append(sessionLines, strings.Join(meta, " · "))
+
+		gitLines := m.renderGitLines(contentW)
+
+		sep := statusStyle.Render(strings.Repeat("─", contentW))
+		infoRaw := strings.Join(sessionLines, "\n") + "\n" + sep + "\n" + strings.Join(gitLines, "\n")
+		infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
+
+		// AI insight panel — shown below git status when available or loading
+		aiPanel := m.renderAIPanel(s, contentW)
+
+		// Snapshot toast
+		snapshotBar := ""
+		if m.snapshotToast != "" {
+			toastStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+			if m.snapshotToastError {
+				toastStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+			}
+			snapshotBar = "\n" + toastStyle.Render(m.snapshotToast) + "\n"
+		}
+
+		var outputPanel strings.Builder
+		outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
+		modeName := "Preview"
+		if m.panelMode == panelModeTerminal {
+			modeName = "Terminal"
+		}
+		scrollHint := ""
+		if m.panelMode == panelModePreview {
+			scrollHint = "  " + statusStyle.Render("[/] scroll")
+		}
+		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
+
+		if m.panelMode == panelModeTerminal && m.terminal != nil {
+			outputPanel.WriteString(m.terminal.View())
+		} else {
+			outputPanel.WriteString(m.viewport.View())
+		}
+
+		if cs, creating := m.creatingSessions[s.ID]; creating {
+			// Background creation in progress (or failed): the preview panel
+			// shows the verbose creation steps instead of session panels.
+			mainContent = m.renderCreatingPanel(cs, contentW) + snapshotBar
+		} else if ts, terminating := m.terminatingSessions[s.ID]; terminating {
+			// Background termination: show step progress in the preview panel.
+			mainContent = m.renderTerminatingPanel(ts, contentW) + snapshotBar
+		} else {
+			mainContent = infoPanel + aiPanel + snapshotBar + outputPanel.String()
+		}
+	}
+	return mainContent
+}
+
+// renderGitLines builds the git and pull-request rows of the session panel.
+func (m *Model) renderGitLines(contentW int) []string {
+	var gitLines []string
+	if m.gitStatus.Branch == "" {
+		gitLines = append(gitLines, activeStyle.Render("Git")+"  "+statusStyle.Render("Loading…"))
+	} else {
+		br := m.gitStatus.Branch
+		if m.gitStatus.Ahead > 0 || m.gitStatus.Behind > 0 {
+			br += fmt.Sprintf(" ↑%d↓%d", m.gitStatus.Ahead, m.gitStatus.Behind)
+		}
+		var ch string
+		if m.gitStatus.StagedCount > 0 || m.gitStatus.UnstagedCount > 0 || m.gitStatus.UntrackedCount > 0 {
+			ch = fmt.Sprintf("%ds · %du · %d?",
+				m.gitStatus.StagedCount, m.gitStatus.UnstagedCount, m.gitStatus.UntrackedCount)
+		} else {
+			ch = "clean"
+		}
+		gitHead := activeStyle.Render("Git") + "  " + br + " · " + ch
+		if !m.lastGitStatusUpdate.IsZero() {
+			gitHead += statusStyle.Render(" · PR@" + m.lastGitStatusUpdate.Format("15:04:05"))
+		}
+		gitLines = append(gitLines, gitHead)
+
+		if pr := m.gitStatus.PullRequest; pr != nil {
+			stateLabel := pr.DisplayState
+			if stateLabel == "" {
+				stateLabel = strings.ToLower(pr.State)
+			}
+			titleMax := contentW - 24
+			if titleMax < 14 {
+				titleMax = 14
+			}
+			prLine := fmt.Sprintf("  #%d %s · %s", pr.Number, truncateRunes(pr.Title, titleMax), strings.ToUpper(stateLabel))
+			if pr.IsDraft {
+				prLine += " · draft"
+			}
+			if pr.Merged {
+				prLine += " · merged"
+			}
+			if pr.CommentCount > 0 {
+				prLine += fmt.Sprintf(" · %dc", pr.CommentCount)
+			}
+			gitLines = append(gitLines, truncateRunes(prLine, contentW))
+
+			revKey := pr.ReviewStatus
+			if revKey == "" && pr.ReviewDecision != "" {
+				revKey = strings.ToLower(pr.ReviewDecision)
+			}
+			revLabel := "R:" + revKey
+			if revLabel == "R:" {
+				revLabel = "R:—"
+			}
+			effRev := pr.ReviewStatus
+			if effRev == "" {
+				switch strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)) {
+				case "APPROVED":
+					effRev = "approved"
+				case "CHANGES_REQUESTED":
+					effRev = "changes_requested"
+				}
+			}
+			revStyled := lipgloss.NewStyle().Foreground(prReviewForeground(effRev)).Render(revLabel)
+
+			var thStyled string
+			if pr.UnresolvedReviewThreads >= 0 {
+				thStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D7D7D"))
+				if pr.UnresolvedReviewThreads > 0 {
+					thStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500"))
+				}
+				thStyled = thStyle.Render(fmt.Sprintf("threads:%d", pr.UnresolvedReviewThreads))
+			} else {
+				thStyled = statusStyle.Render("threads:?")
+			}
+
+			mergeColor := lipgloss.Color("#7D7D7D")
+			mergeTxt := "merge:?"
+			switch strings.ToUpper(strings.TrimSpace(pr.Mergeable)) {
+			case "CONFLICTING":
+				mergeColor = lipgloss.Color("#FF0000")
+				mergeTxt = "merge:conflict"
+			case "MERGEABLE":
+				mergeColor = lipgloss.Color("#00FF00")
+				mergeTxt = "merge:ok"
+			case "UNKNOWN":
+				mergeTxt = "merge:…"
+			}
+			if pr.HasMergeConflict || strings.EqualFold(pr.MergeStateStatus, "DIRTY") {
+				mergeColor = lipgloss.Color("#FF0000")
+				mergeTxt = "merge:dirty"
+			}
+			mergeStyled := lipgloss.NewStyle().Foreground(mergeColor).Render(mergeTxt)
+
+			var parts []string
+			parts = append(parts, revStyled, thStyled, mergeStyled)
+			if pr.ChecksStatus != "none" && pr.ChecksSummary != "" {
+				chkColor := lipgloss.Color("#7D7D7D")
+				switch pr.ChecksStatus {
+				case "success":
+					chkColor = lipgloss.Color("#00FF00")
+				case "failure":
+					chkColor = lipgloss.Color("#FF0000")
+				case "pending":
+					chkColor = lipgloss.Color("#FFA500")
+				}
+				parts = append(parts, lipgloss.NewStyle().Foreground(chkColor).Render("CI:"+pr.ChecksSummary))
+			}
+			gitLines = append(gitLines, "  "+strings.Join(parts, "  "))
+		} else {
+			gitLines = append(gitLines, "  "+statusStyle.Render("No open PR (or gh unavailable)"))
+		}
+	}
+	return gitLines
+}
+
+// renderDaemonPanel builds the right-hand panel for the currently selected row.
+func (m *Model) renderDaemonPanel(mainWidth int) string {
+	var mainContent string
+	if sel := m.daemonList.SelectedItem(); sel != nil {
+		d := sel.(daemonItem).daemon
+		contentW := mainWidth - 4
+		if contentW < 20 {
+			contentW = 20
+		}
+
+		statusLabel := string(d.Status)
+		if d.Status == domain.DaemonStatusRunning {
+			statusLabel = successStyle.Render(statusLabel)
+		} else if d.Status == domain.DaemonStatusStopped {
+			statusLabel = failStyle.Render(statusLabel)
+		}
+
+		daemonLines := []string{
+			activeStyle.Render("Daemon") + "  " + d.RemoteHost,
+			"Status: " + statusLabel,
+		}
+		if !d.UpdatedAt.IsZero() {
+			daemonLines = append(daemonLines, "Last Seen: "+d.UpdatedAt.Format("15:04:05"))
+		}
+
+		var managed []string
+		for _, s := range m.allSessions {
+			if s.RemoteHost == d.RemoteHost && s.Mode == domain.SessionModeAutonomous {
+				managed = append(managed, fmt.Sprintf("- %s (%s)", s.IssueKey, s.Status))
+			}
+		}
+		if len(managed) > 0 {
+			daemonLines = append(daemonLines, "", activeStyle.Render("Managed Sessions:"))
+			daemonLines = append(daemonLines, managed...)
+		} else {
+			daemonLines = append(daemonLines, "", "No active autonomous sessions.")
+		}
+
+		sep := statusStyle.Render(strings.Repeat("─", contentW))
+		infoRaw := strings.Join(daemonLines, "\n") + "\n" + sep + "\n"
+		infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
+
+		var outputPanel strings.Builder
+		outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
+		outputPanel.WriteString(statusStyle.Render("Live Logs (aiman-trigger)") + "\n")
+		if d.Status == domain.DaemonStatusRunning {
+			outputPanel.WriteString(m.viewport.View())
+		} else {
+			outputPanel.WriteString("\n  Daemon is not running. Live logs unavailable.")
+		}
+
+		mainContent = infoPanel + outputPanel.String()
+	} else {
+		mainContent = "\n\n  No daemon selected."
+	}
+	return mainContent
 }
 
 // renderAWSCredExpiryBanner warns when any delegated AWS credential is within

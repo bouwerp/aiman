@@ -137,11 +137,11 @@ func (m TerminalModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		if m.rw != nil {
 			var b []byte
-			switch msg.Type {
-			case tea.MouseWheelUp:
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
 				// Send 10 arrow up for wheel up
 				b = []byte("\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A")
-			case tea.MouseWheelDown:
+			case tea.MouseButtonWheelDown:
 				// Send 10 arrow down for wheel down
 				b = []byte("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B")
 			}

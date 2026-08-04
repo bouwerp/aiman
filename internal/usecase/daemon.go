@@ -42,14 +42,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 			log.Println("Daemon shutting down...")
 			return nil
 		case <-ticker.C:
-			if err := d.poll(ctx); err != nil {
-				log.Printf("Error during poll cycle: %v", err)
-			}
+			d.poll(ctx)
 		}
 	}
 }
 
-func (d *Daemon) poll(ctx context.Context) error {
+// poll runs one cycle of every polling duty. Each step logs and swallows its own
+// failure so one bad source cannot stop the others, which is why nothing is returned.
+func (d *Daemon) poll(ctx context.Context) {
 	// 1. Poll GitHub Issues
 	if err := d.pollGitHub(ctx); err != nil {
 		log.Printf("GitHub polling error: %v", err)
@@ -64,8 +64,6 @@ func (d *Daemon) poll(ctx context.Context) error {
 	if err := d.pollScheduledPrompts(ctx); err != nil {
 		log.Printf("Scheduled prompt polling error: %v", err)
 	}
-
-	return nil
 }
 
 func (d *Daemon) pollGitHub(ctx context.Context) error {
@@ -287,7 +285,10 @@ func (d *Daemon) pollScheduledPrompts(ctx context.Context) error {
 			d.triggerPrompt(ctx, &p)
 
 			p.LastRunAt = now
-			d.db.SaveScheduledPrompt(ctx, &p)
+			if err := d.db.SaveScheduledPrompt(ctx, &p); err != nil {
+				// Not fatal, but the prompt will fire again next tick without this.
+				log.Printf("Failed to record run time for scheduled prompt %s: %v", p.ID, err)
+			}
 		}
 	}
 	return nil

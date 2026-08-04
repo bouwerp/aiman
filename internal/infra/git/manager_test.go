@@ -786,12 +786,13 @@ func TestDetectBaseBranch_EmptyRepoReturnsEmpty(t *testing.T) {
 	}
 }
 
-func runGit(t *testing.T, dir string, args ...string) string {
+// runGit runs a git command in dir, failing the test if it errors. Callers only care that
+// it succeeded, so no output is returned.
+func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(out))
 	}
-	return strings.TrimSpace(string(out))
 }

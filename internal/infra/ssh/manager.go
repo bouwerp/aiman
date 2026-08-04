@@ -2,7 +2,7 @@ package ssh
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -50,8 +50,11 @@ func (m *Manager) controlPath() string {
 	return filepath.Join(home, ".aiman", "sockets", "ssh-"+targetHash+".sock")
 }
 
+// shortTargetHash derives a short, filesystem-safe name for an SSH target so the
+// ControlMaster socket path stays under the OS length limit. This is a naming device, not
+// a security boundary — nothing is authenticated by the digest.
 func shortTargetHash(target string) string {
-	sum := sha1.Sum([]byte(target))
+	sum := sha256.Sum256([]byte(target))
 	// 16 hex chars is compact while still collision-resistant enough for this use.
 	return hex.EncodeToString(sum[:8])
 }

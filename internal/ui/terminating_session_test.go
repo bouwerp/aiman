@@ -43,6 +43,7 @@ func TestBackgroundTerminate_ConfirmReturnsToMain(t *testing.T) {
 	ts := model.terminatingSessions[s.ID]
 	if ts == nil {
 		t.Fatal("expected termination to be tracked")
+		return
 	}
 	if ts.forced {
 		t.Error("'y' must not force-terminate")

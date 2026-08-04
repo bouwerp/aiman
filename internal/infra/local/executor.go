@@ -31,7 +31,7 @@ func (e *Executor) WriteFile(ctx context.Context, path string, content []byte) e
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, content, 0644)
+	return os.WriteFile(path, content, 0600)
 }
 
 func (e *Executor) ValidateDir(ctx context.Context, path string) error     { return nil }

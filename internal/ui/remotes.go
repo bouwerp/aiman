@@ -900,8 +900,7 @@ func (m RemotesModel) updateResult(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case awsAccountLookupMsg:
+	if msg, ok := msg.(awsAccountLookupMsg); ok {
 		m.awsAccountResolving = false
 		if msg.err != nil {
 			m.awsAccountLookupErr = msg.err.Error()

@@ -58,13 +58,10 @@ func (m *IssuePickerModel) SetSize(width, height int) {
 }
 
 func (m IssuePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
-		switch msg.String() {
-		case "enter":
-			if i, ok := m.list.SelectedItem().(jiraItem); ok {
-				m.selected = &i.issue
-				return m, nil
-			}
+	if msg, ok := msg.(tea.KeyMsg); ok && msg.String() == "enter" {
+		if i, ok := m.list.SelectedItem().(jiraItem); ok {
+			m.selected = &i.issue
+			return m, nil
 		}
 	}
 

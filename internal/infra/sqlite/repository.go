@@ -72,6 +72,8 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, err
 	}
 
+	// #nosec G101 -- DDL for the secrets table; the detector matches the variable name,
+	// and no credential appears here.
 	secretsQuery := `
 	CREATE TABLE IF NOT EXISTS secrets (
 		key TEXT PRIMARY KEY,

@@ -58,8 +58,7 @@ func (m EC2SetupModel) Init() tea.Cmd {
 }
 
 func (m EC2SetupModel) Update(msg tea.Msg) (EC2SetupModel, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "esc":
 			return m, nil

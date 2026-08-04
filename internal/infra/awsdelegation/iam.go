@@ -17,6 +17,8 @@ import (
 const passthroughPolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
 
 // passthroughPolicyName is the inline policy name stored on the managed role.
+// #nosec G101 -- an IAM inline policy name, not a credential; "pass" in the identifier
+// is what trips the detector.
 const passthroughPolicyName = "aiman-passthrough"
 
 // EnsureRole creates the IAM role identified by accountID+roleName if it does

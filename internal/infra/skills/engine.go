@@ -62,6 +62,8 @@ func (e *Engine) Sync(ctx context.Context) error {
 		if err := os.MkdirAll(filepath.Dir(skillsPath), 0755); err != nil {
 			return fmt.Errorf("failed to create skills directory: %w", err)
 		}
+		// #nosec G204 -- the repo comes from this user's own config and is passed as a
+		// discrete argv entry, so there is no shell for it to escape into.
 		cmd := exec.CommandContext(ctx, "git", "clone", e.cfg.Skills.Repo, skillsPath)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to clone skills repo: %w\nOutput: %s", err, string(output))
@@ -190,59 +192,56 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 
 	var result domain.PreparedSession
 
-	// For Claude Code
-	if strings.Contains(name, "claude") {
-		result, err = e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
-	} else if strings.Contains(name, "antigravity") || baseCommand == "agy" {
-		// For Antigravity
-		result, err = e.prepareAntigravity(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
-	} else if strings.Contains(name, "opencode") {
-		// For OpenCode
-		cmd := agent.Command
-		result = domain.PreparedSession{Command: cmd}
+	// bareSession covers agents that need nothing but their command, carrying the initial
+	// prompt only when there is an issue to describe.
+	bareSession := func(command string) domain.PreparedSession {
+		ps := domain.PreparedSession{Command: command}
 		if issue != nil {
-			result.InitialPrompt = initialPrompt
+			ps.InitialPrompt = initialPrompt
 		}
-	} else if strings.Contains(name, "ageni") || baseCommand == "ageni" {
-		// For Ageni
+		return ps
+	}
+
+	// Each agent gets the launch command and prompt handling it needs. The switch is
+	// ordered most-specific first; the default covers agents that just take a bare command.
+	switch {
+	case strings.Contains(name, "claude"):
+		result, err = e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+
+	case strings.Contains(name, "antigravity") || baseCommand == "agy":
+		result, err = e.prepareAntigravity(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+
+	case strings.Contains(name, "opencode"):
+		result = bareSession(agent.Command)
+
+	case strings.Contains(name, "ageni") || baseCommand == "ageni":
 		result, err = e.prepareAgeni(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
-	} else if strings.Contains(name, "grok") || baseCommand == "grok" || baseCommand == "grok-build" {
-		// For Grok Build CLI
+
+	case strings.Contains(name, "grok") || baseCommand == "grok" || baseCommand == "grok-build":
 		result, err = e.prepareGrok(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
-	} else if strings.Contains(name, "codex") || baseCommand == "codex" {
-		// For OpenAI Codex CLI
+
+	case strings.Contains(name, "codex") || baseCommand == "codex":
 		result, err = e.prepareCodex(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
-	} else if strings.Contains(name, "cursor") {
-		// For Cursor
+
+	case strings.Contains(name, "cursor"):
 		cmd := agent.Command
 		if promptFree {
 			cmd = fmt.Sprintf("%s --force .", cmd)
 		} else {
 			cmd = fmt.Sprintf("%s .", cmd)
 		}
-		result = domain.PreparedSession{Command: cmd}
-		if issue != nil {
-			result.InitialPrompt = initialPrompt
-		}
-	} else if strings.Contains(name, "copilot") || strings.Contains(strings.ToLower(agent.Command), "copilot") {
-		// For GitHub Copilot CLI
-		cmd := agent.Command
+		result = bareSession(cmd)
+
+	case strings.Contains(name, "copilot") || strings.Contains(strings.ToLower(agent.Command), "copilot"):
 		// Always allow all tools/paths/URLs so permission prompts don't block an autonomous session.
-		cmd = fmt.Sprintf("%s --allow-all", cmd)
+		cmd := fmt.Sprintf("%s --allow-all", agent.Command)
 		if promptFree {
 			cmd = fmt.Sprintf("%s --autopilot", cmd)
 		}
-		result = domain.PreparedSession{Command: cmd}
-		if issue != nil {
-			result.InitialPrompt = initialPrompt
-		}
-	} else {
-		// Default
-		cmd := agent.Command
-		result = domain.PreparedSession{Command: cmd}
-		if issue != nil {
-			result.InitialPrompt = initialPrompt
-		}
+		result = bareSession(cmd)
+
+	default:
+		result = bareSession(agent.Command)
 	}
 	if err != nil {
 		return domain.PreparedSession{}, err

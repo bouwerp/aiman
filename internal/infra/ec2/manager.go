@@ -55,10 +55,6 @@ func (m *Manager) LaunchInstance(ctx context.Context, spec domain.EC2LaunchSpec)
 	if instanceType == "" {
 		instanceType = "t3.large"
 	}
-	diskGB := spec.DiskGB
-	if diskGB <= 0 {
-		diskGB = 30
-	}
 	tagName := spec.TagName
 	if tagName == "" {
 		tagName = fmt.Sprintf("aiman-loop-%d", time.Now().Unix())
@@ -73,16 +69,13 @@ func (m *Manager) LaunchInstance(ctx context.Context, spec domain.EC2LaunchSpec)
 		}
 		amiID = resolvedAMI
 		rootDeviceName = resolvedRoot
-	} else {
-		// If AMI is provided, we should look up its root device name if DiskGB > 0
-		if spec.DiskGB > 0 {
-			resolvedRoot, err := m.getRootDeviceName(ctx, spec.AWSProfile, region, amiID)
-			if err == nil {
-				rootDeviceName = resolvedRoot
-			} else {
-				rootDeviceName = "/dev/sda1" // fallback
-			}
+	} else if spec.DiskGB > 0 {
+		// A caller-supplied AMI still needs its root device name to attach a sized volume.
+		resolvedRoot, err := m.getRootDeviceName(ctx, spec.AWSProfile, region, amiID)
+		if err != nil {
+			resolvedRoot = "/dev/sda1" // fallback
 		}
+		rootDeviceName = resolvedRoot
 	}
 
 	args := []string{

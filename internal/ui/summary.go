@@ -119,7 +119,7 @@ func (m *SummaryModel) SetOpenRouterKey(key string) {
 			filtered = append(filtered, in)
 		}
 	}
-	m.inputs = append(filtered, orInput)
+	m.inputs = append(filtered, orInput) //nolint:gocritic // filtered is a fresh slice built above, not an alias of m.inputs
 }
 
 func (m SummaryModel) Init() tea.Cmd {

@@ -33,14 +33,10 @@ func (m TextInputModel) Init() tea.Cmd {
 func (m TextInputModel) Update(msg tea.Msg) (TextInputModel, tea.Cmd) {
 	var cmd tea.Cmd
 
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyEnter:
-			if m.textInput.Value() != "" {
-				m.Confirmed = true
-				return m, nil
-			}
+	if km, ok := msg.(tea.KeyMsg); ok && km.Type == tea.KeyEnter {
+		if m.textInput.Value() != "" {
+			m.Confirmed = true
+			return m, nil
 		}
 	}
 

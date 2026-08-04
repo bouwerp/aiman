@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -22,9 +23,15 @@ import (
 var version = "dev"
 var buildTime = ""
 
+// errUsage signals that usage has already been written to stderr and the process should
+// exit non-zero without an additional "Error:" line.
+var errUsage = errors.New("usage")
+
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if !errors.Is(err, errUsage) {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -126,7 +133,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  schedule         schedule a prompt to be injected into a session\n")
 			fmt.Fprintf(os.Stderr, "  ec2-loop         launch autonomous loop agent on an on-demand EC2 instance\n")
 			fmt.Fprintf(os.Stderr, "  clear-aws-profiles  clear legacy aiman-* AWS profile names from stored sessions\n")
-			os.Exit(1)
+			return errUsage
 		}
 	}
 

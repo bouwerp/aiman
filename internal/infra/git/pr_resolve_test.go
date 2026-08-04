@@ -99,6 +99,7 @@ func TestDomainViewToPullRequest_ChecksFromConclusion(t *testing.T) {
 	pr := domainViewToPullRequest(v)
 	if pr == nil {
 		t.Fatal("expected PR")
+		return
 	}
 	if pr.ChecksSummary != "2/3 passed" {
 		t.Fatalf("got summary %q, want %q", pr.ChecksSummary, "2/3 passed")

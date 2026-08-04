@@ -319,7 +319,7 @@ func makeSecretInputs() []textinput.Model {
 
 // isValidEnvKey returns true if s is a valid POSIX env var name.
 func isValidEnvKey(s string) bool {
-	if len(s) == 0 {
+	if s == "" {
 		return false
 	}
 	for i, c := range s {

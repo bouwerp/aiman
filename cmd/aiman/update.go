@@ -112,6 +112,8 @@ func platformAssetName() string {
 
 // downloadBinary downloads a .tar.gz asset and extracts the named binary to a temp file.
 func downloadBinary(url, assetName string) (string, error) {
+	// #nosec G107 -- url is the browser_download_url taken from the GitHub release API
+	// response for this repository, not caller-supplied input.
 	resp, err := http.Get(url) //nolint:noctx
 	if err != nil {
 		return "", err
@@ -146,10 +148,19 @@ func downloadBinary(url, assetName string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if _, err := io.Copy(tmp, tr); err != nil {
+		// Cap the extraction: a corrupt or hostile archive must not be able to fill
+		// the disk. The real binary is ~16 MB, so 512 MB is generous headroom.
+		const maxBinarySize = 512 << 20
+		written, err := io.Copy(tmp, io.LimitReader(tr, maxBinarySize+1))
+		if err != nil {
 			tmp.Close()
 			os.Remove(tmp.Name())
 			return "", fmt.Errorf("write temp: %w", err)
+		}
+		if written > maxBinarySize {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return "", fmt.Errorf("release asset %s exceeds the %d byte limit", assetName, int64(maxBinarySize))
 		}
 		tmp.Close()
 		if err := os.Chmod(tmp.Name(), 0755); err != nil {
@@ -176,6 +187,8 @@ func replaceExecutable(target, newBinary string) error {
 	// Remove any stale staging file so WriteFile creates fresh (with correct perms).
 	os.Remove(staged)
 
+	// #nosec G306 -- this is the aiman binary being staged for the swap below; it has to
+	// be executable, and 0755 matches how the installed binary is expected to sit on disk.
 	if err := os.WriteFile(staged, data, 0755); err != nil {
 		os.Remove(staged)
 		return fmt.Errorf("write staged binary: %w", err)
