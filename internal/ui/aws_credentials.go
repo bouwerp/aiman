@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,6 +65,11 @@ type AWSCredentialsModel struct {
 	renaming    bool
 	renameKey   string
 	renameInput textinput.Model
+	// editingLifetime is true while the inline credential-lifetime editor is open.
+	// lifetimeKey identifies the row being edited.
+	editingLifetime bool
+	lifetimeKey     string
+	lifetimeInput   textinput.Model
 	// externalRefresh is true while a dashboard-triggered (shift+R) refresh-all is in
 	// flight. That path renews from config rather than from these rows, so it is
 	// reported separately instead of via the per-row renewing map.
@@ -154,11 +160,18 @@ func NewAWSCredentialsModel(cfg *config.Config, db interface{}) AWSCredentialsMo
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 128
+
+	lifetime := textinput.New()
+	lifetime.Prompt = ""
+	lifetime.CharLimit = 5
+	lifetime.Width = 12
+
 	return AWSCredentialsModel{
-		cfg:         cfg,
-		db:          db,
-		renewing:    make(map[string]bool),
-		renameInput: input,
+		cfg:           cfg,
+		db:            db,
+		renewing:      make(map[string]bool),
+		renameInput:   input,
+		lifetimeInput: lifetime,
 	}
 }
 
@@ -644,6 +657,43 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.renameInput, cmd = m.renameInput.Update(msg)
 			return m, cmd
 		}
+		if m.editingLifetime {
+			switch msg.String() {
+			case "esc":
+				m.editingLifetime = false
+				m.lifetimeKey = ""
+				m.lifetimeInput.Blur()
+				m.message = "Lifetime edit cancelled."
+				return m, nil
+			case "enter":
+				entry := m.entryByKey(m.lifetimeKey)
+				if entry == nil {
+					m.editingLifetime = false
+					m.lifetimeKey = ""
+					m.lifetimeInput.Blur()
+					m.message = "Lifetime target disappeared."
+					return m, nil
+				}
+				seconds, err := parseCredentialLifetime(m.lifetimeInput.Value())
+				if err != nil {
+					m.message = "✗ " + err.Error()
+					return m, nil
+				}
+				if err := setDelegationLifetime(m.cfg, entry, seconds); err != nil {
+					m.message = fmt.Sprintf("✗ Could not save lifetime for %s [%s]: %v", entry.userAtHost, entry.remoteProfile, err)
+					return m, nil
+				}
+				m.editingLifetime = false
+				m.lifetimeKey = ""
+				m.lifetimeInput.Blur()
+				m.message = fmt.Sprintf("Lifetime for %s [%s] set to %s — takes effect on next renew (r or shift+R).",
+					entry.userAtHost, entry.remoteProfile, formatLifetime(seconds))
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.lifetimeInput, cmd = m.lifetimeInput.Update(msg)
+			return m, cmd
+		}
 		switch msg.String() {
 		case "up", "k":
 			if m.cursor > 0 {
@@ -722,6 +772,28 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.removeCmd(e)
 				}
 			}
+		case "t":
+			if m.cursor < len(m.entries) {
+				e := m.entries[m.cursor]
+				switch {
+				case e.del == nil:
+					m.message = fmt.Sprintf("Cannot set a lifetime for [%s]: no local delegation config for this profile.", e.remoteProfile)
+				case m.renewing[e.key]:
+					m.message = fmt.Sprintf("Wait for %s [%s] to finish before changing its lifetime.", e.userAtHost, e.remoteProfile)
+				default:
+					m.editingLifetime = true
+					m.lifetimeKey = e.key
+					if e.del.DurationSeconds > 0 {
+						m.lifetimeInput.SetValue(strconv.Itoa(e.del.DurationSeconds))
+					} else {
+						m.lifetimeInput.SetValue("")
+					}
+					m.lifetimeInput.CursorEnd()
+					m.lifetimeInput.Focus()
+					m.message = fmt.Sprintf("Credential lifetime for %s [%s] — Enter to save.", e.userAtHost, e.remoteProfile)
+					return m, textinput.Blink
+				}
+			}
 		case "e":
 			if m.cursor < len(m.entries) {
 				e := m.entries[m.cursor]
@@ -777,10 +849,10 @@ func (m AWSCredentialsModel) View() string {
 		b.WriteString(dimStyle.Render("  No remotes with AWS delegation found.\n"))
 		b.WriteString(dimStyle.Render("  (Remotes need aws_delegation.sync_credentials: true in config)\n"))
 	} else {
-		hdr := fmt.Sprintf("  %-12s  %-30s  %-20s  %-20s  %-10s",
-			"Status", "Host", "Local profile", "Remote profile", "Expires in")
+		hdr := fmt.Sprintf("  %-12s  %-30s  %-20s  %-20s  %-8s  %-10s",
+			"Status", "Host", "Local profile", "Remote profile", "Lifetime", "Expires in")
 		b.WriteString(headerStyle.Render(hdr) + "\n")
-		b.WriteString(headerStyle.Render("  "+strings.Repeat("─", 102)) + "\n")
+		b.WriteString(headerStyle.Render("  "+strings.Repeat("─", 112)) + "\n")
 
 		now := time.Now()
 
@@ -826,11 +898,19 @@ func (m AWSCredentialsModel) View() string {
 				expiresStr = dimStyle.Render(expiresStr)
 			}
 
-			line := fmt.Sprintf("  %s  %-30s  %-20s  %-20s  %s",
+			// Profiles with no local delegation config have no lifetime to show — aiman
+			// cannot mint for them, so there is nothing configurable.
+			lifetimeStr := dimStyle.Render(fmt.Sprintf("%-8s", "—"))
+			if e.del != nil {
+				lifetimeStr = fmt.Sprintf("%-8s", formatLifetime(e.del.DurationSeconds))
+			}
+
+			line := fmt.Sprintf("  %s  %-30s  %-20s  %-20s  %s  %s",
 				statusStr,
 				truncateRunes(e.userAtHost, 30),
 				truncateRunes(localP, 20),
 				truncateRunes(remoteP, 20),
+				lifetimeStr,
 				expiresStr,
 			)
 			if i == m.cursor {
@@ -848,9 +928,14 @@ func (m AWSCredentialsModel) View() string {
 		b.WriteString("  New remote profile: " + m.renameInput.View() + "\n")
 		b.WriteString("  Press Enter to rename or Esc to cancel.\n\n")
 	}
+	if m.editingLifetime {
+		b.WriteString("  Credential lifetime (seconds): " + m.lifetimeInput.View() + "\n")
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  Enter to save · Esc to cancel   (%d–%d, empty = default %s)",
+			minCredentialLifetime, maxCredentialLifetime, formatLifetime(0))) + "\n\n")
+	}
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	b.WriteString(helpStyle.Render("  r renew selected  •  shift+R refresh ALL  •  e rename selected profile  •  d remove selected stale profile  •  c re-check all  •  ESC back") + "\n")
+	b.WriteString(helpStyle.Render("  r renew selected  •  shift+R refresh ALL  •  e rename selected profile  •  t lifetime of selected profile  •  d remove selected stale profile  •  c re-check all  •  ESC back") + "\n")
 	b.WriteString(helpStyle.Render("  \"~\" marks an expiry estimated from the credentials file's age (pushed before aiman recorded expiry) — refresh to replace it with the exact time.") + "\n")
 
 	return b.String()

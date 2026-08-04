@@ -57,9 +57,10 @@ func run() error {
 
 	// 4. Initialize Infrastructure
 	jiraProvider := jira.NewProvider(jira.Config{
-		URL:      cfg.Integrations.Jira.URL,
-		Email:    cfg.Integrations.Jira.Email,
-		APIToken: cfg.Integrations.Jira.APIToken,
+		URL:           cfg.Integrations.Jira.URL,
+		Email:         cfg.Integrations.Jira.Email,
+		APIToken:      cfg.Integrations.Jira.APIToken,
+		IssueStatuses: cfg.Integrations.Jira.IssueStatuses,
 	})
 	gitManager := git.NewManager(&cfg.Git)
 	doctor := usecase.NewDoctor(cfg, jiraProvider, gitManager)

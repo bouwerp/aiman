@@ -82,6 +82,9 @@ type JiraConfig struct {
 	Email            string `yaml:"email"`
 	APIToken         string `yaml:"api_token"`
 	TransitionStatus string `yaml:"transition_status,omitempty"` // Status to move issue to when starting (e.g. "In Development")
+	// IssueStatuses limits the issue picker to issues in these statuses. Empty falls back
+	// to jira.DefaultIssueStatuses.
+	IssueStatuses []string `yaml:"issue_statuses,omitempty"`
 }
 
 type Remote struct {

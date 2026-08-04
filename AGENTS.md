@@ -180,13 +180,22 @@ State captured at goroutine dispatch time (before the goroutine starts) to avoid
 
 The TUI wizard (`n` key) drives the user through:
 
-1. JIRA issue picker → `m.sessionCfg.IssueKey` / `m.sessionCfg.Issue`
-2. Branch name editor
-3. Repo picker (via `gh repo list`)
-4. Directory picker (remote subdirectory of repo)
-5. Agent picker (scans remote for installed agents)
-6. Summary + AWS override screen
-7. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine
+1. Run-target picker (`viewStateRunTargetPicker`) → a configured remote server, or `[e]` for
+   an EC2 autonomous loop. Shown for any remote count, including zero, because the EC2 loop
+   launches its own instance and needs no remote.
+2. Mode picker (remote targets only) → JIRA issue / new branch / existing branch / ad-hoc /
+   autonomous trigger
+3. JIRA issue picker → `m.sessionCfg.IssueKey` / `m.sessionCfg.Issue`. Only issues assigned
+   to the current user in `integrations.jira.issue_statuses` (default:
+   `jira.DefaultIssueStatuses`) are listed, and typed searches are scoped the same way.
+4. Branch name editor
+5. Repo picker (via `gh repo list`)
+6. Directory picker (remote subdirectory of repo)
+7. Agent picker (scans the remote for installed agents; the EC2 path has no host to scan
+   yet, so it offers `agent.KnownAgents()` instead)
+8. Summary + AWS override screen
+9. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine, or
+   `createEC2LoopSession()` for an EC2 loop
 
 `CreateSession` does:
 - git clone/fetch on remote

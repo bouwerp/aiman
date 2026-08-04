@@ -17,6 +17,9 @@ type Config struct {
 	URL      string
 	Email    string
 	APIToken string
+	// IssueStatuses limits the issue picker to these statuses. Empty means
+	// DefaultIssueStatuses.
+	IssueStatuses []string
 }
 
 type Provider struct {
@@ -53,35 +56,15 @@ type jiraSearchResponse struct {
 	Issues []jiraIssue `json:"issues"`
 }
 
+// SearchIssues returns issues assigned to the current user that sit in one of the
+// configured working statuses. Both the initial list and user-typed searches are scoped
+// that way: the picker exists to start work on tickets that are ready to be worked, so
+// other people's issues and backlog/Done states are never offered.
 func (p *Provider) SearchIssues(ctx context.Context, query string) ([]domain.Issue, error) {
-	if query != "" {
-		// Search by summary or key across all statuses (so Done issues are findable too)
-		jql := fmt.Sprintf("(summary ~ %q OR key = %s) ORDER BY created DESC", query, query)
-		return p.fetchIssues(ctx, jql, 100)
+	if strings.TrimSpace(query) != "" {
+		return p.fetchIssues(ctx, buildSearchJQL(query, p.config.IssueStatuses), 100)
 	}
-
-	// Default: fetch the user's own open issues and 'Dev Ready' issues,
-	// then append recent open issues from others.
-	myIssues, err := p.fetchIssues(ctx,
-		"(assignee = currentUser() OR status = \"Dev Ready\") AND statusCategory != \"Done\" ORDER BY created DESC", 100)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool, len(myIssues))
-	for _, issue := range myIssues {
-		seen[issue.Key] = true
-	}
-
-	otherIssues, _ := p.fetchIssues(ctx,
-		"assignee != currentUser() AND statusCategory != \"Done\" ORDER BY created DESC", 50)
-	for _, issue := range otherIssues {
-		if !seen[issue.Key] {
-			myIssues = append(myIssues, issue)
-		}
-	}
-
-	return myIssues, nil
+	return p.fetchIssues(ctx, buildDefaultJQL(p.config.IssueStatuses), 100)
 }
 
 func (p *Provider) fetchIssues(ctx context.Context, jql string, maxResults int) ([]domain.Issue, error) {

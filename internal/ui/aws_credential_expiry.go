@@ -15,7 +15,7 @@ import (
 
 // awsCredExpiryWarnWindow is how close to expiry delegated credentials must be before the
 // main dashboard warns about them.
-const awsCredExpiryWarnWindow = time.Hour
+const awsCredExpiryWarnWindow = 15 * time.Minute
 
 // awsCredExpiryPollInterval is how often the dashboard re-reads remote expiry times. The
 // countdown itself is recomputed on every render, so this only has to be frequent enough

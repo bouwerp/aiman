@@ -6,13 +6,14 @@
 
 Aiman automates the entire development workflow:
 
-1. **Select a JIRA Issue** — Search and filter your assigned issues
-2. **Generate Branch Name** — Auto-creates git-compatible branch names
-3. **Pick a Repository** — Browse your GitHub repos
-4. **Choose Subdirectory** — Pick a repo sub-folder (monorepo-friendly)
-5. **Scan Agents** — Detect available agents on the remote
-6. **Review Summary** — Confirm settings (and override AWS credentials) before creation
-7. **Create Session** — Worktree + tmux + agent launch + mutagen sync + AWS credentials
+1. **Choose Where It Runs** — A configured remote server, or an on-demand EC2 autonomous loop
+2. **Select a JIRA Issue** — Your issues in the statuses you actually work in
+3. **Generate Branch Name** — Auto-creates git-compatible branch names
+4. **Pick a Repository** — Browse your GitHub repos
+5. **Choose Subdirectory** — Pick a repo sub-folder (monorepo-friendly)
+6. **Scan Agents** — Detect available agents on the remote
+7. **Review Summary** — Confirm settings (and override AWS credentials) before creation
+8. **Create Session** — Worktree + tmux + agent launch + mutagen sync + AWS credentials
 
 Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 
@@ -175,13 +176,21 @@ aiman
 ### Creating a New Session
 
 1. Press `n` on the dashboard
-2. **Select JIRA Issue**: Type to filter your issues in real-time
-3. **Confirm Branch Name**: Edit the auto-generated git-compatible branch name
+2. **Choose Where It Runs**: A numbered remote server, or `[e]` for an EC2 autonomous loop
+   (see below). Offered whatever your remote count, since an EC2 loop needs no remote.
+3. **Choose How to Start**: From a JIRA issue, a new branch, an existing branch, ad-hoc, or
+   an autonomous trigger
+4. **Select JIRA Issue**: Type to filter your issues in real-time. The list holds issues
+   assigned to you in the statuses configured under `integrations.jira.issue_statuses`
+   (default: Groomed, Analysis In Progress, Research, Discovery, Dev Ready, In Development,
+   Dev Review). Searches are scoped the same way, so a ticket sitting in To Do, Later, or a
+   Done state will not appear here.
+5. **Confirm Branch Name**: Edit the auto-generated git-compatible branch name
    - Invalid characters are blocked; spaces automatically become dashes
-4. **Select Repository**: Pick from your GitHub repos
-5. **Select Subdirectory**: Choose a repo subdirectory (or `.` for root)
-6. **Agent Selection**: Choose your AI coding assistant (Claude Code, Antigravity CLI, Copilot, OpenCode, Cursor)
-7. **Summary**: Review selected issue/branch/repo/dir/agent before creation
+6. **Select Repository**: Pick from your GitHub repos
+7. **Select Subdirectory**: Choose a repo subdirectory (or `.` for root)
+8. **Agent Selection**: Choose your AI coding assistant (Claude Code, Antigravity CLI, Copilot, OpenCode, Cursor)
+9. **Summary**: Review selected issue/branch/repo/dir/agent before creation
    - If AWS credential delegation is configured for the remote, editable **Profile** and **Region** fields appear — pre-filled with remote defaults, overridable per session (Tab cycles between fields)
 
 ### Creating an Ad-hoc Session
@@ -195,6 +204,22 @@ Skip the JIRA/branch/repo flow and jump straight to agent selection:
 5. **Summary**: Review and confirm
 
 Ad-hoc sessions still get their own tmux session, mutagen sync, and AWS credentials.
+
+### Starting an EC2 Autonomous Loop
+
+An EC2 loop launches its own on-demand instance, provisions it, runs an agent
+autonomously against a task, and self-destructs — so it needs no remote server of your own:
+
+1. Press `n` on the dashboard
+2. Press `e` on the run-target screen
+3. **Select JIRA Issue**, **Confirm Branch Name**, **Select Repository** as usual
+4. **Agent Selection**: every agent Aiman can install is offered, since the instance does
+   not exist yet and there is nothing to scan
+5. **Summary**: review and confirm
+
+Instance type, region, AWS profile, subnet, security group, and key pair come from
+**EC2 Loop Settings** in the Admin Menu (`m`). The same run is available headless via
+`aiman ec2-loop --repo … --task …`.
 
 ### Terminating a Session
 
@@ -291,6 +316,13 @@ integrations:
     url: "https://company.atlassian.net"
     email: "you@company.com"
     api_token: "ATATT..."
+    # Statuses the issue picker offers. Omit to use the built-in defaults:
+    # Groomed, Analysis In Progress, Research, Discovery, Dev Ready,
+    # In Development, Dev Review
+    issue_statuses:
+      - "Dev Ready"
+      - "In Development"
+      - "Dev Review"
 
 git:
   include_personal: true
@@ -345,16 +377,18 @@ Affected sessions need a restart to pick up the change.
 Every push records the STS expiry in the remote credentials file as `x_security_token_expires` (a key the AWS CLI ignores), so the credentials manager can show an **Expires in** column without calling STS:
 
 ```
-  Status        Host                        Local profile   Remote profile   Expires in
-  ✓ Valid       ubuntu@worker.example.com   prod            default          9h13m
-  ✓ Valid       ubuntu@worker.example.com   dev             dev              36m
-  ✗ Expired     ec2-user@build.example.com  lab             lab              expired
-  ✓ Valid       ec2-user@build.example.com  —               aiman-58f485ff   ~2h59m
+  Status        Host                        Local profile   Remote profile   Lifetime  Expires in
+  ✓ Valid       ubuntu@worker.example.com   prod            default          12h       9h13m
+  ✓ Valid       ubuntu@worker.example.com   dev             dev              1h        36m
+  ✗ Expired     ec2-user@build.example.com  lab             lab              3h        expired
+  ✓ Valid       ec2-user@build.example.com  —               aiman-58f485ff   —         ~2h59m
 ```
 
 A `~` marks an estimate derived from the credentials file's age plus the configured `duration_seconds`, used for profiles pushed before aiman recorded expiry. Refreshing replaces it with the exact time.
 
-`shift+R` refreshes **all** delegated profiles regardless of status, from either the credentials screen or the main dashboard. Profiles on the same host are refreshed sequentially, since they share one `~/.aws/credentials`. The dashboard shows an amber banner when anything is within an hour of expiry, turning red once a credential has actually expired.
+**Lifetime** is the configured `duration_seconds` for the profile, editable in place with `t` (900–43200 seconds; empty means the 12-hour default). The new value applies the next time the profile is renewed — saving it does not re-mint credentials on its own. Profiles with no local delegation config show `—` and cannot be edited, since aiman has nothing to mint from.
+
+`shift+R` refreshes **all** delegated profiles regardless of status, from either the credentials screen or the main dashboard. Profiles on the same host are refreshed sequentially, since they share one `~/.aws/credentials`. The dashboard shows an amber banner when anything is within 15 minutes of expiry, turning red once a credential has actually expired.
 
 Refreshes and status checks run in the background, so you can leave the credentials page while they finish:
 

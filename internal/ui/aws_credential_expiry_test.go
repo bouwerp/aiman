@@ -68,11 +68,51 @@ func TestRenderAWSCredExpiryBannerSilentWhenHealthy(t *testing.T) {
 
 func TestRenderAWSCredExpiryBannerWarnsWithinWindow(t *testing.T) {
 	m := &Model{awsCredExpiry: []awsCredExpiryItem{
-		{userAtHost: "ubuntu@worker.example", profile: "prod", expiresAt: time.Now().Add(20 * time.Minute)},
+		{userAtHost: "ubuntu@worker.example", profile: "prod", expiresAt: time.Now().Add(10 * time.Minute)},
 	}}
 	got := m.renderAWSCredExpiryBanner()
 	if !strings.Contains(got, "prod") || !strings.Contains(got, "shift+R") {
 		t.Fatalf("expected an actionable warning banner, got %q", got)
+	}
+}
+
+// Credentials with half an hour left are not worth interrupting for; the warning window is
+// deliberately narrow so the banner means "act now".
+func TestRenderAWSCredExpiryBannerSilentAboveWarnWindow(t *testing.T) {
+	m := &Model{awsCredExpiry: []awsCredExpiryItem{
+		{userAtHost: "ubuntu@worker.example", profile: "prod", expiresAt: time.Now().Add(30 * time.Minute)},
+	}}
+	if got := m.renderAWSCredExpiryBanner(); got != "" {
+		t.Fatalf("expected no banner 30m out, got %q", got)
+	}
+}
+
+func TestUrgencyOfWarnBoundary(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name string
+		in   time.Duration
+		want expiryUrgency
+	}{
+		{"well ahead", 4 * time.Hour, expiryOK},
+		{"just outside the window", 16 * time.Minute, expiryOK},
+		{"on the boundary", awsCredExpiryWarnWindow, expiryWarn},
+		{"just inside the window", 14 * time.Minute, expiryWarn},
+		{"lapsed", -time.Minute, expiryExpired},
+	}
+	for _, c := range cases {
+		if got := urgencyOf(now.Add(c.in), now); got != c.want {
+			t.Errorf("%s: urgencyOf(+%s) = %v, want %v", c.name, c.in, got, c.want)
+		}
+	}
+	if got := urgencyOf(time.Time{}, now); got != expiryUnknown {
+		t.Errorf("zero expiry should be unknown, got %v", got)
+	}
+}
+
+func TestAWSCredExpiryWarnWindowIsFifteenMinutes(t *testing.T) {
+	if awsCredExpiryWarnWindow != 15*time.Minute {
+		t.Fatalf("expected a 15m warning window, got %s", awsCredExpiryWarnWindow)
 	}
 }
 

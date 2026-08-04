@@ -155,11 +155,11 @@ const (
 	viewStateAuthWizard
 	viewStateTunnelManager
 	viewStateTunnelAdd
-	viewStateSecretsSetup   // manage global secrets
-	viewStateAWSCredentials // manage AWS credential status and renewal
-	viewStateError          // generic error dialog (press any key to dismiss)
-	viewStateRemotePicker   // select remote for new session
-	viewStateQuitConfirm    // confirm before exiting
+	viewStateSecretsSetup    // manage global secrets
+	viewStateAWSCredentials  // manage AWS credential status and renewal
+	viewStateError           // generic error dialog (press any key to dismiss)
+	viewStateRunTargetPicker // pick where a new session runs: a remote server or an EC2 loop
+	viewStateQuitConfirm     // confirm before exiting
 	viewStateAutonomousTriggerPicker
 	viewStateAutonomousLabelsInput
 	viewStateAutonomousReuseWorkspacePicker
@@ -1268,9 +1268,10 @@ func (m *Model) searchJira(query string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		jiraProvider := jira.NewProvider(jira.Config{
-			URL:      m.cfg.Integrations.Jira.URL,
-			Email:    m.cfg.Integrations.Jira.Email,
-			APIToken: m.cfg.Integrations.Jira.APIToken,
+			URL:           m.cfg.Integrations.Jira.URL,
+			Email:         m.cfg.Integrations.Jira.Email,
+			APIToken:      m.cfg.Integrations.Jira.APIToken,
+			IssueStatuses: m.cfg.Integrations.Jira.IssueStatuses,
 		})
 
 		issues, err := jiraProvider.SearchIssues(ctx, query)
@@ -1816,6 +1817,13 @@ func (m *Model) sendStatus(msg string) {
 
 func (m *Model) fetchAgents() tea.Cmd {
 	remote := m.selectedRemote
+	// An EC2 loop provisions a fresh instance, so there is no host to scan: offer every
+	// agent aiman can install rather than whatever happens to be on another machine.
+	if m.sessionCfg.IsEC2Loop {
+		return func() tea.Msg {
+			return agent.ScanAgentsMsg{Agents: agent.KnownAgents()}
+		}
+	}
 	return func() tea.Msg {
 		if remote.Host == "" {
 			return agent.ScanAgentsMsg{Err: fmt.Errorf("no remote selected")}
@@ -2842,8 +2850,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewStateBranchPicker:
 		return m.handleBranchPickerUpdate(msg)
 
-	case viewStateRemotePicker:
-		return m.handleRemotePickerUpdate(msg)
+	case viewStateRunTargetPicker:
+		return m.handleRunTargetPickerUpdate(msg)
 
 	case viewStateModePicker:
 		return m.handleModePickerUpdate(msg)
@@ -3182,9 +3190,10 @@ func (m *Model) renderView() string {
 	case viewStateBranchPicker:
 		return docStyle.Render(m.branchPicker.View())
 
-	case viewStateRemotePicker:
+	case viewStateRunTargetPicker:
 		var b strings.Builder
-		b.WriteString(activeStyle.Render("Select Remote Server") + "\n\n")
+		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		b.WriteString(activeStyle.Render("Where should this session run?") + "\n\n")
 		for i, r := range m.cfg.Remotes {
 			label := r.Name
 			if label == "" {
@@ -3192,7 +3201,11 @@ func (m *Model) renderView() string {
 			}
 			b.WriteString(fmt.Sprintf("  %s  %s (%s@%s)\n", activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host))
 		}
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("  esc: cancel"))
+		if len(m.cfg.Remotes) == 0 {
+			b.WriteString(dim.Render("  No remote servers configured — add one in Admin Menu.") + "\n")
+		}
+		b.WriteString("\n" + activeStyle.Render("  [e]") + "  EC2 Autonomous Loop — on-demand AWS instance\n")
+		b.WriteString("\n" + dim.Render("  esc: cancel"))
 
 		dialog := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -3218,8 +3231,7 @@ func (m *Model) renderView() string {
 		b.WriteString(activeStyle.Render("[3]") + "  Existing Branch      — check out an existing remote branch\n")
 		b.WriteString(activeStyle.Render("[4]") + "  Ad-hoc               — no git repo, no JIRA ticket\n")
 		b.WriteString(activeStyle.Render("[5]") + "  Autonomous Trigger   — configure a remote polling rule\n")
-		b.WriteString(activeStyle.Render("[6]") + "  EC2 Autonomous Loop  — launch on-demand AWS instance\n")
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: cancel"))
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: back"))
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			Padding(2, 4).
@@ -3950,17 +3962,11 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 	}
 	if msg.String() == "n" {
+		// The run-target picker is shown for any remote count, including zero: it is the
+		// only way to reach the EC2 loop, which needs no remote server at all.
 		m.sessionCfg = domain.SessionConfig{}
-		if len(m.cfg.Remotes) > 1 {
-			m.state = viewStateRemotePicker
-		} else if len(m.cfg.Remotes) == 1 {
-			m.selectedRemote = m.cfg.Remotes[0]
-			m.sessionCfg.RemoteHost = m.selectedRemote.Host
-			m.state = viewStateModePicker
-		} else {
-			m.lastError = "No remote servers configured. Go to Admin Menu to add one."
-			m.state = viewStateError
-		}
+		m.selectedRemote = config.Remote{}
+		m.state = viewStateRunTargetPicker
 		return m, nil, true
 	}
 	if msg.String() == "f" && len(m.cfg.Remotes) > 1 {
@@ -4927,12 +4933,24 @@ func (m *Model) handleAWSCredentialsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *Model) handleRemotePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+// handleRunTargetPickerUpdate handles the first screen of the new-session flow: where the
+// work should run. Numbered entries are configured remote servers; "e" is the EC2
+// autonomous loop, which launches its own instance and therefore needs no remote.
+func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = viewStateMain
 			return m, nil
+		case "e", "E":
+			m.sessionCfg = domain.SessionConfig{IsEC2Loop: true}
+			// An EC2 loop provisions its own instance, so no remote is carried forward.
+			m.selectedRemote = config.Remote{}
+			m.issuePicker = NewIssuePickerModel(nil)
+			m.issuePicker.loading = true
+			m.issuePicker.SetSize(m.width, m.height)
+			m.state = viewStateIssuePicker
+			return m, m.searchJira("")
 		default:
 			idx := 0
 			if n, err := strconv.Atoi(km.String()); err == nil {
@@ -4949,53 +4967,55 @@ func (m *Model) handleRemotePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// resetSessionCfg starts a fresh session config for the mode picker's branches while
+// keeping the run target chosen on the previous screen.
+func (m *Model) resetSessionCfg(cfg domain.SessionConfig) {
+	cfg.RemoteHost = m.selectedRemote.Host
+	m.sessionCfg = cfg
+}
+
+// handleModePickerUpdate handles the second screen of the new-session flow: what kind of
+// work to start on the chosen remote. The EC2 loop is not here — it is picked on the
+// run-target screen, since it runs somewhere else entirely.
 func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch km.String() {
 		case "esc":
-			m.state = viewStateMain
+			m.state = viewStateRunTargetPicker
 			return m, nil
 		case "1":
-			m.sessionCfg = domain.SessionConfig{}
+			m.resetSessionCfg(domain.SessionConfig{})
 			m.issuePicker = NewIssuePickerModel(nil)
 			m.issuePicker.loading = true
 			m.issuePicker.SetSize(m.width, m.height)
 			m.state = viewStateIssuePicker
 			return m, m.searchJira("")
 		case "2":
-			m.sessionCfg = domain.SessionConfig{}
+			m.resetSessionCfg(domain.SessionConfig{})
 			m.state = viewStateBranchInput
 			m.branchInput = NewBranchInputModel("")
 			return m, nil
 		case "3":
-			m.sessionCfg = domain.SessionConfig{ExistingBranch: true}
+			m.resetSessionCfg(domain.SessionConfig{ExistingBranch: true})
 			m.loadingMsg = "Loading repositories..."
 			m.loadingNext = viewStateRepoPicker
 			m.state = viewStateLoading
 			m.picker = NewRepoPickerModel(nil, &m.cfg.Git)
 			return m, m.fetchRepos()
 		case "4":
-			m.sessionCfg = domain.SessionConfig{AdHoc: true, PromptFree: true}
+			m.resetSessionCfg(domain.SessionConfig{AdHoc: true, PromptFree: true})
 			m.state = viewStateBranchInput
 			m.branchInput = NewAdHocLabelInputModel("")
 			return m, nil
 		case "5":
-			m.sessionCfg = domain.SessionConfig{
+			m.resetSessionCfg(domain.SessionConfig{
 				Mode: domain.SessionModeAutonomous,
 				AutonomousConfig: &domain.AutonomousConfig{
 					PollFrequencySecs: 300,
 				},
-			}
+			})
 			m.state = viewStateAutonomousTriggerPicker
 			return m, nil
-		case "6":
-			m.sessionCfg = domain.SessionConfig{}
-			m.sessionCfg.IsEC2Loop = true
-			m.issuePicker = NewIssuePickerModel(nil)
-			m.issuePicker.loading = true
-			m.issuePicker.SetSize(m.width, m.height)
-			m.state = viewStateIssuePicker
-			return m, m.searchJira("")
 		}
 	}
 	return m, nil
@@ -5090,7 +5110,13 @@ func (m *Model) handleAutonomousConcurrencyInputUpdate(msg tea.Msg) (tea.Model, 
 func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
 		if m.issuePicker.list.FilterState() != list.Filtering {
-			m.state = viewStateModePicker
+			// An EC2 loop reaches the issue picker straight from the run-target screen,
+			// never via the mode picker.
+			if m.sessionCfg.IsEC2Loop {
+				m.state = viewStateRunTargetPicker
+			} else {
+				m.state = viewStateModePicker
+			}
 			return m, nil
 		}
 	}
@@ -5341,6 +5367,12 @@ func (m *Model) handleChangeDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
 		if m.agentPicker.list.FilterState() != list.Filtering {
+			// The EC2 flow skips the directory picker (issue → repo → agent), so going
+			// back has to land on the screen it actually came from.
+			if m.sessionCfg.IsEC2Loop {
+				m.state = viewStateRepoPicker
+				return m, nil
+			}
 			m.state = viewStateDirPicker
 			return m, nil
 		}
@@ -5374,6 +5406,11 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Pre-fill OpenRouter API key from local environment (user can override).
 		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
+		// An EC2 loop has no remote workspace to inspect — the instance does not exist yet.
+		if m.sessionCfg.IsEC2Loop {
+			m.state = viewStateSummary
+			return m, nil
+		}
 		if m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
 			m.loadingMsg = "Checking workspace..."
 			m.loadingNext = viewStateSummary

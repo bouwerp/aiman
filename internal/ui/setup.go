@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -18,10 +19,25 @@ type SetupModel struct {
 	saved      bool
 }
 
+// parseIssueStatuses splits the comma-separated statuses field into a clean list. Blank
+// entries are dropped; an all-blank value yields nil so the provider falls back to
+// jira.DefaultIssueStatuses.
+func parseIssueStatuses(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
 func NewSetupModel(cfg *config.Config) SetupModel {
 	m := SetupModel{
 		cfg:    cfg,
-		inputs: make([]textinput.Model, 3),
+		inputs: make([]textinput.Model, 4),
 	}
 
 	var t textinput.Model
@@ -43,6 +59,11 @@ func NewSetupModel(cfg *config.Config) SetupModel {
 			t.SetValue(cfg.Integrations.Jira.APIToken)
 			t.EchoMode = textinput.EchoPassword
 			t.EchoCharacter = '•'
+		case 3:
+			t.Placeholder = "e.g. Dev Ready, In Development, Dev Review"
+			t.CharLimit = 512
+			t.Width = 56
+			t.SetValue(strings.Join(cfg.Integrations.Jira.IssueStatuses, ", "))
 		}
 
 		m.inputs[i] = t
@@ -113,6 +134,7 @@ func (m SetupModel) save() (tea.Model, tea.Cmd) {
 	m.cfg.Integrations.Jira.URL = m.inputs[0].Value()
 	m.cfg.Integrations.Jira.Email = m.inputs[1].Value()
 	m.cfg.Integrations.Jira.APIToken = m.inputs[2].Value()
+	m.cfg.Integrations.Jira.IssueStatuses = parseIssueStatuses(m.inputs[3].Value())
 
 	if err := m.cfg.Save(); err != nil {
 		m.err = err
@@ -131,10 +153,16 @@ func (m SetupModel) View() string {
 	var b strings.Builder
 	b.WriteString("Aiman Setup - JIRA Configuration\n\n")
 
+	labels := []string{"URL", "Email", "API Token", "Issue statuses"}
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	for i := range m.inputs {
+		b.WriteString(hintStyle.Render(labels[i]) + "\n")
 		b.WriteString(m.inputs[i].View())
 		b.WriteString("\n")
 	}
+	b.WriteString(hintStyle.Render("  Only issues assigned to you in these statuses are offered when starting a\n"+
+		"  session. Comma-separated; leave empty to use the defaults:\n  "+
+		strings.Join(jira.DefaultIssueStatuses, ", ")) + "\n")
 
 	button := &strings.Builder{}
 	fmt.Fprintf(button, "[ Save ]")

@@ -172,8 +172,8 @@ func TestExpiryUrgency(t *testing.T) {
 	}{
 		{"unknown", time.Time{}, expiryUnknown},
 		{"comfortable", now.Add(6 * time.Hour), expiryOK},
-		{"just over the window", now.Add(time.Hour + time.Minute), expiryOK},
-		{"inside the window", now.Add(59 * time.Minute), expiryWarn},
+		{"just over the window", now.Add(16 * time.Minute), expiryOK},
+		{"inside the window", now.Add(14 * time.Minute), expiryWarn},
 		{"expired", now.Add(-time.Second), expiryExpired},
 	}
 	for _, tc := range cases {
@@ -198,11 +198,11 @@ func TestFormatAWSCredExpiryBanner(t *testing.T) {
 	}
 
 	one := []awsCredExpiryItem{
-		{userAtHost: "ubuntu@host", profile: "prod", expiresAt: now.Add(42 * time.Minute)},
+		{userAtHost: "ubuntu@host", profile: "prod", expiresAt: now.Add(12 * time.Minute)},
 		{userAtHost: "ubuntu@host", profile: "dev", expiresAt: now.Add(9 * time.Hour)},
 	}
 	got := formatAWSCredExpiryBanner(one, now)
-	if !strings.Contains(got, "42m") || !strings.Contains(got, "ubuntu@host") || !strings.Contains(got, "prod") {
+	if !strings.Contains(got, "12m") || !strings.Contains(got, "ubuntu@host") || !strings.Contains(got, "prod") {
 		t.Fatalf("expected the soonest profile named with its remaining time, got %q", got)
 	}
 	if strings.Contains(got, "dev") {
@@ -214,7 +214,7 @@ func TestFormatAWSCredExpiryBanner(t *testing.T) {
 
 	many := []awsCredExpiryItem{
 		{userAtHost: "a@h", profile: "p1", expiresAt: now.Add(10 * time.Minute)},
-		{userAtHost: "b@h", profile: "p2", expiresAt: now.Add(30 * time.Minute)},
+		{userAtHost: "b@h", profile: "p2", expiresAt: now.Add(5 * time.Minute)},
 		{userAtHost: "c@h", profile: "p3", expiresAt: now.Add(-time.Minute)},
 	}
 	got = formatAWSCredExpiryBanner(many, now)
