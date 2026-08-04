@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -658,41 +657,7 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if m.editingLifetime {
-			switch msg.String() {
-			case "esc":
-				m.editingLifetime = false
-				m.lifetimeKey = ""
-				m.lifetimeInput.Blur()
-				m.message = "Lifetime edit cancelled."
-				return m, nil
-			case "enter":
-				entry := m.entryByKey(m.lifetimeKey)
-				if entry == nil {
-					m.editingLifetime = false
-					m.lifetimeKey = ""
-					m.lifetimeInput.Blur()
-					m.message = "Lifetime target disappeared."
-					return m, nil
-				}
-				seconds, err := parseCredentialLifetime(m.lifetimeInput.Value())
-				if err != nil {
-					m.message = "✗ " + err.Error()
-					return m, nil
-				}
-				if err := setDelegationLifetime(m.cfg, entry, seconds); err != nil {
-					m.message = fmt.Sprintf("✗ Could not save lifetime for %s [%s]: %v", entry.userAtHost, entry.remoteProfile, err)
-					return m, nil
-				}
-				m.editingLifetime = false
-				m.lifetimeKey = ""
-				m.lifetimeInput.Blur()
-				m.message = fmt.Sprintf("Lifetime for %s [%s] set to %s — takes effect on next renew (r or shift+R).",
-					entry.userAtHost, entry.remoteProfile, formatLifetime(seconds))
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.lifetimeInput, cmd = m.lifetimeInput.Update(msg)
-			return m, cmd
+			return m.updateLifetimeEditor(msg)
 		}
 		switch msg.String() {
 		case "up", "k":
@@ -774,25 +739,7 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "t":
 			if m.cursor < len(m.entries) {
-				e := m.entries[m.cursor]
-				switch {
-				case e.del == nil:
-					m.message = fmt.Sprintf("Cannot set a lifetime for [%s]: no local delegation config for this profile.", e.remoteProfile)
-				case m.renewing[e.key]:
-					m.message = fmt.Sprintf("Wait for %s [%s] to finish before changing its lifetime.", e.userAtHost, e.remoteProfile)
-				default:
-					m.editingLifetime = true
-					m.lifetimeKey = e.key
-					if e.del.DurationSeconds > 0 {
-						m.lifetimeInput.SetValue(strconv.Itoa(e.del.DurationSeconds))
-					} else {
-						m.lifetimeInput.SetValue("")
-					}
-					m.lifetimeInput.CursorEnd()
-					m.lifetimeInput.Focus()
-					m.message = fmt.Sprintf("Credential lifetime for %s [%s] — Enter to save.", e.userAtHost, e.remoteProfile)
-					return m, textinput.Blink
-				}
+				return m.openLifetimeEditor(m.entries[m.cursor])
 			}
 		case "e":
 			if m.cursor < len(m.entries) {

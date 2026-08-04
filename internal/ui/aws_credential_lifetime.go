@@ -8,6 +8,8 @@ import (
 
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // AWS accepts session lifetimes between 15 minutes and 12 hours.
@@ -55,6 +57,70 @@ func formatLifetime(seconds int) string {
 	default:
 		return fmt.Sprintf("%dh%02dm", hours, minutes)
 	}
+}
+
+// openLifetimeEditor starts editing the lifetime of one profile, pre-filled with its
+// current value (blank when unset, so the placeholder default shows through). Profiles with
+// no local delegation config have nothing to mint from, so nothing to configure either.
+func (m AWSCredentialsModel) openLifetimeEditor(e awsHostEntry) (tea.Model, tea.Cmd) {
+	switch {
+	case e.del == nil:
+		m.message = fmt.Sprintf("Cannot set a lifetime for [%s]: no local delegation config for this profile.", e.remoteProfile)
+		return m, nil
+	case m.renewing[e.key]:
+		m.message = fmt.Sprintf("Wait for %s [%s] to finish before changing its lifetime.", e.userAtHost, e.remoteProfile)
+		return m, nil
+	}
+	m.editingLifetime = true
+	m.lifetimeKey = e.key
+	if e.del.DurationSeconds > 0 {
+		m.lifetimeInput.SetValue(strconv.Itoa(e.del.DurationSeconds))
+	} else {
+		m.lifetimeInput.SetValue("")
+	}
+	m.lifetimeInput.CursorEnd()
+	m.lifetimeInput.Focus()
+	m.message = fmt.Sprintf("Credential lifetime for %s [%s] — Enter to save.", e.userAtHost, e.remoteProfile)
+	return m, textinput.Blink
+}
+
+// closeLifetimeEditor tears down the editor and reports why.
+func (m AWSCredentialsModel) closeLifetimeEditor(message string) (tea.Model, tea.Cmd) {
+	m.editingLifetime = false
+	m.lifetimeKey = ""
+	m.lifetimeInput.Blur()
+	m.message = message
+	return m, nil
+}
+
+// updateLifetimeEditor handles keys while the lifetime editor is open. Invalid values leave
+// the editor open with an explanation rather than discarding what was typed.
+func (m AWSCredentialsModel) updateLifetimeEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		return m.closeLifetimeEditor("Lifetime edit cancelled.")
+	case "enter":
+		entry := m.entryByKey(m.lifetimeKey)
+		if entry == nil {
+			return m.closeLifetimeEditor("Lifetime target disappeared.")
+		}
+		seconds, err := parseCredentialLifetime(m.lifetimeInput.Value())
+		if err != nil {
+			m.message = "✗ " + err.Error()
+			return m, nil
+		}
+		if err := setDelegationLifetime(m.cfg, entry, seconds); err != nil {
+			m.message = fmt.Sprintf("✗ Could not save lifetime for %s [%s]: %v",
+				entry.userAtHost, entry.remoteProfile, err)
+			return m, nil
+		}
+		return m.closeLifetimeEditor(fmt.Sprintf(
+			"Lifetime for %s [%s] set to %s — takes effect on next renew (r or shift+R).",
+			entry.userAtHost, entry.remoteProfile, formatLifetime(seconds)))
+	}
+	var cmd tea.Cmd
+	m.lifetimeInput, cmd = m.lifetimeInput.Update(msg)
+	return m, cmd
 }
 
 // setDelegationLifetime writes seconds to the delegation backing entry and persists the
