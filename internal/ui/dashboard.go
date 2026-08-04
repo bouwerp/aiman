@@ -3648,21 +3648,7 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return attachDoneMsg{err: err}
 		})
 	case attachDoneMsg:
-		if msg.err != nil {
-			m.lastError = fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
-			m.state = viewStateError
-			return m, nil
-		}
-		m.state = viewStateMain
-		m.panelMode = panelModePreview
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			m.activeSession = s.TmuxSession
-			m.tmuxOutput = "Loading..."
-			m.viewport.SetContent(m.tmuxOutput)
-			cmds = append(cmds, tickTmux(), fetchTmuxPane(m.cfg, s))
-		}
-		return m, tea.Batch(cmds...)
+		return m.applyAttachDone(msg, cmds)
 	case tmuxTerminalMsg:
 		if msg.err != nil {
 			m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
@@ -3675,61 +3661,7 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.terminal = &term
 		return m, nil
 	case tmuxTickMsg:
-		cmds = append(cmds, tickTmux())
-
-		// Don't make SSH calls while we're in a loading/provisioning state —
-		// the restart goroutine is already using the same ControlMaster socket
-		// and concurrent access causes "Failed to connect to new control master" races.
-		if m.state == viewStateLoading {
-			return m, tea.Batch(cmds...)
-		}
-
-		// On first tick, force-select the first session if nothing is active
-		if m.initialLoad {
-			m.initialLoad = false
-			if len(m.list.Items()) > 0 {
-				m.list.Select(0)
-				if sel := m.list.SelectedItem(); sel != nil {
-					s := sel.(item).session
-					m.activeSession = s.TmuxSession
-					m.tmuxOutput = "Loading..."
-					m.viewport.SetContent(m.tmuxOutput)
-					cmds = append(cmds,
-						fetchTmuxPane(m.cfg, s),
-						checkInputHint(m.cfg, s),
-						fetchGitStatus(m.cfg, s),
-					)
-				}
-			}
-		} else if m.currentTab == tabSessions {
-			if sel := m.list.SelectedItem(); sel != nil {
-				s := sel.(item).session
-				if m.activeSession != s.TmuxSession {
-					m.activeSession = s.TmuxSession
-				}
-				// Skip sessions being created (no tmux yet) or terminated
-				// (tmux going away).
-				if !m.skipSessionPolling(s.ID) {
-					// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
-					cmds = append(cmds,
-						fetchTmuxPane(m.cfg, s),
-						checkInputHint(m.cfg, s),
-					)
-				}
-			}
-		} else if m.currentTab == tabDaemons {
-			if sel := m.daemonList.SelectedItem(); sel != nil {
-				d := sel.(daemonItem).daemon
-				if m.activeSession != "aiman-trigger" {
-					m.activeSession = "aiman-trigger"
-				}
-				s := domain.Session{
-					RemoteHost:  d.RemoteHost,
-					TmuxSession: "aiman-trigger",
-				}
-				cmds = append(cmds, fetchTmuxPane(m.cfg, s))
-			}
-		}
+		return m.applyTmuxTick(msg, cmds)
 	case gitTickMsg:
 		cmds = append(cmds, tickGit())
 		if m.state == viewStateLoading {
@@ -3751,91 +3683,11 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tmuxOutputMsg:
-		if msg.session == m.activeSession {
-			if msg.err != nil {
-				// Transient pane-unavailability errors (session restarting, tmux server
-				// starting up) are silently ignored — the next tick will retry.
-				errStr := msg.err.Error()
-				isTransient := strings.Contains(errStr, "can't find pane") ||
-					strings.Contains(errStr, "no server running") ||
-					strings.Contains(errStr, "failed to connect to server")
-				if isTransient {
-					break
-				}
-				// Non-transient errors are shown in the viewport.
-				newOutput := failStyle.Render("Failed to capture pane: " + errStr)
-				if newOutput != m.tmuxOutput {
-					m.tmuxOutput = newOutput
-					m.viewport.SetContent(m.tmuxOutput)
-				}
-				break
-			}
-
-			newOutput := msg.output
-
-			// Sticky scroll: only go to bottom if we were already at the bottom OR if it's the first load for this session.
-			wasAtBottom := m.viewport.AtBottom()
-			yOffset := m.viewport.YOffset
-			isFirstLoad := !m.firstLoad[msg.session] && newOutput != "Loading..." && msg.err == nil
-			if isFirstLoad {
-				wasAtBottom = true
-				m.firstLoad[msg.session] = true
-			}
-
-			// Only update viewport content when it actually changed.
-			if newOutput != m.tmuxOutput || isFirstLoad {
-				m.tmuxOutput = newOutput
-				m.viewport.SetContent(m.tmuxOutput)
-				if wasAtBottom {
-					m.viewport.GotoBottom()
-				} else {
-					m.viewport.SetYOffset(yOffset)
-				}
-			}
-		}
+		return m.applyTmuxOutput(msg, cmds)
 	case inputHintMsg:
-		// Update list items with input hint when enabled
-		if m.cfg.Features.InputPromptDetection {
-			// Track how long this session has been continuously "busy".
-			// If it exceeds the liveness threshold, flag it as stale so the user
-			// knows the agent may be hung rather than actively thinking.
-			const livenessThreshold = 5 * time.Minute
-			if msg.activity == "busy" {
-				if _, tracked := m.busySince[msg.session]; !tracked {
-					m.busySince[msg.session] = time.Now()
-				} else if time.Since(m.busySince[msg.session]) > livenessThreshold {
-					msg.activity = "stale"
-				}
-			} else {
-				// Session is no longer busy — reset the watchdog clock.
-				delete(m.busySince, msg.session)
-			}
-
-			items := m.list.Items()
-			for idx, it := range items {
-				if sessItem, ok := it.(item); ok {
-					if sessItem.session.TmuxSession == msg.session {
-						sessItem.needsInput = msg.needsInput
-						sessItem.activity = msg.activity
-						items[idx] = sessItem
-						break
-					}
-				}
-			}
-			m.list.SetItems(items)
-		}
+		return m.applyInputHint(msg, cmds)
 	case aiSummaryMsg:
-		m.aiLoading = false
-		if msg.err != nil {
-			if errors.Is(msg.err, domain.ErrIntelligenceUnavailable) {
-				m.aiError = "AI unavailable — enable in config and ensure Ollama is running (brew install ollama)"
-			} else {
-				m.aiError = fmt.Sprintf("AI error: %v", msg.err)
-			}
-		} else if msg.summary != nil && msg.session == m.activeSession {
-			m.aiSummary[msg.session] = msg.summary
-			m.aiError = ""
-		}
+		return m.applyAISummary(msg, cmds)
 	case triggerDetailsMsg:
 		m.triggerDetailsLoading = false
 		if msg.err != nil {
@@ -3878,6 +3730,188 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	return m.forwardToFocused(msg, cmds)
+}
+
+func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	cmds = append(cmds, tickTmux())
+
+	// Don't make SSH calls while we're in a loading/provisioning state —
+	// the restart goroutine is already using the same ControlMaster socket
+	// and concurrent access causes "Failed to connect to new control master" races.
+	if m.state == viewStateLoading {
+		return m, tea.Batch(cmds...)
+	}
+
+	// On first tick, force-select the first session if nothing is active
+	if m.initialLoad {
+		m.initialLoad = false
+		if len(m.list.Items()) > 0 {
+			m.list.Select(0)
+			if sel := m.list.SelectedItem(); sel != nil {
+				s := sel.(item).session
+				m.activeSession = s.TmuxSession
+				m.tmuxOutput = "Loading..."
+				m.viewport.SetContent(m.tmuxOutput)
+				cmds = append(cmds,
+					fetchTmuxPane(m.cfg, s),
+					checkInputHint(m.cfg, s),
+					fetchGitStatus(m.cfg, s),
+				)
+			}
+		}
+	} else {
+		switch m.currentTab {
+		case tabSessions:
+			if sel := m.list.SelectedItem(); sel != nil {
+				s := sel.(item).session
+				if m.activeSession != s.TmuxSession {
+					m.activeSession = s.TmuxSession
+				}
+				// Skip sessions being created (no tmux yet) or terminated
+				// (tmux going away).
+				if !m.skipSessionPolling(s.ID) {
+					// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
+					cmds = append(cmds,
+						fetchTmuxPane(m.cfg, s),
+						checkInputHint(m.cfg, s),
+					)
+				}
+			}
+		case tabDaemons:
+			if sel := m.daemonList.SelectedItem(); sel != nil {
+				d := sel.(daemonItem).daemon
+				if m.activeSession != "aiman-trigger" {
+					m.activeSession = "aiman-trigger"
+				}
+				s := domain.Session{
+					RemoteHost:  d.RemoteHost,
+					TmuxSession: "aiman-trigger",
+				}
+				cmds = append(cmds, fetchTmuxPane(m.cfg, s))
+			}
+		}
+	}
+	return m.forwardToFocused(msg, cmds)
+}
+
+func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if msg.session == m.activeSession {
+		if msg.err != nil {
+			// Transient pane-unavailability errors (session restarting, tmux server
+			// starting up) are silently ignored — the next tick will retry.
+			errStr := msg.err.Error()
+			isTransient := strings.Contains(errStr, "can't find pane") ||
+				strings.Contains(errStr, "no server running") ||
+				strings.Contains(errStr, "failed to connect to server")
+			if isTransient {
+				return m.forwardToFocused(msg, cmds)
+			}
+			// Non-transient errors are shown in the viewport.
+			newOutput := failStyle.Render("Failed to capture pane: " + errStr)
+			if newOutput != m.tmuxOutput {
+				m.tmuxOutput = newOutput
+				m.viewport.SetContent(m.tmuxOutput)
+			}
+			return m.forwardToFocused(msg, cmds)
+		}
+
+		newOutput := msg.output
+
+		// Sticky scroll: only go to bottom if we were already at the bottom OR if it's the first load for this session.
+		wasAtBottom := m.viewport.AtBottom()
+		yOffset := m.viewport.YOffset
+		isFirstLoad := !m.firstLoad[msg.session] && newOutput != "Loading..." && msg.err == nil
+		if isFirstLoad {
+			wasAtBottom = true
+			m.firstLoad[msg.session] = true
+		}
+
+		// Only update viewport content when it actually changed.
+		if newOutput != m.tmuxOutput || isFirstLoad {
+			m.tmuxOutput = newOutput
+			m.viewport.SetContent(m.tmuxOutput)
+			if wasAtBottom {
+				m.viewport.GotoBottom()
+			} else {
+				m.viewport.SetYOffset(yOffset)
+			}
+		}
+	}
+	return m.forwardToFocused(msg, cmds)
+}
+
+func (m *Model) applyInputHint(msg inputHintMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	// Update list items with input hint when enabled
+	if m.cfg.Features.InputPromptDetection {
+		// Track how long this session has been continuously "busy".
+		// If it exceeds the liveness threshold, flag it as stale so the user
+		// knows the agent may be hung rather than actively thinking.
+		const livenessThreshold = 5 * time.Minute
+		if msg.activity == "busy" {
+			if _, tracked := m.busySince[msg.session]; !tracked {
+				m.busySince[msg.session] = time.Now()
+			} else if time.Since(m.busySince[msg.session]) > livenessThreshold {
+				msg.activity = "stale"
+			}
+		} else {
+			// Session is no longer busy — reset the watchdog clock.
+			delete(m.busySince, msg.session)
+		}
+
+		items := m.list.Items()
+		for idx, it := range items {
+			if sessItem, ok := it.(item); ok {
+				if sessItem.session.TmuxSession == msg.session {
+					sessItem.needsInput = msg.needsInput
+					sessItem.activity = msg.activity
+					items[idx] = sessItem
+					break
+				}
+			}
+		}
+		m.list.SetItems(items)
+	}
+	return m.forwardToFocused(msg, cmds)
+}
+
+func (m *Model) applyAttachDone(msg attachDoneMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.lastError = fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
+		m.state = viewStateError
+		return m, nil
+	}
+	m.state = viewStateMain
+	m.panelMode = panelModePreview
+	if sel := m.list.SelectedItem(); sel != nil {
+		s := sel.(item).session
+		m.activeSession = s.TmuxSession
+		m.tmuxOutput = "Loading..."
+		m.viewport.SetContent(m.tmuxOutput)
+		cmds = append(cmds, tickTmux(), fetchTmuxPane(m.cfg, s))
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) applyAISummary(msg aiSummaryMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	m.aiLoading = false
+	if msg.err != nil {
+		if errors.Is(msg.err, domain.ErrIntelligenceUnavailable) {
+			m.aiError = "AI unavailable — enable in config and ensure Ollama is running (brew install ollama)"
+		} else {
+			m.aiError = fmt.Sprintf("AI error: %v", msg.err)
+		}
+	} else if msg.summary != nil && msg.session == m.activeSession {
+		m.aiSummary[msg.session] = msg.summary
+		m.aiError = ""
+	}
+	return m.forwardToFocused(msg, cmds)
+}
+
+// forwardToFocused hands the message to the component that owns it — the session or
+// daemon list, the preview viewport, or the embedded terminal — and issues follow-up
+// fetches when the selection changed as a result.
+func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	// Capture list selection changes to trigger immediate fetch
 	oldSelID := ""
 	oldDaemonHost := ""
@@ -3951,13 +3985,14 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastGitStatusUpdate = time.Time{}
 			m.tmuxOutput = "Loading..."
 			m.viewport.SetContent(m.tmuxOutput)
-			if m.skipSessionPolling(s.ID) {
-				// Nothing to fetch — the preview panel shows creation or
-				// termination progress.
-			} else if m.panelMode == panelModeTerminal {
-				cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s))
-			} else {
-				cmds = append(cmds, fetchTmuxPane(m.cfg, s), fetchGitStatus(m.cfg, s))
+			// While a session is being created or torn down there is nothing to fetch —
+			// the preview panel shows that progress instead.
+			if !m.skipSessionPolling(s.ID) {
+				if m.panelMode == panelModeTerminal {
+					cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s))
+				} else {
+					cmds = append(cmds, fetchTmuxPane(m.cfg, s), fetchGitStatus(m.cfg, s))
+				}
 			}
 		}
 	} else if m.currentTab == tabDaemons {
@@ -4009,10 +4044,21 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 	}
 
+	if model, handled := m.handlePreviewKey(msg); handled {
+		return model, nil, true
+	}
+	if model, cmd, handled := m.handleNavigationKey(msg); handled {
+		return model, cmd, true
+	}
+	return m.handleSessionActionKey(msg)
+}
+
+// handlePreviewKey handles keys that move around the output panel or the debug console.
+func (m *Model) handlePreviewKey(msg tea.KeyMsg) (tea.Model, bool) {
 	if msg.String() == "G" || msg.String() == "end" {
 		if m.panelMode == panelModePreview {
 			m.viewport.GotoBottom()
-			return m, nil, true
+			return m, true
 		}
 	}
 
@@ -4023,25 +4069,25 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		switch msg.String() {
 		case "[", "shift+up":
 			m.viewport.ScrollUp(3)
-			return m, nil, true
+			return m, true
 		case "]", "shift+down":
 			m.viewport.ScrollDown(3)
-			return m, nil, true
+			return m, true
 		case "shift+pgup":
 			m.viewport.PageUp()
-			return m, nil, true
+			return m, true
 		case "shift+pgdown":
 			m.viewport.PageDown()
-			return m, nil, true
+			return m, true
 		case "pgup":
 			if !m.consoleOpen {
 				m.viewport.PageUp()
-				return m, nil, true
+				return m, true
 			}
 		case "pgdown":
 			if !m.consoleOpen {
 				m.viewport.PageDown()
-				return m, nil, true
+				return m, true
 			}
 		}
 	}
@@ -4062,25 +4108,32 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.consoleViewport.SetContent(wrapLines(m.consoleLog, m.width-6))
 			m.consoleViewport.GotoBottom()
 		}
-		return m, nil, true
+		return m, true
 	}
 	// Handle console scrolling when open
 	if m.consoleOpen {
 		switch msg.String() {
 		case "up", "k":
 			m.consoleViewport.ScrollUp(1)
-			return m, nil, true
+			return m, true
 		case "down", "j":
 			m.consoleViewport.ScrollDown(1)
-			return m, nil, true
+			return m, true
 		case "pgup":
 			m.consoleViewport.PageUp()
-			return m, nil, true
+			return m, true
 		case "pgdown":
 			m.consoleViewport.PageDown()
-			return m, nil, true
+			return m, true
 		}
 	}
+	return m, false
+}
+
+// handleNavigationKey handles keys that change what the dashboard is showing rather than
+// acting on a session: tab switching, mouse reporting, starting a session, filtering,
+// the admin menu, and quitting.
+func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if msg.String() == "tab" {
 		if m.currentTab == tabSessions {
 			m.currentTab = tabDaemons
@@ -4138,6 +4191,14 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, tea.Quit, true
 	}
+	return m, nil, false
+}
+
+// handleSessionActionKey handles keys that act on the selected session — attaching,
+// restarting, terminating, copying output, tunnels, snapshots, and AI insight.
+// handleSessionActionKey handles keys that open or copy from the selected session:
+// attaching a terminal, opening VS Code, and copying output or the local path.
+func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if msg.String() == "ctrl+s" || msg.String() == "a" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
@@ -4258,6 +4319,13 @@ end tell`, cmd)
 		}
 		return m, nil, true
 	}
+	return m.handleSessionManageKey(msg)
+}
+
+// handleSessionManageKey handles keys that change a session's state: restarting, changing
+// directory scope, tunnels, status refresh, snapshots, archiving, termination, and trigger
+// details.
+func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if msg.String() == "ctrl+r" || msg.String() == "s" {
 		if m.currentTab == tabDaemons {
 			if sel := m.daemonList.SelectedItem(); sel != nil {
@@ -4487,7 +4555,6 @@ end tell`, cmd)
 			}
 		}
 	}
-
 	return m, nil, false
 }
 
