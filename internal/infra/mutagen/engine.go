@@ -37,7 +37,7 @@ func (e *Engine) StartSync(ctx context.Context, name, localPath, remotePath stri
 		return fmt.Errorf("invalid sync paths")
 	}
 
-	if err := os.MkdirAll(localPath, 0755); err != nil {
+	if err := os.MkdirAll(localPath, 0750); err != nil {
 		return fmt.Errorf("failed to create local sync directory: %w", err)
 	}
 

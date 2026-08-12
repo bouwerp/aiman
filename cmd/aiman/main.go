@@ -27,6 +27,15 @@ var buildTime = ""
 // exit non-zero without an additional "Error:" line.
 var errUsage = errors.New("usage")
 
+// configPathForNotice resolves the config path for user-facing messages,
+// falling back to the bare filename when the home directory is unavailable.
+func configPathForNotice() string {
+	if p, err := config.GetConfigPath(); err == nil {
+		return p
+	}
+	return config.ConfigName
+}
+
 func main() {
 	if err := run(); err != nil {
 		if !errors.Is(err, errUsage) {
@@ -49,6 +58,17 @@ func run() error {
 		// But for now, let's just fail fast.
 		// Actually, let's provide a default config if it's missing just for the demo
 		cfg = &config.Config{}
+	}
+
+	// Report a repaired config file before the TUI takes over the terminal: the
+	// token in it was readable by other users until now, which the user should
+	// know about rather than have quietly fixed.
+	if cfg.PermissionsTightened {
+		fmt.Fprintf(os.Stderr, "aiman: %s was group/world-readable and has been tightened to 0600.\n", configPathForNotice())
+		fmt.Fprintf(os.Stderr, "       It holds your API token in plaintext; rotate it if this machine is shared.\n")
+	}
+	if cfg.PermissionsError != nil {
+		fmt.Fprintf(os.Stderr, "aiman: warning: %v\n", cfg.PermissionsError)
 	}
 
 	// 3. Initialize Database

@@ -232,7 +232,9 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		if _, err := stdin.Write(content); err != nil {
 			return fmt.Errorf("failed to write content to ssh stdin: %w", err)
 		}
-		stdin.Close()
+		// Closing stdin signals end-of-input to the remote command; a close
+		// error surfaces from cmd.Wait below, which is the useful report.
+		_ = stdin.Close()
 		if err := cmd.Wait(); err != nil {
 			return fmt.Errorf("ssh Wait failed for WriteFile: %w", err)
 		}
@@ -511,8 +513,10 @@ func (s *commandStream) Write(p []byte) (n int, err error) {
 }
 
 func (s *commandStream) Close() error {
-	s.stdin.Close()
-	s.stdout.Close()
+	// The pipes are being torn down alongside the process; killing it below is
+	// what actually matters, so pipe-close errors are not worth propagating.
+	_ = s.stdin.Close()
+	_ = s.stdout.Close()
 	if s.cmd.Process != nil {
 		return s.cmd.Process.Kill()
 	}

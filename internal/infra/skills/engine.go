@@ -59,7 +59,7 @@ func (e *Engine) Sync(ctx context.Context) error {
 	skillsPath := e.cfg.Skills.Path
 	if _, err := os.Stat(skillsPath); os.IsNotExist(err) {
 		// Clone the repo
-		if err := os.MkdirAll(filepath.Dir(skillsPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(skillsPath), 0750); err != nil {
 			return fmt.Errorf("failed to create skills directory: %w", err)
 		}
 		// #nosec G204 -- the repo comes from this user's own config and is passed as a

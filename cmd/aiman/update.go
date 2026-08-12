@@ -153,18 +153,20 @@ func downloadBinary(url, assetName string) (string, error) {
 		const maxBinarySize = 512 << 20
 		written, err := io.Copy(tmp, io.LimitReader(tr, maxBinarySize+1))
 		if err != nil {
-			tmp.Close()
-			os.Remove(tmp.Name())
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
 			return "", fmt.Errorf("write temp: %w", err)
 		}
 		if written > maxBinarySize {
-			tmp.Close()
-			os.Remove(tmp.Name())
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
 			return "", fmt.Errorf("release asset %s exceeds the %d byte limit", assetName, int64(maxBinarySize))
 		}
-		tmp.Close()
+		_ = tmp.Close()
+		// #nosec G302 -- the extracted file is the aiman binary; it has to carry the
+		// executable bit to be runnable after the swap.
 		if err := os.Chmod(tmp.Name(), 0755); err != nil {
-			os.Remove(tmp.Name())
+			_ = os.Remove(tmp.Name())
 			return "", err
 		}
 		return tmp.Name(), nil
@@ -185,23 +187,24 @@ func replaceExecutable(target, newBinary string) error {
 	dir := filepath.Dir(target)
 	staged := filepath.Join(dir, ".aiman-update-staged")
 	// Remove any stale staging file so WriteFile creates fresh (with correct perms).
-	os.Remove(staged)
+	_ = os.Remove(staged)
 
 	// #nosec G306 -- this is the aiman binary being staged for the swap below; it has to
 	// be executable, and 0755 matches how the installed binary is expected to sit on disk.
 	if err := os.WriteFile(staged, data, 0755); err != nil {
-		os.Remove(staged)
+		_ = os.Remove(staged)
 		return fmt.Errorf("write staged binary: %w", err)
 	}
 
 	// Ensure executable bit is set regardless of umask.
+	// #nosec G302 -- same reason as the staging write above: this is an executable.
 	if err := os.Chmod(staged, 0755); err != nil {
-		os.Remove(staged)
+		_ = os.Remove(staged)
 		return fmt.Errorf("chmod staged binary: %w", err)
 	}
 
 	if err := os.Rename(staged, target); err != nil {
-		os.Remove(staged)
+		_ = os.Remove(staged)
 		return fmt.Errorf("replace binary: %w", err)
 	}
 	return nil

@@ -1256,7 +1256,8 @@ func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, b
 func (m *Model) initTerminal(session domain.Session) tea.Cmd {
 	return func() tea.Msg {
 		if m.termCloser != nil {
-			m.termCloser.Close()
+			// Tearing down the embedded terminal; a close error has nowhere useful to go.
+			_ = m.termCloser.Close()
 			m.termCloser = nil
 		}
 
@@ -1616,7 +1617,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		// reconciles remote-only files without deleting remote content, so a
 		// clean-slate delete is unnecessary and causes an empty local dir if the
 		// sync hasn't completed yet.
-		if err := os.MkdirAll(localPath, 0755); err != nil {
+		if err := os.MkdirAll(localPath, 0750); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
 
@@ -1856,7 +1857,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 
 		m.log("Cleaning up local sync path: %s", localSyncPath)
 		_ = os.RemoveAll(localSyncPath)
-		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
+		if err := os.MkdirAll(localSyncPath, 0750); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
 
@@ -2359,7 +2360,7 @@ func (m *Model) log(format string, args ...interface{}) {
 
 // appendDebugLog appends a line to /tmp/aiman-debug.log for tracing goroutine activity.
 func appendDebugLog(line string) error {
-	f, err := os.OpenFile("/tmp/aiman-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile("/tmp/aiman-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -3982,7 +3983,8 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		}
 	}
 
-	if m.currentTab == tabSessions {
+	switch m.currentTab {
+	case tabSessions:
 		newSel := m.list.SelectedItem()
 		var selItem item
 		newSelID := ""
@@ -4007,7 +4009,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 				}
 			}
 		}
-	} else if m.currentTab == tabDaemons {
+	case tabDaemons:
 		newSel := m.daemonList.SelectedItem()
 		var selDaemon daemonItem
 		newDaemonHost := ""
@@ -4199,7 +4201,8 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	}
 	if msg.String() == "ctrl+c" {
 		if m.termCloser != nil {
-			m.termCloser.Close()
+			// Tearing down the embedded terminal; a close error has nowhere useful to go.
+			_ = m.termCloser.Close()
 		}
 		return m, tea.Quit, true
 	}
@@ -5936,7 +5939,8 @@ func (m *Model) handleQuitConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch km.String() {
 		case "y":
 			if m.termCloser != nil {
-				m.termCloser.Close()
+				// Tearing down the embedded terminal; a close error has nowhere useful to go.
+				_ = m.termCloser.Close()
 			}
 			return m, tea.Quit
 		case "n", "esc", "q":
@@ -6346,9 +6350,10 @@ func (m *Model) renderMainView() string {
 
 	// Main Panel
 	var mainContent string
-	if m.currentTab == tabSessions {
+	switch m.currentTab {
+	case tabSessions:
 		mainContent = m.renderSessionPanel(mainWidth)
-	} else if m.currentTab == tabDaemons {
+	case tabDaemons:
 		mainContent = m.renderDaemonPanel(mainWidth)
 	}
 
@@ -6646,9 +6651,10 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 		}
 
 		statusLabel := string(d.Status)
-		if d.Status == domain.DaemonStatusRunning {
+		switch d.Status {
+		case domain.DaemonStatusRunning:
 			statusLabel = successStyle.Render(statusLabel)
-		} else if d.Status == domain.DaemonStatusStopped {
+		case domain.DaemonStatusStopped:
 			statusLabel = failStyle.Render(statusLabel)
 		}
 

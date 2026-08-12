@@ -1,17 +1,18 @@
+version: "2"
+
 run:
   timeout: 5m
   tests: true
 
 linters:
   enable:
-    - gofmt
+    # govet, errcheck, staticcheck, unused and ineffassign are the v2 defaults;
+    # listed explicitly so the set is readable rather than implied.
     - govet
     - errcheck
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
-    - typecheck
     - copyloopvar
     - gocyclo
     - misspell
@@ -20,33 +21,44 @@ linters:
     - gosec
     - gocritic
 
-linters-settings:
-  gocyclo:
-    min-complexity: 50
-  gocritic:
-    enabled-checks:
-      - appendCombine
-      - boolExprSimplify
-      - dupImport
-      - emptyStringTest
-      - hexLiteral
-      - methodExprCall
-      - stringXbytes
-      - typeUnparen
-      - unnecessaryBlock
-      - yodaStyleExpr
+  settings:
+    gocyclo:
+      min-complexity: 50
+    gocritic:
+      enabled-checks:
+        - appendCombine
+        - boolExprSimplify
+        - dupImport
+        - emptyStringTest
+        - hexLiteral
+        - methodExprCall
+        - stringXbytes
+        - typeUnparen
+        - unnecessaryBlock
+        - yodaStyleExpr
 
-issues:
-  exclude-dirs:
-    - vendor
-  exclude-rules:
-    # Exclude some linters from running on tests files
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
-        - gosec
-    # Exclude unused parameters in interface implementations
-    - linters:
-        - unparam
-      text: "is unused"
+  exclusions:
+    # v1 applied these by default (exclude-use-default). v2 requires opting in,
+    # so name them to keep the enforced set the same across the migration
+    # rather than silently widening it.
+    presets:
+      - std-error-handling
+      - common-false-positives
+    paths:
+      - vendor
+    rules:
+      # Tests trade these off deliberately: table-driven cases get long, and
+      # ignoring errors or using weak randomness in a fixture is not a finding.
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - errcheck
+          - gosec
+      # Interface implementations often cannot use every parameter.
+      - linters:
+          - unparam
+        text: "is unused"
+
+formatters:
+  enable:
+    - gofmt

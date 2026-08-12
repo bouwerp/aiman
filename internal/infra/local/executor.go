@@ -28,7 +28,7 @@ func (e *Executor) Execute(ctx context.Context, cmdStr string) (string, error) {
 }
 
 func (e *Executor) WriteFile(ctx context.Context, path string, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return err
 	}
 	return os.WriteFile(path, content, 0600)
