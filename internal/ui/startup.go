@@ -125,9 +125,15 @@ func runCheckSSH(doctor *usecase.Doctor) tea.Cmd {
 	}
 }
 
+// discoveryTimeout caps the whole startup scan. Without it a wedged remote
+// holds the splash screen open indefinitely rather than degrading to whatever
+// the database already knows.
+const discoveryTimeout = 3 * time.Minute
+
 func runDiscovery(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
+		defer cancel()
 		result := discoveryResult{scannedHosts: make(map[string]bool)}
 		if len(cfg.Remotes) == 0 {
 			return discoveryResultMsg(result)

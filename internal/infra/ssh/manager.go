@@ -90,6 +90,13 @@ const sshCommandTimeout = 30 * time.Second
 const remotePathPreamble = `export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:${HOME}/.local/bin:${PATH}"; `
 
 func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
+	return m.executeWithTimeout(ctx, cmdStr, sshCommandTimeout)
+}
+
+// executeWithTimeout runs a remote command with an explicit per-call deadline.
+// Batch discovery scans do far more work per round trip than a single command,
+// so they need a longer budget than sshCommandTimeout allows.
+func (m *Manager) executeWithTimeout(ctx context.Context, cmdStr string, timeout time.Duration) (string, error) {
 	target := m.target()
 	cp := m.controlPath()
 
@@ -101,7 +108,7 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	fullCmd := remotePathPreamble + cmdStr
 
 	run := func() (string, error) {
-		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		// We use ControlMaster=auto and ControlPersist to handle multiplexing automatically.
 		// ServerAliveInterval/CountMax ensure dead connections are detected within ~15s.
@@ -126,7 +133,7 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	}
 
 	runDirect := func() (string, error) {
-		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		// Final fallback without SSH multiplexing, for cases where the control
 		// socket/session is flaky but direct SSH still works.
