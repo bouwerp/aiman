@@ -79,9 +79,27 @@ accumulated worktrees.
   **1 call / 0.60 s**.
 - `discoverSession` deleted; `tmuxRecordsPerItem` + `sessionFromRecord` replace it.
 
-Still open from the review: render the dashboard from SQLite before discovery completes, and
-fold the daemon poll loop into the TUI (decided: fold, with an SSH executor per session's
-remote, then delete `cmd/aiman-trigger` and `internal/infra/local`).
+### Autonomous trigger daemon now actually reaches remotes ✅
+Scheduled Prompts and autonomous GitHub triggers were configurable in the TUI but could never
+fire. The execution path was already complete: the dashboard installs `aiman-trigger` onto a
+remote (`install.sh | BINARY_NAME=aiman-trigger sh`), launches it there in a tmux session, and
+manages it from the Daemons tab. The daemon runs *on* the remote, which is why `local.Executor`
+is the correct executor for it.
+
+The only missing piece was release plumbing:
+- `release.yml` built only `./cmd/aiman`, so `install.sh` resolved
+  `aiman-trigger-<goos>-<goarch>` to an asset that was never published and the remote install
+  failed. The matrix now builds and packages both binaries per platform; the existing
+  `aiman-*` release glob already picks up the new assets.
+- `ci.yml` now compiles `./cmd/aiman-trigger` too, so it cannot silently rot again.
+- `install.sh` hardcoded `./cmd/aiman` in its build-from-source fallback, so
+  `BINARY_NAME=aiman-trigger` would have installed the TUI under the daemon's name. It now
+  builds `./cmd/$BINARY_NAME` and fails loudly if no such command exists.
+
+Also removed `schedule` from the CLI usage text: it was advertised but had no case, so it fell
+through to "unknown command".
+
+Still open from the review: render the dashboard from SQLite before discovery completes.
 
 
 

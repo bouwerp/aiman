@@ -65,5 +65,5 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Build binary
-        run: CGO_ENABLED=0 go build -v ./cmd/aiman
+      - name: Build binaries
+        run: CGO_ENABLED=0 go build -v ./cmd/aiman ./cmd/aiman-trigger

@@ -130,7 +130,6 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  update           update aiman to the latest release\n")
 			fmt.Fprintf(os.Stderr, "  init             run the configuration setup wizard\n")
 			fmt.Fprintf(os.Stderr, "  repos            open the repository picker\n")
-			fmt.Fprintf(os.Stderr, "  schedule         schedule a prompt to be injected into a session\n")
 			fmt.Fprintf(os.Stderr, "  ec2-loop         launch autonomous loop agent on an on-demand EC2 instance\n")
 			fmt.Fprintf(os.Stderr, "  clear-aws-profiles  clear legacy aiman-* AWS profile names from stored sessions\n")
 			return errUsage

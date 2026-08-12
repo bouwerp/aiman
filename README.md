@@ -521,6 +521,7 @@ Aiman follows **Clean Architecture** principles:
 - [x] AI session summaries (brief + long) with action items
 - [x] Session archiving and snapshot browser
 - [x] Self-update (`aiman update`)
+- [x] Autonomous trigger daemon (`aiman-trigger`) released per platform and installable onto a remote from the Daemons tab
 - [ ] Git intelligence panel
 - [ ] MOSH support
 

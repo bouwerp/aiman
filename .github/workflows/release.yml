@@ -20,24 +20,29 @@ jobs:
             goos: darwin
             goarch: amd64
             name: aiman-darwin-amd64
+            trigger_name: aiman-trigger-darwin-amd64
           - os: macos-latest
             goos: darwin
             goarch: arm64
             name: aiman-darwin-arm64
+            trigger_name: aiman-trigger-darwin-arm64
           # Linux builds
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
             name: aiman-linux-amd64
+            trigger_name: aiman-trigger-linux-amd64
           - os: ubuntu-latest
             goos: linux
             goarch: arm64
             name: aiman-linux-arm64
+            trigger_name: aiman-trigger-linux-arm64
           # Windows builds
           - os: ubuntu-latest
             goos: windows
             goarch: amd64
             name: aiman-windows-amd64.exe
+            trigger_name: aiman-trigger-windows-amd64.exe
 
     steps:
       - name: Checkout code
@@ -51,26 +56,36 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Build binary
+      # aiman-trigger is the autonomous-trigger daemon. The dashboard installs it
+      # onto a remote with `install.sh | BINARY_NAME=aiman-trigger sh`, which
+      # resolves the asset as <BINARY_NAME>-<goos>-<goarch>, so it has to be
+      # released alongside the TUI or that install finds nothing to download.
+      - name: Build binaries
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
           BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          go build -v -ldflags="-s -w -X main.version=${{ github.ref_name }} -X main.buildTime=${BUILD_TIME}" -o ${{ matrix.name }} ./cmd/aiman
+          LDFLAGS="-s -w -X main.version=${{ github.ref_name }} -X main.buildTime=${BUILD_TIME}"
+          go build -v -ldflags="$LDFLAGS" -o ${{ matrix.name }} ./cmd/aiman
+          go build -v -ldflags="$LDFLAGS" -o ${{ matrix.trigger_name }} ./cmd/aiman-trigger
 
-      - name: Create package (Unix)
+      - name: Create packages (Unix)
         if: matrix.goos != 'windows'
         run: |
-          tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
-          shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
+          for BIN in ${{ matrix.name }} ${{ matrix.trigger_name }}; do
+            tar czf "${BIN}.tar.gz" "$BIN"
+            shasum -a 256 "${BIN}.tar.gz" > "${BIN}.tar.gz.sha256"
+          done
 
-      - name: Create package (Windows)
+      - name: Create packages (Windows)
         if: matrix.goos == 'windows'
         run: |
-          zip ${{ matrix.name }}.zip ${{ matrix.name }}
-          shasum -a 256 ${{ matrix.name }}.zip > ${{ matrix.name }}.zip.sha256
+          for BIN in ${{ matrix.name }} ${{ matrix.trigger_name }}; do
+            zip "${BIN}.zip" "$BIN"
+            shasum -a 256 "${BIN}.zip" > "${BIN}.zip.sha256"
+          done
 
       - name: Release
         uses: softprops/action-gh-release@v2
