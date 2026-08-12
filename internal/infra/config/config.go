@@ -22,8 +22,78 @@ type Config struct {
 	Skills       SkillsConfig  `yaml:"skills,omitempty"`
 	AI           AIConfig      `yaml:"ai,omitempty"`
 	EC2Loop      EC2LoopConfig `yaml:"ec2_loop,omitempty"`
+	AWS          AWSDefaults   `yaml:"aws,omitempty"`
+	Sync         SyncConfig    `yaml:"sync,omitempty"`
 	Remotes      []Remote      `yaml:"remotes"`
 	ActiveRemote string        `yaml:"active_remote"`
+}
+
+// AWSDefaults sets what the AWS fields on the session summary screen start
+// with, so a profile does not have to be retyped for every session.
+type AWSDefaults struct {
+	// DefaultProfile is the local ~/.aws profile new sessions use to mint
+	// credentials. Empty means fall back to the delegation's source_profile.
+	DefaultProfile string `yaml:"default_profile,omitempty"`
+	// DefaultRegion is the region new sessions start with. Empty falls back to
+	// the delegation's region.
+	DefaultRegion string `yaml:"default_region,omitempty"`
+}
+
+// ResolveAWSSessionDefaults returns the profile and region a new session on
+// this remote should be pre-filled with.
+//
+// Precedence, most specific first: the remote's own aws_default_profile /
+// aws_default_region, then the global aws: block, then the delegation's own
+// source_profile / region. The user can still override either on the summary
+// screen; this only decides what that screen starts with.
+func (c *Config) ResolveAWSSessionDefaults(remote Remote, delegation *AWSDelegation) (profile, region string) {
+	if delegation != nil {
+		profile, region = delegation.SourceProfile, delegation.Region
+	}
+	if c != nil {
+		if v := strings.TrimSpace(c.AWS.DefaultProfile); v != "" {
+			profile = v
+		}
+		if v := strings.TrimSpace(c.AWS.DefaultRegion); v != "" {
+			region = v
+		}
+	}
+	if v := strings.TrimSpace(remote.AWSDefaultProfile); v != "" {
+		profile = v
+	}
+	if v := strings.TrimSpace(remote.AWSDefaultRegion); v != "" {
+		region = v
+	}
+	return profile, region
+}
+
+// SyncConfig tunes what mutagen mirrors between the remote worktree and the
+// local copy. The defaults exclude dependency and build directories, which
+// dominate transfer time on a slow link without being worth mirroring.
+type SyncConfig struct {
+	// Ignore adds patterns on top of the built-in set. An entry prefixed with
+	// "!" removes the matching built-in instead, e.g. "!dist" to mirror a
+	// project that genuinely tracks its dist directory.
+	Ignore []string `yaml:"ignore,omitempty"`
+	// UseDefaultIgnores mirrors everything when explicitly false. Unset means
+	// the built-in ignore set applies.
+	UseDefaultIgnores *bool `yaml:"use_default_ignores,omitempty"`
+}
+
+// SyncIgnoresEnabled reports whether the built-in ignore set should apply.
+func (c *Config) SyncIgnoresEnabled() bool {
+	if c == nil || c.Sync.UseDefaultIgnores == nil {
+		return true
+	}
+	return *c.Sync.UseDefaultIgnores
+}
+
+// SyncIgnorePatterns returns the user's additional ignore patterns.
+func (c *Config) SyncIgnorePatterns() []string {
+	if c == nil {
+		return nil
+	}
+	return c.Sync.Ignore
 }
 
 // EC2LoopConfig configures the default settings for launching EC2 autonomous loops.
@@ -98,6 +168,11 @@ type Remote struct {
 	// AWSDelegations allows multiple delegation profiles per remote (e.g. default + prod).
 	// When both AWSDelegation and AWSDelegations are set, all entries are used.
 	AWSDelegations []*AWSDelegation `yaml:"aws_delegations,omitempty"`
+	// AWSDefaultProfile overrides the global aws.default_profile for sessions
+	// created on this remote. Empty means inherit.
+	AWSDefaultProfile string `yaml:"aws_default_profile,omitempty"`
+	// AWSDefaultRegion overrides the global aws.default_region for this remote.
+	AWSDefaultRegion string `yaml:"aws_default_region,omitempty"`
 }
 
 // AWSDelegation is stored in aiman config; role_arn on the remote is derived from

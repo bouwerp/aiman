@@ -37,6 +37,23 @@ func SanitizeBranchName(s string) string {
 	return s
 }
 
+// SanitizeTmuxSessionName maps a branch name onto the name tmux will actually
+// store for it.
+//
+// tmux parses a target as session:window.pane, so a session name containing
+// "." or ":" can never be addressed again: `kill-session -t "a.b"` reports
+// "can't find pane: b" and leaves the session running. tmux itself rewrites "."
+// to "_" when creating the session, so the name aiman remembers must match that
+// rewrite or every later capture-pane, send-keys and kill-session silently
+// targets nothing.
+func SanitizeTmuxSessionName(branch string) string {
+	s := strings.ReplaceAll(branch, "/", "-")
+	// Match tmux's own normalisation rather than inventing a different one.
+	s = strings.ReplaceAll(s, ".", "_")
+	s = strings.ReplaceAll(s, ":", "_")
+	return s
+}
+
 // sanitizeBranchSegment maps a single path component to git-safe characters:
 // letters, digits, underscore, hyphen, and dot; other runes become hyphens.
 func sanitizeBranchSegment(seg string) string {

@@ -1209,6 +1209,18 @@ func lastNonEmptyLine(output string) string {
 	return ""
 }
 
+// firstSyncingDelegation returns the remote's first delegation that pushes
+// credentials, or nil when none does. It reads both the singular
+// aws_delegation and the plural aws_delegations form.
+func firstSyncingDelegation(remote config.Remote) *config.AWSDelegation {
+	for _, d := range remote.AllDelegations() {
+		if d != nil && d.SyncCredentials {
+			return d
+		}
+	}
+	return nil
+}
+
 func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, bool) {
 	if cfg == nil {
 		return config.Remote{}, false
@@ -1608,7 +1620,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
 
-		mutagenEngine := mutagen.NewEngine()
+		mutagenEngine := mutagen.NewEngineWithIgnores(m.cfg.SyncIgnorePatterns(), m.cfg.SyncIgnoresEnabled())
 
 		m.log("Terminating existing syncs: %s, %s", syncName, tempSyncName)
 		m.sendStatus("Terminating existing syncs...")
@@ -1835,7 +1847,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 		session.RemoteHost = sessionCfg.RemoteHost
 
 		// Start mutagen sync
-		mutagenEngine := mutagen.NewEngine()
+		mutagenEngine := mutagen.NewEngineWithIgnores(m.cfg.SyncIgnorePatterns(), m.cfg.SyncIgnoresEnabled())
 		home, _ := os.UserHomeDir()
 
 		syncName := "aiman-sync-" + session.ID
@@ -1947,7 +1959,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 						cs.cfg.AttachExisting = false
 						// Update the placeholder so the list shows the suffixed name while creating.
 						cs.placeholder.Branch = newBranch
-						cs.placeholder.TmuxSession = strings.ReplaceAll(newBranch, "/", "-")
+						cs.placeholder.TmuxSession = domain.SanitizeTmuxSessionName(newBranch)
 						for i, s := range m.allSessions {
 							if s.ID == msg.placeholderID {
 								m.allSessions[i] = cs.placeholder
@@ -5600,13 +5612,15 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.summary.SetAgent(m.sessionCfg.Agent)
 		m.summary.SetSize(m.width, m.height)
 		// Populate AWS override fields when the remote has SyncCredentials enabled.
-		if remote := m.selectedRemote; remote.AWSDelegation != nil && remote.AWSDelegation.SyncCredentials {
-			d := remote.AWSDelegation
+		// AllDelegations covers both the singular aws_delegation and the plural
+		// aws_delegations form, so a remote configured either way gets the section.
+		if d := firstSyncingDelegation(m.selectedRemote); d != nil {
+			profile, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
 			m.summary.SetAWSDefaults(&domain.AWSConfig{
-				SourceProfile:   d.SourceProfile,
+				SourceProfile:   profile,
 				RoleName:        d.RoleName,
 				AccountID:       d.AccountID,
-				Region:          d.Region,
+				Region:          region,
 				Regions:         d.Regions,
 				SessionPolicy:   d.SessionPolicy,
 				DurationSeconds: d.DurationSeconds,

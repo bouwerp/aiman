@@ -36,7 +36,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 
 ### Remote Development
 - **SSH Multiplexing**: High-performance connections with ControlMaster
-- **Mutagen Sync**: Real-time file sync between local and remote
+- **Mutagen Sync**: Real-time file sync between local and remote, excluding dependency and build directories by default so a new session starts syncing in seconds rather than minutes
 - **Tmux Integration**: Native tmux session management
 
 ### AWS Credential Delegation
@@ -329,6 +329,20 @@ git:
   include_orgs:
     - "mycompany"
 
+aws:
+  # Pre-fills the Profile and Region fields on the session summary screen so
+  # they don't have to be retyped for every session. Still overridable there.
+  default_profile: dev
+  default_region: eu-west-1
+
+sync:
+  # Extra paths to exclude from the local mirror, on top of the built-in set.
+  # Prefix with "!" to mirror a built-in exclusion after all (e.g. "!dist").
+  ignore:
+    - "tmp"
+  # Set false to mirror everything, including node_modules and build output.
+  use_default_ignores: true
+
 remotes:
   - name: devbox
     host: devbox.company.com
@@ -353,6 +367,27 @@ When `sync_credentials: true`, each new session on that remote gets:
 2. The remote `~/.aws/config` updated for the managed profile/default region
 3. Only region env vars injected into tmux when needed (`AWS_REGION` / `AWS_DEFAULT_REGION`)
 
+#### Setting the default profile
+
+Without configuration, the summary screen starts from the delegation's own
+`source_profile` and `region`. Set a default so it doesn't have to be retyped:
+
+```yaml
+aws:
+  default_profile: dev          # applies to every remote
+  default_region: eu-west-1
+
+remotes:
+  - name: devbox
+    aws_default_profile: prod   # this remote only, overrides the global value
+    aws_default_region: us-east-1
+```
+
+Precedence, most specific first: what you type on the summary screen, then the
+remote's `aws_default_profile` / `aws_default_region`, then the global `aws:`
+block, then the delegation's `source_profile` / `region`. Profile and region
+resolve independently, so setting only one leaves the other inheriting.
+
 **Per-session overrides** are available in the session creation summary screen — edit the **Profile** and **Region** fields to override the remote defaults for just that session:
 
 ```
@@ -361,6 +396,23 @@ When `sync_credentials: true`, each new session on that remote gets:
 ```
 
 The profile and region can differ per session; all other settings (role, account, session policy, duration) inherit from the remote config.
+
+### What gets synced
+
+The local mirror at `~/.aiman/work/<session-id>` excludes dependency and build
+directories by default: `node_modules`, `target`, `dist`, `build`, `out`,
+`.venv`, `__pycache__`, `.next`, `.turbo`, `.gradle`, `.terraform`, `coverage`
+and similar. These are large, regenerable, and rebuilt on the remote anyway, so
+mirroring them only costs transfer time. On a 3 MB/s link a worktree carrying
+`node_modules` took several minutes to reach a usable state; excluding them
+brings that down to seconds.
+
+`.git` is deliberately still synced, so the mirror stays a working git checkout
+for the VS Code handoff.
+
+Tune it with the `sync:` block shown in the example config above. Ignored paths
+are never propagated in either direction, so excluding a directory leaves the
+remote copy untouched rather than deleting it.
 
 Legacy `~/.aiman/aws/...` session files from older releases are cleaned up automatically when encountered, but current sync flows operate on `~/.aws/{credentials,config}` directly.
 
