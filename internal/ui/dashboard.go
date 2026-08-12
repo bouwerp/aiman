@@ -329,47 +329,51 @@ func (i tunnelItem) FilterValue() string {
 }
 
 type Model struct {
-	version                string
-	cfg                    *config.Config
-	db                     domain.SessionRepository
-	Program                *tea.Program
-	state                  viewState
-	panelMode              panelMode
-	list                   list.Model
-	daemonList             list.Model
-	daemons                map[string]domain.Daemon // Keyed by RemoteHost
-	currentTab             mainTab
-	menu                   list.Model
-	remotes                RemotesModel
-	setup                  SetupModel
-	gitSetup               GitSetupModel
-	generalSetup           GeneralSetupModel
-	aiSetup                AISetupModel
-	secretsSetup           SecretsSetupModel
-	awsCredentials         AWSCredentialsModel
-	snapshotBrowser        SnapshotBrowserModel
-	scheduledPrompts       ScheduledPromptsModel
-	picker                 RepoPickerModel
-	ec2Setup               EC2SetupModel
-	issuePicker            IssuePickerModel
-	branchInput            BranchInputModel
-	genericInput           TextInputModel
-	branchPicker           BranchPickerModel
-	dirPicker              DirPickerModel
-	agentPicker            AgentPickerModel
-	summary                SummaryModel
-	doctorResults          []usecase.CheckResult
-	width, height          int
-	viewport               viewport.Model
-	terminal               *TerminalModel
-	tmuxOutput             string
-	activeSession          string
-	termCloser             io.Closer
-	lastError              string
-	loadingMsg             string
-	sessionCfg             domain.SessionConfig
-	loadingNext            viewState
-	initialLoad            bool
+	version          string
+	cfg              *config.Config
+	db               domain.SessionRepository
+	Program          *tea.Program
+	state            viewState
+	panelMode        panelMode
+	list             list.Model
+	daemonList       list.Model
+	daemons          map[string]domain.Daemon // Keyed by RemoteHost
+	currentTab       mainTab
+	menu             list.Model
+	remotes          RemotesModel
+	setup            SetupModel
+	gitSetup         GitSetupModel
+	generalSetup     GeneralSetupModel
+	aiSetup          AISetupModel
+	secretsSetup     SecretsSetupModel
+	awsCredentials   AWSCredentialsModel
+	snapshotBrowser  SnapshotBrowserModel
+	scheduledPrompts ScheduledPromptsModel
+	picker           RepoPickerModel
+	ec2Setup         EC2SetupModel
+	issuePicker      IssuePickerModel
+	branchInput      BranchInputModel
+	genericInput     TextInputModel
+	branchPicker     BranchPickerModel
+	dirPicker        DirPickerModel
+	agentPicker      AgentPickerModel
+	summary          SummaryModel
+	doctorResults    []usecase.CheckResult
+	width, height    int
+	viewport         viewport.Model
+	terminal         *TerminalModel
+	tmuxOutput       string
+	activeSession    string
+	termCloser       io.Closer
+	lastError        string
+	loadingMsg       string
+	sessionCfg       domain.SessionConfig
+	loadingNext      viewState
+	initialLoad      bool
+	// discoveryPending is true between the dashboard opening on database
+	// contents and the first remote scan landing, so the list can be shown
+	// immediately while making clear it is not yet confirmed against the remote.
+	discoveryPending       bool
 	terminatePrecheckError string
 	consoleOpen            bool
 	consoleLog             []string
@@ -574,6 +578,13 @@ func (m *Model) applyRemoteFilter() {
 	} else {
 		m.list.Title = "Sessions [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
 		m.daemonList.Title = "Daemons [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
+	}
+
+	// Until the first scan lands the list is whatever the database last recorded,
+	// which may name sessions that no longer exist. Say so rather than presenting
+	// stale rows as current.
+	if m.discoveryPending {
+		m.list.Title += " · scanning remotes…"
 	}
 }
 
@@ -6098,6 +6109,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd) {
 	m.log("Discovered %d sessions", len(msg.sessions))
+	m.discoveryPending = false
 	ctx := context.Background()
 
 	// Load DB to carry timestamps before saving (discovery must not clobber updated_at)

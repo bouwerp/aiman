@@ -99,7 +99,23 @@ The only missing piece was release plumbing:
 Also removed `schedule` from the CLI usage text: it was advertised but had no case, so it fell
 through to "unknown command".
 
-Still open from the review: render the dashboard from SQLite before discovery completes.
+### Dashboard renders from SQLite first ✅
+The splash screen gated on four tasks, one of which was the remote scan, so the dashboard
+could not appear until every remote had been walked. It now gates on the three doctor checks
+only and opens on whatever the database already holds.
+
+- `StartupModel.pending` drops to 3; `discoveryResultMsg` is recorded but no longer decrements
+  the gate.
+- Discovery still starts in `Init`. Whichever way the race resolves, the result reaches the
+  dashboard: if it lands first the handoff replays it as a command, otherwise bubbletea
+  delivers it to the dashboard directly once the model has been swapped.
+- The ~100-line merge in `startup.go` is deleted. `Model.applyDiscoveryResult` already
+  performs the full merge and reloads the database itself, so there is now one merge
+  implementation instead of two that had already drifted (the startup copy did not apply the
+  `WorktreePath` fallback).
+- `Model.discoveryPending` marks the window between opening on database contents and the first
+  scan landing; the session list title shows `· scanning remotes…` so stale rows are not
+  presented as confirmed.
 
 
 
