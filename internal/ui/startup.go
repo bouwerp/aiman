@@ -184,6 +184,12 @@ func loadConfiguredSessions(ctx context.Context, cfg *config.Config, db domain.S
 	return filtered, nil
 }
 
+// startupReadyMsg is emitted immediately by Init. Nothing on the splash screen
+// is worth waiting for: the doctor results are shown permanently in the
+// dashboard footer, and discovery updates the session list in place. Gating the
+// handoff on either only delays the first paint.
+type startupReadyMsg struct{}
+
 func (m StartupModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
@@ -192,6 +198,7 @@ func (m StartupModel) Init() tea.Cmd {
 		runCheckGit(m.doctor),
 		runCheckSSH(m.doctor),
 		runDiscovery(m.cfg),
+		func() tea.Msg { return startupReadyMsg{} },
 	)
 }
 
@@ -211,11 +218,14 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case startupReadyMsg:
+		m.ready = true
 	case checkResultMsg:
+		// Recorded so a check that beats the handoff is carried into the
+		// dashboard; later ones are delivered to the dashboard directly.
 		res := usecase.CheckResult(msg)
 		m.checks[res.Name] = &res
 		m.results = append(m.results, res)
-		m.pending--
 	case discoveryResultMsg:
 		// Recorded but deliberately not counted against m.pending: discovery
 		// must not gate the handoff. If it lands first the result is replayed
@@ -228,13 +238,10 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 	}
 
-	if m.pending <= 0 {
-		m.ready = true
-
-		// Hand off as soon as the doctor checks land, using whatever the database
-		// already knows. Discovery is not part of this gate: it costs a remote
-		// round trip and previously held the splash screen open for the whole
-		// scan. Its result is applied by the dashboard when it arrives.
+	if m.ready {
+		// Open on whatever the database already knows. Neither the doctor checks
+		// nor discovery gate this: both cost network round trips, and both report
+		// into the dashboard itself once they land.
 		ctx := context.Background()
 		dbSessions, err := loadConfiguredSessions(ctx, m.cfg, m.db)
 		startupLogs := []string{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -53,8 +54,10 @@ func (m *Manager) ListRepos(ctx context.Context) ([]domain.Repo, error) {
 	for _, org := range m.cfg.IncludeOrgs {
 		orgRepos, err := m.fetchOrgRepos(ctx, org)
 		if err != nil {
-			// Log error but continue with other orgs
-			fmt.Printf("Warning: failed to fetch repos for org %s: %v\n", org, err)
+			// One unreachable org must not lose the others. This goes to the log
+			// file, never stdout: the TUI owns the terminal and a stray write
+			// corrupts the display.
+			log.Printf("failed to fetch repos for org %s: %v", org, err)
 			continue
 		}
 		allRepos = append(allRepos, orgRepos...)

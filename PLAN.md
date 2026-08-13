@@ -117,6 +117,32 @@ only and opens on whatever the database already holds.
   scan landing; the session list title shows `· scanning remotes…` so stale rows are not
   presented as confirmed.
 
+### Startup is instant; doctor checks stream in ✅
+With discovery off the critical path the slowest doctor check became the gate. Those checks
+report into the dashboard footer permanently, so gating the splash on them only delayed the
+first paint of information the dashboard shows anyway.
+
+- `startupReadyMsg` is emitted by `Init`, so the dashboard opens on database contents alone.
+  Checks that land first are carried across; the rest arrive as `checkResultMsg` and are
+  applied by `Model.applyCheckResult`.
+- The footer reserves a row per known check via `startupCheckNames` and shows in-flight ones as
+  `checking…`, so streaming results fill rows in place. Pane sizing uses the same fixed count;
+  previously it sized off the running result count, which resized the panes three times per
+  launch.
+- Re-running checks from the admin menu now replaces rows instead of appending duplicates.
+
+Two checks were also doing far more work than they needed:
+- `CheckGit` called `ListRepos`, fetching every personal and org repository over the network
+  purely to report a count, then discarding the list — the repo picker fetches them again when
+  opened. `gh auth status` answers the question the check asks. **3.7 s → 596 ms.**
+- `CheckSSH` opened a fresh connection per remote, sequentially. It now probes concurrently
+  over the shared ControlMaster socket. **1.8 s → 160 ms.**
+
+`git.Manager.ListRepos` logged org failures with `fmt.Printf` to **stdout**, which would have
+corrupted the TUI mid-frame. It now uses `log`, and the TUI redirects the standard logger to
+`~/.aiman/aiman.log` (`config.GetLogPath`) for its lifetime so no background goroutine can
+write onto the rendered frame.
+
 
 
 - **SSH Backgrounding**: Avoid using `ssh -f` (backgrounding) inside Go's `os/exec` as it often receives a `SIGKILL` or `SIGHUP` when the parent Go process handles signals. Stick to `-o ControlMaster=auto` and `-o ControlPersist` for robust multiplexing.

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2455,7 +2456,14 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 	h, v := docStyle.GetFrameSize()
 
-	mainHeight := height - v - len(m.doctorResults) - 10
+	// Reserve a row per known check rather than per result received: results
+	// stream in after the dashboard opens, and sizing off the running count
+	// would resize the panes underneath the user three times on every launch.
+	checkRows := len(startupCheckNames)
+	if n := len(m.doctorResults); n > checkRows {
+		checkRows = n
+	}
+	mainHeight := height - v - checkRows - 10
 
 	m.list.SetSize(width/3-h, mainHeight) // Sidebar width
 	m.menu.SetSize(width-h, height-v)
@@ -3746,6 +3754,11 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case SetProgramMsg:
 		m.Program = msg.Program
+		return m, nil
+	case checkResultMsg:
+		// A doctor check finished after the dashboard opened. The footer shows
+		// these permanently, so it is the natural place for them to land.
+		m.applyCheckResult(usecase.CheckResult(msg))
 		return m, nil
 	case tea.KeyMsg:
 		m, cmd, handled := m.handleMainKeyMsg(msg)
@@ -6107,6 +6120,60 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// startupCheckNames are the doctor checks, in the order the footer lists them.
+// The footer reserves a row for each from the first paint, so results arriving
+// one at a time fill rows in place instead of growing the footer and shifting
+// the layout under the user.
+var startupCheckNames = []string{"JIRA", "Git/GitHub", "SSH"}
+
+// applyCheckResult records a doctor result, replacing any earlier result for the
+// same check so a re-run from the admin menu updates in place.
+func (m *Model) applyCheckResult(res usecase.CheckResult) {
+	for i := range m.doctorResults {
+		if m.doctorResults[i].Name == res.Name {
+			m.doctorResults[i] = res
+			return
+		}
+	}
+	m.doctorResults = append(m.doctorResults, res)
+}
+
+// renderStartupChecks draws one row per known check, showing those still in
+// flight as pending rather than omitting them.
+func (m *Model) renderStartupChecks() string {
+	byName := make(map[string]usecase.CheckResult, len(m.doctorResults))
+	for _, res := range m.doctorResults {
+		byName[res.Name] = res
+	}
+
+	var b strings.Builder
+	b.WriteString("Startup Checks:\n")
+	for _, name := range startupCheckNames {
+		res, done := byName[name]
+		if !done {
+			b.WriteString(fmt.Sprintf("%s %-10s: checking…\n", statusStyle.Render("…"), name))
+			continue
+		}
+		status := successStyle.Render("✓")
+		if !res.Passed {
+			status = failStyle.Render("✗")
+		}
+		b.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
+	}
+	// Anything reported under a name not in the fixed list still gets a row.
+	for _, res := range m.doctorResults {
+		if slices.Contains(startupCheckNames, res.Name) {
+			continue
+		}
+		status := successStyle.Render("✓")
+		if !res.Passed {
+			status = failStyle.Render("✗")
+		}
+		b.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
+	}
+	return b.String()
+}
+
 func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd) {
 	m.log("Discovered %d sessions", len(msg.sessions))
 	m.discoveryPending = false
@@ -6383,22 +6450,14 @@ func (m *Model) renderMainView() string {
 	content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainStyle.Render(mainContent))
 
 	// Footer (Checks & Active Remote)
-	var doctorOutput strings.Builder
-	doctorOutput.WriteString("Startup Checks:\n")
-	for _, res := range m.doctorResults {
-		status := successStyle.Render("✓")
-		if !res.Passed {
-			status = failStyle.Render("✗")
-		}
-		doctorOutput.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
-	}
+	doctorSection := m.renderStartupChecks()
 
 	remoteInfo := fmt.Sprintf("Remotes: %d configured", len(m.cfg.Remotes))
 	if m.remoteFilter != "" {
 		remoteInfo += " | Filter: " + activeStyle.Render(remoteNameForHost(m.cfg, m.remoteFilter))
 	}
 
-	footer := "\n" + remoteInfo + "\n\n" + doctorOutput.String()
+	footer := "\n" + remoteInfo + "\n\n" + doctorSection
 
 	helpText := "n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • R: AWS creds • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit"
 	versionText := m.version

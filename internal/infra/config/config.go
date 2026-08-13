@@ -13,6 +13,7 @@ const (
 	DirName    = ".aiman"
 	ConfigName = "config.yaml"
 	DBName     = "aiman.db"
+	LogName    = "aiman.log"
 )
 
 type Config struct {
@@ -338,6 +339,16 @@ func GetDBPath() (string, error) {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 	return filepath.Join(home, DirName, DBName), nil
+}
+
+// GetLogPath returns the path of the log file the TUI redirects to, so
+// background goroutines never write onto the rendered frame.
+func GetLogPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(home, DirName, LogName), nil
 }
 
 // EnsureDir ensures that the configuration directory exists.

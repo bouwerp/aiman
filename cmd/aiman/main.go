@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -161,6 +163,14 @@ func run() error {
 	snapshotManager := usecase.NewSnapshotManager(db, intelligence)
 	startup := ui.NewStartupModel(cfg, doctor, db, flowManager, intelligence, snapshotManager, version)
 	p := tea.NewProgram(startup, tea.WithAltScreen(), tea.WithMouseAllMotion())
+
+	// From here the TUI owns the terminal, so anything written to stderr lands
+	// in the middle of the rendered frame. Background work logs to a file until
+	// the program exits.
+	if closeLog := redirectLogToFile(); closeLog != nil {
+		defer closeLog()
+	}
+
 	// Inject the program reference into the model via message once the event loop starts.
 	go func() { p.Send(ui.SetProgramMsg{Program: p}) }()
 	if _, err := p.Run(); err != nil {
@@ -168,4 +178,26 @@ func run() error {
 	}
 
 	return nil
+}
+
+// redirectLogToFile points the standard logger at ~/.aiman/aiman.log for the
+// lifetime of the TUI. Returns a closer, or nil when the file could not be
+// opened — in which case logging is discarded rather than allowed to corrupt
+// the display.
+func redirectLogToFile() func() {
+	path, err := config.GetLogPath()
+	if err != nil {
+		log.SetOutput(io.Discard)
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		log.SetOutput(io.Discard)
+		return nil
+	}
+	log.SetOutput(f)
+	return func() {
+		log.SetOutput(os.Stderr)
+		_ = f.Close()
+	}
 }
