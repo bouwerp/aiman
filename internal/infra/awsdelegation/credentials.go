@@ -3,6 +3,7 @@ package awsdelegation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -66,10 +67,10 @@ func GetTemporaryCredentials(ctx context.Context, profile string, opts ...Creden
 	if useAssumeRole {
 		roleARN := strings.TrimSpace(o.RoleARN)
 		if roleARN == "" {
-			return nil, fmt.Errorf(
+			return nil, errors.New(
 				"session_policy requires a role_arn / account_id so that assume-role can be used " +
-					"(get-session-token does not support inline policies). " +
-					"Set account_id in the AWS delegation config or remove the regions / session_policy restriction.")
+					"(get-session-token does not support inline policies); " +
+					"set account_id in the AWS delegation config or remove the regions / session_policy restriction")
 		}
 		sessionName := strings.TrimSpace(o.SessionName)
 		if sessionName == "" {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -27,6 +29,15 @@ var buildTime = ""
 // exit non-zero without an additional "Error:" line.
 var errUsage = errors.New("usage")
 
+// configPathForNotice resolves the config path for user-facing messages,
+// falling back to the bare filename when the home directory is unavailable.
+func configPathForNotice() string {
+	if p, err := config.GetConfigPath(); err == nil {
+		return p
+	}
+	return config.ConfigName
+}
+
 func main() {
 	if err := run(); err != nil {
 		if !errors.Is(err, errUsage) {
@@ -49,6 +60,17 @@ func run() error {
 		// But for now, let's just fail fast.
 		// Actually, let's provide a default config if it's missing just for the demo
 		cfg = &config.Config{}
+	}
+
+	// Report a repaired config file before the TUI takes over the terminal: the
+	// token in it was readable by other users until now, which the user should
+	// know about rather than have quietly fixed.
+	if cfg.PermissionsTightened {
+		fmt.Fprintf(os.Stderr, "aiman: %s was group/world-readable and has been tightened to 0600.\n", configPathForNotice())
+		fmt.Fprintf(os.Stderr, "       It holds your API token in plaintext; rotate it if this machine is shared.\n")
+	}
+	if cfg.PermissionsError != nil {
+		fmt.Fprintf(os.Stderr, "aiman: warning: %v\n", cfg.PermissionsError)
 	}
 
 	// 3. Initialize Database
@@ -130,7 +152,6 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  update           update aiman to the latest release\n")
 			fmt.Fprintf(os.Stderr, "  init             run the configuration setup wizard\n")
 			fmt.Fprintf(os.Stderr, "  repos            open the repository picker\n")
-			fmt.Fprintf(os.Stderr, "  schedule         schedule a prompt to be injected into a session\n")
 			fmt.Fprintf(os.Stderr, "  ec2-loop         launch autonomous loop agent on an on-demand EC2 instance\n")
 			fmt.Fprintf(os.Stderr, "  clear-aws-profiles  clear legacy aiman-* AWS profile names from stored sessions\n")
 			return errUsage
@@ -142,6 +163,14 @@ func run() error {
 	snapshotManager := usecase.NewSnapshotManager(db, intelligence)
 	startup := ui.NewStartupModel(cfg, doctor, db, flowManager, intelligence, snapshotManager, version)
 	p := tea.NewProgram(startup, tea.WithAltScreen(), tea.WithMouseAllMotion())
+
+	// From here the TUI owns the terminal, so anything written to stderr lands
+	// in the middle of the rendered frame. Background work logs to a file until
+	// the program exits.
+	if closeLog := redirectLogToFile(); closeLog != nil {
+		defer closeLog()
+	}
+
 	// Inject the program reference into the model via message once the event loop starts.
 	go func() { p.Send(ui.SetProgramMsg{Program: p}) }()
 	if _, err := p.Run(); err != nil {
@@ -149,4 +178,26 @@ func run() error {
 	}
 
 	return nil
+}
+
+// redirectLogToFile points the standard logger at ~/.aiman/aiman.log for the
+// lifetime of the TUI. Returns a closer, or nil when the file could not be
+// opened — in which case logging is discarded rather than allowed to corrupt
+// the display.
+func redirectLogToFile() func() {
+	path, err := config.GetLogPath()
+	if err != nil {
+		log.SetOutput(io.Discard)
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		log.SetOutput(io.Discard)
+		return nil
+	}
+	log.SetOutput(f)
+	return func() {
+		log.SetOutput(os.Stderr)
+		_ = f.Close()
+	}
 }

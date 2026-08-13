@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -351,7 +352,7 @@ func installOllamaCmd() tea.Cmd {
 	return func() tea.Msg {
 		brewPath, err := exec.LookPath("brew")
 		if err != nil {
-			return aiInstallDoneMsg{err: fmt.Errorf("Homebrew not found — download Ollama from https://ollama.com/download/mac")}
+			return aiInstallDoneMsg{err: errors.New("homebrew not found — download Ollama from https://ollama.com/download/mac")}
 		}
 		out, err := exec.Command(brewPath, "install", "ollama").CombinedOutput()
 		if err != nil {

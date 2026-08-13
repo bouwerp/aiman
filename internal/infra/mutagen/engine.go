@@ -13,10 +13,22 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
-type Engine struct{}
+type Engine struct {
+	// ignores are passed to `mutagen sync create` so large regenerable trees
+	// never cross the wire. Empty means sync everything.
+	ignores []string
+}
 
+// NewEngine returns an engine that excludes DefaultIgnores from new syncs.
 func NewEngine() *Engine {
-	return &Engine{}
+	return &Engine{ignores: resolveIgnores(nil, true)}
+}
+
+// NewEngineWithIgnores returns an engine using the user's configured ignore
+// patterns. When useDefaults is true the patterns extend DefaultIgnores;
+// entries prefixed with "!" remove the matching default.
+func NewEngineWithIgnores(extra []string, useDefaults bool) *Engine {
+	return &Engine{ignores: resolveIgnores(extra, useDefaults)}
 }
 
 func (e *Engine) StartSync(ctx context.Context, name, localPath, remotePath string, labels map[string]string, mode domain.SyncMode) error {
@@ -25,7 +37,7 @@ func (e *Engine) StartSync(ctx context.Context, name, localPath, remotePath stri
 		return fmt.Errorf("invalid sync paths")
 	}
 
-	if err := os.MkdirAll(localPath, 0755); err != nil {
+	if err := os.MkdirAll(localPath, 0750); err != nil {
 		return fmt.Errorf("failed to create local sync directory: %w", err)
 	}
 
@@ -35,6 +47,9 @@ func (e *Engine) StartSync(ctx context.Context, name, localPath, remotePath stri
 	}
 	for k, v := range labels {
 		args = append(args, "--label", fmt.Sprintf("%s=%s", k, SanitizeLabelValue(v)))
+	}
+	for _, p := range e.ignores {
+		args = append(args, "--ignore", p)
 	}
 
 	args = append(args, localPath, remotePath)

@@ -308,7 +308,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	sendKeysPrompt = joinPrompt(sendKeysPrompt, config.InitialPrompt)
 
 	// Step 8: Session (Tmux)
-	tmuxName := strings.ReplaceAll(branch, "/", "-")
+	tmuxName := domain.SanitizeTmuxSessionName(branch)
 
 	// Set AWS environment variables using the globally synced profile.
 	awsEnv := map[string]string{}

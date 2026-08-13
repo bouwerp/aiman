@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"sync"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/ssh"
 )
 
 type CheckResult struct {
@@ -56,18 +58,17 @@ func (d *Doctor) CheckJira(ctx context.Context) CheckResult {
 }
 
 func (d *Doctor) CheckGit(ctx context.Context) CheckResult {
-	// Check if gh is installed and authenticated
+	// `gh auth status` is the whole question this check answers. It used to also
+	// call ListRepos, which fetches every personal and org repository over the
+	// network purely to report a count, then discards the list — the repo picker
+	// fetches them all again when it is actually opened. That one call was ~3 s
+	// of a ~3.7 s check.
 	cmd := exec.CommandContext(ctx, "gh", "auth", "status")
 	if err := cmd.Run(); err != nil {
 		return CheckResult{Name: "Git/GitHub", Passed: false, Message: "GitHub CLI (gh) not authenticated"}
 	}
 
-	repos, err := d.gitManager.ListRepos(ctx)
-	if err != nil {
-		return CheckResult{Name: "Git/GitHub", Passed: false, Message: fmt.Sprintf("Failed to list repositories: %v", err)}
-	}
-
-	return CheckResult{Name: "Git/GitHub", Passed: true, Message: fmt.Sprintf("Access to %d repositories verified", len(repos))}
+	return CheckResult{Name: "Git/GitHub", Passed: true, Message: "GitHub CLI authenticated"}
 }
 
 func (d *Doctor) CheckSSH(ctx context.Context) CheckResult {
@@ -75,15 +76,24 @@ func (d *Doctor) CheckSSH(ctx context.Context) CheckResult {
 		return CheckResult{Name: "SSH", Passed: false, Message: "No remote dev servers configured"}
 	}
 
+	// Probe remotes concurrently and over the shared ControlMaster socket. A
+	// fresh connection per remote measured ~1.25 s against ~0.25 s multiplexed,
+	// and doing them one after another multiplied that by the remote count.
+	var wg sync.WaitGroup
+	results := make([]bool, len(d.cfg.Remotes))
+	for i, remote := range d.cfg.Remotes {
+		wg.Add(1)
+		go func(i int, remote config.Remote) {
+			defer wg.Done()
+			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+			results[i] = mgr.Connect(ctx) == nil
+		}(i, remote)
+	}
+	wg.Wait()
+
 	passedCount := 0
-	for _, remote := range d.cfg.Remotes {
-		target := remote.Host
-		if remote.User != "" {
-			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
-		}
-		// Try to connect with a short timeout
-		cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", target, "exit")
-		if err := cmd.Run(); err == nil {
+	for _, ok := range results {
+		if ok {
 			passedCount++
 		}
 	}

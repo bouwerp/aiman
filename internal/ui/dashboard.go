@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -329,47 +330,51 @@ func (i tunnelItem) FilterValue() string {
 }
 
 type Model struct {
-	version                string
-	cfg                    *config.Config
-	db                     domain.SessionRepository
-	Program                *tea.Program
-	state                  viewState
-	panelMode              panelMode
-	list                   list.Model
-	daemonList             list.Model
-	daemons                map[string]domain.Daemon // Keyed by RemoteHost
-	currentTab             mainTab
-	menu                   list.Model
-	remotes                RemotesModel
-	setup                  SetupModel
-	gitSetup               GitSetupModel
-	generalSetup           GeneralSetupModel
-	aiSetup                AISetupModel
-	secretsSetup           SecretsSetupModel
-	awsCredentials         AWSCredentialsModel
-	snapshotBrowser        SnapshotBrowserModel
-	scheduledPrompts       ScheduledPromptsModel
-	picker                 RepoPickerModel
-	ec2Setup               EC2SetupModel
-	issuePicker            IssuePickerModel
-	branchInput            BranchInputModel
-	genericInput           TextInputModel
-	branchPicker           BranchPickerModel
-	dirPicker              DirPickerModel
-	agentPicker            AgentPickerModel
-	summary                SummaryModel
-	doctorResults          []usecase.CheckResult
-	width, height          int
-	viewport               viewport.Model
-	terminal               *TerminalModel
-	tmuxOutput             string
-	activeSession          string
-	termCloser             io.Closer
-	lastError              string
-	loadingMsg             string
-	sessionCfg             domain.SessionConfig
-	loadingNext            viewState
-	initialLoad            bool
+	version          string
+	cfg              *config.Config
+	db               domain.SessionRepository
+	Program          *tea.Program
+	state            viewState
+	panelMode        panelMode
+	list             list.Model
+	daemonList       list.Model
+	daemons          map[string]domain.Daemon // Keyed by RemoteHost
+	currentTab       mainTab
+	menu             list.Model
+	remotes          RemotesModel
+	setup            SetupModel
+	gitSetup         GitSetupModel
+	generalSetup     GeneralSetupModel
+	aiSetup          AISetupModel
+	secretsSetup     SecretsSetupModel
+	awsCredentials   AWSCredentialsModel
+	snapshotBrowser  SnapshotBrowserModel
+	scheduledPrompts ScheduledPromptsModel
+	picker           RepoPickerModel
+	ec2Setup         EC2SetupModel
+	issuePicker      IssuePickerModel
+	branchInput      BranchInputModel
+	genericInput     TextInputModel
+	branchPicker     BranchPickerModel
+	dirPicker        DirPickerModel
+	agentPicker      AgentPickerModel
+	summary          SummaryModel
+	doctorResults    []usecase.CheckResult
+	width, height    int
+	viewport         viewport.Model
+	terminal         *TerminalModel
+	tmuxOutput       string
+	activeSession    string
+	termCloser       io.Closer
+	lastError        string
+	loadingMsg       string
+	sessionCfg       domain.SessionConfig
+	loadingNext      viewState
+	initialLoad      bool
+	// discoveryPending is true between the dashboard opening on database
+	// contents and the first remote scan landing, so the list can be shown
+	// immediately while making clear it is not yet confirmed against the remote.
+	discoveryPending       bool
 	terminatePrecheckError string
 	consoleOpen            bool
 	consoleLog             []string
@@ -574,6 +579,13 @@ func (m *Model) applyRemoteFilter() {
 	} else {
 		m.list.Title = "Sessions [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
 		m.daemonList.Title = "Daemons [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
+	}
+
+	// Until the first scan lands the list is whatever the database last recorded,
+	// which may name sessions that no longer exist. Say so rather than presenting
+	// stale rows as current.
+	if m.discoveryPending {
+		m.list.Title += " · scanning remotes…"
 	}
 }
 
@@ -1209,6 +1221,18 @@ func lastNonEmptyLine(output string) string {
 	return ""
 }
 
+// firstSyncingDelegation returns the remote's first delegation that pushes
+// credentials, or nil when none does. It reads both the singular
+// aws_delegation and the plural aws_delegations form.
+func firstSyncingDelegation(remote config.Remote) *config.AWSDelegation {
+	for _, d := range remote.AllDelegations() {
+		if d != nil && d.SyncCredentials {
+			return d
+		}
+	}
+	return nil
+}
+
 func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, bool) {
 	if cfg == nil {
 		return config.Remote{}, false
@@ -1244,7 +1268,8 @@ func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, b
 func (m *Model) initTerminal(session domain.Session) tea.Cmd {
 	return func() tea.Msg {
 		if m.termCloser != nil {
-			m.termCloser.Close()
+			// Tearing down the embedded terminal; a close error has nowhere useful to go.
+			_ = m.termCloser.Close()
 			m.termCloser = nil
 		}
 
@@ -1604,11 +1629,11 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		// reconciles remote-only files without deleting remote content, so a
 		// clean-slate delete is unnecessary and causes an empty local dir if the
 		// sync hasn't completed yet.
-		if err := os.MkdirAll(localPath, 0755); err != nil {
+		if err := os.MkdirAll(localPath, 0750); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
 
-		mutagenEngine := mutagen.NewEngine()
+		mutagenEngine := mutagen.NewEngineWithIgnores(m.cfg.SyncIgnorePatterns(), m.cfg.SyncIgnoresEnabled())
 
 		m.log("Terminating existing syncs: %s, %s", syncName, tempSyncName)
 		m.sendStatus("Terminating existing syncs...")
@@ -1835,7 +1860,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 		session.RemoteHost = sessionCfg.RemoteHost
 
 		// Start mutagen sync
-		mutagenEngine := mutagen.NewEngine()
+		mutagenEngine := mutagen.NewEngineWithIgnores(m.cfg.SyncIgnorePatterns(), m.cfg.SyncIgnoresEnabled())
 		home, _ := os.UserHomeDir()
 
 		syncName := "aiman-sync-" + session.ID
@@ -1844,7 +1869,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 
 		m.log("Cleaning up local sync path: %s", localSyncPath)
 		_ = os.RemoveAll(localSyncPath)
-		if err := os.MkdirAll(localSyncPath, 0755); err != nil {
+		if err := os.MkdirAll(localSyncPath, 0750); err != nil {
 			m.log("Warning: failed to create local sync path: %v", err)
 		}
 
@@ -1947,7 +1972,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 						cs.cfg.AttachExisting = false
 						// Update the placeholder so the list shows the suffixed name while creating.
 						cs.placeholder.Branch = newBranch
-						cs.placeholder.TmuxSession = strings.ReplaceAll(newBranch, "/", "-")
+						cs.placeholder.TmuxSession = domain.SanitizeTmuxSessionName(newBranch)
 						for i, s := range m.allSessions {
 							if s.ID == msg.placeholderID {
 								m.allSessions[i] = cs.placeholder
@@ -2347,7 +2372,7 @@ func (m *Model) log(format string, args ...interface{}) {
 
 // appendDebugLog appends a line to /tmp/aiman-debug.log for tracing goroutine activity.
 func appendDebugLog(line string) error {
-	f, err := os.OpenFile("/tmp/aiman-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile("/tmp/aiman-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -2431,7 +2456,14 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 	h, v := docStyle.GetFrameSize()
 
-	mainHeight := height - v - len(m.doctorResults) - 10
+	// Reserve a row per known check rather than per result received: results
+	// stream in after the dashboard opens, and sizing off the running count
+	// would resize the panes underneath the user three times on every launch.
+	checkRows := len(startupCheckNames)
+	if n := len(m.doctorResults); n > checkRows {
+		checkRows = n
+	}
+	mainHeight := height - v - checkRows - 10
 
 	m.list.SetSize(width/3-h, mainHeight) // Sidebar width
 	m.menu.SetSize(width-h, height-v)
@@ -3723,6 +3755,11 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SetProgramMsg:
 		m.Program = msg.Program
 		return m, nil
+	case checkResultMsg:
+		// A doctor check finished after the dashboard opened. The footer shows
+		// these permanently, so it is the natural place for them to land.
+		m.applyCheckResult(usecase.CheckResult(msg))
+		return m, nil
 	case tea.KeyMsg:
 		m, cmd, handled := m.handleMainKeyMsg(msg)
 		if handled {
@@ -3970,7 +4007,8 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		}
 	}
 
-	if m.currentTab == tabSessions {
+	switch m.currentTab {
+	case tabSessions:
 		newSel := m.list.SelectedItem()
 		var selItem item
 		newSelID := ""
@@ -3995,7 +4033,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 				}
 			}
 		}
-	} else if m.currentTab == tabDaemons {
+	case tabDaemons:
 		newSel := m.daemonList.SelectedItem()
 		var selDaemon daemonItem
 		newDaemonHost := ""
@@ -4187,7 +4225,8 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	}
 	if msg.String() == "ctrl+c" {
 		if m.termCloser != nil {
-			m.termCloser.Close()
+			// Tearing down the embedded terminal; a close error has nowhere useful to go.
+			_ = m.termCloser.Close()
 		}
 		return m, tea.Quit, true
 	}
@@ -5600,13 +5639,15 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.summary.SetAgent(m.sessionCfg.Agent)
 		m.summary.SetSize(m.width, m.height)
 		// Populate AWS override fields when the remote has SyncCredentials enabled.
-		if remote := m.selectedRemote; remote.AWSDelegation != nil && remote.AWSDelegation.SyncCredentials {
-			d := remote.AWSDelegation
+		// AllDelegations covers both the singular aws_delegation and the plural
+		// aws_delegations form, so a remote configured either way gets the section.
+		if d := firstSyncingDelegation(m.selectedRemote); d != nil {
+			profile, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
 			m.summary.SetAWSDefaults(&domain.AWSConfig{
-				SourceProfile:   d.SourceProfile,
+				SourceProfile:   profile,
 				RoleName:        d.RoleName,
 				AccountID:       d.AccountID,
-				Region:          d.Region,
+				Region:          region,
 				Regions:         d.Regions,
 				SessionPolicy:   d.SessionPolicy,
 				DurationSeconds: d.DurationSeconds,
@@ -5922,7 +5963,8 @@ func (m *Model) handleQuitConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch km.String() {
 		case "y":
 			if m.termCloser != nil {
-				m.termCloser.Close()
+				// Tearing down the embedded terminal; a close error has nowhere useful to go.
+				_ = m.termCloser.Close()
 			}
 			return m, tea.Quit
 		case "n", "esc", "q":
@@ -6078,8 +6120,63 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// startupCheckNames are the doctor checks, in the order the footer lists them.
+// The footer reserves a row for each from the first paint, so results arriving
+// one at a time fill rows in place instead of growing the footer and shifting
+// the layout under the user.
+var startupCheckNames = []string{"JIRA", "Git/GitHub", "SSH"}
+
+// applyCheckResult records a doctor result, replacing any earlier result for the
+// same check so a re-run from the admin menu updates in place.
+func (m *Model) applyCheckResult(res usecase.CheckResult) {
+	for i := range m.doctorResults {
+		if m.doctorResults[i].Name == res.Name {
+			m.doctorResults[i] = res
+			return
+		}
+	}
+	m.doctorResults = append(m.doctorResults, res)
+}
+
+// renderStartupChecks draws one row per known check, showing those still in
+// flight as pending rather than omitting them.
+func (m *Model) renderStartupChecks() string {
+	byName := make(map[string]usecase.CheckResult, len(m.doctorResults))
+	for _, res := range m.doctorResults {
+		byName[res.Name] = res
+	}
+
+	var b strings.Builder
+	b.WriteString("Startup Checks:\n")
+	for _, name := range startupCheckNames {
+		res, done := byName[name]
+		if !done {
+			b.WriteString(fmt.Sprintf("%s %-10s: checking…\n", statusStyle.Render("…"), name))
+			continue
+		}
+		status := successStyle.Render("✓")
+		if !res.Passed {
+			status = failStyle.Render("✗")
+		}
+		b.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
+	}
+	// Anything reported under a name not in the fixed list still gets a row.
+	for _, res := range m.doctorResults {
+		if slices.Contains(startupCheckNames, res.Name) {
+			continue
+		}
+		status := successStyle.Render("✓")
+		if !res.Passed {
+			status = failStyle.Render("✗")
+		}
+		b.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
+	}
+	return b.String()
+}
+
 func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd) {
 	m.log("Discovered %d sessions", len(msg.sessions))
+	m.discoveryPending = false
 	ctx := context.Background()
 
 	// Load DB to carry timestamps before saving (discovery must not clobber updated_at)
@@ -6332,9 +6429,10 @@ func (m *Model) renderMainView() string {
 
 	// Main Panel
 	var mainContent string
-	if m.currentTab == tabSessions {
+	switch m.currentTab {
+	case tabSessions:
 		mainContent = m.renderSessionPanel(mainWidth)
-	} else if m.currentTab == tabDaemons {
+	case tabDaemons:
 		mainContent = m.renderDaemonPanel(mainWidth)
 	}
 
@@ -6352,22 +6450,14 @@ func (m *Model) renderMainView() string {
 	content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainStyle.Render(mainContent))
 
 	// Footer (Checks & Active Remote)
-	var doctorOutput strings.Builder
-	doctorOutput.WriteString("Startup Checks:\n")
-	for _, res := range m.doctorResults {
-		status := successStyle.Render("✓")
-		if !res.Passed {
-			status = failStyle.Render("✗")
-		}
-		doctorOutput.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
-	}
+	doctorSection := m.renderStartupChecks()
 
 	remoteInfo := fmt.Sprintf("Remotes: %d configured", len(m.cfg.Remotes))
 	if m.remoteFilter != "" {
 		remoteInfo += " | Filter: " + activeStyle.Render(remoteNameForHost(m.cfg, m.remoteFilter))
 	}
 
-	footer := "\n" + remoteInfo + "\n\n" + doctorOutput.String()
+	footer := "\n" + remoteInfo + "\n\n" + doctorSection
 
 	helpText := "n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • R: AWS creds • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit"
 	versionText := m.version
@@ -6632,9 +6722,10 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 		}
 
 		statusLabel := string(d.Status)
-		if d.Status == domain.DaemonStatusRunning {
+		switch d.Status {
+		case domain.DaemonStatusRunning:
 			statusLabel = successStyle.Render(statusLabel)
-		} else if d.Status == domain.DaemonStatusStopped {
+		case domain.DaemonStatusStopped:
 			statusLabel = failStyle.Render(statusLabel)
 		}
 

@@ -239,7 +239,8 @@ func (m *Manager) WaitUntilSSHReady(ctx context.Context, profile, region, instan
 			// Check TCP connection to SSH port 22
 			conn, netErr := net.DialTimeout("tcp", net.JoinHostPort(inst.PublicIP, "22"), 3*time.Second)
 			if netErr == nil {
-				conn.Close()
+				// The dial only probes reachability; nothing is read or written.
+				_ = conn.Close()
 				return inst, nil
 			}
 		}

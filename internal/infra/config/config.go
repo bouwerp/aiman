@@ -13,6 +13,7 @@ const (
 	DirName    = ".aiman"
 	ConfigName = "config.yaml"
 	DBName     = "aiman.db"
+	LogName    = "aiman.log"
 )
 
 type Config struct {
@@ -22,8 +23,85 @@ type Config struct {
 	Skills       SkillsConfig  `yaml:"skills,omitempty"`
 	AI           AIConfig      `yaml:"ai,omitempty"`
 	EC2Loop      EC2LoopConfig `yaml:"ec2_loop,omitempty"`
+	AWS          AWSDefaults   `yaml:"aws,omitempty"`
+	Sync         SyncConfig    `yaml:"sync,omitempty"`
 	Remotes      []Remote      `yaml:"remotes"`
 	ActiveRemote string        `yaml:"active_remote"`
+
+	// PermissionsTightened records that Load had to remove group/other access
+	// from the config file, meaning the API token in it had been readable by
+	// other users. Not persisted.
+	PermissionsTightened bool `yaml:"-"`
+	// PermissionsError records why the repair failed, if it did. Not persisted.
+	PermissionsError error `yaml:"-"`
+}
+
+// AWSDefaults sets what the AWS fields on the session summary screen start
+// with, so a profile does not have to be retyped for every session.
+type AWSDefaults struct {
+	// DefaultProfile is the local ~/.aws profile new sessions use to mint
+	// credentials. Empty means fall back to the delegation's source_profile.
+	DefaultProfile string `yaml:"default_profile,omitempty"`
+	// DefaultRegion is the region new sessions start with. Empty falls back to
+	// the delegation's region.
+	DefaultRegion string `yaml:"default_region,omitempty"`
+}
+
+// ResolveAWSSessionDefaults returns the profile and region a new session on
+// this remote should be pre-filled with.
+//
+// Precedence, most specific first: the remote's own aws_default_profile /
+// aws_default_region, then the global aws: block, then the delegation's own
+// source_profile / region. The user can still override either on the summary
+// screen; this only decides what that screen starts with.
+func (c *Config) ResolveAWSSessionDefaults(remote Remote, delegation *AWSDelegation) (profile, region string) {
+	if delegation != nil {
+		profile, region = delegation.SourceProfile, delegation.Region
+	}
+	if c != nil {
+		if v := strings.TrimSpace(c.AWS.DefaultProfile); v != "" {
+			profile = v
+		}
+		if v := strings.TrimSpace(c.AWS.DefaultRegion); v != "" {
+			region = v
+		}
+	}
+	if v := strings.TrimSpace(remote.AWSDefaultProfile); v != "" {
+		profile = v
+	}
+	if v := strings.TrimSpace(remote.AWSDefaultRegion); v != "" {
+		region = v
+	}
+	return profile, region
+}
+
+// SyncConfig tunes what mutagen mirrors between the remote worktree and the
+// local copy. The defaults exclude dependency and build directories, which
+// dominate transfer time on a slow link without being worth mirroring.
+type SyncConfig struct {
+	// Ignore adds patterns on top of the built-in set. An entry prefixed with
+	// "!" removes the matching built-in instead, e.g. "!dist" to mirror a
+	// project that genuinely tracks its dist directory.
+	Ignore []string `yaml:"ignore,omitempty"`
+	// UseDefaultIgnores mirrors everything when explicitly false. Unset means
+	// the built-in ignore set applies.
+	UseDefaultIgnores *bool `yaml:"use_default_ignores,omitempty"`
+}
+
+// SyncIgnoresEnabled reports whether the built-in ignore set should apply.
+func (c *Config) SyncIgnoresEnabled() bool {
+	if c == nil || c.Sync.UseDefaultIgnores == nil {
+		return true
+	}
+	return *c.Sync.UseDefaultIgnores
+}
+
+// SyncIgnorePatterns returns the user's additional ignore patterns.
+func (c *Config) SyncIgnorePatterns() []string {
+	if c == nil {
+		return nil
+	}
+	return c.Sync.Ignore
 }
 
 // EC2LoopConfig configures the default settings for launching EC2 autonomous loops.
@@ -98,6 +176,11 @@ type Remote struct {
 	// AWSDelegations allows multiple delegation profiles per remote (e.g. default + prod).
 	// When both AWSDelegation and AWSDelegations are set, all entries are used.
 	AWSDelegations []*AWSDelegation `yaml:"aws_delegations,omitempty"`
+	// AWSDefaultProfile overrides the global aws.default_profile for sessions
+	// created on this remote. Empty means inherit.
+	AWSDefaultProfile string `yaml:"aws_default_profile,omitempty"`
+	// AWSDefaultRegion overrides the global aws.default_region for this remote.
+	AWSDefaultRegion string `yaml:"aws_default_region,omitempty"`
 }
 
 // AWSDelegation is stored in aiman config; role_arn on the remote is derived from
@@ -192,7 +275,42 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	// Save writes 0600, but nothing kept it that way: a manual edit, a restore
+	// from backup, or an older release could leave a plaintext API token in a
+	// world-readable file. Repair it on every load and tell the caller, so the
+	// exposure is both fixed and reported rather than silently carried forward.
+	tightened, permErr := SecureConfigFile(path)
+	cfg.PermissionsTightened = tightened
+	cfg.PermissionsError = permErr
+
 	return &cfg, nil
+}
+
+// configFileMode is the only permission set appropriate for a file holding a
+// plaintext API token: readable and writable by its owner alone.
+const configFileMode os.FileMode = 0600
+
+// SecureConfigFile removes group and other access from the config file. It
+// reports whether it had to change anything, so a caller can surface the fact
+// that the token had been exposed. A missing file is not an error.
+func SecureConfigFile(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	// Compare only the permission bits; setuid and friends are not our concern.
+	current := info.Mode().Perm()
+	if current&0077 == 0 {
+		return false, nil
+	}
+	if err := os.Chmod(path, configFileMode); err != nil {
+		return false, fmt.Errorf("config file %s is mode %#o and could not be tightened to %#o: %w", path, current, configFileMode, err)
+	}
+	return true, nil
 }
 
 // Save saves the configuration to the config file.
@@ -223,6 +341,16 @@ func GetDBPath() (string, error) {
 	return filepath.Join(home, DirName, DBName), nil
 }
 
+// GetLogPath returns the path of the log file the TUI redirects to, so
+// background goroutines never write onto the rendered frame.
+func GetLogPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(home, DirName, LogName), nil
+}
+
 // EnsureDir ensures that the configuration directory exists.
 func EnsureDir() error {
 	home, err := os.UserHomeDir()
@@ -231,7 +359,9 @@ func EnsureDir() error {
 	}
 	dir := filepath.Join(home, DirName)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		// 0700: this directory holds config.yaml with a plaintext API token,
+		// the session database, and the SSH control sockets.
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}

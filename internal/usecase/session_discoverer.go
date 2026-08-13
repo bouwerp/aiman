@@ -26,10 +26,11 @@ func NewSessionDiscoverer(remoteExecutor domain.RemoteExecutor, syncEngine domai
 }
 
 func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain.Session, error) {
-	// 1. Scan tmux sessions
-	tmuxSessions, err := d.remoteExecutor.ScanTmuxSessions(ctx)
+	// 1. Scan tmux sessions. gatherTmuxRecords collapses this into one round
+	// trip when the executor supports batch discovery.
+	tmuxRecords, err := d.gatherTmuxRecords(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan tmux sessions: %w", err)
+		return nil, err
 	}
 
 	// 2. Get mutagen sessions
@@ -60,8 +61,8 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 	}
 
 	// Process tmux sessions
-	for _, name := range tmuxSessions {
-		session := d.discoverSession(ctx, host, name, mutagenSessions)
+	for _, rec := range tmuxRecords {
+		session := d.sessionFromRecord(host, rec, mutagenSessions)
 		if session.WorktreePath != "" || session.WorkingDirectory != "" {
 			tmuxPathPairs = append(tmuxPathPairs, domain.Session{
 				WorktreePath:     session.WorktreePath,
@@ -83,77 +84,55 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		addSession(session)
 	}
 
-	// 3. Scan for orphaned worktrees
-	repos, err := d.remoteExecutor.ScanGitRepos(ctx)
-	if err == nil {
-		for _, repoPath := range repos {
-			worktrees, err := d.remoteExecutor.ScanWorktrees(ctx, repoPath)
-			if err == nil {
-				for _, wtPath := range worktrees {
-					normalizedWT := normalizePath(wtPath)
-					if !d.isDiscoverableOrphanWorktree(ctx, repoPath, normalizedWT) {
-						continue
-					}
-					wtBase := filepath.Base(normalizedWT)
-					if !seenWorktrees[normalizedWT] && !seenTmuxNames[wtBase] {
-						// Found an orphaned worktree
-						session := domain.Session{
-							TmuxSession:      wtBase,
-							RemoteHost:       host,
-							Status:           domain.SessionStatusInactive,
-							WorktreePath:     normalizedWT,
-							WorkingDirectory: normalizedWT,
-							CreatedAt:        time.Now(),
-						}
+	// 3. Scan for orphaned worktrees. gatherWorktreeRecords resolves each
+	// worktree's liveness and aiman id on the remote, so the whole sweep costs
+	// one round trip when the executor supports batch discovery.
+	for _, rec := range d.gatherWorktreeRecords(ctx) {
+		if rec.State != domain.WorktreeOK {
+			continue
+		}
+		normalizedWT := normalizePath(rec.WorktreePath)
+		wtBase := filepath.Base(normalizedWT)
+		if seenWorktrees[normalizedWT] || seenTmuxNames[wtBase] {
+			continue
+		}
 
-						// Try to read session ID from git metadata or root
-						idCmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -f \"$git_dir/aiman-id\" ]; then cat \"$git_dir/aiman-id\"; elif [ -f %q/.aiman-id ]; then cat %q/.aiman-id; fi",
-							normalizedWT, normalizedWT, normalizedWT)
-						id, err := d.remoteExecutor.Execute(ctx, idCmd)
-						if err == nil && strings.TrimSpace(id) != "" {
-							session.ID = strings.TrimSpace(id)
+		session := domain.Session{
+			TmuxSession:      wtBase,
+			RemoteHost:       host,
+			Status:           domain.SessionStatusInactive,
+			WorktreePath:     normalizedWT,
+			WorkingDirectory: normalizedWT,
+			CreatedAt:        time.Now(),
+			ID:               strings.TrimSpace(rec.AimanID),
+		}
+		if session.ID == "" {
+			session.ID = uuid.New().String()
+		}
 
-							// Auto-migration
-							migrationCmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -f %q/.aiman-id ] && [ -d \"$git_dir\" ]; then mv %q/.aiman-id \"$git_dir/aiman-id\"; fi",
-								normalizedWT, normalizedWT, normalizedWT)
-							_, _ = d.remoteExecutor.Execute(ctx, migrationCmd)
-						}
+		parts := strings.Split(rec.RepoPath, "/")
+		session.RepoName = parts[len(parts)-1]
 
-						if session.ID == "" {
-							session.ID = uuid.New().String()
-						}
+		session.IssueKey = domain.ExtractKey(session.TmuxSession)
+		if session.IssueKey == "" {
+			session.IssueKey = domain.ExtractKey(normalizedWT)
+		}
 
-						// Try to determine repo name
-						parts := strings.Split(repoPath, "/")
-						if len(parts) > 0 {
-							session.RepoName = parts[len(parts)-1]
-						}
-
-						// Extract JIRA key
-						session.IssueKey = domain.ExtractKey(session.TmuxSession)
-						if session.IssueKey == "" {
-							session.IssueKey = domain.ExtractKey(normalizedWT)
-						}
-
-						// Cross-reference with mutagen
-						for _, ms := range mutagenSessions {
-							if !seenMutagenIDs[ms.ID] && d.isSessionMatch(session, ms) {
-								session.LocalPath = normalizePath(ms.LocalPath)
-								if ms.Name != "" {
-									session.MutagenSyncID = ms.Name
-								} else {
-									session.MutagenSyncID = ms.ID
-								}
-								seenMutagenIDs[ms.ID] = true
-								break
-							}
-						}
-
-						addSession(session)
-					}
+		// Cross-reference with mutagen
+		for _, ms := range mutagenSessions {
+			if !seenMutagenIDs[ms.ID] && d.isSessionMatch(session, ms) {
+				session.LocalPath = normalizePath(ms.LocalPath)
+				if ms.Name != "" {
+					session.MutagenSyncID = ms.Name
+				} else {
+					session.MutagenSyncID = ms.ID
 				}
+				seenMutagenIDs[ms.ID] = true
+				break
 			}
 		}
+
+		addSession(session)
 	}
 
 	// 4. Scan for orphaned mutagen syncs that don't match any tmux session.
@@ -328,100 +307,6 @@ func sshHostFromEndpoint(endpoint string) string {
 		return ""
 	}
 	return endpoint[i+1:]
-}
-
-func (d *SessionDiscoverer) discoverSession(ctx context.Context, host string, name string, mutagenSessions []domain.SyncSession) domain.Session {
-	session := domain.Session{
-		TmuxSession: name,
-		RemoteHost:  host,
-		Status:      domain.SessionStatusActive,
-		CreatedAt:   time.Now(), // Approximate
-	}
-
-	// 2. Get AIMAN_ID from tmux env
-	aimanID, _ := d.remoteExecutor.GetTmuxSessionEnv(ctx, name, "AIMAN_ID")
-	if aimanID != "" {
-		session.ID = strings.TrimSpace(aimanID)
-	}
-
-	// 3. Get CWD and Git Root
-	cwd, err := d.remoteExecutor.GetTmuxSessionCWD(ctx, name)
-	if err == nil {
-		normalizedCWD := normalizePath(cwd)
-		session.WorkingDirectory = normalizedCWD
-		// Try to find the git root of the CWD
-		gitRoot, err := d.remoteExecutor.GetGitRoot(ctx, normalizedCWD)
-		if err == nil {
-			session.WorktreePath = normalizePath(gitRoot)
-		} else {
-			session.WorktreePath = normalizedCWD
-		}
-	}
-
-	// 4. Try reading session ID from git metadata or worktree root
-	if session.WorktreePath != "" && session.ID == "" {
-		// New robust location: inside .git metadata
-		// Old fallback: root of worktree
-		cmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -f \"$git_dir/aiman-id\" ]; then cat \"$git_dir/aiman-id\"; elif [ -f %q/.aiman-id ]; then cat %q/.aiman-id; fi",
-			session.WorktreePath, session.WorktreePath, session.WorktreePath)
-
-		id, err := d.remoteExecutor.Execute(ctx, cmd)
-		if err == nil && strings.TrimSpace(id) != "" {
-			session.ID = strings.TrimSpace(id)
-
-			// Auto-migration: Move old file to new location if it exists at root
-			migrationCmd := fmt.Sprintf("git_dir=$(git -C %q rev-parse --git-dir 2>/dev/null) && if [ -f %q/.aiman-id ] && [ -d \"$git_dir\" ]; then mv %q/.aiman-id \"$git_dir/aiman-id\"; fi",
-				session.WorktreePath, session.WorktreePath, session.WorktreePath)
-			_, _ = d.remoteExecutor.Execute(ctx, migrationCmd)
-		}
-	}
-
-	// 5. Extract JIRA key from session name
-	key := domain.ExtractKey(name)
-	if key == "" && session.WorktreePath != "" {
-		// Try extracting from WorktreePath
-		key = domain.ExtractKey(session.WorktreePath)
-	}
-	session.IssueKey = key
-
-	// 6. Try to determine repo name from remote URL (most accurate for worktrees)
-	if session.WorktreePath != "" {
-		remoteURL, err := d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", session.WorktreePath))
-		if err == nil && strings.TrimSpace(remoteURL) != "" {
-			session.RepoName = extractRepoNameFromURL(strings.TrimSpace(remoteURL))
-		}
-		if session.RepoName == "" {
-			parts := strings.Split(session.WorktreePath, "/")
-			if len(parts) > 0 {
-				session.RepoName = parts[len(parts)-1]
-			}
-		}
-	}
-
-	// 7. Cross-reference with mutagen
-	if session.WorktreePath != "" {
-		for _, ms := range mutagenSessions {
-			if d.isSessionMatch(session, ms) {
-				// After ListSyncSessions post-processing, LocalPath is the
-				// local filesystem path (no `:`) and RemotePath is the remote path.
-				session.LocalPath = normalizePath(ms.LocalPath)
-				if ms.Name != "" {
-					session.MutagenSyncID = ms.Name
-				} else {
-					session.MutagenSyncID = ms.ID
-				}
-				session.Status = domain.SessionStatusSyncing
-				break
-			}
-		}
-	}
-
-	// 8. If session ID is still empty (e.g., legacy session), generate a new one
-	if session.ID == "" {
-		session.ID = uuid.New().String()
-	}
-
-	return session
 }
 
 func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.SyncSession) bool {

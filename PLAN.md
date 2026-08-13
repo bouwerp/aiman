@@ -38,6 +38,110 @@
   - Added per-call SSH timeouts (30 s) with `ServerAliveInterval`/`ServerAliveCountMax` to detect dead connections.
   - Added `ResetControlSocket()` call before restart SSH command to clear stale ControlMaster state.
 - **Mutagen sync recreate** (`Ctrl+Y`): Added sync status/percentage progress display.
+- **Session start latency**: `mutagen sync create` ran with no ignore patterns, so a new
+  session mirrored `node_modules`, build output and caches over the wire before it became
+  usable. Measured 2.8 MB/s to the dev box against mirrors of 1.4–3.5 GB, which is the
+  10-minute session start. Now excludes a default set (`mutagen.DefaultIgnores`), tunable
+  via the `sync:` config block. `.git` stays synced so the mirror remains a git checkout.
+- **Unaddressable tmux session names**: tmux parses a target as `session:window.pane`, so a
+  branch containing `.` produced a session tmux stored with `_` while aiman remembered the
+  dot. Every later `kill-session`/`capture-pane`/`send-keys` then resolved to a pane and
+  silently did nothing (`can't find pane: …`), so terminate left the session running and the
+  next create failed with `duplicate session`. `domain.SanitizeTmuxSessionName` now applies
+  tmux's own normalisation at both derivation sites.
+
+- **Default AWS profile**: `aws.default_profile` / `aws.default_region`, with per-remote
+  `aws_default_profile` / `aws_default_region` overrides, pre-fill the summary screen instead
+  of always starting from the delegation's `source_profile`. Resolved by
+  `Config.ResolveAWSSessionDefaults`; profile and region resolve independently.
+- **Plural delegations ignored by the summary screen**: the AWS override section only read
+  `remote.AWSDelegation`, so a remote configured with `aws_delegations` showed no AWS fields.
+  Now selected via `AllDelegations()`.
+
+### Discovery performance ✅
+Startup discovery issued ~200 strictly sequential SSH commands, each a fresh local `ssh`
+process at a measured 250 ms, so the splash screen held for ~50 s and got worse as the remote
+accumulated worktrees.
+
+- `domain.BatchDiscovery`: optional capability letting a RemoteExecutor answer a whole
+  discovery pass in two round trips. Implemented for `ssh.Manager` (`ScanWorktreeTree`,
+  `ScanTmuxSessionDetails`), which resolve each worktree's liveness and aiman id server-side.
+- `SessionDiscoverer` type-asserts for it and falls back to the per-item calls when absent or
+  when a batch call fails, so non-SSH executors and tests are unaffected.
+- `Manager.executeWithTimeout` gives batch scans a 2-minute budget instead of the 30 s
+  single-command one.
+- `runDiscovery` now carries a 3-minute timeout; it previously used `context.Background()`,
+  so a wedged remote held the splash open indefinitely.
+- `--absolute-git-dir` replaces `--git-dir` for aiman-id lookups: the latter returns a bare
+  `.git` for a main worktree, resolving the id path against the SSH login directory.
+- Measured against regent0 (33 repos, 91 worktrees, 9 tmux sessions):
+  worktree sweep 149 calls / ~39 s → **1 call / 1.31 s**; tmux sweep ~45 calls / ~11 s →
+  **1 call / 0.60 s**.
+- `discoverSession` deleted; `tmuxRecordsPerItem` + `sessionFromRecord` replace it.
+
+### Autonomous trigger daemon now actually reaches remotes ✅
+Scheduled Prompts and autonomous GitHub triggers were configurable in the TUI but could never
+fire. The execution path was already complete: the dashboard installs `aiman-trigger` onto a
+remote (`install.sh | BINARY_NAME=aiman-trigger sh`), launches it there in a tmux session, and
+manages it from the Daemons tab. The daemon runs *on* the remote, which is why `local.Executor`
+is the correct executor for it.
+
+The only missing piece was release plumbing:
+- `release.yml` built only `./cmd/aiman`, so `install.sh` resolved
+  `aiman-trigger-<goos>-<goarch>` to an asset that was never published and the remote install
+  failed. The matrix now builds and packages both binaries per platform; the existing
+  `aiman-*` release glob already picks up the new assets.
+- `ci.yml` now compiles `./cmd/aiman-trigger` too, so it cannot silently rot again.
+- `install.sh` hardcoded `./cmd/aiman` in its build-from-source fallback, so
+  `BINARY_NAME=aiman-trigger` would have installed the TUI under the daemon's name. It now
+  builds `./cmd/$BINARY_NAME` and fails loudly if no such command exists.
+
+Also removed `schedule` from the CLI usage text: it was advertised but had no case, so it fell
+through to "unknown command".
+
+### Dashboard renders from SQLite first ✅
+The splash screen gated on four tasks, one of which was the remote scan, so the dashboard
+could not appear until every remote had been walked. It now gates on the three doctor checks
+only and opens on whatever the database already holds.
+
+- `StartupModel.pending` drops to 3; `discoveryResultMsg` is recorded but no longer decrements
+  the gate.
+- Discovery still starts in `Init`. Whichever way the race resolves, the result reaches the
+  dashboard: if it lands first the handoff replays it as a command, otherwise bubbletea
+  delivers it to the dashboard directly once the model has been swapped.
+- The ~100-line merge in `startup.go` is deleted. `Model.applyDiscoveryResult` already
+  performs the full merge and reloads the database itself, so there is now one merge
+  implementation instead of two that had already drifted (the startup copy did not apply the
+  `WorktreePath` fallback).
+- `Model.discoveryPending` marks the window between opening on database contents and the first
+  scan landing; the session list title shows `· scanning remotes…` so stale rows are not
+  presented as confirmed.
+
+### Startup is instant; doctor checks stream in ✅
+With discovery off the critical path the slowest doctor check became the gate. Those checks
+report into the dashboard footer permanently, so gating the splash on them only delayed the
+first paint of information the dashboard shows anyway.
+
+- `startupReadyMsg` is emitted by `Init`, so the dashboard opens on database contents alone.
+  Checks that land first are carried across; the rest arrive as `checkResultMsg` and are
+  applied by `Model.applyCheckResult`.
+- The footer reserves a row per known check via `startupCheckNames` and shows in-flight ones as
+  `checking…`, so streaming results fill rows in place. Pane sizing uses the same fixed count;
+  previously it sized off the running result count, which resized the panes three times per
+  launch.
+- Re-running checks from the admin menu now replaces rows instead of appending duplicates.
+
+Two checks were also doing far more work than they needed:
+- `CheckGit` called `ListRepos`, fetching every personal and org repository over the network
+  purely to report a count, then discarding the list — the repo picker fetches them again when
+  opened. `gh auth status` answers the question the check asks. **3.7 s → 596 ms.**
+- `CheckSSH` opened a fresh connection per remote, sequentially. It now probes concurrently
+  over the shared ControlMaster socket. **1.8 s → 160 ms.**
+
+`git.Manager.ListRepos` logged org failures with `fmt.Printf` to **stdout**, which would have
+corrupted the TUI mid-frame. It now uses `log`, and the TUI redirects the standard logger to
+`~/.aiman/aiman.log` (`config.GetLogPath`) for its lifetime so no background goroutine can
+write onto the rendered frame.
 
 
 

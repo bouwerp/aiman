@@ -189,9 +189,17 @@ build_binary() {
     VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
     BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     
+    # Build the command matching BINARY_NAME. Without this, installing the
+    # daemon (BINARY_NAME=aiman-trigger) from source would silently produce the
+    # TUI binary under the daemon's name.
+    if [ ! -d "./cmd/${BINARY_NAME}" ]; then
+        echo -e "${RED}No such command: ./cmd/${BINARY_NAME}${NC}"
+        exit 1
+    fi
+
     go build -ldflags "-X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
         -o "${BINARY_NAME}" \
-        ./cmd/aiman
+        "./cmd/${BINARY_NAME}"
     
     if [ $? -ne 0 ]; then
         echo -e "${RED}Build failed!${NC}"

@@ -30,6 +30,57 @@ type RepositoryManager interface {
 	GetGitStatus(ctx context.Context, remote RemoteExecutor, path string) (GitStatus, error)
 }
 
+// WorktreeState is the liveness of a worktree as resolved on the remote.
+type WorktreeState string
+
+const (
+	// WorktreeOK means the directory exists and git resolves a git-dir for it.
+	WorktreeOK WorktreeState = "ok"
+	// WorktreeMissing means the registered path no longer exists on disk.
+	WorktreeMissing WorktreeState = "missing"
+	// WorktreeBroken means the directory exists but git cannot resolve it.
+	WorktreeBroken WorktreeState = "broken"
+)
+
+// WorktreeRecord is one git worktree registered on a remote, with its liveness
+// check and aiman id already resolved. Producing these server-side is what lets
+// discovery ask one question instead of four per worktree.
+type WorktreeRecord struct {
+	RepoPath     string
+	WorktreePath string
+	State        WorktreeState
+	// AimanID is the id read from <git-dir>/aiman-id, or empty when the
+	// worktree carries no aiman metadata.
+	AimanID string
+}
+
+// TmuxSessionRecord is one remote tmux session with the per-session facts
+// discovery needs, gathered in a single pass on the remote.
+type TmuxSessionRecord struct {
+	Name string
+	// AimanID comes from the tmux session environment (AIMAN_ID).
+	AimanID string
+	CWD     string
+	GitRoot string
+	// FileAimanID is the id stored in the worktree's git metadata, used when
+	// the tmux environment carries none.
+	FileAimanID string
+	RemoteURL   string
+}
+
+// BatchDiscovery is an optional capability a RemoteExecutor may implement to
+// answer a whole discovery pass in a fixed number of round trips rather than
+// one per repo, worktree and tmux session. Discovery type-asserts for it and
+// falls back to the per-item calls on RemoteExecutor when it is absent.
+type BatchDiscovery interface {
+	// ScanWorktreeTree returns every worktree under the configured root,
+	// pruning stale registrations as it goes.
+	ScanWorktreeTree(ctx context.Context) ([]WorktreeRecord, error)
+	// ScanTmuxSessionDetails returns every tmux session with its resolved
+	// working directory, git root, origin URL and aiman ids.
+	ScanTmuxSessionDetails(ctx context.Context) ([]TmuxSessionRecord, error)
+}
+
 // RemoteExecutor manages remote connections and command execution.
 type RemoteExecutor interface {
 	Connect(ctx context.Context) error

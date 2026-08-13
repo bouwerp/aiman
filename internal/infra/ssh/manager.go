@@ -90,6 +90,13 @@ const sshCommandTimeout = 30 * time.Second
 const remotePathPreamble = `export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:${HOME}/.local/bin:${PATH}"; `
 
 func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
+	return m.executeWithTimeout(ctx, cmdStr, sshCommandTimeout)
+}
+
+// executeWithTimeout runs a remote command with an explicit per-call deadline.
+// Batch discovery scans do far more work per round trip than a single command,
+// so they need a longer budget than sshCommandTimeout allows.
+func (m *Manager) executeWithTimeout(ctx context.Context, cmdStr string, timeout time.Duration) (string, error) {
 	target := m.target()
 	cp := m.controlPath()
 
@@ -101,7 +108,7 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	fullCmd := remotePathPreamble + cmdStr
 
 	run := func() (string, error) {
-		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		// We use ControlMaster=auto and ControlPersist to handle multiplexing automatically.
 		// ServerAliveInterval/CountMax ensure dead connections are detected within ~15s.
@@ -126,7 +133,7 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	}
 
 	runDirect := func() (string, error) {
-		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		// Final fallback without SSH multiplexing, for cases where the control
 		// socket/session is flaky but direct SSH still works.
@@ -225,7 +232,9 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		if _, err := stdin.Write(content); err != nil {
 			return fmt.Errorf("failed to write content to ssh stdin: %w", err)
 		}
-		stdin.Close()
+		// Closing stdin signals end-of-input to the remote command; a close
+		// error surfaces from cmd.Wait below, which is the useful report.
+		_ = stdin.Close()
 		if err := cmd.Wait(); err != nil {
 			return fmt.Errorf("ssh Wait failed for WriteFile: %w", err)
 		}
@@ -504,8 +513,10 @@ func (s *commandStream) Write(p []byte) (n int, err error) {
 }
 
 func (s *commandStream) Close() error {
-	s.stdin.Close()
-	s.stdout.Close()
+	// The pipes are being torn down alongside the process; killing it below is
+	// what actually matters, so pipe-close errors are not worth propagating.
+	_ = s.stdin.Close()
+	_ = s.stdout.Close()
 	if s.cmd.Process != nil {
 		return s.cmd.Process.Kill()
 	}
