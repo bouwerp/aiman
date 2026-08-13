@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/google/uuid"
 )
 
 type SessionDiscoverer struct {
@@ -91,6 +90,12 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		if rec.State != domain.WorktreeOK {
 			continue
 		}
+		// A repo's own checkout is listed by `git worktree list` but is not an
+		// orphan worktree — surfacing it invents a session named after every
+		// repository on the remote.
+		if isMainWorktree(rec) {
+			continue
+		}
 		normalizedWT := normalizePath(rec.WorktreePath)
 		wtBase := filepath.Base(normalizedWT)
 		if seenWorktrees[normalizedWT] || seenTmuxNames[wtBase] {
@@ -107,7 +112,10 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 			ID:               strings.TrimSpace(rec.AimanID),
 		}
 		if session.ID == "" {
-			session.ID = uuid.New().String()
+			// Deterministic, not random: a worktree carrying no aiman-id would
+			// otherwise be saved under a fresh id on every scan, so the database
+			// gained a duplicate row per orphan worktree per launch.
+			session.ID = stableSessionID(host, normalizedWT)
 		}
 
 		parts := strings.Split(rec.RepoPath, "/")
@@ -176,7 +184,9 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 			MutagenSyncID:    syncName,
 			LocalPath:        normalizePath(ms.LocalPath),
 			CreatedAt:        time.Now(),
-			ID:               uuid.New().String(),
+			// Keyed off the sync name for the same reason as orphan worktrees:
+			// a random id here means a new database row on every scan.
+			ID: stableSessionID(host, "sync/"+syncName),
 		}
 		session.IssueKey = domain.ExtractKey(ms.Name)
 		addSession(session)

@@ -6189,19 +6189,30 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		}
 	}
 
-	// Save all discovered sessions to DB, preserving existing timestamps.
+	// Carry existing timestamps so a scan does not clobber updated_at, and
+	// persist only what shouldMergeDiscoveredSession accepts.
+	//
+	// Saving first and filtering afterwards defeats the filter permanently: it
+	// rejects an inactive session unless the database already knows it, so
+	// writing every discovered orphan worktree up front means the next scan
+	// finds it in the database and accepts it forever. The session list then
+	// fills with every worktree on the remote and buries the live sessions.
 	for i := range msg.sessions {
-		if m.db != nil {
-			if existing, ok := dbSessions[msg.sessions[i].ID]; ok {
-				if !existing.UpdatedAt.IsZero() {
-					msg.sessions[i].UpdatedAt = existing.UpdatedAt
-				}
-				if msg.sessions[i].CreatedAt.IsZero() && !existing.CreatedAt.IsZero() {
-					msg.sessions[i].CreatedAt = existing.CreatedAt
-				}
-			}
-			_ = m.db.Save(ctx, &msg.sessions[i])
+		if m.db == nil {
+			break
 		}
+		if existing, ok := dbSessions[msg.sessions[i].ID]; ok {
+			if !existing.UpdatedAt.IsZero() {
+				msg.sessions[i].UpdatedAt = existing.UpdatedAt
+			}
+			if msg.sessions[i].CreatedAt.IsZero() && !existing.CreatedAt.IsZero() {
+				msg.sessions[i].CreatedAt = existing.CreatedAt
+			}
+		}
+		if !shouldMergeDiscoveredSession(msg.sessions[i], dbSessions) {
+			continue
+		}
+		_ = m.db.Save(ctx, &msg.sessions[i])
 	}
 
 	// Merge: discovered sessions win for live state; DB fills in sessions

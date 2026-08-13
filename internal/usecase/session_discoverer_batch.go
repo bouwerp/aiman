@@ -10,6 +10,20 @@ import (
 	"github.com/google/uuid"
 )
 
+// isMainWorktree reports whether a record describes a repository's own checkout
+// rather than a linked worktree. `git worktree list` includes the main worktree,
+// and treating it as an orphan invents one session per repository.
+func isMainWorktree(rec domain.WorktreeRecord) bool {
+	return normalizePath(rec.RepoPath) == normalizePath(rec.WorktreePath)
+}
+
+// stableSessionID derives a deterministic id for a discovered thing that carries
+// no aiman-id of its own, so repeated scans converge on one database row instead
+// of accumulating a new one each time.
+func stableSessionID(host, key string) string {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("aiman://"+host+"/"+key)).String()
+}
+
 // aimanIDReadCmd reads a worktree's aiman id from git metadata, falling back to
 // the legacy dot-file at the worktree root and migrating it when found.
 func aimanIDReadCmd(worktreePath string) string {
