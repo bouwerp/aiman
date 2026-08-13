@@ -63,6 +63,18 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN trigger_event_id TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN autonomous_config_json TEXT")
 
+	// Columns added by ALTER TABLE leave NULL on every pre-existing row, and
+	// Save's `COALESCE(NULLIF(excluded.mode, ''), sessions.mode)` keeps that NULL
+	// in place for any session saved without an explicit mode. Normalise them to
+	// the empty string so callers see a value rather than NULL. The scans tolerate
+	// NULL as well; this keeps the stored data honest.
+	if _, err := db.Exec("UPDATE sessions SET mode = '' WHERE mode IS NULL"); err != nil {
+		return nil, fmt.Errorf("failed to normalise session mode: %w", err)
+	}
+	if _, err := db.Exec("UPDATE sessions SET status = '' WHERE status IS NULL"); err != nil {
+		return nil, fmt.Errorf("failed to normalise session status: %w", err)
+	}
+
 	// Sessions created before v0.8.11 stored per-session "aiman-<id>" AWS profiles that
 	// are no longer written to ~/.aws. Drop them on open so those sessions stop
 	// exporting an AWS_PROFILE that cannot resolve. `aiman clear-aws-profiles` reports
@@ -192,7 +204,10 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 	query := "SELECT id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, created_at, updated_at FROM sessions WHERE id = ?;"
 
 	var s domain.Session
-	var statusStr, modeStr string
+	// NullString, not string: rows written before these columns existed hold
+	// NULL, and scanning NULL into a string fails the entire query. In List that
+	// meant one such row returned zero sessions and an empty dashboard.
+	var statusStr, modeStr sql.NullString
 	var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, agentModel, triggerSource, triggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON sql.NullString
 	var createdAt, updatedAt sql.NullTime
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
@@ -215,11 +230,11 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 	s.LocalPath = localPath.String
 	s.AgentName = agentName.String
 	s.AgentModel = agentModel.String
-	s.Status = domain.SessionStatus(statusStr)
-	if modeStr == "" {
+	s.Status = domain.SessionStatus(statusStr.String)
+	if modeStr.String == "" {
 		s.Mode = domain.SessionModeInteractive // Default for old sessions
 	} else {
-		s.Mode = domain.SessionMode(modeStr)
+		s.Mode = domain.SessionMode(modeStr.String)
 	}
 	s.TriggerSource = triggerSource.String
 	s.TriggerEventID = triggerEventID.String
@@ -258,7 +273,10 @@ func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 	var sessions []domain.Session
 	for rows.Next() {
 		var s domain.Session
-		var statusStr, modeStr string
+		// NullString, not string: rows written before these columns existed hold
+		// NULL, and scanning NULL into a string fails the entire query. In List that
+		// meant one such row returned zero sessions and an empty dashboard.
+		var statusStr, modeStr sql.NullString
 		var issueKey, branch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, mutagenSyncID, localPath, agentName, agentModel, triggerSource, triggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON sql.NullString
 		var createdAt, updatedAt sql.NullTime
 		err := rows.Scan(&s.ID, &issueKey, &branch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &mutagenSyncID, &localPath, &agentName, &agentModel, &statusStr, &modeStr, &triggerSource, &triggerEventID, &autonomousConfigJSON, &tunnelsJSON, &awsConfigJSON, &createdAt, &updatedAt)
@@ -276,11 +294,11 @@ func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 		s.LocalPath = localPath.String
 		s.AgentName = agentName.String
 		s.AgentModel = agentModel.String
-		s.Status = domain.SessionStatus(statusStr)
-		if modeStr == "" {
+		s.Status = domain.SessionStatus(statusStr.String)
+		if modeStr.String == "" {
 			s.Mode = domain.SessionModeInteractive // Default for old sessions
 		} else {
-			s.Mode = domain.SessionMode(modeStr)
+			s.Mode = domain.SessionMode(modeStr.String)
 		}
 		s.TriggerSource = triggerSource.String
 		s.TriggerEventID = triggerEventID.String
