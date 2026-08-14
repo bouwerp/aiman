@@ -28,6 +28,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Session Management**: Track active sessions with live tmux pane previews
 
 ### AI Intelligence
+- **Session activity detection**: Reports whether an agent is working, blocked on a question, or idle, from tmux's own last-output timestamp and the tail of the pane — no model required
 - **Brief AI Summary**: Short summary shown in the session list sidebar (per active session)
 - **Long AI Summary**: Detailed summary with action items generated at archive time
 - **Session Archive**: Compress, AI-summarise, and persist a session snapshot in one step
@@ -164,7 +165,8 @@ aiman
 | `y` | **Copy session output** (visible pane area) to clipboard |
 | `Y` | **Copy session output** (full preview) to clipboard |
 | `G` / `End` | Jump preview pane to latest output |
-| `i` | **AI Insight** — Generate a brief AI summary of the session |
+| `i` | **Classify Session** — Report whether the agent is working, blocked, or idle (rules + local model, side by side) |
+| `I` | **AI Insight** — Generate a brief AI summary of the session |
 | `r` | **Refresh** session status |
 | `f` | **Filter** session list by remote |
 | `Ctrl+A` | **Archive Session** — AI-summarise and snapshot the session |
@@ -329,6 +331,14 @@ git:
   include_orgs:
     - "mycompany"
 
+ai:
+  enabled: true
+  # Model used for summaries. Defaults to qwen3:4b.
+  model: qwen3:4b
+  # Model used to classify session activity. Defaults to `model`.
+  # Smaller models were measured and rejected — see "Session activity" below.
+  classify_model: qwen3:4b
+
 aws:
   # Pre-fills the Profile and Region fields on the session summary screen so
   # they don't have to be retyped for every session. Still overridable there.
@@ -396,6 +406,38 @@ resolve independently, so setting only one leaves the other inheriting.
 ```
 
 The profile and region can differ per session; all other settings (role, account, session policy, duration) inherit from the remote config.
+
+### Session activity
+
+The dashboard reports whether each session is **working**, **needs input**, or
+**idle**. This is decided without a model, from two cheap signals:
+
+- `#{session_activity}` — tmux's own timestamp of when a session last produced
+  output. One call answers for every session, with no pane capture.
+- The tail of the pane — an advancing elapsed timer means work in progress, a
+  rendered choice list means the agent is blocked, and an agent sitting at its
+  own input box means the turn is finished.
+
+Only the last few lines are examined. Scanning the whole pane is what made the
+previous detector unreliable: any occurrence of "confirm" or "thinking" anywhere
+in scrollback decided the answer, so an agent working on a task it had once
+asked about was reported as blocked.
+
+Press `i` on a session to run both the rules and the local model and compare
+them:
+
+```
+rules: working (high) — elapsed timer in status line  =  model(qwen3:4b): working in 601ms
+```
+
+`=` means they agree, `≠` that they do not. Every probe is written to
+`/tmp/aiman-debug.log`.
+
+Against seventeen live sessions the rules resolved every one at high confidence,
+so the model is not consulted automatically. On panes captured from those
+sessions `qwen3:4b` scored 3/3 at ~600 ms while `qwen3:1.7b` managed 1/3 at
+~210 ms — small models read an agent idling at its own input box as working — so
+`classify_model` defaults to the same model used for summaries.
 
 ### What gets synced
 

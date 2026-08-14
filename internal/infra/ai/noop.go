@@ -32,3 +32,9 @@ func (n *NoopIntelligence) SuggestPatterns(_ context.Context, _ domain.Issue) ([
 func (n *NoopIntelligence) GenerateCommitMessage(_ context.Context, _ string) (string, error) {
 	return "", domain.ErrIntelligenceUnavailable
 }
+
+// ClassifyActivity reports unknown so callers fall back to the deterministic
+// classifier rather than treating "AI disabled" as a verdict.
+func (n *NoopIntelligence) ClassifyActivity(context.Context, string) (domain.AgentState, string, error) {
+	return domain.AgentStateUnknown, "", domain.ErrIntelligenceUnavailable
+}

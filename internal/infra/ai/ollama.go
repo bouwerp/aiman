@@ -17,7 +17,11 @@ import (
 const (
 	defaultOllamaHost = "http://localhost:11434"
 	defaultModel      = "qwen3:4b"
-	fallbackModel     = "llama3.2:3b"
+	// defaultClassifyModel answers "is this session busy, blocked, or idle".
+	// Same model as summarisation: see OllamaIntelligence.classifyModel for why
+	// the smaller candidates were rejected.
+	defaultClassifyModel = defaultModel
+	fallbackModel        = "llama3.2:3b"
 	// MaxHeadChars and MaxTailChars are exported so the UI can show a preview
 	// of exactly what gets sent to the model.
 	MaxHeadChars      = 3000  // head of pane content — captures the initial user prompt
@@ -148,9 +152,22 @@ Respond ONLY with valid JSON matching the schema.`
 // OllamaIntelligence implements IntelligenceProvider using the Ollama REST API.
 // It uses a plain net/http client — no external dependencies required.
 type OllamaIntelligence struct {
-	host   string
-	model  string
-	client *http.Client
+	host  string
+	model string
+	// classifyModel is used for activity classification, which is a far smaller
+	// question than summarisation and so invites a smaller model. Measured
+	// against panes captured from real sessions rather than invented ones:
+	//
+	//	qwen3:4b     3/3  ~600 ms
+	//	qwen3:1.7b   1/3  ~210 ms   (and 1/3–2/3 depending on prompt wording)
+	//	gemma3:270m  2/7  ~270 ms   (on an easier, synthetic set)
+	//
+	// The small models look fine on invented examples and fall apart on the real
+	// ambiguity — an agent idling at its own input box reads as "working" to
+	// them. Kept configurable so a faster model can be substituted once one
+	// holds up, but the default is the model that is actually right.
+	classifyModel string
+	client        *http.Client
 }
 
 // NewOllamaIntelligence creates a new Ollama-backed intelligence provider.
@@ -163,12 +180,21 @@ func NewOllamaIntelligence(host, model string) *OllamaIntelligence {
 		model = defaultModel
 	}
 	return &OllamaIntelligence{
-		host:  strings.TrimRight(host, "/"),
-		model: model,
+		host:          strings.TrimRight(host, "/"),
+		model:         model,
+		classifyModel: defaultClassifyModel,
 		client: &http.Client{
 			Timeout: httpClientTimeout,
 		},
 	}
+}
+
+// WithClassifyModel overrides the model used for activity classification.
+func (o *OllamaIntelligence) WithClassifyModel(model string) *OllamaIntelligence {
+	if strings.TrimSpace(model) != "" {
+		o.classifyModel = model
+	}
+	return o
 }
 
 // IsAvailable checks that Ollama is running and the configured model is present.
@@ -380,8 +406,13 @@ func (o *OllamaIntelligence) GenerateCommitMessage(ctx context.Context, diff str
 
 // generate sends a single-turn generation request to Ollama.
 func (o *OllamaIntelligence) generate(ctx context.Context, system, prompt string, schema json.RawMessage, maxTokens int) (string, error) {
+	return o.generateWith(ctx, o.model, system, prompt, schema, maxTokens)
+}
+
+// generateWith is generate against an explicit model.
+func (o *OllamaIntelligence) generateWith(ctx context.Context, model, system, prompt string, schema json.RawMessage, maxTokens int) (string, error) {
 	payload := ollamaGenerateRequest{
-		Model:  o.model,
+		Model:  model,
 		System: system,
 		Prompt: prompt,
 		Stream: false,
@@ -451,3 +482,55 @@ func headTruncate(s string, maxChars int) string {
 	}
 	return s[:maxChars] + "\n...[truncated]"
 }
+
+// activityClassifySchema constrains the reply to one of the three states.
+// Without it even a 4B model answers in prose: "We are given a pane of a coding…".
+var activityClassifySchema = json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "state": {"type": "string", "enum": ["working", "waiting_input", "idle"]},
+    "reason": {"type": "string"}
+  },
+  "required": ["state"]
+}`)
+
+const activityClassifySystemPrompt = `You classify the last lines of a coding agent's terminal pane.
+working: the agent is producing output or thinking (spinner, elapsed timer, streaming tokens).
+waiting_input: the agent is blocked on a question or a choice list and cannot continue without the user.
+idle: nothing is running — a shell prompt, or a finished agent sitting at its own input box.
+An agent at its own empty input box has finished its turn: that is idle, not waiting_input, because it is not asking anything.
+Answer with the state and a reason of at most eight words.`
+
+// ClassifyActivity asks the local model what a pane is doing.
+//
+// This is the escalation path for panes the deterministic classifier cannot
+// resolve, so it uses the small model and a constrained schema to stay fast.
+func (o *OllamaIntelligence) ClassifyActivity(ctx context.Context, paneTail string) (domain.AgentState, string, error) {
+	if strings.TrimSpace(paneTail) == "" {
+		return domain.AgentStateUnknown, "", nil
+	}
+	// Instructions inline, not in the system field: with an identical prompt in
+	// the system slot the same model scored one lower out of three.
+	raw, err := o.generateWith(ctx, o.classifyModel, "",
+		activityClassifySystemPrompt+"\n\n<pane>\n"+paneTail+"\n</pane>",
+		activityClassifySchema, 64)
+	if err != nil {
+		return domain.AgentStateUnknown, "", err
+	}
+	var out struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return domain.AgentStateUnknown, "", fmt.Errorf("parse classification: %w", err)
+	}
+	switch domain.AgentState(out.State) {
+	case domain.AgentStateWorking, domain.AgentStateWaitingInput, domain.AgentStateIdle:
+		return domain.AgentState(out.State), out.Reason, nil
+	default:
+		return domain.AgentStateUnknown, out.Reason, nil
+	}
+}
+
+// ClassifyModel reports which model classification uses, for display.
+func (o *OllamaIntelligence) ClassifyModel() string { return o.classifyModel }

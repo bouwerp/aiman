@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -48,7 +47,6 @@ var (
 	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
 	titleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("62")).Bold(true).Underline(true)
 	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
-	promptRegex  = regexp.MustCompile(`^[\w\-@~/:\.]+\s*(\$|#|>)\s*$`)
 )
 
 // copyStringToSystemClipboard writes text to the OS clipboard when a native helper exists.
@@ -1157,73 +1155,22 @@ func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
 }
 
 func detectSessionActivity(output string) (string, bool) {
-	text := strings.ToLower(output)
-
-	// Input prompt patterns
-	inputPatterns := []string{
-		"press any key",
-		"press enter",
-		"password:",
-		"passphrase",
-		"enter to continue",
-		"allow execution",
-		"action required",
-		"allow once",
-		"allow for this session",
-		"no, suggest changes",
-		"[y/n]",
-		"(y/n)",
-		"[y/n]",
-		"(y/n)",
-		"[y/n]",
-		"(y/n)",
-		"confirm",
-		"are you sure",
-	}
-
-	for _, p := range inputPatterns {
-		if strings.Contains(text, p) {
-			return "input", true
-		}
-	}
-
-	// Busy patterns (Claude/Antigravity style status lines)
-	busyPatterns := []string{
-		"thinking",
-		"tokens",
-		"marinating",
-		"processing",
-		"generating",
-	}
-	for _, p := range busyPatterns {
-		if strings.Contains(text, p) {
-			return "busy", false
-		}
-	}
-
-	// Idle prompt patterns (shell prompt characters)
-	if promptRegex.MatchString(lastNonEmptyLine(output)) {
-		return "idle", false
-	}
-
-	// Unknown/undetermined
-	return "", false
+	return detectSessionActivityWithAge(output, -1)
 }
 
-func lastNonEmptyLine(output string) string {
-	lines := strings.Split(output, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line != "" {
-			return line
-		}
-	}
-	return ""
+// detectSessionActivityWithAge classifies a pane, optionally informed by how
+// long the session has been silent (see ssh.Manager.SessionActivityAges).
+//
+// The previous implementation substring-matched the whole pane, so a "confirm"
+// or "thinking" anywhere in scrollback decided the state and input patterns
+// were checked before working ones — an agent busy on a task it had once asked
+// about read as blocked. pane.Classify looks only at the tail and prefers
+// positive signals (an advancing timer, a rendered choice list) over keywords.
+func detectSessionActivityWithAge(output string, sinceOutput time.Duration) (string, bool) {
+	res := pane.Classify(pane.Observation{Pane: output, SinceOutput: sinceOutput})
+	return pane.UIActivity(res.State), res.State == domain.AgentStateWaitingInput
 }
 
-// firstSyncingDelegation returns the remote's first delegation that pushes
-// credentials, or nil when none does. It reads both the singular
-// aws_delegation and the plural aws_delegations form.
 func firstSyncingDelegation(remote config.Remote) *config.AWSDelegation {
 	for _, d := range remote.AllDelegations() {
 		if d != nil && d.SyncCredentials {
@@ -3747,6 +3694,15 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyTmuxOutput(msg, cmds)
 	case inputHintMsg:
 		return m.applyInputHint(msg, cmds)
+	case classifyProbeMsg:
+		m.aiLoading = false
+		if msg.err != nil {
+			m.aiError = msg.err.Error()
+			return m, m.showToast("⚠️  classify: "+msg.err.Error(), true, 8*time.Second)
+		}
+		m.logPersistent("classify %s: %s", msg.session, msg.summary())
+		return m, m.showToast(msg.summary(), false, 12*time.Second)
+
 	case aiSummaryMsg:
 		return m.applyAISummary(msg, cmds)
 	case triggerDetailsMsg:
@@ -4393,6 +4349,37 @@ end tell`, cmd)
 // handleSessionManageKey handles keys that change a session's state: restarting, changing
 // directory scope, tunnels, status refresh, snapshots, archiving, termination, and trigger
 // details.
+// handleIntelligenceKey serves the two on-demand AI actions.
+//
+//	i  classify the session: deterministic rules and the model, side by side
+//	I  summarise the session, which "i" used to do
+//
+// Split out of handleSessionManageKey to keep that function under the
+// complexity gate; it is already the largest key handler in the dashboard.
+func (m *Model) handleIntelligenceKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	key := msg.String()
+	if key != "i" && key != "I" {
+		return nil, false
+	}
+	sel := m.list.SelectedItem()
+	if sel == nil {
+		return nil, false
+	}
+	if m.aiLoading {
+		return nil, true
+	}
+	s := sel.(item).session
+	m.aiLoading = true
+	m.aiError = ""
+	if key == "I" {
+		return summariseSessionCmd(m.cfg, m.intelligence, s), true
+	}
+	// Classify rather than summarise: the rules and the model both answer, so
+	// their disagreements are visible. That is the evidence for whether the
+	// model tier is worth running automatically.
+	return classifySessionCmd(m.cfg, m.intelligence, s), true
+}
+
 func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if msg.String() == "ctrl+r" || msg.String() == "s" {
 		if m.currentTab == tabDaemons {
@@ -4555,16 +4542,8 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			return m, m.recreateMutagenSync(sel.(item).session), true
 		}
 	}
-	if msg.String() == "i" {
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			if m.aiLoading {
-				return m, nil, true
-			}
-			m.aiLoading = true
-			m.aiError = ""
-			return m, summariseSessionCmd(m.cfg, m.intelligence, s), true
-		}
+	if cmd, handled := m.handleIntelligenceKey(msg); handled {
+		return m, cmd, true
 	}
 	if msg.String() == "ctrl+a" {
 		if sel := m.list.SelectedItem(); sel != nil {

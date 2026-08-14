@@ -79,6 +79,34 @@ accumulated worktrees.
   **1 call / 0.60 s**.
 - `discoverSession` deleted; `tmuxRecordsPerItem` + `sessionFromRecord` replace it.
 
+### Session activity detection ✅
+`detectSessionActivity` substring-matched the whole pane, lowercased, with input patterns checked
+before working ones — so "confirm" or "are you sure" anywhere in scrollback decided the state and
+a busy agent read as blocked. The pattern list carried `[y/n]` and `(y/n)` three times each.
+
+Replaced by `pane.Classify`, which uses positive signals over keywords:
+- `ssh.Manager.SessionActivityAges` reads tmux's own `#{session_activity}` for every session in one
+  round trip — no pane capture, which is what makes it scale past a handful of sessions.
+- Only the last `pane.TailLines` lines are examined. An advancing elapsed timer means working, a
+  rendered choice list means blocked, an agent input box with no timer means idle.
+- `Result.Confidence` marks the cases worth escalating.
+
+Validated against seventeen live sessions on regent0: all resolved at high confidence, none unknown.
+Real panes corrected two assumptions — `new task? /clear` is Claude's *idle* hint rather than a
+question, and `Brewed for 42s` is past-tense completion.
+
+The local-model tier exists but is not automatic. `i` runs the rules and the model side by side and
+reports both; `I` keeps the summary `i` used to trigger. Model choice was measured against captured
+panes rather than invented ones:
+
+	qwen3:4b     3/3  ~600 ms
+	qwen3:1.7b   1/3  ~210 ms
+	gemma3:270m  2/7  ~270 ms  (on an easier synthetic set)
+
+Small models read an agent idling at its own input box as working, so `ai.classify_model` defaults
+to the summarisation model. Two prompt findings: instructions inline beat the same text in the
+`system` field by one of three, and temperature and schema shape made no difference.
+
 ### Autonomous trigger daemon now actually reaches remotes ✅
 Scheduled Prompts and autonomous GitHub triggers were configurable in the TUI but could never
 fire. The execution path was already complete: the dashboard installs `aiman-trigger` onto a

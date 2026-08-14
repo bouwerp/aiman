@@ -24,7 +24,7 @@ func NewIntelligenceProvider(cfg *config.Config) domain.IntelligenceProvider {
 	if model == "" {
 		model = defaultModel
 	}
-	return newLazyIntelligence(NewOllamaIntelligence(host, model))
+	return newLazyIntelligence(NewOllamaIntelligence(host, model).WithClassifyModel(cfg.AI.ClassifyModel))
 }
 
 // lazyIntelligence wraps a delegate IntelligenceProvider and defers the availability
@@ -84,3 +84,14 @@ func (l *lazyIntelligence) GenerateCommitMessage(ctx context.Context, diff strin
 	}
 	return l.delegate.GenerateCommitMessage(ctx, diff)
 }
+
+// ClassifyActivity delegates once the backend has been confirmed reachable.
+func (l *lazyIntelligence) ClassifyActivity(ctx context.Context, paneTail string) (domain.AgentState, string, error) {
+	if !l.checkOnce(ctx) {
+		return domain.AgentStateUnknown, "", domain.ErrIntelligenceUnavailable
+	}
+	return l.delegate.ClassifyActivity(ctx, paneTail)
+}
+
+// ClassifyModel reports the model classification uses, for display.
+func (l *lazyIntelligence) ClassifyModel() string { return l.delegate.ClassifyModel() }

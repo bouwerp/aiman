@@ -3,6 +3,7 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -176,4 +177,41 @@ func parseTmuxSessionRecords(out string) []domain.TmuxSessionRecord {
 		})
 	}
 	return records
+}
+
+// SessionActivityAges returns, per tmux session, how long since it last
+// produced output. tmux tracks this itself, so one round trip answers for every
+// session at once — no pane capture, no per-session command.
+//
+// This is the cheapest signal available for "is anything happening", and the
+// only one that scales: classifying fifteen sessions previously meant fifteen
+// captures.
+func (m *Manager) SessionActivityAges(ctx context.Context) (map[string]time.Duration, error) {
+	const script = `now=$(date +%s); tmux ls -F '#{session_name}	#{session_activity}' 2>/dev/null | while IFS='	' read -r n a; do
+  [ -n "$n" ] || continue
+  printf 'SA\t%s\t%s\n' "$n" "$(( now - a ))"
+done`
+	out, err := m.Execute(ctx, script)
+	if err != nil {
+		// No tmux server is an empty result, not a failure.
+		return map[string]time.Duration{}, nil
+	}
+	return parseSessionActivityAges(out), nil
+}
+
+func parseSessionActivityAges(out string) map[string]time.Duration {
+	ages := make(map[string]time.Duration)
+	for _, line := range strings.Split(out, "\n") {
+		parts := splitRecord(strings.TrimRight(line, "\r"), "SA", 3)
+		if parts == nil {
+			continue
+		}
+		name := strings.TrimSpace(parts[1])
+		secs, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+		if name == "" || err != nil || secs < 0 {
+			continue
+		}
+		ages[name] = time.Duration(secs) * time.Second
+	}
+	return ages
 }

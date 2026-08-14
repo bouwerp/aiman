@@ -26,6 +26,12 @@ type IntelligenceProvider interface {
 	// DetectActions extracts actionable items from session output.
 	DetectActions(ctx context.Context, paneContent string) ([]ActionItem, error)
 
+	// ClassifyActivity decides whether a pane shows an agent working, blocked on
+	// the user, or idle. Intended as the escalation path for panes the
+	// deterministic classifier cannot resolve, so implementations should favour a
+	// small fast model. Returns the state and a short reason.
+	ClassifyActivity(ctx context.Context, paneTail string) (AgentState, string, error)
+
 	// SuggestPatterns recommends agentic orchestration patterns for a JIRA issue.
 	SuggestPatterns(ctx context.Context, issue Issue) ([]PatternSuggestion, error)
 

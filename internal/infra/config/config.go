@@ -123,6 +123,12 @@ type AIConfig struct {
 	OllamaHost string `yaml:"ollama_host,omitempty"`
 	// Model is the Ollama model name to use. Defaults to qwen3:4b.
 	Model string `yaml:"model,omitempty"`
+	// ClassifyModel is the model used for session activity classification.
+	// Defaults to Model. Smaller models were measured and rejected: against
+	// panes captured from real sessions, qwen3:4b scored 3/3 at ~600 ms while
+	// qwen3:1.7b managed 1/3 at ~210 ms. Set this only if a faster model proves
+	// itself on your own sessions.
+	ClassifyModel string `yaml:"classify_model,omitempty"`
 }
 
 type SkillsConfig struct {
