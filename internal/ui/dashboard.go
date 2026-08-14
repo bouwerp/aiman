@@ -1836,11 +1836,18 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
+		// Time every phase the flow already reports. Session creation spans SSH,
+		// git, tmux and mutagen, so without this a "it took ages" report leaves
+		// nothing to point at; the log now names the phase and its duration.
+		phases := newPhaseTimer()
 		sendStatus := func(s string) {
+			phases.mark(s)
 			if m.Program != nil {
 				m.Program.Send(sessionCreateMsg{status: s, placeholderID: placeholderID})
 			}
 		}
+		defer func() { phases.finish(m.logPersistent) }()
+
 		ctx := context.Background()
 		ctx = git.WithProgress(ctx, sendStatus)
 
@@ -1848,11 +1855,16 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 		sendStatus("Creating session...")
 		session, err := m.flowManager.CreateSession(ctx, sessionCfg)
 		if err != nil {
+			// Persisted, not just shown: by the time anyone asks why a session
+			// never appeared, the toast is long gone and aiman may have exited.
+			m.logPersistent("CreateSession failed for branch %q: %v", sessionCfg.Branch, err)
 			return sessionCreateMsg{err: err, placeholderID: placeholderID}
 		}
+		m.logPersistent("worktree and tmux ready: tmux=%q id=%s", session.TmuxSession, session.ID)
 
 		session.ID = strings.TrimSpace(session.ID)
 		if session.ID == "" {
+			m.logPersistent("session ID empty after CreateSession for branch %q; not saving", sessionCfg.Branch)
 			return sessionCreateMsg{err: fmt.Errorf("session ID is empty (%q), cannot safely create sync path", session.ID), placeholderID: placeholderID}
 		}
 
@@ -1896,14 +1908,20 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			session.LocalPath = localSyncPath
 			_ = session.Transition(domain.SessionStatusSyncing)
 		} else {
-			m.log("Warning: failed to start mutagen sync: %v", syncErr)
+			m.logPersistent("failed to start mutagen sync %s: %v", syncName, syncErr)
 			warning = fmt.Sprintf("Session created, but file sync failed: %v", syncErr)
 		}
 
 		// Save to DB — stamp UpdatedAt so new/restarted sessions sort to top.
+		// A session that reaches this point but is never saved still exists on the
+		// remote, carrying its aiman-id, so discovery adopts it on the next launch.
 		if m.db != nil {
 			session.UpdatedAt = time.Now()
-			_ = m.db.Save(ctx, session)
+			if err := m.db.Save(ctx, session); err != nil {
+				m.logPersistent("failed to save session %s (%s): %v", session.TmuxSession, session.ID, err)
+			} else {
+				m.logPersistent("saved session %s (%s) sync=%q", session.TmuxSession, session.ID, session.MutagenSyncID)
+			}
 		}
 
 		return sessionCreateMsg{session: *session, warning: warning, placeholderID: placeholderID}
@@ -2371,6 +2389,17 @@ func (m *Model) log(format string, args ...interface{}) {
 }
 
 // appendDebugLog appends a line to /tmp/aiman-debug.log for tracing goroutine activity.
+// logPersistent records a line in the in-app console and in the debug log file.
+//
+// m.log alone keeps the line in memory, so it dies with the process — which is
+// exactly when a post-mortem needs it. Anything worth reading after aiman has
+// exited (session-create timings, the reason a create failed) goes through here.
+func (m *Model) logPersistent(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	m.log("%s", msg)
+	_ = appendDebugLog(fmt.Sprintf("[create %s] %s\n", time.Now().Format("15:04:05.000"), msg))
+}
+
 func appendDebugLog(line string) error {
 	f, err := os.OpenFile("/tmp/aiman-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {

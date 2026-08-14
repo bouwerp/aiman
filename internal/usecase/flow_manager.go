@@ -374,41 +374,52 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 			"exit $_RC",
 		tmuxName, workingDir, strings.TrimSpace(session.ID), extraEnvFlags, agentBootstrap, tmuxName,
 	)
-	_, err = sshMgr.Execute(ctx, startCmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start tmux session: %w", err)
+	// Attaching means adopting whatever is already on the remote, tmux included.
+	// An interrupted create leaves a live worktree and tmux session behind with
+	// no database row; the retry resolved the worktree but then collided here
+	// with "duplicate session", so a recoverable state failed on every attempt.
+	adopted := config.AttachExisting && tmuxSessionExists(ctx, sshMgr, tmuxName)
+	if adopted {
+		infraGit.ReportProgress(ctx, fmt.Sprintf("Attaching to existing tmux session %s...", tmuxName))
 	}
 
-	// If the agent doesn't support an inline initial prompt (i.e. it would run
-	// headlessly and exit), we send the prompt via tmux send-keys after a short
-	// delay so the agent has time to start up interactively.
-	acceptTrust := config.Agent != nil && IsAntigravityAgent(config.Agent.Name, config.Agent.Command)
-	DeliverInitialPrompt(ctx, sshMgr, tmuxName, session.ID, sendKeysPrompt, acceptTrust)
+	if !adopted {
+		infraGit.ReportProgress(ctx, "Launching agent in tmux...")
+		_, err = sshMgr.Execute(ctx, startCmd)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start tmux session: %w", err)
+		}
+
+		// If the agent doesn't support an inline initial prompt (i.e. it would run
+		// headlessly and exit), we send the prompt via tmux send-keys after a short
+		// delay so the agent has time to start up interactively.
+		//
+		// Skipped when adopting: that agent is mid-conversation, and injecting a
+		// fresh task prompt would interrupt whatever it is doing.
+		acceptTrust := config.Agent != nil && IsAntigravityAgent(config.Agent.Name, config.Agent.Command)
+		DeliverInitialPrompt(ctx, sshMgr, tmuxName, session.ID, sendKeysPrompt, acceptTrust)
+	}
 
 	session.TmuxSession = tmuxName
 
-	// Trust the directory (Git safe.directory and Claude trust)
-	// This ensures agents and tools can operate without permission prompts.
-	trustCmd := fmt.Sprintf("git config --global --add safe.directory %q", workingDir)
-	_, _ = sshMgr.Execute(ctx, trustCmd)
-
-	claudeTrustCmd := fmt.Sprintf("cd %q && if command -v claude >/dev/null; then claude trust . >/dev/null 2>&1; fi", workingDir)
-	_, _ = sshMgr.Execute(ctx, claudeTrustCmd)
-
-	copilotTrustCmd := fmt.Sprintf("cd %q && if command -v copilot >/dev/null; then copilot trust . >/dev/null 2>&1 || copilot trust add . >/dev/null 2>&1; fi", workingDir)
-	_, _ = sshMgr.Execute(ctx, copilotTrustCmd)
-
-	ghCopilotTrustCmd := fmt.Sprintf("cd %q && if command -v gh >/dev/null; then gh copilot trust . >/dev/null 2>&1 || gh copilot trust add . >/dev/null 2>&1; fi", workingDir)
-	_, _ = sshMgr.Execute(ctx, ghCopilotTrustCmd)
+	// Trust the directory and read back the agent's model. Every one of these is
+	// best-effort decoration: the trust commands ignore their result, and the
+	// model only fills a display field. They are also expensive, because each
+	// boots an agent CLI on the remote — measured against a warm, idle box:
+	//
+	//	claude trust .          7.8s
+	//	copilot trust .         1.6s
+	//	claude config get model 21.8s
+	//
+	// Run sequentially and unreported, that is half a minute of silence after the
+	// last git message, which reads as a hung session creation. Run them together
+	// under one deadline instead, and say so while it happens.
+	infraGit.ReportProgress(ctx, "Trusting workspace and detecting agent…")
+	m.finaliseSessionBestEffort(ctx, sshMgr, session, config, workingDir)
 
 	// Transition JIRA issue if configured
 	if session.IssueKey != "" && m.jiraConfig != nil && m.jiraConfig.TransitionStatus != "" {
 		_ = m.jiraProvider.TransitionIssue(ctx, session.IssueKey, m.jiraConfig.TransitionStatus)
-	}
-
-	// Detect the LLM model the agent will use — best-effort, non-fatal.
-	if config.Agent != nil {
-		session.AgentModel = detectAgentModel(ctx, sshMgr, config.Agent.Name)
 	}
 
 	if err := session.Transition(domain.SessionStatusActive); err != nil {
@@ -419,6 +430,17 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 }
 
 // Deprecated: Use CreateSession instead
+// tmuxSessionExists reports whether the remote already has a session by this
+// name. `tmux has-session` exits non-zero when it does not, which Execute
+// surfaces as an error rather than as a value, so the result is echoed instead.
+func tmuxSessionExists(ctx context.Context, remote domain.RemoteExecutor, name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	out, err := remote.Execute(ctx, fmt.Sprintf("tmux has-session -t %q 2>/dev/null && echo YES || echo NO", name))
+	return err == nil && strings.Contains(out, "YES")
+}
+
 func (m *FlowManager) StartNewFlow(ctx context.Context, issueKey string, repoName string) (*domain.Session, error) {
 	return m.CreateSession(ctx, domain.SessionConfig{
 		IssueKey:   issueKey,

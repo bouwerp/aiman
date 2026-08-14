@@ -373,6 +373,7 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	}
 
 	// Create worktree
+	reportProgress(ctx, fmt.Sprintf("Creating worktree %s...", worktreeDir))
 	worktreeCmd := fmt.Sprintf("git -C %q worktree add -B %s ../%s %s", repoPath, branch, worktreeDir, baseBranch)
 	_, worktreeErr := remote.Execute(ctx, worktreeCmd)
 	if worktreeErr != nil {
@@ -843,6 +844,14 @@ func WithProgress(ctx context.Context, fn func(string)) context.Context {
 }
 
 func reportProgress(ctx context.Context, msg string) {
+	ReportProgress(ctx, msg)
+}
+
+// ReportProgress emits a progress message to the callback installed by
+// WithProgress, if any. Exported so the session flow can report the steps it
+// runs outside this package; without that the UI sits on the last git message
+// while later work runs, which reads as a hang.
+func ReportProgress(ctx context.Context, msg string) {
 	if fn, ok := ctx.Value(progressKeyType{}).(func(string)); ok {
 		fn(msg)
 	}
