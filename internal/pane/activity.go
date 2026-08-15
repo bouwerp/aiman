@@ -8,14 +8,20 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
-// TailLines is how much of a pane the classifier looks at.
-//
-// State lives at the bottom of a terminal: the prompt being asked, the spinner,
-// the shell prompt. Scanning the whole pane is what made the previous detector
-// unreliable — any occurrence of "confirm" or "thinking" anywhere in scrollback
-// decided the answer, so an agent working on a task it had once asked about read
-// as blocked.
+// TailLines is the window used to decide whether the user is being asked
+// something. It is deliberately tight: a question further up has been answered.
 const TailLines = 6
+
+// StatusLines is the window used to find evidence that work is in progress.
+//
+// It is wider than TailLines because agents render their input box below the
+// spinner, not above it. Claude Code puts seven lines of chrome underneath —
+// blank, box rule, prompt, box rule, context bar, mode line, background-task
+// line — so a six-line tail cuts the spinner off entirely and leaves only the
+// idle-looking furniture. That is not scrollback: it is the live bottom of the
+// screen, so widening this window does not reintroduce the keyword-matching
+// problem that TailLines exists to avoid.
+const StatusLines = 20
 
 // Confidence reports whether a caller should trust a classification or seek a
 // second opinion (an LLM, or simply waiting for another sample).
@@ -99,7 +105,8 @@ var (
 // to precede change detection or every prompt would read as work in progress.
 func Classify(obs Observation) Result {
 	tail := Tail(obs.Pane, TailLines)
-	if strings.TrimSpace(tail) == "" && obs.SinceOutput < 0 {
+	status := Tail(obs.Pane, StatusLines)
+	if strings.TrimSpace(status) == "" && obs.SinceOutput < 0 {
 		return Result{State: domain.AgentStateUnknown, Confidence: Low, Reason: "empty pane"}
 	}
 
@@ -107,10 +114,12 @@ func Classify(obs Observation) Result {
 		return Result{State: domain.AgentStateWaitingInput, Confidence: High, Reason: reason}
 	}
 
-	if elapsedTimerRe.MatchString(tail) {
+	// A running spinner sits above the agent's own chrome, so this looks further
+	// up than the prompt checks do.
+	if elapsedTimerRe.MatchString(status) {
 		return Result{State: domain.AgentStateWorking, Confidence: High, Reason: "elapsed timer in status line"}
 	}
-	if interruptHintRe.MatchString(tail) {
+	if interruptHintRe.MatchString(status) {
 		return Result{State: domain.AgentStateWorking, Confidence: High, Reason: "interrupt hint"}
 	}
 
@@ -138,10 +147,12 @@ func Classify(obs Observation) Result {
 		return Result{State: domain.AgentStateIdle, Confidence: High, Reason: "no output for " + obs.SinceOutput.Round(time.Second).String()}
 	}
 
-	// The agent is sitting at its own input box with no turn in flight.
-	if agentReadyRe.MatchString(tail) {
+	// The agent is sitting at its own input box and no running timer was found in
+	// the wider window above, so the turn really is over. The box itself proves
+	// nothing: agents render it while working too.
+	if agentReadyRe.MatchString(status) {
 		reason := "agent input box, no turn running"
-		if turnFinishedRe.MatchString(tail) {
+		if turnFinishedRe.MatchString(status) {
 			reason = "agent reported a finished turn"
 		}
 		return Result{State: domain.AgentStateIdle, Confidence: High, Reason: reason}

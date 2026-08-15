@@ -92,6 +92,13 @@ Replaced by `pane.Classify`, which uses positive signals over keywords:
 - `Result.Confidence` marks the cases worth escalating.
 
 Validated against seventeen live sessions on regent0: all resolved at high confidence, none unknown.
+
+Corrected in v0.9.5 after a live miss: a working Claude session read as idle because the six-line
+tail cut the spinner off. Agents draw their input box *below* the spinner, not above it — Claude Code
+puts seven lines of chrome underneath — so the evidence sat outside the window and only the
+idle-looking furniture remained. `StatusLines` (20) is now used to look for a running turn while
+`TailLines` (6) still anchors prompt detection, and the model tier is given the same wider window;
+feeding it the truncated tail is why both tiers agreed on the wrong answer.
 Real panes corrected two assumptions — `new task? /clear` is Claude's *idle* hint rather than a
 question, and `Brewed for 42s` is past-tense completion.
 

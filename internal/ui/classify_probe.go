@@ -82,7 +82,10 @@ func classifySessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, s
 		mctx, mcancel := context.WithTimeout(ctx, classifyProbeTimeout)
 		defer mcancel()
 		start := time.Now()
-		state, reason, cerr := intel.ClassifyActivity(mctx, pane.Tail(paneOut, pane.TailLines))
+		// StatusLines, not TailLines: the narrower window cuts the spinner off
+		// above the agent's own chrome, and feeding the model a truncated tail is
+		// how both tiers came to agree that a working session was idle.
+		state, reason, cerr := intel.ClassifyActivity(mctx, pane.Tail(paneOut, pane.StatusLines))
 		out.modelMS = time.Since(start).Milliseconds()
 		out.model, out.modelReason, out.modelErr = state, reason, cerr
 		return out
