@@ -338,13 +338,30 @@ func (c *Config) Save() error {
 	return nil
 }
 
-// GetDBPath returns the path to the database file.
-func GetDBPath() (string, error) {
+// GetDir returns ~/.aiman.
+func GetDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
-	return filepath.Join(home, DirName, DBName), nil
+	return filepath.Join(home, DirName), nil
+}
+
+// GetDBPath returns the path to the database file.
+func GetDBPath() (string, error) {
+	dir, err := GetDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, DBName), nil
+}
+
+func GetServeLogPath() (string, error) {
+	dir, err := GetDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "serve.log"), nil
 }
 
 // GetLogPath returns the path of the log file the TUI redirects to, so

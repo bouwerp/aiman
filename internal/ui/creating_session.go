@@ -38,6 +38,8 @@ func newCreatingPlaceholder(cfg domain.SessionConfig, remote config.Remote) doma
 	now := time.Now()
 	return domain.Session{
 		ID:          fmt.Sprintf("pending-%d", now.UnixNano()),
+		Name:        cfg.Name,
+		Group:       cfg.Group,
 		IssueKey:    cfg.IssueKey,
 		Branch:      cfg.Branch,
 		RepoName:    cfg.Repo.Name,

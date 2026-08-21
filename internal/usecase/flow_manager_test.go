@@ -102,6 +102,28 @@ func TestDeliverInitialPromptSkipsEmpty(t *testing.T) {
 	}
 }
 
+func TestSendPromptDoesNotInterpolatePrompt(t *testing.T) {
+	malicious := "do the thing $(touch /tmp/pwned) `id`"
+	f := &fakePromptDeliverer{}
+	if err := SendPrompt(context.Background(), f, "sess", "abc-123", malicious); err != nil {
+		t.Fatal(err)
+	}
+	if string(f.writeContent) != malicious {
+		t.Fatalf("prompt not written verbatim: %q", f.writeContent)
+	}
+	if len(f.execCmds) != 1 {
+		t.Fatalf("expected one Execute, got %d", len(f.execCmds))
+	}
+	for _, frag := range []string{"$(touch /tmp/pwned)", "`id`", "do the thing"} {
+		if strings.Contains(f.execCmds[0], frag) {
+			t.Fatalf("prompt leaked into command (%q): %s", frag, f.execCmds[0])
+		}
+	}
+	if strings.Contains(f.execCmds[0], "nohup") {
+		t.Fatalf("SendPrompt should not detach: %s", f.execCmds[0])
+	}
+}
+
 func TestDeliverInitialPromptSkipsExecuteOnWriteError(t *testing.T) {
 	f := &fakePromptDeliverer{writeErr: context.DeadlineExceeded}
 	DeliverInitialPrompt(context.Background(), f, "sess", "abc-123", "hello", false)

@@ -143,6 +143,12 @@ func run() error {
 			return runEC2Loop(cfg, os.Args[2:])
 		case "clear-aws-profiles":
 			return runClearAWSProfiles(db, os.Args[2:])
+		case "serve":
+			return runServe()
+		case "session":
+			return runSession(os.Args[2:])
+		case "--skill":
+			return runSkill()
 		default:
 			fmt.Fprintf(os.Stderr, "aiman: unknown command %q\n\n", os.Args[1])
 			fmt.Fprintf(os.Stderr, "Usage: aiman [command]\n\n")
@@ -154,8 +160,16 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  repos            open the repository picker\n")
 			fmt.Fprintf(os.Stderr, "  ec2-loop         launch autonomous loop agent on an on-demand EC2 instance\n")
 			fmt.Fprintf(os.Stderr, "  clear-aws-profiles  clear legacy aiman-* AWS profile names from stored sessions\n")
+			fmt.Fprintf(os.Stderr, "  serve            run the remote session server\n")
+			fmt.Fprintf(os.Stderr, "  session          list/get/create/prompt sessions (JSON)\n")
+			fmt.Fprintf(os.Stderr, "  --skill          print the agent skill\n")
 			return errUsage
 		}
+	}
+
+	if blockBareTUI(os.Getenv("AIMAN_ENV"), stdinIsTTY()) {
+		fmt.Fprintf(os.Stderr, "aiman: refusing to start the TUI (AIMAN_ENV=1 or no TTY). Try: aiman session --help\n")
+		return errUsage
 	}
 
 	// 7. Start TUI with StartupModel (Splash screen)
