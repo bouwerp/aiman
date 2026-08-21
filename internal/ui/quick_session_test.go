@@ -39,6 +39,21 @@ func TestQuickStartNoRemotesStaysOnMain(t *testing.T) {
 	}
 }
 
+func TestStartQuickSessionDoesNotCopyNameOntoBranch(t *testing.T) {
+	cfg := twoRemoteCfg()
+	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.selectedRemote = cfg.Remotes[0]
+	m.sessionCfg.Quick = true
+	m.sessionCfg.Agent = &domain.Agent{Name: "claude", Command: "claude"}
+	_, _ = m.startQuickSession()
+	if m.sessionCfg.Name == "" {
+		t.Fatal("expected a generated display name")
+	}
+	if m.sessionCfg.Branch == m.sessionCfg.Name {
+		t.Fatalf("Branch %q must not be the display name; rename has to leave the worktree/tmux identity alone", m.sessionCfg.Branch)
+	}
+}
+
 func TestRenameKeyOpensInput(t *testing.T) {
 	cfg := twoRemoteCfg()
 	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TmuxSession: "q1", RemoteHost: "10.0.1.5"}

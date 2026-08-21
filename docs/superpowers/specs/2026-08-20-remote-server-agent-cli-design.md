@@ -93,7 +93,7 @@ The dashboard list is flat: `WTB-1925 (wtb-1925-fix-auth) [regent0]`. Two sessio
 10. **Do not start the TUI from inside a session.** If `AIMAN_ENV=1` or stdin is not a TTY, bare `aiman` prints usage and exits 2. The skill says the same.
 11. **Every session has a `Name` and a `Group`.** Name is the herdr agent-name analog: a short unique alias on that host. Group is the herdr workspace analog: a bucket of related sessions with a rolled-up state. Neither is a multiplexer object.
 12. **Names are unique per host (per `aiman serve`), compared case-insensitively.** Groups are not a namespace. `aiman session prompt reviewer` is unambiguous on that box. The TUI already suffixes `[remote]` when several remotes are visible.
-13. **Do not rename the tmux session when the Aiman name changes.** Identity for kill/capture remains `AIMAN_ID` and the existing `TmuxSession` string. Tmux names stay stable after create.
+13. **`Name` is a display alias, not the worktree or branch.** Create derives tmux and the worktree from `Branch` (ad-hoc: `adhoc-<timestamp>`). Rename writes only `Name`. Kill, capture, attach, and git stay on `TmuxSession` / `WorktreePath` / `Branch`.
 14. **Quick start is ad-hoc on the default remote.** No JIRA, no repo picker, no branch editor, no summary. The only interactive choice is the agent. Full wizard stays on `n`.
 15. **Rename is a first-class TUI action**, not CLI-only. `e` on the selected session (`R` is already AWS credential refresh). Same validation and uniqueness as `session.rename`.
 
@@ -269,7 +269,7 @@ Full TUI `n` create does not add a name field to the wizard. It uses the table a
 
 Same idea as herdr's workspace sidebar: look at the group that needs a decision, not every row.
 
-**Tmux uniqueness:** `CreateSession` today names tmux after the sanitized branch, so two sessions on the same branch fail. After names exist, the tmux session name is `SanitizeTmuxSessionName(name)` when that string is free, otherwise `SanitizeTmuxSessionName(name + "-" + first 8 of id)`. Existing sessions keep their current tmux name.
+**Tmux uniqueness:** tmux is named `SanitizeTmuxSessionName(branch)` only. Two sessions on the same branch still collide in tmux; that is a git/worktree concern, not a display-name concern. Existing sessions keep their current tmux name across rename.
 
 ### Quick session start
 

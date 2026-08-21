@@ -330,13 +330,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// the entire prompt.
 	sendKeysPrompt = joinPrompt(sendKeysPrompt, config.InitialPrompt)
 
-	// Step 8: Session (Tmux)
-	tmuxName := domain.SanitizeTmuxSessionName(branch)
-	if session.Name != "" {
-		if n := domain.SanitizeTmuxSessionName(session.Name); n != "" {
-			tmuxName = n
-		}
-	}
+	// Step 8: Session (Tmux). The display Name is a renameable alias and must
+	// not become the tmux target; kill/capture/attach stay on the branch.
+	tmuxName := tmuxNameForCreate(branch, session.Name)
 
 	// Set AWS environment variables using the globally synced profile.
 	awsEnv := map[string]string{}
@@ -554,6 +550,13 @@ func SharedSessionAWSEnv(profileName, region string) map[string]string {
 
 // SessionRuntimeEnv is the AIMAN_* tmux environment for a session. Secrets
 // must not override these keys.
+// tmuxNameForCreate is the tmux session name for a new Aiman session.
+// displayName is ignored: renaming the session must not imply renaming tmux
+// or the worktree, so create never seeds tmux from the alias.
+func tmuxNameForCreate(branch, _ string) string {
+	return domain.SanitizeTmuxSessionName(branch)
+}
+
 func SessionRuntimeEnv(session *domain.Session) map[string]string {
 	return aimanRuntimeEnv(session)
 }

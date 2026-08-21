@@ -294,6 +294,9 @@ func (i item) Description() string {
 	if agentLabel != "" {
 		agentPart = " | Agent: " + agentLabel
 	}
+	if i.session.Branch != "" {
+		agentPart = " | Branch: " + i.session.Branch + agentPart
+	}
 	createdPart := ""
 	if !i.session.CreatedAt.IsZero() {
 		createdPart = " | Created: " + i.session.CreatedAt.Format("2006-01-02 15:04")

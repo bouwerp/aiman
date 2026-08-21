@@ -121,7 +121,6 @@ func (m *Model) startQuickSession() (tea.Model, tea.Cmd) {
 	}
 	m.sessionCfg.Name = name
 	m.sessionCfg.Group = domain.GroupQuick
-	m.sessionCfg.Branch = name
 	m.sessionCfg.AdHoc = true
 	m.sessionCfg.PromptFree = true
 	m.sessionCfg.Quick = true

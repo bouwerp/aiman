@@ -384,9 +384,6 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		Agent:         &domain.Agent{Name: params.Agent, Command: params.Agent},
 		Repo:          domain.Repo{Name: params.Repo},
 	}
-	if params.Quick && cfg.Branch == "" {
-		cfg.Branch = name
-	}
 	sess, err := s.create.CreateSession(ctx, cfg)
 	if err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())

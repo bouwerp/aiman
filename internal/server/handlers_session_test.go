@@ -216,6 +216,9 @@ func TestSessionCreateQuickAndRename(t *testing.T) {
 	if !creator.cfg.Quick || !creator.cfg.AdHoc || creator.cfg.Name != "q1" || creator.cfg.Group != "quick" {
 		t.Fatalf("cfg = %+v", creator.cfg)
 	}
+	if creator.cfg.Branch == creator.cfg.Name {
+		t.Fatalf("quick create copied display name %q onto Branch; they must stay independent", creator.cfg.Name)
+	}
 
 	resp, err = Call(sock, "session.rename", map[string]any{"id": "q1", "name": "spike"})
 	if err != nil {

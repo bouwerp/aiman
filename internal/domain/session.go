@@ -45,7 +45,7 @@ const (
 
 type Session struct {
 	ID               string
-	Name             string // unique per host; charset ValidateSessionName
+	Name             string // display alias, unique per host; independent of Branch and the worktree
 	Group            string // work bucket; empty persists as GroupUngrouped
 	IssueKey         string
 	Branch           string
