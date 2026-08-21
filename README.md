@@ -55,7 +55,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Health Checks**: Built-in "Doctor" validates all integrations on startup
 - **Fuzzy Search**: Find issues, repos, and sessions quickly
 - **Filter by Remote**: Show only sessions from a specific remote server (`f` key)
-- **Self-update**: `aiman update` downloads and installs the latest release in-place
+- **Self-update**: `aiman update` downloads and installs the latest release in-place; `aiman downgrade` rolls back to the previous (or a given) release
 
 ### Configuration
 - **YAML-based Config**: Simple `~/.aiman/config.yaml` configuration
@@ -98,6 +98,21 @@ aiman update
 ```
 
 This downloads the latest release binary and replaces the running binary in-place.
+
+### Downgrade / recover a broken install
+
+If the current binary still starts:
+
+```bash
+aiman downgrade          # previous stable release
+aiman downgrade v0.9.1   # pin a specific tag
+```
+
+If it will not start, reinstall a known-good tag with the installer (the flag must be on the `bash` side of the pipe):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --version v0.9.1
+```
 
 ### Manual Build
 
@@ -562,7 +577,7 @@ Aiman follows **Clean Architecture** principles:
 - [x] Session tunnel management (local port forwarding)
 - [x] AI session summaries (brief + long) with action items
 - [x] Session archiving and snapshot browser
-- [x] Self-update (`aiman update`)
+- [x] Self-update (`aiman update`) and downgrade (`aiman downgrade [tag]`)
 - [x] Autonomous trigger daemon (`aiman-trigger`) released per platform and installable onto a remote from the Daemons tab
 - [ ] Git intelligence panel
 - [ ] MOSH support

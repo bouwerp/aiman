@@ -122,6 +122,8 @@ func run() error {
 			return nil
 		case "update":
 			return runUpdate(version)
+		case "downgrade":
+			return runDowngrade(version, os.Args[2:])
 		case "init":
 			p := tea.NewProgram(ui.NewSetupModel(cfg), tea.WithAltScreen(), tea.WithMouseAllMotion())
 			if _, err := p.Run(); err != nil {
@@ -156,6 +158,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  (none)           start the TUI\n")
 			fmt.Fprintf(os.Stderr, "  version, -v      print version information\n")
 			fmt.Fprintf(os.Stderr, "  update           update aiman to the latest release\n")
+			fmt.Fprintf(os.Stderr, "  downgrade [tag]  install the previous (or given) release\n")
 			fmt.Fprintf(os.Stderr, "  init             run the configuration setup wizard\n")
 			fmt.Fprintf(os.Stderr, "  repos            open the repository picker\n")
 			fmt.Fprintf(os.Stderr, "  ec2-loop         launch autonomous loop agent on an on-demand EC2 instance\n")
