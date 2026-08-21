@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	DirName    = ".aiman"
-	ConfigName = "config.yaml"
-	DBName     = "aiman.db"
-	LogName    = "aiman.log"
+	DirName      = ".aiman"
+	ConfigName   = "config.yaml"
+	DBName       = "aiman.db"
+	LogName      = "aiman.log"
+	DebugLogName = "debug.log"
 )
 
 type Config struct {
@@ -362,6 +363,15 @@ func GetServeLogPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "serve.log"), nil
+}
+
+// GetDebugLogPath is the default file for `aiman --debug`.
+func GetDebugLogPath() (string, error) {
+	dir, err := GetDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, DebugLogName), nil
 }
 
 // GetLogPath returns the path of the log file the TUI redirects to, so

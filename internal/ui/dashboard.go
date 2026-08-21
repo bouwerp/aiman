@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/ai"
@@ -2375,9 +2376,11 @@ func (m *Model) log(format string, args ...interface{}) {
 	if len(m.consoleLog) > 100 {
 		m.consoleLog = m.consoleLog[len(m.consoleLog)-100:]
 	}
+	if debuglog.Enabled() {
+		_ = debuglog.Write(msg + "\n")
+	}
 }
 
-// appendDebugLog appends a line to /tmp/aiman-debug.log for tracing goroutine activity.
 // logPersistent records a line in the in-app console and in the debug log file.
 //
 // m.log alone keeps the line in memory, so it dies with the process — which is
@@ -2390,13 +2393,7 @@ func (m *Model) logPersistent(format string, args ...interface{}) {
 }
 
 func appendDebugLog(line string) error {
-	f, err := os.OpenFile("/tmp/aiman-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.WriteString(line)
-	return err
+	return debuglog.Write(line)
 }
 
 // wrapLines wraps each log line to width and joins them with newlines.

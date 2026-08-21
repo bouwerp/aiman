@@ -108,6 +108,15 @@ aiman downgrade          # previous stable release
 aiman downgrade v0.9.1   # pin a specific tag
 ```
 
+To capture a debug dump while reproducing a bug:
+
+```bash
+aiman --debug
+aiman --debug=/tmp/aiman.debug session list
+```
+
+The default file is `~/.aiman/debug.log`. The TUI also keeps traces in `/tmp/aiman-debug.log` when `--debug` is not set.
+
 If it will not start, reinstall a known-good tag with the installer (the flag must be on the `bash` side of the pipe):
 
 ```bash

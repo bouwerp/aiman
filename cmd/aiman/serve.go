@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
@@ -34,7 +35,11 @@ func runServe() error {
 		return fmt.Errorf("opening serve log: %w", err)
 	}
 	defer f.Close()
-	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	writers := []io.Writer{os.Stderr, f}
+	if w := debuglog.Writer(); w != nil {
+		writers = append(writers, w)
+	}
+	log.SetOutput(io.MultiWriter(writers...))
 
 	cfg, err := config.Load()
 	if err != nil {

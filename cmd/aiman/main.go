@@ -7,7 +7,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 
+	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/ai"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -48,9 +50,23 @@ func main() {
 }
 
 func run() error {
+	origArgs := append([]string(nil), os.Args...)
+	parsed, err := parseGlobalFlags(os.Args[1:])
+	if err != nil {
+		return err
+	}
+	os.Args = append([]string{os.Args[0]}, parsed.Rest...)
+
 	// 1. Ensure config directory exists
 	if err := config.EnsureDir(); err != nil {
 		return fmt.Errorf("failed to ensure config directory: %w", err)
+	}
+
+	if parsed.Debug {
+		if err := startDebugLog(parsed.DebugPath, origArgs); err != nil {
+			return err
+		}
+		defer debuglog.Close()
 	}
 
 	// 2. Load configuration
@@ -153,7 +169,9 @@ func run() error {
 			return runSkill()
 		default:
 			fmt.Fprintf(os.Stderr, "aiman: unknown command %q\n\n", os.Args[1])
-			fmt.Fprintf(os.Stderr, "Usage: aiman [command]\n\n")
+			fmt.Fprintf(os.Stderr, "Usage: aiman [options] [command]\n\n")
+			fmt.Fprintf(os.Stderr, "Options:\n")
+			fmt.Fprintf(os.Stderr, "  --debug[=PATH]   write debug logs to PATH (default ~/.aiman/debug.log)\n\n")
 			fmt.Fprintf(os.Stderr, "Commands:\n")
 			fmt.Fprintf(os.Stderr, "  (none)           start the TUI\n")
 			fmt.Fprintf(os.Stderr, "  version, -v      print version information\n")
@@ -212,9 +230,32 @@ func redirectLogToFile() func() {
 		log.SetOutput(io.Discard)
 		return nil
 	}
-	log.SetOutput(f)
+	if w := debuglog.Writer(); w != nil {
+		log.SetOutput(io.MultiWriter(f, w))
+	} else {
+		log.SetOutput(f)
+	}
 	return func() {
 		log.SetOutput(os.Stderr)
 		_ = f.Close()
 	}
+}
+
+func startDebugLog(path string, origArgs []string) error {
+	if path == "" {
+		var err error
+		path, err = config.GetDebugLogPath()
+		if err != nil {
+			return fmt.Errorf("debug log path: %w", err)
+		}
+	}
+	if err := debuglog.Enable(path); err != nil {
+		return fmt.Errorf("debug log: %w", err)
+	}
+	if w := debuglog.Writer(); w != nil {
+		log.SetOutput(io.MultiWriter(log.Writer(), w))
+	}
+	log.Printf("aiman debug version=%s goos=%s goarch=%s args=%q", version, runtime.GOOS, runtime.GOARCH, origArgs)
+	fmt.Fprintf(os.Stderr, "aiman: debug log %s\n", path)
+	return nil
 }
