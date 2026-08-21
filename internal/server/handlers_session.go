@@ -147,7 +147,7 @@ func (s *Server) handleList(ctx context.Context, req Request) Response {
 		if params.Group != "" && sess.Group != params.Group {
 			continue
 		}
-		info := sessionInfo(sess, "")
+		info := sessionInfo(sess, req.Caller)
 		s.decorateState(ctx, &info, sess)
 		out = append(out, info)
 	}
@@ -172,7 +172,7 @@ func (s *Server) handleGet(ctx context.Context, req Request) Response {
 	if !ok {
 		return errResp(req.ID, CodeNotFound, "session not found")
 	}
-	info := sessionInfo(sess, "")
+	info := sessionInfo(sess, req.Caller)
 	s.decorateState(ctx, &info, sess)
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":    "session",
@@ -223,7 +223,7 @@ func (s *Server) handleRead(ctx context.Context, req Request) Response {
 	}
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":    "pane_read",
-		"session": sessionInfo(sess, ""),
+		"session": sessionInfo(sess, req.Caller),
 		"text":    text,
 	}}
 }
@@ -395,7 +395,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeCreateFailed, err.Error())
 		}
 	}
-	info := sessionInfo(*sess, "")
+	info := sessionInfo(*sess, req.Caller)
 	return Response{ID: req.ID, Result: map[string]any{"type": "session", "session": info}}
 }
 
@@ -432,7 +432,7 @@ func (s *Server) handleRename(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
 	}
-	info := sessionInfo(sess, "")
+	info := sessionInfo(sess, req.Caller)
 	return Response{ID: req.ID, Result: map[string]any{"type": "session", "session": info}}
 }
 
@@ -456,7 +456,7 @@ func (s *Server) handleMove(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
 	}
-	info := sessionInfo(sess, "")
+	info := sessionInfo(sess, req.Caller)
 	return Response{ID: req.ID, Result: map[string]any{"type": "session", "session": info}}
 }
 

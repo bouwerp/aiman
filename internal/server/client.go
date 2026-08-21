@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +24,12 @@ func Call(socketPath, method string, params any) (Response, error) {
 		}
 		rawParams = b
 	}
-	req := Request{ID: uuid.NewString(), Method: method, Params: rawParams}
+	req := Request{
+		ID:     uuid.NewString(),
+		Method: method,
+		Params: rawParams,
+		Caller: strings.TrimSpace(os.Getenv("AIMAN_ID")),
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return Response{}, err

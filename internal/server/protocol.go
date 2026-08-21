@@ -24,6 +24,7 @@ type Request struct {
 	ID     string          `json:"id"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
+	Caller string          `json:"caller,omitempty"`
 }
 
 type Response struct {

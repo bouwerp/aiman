@@ -11,7 +11,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 )
 
-func startTestServer(t *testing.T, repo domain.SessionRepository) (string, context.CancelFunc) {
+func startTestServer(t *testing.T, repo domain.SessionRepository) string {
 	t.Helper()
 	dir := t.TempDir()
 	ln, err := Listen(dir)
@@ -22,7 +22,7 @@ func startTestServer(t *testing.T, repo domain.SessionRepository) (string, conte
 	srv := New(ln, repo, nil, nil, "test")
 	go func() { _ = srv.Serve(ctx) }()
 	t.Cleanup(cancel)
-	return SocketPath(dir), cancel
+	return SocketPath(dir)
 }
 
 func testRepo(t *testing.T) domain.SessionRepository {
@@ -51,7 +51,7 @@ func TestSessionListAndGet(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	sock, _ := startTestServer(t, repo)
+	sock := startTestServer(t, repo)
 
 	resp, err := Call(sock, "session.list", map[string]any{})
 	if err != nil {
@@ -127,6 +127,54 @@ func TestSessionListAndGet(t *testing.T) {
 	}
 }
 
+func TestSessionListMarksSelf(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "id-a", Name: "impl", Group: "g", TmuxSession: "imp",
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "id-b", Name: "reviewer", Group: "g", TmuxSession: "rev",
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestServer(t, repo)
+	t.Setenv("AIMAN_ID", "id-a")
+	resp, err := Call(sock, "session.list", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(resp.Result)
+	var list struct {
+		Sessions []SessionInfo `json:"sessions"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatal(err)
+	}
+	var sawSelf, sawOther bool
+	for _, s := range list.Sessions {
+		switch s.ID {
+		case "id-a":
+			if !s.Self {
+				t.Fatalf("caller session self=false: %s", raw)
+			}
+			sawSelf = true
+		case "id-b":
+			if s.Self {
+				t.Fatalf("other session self=true: %s", raw)
+			}
+			sawOther = true
+		}
+	}
+	if !sawSelf || !sawOther {
+		t.Fatalf("sessions = %s", raw)
+	}
+}
+
 func TestSessionListBackfillsName(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
@@ -136,7 +184,7 @@ func TestSessionListBackfillsName(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	sock, _ := startTestServer(t, repo)
+	sock := startTestServer(t, repo)
 	resp, err := Call(sock, "session.list", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
