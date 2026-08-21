@@ -125,9 +125,8 @@ func (m *Model) startQuickSession() (tea.Model, tea.Cmd) {
 	m.sessionCfg.PromptFree = true
 	m.sessionCfg.Quick = true
 	if d := firstSyncingDelegation(m.selectedRemote); d != nil {
-		profile, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
+		_, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
 		m.sessionCfg.AWSConfig = &domain.AWSConfig{
-			SourceProfile:   profile,
 			RoleName:        d.RoleName,
 			AccountID:       d.AccountID,
 			Region:          region,

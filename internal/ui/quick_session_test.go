@@ -39,6 +39,22 @@ func TestQuickStartNoRemotesStaysOnMain(t *testing.T) {
 	}
 }
 
+func TestStartQuickSessionDoesNotSetDefaultAWSProfile(t *testing.T) {
+	cfg := twoRemoteCfg()
+	cfg.AWS.DefaultProfile = "prod"
+	cfg.Remotes[0].AWSDelegation = &config.AWSDelegation{
+		Profile: "prod", SourceProfile: "prod", SyncCredentials: true, Region: "eu-west-1",
+	}
+	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.selectedRemote = cfg.Remotes[0]
+	m.sessionCfg.Quick = true
+	m.sessionCfg.Agent = &domain.Agent{Name: "claude", Command: "claude"}
+	_, _ = m.startQuickSession()
+	if m.sessionCfg.AWSConfig != nil && m.sessionCfg.AWSConfig.SourceProfile != "" {
+		t.Fatalf("quick start must not inject a default AWS profile, got %+v", m.sessionCfg.AWSConfig)
+	}
+}
+
 func TestStartQuickSessionDoesNotCopyNameOntoBranch(t *testing.T) {
 	cfg := twoRemoteCfg()
 	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)

@@ -5732,9 +5732,8 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// AllDelegations covers both the singular aws_delegation and the plural
 		// aws_delegations form, so a remote configured either way gets the section.
 		if d := firstSyncingDelegation(m.selectedRemote); d != nil {
-			profile, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
+			_, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
 			m.summary.SetAWSDefaults(&domain.AWSConfig{
-				SourceProfile:   profile,
 				RoleName:        d.RoleName,
 				AccountID:       d.AccountID,
 				Region:          region,

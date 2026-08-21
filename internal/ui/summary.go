@@ -66,9 +66,9 @@ func NewAdHocSummaryModel(label string) SummaryModel {
 	}
 }
 
-// SetAWSDefaults enables the AWS override section, pre-filling inputs with
-// the remote's configured defaults. The user can edit profile and region
-// before confirming.
+// SetAWSDefaults enables the AWS override section. Region is pre-filled from
+// the remote defaults; the profile field starts blank so a session uses the
+// default credential chain unless the user types a profile.
 func (m *SummaryModel) SetAWSDefaults(cfg *domain.AWSConfig) {
 	if cfg == nil {
 		return
@@ -78,7 +78,6 @@ func (m *SummaryModel) SetAWSDefaults(cfg *domain.AWSConfig) {
 
 	profileInput := textinput.New()
 	profileInput.Placeholder = "blank = AWS default credential chain"
-	profileInput.SetValue(cfg.SourceProfile)
 	profileInput.Width = 40
 
 	regionInput := textinput.New()
