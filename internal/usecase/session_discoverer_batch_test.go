@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -59,8 +60,12 @@ func TestDiscoverUsesBatchPathWhenAvailable(t *testing.T) {
 	if remote.tmuxCalls != 1 || remote.wtCalls != 1 {
 		t.Errorf("expected one batch call each, got tmux=%d worktree=%d", remote.tmuxCalls, remote.wtCalls)
 	}
-	if len(remote.commands) != 0 {
+	for _, c := range remote.commands {
+		if strings.Contains(c, "native-sessions") {
+			continue
+		}
 		t.Errorf("batch path should issue no per-item commands, got %v", remote.commands)
+		break
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)

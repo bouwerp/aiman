@@ -58,6 +58,15 @@ type Session struct {
 	LocalPath        string
 	AgentName        string
 	AgentModel       string // LLM model in use (e.g. "claude-opus-4-5"); detected at session creation
+	AgentSessionID   string // vendor conversation id for resume (claude --resume, grok --resume, …)
+	AgentSessionPath string // optional vendor transcript / session file
+	AgentTitle       string // vendor session title, when a hook reports one
+	AgentEnded       bool   // SessionEnd: the agent process finished (not a crashed pane)
+	HookState        AgentState
+	HookStateMessage string // blocked reason, e.g. a permission prompt
+	HookStateSource  string // lifecycle | idle_prompt | session_end
+	HookStateSeq     int64
+	HookStateAt      time.Time
 	Status           SessionStatus
 	Mode             SessionMode       // INTERACTIVE or AUTONOMOUS
 	TriggerSource    string            // e.g., github, sentry, jira

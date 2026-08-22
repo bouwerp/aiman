@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/usecase"
@@ -23,9 +24,15 @@ type SessionInfo struct {
 	WorktreePath     string `json:"worktree_path,omitempty"`
 	WorkingDirectory string `json:"working_directory,omitempty"`
 	AgentName        string `json:"agent_name,omitempty"`
+	AgentSessionID   string `json:"agent_session_id,omitempty"`
+	AgentSessionPath string `json:"agent_session_path,omitempty"`
+	Title            string `json:"title,omitempty"`
 	Status           string `json:"status,omitempty"`
 	State            string `json:"state,omitempty"`
 	StateConfidence  string `json:"state_confidence,omitempty"`
+	StateMessage     string `json:"state_message,omitempty"`
+	StateSource      string `json:"state_source,omitempty"`
+	Ended            bool   `json:"ended,omitempty"`
 	Self             bool   `json:"self"`
 }
 
@@ -41,14 +48,32 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		WorktreePath:     s.WorktreePath,
 		WorkingDirectory: s.WorkingDirectory,
 		AgentName:        s.AgentName,
+		AgentSessionID:   s.AgentSessionID,
+		AgentSessionPath: s.AgentSessionPath,
+		Title:            s.AgentTitle,
 		Status:           string(s.Status),
 		State:            string(domain.AgentStateUnknown),
+		Ended:            s.AgentEnded,
 		Self:             callerID != "" && callerID == s.ID,
 	}
 }
 
+func (s *Server) liveSession(ctx context.Context, sess domain.Session) domain.Session {
+	if s.repo == nil || sess.ID == "" {
+		return sess
+	}
+	got, err := s.repo.Get(ctx, sess.ID)
+	if err != nil {
+		return sess
+	}
+	return *got
+}
+
 func (s *Server) decorateState(ctx context.Context, info *SessionInfo, sess domain.Session) {
-	st, conf := s.classify(ctx, sess)
+	live := s.liveSession(ctx, sess)
+	info.Title = live.AgentTitle
+	info.Ended = live.AgentEnded
+	st, conf := s.classify(ctx, live)
 	info.State = string(st)
 	switch conf {
 	case pane.High:
@@ -56,13 +81,23 @@ func (s *Server) decorateState(ctx context.Context, info *SessionInfo, sess doma
 	default:
 		info.StateConfidence = "low"
 	}
+	if live.HookStateMessage != "" && st == domain.AgentStateWaitingInput {
+		info.StateMessage = live.HookStateMessage
+	}
+	if live.HookStateSource != "" && conf == pane.High {
+		info.StateSource = live.HookStateSource
+	}
 }
 
 func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.AgentState, pane.Confidence) {
-	if s.remote == nil || sess.TmuxSession == "" {
+	live := s.liveSession(ctx, sess)
+	if st, ok := agenthook.ResolveHookState(live, time.Now()); ok {
+		return st, pane.High
+	}
+	if s.remote == nil || live.TmuxSession == "" {
 		return domain.AgentStateUnknown, pane.Low
 	}
-	text, err := s.remote.CaptureTmuxPane(ctx, sess.TmuxSession)
+	text, err := s.remote.CaptureTmuxPane(ctx, live.TmuxSession)
 	if err != nil {
 		return domain.AgentStateUnknown, pane.Low
 	}
@@ -458,6 +493,62 @@ func (s *Server) handleMove(ctx context.Context, req Request) Response {
 	}
 	info := sessionInfo(sess, req.Caller)
 	return Response{ID: req.ID, Result: map[string]any{"type": "session", "session": info}}
+}
+
+func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Response {
+	var params struct {
+		ID               string `json:"id"`
+		AgentSessionID   string `json:"agent_session_id"`
+		AgentSessionPath string `json:"agent_session_path"`
+		State            string `json:"state"`
+		Source           string `json:"source"`
+		Message          string `json:"message"`
+		Title            string `json:"title"`
+		Ended            bool   `json:"ended"`
+		Seq              int64  `json:"seq"`
+	}
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return errResp(req.ID, CodeInvalidParams, "invalid params")
+		}
+	}
+	sessionID := strings.TrimSpace(params.ID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(req.Caller)
+	}
+	rep := agenthook.Report{
+		Native: agenthook.Native{
+			ID:   strings.TrimSpace(params.AgentSessionID),
+			Path: strings.TrimSpace(params.AgentSessionPath),
+		},
+		State:   domain.AgentState(strings.TrimSpace(params.State)),
+		Source:  strings.TrimSpace(params.Source),
+		Message: strings.TrimSpace(params.Message),
+		Title:   strings.TrimSpace(params.Title),
+		Ended:   params.Ended,
+		Seq:     params.Seq,
+	}
+	if sessionID == "" || (rep.ID == "" && rep.State == "" && !rep.Ended && rep.Title == "") {
+		return errResp(req.ID, CodeInvalidParams, "id plus agent_session_id, state, title, or ended is required")
+	}
+	if s.repo != nil {
+		sess, err := s.repo.Get(ctx, sessionID)
+		if err == nil {
+			agenthook.ApplyReport(sess, rep, time.Now())
+			if err := s.repo.Save(ctx, sess); err != nil {
+				return errResp(req.ID, CodeInvalidParams, err.Error())
+			}
+		}
+	}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type":               "agent_session",
+		"id":                 sessionID,
+		"agent_session_id":   rep.ID,
+		"agent_session_path": rep.Path,
+		"state":              string(rep.State),
+		"title":              rep.Title,
+		"ended":              rep.Ended,
+	}}
 }
 
 func resolveSession(list []domain.Session, target string) (domain.Session, bool) {

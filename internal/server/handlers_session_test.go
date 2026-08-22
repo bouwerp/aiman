@@ -298,3 +298,163 @@ func TestCallServerNotRunning(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestReportAgentSessionUpdatesExisting(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "id-a", Name: "impl", Group: "g", TmuxSession: "imp",
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestServer(t, repo)
+	resp, err := Call(sock, "session.report_agent_session", map[string]any{
+		"id": "id-a", "agent_session_id": "native-1", "agent_session_path": "/tmp/t.jsonl",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("%+v", resp.Error)
+	}
+	got, err := repo.Get(ctx, "id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentSessionID != "native-1" || got.AgentSessionPath != "/tmp/t.jsonl" {
+		t.Fatalf("%+v", got)
+	}
+	listed, err := Call(sock, "session.get", map[string]any{"id": "impl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(listed.Result)
+	var one struct {
+		Session SessionInfo `json:"session"`
+	}
+	if err := json.Unmarshal(raw, &one); err != nil {
+		t.Fatal(err)
+	}
+	if one.Session.AgentSessionID != "native-1" {
+		t.Fatalf("get json: %s", raw)
+	}
+}
+
+func TestReportAgentSessionUnknownIDStillSucceeds(t *testing.T) {
+	sock := startTestServer(t, testRepo(t))
+	resp, err := Call(sock, "session.report_agent_session", map[string]any{
+		"id": "ghost", "agent_session_id": "n1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("missing session must not fail the hook: %+v", resp.Error)
+	}
+}
+
+func TestReportAgentSessionUsesCaller(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "id-a", Name: "impl", Group: "g",
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestServer(t, repo)
+	t.Setenv("AIMAN_ID", "id-a")
+	resp, err := Call(sock, "session.report_agent_session", map[string]any{
+		"agent_session_id": "from-caller",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("%+v", resp.Error)
+	}
+	got, err := repo.Get(ctx, "id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentSessionID != "from-caller" {
+		t.Fatalf("%q", got.AgentSessionID)
+	}
+}
+
+func TestReportAgentStateAndWait(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "id-a", Name: "impl", Group: "g", TmuxSession: "imp",
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestServer(t, repo)
+	resp, err := Call(sock, "session.report_agent_session", map[string]any{
+		"id": "id-a", "state": "blocked", "source": "lifecycle",
+		"message": "git push", "title": "fix auth",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("%+v", resp.Error)
+	}
+	got, err := Call(sock, "session.get", map[string]any{"id": "impl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(got.Result)
+	var one struct {
+		Session SessionInfo `json:"session"`
+	}
+	if err := json.Unmarshal(raw, &one); err != nil {
+		t.Fatal(err)
+	}
+	if one.Session.State != "waiting_input" || one.Session.StateMessage != "git push" {
+		t.Fatalf("blocked: %s", raw)
+	}
+	if one.Session.Title != "fix auth" || one.Session.StateConfidence != "high" {
+		t.Fatalf("title/conf: %s", raw)
+	}
+
+	if _, err := Call(sock, "session.report_agent_session", map[string]any{
+		"id": "id-a", "state": "idle", "source": "idle_prompt",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waited, err := Call(sock, "session.wait", map[string]any{"id": "impl", "until": "idle", "timeout_ms": 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waited.Error != nil {
+		t.Fatalf("wait: %+v", waited.Error)
+	}
+}
+
+func TestReportSessionEnd(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "id-a", Name: "impl", Group: "g",
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestServer(t, repo)
+	if _, err := Call(sock, "session.report_agent_session", map[string]any{
+		"id": "id-a", "ended": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, "id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.AgentEnded {
+		t.Fatal("ended not stored")
+	}
+}
