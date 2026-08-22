@@ -44,6 +44,8 @@ GitHub Actions builds cross-platform binaries and creates the release automatica
 ```
 cmd/aiman/          — main.go entry point
 internal/
+  agenthook/        — native-session hooks (install, payload, resume)
+  aimanskill/       — bundled skill text + EnsureOnHost
   domain/           — pure Go domain types and interfaces (no external deps)
     session.go      — Session, SessionConfig, SessionStatus, GitStatus, PullRequest, Secret
     interfaces.go   — all domain interfaces (RemoteExecutor, SyncEngine, etc.)
@@ -93,6 +95,11 @@ A `domain.Session` holds:
 | `MutagenSyncID` | mutagen sync session name (usually `aiman-sync-<ID>`) |
 | `LocalPath` | `~/.aiman/work/<ID>` — local mutagen sync root |
 | `AgentName` | agent binary name, e.g. `claude` |
+| `AgentSessionID` | vendor conversation id for resume (`claude --resume`, `grok --resume`, …) |
+| `AgentSessionPath` | optional vendor transcript / session file |
+| `AgentTitle` | vendor session title when a hook reports one |
+| `AgentEnded` | SessionEnd: the agent finished (not a crashed pane) |
+| `HookState` | last hook-reported idle/working/waiting_input, with source/message/seq |
 | `Status` | `PROVISIONING → ACTIVE → CLEANUP` (or `ERROR`/`INACTIVE`) |
 | `Tunnels` | local↔remote port forwards |
 | `AWSProfileName` | legacy scoped AWS profile name retained only for migration/cleanup |
@@ -111,7 +118,7 @@ field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 
 **Why this matters:** The session discoverer (`Discover`) builds sessions from live remote state — it can only know what it can read from a running tmux process. Fields like `Branch`, `AgentName`, `WorktreePath`, and `WorkingDirectory` will often be empty in discovered sessions. Before this fix, discovery was silently overwriting the DB with empty strings on every scan cycle, causing restart to fail with "session has no working directory".
 
-**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `mutagen_sync_id`, `local_path`, `agent_name`.
+**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `mutagen_sync_id`, `local_path`, `agent_name`, `agent_session_id`, `agent_session_path`, `agent_title`, `agent_ended`, `hook_state`, `hook_state_message`, `hook_state_source`.
 
 **Fields always overwritten:** `status`, `updated_at`.
 
@@ -173,7 +180,7 @@ Admin Menu (`m`) → **Agent API** is the settings page for `aiman serve` (one r
 
 Session create also calls `ensureRemoteServer` if `~/.aiman/aiman.sock` is missing.
 
-On start, `aiman serve` installs or updates the bundled skill (`internal/aimanskill`) in user-level agent skill dirs under `$HOME` and in each known session worktree. Session create still writes the worktree copy.
+On start, `aiman serve` installs or updates the bundled skill (`internal/aimanskill`) in user-level agent skill dirs under `$HOME` and in each known session worktree, and registers native-session hooks (`internal/agenthook`) in each installed agent's config. Identity agents (Claude, Grok, Cursor, Codex, Copilot, agy) report session id, `SessionEnd`, and `idle_prompt`. OpenCode and Pi also report lifecycle state. `session.wait` uses a hook report newer than 2 minutes instead of `pane.Classify`. Session create still writes the worktree skill copy. Ageni is not hooked.
 
 SSH `systemctl --user` needs `XDG_RUNTIME_DIR` and the session bus; the scripts set those. Linger is enabled *before* `systemctl --user` so a first SSH to a host with no lingering user instance can still install.
 
@@ -188,9 +195,10 @@ Do not run serve inside tmux. Probe on select, `r`, after an op, and after disco
 The restart flow (triggered by `s` key):
 1. Local: terminate mutagen syncs (`aiman-sync-<ID>`, `aiman-sync-<ID>-pull`, `s.TmuxSession`, `s.MutagenSyncID`)
 2. Optionally: call `flowManager.SkillEngine.PrepareSession` to generate agent command
-3. `mgr.ResetControlSocket()` — clear stale SSH master
-4. **1 SSH call**: `tmux kill-session … && tmux new-session … "bash -l -c '<agent>; exec bash'"`
-5. Re-establish mutagen sync
+3. SSH-read `~/.aiman/native-sessions/<ID>` on the remote and append the vendor resume flag (`agenthook.WithResume`)
+4. `mgr.ResetControlSocket()` — clear stale SSH master
+5. **1 SSH call**: `tmux kill-session … && tmux new-session … "bash -l -c '<agent>; exec bash'"`
+6. Re-establish mutagen sync
 
 **The worktree is never touched.** Only the tmux process + agent is replaced.
 

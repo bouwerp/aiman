@@ -398,6 +398,7 @@ aiman session move <target> --group GROUP
 aiman session prompt <target> TEXT [--wait] [--until STATE] [--timeout 120s] [--force]
 aiman session wait <target> [--until idle|working|waiting_input|blocked] [--timeout 120s]
 aiman session read <target> [--lines 120]
+aiman session report-agent-session --from-stdin
 ```
 
 Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refused: use `aiman session …`.
@@ -491,6 +492,8 @@ aiman --skill
 That prints the Markdown skill (`internal/aimanskill/SKILL.md`, also under `skills/aiman/`). The skill is gated on `AIMAN_ENV=1`. If that is unset, the agent is not inside an Aiman session and must stop.
 
 `aiman serve` on start (and on restart) installs or updates the skill in each agent's user skill dir under `$HOME` (`.claude/skills/aiman`, `.cursor/skills/aiman`, and the other known loaders) and in every session worktree it knows about. Missing files are created; stale copies are replaced with the copy embedded in the binary. Session create still writes the worktree copy so a new session does not wait for a serve restart.
+
+It also registers **native-session hooks** in each installed agent's config. Every hooked agent reports vendor conversation id, `SessionEnd`, and (where the runtime has it) `Notification` `idle_prompt`. OpenCode and Pi also report lifecycle `idle` / `working` / `blocked` with an optional block reason and session title. `aiman session wait` / `prompt --wait` prefer a fresh hook report over tmux screen classification. Restart uses the native id (`claude --resume`, `codex resume`, …). Ageni is not hooked. Missing agent config directories are left alone.
 
 Typical helper spawn from an in-pane agent:
 

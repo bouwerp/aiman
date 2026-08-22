@@ -26,6 +26,7 @@ func TestPrintServeUsageTellsOperatorTheTUIPath(t *testing.T) {
 		"i  install/enable",
 		"~/.aiman/aiman.sock",
 		"Do not run this on your laptop",
+		"native-session hooks",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("usage missing %q:\n%s", want, out)

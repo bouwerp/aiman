@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
@@ -192,7 +193,28 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		addSession(session)
 	}
 
-	return dedupeDiscoveredSessions(sessions), nil
+	sessions = dedupeDiscoveredSessions(sessions)
+	d.enrichHookReports(ctx, sessions)
+	return sessions, nil
+}
+
+func (d *SessionDiscoverer) enrichHookReports(ctx context.Context, sessions []domain.Session) {
+	if d.remoteExecutor == nil || len(sessions) == 0 {
+		return
+	}
+	raw, err := d.remoteExecutor.Execute(ctx, agenthook.ListSidecarsCmd)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return
+	}
+	byID := agenthook.ParseSidecarDump(raw)
+	now := time.Now()
+	for i := range sessions {
+		r, ok := byID[sessions[i].ID]
+		if !ok {
+			continue
+		}
+		agenthook.ApplyReport(&sessions[i], r, now)
+	}
 }
 
 func (d *SessionDiscoverer) isDiscoverableOrphanWorktree(ctx context.Context, repoPath, worktreePath string) bool {

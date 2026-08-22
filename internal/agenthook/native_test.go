@@ -1,0 +1,61 @@
+package agenthook
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestSafeSessionID(t *testing.T) {
+	t.Parallel()
+	if SafeSessionID("4881040e-e03c-41e7-b36f-f1381450875a") == "" {
+		t.Fatal("uuid")
+	}
+	if SafeSessionID("../etc/passwd") != "" {
+		t.Fatal("dotdot")
+	}
+	if SafeSessionID("a/b") != "" {
+		t.Fatal("slash")
+	}
+	if SafeSessionID("") != "" {
+		t.Fatal("empty")
+	}
+}
+
+func TestWriteAndParseStored(t *testing.T) {
+	dir := t.TempDir()
+	n := Report{Native: Native{ID: "conv-1", Path: "/tmp/x.jsonl"}}
+	if err := WriteStored(dir, "sess-1", n); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, nativeDirName, "sess-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ParseStored(raw)
+	if got.ID != "conv-1" || got.Path != "/tmp/x.jsonl" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestWriteStoredRejectsUnsafeID(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteStored(dir, "../x", Report{Native: Native{ID: "n"}}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestParseStoredFallsBackToHookPayload(t *testing.T) {
+	got := ParseStored([]byte(`{"session_id":"abc"}`))
+	if got.ID != "abc" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestParseSidecarDump(t *testing.T) {
+	raw := "ID sess-1\n{\"id\":\"n1\",\"state\":\"idle\",\"source\":\"idle_prompt\"}\nEND\nID sess-2\n{\"id\":\"n2\",\"ended\":true}\nEND\n"
+	got := ParseSidecarDump(raw)
+	if got["sess-1"].State != "idle" || !got["sess-2"].Ended {
+		t.Fatalf("%+v", got)
+	}
+}

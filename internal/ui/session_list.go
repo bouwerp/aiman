@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func groupRollup(items []item) string {
@@ -167,20 +168,226 @@ func newSessionListDelegate() sessionListDelegate {
 	return sessionListDelegate{DefaultDelegate: list.NewDefaultDelegate()}
 }
 
+var (
+	stateColorWorking = lipgloss.Color("#00FF00")
+	stateColorWaiting = lipgloss.Color("#FFA500")
+	stateColorError   = lipgloss.Color("#FF0000")
+	stateColorIdle    = lipgloss.Color("#7D7D7D")
+	stateColorEnded   = lipgloss.Color("#6B6B6B")
+	stateColorName    = lipgloss.Color("#DDDDDD")
+	headerLabelColor  = lipgloss.Color("62")
+	headerSelFg       = lipgloss.Color("229")
+	headerSelBg       = lipgloss.Color("57")
+)
+
+func sessionStateColor(i item) lipgloss.Color {
+	if i.header {
+		switch i.activity {
+		case "waiting":
+			return stateColorWaiting
+		case "error":
+			return stateColorError
+		case "working":
+			return stateColorWorking
+		default:
+			return stateColorIdle
+		}
+	}
+	if i.session.AgentEnded || i.activity == "terminating" {
+		return stateColorEnded
+	}
+	if i.activity == "create-failed" || i.activity == "stale" {
+		return stateColorError
+	}
+	if i.needsInput {
+		return stateColorWaiting
+	}
+	if i.syncStale {
+		return stateColorError
+	}
+	switch i.activity {
+	case "busy", "creating":
+		return stateColorWorking
+	case "idle":
+		return stateColorIdle
+	default:
+		return stateColorName
+	}
+}
+
+func (i item) chrome() (prefix, activity string) {
+	switch i.activity {
+	case "creating":
+		prefix, activity = "~ ", " • creating…"
+	case "create-failed":
+		prefix, activity = "! ", " ⚠ create failed"
+	case "terminating":
+		prefix, activity = "x ", " • terminating…"
+	default:
+		if i.needsInput {
+			prefix = "! "
+			activity = " ⚠ input"
+			if msg := strings.TrimSpace(i.session.HookStateMessage); msg != "" {
+				activity = " ⚠ " + truncateRunes(msg, 24)
+			}
+			break
+		}
+		switch i.activity {
+		case "idle":
+			prefix, activity = "o ", " • idle"
+		case "busy":
+			prefix, activity = "> ", " • busy"
+		case "stale":
+			prefix, activity = "! ", " ⚠ thinking (stuck?)"
+		}
+	}
+	if i.syncStale {
+		activity += " ⚠ sync"
+	}
+	if i.session.AgentEnded {
+		prefix = "x "
+		activity = " • exited"
+	}
+	if i.session.Mode == domain.SessionModeAutonomous {
+		prefix = "🤖 " + prefix
+	}
+	return prefix, activity
+}
+
+func (i item) displayName() string {
+	label := i.session.Name
+	if label == "" {
+		if i.session.IssueKey != "" {
+			label = fmt.Sprintf("%s (%s)", i.session.IssueKey, i.session.TmuxSession)
+		} else {
+			label = i.session.TmuxSession
+		}
+	}
+	if title := strings.TrimSpace(i.session.AgentTitle); title != "" {
+		label += " · " + truncateRunes(title, 32)
+	}
+	return label
+}
+
+func (i item) treeBranch() string {
+	if i.treeLast {
+		return "  └─ "
+	}
+	return "  ├─ "
+}
+
+func (i item) headerPlainTitle() string {
+	label := domain.GroupLabel(i.session.Group)
+	count := ""
+	if i.groupN > 0 {
+		count = fmt.Sprintf(" · %d", i.groupN)
+	}
+	activity := ""
+	if i.activity != "" {
+		activity = " • " + i.activity
+	}
+	remoteTag := ""
+	if i.remoteName != "" {
+		remoteTag = " [" + i.remoteName + "]"
+	}
+	glyph := "▾"
+	if i.collapsed {
+		glyph = "▸"
+	}
+	return fmt.Sprintf("%s %s%s%s%s", glyph, label, count, activity, remoteTag)
+}
+
+func (i item) plainTitle() string {
+	if i.header {
+		return i.headerPlainTitle()
+	}
+	prefix, activity := i.chrome()
+	return i.treeBranch() + prefix + i.displayName() + activity
+}
+
 func (d sessionListDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
 	it, ok := listItem.(item)
-	if !ok || !it.header {
+	if !ok {
 		d.DefaultDelegate.Render(w, m, index, listItem)
 		return
 	}
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("62")).
-		Bold(true).
-		Padding(0, 0, 0, 2)
-	if index == m.Index() {
-		style = style.Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57"))
+	if m.Width() <= 0 {
+		return
 	}
-	_, _ = fmt.Fprint(w, style.Render(it.Title())+"\n")
+	selected := index == m.Index()
+	if it.header {
+		_, _ = fmt.Fprint(w, renderSessionHeader(it, selected)+"\n")
+		return
+	}
+	title, desc := renderSessionRow(d, it, selected, m.Width())
+	if d.ShowDescription {
+		_, _ = fmt.Fprintf(w, "%s\n%s", title, desc)
+		return
+	}
+	_, _ = fmt.Fprint(w, title)
+}
+
+func renderSessionHeader(it item, selected bool) string {
+	label := domain.GroupLabel(it.session.Group)
+	count := ""
+	if it.groupN > 0 {
+		count = fmt.Sprintf(" · %d", it.groupN)
+	}
+	glyph := "▾"
+	if it.collapsed {
+		glyph = "▸"
+	}
+	headFg := headerLabelColor
+	if selected {
+		headFg = headerSelFg
+	}
+	head := lipgloss.NewStyle().Bold(true).Foreground(headFg).Render(glyph + " " + label + count)
+	act := ""
+	if it.activity != "" {
+		act = lipgloss.NewStyle().Foreground(sessionStateColor(it)).Render(" • " + it.activity)
+	}
+	remote := ""
+	if it.remoteName != "" {
+		remote = lipgloss.NewStyle().Foreground(stateColorIdle).Render(" [" + it.remoteName + "]")
+	}
+	line := head + act + remote
+	row := lipgloss.NewStyle().Padding(0, 0, 0, 2)
+	if selected {
+		row = row.Background(headerSelBg)
+	}
+	return row.Render(line)
+}
+
+func renderSessionRow(d sessionListDelegate, it item, selected bool, width int) (string, string) {
+	prefix, activity := it.chrome()
+	state := lipgloss.NewStyle().Foreground(sessionStateColor(it))
+	if selected {
+		state = state.Bold(true)
+	}
+	tree := lipgloss.NewStyle().Foreground(stateColorIdle).Render(it.treeBranch())
+	nameStyle := d.Styles.NormalTitle.UnsetPadding().Foreground(stateColorName)
+	if selected {
+		nameStyle = d.Styles.SelectedTitle.UnsetPadding().UnsetBorderStyle().Foreground(lipgloss.Color("#EE6FF8"))
+	}
+	line := tree + state.Render(prefix) + nameStyle.Render(it.displayName()) + state.Render(activity)
+	pad := 2
+	if selected {
+		pad = 1
+	}
+	textwidth := width - pad
+	if textwidth < 8 {
+		textwidth = 8
+	}
+	line = ansi.Truncate(line, textwidth, "…")
+	titleStyle := d.Styles.NormalTitle.UnsetForeground()
+	descStyle := d.Styles.NormalDesc
+	if selected {
+		titleStyle = d.Styles.SelectedTitle.UnsetForeground()
+		descStyle = d.Styles.SelectedDesc
+	}
+	desc := it.Description()
+	desc = ansi.Truncate(desc, textwidth, "…")
+	return titleStyle.Render(line), descStyle.Render(desc)
 }
 
 func (m *Model) startQuickSession() (tea.Model, tea.Cmd) {

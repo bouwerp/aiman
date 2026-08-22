@@ -94,6 +94,8 @@ func TestOverlayPersistedSessionFieldsKeepsNameAndGroup(t *testing.T) {
 		IssueKey: "WTB-1925", Branch: "wtb-1925-fix",
 		RepoName: "org/repo", WorktreePath: "/wt", LocalPath: "/local",
 		AgentName: "claude", MutagenSyncID: "sync-1",
+		AgentSessionID: "native-9", AgentSessionPath: "/tmp/t.jsonl",
+		AgentTitle: "fix auth", HookState: "idle", HookStateSource: "idle_prompt",
 	}
 	got := overlayPersistedSessionFields(live, stored)
 	if got.Name != "impl" || got.Group != "WTB-1925" {
@@ -104,5 +106,11 @@ func TestOverlayPersistedSessionFieldsKeepsNameAndGroup(t *testing.T) {
 	}
 	if got.IssueKey != "WTB-1925" || got.RepoName != "org/repo" {
 		t.Fatalf("other persisted fields dropped: %+v", got)
+	}
+	if got.AgentSessionID != "native-9" || got.AgentSessionPath != "/tmp/t.jsonl" {
+		t.Fatalf("native session dropped: %+v", got)
+	}
+	if got.AgentTitle != "fix auth" || got.HookState != "idle" {
+		t.Fatalf("hook fields dropped: %+v", got)
 	}
 }

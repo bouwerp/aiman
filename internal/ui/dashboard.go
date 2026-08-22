@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
@@ -259,81 +260,7 @@ type item struct {
 }
 
 func (i item) Title() string {
-	prefix := ""
-	switch {
-	case i.activity == "creating":
-		prefix = "~ "
-	case i.activity == "create-failed":
-		prefix = "! "
-	case i.activity == "terminating":
-		prefix = "x "
-	case i.needsInput:
-		prefix = "! "
-	case i.activity == "idle":
-		prefix = "o "
-	case i.activity == "busy":
-		prefix = "> "
-	case i.activity == "stale":
-		prefix = "! "
-	}
-	activity := ""
-	switch {
-	case i.activity == "creating":
-		activity = " • creating…"
-	case i.activity == "create-failed":
-		activity = " ⚠ create failed"
-	case i.activity == "terminating":
-		activity = " • terminating…"
-	case i.needsInput:
-		activity = " ⚠ input"
-	case i.activity == "idle":
-		activity = " • idle"
-	case i.activity == "busy":
-		activity = " • busy"
-	case i.activity == "stale":
-		activity = " ⚠ thinking (stuck?)"
-	}
-	if i.syncStale {
-		activity += " ⚠ sync"
-	}
-	remoteTag := ""
-	if i.remoteName != "" {
-		remoteTag = " [" + i.remoteName + "]"
-	}
-	if i.header {
-		label := domain.GroupLabel(i.session.Group)
-		count := ""
-		if i.groupN > 0 {
-			count = fmt.Sprintf(" · %d", i.groupN)
-		}
-		if i.activity != "" {
-			activity = " • " + i.activity
-		}
-		if i.remoteName != "" {
-			remoteTag = " [" + i.remoteName + "]"
-		}
-		glyph := "▾"
-		if i.collapsed {
-			glyph = "▸"
-		}
-		return fmt.Sprintf("%s %s%s%s%s", glyph, label, count, activity, remoteTag)
-	}
-	if i.session.Mode == domain.SessionModeAutonomous {
-		prefix = "🤖 " + prefix
-	}
-	label := i.session.Name
-	if label == "" {
-		if i.session.IssueKey != "" {
-			label = fmt.Sprintf("%s (%s)", i.session.IssueKey, i.session.TmuxSession)
-		} else {
-			label = i.session.TmuxSession
-		}
-	}
-	branch := "  ├─ "
-	if i.treeLast {
-		branch = "  └─ "
-	}
-	return branch + prefix + label + activity
+	return i.plainTitle()
 }
 
 func (i item) Description() string {
@@ -1316,6 +1243,10 @@ func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
 		if !cfg.Features.InputPromptDetection {
 			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
 		}
+		if st, ok := agenthook.ResolveHookState(session, time.Now()); ok {
+			activity, needs := activityFromHook(st, session.AgentEnded)
+			return inputHintMsg{session: session.TmuxSession, needsInput: needs, activity: activity}
+		}
 		remote, ok := resolveRemote(cfg, session)
 		if !ok {
 			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
@@ -1327,6 +1258,24 @@ func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
 		}
 		activity, needs := detectSessionActivity(out)
 		return inputHintMsg{session: session.TmuxSession, needsInput: needs, activity: activity}
+	}
+}
+
+func activityFromHook(st domain.AgentState, ended bool) (string, bool) {
+	if ended {
+		return "idle", false
+	}
+	switch st {
+	case domain.AgentStateWaitingInput:
+		return "", true
+	case domain.AgentStateWorking:
+		return "busy", false
+	case domain.AgentStateIdle:
+		return "idle", false
+	case domain.AgentStateErrored:
+		return "stale", false
+	default:
+		return "", false
 	}
 }
 
@@ -7290,6 +7239,7 @@ func (m *Model) restartSession() tea.Cmd {
 				sendKeysPrompt = prepared.InitialPrompt
 			}
 		}
+		agentCmd = withRemoteNativeResume(ctx, mgr, s, agentCmd)
 
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
 		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")

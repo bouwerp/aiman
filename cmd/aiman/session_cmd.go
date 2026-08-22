@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/server"
 )
@@ -41,9 +44,12 @@ func writeCLIError(code, msg string) {
 
 func runSession(args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|prompt|wait|read> …\n")
+		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|prompt|wait|read|report-agent-session> …\n")
 		fmt.Fprintf(os.Stderr, "Are you an AI? Run: aiman --skill\n")
 		return errUsage
+	}
+	if args[0] == "report-agent-session" {
+		return runReportAgentSession(args[1:])
 	}
 	sock, err := socketPath()
 	if err != nil {
@@ -147,6 +153,10 @@ func runSession(args []string) error {
 	}
 }
 
+var boolSessionFlags = map[string]bool{
+	"wait": true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true,
+}
+
 func takeFlags(args []string) (map[string]string, []string) {
 	flags := map[string]string{}
 	var rest []string
@@ -157,7 +167,7 @@ func takeFlags(args []string) (map[string]string, []string) {
 			continue
 		}
 		key := strings.TrimPrefix(a, "--")
-		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") && key != "wait" && key != "force" && key != "quick" && key != "existing" {
+		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") && !boolSessionFlags[key] {
 			flags[key] = args[i+1]
 			i++
 			continue
@@ -187,6 +197,104 @@ func parseTimeoutMS(s string) int {
 		mult = 1000
 	}
 	return atoi(s) * mult
+}
+
+func runReportAgentSession(args []string) error {
+	flags, _ := takeFlags(args)
+	rep := agenthook.Report{
+		Native:  agenthook.Native{ID: flags["id"], Path: flags["path"]},
+		State:   domain.AgentState(flags["state"]),
+		Source:  flags["source"],
+		Message: flags["message"],
+		Title:   flags["title"],
+		Ended:   flags["ended"] == "1",
+	}
+	if _, ok := flags["from-stdin"]; ok {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		got := agenthook.ExtractReport(raw)
+		if rep.ID == "" {
+			rep.ID = got.ID
+		}
+		if rep.Path == "" {
+			rep.Path = got.Path
+		}
+		if rep.State == "" {
+			rep.State = got.State
+		}
+		if rep.Source == "" {
+			rep.Source = got.Source
+		}
+		if rep.Message == "" {
+			rep.Message = got.Message
+		}
+		if rep.Title == "" {
+			rep.Title = got.Title
+		}
+		if !rep.Ended {
+			rep.Ended = got.Ended
+		}
+		if got.Seq != 0 {
+			rep.Seq = got.Seq
+		}
+	}
+	sessionID := strings.TrimSpace(os.Getenv("AIMAN_ID"))
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(flags["session"])
+	}
+	if sessionID == "" || (rep.ID == "" && rep.State == "" && !rep.Ended && rep.Title == "") {
+		return nil
+	}
+	if dir, err := config.GetDir(); err == nil {
+		_ = agenthook.WriteStored(dir, sessionID, rep)
+	}
+	sock, err := socketPath()
+	if err != nil {
+		return writeJSON(reportAgentSessionResult(sessionID, rep))
+	}
+	if err := reportNativeToServe(sock, sessionID, rep); err != nil {
+		writeCLIError(server.CodeInvalidParams, err.Error())
+		return err
+	}
+	return writeJSON(reportAgentSessionResult(sessionID, rep))
+}
+
+func reportAgentSessionResult(sessionID string, r agenthook.Report) map[string]any {
+	return map[string]any{
+		"type":               "agent_session",
+		"id":                 sessionID,
+		"agent_session_id":   r.ID,
+		"agent_session_path": r.Path,
+		"state":              string(r.State),
+		"title":              r.Title,
+		"ended":              r.Ended,
+	}
+}
+
+func reportNativeToServe(sock, sessionID string, r agenthook.Report) error {
+	resp, err := server.Call(sock, "session.report_agent_session", map[string]any{
+		"id":                 sessionID,
+		"agent_session_id":   r.ID,
+		"agent_session_path": r.Path,
+		"state":              string(r.State),
+		"source":             r.Source,
+		"message":            r.Message,
+		"title":              r.Title,
+		"ended":              r.Ended,
+		"seq":                r.Seq,
+	})
+	if err != nil {
+		if errors.Is(err, server.ErrServerNotRunning) {
+			return nil
+		}
+		return err
+	}
+	if resp.Error != nil {
+		return resp.Error
+	}
+	return nil
 }
 
 func callAndPrint(sock, method string, params any) error {

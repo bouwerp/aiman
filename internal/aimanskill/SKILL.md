@@ -24,6 +24,8 @@ aiman session get "$AIMAN_SESSION_NAME"
 
 Commands return JSON. Parse `name`, `group`, and `id` from the result. Prefer names over UUIDs.
 
+Do not call `aiman session report-agent-session`. Aiman installs a SessionStart hook that reports the vendor conversation id automatically.
+
 ## Names and groups
 
 Every session has a short unique `name` (`impl`, `reviewer`, `q1`) and a `group` (issue key, repo, or `quick`). Spawn helpers in the caller's group:
