@@ -69,3 +69,10 @@ jobs:
 
       - name: Build binaries
         run: CGO_ENABLED=0 go build -v ./cmd/aiman ./cmd/aiman-trigger
+
+      # The release matrix cross-compiles Windows from Linux. Catch GOOS-specific
+      # syscall use here instead of after a tag is pushed.
+      - name: Cross-compile Windows
+        run: |
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/aiman-windows.exe ./cmd/aiman
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/aiman-trigger-windows.exe ./cmd/aiman-trigger
