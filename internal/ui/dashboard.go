@@ -870,6 +870,9 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	model.provisionSpinner.Spinner = spinner.Dot
 	model.provisionSpinner.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	model.consoleLog = append(model.consoleLog, initialLogs...)
+	if cfg != nil {
+		model.applyRemoteFilter()
+	}
 	return model
 }
 

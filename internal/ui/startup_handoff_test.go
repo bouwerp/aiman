@@ -19,7 +19,7 @@ func newTestStartupModel(repo domain.SessionRepository) StartupModel {
 func TestStartupHandsOffImmediately(t *testing.T) {
 	repo := &startupSessionRepo{
 		sessions: []domain.Session{
-			{ID: "from-db", RemoteHost: "regent0", TmuxSession: "WTB-1"},
+			{ID: "from-db", Name: "impl", Group: "WTB-1925", RemoteHost: "regent0", TmuxSession: "WTB-1"},
 		},
 	}
 
@@ -34,6 +34,16 @@ func TestStartupHandsOffImmediately(t *testing.T) {
 	}
 	if !dash.discoveryPending {
 		t.Error("discoveryPending should be set when the dashboard opens before the scan lands")
+	}
+	foundHeader := false
+	for _, it := range dash.list.Items() {
+		si, ok := it.(item)
+		if ok && si.header && si.session.Group == "WTB-1925" {
+			foundHeader = true
+		}
+	}
+	if !foundHeader {
+		t.Fatal("startup dashboard must show persisted group headers before discovery")
 	}
 	if len(dash.doctorResults) != 0 {
 		t.Errorf("no checks had landed yet, got %+v", dash.doctorResults)

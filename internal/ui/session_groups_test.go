@@ -8,6 +8,23 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func TestNewModelShowsGroupHeadersWithoutExtraFilter(t *testing.T) {
+	cfg := twoRemoteCfg()
+	sessions := []domain.Session{
+		{ID: "a", Name: "impl", Group: "WTB-1", RemoteHost: "10.0.1.5"},
+		{ID: "b", Name: "q1", Group: "quick", RemoteHost: "10.0.1.5"},
+	}
+	m := NewModel(cfg, nil, sessions, &mockSessionRepo{}, nil, nil, nil)
+	items := m.list.Items()
+	if len(items) != 4 {
+		t.Fatalf("len=%d want 4 (2 headers + 2 sessions)", len(items))
+	}
+	h, ok := items[0].(item)
+	if !ok || !h.header {
+		t.Fatalf("first row must be a group header, got %+v", items[0])
+	}
+}
+
 func TestCollapsedGroupHidesChildren(t *testing.T) {
 	flat := []item{
 		{session: domain.Session{ID: "1", Name: "impl", Group: "WTB-1", RemoteHost: "h"}, remoteName: "box"},
