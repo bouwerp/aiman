@@ -158,7 +158,7 @@ Key behaviours:
 
 `aiman serve` and `aiman-trigger` run on remotes as systemd `--user` units (`aiman-serve.service`, `aiman-trigger.service`) with `loginctl enable-linger`. They are independent of the laptop TUI and of tmux. If user systemd is unavailable, fallback is `nohup` plus `~/.aiman/{serve,trigger}.pid`.
 
-The Daemons tab (Tab) lists both kinds per remote:
+The Daemons tab (Tab) lists **agent API** (`serve`) and **trigger** per remote. The skill talks to the agent API only. Start it from that tab with `i`.
 
 | Key | Action |
 |---|---|

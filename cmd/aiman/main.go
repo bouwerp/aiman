@@ -181,8 +181,8 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  repos            open the repository picker\n")
 			fmt.Fprintf(os.Stderr, "  ec2-loop         launch autonomous loop agent on an on-demand EC2 instance\n")
 			fmt.Fprintf(os.Stderr, "  clear-aws-profiles  clear legacy aiman-* AWS profile names from stored sessions\n")
-			fmt.Fprintf(os.Stderr, "  serve            run the remote session server\n")
-			fmt.Fprintf(os.Stderr, "  session          list/get/create/prompt sessions (JSON)\n")
+			fmt.Fprintf(os.Stderr, "  serve            agent API on this host (install remotes from TUI: Tab, i)\n")
+			fmt.Fprintf(os.Stderr, "  session          list/get/create/prompt sessions (JSON; needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  --skill          print the agent skill\n")
 			return errUsage
 		}
