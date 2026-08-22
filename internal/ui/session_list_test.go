@@ -7,7 +7,68 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
+
+func TestSessionStateColorByActivity(t *testing.T) {
+	tests := []struct {
+		it   item
+		want lipgloss.Color
+	}{
+		{item{activity: "busy"}, stateColorWorking},
+		{item{activity: "creating"}, stateColorWorking},
+		{item{needsInput: true}, stateColorWaiting},
+		{item{activity: "idle"}, stateColorIdle},
+		{item{activity: "stale"}, stateColorError},
+		{item{activity: "create-failed"}, stateColorError},
+		{item{session: domain.Session{AgentEnded: true}}, stateColorEnded},
+		{item{header: true, activity: "waiting"}, stateColorWaiting},
+		{item{header: true, activity: "working"}, stateColorWorking},
+		{item{header: true, activity: "idle"}, stateColorIdle},
+	}
+	for _, tt := range tests {
+		if got := sessionStateColor(tt.it); got != tt.want {
+			t.Fatalf("state=%q needs=%v ended=%v header=%v: got %q want %q",
+				tt.it.activity, tt.it.needsInput, tt.it.session.AgentEnded, tt.it.header, got, tt.want)
+		}
+	}
+}
+
+func TestSessionTitleStaysUncolored(t *testing.T) {
+	it := item{session: domain.Session{Name: "impl"}, activity: "busy"}
+	if strings.Contains(it.Title(), "\x1b") {
+		t.Fatalf("Title() must stay plain for tests, got %q", it.Title())
+	}
+}
+
+func TestSessionListDelegatePaintsState(t *testing.T) {
+	orig := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(orig) })
+
+	busy := item{session: domain.Session{Name: "impl"}, activity: "busy"}
+	idle := item{session: domain.Session{Name: "q1"}, activity: "idle"}
+	wait := item{session: domain.Session{Name: "reviewer"}, needsInput: true}
+	items := []list.Item{busy, idle, wait}
+	l := list.New(items, newSessionListDelegate(), 48, 12)
+	d := newSessionListDelegate()
+	var b strings.Builder
+	d.Render(&b, l, 0, busy)
+	busyOut := b.String()
+	b.Reset()
+	d.Render(&b, l, 1, idle)
+	idleOut := b.String()
+	b.Reset()
+	d.Render(&b, l, 2, wait)
+	waitOut := b.String()
+	if !strings.Contains(busyOut, "impl") || !strings.Contains(busyOut, "\x1b") {
+		t.Fatalf("busy row: %q", busyOut)
+	}
+	if busyOut == idleOut || idleOut == waitOut {
+		t.Fatalf("expected distinct colors\nbusy=%q\nidle=%q\nwait=%q", busyOut, idleOut, waitOut)
+	}
+}
 
 func TestGroupedSessionItemsHeadersAndRollup(t *testing.T) {
 	flat := []item{

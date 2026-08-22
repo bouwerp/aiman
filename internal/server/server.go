@@ -112,6 +112,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleRename(ctx, req)
 	case "session.move":
 		return s.handleMove(ctx, req)
+	case "session.report_agent_session":
+		return s.handleReportAgentSession(ctx, req)
 	default:
 		return Response{ID: req.ID, Error: &Error{Code: CodeInvalidParams, Message: "unknown method " + req.Method}}
 	}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/aimanskill"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -92,6 +93,7 @@ func runServe() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ensureAimanSkill(ctx, db)
+	ensureAgentHooks()
 	srv := server.New(ln, db, localExec, flow, version)
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
@@ -121,6 +123,19 @@ func ensureAimanSkill(ctx context.Context, db domain.SessionRepository) {
 	log.Printf("aiman skill: %s", aimanskill.Summarize(results))
 }
 
+func ensureAgentHooks() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("aiman hooks: home: %v", err)
+		return
+	}
+	results, err := agenthook.EnsureOnHost(home)
+	if err != nil {
+		log.Printf("aiman hooks: %v", err)
+	}
+	log.Printf("aiman hooks: %s", agenthook.Summarize(results))
+}
+
 func serveWantsHelp(args []string) bool {
 	for _, a := range args {
 		if a == "-h" || a == "--help" {
@@ -148,6 +163,8 @@ systemd --user (installed by the TUI):
   systemctl --user status aiman-serve
 
 On start it installs or updates the bundled agent skill under $HOME
-and in each known session worktree.
+and in each known session worktree, and registers native-session hooks
+in each installed agent's config (Claude, Grok, Cursor, Codex, Copilot,
+agy, OpenCode, Pi). Ageni is not hooked.
 `)
 }
