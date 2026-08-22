@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/aimanskill"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
@@ -119,6 +120,24 @@ func TestPrepareSession_ClaudeWithIssue_UsesSendKeys(t *testing.T) {
 	}
 	if !strings.Contains(result.InitialPrompt, ".aiman_task.md") {
 		t.Errorf("InitialPrompt should reference .aiman_task.md, got: %s", result.InitialPrompt)
+	}
+}
+
+func TestPrepareSession_InstallsBundledAimanSkill(t *testing.T) {
+	engine := NewEngine(&config.Config{})
+	remote := newMockRemote()
+	agent := domain.Agent{Name: "Claude Code", Command: "claude"}
+	if _, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, true, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range aimanskill.ProjectSkillFiles("/home/user/code/myrepo") {
+		got, ok := remote.writtenFiles[p]
+		if !ok {
+			t.Fatalf("missing %s", p)
+		}
+		if string(got) != aimanskill.Text {
+			t.Fatalf("%s content mismatch", p)
+		}
 	}
 }
 

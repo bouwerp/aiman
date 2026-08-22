@@ -173,6 +173,8 @@ Admin Menu (`m`) → **Agent API** is the settings page for `aiman serve` (one r
 
 Session create also calls `ensureRemoteServer` if `~/.aiman/aiman.sock` is missing.
 
+On start, `aiman serve` installs or updates the bundled skill (`internal/aimanskill`) in user-level agent skill dirs under `$HOME` and in each known session worktree. Session create still writes the worktree copy.
+
 SSH `systemctl --user` needs `XDG_RUNTIME_DIR` and the session bus; the scripts set those. Linger is enabled *before* `systemctl --user` so a first SSH to a host with no lingering user instance can still install.
 
 Do not run serve inside tmux. Probe on select, `r`, after an op, and after discovery — not on the tmux pane ticker.

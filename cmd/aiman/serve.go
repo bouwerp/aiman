@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/bouwerp/aiman/internal/aimanskill"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -90,9 +91,34 @@ func runServe() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ensureAimanSkill(ctx, db)
 	srv := server.New(ln, db, localExec, flow, version)
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
+}
+
+func ensureAimanSkill(ctx context.Context, db domain.SessionRepository) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("aiman skill: home: %v", err)
+		return
+	}
+	var roots []string
+	if db != nil {
+		sessions, err := db.List(ctx)
+		if err != nil {
+			log.Printf("aiman skill: list sessions: %v", err)
+		} else {
+			for _, s := range sessions {
+				roots = append(roots, s.WorktreePath, s.WorkingDirectory)
+			}
+		}
+	}
+	results, err := aimanskill.EnsureOnHost(home, roots)
+	if err != nil {
+		log.Printf("aiman skill: %v", err)
+	}
+	log.Printf("aiman skill: %s", aimanskill.Summarize(results))
 }
 
 func serveWantsHelp(args []string) bool {
@@ -120,5 +146,8 @@ Foreground on the remote (debugging):
 
 systemd --user (installed by the TUI):
   systemctl --user status aiman-serve
+
+On start it installs or updates the bundled agent skill under $HOME
+and in each known session worktree.
 `)
 }
