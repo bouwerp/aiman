@@ -20,6 +20,27 @@ func ValidateSessionName(name string) error {
 	return nil
 }
 
+// GroupLabel is the sidebar bucket for a session: empty persists as ungrouped.
+func GroupLabel(group string) string {
+	g := strings.TrimSpace(group)
+	if g == "" {
+		return GroupUngrouped
+	}
+	return g
+}
+
+// NormalizeGroupName hyphenates spaces and accepts ungrouped. Empty becomes ungrouped.
+func NormalizeGroupName(name string) (string, error) {
+	name = strings.Join(strings.Fields(strings.TrimSpace(name)), "-")
+	if name == "" || strings.EqualFold(name, GroupUngrouped) {
+		return GroupUngrouped, nil
+	}
+	if err := ValidateSessionName(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
 func NameTaken(existing []Session, name string) bool {
 	want := strings.ToLower(name)
 	for _, s := range existing {

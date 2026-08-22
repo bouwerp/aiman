@@ -169,6 +169,9 @@ const (
 	viewStateTriggerDetails
 	viewStateRenameSession
 	viewStateAgentAPI // install/monitor/restart aiman serve on remotes
+	viewStateRenameGroup
+	viewStateAssignGroup
+	viewStateNewGroup
 )
 
 type mainTab int
@@ -247,6 +250,7 @@ type item struct {
 	header     bool   // group header row, not a session
 	groupN     int    // session count, set on headers
 	treeLast   bool   // last session in its group; draws └─ instead of ├─
+	collapsed  bool   // header only: children are hidden
 }
 
 func (i item) Title() string {
@@ -292,10 +296,7 @@ func (i item) Title() string {
 		remoteTag = " [" + i.remoteName + "]"
 	}
 	if i.header {
-		label := i.session.Group
-		if label == "" {
-			label = domain.GroupUngrouped
-		}
+		label := domain.GroupLabel(i.session.Group)
 		count := ""
 		if i.groupN > 0 {
 			count = fmt.Sprintf(" · %d", i.groupN)
@@ -306,7 +307,11 @@ func (i item) Title() string {
 		if i.remoteName != "" {
 			remoteTag = " [" + i.remoteName + "]"
 		}
-		return fmt.Sprintf("▸ %s%s%s%s", label, count, activity, remoteTag)
+		glyph := "▾"
+		if i.collapsed {
+			glyph = "▸"
+		}
+		return fmt.Sprintf("%s %s%s%s%s", glyph, label, count, activity, remoteTag)
 	}
 	if i.session.Mode == domain.SessionModeAutonomous {
 		prefix = "🤖 " + prefix
@@ -455,6 +460,12 @@ type Model struct {
 	selectedRemote         config.Remote        // remote chosen for the current new-session wizard
 	remoteFilter           string               // "" = all remotes, otherwise a Remote.Host to filter by
 	allSessions            []domain.Session     // unfiltered master session list
+	collapsedGroups        map[string]bool      // groupCollapseKey → hidden children
+	assigningSessionID     string
+	assignChoices          []assignChoice
+	assignCursor           int
+	renamingGroup          string
+	renamingGroupHost      string
 	mouseEnabled           bool
 	provisionSteps         []domain.ProvisionStep
 	provisioningIdx        int
@@ -609,8 +620,13 @@ func (m *Model) removeCreatingPlaceholder(id string) {
 
 func (m *Model) applyRemoteFilter() {
 	selectedID := ""
-	if it, ok := m.list.SelectedItem().(item); ok && !it.header {
-		selectedID = it.session.ID
+	selectedHeaderKey := ""
+	if it, ok := m.list.SelectedItem().(item); ok {
+		if it.header {
+			selectedHeaderKey = groupCollapseKey(it.session.Group, it.remoteName)
+		} else {
+			selectedID = it.session.ID
+		}
 	}
 	// Sort sessions: most recently created first. Using CreatedAt only keeps
 	// the list order stable as sessions are used (UpdatedAt would cause them to jump).
@@ -627,7 +643,7 @@ func (m *Model) applyRemoteFilter() {
 			flat = append(flat, m.makeItem(s))
 		}
 	}
-	filtered := groupedSessionItems(flat)
+	filtered := groupedSessionItems(flat, m.collapsedGroups)
 
 	selHost, selKind := "", ""
 	if d, ok := m.selectedDaemon(); ok {
@@ -651,10 +667,44 @@ func (m *Model) applyRemoteFilter() {
 	}
 
 	m.list.SetItems(filtered)
-	if selectedID != "" {
+	switch {
+	case selectedID != "":
 		found := false
 		for i, it := range filtered {
-			if si, ok := it.(item); ok && !si.header && si.session.ID == selectedID {
+			si, ok := it.(item)
+			if !ok {
+				continue
+			}
+			if !si.header && si.session.ID == selectedID {
+				m.list.Select(i)
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Session row may have been collapsed; land on its group header.
+			for _, s := range m.allSessions {
+				if s.ID != selectedID {
+					continue
+				}
+				want := groupCollapseKey(s.Group, remoteNameForHost(m.cfg, s.RemoteHost))
+				for i, it := range filtered {
+					if si, ok := it.(item); ok && si.header && groupCollapseKey(si.session.Group, si.remoteName) == want {
+						m.list.Select(i)
+						found = true
+						break
+					}
+				}
+				break
+			}
+		}
+		if !found {
+			m.selectFirstSessionRow()
+		}
+	case selectedHeaderKey != "":
+		found := false
+		for i, it := range filtered {
+			if si, ok := it.(item); ok && si.header && groupCollapseKey(si.session.Group, si.remoteName) == selectedHeaderKey {
 				m.list.Select(i)
 				found = true
 				break
@@ -663,7 +713,7 @@ func (m *Model) applyRemoteFilter() {
 		if !found {
 			m.selectFirstSessionRow()
 		}
-	} else {
+	default:
 		m.selectFirstSessionRow()
 	}
 	m.daemonList.SetItems(daemonItems)
@@ -708,7 +758,9 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new session")),
 			key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "quick session")),
-			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "rename session")),
+			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "rename session or group")),
+			key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "assign session group")),
+			key.NewBinding(key.WithKeys("enter", " "), key.WithHelp("enter", "collapse/expand group")),
 			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart session")),
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
 			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "manage tunnels")),
@@ -801,6 +853,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		syncHealth:          make(map[string]syncHealth),
 		daemonList:          dl,
 		daemons:             make(map[string]domain.Daemon),
+		collapsedGroups:     make(map[string]bool),
 		currentTab:          tabSessions,
 		triggerDetailsVP:    viewport.New(0, 0),
 	}
@@ -2802,6 +2855,9 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		model, cmd := m.handleRenameSessionUpdate(msg)
 		return model, cmd, true
 
+	case viewStateRenameGroup, viewStateAssignGroup, viewStateNewGroup:
+		return m.dispatchGroupEdit(msg)
+
 	case viewStateRestartAgentPicker:
 		model, cmd := m.handleRestartAgentPickerUpdate(msg)
 		return model, cmd, true
@@ -3235,8 +3291,11 @@ func (m *Model) renderView() string {
 	case viewStateAgentPicker:
 		return docStyle.Render(m.agentPicker.View())
 
-	case viewStateRenameSession:
+	case viewStateRenameSession, viewStateRenameGroup, viewStateNewGroup:
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.View())
+
+	case viewStateAssignGroup:
+		return m.renderAssignGroupView()
 
 	case viewStateBranchPicker:
 		return docStyle.Render(m.branchPicker.View())
@@ -4055,7 +4114,6 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 	// Capture list selection changes to trigger immediate fetch
 	oldSelID := ""
 	oldHeader := false
-	oldIdx := m.list.Index()
 	if oldSel, ok := m.list.SelectedItem().(item); ok {
 		if oldSel.header {
 			oldHeader = true
@@ -4077,7 +4135,6 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		if mouseMsg.X < (m.width/3 + 4) {
 			if m.currentTab == tabSessions {
 				m.list, cmd = m.list.Update(msg)
-				m.snapOffGroupHeader(m.list.Index() - oldIdx)
 			} else {
 				m.daemonList, cmd = m.daemonList.Update(msg)
 			}
@@ -4099,7 +4156,6 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		// Non-mouse messages go to both (keys are usually handled by focused component)
 		if m.currentTab == tabSessions {
 			m.list, cmd = m.list.Update(msg)
-			m.snapOffGroupHeader(m.list.Index() - oldIdx)
 		} else {
 			m.daemonList, cmd = m.daemonList.Update(msg)
 		}
@@ -4347,7 +4403,15 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.state = viewStateLoading
 		return m, m.fetchAgents(), true
 	}
+	if m.currentTab == tabSessions && (msg.String() == "enter" || msg.String() == " ") {
+		if it, ok := m.list.SelectedItem().(item); ok && it.header {
+			return m.toggleSelectedGroupCollapsed()
+		}
+	}
 	if msg.String() == "e" {
+		if it, ok := m.list.SelectedItem().(item); ok && it.header {
+			return m.startRenameGroup(it)
+		}
 		it, ok := m.selectedSessionItem()
 		if !ok {
 			return m, nil, true
@@ -4359,6 +4423,13 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.genericInput = NewTextInputModel("Rename session", "name", initial)
 		m.state = viewStateRenameSession
 		return m, m.genericInput.Init(), true
+	}
+	if msg.String() == "g" {
+		it, ok := m.selectedSessionItem()
+		if !ok {
+			return m, nil, true
+		}
+		return m.startAssignGroup(it.session)
 	}
 	if msg.String() == "f" && len(m.cfg.Remotes) > 1 {
 		hosts := []string{""} // "" = all
@@ -6629,7 +6700,7 @@ func (m *Model) renderMainView() string {
 
 	footer := "\n" + remoteInfo + "\n\n" + doctorSection
 
-	helpText := "n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • R: AWS creds • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit"
+	helpText := "n: new • e: rename • g: group • enter: collapse • f: filter • c: scope • t: tunnels • s: restart • y: copy • r: refresh • i: AI • ctrl+k: term • m: menu • q: quit"
 	if m.currentTab == tabDaemons {
 		helpText = "agent API: i install • s restart • c reload • u update • r probe • ctrl+k stop • tab: sessions • q: quit"
 	}

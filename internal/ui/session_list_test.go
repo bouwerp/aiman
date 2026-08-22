@@ -13,7 +13,7 @@ func TestGroupedSessionItemsHeadersAndRollup(t *testing.T) {
 		{session: domain.Session{ID: "1", Name: "impl", Group: "WTB-1925"}, activity: "busy", remoteName: "regent0"},
 		{session: domain.Session{ID: "3", Name: "q1", Group: "quick"}, activity: "idle", remoteName: "regent0"},
 	}
-	got := groupedSessionItems(flat)
+	got := groupedSessionItems(flat, nil)
 	if len(got) != 5 {
 		t.Fatalf("len=%d want 5 (2 headers + 3 sessions)", len(got))
 	}
@@ -37,10 +37,10 @@ func TestGroupedSessionTitlesNestUnderHeader(t *testing.T) {
 		{session: domain.Session{ID: "1", Name: "impl", Group: "WTB-1925"}, activity: "busy", remoteName: "regent0"},
 		{session: domain.Session{ID: "3", Name: "q1", Group: "quick"}, activity: "idle", remoteName: "regent0"},
 	}
-	got := groupedSessionItems(flat)
+	got := groupedSessionItems(flat, nil)
 	h := got[0].(item)
 	ht := h.Title()
-	if !strings.HasPrefix(ht, "▸ WTB-1925") {
+	if !strings.HasPrefix(ht, "▾ WTB-1925") {
 		t.Fatalf("header title %q", ht)
 	}
 	if !strings.Contains(ht, "· 2") {
