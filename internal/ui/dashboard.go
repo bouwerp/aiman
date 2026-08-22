@@ -650,7 +650,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		items[i] = item{session: s, remoteName: remoteNameForHost(cfg, s.RemoteHost)}
 	}
 
-	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
+	l := list.New(items, newSessionListDelegate(), 0, 0)
 	l.Title = "Aiman Dashboard - Active Sessions"
 	l.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
@@ -4004,6 +4004,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 	oldSelID := ""
 	oldHeader := false
 	oldDaemonHost := ""
+	oldIdx := m.list.Index()
 	if oldSel, ok := m.list.SelectedItem().(item); ok {
 		if oldSel.header {
 			oldHeader = true
@@ -4024,6 +4025,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		if mouseMsg.X < (m.width/3 + 4) {
 			if m.currentTab == tabSessions {
 				m.list, cmd = m.list.Update(msg)
+				m.snapOffGroupHeader(m.list.Index() - oldIdx)
 			} else {
 				m.daemonList, cmd = m.daemonList.Update(msg)
 			}
@@ -4045,6 +4047,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		// Non-mouse messages go to both (keys are usually handled by focused component)
 		if m.currentTab == tabSessions {
 			m.list, cmd = m.list.Update(msg)
+			m.snapOffGroupHeader(m.list.Index() - oldIdx)
 		} else {
 			m.daemonList, cmd = m.daemonList.Update(msg)
 		}

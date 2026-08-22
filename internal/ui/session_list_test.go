@@ -113,6 +113,49 @@ func TestApplyRemoteFilterSelectsFirstSessionNotHeader(t *testing.T) {
 	}
 }
 
+func TestSnapOffGroupHeaderDownSelectsChildSession(t *testing.T) {
+	cfg := twoRemoteCfg()
+	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
+	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
+	m.applyRemoteFilter()
+	m.list.Select(0)
+	if it, ok := m.list.SelectedItem().(item); !ok || !it.header {
+		t.Fatal("setup: want header at 0")
+	}
+	m.snapOffGroupHeader(1)
+	it, ok := m.selectedSessionItem()
+	if !ok || it.session.ID != "s1" {
+		t.Fatalf("down from header want session s1, ok=%v id=%q", ok, it.session.ID)
+	}
+}
+
+func TestSnapOffGroupHeaderUpSelectsPreviousGroupSession(t *testing.T) {
+	cfg := twoRemoteCfg()
+	sessions := []domain.Session{
+		{ID: "a", Name: "impl", Group: "WTB-1", TmuxSession: "a", RemoteHost: "10.0.1.5"},
+		{ID: "b", Name: "q1", Group: "quick", TmuxSession: "b", RemoteHost: "10.0.1.5"},
+	}
+	m := NewModel(cfg, nil, sessions, &mockSessionRepo{}, nil, nil, nil)
+	m.applyRemoteFilter()
+	items := m.list.Items()
+	headerIdx := -1
+	for i, it := range items {
+		if si, ok := it.(item); ok && si.header && si.session.Group == "quick" {
+			headerIdx = i
+			break
+		}
+	}
+	if headerIdx < 0 {
+		t.Fatal("missing quick header")
+	}
+	m.list.Select(headerIdx)
+	m.snapOffGroupHeader(-1)
+	it, ok := m.selectedSessionItem()
+	if !ok || it.session.ID != "a" {
+		t.Fatalf("up from next-group header want session a, ok=%v id=%q", ok, it.session.ID)
+	}
+}
+
 func TestInitialTmuxTickSelectsSessionNotHeader(t *testing.T) {
 	cfg := twoRemoteCfg()
 	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl", RemoteHost: "10.0.1.5"}

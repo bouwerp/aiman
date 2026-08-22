@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func groupRollup(items []item) string {
@@ -121,6 +123,61 @@ func (m *Model) selectFirstSessionRow() {
 			return
 		}
 	}
+}
+
+// snapOffGroupHeader moves the cursor off a group header onto a session.
+// dir > 0 prefers the first session under the header; dir < 0 prefers the
+// session above it. Headers are labels, not selectable sessions.
+func (m *Model) snapOffGroupHeader(dir int) {
+	it, ok := m.list.SelectedItem().(item)
+	if !ok || !it.header {
+		return
+	}
+	items := m.list.Items()
+	idx := m.list.Index()
+	pick := func(start, step int) bool {
+		for i := start; i >= 0 && i < len(items); i += step {
+			if si, ok := items[i].(item); ok && !si.header {
+				m.list.Select(i)
+				return true
+			}
+		}
+		return false
+	}
+	if dir < 0 {
+		if pick(idx-1, -1) {
+			return
+		}
+		_ = pick(idx+1, 1)
+		return
+	}
+	if pick(idx+1, 1) {
+		return
+	}
+	_ = pick(idx-1, -1)
+}
+
+type sessionListDelegate struct {
+	list.DefaultDelegate
+}
+
+func newSessionListDelegate() sessionListDelegate {
+	return sessionListDelegate{DefaultDelegate: list.NewDefaultDelegate()}
+}
+
+func (d sessionListDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	it, ok := listItem.(item)
+	if !ok || !it.header {
+		d.DefaultDelegate.Render(w, m, index, listItem)
+		return
+	}
+	// Headers are section labels: never the selected-session left border.
+	label := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("62")).
+		Bold(true).
+		Padding(0, 0, 0, 2).
+		Render(it.Title())
+	_, _ = fmt.Fprint(w, label+"\n")
 }
 
 func (m *Model) startQuickSession() (tea.Model, tea.Cmd) {
