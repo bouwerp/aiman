@@ -57,3 +57,26 @@ func TestShouldMergeDiscoveredSession(t *testing.T) {
 		})
 	}
 }
+
+func TestOverlayPersistedSessionFieldsKeepsNameAndGroup(t *testing.T) {
+	live := domain.Session{
+		ID: "s1", Status: domain.SessionStatusActive,
+		TmuxSession: "wtb-1", RemoteHost: "regent0",
+	}
+	stored := domain.Session{
+		ID: "s1", Name: "impl", Group: "WTB-1925",
+		IssueKey: "WTB-1925", Branch: "wtb-1925-fix",
+		RepoName: "org/repo", WorktreePath: "/wt", LocalPath: "/local",
+		AgentName: "claude", MutagenSyncID: "sync-1",
+	}
+	got := overlayPersistedSessionFields(live, stored)
+	if got.Name != "impl" || got.Group != "WTB-1925" {
+		t.Fatalf("name=%q group=%q", got.Name, got.Group)
+	}
+	if got.TmuxSession != "wtb-1" || got.RemoteHost != "regent0" {
+		t.Fatalf("live identity clobbered: %+v", got)
+	}
+	if got.IssueKey != "WTB-1925" || got.RepoName != "org/repo" {
+		t.Fatalf("other persisted fields dropped: %+v", got)
+	}
+}

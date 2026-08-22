@@ -108,3 +108,31 @@ func TestDiscoveryKeepsKnownInactiveSessions(t *testing.T) {
 		t.Errorf("a known inactive session was dropped: %v", m.allSessions)
 	}
 }
+
+func TestDiscoveryKeepsPersistedNameAndGroup(t *testing.T) {
+	known := domain.Session{
+		ID: "s1", Name: "impl", Group: "WTB-1925",
+		RemoteHost: "regent0", TmuxSession: "wtb-1925-fix",
+		Status: domain.SessionStatusActive,
+	}
+	repo := &savingSessionRepo{startupSessionRepo: startupSessionRepo{sessions: []domain.Session{known}}}
+	cfg := testCfg()
+	m := NewModel(cfg, nil, []domain.Session{known}, repo, nil, nil, nil)
+
+	live := domain.Session{
+		ID: "s1", RemoteHost: "regent0", TmuxSession: "wtb-1925-fix",
+		Status: domain.SessionStatusActive,
+	}
+	m.applyDiscoveryResult(discoveryResultMsg{
+		scannedHosts: map[string]bool{"regent0": true},
+		sessions:     []domain.Session{live},
+	})
+
+	if len(m.allSessions) != 1 {
+		t.Fatalf("len=%d", len(m.allSessions))
+	}
+	got := m.allSessions[0]
+	if got.Name != "impl" || got.Group != "WTB-1925" {
+		t.Fatalf("discovery dropped identity: name=%q group=%q", got.Name, got.Group)
+	}
+}
