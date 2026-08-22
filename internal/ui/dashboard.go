@@ -228,7 +228,12 @@ func (i daemonItem) Description() string {
 			extra += "  no-socket"
 		}
 		if i.daemon.Status != domain.DaemonStatusRunning {
-			extra += "  press i to install"
+			switch i.daemon.Driver {
+			case "systemd", "nohup", "tmux":
+				extra += "  press s to restart"
+			default:
+				extra += "  press i to install"
+			}
 		}
 	}
 	if i.daemon.Driver != "" && i.daemon.Driver != "none" {
@@ -410,6 +415,7 @@ type Model struct {
 	daemonList       list.Model
 	daemons          map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
 	agentAPICursor   int                      // selected remote on the Agent API settings page
+	agentAPIProbing  map[string]bool          // host → probe SSH call in flight
 	currentTab       mainTab
 	menu             list.Model
 	remotes          RemotesModel
@@ -854,6 +860,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		syncHealth:          make(map[string]syncHealth),
 		daemonList:          dl,
 		daemons:             make(map[string]domain.Daemon),
+		agentAPIProbing:     make(map[string]bool),
 		collapsedGroups:     make(map[string]bool),
 		currentTab:          tabSessions,
 		triggerDetailsVP:    viewport.New(0, 0),
@@ -7020,8 +7027,8 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 			} else {
 				daemonLines = append(daemonLines, "", "No active autonomous sessions.")
 			}
-		} else if d.Status != domain.DaemonStatusRunning {
-			daemonLines = append(daemonLines, "", "Press i to install and enable. Agents cannot use the skill until this is RUNNING and the socket is up.")
+		} else if hint := agentAPIStatusHint(d); hint != "" {
+			daemonLines = append(daemonLines, "", hint)
 		}
 
 		sep := statusStyle.Render(strings.Repeat("─", contentW))
@@ -7037,7 +7044,7 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 		case d.Logs != "":
 			outputPanel.WriteString(d.Logs)
 		case kind == string(remotesvc.KindServe) && d.Status != domain.DaemonStatusRunning:
-			outputPanel.WriteString("\n  Agent API is not running. Press i to install and enable it on this remote.")
+			outputPanel.WriteString("\n  " + agentAPIStatusHint(d))
 		case d.Status != domain.DaemonStatusRunning:
 			outputPanel.WriteString("\n  Service is not running. Press i to install.")
 		default:

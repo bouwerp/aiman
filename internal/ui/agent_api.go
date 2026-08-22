@@ -22,9 +22,17 @@ func (m *Model) enterAgentAPI() tea.Cmd {
 	}
 	var cmds []tea.Cmd
 	for _, r := range remotes {
+		m.markAgentAPIProbing(r.Host)
 		cmds = append(cmds, probeRemoteServiceCmd(m.cfg, r.Host, remotesvc.KindServe))
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) markAgentAPIProbing(host string) {
+	if m.agentAPIProbing == nil {
+		m.agentAPIProbing = map[string]bool{}
+	}
+	m.agentAPIProbing[host] = true
 }
 
 func agentAPIRemotes(cfg *config.Config) []config.Remote {
@@ -90,6 +98,7 @@ func (m *Model) handleAgentAPIUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return model, cmd
 	case "r":
 		if d, ok := m.selectedAgentAPIDaemon(); ok {
+			m.markAgentAPIProbing(d.RemoteHost)
 			return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, remotesvc.KindServe)
 		}
 		return m, nil
@@ -121,15 +130,21 @@ func (m *Model) renderAgentAPIView() string {
 
 	for i, r := range remotes {
 		d := m.daemons[domain.DaemonKey(r.Host, string(remotesvc.KindServe))]
+		probing := m.agentAPIProbing[r.Host]
 		status := string(d.Status)
 		if status == "" {
 			status = string(domain.DaemonStatusStopped)
 		}
+		if probing {
+			status = "PROBING"
+		}
 		statusCell := fmt.Sprintf("%-12s", status)
-		switch d.Status {
-		case domain.DaemonStatusRunning:
+		switch {
+		case probing:
+			statusCell = dimStyle.Render(statusCell)
+		case d.Status == domain.DaemonStatusRunning:
 			statusCell = okStyle.Render(statusCell)
-		case domain.DaemonStatusStopped, "":
+		case d.Status == domain.DaemonStatusStopped, d.Status == "":
 			statusCell = badStyle.Render(fmt.Sprintf("%-12s", string(domain.DaemonStatusStopped)))
 		default:
 			statusCell = badStyle.Render(statusCell)
@@ -139,7 +154,7 @@ func (m *Model) renderAgentAPIView() string {
 			driver = "—"
 		}
 		sock := "—"
-		if d.Kind == string(remotesvc.KindServe) || d.Kind == "" {
+		if !probing && (d.Kind == string(remotesvc.KindServe) || d.Kind == "") {
 			if d.SocketOK {
 				sock = okStyle.Render("up")
 			} else {
@@ -163,8 +178,10 @@ func (m *Model) renderAgentAPIView() string {
 
 	if d, ok := m.selectedAgentAPIDaemon(); ok {
 		b.WriteString("\n")
-		if d.Status != domain.DaemonStatusRunning {
-			b.WriteString("  Press i to install and enable. Agents cannot use the skill until this is RUNNING and the socket is up.\n")
+		if m.agentAPIProbing[d.RemoteHost] {
+			b.WriteString("  " + dimStyle.Render("Probing remote…") + "\n")
+		} else if hint := agentAPIStatusHint(d); hint != "" {
+			b.WriteString("  " + hint + "\n")
 		}
 		if logs := strings.TrimSpace(d.Logs); logs != "" {
 			b.WriteString("\n" + dimStyle.Render("  Logs") + "\n")
@@ -176,6 +193,24 @@ func (m *Model) renderAgentAPIView() string {
 
 	b.WriteString("\n  " + dimStyle.Render("i install/enable  s restart  c reload  u update  r probe  ctrl+k stop  esc back") + "\n")
 	return docStyle.Render(b.String())
+}
+
+func agentAPIStatusHint(d domain.Daemon) string {
+	if d.Status == domain.DaemonStatusRunning {
+		if d.SocketOK {
+			return ""
+		}
+		return "Process is up but the socket is down. Press s to restart."
+	}
+	switch d.Driver {
+	case "systemd", "nohup", "tmux":
+		if d.Status == domain.DaemonStatusError {
+			return "Service is installed but failed. Press s to restart (clears a crash loop). Logs are below."
+		}
+		return "Service is installed but not running. Press s to restart, or i to reinstall."
+	default:
+		return "Press i to install and enable. Agents cannot use the skill until this is RUNNING and the socket is up."
+	}
 }
 
 func truncatePad(s string, n int) string {

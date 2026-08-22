@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -26,4 +28,17 @@ func TestListenRejectsSecondInstance(t *testing.T) {
 		t.Fatalf("Listen after Close: %v", err)
 	}
 	_ = l2.Close()
+}
+
+func TestListenReplacesStaleSocket(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, sockFile)
+	if err := os.WriteFile(stale, []byte("leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Listen(dir)
+	if err != nil {
+		t.Fatalf("Listen with stale sock: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
 }

@@ -57,3 +57,21 @@ func TestStoppedServeDescriptionTellsOperatorToInstall(t *testing.T) {
 		t.Fatalf("desc %q", desc)
 	}
 }
+
+func TestFailedSystemdServeDescriptionTellsOperatorToRestart(t *testing.T) {
+	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.storeDaemon(domain.Daemon{
+		RemoteHost: "10.0.1.5",
+		Kind:       string(remotesvc.KindServe),
+		Status:     domain.DaemonStatusError,
+		Driver:     "systemd",
+	})
+	m.applyRemoteFilter()
+	desc := m.daemonList.Items()[0].(daemonItem).Description()
+	if strings.Contains(desc, "press i to install") {
+		t.Fatalf("installed unit must not say install: %q", desc)
+	}
+	if !strings.Contains(desc, "press s to restart") {
+		t.Fatalf("desc %q", desc)
+	}
+}
