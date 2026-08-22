@@ -72,6 +72,8 @@ func UnitFile(k Kind) string {
 	return fmt.Sprintf(`[Unit]
 Description=Aiman %s
 After=default.target
+StartLimitIntervalSec=120
+StartLimitBurst=20
 
 [Service]
 Type=simple
@@ -80,12 +82,10 @@ Restart=on-failure
 RestartSec=2
 WorkingDirectory=%%h
 Environment=HOME=%%h
-StandardOutput=append:%%h/.aiman/%s.log
-StandardError=append:%%h/.aiman/%s.log
 
 [Install]
 WantedBy=default.target
-`, k, k.ExecLine(), k, k)
+`, k, k.ExecLine())
 }
 
 // userRuntimeEnv makes `systemctl --user` work over SSH: non-interactive
@@ -117,6 +117,7 @@ if command -v systemctl >/dev/null 2>&1; then
 %s
 UNIT
     systemctl --user daemon-reload
+    %s
     systemctl --user enable --now %s.service
   else
     %s
@@ -124,21 +125,40 @@ UNIT
 else
   %s
 fi
-`, k.Binary(), k.Binary(), k.InstallPipe(), unit, UnitFile(k), unit, fallback, fallback)
+`, k.Binary(), k.Binary(), k.InstallPipe(), unit, UnitFile(k), leftoverCleanup(k), unit, fallback, fallback)
 }
 
 func StartScript(k Kind) string {
 	unit := k.Unit()
 	return "set -e\n" + userRuntimeEnv() + fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
-mkdir -p "$HOME/.aiman"
+mkdir -p "$HOME/.aiman" "$HOME/.config/systemd/user"
 if command -v systemctl >/dev/null 2>&1 && [ -f "$HOME/.config/systemd/user/%s.service" ] && systemctl --user show-environment >/dev/null 2>&1; then
+  cat > "$HOME/.config/systemd/user/%s.service" <<'UNIT'
+%s
+UNIT
   systemctl --user daemon-reload
-  systemctl --user restart %s.service
+  %s
+  systemctl --user start %s.service
   systemctl --user enable %s.service >/dev/null 2>&1 || true
 else
   %s
 fi
-`, unit, unit, unit, nohupStart(k))
+`, unit, unit, UnitFile(k), leftoverCleanup(k), unit, unit, nohupStart(k))
+}
+
+// leftoverCleanup resets systemd start-limit, stops the user unit, and kills
+// any leftover process holding the socket lock so the next start can bind.
+func leftoverCleanup(k Kind) string {
+	unit := k.Unit()
+	pid := k.PidFile()
+	return fmt.Sprintf(`systemctl --user reset-failed %s.service >/dev/null 2>&1 || true
+systemctl --user stop %s.service >/dev/null 2>&1 || true
+if [ -f %s ]; then
+  kill "$(cat %s)" 2>/dev/null || true
+  rm -f %s
+fi
+pkill -f '%s' >/dev/null 2>&1 || true
+`, unit, unit, pid, pid, pid, k.procPattern())
 }
 
 func StopScript(k Kind) string {
@@ -169,7 +189,8 @@ func ProbeScript(k Kind) string {
 	bin := k.Binary()
 	sockCheck := `echo SOCKET=0`
 	if k == KindServe {
-		sockCheck = `if [ -S "$HOME/.aiman/aiman.sock" ]; then echo SOCKET=1; else echo SOCKET=0; fi`
+		// A leftover sock after a crash is not a live listener.
+		sockCheck = `if [ "$ACTIVE" = active ] && [ -S "$HOME/.aiman/aiman.sock" ]; then echo SOCKET=1; else echo SOCKET=0; fi`
 	}
 	procCheck := fmt.Sprintf("pgrep -f '%s' >/dev/null", k.procPattern())
 	return userRuntimeEnv() + fmt.Sprintf(`
@@ -177,7 +198,8 @@ DRIVER=none
 ACTIVE=inactive
 if command -v systemctl >/dev/null 2>&1 && [ -f "$HOME/.config/systemd/user/%s.service" ] && systemctl --user show-environment >/dev/null 2>&1; then
   DRIVER=systemd
-  ACTIVE=$(systemctl --user is-active %s.service 2>/dev/null || echo inactive)
+  ACTIVE=$(systemctl --user show -p ActiveState --value %s.service 2>/dev/null || true)
+  ACTIVE=${ACTIVE:-inactive}
 elif [ -f %s ] && kill -0 "$(cat %s)" 2>/dev/null; then
   DRIVER=nohup
   ACTIVE=active
@@ -200,11 +222,10 @@ fi
 %s
 echo '---LOGS---'
 if [ "$DRIVER" = systemd ]; then
-  journalctl --user -u %s.service -n 80 --no-pager 2>/dev/null || tail -n 80 %s 2>/dev/null || true
-else
-  tail -n 80 %s 2>/dev/null || true
+  journalctl --user -u %s.service -n 40 --no-pager 2>/dev/null || true
 fi
-`, unit, unit, pid, pid, procCheck, unit, bin, bin, bin, bin, sockCheck, unit, logf, logf)
+tail -n 40 %s 2>/dev/null || true
+`, unit, unit, pid, pid, procCheck, unit, bin, bin, bin, bin, sockCheck, unit, logf)
 }
 
 func nohupStart(k Kind) string {
@@ -245,12 +266,7 @@ func ParseProbe(kind Kind, host, stdout string) domain.Daemon {
 		case "DRIVER":
 			d.Driver = val
 		case "ACTIVE":
-			switch val {
-			case "active":
-				d.Status = domain.DaemonStatusRunning
-			case "failed":
-				d.Status = domain.DaemonStatusError
-			}
+			d.Status = parseActiveState(val)
 		case "VERSION":
 			d.Version = val
 		case "SOCKET":
@@ -258,5 +274,24 @@ func ParseProbe(kind Kind, host, stdout string) domain.Daemon {
 		}
 	}
 	d.Logs = strings.TrimRight(logs, "\n")
+	if d.Status != domain.DaemonStatusRunning {
+		d.SocketOK = false
+	}
 	return d
+}
+
+func parseActiveState(val string) domain.DaemonStatus {
+	val = strings.TrimPrefix(strings.TrimSpace(val), "ActiveState=")
+	fields := strings.Fields(val)
+	if len(fields) == 0 {
+		return domain.DaemonStatusStopped
+	}
+	switch strings.ToLower(fields[0]) {
+	case "active", "activating", "reloading":
+		return domain.DaemonStatusRunning
+	case "failed":
+		return domain.DaemonStatusError
+	default:
+		return domain.DaemonStatusStopped
+	}
 }

@@ -47,7 +47,7 @@ func TestAgentAPIViewListsEachRemote(t *testing.T) {
 	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
 	m.enterAgentAPI()
 	out := m.renderAgentAPIView()
-	for _, want := range []string{"Agent API", "10.0.1.5", "i install/enable", "STOPPED"} {
+	for _, want := range []string{"Agent API", "10.0.1.5", "i install/enable", "PROBING"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
@@ -64,6 +64,69 @@ func TestAgentAPIInstallStaysOnSettingsPage(t *testing.T) {
 	}
 	if m.loadingNext != viewStateAgentAPI {
 		t.Fatalf("loadingNext %v", m.loadingNext)
+	}
+}
+
+func TestAgentAPIProbeKeyShowsProbing(t *testing.T) {
+	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.state = viewStateAgentAPI
+	got, cmd := m.handleAgentAPIUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model := got.(*Model)
+	if cmd == nil {
+		t.Fatal("r must fire a probe command")
+	}
+	out := model.renderAgentAPIView()
+	if !strings.Contains(out, "PROBING") {
+		t.Fatalf("r must show PROBING while the SSH probe is in flight:\n%s", out)
+	}
+}
+
+func TestAgentAPIHintFailedSystemdSaysRestart(t *testing.T) {
+	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.state = viewStateAgentAPI
+	m.storeDaemon(domain.Daemon{
+		RemoteHost: "10.0.1.5",
+		Kind:       string(remotesvc.KindServe),
+		Status:     domain.DaemonStatusError,
+		Driver:     "systemd",
+		Version:    "aiman v0.10.1",
+		Logs:       "Main process exited, code=exited, status=1/FAILURE",
+	})
+	out := m.renderAgentAPIView()
+	if strings.Contains(out, "Press i to install and enable") {
+		t.Fatalf("installed failed unit must not tell the operator to install:\n%s", out)
+	}
+	if !strings.Contains(out, "restart") {
+		t.Fatalf("failed systemd unit must point at restart:\n%s", out)
+	}
+}
+
+func TestAgentAPIHintUninstalledSaysInstall(t *testing.T) {
+	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.state = viewStateAgentAPI
+	out := m.renderAgentAPIView()
+	if !strings.Contains(out, "Press i to install and enable") {
+		t.Fatalf("missing install hint:\n%s", out)
+	}
+}
+
+func TestApplyDaemonProbeClearsProbing(t *testing.T) {
+	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.state = viewStateAgentAPI
+	_, _ = m.handleAgentAPIUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_, _ = m.applyDaemonProbe(daemonProbeMsg{daemon: domain.Daemon{
+		RemoteHost: "10.0.1.5",
+		Kind:       string(remotesvc.KindServe),
+		Status:     domain.DaemonStatusError,
+		Driver:     "systemd",
+		Logs:       "failed",
+	}})
+	out := m.renderAgentAPIView()
+	if strings.Contains(out, "PROBING") {
+		t.Fatalf("PROBING must clear after the probe returns:\n%s", out)
+	}
+	if !strings.Contains(out, "ERROR") {
+		t.Fatalf("want ERROR after failed probe:\n%s", out)
 	}
 }
 

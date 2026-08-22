@@ -115,6 +115,9 @@ func (m *Model) applyDaemonProbe(msg daemonProbeMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil && d.Status == "" {
 		d.Status = domain.DaemonStatusError
 	}
+	if m.agentAPIProbing != nil {
+		delete(m.agentAPIProbing, d.RemoteHost)
+	}
 	m.storeDaemon(d)
 	m.applyRemoteFilter()
 	if sel, ok := m.selectedDaemon(); ok && sel.RemoteHost == d.RemoteHost && sel.Kind == d.Kind {
