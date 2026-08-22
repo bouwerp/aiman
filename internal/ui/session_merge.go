@@ -17,6 +17,34 @@ func shouldMergeDiscoveredSession(s domain.Session, dbSessions map[string]domain
 	return ok
 }
 
+func sessionTmuxKey(s domain.Session) string {
+	if s.TmuxSession == "" {
+		return ""
+	}
+	return s.RemoteHost + "\x00" + s.TmuxSession
+}
+
+func persistedByTmux(sessions map[string]domain.Session) map[string]domain.Session {
+	out := make(map[string]domain.Session, len(sessions))
+	for _, s := range sessions {
+		if k := sessionTmuxKey(s); k != "" {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+func lookupPersistedSession(live domain.Session, byID, byTmux map[string]domain.Session) (domain.Session, bool) {
+	if s, ok := byID[live.ID]; ok {
+		return s, true
+	}
+	if k := sessionTmuxKey(live); k != "" {
+		s, ok := byTmux[k]
+		return s, ok
+	}
+	return domain.Session{}, false
+}
+
 // overlayPersistedSessionFields copies identity the live remote scan cannot
 // see. Discovery never reads Name or Group; without this, a restart flattens
 // every session into ungrouped until the user edits a group again.

@@ -136,3 +136,46 @@ func TestDiscoveryKeepsPersistedNameAndGroup(t *testing.T) {
 		t.Fatalf("discovery dropped identity: name=%q group=%q", got.Name, got.Group)
 	}
 }
+
+func TestDiscoveryKeepsPersistedGroupWhenIDsDiffer(t *testing.T) {
+	known := domain.Session{
+		ID: "db-id", Name: "impl", Group: "WTB-1925",
+		RemoteHost: "regent0", TmuxSession: "wtb-1925-fix",
+		Status: domain.SessionStatusActive,
+	}
+	repo := &savingSessionRepo{startupSessionRepo: startupSessionRepo{sessions: []domain.Session{known}}}
+	cfg := testCfg()
+	m := NewModel(cfg, nil, []domain.Session{known}, repo, nil, nil, nil)
+
+	live := domain.Session{
+		ID: "fresh-uuid", RemoteHost: "regent0", TmuxSession: "wtb-1925-fix",
+		Status: domain.SessionStatusActive,
+	}
+	m.applyDiscoveryResult(discoveryResultMsg{
+		scannedHosts: map[string]bool{"regent0": true},
+		sessions:     []domain.Session{live},
+	})
+
+	if len(m.allSessions) != 1 {
+		t.Fatalf("len=%d %+v", len(m.allSessions), m.allSessions)
+	}
+	got := m.allSessions[0]
+	if got.Name != "impl" || got.Group != "WTB-1925" {
+		t.Fatalf("tmux match dropped identity: name=%q group=%q id=%q", got.Name, got.Group, got.ID)
+	}
+	if got.ID != "db-id" {
+		t.Fatalf("live id %q should adopt persisted id", got.ID)
+	}
+
+	m.applyRemoteFilter()
+	foundHeader := false
+	for _, it := range m.list.Items() {
+		si, ok := it.(item)
+		if ok && si.header && si.session.Group == "WTB-1925" {
+			foundHeader = true
+		}
+	}
+	if !foundHeader {
+		t.Fatal("group header missing after discovery")
+	}
+}
