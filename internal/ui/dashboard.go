@@ -4247,6 +4247,21 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 }
 
 func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	lst := &m.list
+	if m.currentTab == tabDaemons {
+		lst = &m.daemonList
+	}
+	switch lst.FilterState() {
+	case list.Filtering:
+		// Keys belong to the list filter input, including esc (cancel) and q.
+		return m, nil, false
+	case list.FilterApplied:
+		if msg.String() == "esc" {
+			lst.ResetFilter()
+			return m, nil, true
+		}
+	}
+
 	// Background-creation placeholders have no tmux session, worktree, or
 	// sync yet — block session actions on them. ctrl+k dismisses a failed
 	// placeholder instead of running the terminate flow. Skip this on the
