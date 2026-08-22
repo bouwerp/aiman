@@ -25,7 +25,11 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Repo & Directory Picker**: Choose repo + subdirectory from the remote
 - **Multi-Agent Support**: Scan and select Claude Code, Antigravity CLI, GitHub Copilot, OpenCode, or Cursor
 - **Ad-hoc Sessions**: Create quick sessions without a JIRA issue, branch, or repo
+- **Quick start (`N`)**: Default remote, agent picker only, generated `q1`/`q2`/… in group `quick`
+- **Names and groups**: Every session has a unique display `name` and a `group`; the sidebar is a tree of groups, not a flat list
 - **Session Management**: Track active sessions with live tmux pane previews
+- **Remote `aiman serve`**: Headless JSON server on each remote so agents in tmux can list, create, prompt, and wait on sibling sessions
+- **Agent skill**: `aiman --skill` prints a Markdown skill gated on `AIMAN_ENV=1`
 
 ### AI Intelligence
 - **Session activity detection**: Reports whether an agent is working, blocked on a question, or idle, from tmux's own last-output timestamp and the tail of the pane — no model required
@@ -176,6 +180,8 @@ aiman
 | Key | Action |
 |-----|--------|
 | `n` | **New Session** — Start the full JIRA-driven workflow wizard |
+| `N` | **Quick session** — Default remote, pick an agent, generated name in group `quick` |
+| `e` | **Rename** — Change the display name (tmux and worktree stay on the branch) |
 | `m` | **Admin Menu** — Configure remotes, JIRA, browse snapshots |
 | `↑/↓` | Navigate sessions |
 | `Enter` | Select item |
@@ -230,6 +236,8 @@ Skip the JIRA/branch/repo flow and jump straight to agent selection:
 5. **Summary**: Review and confirm
 
 Ad-hoc sessions still get their own tmux session, mutagen sync, and AWS credentials.
+
+**Faster path:** `N` on the dashboard. It uses the active (or filtered) remote, skips JIRA/branch/repo, opens the agent picker, and names the session `q1`, `q2`, … in group `quick`. Rename afterwards with `e`.
 
 ### Starting an EC2 Autonomous Loop
 
@@ -322,6 +330,146 @@ Quickly browse GitHub repositories:
 aiman repos
 ```
 
+## Remote server and agent CLI
+
+The laptop TUI is the human control plane. Each remote also runs a headless **`aiman serve`** process so an agent *inside* a tmux pane can talk to sibling sessions on that host: list them, start a helper, send a prompt, wait until it is idle or blocked. tmux stays the multiplexer. Mutagen, JIRA tokens, and the laptop SQLite file stay on the laptop.
+
+There is no HTTP, MCP, or TCP port. The CLI is a thin JSON wrapper over a Unix socket.
+
+### `aiman serve`
+
+Runs on the **remote**, typically in tmux session `aiman-serve`. The dashboard starts it when it needs to (installs `~/.local/bin/aiman` if missing, then `tmux new-session -d -s aiman-serve 'aiman serve'`).
+
+Manual:
+
+```bash
+aiman serve
+```
+
+| Item | Path |
+|---|---|
+| Socket | `~/.aiman/aiman.sock` (`0o600`) |
+| Lock | `~/.aiman/aiman.sock.lock` (one instance per host) |
+| Log | `~/.aiman/serve.log` (also stderr) |
+| Override | `AIMAN_SOCKET_PATH` |
+
+A second `aiman serve` on the same host fails with `already_running`. `aiman serve` is Unix-only (not Windows). Stop it with `tmux kill-session -t aiman-serve`, not by running `aiman serve` again.
+
+The server uses the remote `~/.aiman/config.yaml` (often sparse) and `~/.aiman/aiman.db`. Session create on the remote does **not** start mutagen or push AWS STS; those remain TUI/laptop concerns. The new tmux session inherits whatever is already in remote `~/.aws`.
+
+### `aiman session` CLI
+
+From inside a pane (or any process on the remote with the socket):
+
+```bash
+aiman session list [--group GROUP]
+aiman session get <target>
+aiman session create --repo owner/repo --branch NAME --agent claude \
+    [--name NAME] [--group GROUP] \
+    [--dir SUBDIR] [--prompt TEXT] [--issue KEY] [--base BRANCH] [--existing]
+aiman session create --quick --agent claude [--name NAME]
+aiman session rename <target> NEW-NAME
+aiman session move <target> --group GROUP
+aiman session prompt <target> TEXT [--wait] [--until STATE] [--timeout 120s] [--force]
+aiman session wait <target> [--until idle|working|waiting_input|blocked] [--timeout 120s]
+aiman session read <target> [--lines 120]
+```
+
+Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refused: use `aiman session …`.
+
+`<target>` is resolved in this order: unique `name`, `group/name`, UUID (`id`), tmux session name.
+
+`--quick` is ad-hoc, group `quick`, generated `q1`/`q2`/…, current host. `--agent` is required. `--wait` on prompt sends then waits until the first of `idle`, `waiting_input`, or `errored`. Default timeout is 120s; `--timeout 0` means no limit. `--until blocked` is an alias for `waiting_input`. Prompting a session that is already waiting for input fails with `agent_blocked` unless `--force`.
+
+Rename changes the display name only. It does not rename tmux or the git worktree.
+
+Stdout is indented JSON. Server errors are JSON on stderr, exit 1. Usage errors exit 2.
+
+```json
+{
+  "type": "session_list",
+  "sessions": [
+    {
+      "id": "uuid",
+      "name": "impl",
+      "group": "WTB-1925",
+      "issue_key": "PROJ-123",
+      "branch": "proj-123-fix-auth",
+      "repo_name": "owner/repo",
+      "tmux_session": "proj-123-fix-auth",
+      "worktree_path": "/home/dev/src/repo@proj-123-fix-auth",
+      "working_directory": "/home/dev/src/repo@proj-123-fix-auth",
+      "agent_name": "claude",
+      "status": "ACTIVE",
+      "state": "working",
+      "state_confidence": "high",
+      "self": true
+    }
+  ]
+}
+```
+
+`self` is true when `id` equals the caller's `AIMAN_ID`. `state` is `idle`, `working`, `waiting_input`, `errored`, or `unknown`.
+
+| Code | Meaning |
+|---|---|
+| `invalid_params` | Missing or bad arguments |
+| `not_found` | No session matches `<target>` |
+| `name_taken` | Display name already in use on this host |
+| `server_not_running` | Socket missing or `aiman serve` is down |
+| `already_running` | Another `aiman serve` holds the lock |
+| `agent_blocked` | Target is `waiting_input` and `--force` was not set |
+| `timeout` | `--wait` / `wait` hit `--timeout` |
+| `create_failed` | Worktree/tmux create failed |
+| `jira_unavailable` | `--issue` given but JIRA is not configured on the remote |
+
+### Names and groups
+
+Every session has a **name** (unique per host, `^[A-Za-z][A-Za-z0-9_-]{0,47}$`) and a **group** (work bucket: issue key, repo short name, `quick`, or `ungrouped`). The dashboard sidebar groups by that label. Group headers are labels, not sessions.
+
+| | Name | Group |
+|---|---|---|
+| TUI `n` (full wizard) | `impl` if free, else from branch | issue key, else repo short name, else `ungrouped` |
+| TUI `N` (quick) | `q1`, `q2`, … | `quick` |
+| CLI `--quick` | same as `N` | `quick` |
+| CLI `--name` / `--group` | as given, if unique | as given |
+
+### Environment (inside a pane)
+
+`CreateSession` injects these into the tmux session environment (not overridable by stored secrets):
+
+| Variable | Value |
+|---|---|
+| `AIMAN_ENV` | `1` (skill/CLI gate) |
+| `AIMAN_ID` / `AIMAN_SESSION_ID` | Session UUID |
+| `AIMAN_SESSION_NAME` | Display name |
+| `AIMAN_GROUP` | Group |
+| `AIMAN_SOCKET_PATH` | `~/.aiman/aiman.sock` |
+| `AIMAN_BIN_PATH` | Path of the `aiman` binary |
+
+### Agent skill
+
+Coding agents on the remote should load the bundled skill, not invent the CLI:
+
+```bash
+aiman --skill
+```
+
+That prints the Markdown skill (`internal/aimanskill/SKILL.md`, also under `skills/aiman/`). The skill is gated on `AIMAN_ENV=1`. If that is unset, the agent is not inside an Aiman session and must stop.
+
+Typical helper spawn from an in-pane agent:
+
+```bash
+test "${AIMAN_ENV:-}" = 1
+aiman session list
+aiman session create --repo owner/repo --branch BRANCH --agent claude \
+  --name reviewer --group "$AIMAN_GROUP"
+aiman session prompt reviewer "Review the current diff." --wait --timeout 120s
+aiman session read reviewer --lines 120
+```
+
+Do not run bare `aiman` from a pane (TUI). Do not run `aiman serve` to stop the server. Prefer names over UUIDs. Put helpers in `"$AIMAN_GROUP"`.
+
 ## 📁 Configuration
 
 All data is stored in `~/.aiman/`:
@@ -330,6 +478,10 @@ All data is stored in `~/.aiman/`:
 ~/.aiman/
 ├── config.yaml          # Main configuration
 ├── aiman.db             # SQLite database (sessions + snapshots)
+├── aiman.sock           # Remote: `aiman serve` Unix socket (`0o600`)
+├── aiman.sock.lock      # Remote: serve singleton lock
+├── serve.log            # Remote: serve log
+├── debug.log            # `aiman --debug` dump (optional)
 ├── sockets/             # SSH ControlMaster sockets (hashed filenames)
 └── work/                # Local mutagen sync roots — one subdirectory per session ID
 ```
@@ -545,6 +697,8 @@ Aiman follows **Clean Architecture** principles:
 - **`MutagenBridge`**: File synchronization
 - **`TmuxManager`**: Session lifecycle management
 - **`SkillEngine`**: Agent configuration injection
+- **`aiman serve`**: Headless Unix-socket JSON server on the remote (`internal/server`)
+- **Agent skill**: `aiman --skill` / `internal/aimanskill/SKILL.md`
 - **`SnapshotManager`**: Session archiving (capture → clean → compress → AI → persist)
 - **`IntelligenceProvider`**: AI summarisation via Ollama (local LLM)
 - **`AWSDelegation`**: Session-scoped AWS credential push and cleanup
@@ -588,6 +742,9 @@ Aiman follows **Clean Architecture** principles:
 - [x] Session archiving and snapshot browser
 - [x] Self-update (`aiman update`) and downgrade (`aiman downgrade [tag]`)
 - [x] Autonomous trigger daemon (`aiman-trigger`) released per platform and installable onto a remote from the Daemons tab
+- [x] Remote `aiman serve` + JSON `aiman session` CLI (list/get/create/prompt/wait/read/rename/move)
+- [x] Session names and groups, TUI grouped sidebar, quick start (`N`) and rename (`e`)
+- [x] Bundled agent skill (`aiman --skill`), gated on `AIMAN_ENV=1`
 - [ ] Git intelligence panel
 - [ ] MOSH support
 
