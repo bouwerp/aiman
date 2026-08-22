@@ -6,6 +6,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
@@ -215,6 +216,49 @@ func TestSnapOffGroupHeaderUpSelectsPreviousGroupSession(t *testing.T) {
 	it, ok := m.selectedSessionItem()
 	if !ok || it.session.ID != "a" {
 		t.Fatalf("up from next-group header want session a, ok=%v id=%q", ok, it.session.ID)
+	}
+}
+
+func TestSessionSearchEscCancelsAndStaysOnDashboard(t *testing.T) {
+	cfg := twoRemoteCfg()
+	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
+	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
+
+	updated, _ := m.handleMainUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m = updated.(*Model)
+	if m.list.FilterState() != list.Filtering {
+		t.Fatalf("after / want Filtering, got %s", m.list.FilterState())
+	}
+
+	updated, _ = m.handleMainUpdate(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(*Model)
+	if m.state != viewStateMain {
+		t.Fatalf("esc while searching must not quit, state %v", m.state)
+	}
+	if m.list.FilterState() != list.Unfiltered {
+		t.Fatalf("esc must cancel search, got %s", m.list.FilterState())
+	}
+}
+
+func TestSessionSearchEscClearsAppliedFilter(t *testing.T) {
+	cfg := twoRemoteCfg()
+	sessions := []domain.Session{
+		{ID: "a", Name: "impl", Group: "WTB-1", RemoteHost: "10.0.1.5"},
+		{ID: "b", Name: "q1", Group: "quick", RemoteHost: "10.0.1.5"},
+	}
+	m := NewModel(cfg, nil, sessions, &mockSessionRepo{}, nil, nil, nil)
+	m.list.SetFilterText("impl")
+	if m.list.FilterState() != list.FilterApplied {
+		t.Fatalf("state %s", m.list.FilterState())
+	}
+
+	updated, _ := m.handleMainUpdate(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(*Model)
+	if m.state != viewStateMain {
+		t.Fatalf("esc must not quit, state %v", m.state)
+	}
+	if m.list.FilterState() != list.Unfiltered {
+		t.Fatalf("esc must clear applied filter, got %s", m.list.FilterState())
 	}
 }
 

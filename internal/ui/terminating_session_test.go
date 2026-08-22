@@ -23,7 +23,6 @@ func newTestModelWithTerminatableSession(t *testing.T) (*Model, domain.Session) 
 	}
 	cfg := &config.Config{Remotes: []config.Remote{{Host: "other-host"}}}
 	model := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
-	model.list.Select(0)
 	return model, s
 }
 
