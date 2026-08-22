@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/ai"
@@ -165,6 +166,7 @@ const (
 	viewStateAutonomousReuseWorkspacePicker
 	viewStateAutonomousConcurrencyInput
 	viewStateTriggerDetails
+	viewStateRenameSession
 )
 
 type mainTab int
@@ -212,6 +214,7 @@ type item struct {
 	activity   string
 	remoteName string // short name of the remote for display
 	syncStale  bool   // mutagen sync is missing/unhealthy/pointing at wrong host
+	header     bool   // group header row, not a session
 }
 
 func (i item) Title() string {
@@ -256,13 +259,31 @@ func (i item) Title() string {
 	if i.remoteName != "" {
 		remoteTag = " [" + i.remoteName + "]"
 	}
+	if i.header {
+		label := i.session.Group
+		if label == "" {
+			label = domain.GroupUngrouped
+		}
+		if i.activity != "" {
+			activity = " • " + i.activity
+		}
+		if i.remoteName != "" {
+			remoteTag = " [" + i.remoteName + "]"
+		}
+		return fmt.Sprintf("▸ %s%s%s", label, activity, remoteTag)
+	}
 	if i.session.Mode == domain.SessionModeAutonomous {
 		prefix = "🤖 " + prefix
 	}
-	if i.session.IssueKey != "" {
-		return fmt.Sprintf("%s%s (%s)%s%s", prefix, i.session.IssueKey, i.session.TmuxSession, activity, remoteTag)
+	label := i.session.Name
+	if label == "" {
+		if i.session.IssueKey != "" {
+			label = fmt.Sprintf("%s (%s)", i.session.IssueKey, i.session.TmuxSession)
+		} else {
+			label = i.session.TmuxSession
+		}
 	}
-	return fmt.Sprintf("%s%s%s%s", prefix, i.session.TmuxSession, activity, remoteTag)
+	return fmt.Sprintf("%s%s%s%s", prefix, label, activity, remoteTag)
 }
 
 func (i item) Description() string {
@@ -273,6 +294,9 @@ func (i item) Description() string {
 	agentPart := ""
 	if agentLabel != "" {
 		agentPart = " | Agent: " + agentLabel
+	}
+	if i.session.Branch != "" {
+		agentPart = " | Branch: " + i.session.Branch + agentPart
 	}
 	createdPart := ""
 	if !i.session.CreatedAt.IsZero() {
@@ -303,7 +327,7 @@ func (i item) Description() string {
 }
 
 func (i item) FilterValue() string {
-	return i.session.IssueKey + " " + i.session.TmuxSession + " " + i.session.RepoName + " " + i.remoteName
+	return i.session.Name + " " + i.session.Group + " " + i.session.IssueKey + " " + i.session.TmuxSession + " " + i.session.RepoName + " " + i.remoteName
 }
 
 type tunnelItem struct {
@@ -540,21 +564,26 @@ func (m *Model) removeCreatingPlaceholder(id string) {
 }
 
 func (m *Model) applyRemoteFilter() {
+	selectedID := ""
+	if it, ok := m.list.SelectedItem().(item); ok && !it.header {
+		selectedID = it.session.ID
+	}
 	// Sort sessions: most recently created first. Using CreatedAt only keeps
 	// the list order stable as sessions are used (UpdatedAt would cause them to jump).
 	sort.Slice(m.allSessions, func(i, j int) bool {
 		return m.allSessions[i].CreatedAt.After(m.allSessions[j].CreatedAt)
 	})
-	var filtered []list.Item
+	var flat []item
 	var daemonItems []list.Item
 	for _, s := range m.allSessions {
-		if s.TmuxSession == "aiman-trigger" {
+		if s.TmuxSession == "aiman-trigger" || s.TmuxSession == "aiman-serve" {
 			continue // Skip daemon sessions in the main list
 		}
 		if m.remoteFilter == "" || s.RemoteHost == m.remoteFilter {
-			filtered = append(filtered, m.makeItem(s))
+			flat = append(flat, m.makeItem(s))
 		}
 	}
+	filtered := groupedSessionItems(flat)
 
 	// Rebuild daemon list based on configured remotes and active daemon sessions
 	for _, r := range m.cfg.Remotes {
@@ -569,6 +598,14 @@ func (m *Model) applyRemoteFilter() {
 	}
 
 	m.list.SetItems(filtered)
+	if selectedID != "" {
+		for i, it := range filtered {
+			if si, ok := it.(item); ok && !si.header && si.session.ID == selectedID {
+				m.list.Select(i)
+				break
+			}
+		}
+	}
 	m.daemonList.SetItems(daemonItems)
 
 	if m.remoteFilter == "" {
@@ -598,6 +635,8 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	l.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new session")),
+			key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "quick session")),
+			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "rename session")),
 			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart session")),
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
 			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "manage tunnels")),
@@ -1809,6 +1848,10 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 		}
 		m.logPersistent("worktree and tmux ready: tmux=%q id=%s", session.TmuxSession, session.ID)
 
+		if mgr, ok := sessionCfg.SSHManager.(*ssh.Manager); ok {
+			_ = m.ensureRemoteServer(ctx, mgr)
+		}
+
 		session.ID = strings.TrimSpace(session.ID)
 		if session.ID == "" {
 			m.logPersistent("session ID empty after CreateSession for branch %q; not saving", sessionCfg.Branch)
@@ -2333,9 +2376,11 @@ func (m *Model) log(format string, args ...interface{}) {
 	if len(m.consoleLog) > 100 {
 		m.consoleLog = m.consoleLog[len(m.consoleLog)-100:]
 	}
+	if debuglog.Enabled() {
+		_ = debuglog.Write(msg + "\n")
+	}
 }
 
-// appendDebugLog appends a line to /tmp/aiman-debug.log for tracing goroutine activity.
 // logPersistent records a line in the in-app console and in the debug log file.
 //
 // m.log alone keeps the line in memory, so it dies with the process — which is
@@ -2348,13 +2393,7 @@ func (m *Model) logPersistent(format string, args ...interface{}) {
 }
 
 func appendDebugLog(line string) error {
-	f, err := os.OpenFile("/tmp/aiman-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.WriteString(line)
-	return err
+	return debuglog.Write(line)
 }
 
 // wrapLines wraps each log line to width and joins them with newlines.
@@ -2673,6 +2712,10 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 
 	case viewStateAgentPicker:
 		model, cmd := m.handleAgentPickerUpdate(msg)
+		return model, cmd, true
+
+	case viewStateRenameSession:
+		model, cmd := m.handleRenameSessionUpdate(msg)
 		return model, cmd, true
 
 	case viewStateRestartAgentPicker:
@@ -3104,6 +3147,9 @@ func (m *Model) renderView() string {
 
 	case viewStateAgentPicker:
 		return docStyle.Render(m.agentPicker.View())
+
+	case viewStateRenameSession:
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.View())
 
 	case viewStateBranchPicker:
 		return docStyle.Render(m.branchPicker.View())
@@ -4183,6 +4229,32 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.selectedRemote = config.Remote{}
 		m.state = viewStateRunTargetPicker
 		return m, nil, true
+	}
+	if msg.String() == "N" {
+		r, ok := m.defaultRemote()
+		if !ok {
+			m.log("no remote configured")
+			return m, nil, true
+		}
+		m.selectedRemote = r
+		m.resetSessionCfg(domain.SessionConfig{AdHoc: true, PromptFree: true, Quick: true, Group: domain.GroupQuick})
+		m.loadingMsg = "Scanning agents on " + r.Host + "..."
+		m.loadingNext = viewStateAgentPicker
+		m.state = viewStateLoading
+		return m, m.fetchAgents(), true
+	}
+	if msg.String() == "e" {
+		it, ok := m.selectedSessionItem()
+		if !ok {
+			return m, nil, true
+		}
+		initial := it.session.Name
+		if initial == "" {
+			initial = it.session.TmuxSession
+		}
+		m.genericInput = NewTextInputModel("Rename session", "name", initial)
+		m.state = viewStateRenameSession
+		return m, m.genericInput.Init(), true
 	}
 	if msg.String() == "f" && len(m.cfg.Remotes) > 1 {
 		hosts := []string{""} // "" = all
@@ -5622,6 +5694,10 @@ func (m *Model) handleChangeDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
 		if m.agentPicker.list.FilterState() != list.Filtering {
+			if m.sessionCfg.Quick {
+				m.state = viewStateMain
+				return m, nil
+			}
 			// The EC2 flow skips the directory picker (issue → repo → agent), so going
 			// back has to land on the screen it actually came from.
 			if m.sessionCfg.IsEC2Loop {
@@ -5639,6 +5715,9 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
 		m.sessionCfg.PromptFree = true
+		if m.sessionCfg.Quick {
+			return m.startQuickSession()
+		}
 		if m.sessionCfg.AdHoc {
 			m.summary = NewAdHocSummaryModel(m.sessionCfg.Branch)
 		} else {
@@ -5650,9 +5729,8 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// AllDelegations covers both the singular aws_delegation and the plural
 		// aws_delegations form, so a remote configured either way gets the section.
 		if d := firstSyncingDelegation(m.selectedRemote); d != nil {
-			profile, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
+			_, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
 			m.summary.SetAWSDefaults(&domain.AWSConfig{
-				SourceProfile:   profile,
 				RoleName:        d.RoleName,
 				AccountID:       d.AccountID,
 				Region:          region,
@@ -7052,7 +7130,9 @@ func (m *Model) restartSession() tea.Cmd {
 			awsEnv = usecase.SharedSessionAWSEnv(awsCfg.SourceProfile, awsCfg.Region)
 			s.AWSConfig = awsCfg
 		}
-		awsEnv["AIMAN_ID"] = strings.TrimSpace(s.ID)
+		for k, v := range usecase.SessionRuntimeEnv(s) {
+			awsEnv[k] = v
+		}
 		extraEnvFlags := tmuxExtraEnvFlags(awsEnv)
 		awsEnvCmd := tmuxSessionEnvCommands(
 			s.TmuxSession,
@@ -7063,6 +7143,12 @@ func (m *Model) restartSession() tea.Cmd {
 			"AWS_REGION",
 			"AWS_DEFAULT_REGION",
 			"AIMAN_ID",
+			"AIMAN_ENV",
+			"AIMAN_SESSION_ID",
+			"AIMAN_SESSION_NAME",
+			"AIMAN_GROUP",
+			"AIMAN_SOCKET_PATH",
+			"AIMAN_BIN_PATH",
 		)
 		if strings.Contains(strings.ToLower(agentCmd), "opencode") {
 			_ = mgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))

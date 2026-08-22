@@ -8,6 +8,8 @@ REPO_URL="https://github.com/bouwerp/aiman"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="${BINARY_NAME:-aiman}"
 GITHUB_API="https://api.github.com/repos/bouwerp/aiman/releases/latest"
+# Pin a release tag with --version or VERSION= (e.g. VERSION=v0.9.1 ./install.sh).
+PINNED_VERSION="${VERSION:-}"
 
 # Colors
 RED='\033[0;31m'
@@ -64,15 +66,37 @@ get_binary_name() {
     esac
 }
 
+normalize_pin() {
+    local v="$1"
+    v="${v#"${v%%[![:space:]]*}"}"
+    v="${v%"${v##*[![:space:]]}"}"
+    v="${v#v}"
+    v="${v#V}"
+    if [ -z "$v" ]; then
+        echo -e "${RED}Error: empty release tag${NC}" >&2
+        exit 1
+    fi
+    printf 'v%s\n' "$v"
+}
+
 # Download pre-built binary from GitHub releases
 download_binary() {
     echo "Checking for pre-built binary..."
 
     get_binary_name
 
-    # Get latest release info
-    if ! RELEASE_DATA=$(curl -sf "$GITHUB_API" 2>/dev/null); then
-        echo -e "${YELLOW}No release found, will build from source${NC}"
+    local api="$GITHUB_API"
+    if [ -n "${PINNED_VERSION:-}" ]; then
+        api="https://api.github.com/repos/bouwerp/aiman/releases/tags/${PINNED_VERSION}"
+        echo "Pinning release: ${PINNED_VERSION}"
+    fi
+
+    if ! RELEASE_DATA=$(curl -sf "$api" 2>/dev/null); then
+        if [ -n "${PINNED_VERSION:-}" ]; then
+            echo -e "${YELLOW}Pinned release ${PINNED_VERSION} not found as a GitHub release, will build from that tag${NC}"
+        else
+            echo -e "${YELLOW}No release found, will build from source${NC}"
+        fi
         return 1
     fi
 
@@ -173,7 +197,11 @@ clone_repo() {
     echo "Cloning repository..."
     TEMP_DIR=$(mktemp -d)
     cd "$TEMP_DIR"
-    git clone --depth 1 "$REPO_URL" aiman-src
+    if [ -n "${PINNED_VERSION:-}" ]; then
+        git clone --depth 1 --branch "$PINNED_VERSION" "$REPO_URL" aiman-src
+    else
+        git clone --depth 1 "$REPO_URL" aiman-src
+    fi
     cd aiman-src
 }
 
@@ -342,13 +370,25 @@ while [[ $# -gt 0 ]]; do
             INSTALL_DIR="/usr/local/bin"
             shift
             ;;
+        --version)
+            if [ -z "${2:-}" ]; then
+                echo "Error: --version requires a tag (e.g. v0.9.1)"
+                exit 1
+            fi
+            PINNED_VERSION="$2"
+            shift 2
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --prefix DIR    Install to custom directory (default: ~/.local/bin)"
             echo "  --system        Install to /usr/local/bin (requires sudo)"
+            echo "  --version TAG   Install a specific release tag (also: VERSION=v0.9.1)"
             echo "  -h, --help      Show this help message"
+            echo ""
+            echo "Recover a broken install:"
+            echo "  curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --version v0.9.1"
             exit 0
             ;;
         *)
@@ -357,5 +397,9 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [ -n "${PINNED_VERSION:-}" ]; then
+    PINNED_VERSION="$(normalize_pin "$PINNED_VERSION")"
+fi
 
 main

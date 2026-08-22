@@ -5,7 +5,20 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/bouwerp/aiman/internal/domain"
 )
+
+func TestTmuxNameForCreateUsesBranchNotDisplayName(t *testing.T) {
+	got := tmuxNameForCreate("wtb-1925-auth", "spike")
+	want := domain.SanitizeTmuxSessionName("wtb-1925-auth")
+	if got != want {
+		t.Fatalf("tmuxNameForCreate = %q, want branch-derived %q (not the display name)", got, want)
+	}
+	if got == domain.SanitizeTmuxSessionName("spike") && want != got {
+		t.Fatal("display name must not become the tmux session")
+	}
+}
 
 func TestJoinPrompt(t *testing.T) {
 	cases := []struct {
@@ -99,6 +112,28 @@ func TestDeliverInitialPromptSkipsEmpty(t *testing.T) {
 	DeliverInitialPrompt(context.Background(), f, "sess", "abc-123", "", false)
 	if f.writePath != "" || len(f.execCmds) != 0 {
 		t.Fatalf("empty prompt should not write or execute anything")
+	}
+}
+
+func TestSendPromptDoesNotInterpolatePrompt(t *testing.T) {
+	malicious := "do the thing $(touch /tmp/pwned) `id`"
+	f := &fakePromptDeliverer{}
+	if err := SendPrompt(context.Background(), f, "sess", "abc-123", malicious); err != nil {
+		t.Fatal(err)
+	}
+	if string(f.writeContent) != malicious {
+		t.Fatalf("prompt not written verbatim: %q", f.writeContent)
+	}
+	if len(f.execCmds) != 1 {
+		t.Fatalf("expected one Execute, got %d", len(f.execCmds))
+	}
+	for _, frag := range []string{"$(touch /tmp/pwned)", "`id`", "do the thing"} {
+		if strings.Contains(f.execCmds[0], frag) {
+			t.Fatalf("prompt leaked into command (%q): %s", frag, f.execCmds[0])
+		}
+	}
+	if strings.Contains(f.execCmds[0], "nohup") {
+		t.Fatalf("SendPrompt should not detach: %s", f.execCmds[0])
 	}
 }
 

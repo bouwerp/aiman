@@ -75,6 +75,25 @@ func TestSummaryModelAdHocGetSessionConfigReturnsPrompt(t *testing.T) {
 // With AWS inputs present, the prompt occupies focus index 0 and the AWS inputs
 // shift to 1..N. Tabbing off the prompt must route typing to the AWS input, not
 // the prompt — this guards the focus-index offset arithmetic.
+func TestSummaryModelDoesNotPrefillAWSProfile(t *testing.T) {
+	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "repo"}, "")
+	m.SetAWSDefaults(&domain.AWSConfig{SourceProfile: "prod", Region: "eu-west-1"})
+	if m.inputs[0].Value() != "" {
+		t.Fatalf("AWS profile must start blank, got %q", m.inputs[0].Value())
+	}
+	if m.inputs[1].Value() != "eu-west-1" {
+		t.Fatalf("region should still be pre-filled, got %q", m.inputs[1].Value())
+	}
+	m.SetAgent(&domain.Agent{Name: "Claude"})
+	cfg := m.GetSessionConfig()
+	if cfg.AWSConfig == nil {
+		t.Fatal("expected AWSConfig so region still applies")
+	}
+	if cfg.AWSConfig.SourceProfile != "" {
+		t.Fatalf("SourceProfile must stay empty unless the user types one, got %q", cfg.AWSConfig.SourceProfile)
+	}
+}
+
 func TestSummaryModelTabRoutesTypingToAWSInput(t *testing.T) {
 	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "repo"}, "")
 	m.SetAWSDefaults(&domain.AWSConfig{SourceProfile: "p", Region: "us-east-2"})

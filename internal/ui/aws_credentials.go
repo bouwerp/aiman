@@ -742,9 +742,7 @@ func (m AWSCredentialsModel) handleCredentialTableKey(msg tea.KeyMsg) (tea.Model
 	case "d":
 		if m.cursor < len(m.entries) {
 			e := m.entries[m.cursor]
-			if e.del != nil {
-				m.message = fmt.Sprintf("Cannot remove [%s] here: it is still managed by local settings.", e.remoteProfile)
-			} else if !m.renewing[e.key] {
+			if !m.renewing[e.key] {
 				m.renewing[e.key] = true
 				m.message = fmt.Sprintf("Removing %s [%s] from remote AWS config…", e.userAtHost, e.remoteProfile)
 				return m, m.removeCmd(e)
@@ -894,7 +892,7 @@ func (m AWSCredentialsModel) View() string {
 	}
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	b.WriteString(helpStyle.Render("  r renew selected  •  shift+R refresh ALL  •  e rename selected profile  •  t lifetime of selected profile  •  d remove selected stale profile  •  c re-check all  •  ESC back") + "\n")
+	b.WriteString(helpStyle.Render("  r renew selected  •  shift+R refresh ALL  •  e rename selected profile  •  t lifetime of selected profile  •  d delete selected remote profile  •  c re-check all  •  ESC back") + "\n")
 	b.WriteString(helpStyle.Render("  \"~\" marks an expiry estimated from the credentials file's age (pushed before aiman recorded expiry) — refresh to replace it with the exact time.") + "\n")
 
 	return b.String()

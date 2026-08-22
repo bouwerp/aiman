@@ -45,6 +45,8 @@ const (
 
 type Session struct {
 	ID               string
+	Name             string // display alias, unique per host; independent of Branch and the worktree
+	Group            string // work bucket; empty persists as GroupUngrouped
 	IssueKey         string
 	Branch           string
 	RepoName         string
@@ -183,6 +185,9 @@ type SessionRepository interface {
 
 // SessionConfig holds the configuration for creating a new session.
 type SessionConfig struct {
+	Name           string
+	Group          string
+	Quick          bool // ad-hoc session with generated q{n} name in group "quick"
 	IssueKey       string
 	Issue          *Issue // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
 	Branch         string

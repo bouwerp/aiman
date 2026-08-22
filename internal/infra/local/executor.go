@@ -2,10 +2,12 @@ package local
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
@@ -34,23 +36,45 @@ func (e *Executor) WriteFile(ctx context.Context, path string, content []byte) e
 	return os.WriteFile(path, content, 0600)
 }
 
-func (e *Executor) ValidateDir(ctx context.Context, path string) error     { return nil }
-func (e *Executor) ScanTmuxSessions(ctx context.Context) ([]string, error) { return nil, nil }
-func (e *Executor) ScanGitRepos(ctx context.Context) ([]string, error)     { return nil, nil }
+func (e *Executor) ValidateDir(ctx context.Context, path string) error { return nil }
+func (e *Executor) ScanTmuxSessions(ctx context.Context) ([]string, error) {
+	out, err := e.Execute(ctx, "tmux list-sessions -F '#{session_name}' 2>/dev/null")
+	if err != nil {
+		return nil, nil
+	}
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+	return names, nil
+}
+func (e *Executor) ScanGitRepos(ctx context.Context) ([]string, error) { return nil, nil }
 func (e *Executor) ScanWorktrees(ctx context.Context, repoPath string) ([]string, error) {
 	return nil, nil
 }
 func (e *Executor) GetGitRoot(ctx context.Context, path string) (string, error) { return "", nil }
-func (e *Executor) GetTmuxSessionCWD(ctx context.Context, sessionName string) (string, error) {
-	return "", nil
-}
 func (e *Executor) GetTmuxSessionEnv(ctx context.Context, sessionName, envVar string) (string, error) {
-	return "", nil
+	out, err := e.Execute(ctx, fmt.Sprintf("tmux show-environment -t %q %q 2>/dev/null", sessionName, envVar))
+	if err != nil {
+		return "", err
+	}
+	out = strings.TrimSpace(out)
+	if i := strings.IndexByte(out, '='); i >= 0 {
+		return out[i+1:], nil
+	}
+	return out, nil
+}
+
+func (e *Executor) GetTmuxSessionCWD(ctx context.Context, sessionName string) (string, error) {
+	out, err := e.Execute(ctx, fmt.Sprintf("tmux display-message -p -t %q '#{pane_current_path}' 2>/dev/null", sessionName))
+	return strings.TrimSpace(out), err
 }
 
 func (e *Executor) CaptureTmuxPane(ctx context.Context, sessionName string) (string, error) {
-	cmdStr := "tmux capture-pane -p -t " + sessionName + " -S -100"
-	return e.Execute(ctx, cmdStr)
+	return e.Execute(ctx, fmt.Sprintf("tmux capture-pane -p -t %q -S -100", sessionName))
 }
 
 func (e *Executor) AttachTmuxSession(sessionName string) *exec.Cmd { return nil }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bouwerp/aiman/internal/aimanskill"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
@@ -77,6 +78,23 @@ func (e *Engine) Sync(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func installBundledAimanSkill(ctx context.Context, remote domain.RemoteExecutor, worktreePath string) error {
+	if remote == nil || strings.TrimSpace(worktreePath) == "" || aimanskill.Text == "" {
+		return nil
+	}
+	paths := []string{
+		worktreePath + "/.agents/skills/aiman/SKILL.md",
+		worktreePath + "/.claude/skills/aiman/SKILL.md",
+	}
+	var first error
+	for _, p := range paths {
+		if err := remote.WriteFile(ctx, p, []byte(aimanskill.Text)); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 func (e *Engine) ListSkills() ([]domain.Skill, error) {
@@ -177,6 +195,8 @@ func buildSessionPrompt(files []string) string {
 func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue, snapshot *domain.SessionSnapshot) (domain.PreparedSession, error) {
 	name := strings.ToLower(agent.Name)
 	baseCommand := agentBaseCommand(agent.Command)
+
+	_ = installBundledAimanSkill(ctx, remote, worktreePath)
 
 	// Write JIRA task file if an issue is provided.
 	if issue != nil {

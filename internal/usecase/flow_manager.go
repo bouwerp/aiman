@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -151,6 +152,26 @@ func DeliverInitialPrompt(ctx context.Context, remote promptDeliverer, tmuxName,
 	_, _ = remote.Execute(ctx, detachCommand(sendKeysScript(tmuxName, promptPath, acceptWorkspaceTrust)))
 }
 
+// SendPrompt types text into an already-running tmux session using the
+// file-backed send-keys path. It does not wait for agent startup and does
+// not detach, so the caller can wait on pane state afterwards.
+func SendPrompt(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, prompt string) error {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil
+	}
+	promptPath := fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
+	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
+		return err
+	}
+	script := fmt.Sprintf(
+		"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter; rm -f %q",
+		tmuxName, promptPath, tmuxName, promptPath,
+	)
+	_, err := remote.Execute(ctx, script)
+	return err
+}
+
 // IsAntigravityAgent reports whether the agent is Antigravity CLI (agy). agy is
 // special-cased for prompt delivery because it presents a workspace-trust dialog
 // on first run that --dangerously-skip-permissions does not dismiss.
@@ -211,6 +232,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	session := &domain.Session{
 		ID:             uuid.New().String(),
+		Name:           config.Name,
+		Group:          config.Group,
 		IssueKey:       config.IssueKey,
 		Branch:         branch,
 		RepoName:       config.Repo.Name,
@@ -307,8 +330,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// the entire prompt.
 	sendKeysPrompt = joinPrompt(sendKeysPrompt, config.InitialPrompt)
 
-	// Step 8: Session (Tmux)
-	tmuxName := domain.SanitizeTmuxSessionName(branch)
+	// Step 8: Session (Tmux). The display Name is a renameable alias and must
+	// not become the tmux target; kill/capture/attach stay on the branch.
+	tmuxName := tmuxNameForCreate(branch, session.Name)
 
 	// Set AWS environment variables using the globally synced profile.
 	awsEnv := map[string]string{}
@@ -355,6 +379,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	for _, secret := range config.EnvSecrets {
 		extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 	}
+	// AIMAN_* is injected last so session secrets cannot override the gate.
+	extraEnvFlags += tmuxEnvFlags(aimanRuntimeEnv(session))
 	// Ensure the tmux server is running before touching global options
 	// (set-window-option -g fails silently if no server exists yet, leaving
 	// the default remain-on-exit=off that would cause the session to vanish
@@ -518,6 +544,40 @@ func SharedSessionAWSEnv(profileName, region string) map[string]string {
 	if region = strings.TrimSpace(region); region != "" {
 		env["AWS_REGION"] = region
 		env["AWS_DEFAULT_REGION"] = region
+	}
+	return env
+}
+
+// SessionRuntimeEnv is the AIMAN_* tmux environment for a session. Secrets
+// must not override these keys.
+// tmuxNameForCreate is the tmux session name for a new Aiman session.
+// displayName is ignored: renaming the session must not imply renaming tmux
+// or the worktree, so create never seeds tmux from the alias.
+func tmuxNameForCreate(branch, _ string) string {
+	return domain.SanitizeTmuxSessionName(branch)
+}
+
+func SessionRuntimeEnv(session *domain.Session) map[string]string {
+	return aimanRuntimeEnv(session)
+}
+
+func aimanRuntimeEnv(session *domain.Session) map[string]string {
+	env := map[string]string{
+		"AIMAN_ENV":        "1",
+		"AIMAN_ID":         strings.TrimSpace(session.ID),
+		"AIMAN_SESSION_ID": strings.TrimSpace(session.ID),
+	}
+	if session.Name != "" {
+		env["AIMAN_SESSION_NAME"] = session.Name
+	}
+	if session.Group != "" {
+		env["AIMAN_GROUP"] = session.Group
+	}
+	if dir, err := config.GetDir(); err == nil {
+		env["AIMAN_SOCKET_PATH"] = filepath.Join(dir, "aiman.sock")
+	}
+	if exe, err := os.Executable(); err == nil {
+		env["AIMAN_BIN_PATH"] = exe
 	}
 	return env
 }
