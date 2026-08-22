@@ -111,7 +111,7 @@ field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 
 **Why this matters:** The session discoverer (`Discover`) builds sessions from live remote state — it can only know what it can read from a running tmux process. Fields like `Branch`, `AgentName`, `WorktreePath`, and `WorkingDirectory` will often be empty in discovered sessions. Before this fix, discovery was silently overwriting the DB with empty strings on every scan cycle, causing restart to fail with "session has no working directory".
 
-**Fields protected by COALESCE:** `issue_key`, `branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `mutagen_sync_id`, `local_path`, `agent_name`.
+**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `mutagen_sync_id`, `local_path`, `agent_name`.
 
 **Fields always overwritten:** `status`, `updated_at`.
 
@@ -129,9 +129,11 @@ field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 - `MutagenSyncID` (from `mutagen sync list`)
 - Basic git branch info if the CWD is a git repo
 
-It does **not** read `Branch`, `AgentName`, `IssueKey`, `WorktreePath`, or `LocalPath` — those come from the DB.
+It does **not** read `Name`, `Group`, `Branch`, `AgentName`, `IssueKey`, `WorktreePath`, or `LocalPath` — those come from the DB.
 
-The `discoveryResultMsg` handler in `dashboard.go` (~line 4269) saves all discovered sessions to DB after each discovery cycle. This is where the stale-reference bug lived; it's now safe because of the COALESCE fix.
+`applyDiscoveryResult` overlays those DB fields onto live sessions (`overlayPersistedSessionFields`) so a scan cannot flatten names and groups in the TUI. Save still uses COALESCE so empty discovery writes do not wipe the DB.
+
+The `discoveryResultMsg` handler in `dashboard.go` saves discovered sessions to DB after each discovery cycle. Empty discovered fields are safe because of the COALESCE fix.
 
 Startup also prunes DB sessions whose explicit `RemoteHost` no longer matches any configured remote. This prevents deleted/retired remotes from resurrecting sticky orphaned sessions on restart.
 
