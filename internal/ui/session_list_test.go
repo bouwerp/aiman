@@ -31,6 +31,46 @@ func TestGroupedSessionItemsHeadersAndRollup(t *testing.T) {
 	}
 }
 
+func TestGroupedSessionTitlesNestUnderHeader(t *testing.T) {
+	flat := []item{
+		{session: domain.Session{ID: "2", Name: "reviewer", Group: "WTB-1925"}, needsInput: true, remoteName: "regent0"},
+		{session: domain.Session{ID: "1", Name: "impl", Group: "WTB-1925"}, activity: "busy", remoteName: "regent0"},
+		{session: domain.Session{ID: "3", Name: "q1", Group: "quick"}, activity: "idle", remoteName: "regent0"},
+	}
+	got := groupedSessionItems(flat)
+	h := got[0].(item)
+	ht := h.Title()
+	if !strings.HasPrefix(ht, "▸ WTB-1925") {
+		t.Fatalf("header title %q", ht)
+	}
+	if !strings.Contains(ht, "· 2") {
+		t.Fatalf("header should show session count, got %q", ht)
+	}
+	if !strings.Contains(ht, "[regent0]") {
+		t.Fatalf("header should carry the remote, got %q", ht)
+	}
+	if h.Description() != "" {
+		t.Fatalf("header description should be empty, got %q", h.Description())
+	}
+
+	mid := got[1].(item)
+	last := got[2].(item)
+	if !strings.HasPrefix(mid.Title(), "  ├─ ") {
+		t.Fatalf("first child %q", mid.Title())
+	}
+	if !strings.HasPrefix(last.Title(), "  └─ ") {
+		t.Fatalf("last child %q", last.Title())
+	}
+	if strings.Contains(mid.Title(), "[regent0]") || strings.Contains(last.Title(), "[regent0]") {
+		t.Fatalf("children should not repeat the remote tag: %q / %q", mid.Title(), last.Title())
+	}
+
+	q := got[4].(item)
+	if !strings.HasPrefix(q.Title(), "  └─ ") {
+		t.Fatalf("sole child of a group is a last branch, got %q", q.Title())
+	}
+}
+
 func TestRenderSessionPanelBlankWhenHeaderSelected(t *testing.T) {
 	cfg := twoRemoteCfg()
 	s := domain.Session{

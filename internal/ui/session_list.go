@@ -80,9 +80,11 @@ func groupedSessionItems(flat []item) []list.Item {
 			session:    domain.Session{Group: groupName},
 			remoteName: b.items[0].remoteName,
 			activity:   groupRollup(b.items),
+			groupN:     len(b.items),
 		}
 		out = append(out, header)
-		for _, it := range b.items {
+		for i, it := range b.items {
+			it.treeLast = i == len(b.items)-1
 			out = append(out, it)
 		}
 	}

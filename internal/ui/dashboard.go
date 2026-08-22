@@ -215,6 +215,8 @@ type item struct {
 	remoteName string // short name of the remote for display
 	syncStale  bool   // mutagen sync is missing/unhealthy/pointing at wrong host
 	header     bool   // group header row, not a session
+	groupN     int    // session count, set on headers
+	treeLast   bool   // last session in its group; draws └─ instead of ├─
 }
 
 func (i item) Title() string {
@@ -264,13 +266,17 @@ func (i item) Title() string {
 		if label == "" {
 			label = domain.GroupUngrouped
 		}
+		count := ""
+		if i.groupN > 0 {
+			count = fmt.Sprintf(" · %d", i.groupN)
+		}
 		if i.activity != "" {
 			activity = " • " + i.activity
 		}
 		if i.remoteName != "" {
 			remoteTag = " [" + i.remoteName + "]"
 		}
-		return fmt.Sprintf("▸ %s%s%s", label, activity, remoteTag)
+		return fmt.Sprintf("▸ %s%s%s%s", label, count, activity, remoteTag)
 	}
 	if i.session.Mode == domain.SessionModeAutonomous {
 		prefix = "🤖 " + prefix
@@ -283,10 +289,17 @@ func (i item) Title() string {
 			label = i.session.TmuxSession
 		}
 	}
-	return fmt.Sprintf("%s%s%s%s", prefix, label, activity, remoteTag)
+	branch := "  ├─ "
+	if i.treeLast {
+		branch = "  └─ "
+	}
+	return branch + prefix + label + activity
 }
 
 func (i item) Description() string {
+	if i.header {
+		return ""
+	}
 	agentLabel := i.session.AgentName
 	if i.session.AgentModel != "" {
 		agentLabel = fmt.Sprintf("%s (%s)", agentLabel, i.session.AgentModel)
