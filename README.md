@@ -182,7 +182,7 @@ aiman
 | `n` | **New Session** — Start the full JIRA-driven workflow wizard |
 | `N` | **Quick session** — Default remote, pick an agent, generated name in group `quick` |
 | `e` | **Rename** — Change the display name (tmux and worktree stay on the branch) |
-| `m` | **Admin Menu** — Configure remotes, JIRA, browse snapshots |
+| `m` | **Admin Menu** — Remotes, **Agent API**, JIRA, snapshots |
 | `↑/↓` | Navigate sessions |
 | `Enter` | Select item |
 | `ESC` | Go back / Cancel |
@@ -341,12 +341,13 @@ There is no HTTP, MCP, or TCP port. The CLI is a thin JSON wrapper over `~/.aima
 Do not run `aiman serve` on your laptop. That starts a local API, not the remote one.
 
 1. Open the dashboard: `aiman`
-2. Press **Tab** (Agent API and daemons)
-3. Select **agent API** on the remote (not `trigger`)
-4. Press **i** to install and enable
-5. Status should show `RUNNING` and `socket`
+2. Press **m** (Admin Menu)
+3. Select **Agent API**
+4. Select the remote
+5. Press **i** to install and enable
+6. Status should show `RUNNING` and socket `up`
 
-Creating a session also starts it if `~/.aiman/aiman.sock` is missing. `trigger` on the same tab is the autonomous GitHub/cron daemon; it is not what the skill talks to. `aiman serve --help` prints this path.
+Creating a session also starts it if `~/.aiman/aiman.sock` is missing. `aiman serve --help` prints this path. The Daemons tab (Tab) still lists `agent API` next to `trigger` (the GitHub/cron daemon); the skill talks only to the agent API.
 
 | Key | Action |
 |---|---|

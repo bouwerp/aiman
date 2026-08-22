@@ -22,8 +22,7 @@ func TestPrintServeUsageTellsOperatorTheTUIPath(t *testing.T) {
 	out := b.String()
 	for _, want := range []string{
 		"agent API",
-		`select "agent API"`,
-		"Tab",
+		"m  →  Agent API",
 		"i  install/enable",
 		"~/.aiman/aiman.sock",
 		"Do not run this on your laptop",

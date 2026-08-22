@@ -5,7 +5,7 @@ description: "Control Aiman sessions on this host. Use only when AIMAN_ENV=1 is 
 
 # Aiman
 
-Aiman runs coding-agent sessions in tmux on this machine. The `aiman` CLI talks to the **agent API** (`aiman serve`) over a local Unix socket. The laptop operator starts that process from the TUI: Tab, select **agent API**, press `i`. Do not start or stop it yourself. If a command returns `server_not_running`, tell the operator the agent API is down.
+Aiman runs coding-agent sessions in tmux on this machine. The `aiman` CLI talks to the **agent API** (`aiman serve`) over a local Unix socket. The laptop operator starts that process from Admin Menu (`m`) → **Agent API** → `i`. Do not start or stop it yourself. If a command returns `server_not_running`, tell the operator the agent API is down.
 
 Before any control command:
 
