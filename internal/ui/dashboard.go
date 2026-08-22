@@ -454,6 +454,7 @@ type Model struct {
 	lastGitStatusUpdate    time.Time
 	restartingSession      *domain.Session
 	changingDirSession     *domain.Session
+	renamingSessionID      string
 	flowManager            *usecase.FlowManager
 	firstLoad              map[string]bool
 	busySince              map[string]time.Time // when each session entered "busy" state
@@ -4421,6 +4422,8 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			initial = it.session.TmuxSession
 		}
 		m.genericInput = NewTextInputModel("Rename session", "name", initial)
+		m.genericInput.textInput.CharLimit = 48
+		m.renamingSessionID = it.session.ID
 		m.state = viewStateRenameSession
 		return m, m.genericInput.Init(), true
 	}

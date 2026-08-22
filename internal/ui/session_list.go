@@ -211,6 +211,7 @@ func (m *Model) startQuickSession() (tea.Model, tea.Cmd) {
 
 func (m *Model) handleRenameSessionUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.renamingSessionID = ""
 		m.state = viewStateMain
 		return m, nil
 	}
@@ -219,33 +220,35 @@ func (m *Model) handleRenameSessionUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.genericInput.Confirmed {
 		return m, cmd
 	}
-	name := strings.TrimSpace(m.genericInput.Value())
-	it, ok := m.selectedSessionItem()
+	name := strings.Join(strings.Fields(strings.TrimSpace(m.genericInput.Value())), "-")
+	sess, ok := m.sessionForRename()
 	if !ok {
+		m.renamingSessionID = ""
 		m.state = viewStateMain
 		return m, nil
 	}
 	if err := domain.ValidateSessionName(name); err != nil {
 		m.genericInput.Confirmed = false
-		m.log("%v", err)
+		m.genericInput.Error = "Start with a letter; use letters, digits, _ or - (max 48)."
 		return m, nil
 	}
 	others := make([]domain.Session, 0, len(m.allSessions))
 	for _, s := range m.allSessions {
-		if s.ID != it.session.ID && s.RemoteHost == it.session.RemoteHost {
+		if s.ID != sess.ID && s.RemoteHost == sess.RemoteHost {
 			others = append(others, s)
 		}
 	}
 	if domain.NameTaken(others, name) {
 		m.genericInput.Confirmed = false
-		m.log("name %q already in use", name)
+		m.genericInput.Error = "That name is already in use on this remote."
 		return m, nil
 	}
-	sess := it.session
 	sess.Name = name
 	if m.db != nil {
 		if err := m.db.Save(context.Background(), &sess); err != nil {
-			m.log("rename save: %v", err)
+			m.genericInput.Confirmed = false
+			m.genericInput.Error = "Could not save: " + err.Error()
+			return m, nil
 		}
 	}
 	for i, s := range m.allSessions {
@@ -254,9 +257,25 @@ func (m *Model) handleRenameSessionUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 	}
+	m.renamingSessionID = ""
 	m.applyRemoteFilter()
 	m.state = viewStateMain
 	return m, nil
+}
+
+func (m *Model) sessionForRename() (domain.Session, bool) {
+	if m.renamingSessionID != "" {
+		for _, s := range m.allSessions {
+			if s.ID == m.renamingSessionID {
+				return s, true
+			}
+		}
+	}
+	it, ok := m.selectedSessionItem()
+	if !ok {
+		return domain.Session{}, false
+	}
+	return it.session, true
 }
 
 func (m *Model) ensureRemoteServer(ctx context.Context, sshMgr *ssh.Manager) error {
