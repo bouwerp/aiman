@@ -26,6 +26,9 @@ type serviceOpMsg struct {
 }
 
 func (m *Model) selectedDaemon() (domain.Daemon, bool) {
+	if m.state == viewStateAgentAPI {
+		return m.selectedAgentAPIDaemon()
+	}
 	sel := m.daemonList.SelectedItem()
 	di, ok := sel.(daemonItem)
 	if !ok {
@@ -125,7 +128,7 @@ func (m *Model) applyDaemonProbe(msg daemonProbeMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) applyServiceOp(msg serviceOpMsg) (tea.Model, tea.Cmd) {
-	m.state = viewStateMain
+	m.state = m.loadingNext
 	if msg.err != nil {
 		m.lastError = fmt.Sprintf("%s %s on %s: %v", msg.op, msg.kind, msg.host, msg.err)
 		m.state = viewStateError
@@ -148,7 +151,11 @@ func (m *Model) runSelectedServiceOp(op, loading string) (tea.Model, tea.Cmd, bo
 		kind = remotesvc.KindTrigger
 	}
 	m.loadingMsg = loading + " " + string(kind) + " on " + d.RemoteHost + "..."
-	m.loadingNext = viewStateMain
+	if m.state == viewStateAgentAPI {
+		m.loadingNext = viewStateAgentAPI
+	} else {
+		m.loadingNext = viewStateMain
+	}
 	m.state = viewStateLoading
 	return m, remoteServiceOpCmd(m.cfg, d.RemoteHost, kind, op), true
 }

@@ -112,7 +112,7 @@ In-pane agents talk to this process over ~/.aiman/aiman.sock
 
 Do not run this on your laptop to enable remotes. Start it from the TUI:
 
-  Tab  →  select "agent API" on the remote  →  i  install/enable
+  m  →  Agent API  →  select the remote  →  i  install/enable
   s restart   c reload   u update   ctrl+k stop   r probe
 
 Foreground on the remote (debugging):

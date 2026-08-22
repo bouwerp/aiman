@@ -168,6 +168,7 @@ const (
 	viewStateAutonomousConcurrencyInput
 	viewStateTriggerDetails
 	viewStateRenameSession
+	viewStateAgentAPI // install/monitor/restart aiman serve on remotes
 )
 
 type mainTab int
@@ -403,6 +404,7 @@ type Model struct {
 	list             list.Model
 	daemonList       list.Model
 	daemons          map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
+	agentAPICursor   int                      // selected remote on the Agent API settings page
 	currentTab       mainTab
 	menu             list.Model
 	remotes          RemotesModel
@@ -746,6 +748,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 
 	menuItems := []list.Item{
 		menuItem{title: "Manage Remote Servers", desc: "Add, edit, or remove remote dev servers", action: viewStateRemotes},
+		menuItem{title: "Agent API", desc: "Install, monitor, restart, and update aiman serve on remotes", action: viewStateAgentAPI},
 		menuItem{title: "Provision Remote Server", desc: "100% setup: install gh, agents, node, and skills", action: viewStateProvisioningRemotePicker},
 		menuItem{title: "Auth Setup Wizard", desc: "Guided auth checks and instructions per remote tool", action: viewStateAuthRemotePicker},
 		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
@@ -2699,6 +2702,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applySyncHealthMsg(msg, cmds)
 	case sessionCreateMsg:
 		return m.applySessionCreateMsg(msg, cmds)
+	case daemonProbeMsg:
+		return m.applyDaemonProbe(msg)
+	case serviceOpMsg:
+		return m.applyServiceOp(msg)
 	}
 
 	if model, cmd, handled := m.updateByState(msg); handled {
@@ -2751,6 +2758,10 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 
 	case viewStateAWSCredentials:
 		model, cmd := m.handleAWSCredentialsUpdate(msg)
+		return model, cmd, true
+
+	case viewStateAgentAPI:
+		model, cmd := m.handleAgentAPIUpdate(msg)
 		return model, cmd, true
 
 	case viewStateSnapshotBrowser:
@@ -3145,6 +3156,9 @@ func (m *Model) renderView() string {
 
 	case viewStateAWSCredentials:
 		return m.awsCredentials.View()
+
+	case viewStateAgentAPI:
+		return m.renderAgentAPIView()
 
 	case viewStateSnapshotBrowser:
 		return docStyle.Render(m.snapshotBrowser.View())
@@ -3776,10 +3790,6 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 	case attachDoneMsg:
 		return m.applyAttachDone(msg, cmds)
-	case daemonProbeMsg:
-		return m.applyDaemonProbe(msg)
-	case serviceOpMsg:
-		return m.applyServiceOp(msg)
 	case tmuxTerminalMsg:
 		if msg.err != nil {
 			m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
@@ -4815,6 +4825,9 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if i.action == viewStateAWSCredentials {
 					return m, m.enterAWSCredentials()
+				}
+				if i.action == viewStateAgentAPI {
+					return m, m.enterAgentAPI()
 				}
 				if i.action == viewStateSnapshotBrowser {
 					m.snapshotBrowser = NewSnapshotBrowserModel(m.width, m.height, m.snapshotManager)
@@ -6211,11 +6224,6 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
 			return attachDoneMsg{err: err}
 		})
-	case serviceOpMsg:
-		return m.applyServiceOp(msg)
-	case daemonProbeMsg:
-		m.state = viewStateMain
-		return m.applyDaemonProbe(msg)
 	case attachDoneMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
