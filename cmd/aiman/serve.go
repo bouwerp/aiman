@@ -23,6 +23,10 @@ import (
 )
 
 func runServe() error {
+	if serveWantsHelp(os.Args[2:]) {
+		printServeUsage(os.Stdout)
+		return nil
+	}
 	if err := config.EnsureDir(); err != nil {
 		return err
 	}
@@ -89,4 +93,32 @@ func runServe() error {
 	srv := server.New(ln, db, localExec, flow, version)
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
+}
+
+func serveWantsHelp(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func printServeUsage(w io.Writer) {
+	fmt.Fprint(w, `aiman serve — agent API on THIS host
+
+In-pane agents talk to this process over ~/.aiman/aiman.sock
+(aiman session … and the skill). One instance per host.
+
+Do not run this on your laptop to enable remotes. Start it from the TUI:
+
+  Tab  →  select "agent API" on the remote  →  i  install/enable
+  s restart   c reload   u update   ctrl+k stop   r probe
+
+Foreground on the remote (debugging):
+  aiman serve
+
+systemd --user (installed by the TUI):
+  systemctl --user status aiman-serve
+`)
 }

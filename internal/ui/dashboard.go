@@ -197,12 +197,19 @@ type daemonItem struct {
 	daemon domain.Daemon
 }
 
-func (i daemonItem) Title() string {
-	kind := i.daemon.Kind
-	if kind == "" {
-		kind = "trigger"
+func daemonKindLabel(kind string) string {
+	switch kind {
+	case string(remotesvc.KindServe):
+		return "agent API"
+	case "":
+		return "trigger"
+	default:
+		return kind
 	}
-	return kind + "  ·  " + i.daemon.RemoteHost
+}
+
+func (i daemonItem) Title() string {
+	return daemonKindLabel(i.daemon.Kind) + "  ·  " + i.daemon.RemoteHost
 }
 
 func (i daemonItem) Description() string {
@@ -210,11 +217,14 @@ func (i daemonItem) Description() string {
 	if i.daemon.Version != "" && i.daemon.Version != "missing" {
 		extra += "  " + i.daemon.Version
 	}
-	if i.daemon.Kind == "serve" {
+	if i.daemon.Kind == string(remotesvc.KindServe) {
 		if i.daemon.SocketOK {
 			extra += "  socket"
 		} else if i.daemon.Status == domain.DaemonStatusRunning {
 			extra += "  no-socket"
+		}
+		if i.daemon.Status != domain.DaemonStatusRunning {
+			extra += "  press i to install"
 		}
 	}
 	if i.daemon.Driver != "" && i.daemon.Driver != "none" {
@@ -224,7 +234,7 @@ func (i daemonItem) Description() string {
 }
 
 func (i daemonItem) FilterValue() string {
-	return i.daemon.RemoteHost + " " + i.daemon.Kind
+	return i.daemon.RemoteHost + " " + i.daemon.Kind + " " + daemonKindLabel(i.daemon.Kind)
 }
 
 type item struct {
@@ -670,10 +680,10 @@ func (m *Model) applyRemoteFilter() {
 
 	if m.remoteFilter == "" {
 		m.list.Title = "Aiman Dashboard - Active Sessions"
-		m.daemonList.Title = "Aiman Dashboard - Remote Daemons"
+		m.daemonList.Title = "Aiman Dashboard - Agent API and daemons"
 	} else {
 		m.list.Title = "Sessions [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
-		m.daemonList.Title = "Daemons [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
+		m.daemonList.Title = "Agent API [" + remoteNameForHost(m.cfg, m.remoteFilter) + "]"
 	}
 
 	// Until the first scan lands the list is whatever the database last recorded,
@@ -714,22 +724,22 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
 			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "view trigger details (autonomous)")),
-			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch tabs")),
+			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "sessions / agent API")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 		}
 	}
 
 	dl := list.New(nil, list.NewDefaultDelegate(), 0, 0)
-	dl.Title = "Aiman Dashboard - Remote Daemons"
+	dl.Title = "Aiman Dashboard - Agent API and daemons"
 	dl.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "start/restart service")),
-			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "install/enable service")),
+			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "install/enable agent API")),
 			key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "update binary and restart")),
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "reload config (restart)")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "stop service")),
-			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch tabs")),
+			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "sessions / agent API")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 		}
 	}
@@ -6613,7 +6623,7 @@ func (m *Model) renderMainView() string {
 
 	helpText := "n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • R: AWS creds • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit"
 	if m.currentTab == tabDaemons {
-		helpText = "i: install • s: restart • c: reload • u: update • r: probe • ctrl+k: stop • tab: sessions • q: quit"
+		helpText = "agent API: i install • s restart • c reload • u update • r probe • ctrl+k stop • tab: sessions • q: quit"
 	}
 	versionText := m.version
 
@@ -6888,17 +6898,23 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 		if kind == "" {
 			kind = "trigger"
 		}
+		label := daemonKindLabel(kind)
 		daemonLines := []string{
-			activeStyle.Render(kind) + "  " + d.RemoteHost,
-			"Status: " + statusLabel,
+			activeStyle.Render(label) + "  " + d.RemoteHost,
 		}
+		if kind == string(remotesvc.KindServe) {
+			daemonLines = append(daemonLines, "In-pane agents talk to this process (skill / aiman session).")
+		} else {
+			daemonLines = append(daemonLines, "Autonomous GitHub/cron trigger daemon.")
+		}
+		daemonLines = append(daemonLines, "Status: "+statusLabel)
 		if d.Driver != "" && d.Driver != "none" {
 			daemonLines = append(daemonLines, "Driver: "+d.Driver)
 		}
 		if d.Version != "" {
 			daemonLines = append(daemonLines, "Version: "+d.Version)
 		}
-		if kind == "serve" {
+		if kind == string(remotesvc.KindServe) {
 			if d.SocketOK {
 				daemonLines = append(daemonLines, "Socket: "+successStyle.Render("~/.aiman/aiman.sock"))
 			} else {
@@ -6909,17 +6925,21 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 			daemonLines = append(daemonLines, "Last Seen: "+d.UpdatedAt.Format("15:04:05"))
 		}
 
-		var managed []string
-		for _, s := range m.allSessions {
-			if s.RemoteHost == d.RemoteHost && s.Mode == domain.SessionModeAutonomous {
-				managed = append(managed, fmt.Sprintf("- %s (%s)", s.IssueKey, s.Status))
+		if kind != string(remotesvc.KindServe) {
+			var managed []string
+			for _, s := range m.allSessions {
+				if s.RemoteHost == d.RemoteHost && s.Mode == domain.SessionModeAutonomous {
+					managed = append(managed, fmt.Sprintf("- %s (%s)", s.IssueKey, s.Status))
+				}
 			}
-		}
-		if len(managed) > 0 {
-			daemonLines = append(daemonLines, "", activeStyle.Render("Managed Sessions:"))
-			daemonLines = append(daemonLines, managed...)
-		} else {
-			daemonLines = append(daemonLines, "", "No active autonomous sessions.")
+			if len(managed) > 0 {
+				daemonLines = append(daemonLines, "", activeStyle.Render("Managed Sessions:"))
+				daemonLines = append(daemonLines, managed...)
+			} else {
+				daemonLines = append(daemonLines, "", "No active autonomous sessions.")
+			}
+		} else if d.Status != domain.DaemonStatusRunning {
+			daemonLines = append(daemonLines, "", "Press i to install and enable. Agents cannot use the skill until this is RUNNING and the socket is up.")
 		}
 
 		sep := statusStyle.Render(strings.Repeat("─", contentW))
@@ -6928,14 +6948,16 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 
 		var outputPanel strings.Builder
 		outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
-		outputPanel.WriteString(statusStyle.Render("Logs  s restart  i install  u update  c reload  ctrl+k stop") + "\n")
+		outputPanel.WriteString(statusStyle.Render("i install/enable  s restart  c reload  u update  r probe  ctrl+k stop") + "\n")
 		switch {
 		case strings.TrimSpace(m.viewport.View()) != "":
 			outputPanel.WriteString(m.viewport.View())
 		case d.Logs != "":
 			outputPanel.WriteString(d.Logs)
+		case kind == string(remotesvc.KindServe) && d.Status != domain.DaemonStatusRunning:
+			outputPanel.WriteString("\n  Agent API is not running. Press i to install and enable it on this remote.")
 		case d.Status != domain.DaemonStatusRunning:
-			outputPanel.WriteString("\n  Service is not running.")
+			outputPanel.WriteString("\n  Service is not running. Press i to install.")
 		default:
 			outputPanel.WriteString("\n  Press r to fetch logs.")
 		}

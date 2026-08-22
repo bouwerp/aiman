@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -19,7 +20,7 @@ func TestDaemonListHasServeAndTriggerPerRemote(t *testing.T) {
 	if !ok || first.daemon.Kind != string(remotesvc.KindServe) {
 		t.Fatalf("first %+v", items[0])
 	}
-	if first.Title() != "serve  ·  10.0.1.5" {
+	if first.Title() != "agent API  ·  10.0.1.5" {
 		t.Fatalf("title %q", first.Title())
 	}
 	second := items[1].(daemonItem)
@@ -44,6 +45,15 @@ func TestStoreDaemonRoundTrip(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	if desc := m.daemonList.Items()[0].(daemonItem).Description(); desc != "RUNNING  aiman v0.10.1  socket  systemd" {
+		t.Fatalf("desc %q", desc)
+	}
+}
+
+func TestStoppedServeDescriptionTellsOperatorToInstall(t *testing.T) {
+	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.applyRemoteFilter()
+	desc := m.daemonList.Items()[0].(daemonItem).Description()
+	if !strings.Contains(desc, "press i to install") {
 		t.Fatalf("desc %q", desc)
 	}
 }

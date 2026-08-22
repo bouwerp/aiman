@@ -28,7 +28,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Quick start (`N`)**: Default remote, agent picker only, generated `q1`/`q2`/… in group `quick`
 - **Names and groups**: Every session has a unique display `name` and a `group`; the sidebar is a tree of groups, not a flat list
 - **Session Management**: Track active sessions with live tmux pane previews
-- **Remote `aiman serve`**: Headless JSON server on each remote so agents in tmux can list, create, prompt, and wait on sibling sessions
+- **Agent API (`aiman serve`)**: One JSON server per remote; start it from the TUI (Tab → **agent API** → `i`) so in-pane agents can list, create, prompt, and wait on sibling sessions
 - **Agent skill**: `aiman --skill` prints a Markdown skill gated on `AIMAN_ENV=1`
 
 ### AI Intelligence
@@ -330,28 +330,36 @@ Quickly browse GitHub repositories:
 aiman repos
 ```
 
-## Remote server and agent CLI
+## Agent API (`aiman serve`)
 
-The laptop TUI is the human control plane. Each remote also runs a headless **`aiman serve`** process so an agent *inside* a tmux pane can talk to sibling sessions on that host: list them, start a helper, send a prompt, wait until it is idle or blocked. tmux stays the multiplexer. Mutagen, JIRA tokens, and the laptop SQLite file stay on the laptop.
+Agents inside a tmux session talk to **one server per remote**, not to the laptop TUI. That process is `aiman serve` (the agent API). The skill (`aiman --skill`) and `aiman session …` are clients of it. tmux stays the multiplexer. Mutagen, JIRA tokens, and the laptop SQLite file stay on the laptop.
 
-There is no HTTP, MCP, or TCP port. The CLI is a thin JSON wrapper over a Unix socket.
+There is no HTTP, MCP, or TCP port. The CLI is a thin JSON wrapper over `~/.aiman/aiman.sock`.
 
-### `aiman serve`
+### Start and manage it from the laptop
 
-Runs on the **remote** as a user service, independent of the laptop TUI and of tmux. The dashboard **Daemons** tab (Tab) lists `serve` and `trigger` for every remote. The same keys work for both.
+Do not run `aiman serve` on your laptop. That starts a local API, not the remote one.
+
+1. Open the dashboard: `aiman`
+2. Press **Tab** (Agent API and daemons)
+3. Select **agent API** on the remote (not `trigger`)
+4. Press **i** to install and enable
+5. Status should show `RUNNING` and `socket`
+
+Creating a session also starts it if `~/.aiman/aiman.sock` is missing. `trigger` on the same tab is the autonomous GitHub/cron daemon; it is not what the skill talks to. `aiman serve --help` prints this path.
 
 | Key | Action |
 |---|---|
-| `i` | Install the binary if missing, `loginctl enable-linger`, write the systemd `--user` unit, `enable --now` |
+| `i` | Install the binary if missing, enable linger, write the systemd `--user` unit, start it |
 | `s` | Start or restart |
 | `c` | Reload (restart; serve re-reads remote `~/.aiman/config.yaml`) |
 | `u` | Reinstall the latest GitHub release, then restart |
 | `ctrl+k` | Stop |
 | `r` | Probe status, version, socket (serve), and logs |
 
-Linger is enabled *before* `systemctl --user` so the first SSH to a host with no lingering user instance can still install. Scripts set `XDG_RUNTIME_DIR` and the session bus so `systemctl --user` works over SSH. If user systemd is still unavailable, Aiman falls back to `nohup` plus `~/.aiman/serve.pid` (or `trigger.pid`). Linger is what keeps the process running after SSH disconnects. Creating a session also installs `serve` if `~/.aiman/aiman.sock` is missing.
+Linger is enabled *before* `systemctl --user` so the first SSH to a host with no lingering user instance can still install. Scripts set `XDG_RUNTIME_DIR` and the session bus so `systemctl --user` works over SSH. If user systemd is still unavailable, Aiman falls back to `nohup` plus `~/.aiman/serve.pid` (or `trigger.pid`).
 
-Manual on the remote:
+Foreground on the remote (debugging):
 
 ```bash
 aiman serve
