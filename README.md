@@ -338,22 +338,36 @@ There is no HTTP, MCP, or TCP port. The CLI is a thin JSON wrapper over a Unix s
 
 ### `aiman serve`
 
-Runs on the **remote**, typically in tmux session `aiman-serve`. The dashboard starts it when it needs to (installs `~/.local/bin/aiman` if missing, then `tmux new-session -d -s aiman-serve 'aiman serve'`).
+Runs on the **remote** as a user service, independent of the laptop TUI and of tmux. The dashboard **Daemons** tab (Tab) lists `serve` and `trigger` for every remote. The same keys work for both.
 
-Manual:
+| Key | Action |
+|---|---|
+| `i` | Install the binary if missing, `loginctl enable-linger`, write the systemd `--user` unit, `enable --now` |
+| `s` | Start or restart |
+| `c` | Reload (restart; serve re-reads remote `~/.aiman/config.yaml`) |
+| `u` | Reinstall the latest GitHub release, then restart |
+| `ctrl+k` | Stop |
+| `r` | Probe status, version, socket (serve), and logs |
+
+Linger is enabled *before* `systemctl --user` so the first SSH to a host with no lingering user instance can still install. Scripts set `XDG_RUNTIME_DIR` and the session bus so `systemctl --user` works over SSH. If user systemd is still unavailable, Aiman falls back to `nohup` plus `~/.aiman/serve.pid` (or `trigger.pid`). Linger is what keeps the process running after SSH disconnects. Creating a session also installs `serve` if `~/.aiman/aiman.sock` is missing.
+
+Manual on the remote:
 
 ```bash
 aiman serve
+# or
+systemctl --user status aiman-serve
 ```
 
 | Item | Path |
 |---|---|
 | Socket | `~/.aiman/aiman.sock` (`0o600`) |
 | Lock | `~/.aiman/aiman.sock.lock` (one instance per host) |
-| Log | `~/.aiman/serve.log` (also stderr) |
+| Log | `~/.aiman/serve.log` (and `journalctl --user -u aiman-serve` when systemd) |
+| Unit | `~/.config/systemd/user/aiman-serve.service` |
 | Override | `AIMAN_SOCKET_PATH` |
 
-A second `aiman serve` on the same host fails with `already_running`. `aiman serve` is Unix-only (not Windows). Stop it with `tmux kill-session -t aiman-serve`, not by running `aiman serve` again.
+A second instance fails with `already_running`. `aiman serve` is Unix-only (not Windows).
 
 The server uses the remote `~/.aiman/config.yaml` (often sparse) and `~/.aiman/aiman.db`. Session create on the remote does **not** start mutagen or push AWS STS; those remain TUI/laptop concerns. The new tmux session inherits whatever is already in remote `~/.aws`.
 
@@ -743,6 +757,7 @@ Aiman follows **Clean Architecture** principles:
 - [x] Self-update (`aiman update`) and downgrade (`aiman downgrade [tag]`)
 - [x] Autonomous trigger daemon (`aiman-trigger`) released per platform and installable onto a remote from the Daemons tab
 - [x] Remote `aiman serve` + JSON `aiman session` CLI (list/get/create/prompt/wait/read/rename/move)
+- [x] `aiman serve` / `aiman-trigger` as systemd `--user` services (linger), install/monitor/restart/update from the Daemons tab
 - [x] Session names and groups, TUI grouped sidebar, quick start (`N`) and rename (`e`)
 - [x] Bundled agent skill (`aiman --skill`), gated on `AIMAN_ENV=1`
 - [ ] Git intelligence panel

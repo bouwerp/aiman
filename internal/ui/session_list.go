@@ -9,6 +9,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/remotesvc"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -263,12 +264,9 @@ func (m *Model) ensureRemoteServer(ctx context.Context, sshMgr *ssh.Manager) err
 	if _, err := sshMgr.Execute(ctx, "test -S ~/.aiman/aiman.sock"); err == nil {
 		return nil
 	}
-	if _, err := sshMgr.Execute(ctx, "test -x ~/.local/bin/aiman"); err != nil {
-		installCmd := "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | sh"
-		if _, err := sshMgr.Execute(ctx, installCmd); err != nil {
-			return fmt.Errorf("install aiman on remote: %w", err)
-		}
+	script := remotesvc.InstallEnableScript(remotesvc.KindServe)
+	if _, err := execRemoteScript(sshMgr, ctx, "/tmp/aiman-install-serve.sh", script); err != nil {
+		return fmt.Errorf("installing aiman serve: %w", err)
 	}
-	_, _ = sshMgr.Execute(ctx, "tmux has-session -t aiman-serve 2>/dev/null || tmux new-session -d -s aiman-serve 'aiman serve'")
 	return nil
 }

@@ -93,6 +93,15 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	return m.executeWithTimeout(ctx, cmdStr, sshCommandTimeout)
 }
 
+// ExecuteWithTimeout is Execute with a caller-chosen deadline. Use it for
+// remote work that legitimately exceeds sshCommandTimeout (installers, updates).
+func (m *Manager) ExecuteWithTimeout(ctx context.Context, cmdStr string, timeout time.Duration) (string, error) {
+	if timeout <= 0 {
+		timeout = sshCommandTimeout
+	}
+	return m.executeWithTimeout(ctx, cmdStr, timeout)
+}
+
 // executeWithTimeout runs a remote command with an explicit per-call deadline.
 // Batch discovery scans do far more work per round trip than a single command,
 // so they need a longer budget than sshCommandTimeout allows.

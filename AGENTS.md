@@ -57,7 +57,8 @@ internal/
     snapshot.go     — SnapshotManager (archive, compress, AI summarise)
     doctor.go       — startup health checks
   infra/
-    ssh/manager.go  — SSH ControlMaster multiplexer (Execute, WriteFile, ResetControlSocket)
+    ssh/manager.go  — SSH ControlMaster multiplexer (Execute, ExecuteWithTimeout, WriteFile, ResetControlSocket)
+    remotesvc/      — systemd --user unit + nohup scripts for remote serve/trigger
     sqlite/repository.go — SQLite persistence (sessions + snapshots + secrets)
     mutagen/        — mutagen sync engine
     git/            — git worktree management, PR metadata via gh CLI
@@ -143,11 +144,36 @@ Startup also prunes DB sessions whose explicit `RemoteHost` no longer matches an
 Key behaviours:
 - Uses `ControlMaster=auto` + `ControlPersist=10m` — all calls to the same host share one socket
 - Socket path: `~/.aiman/sockets/ssh-<sha1(user@host)[:16]>.sock`
-- Per-call timeout: **30 seconds** (via `context.WithTimeout`)
+- Per-call timeout: **30 seconds** (`Execute`). `ExecuteWithTimeout` is for work that exceeds that (remote install/update uses `remotesvc.OpTimeout`, 3 minutes).
 - On transport errors: clears socket, retries up to 2×, then falls back to `ControlMaster=no`
 - `ResetControlSocket()`: sends `ssh -O exit` to gracefully stop the master, then removes the socket file. Call this before disruptive remote operations (e.g. tmux kill-session) to ensure a clean connection for the next call.
 
 **Do not** add "permission denied" removal from `isRetriableSSHTransportError` without testing — it causes 4× retries on auth failures which wastes 120s.
+
+---
+
+## Remote serve / trigger as a service
+
+**File:** `internal/infra/remotesvc/remotesvc.go`
+
+`aiman serve` and `aiman-trigger` run on remotes as systemd `--user` units (`aiman-serve.service`, `aiman-trigger.service`) with `loginctl enable-linger`. They are independent of the laptop TUI and of tmux. If user systemd is unavailable, fallback is `nohup` plus `~/.aiman/{serve,trigger}.pid`.
+
+The Daemons tab (Tab) lists both kinds per remote:
+
+| Key | Action |
+|---|---|
+| `i` | Install/enable (linger first, then the unit) |
+| `s` | Start or restart |
+| `c` | Reload (restart; serve re-reads remote `~/.aiman/config.yaml`) |
+| `u` | Update binary from GitHub, then restart |
+| `ctrl+k` | Stop |
+| `r` | Probe driver/status/version/socket/logs |
+
+Session create also calls `ensureRemoteServer` if `~/.aiman/aiman.sock` is missing.
+
+SSH `systemctl --user` needs `XDG_RUNTIME_DIR` and the session bus; the scripts set those. Linger is enabled *before* `systemctl --user` so a first SSH to a host with no lingering user instance can still install.
+
+Do not run serve inside tmux. Probe on select, `r`, after an op, and after discovery — not on the tmux pane ticker.
 
 ---
 

@@ -27,6 +27,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
+	"github.com/bouwerp/aiman/internal/infra/remotesvc"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/usecase"
@@ -197,15 +198,33 @@ type daemonItem struct {
 }
 
 func (i daemonItem) Title() string {
-	return i.daemon.RemoteHost
+	kind := i.daemon.Kind
+	if kind == "" {
+		kind = "trigger"
+	}
+	return kind + "  ·  " + i.daemon.RemoteHost
 }
 
 func (i daemonItem) Description() string {
-	return string(i.daemon.Status)
+	extra := string(i.daemon.Status)
+	if i.daemon.Version != "" && i.daemon.Version != "missing" {
+		extra += "  " + i.daemon.Version
+	}
+	if i.daemon.Kind == "serve" {
+		if i.daemon.SocketOK {
+			extra += "  socket"
+		} else if i.daemon.Status == domain.DaemonStatusRunning {
+			extra += "  no-socket"
+		}
+	}
+	if i.daemon.Driver != "" && i.daemon.Driver != "none" {
+		extra += "  " + i.daemon.Driver
+	}
+	return extra
 }
 
 func (i daemonItem) FilterValue() string {
-	return i.daemon.RemoteHost
+	return i.daemon.RemoteHost + " " + i.daemon.Kind
 }
 
 type item struct {
@@ -373,7 +392,7 @@ type Model struct {
 	panelMode        panelMode
 	list             list.Model
 	daemonList       list.Model
-	daemons          map[string]domain.Daemon // Keyed by RemoteHost
+	daemons          map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
 	currentTab       mainTab
 	menu             list.Model
 	remotes          RemotesModel
@@ -598,16 +617,25 @@ func (m *Model) applyRemoteFilter() {
 	}
 	filtered := groupedSessionItems(flat)
 
-	// Rebuild daemon list based on configured remotes and active daemon sessions
+	selHost, selKind := "", ""
+	if d, ok := m.selectedDaemon(); ok {
+		selHost, selKind = d.RemoteHost, d.Kind
+	}
+	// Rebuild daemon list: serve + trigger per remote.
 	for _, r := range m.cfg.Remotes {
 		if m.remoteFilter != "" && r.Host != m.remoteFilter {
 			continue
 		}
-		d, exists := m.daemons[r.Host]
-		if !exists {
-			d = domain.Daemon{RemoteHost: r.Host, Status: domain.DaemonStatusStopped}
+		for _, kind := range []string{string(remotesvc.KindServe), string(remotesvc.KindTrigger)} {
+			d, exists := m.daemons[domain.DaemonKey(r.Host, kind)]
+			if !exists {
+				d = domain.Daemon{RemoteHost: r.Host, Kind: kind, Status: domain.DaemonStatusStopped}
+			}
+			if d.Kind == "" {
+				d.Kind = kind
+			}
+			daemonItems = append(daemonItems, daemonItem{daemon: d})
 		}
-		daemonItems = append(daemonItems, daemonItem{daemon: d})
 	}
 
 	m.list.SetItems(filtered)
@@ -627,6 +655,18 @@ func (m *Model) applyRemoteFilter() {
 		m.selectFirstSessionRow()
 	}
 	m.daemonList.SetItems(daemonItems)
+	if selHost != "" {
+		for i, it := range daemonItems {
+			di, ok := it.(daemonItem)
+			if !ok {
+				continue
+			}
+			if di.daemon.RemoteHost == selHost && di.daemon.Kind == selKind {
+				m.daemonList.Select(i)
+				break
+			}
+		}
+	}
 
 	if m.remoteFilter == "" {
 		m.list.Title = "Aiman Dashboard - Active Sessions"
@@ -684,8 +724,11 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	dl.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
-			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "start/restart daemon")),
-			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "kill daemon")),
+			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "start/restart service")),
+			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "install/enable service")),
+			key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "update binary and restart")),
+			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "reload config (restart)")),
+			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "stop service")),
 			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch tabs")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 		}
@@ -3723,6 +3766,10 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 	case attachDoneMsg:
 		return m.applyAttachDone(msg, cmds)
+	case daemonProbeMsg:
+		return m.applyDaemonProbe(msg)
+	case serviceOpMsg:
+		return m.applyServiceOp(msg)
 	case tmuxTerminalMsg:
 		if msg.err != nil {
 			m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
@@ -3848,35 +3895,20 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 				fetchGitStatus(m.cfg, s),
 			)
 		}
-	} else {
-		switch m.currentTab {
-		case tabSessions:
-			if it, ok := m.selectedSessionItem(); ok {
-				s := it.session
-				if m.activeSession != s.TmuxSession {
-					m.activeSession = s.TmuxSession
-				}
-				// Skip sessions being created (no tmux yet) or terminated
-				// (tmux going away).
-				if !m.skipSessionPolling(s.ID) {
-					// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
-					cmds = append(cmds,
-						fetchTmuxPane(m.cfg, s),
-						checkInputHint(m.cfg, s),
-					)
-				}
+	} else if m.currentTab == tabSessions {
+		if it, ok := m.selectedSessionItem(); ok {
+			s := it.session
+			if m.activeSession != s.TmuxSession {
+				m.activeSession = s.TmuxSession
 			}
-		case tabDaemons:
-			if sel := m.daemonList.SelectedItem(); sel != nil {
-				d := sel.(daemonItem).daemon
-				if m.activeSession != "aiman-trigger" {
-					m.activeSession = "aiman-trigger"
-				}
-				s := domain.Session{
-					RemoteHost:  d.RemoteHost,
-					TmuxSession: "aiman-trigger",
-				}
-				cmds = append(cmds, fetchTmuxPane(m.cfg, s))
+			// Skip sessions being created (no tmux yet) or terminated
+			// (tmux going away).
+			if !m.skipSessionPolling(s.ID) {
+				// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
+				cmds = append(cmds,
+					fetchTmuxPane(m.cfg, s),
+					checkInputHint(m.cfg, s),
+				)
 			}
 		}
 	}
@@ -4003,7 +4035,6 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 	// Capture list selection changes to trigger immediate fetch
 	oldSelID := ""
 	oldHeader := false
-	oldDaemonHost := ""
 	oldIdx := m.list.Index()
 	if oldSel, ok := m.list.SelectedItem().(item); ok {
 		if oldSel.header {
@@ -4012,8 +4043,9 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			oldSelID = oldSel.session.ID
 		}
 	}
+	oldDaemonKey := ""
 	if oldDaemon, ok := m.daemonList.SelectedItem().(daemonItem); ok {
-		oldDaemonHost = oldDaemon.daemon.RemoteHost
+		oldDaemonKey = domain.DaemonKey(oldDaemon.daemon.RemoteHost, oldDaemon.daemon.Kind)
 	}
 
 	var cmd tea.Cmd
@@ -4107,20 +4139,20 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 	case tabDaemons:
 		newSel := m.daemonList.SelectedItem()
 		var selDaemon daemonItem
-		newDaemonHost := ""
+		newDaemonKey := ""
 		if typedSel, ok := newSel.(daemonItem); ok {
 			selDaemon = typedSel
-			newDaemonHost = selDaemon.daemon.RemoteHost
+			newDaemonKey = domain.DaemonKey(selDaemon.daemon.RemoteHost, selDaemon.daemon.Kind)
 		}
-		if oldDaemonHost != newDaemonHost && newDaemonHost != "" {
-			m.activeSession = "aiman-trigger"
-			m.tmuxOutput = "Loading daemon logs..."
-			m.viewport.SetContent(m.tmuxOutput)
-			s := domain.Session{
-				RemoteHost:  selDaemon.daemon.RemoteHost,
-				TmuxSession: "aiman-trigger",
+		if oldDaemonKey != newDaemonKey && newDaemonKey != "" {
+			d := selDaemon.daemon
+			kind := remotesvc.Kind(d.Kind)
+			if kind == "" {
+				kind = remotesvc.KindTrigger
 			}
-			cmds = append(cmds, fetchTmuxPane(m.cfg, s))
+			m.tmuxOutput = "Loading " + string(kind) + " logs..."
+			m.viewport.SetContent(m.tmuxOutput)
+			cmds = append(cmds, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind))
 		}
 	}
 
@@ -4130,24 +4162,27 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	// Background-creation placeholders have no tmux session, worktree, or
 	// sync yet — block session actions on them. ctrl+k dismisses a failed
-	// placeholder instead of running the terminate flow.
-	if sel := m.list.SelectedItem(); sel != nil {
-		if si, ok := sel.(item); ok {
-			if cs, creating := m.creatingSessions[si.session.ID]; creating {
-				switch msg.String() {
-				case "ctrl+k":
-					if cs.failed {
-						m.removeCreatingPlaceholder(si.session.ID)
+	// placeholder instead of running the terminate flow. Skip this on the
+	// Daemons tab so service keys still work while a session is creating.
+	if m.currentTab != tabDaemons {
+		if sel := m.list.SelectedItem(); sel != nil {
+			if si, ok := sel.(item); ok {
+				if cs, creating := m.creatingSessions[si.session.ID]; creating {
+					switch msg.String() {
+					case "ctrl+k":
+						if cs.failed {
+							m.removeCreatingPlaceholder(si.session.ID)
+						}
+						return m, nil, true
+					case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y":
+						return m, m.showToast("⚠️  This session is still being created — wait for it to finish.", true, 4*time.Second), true
 					}
-					return m, nil, true
-				case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y":
-					return m, m.showToast("⚠️  This session is still being created — wait for it to finish.", true, 4*time.Second), true
 				}
-			}
-			if m.isTerminatingSession(si.session.ID) {
-				switch msg.String() {
-				case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+k":
-					return m, m.showToast("⚠️  This session is being terminated.", true, 4*time.Second), true
+				if m.isTerminatingSession(si.session.ID) {
+					switch msg.String() {
+					case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+k":
+						return m, m.showToast("⚠️  This session is being terminated.", true, 4*time.Second), true
+					}
 				}
 			}
 		}
@@ -4246,6 +4281,15 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if msg.String() == "tab" {
 		if m.currentTab == tabSessions {
 			m.currentTab = tabDaemons
+			if d, ok := m.selectedDaemon(); ok {
+				kind := remotesvc.Kind(d.Kind)
+				if kind == "" {
+					kind = remotesvc.KindTrigger
+				}
+				m.tmuxOutput = "Loading " + string(kind) + " logs..."
+				m.viewport.SetContent(m.tmuxOutput)
+				return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind), true
+			}
 		} else {
 			m.currentTab = tabSessions
 		}
@@ -4475,6 +4519,9 @@ end tell`, cmd)
 // Split out of handleSessionManageKey to keep that function under the
 // complexity gate; it is already the largest key handler in the dashboard.
 func (m *Model) handleIntelligenceKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	if m.currentTab == tabDaemons {
+		return nil, false
+	}
 	key := msg.String()
 	if key != "i" && key != "I" {
 		return nil, false
@@ -4499,34 +4546,33 @@ func (m *Model) handleIntelligenceKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 }
 
 func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	if msg.String() == "ctrl+r" || msg.String() == "s" {
-		if m.currentTab == tabDaemons {
-			if sel := m.daemonList.SelectedItem(); sel != nil {
-				d := sel.(daemonItem).daemon
-				m.loadingMsg = "Starting daemon on " + d.RemoteHost + "..."
-				m.loadingNext = viewStateMain
-				m.state = viewStateLoading
-				return m, func() tea.Msg {
-					ctx := context.Background()
-					var remote *config.Remote
-					for _, r := range m.cfg.Remotes {
-						if r.Host == d.RemoteHost {
-							remote = &r
-							break
-						}
-					}
-					if remote == nil {
-						return attachDoneMsg{err: fmt.Errorf("remote config not found")}
-					}
-					mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-					// Best-effort teardown of any previous trigger session; the command
-					// swallows its own failure, so nothing here can be acted on.
-					_, _ = mgr.Execute(ctx, "tmux kill-session -t aiman-trigger 2>/dev/null || true")
-					_, err := mgr.Execute(ctx, "tmux new-session -d -s aiman-trigger 'aiman-trigger'")
-					return attachDoneMsg{err: err}
-				}, true
+	if m.currentTab == tabDaemons {
+		switch msg.String() {
+		case "ctrl+r", "s":
+			return m.runSelectedServiceOp("restart", "Restarting")
+		case "ctrl+k":
+			return m.runSelectedServiceOp("stop", "Stopping")
+		case "i":
+			return m.runSelectedServiceOp("install", "Installing")
+		case "u":
+			return m.runSelectedServiceOp("update", "Updating")
+		case "c":
+			return m.runSelectedServiceOp("reload", "Reloading")
+		case "r":
+			if d, ok := m.selectedDaemon(); ok {
+				kind := remotesvc.Kind(d.Kind)
+				if kind == "" {
+					kind = remotesvc.KindTrigger
+				}
+				m.tmuxOutput = "Refreshing..."
+				m.viewport.SetContent(m.tmuxOutput)
+				return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind), true
 			}
-		} else if sel := m.list.SelectedItem(); sel != nil {
+			return m, nil, true
+		}
+	}
+	if msg.String() == "ctrl+r" || msg.String() == "s" {
+		if sel := m.list.SelectedItem(); sel != nil {
 			selectedSess := sel.(item).session
 			if remote, ok := resolveRemote(m.cfg, selectedSess); ok {
 				m.selectedRemote = remote
@@ -4674,30 +4720,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		}
 	}
 	if msg.String() == "ctrl+k" {
-		if m.currentTab == tabDaemons {
-			if sel := m.daemonList.SelectedItem(); sel != nil {
-				d := sel.(daemonItem).daemon
-				m.loadingMsg = "Killing daemon on " + d.RemoteHost + "..."
-				m.loadingNext = viewStateMain
-				m.state = viewStateLoading
-				return m, func() tea.Msg {
-					ctx := context.Background()
-					var remote *config.Remote
-					for _, r := range m.cfg.Remotes {
-						if r.Host == d.RemoteHost {
-							remote = &r
-							break
-						}
-					}
-					if remote == nil {
-						return attachDoneMsg{err: fmt.Errorf("remote config not found")}
-					}
-					mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-					_, err := mgr.Execute(ctx, "tmux kill-session -t aiman-trigger")
-					return attachDoneMsg{err: err}
-				}, true
-			}
-		} else if sel := m.list.SelectedItem(); sel != nil {
+		if sel := m.list.SelectedItem(); sel != nil {
 			m.terminatePrecheckError = ""
 			m.state = viewStateTerminateConfirm
 			return m, nil, true
@@ -5864,20 +5887,13 @@ func (m *Model) startBackgroundCreate() tea.Cmd {
 }
 
 func (m *Model) ensureRemoteDaemon(ctx context.Context, sshMgr *ssh.Manager) error {
-	// Ensure daemon is running
-	if _, err := sshMgr.Execute(ctx, "pgrep -f aiman-trigger > /dev/null"); err != nil {
-		// Not running. Install if missing.
-		if _, err := sshMgr.Execute(ctx, "test -x ~/.local/bin/aiman-trigger"); err != nil {
-			m.loadingMsg = "Downloading aiman-trigger to remote..."
-			// We can pass BINARY_NAME=aiman-trigger to the standard install script to install the daemon instead of aiman
-			installCmd := "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | BINARY_NAME=aiman-trigger sh"
-			if _, err := sshMgr.Execute(ctx, installCmd); err != nil {
-				return fmt.Errorf("failed to install aiman-trigger on remote: %w", err)
-			}
-		}
-		// Start it
-		m.loadingMsg = "Starting aiman-trigger on remote..."
-		_, _ = sshMgr.Execute(ctx, "mkdir -p ~/.aiman && nohup ~/.local/bin/aiman-trigger > ~/.aiman/trigger.log 2>&1 &")
+	if _, err := sshMgr.Execute(ctx, "pgrep -f aiman-trigger > /dev/null"); err == nil {
+		return nil
+	}
+	m.loadingMsg = "Installing aiman-trigger service on remote..."
+	script := remotesvc.InstallEnableScript(remotesvc.KindTrigger)
+	if _, err := execRemoteScript(sshMgr, ctx, "/tmp/aiman-install-trigger.sh", script); err != nil {
+		return fmt.Errorf("failed to install aiman-trigger on remote: %w", err)
 	}
 	return nil
 }
@@ -6185,6 +6201,11 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
 			return attachDoneMsg{err: err}
 		})
+	case serviceOpMsg:
+		return m.applyServiceOp(msg)
+	case daemonProbeMsg:
+		m.state = viewStateMain
+		return m.applyDaemonProbe(msg)
 	case attachDoneMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
@@ -6433,29 +6454,17 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 
 	m.allSessions = merged
 
-	// Update daemon status
+	var probes []tea.Cmd
 	for host := range msg.scannedHosts {
-		d, ok := m.daemons[host]
-		if !ok {
-			d = domain.Daemon{RemoteHost: host}
-		}
-		// Assume stopped unless found
-		d.Status = domain.DaemonStatusStopped
-
-		// If daemon is running, it will be in msg.sessions
-		for _, s := range msg.sessions {
-			if s.RemoteHost == host && s.TmuxSession == "aiman-trigger" {
-				d.Status = domain.DaemonStatusRunning
-				d.UpdatedAt = time.Now()
-				break
-			}
-		}
-		m.daemons[host] = d
+		probes = append(probes,
+			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindServe),
+			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindTrigger),
+		)
 	}
 
 	m.applyRemoteFilter()
 	m.state = viewStateMain
-	return m, nil
+	return m, tea.Batch(probes...)
 }
 
 func (m *Model) applyRecreateMutagen(msg recreateMutagenMsg) (tea.Model, tea.Cmd) {
@@ -6603,6 +6612,9 @@ func (m *Model) renderMainView() string {
 	footer := "\n" + remoteInfo + "\n\n" + doctorSection
 
 	helpText := "n: new • f: filter • c: scope • t: tunnels • s: restart • y: copy view • G/end: latest • r: refresh • R: AWS creds • i: AI insight • ctrl+y: sync • ctrl+k: term • m: menu • v: vscode • ctrl+s/a: attach • q: quit"
+	if m.currentTab == tabDaemons {
+		helpText = "i: install • s: restart • c: reload • u: update • r: probe • ctrl+k: stop • tab: sessions • q: quit"
+	}
 	versionText := m.version
 
 	contentWidth := m.width - 4 // docStyle margins
@@ -6872,9 +6884,26 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 			statusLabel = failStyle.Render(statusLabel)
 		}
 
+		kind := d.Kind
+		if kind == "" {
+			kind = "trigger"
+		}
 		daemonLines := []string{
-			activeStyle.Render("Daemon") + "  " + d.RemoteHost,
+			activeStyle.Render(kind) + "  " + d.RemoteHost,
 			"Status: " + statusLabel,
+		}
+		if d.Driver != "" && d.Driver != "none" {
+			daemonLines = append(daemonLines, "Driver: "+d.Driver)
+		}
+		if d.Version != "" {
+			daemonLines = append(daemonLines, "Version: "+d.Version)
+		}
+		if kind == "serve" {
+			if d.SocketOK {
+				daemonLines = append(daemonLines, "Socket: "+successStyle.Render("~/.aiman/aiman.sock"))
+			} else {
+				daemonLines = append(daemonLines, "Socket: "+failStyle.Render("down"))
+			}
 		}
 		if !d.UpdatedAt.IsZero() {
 			daemonLines = append(daemonLines, "Last Seen: "+d.UpdatedAt.Format("15:04:05"))
@@ -6899,11 +6928,16 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 
 		var outputPanel strings.Builder
 		outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
-		outputPanel.WriteString(statusStyle.Render("Live Logs (aiman-trigger)") + "\n")
-		if d.Status == domain.DaemonStatusRunning {
+		outputPanel.WriteString(statusStyle.Render("Logs  s restart  i install  u update  c reload  ctrl+k stop") + "\n")
+		switch {
+		case strings.TrimSpace(m.viewport.View()) != "":
 			outputPanel.WriteString(m.viewport.View())
-		} else {
-			outputPanel.WriteString("\n  Daemon is not running. Live logs unavailable.")
+		case d.Logs != "":
+			outputPanel.WriteString(d.Logs)
+		case d.Status != domain.DaemonStatusRunning:
+			outputPanel.WriteString("\n  Service is not running.")
+		default:
+			outputPanel.WriteString("\n  Press r to fetch logs.")
 		}
 
 		mainContent = infoPanel + outputPanel.String()
