@@ -12,7 +12,18 @@ const (
 
 type Daemon struct {
 	RemoteHost string
+	Kind       string // "serve" or "trigger"
 	Status     DaemonStatus
-	Logs       string // Last N lines of tmux pane capture
+	Driver     string // systemd, nohup, tmux, none
+	Version    string
+	SocketOK   bool
+	Logs       string
 	UpdatedAt  time.Time
+}
+
+func DaemonKey(host, kind string) string {
+	if kind == "" {
+		kind = "trigger"
+	}
+	return host + "\x00" + kind
 }
