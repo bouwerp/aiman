@@ -181,7 +181,9 @@ aiman
 |-----|--------|
 | `n` | **New Session** — Start the full JIRA-driven workflow wizard |
 | `N` | **Quick session** — Default remote, pick an agent, generated name in group `quick` |
-| `e` | **Rename** — Change the display name (tmux and worktree stay on the branch) |
+| `e` | **Rename** — Session name, or the group if a group header is selected |
+| `g` | **Group** — Assign the session to a group, ungrouped, or a new group |
+| `enter` / `space` | **Collapse/expand** the selected group |
 | `m` | **Admin Menu** — Remotes, **Agent API**, JIRA, snapshots |
 | `↑/↓` | Navigate sessions |
 | `Enter` | Select item |
@@ -448,7 +450,15 @@ Stdout is indented JSON. Server errors are JSON on stderr, exit 1. Usage errors 
 
 ### Names and groups
 
-Every session has a **name** (unique per host, `^[A-Za-z][A-Za-z0-9_-]{0,47}$`) and a **group** (work bucket: issue key, repo short name, `quick`, or `ungrouped`). The dashboard sidebar groups by that label. Group headers are labels, not sessions.
+Every session has a **name** (unique per host, `^[A-Za-z][A-Za-z0-9_-]{0,47}$`) and a **group** (work bucket: issue key, repo short name, `quick`, or `ungrouped`). The dashboard sidebar is a tree of groups. Each header shows the session count (`· N`).
+
+| Key | On a group header | On a session |
+|---|---|---|
+| `enter` / `space` | Collapse or expand | (list select) |
+| `e` | Rename the group (all members) | Rename the session |
+| `g` | — | Assign to an existing group, **ungrouped**, or a **new** group |
+
+Empty group is stored as `ungrouped` so discovery cannot blank it.
 
 | | Name | Group |
 |---|---|---|

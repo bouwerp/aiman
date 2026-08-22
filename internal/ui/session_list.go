@@ -41,9 +41,12 @@ func groupRollup(items []item) string {
 	}
 }
 
-func groupedSessionItems(flat []item) []list.Item {
+func groupedSessionItems(flat []item, collapsed map[string]bool) []list.Item {
 	if len(flat) == 0 {
 		return nil
+	}
+	if collapsed == nil {
+		collapsed = map[string]bool{}
 	}
 	type bucket struct {
 		key   string
@@ -52,10 +55,7 @@ func groupedSessionItems(flat []item) []list.Item {
 	order := []string{}
 	by := map[string]*bucket{}
 	for _, it := range flat {
-		g := it.session.Group
-		if g == "" {
-			g = domain.GroupUngrouped
-		}
+		g := domain.GroupLabel(it.session.Group)
 		if it.remoteName != "" {
 			g = g + "\x00" + it.remoteName
 		}
@@ -74,18 +74,19 @@ func groupedSessionItems(flat []item) []list.Item {
 		sort.Slice(b.items, func(i, j int) bool {
 			return strings.ToLower(b.items[i].session.Name) < strings.ToLower(b.items[j].session.Name)
 		})
-		groupName := b.items[0].session.Group
-		if groupName == "" {
-			groupName = domain.GroupUngrouped
-		}
+		groupName := domain.GroupLabel(b.items[0].session.Group)
 		header := item{
 			header:     true,
-			session:    domain.Session{Group: groupName},
+			session:    domain.Session{Group: groupName, RemoteHost: b.items[0].session.RemoteHost},
 			remoteName: b.items[0].remoteName,
 			activity:   groupRollup(b.items),
 			groupN:     len(b.items),
+			collapsed:  collapsed[key],
 		}
 		out = append(out, header)
+		if header.collapsed {
+			continue
+		}
 		for i, it := range b.items {
 			it.treeLast = i == len(b.items)-1
 			out = append(out, it)
@@ -172,13 +173,14 @@ func (d sessionListDelegate) Render(w io.Writer, m list.Model, index int, listIt
 		d.DefaultDelegate.Render(w, m, index, listItem)
 		return
 	}
-	// Headers are section labels: never the selected-session left border.
-	label := lipgloss.NewStyle().
+	style := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("62")).
 		Bold(true).
-		Padding(0, 0, 0, 2).
-		Render(it.Title())
-	_, _ = fmt.Fprint(w, label+"\n")
+		Padding(0, 0, 0, 2)
+	if index == m.Index() {
+		style = style.Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57"))
+	}
+	_, _ = fmt.Fprint(w, style.Render(it.Title())+"\n")
 }
 
 func (m *Model) startQuickSession() (tea.Model, tea.Cmd) {

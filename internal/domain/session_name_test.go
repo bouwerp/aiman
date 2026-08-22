@@ -26,6 +26,31 @@ func stringsRepeat(s string, n int) string {
 	return string(out)
 }
 
+func TestGroupLabelAndNormalize(t *testing.T) {
+	t.Parallel()
+	if GroupLabel("") != GroupUngrouped || GroupLabel("  ") != GroupUngrouped {
+		t.Fatal("empty is ungrouped")
+	}
+	if GroupLabel("WTB-1") != "WTB-1" {
+		t.Fatal("keeps a set group")
+	}
+	got, err := NormalizeGroupName("  my group  ")
+	if err != nil || got != "my-group" {
+		t.Fatalf("got %q %v", got, err)
+	}
+	got, err = NormalizeGroupName("")
+	if err != nil || got != GroupUngrouped {
+		t.Fatalf("empty normalize %q %v", got, err)
+	}
+	got, err = NormalizeGroupName("ungrouped")
+	if err != nil || got != GroupUngrouped {
+		t.Fatalf("ungrouped %q %v", got, err)
+	}
+	if _, err := NormalizeGroupName("1bad"); err == nil {
+		t.Fatal("want error")
+	}
+}
+
 func TestNameTakenIsCaseInsensitive(t *testing.T) {
 	t.Parallel()
 	existing := []Session{{Name: "Reviewer"}, {Name: "impl"}}
