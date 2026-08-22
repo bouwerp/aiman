@@ -6440,6 +6440,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 			}
 		}
 	}
+	dbByTmux := persistedByTmux(dbSessions)
 
 	// Carry existing timestamps so a scan does not clobber updated_at, and
 	// persist only what shouldMergeDiscoveredSession accepts.
@@ -6453,12 +6454,16 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		if m.db == nil {
 			break
 		}
-		if existing, ok := dbSessions[msg.sessions[i].ID]; ok {
+		if existing, ok := lookupPersistedSession(msg.sessions[i], dbSessions, dbByTmux); ok {
 			if !existing.UpdatedAt.IsZero() {
 				msg.sessions[i].UpdatedAt = existing.UpdatedAt
 			}
 			if msg.sessions[i].CreatedAt.IsZero() && !existing.CreatedAt.IsZero() {
 				msg.sessions[i].CreatedAt = existing.CreatedAt
+			}
+			msg.sessions[i] = overlayPersistedSessionFields(msg.sessions[i], existing)
+			if existing.ID != "" {
+				msg.sessions[i].ID = existing.ID
 			}
 		}
 		if !shouldMergeDiscoveredSession(msg.sessions[i], dbSessions) {
@@ -6480,38 +6485,15 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		if seenID[s.ID] {
 			continue
 		}
-		tk := ""
-		if s.TmuxSession != "" {
-			tk = s.RemoteHost + "\x00" + s.TmuxSession
-		}
+		tk := sessionTmuxKey(s)
 		if tk != "" && seenTmux[tk] {
 			continue
 		}
 
-		if dbSess, ok := dbSessions[s.ID]; ok {
-			if dbSess.WorkingDirectory != "" {
-				s.WorkingDirectory = dbSess.WorkingDirectory
-			}
-			if dbSess.RepoName != "" && (s.RepoName == "" || (!strings.Contains(s.RepoName, "/") && strings.Contains(dbSess.RepoName, "/"))) {
-				s.RepoName = dbSess.RepoName
-			}
-			if s.IssueKey == "" {
-				s.IssueKey = dbSess.IssueKey
-			}
-			if s.Branch == "" {
-				s.Branch = dbSess.Branch
-			}
-			if s.AgentName == "" {
-				s.AgentName = dbSess.AgentName
-			}
-			if s.AgentModel == "" {
-				s.AgentModel = dbSess.AgentModel
-			}
-			if s.WorktreePath == "" {
-				s.WorktreePath = dbSess.WorktreePath
-			}
-			if s.LocalPath == "" {
-				s.LocalPath = dbSess.LocalPath
+		if dbSess, ok := lookupPersistedSession(s, dbSessions, dbByTmux); ok {
+			s = overlayPersistedSessionFields(s, dbSess)
+			if dbSess.ID != "" {
+				s.ID = dbSess.ID
 			}
 		}
 
