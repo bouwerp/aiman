@@ -490,6 +490,8 @@ aiman --skill
 
 That prints the Markdown skill (`internal/aimanskill/SKILL.md`, also under `skills/aiman/`). The skill is gated on `AIMAN_ENV=1`. If that is unset, the agent is not inside an Aiman session and must stop.
 
+`aiman serve` on start (and on restart) installs or updates the skill in each agent's user skill dir under `$HOME` (`.claude/skills/aiman`, `.cursor/skills/aiman`, and the other known loaders) and in every session worktree it knows about. Missing files are created; stale copies are replaced with the copy embedded in the binary. Session create still writes the worktree copy so a new session does not wait for a serve restart.
+
 Typical helper spawn from an in-pane agent:
 
 ```bash

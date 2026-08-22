@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -84,12 +85,9 @@ func installBundledAimanSkill(ctx context.Context, remote domain.RemoteExecutor,
 	if remote == nil || strings.TrimSpace(worktreePath) == "" || aimanskill.Text == "" {
 		return nil
 	}
-	paths := []string{
-		worktreePath + "/.agents/skills/aiman/SKILL.md",
-		worktreePath + "/.claude/skills/aiman/SKILL.md",
-	}
 	var first error
-	for _, p := range paths {
+	for _, p := range aimanskill.ProjectSkillFiles(worktreePath) {
+		_, _ = remote.Execute(ctx, fmt.Sprintf("mkdir -p %q", path.Dir(p)))
 		if err := remote.WriteFile(ctx, p, []byte(aimanskill.Text)); err != nil && first == nil {
 			first = err
 		}
