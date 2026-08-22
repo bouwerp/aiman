@@ -112,6 +112,15 @@ func (m *Model) selectedSessionItem() (item, bool) {
 	return it, true
 }
 
+func (m *Model) selectFirstSessionRow() {
+	for i, it := range m.list.Items() {
+		if si, ok := it.(item); ok && !si.header {
+			m.list.Select(i)
+			return
+		}
+	}
+}
+
 func (m *Model) startQuickSession() (tea.Model, tea.Cmd) {
 	name, err := domain.AssignSessionName(m.allSessions, "", true)
 	if err != nil {

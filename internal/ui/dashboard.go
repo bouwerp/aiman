@@ -89,7 +89,7 @@ func normalizeMultiline(s string) string {
 // yankSessionOutputToClipboard copies visible or full preview buffer to the OS clipboard.
 // Mouse selection in alternate-screen TUIs often does not reach the system clipboard; use y / Y instead.
 func (m *Model) yankSessionOutputToClipboard(fullBuffer bool) bool {
-	if m.list.SelectedItem() == nil {
+	if _, ok := m.selectedSessionItem(); !ok {
 		return false
 	}
 	var raw string
@@ -599,12 +599,19 @@ func (m *Model) applyRemoteFilter() {
 
 	m.list.SetItems(filtered)
 	if selectedID != "" {
+		found := false
 		for i, it := range filtered {
 			if si, ok := it.(item); ok && !si.header && si.session.ID == selectedID {
 				m.list.Select(i)
+				found = true
 				break
 			}
 		}
+		if !found {
+			m.selectFirstSessionRow()
+		}
+	} else {
+		m.selectFirstSessionRow()
 	}
 	m.daemonList.SetItems(daemonItems)
 
@@ -3721,8 +3728,8 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == viewStateLoading {
 			return m, tea.Batch(cmds...)
 		}
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
+		if it, ok := m.selectedSessionItem(); ok {
+			s := it.session
 			if !m.skipSessionPolling(s.ID) {
 				cmds = append(cmds, fetchGitStatus(m.cfg, s))
 			}
@@ -3811,28 +3818,28 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 		return m, tea.Batch(cmds...)
 	}
 
-	// On first tick, force-select the first session if nothing is active
+	// On first tick, land on a session row, not a group header.
 	if m.initialLoad {
 		m.initialLoad = false
-		if len(m.list.Items()) > 0 {
-			m.list.Select(0)
-			if sel := m.list.SelectedItem(); sel != nil {
-				s := sel.(item).session
-				m.activeSession = s.TmuxSession
-				m.tmuxOutput = "Loading..."
-				m.viewport.SetContent(m.tmuxOutput)
-				cmds = append(cmds,
-					fetchTmuxPane(m.cfg, s),
-					checkInputHint(m.cfg, s),
-					fetchGitStatus(m.cfg, s),
-				)
-			}
+		if _, ok := m.selectedSessionItem(); !ok {
+			m.selectFirstSessionRow()
+		}
+		if it, ok := m.selectedSessionItem(); ok {
+			s := it.session
+			m.activeSession = s.TmuxSession
+			m.tmuxOutput = "Loading..."
+			m.viewport.SetContent(m.tmuxOutput)
+			cmds = append(cmds,
+				fetchTmuxPane(m.cfg, s),
+				checkInputHint(m.cfg, s),
+				fetchGitStatus(m.cfg, s),
+			)
 		}
 	} else {
 		switch m.currentTab {
 		case tabSessions:
-			if sel := m.list.SelectedItem(); sel != nil {
-				s := sel.(item).session
+			if it, ok := m.selectedSessionItem(); ok {
+				s := it.session
 				if m.activeSession != s.TmuxSession {
 					m.activeSession = s.TmuxSession
 				}
@@ -3982,9 +3989,14 @@ func (m *Model) applyAISummary(msg aiSummaryMsg, cmds []tea.Cmd) (tea.Model, tea
 func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	// Capture list selection changes to trigger immediate fetch
 	oldSelID := ""
+	oldHeader := false
 	oldDaemonHost := ""
 	if oldSel, ok := m.list.SelectedItem().(item); ok {
-		oldSelID = oldSel.session.ID
+		if oldSel.header {
+			oldHeader = true
+		} else {
+			oldSelID = oldSel.session.ID
+		}
 	}
 	if oldDaemon, ok := m.daemonList.SelectedItem().(daemonItem); ok {
 		oldDaemonHost = oldDaemon.daemon.RemoteHost
@@ -4043,11 +4055,23 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		newSel := m.list.SelectedItem()
 		var selItem item
 		newSelID := ""
+		newHeader := false
 		if typedSel, ok := newSel.(item); ok {
 			selItem = typedSel
-			newSelID = selItem.session.ID
+			newHeader = selItem.header
+			if !newHeader {
+				newSelID = selItem.session.ID
+			}
 		}
-		if oldSelID != newSelID && newSelID != "" {
+		if newHeader {
+			if !oldHeader {
+				m.activeSession = ""
+				m.gitStatus = domain.GitStatus{}
+				m.lastGitStatusUpdate = time.Time{}
+				m.tmuxOutput = ""
+				m.viewport.SetContent("")
+			}
+		} else if oldSelID != newSelID && newSelID != "" {
 			s := selItem.session
 			m.activeSession = s.TmuxSession
 			m.gitStatus = domain.GitStatus{} // Clear old status
@@ -4295,6 +4319,12 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 // handleSessionActionKey handles keys that open or copy from the selected session:
 // attaching a terminal, opening VS Code, and copying output or the local path.
 func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch msg.String() {
+	case "ctrl+s", "a", "v", "y", "Y", "p":
+		if _, ok := m.selectedSessionItem(); !ok {
+			return m, nil, true
+		}
+	}
 	if msg.String() == "ctrl+s" || msg.String() == "a" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
@@ -6534,7 +6564,7 @@ func (m *Model) renderMainView() string {
 	}
 
 	if mainContent == "" {
-		if m.currentTab == tabSessions {
+		if m.currentTab == tabSessions && m.list.SelectedItem() == nil {
 			mainContent = "\n\n  No session selected.\n  Press 'm' for Admin Menu."
 		}
 	}
@@ -6575,7 +6605,7 @@ func (m *Model) renderMainView() string {
 
 	// PR Buttons (matching Figma)
 	var prButtons string
-	if sel := m.list.SelectedItem(); sel != nil {
+	if _, ok := m.selectedSessionItem(); ok {
 		if m.gitStatus.PullRequest != nil {
 			btnStyle := lipgloss.NewStyle().
 				Padding(0, 1).
@@ -6600,8 +6630,8 @@ func (m *Model) renderMainView() string {
 // renderSessionPanel builds the right-hand panel for the currently selected row.
 func (m *Model) renderSessionPanel(mainWidth int) string {
 	var mainContent string
-	if sel := m.list.SelectedItem(); sel != nil {
-		s := sel.(item).session
+	if it, ok := m.selectedSessionItem(); ok {
+		s := it.session
 		contentW := mainWidth - 4
 		if contentW < 20 {
 			contentW = 20
