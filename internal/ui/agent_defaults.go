@@ -6,20 +6,23 @@ import (
 
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type agentDefaultRow struct {
-	key  string
-	name string
+	key       string
+	name      string
+	models    []string
+	efforts   []string
+	modelIdx  int
+	effortIdx int
+	hasEffort bool
 }
 
 type AgentDefaultsModel struct {
 	cfg        *config.Config
 	rows       []agentDefaultRow
-	models     []textinput.Model
-	efforts    []textinput.Model
 	focusIndex int
 	saved      bool
 	err        error
@@ -30,111 +33,164 @@ func NewAgentDefaultsModel(cfg *config.Config) AgentDefaultsModel {
 	rows := make([]agentDefaultRow, 0, len(known))
 	seen := map[string]bool{}
 	for _, a := range known {
-		fields := strings.Fields(strings.ToLower(a.Command))
-		if len(fields) == 0 {
-			continue
-		}
-		key := fields[0]
-		if seen[key] {
+		key := agent.CommandBase(a.Command)
+		if key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
-		rows = append(rows, agentDefaultRow{key: key, name: a.Name})
-	}
-	models := make([]textinput.Model, len(rows))
-	efforts := make([]textinput.Model, len(rows))
-	for i, r := range rows {
+		cat := agent.LaunchCatalogFor(key)
 		d := config.AgentDefaults{}
 		if cfg != nil && cfg.AgentDefaults != nil {
-			d = cfg.AgentDefaults[r.key]
+			d = cfg.AgentDefaults[key]
 		}
-		models[i] = newAgentDefaultInput("model", d.Model)
-		efforts[i] = newAgentDefaultInput("effort", d.Effort)
+		models := withEmptyOption(cat.Models, d.Model)
+		row := agentDefaultRow{
+			key:      key,
+			name:     a.Name,
+			models:   models,
+			modelIdx: indexOf(models, strings.TrimSpace(d.Model)),
+		}
+		if cat.SupportsEffort() {
+			efforts := withEmptyOption(cat.Efforts, d.Effort)
+			row.hasEffort = true
+			row.efforts = efforts
+			row.effortIdx = indexOf(efforts, strings.TrimSpace(d.Effort))
+		}
+		rows = append(rows, row)
 	}
-	if len(models) > 0 {
-		models[0].Focus()
-	}
-	return AgentDefaultsModel{cfg: cfg, rows: rows, models: models, efforts: efforts}
+	return AgentDefaultsModel{cfg: cfg, rows: rows}
 }
 
-func newAgentDefaultInput(placeholder, value string) textinput.Model {
-	ti := textinput.New()
-	ti.Placeholder = placeholder
-	ti.SetValue(value)
-	ti.CharLimit = 64
-	ti.Width = 22
-	return ti
+func withEmptyOption(values []string, extra string) []string {
+	out := make([]string, 0, len(values)+2)
+	out = append(out, "")
+	seen := map[string]bool{"": true}
+	for _, v := range values {
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	extra = strings.TrimSpace(extra)
+	if extra != "" && !seen[extra] {
+		out = append(out, extra)
+	}
+	return out
+}
+
+func indexOf(values []string, want string) int {
+	for i, v := range values {
+		if v == want {
+			return i
+		}
+	}
+	return 0
 }
 
 func (m AgentDefaultsModel) Init() tea.Cmd { return nil }
 
-func (m AgentDefaultsModel) fieldCount() int { return len(m.rows)*2 + 1 }
-
-func (m AgentDefaultsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
-		switch km.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-		case "esc":
-			return m, nil
-		case "tab", "down":
-			m.focusIndex++
-			if m.focusIndex >= m.fieldCount() {
-				m.focusIndex = 0
-			}
-			m.syncFocus()
-			return m, nil
-		case "shift+tab", "up":
-			m.focusIndex--
-			if m.focusIndex < 0 {
-				m.focusIndex = m.fieldCount() - 1
-			}
-			m.syncFocus()
-			return m, nil
-		case "enter":
-			if m.focusIndex == m.fieldCount()-1 {
-				return m.save()
-			}
+func (m AgentDefaultsModel) fieldCount() int {
+	n := 1
+	for _, r := range m.rows {
+		n++
+		if r.hasEffort {
+			n++
 		}
 	}
-	i := m.focusIndex
-	if i < len(m.rows)*2 {
-		row := i / 2
-		var cmd tea.Cmd
-		if i%2 == 0 {
-			m.models[row], cmd = m.models[row].Update(msg)
-		} else {
-			m.efforts[row], cmd = m.efforts[row].Update(msg)
+	return n
+}
+
+func (m AgentDefaultsModel) focusSave() bool {
+	return m.focusIndex == m.fieldCount()-1
+}
+
+// focusCell returns the row and whether the effort column is focused.
+func (m AgentDefaultsModel) focusCell() (row int, effort bool) {
+	n := 0
+	for i, r := range m.rows {
+		if n == m.focusIndex {
+			return i, false
 		}
-		return m, cmd
+		n++
+		if r.hasEffort {
+			if n == m.focusIndex {
+				return i, true
+			}
+			n++
+		}
+	}
+	return 0, false
+}
+
+func (m AgentDefaultsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	km, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch km.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		return m, nil
+	case "tab", "down":
+		m.focusIndex++
+		if m.focusIndex >= m.fieldCount() {
+			m.focusIndex = 0
+		}
+	case "shift+tab", "up":
+		m.focusIndex--
+		if m.focusIndex < 0 {
+			m.focusIndex = m.fieldCount() - 1
+		}
+	case "left", "h":
+		m.cycle(-1)
+	case "right", "l", " ":
+		m.cycle(1)
+	case "enter":
+		if m.focusSave() {
+			return m.save()
+		}
+		m.cycle(1)
 	}
 	return m, nil
 }
 
-func (m *AgentDefaultsModel) syncFocus() {
-	save := m.focusIndex == m.fieldCount()-1
-	for i := range m.rows {
-		if !save && m.focusIndex/2 == i && m.focusIndex%2 == 0 {
-			m.models[i].Focus()
-		} else {
-			m.models[i].Blur()
-		}
-		if !save && m.focusIndex/2 == i && m.focusIndex%2 == 1 {
-			m.efforts[i].Focus()
-		} else {
-			m.efforts[i].Blur()
-		}
+func (m *AgentDefaultsModel) cycle(delta int) {
+	if m.focusSave() {
+		return
 	}
+	row, effort := m.focusCell()
+	if row < 0 || row >= len(m.rows) {
+		return
+	}
+	r := &m.rows[row]
+	if effort {
+		r.effortIdx = wrapIndex(r.effortIdx+delta, len(r.efforts))
+		return
+	}
+	r.modelIdx = wrapIndex(r.modelIdx+delta, len(r.models))
+}
+
+func wrapIndex(i, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	i %= n
+	if i < 0 {
+		i += n
+	}
+	return i
 }
 
 func (m AgentDefaultsModel) save() (tea.Model, tea.Cmd) {
 	if m.cfg.AgentDefaults == nil {
 		m.cfg.AgentDefaults = map[string]config.AgentDefaults{}
 	}
-	for i, r := range m.rows {
-		d := config.AgentDefaults{
-			Model:  strings.TrimSpace(m.models[i].Value()),
-			Effort: strings.TrimSpace(m.efforts[i].Value()),
+	for _, r := range m.rows {
+		d := config.AgentDefaults{Model: optionAt(r.models, r.modelIdx)}
+		if r.hasEffort {
+			d.Effort = optionAt(r.efforts, r.effortIdx)
 		}
 		if d.Model == "" && d.Effort == "" {
 			delete(m.cfg.AgentDefaults, r.key)
@@ -150,30 +206,62 @@ func (m AgentDefaultsModel) save() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func optionAt(values []string, i int) string {
+	if i < 0 || i >= len(values) {
+		return ""
+	}
+	return values[i]
+}
+
 func (m AgentDefaultsModel) View() string {
 	if m.saved {
 		return "Agent defaults saved!\n"
 	}
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	var b strings.Builder
 	b.WriteString("Agent defaults\n")
-	b.WriteString("Launch model and thinking/reasoning effort per agent. Empty = agent default.\n")
-	b.WriteString("Claude: --model / --effort. Grok: --model / --reasoning-effort. Codex: --model / -c model_reasoning_effort.\n\n")
-	b.WriteString(fmt.Sprintf("  %-22s  %-24s  %s\n", "Agent", "Model", "Effort"))
+	b.WriteString("Pick a model and reasoning effort from each CLI's own list. Empty = agent default.\n")
+	b.WriteString("Left/right cycles the highlighted value. Effort is n/a when the CLI has no such flag.\n\n")
+	b.WriteString(fmt.Sprintf("  %-22s  %-28s  %s\n", "Agent", "Model", "Effort"))
+	saveFocus := m.focusSave()
+	focusRow, focusEffort := 0, false
+	if !saveFocus {
+		focusRow, focusEffort = m.focusCell()
+	}
 	for i, r := range m.rows {
 		name := fmt.Sprintf("%-22s", r.name)
-		if m.focusIndex/2 == i && m.focusIndex < len(m.rows)*2 {
+		if !saveFocus && i == focusRow {
 			name = activeStyle.Render(name)
 		}
-		fmt.Fprintf(&b, "  %s  %s  %s\n", name, m.models[i].View(), m.efforts[i].View())
+		model := fmt.Sprintf("%-28s", formatOption(r.models, r.modelIdx))
+		if !saveFocus && i == focusRow && !focusEffort {
+			model = activeStyle.Render(model)
+		}
+		effort := dim.Render(fmt.Sprintf("%-16s", "n/a"))
+		if r.hasEffort {
+			effort = fmt.Sprintf("%-16s", formatOption(r.efforts, r.effortIdx))
+			if !saveFocus && i == focusRow && focusEffort {
+				effort = activeStyle.Render(effort)
+			}
+		}
+		fmt.Fprintf(&b, "  %s  %s  %s\n", name, model, effort)
 	}
 	saveLabel := "[ Save ]"
-	if m.focusIndex == m.fieldCount()-1 {
+	if saveFocus {
 		saveLabel = activeStyle.Render(saveLabel)
 	}
 	b.WriteString("\n" + saveLabel + "\n")
 	if m.err != nil {
 		b.WriteString("\n" + failStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n")
 	}
-	b.WriteString("\n(tab to move, enter to save, esc to cancel)\n")
+	b.WriteString("\n(tab to move, ←/→ to change, enter to save, esc to cancel)\n")
 	return docStyle.Render(b.String())
+}
+
+func formatOption(values []string, i int) string {
+	v := optionAt(values, i)
+	if v == "" {
+		return "(agent default)"
+	}
+	return v
 }
