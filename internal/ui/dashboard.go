@@ -1226,7 +1226,7 @@ type archiveCleanedMsg struct {
 }
 
 // persistSnapshotCmd saves a pre-built snapshot to the database.
-func persistSnapshotCmd(snapMgr *usecase.SnapshotManager, snap *domain.SessionSnapshot) tea.Cmd {
+func persistSnapshotCmd(snapMgr *usecase.SnapshotManager, snap *domain.SessionSnapshot, sess domain.Session, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		if snapMgr == nil {
 			return snapshotSavedMsg{err: fmt.Errorf("snapshot manager unavailable")}
@@ -1237,8 +1237,23 @@ func persistSnapshotCmd(snapMgr *usecase.SnapshotManager, snap *domain.SessionSn
 		if err != nil {
 			return snapshotSavedMsg{err: err}
 		}
+		putCtx, putCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer putCancel()
+		putRemoteSnapshotContext(putCtx, sess, cfg, snap)
 		return snapshotSavedMsg{snapshot: snap}
 	}
+}
+
+func putRemoteSnapshotContext(ctx context.Context, sess domain.Session, cfg *config.Config, snap *domain.SessionSnapshot) {
+	if cfg == nil || snap == nil {
+		return
+	}
+	remote, ok := resolveRemote(cfg, sess)
+	if !ok {
+		return
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	_ = usecase.PutSnapshotContext(ctx, mgr, snap, sess.Group)
 }
 
 func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
@@ -7257,6 +7272,7 @@ func (m *Model) restartSession() tea.Cmd {
 				sendKeysPrompt = prepared.InitialPrompt
 			}
 		}
+		sendKeysPrompt = usecase.InjectSharedContext(ctx, mgr, workingDir, s.Group, s.RepoName, sendKeysPrompt)
 		agentCmd = withRemoteNativeResume(ctx, mgr, s, agentCmd)
 
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
@@ -7468,7 +7484,7 @@ func (m *Model) handleArchivePreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateMain
 			if p != nil && p.snapshot != nil {
 				// Auto-clear is a fallback; snapshotSavedMsg normally replaces this.
-				return m, tea.Batch(persistSnapshotCmd(m.snapshotManager, p.snapshot), m.showToast("📸 Saving archive…", false, 15*time.Second))
+				return m, tea.Batch(persistSnapshotCmd(m.snapshotManager, p.snapshot, p.session, m.cfg), m.showToast("📸 Saving archive…", false, 15*time.Second))
 			}
 			return m, nil
 		case "esc":

@@ -364,7 +364,8 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 	// 3. Guardrails
 	sb.WriteString("## Guardrails\n\n")
 	sb.WriteString("- **Stay on scope.** Only make changes that directly serve the task. If you notice something unrelated that needs attention, note it but do not fix it in this session.\n")
-	sb.WriteString(fmt.Sprintf("- **Do not commit generated files.** This file (`%s`), `%s`, `%s`, and any other files prefixed with `.aiman_` are session scaffolding. Never stage, commit, or include them in pull requests.\n", domain.AimanTaskFileName, domain.AimanPromptFileName, domain.AimanSessionSummaryFileName))
+	sb.WriteString(fmt.Sprintf("- **Do not commit generated files.** This file (`%s`), `%s`, `%s`, `%s`, and any other files prefixed with `.aiman_` are session scaffolding. Never stage, commit, or include them in pull requests.\n", domain.AimanTaskFileName, domain.AimanPromptFileName, domain.AimanSessionSummaryFileName, domain.AimanContextFileName))
+	sb.WriteString(fmt.Sprintf("- **Shared context.** If `%s` is present, read it after this file. Record durable findings with `aiman context put`. Use `aiman context get ID` for a full note.\n", domain.AimanContextFileName))
 	sb.WriteString("- **No secrets or credentials in code.** Do not hardcode tokens, passwords, API keys, or other secrets.\n")
 	sb.WriteString("- **Preserve existing tests.** Do not delete, skip, or weaken existing tests to make your changes pass. If an existing test conflicts with the new behaviour, update it to reflect the correct new expectation and explain why.\n")
 	sb.WriteString("- **Respect the project structure.** Follow existing file layout, naming conventions, and patterns. When in doubt, look at how similar features are implemented in the codebase and stay consistent.\n\n")

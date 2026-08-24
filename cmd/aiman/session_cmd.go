@@ -154,7 +154,7 @@ func runSession(args []string) error {
 }
 
 var boolSessionFlags = map[string]bool{
-	"wait": true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true,
+	"wait": true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true, "dry-run": true,
 }
 
 func takeFlags(args []string) (map[string]string, []string) {
