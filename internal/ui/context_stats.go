@@ -182,7 +182,7 @@ func (m ContextStatsModel) View() string {
 func (r contextStatsRow) detail() string {
 	st := r.stats
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("  Namespaces:"))
+	b.WriteString("  Namespaces:")
 	if len(st.Namespaces) == 0 {
 		b.WriteString(" none\n")
 	} else {

@@ -2745,7 +2745,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // updateByState routes a message to the handler for the screen currently on top. The bool
 // reports whether this state claimed the message; when false the caller falls through to
 // the batched commands collected earlier in Update.
+func (m *Model) dispatchSettingsUpdate(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch m.state {
+	case viewStateAgentDefaults:
+		model, cmd := m.handleAgentDefaultsUpdate(msg)
+		return model, cmd, true
+	case viewStateContextStats:
+		model, cmd := m.handleContextStatsUpdate(msg)
+		return model, cmd, true
+	case viewStateAISettings:
+		model, cmd := m.handleAISetupUpdate(msg)
+		return model, cmd, true
+	default:
+		return m, nil, false
+	}
+}
+
 func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	if model, cmd, ok := m.dispatchSettingsUpdate(msg); ok {
+		return model, cmd, true
+	}
 	switch m.state {
 	case viewStateMain:
 		model, cmd := m.handleMainUpdate(msg)
@@ -2769,18 +2788,6 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 
 	case viewStateGeneralSettings:
 		model, cmd := m.handleGeneralSetupUpdate(msg)
-		return model, cmd, true
-
-	case viewStateAgentDefaults:
-		model, cmd := m.handleAgentDefaultsUpdate(msg)
-		return model, cmd, true
-
-	case viewStateContextStats:
-		model, cmd := m.handleContextStatsUpdate(msg)
-		return model, cmd, true
-
-	case viewStateAISettings:
-		model, cmd := m.handleAISetupUpdate(msg)
 		return model, cmd, true
 
 	case viewStateSecretsSetup:
@@ -3163,7 +3170,23 @@ func (m *Model) View() string {
 	return baseView
 }
 
+func (m *Model) renderSettingsView() (string, bool) {
+	switch m.state {
+	case viewStateAgentDefaults:
+		return m.agentDefaults.View(), true
+	case viewStateContextStats:
+		return m.contextStats.View(), true
+	case viewStateAISettings:
+		return m.aiSetup.View(), true
+	default:
+		return "", false
+	}
+}
+
 func (m *Model) renderView() string {
+	if s, ok := m.renderSettingsView(); ok {
+		return s
+	}
 	switch m.state {
 	case viewStateMain:
 		return m.renderMainView()
@@ -3182,15 +3205,6 @@ func (m *Model) renderView() string {
 
 	case viewStateGeneralSettings:
 		return m.generalSetup.View()
-
-	case viewStateAgentDefaults:
-		return m.agentDefaults.View()
-
-	case viewStateContextStats:
-		return m.contextStats.View()
-
-	case viewStateAISettings:
-		return m.aiSetup.View()
 
 	case viewStateSecretsSetup:
 		return m.secretsSetup.View()
