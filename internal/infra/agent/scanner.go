@@ -59,9 +59,7 @@ var knownAgents = []domain.Agent{
 }
 
 // KnownAgents returns every agent aiman knows how to install and drive, as a copy callers
-// can freely modify. Used where there is no host to scan yet — an EC2 loop provisions its
-// instance from scratch, so the agents installed on any other machine say nothing about
-// what will be available there.
+// can freely modify. Used for defaults lists and anywhere a host scan is not possible.
 func KnownAgents() []domain.Agent {
 	out := make([]domain.Agent, len(knownAgents))
 	copy(out, knownAgents)

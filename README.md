@@ -6,7 +6,7 @@
 
 Aiman automates the entire development workflow:
 
-1. **Choose Where It Runs** — A configured remote server, or an on-demand EC2 autonomous loop
+1. **Choose Where It Runs** — A configured remote server from your registry
 2. **Select a JIRA Issue** — Your issues in the statuses you actually work in
 3. **Generate Branch Name** — Auto-creates git-compatible branch names
 4. **Pick a Repository** — Browse your GitHub repos
@@ -215,8 +215,7 @@ aiman
 ### Creating a New Session
 
 1. Press `n` on the dashboard
-2. **Choose Where It Runs**: A numbered remote server, or `[e]` for an EC2 autonomous loop
-   (see below). Offered whatever your remote count, since an EC2 loop needs no remote.
+2. **Choose Where It Runs**: A numbered remote server from your registry.
 3. **Choose How to Start**: From a JIRA issue, a new branch, an existing branch, ad-hoc, or
    an autonomous trigger
 4. **Select JIRA Issue**: Type to filter your issues in real-time. The list holds issues
@@ -245,22 +244,6 @@ Skip the JIRA/branch/repo flow and jump straight to agent selection:
 Ad-hoc sessions still get their own tmux session, mutagen sync, and AWS credentials.
 
 **Faster path:** `N` on the dashboard. It uses the active (or filtered) remote, skips JIRA/branch/repo, opens the agent picker, and names the session `q1`, `q2`, … in group `quick`. Rename afterwards with `e`.
-
-### Starting an EC2 Autonomous Loop
-
-An EC2 loop launches its own on-demand instance, provisions it, runs an agent
-autonomously against a task, and self-destructs — so it needs no remote server of your own:
-
-1. Press `n` on the dashboard
-2. Press `e` on the run-target screen
-3. **Select JIRA Issue**, **Confirm Branch Name**, **Select Repository** as usual
-4. **Agent Selection**: every agent Aiman can install is offered, since the instance does
-   not exist yet and there is nothing to scan
-5. **Summary**: review and confirm
-
-Instance type, region, AWS profile, subnet, security group, and key pair come from
-**EC2 Loop Settings** in the Admin Menu (`m`). The same run is available headless via
-`aiman ec2-loop --repo … --task …`.
 
 ### Terminating a Session
 

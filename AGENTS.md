@@ -223,22 +223,18 @@ State captured at goroutine dispatch time (before the goroutine starts) to avoid
 
 The TUI wizard (`n` key) drives the user through:
 
-1. Run-target picker (`viewStateRunTargetPicker`) → a configured remote server, or `[e]` for
-   an EC2 autonomous loop. Shown for any remote count, including zero, because the EC2 loop
-   launches its own instance and needs no remote.
-2. Mode picker (remote targets only) → JIRA issue / new branch / existing branch / ad-hoc /
-   autonomous trigger
+1. Run-target picker (`viewStateRunTargetPicker`) → a configured remote server. Shown for
+   any remote count, including zero, so a fresh install still has somewhere actionable to go.
+2. Mode picker → JIRA issue / new branch / existing branch / ad-hoc / autonomous trigger
 3. JIRA issue picker → `m.sessionCfg.IssueKey` / `m.sessionCfg.Issue`. Only issues assigned
    to the current user in `integrations.jira.issue_statuses` (default:
    `jira.DefaultIssueStatuses`) are listed, and typed searches are scoped the same way.
 4. Branch name editor
 5. Repo picker (via `gh repo list`)
 6. Directory picker (remote subdirectory of repo)
-7. Agent picker (scans the remote for installed agents; the EC2 path has no host to scan
-   yet, so it offers `agent.KnownAgents()` instead)
+7. Agent picker (scans the remote for installed agents)
 8. Summary + AWS override screen
-9. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine, or
-   `createEC2LoopSession()` for an EC2 loop
+9. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine
 
 `CreateSession` does:
 - git clone/fetch on remote
@@ -354,14 +350,12 @@ routed by `usecase.CaptureSessionPane / SendSessionPrompt /
 TerminateSessionTerminal` — call those instead of RemoteExecutor tmux methods
 so both backends stay supported.
 
-Not implemented for the PTY backend: EC2 loop sessions (their instance-
-termination watchdog is coupled to tmux's lifecycle by design).
+
 
 ## Remaining TODOs (from PLAN.md)
 
 - **Remote VM Bootstrapper**: Connect to a new VM and install baseline tooling (git, tmux, go, node, claude, cursor, agy, opencode, acli), configure SSH keys, and authenticate agents.
 - **AI Compute Monitoring**: Provider subscription/usage monitoring (Anthropic, Google, OpenAI) — credit balances and usage tracking.
-- **EC2 Provisioning**: Spin up/terminate EC2 instances and wire to Aiman's remote registry.
 - **MOSH Support**: Hand off to MOSH for high-latency interactive connections.
 - **Agentic Patterns**: Robust orchestrator-worker-validator patterns; translate for each supported coding tool.
 

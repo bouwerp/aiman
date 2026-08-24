@@ -32,7 +32,6 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/ai"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	"github.com/bouwerp/aiman/internal/infra/ec2"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
@@ -140,7 +139,6 @@ const (
 	viewStateDirPicker
 	viewStateAgentPicker
 	viewStateSummary
-	viewStateEC2Settings
 	viewStateLoading
 	viewStateTerminateConfirm
 	viewStateWorktreeExists
@@ -162,7 +160,7 @@ const (
 	viewStateSecretsSetup    // manage global secrets
 	viewStateAWSCredentials  // manage AWS credential status and renewal
 	viewStateError           // generic error dialog (press any key to dismiss)
-	viewStateRunTargetPicker // pick where a new session runs: a remote server or an EC2 loop
+	viewStateRunTargetPicker // pick which configured remote a new session runs on
 	viewStateQuitConfirm     // confirm before exiting
 	viewStateAutonomousTriggerPicker
 	viewStateAutonomousLabelsInput
@@ -360,7 +358,6 @@ type Model struct {
 	snapshotBrowser  SnapshotBrowserModel
 	scheduledPrompts ScheduledPromptsModel
 	picker           RepoPickerModel
-	ec2Setup         EC2SetupModel
 	issuePicker      IssuePickerModel
 	branchInput      BranchInputModel
 	genericInput     TextInputModel
@@ -750,7 +747,6 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
 		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
 		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
-		menuItem{title: "EC2 Loop Settings", desc: "Configure default settings for autonomous EC2 loops", action: viewStateEC2Settings},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 		menuItem{title: "Scheduled Prompts", desc: "Manage periodic cron-scheduled prompt injections", action: viewStateScheduledPrompts},
 	}
@@ -1888,13 +1884,6 @@ func (m *Model) sendStatus(msg string) {
 
 func (m *Model) fetchAgents() tea.Cmd {
 	remote := m.selectedRemote
-	// An EC2 loop provisions a fresh instance, so there is no host to scan: offer every
-	// agent aiman can install rather than whatever happens to be on another machine.
-	if m.sessionCfg.IsEC2Loop {
-		return func() tea.Msg {
-			return agent.ScanAgentsMsg{Agents: agent.KnownAgents()}
-		}
-	}
 	return func() tea.Msg {
 		if remote.Host == "" {
 			return agent.ScanAgentsMsg{Err: fmt.Errorf("no remote selected")}
@@ -2797,10 +2786,6 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		model, cmd := m.handleSecretsSetupUpdate(msg)
 		return model, cmd, true
 
-	case viewStateEC2Settings:
-		model, cmd := m.handleEC2SetupUpdate(msg)
-		return model, cmd, true
-
 	case viewStateAWSCredentials:
 		model, cmd := m.handleAWSCredentialsUpdate(msg)
 		return model, cmd, true
@@ -3211,9 +3196,6 @@ func (m *Model) renderView() string {
 
 	case viewStateSecretsSetup:
 		return m.secretsSetup.viewString()
-
-	case viewStateEC2Settings:
-		return docStyle.Render(m.ec2Setup.viewString())
 
 	case viewStateAWSCredentials:
 		return m.awsCredentials.viewString()
@@ -3659,7 +3641,6 @@ func (m *Model) renderRunTargetPicker() string {
 	if len(m.cfg.Remotes) == 0 {
 		b.WriteString(dim.Render("  No remote servers configured — add one in Admin Menu.") + "\n")
 	}
-	b.WriteString("\n" + activeStyle.Render("  [e]") + "  EC2 Autonomous Loop — on-demand AWS instance\n")
 	b.WriteString("\n" + dim.Render("  esc: cancel"))
 
 	dialog := lipgloss.NewStyle().
@@ -4403,8 +4384,8 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 	if msg.String() == "n" {
-		// The run-target picker is shown for any remote count, including zero: it is the
-		// only way to reach the EC2 loop, which needs no remote server at all.
+		// The run-target picker is shown even with zero remotes so the user lands
+		// somewhere actionable instead of failing silently later.
 		m.sessionCfg = domain.SessionConfig{}
 		m.selectedRemote = config.Remote{}
 		m.state = viewStateRunTargetPicker
@@ -4939,11 +4920,6 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, m.secretsSetup.Init()
 				}
-				if i.action == viewStateEC2Settings {
-					m.ec2Setup = NewEC2SetupModel(m.cfg)
-					m.state = i.action
-					return m, m.ec2Setup.Init()
-				}
 				if i.action == viewStateAWSCredentials {
 					return m, m.enterAWSCredentials()
 				}
@@ -5426,16 +5402,6 @@ func (m *Model) handleSecretsSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *Model) handleEC2SetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyPressMsg); ok && keyMsg.String() == "esc" {
-		m.state = viewStateMenu
-		return m, nil
-	}
-	var cmd tea.Cmd
-	m.ec2Setup, cmd = m.ec2Setup.Update(msg)
-	return m, cmd
-}
-
 func (m *Model) handleScheduledPromptsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		if m.scheduledPrompts.mode == spModeList && keyMsg.String() == "esc" {
@@ -5489,24 +5455,14 @@ func (m *Model) handleAWSCredentialsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// handleRunTargetPickerUpdate handles the first screen of the new-session flow: where the
-// work should run. Numbered entries are configured remote servers; "e" is the EC2
-// autonomous loop, which launches its own instance and therefore needs no remote.
+// handleRunTargetPickerUpdate handles the first screen of the new-session flow: which
+// configured remote server the work should run on.
 func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = viewStateMain
 			return m, nil
-		case "e", "E":
-			m.sessionCfg = domain.SessionConfig{IsEC2Loop: true}
-			// An EC2 loop provisions its own instance, so no remote is carried forward.
-			m.selectedRemote = config.Remote{}
-			m.issuePicker = NewIssuePickerModel(nil)
-			m.issuePicker.loading = true
-			m.issuePicker.SetSize(m.width, m.height)
-			m.state = viewStateIssuePicker
-			return m, m.searchJira("")
 		default:
 			idx := 0
 			if n, err := strconv.Atoi(km.String()); err == nil {
@@ -5531,8 +5487,7 @@ func (m *Model) resetSessionCfg(cfg domain.SessionConfig) {
 }
 
 // handleModePickerUpdate handles the second screen of the new-session flow: what kind of
-// work to start on the chosen remote. The EC2 loop is not here — it is picked on the
-// run-target screen, since it runs somewhere else entirely.
+// work to start on the chosen remote.
 func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
@@ -5666,13 +5621,7 @@ func (m *Model) handleAutonomousConcurrencyInputUpdate(msg tea.Msg) (tea.Model, 
 func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.issuePicker.list.FilterState() != list.Filtering {
-			// An EC2 loop reaches the issue picker straight from the run-target screen,
-			// never via the mode picker.
-			if m.sessionCfg.IsEC2Loop {
-				m.state = viewStateRunTargetPicker
-			} else {
-				m.state = viewStateModePicker
-			}
+			m.state = viewStateModePicker
 			return m, nil
 		}
 	}
@@ -5812,13 +5761,6 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fetchBranches(*m.picker.selected)
 		}
 
-		if m.sessionCfg.IsEC2Loop {
-			m.loadingMsg = "Scanning available agents..."
-			m.loadingNext = viewStateAgentPicker
-			m.state = viewStateLoading
-			return m, m.fetchAgents()
-		}
-
 		if m.sessionCfg.Mode == domain.SessionModeAutonomous {
 			m.sessionCfg.AutonomousConfig.GitHubRepo = m.sessionCfg.Repo.Name
 			// Skip directories for autonomous triggers, go straight to agent
@@ -5927,12 +5869,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = viewStateMain
 				return m, nil
 			}
-			// The EC2 flow skips the directory picker (issue → repo → agent), so going
-			// back has to land on the screen it actually came from.
-			if m.sessionCfg.IsEC2Loop {
-				m.state = viewStateRepoPicker
-				return m, nil
-			}
 			m.state = viewStateDirPicker
 			return m, nil
 		}
@@ -5970,11 +5906,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Pre-fill OpenRouter API key from local environment (user can override).
 		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
-		// An EC2 loop has no remote workspace to inspect — the instance does not exist yet.
-		if m.sessionCfg.IsEC2Loop {
-			m.state = viewStateSummary
-			return m, nil
-		}
 		if m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
 			m.loadingMsg = "Checking workspace..."
 			m.loadingNext = viewStateSummary
@@ -6007,10 +5938,6 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.sessionCfg.Mode == domain.SessionModeAutonomous {
 			return m, m.createAutonomousRule()
-		}
-
-		if m.sessionCfg.IsEC2Loop {
-			return m, m.createEC2LoopSession()
 		}
 
 		return m, m.startBackgroundCreate()
@@ -6056,93 +5983,6 @@ func (m *Model) ensureRemoteDaemon(ctx context.Context, sshMgr *ssh.Manager) err
 		return fmt.Errorf("failed to install aiman-trigger on remote: %w", err)
 	}
 	return nil
-}
-
-func (m *Model) createEC2LoopSession() tea.Cmd {
-	placeholderID := uuid.New().String()
-	placeholder := domain.Session{
-		ID:          placeholderID,
-		IssueKey:    m.sessionCfg.IssueKey,
-		RepoName:    m.sessionCfg.Repo.Name,
-		AgentName:   m.sessionCfg.Agent.Name,
-		Status:      domain.SessionStatusProvisioning,
-		Mode:        domain.SessionModeEC2Loop,
-		RemoteHost:  "aws-ec2", // Dummy host so it renders
-		TmuxSession: "EC2 Loop: " + m.sessionCfg.Branch,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-
-	m.allSessions = append(m.allSessions, placeholder)
-	m.applyRemoteFilter()
-	m.activeSession = placeholder.TmuxSession
-	m.state = viewStateMain
-
-	items := m.list.Items()
-	for i, it := range items {
-		if si, ok := it.(item); ok && si.session.ID == placeholder.ID {
-			m.list.Select(i)
-			break
-		}
-	}
-
-	return func() tea.Msg {
-		ctx := context.Background()
-		ec2Mgr := ec2.NewManager()
-		sshFactory := func(host, user, root string) domain.RemoteExecutor {
-			return ssh.NewManager(ssh.Config{
-				Host: host,
-				User: user,
-				Root: root,
-			})
-		}
-		runner := usecase.NewEC2LoopRunner(ec2Mgr, sshFactory)
-
-		envVars := make(map[string]string)
-		if gh := os.Getenv("GITHUB_TOKEN"); gh != "" {
-			envVars["GITHUB_TOKEN"] = gh
-		}
-		if anth := os.Getenv("ANTHROPIC_API_KEY"); anth != "" {
-			envVars["ANTHROPIC_API_KEY"] = anth
-		}
-		if oai := os.Getenv("OPENAI_API_KEY"); oai != "" {
-			envVars["OPENAI_API_KEY"] = oai
-		}
-
-		spec := domain.EC2LaunchSpec{
-			AWSProfile:      m.cfg.EC2Loop.DefaultProfile,
-			Region:          m.cfg.EC2Loop.DefaultRegion,
-			InstanceType:    m.cfg.EC2Loop.DefaultInstanceType,
-			SubnetID:        m.cfg.EC2Loop.DefaultSubnetID,
-			SecurityGroupID: m.cfg.EC2Loop.DefaultSecurityGroup,
-			KeyName:         m.cfg.EC2Loop.DefaultKeyName,
-			Repositories:    []string{m.sessionCfg.Repo.URL},
-			IssueKey:        m.sessionCfg.IssueKey,
-			Branch:          m.sessionCfg.Branch,
-			AgentName:       m.sessionCfg.Agent.Name,
-			TaskDescription: m.sessionCfg.InitialPrompt,
-			EnvironmentVars: envVars,
-			SelfDestruct:    true,
-			TimeoutMinutes:  60,
-		}
-
-		progressChan := make(chan usecase.EC2LoopProgress, 100)
-
-		go func() {
-			for p := range progressChan {
-				if m.Program != nil {
-					m.Program.Send(sessionCreateMsg{status: p.Message, placeholderID: placeholderID})
-				}
-			}
-		}()
-
-		_, err := runner.Run(ctx, spec, progressChan)
-		if err != nil {
-			return sessionCreateMsg{err: fmt.Errorf("ec2 loop failed: %w", err), placeholderID: placeholderID}
-		}
-
-		return sessionCreateMsg{session: placeholder, placeholderID: placeholderID}
-	}
 }
 
 func (m *Model) createAutonomousRule() tea.Cmd {
