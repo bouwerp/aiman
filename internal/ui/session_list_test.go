@@ -1,20 +1,20 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"github.com/charmbracelet/colorprofile"
 )
 
 func TestSessionStateColorByActivity(t *testing.T) {
 	tests := []struct {
 		it   item
-		want lipgloss.Color
+		want color.Color
 	}{
 		{item{activity: "busy"}, stateColorWorking},
 		{item{activity: "creating"}, stateColorWorking},
@@ -54,9 +54,9 @@ func TestSessionTitleStaysUncolored(t *testing.T) {
 }
 
 func TestSessionListDelegatePaintsState(t *testing.T) {
-	orig := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(orig) })
+	orig := lipgloss.Writer.Profile
+	lipgloss.Writer.Profile = colorprofile.TrueColor
+	t.Cleanup(func() { lipgloss.Writer.Profile = orig })
 
 	busy := item{session: domain.Session{Name: "impl"}, activity: "busy"}
 	idle := item{session: domain.Session{Name: "q1"}, activity: "idle"}
@@ -235,13 +235,13 @@ func TestSessionSearchEscCancelsAndStaysOnDashboard(t *testing.T) {
 	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 
-	updated, _ := m.handleMainUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	updated, _ := m.handleMainUpdate(pressKey("/"))
 	m = updated.(*Model)
 	if m.list.FilterState() != list.Filtering {
 		t.Fatalf("after / want Filtering, got %s", m.list.FilterState())
 	}
 
-	updated, _ = m.handleMainUpdate(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.handleMainUpdate(pressKey("esc"))
 	m = updated.(*Model)
 	if m.state != viewStateMain {
 		t.Fatalf("esc while searching must not quit, state %v", m.state)
@@ -263,7 +263,7 @@ func TestSessionSearchEscClearsAppliedFilter(t *testing.T) {
 		t.Fatalf("state %s", m.list.FilterState())
 	}
 
-	updated, _ := m.handleMainUpdate(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.handleMainUpdate(pressKey("esc"))
 	m = updated.(*Model)
 	if m.state != viewStateMain {
 		t.Fatalf("esc must not quit, state %v", m.state)

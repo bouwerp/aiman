@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type assignChoice struct {
@@ -96,7 +96,7 @@ func (m *Model) buildAssignChoices(sess domain.Session) []assignChoice {
 }
 
 func (m *Model) handleRenameGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.renamingGroup = ""
 		m.renamingGroupHost = ""
 		m.state = viewStateMain
@@ -136,7 +136,7 @@ func (m *Model) handleRenameGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleAssignGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	km, ok := msg.(tea.KeyMsg)
+	km, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
@@ -176,7 +176,7 @@ func (m *Model) handleAssignGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleNewGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateAssignGroup
 		return m, nil
 	}

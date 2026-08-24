@@ -3,9 +3,9 @@ package ui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type TextInputModel struct {
@@ -20,7 +20,7 @@ func NewTextInputModel(prompt, placeholder, initial string) TextInputModel {
 	ti.Placeholder = placeholder
 	ti.Focus()
 	ti.CharLimit = 156
-	ti.Width = 40
+	ti.SetWidth(40)
 	ti.SetValue(initial)
 
 	return TextInputModel{
@@ -33,18 +33,18 @@ func (m TextInputModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-func isConfirmKey(km tea.KeyMsg) bool {
+func isConfirmKey(km tea.KeyPressMsg) bool {
 	switch km.String() {
 	case "enter", "ctrl+j", "ctrl+m":
 		return true
 	}
-	return km.Type == tea.KeyEnter
+	return false
 }
 
 func (m TextInputModel) Update(msg tea.Msg) (TextInputModel, tea.Cmd) {
 	var cmd tea.Cmd
 
-	if km, ok := msg.(tea.KeyMsg); ok && isConfirmKey(km) {
+	if km, ok := msg.(tea.KeyPressMsg); ok && isConfirmKey(km) {
 		if strings.TrimSpace(m.textInput.Value()) != "" {
 			m.Confirmed = true
 			m.Error = ""
@@ -56,7 +56,7 @@ func (m TextInputModel) Update(msg tea.Msg) (TextInputModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m TextInputModel) View() string {
+func (m TextInputModel) viewString() string {
 	lines := []string{
 		titleStyle.Render(m.Prompt),
 		"",
@@ -72,4 +72,8 @@ func (m TextInputModel) View() string {
 
 func (m TextInputModel) Value() string {
 	return m.textInput.Value()
+}
+
+func (m TextInputModel) View() tea.View {
+	return newView(m.viewString())
 }

@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // syncHealth describes the observed state of a session's mutagen sync.

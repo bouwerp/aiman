@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // awsCredExpiryWarnWindow is how close to expiry delegated credentials must be before the

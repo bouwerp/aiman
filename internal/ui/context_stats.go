@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type contextStatsRow struct {
@@ -107,7 +107,7 @@ func (m *Model) handleContextStatsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	km, ok := msg.(tea.KeyMsg)
+	km, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
@@ -138,7 +138,7 @@ func (m *Model) handleContextStatsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m ContextStatsModel) View() string {
+func (m ContextStatsModel) viewString() string {
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	var b strings.Builder
 	b.WriteString("Shared context\n")
@@ -220,4 +220,8 @@ func formatBytes(n int64) string {
 
 func formatMs(ms float64) string {
 	return fmt.Sprintf("%.2f", ms)
+}
+
+func (m ContextStatsModel) View() tea.View {
+	return newView(m.viewString())
 }

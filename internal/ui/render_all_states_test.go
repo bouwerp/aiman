@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/list"
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/charmbracelet/bubbles/list"
 )
 
 // renderModelForAllStates builds a Model with every sub-model initialised, so a render of

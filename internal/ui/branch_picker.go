@@ -1,10 +1,10 @@
 package ui
 
 import (
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type branchItem struct {
@@ -45,7 +45,7 @@ func (m *BranchPickerModel) SetSize(width, height int) {
 }
 
 func (m BranchPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		if km.String() == "enter" {
 			if i, ok := m.list.SelectedItem().(branchItem); ok {
 				m.selected = i.name
@@ -58,10 +58,14 @@ func (m BranchPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m BranchPickerModel) View() string {
+func (m BranchPickerModel) viewString() string {
 	if len(m.list.Items()) == 0 {
 		return "\n  No remote branches found.\n  Press esc to go back."
 	}
 	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("enter: select branch")
 	return m.list.View() + "\n  " + hint
+}
+
+func (m BranchPickerModel) View() tea.View {
+	return newView(m.viewString())
 }

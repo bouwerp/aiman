@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type agentDefaultRow struct {
@@ -124,7 +124,7 @@ func (m AgentDefaultsModel) focusCell() (row int, effort bool) {
 }
 
 func (m AgentDefaultsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	km, ok := msg.(tea.KeyMsg)
+	km, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
@@ -213,7 +213,7 @@ func optionAt(values []string, i int) string {
 	return values[i]
 }
 
-func (m AgentDefaultsModel) View() string {
+func (m AgentDefaultsModel) viewString() string {
 	if m.saved {
 		return "Agent defaults saved!\n"
 	}
@@ -264,4 +264,8 @@ func formatOption(values []string, i int) string {
 		return "(agent default)"
 	}
 	return v
+}
+
+func (m AgentDefaultsModel) View() tea.View {
+	return newView(m.viewString())
 }

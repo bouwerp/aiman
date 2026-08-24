@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestDropRemoteDelegationRemovesConfigEntry(t *testing.T) {
@@ -35,7 +34,7 @@ func TestAWSCredentialsModelDeleteStartsRemovalForUnmanagedProfile(t *testing.T)
 		remote:        config.Remote{Host: "example", User: "dev", Root: "/home/dev"},
 	}}
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, cmd := model.Update(pressKey("d"))
 	m := updated.(AWSCredentialsModel)
 	if cmd == nil {
 		t.Fatal("expected remove command")
@@ -55,7 +54,7 @@ func TestAWSCredentialsModelDeleteStartsRemovalForManagedProfile(t *testing.T) {
 		remote:        config.Remote{Host: "example", User: "dev", Root: "/home/dev"},
 	}}
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, cmd := model.Update(pressKey("d"))
 	m := updated.(AWSCredentialsModel)
 	if cmd == nil {
 		t.Fatal("expected remove command for a pushed temporary profile")
@@ -73,7 +72,7 @@ func TestAWSCredentialsModelRenameStartsEditing(t *testing.T) {
 		remoteProfile: "dev",
 	}}
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	updated, cmd := model.Update(pressKey("e"))
 	m := updated.(AWSCredentialsModel)
 	if cmd == nil {
 		t.Fatal("expected rename input command")
@@ -98,7 +97,7 @@ func TestAWSCredentialsModelRenameSubmitsCommand(t *testing.T) {
 	model.renameKey = "host|local|dev"
 	model.renameInput.SetValue("prod")
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.Update(pressKey("enter"))
 	m := updated.(AWSCredentialsModel)
 	if cmd == nil {
 		t.Fatal("expected rename command")

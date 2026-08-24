@@ -5,14 +5,13 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestQuickStartKeyUsesDefaultRemote(t *testing.T) {
 	cfg := twoRemoteCfg()
 	cfg.ActiveRemote = "10.0.1.9"
 	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
-	updated, cmd, handled := m.handleMainKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	updated, cmd, handled := m.handleMainKeyMsg(pressKey("N"))
 	if !handled {
 		t.Fatal("N should be handled")
 	}
@@ -75,7 +74,7 @@ func TestRenameKeyOpensInput(t *testing.T) {
 	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TmuxSession: "q1", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
-	updated, _, handled := m.handleMainKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	updated, _, handled := m.handleMainKeyMsg(pressKey("e"))
 	if !handled {
 		t.Fatal("e should be handled")
 	}

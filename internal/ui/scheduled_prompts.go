@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 )
@@ -78,7 +78,7 @@ func (m ScheduledPromptsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = len(m.prompts) - 1
 		}
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch m.mode {
 		case spModeList:
 			return m.updateList(msg)
@@ -196,7 +196,7 @@ func (m ScheduledPromptsModel) updateSelectSessions(msg tea.KeyMsg) (tea.Model, 
 		if m.sessionCursor < len(m.allSessions)-1 {
 			m.sessionCursor++
 		}
-	case " ":
+	case " ", "space":
 		if len(m.allSessions) > 0 {
 			sid := m.allSessions[m.sessionCursor].ID
 			m.selectedSessions[sid] = !m.selectedSessions[sid]
@@ -285,7 +285,7 @@ func (m ScheduledPromptsModel) deletePrompt(id string) tea.Cmd {
 	}
 }
 
-func (m ScheduledPromptsModel) View() string {
+func (m ScheduledPromptsModel) viewString() string {
 	switch m.mode {
 	case spModeEdit:
 		return m.viewEdit()
@@ -427,9 +427,9 @@ func makeSPInputs(cron, prompt string) []textinput.Model {
 	inputs := make([]textinput.Model, 2)
 	for i := range inputs {
 		t := textinput.New()
-		t.Cursor.Style = cursorStyle
+		applyCursorStyle(&t)
 		t.CharLimit = 256
-		t.Width = 40
+		t.SetWidth(40)
 		if i == 0 {
 			t.Placeholder = "*/5 * * * *"
 			t.SetValue(cron)
@@ -440,4 +440,8 @@ func makeSPInputs(cron, prompt string) []textinput.Model {
 		inputs[i] = t
 	}
 	return inputs
+}
+
+func (m ScheduledPromptsModel) View() tea.View {
+	return newView(m.viewString())
 }

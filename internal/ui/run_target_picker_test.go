@@ -7,7 +7,6 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func twoRemoteCfg() *config.Config {
@@ -18,7 +17,7 @@ func twoRemoteCfg() *config.Config {
 }
 
 func pressMainKey(m *Model, r rune) *Model {
-	updated, _, _ := m.handleMainKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	updated, _, _ := m.handleMainKeyMsg(pressRune(r))
 	if mm, ok := updated.(*Model); ok {
 		return mm
 	}
@@ -50,7 +49,7 @@ func TestNewSessionAlwaysOpensRunTargetPicker(t *testing.T) {
 
 func TestRunTargetPickerSelectsRemote(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
-	updated, _ := m.handleRunTargetPickerUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	updated, _ := m.handleRunTargetPickerUpdate(pressKey("2"))
 	got := updated.(*Model)
 
 	if got.state != viewStateModePicker {
@@ -69,7 +68,7 @@ func TestRunTargetPickerSelectsRemote(t *testing.T) {
 
 func TestRunTargetPickerIgnoresOutOfRangeIndex(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
-	updated, _ := m.handleRunTargetPickerUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
+	updated, _ := m.handleRunTargetPickerUpdate(pressKey("7"))
 	if got := updated.(*Model); got.state != viewStateRunTargetPicker {
 		t.Fatalf("expected to stay on the picker, got %v", got.state)
 	}
@@ -78,7 +77,7 @@ func TestRunTargetPickerIgnoresOutOfRangeIndex(t *testing.T) {
 func TestRunTargetPickerSelectsEC2Loop(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker,
 		selectedRemote: config.Remote{Host: "stale.example", User: "ubuntu"}}
-	updated, cmd := m.handleRunTargetPickerUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	updated, cmd := m.handleRunTargetPickerUpdate(pressKey("e"))
 	got := updated.(*Model)
 
 	if got.state != viewStateIssuePicker {
@@ -100,7 +99,7 @@ func TestRunTargetPickerSelectsEC2Loop(t *testing.T) {
 
 func TestRunTargetPickerEC2LoopWithNoRemotes(t *testing.T) {
 	m := &Model{cfg: &config.Config{}, state: viewStateRunTargetPicker}
-	updated, _ := m.handleRunTargetPickerUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	updated, _ := m.handleRunTargetPickerUpdate(pressKey("e"))
 	if got := updated.(*Model); !got.sessionCfg.IsEC2Loop || got.state != viewStateIssuePicker {
 		t.Fatalf("EC2 must be selectable with no remotes configured, got state %v", got.state)
 	}
@@ -108,7 +107,7 @@ func TestRunTargetPickerEC2LoopWithNoRemotes(t *testing.T) {
 
 func TestRunTargetPickerEscCancels(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
-	updated, _ := m.handleRunTargetPickerUpdate(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.handleRunTargetPickerUpdate(pressKey("esc"))
 	if got := updated.(*Model); got.state != viewStateMain {
 		t.Fatalf("expected esc to return to the dashboard, got %v", got.state)
 	}
@@ -143,7 +142,7 @@ func TestModePickerNoLongerOffersEC2(t *testing.T) {
 		t.Errorf("the mode picker must not mention EC2 any more, got:\n%s", out)
 	}
 
-	updated, _ := m.handleModePickerUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+	updated, _ := m.handleModePickerUpdate(pressKey("6"))
 	if got := updated.(*Model); got.sessionCfg.IsEC2Loop {
 		t.Error("'6' must no longer start an EC2 loop")
 	}
@@ -155,7 +154,7 @@ func TestModePickerKeepsSelectedRemote(t *testing.T) {
 	remote := twoRemoteCfg().Remotes[0]
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateModePicker, selectedRemote: remote,
 		sessionCfg: domain.SessionConfig{RemoteHost: remote.Host}}
-	updated, _ := m.handleModePickerUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	updated, _ := m.handleModePickerUpdate(pressKey("2"))
 	if got := updated.(*Model); got.sessionCfg.RemoteHost != remote.Host {
 		t.Errorf("expected RemoteHost %q preserved, got %q", remote.Host, got.sessionCfg.RemoteHost)
 	}
@@ -176,7 +175,7 @@ func TestEscFromIssuePickerRespectsEC2Flow(t *testing.T) {
 			m := &Model{cfg: twoRemoteCfg(), state: viewStateIssuePicker,
 				issuePicker: NewIssuePickerModel(nil),
 				sessionCfg:  domain.SessionConfig{IsEC2Loop: tc.ec2}}
-			updated, _ := m.handleIssuePickerUpdate(tea.KeyMsg{Type: tea.KeyEsc})
+			updated, _ := m.handleIssuePickerUpdate(pressKey("esc"))
 			if got := updated.(*Model); got.state != tc.want {
 				t.Fatalf("expected state %v, got %v", tc.want, got.state)
 			}
@@ -197,7 +196,7 @@ func TestEscFromAgentPickerRespectsEC2Flow(t *testing.T) {
 			m := &Model{cfg: twoRemoteCfg(), state: viewStateAgentPicker,
 				agentPicker: NewAgentPickerModel(nil),
 				sessionCfg:  domain.SessionConfig{IsEC2Loop: tc.ec2}}
-			updated, _ := m.handleAgentPickerUpdate(tea.KeyMsg{Type: tea.KeyEsc})
+			updated, _ := m.handleAgentPickerUpdate(pressKey("esc"))
 			if got := updated.(*Model); got.state != tc.want {
 				t.Fatalf("expected state %v, got %v", tc.want, got.state)
 			}

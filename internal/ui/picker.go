@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type RepoItem struct {
@@ -69,7 +69,7 @@ func NewRepoPickerModel(repos []domain.Repo, cfg *config.GitConfig) RepoPickerMo
 	ti := textinput.New()
 	ti.Placeholder = "Enter new repository name"
 	ti.CharLimit = 100
-	ti.Width = 50
+	ti.SetWidth(50)
 
 	return RepoPickerModel{
 		list:   l,
@@ -114,7 +114,7 @@ func (m *RepoPickerModel) SetSize(width, height int) {
 }
 
 func (m RepoPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch m.state {
 		case repoStateList:
 			switch msg.String() {
@@ -189,7 +189,7 @@ func (m RepoPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m RepoPickerModel) View() string {
+func (m RepoPickerModel) viewString() string {
 	switch m.state {
 	case repoStateList:
 		return docStyle.Render(m.list.View()) + "\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("ctrl+n: create new repository • ctrl+a: skip (no repository)")
@@ -218,4 +218,9 @@ func (m RepoPickerModel) View() string {
 	}
 
 	return ""
+}
+
+func (m RepoPickerModel) View() tea.View {
+	v := tea.NewView(m.viewString())
+	return v
 }

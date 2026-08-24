@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type GeneralSetupModel struct {
@@ -28,7 +28,7 @@ func (m GeneralSetupModel) Init() tea.Cmd {
 }
 
 func (m GeneralSetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -70,7 +70,7 @@ func (m GeneralSetupModel) save() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m GeneralSetupModel) View() string {
+func (m GeneralSetupModel) viewString() string {
 	if m.saved {
 		return "General settings saved!\n"
 	}
@@ -102,4 +102,8 @@ func (m GeneralSetupModel) View() string {
 	b.WriteString("\n(tab/shift+tab to navigate, enter to toggle/save, esc to cancel)\n")
 
 	return docStyle.Render(b.String())
+}
+
+func (m GeneralSetupModel) View() tea.View {
+	return newView(m.viewString())
 }

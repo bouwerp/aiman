@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // knownAgents defines the agents we know how to scan for.

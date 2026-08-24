@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type BranchInputModel struct {
@@ -33,7 +33,7 @@ func newBranchInputModelMode(proposed string, labelMode bool) BranchInputModel {
 	}
 	ti.Focus()
 	ti.CharLimit = 156
-	ti.Width = 40
+	ti.SetWidth(40)
 
 	m := BranchInputModel{
 		textInput: ti,
@@ -51,7 +51,7 @@ func (m BranchInputModel) Init() tea.Cmd {
 }
 
 func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
 			// Sanitize and validate before confirming
@@ -61,7 +61,7 @@ func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Confirmed = true
 				return m, nil
 			}
-		case " ":
+		case " ", "space":
 			// Let space through - it will be converted to dash in sanitization
 		default:
 			// Block invalid characters
@@ -106,7 +106,7 @@ func (m BranchInputModel) sanitizeInput(s string) string {
 	return strings.TrimRight(s, "-")
 }
 
-func (m BranchInputModel) View() string {
+func (m BranchInputModel) viewString() string {
 	style := lipgloss.NewStyle().Padding(1, 2).Border(lipgloss.RoundedBorder())
 
 	title := "Confirm Branch Name"
@@ -123,4 +123,8 @@ func (m BranchInputModel) View() string {
 
 func (m BranchInputModel) Value() string {
 	return m.textInput.Value()
+}
+
+func (m BranchInputModel) View() tea.View {
+	return newView(m.viewString())
 }

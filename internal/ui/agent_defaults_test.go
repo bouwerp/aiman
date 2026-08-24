@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestAgentDefaultsModelListsKnownAgents(t *testing.T) {
@@ -13,7 +12,7 @@ func TestAgentDefaultsModelListsKnownAgents(t *testing.T) {
 	if len(m.rows) == 0 {
 		t.Fatal("expected known agents")
 	}
-	out := m.View()
+	out := m.viewString()
 	if !strings.Contains(out, "Claude") || !strings.Contains(out, "Grok") {
 		t.Fatalf("%s", out)
 	}
@@ -45,7 +44,7 @@ func TestAgentDefaultsCyclesModelList(t *testing.T) {
 		t.Fatalf("%q", m.rows[row].models[m.rows[row].modelIdx])
 	}
 	m.focusIndex = fieldIndex(m, "claude", false)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	next, _ := m.Update(pressKey("right"))
 	m = next.(AgentDefaultsModel)
 	if m.rows[row].models[m.rows[row].modelIdx] == "sonnet" {
 		t.Fatal("right should cycle off sonnet")
@@ -55,7 +54,7 @@ func TestAgentDefaultsCyclesModelList(t *testing.T) {
 func TestAgentDefaultsTabSkipsNAEffort(t *testing.T) {
 	m := NewAgentDefaultsModel(&config.Config{})
 	m.focusIndex = fieldIndex(m, "opencode", false)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ := m.Update(pressKey("tab"))
 	m = next.(AgentDefaultsModel)
 	row, effort := m.focusCell()
 	if m.rows[row].key == "opencode" && effort {

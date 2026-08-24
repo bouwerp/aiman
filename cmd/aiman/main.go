@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/ai"
@@ -20,7 +21,6 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/ui"
 	"github.com/bouwerp/aiman/internal/usecase"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Set via -ldflags at build time.
@@ -141,7 +141,7 @@ func run() error {
 		case "downgrade":
 			return runDowngrade(version, os.Args[2:])
 		case "init":
-			p := tea.NewProgram(ui.NewSetupModel(cfg), tea.WithAltScreen(), tea.WithMouseAllMotion())
+			p := tea.NewProgram(ui.NewSetupModel(cfg))
 			if _, err := p.Run(); err != nil {
 				return fmt.Errorf("alas, there's been an error: %w", err)
 			}
@@ -151,7 +151,7 @@ func run() error {
 			if err != nil {
 				return fmt.Errorf("failed to list repos: %w", err)
 			}
-			p := tea.NewProgram(ui.NewRepoPickerModel(repos, &cfg.Git), tea.WithAltScreen(), tea.WithMouseAllMotion())
+			p := tea.NewProgram(ui.NewRepoPickerModel(repos, &cfg.Git))
 			if _, err := p.Run(); err != nil {
 				return fmt.Errorf("alas, there's been an error: %w", err)
 			}
@@ -203,7 +203,7 @@ func run() error {
 	intelligence := ai.NewIntelligenceProvider(cfg)
 	snapshotManager := usecase.NewSnapshotManager(db, intelligence)
 	startup := ui.NewStartupModel(cfg, doctor, db, flowManager, intelligence, snapshotManager, version)
-	p := tea.NewProgram(startup, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	p := tea.NewProgram(startup)
 
 	// From here the TUI owns the terminal, so anything written to stderr lands
 	// in the middle of the rendered frame. Background work logs to a file until

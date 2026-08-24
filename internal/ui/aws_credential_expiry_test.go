@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func syncedRemote() config.Remote {
@@ -161,7 +160,7 @@ func TestAWSCredExpiryWarnWindowIsFifteenMinutes(t *testing.T) {
 
 func TestMainKeyShiftRStartsRefreshAll(t *testing.T) {
 	m := &Model{cfg: &config.Config{Remotes: []config.Remote{syncedRemote()}}}
-	updated, cmd, handled := m.handleMainKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, cmd, handled := m.handleMainKeyMsg(pressKey("R"))
 	if !handled {
 		t.Fatal("shift+R must be handled by the main view")
 	}
@@ -179,7 +178,7 @@ func TestMainKeyShiftRStartsRefreshAll(t *testing.T) {
 
 func TestMainKeyShiftRWithoutSyncedDelegations(t *testing.T) {
 	m := &Model{cfg: &config.Config{}}
-	updated, _, handled := m.handleMainKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, _, handled := m.handleMainKeyMsg(pressKey("R"))
 	if !handled {
 		t.Fatal("shift+R must be handled even when there is nothing to refresh")
 	}
@@ -190,7 +189,7 @@ func TestMainKeyShiftRWithoutSyncedDelegations(t *testing.T) {
 
 func TestMainKeyShiftRIgnoredWhileRefreshing(t *testing.T) {
 	m := &Model{cfg: &config.Config{Remotes: []config.Remote{syncedRemote()}}, awsCredRefreshing: true}
-	_, cmd, handled := m.handleMainKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	_, cmd, handled := m.handleMainKeyMsg(pressKey("R"))
 	if !handled || cmd == nil {
 		t.Fatal("a second shift+R should be handled with a toast, not ignored")
 	}
