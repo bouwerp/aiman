@@ -19,7 +19,7 @@ func startTestServer(t *testing.T, repo domain.SessionRepository) string {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	srv := New(ln, repo, nil, nil, nil, "test")
+	srv := New(ln, repo, nil, nil, nil, nil, "test")
 	go func() { _ = srv.Serve(ctx) }()
 	t.Cleanup(cancel)
 	return SocketPath(dir)
@@ -218,7 +218,7 @@ func TestSessionPromptBlocked(t *testing.T) {
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = New(ln, repo, remote, nil, nil, "t").Serve(cctx) }()
+	go func() { _ = New(ln, repo, remote, nil, nil, nil, "t").Serve(cctx) }()
 	sock := SocketPath(dir)
 
 	resp, err := Call(sock, "session.prompt", map[string]any{"id": "reviewer", "text": "yes"})
@@ -251,7 +251,7 @@ func TestSessionCreateQuickAndRename(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	creator := &fakeCreator{}
-	go func() { _ = New(ln, repo, nil, creator, nil, "t").Serve(ctx) }()
+	go func() { _ = New(ln, repo, nil, creator, nil, nil, "t").Serve(ctx) }()
 	sock := SocketPath(dir)
 
 	resp, err := Call(sock, "session.create", map[string]any{"quick": true, "agent": "claude"})

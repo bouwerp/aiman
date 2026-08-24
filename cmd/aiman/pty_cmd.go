@@ -1,0 +1,255 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+
+	"github.com/bouwerp/aiman/internal/server"
+	"golang.org/x/term"
+)
+
+// runPTY drives the built-in PTY runtime through the serve socket:
+//
+//	aiman pty list
+//	aiman pty create --id <aiman-session-id> --name <name> --dir <dir> --command <cmd> [--env K=V]…
+//	aiman pty get|kill|forget <id>
+//	aiman pty capture <id> [--lines N] [--max-bytes N]
+//	aiman pty input <id> --data <text>
+//	aiman pty attach <id>   # raw interactive relay; terminal goes raw mode
+func runPTY(args []string) error {
+	if len(args) == 0 {
+		printPTYUsage(os.Stderr)
+		return errUsage
+	}
+	sock, err := socketPath()
+	if err != nil {
+		return err
+	}
+
+	switch args[0] {
+	case "list":
+		return callAndPrint(sock, "pty.list", map[string]any{})
+	case "create":
+		return runPTYCreate(sock, args[1:])
+	case "attach":
+		if len(args) < 2 {
+			writeCLIError(server.CodeInvalidParams, "pty attach requires a session id")
+			return errUsage
+		}
+		return runPTYAttach(sock, args[1])
+	case "capture", "get", "kill", "forget", "input":
+		if len(args) < 2 {
+			writeCLIError(server.CodeInvalidParams, "pty "+args[0]+" requires a session id")
+			return errUsage
+		}
+		id := args[1]
+		flags, _ := takeFlags(args[2:])
+		method := "pty." + args[0]
+		params := map[string]any{"id": id}
+		switch args[0] {
+		case "capture":
+			if n := flags["lines"]; n != "" {
+				params["lines"] = atoi(n)
+			}
+			if n := flags["max-bytes"]; n != "" {
+				params["max_bytes"] = atoi(n)
+			}
+		case "input":
+			data, ok := flags["data"]
+			if fpath := flags["file"]; !ok && fpath != "" {
+				b, rerr := os.ReadFile(fpath)
+				if rerr != nil {
+					writeCLIError(server.CodeInvalidParams, "file unreadable: "+rerr.Error())
+					return errUsage
+				}
+				data = string(b)
+				ok = true
+			}
+			if !ok {
+				b, rerr := io.ReadAll(os.Stdin)
+				if rerr != nil || len(b) == 0 {
+					writeCLIError(server.CodeInvalidParams, "pty input requires --data or stdin")
+					return errUsage
+				}
+				data = string(b)
+			}
+			params["data"] = data
+		}
+		return callAndPrint(sock, method, params)
+	default:
+		fmt.Fprintf(os.Stderr, "aiman pty: unknown command %q\n\n", args[0])
+		printPTYUsage(os.Stderr)
+		return errUsage
+	}
+}
+
+func runPTYCreate(sock string, args []string) error {
+	flags, _ := takeFlags(args)
+	if pf := flags["params-file"]; pf != "" {
+		raw, rerr := os.ReadFile(pf)
+		if rerr != nil {
+			writeCLIError(server.CodeInvalidParams, "params-file unreadable: "+rerr.Error())
+			return errUsage
+		}
+		return callAndPrintRaw(sock, "pty.create", raw)
+	}
+	params := map[string]any{}
+	for _, key := range []string{"id", "name", "dir", "command"} {
+		if v := flags[key]; v != "" {
+			params[key] = v
+		}
+	}
+	if params["command"] == "" && flags["exec"] != "" {
+		params["command"] = flags["exec"]
+	}
+	if params["id"] == "" || params["command"] == "" {
+		writeCLIError(server.CodeInvalidParams, "pty create requires --id and --command")
+		return errUsage
+	}
+	if envs, ok := flags["env"]; ok && envs != "" {
+		env := map[string]string{}
+		for _, kv := range splitComma(envs) {
+			parts := splitFirst(kv, '=')
+			if parts[0] != "" {
+				env[parts[0]] = parts[1]
+			}
+		}
+		params["env"] = env
+	}
+	if c := flags["cols"]; c != "" {
+		params["cols"] = atoi(c)
+	}
+	if r := flags["rows"]; r != "" {
+		params["rows"] = atoi(r)
+	}
+	return callAndPrint(sock, "pty.create", params)
+}
+
+// runPTYAttach is the remote end of `ssh -t host aiman pty attach <id>`: it
+// puts the local terminal into raw mode and shuttles bytes between the tty and
+// the serve socket until the session ends or the user detaches with ctrl+q.
+func runPTYAttach(sock, id string) error {
+	if !stdinIsTTY() {
+		return errors.New("pty attach needs a terminal (run over `ssh -t`)")
+	}
+	cols, rows := terminalSize()
+
+	connResp, err := server.AttachDial(sock, id, cols, rows)
+	if err != nil {
+		writeCLIError(server.CodeServerNotRunning, err.Error())
+		return err
+	}
+	defer connResp.Close()
+
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return fmt.Errorf("pty attach: raw mode: %w", err)
+	}
+	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
+
+	// Live resize is not supported yet; the window size is fixed at attach.
+	if err := connResp.Relay(detachOnCtrlQ(os.Stdin, connResp), os.Stdout); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
+func terminalSize() (int, int) {
+	w, h, err := term.GetSize(int(os.Stdin.Fd()))
+	if err != nil {
+		return 80, 24
+	}
+	return w, h
+}
+
+func printPTYUsage(w io.Writer) {
+	fmt.Fprint(w, `aiman pty — built-in PTY sessions on this host (needs aiman serve)
+
+  aiman pty list
+  aiman pty create --id ID --command "claude" [--dir DIR] [--env K=V,K2=V2] [--cols N --rows M]
+  aiman pty get|capture|kill|forget ID     (capture: --lines N or --max-bytes N)
+  aiman pty input ID --data TEXT
+  aiman pty attach ID                      (interactive; detach with ctrl+q)
+
+Sessions live inside aiman serve and survive disconnects, but not a serve restart.
+`)
+}
+
+func splitComma(s string) []string {
+	var out []string
+	cur := ""
+	for _, r := range s {
+		if r == ',' {
+			out = append(out, cur)
+			cur = ""
+			continue
+		}
+		cur += string(r)
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
+
+func splitFirst(s string, sep byte) [2]string {
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep {
+			return [2]string{s[:i], s[i+1:]}
+		}
+	}
+	return [2]string{s, ""}
+}
+
+// detachKey is ctrl+q; pressing it closes the attach stream without touching
+// the session itself.
+const detachKey = 0x11
+
+// detachOnCtrlQ wraps stdin so ctrl+q ends the relay instead of reaching the
+// remote terminal.
+func detachOnCtrlQ(r io.Reader, closer io.Closer) io.Reader {
+	return &detachReader{r: r, closer: closer}
+}
+
+type detachReader struct {
+	r      io.Reader
+	closer io.Closer
+	buf    []byte
+}
+
+func (d *detachReader) Read(p []byte) (int, error) {
+	if len(d.buf) > 0 {
+		n := copy(p, d.buf)
+		d.buf = d.buf[n:]
+		return n, nil
+	}
+	n, err := d.r.Read(p)
+	for i := 0; i < n; i++ {
+		if p[i] == detachKey {
+			// Keep everything before ctrl+q, drop it and everything after.
+			out := p[:i]
+			_ = d.closer.Close()
+			if copy(p, out) < len(out) {
+				return 0, io.EOF
+			}
+			return len(out), io.EOF
+		}
+	}
+	return n, err
+}
+
+// callAndPrintRaw issues a request whose params are pre-encoded JSON.
+func callAndPrintRaw(sock, method string, rawParams []byte) error {
+	resp, err := server.CallRaw(sock, method, rawParams)
+	if err != nil {
+		writeCLIError(server.CodeServerNotRunning, err.Error())
+		return err
+	}
+	if resp.Error != nil {
+		writeCLIError(resp.Error.Code, resp.Error.Message)
+		return errors.New(resp.Error.Message)
+	}
+	return writeJSON(resp.Result)
+}

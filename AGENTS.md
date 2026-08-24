@@ -56,6 +56,7 @@ internal/
     aws.go          — AWSConfig type
   contextstore/
     files.go        — markdown+YAML store under ~/.aiman/context/
+  ptyruntime/       — built-in PTY session runtime used by aiman serve
   usecase/
     flow_manager.go — CreateSession (the main session-creation orchestrator)
     session_discoverer.go — discovers sessions from live remote (tmux/git/mutagen)
@@ -320,6 +321,33 @@ Key config fields:
 10. **AWS_PROFILE is sanitised, not trusted**: `usecase.SharedSessionAWSEnv` exports a profile only if it survives `SanitizeSessionAWSProfile` — legacy `aiman-<id>` names and names missing from `~/.aws` are dropped so the session falls back to the default credential chain rather than pointing at a profile that cannot resolve. Do not bypass it by setting `AWS_PROFILE` directly in tmux env code.
 
 ---
+
+## Built-in PTY Runtime (opt-in alternative to tmux)
+
+`internal/ptyruntime` runs inside `aiman serve`: each session is a real PTY
+(creack/pty) whose master is owned by the daemon, with a 1 MiB scrollback ring,
+fan-out attach subscribers, and SIGTERM/SIGKILL kill grace. Sessions survive
+laptop disconnects but **not** a serve restart (documented limitation).
+
+Socket API (`internal/server/handlers_pty.go`): `pty.create/list/get/input/
+capture/kill/forget` are plain JSON methods; `pty.attach` answers once then
+takes over the connection as a raw bidirectional byte stream.
+
+CLI (`cmd/aiman/pty_cmd.go`): `aiman pty list|create|get|capture|input|kill|
+forget|attach`. Attach puts the local tty in raw mode and relays; ctrl+q
+detaches without stopping the session. `--params-file` / `--file` flags keep
+secrets and prompt text out of argv.
+
+Session model: `domain.Session.Backend` is `"tmux"` (default) or `"pty"`;
+persisted in the sqlite `backend` column with COALESCE protection like other
+identity fields. Remotes opt in via config `remotes[].session_backend: pty`.
+The laptop drives everything through SSH (`$HOME/.local/bin/aiman pty …`),
+routed by `usecase.CaptureSessionPane / SendSessionPrompt /
+TerminateSessionTerminal` — call those instead of RemoteExecutor tmux methods
+so both backends stay supported.
+
+Not implemented yet for the PTY backend: live window resize during attach,
+AttachExisting adoption, EC2 loop sessions.
 
 ## Remaining TODOs (from PLAN.md)
 

@@ -19,7 +19,7 @@ func startContextServer(t *testing.T) string {
 	}
 	store := contextstore.NewFiles(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
-	srv := New(ln, nil, nil, nil, store, "test")
+	srv := New(ln, nil, nil, nil, store, nil, "test")
 	go func() { _ = srv.Serve(ctx) }()
 	t.Cleanup(cancel)
 	return SocketPath(dir)
@@ -153,7 +153,7 @@ func TestContextStoreUnavailable(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = New(ln, nil, nil, nil, nil, "t").Serve(ctx) }()
+	go func() { _ = New(ln, nil, nil, nil, nil, nil, "t").Serve(ctx) }()
 	resp, err := Call(SocketPath(dir), "context.list", map[string]any{})
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
 type sessionCreator interface {
@@ -22,13 +23,14 @@ type Server struct {
 	remote   domain.RemoteExecutor
 	create   sessionCreator
 	ctxStore domain.ContextStore
+	pty      *ptyruntime.Manager
 	version  string
 
 	mu     sync.Mutex
 	sessMu map[string]*sync.Mutex
 }
 
-func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecutor, create sessionCreator, ctxStore domain.ContextStore, version string) *Server {
+func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecutor, create sessionCreator, ctxStore domain.ContextStore, ptyMgr *ptyruntime.Manager, version string) *Server {
 	if version == "" {
 		version = "dev"
 	}
@@ -38,6 +40,7 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 		remote:   remote,
 		create:   create,
 		ctxStore: ctxStore,
+		pty:      ptyMgr,
 		version:  version,
 		sessMu:   map[string]*sync.Mutex{},
 	}
@@ -74,6 +77,10 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		line = bytesTrimSpace(line)
 		if len(line) == 0 {
 			continue
+		}
+		if isPTYAttach(line) {
+			s.handlePTYAttachConn(ctx, conn, line)
+			return
 		}
 		resp := s.dispatch(ctx, line)
 		out, encErr := EncodeResponse(resp)
@@ -128,6 +135,20 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleContextPack(ctx, req)
 	case "context.stats":
 		return s.handleContextStats(ctx, req)
+	case "pty.create":
+		return s.handlePTYCreate(ctx, req)
+	case "pty.list":
+		return s.handlePTYList(ctx, req)
+	case "pty.get":
+		return s.handlePTYGet(ctx, req)
+	case "pty.input":
+		return s.handlePTYInput(ctx, req)
+	case "pty.capture":
+		return s.handlePTYCapture(ctx, req)
+	case "pty.kill":
+		return s.handlePTYKill(ctx, req)
+	case "pty.forget":
+		return s.handlePTYForget(ctx, req)
 	default:
 		return Response{ID: req.ID, Error: &Error{Code: CodeInvalidParams, Message: "unknown method " + req.Method}}
 	}

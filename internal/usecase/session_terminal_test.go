@@ -1,0 +1,155 @@
+package usecase
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/bouwerp/aiman/internal/domain"
+)
+
+// terminalRemote records Execute commands and hands back canned output.
+type terminalRemote struct {
+	commands []string
+	output   map[string]string
+
+	written map[string][]byte
+}
+
+func (r *terminalRemote) Execute(_ context.Context, cmd string) (string, error) {
+	r.commands = append(r.commands, cmd)
+	for frag, out := range r.output {
+		if strings.Contains(cmd, frag) {
+			return out, nil
+		}
+	}
+	return "", nil
+}
+
+func (r *terminalRemote) CaptureTmuxPane(context.Context, string) (string, error) { return "", nil }
+
+func (r *terminalRemote) WriteFile(_ context.Context, path string, content []byte) error {
+	if r.written == nil {
+		r.written = map[string][]byte{}
+	}
+	r.written[path] = content
+	return nil
+}
+
+func TestScanPTYSessionsParsesRuntimeList(t *testing.T) {
+	r := &terminalRemote{output: map[string]string{
+		"aiman pty list": `{
+  "type": "pty_list",
+  "sessions": [
+    {"id": "abc", "name": "feat-x", "dir": "/srv/app@feat-x", "status": "running"}
+  ]
+}`,
+	}}
+	got := ScanPTYSessions(context.Background(), r)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(got))
+	}
+	if got[0].ID != "abc" || got[0].Status != "running" || got[0].Dir != "/srv/app@feat-x" {
+		t.Fatalf("unexpected record: %+v", got[0])
+	}
+}
+
+func TestScanPTYSessionsEmptyOnMissingRuntime(t *testing.T) {
+	r := &terminalRemote{output: map[string]string{"aiman pty list": ""}}
+	if got := ScanPTYSessions(context.Background(), r); len(got) != 0 {
+		t.Fatalf("expected no sessions, got %d", len(got))
+	}
+}
+
+func TestCreatePTYSessionWritesParamsFile(t *testing.T) {
+	r := &terminalRemote{}
+	err := CreatePTYSession(context.Background(), r, PTYSpec{
+		ID: "sid", Name: "feat", Dir: "/d", Command: "claude",
+		Env: map[string]string{"AWS_PROFILE": "prod"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	found := false
+	for path, body := range r.written {
+		if strings.HasPrefix(path, "/tmp/aiman-pty-") && strings.Contains(string(body), `"AWS_PROFILE":"prod"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("params file with env not written: %v", r.written)
+	}
+	last := r.commands[len(r.commands)-1]
+	if !strings.Contains(last, "aiman pty create --params-file") || !strings.Contains(last, "rm -f") {
+		t.Fatalf("create command malformed: %s", last)
+	}
+}
+
+func TestSendSessionPromptRoutesByBackend(t *testing.T) {
+	ctx := context.Background()
+
+	// tmux session keeps the legacy path
+	r := &terminalRemote{}
+	tmux := domain.Session{TmuxSession: "WTB-1", ID: "tid"}
+	if err := SendSessionPrompt(ctx, r, tmux, "hello"); err != nil {
+		t.Fatalf("tmux prompt: %v", err)
+	}
+	if len(r.commands) == 0 || !strings.Contains(r.commands[0], "tmux send-keys") {
+		t.Fatalf("tmux prompt did not use send-keys: %v", r.commands)
+	}
+
+	// pty session goes through input --file plus an Enter press
+	r = &terminalRemote{}
+	ptySess := domain.Session{ID: "pid", Backend: domain.BackendPTY}
+	if err := SendSessionPrompt(ctx, r, ptySess, "do things"); err != nil {
+		t.Fatalf("pty prompt: %v", err)
+	}
+	joined := strings.Join(r.commands, "\n")
+	if !strings.Contains(joined, "aiman pty input \"pid\" --file") {
+		t.Fatalf("pty prompt missing file input: %s", joined)
+	}
+	var promptBody []byte
+	for _, body := range r.written {
+		promptBody = body
+	}
+	if string(promptBody) != "do things" {
+		t.Fatalf("prompt file content wrong: %q", promptBody)
+	}
+}
+
+func TestTerminateSessionTerminalRoutesByBackend(t *testing.T) {
+	ctx := context.Background()
+
+	r := &terminalRemote{}
+	ptySess := domain.Session{ID: "pid", Backend: domain.BackendPTY}
+	if err := TerminateSessionTerminal(ctx, r, ptySess); err != nil {
+		t.Fatalf("pty terminate: %v", err)
+	}
+	joined := strings.Join(r.commands, "\n")
+	if !strings.Contains(joined, "aiman pty kill") || !strings.Contains(joined, "aiman pty forget") {
+		t.Fatalf("pty terminate commands wrong: %s", joined)
+	}
+
+	r = &terminalRemote{}
+	tmux := domain.Session{TmuxSession: "WTB-1"}
+	if err := TerminateSessionTerminal(ctx, r, tmux); err != nil {
+		t.Fatalf("tmux terminate: %v", err)
+	}
+	if !strings.Contains(r.commands[0], "tmux kill-session") {
+		t.Fatalf("tmux terminate wrong: %s", r.commands[0])
+	}
+}
+
+func TestCaptureSessionPaneRoutesByBackend(t *testing.T) {
+	ctx := context.Background()
+	r := &terminalRemote{output: map[string]string{
+		"aiman pty capture": `{"type":"pane_read","text":"pane-bytes"}`,
+	}}
+	out, err := CaptureSessionPane(ctx, r, domain.Session{ID: "pid", Backend: domain.BackendPTY})
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if out != "pane-bytes" {
+		t.Fatalf("capture text = %q", out)
+	}
+}

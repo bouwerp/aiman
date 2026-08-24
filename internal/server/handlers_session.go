@@ -97,6 +97,15 @@ func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.Agen
 	if s.remote == nil || live.TmuxSession == "" {
 		return domain.AgentStateUnknown, pane.Low
 	}
+	if live.IsPTY() {
+		// The PTY runtime lives in this process; skip the remote hop.
+		data, cerr := s.pty.Capture(live.ID, 0)
+		if cerr != nil {
+			return domain.AgentStateUnknown, pane.Low
+		}
+		r := pane.Classify(pane.Observation{Pane: string(data)})
+		return r.State, r.Confidence
+	}
 	text, err := s.remote.CaptureTmuxPane(ctx, live.TmuxSession)
 	if err != nil {
 		return domain.AgentStateUnknown, pane.Low
@@ -243,9 +252,24 @@ func (s *Server) handleRead(ctx context.Context, req Request) Response {
 	}
 	_ = json.Unmarshal(req.Params, &params)
 	text := ""
+	if sess.IsPTY() && s.pty != nil {
+		data, cerr := s.pty.Capture(sess.ID, params.Lines)
+		if cerr != nil {
+			return errResp(req.ID, CodeInvalidParams, cerr.Error())
+		}
+		return Response{ID: req.ID, Result: map[string]any{
+			"type":    "pane_read",
+			"session": sessionInfo(sess, req.Caller),
+			"text":    string(data),
+		}}
+	}
 	if s.remote != nil {
 		var err error
-		text, err = s.remote.CaptureTmuxPane(ctx, sess.TmuxSession)
+		if sess.IsPTY() {
+			text, err = usecase.CapturePTYPane(ctx, s.remote, sess.ID, params.Lines)
+		} else {
+			text, err = s.remote.CaptureTmuxPane(ctx, sess.TmuxSession)
+		}
 		if err != nil {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
@@ -288,7 +312,7 @@ func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
 	if s.remote == nil {
 		return errResp(req.ID, CodeInvalidParams, "no remote executor")
 	}
-	if err := usecase.SendPrompt(ctx, s.remote, sess.TmuxSession, sess.ID, params.Text); err != nil {
+	if err := usecase.SendSessionPrompt(ctx, s.remote, sess, params.Text); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	result := map[string]any{"type": "prompt_result", "sent": true}

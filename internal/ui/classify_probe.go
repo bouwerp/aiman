@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"github.com/bouwerp/aiman/internal/usecase"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -54,7 +55,7 @@ func classifySessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, s
 		ctx, cancel := context.WithTimeout(context.Background(), classifyProbeTimeout+10*time.Second)
 		defer cancel()
 
-		paneOut, err := mgr.CaptureTmuxPane(ctx, session.TmuxSession)
+		paneOut, err := usecase.CaptureSessionPane(ctx, mgr, session)
 		if err != nil {
 			out.err = fmt.Errorf("capture pane: %w", err)
 			return out

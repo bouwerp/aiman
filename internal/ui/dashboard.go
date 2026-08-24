@@ -1072,7 +1072,7 @@ func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		out, err := mgr.CaptureTmuxPane(ctx, session.TmuxSession)
+		out, err := usecase.CaptureSessionPane(ctx, mgr, session)
 		return tmuxOutputMsg{
 			session: session.TmuxSession,
 			output:  out,
@@ -1090,7 +1090,7 @@ func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, 
 			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		pane, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		pane, err := usecase.CaptureSessionPane(context.Background(), mgr, session)
 		if err != nil {
 			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("capture pane: %w", err)}
 		}
@@ -1158,7 +1158,7 @@ func loadArchivePreviewCmd(cfg *config.Config, snapMgr *usecase.SnapshotManager,
 		func() tea.Msg {
 			remote, _ := resolveRemote(cfg, session)
 			sshMgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-			rawPane, err := sshMgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+			rawPane, err := usecase.CaptureSessionPane(context.Background(), sshMgr, session)
 			if err != nil {
 				return archiveStepErrMsg{idx: 1, err: fmt.Errorf("capture pane: %w", err)}
 			}
@@ -1262,7 +1262,7 @@ func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
 			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		out, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		out, err := usecase.CaptureSessionPane(context.Background(), mgr, session)
 		if err != nil {
 			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
 		}
@@ -1917,6 +1917,9 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			Root: remote.Root,
 		})
 		sessionCfg.RemoteHost = remote.Host
+		// Opt-in PTY backend: remotes configured with session_backend: pty hand
+		// their agents to the serve daemon's built-in runtime instead of tmux.
+		sessionCfg.SessionBackend = remote.SessionBackend
 	}
 
 	return func() tea.Msg {
@@ -2265,7 +2268,7 @@ func (m *Model) terminateDiscardChanges(ctx context.Context, s domain.Session) e
 }
 
 func (m *Model) terminateKillTmux(ctx context.Context, s domain.Session) error {
-	if s.TmuxSession == "" {
+	if !s.IsPTY() && s.TmuxSession == "" {
 		return nil
 	}
 	remote, ok := resolveRemote(m.cfg, s)
@@ -2273,7 +2276,7 @@ func (m *Model) terminateKillTmux(ctx context.Context, s domain.Session) error {
 		return nil
 	}
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-	_, err := mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
+	err := usecase.TerminateSessionTerminal(ctx, mgr, s)
 	return err
 }
 
@@ -4504,6 +4507,9 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			}
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 			c := mgr.AttachTmuxSession(s.TmuxSession)
+			if s.IsPTY() {
+				c = mgr.AttachPTYSession(s.ID)
+			}
 			m.loadingMsg = fmt.Sprintf("Connecting to session %s...", s.TmuxSession)
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
@@ -7323,7 +7329,13 @@ func (m *Model) restartSession() tea.Cmd {
 		m.sendStatus("Capturing restart handoff...")
 		logf("step1: capturing restart handoff to %s", summaryPath)
 		summaryCtx, summaryCancel := context.WithTimeout(ctx, 90*time.Second)
-		summaryCreated, err := usecase.CaptureRestartSessionSummary(summaryCtx, mgr, s.TmuxSession, summaryPath)
+		var summaryCreated bool
+		var err error
+		if s.IsPTY() {
+			summaryCreated, err = usecase.CaptureRestartSessionSummaryPTY(summaryCtx, mgr, s.ID, summaryPath)
+		} else {
+			summaryCreated, err = usecase.CaptureRestartSessionSummary(summaryCtx, mgr, s.TmuxSession, summaryPath)
+		}
 		summaryCancel()
 		if err != nil {
 			logf("step1 FAILED: %v", err)
@@ -7406,6 +7418,36 @@ func (m *Model) restartSession() tea.Cmd {
 		// option guards to avoid the remain-on-exit race.
 		m.sendStatus(fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
 		logf("step3: restarting agent")
+
+		if s.IsPTY() {
+			// Built-in PTY backend: replace the process by killing and
+			// re-creating the session inside the remote serve daemon.
+			if kerr := usecase.KillPTYSession(ctx, mgr, s.ID); kerr != nil {
+				logf("step3: pty kill (continuing): %v", kerr)
+			}
+			env := map[string]string{}
+			for k, v := range awsEnv {
+				env[k] = v
+			}
+			for _, secret := range sessionCfg.EnvSecrets {
+				env[secret.Key] = secret.Value
+			}
+			if err := usecase.CreatePTYSession(ctx, mgr, usecase.PTYSpec{
+				ID:      s.ID,
+				Name:    s.TmuxSession,
+				Dir:     workingDir,
+				Command: agentCmd,
+				Env:     env,
+			}); err != nil {
+				return sessionCreateMsg{err: fmt.Errorf("failed to restart PTY session: %w", err)}
+			}
+			usecase.DeliverInitialPromptPTY(ctx, mgr, s.ID, sendKeysPrompt)
+
+			if db != nil {
+				_ = db.Save(ctx, s)
+			}
+			return sessionCreateMsg{session: *s}
+		}
 		paneCmd := fmt.Sprintf("bash -l -c '%s'; exec bash -i", agentBootstrap)
 		restartCmd := fmt.Sprintf(
 			"if tmux has-session -t %q 2>/dev/null; then "+

@@ -199,6 +199,9 @@ type Remote struct {
 	AWSDefaultProfile string `yaml:"aws_default_profile,omitempty"`
 	// AWSDefaultRegion overrides the global aws.default_region for this remote.
 	AWSDefaultRegion string `yaml:"aws_default_region,omitempty"`
+	// SessionBackend selects how new sessions host their terminal on this
+	// remote: "tmux" (default) or "pty" (aiman serve's built-in PTY runtime).
+	SessionBackend string `yaml:"session_backend,omitempty"`
 }
 
 // AWSDelegation is stored in aiman config; role_arn on the remote is derived from

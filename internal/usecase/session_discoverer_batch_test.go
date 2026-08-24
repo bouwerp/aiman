@@ -61,7 +61,9 @@ func TestDiscoverUsesBatchPathWhenAvailable(t *testing.T) {
 		t.Errorf("expected one batch call each, got tmux=%d worktree=%d", remote.tmuxCalls, remote.wtCalls)
 	}
 	for _, c := range remote.commands {
-		if strings.Contains(c, "native-sessions") {
+		// Fixed single-round-trip scans are allowed: the PTY runtime list and
+		// the native-session hook directory sweep.
+		if strings.Contains(c, "native-sessions") || strings.Contains(c, "aiman pty list") {
 			continue
 		}
 		t.Errorf("batch path should issue no per-item commands, got %v", remote.commands)

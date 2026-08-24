@@ -476,6 +476,22 @@ func tmuxAttachRemoteCommand(sessionName string) string {
 	)
 }
 
+// ptyAttachRemoteCommand hands the terminal to the serve daemon's PTY runtime.
+// ctrl+q detaches without touching the session.
+func ptyAttachRemoteCommand(sessionID string) string {
+	return remotePathPreamble + fmt.Sprintf(
+		`exec aiman pty attach %q`,
+		sessionID,
+	)
+}
+
+// AttachPTYSession returns the ssh command that interactively attaches to a
+// built-in-PTY session on this remote.
+func (m *Manager) AttachPTYSession(sessionID string) *exec.Cmd {
+	target := m.target()
+	return exec.Command("ssh", "-t", "-A", "-o", "BatchMode=yes", target, ptyAttachRemoteCommand(sessionID))
+}
+
 func (m *Manager) AttachTmuxSession(sessionName string) *exec.Cmd {
 	target := m.target()
 	// Use -t for interactive tty allocation, -A for agent forwarding, and -X for X11 forwarding (clipboard)

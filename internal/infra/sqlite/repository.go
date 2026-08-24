@@ -36,6 +36,7 @@ func NewRepository(dbPath string) (*Repository, error) {
 		worktree_path TEXT,
 		working_directory TEXT,
 		tmux_session TEXT,
+		backend TEXT,
 		mutagen_sync_id TEXT,
 		local_path TEXT,
 		agent_name TEXT,
@@ -59,6 +60,7 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN aws_config_json TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN agent_model TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN mode TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN backend TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN trigger_source TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN trigger_event_id TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN autonomous_config_json TEXT")
@@ -187,8 +189,8 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 	}
 
 	query := `
-	INSERT INTO sessions (id, name, group_name, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO sessions (id, name, group_name, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, backend, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		name = COALESCE(NULLIF(excluded.name, ''), sessions.name),
 		group_name = COALESCE(NULLIF(excluded.group_name, ''), sessions.group_name),
@@ -199,6 +201,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		worktree_path = COALESCE(NULLIF(excluded.worktree_path, ''), sessions.worktree_path),
 		working_directory = COALESCE(NULLIF(excluded.working_directory, ''), sessions.working_directory),
 		tmux_session = COALESCE(NULLIF(excluded.tmux_session, ''), sessions.tmux_session),
+		backend = COALESCE(NULLIF(excluded.backend, ''), sessions.backend),
 		mutagen_sync_id = COALESCE(NULLIF(excluded.mutagen_sync_id, ''), sessions.mutagen_sync_id),
 		local_path = COALESCE(NULLIF(excluded.local_path, ''), sessions.local_path),
 		agent_name = COALESCE(NULLIF(excluded.agent_name, ''), sessions.agent_name),
@@ -235,7 +238,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		hookAt = s.HookStateAt
 	}
 	_, err := r.db.ExecContext(ctx, query,
-		s.ID, s.Name, s.Group, s.IssueKey, s.Branch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.CreatedAt, updatedAt)
+		s.ID, s.Name, s.Group, s.IssueKey, s.Branch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, sessionBackend(s.Backend), s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
@@ -545,4 +548,13 @@ func scanScheduledPrompt(row spScanner) (*domain.ScheduledPrompt, error) {
 		sp.LastRunAt = lastRunAt.Time
 	}
 	return &sp, nil
+}
+
+// sessionBackend normalises an empty backend to tmux so rows written after the
+// field existed are always explicit.
+func sessionBackend(b string) string {
+	if b == "" {
+		return domain.BackendTmux
+	}
+	return b
 }
