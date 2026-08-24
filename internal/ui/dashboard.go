@@ -1118,21 +1118,6 @@ func fetchTriggerDetailsCmd(cfg *config.Config, session domain.Session) tea.Cmd 
 	}
 }
 
-// loadPriorSnapshotCmd looks up the latest snapshot for a session.
-// The result is delivered as snapshotPreviewMsg so the UI can show a preview.
-func loadPriorSnapshotCmd(snapMgr *usecase.SnapshotManager, sessionID string) tea.Cmd {
-	return func() tea.Msg {
-		if snapMgr == nil {
-			return snapshotPreviewMsg{snapshot: nil}
-		}
-		snap, err := snapMgr.GetLatestSnapshot(context.Background(), sessionID)
-		if err != nil || snap == nil {
-			return snapshotPreviewMsg{snapshot: nil}
-		}
-		return snapshotPreviewMsg{snapshot: snap}
-	}
-}
-
 // archivePreviewReadyMsg carries pre-computed archive preview data to the UI.
 type archivePreviewReadyMsg struct {
 	data *archivePreviewData
