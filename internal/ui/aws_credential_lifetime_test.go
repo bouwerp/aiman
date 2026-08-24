@@ -9,7 +9,6 @@ import (
 
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestParseCredentialLifetime(t *testing.T) {
@@ -189,22 +188,13 @@ func lifetimeModel(t *testing.T) AWSCredentialsModel {
 	return m
 }
 
-func pressKey(m AWSCredentialsModel, s string) AWSCredentialsModel {
-	var msg tea.KeyMsg
-	switch s {
-	case "enter":
-		msg = tea.KeyMsg{Type: tea.KeyEnter}
-	case "esc":
-		msg = tea.KeyMsg{Type: tea.KeyEsc}
-	default:
-		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
-	}
-	updated, _ := m.Update(msg)
+func pressLifetimeKey(m AWSCredentialsModel, s string) AWSCredentialsModel {
+	updated, _ := m.Update(pressKey(s))
 	return updated.(AWSCredentialsModel)
 }
 
 func TestLifetimeKeyOpensEditorPrefilled(t *testing.T) {
-	m := pressKey(lifetimeModel(t), "t")
+	m := pressLifetimeKey(lifetimeModel(t), "t")
 	if !m.editingLifetime {
 		t.Fatal("expected 't' to open the lifetime editor")
 	}
@@ -215,9 +205,9 @@ func TestLifetimeKeyOpensEditorPrefilled(t *testing.T) {
 
 func TestLifetimeEditorSavesOnEnter(t *testing.T) {
 	withTempHome(t)
-	m := pressKey(lifetimeModel(t), "t")
+	m := pressLifetimeKey(lifetimeModel(t), "t")
 	m.lifetimeInput.SetValue("7200")
-	m = pressKey(m, "enter")
+	m = pressLifetimeKey(m, "enter")
 
 	if m.editingLifetime {
 		t.Error("expected the editor to close after saving")
@@ -232,9 +222,9 @@ func TestLifetimeEditorSavesOnEnter(t *testing.T) {
 
 func TestLifetimeEditorRejectsOutOfRangeAndStaysOpen(t *testing.T) {
 	withTempHome(t)
-	m := pressKey(lifetimeModel(t), "t")
+	m := pressLifetimeKey(lifetimeModel(t), "t")
 	m.lifetimeInput.SetValue("60")
-	m = pressKey(m, "enter")
+	m = pressLifetimeKey(m, "enter")
 
 	if !m.editingLifetime {
 		t.Error("expected the editor to stay open after an invalid value")
@@ -248,9 +238,9 @@ func TestLifetimeEditorRejectsOutOfRangeAndStaysOpen(t *testing.T) {
 }
 
 func TestLifetimeEditorCancelsOnEsc(t *testing.T) {
-	m := pressKey(lifetimeModel(t), "t")
+	m := pressLifetimeKey(lifetimeModel(t), "t")
 	m.lifetimeInput.SetValue("7200")
-	m = pressKey(m, "esc")
+	m = pressLifetimeKey(m, "esc")
 
 	if m.editingLifetime {
 		t.Error("expected the editor to close")
@@ -263,7 +253,7 @@ func TestLifetimeEditorCancelsOnEsc(t *testing.T) {
 func TestLifetimeKeyRefusesUnmanagedProfile(t *testing.T) {
 	m := lifetimeModel(t)
 	m.entries[0].del = nil
-	m = pressKey(m, "t")
+	m = pressLifetimeKey(m, "t")
 
 	if m.editingLifetime {
 		t.Error("a profile with no local delegation config has no lifetime to edit")
@@ -277,9 +267,9 @@ func TestLifetimeKeyRefusesUnmanagedProfile(t *testing.T) {
 // when the user asks for a renew.
 func TestLifetimeEditorDoesNotRenew(t *testing.T) {
 	withTempHome(t)
-	m := pressKey(lifetimeModel(t), "t")
+	m := pressLifetimeKey(lifetimeModel(t), "t")
 	m.lifetimeInput.SetValue("7200")
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(pressKey("enter"))
 	saved := updated.(AWSCredentialsModel)
 	if cmd != nil {
 		t.Error("saving a lifetime should not dispatch work")
@@ -292,7 +282,7 @@ func TestLifetimeEditorDoesNotRenew(t *testing.T) {
 func TestAWSCredentialsViewShowsLifetimeColumn(t *testing.T) {
 	m := lifetimeModel(t)
 	m.entries[0].expiresAt = time.Now().Add(45 * time.Minute)
-	out := m.View()
+	out := m.viewString()
 	if !strings.Contains(out, "Lifetime") {
 		t.Error("expected a Lifetime column header")
 	}

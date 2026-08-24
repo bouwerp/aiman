@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type EC2SetupModel struct {
@@ -27,7 +27,7 @@ func NewEC2SetupModel(cfg *config.Config) EC2SetupModel {
 	for i := range m.inputs {
 		t := textinput.New()
 		t.CharLimit = 128
-		t.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+		applyInputPrompt(&t, "39")
 		m.inputs[i] = t
 	}
 
@@ -58,7 +58,7 @@ func (m EC2SetupModel) Init() tea.Cmd {
 }
 
 func (m EC2SetupModel) Update(msg tea.Msg) (EC2SetupModel, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "esc":
 			return m, nil
@@ -97,10 +97,10 @@ func (m EC2SetupModel) Update(msg tea.Msg) (EC2SetupModel, tea.Cmd) {
 			for i := 0; i <= len(m.inputs)-1; i++ {
 				if i == m.focusIndex {
 					cmds[i] = m.inputs[i].Focus()
-					m.inputs[i].PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+					applyInputPrompt(&m.inputs[i], "205")
 				} else {
 					m.inputs[i].Blur()
-					m.inputs[i].PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+					applyInputPrompt(&m.inputs[i], "39")
 				}
 			}
 			return m, tea.Batch(cmds...)
@@ -119,7 +119,7 @@ func (m *EC2SetupModel) updateInputs(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m EC2SetupModel) View() string {
+func (m EC2SetupModel) viewString() string {
 	var b strings.Builder
 	b.WriteString("\n  EC2 Autonomous Loop Settings\n\n")
 
@@ -150,4 +150,8 @@ func (m EC2SetupModel) View() string {
 	}
 
 	return b.String()
+}
+
+func (m EC2SetupModel) View() tea.View {
+	return newView(m.viewString())
 }

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestSummaryModelPromptFocusedByDefault(t *testing.T) {
@@ -27,7 +26,7 @@ func TestSummaryModelAdHocPromptFocusedByDefault(t *testing.T) {
 
 func TestSummaryModelTypingPopulatesPrompt(t *testing.T) {
 	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "repo"}, "")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi there")})
+	updated, _ := m.Update(pressKey("hi there"))
 	m = updated.(SummaryModel)
 	if got := m.promptInput.Value(); got != "hi there" {
 		t.Fatalf("expected prompt %q, got %q", "hi there", got)
@@ -37,7 +36,7 @@ func TestSummaryModelTypingPopulatesPrompt(t *testing.T) {
 func TestSummaryModelGetSessionConfigReturnsPromptNoSecrets(t *testing.T) {
 	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "repo"}, "")
 	m.SetAgent(&domain.Agent{Name: "Claude"})
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("do the thing")})
+	updated, _ := m.Update(pressKey("do the thing"))
 	m = updated.(SummaryModel)
 	cfg := m.GetSessionConfig()
 	if cfg.InitialPrompt != "do the thing" {
@@ -51,7 +50,7 @@ func TestSummaryModelGetSessionConfigReturnsPromptNoSecrets(t *testing.T) {
 func TestSummaryModelEnterConfirmsWithAgent(t *testing.T) {
 	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "repo"}, "")
 	m.SetAgent(&domain.Agent{Name: "Claude"})
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(pressKey("enter"))
 	m = updated.(SummaryModel)
 	if !m.IsConfirmed() {
 		t.Fatal("expected confirmed after Enter with agent set")
@@ -61,7 +60,7 @@ func TestSummaryModelEnterConfirmsWithAgent(t *testing.T) {
 func TestSummaryModelAdHocGetSessionConfigReturnsPrompt(t *testing.T) {
 	m := NewAdHocSummaryModel("my-label")
 	m.SetAgent(&domain.Agent{Name: "Claude"})
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("adhoc prompt")})
+	updated, _ := m.Update(pressKey("adhoc prompt"))
 	m = updated.(SummaryModel)
 	cfg := m.GetSessionConfig()
 	if !cfg.AdHoc {
@@ -91,12 +90,12 @@ func TestSummaryModelTabRoutesTypingToOpenRouterInput(t *testing.T) {
 	if m.focusIndex != 0 {
 		t.Fatalf("expected prompt focused (0), got %d", m.focusIndex)
 	}
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := m.Update(pressKey("tab"))
 	m = updated.(SummaryModel)
 	if m.focusIndex != 1 {
 		t.Fatalf("expected focus index 1 (OpenRouter) after tab, got %d", m.focusIndex)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	updated, _ = m.Update(pressKey("X"))
 	m = updated.(SummaryModel)
 	if m.promptInput.Value() != "" {
 		t.Fatalf("prompt should stay empty; got %q", m.promptInput.Value())

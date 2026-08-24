@@ -3,17 +3,18 @@ package ui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usecase"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // aimanPixels is a 7-row pixel bitmap for the AIMAN logo.
@@ -33,14 +34,14 @@ var aimanPixels = []string{
 
 var (
 	logoTagline = "ai coding agent manager"
-	logoPalette = []lipgloss.Color{
-		"#FF6B9D", // pink
-		"#D45BFF", // purple
-		"#7B9EFF", // blue
-		"#5BFFE8", // teal
-		"#5BFFA0", // green
-		"#FFD95B", // gold
-		"#FF9A6B", // orange
+	logoPalette = []color.Color{
+		lipgloss.Color("#FF6B9D"), // pink
+		lipgloss.Color("#D45BFF"), // purple
+		lipgloss.Color("#7B9EFF"), // blue
+		lipgloss.Color("#5BFFE8"), // teal
+		lipgloss.Color("#5BFFA0"), // green
+		lipgloss.Color("#FFD95B"), // gold
+		lipgloss.Color("#FF9A6B"), // orange
 	}
 )
 
@@ -208,7 +209,7 @@ func (m StartupModel) Init() tea.Cmd {
 
 func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
@@ -376,10 +377,15 @@ func (m StartupModel) buildContent() string {
 	return logo + tagline + "\n" + version + "\n\n" + checks.String()
 }
 
-func (m StartupModel) View() string {
+func (m StartupModel) viewString() string {
 	content := m.buildContent()
 	if m.width > 0 && m.height > 0 {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 	}
 	return "\n" + content
+}
+
+func (m StartupModel) View() tea.View {
+	v := tea.NewView(m.viewString())
+	return v
 }

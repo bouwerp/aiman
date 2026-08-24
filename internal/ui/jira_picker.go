@@ -3,11 +3,11 @@ package ui
 import (
 	"fmt"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type jiraItem struct {
@@ -58,7 +58,7 @@ func (m *IssuePickerModel) SetSize(width, height int) {
 }
 
 func (m IssuePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok && msg.String() == "enter" {
+	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
 		if i, ok := m.list.SelectedItem().(jiraItem); ok {
 			m.selected = &i.issue
 			return m, nil
@@ -70,7 +70,7 @@ func (m IssuePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m IssuePickerModel) View() string {
+func (m IssuePickerModel) viewString() string {
 	if m.loading && len(m.list.Items()) == 0 {
 		return "\n  Loading issues from JIRA..."
 	}
@@ -78,4 +78,8 @@ func (m IssuePickerModel) View() string {
 		return "\n  No JIRA issues found.\n  Press ESC to go back."
 	}
 	return m.list.View() + "\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("enter: select issue")
+}
+
+func (m IssuePickerModel) View() tea.View {
+	return newView(m.viewString())
 }

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type orgItem struct {
@@ -69,13 +69,13 @@ func NewGitSetupModel(cfg *config.Config) GitSetupModel {
 	m.includeInput = textinput.New()
 	m.includeInput.Placeholder = "Include patterns (comma-separated regex)"
 	m.includeInput.SetValue(strings.Join(cfg.Git.IncludePatterns, ", "))
-	m.includeInput.Cursor.Style = cursorStyle
+	applyCursorStyle(&m.includeInput)
 
 	// Exclude patterns input
 	m.excludeInput = textinput.New()
 	m.excludeInput.Placeholder = "Exclude patterns (comma-separated regex)"
 	m.excludeInput.SetValue(strings.Join(cfg.Git.ExcludePatterns, ", "))
-	m.excludeInput.Cursor.Style = cursorStyle
+	applyCursorStyle(&m.excludeInput)
 
 	return m
 }
@@ -102,7 +102,7 @@ func fetchOrgs() tea.Cmd {
 
 func (m GitSetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -154,7 +154,7 @@ func (m GitSetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.updateFocus()
 
-		case " ":
+		case " ", "space":
 			// Toggle org selection when in orgs list
 			if m.focusIndex == 1 {
 				if sel := m.orgsList.SelectedItem(); sel != nil {
@@ -270,7 +270,7 @@ func parseCommaList(s string) []string {
 	return result
 }
 
-func (m GitSetupModel) View() string {
+func (m GitSetupModel) viewString() string {
 	if m.saved {
 		return "Git configuration saved!\n"
 	}
@@ -343,4 +343,8 @@ func (m GitSetupModel) View() string {
 	b.WriteString("\n(↑/↓ or tab to navigate, space to toggle org, enter to select/save, esc to cancel)\n")
 
 	return docStyle.Render(b.String())
+}
+
+func (m GitSetupModel) View() tea.View {
+	return newView(m.viewString())
 }

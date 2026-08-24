@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/color"
 	"io"
 	"os"
 	"os/exec"
@@ -17,6 +18,13 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -32,13 +40,6 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/usecase"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
 )
@@ -97,7 +98,7 @@ func (m *Model) yankSessionOutputToClipboard(fullBuffer bool) bool {
 	var raw string
 	switch {
 	case m.panelMode == panelModeTerminal && m.terminal != nil:
-		raw = m.terminal.View()
+		raw = m.terminal.viewString()
 	case fullBuffer:
 		raw = m.tmuxOutput
 	default:
@@ -698,7 +699,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "quick session")),
 			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "rename session or group")),
 			key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "assign session group")),
-			key.NewBinding(key.WithKeys("enter", " "), key.WithHelp("enter", "collapse/expand group")),
+			key.NewBinding(key.WithKeys("enter", " ", "space"), key.WithHelp("enter", "collapse/expand group")),
 			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart / switch agent")),
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
 			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "manage tunnels")),
@@ -756,7 +757,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
 	m.Title = "Administrative Menu"
 
-	vp := viewport.New(0, 0)
+	vp := viewport.New()
 	vp.MouseWheelEnabled = true
 	vp.MouseWheelDelta = 10
 	vp.Style = lipgloss.NewStyle().
@@ -796,7 +797,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		agentAPIProbing:     make(map[string]bool),
 		collapsedGroups:     make(map[string]bool),
 		currentTab:          tabSessions,
-		triggerDetailsVP:    viewport.New(0, 0),
+		triggerDetailsVP:    viewport.New(),
 	}
 	model.tunnelList.Title = "Session Tunnels"
 	model.provisionSpinner = spinner.New()
@@ -2463,7 +2464,6 @@ func (m *Model) Init() tea.Cmd {
 		tickAWSCredExpiry(),
 		pollAWSCredExpiryCmd(m.cfg),
 		tickAWSCredTable(),
-		tea.EnableMouseCellMotion,
 	)
 }
 
@@ -2531,8 +2531,8 @@ func (m *Model) renderWithConsole(baseView string) string {
 	// Update viewport content without losing scroll position.
 	// If already at the bottom, follow new content; otherwise stay put.
 	atBottom := m.consoleViewport.AtBottom()
-	yOffset := m.consoleViewport.YOffset
-	m.consoleViewport.SetContent(wrapLines(m.consoleLog, m.consoleViewport.Width))
+	yOffset := m.consoleViewport.YOffset()
+	m.consoleViewport.SetContent(wrapLines(m.consoleLog, m.consoleViewport.Width()))
 	if atBottom {
 		m.consoleViewport.GotoBottom()
 	} else {
@@ -2585,10 +2585,10 @@ func (m *Model) SetSize(width, height int) {
 	m.remotes.height = height
 
 	// Viewport takes up the bottom part of the main panel
-	m.viewport.Width = width - (width / 3) - h - 4
+	m.viewport.SetWidth(width - (width / 3) - h - 4)
 	// Compact stacked session/git strip (~6–9 lines) + thin preview chrome; rest for tmux/terminal.
 	const compactMainUpperBudget = 12
-	m.viewport.Height = max(6, mainHeight-compactMainUpperBudget)
+	m.viewport.SetHeight(max(6, mainHeight-compactMainUpperBudget))
 
 	if m.issuePicker.list.Title != "" {
 		m.issuePicker.SetSize(width, height)
@@ -2600,8 +2600,8 @@ func (m *Model) SetSize(width, height int) {
 
 	m.summary.SetSize(width, height)
 
-	m.triggerDetailsVP.Width = width - 12
-	m.triggerDetailsVP.Height = height - 12
+	m.triggerDetailsVP.SetWidth(width - 12)
+	m.triggerDetailsVP.SetHeight(height - 12)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -2611,9 +2611,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.WindowSizeMsg); ok {
 		m.SetSize(msg.Width, msg.Height)
 		if m.terminal != nil {
-			m.terminal.w = m.viewport.Width
-			m.terminal.h = m.viewport.Height
-			m.terminal.term.Resize(m.viewport.Width, m.viewport.Height)
+			m.terminal.w = m.viewport.Width()
+			m.terminal.h = m.viewport.Height()
+			m.terminal.term.Resize(m.viewport.Width(), m.viewport.Height())
 		}
 
 		// Propagate to sub-models
@@ -2815,7 +2815,7 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return model, cmd, true
 
 	case viewStateVSCodeError, viewStateError:
-		if _, ok := msg.(tea.KeyMsg); ok {
+		if _, ok := msg.(tea.KeyPressMsg); ok {
 			m.state = viewStateMain
 		}
 		return m, nil, true
@@ -3125,7 +3125,7 @@ func (m *Model) applyArchivePreviewReadyMsg(msg archivePreviewReadyMsg, cmds []t
 	dialogW := 76
 	inner := dialogW - 6
 	vpH := max(5, m.height-16) // 16 = border+padding+fixed header+footer lines
-	m.archivePreviewVP = viewport.New(inner, vpH)
+	m.archivePreviewVP = viewport.New(viewport.WithWidth(inner), viewport.WithHeight(vpH))
 	m.archivePreviewVP.SetContent(buildArchivePreviewBody(msg.data, inner))
 	m.state = viewStateArchivePreview
 	return m, nil
@@ -3159,7 +3159,7 @@ func (m *Model) applyArchivePaneCapturedMsg(msg archivePaneCapturedMsg, cmds []t
 	return m, nil
 }
 
-func (m *Model) View() string {
+func (m *Model) viewString() string {
 	baseView := m.renderView()
 
 	// Overlay console if open
@@ -3173,11 +3173,11 @@ func (m *Model) View() string {
 func (m *Model) renderSettingsView() (string, bool) {
 	switch m.state {
 	case viewStateAgentDefaults:
-		return m.agentDefaults.View(), true
+		return m.agentDefaults.viewString(), true
 	case viewStateContextStats:
-		return m.contextStats.View(), true
+		return m.contextStats.viewString(), true
 	case viewStateAISettings:
-		return m.aiSetup.View(), true
+		return m.aiSetup.viewString(), true
 	default:
 		return "", false
 	}
@@ -3195,34 +3195,34 @@ func (m *Model) renderView() string {
 		return docStyle.Render(m.menu.View())
 
 	case viewStateRemotes:
-		return docStyle.Render(m.remotes.View())
+		return docStyle.Render(m.remotes.viewString())
 
 	case viewStateSetup:
-		return docStyle.Render(m.setup.View())
+		return docStyle.Render(m.setup.viewString())
 
 	case viewStateGitSetup:
-		return docStyle.Render(m.gitSetup.View())
+		return docStyle.Render(m.gitSetup.viewString())
 
 	case viewStateGeneralSettings:
-		return m.generalSetup.View()
+		return m.generalSetup.viewString()
 
 	case viewStateSecretsSetup:
-		return m.secretsSetup.View()
+		return m.secretsSetup.viewString()
 
 	case viewStateEC2Settings:
-		return docStyle.Render(m.ec2Setup.View())
+		return docStyle.Render(m.ec2Setup.viewString())
 
 	case viewStateAWSCredentials:
-		return m.awsCredentials.View()
+		return m.awsCredentials.viewString()
 
 	case viewStateAgentAPI:
 		return m.renderAgentAPIView()
 
 	case viewStateSnapshotBrowser:
-		return docStyle.Render(m.snapshotBrowser.View())
+		return docStyle.Render(m.snapshotBrowser.viewString())
 
 	case viewStateScheduledPrompts:
-		return docStyle.Render(m.scheduledPrompts.View())
+		return docStyle.Render(m.scheduledPrompts.viewString())
 
 	case viewStateVSCodeError:
 		return m.renderVSCodeError()
@@ -3259,7 +3259,7 @@ func (m *Model) renderView() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
 
 	case viewStateAutonomousLabelsInput:
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.View())
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.viewString())
 
 	case viewStateAutonomousReuseWorkspacePicker:
 		var b strings.Builder
@@ -3276,45 +3276,45 @@ func (m *Model) renderView() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(b.String()))
 
 	case viewStateAutonomousConcurrencyInput:
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.View())
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.viewString())
 
 	case viewStateIssuePicker:
-		return docStyle.Render(m.issuePicker.View())
+		return docStyle.Render(m.issuePicker.viewString())
 
 	case viewStateBranchInput:
-		return m.branchInput.View()
+		return m.branchInput.viewString()
 
 	case viewStateRepoPicker:
-		return docStyle.Render(m.picker.View())
+		return docStyle.Render(m.picker.viewString())
 
 	case viewStateDirPicker:
-		return docStyle.Render(m.dirPicker.View())
+		return docStyle.Render(m.dirPicker.viewString())
 
 	case viewStateAgentPicker:
-		return docStyle.Render(m.agentPicker.View())
+		return docStyle.Render(m.agentPicker.viewString())
 
 	case viewStateRenameSession, viewStateRenameGroup, viewStateNewGroup:
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.View())
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.genericInput.viewString())
 
 	case viewStateAssignGroup:
 		return m.renderAssignGroupView()
 
 	case viewStateBranchPicker:
-		return docStyle.Render(m.branchPicker.View())
+		return docStyle.Render(m.branchPicker.viewString())
 
 	case viewStateRunTargetPicker:
 		return m.renderRunTargetPicker()
 	case viewStateModePicker:
 		return m.renderModePicker()
 	case viewStateRestartAgentPicker:
-		return docStyle.Render(m.agentPicker.View())
+		return docStyle.Render(m.agentPicker.viewString())
 
 	case viewStateRestartConfirm:
 		return m.renderRestartConfirm()
 	case viewStateSnapshotPreview:
 		return m.renderSnapshotPreview()
 	case viewStateChangeDirPicker:
-		return docStyle.Render(m.dirPicker.View())
+		return docStyle.Render(m.dirPicker.viewString())
 
 	case viewStateArchivePreview:
 		return m.renderArchivePreview()
@@ -3323,7 +3323,7 @@ func (m *Model) renderView() string {
 	case viewStateChangeDirConfirm:
 		return m.renderChangeDirConfirm()
 	case viewStateSummary:
-		return m.summary.View()
+		return m.summary.viewString()
 
 	case viewStateTerminateConfirm:
 		return m.renderTerminateConfirm()
@@ -3358,7 +3358,7 @@ func (m *Model) renderArchivePreview() string {
 	header.WriteString(muted.Render(strings.Repeat("─", inner)) + "\n")
 
 	scrollPct := ""
-	if m.archivePreviewVP.TotalLineCount() > m.archivePreviewVP.Height {
+	if m.archivePreviewVP.TotalLineCount() > m.archivePreviewVP.Height() {
 		pct := int(m.archivePreviewVP.ScrollPercent() * 100)
 		scrollPct = muted.Render(fmt.Sprintf(" (%d%%)", pct))
 	}
@@ -3859,7 +3859,7 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.termCloser = msg.stream
-		term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
+		term := NewTerminalModel(msg.stream, m.viewport.Width(), m.viewport.Height())
 		m.terminal = &term
 		return m, nil
 	case tmuxTickMsg:
@@ -3939,7 +3939,7 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// these permanently, so it is the natural place for them to land.
 		m.applyCheckResult(usecase.CheckResult(msg))
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		m, cmd, handled := m.handleMainKeyMsg(msg)
 		if handled {
 			return m, cmd
@@ -4021,7 +4021,7 @@ func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, t
 
 		// Sticky scroll: only go to bottom if we were already at the bottom OR if it's the first load for this session.
 		wasAtBottom := m.viewport.AtBottom()
-		yOffset := m.viewport.YOffset
+		yOffset := m.viewport.YOffset()
 		isFirstLoad := !m.firstLoad[msg.session] && newOutput != "Loading..." && msg.err == nil
 		if isFirstLoad {
 			wasAtBottom = true
@@ -4132,9 +4132,10 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 
 	// If it's a mouse event, only forward to the component under the cursor
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
-		m.log("Mouse X: %d, Y: %d, Action: %v, Button: %v, Width: %d",
-			mouseMsg.X, mouseMsg.Y, mouseMsg.Action, mouseMsg.Button, m.width)
-		if mouseMsg.X < (m.width/3 + 4) {
+		mo := mouseMsg.Mouse()
+		m.log("Mouse X: %d, Y: %d, Button: %v, Width: %d",
+			mo.X, mo.Y, mo.Button, m.width)
+		if mo.X < (m.width/3 + 4) {
 			if m.currentTab == tabSessions {
 				m.list, cmd = m.list.Update(msg)
 			} else {
@@ -4341,7 +4342,7 @@ func (m *Model) handlePreviewKey(msg tea.KeyMsg) (tea.Model, bool) {
 			if consoleHeight > 20 {
 				consoleHeight = 20
 			}
-			m.consoleViewport = viewport.New(m.width-6, consoleHeight-4)
+			m.consoleViewport = viewport.New(viewport.WithWidth(m.width-6), viewport.WithHeight(consoleHeight-4))
 			m.consoleViewport.SetContent(wrapLines(m.consoleLog, m.width-6))
 			m.consoleViewport.GotoBottom()
 		}
@@ -4393,11 +4394,10 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.viewport.MouseWheelEnabled = m.mouseEnabled
 		if m.mouseEnabled {
 			m.log("Mouse reporting enabled (scrolling active)")
-			return m, tea.EnableMouseCellMotion, true
 		} else {
 			m.log("Mouse reporting disabled (native selection unlocked)")
-			return m, tea.DisableMouse, true
 		}
+		return m, nil, true
 	}
 	if msg.String() == "n" {
 		// The run-target picker is shown for any remote count, including zero: it is the
@@ -4858,7 +4858,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 
 func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		if msg.String() == "enter" {
 			if i, ok := m.menu.SelectedItem().(menuItem); ok {
 				if i.action == viewStateRemotes {
@@ -4968,7 +4968,7 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleProvisioningRemotePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = viewStateMenu
@@ -5003,7 +5003,7 @@ func (m *Model) handleProvisioningRemotePickerUpdate(msg tea.Msg) (tea.Model, te
 
 func (m *Model) handleProvisioningProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if msg.String() == "esc" && (m.provisioningError != "" || m.provisioningIdx >= len(m.provisionSteps)) {
 			m.state = viewStateMenu
 			return m, nil
@@ -5050,7 +5050,7 @@ func (m *Model) handleProvisioningProgressUpdate(msg tea.Msg) (tea.Model, tea.Cm
 }
 
 func (m *Model) handleAuthRemotePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = viewStateMenu
@@ -5115,7 +5115,7 @@ func (m *Model) handleAuthWizardUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.authStatusMsg = fmt.Sprintf("Failed: %s", m.authSteps[msg.idx].Name)
 		}
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "esc":
 			m.state = viewStateMenu
@@ -5172,7 +5172,7 @@ func (m *Model) handleTunnelManagerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tunnelError = ""
 		}
 		return m, m.refreshTunnelStatesCmd(*m.tunnelSession)
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "esc":
 			m.state = viewStateMain
@@ -5190,7 +5190,7 @@ func (m *Model) handleTunnelManagerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			in.Placeholder = "5173:5173"
 			in.Focus()
 			in.CharLimit = 24
-			in.Width = 30
+			in.SetWidth(30)
 			m.tunnelInput = in
 			m.state = viewStateTunnelAdd
 			return m, nil
@@ -5243,7 +5243,7 @@ func (m *Model) handleTunnelManagerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleTunnelAddUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = viewStateTunnelManager
@@ -5285,7 +5285,7 @@ func (m *Model) handleTunnelAddUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleRemotesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.remotes.IsAtTopLevel() {
 			m.state = viewStateMenu
 			return m, nil
@@ -5308,7 +5308,7 @@ func (m *Model) handleRemotesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateMenu
 		return m, nil
 	}
@@ -5324,7 +5324,7 @@ func (m *Model) handleSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleGitSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateMenu
 		return m, nil
 	}
@@ -5340,7 +5340,7 @@ func (m *Model) handleGitSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleGeneralSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateMenu
 		return m, nil
 	}
@@ -5356,7 +5356,7 @@ func (m *Model) handleGeneralSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleAgentDefaultsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateMenu
 		return m, nil
 	}
@@ -5372,7 +5372,7 @@ func (m *Model) handleAgentDefaultsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleAISetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateMenu
 		return m, nil
 	}
@@ -5388,7 +5388,7 @@ func (m *Model) handleAISetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSecretsSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.secretsSetup.mode != secretsModeList {
 			// Let the sub-model handle esc (cancel add/delete).
 		} else {
@@ -5404,7 +5404,7 @@ func (m *Model) handleSecretsSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleEC2SetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "esc" {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok && keyMsg.String() == "esc" {
 		m.state = viewStateMenu
 		return m, nil
 	}
@@ -5414,7 +5414,7 @@ func (m *Model) handleEC2SetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleScheduledPromptsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		if m.scheduledPrompts.mode == spModeList && keyMsg.String() == "esc" {
 			m.state = viewStateMenu
 			return m, nil
@@ -5455,7 +5455,7 @@ func (m *Model) enterAWSCredentials() tea.Cmd {
 }
 
 func (m *Model) handleAWSCredentialsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateMenu
 		return m, nil
 	}
@@ -5470,7 +5470,7 @@ func (m *Model) handleAWSCredentialsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 // work should run. Numbered entries are configured remote servers; "e" is the EC2
 // autonomous loop, which launches its own instance and therefore needs no remote.
 func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = viewStateMain
@@ -5511,7 +5511,7 @@ func (m *Model) resetSessionCfg(cfg domain.SessionConfig) {
 // work to start on the chosen remote. The EC2 loop is not here — it is picked on the
 // run-target screen, since it runs somewhere else entirely.
 func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = viewStateRunTargetPicker
@@ -5555,7 +5555,7 @@ func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleAutonomousTriggerPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = viewStateModePicker
@@ -5572,7 +5572,7 @@ func (m *Model) handleAutonomousTriggerPickerUpdate(msg tea.Msg) (tea.Model, tea
 }
 
 func (m *Model) handleAutonomousLabelsInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateAutonomousTriggerPicker
 		return m, nil
 	}
@@ -5589,7 +5589,7 @@ func (m *Model) handleAutonomousLabelsInputUpdate(msg tea.Msg) (tea.Model, tea.C
 }
 
 func (m *Model) handleAutonomousReuseWorkspacePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.genericInput = NewTextInputModel("Filter Criteria", "e.g. bug,aiman-auto", m.sessionCfg.AutonomousConfig.FilterLabels)
@@ -5614,7 +5614,7 @@ func (m *Model) handleAutonomousReuseWorkspacePickerUpdate(msg tea.Msg) (tea.Mod
 }
 
 func (m *Model) handleAutonomousConcurrencyInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateAutonomousReuseWorkspacePicker
 		return m, nil
 	}
@@ -5641,7 +5641,7 @@ func (m *Model) handleAutonomousConcurrencyInputUpdate(msg tea.Msg) (tea.Model, 
 }
 
 func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.issuePicker.list.FilterState() != list.Filtering {
 			// An EC2 loop reaches the issue picker straight from the run-target screen,
 			// never via the mode picker.
@@ -5679,7 +5679,7 @@ func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleBranchPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.branchPicker.list.FilterState() != list.Filtering {
 			m.state = viewStateRepoPicker
 			return m, nil
@@ -5715,7 +5715,7 @@ func (m *Model) handleBranchPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleBranchInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.sessionCfg.IssueKey != "" {
 			m.state = viewStateIssuePicker
 		} else {
@@ -5746,7 +5746,7 @@ func (m *Model) handleBranchInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.picker.list.FilterState() != list.Filtering {
 			if m.sessionCfg.ExistingBranch {
 				m.state = viewStateModePicker
@@ -5823,7 +5823,7 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.dirPicker.list.FilterState() != list.Filtering {
 			m.state = viewStateRepoPicker
 			return m, nil
@@ -5855,7 +5855,7 @@ func (m *Model) handleDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleChangeDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.dirPicker.list.FilterState() != list.Filtering {
 			m.state = viewStateMain
 			m.changingDirSession = nil
@@ -5898,7 +5898,7 @@ func (m *Model) handleChangeDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.agentPicker.list.FilterState() != list.Filtering {
 			if m.sessionCfg.Quick {
 				m.state = viewStateMain
@@ -5965,7 +5965,7 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		m.state = viewStateAgentPicker
 		return m, nil
 	}
@@ -6216,7 +6216,7 @@ INSERT INTO sessions (
 }
 
 func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc", "n":
 			m.terminatePrecheckError = ""
@@ -6244,7 +6244,7 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleQuitConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y":
 			if m.termCloser != nil {
@@ -6261,7 +6261,7 @@ func (m *Model) handleQuitConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleWorktreeExistsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "c", "esc":
 			// Creation was aborted — drop the background placeholder.
@@ -6316,7 +6316,7 @@ func (m *Model) handleTriggerDetailsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc", "q":
 			m.state = viewStateMain
@@ -6650,7 +6650,7 @@ func (m *Model) applyTmuxTerminal(msg tmuxTerminalMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.termCloser = msg.stream
-	term := NewTerminalModel(msg.stream, m.viewport.Width, m.viewport.Height)
+	term := NewTerminalModel(msg.stream, m.viewport.Width(), m.viewport.Height())
 	m.terminal = &term
 	m.panelMode = panelModeTerminal
 	m.state = viewStateMain
@@ -6685,7 +6685,7 @@ func truncateRunes(s string, max int) string {
 	return string(r[:max-1]) + "…"
 }
 
-func prReviewForeground(status string) lipgloss.Color {
+func prReviewForeground(status string) color.Color {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "approved":
 		return lipgloss.Color("#00FF00")
@@ -6866,7 +6866,7 @@ func (m *Model) renderSessionPanel(mainWidth int) string {
 		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
 
 		if m.panelMode == panelModeTerminal && m.terminal != nil {
-			outputPanel.WriteString(m.terminal.View())
+			outputPanel.WriteString(m.terminal.viewString())
 		} else {
 			outputPanel.WriteString(m.viewport.View())
 		}
@@ -7214,7 +7214,7 @@ func (m *Model) renderAIPanel(s domain.Session, contentW int) string {
 }
 
 func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.agentPicker.list.FilterState() != list.Filtering {
 			m.state = viewStateMain
 			m.restartingSession = nil
@@ -7453,7 +7453,7 @@ func (m *Model) restartSession() tea.Cmd {
 }
 
 func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y":
 			m.loadingMsg = "Restarting session with new scope..."
@@ -7490,7 +7490,7 @@ func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y", "enter":
 			m.loadingMsg = "Scanning available agents..."
@@ -7507,7 +7507,7 @@ func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSnapshotPreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y", "enter":
 			m.sessionCfg.PriorSnapshot = m.priorSnapshotCandidate
@@ -7537,7 +7537,7 @@ func (m *Model) handleSnapshotPreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSnapshotBrowserUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		if km.String() == "esc" && m.snapshotBrowser.confirmDelete == nil {
 			m.state = viewStateMain
 			return m, nil
@@ -7551,7 +7551,7 @@ func (m *Model) handleSnapshotBrowserUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleArchivePreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "enter":
 			p := m.archivePreview
@@ -7700,7 +7700,7 @@ func initArchiveSteps() []archiveStep {
 
 func (m *Model) handleArchiveProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if msg.String() == "esc" || msg.String() == "ctrl+c" {
 			m.archivePreview = nil
 			m.archiveSteps = nil
@@ -7714,4 +7714,12 @@ func (m *Model) handleArchiveProgressUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	// Forward all other msgs to main Update so step/ready messages are handled
 	return m, nil
+}
+
+func (m *Model) View() tea.View {
+	v := newView(m.viewString())
+	if !m.mouseEnabled {
+		v.MouseMode = tea.MouseModeNone
+	}
+	return v
 }

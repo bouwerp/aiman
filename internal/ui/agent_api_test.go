@@ -6,7 +6,6 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/remotesvc"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestMenuHasAgentAPIItem(t *testing.T) {
@@ -36,7 +35,7 @@ func TestMenuEnterOpensAgentAPISettings(t *testing.T) {
 			break
 		}
 	}
-	got, _ := m.handleMenuUpdate(tea.KeyMsg{Type: tea.KeyEnter})
+	got, _ := m.handleMenuUpdate(pressKey("enter"))
 	model := got.(*Model)
 	if model.state != viewStateAgentAPI {
 		t.Fatalf("state %v", model.state)
@@ -70,7 +69,7 @@ func TestAgentAPIInstallStaysOnSettingsPage(t *testing.T) {
 func TestAgentAPIProbeKeyShowsProbing(t *testing.T) {
 	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
 	m.state = viewStateAgentAPI
-	got, cmd := m.handleAgentAPIUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	got, cmd := m.handleAgentAPIUpdate(pressKey("r"))
 	model := got.(*Model)
 	if cmd == nil {
 		t.Fatal("r must fire a probe command")
@@ -113,7 +112,7 @@ func TestAgentAPIHintUninstalledSaysInstall(t *testing.T) {
 func TestApplyDaemonProbeClearsProbing(t *testing.T) {
 	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
 	m.state = viewStateAgentAPI
-	_, _ = m.handleAgentAPIUpdate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_, _ = m.handleAgentAPIUpdate(pressKey("r"))
 	_, _ = m.applyDaemonProbe(daemonProbeMsg{daemon: domain.Daemon{
 		RemoteHost: "10.0.1.5",
 		Kind:       string(remotesvc.KindServe),
@@ -133,7 +132,7 @@ func TestApplyDaemonProbeClearsProbing(t *testing.T) {
 func TestAgentAPICursorMovesBetweenRemotes(t *testing.T) {
 	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
 	m.state = viewStateAgentAPI
-	got, _ := m.handleAgentAPIUpdate(tea.KeyMsg{Type: tea.KeyDown})
+	got, _ := m.handleAgentAPIUpdate(pressKey("down"))
 	model := got.(*Model)
 	if model.agentAPICursor != 1 {
 		t.Fatalf("cursor %d", model.agentAPICursor)

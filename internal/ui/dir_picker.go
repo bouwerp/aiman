@@ -3,12 +3,12 @@ package ui
 import (
 	"fmt"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type dirItem struct {
@@ -52,7 +52,7 @@ func NewDirPickerModel(dirs []string, repo domain.Repo) DirPickerModel {
 	ti := textinput.New()
 	ti.Placeholder = "Enter new directory path (e.g. src/new-feature)"
 	ti.CharLimit = 100
-	ti.Width = 50
+	ti.SetWidth(50)
 
 	return DirPickerModel{
 		list:  l,
@@ -71,7 +71,7 @@ func (m *DirPickerModel) SetSize(width, height int) {
 }
 
 func (m DirPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		if m.createMode {
 			switch msg.String() {
 			case "enter":
@@ -110,7 +110,7 @@ func (m DirPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m DirPickerModel) View() string {
+func (m DirPickerModel) viewString() string {
 	if m.createMode {
 		style := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -159,4 +159,8 @@ func splitPath(path string) []string {
 		parts = append(parts, current)
 	}
 	return parts
+}
+
+func (m DirPickerModel) View() tea.View {
+	return newView(m.viewString())
 }

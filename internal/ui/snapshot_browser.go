@@ -7,12 +7,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/usecase"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -95,7 +95,7 @@ func NewSnapshotBrowserModel(width, height int, snapMgr *usecase.SnapshotManager
 	l.SetShowHelp(false)
 	return SnapshotBrowserModel{
 		list:      l,
-		detail:    viewport.New(dw, dh),
+		detail:    viewport.New(viewport.WithWidth(dw), viewport.WithHeight(dh)),
 		width:     width,
 		height:    height,
 		focusLeft: true,
@@ -182,11 +182,11 @@ func (m SnapshotBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		lw, dw, dh := snapshotPaneSizes(m.width, m.height)
 		m.list.SetSize(lw, m.height-4)
-		m.detail = viewport.New(dw, dh)
+		m.detail = viewport.New(viewport.WithWidth(dw), viewport.WithHeight(dh))
 		m.refreshDetail()
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// Delete confirmation dialog intercepts all keys.
 		if m.confirmDelete != nil {
 			switch msg.String() {
@@ -236,7 +236,7 @@ func (m SnapshotBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m SnapshotBrowserModel) View() string {
+func (m SnapshotBrowserModel) viewString() string {
 	if m.confirmDelete != nil {
 		return m.renderDeleteConfirm()
 	}
@@ -454,4 +454,8 @@ func renderSnapshotDetail(snap domain.SessionSnapshot, width int) string {
 	}
 
 	return b.String()
+}
+
+func (m SnapshotBrowserModel) View() tea.View {
+	return newView(m.viewString())
 }

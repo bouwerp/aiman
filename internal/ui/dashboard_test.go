@@ -8,7 +8,6 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/usecase"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // mockSessionRepo implements domain.SessionRepository for testing
@@ -191,15 +190,15 @@ func TestWorktreeExistsStateKeyHandling(t *testing.T) {
 			model.sessionCfg.Branch = tt.setupBranch
 
 			// Simulate key press
-			keyMsg := tea.KeyMsg{Type: tea.KeyRunes}
+			keyMsg := pressKey("")
 			// Manually set the key string (in real code this comes from bubbletea)
 			switch tt.key {
 			case "c":
-				keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}
+				keyMsg = pressKey("c")
 			case "b":
-				keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}}
+				keyMsg = pressKey("b")
 			case "esc":
-				keyMsg = tea.KeyMsg{Type: tea.KeyEsc}
+				keyMsg = pressKey("esc")
 			}
 
 			updatedModel, _ := model.Update(keyMsg)
@@ -227,7 +226,7 @@ func TestWorktreeExistsOtherKeysIgnored(t *testing.T) {
 	model.sessionCfg.Branch = "feature/test"
 
 	// Simulate pressing an unhandled key
-	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}
+	keyMsg := pressKey("x")
 
 	updatedModel, _ := model.Update(keyMsg)
 	m := updatedModel.(*Model)

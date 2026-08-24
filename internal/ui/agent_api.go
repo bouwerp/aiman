@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/remotesvc"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 func (m *Model) enterAgentAPI() tea.Cmd {
@@ -62,7 +62,7 @@ func (m *Model) selectedAgentAPIDaemon() (domain.Daemon, bool) {
 }
 
 func (m *Model) handleAgentAPIUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	km, ok := msg.(tea.KeyMsg)
+	km, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}

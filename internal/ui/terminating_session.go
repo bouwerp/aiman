@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // terminatingSession tracks a session being terminated in the background.

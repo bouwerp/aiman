@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestNewModelShowsGroupHeadersWithoutExtraFilter(t *testing.T) {
@@ -77,7 +76,7 @@ func TestRenameGroupUpdatesAllMembers(t *testing.T) {
 	_, cmd, _ := m.startRenameGroup(it)
 	_ = cmd
 	m.genericInput = NewTextInputModel("Rename group", "group", "spike")
-	got, _ := m.handleRenameGroupUpdate(tea.KeyMsg{Type: tea.KeyEnter})
+	got, _ := m.handleRenameGroupUpdate(pressKey("enter"))
 	model := got.(*Model)
 	if model.state != viewStateMain {
 		t.Fatalf("state %v err %q", model.state, model.genericInput.Error)
@@ -149,13 +148,13 @@ func TestAssignNewGroupFromPicker(t *testing.T) {
 		t.Fatalf("last choice should be new group: %+v", last)
 	}
 	m.assignCursor = len(m.assignChoices) - 1
-	got, _ := m.handleAssignGroupUpdate(tea.KeyMsg{Type: tea.KeyEnter})
+	got, _ := m.handleAssignGroupUpdate(pressKey("enter"))
 	model := got.(*Model)
 	if model.state != viewStateNewGroup {
 		t.Fatalf("state %v", model.state)
 	}
 	model.genericInput = NewTextInputModel("New group", "group name", "spike")
-	got, _ = model.handleNewGroupUpdate(tea.KeyMsg{Type: tea.KeyEnter})
+	got, _ = model.handleNewGroupUpdate(pressKey("enter"))
 	model = got.(*Model)
 	if model.state != viewStateMain {
 		t.Fatalf("state %v err %q", model.state, model.genericInput.Error)

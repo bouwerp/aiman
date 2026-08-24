@@ -10,7 +10,7 @@ import (
 
 func TestContextStatsView(t *testing.T) {
 	m := NewContextStatsModel(&config.Config{Remotes: []config.Remote{{Name: "dev", Host: "10.0.1.5"}}})
-	out := m.View()
+	out := m.viewString()
 	if !strings.Contains(out, "Shared context") || !strings.Contains(out, "10.0.1.5") {
 		t.Fatalf("%s", out)
 	}
@@ -20,7 +20,7 @@ func TestContextStatsView(t *testing.T) {
 		Bytes: 2048,
 		Ops:   map[string]domain.ContextOpStat{"get": {Count: 9, P50Ms: 1.2}},
 	}
-	out = m.View()
+	out = m.viewString()
 	if !strings.Contains(out, "4") || !strings.Contains(out, "9") {
 		t.Fatalf("%s", out)
 	}

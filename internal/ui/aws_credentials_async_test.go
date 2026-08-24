@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func busyCredsModel() AWSCredentialsModel {
@@ -43,7 +42,7 @@ func TestAWSCredentialsBusy(t *testing.T) {
 }
 
 func TestAWSCredentialsViewShowsInFlightWork(t *testing.T) {
-	view := busyCredsModel().View()
+	view := busyCredsModel().viewString()
 	if !strings.Contains(view, "in flight") {
 		t.Fatalf("a busy model must say work is in flight, got:\n%s", view)
 	}
@@ -53,7 +52,7 @@ func TestAWSCredentialsViewShowsInFlightWork(t *testing.T) {
 
 	idle := NewAWSCredentialsModel(&config.Config{}, nil)
 	idle.entries = []awsHostEntry{{key: "k1", status: awsCredStatusValid}}
-	if strings.Contains(idle.View(), "in flight") {
+	if strings.Contains(idle.viewString(), "in flight") {
 		t.Fatal("a settled model must not claim work is in flight")
 	}
 }
@@ -62,8 +61,8 @@ func TestAWSCredentialsViewShowsExternalRefresh(t *testing.T) {
 	m := NewAWSCredentialsModel(&config.Config{}, nil)
 	m.entries = []awsHostEntry{{key: "k1", status: awsCredStatusValid}}
 	m.externalRefresh = true
-	if !strings.Contains(m.View(), "shift+R") {
-		t.Fatalf("a dashboard-triggered refresh must be visible on this page, got:\n%s", m.View())
+	if !strings.Contains(m.viewString(), "shift+R") {
+		t.Fatalf("a dashboard-triggered refresh must be visible on this page, got:\n%s", m.viewString())
 	}
 }
 
@@ -202,7 +201,7 @@ func TestRefreshFailureCounterResetsPerWave(t *testing.T) {
 
 	// Starting a new wave with shift+R clears the previous wave's tally.
 	m.renewing = map[string]bool{}
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, _ := m.Update(pressKey("R"))
 	if got := updated.(AWSCredentialsModel).refreshFailures; got != 0 {
 		t.Fatalf("expected the failure tally to reset when a refresh starts, got %d", got)
 	}

@@ -7,17 +7,17 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usecase"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // ---------------------------------------------------------------------------
@@ -295,7 +295,7 @@ func (m *RemotesModel) initDialog(host, user, root string) {
 	m.hostInput.Placeholder = "hostname or IP"
 	m.hostInput.SetValue(host)
 	m.hostInput.CharLimit = 120
-	m.hostInput.Width = 40
+	m.hostInput.SetWidth(40)
 
 	if user == "" {
 		user = os.Getenv("USER")
@@ -304,7 +304,7 @@ func (m *RemotesModel) initDialog(host, user, root string) {
 	m.userInput.Placeholder = "username"
 	m.userInput.SetValue(user)
 	m.userInput.CharLimit = 60
-	m.userInput.Width = 40
+	m.userInput.SetWidth(40)
 
 	if root == "" {
 		root = "/home/" + user
@@ -313,7 +313,7 @@ func (m *RemotesModel) initDialog(host, user, root string) {
 	m.rootInput.Placeholder = "/home/user"
 	m.rootInput.SetValue(root)
 	m.rootInput.CharLimit = 200
-	m.rootInput.Width = 40
+	m.rootInput.SetWidth(40)
 
 	m.dialogFocus = dialogFocusHost
 }
@@ -356,7 +356,7 @@ func (m *RemotesModel) initAWSDialog() {
 	m.awsProfile = textinput.New()
 	m.awsProfile.Placeholder = awsdelegation.DefaultDelegatedProfileName
 	m.awsProfile.CharLimit = 80
-	m.awsProfile.Width = 56
+	m.awsProfile.SetWidth(56)
 	if d != nil && strings.TrimSpace(d.Profile) != "" {
 		m.awsProfile.SetValue(d.Profile)
 	} else {
@@ -379,7 +379,7 @@ func (m *RemotesModel) initAWSDialog() {
 	m.awsRoleName = textinput.New()
 	m.awsRoleName.Placeholder = awsdelegation.DefaultDelegatedRoleName + " (default if empty)"
 	m.awsRoleName.CharLimit = 64
-	m.awsRoleName.Width = 56
+	m.awsRoleName.SetWidth(56)
 	if d != nil {
 		m.awsRoleName.SetValue(d.RoleName)
 	}
@@ -387,7 +387,7 @@ func (m *RemotesModel) initAWSDialog() {
 	m.awsSource = textinput.New()
 	m.awsSource.Placeholder = "source profile (default is recommended)"
 	m.awsSource.CharLimit = 120
-	m.awsSource.Width = 56
+	m.awsSource.SetWidth(56)
 	if d != nil && strings.TrimSpace(d.SourceProfile) != "" {
 		m.awsSource.SetValue(d.SourceProfile)
 		for i, n := range m.awsLocalProfiles {
@@ -403,7 +403,7 @@ func (m *RemotesModel) initAWSDialog() {
 	m.awsRegions = textinput.New()
 	m.awsRegions.Placeholder = "us-east-2 (comma-sep, empty = no restriction)"
 	m.awsRegions.CharLimit = 256
-	m.awsRegions.Width = 56
+	m.awsRegions.SetWidth(56)
 	if d != nil && len(d.Regions) > 0 {
 		m.awsRegions.SetValue(strings.Join(d.Regions, ", "))
 	} else if d == nil {
@@ -413,7 +413,7 @@ func (m *RemotesModel) initAWSDialog() {
 	m.awsRegion = textinput.New()
 	m.awsRegion.Placeholder = "us-east-1 (optional — sets default region in profile)"
 	m.awsRegion.CharLimit = 32
-	m.awsRegion.Width = 56
+	m.awsRegion.SetWidth(56)
 	if d != nil {
 		m.awsRegion.SetValue(d.Region)
 	}
@@ -421,7 +421,7 @@ func (m *RemotesModel) initAWSDialog() {
 	m.awsSessionPolicy = textinput.New()
 	m.awsSessionPolicy.Placeholder = `{"Version":"2012-10-17","Statement":[...]} (optional)`
 	m.awsSessionPolicy.CharLimit = 2048
-	m.awsSessionPolicy.Width = 56
+	m.awsSessionPolicy.SetWidth(56)
 	if d != nil {
 		m.awsSessionPolicy.SetValue(d.SessionPolicy)
 	}
@@ -429,7 +429,7 @@ func (m *RemotesModel) initAWSDialog() {
 	m.awsDuration = textinput.New()
 	m.awsDuration.Placeholder = "900–43200 seconds (optional)"
 	m.awsDuration.CharLimit = 6
-	m.awsDuration.Width = 20
+	m.awsDuration.SetWidth(20)
 	if d != nil && d.DurationSeconds > 0 {
 		m.awsDuration.SetValue(fmt.Sprintf("%d", d.DurationSeconds))
 	}
@@ -704,7 +704,7 @@ func (m RemotesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // --- List state ---
 
 func (m RemotesModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "a":
 			m.initDialog("", "", "")
@@ -737,7 +737,7 @@ func (m RemotesModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case " ":
+		case " ", "space":
 			// Scan the selected remote to verify connectivity and discover sessions
 			if i, ok := m.list.SelectedItem().(remoteItem); ok && i.isConfig {
 				m.testingHost = i.host
@@ -778,7 +778,7 @@ func (m RemotesModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 // --- Add / Edit dialog ---
 
 func (m RemotesModel) updateDialog(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = remotesStateList
@@ -827,7 +827,7 @@ func (m RemotesModel) updateDialog(msg tea.Msg) (tea.Model, tea.Cmd) {
 // --- Delete confirmation ---
 
 func (m RemotesModel) updateDelete(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y":
 			if i, ok := m.list.SelectedItem().(remoteItem); ok {
@@ -894,7 +894,7 @@ func (m RemotesModel) updateScanning(msg tea.Msg) (tea.Model, tea.Cmd) {
 // --- Result ---
 
 func (m RemotesModel) updateResult(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "enter", "esc":
 			if m.scanResults != nil && m.scanResults.err == nil {
@@ -921,7 +921,7 @@ func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
 			m.state = remotesStateList
@@ -953,7 +953,7 @@ func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m.saveAWSAndPush()
-		case " ":
+		case " ", "space":
 			if m.awsFocus == awsFocusSync {
 				m.awsSyncCreds = !m.awsSyncCreds
 				return m, nil
@@ -1174,7 +1174,7 @@ func (m RemotesModel) updateAWSPushing(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View
 // ---------------------------------------------------------------------------
 
-func (m RemotesModel) View() string {
+func (m RemotesModel) viewString() string {
 	switch m.state {
 	case remotesStateTesting:
 		return m.viewOverlay(fmt.Sprintf("Testing connection to %s@%s...", m.testingUser, m.testingHost))
@@ -1401,4 +1401,8 @@ func (m RemotesModel) viewResult() string {
 		Width(60)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
+}
+
+func (m RemotesModel) View() tea.View {
+	return newView(m.viewString())
 }

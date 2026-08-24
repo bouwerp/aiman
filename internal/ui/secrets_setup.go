@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type secretsSetupMode int
@@ -72,7 +72,7 @@ func (m SecretsSetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = len(m.secrets) - 1
 		}
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch m.mode {
 		case secretsModeList:
 			return m.updateList(msg)
@@ -212,7 +212,7 @@ func (m SecretsSetupModel) deleteSecret(key string) tea.Cmd {
 	}
 }
 
-func (m SecretsSetupModel) View() string {
+func (m SecretsSetupModel) viewString() string {
 	switch m.mode {
 	case secretsModeAdd:
 		return m.viewAdd()
@@ -297,20 +297,20 @@ func makeSecretInputs() []textinput.Model {
 	inputs := make([]textinput.Model, 3)
 	for i := range inputs {
 		t := textinput.New()
-		t.Cursor.Style = cursorStyle
+		applyCursorStyle(&t)
 		t.CharLimit = 256
 		switch i {
 		case 0:
 			t.Placeholder = "MY_API_KEY"
-			t.Width = 40
+			t.SetWidth(40)
 		case 1:
 			t.Placeholder = "secret value"
 			t.EchoMode = textinput.EchoPassword
 			t.EchoCharacter = '•'
-			t.Width = 40
+			t.SetWidth(40)
 		case 2:
 			t.Placeholder = "optional description"
-			t.Width = 40
+			t.SetWidth(40)
 		}
 		inputs[i] = t
 	}
@@ -345,4 +345,8 @@ func maskDescription(desc string) string {
 		return ""
 	}
 	return "— " + desc
+}
+
+func (m SecretsSetupModel) View() tea.View {
+	return newView(m.viewString())
 }

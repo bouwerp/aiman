@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type SummaryModel struct {
@@ -37,7 +37,7 @@ type SummaryModel struct {
 func newPromptInput() textinput.Model {
 	ti := textinput.New()
 	ti.Placeholder = "Initial prompt (optional)"
-	ti.Width = 40
+	ti.SetWidth(40)
 	ti.Focus()
 	return ti
 }
@@ -87,7 +87,7 @@ func (m *SummaryModel) SetOpenRouterKey(key string) {
 	orInput.Placeholder = "sk-or-... (OPENROUTER_API_KEY)"
 	orInput.EchoMode = textinput.EchoPassword
 	orInput.SetValue(key)
-	orInput.Width = 40
+	orInput.SetWidth(40)
 
 	// Remove any stale openRouter input, then append the fresh one.
 	filtered := make([]textinput.Model, 0, len(m.inputs))
@@ -131,7 +131,7 @@ func (m SummaryModel) buttonFocusIndex() int {
 }
 
 func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -196,7 +196,7 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m SummaryModel) View() string {
+func (m SummaryModel) viewString() string {
 	var b strings.Builder
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 
@@ -345,4 +345,8 @@ func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 	cfg.InitialPrompt = strings.TrimSpace(m.promptInput.Value())
 
 	return cfg
+}
+
+func (m SummaryModel) View() tea.View {
+	return newView(m.viewString())
 }

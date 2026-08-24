@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // awsCredStatus represents the validity state of AWS credentials for a remote host.
@@ -166,7 +166,7 @@ func NewAWSCredentialsModel(cfg *config.Config, db interface{}) AWSCredentialsMo
 	lifetime := textinput.New()
 	lifetime.Prompt = ""
 	lifetime.CharLimit = 5
-	lifetime.Width = 12
+	lifetime.SetWidth(12)
 
 	m := AWSCredentialsModel{
 		cfg:           cfg,
@@ -712,7 +712,7 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = fmt.Sprintf("Renamed %s [%s → %s].", msg.userAtHost, msg.oldProfile, msg.newProfile)
 		return m, m.buildEntries()
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		m.message = ""
 		if m.renaming {
 			return m.updateRenameEditor(msg)
@@ -776,7 +776,7 @@ func (m AWSCredentialsModel) handleCredentialTableKey(msg tea.KeyMsg) (tea.Model
 			m.focusLocal = !m.focusLocal
 		}
 		return m, nil
-	case " ":
+	case " ", "space":
 		if m.focusLocal && m.localCursor >= 0 && m.localCursor < len(m.localNames) {
 			m.toggleLocalIncluded(m.localNames[m.localCursor])
 			return m, m.buildEntries()
@@ -889,7 +889,7 @@ func (m AWSCredentialsModel) handleCredentialTableKey(msg tea.KeyMsg) (tea.Model
 	return m, nil
 }
 
-func (m AWSCredentialsModel) View() string {
+func (m AWSCredentialsModel) viewString() string {
 	var b strings.Builder
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
@@ -1142,4 +1142,8 @@ func normalizeAWSProfileName(name string) string {
 		return "default"
 	}
 	return name
+}
+
+func (m AWSCredentialsModel) View() tea.View {
+	return newView(m.viewString())
 }

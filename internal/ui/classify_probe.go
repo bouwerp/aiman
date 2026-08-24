@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/pane"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // classifyProbeMsg carries the result of an on-demand classification comparison.

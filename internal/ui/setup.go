@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/jira"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type SetupModel struct {
@@ -43,7 +43,7 @@ func NewSetupModel(cfg *config.Config) SetupModel {
 	var t textinput.Model
 	for i := range m.inputs {
 		t = textinput.New()
-		t.Cursor.Style = cursorStyle
+		applyCursorStyle(&t)
 		t.CharLimit = 128
 
 		switch i {
@@ -62,7 +62,7 @@ func NewSetupModel(cfg *config.Config) SetupModel {
 		case 3:
 			t.Placeholder = "e.g. Dev Ready, In Development, Dev Review"
 			t.CharLimit = 512
-			t.Width = 56
+			t.SetWidth(56)
 			t.SetValue(strings.Join(cfg.Integrations.Jira.IssueStatuses, ", "))
 		}
 
@@ -77,7 +77,7 @@ func (m SetupModel) Init() tea.Cmd {
 }
 
 func (m SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -145,7 +145,7 @@ func (m SetupModel) save() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m SetupModel) View() string {
+func (m SetupModel) viewString() string {
 	if m.saved {
 		return "Configuration saved! Please restart Aiman.\n"
 	}
@@ -177,6 +177,7 @@ func (m SetupModel) View() string {
 	return docStyle.Render(b.String())
 }
 
-var (
-	cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-)
+func (m SetupModel) View() tea.View {
+	v := tea.NewView(m.viewString())
+	return v
+}

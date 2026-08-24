@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // AWS accepts session lifetimes between 15 minutes and 12 hours.

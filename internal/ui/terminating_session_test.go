@@ -7,7 +7,6 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // newTestModelWithTerminatableSession builds a model with one session whose
@@ -30,7 +29,7 @@ func TestBackgroundTerminate_ConfirmReturnsToMain(t *testing.T) {
 	model, s := newTestModelWithTerminatableSession(t)
 	model.state = viewStateTerminateConfirm
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	updated, cmd := model.Update(pressKey("y"))
 	model = updated.(*Model)
 
 	if model.state != viewStateMain {
@@ -64,7 +63,7 @@ func TestBackgroundTerminate_ForcedUsesForcedSteps(t *testing.T) {
 	model, s := newTestModelWithTerminatableSession(t)
 	model.state = viewStateTerminateConfirm
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ := model.Update(pressKey("f"))
 	model = updated.(*Model)
 
 	ts := model.terminatingSessions[s.ID]
@@ -79,7 +78,7 @@ func TestBackgroundTerminate_ForcedUsesForcedSteps(t *testing.T) {
 func TestBackgroundTerminate_StepsProgressAndComplete(t *testing.T) {
 	model, s := newTestModelWithTerminatableSession(t)
 	model.state = viewStateTerminateConfirm
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	updated, _ := model.Update(pressKey("y"))
 	model = updated.(*Model)
 	ts := model.terminatingSessions[s.ID]
 
@@ -127,11 +126,11 @@ func TestBackgroundTerminate_StepsProgressAndComplete(t *testing.T) {
 func TestBackgroundTerminate_ActionKeysBlocked(t *testing.T) {
 	model, s := newTestModelWithTerminatableSession(t)
 	model.state = viewStateTerminateConfirm
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	updated, _ := model.Update(pressKey("y"))
 	model = updated.(*Model)
 
 	// ctrl+k on a terminating session must not re-open the terminate dialog.
-	updated, _, handled := model.handleMainKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlK})
+	updated, _, handled := model.handleMainKeyMsg(pressKey("ctrl+k"))
 	model = updated.(*Model)
 	if !handled {
 		t.Fatal("expected ctrl+k to be intercepted for terminating session")
@@ -174,7 +173,7 @@ func TestRunTerminateStep_MainRepoWorktreeIsSkippedNotFailed(t *testing.T) {
 func TestBackgroundTerminate_SafetySkipIsNotAnError(t *testing.T) {
 	model, s := newTestModelWithTerminatableSession(t)
 	model.state = viewStateTerminateConfirm
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	updated, _ := model.Update(pressKey("y"))
 	model = updated.(*Model)
 	ts := model.terminatingSessions[s.ID]
 

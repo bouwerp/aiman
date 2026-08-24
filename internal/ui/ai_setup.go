@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Message types for async AI setup operations.
@@ -54,13 +54,13 @@ type AISetupModel struct {
 
 func NewAISetupModel(cfg *config.Config) AISetupModel {
 	host := textinput.New()
-	host.Cursor.Style = cursorStyle
+	applyCursorStyle(&host)
 	host.CharLimit = 256
 	host.Placeholder = "http://localhost:11434"
 	host.SetValue(cfg.AI.OllamaHost)
 
 	model := textinput.New()
-	model.Cursor.Style = cursorStyle
+	applyCursorStyle(&model)
 	model.CharLimit = 128
 	model.Placeholder = "qwen3:4b"
 	model.SetValue(cfg.AI.Model)
@@ -128,7 +128,7 @@ func (m AISetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -211,7 +211,7 @@ func (m AISetupModel) save() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m AISetupModel) View() string {
+func (m AISetupModel) viewString() string {
 	if m.saved {
 		return "AI settings saved! Press 'i' on any session to try it now.\n"
 	}
@@ -414,4 +414,8 @@ func scanCR(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		return len(data), data, nil
 	}
 	return 0, nil, nil
+}
+
+func (m AISetupModel) View() tea.View {
+	return newView(m.viewString())
 }
