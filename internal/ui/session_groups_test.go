@@ -96,6 +96,25 @@ func TestRenameGroupUpdatesAllMembers(t *testing.T) {
 	}
 }
 
+func TestAssignGroupOnCreatingPlaceholderDoesNotPersist(t *testing.T) {
+	repo := &savingSessionRepo{}
+	cfg := twoRemoteCfg()
+	m := NewModel(cfg, nil, nil, repo, nil, nil, nil)
+	m.selectedRemote = cfg.Remotes[0]
+	m.sessionCfg = domain.SessionConfig{Branch: "feature/pb-1", Repo: domain.Repo{Name: "org/repo"}}
+	_ = m.startBackgroundCreate()
+	id := m.allSessions[0].ID
+	if err := m.setSessionGroup(id, "spike"); err != nil {
+		t.Fatal(err)
+	}
+	if m.allSessions[0].Group != "spike" {
+		t.Fatalf("group %q", m.allSessions[0].Group)
+	}
+	if len(repo.saved) != 0 {
+		t.Fatalf("placeholder must not be persisted, saved %v", repo.saved)
+	}
+}
+
 func TestAssignSessionToExistingAndUngrouped(t *testing.T) {
 	cfg := twoRemoteCfg()
 	sessions := []domain.Session{

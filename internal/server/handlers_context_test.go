@@ -113,6 +113,25 @@ func TestContextPutGetListFindPack(t *testing.T) {
 	if packRes.Type != "context_pack" || !strings.Contains(packRes.Text, "Auth cookie") {
 		t.Fatalf("pack %s", raw)
 	}
+
+	stats, err := Call(sock, "context.stats", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Error != nil {
+		t.Fatalf("stats: %+v", stats.Error)
+	}
+	raw, _ = json.Marshal(stats.Result)
+	var statsRes struct {
+		Type  string              `json:"type"`
+		Stats domain.ContextStats `json:"stats"`
+	}
+	if err := json.Unmarshal(raw, &statsRes); err != nil {
+		t.Fatal(err)
+	}
+	if statsRes.Type != "context_stats" || statsRes.Stats.Notes < 1 || statsRes.Stats.Ops["put"].Count < 1 {
+		t.Fatalf("stats %s", raw)
+	}
 }
 
 func TestContextGetMissing(t *testing.T) {

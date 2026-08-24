@@ -173,6 +173,10 @@ func loadConfiguredSessions(ctx context.Context, cfg *config.Config, db domain.S
 	}
 	filtered := make([]domain.Session, 0, len(sessions))
 	for _, s := range sessions {
+		if domain.IsEphemeralSessionID(s.ID) {
+			_ = db.Delete(ctx, s.ID)
+			continue
+		}
 		if s.RemoteHost != "" {
 			if _, ok := resolveRemote(cfg, s); !ok {
 				_ = db.Delete(ctx, s.ID)

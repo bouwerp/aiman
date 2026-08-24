@@ -16,13 +16,14 @@ import (
 )
 
 func printContextUsage(w io.Writer) {
-	fmt.Fprint(w, `Usage: aiman context <ls|find|get|put|pack|import> …
+	fmt.Fprint(w, `Usage: aiman context <ls|find|get|put|pack|stats|import> …
 
   ls [--group G | --repo R] [--limit N]
   find QUERY [--group G | --repo R] [--limit N]
   get ID
   put --title T [--abstract A] [--group G | --repo R] [--body-file FILE]
   pack [--group G] [--repo R] [--limit N]
+  stats
   import [--agent all|claude,grok,codex,agy] [--group G] [--repo R] [--dry-run]
 
 Notes live in ~/.aiman/context/ on this host. Serve is preferred; if it
@@ -149,6 +150,8 @@ func contextRPC(cmd string, args []string) (string, map[string]any, error) {
 			params["text"] = t
 		}
 		return "context.pack", params, nil
+	case "stats":
+		return "context.stats", map[string]any{}, nil
 	default:
 		writeCLIError(server.CodeInvalidParams, "unknown context command "+cmd)
 		return "", nil, errUsage
@@ -259,6 +262,12 @@ func contextViaFiles(store *contextstore.Files, cmd string, args []string) error
 			}
 		}
 		return writeJSON(map[string]any{"type": "context_pack", "text": text})
+	case "stats":
+		st, err := store.Stats(ctx)
+		if err != nil {
+			return err
+		}
+		return writeJSON(map[string]any{"type": "context_stats", "stats": st})
 	default:
 		writeCLIError(server.CodeInvalidParams, "unknown context command "+cmd)
 		return errUsage

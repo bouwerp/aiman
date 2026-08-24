@@ -100,6 +100,9 @@ func NewRepository(dbPath string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
+	if _, err := db.Exec(`DELETE FROM sessions WHERE id LIKE 'pending-%'`); err != nil {
+		return nil, fmt.Errorf("failed to drop ephemeral create placeholders: %w", err)
+	}
 
 	// #nosec G101 -- DDL for the secrets table; the detector matches the variable name,
 	// and no credential appears here.
@@ -157,6 +160,9 @@ func NewRepository(dbPath string) (*Repository, error) {
 }
 
 func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
+	if domain.IsEphemeralSessionID(s.ID) {
+		return nil
+	}
 	var tunnelsJSON any
 	if s.Tunnels != nil {
 		encoded, err := json.Marshal(s.Tunnels)

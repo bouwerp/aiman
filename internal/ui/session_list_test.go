@@ -18,6 +18,7 @@ func TestSessionStateColorByActivity(t *testing.T) {
 	}{
 		{item{activity: "busy"}, stateColorWorking},
 		{item{activity: "creating"}, stateColorWorking},
+		{item{activity: "bgwait"}, stateColorBackground},
 		{item{needsInput: true}, stateColorWaiting},
 		{item{activity: "idle"}, stateColorIdle},
 		{item{activity: "stale"}, stateColorError},
@@ -32,6 +33,16 @@ func TestSessionStateColorByActivity(t *testing.T) {
 			t.Fatalf("state=%q needs=%v ended=%v header=%v: got %q want %q",
 				tt.it.activity, tt.it.needsInput, tt.it.session.AgentEnded, tt.it.header, got, tt.want)
 		}
+	}
+}
+
+func TestBackgroundWaitChromeAndRollup(t *testing.T) {
+	it := item{session: domain.Session{Name: "impl"}, activity: "bgwait"}
+	if got := it.plainTitle(); !strings.Contains(got, "waiting") {
+		t.Fatalf("chrome %q", got)
+	}
+	if groupRollup([]item{it, {activity: "idle"}}) != "working" {
+		t.Fatal("background wait rollup should be working, not user-wait")
 	}
 }
 

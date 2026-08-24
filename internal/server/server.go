@@ -126,6 +126,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleContextFind(ctx, req)
 	case "context.pack":
 		return s.handleContextPack(ctx, req)
+	case "context.stats":
+		return s.handleContextStats(ctx, req)
 	default:
 		return Response{ID: req.ID, Error: &Error{Code: CodeInvalidParams, Message: "unknown method " + req.Method}}
 	}

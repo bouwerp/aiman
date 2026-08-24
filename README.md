@@ -32,11 +32,12 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Restart / switch agent (`s`)**: Save a handoff, start the chosen agent (same or different), and tell it to read the handoff
 - **AWS profile allowlist**: Menu → AWS Credentials toggles which local `~/.aws` profiles aiman uses; delete removes the remote profile and the config entry so it does not come back
 - **Agent API (`aiman serve`)**: One JSON server per remote; start it from the TUI (Tab → **agent API** → `i`) so in-pane agents can list, create, prompt, and wait on sibling sessions
-- **Shared context**: Durable markdown notes per host (`aiman context ls|find|get|put|pack`); session create injects abstracts into `.aiman_context.md`, archive writes a note back
+- **Shared context**: Durable markdown notes per host (`aiman context ls|find|get|put|pack|stats`); session create injects abstracts into `.aiman_context.md`, archive writes a note back. Menu → Shared context shows store size, lookups, and pack usage
+- **Mobile TUI (`aiman phone`)**: Termius over Tailscale. Uses the host `tailscale` CLI; the phone still needs the Tailscale app connected first
 - **Agent skill**: `aiman --skill` prints a Markdown skill gated on `AIMAN_ENV=1`
 
 ### AI Intelligence
-- **Session activity detection**: Reports whether an agent is working, blocked on a question, or idle, from tmux's own last-output timestamp and the tail of the pane — no model required
+- **Session activity detection**: Reports whether an agent is working, waiting on background agents, blocked on a question, or idle, from tmux's own last-output timestamp and the tail of the pane — no model required
 - **Brief AI Summary**: Short summary shown in the session list sidebar (per active session)
 - **Long AI Summary**: Detailed summary with action items generated at archive time
 - **Session Archive**: Compress, AI-summarise, and persist a session snapshot in one step
@@ -54,7 +55,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Per-session overrides**: At session creation, override the AWS profile and region independently per session (e.g. `dev`/`us-east-1` in one session, `prod`/`eu-west-1` in another)
 - **Time to expiry**: The credentials manager shows how long each remote profile has left, counting down live
 - **Refresh anything, any time**: `shift+R` re-mints and pushes every delegated profile regardless of its current status, from the credentials screen or straight from the dashboard
-- **Expiry warning banner**: The dashboard warns when any delegated credential is within an hour of expiry (red once expired)
+- **Expiry warning banner**: The dashboard warns when a selected delegated credential is within 15 minutes of expiry (red once expired). Unchecked local profiles are not polled or shown
 
 ### User Experience
 - **Interactive TUI**: Built with Bubble Tea for a modern terminal UI
@@ -400,10 +401,22 @@ aiman session create --quick --agent claude [--name NAME]
 aiman session rename <target> NEW-NAME
 aiman session move <target> --group GROUP
 aiman session prompt <target> TEXT [--wait] [--until STATE] [--timeout 120s] [--force]
-aiman session wait <target> [--until idle|working|waiting_input|blocked] [--timeout 120s]
+aiman session wait <target> [--until idle|working|waiting_input|waiting_background|blocked] [--timeout 120s]
 aiman session read <target> [--lines 120]
 aiman session report-agent-session --from-stdin
 ```
+
+### `aiman phone`
+
+Run this on the host you will SSH into from an iPhone (Termius). It uses the host `tailscale` CLI; it does not bundle Tailscale. The phone still needs the Tailscale app connected first.
+
+```bash
+aiman phone
+aiman phone --up      # tailscale up if this host is not on the tailnet
+aiman phone --json
+```
+
+Prints MagicDNS name, `100.x` IPv4, SSH user, and Termius fields.
 
 Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refused: use `aiman session …`.
 
@@ -439,7 +452,7 @@ Stdout is indented JSON. Server errors are JSON on stderr, exit 1. Usage errors 
 }
 ```
 
-`self` is true when `id` equals the caller's `AIMAN_ID`. `state` is `idle`, `working`, `waiting_input`, `errored`, or `unknown`.
+`self` is true when `id` equals the caller's `AIMAN_ID`. `state` is `idle`, `working`, `waiting_input`, `waiting_background`, `errored`, or `unknown`.
 
 | Code | Meaning |
 |---|---|

@@ -63,11 +63,12 @@ type SessionSummary struct {
 type AgentState string
 
 const (
-	AgentStateIdle         AgentState = "idle"          // prompt shown, no activity
-	AgentStateWorking      AgentState = "working"       // actively generating output
-	AgentStateWaitingInput AgentState = "waiting_input" // asking a question or awaiting confirmation
-	AgentStateErrored      AgentState = "errored"       // error visible in output
-	AgentStateUnknown      AgentState = "unknown"
+	AgentStateIdle              AgentState = "idle"               // prompt shown, no activity
+	AgentStateWorking           AgentState = "working"            // actively generating output
+	AgentStateWaitingInput      AgentState = "waiting_input"      // asking a question or awaiting confirmation
+	AgentStateWaitingBackground AgentState = "waiting_background" // blocked on its own background agents/tasks
+	AgentStateErrored           AgentState = "errored"            // error visible in output
+	AgentStateUnknown           AgentState = "unknown"
 )
 
 // ActionItem is a specific thing that requires human attention.

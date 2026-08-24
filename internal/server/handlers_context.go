@@ -196,6 +196,21 @@ func (s *Server) handleContextPack(ctx context.Context, req Request) Response {
 	}}
 }
 
+func (s *Server) handleContextStats(ctx context.Context, req Request) Response {
+	store, fail, ok := s.requireStore(req.ID)
+	if !ok {
+		return fail
+	}
+	st, err := store.Stats(ctx)
+	if err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type":  "context_stats",
+		"stats": st,
+	}}
+}
+
 func contextListResult(id, typ string, list []domain.ContextEntry) Response {
 	notes := make([]ContextNote, 0, len(list))
 	for _, e := range list {

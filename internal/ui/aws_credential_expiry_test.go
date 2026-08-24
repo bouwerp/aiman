@@ -57,6 +57,49 @@ func TestSyncedDelegationsNilConfig(t *testing.T) {
 	}
 }
 
+func TestSyncedDelegationsSkipsDisallowedLocalProfiles(t *testing.T) {
+	only := []string{"prod"}
+	cfg := &config.Config{
+		AWS: config.AWSDefaults{IncludeProfiles: &only},
+		Remotes: []config.Remote{
+			syncedRemote(),
+			{
+				Host: "regent0",
+				User: "code",
+				AWSDelegation: &config.AWSDelegation{
+					Profile: "lab", SourceProfile: "lab", SyncCredentials: true,
+				},
+			},
+		},
+	}
+	got := syncedDelegations(cfg)
+	if len(got) != 1 || got[0].profile != "prod" {
+		t.Fatalf("deselected lab must not be a sync target, got %+v", got)
+	}
+}
+
+func TestRenderAWSCredExpiryBannerIgnoresDeselectedProfiles(t *testing.T) {
+	only := []string{"prod"}
+	m := &Model{
+		cfg: &config.Config{
+			AWS: config.AWSDefaults{IncludeProfiles: &only},
+			Remotes: []config.Remote{{
+				Host: "regent0",
+				User: "code",
+				AWSDelegation: &config.AWSDelegation{
+					Profile: "lab", SourceProfile: "lab", SyncCredentials: true,
+				},
+			}},
+		},
+		awsCredExpiry: []awsCredExpiryItem{
+			{userAtHost: "code@regent0", profile: "lab", expiresAt: time.Now().Add(-time.Minute)},
+		},
+	}
+	if got := m.renderAWSCredExpiryBanner(); got != "" {
+		t.Fatalf("deselected lab must not appear on the banner, got %q", got)
+	}
+}
+
 func TestRenderAWSCredExpiryBannerSilentWhenHealthy(t *testing.T) {
 	m := &Model{awsCredExpiry: []awsCredExpiryItem{
 		{userAtHost: "ubuntu@worker.example", profile: "prod", expiresAt: time.Now().Add(6 * time.Hour)},

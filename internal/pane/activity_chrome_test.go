@@ -79,3 +79,14 @@ Do you want to proceed?
 		t.Errorf("State = %q (%s), want waiting_input", got.State, got.Reason)
 	}
 }
+
+func TestClassifyBackgroundWaitBeatsIdleChrome(t *testing.T) {
+	pane := strings.Replace(workingPaneWithChrome,
+		"· Sautéing… (10m 42s · ↓ 27.5k tokens · thought for 17s)",
+		"Waiting for 1 background agent to finish", 1)
+
+	got := Classify(Observation{Pane: pane, SinceOutput: 12 * time.Second})
+	if got.State != domain.AgentStateWaitingBackground {
+		t.Fatalf("State = %q (%s), want waiting_background", got.State, got.Reason)
+	}
+}

@@ -24,6 +24,56 @@ func sessionTmuxKey(s domain.Session) string {
 	return s.RemoteHost + "\x00" + s.TmuxSession
 }
 
+// creatingPlaceholderMatchesLive reports whether a discovered session is the
+// in-flight create represented by placeholder. Placeholder IDs are ephemeral
+// (`pending-*`) and tmux names are often unsanitized branch labels, so ID and
+// exact tmux equality both miss.
+func creatingPlaceholderMatchesLive(placeholder, live domain.Session) bool {
+	if placeholder.RemoteHost == "" || live.RemoteHost == "" || placeholder.RemoteHost != live.RemoteHost {
+		return false
+	}
+	if live.ID == "" || live.ID == placeholder.ID {
+		return false
+	}
+	phTmux := domain.SanitizeTmuxSessionName(placeholder.TmuxSession)
+	liveTmux := domain.SanitizeTmuxSessionName(live.TmuxSession)
+	if phTmux != "" && phTmux == liveTmux {
+		return true
+	}
+	if placeholder.Branch == "" || placeholder.Branch != live.Branch {
+		return false
+	}
+	if placeholder.RepoName == "" || live.RepoName == "" {
+		return true
+	}
+	return placeholder.RepoName == live.RepoName
+}
+
+func upsertSessionReplacing(sessions []domain.Session, placeholderID string, live domain.Session) []domain.Session {
+	out := make([]domain.Session, 0, len(sessions))
+	replacedLive := false
+	for _, s := range sessions {
+		if s.ID == placeholderID {
+			continue
+		}
+		if live.ID != "" && s.ID == live.ID {
+			if replacedLive {
+				continue
+			}
+			merged := overlayPersistedSessionFields(live, s)
+			merged.ID = live.ID
+			out = append(out, merged)
+			replacedLive = true
+			continue
+		}
+		out = append(out, s)
+	}
+	if !replacedLive {
+		out = append(out, live)
+	}
+	return out
+}
+
 func persistedByTmux(sessions map[string]domain.Session) map[string]domain.Session {
 	out := make(map[string]domain.Session, len(sessions))
 	for _, s := range sessions {

@@ -75,6 +75,25 @@ func TestClassify(t *testing.T) {
 			confidence: High,
 		},
 		{
+			name: "grok live turn is working without a claude timer",
+			obs: Observation{Pane: `Running cargo test
+
+Enter to send now
+esc cancel
+❯
+`, SinceOutput: 4 * time.Second},
+			want:       domain.AgentStateWorking,
+			confidence: High,
+		},
+		{
+			name: "grok still-running line is waiting on background work",
+			obs: Observation{Pane: `◎ 1 command still running · send a message to interrupt
+❯
+`, SinceOutput: 8 * time.Second},
+			want:       domain.AgentStateWaitingBackground,
+			confidence: High,
+		},
+		{
 			name: "finished agent with prompt is idle",
 			obs: Observation{
 				Pane:        "● Done. I fixed the datum-hash handling and pushed the branch.\n\n❯ ",
@@ -112,6 +131,27 @@ func TestClassify(t *testing.T) {
 			obs:        Observation{Pane: "", SinceOutput: -1},
 			want:       domain.AgentStateUnknown,
 			confidence: Low,
+		},
+		{
+			name: "waiting for a background agent is not idle",
+			obs: Observation{Pane: `● Dispatched a reviewer.
+
+Waiting for 1 background agent to finish
+
+❯
+  -- INSERT -- ⏵⏵ bypass permissions on · ← 1 agent
+`, SinceOutput: 20 * time.Second},
+			want:       domain.AgentStateWaitingBackground,
+			confidence: High,
+		},
+		{
+			name: "waiting for several background agents",
+			obs: Observation{
+				Pane:        "Waiting for 3 background agents to finish",
+				SinceOutput: 5 * time.Second,
+			},
+			want:       domain.AgentStateWaitingBackground,
+			confidence: High,
 		},
 	}
 
@@ -174,11 +214,12 @@ func TestTail(t *testing.T) {
 
 func TestUIActivity(t *testing.T) {
 	cases := map[domain.AgentState]string{
-		domain.AgentStateWorking:      "busy",
-		domain.AgentStateWaitingInput: "input",
-		domain.AgentStateIdle:         "idle",
-		domain.AgentStateUnknown:      "",
-		domain.AgentStateErrored:      "",
+		domain.AgentStateWorking:           "busy",
+		domain.AgentStateWaitingInput:      "input",
+		domain.AgentStateWaitingBackground: "bgwait",
+		domain.AgentStateIdle:              "idle",
+		domain.AgentStateUnknown:           "",
+		domain.AgentStateErrored:           "",
 	}
 	for state, want := range cases {
 		if got := UIActivity(state); got != want {

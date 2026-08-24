@@ -167,6 +167,8 @@ func run() error {
 			return runSession(os.Args[2:])
 		case "context":
 			return runContext(os.Args[2:])
+		case "phone":
+			return runPhone(os.Args[2:])
 		case "--skill":
 			return runSkill()
 		default:
@@ -186,6 +188,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  serve            agent API on this host (install remotes from TUI: m → Agent API → i)\n")
 			fmt.Fprintf(os.Stderr, "  session          list/get/create/prompt sessions (JSON; needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  context          ls/find/get/put/pack shared notes (JSON; files if serve is down)\n")
+			fmt.Fprintf(os.Stderr, "  phone            Tailscale + Termius setup for this host\n")
 			fmt.Fprintf(os.Stderr, "  --skill          print the agent skill\n")
 			return errUsage
 		}

@@ -64,7 +64,7 @@ var (
     "topic":      {"type": "string"},
     "summary":    {"type": "string"},
     "actions":    {"type": "array", "items": {"type": "string"}},
-    "agent_state": {"type": "string", "enum": ["idle","working","waiting_input","errored","unknown"]}
+    "agent_state": {"type": "string", "enum": ["idle","working","waiting_input","waiting_background","errored","unknown"]}
   },
   "required": ["topic", "summary", "actions", "agent_state"]
 }`)
@@ -76,7 +76,7 @@ var (
     "details":    {"type": "array", "items": {"type": "string"}},
     "actions":    {"type": "array", "items": {"type": "string"}},
     "next_steps": {"type": "array", "items": {"type": "string"}},
-    "agent_state": {"type": "string", "enum": ["idle","working","waiting_input","errored","unknown"]}
+    "agent_state": {"type": "string", "enum": ["idle","working","waiting_input","waiting_background","errored","unknown"]}
   },
   "required": ["overview", "details", "actions", "next_steps", "agent_state"]
 }`)
@@ -120,14 +120,14 @@ var (
 // System prompts for each use case.
 const (
 	sessionBriefSystemPrompt = `You are monitoring an AI coding agent's tmux session. Respond ONLY with valid JSON.
-agent_state: idle|working|waiting_input|errored|unknown.
+agent_state: idle|working|waiting_input|waiting_background|errored|unknown.
 topic: ≤8 words describing what the session is about, derived from the initial user prompt at the start of SESSION START. Use noun phrases, no verbs. Examples: "AWS session-scoped credential isolation", "Auth module JWT refactor", "Fix pagination bug in orders API". If no clear initial prompt is visible, infer from the overall activity.
 summary: one sentence describing current status. Write in present participle, NO subject. NEVER start with "The agent", "It", or any noun/pronoun subject. WRONG: "The agent is running tests." RIGHT: "Running tests after fixing the auth middleware timeout." Include file names or error text if visible.
 actions: only items needing immediate human response (blocked on approval, unanswered question, unresolvable error). Empty array if none.`
 
 	sessionSummarySystemPrompt = `You are monitoring an AI coding agent's tmux session. Respond ONLY with valid JSON.
 When SESSION START is provided, treat the initial user prompt there as the primary goal of the session — use it to anchor the overview.
-agent_state: idle|working|waiting_input|errored|unknown.
+agent_state: idle|working|waiting_input|waiting_background|errored|unknown.
 overview: array of 2-4 sentences, one per element. First sentence states the session goal (derived from the initial prompt). Remaining sentences cover accomplishments and current status. Write each in present participle — NO subject of any kind. NEVER use "The agent", "It", "The model", or any other subject. WRONG: "The agent implemented the feature." RIGHT: "Implementing user authentication endpoints in the API layer."
 details: array of 6-12 items — exact files created/modified/deleted, commands and outcomes, test pass/fail counts, errors verbatim, build and lint results. One sentence per item, no subject, present participle.
 actions: items needing immediate human response (blocked on approval, unanswered question, unresolvable error). Empty array if none.
@@ -488,7 +488,7 @@ func headTruncate(s string, maxChars int) string {
 var activityClassifySchema = json.RawMessage(`{
   "type": "object",
   "properties": {
-    "state": {"type": "string", "enum": ["working", "waiting_input", "idle"]},
+    "state": {"type": "string", "enum": ["working", "waiting_input", "waiting_background", "idle"]},
     "reason": {"type": "string"}
   },
   "required": ["state"]
@@ -497,6 +497,7 @@ var activityClassifySchema = json.RawMessage(`{
 const activityClassifySystemPrompt = `You classify the last lines of a coding agent's terminal pane.
 working: the agent is producing output or thinking (spinner, elapsed timer, streaming tokens).
 waiting_input: the agent is blocked on a question or a choice list and cannot continue without the user.
+waiting_background: the foreground agent is parked waiting for its own background agents or tasks to finish (for example "Waiting for 1 background agent to finish"). That is not idle and not waiting_input.
 idle: nothing is running — a shell prompt, or a finished agent sitting at its own input box.
 An agent at its own empty input box has finished its turn: that is idle, not waiting_input, because it is not asking anything.
 Answer with the state and a reason of at most eight words.`
@@ -525,7 +526,7 @@ func (o *OllamaIntelligence) ClassifyActivity(ctx context.Context, paneTail stri
 		return domain.AgentStateUnknown, "", fmt.Errorf("parse classification: %w", err)
 	}
 	switch domain.AgentState(out.State) {
-	case domain.AgentStateWorking, domain.AgentStateWaitingInput, domain.AgentStateIdle:
+	case domain.AgentStateWorking, domain.AgentStateWaitingInput, domain.AgentStateWaitingBackground, domain.AgentStateIdle:
 		return domain.AgentState(out.State), out.Reason, nil
 	default:
 		return domain.AgentStateUnknown, out.Reason, nil
