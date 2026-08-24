@@ -104,6 +104,23 @@ func tickAWSCredExpiry() tea.Cmd {
 	})
 }
 
+func filterExpiryItemsByAllowlist(items []awsCredExpiryItem, cfg *config.Config) []awsCredExpiryItem {
+	if cfg == nil || cfg.AWS.IncludeProfiles == nil {
+		return items
+	}
+	allowed := map[string]bool{}
+	for _, t := range syncedDelegations(cfg) {
+		allowed[t.userAtHost+"\x00"+t.profile] = true
+	}
+	var out []awsCredExpiryItem
+	for _, it := range items {
+		if allowed[it.userAtHost+"\x00"+it.profile] {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 // formatAWSCredExpiryBanner returns the dashboard warning line, or "" when nothing is
 // close to expiry. It names the most urgent profile and counts the rest.
 func formatAWSCredExpiryBanner(items []awsCredExpiryItem, now time.Time) string {
@@ -147,6 +164,9 @@ func syncedDelegations(cfg *config.Config) []delegationTarget {
 		}
 		for _, d := range r.AllDelegations() {
 			if d == nil || !d.SyncCredentials {
+				continue
+			}
+			if !cfg.AWSLocalProfileAllowed(d.LocalSourceProfile()) {
 				continue
 			}
 			profile := strings.TrimSpace(d.Profile)

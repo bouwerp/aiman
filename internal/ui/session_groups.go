@@ -207,12 +207,15 @@ func (m *Model) renameGroupOnHost(host, oldLabel, newLabel string) error {
 			continue
 		}
 		s.Group = newLabel
-		if m.db != nil {
+		if m.db != nil && !domain.IsEphemeralSessionID(s.ID) {
 			if err := m.db.Save(context.Background(), &s); err != nil {
 				return fmt.Errorf("could not save: %w", err)
 			}
 		}
 		m.allSessions[i].Group = newLabel
+		if cs, ok := m.creatingSessions[s.ID]; ok {
+			cs.placeholder.Group = newLabel
+		}
 	}
 	return nil
 }
@@ -223,12 +226,15 @@ func (m *Model) setSessionGroup(id, group string) error {
 			continue
 		}
 		s.Group = group
-		if m.db != nil {
+		if m.db != nil && !domain.IsEphemeralSessionID(id) {
 			if err := m.db.Save(context.Background(), &s); err != nil {
 				return err
 			}
 		}
 		m.allSessions[i].Group = group
+		if cs, ok := m.creatingSessions[id]; ok {
+			cs.placeholder.Group = group
+		}
 		return nil
 	}
 	return fmt.Errorf("session not found")

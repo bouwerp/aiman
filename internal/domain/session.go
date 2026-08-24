@@ -3,8 +3,17 @@ package domain
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
+
+// EphemeralSessionIDPrefix marks TUI-only rows (background-create placeholders)
+// that must never be persisted. A real session uses a UUID.
+const EphemeralSessionIDPrefix = "pending-"
+
+func IsEphemeralSessionID(id string) bool {
+	return strings.HasPrefix(id, EphemeralSessionIDPrefix)
+}
 
 type SessionStatus string
 

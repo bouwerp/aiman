@@ -26,7 +26,7 @@ func groupRollup(items []item) string {
 		if it.activity == "create-failed" {
 			hasErr = true
 		}
-		if it.activity == "busy" || it.activity == "creating" {
+		if it.activity == "busy" || it.activity == "creating" || it.activity == "bgwait" {
 			hasBusy = true
 		}
 	}
@@ -169,15 +169,16 @@ func newSessionListDelegate() sessionListDelegate {
 }
 
 var (
-	stateColorWorking = lipgloss.Color("#00FF00")
-	stateColorWaiting = lipgloss.Color("#FFA500")
-	stateColorError   = lipgloss.Color("#FF0000")
-	stateColorIdle    = lipgloss.Color("#7D7D7D")
-	stateColorEnded   = lipgloss.Color("#6B6B6B")
-	stateColorName    = lipgloss.Color("#DDDDDD")
-	headerLabelColor  = lipgloss.Color("62")
-	headerSelFg       = lipgloss.Color("229")
-	headerSelBg       = lipgloss.Color("57")
+	stateColorWorking    = lipgloss.Color("#00FF00")
+	stateColorWaiting    = lipgloss.Color("#FFA500")
+	stateColorBackground = lipgloss.Color("#5FD7FF")
+	stateColorError      = lipgloss.Color("#FF0000")
+	stateColorIdle       = lipgloss.Color("#7D7D7D")
+	stateColorEnded      = lipgloss.Color("#6B6B6B")
+	stateColorName       = lipgloss.Color("#DDDDDD")
+	headerLabelColor     = lipgloss.Color("62")
+	headerSelFg          = lipgloss.Color("229")
+	headerSelBg          = lipgloss.Color("57")
 )
 
 func sessionStateColor(i item) lipgloss.Color {
@@ -208,6 +209,8 @@ func sessionStateColor(i item) lipgloss.Color {
 	switch i.activity {
 	case "busy", "creating":
 		return stateColorWorking
+	case "bgwait":
+		return stateColorBackground
 	case "idle":
 		return stateColorIdle
 	default:
@@ -237,6 +240,8 @@ func (i item) chrome() (prefix, activity string) {
 			prefix, activity = "o ", " • idle"
 		case "busy":
 			prefix, activity = "> ", " • busy"
+		case "bgwait":
+			prefix, activity = "~ ", " • waiting"
 		case "stale":
 			prefix, activity = "! ", " ⚠ thinking (stuck?)"
 		}

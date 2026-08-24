@@ -369,6 +369,8 @@ func renderSnapshotDetail(snap domain.SessionSnapshot, width int) string {
 		stateColor = "1"
 	case domain.AgentStateWaitingInput:
 		stateColor = "3"
+	case domain.AgentStateWaitingBackground:
+		stateColor = "87"
 	case domain.AgentStateIdle:
 		stateColor = "241"
 	}

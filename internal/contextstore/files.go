@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -37,10 +38,13 @@ type fileMeta struct {
 // Files is a markdown directory store under root (typically ~/.aiman/context).
 type Files struct {
 	root string
+	mu   sync.Mutex
+	ops  persistedStats
 }
 
 func NewFiles(root string) *Files {
-	return &Files{root: strings.TrimRight(root, "/\\")}
+	root = strings.TrimRight(root, "/\\")
+	return &Files{root: root, ops: loadPersisted(root)}
 }
 
 // Root is ~/.aiman/context when aimanDir is the config directory.
@@ -48,37 +52,43 @@ func Root(aimanDir string) string {
 	return path.Join(strings.TrimRight(aimanDir, "/\\"), DirName)
 }
 
-func (s *Files) Put(_ context.Context, e domain.ContextEntry) (domain.ContextEntry, error) {
-	e, err := normalize(e)
+func (s *Files) Put(_ context.Context, e domain.ContextEntry) (stored domain.ContextEntry, err error) {
+	start := time.Now()
+	n := 0
+	defer func() { s.observe("put", start, err, n) }()
+	e, err = normalize(e)
 	if err != nil {
 		return domain.ContextEntry{}, err
 	}
 	p := absPath(s.root, e)
-	if err := os.MkdirAll(path.Dir(p), 0o700); err != nil {
+	if err = os.MkdirAll(path.Dir(p), 0o700); err != nil {
 		return domain.ContextEntry{}, fmt.Errorf("creating context dir: %w", err)
 	}
 	body, err := encode(e)
 	if err != nil {
 		return domain.ContextEntry{}, err
 	}
+	n = len(body)
 	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+	if err = os.WriteFile(tmp, body, 0o600); err != nil {
 		return domain.ContextEntry{}, fmt.Errorf("writing %s: %w", tmp, err)
 	}
-	if err := os.Rename(tmp, p); err != nil {
+	if err = os.Rename(tmp, p); err != nil {
 		_ = os.Remove(tmp)
 		return domain.ContextEntry{}, fmt.Errorf("renaming %s: %w", p, err)
 	}
 	return e, nil
 }
 
-func (s *Files) Get(_ context.Context, id string) (*domain.ContextEntry, error) {
+func (s *Files) Get(_ context.Context, id string) (found *domain.ContextEntry, err error) {
+	start := time.Now()
+	n := 0
+	defer func() { s.observe("get", start, err, n) }()
 	id = SafeKey(id)
 	if id == "" {
 		return nil, fmt.Errorf("invalid id")
 	}
-	var found *domain.ContextEntry
-	err := s.walk(func(e domain.ContextEntry) error {
+	err = s.walk(func(e domain.ContextEntry) error {
 		if e.ID == id {
 			cp := e
 			found = &cp
@@ -89,35 +99,91 @@ func (s *Files) Get(_ context.Context, id string) (*domain.ContextEntry, error) 
 	if err != nil && err != errStop {
 		return nil, err
 	}
+	err = nil
 	if found == nil {
-		return nil, fmt.Errorf("context note not found")
+		err = fmt.Errorf("context note not found")
+		return nil, err
 	}
+	n = len(found.Body)
 	return found, nil
 }
 
 func (s *Files) List(_ context.Context, q domain.ContextQuery) ([]domain.ContextEntry, error) {
-	return s.collect(q, false)
+	return s.timedCollect("list", q, false)
 }
 
 func (s *Files) Find(_ context.Context, q domain.ContextQuery) ([]domain.ContextEntry, error) {
-	return s.collect(q, true)
+	return s.timedCollect("find", q, true)
 }
 
-func (s *Files) Pack(ctx context.Context, q domain.ContextQuery) (string, error) {
+func (s *Files) timedCollect(op string, q domain.ContextQuery, text bool) (list []domain.ContextEntry, err error) {
+	start := time.Now()
+	defer func() { s.observe(op, start, err, len(list)) }()
+	return s.collect(q, text)
+}
+
+func (s *Files) Pack(_ context.Context, q domain.ContextQuery) (text string, err error) {
+	start := time.Now()
+	defer func() { s.observe("pack", start, err, len(text)) }()
 	if q.Limit <= 0 {
 		q.Limit = defaultPackLimit
 	}
-	var entries []domain.ContextEntry
-	var err error
-	if strings.TrimSpace(q.Text) != "" {
-		entries, err = s.Find(ctx, q)
-	} else {
-		entries, err = s.List(ctx, q)
-	}
+	entries, err := s.collect(q, strings.TrimSpace(q.Text) != "")
 	if err != nil {
 		return "", err
 	}
 	return FormatPack(entries), nil
+}
+
+func (s *Files) Stats(_ context.Context) (domain.ContextStats, error) {
+	notes, bytes, ns := s.measure()
+	out := domain.ContextStats{
+		Notes:       notes,
+		Bytes:       bytes,
+		Namespaces:  ns,
+		Ops:         s.snapshotOps(),
+		CollectedAt: time.Now().UTC(),
+	}
+	if out.Namespaces == nil {
+		out.Namespaces = map[string]int{}
+	}
+	if out.Ops == nil {
+		out.Ops = map[string]domain.ContextOpStat{}
+	}
+	return out, nil
+}
+
+func (s *Files) measure() (notes int, bytes int64, ns map[string]int) {
+	ns = map[string]int{}
+	if s.root == "" {
+		return 0, 0, ns
+	}
+	if _, err := os.Stat(s.root); os.IsNotExist(err) {
+		return 0, 0, ns
+	}
+	_ = s.walk(func(e domain.ContextEntry) error {
+		notes++
+		ns[e.Namespace]++
+		return nil
+	})
+	_ = fs.WalkDir(os.DirFS(s.root), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".md") {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr == nil {
+			bytes += info.Size()
+		}
+		return nil
+	})
+	return notes, bytes, ns
+}
+
+// PackSession builds the create/restart pack and records one pack op.
+func (s *Files) PackSession(ctx context.Context, group, repo string) (text string) {
+	start := time.Now()
+	defer func() { s.observe("pack", start, nil, len(text)) }()
+	return packForSessionUnmetered(ctx, s, group, repo)
 }
 
 func (s *Files) collect(q domain.ContextQuery, requireText bool) ([]domain.ContextEntry, error) {
@@ -331,6 +397,45 @@ func PackForSession(ctx context.Context, store domain.ContextStore, group, repo 
 	if store == nil {
 		return ""
 	}
+	if f, ok := store.(*Files); ok {
+		return f.PackSession(ctx, group, repo)
+	}
+	return packFromLists(ctx, store, group, repo)
+}
+
+func packForSessionUnmetered(_ context.Context, s *Files, group, repo string) string {
+	if s == nil {
+		return ""
+	}
+	seen := map[string]bool{}
+	var all []domain.ContextEntry
+	add := func(ns, key string) {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return
+		}
+		list, err := s.collect(domain.ContextQuery{Namespace: ns, Key: key, Limit: defaultPackLimit}, false)
+		if err != nil {
+			return
+		}
+		for _, e := range list {
+			if seen[e.ID] {
+				continue
+			}
+			seen[e.ID] = true
+			all = append(all, e)
+		}
+	}
+	add(domain.ContextNSGroup, group)
+	add(domain.ContextNSRepo, repo)
+	add(domain.ContextNSHost, "host")
+	if len(all) > defaultPackLimit {
+		all = all[:defaultPackLimit]
+	}
+	return FormatPack(all)
+}
+
+func packFromLists(ctx context.Context, store domain.ContextStore, group, repo string) string {
 	seen := map[string]bool{}
 	var all []domain.ContextEntry
 	add := func(ns, key string) {

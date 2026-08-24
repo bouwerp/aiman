@@ -98,6 +98,23 @@ func TestStartupReplaysEarlyDiscovery(t *testing.T) {
 	}
 }
 
+func TestDashboardAppliesDiscoveryOnMainView(t *testing.T) {
+	next, _ := newTestStartupModel(&startupSessionRepo{}).Update(startupReadyMsg{})
+	dash := next.(*Model)
+	if dash.state != viewStateMain {
+		t.Fatalf("state %v", dash.state)
+	}
+
+	updated, _ := dash.Update(discoveryResultMsg{
+		sessions:     []domain.Session{{ID: "live", RemoteHost: "regent0", TmuxSession: "WTB-2", Status: domain.SessionStatusActive}},
+		scannedHosts: map[string]bool{"regent0": true},
+	})
+	dash = updated.(*Model)
+	if len(dash.allSessions) != 1 || dash.allSessions[0].ID != "live" {
+		t.Fatalf("main view must apply discovery, got %+v", dash.allSessions)
+	}
+}
+
 // Results arriving after the handoff land on the dashboard.
 func TestDashboardAcceptsLateCheckResults(t *testing.T) {
 	next, _ := newTestStartupModel(&startupSessionRepo{}).Update(startupReadyMsg{})

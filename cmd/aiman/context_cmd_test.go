@@ -46,6 +46,16 @@ func TestContextViaFilesPack(t *testing.T) {
 	if err := contextViaFiles(store, "pack", []string{"--group", "G1"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := contextViaFiles(store, "stats", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestContextRPCStats(t *testing.T) {
+	method, _, err := contextRPC("stats", nil)
+	if err != nil || method != "context.stats" {
+		t.Fatalf("%s %v", method, err)
+	}
 }
 
 func TestParseImportAgentsFromCLI(t *testing.T) {

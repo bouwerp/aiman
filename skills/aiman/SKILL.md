@@ -59,7 +59,7 @@ aiman session read reviewer --lines 120
 
 ## Shared context
 
-This host keeps durable notes in `~/.aiman/context/` (markdown with YAML frontmatter). Prefer `aiman context` over inventing a sidecar. `ls`/`find` return abstracts; `get` returns the full body. Session create injects a pack of abstracts into `.aiman_context.md`.
+This host keeps durable notes in `~/.aiman/context/` (markdown with YAML frontmatter). Prefer `aiman context` over inventing a sidecar. `ls`/`find` return abstracts; `get` returns the full body. Session create injects a pack of abstracts into `.aiman_context.md`. `aiman context stats` reports store size, op counts, and lookup times.
 
 ```bash
 aiman context ls --group "$AIMAN_GROUP"

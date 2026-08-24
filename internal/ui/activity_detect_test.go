@@ -50,6 +50,25 @@ func TestDetectSessionActivity(t *testing.T) {
 			since:        20 * time.Second,
 			wantActivity: "idle",
 		},
+		{
+			name: "waiting on a background agent is not idle",
+			pane: "Waiting for 1 background agent to finish\n\n❯\n" +
+				"  -- INSERT -- ⏵⏵ bypass permissions on · ← 1 agent",
+			since:        15 * time.Second,
+			wantActivity: "bgwait",
+		},
+		{
+			name:         "grok send-now footer is busy",
+			pane:         "Editing launch_flags.go\n\nEnter to send now\n❯ ",
+			since:        3 * time.Second,
+			wantActivity: "busy",
+		},
+		{
+			name:         "grok still-running footer is waiting",
+			pane:         "◎ 2 monitors still running · send a message to interrupt\n❯ ",
+			since:        10 * time.Second,
+			wantActivity: "bgwait",
+		},
 	}
 
 	for _, tt := range tests {

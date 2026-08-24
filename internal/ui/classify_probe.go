@@ -125,6 +125,8 @@ func stateLabel(s domain.AgentState) string {
 		return "working"
 	case domain.AgentStateWaitingInput:
 		return "needs input"
+	case domain.AgentStateWaitingBackground:
+		return "waiting on background"
 	case domain.AgentStateIdle:
 		return "idle"
 	default:

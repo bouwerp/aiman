@@ -125,6 +125,8 @@ func normalizeState(v string) domain.AgentState {
 		return domain.AgentStateWorking
 	case "waiting_input", "blocked", "waitinginput":
 		return domain.AgentStateWaitingInput
+	case "waiting_background", "background", "waitingbackground":
+		return domain.AgentStateWaitingBackground
 	case "errored", "error":
 		return domain.AgentStateErrored
 	default:

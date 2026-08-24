@@ -217,6 +217,88 @@ func TestBackgroundCreate_PlaceholderSurvivesDiscovery(t *testing.T) {
 	}
 }
 
+func TestBackgroundCreate_DiscoveryDoesNotCloneInFlightSession(t *testing.T) {
+	model := newTestModelWithSummaryConfirmed(t)
+	_ = model.startBackgroundCreate()
+	id := model.allSessions[0].ID
+
+	live := domain.Session{
+		ID:          "real-1",
+		TmuxSession: "feature-pb-1",
+		Branch:      "feature/pb-1",
+		RepoName:    "org/repo",
+		RemoteHost:  "devbox",
+		Status:      domain.SessionStatusActive,
+	}
+	model.applyDiscoveryResult(discoveryResultMsg{
+		sessions:     []domain.Session{live},
+		scannedHosts: map[string]bool{"devbox": true},
+	})
+
+	if n := len(model.allSessions); n != 1 {
+		t.Fatalf("in-flight create must stay a single list row, got %d: %+v", n, model.allSessions)
+	}
+	if model.allSessions[0].ID != id {
+		t.Fatalf("expected placeholder %s to remain until create finishes, got %s", id, model.allSessions[0].ID)
+	}
+
+	updated, _ := model.Update(sessionCreateMsg{placeholderID: id, session: live})
+	model = updated.(*Model)
+	if n := len(model.allSessions); n != 1 || model.allSessions[0].ID != "real-1" {
+		t.Fatalf("expected one real session after create, got %+v", model.allSessions)
+	}
+}
+
+func TestBackgroundCreate_AssignGroupDuringCreateKeepsOneSession(t *testing.T) {
+	model := newTestModelWithSummaryConfirmed(t)
+	_ = model.startBackgroundCreate()
+	id := model.allSessions[0].ID
+
+	if err := model.setSessionGroup(id, "spike"); err != nil {
+		t.Fatal(err)
+	}
+
+	live := domain.Session{
+		ID:          "real-1",
+		TmuxSession: "feature-pb-1",
+		Branch:      "feature/pb-1",
+		RepoName:    "org/repo",
+		RemoteHost:  "devbox",
+		Status:      domain.SessionStatusActive,
+	}
+	model.applyDiscoveryResult(discoveryResultMsg{
+		sessions:     []domain.Session{live},
+		scannedHosts: map[string]bool{"devbox": true},
+	})
+
+	updated, _ := model.Update(sessionCreateMsg{placeholderID: id, session: live})
+	model = updated.(*Model)
+
+	if n := len(model.allSessions); n != 1 {
+		t.Fatalf("grouped in-flight session cloned: %+v", model.allSessions)
+	}
+	got := model.allSessions[0]
+	if got.ID != "real-1" {
+		t.Fatalf("id %s", got.ID)
+	}
+	if got.Group != "spike" {
+		t.Fatalf("group %q, want spike", got.Group)
+	}
+	var listed int
+	for _, it := range model.list.Items() {
+		si, ok := it.(item)
+		if ok && !si.header {
+			listed++
+			if si.session.ID != "real-1" {
+				t.Fatalf("list row id %s", si.session.ID)
+			}
+		}
+	}
+	if listed != 1 {
+		t.Fatalf("left pane session rows=%d", listed)
+	}
+}
+
 func TestBackgroundCreate_ReadyToastAutoClears(t *testing.T) {
 	model := newTestModelWithSummaryConfirmed(t)
 	_ = model.startBackgroundCreate()

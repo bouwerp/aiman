@@ -36,3 +36,18 @@ func TestAWSLocalProfileAllowed(t *testing.T) {
 		t.Fatal("allowlist")
 	}
 }
+
+func TestAWSDelegationLocalSourceProfile(t *testing.T) {
+	if (*AWSDelegation)(nil).LocalSourceProfile() != "" {
+		t.Fatal("nil")
+	}
+	if (&AWSDelegation{SourceProfile: "lab", Profile: "prod"}).LocalSourceProfile() != "lab" {
+		t.Fatal("source_profile wins")
+	}
+	if (&AWSDelegation{Profile: "lab"}).LocalSourceProfile() != "lab" {
+		t.Fatal("remote name is the local source when source_profile is empty")
+	}
+	if (&AWSDelegation{}).LocalSourceProfile() != "default" {
+		t.Fatal("empty defaults")
+	}
+}

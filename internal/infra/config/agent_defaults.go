@@ -38,3 +38,18 @@ func (c *Config) AWSLocalProfileAllowed(name string) bool {
 	}
 	return false
 }
+
+// LocalSourceProfile is the ~/.aws profile used to mint this delegation.
+// source_profile wins; otherwise the remote profile name (or "default").
+func (d *AWSDelegation) LocalSourceProfile() string {
+	if d == nil {
+		return ""
+	}
+	if s := strings.TrimSpace(d.SourceProfile); s != "" {
+		return s
+	}
+	if p := strings.TrimSpace(d.Profile); p != "" {
+		return p
+	}
+	return "default"
+}

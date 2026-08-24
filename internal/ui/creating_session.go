@@ -37,7 +37,7 @@ func newCreatingPlaceholder(cfg domain.SessionConfig, remote config.Remote) doma
 	}
 	now := time.Now()
 	return domain.Session{
-		ID:          fmt.Sprintf("pending-%d", now.UnixNano()),
+		ID:          fmt.Sprintf("%s%d", domain.EphemeralSessionIDPrefix, now.UnixNano()),
 		Name:        cfg.Name,
 		Group:       cfg.Group,
 		IssueKey:    cfg.IssueKey,
@@ -50,6 +50,15 @@ func newCreatingPlaceholder(cfg domain.SessionConfig, remote config.Remote) doma
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
+}
+
+func (m *Model) creatingPlaceholderFor(live domain.Session) *creatingSession {
+	for _, cs := range m.creatingSessions {
+		if creatingPlaceholderMatchesLive(cs.placeholder, live) {
+			return cs
+		}
+	}
+	return nil
 }
 
 // addStep appends a progress step, deduplicating immediate repeats.

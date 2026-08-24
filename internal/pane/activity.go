@@ -70,7 +70,7 @@ var (
 	elapsedTimerRe = regexp.MustCompile(`\(\s*(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*[·)]`)
 
 	// Explicit interrupt hints accompany every agent's working state.
-	interruptHintRe = regexp.MustCompile(`(?i)\b(esc to interrupt|ctrl\+c to (?:stop|cancel)|press esc)\b`)
+	interruptHintRe = regexp.MustCompile(`(?i)\b(esc to interrupt|ctrl\+c to (?:stop|cancel)|press esc|enter to send now)\b`)
 
 	// A numbered or arrow-marked choice list is a question, not output.
 	menuChoiceRe = regexp.MustCompile(`(?m)^\s*[❯>]\s*\d+[.)]\s+\S`)
@@ -84,8 +84,10 @@ var (
 	// Credential and continue prompts, which block just as hard.
 	blockingPromptRe = regexp.MustCompile(`(?i)(password|passphrase)\s*[:?]\s*$|press (?:any key|enter)\b|allow (?:once|always|execution|for this session)\b`)
 
-	// A bare shell prompt at the end means nothing is running.
-	shellPromptRe = regexp.MustCompile(`(?:^|\n)\s*(?:\S+@\S+[:\s].*)?[$#%❯>]\s*$`)
+	// A bare shell prompt at the end means nothing is running. Do not treat
+	// agent composers (Claude/Grok ❯) as a shell: Grok keeps ❯ on screen
+	// while a turn runs, and that used to classify busy sessions as idle.
+	shellPromptRe = regexp.MustCompile(`(?:^|\n)\s*(?:\S+@\S+[:\s].*[$#%]|[$#%])\s*$`)
 
 	// Agents render their own input box when they are ready for the next
 	// instruction: Claude Code shows a "-- INSERT --" affordance line, a
@@ -94,9 +96,14 @@ var (
 	// blocked, because nothing is being asked.
 	agentReadyRe = regexp.MustCompile(`(?i)(-- INSERT --|bypass permissions on|new task\? /clear|\bshift\+tab to cycle\b)`)
 
-	// Past-tense completion markers ("Brewed for 42s") report a finished turn,
-	// unlike the present-tense timer that marks a running one.
+	// Past-tense completion markers ("Brewed for 42s", Grok "Worked for 12s")
+	// report a finished turn, unlike the present-tense timer that marks a running one.
 	turnFinishedRe = regexp.MustCompile(`(?i)\b(?:brewed|thought|pondered|worked|ruminated) for\s+(?:\d+m\s*)?\d+s\b`)
+
+	// The foreground agent is parked on its own sub-agents. Claude Code prints
+	// "Waiting for 1 background agent to finish" under the input box; Grok
+	// prints "◎ 1 command still running · send a message to interrupt".
+	waitingBackgroundRe = regexp.MustCompile(`(?i)(?:waiting for \d+ (?:background )?(?:agents?|subagents?|tasks?)(?: to finish)?\b|send a message to interrupt|(?:\d+\s+)?(?:commands?|subagents?|monitors?|loops?|tasks?) still running)`)
 )
 
 // Classify decides what a session is doing from cheap, local signals.
@@ -112,6 +119,10 @@ func Classify(obs Observation) Result {
 
 	if reason, ok := needsInput(tail); ok {
 		return Result{State: domain.AgentStateWaitingInput, Confidence: High, Reason: reason}
+	}
+
+	if waitingBackgroundRe.MatchString(status) {
+		return Result{State: domain.AgentStateWaitingBackground, Confidence: High, Reason: "waiting on background agent"}
 	}
 
 	// A running spinner sits above the agent's own chrome, so this looks further
@@ -231,6 +242,8 @@ func UIActivity(s domain.AgentState) string {
 		return "busy"
 	case domain.AgentStateWaitingInput:
 		return "input"
+	case domain.AgentStateWaitingBackground:
+		return "bgwait"
 	case domain.AgentStateIdle:
 		return "idle"
 	default:

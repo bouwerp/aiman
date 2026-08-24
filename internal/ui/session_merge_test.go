@@ -6,6 +6,46 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
+func TestCreatingPlaceholderMatchesLive(t *testing.T) {
+	ph := domain.Session{
+		ID: "pending-1", RemoteHost: "devbox",
+		TmuxSession: "feature/pb-1", Branch: "feature/pb-1", RepoName: "org/repo",
+	}
+	tests := []struct {
+		name string
+		live domain.Session
+		want bool
+	}{
+		{
+			name: "sanitized tmux name",
+			live: domain.Session{ID: "real-1", RemoteHost: "devbox", TmuxSession: "feature-pb-1"},
+			want: true,
+		},
+		{
+			name: "same branch and repo",
+			live: domain.Session{ID: "real-1", RemoteHost: "devbox", Branch: "feature/pb-1", RepoName: "org/repo"},
+			want: true,
+		},
+		{
+			name: "different host",
+			live: domain.Session{ID: "real-1", RemoteHost: "other", TmuxSession: "feature-pb-1"},
+			want: false,
+		},
+		{
+			name: "unrelated branch",
+			live: domain.Session{ID: "other", RemoteHost: "devbox", TmuxSession: "other", Branch: "main", RepoName: "org/repo"},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := creatingPlaceholderMatchesLive(ph, tt.live); got != tt.want {
+				t.Fatalf("got %v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShouldMergeDiscoveredSession(t *testing.T) {
 	dbSessions := map[string]domain.Session{
 		"known": {ID: "known"},

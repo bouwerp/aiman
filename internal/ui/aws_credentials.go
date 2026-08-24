@@ -376,7 +376,10 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 			var profiles []string
 			for p := range hi.configProfiles {
 				src := hi.configProfiles[p]
-				if src != "" && !m.cfg.AWSLocalProfileAllowed(src) {
+				if del := hi.dels[p]; del != nil {
+					src = del.LocalSourceProfile()
+				}
+				if !m.cfg.AWSLocalProfileAllowed(src) {
 					continue
 				}
 				profiles = append(profiles, p)

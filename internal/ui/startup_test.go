@@ -80,3 +80,23 @@ func TestLoadConfiguredSessions_PrunesRemovedRemoteSessions(t *testing.T) {
 		t.Fatalf("expected removed remote session to be deleted from DB, got %#v", repo.deletedID)
 	}
 }
+
+func TestLoadConfiguredSessions_PrunesEphemeralIDs(t *testing.T) {
+	repo := &startupSessionRepo{
+		sessions: []domain.Session{
+			{ID: "pending-1", RemoteHost: "still-here", TmuxSession: "feature-pb-1"},
+			{ID: "keep", RemoteHost: "still-here", TmuxSession: "PB-721"},
+		},
+	}
+	cfg := &config.Config{Remotes: []config.Remote{{Host: "still-here"}}}
+	sessions, err := loadConfiguredSessions(context.Background(), cfg, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != "keep" {
+		t.Fatalf("got %#v", sessions)
+	}
+	if len(repo.deletedID) != 1 || repo.deletedID[0] != "pending-1" {
+		t.Fatalf("deleted %#v", repo.deletedID)
+	}
+}

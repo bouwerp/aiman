@@ -174,6 +174,7 @@ const (
 	viewStateAssignGroup
 	viewStateNewGroup
 	viewStateAgentDefaults
+	viewStateContextStats
 )
 
 type mainTab int
@@ -351,6 +352,7 @@ type Model struct {
 	gitSetup         GitSetupModel
 	generalSetup     GeneralSetupModel
 	agentDefaults    AgentDefaultsModel
+	contextStats     ContextStatsModel
 	aiSetup          AISetupModel
 	secretsSetup     SecretsSetupModel
 	awsCredentials   AWSCredentialsModel
@@ -743,6 +745,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 		menuItem{title: "Agent defaults", desc: "Default model and thinking effort per agent", action: viewStateAgentDefaults},
+		menuItem{title: "Shared context", desc: "Store size, lookups, and pack usage on remotes", action: viewStateContextStats},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
 		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
 		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
@@ -1276,6 +1279,8 @@ func activityFromHook(st domain.AgentState, ended bool) (string, bool) {
 		return "", true
 	case domain.AgentStateWorking:
 		return "busy", false
+	case domain.AgentStateWaitingBackground:
+		return "bgwait", false
 	case domain.AgentStateIdle:
 		return "idle", false
 	case domain.AgentStateErrored:
@@ -2018,7 +2023,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 		// Placeholder was dismissed. If the session finished anyway, still
 		// surface it in the list so the user doesn't lose a live session.
 		if msg.err == nil && msg.status == "" && msg.session.ID != "" {
-			m.allSessions = append(m.allSessions, msg.session)
+			m.allSessions = upsertSessionReplacing(m.allSessions, msg.placeholderID, msg.session)
 			m.applyRemoteFilter()
 		}
 		return m, nil
@@ -2106,18 +2111,19 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 			selectedWasPlaceholder = true
 		}
 	}
+	live := msg.session
+	if cs.placeholder.Name != "" && live.Name == "" {
+		live.Name = cs.placeholder.Name
+	}
+	if cs.placeholder.Group != "" {
+		live.Group = cs.placeholder.Group
+	}
 	delete(m.creatingSessions, msg.placeholderID)
-	replaced := false
-	for i, s := range m.allSessions {
-		if s.ID == msg.placeholderID {
-			m.allSessions[i] = msg.session
-			replaced = true
-			break
-		}
+	m.allSessions = upsertSessionReplacing(m.allSessions, msg.placeholderID, live)
+	if m.db != nil && live.ID != "" && !domain.IsEphemeralSessionID(live.ID) {
+		_ = m.db.Save(context.Background(), &live)
 	}
-	if !replaced {
-		m.allSessions = append(m.allSessions, msg.session)
-	}
+	msg.session = live
 	m.applyRemoteFilter()
 
 	var toastCmd tea.Cmd
@@ -2722,6 +2728,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyDaemonProbe(msg)
 	case serviceOpMsg:
 		return m.applyServiceOp(msg)
+	case discoveryResultMsg:
+		// Startup and refresh both deliver this after the dashboard is already
+		// on the main list. Routing by view state drops the scan, so a create
+		// that races the first scan keeps a placeholder plus the live row.
+		return m.applyDiscoveryResult(msg)
 	}
 
 	if model, cmd, handled := m.updateByState(msg); handled {
@@ -2734,7 +2745,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // updateByState routes a message to the handler for the screen currently on top. The bool
 // reports whether this state claimed the message; when false the caller falls through to
 // the batched commands collected earlier in Update.
+func (m *Model) dispatchSettingsUpdate(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch m.state {
+	case viewStateAgentDefaults:
+		model, cmd := m.handleAgentDefaultsUpdate(msg)
+		return model, cmd, true
+	case viewStateContextStats:
+		model, cmd := m.handleContextStatsUpdate(msg)
+		return model, cmd, true
+	case viewStateAISettings:
+		model, cmd := m.handleAISetupUpdate(msg)
+		return model, cmd, true
+	default:
+		return m, nil, false
+	}
+}
+
 func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	if model, cmd, ok := m.dispatchSettingsUpdate(msg); ok {
+		return model, cmd, true
+	}
 	switch m.state {
 	case viewStateMain:
 		model, cmd := m.handleMainUpdate(msg)
@@ -2758,14 +2788,6 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 
 	case viewStateGeneralSettings:
 		model, cmd := m.handleGeneralSetupUpdate(msg)
-		return model, cmd, true
-
-	case viewStateAgentDefaults:
-		model, cmd := m.handleAgentDefaultsUpdate(msg)
-		return model, cmd, true
-
-	case viewStateAISettings:
-		model, cmd := m.handleAISetupUpdate(msg)
 		return model, cmd, true
 
 	case viewStateSecretsSetup:
@@ -3148,7 +3170,23 @@ func (m *Model) View() string {
 	return baseView
 }
 
+func (m *Model) renderSettingsView() (string, bool) {
+	switch m.state {
+	case viewStateAgentDefaults:
+		return m.agentDefaults.View(), true
+	case viewStateContextStats:
+		return m.contextStats.View(), true
+	case viewStateAISettings:
+		return m.aiSetup.View(), true
+	default:
+		return "", false
+	}
+}
+
 func (m *Model) renderView() string {
+	if s, ok := m.renderSettingsView(); ok {
+		return s
+	}
 	switch m.state {
 	case viewStateMain:
 		return m.renderMainView()
@@ -3167,12 +3205,6 @@ func (m *Model) renderView() string {
 
 	case viewStateGeneralSettings:
 		return m.generalSetup.View()
-
-	case viewStateAgentDefaults:
-		return m.agentDefaults.View()
-
-	case viewStateAISettings:
-		return m.aiSetup.View()
 
 	case viewStateSecretsSetup:
 		return m.secretsSetup.View()
@@ -4871,6 +4903,9 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, m.agentDefaults.Init()
 				}
+				if i.action == viewStateContextStats {
+					return m, m.enterContextStats()
+				}
 				if i.action == viewStateAISettings {
 					m.aiSetup = NewAISetupModel(m.cfg)
 					m.state = i.action
@@ -6460,9 +6495,12 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 				msg.sessions[i].CreatedAt = existing.CreatedAt
 			}
 			msg.sessions[i] = overlayPersistedSessionFields(msg.sessions[i], existing)
-			if existing.ID != "" {
+			if existing.ID != "" && !domain.IsEphemeralSessionID(existing.ID) {
 				msg.sessions[i].ID = existing.ID
 			}
+		}
+		if domain.IsEphemeralSessionID(msg.sessions[i].ID) {
+			continue
 		}
 		if !shouldMergeDiscoveredSession(msg.sessions[i], dbSessions) {
 			continue
@@ -6477,6 +6515,14 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 	seenTmux := make(map[string]bool)
 	merged := []domain.Session{}
 	for _, s := range msg.sessions {
+		if domain.IsEphemeralSessionID(s.ID) {
+			continue
+		}
+		if m.creatingPlaceholderFor(s) != nil {
+			// Live tmux is already the in-flight create. Keep the placeholder
+			// until create finishes so the list does not grow a twin row.
+			continue
+		}
 		if !shouldMergeDiscoveredSession(s, dbSessions) {
 			continue
 		}
@@ -6490,7 +6536,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 
 		if dbSess, ok := lookupPersistedSession(s, dbSessions, dbByTmux); ok {
 			s = overlayPersistedSessionFields(s, dbSess)
-			if dbSess.ID != "" {
+			if dbSess.ID != "" && !domain.IsEphemeralSessionID(dbSess.ID) {
 				s.ID = dbSess.ID
 			}
 		}
@@ -6502,6 +6548,12 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		}
 	}
 	for id, s := range dbSessions {
+		if domain.IsEphemeralSessionID(id) {
+			if m.db != nil {
+				_ = m.db.Delete(ctx, id)
+			}
+			continue
+		}
 		if seenID[id] {
 			continue
 		}
@@ -6542,7 +6594,9 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 	}
 
 	m.applyRemoteFilter()
-	m.state = viewStateMain
+	if m.state == viewStateLoading {
+		m.state = viewStateMain
+	}
 	return m, tea.Batch(probes...)
 }
 
@@ -7048,7 +7102,7 @@ func (m *Model) renderAWSCredExpiryBanner() string {
 	// once they leave the credentials page.
 	glyph := "⚠"
 	color := lipgloss.Color("3") // amber: expiry approaching
-	text := formatAWSCredExpiryBanner(m.awsCredExpiry, now)
+	text := formatAWSCredExpiryBanner(filterExpiryItemsByAllowlist(m.awsCredExpiry, m.cfg), now)
 	switch {
 	case m.awsCredRefreshing || m.awsCredentials.Refreshing():
 		glyph = "🔑"
@@ -7106,6 +7160,8 @@ func (m *Model) renderAIPanel(s domain.Session, contentW int) string {
 		stateColor = lipgloss.Color("#00FF00")
 	case domain.AgentStateWaitingInput:
 		stateColor = lipgloss.Color("#FFA500")
+	case domain.AgentStateWaitingBackground:
+		stateColor = lipgloss.Color("#5FD7FF")
 	case domain.AgentStateErrored:
 		stateColor = lipgloss.Color("#FF0000")
 	case domain.AgentStateIdle:
