@@ -173,6 +173,7 @@ const (
 	viewStateRenameGroup
 	viewStateAssignGroup
 	viewStateNewGroup
+	viewStateAgentDefaults
 )
 
 type mainTab int
@@ -349,6 +350,7 @@ type Model struct {
 	setup            SetupModel
 	gitSetup         GitSetupModel
 	generalSetup     GeneralSetupModel
+	agentDefaults    AgentDefaultsModel
 	aiSetup          AISetupModel
 	secretsSetup     SecretsSetupModel
 	awsCredentials   AWSCredentialsModel
@@ -695,7 +697,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "rename session or group")),
 			key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "assign session group")),
 			key.NewBinding(key.WithKeys("enter", " "), key.WithHelp("enter", "collapse/expand group")),
-			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart session")),
+			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart / switch agent")),
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
 			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "manage tunnels")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
@@ -740,6 +742,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
+		menuItem{title: "Agent defaults", desc: "Default model and thinking effort per agent", action: viewStateAgentDefaults},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
 		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
 		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
@@ -2772,6 +2775,10 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		model, cmd := m.handleGeneralSetupUpdate(msg)
 		return model, cmd, true
 
+	case viewStateAgentDefaults:
+		model, cmd := m.handleAgentDefaultsUpdate(msg)
+		return model, cmd, true
+
 	case viewStateAISettings:
 		model, cmd := m.handleAISetupUpdate(msg)
 		return model, cmd, true
@@ -3175,6 +3182,9 @@ func (m *Model) renderView() string {
 
 	case viewStateGeneralSettings:
 		return m.generalSetup.View()
+
+	case viewStateAgentDefaults:
+		return m.agentDefaults.View()
 
 	case viewStateAISettings:
 		return m.aiSetup.View()
@@ -3761,7 +3771,7 @@ func (m *Model) renderRestartConfirm() string {
 	var b strings.Builder
 	b.WriteString(activeStyle.Render("Confirm Session Restart") + "\n\n")
 	b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TmuxSession))
-	b.WriteString("Restarting will ask the current agent to write a handoff first if it is still running, then stop it and start the newly selected agent.\n\n")
+	b.WriteString("The current agent writes a handoff, then the agent you pick starts and is told to read it. Choose a different agent to switch.\n\n")
 	b.WriteString("Do you want to proceed?\n\n")
 	b.WriteString(activeStyle.Render("[y]") + " Yes  " + activeStyle.Render("[n]") + " No")
 
@@ -4871,6 +4881,11 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, m.generalSetup.Init()
 				}
+				if i.action == viewStateAgentDefaults {
+					m.agentDefaults = NewAgentDefaultsModel(m.cfg)
+					m.state = i.action
+					return m, m.agentDefaults.Init()
+				}
 				if i.action == viewStateAISettings {
 					m.aiSetup = NewAISetupModel(m.cfg)
 					m.state = i.action
@@ -5315,6 +5330,22 @@ func (m *Model) handleGeneralSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.generalSetup = subModel.(GeneralSetupModel)
 	if m.generalSetup.saved {
 		m.generalSetup.saved = false
+		m.state = viewStateMenu
+	}
+	return m, cmd
+}
+
+func (m *Model) handleAgentDefaultsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
+		m.state = viewStateMenu
+		return m, nil
+	}
+	var subModel tea.Model
+	var cmd tea.Cmd
+	subModel, cmd = m.agentDefaults.Update(msg)
+	m.agentDefaults = subModel.(AgentDefaultsModel)
+	if m.agentDefaults.saved {
+		m.agentDefaults.saved = false
 		m.state = viewStateMenu
 	}
 	return m, cmd
@@ -7165,12 +7196,14 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 			m.sessionCfg.EnvSecrets = secrets
 		}
 		m.priorSnapshotCandidate = nil
-		// Transition to loading while we check for a prior snapshot; snapshotPreviewMsg
-		// is handled globally so it will be caught regardless of which state we're in.
-		m.loadingMsg = "Checking for prior snapshot..."
+		m.sessionCfg.PriorSnapshot = nil
+		if m.restartingSession != nil && m.sessionCfg.Agent != nil {
+			m.restartingSession.AgentName = m.sessionCfg.Agent.Name
+		}
+		m.loadingMsg = fmt.Sprintf("Restarting with %s (saving handoff)…", m.sessionCfg.Agent.Name)
 		m.loadingNext = viewStateMain
 		m.state = viewStateLoading
-		return m, loadPriorSnapshotCmd(m.snapshotManager, m.restartingSession.ID)
+		return m, m.restartSession()
 	}
 
 	return m, cmd
@@ -7218,6 +7251,7 @@ func (m *Model) restartSession() tea.Cmd {
 		if sessionCfg.Agent == nil {
 			return sessionCreateMsg{err: fmt.Errorf("no agent selected for restart")}
 		}
+		s.AgentName = sessionCfg.Agent.Name
 
 		remote, ok := resolveRemote(cfg, *s)
 		if !ok {

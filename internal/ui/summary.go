@@ -66,37 +66,15 @@ func NewAdHocSummaryModel(label string) SummaryModel {
 	}
 }
 
-// SetAWSDefaults enables the AWS override section. Region is pre-filled from
-// the remote defaults; the profile field starts blank so a session uses the
-// default credential chain unless the user types a profile.
+// SetAWSDefaults records remote AWS defaults for the session without showing
+// per-session profile/region fields. Which local profiles are used is chosen
+// in Menu → AWS Credentials.
 func (m *SummaryModel) SetAWSDefaults(cfg *domain.AWSConfig) {
 	if cfg == nil {
 		return
 	}
-	m.awsEnabled = true
 	m.awsDefaults = cfg
-
-	profileInput := textinput.New()
-	profileInput.Placeholder = "blank = AWS default credential chain"
-	profileInput.Width = 40
-
-	regionInput := textinput.New()
-	regionInput.Placeholder = "AWS region (e.g. us-east-2)"
-	region := cfg.Region
-	if region == "" {
-		region = "us-east-2"
-	}
-	regionInput.SetValue(region)
-	regionInput.Width = 40
-
-	// Preserve any existing OpenRouter input that was added before AWS defaults.
-	newInputs := []textinput.Model{profileInput, regionInput}
-	for _, in := range m.inputs {
-		if in.EchoMode == textinput.EchoPassword {
-			newInputs = append(newInputs, in)
-		}
-	}
-	m.inputs = newInputs
+	m.awsEnabled = false
 }
 
 // SetOpenRouterKey enables the OpenRouter API key section, pre-filling it with
@@ -139,19 +117,7 @@ func (m *SummaryModel) SetWorkspaceStatus(path string, exists bool) {
 	m.workspaceExists = exists
 }
 
-// awsProfileIdx returns the index of the AWS profile input in m.inputs.
-func (m SummaryModel) awsProfileIdx() int { return 0 }
-
-// awsRegionIdx returns the index of the AWS region input in m.inputs.
-func (m SummaryModel) awsRegionIdx() int { return 1 }
-
-// openRouterIdx returns the index of the OpenRouter key input in m.inputs.
-func (m SummaryModel) openRouterIdx() int {
-	if m.awsEnabled {
-		return 2
-	}
-	return 0
-}
+func (m SummaryModel) openRouterIdx() int { return 0 }
 
 // Focus index 0 is always the initial-prompt input. The AWS/OpenRouter inputs in
 // m.inputs occupy focus indices 1..len(m.inputs); the Create button is last.
@@ -306,21 +272,6 @@ func (m SummaryModel) View() string {
 	}
 	b.WriteString(fmt.Sprintf("%-15s %s\n", promptLabel, m.promptInput.View()))
 
-	// AWS credential overrides
-	if m.awsEnabled {
-		b.WriteString("\n" + activeStyle.Render("AWS Credentials") + "\n")
-		profileLabel := "  Profile:"
-		regionLabel := "  Region: "
-		if m.focusIndex == m.inputFocusIndex(m.awsProfileIdx()) {
-			profileLabel = activeStyle.Render("> Profile:")
-		}
-		if m.focusIndex == m.inputFocusIndex(m.awsRegionIdx()) {
-			regionLabel = activeStyle.Render("> Region: ")
-		}
-		b.WriteString(fmt.Sprintf("%-15s %s\n", profileLabel, m.inputs[m.awsProfileIdx()].View()))
-		b.WriteString(fmt.Sprintf("%-15s %s\n", regionLabel, m.inputs[m.awsRegionIdx()].View()))
-	}
-
 	// OpenRouter API key
 	if m.openRouterEnabled {
 		b.WriteString("\n" + activeStyle.Render("OpenRouter") + "\n")
@@ -380,19 +331,8 @@ func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 		AdHoc:      m.adHoc,
 	}
 
-	// Merge per-session AWS overrides on top of the remote defaults.
-	if m.awsEnabled && m.awsDefaults != nil {
-		overrideProfile := strings.TrimSpace(m.inputs[m.awsProfileIdx()].Value())
-		overrideRegion := strings.TrimSpace(m.inputs[m.awsRegionIdx()].Value())
-
-		aws := *m.awsDefaults // copy remote defaults
-		// Always apply the field values — an empty profile means "use the AWS default
-		// credential chain" (omits --profile from CLI calls), allowing the user to clear
-		// a remote-configured profile to fall back to the local default.
-		aws.SourceProfile = overrideProfile
-		if overrideRegion != "" {
-			aws.Region = overrideRegion
-		}
+	if m.awsDefaults != nil {
+		aws := *m.awsDefaults
 		cfg.AWSConfig = &aws
 	}
 

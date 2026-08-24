@@ -15,7 +15,7 @@ Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full
 Binary: `aiman` — built from `./cmd/aiman/main.go`  
 Module: `github.com/bouwerp/aiman`  
 Go: 1.26  
-Current release: **v0.11.0**
+Current release: **v0.12.0**
 
 ---
 
@@ -195,13 +195,14 @@ Do not run serve inside tmux. Probe on select, `r`, after an op, and after disco
 
 **File:** `internal/ui/dashboard.go` — `restartSession()` (~line 4885)
 
-The restart flow (triggered by `s` key):
-1. Local: terminate mutagen syncs (`aiman-sync-<ID>`, `aiman-sync-<ID>-pull`, `s.TmuxSession`, `s.MutagenSyncID`)
-2. Optionally: call `flowManager.SkillEngine.PrepareSession` to generate agent command
-3. SSH-read `~/.aiman/native-sessions/<ID>` on the remote and append the vendor resume flag (`agenthook.WithResume`)
-4. `mgr.ResetControlSocket()` — clear stale SSH master
-5. **1 SSH call**: `tmux kill-session … && tmux new-session … "bash -l -c '<agent>; exec bash'"`
-6. Re-establish mutagen sync
+The restart flow (triggered by `s` / `ctrl+r`, including switching agent):
+1. Agent picker (same or different agent)
+2. Ask the current agent to write `.aiman_session_summary.md`, then Ctrl+C
+3. `PrepareSession` for the chosen agent (configured `--model` / effort flags, summary prompt)
+4. **1 SSH call**: `tmux kill-session … && tmux new-session … "bash -l -c '<agent>; exec bash'"`
+5. send-keys the handoff prompt
+
+**The worktree is never touched.** Only the tmux process + agent is replaced.
 
 **The worktree is never touched.** Only the tmux process + agent is replaced.
 
@@ -288,7 +289,8 @@ Key config fields:
 - `remotes[]` — name, host, user, root, aws_delegation
 - `active_remote` — which remote is currently selected
 - `git` — include_personal, include_orgs, include_patterns, exclude_patterns
-- `agents[]` — manually listed agents (supplemented by remote scan)
+- `agent_defaults` — per-binary `model` and `effort` applied at session launch
+- `aws.include_profiles` — local `~/.aws` profiles aiman may use (omit = all)
 - `skills.repo` — git URL for skills repository
 
 `config.DirName = ".aiman"` — used to construct all local paths.

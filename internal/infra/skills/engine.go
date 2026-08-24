@@ -267,6 +267,7 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	if summaryExists {
 		result.InitialPrompt = appendPrompt(result.InitialPrompt, sessionSummaryPrompt)
 	}
+	result.Command = applyConfiguredLaunchFlags(result.Command, agent, e.cfg)
 	return result, nil
 }
 

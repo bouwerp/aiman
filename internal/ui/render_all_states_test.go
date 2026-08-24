@@ -33,6 +33,7 @@ func renderModelForAllStates(t *testing.T) *Model {
 	m.branchPicker = NewBranchPickerModel([]string{"main"})
 	m.restartingSession = &s
 	m.changingDirSession = &s
+	m.agentDefaults = NewAgentDefaultsModel(cfg)
 	return m
 }
 
@@ -49,7 +50,7 @@ var statesWithoutOwnScreen = map[viewState]bool{
 // Every view state must render without panicking. This is the safety net for the dashboard
 // render split: renderView delegates to ~18 methods, and a mis-wired one would surface here.
 func TestEveryViewStateRendersWithoutPanic(t *testing.T) {
-	for st := viewState(0); st <= viewStateNewGroup; st++ {
+	for st := viewState(0); st <= viewStateAgentDefaults; st++ {
 		m := renderModelForAllStates(t)
 		m.state = st
 		func() {

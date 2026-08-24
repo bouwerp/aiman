@@ -332,6 +332,15 @@ func (m *RemotesModel) initAWSDialog() {
 	}
 
 	names, _ := awsdelegation.ListLocalAWSProfileNames()
+	if m.cfg != nil {
+		var allowed []string
+		for _, n := range names {
+			if m.cfg.AWSLocalProfileAllowed(n) {
+				allowed = append(allowed, n)
+			}
+		}
+		names = allowed
+	}
 	m.awsLocalProfiles = names
 	m.awsLocalPick = -1
 	if len(names) > 0 {

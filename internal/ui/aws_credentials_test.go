@@ -11,6 +11,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func TestDropRemoteDelegationRemovesConfigEntry(t *testing.T) {
+	cfg := &config.Config{Remotes: []config.Remote{{
+		Host: "example", User: "dev",
+		AWSDelegation:  &config.AWSDelegation{Profile: "dev", SourceProfile: "work"},
+		AWSDelegations: []*config.AWSDelegation{{Profile: "prod", SourceProfile: "prod"}},
+	}}}
+	dropRemoteDelegation(cfg, "dev@example", "dev")
+	if cfg.Remotes[0].AWSDelegation != nil {
+		t.Fatal("primary delegation should be cleared")
+	}
+	if len(cfg.Remotes[0].AWSDelegations) != 1 || cfg.Remotes[0].AWSDelegations[0].Profile != "prod" {
+		t.Fatalf("%+v", cfg.Remotes[0].AWSDelegations)
+	}
+}
+
 func TestAWSCredentialsModelDeleteStartsRemovalForUnmanagedProfile(t *testing.T) {
 	model := NewAWSCredentialsModel(&config.Config{}, nil)
 	model.entries = []awsHostEntry{{
