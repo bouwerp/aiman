@@ -26,6 +26,27 @@ func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
 	if effort == "" {
 		return cmd
 	}
+
+	// Determine the effective model to check if effort is already baked in
+	resolvedModel := model
+	if resolvedModel == "" {
+		idx := strings.Index(cmd, "--model ")
+		if idx >= 0 {
+			parts := strings.Fields(cmd[idx+8:])
+			if len(parts) > 0 {
+				resolvedModel = parts[0]
+			}
+		}
+	}
+
+	if base == "agy" || base == "antigravity" {
+		if strings.HasSuffix(resolvedModel, "-low") ||
+			strings.HasSuffix(resolvedModel, "-medium") ||
+			strings.HasSuffix(resolvedModel, "-high") {
+			return cmd // Effort is baked into the model string
+		}
+	}
+
 	cat := agent.LaunchCatalogFor(base)
 	if !cat.SupportsEffort() {
 		return cmd

@@ -36,4 +36,8 @@ func TestApplyLaunchDefaults(t *testing.T) {
 	if strings.Contains(got, "effort") || strings.Contains(got, "thinking") {
 		t.Fatalf("opencode must ignore effort: %q", got)
 	}
+	got = applyLaunchDefaults("agy", "agy", config.AgentDefaults{Model: "gemini-3.1-pro-low", Effort: "medium"})
+	if strings.Contains(got, "--effort") {
+		t.Fatalf("agy with effort-baked model must ignore effort flag: %q", got)
+	}
 }

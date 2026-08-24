@@ -7239,6 +7239,16 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 		m.priorSnapshotCandidate = nil
 		m.sessionCfg.PriorSnapshot = nil
 		if m.restartingSession != nil && m.sessionCfg.Agent != nil {
+			if m.restartingSession.AgentName != "" && !strings.EqualFold(m.restartingSession.AgentName, m.sessionCfg.Agent.Name) {
+				m.restartingSession.AgentSessionID = ""
+				m.restartingSession.AgentSessionPath = ""
+				m.restartingSession.AgentTitle = ""
+				m.restartingSession.AgentEnded = false
+				m.restartingSession.HookState = ""
+				m.restartingSession.HookStateMessage = ""
+				m.restartingSession.HookStateSource = ""
+				m.restartingSession.HookStateSeq = 0
+			}
 			m.restartingSession.AgentName = m.sessionCfg.Agent.Name
 		}
 		m.loadingMsg = fmt.Sprintf("Restarting with %s (saving handoff)…", m.sessionCfg.Agent.Name)
