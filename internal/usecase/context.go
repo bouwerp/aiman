@@ -73,7 +73,7 @@ func InjectSharedContext(ctx context.Context, remote contextRemote, worktreePath
 	if err := contextstore.WriteSessionPack(ctx, remote, worktreePath, pack); err != nil {
 		return prompt
 	}
-	return joinPrompt(prompt, ContextPackPrompt)
+	return joinPrompt(ContextPackPrompt, prompt)
 }
 
 func PutSnapshotContext(ctx context.Context, remote contextRemote, snap *domain.SessionSnapshot, group string) error {
