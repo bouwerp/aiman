@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,9 +58,11 @@ func Call(socketPath, method string, params any) (Response, error) {
 	return resp, nil
 }
 
-// AttachConn is a raw bidirectional channel to a PTY session.
+// AttachConn is a bidirectional channel to a PTY session: output arrives as
+// raw bytes, input goes out as frames (see attach_framing.go).
 type AttachConn struct {
 	conn net.Conn
+	wmu  sync.Mutex
 }
 
 // AttachDial opens an attach stream to a PTY session. After the single
@@ -97,10 +101,38 @@ func AttachDial(socketPath, id string, cols, rows int) (*AttachConn, error) {
 		return nil, err
 	}
 	if resp.Error != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, errors.New(resp.Error.Message)
 	}
 	return &AttachConn{conn: conn}, nil
+}
+
+// frameWriter turns a raw byte stream into input frames.
+type frameWriter struct {
+	conn io.Writer
+	mu   *sync.Mutex
+}
+
+func (f frameWriter) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := writeAttachFrame(f.conn, attachFrameInput, p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// Resize updates the remote session's window size.
+func (a *AttachConn) Resize(cols, rows int) error {
+	if cols <= 0 || rows <= 0 || cols > 0xFFFF || rows > 0xFFFF {
+		return fmt.Errorf("pty attach: invalid window size %dx%d", cols, rows)
+	}
+	payload := make([]byte, 4)
+	binary.BigEndian.PutUint16(payload[:2], uint16(cols)) //nolint:gosec // G115: bounds-checked above
+	binary.BigEndian.PutUint16(payload[2:], uint16(rows)) //nolint:gosec // G115: bounds-checked above
+	a.wmu.Lock()
+	defer a.wmu.Unlock()
+	return writeAttachFrame(a.conn, attachFrameResize, payload)
 }
 
 // Relay shuttles bytes between in/out and the session until the connection
@@ -108,7 +140,7 @@ func AttachDial(socketPath, id string, cols, rows int) (*AttachConn, error) {
 func (a *AttachConn) Relay(in io.Reader, out io.Writer) error {
 	errCh := make(chan error, 2)
 	go func() {
-		_, err := io.Copy(a.conn, in)
+		_, err := io.Copy(frameWriter{conn: a.conn, mu: &a.wmu}, in)
 		errCh <- err
 	}()
 	go func() {
@@ -116,7 +148,7 @@ func (a *AttachConn) Relay(in io.Reader, out io.Writer) error {
 		errCh <- err
 	}()
 	err := <-errCh
-	a.conn.Close()
+	_ = a.conn.Close() // the stream is done either way; close errors are moot
 	return err
 }
 

@@ -153,3 +153,67 @@ func TestCaptureSessionPaneRoutesByBackend(t *testing.T) {
 		t.Fatalf("capture text = %q", out)
 	}
 }
+
+func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
+	ctx := context.Background()
+
+	// tmux sessions never revive
+	r := &terminalRemote{}
+	revived, err := ReviveIfNeeded(ctx, r, &domain.Session{ID: "x"})
+	if err != nil || revived {
+		t.Fatalf("tmux session must not revive: %v / %v", revived, err)
+	}
+
+	// live pty session: no-op
+	r = &terminalRemote{output: map[string]string{
+		"aiman pty get": `{"session":{"id":"pid","status":"running"}}`,
+	}}
+	revived, err = ReviveIfNeeded(ctx, r, &domain.Session{ID: "pid", Backend: domain.BackendPTY})
+	if err != nil || revived {
+		t.Fatalf("live session must not revive: %v / %v", revived, err)
+	}
+
+	// dead session with a vendor conversation id: relaunches with --resume
+	r = &terminalRemote{output: map[string]string{
+		"aiman pty get":   `{"error":{"code":"not_found","message":"pty session not found"}}`,
+		"native-sessions": "",
+	}}
+	s := domain.Session{ID: "dead", Backend: domain.BackendPTY, AgentName: "claude",
+		AgentSessionID: "conv-42", WorkingDirectory: "/w", TmuxSession: "feat"}
+	revived, err = ReviveIfNeeded(ctx, r, &s)
+	if err != nil || !revived {
+		t.Fatalf("expected revival: %v / %v", revived, err)
+	}
+	var created bool
+	for path, body := range r.written {
+		if strings.HasPrefix(path, "/tmp/aiman-pty-dead") && strings.Contains(string(body), `"claude --resume conv-42"`) {
+			created = true
+		}
+	}
+	if !created {
+		t.Fatalf("resume command not in create payload: %v", r.written)
+	}
+
+	// dead session without any vendor id: refuses rather than silently forking
+	// a fresh conversation
+	r = &terminalRemote{output: map[string]string{"aiman pty get": "not_found"}}
+	s2 := domain.Session{ID: "lost", Backend: domain.BackendPTY, AgentName: "claude"}
+	if _, err := ReviveIfNeeded(ctx, r, &s2); err == nil {
+		t.Fatal("revival without an agent session id must fail")
+	}
+}
+
+func TestNativeSessionIDPrefersSidecar(t *testing.T) {
+	r := &terminalRemote{output: map[string]string{"native-sessions": `{"id":"sidecar-id"}`}}
+	s := domain.Session{ID: "sess", Backend: domain.BackendPTY, AgentSessionID: "stored-id"}
+	got := NativeSessionID(context.Background(), r, &s)
+	if got != "sidecar-id" {
+		t.Fatalf("NativeSessionID = %q", got)
+	}
+
+	r = &terminalRemote{}
+	s = domain.Session{ID: "sess", Backend: domain.BackendPTY, AgentSessionID: "stored-id"}
+	if got := NativeSessionID(context.Background(), r, &s); got != "stored-id" {
+		t.Fatalf("fallback to stored id failed: %q", got)
+	}
+}

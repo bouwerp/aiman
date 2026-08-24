@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/bouwerp/aiman/internal/server"
 	"golang.org/x/term"
@@ -149,7 +151,17 @@ func runPTYAttach(sock, id string) error {
 	}
 	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
 
-	// Live resize is not supported yet; the window size is fixed at attach.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGWINCH)
+	defer signal.Stop(stop)
+	go func() {
+		for range stop {
+			if c, r := terminalSize(); c > 0 && r > 0 {
+				_ = connResp.Resize(c, r)
+			}
+		}
+	}()
+
 	if err := connResp.Relay(detachOnCtrlQ(os.Stdin, connResp), os.Stdout); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}

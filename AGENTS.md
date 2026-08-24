@@ -331,7 +331,15 @@ laptop disconnects but **not** a serve restart (documented limitation).
 
 Socket API (`internal/server/handlers_pty.go`): `pty.create/list/get/input/
 capture/kill/forget` are plain JSON methods; `pty.attach` answers once then
-takes over the connection as a raw bidirectional byte stream.
+takes over the connection: output streams out as raw bytes, client messages are
+framed (`internal/server/attach_framing.go` — `[len BE][kind][payload]`, kinds
+0x01 input, 0x02 resize), which is what makes live window resize possible.
+
+**Serve-restart recovery**: a serve restart kills PTY processes but not agent
+conversations. Attaching to a pty-backed session whose process is gone revives
+it transparently via `usecase.ReviveIfNeeded` — the agent relaunches with its
+native resume flag (sidecar id first, stored `AgentSessionID` as fallback;
+refuses if neither exists so it never silently forks a fresh conversation).
 
 CLI (`cmd/aiman/pty_cmd.go`): `aiman pty list|create|get|capture|input|kill|
 forget|attach`. Attach puts the local tty in raw mode and relays; ctrl+q
@@ -346,8 +354,8 @@ routed by `usecase.CaptureSessionPane / SendSessionPrompt /
 TerminateSessionTerminal` — call those instead of RemoteExecutor tmux methods
 so both backends stay supported.
 
-Not implemented yet for the PTY backend: live window resize during attach,
-AttachExisting adoption, EC2 loop sessions.
+Not implemented for the PTY backend: EC2 loop sessions (their instance-
+termination watchdog is coupled to tmux's lifecycle by design).
 
 ## Remaining TODOs (from PLAN.md)
 

@@ -182,6 +182,28 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
+func TestPTYAttachLiveResize(t *testing.T) {
+	sock := startPTYServer(t)
+	create, cerr := Call(sock, "pty.create", map[string]any{"id": "rsz", "command": "true"})
+	if cerr != nil || create.Error != nil {
+		t.Fatalf("create: %v / %v", cerr, create.Error)
+	}
+
+	conn, err := AttachDial(sock, "rsz", 80, 24)
+	if err != nil {
+		t.Fatalf("attach dial: %v", err)
+	}
+	defer conn.Close()
+
+	if rerr := conn.Resize(123, 45); rerr != nil {
+		t.Fatalf("resize: %v", rerr)
+	}
+	eventually(t, 5*time.Second, func() bool {
+		info, gerr := Call(sock, "pty.get", map[string]any{"id": "rsz"})
+		return gerr == nil && info.Error == nil && strings.Contains(resultJSON(t, info), `"123x45"`)
+	})
+}
+
 func TestPTYAttachUnknownSessionFailsCleanly(t *testing.T) {
 	sock := startPTYServer(t)
 	if _, err := AttachDial(sock, "missing", 80, 24); err == nil {

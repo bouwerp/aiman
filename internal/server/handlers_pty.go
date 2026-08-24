@@ -140,9 +140,9 @@ func (s *Server) ptyErrResp(id string, err error) Response {
 	return errResp(id, CodeInvalidParams, err.Error())
 }
 
-// handlePTYAttach answers once, then relays raw bytes between the connection
-// and the session until either side closes. The window size is fixed at attach
-// time; live resizing is not supported yet.
+// handlePTYAttach answers once, then streams raw output to the connection and
+// consumes framed client messages (input + live resize) until either side
+// closes.
 func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Request) {
 	var params struct {
 		ID   string `json:"id"`
@@ -176,19 +176,12 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 		replay = replay[n:]
 	}
 
-	// Connection -> session (input).
-	go func() {
-		buf := make([]byte, 4<<10)
-		for {
-			n, rerr := conn.Read(buf)
-			if n > 0 {
-				_ = s.pty.Write(params.ID, buf[:n])
-			}
-			if rerr != nil {
-				return
-			}
-		}
-	}()
+	// Connection -> session (framed: input + resize).
+	go handlePTYAttachConnInput(ctx, params.ID, func(data []byte) error {
+		return s.pty.Write(params.ID, data)
+	}, func(cols, rows int) error {
+		return s.pty.Resize(params.ID, cols, rows)
+	}, conn)
 
 	// Live -> connection (output).
 	for {

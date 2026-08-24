@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
@@ -176,4 +178,76 @@ func ScanPTYSessions(ctx context.Context, remote TerminalExecutor) []PTYRecord {
 		return nil
 	}
 	return result.Sessions
+}
+
+// PTYSessionExists reports whether the remote runtime currently holds a live
+// session with this id.
+func PTYSessionExists(ctx context.Context, remote TerminalExecutor, id string) bool {
+	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty get %q 2>/dev/null", id))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(out, `"running"`)
+}
+
+// RevivePTYSession brings back a built-in-PTY session whose process died —
+// typically because aiman serve restarted — by relaunching the agent with its
+// native resume flag (claude --resume, codex resume, …). The conversation
+// continues; only the terminal process was lost.
+func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Session) error {
+	if !s.IsPTY() || s.AgentName == "" {
+		return fmt.Errorf("session %s cannot be revived: backend=%s agent=%q", s.ID, s.Backend, s.AgentName)
+	}
+	nativeID := NativeSessionID(ctx, remote, s)
+	command := agenthook.WithResume(s.AgentName, nativeID)
+	if command == s.AgentName && nativeID == "" {
+		// No vendor conversation id anywhere: relaunching would start a fresh
+		// conversation silently. Refuse and let restart handle it explicitly.
+		return fmt.Errorf("session %s has no agent session id; use restart to relaunch", s.ID)
+	}
+	env := map[string]string{}
+	for k, v := range aimanRuntimeEnv(s) {
+		env[k] = v
+	}
+	if err := CreatePTYSession(ctx, remote, PTYSpec{
+		ID:      s.ID,
+		Name:    s.TmuxSession,
+		Dir:     s.WorkingDirectory,
+		Command: command,
+		Env:     env,
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ReviveIfNeeded revives the session only when the remote runtime no longer
+// holds it. Returns whether a revival happened.
+func ReviveIfNeeded(ctx context.Context, remote TerminalExecutor, s *domain.Session) (bool, error) {
+	if !s.IsPTY() {
+		return false, nil
+	}
+	if PTYSessionExists(ctx, remote, s.ID) {
+		return false, nil
+	}
+	if err := RevivePTYSession(ctx, remote, s); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// NativeSessionID resolves the vendor conversation id for a session. The
+// remote sidecar file the hooks maintain wins: it reflects what the agent is
+// actually working on right now, while the stored field may lag behind.
+func NativeSessionID(ctx context.Context, remote TerminalExecutor, s *domain.Session) string {
+	if safe := agenthook.SafeSessionID(s.ID); safe != "" {
+		out, err := remote.Execute(ctx, fmt.Sprintf("cat \"$HOME/.aiman/native-sessions/%s\" 2>/dev/null || true", safe))
+		if err == nil {
+			if n := agenthook.ParseStored([]byte(out)); n.ID != "" {
+				agenthook.ApplyReport(s, n, time.Now())
+				return n.ID
+			}
+		}
+	}
+	return strings.TrimSpace(s.AgentSessionID)
 }

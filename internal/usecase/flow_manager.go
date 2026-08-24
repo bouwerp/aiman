@@ -659,20 +659,25 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 	for k, v := range aimanRuntimeEnv(session) {
 		env[k] = v
 	}
-	if err := CreatePTYSession(ctx, sshMgr, PTYSpec{
-		ID:      session.ID,
-		Name:    tmuxName,
-		Dir:     workingDir,
-		Command: agentCmd,
-		Env:     env,
-	}); err != nil {
-		return nil, fmt.Errorf("failed to start PTY session: %w", err)
+	if config.AttachExisting && PTYSessionExists(ctx, sshMgr, session.ID) {
+		// Adoption: an interrupted create left a live PTY session behind with no
+		// database row. Adopt it as-is — injecting a fresh task prompt would
+		// interrupt whatever the agent is mid-way through.
+		infraGit.ReportProgress(ctx, "Adopting existing PTY session...")
+	} else {
+		if err := CreatePTYSession(ctx, sshMgr, PTYSpec{
+			ID:      session.ID,
+			Name:    tmuxName,
+			Dir:     workingDir,
+			Command: agentCmd,
+			Env:     env,
+		}); err != nil {
+			return nil, fmt.Errorf("failed to start PTY session: %w", err)
+		}
+		DeliverInitialPromptPTY(ctx, sshMgr, session.ID, sendKeysPrompt)
 	}
 	session.Backend = domain.BackendPTY
 	session.TmuxSession = tmuxName // display handle; kill/capture route via Backend
-
-	// Note: AttachExisting adoption is not implemented for the PTY backend yet.
-	DeliverInitialPromptPTY(ctx, sshMgr, session.ID, sendKeysPrompt)
 
 	return m.finaliseCreate(ctx, sshMgr, session, config, workingDir)
 }

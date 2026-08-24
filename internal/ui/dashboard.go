@@ -4506,6 +4506,23 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 				return m, nil, true
 			}
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+			if s.IsPTY() {
+				// A serve restart on the remote kills PTY processes but not the
+				// conversations. Revive with the agent's native resume flag so
+				// attach picks the conversation back up.
+				reviveCtx, reviveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				revived, rerr := usecase.ReviveIfNeeded(reviveCtx, mgr, &s)
+				reviveCancel()
+				if rerr != nil {
+					m.lastError = fmt.Sprintf("Cannot attach: %v (use 's' to restart the session instead)", rerr)
+					m.state = viewStateVSCodeError
+					return m, nil, true
+				}
+				if revived {
+					m.log("revived pty session %s from agent resume", s.ID)
+					time.Sleep(2 * time.Second) // give the agent a moment to boot
+				}
+			}
 			c := mgr.AttachTmuxSession(s.TmuxSession)
 			if s.IsPTY() {
 				c = mgr.AttachPTYSession(s.ID)
