@@ -67,6 +67,20 @@ func (m *mockRemote) ProvisionRemote(ctx context.Context, steps []domain.Provisi
 }
 func (m *mockRemote) Close() error { return nil }
 
+func TestPrepareSession_AppliesAgentDefaults(t *testing.T) {
+	cfg := &config.Config{AgentDefaults: map[string]config.AgentDefaults{
+		"claude": {Model: "sonnet", Effort: "medium"},
+	}}
+	engine := NewEngine(cfg)
+	result, err := engine.PrepareSession(context.Background(), newMockRemote(), "/wt", domain.Agent{Name: "Claude Code", Command: "claude"}, nil, true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Command, "--model sonnet") || !strings.Contains(result.Command, "--effort medium") {
+		t.Fatalf("%q", result.Command)
+	}
+}
+
 func TestPrepareSession_ClaudeWithIssue_UsesSendKeys(t *testing.T) {
 	cfg := &config.Config{}
 	engine := NewEngine(cfg)

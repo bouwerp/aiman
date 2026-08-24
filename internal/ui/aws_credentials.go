@@ -77,6 +77,9 @@ type AWSCredentialsModel struct {
 	// finishes while this page is closed can be reported accurately. Reset when a new
 	// wave starts.
 	refreshFailures int
+	localNames      []string
+	localCursor     int
+	focusLocal      bool
 }
 
 // Busy reports whether credential work is still running: a renewal in flight or a status
@@ -165,13 +168,99 @@ func NewAWSCredentialsModel(cfg *config.Config, db interface{}) AWSCredentialsMo
 	lifetime.CharLimit = 5
 	lifetime.Width = 12
 
-	return AWSCredentialsModel{
+	m := AWSCredentialsModel{
 		cfg:           cfg,
 		db:            db,
 		renewing:      make(map[string]bool),
 		renameInput:   input,
 		lifetimeInput: lifetime,
 	}
+	m.refreshLocalNames()
+	return m
+}
+
+func dropRemoteDelegation(cfg *config.Config, userAtHost, remoteProfile string) {
+	if cfg == nil {
+		return
+	}
+	remoteProfile = normalizeAWSProfileName(remoteProfile)
+	for i := range cfg.Remotes {
+		r := &cfg.Remotes[i]
+		uh := r.Host
+		if r.User != "" {
+			uh = r.User + "@" + r.Host
+		}
+		if uh != userAtHost {
+			continue
+		}
+		if delegationProfileName(r.AWSDelegation) == remoteProfile {
+			r.AWSDelegation = nil
+		}
+		kept := r.AWSDelegations[:0]
+		for _, d := range r.AWSDelegations {
+			if delegationProfileName(d) != remoteProfile {
+				kept = append(kept, d)
+			}
+		}
+		r.AWSDelegations = kept
+	}
+}
+
+func (m *AWSCredentialsModel) toggleLocalIncluded(name string) {
+	if m.cfg == nil {
+		return
+	}
+	var current []string
+	if m.cfg.AWS.IncludeProfiles == nil {
+		current = append([]string{}, m.localNames...)
+	} else {
+		current = append([]string{}, *m.cfg.AWS.IncludeProfiles...)
+	}
+	found := -1
+	for i, p := range current {
+		if strings.EqualFold(strings.TrimSpace(p), name) {
+			found = i
+			break
+		}
+	}
+	if found >= 0 {
+		current = append(current[:found], current[found+1:]...)
+	} else {
+		current = append(current, name)
+	}
+	if localProfileListComplete(current, m.localNames) {
+		m.cfg.AWS.IncludeProfiles = nil
+	} else {
+		m.cfg.AWS.IncludeProfiles = &current
+	}
+	_ = m.cfg.Save()
+}
+
+func localProfileListComplete(current, all []string) bool {
+	if len(current) != len(all) {
+		return false
+	}
+	have := map[string]bool{}
+	for _, p := range current {
+		have[strings.ToLower(strings.TrimSpace(p))] = true
+	}
+	for _, p := range all {
+		if !have[strings.ToLower(p)] {
+			return false
+		}
+	}
+	return true
+}
+
+func delegationProfileName(d *config.AWSDelegation) string {
+	if d == nil {
+		return ""
+	}
+	p := strings.TrimSpace(d.Profile)
+	if p == "" {
+		return "default"
+	}
+	return normalizeAWSProfileName(p)
 }
 
 // --- tea.Model ---
@@ -180,6 +269,14 @@ func NewAWSCredentialsModel(cfg *config.Config, db interface{}) AWSCredentialsMo
 // long-lived chain), so re-entering this page never stacks up timers.
 func (m AWSCredentialsModel) Init() tea.Cmd {
 	return m.buildEntries()
+}
+
+func (m *AWSCredentialsModel) refreshLocalNames() {
+	names, _ := awsdelegation.ListLocalAWSProfileNames()
+	m.localNames = names
+	if m.localCursor >= len(m.localNames) {
+		m.localCursor = 0
+	}
 }
 
 // awsCredTablePaintInterval is how often the expiry countdown is redrawn. No SSH work is
@@ -272,35 +369,28 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 				cancel()
 			}
 
-			// Build a set of all profiles to show:
-			// • every profile found on the remote, including leftover session-scoped
-			//   "aiman-<id>" profiles from before v0.8.11 — hiding those made stale
-			//   credentials invisible and unfixable from this screen
-			// • every profile declared in config (even if not pushed yet)
-			seen := map[string]bool{}
-			var profiles []string
+			remoteSet := map[string]bool{}
 			for _, p := range remoteProfiles {
-				if !seen[p] {
-					seen[p] = true
-					profiles = append(profiles, p)
-				}
+				remoteSet[p] = true
 			}
+			var profiles []string
 			for p := range hi.configProfiles {
-				if !seen[p] {
-					seen[p] = true
-					profiles = append(profiles, p)
+				src := hi.configProfiles[p]
+				if src != "" && !m.cfg.AWSLocalProfileAllowed(src) {
+					continue
 				}
+				profiles = append(profiles, p)
 			}
 			sort.Strings(profiles)
 
 			for _, p := range profiles {
-				localProfile := hi.configProfiles[p] // empty string if not in config
-				del := hi.dels[p]                    // nil if not in config
+				localProfile := hi.configProfiles[p]
+				del := hi.dels[p]
 
 				status := awsCredStatusChecking
 				if sshErr != nil {
 					status = awsCredStatusSSHError
-				} else if !seen[p] {
+				} else if !remoteSet[p] {
 					status = awsCredStatusNotPushed
 				}
 
@@ -595,7 +685,12 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = fmt.Sprintf("✗ Remove failed for %s [%s]: %v", msg.userAtHost, msg.remoteProfile, msg.err)
 			return m, nil
 		}
-		m.message = fmt.Sprintf("Removed %s [%s] from remote AWS config.", msg.userAtHost, msg.remoteProfile)
+		dropRemoteDelegation(m.cfg, msg.userAtHost, msg.remoteProfile)
+		if err := m.cfg.Save(); err != nil {
+			m.message = fmt.Sprintf("Removed %s [%s] from remote AWS config, but config save failed: %v", msg.userAtHost, msg.remoteProfile, err)
+			return m, m.buildEntries()
+		}
+		m.message = fmt.Sprintf("Removed %s [%s] from remote AWS config and aiman settings.", msg.userAtHost, msg.remoteProfile)
 		return m, m.buildEntries()
 
 	case awsCredRenameResultMsg:
@@ -673,11 +768,33 @@ func (m AWSCredentialsModel) updateRenameEditor(msg tea.KeyMsg) (tea.Model, tea.
 // re-checking, renaming, removing, and editing a profile's lifetime.
 func (m AWSCredentialsModel) handleCredentialTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "tab":
+		if len(m.localNames) > 0 {
+			m.focusLocal = !m.focusLocal
+		}
+		return m, nil
+	case " ":
+		if m.focusLocal && m.localCursor >= 0 && m.localCursor < len(m.localNames) {
+			m.toggleLocalIncluded(m.localNames[m.localCursor])
+			return m, m.buildEntries()
+		}
 	case "up", "k":
+		if m.focusLocal {
+			if m.localCursor > 0 {
+				m.localCursor--
+			}
+			return m, nil
+		}
 		if m.cursor > 0 {
 			m.cursor--
 		}
 	case "down", "j":
+		if m.focusLocal {
+			if m.localCursor < len(m.localNames)-1 {
+				m.localCursor++
+			}
+			return m, nil
+		}
 		if m.cursor < len(m.entries)-1 {
 			m.cursor++
 		}
@@ -892,7 +1009,25 @@ func (m AWSCredentialsModel) View() string {
 	}
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	b.WriteString(helpStyle.Render("  r renew selected  •  shift+R refresh ALL  •  e rename selected profile  •  t lifetime of selected profile  •  d delete selected remote profile  •  c re-check all  •  ESC back") + "\n")
+	b.WriteString("\n  " + titleStyle.Render("Local AWS profiles") + "\n")
+	b.WriteString(dimStyle.Render("  Only checked names are used for sync and shown above. Space toggles; Tab switches list.") + "\n")
+	if len(m.localNames) == 0 {
+		b.WriteString(dimStyle.Render("  No profiles in ~/.aws on this machine.\n"))
+	} else {
+		for i, name := range m.localNames {
+			mark := "[ ]"
+			if m.cfg == nil || m.cfg.AWSLocalProfileAllowed(name) {
+				mark = "[x]"
+			}
+			line := fmt.Sprintf("  %s %s", mark, name)
+			if m.focusLocal && i == m.localCursor {
+				line = selectedBg.Render(line)
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+
+	b.WriteString(helpStyle.Render("  r renew selected  •  shift+R refresh ALL  •  e rename selected profile  •  t lifetime of selected profile  •  d delete (remote + settings)  •  space toggle local  •  tab lists  •  c re-check all  •  ESC back") + "\n")
 	b.WriteString(helpStyle.Render("  \"~\" marks an expiry estimated from the credentials file's age (pushed before aiman recorded expiry) — refresh to replace it with the exact time.") + "\n")
 
 	return b.String()

@@ -28,6 +28,9 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Quick start (`N`)**: Default remote, agent picker only, generated `q1`/`q2`/… in group `quick`
 - **Names and groups**: Every session has a unique display `name` and a `group`; the sidebar is a tree of groups, not a flat list
 - **Session Management**: Track active sessions with live tmux pane previews
+- **Agent defaults**: Menu → Agent defaults sets per-agent launch model and thinking/reasoning effort (e.g. Claude `sonnet` + `medium`, Grok `4.6` + `medium`)
+- **Restart / switch agent (`s`)**: Save a handoff, start the chosen agent (same or different), and tell it to read the handoff
+- **AWS profile allowlist**: Menu → AWS Credentials toggles which local `~/.aws` profiles aiman uses; delete removes the remote profile and the config entry so it does not come back
 - **Agent API (`aiman serve`)**: One JSON server per remote; start it from the TUI (Tab → **agent API** → `i`) so in-pane agents can list, create, prompt, and wait on sibling sessions
 - **Shared context**: Durable markdown notes per host (`aiman context ls|find|get|put|pack`); session create injects abstracts into `.aiman_context.md`, archive writes a note back
 - **Agent skill**: `aiman --skill` prints a Markdown skill gated on `AIMAN_ENV=1`

@@ -18,16 +18,17 @@ const (
 )
 
 type Config struct {
-	Integrations Integrations  `yaml:"integrations"`
-	Git          GitConfig     `yaml:"git,omitempty"`
-	Features     FeatureFlags  `yaml:"features,omitempty"`
-	Skills       SkillsConfig  `yaml:"skills,omitempty"`
-	AI           AIConfig      `yaml:"ai,omitempty"`
-	EC2Loop      EC2LoopConfig `yaml:"ec2_loop,omitempty"`
-	AWS          AWSDefaults   `yaml:"aws,omitempty"`
-	Sync         SyncConfig    `yaml:"sync,omitempty"`
-	Remotes      []Remote      `yaml:"remotes"`
-	ActiveRemote string        `yaml:"active_remote"`
+	Integrations  Integrations             `yaml:"integrations"`
+	Git           GitConfig                `yaml:"git,omitempty"`
+	Features      FeatureFlags             `yaml:"features,omitempty"`
+	Skills        SkillsConfig             `yaml:"skills,omitempty"`
+	AI            AIConfig                 `yaml:"ai,omitempty"`
+	EC2Loop       EC2LoopConfig            `yaml:"ec2_loop,omitempty"`
+	AWS           AWSDefaults              `yaml:"aws,omitempty"`
+	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
+	Sync          SyncConfig               `yaml:"sync,omitempty"`
+	Remotes       []Remote                 `yaml:"remotes"`
+	ActiveRemote  string                   `yaml:"active_remote"`
 
 	// PermissionsTightened records that Load had to remove group/other access
 	// from the config file, meaning the API token in it had been readable by
@@ -46,6 +47,16 @@ type AWSDefaults struct {
 	// DefaultRegion is the region new sessions start with. Empty falls back to
 	// the delegation's region.
 	DefaultRegion string `yaml:"default_region,omitempty"`
+	// IncludeProfiles is the local ~/.aws profile names aiman will use. nil
+	// (omitted) means every local profile; an empty list means none.
+	IncludeProfiles *[]string `yaml:"include_profiles,omitempty"`
+}
+
+// AgentDefaults is the launch model and reasoning effort for one agent binary
+// (keyed by command: claude, grok, agy, codex, …).
+type AgentDefaults struct {
+	Model  string `yaml:"model,omitempty"`
+	Effort string `yaml:"effort,omitempty"`
 }
 
 // ResolveAWSSessionDefaults returns the profile and region a new session on
