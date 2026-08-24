@@ -5,15 +5,16 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
-func applyConfiguredLaunchFlags(cmd string, agent domain.Agent, cfg *config.Config) string {
+func applyConfiguredLaunchFlags(cmd string, ag domain.Agent, cfg *config.Config) string {
 	if cfg == nil {
 		return cmd
 	}
-	d := cfg.LaunchDefaultsFor(agent.Name, agent.Command)
-	return applyLaunchDefaults(cmd, agentBaseCommand(agent.Command), d)
+	d := cfg.LaunchDefaultsFor(ag.Name, ag.Command)
+	return applyLaunchDefaults(cmd, agentBaseCommand(ag.Command), d)
 }
 
 func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
@@ -25,16 +26,19 @@ func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
 	if effort == "" {
 		return cmd
 	}
-	switch base {
-	case "claude", "claude-code":
-		cmd = ensureKeyedFlag(cmd, "--effort", effort)
-	case "grok", "grok-build":
-		cmd = ensureKeyedFlag(cmd, "--reasoning-effort", effort)
-	case "codex":
-		flag := fmt.Sprintf("-c model_reasoning_effort=%s", effort)
-		if !strings.Contains(cmd, "model_reasoning_effort=") {
-			cmd = cmd + " " + flag
+	cat := agent.LaunchCatalogFor(base)
+	if !cat.SupportsEffort() {
+		return cmd
+	}
+	if cat.EffortConfig != "" {
+		needle := cat.EffortConfig + "="
+		if !strings.Contains(cmd, needle) {
+			cmd = fmt.Sprintf("%s -c %s=%s", cmd, cat.EffortConfig, effort)
 		}
+		return cmd
+	}
+	if cat.EffortFlag != "" {
+		cmd = ensureKeyedFlag(cmd, cat.EffortFlag, effort)
 	}
 	return cmd
 }

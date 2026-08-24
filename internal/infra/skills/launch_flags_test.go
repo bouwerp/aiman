@@ -24,4 +24,16 @@ func TestApplyLaunchDefaults(t *testing.T) {
 	if strings.Contains(got, "--model sonnet") {
 		t.Fatalf("must not override existing --model: %q", got)
 	}
+	got = applyLaunchDefaults("agy --dangerously-skip-permissions", "agy", config.AgentDefaults{Effort: "high"})
+	if !strings.Contains(got, "--effort high") {
+		t.Fatalf("%q", got)
+	}
+	got = applyLaunchDefaults("pi", "pi", config.AgentDefaults{Effort: "high"})
+	if !strings.Contains(got, "--thinking high") {
+		t.Fatalf("%q", got)
+	}
+	got = applyLaunchDefaults("opencode", "opencode", config.AgentDefaults{Effort: "high"})
+	if strings.Contains(got, "effort") || strings.Contains(got, "thinking") {
+		t.Fatalf("opencode must ignore effort: %q", got)
+	}
 }
