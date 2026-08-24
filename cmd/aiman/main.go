@@ -165,6 +165,8 @@ func run() error {
 			return runServe()
 		case "session":
 			return runSession(os.Args[2:])
+		case "context":
+			return runContext(os.Args[2:])
 		case "--skill":
 			return runSkill()
 		default:
@@ -183,6 +185,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  clear-aws-profiles  clear legacy aiman-* AWS profile names from stored sessions\n")
 			fmt.Fprintf(os.Stderr, "  serve            agent API on this host (install remotes from TUI: m → Agent API → i)\n")
 			fmt.Fprintf(os.Stderr, "  session          list/get/create/prompt sessions (JSON; needs serve)\n")
+			fmt.Fprintf(os.Stderr, "  context          ls/find/get/put/pack shared notes (JSON; files if serve is down)\n")
 			fmt.Fprintf(os.Stderr, "  --skill          print the agent skill\n")
 			return errUsage
 		}

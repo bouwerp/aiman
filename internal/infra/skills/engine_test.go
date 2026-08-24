@@ -498,6 +498,7 @@ func TestWriteTaskFile_Content(t *testing.T) {
 		"DDD",
 		"Simplicity over cleverness",
 		"Stay on scope",
+		"Shared context",
 	}
 
 	for _, s := range expected {

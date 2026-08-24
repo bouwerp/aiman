@@ -19,7 +19,7 @@ func TestPing(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	srv := New(ln, nil, nil, nil, "test")
+	srv := New(ln, nil, nil, nil, nil, "test")
 	go func() { _ = srv.Serve(ctx) }()
 
 	conn, err := net.Dial("unix", SocketPath(dir))

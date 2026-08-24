@@ -17,27 +17,29 @@ type sessionCreator interface {
 }
 
 type Server struct {
-	ln      *Listener
-	repo    domain.SessionRepository
-	remote  domain.RemoteExecutor
-	create  sessionCreator
-	version string
+	ln       *Listener
+	repo     domain.SessionRepository
+	remote   domain.RemoteExecutor
+	create   sessionCreator
+	ctxStore domain.ContextStore
+	version  string
 
 	mu     sync.Mutex
 	sessMu map[string]*sync.Mutex
 }
 
-func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecutor, create sessionCreator, version string) *Server {
+func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecutor, create sessionCreator, ctxStore domain.ContextStore, version string) *Server {
 	if version == "" {
 		version = "dev"
 	}
 	return &Server{
-		ln:      ln,
-		repo:    repo,
-		remote:  remote,
-		create:  create,
-		version: version,
-		sessMu:  map[string]*sync.Mutex{},
+		ln:       ln,
+		repo:     repo,
+		remote:   remote,
+		create:   create,
+		ctxStore: ctxStore,
+		version:  version,
+		sessMu:   map[string]*sync.Mutex{},
 	}
 }
 
@@ -114,6 +116,16 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleMove(ctx, req)
 	case "session.report_agent_session":
 		return s.handleReportAgentSession(ctx, req)
+	case "context.put":
+		return s.handleContextPut(ctx, req)
+	case "context.get":
+		return s.handleContextGet(ctx, req)
+	case "context.list":
+		return s.handleContextList(ctx, req)
+	case "context.find":
+		return s.handleContextFind(ctx, req)
+	case "context.pack":
+		return s.handleContextPack(ctx, req)
 	default:
 		return Response{ID: req.ID, Error: &Error{Code: CodeInvalidParams, Message: "unknown method " + req.Method}}
 	}

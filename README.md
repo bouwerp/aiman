@@ -29,6 +29,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Names and groups**: Every session has a unique display `name` and a `group`; the sidebar is a tree of groups, not a flat list
 - **Session Management**: Track active sessions with live tmux pane previews
 - **Agent API (`aiman serve`)**: One JSON server per remote; start it from the TUI (Tab → **agent API** → `i`) so in-pane agents can list, create, prompt, and wait on sibling sessions
+- **Shared context**: Durable markdown notes per host (`aiman context ls|find|get|put|pack`); session create injects abstracts into `.aiman_context.md`, archive writes a note back
 - **Agent skill**: `aiman --skill` prints a Markdown skill gated on `AIMAN_ENV=1`
 
 ### AI Intelligence
@@ -449,6 +450,23 @@ Stdout is indented JSON. Server errors are JSON on stderr, exit 1. Usage errors 
 | `create_failed` | Worktree/tmux create failed |
 | `jira_unavailable` | `--issue` given but JIRA is not configured on the remote |
 
+### `aiman context` CLI
+
+Shared notes on this host (`~/.aiman/context/`). Serve is used when the socket is up; otherwise the same commands read and write the files directly.
+
+```bash
+aiman context ls [--group GROUP | --repo owner/repo] [--limit N]
+aiman context find QUERY [--group GROUP | --repo owner/repo]
+aiman context get ID
+aiman context put --title TITLE [--abstract TEXT] [--group GROUP | --repo owner/repo] [--body-file FILE]
+aiman context pack [--group GROUP] [--repo owner/repo] [--limit N]
+aiman context import [--agent all|claude,grok,codex,agy] [--group GROUP] [--repo owner/repo] [--dry-run]
+```
+
+`ls`/`find` return abstracts. `get` returns the body. Create and restart pack abstracts into `.aiman_context.md`. Archiving a session writes one note from the snapshot summary.
+
+`import` copies this host's agent memories into the store: Claude auto-memory under `~/.claude/projects/*/memory/`, Grok `~/.grok/memory/**/MEMORY.md`, Codex `~/.codex/memories/*.md`, and agy `walkthrough.md` files. Project notes go under the git origin slug when it can be inferred. Re-running overwrites the same ids. `--group` / `--repo` pin every imported note to that namespace.
+
 ### Names and groups
 
 Every session has a **name** (unique per host, `^[A-Za-z][A-Za-z0-9_-]{0,47}$`) and a **group** (work bucket: issue key, repo short name, `quick`, or `ungrouped`). The dashboard sidebar is a tree of groups. Each header shows the session count (`· N`).
@@ -520,6 +538,7 @@ All data is stored in `~/.aiman/`:
 ├── aiman.sock.lock      # Remote: serve singleton lock
 ├── serve.log            # Remote: serve log
 ├── debug.log            # `aiman --debug` dump (optional)
+├── context/             # Shared context notes (markdown + YAML frontmatter)
 ├── sockets/             # SSH ControlMaster sockets (hashed filenames)
 └── work/                # Local mutagen sync roots — one subdirectory per session ID
 ```

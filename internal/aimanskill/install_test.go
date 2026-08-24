@@ -3,8 +3,15 @@ package aimanskill
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestSkillDocumentsContextCLI(t *testing.T) {
+	if !strings.Contains(Text, "aiman context ls") || !strings.Contains(Text, "aiman context put") || !strings.Contains(Text, "aiman context import") {
+		t.Fatal("skill must document aiman context")
+	}
+}
 
 func TestEnsureFileInstallsWhenMissing(t *testing.T) {
 	dir := t.TempDir()

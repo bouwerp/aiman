@@ -12,6 +12,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/aimanskill"
+	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -94,7 +95,8 @@ func runServe() error {
 	defer stop()
 	ensureAimanSkill(ctx, db)
 	ensureAgentHooks()
-	srv := server.New(ln, db, localExec, flow, version)
+	store := contextstore.NewFiles(contextstore.Root(dir))
+	srv := server.New(ln, db, localExec, flow, store, version)
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
 }
@@ -149,7 +151,7 @@ func printServeUsage(w io.Writer) {
 	fmt.Fprint(w, `aiman serve — agent API on THIS host
 
 In-pane agents talk to this process over ~/.aiman/aiman.sock
-(aiman session … and the skill). One instance per host.
+(aiman session …, aiman context …, and the skill). One instance per host.
 
 Do not run this on your laptop to enable remotes. Start it from the TUI:
 

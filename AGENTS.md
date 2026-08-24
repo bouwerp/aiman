@@ -15,7 +15,7 @@ Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full
 Binary: `aiman` — built from `./cmd/aiman/main.go`  
 Module: `github.com/bouwerp/aiman`  
 Go: 1.26  
-Current release: **v0.9.5**
+Current release: **v0.11.0**
 
 ---
 
@@ -50,9 +50,12 @@ internal/
     session.go      — Session, SessionConfig, SessionStatus, GitStatus, PullRequest, Secret
     interfaces.go   — all domain interfaces (RemoteExecutor, SyncEngine, etc.)
     snapshot.go     — SessionSnapshot type
+    context.go      — ContextStore, ContextEntry (shared notes)
     agent.go        — Agent type
     skills.go       — Skill type
     aws.go          — AWSConfig type
+  contextstore/
+    files.go        — markdown+YAML store under ~/.aiman/context/
   usecase/
     flow_manager.go — CreateSession (the main session-creation orchestrator)
     session_discoverer.go — discovers sessions from live remote (tmux/git/mutagen)
