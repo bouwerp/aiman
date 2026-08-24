@@ -59,7 +59,7 @@ func collectClaude(home string) []MemoryFile {
 			})
 		}
 	}
-	return capNewest(out, defaultImportLimit)
+	return capNewest(out)
 }
 
 func collectGrok(home string) []MemoryFile {
@@ -109,7 +109,7 @@ func collectGrok(home string) []MemoryFile {
 		})
 		return nil
 	})
-	return capNewest(out, defaultImportLimit)
+	return capNewest(out)
 }
 
 func grokWorkspaceRepo(name, dir string) string {
@@ -179,7 +179,7 @@ func collectCodex(home string) []MemoryFile {
 			mtime:    mtime,
 		})
 	}
-	return capNewest(out, defaultImportLimit)
+	return capNewest(out)
 }
 
 func collectAgy(home string) []MemoryFile {
@@ -224,7 +224,7 @@ func collectAgy(home string) []MemoryFile {
 			})
 		}
 	}
-	return capNewest(out, defaultImportLimit)
+	return capNewest(out)
 }
 
 func repoFromWalkthrough(body string) string {
@@ -256,8 +256,8 @@ func repoFromWalkthrough(body string) string {
 	return ""
 }
 
-func capNewest(files []MemoryFile, limit int) []MemoryFile {
-	if limit <= 0 || len(files) <= limit {
+func capNewest(files []MemoryFile) []MemoryFile {
+	if len(files) <= defaultImportLimit {
 		return files
 	}
 	sort.Slice(files, func(i, j int) bool {
@@ -266,5 +266,5 @@ func capNewest(files []MemoryFile, limit int) []MemoryFile {
 		}
 		return files[i].RelPath > files[j].RelPath
 	})
-	return files[:limit]
+	return files[:defaultImportLimit]
 }
