@@ -394,6 +394,7 @@ type Model struct {
 	firstLoad              map[string]bool
 	busySince              map[string]time.Time // when each session entered "busy" state
 	selectedRemote         config.Remote        // remote chosen for the current new-session wizard
+	runTargetSelected      int                  // 1-based index into cfg.Remotes while the run-target picker is open; 0 = none
 	remoteFilter           string               // "" = all remotes, otherwise a Remote.Host to filter by
 	allSessions            []domain.Session     // unfiltered master session list
 	collapsedGroups        map[string]bool      // groupCollapseKey → hidden children
@@ -3636,12 +3637,30 @@ func (m *Model) renderRunTargetPicker() string {
 		if label == "" {
 			label = r.Host
 		}
-		b.WriteString(fmt.Sprintf("  %s  %s (%s@%s)\n", activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host))
+		marker := " "
+		if m.runTargetSelected == i+1 {
+			marker = "*"
+		}
+		backend := "tmux"
+		if r.SessionBackend == domain.BackendPTY {
+			backend = "pty"
+		}
+		b.WriteString(fmt.Sprintf(" %s %s  %s (%s@%s)  [%s]\n",
+			marker, activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host, backend))
 	}
 	if len(m.cfg.Remotes) == 0 {
-		b.WriteString(dim.Render("  No remote servers configured — add one in Admin Menu.") + "\n")
+		b.WriteString(dim.Render("  No remote servers configured \u2014 add one in Admin Menu.") + "\n")
 	}
-	b.WriteString("\n" + dim.Render("  esc: cancel"))
+	if m.runTargetSelected > 0 {
+		current, other := "pty", "tmux"
+		if m.sessionCfg.SessionBackend != domain.BackendPTY {
+			current, other = "tmux", "pty"
+		}
+		b.WriteString("\n" + activeStyle.Render(fmt.Sprintf("  backend for this session: %s", current)))
+		b.WriteString("\n" + dim.Render(fmt.Sprintf("  enter: continue   b: use %s for this session   esc: cancel", other)))
+	} else {
+		b.WriteString("\n" + dim.Render("  esc: cancel"))
+	}
 
 	dialog := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -4388,6 +4407,7 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		// somewhere actionable instead of failing silently later.
 		m.sessionCfg = domain.SessionConfig{}
 		m.selectedRemote = config.Remote{}
+		m.runTargetSelected = 0
 		m.state = viewStateRunTargetPicker
 		return m, nil, true
 	}
@@ -5457,22 +5477,41 @@ func (m *Model) handleAWSCredentialsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleRunTargetPickerUpdate handles the first screen of the new-session flow: which
 // configured remote server the work should run on.
-func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:unparam // Cmd stays nil by design: selection is pure state, no commands to fire
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
+			m.runTargetSelected = 0
 			m.state = viewStateMain
 			return m, nil
+		case "b", "B":
+			// tmux and pty sessions run side by side on one host; this picks the
+			// backend for the session being created only (the remote's config
+			// default is the starting point).
+			if m.sessionCfg.SessionBackend == domain.BackendPTY {
+				m.sessionCfg.SessionBackend = domain.BackendTmux
+			} else {
+				m.sessionCfg.SessionBackend = domain.BackendPTY
+			}
+			return m, nil
+		case "enter":
+			if m.runTargetSelected >= 1 && m.runTargetSelected <= len(m.cfg.Remotes) {
+				r := m.cfg.Remotes[m.runTargetSelected-1]
+				m.selectedRemote = r
+				m.sessionCfg.RemoteHost = r.Host
+				m.runTargetSelected = 0
+				m.state = viewStateModePicker
+			}
 		default:
 			idx := 0
 			if n, err := strconv.Atoi(km.String()); err == nil {
 				idx = n
 			}
 			if idx >= 1 && idx <= len(m.cfg.Remotes) {
-				r := m.cfg.Remotes[idx-1]
-				m.selectedRemote = r
-				m.sessionCfg.RemoteHost = r.Host
-				m.state = viewStateModePicker
+				m.runTargetSelected = idx
+				// Start from the remote's configured default each time a remote
+				// is picked so the toggle never leaks between wizard runs.
+				m.sessionCfg.SessionBackend = m.cfg.Remotes[idx-1].SessionBackend
 			}
 		}
 	}

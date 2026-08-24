@@ -640,6 +640,10 @@ func DeliverInitialPromptPTY(ctx context.Context, remote domain.RemoteExecutor, 
 // instead of tmux. Env travels in the create payload, so no -e flags or shell
 // escaping are needed; the command runs under bash -l inside a real PTY.
 func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, workingDir, tmuxName, agentCmd string, sendKeysPrompt string, awsEnv map[string]string) (*domain.Session, error) {
+	if !PTYRuntimeAvailable(ctx, sshMgr) {
+		return nil, fmt.Errorf(
+			"the PTY backend needs aiman serve running on the remote (TUI: m → Agent API \u2192 i then s), or set session_backend back to tmux")
+	}
 	infraGit.ReportProgress(ctx, "Launching agent in built-in PTY...")
 	env := make(map[string]string, len(awsEnv)+4)
 	for k, v := range awsEnv {

@@ -24,11 +24,3 @@ func applyCursorStyle(t *textinput.Model) {
 	st.Cursor = textinput.CursorStyle{Color: lipgloss.Color("212"), Blink: true}
 	t.SetStyles(st)
 }
-
-// applyInputPrompt colours an input's prompt line for the given focus state.
-func applyInputPrompt(t *textinput.Model, color string) {
-	st := t.Styles()
-	st.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
-	st.Blurred.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	t.SetStyles(st)
-}

@@ -225,6 +225,8 @@ The TUI wizard (`n` key) drives the user through:
 
 1. Run-target picker (`viewStateRunTargetPicker`) → a configured remote server. Shown for
    any remote count, including zero, so a fresh install still has somewhere actionable to go.
+   Number selects; `b` toggles the terminal backend (tmux/pty) for this session only —
+   tmux and pty sessions run side by side on one host; `enter` confirms.
 2. Mode picker → JIRA issue / new branch / existing branch / ad-hoc / autonomous trigger
 3. JIRA issue picker → `m.sessionCfg.IssueKey` / `m.sessionCfg.Issue`. Only issues assigned
    to the current user in `integrations.jira.issue_statuses` (default:

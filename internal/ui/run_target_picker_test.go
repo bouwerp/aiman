@@ -47,19 +47,80 @@ func TestNewSessionAlwaysOpensRunTargetPicker(t *testing.T) {
 	}
 }
 
-func TestRunTargetPickerSelectsRemote(t *testing.T) {
-	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
-	updated, _ := m.handleRunTargetPickerUpdate(pressKey("2"))
-	got := updated.(*Model)
+// pickKey drives the run-target picker and returns the updated model.
+func pickKey(m *Model, name string) *Model {
+	updated, _ := m.handleRunTargetPickerUpdate(pressKey(name))
+	return updated.(*Model)
+}
 
+func TestRunTargetPickerSelectThenConfirm(t *testing.T) {
+	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
+	m = pickKey(m, "2")
+
+	if m.runTargetSelected != 2 {
+		t.Fatalf("expected remote 2 selected, got %d", m.runTargetSelected)
+	}
+	if m.state != viewStateRunTargetPicker {
+		t.Fatalf("selection alone must not leave the picker, got state %v", m.state)
+	}
+
+	got := pickKey(m, "enter")
 	if got.state != viewStateModePicker {
-		t.Fatalf("expected the mode picker after choosing a remote, got %v", got.state)
+		t.Fatalf("expected the mode picker after enter, got %v", got.state)
 	}
 	if got.selectedRemote.Host != "10.0.1.9" {
 		t.Errorf("expected the second remote selected, got %q", got.selectedRemote.Host)
 	}
 	if got.sessionCfg.RemoteHost != "10.0.1.9" {
 		t.Errorf("expected RemoteHost carried into sessionCfg, got %q", got.sessionCfg.RemoteHost)
+	}
+}
+
+// tmux and pty sessions run side by side: b flips the backend for this session
+// only, starting from the remote's configured default.
+func TestRunTargetPickerTogglesBackend(t *testing.T) {
+	cfg := twoRemoteCfg()
+	cfg.Remotes[0].SessionBackend = domain.BackendPTY
+
+	m := &Model{cfg: cfg, state: viewStateRunTargetPicker}
+	m = pickKey(m, "1")
+	if m.sessionCfg.SessionBackend != domain.BackendPTY {
+		t.Fatalf("remote default (pty) not seeded, got %q", m.sessionCfg.SessionBackend)
+	}
+
+	m = pickKey(m, "b")
+	if m.sessionCfg.SessionBackend != domain.BackendTmux {
+		t.Fatalf("b must toggle to tmux, got %q", m.sessionCfg.SessionBackend)
+	}
+	if m.state != viewStateRunTargetPicker {
+		t.Fatalf("toggle must stay on the picker, got %v", m.state)
+	}
+
+	m = pickKey(m, "enter")
+	if m.sessionCfg.SessionBackend != domain.BackendTmux {
+		t.Fatalf("toggled backend must carry into sessionCfg, got %q", m.sessionCfg.SessionBackend)
+	}
+}
+
+func TestRunTargetPickerBackendDoesNotLeakBetweenRuns(t *testing.T) {
+	cfg := twoRemoteCfg()
+	cfg.Remotes[0].SessionBackend = domain.BackendPTY
+
+	m := &Model{cfg: cfg, state: viewStateRunTargetPicker}
+	m = pickKey(m, "1")
+	m = pickKey(m, "b") // flip to tmux
+	_ = pickKey(m, "esc")
+
+	m2 := pressMainKey(&Model{cfg: cfg, state: viewStateMain}, 'n')
+	if m2.state != viewStateRunTargetPicker {
+		t.Fatalf("expected picker, got %v", m2.state)
+	}
+	if m2.runTargetSelected != 0 {
+		t.Fatalf("stale selection across wizard runs: %d", m2.runTargetSelected)
+	}
+	m2 = pickKey(m2, "1")
+	if m2.sessionCfg.SessionBackend != domain.BackendPTY {
+		t.Fatalf("previous toggle leaked into a fresh wizard run: %q", m2.sessionCfg.SessionBackend)
 	}
 }
 
@@ -79,10 +140,18 @@ func TestRunTargetPickerEscCancels(t *testing.T) {
 	}
 }
 
+func TestRunTargetPickerEnterWithoutSelectionStays(t *testing.T) {
+	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
+	got := pickKey(m, "enter")
+	if got.state != viewStateRunTargetPicker {
+		t.Fatalf("enter with no selected remote must stay on the picker, got %v", got.state)
+	}
+}
+
 func TestRunTargetPickerViewListsRemotes(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker, width: 100, height: 40}
 	out := m.renderView()
-	for _, want := range []string{"dev-box", "build-2", "[1]", "[2]"} {
+	for _, want := range []string{"dev-box", "build-2", "[1]", "[2]", "[tmux]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in the picker, got:\n%s", want, out)
 		}
