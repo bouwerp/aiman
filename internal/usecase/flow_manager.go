@@ -342,6 +342,13 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		session.AWSConfig = config.AWSConfig
 	}
 
+	// PTY backend: hand the agent to aiman serve's built-in runtime instead of
+	// tmux. Env travels in the create payload, so no -e flags or shell escaping
+	// are needed; the command runs under bash -l inside a real PTY.
+	if config.SessionBackend == domain.BackendPTY {
+		return m.launchPTYSession(ctx, sshMgr, session, config, workingDir, tmuxName, agentCmd, sendKeysPrompt, awsEnv)
+	}
+
 	// Start the session and immediately set remain-on-exit in a single SSH call to avoid
 	// a race condition: if the agent exits before the separate set-option call runs, the
 	// session (and server) would already be gone.
@@ -429,6 +436,13 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	session.TmuxSession = tmuxName
 
+	return m.finaliseCreate(ctx, sshMgr, session, config, workingDir)
+}
+
+// finaliseCreate runs the best-effort decoration and bookkeeping shared by both
+// backends after the terminal process is up: workspace trust, agent model
+// detection, JIRA transition, and the ACTIVE transition.
+func (m *FlowManager) finaliseCreate(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, workingDir string) (*domain.Session, error) {
 	// Trust the directory and read back the agent's model. Every one of these is
 	// best-effort decoration: the trust commands ignore their result, and the
 	// model only fills a display field. They are also expensive, because each
@@ -596,8 +610,78 @@ func tmuxEnvFlags(env map[string]string) string {
 	var b strings.Builder
 	for _, key := range keys {
 		if value := strings.TrimSpace(env[key]); value != "" {
-			b.WriteString(fmt.Sprintf(" -e %s=%s", key, value))
+			fmt.Fprintf(&b, " -e %s=%s", key, value)
 		}
 	}
 	return b.String()
+}
+
+// DeliverInitialPromptPTY sends the initial prompt to a freshly-created PTY
+// session: write the prompt remotely, type it through `aiman pty input`, then
+// press Enter. Fire-and-forget like the tmux path.
+func DeliverInitialPromptPTY(ctx context.Context, remote domain.RemoteExecutor, sessionID, prompt string) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return
+	}
+	promptPath := fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
+	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
+		return
+	}
+	script := fmt.Sprintf(
+		`export PATH="$HOME/.local/bin:$PATH"; `+
+			`sleep 3; aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --data "\r" >/dev/null 2>&1; rm -f %q`,
+		strings.TrimSpace(sessionID), promptPath, strings.TrimSpace(sessionID), promptPath,
+	)
+	_, _ = remote.Execute(ctx, detachCommand(script))
+}
+
+// launchPTYSession hands the agent to aiman serve's built-in PTY runtime
+// instead of tmux. Env travels in the create payload, so no -e flags or shell
+// escaping are needed; the command runs under bash -l inside a real PTY.
+func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, workingDir, tmuxName, agentCmd string, sendKeysPrompt string, awsEnv map[string]string) (*domain.Session, error) {
+	if !PTYRuntimeAvailable(ctx, sshMgr) {
+		return nil, fmt.Errorf(
+			"the PTY backend needs aiman serve running on the remote (TUI: m → Agent API \u2192 i then s), or set session_backend back to tmux")
+	}
+	infraGit.ReportProgress(ctx, "Launching agent in built-in PTY...")
+	env := make(map[string]string, len(awsEnv)+4)
+	for k, v := range awsEnv {
+		env[k] = v
+	}
+	if strings.Contains(strings.ToLower(agentCmd), "opencode") {
+		_ = sshMgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
+		env["OPENCODE_CONFIG"] = "/tmp/opencode-aiman.json"
+		env["OPENCODE_CONFIG_CONTENT"] = `{"permission":"allow"}`
+	}
+	if config.OpenRouterAPIKey != "" {
+		env["OPENROUTER_API_KEY"] = config.OpenRouterAPIKey
+	}
+	for _, secret := range config.EnvSecrets {
+		env[secret.Key] = secret.Value
+	}
+	for k, v := range aimanRuntimeEnv(session) {
+		env[k] = v
+	}
+	if config.AttachExisting && PTYSessionExists(ctx, sshMgr, session.ID) {
+		// Adoption: an interrupted create left a live PTY session behind with no
+		// database row. Adopt it as-is — injecting a fresh task prompt would
+		// interrupt whatever the agent is mid-way through.
+		infraGit.ReportProgress(ctx, "Adopting existing PTY session...")
+	} else {
+		if err := CreatePTYSession(ctx, sshMgr, PTYSpec{
+			ID:      session.ID,
+			Name:    tmuxName,
+			Dir:     workingDir,
+			Command: agentCmd,
+			Env:     env,
+		}); err != nil {
+			return nil, fmt.Errorf("failed to start PTY session: %w", err)
+		}
+		DeliverInitialPromptPTY(ctx, sshMgr, session.ID, sendKeysPrompt)
+	}
+	session.Backend = domain.BackendPTY
+	session.TmuxSession = tmuxName // display handle; kill/capture route via Backend
+
+	return m.finaliseCreate(ctx, sshMgr, session, config, workingDir)
 }

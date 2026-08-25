@@ -12,14 +12,14 @@ import (
 )
 
 func TestPing(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	srv := New(ln, nil, nil, nil, nil, "test")
+	srv := New(ln, nil, nil, nil, nil, nil, "test")
 	go func() { _ = srv.Serve(ctx) }()
 
 	conn, err := net.Dial("unix", SocketPath(dir))
@@ -56,7 +56,7 @@ func TestPing(t *testing.T) {
 }
 
 func TestListenSocketMode(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	l, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)

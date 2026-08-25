@@ -113,6 +113,53 @@ existing hook-sidecar signal only exists for sessions aiman itself launched.
   All three paths hand off to the existing `restartSession()` — no new
   session-launch logic was needed.
 
+### Built-in PTY runtime as an opt-in session backend ✅
+Sessions are no longer tmux-only. `session_backend: pty` on a remote hosts its
+sessions in `aiman serve`'s own PTY runtime instead, selectable per session in
+the run-target step of the wizard. Sessions are owned by detached *holder*
+processes (`internal/ptyhold`) rather than by serve, so they survive a serve
+restart and are re-adopted — matching the durability tmux provided. Driveable
+from the CLI via `aiman pty list|get|attach|kill`. Unix-only: the runtime needs
+`setsid` and `SIGWINCH`, so the Windows build omits it and uses tmux.
+
+**Breaking**: EC2 loop sessions are removed entirely (`feat!`). The
+`SessionMode` EC2 path, its wizard screens, and its settings are gone; the
+separate *EC2 Provisioning* roadmap item below (spinning up instances to use as
+ordinary remotes) is unaffected.
+
+Hardening done while getting this branch green — all of it found by finally
+being able to compile and run the package:
+
+- **`internal/ptyhold` had never been committed.** It was imported but absent
+  from git, so the branch had never built and its CI failed on Build, Test and
+  Lint. Recovered from the remote worktree where it sat untracked.
+- **Fork bomb.** `ptyruntime.holderCmd()` fell back to `os.Executable()`, and
+  the server tests used the production `NewManager()`, which never sets
+  `HolderCmd`. Under `go test` that is the *test binary*, and a Go test binary
+  ignores unknown positional args — so re-execing it as `<binary> pty hold <id>`
+  silently re-ran the whole suite, which created more sessions, which forked
+  more suites. Exponential, not a leak: it reached ~2000 resident processes and
+  OOM-killed the dev box. `holderCmd()` now panics under `testing.Testing()`
+  instead of defaulting, so the mistake cannot be made silently again.
+- **Socket-path limit, not a race.** Unix socket paths are OS-capped (~104
+  bytes on macOS) and `t.TempDir()` embeds the test name under a long
+  `/var/folders/…` base, so the holder's `term.sock` went over the limit and
+  `listen` failed — making failures track *test-name length*. Short-path roots
+  fix it, and the same cause explains this repo's long-standing "internal/server
+  tests always fail on macOS".
+- **Silent startup failures.** The holder runs detached with stdio discarded and
+  writes `meta.json` *before* binding its socket, so the manager accepted the
+  session as started and any later failure surfaced only as an unexplained
+  `exited`. `ptyhold.Run` now records startup failures in the exit file, and
+  `Spawn` treats the *socket* as readiness rather than meta alone.
+- **Resize readback implemented.** Live resize applied a size that could never
+  be read back — nothing populated `SessionInfo.Size` and the contract had no
+  size field at all. `Meta.Size` now carries it, set at startup and on every
+  applied resize, surfaced by `ptyruntime.Get`.
+- Test holders no longer leak (they are detached, so a forgotten `Kill` left one
+  running for the whole run and starved the timing-sensitive tests), and the
+  spool-rotation test no longer depends on bash's unpredictable echo yield.
+
 ### Restart runs in the background; discovery failures can't fake an empty host ✅
 Live testing of the revive flow surfaced three problems at once:
 

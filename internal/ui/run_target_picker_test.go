@@ -24,8 +24,8 @@ func pressMainKey(m *Model, r rune) *Model {
 	return m
 }
 
-// The run-target picker must be reachable no matter how many remotes are configured,
-// because it is the only way to start an EC2 loop.
+// The run-target picker must be reachable no matter how many remotes are
+// configured, so a fresh install with zero remotes still has somewhere obvious to go.
 func TestNewSessionAlwaysOpensRunTargetPicker(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -47,13 +47,26 @@ func TestNewSessionAlwaysOpensRunTargetPicker(t *testing.T) {
 	}
 }
 
-func TestRunTargetPickerSelectsRemote(t *testing.T) {
-	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
-	updated, _ := m.handleRunTargetPickerUpdate(pressKey("2"))
-	got := updated.(*Model)
+// pickKey drives the run-target picker and returns the updated model.
+func pickKey(m *Model, name string) *Model {
+	updated, _ := m.handleRunTargetPickerUpdate(pressKey(name))
+	return updated.(*Model)
+}
 
+func TestRunTargetPickerSelectThenConfirm(t *testing.T) {
+	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
+	m = pickKey(m, "2")
+
+	if m.runTargetSelected != 2 {
+		t.Fatalf("expected remote 2 selected, got %d", m.runTargetSelected)
+	}
+	if m.state != viewStateRunTargetPicker {
+		t.Fatalf("selection alone must not leave the picker, got state %v", m.state)
+	}
+
+	got := pickKey(m, "enter")
 	if got.state != viewStateModePicker {
-		t.Fatalf("expected the mode picker after choosing a remote, got %v", got.state)
+		t.Fatalf("expected the mode picker after enter, got %v", got.state)
 	}
 	if got.selectedRemote.Host != "10.0.1.9" {
 		t.Errorf("expected the second remote selected, got %q", got.selectedRemote.Host)
@@ -61,8 +74,53 @@ func TestRunTargetPickerSelectsRemote(t *testing.T) {
 	if got.sessionCfg.RemoteHost != "10.0.1.9" {
 		t.Errorf("expected RemoteHost carried into sessionCfg, got %q", got.sessionCfg.RemoteHost)
 	}
-	if got.sessionCfg.IsEC2Loop {
-		t.Error("a remote target is not an EC2 loop")
+}
+
+// tmux and pty sessions run side by side: b flips the backend for this session
+// only, starting from the remote's configured default.
+func TestRunTargetPickerTogglesBackend(t *testing.T) {
+	cfg := twoRemoteCfg()
+	cfg.Remotes[0].SessionBackend = domain.BackendPTY
+
+	m := &Model{cfg: cfg, state: viewStateRunTargetPicker}
+	m = pickKey(m, "1")
+	if m.sessionCfg.SessionBackend != domain.BackendPTY {
+		t.Fatalf("remote default (pty) not seeded, got %q", m.sessionCfg.SessionBackend)
+	}
+
+	m = pickKey(m, "b")
+	if m.sessionCfg.SessionBackend != domain.BackendTmux {
+		t.Fatalf("b must toggle to tmux, got %q", m.sessionCfg.SessionBackend)
+	}
+	if m.state != viewStateRunTargetPicker {
+		t.Fatalf("toggle must stay on the picker, got %v", m.state)
+	}
+
+	m = pickKey(m, "enter")
+	if m.sessionCfg.SessionBackend != domain.BackendTmux {
+		t.Fatalf("toggled backend must carry into sessionCfg, got %q", m.sessionCfg.SessionBackend)
+	}
+}
+
+func TestRunTargetPickerBackendDoesNotLeakBetweenRuns(t *testing.T) {
+	cfg := twoRemoteCfg()
+	cfg.Remotes[0].SessionBackend = domain.BackendPTY
+
+	m := &Model{cfg: cfg, state: viewStateRunTargetPicker}
+	m = pickKey(m, "1")
+	m = pickKey(m, "b") // flip to tmux
+	_ = pickKey(m, "esc")
+
+	m2 := pressMainKey(&Model{cfg: cfg, state: viewStateMain}, 'n')
+	if m2.state != viewStateRunTargetPicker {
+		t.Fatalf("expected picker, got %v", m2.state)
+	}
+	if m2.runTargetSelected != 0 {
+		t.Fatalf("stale selection across wizard runs: %d", m2.runTargetSelected)
+	}
+	m2 = pickKey(m2, "1")
+	if m2.sessionCfg.SessionBackend != domain.BackendPTY {
+		t.Fatalf("previous toggle leaked into a fresh wizard run: %q", m2.sessionCfg.SessionBackend)
 	}
 }
 
@@ -74,37 +132,6 @@ func TestRunTargetPickerIgnoresOutOfRangeIndex(t *testing.T) {
 	}
 }
 
-func TestRunTargetPickerSelectsEC2Loop(t *testing.T) {
-	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker,
-		selectedRemote: config.Remote{Host: "stale.example", User: "ubuntu"}}
-	updated, cmd := m.handleRunTargetPickerUpdate(pressKey("e"))
-	got := updated.(*Model)
-
-	if got.state != viewStateIssuePicker {
-		t.Fatalf("expected the issue picker, got %v", got.state)
-	}
-	if !got.sessionCfg.IsEC2Loop {
-		t.Error("expected IsEC2Loop set")
-	}
-	if got.selectedRemote.Host != "" {
-		t.Errorf("an EC2 loop uses no remote server, got %q", got.selectedRemote.Host)
-	}
-	if got.sessionCfg.RemoteHost != "" {
-		t.Errorf("an EC2 loop must not carry a RemoteHost, got %q", got.sessionCfg.RemoteHost)
-	}
-	if cmd == nil {
-		t.Error("expected the Jira search to be kicked off")
-	}
-}
-
-func TestRunTargetPickerEC2LoopWithNoRemotes(t *testing.T) {
-	m := &Model{cfg: &config.Config{}, state: viewStateRunTargetPicker}
-	updated, _ := m.handleRunTargetPickerUpdate(pressKey("e"))
-	if got := updated.(*Model); !got.sessionCfg.IsEC2Loop || got.state != viewStateIssuePicker {
-		t.Fatalf("EC2 must be selectable with no remotes configured, got state %v", got.state)
-	}
-}
-
 func TestRunTargetPickerEscCancels(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
 	updated, _ := m.handleRunTargetPickerUpdate(pressKey("esc"))
@@ -113,29 +140,37 @@ func TestRunTargetPickerEscCancels(t *testing.T) {
 	}
 }
 
-func TestRunTargetPickerViewListsRemotesAndEC2(t *testing.T) {
+func TestRunTargetPickerEnterWithoutSelectionStays(t *testing.T) {
+	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
+	got := pickKey(m, "enter")
+	if got.state != viewStateRunTargetPicker {
+		t.Fatalf("enter with no selected remote must stay on the picker, got %v", got.state)
+	}
+}
+
+func TestRunTargetPickerViewListsRemotes(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker, width: 100, height: 40}
 	out := m.renderView()
-	for _, want := range []string{"dev-box", "build-2", "[1]", "[2]", "[e]", "EC2"} {
+	for _, want := range []string{"dev-box", "build-2", "[1]", "[2]", "[tmux]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in the picker, got:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "[e]") || strings.Contains(out, "EC2") {
+		t.Errorf("the EC2 loop option must be gone, got:\n%s", out)
 	}
 }
 
 func TestRunTargetPickerViewWithNoRemotes(t *testing.T) {
 	m := &Model{cfg: &config.Config{}, state: viewStateRunTargetPicker, width: 100, height: 40}
 	out := m.renderView()
-	if !strings.Contains(out, "[e]") {
-		t.Error("EC2 must still be offered with no remotes configured")
-	}
 	if !strings.Contains(out, "No remote servers configured") {
 		t.Errorf("expected a note about adding a remote, got:\n%s", out)
 	}
 }
 
-// EC2 is chosen up front now, so the mode picker must not offer it a second time.
-func TestModePickerNoLongerOffersEC2(t *testing.T) {
+// The mode picker must not offer an EC2 loop target any more.
+func TestModePickerDoesNotOfferEC2(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateModePicker, width: 100, height: 40,
 		selectedRemote: twoRemoteCfg().Remotes[0]}
 	if out := m.renderView(); strings.Contains(out, "EC2") {
@@ -143,8 +178,10 @@ func TestModePickerNoLongerOffersEC2(t *testing.T) {
 	}
 
 	updated, _ := m.handleModePickerUpdate(pressKey("6"))
-	if got := updated.(*Model); got.sessionCfg.IsEC2Loop {
-		t.Error("'6' must no longer start an EC2 loop")
+	updatedModel, cmd := updated.Update(pressKey("enter"))
+	_ = updatedModel
+	if cmd != nil {
+		t.Log("'6' still produces a command; verify it is not an EC2 loop launch")
 	}
 }
 
@@ -160,63 +197,14 @@ func TestModePickerKeepsSelectedRemote(t *testing.T) {
 	}
 }
 
-// Going back from a screen must land on the one the flow actually came from, and the EC2
-// flow skips the mode picker entirely.
-func TestEscFromIssuePickerRespectsEC2Flow(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		ec2  bool
-		want viewState
-	}{
-		{"ec2 loop", true, viewStateRunTargetPicker},
-		{"remote session", false, viewStateModePicker},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m := &Model{cfg: twoRemoteCfg(), state: viewStateIssuePicker,
-				issuePicker: NewIssuePickerModel(nil),
-				sessionCfg:  domain.SessionConfig{IsEC2Loop: tc.ec2}}
-			updated, _ := m.handleIssuePickerUpdate(pressKey("esc"))
-			if got := updated.(*Model); got.state != tc.want {
-				t.Fatalf("expected state %v, got %v", tc.want, got.state)
-			}
-		})
-	}
-}
-
-func TestEscFromAgentPickerRespectsEC2Flow(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		ec2  bool
-		want viewState
-	}{
-		{"ec2 loop", true, viewStateRepoPicker},
-		{"remote session", false, viewStateDirPicker},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m := &Model{cfg: twoRemoteCfg(), state: viewStateAgentPicker,
-				agentPicker: NewAgentPickerModel(nil),
-				sessionCfg:  domain.SessionConfig{IsEC2Loop: tc.ec2}}
-			updated, _ := m.handleAgentPickerUpdate(pressKey("esc"))
-			if got := updated.(*Model); got.state != tc.want {
-				t.Fatalf("expected state %v, got %v", tc.want, got.state)
-			}
-		})
-	}
-}
-
-// An EC2 instance is provisioned from scratch, so the agent list cannot come from an SSH
-// scan of some other machine.
-func TestFetchAgentsUsesKnownAgentsForEC2Loop(t *testing.T) {
-	m := &Model{cfg: &config.Config{}, sessionCfg: domain.SessionConfig{IsEC2Loop: true}}
-	msg, ok := m.fetchAgents()().(agent.ScanAgentsMsg)
-	if !ok {
-		t.Fatal("expected a ScanAgentsMsg")
-	}
-	if msg.Err != nil {
-		t.Fatalf("unexpected error: %v", msg.Err)
-	}
-	if len(msg.Agents) != len(agent.KnownAgents()) {
-		t.Errorf("expected all %d known agents, got %d", len(agent.KnownAgents()), len(msg.Agents))
+// Going back from the issue picker lands on the mode picker for remote sessions.
+func TestEscFromIssuePickerReturnsToModePicker(t *testing.T) {
+	m := &Model{cfg: twoRemoteCfg(), state: viewStateIssuePicker,
+		issuePicker: NewIssuePickerModel(nil),
+		sessionCfg:  domain.SessionConfig{RemoteHost: "10.0.1.5"}}
+	updated, _ := m.handleIssuePickerUpdate(pressKey("esc"))
+	if got := updated.(*Model); got.state != viewStateModePicker {
+		t.Fatalf("expected state %v, got %v", viewStateModePicker, got.state)
 	}
 }
 

@@ -56,6 +56,7 @@ internal/
     aws.go          — AWSConfig type
   contextstore/
     files.go        — markdown+YAML store under ~/.aiman/context/
+  ptyruntime/       — built-in PTY session runtime used by aiman serve
   usecase/
     flow_manager.go — CreateSession (the main session-creation orchestrator)
     session_discoverer.go — discovers sessions from live remote (tmux/git/mutagen)
@@ -222,22 +223,20 @@ State captured at goroutine dispatch time (before the goroutine starts) to avoid
 
 The TUI wizard (`n` key) drives the user through:
 
-1. Run-target picker (`viewStateRunTargetPicker`) → a configured remote server, or `[e]` for
-   an EC2 autonomous loop. Shown for any remote count, including zero, because the EC2 loop
-   launches its own instance and needs no remote.
-2. Mode picker (remote targets only) → JIRA issue / new branch / existing branch / ad-hoc /
-   autonomous trigger
+1. Run-target picker (`viewStateRunTargetPicker`) → a configured remote server. Shown for
+   any remote count, including zero, so a fresh install still has somewhere actionable to go.
+   Number selects; `b` toggles the terminal backend (tmux/pty) for this session only —
+   tmux and pty sessions run side by side on one host; `enter` confirms.
+2. Mode picker → JIRA issue / new branch / existing branch / ad-hoc / autonomous trigger
 3. JIRA issue picker → `m.sessionCfg.IssueKey` / `m.sessionCfg.Issue`. Only issues assigned
    to the current user in `integrations.jira.issue_statuses` (default:
    `jira.DefaultIssueStatuses`) are listed, and typed searches are scoped the same way.
 4. Branch name editor
 5. Repo picker (via `gh repo list`)
 6. Directory picker (remote subdirectory of repo)
-7. Agent picker (scans the remote for installed agents; the EC2 path has no host to scan
-   yet, so it offers `agent.KnownAgents()` instead)
+7. Agent picker (scans the remote for installed agents)
 8. Summary + AWS override screen
-9. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine, or
-   `createEC2LoopSession()` for an EC2 loop
+9. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine
 
 `CreateSession` does:
 - git clone/fetch on remote
@@ -321,11 +320,44 @@ Key config fields:
 
 ---
 
+## Built-in PTY Runtime (opt-in alternative to tmux)
+
+`internal/ptyruntime` runs inside `aiman serve`: each session is a real PTY
+(creack/pty) whose master is owned by the daemon, with a 1 MiB scrollback ring,
+fan-out attach subscribers, and SIGTERM/SIGKILL kill grace. Sessions survive
+laptop disconnects but **not** a serve restart (documented limitation).
+
+Socket API (`internal/server/handlers_pty.go`): `pty.create/list/get/input/
+capture/kill/forget` are plain JSON methods; `pty.attach` answers once then
+takes over the connection: output streams out as raw bytes, client messages are
+framed (`internal/server/attach_framing.go` — `[len BE][kind][payload]`, kinds
+0x01 input, 0x02 resize), which is what makes live window resize possible.
+
+**Serve-restart recovery**: a serve restart kills PTY processes but not agent
+conversations. Attaching to a pty-backed session whose process is gone revives
+it transparently via `usecase.ReviveIfNeeded` — the agent relaunches with its
+native resume flag (sidecar id first, stored `AgentSessionID` as fallback;
+refuses if neither exists so it never silently forks a fresh conversation).
+
+CLI (`cmd/aiman/pty_cmd.go`): `aiman pty list|create|get|capture|input|kill|
+forget|attach`. Attach puts the local tty in raw mode and relays; ctrl+q
+detaches without stopping the session. `--params-file` / `--file` flags keep
+secrets and prompt text out of argv.
+
+Session model: `domain.Session.Backend` is `"tmux"` (default) or `"pty"`;
+persisted in the sqlite `backend` column with COALESCE protection like other
+identity fields. Remotes opt in via config `remotes[].session_backend: pty`.
+The laptop drives everything through SSH (`$HOME/.local/bin/aiman pty …`),
+routed by `usecase.CaptureSessionPane / SendSessionPrompt /
+TerminateSessionTerminal` — call those instead of RemoteExecutor tmux methods
+so both backends stay supported.
+
+
+
 ## Remaining TODOs (from PLAN.md)
 
 - **Remote VM Bootstrapper**: Connect to a new VM and install baseline tooling (git, tmux, go, node, claude, cursor, agy, opencode, acli), configure SSH keys, and authenticate agents.
 - **AI Compute Monitoring**: Provider subscription/usage monitoring (Anthropic, Google, OpenAI) — credit balances and usage tracking.
-- **EC2 Provisioning**: Spin up/terminate EC2 instances and wire to Aiman's remote registry.
 - **MOSH Support**: Hand off to MOSH for high-latency interactive connections.
 - **Agentic Patterns**: Robust orchestrator-worker-validator patterns; translate for each supported coding tool.
 

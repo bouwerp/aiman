@@ -84,6 +84,23 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		addSession(session)
 	}
 
+	// 2b. Scan built-in-PTY sessions hosted by aiman serve on this remote.
+	// These carry the aiman session id directly, so no env archaeology is needed.
+	for _, rec := range ScanPTYSessions(ctx, d.remoteExecutor) {
+		if rec.ID == "" || rec.Status != "running" {
+			continue
+		}
+		addSession(domain.Session{
+			ID:               strings.TrimSpace(rec.ID),
+			TmuxSession:      rec.Name,
+			Backend:          domain.BackendPTY,
+			RemoteHost:       host,
+			WorkingDirectory: rec.Dir,
+			Status:           domain.SessionStatusActive,
+			CreatedAt:        time.Now(),
+		})
+	}
+
 	// 3. Scan for orphaned worktrees. gatherWorktreeRecords resolves each
 	// worktree's liveness and aiman id on the remote, so the whole sweep costs
 	// one round trip when the executor supports batch discovery. A failed

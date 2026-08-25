@@ -6,7 +6,7 @@
 
 Aiman automates the entire development workflow:
 
-1. **Choose Where It Runs** — A configured remote server, or an on-demand EC2 autonomous loop
+1. **Choose Where It Runs** — A configured remote server from your registry
 2. **Select a JIRA Issue** — Your issues in the statuses you actually work in
 3. **Generate Branch Name** — Auto-creates git-compatible branch names
 4. **Pick a Repository** — Browse your GitHub repos
@@ -50,6 +50,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **SSH Multiplexing**: High-performance connections with ControlMaster
 - **Mutagen Sync**: Real-time file sync between local and remote, excluding dependency and build directories by default so a new session starts syncing in seconds rather than minutes
 - **Tmux Integration**: Native tmux session management
+- **Built-in PTY runtime (opt-in)**: Host sessions in `aiman serve`'s own PTY runtime instead of tmux, per remote or per session. Sessions survive a serve restart and are re-adopted; see [Session backends](#session-backends)
 
 ### AWS Credential Delegation
 - **Shared AWS credential sync**: Automatically syncs your local `~/.aws` configuration to the remote
@@ -218,8 +219,7 @@ aiman
 ### Creating a New Session
 
 1. Press `n` on the dashboard
-2. **Choose Where It Runs**: A numbered remote server, or `[e]` for an EC2 autonomous loop
-   (see below). Offered whatever your remote count, since an EC2 loop needs no remote.
+2. **Choose Where It Runs**: A numbered remote server from your registry.
 3. **Choose How to Start**: From a JIRA issue, a new branch, an existing branch, ad-hoc, or
    an autonomous trigger
 4. **Select JIRA Issue**: Type to filter your issues in real-time. The list holds issues
@@ -248,22 +248,6 @@ Skip the JIRA/branch/repo flow and jump straight to agent selection:
 Ad-hoc sessions still get their own tmux session, mutagen sync, and AWS credentials.
 
 **Faster path:** `N` on the dashboard. It uses the active (or filtered) remote, skips JIRA/branch/repo, opens the agent picker, and names the session `q1`, `q2`, … in group `quick`. Rename afterwards with `e`.
-
-### Starting an EC2 Autonomous Loop
-
-An EC2 loop launches its own on-demand instance, provisions it, runs an agent
-autonomously against a task, and self-destructs — so it needs no remote server of your own:
-
-1. Press `n` on the dashboard
-2. Press `e` on the run-target screen
-3. **Select JIRA Issue**, **Confirm Branch Name**, **Select Repository** as usual
-4. **Agent Selection**: every agent Aiman can install is offered, since the instance does
-   not exist yet and there is nothing to scan
-5. **Summary**: review and confirm
-
-Instance type, region, AWS profile, subnet, security group, and key pair come from
-**EC2 Loop Settings** in the Admin Menu (`m`). The same run is available headless via
-`aiman ec2-loop --repo … --task …`.
 
 ### Terminating a Session
 
@@ -323,6 +307,41 @@ invisible there by design — use **Menu → Revive Worktree** to find and resum
 
 
 Press `Ctrl+Y` on a selected session to recreate its mutagen sync binding using that session's current remote agent working directory and the canonical local path `~/.aiman/work/<session-name>`.
+
+### Session backends
+
+Every session is hosted by a terminal runtime. `tmux` is the default and needs no
+configuration. The alternative is aiman's own PTY runtime, served by `aiman serve` on
+the remote — useful where tmux isn't available or wanted.
+
+Opt in per remote in `~/.aiman/config.yaml`:
+
+```yaml
+remotes:
+  - host: devbox
+    user: code
+    root: /home/code/repos
+    session_backend: pty      # "tmux" (default) or "pty"
+```
+
+A remote configured this way offers the backend as a choice in the run-target step of
+the new-session wizard, so individual sessions can still opt out.
+
+PTY sessions are owned by detached *holder* processes rather than by `aiman serve`
+itself, so they survive a serve restart or crash and are re-adopted when it comes
+back — the same guarantee tmux gives. Inspect and drive them directly with:
+
+```bash
+aiman pty list
+aiman pty get <id>
+aiman pty attach <id>     # interactive; detach with ctrl+q, which leaves it running
+aiman pty kill <id>
+```
+
+`aiman pty hold` is the holder itself and is not meant to be run by hand.
+
+Requires a Unix remote: the runtime uses `setsid` and `SIGWINCH`, so the Windows build
+omits it. Use the tmux backend there.
 
 ### Administrative Menu
 

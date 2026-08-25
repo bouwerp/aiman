@@ -23,7 +23,6 @@ type Config struct {
 	Features      FeatureFlags             `yaml:"features,omitempty"`
 	Skills        SkillsConfig             `yaml:"skills,omitempty"`
 	AI            AIConfig                 `yaml:"ai,omitempty"`
-	EC2Loop       EC2LoopConfig            `yaml:"ec2_loop,omitempty"`
 	AWS           AWSDefaults              `yaml:"aws,omitempty"`
 	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
 	Sync          SyncConfig               `yaml:"sync,omitempty"`
@@ -116,16 +115,6 @@ func (c *Config) SyncIgnorePatterns() []string {
 	return c.Sync.Ignore
 }
 
-// EC2LoopConfig configures the default settings for launching EC2 autonomous loops.
-type EC2LoopConfig struct {
-	DefaultProfile       string `yaml:"default_profile,omitempty"`
-	DefaultRegion        string `yaml:"default_region,omitempty"`
-	DefaultInstanceType  string `yaml:"default_instance_type,omitempty"`
-	DefaultSubnetID      string `yaml:"default_subnet_id,omitempty"`
-	DefaultSecurityGroup string `yaml:"default_security_group,omitempty"`
-	DefaultKeyName       string `yaml:"default_key_name,omitempty"`
-}
-
 // AIConfig controls the local SLM intelligence features powered by Ollama.
 type AIConfig struct {
 	// Enabled turns on AI-powered features. When false, all intelligence calls
@@ -199,6 +188,9 @@ type Remote struct {
 	AWSDefaultProfile string `yaml:"aws_default_profile,omitempty"`
 	// AWSDefaultRegion overrides the global aws.default_region for this remote.
 	AWSDefaultRegion string `yaml:"aws_default_region,omitempty"`
+	// SessionBackend selects how new sessions host their terminal on this
+	// remote: "tmux" (default) or "pty" (aiman serve's built-in PTY runtime).
+	SessionBackend string `yaml:"session_backend,omitempty"`
 }
 
 // AWSDelegation is stored in aiman config; role_arn on the remote is derived from

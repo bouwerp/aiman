@@ -24,14 +24,14 @@ func TestSessionRenameLeavesBranchWorktreeAndTmux(t *testing.T) {
 	if err := repo.Save(ctx, orig); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = New(ln, repo, nil, nil, nil, "t").Serve(cctx) }()
+	go func() { _ = New(ln, repo, nil, nil, nil, nil, "t").Serve(cctx) }()
 
 	resp, err := Call(SocketPath(dir), "session.rename", map[string]any{"id": "q1", "name": "spike"})
 	if err != nil {

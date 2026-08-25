@@ -32,7 +32,6 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/ai"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
-	"github.com/bouwerp/aiman/internal/infra/ec2"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/bouwerp/aiman/internal/infra/mutagen"
@@ -140,7 +139,6 @@ const (
 	viewStateDirPicker
 	viewStateAgentPicker
 	viewStateSummary
-	viewStateEC2Settings
 	viewStateLoading
 	viewStateTerminateConfirm
 	viewStateWorktreeExists
@@ -162,7 +160,7 @@ const (
 	viewStateSecretsSetup    // manage global secrets
 	viewStateAWSCredentials  // manage AWS credential status and renewal
 	viewStateError           // generic error dialog (press any key to dismiss)
-	viewStateRunTargetPicker // pick where a new session runs: a remote server or an EC2 loop
+	viewStateRunTargetPicker // pick which configured remote a new session runs on
 	viewStateQuitConfirm     // confirm before exiting
 	viewStateAutonomousTriggerPicker
 	viewStateAutonomousLabelsInput
@@ -368,7 +366,6 @@ type Model struct {
 	revive               ReviveWorktreeModel
 	revivePickCandidates []string // set when a revive-list selection has 2+ agent candidates, for viewStateReviveAgentPick
 	picker               RepoPickerModel
-	ec2Setup             EC2SetupModel
 	issuePicker          IssuePickerModel
 	branchInput          BranchInputModel
 	genericInput         TextInputModel
@@ -405,6 +402,7 @@ type Model struct {
 	firstLoad              map[string]bool
 	busySince              map[string]time.Time // when each session entered "busy" state
 	selectedRemote         config.Remote        // remote chosen for the current new-session wizard
+	runTargetSelected      int                  // 1-based index into cfg.Remotes while the run-target picker is open; 0 = none
 	remoteFilter           string               // "" = all remotes, otherwise a Remote.Host to filter by
 	allSessions            []domain.Session     // unfiltered master session list
 	collapsedGroups        map[string]bool      // groupCollapseKey → hidden children
@@ -759,7 +757,6 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
 		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
 		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
-		menuItem{title: "EC2 Loop Settings", desc: "Configure default settings for autonomous EC2 loops", action: viewStateEC2Settings},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 		menuItem{title: "Scheduled Prompts", desc: "Manage periodic cron-scheduled prompt injections", action: viewStateScheduledPrompts},
 		menuItem{title: "Revive Worktree", desc: "Find abandoned worktrees under a remote's repo root and resume the agent that worked there", action: viewStateReviveRemotePicker},
@@ -1082,7 +1079,7 @@ func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		out, err := mgr.CaptureTmuxPane(ctx, session.TmuxSession)
+		out, err := usecase.CaptureSessionPane(ctx, mgr, session)
 		return tmuxOutputMsg{
 			session: session.TmuxSession,
 			output:  out,
@@ -1100,7 +1097,7 @@ func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, 
 			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		pane, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		pane, err := usecase.CaptureSessionPane(context.Background(), mgr, session)
 		if err != nil {
 			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("capture pane: %w", err)}
 		}
@@ -1168,7 +1165,7 @@ func loadArchivePreviewCmd(cfg *config.Config, snapMgr *usecase.SnapshotManager,
 		func() tea.Msg {
 			remote, _ := resolveRemote(cfg, session)
 			sshMgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-			rawPane, err := sshMgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+			rawPane, err := usecase.CaptureSessionPane(context.Background(), sshMgr, session)
 			if err != nil {
 				return archiveStepErrMsg{idx: 1, err: fmt.Errorf("capture pane: %w", err)}
 			}
@@ -1272,7 +1269,7 @@ func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
 			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		out, err := mgr.CaptureTmuxPane(context.Background(), session.TmuxSession)
+		out, err := usecase.CaptureSessionPane(context.Background(), mgr, session)
 		if err != nil {
 			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
 		}
@@ -1907,13 +1904,6 @@ func (m *Model) sendStatusFor(placeholderID, msg string) {
 
 func (m *Model) fetchAgents() tea.Cmd {
 	remote := m.selectedRemote
-	// An EC2 loop provisions a fresh instance, so there is no host to scan: offer every
-	// agent aiman can install rather than whatever happens to be on another machine.
-	if m.sessionCfg.IsEC2Loop {
-		return func() tea.Msg {
-			return agent.ScanAgentsMsg{Agents: agent.KnownAgents()}
-		}
-	}
 	return func() tea.Msg {
 		if remote.Host == "" {
 			return agent.ScanAgentsMsg{Err: fmt.Errorf("no remote selected")}
@@ -1936,6 +1926,9 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			Root: remote.Root,
 		})
 		sessionCfg.RemoteHost = remote.Host
+		// Opt-in PTY backend: remotes configured with session_backend: pty hand
+		// their agents to the serve daemon's built-in runtime instead of tmux.
+		sessionCfg.SessionBackend = remote.SessionBackend
 	}
 
 	return func() tea.Msg {
@@ -2284,7 +2277,7 @@ func (m *Model) terminateDiscardChanges(ctx context.Context, s domain.Session) e
 }
 
 func (m *Model) terminateKillTmux(ctx context.Context, s domain.Session) error {
-	if s.TmuxSession == "" {
+	if !s.IsPTY() && s.TmuxSession == "" {
 		return nil
 	}
 	remote, ok := resolveRemote(m.cfg, s)
@@ -2292,7 +2285,7 @@ func (m *Model) terminateKillTmux(ctx context.Context, s domain.Session) error {
 		return nil
 	}
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-	_, err := mgr.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q", s.TmuxSession))
+	err := usecase.TerminateSessionTerminal(ctx, mgr, s)
 	return err
 }
 
@@ -2822,10 +2815,6 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		model, cmd := m.handleSecretsSetupUpdate(msg)
 		return model, cmd, true
 
-	case viewStateEC2Settings:
-		model, cmd := m.handleEC2SetupUpdate(msg)
-		return model, cmd, true
-
 	case viewStateAWSCredentials:
 		model, cmd := m.handleAWSCredentialsUpdate(msg)
 		return model, cmd, true
@@ -3239,9 +3228,6 @@ func (m *Model) renderView() string {
 
 	case viewStateSecretsSetup:
 		return m.secretsSetup.viewString()
-
-	case viewStateEC2Settings:
-		return docStyle.Render(m.ec2Setup.viewString())
 
 	case viewStateAWSCredentials:
 		return m.awsCredentials.viewString()
@@ -3682,13 +3668,30 @@ func (m *Model) renderRunTargetPicker() string {
 		if label == "" {
 			label = r.Host
 		}
-		b.WriteString(fmt.Sprintf("  %s  %s (%s@%s)\n", activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host))
+		marker := " "
+		if m.runTargetSelected == i+1 {
+			marker = "*"
+		}
+		backend := "tmux"
+		if r.SessionBackend == domain.BackendPTY {
+			backend = "pty"
+		}
+		b.WriteString(fmt.Sprintf(" %s %s  %s (%s@%s)  [%s]\n",
+			marker, activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host, backend))
 	}
 	if len(m.cfg.Remotes) == 0 {
-		b.WriteString(dim.Render("  No remote servers configured — add one in Admin Menu.") + "\n")
+		b.WriteString(dim.Render("  No remote servers configured \u2014 add one in Admin Menu.") + "\n")
 	}
-	b.WriteString("\n" + activeStyle.Render("  [e]") + "  EC2 Autonomous Loop — on-demand AWS instance\n")
-	b.WriteString("\n" + dim.Render("  esc: cancel"))
+	if m.runTargetSelected > 0 {
+		current, other := "pty", "tmux"
+		if m.sessionCfg.SessionBackend != domain.BackendPTY {
+			current, other = "tmux", "pty"
+		}
+		b.WriteString("\n" + activeStyle.Render(fmt.Sprintf("  backend for this session: %s", current)))
+		b.WriteString("\n" + dim.Render(fmt.Sprintf("  enter: continue   b: use %s for this session   esc: cancel", other)))
+	} else {
+		b.WriteString("\n" + dim.Render("  esc: cancel"))
+	}
 
 	dialog := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -4435,10 +4438,11 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 	if msg.String() == "n" {
-		// The run-target picker is shown for any remote count, including zero: it is the
-		// only way to reach the EC2 loop, which needs no remote server at all.
+		// The run-target picker is shown even with zero remotes so the user lands
+		// somewhere actionable instead of failing silently later.
 		m.sessionCfg = domain.SessionConfig{}
 		m.selectedRemote = config.Remote{}
+		m.runTargetSelected = 0
 		m.state = viewStateRunTargetPicker
 		return m, nil, true
 	}
@@ -4538,7 +4542,27 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 				return m, nil, true
 			}
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+			if s.IsPTY() {
+				// A serve restart on the remote kills PTY processes but not the
+				// conversations. Revive with the agent's native resume flag so
+				// attach picks the conversation back up.
+				reviveCtx, reviveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				revived, rerr := usecase.ReviveIfNeeded(reviveCtx, mgr, &s)
+				reviveCancel()
+				if rerr != nil {
+					m.lastError = fmt.Sprintf("Cannot attach: %v (use 's' to restart the session instead)", rerr)
+					m.state = viewStateVSCodeError
+					return m, nil, true
+				}
+				if revived {
+					m.log("revived pty session %s from agent resume", s.ID)
+					time.Sleep(2 * time.Second) // give the agent a moment to boot
+				}
+			}
 			c := mgr.AttachTmuxSession(s.TmuxSession)
+			if s.IsPTY() {
+				c = mgr.AttachPTYSession(s.ID)
+			}
 			m.loadingMsg = fmt.Sprintf("Connecting to session %s...", s.TmuxSession)
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
@@ -5061,11 +5085,6 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, m.secretsSetup.Init()
 				}
-				if i.action == viewStateEC2Settings {
-					m.ec2Setup = NewEC2SetupModel(m.cfg)
-					m.state = i.action
-					return m, m.ec2Setup.Init()
-				}
 				if i.action == viewStateAWSCredentials {
 					return m, m.enterAWSCredentials()
 				}
@@ -5548,16 +5567,6 @@ func (m *Model) handleSecretsSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *Model) handleEC2SetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyPressMsg); ok && keyMsg.String() == "esc" {
-		m.state = viewStateMenu
-		return m, nil
-	}
-	var cmd tea.Cmd
-	m.ec2Setup, cmd = m.ec2Setup.Update(msg)
-	return m, cmd
-}
-
 func (m *Model) handleScheduledPromptsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		if m.scheduledPrompts.mode == spModeList && keyMsg.String() == "esc" {
@@ -5611,34 +5620,43 @@ func (m *Model) handleAWSCredentialsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// handleRunTargetPickerUpdate handles the first screen of the new-session flow: where the
-// work should run. Numbered entries are configured remote servers; "e" is the EC2
-// autonomous loop, which launches its own instance and therefore needs no remote.
-func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+// handleRunTargetPickerUpdate handles the first screen of the new-session flow: which
+// configured remote server the work should run on.
+func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:unparam // Cmd stays nil by design: selection is pure state, no commands to fire
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
+			m.runTargetSelected = 0
 			m.state = viewStateMain
 			return m, nil
-		case "e", "E":
-			m.sessionCfg = domain.SessionConfig{IsEC2Loop: true}
-			// An EC2 loop provisions its own instance, so no remote is carried forward.
-			m.selectedRemote = config.Remote{}
-			m.issuePicker = NewIssuePickerModel(nil)
-			m.issuePicker.loading = true
-			m.issuePicker.SetSize(m.width, m.height)
-			m.state = viewStateIssuePicker
-			return m, m.searchJira("")
+		case "b", "B":
+			// tmux and pty sessions run side by side on one host; this picks the
+			// backend for the session being created only (the remote's config
+			// default is the starting point).
+			if m.sessionCfg.SessionBackend == domain.BackendPTY {
+				m.sessionCfg.SessionBackend = domain.BackendTmux
+			} else {
+				m.sessionCfg.SessionBackend = domain.BackendPTY
+			}
+			return m, nil
+		case "enter":
+			if m.runTargetSelected >= 1 && m.runTargetSelected <= len(m.cfg.Remotes) {
+				r := m.cfg.Remotes[m.runTargetSelected-1]
+				m.selectedRemote = r
+				m.sessionCfg.RemoteHost = r.Host
+				m.runTargetSelected = 0
+				m.state = viewStateModePicker
+			}
 		default:
 			idx := 0
 			if n, err := strconv.Atoi(km.String()); err == nil {
 				idx = n
 			}
 			if idx >= 1 && idx <= len(m.cfg.Remotes) {
-				r := m.cfg.Remotes[idx-1]
-				m.selectedRemote = r
-				m.sessionCfg.RemoteHost = r.Host
-				m.state = viewStateModePicker
+				m.runTargetSelected = idx
+				// Start from the remote's configured default each time a remote
+				// is picked so the toggle never leaks between wizard runs.
+				m.sessionCfg.SessionBackend = m.cfg.Remotes[idx-1].SessionBackend
 			}
 		}
 	}
@@ -5653,8 +5671,7 @@ func (m *Model) resetSessionCfg(cfg domain.SessionConfig) {
 }
 
 // handleModePickerUpdate handles the second screen of the new-session flow: what kind of
-// work to start on the chosen remote. The EC2 loop is not here — it is picked on the
-// run-target screen, since it runs somewhere else entirely.
+// work to start on the chosen remote.
 func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
@@ -5788,13 +5805,7 @@ func (m *Model) handleAutonomousConcurrencyInputUpdate(msg tea.Msg) (tea.Model, 
 func (m *Model) handleIssuePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.issuePicker.list.FilterState() != list.Filtering {
-			// An EC2 loop reaches the issue picker straight from the run-target screen,
-			// never via the mode picker.
-			if m.sessionCfg.IsEC2Loop {
-				m.state = viewStateRunTargetPicker
-			} else {
-				m.state = viewStateModePicker
-			}
+			m.state = viewStateModePicker
 			return m, nil
 		}
 	}
@@ -5934,13 +5945,6 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fetchBranches(*m.picker.selected)
 		}
 
-		if m.sessionCfg.IsEC2Loop {
-			m.loadingMsg = "Scanning available agents..."
-			m.loadingNext = viewStateAgentPicker
-			m.state = viewStateLoading
-			return m, m.fetchAgents()
-		}
-
 		if m.sessionCfg.Mode == domain.SessionModeAutonomous {
 			m.sessionCfg.AutonomousConfig.GitHubRepo = m.sessionCfg.Repo.Name
 			// Skip directories for autonomous triggers, go straight to agent
@@ -6049,12 +6053,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = viewStateMain
 				return m, nil
 			}
-			// The EC2 flow skips the directory picker (issue → repo → agent), so going
-			// back has to land on the screen it actually came from.
-			if m.sessionCfg.IsEC2Loop {
-				m.state = viewStateRepoPicker
-				return m, nil
-			}
 			m.state = viewStateDirPicker
 			return m, nil
 		}
@@ -6092,11 +6090,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Pre-fill OpenRouter API key from local environment (user can override).
 		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
-		// An EC2 loop has no remote workspace to inspect — the instance does not exist yet.
-		if m.sessionCfg.IsEC2Loop {
-			m.state = viewStateSummary
-			return m, nil
-		}
 		if m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
 			m.loadingMsg = "Checking workspace..."
 			m.loadingNext = viewStateSummary
@@ -6129,10 +6122,6 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.sessionCfg.Mode == domain.SessionModeAutonomous {
 			return m, m.createAutonomousRule()
-		}
-
-		if m.sessionCfg.IsEC2Loop {
-			return m, m.createEC2LoopSession()
 		}
 
 		return m, m.startBackgroundCreate()
@@ -6178,93 +6167,6 @@ func (m *Model) ensureRemoteDaemon(ctx context.Context, sshMgr *ssh.Manager) err
 		return fmt.Errorf("failed to install aiman-trigger on remote: %w", err)
 	}
 	return nil
-}
-
-func (m *Model) createEC2LoopSession() tea.Cmd {
-	placeholderID := uuid.New().String()
-	placeholder := domain.Session{
-		ID:          placeholderID,
-		IssueKey:    m.sessionCfg.IssueKey,
-		RepoName:    m.sessionCfg.Repo.Name,
-		AgentName:   m.sessionCfg.Agent.Name,
-		Status:      domain.SessionStatusProvisioning,
-		Mode:        domain.SessionModeEC2Loop,
-		RemoteHost:  "aws-ec2", // Dummy host so it renders
-		TmuxSession: "EC2 Loop: " + m.sessionCfg.Branch,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-
-	m.allSessions = append(m.allSessions, placeholder)
-	m.applyRemoteFilter()
-	m.activeSession = placeholder.TmuxSession
-	m.state = viewStateMain
-
-	items := m.list.Items()
-	for i, it := range items {
-		if si, ok := it.(item); ok && si.session.ID == placeholder.ID {
-			m.list.Select(i)
-			break
-		}
-	}
-
-	return func() tea.Msg {
-		ctx := context.Background()
-		ec2Mgr := ec2.NewManager()
-		sshFactory := func(host, user, root string) domain.RemoteExecutor {
-			return ssh.NewManager(ssh.Config{
-				Host: host,
-				User: user,
-				Root: root,
-			})
-		}
-		runner := usecase.NewEC2LoopRunner(ec2Mgr, sshFactory)
-
-		envVars := make(map[string]string)
-		if gh := os.Getenv("GITHUB_TOKEN"); gh != "" {
-			envVars["GITHUB_TOKEN"] = gh
-		}
-		if anth := os.Getenv("ANTHROPIC_API_KEY"); anth != "" {
-			envVars["ANTHROPIC_API_KEY"] = anth
-		}
-		if oai := os.Getenv("OPENAI_API_KEY"); oai != "" {
-			envVars["OPENAI_API_KEY"] = oai
-		}
-
-		spec := domain.EC2LaunchSpec{
-			AWSProfile:      m.cfg.EC2Loop.DefaultProfile,
-			Region:          m.cfg.EC2Loop.DefaultRegion,
-			InstanceType:    m.cfg.EC2Loop.DefaultInstanceType,
-			SubnetID:        m.cfg.EC2Loop.DefaultSubnetID,
-			SecurityGroupID: m.cfg.EC2Loop.DefaultSecurityGroup,
-			KeyName:         m.cfg.EC2Loop.DefaultKeyName,
-			Repositories:    []string{m.sessionCfg.Repo.URL},
-			IssueKey:        m.sessionCfg.IssueKey,
-			Branch:          m.sessionCfg.Branch,
-			AgentName:       m.sessionCfg.Agent.Name,
-			TaskDescription: m.sessionCfg.InitialPrompt,
-			EnvironmentVars: envVars,
-			SelfDestruct:    true,
-			TimeoutMinutes:  60,
-		}
-
-		progressChan := make(chan usecase.EC2LoopProgress, 100)
-
-		go func() {
-			for p := range progressChan {
-				if m.Program != nil {
-					m.Program.Send(sessionCreateMsg{status: p.Message, placeholderID: placeholderID})
-				}
-			}
-		}()
-
-		_, err := runner.Run(ctx, spec, progressChan)
-		if err != nil {
-			return sessionCreateMsg{err: fmt.Errorf("ec2 loop failed: %w", err), placeholderID: placeholderID}
-		}
-
-		return sessionCreateMsg{session: placeholder, placeholderID: placeholderID}
-	}
 }
 
 func (m *Model) createAutonomousRule() tea.Cmd {
@@ -7473,7 +7375,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		m.sendStatusFor(placeholderID, "Capturing restart handoff...")
 		logf("step1: capturing restart handoff to %s", summaryPath)
 		summaryCtx, summaryCancel := context.WithTimeout(ctx, 90*time.Second)
-		summaryCreated, note := usecase.CaptureRestartSessionSummaryBestEffort(summaryCtx, mgr, s.TmuxSession, summaryPath)
+		summaryCreated, note := usecase.CaptureSessionHandoffBestEffort(summaryCtx, mgr, *s, summaryPath)
 		summaryCancel()
 		if note != "" {
 			logf("step1: %s", note)
@@ -7556,6 +7458,36 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		// option guards to avoid the remain-on-exit race.
 		m.sendStatusFor(placeholderID, fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
 		logf("step3: restarting agent")
+
+		if s.IsPTY() {
+			// Built-in PTY backend: replace the process by killing and
+			// re-creating the session inside the remote serve daemon.
+			if kerr := usecase.KillPTYSession(ctx, mgr, s.ID); kerr != nil {
+				logf("step3: pty kill (continuing): %v", kerr)
+			}
+			env := map[string]string{}
+			for k, v := range awsEnv {
+				env[k] = v
+			}
+			for _, secret := range sessionCfg.EnvSecrets {
+				env[secret.Key] = secret.Value
+			}
+			if err := usecase.CreatePTYSession(ctx, mgr, usecase.PTYSpec{
+				ID:      s.ID,
+				Name:    s.TmuxSession,
+				Dir:     workingDir,
+				Command: agentCmd,
+				Env:     env,
+			}); err != nil {
+				return sessionCreateMsg{err: fmt.Errorf("failed to restart PTY session: %w", err)}
+			}
+			usecase.DeliverInitialPromptPTY(ctx, mgr, s.ID, sendKeysPrompt)
+
+			if db != nil {
+				_ = db.Save(ctx, s)
+			}
+			return sessionCreateMsg{session: *s}
+		}
 		paneCmd := fmt.Sprintf("bash -l -c '%s'; exec bash -i", agentBootstrap)
 		restartCmd := fmt.Sprintf(
 			"if tmux has-session -t %q 2>/dev/null; then "+

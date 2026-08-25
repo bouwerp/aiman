@@ -21,6 +21,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/infra/skills"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
@@ -96,7 +97,9 @@ func runServe() error {
 	ensureAimanSkill(ctx, db)
 	ensureAgentHooks()
 	store := contextstore.NewFiles(contextstore.Root(dir))
-	srv := server.New(ln, db, localExec, flow, store, version)
+	ptyMgr := ptyruntime.NewManager()
+	defer ptyMgr.CloseAll()
+	srv := server.New(ln, db, localExec, flow, store, ptyMgr, version)
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
 }

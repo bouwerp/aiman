@@ -218,7 +218,7 @@ func (d *Daemon) monitorPanes(ctx context.Context) error {
 			}
 			executor := local.NewExecutor(remoteRoot)
 
-			out, err := executor.CaptureTmuxPane(ctx, s.TmuxSession)
+			out, err := CaptureSessionPane(ctx, executor, s)
 			if err != nil || out == "" {
 				continue
 			}

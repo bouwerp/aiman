@@ -157,14 +157,14 @@ func run() error {
 			}
 			return nil
 
-		case "ec2-loop":
-			return runEC2Loop(cfg, os.Args[2:])
 		case "clear-aws-profiles":
 			return runClearAWSProfiles(db, os.Args[2:])
 		case "serve":
 			return runServe()
 		case "session":
 			return runSession(os.Args[2:])
+		case "pty":
+			return runPTY(os.Args[2:])
 		case "context":
 			return runContext(os.Args[2:])
 		case "phone":
@@ -183,10 +183,10 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  downgrade [tag]  install the previous (or given) release\n")
 			fmt.Fprintf(os.Stderr, "  init             run the configuration setup wizard\n")
 			fmt.Fprintf(os.Stderr, "  repos            open the repository picker\n")
-			fmt.Fprintf(os.Stderr, "  ec2-loop         launch autonomous loop agent on an on-demand EC2 instance\n")
 			fmt.Fprintf(os.Stderr, "  clear-aws-profiles  clear legacy aiman-* AWS profile names from stored sessions\n")
 			fmt.Fprintf(os.Stderr, "  serve            agent API on this host (install remotes from TUI: m → Agent API → i)\n")
 			fmt.Fprintf(os.Stderr, "  session          list/get/create/prompt sessions (JSON; needs serve)\n")
+			fmt.Fprintf(os.Stderr, "  pty              manage built-in PTY sessions (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  context          ls/find/get/put/pack shared notes (JSON; files if serve is down)\n")
 			fmt.Fprintf(os.Stderr, "  phone            Tailscale + Termius setup for this host\n")
 			fmt.Fprintf(os.Stderr, "  --skill          print the agent skill\n")

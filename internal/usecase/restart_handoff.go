@@ -77,6 +77,23 @@ func CaptureRestartSessionSummaryBestEffort(ctx context.Context, remote domain.R
 	return created, ""
 }
 
+// CaptureSessionHandoffBestEffort captures a restart handoff for either
+// backend, giving the built-in PTY path the same "never block a restart"
+// guarantee the tmux path has: any error becomes a note for the caller to
+// log, and the restart proceeds without a handoff.
+func CaptureSessionHandoffBestEffort(ctx context.Context, remote domain.RemoteExecutor, session domain.Session, summaryPath string) (created bool, note string) {
+	var err error
+	if session.IsPTY() {
+		created, err = CaptureRestartSessionSummaryPTY(ctx, remote, session.ID, summaryPath)
+	} else {
+		created, err = CaptureRestartSessionSummary(ctx, remote, session.TmuxSession, summaryPath)
+	}
+	if err != nil {
+		return false, fmt.Sprintf("restart handoff not captured: %v", err)
+	}
+	return created, ""
+}
+
 func currentPaneCommand(ctx context.Context, remote domain.RemoteExecutor, tmuxSession string) (string, error) {
 	out, err := remote.Execute(ctx, fmt.Sprintf("tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true", tmuxSession))
 	if err != nil {
@@ -85,7 +102,7 @@ func currentPaneCommand(ctx context.Context, remote domain.RemoteExecutor, tmuxS
 	return strings.TrimSpace(out), nil
 }
 
-func waitForRemoteFile(ctx context.Context, remote domain.RemoteExecutor, path string, interval time.Duration) (bool, error) {
+func waitForRemoteFile(ctx context.Context, remote TerminalExecutor, path string, interval time.Duration) (bool, error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -106,7 +123,7 @@ func waitForRemoteFile(ctx context.Context, remote domain.RemoteExecutor, path s
 	}
 }
 
-func remoteFileExists(ctx context.Context, remote domain.RemoteExecutor, path string) (bool, error) {
+func remoteFileExists(ctx context.Context, remote TerminalExecutor, path string) (bool, error) {
 	out, err := remote.Execute(ctx, fmt.Sprintf("if [ -f %q ]; then printf 1; fi", path))
 	if err != nil {
 		return false, err
@@ -133,4 +150,47 @@ func restartSummaryPrompt(summaryPath, tempPath string) string {
 		"Before this session is restarted, write a concise markdown handoff to `%s`. Include completed work, files changed, current state, blockers, and the exact next steps for the next agent. Write to `%s` first, then rename it atomically to `%s` when complete. Do not print the summary in chat. When the file is fully written, respond only with SESSION_SUMMARY_SAVED.",
 		summaryPath, tempPath, summaryPath,
 	)
+}
+
+// CaptureRestartSessionSummaryPTY is the built-in-PTY variant of
+// CaptureRestartSessionSummary: it cannot ask tmux for the foreground command,
+// so an empty pane stands in for "already at a shell", and interrupt/prompt go
+// through `aiman pty input`.
+func CaptureRestartSessionSummaryPTY(ctx context.Context, remote TerminalExecutor, sessionID, summaryPath string) (bool, error) {
+	tempPath := summaryPath + ".tmp"
+	if _, err := remote.Execute(ctx, fmt.Sprintf("rm -f %q %q", summaryPath, tempPath)); err != nil {
+		return false, err
+	}
+
+	pane, err := CapturePTYPane(ctx, remote, sessionID, 40)
+	if err != nil || strings.TrimSpace(pane) == "" {
+		// No pane output at all: nothing live to hand off.
+		return false, nil
+	}
+
+	prompt := restartSummaryPrompt(summaryPath, tempPath)
+	promptPath := fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
+	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
+		return false, err
+	}
+	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
+		"sleep 1; aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --data '\\r'",
+		strings.TrimSpace(sessionID), promptPath, strings.TrimSpace(sessionID))); err != nil {
+		return false, err
+	}
+
+	written, err := waitForRemoteFile(ctx, remote, summaryPath, restartSummaryPollInterval)
+	if ctx.Err() != nil {
+		_, _ = remote.Execute(context.Background(), remoteAimanPreamble+fmt.Sprintf(
+			"aiman pty input %q --data '\\x03'", strings.TrimSpace(sessionID)))
+		return false, nil
+	}
+	if err != nil || !written {
+		return false, err
+	}
+	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
+		"aiman pty input %q --data '\\x03'", strings.TrimSpace(sessionID))); err != nil {
+		return true, err
+	}
+	return true, nil
 }

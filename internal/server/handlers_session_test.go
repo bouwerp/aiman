@@ -13,13 +13,13 @@ import (
 
 func startTestServer(t *testing.T, repo domain.SessionRepository) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	srv := New(ln, repo, nil, nil, nil, "test")
+	srv := New(ln, repo, nil, nil, nil, nil, "test")
 	go func() { _ = srv.Serve(ctx) }()
 	t.Cleanup(cancel)
 	return SocketPath(dir)
@@ -27,7 +27,7 @@ func startTestServer(t *testing.T, repo domain.SessionRepository) string {
 
 func testRepo(t *testing.T) domain.SessionRepository {
 	t.Helper()
-	repo, err := sqlite.NewRepository(filepath.Join(t.TempDir(), "aiman.db"))
+	repo, err := sqlite.NewRepository(filepath.Join(shortTempDir(t), "aiman.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,14 +211,14 @@ func TestSessionPromptBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &fakeRemote{pane: "Allow execution of `rm -rf build/`? [y/N]"}
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = New(ln, repo, remote, nil, nil, "t").Serve(cctx) }()
+	go func() { _ = New(ln, repo, remote, nil, nil, nil, "t").Serve(cctx) }()
 	sock := SocketPath(dir)
 
 	resp, err := Call(sock, "session.prompt", map[string]any{"id": "reviewer", "text": "yes"})
@@ -243,7 +243,7 @@ func TestSessionPromptBlocked(t *testing.T) {
 
 func TestSessionCreateQuickAndRename(t *testing.T) {
 	repo := testRepo(t)
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +251,7 @@ func TestSessionCreateQuickAndRename(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	creator := &fakeCreator{}
-	go func() { _ = New(ln, repo, nil, creator, nil, "t").Serve(ctx) }()
+	go func() { _ = New(ln, repo, nil, creator, nil, nil, "t").Serve(ctx) }()
 	sock := SocketPath(dir)
 
 	resp, err := Call(sock, "session.create", map[string]any{"quick": true, "agent": "claude"})
@@ -293,7 +293,7 @@ func TestSessionCreateQuickAndRename(t *testing.T) {
 }
 
 func TestCallServerNotRunning(t *testing.T) {
-	_, err := Call(filepath.Join(t.TempDir(), "aiman.sock"), "ping", nil)
+	_, err := Call(filepath.Join(shortTempDir(t), "aiman.sock"), "ping", nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}

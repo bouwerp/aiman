@@ -32,7 +32,6 @@ type SessionMode string
 const (
 	SessionModeInteractive SessionMode = "INTERACTIVE"
 	SessionModeAutonomous  SessionMode = "AUTONOMOUS"
-	SessionModeEC2Loop     SessionMode = "EC2_LOOP"
 )
 
 type AutonomousConfig struct {
@@ -63,6 +62,9 @@ type Session struct {
 	WorktreePath     string
 	WorkingDirectory string
 	TmuxSession      string
+	// Backend is the terminal runtime hosting the session: "tmux" (default)
+	// or "pty" (aiman serve's built-in PTY runtime).
+	Backend          string
 	MutagenSyncID    string
 	LocalPath        string
 	AgentName        string
@@ -219,9 +221,11 @@ type SessionConfig struct {
 	BaseBranch     string         // clone from this branch instead of the repository default branch
 	ReuseWorkspace bool           // bypass git worktree and execute directly in the main clone
 	AdHoc          bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
-	IsEC2Loop      bool           // if true, launches an ephemeral EC2 instance and loops instead of a standard session
 	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
 	RemoteHost     string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
+	// SessionBackend selects the terminal runtime for this session:
+	// "tmux" (default) or "pty" (aiman serve's built-in PTY runtime on the remote).
+	SessionBackend string
 	// PriorSnapshot is an optional snapshot from a previous session on the same branch/issue.
 	// When set, its summary and next steps are injected into the agent task file so the
 	// new session can continue from where the prior one left off.
@@ -261,3 +265,13 @@ type ScheduledPrompt struct {
 	CreatedAt  time.Time `json:"created_at"`
 	LastRunAt  time.Time `json:"last_run_at"`
 }
+
+// Session backend values. Empty means tmux for backwards compatibility with
+// rows written before the field existed.
+const (
+	BackendTmux = "tmux"
+	BackendPTY  = "pty"
+)
+
+// IsPTY reports whether this session runs under the built-in PTY runtime.
+func (s Session) IsPTY() bool { return s.Backend == BackendPTY }
