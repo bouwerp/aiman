@@ -4818,8 +4818,14 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 					if err := mgr.Connect(ctx); err != nil {
 						continue
 					}
-					discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
-					sessions, _ := discoverer.Discover(ctx, r.Host)
+					sessions, ok := usecase.DiscoverHostSessions(ctx, mgr, mutagen.NewEngine(), r.Host)
+					if !ok {
+						// See runDiscovery's identical guard (startup.go): a failed
+						// scan must not mark this host as scanned, or every DB
+						// session for it gets treated as confirmed-dead and
+						// disappears from the list until the next successful scan.
+						continue
+					}
 					allSessions = append(allSessions, sessions...)
 					scannedHosts[r.Host] = true
 				}
