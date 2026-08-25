@@ -3,12 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
@@ -418,6 +420,9 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		BaseBranch:    params.Base,
 		Agent:         &domain.Agent{Name: params.Agent, Command: params.Agent},
 		Repo:          domain.Repo{Name: params.Repo},
+	}
+	if caller, ok := resolveSession(existing, req.Caller); ok && strings.TrimSpace(caller.WorktreePath) != "" {
+		cfg.SSHManager = local.NewExecutor(filepath.Dir(caller.WorktreePath))
 	}
 	sess, err := s.create.CreateSession(ctx, cfg)
 	if err != nil {
