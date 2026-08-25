@@ -50,6 +50,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **SSH Multiplexing**: High-performance connections with ControlMaster
 - **Mutagen Sync**: Real-time file sync between local and remote, excluding dependency and build directories by default so a new session starts syncing in seconds rather than minutes
 - **Tmux Integration**: Native tmux session management
+- **Built-in PTY runtime (opt-in)**: Host sessions in `aiman serve`'s own PTY runtime instead of tmux, per remote or per session. Sessions survive a serve restart and are re-adopted; see [Session backends](#session-backends)
 
 ### AWS Credential Delegation
 - **Shared AWS credential sync**: Automatically syncs your local `~/.aws` configuration to the remote
@@ -306,6 +307,41 @@ invisible there by design — use **Menu → Revive Worktree** to find and resum
 
 
 Press `Ctrl+Y` on a selected session to recreate its mutagen sync binding using that session's current remote agent working directory and the canonical local path `~/.aiman/work/<session-name>`.
+
+### Session backends
+
+Every session is hosted by a terminal runtime. `tmux` is the default and needs no
+configuration. The alternative is aiman's own PTY runtime, served by `aiman serve` on
+the remote — useful where tmux isn't available or wanted.
+
+Opt in per remote in `~/.aiman/config.yaml`:
+
+```yaml
+remotes:
+  - host: devbox
+    user: code
+    root: /home/code/repos
+    session_backend: pty      # "tmux" (default) or "pty"
+```
+
+A remote configured this way offers the backend as a choice in the run-target step of
+the new-session wizard, so individual sessions can still opt out.
+
+PTY sessions are owned by detached *holder* processes rather than by `aiman serve`
+itself, so they survive a serve restart or crash and are re-adopted when it comes
+back — the same guarantee tmux gives. Inspect and drive them directly with:
+
+```bash
+aiman pty list
+aiman pty get <id>
+aiman pty attach <id>     # interactive; detach with ctrl+q, which leaves it running
+aiman pty kill <id>
+```
+
+`aiman pty hold` is the holder itself and is not meant to be run by hand.
+
+Requires a Unix remote: the runtime uses `setsid` and `SIGWINCH`, so the Windows build
+omits it. Use the tmux backend there.
 
 ### Administrative Menu
 
