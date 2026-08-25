@@ -170,6 +170,59 @@ func TestDiscoverLeavesAgentNameEmptyWithoutAVendorHint(t *testing.T) {
 	}
 }
 
+// OrphanWorktreeSessions is the on-demand "revive worktree" entry point: it
+// must return every non-main worktree Discover's own step 3 would have
+// found, independent of any live tmux/mutagen state, and with the same
+// main-worktree skip and stable-id derivation.
+func TestOrphanWorktreeSessions_ReturnsEveryNonMainWorktree(t *testing.T) {
+	remote := &batchRemote{
+		wtRecords: []domain.WorktreeRecord{
+			{RepoPath: "/repos/app", WorktreePath: "/repos/app", State: domain.WorktreeOK}, // main, skipped
+			{RepoPath: "/repos/app", WorktreePath: "/repos/app@one", State: domain.WorktreeOK, AimanID: "real-id"},
+			{RepoPath: "/repos/app", WorktreePath: "/repos/app@two", State: domain.WorktreeOK},
+			{RepoPath: "/repos/app", WorktreePath: "/repos/app@missing", State: domain.WorktreeMissing},
+		},
+	}
+
+	sessions, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).OrphanWorktreeSessions(context.Background(), "regent0")
+	if err != nil {
+		t.Fatalf("OrphanWorktreeSessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 orphan worktrees, got %d: %+v", len(sessions), sessions)
+	}
+
+	byPath := map[string]domain.Session{}
+	for _, s := range sessions {
+		byPath[s.WorktreePath] = s
+	}
+	if byPath["/repos/app@one"].ID != "real-id" {
+		t.Errorf("expected the remote's aiman-id to be used, got %+v", byPath["/repos/app@one"])
+	}
+	if byPath["/repos/app@two"].ID == "" {
+		t.Errorf("expected a stable derived id, got empty")
+	}
+	if byPath["/repos/app@two"].ID != stableSessionID("regent0", "/repos/app@two") {
+		t.Errorf("expected the same derivation Discover uses")
+	}
+	for _, s := range sessions {
+		if s.Status != domain.SessionStatusInactive {
+			t.Errorf("expected Inactive status, got %s for %s", s.Status, s.WorktreePath)
+		}
+	}
+}
+
+func TestOrphanWorktreeSessions_EmptyWhenNoWorktrees(t *testing.T) {
+	remote := &batchRemote{}
+	sessions, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).OrphanWorktreeSessions(context.Background(), "regent0")
+	if err != nil {
+		t.Fatalf("OrphanWorktreeSessions: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("expected no sessions, got %+v", sessions)
+	}
+}
+
 func TestStableSessionIDIsDeterministicAndDistinct(t *testing.T) {
 	a := stableSessionID("host1", "/repos/app@one")
 	if a != stableSessionID("host1", "/repos/app@one") {

@@ -60,6 +60,29 @@ func TestParseSidecarDump(t *testing.T) {
 	}
 }
 
+func TestInferAgentNameFromText(t *testing.T) {
+	tests := []struct {
+		text string
+		want string
+	}{
+		{"Claude Sonnet 5 <noreply@anthropic.com>", "Claude Code"},
+		{"Codex <noreply@openai.com>", "Codex CLI"},
+		{"GitHub Copilot <copilot@github.com>", "GitHub Copilot CLI"},
+		{"Cursor Agent <cursor@cursor.sh>", "Cursor"},
+		{"Grok Build <grok@x.ai>", "Grok Build CLI"},
+		{"Antigravity <agy@google.com>", "Antigravity CLI"},
+		{"Ageni <ageni@example.com>", "Ageni"},
+		{"Some Human <human@example.com>", ""},
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tt := range tests {
+		if got := InferAgentNameFromText(tt.text); got != tt.want {
+			t.Errorf("InferAgentNameFromText(%q) = %q, want %q", tt.text, got, tt.want)
+		}
+	}
+}
+
 func TestInferAgentName(t *testing.T) {
 	tests := []struct {
 		path string
