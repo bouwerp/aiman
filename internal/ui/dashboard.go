@@ -174,6 +174,9 @@ const (
 	viewStateNewGroup
 	viewStateAgentDefaults
 	viewStateContextStats
+	viewStateReviveRemotePicker // pick which remote to scan for abandoned worktrees
+	viewStateReviveList         // list of abandoned worktrees found, with candidate agent(s)
+	viewStateReviveAgentPick    // short pick-list when a worktree has 2+ agent candidates
 )
 
 type mainTab int
@@ -298,6 +301,9 @@ func (i item) Description() string {
 	if i.activity == "stale" {
 		return fmt.Sprintf("Repo: %s | Host: %s%s | State: thinking (no progress >5m — may be stuck)%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
 	}
+	if i.activity == "exited" {
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: agent exited — press s to resume%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+	}
 	if i.session.Mode == domain.SessionModeAutonomous && i.session.Status == domain.SessionStatusInactive {
 		return fmt.Sprintf("Trigger Rule: %s | Repo: %s | Host: %s | Poll: %ds%s", i.session.TriggerSource, i.session.RepoName, i.session.RemoteHost, i.session.AutonomousConfig.PollFrequencySecs, createdPart)
 	}
@@ -333,50 +339,52 @@ func (i tunnelItem) FilterValue() string {
 }
 
 type Model struct {
-	version          string
-	cfg              *config.Config
-	db               domain.SessionRepository
-	Program          *tea.Program
-	state            viewState
-	panelMode        panelMode
-	list             list.Model
-	daemonList       list.Model
-	daemons          map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
-	agentAPICursor   int                      // selected remote on the Agent API settings page
-	agentAPIProbing  map[string]bool          // host → probe SSH call in flight
-	currentTab       mainTab
-	menu             list.Model
-	remotes          RemotesModel
-	setup            SetupModel
-	gitSetup         GitSetupModel
-	generalSetup     GeneralSetupModel
-	agentDefaults    AgentDefaultsModel
-	contextStats     ContextStatsModel
-	aiSetup          AISetupModel
-	secretsSetup     SecretsSetupModel
-	awsCredentials   AWSCredentialsModel
-	snapshotBrowser  SnapshotBrowserModel
-	scheduledPrompts ScheduledPromptsModel
-	picker           RepoPickerModel
-	issuePicker      IssuePickerModel
-	branchInput      BranchInputModel
-	genericInput     TextInputModel
-	branchPicker     BranchPickerModel
-	dirPicker        DirPickerModel
-	agentPicker      AgentPickerModel
-	summary          SummaryModel
-	doctorResults    []usecase.CheckResult
-	width, height    int
-	viewport         viewport.Model
-	terminal         *TerminalModel
-	tmuxOutput       string
-	activeSession    string
-	termCloser       io.Closer
-	lastError        string
-	loadingMsg       string
-	sessionCfg       domain.SessionConfig
-	loadingNext      viewState
-	initialLoad      bool
+	version              string
+	cfg                  *config.Config
+	db                   domain.SessionRepository
+	Program              *tea.Program
+	state                viewState
+	panelMode            panelMode
+	list                 list.Model
+	daemonList           list.Model
+	daemons              map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
+	agentAPICursor       int                      // selected remote on the Agent API settings page
+	agentAPIProbing      map[string]bool          // host → probe SSH call in flight
+	currentTab           mainTab
+	menu                 list.Model
+	remotes              RemotesModel
+	setup                SetupModel
+	gitSetup             GitSetupModel
+	generalSetup         GeneralSetupModel
+	agentDefaults        AgentDefaultsModel
+	contextStats         ContextStatsModel
+	aiSetup              AISetupModel
+	secretsSetup         SecretsSetupModel
+	awsCredentials       AWSCredentialsModel
+	snapshotBrowser      SnapshotBrowserModel
+	scheduledPrompts     ScheduledPromptsModel
+	revive               ReviveWorktreeModel
+	revivePickCandidates []string // set when a revive-list selection has 2+ agent candidates, for viewStateReviveAgentPick
+	picker               RepoPickerModel
+	issuePicker          IssuePickerModel
+	branchInput          BranchInputModel
+	genericInput         TextInputModel
+	branchPicker         BranchPickerModel
+	dirPicker            DirPickerModel
+	agentPicker          AgentPickerModel
+	summary              SummaryModel
+	doctorResults        []usecase.CheckResult
+	width, height        int
+	viewport             viewport.Model
+	terminal             *TerminalModel
+	tmuxOutput           string
+	activeSession        string
+	termCloser           io.Closer
+	lastError            string
+	loadingMsg           string
+	sessionCfg           domain.SessionConfig
+	loadingNext          viewState
+	initialLoad          bool
 	// discoveryPending is true between the dashboard opening on database
 	// contents and the first remote scan landing, so the list can be shown
 	// immediately while making clear it is not yet confirmed against the remote.
@@ -698,7 +706,8 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "rename session or group")),
 			key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "assign session group")),
 			key.NewBinding(key.WithKeys("enter", " ", "space"), key.WithHelp("enter", "collapse/expand group")),
-			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart / switch agent")),
+			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "resume / restart (auto agent)")),
+			key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "switch agent")),
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
 			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "manage tunnels")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
@@ -750,6 +759,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 		menuItem{title: "Scheduled Prompts", desc: "Manage periodic cron-scheduled prompt injections", action: viewStateScheduledPrompts},
+		menuItem{title: "Revive Worktree", desc: "Find abandoned worktrees under a remote's repo root and resume the agent that worked there", action: viewStateReviveRemotePicker},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
 	m.Title = "Administrative Menu"
@@ -1883,6 +1893,15 @@ func (m *Model) sendStatus(msg string) {
 	}
 }
 
+// sendStatusFor is sendStatus correlated to a background operation, so the
+// progress line lands on that operation's placeholder row instead of the
+// blocking loading screen.
+func (m *Model) sendStatusFor(placeholderID, msg string) {
+	if m.Program != nil {
+		m.Program.Send(sessionCreateMsg{status: msg, placeholderID: placeholderID})
+	}
+}
+
 func (m *Model) fetchAgents() tea.Cmd {
 	remote := m.selectedRemote
 	return func() tea.Msg {
@@ -2749,6 +2768,15 @@ func (m *Model) dispatchSettingsUpdate(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case viewStateAISettings:
 		model, cmd := m.handleAISetupUpdate(msg)
 		return model, cmd, true
+	case viewStateReviveRemotePicker:
+		model, cmd := m.handleReviveRemotePickerUpdate(msg)
+		return model, cmd, true
+	case viewStateReviveList:
+		model, cmd := m.handleReviveListUpdate(msg)
+		return model, cmd, true
+	case viewStateReviveAgentPick:
+		model, cmd := m.handleReviveAgentPickUpdate(msg)
+		return model, cmd, true
 	default:
 		return m, nil, false
 	}
@@ -3094,10 +3122,7 @@ func (m *Model) applySnapshotPreviewMsg(msg snapshotPreviewMsg, cmds []tea.Cmd) 
 		m.priorSnapshotCandidate = msg.snapshot
 		m.state = viewStateSnapshotPreview
 	} else {
-		m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
-		m.loadingNext = viewStateMain
-		m.state = viewStateLoading
-		return m, m.restartSession()
+		return m, m.startBackgroundRestart()
 	}
 	return m, nil
 }
@@ -3167,6 +3192,12 @@ func (m *Model) renderSettingsView() (string, bool) {
 		return m.contextStats.viewString(), true
 	case viewStateAISettings:
 		return m.aiSetup.viewString(), true
+	case viewStateReviveRemotePicker:
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.remotes.list.View()), true
+	case viewStateReviveList:
+		return docStyle.Render(m.revive.list.View()), true
+	case viewStateReviveAgentPick:
+		return m.renderReviveAgentPick(), true
 	default:
 		return "", false
 	}
@@ -3791,7 +3822,11 @@ func (m *Model) renderRestartConfirm() string {
 	var b strings.Builder
 	b.WriteString(activeStyle.Render("Confirm Session Restart") + "\n\n")
 	b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TmuxSession))
-	b.WriteString("The current agent writes a handoff, then the agent you pick starts and is told to read it. Choose a different agent to switch.\n\n")
+	if known := m.sessionCfg.Agent; known != nil {
+		b.WriteString(fmt.Sprintf("The current agent writes a handoff, then %s resumes in its place.\n\n", known.Name))
+	} else {
+		b.WriteString("The current agent writes a handoff, then the agent you pick starts and is told to read it. Choose a different agent to switch.\n\n")
+	}
 	b.WriteString("Do you want to proceed?\n\n")
 	b.WriteString(activeStyle.Render("[y]") + " Yes  " + activeStyle.Render("[n]") + " No")
 
@@ -4679,6 +4714,94 @@ func (m *Model) handleIntelligenceKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return classifySessionCmd(m.cfg, m.intelligence, s), true
 }
 
+// prepareRestartTarget sets m.restartingSession, m.selectedRemote, and the
+// base m.sessionCfg for a restart-style resume of s. Shared by the "s"/"S"
+// key handler and the revive-worktree flow — both eventually call
+// restartSession(), which reads exactly this state. Callers still need to
+// set m.sessionCfg.Agent themselves once the agent is known or chosen.
+func (m *Model) prepareRestartTarget(s domain.Session) {
+	if remote, ok := resolveRemote(m.cfg, s); ok {
+		m.selectedRemote = remote
+	}
+	m.restartingSession = &s
+	m.sessionCfg = domain.SessionConfig{
+		IssueKey:   s.IssueKey,
+		Branch:     s.Branch,
+		Repo:       domain.Repo{Name: s.RepoName, URL: ""},
+		RemoteHost: s.RemoteHost,
+		Directory:  "",
+		PromptFree: true,
+	}
+	if m.selectedRemote.Host != "" {
+		m.sessionCfg.RemoteHost = m.selectedRemote.Host
+	}
+}
+
+// startBackgroundRestart runs a restart/revive of m.restartingSession in the
+// background, mirroring background session creation: the session's row shows
+// progress in the preview panel while the dashboard stays fully usable, and
+// the row swaps to the finished session when the restart lands. Callers must
+// have set m.restartingSession, m.sessionCfg (including .Agent), and
+// m.selectedRemote — prepareRestartTarget plus an agent choice does all three.
+func (m *Model) startBackgroundRestart() tea.Cmd {
+	s := m.restartingSession
+	if s == nil {
+		return nil
+	}
+	if _, ok := m.creatingSessions[s.ID]; ok {
+		return m.showToast("⚠️  This session is already being restarted.", true, 3*time.Second)
+	}
+
+	placeholder := *s
+	placeholder.Status = domain.SessionStatusProvisioning
+	if m.sessionCfg.Agent != nil {
+		placeholder.AgentName = m.sessionCfg.Agent.Name
+	}
+	m.creatingSessions[s.ID] = &creatingSession{
+		placeholder: placeholder,
+		cfg:         m.sessionCfg,
+		remote:      m.selectedRemote,
+	}
+
+	// A restart replaces an existing row; a revive adds a new one.
+	replaced := false
+	for i := range m.allSessions {
+		if m.allSessions[i].ID == s.ID {
+			m.allSessions[i] = placeholder
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		m.allSessions = append(m.allSessions, placeholder)
+	}
+	m.applyRemoteFilter()
+
+	// Select the row so its progress steps show in the preview panel; the
+	// user can navigate away at any time.
+	items := m.list.Items()
+	for i, it := range items {
+		if si, ok := it.(item); ok && si.session.ID == s.ID {
+			m.list.Select(i)
+			break
+		}
+	}
+	m.state = viewStateMain
+	return m.restartSession(s.ID)
+}
+
+// startAgentPickerRestart shows the manual agent-picker restart flow: used
+// when the session's agent identity can't be resolved automatically (no
+// known AgentName, and no vendor hint from a hook sidecar), or the user
+// explicitly asked to switch agents with "S". Callers must have already set
+// m.restartingSession and m.sessionCfg.
+func (m *Model) startAgentPickerRestart() (tea.Model, tea.Cmd) {
+	m.loadingMsg = "Scanning available agents..."
+	m.loadingNext = viewStateRestartAgentPicker
+	m.state = viewStateLoading
+	return m, m.fetchAgents()
+}
+
 func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if m.currentTab == tabDaemons {
 		switch msg.String() {
@@ -4705,39 +4828,42 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			return m, nil, true
 		}
 	}
-	if msg.String() == "ctrl+r" || msg.String() == "s" {
+	if msg.String() == "ctrl+r" || msg.String() == "s" || msg.String() == "S" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			selectedSess := sel.(item).session
-			if remote, ok := resolveRemote(m.cfg, selectedSess); ok {
-				m.selectedRemote = remote
-				m.sessionCfg.RemoteHost = remote.Host
-			}
-			m.restartingSession = &selectedSess
-			m.sessionCfg = domain.SessionConfig{
-				IssueKey:   selectedSess.IssueKey,
-				Branch:     selectedSess.Branch,
-				Repo:       domain.Repo{Name: selectedSess.RepoName, URL: ""},
-				RemoteHost: selectedSess.RemoteHost,
-				Directory:  "",
-				PromptFree: true,
-			}
-			if m.selectedRemote.Host != "" {
-				m.sessionCfg.RemoteHost = m.selectedRemote.Host
-			}
+			m.prepareRestartTarget(selectedSess)
 
 			m.log("Preparing to restart session %q (ID: %s)", selectedSess.TmuxSession, selectedSess.ID)
 			_ = appendDebugLog(fmt.Sprintf("[ui %s] restart triggered: session=%s status=%s\n", time.Now().Format("15:04:05.000"), selectedSess.TmuxSession, selectedSess.Status))
 
-			// If session is active or syncing, ask for confirmation
+			// "S" always means "switch agent": show the picker even when the
+			// agent is already known. "s"/"ctrl+r" resolve the last-known agent
+			// (from the DB, or inferred from a hook sidecar during discovery)
+			// and skip the picker entirely — that is the whole point of
+			// reviving a session without re-asking every time.
+			forceSwitch := msg.String() == "S"
+			var knownAgent *domain.Agent
+			if !forceSwitch {
+				if resolved, ok := agent.FindKnown(selectedSess.AgentName); ok {
+					knownAgent = &resolved
+				}
+			}
+			m.sessionCfg.Agent = knownAgent
+
+			// A live session's pane is about to be replaced either way, so
+			// still confirm before touching it — whether that leads to an
+			// auto-resume or the picker is decided by handleRestartConfirmUpdate.
 			if selectedSess.Status == domain.SessionStatusActive || selectedSess.Status == domain.SessionStatusSyncing {
 				m.state = viewStateRestartConfirm
 				return m, nil, true
 			}
 
-			m.loadingMsg = "Scanning available agents..."
-			m.loadingNext = viewStateRestartAgentPicker
-			m.state = viewStateLoading
-			return m, m.fetchAgents(), true
+			if knownAgent != nil {
+				return m, m.startBackgroundRestart(), true
+			}
+
+			model, cmd := m.startAgentPickerRestart()
+			return model, cmd, true
 		}
 	}
 
@@ -4801,8 +4927,14 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 					if err := mgr.Connect(ctx); err != nil {
 						continue
 					}
-					discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
-					sessions, _ := discoverer.Discover(ctx, r.Host)
+					sessions, ok := usecase.DiscoverHostSessions(ctx, mgr, mutagen.NewEngine(), r.Host)
+					if !ok {
+						// See runDiscovery's identical guard (startup.go): a failed
+						// scan must not mark this host as scanned, or every DB
+						// session for it gets treated as confirmed-dead and
+						// disappears from the list until the next successful scan.
+						continue
+					}
 					allSessions = append(allSessions, sessions...)
 					scannedHosts[r.Host] = true
 				}
@@ -4904,6 +5036,19 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if i.action == viewStateAuthRemotePicker {
+					m.remotes = NewRemotesModel(m.cfg)
+					m.remotes.width = m.width
+					m.remotes.height = m.height
+					h, v := docStyle.GetFrameSize()
+					m.remotes.list.SetSize(m.width-h-4, m.height-v-6)
+					m.state = i.action
+					return m, nil
+				}
+				if i.action == viewStateReviveRemotePicker {
+					remotes := config.UniqueRemotes(m.cfg.Remotes)
+					if len(remotes) == 1 {
+						return m.startAbandonedWorktreeScan(remotes[0])
+					}
 					m.remotes = NewRemotesModel(m.cfg)
 					m.remotes.width = m.width
 					m.remotes.height = m.height
@@ -6303,6 +6448,8 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyRecreateMutagen(msg)
 	case agent.ScanAgentsMsg:
 		return m.applyScanAgents(msg)
+	case reviveScanResultMsg:
+		return m.applyReviveScanResult(msg)
 	}
 	return m, nil
 }
@@ -6646,7 +6793,7 @@ func (m *Model) renderMainView() string {
 
 	footer := "\n" + remoteInfo + "\n\n" + doctorSection
 
-	helpText := "n: new • e: rename • g: group • enter: collapse • f: filter • c: scope • t: tunnels • s: restart • y: copy • r: refresh • i: AI • ctrl+k: term • m: menu • q: quit"
+	helpText := "n: new • e: rename • g: group • enter: collapse • f: filter • c: scope • t: tunnels • s: resume • S: switch agent • y: copy • r: refresh • i: AI • ctrl+k: term • m: menu • q: quit"
 	if m.currentTab == tabDaemons {
 		helpText = "agent API: i install • s restart • c reload • u update • r probe • ctrl+k stop • tab: sessions • q: quit"
 	}
@@ -7143,16 +7290,16 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 		if m.restartingSession != nil && m.sessionCfg.Agent != nil {
 			m.restartingSession.AgentName = m.sessionCfg.Agent.Name
 		}
-		m.loadingMsg = fmt.Sprintf("Restarting with %s (saving handoff)…", m.sessionCfg.Agent.Name)
-		m.loadingNext = viewStateMain
-		m.state = viewStateLoading
-		return m, m.restartSession()
+		return m, m.startBackgroundRestart()
 	}
 
 	return m, cmd
 }
 
-func (m *Model) restartSession() tea.Cmd {
+// restartSession runs the restart/revive itself. placeholderID correlates
+// its progress and result with the background-tracking entry registered by
+// startBackgroundRestart, exactly like background session creation.
+func (m *Model) restartSession(placeholderID string) tea.Cmd {
 	// Capture all required state at dispatch time (before the goroutine starts)
 	// to avoid data races with the TUI loop running concurrently.
 	s := m.restartingSession
@@ -7168,7 +7315,7 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 		defer func() {
 			if r := recover(); r != nil {
-				retMsg = sessionCreateMsg{err: fmt.Errorf("restart panicked: %v", r)}
+				retMsg = sessionCreateMsg{err: fmt.Errorf("restart panicked: %v", r), placeholderID: placeholderID}
 			}
 			logf("goroutine done, retMsg=%T err=%v", retMsg, func() interface{} {
 				if sm, ok := retMsg.(sessionCreateMsg); ok {
@@ -7183,22 +7330,22 @@ func (m *Model) restartSession() tea.Cmd {
 		defer cancel()
 
 		if s == nil {
-			return sessionCreateMsg{err: fmt.Errorf("no session to restart")}
+			return sessionCreateMsg{err: fmt.Errorf("no session to restart"), placeholderID: placeholderID}
 		}
 
 		s.ID = strings.TrimSpace(s.ID)
 		if s.ID == "" {
-			return sessionCreateMsg{err: fmt.Errorf("session ID is empty")}
+			return sessionCreateMsg{err: fmt.Errorf("session ID is empty"), placeholderID: placeholderID}
 		}
 
 		if sessionCfg.Agent == nil {
-			return sessionCreateMsg{err: fmt.Errorf("no agent selected for restart")}
+			return sessionCreateMsg{err: fmt.Errorf("no agent selected for restart"), placeholderID: placeholderID}
 		}
 		s.AgentName = sessionCfg.Agent.Name
 
 		remote, ok := resolveRemote(cfg, *s)
 		if !ok {
-			return sessionCreateMsg{err: fmt.Errorf("no active remote configured")}
+			return sessionCreateMsg{err: fmt.Errorf("no active remote configured"), placeholderID: placeholderID}
 		}
 
 		workingDir := s.WorkingDirectory
@@ -7206,7 +7353,7 @@ func (m *Model) restartSession() tea.Cmd {
 			workingDir = s.WorktreePath
 		}
 		if workingDir == "" {
-			return sessionCreateMsg{err: fmt.Errorf("session has no working directory")}
+			return sessionCreateMsg{err: fmt.Errorf("session has no working directory"), placeholderID: placeholderID}
 		}
 
 		logf("session=%s remote=%s@%s workingDir=%s agent=%s", s.TmuxSession, remote.User, remote.Host, workingDir, sessionCfg.Agent.Command)
@@ -7221,26 +7368,23 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		// Step 1: ask the current agent for a restart handoff before replacing it.
+		// A missing or failed handoff must never block the restart itself — the
+		// best-effort wrapper swallows any error (not just a timeout) and the
+		// new agent simply starts without one.
 		summaryPath := filepath.Join(workingDir, domain.AimanSessionSummaryFileName)
-		m.sendStatus("Capturing restart handoff...")
+		m.sendStatusFor(placeholderID, "Capturing restart handoff...")
 		logf("step1: capturing restart handoff to %s", summaryPath)
 		summaryCtx, summaryCancel := context.WithTimeout(ctx, 90*time.Second)
-		var summaryCreated bool
-		var err error
-		if s.IsPTY() {
-			summaryCreated, err = usecase.CaptureRestartSessionSummaryPTY(summaryCtx, mgr, s.ID, summaryPath)
-		} else {
-			summaryCreated, err = usecase.CaptureRestartSessionSummary(summaryCtx, mgr, s.TmuxSession, summaryPath)
-		}
+		summaryCreated, note := usecase.CaptureSessionHandoffBestEffort(summaryCtx, mgr, *s, summaryPath)
 		summaryCancel()
-		if err != nil {
-			logf("step1 FAILED: %v", err)
-			return sessionCreateMsg{err: fmt.Errorf("failed to capture restart handoff: %w", err)}
+		if note != "" {
+			logf("step1: %s", note)
+			m.sendStatusFor(placeholderID, note)
 		}
 		logf("step1 ok: summaryCreated=%t", summaryCreated)
 
 		// Step 2: build the new agent command after the restart handoff file exists.
-		m.sendStatus(fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
+		m.sendStatusFor(placeholderID, fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
 		logf("step2: preparing agent command")
 		agentCmd := sessionCfg.Agent.Command
 		var sendKeysPrompt string
@@ -7312,7 +7456,7 @@ func (m *Model) restartSession() tea.Cmd {
 		// If the session is gone (remote reboot, manual kill, etc.) fall back to
 		// creating a fresh session with new-session, using start-server + global
 		// option guards to avoid the remain-on-exit race.
-		m.sendStatus(fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
+		m.sendStatusFor(placeholderID, fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
 		logf("step3: restarting agent")
 
 		if s.IsPTY() {
@@ -7376,7 +7520,7 @@ func (m *Model) restartSession() tea.Cmd {
 		logf("step3: restartCmd=%s", restartCmd)
 		if _, err := mgr.Execute(ctx, restartCmd); err != nil {
 			logf("step3 FAILED: %v", err)
-			return sessionCreateMsg{err: fmt.Errorf("failed to restart agent in session %q: %w", s.TmuxSession, err)}
+			return sessionCreateMsg{err: fmt.Errorf("failed to restart agent in session %q: %w", s.TmuxSession, err), placeholderID: placeholderID}
 		}
 		logf("step3 ok")
 
@@ -7386,7 +7530,7 @@ func (m *Model) restartSession() tea.Cmd {
 		if db != nil {
 			_ = db.Save(ctx, s)
 		}
-		return sessionCreateMsg{session: *s}
+		return sessionCreateMsg{session: *s, placeholderID: placeholderID}
 	}
 }
 
@@ -7394,17 +7538,13 @@ func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y":
-			m.loadingMsg = "Restarting session with new scope..."
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-
 			// We need to update the session's WorkingDirectory
 			m.changingDirSession.WorkingDirectory = m.sessionCfg.Directory
 			if !strings.HasPrefix(m.changingDirSession.WorkingDirectory, m.changingDirSession.WorktreePath) {
 				m.changingDirSession.WorkingDirectory = filepath.Join(m.changingDirSession.WorktreePath, m.sessionCfg.Directory)
 			}
 
-			// Reuse restartSession but it will use the updated WorkingDirectory
+			// Reuse the restart machinery; it will use the updated WorkingDirectory
 			m.restartingSession = m.changingDirSession
 			m.changingDirSession = nil
 
@@ -7414,10 +7554,11 @@ func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.sessionCfg.Agent == nil {
 				m.loadingMsg = "Scanning agents..."
 				m.loadingNext = viewStateRestartAgentPicker
+				m.state = viewStateLoading
 				return m, m.fetchAgents()
 			}
 
-			return m, m.restartSession()
+			return m, m.startBackgroundRestart()
 		case "n", "esc":
 			m.state = viewStateMain
 			m.changingDirSession = nil
@@ -7431,10 +7572,12 @@ func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y", "enter":
-			m.loadingMsg = "Scanning available agents..."
-			m.loadingNext = viewStateRestartAgentPicker
-			m.state = viewStateLoading
-			return m, m.fetchAgents()
+			// A known agent was already resolved before this confirm (see
+			// handleSessionManageKey) — skip the picker and resume directly.
+			if m.sessionCfg.Agent != nil {
+				return m, m.startBackgroundRestart()
+			}
+			return m.startAgentPickerRestart()
 		case "n", "esc":
 			m.state = viewStateMain
 			m.restartingSession = nil
@@ -7453,17 +7596,11 @@ func (m *Model) handleSnapshotPreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.db.MarkSnapshotInjected(context.Background(), m.priorSnapshotCandidate.ID)
 			}
 			m.priorSnapshotCandidate = nil
-			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-			return m, m.restartSession()
+			return m, m.startBackgroundRestart()
 		case "n":
 			m.sessionCfg.PriorSnapshot = nil
 			m.priorSnapshotCandidate = nil
-			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-			return m, m.restartSession()
+			return m, m.startBackgroundRestart()
 		case "esc":
 			m.priorSnapshotCandidate = nil
 			m.restartingSession = nil

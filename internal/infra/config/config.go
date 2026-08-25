@@ -335,6 +335,14 @@ func (c *Config) Save() error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
+	// The directory holding config.yaml may not exist yet (first run, or a
+	// caller that saves before EnsureDir has ever been called) — create it
+	// rather than silently failing the write. 0700: this directory also
+	// holds the session database and SSH control sockets.
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}

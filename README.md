@@ -29,7 +29,9 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Names and groups**: Every session has a unique display `name` and a `group`; the sidebar is a tree of groups, not a flat list
 - **Session Management**: Track active sessions with live tmux pane previews
 - **Agent defaults**: Menu → Agent defaults sets per-agent launch model and thinking/reasoning effort (e.g. Claude `sonnet` + `medium`, Grok `4.6` + `medium`)
-- **Restart / switch agent (`s`)**: Save a handoff, start the chosen agent (same or different), and tell it to read the handoff
+- **Resume / restart (`s`)**: Save a handoff, then resume with the last-known agent automatically — no picker, no re-asking — including a worktree revived after a tmux crash or reboot. Falls back to the agent picker only when the agent can't be determined. Use `S` to deliberately switch agents instead
+- **Agent-exited detection**: A pane that fell back to a bare shell (crashed or never-started agent) shows as a distinct `⚠ agent exited` state instead of blending in with idle
+- **Revive Worktree** (Menu → Revive Worktree): finds worktrees under a remote's repo root that aiman has never tracked before (hand-created, or from before this existed) and lists each with the agent(s) that plausibly worked there, detected from git commit trailers — not project files, which are often committed and shared across every worktree of a repo. Zero candidates opens the full agent picker, one revives immediately, two or more show a short pick-list instead of guessing
 - **AWS profile allowlist**: Menu → AWS Credentials toggles which local `~/.aws` profiles aiman uses; delete removes the remote profile and the config entry so it does not come back
 - **Agent API (`aiman serve`)**: One JSON server per remote; start it from the TUI (Tab → **agent API** → `i`) so in-pane agents can list, create, prompt, and wait on sibling sessions
 - **Shared context**: Durable markdown notes per host (`aiman context ls|find|get|put|pack|stats`); session create injects abstracts into `.aiman_context.md`, archive writes a note back. Menu → Shared context shows store size, lookups, and pack usage
@@ -194,7 +196,8 @@ aiman
 | `Enter` | Select item |
 | `ESC` | Go back / Cancel |
 | `a` | **Attach** to tmux session (full terminal) |
-| `s` | **Restart** session (re-launch agent in existing tmux) |
+| `s` | **Resume / restart** — auto-detects the last agent and resumes it, no picker |
+| `S` | **Switch agent** — always shows the agent picker |
 | `c` | **Change** directory scope for the session |
 | `t` | **Tunnels** — Manage per-session local↔remote port forwards |
 | `p` | **Copy local path** to clipboard |
@@ -273,17 +276,32 @@ Access the **Snapshot Browser** via the Admin Menu (`m`) → **Session Snapshots
 - `Delete` / `d`: delete the selected snapshot
 - `ESC`: close the browser
 
-### Restarting a Session
+### Restarting, resuming, and reviving a session
 
-Press `s` on a selected session to restart it. You will be prompted to choose an agent. Aiman will:
+Press `s` on a selected session to resume it. Aiman resolves the last agent that ran
+there — from the database, or (if that row was lost) inferred from a hook sidecar
+file's transcript path — and restarts it in place with no picker and no re-asking:
 
-1. Terminate any existing mutagen syncs for the session
-2. Kill the existing tmux session
-3. Start a fresh tmux session in the **same working directory** (the git worktree is preserved)
-4. Launch the newly selected agent
-5. Re-establish mutagen sync
+1. Asks the current agent (if one is running) for a restart handoff; a failed or
+   missing handoff never blocks the restart, the new agent just starts without one
+2. Respawns the agent process in the existing tmux pane (`respawn-pane`), or starts a
+   fresh tmux session in the **same working directory** if the session itself is gone
+   (host reboot, tmux server crash) — the git worktree, branch, and all files are
+   always untouched
+3. Resumes the agent's own native conversation (`--resume`/`--session`/…) when a prior
+   conversation id is known
 
-The git worktree, branch, and all files are untouched — only the tmux process and agent are replaced.
+Press `S` to deliberately switch agents instead — this always shows the agent picker,
+even when the last agent is already known. If the agent identity truly can't be
+determined (new worktree, no hook data), `s` falls back to the picker too.
+
+A pane whose agent process crashed or never started shows as `⚠ agent exited` in the
+session list (distinct from a normal idle agent) — press `s` there to bring it back.
+
+`s`/`S` only work on a session already visible in the dashboard. A worktree aiman has
+never tracked before (hand-created, or from before aiman was managing this remote) is
+invisible there by design — use **Menu → Revive Worktree** to find and resume those; see
+"Revive Worktree" above for how it detects which agent worked in one.
 
 
 
@@ -296,6 +314,7 @@ Press `m` to access:
 - **JIRA Configuration**: Update credentials
 - **Health Checks**: Re-run doctor checks
 - **Session Snapshots**: Open the archive browser
+- **Revive Worktree**: Scan a remote's repo root for abandoned worktrees aiman has never tracked and resume the agent that worked there
 
 ### Git Repository Configuration
 

@@ -129,6 +129,79 @@ func ParseStored(raw []byte) Report {
 	return ExtractReport(raw)
 }
 
+// vendorPathHints maps a substring of a hook-reported transcript/session path
+// to the domain.Agent catalog name (internal/infra/agent.knownAgents) that
+// owns it. Only vendors whose config directory install.go actually installs
+// hooks into, and that unambiguously belong to one known agent, are listed —
+// this is a conservative best-effort guess, not exhaustive: OpenCode and Pi
+// report no path today, so a session run under either falls through to the
+// manual agent picker instead of being guessed at.
+var vendorPathHints = []struct {
+	substr string
+	name   string
+}{
+	{"/.claude/", "Claude Code"},
+	{"/.codex/", "Codex CLI"},
+	{"/.copilot/", "GitHub Copilot CLI"},
+	{"/.cursor/", "Cursor"},
+	{"/.grok/", "Grok Build CLI"},
+}
+
+// InferAgentName makes a best-effort guess at which known agent produced a
+// hook-reported transcript/session path, for reviving a session whose
+// AgentName was never recorded (or was lost along with its database row).
+// Returns "" when the path carries no recognizable vendor hint — callers
+// must fall back to asking, not guessing.
+func InferAgentName(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	for _, hint := range vendorPathHints {
+		if strings.Contains(path, hint.substr) {
+			return hint.name
+		}
+	}
+	return ""
+}
+
+// vendorTextHints maps a case-insensitive substring of free text (a git
+// commit trailer, typically) to the domain.Agent catalog name it identifies.
+// Kept deliberately small and unambiguous: "pi" is not included because it's
+// too short and common a substring to match free text safely — a session
+// carrying only that vendor's evidence falls through to the manual picker.
+var vendorTextHints = []struct {
+	substr string
+	name   string
+}{
+	{"claude", "Claude Code"},
+	{"codex", "Codex CLI"},
+	{"copilot", "GitHub Copilot CLI"},
+	{"cursor", "Cursor"},
+	{"grok", "Grok Build CLI"},
+	{"antigravity", "Antigravity CLI"},
+	{"agy", "Antigravity CLI"},
+	{"opencode", "OpenCode"},
+	{"ageni", "Ageni"},
+}
+
+// InferAgentNameFromText makes a best-effort guess at which known agent a
+// free-text string (a git "Co-authored-by" trailer, typically) refers to.
+// Returns "" when nothing recognizable is found — callers must fall back to
+// asking, not guessing.
+func InferAgentNameFromText(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return ""
+	}
+	for _, hint := range vendorTextHints {
+		if strings.Contains(text, hint.substr) {
+			return hint.name
+		}
+	}
+	return ""
+}
+
 // ListSidecarsCmd dumps every native-session sidecar in one SSH round trip.
 const ListSidecarsCmd = `for f in "$HOME"/.aiman/native-sessions/*; do [ -f "$f" ] || continue; printf 'ID %s\n' "$(basename "$f")"; cat "$f"; printf '\nEND\n'; done`
 

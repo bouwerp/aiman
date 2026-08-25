@@ -155,9 +155,11 @@ func runDiscovery(cfg *config.Config) tea.Cmd {
 				// Skip unreachable remotes — don't block startup
 				continue
 			}
+			sessions, ok := usecase.DiscoverHostSessions(ctx, mgr, mutagen.NewEngine(), remote.Host)
+			if !ok {
+				continue
+			}
 			result.scannedHosts[remote.Host] = true
-			discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
-			sessions, _ := discoverer.Discover(ctx, remote.Host)
 			result.sessions = append(result.sessions, sessions...)
 		}
 		return discoveryResultMsg(result)
@@ -172,13 +174,20 @@ func loadConfiguredSessions(ctx context.Context, cfg *config.Config, db domain.S
 	if err != nil {
 		return nil, err
 	}
+	// A config with no remotes at all is almost certainly broken (wiped,
+	// mid-edit, not yet loaded) rather than a deliberate "remove every
+	// remote" — resolveRemote would otherwise fail for every session with a
+	// RemoteHost and the loop below would permanently delete the entire
+	// session history from one bad config read. Only prune per-session when
+	// there is at least one configured remote to check against.
+	pruneOrphans := len(cfg.Remotes) > 0
 	filtered := make([]domain.Session, 0, len(sessions))
 	for _, s := range sessions {
 		if domain.IsEphemeralSessionID(s.ID) {
 			_ = db.Delete(ctx, s.ID)
 			continue
 		}
-		if s.RemoteHost != "" {
+		if pruneOrphans && s.RemoteHost != "" {
 			if _, ok := resolveRemote(cfg, s); !ok {
 				_ = db.Delete(ctx, s.ID)
 				continue

@@ -263,3 +263,20 @@ func TestSpoolRotationKeepsHistoryReadable(t *testing.T) {
 		t.Logf("kill big (best effort): %v", err)
 	}
 }
+
+// A Manager with no injected HolderCmd must panic under `go test` rather than
+// fall back to os.Executable(). That fallback resolves to the *test binary*,
+// and a Go test binary ignores unknown positional args — so the "holder" it
+// spawns re-runs the whole suite, which creates more sessions, which fork
+// more suites. That exponential self-replication once reached ~2000 resident
+// processes and OOM-killed the dev box; this guard is what makes reintroducing
+// it a loud CI failure instead of a silent outage.
+func TestHolderCmdPanicsUnderTestWithoutInjection(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic when HolderCmd is unset under go test")
+		}
+	}()
+	m := &Manager{}
+	_ = m.holderCmd()
+}

@@ -103,15 +103,16 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 
 	// 3. Scan for orphaned worktrees. gatherWorktreeRecords resolves each
 	// worktree's liveness and aiman id on the remote, so the whole sweep costs
-	// one round trip when the executor supports batch discovery.
-	for _, rec := range d.gatherWorktreeRecords(ctx) {
-		if rec.State != domain.WorktreeOK {
-			continue
-		}
-		// A repo's own checkout is listed by `git worktree list` but is not an
-		// orphan worktree — surfacing it invents a session named after every
-		// repository on the remote.
-		if isMainWorktree(rec) {
+	// one round trip when the executor supports batch discovery. A failed
+	// sweep fails the whole Discover: a partial result would be read by the
+	// merge step as "these are ALL the sessions on this host", killing the
+	// ones the failed part would have found.
+	worktreeRecords, err := d.gatherWorktreeRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range worktreeRecords {
+		if rec.State != domain.WorktreeOK || isMainWorktree(rec) {
 			continue
 		}
 		normalizedWT := normalizePath(rec.WorktreePath)
@@ -119,46 +120,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		if seenWorktrees[normalizedWT] || seenTmuxNames[wtBase] {
 			continue
 		}
-
-		session := domain.Session{
-			TmuxSession:      wtBase,
-			RemoteHost:       host,
-			Status:           domain.SessionStatusInactive,
-			WorktreePath:     normalizedWT,
-			WorkingDirectory: normalizedWT,
-			CreatedAt:        time.Now(),
-			ID:               strings.TrimSpace(rec.AimanID),
-		}
-		if session.ID == "" {
-			// Deterministic, not random: a worktree carrying no aiman-id would
-			// otherwise be saved under a fresh id on every scan, so the database
-			// gained a duplicate row per orphan worktree per launch.
-			session.ID = stableSessionID(host, normalizedWT)
-		}
-
-		parts := strings.Split(rec.RepoPath, "/")
-		session.RepoName = parts[len(parts)-1]
-
-		session.IssueKey = domain.ExtractKey(session.TmuxSession)
-		if session.IssueKey == "" {
-			session.IssueKey = domain.ExtractKey(normalizedWT)
-		}
-
-		// Cross-reference with mutagen
-		for _, ms := range mutagenSessions {
-			if !seenMutagenIDs[ms.ID] && d.isSessionMatch(session, ms) {
-				session.LocalPath = normalizePath(ms.LocalPath)
-				if ms.Name != "" {
-					session.MutagenSyncID = ms.Name
-				} else {
-					session.MutagenSyncID = ms.ID
-				}
-				seenMutagenIDs[ms.ID] = true
-				break
-			}
-		}
-
-		addSession(session)
+		addSession(d.orphanSessionFromWorktreeRecord(host, rec, mutagenSessions, seenMutagenIDs))
 	}
 
 	// 4. Scan for orphaned mutagen syncs that don't match any tmux session.
@@ -215,6 +177,97 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 	return sessions, nil
 }
 
+// orphanSessionFromWorktreeRecord converts one live worktree record into an
+// Inactive session: an aiman id if the worktree carries one in git metadata,
+// otherwise a stable derived one so repeated scans converge on the same
+// database row, plus a mutagen cross-reference for sync/local path info.
+// seenMutagenIDs is mutated on a match so a caller iterating many records
+// against the same mutagenSessions list doesn't double-claim one sync.
+func (d *SessionDiscoverer) orphanSessionFromWorktreeRecord(host string, rec domain.WorktreeRecord, mutagenSessions []domain.SyncSession, seenMutagenIDs map[string]bool) domain.Session {
+	normalizedWT := normalizePath(rec.WorktreePath)
+	wtBase := filepath.Base(normalizedWT)
+
+	session := domain.Session{
+		TmuxSession:      wtBase,
+		RemoteHost:       host,
+		Status:           domain.SessionStatusInactive,
+		WorktreePath:     normalizedWT,
+		WorkingDirectory: normalizedWT,
+		CreatedAt:        time.Now(),
+		ID:               strings.TrimSpace(rec.AimanID),
+	}
+	if session.ID == "" {
+		// Deterministic, not random: a worktree carrying no aiman-id would
+		// otherwise be saved under a fresh id on every scan, so the database
+		// gained a duplicate row per orphan worktree per launch.
+		session.ID = stableSessionID(host, normalizedWT)
+	}
+
+	parts := strings.Split(rec.RepoPath, "/")
+	session.RepoName = parts[len(parts)-1]
+
+	session.IssueKey = domain.ExtractKey(session.TmuxSession)
+	if session.IssueKey == "" {
+		session.IssueKey = domain.ExtractKey(normalizedWT)
+	}
+
+	for _, ms := range mutagenSessions {
+		if !seenMutagenIDs[ms.ID] && d.isSessionMatch(session, ms) {
+			session.LocalPath = normalizePath(ms.LocalPath)
+			if ms.Name != "" {
+				session.MutagenSyncID = ms.Name
+			} else {
+				session.MutagenSyncID = ms.ID
+			}
+			seenMutagenIDs[ms.ID] = true
+			break
+		}
+	}
+
+	return session
+}
+
+// OrphanWorktreeSessions scans the whole configured repo root for every
+// worktree not backed by a live tmux session (Discover's step 3, run
+// standalone) — including ones aiman has never tracked before, which
+// Discover's own callers deliberately hide from the main session list to
+// avoid flooding it. Used on demand by the "revive worktree" flow, which
+// wants exactly the worktrees that are otherwise invisible.
+func (d *SessionDiscoverer) OrphanWorktreeSessions(ctx context.Context, host string) ([]domain.Session, error) {
+	mutagenSessions, _ := d.syncEngine.ListSyncSessions(ctx)
+	seenMutagenIDs := make(map[string]bool)
+
+	worktreeRecords, err := d.gatherWorktreeRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var sessions []domain.Session
+	for _, rec := range worktreeRecords {
+		if rec.State != domain.WorktreeOK || isMainWorktree(rec) {
+			continue
+		}
+		sessions = append(sessions, d.orphanSessionFromWorktreeRecord(host, rec, mutagenSessions, seenMutagenIDs))
+	}
+	return sessions, nil
+}
+
+// DiscoverHostSessions runs Discover for one already-connected remote and
+// reports whether the scan actually succeeded, distinct from whether it
+// found anything. A transient scan failure (one flaky SSH command, a
+// timeout) is not proof a host's sessions are gone: callers that mark a host
+// "scanned" on a false ok end up telling the merge step every database
+// session for that host is confirmed dead, which drops them from the
+// dashboard until the next successful scan. Callers should treat ok==false
+// exactly like an unreachable remote — leave the database's view of that
+// host untouched this round.
+func DiscoverHostSessions(ctx context.Context, remote domain.RemoteExecutor, syncEngine domain.SyncEngine, host string) ([]domain.Session, bool) {
+	sessions, err := NewSessionDiscoverer(remote, syncEngine).Discover(ctx, host)
+	if err != nil {
+		return nil, false
+	}
+	return sessions, true
+}
+
 func (d *SessionDiscoverer) enrichHookReports(ctx context.Context, sessions []domain.Session) {
 	if d.remoteExecutor == nil || len(sessions) == 0 {
 		return
@@ -231,6 +284,16 @@ func (d *SessionDiscoverer) enrichHookReports(ctx context.Context, sessions []do
 			continue
 		}
 		agenthook.ApplyReport(&sessions[i], r, now)
+		// A revived worktree may have no persisted AgentName at all (its DB
+		// row was never written, or was lost). Best-effort infer it from the
+		// hook-reported transcript path rather than forcing the restart flow
+		// to always ask; leaves AgentName empty (picker fallback) when the
+		// path carries no recognizable vendor hint.
+		if sessions[i].AgentName == "" {
+			if name := agenthook.InferAgentName(sessions[i].AgentSessionPath); name != "" {
+				sessions[i].AgentName = name
+			}
+		}
 	}
 }
 

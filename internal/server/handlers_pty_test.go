@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,8 +16,38 @@ import (
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
+// holderBin is a real `aiman pty hold` command, built once for the suite.
+//
+// It must never default to os.Executable(): under `go test` that is the test
+// binary, and a Go test binary ignores unknown positional args, so a holder
+// spawned that way silently re-runs this whole suite — which creates more
+// sessions, which fork more suites. That is not a leak but exponential
+// self-replication; it once reached ~2000 resident processes and OOM-killed
+// the dev box. ptyruntime.holderCmd now panics under test rather than allow
+// it, and this is the correct injection.
+var holderBin []string
+
+func TestMain(m *testing.M) {
+	tmp, err := os.MkdirTemp("", "aiman-server-test-*")
+	if err != nil {
+		panic(err)
+	}
+	bin := filepath.Join(tmp, "aiman")
+	build := exec.Command("go", "build", "-o", bin, "github.com/bouwerp/aiman/cmd/aiman")
+	build.Stdout, build.Stderr = os.Stdout, os.Stderr
+	if err := build.Run(); err != nil {
+		_ = os.RemoveAll(tmp)
+		panic("building aiman for pty tests: " + err.Error())
+	}
+	holderBin = []string{bin, "pty", "hold"}
+	code := m.Run()
+	_ = os.RemoveAll(tmp)
+	os.Exit(code)
+}
+
 // startPTYServer runs a serve instance with a live PTY manager and returns
-// its socket path.
+// its socket path. The manager is rooted in a temp dir (never the real
+// ~/.aiman) and holds via the built binary, never this test binary.
 func startPTYServer(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -22,7 +55,7 @@ func startPTYServer(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	mgr := ptyruntime.NewManager()
+	mgr := ptyruntime.NewManagerWithRoot(t.TempDir(), append([]string(nil), holderBin...))
 	srv := New(ln, nil, nil, nil, nil, mgr, "test")
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = srv.Serve(ctx) }()
@@ -32,6 +65,22 @@ func startPTYServer(t *testing.T) string {
 		mgr.CloseAll()
 	})
 	return SocketPath(dir)
+}
+
+// createPTY creates a session and registers its kill as test cleanup, so no
+// individual test can leak a holder by forgetting to tear it down.
+func createPTY(t *testing.T, sock string, params map[string]any) Response {
+	t.Helper()
+	resp, err := Call(sock, "pty.create", params)
+	if err != nil {
+		t.Fatalf("pty.create: %v", err)
+	}
+	if id, _ := params["id"].(string); id != "" {
+		t.Cleanup(func() {
+			_, _ = Call(sock, "pty.kill", map[string]any{"id": id})
+		})
+	}
+	return resp
 }
 
 func resultJSON(t *testing.T, resp Response) string {
@@ -75,11 +124,11 @@ func eventually(t *testing.T, timeout time.Duration, cond func() bool) {
 func TestPTYCreateCaptureKillOverSocket(t *testing.T) {
 	sock := startPTYServer(t)
 
-	create, err := Call(sock, "pty.create", map[string]any{
+	create := createPTY(t, sock, map[string]any{
 		"id": "s1", "name": "test", "command": "echo e2e_marker",
 	})
-	if err != nil || create.Error != nil {
-		t.Fatalf("create: %v / %v", err, create.Error)
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
 	}
 
 	eventually(t, 5*time.Second, func() bool {
@@ -121,9 +170,9 @@ func TestPTYCreateCaptureKillOverSocket(t *testing.T) {
 
 func TestPTYAttachRelaysBothDirections(t *testing.T) {
 	sock := startPTYServer(t)
-	create, cerr := Call(sock, "pty.create", map[string]any{"id": "att", "command": "true"})
-	if cerr != nil || create.Error != nil {
-		t.Fatalf("create: %v / %v", cerr, create.Error)
+	create := createPTY(t, sock, map[string]any{"id": "att", "command": "true"})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
 	}
 
 	conn, err := AttachDial(sock, "att", 100, 30)
@@ -184,9 +233,9 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 
 func TestPTYAttachLiveResize(t *testing.T) {
 	sock := startPTYServer(t)
-	create, cerr := Call(sock, "pty.create", map[string]any{"id": "rsz", "command": "true"})
-	if cerr != nil || create.Error != nil {
-		t.Fatalf("create: %v / %v", cerr, create.Error)
+	create := createPTY(t, sock, map[string]any{"id": "rsz", "command": "true"})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
 	}
 
 	conn, err := AttachDial(sock, "rsz", 80, 24)

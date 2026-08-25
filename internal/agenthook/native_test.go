@@ -59,3 +59,47 @@ func TestParseSidecarDump(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestInferAgentNameFromText(t *testing.T) {
+	tests := []struct {
+		text string
+		want string
+	}{
+		{"Claude Sonnet 5 <noreply@anthropic.com>", "Claude Code"},
+		{"Codex <noreply@openai.com>", "Codex CLI"},
+		{"GitHub Copilot <copilot@github.com>", "GitHub Copilot CLI"},
+		{"Cursor Agent <cursor@cursor.sh>", "Cursor"},
+		{"Grok Build <grok@x.ai>", "Grok Build CLI"},
+		{"Antigravity <agy@google.com>", "Antigravity CLI"},
+		{"Ageni <ageni@example.com>", "Ageni"},
+		{"Some Human <human@example.com>", ""},
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tt := range tests {
+		if got := InferAgentNameFromText(tt.text); got != tt.want {
+			t.Errorf("InferAgentNameFromText(%q) = %q, want %q", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestInferAgentName(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/home/dev/.claude/projects/-home-dev-repo/abc-123.jsonl", "Claude Code"},
+		{"/home/dev/.codex/sessions/2024/01/01/session.jsonl", "Codex CLI"},
+		{"/home/dev/.copilot/sessions/session.json", "GitHub Copilot CLI"},
+		{"/home/dev/.cursor/chats/abc.json", "Cursor"},
+		{"/home/dev/.grok/sessions/abc.json", "Grok Build CLI"},
+		{"/home/dev/.opencode/storage/session/abc.json", ""}, // no vendor hint mapped
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tt := range tests {
+		if got := InferAgentName(tt.path); got != tt.want {
+			t.Errorf("InferAgentName(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}

@@ -64,6 +64,36 @@ func CaptureRestartSessionSummary(ctx context.Context, remote domain.RemoteExecu
 	return true, nil
 }
 
+// CaptureRestartSessionSummaryBestEffort wraps CaptureRestartSessionSummary so a
+// restart is never blocked by a handoff that can't be captured. Any error —
+// not only the context-timeout case CaptureRestartSessionSummary already
+// handles gracefully — is swallowed and reported back as a short note for
+// the caller to log; the restart itself always proceeds without a handoff.
+func CaptureRestartSessionSummaryBestEffort(ctx context.Context, remote domain.RemoteExecutor, tmuxSession, summaryPath string) (created bool, note string) {
+	created, err := CaptureRestartSessionSummary(ctx, remote, tmuxSession, summaryPath)
+	if err != nil {
+		return false, fmt.Sprintf("restart handoff not captured: %v", err)
+	}
+	return created, ""
+}
+
+// CaptureSessionHandoffBestEffort captures a restart handoff for either
+// backend, giving the built-in PTY path the same "never block a restart"
+// guarantee the tmux path has: any error becomes a note for the caller to
+// log, and the restart proceeds without a handoff.
+func CaptureSessionHandoffBestEffort(ctx context.Context, remote domain.RemoteExecutor, session domain.Session, summaryPath string) (created bool, note string) {
+	var err error
+	if session.IsPTY() {
+		created, err = CaptureRestartSessionSummaryPTY(ctx, remote, session.ID, summaryPath)
+	} else {
+		created, err = CaptureRestartSessionSummary(ctx, remote, session.TmuxSession, summaryPath)
+	}
+	if err != nil {
+		return false, fmt.Sprintf("restart handoff not captured: %v", err)
+	}
+	return created, ""
+}
+
 func currentPaneCommand(ctx context.Context, remote domain.RemoteExecutor, tmuxSession string) (string, error) {
 	out, err := remote.Execute(ctx, fmt.Sprintf("tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true", tmuxSession))
 	if err != nil {
@@ -102,11 +132,16 @@ func remoteFileExists(ctx context.Context, remote TerminalExecutor, path string)
 }
 
 func isShellCommand(cmd string) bool {
-	cmd = strings.TrimSpace(strings.ToLower(filepath.Base(cmd)))
+	// Emptiness must be decided before filepath.Base: Base("") returns ".",
+	// which never matched the empty check below — so a nonexistent tmux
+	// session (pane probe returns "") was treated as a running agent and the
+	// caller sat out its whole handoff timeout waiting on a file no one
+	// could ever write. Reviving a worktree hits exactly that case.
+	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return true
 	}
-	_, ok := shellCommands[cmd]
+	_, ok := shellCommands[strings.ToLower(filepath.Base(cmd))]
 	return ok
 }
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -102,6 +103,17 @@ func mustRoot() string {
 func (m *Manager) holderCmd() []string {
 	if len(m.HolderCmd) > 0 {
 		return m.HolderCmd
+	}
+	// Under `go test`, os.Executable() is the *test binary*, and a Go test
+	// binary ignores unknown positional args — so re-execing it as
+	// "<binary> pty hold <id>" silently re-runs the whole test suite instead
+	// of holding a PTY. Any suite that then creates a session forks another
+	// full suite, exponentially: this once grew to ~2000 resident processes
+	// and OOM-killed the dev box. Fail loudly instead; tests must inject
+	// HolderCmd (see NewManagerWithRoot).
+	if testing.Testing() {
+		panic("ptyruntime: HolderCmd must be set explicitly under go test — " +
+			"defaulting to os.Executable() would re-exec the test binary as its own holder")
 	}
 	exe, err := os.Executable()
 	if err != nil {

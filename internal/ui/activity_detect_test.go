@@ -38,10 +38,10 @@ func TestDetectSessionActivity(t *testing.T) {
 			wantNeeds:    true,
 		},
 		{
-			name:         "silent shell prompt is idle",
+			name:         "silent shell prompt means the agent exited",
 			pane:         "code@regent0:~/repos/realfi$ ",
 			since:        10 * time.Minute,
-			wantActivity: "idle",
+			wantActivity: "exited",
 		},
 		{
 			// Captured from a real session: turn finished, agent at its prompt.

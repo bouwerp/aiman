@@ -294,8 +294,15 @@ func (m *Manager) ScanTmuxSessions(ctx context.Context) ([]string, error) {
 	// tmux ls -F '#S'
 	output, err := m.Execute(ctx, "tmux ls -F '#S'")
 	if err != nil {
-		// If tmux ls fails, it might mean there are no sessions
-		return nil, nil
+		// `tmux ls` with no server exits non-zero — that is genuinely "no
+		// sessions", not a failure. Anything else (SSH transport, timeout)
+		// must propagate: swallowing it made a failed scan look like a host
+		// with zero sessions, which the discovery merge then read as every
+		// known session on that host being confirmed dead.
+		if isTmuxNoServerError(err.Error()) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to scan tmux sessions: %w", err)
 	}
 
 	sessions := []string{}
@@ -306,6 +313,15 @@ func (m *Manager) ScanTmuxSessions(ctx context.Context) ([]string, error) {
 		}
 	}
 	return sessions, nil
+}
+
+// isTmuxNoServerError reports whether an error from `tmux ls` just means no
+// tmux server is running, across the phrasings tmux versions use.
+func isTmuxNoServerError(errText string) bool {
+	s := strings.ToLower(errText)
+	return strings.Contains(s, "no server running") ||
+		strings.Contains(s, "error connecting to") ||
+		strings.Contains(s, "no sessions")
 }
 
 func (m *Manager) ScanGitRepos(ctx context.Context) ([]string, error) {

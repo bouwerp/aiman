@@ -69,9 +69,9 @@ func TestClassify(t *testing.T) {
 			confidence: High,
 		},
 		{
-			name:       "shell prompt with silence is idle",
+			name:       "shell prompt with silence means the agent exited",
 			obs:        Observation{Pane: "code@regent0:~/repos/realfi$ ", SinceOutput: 10 * time.Minute},
-			want:       domain.AgentStateIdle,
+			want:       domain.AgentStateExited,
 			confidence: High,
 		},
 		{
@@ -218,6 +218,7 @@ func TestUIActivity(t *testing.T) {
 		domain.AgentStateWaitingInput:      "input",
 		domain.AgentStateWaitingBackground: "bgwait",
 		domain.AgentStateIdle:              "idle",
+		domain.AgentStateExited:            "exited",
 		domain.AgentStateUnknown:           "",
 		domain.AgentStateErrored:           "",
 	}
@@ -228,15 +229,15 @@ func TestUIActivity(t *testing.T) {
 	}
 }
 
-// A prompt that appeared this instant is idle, but not confidently so — the
-// caller should look again rather than act on it.
+// A prompt that appeared this instant means the agent process just exited,
+// but not confidently so — the caller should look again rather than act on it.
 func TestClassifyFlagsFreshShellPromptAsLowConfidence(t *testing.T) {
 	got := Classify(Observation{
 		Pane:        "code@regent0:~$ ",
 		SinceOutput: time.Second,
 	})
-	if got.State != domain.AgentStateIdle {
-		t.Errorf("State = %q, want idle", got.State)
+	if got.State != domain.AgentStateExited {
+		t.Errorf("State = %q, want exited", got.State)
 	}
 	if got.Confidence != Low {
 		t.Errorf("Confidence = %v, want Low for a prompt that just appeared", got.Confidence)

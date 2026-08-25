@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os/exec"
 	"strings"
@@ -16,12 +17,16 @@ type restartRemote struct {
 	paneCommand          string
 	fileExists           bool
 	sendPromptWritesFile bool
+	failOn               string // command substring that triggers a hard error
 }
 
 func (r *restartRemote) Connect(context.Context) error { return nil }
 func (r *restartRemote) GetRoot() string               { return "" }
 func (r *restartRemote) Execute(_ context.Context, cmd string) (string, error) {
 	r.commands = append(r.commands, cmd)
+	if r.failOn != "" && strings.Contains(cmd, r.failOn) {
+		return "", fmt.Errorf("simulated remote failure for %q", r.failOn)
+	}
 	switch {
 	case strings.HasPrefix(cmd, "rm -f "):
 		r.fileExists = false
@@ -129,5 +134,57 @@ func TestCaptureRestartSessionSummary_TimeoutFallsBackWithoutError(t *testing.T)
 	}
 	if ok {
 		t.Fatal("expected timeout path to continue without a summary")
+	}
+}
+
+// A revived worktree has no tmux session at all, so the pane probe returns
+// "": that must skip the handoff instantly, not inject a prompt into a
+// nonexistent session and sit out the whole timeout. filepath.Base("")
+// returns ".", which used to defeat the empty check.
+func TestCaptureRestartSessionSummary_SkipsWhenNoPaneExists(t *testing.T) {
+	remote := &restartRemote{paneCommand: ""}
+
+	ok, err := CaptureRestartSessionSummary(context.Background(), remote, "no-such-session", "/work/.aiman_session_summary.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Fatal("expected an absent pane to skip handoff capture")
+	}
+	joined := strings.Join(remote.commands, "\n")
+	if strings.Contains(joined, "SESSION_SUMMARY_SAVED") {
+		t.Fatalf("did not expect a handoff prompt for a nonexistent session, got commands:\n%s", joined)
+	}
+}
+
+// A real (non-timeout) remote failure must never block a restart: the
+// best-effort wrapper swallows it and hands back a note instead of an error.
+func TestCaptureRestartSessionSummaryBestEffort_SwallowsHardError(t *testing.T) {
+	remote := &restartRemote{paneCommand: "node", failOn: "#{pane_current_command}"}
+
+	created, note := CaptureRestartSessionSummaryBestEffort(context.Background(), remote, "session-1", "/work/.aiman_session_summary.md")
+	if created {
+		t.Fatal("expected created=false when the remote call fails")
+	}
+	if note == "" {
+		t.Fatal("expected a non-empty note describing the failure")
+	}
+}
+
+// The graceful paths (shell pane, success) still behave the same through
+// the wrapper, with an empty note.
+func TestCaptureRestartSessionSummaryBestEffort_PassesThroughSuccess(t *testing.T) {
+	remote := &restartRemote{paneCommand: "node", sendPromptWritesFile: true}
+
+	oldInterval := restartSummaryPollInterval
+	restartSummaryPollInterval = time.Millisecond
+	defer func() { restartSummaryPollInterval = oldInterval }()
+
+	created, note := CaptureRestartSessionSummaryBestEffort(context.Background(), remote, "session-1", "/work/.aiman_session_summary.md")
+	if !created {
+		t.Fatal("expected the handoff to be captured")
+	}
+	if note != "" {
+		t.Fatalf("expected no note on success, got %q", note)
 	}
 }

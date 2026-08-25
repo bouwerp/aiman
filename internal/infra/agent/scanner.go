@@ -66,6 +66,23 @@ func KnownAgents() []domain.Agent {
 	return out
 }
 
+// FindKnown resolves a persisted domain.Session.AgentName back into a runnable
+// domain.Agent (with its launch Command) without a remote scan. Used to
+// restart/resume a session whose agent identity is already known instead of
+// forcing the user through the agent picker again.
+func FindKnown(name string) (domain.Agent, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return domain.Agent{}, false
+	}
+	for _, a := range knownAgents {
+		if a.Name == name {
+			return a, true
+		}
+	}
+	return domain.Agent{}, false
+}
+
 // Executor defines the interface for executing remote commands.
 type Executor interface {
 	Execute(ctx context.Context, cmd string) (string, error)

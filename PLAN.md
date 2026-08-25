@@ -30,6 +30,117 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
+### Restart/recovery robustness ✅
+Restarting a session could leave a pane that only *looked* dead: both create and
+restart append `; exec bash -i` after the agent command so a crashed process
+never takes the whole tmux session down, but that meant a crashed or
+never-started agent was indistinguishable from a normal idle shell — nothing in
+the dashboard flagged it, and reviving a worktree that outlived its tmux
+session (host reboot, tmux server crash) always forced the full agent-picker
+flow even when aiman already knew which agent had been running there.
+
+- `pane.Classify` now reports the bare-shell-prompt case as `domain.AgentStateExited`
+  instead of folding it into `AgentStateIdle` — the signal already existed, it was
+  just mislabeled. The dashboard shows it as a distinct `⚠ agent exited` state
+  (`internal/ui/session_list.go`), colored the same as other stuck states.
+- `s` on a session whose agent is already known (persisted `AgentName`, or
+  inferred from a hook sidecar's transcript path via
+  `agenthook.InferAgentName` when the DB row itself was lost) now skips the
+  agent picker entirely and resumes directly — `agent.FindKnown` resolves the
+  name back to a runnable command without a remote scan. `S` remains for
+  deliberately switching agents; an unresolvable identity still falls back to
+  the picker rather than guessing.
+- `CaptureRestartSessionSummaryBestEffort` (`internal/usecase/restart_handoff.go`)
+  wraps the restart-handoff capture so *any* failure — not only the
+  already-graceful context-timeout case — degrades to "no handoff" instead of
+  aborting the restart. A missing or failed handoff can no longer block
+  reviving a session.
+
+### Config-save test isolation and startup session flicker ✅
+Two unrelated but severe robustness bugs, both found the hard way (running
+this repo's own test suite locally overwrote the maintainer's real
+`~/.aiman/config.yaml`, and the emptied remotes list then cascaded into the
+whole session history being pruned from the database on the next launch):
+
+- `TestSetupModelSavesOnEnterViaHarness` called the real `Config.Save()`
+  (`internal/infra/config/config.go`), which resolves `~/.aiman/config.yaml`
+  from the actual `HOME` env var with no test-injectable override, and never
+  sandboxed `HOME` the way every other save-exercising test in the package
+  does. `Config.Save()` also now creates `~/.aiman` if missing rather than
+  silently failing the write (this was also the test's pre-existing CI
+  failure, independent of the isolation bug).
+- `loadConfiguredSessions` (`internal/ui/startup.go`) deleted any DB session
+  whose `RemoteHost` didn't resolve against the current config — and an
+  empty remotes list fails that check for *every* session. It now only
+  prunes when the config has at least one remote; zero remotes is treated as
+  "probably broken," never as "delete everything."
+- Separately: `runDiscovery` (`internal/ui/startup.go`) and the dashboard's
+  "r" refresh handler both marked a host `scannedHosts[host] = true` right
+  after `Connect` succeeded, discarding `Discover`'s own error
+  (`sessions, _ := discoverer.Discover(...)`). A transient scan failure (one
+  flaky SSH command) was then read by the merge step as "this host was fully
+  scanned and these sessions weren't found" — so a session would show on the
+  DB-backed first paint and then disappear once the (failed) scan result
+  landed. `usecase.DiscoverHostSessions` now reports scan success distinct
+  from "found nothing," and both call sites use it.
+
+### Revive abandoned worktrees, with multi-agent detection ✅
+Discovery's remote scan already walks the whole configured repo root for
+every git worktree, known to aiman or not — but a worktree aiman has never
+tracked before was silently dropped before reaching the dashboard, to avoid
+flooding the session list on a remote with dozens of them. There was also no
+way to identify which agent had worked in such a worktree, since the
+existing hook-sidecar signal only exists for sessions aiman itself launched.
+
+- **Menu → Revive Worktree**: an on-demand screen (`internal/ui/revive_worktree.go`)
+  that scans a remote's repo root for worktrees not already visible anywhere
+  in the dashboard (`usecase.SessionDiscoverer.OrphanWorktreeSessions`) and
+  lists each with its candidate agent(s).
+- **Agent identity from git history, not project files**: per-vendor project
+  files (`.claude/`, `AGENTS.md`, …) are often committed to the repo and
+  shared across every worktree of it, so they say "this repo supports agent
+  X," not "agent X worked in *this* worktree." Commit trailers are genuinely
+  per-worktree and already capture sequential multi-agent work: many agent
+  CLIs (including this one) append `Co-authored-by: <name> <email>` when
+  they commit. `ssh.Manager.WorktreeCoAuthorHints` collects those in one
+  batched round trip; `agenthook.InferAgentNameFromText` and
+  `usecase.ResolveWorktreeAgentCandidates` turn them into a ranked,
+  deduplicated candidate list per worktree.
+- Selecting a worktree resumes with as little friction as an already-known
+  session does: zero candidates falls back to the full agent picker, exactly
+  one revives immediately with no picker or confirm, and two or more show a
+  short pick-list of just those candidates (never a guess) before reviving.
+  All three paths hand off to the existing `restartSession()` — no new
+  session-launch logic was needed.
+
+### Restart runs in the background; discovery failures can't fake an empty host ✅
+Live testing of the revive flow surfaced three problems at once:
+
+- **A revive sat out the full 90 s handoff budget on a session that doesn't
+  exist**: `isShellCommand` called `filepath.Base` before its emptiness
+  check, and `Base("")` returns `"."` — so the pane probe's empty answer for
+  a nonexistent tmux session read as "an agent is running", a handoff prompt
+  was injected into nothing, and the restart waited for a file no one could
+  ever write. Emptiness is now decided first, so a missing pane skips the
+  handoff instantly.
+- **Sessions still flickered in and out of the list at startup**: the
+  v0.16.2 fix only covered discovery errors that *propagated*, but
+  `ScanTmuxSessionDetails` swallowed every error (`return nil, nil`) on the
+  incorrect theory that "no tmux server" exits non-zero — the scan script
+  pipes `tmux ls` into a `while` loop, so it exits 0 with empty output in
+  that case, meaning every swallowed error was a real transport failure
+  masquerading as "zero sessions". The batch tmux scan now propagates
+  errors; the per-item `ScanTmuxSessions` distinguishes tmux's own
+  no-server message from transport failures; and a failed worktree sweep
+  now fails the whole `Discover` rather than returning a partial result the
+  merge step reads as complete.
+- **Restart/revive blocked the whole dashboard on a loading screen**: every
+  restart-shaped flow (`s` resume, `S` switch, revive, change-scope,
+  post-picker) now runs through `startBackgroundRestart`, reusing the
+  background-creation machinery — the session's row shows live progress
+  steps in the preview panel while the dashboard stays fully usable, exactly
+  like creating a new session.
+
 ### Bug Fixes & Reliability (v0.6.43 – v0.6.57)
 - **Session restart**: Identified and fixed root causes of restart hangs and failures across many releases.
   - Simplified `restartSession` from 8+ SSH calls to 1 (eliminate ValidateDir, git metadata, trust cmds).

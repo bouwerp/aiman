@@ -22,6 +22,7 @@ func TestSessionStateColorByActivity(t *testing.T) {
 		{item{needsInput: true}, stateColorWaiting},
 		{item{activity: "idle"}, stateColorIdle},
 		{item{activity: "stale"}, stateColorError},
+		{item{activity: "exited"}, stateColorError},
 		{item{activity: "create-failed"}, stateColorError},
 		{item{session: domain.Session{AgentEnded: true}}, stateColorEnded},
 		{item{header: true, activity: "waiting"}, stateColorWaiting},
@@ -33,6 +34,19 @@ func TestSessionStateColorByActivity(t *testing.T) {
 			t.Fatalf("state=%q needs=%v ended=%v header=%v: got %q want %q",
 				tt.it.activity, tt.it.needsInput, tt.it.session.AgentEnded, tt.it.header, got, tt.want)
 		}
+	}
+}
+
+// A pane that fell back to a bare shell must read as a warning, distinct
+// from a normal idle agent, so the user notices and presses 's' to resume.
+func TestExitedChromeWarnsDistinctlyFromIdle(t *testing.T) {
+	it := item{session: domain.Session{Name: "impl"}, activity: "exited"}
+	prefix, activity := it.chrome()
+	if !strings.Contains(activity, "exited") {
+		t.Fatalf("chrome activity %q should mention exited", activity)
+	}
+	if prefix != "! " {
+		t.Fatalf("chrome prefix = %q, want a warning marker", prefix)
 	}
 }
 
