@@ -68,6 +68,7 @@ const (
 	AgentStateWaitingInput      AgentState = "waiting_input"      // asking a question or awaiting confirmation
 	AgentStateWaitingBackground AgentState = "waiting_background" // blocked on its own background agents/tasks
 	AgentStateErrored           AgentState = "errored"            // error visible in output
+	AgentStateExited            AgentState = "exited"             // pane fell back to a bare shell — the agent process is no longer running
 	AgentStateUnknown           AgentState = "unknown"
 )
 

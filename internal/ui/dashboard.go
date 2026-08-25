@@ -300,6 +300,9 @@ func (i item) Description() string {
 	if i.activity == "stale" {
 		return fmt.Sprintf("Repo: %s | Host: %s%s | State: thinking (no progress >5m — may be stuck)%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
 	}
+	if i.activity == "exited" {
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: agent exited — press s to resume%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+	}
 	if i.session.Mode == domain.SessionModeAutonomous && i.session.Status == domain.SessionStatusInactive {
 		return fmt.Sprintf("Trigger Rule: %s | Repo: %s | Host: %s | Poll: %ds%s", i.session.TriggerSource, i.session.RepoName, i.session.RemoteHost, i.session.AutonomousConfig.PollFrequencySecs, createdPart)
 	}
@@ -700,7 +703,8 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "rename session or group")),
 			key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "assign session group")),
 			key.NewBinding(key.WithKeys("enter", " ", "space"), key.WithHelp("enter", "collapse/expand group")),
-			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "restart / switch agent")),
+			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "resume / restart (auto agent)")),
+			key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "switch agent")),
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change directory scope")),
 			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "manage tunnels")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
@@ -3788,7 +3792,11 @@ func (m *Model) renderRestartConfirm() string {
 	var b strings.Builder
 	b.WriteString(activeStyle.Render("Confirm Session Restart") + "\n\n")
 	b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TmuxSession))
-	b.WriteString("The current agent writes a handoff, then the agent you pick starts and is told to read it. Choose a different agent to switch.\n\n")
+	if known := m.sessionCfg.Agent; known != nil {
+		b.WriteString(fmt.Sprintf("The current agent writes a handoff, then %s resumes in its place.\n\n", known.Name))
+	} else {
+		b.WriteString("The current agent writes a handoff, then the agent you pick starts and is told to read it. Choose a different agent to switch.\n\n")
+	}
 	b.WriteString("Do you want to proceed?\n\n")
 	b.WriteString(activeStyle.Render("[y]") + " Yes  " + activeStyle.Render("[n]") + " No")
 
@@ -4655,6 +4663,18 @@ func (m *Model) handleIntelligenceKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return classifySessionCmd(m.cfg, m.intelligence, s), true
 }
 
+// startAgentPickerRestart shows the manual agent-picker restart flow: used
+// when the session's agent identity can't be resolved automatically (no
+// known AgentName, and no vendor hint from a hook sidecar), or the user
+// explicitly asked to switch agents with "S". Callers must have already set
+// m.restartingSession and m.sessionCfg.
+func (m *Model) startAgentPickerRestart() (tea.Model, tea.Cmd) {
+	m.loadingMsg = "Scanning available agents..."
+	m.loadingNext = viewStateRestartAgentPicker
+	m.state = viewStateLoading
+	return m, m.fetchAgents()
+}
+
 func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if m.currentTab == tabDaemons {
 		switch msg.String() {
@@ -4681,7 +4701,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			return m, nil, true
 		}
 	}
-	if msg.String() == "ctrl+r" || msg.String() == "s" {
+	if msg.String() == "ctrl+r" || msg.String() == "s" || msg.String() == "S" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			selectedSess := sel.(item).session
 			if remote, ok := resolveRemote(m.cfg, selectedSess); ok {
@@ -4704,16 +4724,37 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			m.log("Preparing to restart session %q (ID: %s)", selectedSess.TmuxSession, selectedSess.ID)
 			_ = appendDebugLog(fmt.Sprintf("[ui %s] restart triggered: session=%s status=%s\n", time.Now().Format("15:04:05.000"), selectedSess.TmuxSession, selectedSess.Status))
 
-			// If session is active or syncing, ask for confirmation
+			// "S" always means "switch agent": show the picker even when the
+			// agent is already known. "s"/"ctrl+r" resolve the last-known agent
+			// (from the DB, or inferred from a hook sidecar during discovery)
+			// and skip the picker entirely — that is the whole point of
+			// reviving a session without re-asking every time.
+			forceSwitch := msg.String() == "S"
+			var knownAgent *domain.Agent
+			if !forceSwitch {
+				if resolved, ok := agent.FindKnown(selectedSess.AgentName); ok {
+					knownAgent = &resolved
+				}
+			}
+			m.sessionCfg.Agent = knownAgent
+
+			// A live session's pane is about to be replaced either way, so
+			// still confirm before touching it — whether that leads to an
+			// auto-resume or the picker is decided by handleRestartConfirmUpdate.
 			if selectedSess.Status == domain.SessionStatusActive || selectedSess.Status == domain.SessionStatusSyncing {
 				m.state = viewStateRestartConfirm
 				return m, nil, true
 			}
 
-			m.loadingMsg = "Scanning available agents..."
-			m.loadingNext = viewStateRestartAgentPicker
-			m.state = viewStateLoading
-			return m, m.fetchAgents(), true
+			if knownAgent != nil {
+				m.loadingMsg = fmt.Sprintf("Resuming with %s...", knownAgent.Name)
+				m.loadingNext = viewStateMain
+				m.state = viewStateLoading
+				return m, m.restartSession(), true
+			}
+
+			model, cmd := m.startAgentPickerRestart()
+			return model, cmd, true
 		}
 	}
 
@@ -6744,7 +6785,7 @@ func (m *Model) renderMainView() string {
 
 	footer := "\n" + remoteInfo + "\n\n" + doctorSection
 
-	helpText := "n: new • e: rename • g: group • enter: collapse • f: filter • c: scope • t: tunnels • s: restart • y: copy • r: refresh • i: AI • ctrl+k: term • m: menu • q: quit"
+	helpText := "n: new • e: rename • g: group • enter: collapse • f: filter • c: scope • t: tunnels • s: resume • S: switch agent • y: copy • r: refresh • i: AI • ctrl+k: term • m: menu • q: quit"
 	if m.currentTab == tabDaemons {
 		helpText = "agent API: i install • s restart • c reload • u update • r probe • ctrl+k stop • tab: sessions • q: quit"
 	}
@@ -7319,15 +7360,18 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 
 		// Step 1: ask the current agent for a restart handoff before replacing it.
+		// A missing or failed handoff must never block the restart itself — the
+		// best-effort wrapper swallows any error (not just a timeout) and the
+		// new agent simply starts without one.
 		summaryPath := filepath.Join(workingDir, domain.AimanSessionSummaryFileName)
 		m.sendStatus("Capturing restart handoff...")
 		logf("step1: capturing restart handoff to %s", summaryPath)
 		summaryCtx, summaryCancel := context.WithTimeout(ctx, 90*time.Second)
-		summaryCreated, err := usecase.CaptureRestartSessionSummary(summaryCtx, mgr, s.TmuxSession, summaryPath)
+		summaryCreated, note := usecase.CaptureRestartSessionSummaryBestEffort(summaryCtx, mgr, s.TmuxSession, summaryPath)
 		summaryCancel()
-		if err != nil {
-			logf("step1 FAILED: %v", err)
-			return sessionCreateMsg{err: fmt.Errorf("failed to capture restart handoff: %w", err)}
+		if note != "" {
+			logf("step1: %s", note)
+			m.sendStatus(note)
 		}
 		logf("step1 ok: summaryCreated=%t", summaryCreated)
 
@@ -7493,10 +7537,15 @@ func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y", "enter":
-			m.loadingMsg = "Scanning available agents..."
-			m.loadingNext = viewStateRestartAgentPicker
-			m.state = viewStateLoading
-			return m, m.fetchAgents()
+			// A known agent was already resolved before this confirm (see
+			// handleSessionManageKey) — skip the picker and resume directly.
+			if m.sessionCfg.Agent != nil {
+				m.loadingMsg = fmt.Sprintf("Resuming with %s...", m.sessionCfg.Agent.Name)
+				m.loadingNext = viewStateMain
+				m.state = viewStateLoading
+				return m, m.restartSession()
+			}
+			return m.startAgentPickerRestart()
 		case "n", "esc":
 			m.state = viewStateMain
 			m.restartingSession = nil

@@ -214,6 +214,16 @@ func (d *SessionDiscoverer) enrichHookReports(ctx context.Context, sessions []do
 			continue
 		}
 		agenthook.ApplyReport(&sessions[i], r, now)
+		// A revived worktree may have no persisted AgentName at all (its DB
+		// row was never written, or was lost). Best-effort infer it from the
+		// hook-reported transcript path rather than forcing the restart flow
+		// to always ask; leaves AgentName empty (picker fallback) when the
+		// path carries no recognizable vendor hint.
+		if sessions[i].AgentName == "" {
+			if name := agenthook.InferAgentName(sessions[i].AgentSessionPath); name != "" {
+				sessions[i].AgentName = name
+			}
+		}
 	}
 }
 

@@ -146,12 +146,17 @@ func Classify(obs Observation) Result {
 	silent := obs.SinceOutput >= 0 && obs.SinceOutput >= idleAfter
 
 	if shellPromptRe.MatchString(strings.TrimRight(tail, " \t")) {
+		// A bare shell prompt means no agent CLI is fronting this pane at all —
+		// every aiman session is expected to run one, so this is the process
+		// having exited (crash, `exit`, or the agent never started), not a
+		// legitimately idle agent. A live agent renders its own input box
+		// (agentReadyRe below), never a raw shell prompt.
 		if silent || obs.SinceOutput < 0 {
-			return Result{State: domain.AgentStateIdle, Confidence: High, Reason: "shell prompt with no recent output"}
+			return Result{State: domain.AgentStateExited, Confidence: High, Reason: "shell prompt with no recent output"}
 		}
 		// A prompt that just appeared means a command finished this instant;
-		// treat it as idle but invite a second look.
-		return Result{State: domain.AgentStateIdle, Confidence: Low, Reason: "shell prompt but output is recent"}
+		// treat it as exited but invite a second look.
+		return Result{State: domain.AgentStateExited, Confidence: Low, Reason: "shell prompt but output is recent"}
 	}
 
 	if silent {
@@ -246,6 +251,8 @@ func UIActivity(s domain.AgentState) string {
 		return "bgwait"
 	case domain.AgentStateIdle:
 		return "idle"
+	case domain.AgentStateExited:
+		return "exited"
 	default:
 		return ""
 	}

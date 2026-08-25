@@ -129,6 +129,42 @@ func ParseStored(raw []byte) Report {
 	return ExtractReport(raw)
 }
 
+// vendorPathHints maps a substring of a hook-reported transcript/session path
+// to the domain.Agent catalog name (internal/infra/agent.knownAgents) that
+// owns it. Only vendors whose config directory install.go actually installs
+// hooks into, and that unambiguously belong to one known agent, are listed —
+// this is a conservative best-effort guess, not exhaustive: OpenCode and Pi
+// report no path today, so a session run under either falls through to the
+// manual agent picker instead of being guessed at.
+var vendorPathHints = []struct {
+	substr string
+	name   string
+}{
+	{"/.claude/", "Claude Code"},
+	{"/.codex/", "Codex CLI"},
+	{"/.copilot/", "GitHub Copilot CLI"},
+	{"/.cursor/", "Cursor"},
+	{"/.grok/", "Grok Build CLI"},
+}
+
+// InferAgentName makes a best-effort guess at which known agent produced a
+// hook-reported transcript/session path, for reviving a session whose
+// AgentName was never recorded (or was lost along with its database row).
+// Returns "" when the path carries no recognizable vendor hint — callers
+// must fall back to asking, not guessing.
+func InferAgentName(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	for _, hint := range vendorPathHints {
+		if strings.Contains(path, hint.substr) {
+			return hint.name
+		}
+	}
+	return ""
+}
+
 // ListSidecarsCmd dumps every native-session sidecar in one SSH round trip.
 const ListSidecarsCmd = `for f in "$HOME"/.aiman/native-sessions/*; do [ -f "$f" ] || continue; printf 'ID %s\n' "$(basename "$f")"; cat "$f"; printf '\nEND\n'; done`
 

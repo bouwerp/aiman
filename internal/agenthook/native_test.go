@@ -59,3 +59,24 @@ func TestParseSidecarDump(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestInferAgentName(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/home/dev/.claude/projects/-home-dev-repo/abc-123.jsonl", "Claude Code"},
+		{"/home/dev/.codex/sessions/2024/01/01/session.jsonl", "Codex CLI"},
+		{"/home/dev/.copilot/sessions/session.json", "GitHub Copilot CLI"},
+		{"/home/dev/.cursor/chats/abc.json", "Cursor"},
+		{"/home/dev/.grok/sessions/abc.json", "Grok Build CLI"},
+		{"/home/dev/.opencode/storage/session/abc.json", ""}, // no vendor hint mapped
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tt := range tests {
+		if got := InferAgentName(tt.path); got != tt.want {
+			t.Errorf("InferAgentName(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
