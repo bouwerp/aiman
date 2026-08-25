@@ -155,9 +155,11 @@ func runDiscovery(cfg *config.Config) tea.Cmd {
 				// Skip unreachable remotes — don't block startup
 				continue
 			}
+			sessions, ok := usecase.DiscoverHostSessions(ctx, mgr, mutagen.NewEngine(), remote.Host)
+			if !ok {
+				continue
+			}
 			result.scannedHosts[remote.Host] = true
-			discoverer := usecase.NewSessionDiscoverer(mgr, mutagen.NewEngine())
-			sessions, _ := discoverer.Discover(ctx, remote.Host)
 			result.sessions = append(result.sessions, sessions...)
 		}
 		return discoveryResultMsg(result)

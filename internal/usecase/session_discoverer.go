@@ -198,6 +198,23 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 	return sessions, nil
 }
 
+// DiscoverHostSessions runs Discover for one already-connected remote and
+// reports whether the scan actually succeeded, distinct from whether it
+// found anything. A transient scan failure (one flaky SSH command, a
+// timeout) is not proof a host's sessions are gone: callers that mark a host
+// "scanned" on a false ok end up telling the merge step every database
+// session for that host is confirmed dead, which drops them from the
+// dashboard until the next successful scan. Callers should treat ok==false
+// exactly like an unreachable remote — leave the database's view of that
+// host untouched this round.
+func DiscoverHostSessions(ctx context.Context, remote domain.RemoteExecutor, syncEngine domain.SyncEngine, host string) ([]domain.Session, bool) {
+	sessions, err := NewSessionDiscoverer(remote, syncEngine).Discover(ctx, host)
+	if err != nil {
+		return nil, false
+	}
+	return sessions, true
+}
+
 func (d *SessionDiscoverer) enrichHookReports(ctx context.Context, sessions []domain.Session) {
 	if d.remoteExecutor == nil || len(sessions) == 0 {
 		return

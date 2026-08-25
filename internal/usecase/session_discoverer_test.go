@@ -440,3 +440,38 @@ func TestDedupeDiscoveredSessions_DropsAimanSyncGhostsAndOrphanDup(t *testing.T)
 		t.Fatalf("expected active session kept")
 	}
 }
+
+// failingTmuxRemote forces Discover's tmux scan to fail on both the batch
+// and per-item paths (discovererRemote implements neither
+// domain.BatchDiscovery nor an erroring ScanTmuxSessions on its own).
+type failingTmuxRemote struct {
+	discovererRemote
+}
+
+func (r *failingTmuxRemote) ScanTmuxSessions(context.Context) ([]string, error) {
+	return nil, fmt.Errorf("ssh: connection lost")
+}
+
+// DiscoverHostSessions must report failure distinctly from "found nothing":
+// callers (internal/ui/startup.go's runDiscovery, the dashboard's "r"
+// refresh) rely on that distinction to avoid marking a host "scanned" on a
+// transient error, which would otherwise tell the merge step every database
+// session for that host is confirmed dead.
+func TestDiscoverHostSessionsReportsFailureOnScanError(t *testing.T) {
+	remote := &failingTmuxRemote{}
+	sessions, ok := DiscoverHostSessions(context.Background(), remote, &recordingSyncEngine{}, "regent0")
+	if ok {
+		t.Fatal("expected ok=false when the scan fails")
+	}
+	if sessions != nil {
+		t.Errorf("expected no sessions on failure, got %+v", sessions)
+	}
+}
+
+func TestDiscoverHostSessionsReportsSuccessEvenWithNoSessions(t *testing.T) {
+	remote := &discovererRemote{tmuxSessions: []string{}}
+	_, ok := DiscoverHostSessions(context.Background(), remote, &recordingSyncEngine{}, "regent0")
+	if !ok {
+		t.Fatal("expected ok=true on a clean scan, even with zero sessions found")
+	}
+}
