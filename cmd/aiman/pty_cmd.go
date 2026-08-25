@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/bouwerp/aiman/internal/ptyhold"
 	"github.com/bouwerp/aiman/internal/server"
 	"golang.org/x/term"
 )
@@ -31,6 +32,8 @@ func runPTY(args []string) error {
 	}
 
 	switch args[0] {
+	case "hold":
+		return runPTYHold(args[1:])
 	case "list":
 		return callAndPrint(sock, "pty.list", map[string]any{})
 	case "create":
@@ -264,4 +267,20 @@ func callAndPrintRaw(sock, method string, rawParams []byte) error {
 		return errors.New(resp.Error.Message)
 	}
 	return writeJSON(resp.Result)
+}
+
+// runPTYHold is the internal holder entry point (`aiman pty hold --root R
+// --id ID`); it blocks for the lifetime of the session and is not part of the
+// public CLI surface.
+func runPTYHold(args []string) error {
+	flags, _ := takeFlags(args)
+	root, id := flags["root"], flags["id"]
+	if root == "" || id == "" {
+		return errors.New("pty hold requires --root and --id")
+	}
+	if err := ptyhold.Run(root, id); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return nil
 }

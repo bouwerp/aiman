@@ -1,33 +1,27 @@
-// Package ptyruntime owns long-lived PTY sessions inside aiman serve.
-//
-// Each session is a real pseudo-terminal (creack/pty) whose slave side runs an
-// agent or shell. The master side is held by the manager: output is appended
-// to a bounded scrollback ring and fanned out to live subscribers, input is
-// written straight through, and attach clients replay the ring before
-// streaming. Sessions live as long as the serve process does — they survive
-// laptop disconnects by design, but a serve restart terminates them.
+// Package ptyruntime is a thin client over the ptyhold contract: sessions are
+// owned by detached holder processes (which survive serve restarts), and this
+// package merely spawns holders and proxies operations to the session
+// directory's files and socket. See internal/ptyhold for the contract.
 package ptyruntime
 
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
-	pty "github.com/creack/pty/v2"
-)
-
-const (
-	// DefaultScrollbackBytes bounds each session's replay buffer (1 MiB).
-	DefaultScrollbackBytes = 1 << 20
-	// DefaultKillGrace is how long Kill waits after SIGTERM before SIGKILL.
-	DefaultKillGrace = 3 * time.Second
+	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/ptyhold"
 )
 
 // ErrNotFound is returned when a session id does not exist.
 var ErrNotFound = errors.New("pty session not found")
+
+// killTimeout covers the holder's internal SIGTERM->SIGKILL grace plus slack.
+const killTimeout = 8 * time.Second
 
 // Spec describes a session to create.
 type Spec struct {
@@ -37,10 +31,9 @@ type Spec struct {
 	Name string
 	// Dir is the working directory for the spawned command.
 	Dir string
-	// Command is run via `bash -l -c '<command>; exec bash -i'` so agents get a
-	// login PATH and drop to an interactive shell if they exit.
+	// Command runs under `bash -l -c '<command>; exec bash -i'` inside the PTY.
 	Command string
-	// Env is added on top of the serve process environment.
+	// Env is added on top of the holder's inherited environment.
 	Env map[string]string
 	// Cols/Rows set the initial window size (0 defaults to 80x24).
 	Cols, Rows int
@@ -64,140 +57,101 @@ type SessionInfo struct {
 	PID     int       `json:"pid,omitempty"`
 	ExitErr string    `json:"exit_error,omitempty"`
 	Started time.Time `json:"started_at"`
-	Size    string    `json:"size"`
+	Size    string    `json:"size,omitempty"`
 }
 
-// bootstrapCommand mirrors flow_manager's tmux launch shape: login shell for
-// PATH, then drop to an interactive bash when the command exits so failures
-// stay inspectable in the pane.
-func bootstrapCommand(command string) string {
-	return fmt.Sprintf(
-		"export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s; exec bash -i",
-		command,
-	)
-}
-
-func envMap(base []string, extra map[string]string) []string {
-	out := make([]string, 0, len(base)+len(extra))
-	seen := make(map[string]int, len(base)+len(extra))
-	for _, kv := range base {
-		for i := 0; i < len(kv); i++ {
-			if kv[i] == '=' {
-				seen[kv[:i]] = len(out)
-				break
-			}
-		}
-		out = append(out, kv)
-	}
-	for k, v := range extra {
-		if v == "" {
-			continue
-		}
-		full := k + "=" + v
-		if at, ok := seen[k]; ok {
-			out[at] = full
-			continue
-		}
-		seen[k] = len(out)
-		out = append(out, full)
-	}
-	return out
-}
-
-// Manager creates and tracks PTY sessions.
+// Manager creates and tracks holder-backed PTY sessions. It holds no process
+// state: every call reads the contract files or talks to the live socket.
 type Manager struct {
-	mu       sync.Mutex
-	sessions map[string]*session
+	root string
+	// HolderCmd invokes the holder binary; default is this executable with
+	// "pty hold". Injectable for tests.
+	HolderCmd []string
 
-	scrollback int
-	killGrace  time.Duration
+	mu    sync.Mutex
+	conns map[string]net.Conn // cached input connections per session id
+
+	subs sync.WaitGroup
 }
 
-// NewManager returns a manager with default scrollback and kill grace.
+// NewManager returns a manager rooted at the aiman config directory.
 func NewManager() *Manager {
 	return &Manager{
-		sessions:   map[string]*session{},
-		scrollback: DefaultScrollbackBytes,
-		killGrace:  DefaultKillGrace,
+		root:  mustRoot(),
+		conns: map[string]net.Conn{},
 	}
 }
 
-// Create spawns a new PTY session. It fails if the id already exists.
+// NewManagerWithRoot returns a manager over an explicit root (tests).
+func NewManagerWithRoot(root string, holderCmd []string) *Manager {
+	return &Manager{root: root, HolderCmd: holderCmd, conns: map[string]net.Conn{}}
+}
+
+func mustRoot() string {
+	dir, err := config.GetDir()
+	if err != nil {
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			return "."
+		}
+		return filepath.Join(home, ".aiman")
+	}
+	return dir
+}
+
+func (m *Manager) holderCmd() []string {
+	if len(m.HolderCmd) > 0 {
+		return m.HolderCmd
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return []string{"aiman", "pty", "hold"}
+	}
+	return []string{exe, "pty", "hold"}
+}
+
+// Create spawns a new holder-backed PTY session.
 func (m *Manager) Create(spec Spec) (*SessionInfo, error) {
 	if spec.ID == "" {
 		return nil, errors.New("pty: id is required")
 	}
-	dir := spec.Dir
-	if dir == "" {
-		dir = os.Getenv("HOME")
-	}
-	if _, err := os.Stat(dir); err != nil { //nolint:gosec // G703: the working directory is operator-provided by design
-		return nil, fmt.Errorf("pty: working directory %q: %w", dir, err)
-	}
-	command := spec.Command
-	if command == "" {
+	if spec.Command == "" {
 		return nil, errors.New("pty: command is required")
 	}
-
-	cols, rows := spec.Cols, spec.Rows
-	if cols <= 0 {
-		cols = 80
+	switch insp := ptyhold.InspectSession(m.root, spec.ID); insp.Status {
+	case ptyhold.StatusRunning:
+		return nil, fmt.Errorf("pty: session %s already exists", spec.ID)
+	case ptyhold.StatusExited:
+		// Previous run's leftovers; clear them so the fresh holder starts clean.
+		if err := ptyhold.Cleanup(m.root, spec.ID); err != nil {
+			return nil, fmt.Errorf("pty: clean stale session: %w", err)
+		}
 	}
-	if rows <= 0 {
-		rows = 24
-	}
-
-	cmd := exec.Command("bash", "-l", "-c", bootstrapCommand(command)) //nolint:gosec // G204: the operator-configured agent command is what this runtime exists to run
-	cmd.Dir = dir
-	cmd.Env = envMap(os.Environ(), spec.Env)
-
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
-		Cols: clampUint16(cols),
-		Rows: clampUint16(rows),
-	}) //nolint:gosec // G204: running the operator-configured agent command is the purpose of this runtime
-	if err != nil {
-		return nil, fmt.Errorf("pty: start %q: %w", command, err)
-	}
-
-	s := newSession(SessionInfo{
+	if err := ptyhold.Spawn(m.root, ptyhold.Spec{
 		ID:      spec.ID,
 		Name:    spec.Name,
-		Dir:     dir,
-		Command: command,
-		Status:  StatusRunning,
-		PID:     cmd.Process.Pid,
-		Started: time.Now(),
-		Size:    fmt.Sprintf("%dx%d", cols, rows),
-	}, cmd, ptmx, m.scrollback)
-
-	m.mu.Lock()
-	if _, dup := m.sessions[spec.ID]; dup {
-		m.mu.Unlock()
-		_ = ptmx.Close()
-		return nil, fmt.Errorf("pty: session %s already exists", spec.ID)
+		Dir:     spec.Dir,
+		Command: spec.Command,
+		Env:     spec.Env,
+		Cols:    spec.Cols,
+		Rows:    spec.Rows,
+	}, m.holderCmd()); err != nil {
+		return nil, fmt.Errorf("pty: start %q: %w", spec.Command, err)
 	}
-	m.sessions[spec.ID] = s
-	m.mu.Unlock()
-
-	go s.pump()
-	go s.reap(m.killGrace)
-
-	info := s.snapshot()
-	return &info, nil
+	return m.Get(spec.ID)
 }
 
-// List returns every session sorted by start time.
+// List returns every session known to the contract, sorted by start time.
 func (m *Manager) List() []SessionInfo {
-	m.mu.Lock()
-	list := make([]*session, 0, len(m.sessions))
-	for _, s := range m.sessions {
-		list = append(list, s)
+	ids, err := ptyhold.ScanIDs(m.root)
+	if err != nil {
+		return nil
 	}
-	m.mu.Unlock()
-
-	out := make([]SessionInfo, 0, len(list))
-	for _, s := range list {
-		out = append(out, s.snapshot())
+	out := make([]SessionInfo, 0, len(ids))
+	for _, id := range ids {
+		if info, err := m.Get(id); err == nil {
+			out = append(out, *info)
+		}
 	}
 	sortSessions(out)
 	return out
@@ -205,103 +159,190 @@ func (m *Manager) List() []SessionInfo {
 
 // Get returns one session by id.
 func (m *Manager) Get(id string) (*SessionInfo, error) {
-	s, ok := m.lookup(id)
-	if !ok {
-		return nil, ErrNotFound
+	insp := ptyhold.InspectSession(m.root, id)
+	if insp.Status == ptyhold.StatusGone && insp.Exit == "" {
+		if _, err := os.Stat(ptyhold.Dir(m.root, id)); err != nil {
+			return nil, ErrNotFound
+		}
 	}
-	info := s.snapshot()
+	status := Status(insp.Status)
+	info := SessionInfo{
+		ID:      id,
+		Name:    insp.Meta.Name,
+		Dir:     insp.Meta.Dir,
+		Command: insp.Meta.Command,
+		PID:     insp.Meta.PID,
+		Status:  status,
+		ExitErr: insp.Exit,
+	}
+	if t, terr := time.Parse(time.RFC3339, insp.Meta.Started); terr == nil {
+		info.Started = t
+	}
 	return &info, nil
 }
 
-// Write sends raw bytes to the session's terminal (the send-keys path).
+// Write sends raw bytes to the session's terminal via the live socket.
 func (m *Manager) Write(id string, data []byte) error {
-	s, ok := m.lookup(id)
-	if !ok {
-		return ErrNotFound
+	conn, err := m.inputConn(id)
+	if err != nil {
+		return err
 	}
-	return s.write(data)
-}
-
-// Resize sets the session window size.
-func (m *Manager) Resize(id string, cols, rows int) error {
-	s, ok := m.lookup(id)
-	if !ok {
-		return ErrNotFound
+	if _, werr := conn.Write(data); werr != nil {
+		// One redial on a stale connection, then give up.
+		m.dropConn(id)
+		conn, err = m.inputConn(id)
+		if err != nil {
+			return err
+		}
+		if _, werr := conn.Write(data); werr != nil {
+			return fmt.Errorf("pty: write %s: %w", id, werr)
+		}
 	}
-	return s.resize(cols, rows)
-}
-
-// Capture returns up to maxBytes of recent output from the ring buffer.
-func (m *Manager) Capture(id string, maxBytes int) ([]byte, error) {
-	s, ok := m.lookup(id)
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return s.capture(maxBytes), nil
-}
-
-// Kill terminates a session: SIGTERM, grace period, then SIGKILL. The session
-// record stays listed with StatusExited until Forget removes it.
-func (m *Manager) Kill(id string) error {
-	s, ok := m.lookup(id)
-	if !ok {
-		return ErrNotFound
-	}
-	return s.kill(m.killGrace)
-}
-
-// Forget drops an exited session's record entirely.
-func (m *Manager) Forget(id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	s, ok := m.sessions[id]
-	if !ok {
-		return ErrNotFound
-	}
-	if s.isRunning() {
-		return errors.New("pty: session still running")
-	}
-	delete(m.sessions, id)
 	return nil
 }
 
-func (m *Manager) lookup(id string) (*session, bool) {
+func (m *Manager) inputConn(id string) (net.Conn, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	s, ok := m.sessions[id]
-	return s, ok
+	conn, ok := m.conns[id]
+	m.mu.Unlock()
+	if ok {
+		return conn, nil
+	}
+	conn, err := ptyhold.Dial(m.root, id)
+	if err != nil {
+		return nil, fmt.Errorf("pty: session %s has exited", id)
+	}
+	m.mu.Lock()
+	m.conns[id] = conn
+	m.mu.Unlock()
+	return conn, nil
 }
 
-// clampUint16 guards the pty window-size conversion.
-func clampUint16(v int) uint16 {
-	if v < 1 {
-		return 1
+func (m *Manager) dropConn(id string) {
+	m.mu.Lock()
+	conn, ok := m.conns[id]
+	delete(m.conns, id)
+	m.mu.Unlock()
+	if ok {
+		_ = conn.Close()
 	}
-	if v > 0xFFFF {
-		return 0xFFFF
+}
+
+// Resize asks the holder to set the window size.
+func (m *Manager) Resize(id string, cols, rows int) error {
+	if err := ptyhold.RequestResize(m.root, id, cols, rows); err != nil {
+		return err
 	}
-	return uint16(v)
+	return nil
+}
+
+// Capture returns up to maxBytes of recent output from the spool files.
+func (m *Manager) Capture(id string, maxBytes int) ([]byte, error) {
+	if _, err := m.Get(id); err != nil {
+		return nil, err
+	}
+	return ptyhold.ReadSpool(m.root, id, maxBytes), nil
+}
+
+// Kill terminates a session via the kill marker and waits for the holder to
+// finish its cleanup.
+func (m *Manager) Kill(id string) error {
+	insp := ptyhold.InspectSession(m.root, id)
+	if insp.Status == ptyhold.StatusGone {
+		return ErrNotFound
+	}
+	if insp.Status != ptyhold.StatusRunning {
+		return fmt.Errorf("pty: session %s has exited", id)
+	}
+	if err := ptyhold.RequestKill(m.root, id); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(killTimeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		if now := ptyhold.InspectSession(m.root, id); now.Status != ptyhold.StatusRunning {
+			m.dropConn(id)
+			return nil
+		}
+	}
+	m.dropConn(id)
+	return fmt.Errorf("pty: session %s did not stop in time", id)
+}
+
+// Forget removes an exited session's directory entirely.
+func (m *Manager) Forget(id string) error {
+	insp := ptyhold.InspectSession(m.root, id)
+	if insp.Status == ptyhold.StatusGone {
+		return ErrNotFound
+	}
+	if insp.Status == ptyhold.StatusRunning {
+		return fmt.Errorf("pty: session still running")
+	}
+	return ptyhold.Cleanup(m.root, id)
+}
+
+// Subscribe returns everything currently in the spool for immediate replay
+// plus a live channel fed from the session's socket. unsub must be called when
+// the consumer goes away.
+func (m *Manager) Subscribe(id string) ([]byte, <-chan []byte, func(), error) {
+	if _, err := m.Get(id); err != nil {
+		return nil, nil, nil, err
+	}
+	replay := ptyhold.ReadSpool(m.root, id, 1<<20)
+	live := make(chan []byte, 256)
+
+	conn, err := ptyhold.Dial(m.root, id)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("pty: session %s has exited", id)
+	}
+	done := make(chan struct{})
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			close(done)
+			_ = conn.Close()
+		})
+	}
+	m.subs.Add(1)
+	go func() {
+		defer m.subs.Done()
+		defer close(live)
+		buf := make([]byte, 16<<10)
+		for {
+			n, rerr := conn.Read(buf)
+			if n > 0 {
+				chunk := append([]byte(nil), buf[:n]...)
+				select {
+				case live <- chunk:
+				case <-done:
+					return
+				}
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+	return replay, live, stop, nil
+}
+
+// CloseAll releases only serve-side resources. Holders are deliberately left
+// running — surviving serve restarts and updates is their entire purpose.
+func (m *Manager) CloseAll() {
+	m.mu.Lock()
+	conns := m.conns
+	m.conns = map[string]net.Conn{}
+	m.mu.Unlock()
+	for _, c := range conns {
+		_ = c.Close()
+	}
+	m.subs.Wait()
 }
 
 func sortSessions(list []SessionInfo) {
-	// insertion sort keeps this dependency-free; session counts are tiny
 	for i := 1; i < len(list); i++ {
 		for j := i; j > 0 && list[j].Started.Before(list[j-1].Started); j-- {
 			list[j], list[j-1] = list[j-1], list[j]
 		}
-	}
-}
-
-// CloseAll kills every session; used on serve shutdown so children never
-// outlive the process that owns their PTY masters.
-func (m *Manager) CloseAll() {
-	m.mu.Lock()
-	ids := make([]string, 0, len(m.sessions))
-	for id := range m.sessions {
-		ids = append(ids, id)
-	}
-	m.mu.Unlock()
-	for _, id := range ids {
-		_ = m.Kill(id)
 	}
 }
