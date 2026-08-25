@@ -113,6 +113,34 @@ existing hook-sidecar signal only exists for sessions aiman itself launched.
   All three paths hand off to the existing `restartSession()` — no new
   session-launch logic was needed.
 
+### Restart runs in the background; discovery failures can't fake an empty host ✅
+Live testing of the revive flow surfaced three problems at once:
+
+- **A revive sat out the full 90 s handoff budget on a session that doesn't
+  exist**: `isShellCommand` called `filepath.Base` before its emptiness
+  check, and `Base("")` returns `"."` — so the pane probe's empty answer for
+  a nonexistent tmux session read as "an agent is running", a handoff prompt
+  was injected into nothing, and the restart waited for a file no one could
+  ever write. Emptiness is now decided first, so a missing pane skips the
+  handoff instantly.
+- **Sessions still flickered in and out of the list at startup**: the
+  v0.16.2 fix only covered discovery errors that *propagated*, but
+  `ScanTmuxSessionDetails` swallowed every error (`return nil, nil`) on the
+  incorrect theory that "no tmux server" exits non-zero — the scan script
+  pipes `tmux ls` into a `while` loop, so it exits 0 with empty output in
+  that case, meaning every swallowed error was a real transport failure
+  masquerading as "zero sessions". The batch tmux scan now propagates
+  errors; the per-item `ScanTmuxSessions` distinguishes tmux's own
+  no-server message from transport failures; and a failed worktree sweep
+  now fails the whole `Discover` rather than returning a partial result the
+  merge step reads as complete.
+- **Restart/revive blocked the whole dashboard on a loading screen**: every
+  restart-shaped flow (`s` resume, `S` switch, revive, change-scope,
+  post-picker) now runs through `startBackgroundRestart`, reusing the
+  background-creation machinery — the session's row shows live progress
+  steps in the preview panel while the dashboard stays fully usable, exactly
+  like creating a new session.
+
 ### Bug Fixes & Reliability (v0.6.43 – v0.6.57)
 - **Session restart**: Identified and fixed root causes of restart hangs and failures across many releases.
   - Simplified `restartSession` from 8+ SSH calls to 1 (eliminate ValidateDir, git metadata, trust cmds).

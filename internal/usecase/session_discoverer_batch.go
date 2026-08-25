@@ -89,21 +89,24 @@ func (d *SessionDiscoverer) tmuxRecordsPerItem(ctx context.Context) ([]domain.Tm
 }
 
 // gatherWorktreeRecords collects every registered worktree under the remote's
-// root, batched into one round trip when the executor supports it.
-func (d *SessionDiscoverer) gatherWorktreeRecords(ctx context.Context) []domain.WorktreeRecord {
+// root, batched into one round trip when the executor supports it. A batch
+// failure falls back to the per-item path; if that fails too, the error
+// propagates — a failed sweep must not read as "this host has no worktrees",
+// or every inactive session on it gets treated as confirmed dead.
+func (d *SessionDiscoverer) gatherWorktreeRecords(ctx context.Context) ([]domain.WorktreeRecord, error) {
 	if batch, ok := d.remoteExecutor.(domain.BatchDiscovery); ok {
 		records, err := batch.ScanWorktreeTree(ctx)
 		if err == nil {
-			return records
+			return records, nil
 		}
 	}
 	return d.worktreeRecordsPerItem(ctx)
 }
 
-func (d *SessionDiscoverer) worktreeRecordsPerItem(ctx context.Context) []domain.WorktreeRecord {
+func (d *SessionDiscoverer) worktreeRecordsPerItem(ctx context.Context) ([]domain.WorktreeRecord, error) {
 	repos, err := d.remoteExecutor.ScanGitRepos(ctx)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to scan git repos: %w", err)
 	}
 
 	var records []domain.WorktreeRecord
@@ -128,7 +131,7 @@ func (d *SessionDiscoverer) worktreeRecordsPerItem(ctx context.Context) []domain
 			records = append(records, rec)
 		}
 	}
-	return records
+	return records, nil
 }
 
 // sessionFromRecord builds a session from a tmux record and cross-references it

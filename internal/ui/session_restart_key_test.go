@@ -16,7 +16,8 @@ func newTestModelWithSession(t *testing.T, s domain.Session) *Model {
 
 // An inactive session whose AgentName is already known (persisted, or
 // inferred from a hook sidecar during discovery) resumes immediately on "s"
-// — no agent picker, no confirmation dialog.
+// — no agent picker, no confirmation dialog, and no blocking loading screen:
+// the restart runs in the background like session creation.
 func TestHandleSessionManageKey_KnownAgentResumesWithoutPicker(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
 		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
@@ -28,11 +29,11 @@ func TestHandleSessionManageKey_KnownAgentResumesWithoutPicker(t *testing.T) {
 		t.Fatal("expected the key to be handled")
 	}
 	m := newModel.(*Model)
-	if m.state != viewStateLoading {
-		t.Fatalf("state = %v, want viewStateLoading", m.state)
+	if m.state != viewStateMain {
+		t.Fatalf("state = %v, want viewStateMain (background restart, no loading screen)", m.state)
 	}
-	if m.loadingNext != viewStateMain {
-		t.Fatalf("loadingNext = %v, want viewStateMain (no picker)", m.loadingNext)
+	if _, ok := m.creatingSessions["sess-1"]; !ok {
+		t.Fatal("expected a background-restart tracking entry for the session")
 	}
 	if m.sessionCfg.Agent == nil || m.sessionCfg.Agent.Name != "Codex CLI" {
 		t.Fatalf("expected sessionCfg.Agent to resolve to Codex CLI, got %+v", m.sessionCfg.Agent)
@@ -125,11 +126,11 @@ func TestHandleRestartConfirmUpdate_KnownAgentSkipsPicker(t *testing.T) {
 
 	newModel, cmd := model.handleRestartConfirmUpdate(pressKey("y"))
 	m := newModel.(*Model)
-	if m.state != viewStateLoading {
-		t.Fatalf("state = %v, want viewStateLoading", m.state)
+	if m.state != viewStateMain {
+		t.Fatalf("state = %v, want viewStateMain (background restart, no loading screen)", m.state)
 	}
-	if m.loadingNext != viewStateMain {
-		t.Fatalf("loadingNext = %v, want viewStateMain (no picker)", m.loadingNext)
+	if _, ok := m.creatingSessions["sess-1"]; !ok {
+		t.Fatal("expected a background-restart tracking entry for the session")
 	}
 	if cmd == nil {
 		t.Fatal("expected a restart command")

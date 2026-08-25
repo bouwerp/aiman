@@ -475,3 +475,31 @@ func TestDiscoverHostSessionsReportsSuccessEvenWithNoSessions(t *testing.T) {
 		t.Fatal("expected ok=true on a clean scan, even with zero sessions found")
 	}
 }
+
+// failingWorktreeRemote makes both the batch worktree sweep and the per-item
+// repo scan fail, while the tmux scan stays healthy.
+type failingWorktreeRemote struct {
+	batchRemote
+}
+
+func (r *failingWorktreeRemote) ScanGitRepos(context.Context) ([]string, error) {
+	return nil, fmt.Errorf("ssh: connection lost")
+}
+
+// A failed worktree sweep must fail the whole Discover rather than return a
+// partial result: the merge step reads the result as "these are ALL the
+// sessions on this host", so a silently-missing worktree sweep killed every
+// inactive session the host still had.
+func TestDiscoverFailsWhenWorktreeSweepFails(t *testing.T) {
+	remote := &failingWorktreeRemote{}
+	remote.wtErr = fmt.Errorf("batch scan timed out")
+
+	_, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).Discover(context.Background(), "regent0")
+	if err == nil {
+		t.Fatal("expected Discover to fail when both worktree scan paths fail")
+	}
+
+	if _, ok := DiscoverHostSessions(context.Background(), remote, &recordingSyncEngine{}, "regent0"); ok {
+		t.Fatal("expected ok=false when the worktree sweep fails")
+	}
+}

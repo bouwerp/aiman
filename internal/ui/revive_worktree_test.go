@@ -61,18 +61,20 @@ func TestChooseReviveTarget_NoCandidatesGoesToPicker(t *testing.T) {
 	}
 }
 
-// One candidate revives immediately, no picker and no confirm.
+// One candidate revives immediately, no picker and no confirm, and the
+// revive runs in the background like session creation — the dashboard stays
+// usable instead of blocking on a loading screen.
 func TestChooseReviveTarget_OneCandidateRevivesDirectly(t *testing.T) {
 	model := newTestModelForRevive(t)
 	entry := reviveItem{session: model.allSessions[0], candidates: []string{"Codex CLI"}}
 
 	newModel, cmd := model.chooseReviveTarget(entry)
 	m := newModel.(*Model)
-	if m.state != viewStateLoading {
-		t.Fatalf("state = %v, want viewStateLoading", m.state)
+	if m.state != viewStateMain {
+		t.Fatalf("state = %v, want viewStateMain (background revive, no loading screen)", m.state)
 	}
-	if m.loadingNext != viewStateMain {
-		t.Fatalf("loadingNext = %v, want viewStateMain (no picker)", m.loadingNext)
+	if _, ok := m.creatingSessions["wt-1"]; !ok {
+		t.Fatal("expected a background-restart tracking entry for the worktree")
 	}
 	if m.sessionCfg.Agent == nil || m.sessionCfg.Agent.Name != "Codex CLI" {
 		t.Fatalf("expected sessionCfg.Agent to resolve to Codex CLI, got %+v", m.sessionCfg.Agent)
