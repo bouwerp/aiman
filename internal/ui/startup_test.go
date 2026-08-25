@@ -100,3 +100,28 @@ func TestLoadConfiguredSessions_PrunesEphemeralIDs(t *testing.T) {
 		t.Fatalf("deleted %#v", repo.deletedID)
 	}
 }
+
+// A config with zero remotes at all (wiped, mid-edit, not yet loaded) must
+// never be read as "every remote was removed" — that reading would delete
+// the entire session history on the next startup from what is almost always
+// a transient config problem, not a deliberate request to purge everything.
+func TestLoadConfiguredSessions_EmptyRemotesNeverMassDeletes(t *testing.T) {
+	repo := &startupSessionRepo{
+		sessions: []domain.Session{
+			{ID: "s1", RemoteHost: "devbox", TmuxSession: "PB-1"},
+			{ID: "s2", RemoteHost: "regent0", TmuxSession: "PB-2"},
+		},
+	}
+	cfg := &config.Config{Remotes: nil}
+
+	sessions, err := loadConfiguredSessions(context.Background(), cfg, repo)
+	if err != nil {
+		t.Fatalf("loadConfiguredSessions returned error: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected both sessions kept when remotes is empty, got %#v", sessions)
+	}
+	if len(repo.deletedID) != 0 {
+		t.Fatalf("expected no deletions when remotes is empty, got %#v", repo.deletedID)
+	}
+}

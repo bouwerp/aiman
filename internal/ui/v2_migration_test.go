@@ -83,6 +83,12 @@ func TestPressKeyMatchesProductionBindings(t *testing.T) {
 func TestSetupModelSavesOnEnterViaHarness(t *testing.T) {
 	// Smoke-test the v2 wiring end to end at the model level: type into the
 	// focused first field, then confirm through the save button.
+	//
+	// cfg.Save() resolves ~/.aiman/config.yaml from the real HOME env var —
+	// it has no test-injectable path. Without this sandbox, running this
+	// test on a developer machine silently overwrites that developer's real
+	// aiman config with this test's fixture data.
+	t.Setenv("HOME", t.TempDir())
 	cfg := &config.Config{}
 	m := NewSetupModel(cfg)
 	m.inputs[0].SetValue("https://example.atlassian.net")

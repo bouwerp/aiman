@@ -154,8 +154,14 @@ func TestSetDelegationLifetimePersists(t *testing.T) {
 }
 
 func TestSetDelegationLifetimeRollsBackOnSaveFailure(t *testing.T) {
-	// No HOME config dir, so Save fails and the in-memory value must be restored.
-	t.Setenv("HOME", filepath.Join(t.TempDir(), "missing"))
+	// Save() creates ~/.aiman if it's simply missing, so force a real failure
+	// instead: put a plain file where the config directory needs to go, and
+	// the in-memory value must be restored.
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, config.DirName), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("failed to set up blocked config dir: %v", err)
+	}
+	t.Setenv("HOME", home)
 	cfg := lifetimeCfg()
 	entry := lifetimeEntry(cfg, "prod")
 
