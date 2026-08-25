@@ -198,7 +198,7 @@ func sessionStateColor(i item) color.Color {
 	if i.session.AgentEnded || i.activity == "terminating" {
 		return stateColorEnded
 	}
-	if i.activity == "create-failed" || i.activity == "stale" {
+	if i.activity == "create-failed" || i.activity == "stale" || i.activity == "exited" {
 		return stateColorError
 	}
 	if i.needsInput {
@@ -245,6 +245,8 @@ func (i item) chrome() (prefix, activity string) {
 			prefix, activity = "~ ", " • waiting"
 		case "stale":
 			prefix, activity = "! ", " ⚠ thinking (stuck?)"
+		case "exited":
+			prefix, activity = "! ", " ⚠ agent exited"
 		}
 	}
 	if i.syncStale {

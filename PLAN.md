@@ -30,6 +30,32 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
+### Restart/recovery robustness ✅
+Restarting a session could leave a pane that only *looked* dead: both create and
+restart append `; exec bash -i` after the agent command so a crashed process
+never takes the whole tmux session down, but that meant a crashed or
+never-started agent was indistinguishable from a normal idle shell — nothing in
+the dashboard flagged it, and reviving a worktree that outlived its tmux
+session (host reboot, tmux server crash) always forced the full agent-picker
+flow even when aiman already knew which agent had been running there.
+
+- `pane.Classify` now reports the bare-shell-prompt case as `domain.AgentStateExited`
+  instead of folding it into `AgentStateIdle` — the signal already existed, it was
+  just mislabeled. The dashboard shows it as a distinct `⚠ agent exited` state
+  (`internal/ui/session_list.go`), colored the same as other stuck states.
+- `s` on a session whose agent is already known (persisted `AgentName`, or
+  inferred from a hook sidecar's transcript path via
+  `agenthook.InferAgentName` when the DB row itself was lost) now skips the
+  agent picker entirely and resumes directly — `agent.FindKnown` resolves the
+  name back to a runnable command without a remote scan. `S` remains for
+  deliberately switching agents; an unresolvable identity still falls back to
+  the picker rather than guessing.
+- `CaptureRestartSessionSummaryBestEffort` (`internal/usecase/restart_handoff.go`)
+  wraps the restart-handoff capture so *any* failure — not only the
+  already-graceful context-timeout case — degrades to "no handoff" instead of
+  aborting the restart. A missing or failed handoff can no longer block
+  reviving a session.
+
 ### Bug Fixes & Reliability (v0.6.43 – v0.6.57)
 - **Session restart**: Identified and fixed root causes of restart hangs and failures across many releases.
   - Simplified `restartSession` from 8+ SSH calls to 1 (eliminate ValidateDir, git metadata, trust cmds).

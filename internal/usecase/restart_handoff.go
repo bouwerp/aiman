@@ -64,6 +64,19 @@ func CaptureRestartSessionSummary(ctx context.Context, remote domain.RemoteExecu
 	return true, nil
 }
 
+// CaptureRestartSessionSummaryBestEffort wraps CaptureRestartSessionSummary so a
+// restart is never blocked by a handoff that can't be captured. Any error —
+// not only the context-timeout case CaptureRestartSessionSummary already
+// handles gracefully — is swallowed and reported back as a short note for
+// the caller to log; the restart itself always proceeds without a handoff.
+func CaptureRestartSessionSummaryBestEffort(ctx context.Context, remote domain.RemoteExecutor, tmuxSession, summaryPath string) (created bool, note string) {
+	created, err := CaptureRestartSessionSummary(ctx, remote, tmuxSession, summaryPath)
+	if err != nil {
+		return false, fmt.Sprintf("restart handoff not captured: %v", err)
+	}
+	return created, ""
+}
+
 func currentPaneCommand(ctx context.Context, remote domain.RemoteExecutor, tmuxSession string) (string, error) {
 	out, err := remote.Execute(ctx, fmt.Sprintf("tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true", tmuxSession))
 	if err != nil {

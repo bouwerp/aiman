@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
@@ -108,6 +109,64 @@ func TestDiscoverPrefersRemoteAimanID(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0].ID != "real-id" {
 		t.Fatalf("expected the remote's aiman-id to be used, got %+v", sessions)
+	}
+}
+
+// A worktree revived after its tmux session and its DB row are both gone
+// (host reboot plus a lost/fresh database) still carries its real aiman-id
+// in git metadata; if that id's hook sidecar reports a transcript path,
+// discovery should recover the agent identity from it rather than leaving
+// AgentName empty and forcing the restart flow to always ask.
+func TestDiscoverInfersAgentNameFromSidecarPath(t *testing.T) {
+	remote := &batchRemote{
+		discovererRemote: discovererRemote{
+			outputs: map[string]string{
+				agenthook.ListSidecarsCmd: "ID orphan-id\n" +
+					`{"session_id":"native-1","transcript_path":"/home/dev/.codex/sessions/2024/01/01/abc.jsonl"}` + "\nEND\n",
+			},
+		},
+		wtRecords: []domain.WorktreeRecord{
+			{RepoPath: "/repos/app", WorktreePath: "/repos/app@feature", State: domain.WorktreeOK, AimanID: "orphan-id"},
+		},
+	}
+
+	sessions, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).Discover(context.Background(), "regent0")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
+	}
+	if sessions[0].AgentName != "Codex CLI" {
+		t.Errorf("AgentName = %q, want %q", sessions[0].AgentName, "Codex CLI")
+	}
+}
+
+// A sidecar report with no path (or one that matches no known vendor
+// directory) must leave AgentName empty rather than guess — the restart flow
+// falls back to the manual picker in that case.
+func TestDiscoverLeavesAgentNameEmptyWithoutAVendorHint(t *testing.T) {
+	remote := &batchRemote{
+		discovererRemote: discovererRemote{
+			outputs: map[string]string{
+				agenthook.ListSidecarsCmd: "ID orphan-id\n" +
+					`{"session_id":"native-1","transcript_path":"/home/dev/.opencode/storage/session/abc.json"}` + "\nEND\n",
+			},
+		},
+		wtRecords: []domain.WorktreeRecord{
+			{RepoPath: "/repos/app", WorktreePath: "/repos/app@feature", State: domain.WorktreeOK, AimanID: "orphan-id"},
+		},
+	}
+
+	sessions, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).Discover(context.Background(), "regent0")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(sessions), sessions)
+	}
+	if sessions[0].AgentName != "" {
+		t.Errorf("AgentName = %q, want empty (no vendor hint to guess from)", sessions[0].AgentName)
 	}
 }
 

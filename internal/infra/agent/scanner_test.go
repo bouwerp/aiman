@@ -247,3 +247,23 @@ func TestScanAgents_DetectsCodex(t *testing.T) {
 		t.Error("expected Codex CLI to be detected as an available agent")
 	}
 }
+
+func TestFindKnown(t *testing.T) {
+	a, ok := FindKnown("Codex CLI")
+	if !ok {
+		t.Fatal("expected Codex CLI to be a known agent")
+	}
+	if a.Command != "codex" {
+		t.Errorf("Command = %q, want codex", a.Command)
+	}
+
+	if _, ok := FindKnown("Some Unheard Of CLI"); ok {
+		t.Error("expected an unknown agent name to miss")
+	}
+	if _, ok := FindKnown(""); ok {
+		t.Error("expected an empty name to miss")
+	}
+	if _, ok := FindKnown("  Codex CLI  "); !ok {
+		t.Error("expected surrounding whitespace to be trimmed before matching")
+	}
+}
