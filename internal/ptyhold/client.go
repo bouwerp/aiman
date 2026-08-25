@@ -14,6 +14,10 @@ import (
 	"time"
 )
 
+// spawnReadyTimeout bounds how long Spawn waits for a holder to bind its
+// socket. See the comment at its use for why this is safe to make generous.
+const spawnReadyTimeout = 30 * time.Second
+
 // Spawn launches a detached holder process for the spec. The holder is a child
 // of the caller in name only: Setsid detaches it into its own session, so it
 // survives the caller's death and is reparented to init. Returns once the
@@ -53,7 +57,13 @@ func Spawn(root string, spec Spec, holderCmd []string) error {
 	// exists. The holder writes meta *before* binding, so a meta-only check
 	// reported success for sessions whose socket never came up — the caller
 	// then saw an unexplained "exited" status instead of the real error.
-	deadline := time.Now().Add(5 * time.Second)
+	//
+	// The budget is generous because it only bounds the pathological case: a
+	// holder that fails outright writes the exit file and is reported on the
+	// very next poll, so waiting longer never delays a real failure. It only
+	// covers a cold process spawn on a loaded machine, where 5s was tight
+	// enough to time out spuriously.
+	deadline := time.Now().Add(spawnReadyTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(filepath.Join(dir, ExitFile)); err == nil {
 			line, _ := readSmallFile(filepath.Join(dir, ExitFile))
