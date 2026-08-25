@@ -36,8 +36,27 @@ func TestMain(m *testing.M) {
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
-	root := t.TempDir()
-	return NewManagerWithRoot(root, append([]string(nil), holderBin...))
+	return newTestManagerAt(t, shortTempDir(t), append([]string(nil), holderBin...))
+}
+
+// newTestManagerAt is NewManagerWithRoot plus guaranteed teardown, for the
+// tests that need two managers over one root (serve-restart / adoption).
+//
+// Holders are detached and outlive their creator by design, so a test that
+// forgets to Kill leaves one running for the rest of the run — each holding an
+// interactive shell on a PTY. Enough of those and the timing-sensitive tests
+// here fail on CPU contention rather than on their own behaviour. Never rely
+// on individual tests to remember teardown.
+func newTestManagerAt(t *testing.T, root string, holderCmd []string) *Manager {
+	t.Helper()
+	m := NewManagerWithRoot(root, holderCmd)
+	t.Cleanup(func() {
+		for _, s := range m.List() {
+			_ = m.Kill(s.ID)
+		}
+		m.CloseAll()
+	})
+	return m
 }
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -86,10 +105,10 @@ func TestHolderWriteReachesShell(t *testing.T) {
 }
 
 func TestHolderSurvivesManagerRestart(t *testing.T) {
-	root := t.TempDir()
+	root := shortTempDir(t)
 	holderCmd := append([]string(nil), holderBin...)
 
-	a := NewManagerWithRoot(root, holderCmd)
+	a := newTestManagerAt(t, root, holderCmd)
 	if _, err := a.Create(Spec{ID: "surv", Command: "echo before_restart"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -101,7 +120,7 @@ func TestHolderSurvivesManagerRestart(t *testing.T) {
 
 	// "serve restart": a brand-new manager over the same root must find the
 	// session still running, with its scrollback intact.
-	b := NewManagerWithRoot(root, holderCmd)
+	b := newTestManagerAt(t, root, holderCmd)
 	info, err := b.Get("surv")
 	if err != nil {
 		t.Fatalf("get after restart: %v", err)
@@ -124,13 +143,13 @@ func TestHolderSurvivesManagerRestart(t *testing.T) {
 }
 
 func TestHolderListFindsSessionsFromFreshManager(t *testing.T) {
-	root := t.TempDir()
+	root := shortTempDir(t)
 	holderCmd := append([]string(nil), holderBin...)
-	a := NewManagerWithRoot(root, holderCmd)
+	a := newTestManagerAt(t, root, holderCmd)
 	if _, err := a.Create(Spec{ID: "l1", Name: "one", Command: "sleep 300"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	b := NewManagerWithRoot(root, holderCmd)
+	b := newTestManagerAt(t, root, holderCmd)
 	list := b.List()
 	found := false
 	for _, info := range list {
@@ -186,11 +205,40 @@ func TestHolderResizeRoundTrip(t *testing.T) {
 	if err := m.Resize("r", 120, 40); err != nil {
 		t.Fatalf("resize: %v", err)
 	}
-	// The contract has no size readback (files only); verify the marker was
-	// consumed by the holder's control loop.
+	// The marker is consumed by the holder's control loop...
 	waitFor(t, func() bool {
 		_, err := os.Stat(ptyhold.Dir(m.root, "r") + string(os.PathSeparator) + "resize")
 		return err != nil // file gone => holder applied it
+	})
+	// ...and the applied size is readable back. Only the holder owns the real
+	// PTY, so without it reporting the size nothing downstream could confirm a
+	// resize took effect — pty.get returned an empty size forever.
+	waitFor(t, func() bool {
+		info, err := m.Get("r")
+		return err == nil && info.Size == "120x40"
+	})
+}
+
+func TestResizeIsReadableBackFromAFreshManager(t *testing.T) {
+	root := shortTempDir(t)
+	holderCmd := append([]string(nil), holderBin...)
+	a := newTestManagerAt(t, root, holderCmd)
+	if _, err := a.Create(Spec{ID: "rs", Command: "sleep 60"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	info, err := a.Get("rs")
+	if err != nil || info.Size != "80x24" {
+		t.Fatalf("expected the default size to be reported, got %q / %v", info.Size, err)
+	}
+	if err := a.Resize("rs", 123, 45); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+	// A different manager over the same root must see it too: the size lives in
+	// the contract's meta file, not in any one manager's memory.
+	b := newTestManagerAt(t, root, holderCmd)
+	waitFor(t, func() bool {
+		got, gerr := b.Get("rs")
+		return gerr == nil && got.Size == "123x45"
 	})
 }
 
@@ -236,18 +284,19 @@ func TestSubscribeReplaysThenStreams(t *testing.T) {
 }
 
 func TestSpoolRotationKeepsHistoryReadable(t *testing.T) {
-	t.Setenv("AIMAN_PTY_SPOOL_MAX", "65536") // small segments so rotation happens quickly
+	// The session command itself emits the bulk output, rather than typing into
+	// the shell and relying on its echo. Driving this through bash's line editor
+	// made the test flaky for reasons unrelated to spooling: readline's echo
+	// yield per written byte is neither 1:1 nor predictable (1 KiB lines came
+	// back as ~120 B), and its throughput collapses under load, so the volume
+	// needed to force a rotation kept landing on the wrong side of the deadline.
+	// A direct 200 KiB of 'x' is deterministic, fast, and still gives the
+	// contiguous 1 KiB run the retention assertion below needs.
+	t.Setenv("AIMAN_PTY_SPOOL_MAX", "16384")
 	m := newTestManager(t)
-	if _, err := m.Create(Spec{ID: "big", Command: "true"}); err != nil {
+	if _, err := m.Create(Spec{ID: "big", Command: `head -c 200000 /dev/zero | tr '\0' x`}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// Write more than one spool segment through the shell.
-	chunk := strings.Repeat("x", 1024) + "\r"
-	go func() {
-		for i := 0; i < 300; i++ { // ~600 KiB echoed back, several segments
-			_ = m.Write("big", []byte(chunk))
-		}
-	}()
 	waitFor(t, func() bool {
 		_, err := os.Stat(filepath.Join(ptyhold.Dir(m.root, "big"), ptyhold.SpoolOld))
 		return err == nil
@@ -279,4 +328,22 @@ func TestHolderCmdPanicsUnderTestWithoutInjection(t *testing.T) {
 	}()
 	m := &Manager{}
 	_ = m.holderCmd()
+}
+
+// shortTempDir is t.TempDir() with a short path.
+//
+// The holder binds a unix socket at <root>/pty/<id>/term.sock, and socket paths
+// are OS-capped (~104 bytes on macOS, 108 on Linux). t.TempDir() embeds the
+// test name under a long /var/folders/… base on macOS, so longer-named tests
+// pushed that socket past the limit; the holder's listen then failed, it exited,
+// and its child died with it — surfacing only as an unexplained "exited"
+// status because the holder's stdio is discarded. Keep roots short.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ap")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }

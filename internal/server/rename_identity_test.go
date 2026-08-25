@@ -24,7 +24,7 @@ func TestSessionRenameLeavesBranchWorktreeAndTmux(t *testing.T) {
 	if err := repo.Save(ctx, orig); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)

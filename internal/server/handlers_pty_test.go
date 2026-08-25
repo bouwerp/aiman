@@ -50,12 +50,12 @@ func TestMain(m *testing.M) {
 // ~/.aiman) and holds via the built binary, never this test binary.
 func startPTYServer(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	mgr := ptyruntime.NewManagerWithRoot(t.TempDir(), append([]string(nil), holderBin...))
+	mgr := ptyruntime.NewManagerWithRoot(shortTempDir(t), append([]string(nil), holderBin...))
 	srv := New(ln, nil, nil, nil, nil, mgr, "test")
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = srv.Serve(ctx) }()

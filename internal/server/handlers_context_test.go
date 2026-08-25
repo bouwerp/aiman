@@ -12,12 +12,12 @@ import (
 
 func startContextServer(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := contextstore.NewFiles(t.TempDir())
+	store := contextstore.NewFiles(shortTempDir(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	srv := New(ln, nil, nil, nil, store, nil, "test")
 	go func() { _ = srv.Serve(ctx) }()
@@ -146,7 +146,7 @@ func TestContextGetMissing(t *testing.T) {
 }
 
 func TestContextStoreUnavailable(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)

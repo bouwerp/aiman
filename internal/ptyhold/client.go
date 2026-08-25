@@ -49,22 +49,29 @@ func Spawn(root string, spec Spec, holderCmd []string) error {
 	// Do not wait on the holder; it outlives us by design.
 	go func() { _, _ = cmd.Process.Wait() }()
 
+	// Readiness means the live socket is bound, not merely that meta.json
+	// exists. The holder writes meta *before* binding, so a meta-only check
+	// reported success for sessions whose socket never came up — the caller
+	// then saw an unexplained "exited" status instead of the real error.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if metaExists(dir) {
-			return nil
-		}
 		if _, err := os.Stat(filepath.Join(dir, ExitFile)); err == nil {
 			line, _ := readSmallFile(filepath.Join(dir, ExitFile))
 			return fmt.Errorf("ptyhold: holder exited immediately: %s", strings.TrimSpace(line))
+		}
+		if socketReady(dir) {
+			return nil
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	return fmt.Errorf("ptyhold: holder %s did not become ready in time", spec.ID)
 }
 
-func metaExists(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, MetaFile))
+func socketReady(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, MetaFile)); err != nil {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, SocketFile))
 	return err == nil
 }
 

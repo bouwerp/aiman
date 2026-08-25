@@ -12,7 +12,7 @@ import (
 )
 
 func TestPing(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestPing(t *testing.T) {
 }
 
 func TestListenSocketMode(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	l, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)

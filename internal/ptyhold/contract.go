@@ -77,6 +77,10 @@ type Meta struct {
 	Command string `json:"command,omitempty"`
 	PID     int    `json:"pid"`
 	Started string `json:"started_at"`
+	// Size is the terminal's current size as "<cols>x<rows>". The holder owns
+	// the real PTY, so it is the only thing that can report this; without it
+	// callers could request a resize but never read one back.
+	Size string `json:"size,omitempty"`
 }
 
 func writeFileAtomic(path string, data []byte) error {

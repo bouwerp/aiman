@@ -8,7 +8,7 @@ import (
 )
 
 func TestListenRejectsSecondInstance(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	l1, err := Listen(dir)
 	if err != nil {
 		t.Fatalf("first Listen: %v", err)
@@ -31,7 +31,7 @@ func TestListenRejectsSecondInstance(t *testing.T) {
 }
 
 func TestListenReplacesStaleSocket(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	stale := filepath.Join(dir, sockFile)
 	if err := os.WriteFile(stale, []byte("leftover"), 0o600); err != nil {
 		t.Fatal(err)

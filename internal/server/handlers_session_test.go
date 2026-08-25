@@ -13,7 +13,7 @@ import (
 
 func startTestServer(t *testing.T, repo domain.SessionRepository) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +27,7 @@ func startTestServer(t *testing.T, repo domain.SessionRepository) string {
 
 func testRepo(t *testing.T) domain.SessionRepository {
 	t.Helper()
-	repo, err := sqlite.NewRepository(filepath.Join(t.TempDir(), "aiman.db"))
+	repo, err := sqlite.NewRepository(filepath.Join(shortTempDir(t), "aiman.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestSessionPromptBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &fakeRemote{pane: "Allow execution of `rm -rf build/`? [y/N]"}
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func TestSessionPromptBlocked(t *testing.T) {
 
 func TestSessionCreateQuickAndRename(t *testing.T) {
 	repo := testRepo(t)
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +293,7 @@ func TestSessionCreateQuickAndRename(t *testing.T) {
 }
 
 func TestCallServerNotRunning(t *testing.T) {
-	_, err := Call(filepath.Join(t.TempDir(), "aiman.sock"), "ping", nil)
+	_, err := Call(filepath.Join(shortTempDir(t), "aiman.sock"), "ping", nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}

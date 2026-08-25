@@ -186,6 +186,7 @@ func (m *Manager) Get(id string) (*SessionInfo, error) {
 		PID:     insp.Meta.PID,
 		Status:  status,
 		ExitErr: insp.Exit,
+		Size:    insp.Meta.Size,
 	}
 	if t, terr := time.Parse(time.RFC3339, insp.Meta.Started); terr == nil {
 		info.Started = t

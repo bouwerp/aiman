@@ -27,8 +27,21 @@ const killGrace = 3 * time.Second
 // Run executes the holder for the session dir under root. It blocks until the
 // child exits or a kill marker is honoured, then performs exit cleanup. This
 // function IS the holder: keep it minimal and boring.
-func Run(root, id string) error {
+//
+// Any startup failure is recorded in the exit file before returning. The
+// holder is spawned detached with its stdio discarded, so a bare error return
+// is invisible to everyone: the manager had already accepted the session as
+// started (meta.json is written before the socket is bound), so a later
+// failure surfaced only as an unexplained "exited" status. Writing the reason
+// down is what makes it diagnosable — a too-long socket path on macOS, for
+// instance, reported nothing at all before this.
+func Run(root, id string) (err error) {
 	dir := Dir(root, id)
+	defer func() {
+		if err != nil {
+			_ = writeFileAtomic(filepath.Join(dir, ExitFile), []byte("holder failed to start: "+err.Error()))
+		}
+	}()
 	raw, err := os.ReadFile(filepath.Join(dir, RequestFile))
 	if err != nil {
 		return fmt.Errorf("holder: read request: %w", err)
@@ -59,15 +72,16 @@ func Run(root, id string) error {
 	}
 	defer ptmx.Close()
 
-	meta, _ := json.Marshal(Meta{
+	meta := Meta{
 		ID:      spec.ID,
 		Name:    spec.Name,
 		Dir:     spec.Dir,
 		Command: spec.Command,
 		PID:     cmd.Process.Pid,
 		Started: time.Now().UTC().Format(time.RFC3339),
-	})
-	if err := writeFileAtomic(filepath.Join(dir, MetaFile), meta); err != nil {
+		Size:    fmt.Sprintf("%dx%d", cols, rows),
+	}
+	if err := writeMeta(dir, meta); err != nil {
 		return fmt.Errorf("holder: write meta: %w", err)
 	}
 
@@ -148,7 +162,7 @@ func Run(root, id string) error {
 			}
 			goto cleanup
 		case <-ticker.C:
-			if applyResizeFile(dir, ptmx) {
+			if applyResizeFile(dir, ptmx, &meta) {
 				continue
 			}
 			if _, kerr := os.Stat(filepath.Join(dir, KillFile)); kerr == nil {
@@ -187,8 +201,18 @@ func terminate(proc *os.Process) {
 	_ = proc.Signal(syscall.SIGTERM)
 }
 
-// applyResizeFile consumes a resize marker if present.
-func applyResizeFile(dir string, ptmx *os.File) bool {
+// writeMeta atomically publishes the session's metadata.
+func writeMeta(dir string, meta Meta) error {
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(filepath.Join(dir, MetaFile), raw)
+}
+
+// applyResizeFile consumes a resize marker if present, recording the new size
+// in meta so callers can read back the size they asked for.
+func applyResizeFile(dir string, ptmx *os.File, meta *Meta) bool {
 	path := filepath.Join(dir, ResizeFile)
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -200,6 +224,10 @@ func applyResizeFile(dir string, ptmx *os.File) bool {
 		rows, c2 := strconv.Atoi(parts[1])
 		if c1 == nil && c2 == nil && cols > 0 && rows > 0 && cols <= 0xFFFF && rows <= 0xFFFF {
 			_ = pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}) //nolint:gosec // G115: bounds-checked above
+			if meta != nil {
+				meta.Size = fmt.Sprintf("%dx%d", cols, rows)
+				_ = writeMeta(dir, *meta)
+			}
 		}
 	}
 	_ = os.Remove(path)
