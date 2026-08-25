@@ -115,11 +115,16 @@ func remoteFileExists(ctx context.Context, remote domain.RemoteExecutor, path st
 }
 
 func isShellCommand(cmd string) bool {
-	cmd = strings.TrimSpace(strings.ToLower(filepath.Base(cmd)))
+	// Emptiness must be decided before filepath.Base: Base("") returns ".",
+	// which never matched the empty check below — so a nonexistent tmux
+	// session (pane probe returns "") was treated as a running agent and the
+	// caller sat out its whole handoff timeout waiting on a file no one
+	// could ever write. Reviving a worktree hits exactly that case.
+	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return true
 	}
-	_, ok := shellCommands[cmd]
+	_, ok := shellCommands[strings.ToLower(filepath.Base(cmd))]
 	return ok
 }
 

@@ -137,6 +137,26 @@ func TestCaptureRestartSessionSummary_TimeoutFallsBackWithoutError(t *testing.T)
 	}
 }
 
+// A revived worktree has no tmux session at all, so the pane probe returns
+// "": that must skip the handoff instantly, not inject a prompt into a
+// nonexistent session and sit out the whole timeout. filepath.Base("")
+// returns ".", which used to defeat the empty check.
+func TestCaptureRestartSessionSummary_SkipsWhenNoPaneExists(t *testing.T) {
+	remote := &restartRemote{paneCommand: ""}
+
+	ok, err := CaptureRestartSessionSummary(context.Background(), remote, "no-such-session", "/work/.aiman_session_summary.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Fatal("expected an absent pane to skip handoff capture")
+	}
+	joined := strings.Join(remote.commands, "\n")
+	if strings.Contains(joined, "SESSION_SUMMARY_SAVED") {
+		t.Fatalf("did not expect a handoff prompt for a nonexistent session, got commands:\n%s", joined)
+	}
+}
+
 // A real (non-timeout) remote failure must never block a restart: the
 // best-effort wrapper swallows it and hands back a note instead of an error.
 func TestCaptureRestartSessionSummaryBestEffort_SwallowsHardError(t *testing.T) {

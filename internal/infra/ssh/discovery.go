@@ -109,12 +109,17 @@ func (m *Manager) ScanWorktreeTree(ctx context.Context) ([]domain.WorktreeRecord
 }
 
 // ScanTmuxSessionDetails implements domain.BatchDiscovery.
+//
+// A remote with no tmux server is NOT an error here: the script pipes
+// `tmux ls` into a while loop, so the pipeline exits 0 with empty output in
+// that case. Any non-zero exit is therefore a real failure (SSH transport,
+// timeout) and must propagate — swallowing it made a failed scan look like
+// "this host has zero sessions", which the discovery merge then read as
+// every known session on the host being confirmed dead.
 func (m *Manager) ScanTmuxSessionDetails(ctx context.Context) ([]domain.TmuxSessionRecord, error) {
 	out, err := m.executeWithTimeout(ctx, tmuxScanScript(), batchScanTimeout)
 	if err != nil {
-		// A remote with no tmux server running exits non-zero; that is an empty
-		// result, not a failure worth aborting discovery over.
-		return nil, nil
+		return nil, fmt.Errorf("failed to scan tmux sessions: %w", err)
 	}
 	return parseTmuxSessionRecords(out), nil
 }

@@ -86,8 +86,15 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 
 	// 3. Scan for orphaned worktrees. gatherWorktreeRecords resolves each
 	// worktree's liveness and aiman id on the remote, so the whole sweep costs
-	// one round trip when the executor supports batch discovery.
-	for _, rec := range d.gatherWorktreeRecords(ctx) {
+	// one round trip when the executor supports batch discovery. A failed
+	// sweep fails the whole Discover: a partial result would be read by the
+	// merge step as "these are ALL the sessions on this host", killing the
+	// ones the failed part would have found.
+	worktreeRecords, err := d.gatherWorktreeRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range worktreeRecords {
 		if rec.State != domain.WorktreeOK || isMainWorktree(rec) {
 			continue
 		}
@@ -213,8 +220,12 @@ func (d *SessionDiscoverer) OrphanWorktreeSessions(ctx context.Context, host str
 	mutagenSessions, _ := d.syncEngine.ListSyncSessions(ctx)
 	seenMutagenIDs := make(map[string]bool)
 
+	worktreeRecords, err := d.gatherWorktreeRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var sessions []domain.Session
-	for _, rec := range d.gatherWorktreeRecords(ctx) {
+	for _, rec := range worktreeRecords {
 		if rec.State != domain.WorktreeOK || isMainWorktree(rec) {
 			continue
 		}

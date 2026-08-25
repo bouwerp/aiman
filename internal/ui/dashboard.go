@@ -1896,6 +1896,15 @@ func (m *Model) sendStatus(msg string) {
 	}
 }
 
+// sendStatusFor is sendStatus correlated to a background operation, so the
+// progress line lands on that operation's placeholder row instead of the
+// blocking loading screen.
+func (m *Model) sendStatusFor(placeholderID, msg string) {
+	if m.Program != nil {
+		m.Program.Send(sessionCreateMsg{status: msg, placeholderID: placeholderID})
+	}
+}
+
 func (m *Model) fetchAgents() tea.Cmd {
 	remote := m.selectedRemote
 	// An EC2 loop provisions a fresh instance, so there is no host to scan: offer every
@@ -3124,10 +3133,7 @@ func (m *Model) applySnapshotPreviewMsg(msg snapshotPreviewMsg, cmds []tea.Cmd) 
 		m.priorSnapshotCandidate = msg.snapshot
 		m.state = viewStateSnapshotPreview
 	} else {
-		m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
-		m.loadingNext = viewStateMain
-		m.state = viewStateLoading
-		return m, m.restartSession()
+		return m, m.startBackgroundRestart()
 	}
 	return m, nil
 }
@@ -4707,6 +4713,59 @@ func (m *Model) prepareRestartTarget(s domain.Session) {
 	}
 }
 
+// startBackgroundRestart runs a restart/revive of m.restartingSession in the
+// background, mirroring background session creation: the session's row shows
+// progress in the preview panel while the dashboard stays fully usable, and
+// the row swaps to the finished session when the restart lands. Callers must
+// have set m.restartingSession, m.sessionCfg (including .Agent), and
+// m.selectedRemote — prepareRestartTarget plus an agent choice does all three.
+func (m *Model) startBackgroundRestart() tea.Cmd {
+	s := m.restartingSession
+	if s == nil {
+		return nil
+	}
+	if _, ok := m.creatingSessions[s.ID]; ok {
+		return m.showToast("⚠️  This session is already being restarted.", true, 3*time.Second)
+	}
+
+	placeholder := *s
+	placeholder.Status = domain.SessionStatusProvisioning
+	if m.sessionCfg.Agent != nil {
+		placeholder.AgentName = m.sessionCfg.Agent.Name
+	}
+	m.creatingSessions[s.ID] = &creatingSession{
+		placeholder: placeholder,
+		cfg:         m.sessionCfg,
+		remote:      m.selectedRemote,
+	}
+
+	// A restart replaces an existing row; a revive adds a new one.
+	replaced := false
+	for i := range m.allSessions {
+		if m.allSessions[i].ID == s.ID {
+			m.allSessions[i] = placeholder
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		m.allSessions = append(m.allSessions, placeholder)
+	}
+	m.applyRemoteFilter()
+
+	// Select the row so its progress steps show in the preview panel; the
+	// user can navigate away at any time.
+	items := m.list.Items()
+	for i, it := range items {
+		if si, ok := it.(item); ok && si.session.ID == s.ID {
+			m.list.Select(i)
+			break
+		}
+	}
+	m.state = viewStateMain
+	return m.restartSession(s.ID)
+}
+
 // startAgentPickerRestart shows the manual agent-picker restart flow: used
 // when the session's agent identity can't be resolved automatically (no
 // known AgentName, and no vendor hint from a hook sidecar), or the user
@@ -4776,10 +4835,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			}
 
 			if knownAgent != nil {
-				m.loadingMsg = fmt.Sprintf("Resuming with %s...", knownAgent.Name)
-				m.loadingNext = viewStateMain
-				m.state = viewStateLoading
-				return m, m.restartSession(), true
+				return m, m.startBackgroundRestart(), true
 			}
 
 			model, cmd := m.startAgentPickerRestart()
@@ -7332,16 +7388,16 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 		if m.restartingSession != nil && m.sessionCfg.Agent != nil {
 			m.restartingSession.AgentName = m.sessionCfg.Agent.Name
 		}
-		m.loadingMsg = fmt.Sprintf("Restarting with %s (saving handoff)…", m.sessionCfg.Agent.Name)
-		m.loadingNext = viewStateMain
-		m.state = viewStateLoading
-		return m, m.restartSession()
+		return m, m.startBackgroundRestart()
 	}
 
 	return m, cmd
 }
 
-func (m *Model) restartSession() tea.Cmd {
+// restartSession runs the restart/revive itself. placeholderID correlates
+// its progress and result with the background-tracking entry registered by
+// startBackgroundRestart, exactly like background session creation.
+func (m *Model) restartSession(placeholderID string) tea.Cmd {
 	// Capture all required state at dispatch time (before the goroutine starts)
 	// to avoid data races with the TUI loop running concurrently.
 	s := m.restartingSession
@@ -7357,7 +7413,7 @@ func (m *Model) restartSession() tea.Cmd {
 		}
 		defer func() {
 			if r := recover(); r != nil {
-				retMsg = sessionCreateMsg{err: fmt.Errorf("restart panicked: %v", r)}
+				retMsg = sessionCreateMsg{err: fmt.Errorf("restart panicked: %v", r), placeholderID: placeholderID}
 			}
 			logf("goroutine done, retMsg=%T err=%v", retMsg, func() interface{} {
 				if sm, ok := retMsg.(sessionCreateMsg); ok {
@@ -7372,22 +7428,22 @@ func (m *Model) restartSession() tea.Cmd {
 		defer cancel()
 
 		if s == nil {
-			return sessionCreateMsg{err: fmt.Errorf("no session to restart")}
+			return sessionCreateMsg{err: fmt.Errorf("no session to restart"), placeholderID: placeholderID}
 		}
 
 		s.ID = strings.TrimSpace(s.ID)
 		if s.ID == "" {
-			return sessionCreateMsg{err: fmt.Errorf("session ID is empty")}
+			return sessionCreateMsg{err: fmt.Errorf("session ID is empty"), placeholderID: placeholderID}
 		}
 
 		if sessionCfg.Agent == nil {
-			return sessionCreateMsg{err: fmt.Errorf("no agent selected for restart")}
+			return sessionCreateMsg{err: fmt.Errorf("no agent selected for restart"), placeholderID: placeholderID}
 		}
 		s.AgentName = sessionCfg.Agent.Name
 
 		remote, ok := resolveRemote(cfg, *s)
 		if !ok {
-			return sessionCreateMsg{err: fmt.Errorf("no active remote configured")}
+			return sessionCreateMsg{err: fmt.Errorf("no active remote configured"), placeholderID: placeholderID}
 		}
 
 		workingDir := s.WorkingDirectory
@@ -7395,7 +7451,7 @@ func (m *Model) restartSession() tea.Cmd {
 			workingDir = s.WorktreePath
 		}
 		if workingDir == "" {
-			return sessionCreateMsg{err: fmt.Errorf("session has no working directory")}
+			return sessionCreateMsg{err: fmt.Errorf("session has no working directory"), placeholderID: placeholderID}
 		}
 
 		logf("session=%s remote=%s@%s workingDir=%s agent=%s", s.TmuxSession, remote.User, remote.Host, workingDir, sessionCfg.Agent.Command)
@@ -7414,19 +7470,19 @@ func (m *Model) restartSession() tea.Cmd {
 		// best-effort wrapper swallows any error (not just a timeout) and the
 		// new agent simply starts without one.
 		summaryPath := filepath.Join(workingDir, domain.AimanSessionSummaryFileName)
-		m.sendStatus("Capturing restart handoff...")
+		m.sendStatusFor(placeholderID, "Capturing restart handoff...")
 		logf("step1: capturing restart handoff to %s", summaryPath)
 		summaryCtx, summaryCancel := context.WithTimeout(ctx, 90*time.Second)
 		summaryCreated, note := usecase.CaptureRestartSessionSummaryBestEffort(summaryCtx, mgr, s.TmuxSession, summaryPath)
 		summaryCancel()
 		if note != "" {
 			logf("step1: %s", note)
-			m.sendStatus(note)
+			m.sendStatusFor(placeholderID, note)
 		}
 		logf("step1 ok: summaryCreated=%t", summaryCreated)
 
 		// Step 2: build the new agent command after the restart handoff file exists.
-		m.sendStatus(fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
+		m.sendStatusFor(placeholderID, fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
 		logf("step2: preparing agent command")
 		agentCmd := sessionCfg.Agent.Command
 		var sendKeysPrompt string
@@ -7498,7 +7554,7 @@ func (m *Model) restartSession() tea.Cmd {
 		// If the session is gone (remote reboot, manual kill, etc.) fall back to
 		// creating a fresh session with new-session, using start-server + global
 		// option guards to avoid the remain-on-exit race.
-		m.sendStatus(fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
+		m.sendStatusFor(placeholderID, fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
 		logf("step3: restarting agent")
 		paneCmd := fmt.Sprintf("bash -l -c '%s'; exec bash -i", agentBootstrap)
 		restartCmd := fmt.Sprintf(
@@ -7532,7 +7588,7 @@ func (m *Model) restartSession() tea.Cmd {
 		logf("step3: restartCmd=%s", restartCmd)
 		if _, err := mgr.Execute(ctx, restartCmd); err != nil {
 			logf("step3 FAILED: %v", err)
-			return sessionCreateMsg{err: fmt.Errorf("failed to restart agent in session %q: %w", s.TmuxSession, err)}
+			return sessionCreateMsg{err: fmt.Errorf("failed to restart agent in session %q: %w", s.TmuxSession, err), placeholderID: placeholderID}
 		}
 		logf("step3 ok")
 
@@ -7542,7 +7598,7 @@ func (m *Model) restartSession() tea.Cmd {
 		if db != nil {
 			_ = db.Save(ctx, s)
 		}
-		return sessionCreateMsg{session: *s}
+		return sessionCreateMsg{session: *s, placeholderID: placeholderID}
 	}
 }
 
@@ -7550,17 +7606,13 @@ func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y":
-			m.loadingMsg = "Restarting session with new scope..."
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-
 			// We need to update the session's WorkingDirectory
 			m.changingDirSession.WorkingDirectory = m.sessionCfg.Directory
 			if !strings.HasPrefix(m.changingDirSession.WorkingDirectory, m.changingDirSession.WorktreePath) {
 				m.changingDirSession.WorkingDirectory = filepath.Join(m.changingDirSession.WorktreePath, m.sessionCfg.Directory)
 			}
 
-			// Reuse restartSession but it will use the updated WorkingDirectory
+			// Reuse the restart machinery; it will use the updated WorkingDirectory
 			m.restartingSession = m.changingDirSession
 			m.changingDirSession = nil
 
@@ -7570,10 +7622,11 @@ func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.sessionCfg.Agent == nil {
 				m.loadingMsg = "Scanning agents..."
 				m.loadingNext = viewStateRestartAgentPicker
+				m.state = viewStateLoading
 				return m, m.fetchAgents()
 			}
 
-			return m, m.restartSession()
+			return m, m.startBackgroundRestart()
 		case "n", "esc":
 			m.state = viewStateMain
 			m.changingDirSession = nil
@@ -7590,10 +7643,7 @@ func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A known agent was already resolved before this confirm (see
 			// handleSessionManageKey) — skip the picker and resume directly.
 			if m.sessionCfg.Agent != nil {
-				m.loadingMsg = fmt.Sprintf("Resuming with %s...", m.sessionCfg.Agent.Name)
-				m.loadingNext = viewStateMain
-				m.state = viewStateLoading
-				return m, m.restartSession()
+				return m, m.startBackgroundRestart()
 			}
 			return m.startAgentPickerRestart()
 		case "n", "esc":
@@ -7614,17 +7664,11 @@ func (m *Model) handleSnapshotPreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.db.MarkSnapshotInjected(context.Background(), m.priorSnapshotCandidate.ID)
 			}
 			m.priorSnapshotCandidate = nil
-			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-			return m, m.restartSession()
+			return m, m.startBackgroundRestart()
 		case "n":
 			m.sessionCfg.PriorSnapshot = nil
 			m.priorSnapshotCandidate = nil
-			m.loadingMsg = fmt.Sprintf("Restarting session %s...", m.restartingSession.TmuxSession)
-			m.loadingNext = viewStateMain
-			m.state = viewStateLoading
-			return m, m.restartSession()
+			return m, m.startBackgroundRestart()
 		case "esc":
 			m.priorSnapshotCandidate = nil
 			m.restartingSession = nil
