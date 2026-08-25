@@ -58,10 +58,15 @@ func startPTYServer(t *testing.T) string {
 	mgr := ptyruntime.NewManagerWithRoot(shortTempDir(t), append([]string(nil), holderBin...))
 	srv := New(ln, nil, nil, nil, nil, mgr, "test")
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = srv.Serve(ctx) }()
+	served := make(chan struct{})
+	go func() { defer close(served); _ = srv.Serve(ctx) }()
 	t.Cleanup(func() {
+		// Serve owns the listener and closes it itself once ctx is done. Closing
+		// it here as well was a double close, which -race reports as a data race
+		// on the underlying file descriptor. Cancel, then wait for Serve to
+		// return so teardown is ordered.
 		cancel()
-		_ = ln.Close()
+		<-served
 		mgr.CloseAll()
 	})
 	return SocketPath(dir)

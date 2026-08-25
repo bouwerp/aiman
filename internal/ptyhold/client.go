@@ -40,7 +40,7 @@ func Spawn(root string, spec Spec, holderCmd []string) error {
 	}
 
 	cmd := exec.Command(holderCmd[0], append(holderCmd[1:], "--root", root, "--id", spec.ID)...) //nolint:gosec // G204: the operator-configured agent command travels inside the request file
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachAttr()
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {

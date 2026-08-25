@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/bouwerp/aiman/internal/ptyhold"
 	"github.com/bouwerp/aiman/internal/server"
@@ -155,7 +154,7 @@ func runPTYAttach(sock, id string) error {
 	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
 
 	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGWINCH)
+	signal.Notify(stop, resizeSignals()...)
 	defer signal.Stop(stop)
 	go func() {
 		for range stop {
