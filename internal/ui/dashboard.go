@@ -176,6 +176,9 @@ const (
 	viewStateNewGroup
 	viewStateAgentDefaults
 	viewStateContextStats
+	viewStateReviveRemotePicker // pick which remote to scan for abandoned worktrees
+	viewStateReviveList         // list of abandoned worktrees found, with candidate agent(s)
+	viewStateReviveAgentPick    // short pick-list when a worktree has 2+ agent candidates
 )
 
 type mainTab int
@@ -338,51 +341,53 @@ func (i tunnelItem) FilterValue() string {
 }
 
 type Model struct {
-	version          string
-	cfg              *config.Config
-	db               domain.SessionRepository
-	Program          *tea.Program
-	state            viewState
-	panelMode        panelMode
-	list             list.Model
-	daemonList       list.Model
-	daemons          map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
-	agentAPICursor   int                      // selected remote on the Agent API settings page
-	agentAPIProbing  map[string]bool          // host → probe SSH call in flight
-	currentTab       mainTab
-	menu             list.Model
-	remotes          RemotesModel
-	setup            SetupModel
-	gitSetup         GitSetupModel
-	generalSetup     GeneralSetupModel
-	agentDefaults    AgentDefaultsModel
-	contextStats     ContextStatsModel
-	aiSetup          AISetupModel
-	secretsSetup     SecretsSetupModel
-	awsCredentials   AWSCredentialsModel
-	snapshotBrowser  SnapshotBrowserModel
-	scheduledPrompts ScheduledPromptsModel
-	picker           RepoPickerModel
-	ec2Setup         EC2SetupModel
-	issuePicker      IssuePickerModel
-	branchInput      BranchInputModel
-	genericInput     TextInputModel
-	branchPicker     BranchPickerModel
-	dirPicker        DirPickerModel
-	agentPicker      AgentPickerModel
-	summary          SummaryModel
-	doctorResults    []usecase.CheckResult
-	width, height    int
-	viewport         viewport.Model
-	terminal         *TerminalModel
-	tmuxOutput       string
-	activeSession    string
-	termCloser       io.Closer
-	lastError        string
-	loadingMsg       string
-	sessionCfg       domain.SessionConfig
-	loadingNext      viewState
-	initialLoad      bool
+	version              string
+	cfg                  *config.Config
+	db                   domain.SessionRepository
+	Program              *tea.Program
+	state                viewState
+	panelMode            panelMode
+	list                 list.Model
+	daemonList           list.Model
+	daemons              map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
+	agentAPICursor       int                      // selected remote on the Agent API settings page
+	agentAPIProbing      map[string]bool          // host → probe SSH call in flight
+	currentTab           mainTab
+	menu                 list.Model
+	remotes              RemotesModel
+	setup                SetupModel
+	gitSetup             GitSetupModel
+	generalSetup         GeneralSetupModel
+	agentDefaults        AgentDefaultsModel
+	contextStats         ContextStatsModel
+	aiSetup              AISetupModel
+	secretsSetup         SecretsSetupModel
+	awsCredentials       AWSCredentialsModel
+	snapshotBrowser      SnapshotBrowserModel
+	scheduledPrompts     ScheduledPromptsModel
+	revive               ReviveWorktreeModel
+	revivePickCandidates []string // set when a revive-list selection has 2+ agent candidates, for viewStateReviveAgentPick
+	picker               RepoPickerModel
+	ec2Setup             EC2SetupModel
+	issuePicker          IssuePickerModel
+	branchInput          BranchInputModel
+	genericInput         TextInputModel
+	branchPicker         BranchPickerModel
+	dirPicker            DirPickerModel
+	agentPicker          AgentPickerModel
+	summary              SummaryModel
+	doctorResults        []usecase.CheckResult
+	width, height        int
+	viewport             viewport.Model
+	terminal             *TerminalModel
+	tmuxOutput           string
+	activeSession        string
+	termCloser           io.Closer
+	lastError            string
+	loadingMsg           string
+	sessionCfg           domain.SessionConfig
+	loadingNext          viewState
+	initialLoad          bool
 	// discoveryPending is true between the dashboard opening on database
 	// contents and the first remote scan landing, so the list can be shown
 	// immediately while making clear it is not yet confirmed against the remote.
@@ -757,6 +762,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "EC2 Loop Settings", desc: "Configure default settings for autonomous EC2 loops", action: viewStateEC2Settings},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 		menuItem{title: "Scheduled Prompts", desc: "Manage periodic cron-scheduled prompt injections", action: viewStateScheduledPrompts},
+		menuItem{title: "Revive Worktree", desc: "Find abandoned worktrees under a remote's repo root and resume the agent that worked there", action: viewStateReviveRemotePicker},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
 	m.Title = "Administrative Menu"
@@ -2760,6 +2766,15 @@ func (m *Model) dispatchSettingsUpdate(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case viewStateAISettings:
 		model, cmd := m.handleAISetupUpdate(msg)
 		return model, cmd, true
+	case viewStateReviveRemotePicker:
+		model, cmd := m.handleReviveRemotePickerUpdate(msg)
+		return model, cmd, true
+	case viewStateReviveList:
+		model, cmd := m.handleReviveListUpdate(msg)
+		return model, cmd, true
+	case viewStateReviveAgentPick:
+		model, cmd := m.handleReviveAgentPickUpdate(msg)
+		return model, cmd, true
 	default:
 		return m, nil, false
 	}
@@ -3182,6 +3197,12 @@ func (m *Model) renderSettingsView() (string, bool) {
 		return m.contextStats.viewString(), true
 	case viewStateAISettings:
 		return m.aiSetup.viewString(), true
+	case viewStateReviveRemotePicker:
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.remotes.list.View()), true
+	case viewStateReviveList:
+		return docStyle.Render(m.revive.list.View()), true
+	case viewStateReviveAgentPick:
+		return m.renderReviveAgentPick(), true
 	default:
 		return "", false
 	}
@@ -4663,6 +4684,29 @@ func (m *Model) handleIntelligenceKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return classifySessionCmd(m.cfg, m.intelligence, s), true
 }
 
+// prepareRestartTarget sets m.restartingSession, m.selectedRemote, and the
+// base m.sessionCfg for a restart-style resume of s. Shared by the "s"/"S"
+// key handler and the revive-worktree flow — both eventually call
+// restartSession(), which reads exactly this state. Callers still need to
+// set m.sessionCfg.Agent themselves once the agent is known or chosen.
+func (m *Model) prepareRestartTarget(s domain.Session) {
+	if remote, ok := resolveRemote(m.cfg, s); ok {
+		m.selectedRemote = remote
+	}
+	m.restartingSession = &s
+	m.sessionCfg = domain.SessionConfig{
+		IssueKey:   s.IssueKey,
+		Branch:     s.Branch,
+		Repo:       domain.Repo{Name: s.RepoName, URL: ""},
+		RemoteHost: s.RemoteHost,
+		Directory:  "",
+		PromptFree: true,
+	}
+	if m.selectedRemote.Host != "" {
+		m.sessionCfg.RemoteHost = m.selectedRemote.Host
+	}
+}
+
 // startAgentPickerRestart shows the manual agent-picker restart flow: used
 // when the session's agent identity can't be resolved automatically (no
 // known AgentName, and no vendor hint from a hook sidecar), or the user
@@ -4704,22 +4748,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	if msg.String() == "ctrl+r" || msg.String() == "s" || msg.String() == "S" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			selectedSess := sel.(item).session
-			if remote, ok := resolveRemote(m.cfg, selectedSess); ok {
-				m.selectedRemote = remote
-				m.sessionCfg.RemoteHost = remote.Host
-			}
-			m.restartingSession = &selectedSess
-			m.sessionCfg = domain.SessionConfig{
-				IssueKey:   selectedSess.IssueKey,
-				Branch:     selectedSess.Branch,
-				Repo:       domain.Repo{Name: selectedSess.RepoName, URL: ""},
-				RemoteHost: selectedSess.RemoteHost,
-				Directory:  "",
-				PromptFree: true,
-			}
-			if m.selectedRemote.Host != "" {
-				m.sessionCfg.RemoteHost = m.selectedRemote.Host
-			}
+			m.prepareRestartTarget(selectedSess)
 
 			m.log("Preparing to restart session %q (ID: %s)", selectedSess.TmuxSession, selectedSess.ID)
 			_ = appendDebugLog(fmt.Sprintf("[ui %s] restart triggered: session=%s status=%s\n", time.Now().Format("15:04:05.000"), selectedSess.TmuxSession, selectedSess.Status))
@@ -4927,6 +4956,19 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if i.action == viewStateAuthRemotePicker {
+					m.remotes = NewRemotesModel(m.cfg)
+					m.remotes.width = m.width
+					m.remotes.height = m.height
+					h, v := docStyle.GetFrameSize()
+					m.remotes.list.SetSize(m.width-h-4, m.height-v-6)
+					m.state = i.action
+					return m, nil
+				}
+				if i.action == viewStateReviveRemotePicker {
+					remotes := config.UniqueRemotes(m.cfg.Remotes)
+					if len(remotes) == 1 {
+						return m.startAbandonedWorktreeScan(remotes[0])
+					}
 					m.remotes = NewRemotesModel(m.cfg)
 					m.remotes.width = m.width
 					m.remotes.height = m.height
@@ -6448,6 +6490,8 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyRecreateMutagen(msg)
 	case agent.ScanAgentsMsg:
 		return m.applyScanAgents(msg)
+	case reviveScanResultMsg:
+		return m.applyReviveScanResult(msg)
 	}
 	return m, nil
 }
