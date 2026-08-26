@@ -233,6 +233,39 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### PTY sessions survived serve restarts in theory only ✅
+Updating or restarting `aiman serve` killed the agent inside every PTY session,
+the one thing the holder design exists to prevent. `setsid` puts a holder in its
+own session, so it escapes process-group signals, but cgroup membership is
+inherited across `fork` and cannot be shed — and the generated systemd unit left
+`KillMode` at its default of `control-group`. Stopping serve therefore SIGTERMed
+everything in the unit's cgroup, holders included. Confirmed on a live remote:
+the holder's `/proc/<pid>/cgroup` was `…/aiman-serve.service`, identical to
+serve's own.
+
+The serve unit now sets `KillMode=process`, so a stop signals only serve.
+Verified against real systemd before shipping: the child survives the stop, the
+unit still goes inactive, and it restarts cleanly with the leftover running. The
+trigger unit keeps the default, which is correct for its transient ssh children.
+Start/install/update already write and reload the unit *before* stopping, so the
+very update that ships this fix is the first to honour it.
+
+The attach client's half of the same event is fixed too: a lost stream printed
+`Error: write /dev/stdout: use of closed network connection` and exited 1.
+(`io.Copy(os.Stdout, conn)` uses `os.File.ReadFrom`, which splices, so a failed
+read on the *source* is reported as a `PathError` against the write target.) It
+now exits cleanly and says the stream ended and how to reattach.
+
+### Detaching from a PTY session reported a failed attach ✅
+`ctrl+q` landed the dashboard on its error screen with "Failed to attach to tmux
+session: exit status 1". Detaching closes the attach connection from the input
+side, and `Relay` returns whichever of its two `io.Copy` directions finishes
+first, so the same keypress yields either `nil` or "use of closed network
+connection" depending on which goroutine wins. The error path became a non-zero
+exit from `aiman pty attach`, which over `ssh -t` reached the UI as exit status
+1. The reader now records the deliberate detach and the exit is clean either way.
+The message also no longer blames tmux for a session tmux never hosted.
+
 ### Built-in PTY runtime as an opt-in session backend ✅
 Sessions are no longer tmux-only. `session_backend: pty` on a remote hosts its
 sessions in `aiman serve`'s own PTY runtime instead, selectable per session in

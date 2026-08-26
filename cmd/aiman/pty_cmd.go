@@ -175,8 +175,20 @@ func runPTYAttach(sock, id string) error {
 	if err := attachExitErr(connResp.Relay(stdin, os.Stdout), stdin.Detached()); err != nil {
 		return err
 	}
-	fmt.Fprint(os.Stdout, "\r\n[aiman] detached from "+id+"\r\n")
+	fmt.Fprint(os.Stdout, "\r\n"+attachExitNote(id, stdin.Detached())+"\r\n")
 	return nil
+}
+
+// attachExitNote explains why the relay ended. Losing the stream without a
+// keypress means the far end went away — most often aiman serve being restarted
+// or updated — and the useful next step is to reattach, since the session itself
+// is owned by a holder process that outlives serve.
+func attachExitNote(id string, detached bool) string {
+	if detached {
+		return "[aiman] detached from " + id
+	}
+	return "[aiman] stream to " + id + " ended (session exited, or aiman serve restarted)" +
+		" — reattach with: aiman pty attach " + id
 }
 
 // attachExitErr decides whether a finished relay is a failure worth reporting.
@@ -217,7 +229,8 @@ func printPTYUsage(w io.Writer) {
   aiman pty input ID --data TEXT
   aiman pty attach ID                      (interactive; detach with ctrl+q)
 
-Sessions live inside aiman serve and survive disconnects, but not a serve restart.
+Sessions are owned by detached holder processes, so they survive disconnects and
+serve restarts or updates; reattach with: aiman pty attach ID
 `)
 }
 

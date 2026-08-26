@@ -3,7 +3,9 @@ package main
 import (
 	"errors"
 	"io"
+	"io/fs"
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -121,4 +123,37 @@ func (c *chunkReader) Read(p []byte) (int, error) {
 	}
 	c.done = true
 	return copy(p, c.data), nil
+}
+
+// TestAttachExitErrToleratesSpliceWrappedClose covers the error shape a lost
+// stream actually has on Linux. io.Copy(os.Stdout, conn) uses os.File.ReadFrom,
+// which splices; a failure on the *source* is reported as a PathError against
+// the write target, so the observed message is
+// "write /dev/stdout: use of closed network connection". That must not become a
+// non-zero exit, or a serve restart looks like a crash to the user.
+func TestAttachExitErrToleratesSpliceWrappedClose(t *testing.T) {
+	spliced := &fs.PathError{Op: "write", Path: "/dev/stdout", Err: net.ErrClosed}
+	if got := attachExitErr(spliced, false); got != nil {
+		t.Fatalf("a lost stream must exit cleanly, got %v", got)
+	}
+	if !strings.Contains(spliced.Error(), "write /dev/stdout: use of closed network connection") {
+		t.Fatalf("test no longer reproduces the reported message: %v", spliced)
+	}
+}
+
+func TestAttachExitNoteDistinguishesDetachFromLostStream(t *testing.T) {
+	detached := attachExitNote("abc", true)
+	if !strings.Contains(detached, "detached from abc") {
+		t.Fatalf("got %q", detached)
+	}
+	if strings.Contains(detached, "reattach") {
+		t.Fatalf("a deliberate detach needs no recovery advice: %q", detached)
+	}
+
+	lost := attachExitNote("abc", false)
+	for _, want := range []string{"ended", "serve restarted", "aiman pty attach abc"} {
+		if !strings.Contains(lost, want) {
+			t.Fatalf("lost-stream note missing %q: %q", want, lost)
+		}
+	}
 }

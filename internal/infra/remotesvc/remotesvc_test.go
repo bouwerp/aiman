@@ -1,6 +1,7 @@
 package remotesvc
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -254,6 +255,78 @@ func TestScriptsHaveNoFmtLeftovers(t *testing.T) {
 		for name, s := range scripts {
 			if strings.Contains(s, "%!") {
 				t.Fatalf("%s %s has fmt error:\n%s", k, name, s)
+			}
+		}
+	}
+}
+
+// TestServeUnitLeavesPTYHoldersAlone pins the fix for PTY sessions dying
+// whenever serve was restarted or updated.
+//
+// serve spawns detached holder processes that own the PTY sessions and are meant
+// to outlive it. Setsid gives them a new process group but cannot shed the
+// cgroup they inherited, so systemd's default KillMode=control-group SIGTERMed
+// every holder — and every agent running inside one — on `systemctl stop`.
+func TestServeUnitLeavesPTYHoldersAlone(t *testing.T) {
+	u := UnitFile(KindServe)
+	if !strings.Contains(u, "KillMode=process") {
+		t.Fatalf("serve unit must not kill its cgroup: PTY holders live there\n%s", u)
+	}
+	// The trigger daemon owns nothing that should outlive it.
+	if tr := UnitFile(KindTrigger); strings.Contains(tr, "KillMode") {
+		t.Fatalf("trigger unit should keep default cgroup cleanup:\n%s", tr)
+	}
+}
+
+// TestStartRewritesUnitBeforeStopping guards the upgrade path: the stop that
+// happens during a start/update must be governed by the *new* unit file, or the
+// very update that ships the KillMode fix would still kill the holders on its
+// way in. So the unit must be written and reloaded before anything is stopped.
+func TestStartRewritesUnitBeforeStopping(t *testing.T) {
+	for name, s := range map[string]string{
+		"start":   StartScript(KindServe),
+		"install": InstallEnableScript(KindServe),
+		"update":  UpdateScript(KindServe),
+	} {
+		reload := strings.Index(s, "systemctl --user daemon-reload")
+		stop := strings.Index(s, "systemctl --user stop")
+		if reload < 0 || stop < 0 {
+			t.Fatalf("%s script missing reload (%d) or stop (%d):\n%s", name, reload, stop, s)
+		}
+		if reload > stop {
+			t.Fatalf("%s stops the unit before reloading the new unit file, so the old KillMode still applies:\n%s", name, s)
+		}
+	}
+}
+
+// TestStopScriptsSpareHolderProcesses makes sure no script reaches past serve
+// itself: the holder command line must not match the pkill patterns.
+func TestStopScriptsSpareHolderProcesses(t *testing.T) {
+	holder := "/home/code/.local/bin/aiman pty hold --root /home/code/.aiman --id abc123"
+	for name, s := range map[string]string{
+		"stop":   StopScript(KindServe),
+		"start":  StartScript(KindServe),
+		"update": UpdateScript(KindServe),
+	} {
+		for _, line := range strings.Split(s, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "pkill") {
+				continue
+			}
+			// Patterns are single-quoted in the script; pkill -f matches them as
+			// a regex against the full command line.
+			start := strings.Index(line, "'")
+			end := strings.LastIndex(line, "'")
+			if start < 0 || end <= start {
+				t.Fatalf("%s: cannot read pkill pattern from %q", name, line)
+			}
+			pat := line[start+1 : end]
+			re, err := regexp.Compile(pat)
+			if err != nil {
+				t.Fatalf("%s: pkill pattern %q is not a valid regex: %v", name, pat, err)
+			}
+			if re.MatchString(holder) {
+				t.Fatalf("%s: pkill pattern %q would kill PTY holders (%q)", name, pat, holder)
 			}
 		}
 	}

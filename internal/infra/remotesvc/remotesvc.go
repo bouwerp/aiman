@@ -68,6 +68,26 @@ func (k Kind) procPattern() string {
 	return "[a]iman serve"
 }
 
+// killMode returns the systemd KillMode for the unit.
+//
+// serve spawns detached PTY holder processes that are meant to outlive it —
+// surviving a serve restart or update is their entire purpose. Setsid is not
+// enough for that: it moves a process to a new session, so it escapes
+// process-group signals, but cgroup membership is inherited across fork and
+// cannot be shed. Under systemd's default KillMode=control-group, stopping
+// serve therefore SIGTERMs every holder in its cgroup, killing the running
+// agents with it. KillMode=process signals only the main process and leaves the
+// rest of the cgroup alone, which is exactly the contract the holders assume.
+//
+// The trigger daemon owns no such processes; the default group cleanup is the
+// right behaviour for its transient ssh children.
+func (k Kind) killMode() string {
+	if k == KindTrigger {
+		return ""
+	}
+	return "KillMode=process\n"
+}
+
 func UnitFile(k Kind) string {
 	return fmt.Sprintf(`[Unit]
 Description=Aiman %s
@@ -80,12 +100,12 @@ Type=simple
 ExecStart=%s
 Restart=on-failure
 RestartSec=2
-WorkingDirectory=%%h
+%sWorkingDirectory=%%h
 Environment=HOME=%%h
 
 [Install]
 WantedBy=default.target
-`, k, k.ExecLine())
+`, k, k.ExecLine(), k.killMode())
 }
 
 // userRuntimeEnv makes `systemctl --user` work over SSH: non-interactive

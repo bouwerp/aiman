@@ -342,7 +342,15 @@ tmux session, without editing config. The summary screen shows the backend it wi
 
 PTY sessions are owned by detached *holder* processes rather than by `aiman serve`
 itself, so they survive a serve restart or crash and are re-adopted when it comes
-back — the same guarantee tmux gives. Inspect and drive them directly with:
+back — the same guarantee tmux gives.
+
+That durability depends on the generated systemd unit setting `KillMode=process`.
+A holder is placed in its own session (`setsid`), which is enough to escape
+process-group signals, but a process cannot leave the cgroup it inherited — so
+under systemd's default `KillMode=control-group`, stopping serve would SIGTERM
+every holder along with it. If you manage the unit by hand, keep that setting.
+
+Inspect and drive them directly with:
 
 ```bash
 aiman pty list
