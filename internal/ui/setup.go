@@ -56,6 +56,13 @@ func NewSetupModel(cfg *config.Config) SetupModel {
 			t.SetValue(cfg.Integrations.Jira.Email)
 		case 2:
 			t.Placeholder = "JIRA API Token"
+			// Never cap a credential near its real length. Atlassian's current
+			// tokens (ATATT…) run about 192 characters, so the shared 128 limit
+			// truncated them silently — the field is masked, so there was nothing
+			// to see — and the saved token then failed every request with 401.
+			// The symptom was "no JIRA issues in the picker", which looks like a
+			// JQL or status-filter problem and sends you looking in the wrong place.
+			t.CharLimit = 4096
 			t.SetValue(cfg.Integrations.Jira.APIToken)
 			t.EchoMode = textinput.EchoPassword
 			t.EchoCharacter = '•'

@@ -113,6 +113,24 @@ existing hook-sidecar signal only exists for sessions aiman itself launched.
   All three paths hand off to the existing `restartSession()` — no new
   session-launch logic was needed.
 
+### Masked credential fields truncated their input ✅
+The JIRA issue picker showed nothing to start a session from. The cause was not
+the JQL or the status filter: the API token input carried the setup screen's
+shared `CharLimit = 128`, and Atlassian's current tokens (`ATATT…`) run about
+192 characters, so every token was silently cut to 128 on entry. The field is
+masked, so there was nothing on screen to notice, and the saved token then
+failed every request with 401 — which presents as "no issues in the picker",
+pointing at exactly the wrong part of the system. (The JIRA doctor check does
+report `Authentication failed`, which is the real clue.)
+
+A credential field must never cap near the credential's length. Both masked
+inputs — the JIRA token and env-secret values, the latter capped at 256 — are
+now 4096. Guarded by tests that fail if either cap returns, since a truncated
+secret is invisible by construction.
+
+Note for anyone who entered a token before this fix: the stored value is
+truncated and cannot be recovered, so it has to be re-entered.
+
 ### The agent API was unreachable from inside a session ✅
 An agent in a remote session could never talk to `aiman serve`: every
 `aiman session …` call answered `server_not_running`, naming a socket under

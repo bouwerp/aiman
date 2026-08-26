@@ -305,6 +305,11 @@ func makeSecretInputs() []textinput.Model {
 			t.SetWidth(40)
 		case 1:
 			t.Placeholder = "secret value"
+			// Secrets must never be capped near their real length: the field is
+			// masked, so a truncated value looks identical to a correct one and
+			// only shows up later as an auth failure somewhere else entirely.
+			// Long-lived tokens and JWTs comfortably exceed 256 characters.
+			t.CharLimit = 4096
 			t.EchoMode = textinput.EchoPassword
 			t.EchoCharacter = '•'
 			t.SetWidth(40)

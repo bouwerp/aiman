@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -67,5 +68,33 @@ func TestSetupModel_SaveStoresStatuses(t *testing.T) {
 	want := []string{"Dev Ready", "In Development"}
 	if !reflect.DeepEqual(cfg.Integrations.Jira.IssueStatuses, want) {
 		t.Errorf("expected %#v saved, got %#v", want, cfg.Integrations.Jira.IssueStatuses)
+	}
+}
+
+// A masked credential field must not cap near the credential's real length: a
+// truncated token looks identical to a correct one on screen and only surfaces
+// later as a 401. Atlassian's current tokens run ~192 chars, and the shared
+// 128 limit silently cut them, which presented as "no JIRA issues in the
+// picker" — nothing that points at the token at all.
+func TestSetupModelAcceptsFullLengthAPIToken(t *testing.T) {
+	cfg := &config.Config{}
+	m := NewSetupModel(cfg)
+
+	token := "ATATT" + strings.Repeat("x", 250)
+	m.inputs[2].SetValue(token)
+	if got := m.inputs[2].Value(); got != token {
+		t.Fatalf("token truncated to %d chars (limit %d), want all %d",
+			len(got), m.inputs[2].CharLimit, len(token))
+	}
+}
+
+// Same hazard for env secrets, which are masked too.
+func TestSecretInputsAcceptLongValues(t *testing.T) {
+	inputs := makeSecretInputs()
+	value := strings.Repeat("k", 1000)
+	inputs[1].SetValue(value)
+	if got := inputs[1].Value(); got != value {
+		t.Fatalf("secret truncated to %d chars (limit %d), want all %d",
+			len(got), inputs[1].CharLimit, len(value))
 	}
 }

@@ -347,7 +347,7 @@ omits it. Use the tmux backend there.
 
 Press `m` to access:
 - **Manage Remote Servers**: Add, scan, or test SSH connections
-- **JIRA Configuration**: Update credentials
+- **JIRA Configuration**: Update credentials. If the issue picker comes up empty, check the JIRA line in the dashboard footer first — `Authentication failed` there means the credentials are wrong, not the status filter. Only issues assigned to you in the configured `issue_statuses` are offered
 - **Health Checks**: Re-run doctor checks
 - **Session Snapshots**: Open the archive browser
 - **Revive Worktree**: Scan a remote's repo root for abandoned worktrees aiman has never tracked and resume the agent that worked there
