@@ -13,7 +13,7 @@ Aiman automates the entire development workflow:
 5. **Choose Subdirectory** — Pick a repo sub-folder (monorepo-friendly)
 6. **Scan Agents** — Detect available agents on the remote
 7. **Review Summary** — Confirm settings (and override AWS credentials) before creation
-8. **Create Session** — Worktree + tmux + agent launch + mutagen sync + AWS credentials
+8. **Create Session** — Worktree + terminal (tmux, or the built-in PTY runtime) + agent launch + mutagen sync + AWS credentials
 
 Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 
@@ -23,11 +23,11 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **JIRA Integration**: Real-time search with VSCode-style filtering
 - **Smart Branch Names**: Auto-sanitizes issue titles for git compatibility
 - **Repo & Directory Picker**: Choose repo + subdirectory from the remote
-- **Multi-Agent Support**: Scan and select Claude Code, Antigravity CLI, GitHub Copilot, OpenCode, or Cursor
+- **Multi-Agent Support**: Scans the remote and offers whichever of these it finds — Claude Code, Antigravity CLI (`agy`), Grok Build CLI, Codex CLI, OpenCode, GitHub Copilot CLI, Cursor (`cursor-agent`), Pi, Ageni
 - **Ad-hoc Sessions**: Create quick sessions without a JIRA issue, branch, or repo
 - **Quick start (`N`)**: Default remote, agent picker only, generated `q1`/`q2`/… in group `quick`
 - **Names and groups**: Every session has a unique display `name` and a `group`; the sidebar is a tree of groups, not a flat list
-- **Session Management**: Track active sessions with live tmux pane previews
+- **Session Management**: Track active sessions with live pane previews (tmux or PTY)
 - **Agent defaults**: Menu → Agent defaults sets per-agent launch model and thinking/reasoning effort (e.g. Claude `sonnet` + `medium`, Grok `4.6` + `medium`)
 - **Resume / restart (`s`)**: Save a handoff, then resume with the last-known agent automatically — no picker, no re-asking — including a worktree revived after a tmux crash or reboot. Falls back to the agent picker only when the agent can't be determined. Use `S` to deliberately switch agents instead
 - **Agent-exited detection**: A pane that fell back to a bare shell (crashed or never-started agent) shows as a distinct `⚠ agent exited` state instead of blending in with idle
@@ -62,7 +62,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 
 ### User Experience
 - **Interactive TUI**: Built with Bubble Tea for a modern terminal UI
-- **Real-time Previews**: Live tmux pane capture in the dashboard
+- **Real-time Previews**: Live pane capture in the dashboard, for either backend
 - **VS Code Integration**: Open synced directories directly in VS Code (`v` key)
 - **Health Checks**: Built-in "Doctor" validates all integrations on startup
 - **Fuzzy Search**: Find issues, repos, and sessions quickly
@@ -153,7 +153,7 @@ mv aiman ~/.local/bin/
 
 ### Optional
 - **Go 1.26+**: Only needed if building from source (not required for pre-built binaries)
-- **tmux**: For session management on remote servers
+- **tmux**: Hosts sessions on the remote. Required unless you opt that remote into the built-in PTY backend instead — see [Session backends](#session-backends)
 - **mutagen**: For local/remote file syncing
 - **code** (VS Code CLI): For IDE integration
 - **AWS CLI**: Required for AWS credential delegation (`aws sts`)
@@ -195,7 +195,7 @@ aiman
 | `m` | **Admin Menu** — Remotes, **Agent API**, JIRA, snapshots |
 | `↑/↓` | Navigate sessions |
 | `Enter` | Select item |
-| `ESC` | Go back / Cancel |
+| `ESC` / `q` | Quit (asks to confirm). Inside a screen or an active list filter, cancels instead |
 | `a` | **Attach** to tmux session (full terminal) |
 | `s` | **Resume / restart** — auto-detects the last agent and resumes it, no picker |
 | `S` | **Switch agent** — always shows the agent picker |
@@ -209,7 +209,14 @@ aiman
 | `i` | **Classify Session** — Report whether the agent is working, blocked, or idle (rules + local model, side by side) |
 | `I` | **AI Insight** — Generate a brief AI summary of the session |
 | `r` | **Refresh** session status |
-| `f` | **Filter** session list by remote |
+| `R` | **Refresh AWS credentials** — re-mint and push every delegated profile, whatever its remaining lifetime |
+| `f` | **Filter** session list by remote (only active with more than one remote configured) |
+| `d` | **Trigger details** for an autonomous session |
+| `tab` | Switch between the **sessions** list and the **agent API / daemons** tab |
+| `T` | **Take over** an autonomous session (convert it to interactive) |
+| `Ctrl+M` | Toggle mouse reporting — off lets the terminal do native text selection |
+| `[` / `]`, `shift+↑/↓`, `PgUp` / `PgDn` | Scroll the preview panel |
+| `Ctrl+R` / `Ctrl+S` | Aliases for `s` (resume) and `a` (attach) |
 | `Ctrl+A` | **Archive Session** — AI-summarise and snapshot the session |
 | `Ctrl+Y` | **Recreate Mutagen Sync** for the selected session |
 | `Ctrl+K` | **Terminate Session** (with git safety checks) |
@@ -240,10 +247,14 @@ aiman
 Skip the JIRA/branch/repo flow and jump straight to agent selection:
 
 1. Press `n` on the dashboard
-2. When prompted for a JIRA issue, press `Tab` to switch to ad-hoc mode
-3. Optionally enter a label for the session, or leave blank for auto-generated
-4. **Agent Selection**: Choose your AI coding assistant
-5. **Summary**: Review and confirm
+2. Pick the remote to run on
+3. Choose `[4] Ad-hoc — no git repo, no JIRA ticket`
+4. Optionally enter a label for the session, or leave blank for auto-generated
+5. **Agent Selection**: Choose your AI coding assistant
+6. **Summary**: Review and confirm
+
+For an even shorter path, `N` creates a quick session directly on the default remote:
+agent picker only, auto-named `q1`/`q2`/… in group `quick`.
 
 Ad-hoc sessions still get their own tmux session, mutagen sync, and AWS credentials.
 
@@ -306,7 +317,7 @@ invisible there by design — use **Menu → Revive Worktree** to find and resum
 
 
 
-Press `Ctrl+Y` on a selected session to recreate its mutagen sync binding using that session's current remote agent working directory and the canonical local path `~/.aiman/work/<session-name>`.
+Press `Ctrl+Y` on a selected session to recreate its mutagen sync binding using that session's current remote agent working directory and the canonical local path `~/.aiman/work/<session-id>`.
 
 ### Session backends
 
@@ -324,8 +335,10 @@ remotes:
     session_backend: pty      # "tmux" (default) or "pty"
 ```
 
-A remote configured this way offers the backend as a choice in the run-target step of
-the new-session wizard, so individual sessions can still opt out.
+The run-target step of the new-session wizard always offers `b` to flip the backend for
+the session being created, starting from the remote's configured default. So a
+tmux-default remote can host a one-off pty session, and a pty-default remote a one-off
+tmux session, without editing config. The summary screen shows the backend it will use.
 
 PTY sessions are owned by detached *holder* processes rather than by `aiman serve`
 itself, so they survive a serve restart or crash and are re-adopted when it comes
@@ -335,7 +348,11 @@ back — the same guarantee tmux gives. Inspect and drive them directly with:
 aiman pty list
 aiman pty get <id>
 aiman pty attach <id>     # interactive; detach with ctrl+q, which leaves it running
+aiman pty capture <id>    # read the pane without attaching
+aiman pty input <id> --data TEXT | --file PATH
+aiman pty create --id <id> --command CMD [--name N] [--dir D] [--env K=V]…
 aiman pty kill <id>
+aiman pty forget <id>     # drop an exited session's directory
 ```
 
 `aiman pty hold` is the holder itself and is not meant to be run by hand.
@@ -345,12 +362,29 @@ omits it. Use the tmux backend there.
 
 ### Administrative Menu
 
-Press `m` to access:
-- **Manage Remote Servers**: Add, scan, or test SSH connections
-- **JIRA Configuration**: Update credentials. If the issue picker comes up empty, check the JIRA line in the dashboard footer first — `Authentication failed` there means the credentials are wrong, not the status filter. Only issues assigned to you in the configured `issue_statuses` are offered
-- **Health Checks**: Re-run doctor checks
-- **Session Snapshots**: Open the archive browser
-- **Revive Worktree**: Scan a remote's repo root for abandoned worktrees aiman has never tracked and resume the agent that worked there
+Press `m` to access, in order:
+
+| Item | What it does |
+|---|---|
+| **Manage Remote Servers** | Add, scan `known_hosts`, edit, or test SSH connections |
+| **Agent API** | Install, start, reload, update or stop `aiman serve` per remote |
+| **Provision Remote Server** | Install baseline tooling on a fresh host (gh, agents, node, skills) |
+| **Auth Setup Wizard** | Guided auth checks and instructions per remote tool |
+| **JIRA Configuration** | URL, email, API token, and which issue statuses the picker offers |
+| **Git Configuration** | Which repositories and orgs the repo picker lists |
+| **General Settings** | Experimental and general feature flags |
+| **Agent defaults** | Per-agent launch model and thinking/reasoning effort |
+| **Shared context** | Store size, lookups, and pack usage per remote |
+| **AI Settings** | Enable the local model; Ollama host and model choice |
+| **Secrets** | Env-var secrets injected into new sessions |
+| **AWS Credentials** | Status, lifetime and renewal of delegated profiles; profile allowlist |
+| **Session Snapshots** | Browse, search and preview archived sessions |
+| **Scheduled Prompts** | Cron-scheduled prompt injection into a set of sessions |
+| **Revive Worktree** | Find abandoned worktrees under a remote's repo root and resume the agent that worked there |
+
+Doctor checks are not a menu item: they stream into the dashboard footer at startup,
+and `r` re-runs them. If the issue picker comes up empty, read the JIRA line there
+first — `Authentication failed` means the credentials are wrong, not the status filter.
 
 ### Git Repository Configuration
 
@@ -377,7 +411,7 @@ aiman repos
 
 ## Agent API (`aiman serve`)
 
-Agents inside a tmux session talk to **one server per remote**, not to the laptop TUI. That process is `aiman serve` (the agent API). The skill (`aiman --skill`) and `aiman session …` are clients of it. tmux stays the multiplexer. Mutagen, JIRA tokens, and the laptop SQLite file stay on the laptop.
+Agents inside a session talk to **one server per remote**, not to the laptop TUI. That process is `aiman serve` (the agent API). The skill (`aiman --skill`) and `aiman session …` are clients of it. tmux (or the built-in PTY runtime) hosts the terminal. Mutagen, JIRA tokens, and the laptop SQLite file stay on the laptop.
 
 `session list` reports the sessions actually running on that host, discovered from tmux
 and the PTY runtime — it does not depend on the laptop having told the remote about them.
@@ -433,6 +467,21 @@ systemctl --user status aiman-serve
 | Override | `AIMAN_SOCKET_PATH` |
 
 A second instance fails with `already_running`. `aiman serve` is Unix-only (not Windows).
+
+#### Protocol methods
+
+The full surface the socket dispatches. `aiman session`, `aiman pty` and `aiman context`
+are thin clients over these; an agent can also speak the JSON directly.
+
+| Group | Methods |
+|---|---|
+| Sessions | `session.list`, `session.get`, `session.read`, `session.prompt`, `session.wait`, `session.create`, `session.rename`, `session.move` |
+| PTY runtime | `pty.list`, `pty.get`, `pty.create`, `pty.input`, `pty.capture`, `pty.kill`, `pty.forget` |
+| Shared context | `context.list`, `context.find`, `context.get`, `context.put`, `context.pack`, `context.stats` |
+
+Errors come back with a machine-readable `code` — `server_not_running`, `not_found`,
+`invalid_params`, `agent_blocked`, `already_running` — so callers can branch on the
+reason rather than parsing prose.
 
 The server uses the remote `~/.aiman/config.yaml` (often sparse) and `~/.aiman/aiman.db`. Session create on the remote does **not** start mutagen or push AWS STS; those remain TUI/laptop concerns. The new tmux session inherits whatever is already in remote `~/.aws`.
 
@@ -534,7 +583,7 @@ aiman context import [--agent all|claude,grok,codex,agy] [--group GROUP] [--repo
 
 ### Names and groups
 
-Every session has a **name** (unique per host, `^[A-Za-z][A-Za-z0-9_-]{0,47}$`) and a **group** (work bucket: issue key, repo short name, `quick`, or `ungrouped`). The dashboard sidebar is a tree of groups. Each header shows the session count (`· N`).
+Every session has a **name** (unique per host; up to 120 characters, no control characters, no leading or trailing spaces) and a **group** (work bucket: issue key, repo short name, `quick`, or `ungrouped`). The dashboard sidebar is a tree of groups. Each header shows the session count (`· N`).
 
 | Key | On a group header | On a session |
 |---|---|---|
@@ -553,7 +602,7 @@ Empty group is stored as `ungrouped` so discovery cannot blank it.
 
 ### Environment (inside a pane)
 
-`CreateSession` injects these into the tmux session environment (not overridable by stored secrets):
+`CreateSession` injects these into the session environment (tmux or PTY) (not overridable by stored secrets):
 
 | Variable | Value |
 |---|---|
@@ -599,11 +648,19 @@ All data is stored in `~/.aiman/`:
 ~/.aiman/
 ├── config.yaml          # Main configuration
 ├── aiman.db             # SQLite database (sessions + snapshots)
+├── aiman.log            # TUI log — background goroutines write here, never to the screen
 ├── aiman.sock           # Remote: `aiman serve` Unix socket (`0o600`)
 ├── aiman.sock.lock      # Remote: serve singleton lock
 ├── serve.log            # Remote: serve log
-├── debug.log            # `aiman --debug` dump (optional)
+├── serve.pid            # Remote: serve pid, when running under nohup instead of systemd
+├── trigger.pid          # Remote: aiman-trigger pid, same fallback
+├── debug.log            # `aiman --debug` dump (optional; the TUI otherwise
+│                        #   traces to /tmp/aiman-debug.log)
 ├── context/             # Shared context notes (markdown + YAML frontmatter)
+├── skills/              # Skills synced into agents and worktrees
+├── hooks/               # Agent hook reporter script installed per host
+├── native-sessions/     # Per-session vendor conversation ids reported by hooks
+├── pty/                 # Remote: one directory per built-in PTY session
 ├── sockets/             # SSH ControlMaster sockets (hashed filenames)
 └── work/                # Local mutagen sync roots — one subdirectory per session ID
 ```
@@ -623,14 +680,38 @@ integrations:
       - "Dev Ready"
       - "In Development"
       - "Dev Review"
+    # Optional: status to move an issue to when a session starts on it.
+    transition_status: "In Development"
 
 git:
   include_personal: true
   include_orgs:
     - "mycompany"
 
+features:
+  # Classify what each session is doing (busy / input / idle / agent exited)
+  # and show it in the sidebar.
+  input_prompt_detection: true
+
+skills:
+  # Skills synced into each agent's config and into new worktrees.
+  repo: ""                       # optional git repo to source skills from
+  path: ~/.aiman/skills          # local skill directory (this is the default)
+
+# Per-agent launch defaults, keyed by the agent name as aiman reports it.
+# Also editable in Menu → Agent defaults.
+agent_defaults:
+  "Claude Code":
+    model: sonnet
+    effort: medium
+  "Grok Build CLI":
+    model: "4.6"
+    effort: medium
+
 ai:
   enabled: true
+  # Where Ollama listens. Defaults to http://localhost:11434.
+  ollama_host: http://localhost:11434
   # Model used for summaries. Defaults to qwen3:4b.
   model: qwen3:4b
   # Model used to classify session activity. Defaults to `model`.
@@ -642,6 +723,11 @@ aws:
   # they don't have to be retyped for every session. Still overridable there.
   default_profile: dev
   default_region: eu-west-1
+  # Which local ~/.aws profiles aiman may use, managed from
+  # Menu → AWS Credentials. Omit the key to allow every profile; an explicit
+  # empty list allows none.
+  include_profiles:
+    - dev
 
 sync:
   # Extra paths to exclude from the local mirror, on top of the built-in set.
@@ -656,13 +742,27 @@ remotes:
     host: devbox.company.com
     user: developer
     root: /home/developer/repos
+    # Terminal runtime for sessions on this remote: "tmux" (default) or "pty".
+    # Only a default — the run-target screen can override it per session.
+    session_backend: tmux
     aws_delegation:
+      profile: default                         # name of the profile written on the remote
       source_profile: my-local-aws-profile   # local ~/.aws profile with long-lived creds
       role_name: TemporaryDelegatedRole        # IAM role to assume on the remote
       account_id: "123456789012"               # 12-digit AWS account ID
       region: us-east-1                        # default region written to remote profile
       sync_credentials: true                   # push fresh STS tokens before each session
       duration_seconds: 3600                   # credential lifetime (900–43200)
+      managed_role: false                      # create the IAM role if it does not exist
+      regions:                                 # restrict creds via aws:RequestedRegion
+        - us-east-1
+      session_policy: ""                       # optional inline JSON IAM policy
+    # For more than one delegated profile on the same remote, use the plural
+    # form instead of (or alongside) aws_delegation:
+    # aws_delegations:
+    #   - profile: prod
+    #     source_profile: my-prod-profile
+    #     account_id: "210987654321"
 
 active_remote: devbox
 ```
@@ -793,33 +893,55 @@ Refreshes and status checks run in the background, so you can leave the credenti
 Aiman follows **Clean Architecture** principles:
 
 ```
-┌─────────────────────────────────────────┐
-│  UI (Bubble Tea)                        │
-│  - Dashboard, Pickers, Inputs           │
-├─────────────────────────────────────────┤
-│  Use Cases                              │
-│  - Doctor, Session Discovery, Flow      │
-│  - SnapshotManager, IntelligenceLayer   │
-├─────────────────────────────────────────┤
-│  Domain                                 │
-│  - Session, Issue, Repository, Snapshot │
-├─────────────────────────────────────────┤
-│  Infrastructure                         │
-│  - JIRA, Git, SSH, SQLite, Mutagen      │
-│  - AI (Ollama), AWS Delegation          │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  UI (Bubble Tea)                internal/ui              │
+│  - Dashboard, pickers, wizards, admin screens            │
+├──────────────────────────────────────────────────────────┤
+│  Use Cases                      internal/usecase         │
+│  - Doctor, session discovery, FlowManager (create)        │
+│  - Restart/revive handoff, SnapshotManager, context       │
+├──────────────────────────────────────────────────────────┤
+│  Domain                         internal/domain          │
+│  - Session, Issue, Repo, Snapshot, agent state           │
+├──────────────────────────────────────────────────────────┤
+│  Infrastructure                 internal/infra/*         │
+│  - jira, git, ssh, sqlite, mutagen, agent (scan),        │
+│    ai (Ollama), awsdelegation, config, local, remotesvc, │
+│    skills, tailscale                                     │
+└──────────────────────────────────────────────────────────┘
 ```
+
+Two processes run *on the remote*, both driven from the laptop TUI but
+independent of it once started:
+
+```
+laptop                          remote host
+──────                          ───────────
+aiman (TUI) ──ssh──────────────► tmux ──► agent
+            │                    │
+            │                    └─ or ─► aiman serve ──► ptyhold (holder) ──► agent
+            └──ssh──────────────► aiman-trigger (scheduled / GitHub-driven runs)
+```
+
+The laptop owns mutagen, JIRA credentials and the authoritative SQLite database.
+`aiman serve` answers the agent API over a Unix socket and, when the PTY backend
+is used, owns the terminals — via detached holder processes, so sessions outlive
+a serve restart.
 
 ### Key Components
 
-- **`JiraProvider`**: JIRA Cloud API v3 integration
+- **`jira.Provider`**: JIRA Cloud API v3 integration
 - **`GitSlugger`**: Branch name sanitization
-- **`SSHManager`**: ControlMaster multiplexing with per-call 30s timeout and automatic retry/socket reset
-- **`WorktreeManager`**: Git worktree operations
-- **`MutagenBridge`**: File synchronization
-- **`TmuxManager`**: Session lifecycle management
+- **`ssh.Manager`**: ControlMaster multiplexing with per-call 30s timeout and automatic retry/socket reset, plus batched whole-remote discovery scans
+- **`mutagen.Engine`**: File synchronization
+- **Worktree and terminal lifecycle**: not single types — worktree setup lives in `internal/infra/git`, while session start/stop/restart is coordinated in `internal/usecase` (`flow_manager.go`, `session_terminal.go`, `restart_handoff.go`) and driven from `internal/ui`
 - **`SkillEngine`**: Agent configuration injection
 - **`aiman serve`**: Headless Unix-socket JSON server on the remote (`internal/server`)
+- **`ptyruntime` / `ptyhold`**: The built-in PTY backend. `ptyruntime` is a thin client over a file-and-socket contract; `ptyhold` is the detached holder process that actually owns a terminal, which is what lets a session survive a serve restart
+- **`pane`**: Classifies what a session is doing (working, blocked on a question, waiting on background agents, idle, agent exited) from the tail of the pane plus tmux's own last-output timestamp — no model required
+- **`agenthook`**: Installs per-vendor hooks so agents report their own lifecycle (session id, title, idle/blocked, session end) back to aiman, and infers which agent worked in a directory when reviving one
+- **`contextstore`**: The shared markdown note store behind `aiman context`
+- **`remotesvc`**: Installs and supervises the two remote daemons (`aiman serve`, `aiman-trigger`) over systemd `--user`, falling back to `nohup`
 - **Agent skill**: `aiman --skill` / `internal/aimanskill/SKILL.md`
 - **`SnapshotManager`**: Session archiving (capture → clean → compress → AI → persist)
 - **`IntelligenceProvider`**: AI summarisation via Ollama (local LLM)
