@@ -113,6 +113,43 @@ existing hook-sidecar signal only exists for sessions aiman itself launched.
   All three paths hand off to the existing `restartSession()` — no new
   session-launch logic was needed.
 
+### The agent API was unreachable from inside a session ✅
+An agent in a remote session could never talk to `aiman serve`: every
+`aiman session …` call answered `server_not_running`, naming a socket under
+`/Users/pieter/.aiman/` — the *laptop's* path — while serve was healthy on the
+remote at `/home/code/.aiman/aiman.sock`. The skill telling agents to use the
+API was correct; the environment handed to them was not.
+
+`aimanRuntimeEnv` filled `AIMAN_SOCKET_PATH` from `config.GetDir()` and
+`AIMAN_BIN_PATH` from `os.Executable()`. Both resolve on whichever machine
+*creates* the session, which for the TUI is the laptop, while the session runs
+on the remote — so both values were paths that do not exist where they were
+used. `AIMAN_BIN_PATH` broke hook reporting the same way, silently, which is
+why agent state and identity reporting had been unreliable.
+
+Neither is injected now. Left unset, each resolves correctly on the machine
+that actually uses it: the in-session binary falls back to its own
+`config.GetDir()` (`cmd/aiman`'s `socketPath`), and the hook reporter resolves
+the binary itself (PATH, then `$HOME/.local/bin/aiman`). Verified against
+regent0: the injected path reproduces `server_not_running`, and unset returns
+a real session list. Both restart and create still *unset* the stale variables
+in the tmux environment, so sessions made by older builds are repaired too.
+
+### Discovery could hide detached PTY sessions ✅
+`ScanPTYSessions` swallowed every failure and returned nil, so a transient SSH
+error looked identical to "this host has no PTY sessions" — for a host
+discovery had just marked as scanned. The merge step reads a known session
+missing from a scanned host as dead, so live PTY sessions dropped out of the
+dashboard: the same flicker already fixed for tmux, still live for PTY, and
+worse here because a detached PTY session that isn't listed cannot be
+reattached.
+
+The scan command now guards on `command -v aiman` and always prints a valid
+empty list, so a remote with no runtime is a clean empty answer while a failed
+call is a real error that fails the whole `Discover` — leaving the database's
+view of that host untouched. The session list also marks PTY-hosted sessions
+(`| pty`), since they are reattached and torn down differently from tmux ones.
+
 ### Built-in PTY runtime as an opt-in session backend ✅
 Sessions are no longer tmux-only. `session_backend: pty` on a remote hosts its
 sessions in `aiman serve`'s own PTY runtime instead, selectable per session in

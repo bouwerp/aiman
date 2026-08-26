@@ -141,3 +141,26 @@ func TestEnsureOnHostDoesNotTouchAgeni(t *testing.T) {
 		t.Fatalf("ageni was touched: %v", entries)
 	}
 }
+
+// The reporter must find the aiman binary without being handed a path.
+//
+// AIMAN_BIN_PATH used to be injected by whoever created the session — the
+// laptop, for a remote session — so remote hooks were pointed at a path that
+// did not exist there and every report silently failed. The script now
+// resolves the binary where it actually runs, and still honours an explicit
+// override when one is valid.
+func TestReporterScriptResolvesBinaryWithoutInjectedPath(t *testing.T) {
+	for _, want := range []string{
+		`command -v aiman`,
+		`$HOME/.local/bin/aiman`,
+		`${AIMAN_BIN_PATH:-}`,
+	} {
+		if !strings.Contains(reporterScript, want) {
+			t.Errorf("reporter script should contain %q so it works on the session's own host", want)
+		}
+	}
+	// Still a no-op outside an aiman session, and still never fails the agent.
+	if !strings.Contains(reporterScript, `[ "${AIMAN_ENV:-}" = 1 ] || exit 0`) {
+		t.Error("reporter must stay inert outside an aiman session")
+	}
+}

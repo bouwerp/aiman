@@ -86,7 +86,16 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 
 	// 2b. Scan built-in-PTY sessions hosted by aiman serve on this remote.
 	// These carry the aiman session id directly, so no env archaeology is needed.
-	for _, rec := range ScanPTYSessions(ctx, d.remoteExecutor) {
+	//
+	// A failed scan fails the whole Discover, exactly like the worktree sweep
+	// below: returning partial results would let the merge step conclude that
+	// the PTY sessions it already knows about are dead. A remote with no
+	// runtime at all reports an empty list rather than an error.
+	ptyRecords, err := ScanPTYSessions(ctx, d.remoteExecutor)
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range ptyRecords {
 		if rec.ID == "" || rec.Status != "running" {
 			continue
 		}

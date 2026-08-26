@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,12 +13,16 @@ import (
 type terminalRemote struct {
 	commands []string
 	output   map[string]string
+	execErr  error
 
 	written map[string][]byte
 }
 
 func (r *terminalRemote) Execute(_ context.Context, cmd string) (string, error) {
 	r.commands = append(r.commands, cmd)
+	if r.execErr != nil {
+		return "", r.execErr
+	}
 	for frag, out := range r.output {
 		if strings.Contains(cmd, frag) {
 			return out, nil
@@ -45,7 +50,10 @@ func TestScanPTYSessionsParsesRuntimeList(t *testing.T) {
   ]
 }`,
 	}}
-	got := ScanPTYSessions(context.Background(), r)
+	got, err := ScanPTYSessions(context.Background(), r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(got) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(got))
 	}
@@ -54,10 +62,52 @@ func TestScanPTYSessionsParsesRuntimeList(t *testing.T) {
 	}
 }
 
+// A remote with no runtime answers with an empty list and exit 0 — the scan
+// command guards on `command -v aiman` for exactly this.
 func TestScanPTYSessionsEmptyOnMissingRuntime(t *testing.T) {
-	r := &terminalRemote{output: map[string]string{"aiman pty list": ""}}
-	if got := ScanPTYSessions(context.Background(), r); len(got) != 0 {
+	r := &terminalRemote{output: map[string]string{"aiman pty list": `{"sessions":[]}`}}
+	got, err := ScanPTYSessions(context.Background(), r)
+	if err != nil {
+		t.Fatalf("a remote without the runtime is not an error: %v", err)
+	}
+	if len(got) != 0 {
 		t.Fatalf("expected no sessions, got %d", len(got))
+	}
+}
+
+// "Could not ask" must never look like "there are none": discovery marks the
+// host scanned, and the merge step reads a missing session on a scanned host
+// as dead. Silently returning nil here dropped live PTY sessions from the
+// dashboard on any transient SSH failure.
+func TestScanPTYSessionsFailsRatherThanReportingNone(t *testing.T) {
+	r := &terminalRemote{execErr: fmt.Errorf("ssh: connection lost")}
+	if _, err := ScanPTYSessions(context.Background(), r); err == nil {
+		t.Fatal("expected a transport failure to propagate")
+	}
+
+	// Unparseable output is equally "unanswered", not "empty".
+	garbled := &terminalRemote{output: map[string]string{"aiman pty list": "not json"}}
+	if _, err := ScanPTYSessions(context.Background(), garbled); err == nil {
+		t.Fatal("expected unparseable output to propagate")
+	}
+
+	// A call that succeeded but said nothing means no runtime, hence no
+	// sessions — only a failed call is ambiguous.
+	silent := &terminalRemote{output: map[string]string{"aiman pty list": ""}}
+	got, err := ScanPTYSessions(context.Background(), silent)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("silent success should be an empty list, got %v / %v", got, err)
+	}
+}
+
+// The scan must survive a remote that has no aiman binary at all without
+// reporting failure, or discovery would break for every tmux-only remote.
+func TestScanPTYSessionsCmdGuardsOnBinaryPresence(t *testing.T) {
+	if !strings.Contains(scanPTYSessionsCmd, "command -v aiman") {
+		t.Error("scan command must check for the binary before invoking it")
+	}
+	if !strings.Contains(scanPTYSessionsCmd, `{"sessions":[]}`) {
+		t.Error("scan command must fall back to a valid empty list, not a non-zero exit")
 	}
 }
 

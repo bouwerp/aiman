@@ -164,20 +164,40 @@ type PTYRecord struct {
 	Command string `json:"command"`
 }
 
+// scanPTYSessionsCmd asks the remote for its PTY sessions, answering with an
+// empty list — never a non-zero exit — when the runtime simply isn't there.
+//
+// That distinction is the whole point: a remote with no aiman binary genuinely
+// has no PTY sessions, whereas a failed SSH call means we could not ask. If
+// both looked alike, a transient failure would report "this host has zero PTY
+// sessions" for a host discovery had marked as scanned, and the merge step
+// would take that as proof the known ones are dead and drop them from the
+// dashboard — the same way swallowed tmux scan errors used to make live
+// sessions flicker out of the list.
+const scanPTYSessionsCmd = remoteAimanPreamble +
+	`if command -v aiman >/dev/null 2>&1; then aiman pty list 2>/dev/null || printf '{"sessions":[]}'; else printf '{"sessions":[]}'; fi`
+
 // ScanPTYSessions asks the remote serve daemon what PTY sessions it currently
-// holds. Remotes without the runtime return an empty list, not an error.
-func ScanPTYSessions(ctx context.Context, remote TerminalExecutor) []PTYRecord {
-	out, err := remote.Execute(ctx, remoteAimanPreamble+"aiman pty list 2>/dev/null")
+// holds. Remotes without the runtime yield an empty list; an error means the
+// remote could not be asked, and callers must not read that as "none".
+func ScanPTYSessions(ctx context.Context, remote TerminalExecutor) ([]PTYRecord, error) {
+	out, err := remote.Execute(ctx, scanPTYSessionsCmd)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to scan pty sessions: %w", err)
+	}
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" {
+		// A call that succeeded but said nothing means no runtime and so no
+		// sessions. Only a *failed* call is ambiguous, and that is handled above.
+		return nil, nil
 	}
 	var result struct {
 		Sessions []PTYRecord `json:"sessions"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &result); err != nil {
-		return nil
+	if err := json.Unmarshal([]byte(trimmed), &result); err != nil {
+		return nil, fmt.Errorf("parsing pty session list: %w", err)
 	}
-	return result.Sessions
+	return result.Sessions, nil
 }
 
 // PTYSessionExists reports whether the remote runtime currently holds a live

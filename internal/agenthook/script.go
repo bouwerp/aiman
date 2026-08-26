@@ -10,10 +10,23 @@ const reporterName = "report-agent-session.sh"
 
 // reporterScript is invoked by every vendor hook. It always exits 0 so a
 // missing serve or a non-Aiman environment cannot fail the agent session.
+// AIMAN_BIN_PATH is honoured when set but never relied on: it used to be
+// injected by the session creator, which for the TUI is the laptop, so remote
+// sessions received a laptop-only path and every hook report silently failed.
+// Resolving the binary here works wherever the session actually runs.
 const reporterScript = `#!/bin/sh
 [ "${AIMAN_ENV:-}" = 1 ] || exit 0
 [ -n "${AIMAN_ID:-}" ] || exit 0
-bin="${AIMAN_BIN_PATH:-aiman}"
+bin="${AIMAN_BIN_PATH:-}"
+if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+  if command -v aiman >/dev/null 2>&1; then
+    bin=aiman
+  elif [ -x "$HOME/.local/bin/aiman" ]; then
+    bin="$HOME/.local/bin/aiman"
+  else
+    exit 0
+  fi
+fi
 "$bin" session report-agent-session --from-stdin >/dev/null 2>&1 || true
 exit 0
 `

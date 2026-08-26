@@ -282,6 +282,12 @@ func (i item) Description() string {
 	if i.session.Branch != "" {
 		agentPart = " | Branch: " + i.session.Branch + agentPart
 	}
+	// Mark the backend only when it is not the tmux default: a PTY session is
+	// reattached and torn down differently, so which runtime hosts it has to be
+	// visible rather than something the user has to remember per session.
+	if i.session.IsPTY() {
+		agentPart = " | pty" + agentPart
+	}
 	createdPart := ""
 	if !i.session.CreatedAt.IsZero() {
 		createdPart = " | Created: " + i.session.CreatedAt.Format("2006-01-02 15:04")

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -155,5 +156,24 @@ func TestHandleRestartConfirmUpdate_NoKnownAgentGoesToPicker(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected a fetch-agents command")
+	}
+}
+
+// A PTY-hosted session must be identifiable in the list: it is reattached and
+// torn down differently from a tmux one, so the backend cannot be invisible.
+func TestItemDescriptionMarksPTYBackend(t *testing.T) {
+	pty := item{session: domain.Session{
+		ID: "p1", RepoName: "app", RemoteHost: "devbox", Backend: domain.BackendPTY,
+	}}
+	if got := pty.Description(); !strings.Contains(got, "pty") {
+		t.Errorf("pty session description should mark the backend, got %q", got)
+	}
+
+	// tmux is the default and stays unmarked, so the hint means something.
+	tmux := item{session: domain.Session{
+		ID: "t1", RepoName: "app", RemoteHost: "devbox", TmuxSession: "PB-1",
+	}}
+	if got := tmux.Description(); strings.Contains(got, "pty") {
+		t.Errorf("tmux session must not be marked as pty, got %q", got)
 	}
 }

@@ -476,6 +476,45 @@ func TestDiscoverHostSessionsReportsSuccessEvenWithNoSessions(t *testing.T) {
 	}
 }
 
+// A failed PTY scan must fail the whole Discover rather than report zero PTY
+// sessions. Discovery marks the host as scanned, and the merge step reads a
+// known session missing from a scanned host as dead — so silently returning
+// none dropped live PTY sessions out of the dashboard, leaving detached
+// sessions unidentifiable and therefore un-reattachable.
+func TestDiscoverFailsWhenPTYScanFails(t *testing.T) {
+	remote := &batchRemote{
+		discovererRemote: discovererRemote{
+			errors: map[string]error{scanPTYSessionsCmd: fmt.Errorf("ssh: connection lost")},
+		},
+	}
+
+	if _, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).Discover(context.Background(), "regent0"); err == nil {
+		t.Fatal("expected Discover to fail when the pty scan fails")
+	}
+	if _, ok := DiscoverHostSessions(context.Background(), remote, &recordingSyncEngine{}, "regent0"); ok {
+		t.Fatal("expected ok=false so the host is not marked scanned")
+	}
+}
+
+// A remote with no PTY runtime is not a failure: it simply has no PTY
+// sessions, and discovery must keep working for every tmux-only remote.
+func TestDiscoverSucceedsWhenRemoteHasNoPTYRuntime(t *testing.T) {
+	remote := &batchRemote{
+		discovererRemote: discovererRemote{
+			outputs: map[string]string{scanPTYSessionsCmd: `{"sessions":[]}`},
+		},
+		tmuxRecords: []domain.TmuxSessionRecord{{Name: "PB-1", AimanID: "id-1", CWD: "/repos/app"}},
+	}
+
+	sessions, ok := DiscoverHostSessions(context.Background(), remote, &recordingSyncEngine{}, "regent0")
+	if !ok {
+		t.Fatal("a remote without the pty runtime must still scan cleanly")
+	}
+	if len(sessions) != 1 || sessions[0].TmuxSession != "PB-1" {
+		t.Fatalf("expected the tmux session to survive, got %+v", sessions)
+	}
+}
+
 // failingWorktreeRemote makes both the batch worktree sweep and the per-item
 // repo scan fail, while the tmux scan stays healthy.
 type failingWorktreeRemote struct {

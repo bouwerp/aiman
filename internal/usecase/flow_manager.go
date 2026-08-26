@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -588,12 +587,20 @@ func aimanRuntimeEnv(session *domain.Session) map[string]string {
 	if session.Group != "" {
 		env["AIMAN_GROUP"] = session.Group
 	}
-	if dir, err := config.GetDir(); err == nil {
-		env["AIMAN_SOCKET_PATH"] = filepath.Join(dir, "aiman.sock")
-	}
-	if exe, err := os.Executable(); err == nil {
-		env["AIMAN_BIN_PATH"] = exe
-	}
+	// Deliberately no AIMAN_SOCKET_PATH or AIMAN_BIN_PATH.
+	//
+	// Both used to be filled in from config.GetDir() and os.Executable() — but
+	// those resolve on whichever machine is *creating* the session, which for
+	// the TUI is the laptop, while the session itself runs on the remote. A
+	// session on regent0 was therefore told the agent API lived at
+	// /Users/pieter/.aiman/aiman.sock, a path that does not exist there, so
+	// every in-session `aiman session ...` call reported server_not_running
+	// even with serve healthy on /home/code/.aiman/aiman.sock.
+	//
+	// Leaving them unset is correct on both machines: the in-session binary
+	// falls back to its own config.GetDir() (see cmd/aiman socketPath), and the
+	// hook reporter resolves the binary itself. Anything that genuinely needs
+	// to override them can still set them in the session environment.
 	return env
 }
 
