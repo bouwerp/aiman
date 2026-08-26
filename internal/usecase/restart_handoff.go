@@ -174,7 +174,7 @@ func CaptureRestartSessionSummaryPTY(ctx context.Context, remote TerminalExecuto
 		return false, err
 	}
 	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-		"sleep 1; aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --data '\\r'",
+		"sleep 1; aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --key enter",
 		strings.TrimSpace(sessionID), promptPath, strings.TrimSpace(sessionID))); err != nil {
 		return false, err
 	}
@@ -182,14 +182,14 @@ func CaptureRestartSessionSummaryPTY(ctx context.Context, remote TerminalExecuto
 	written, err := waitForRemoteFile(ctx, remote, summaryPath, restartSummaryPollInterval)
 	if ctx.Err() != nil {
 		_, _ = remote.Execute(context.Background(), remoteAimanPreamble+fmt.Sprintf(
-			"aiman pty input %q --data '\\x03'", strings.TrimSpace(sessionID)))
+			"aiman pty input %q --key ctrl-c", strings.TrimSpace(sessionID)))
 		return false, nil
 	}
 	if err != nil || !written {
 		return false, err
 	}
 	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-		"aiman pty input %q --data '\\x03'", strings.TrimSpace(sessionID))); err != nil {
+		"aiman pty input %q --key ctrl-c", strings.TrimSpace(sessionID))); err != nil {
 		return true, err
 	}
 	return true, nil

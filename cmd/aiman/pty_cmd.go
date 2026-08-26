@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"sync/atomic"
 
 	"github.com/bouwerp/aiman/internal/ptyhold"
@@ -80,15 +82,30 @@ func runPTY(args []string) error {
 				data = string(b)
 				ok = true
 			}
-			if !ok {
+			// Control characters go through --key, never --data. A shell does not
+			// interpret the escape in `--data "\r"` or `--data '\x03'` — those
+			// are the literal characters backslash and r, or backslash x 0 3 —
+			// and nothing here unescapes them, so the agent typed them into its
+			// input box instead of receiving Return or an interrupt.
+			var keySeq string
+			keyName := flags["key"]
+			if keyName != "" {
+				seq, known := ptyKeySequence(keyName)
+				if !known {
+					writeCLIError(server.CodeInvalidParams, "unknown key "+keyName+"; known: "+ptyKeyNames())
+					return errUsage
+				}
+				keySeq = seq
+			}
+			if !ok && keySeq == "" {
 				b, rerr := io.ReadAll(os.Stdin)
 				if rerr != nil || len(b) == 0 {
-					writeCLIError(server.CodeInvalidParams, "pty input requires --data or stdin")
+					writeCLIError(server.CodeInvalidParams, "pty input requires --data, --file, --key, or stdin")
 					return errUsage
 				}
 				data = string(b)
 			}
-			params["data"] = data
+			params["data"] = data + keySeq
 		}
 		return callAndPrint(sock, method, params)
 	default:
@@ -198,6 +215,36 @@ func attachExitNote(id string, detached bool) string {
 		" — reattach with: aiman pty attach " + id
 }
 
+// ptyKeys maps the key names `pty input --key` accepts to the bytes a terminal
+// sends for them.
+//
+// These exist so callers never have to smuggle a control character through a
+// shell. `--data "\r"` and `--data '\x03'` both send the literal characters of
+// the escape rather than the byte, which typed "\r" into the agent's input box
+// instead of submitting, and "\x03" instead of interrupting.
+var ptyKeys = map[string]string{
+	"enter":  "\r",
+	"return": "\r",
+	"ctrl-c": "\x03",
+	"ctrl-d": "\x04",
+	"esc":    "\x1b",
+	"tab":    "\t",
+}
+
+func ptyKeySequence(name string) (string, bool) {
+	seq, ok := ptyKeys[strings.ToLower(strings.TrimSpace(name))]
+	return seq, ok
+}
+
+func ptyKeyNames() string {
+	names := make([]string, 0, len(ptyKeys))
+	for k := range ptyKeys {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
 // notice formats an aiman message for a screen a full-screen agent is drawing
 // on.
 //
@@ -262,7 +309,7 @@ func printPTYUsage(w io.Writer) {
   aiman pty create --id ID --command "claude" [--dir DIR] [--env K=V,K2=V2] [--cols N --rows M]
   aiman pty get|capture|kill|forget ID     (capture: --lines N or --max-bytes N)
   aiman pty resize ID --cols N --rows M
-  aiman pty input ID --data TEXT
+  aiman pty input ID --data TEXT | --file PATH | --key enter|ctrl-c|ctrl-d|esc|tab
   aiman pty attach ID                      (interactive; detach with ctrl+q)
 
 Sessions are owned by detached holder processes, so they survive disconnects and

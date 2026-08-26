@@ -628,7 +628,10 @@ func tmuxEnvFlags(env map[string]string) string {
 // DeliverInitialPromptPTY sends the initial prompt to a freshly-created PTY
 // session: write the prompt remotely, type it through `aiman pty input`, then
 // press Enter. Fire-and-forget like the tmux path.
-func DeliverInitialPromptPTY(ctx context.Context, remote domain.RemoteExecutor, sessionID, prompt string) {
+// It takes the same narrow promptDeliverer as the tmux path: writing a file and
+// running a command is all delivery needs, and the wide executor made this
+// untestable.
+func DeliverInitialPromptPTY(ctx context.Context, remote promptDeliverer, sessionID, prompt string) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return
@@ -637,9 +640,15 @@ func DeliverInitialPromptPTY(ctx context.Context, remote domain.RemoteExecutor, 
 	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
 		return
 	}
+	// Return goes in a second call, via --enter. `--data "\r"` was typing the
+	// two literal characters backslash and r into the agent's input box: POSIX
+	// shell does not interpret that escape inside double quotes. Keeping it a
+	// separate write after a pause also matters on its own — an agent TUI that
+	// receives text and Return in one read treats the lot as a paste and inserts
+	// a newline instead of submitting.
 	script := fmt.Sprintf(
 		`export PATH="$HOME/.local/bin:$PATH"; `+
-			`sleep 3; aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --data "\r" >/dev/null 2>&1; rm -f %q`,
+			`sleep 3; aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --key enter >/dev/null 2>&1; rm -f %q`,
 		strings.TrimSpace(sessionID), promptPath, strings.TrimSpace(sessionID), promptPath,
 	)
 	_, _ = remote.Execute(ctx, detachCommand(script))

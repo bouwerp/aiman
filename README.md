@@ -362,7 +362,7 @@ aiman pty attach <id>     # interactive; detach with ctrl+q, which leaves it run
                           #    nothing — the attach banner reminds you of ctrl+q)
 aiman pty capture <id>    # read the pane without attaching
 aiman pty resize <id> --cols N --rows M
-aiman pty input <id> --data TEXT | --file PATH
+aiman pty input <id> --data TEXT | --file PATH | --key enter|ctrl-c|ctrl-d|esc|tab
 aiman pty create --id <id> --command CMD [--name N] [--dir D] [--env K=V]…
 aiman pty kill <id>
 aiman pty forget <id>     # drop an exited session's directory

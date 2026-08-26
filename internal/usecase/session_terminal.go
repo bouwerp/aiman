@@ -166,10 +166,17 @@ func ResizePTYSession(ctx context.Context, remote TerminalExecutor, id string, c
 	return nil
 }
 
-// SendPTYFile types the contents of a remote file into the session followed by
-// Enter — the PTY equivalent of tmux send-keys "$(cat file)" + Enter.
+// SendPTYFile types the contents of a remote file into the session and presses
+// Return — the PTY equivalent of tmux send-keys "$(cat file)" + Enter.
+//
+// The Return is a second write after a pause, not a "\r" appended to the text.
+// An agent TUI that receives the text and the Return in one read treats the lot
+// as a paste and inserts a newline instead of submitting, which left every
+// prompt sitting in the input box unsent.
 func SendPTYFile(ctx context.Context, remote TerminalExecutor, id, remotePath string) error {
-	_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty input %q --file %q", id, remotePath))
+	_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
+		"aiman pty input %[1]q --file %[2]q && sleep 1 && aiman pty input %[1]q --key enter",
+		id, remotePath))
 	return err
 }
 

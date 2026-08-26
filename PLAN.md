@@ -233,6 +233,36 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### Prompts reached the input box but were never submitted (PTY) ✅
+The initial prompt was typed into the agent's input box and left there, so it had
+to be attached to and submitted by hand.
+
+The Return was sent as `aiman pty input <id> --data "\r"`. A shell does not
+interpret that escape inside double quotes and nothing unescapes it on the way
+through, so what arrived was the two literal characters backslash and `r` —
+appended to the prompt as text. Verified directly: `bash -c 'printf "%s" "\r"'`
+emits `5c 72`, not `0d`.
+
+The same class of bug was in two more places:
+
+- `SendPTYFile` sent no Return **at all**, despite its comment claiming it did.
+  That is the path behind `SendSessionPrompt`, so every prompt from the agent
+  API, peer messaging, scheduled prompts and the dashboard's own send landed in
+  a PTY session's input box unsent.
+- The restart handoff interrupted the agent with `--data '\x03'`, which typed
+  four characters instead of interrupting it.
+
+Control characters now go through `aiman pty input --key enter|ctrl-c|ctrl-d|esc|tab`,
+which resolves the byte in Go where no shell can mangle it. Return stays a
+separate write after a pause, which matters independently: an agent TUI that
+reads the text and the Return in one go treats the lot as a paste and inserts a
+newline instead of submitting.
+
+`DeliverInitialPromptPTY` also took the wide `domain.RemoteExecutor` while its
+tmux sibling took the narrow `promptDeliverer` — the reason this path had no test
+at all. It now takes the narrow one, and a regex-based test rejects any control
+character spelled as an escape inside a shell command across all of these paths.
+
 ### Previews wrapped by exactly one column ✅
 Every preview line wrapped a single character onto the next row, doubling the
 height of every line of the agent's box.
