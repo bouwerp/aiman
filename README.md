@@ -39,7 +39,8 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Agent skill**: `aiman --skill` prints a Markdown skill gated on `AIMAN_ENV=1`
 
 ### AI Intelligence
-- **Session activity detection**: Reports whether an agent is working, waiting on background agents, blocked on a question, or idle, from tmux's own last-output timestamp and the tail of the pane — no model required
+- **Session activity detection**: Reports whether an agent is working, waiting on background agents, blocked on a question, or idle — no model required. Built on signals the runtime knows rather than the screen alone: how long the session has been silent (tmux's `#{session_activity}`, or the PTY holder's own record) and whether the agent's terminal title is still moving, which is where agents advertise what they are doing. The rendered pane is the fallback evidence, not the primary
+- **Pushed, not polled**: For PTY remotes the dashboard holds a `session.events` stream open, so it hears the moment a session's output or title changes instead of asking every half second
 - **Brief AI Summary**: Short summary shown in the session list sidebar (per active session)
 - **Long AI Summary**: Detailed summary with action items generated at archive time
 - **Session Archive**: Compress, AI-summarise, and persist a session snapshot in one step
@@ -362,6 +363,7 @@ aiman pty attach <id>     # interactive; detach with ctrl+q, which leaves it run
                           #    nothing — the attach banner reminds you of ctrl+q)
 aiman pty capture <id>    # read the pane without attaching
 aiman pty resize <id> --cols N --rows M
+aiman pty events          # stream session activity as JSON lines
 aiman pty input <id> --data TEXT | --file PATH | --key enter|ctrl-c|ctrl-d|esc|tab
 aiman pty create --id <id> --command CMD [--name N] [--dir D] [--env K=V]…
 aiman pty kill <id>
@@ -524,6 +526,7 @@ are thin clients over these; an agent can also speak the JSON directly.
 |---|---|
 | Sessions | `session.list`, `session.get`, `session.read`, `session.prompt`, `session.wait`, `session.create`, `session.rename`, `session.move` |
 | PTY runtime | `pty.list`, `pty.get`, `pty.create`, `pty.input`, `pty.capture`, `pty.resize`, `pty.kill`, `pty.forget` |
+| Live activity | `session.events` (streaming; takes over the connection like `pty.attach`) |
 | Shared context | `context.list`, `context.find`, `context.get`, `context.put`, `context.pack`, `context.stats` |
 
 Errors come back with a machine-readable `code` — `server_not_running`, `not_found`,

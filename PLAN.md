@@ -233,6 +233,54 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### Session activity is pushed from the runtime, not polled from the screen ✅
+Four stages, each verified against a real remote.
+
+**1. The holder publishes what it already sees.** It handles every byte of a
+session's output and kept none of it. It now writes `activity.json`: when output
+last arrived, and the terminal title the agent last set with the time it changed.
+An incremental OSC 0/2 scanner handles a title split across any two PTY reads;
+writes are throttled to a second, except a changed title which flushes at once
+because that is the edge a reader waits for.
+
+Why the title: measured on a real 6 MB spool, Claude Code sets it **5,532 times**
+in one session as `<spinner glyph> <current task>`. A title that is still moving
+is direct evidence of work, needs no pattern matching, and cannot be confused by
+scrollback. The same scan found **zero** genuine attention bells — all 5,574 BELs
+were OSC terminators — so BEL was dropped as a signal rather than assumed.
+
+**2. serve exposes it, O(1).** The fields ride along on `pty.get`, `pty.list` and
+`pty.capture`, so a caller judging a session gets the screen and the timings in
+one round trip instead of two.
+
+**3. Classification uses it.** `pane.Observation` gained `SinceTitleChange`, and a
+title that moved within five seconds is a high-confidence "working" verdict. Its
+zero value has to mean "unknown" rather than "changed this instant", or every
+caller that does not set it would look permanently busy. A question still
+outranks a moving title: an agent that stopped to ask has stopped working.
+
+This also fixed a long-standing gap. `checkInputHint` passed `SinceOutput: -1`
+for **every** session, tmux included, so the three branches of `Classify` that
+reason about silence could never fire from the dashboard — even though
+`SessionActivityAges` already existed. `usecase.ObserveSession` now returns pane
+plus timings in one call per backend. The tmux side takes "now" from the shell
+because `#{t:#{now}}` is unsupported on some tmux versions and returns empty,
+which would have silently read as "activity unknown".
+
+**4. Pushed instead of polled.** `session.events` streams activity changes,
+taking over the connection like `pty.attach` does, and the dashboard holds one
+`aiman pty events` per remote that hosts a PTY session. Events are a trigger, not
+a second source of truth: one says something changed, and the existing
+classifier decides what it changed to, rate-limited to one refresh per session
+per 1.5s since a spinner changes several times a second. A title that just moved
+does show as busy immediately, because that much is certain.
+
+Verified on the remote: a session setting a title and changing it two seconds
+later produced exactly two events, with nanosecond stamps and no traffic in
+between. Against an older serve without the method, the client fails cleanly with
+"unknown method session.events" rather than hanging, so the dashboard falls back
+to polling and retries in a minute.
+
 ### PTY previews were slow because every capture replayed the whole session ✅
 Measured against a real remote: `aiman pty capture` on a session with a 6 MB
 spool took **~1390 ms**, against **~10 ms** for the tmux equivalent.

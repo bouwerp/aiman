@@ -386,6 +386,10 @@ type Model struct {
 	// previewCols is the widest line in the current preview. Remote sessions are
 	// routinely wider than the panel, so this drives the pan hint.
 	previewCols int
+	// Live session-activity streams, one per remote hosting a PTY session, and
+	// the latest each has said (see session_events.go).
+	streams   map[string]*sessionStream
+	eventSeen map[string]sessionEventState
 	// Auto-fitting the previewed session to the panel (see preview_fit.go).
 	fitApplied    map[string]string    // session ID -> size known to be in place
 	fitBackoff    map[string]time.Time // session ID -> do not retry before
@@ -2669,6 +2673,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// the timer marked as armed forever, so no session would ever be fitted
 	// again.
 	switch msg := msg.(type) {
+	case sessionEventMsg:
+		// Handled globally: the stream must keep being consumed whatever screen
+		// the user is on, or one unread event stalls it permanently.
+		return m, m.applySessionEvent(msg)
+	case sessionStreamEndedMsg:
+		return m, m.applyStreamEnded(msg)
+	case sessionStreamRetryMsg:
+		if remote, ok := remoteByHost(m.cfg, msg.host); ok {
+			return m, m.startSessionStream(remote)
+		}
+		return m, nil
 	case previewFitTickMsg:
 		return m, m.applyPreviewFitTick(msg)
 	case previewFitDoneMsg:
@@ -4055,6 +4070,10 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 					fetchTmuxPane(m.cfg, s),
 					checkInputHint(m.cfg, s),
 				)
+				// Open or close activity streams as the PTY session set changes.
+				if cmd := m.ensureSessionStreams(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 				// Keep the previewed session rendering at the panel's size.
 				// Driven from the poll rather than from each place the
 				// selection or window size changes, so every path is covered.

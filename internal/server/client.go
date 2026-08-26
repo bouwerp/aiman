@@ -186,3 +186,69 @@ func CallRaw(socketPath, method string, rawParams json.RawMessage) (Response, er
 	}
 	return resp, nil
 }
+
+// EventsConn is a live stream of session activity changes.
+type EventsConn struct {
+	conn net.Conn
+	r    *bufio.Reader
+}
+
+// EventsDial opens the session event stream. The connection stays open and
+// carries one JSON event per line, so a reader learns what a session is doing
+// when it happens rather than by asking twice a second.
+func EventsDial(socketPath string) (*EventsConn, error) {
+	if _, err := os.Stat(socketPath); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrServerNotRunning, socketPath)
+	}
+	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrServerNotRunning, err)
+	}
+	req := Request{
+		ID:     uuid.NewString(),
+		Method: "session.events",
+		Caller: strings.TrimSpace(os.Getenv("AIMAN_ID")),
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if _, err := conn.Write(append(body, '\n')); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	r := bufio.NewReader(conn)
+	line, err := r.ReadBytes('\n')
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	var resp Response
+	if err := json.Unmarshal(line, &resp); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if resp.Error != nil {
+		_ = conn.Close()
+		return nil, errors.New(resp.Error.Message)
+	}
+	return &EventsConn{conn: conn, r: r}, nil
+}
+
+// Next blocks for the next event. The stream is deliberately unbounded in time,
+// so callers set no read deadline; a dead connection surfaces as a read error.
+func (e *EventsConn) Next() (SessionEvent, error) {
+	var ev SessionEvent
+	line, err := e.r.ReadBytes('\n')
+	if err != nil {
+		return ev, err
+	}
+	if err := json.Unmarshal(bytesTrimSpace(line), &ev); err != nil {
+		return ev, err
+	}
+	return ev, nil
+}
+
+// Close ends the stream.
+func (e *EventsConn) Close() error { return e.conn.Close() }

@@ -82,6 +82,12 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			s.handlePTYAttachConn(ctx, conn, line)
 			return
 		}
+		// Like pty.attach, the event stream takes over the connection instead of
+		// answering once.
+		if isSessionEvents(line) {
+			s.handleSessionEventsConn(ctx, conn, line)
+			return
+		}
 		resp := s.dispatch(ctx, line)
 		out, encErr := EncodeResponse(resp)
 		if encErr != nil {

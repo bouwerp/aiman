@@ -727,3 +727,17 @@ func (m *Manager) Close() error {
 	cmd := exec.CommandContext(context.Background(), "ssh", "-o", "BatchMode=yes", "-O", "exit", target)
 	return cmd.Run()
 }
+
+// SessionEventsCommand returns the ssh command that streams a remote's session
+// activity as newline-delimited JSON.
+//
+// Long-lived by design: it stays connected and emits when something changes, so
+// the dashboard stops asking each session what it is doing on a timer. No tty is
+// requested — this is a pipe, not an interactive session — and the context lets
+// the caller end it.
+func (m *Manager) SessionEventsCommand(ctx context.Context) *exec.Cmd {
+	//nolint:gosec // G204: the target comes from the operator's own remote config, as with every other ssh call here
+	return exec.CommandContext(ctx, "ssh", "-A", "-o", "BatchMode=yes",
+		"-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+		m.target(), remotePathPreamble+"exec aiman pty events")
+}

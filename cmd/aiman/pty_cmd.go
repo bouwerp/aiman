@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +41,8 @@ func runPTY(args []string) error {
 	}
 
 	switch args[0] {
+	case "events":
+		return runPTYEvents(sock)
 	case "list":
 		return callAndPrint(sock, "pty.list", map[string]any{})
 	case "create":
@@ -218,6 +221,32 @@ func attachExitNote(id string, detached bool) string {
 		" — reattach with: aiman pty attach " + id
 }
 
+// runPTYEvents streams session activity as newline-delimited JSON until the
+// connection ends. The dashboard runs this over SSH so it hears about a session
+// changing instead of asking every half second.
+func runPTYEvents(sock string) error {
+	conn, err := server.EventsDial(sock)
+	if err != nil {
+		writeCLIError(server.CodeServerNotRunning, err.Error())
+		return err
+	}
+	defer conn.Close()
+
+	enc := json.NewEncoder(os.Stdout)
+	for {
+		ev, rerr := conn.Next()
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return rerr
+		}
+		if err := enc.Encode(ev); err != nil {
+			return err
+		}
+	}
+}
+
 // ptyKeys maps the key names `pty input --key` accepts to the bytes a terminal
 // sends for them.
 //
@@ -314,6 +343,7 @@ func printPTYUsage(w io.Writer) {
   aiman pty resize ID --cols N --rows M
   aiman pty input ID --data TEXT | --file PATH | --key enter|ctrl-c|ctrl-d|esc|tab
   aiman pty attach ID                      (interactive; detach with ctrl+q)
+  aiman pty events                         (streams activity as JSON lines)
 
 Sessions are owned by detached holder processes, so they survive disconnects and
 serve restarts or updates; reattach with: aiman pty attach ID
