@@ -384,13 +384,16 @@ type Model struct {
 	viewport             viewport.Model
 	terminal             *TerminalModel
 	tmuxOutput           string
-	activeSession        string
-	termCloser           io.Closer
-	lastError            string
-	loadingMsg           string
-	sessionCfg           domain.SessionConfig
-	loadingNext          viewState
-	initialLoad          bool
+	// previewCols is the widest line in the current preview. Remote sessions are
+	// routinely wider than the panel, so this drives the pan hint.
+	previewCols   int
+	activeSession string
+	termCloser    io.Closer
+	lastError     string
+	loadingMsg    string
+	sessionCfg    domain.SessionConfig
+	loadingNext   viewState
+	initialLoad   bool
 	// discoveryPending is true between the dashboard opening on database
 	// contents and the first remote scan landing, so the list can be shown
 	// immediately while making clear it is not yet confirmed against the remote.
@@ -2175,7 +2178,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 		}
 		m.activeSession = msg.session.TmuxSession
 		m.tmuxOutput = "Loading..."
-		m.viewport.SetContent(m.tmuxOutput)
+		m.setPreviewContent()
 		cmds = append(cmds, fetchTmuxPane(m.cfg, msg.session), fetchGitStatus(m.cfg, msg.session))
 	}
 	return m, tea.Batch(cmds...)
@@ -3048,7 +3051,7 @@ func (m *Model) applySessionCreateMsg(msg sessionCreateMsg, cmds []tea.Cmd) (tea
 
 	m.activeSession = msg.session.TmuxSession
 	m.tmuxOutput = "Loading..."
-	m.viewport.SetContent(m.tmuxOutput)
+	m.setPreviewContent()
 	m.state = m.loadingNext
 
 	return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session), warnCmd)
@@ -4024,7 +4027,7 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 			s := it.session
 			m.activeSession = s.TmuxSession
 			m.tmuxOutput = "Loading..."
-			m.viewport.SetContent(m.tmuxOutput)
+			m.setPreviewContent()
 			cmds = append(cmds,
 				fetchTmuxPane(m.cfg, s),
 				checkInputHint(m.cfg, s),
@@ -4067,7 +4070,7 @@ func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, t
 			newOutput := failStyle.Render("Failed to capture pane: " + errStr)
 			if newOutput != m.tmuxOutput {
 				m.tmuxOutput = newOutput
-				m.viewport.SetContent(m.tmuxOutput)
+				m.setPreviewContent()
 			}
 			return m.forwardToFocused(msg, cmds)
 		}
@@ -4086,7 +4089,7 @@ func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, t
 		// Only update viewport content when it actually changed.
 		if newOutput != m.tmuxOutput || isFirstLoad {
 			m.tmuxOutput = newOutput
-			m.viewport.SetContent(m.tmuxOutput)
+			m.setPreviewContent()
 			if wasAtBottom {
 				m.viewport.GotoBottom()
 			} else {
@@ -4143,7 +4146,7 @@ func (m *Model) applyAttachDone(msg attachDoneMsg, cmds []tea.Cmd) (tea.Model, t
 		s := sel.(item).session
 		m.activeSession = s.TmuxSession
 		m.tmuxOutput = "Loading..."
-		m.viewport.SetContent(m.tmuxOutput)
+		m.setPreviewContent()
 		cmds = append(cmds, tickTmux(), fetchTmuxPane(m.cfg, s))
 	} else {
 		// Keep the poll chain alive: tickTmux is self-perpetuating, so dropping
@@ -4263,7 +4266,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			m.gitStatus = domain.GitStatus{} // Clear old status
 			m.lastGitStatusUpdate = time.Time{}
 			m.tmuxOutput = "Loading..."
-			m.viewport.SetContent(m.tmuxOutput)
+			m.setPreviewContent()
 			// While a session is being created or torn down there is nothing to fetch —
 			// the preview panel shows that progress instead.
 			if !m.skipSessionPolling(s.ID) {
@@ -4289,7 +4292,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 				kind = remotesvc.KindTrigger
 			}
 			m.tmuxOutput = "Loading " + string(kind) + " logs..."
-			m.viewport.SetContent(m.tmuxOutput)
+			m.setPreviewContent()
 			cmds = append(cmds, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind))
 		}
 	}
@@ -4440,7 +4443,7 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 					kind = remotesvc.KindTrigger
 				}
 				m.tmuxOutput = "Loading " + string(kind) + " logs..."
-				m.viewport.SetContent(m.tmuxOutput)
+				m.setPreviewContent()
 				return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind), true
 			}
 		} else {
@@ -4843,7 +4846,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 					kind = remotesvc.KindTrigger
 				}
 				m.tmuxOutput = "Refreshing..."
-				m.viewport.SetContent(m.tmuxOutput)
+				m.setPreviewContent()
 				return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind), true
 			}
 			return m, nil, true
@@ -6939,7 +6942,7 @@ func (m *Model) renderSessionPanel(mainWidth int) string {
 		}
 		scrollHint := ""
 		if m.panelMode == panelModePreview {
-			scrollHint = "  " + statusStyle.Render("[/] scroll")
+			scrollHint = "  " + statusStyle.Render("[/] scroll") + m.previewPanHint()
 		}
 		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
 

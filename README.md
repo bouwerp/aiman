@@ -216,6 +216,7 @@ aiman
 | `T` | **Take over** an autonomous session (convert it to interactive) |
 | `Ctrl+M` | Toggle mouse reporting — off lets the terminal do native text selection |
 | `[` / `]`, `shift+↑/↓`, `PgUp` / `PgDn` | Scroll the preview panel |
+| `←` / `→` | Pan the preview sideways. Remote sessions are usually wider than the panel; the header shows `←/→ pan (N of M cols)` when part of the screen is off to the right |
 | `Ctrl+R` / `Ctrl+S` | Aliases for `s` (resume) and `a` (attach) |
 | `Ctrl+A` | **Archive Session** — AI-summarise and snapshot the session |
 | `Ctrl+Y` | **Recreate Mutagen Sync** for the selected session |
@@ -369,7 +370,9 @@ aiman pty forget <id>     # drop an exited session's directory
 
 The pane is rendered before it is shown: the spool is a raw byte stream of cursor
 addressing and redraws, so previews and activity detection replay it through a terminal
-emulator at the session's own size, the way `tmux capture-pane` returns a screen.
+emulator at the session's own size, the way `tmux capture-pane` returns a screen. The
+render keeps the agent's colours, emitting foreground and background per run and closing
+each row's styling, so a PTY preview reads like a tmux one.
 Sessions also get `TERM=xterm-256color` and `COLORTERM=truecolor` — `aiman serve` is a
 daemon with no tty, so without that the agent inherits no terminal type and emits no
 colour.

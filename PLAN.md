@@ -233,6 +233,43 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### Previews smeared their colours; PTY previews had none ✅
+Three separate causes behind "the previews all look a bit weird, and pty
+sessions are still not color", found by capturing real panes off a live remote
+rather than reading the render path.
+
+**Colour bled out of every tmux preview.** `capture-pane -e` reproduces what the
+agent painted and stops there, so the styling is never terminated: in the
+capture used to diagnose this, **53 of 54 lines left colour open and not one
+ended in a reset**. Written into a panel, that state carries past the end of the
+line and colours whatever is drawn next — the rest of the row, the line below,
+the dashboard's own chrome. Each line is now sealed with a reset when it ends
+mid-style. Verified on the real capture: open lines 53 → 0, with the visible
+text and width of every line unchanged.
+
+**PTY previews were monochrome.** The renderer read only each cell's character
+and dropped its attributes, so a tmux preview came back with 205 SGR sequences
+and the equivalent PTY preview with zero. It now emits foreground and
+background per run, sealing each row. Backgrounds matter as much as
+foregrounds here: vt10x resolves reverse video by swapping the pair when it
+stores the cell, so dropping the background would render reversed text
+dark-on-dark. Confirmed against a live session's spool: 111 SGR sequences,
+truecolour text, comment-grey and dim.
+
+**Activity detection was reading escape bytes** — a pre-existing bug that hit
+tmux sessions, and would have hit PTY ones the moment they gained colour.
+`pane.Classify` is entirely regexes over visible text, but nothing stripped ANSI
+first (`pane.Clean` does, and is only used for AI summarisation). Agents colour
+phrases word by word, so a styled `(esc to interrupt)` classified as **unknown
+instead of working**. `Classify` now strips both `Pane` and `Previous` — both,
+because stripping one would make every sample differ from the last and every
+session look busy forever.
+
+Also: the preview panel now says `←/→ pan (154 of 273 cols)` when the session is
+wider than the panel. Remote sessions are as wide as the terminal that last
+sized them, the viewport already cuts and pans ANSI-aware, but with no hint a
+right edge sliced mid-word just looks broken.
+
 ### PTY sessions survived serve restarts in theory only ✅
 Updating or restarting `aiman serve` killed the agent inside every PTY session,
 the one thing the holder design exists to prevent. `setsid` puts a holder in its

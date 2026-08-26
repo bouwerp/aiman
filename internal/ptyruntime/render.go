@@ -1,6 +1,7 @@
 package ptyruntime
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/hinshun/vt10x"
@@ -13,7 +14,7 @@ const (
 )
 
 // RenderScreen replays raw PTY output through a terminal emulator and returns
-// the resulting screen as plain text.
+// the resulting screen as text with SGR colour, each line's styling terminated.
 //
 // This is what makes PTY sessions comparable to tmux ones. `tmux capture-pane`
 // hands back a *rendered* screen, because tmux is itself a terminal emulator.
@@ -48,23 +49,88 @@ func RenderScreen(spool []byte, cols, rows int) string {
 	var b strings.Builder
 	b.Grow(rows * (cols + 1))
 	for y := 0; y < rows; y++ {
-		line := make([]rune, 0, cols)
-		for x := 0; x < cols; x++ {
-			ch := term.Cell(x, y).Char
-			if ch == 0 {
-				ch = ' '
-			}
-			line = append(line, ch)
-		}
-		// Trailing blanks are padding, not content, and they defeat the
-		// tail-based classification that looks at the last non-empty lines.
-		b.WriteString(strings.TrimRight(string(line), " "))
+		b.WriteString(renderRow(term, y, cols))
 		if y < rows-1 {
 			b.WriteByte('\n')
 		}
 	}
 	// Blank rows below the cursor are padding too.
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderRow emits one screen row as text plus SGR colour.
+//
+// Colour is what makes a preview readable — an agent's diffs, warnings and dim
+// chrome all carry meaning — and it keeps PTY sessions on a par with tmux ones,
+// whose panes are captured with `capture-pane -e`. Attributes are read straight
+// off the glyph because vt10x has already resolved them: it brightens bold
+// foregrounds and swaps the pair for reverse video when it stores the cell, so
+// the colours here are the ones meant to be seen.
+func renderRow(term vt10x.Terminal, y, cols int) string {
+	last := lastSignificantCol(term, y, cols)
+	if last < 0 {
+		return ""
+	}
+	var b strings.Builder
+	fg, bg := vt10x.DefaultFG, vt10x.DefaultBG
+	for x := 0; x <= last; x++ {
+		cell := term.Cell(x, y)
+		if cell.FG != fg || cell.BG != bg {
+			fg, bg = cell.FG, cell.BG
+			b.WriteString("\x1b[" + fgParam(fg) + ";" + bgParam(bg) + "m")
+		}
+		ch := cell.Char
+		if ch == 0 {
+			ch = ' '
+		}
+		b.WriteRune(ch)
+	}
+	// Terminate the row's styling. An unterminated run leaks the colour into
+	// whatever is drawn next — the rest of the row, the following line, or the
+	// surrounding UI when the screen is embedded in a panel.
+	if fg != vt10x.DefaultFG || bg != vt10x.DefaultBG {
+		b.WriteString("\x1b[0m")
+	}
+	return b.String()
+}
+
+// lastSignificantCol is the rightmost column worth emitting, or -1 for a row
+// with nothing on it. Trailing blanks are padding, not content, and they defeat
+// the tail-based classification that looks at the last non-empty lines — but a
+// blank carrying a background colour is visible, so it counts as content.
+func lastSignificantCol(term vt10x.Terminal, y, cols int) int {
+	for x := cols - 1; x >= 0; x-- {
+		cell := term.Cell(x, y)
+		if cell.Char != 0 && cell.Char != ' ' {
+			return x
+		}
+		if cell.BG != vt10x.DefaultBG {
+			return x
+		}
+	}
+	return -1
+}
+
+// fgParam and bgParam render a vt10x colour as SGR parameters.
+//
+// vt10x stores palette entries as their index and 24-bit colours as a packed
+// r<<16|g<<8|b, which makes a truecolour value below 256 indistinguishable from
+// a palette index; such a colour (a near-black blue) renders as the palette
+// entry instead. That ambiguity is in the emulator's own encoding, so it cannot
+// be resolved here.
+func fgParam(c vt10x.Color) string { return colorParam(c, vt10x.DefaultFG, "38", "39") }
+func bgParam(c vt10x.Color) string { return colorParam(c, vt10x.DefaultBG, "48", "49") }
+
+func colorParam(c, def vt10x.Color, set, reset string) string {
+	switch {
+	case c == def || c >= vt10x.DefaultFG:
+		return reset
+	case c < 256:
+		return set + ";5;" + strconv.Itoa(int(c))
+	default:
+		r, g, bl := (c>>16)&0xFF, (c>>8)&0xFF, c&0xFF
+		return set + ";2;" + strconv.Itoa(int(r)) + ";" + strconv.Itoa(int(g)) + ";" + strconv.Itoa(int(bl))
+	}
 }
 
 // parseSize reads a "<cols>x<rows>" size as reported in the session contract.

@@ -111,6 +111,12 @@ var (
 // Order matters. A question appearing is itself a change, so input detection has
 // to precede change detection or every prompt would read as work in progress.
 func Classify(obs Observation) Result {
+	// Every signal below is a regex over visible text, so the styling has to go
+	// first. Both fields are stripped so the change-detection comparison stays
+	// like-for-like; stripping only one would make every sample look different.
+	obs.Pane = StripANSI(obs.Pane)
+	obs.Previous = StripANSI(obs.Previous)
+
 	tail := Tail(obs.Pane, TailLines)
 	status := Tail(obs.Pane, StatusLines)
 	if strings.TrimSpace(status) == "" && obs.SinceOutput < 0 {

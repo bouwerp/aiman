@@ -11,6 +11,17 @@ import (
 // ansiEscape matches ANSI/VT100 escape sequences (colours, cursor moves, etc.).
 var ansiEscape = regexp.MustCompile(`\x1b(\[[0-9;?]*[a-zA-Z]|\][^\x07]*\x07|[()][AB012]|[DABEGHM78=><]|%[Gg])`)
 
+// StripANSI removes escape sequences, leaving the visible text.
+//
+// Anything that pattern-matches pane content needs this first. Captured panes
+// arrive styled (tmux capture-pane is invoked with -e, and the PTY renderer
+// emits colour of its own), and agents colour words individually — so a phrase
+// like "esc to interrupt" can carry an SGR sequence between any two characters,
+// which silently defeats a regex written against the plain text.
+func StripANSI(s string) string {
+	return ansiEscape.ReplaceAllString(s, "")
+}
+
 // Clean applies the full cleaning pipeline to raw tmux pane content:
 //  1. Strip ANSI/VT100 escape sequences
 //  2. Collapse consecutive duplicate lines into "line [×N]"
