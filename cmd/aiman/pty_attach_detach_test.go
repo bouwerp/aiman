@@ -157,3 +157,48 @@ func TestAttachExitNoteDistinguishesDetachFromLostStream(t *testing.T) {
 		}
 	}
 }
+
+// A banner is written into the middle of a full-screen agent's frame, so it has
+// to erase the rest of the row. Without that, the remainder of the agent's box
+// border trails off the end of the message — the long run of "─" seen after a
+// detach — and the text inherits whatever colours the agent left set.
+func TestNoticeCleansUpAfterItself(t *testing.T) {
+	got := notice("[aiman] detached from abc")
+
+	if !strings.HasPrefix(got, "\x1b[0m") {
+		t.Errorf("must reset inherited styling first: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[2K") {
+		t.Errorf("must erase the line it writes on: %q", got)
+	}
+	// The erase-to-end must come after the text, or the border survives.
+	textAt := strings.Index(got, "[aiman] detached from abc")
+	eraseAt := strings.Index(got, "\x1b[K"+"\r\n")
+	if textAt < 0 || eraseAt < textAt {
+		t.Errorf("must erase the rest of the row after the text: %q", got)
+	}
+	if !strings.HasSuffix(got, "\r\n") {
+		t.Errorf("raw mode needs an explicit carriage return: %q", got)
+	}
+	// Raw mode: every newline must carry a carriage return.
+	if strings.Count(got, "\n") != strings.Count(got, "\r\n") {
+		t.Errorf("bare newline in raw mode: %q", got)
+	}
+}
+
+// The last thing printed clears the screen: ssh's "Connection closed" and the
+// dashboard redraw both land on whatever is left behind.
+func TestExitNoticeClearsTheScreen(t *testing.T) {
+	got := exitNotice("[aiman] detached from abc")
+	for _, want := range []string{"\x1b[0m", "\x1b[2J", "\x1b[H"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("exit notice missing %q: %q", want, got)
+		}
+	}
+	if !strings.Contains(got, "[aiman] detached from abc") {
+		t.Errorf("text lost: %q", got)
+	}
+	if strings.Count(got, "\n") != strings.Count(got, "\r\n") {
+		t.Errorf("bare newline in raw mode: %q", got)
+	}
+}

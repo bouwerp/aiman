@@ -176,13 +176,13 @@ func runPTYAttach(sock, id string) error {
 	// Say how to get out. A PTY session has no tmux prefix, so the muscle
 	// memory of ctrl+b d does nothing here and there is otherwise no hint on
 	// screen that ctrl+q is the way back.
-	fmt.Fprint(os.Stdout, "\r\n[aiman] attached to "+id+" — press ctrl+q to detach (the session keeps running)\r\n")
+	fmt.Fprint(os.Stdout, notice("[aiman] attached to "+id+" — press ctrl+q to detach (the session keeps running)"))
 
 	stdin := detachOnCtrlQ(os.Stdin, connResp)
 	if err := attachExitErr(connResp.Relay(stdin, os.Stdout), stdin.Detached()); err != nil {
 		return err
 	}
-	fmt.Fprint(os.Stdout, "\r\n"+attachExitNote(id, stdin.Detached())+"\r\n")
+	fmt.Fprint(os.Stdout, exitNotice(attachExitNote(id, stdin.Detached())))
 	return nil
 }
 
@@ -196,6 +196,34 @@ func attachExitNote(id string, detached bool) string {
 	}
 	return "[aiman] stream to " + id + " ended (session exited, or aiman serve restarted)" +
 		" — reattach with: aiman pty attach " + id
+}
+
+// notice formats an aiman message for a screen a full-screen agent is drawing
+// on.
+//
+// The message goes out wherever the cursor happens to be, in the middle of the
+// agent's frame, so it has to clean up after itself:
+//
+//	\x1b[0m   drop any styling the agent left set, or the message inherits its
+//	          colours — agents routinely leave a foreground and background open
+//	\r\n      start on a fresh line rather than mid-sentence
+//	\x1b[2K   erase that line before writing over it
+//	\x1b[K    erase whatever followed the cursor afterwards. Without this the
+//	          remainder of the agent's box border trails off the end of the
+//	          message as a long run of "─".
+func notice(text string) string {
+	return "\x1b[0m\r\n\x1b[2K" + text + "\x1b[K\r\n"
+}
+
+// exitNotice is notice for the last thing printed before the process exits, and
+// clears the screen as well.
+//
+// What follows is outside this program's control: ssh prints "Connection to
+// <host> closed." over whatever is on screen, and the dashboard redraws on top
+// of that. Leaving a half-painted agent frame behind means both land on residue
+// and produce overlapping, unreadable text.
+func exitNotice(text string) string {
+	return "\x1b[0m\x1b[2J\x1b[H" + text + "\r\n"
 }
 
 // attachExitErr decides whether a finished relay is a failure worth reporting.

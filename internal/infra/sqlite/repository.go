@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -19,8 +20,32 @@ type Repository struct {
 	clearedOnOpen []LegacyAWSProfileRef
 }
 
+// busyTimeout is how long a connection waits for another process to release a
+// lock before giving up.
+//
+// Several processes share this file — the dashboard, `aiman serve`, the trigger
+// daemon and any one-shot CLI call — and SQLite's default is to fail an
+// otherwise fine statement immediately with "database is locked" the moment two
+// of them overlap. Waiting is almost always the right answer for writes this
+// small.
+const busyTimeout = 5 * time.Second
+
+// dsn builds the driver connection string for a database path.
+//
+// The pragma is passed in the DSN rather than executed after opening because
+// busy_timeout is per-connection: database/sql pools connections and opens more
+// on demand, so a PRAGMA issued once would apply only to whichever connection
+// happened to run it. The driver strips the query from the filename itself, so a
+// plain path needs no URI escaping.
+func dsn(dbPath string) string {
+	if strings.ContainsRune(dbPath, '?') {
+		return dbPath // a '?' in the path would be read as the query separator
+	}
+	return fmt.Sprintf("%s?_pragma=busy_timeout(%d)", dbPath, busyTimeout.Milliseconds())
+}
+
 func NewRepository(dbPath string) (*Repository, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dsn(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}

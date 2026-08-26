@@ -233,6 +233,32 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### The PTY holder no longer opens the database, and writers wait ✅
+CI caught a real startup failure hiding behind a flaky test: a holder failing
+with `failed to initialize database: database is locked (SQLITE_BUSY)`, which
+means a session that cannot start.
+
+`run()` loaded config, opened SQLite, and built the JIRA/SSH/flow plumbing
+*before* dispatching any subcommand — including `aiman pty hold`, which is the
+detached holder and is handed an explicit `--root` and `--id`. So every session
+start paid for that setup and contended with serve and the dashboard for the
+database lock. `pty hold` is now dispatched first.
+
+Separately, nothing set `busy_timeout`, so SQLite failed an otherwise fine
+statement the instant two of the several processes sharing the file overlapped.
+The timeout is passed in the DSN rather than executed after opening, because it
+is per-connection and `database/sql` pools connections and opens more on demand.
+A test with six writers on one file reproduces the exact CI error without it.
+
+### Attach banners no longer smear the agent's frame ✅
+The attach and detach notices added with the detach fix were printed at whatever
+cursor position the agent's full-screen frame happened to leave, with no line
+erase — so the remainder of the agent's box border trailed off the end of the
+message as a long run of `─`, and the text inherited whatever colours the agent
+had left open. The last notice before exit now clears the screen too: ssh prints
+"Connection to <host> closed." over whatever is left and the dashboard redraws
+on top of that, so a half-painted frame left both landing on residue.
+
 ### The previewed session is fitted to the preview panel ✅
 Terminal text cannot be scaled, so the only way to make a session fit the panel
 is to tell it that it is narrower and let the agent repaint its own UI at that
