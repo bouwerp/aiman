@@ -50,7 +50,7 @@ func TestRenameInvalidNameStaysAndShowsError(t *testing.T) {
 	m.applyRemoteFilter()
 	updated, _, _ := m.handleMainKeyMsg(pressKey("e"))
 	m = updated.(*Model)
-	m.genericInput = NewTextInputModel("Rename session", "name", "1bad")
+	m.genericInput = NewTextInputModel("Rename session", "name", strings.Repeat("a", 121))
 	got, _ := m.handleRenameSessionUpdate(pressKey("enter"))
 	model := got.(*Model)
 	if model.state != viewStateRenameSession {

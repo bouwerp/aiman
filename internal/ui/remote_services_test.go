@@ -1,12 +1,31 @@
 package ui
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/remotesvc"
 )
+
+type recordingServeConfigWriter struct {
+	commands []string
+	path     string
+	content  []byte
+}
+
+func (w *recordingServeConfigWriter) Execute(_ context.Context, command string) (string, error) {
+	w.commands = append(w.commands, command)
+	return "", nil
+}
+
+func (w *recordingServeConfigWriter) WriteFile(_ context.Context, path string, content []byte) error {
+	w.path = path
+	w.content = content
+	return nil
+}
 
 func TestDaemonListHasServeAndTriggerPerRemote(t *testing.T) {
 	cfg := twoRemoteCfg()
@@ -73,5 +92,34 @@ func TestFailedSystemdServeDescriptionTellsOperatorToRestart(t *testing.T) {
 	}
 	if !strings.Contains(desc, "press s to restart") {
 		t.Fatalf("desc %q", desc)
+	}
+}
+
+func TestWriteServeConfigSyncsJiraSettingsWithPrivatePermissions(t *testing.T) {
+	writer := &recordingServeConfigWriter{}
+	cfg := &config.Config{
+		Integrations: config.Integrations{Jira: config.JiraConfig{
+			URL:      "https://jira.example.test",
+			Email:    "user@example.test",
+			APIToken: "test-token",
+		}},
+		Remotes: []config.Remote{{Host: "remote.example.test", Root: "/repos"}},
+	}
+
+	if err := writeServeConfig(context.Background(), cfg, writer); err != nil {
+		t.Fatalf("writeServeConfig: %v", err)
+	}
+	if writer.path != ".aiman/config.yaml" {
+		t.Fatalf("path %q", writer.path)
+	}
+	if !strings.Contains(string(writer.content), "https://jira.example.test") {
+		t.Fatalf("Jira settings were not synced: %s", writer.content)
+	}
+	if strings.Contains(string(writer.content), "remote.example.test") || strings.Contains(string(writer.content), "/repos") {
+		t.Fatalf("local remote settings must not be copied: %s", writer.content)
+	}
+	joined := strings.Join(writer.commands, "\n")
+	if !strings.Contains(joined, "install -d -m 700") || !strings.Contains(joined, "chmod 600") {
+		t.Fatalf("remote config must be private: %s", joined)
 	}
 }

@@ -32,7 +32,7 @@ func newBranchInputModelMode(proposed string, labelMode bool) BranchInputModel {
 		ti.Placeholder = "Branch Name"
 	}
 	ti.Focus()
-	ti.CharLimit = 156
+	ti.CharLimit = 120
 	ti.SetWidth(40)
 
 	m := BranchInputModel{
@@ -40,8 +40,7 @@ func newBranchInputModelMode(proposed string, labelMode bool) BranchInputModel {
 		labelMode: labelMode,
 	}
 
-	sanitized := m.sanitizeInput(proposed)
-	m.textInput.SetValue(sanitized)
+	m.textInput.SetValue(strings.TrimSpace(proposed))
 
 	return m
 }
@@ -54,21 +53,11 @@ func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "enter":
-			// Sanitize and validate before confirming
-			value := m.sanitizeInput(m.textInput.Value())
+			value := m.Name()
 			m.textInput.SetValue(value)
-			if value != "" {
+			if domain.ValidateSessionName(value) == nil && m.BranchName() != "" {
 				m.Confirmed = true
 				return m, nil
-			}
-		case " ", "space":
-			// Let space through - it will be converted to dash in sanitization
-		default:
-			// Block invalid characters
-			if len(msg.String()) == 1 {
-				if m.isInvalidChar(msg.String()) {
-					return m, nil
-				}
 			}
 		}
 	}
@@ -76,24 +65,10 @@ func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(msg)
 
-	// Sanitize the value after each update to ensure consistency
-	currentValue := m.textInput.Value()
-	sanitized := m.sanitizeInput(currentValue)
-	if currentValue != sanitized {
-		m.textInput.SetValue(sanitized)
-	}
-
 	return m, cmd
 }
 
-// isInvalidChar blocks typing chars that can never appear in a sanitized branch
-// (everything else is normalized on update via domain.SanitizeBranchName).
-func (m BranchInputModel) isInvalidChar(s string) bool {
-	invalidChars := `~^:\@{}[]*?<>'!,` + "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f"
-	return strings.ContainsAny(s, invalidChars)
-}
-
-// sanitizeInput normalizes branch names to git-safe characters (see domain.SanitizeBranchName).
+// sanitizeInput normalizes the display name for Git identifiers.
 func (m BranchInputModel) sanitizeInput(s string) string {
 	s = domain.SanitizeBranchName(s)
 	if s == "" {
@@ -109,20 +84,37 @@ func (m BranchInputModel) sanitizeInput(s string) string {
 func (m BranchInputModel) viewString() string {
 	style := lipgloss.NewStyle().Padding(1, 2).Border(lipgloss.RoundedBorder())
 
-	title := "Confirm Branch Name"
+	title := "New Session Name"
 	if m.labelMode {
-		title = "Session Label"
+		title = "Ad-hoc Session Name"
+	}
+	identifier := m.BranchName()
+	if identifier == "" {
+		identifier = "(enter a name with letters or numbers)"
 	}
 	return lipgloss.Place(80, 10, lipgloss.Center, lipgloss.Center,
 		style.Render(fmt.Sprintf(
-			"%s\n\n%s\n\n(enter to confirm, esc to cancel)",
+			"%s\n\n%s\n\nBranch: %s\nWorktree: <repository>@%s\nTmux session: %s\n\n(enter to confirm, esc to cancel)",
 			title,
 			m.textInput.View(),
+			identifier,
+			identifier,
+			domain.SanitizeTmuxSessionName(identifier),
 		)))
 }
 
+// Name returns the user-visible session name.
+func (m BranchInputModel) Name() string {
+	return strings.TrimSpace(m.textInput.Value())
+}
+
+// BranchName returns the Git-safe identifier derived from the session name.
+func (m BranchInputModel) BranchName() string {
+	return m.sanitizeInput(m.Name())
+}
+
 func (m BranchInputModel) Value() string {
-	return m.textInput.Value()
+	return m.BranchName()
 }
 
 func (m BranchInputModel) View() tea.View {

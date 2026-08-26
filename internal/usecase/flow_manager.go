@@ -193,7 +193,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 2: Branch / label derivation
 	branch := config.Branch
 	if config.AdHoc {
-		// Ad-hoc: use the label as-is (already sanitized by UI), fall back to timestamp.
+		// Ad-hoc sessions use the Git-safe identifier, falling back to a timestamp.
 		if branch == "" {
 			branch = "adhoc-" + time.Now().Format("20060102-1504")
 		}
@@ -596,8 +596,12 @@ func tmuxEnvFlags(env map[string]string) string {
 	var b strings.Builder
 	for _, key := range keys {
 		if value := strings.TrimSpace(env[key]); value != "" {
-			b.WriteString(fmt.Sprintf(" -e %s=%s", key, value))
+			b.WriteString(fmt.Sprintf(" -e %s", shellQuote(key+"="+value)))
 		}
 	}
 	return b.String()
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

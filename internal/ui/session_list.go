@@ -435,7 +435,7 @@ func (m *Model) handleRenameSessionUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.genericInput.Confirmed {
 		return m, cmd
 	}
-	name := strings.Join(strings.Fields(strings.TrimSpace(m.genericInput.Value())), "-")
+	name := strings.TrimSpace(m.genericInput.Value())
 	sess, ok := m.sessionForRename()
 	if !ok {
 		m.renamingSessionID = ""
@@ -444,7 +444,7 @@ func (m *Model) handleRenameSessionUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if err := domain.ValidateSessionName(name); err != nil {
 		m.genericInput.Confirmed = false
-		m.genericInput.Error = "Start with a letter; use letters, digits, _ or - (max 48)."
+		m.genericInput.Error = "Enter a name without leading or trailing spaces."
 		return m, nil
 	}
 	others := make([]domain.Session, 0, len(m.allSessions))

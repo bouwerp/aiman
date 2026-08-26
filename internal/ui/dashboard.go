@@ -5873,7 +5873,8 @@ func (m *Model) handleBranchInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	subModel, cmd = m.branchInput.Update(msg)
 	m.branchInput = subModel.(BranchInputModel)
 	if m.branchInput.Confirmed {
-		m.sessionCfg.Branch = m.branchInput.Value()
+		m.sessionCfg.Name = m.branchInput.Name()
+		m.sessionCfg.Branch = m.branchInput.BranchName()
 		if m.sessionCfg.AdHoc {
 			// Skip repo picker entirely — go straight to agent selection.
 			m.loadingMsg = "Scanning available agents..."

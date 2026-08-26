@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestUniqueRemotes(t *testing.T) {
@@ -57,5 +59,37 @@ func TestSaveFailsWhenConfigDirCannotBeCreated(t *testing.T) {
 
 	if err := (&Config{}).Save(); err == nil {
 		t.Fatal("expected Save to fail when the config directory path is blocked")
+	}
+}
+
+func TestMarshalServeConfigIncludesServiceSettingsWithoutRemotePaths(t *testing.T) {
+	cfg := &Config{
+		Integrations: Integrations{Jira: JiraConfig{
+			URL:              "https://jira.example.test",
+			Email:            "user@example.test",
+			APIToken:         "test-token",
+			IssueStatuses:    []string{"Dev Ready"},
+			TransitionStatus: "In Development",
+		}},
+		Git:           GitConfig{IncludeOrgs: []string{"acme"}},
+		Skills:        SkillsConfig{Repo: "git@example.test:skills.git"},
+		AgentDefaults: map[string]AgentDefaults{"codex": {Model: "gpt-5", Effort: "high"}},
+		Remotes:       []Remote{{Host: "remote.example.test", Root: "/repos"}},
+	}
+
+	body, err := cfg.MarshalServeConfig()
+	if err != nil {
+		t.Fatalf("MarshalServeConfig: %v", err)
+	}
+
+	var got map[string]any
+	if err := yaml.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal serve config: %v", err)
+	}
+	if _, ok := got["remotes"]; ok {
+		t.Fatalf("serve config must not carry local remote paths: %s", body)
+	}
+	if got["integrations"] == nil || got["agent_defaults"] == nil || got["skills"] == nil {
+		t.Fatalf("serve config missing required settings: %s", body)
 	}
 }

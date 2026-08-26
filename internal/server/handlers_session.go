@@ -487,7 +487,7 @@ func (s *Server) handleMove(ctx context.Context, req Request) Response {
 	if err := json.Unmarshal(req.Params, &params); err != nil || params.Group == "" {
 		return errResp(req.ID, CodeInvalidParams, "group is required")
 	}
-	if err := domain.ValidateSessionName(params.Group); err != nil {
+	if err := domain.ValidateGroupName(params.Group); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	sess.Group = params.Group
