@@ -5035,6 +5035,7 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if i.action == viewStateGitSetup {
 					m.gitSetup = NewGitSetupModel(m.cfg)
+					m.gitSetup.SetSize(m.width, m.height)
 					m.state = i.action
 					return m, m.gitSetup.Init()
 				}

@@ -20,9 +20,9 @@ type orgItem struct {
 
 func (i orgItem) Title() string {
 	if i.selected {
-		return "✓ " + i.name
+		return "[x] " + i.name
 	}
-	return "  " + i.name
+	return "[ ] " + i.name
 }
 
 func (i orgItem) Description() string {
@@ -309,7 +309,7 @@ func (m GitSetupModel) viewString() string {
 	b.WriteString("\n")
 
 	// Orgs list
-	label = "Organizations:"
+	label = fmt.Sprintf("Organizations (%d selected):", m.selectedOrgCount())
 	if m.focusIndex == 1 {
 		label = activeStyle.Render(label)
 	}
@@ -358,6 +358,16 @@ func (m GitSetupModel) viewString() string {
 	b.WriteString("\n(tab to change field, ↑/↓ to choose an org, space or enter to toggle, esc to cancel)\n")
 
 	return docStyle.Render(b.String())
+}
+
+func (m GitSetupModel) selectedOrgCount() int {
+	count := 0
+	for _, item := range m.orgsList.Items() {
+		if org, ok := item.(orgItem); ok && org.selected {
+			count++
+		}
+	}
+	return count
 }
 
 func (m GitSetupModel) View() tea.View {
