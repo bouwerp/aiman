@@ -192,7 +192,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 2: Branch / label derivation
 	branch := config.Branch
 	if config.AdHoc {
-		// Ad-hoc: use the label as-is (already sanitized by UI), fall back to timestamp.
+		// Ad-hoc sessions use the Git-safe identifier, falling back to a timestamp.
 		if branch == "" {
 			branch = "adhoc-" + time.Now().Format("20060102-1504")
 		}
@@ -617,7 +617,9 @@ func tmuxEnvFlags(env map[string]string) string {
 	var b strings.Builder
 	for _, key := range keys {
 		if value := strings.TrimSpace(env[key]); value != "" {
-			fmt.Fprintf(&b, " -e %s=%s", key, value)
+			// Quoted, not interpolated: an env value with a space or a shell
+			// metacharacter would otherwise split into extra tmux arguments.
+			b.WriteString(fmt.Sprintf(" -e %s", shellQuote(key+"="+value)))
 		}
 	}
 	return b.String()
@@ -691,4 +693,10 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 	session.TmuxSession = tmuxName // display handle; kill/capture route via Backend
 
 	return m.finaliseCreate(ctx, sshMgr, session, config, workingDir)
+}
+
+// shellQuote wraps s for POSIX sh so a value containing spaces or shell
+// metacharacters survives as a single argument.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

@@ -4,13 +4,13 @@ import "testing"
 
 func TestValidSessionName(t *testing.T) {
 	t.Parallel()
-	ok := []string{"q1", "impl", "reviewer", "WTB-1925", "A", "a_b-c1"}
+	ok := []string{"q1", "impl", "reviewer", "WTB-1925", "A", "a_b-c1", "Deploy API: phase 2!"}
 	for _, name := range ok {
 		if err := ValidateSessionName(name); err != nil {
 			t.Errorf("ValidateSessionName(%q) = %v, want nil", name, err)
 		}
 	}
-	bad := []string{"", "1q", "has.dot", "has:colon", "has/slash", "has space", "-lead", stringsRepeat("a", 49)}
+	bad := []string{"", " \t ", "line\nbreak", stringsRepeat("a", 121)}
 	for _, name := range bad {
 		if err := ValidateSessionName(name); err == nil {
 			t.Errorf("ValidateSessionName(%q) = nil, want error", name)

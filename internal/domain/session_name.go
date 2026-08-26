@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -11,11 +13,29 @@ const (
 	GroupQuick     = "quick"
 )
 
-var sessionNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,47}$`)
+var groupNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,47}$`)
+
+const maxSessionNameRunes = 120
 
 func ValidateSessionName(name string) error {
-	if !sessionNameRe.MatchString(name) {
-		return fmt.Errorf("invalid session name %q: must match %s", name, sessionNameRe.String())
+	if name == "" || strings.TrimSpace(name) != name {
+		return fmt.Errorf("invalid session name %q: must not be empty or padded", name)
+	}
+	if utf8.RuneCountInString(name) > maxSessionNameRunes {
+		return fmt.Errorf("invalid session name %q: exceeds %d characters", name, maxSessionNameRunes)
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("invalid session name %q: contains a control character", name)
+		}
+	}
+	return nil
+}
+
+// ValidateGroupName accepts the identifier format used for sidebar groups.
+func ValidateGroupName(name string) error {
+	if !groupNameRe.MatchString(name) {
+		return fmt.Errorf("invalid group name %q: must match %s", name, groupNameRe.String())
 	}
 	return nil
 }
@@ -35,7 +55,7 @@ func NormalizeGroupName(name string) (string, error) {
 	if name == "" || strings.EqualFold(name, GroupUngrouped) {
 		return GroupUngrouped, nil
 	}
-	if err := ValidateSessionName(name); err != nil {
+	if err := ValidateGroupName(name); err != nil {
 		return "", err
 	}
 	return name, nil

@@ -20,6 +20,14 @@ func TestTmuxNameForCreateUsesBranchNotDisplayName(t *testing.T) {
 	}
 }
 
+func TestTmuxEnvFlagsQuoteSessionNames(t *testing.T) {
+	got := tmuxEnvFlags(map[string]string{"AIMAN_SESSION_NAME": "Deploy API: $blue; ready!"})
+	want := " -e 'AIMAN_SESSION_NAME=Deploy API: $blue; ready!'"
+	if got != want {
+		t.Fatalf("tmuxEnvFlags() = %q, want %q", got, want)
+	}
+}
+
 func TestJoinPrompt(t *testing.T) {
 	cases := []struct {
 		name       string

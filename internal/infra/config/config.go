@@ -37,6 +37,28 @@ type Config struct {
 	PermissionsError error `yaml:"-"`
 }
 
+// ServeConfig is the subset of settings used by aiman serve on a remote host.
+// It excludes remotes because they describe the machine that runs the TUI.
+type ServeConfig struct {
+	Integrations  Integrations             `yaml:"integrations"`
+	Git           GitConfig                `yaml:"git,omitempty"`
+	Skills        SkillsConfig             `yaml:"skills,omitempty"`
+	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
+}
+
+// MarshalServeConfig serializes the settings a remote Agent API needs.
+func (c *Config) MarshalServeConfig() ([]byte, error) {
+	if c == nil {
+		return yaml.Marshal(ServeConfig{})
+	}
+	return yaml.Marshal(ServeConfig{
+		Integrations:  c.Integrations,
+		Git:           c.Git,
+		Skills:        c.Skills,
+		AgentDefaults: c.AgentDefaults,
+	})
+}
+
 // AWSDefaults sets what the AWS fields on the session summary screen start
 // with, so a profile does not have to be retyped for every session.
 type AWSDefaults struct {

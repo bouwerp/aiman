@@ -117,6 +117,7 @@ func (m *Model) renderAgentAPIView() string {
 	b.WriteString("\n  " + titleStyle.Render("Agent API") + "\n\n")
 	b.WriteString("  In-pane agents talk to this process on each remote (skill / aiman session).\n")
 	b.WriteString("  Select a remote, then install or manage it. This is not the laptop TUI.\n\n")
+	b.WriteString(dimStyle.Render("  Install, restart, reload, and update sync Jira and launch settings to the remote.\n\n"))
 
 	remotes := agentAPIRemotes(m.cfg)
 	if len(remotes) == 0 {

@@ -299,6 +299,47 @@ func TestSessionCreateQuickAndRename(t *testing.T) {
 	}
 }
 
+func TestSessionCreateUsesCallerWorktreeParentAsRoot(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID:           "parent-id",
+		Name:         "impl",
+		WorktreePath: "/home/code/repos/treasury-admin-dapp@WTB-1",
+		Status:       domain.SessionStatusActive,
+		CreatedAt:    time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := shortTempDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	creator := &fakeCreator{}
+	go func() { _ = New(ln, repo, nil, creator, nil, nil, "t").Serve(cancelCtx) }()
+
+	t.Setenv("AIMAN_ID", "parent-id")
+	resp, err := Call(SocketPath(dir), "session.create", map[string]any{
+		"repo": "owner/treasury-admin-dapp", "branch": "WTB-2", "agent": "claude",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.SSHManager == nil {
+		t.Fatal("caller session must provide a create executor")
+	}
+	if got := creator.cfg.SSHManager.GetRoot(); got != "/home/code/repos" {
+		t.Fatalf("create root = %q, want /home/code/repos", got)
+	}
+}
+
 func TestCallServerNotRunning(t *testing.T) {
 	_, err := Call(filepath.Join(shortTempDir(t), "aiman.sock"), "ping", nil)
 	if err == nil {

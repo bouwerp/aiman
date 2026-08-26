@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
@@ -573,6 +575,9 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		Agent:         &domain.Agent{Name: params.Agent, Command: params.Agent},
 		Repo:          domain.Repo{Name: params.Repo},
 	}
+	if caller, ok := resolveSession(existing, req.Caller); ok && strings.TrimSpace(caller.WorktreePath) != "" {
+		cfg.SSHManager = local.NewExecutor(filepath.Dir(caller.WorktreePath))
+	}
 	sess, err := s.create.CreateSession(ctx, cfg)
 	if err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
@@ -636,7 +641,7 @@ func (s *Server) handleMove(ctx context.Context, req Request) Response {
 	if err := json.Unmarshal(req.Params, &params); err != nil || params.Group == "" {
 		return errResp(req.ID, CodeInvalidParams, "group is required")
 	}
-	if err := domain.ValidateSessionName(params.Group); err != nil {
+	if err := domain.ValidateGroupName(params.Group); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	sess.Group = params.Group

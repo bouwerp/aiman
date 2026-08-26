@@ -25,6 +25,39 @@ type serviceOpMsg struct {
 	err  error
 }
 
+type serveConfigWriter interface {
+	Execute(ctx context.Context, command string) (string, error)
+	WriteFile(ctx context.Context, path string, content []byte) error
+}
+
+func writeServeConfig(ctx context.Context, cfg *config.Config, remote serveConfigWriter) error {
+	body, err := cfg.MarshalServeConfig()
+	if err != nil {
+		return fmt.Errorf("serializing Agent API settings: %w", err)
+	}
+	if _, err := remote.Execute(ctx, `install -d -m 700 "$HOME/.aiman" && (umask 077; touch "$HOME/.aiman/config.yaml") && chmod 600 "$HOME/.aiman/config.yaml"`); err != nil {
+		return fmt.Errorf("creating remote Agent API config directory: %w", err)
+	}
+	if err := remote.WriteFile(ctx, ".aiman/config.yaml", body); err != nil {
+		return fmt.Errorf("writing remote Agent API settings: %w", err)
+	}
+	if _, err := remote.Execute(ctx, `chmod 600 "$HOME/.aiman/config.yaml"`); err != nil {
+		return fmt.Errorf("protecting remote Agent API settings: %w", err)
+	}
+	return nil
+}
+
+func syncRemoteServeConfig(cfg *config.Config, host string) error {
+	r, ok := remoteForHost(cfg, host)
+	if !ok {
+		return fmt.Errorf("remote config not found for %s", host)
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: r.Host, User: r.User, Root: r.Root})
+	ctx, cancel := context.WithTimeout(context.Background(), remotesvc.OpTimeout)
+	defer cancel()
+	return writeServeConfig(ctx, cfg, mgr)
+}
+
 func (m *Model) selectedDaemon() (domain.Daemon, bool) {
 	if m.state == viewStateAgentAPI {
 		return m.selectedAgentAPIDaemon()
@@ -105,6 +138,11 @@ func remoteServiceOpCmd(cfg *config.Config, host string, kind remotesvc.Kind, op
 		}
 	}
 	return func() tea.Msg {
+		if kind == remotesvc.KindServe && op != "stop" {
+			if err := syncRemoteServeConfig(cfg, host); err != nil {
+				return serviceOpMsg{host: host, kind: kind, op: op, err: err}
+			}
+		}
 		_, err := runRemoteScript(cfg, host, script)
 		return serviceOpMsg{host: host, kind: kind, op: op, err: err}
 	}
