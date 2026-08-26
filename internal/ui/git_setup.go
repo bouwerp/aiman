@@ -110,6 +110,11 @@ func (m GitSetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "up", "down":
+			if m.focusIndex == 1 {
+				var cmd tea.Cmd
+				m.orgsList, cmd = m.orgsList.Update(msg)
+				return m, cmd
+			}
 			// Navigate through focusable items
 			if msg.String() == "up" {
 				m.focusIndex--
@@ -147,6 +152,9 @@ func (m GitSetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focusIndex == 4 {
 				return m.save()
 			}
+			if m.focusIndex == 1 {
+				return m, m.toggleSelectedOrg()
+			}
 			// Move to next field
 			m.focusIndex++
 			if m.focusIndex > 4 {
@@ -157,15 +165,7 @@ func (m GitSetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ", "space":
 			// Toggle org selection when in orgs list
 			if m.focusIndex == 1 {
-				if sel := m.orgsList.SelectedItem(); sel != nil {
-					org := sel.(orgItem)
-					org.selected = !org.selected
-					// Update the item in the list
-					idx := m.orgsList.Index()
-					m.orgsList.RemoveItem(idx)
-					m.orgsList.InsertItem(idx, org)
-				}
-				return m, nil
+				return m, m.toggleSelectedOrg()
 			}
 		}
 
@@ -205,6 +205,21 @@ func (m GitSetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, cmd
+}
+
+func (m *GitSetupModel) toggleSelectedOrg() tea.Cmd {
+	sel := m.orgsList.SelectedItem()
+	if sel == nil {
+		return nil
+	}
+	org, ok := sel.(orgItem)
+	if !ok {
+		return nil
+	}
+	org.selected = !org.selected
+	idx := m.orgsList.Index()
+	m.orgsList.RemoveItem(idx)
+	return m.orgsList.InsertItem(idx, org)
 }
 
 func (m *GitSetupModel) updateFocus() tea.Cmd {
@@ -340,7 +355,7 @@ func (m GitSetupModel) viewString() string {
 		b.WriteString("\n" + failStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n")
 	}
 
-	b.WriteString("\n(↑/↓ or tab to navigate, space to toggle org, enter to select/save, esc to cancel)\n")
+	b.WriteString("\n(tab to change field, ↑/↓ to choose an org, space or enter to toggle, esc to cancel)\n")
 
 	return docStyle.Render(b.String())
 }
