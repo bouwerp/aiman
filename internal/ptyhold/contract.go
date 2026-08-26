@@ -43,12 +43,15 @@ const (
 	// MetaFile / SpoolFile etc. are the contract's fixed file names.
 	MetaFile    = "meta.json"
 	RequestFile = "request.json"
-	SpoolFile   = "spool"
-	SpoolOld    = "spool.old"
-	SocketFile  = "term.sock"
-	ResizeFile  = "resize"
-	KillFile    = "kill"
-	ExitFile    = "exit"
+	// HolderLogFile captures the holder process's own stdout/stderr, so a
+	// holder that dies before it can write the exit file still says why.
+	HolderLogFile = "holder.log"
+	SpoolFile     = "spool"
+	SpoolOld      = "spool.old"
+	SocketFile    = "term.sock"
+	ResizeFile    = "resize"
+	KillFile      = "kill"
+	ExitFile      = "exit"
 )
 
 // Spec is what serve hands to a holder. Field names are part of the durable

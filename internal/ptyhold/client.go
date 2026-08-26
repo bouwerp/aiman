@@ -52,8 +52,18 @@ func Spawn(root string, spec Spec, holderCmd []string) error {
 
 	cmd := exec.Command(holderCmd[0], append(holderCmd[1:], "--root", root, "--id", spec.ID)...) //nolint:gosec // G204: the operator-configured agent command travels inside the request file
 	cmd.SysProcAttr = detachAttr()
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	// Keep the holder's own output. Discarding it made a holder that failed
+	// before it could write the exit file completely undiagnosable: all the
+	// caller ever saw was "did not become ready in time", with no way to tell a
+	// slow spawn from a binary that could not exec or a PTY that could not be
+	// allocated. The file is small, lives beside the session, and is quoted back
+	// in the timeout error below.
+	logPath := filepath.Join(dir, HolderLogFile)
+	if logFile, lerr := os.Create(logPath); lerr == nil {
+		defer logFile.Close()
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("ptyhold: spawn: %w", err)
 	}
@@ -81,7 +91,26 @@ func Spawn(root string, spec Spec, holderCmd []string) error {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	return fmt.Errorf("ptyhold: holder %s did not become ready in time", spec.ID)
+	return fmt.Errorf("ptyhold: holder %s did not become ready in %s%s",
+		spec.ID, spawnReadyTimeout, holderLogSuffix(dir))
+}
+
+// holderLogSuffix quotes what the holder printed, so a readiness timeout says
+// why instead of only that it happened.
+func holderLogSuffix(dir string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, HolderLogFile))
+	if err != nil {
+		return " (no holder output captured)"
+	}
+	out := strings.TrimSpace(string(raw))
+	if out == "" {
+		return " (holder produced no output)"
+	}
+	const max = 600
+	if len(out) > max {
+		out = out[len(out)-max:]
+	}
+	return ": holder output: " + out
 }
 
 func socketReady(dir string) bool {

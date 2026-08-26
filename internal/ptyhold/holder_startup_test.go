@@ -81,3 +81,21 @@ func TestSpawnReadyTimeoutLeavesHeadroomForTheAPIClient(t *testing.T) {
 			spawnReadyTimeout, apiClientDeadline)
 	}
 }
+
+// A holder that dies before it can write the exit file must still explain
+// itself. Its stdio used to be discarded, so the only signal was "did not
+// become ready in time" — indistinguishable between a slow spawn, a binary
+// that cannot exec, and a PTY that cannot be allocated.
+func TestSpawnTimeoutQuotesHolderOutput(t *testing.T) {
+	root := t.TempDir()
+	// A "holder" that complains and exits without touching the contract files.
+	fake := []string{"sh", "-c", `echo "cannot allocate pty: no such device" >&2; exit 3`, "--"}
+
+	err := Spawn(root, Spec{ID: "diag", Command: "true"}, fake)
+	if err == nil {
+		t.Fatal("expected Spawn to fail")
+	}
+	if !strings.Contains(err.Error(), "cannot allocate pty") {
+		t.Fatalf("error must quote what the holder printed, got: %v", err)
+	}
+}
