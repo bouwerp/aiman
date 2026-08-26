@@ -1579,10 +1579,21 @@ type sessionCreateMsg struct {
 
 type attachMsg struct {
 	cmd *exec.Cmd
+	pty bool
 }
 
 type attachDoneMsg struct {
 	err error
+	pty bool
+}
+
+// attachFailure describes a failed attach in terms of the backend that was
+// actually used; a PTY session has no tmux server involved at all.
+func attachFailure(msg attachDoneMsg) string {
+	if msg.pty {
+		return fmt.Sprintf("Failed to attach to PTY session: %v", msg.err)
+	}
+	return fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
 }
 
 type terminateStepMsg struct {
@@ -3891,7 +3902,7 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case attachMsg:
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-			return attachDoneMsg{err: err}
+			return attachDoneMsg{err: err, pty: msg.pty}
 		})
 	case attachDoneMsg:
 		return m.applyAttachDone(msg, cmds)
@@ -4122,7 +4133,7 @@ func (m *Model) applyInputHint(msg inputHintMsg, cmds []tea.Cmd) (tea.Model, tea
 
 func (m *Model) applyAttachDone(msg attachDoneMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		m.lastError = fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
+		m.lastError = attachFailure(msg)
 		m.state = viewStateError
 		return m, nil
 	}
@@ -4134,6 +4145,10 @@ func (m *Model) applyAttachDone(msg attachDoneMsg, cmds []tea.Cmd) (tea.Model, t
 		m.tmuxOutput = "Loading..."
 		m.viewport.SetContent(m.tmuxOutput)
 		cmds = append(cmds, tickTmux(), fetchTmuxPane(m.cfg, s))
+	} else {
+		// Keep the poll chain alive: tickTmux is self-perpetuating, so dropping
+		// it here would leave the preview frozen until the next event.
+		cmds = append(cmds, tickTmux())
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -4574,7 +4589,7 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			m.state = viewStateLoading
 			return m, tea.Sequence(
 				tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
-					return attachMsg{cmd: c}
+					return attachMsg{cmd: c, pty: s.IsPTY()}
 				}),
 			), true
 		}
@@ -6411,24 +6426,10 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyDiscoveryResult(msg)
 	case attachMsg:
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-			return attachDoneMsg{err: err}
+			return attachDoneMsg{err: err, pty: msg.pty}
 		})
 	case attachDoneMsg:
-		if msg.err != nil {
-			m.lastError = fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
-			m.state = viewStateError
-			return m, nil
-		}
-		m.state = viewStateMain
-		m.panelMode = panelModePreview
-		if sel := m.list.SelectedItem(); sel != nil {
-			s := sel.(item).session
-			m.activeSession = s.TmuxSession
-			m.tmuxOutput = "Loading..."
-			m.viewport.SetContent(m.tmuxOutput)
-			return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, s))
-		}
-		return m, tickTmux()
+		return m.applyAttachDone(msg, nil)
 	case tmuxTerminalMsg:
 		return m.applyTmuxTerminal(msg)
 	case reposMsg:

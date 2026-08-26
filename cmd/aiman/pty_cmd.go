@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
+	"sync/atomic"
 
 	"github.com/bouwerp/aiman/internal/ptyhold"
 	"github.com/bouwerp/aiman/internal/server"
@@ -169,11 +171,33 @@ func runPTYAttach(sock, id string) error {
 	// screen that ctrl+q is the way back.
 	fmt.Fprint(os.Stdout, "\r\n[aiman] attached to "+id+" — press ctrl+q to detach (the session keeps running)\r\n")
 
-	if err := connResp.Relay(detachOnCtrlQ(os.Stdin, connResp), os.Stdout); err != nil && !errors.Is(err, io.EOF) {
+	stdin := detachOnCtrlQ(os.Stdin, connResp)
+	if err := attachExitErr(connResp.Relay(stdin, os.Stdout), stdin.Detached()); err != nil {
 		return err
 	}
 	fmt.Fprint(os.Stdout, "\r\n[aiman] detached from "+id+"\r\n")
 	return nil
+}
+
+// attachExitErr decides whether a finished relay is a failure worth reporting.
+//
+// Detaching is a normal way to leave, but it looks like a failure from inside
+// the relay: ctrl+q closes the connection, so whichever of the relay's two
+// copy directions notices first reports "use of closed network connection" —
+// and which one wins is a race. A non-nil return here becomes a non-zero exit
+// from `aiman pty attach`, which the caller over `ssh -t` sees as exit status
+// 1, which the dashboard then reports as a failed attach. So a detach the user
+// asked for must never produce an error, and a closed connection is by
+// definition one somebody closed deliberately.
+func attachExitErr(err error, detached bool) error {
+	switch {
+	case err == nil, detached:
+		return nil
+	case errors.Is(err, io.EOF), errors.Is(err, net.ErrClosed):
+		return nil
+	default:
+		return err
+	}
 }
 
 func terminalSize() (int, int) {
@@ -229,15 +253,21 @@ const detachKey = 0x11
 
 // detachOnCtrlQ wraps stdin so ctrl+q ends the relay instead of reaching the
 // remote terminal.
-func detachOnCtrlQ(r io.Reader, closer io.Closer) io.Reader {
+func detachOnCtrlQ(r io.Reader, closer io.Closer) *detachReader {
 	return &detachReader{r: r, closer: closer}
 }
 
 type detachReader struct {
-	r      io.Reader
-	closer io.Closer
-	buf    []byte
+	r        io.Reader
+	closer   io.Closer
+	buf      []byte
+	detached atomic.Bool
 }
+
+// Detached reports whether the user asked to leave by pressing ctrl+q. The
+// relay's other copy direction observes the resulting close concurrently, so
+// this is read from a different goroutine than the one that sets it.
+func (d *detachReader) Detached() bool { return d.detached.Load() }
 
 func (d *detachReader) Read(p []byte) (int, error) {
 	if len(d.buf) > 0 {
@@ -250,6 +280,7 @@ func (d *detachReader) Read(p []byte) (int, error) {
 		if p[i] == detachKey {
 			// Keep everything before ctrl+q, drop it and everything after.
 			out := p[:i]
+			d.detached.Store(true)
 			_ = d.closer.Close()
 			if copy(p, out) < len(out) {
 				return 0, io.EOF
