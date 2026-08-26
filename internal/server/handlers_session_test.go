@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,8 +229,14 @@ func TestSessionPromptBlocked(t *testing.T) {
 	if resp.Error == nil || resp.Error.Code != CodeAgentBlocked {
 		t.Fatalf("want agent_blocked, got %+v", resp.Error)
 	}
-	if len(remote.execs) != 0 {
-		t.Fatalf("must not send-keys when blocked: %v", remote.execs)
+	// Asserts what this test is actually about: no prompt was delivered.
+	// It used to require zero commands outright, which stopped being a fair
+	// proxy once listing a session legitimately enumerates what is running on
+	// the host (tmux/pty discovery) before deciding anything.
+	for _, cmd := range remote.execs {
+		if strings.Contains(cmd, "send-keys") || strings.Contains(cmd, "pty input") {
+			t.Fatalf("must not deliver a prompt when blocked: %v", remote.execs)
+		}
 	}
 
 	resp, err = Call(sock, "session.prompt", map[string]any{"id": "reviewer", "text": "yes", "force": true})
@@ -456,5 +463,75 @@ func TestReportSessionEnd(t *testing.T) {
 	}
 	if !got.AgentEnded {
 		t.Fatal("ended not stored")
+	}
+}
+
+// serve must list the sessions actually running on its host, not just the rows
+// in its own database.
+//
+// Sessions are created by the laptop TUI, which persists to the *laptop's*
+// database, so the remote's copy stays empty. A DB-only listing therefore
+// reported no sessions at all while six were running — leaving an in-session
+// agent with nothing to address and no way to prompt a sibling.
+func TestSessionListIncludesLiveSessionsMissingFromTheDB(t *testing.T) {
+	repo := testRepo(t)
+	remote := &fakeRemote{
+		tmuxSessions: []string{"treasury@WTB-1896", "not-aiman"},
+		// Only the aiman-managed session carries AIMAN_ID; the other must be
+		// ignored, which is how serve's and the trigger daemon's own tmux
+		// sessions stay out of the list.
+		tmuxEnv: map[string]string{"treasury@WTB-1896": "live-id-1"},
+		tmuxCWD: map[string]string{"treasury@WTB-1896": "/home/code/repos/treasury@WTB-1896"},
+	}
+	dir := shortTempDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = New(ln, repo, remote, nil, nil, nil, "t").Serve(ctx) }()
+	sock := SocketPath(dir)
+
+	resp, err := Call(sock, "session.list", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("list: %+v", resp.Error)
+	}
+	raw, _ := json.Marshal(resp.Result)
+	var list struct {
+		Sessions []SessionInfo `json:"sessions"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(list.Sessions) != 1 {
+		t.Fatalf("expected exactly the one aiman-managed live session, got %s", raw)
+	}
+	got := list.Sessions[0]
+	if got.ID != "live-id-1" {
+		t.Errorf("ID = %q, want live-id-1", got.ID)
+	}
+	// Named after the tmux session, not the creation-flow's "impl": six
+	// discovered sessions all called impl-N are indistinguishable and useless
+	// for addressing a specific sibling.
+	if got.Name != "treasury@WTB-1896" {
+		t.Errorf("Name = %q, want the tmux session name", got.Name)
+	}
+	// And the issue key drives the group, so sessions bucket usefully.
+	if got.Group != "WTB-1896" {
+		t.Errorf("Group = %q, want WTB-1896 derived from the session name", got.Group)
+	}
+
+	// And it is reachable by that name, which is the whole point.
+	one, err := Call(sock, "session.get", map[string]any{"id": got.Name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.Error != nil {
+		t.Fatalf("get by derived name %q: %+v", got.Name, one.Error)
 	}
 }

@@ -131,6 +131,37 @@ secret is invisible by construction.
 Note for anyone who entered a token before this fix: the stored value is
 truncated and cannot be recovered, so it has to be re-entered.
 
+### serve listed nothing, because its database was never the index ✅
+With the socket reachable, `aiman session list` still returned an empty list
+while six sessions were running, and `AIMAN_SESSION_NAME`/`AIMAN_GROUP` were
+absent from every session. Neither was a bug in the listing code: sessions are
+created by the laptop TUI, which persists to the *laptop's* database, and
+`loadSessions` read only serve's own — a database on the remote that nothing
+ever writes to. So the agent API's whole premise, agents addressing sibling
+sessions, could not work for any session the TUI had created.
+
+serve already holds a local executor, so it can simply look at its own host.
+`liveSessions` enumerates live tmux sessions (keyed by the `AIMAN_ID` in the
+tmux environment, which doubles as the filter that keeps serve's and the
+trigger daemon's own tmux sessions out) plus running PTY sessions, and
+`mergeLiveSessions` folds them over the stored rows: the database still wins
+for identity the host cannot know (name, group, issue, branch, repo), while
+liveness and terminal facts come from the host. Discovered sessions are
+labelled in memory only — this host does not own them, and writing rows here
+would put identity in two places and let it drift.
+
+Naming needed its own path rather than the existing `backfill`:
+`AssignSessionName` serves session *creation*, where the first session earns
+the friendly name "impl" and a long tmux name fails `ValidateSessionName` and
+is discarded — which turned six distinct sessions into `impl` … `impl-6`,
+indistinguishable and useless for addressing one. `labelDiscovered` uses the
+tmux/PTY session name, the label already shown in the dashboard, and derives
+the group from the issue key.
+
+Verified against regent0's six live sessions: all six listed with their real
+names, grouped by issue key (WTB-1895 … WTB-1917), resolvable by name through
+`session get`, reporting live state, and correct under `--group` filtering.
+
 ### A stale socket path no longer needs a session restart to recover ✅
 Not injecting the laptop's paths fixes *new* sessions, but every session
 already running still had the bad `AIMAN_SOCKET_PATH` in its environment — and

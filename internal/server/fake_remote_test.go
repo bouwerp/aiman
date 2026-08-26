@@ -13,6 +13,12 @@ type fakeRemote struct {
 	mu    sync.Mutex
 	pane  string
 	execs []string
+
+	// tmuxSessions are the live sessions this host reports, and tmuxEnv maps a
+	// session name to its AIMAN_ID — the join key serve discovers them by.
+	tmuxSessions []string
+	tmuxEnv      map[string]string
+	tmuxCWD      map[string]string
 }
 
 func (f *fakeRemote) Connect(context.Context) error { return nil }
@@ -26,18 +32,18 @@ func (f *fakeRemote) Execute(_ context.Context, cmd string) (string, error) {
 func (f *fakeRemote) WriteFile(context.Context, string, []byte) error { return nil }
 func (f *fakeRemote) ValidateDir(context.Context, string) error       { return nil }
 func (f *fakeRemote) ScanTmuxSessions(context.Context) ([]string, error) {
-	return nil, nil
+	return f.tmuxSessions, nil
 }
 func (f *fakeRemote) ScanGitRepos(context.Context) ([]string, error) { return nil, nil }
 func (f *fakeRemote) ScanWorktrees(context.Context, string) ([]string, error) {
 	return nil, nil
 }
 func (f *fakeRemote) GetGitRoot(context.Context, string) (string, error) { return "", nil }
-func (f *fakeRemote) GetTmuxSessionCWD(context.Context, string) (string, error) {
-	return "", nil
+func (f *fakeRemote) GetTmuxSessionCWD(_ context.Context, name string) (string, error) {
+	return f.tmuxCWD[name], nil
 }
-func (f *fakeRemote) GetTmuxSessionEnv(context.Context, string, string) (string, error) {
-	return "", nil
+func (f *fakeRemote) GetTmuxSessionEnv(_ context.Context, name, _ string) (string, error) {
+	return f.tmuxEnv[name], nil
 }
 func (f *fakeRemote) CaptureTmuxPane(context.Context, string) (string, error) {
 	f.mu.Lock()

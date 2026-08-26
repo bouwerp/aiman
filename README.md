@@ -379,6 +379,11 @@ aiman repos
 
 Agents inside a tmux session talk to **one server per remote**, not to the laptop TUI. That process is `aiman serve` (the agent API). The skill (`aiman --skill`) and `aiman session …` are clients of it. tmux stays the multiplexer. Mutagen, JIRA tokens, and the laptop SQLite file stay on the laptop.
 
+`session list` reports the sessions actually running on that host, discovered from tmux
+and the PTY runtime — it does not depend on the laptop having told the remote about them.
+A session with no display name is addressable by its tmux/PTY session name, and grouped
+by its issue key.
+
 There is no HTTP, MCP, or TCP port. The CLI is a thin JSON wrapper over `~/.aiman/aiman.sock`.
 
 That socket path is resolved by the binary that uses it, so an in-session agent

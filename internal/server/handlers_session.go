@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -122,6 +123,91 @@ func parseUntil(v string) domain.AgentState {
 	return domain.AgentState(v)
 }
 
+// liveSessions enumerates the sessions actually running on this host.
+//
+// serve's own database is not a usable index of them: sessions are created by
+// the laptop TUI, which persists to the *laptop's* database, so the remote's
+// copy stays empty and a DB-only listing reported no sessions at all while six
+// were running. serve holds a local executor, so it can just look.
+//
+// A tmux session is only counted when it carries AIMAN_ID, which is both the
+// join key and the filter: it excludes tmux sessions that are not aiman's,
+// including serve's and the trigger daemon's own.
+func (s *Server) liveSessions(ctx context.Context) []domain.Session {
+	if s.remote == nil {
+		return nil
+	}
+	var out []domain.Session
+
+	names, err := s.remote.ScanTmuxSessions(ctx)
+	if err == nil {
+		for _, name := range names {
+			id, iderr := s.remote.GetTmuxSessionEnv(ctx, name, "AIMAN_ID")
+			id = strings.TrimSpace(id)
+			if iderr != nil || id == "" {
+				continue
+			}
+			sess := domain.Session{
+				ID:          id,
+				TmuxSession: name,
+				Backend:     domain.BackendTmux,
+				Status:      domain.SessionStatusActive,
+			}
+			if cwd, cerr := s.remote.GetTmuxSessionCWD(ctx, name); cerr == nil {
+				sess.WorkingDirectory = strings.TrimSpace(cwd)
+			}
+			out = append(out, sess)
+		}
+	}
+
+	// PTY-hosted sessions carry the aiman id directly.
+	if recs, perr := usecase.ScanPTYSessions(ctx, s.remote); perr == nil {
+		for _, rec := range recs {
+			id := strings.TrimSpace(rec.ID)
+			if id == "" || rec.Status != "running" {
+				continue
+			}
+			out = append(out, domain.Session{
+				ID:               id,
+				TmuxSession:      rec.Name,
+				Backend:          domain.BackendPTY,
+				WorkingDirectory: rec.Dir,
+				Status:           domain.SessionStatusActive,
+			})
+		}
+	}
+	return out
+}
+
+// mergeLiveSessions folds what is running on this host into the stored list.
+// Stored records win for identity the host cannot know (name, group, issue,
+// branch, repo); liveness and terminal facts come from the host.
+func mergeLiveSessions(stored, live []domain.Session) []domain.Session {
+	byID := make(map[string]int, len(stored))
+	for i := range stored {
+		byID[stored[i].ID] = i
+	}
+	out := stored
+	for _, l := range live {
+		if i, ok := byID[l.ID]; ok {
+			if l.TmuxSession != "" {
+				out[i].TmuxSession = l.TmuxSession
+			}
+			if l.WorkingDirectory != "" {
+				out[i].WorkingDirectory = l.WorkingDirectory
+			}
+			if l.Backend != "" {
+				out[i].Backend = l.Backend
+			}
+			out[i].Status = l.Status
+			continue
+		}
+		byID[l.ID] = len(out)
+		out = append(out, l)
+	}
+	return out
+}
+
 func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 	if s.repo == nil {
 		return nil, nil
@@ -130,6 +216,8 @@ func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Backfill and persist names for rows this host actually owns, before
+	// anything discovered is folded in — the re-read below would discard it.
 	changed := false
 	for i := range list {
 		if list[i].Name == "" || list[i].Group == "" {
@@ -146,6 +234,16 @@ func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 			return nil, err
 		}
 	}
+
+	// Then fold in what is running here. Sessions absent from the local
+	// database are labelled in memory only: this host is not their owner, so
+	// writing rows for them would put identity in two places and let it drift.
+	stored := len(list)
+	list = mergeLiveSessions(list, s.liveSessions(ctx))
+	for i := stored; i < len(list); i++ {
+		labelDiscovered(&list[i], list[:i])
+	}
+
 	sort.Slice(list, func(i, j int) bool {
 		if list[i].Group != list[j].Group {
 			return list[i].Group < list[j].Group
@@ -153,6 +251,38 @@ func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
 	})
 	return list, nil
+}
+
+// labelDiscovered names a session found running on this host but absent from
+// its database.
+//
+// It deliberately does not use backfill/AssignSessionName: those serve the
+// creation flow, where the first session earns the friendly name "impl" and a
+// long tmux name fails ValidateSessionName and is discarded. That turned six
+// distinct sessions into impl, impl-2 … impl-6 — unidentifiable, and useless
+// for addressing a specific sibling. The tmux/PTY session name is the label
+// already shown in the dashboard, so it is what an agent should be able to use.
+func labelDiscovered(sess *domain.Session, others []domain.Session) {
+	if sess.IssueKey == "" {
+		sess.IssueKey = domain.ExtractKey(sess.TmuxSession)
+	}
+	if sess.Group == "" {
+		sess.Group = domain.AssignSessionGroup("", sess.IssueKey, sess.RepoName, false)
+	}
+	if sess.Name != "" {
+		return
+	}
+	name := strings.TrimSpace(sess.TmuxSession)
+	if name == "" {
+		name = sess.ID
+	}
+	// Names address sessions, so they must stay distinct even if two hosts ever
+	// present the same tmux name.
+	base := name
+	for n := 2; domain.NameTaken(others, name); n++ {
+		name = fmt.Sprintf("%s-%d", base, n)
+	}
+	sess.Name = name
 }
 
 func (s *Server) backfill(sess *domain.Session, existing []domain.Session) {
