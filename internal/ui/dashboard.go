@@ -448,7 +448,6 @@ type Model struct {
 	tunnelError            string
 	intelligence           domain.IntelligenceProvider
 	snapshotManager        *usecase.SnapshotManager
-	aiSummary              map[string]*domain.SessionSummary // keyed by TmuxSession
 	aiLoading              bool
 	aiError                string
 	triggerDetailsVP       viewport.Model
@@ -465,6 +464,9 @@ type Model struct {
 	creatingSessions       map[string]*creatingSession    // background session creations, keyed by placeholder session ID
 	terminatingSessions    map[string]*terminatingSession // background session terminations, keyed by session ID
 	syncHealth             map[string]syncHealth          // mutagen sync health per session ID
+	// serveUpdateAt records when each remote's agent API was last auto-updated,
+	// so a failing update is not retried on every probe (see serve_autoupdate.go).
+	serveUpdateAt map[string]time.Time
 	// syncReconciled marks sessions this run has already tried to build a local
 	// sync for, so a failure is not retried in a loop (see create_remote.go).
 	syncReconciled    map[string]bool
@@ -816,7 +818,6 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		tunnelList:          list.New(nil, list.NewDefaultDelegate(), 0, 0),
 		intelligence:        intelligence,
 		snapshotManager:     snapshotManager,
-		aiSummary:           make(map[string]*domain.SessionSummary),
 		creatingSessions:    make(map[string]*creatingSession),
 		terminatingSessions: make(map[string]*terminatingSession),
 		syncHealth:          make(map[string]syncHealth),
@@ -4242,9 +4243,15 @@ func (m *Model) applyAISummary(msg aiSummaryMsg, cmds []tea.Cmd) (tea.Model, tea
 		} else {
 			m.aiError = fmt.Sprintf("AI error: %v", msg.err)
 		}
-	} else if msg.summary != nil && msg.session == m.activeSession {
-		m.aiSummary[msg.session] = msg.summary
+		return m, m.showToast("⚠️  "+m.aiError, true, 10*time.Second)
+	} else if msg.summary != nil {
+		// Reported as a toast rather than held in a panel: the AI section the
+		// summary used to live in is gone, and `i` (classify) already answers
+		// this way.
 		m.aiError = ""
+		if text := strings.TrimSpace(msg.summary.Summary); text != "" {
+			return m, m.showToast(text, false, 20*time.Second)
+		}
 	}
 	return m.forwardToFocused(msg, cmds)
 }
@@ -6979,7 +6986,6 @@ func (m *Model) renderSessionPanel(mainWidth int) string {
 		infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
 
 		// AI insight panel — shown below git status when available or loading
-		aiPanel := m.renderAIPanel(s, contentW)
 
 		// Snapshot toast
 		snapshotBar := ""
@@ -7017,7 +7023,7 @@ func (m *Model) renderSessionPanel(mainWidth int) string {
 			// Background termination: show step progress in the preview panel.
 			mainContent = m.renderTerminatingPanel(ts, contentW) + snapshotBar
 		} else {
-			mainContent = infoPanel + aiPanel + snapshotBar + outputPanel.String()
+			mainContent = infoPanel + snapshotBar + outputPanel.String()
 		}
 	}
 	return mainContent
@@ -7263,92 +7269,6 @@ func (m *Model) renderAWSCredExpiryBanner() string {
 		Bold(true).
 		Padding(0, 1).
 		Render(glyph + "  " + text)
-}
-
-// renderAIPanel renders the AI insight section of the main panel.
-// It shows a loading indicator, the session summary, action items, or a hint
-// to press 'i' if no summary has been generated yet.
-func (m *Model) renderAIPanel(s domain.Session, contentW int) string {
-	aiHeader := activeStyle.Render("AI") + "  "
-	sep := "\n" + statusStyle.Render(strings.Repeat("─", contentW)) + "\n"
-
-	if m.aiLoading {
-		return sep + aiHeader + statusStyle.Render("Analysing session…") + "\n"
-	}
-
-	if m.aiError != "" {
-		return sep + aiHeader + failStyle.Render(m.aiError) + "\n"
-	}
-
-	summary, ok := m.aiSummary[s.TmuxSession]
-	if !ok {
-		if m.intelligence != nil {
-			hint := statusStyle.Render("Press i to get AI insight for this session")
-			return sep + aiHeader + hint + "\n"
-		}
-		return ""
-	}
-
-	var lines []string
-
-	// Agent state badge
-	stateColor := lipgloss.Color("#7D7D7D")
-	switch summary.AgentState {
-	case domain.AgentStateWorking:
-		stateColor = lipgloss.Color("#00FF00")
-	case domain.AgentStateWaitingInput:
-		stateColor = lipgloss.Color("#FFA500")
-	case domain.AgentStateWaitingBackground:
-		stateColor = lipgloss.Color("#5FD7FF")
-	case domain.AgentStateErrored:
-		stateColor = lipgloss.Color("#FF0000")
-	case domain.AgentStateIdle:
-		stateColor = lipgloss.Color("#7D7D7D")
-	}
-	stateBadge := lipgloss.NewStyle().Foreground(stateColor).Render(string(summary.AgentState))
-	lines = append(lines, aiHeader+stateBadge)
-
-	// Topic — what the session is about (muted, above the status line)
-	if summary.Topic != "" {
-		wrapW := contentW - 4
-		if wrapW < 20 {
-			wrapW = 20
-		}
-		topicStyled := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("244")).
-			Italic(true).
-			Width(wrapW).
-			Render(summary.Topic)
-		for _, l := range strings.Split(topicStyled, "\n") {
-			lines = append(lines, "  "+l)
-		}
-	}
-
-	// Summary text — current status, word-wrapped to content width
-	if summary.Summary != "" {
-		wrapW := contentW - 4
-		if wrapW < 20 {
-			wrapW = 20
-		}
-		wrapped := lipgloss.NewStyle().Width(wrapW).Render(summary.Summary)
-		for _, l := range strings.Split(wrapped, "\n") {
-			lines = append(lines, "  "+l)
-		}
-	}
-
-	// Action items
-	for _, action := range summary.Actions {
-		wrapW := contentW - 6
-		if wrapW < 20 {
-			wrapW = 20
-		}
-		actionStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D7D7D")).Width(wrapW).Render("· " + action)
-		for _, l := range strings.Split(actionStyled, "\n") {
-			lines = append(lines, "  "+l)
-		}
-	}
-
-	return sep + strings.Join(lines, "\n") + "\n"
 }
 
 func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {

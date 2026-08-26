@@ -23,6 +23,10 @@ type serviceOpMsg struct {
 	kind remotesvc.Kind
 	op   string
 	err  error
+	// auto marks an operation nobody asked for — the client noticing a remote is
+	// behind and updating it. Such an op must not move the user's view or raise
+	// the error screen a keypress-initiated one does.
+	auto bool
 }
 
 type serveConfigWriter interface {
@@ -121,7 +125,7 @@ func probeRemoteServiceCmd(cfg *config.Config, host string, kind remotesvc.Kind)
 	}
 }
 
-func remoteServiceOpCmd(cfg *config.Config, host string, kind remotesvc.Kind, op string) tea.Cmd {
+func remoteServiceOpCmd(cfg *config.Config, host string, kind remotesvc.Kind, op string, auto bool) tea.Cmd {
 	var script string
 	switch op {
 	case "install":
@@ -134,17 +138,17 @@ func remoteServiceOpCmd(cfg *config.Config, host string, kind remotesvc.Kind, op
 		script = remotesvc.UpdateScript(kind)
 	default:
 		return func() tea.Msg {
-			return serviceOpMsg{host: host, kind: kind, op: op, err: fmt.Errorf("unknown op %s", op)}
+			return serviceOpMsg{host: host, kind: kind, op: op, auto: auto, err: fmt.Errorf("unknown op %s", op)}
 		}
 	}
 	return func() tea.Msg {
 		if kind == remotesvc.KindServe && op != "stop" {
 			if err := syncRemoteServeConfig(cfg, host); err != nil {
-				return serviceOpMsg{host: host, kind: kind, op: op, err: err}
+				return serviceOpMsg{host: host, kind: kind, op: op, auto: auto, err: err}
 			}
 		}
 		_, err := runRemoteScript(cfg, host, script)
-		return serviceOpMsg{host: host, kind: kind, op: op, err: err}
+		return serviceOpMsg{host: host, kind: kind, op: op, auto: auto, err: err}
 	}
 }
 
@@ -158,6 +162,9 @@ func (m *Model) applyDaemonProbe(msg daemonProbeMsg) (tea.Model, tea.Cmd) {
 	}
 	m.storeDaemon(d)
 	m.applyRemoteFilter()
+	// The probe carries the remote's version, so this is where a remote running
+	// behind the client is noticed.
+	autoUpdate := m.maybeAutoUpdateServe(d)
 	if sel, ok := m.selectedDaemon(); ok && sel.RemoteHost == d.RemoteHost && sel.Kind == d.Kind {
 		m.tmuxOutput = d.Logs
 		if d.Logs == "" {
@@ -165,10 +172,22 @@ func (m *Model) applyDaemonProbe(msg daemonProbeMsg) (tea.Model, tea.Cmd) {
 		}
 		m.viewport.SetContent(m.tmuxOutput)
 	}
-	return m, nil
+	return m, autoUpdate
 }
 
 func (m *Model) applyServiceOp(msg serviceOpMsg) (tea.Model, tea.Cmd) {
+	if msg.auto {
+		// Nobody asked for this, so it must leave the view exactly as it was:
+		// no state change, and a failure reported rather than thrown up.
+		if msg.err != nil {
+			m.logPersistent("auto-%s %s on %s failed: %v", msg.op, msg.kind, msg.host, msg.err)
+			return m, m.showToast("⚠️  could not update the agent API on "+msg.host, true, 8*time.Second)
+		}
+		return m, tea.Batch(
+			m.showToast("✓  agent API updated on "+msg.host, false, 5*time.Second),
+			probeRemoteServiceCmd(m.cfg, msg.host, msg.kind),
+		)
+	}
 	m.state = m.loadingNext
 	if msg.err != nil {
 		m.lastError = fmt.Sprintf("%s %s on %s: %v", msg.op, msg.kind, msg.host, msg.err)
@@ -198,5 +217,5 @@ func (m *Model) runSelectedServiceOp(op, loading string) (tea.Model, tea.Cmd, bo
 		m.loadingNext = viewStateMain
 	}
 	m.state = viewStateLoading
-	return m, remoteServiceOpCmd(m.cfg, d.RemoteHost, kind, op), true
+	return m, remoteServiceOpCmd(m.cfg, d.RemoteHost, kind, op, false), true
 }

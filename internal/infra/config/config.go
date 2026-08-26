@@ -182,6 +182,20 @@ func PersonalReposEnabled(g *GitConfig) bool {
 
 type FeatureFlags struct {
 	InputPromptDetection bool `yaml:"input_prompt_detection,omitempty"`
+	// AutoUpdateRemotes keeps each remote's agent API on the client's release.
+	// A pointer so an absent key means enabled: almost every runtime fix lives
+	// in serve rather than the TUI, and a remote silently left behind loses them
+	// while looking healthy.
+	AutoUpdateRemotes *bool `yaml:"auto_update_remotes,omitempty"`
+}
+
+// AutoUpdateRemotes reports whether the client should update remotes that are
+// running an older release than itself. Defaults to on.
+func (c *Config) AutoUpdateRemotes() bool {
+	if c == nil || c.Features.AutoUpdateRemotes == nil {
+		return true
+	}
+	return *c.Features.AutoUpdateRemotes
 }
 
 type JiraConfig struct {

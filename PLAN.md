@@ -233,6 +233,43 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### Remotes running behind the client update themselves ✅
+Almost every fix in this stretch of work lives in `aiman serve` and the holder
+rather than in the TUI, so a remote left on an older release quietly loses them
+while still looking perfectly healthy — old renderer, old prompt delivery, no
+activity publishing. Noticing that was left to the user, even though the probe
+already reports the remote's version and the client knows its own.
+
+A serve that is running an older release than the client is now updated
+automatically. Deliberately narrow, because this restarts someone's daemon
+without being asked:
+
+- serve only. The trigger daemon runs autonomous work on a schedule and
+  restarting it unasked could interrupt a run.
+- running only. A stopped or absent serve is an install decision.
+- strictly older only, and only when both sides report a real release number: a
+  remote that is *ahead* is never downgraded to match an older laptop, and a
+  locally-built client has no release to offer. "dev" and "missing" are never
+  read as v0.0.0.
+- once per remote per thirty minutes, so an update that keeps failing does not
+  retry on every probe.
+- `features.auto_update_remotes: false` opts out; absent means enabled.
+
+An automatic operation also had to stop behaving like a keypress: `applyServiceOp`
+set `m.state = m.loadingNext` and raised the error screen on failure, which for an
+unattended update would have moved the user's view out from under them. Automatic
+ops now leave the view alone and report by toast.
+
+Safe to do now for a reason: PTY holders survive a serve restart since the
+KillMode fix, so updating serve no longer takes running agents down with it.
+
+### The AI section is gone from the session panel ✅
+The panel's "AI" block — state badge, topic, summary, action items, and a "press
+i" hint — is removed. `I` (summarise) now reports its result as a toast, which is
+how `i` (classify) already answered, so the capability survives without a
+permanent section. The stored summary map went with the panel: nothing else read
+it.
+
 ### Session creation runs on the remote, so the client can walk away ✅
 `aiman serve` already built a full FlowManager over a local executor, so its
 `session.create` did the worktree, the agent launch and the prompt on the remote
