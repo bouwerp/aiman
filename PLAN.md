@@ -131,6 +131,26 @@ secret is invisible by construction.
 Note for anyone who entered a token before this fix: the stored value is
 truncated and cannot be recovered, so it has to be re-entered.
 
+### The per-session pty choice was discarded twice ✅
+The run-target picker's `b` toggle looked like it had stopped existing. It was
+still drawn, and still flipped the value — but two separate places threw the
+choice away before it could reach session creation, so every session came out
+tmux:
+
+- `resetSessionCfg` rebuilt the config for each mode-picker branch keeping only
+  the host, so picking *any* mode dropped the backend.
+- `createSession` then assigned `remote.SessionBackend` unconditionally,
+  overwriting whatever survived with the remote's default.
+
+A remote's `session_backend` is a default, not an override: `resolveSessionBackend`
+now applies it only when nothing was chosen, and `resetSessionCfg` carries the
+backend alongside the host. Choosing pty on a tmux-default remote is the only
+use for that toggle, and it was exactly the case that failed.
+
+The summary screen now shows `Backend:` as well. Nothing on the confirmation
+screen previously named it, which is why a toggle that did nothing was
+invisible right up to session creation.
+
 ### serve listed nothing, because its database was never the index ✅
 With the socket reachable, `aiman session list` still returned an empty list
 while six sessions were running, and `AIMAN_SESSION_NAME`/`AIMAN_GROUP` were

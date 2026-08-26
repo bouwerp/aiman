@@ -1934,7 +1934,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 		sessionCfg.RemoteHost = remote.Host
 		// Opt-in PTY backend: remotes configured with session_backend: pty hand
 		// their agents to the serve daemon's built-in runtime instead of tmux.
-		sessionCfg.SessionBackend = remote.SessionBackend
+		sessionCfg.SessionBackend = resolveSessionBackend(sessionCfg.SessionBackend, remote.SessionBackend)
 	}
 
 	return func() tea.Msg {
@@ -5669,10 +5669,29 @@ func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) { 
 	return m, nil
 }
 
+// resolveSessionBackend picks the terminal runtime for a session being created.
+//
+// A remote's session_backend is a *default*: it applies only when nothing was
+// chosen for this session. Overwriting the chosen value with it made the
+// run-target picker's "b" toggle inert — and that toggle is the only way to run
+// pty on a remote that defaults to tmux.
+func resolveSessionBackend(chosen, remoteDefault string) string {
+	if chosen != "" {
+		return chosen
+	}
+	return remoteDefault
+}
+
 // resetSessionCfg starts a fresh session config for the mode picker's branches while
-// keeping the run target chosen on the previous screen.
+// keeping what was chosen on the run-target screen before it.
+//
+// That means the backend as well as the host: it used to carry only the host,
+// so picking any mode threw away a "b" toggle from the previous screen and
+// every session came out tmux regardless. The toggle was still drawn, which
+// made it look like the pty option had quietly stopped existing.
 func (m *Model) resetSessionCfg(cfg domain.SessionConfig) {
 	cfg.RemoteHost = m.selectedRemote.Host
+	cfg.SessionBackend = m.sessionCfg.SessionBackend
 	m.sessionCfg = cfg
 }
 
@@ -6079,6 +6098,7 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
 		}
 		m.summary.SetAgent(m.sessionCfg.Agent)
+		m.summary.SetBackend(m.sessionCfg.SessionBackend)
 		m.summary.SetSize(m.width, m.height)
 		// Populate AWS override fields when the remote has SyncCredentials enabled.
 		// AllDelegations covers both the singular aws_delegation and the plural

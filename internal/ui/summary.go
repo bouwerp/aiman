@@ -16,6 +16,7 @@ type SummaryModel struct {
 	repo          domain.Repo
 	directory     string
 	agent         *domain.Agent
+	backend       string // session terminal runtime; empty means the tmux default
 	promptFree    bool
 	adHoc         bool
 	confirmed     bool
@@ -101,6 +102,11 @@ func (m *SummaryModel) SetOpenRouterKey(key string) {
 
 func (m SummaryModel) Init() tea.Cmd {
 	return nil
+}
+
+// SetBackend records which terminal runtime will host the session.
+func (m *SummaryModel) SetBackend(backend string) {
+	m.backend = backend
 }
 
 func (m *SummaryModel) SetAgent(agent *domain.Agent) {
@@ -254,6 +260,15 @@ func (m SummaryModel) viewString() string {
 	} else {
 		b.WriteString(fmt.Sprintf("%-15s %s\n", "Agent:", failStyle.Render("None selected")))
 	}
+
+	// Backend. Shown always, not just for pty: the run-target toggle silently
+	// had no effect for a while, and nothing on the confirmation screen would
+	// have revealed it.
+	backend := m.backend
+	if backend == "" {
+		backend = domain.BackendTmux
+	}
+	b.WriteString(fmt.Sprintf("%-15s %s\n", "Backend:", backend))
 
 	if !m.adHoc {
 		// Prompt Free

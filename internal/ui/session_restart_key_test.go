@@ -177,3 +177,73 @@ func TestItemDescriptionMarksPTYBackend(t *testing.T) {
 		t.Errorf("tmux session must not be marked as pty, got %q", got)
 	}
 }
+
+// The run-target picker's "b" toggle is the only way to run a pty session on a
+// remote that defaults to tmux, and its choice has to survive the rest of the
+// wizard. Two separate places used to discard it — resetSessionCfg rebuilt the
+// config keeping only the host, and createSession then overwrote whatever was
+// left with the remote's default — so the toggle was drawn but did nothing and
+// every session came out tmux.
+func TestSessionBackendChoiceSurvivesTheModePicker(t *testing.T) {
+	cfg := &config.Config{Remotes: []config.Remote{{Host: "devbox", User: "code"}}}
+	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.selectedRemote = cfg.Remotes[0]
+	m.sessionCfg.SessionBackend = domain.BackendPTY
+
+	// Any mode-picker branch rebuilds the config; the backend must come along.
+	m.resetSessionCfg(domain.SessionConfig{})
+
+	if m.sessionCfg.SessionBackend != domain.BackendPTY {
+		t.Fatalf("backend = %q, want pty to survive the mode picker", m.sessionCfg.SessionBackend)
+	}
+	if m.sessionCfg.RemoteHost != "devbox" {
+		t.Fatalf("host = %q, want the run target kept too", m.sessionCfg.RemoteHost)
+	}
+}
+
+// A remote's session_backend is a default, not an override: it must not clobber
+// a per-session choice already made in the picker.
+func TestRemoteBackendDefaultDoesNotOverridePerSessionChoice(t *testing.T) {
+	tmuxRemote := config.Remote{Host: "devbox", User: "code"} // no session_backend
+	cfg := &config.Config{Remotes: []config.Remote{tmuxRemote}}
+	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.selectedRemote = tmuxRemote
+
+	// Chosen in the picker, against a remote that defaults to tmux.
+	m.sessionCfg.SessionBackend = domain.BackendPTY
+	m.summary.SetBackend(m.sessionCfg.SessionBackend)
+
+	if got := m.summary.viewString(); !strings.Contains(got, "pty") {
+		t.Errorf("the summary must show the chosen backend so it is verifiable before creating")
+	}
+
+	// And the reverse: an unset per-session backend inherits the remote's.
+	ptyRemote := config.Remote{Host: "ptybox", User: "code", SessionBackend: domain.BackendPTY}
+	m2 := NewModel(&config.Config{Remotes: []config.Remote{ptyRemote}}, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m2.selectedRemote = ptyRemote
+	m2.resetSessionCfg(domain.SessionConfig{})
+	if m2.sessionCfg.SessionBackend != "" {
+		t.Fatalf("an unchosen backend should stay empty until creation applies the remote default, got %q",
+			m2.sessionCfg.SessionBackend)
+	}
+}
+
+// A remote's session_backend is a default, not an override.
+func TestResolveSessionBackend(t *testing.T) {
+	cases := []struct{ chosen, remoteDefault, want string }{
+		// The picker's choice wins, including choosing pty on a tmux remote —
+		// the case that was silently discarded.
+		{domain.BackendPTY, "", domain.BackendPTY},
+		{domain.BackendPTY, domain.BackendTmux, domain.BackendPTY},
+		// And explicitly choosing tmux on a pty remote must stick too.
+		{domain.BackendTmux, domain.BackendPTY, domain.BackendTmux},
+		// With no choice made, the remote's default applies.
+		{"", domain.BackendPTY, domain.BackendPTY},
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		if got := resolveSessionBackend(c.chosen, c.remoteDefault); got != c.want {
+			t.Errorf("resolveSessionBackend(%q, %q) = %q, want %q", c.chosen, c.remoteDefault, got, c.want)
+		}
+	}
+}
