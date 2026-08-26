@@ -233,6 +233,23 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### Previews wrapped by exactly one column ✅
+Every preview line wrapped a single character onto the next row, doubling the
+height of every line of the agent's box.
+
+lipgloss counts a style's border and padding *inside* its `Width`, so the main
+panel's content area is `Width` minus its one-column left border and two columns
+of left padding. The viewport was sized to `mainWidth - 2` — the padding only,
+ignoring the border — leaving it one column too wide for the space it was drawn
+into, so lipgloss wrapped every line by one character.
+
+The off-by-one predates the fit, but was invisible while previews were a slice of
+a much wider screen: it took lines that run the full width of the panel to make
+every row wrap. Both the layout and the viewport size now derive from
+`mainContentWidth()` so they cannot drift, and `mainPanelFrame` is pinned by a
+test against the style it describes — a line of exactly the content width must
+stay on one row, and one column more must wrap.
+
 ### The PTY holder no longer opens the database, and writers wait ✅
 CI caught a real startup failure hiding behind a flaky test: a holder failing
 with `failed to initialize database: database is locked (SQLITE_BUSY)`, which

@@ -2623,7 +2623,7 @@ func (m *Model) SetSize(width, height int) {
 	m.remotes.height = height
 
 	// Viewport takes up the bottom part of the main panel
-	m.viewport.SetWidth(width - (width / 3) - h - 4)
+	m.viewport.SetWidth(m.mainContentWidth())
 	// Compact stacked session/git strip (~6–9 lines) + thin preview chrome; rest for tmux/terminal.
 	const compactMainUpperBudget = 12
 	m.viewport.SetHeight(max(6, mainHeight-compactMainUpperBudget))
@@ -6803,11 +6803,32 @@ func prReviewForeground(status string) color.Color {
 	}
 }
 
+// mainPanelFrame is what the main panel's style spends on chrome: a one-column
+// left border plus two columns of left padding (see renderMainView).
+//
+// lipgloss counts a style's border and padding *inside* its Width, so the space
+// left for content is Width minus this. Sizing the viewport to Width minus the
+// padding alone left it one column too wide, and lipgloss wrapped every line by
+// exactly one character — which, once previews were fitted to the panel and
+// every line ran the full width, meant every line of the agent's box wrapped.
+const mainPanelFrame = 3
+
+// mainPanelWidth is the total width of the main panel, chrome included.
+func (m *Model) mainPanelWidth() int {
+	h, _ := docStyle.GetFrameSize()
+	return m.width - (m.width / 3) - h - 2
+}
+
+// mainContentWidth is how much of the main panel is actually available to draw
+// in. Both the layout and the viewport size derive from this so they cannot
+// drift apart.
+func (m *Model) mainContentWidth() int {
+	return max(1, m.mainPanelWidth()-mainPanelFrame)
+}
+
 func (m *Model) renderMainView() string {
 	// Split View
-	h, _ := docStyle.GetFrameSize()
-	sidebarWidth := m.width / 3
-	mainWidth := m.width - sidebarWidth - h - 2
+	mainWidth := m.mainPanelWidth()
 
 	// Sidebar
 	var sidebar string
@@ -6898,7 +6919,7 @@ func (m *Model) renderSessionPanel(mainWidth int) string {
 	var mainContent string
 	if it, ok := m.selectedSessionItem(); ok {
 		s := it.session
-		contentW := mainWidth - 4
+		contentW := mainWidth - mainPanelFrame
 		if contentW < 20 {
 			contentW = 20
 		}
@@ -7109,7 +7130,7 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 	var mainContent string
 	if sel := m.daemonList.SelectedItem(); sel != nil {
 		d := sel.(daemonItem).daemon
-		contentW := mainWidth - 4
+		contentW := mainWidth - mainPanelFrame
 		if contentW < 20 {
 			contentW = 20
 		}
