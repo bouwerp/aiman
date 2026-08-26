@@ -15,8 +15,15 @@ import (
 )
 
 // spawnReadyTimeout bounds how long Spawn waits for a holder to bind its
-// socket. See the comment at its use for why this is safe to make generous.
-const spawnReadyTimeout = 30 * time.Second
+// socket. See the comment at its use for why waiting is safe.
+//
+// It must stay comfortably below the agent API client's 30s read deadline
+// (internal/server/client.go): a pty.create request travels through that
+// client, so a server-side wait as long as the client's own deadline means the
+// caller gives up at the same instant and reports a bare "i/o timeout" instead
+// of the real answer. Generous enough for a cold spawn on a loaded machine,
+// short enough to always answer first.
+const spawnReadyTimeout = 15 * time.Second
 
 // Spawn launches a detached holder process for the spec. The holder is a child
 // of the caller in name only: Setsid detaches it into its own session, so it

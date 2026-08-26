@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A holder that cannot start must record why in the exit file.
@@ -59,5 +60,24 @@ func TestSocketReadyRequiresBothMetaAndSocket(t *testing.T) {
 	}
 	if !socketReady(dir) {
 		t.Fatal("meta plus socket must be ready")
+	}
+}
+
+// The spawn wait must answer before the agent API client gives up.
+//
+// A pty.create request reaches Spawn through internal/server's client, which
+// sets a 30s read deadline. Setting this wait to 30s too meant that on a slow
+// runner the client timed out at the exact moment the server was still
+// waiting, surfacing "i/o timeout" instead of the real result.
+func TestSpawnReadyTimeoutLeavesHeadroomForTheAPIClient(t *testing.T) {
+	const apiClientDeadline = 30 * time.Second
+	if spawnReadyTimeout >= apiClientDeadline {
+		t.Fatalf("spawnReadyTimeout (%s) must be below the API client deadline (%s)",
+			spawnReadyTimeout, apiClientDeadline)
+	}
+	// And comfortably below, not merely under by a hair.
+	if spawnReadyTimeout > apiClientDeadline/2 {
+		t.Errorf("spawnReadyTimeout (%s) leaves too little headroom under %s",
+			spawnReadyTimeout, apiClientDeadline)
 	}
 }
