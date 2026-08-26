@@ -72,6 +72,12 @@ type Manager struct {
 	mu    sync.Mutex
 	conns map[string]net.Conn // cached input connections per session id
 
+	// Long-lived terminal emulators, one per session being looked at, so a
+	// capture costs the output since the last one rather than the session's
+	// entire history (see screen.go).
+	screenMu sync.Mutex
+	screens  map[string]*screen
+
 	subs sync.WaitGroup
 }
 
@@ -262,13 +268,23 @@ func (m *Manager) Capture(id string, maxBytes int) ([]byte, error) {
 //
 // Callers that display or classify a session want this, not Capture: the raw
 // spool is a byte stream full of cursor addressing and redraws, not a screen.
+//
+// The emulator is kept between calls and fed only the output since the last one,
+// so this costs what the session has produced recently rather than everything it
+// has ever produced.
 func (m *Manager) CaptureScreen(id string) (string, error) {
 	info, err := m.Get(id)
 	if err != nil {
 		return "", err
 	}
 	cols, rows := parseSize(info.Size)
-	return RenderScreen(ptyhold.ReadSpool(m.root, id, 0), cols, rows), nil
+	if cols <= 0 {
+		cols = defaultCols
+	}
+	if rows <= 0 {
+		rows = defaultRows
+	}
+	return m.screenFor(id).capture(m.root, id, cols, rows), nil
 }
 
 // Kill terminates a session via the kill marker and waits for the holder to
@@ -313,6 +329,7 @@ func (m *Manager) Forget(id string) error {
 			return ErrNotFound
 		}
 	}
+	m.dropScreen(id)
 	return ptyhold.Cleanup(m.root, id)
 }
 
@@ -371,6 +388,9 @@ func (m *Manager) CloseAll() {
 	for _, c := range conns {
 		_ = c.Close()
 	}
+	m.screenMu.Lock()
+	m.screens = nil
+	m.screenMu.Unlock()
 	m.subs.Wait()
 }
 

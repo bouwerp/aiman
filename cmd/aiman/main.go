@@ -57,14 +57,24 @@ func run() error {
 	}
 	os.Args = append([]string{os.Args[0]}, parsed.Rest...)
 
-	// `pty hold` is the detached holder process. It is given an explicit --root
-	// and --id and needs nothing else, so it is dispatched before the setup
-	// below — which it would otherwise pay for on every single session start,
-	// and which can fail it outright: opening the shared SQLite file while
-	// serve or the dashboard holds it returns "database is locked", and a
-	// holder that cannot start is a session that cannot start.
-	if len(parsed.Rest) >= 2 && parsed.Rest[0] == "pty" && parsed.Rest[1] == "hold" {
-		return runPTYHold(parsed.Rest[2:])
+	// `pty` and `session` talk only to the agent API socket (and `pty hold` not
+	// even to that — it is the detached holder, handed an explicit --root and
+	// --id). Everything below exists for the TUI: loading config, opening the
+	// SQLite file and running its migrations, building the JIRA, git, SSH and
+	// flow plumbing. None of it is reachable from these commands, and paying for
+	// it costs about 48 ms per call — which the dashboard makes twice a second
+	// while previewing a PTY session.
+	//
+	// It is also a correctness matter for the holder: opening the shared SQLite
+	// file while serve or the dashboard holds it returns "database is locked",
+	// and a holder that cannot start is a session that cannot start.
+	if len(parsed.Rest) > 0 {
+		switch parsed.Rest[0] {
+		case "pty":
+			return runPTY(parsed.Rest[1:])
+		case "session":
+			return runSession(parsed.Rest[1:])
+		}
 	}
 
 	// 1. Ensure config directory exists
@@ -171,10 +181,8 @@ func run() error {
 			return runClearAWSProfiles(db, os.Args[2:])
 		case "serve":
 			return runServe()
-		case "session":
-			return runSession(os.Args[2:])
-		case "pty":
-			return runPTY(os.Args[2:])
+		// `session` and `pty` are dispatched earlier, before the config and
+		// database setup they do not need.
 		case "context":
 			return runContext(os.Args[2:])
 		case "phone":

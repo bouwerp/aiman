@@ -233,6 +233,43 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### PTY previews were slow because every capture replayed the whole session ✅
+Measured against a real remote: `aiman pty capture` on a session with a 6 MB
+spool took **~1390 ms**, against **~10 ms** for the tmux equivalent.
+
+`CaptureScreen` read the entire spool — both segments, so up to 16 MB — and
+replayed all of it through a fresh terminal emulator, on every call, while the
+dashboard polls twice a second. Cost is linear in the session's whole lifetime:
+~32 ms per MB locally, and ~1.3 s for 6 MB on the remote's slower CPU.
+
+The emulator is now kept per session and fed only the bytes that arrived since
+the last capture (`ptyhold.ReadSpoolFrom`, `ptyruntime/screen.go`). Verified
+against the real 6 MB spool: the incrementally-built screen is **identical** to a
+full replay, 30 successive captures cost 191 ms in total against 199 ms for one
+full replay, and a capture with no new output takes **132 µs**. Spool rotation is
+detected (the stream's total length drops below what was consumed) and rebuilds;
+a resize rebuilds too, since vt10x does not reflow the way the agent's own
+repaint will. Idle emulators are dropped after ten minutes.
+
+The other ~48 ms per call was the CLI: `pty` and `session` only talk to the
+agent API socket, but every invocation first loaded config, opened SQLite and ran
+its migrations, and built the JIRA, git, SSH and flow plumbing. Both are now
+dispatched before any of that. A test asserts the database file is never even
+created by them, with a companion test proving a normal command does create it.
+
+### The startup-check readout and remotes line are gone ✅
+The dashboard's bottom section ("Remotes: 1 configured" plus a three-row startup
+check list) was noise once the checks had passed. Removed, and the rows it
+reserved in the height budget now go to the panes. Nothing was lost: the remote
+filter it also reported is already on the session list's title, and the check
+results themselves are still kept — the AWS credentials screen is built from
+them.
+
+A new test renders the dashboard at several terminal sizes and asserts it fits.
+It immediately found that the help bar never truncated, so on a terminal narrower
+than ~190 columns it wrapped and pushed the layout past the bottom of the screen;
+it is now truncated to the available width.
+
 ### Prompts reached the input box but were never submitted (PTY) ✅
 The initial prompt was typed into the agent's input box and left there, so it had
 to be attached to and submitted by hand.

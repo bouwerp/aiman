@@ -29,14 +29,17 @@ func runPTY(args []string) error {
 		printPTYUsage(os.Stderr)
 		return errUsage
 	}
+	// The holder needs neither the socket nor a resolvable home: it is handed an
+	// explicit --root and --id.
+	if args[0] == "hold" {
+		return runPTYHold(args[1:])
+	}
 	sock, err := socketPath()
 	if err != nil {
 		return err
 	}
 
 	switch args[0] {
-	case "hold":
-		return runPTYHold(args[1:])
 	case "list":
 		return callAndPrint(sock, "pty.list", map[string]any{})
 	case "create":

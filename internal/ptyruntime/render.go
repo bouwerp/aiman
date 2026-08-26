@@ -35,14 +35,28 @@ func RenderScreen(spool []byte, cols, rows int) string {
 		rows = defaultRows
 	}
 
-	term := vt10x.New()
-	term.Resize(cols, rows)
+	term := newTerminal(cols, rows)
 	// Write takes the terminal's own lock, so it must not be called with the
 	// lock already held — doing so deadlocks on a non-reentrant mutex. Errors
 	// are immaterial: the emulator applies whatever it understands, and a
 	// malformed tail should still render everything before it.
 	_, _ = term.Write(spool)
+	return renderTerminal(term, cols, rows)
+}
 
+// newTerminal returns an emulator sized for a session.
+func newTerminal(cols, rows int) vt10x.Terminal {
+	term := vt10x.New()
+	term.Resize(cols, rows)
+	return term
+}
+
+// renderTerminal turns an emulator's current screen into text with colour.
+//
+// Separate from RenderScreen so a long-lived emulator can be rendered without
+// replaying its whole history: the runtime keeps one per session and feeds it
+// only the bytes that arrived since the last capture.
+func renderTerminal(term vt10x.Terminal, cols, rows int) string {
 	term.Lock()
 	defer term.Unlock()
 

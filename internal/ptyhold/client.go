@@ -149,6 +149,70 @@ func readIfExists(path string) []byte {
 	return b
 }
 
+// ReadSpoolFrom returns the bytes of the spool stream from offset onwards, plus
+// the stream's current total length. The stream is spool.old followed by spool,
+// and it only ever grows by appending — so a caller that remembers the total it
+// last saw can ask for just what arrived since.
+//
+// A total *smaller* than the offset means the stream was rotated (spool became
+// spool.old, discarding the previous spool.old) and the offset no longer refers
+// to the same bytes. Callers must treat that as "start again from zero": this
+// returns the whole stream in that case, so a caller that resets its offset gets
+// a correct answer either way.
+//
+// This exists because replaying the entire spool to render one screen costs
+// hundreds of milliseconds once a session has been busy for an hour — measured
+// at ~1.3s for a 6 MB spool on a real remote — and the dashboard asks twice a
+// second.
+func ReadSpoolFrom(root, id string, offset int64) ([]byte, int64) {
+	dir := Dir(root, id)
+	oldSize := fileSize(filepath.Join(dir, SpoolOld))
+	curSize := fileSize(filepath.Join(dir, SpoolFile))
+	total := oldSize + curSize
+
+	if offset < 0 || offset > total {
+		offset = 0 // rotated, truncated, or a bogus offset: hand back everything
+	}
+	if offset == total {
+		return nil, total
+	}
+
+	out := make([]byte, 0, total-offset)
+	if offset < oldSize {
+		out = append(out, readRange(filepath.Join(dir, SpoolOld), offset, oldSize-offset)...)
+		out = append(out, readRange(filepath.Join(dir, SpoolFile), 0, curSize)...)
+		return out, total
+	}
+	return readRange(filepath.Join(dir, SpoolFile), offset-oldSize, total-offset), total
+}
+
+func fileSize(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// readRange reads n bytes at off, tolerating a file that is shorter than the
+// stat said (the holder is appending to it concurrently).
+func readRange(path string, off, n int64) []byte {
+	if n <= 0 {
+		return nil
+	}
+	f, err := os.Open(path) //nolint:gosec // G304: path is built from the contract's own directory
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	read, err := f.ReadAt(buf, off)
+	if read <= 0 && err != nil {
+		return nil
+	}
+	return buf[:read]
+}
+
 // Dial connects to the live socket. Live output only — replay comes from
 // ReadSpool.
 func Dial(root, id string) (net.Conn, error) {

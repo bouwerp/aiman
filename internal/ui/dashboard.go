@@ -12,7 +12,6 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2607,14 +2606,12 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 	h, v := docStyle.GetFrameSize()
 
-	// Reserve a row per known check rather than per result received: results
-	// stream in after the dashboard opens, and sizing off the running count
-	// would resize the panes underneath the user three times on every launch.
-	checkRows := len(startupCheckNames)
-	if n := len(m.doctorResults); n > checkRows {
-		checkRows = n
-	}
-	mainHeight := height - v - checkRows - 10
+	// mainChrome is what the dashboard spends around the panes: the PR button
+	// row, the help bar, and the blank lines between them. The startup-check
+	// readout and the "Remotes: N configured" line used to sit here too; the
+	// rows they reserved now go to the panes, which is what the space is for.
+	const mainChrome = 7
+	mainHeight := height - v - mainChrome
 
 	m.list.SetSize(width/3-h, mainHeight) // Sidebar width
 	m.menu.SetSize(width-h, height-v)
@@ -6510,12 +6507,6 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// startupCheckNames are the doctor checks, in the order the footer lists them.
-// The footer reserves a row for each from the first paint, so results arriving
-// one at a time fill rows in place instead of growing the footer and shifting
-// the layout under the user.
-var startupCheckNames = []string{"JIRA", "Git/GitHub", "SSH"}
-
 // applyCheckResult records a doctor result, replacing any earlier result for the
 // same check so a re-run from the admin menu updates in place.
 func (m *Model) applyCheckResult(res usecase.CheckResult) {
@@ -6526,42 +6517,6 @@ func (m *Model) applyCheckResult(res usecase.CheckResult) {
 		}
 	}
 	m.doctorResults = append(m.doctorResults, res)
-}
-
-// renderStartupChecks draws one row per known check, showing those still in
-// flight as pending rather than omitting them.
-func (m *Model) renderStartupChecks() string {
-	byName := make(map[string]usecase.CheckResult, len(m.doctorResults))
-	for _, res := range m.doctorResults {
-		byName[res.Name] = res
-	}
-
-	var b strings.Builder
-	b.WriteString("Startup Checks:\n")
-	for _, name := range startupCheckNames {
-		res, done := byName[name]
-		if !done {
-			b.WriteString(fmt.Sprintf("%s %-10s: checking…\n", statusStyle.Render("…"), name))
-			continue
-		}
-		status := successStyle.Render("✓")
-		if !res.Passed {
-			status = failStyle.Render("✗")
-		}
-		b.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
-	}
-	// Anything reported under a name not in the fixed list still gets a row.
-	for _, res := range m.doctorResults {
-		if slices.Contains(startupCheckNames, res.Name) {
-			continue
-		}
-		status := successStyle.Render("✓")
-		if !res.Passed {
-			status = failStyle.Render("✗")
-		}
-		b.WriteString(fmt.Sprintf("%s %-10s: %s\n", status, res.Name, res.Message))
-	}
-	return b.String()
 }
 
 func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd) {
@@ -6860,16 +6815,6 @@ func (m *Model) renderMainView() string {
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainStyle.Render(mainContent))
 
-	// Footer (Checks & Active Remote)
-	doctorSection := m.renderStartupChecks()
-
-	remoteInfo := fmt.Sprintf("Remotes: %d configured", len(m.cfg.Remotes))
-	if m.remoteFilter != "" {
-		remoteInfo += " | Filter: " + activeStyle.Render(remoteNameForHost(m.cfg, m.remoteFilter))
-	}
-
-	footer := "\n" + remoteInfo + "\n\n" + doctorSection
-
 	helpText := "n: new • e: rename • g: group • enter: collapse • f: filter • c: scope • t: tunnels • s: resume • S: switch agent • y: copy • r: refresh • i: AI • ctrl+k: term • m: menu • q: quit"
 	if m.currentTab == tabDaemons {
 		helpText = "agent API: i install • s restart • c reload • u update • r probe • ctrl+k stop • tab: sessions • q: quit"
@@ -6882,7 +6827,11 @@ func (m *Model) renderMainView() string {
 		pad := contentWidth - lipgloss.Width(helpText) - lipgloss.Width(versionText)
 		bottomLine = helpText + strings.Repeat(" ", pad) + versionText
 	} else {
-		bottomLine = helpText + " | " + versionText
+		// The help line does not fit. Truncating keeps the bar one row; letting
+		// it run over wraps it and pushes the whole layout past the bottom of
+		// the terminal.
+		room := contentWidth - lipgloss.Width(versionText) - 1
+		bottomLine = ansi.Truncate(helpText, max(0, room), "…") + " " + versionText
 	}
 
 	helpBar := lipgloss.NewStyle().
@@ -6907,7 +6856,7 @@ func (m *Model) renderMainView() string {
 		}
 	}
 
-	body := content + "\n" + footer + prButtons + "\n" + helpBar
+	body := content + "\n" + prButtons + "\n" + helpBar
 	if banner := m.renderAWSCredExpiryBanner(); banner != "" {
 		body = banner + "\n" + body
 	}
