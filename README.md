@@ -62,7 +62,8 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 
 ### User Experience
 - **Interactive TUI**: Built with Bubble Tea for a modern terminal UI
-- **Real-time Previews**: Live pane capture in the dashboard, for either backend
+- **Real-time Previews**: Live pane capture in the dashboard, for either backend, in colour
+- **Previews fit the panel**: The previewed session is resized to the preview panel so the agent repaints its own UI at that width, instead of most of the screen sitting off to the right. See [Fitting the preview](#fitting-the-preview)
 - **VS Code Integration**: Open synced directories directly in VS Code (`v` key)
 - **Health Checks**: Built-in "Doctor" validates all integrations on startup
 - **Fuzzy Search**: Find issues, repos, and sessions quickly
@@ -216,7 +217,7 @@ aiman
 | `T` | **Take over** an autonomous session (convert it to interactive) |
 | `Ctrl+M` | Toggle mouse reporting — off lets the terminal do native text selection |
 | `[` / `]`, `shift+↑/↓`, `PgUp` / `PgDn` | Scroll the preview panel |
-| `←` / `→` | Pan the preview sideways. Remote sessions are usually wider than the panel; the header shows `←/→ pan (N of M cols)` when part of the screen is off to the right |
+| `←` / `→` | Pan the preview sideways when part of the screen is still off to the right; the header shows `←/→ pan (N of M cols)` |
 | `Ctrl+R` / `Ctrl+S` | Aliases for `s` (resume) and `a` (attach) |
 | `Ctrl+A` | **Archive Session** — AI-summarise and snapshot the session |
 | `Ctrl+Y` | **Recreate Mutagen Sync** for the selected session |
@@ -360,6 +361,7 @@ aiman pty attach <id>     # interactive; detach with ctrl+q, which leaves it run
                           #   (a PTY session has no tmux prefix, so ctrl+b d does
                           #    nothing — the attach banner reminds you of ctrl+q)
 aiman pty capture <id>    # read the pane without attaching
+aiman pty resize <id> --cols N --rows M
 aiman pty input <id> --data TEXT | --file PATH
 aiman pty create --id <id> --command CMD [--name N] [--dir D] [--env K=V]…
 aiman pty kill <id>
@@ -367,6 +369,31 @@ aiman pty forget <id>     # drop an exited session's directory
 ```
 
 `aiman pty hold` is the holder itself and is not meant to be run by hand.
+
+### Fitting the preview
+
+Terminal text cannot be scaled, so the only way to make a session fit the preview
+panel is to tell the session it is narrower and let the agent repaint its own UI at
+that width. Remote sessions are as wide as the terminal that last sized them — 273
+columns is typical — while the panel is a fraction of that, so otherwise most of the
+screen sits off to the right.
+
+The previewed session is therefore resized to the panel, automatically:
+
+- **Debounced.** Dragging a window edge changes the target size many times a second
+  and every change makes the remote agent repaint, so only the size it settles on is
+  applied.
+- **Never below 80x24.** Agent TUIs assume a classic terminal and start dropping
+  their own columns below that, so a smaller panel scrolls and pans instead.
+- **Attached tmux sessions are left alone.** Someone is watching, and shrinking the
+  window would resize their view out from under them. The check and the resize are a
+  single remote command, so nothing can attach in between.
+- **Attaching hands sizing back.** tmux windows are set to `window-size manual` to
+  hold the fitted size (tmux would otherwise refit to its smallest client), and the
+  attach path sets `window-size latest` so the terminal you attach with wins. A PTY
+  session needs no such restore: attaching sends its own size in the handshake.
+
+`aiman pty resize <id> --cols N --rows M` does the same thing by hand.
 
 The pane is rendered before it is shown: the spool is a raw byte stream of cursor
 addressing and redraws, so previews and activity detection replay it through a terminal
@@ -496,7 +523,7 @@ are thin clients over these; an agent can also speak the JSON directly.
 | Group | Methods |
 |---|---|
 | Sessions | `session.list`, `session.get`, `session.read`, `session.prompt`, `session.wait`, `session.create`, `session.rename`, `session.move` |
-| PTY runtime | `pty.list`, `pty.get`, `pty.create`, `pty.input`, `pty.capture`, `pty.kill`, `pty.forget` |
+| PTY runtime | `pty.list`, `pty.get`, `pty.create`, `pty.input`, `pty.capture`, `pty.resize`, `pty.kill`, `pty.forget` |
 | Shared context | `context.list`, `context.find`, `context.get`, `context.put`, `context.pack`, `context.stats` |
 
 Errors come back with a machine-readable `code` — `server_not_running`, `not_found`,

@@ -77,6 +77,95 @@ func CapturePTYPane(ctx context.Context, remote TerminalExecutor, id string, lin
 	return extractPTYText(out), nil
 }
 
+// Terminal size floors. A session narrower or shorter than a classic terminal
+// leaves agent TUIs unusable — they assume 80x24 and start dropping columns of
+// their own — so fitting a session to a small panel stops here and lets the
+// panel scroll instead.
+const (
+	MinTerminalCols = 80
+	MinTerminalRows = 24
+)
+
+// ClampTerminalSize applies the floors, reporting whether the request was
+// usable at all.
+func ClampTerminalSize(cols, rows int) (int, int, bool) {
+	if cols <= 0 || rows <= 0 {
+		return 0, 0, false
+	}
+	return max(cols, MinTerminalCols), max(rows, MinTerminalRows), true
+}
+
+// fitMarker prefixes the outcome of a tmux fit so the caller can tell a resize
+// that happened from one that was deliberately declined.
+const fitMarker = "AIMAN_FIT="
+
+// ResizeSessionTerminal re-sizes whichever backend hosts the session, so the
+// agent repaints its UI at the given width instead of at whatever size the
+// terminal that last attached happened to be. It reports whether the resize was
+// actually applied.
+//
+// tmux normally fits a window to its smallest attached client and would undo
+// this on the next attach, so the window is switched to manual sizing; the
+// attach path sets it back to `latest` to hand control to the attaching client
+// (see ssh.Manager.AttachTmuxSession). A PTY session needs no such restore:
+// attaching sends the client's own size as part of the handshake.
+//
+// A tmux session with a client attached is left alone — someone is watching it,
+// and shrinking the window would resize their view out from under them. The
+// check and the resize are one remote command so nothing can attach in between,
+// and so this costs a single round trip.
+func ResizeSessionTerminal(ctx context.Context, remote TerminalExecutor, s domain.Session, cols, rows int) (bool, error) {
+	cols, rows, ok := ClampTerminalSize(cols, rows)
+	if !ok {
+		return false, fmt.Errorf("resize: cols and rows must both be positive")
+	}
+	if s.IsPTY() {
+		if err := ResizePTYSession(ctx, remote, terminalID(s), cols, rows); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if s.TmuxSession == "" {
+		return false, fmt.Errorf("resize: session has no tmux session name")
+	}
+	// window-size is set every time: an attach resets it to `latest`, and
+	// resize-window against an automatically sized window is silently undone.
+	out, err := remote.Execute(ctx, fmt.Sprintf(
+		`if [ "$(tmux display-message -p -t %[1]q '#{session_attached}' 2>/dev/null || echo 0)" != "0" ]; then `+
+			`echo %[2]sattached; `+
+			`else tmux set-option -t %[1]q window-size manual 2>/dev/null; `+
+			`tmux resize-window -t %[1]q -x %[3]d -y %[4]d 2>/dev/null && echo %[2]sapplied || echo %[2]sfailed; fi`,
+		s.TmuxSession, fitMarker, cols, rows))
+	if err != nil {
+		return false, err
+	}
+	return ParseFitOutcome(out)
+}
+
+// ParseFitOutcome reads the marker emitted by the tmux fit command.
+func ParseFitOutcome(out string) (bool, error) {
+	switch {
+	case strings.Contains(out, fitMarker+"applied"):
+		return true, nil
+	case strings.Contains(out, fitMarker+"attached"):
+		return false, nil // a client is watching; deliberately left alone
+	case strings.Contains(out, fitMarker+"failed"):
+		return false, fmt.Errorf("resize: tmux declined the resize")
+	default:
+		return false, fmt.Errorf("resize: unexpected output %q", strings.TrimSpace(out))
+	}
+}
+
+// ResizePTYSession sets a remote PTY session's window size.
+func ResizePTYSession(ctx context.Context, remote TerminalExecutor, id string, cols, rows int) error {
+	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
+		"aiman pty resize %q --cols %d --rows %d", id, cols, rows))
+	if err != nil {
+		return fmt.Errorf("pty resize: %s: %w", strings.TrimSpace(out), err)
+	}
+	return nil
+}
+
 // SendPTYFile types the contents of a remote file into the session followed by
 // Enter — the PTY equivalent of tmux send-keys "$(cat file)" + Enter.
 func SendPTYFile(ctx context.Context, remote TerminalExecutor, id, remotePath string) error {

@@ -233,6 +233,43 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### The previewed session is fitted to the preview panel ✅
+Terminal text cannot be scaled, so the only way to make a session fit the panel
+is to tell it that it is narrower and let the agent repaint its own UI at that
+width. Sessions are as wide as the terminal that last sized them (273 columns on
+the remote this came from) against a panel of 128–181, so most of the screen sat
+off to the right.
+
+Resizing had been reachable only from *inside* `pty.attach`, so there was no way
+to size a session for a viewer that is not attached. Added `pty.resize` and
+`aiman pty resize`, plus `usecase.ResizeSessionTerminal` dispatching per
+backend. The previewed session is now fitted automatically:
+
+- Debounced, because a window drag changes the target many times a second and
+  each change repaints the remote agent. The timer is armed at most once: the
+  poll ticker runs faster than the debounce, so re-arming on every tick would
+  cancel the pending timer before it ever fired — instead the pending target is
+  updated in place and the armed timer applies whatever the latest value is.
+- Floored at 80x24. Agent TUIs assume a classic terminal and start dropping
+  their own columns below that, so a smaller panel scrolls and pans instead.
+- Attached tmux sessions are left alone — someone is watching them. The check
+  and the resize are one remote command, so nothing can attach in between, and
+  a decline is reported as "not applied" rather than as an error, which backs
+  off for 30s instead of retrying on every poll.
+- Attach hands sizing back: tmux windows are held at `window-size manual` (tmux
+  would otherwise refit to its smallest client) and the attach path restores
+  `window-size latest`. PTY needs no restore — attach sends its own size.
+- Fit messages are handled in the global part of `Update`, since the debounce
+  can land while the user is in a menu; a dropped tick would leave the timer
+  marked armed forever and no session would ever be fitted again.
+
+Verified against real tmux on a remote, under a separate login so no live
+session was touched: a detached 200x50 window reported `AIMAN_FIT=applied` and
+became 100x30 with `window-size manual`; with a client attached the same command
+reported `AIMAN_FIT=attached` and left it at 200x50. The PTY path is covered by
+a server test that drives a real holder and reads the size back through
+`pty.get`.
+
 ### Previews smeared their colours; PTY previews had none ✅
 Three separate causes behind "the previews all look a bit weird, and pty
 sessions are still not color", found by capturing real panes off a live remote

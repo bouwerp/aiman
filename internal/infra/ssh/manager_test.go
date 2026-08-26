@@ -52,3 +52,18 @@ func TestIsTmuxNoServerError(t *testing.T) {
 		}
 	}
 }
+
+// Fitting a session to the dashboard's preview panel switches its tmux window
+// to manual sizing. Attaching has to hand that control back, or the window would
+// stay at the panel's width for a full-screen client and tmux would never fit it
+// to the terminal being attached.
+func TestTmuxAttachRemoteCommand_RestoresAutomaticSizing(t *testing.T) {
+	cmd := tmuxAttachRemoteCommand("feature-x")
+	if !strings.Contains(cmd, `tmux set-option -t "feature-x" window-size latest`) {
+		t.Fatalf("attach must restore automatic window sizing, got %q", cmd)
+	}
+	// It has to happen before the attach, since exec replaces the shell.
+	if strings.Index(cmd, "window-size latest") > strings.Index(cmd, "exec tmux attach") {
+		t.Fatalf("window-size must be restored before exec, got %q", cmd)
+	}
+}

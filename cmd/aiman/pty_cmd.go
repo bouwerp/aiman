@@ -45,7 +45,7 @@ func runPTY(args []string) error {
 			return errUsage
 		}
 		return runPTYAttach(sock, args[1])
-	case "capture", "get", "kill", "forget", "input":
+	case "capture", "get", "kill", "forget", "input", "resize":
 		if len(args) < 2 {
 			writeCLIError(server.CodeInvalidParams, "pty "+args[0]+" requires a session id")
 			return errUsage
@@ -55,6 +55,13 @@ func runPTY(args []string) error {
 		method := "pty." + args[0]
 		params := map[string]any{"id": id}
 		switch args[0] {
+		case "resize":
+			cols, rows := atoi(flags["cols"]), atoi(flags["rows"])
+			if cols <= 0 || rows <= 0 {
+				writeCLIError(server.CodeInvalidParams, "pty resize requires --cols and --rows")
+				return errUsage
+			}
+			params["cols"], params["rows"] = cols, rows
 		case "capture":
 			if n := flags["lines"]; n != "" {
 				params["lines"] = atoi(n)
@@ -226,6 +233,7 @@ func printPTYUsage(w io.Writer) {
   aiman pty list
   aiman pty create --id ID --command "claude" [--dir DIR] [--env K=V,K2=V2] [--cols N --rows M]
   aiman pty get|capture|kill|forget ID     (capture: --lines N or --max-bytes N)
+  aiman pty resize ID --cols N --rows M
   aiman pty input ID --data TEXT
   aiman pty attach ID                      (interactive; detach with ctrl+q)
 

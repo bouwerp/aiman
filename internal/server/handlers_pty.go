@@ -136,6 +136,35 @@ func (s *Server) handlePTYForget(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "pty_forget", "forgotten": true}}
 }
 
+// handlePTYResize sets a session's window size outside an attach stream.
+//
+// Resizing was previously reachable only from inside pty.attach, which left no
+// way to fit a session to a viewer that is not attached — the dashboard shows a
+// preview panel far narrower than the terminal that last sized the session, so
+// without this the agent renders wider than anything can display.
+func (s *Server) handlePTYResize(_ context.Context, req Request) Response {
+	id, fail, ok := s.resolvePTYID(req)
+	if !ok {
+		return fail
+	}
+	var params struct {
+		Cols int `json:"cols"`
+		Rows int `json:"rows"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return errResp(req.ID, CodeInvalidParams, "invalid params")
+	}
+	if params.Cols <= 0 || params.Rows <= 0 {
+		return errResp(req.ID, CodeInvalidParams, "cols and rows must both be positive")
+	}
+	if err := s.pty.Resize(id, params.Cols, params.Rows); err != nil {
+		return s.ptyErrResp(req.ID, err)
+	}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type": "pty_resize", "id": id, "cols": params.Cols, "rows": params.Rows,
+	}}
+}
+
 func (s *Server) ptyErrResp(id string, err error) Response {
 	if errors.Is(err, ptyruntime.ErrNotFound) {
 		return errResp(id, CodeNotFound, err.Error())

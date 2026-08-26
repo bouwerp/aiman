@@ -486,9 +486,14 @@ func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (stri
 }
 
 func tmuxAttachRemoteCommand(sessionName string) string {
+	// window-size is set back to `latest` because fitting a session to the
+	// dashboard's preview panel switches it to manual sizing. Without this the
+	// window would stay at the panel's width for a full-screen client too, and
+	// tmux would never fit it to the terminal being attached.
 	return remotePathPreamble + fmt.Sprintf(
-		"tmux set-option -t %q mouse on >/dev/null 2>&1 || tmux set-option -g mouse on >/dev/null 2>&1; exec tmux attach -t %q",
-		sessionName, sessionName,
+		"tmux set-option -t %q mouse on >/dev/null 2>&1 || tmux set-option -g mouse on >/dev/null 2>&1; "+
+			"tmux set-option -t %q window-size latest >/dev/null 2>&1; exec tmux attach -t %q",
+		sessionName, sessionName, sessionName,
 	)
 }
 

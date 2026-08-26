@@ -145,6 +145,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handlePTYInput(ctx, req)
 	case "pty.capture":
 		return s.handlePTYCapture(ctx, req)
+	case "pty.resize":
+		return s.handlePTYResize(ctx, req)
 	case "pty.kill":
 		return s.handlePTYKill(ctx, req)
 	case "pty.forget":

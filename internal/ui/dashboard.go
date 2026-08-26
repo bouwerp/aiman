@@ -386,7 +386,13 @@ type Model struct {
 	tmuxOutput           string
 	// previewCols is the widest line in the current preview. Remote sessions are
 	// routinely wider than the panel, so this drives the pan hint.
-	previewCols   int
+	previewCols int
+	// Auto-fitting the previewed session to the panel (see preview_fit.go).
+	fitApplied    map[string]string    // session ID -> size known to be in place
+	fitBackoff    map[string]time.Time // session ID -> do not retry before
+	fitPending    *previewFit
+	fitArmed      bool
+	fitGen        int
 	activeSession string
 	termCloser    io.Closer
 	lastError     string
@@ -2669,6 +2675,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Preview-fit messages are handled globally: the debounce timer can land
+	// while the user is in a menu or a wizard, and a dropped tick would leave
+	// the timer marked as armed forever, so no session would ever be fitted
+	// again.
+	switch msg := msg.(type) {
+	case previewFitTickMsg:
+		return m, m.applyPreviewFitTick(msg)
+	case previewFitDoneMsg:
+		m.applyPreviewFitDone(msg)
+		return m, nil
+	}
+
 	// Archive progress messages are handled globally so they reach the handler
 	// regardless of which sub-state is active during the pipeline.
 	switch msg := msg.(type) {
@@ -4048,6 +4066,12 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 					fetchTmuxPane(m.cfg, s),
 					checkInputHint(m.cfg, s),
 				)
+				// Keep the previewed session rendering at the panel's size.
+				// Driven from the poll rather than from each place the
+				// selection or window size changes, so every path is covered.
+				if cmd := m.schedulePreviewFit(s); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 		}
 	}

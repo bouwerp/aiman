@@ -264,3 +264,49 @@ func TestPTYAttachUnknownSessionFailsCleanly(t *testing.T) {
 		t.Fatal("attach to unknown session must fail")
 	}
 }
+
+// Resizing used to be reachable only from inside pty.attach, which left no way
+// to fit a session for a viewer that is not attached — the dashboard's preview
+// panel is far narrower than the terminal that last sized the session.
+func TestPTYResizeOutsideAnAttachStream(t *testing.T) {
+	sock := startPTYServer(t)
+	create := createPTY(t, sock, map[string]any{"id": "rsz2", "command": "sleep 30", "cols": 200, "rows": 50})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+
+	resp, err := Call(sock, "pty.resize", map[string]any{"id": "rsz2", "cols": 100, "rows": 30})
+	if err != nil || resp.Error != nil {
+		t.Fatalf("resize: %v / %v", err, resp.Error)
+	}
+
+	// The holder records the size it applied, so get reports it back.
+	eventually(t, 10*time.Second, func() bool {
+		got, gerr := Call(sock, "pty.get", map[string]any{"id": "rsz2"})
+		if gerr != nil || got.Error != nil {
+			return false
+		}
+		return strings.Contains(resultJSON(t, got), `"100x30"`)
+	})
+}
+
+func TestPTYResizeRejectsUnusableSizes(t *testing.T) {
+	sock := startPTYServer(t)
+	create := createPTY(t, sock, map[string]any{"id": "rsz3", "command": "sleep 30"})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	for _, params := range []map[string]any{
+		{"id": "rsz3", "cols": 0, "rows": 30},
+		{"id": "rsz3", "cols": 100, "rows": 0},
+		{"id": "rsz3"},
+	} {
+		resp, err := Call(sock, "pty.resize", params)
+		if err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		if resp.Error == nil {
+			t.Errorf("expected an error for %v", params)
+		}
+	}
+}
