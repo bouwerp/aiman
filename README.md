@@ -28,6 +28,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Quick start (`N`)**: Default remote, agent picker only, generated `q1`/`q2`/… in group `quick`
 - **Names and groups**: Every session has a unique display `name` and a `group`; the sidebar is a tree of groups, not a flat list
 - **Session Management**: Track active sessions with live pane previews (tmux or PTY)
+- **Creation runs on the remote**: The wizard hands the whole create to the remote's `aiman serve`, which does the worktree, agent launch and prompt itself. Close aiman the moment you confirm — even mid-create — and it still completes. See [Remote-side session creation](#remote-side-session-creation)
 - **Agent defaults**: Menu → Agent defaults sets per-agent launch model and thinking/reasoning effort (e.g. Claude `sonnet` + `medium`, Grok `4.6` + `medium`)
 - **Resume / restart (`s`)**: Save a handoff, then resume with the last-known agent automatically — no picker, no re-asking — including a worktree revived after a tmux crash or reboot. Falls back to the agent picker only when the agent can't be determined. Use `S` to deliberately switch agents instead
 - **Agent-exited detection**: A pane that fell back to a bare shell (crashed or never-started agent) shows as a distinct `⚠ agent exited` state instead of blending in with idle
@@ -371,6 +372,34 @@ aiman pty forget <id>     # drop an exited session's directory
 ```
 
 `aiman pty hold` is the holder itself and is not meant to be run by hand.
+
+### Remote-side session creation
+
+`aiman serve` builds its own flow manager over a local executor, so it can create
+a session end to end on the remote: the git worktree, the terminal, the agent
+launch and the initial prompt. The dashboard hands creation over whenever serve
+is reachable, and the flow is not tied to the connection that asked for it — so
+you can quit aiman as soon as you confirm the session, or before it finishes, and
+the create still completes.
+
+Two steps cannot follow it across, because they are made *from your machine*:
+
+- **File sync.** Mutagen's local↔remote session is created by a mutagen daemon on
+  your laptop. A remotely-created session therefore has no local mirror at first;
+  the dashboard notices and builds it, one session at a time, the next time it is
+  running.
+- **Delegated AWS credentials.** STS tokens are minted from your local `~/.aws`.
+
+Sessions carrying state that only exists locally are created locally instead
+rather than silently losing it: per-session AWS overrides, session secrets, an
+OpenRouter key, an autonomous-trigger config, a snapshot being resumed, selected
+skills, or adopting an existing worktree.
+
+By hand, the same thing:
+
+```bash
+ssh myremote aiman session create --repo myrepo --branch WTB-123-thing --agent claude --prompt "..."
+```
 
 ### Fitting the preview
 

@@ -465,10 +465,13 @@ type Model struct {
 	creatingSessions       map[string]*creatingSession    // background session creations, keyed by placeholder session ID
 	terminatingSessions    map[string]*terminatingSession // background session terminations, keyed by session ID
 	syncHealth             map[string]syncHealth          // mutagen sync health per session ID
-	worktreeExistsID       string                         // placeholder ID of the background creation that hit WORKTREE_EXISTS
-	snapshotToastSeq       int                            // increments per toast; stale clear timers are ignored
-	awsCredExpiry          []awsCredExpiryItem            // delegated AWS credential expiry per (host, profile), polled periodically
-	awsCredRefreshing      bool                           // a shift+R refresh-all is in flight
+	// syncReconciled marks sessions this run has already tried to build a local
+	// sync for, so a failure is not retried in a loop (see create_remote.go).
+	syncReconciled    map[string]bool
+	worktreeExistsID  string              // placeholder ID of the background creation that hit WORKTREE_EXISTS
+	snapshotToastSeq  int                 // increments per toast; stale clear timers are ignored
+	awsCredExpiry     []awsCredExpiryItem // delegated AWS credential expiry per (host, profile), polled periodically
+	awsCredRefreshing bool                // a shift+R refresh-all is in flight
 }
 
 // showToast displays a transient message in the toast bar and returns a
@@ -1609,6 +1612,10 @@ type terminateStepMsg struct {
 type recreateMutagenMsg struct {
 	session domain.Session
 	err     error
+	// background marks a sync created by reconciliation rather than by the user
+	// pressing ctrl+y. A failure there must not throw up an error screen: nobody
+	// asked for it, and the session is still usable without the local mirror.
+	background bool
 }
 
 func (m *Model) waitForSyncWatching(ctx context.Context, engine domain.SyncEngine, name string, timeout time.Duration, status func(string)) error {
@@ -1688,14 +1695,14 @@ func tmuxExtraEnvFlags(env map[string]string) string {
 	return b.String()
 }
 
-func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
+func (m *Model) recreateMutagenSync(s domain.Session, background bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
 		remote, ok := resolveRemote(m.cfg, s)
 		if !ok {
-			return recreateMutagenMsg{err: fmt.Errorf("no remote configured")}
+			return recreateMutagenMsg{background: background, session: s, err: fmt.Errorf("no remote configured")}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
@@ -1712,7 +1719,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			remoteSyncDir = s.WorktreePath
 		}
 		if remoteSyncDir == "" {
-			return recreateMutagenMsg{err: fmt.Errorf("session has no remote working directory (WorkingDirectory, WorktreePath, and tmux CWD are all empty)")}
+			return recreateMutagenMsg{background: background, session: s, err: fmt.Errorf("session has no remote working directory (WorkingDirectory, WorktreePath, and tmux CWD are all empty)")}
 		}
 
 		target := remote.Host
@@ -1727,7 +1734,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 
 		s.ID = strings.TrimSpace(s.ID)
 		if s.ID == "" {
-			return recreateMutagenMsg{err: fmt.Errorf("session ID is empty (%q), cannot safely create sync path", s.ID)}
+			return recreateMutagenMsg{background: background, session: s, err: fmt.Errorf("session ID is empty (%q), cannot safely create sync path", s.ID)}
 		}
 
 		syncName := "aiman-sync-" + s.ID
@@ -1789,7 +1796,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 			}
 			if syncs, listErr = mutagenEngine.ListSyncSessions(ctx); listErr == nil {
 				if leftover := matchSyncSession(s, syncs); leftover != nil {
-					return recreateMutagenMsg{err: fmt.Errorf("stale sync %q could not be terminated; run 'mutagen sync terminate %s' manually", leftover.Name, leftover.ID)}
+					return recreateMutagenMsg{background: background, session: s, err: fmt.Errorf("stale sync %q could not be terminated; run 'mutagen sync terminate %s' manually", leftover.Name, leftover.ID)}
 				}
 			}
 		}
@@ -1803,7 +1810,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		m.log("Starting two-way sync: %s -> %s (session: %s)", remoteSyncPath, localPath, syncName)
 		m.sendStatus("Starting new sync...")
 		if err := mutagenEngine.StartSync(ctx, syncName, localPath, remoteSyncPath, labels, domain.SyncModeTwoWay); err != nil {
-			return recreateMutagenMsg{err: fmt.Errorf("failed to start two-way mutagen sync: %w", err)}
+			return recreateMutagenMsg{background: background, session: s, err: fmt.Errorf("failed to start two-way mutagen sync: %w", err)}
 		}
 
 		// Wait for the initial sync to settle locally, then clear any sparse
@@ -1813,7 +1820,7 @@ func (m *Model) recreateMutagenSync(s domain.Session) tea.Cmd {
 		s.LocalPath = localPath
 		s.WorkingDirectory = remoteSyncDir
 		s.MutagenSyncID = syncName
-		return recreateMutagenMsg{session: s}
+		return recreateMutagenMsg{session: s, background: background}
 	}
 }
 
@@ -1967,6 +1974,39 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 
 		ctx := context.Background()
 		ctx = git.WithProgress(ctx, sendStatus)
+
+		// Hand the whole create to the remote when it can take it: serve builds
+		// its own FlowManager over a local executor, and the flow is not tied to
+		// the connection that asked for it, so aiman can be closed the moment
+		// this returns — or before. The local flow below is the fallback for a
+		// remote with no serve running, and for sessions carrying state that only
+		// exists on this machine.
+		if mgr, ok := sessionCfg.SSHManager.(*ssh.Manager); ok {
+			if handoff, why := canCreateRemotely(sessionCfg); !handoff {
+				m.log("creating locally: %s", why)
+			} else if !usecase.ServeAvailable(ctx, mgr) {
+				m.log("creating locally: no agent API on %s", sessionCfg.RemoteHost)
+			} else {
+				sendStatus("Handing creation to the remote...")
+				session, rerr := createSessionRemotely(ctx, mgr, sessionCfg, sessionCfg.RemoteHost)
+				if rerr != nil {
+					// Fall through to the local flow: a remote that refused the
+					// request has created nothing, so retrying locally is safe.
+					m.logPersistent("remote create failed for branch %q, falling back to local: %v",
+						sessionCfg.Branch, rerr)
+				} else {
+					m.logPersistent("remote created session %s (%s) on %s; sync and credentials reconcile locally",
+						session.TmuxSession, session.ID, sessionCfg.RemoteHost)
+					if m.db != nil {
+						session.UpdatedAt = time.Now()
+						if serr := m.db.Save(ctx, session); serr != nil {
+							m.logPersistent("failed to save remotely-created session %s: %v", session.ID, serr)
+						}
+					}
+					return sessionCreateMsg{session: *session, placeholderID: placeholderID}
+				}
+			}
+		}
 
 		// Use FlowManager to create the session
 		sendStatus("Creating session...")
@@ -2741,6 +2781,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		tickCmds := []tea.Cmd{tickSyncHealth()}
 		if len(m.allSessions) > 0 {
 			tickCmds = append(tickCmds, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...)))
+			// A session created by the remote has no local file sync, because the
+			// sync is made from this machine. Build it here rather than expecting
+			// the user to notice and press ctrl+y.
+			if cmd := m.reconcileMissingSyncs(); cmd != nil {
+				tickCmds = append(tickCmds, cmd)
+			}
 		}
 		return m, tea.Batch(tickCmds...)
 	case awsCredExpiryTickMsg:
@@ -4959,7 +5005,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 				m.loadingMsg = "Taking over autonomous session..."
 				m.loadingNext = viewStateMain
 				m.state = viewStateLoading
-				return m, m.recreateMutagenSync(s), true
+				return m, m.recreateMutagenSync(s, false), true
 			} else {
 				return m, m.showToast("⚠️  Only autonomous sessions can be taken over.", true, 3*time.Second), true
 			}
@@ -5025,7 +5071,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			m.loadingMsg = "Recreating mutagen sync..."
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
-			return m, m.recreateMutagenSync(sel.(item).session), true
+			return m, m.recreateMutagenSync(sel.(item).session, false), true
 		}
 	}
 	if cmd, handled := m.handleIntelligenceKey(msg); handled {
@@ -6673,6 +6719,12 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 
 func (m *Model) applyRecreateMutagen(msg recreateMutagenMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
+		if msg.background {
+			// Reconciliation, not a request: report it and move on rather than
+			// interrupting whatever the user is doing.
+			m.logPersistent("sync reconcile failed for %s: %v", msg.session.ID, msg.err)
+			return m, m.showToast("⚠️  file sync could not be created for this session", true, 8*time.Second)
+		}
 		m.lastError = fmt.Sprintf("Failed to recreate mutagen sync: %v", msg.err)
 		m.state = viewStateError
 		return m, nil

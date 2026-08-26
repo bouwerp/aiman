@@ -233,6 +233,50 @@ call is a real error that fails the whole `Discover` — leaving the database's
 view of that host untouched. The session list also marks PTY-hosted sessions
 (`| pty`), since they are reattached and torn down differently from tmux ones.
 
+### Session creation runs on the remote, so the client can walk away ✅
+`aiman serve` already built a full FlowManager over a local executor, so its
+`session.create` did the worktree, the agent launch and the prompt on the remote
+— and `handleConn` is passed serve's own lifetime context rather than one derived
+from the socket, so the flow already survived the caller disconnecting. The
+capability was there; the dashboard just never used it, driving the remote step
+by step from the laptop instead, so quitting mid-create stopped it.
+
+The wizard now hands the whole create to serve whenever it is reachable, and
+returns as soon as the remote answers. What the API was missing to make that
+faithful:
+
+- `backend`, so a pty session does not silently come up under tmux.
+- `agent_name`, since the remote needs the *command* to run while the session
+  should still read as "Claude Code" rather than "claude".
+- `prompt_free`, as a pointer so absent keeps meaning "true" — that is what an
+  agent creating an ad-hoc sibling wants, and it was the only behaviour before.
+  A dashboard hand-off sends false, and `CreateSession` resolves the JIRA issue
+  from its key by itself, so the task file is written as usual.
+- `--params-file` for `session create`, so an initial prompt is never parsed by a
+  shell.
+
+Sessions carrying state that only exists on the laptop are still created locally,
+because handing them over would silently drop it: per-session AWS credentials,
+session secrets, an OpenRouter key, an autonomous config, a snapshot to resume
+from, selected skills, adopting an existing worktree, reusing the main clone. A
+remote that has no serve, or that refuses the request, also falls back — nothing
+was created in that case, so retrying locally is safe.
+
+Two steps cannot move, both because they are made *from* the laptop: the mutagen
+sync (a local daemon owns it) and delegated AWS credentials (minted from local
+`~/.aws`). `checkSyncHealth` could not help, since it only inspects sessions that
+already have a sync id, so a remotely-created session was invisible to it. A
+reconcile pass now builds the missing sync, one session per pass — creating one
+waits for the initial mirror to settle, and starting several at once would swamp
+the machine — and once per run, so a failure is not retried in a loop. Its
+failures log and toast instead of throwing up the error screen the manual
+`ctrl+y` path uses: nobody asked for it.
+
+Verified end to end on the remote, in an isolated HOME with its own git repo and
+serve, so the live serve and sessions were untouched: a full session came back
+with its worktree, tmux session, branch, group and the display name carried
+through `agent_name`. The probe's tmux session was removed afterwards.
+
 ### Session activity is pushed from the runtime, not polled from the screen ✅
 Four stages, each verified against a real remote.
 

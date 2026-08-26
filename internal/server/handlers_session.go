@@ -549,6 +549,21 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		Prompt string `json:"prompt"`
 		Issue  string `json:"issue"`
 		Base   string `json:"base"`
+		// Backend picks the terminal runtime ("tmux" or "pty"). The dashboard
+		// offers this per session, so a remote-side create has to carry it or a
+		// pty session would silently come up under tmux.
+		Backend string `json:"backend"`
+		// ExistingBranch starts from a branch that already exists on the remote
+		// instead of creating one.
+		ExistingBranch bool `json:"existing_branch"`
+		// AgentName is the agent's display name when it differs from the command
+		// ("Claude Code" against "claude"). Absent means the command is the name.
+		AgentName string `json:"agent_name"`
+		// PromptFree suppresses the task file the skill engine writes from the
+		// JIRA issue. A pointer because absent has to keep meaning "true": that is
+		// what an agent creating an ad-hoc sibling wants, and it was the only
+		// behaviour before callers could ask for a task-driven session.
+		PromptFree *bool `json:"prompt_free"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
@@ -576,6 +591,14 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeNameTaken, "name already in use")
 	}
 	group := domain.AssignSessionGroup(params.Group, params.Issue, params.Repo, params.Quick)
+	promptFree := true
+	if params.PromptFree != nil {
+		promptFree = *params.PromptFree
+	}
+	agentName := params.AgentName
+	if strings.TrimSpace(agentName) == "" {
+		agentName = params.Agent
+	}
 	if s.create == nil {
 		return errResp(req.ID, CodeCreateFailed, "create not configured")
 	}
@@ -584,14 +607,18 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		Group:         group,
 		Quick:         params.Quick,
 		AdHoc:         params.Quick,
-		PromptFree:    true,
+		PromptFree:    promptFree,
 		IssueKey:      params.Issue,
 		Branch:        params.Branch,
 		Directory:     params.Dir,
 		InitialPrompt: params.Prompt,
 		BaseBranch:    params.Base,
-		Agent:         &domain.Agent{Name: params.Agent, Command: params.Agent},
-		Repo:          domain.Repo{Name: params.Repo},
+		// The agent's launch model and effort come from this host's own agent
+		// defaults, which serve install keeps in step with the laptop's config.
+		Agent:          &domain.Agent{Name: agentName, Command: params.Agent},
+		Repo:           domain.Repo{Name: params.Repo},
+		SessionBackend: params.Backend,
+		ExistingBranch: params.ExistingBranch,
 	}
 	if caller, ok := resolveSession(existing, req.Caller); ok && strings.TrimSpace(caller.WorktreePath) != "" {
 		cfg.SSHManager = local.NewExecutor(filepath.Dir(caller.WorktreePath))

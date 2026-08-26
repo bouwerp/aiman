@@ -576,3 +576,35 @@ func TestSessionListIncludesLiveSessionsMissingFromTheDB(t *testing.T) {
 		t.Fatalf("get by derived name %q: %+v", got.Name, one.Error)
 	}
 }
+
+// A dashboard hand-off creates a task-driven session, so it must be able to ask
+// for the task file. Absent has to keep meaning "suppress it": that is what an
+// agent creating an ad-hoc sibling wants, and was the only behaviour before.
+func TestSessionCreatePromptFreeDefaultsToTrue(t *testing.T) {
+	cases := []struct {
+		name   string
+		params string
+		want   bool
+	}{
+		{"absent keeps the old behaviour", `{"agent":"claude","repo":"r","branch":"b"}`, true},
+		{"explicit true", `{"agent":"claude","repo":"r","branch":"b","prompt_free":true}`, true},
+		{"explicit false asks for the task file", `{"agent":"claude","repo":"r","branch":"b","prompt_free":false}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var params struct {
+				PromptFree *bool `json:"prompt_free"`
+			}
+			if err := json.Unmarshal([]byte(tc.params), &params); err != nil {
+				t.Fatal(err)
+			}
+			got := true
+			if params.PromptFree != nil {
+				got = *params.PromptFree
+			}
+			if got != tc.want {
+				t.Errorf("prompt_free = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

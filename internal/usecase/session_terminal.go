@@ -198,6 +198,18 @@ func PTYRuntimeAvailable(ctx context.Context, remote TerminalExecutor) bool {
 	return err == nil && strings.Contains(out, "YES")
 }
 
+// ServeAvailable reports whether the remote's agent API is up and answering the
+// surface a remote-side create needs.
+//
+// Probed with session.list rather than a plain connection check: that is the
+// same handler path session.create goes through, so a serve that is running but
+// cannot serve sessions is reported as unavailable rather than accepted and then
+// failing mid-create.
+func ServeAvailable(ctx context.Context, remote TerminalExecutor) bool {
+	out, err := remote.Execute(ctx, remoteAimanPreamble+"aiman session list >/dev/null 2>&1 && echo YES || echo NO")
+	return err == nil && strings.Contains(out, "YES")
+}
+
 // extractPTYText pulls the pane text out of `aiman pty capture` JSON output.
 func extractPTYText(raw string) string {
 	var result struct {

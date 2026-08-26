@@ -142,8 +142,18 @@ func runSession(args []string) error {
 		return callAndPrint(sock, "session.wait", params)
 	case "create":
 		flags, _ := takeFlags(args[1:])
+		// A params file keeps arbitrary text — the initial prompt above all —
+		// out of argv, so no shell ever parses it.
+		if pf := flags["params-file"]; pf != "" {
+			raw, rerr := os.ReadFile(pf)
+			if rerr != nil {
+				writeCLIError(server.CodeInvalidParams, "params-file unreadable: "+rerr.Error())
+				return errUsage
+			}
+			return callAndPrintRaw(sock, "session.create", raw)
+		}
 		params := map[string]any{}
-		for _, k := range []string{"name", "group", "repo", "branch", "agent", "dir", "prompt", "issue", "base"} {
+		for _, k := range []string{"name", "group", "repo", "branch", "agent", "dir", "prompt", "issue", "base", "backend"} {
 			if flags[k] != "" {
 				params[k] = flags[k]
 			}
@@ -153,6 +163,9 @@ func runSession(args []string) error {
 		}
 		if _, ok := flags["existing"]; ok {
 			params["existing"] = true
+		}
+		if _, ok := flags["existing-branch"]; ok {
+			params["existing_branch"] = true
 		}
 		return callAndPrint(sock, "session.create", params)
 	case "rename":
@@ -180,6 +193,7 @@ func runSession(args []string) error {
 
 var boolSessionFlags = map[string]bool{
 	"wait": true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true, "dry-run": true,
+	"existing-branch": true,
 }
 
 func takeFlags(args []string) (map[string]string, []string) {
