@@ -19,6 +19,10 @@
 //	kill          serve touches this file; holder SIGTERM->grace->SIGKILLs the
 //	              child and exits cleanly
 //	exit          holder writes its final status here on the way out
+//	activity.json holder's rolling view of the live session: when output last
+//	              arrived, and the terminal title the child last set. Cheap to
+//	              read, so callers can judge what a session is doing without
+//	              replaying its output through an emulator.
 //
 // Design rules that keep updates harmless:
 //   - The holder speaks no protocol: one raw socket, flat files.
@@ -52,6 +56,7 @@ const (
 	ResizeFile    = "resize"
 	KillFile      = "kill"
 	ExitFile      = "exit"
+	ActivityFile  = "activity.json"
 )
 
 // Spec is what serve hands to a holder. Field names are part of the durable
@@ -84,6 +89,31 @@ type Meta struct {
 	// the real PTY, so it is the only thing that can report this; without it
 	// callers could request a resize but never read one back.
 	Size string `json:"size,omitempty"`
+}
+
+// Activity is the holder's rolling view of a live session, refreshed as output
+// arrives. Field names are part of the durable contract: never rename or
+// repurpose, only ever add.
+//
+// This exists because the only signals available about a PTY session used to be
+// its rendered screen — which meant replaying the whole spool through an
+// emulator and then pattern-matching the result. The holder already sees every
+// byte, so the cheap, certain facts are recorded here instead: tmux offers the
+// same thing through #{session_activity}, and PTY sessions had no equivalent.
+type Activity struct {
+	// LastOutput is when the child last produced output, RFC3339. The direct
+	// equivalent of tmux's #{session_activity}.
+	LastOutput string `json:"last_output,omitempty"`
+	// Bytes is how much output the session has produced in total.
+	Bytes int64 `json:"bytes,omitempty"`
+	// Title is the terminal title the child last set (OSC 0/2). Agents put
+	// their current activity here — Claude Code sets "<spinner> <task>" and
+	// changes it several times a second while it works.
+	Title string `json:"title,omitempty"`
+	// TitleChanged is when Title last changed, RFC3339. A title that is still
+	// moving is the most direct evidence there is that an agent is working, and
+	// unlike a rendered spinner it needs no pattern matching.
+	TitleChanged string `json:"title_changed_at,omitempty"`
 }
 
 func writeFileAtomic(path string, data []byte) error {

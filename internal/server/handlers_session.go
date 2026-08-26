@@ -108,7 +108,20 @@ func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.Agen
 		if cerr != nil {
 			return domain.AgentStateUnknown, pane.Low
 		}
-		r := pane.Classify(pane.Observation{Pane: screen})
+		obs := pane.Observation{Pane: screen, SinceOutput: -1, SinceTitleChange: -1}
+		// The holder publishes when output last arrived and when the agent last
+		// changed its terminal title. Both are certain, where the screen is
+		// evidence to be interpreted.
+		if info, ierr := s.pty.Get(live.ID); ierr == nil {
+			now := time.Now()
+			if !info.LastOutput.IsZero() && !now.Before(info.LastOutput) {
+				obs.SinceOutput = now.Sub(info.LastOutput)
+			}
+			if !info.TitleChanged.IsZero() && !now.Before(info.TitleChanged) {
+				obs.SinceTitleChange = now.Sub(info.TitleChanged)
+			}
+		}
+		r := pane.Classify(obs)
 		return r.State, r.Confidence
 	}
 	text, err := s.remote.CaptureTmuxPane(ctx, live.TmuxSession)

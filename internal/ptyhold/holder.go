@@ -102,7 +102,11 @@ func Run(root, id string) (err error) {
 	hub := newFanout()
 	spool := newSpoolWriter(dir)
 
-	// PTY -> spool + clients.
+	// PTY -> spool + clients, recording what the output says about the session
+	// as it passes. Doing it here is what makes it free: the bytes are already
+	// in hand, and the alternative is replaying the whole spool through an
+	// emulator later and pattern-matching the result.
+	act := newActivityTracker(dir)
 	outputDone := make(chan struct{})
 	go func() {
 		defer close(outputDone)
@@ -113,6 +117,7 @@ func Run(root, id string) (err error) {
 				data := append([]byte(nil), buf[:n]...)
 				hub.broadcast(data)
 				spool.write(data)
+				act.observe(data)
 			}
 			if rerr != nil {
 				return
@@ -195,10 +200,12 @@ cleanup:
 	hub.closeAll()
 	<-outputDone
 	spool.close()
+	act.flush()
 	_ = writeFileAtomic(filepath.Join(dir, ExitFile), []byte(exitLine))
 	_ = os.Remove(filepath.Join(dir, MetaFile))
 	_ = os.Remove(filepath.Join(dir, KillFile))
 	_ = os.Remove(filepath.Join(dir, ResizeFile))
+	_ = os.Remove(filepath.Join(dir, ActivityFile))
 	_ = os.Remove(sockPath)
 	return nil
 }

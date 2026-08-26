@@ -59,6 +59,15 @@ type SessionInfo struct {
 	ExitErr string    `json:"exit_error,omitempty"`
 	Started time.Time `json:"started_at"`
 	Size    string    `json:"size,omitempty"`
+
+	// What the session's own output says about it, published by the holder as it
+	// passes (see ptyhold.Activity). Reading this is O(1), where judging a
+	// session from its rendered screen means replaying the spool through an
+	// emulator and pattern-matching the result.
+	LastOutput   time.Time `json:"last_output,omitempty"`
+	OutputBytes  int64     `json:"output_bytes,omitempty"`
+	Title        string    `json:"title,omitempty"`
+	TitleChanged time.Time `json:"title_changed_at,omitempty"`
 }
 
 // Manager creates and tracks holder-backed PTY sessions. It holds no process
@@ -196,6 +205,15 @@ func (m *Manager) Get(id string) (*SessionInfo, error) {
 	}
 	if t, terr := time.Parse(time.RFC3339, insp.Meta.Started); terr == nil {
 		info.Started = t
+	}
+	act := ptyhold.ReadActivity(m.root, id)
+	info.OutputBytes = act.Bytes
+	info.Title = act.Title
+	if t, ok := act.LastOutputAt(); ok {
+		info.LastOutput = t
+	}
+	if t, ok := act.TitleChangedAt(); ok {
+		info.TitleChanged = t
 	}
 	return &info, nil
 }

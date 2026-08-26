@@ -3,6 +3,7 @@ package pane
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
@@ -57,5 +58,54 @@ func TestStripANSI(t *testing.T) {
 		if got := StripANSI(in); got != want {
 			t.Errorf("StripANSI(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A terminal title that changed a moment ago is the one signal here that is not
+// an inference from rendered text: agents animate a spinner in the title while
+// they work, so a moving title means work.
+func TestClassifyUsesTitleActivity(t *testing.T) {
+	// A pane with no useful markers at all, plus a long silence, would otherwise
+	// read as idle.
+	quiet := strings.Repeat("some settled output\n", 12)
+
+	idle := Classify(Observation{Pane: quiet, SinceOutput: 10 * time.Minute, SinceTitleChange: -1})
+	if idle.State != domain.AgentStateIdle {
+		t.Fatalf("premise: expected idle without the title signal, got %s (%s)", idle.State, idle.Reason)
+	}
+
+	working := Classify(Observation{Pane: quiet, SinceOutput: 10 * time.Minute, SinceTitleChange: time.Second})
+	if working.State != domain.AgentStateWorking {
+		t.Errorf("a title that changed a second ago means working, got %s (%s)", working.State, working.Reason)
+	}
+	if working.Confidence != High {
+		t.Errorf("the title signal is direct evidence, expected high confidence")
+	}
+
+	// A stale title must not keep a finished session looking busy.
+	stale := Classify(Observation{Pane: quiet, SinceOutput: 10 * time.Minute,
+		SinceTitleChange: TitleActivityWindow + time.Second})
+	if stale.State == domain.AgentStateWorking {
+		t.Errorf("a title older than the window is not evidence of work: %s", stale.Reason)
+	}
+}
+
+// The zero value has to mean "no information". Every caller that does not set
+// the field would otherwise look permanently busy.
+func TestClassifyTreatsUnsetTitleAgeAsUnknown(t *testing.T) {
+	quiet := strings.Repeat("some settled output\n", 12)
+	res := Classify(Observation{Pane: quiet, SinceOutput: 10 * time.Minute})
+	if res.State == domain.AgentStateWorking {
+		t.Fatalf("an unset title age must not read as a title that just changed: %s", res.Reason)
+	}
+}
+
+// A question outranks a moving title: an agent that stopped to ask has stopped
+// working, and its last title may only be a second old.
+func TestClassifyPrefersAQuestionOverAMovingTitle(t *testing.T) {
+	asking := "Do you want to proceed?\n[y/N] "
+	res := Classify(Observation{Pane: asking, SinceOutput: time.Second, SinceTitleChange: time.Second})
+	if res.State != domain.AgentStateWaitingInput {
+		t.Errorf("expected waiting_input, got %s (%s)", res.State, res.Reason)
 	}
 }

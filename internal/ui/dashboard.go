@@ -1283,11 +1283,14 @@ func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
 			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		out, err := usecase.CaptureSessionPane(context.Background(), mgr, session)
+		// One call for the pane and the timings. The classifier reasons about
+		// silence and a moving terminal title; passing only a pane left those
+		// branches permanently unreachable.
+		obs, err := usecase.ObserveSession(context.Background(), mgr, session)
 		if err != nil {
 			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
 		}
-		activity, needs := detectSessionActivity(out)
+		activity, needs := detectSessionActivityFrom(obs)
 		return inputHintMsg{session: session.TmuxSession, needsInput: needs, activity: activity}
 	}
 }
@@ -1312,20 +1315,9 @@ func activityFromHook(st domain.AgentState, ended bool) (string, bool) {
 	}
 }
 
-func detectSessionActivity(output string) (string, bool) {
-	return detectSessionActivityWithAge(output, -1)
-}
-
-// detectSessionActivityWithAge classifies a pane, optionally informed by how
-// long the session has been silent (see ssh.Manager.SessionActivityAges).
-//
-// The previous implementation substring-matched the whole pane, so a "confirm"
-// or "thinking" anywhere in scrollback decided the state and input patterns
-// were checked before working ones — an agent busy on a task it had once asked
-// about read as blocked. pane.Classify looks only at the tail and prefers
-// positive signals (an advancing timer, a rendered choice list) over keywords.
-func detectSessionActivityWithAge(output string, sinceOutput time.Duration) (string, bool) {
-	res := pane.Classify(pane.Observation{Pane: output, SinceOutput: sinceOutput})
+// detectSessionActivityFrom classifies a fully-populated observation.
+func detectSessionActivityFrom(obs pane.Observation) (string, bool) {
+	res := pane.Classify(obs)
 	return pane.UIActivity(res.State), res.State == domain.AgentStateWaitingInput
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
@@ -111,7 +112,23 @@ func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {
 	if params.Lines > 0 {
 		text = tailLines(text, params.Lines)
 	}
-	return Response{ID: req.ID, Result: map[string]any{"type": "pane_read", "text": text}}
+	// The activity fields ride along so a caller judging what the session is
+	// doing gets the screen and the timings in one round trip. Silence and a
+	// moving title are what actually decide the answer; the screen is the
+	// fallback evidence.
+	result := map[string]any{"type": "pane_read", "text": text}
+	if info, ierr := s.pty.Get(id); ierr == nil {
+		if !info.LastOutput.IsZero() {
+			result["last_output"] = info.LastOutput.UTC().Format(time.RFC3339Nano)
+		}
+		if !info.TitleChanged.IsZero() {
+			result["title_changed_at"] = info.TitleChanged.UTC().Format(time.RFC3339Nano)
+		}
+		if info.Title != "" {
+			result["title"] = info.Title
+		}
+	}
+	return Response{ID: req.ID, Result: result}
 }
 
 func (s *Server) handlePTYKill(ctx context.Context, req Request) Response {

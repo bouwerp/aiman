@@ -3,6 +3,8 @@ package ui
 import (
 	"testing"
 	"time"
+
+	"github.com/bouwerp/aiman/internal/pane"
 )
 
 // The dashboard's activity strings must follow the classifier, including the
@@ -73,7 +75,7 @@ func TestDetectSessionActivity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			activity, needs := detectSessionActivityWithAge(tt.pane, tt.since)
+			activity, needs := detectSessionActivityFrom(pane.Observation{Pane: tt.pane, SinceOutput: tt.since, SinceTitleChange: -1})
 			if activity != tt.wantActivity {
 				t.Errorf("activity = %q, want %q", activity, tt.wantActivity)
 			}
@@ -87,10 +89,10 @@ func TestDetectSessionActivity(t *testing.T) {
 // The no-age entry point must keep working for callers that have not been
 // given the tmux activity timestamp yet.
 func TestDetectSessionActivityWithoutAge(t *testing.T) {
-	if activity, _ := detectSessionActivity("✻ Pondering… (1m 2s · ↓ 3k tokens)"); activity != "busy" {
+	if activity, _ := detectSessionActivityFrom(pane.Observation{Pane: "✻ Pondering… (1m 2s · ↓ 3k tokens)", SinceOutput: -1, SinceTitleChange: -1}); activity != "busy" {
 		t.Errorf("activity = %q, want busy", activity)
 	}
-	if _, needs := detectSessionActivity("Allow execution of `rm -rf build/`? [y/N]"); !needs {
+	if _, needs := detectSessionActivityFrom(pane.Observation{Pane: "Allow execution of `rm -rf build/`? [y/N]", SinceOutput: -1, SinceTitleChange: -1}); !needs {
 		t.Error("expected a yes/no confirmation to need input")
 	}
 }

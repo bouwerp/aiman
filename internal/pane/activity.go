@@ -23,6 +23,15 @@ const TailLines = 6
 // problem that TailLines exists to avoid.
 const StatusLines = 20
 
+// TitleActivityWindow is how recently the terminal title must have changed for
+// the session to count as working on that evidence alone.
+//
+// Sized against the real thing: an agent animating a spinner in its title
+// changes it several times a second, so anything within a few seconds means it
+// was mid-work moments ago. Too wide a window would keep a finished session
+// looking busy for as long as the window lasts.
+const TitleActivityWindow = 5 * time.Second
+
 // Confidence reports whether a caller should trust a classification or seek a
 // second opinion (an LLM, or simply waiting for another sample).
 type Confidence int
@@ -43,8 +52,20 @@ type Observation struct {
 	// when there is no prior sample.
 	Previous string
 	// SinceOutput is how long ago the session last produced output, from tmux's
-	// own bookkeeping. Negative means unknown.
+	// own bookkeeping or the PTY holder's. Negative means unknown.
 	SinceOutput time.Duration
+	// SinceTitleChange is how long ago the session's terminal title changed.
+	// Zero or negative means unknown — unlike SinceOutput, the zero value has to
+	// mean "no information" rather than "changed this instant", or every caller
+	// that does not set it would look permanently busy. A title that really did
+	// just change reports a positive, sub-second duration.
+	//
+	// Agents advertise their current activity in the title — Claude Code sets
+	// "<spinner glyph> <task>" and changes it several times a second while it
+	// works. A title that is still moving is therefore direct evidence of work,
+	// not an inference from rendered prose, and it is the one signal here that
+	// cannot be confused by scrollback.
+	SinceTitleChange time.Duration
 	// IdleAfter is how much silence means idle. Zero uses DefaultIdleAfter.
 	IdleAfter time.Duration
 }
@@ -129,6 +150,16 @@ func Classify(obs Observation) Result {
 
 	if waitingBackgroundRe.MatchString(status) {
 		return Result{State: domain.AgentStateWaitingBackground, Confidence: High, Reason: "waiting on background agent"}
+	}
+
+	// A title that changed a moment ago is the strongest evidence available that
+	// the agent is working, and the only one here that is not an inference from
+	// rendered text. It sits after the input checks because a question still
+	// outranks it: an agent that stops to ask has stopped working, and its last
+	// title may only be seconds old.
+	if obs.SinceTitleChange > 0 && obs.SinceTitleChange <= TitleActivityWindow {
+		return Result{State: domain.AgentStateWorking, Confidence: High,
+			Reason: "terminal title changed " + obs.SinceTitleChange.Round(time.Second).String() + " ago"}
 	}
 
 	// A running spinner sits above the agent's own chrome, so this looks further
