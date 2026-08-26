@@ -348,6 +348,8 @@ back — the same guarantee tmux gives. Inspect and drive them directly with:
 aiman pty list
 aiman pty get <id>
 aiman pty attach <id>     # interactive; detach with ctrl+q, which leaves it running
+                          #   (a PTY session has no tmux prefix, so ctrl+b d does
+                          #    nothing — the attach banner reminds you of ctrl+q)
 aiman pty capture <id>    # read the pane without attaching
 aiman pty input <id> --data TEXT | --file PATH
 aiman pty create --id <id> --command CMD [--name N] [--dir D] [--env K=V]…
@@ -356,6 +358,13 @@ aiman pty forget <id>     # drop an exited session's directory
 ```
 
 `aiman pty hold` is the holder itself and is not meant to be run by hand.
+
+The pane is rendered before it is shown: the spool is a raw byte stream of cursor
+addressing and redraws, so previews and activity detection replay it through a terminal
+emulator at the session's own size, the way `tmux capture-pane` returns a screen.
+Sessions also get `TERM=xterm-256color` and `COLORTERM=truecolor` — `aiman serve` is a
+daemon with no tty, so without that the agent inherits no terminal type and emits no
+colour.
 
 Requires a Unix remote: the runtime uses `setsid` and `SIGWINCH`, so the Windows build
 omits it. Use the tmux backend there.

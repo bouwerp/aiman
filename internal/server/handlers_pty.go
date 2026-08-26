@@ -100,11 +100,14 @@ func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {
 		Lines    int `json:"lines"`
 	}
 	_ = json.Unmarshal(req.Params, &params)
-	data, err := s.pty.Capture(id, params.MaxBytes)
+	// Rendered, not raw: the caller wants a screen, the way tmux capture-pane
+	// gives one. MaxBytes is deliberately not applied to the spool here —
+	// truncating the byte stream would cut mid-escape-sequence and corrupt the
+	// replay; the rendered screen is already bounded by the session's size.
+	text, err := s.pty.CaptureScreen(id)
 	if err != nil {
 		return s.ptyErrResp(req.ID, err)
 	}
-	text := string(data)
 	if params.Lines > 0 {
 		text = tailLines(text, params.Lines)
 	}

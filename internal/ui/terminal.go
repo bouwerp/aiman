@@ -25,9 +25,10 @@ func NewTerminalModel(rw io.ReadWriter, w, h int) TerminalModel {
 		for {
 			n, err := rw.Read(buf)
 			if n > 0 {
-				term.Lock()
+				// No Lock around Write: vt10x.Write takes the terminal's own
+				// lock, and its mutex is not reentrant, so wrapping it
+				// deadlocks. Only reads (Cell/Size) need the explicit lock.
 				_, _ = term.Write(buf[:n])
-				term.Unlock()
 			}
 			if err != nil {
 				break

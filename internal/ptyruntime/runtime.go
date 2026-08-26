@@ -257,6 +257,20 @@ func (m *Manager) Capture(id string, maxBytes int) ([]byte, error) {
 	return ptyhold.ReadSpool(m.root, id, maxBytes), nil
 }
 
+// CaptureScreen is Capture rendered through a terminal emulator, at the
+// session's own size — the PTY equivalent of `tmux capture-pane -p`.
+//
+// Callers that display or classify a session want this, not Capture: the raw
+// spool is a byte stream full of cursor addressing and redraws, not a screen.
+func (m *Manager) CaptureScreen(id string) (string, error) {
+	info, err := m.Get(id)
+	if err != nil {
+		return "", err
+	}
+	cols, rows := parseSize(info.Size)
+	return RenderScreen(ptyhold.ReadSpool(m.root, id, 0), cols, rows), nil
+}
+
 // Kill terminates a session via the kill marker and waits for the holder to
 // finish its cleanup.
 func (m *Manager) Kill(id string) error {
@@ -285,11 +299,19 @@ func (m *Manager) Kill(id string) error {
 // Forget removes an exited session's directory entirely.
 func (m *Manager) Forget(id string) error {
 	insp := ptyhold.InspectSession(m.root, id)
-	if insp.Status == ptyhold.StatusGone {
-		return ErrNotFound
-	}
 	if insp.Status == ptyhold.StatusRunning {
 		return fmt.Errorf("pty: session still running")
+	}
+	if insp.Status == ptyhold.StatusGone {
+		// "Gone" means no meta and no exit file — but a leftover *directory* in
+		// that state is the single most forgettable thing there is, and it is
+		// what a killed-then-partly-cleaned session leaves behind. Refusing here
+		// made such entries permanently unremovable: List and Get report them
+		// (they only require the directory to exist), while Forget denied they
+		// existed at all. Only a genuinely absent directory is not found.
+		if _, err := os.Stat(ptyhold.Dir(m.root, id)); err != nil {
+			return ErrNotFound
+		}
 	}
 	return ptyhold.Cleanup(m.root, id)
 }

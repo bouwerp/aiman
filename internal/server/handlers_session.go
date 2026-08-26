@@ -102,11 +102,13 @@ func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.Agen
 	}
 	if live.IsPTY() {
 		// The PTY runtime lives in this process; skip the remote hop.
-		data, cerr := s.pty.Capture(live.ID, 0)
+		// pane.Classify was written against rendered tmux output, so it needs a
+		// screen here too, not the raw spool.
+		screen, cerr := s.pty.CaptureScreen(live.ID)
 		if cerr != nil {
 			return domain.AgentStateUnknown, pane.Low
 		}
-		r := pane.Classify(pane.Observation{Pane: string(data)})
+		r := pane.Classify(pane.Observation{Pane: screen})
 		return r.State, r.Confidence
 	}
 	text, err := s.remote.CaptureTmuxPane(ctx, live.TmuxSession)
@@ -385,14 +387,17 @@ func (s *Server) handleRead(ctx context.Context, req Request) Response {
 	_ = json.Unmarshal(req.Params, &params)
 	text := ""
 	if sess.IsPTY() && s.pty != nil {
-		data, cerr := s.pty.Capture(sess.ID, params.Lines)
+		screen, cerr := s.pty.CaptureScreen(sess.ID)
 		if cerr != nil {
 			return errResp(req.ID, CodeInvalidParams, cerr.Error())
+		}
+		if params.Lines > 0 {
+			screen = tailLines(screen, params.Lines)
 		}
 		return Response{ID: req.ID, Result: map[string]any{
 			"type":    "pane_read",
 			"session": sessionInfo(sess, req.Caller),
-			"text":    string(data),
+			"text":    screen,
 		}}
 	}
 	if s.remote != nil {

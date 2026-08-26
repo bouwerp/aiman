@@ -164,9 +164,15 @@ func runPTYAttach(sock, id string) error {
 		}
 	}()
 
+	// Say how to get out. A PTY session has no tmux prefix, so the muscle
+	// memory of ctrl+b d does nothing here and there is otherwise no hint on
+	// screen that ctrl+q is the way back.
+	fmt.Fprint(os.Stdout, "\r\n[aiman] attached to "+id+" — press ctrl+q to detach (the session keeps running)\r\n")
+
 	if err := connResp.Relay(detachOnCtrlQ(os.Stdin, connResp), os.Stdout); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
+	fmt.Fprint(os.Stdout, "\r\n[aiman] detached from "+id+"\r\n")
 	return nil
 }
 

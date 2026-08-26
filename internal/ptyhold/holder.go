@@ -65,7 +65,13 @@ func Run(root, id string) (err error) {
 	cmd := exec.Command("bash", "-l", "-c",
 		fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s; exec bash -i", spec.Command))
 	cmd.Dir = spec.Dir
-	cmd.Env = envMap(os.Environ(), spec.Env)
+	// The holder allocates a real PTY, so the child is entitled to a terminal
+	// type — but the holder is spawned by aiman serve, a daemon with no tty and
+	// therefore no TERM to inherit. Without one, agents fall back to a dumb
+	// terminal and emit no colour at all. tmux does the same thing for its own
+	// panes; this is the PTY backend's equivalent. Anything explicit in the
+	// spec still wins.
+	cmd.Env = envMap(withTerminalEnv(os.Environ()), spec.Env)
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}) //nolint:gosec // G115: bounded below
 	if err != nil {
 		return fmt.Errorf("holder: start: %w", err)
@@ -314,4 +320,42 @@ func indexByte(s string, b byte) int {
 		}
 	}
 	return -1
+}
+
+// defaultTERM is what the holder gives a child that inherited none. 256-colour
+// xterm is the safe common denominator: every agent CLI recognises it, and it
+// matches what tmux hands its own panes.
+const defaultTERM = "xterm-256color"
+
+// withTerminalEnv ensures TERM and COLORTERM are present, without overriding
+// values that are already set.
+func withTerminalEnv(base []string) []string {
+	haveTERM, haveColor := false, false
+	for _, kv := range base {
+		switch {
+		case strings.HasPrefix(kv, "TERM="):
+			// An inherited TERM=dumb is worse than none: it actively tells
+			// agents to disable colour and cursor addressing.
+			if strings.TrimSpace(strings.TrimPrefix(kv, "TERM=")) != "" &&
+				strings.TrimPrefix(kv, "TERM=") != "dumb" {
+				haveTERM = true
+			}
+		case strings.HasPrefix(kv, "COLORTERM="):
+			haveColor = true
+		}
+	}
+	out := make([]string, 0, len(base)+2)
+	for _, kv := range base {
+		if !haveTERM && strings.HasPrefix(kv, "TERM=") {
+			continue // drop the unusable value so envMap's later entry wins
+		}
+		out = append(out, kv)
+	}
+	if !haveTERM {
+		out = append(out, "TERM="+defaultTERM)
+	}
+	if !haveColor {
+		out = append(out, "COLORTERM=truecolor")
+	}
+	return out
 }
