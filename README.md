@@ -383,9 +383,9 @@ There is no HTTP, MCP, or TCP port. The CLI is a thin JSON wrapper over `~/.aima
 
 That socket path is resolved by the binary that uses it, so an in-session agent
 reaches its own host's server (`/home/<user>/.aiman/aiman.sock` on the remote), not the
-laptop's. Set `AIMAN_SOCKET_PATH` only to point at a non-default location on that same
-host — pointing it at another machine's path is what makes `aiman session …` report
-`server_not_running` while the server is in fact healthy.
+laptop's. `AIMAN_SOCKET_PATH` overrides it, but only when it points at something that
+exists — a path that doesn't is ignored in favour of this host's default, so an agent
+that inherited another machine's path keeps working without being restarted.
 
 ### Start and manage it from the laptop
 

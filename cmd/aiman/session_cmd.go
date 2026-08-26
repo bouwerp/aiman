@@ -19,13 +19,38 @@ func stdinIsTTY() bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
+// socketPath resolves the agent API socket for this host.
+//
+// AIMAN_SOCKET_PATH is honoured only when it actually points at something. It
+// used to be trusted unconditionally, and older builds injected the *creating*
+// machine's path into remote sessions — so a session on a remote was told the
+// socket lived under the laptop's /Users/... home and every call failed with
+// server_not_running while the real server was healthy a few directories away.
+//
+// A path that does not exist is never the right answer, and the running agents
+// in those sessions cannot be re-environed without a restart, so falling back
+// to this host's own default repairs them in place.
 func socketPath() (string, error) {
+	dir, dirErr := config.GetDir()
+
 	if p := os.Getenv("AIMAN_SOCKET_PATH"); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+		// Only override a broken value when we have somewhere better to point.
+		if dirErr == nil {
+			if fallback := server.SocketPath(dir); fallback != p {
+				if _, err := os.Stat(fallback); err == nil {
+					return fallback, nil
+				}
+			}
+		}
+		// Nothing better available: keep it so the error names what was asked for.
 		return p, nil
 	}
-	dir, err := config.GetDir()
-	if err != nil {
-		return "", err
+
+	if dirErr != nil {
+		return "", dirErr
 	}
 	return server.SocketPath(dir), nil
 }

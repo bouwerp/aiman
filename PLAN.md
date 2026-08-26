@@ -131,6 +131,20 @@ secret is invisible by construction.
 Note for anyone who entered a token before this fix: the stored value is
 truncated and cannot be recovered, so it has to be re-entered.
 
+### A stale socket path no longer needs a session restart to recover ✅
+Not injecting the laptop's paths fixes *new* sessions, but every session
+already running still had the bad `AIMAN_SOCKET_PATH` in its environment — and
+`tmux set-environment` cannot re-environ a process that is already running, so
+the only route was restarting six live agents mid-work.
+
+`socketPath` now honours `AIMAN_SOCKET_PATH` only when it points at something
+that exists, falling back to this host's own default otherwise. A path that
+does not exist is never the right answer, so this repairs already-running
+sessions in place once the *remote* binary is updated — no restart, no lost
+agent context. An explicit override that does exist is still respected, and
+when there is no better path the requested one is kept so the error names what
+was actually asked for.
+
 ### The agent API was unreachable from inside a session ✅
 An agent in a remote session could never talk to `aiman serve`: every
 `aiman session …` call answered `server_not_running`, naming a socket under
