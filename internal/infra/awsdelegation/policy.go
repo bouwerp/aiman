@@ -7,9 +7,9 @@ import (
 
 type regionPolicyStatement struct {
 	Effect    string         `json:"Effect"`
-	Action    string         `json:"Action"`
+	Action    any            `json:"Action"`
 	Resource  string         `json:"Resource"`
-	Condition map[string]any `json:"Condition"`
+	Condition map[string]any `json:"Condition,omitempty"`
 }
 
 type regionPolicy struct {
@@ -17,8 +17,20 @@ type regionPolicy struct {
 	Statement []regionPolicyStatement `json:"Statement"`
 }
 
+// route53DNSActions are hosted-zone APIs needed to find a zone and write ACM
+// (or similar) DNS validation records. They have no RequestedRegion.
+var route53DNSActions = []string{
+	"route53:ListHostedZones",
+	"route53:ListHostedZonesByName",
+	"route53:GetHostedZone",
+	"route53:ListResourceRecordSets",
+	"route53:ChangeResourceRecordSets",
+	"route53:GetChange",
+}
+
 // BuildRegionPolicy returns an inline IAM JSON policy that restricts all
-// actions to the given AWS regions via the aws:RequestedRegion condition.
+// actions to the given AWS regions via the aws:RequestedRegion condition,
+// plus unconditional Route53 hosted-zone access for DNS validation.
 // Returns an empty string when regions is nil or empty.
 func BuildRegionPolicy(regions []string) string {
 	trimmed := make([]string, 0, len(regions))
@@ -50,6 +62,13 @@ func BuildRegionPolicy(regions []string) string {
 						"aws:RequestedRegion": condition,
 					},
 				},
+			},
+			// Route53 is global (API in us-east-1). A RequestedRegion lock
+			// otherwise denies ListHostedZones and ACM DNS validation records.
+			{
+				Effect:   "Allow",
+				Action:   route53DNSActions,
+				Resource: "*",
 			},
 		},
 	}

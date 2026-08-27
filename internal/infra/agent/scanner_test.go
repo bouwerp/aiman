@@ -120,6 +120,19 @@ func TestCommandExists_TriesZshLogin(t *testing.T) {
 	}
 }
 
+func TestCommandExists_KiloOfficialBinIncluded(t *testing.T) {
+	exec := &mockExecutor{
+		canRun: func(cmd string) bool {
+			return strings.Contains(cmd, ".kilo/bin") && strings.Contains(cmd, "command -v kilo")
+		},
+	}
+	scanner := NewScanner(exec)
+
+	if !scanner.commandExists(context.Background(), "kilo") {
+		t.Error("official curl install puts kilo in ~/.kilo/bin")
+	}
+}
+
 func TestCommandExists_GoPathIncluded(t *testing.T) {
 	exec := &mockExecutor{
 		canRun: func(cmd string) bool {

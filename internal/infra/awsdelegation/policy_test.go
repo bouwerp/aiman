@@ -64,6 +64,55 @@ func TestBuildRegionPolicy_Multi(t *testing.T) {
 	}
 }
 
+func TestBuildRegionPolicy_AllowsRoute53WithoutRegion(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(p.Statement) < 2 {
+		t.Fatalf("want a Route53 statement besides the region lock, got %d statements", len(p.Statement))
+	}
+	foundList, foundChange := false, false
+	for _, s := range p.Statement {
+		if s.Condition != nil {
+			continue
+		}
+		for _, a := range actionList(s.Action) {
+			if a == "route53:ListHostedZones" {
+				foundList = true
+			}
+			if a == "route53:ChangeResourceRecordSets" {
+				foundChange = true
+			}
+		}
+	}
+	if !foundList || !foundChange {
+		t.Fatalf("unconditional Route53 DNS access missing, policy=%s", got)
+	}
+}
+
+func actionList(action any) []string {
+	switch v := action.(type) {
+	case string:
+		return []string{v}
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 func TestBuildRegionPolicy_TrimsWhitespace(t *testing.T) {
 	got := BuildRegionPolicy([]string{"  us-east-2 ", " eu-west-1"})
 	if got == "" {
