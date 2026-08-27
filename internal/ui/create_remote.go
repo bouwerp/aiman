@@ -89,50 +89,13 @@ func createSessionRemotely(ctx context.Context, mgr *ssh.Manager, cfg domain.Ses
 	return session, nil
 }
 
-// reconcileMissingSyncs creates the local file sync for one session that has
-// none.
-//
-// A session created by the remote comes back without a mutagen sync, because the
-// sync is made by a mutagen daemon on this machine and the remote cannot reach
-// it. The sync-health check does not notice: it only inspects sessions that
-// already have a sync id. So this looks for sessions with a remote worktree and
-// no sync, and makes it.
-//
-// One per pass on purpose. Creating a sync waits for the initial mirror to
-// settle, which for a large repo is minutes of disk and network; starting five at
-// once would swamp the machine the user is trying to work on.
+// reconcileMissingSyncs is a no-op: mutagen sync is created only by ctrl+y.
 func (m *Model) reconcileMissingSyncs() tea.Cmd {
-	if m.syncReconciled == nil {
-		m.syncReconciled = map[string]bool{}
-	}
-	for _, s := range m.allSessions {
-		if !m.needsSyncReconcile(s) {
-			continue
-		}
-		m.syncReconciled[s.ID] = true
-		m.log("creating the local file sync for %s (created remotely)", s.ID)
-		return m.recreateMutagenSync(s, true)
-	}
 	return nil
 }
 
-// needsSyncReconcile reports whether a session is missing its local sync and is
-// in a state where making one is the right thing to do.
-func (m *Model) needsSyncReconcile(s domain.Session) bool {
-	switch {
-	case strings.TrimSpace(s.ID) == "":
-		return false
-	case m.syncReconciled[s.ID]:
-		return false // tried once this run; a retry loop would be worse than no sync
-	case s.MutagenSyncID != "" || s.LocalPath != "":
-		return false // already has one, or had one that sync-health will judge
-	case domain.IsEphemeralSessionID(s.ID):
-		return false // a create placeholder, not a real session
-	case s.WorktreePath == "" && s.WorkingDirectory == "":
-		return false // nothing on the remote to mirror
-	case s.Status == domain.SessionStatusCleanup || s.Status == domain.SessionStatusError:
-		return false // going away, or already broken; a new sync helps neither
-	}
-	_, ok := resolveRemote(m.cfg, s)
-	return ok
+// needsSyncReconcile is always false: mutagen sync is created only when the
+// operator presses ctrl+y.
+func (m *Model) needsSyncReconcile(_ domain.Session) bool {
+	return false
 }
