@@ -592,6 +592,12 @@ func aimanRuntimeEnv(session *domain.Session) map[string]string {
 	return env
 }
 
+// TmuxEnvFlags formats tmux -e flags with a shell-quoted NAME=value so a
+// space in a session name cannot split respawn-pane and drop the pane command.
+func TmuxEnvFlags(env map[string]string) string {
+	return tmuxEnvFlags(env)
+}
+
 func tmuxEnvFlags(env map[string]string) string {
 	if len(env) == 0 {
 		return ""

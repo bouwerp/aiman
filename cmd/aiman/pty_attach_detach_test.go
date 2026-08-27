@@ -2,11 +2,13 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestAttachExitErrTreatsDetachAsClean pins the contract that made attaching
@@ -168,6 +170,54 @@ func TestTrailingCtrlQPrefixOnlyHoldsOnceQIsIdentified(t *testing.T) {
 		if got := trailingCtrlQPrefix([]byte(tc.in)); got != tc.hold {
 			t.Errorf("trailingCtrlQPrefix(%q) = %d, want %d", tc.in, got, tc.hold)
 		}
+	}
+}
+
+func TestAttachRedrawNudgeIsARealSizeChange(t *testing.T) {
+	cases := []struct {
+		cols, rows, wantCols, wantRows int
+		ok                             bool
+	}{
+		{80, 24, 79, 24, true},
+		{1, 24, 1, 23, true},
+		{0, 24, 0, 0, false},
+		{80, 0, 0, 0, false},
+	}
+	for _, tc := range cases {
+		gotCols, gotRows, ok := attachRedrawNudge(tc.cols, tc.rows)
+		if ok != tc.ok || gotCols != tc.wantCols || gotRows != tc.wantRows {
+			t.Errorf("attachRedrawNudge(%d,%d)=%d,%d,%v want %d,%d,%v",
+				tc.cols, tc.rows, gotCols, gotRows, ok, tc.wantCols, tc.wantRows, tc.ok)
+		}
+	}
+}
+
+func TestKickAttachRedrawSendsNudgeThenRestore(t *testing.T) {
+	var sizes []string
+	var sleeps []time.Duration
+	kickAttachRedraw(func(cols, rows int) error {
+		sizes = append(sizes, fmt.Sprintf("%dx%d", cols, rows))
+		return nil
+	}, 80, 24, func(d time.Duration) { sleeps = append(sleeps, d) })
+	if len(sizes) != 2 || sizes[0] != "79x24" || sizes[1] != "80x24" {
+		t.Fatalf("kick must send two distinct sizes, got %v", sizes)
+	}
+	if len(sleeps) != 2 || sleeps[0] != attachRedrawGap || sleeps[1] != attachRedrawGap {
+		t.Fatalf("each step must wait longer than the holder poll, got %v", sleeps)
+	}
+	if attachRedrawGap < 150*time.Millisecond {
+		t.Fatalf("attachRedrawGap %s is shorter than the holder 150ms poll; resizes would coalesce", attachRedrawGap)
+	}
+}
+
+func TestKickAttachRedrawSkipsUnusableSizes(t *testing.T) {
+	called := 0
+	kickAttachRedraw(func(int, int) error {
+		called++
+		return nil
+	}, 0, 24, func(time.Duration) {})
+	if called != 0 {
+		t.Fatalf("unusable size must not resize, calls=%d", called)
 	}
 }
 

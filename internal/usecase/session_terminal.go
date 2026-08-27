@@ -230,13 +230,29 @@ func KillPTYSession(ctx context.Context, remote TerminalExecutor, id string) err
 
 // RecreatePTYSession replaces a holder-backed session: kill, wait until it is
 // gone, then create. Creating while the previous holder is still running
-// fails with "already exists" and leaves a dead pane.
+// fails with "already exists" and leaves a dead pane. A stale "already exists"
+// after get reports gone is killed once more and retried.
 func RecreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec) error {
+	if err := waitPTYGone(ctx, remote, spec.ID); err != nil {
+		return err
+	}
+	err := CreatePTYSession(ctx, remote, spec)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		return err
+	}
 	_ = KillPTYSession(ctx, remote, spec.ID)
+	if err := waitPTYGone(ctx, remote, spec.ID); err != nil {
+		return err
+	}
+	return CreatePTYSession(ctx, remote, spec)
+}
+
+func waitPTYGone(ctx context.Context, remote TerminalExecutor, id string) error {
+	_ = KillPTYSession(ctx, remote, id)
 	deadline := time.Now().Add(8 * time.Second)
-	for PTYSessionExists(ctx, remote, spec.ID) {
+	for PTYSessionExists(ctx, remote, id) {
 		if time.Now().After(deadline) {
-			return fmt.Errorf("pty: session %s did not stop in time", spec.ID)
+			return fmt.Errorf("pty: session %s did not stop in time", id)
 		}
 		select {
 		case <-ctx.Done():
@@ -244,7 +260,7 @@ func RecreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSp
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return CreatePTYSession(ctx, remote, spec)
+	return nil
 }
 
 // PTYRuntimeAvailable reports whether the remote can host PTY sessions right

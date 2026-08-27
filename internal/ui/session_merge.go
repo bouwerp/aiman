@@ -99,6 +99,9 @@ func lookupPersistedSession(live domain.Session, byID, byTmux map[string]domain.
 // see. Discovery never reads Name or Group; without this, a restart flattens
 // every session into ungrouped until the user edits a group again.
 func overlayPersistedSessionFields(live, stored domain.Session) domain.Session {
+	if live.Backend == "" {
+		live.Backend = stored.Backend
+	}
 	if live.Name == "" {
 		live.Name = stored.Name
 	}

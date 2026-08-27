@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/ptyhold"
 	"github.com/bouwerp/aiman/internal/server"
@@ -204,13 +205,12 @@ func runPTYAttach(sock, id string) error {
 	// screen so a full-screen agent cannot paint over leftover local output.
 	fmt.Fprint(os.Stdout, notice("[aiman] attached to "+id+" — press ctrl+q to detach (the session keeps running)"))
 	fmt.Fprint(os.Stdout, attachOpen())
-	// Repeat the size now that the alt screen is up so a CUP-painting agent
-	// redraws onto the blank surface rather than the leftover primary screen.
-	if cols > 0 && rows > 0 {
-		_ = connResp.Resize(cols, rows)
-	}
 
 	stdin := detachOnCtrlQ(os.Stdin, connResp)
+	// Two-step resize after the alt screen is cleared. kickAttachRedraw waits
+	// once so Relay is already copying; otherwise the redraw fills the
+	// subscribe buffer and is dropped.
+	go kickAttachRedraw(connResp.Resize, cols, rows, time.Sleep)
 	if err := attachExitErr(connResp.Relay(stdin, os.Stdout), stdin.Detached()); err != nil {
 		return err
 	}
@@ -395,6 +395,32 @@ func mouseTrackingOn() string {
 
 func mouseTrackingOff() string {
 	return "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
+}
+
+// attachRedrawGap is longer than the holder's 150ms control poll so two
+// RequestResize files cannot coalesce into one TIOCSWINSZ.
+const attachRedrawGap = 250 * time.Millisecond
+
+func attachRedrawNudge(cols, rows int) (int, int, bool) {
+	if cols > 1 && rows > 0 {
+		return cols - 1, rows, true
+	}
+	if rows > 1 && cols > 0 {
+		return cols, rows - 1, true
+	}
+	return 0, 0, false
+}
+
+// kickAttachRedraw forces a full agent layout onto the cleared alt screen.
+func kickAttachRedraw(resize func(int, int) error, cols, rows int, sleep func(time.Duration)) {
+	nudgeCols, nudgeRows, ok := attachRedrawNudge(cols, rows)
+	if !ok {
+		return
+	}
+	sleep(attachRedrawGap)
+	_ = resize(nudgeCols, nudgeRows)
+	sleep(attachRedrawGap)
+	_ = resize(cols, rows)
 }
 
 // attachOpen puts the attaching tty on a blank alt screen with mouse tracking
