@@ -27,7 +27,7 @@ func remoteCreateSpecFrom(cfg domain.SessionConfig) usecase.RemoteCreateSpec {
 		Prompt:         cfg.InitialPrompt,
 		Issue:          cfg.IssueKey,
 		BaseBranch:     cfg.BaseBranch,
-		Backend:        cfg.SessionBackend,
+		Backend:        domain.ResolveSessionBackend(cfg.SessionBackend, ""),
 		Quick:          cfg.Quick,
 		ExistingBranch: cfg.ExistingBranch,
 		PromptFree:     cfg.PromptFree,

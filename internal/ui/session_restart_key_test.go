@@ -140,6 +140,36 @@ func TestHandleRestartConfirmUpdate_KnownAgentSkipsPicker(t *testing.T) {
 
 // Without a pre-resolved agent, confirming still goes to the picker exactly
 // as before this change.
+// The confirm dialog for a live session must offer switching agents. "S" on
+// the list already does; without the same key here, yes/no is the only choice.
+func TestHandleRestartConfirmUpdate_SwitchAgentOpensPicker(t *testing.T) {
+	model := newTestModelWithSession(t, domain.Session{
+		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
+		Status: domain.SessionStatusActive, AgentName: "Codex CLI",
+	})
+	sess := model.allSessions[0]
+	model.restartingSession = &sess
+	model.sessionCfg.Agent = &domain.Agent{Name: "Codex CLI", Command: "codex"}
+	model.state = viewStateRestartConfirm
+
+	view := model.renderRestartConfirm()
+	if !strings.Contains(view, "S") || !strings.Contains(strings.ToLower(view), "switch") {
+		t.Fatalf("confirm dialog must mention switch agent, got %q", view)
+	}
+
+	newModel, cmd := model.handleRestartConfirmUpdate(pressKey("S"))
+	m := newModel.(*Model)
+	if m.sessionCfg.Agent != nil {
+		t.Fatalf("switch must drop the current agent before the picker, got %+v", m.sessionCfg.Agent)
+	}
+	if m.loadingNext != viewStateRestartAgentPicker {
+		t.Fatalf("loadingNext = %v, want viewStateRestartAgentPicker", m.loadingNext)
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch-agents command")
+	}
+}
+
 func TestHandleRestartConfirmUpdate_NoKnownAgentGoesToPicker(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
 		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
@@ -239,7 +269,8 @@ func TestResolveSessionBackend(t *testing.T) {
 		{domain.BackendTmux, domain.BackendPTY, domain.BackendTmux},
 		// With no choice made, the remote's default applies.
 		{"", domain.BackendPTY, domain.BackendPTY},
-		{"", "", ""},
+		{"", "", domain.BackendPTY},
+		{"", domain.BackendTmux, domain.BackendTmux},
 	}
 	for _, c := range cases {
 		if got := resolveSessionBackend(c.chosen, c.remoteDefault); got != c.want {

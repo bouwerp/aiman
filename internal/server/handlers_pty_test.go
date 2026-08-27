@@ -258,6 +258,43 @@ func TestPTYAttachLiveResize(t *testing.T) {
 	})
 }
 
+// A second attach at the same size used to skip SIGWINCH (TIOCSWINSZ is a
+// no-op when the winsize is unchanged). The client had already been cleared,
+// so Grok never repainted its chrome.
+func TestPTYAttachSameSizeSendsWINCH(t *testing.T) {
+	sock := startPTYServer(t)
+	cmd := `python3 -c "import signal,sys,time; signal.signal(signal.SIGWINCH, lambda *_: (sys.stdout.write('WINCHED\n'), sys.stdout.flush())); time.sleep(60)"`
+	create := createPTY(t, sock, map[string]any{
+		"id": "winch", "command": cmd, "cols": 80, "rows": 24,
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	conn, err := AttachDial(sock, "winch", 80, 24)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer conn.Close()
+	stdinR, stdinW := io.Pipe()
+	defer stdinW.Close()
+	var mu sync.Mutex
+	var out bytes.Buffer
+	go func() { _ = conn.Relay(stdinR, &lockedWriter{mu: &mu, w: &out}) }()
+
+	var got string
+	eventually(t, 10*time.Second, func() bool {
+		mu.Lock()
+		got = out.String()
+		mu.Unlock()
+		return strings.Contains(got, "WINCHED")
+	})
+	if !strings.Contains(got, "WINCHED") {
+		t.Fatalf("reattach at the same size must SIGWINCH the agent, got %q", got)
+	}
+}
+
 func TestPTYAttachUnknownSessionFailsCleanly(t *testing.T) {
 	sock := startPTYServer(t)
 	if _, err := AttachDial(sock, "missing", 80, 24); err == nil {
@@ -340,6 +377,9 @@ func TestPTYAttachResetsWithoutReplayingRawCUPHistory(t *testing.T) {
 	if strings.Contains(got, "RAW_OVERDRAWN") {
 		t.Fatalf("attach dumped overwritten CUP history onto the terminal: %q", got)
 	}
+	if !strings.Contains(got, "VISIBLE_NOW") {
+		t.Fatalf("attach must show the current screen immediately, got %q", got)
+	}
 	if !strings.Contains(got, "\x1b[2J") && !strings.Contains(got, "\x1b[?1049h") {
 		t.Fatalf("attach must reset the terminal before painting, got %q", got)
 	}
@@ -363,11 +403,27 @@ func TestPTYAttachDoesNotDumpLFRenderedSnapshot(t *testing.T) {
 	})
 
 	got := attachOutput(t, sock, "lf")
+	if !strings.Contains(got, "ROW_A") || !strings.Contains(got, "ROW_B") {
+		t.Fatalf("attach must show the current screen immediately, got %q", got)
+	}
 	if strings.Contains(got, "ROW_A\nROW_B") {
 		t.Fatalf("attach dumped an LF-joined snapshot (shears in raw mode): %q", got)
 	}
 	if !strings.Contains(got, "\x1b[2J") && !strings.Contains(got, "\x1b[?1049h") {
 		t.Fatalf("attach must reset the terminal, got %q", got)
+	}
+}
+
+func TestEncodeAttachScreenUsesCUPNotBareLF(t *testing.T) {
+	got := string(encodeAttachScreen("ROW_A\nROW_B"))
+	if !strings.Contains(got, "ROW_A") || !strings.Contains(got, "ROW_B") {
+		t.Fatalf("dump must include both rows: %q", got)
+	}
+	if strings.Contains(got, "ROW_A\nROW_B") {
+		t.Fatalf("raw-mode dump must not join rows with bare LF: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[1;1H") || !strings.Contains(got, "\x1b[2;1H") {
+		t.Fatalf("each row must be CUP-addressed: %q", got)
 	}
 }
 

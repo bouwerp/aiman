@@ -62,8 +62,9 @@ type Session struct {
 	WorktreePath     string
 	WorkingDirectory string
 	TmuxSession      string
-	// Backend is the terminal runtime hosting the session: "tmux" (default)
-	// or "pty" (aiman serve's built-in PTY runtime).
+	// Backend is the terminal runtime hosting the session: "pty" (default
+	// for new sessions) or "tmux". Empty on a stored row means tmux: those
+	// rows were written before the field existed.
 	Backend          string
 	MutagenSyncID    string
 	LocalPath        string
@@ -224,7 +225,7 @@ type SessionConfig struct {
 	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
 	RemoteHost     string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
 	// SessionBackend selects the terminal runtime for this session:
-	// "tmux" (default) or "pty" (aiman serve's built-in PTY runtime on the remote).
+	// "pty" (default, aiman serve's built-in runtime) or "tmux".
 	SessionBackend string
 	// PriorSnapshot is an optional snapshot from a previous session on the same branch/issue.
 	// When set, its summary and next steps are injected into the agent task file so the
@@ -262,12 +263,26 @@ type ScheduledPrompt struct {
 	LastRunAt  time.Time `json:"last_run_at"`
 }
 
-// Session backend values. Empty means tmux for backwards compatibility with
-// rows written before the field existed.
+// Session backend values. Empty on a persisted Session means tmux (rows
+// written before the field existed). Empty on SessionConfig means "use the
+// product default" — DefaultSessionBackend.
 const (
-	BackendTmux = "tmux"
-	BackendPTY  = "pty"
+	BackendTmux           = "tmux"
+	BackendPTY            = "pty"
+	DefaultSessionBackend = BackendPTY
 )
 
 // IsPTY reports whether this session runs under the built-in PTY runtime.
 func (s Session) IsPTY() bool { return s.Backend == BackendPTY }
+
+// ResolveSessionBackend picks the runtime for a session being created.
+// A per-session choice wins; otherwise the remote default; otherwise PTY.
+func ResolveSessionBackend(chosen, remoteDefault string) string {
+	if chosen != "" {
+		return chosen
+	}
+	if remoteDefault != "" {
+		return remoteDefault
+	}
+	return DefaultSessionBackend
+}

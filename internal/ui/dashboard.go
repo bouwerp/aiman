@@ -1955,8 +1955,6 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			Root: remote.Root,
 		})
 		sessionCfg.RemoteHost = remote.Host
-		// Opt-in PTY backend: remotes configured with session_backend: pty hand
-		// their agents to the serve daemon's built-in runtime instead of tmux.
 		sessionCfg.SessionBackend = resolveSessionBackend(sessionCfg.SessionBackend, remote.SessionBackend)
 	}
 
@@ -1975,6 +1973,13 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 
 		ctx := context.Background()
 		ctx = git.WithProgress(ctx, sendStatus)
+
+		if mgr, ok := sessionCfg.SSHManager.(*ssh.Manager); ok && sessionCfg.SessionBackend == domain.BackendPTY {
+			sendStatus("Ensuring agent API...")
+			if err := m.ensureRemoteServer(ctx, mgr); err != nil {
+				m.log("ensure agent API: %v", err)
+			}
+		}
 
 		// Hand the whole create to the remote when it can take it: serve builds
 		// its own FlowManager over a local executor, and the flow is not tied to
@@ -2019,10 +2024,6 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			return sessionCreateMsg{err: err, placeholderID: placeholderID}
 		}
 		m.logPersistent("worktree and tmux ready: tmux=%q id=%s", session.TmuxSession, session.ID)
-
-		if mgr, ok := sessionCfg.SSHManager.(*ssh.Manager); ok {
-			_ = m.ensureRemoteServer(ctx, mgr)
-		}
 
 		session.ID = strings.TrimSpace(session.ID)
 		if session.ID == "" {
@@ -3719,10 +3720,7 @@ func (m *Model) renderRunTargetPicker() string {
 		if m.runTargetSelected == i+1 {
 			marker = "*"
 		}
-		backend := "tmux"
-		if r.SessionBackend == domain.BackendPTY {
-			backend = "pty"
-		}
+		backend := domain.ResolveSessionBackend("", r.SessionBackend)
 		b.WriteString(fmt.Sprintf(" %s %s  %s (%s@%s)  [%s]\n",
 			marker, activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host, backend))
 	}
@@ -3875,7 +3873,7 @@ func (m *Model) renderRestartConfirm() string {
 		b.WriteString("The current agent writes a handoff, then the agent you pick starts and is told to read it. Choose a different agent to switch.\n\n")
 	}
 	b.WriteString("Do you want to proceed?\n\n")
-	b.WriteString(activeStyle.Render("[y]") + " Yes  " + activeStyle.Render("[n]") + " No")
+	b.WriteString(activeStyle.Render("[y]") + " same agent  " + activeStyle.Render("[S]") + " switch agent  " + activeStyle.Render("[n]") + " No")
 
 	dialog := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -5724,7 +5722,7 @@ func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) { 
 				m.runTargetSelected = idx
 				// Start from the remote's configured default each time a remote
 				// is picked so the toggle never leaks between wizard runs.
-				m.sessionCfg.SessionBackend = m.cfg.Remotes[idx-1].SessionBackend
+				m.sessionCfg.SessionBackend = domain.ResolveSessionBackend("", m.cfg.Remotes[idx-1].SessionBackend)
 			}
 		}
 	}
@@ -5738,10 +5736,7 @@ func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) { 
 // run-target picker's "b" toggle inert — and that toggle is the only way to run
 // pty on a remote that defaults to tmux.
 func resolveSessionBackend(chosen, remoteDefault string) string {
-	if chosen != "" {
-		return chosen
-	}
-	return remoteDefault
+	return domain.ResolveSessionBackend(chosen, remoteDefault)
 }
 
 // resetSessionCfg starts a fresh session config for the mode picker's branches while
@@ -7422,9 +7417,6 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		if s.IsPTY() {
 			// Built-in PTY backend: replace the process by killing and
 			// re-creating the session inside the remote serve daemon.
-			if kerr := usecase.KillPTYSession(ctx, mgr, s.ID); kerr != nil {
-				logf("step3: pty kill (continuing): %v", kerr)
-			}
 			env := map[string]string{}
 			for k, v := range awsEnv {
 				env[k] = v
@@ -7432,7 +7424,8 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			for _, secret := range sessionCfg.EnvSecrets {
 				env[secret.Key] = secret.Value
 			}
-			if err := usecase.CreatePTYSession(ctx, mgr, usecase.PTYSpec{
+			usecase.ApplyOpenCodeAllowEnv(ctx, mgr, agentCmd, env)
+			if err := usecase.RecreatePTYSession(ctx, mgr, usecase.PTYSpec{
 				ID:      s.ID,
 				Name:    s.TmuxSession,
 				Dir:     workingDir,
@@ -7448,7 +7441,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			}
 			return sessionCreateMsg{session: *s}
 		}
-		paneCmd := fmt.Sprintf("bash -l -c '%s'; exec bash -i", agentBootstrap)
+		paneCmd := usecase.PaneShellCommand(agentBootstrap)
 		restartCmd := fmt.Sprintf(
 			"if tmux has-session -t %q 2>/dev/null; then "+
 				"%s"+
@@ -7537,6 +7530,9 @@ func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.sessionCfg.Agent != nil {
 				return m, m.startBackgroundRestart()
 			}
+			return m.startAgentPickerRestart()
+		case "S":
+			m.sessionCfg.Agent = nil
 			return m.startAgentPickerRestart()
 		case "n", "esc":
 			m.state = viewStateMain

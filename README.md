@@ -326,24 +326,25 @@ Press `Ctrl+Y` on a selected session to recreate its mutagen sync binding using 
 
 ### Session backends
 
-Every session is hosted by a terminal runtime. `tmux` is the default and needs no
-configuration. The alternative is aiman's own PTY runtime, served by `aiman serve` on
-the remote — useful where tmux isn't available or wanted.
+Every session is hosted by a terminal runtime. **pty** (aiman serve's built-in runtime)
+is the default. `tmux` remains available per remote or per session.
 
-Opt in per remote in `~/.aiman/config.yaml`:
+Set a remote's default in `~/.aiman/config.yaml` only if you want tmux (or to pin pty
+explicitly):
 
 ```yaml
 remotes:
   - host: devbox
     user: code
     root: /home/code/repos
-    session_backend: pty      # "tmux" (default) or "pty"
+    session_backend: tmux     # omit for pty (the default); "tmux" or "pty"
 ```
 
 The run-target step of the new-session wizard always offers `b` to flip the backend for
-the session being created, starting from the remote's configured default. So a
-tmux-default remote can host a one-off pty session, and a pty-default remote a one-off
-tmux session, without editing config. The summary screen shows the backend it will use.
+the session being created, starting from the remote's configured default. The summary
+screen shows the backend it will use. Session create installs/starts `aiman serve` on
+the remote when the socket is missing, so a first pty session does not require a
+manual Agent API install.
 
 PTY sessions are owned by detached *holder* processes rather than by `aiman serve`
 itself, so they survive a serve restart or crash and are re-adopted when it comes
@@ -822,9 +823,9 @@ remotes:
     host: devbox.company.com
     user: developer
     root: /home/developer/repos
-    # Terminal runtime for sessions on this remote: "tmux" (default) or "pty".
+    # Terminal runtime for sessions on this remote: omit for pty (default), or "tmux".
     # Only a default — the run-target screen can override it per session.
-    session_backend: tmux
+    # session_backend: tmux
     aws_delegation:
       profile: default                         # name of the profile written on the remote
       source_profile: my-local-aws-profile   # local ~/.aws profile with long-lived creds
