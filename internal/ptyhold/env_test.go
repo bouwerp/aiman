@@ -69,8 +69,8 @@ func TestChildShellForcesTERMAfterLoginProfile(t *testing.T) {
 	if termAt < 0 || cmdAt < 0 || termAt > cmdAt {
 		t.Fatalf("TERM must be forced after login profile and before the agent, got %q", got)
 	}
-	if !strings.Contains(got, "exec bash -i") {
-		t.Fatalf("missing fallback shell: %q", got)
+	if strings.Contains(got, "exec bash") {
+		t.Fatalf("a fallback shell is a live-but-empty PTY; attach must revive the agent instead, got %q", got)
 	}
 }
 

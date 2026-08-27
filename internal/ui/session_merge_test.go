@@ -154,3 +154,12 @@ func TestOverlayPersistedSessionFieldsKeepsNameAndGroup(t *testing.T) {
 		t.Fatalf("hook fields dropped: %+v", got)
 	}
 }
+
+func TestOverlayPersistedSessionFieldsKeepsBackend(t *testing.T) {
+	live := domain.Session{ID: "s1", RemoteHost: "regent0", TmuxSession: "feat"}
+	stored := domain.Session{ID: "s1", Backend: domain.BackendPTY, TmuxSession: "feat"}
+	got := overlayPersistedSessionFields(live, stored)
+	if got.Backend != domain.BackendPTY {
+		t.Fatalf("live scan cannot see backend; overlay must keep stored %q, got %q", domain.BackendPTY, got.Backend)
+	}
+}

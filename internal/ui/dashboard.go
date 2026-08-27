@@ -1678,22 +1678,7 @@ func tmuxSessionEnvCommands(sessionName string, env map[string]string, unsetKeys
 }
 
 func tmuxExtraEnvFlags(env map[string]string) string {
-	if len(env) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(env))
-	for key := range env {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	var b strings.Builder
-	for _, key := range keys {
-		if value := strings.TrimSpace(env[key]); value != "" {
-			b.WriteString(fmt.Sprintf(" -e %s=%s", key, value))
-		}
-	}
-	return b.String()
+	return usecase.TmuxEnvFlags(env)
 }
 
 func (m *Model) recreateMutagenSync(s domain.Session, background bool) tea.Cmd {
@@ -7394,12 +7379,16 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		)
 		if strings.Contains(strings.ToLower(agentCmd), "opencode") {
 			_ = mgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
-			extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
-			extraEnvFlags += ` -e 'OPENCODE_CONFIG_CONTENT={"permission":"allow"}'`
+			extraEnvFlags += usecase.TmuxEnvFlags(map[string]string{
+				"OPENCODE_CONFIG":         "/tmp/opencode-aiman.json",
+				"OPENCODE_CONFIG_CONTENT": `{"permission":"allow"}`,
+			})
 		}
+		secretEnv := map[string]string{}
 		for _, secret := range sessionCfg.EnvSecrets {
-			extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
+			secretEnv[secret.Key] = secret.Value
 		}
+		extraEnvFlags += usecase.TmuxEnvFlags(secretEnv)
 
 		// Step 3: start the new agent in a fresh pane process.
 		//

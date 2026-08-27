@@ -139,6 +139,48 @@ func TestRecreatePTYSessionWaitsUntilGoneThenCreates(t *testing.T) {
 	}
 }
 
+func TestRecreatePTYSessionRetriesWhenCreateSeesAlreadyExists(t *testing.T) {
+	r := &staleExistsRemote{creates: 0}
+	err := RecreatePTYSession(context.Background(), r, PTYSpec{
+		ID: "sid", Name: "feat", Dir: "/d", Command: "claude",
+	})
+	if err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+	if r.creates < 2 {
+		t.Fatalf("stale already-exists must be killed and created again, creates=%d", r.creates)
+	}
+}
+
+type staleExistsRemote struct {
+	commands []string
+	creates  int
+	written  map[string][]byte
+}
+
+func (r *staleExistsRemote) Execute(_ context.Context, cmd string) (string, error) {
+	r.commands = append(r.commands, cmd)
+	switch {
+	case strings.Contains(cmd, "pty get"):
+		return `{"error":{"code":"not_found"}}`, fmt.Errorf("not_found")
+	case strings.Contains(cmd, "pty create"):
+		r.creates++
+		if r.creates == 1 {
+			return `{"error":{"message":"already exists"}}`, fmt.Errorf("pty: session sid already exists")
+		}
+		return `{"session":{"id":"sid","status":"running"}}`, nil
+	}
+	return "", nil
+}
+
+func (r *staleExistsRemote) WriteFile(_ context.Context, path string, content []byte) error {
+	if r.written == nil {
+		r.written = map[string][]byte{}
+	}
+	r.written[path] = content
+	return nil
+}
+
 type killThenGoneRemote struct {
 	commands  []string
 	running   bool

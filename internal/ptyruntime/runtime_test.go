@@ -73,7 +73,7 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestHolderCreateEchoAndCapture(t *testing.T) {
 	m := newTestManager(t)
-	info, err := m.Create(Spec{ID: "s1", Name: "test", Command: "echo aiman_pty_ok"})
+	info, err := m.Create(Spec{ID: "s1", Name: "test", Command: "bash -c 'echo aiman_pty_ok; exec sleep 300'"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestHolderCreateEchoAndCapture(t *testing.T) {
 
 func TestHolderWriteReachesShell(t *testing.T) {
 	m := newTestManager(t)
-	if _, err := m.Create(Spec{ID: "sh", Command: "true"}); err != nil {
+	if _, err := m.Create(Spec{ID: "sh", Command: "bash -i"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if err := m.Write("sh", []byte("echo wrote_$((40+2))\r")); err != nil {
@@ -109,7 +109,7 @@ func TestHolderSurvivesManagerRestart(t *testing.T) {
 	holderCmd := append([]string(nil), holderBin...)
 
 	a := newTestManagerAt(t, root, holderCmd)
-	if _, err := a.Create(Spec{ID: "surv", Command: "echo before_restart"}); err != nil {
+	if _, err := a.Create(Spec{ID: "surv", Command: "bash -c 'echo before_restart; exec bash -i'"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	waitFor(t, func() bool {
@@ -244,7 +244,7 @@ func TestResizeIsReadableBackFromAFreshManager(t *testing.T) {
 
 func TestSubscribeReplaysThenStreams(t *testing.T) {
 	m := newTestManager(t)
-	if _, err := m.Create(Spec{ID: "sub", Command: "echo first_output"}); err != nil {
+	if _, err := m.Create(Spec{ID: "sub", Command: "bash -c 'echo first_output; exec bash -i'"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	waitFor(t, func() bool {
@@ -294,7 +294,7 @@ func TestSpoolRotationKeepsHistoryReadable(t *testing.T) {
 	// contiguous 1 KiB run the retention assertion below needs.
 	t.Setenv("AIMAN_PTY_SPOOL_MAX", "16384")
 	m := newTestManager(t)
-	if _, err := m.Create(Spec{ID: "big", Command: `head -c 200000 /dev/zero | tr '\0' x`}); err != nil {
+	if _, err := m.Create(Spec{ID: "big", Command: `bash -c 'head -c 200000 /dev/zero | tr "\0" x; exec sleep 300'`}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	waitFor(t, func() bool {

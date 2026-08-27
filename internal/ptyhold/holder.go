@@ -21,6 +21,12 @@ import (
 // poll tick is invisible to a human.
 const controlPollInterval = 150 * time.Millisecond
 
+// resizeNudgePause is how long the holder leaves the PTY at the nudged size
+// before restoring. SIGWINCH is not queued: two TIOCSWINSZ in one burst
+// become one signal, and TIOCGWINSZ then reports the original size, so
+// Grok/Ink skip a full layout.
+var resizeNudgePause = 80 * time.Millisecond
+
 // killGrace mirrors ptyruntime.DefaultKillGrace.
 const killGrace = 3 * time.Second
 
@@ -241,6 +247,9 @@ func applyResizeFile(dir string, ptmx *os.File, meta *Meta) bool {
 			}
 			if nc, nr, ok := resizeNudge(cols, rows, curCols, curRows); ok {
 				_ = pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(nc), Rows: uint16(nr)}) //nolint:gosec // G115: nudge is in-range
+				if resizeNudgePause > 0 {
+					time.Sleep(resizeNudgePause)
+				}
 			}
 			_ = pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}) //nolint:gosec // G115: bounds-checked above
 			if meta != nil {
@@ -372,11 +381,12 @@ const defaultTERM = "xterm-256color"
 
 // childShell is the login-shell script that runs the agent inside the PTY.
 // TERM is exported here, after profile scripts, because bash -l can clobber
-// the holder process environment with TERM=dumb. Codex 0.150 then refuses
-// its TUI and the trailing exec bash is what an attach shows.
+// the holder process environment with TERM=dumb. There is no fallback shell:
+// when the agent exits the holder exits, so attach can revive instead of
+// presenting an empty pane.
 func childShell(command string) string {
 	return fmt.Sprintf(
-		"export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; export TERM=%s COLORTERM=truecolor LANG=\"${LANG:-%s}\"; %s; exec bash -i",
+		"export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; export TERM=%s COLORTERM=truecolor LANG=\"${LANG:-%s}\"; %s",
 		defaultTERM, defaultUTF8Locale, command,
 	)
 }

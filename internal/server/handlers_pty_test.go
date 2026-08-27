@@ -130,7 +130,7 @@ func TestPTYCreateCaptureKillOverSocket(t *testing.T) {
 	sock := startPTYServer(t)
 
 	create := createPTY(t, sock, map[string]any{
-		"id": "s1", "name": "test", "command": "echo e2e_marker",
+		"id": "s1", "name": "test", "command": "bash -c 'echo e2e_marker; exec bash -i'",
 	})
 	if create.Error != nil {
 		t.Fatalf("create: %v", create.Error)
@@ -175,7 +175,7 @@ func TestPTYCreateCaptureKillOverSocket(t *testing.T) {
 
 func TestPTYAttachRelaysBothDirections(t *testing.T) {
 	sock := startPTYServer(t)
-	create := createPTY(t, sock, map[string]any{"id": "att", "command": "true"})
+	create := createPTY(t, sock, map[string]any{"id": "att", "command": "bash -i"})
 	if create.Error != nil {
 		t.Fatalf("create: %v", create.Error)
 	}
@@ -238,7 +238,7 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 
 func TestPTYAttachLiveResize(t *testing.T) {
 	sock := startPTYServer(t)
-	create := createPTY(t, sock, map[string]any{"id": "rsz", "command": "true"})
+	create := createPTY(t, sock, map[string]any{"id": "rsz", "command": "sleep 60"})
 	if create.Error != nil {
 		t.Fatalf("create: %v", create.Error)
 	}
@@ -292,6 +292,48 @@ func TestPTYAttachSameSizeSendsWINCH(t *testing.T) {
 	})
 	if !strings.Contains(got, "WINCHED") {
 		t.Fatalf("reattach at the same size must SIGWINCH the agent, got %q", got)
+	}
+}
+
+// Two TIOCSWINSZ in one syscall burst coalesce into a single SIGWINCH, and
+// TIOCGWINSZ then reports the original size, so Grok/Ink skip a full layout.
+// The holder must let the child observe the nudged size before restoring.
+func TestPTYAttachSameSizeReportsNudgedThenRestoredSize(t *testing.T) {
+	sock := startPTYServer(t)
+	cmd := `python3 -c "import fcntl,signal,struct,sys,termios,time
+def sz():
+ s=fcntl.ioctl(1,termios.TIOCGWINSZ,struct.pack('HHHH',0,0,0,0)); r,c,_,_=struct.unpack('HHHH',s); return c,r
+def h(*_):
+ c,r=sz(); sys.stdout.write('WINCH:%dx%d\n'%(c,r)); sys.stdout.flush()
+signal.signal(signal.SIGWINCH,h); time.sleep(60)"`
+	create := createPTY(t, sock, map[string]any{
+		"id": "winch-sz", "command": cmd, "cols": 80, "rows": 24,
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	conn, err := AttachDial(sock, "winch-sz", 80, 24)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer conn.Close()
+	stdinR, stdinW := io.Pipe()
+	defer stdinW.Close()
+	var mu sync.Mutex
+	var out bytes.Buffer
+	go func() { _ = conn.Relay(stdinR, &lockedWriter{mu: &mu, w: &out}) }()
+
+	var got string
+	eventually(t, 10*time.Second, func() bool {
+		mu.Lock()
+		got = out.String()
+		mu.Unlock()
+		return strings.Contains(got, "WINCH:79x24") && strings.Contains(got, "WINCH:80x24")
+	})
+	if !strings.Contains(got, "WINCH:79x24") || !strings.Contains(got, "WINCH:80x24") {
+		t.Fatalf("same-size attach must WINCH at the nudge then the real size, got %q", got)
 	}
 }
 
