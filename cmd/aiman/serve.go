@@ -64,14 +64,8 @@ func runServe() error {
 	}
 	defer db.Close()
 
-	root := ""
-	if len(cfg.Remotes) > 0 {
-		root = cfg.Remotes[0].Root
-	}
-	if root == "" {
-		home, _ := os.UserHomeDir()
-		root = home
-	}
+	home, _ := os.UserHomeDir()
+	root := config.ServeGitRoot(cfg, home, config.DirExists)
 	localExec := local.NewExecutor(root)
 	jiraProvider := jira.NewProvider(jira.Config{
 		URL:           cfg.Integrations.Jira.URL,

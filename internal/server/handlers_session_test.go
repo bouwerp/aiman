@@ -340,6 +340,46 @@ func TestSessionCreateUsesCallerWorktreeParentAsRoot(t *testing.T) {
 	}
 }
 
+func TestSessionCreateInfersRootFromExistingWorktreesWhenCallerUnknown(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID:           "other-id",
+		Name:         "impl",
+		WorktreePath: "/home/code/repos/aiman@aiman-fixes-2808",
+		Status:       domain.SessionStatusActive,
+		CreatedAt:    time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := shortTempDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	creator := &fakeCreator{}
+	go func() { _ = New(ln, repo, nil, creator, nil, nil, "t").Serve(cancelCtx) }()
+
+	resp, err := Call(SocketPath(dir), "session.create", map[string]any{
+		"repo": "realfi-co/realfi", "branch": "WTB-2", "agent": "claude",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.SSHManager == nil {
+		t.Fatal("create must infer a git root from existing worktrees")
+	}
+	if got := creator.cfg.SSHManager.GetRoot(); got != "/home/code/repos" {
+		t.Fatalf("create root = %q, want /home/code/repos, not $HOME/realfi", got)
+	}
+}
+
 func TestCallServerNotRunning(t *testing.T) {
 	_, err := Call(filepath.Join(shortTempDir(t), "aiman.sock"), "ping", nil)
 	if err == nil {
