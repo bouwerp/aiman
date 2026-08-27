@@ -594,6 +594,10 @@ func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, 
 	if promptFree {
 		cmd = ensureFlag(cmd, "--always-approve")
 	}
+	// Native terminal scrollback: alt-screen TUIs have nothing for the
+	// attach client's wheel/page-up to scroll, which is how PTY attach
+	// (and tmux copy-mode) surface history.
+	cmd = ensureFlag(cmd, "--no-alt-screen")
 
 	result := domain.PreparedSession{Command: cmd}
 	var promptFiles []string
