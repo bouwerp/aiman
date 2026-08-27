@@ -217,7 +217,7 @@ func (m SummaryModel) viewString() string {
 	// have revealed it.
 	backend := m.backend
 	if backend == "" {
-		backend = domain.BackendTmux
+		backend = domain.DefaultSessionBackend
 	}
 	b.WriteString(fmt.Sprintf("%-15s %s\n", "Backend:", backend))
 

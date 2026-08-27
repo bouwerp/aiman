@@ -235,6 +235,13 @@ func applyResizeFile(dir string, ptmx *os.File, meta *Meta) bool {
 		cols, c1 := strconv.Atoi(parts[0])
 		rows, c2 := strconv.Atoi(parts[1])
 		if c1 == nil && c2 == nil && cols > 0 && rows > 0 && cols <= 0xFFFF && rows <= 0xFFFF {
+			curCols, curRows := 0, 0
+			if meta != nil {
+				curCols, curRows = parseWxH(meta.Size)
+			}
+			if nc, nr, ok := resizeNudge(cols, rows, curCols, curRows); ok {
+				_ = pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(nc), Rows: uint16(nr)}) //nolint:gosec // G115: nudge is in-range
+			}
 			_ = pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}) //nolint:gosec // G115: bounds-checked above
 			if meta != nil {
 				meta.Size = fmt.Sprintf("%dx%d", cols, rows)
@@ -244,6 +251,36 @@ func applyResizeFile(dir string, ptmx *os.File, meta *Meta) bool {
 	}
 	_ = os.Remove(path)
 	return true
+}
+
+// resizeNudge is a one-cell size change applied before a TIOCSWINSZ that
+// would otherwise be a no-op. The kernel does not SIGWINCH when the winsize
+// is unchanged, so a reattach that clears the client tty would leave Grok
+// (and other CUP TUIs) without a chrome redraw.
+func resizeNudge(cols, rows, curCols, curRows int) (int, int, bool) {
+	if cols != curCols || rows != curRows || cols <= 0 || rows <= 0 {
+		return 0, 0, false
+	}
+	if cols > 1 {
+		return cols - 1, rows, true
+	}
+	if rows > 1 {
+		return cols, rows - 1, true
+	}
+	return 2, 1, true
+}
+
+func parseWxH(s string) (int, int) {
+	parts := strings.SplitN(strings.TrimSpace(s), "x", 2)
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	cols, err1 := strconv.Atoi(parts[0])
+	rows, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return 0, 0
+	}
+	return cols, rows
 }
 
 // fanout broadcasts live output to attached readers and pipes each client's

@@ -616,7 +616,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		// defaults, which serve install keeps in step with the laptop's config.
 		Agent:          &domain.Agent{Name: agentName, Command: params.Agent},
 		Repo:           domain.Repo{Name: params.Repo},
-		SessionBackend: params.Backend,
+		SessionBackend: domain.ResolveSessionBackend(params.Backend, ""),
 		ExistingBranch: params.ExistingBranch,
 	}
 	var caller *domain.Session

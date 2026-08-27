@@ -341,9 +341,10 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		session.AWSConfig = config.AWSConfig
 	}
 
-	// PTY backend: hand the agent to aiman serve's built-in runtime instead of
-	// tmux. Env travels in the create payload, so no -e flags or shell escaping
-	// are needed; the command runs under bash -l inside a real PTY.
+	// PTY is the default runtime. Env travels in the create payload, so no
+	// -e flags or shell escaping are needed; the command runs under bash -l
+	// inside a real PTY. Explicit session_backend: tmux still uses tmux.
+	config.SessionBackend = domain.ResolveSessionBackend(config.SessionBackend, "")
 	if config.SessionBackend == domain.BackendPTY {
 		return m.launchPTYSession(ctx, sshMgr, session, config, workingDir, tmuxName, agentCmd, sendKeysPrompt, awsEnv)
 	}
@@ -367,19 +368,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
 	extraEnvFlags := tmuxEnvFlags(awsEnv)
-	// Ensure OpenCode runs in auto-approve mode. Two mechanisms are used for
-	// maximum compatibility across versions:
-	//   1. OPENCODE_CONFIG=/tmp/opencode-aiman.json — works with all versions but
-	//      can be overridden by a project-level opencode.json (precedence 3 of 8).
-	//   2. OPENCODE_CONFIG_CONTENT — newer OpenCode versions only; highest user
-	//      precedence (position 6 of 8), overrides even project config.
-	// The correct top-level format for all-permissions is the string "allow", not
-	// an object like {"*":"allow"}.
-	if strings.Contains(strings.ToLower(agentCmd), "opencode") {
-		_ = sshMgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
-		extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
-		extraEnvFlags += ` -e 'OPENCODE_CONFIG_CONTENT={"permission":"allow"}'`
-	}
+	openCodeEnv := map[string]string{}
+	ApplyOpenCodeAllowEnv(ctx, sshMgr, agentCmd, openCodeEnv)
+	extraEnvFlags += tmuxEnvFlags(openCodeEnv)
 	for _, secret := range config.EnvSecrets {
 		extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 	}
@@ -396,13 +387,13 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		"tmux start-server 2>/dev/null || true; "+
 			"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
 			"tmux set-window-option -g remain-on-exit on 2>/dev/null || true; "+
-			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s \"bash -l -c '%s'; exec bash -i\"; "+
+			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s %q; "+
 			"_RC=$?; "+
 			"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
 			"tmux set-window-option -g remain-on-exit off 2>/dev/null || true; "+
 			"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
 			"exit $_RC",
-		tmuxName, workingDir, strings.TrimSpace(session.ID), extraEnvFlags, agentBootstrap, tmuxName,
+		tmuxName, workingDir, strings.TrimSpace(session.ID), extraEnvFlags, PaneShellCommand(agentBootstrap), tmuxName,
 	)
 	// Attaching means adopting whatever is already on the remote, tmux included.
 	// An interrupted create leaves a live worktree and tmux session behind with
@@ -664,11 +655,7 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 	for k, v := range awsEnv {
 		env[k] = v
 	}
-	if strings.Contains(strings.ToLower(agentCmd), "opencode") {
-		_ = sshMgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
-		env["OPENCODE_CONFIG"] = "/tmp/opencode-aiman.json"
-		env["OPENCODE_CONFIG_CONTENT"] = `{"permission":"allow"}`
-	}
+	ApplyOpenCodeAllowEnv(ctx, sshMgr, agentCmd, env)
 	for _, secret := range config.EnvSecrets {
 		env[secret.Key] = secret.Value
 	}

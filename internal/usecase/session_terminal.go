@@ -39,6 +39,25 @@ type PTYSpec struct {
 	Env     map[string]string
 }
 
+// PaneShellCommand is the tmux pane command that runs the agent. The trailing
+// exec bash lives inside the same bash -c as the agent: tmux execs one command,
+// so a sibling `cmd; exec bash` never runs and remain-on-exit shows a dead pane.
+func PaneShellCommand(bootstrap string) string {
+	return fmt.Sprintf("bash -l -c '%s; exec bash -i'", bootstrap)
+}
+
+// ApplyOpenCodeAllowEnv writes the auto-allow config and sets the env keys
+// OpenCode reads for it. Create and restart both have to do this: a restart
+// that only set tmux -e flags left PTY OpenCode sessions prompting or exiting.
+func ApplyOpenCodeAllowEnv(ctx context.Context, remote TerminalExecutor, agentCmd string, env map[string]string) {
+	if remote == nil || env == nil || !strings.Contains(strings.ToLower(agentCmd), "opencode") {
+		return
+	}
+	_ = remote.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
+	env["OPENCODE_CONFIG"] = "/tmp/opencode-aiman.json"
+	env["OPENCODE_CONFIG_CONTENT"] = `{"permission":"allow"}`
+}
+
 // CreatePTYSession launches a session inside the remote serve daemon's PTY
 // runtime. Params travel as a JSON file to keep secrets out of argv.
 func CreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec) error {
@@ -207,6 +226,25 @@ func KillPTYSession(ctx context.Context, remote TerminalExecutor, id string) err
 		return err
 	}
 	return nil
+}
+
+// RecreatePTYSession replaces a holder-backed session: kill, wait until it is
+// gone, then create. Creating while the previous holder is still running
+// fails with "already exists" and leaves a dead pane.
+func RecreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec) error {
+	_ = KillPTYSession(ctx, remote, spec.ID)
+	deadline := time.Now().Add(8 * time.Second)
+	for PTYSessionExists(ctx, remote, spec.ID) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("pty: session %s did not stop in time", spec.ID)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return CreatePTYSession(ctx, remote, spec)
 }
 
 // PTYRuntimeAvailable reports whether the remote can host PTY sessions right

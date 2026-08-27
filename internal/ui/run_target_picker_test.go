@@ -78,6 +78,14 @@ func TestRunTargetPickerSelectThenConfirm(t *testing.T) {
 
 // tmux and pty sessions run side by side: b flips the backend for this session
 // only, starting from the remote's configured default.
+func TestRunTargetPickerDefaultsToPTY(t *testing.T) {
+	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
+	m = pickKey(m, "1")
+	if m.sessionCfg.SessionBackend != domain.BackendPTY {
+		t.Fatalf("new sessions default to pty, got %q", m.sessionCfg.SessionBackend)
+	}
+}
+
 func TestRunTargetPickerTogglesBackend(t *testing.T) {
 	cfg := twoRemoteCfg()
 	cfg.Remotes[0].SessionBackend = domain.BackendPTY
@@ -151,7 +159,7 @@ func TestRunTargetPickerEnterWithoutSelectionStays(t *testing.T) {
 func TestRunTargetPickerViewListsRemotes(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker, width: 100, height: 40}
 	out := m.renderView()
-	for _, want := range []string{"dev-box", "build-2", "[1]", "[2]", "[tmux]"} {
+	for _, want := range []string{"dev-box", "build-2", "[1]", "[2]", "[pty]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in the picker, got:\n%s", want, out)
 		}

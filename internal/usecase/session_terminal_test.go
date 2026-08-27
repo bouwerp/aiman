@@ -111,6 +111,97 @@ func TestScanPTYSessionsCmdGuardsOnBinaryPresence(t *testing.T) {
 	}
 }
 
+// Recreate must not call create while get still reports running: that leaves
+// the old holder in place and the dashboard attaches to a dead pane.
+func TestRecreatePTYSessionWaitsUntilGoneThenCreates(t *testing.T) {
+	r := &killThenGoneRemote{running: true}
+	err := RecreatePTYSession(context.Background(), r, PTYSpec{
+		ID: "sid", Name: "feat", Dir: "/d", Command: "claude",
+	})
+	if err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+	joined := strings.Join(r.commands, "\n")
+	if !strings.Contains(joined, "aiman pty kill") {
+		t.Fatalf("missing kill: %s", joined)
+	}
+	if !strings.Contains(joined, "aiman pty create") {
+		t.Fatalf("missing create: %s", joined)
+	}
+	createAt := -1
+	for i, c := range r.commands {
+		if strings.Contains(c, "aiman pty create") {
+			createAt = i
+		}
+	}
+	if createAt >= 0 && r.runningAt[createAt] {
+		t.Fatal("create ran while the previous holder was still running")
+	}
+}
+
+type killThenGoneRemote struct {
+	commands  []string
+	running   bool
+	runningAt []bool
+	written   map[string][]byte
+}
+
+func (r *killThenGoneRemote) Execute(_ context.Context, cmd string) (string, error) {
+	r.runningAt = append(r.runningAt, r.running)
+	r.commands = append(r.commands, cmd)
+	switch {
+	case strings.Contains(cmd, "pty kill"), strings.Contains(cmd, "pty forget"):
+		r.running = false
+		return "", nil
+	case strings.Contains(cmd, "pty get"):
+		if r.running {
+			return `{"session":{"id":"sid","status":"running"}}`, nil
+		}
+		return `{"error":{"code":"not_found"}}`, fmt.Errorf("not_found")
+	case strings.Contains(cmd, "pty create"):
+		if r.running {
+			return `{"error":{"message":"already exists"}}`, fmt.Errorf("pty: session sid already exists")
+		}
+		return `{"session":{"id":"sid","status":"running"}}`, nil
+	}
+	return "", nil
+}
+
+func (r *killThenGoneRemote) WriteFile(_ context.Context, path string, content []byte) error {
+	if r.written == nil {
+		r.written = map[string][]byte{}
+	}
+	r.written[path] = content
+	return nil
+}
+
+func TestPaneShellCommandKeepsShellInsideLoginCommand(t *testing.T) {
+	got := PaneShellCommand("export PATH=foo; grok --always-approve")
+	if !strings.HasPrefix(got, "bash -l -c '") {
+		t.Fatalf("want a login-shell wrapper, got %q", got)
+	}
+	if strings.Contains(got, "'; exec bash") {
+		t.Fatal("tmux execs one pane command; a sibling exec bash never runs and remain-on-exit shows a dead pane")
+	}
+	if !strings.Contains(got, "; exec bash -i'") {
+		t.Fatalf("agent exit must exec bash inside the same -c, got %q", got)
+	}
+}
+
+func TestApplyOpenCodeAllowEnv(t *testing.T) {
+	r := &terminalRemote{}
+	env := map[string]string{}
+	ApplyOpenCodeAllowEnv(context.Background(), r, "opencode --foo", env)
+	if env["OPENCODE_CONFIG"] == "" || env["OPENCODE_CONFIG_CONTENT"] == "" {
+		t.Fatalf("opencode restart/create must inject allow-env, got %v", env)
+	}
+	env = map[string]string{}
+	ApplyOpenCodeAllowEnv(context.Background(), r, "claude", env)
+	if len(env) != 0 {
+		t.Fatalf("non-opencode must not get OPENCODE_*: %v", env)
+	}
+}
+
 func TestCreatePTYSessionWritesParamsFile(t *testing.T) {
 	r := &terminalRemote{}
 	err := CreatePTYSession(context.Background(), r, PTYSpec{

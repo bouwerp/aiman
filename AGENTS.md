@@ -344,9 +344,11 @@ forget|attach`. Attach puts the local tty in raw mode and relays; ctrl+q
 detaches without stopping the session. `--params-file` / `--file` flags keep
 secrets and prompt text out of argv.
 
-Session model: `domain.Session.Backend` is `"tmux"` (default) or `"pty"`;
+Session model: `domain.Session.Backend` is `"pty"` (default for new sessions) or `"tmux"`;
 persisted in the sqlite `backend` column with COALESCE protection like other
-identity fields. Remotes opt in via config `remotes[].session_backend: pty`.
+identity fields. Empty persisted `backend` still means tmux (pre-field rows). New
+sessions default to `"pty"` unless `remotes[].session_backend` or the wizard `b`
+toggle selects `"tmux"`.
 The laptop drives everything through SSH (`$HOME/.local/bin/aiman pty …`),
 routed by `usecase.CaptureSessionPane / SendSessionPrompt /
 TerminateSessionTerminal` — call those instead of RemoteExecutor tmux methods

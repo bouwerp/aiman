@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -244,11 +245,12 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 
 	writeResponse(conn, Response{ID: req.ID, Result: map[string]any{"type": "pty_attached"}})
 
-	// Do not replay the raw spool, and do not dump CaptureScreen text.
-	// CaptureScreen joins rows with LF; attach runs the client tty in raw
-	// mode, where LF is cursor-down without CR, so Ink TUIs (agy) shear.
-	// Reset the client, SIGWINCH the agent, and stream live CUP from there.
-	if _, err := conn.Write(attachScreenReset()); err != nil {
+	// Replay the current screen with CUP, not the raw spool and not LF-joined
+	// CaptureScreen text. Attach runs the client in raw mode, where LF is
+	// cursor-down without CR. CUP-addressed rows show chrome immediately;
+	// SIGWINCH then lets the agent paint live updates on top.
+	text, _ := s.pty.CaptureScreen(params.ID)
+	if _, err := conn.Write(encodeAttachScreen(text)); err != nil {
 		return
 	}
 	if params.Cols > 0 && params.Rows > 0 {
@@ -282,6 +284,18 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 
 func attachScreenReset() []byte {
 	return []byte("\x1b[?1049h\x1b[2J\x1b[H")
+}
+
+func encodeAttachScreen(text string) []byte {
+	var b strings.Builder
+	b.Write(attachScreenReset())
+	if text == "" {
+		return []byte(b.String())
+	}
+	for i, row := range strings.Split(text, "\n") {
+		fmt.Fprintf(&b, "\x1b[%d;1H%s\x1b[K", i+1, row)
+	}
+	return []byte(b.String())
 }
 
 func writeResponse(conn io.Writer, resp Response) {

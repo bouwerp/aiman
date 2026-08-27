@@ -229,7 +229,7 @@ type Remote struct {
 	// AWSDefaultRegion overrides the global aws.default_region for this remote.
 	AWSDefaultRegion string `yaml:"aws_default_region,omitempty"`
 	// SessionBackend selects how new sessions host their terminal on this
-	// remote: "tmux" (default) or "pty" (aiman serve's built-in PTY runtime).
+	// remote: "pty" (default) or "tmux". Empty inherits the product default (pty).
 	SessionBackend string `yaml:"session_backend,omitempty"`
 }
 

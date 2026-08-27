@@ -39,6 +39,26 @@ func TestWithTerminalEnvReplacesNonUTF8Locale(t *testing.T) {
 	}
 }
 
+func TestResizeNudgeWhenSizeUnchanged(t *testing.T) {
+	cases := []struct {
+		cols, rows, curCols, curRows int
+		wantCols, wantRows           int
+		want                         bool
+	}{
+		{80, 24, 100, 30, 0, 0, false},
+		{80, 24, 80, 24, 79, 24, true},
+		{1, 24, 1, 24, 1, 23, true},
+		{1, 1, 1, 1, 2, 1, true},
+	}
+	for _, tc := range cases {
+		gotCols, gotRows, ok := resizeNudge(tc.cols, tc.rows, tc.curCols, tc.curRows)
+		if ok != tc.want || (ok && (gotCols != tc.wantCols || gotRows != tc.wantRows)) {
+			t.Errorf("resizeNudge(%d,%d, cur %d,%d) = %d,%d,%v want %d,%d,%v",
+				tc.cols, tc.rows, tc.curCols, tc.curRows, gotCols, gotRows, ok, tc.wantCols, tc.wantRows, tc.want)
+		}
+	}
+}
+
 func TestChildShellForcesTERMAfterLoginProfile(t *testing.T) {
 	got := childShell("codex --dangerously-bypass-approvals-and-sandbox")
 	// bash -l sources the profile before this script. Codex 0.150 refuses
