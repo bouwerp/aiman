@@ -28,9 +28,22 @@ var route53DNSActions = []string{
 	"route53:GetChange",
 }
 
+// iamInspectActions are the IAM APIs used to read a role's policies and
+// simulate access. IAM is global (API in us-east-1); they have no RequestedRegion.
+var iamInspectActions = []string{
+	"iam:GetRole",
+	"iam:ListRolePolicies",
+	"iam:GetRolePolicy",
+	"iam:ListAttachedRolePolicies",
+	"iam:GetPolicy",
+	"iam:GetPolicyVersion",
+	"iam:SimulatePrincipalPolicy",
+}
+
 // BuildRegionPolicy returns an inline IAM JSON policy that restricts all
 // actions to the given AWS regions via the aws:RequestedRegion condition,
-// plus unconditional Route53 hosted-zone access for DNS validation.
+// plus unconditional Route53 hosted-zone access for DNS validation and
+// unconditional IAM inspect/simulate so agents can see why a call is denied.
 // Returns an empty string when regions is nil or empty.
 func BuildRegionPolicy(regions []string) string {
 	trimmed := make([]string, 0, len(regions))
@@ -68,6 +81,13 @@ func BuildRegionPolicy(regions []string) string {
 			{
 				Effect:   "Allow",
 				Action:   route53DNSActions,
+				Resource: "*",
+			},
+			// IAM is global (API in us-east-1). A RequestedRegion lock
+			// otherwise denies ListRolePolicies / SimulatePrincipalPolicy.
+			{
+				Effect:   "Allow",
+				Action:   iamInspectActions,
 				Resource: "*",
 			},
 		},

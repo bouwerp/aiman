@@ -97,6 +97,46 @@ func TestBuildRegionPolicy_AllowsRoute53WithoutRegion(t *testing.T) {
 	}
 }
 
+func TestBuildRegionPolicy_AllowsIAMInspectWithoutRegion(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	want := []string{
+		"iam:GetRole",
+		"iam:ListRolePolicies",
+		"iam:GetRolePolicy",
+		"iam:ListAttachedRolePolicies",
+		"iam:GetPolicy",
+		"iam:GetPolicyVersion",
+		"iam:SimulatePrincipalPolicy",
+	}
+	found := map[string]bool{}
+	for _, s := range p.Statement {
+		if s.Condition != nil {
+			continue
+		}
+		for _, a := range actionList(s.Action) {
+			found[a] = true
+		}
+	}
+	var missing []string
+	for _, a := range want {
+		if !found[a] {
+			missing = append(missing, a)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("unconditional IAM inspect access missing %v, policy=%s", missing, got)
+	}
+}
+
 func actionList(action any) []string {
 	switch v := action.(type) {
 	case string:
