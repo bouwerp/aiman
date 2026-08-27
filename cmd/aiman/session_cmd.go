@@ -153,13 +153,16 @@ func runSession(args []string) error {
 			return callAndPrintRaw(sock, "session.create", raw)
 		}
 		params := map[string]any{}
-		for _, k := range []string{"name", "group", "repo", "branch", "agent", "dir", "prompt", "issue", "base", "backend"} {
+		for _, k := range []string{"name", "group", "parent", "repo", "branch", "agent", "dir", "prompt", "issue", "base", "backend"} {
 			if flags[k] != "" {
 				params[k] = flags[k]
 			}
 		}
 		if _, ok := flags["quick"]; ok {
 			params["quick"] = true
+		}
+		if _, ok := flags["orphan"]; ok {
+			params["orphan"] = true
 		}
 		if _, ok := flags["existing"]; ok {
 			params["existing"] = true
@@ -193,7 +196,7 @@ func runSession(args []string) error {
 
 var boolSessionFlags = map[string]bool{
 	"wait": true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true, "dry-run": true,
-	"existing-branch": true,
+	"existing-branch": true, "orphan": true,
 }
 
 func takeFlags(args []string) (map[string]string, []string) {

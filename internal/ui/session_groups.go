@@ -37,6 +37,20 @@ func groupCollapseKey(group, remoteName string) string {
 	return domain.GroupLabel(group) + "\x00" + remoteName
 }
 
+func (m *Model) toggleSelectedSessionCollapsed() (tea.Model, tea.Cmd, bool) {
+	it, ok := m.list.SelectedItem().(item)
+	if !ok || it.header || !it.hasChildren {
+		return m, nil, false
+	}
+	if m.collapsedSessions == nil {
+		m.collapsedSessions = map[string]bool{}
+	}
+	id := it.session.ID
+	m.collapsedSessions[id] = !m.collapsedSessions[id]
+	m.applyRemoteFilter()
+	return m, nil, true
+}
+
 func (m *Model) toggleSelectedGroupCollapsed() (tea.Model, tea.Cmd, bool) {
 	it, ok := m.list.SelectedItem().(item)
 	if !ok || !it.header {

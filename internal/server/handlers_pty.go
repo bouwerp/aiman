@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
@@ -90,6 +92,141 @@ func (s *Server) handlePTYInput(ctx context.Context, req Request) Response {
 		return s.ptyErrResp(req.ID, err)
 	}
 	return Response{ID: req.ID, Result: map[string]any{"type": "pty_input", "sent": true}}
+}
+
+const waitOutputSpoolBytes = 256 * 1024
+const waitOutputTailRunes = 4000
+const waitOutputPoll = 200 * time.Millisecond
+const waitOutputDefaultMS = 120000
+
+func appendRunEnter(command string) string {
+	if strings.HasSuffix(command, "\r") || strings.HasSuffix(command, "\n") {
+		return command
+	}
+	return command + "\r"
+}
+
+func (s *Server) handlePTYRun(ctx context.Context, req Request) Response {
+	id, fail, ok := s.resolvePTYID(req)
+	if !ok {
+		return fail
+	}
+	var params struct {
+		Command string `json:"command"`
+		Text    string `json:"text"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	cmd := params.Command
+	if cmd == "" {
+		cmd = params.Text
+	}
+	if strings.TrimSpace(cmd) == "" {
+		return errResp(req.ID, CodeInvalidParams, "command is required")
+	}
+	if s.pty == nil {
+		return errResp(req.ID, CodeInvalidParams, "no PTY runtime on this host")
+	}
+	if err := s.pty.Write(id, []byte(appendRunEnter(cmd))); err != nil {
+		return s.ptyErrResp(req.ID, err)
+	}
+	return Response{ID: req.ID, Result: map[string]any{"type": "pty_run", "sent": true}}
+}
+
+func (s *Server) handlePTYWaitOutput(ctx context.Context, req Request) Response {
+	id, fail, ok := s.resolvePTYID(req)
+	if !ok {
+		return fail
+	}
+	var params struct {
+		Match     string `json:"match"`
+		Regex     string `json:"regex"`
+		TimeoutMS *int   `json:"timeout_ms"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	if (params.Match == "") == (params.Regex == "") {
+		return errResp(req.ID, CodeInvalidParams, "exactly one of match or regex is required")
+	}
+	var re *regexp.Regexp
+	if params.Regex != "" {
+		compiled, cerr := regexp.Compile(params.Regex)
+		if cerr != nil {
+			return errResp(req.ID, CodeInvalidParams, "invalid regex: "+cerr.Error())
+		}
+		re = compiled
+	}
+	if s.pty == nil {
+		return errResp(req.ID, CodeInvalidParams, "no PTY runtime on this host")
+	}
+	matches := func(plain string) bool {
+		if re != nil {
+			return re.MatchString(plain)
+		}
+		return strings.Contains(plain, params.Match)
+	}
+	snapshot := func() (string, error) {
+		raw, err := s.pty.Capture(id, waitOutputSpoolBytes)
+		if err != nil {
+			return "", err
+		}
+		return pane.StripANSI(string(raw)), nil
+	}
+	ms := waitOutputDefaultMS
+	if params.TimeoutMS != nil {
+		ms = *params.TimeoutMS
+	}
+	waitCtx := ctx
+	cancel := func() {}
+	if ms > 0 {
+		waitCtx, cancel = context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
+	}
+	defer cancel()
+
+	plain, err := snapshot()
+	if err != nil {
+		return s.ptyErrResp(req.ID, err)
+	}
+	if matches(plain) {
+		return Response{ID: req.ID, Result: map[string]any{
+			"type": "wait_output", "matched": true, "text": tailRunes(plain, waitOutputTailRunes),
+		}}
+	}
+	ticker := time.NewTicker(waitOutputPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-waitCtx.Done():
+			return Response{
+				ID: req.ID,
+				Result: map[string]any{
+					"type": "wait_output", "matched": false, "text": tailRunes(plain, waitOutputTailRunes),
+				},
+				Error: &Error{Code: CodeTimeout, Message: waitCtx.Err().Error()},
+			}
+		case <-ticker.C:
+			next, serr := snapshot()
+			if serr != nil {
+				return s.ptyErrResp(req.ID, serr)
+			}
+			plain = next
+			if matches(plain) {
+				return Response{ID: req.ID, Result: map[string]any{
+					"type": "wait_output", "matched": true, "text": tailRunes(plain, waitOutputTailRunes),
+				}}
+			}
+		}
+	}
+}
+
+func tailRunes(s string, n int) string {
+	r := []rune(s)
+	if n <= 0 || len(r) <= n {
+		return s
+	}
+	return string(r[len(r)-n:])
 }
 
 func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {

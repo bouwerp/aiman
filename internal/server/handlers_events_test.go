@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
@@ -75,6 +76,23 @@ func TestCollectSessionEventsReportsSessionsGoingAway(t *testing.T) {
 	// Reported once, not on every tick.
 	if again := collectSessionEvents(l, seen); len(again) != 0 {
 		t.Fatalf("session_gone must not repeat: %+v", again)
+	}
+}
+
+func TestCollectRepoCreatedEventsEmitsOnce(t *testing.T) {
+	sessions := []domain.Session{
+		{ID: "new", Name: "reviewer", ParentID: "parent", Status: domain.SessionStatusActive},
+	}
+	announced := map[string]struct{}{}
+	first := collectRepoCreatedEvents(sessions, announced)
+	if len(first) != 1 || first[0].Type != "session_created" || first[0].ID != "new" {
+		t.Fatalf("first pass: %+v", first)
+	}
+	if first[0].Session == nil || first[0].Session.Name != "reviewer" || first[0].Session.ParentID != "parent" {
+		t.Fatalf("session payload: %+v", first[0].Session)
+	}
+	if again := collectRepoCreatedEvents(sessions, announced); len(again) != 0 {
+		t.Fatalf("must not re-announce: %+v", again)
 	}
 }
 

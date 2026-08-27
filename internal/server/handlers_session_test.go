@@ -340,6 +340,86 @@ func TestSessionCreateUsesCallerWorktreeParentAsRoot(t *testing.T) {
 	}
 }
 
+func TestSessionCreateNestsUnderCaller(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "parent-id", Name: "impl", Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := shortTempDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	creator := &fakeCreator{}
+	go func() { _ = New(ln, repo, nil, creator, nil, nil, "t").Serve(cancelCtx) }()
+
+	t.Setenv("AIMAN_ID", "parent-id")
+	resp, err := Call(SocketPath(dir), "session.create", map[string]any{
+		"quick": true, "agent": "claude", "name": "reviewer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.ParentID != "parent-id" {
+		t.Fatalf("cfg.ParentID=%q", creator.cfg.ParentID)
+	}
+	got, err := repo.Get(ctx, "new-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ParentID != "parent-id" {
+		t.Fatalf("saved parent_id=%q", got.ParentID)
+	}
+}
+
+func TestSessionCreateOrphanIsRoot(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "parent-id", Name: "impl", Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := shortTempDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	creator := &fakeCreator{}
+	go func() { _ = New(ln, repo, nil, creator, nil, nil, "t").Serve(cancelCtx) }()
+
+	t.Setenv("AIMAN_ID", "parent-id")
+	resp, err := Call(SocketPath(dir), "session.create", map[string]any{
+		"quick": true, "agent": "claude", "name": "sibling", "orphan": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.ParentID != "" {
+		t.Fatalf("orphan cfg.ParentID=%q", creator.cfg.ParentID)
+	}
+	got, err := repo.Get(ctx, "new-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ParentID != "" {
+		t.Fatalf("orphan saved parent_id=%q", got.ParentID)
+	}
+}
+
 func TestSessionCreateInfersRootFromExistingWorktreesWhenCallerUnknown(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()

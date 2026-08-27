@@ -47,6 +47,7 @@ var (
 	statusStyle  = lipgloss.NewStyle().PaddingLeft(2).Italic(true).Foreground(lipgloss.Color("#7D7D7D"))
 	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00"))
 	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
+	naStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	titleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("62")).Bold(true).Underline(true)
 	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
 )
@@ -251,15 +252,17 @@ func (i daemonItem) FilterValue() string {
 }
 
 type item struct {
-	session    domain.Session
-	needsInput bool
-	activity   string
-	remoteName string // short name of the remote for display
-	syncStale  bool   // mutagen sync is missing/unhealthy/pointing at wrong host
-	header     bool   // group header row, not a session
-	groupN     int    // session count, set on headers
-	treeLast   bool   // last session in its group; draws └─ instead of ├─
-	collapsed  bool   // header only: children are hidden
+	session     domain.Session
+	needsInput  bool
+	activity    string
+	remoteName  string // short name of the remote for display
+	syncStale   bool   // mutagen sync is missing/unhealthy/pointing at wrong host
+	header      bool   // group header row, not a session
+	groupN      int    // session count, set on headers
+	treeLast    bool   // last among siblings; draws └─ instead of ├─
+	treeDepth   int    // 0 for a group root, 1+ under a parent session
+	hasChildren bool
+	collapsed   bool // header or parent session: children are hidden
 }
 
 func (i item) Title() string {
@@ -424,6 +427,7 @@ type Model struct {
 	remoteFilter           string               // "" = all remotes, otherwise a Remote.Host to filter by
 	allSessions            []domain.Session     // unfiltered master session list
 	collapsedGroups        map[string]bool      // groupCollapseKey → hidden children
+	collapsedSessions      map[string]bool      // parent session ID → hidden children
 	assigningSessionID     string
 	assignChoices          []assignChoice
 	assignCursor           int
@@ -611,7 +615,7 @@ func (m *Model) applyRemoteFilter() {
 			flat = append(flat, m.makeItem(s))
 		}
 	}
-	filtered := groupedSessionItems(flat, m.collapsedGroups)
+	filtered := groupedSessionItems(flat, m.collapsedGroups, m.collapsedSessions)
 
 	selHost, selKind := "", ""
 	if d, ok := m.selectedDaemon(); ok {
@@ -825,6 +829,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		daemons:             make(map[string]domain.Daemon),
 		agentAPIProbing:     make(map[string]bool),
 		collapsedGroups:     make(map[string]bool),
+		collapsedSessions:   make(map[string]bool),
 		currentTab:          tabSessions,
 		triggerDetailsVP:    viewport.New(),
 	}
@@ -4509,9 +4514,14 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.state = viewStateLoading
 		return m, m.fetchAgents(), true
 	}
-	if m.currentTab == tabSessions && (msg.String() == "enter" || msg.String() == " ") {
-		if it, ok := m.list.SelectedItem().(item); ok && it.header {
-			return m.toggleSelectedGroupCollapsed()
+	if m.currentTab == tabSessions {
+		if it, ok := m.list.SelectedItem().(item); ok {
+			if it.header && (msg.String() == "enter" || msg.String() == " " || msg.String() == "space") {
+				return m.toggleSelectedGroupCollapsed()
+			}
+			if !it.header && it.hasChildren && (msg.String() == " " || msg.String() == "space") {
+				return m.toggleSelectedSessionCollapsed()
+			}
 		}
 	}
 	if msg.String() == "e" {
@@ -6896,14 +6906,14 @@ func (m *Model) renderSessionPanel(mainWidth int) string {
 		}
 		if s.MutagenSyncID != "" {
 			if h, tracked := m.syncHealth[s.ID]; tracked && h.stale {
-				meta = append(meta, failStyle.Render("⚠ sync STALE: "+truncateRunes(h.reason, 40))+statusStyle.Render(" ctrl+y to recreate"))
+				meta = append(meta, naStyle.Render("N/A"))
 			} else if tracked && h.status != "" {
 				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32))+statusStyle.Render(" ("+truncateRunes(h.status, 24)+")"))
 			} else {
 				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32)))
 			}
 		} else {
-			meta = append(meta, failStyle.Render("no sync"))
+			meta = append(meta, naStyle.Render("N/A"))
 		}
 		if s.IssueKey != "" {
 			meta = append(meta, s.IssueKey)

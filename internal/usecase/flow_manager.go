@@ -233,6 +233,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		ID:             uuid.New().String(),
 		Name:           config.Name,
 		Group:          config.Group,
+		ParentID:       config.ParentID,
 		IssueKey:       config.IssueKey,
 		Branch:         branch,
 		RepoName:       config.Repo.Name,
@@ -574,6 +575,9 @@ func aimanRuntimeEnv(session *domain.Session) map[string]string {
 	}
 	if session.Group != "" {
 		env["AIMAN_GROUP"] = session.Group
+	}
+	if session.ParentID != "" {
+		env["AIMAN_PARENT_ID"] = session.ParentID
 	}
 	// Deliberately no AIMAN_SOCKET_PATH or AIMAN_BIN_PATH.
 	//

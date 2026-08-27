@@ -19,6 +19,7 @@ type SessionInfo struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
 	Group            string `json:"group"`
+	ParentID         string `json:"parent_id,omitempty"`
 	IssueKey         string `json:"issue_key,omitempty"`
 	Branch           string `json:"branch,omitempty"`
 	RepoName         string `json:"repo_name,omitempty"`
@@ -43,6 +44,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		ID:               s.ID,
 		Name:             s.Name,
 		Group:            s.Group,
+		ParentID:         s.ParentID,
 		IssueKey:         s.IssueKey,
 		Branch:           s.Branch,
 		RepoName:         s.RepoName,
@@ -540,6 +542,8 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	var params struct {
 		Name   string `json:"name"`
 		Group  string `json:"group"`
+		Parent string `json:"parent"`
+		Orphan bool   `json:"orphan"`
 		Quick  bool   `json:"quick"`
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
@@ -590,6 +594,10 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeNameTaken, "name already in use")
 	}
 	group := domain.AssignSessionGroup(params.Group, params.Issue, params.Repo, params.Quick)
+	parentID, perr := domain.ResolveCreateParent(params.Orphan, params.Parent, req.Caller, "", existing)
+	if perr != nil {
+		return errResp(req.ID, CodeInvalidParams, perr.Error())
+	}
 	promptFree := true
 	if params.PromptFree != nil {
 		promptFree = *params.PromptFree
@@ -604,6 +612,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	cfg := domain.SessionConfig{
 		Name:          name,
 		Group:         group,
+		ParentID:      parentID,
 		Quick:         params.Quick,
 		AdHoc:         params.Quick,
 		PromptFree:    promptFree,
@@ -632,6 +641,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	}
 	sess.Name = name
 	sess.Group = group
+	sess.ParentID = parentID
 	if s.repo != nil {
 		if err := s.repo.Save(ctx, sess); err != nil {
 			return errResp(req.ID, CodeCreateFailed, err.Error())

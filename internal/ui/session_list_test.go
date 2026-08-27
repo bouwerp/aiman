@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestSessionStateColorByActivity(t *testing.T) {
@@ -28,6 +29,7 @@ func TestSessionStateColorByActivity(t *testing.T) {
 		{item{header: true, activity: "waiting"}, stateColorWaiting},
 		{item{header: true, activity: "working"}, stateColorWorking},
 		{item{header: true, activity: "idle"}, stateColorIdle},
+		{item{activity: "idle", syncStale: true}, stateColorIdle},
 	}
 	for _, tt := range tests {
 		if got := sessionStateColor(tt.it); got != tt.want {
@@ -47,6 +49,17 @@ func TestExitedChromeWarnsDistinctlyFromIdle(t *testing.T) {
 	}
 	if prefix != "! " {
 		t.Fatalf("chrome prefix = %q, want a warning marker", prefix)
+	}
+}
+
+func TestSyncStaleDoesNotWarnInListChrome(t *testing.T) {
+	it := item{session: domain.Session{Name: "impl"}, activity: "idle", syncStale: true}
+	_, activity := it.chrome()
+	if strings.Contains(activity, "sync") || strings.Contains(activity, "⚠") {
+		t.Fatalf("list chrome must not show a sync error, got %q", activity)
+	}
+	if sessionStateColor(it) != stateColorIdle {
+		t.Fatalf("sync-stale idle must stay idle color, got %q", sessionStateColor(it))
 	}
 }
 
@@ -101,7 +114,7 @@ func TestGroupedSessionItemsHeadersAndRollup(t *testing.T) {
 		{session: domain.Session{ID: "1", Name: "impl", Group: "WTB-1925"}, activity: "busy", remoteName: "regent0"},
 		{session: domain.Session{ID: "3", Name: "q1", Group: "quick"}, activity: "idle", remoteName: "regent0"},
 	}
-	got := groupedSessionItems(flat, nil)
+	got := groupedSessionItems(flat, nil, nil)
 	if len(got) != 5 {
 		t.Fatalf("len=%d want 5 (2 headers + 3 sessions)", len(got))
 	}
@@ -125,7 +138,7 @@ func TestGroupedSessionTitlesNestUnderHeader(t *testing.T) {
 		{session: domain.Session{ID: "1", Name: "impl", Group: "WTB-1925"}, activity: "busy", remoteName: "regent0"},
 		{session: domain.Session{ID: "3", Name: "q1", Group: "quick"}, activity: "idle", remoteName: "regent0"},
 	}
-	got := groupedSessionItems(flat, nil)
+	got := groupedSessionItems(flat, nil, nil)
 	h := got[0].(item)
 	ht := h.Title()
 	if !strings.HasPrefix(ht, "▾ WTB-1925") {
@@ -156,6 +169,37 @@ func TestGroupedSessionTitlesNestUnderHeader(t *testing.T) {
 	q := got[4].(item)
 	if !strings.HasPrefix(q.Title(), "  └─ ") {
 		t.Fatalf("sole child of a group is a last branch, got %q", q.Title())
+	}
+}
+
+func TestRenderSessionPanelSyncIsNA(t *testing.T) {
+	cfg := twoRemoteCfg()
+	s := domain.Session{
+		ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl",
+		RemoteHost: "10.0.1.5", RepoName: "org/repo", WorktreePath: "/home/u/repo",
+		Status: domain.SessionStatusActive,
+	}
+	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
+	m.SetSize(140, 44)
+	m.applyRemoteFilter()
+	got := m.renderSessionPanel(90)
+	if strings.Contains(got, "no sync") || strings.Contains(got, "STALE") || strings.Contains(got, "⚠") {
+		t.Fatalf("info panel must not show a sync error, got:\n%s", got)
+	}
+	if !strings.Contains(ansi.Strip(got), "N/A") {
+		t.Fatalf("info panel must show N/A for absent sync, got:\n%s", got)
+	}
+
+	s.MutagenSyncID = "aiman-sync-s1"
+	m.allSessions = []domain.Session{s}
+	m.syncHealth = map[string]syncHealth{s.ID: {stale: true, reason: "missing"}}
+	m.applyRemoteFilter()
+	got = m.renderSessionPanel(90)
+	if strings.Contains(got, "STALE") || strings.Contains(got, "⚠") {
+		t.Fatalf("stale sync must not render as error, got:\n%s", got)
+	}
+	if !strings.Contains(ansi.Strip(got), "N/A") {
+		t.Fatalf("stale sync must show N/A, got:\n%s", got)
 	}
 }
 

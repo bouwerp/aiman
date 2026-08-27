@@ -155,6 +155,15 @@ func TestOverlayPersistedSessionFieldsKeepsNameAndGroup(t *testing.T) {
 	}
 }
 
+func TestOverlayPersistedSessionFieldsKeepsParentID(t *testing.T) {
+	live := domain.Session{ID: "child", RemoteHost: "regent0", TmuxSession: "rev"}
+	stored := domain.Session{ID: "child", ParentID: "parent", TmuxSession: "rev"}
+	got := overlayPersistedSessionFields(live, stored)
+	if got.ParentID != "parent" {
+		t.Fatalf("live scan cannot see parent; overlay must keep stored, got %q", got.ParentID)
+	}
+}
+
 func TestOverlayPersistedSessionFieldsKeepsBackend(t *testing.T) {
 	live := domain.Session{ID: "s1", RemoteHost: "regent0", TmuxSession: "feat"}
 	stored := domain.Session{ID: "s1", Backend: domain.BackendPTY, TmuxSession: "feat"}

@@ -30,7 +30,7 @@ func TestCollapsedGroupHidesChildren(t *testing.T) {
 		{session: domain.Session{ID: "2", Name: "q1", Group: "quick", RemoteHost: "h"}, remoteName: "box"},
 	}
 	key := groupCollapseKey("WTB-1", "box")
-	got := groupedSessionItems(flat, map[string]bool{key: true})
+	got := groupedSessionItems(flat, map[string]bool{key: true}, nil)
 	if len(got) != 3 {
 		t.Fatalf("len=%d want 3 (collapsed header + quick header + q1)", len(got))
 	}

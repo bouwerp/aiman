@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
@@ -38,6 +39,9 @@ type SessionEvent struct {
 	// Status is the session's lifecycle state, so a reader hears about a session
 	// exiting as well as one working.
 	Status string `json:"status,omitempty"`
+	// Session is filled on session_created so the dashboard can upsert without
+	// a second round trip.
+	Session *SessionInfo `json:"session,omitempty"`
 }
 
 // isSessionEvents reports whether a request opens the event stream, which like
@@ -85,6 +89,7 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 
 	enc := json.NewEncoder(conn)
 	seen := map[string]SessionEvent{}
+	announced := map[string]struct{}{}
 	ticker := time.NewTicker(eventPollInterval)
 	defer ticker.Stop()
 	lastSent := time.Now()
@@ -99,6 +104,11 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 		}
 
 		changed := collectSessionEvents(s.pty, seen)
+		if s.repo != nil {
+			if listed, lerr := s.repo.List(ctx); lerr == nil {
+				changed = append(changed, collectRepoCreatedEvents(listed, announced)...)
+			}
+		}
 		for _, ev := range changed {
 			if err := enc.Encode(ev); err != nil {
 				return
@@ -153,6 +163,29 @@ func collectSessionEvents(pty ptyLister, seen map[string]SessionEvent) []Session
 		}
 		delete(seen, id)
 		out = append(out, SessionEvent{Type: "session_gone", ID: id})
+	}
+	return out
+}
+
+// collectRepoCreatedEvents announces each session the first time it appears in
+// serve's store so a CLI create reaches event-stream clients without a scan.
+func collectRepoCreatedEvents(sessions []domain.Session, announced map[string]struct{}) []SessionEvent {
+	var out []SessionEvent
+	for _, s := range sessions {
+		if s.ID == "" {
+			continue
+		}
+		if _, ok := announced[s.ID]; ok {
+			continue
+		}
+		announced[s.ID] = struct{}{}
+		info := sessionInfo(s, "")
+		out = append(out, SessionEvent{
+			Type:    "session_created",
+			ID:      s.ID,
+			Status:  string(s.Status),
+			Session: &info,
+		})
 	}
 	return out
 }
