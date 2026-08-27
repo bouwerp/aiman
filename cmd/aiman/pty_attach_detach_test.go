@@ -91,6 +91,65 @@ func TestDetachReaderPassesThroughWithoutCtrlQ(t *testing.T) {
 // TestDetachReaderDetachOnFirstByte covers ctrl+q as the only byte read, the
 // case where the stdin copy sees no bytes to forward and so returns nil rather
 // than a closed-connection error.
+func TestDetachReaderTreatsKittyCtrlQAsDetach(t *testing.T) {
+	rec := &closeRecorder{}
+	// agy (and other Ink TUIs) enable the kitty keyboard protocol, so ctrl+q
+	// arrives as CSI 113;5u rather than 0x11.
+	src := newChunkReader(append([]byte("hi"), []byte("\x1b[113;5uXY")...))
+	d := detachOnCtrlQ(src, rec)
+
+	buf := make([]byte, 16)
+	n, err := d.Read(buf)
+	if string(buf[:n]) != "hi" {
+		t.Fatalf("bytes before ctrl+q must be delivered, got %q", string(buf[:n]))
+	}
+	if !errors.Is(err, io.EOF) || !d.Detached() || !rec.closed {
+		t.Fatalf("kitty ctrl+q must detach: n=%d err=%v detached=%v closed=%v", n, err, d.Detached(), rec.closed)
+	}
+}
+
+func TestDetachReaderTreatsModifyOtherKeysCtrlQAsDetach(t *testing.T) {
+	rec := &closeRecorder{}
+	src := newChunkReader([]byte("\x1b[27;5;113~"))
+	d := detachOnCtrlQ(src, rec)
+
+	buf := make([]byte, 16)
+	n, err := d.Read(buf)
+	if n != 0 || !errors.Is(err, io.EOF) || !d.Detached() {
+		t.Fatalf("xterm modifyOtherKeys ctrl+q must detach: n=%d err=%v detached=%v", n, err, d.Detached())
+	}
+}
+
+func TestDetachReaderKittyCtrlQSplitAcrossReads(t *testing.T) {
+	rec := &closeRecorder{}
+	src := &seqReader{chunks: [][]byte{[]byte("pre\x1b[113"), []byte(";5u")}}
+	d := detachOnCtrlQ(src, rec)
+
+	buf := make([]byte, 16)
+	n, err := d.Read(buf)
+	if string(buf[:n]) != "pre" {
+		t.Fatalf("first read should flush bytes before the CSI prefix, got %q", string(buf[:n]))
+	}
+	if err != nil {
+		t.Fatalf("incomplete CSI must not EOF yet: %v", err)
+	}
+
+	n, err = d.Read(buf)
+	if n != 0 || !errors.Is(err, io.EOF) || !d.Detached() || !rec.closed {
+		t.Fatalf("second read must finish the detach: n=%d err=%v detached=%v closed=%v", n, err, d.Detached(), rec.closed)
+	}
+}
+
+func TestDetachReaderPassesThroughUnrelatedCSI(t *testing.T) {
+	rec := &closeRecorder{}
+	d := detachOnCtrlQ(newChunkReader([]byte("\x1b[A")), rec)
+	buf := make([]byte, 16)
+	n, err := d.Read(buf)
+	if err != nil || string(buf[:n]) != "\x1b[A" || d.Detached() {
+		t.Fatalf("arrow-up must pass through, got %q err=%v detached=%v", string(buf[:n]), err, d.Detached())
+	}
+}
+
 func TestDetachReaderDetachOnFirstByte(t *testing.T) {
 	rec := &closeRecorder{}
 	d := detachOnCtrlQ(newChunkReader([]byte{detachKey}), rec)
@@ -123,6 +182,20 @@ func (c *chunkReader) Read(p []byte) (int, error) {
 	}
 	c.done = true
 	return copy(p, c.data), nil
+}
+
+// seqReader returns one chunk per Read, then EOF.
+type seqReader struct {
+	chunks [][]byte
+}
+
+func (s *seqReader) Read(p []byte) (int, error) {
+	if len(s.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, s.chunks[0])
+	s.chunks = s.chunks[1:]
+	return n, nil
 }
 
 // TestAttachExitErrToleratesSpliceWrappedClose covers the error shape a lost

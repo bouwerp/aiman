@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -376,9 +377,17 @@ func splitFirst(s string, sep byte) [2]string {
 	return [2]string{s, ""}
 }
 
-// detachKey is ctrl+q; pressing it closes the attach stream without touching
-// the session itself.
+// detachKey is the classic ctrl+q byte. TUIs that enable the kitty keyboard
+// protocol or xterm modifyOtherKeys send a CSI sequence instead; those are
+// listed in ctrlQSequences.
 const detachKey = 0x11
+
+var ctrlQSequences = [][]byte{
+	{detachKey},
+	[]byte("\x1b[113;5u"),    // kitty: q=113, ctrl
+	[]byte("\x1b[113;5;1u"),  // kitty with press event type
+	[]byte("\x1b[27;5;113~"), // xterm modifyOtherKeys
+}
 
 // detachOnCtrlQ wraps stdin so ctrl+q ends the relay instead of reaching the
 // remote terminal.
@@ -399,25 +408,64 @@ type detachReader struct {
 func (d *detachReader) Detached() bool { return d.detached.Load() }
 
 func (d *detachReader) Read(p []byte) (int, error) {
-	if len(d.buf) > 0 {
-		n := copy(p, d.buf)
-		d.buf = d.buf[n:]
-		return n, nil
+	if len(p) == 0 {
+		return 0, nil
 	}
-	n, err := d.r.Read(p)
-	for i := 0; i < n; i++ {
-		if p[i] == detachKey {
-			// Keep everything before ctrl+q, drop it and everything after.
-			out := p[:i]
+	for {
+		if start, ok := indexCtrlQ(d.buf); ok {
+			out := d.buf[:start]
+			d.buf = nil
 			d.detached.Store(true)
 			_ = d.closer.Close()
-			if copy(p, out) < len(out) {
-				return 0, io.EOF
-			}
-			return len(out), io.EOF
+			return copy(p, out), io.EOF
+		}
+		hold := trailingCtrlQPrefix(d.buf)
+		deliver := d.buf[:len(d.buf)-hold]
+		if len(deliver) > 0 {
+			n := copy(p, deliver)
+			d.buf = append(append([]byte(nil), deliver[n:]...), d.buf[len(d.buf)-hold:]...)
+			return n, nil
+		}
+		tmp := make([]byte, max(len(p), 64))
+		n, err := d.r.Read(tmp)
+		d.buf = append(d.buf, tmp[:n]...)
+		if err != nil {
+			n = copy(p, d.buf)
+			d.buf = d.buf[n:]
+			return n, err
 		}
 	}
-	return n, err
+}
+
+func indexCtrlQ(b []byte) (int, bool) {
+	best := -1
+	for _, seq := range ctrlQSequences {
+		if i := bytes.Index(b, seq); i >= 0 && (best < 0 || i < best) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return 0, false
+	}
+	return best, true
+}
+
+// trailingCtrlQPrefix is the length of a proper prefix of a CSI ctrl+q
+// sequence at the end of b. A lone ESC is not held: that would delay the Esc
+// key until the next stdin read.
+func trailingCtrlQPrefix(b []byte) int {
+	max := 0
+	for _, seq := range ctrlQSequences {
+		if len(seq) < 2 {
+			continue
+		}
+		for n := 2; n < len(seq); n++ {
+			if bytes.HasSuffix(b, seq[:n]) && n > max {
+				max = n
+			}
+		}
+	}
+	return max
 }
 
 // callAndPrintRaw issues a request whose params are pre-encoded JSON.
