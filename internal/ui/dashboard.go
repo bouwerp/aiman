@@ -7345,7 +7345,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		sendKeysPrompt = usecase.InjectSharedContext(ctx, mgr, workingDir, s.Group, s.RepoName, sendKeysPrompt)
 		agentCmd = withRemoteNativeResume(ctx, mgr, s, agentCmd)
 
-		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
+		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.kilo/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
 		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
 		awsEnv := map[string]string{}
