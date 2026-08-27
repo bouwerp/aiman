@@ -76,7 +76,7 @@ func FindKnown(name string) (domain.Agent, bool) {
 		return domain.Agent{}, false
 	}
 	for _, a := range knownAgents {
-		if a.Name == name {
+		if a.Name == name || a.Command == name {
 			return a, true
 		}
 	}

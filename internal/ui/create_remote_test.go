@@ -49,7 +49,6 @@ func TestCanCreateRemotelyRefusesLocalOnlyState(t *testing.T) {
 	cases := map[string]func(*domain.SessionConfig){
 		"aws credentials": func(c *domain.SessionConfig) { c.AWSConfig = &domain.AWSConfig{} },
 		"env secrets":     func(c *domain.SessionConfig) { c.EnvSecrets = []domain.Secret{{Key: "K"}} },
-		"openrouter key":  func(c *domain.SessionConfig) { c.OpenRouterAPIKey = "sk-x" },
 		"autonomous":      func(c *domain.SessionConfig) { c.AutonomousConfig = &domain.AutonomousConfig{} },
 		"prior snapshot":  func(c *domain.SessionConfig) { c.PriorSnapshot = &domain.SessionSnapshot{} },
 		"attach existing": func(c *domain.SessionConfig) { c.AttachExisting = true },
@@ -84,16 +83,15 @@ func reconcileModel(sessions ...domain.Session) *Model {
 	}
 }
 
-// A remotely-created session has no sync, and sync-health never looks at it
-// because it only inspects sessions that already have one.
+// File sync is opt-in (ctrl+y). Sessions without a mutagen id are left alone.
 func TestNeedsSyncReconcile(t *testing.T) {
 	remoteMade := domain.Session{
 		ID: "a", RemoteHost: "regent0", WorktreePath: "/home/code/repos/x",
 		Status: domain.SessionStatusActive,
 	}
 	m := reconcileModel(remoteMade)
-	if !m.needsSyncReconcile(remoteMade) {
-		t.Error("a session with a worktree and no sync needs one")
+	if m.needsSyncReconcile(remoteMade) {
+		t.Error("file sync is opt-in via ctrl+y; a missing sync must not auto-create")
 	}
 
 	withSync := remoteMade
@@ -128,20 +126,10 @@ func TestReconcileMissingSyncsTriesEachSessionOnce(t *testing.T) {
 		domain.Session{ID: "a", RemoteHost: "regent0", WorktreePath: "/x", Status: domain.SessionStatusActive},
 		domain.Session{ID: "b", RemoteHost: "regent0", WorktreePath: "/y", Status: domain.SessionStatusActive},
 	)
-	if cmd := m.reconcileMissingSyncs(); cmd == nil {
-		t.Fatal("expected a sync to be started")
-	}
-	// One per pass: creating a sync waits for the initial mirror.
-	if len(m.syncReconciled) != 1 {
-		t.Errorf("expected one attempt per pass, got %d", len(m.syncReconciled))
-	}
-	if cmd := m.reconcileMissingSyncs(); cmd == nil {
-		t.Fatal("the second session should be picked up on the next pass")
-	}
-	if len(m.syncReconciled) != 2 {
-		t.Errorf("expected both attempted after two passes, got %d", len(m.syncReconciled))
-	}
 	if cmd := m.reconcileMissingSyncs(); cmd != nil {
-		t.Error("nothing left to do, but work was scheduled again")
+		t.Fatal("file sync is opt-in; reconcile must not start one")
+	}
+	if len(m.syncReconciled) != 0 {
+		t.Errorf("expected no reconcile attempts, got %d", len(m.syncReconciled))
 	}
 }

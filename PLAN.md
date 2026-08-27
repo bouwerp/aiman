@@ -294,7 +294,7 @@ faithful:
 
 Sessions carrying state that only exists on the laptop are still created locally,
 because handing them over would silently drop it: per-session AWS credentials,
-session secrets, an OpenRouter key, an autonomous config, a snapshot to resume
+session secrets, an autonomous config, a snapshot to resume
 from, selected skills, adopting an existing worktree, reusing the main clone. A
 remote that has no serve, or that refuses the request, also falls back — nothing
 was created in that case, so retrying locally is safe.

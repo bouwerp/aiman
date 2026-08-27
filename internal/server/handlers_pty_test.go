@@ -321,6 +321,80 @@ func TestPTYResizeDeclinedWhenAttached(t *testing.T) {
 	}
 }
 
+// Full-screen agents (Grok, Claude, agy) paint with CUP. Replaying the raw
+// spool on attach dumps every historical frame onto the local terminal.
+func TestPTYAttachResetsWithoutReplayingRawCUPHistory(t *testing.T) {
+	sock := startPTYServer(t)
+	cmd := "printf '\\033[1;1HRAW_OVERDRAWN\\033[1;1HVISIBLE_NOW'; sleep 60"
+	create := createPTY(t, sock, map[string]any{
+		"id": "cup", "command": cmd, "cols": 80, "rows": 24,
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	eventually(t, 10*time.Second, func() bool {
+		return strings.Contains(captureText(t, sock, "cup"), "VISIBLE_NOW")
+	})
+
+	got := attachOutput(t, sock, "cup")
+	if strings.Contains(got, "RAW_OVERDRAWN") {
+		t.Fatalf("attach dumped overwritten CUP history onto the terminal: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[2J") && !strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("attach must reset the terminal before painting, got %q", got)
+	}
+}
+
+// CaptureScreen joins rows with LF. Attach puts the tty in raw mode, where LF
+// is "cursor down, same column" — Ink TUIs (agy) come out sheared. Attach must
+// not dump that snapshot; SIGWINCH makes the agent redraw with real CUP.
+func TestPTYAttachDoesNotDumpLFRenderedSnapshot(t *testing.T) {
+	sock := startPTYServer(t)
+	cmd := "printf 'ROW_A\\nROW_B\\nROW_C'; sleep 60"
+	create := createPTY(t, sock, map[string]any{
+		"id": "lf", "command": cmd, "cols": 80, "rows": 24,
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	eventually(t, 10*time.Second, func() bool {
+		text := captureText(t, sock, "lf")
+		return strings.Contains(text, "ROW_A") && strings.Contains(text, "ROW_B")
+	})
+
+	got := attachOutput(t, sock, "lf")
+	if strings.Contains(got, "ROW_A\nROW_B") {
+		t.Fatalf("attach dumped an LF-joined snapshot (shears in raw mode): %q", got)
+	}
+	if !strings.Contains(got, "\x1b[2J") && !strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("attach must reset the terminal, got %q", got)
+	}
+}
+
+func attachOutput(t *testing.T, sock, id string) string {
+	t.Helper()
+	conn, err := AttachDial(sock, id, 80, 24)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	stdinR, stdinW := io.Pipe()
+	t.Cleanup(func() { _ = stdinW.Close() })
+	var mu sync.Mutex
+	var out bytes.Buffer
+	go func() { _ = conn.Relay(stdinR, &lockedWriter{mu: &mu, w: &out}) }()
+
+	var got string
+	eventually(t, 10*time.Second, func() bool {
+		mu.Lock()
+		got = out.String()
+		mu.Unlock()
+		return strings.Contains(got, "\x1b[2J") || strings.Contains(got, "\x1b[?1049h")
+	})
+	return got
+}
+
 func TestPTYResizeRejectsUnusableSizes(t *testing.T) {
 	sock := startPTYServer(t)
 	create := createPTY(t, sock, map[string]any{"id": "rsz3", "command": "sleep 30"})

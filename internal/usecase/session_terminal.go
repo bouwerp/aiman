@@ -9,6 +9,8 @@ import (
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
+	infraAgent "github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/infra/skills"
 )
 
 // TerminalExecutor is the slice of RemoteExecutor the terminal-routing helpers
@@ -343,8 +345,9 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 		return fmt.Errorf("session %s cannot be revived: backend=%s agent=%q", s.ID, s.Backend, s.AgentName)
 	}
 	nativeID := NativeSessionID(ctx, remote, s)
-	command := agenthook.WithResume(s.AgentName, nativeID)
-	if command == s.AgentName && nativeID == "" {
+	command := reviveAgentCommand(s.AgentName, s.WorkingDirectory)
+	resumed := agenthook.WithResume(command, nativeID)
+	if resumed == command && nativeID == "" {
 		// No vendor conversation id anywhere: relaunching would start a fresh
 		// conversation silently. Refuse and let restart handle it explicitly.
 		return fmt.Errorf("session %s has no agent session id; use restart to relaunch", s.ID)
@@ -357,7 +360,7 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 		ID:      s.ID,
 		Name:    s.TmuxSession,
 		Dir:     s.WorkingDirectory,
-		Command: command,
+		Command: resumed,
 		Env:     env,
 	}); err != nil {
 		return err
@@ -378,6 +381,17 @@ func ReviveIfNeeded(ctx context.Context, remote TerminalExecutor, s *domain.Sess
 		return false, err
 	}
 	return true, nil
+}
+
+// reviveAgentCommand maps a persisted AgentName ("Codex CLI") to the binary
+// plus interactive flags. WithResume must see the binary, not the display name,
+// or it produces `Codex resume <id> CLI` and the holder falls through to bash.
+func reviveAgentCommand(agentName, worktree string) string {
+	cmd := strings.TrimSpace(agentName)
+	if known, ok := infraAgent.FindKnown(agentName); ok {
+		cmd = known.Command
+	}
+	return skills.EnsureInteractiveLaunch(cmd, worktree)
 }
 
 // NativeSessionID resolves the vendor conversation id for a session. The

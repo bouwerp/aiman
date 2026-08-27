@@ -184,7 +184,10 @@ func runPTYAttach(sock, id string) error {
 	if err != nil {
 		return fmt.Errorf("pty attach: raw mode: %w", err)
 	}
-	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
+	defer func() {
+		fmt.Fprint(os.Stdout, attachClose())
+		_ = term.Restore(int(os.Stdin.Fd()), oldState)
+	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, resizeSignals()...)
@@ -197,10 +200,15 @@ func runPTYAttach(sock, id string) error {
 		}
 	}()
 
-	// Say how to get out. A PTY session has no tmux prefix, so the muscle
-	// memory of ctrl+b d does nothing here and there is otherwise no hint on
-	// screen that ctrl+q is the way back.
+	// Hint lives on the primary screen. attachOpen then switches to the alt
+	// screen so a full-screen agent cannot paint over leftover local output.
 	fmt.Fprint(os.Stdout, notice("[aiman] attached to "+id+" — press ctrl+q to detach (the session keeps running)"))
+	fmt.Fprint(os.Stdout, attachOpen())
+	// Repeat the size now that the alt screen is up so a CUP-painting agent
+	// redraws onto the blank surface rather than the leftover primary screen.
+	if cols > 0 && rows > 0 {
+		_ = connResp.Resize(cols, rows)
+	}
 
 	stdin := detachOnCtrlQ(os.Stdin, connResp)
 	if err := attachExitErr(connResp.Relay(stdin, os.Stdout), stdin.Detached()); err != nil {
@@ -375,6 +383,28 @@ func splitFirst(s string, sep byte) [2]string {
 		}
 	}
 	return [2]string{s, ""}
+}
+
+// mouseTrackingOn asks the attaching terminal to send SGR mouse events
+// (including the wheel). Claude's TUI does this itself, so wheel-scroll works
+// there; Grok/agy/Codex often never get their own DECSET to the client (or
+// send it only once in a dropped first frame), so PTY attach has to.
+func mouseTrackingOn() string {
+	return "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+}
+
+func mouseTrackingOff() string {
+	return "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
+}
+
+// attachOpen puts the attaching tty on a blank alt screen with mouse tracking
+// so leftover primary-screen text cannot show through a CUP-painted TUI.
+func attachOpen() string {
+	return "\x1b[?1049h\x1b[2J\x1b[H" + mouseTrackingOn()
+}
+
+func attachClose() string {
+	return mouseTrackingOff() + "\x1b[?1049l"
 }
 
 // detachKey is the classic ctrl+q byte. TUIs that enable the kitty keyboard

@@ -631,12 +631,7 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 		}
 	}
 
-	cmd := agent.Command
-	cmd = ensureFlag(cmd, "--dangerously-bypass-approvals-and-sandbox")
-	cmd = ensureConfigOverride(cmd, "check_for_upgrades_on_startup", "false")
-	if strings.TrimSpace(worktreePath) != "" {
-		cmd = ensureKeyedFlag(cmd, "--cd", worktreePath)
-	}
+	cmd := withCodexInteractiveFlags(agent.Command, worktreePath)
 
 	result := domain.PreparedSession{Command: cmd}
 	var promptFiles []string

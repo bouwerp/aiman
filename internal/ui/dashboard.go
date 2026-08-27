@@ -743,7 +743,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "AI insight")),
 			key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "archive session")),
-			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "recreate mutagen sync")),
+			key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "create mutagen sync")),
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
 			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "view trigger details (autonomous)")),
@@ -2027,52 +2027,14 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 		session.ID = strings.TrimSpace(session.ID)
 		if session.ID == "" {
 			m.logPersistent("session ID empty after CreateSession for branch %q; not saving", sessionCfg.Branch)
-			return sessionCreateMsg{err: fmt.Errorf("session ID is empty (%q), cannot safely create sync path", session.ID), placeholderID: placeholderID}
+			return sessionCreateMsg{err: fmt.Errorf("session ID is empty (%q), cannot save the session", session.ID), placeholderID: placeholderID}
 		}
 
 		// Tag the session with the remote it was created on
 		session.RemoteHost = sessionCfg.RemoteHost
 
-		// Start mutagen sync
-		mutagenEngine := mutagen.NewEngineWithIgnores(m.cfg.SyncIgnorePatterns(), m.cfg.SyncIgnoresEnabled())
-		home, _ := os.UserHomeDir()
-
-		syncName := "aiman-sync-" + session.ID
-		m.log("Creating sync %q", syncName)
-		localSyncPath := filepath.Join(home, config.DirName, "work", session.ID)
-
-		m.log("Cleaning up local sync path: %s", localSyncPath)
-		_ = os.RemoveAll(localSyncPath)
-		if err := os.MkdirAll(localSyncPath, 0750); err != nil {
-			m.log("Warning: failed to create local sync path: %v", err)
-		}
-
-		target := remote.Host
-		if remote.User != "" {
-			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
-		}
-
-		m.log("Terminating existing sync: %s", syncName)
-		sendStatus("Preparing file sync...")
-		_ = exec.CommandContext(ctx, "mutagen", "sync", "terminate", syncName).Run()
-		mutagenEngine.TerminateByLabel(ctx, "aiman-id", session.ID)
-
-		m.log("Starting mutagen sync: %s -> %s:%s", localSyncPath, target, session.WorkingDirectory)
-		sendStatus("Starting file sync...")
-		labels := map[string]string{"aiman-id": session.ID}
-		syncErr := mutagenEngine.StartSync(ctx, syncName, localSyncPath, fmt.Sprintf("%s:%s", target, session.WorkingDirectory), labels, domain.SyncModeTwoWay)
-		warning := ""
-		if syncErr == nil {
-			// Wait for the initial local mirror to settle, then repair any sparse
-			// checkout state before the user opens the mirrored worktree.
-			m.normalizeLocalSyncedWorktree(ctx, mutagenEngine, syncName, localSyncPath, 5*time.Minute, sendStatus)
-			session.MutagenSyncID = syncName
-			session.LocalPath = localSyncPath
-			_ = session.Transition(domain.SessionStatusSyncing)
-		} else {
-			m.logPersistent("failed to start mutagen sync %s: %v", syncName, syncErr)
-			warning = fmt.Sprintf("Session created, but file sync failed: %v", syncErr)
-		}
+		// File sync is opt-in: ctrl+y creates the mutagen session when the
+		// operator wants a local mirror.
 
 		// Save to DB — stamp UpdatedAt so new/restarted sessions sort to top.
 		// A session that reaches this point but is never saved still exists on the
@@ -2086,7 +2048,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			}
 		}
 
-		return sessionCreateMsg{session: *session, warning: warning, placeholderID: placeholderID}
+		return sessionCreateMsg{session: *session, placeholderID: placeholderID}
 	}
 }
 
@@ -2782,12 +2744,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		tickCmds := []tea.Cmd{tickSyncHealth()}
 		if len(m.allSessions) > 0 {
 			tickCmds = append(tickCmds, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...)))
-			// A session created by the remote has no local file sync, because the
-			// sync is made from this machine. Build it here rather than expecting
-			// the user to notice and press ctrl+y.
-			if cmd := m.reconcileMissingSyncs(); cmd != nil {
-				tickCmds = append(tickCmds, cmd)
-			}
+			// File sync is opt-in (ctrl+y). Do not create mutagen sessions
+			// in the background.
 		}
 		return m, tea.Batch(tickCmds...)
 	case awsCredExpiryTickMsg:
@@ -5075,7 +5033,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	}
 	if msg.String() == "ctrl+y" {
 		if sel := m.list.SelectedItem(); sel != nil {
-			m.loadingMsg = "Recreating mutagen sync..."
+			m.loadingMsg = "Creating mutagen sync..."
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
 			return m, m.recreateMutagenSync(sel.(item).session, false), true
@@ -6219,8 +6177,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				DurationSeconds: d.DurationSeconds,
 			})
 		}
-		// Pre-fill OpenRouter API key from local environment (user can override).
-		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
 		if m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
 			m.loadingMsg = "Checking workspace..."
 			m.loadingNext = viewStateSummary
@@ -6248,7 +6204,6 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionCfg.Agent = summaryCfg.Agent
 		m.sessionCfg.PromptFree = summaryCfg.PromptFree
 		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
-		m.sessionCfg.OpenRouterAPIKey = summaryCfg.OpenRouterAPIKey
 		m.sessionCfg.InitialPrompt = summaryCfg.InitialPrompt
 
 		if m.sessionCfg.Mode == domain.SessionModeAutonomous {
@@ -7289,7 +7244,6 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 		m.sessionCfg.Agent = m.agentPicker.selected
 		m.agentPicker.selected = nil // prevent re-dispatch on subsequent keypresses
 		_ = appendDebugLog(fmt.Sprintf("[ui %s] agent selected: %s\n", time.Now().Format("15:04:05.000"), m.sessionCfg.Agent.Name))
-		m.sessionCfg.OpenRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
 		// Inject all globally stored secrets on restart.
 		if secrets, err := m.db.ListSecrets(context.Background()); err == nil {
 			m.sessionCfg.EnvSecrets = secrets
@@ -7447,9 +7401,6 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			_ = mgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
 			extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
 			extraEnvFlags += ` -e 'OPENCODE_CONFIG_CONTENT={"permission":"allow"}'`
-		}
-		if sessionCfg.OpenRouterAPIKey != "" {
-			extraEnvFlags += fmt.Sprintf(" -e OPENROUTER_API_KEY=%s", sessionCfg.OpenRouterAPIKey)
 		}
 		for _, secret := range sessionCfg.EnvSecrets {
 			extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)

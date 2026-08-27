@@ -800,11 +800,15 @@ func TestPrepareSession_CodexAlwaysTrustsWorkspaceAndSkipsUpgrade(t *testing.T) 
 	}
 	for _, want := range []string{
 		"--dangerously-bypass-approvals-and-sandbox",
+		"--dangerously-bypass-hook-trust",
+		"--disable in_app_updates",
 		"--cd /home/user/code/myrepo",
-		"check_for_upgrades_on_startup=false",
 	} {
 		if !strings.Contains(result.Command, want) {
 			t.Errorf("codex command missing %q, got: %s", want, result.Command)
 		}
+	}
+	if strings.Contains(result.Command, "check_for_upgrades_on_startup") {
+		t.Errorf("codex has no such config key; it is ignored or fatal under --strict-config: %s", result.Command)
 	}
 }

@@ -233,7 +233,7 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 		writeResponse(conn, errResp(req.ID, CodeInvalidParams, "id is required"))
 		return
 	}
-	replay, live, unsub, err := s.pty.Subscribe(params.ID)
+	_, live, unsub, err := s.pty.Subscribe(params.ID)
 	if err != nil {
 		writeResponse(conn, s.ptyErrResp(req.ID, err))
 		return
@@ -242,23 +242,22 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	s.beginAttach(params.ID)
 	defer s.endAttach(params.ID)
 
+	writeResponse(conn, Response{ID: req.ID, Result: map[string]any{"type": "pty_attached"}})
+
+	// Do not replay the raw spool, and do not dump CaptureScreen text.
+	// CaptureScreen joins rows with LF; attach runs the client tty in raw
+	// mode, where LF is cursor-down without CR, so Ink TUIs (agy) shear.
+	// Reset the client, SIGWINCH the agent, and stream live CUP from there.
+	if _, err := conn.Write(attachScreenReset()); err != nil {
+		return
+	}
 	if params.Cols > 0 && params.Rows > 0 {
 		_ = s.pty.Resize(params.ID, params.Cols, params.Rows)
 	}
 
-	writeResponse(conn, Response{ID: req.ID, Result: map[string]any{"type": "pty_attached"}})
-
-	// Replay the scrollback synchronously before streaming live output so the
-	// attaching client sees a coherent pane from byte one.
-	for len(replay) > 0 {
-		n, werr := conn.Write(replay)
-		if werr != nil {
-			return
-		}
-		replay = replay[n:]
-	}
-
-	// Connection -> session (framed: input + resize).
+	// Connection -> session (framed: input + resize). Started after the
+	// attach-time resize so a client WINCH that races AttachDial cannot be
+	// overwritten by that initial size.
 	go handlePTYAttachConnInput(ctx, params.ID, func(data []byte) error {
 		return s.pty.Write(params.ID, data)
 	}, func(cols, rows int) error {
@@ -279,6 +278,10 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 			}
 		}
 	}
+}
+
+func attachScreenReset() []byte {
+	return []byte("\x1b[?1049h\x1b[2J\x1b[H")
 }
 
 func writeResponse(conn io.Writer, resp Response) {
