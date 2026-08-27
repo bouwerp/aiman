@@ -253,13 +253,12 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	if _, err := conn.Write(encodeAttachScreen(text)); err != nil {
 		return
 	}
-	if params.Cols > 0 && params.Rows > 0 {
-		_ = s.pty.Resize(params.ID, params.Cols, params.Rows)
-	}
+	// Do not Resize here. Same-size TIOCSWINSZ before Relay starts fills
+	// the subscribe buffer (and is dropped), and it starts Ink's SIGWINCH
+	// debounce so the client's later two-step restore looks like no change.
+	// The attach client kicks a two-step resize once Relay is copying.
 
-	// Connection -> session (framed: input + resize). Started after the
-	// attach-time resize so a client WINCH that races AttachDial cannot be
-	// overwritten by that initial size.
+	// Connection -> session (framed: input + resize).
 	go handlePTYAttachConnInput(ctx, params.ID, func(data []byte) error {
 		return s.pty.Write(params.ID, data)
 	}, func(cols, rows int) error {

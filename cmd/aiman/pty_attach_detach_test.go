@@ -178,7 +178,8 @@ func TestAttachRedrawNudgeIsARealSizeChange(t *testing.T) {
 		cols, rows, wantCols, wantRows int
 		ok                             bool
 	}{
-		{80, 24, 79, 24, true},
+		{80, 24, 78, 23, true},
+		{3, 24, 3, 23, true},
 		{1, 24, 1, 23, true},
 		{0, 24, 0, 0, false},
 		{80, 0, 0, 0, false},
@@ -199,14 +200,14 @@ func TestKickAttachRedrawSendsNudgeThenRestore(t *testing.T) {
 		sizes = append(sizes, fmt.Sprintf("%dx%d", cols, rows))
 		return nil
 	}, 80, 24, func(d time.Duration) { sleeps = append(sleeps, d) })
-	if len(sizes) != 2 || sizes[0] != "79x24" || sizes[1] != "80x24" {
+	if len(sizes) != 2 || sizes[0] != "78x23" || sizes[1] != "80x24" {
 		t.Fatalf("kick must send two distinct sizes, got %v", sizes)
 	}
 	if len(sleeps) != 2 || sleeps[0] != attachRedrawGap || sleeps[1] != attachRedrawGap {
 		t.Fatalf("each step must wait longer than the holder poll, got %v", sleeps)
 	}
-	if attachRedrawGap < 150*time.Millisecond {
-		t.Fatalf("attachRedrawGap %s is shorter than the holder 150ms poll; resizes would coalesce", attachRedrawGap)
+	if attachRedrawGap < 500*time.Millisecond {
+		t.Fatalf("attachRedrawGap %s is shorter than Ink-style SIGWINCH debounce; the agent would only see the restored size", attachRedrawGap)
 	}
 }
 

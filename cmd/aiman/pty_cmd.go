@@ -397,15 +397,29 @@ func mouseTrackingOff() string {
 	return "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
 }
 
-// attachRedrawGap is longer than the holder's 150ms control poll so two
-// RequestResize files cannot coalesce into one TIOCSWINSZ.
-const attachRedrawGap = 250 * time.Millisecond
+// attachRedrawGap is longer than Ink-style SIGWINCH debounce (~300ms). A
+// shorter pause restores the original size before the agent reads it, so it
+// skips a full layout and the cleared alt screen stays empty.
+const attachRedrawGap = 600 * time.Millisecond
 
 func attachRedrawNudge(cols, rows int) (int, int, bool) {
-	if cols > 1 && rows > 0 {
+	if cols <= 0 || rows <= 0 {
+		return 0, 0, false
+	}
+	nc, nr := cols, rows
+	if cols > 3 {
+		nc = cols - 2
+	}
+	if rows > 2 {
+		nr = rows - 1
+	}
+	if nc != cols || nr != rows {
+		return nc, nr, true
+	}
+	if cols > 1 {
 		return cols - 1, rows, true
 	}
-	if rows > 1 && cols > 0 {
+	if rows > 1 {
 		return cols, rows - 1, true
 	}
 	return 0, 0, false
