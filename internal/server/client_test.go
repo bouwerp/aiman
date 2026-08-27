@@ -90,15 +90,19 @@ func TestRelayReadsRawConnWhenNoHandshakeReader(t *testing.T) {
 	stdinR, stdinW := io.Pipe()
 	defer stdinW.Close()
 	var out bytes.Buffer
+	var outMu sync.Mutex
 	done := make(chan error, 1)
-	go func() { done <- a.Relay(stdinR, &out) }()
+	go func() { done <- a.Relay(stdinR, &lockedWriter{mu: &outMu, w: &out}) }()
 	if _, err := remote.Write([]byte("hello-raw")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if out.String() == "hello-raw" {
+		outMu.Lock()
+		got := out.String()
+		outMu.Unlock()
+		if got == "hello-raw" {
 			_ = remote.Close()
 			select {
 			case <-done:
@@ -109,5 +113,8 @@ func TestRelayReadsRawConnWhenNoHandshakeReader(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	_ = remote.Close()
-	t.Fatalf("got %q, want hello-raw", out.String())
+	outMu.Lock()
+	got := out.String()
+	outMu.Unlock()
+	t.Fatalf("got %q, want hello-raw", got)
 }
