@@ -120,10 +120,7 @@ func ResizeSessionTerminal(ctx context.Context, remote TerminalExecutor, s domai
 		return false, fmt.Errorf("resize: cols and rows must both be positive")
 	}
 	if s.IsPTY() {
-		if err := ResizePTYSession(ctx, remote, terminalID(s), cols, rows); err != nil {
-			return false, err
-		}
-		return true, nil
+		return ResizePTYSession(ctx, remote, terminalID(s), cols, rows)
 	}
 	if s.TmuxSession == "" {
 		return false, fmt.Errorf("resize: session has no tmux session name")
@@ -157,13 +154,32 @@ func ParseFitOutcome(out string) (bool, error) {
 }
 
 // ResizePTYSession sets a remote PTY session's window size.
-func ResizePTYSession(ctx context.Context, remote TerminalExecutor, id string, cols, rows int) error {
+//
+// applied is false when a client is attached: shrinking the session to the
+// dashboard preview must not resize a fullscreen attach out from under the
+// operator. That matches the tmux attached-client guard.
+func ResizePTYSession(ctx context.Context, remote TerminalExecutor, id string, cols, rows int) (bool, error) {
 	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
 		"aiman pty resize %q --cols %d --rows %d", id, cols, rows))
 	if err != nil {
-		return fmt.Errorf("pty resize: %s: %w", strings.TrimSpace(out), err)
+		return false, fmt.Errorf("pty resize: %s: %w", strings.TrimSpace(out), err)
 	}
-	return nil
+	return parsePTYResizeApplied(out), nil
+}
+
+// parsePTYResizeApplied reads the applied flag from `aiman pty resize` JSON.
+// A missing flag is treated as applied so older remotes still fit the preview.
+func parsePTYResizeApplied(out string) bool {
+	var result struct {
+		Applied *bool `json:"applied"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &result); err != nil {
+		return true
+	}
+	if result.Applied != nil && !*result.Applied {
+		return false
+	}
+	return true
 }
 
 // SendPTYFile types the contents of a remote file into the session and presses

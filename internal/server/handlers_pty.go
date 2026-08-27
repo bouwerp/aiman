@@ -174,12 +174,43 @@ func (s *Server) handlePTYResize(_ context.Context, req Request) Response {
 	if params.Cols <= 0 || params.Rows <= 0 {
 		return errResp(req.ID, CodeInvalidParams, "cols and rows must both be positive")
 	}
+	if s.attachCount(id) > 0 {
+		return Response{ID: req.ID, Result: map[string]any{
+			"type": "pty_resize", "id": id, "cols": params.Cols, "rows": params.Rows,
+			"applied": false, "reason": "attached",
+		}}
+	}
 	if err := s.pty.Resize(id, params.Cols, params.Rows); err != nil {
 		return s.ptyErrResp(req.ID, err)
 	}
 	return Response{ID: req.ID, Result: map[string]any{
 		"type": "pty_resize", "id": id, "cols": params.Cols, "rows": params.Rows,
+		"applied": true,
 	}}
+}
+
+func (s *Server) beginAttach(id string) {
+	s.attachMu.Lock()
+	if s.attaches == nil {
+		s.attaches = map[string]int{}
+	}
+	s.attaches[id]++
+	s.attachMu.Unlock()
+}
+
+func (s *Server) endAttach(id string) {
+	s.attachMu.Lock()
+	s.attaches[id]--
+	if s.attaches[id] <= 0 {
+		delete(s.attaches, id)
+	}
+	s.attachMu.Unlock()
+}
+
+func (s *Server) attachCount(id string) int {
+	s.attachMu.Lock()
+	defer s.attachMu.Unlock()
+	return s.attaches[id]
 }
 
 func (s *Server) ptyErrResp(id string, err error) Response {
@@ -208,6 +239,8 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 		return
 	}
 	defer unsub()
+	s.beginAttach(params.ID)
+	defer s.endAttach(params.ID)
 
 	if params.Cols > 0 && params.Rows > 0 {
 		_ = s.pty.Resize(params.ID, params.Cols, params.Rows)

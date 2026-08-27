@@ -334,10 +334,10 @@ func indexByte(s string, b byte) int {
 // matches what tmux hands its own panes.
 const defaultTERM = "xterm-256color"
 
-// withTerminalEnv ensures TERM and COLORTERM are present, without overriding
-// values that are already set.
+// withTerminalEnv ensures TERM, COLORTERM, and a UTF-8 locale are present,
+// without overriding usable values that are already set.
 func withTerminalEnv(base []string) []string {
-	haveTERM, haveColor := false, false
+	haveTERM, haveColor, haveUTF8 := false, false, false
 	for _, kv := range base {
 		switch {
 		case strings.HasPrefix(kv, "TERM="):
@@ -349,12 +349,17 @@ func withTerminalEnv(base []string) []string {
 			}
 		case strings.HasPrefix(kv, "COLORTERM="):
 			haveColor = true
+		case isLocaleKey(kv) && localeValueIsUTF8(kv):
+			haveUTF8 = true
 		}
 	}
-	out := make([]string, 0, len(base)+2)
+	out := make([]string, 0, len(base)+3)
 	for _, kv := range base {
 		if !haveTERM && strings.HasPrefix(kv, "TERM=") {
 			continue // drop the unusable value so envMap's later entry wins
+		}
+		if !haveUTF8 && isLocaleKey(kv) {
+			continue // drop LANG=C and friends; box drawing needs UTF-8
 		}
 		out = append(out, kv)
 	}
@@ -364,5 +369,25 @@ func withTerminalEnv(base []string) []string {
 	if !haveColor {
 		out = append(out, "COLORTERM=truecolor")
 	}
+	if !haveUTF8 {
+		out = append(out, "LANG="+defaultUTF8Locale)
+	}
 	return out
+}
+
+const defaultUTF8Locale = "C.UTF-8"
+
+func isLocaleKey(kv string) bool {
+	return strings.HasPrefix(kv, "LANG=") ||
+		strings.HasPrefix(kv, "LC_ALL=") ||
+		strings.HasPrefix(kv, "LC_CTYPE=")
+}
+
+func localeValueIsUTF8(kv string) bool {
+	eq := strings.IndexByte(kv, '=')
+	if eq < 0 {
+		return false
+	}
+	v := strings.ToLower(strings.TrimSpace(kv[eq+1:]))
+	return strings.Contains(v, "utf-8") || strings.Contains(v, "utf8")
 }

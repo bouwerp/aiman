@@ -290,6 +290,37 @@ func TestPTYResizeOutsideAnAttachStream(t *testing.T) {
 	})
 }
 
+func TestPTYResizeDeclinedWhenAttached(t *testing.T) {
+	sock := startPTYServer(t)
+	create := createPTY(t, sock, map[string]any{"id": "att-fit", "command": "sleep 30", "cols": 200, "rows": 50})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+
+	conn, err := AttachDial(sock, "att-fit", 200, 50)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer conn.Close()
+
+	resp, err := Call(sock, "pty.resize", map[string]any{"id": "att-fit", "cols": 80, "rows": 24})
+	if err != nil || resp.Error != nil {
+		t.Fatalf("resize: %v / %v", err, resp.Error)
+	}
+	got := resultJSON(t, resp)
+	if !strings.Contains(got, `"applied":false`) || !strings.Contains(got, `"attached"`) {
+		t.Fatalf("expected a declined resize, got %s", got)
+	}
+
+	info, gerr := Call(sock, "pty.get", map[string]any{"id": "att-fit"})
+	if gerr != nil || info.Error != nil {
+		t.Fatalf("get: %v / %v", gerr, info.Error)
+	}
+	if strings.Contains(resultJSON(t, info), `"80x24"`) {
+		t.Fatalf("preview fit must not shrink an attached session, got %s", resultJSON(t, info))
+	}
+}
+
 func TestPTYResizeRejectsUnusableSizes(t *testing.T) {
 	sock := startPTYServer(t)
 	create := createPTY(t, sock, map[string]any{"id": "rsz3", "command": "sleep 30"})
