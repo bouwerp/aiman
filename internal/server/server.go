@@ -28,6 +28,11 @@ type Server struct {
 
 	mu     sync.Mutex
 	sessMu map[string]*sync.Mutex
+
+	// attaches counts live pty.attach streams per session so a dashboard
+	// preview fit cannot shrink a session out from under a fullscreen client.
+	attachMu sync.Mutex
+	attaches map[string]int
 }
 
 func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecutor, create sessionCreator, ctxStore domain.ContextStore, ptyMgr *ptyruntime.Manager, version string) *Server {
@@ -43,6 +48,7 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 		pty:      ptyMgr,
 		version:  version,
 		sessMu:   map[string]*sync.Mutex{},
+		attaches: map[string]int{},
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -620,8 +619,12 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		SessionBackend: params.Backend,
 		ExistingBranch: params.ExistingBranch,
 	}
-	if caller, ok := resolveSession(existing, req.Caller); ok && strings.TrimSpace(caller.WorktreePath) != "" {
-		cfg.SSHManager = local.NewExecutor(filepath.Dir(caller.WorktreePath))
+	var caller *domain.Session
+	if found, ok := resolveSession(existing, req.Caller); ok {
+		caller = &found
+	}
+	if root := createGitRoot(caller, existing); root != "" {
+		cfg.SSHManager = local.NewExecutor(root)
 	}
 	sess, err := s.create.CreateSession(ctx, cfg)
 	if err != nil {

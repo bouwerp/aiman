@@ -170,6 +170,10 @@ type GitConfig struct {
 	IncludeOrgs     []string `yaml:"include_orgs,omitempty"`
 	IncludePatterns []string `yaml:"include_patterns,omitempty"`
 	ExcludePatterns []string `yaml:"exclude_patterns,omitempty"`
+	// Root is the parent of main clones and `<repo>@<branch>` worktrees on this
+	// host. serve uses it when remotes[] is empty (the Agent API config has no
+	// remotes). Empty means infer: $HOME/repos if that directory exists, else $HOME.
+	Root string `yaml:"root,omitempty"`
 }
 
 // PersonalReposEnabled returns whether repos under the authenticated GitHub user should be listed.

@@ -34,7 +34,7 @@ func TestResizeSessionTerminalPTYUsesTheRuntime(t *testing.T) {
 		t.Fatalf("resize: %v", err)
 	}
 	if !applied {
-		t.Error("a PTY resize has no attached-client guard, so it always applies")
+		t.Error("an unattached PTY resize should apply")
 	}
 	if !strings.Contains(r.joined(), `aiman pty resize "abc" --cols 154 --rows 40`) {
 		t.Errorf("unexpected command: %s", r.joined())
@@ -75,6 +75,34 @@ func TestResizeSessionTerminalTmuxSetsManualSizing(t *testing.T) {
 
 // Someone watching an attached session must not have the window resized under
 // them. That is a decision, not a failure, so it is reported as "not applied".
+func TestResizeSessionTerminalPTYLeavesAttachedAlone(t *testing.T) {
+	r := &recordingRemote{out: `{"type":"pty_resize","applied":false,"reason":"attached"}`}
+	s := domain.Session{ID: "abc", Backend: domain.BackendPTY}
+
+	applied, err := ResizeSessionTerminal(context.Background(), r, s, 80, 24)
+	if err != nil {
+		t.Fatalf("an attached session is not an error: %v", err)
+	}
+	if applied {
+		t.Error("must not report a resize that was declined because a client is attached")
+	}
+}
+
+func TestParsePTYResizeApplied(t *testing.T) {
+	if !parsePTYResizeApplied(`{"type":"pty_resize","applied":true}`) {
+		t.Error("applied true")
+	}
+	if parsePTYResizeApplied(`{"type":"pty_resize","applied":false,"reason":"attached"}`) {
+		t.Error("applied false")
+	}
+	if !parsePTYResizeApplied(`{"type":"pty_resize"}`) {
+		t.Error("older remotes without the flag still apply")
+	}
+	if !parsePTYResizeApplied("not json") {
+		t.Error("unparseable output must not be treated as declined")
+	}
+}
+
 func TestResizeSessionTerminalLeavesAttachedSessionsAlone(t *testing.T) {
 	r := &recordingRemote{out: "AIMAN_FIT=attached\n"}
 	s := domain.Session{ID: "abc", TmuxSession: "demo"}

@@ -62,7 +62,11 @@ func Call(socketPath, method string, params any) (Response, error) {
 // raw bytes, input goes out as frames (see attach_framing.go).
 type AttachConn struct {
 	conn net.Conn
-	wmu  sync.Mutex
+	// r is the handshake reader. The confirmation line and the first TUI frame
+	// often arrive in one packet; a throwaway bufio.Reader would keep the
+	// frame in its buffer and Relay would never see it.
+	r   *bufio.Reader
+	wmu sync.Mutex
 }
 
 // AttachDial opens an attach stream to a PTY session. After the single
@@ -90,7 +94,8 @@ func AttachDial(socketPath, id string, cols, rows int) (*AttachConn, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	r := bufio.NewReader(conn)
+	line, err := r.ReadBytes('\n')
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -104,7 +109,7 @@ func AttachDial(socketPath, id string, cols, rows int) (*AttachConn, error) {
 		_ = conn.Close()
 		return nil, errors.New(resp.Error.Message)
 	}
-	return &AttachConn{conn: conn}, nil
+	return &AttachConn{conn: conn, r: r}, nil
 }
 
 // frameWriter turns a raw byte stream into input frames.
@@ -144,7 +149,11 @@ func (a *AttachConn) Relay(in io.Reader, out io.Writer) error {
 		errCh <- err
 	}()
 	go func() {
-		_, err := io.Copy(out, a.conn)
+		src := io.Reader(a.conn)
+		if a.r != nil {
+			src = a.r
+		}
+		_, err := io.Copy(out, src)
 		errCh <- err
 	}()
 	err := <-errCh
