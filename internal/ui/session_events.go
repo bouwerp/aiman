@@ -145,7 +145,11 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 	}
 	next := waitForSessionEvent(st)
 
-	if msg.event.Type == "keepalive" || msg.event.ID == "" {
+	if msg.event.Type == "keepalive" || (msg.event.ID == "" && msg.event.Type != "session_created") {
+		return next
+	}
+	if msg.event.Type == "session_created" && msg.event.Session != nil {
+		m.upsertLiveSession(sessionFromInfo(msg.host, *msg.event.Session))
 		return next
 	}
 	if m.eventSeen == nil {
@@ -225,19 +229,17 @@ func (m *Model) applyStreamEnded(msg sessionStreamEndedMsg) tea.Cmd {
 // sessionStreamRetryMsg asks for a stream to be redialled.
 type sessionStreamRetryMsg struct{ host string }
 
-// ensureSessionStreams opens a stream for every remote that hosts a PTY session
-// and closes those that no longer do.
-//
-// Only PTY sessions publish activity, so a tmux-only remote has nothing to
-// stream and is left alone rather than holding an idle SSH connection open.
+// ensureSessionStreams opens one event stream per configured remote.
+// A remote with no sessions yet still needs the stream, or a CLI create
+// never reaches the dashboard.
 func (m *Model) ensureSessionStreams() tea.Cmd {
 	want := map[string]config.Remote{}
-	for _, s := range m.allSessions {
-		if !s.IsPTY() {
-			continue
-		}
-		if remote, ok := resolveRemote(m.cfg, s); ok {
-			want[remote.Host] = remote
+	if m.cfg != nil {
+		for _, r := range m.cfg.Remotes {
+			if r.Host == "" {
+				continue
+			}
+			want[r.Host] = r
 		}
 	}
 
@@ -268,6 +270,60 @@ func (m *Model) sessionByID(id string) (domain.Session, bool) {
 		}
 	}
 	return domain.Session{}, false
+}
+
+func sessionFromInfo(host string, info server.SessionInfo) domain.Session {
+	return domain.Session{
+		ID:               info.ID,
+		Name:             info.Name,
+		Group:            info.Group,
+		ParentID:         info.ParentID,
+		IssueKey:         info.IssueKey,
+		Branch:           info.Branch,
+		RepoName:         info.RepoName,
+		RemoteHost:       host,
+		TmuxSession:      info.TmuxSession,
+		WorktreePath:     info.WorktreePath,
+		WorkingDirectory: info.WorkingDirectory,
+		AgentName:        info.AgentName,
+		AgentSessionID:   info.AgentSessionID,
+		AgentSessionPath: info.AgentSessionPath,
+		AgentTitle:       info.Title,
+		AgentEnded:       info.Ended,
+		Status:           domain.SessionStatus(info.Status),
+	}
+}
+
+func (m *Model) upsertLiveSession(s domain.Session) {
+	if s.ID == "" {
+		return
+	}
+	for i, existing := range m.allSessions {
+		if existing.ID != s.ID {
+			continue
+		}
+		m.allSessions[i] = overlayPersistedSessionFields(s, existing)
+		m.allSessions[i].ID = s.ID
+		if m.db != nil && !domain.IsEphemeralSessionID(s.ID) {
+			_ = m.db.Save(context.Background(), &m.allSessions[i])
+		}
+		m.maybeRefreshSessionList()
+		return
+	}
+	if m.creatingPlaceholderFor(s) != nil {
+		return
+	}
+	m.allSessions = append(m.allSessions, s)
+	if m.db != nil && !domain.IsEphemeralSessionID(s.ID) {
+		_ = m.db.Save(context.Background(), &s)
+	}
+	m.maybeRefreshSessionList()
+}
+
+func (m *Model) maybeRefreshSessionList() {
+	if m.list.Height() > 0 || len(m.list.Items()) > 0 {
+		m.applyRemoteFilter()
+	}
 }
 
 func parseEventTime(v string) time.Time {

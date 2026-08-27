@@ -128,8 +128,8 @@ func classifySyncHealth(s domain.Session, syncs []domain.SyncSession, expectedHo
 }
 
 // checkSyncHealth lists local mutagen syncs and classifies the health of each
-// session's sync. Sessions without a recorded sync are skipped (they already
-// render a "no sync" marker).
+// session's sync. Sessions without a recorded sync are skipped (the panel
+// already shows N/A).
 func checkSyncHealth(cfg *config.Config, sessions []domain.Session) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

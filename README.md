@@ -556,7 +556,7 @@ are thin clients over these; an agent can also speak the JSON directly.
 | Group | Methods |
 |---|---|
 | Sessions | `session.list`, `session.get`, `session.read`, `session.prompt`, `session.wait`, `session.create`, `session.rename`, `session.move` |
-| PTY runtime | `pty.list`, `pty.get`, `pty.create`, `pty.input`, `pty.capture`, `pty.resize`, `pty.kill`, `pty.forget` |
+| PTY runtime | `pty.list`, `pty.get`, `pty.create`, `pty.input`, `pty.run`, `pty.wait-output`, `pty.capture`, `pty.resize`, `pty.kill`, `pty.forget` |
 | Live activity | `session.events` (streaming; takes over the connection like `pty.attach`) |
 | Shared context | `context.list`, `context.find`, `context.get`, `context.put`, `context.pack`, `context.stats` |
 
@@ -574,9 +574,9 @@ From inside a pane (or any process on the remote with the socket):
 aiman session list [--group GROUP]
 aiman session get <target>
 aiman session create --repo owner/repo --branch NAME --agent claude \
-    [--name NAME] [--group GROUP] \
+    [--name NAME] [--group GROUP] [--parent ID] [--orphan] \
     [--dir SUBDIR] [--prompt TEXT] [--issue KEY] [--base BRANCH] [--existing]
-aiman session create --quick --agent claude [--name NAME]
+aiman session create --quick --agent claude [--name NAME] [--orphan]
 aiman session rename <target> NEW-NAME
 aiman session move <target> --group GROUP
 aiman session prompt <target> TEXT [--wait] [--until STATE] [--timeout 120s] [--force]
@@ -601,7 +601,7 @@ Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refus
 
 `<target>` is resolved in this order: unique `name`, `group/name`, UUID (`id`), tmux session name.
 
-`--quick` is ad-hoc, group `quick`, generated `q1`/`q2`/…, current host. `--agent` is required. `--wait` on prompt sends then waits until the first of `idle`, `waiting_input`, or `errored`. Default timeout is 120s; `--timeout 0` means no limit. `--until blocked` is an alias for `waiting_input`. Prompting a session that is already waiting for input fails with `agent_blocked` unless `--force`.
+`--quick` is ad-hoc, group `quick`, generated `q1`/`q2`/…, current host. `--agent` is required. A create from a session (RPC `caller` / `AIMAN_ID`) nests under that session on the dashboard; `--orphan` makes a root. The dashboard hears `session_created` on the existing `session.events` stream, so a new helper appears without `r`. `--wait` on prompt sends then waits until the first of `idle`, `waiting_input`, or `errored`. Default timeout is 120s; `--timeout 0` means no limit. `--until blocked` is an alias for `waiting_input`. Prompting a session that is already waiting for input fails with `agent_blocked` unless `--force`.
 
 Rename changes the display name only. It does not rename tmux or the git worktree.
 
@@ -691,6 +691,7 @@ Empty group is stored as `ungrouped` so discovery cannot blank it.
 | `AIMAN_ID` / `AIMAN_SESSION_ID` | Session UUID |
 | `AIMAN_SESSION_NAME` | Display name |
 | `AIMAN_GROUP` | Group |
+| `AIMAN_PARENT_ID` | Parent session UUID when this session was spawned |
 | `AIMAN_SOCKET_PATH` | `~/.aiman/aiman.sock` |
 | `AIMAN_BIN_PATH` | Path of the `aiman` binary |
 
@@ -719,7 +720,7 @@ aiman session prompt reviewer "Review the current diff." --wait --timeout 120s
 aiman session read reviewer --lines 120
 ```
 
-Do not run bare `aiman` from a pane (TUI). Do not run `aiman serve` to stop the server. Prefer names over UUIDs. Put helpers in `"$AIMAN_GROUP"`.
+Do not run bare `aiman` from a pane (TUI). Do not run `aiman serve` to stop the server. Prefer names over UUIDs. Put helpers in `"$AIMAN_GROUP"`. Creates nest under the caller unless `--orphan`.
 
 ## 📁 Configuration
 

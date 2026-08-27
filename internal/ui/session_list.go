@@ -43,12 +43,15 @@ func groupRollup(items []item) string {
 	}
 }
 
-func groupedSessionItems(flat []item, collapsed map[string]bool) []list.Item {
+func groupedSessionItems(flat []item, collapsed map[string]bool, collapsedSessions map[string]bool) []list.Item {
 	if len(flat) == 0 {
 		return nil
 	}
 	if collapsed == nil {
 		collapsed = map[string]bool{}
+	}
+	if collapsedSessions == nil {
+		collapsedSessions = map[string]bool{}
 	}
 	type bucket struct {
 		key   string
@@ -56,11 +59,9 @@ func groupedSessionItems(flat []item, collapsed map[string]bool) []list.Item {
 	}
 	order := []string{}
 	by := map[string]*bucket{}
+	byID := itemByID(flat)
 	for _, it := range flat {
-		g := domain.GroupLabel(it.session.Group)
-		if it.remoteName != "" {
-			g = g + "\x00" + it.remoteName
-		}
+		g := groupHomeKey(it, byID)
 		b, ok := by[g]
 		if !ok {
 			b = &bucket{key: g}
@@ -73,14 +74,12 @@ func groupedSessionItems(flat []item, collapsed map[string]bool) []list.Item {
 	var out []list.Item
 	for _, key := range order {
 		b := by[key]
-		sort.Slice(b.items, func(i, j int) bool {
-			return strings.ToLower(b.items[i].session.Name) < strings.ToLower(b.items[j].session.Name)
-		})
-		groupName := domain.GroupLabel(b.items[0].session.Group)
+		home := homeRoot(b.items[0], byID)
+		groupName := domain.GroupLabel(home.session.Group)
 		header := item{
 			header:     true,
-			session:    domain.Session{Group: groupName, RemoteHost: b.items[0].session.RemoteHost},
-			remoteName: b.items[0].remoteName,
+			session:    domain.Session{Group: groupName, RemoteHost: home.session.RemoteHost},
+			remoteName: home.remoteName,
 			activity:   groupRollup(b.items),
 			groupN:     len(b.items),
 			collapsed:  collapsed[key],
@@ -89,8 +88,7 @@ func groupedSessionItems(flat []item, collapsed map[string]bool) []list.Item {
 		if header.collapsed {
 			continue
 		}
-		for i, it := range b.items {
-			it.treeLast = i == len(b.items)-1
+		for _, it := range flattenSessionForest(b.items, collapsedSessions) {
 			out = append(out, it)
 		}
 	}
@@ -204,9 +202,6 @@ func sessionStateColor(i item) color.Color {
 	if i.needsInput {
 		return stateColorWaiting
 	}
-	if i.syncStale {
-		return stateColorError
-	}
 	switch i.activity {
 	case "busy", "creating":
 		return stateColorWorking
@@ -249,9 +244,6 @@ func (i item) chrome() (prefix, activity string) {
 			prefix, activity = "! ", " ⚠ agent exited"
 		}
 	}
-	if i.syncStale {
-		activity += " ⚠ sync"
-	}
 	if i.session.AgentEnded {
 		prefix = "x "
 		activity = " • exited"
@@ -278,10 +270,11 @@ func (i item) displayName() string {
 }
 
 func (i item) treeBranch() string {
+	pad := strings.Repeat("  ", i.treeDepth)
 	if i.treeLast {
-		return "  └─ "
+		return pad + "  └─ "
 	}
-	return "  ├─ "
+	return pad + "  ├─ "
 }
 
 func (i item) headerPlainTitle() string {

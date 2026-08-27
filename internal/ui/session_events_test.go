@@ -19,26 +19,16 @@ func eventModel(sessions ...domain.Session) *Model {
 	}
 }
 
-// Only PTY sessions publish activity, so a remote with none has nothing to
-// stream and must not hold an SSH connection open for it.
-func TestEnsureSessionStreamsOnlyForPTYRemotes(t *testing.T) {
-	m := eventModel(domain.Session{ID: "t", RemoteHost: "regent0", TmuxSession: "x"})
-	if cmd := m.ensureSessionStreams(); cmd != nil {
-		t.Error("a tmux-only remote should not open a stream")
-	}
-	if len(m.streams) != 0 {
-		t.Errorf("expected no streams, got %d", len(m.streams))
-	}
-
-	m = eventModel(domain.Session{ID: "p", RemoteHost: "regent0", Backend: domain.BackendPTY})
+// A remote with no sessions yet still needs a stream, or the first CLI create
+// never reaches the dashboard.
+func TestEnsureSessionStreamsOpensForConfiguredRemotes(t *testing.T) {
+	m := eventModel()
 	if cmd := m.ensureSessionStreams(); cmd == nil {
-		t.Fatal("a PTY session should open a stream for its remote")
+		t.Fatal("a configured remote should open a stream even with no sessions")
 	}
 	if _, ok := m.streams["regent0"]; !ok {
 		t.Errorf("expected a stream for regent0, got %v", m.streams)
 	}
-
-	// Already running: no second stream for the same remote.
 	before := len(m.streams)
 	if cmd := m.ensureSessionStreams(); cmd != nil {
 		t.Error("an existing stream should not be reopened")
@@ -46,20 +36,32 @@ func TestEnsureSessionStreamsOnlyForPTYRemotes(t *testing.T) {
 	if len(m.streams) != before {
 		t.Errorf("stream count changed: %d -> %d", before, len(m.streams))
 	}
-}
-
-// When the last PTY session on a remote goes away, its stream is closed.
-func TestEnsureSessionStreamsClosesUnneededStreams(t *testing.T) {
-	m := eventModel(domain.Session{ID: "p", RemoteHost: "regent0", Backend: domain.BackendPTY})
-	m.ensureSessionStreams()
-	if len(m.streams) != 1 {
-		t.Fatalf("expected one stream, got %d", len(m.streams))
-	}
 
 	m.allSessions = nil
 	m.ensureSessionStreams()
-	if len(m.streams) != 0 {
-		t.Errorf("expected the stream to be closed, got %d", len(m.streams))
+	if len(m.streams) != 1 {
+		t.Errorf("empty session list must not close the remote stream, got %d", len(m.streams))
+	}
+}
+
+func TestApplySessionEventInsertsCreatedSession(t *testing.T) {
+	m := eventModel(domain.Session{ID: "parent", Name: "impl", RemoteHost: "regent0", Group: "WTB-1"})
+	m.ensureSessionStreams()
+	info := &server.SessionInfo{ID: "child", Name: "reviewer", Group: "WTB-1", ParentID: "parent", Status: "ACTIVE"}
+	if cmd := m.applySessionEvent(sessionEventMsg{
+		host:  "regent0",
+		event: server.SessionEvent{Type: "session_created", ID: "child", Session: info},
+	}); cmd == nil {
+		t.Fatal("stream would stall")
+	}
+	found := false
+	for _, s := range m.allSessions {
+		if s.ID == "child" && s.ParentID == "parent" && s.Name == "reviewer" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("created session missing from list: %+v", m.allSessions)
 	}
 }
 

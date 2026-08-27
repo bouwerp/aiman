@@ -28,12 +28,14 @@ Do not call `aiman session report-agent-session`. Aiman installs a SessionStart 
 
 ## Names and groups
 
-Every session has a short unique `name` (`impl`, `reviewer`, `q1`) and a `group` (issue key, repo, or `quick`). Spawn helpers in the caller's group:
+Every session has a short unique `name` (`impl`, `reviewer`, `q1`) and a `group` (issue key, repo, or `quick`). A create from inside a session nests under the caller on the operator's list. Spawn helpers in the caller's group:
 
 ```bash
 aiman session create --repo owner/repo --branch BRANCH --agent claude \
   --name reviewer --group "$AIMAN_GROUP"
 ```
+
+`--orphan` makes a root instead of a child. `--parent ID` nests under a different session.
 
 Quick ad-hoc session:
 
@@ -56,6 +58,22 @@ aiman session read reviewer --lines 120
 ```
 
 `--until blocked` means `waiting_input`. Do not prompt a session that is already waiting for input unless the user asked you to answer it (`--force`).
+
+## Run a command in another terminal
+
+Do not `session create` a coding agent to run tests or a server. Create a PTY in this directory, submit the command, wait for output, then read it:
+
+```bash
+wid="${AIMAN_ID}-run"
+aiman pty create --id "$wid" --dir "$PWD" --command "bash -l"
+aiman pty run "$wid" "just test"
+aiman pty wait-output "$wid" --match PASS --timeout 120s
+aiman pty capture "$wid" --lines 80
+aiman pty kill "$wid"
+aiman pty forget "$wid"
+```
+
+`--match` is a literal substring; `--regex` is a Go regular expression. Output is matched after stripping ANSI. `pty capture` is the read. Do not attach. Only kill a PTY you created.
 
 ## Shared context
 
@@ -81,7 +99,7 @@ aiman context import --agent claude,agy --repo owner/repo
 
 ## Safety
 
-- Use `--name` / `--group "$AIMAN_GROUP"` for helpers. Do not steal focus from the user's TUI (there is none on this host).
+- Use `--name` / `--group "$AIMAN_GROUP"` for helpers. They nest under you unless you pass `--orphan`. Do not steal focus from the user's TUI (there is none on this host).
 - Do not kill sessions you did not create unless the user asked.
 - Never run `aiman serve` to stop it.
 - CLI server errors are JSON on stderr, exit 1. Usage errors exit 2.

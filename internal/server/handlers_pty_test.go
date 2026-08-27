@@ -526,3 +526,80 @@ func TestPTYResizeRejectsUnusableSizes(t *testing.T) {
 		}
 	}
 }
+
+func TestPTYRunSubmitsCommandWithEnter(t *testing.T) {
+	sock := startPTYServer(t)
+	create := createPTY(t, sock, map[string]any{"id": "run1", "command": "bash -i"})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	resp, err := Call(sock, "pty.run", map[string]any{"id": "run1", "command": "echo run_marker_42"})
+	if err != nil || resp.Error != nil {
+		t.Fatalf("run: %v / %+v", err, resp.Error)
+	}
+	eventually(t, 8*time.Second, func() bool {
+		return strings.Contains(captureText(t, sock, "run1"), "run_marker_42")
+	})
+}
+
+func TestPTYWaitOutputMatchesExistingText(t *testing.T) {
+	sock := startPTYServer(t)
+	create := createPTY(t, sock, map[string]any{
+		"id": "w1", "command": "bash -c 'echo wait_already_here; exec bash -i'",
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	eventually(t, 8*time.Second, func() bool {
+		return strings.Contains(captureText(t, sock, "w1"), "wait_already_here")
+	})
+	resp, err := Call(sock, "pty.wait-output", map[string]any{
+		"id": "w1", "match": "wait_already_here", "timeout_ms": 2000,
+	})
+	if err != nil || resp.Error != nil {
+		t.Fatalf("wait-output: %v / %+v", err, resp.Error)
+	}
+	m, _ := resp.Result.(map[string]any)
+	if m["matched"] != true {
+		t.Fatalf("expected matched, got %+v", m)
+	}
+}
+
+func TestPTYWaitOutputStripsANSI(t *testing.T) {
+	sock := startPTYServer(t)
+	create := createPTY(t, sock, map[string]any{
+		"id": "wansi", "command": "bash -c 'printf \"\\033[32mGREENPASS\\033[0m\\n\"; exec bash -i'",
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	resp, err := Call(sock, "pty.wait-output", map[string]any{
+		"id": "wansi", "match": "GREENPASS", "timeout_ms": 8000,
+	})
+	if err != nil || resp.Error != nil {
+		t.Fatalf("wait-output: %v / %+v", err, resp.Error)
+	}
+}
+
+func TestPTYWaitOutputRegexAndTimeout(t *testing.T) {
+	sock := startPTYServer(t)
+	create := createPTY(t, sock, map[string]any{"id": "w2", "command": "bash -c 'echo abc123xyz; exec bash -i'"})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	ok, err := Call(sock, "pty.wait-output", map[string]any{
+		"id": "w2", "regex": "abc[0-9]+xyz", "timeout_ms": 8000,
+	})
+	if err != nil || ok.Error != nil {
+		t.Fatalf("regex wait: %v / %+v", err, ok.Error)
+	}
+	miss, err := Call(sock, "pty.wait-output", map[string]any{
+		"id": "w2", "match": "this_string_is_not_in_the_pane", "timeout_ms": 300,
+	})
+	if err != nil {
+		t.Fatalf("timeout call: %v", err)
+	}
+	if miss.Error == nil || miss.Error.Code != CodeTimeout {
+		t.Fatalf("expected timeout, got %+v", miss.Error)
+	}
+}

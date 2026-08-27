@@ -55,6 +55,10 @@ func runPTY(args []string) error {
 			return errUsage
 		}
 		return runPTYAttach(sock, args[1])
+	case "run":
+		return runPTYRun(sock, args[1:])
+	case "wait-output":
+		return runPTYWaitOutput(sock, args[1:])
 	case "capture", "get", "kill", "forget", "input", "resize":
 		if len(args) < 2 {
 			writeCLIError(server.CodeInvalidParams, "pty "+args[0]+" requires a session id")
@@ -163,6 +167,54 @@ func runPTYCreate(sock string, args []string) error {
 		params["rows"] = atoi(r)
 	}
 	return callAndPrint(sock, "pty.create", params)
+}
+
+func runPTYRun(sock string, args []string) error {
+	flags, rest := takeFlags(args)
+	if pf := flags["params-file"]; pf != "" {
+		raw, rerr := os.ReadFile(pf)
+		if rerr != nil {
+			writeCLIError(server.CodeInvalidParams, "params-file unreadable: "+rerr.Error())
+			return errUsage
+		}
+		return callAndPrintRaw(sock, "pty.run", raw)
+	}
+	id := flags["id"]
+	cmd := flags["command"]
+	if id == "" && len(rest) > 0 {
+		id, rest = rest[0], rest[1:]
+	}
+	if cmd == "" {
+		cmd = strings.Join(rest, " ")
+	}
+	if id == "" || strings.TrimSpace(cmd) == "" {
+		writeCLIError(server.CodeInvalidParams, "pty run requires an id and a command")
+		return errUsage
+	}
+	return callAndPrint(sock, "pty.run", map[string]any{"id": id, "command": cmd})
+}
+
+func runPTYWaitOutput(sock string, args []string) error {
+	flags, rest := takeFlags(args)
+	id := flags["id"]
+	if id == "" && len(rest) > 0 {
+		id = rest[0]
+	}
+	if id == "" {
+		writeCLIError(server.CodeInvalidParams, "pty wait-output requires a session id")
+		return errUsage
+	}
+	params := map[string]any{"id": id}
+	if m := flags["match"]; m != "" {
+		params["match"] = m
+	}
+	if r := flags["regex"]; r != "" {
+		params["regex"] = r
+	}
+	if t := flags["timeout"]; t != "" {
+		params["timeout_ms"] = parseTimeoutMS(t)
+	}
+	return callAndPrint(sock, "pty.wait-output", params)
 }
 
 // runPTYAttach is the remote end of `ssh -t host aiman pty attach <id>`: it
@@ -350,6 +402,8 @@ func printPTYUsage(w io.Writer) {
   aiman pty list
   aiman pty create --id ID --command "claude" [--dir DIR] [--env K=V,K2=V2] [--cols N --rows M]
   aiman pty get|capture|kill|forget ID     (capture: --lines N or --max-bytes N)
+  aiman pty run ID COMMAND                 (submit command + Enter)
+  aiman pty wait-output ID --match TEXT|--regex RE [--timeout 120s]
   aiman pty resize ID --cols N --rows M
   aiman pty input ID --data TEXT | --file PATH | --key enter|ctrl-c|ctrl-d|esc|tab
   aiman pty attach ID                      (interactive; detach with ctrl+q)
