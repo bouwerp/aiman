@@ -121,6 +121,17 @@ func TestBuildRegionPolicy_AllowsIAMInspectWithoutRegion(t *testing.T) {
 		"iam:ListPolicyVersions",
 		"iam:DeletePolicyVersion",
 		"iam:PutRolePolicy",
+		"iam:CreateRole",
+		"iam:DeleteRole",
+		"iam:UpdateRole",
+		"iam:UpdateAssumeRolePolicy",
+		"iam:DeleteRolePolicy",
+		"iam:AttachRolePolicy",
+		"iam:DetachRolePolicy",
+		"iam:TagRole",
+		"iam:UntagRole",
+		"iam:ListRoles",
+		"iam:PassRole",
 	}
 	found := map[string]bool{}
 	for _, s := range p.Statement {
@@ -139,6 +150,49 @@ func TestBuildRegionPolicy_AllowsIAMInspectWithoutRegion(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Fatalf("unconditional IAM policy access missing %v, policy=%s", missing, got)
+	}
+}
+
+func TestBuildRegionPolicy_AllowsS3WithoutRegion(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	want := []string{
+		"s3:ListAllMyBuckets",
+		"s3:CreateBucket",
+		"s3:DeleteBucket",
+		"s3:ListBucket",
+		"s3:GetObject",
+		"s3:PutObject",
+		"s3:DeleteObject",
+	}
+	found := map[string]bool{}
+	for _, s := range p.Statement {
+		if s.Condition != nil {
+			continue
+		}
+		for _, a := range actionList(s.Action) {
+			found[a] = true
+			if a == "s3:*" {
+				return
+			}
+		}
+	}
+	var missing []string
+	for _, a := range want {
+		if !found[a] {
+			missing = append(missing, a)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("unconditional S3 access missing %v, policy=%s", missing, got)
 	}
 }
 

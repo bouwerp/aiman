@@ -44,12 +44,23 @@ var iamPolicyActions = []string{
 	"iam:ListPolicyVersions",
 	"iam:DeletePolicyVersion",
 	"iam:PutRolePolicy",
+	"iam:DeleteRolePolicy",
+	"iam:CreateRole",
+	"iam:DeleteRole",
+	"iam:UpdateRole",
+	"iam:UpdateAssumeRolePolicy",
+	"iam:AttachRolePolicy",
+	"iam:DetachRolePolicy",
+	"iam:TagRole",
+	"iam:UntagRole",
+	"iam:ListRoles",
+	"iam:PassRole",
 }
 
 // BuildRegionPolicy returns an inline IAM JSON policy that restricts all
 // actions to the given AWS regions via the aws:RequestedRegion condition,
-// plus unconditional Route53 hosted-zone access for DNS validation and
-// unconditional IAM policy inspect/update (IAM is global).
+// plus unconditional Route53, IAM, and S3 access (those APIs are global or
+// need to work regardless of the session's locked region).
 // Returns an empty string when regions is nil or empty.
 func BuildRegionPolicy(regions []string) string {
 	trimmed := make([]string, 0, len(regions))
@@ -90,10 +101,18 @@ func BuildRegionPolicy(regions []string) string {
 				Resource: "*",
 			},
 			// IAM is global (API in us-east-1). A RequestedRegion lock
-			// otherwise denies ListRolePolicies / CreatePolicyVersion.
+			// otherwise denies ListRolePolicies / CreateRole.
 			{
 				Effect:   "Allow",
 				Action:   iamPolicyActions,
+				Resource: "*",
+			},
+			// ListBuckets is global; CreateBucket in us-east-1 has no
+			// LocationConstraint. A RequestedRegion lock otherwise denies
+			// listing and some creates even when object APIs in-region work.
+			{
+				Effect:   "Allow",
+				Action:   "s3:*",
 				Resource: "*",
 			},
 		},
