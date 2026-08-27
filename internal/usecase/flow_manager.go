@@ -363,14 +363,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// so tools like claude that are installed in ~/.local/bin are found.
 	// We also append common user-local bin paths explicitly to avoid false
 	// "command not found" failures for tools installed outside default login PATH.
-	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
+	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
 	// Escape single quotes for bash -c '...'
 	agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
 	extraEnvFlags := tmuxEnvFlags(awsEnv)
-	openCodeEnv := map[string]string{}
-	ApplyOpenCodeAllowEnv(ctx, sshMgr, agentCmd, openCodeEnv)
-	extraEnvFlags += tmuxEnvFlags(openCodeEnv)
+	kiloEnv := map[string]string{}
+	ApplyKiloAllowEnv(ctx, sshMgr, agentCmd, kiloEnv)
+	extraEnvFlags += tmuxEnvFlags(kiloEnv)
 	for _, secret := range config.EnvSecrets {
 		extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 	}
@@ -487,8 +487,8 @@ func detectAgentModel(ctx context.Context, remote domain.RemoteExecutor, agentNa
 	case strings.Contains(name, "claude"):
 		// ANTHROPIC_MODEL env var takes precedence; claude config is a fallback.
 		cmd = `printenv ANTHROPIC_MODEL 2>/dev/null || claude config get model 2>/dev/null || echo ""`
-	case strings.Contains(name, "opencode"):
-		cmd = `printenv OPENCODE_MODEL 2>/dev/null || echo ""`
+	case strings.Contains(name, "kilo"):
+		cmd = `printenv KILO_MODEL 2>/dev/null || echo ""`
 	case strings.Contains(name, "copilot"):
 		cmd = `printenv GITHUB_COPILOT_MODEL 2>/dev/null || echo ""`
 	case strings.Contains(name, "ageni"):
@@ -661,7 +661,7 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 	for k, v := range awsEnv {
 		env[k] = v
 	}
-	ApplyOpenCodeAllowEnv(ctx, sshMgr, agentCmd, env)
+	ApplyKiloAllowEnv(ctx, sshMgr, agentCmd, env)
 	for _, secret := range config.EnvSecrets {
 		env[secret.Key] = secret.Value
 	}

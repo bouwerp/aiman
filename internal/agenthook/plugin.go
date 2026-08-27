@@ -1,6 +1,6 @@
 package agenthook
 
-const openCodePlugin = `import { spawn } from "node:child_process";
+const kiloPlugin = `import { spawn } from "node:child_process";
 
 export const AimanNativeSession = async () => {
   let seq = 0;

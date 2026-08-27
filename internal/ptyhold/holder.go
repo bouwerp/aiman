@@ -386,7 +386,7 @@ const defaultTERM = "xterm-256color"
 // presenting an empty pane.
 func childShell(command string) string {
 	return fmt.Sprintf(
-		"export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; export TERM=%s COLORTERM=truecolor LANG=\"${LANG:-%s}\"; %s",
+		"export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; export TERM=%s COLORTERM=truecolor LANG=\"${LANG:-%s}\"; %s",
 		defaultTERM, defaultUTF8Locale, command,
 	)
 }

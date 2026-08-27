@@ -131,7 +131,7 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 
 		relPath, _ := filepath.Rel(skillsPath, path)
 		name := strings.TrimSuffix(info.Name(), ext)
-		// OpenCode-style layout: skills/<id>/SKILL.md
+		// Agent skill layout: skills/<id>/SKILL.md
 		if strings.EqualFold(info.Name(), "SKILL.md") || strings.EqualFold(info.Name(), "SKILL.txt") {
 			if parent := filepath.Base(filepath.Dir(path)); parent != "" && parent != "." {
 				name = parent
@@ -237,8 +237,8 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	case strings.Contains(name, "antigravity") || baseCommand == "agy":
 		result, err = e.prepareAntigravity(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
 
-	case strings.Contains(name, "opencode"):
-		result = bareSession(agent.Command)
+	case strings.Contains(name, "kilo"):
+		result = bareSession(ensureFlag(agent.Command, "--auto"))
 
 	case strings.Contains(name, "ageni") || baseCommand == "ageni":
 		result, err = e.prepareAgeni(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)

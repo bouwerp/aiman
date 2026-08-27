@@ -29,7 +29,7 @@ func WithResume(command, nativeID string) string {
 		return fields[0] + " --resume=" + nativeID + restArgs(fields[1:])
 	case strings.Contains(base, "agy") || strings.Contains(base, "antigravity"):
 		return fields[0] + " --conversation " + nativeID + restArgs(fields[1:])
-	case strings.Contains(base, "opencode"):
+	case strings.Contains(base, "kilo"):
 		return fields[0] + " --session " + nativeID + restArgs(fields[1:])
 	case strings.Contains(base, "pi"):
 		return fields[0] + " --session " + nativeID + restArgs(fields[1:])

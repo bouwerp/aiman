@@ -32,9 +32,9 @@ var knownAgents = []domain.Agent{
 		Description: "OpenAI Codex CLI",
 	},
 	{
-		Name:        "OpenCode",
-		Command:     "opencode",
-		Description: "OpenCode interactive CLI",
+		Name:        "Kilo Code",
+		Command:     "kilo",
+		Description: "Kilo Code CLI (kilo.ai)",
 	},
 	{
 		Name:        "GitHub Copilot CLI",
@@ -171,9 +171,9 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 			}
 		}
 
-		// Support both OpenCode binary names.
-		if !found && agent.Name == "OpenCode" {
-			fallbacks := []string{"opencode", "opencode-cli"}
+		// Support both Kilo CLI binary names.
+		if !found && agent.Name == "Kilo Code" {
+			fallbacks := []string{"kilo", "kilocode"}
 			for _, fb := range fallbacks {
 				if fb == agent.Command {
 					continue
@@ -227,7 +227,7 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 }
 
 func (s *Scanner) commandExists(ctx context.Context, cmd string) bool {
-	pathSuffix := "$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:$HOME/go/bin:/usr/local/go/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin"
+	pathSuffix := "$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:$HOME/go/bin:/usr/local/go/bin:/usr/local/bin:/opt/homebrew/bin"
 	checks := []string{
 		fmt.Sprintf("command -v %s >/dev/null 2>&1", cmd),
 		fmt.Sprintf("bash -lc 'command -v %s >/dev/null 2>&1'", cmd),

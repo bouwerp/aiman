@@ -37,8 +37,8 @@ func LaunchCatalogFor(base string) LaunchCatalog {
 		return agyCatalog
 	case "codex":
 		return codexCatalog
-	case "opencode":
-		return opencodeCatalog
+	case "kilo", "kilocode":
+		return kiloCatalog
 	case "copilot":
 		return copilotCatalog
 	case "cursor-agent":
@@ -90,41 +90,19 @@ var codexCatalog = LaunchCatalog{
 	EffortConfig: "model_reasoning_effort",
 }
 
-// opencode models: OpenCode-hosted IDs from `opencode models`.
-var opencodeCatalog = LaunchCatalog{
+// kilo models: provider/model IDs from `kilo models`. --variant is reasoning effort.
+var kiloCatalog = LaunchCatalog{
 	Models: []string{
-		"opencode/big-pickle",
-		"opencode/hy3-free",
-		"opencode/mimo-v2.5-free",
-		"opencode/muse-spark-1.2-contributor-free",
-		"opencode/nemotron-3-ultra-free",
-		"opencode/nemotron-3.5-lightning-free",
-		"opencode/x-preview-f-free",
-		"opencode-go/deepseek-v4-flash",
-		"opencode-go/deepseek-v4-flash-vision-exp",
-		"opencode-go/deepseek-v4-pro",
-		"opencode-go/glm-5.1",
-		"opencode-go/glm-5.2",
-		"opencode-go/glm-5.3",
-		"opencode-go/gpt-5.6-luna",
-		"opencode-go/grok-4.5",
-		"opencode-go/hy3",
-		"opencode-go/kimi-k2.6",
-		"opencode-go/kimi-k2.7-code",
-		"opencode-go/kimi-k3",
-		"opencode-go/mimo-v2.5",
-		"opencode-go/mimo-v2.5-pro",
-		"opencode-go/minimax-m2.7",
-		"opencode-go/minimax-m3",
-		"opencode-go/muse-spark-1.2-contributor",
-		"opencode-go/ox-alpha-free",
-		"opencode-go/qwen3.6-plus",
-		"opencode-go/qwen3.7-max",
-		"opencode-go/qwen3.7-plus",
-		"opencode-go/qwen3.8-max",
-		"anthropic/claude-sonnet-4-5",
-		"anthropic/claude-haiku-4-5",
+		"kilo/auto",
+		"kilo/minimax-m2.1",
+		"anthropic/claude-sonnet-4-6",
+		"anthropic/claude-opus-4-6",
+		"google/gemini-3.1-pro",
+		"openai/gpt-5.2",
+		"xai/grok-4.5",
 	},
+	Efforts:    []string{"minimal", "low", "medium", "high", "max"},
+	EffortFlag: "--variant",
 }
 
 // copilot --model examples / GitHub Copilot CLI model IDs and --effort choices.

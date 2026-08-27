@@ -53,11 +53,10 @@ func TestScanAgents_DetectsAntigravity(t *testing.T) {
 	}
 }
 
-func TestScanAgents_DetectsOpenCode(t *testing.T) {
+func TestScanAgents_DetectsKiloCode(t *testing.T) {
 	exec := &mockExecutor{
 		canRun: func(cmd string) bool {
-			// Simulate opencode being discoverable via command -v.
-			return strings.Contains(cmd, "opencode")
+			return strings.Contains(cmd, "kilo")
 		},
 	}
 	scanner := NewScanner(exec)
@@ -69,21 +68,20 @@ func TestScanAgents_DetectsOpenCode(t *testing.T) {
 
 	found := false
 	for _, a := range agents {
-		if a.Name == "OpenCode" {
+		if a.Name == "Kilo Code" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected OpenCode to be detected as an available agent")
+		t.Error("expected Kilo Code to be detected as an available agent")
 	}
 }
 
-func TestScanAgents_DetectsOpenCodeCLIFallback(t *testing.T) {
+func TestScanAgents_DetectsKiloCodeCLIFallback(t *testing.T) {
 	exec := &mockExecutor{
 		canRun: func(cmd string) bool {
-			// Only the opencode-cli binary exists.
-			return strings.Contains(cmd, "opencode-cli")
+			return strings.Contains(cmd, "kilocode")
 		},
 	}
 	scanner := NewScanner(exec)
@@ -95,16 +93,16 @@ func TestScanAgents_DetectsOpenCodeCLIFallback(t *testing.T) {
 
 	found := false
 	for _, a := range agents {
-		if a.Name == "OpenCode" {
+		if a.Name == "Kilo Code" {
 			found = true
-			if a.Command != "opencode-cli" {
-				t.Errorf("expected command to be opencode-cli, got %s", a.Command)
+			if a.Command != "kilocode" {
+				t.Errorf("expected command to be kilocode, got %s", a.Command)
 			}
 			break
 		}
 	}
 	if !found {
-		t.Error("expected OpenCode to be detected via opencode-cli fallback")
+		t.Error("expected Kilo Code to be detected via kilocode fallback")
 	}
 }
 
@@ -117,7 +115,7 @@ func TestCommandExists_TriesZshLogin(t *testing.T) {
 	}
 	scanner := NewScanner(exec)
 
-	if !scanner.commandExists(context.Background(), "opencode") {
+	if !scanner.commandExists(context.Background(), "kilo") {
 		t.Error("expected commandExists to succeed via zsh -lc fallback")
 	}
 }

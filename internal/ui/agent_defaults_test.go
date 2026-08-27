@@ -30,7 +30,10 @@ func TestAgentDefaultsEffortAvailability(t *testing.T) {
 	if !got["claude"] || !got["grok"] || !got["codex"] || !got["agy"] || !got["copilot"] || !got["pi"] {
 		t.Fatalf("effort agents: %+v", got)
 	}
-	if got["opencode"] || got["cursor-agent"] {
+	if !got["kilo"] {
+		t.Fatalf("kilo exposes --variant: %+v", got)
+	}
+	if got["cursor-agent"] {
 		t.Fatalf("n/a agents must not expose effort: %+v", got)
 	}
 }
@@ -53,11 +56,11 @@ func TestAgentDefaultsCyclesModelList(t *testing.T) {
 
 func TestAgentDefaultsTabSkipsNAEffort(t *testing.T) {
 	m := NewAgentDefaultsModel(&config.Config{})
-	m.focusIndex = fieldIndex(m, "opencode", false)
+	m.focusIndex = fieldIndex(m, "cursor-agent", false)
 	next, _ := m.Update(pressKey("tab"))
 	m = next.(AgentDefaultsModel)
 	row, effort := m.focusCell()
-	if m.rows[row].key == "opencode" && effort {
+	if m.rows[row].key == "cursor-agent" && effort {
 		t.Fatal("tab must skip n/a effort")
 	}
 }

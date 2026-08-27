@@ -164,6 +164,6 @@ systemd --user (installed by the TUI):
 On start it installs or updates the bundled agent skill under $HOME
 and in each known session worktree, and registers native-session hooks
 in each installed agent's config (Claude, Grok, Cursor, Codex, Copilot,
-agy, OpenCode, Pi). Ageni is not hooked.
+agy, Kilo Code, Pi). Ageni is not hooked.
 `)
 }

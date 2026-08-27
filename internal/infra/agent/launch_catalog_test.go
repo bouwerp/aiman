@@ -30,8 +30,11 @@ func TestLaunchCatalogForAgyEffort(t *testing.T) {
 }
 
 func TestLaunchCatalogEffortNA(t *testing.T) {
-	if LaunchCatalogFor("opencode").SupportsEffort() {
-		t.Fatal("opencode has no effort flag")
+	if !LaunchCatalogFor("kilo").SupportsEffort() {
+		t.Fatal("kilo exposes --variant as effort")
+	}
+	if LaunchCatalogFor("cursor-agent").SupportsEffort() {
+		t.Fatal("cursor-agent has no effort flag")
 	}
 	if LaunchCatalogFor("cursor-agent").SupportsEffort() {
 		t.Fatal("cursor effort is in the model id")

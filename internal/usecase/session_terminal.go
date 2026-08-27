@@ -46,16 +46,17 @@ func PaneShellCommand(bootstrap string) string {
 	return fmt.Sprintf("bash -l -c '%s; exec bash -i'", bootstrap)
 }
 
-// ApplyOpenCodeAllowEnv writes the auto-allow config and sets the env keys
-// OpenCode reads for it. Create and restart both have to do this: a restart
-// that only set tmux -e flags left PTY OpenCode sessions prompting or exiting.
-func ApplyOpenCodeAllowEnv(ctx context.Context, remote TerminalExecutor, agentCmd string, env map[string]string) {
-	if remote == nil || env == nil || !strings.Contains(strings.ToLower(agentCmd), "opencode") {
+// ApplyKiloAllowEnv writes the auto-allow config and sets the env keys
+// Kilo CLI reads for it. Create and restart both have to do this: a restart
+// that only set tmux -e flags left PTY Kilo sessions prompting or exiting.
+func ApplyKiloAllowEnv(ctx context.Context, remote TerminalExecutor, agentCmd string, env map[string]string) {
+	lower := strings.ToLower(agentCmd)
+	if remote == nil || env == nil || !strings.Contains(lower, "kilo") {
 		return
 	}
-	_ = remote.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
-	env["OPENCODE_CONFIG"] = "/tmp/opencode-aiman.json"
-	env["OPENCODE_CONFIG_CONTENT"] = `{"permission":"allow"}`
+	_ = remote.WriteFile(ctx, "/tmp/kilo-aiman.json", []byte(`{"permission":"allow"}`))
+	env["KILO_CONFIG"] = "/tmp/kilo-aiman.json"
+	env["KILO_CONFIG_CONTENT"] = `{"permission":"allow"}`
 }
 
 // CreatePTYSession launches a session inside the remote serve daemon's PTY

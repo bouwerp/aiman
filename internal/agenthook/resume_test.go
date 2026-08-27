@@ -12,7 +12,7 @@ func TestWithResumePerAgent(t *testing.T) {
 		{"cursor-agent --force .", "c1", "cursor-agent --resume c1 --force ."},
 		{"copilot --allow-all", "p1", "copilot --resume=p1 --allow-all"},
 		{"agy --dangerously-skip-permissions --add-dir .", "a1", "agy --conversation a1 --dangerously-skip-permissions --add-dir ."},
-		{"opencode", "o1", "opencode --session o1"},
+		{"kilo", "o1", "kilo --session o1"},
 		{"pi --new", "s1", "pi --session s1 --new"},
 		{"claude --resume already", "x", "claude --resume already"},
 		{"claude", "", "claude"},

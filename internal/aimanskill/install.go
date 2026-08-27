@@ -37,8 +37,8 @@ func UserSkillFiles(home string) []string {
 		filepath.Join(home, ".codex", rel),
 		filepath.Join(home, ".grok", rel),
 		filepath.Join(home, ".gemini", rel),
-		filepath.Join(home, ".opencode", rel),
-		filepath.Join(home, ".config", "opencode", rel),
+		filepath.Join(home, ".config", "kilo", rel),
+		filepath.Join(home, ".kilo", rel),
 	}
 }
 
@@ -56,6 +56,7 @@ func ProjectSkillFiles(root string) []string {
 		root + "/.codex/skills/aiman/SKILL.md",
 		root + "/.grok/skills/aiman/SKILL.md",
 		root + "/.gemini/skills/aiman/SKILL.md",
+		root + "/.kilo/skills/aiman/SKILL.md",
 	}
 }
 

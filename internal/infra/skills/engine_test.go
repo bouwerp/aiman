@@ -304,7 +304,7 @@ func TestPrepareSession_CursorWithIssue_UsesSendKeys(t *testing.T) {
 	}
 }
 
-func TestPrepareSession_OpenCodeWithIssue_UsesSendKeys(t *testing.T) {
+func TestPrepareSession_KiloWithIssue_UsesSendKeys(t *testing.T) {
 	cfg := &config.Config{}
 	engine := NewEngine(cfg)
 	remote := newMockRemote()
@@ -315,21 +315,21 @@ func TestPrepareSession_OpenCodeWithIssue_UsesSendKeys(t *testing.T) {
 		Summary: "Add health check endpoint",
 	}
 
-	agent := domain.Agent{Name: "OpenCode", Command: "opencode-cli"}
+	agent := domain.Agent{Name: "Kilo Code", Command: "kilo"}
 
 	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Command should NOT have the prompt inline
-	if strings.Contains(result.Command, ".aiman_task.md") {
-		t.Errorf("OpenCode should NOT embed prompt in command, got: %s", result.Command)
+	if !strings.Contains(result.Command, "--auto") {
+		t.Errorf("kilo must auto-approve permissions, got: %s", result.Command)
 	}
-
-	// Should use InitialPrompt for tmux send-keys
+	if strings.Contains(result.Command, ".aiman_task.md") {
+		t.Errorf("Kilo should NOT embed prompt in command, got: %s", result.Command)
+	}
 	if result.InitialPrompt == "" {
-		t.Error("expected non-empty InitialPrompt for OpenCode (uses send-keys)")
+		t.Error("expected non-empty InitialPrompt for Kilo (uses send-keys)")
 	}
 }
 

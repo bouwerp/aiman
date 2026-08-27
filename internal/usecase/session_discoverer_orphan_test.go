@@ -150,7 +150,7 @@ func TestDiscoverLeavesAgentNameEmptyWithoutAVendorHint(t *testing.T) {
 		discovererRemote: discovererRemote{
 			outputs: map[string]string{
 				agenthook.ListSidecarsCmd: "ID orphan-id\n" +
-					`{"session_id":"native-1","transcript_path":"/home/dev/.opencode/storage/session/abc.json"}` + "\nEND\n",
+					`{"session_id":"native-1","transcript_path":"/tmp/unknown-session.json"}` + "\nEND\n",
 			},
 		},
 		wtRecords: []domain.WorktreeRecord{

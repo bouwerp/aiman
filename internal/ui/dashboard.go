@@ -7345,7 +7345,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		sendKeysPrompt = usecase.InjectSharedContext(ctx, mgr, workingDir, s.Group, s.RepoName, sendKeysPrompt)
 		agentCmd = withRemoteNativeResume(ctx, mgr, s, agentCmd)
 
-		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s", agentCmd)
+		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
 		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
 
 		awsEnv := map[string]string{}
@@ -7377,11 +7377,11 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			"AIMAN_SOCKET_PATH",
 			"AIMAN_BIN_PATH",
 		)
-		if strings.Contains(strings.ToLower(agentCmd), "opencode") {
-			_ = mgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
+		if strings.Contains(strings.ToLower(agentCmd), "kilo") {
+			_ = mgr.WriteFile(ctx, "/tmp/kilo-aiman.json", []byte(`{"permission":"allow"}`))
 			extraEnvFlags += usecase.TmuxEnvFlags(map[string]string{
-				"OPENCODE_CONFIG":         "/tmp/opencode-aiman.json",
-				"OPENCODE_CONFIG_CONTENT": `{"permission":"allow"}`,
+				"KILO_CONFIG":         "/tmp/kilo-aiman.json",
+				"KILO_CONFIG_CONTENT": `{"permission":"allow"}`,
 			})
 		}
 		secretEnv := map[string]string{}
@@ -7413,7 +7413,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			for _, secret := range sessionCfg.EnvSecrets {
 				env[secret.Key] = secret.Value
 			}
-			usecase.ApplyOpenCodeAllowEnv(ctx, mgr, agentCmd, env)
+			usecase.ApplyKiloAllowEnv(ctx, mgr, agentCmd, env)
 			if err := usecase.RecreatePTYSession(ctx, mgr, usecase.PTYSpec{
 				ID:      s.ID,
 				Name:    s.TmuxSession,
