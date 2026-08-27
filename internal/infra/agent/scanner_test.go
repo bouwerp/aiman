@@ -266,4 +266,8 @@ func TestFindKnown(t *testing.T) {
 	if _, ok := FindKnown("  Codex CLI  "); !ok {
 		t.Error("expected surrounding whitespace to be trimmed before matching")
 	}
+	a, ok = FindKnown("codex")
+	if !ok || a.Command != "codex" {
+		t.Errorf("FindKnown(codex) = %+v ok=%v, want the Codex CLI binary", a, ok)
+	}
 }

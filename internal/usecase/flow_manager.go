@@ -380,9 +380,6 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
 		extraEnvFlags += ` -e 'OPENCODE_CONFIG_CONTENT={"permission":"allow"}'`
 	}
-	if config.OpenRouterAPIKey != "" {
-		extraEnvFlags += fmt.Sprintf(" -e OPENROUTER_API_KEY=%s", config.OpenRouterAPIKey)
-	}
 	for _, secret := range config.EnvSecrets {
 		extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
 	}
@@ -671,9 +668,6 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 		_ = sshMgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
 		env["OPENCODE_CONFIG"] = "/tmp/opencode-aiman.json"
 		env["OPENCODE_CONFIG_CONTENT"] = `{"permission":"allow"}`
-	}
-	if config.OpenRouterAPIKey != "" {
-		env["OPENROUTER_API_KEY"] = config.OpenRouterAPIKey
 	}
 	for _, secret := range config.EnvSecrets {
 		env[secret.Key] = secret.Value

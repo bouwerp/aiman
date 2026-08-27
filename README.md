@@ -393,7 +393,7 @@ Two steps cannot follow it across, because they are made *from your machine*:
 
 Sessions carrying state that only exists locally are created locally instead
 rather than silently losing it: per-session AWS overrides, session secrets, an
-OpenRouter key, an autonomous-trigger config, a snapshot being resumed, selected
+autonomous-trigger config, a snapshot being resumed, selected
 skills, or adopting an existing worktree.
 
 By hand, the same thing:

@@ -244,6 +244,35 @@ func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
 		t.Fatalf("resume command not in create payload: %v", r.written)
 	}
 
+	// Display names are not binaries. Codex CLI must revive as `codex resume`,
+	// with the same trust/update flags a fresh create uses, or it exits and
+	// the holder drops to a shell.
+	r = &terminalRemote{output: map[string]string{
+		"aiman pty get":   `{"error":{"code":"not_found","message":"pty session not found"}}`,
+		"native-sessions": "",
+	}}
+	codex := domain.Session{ID: "cx", Backend: domain.BackendPTY, AgentName: "Codex CLI",
+		AgentSessionID: "thread-9", WorkingDirectory: "/wt"}
+	if _, err := ReviveIfNeeded(ctx, r, &codex); err != nil {
+		t.Fatalf("codex revival: %v", err)
+	}
+	var got string
+	for _, body := range r.written {
+		got += string(body)
+	}
+	for _, want := range []string{
+		`"codex resume thread-9`,
+		"--dangerously-bypass-approvals-and-sandbox",
+		"--dangerously-bypass-hook-trust",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("codex revive missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, `"Codex resume`) || strings.Contains(got, `"Codex CLI resume`) {
+		t.Errorf("revive used the display name as a binary: %s", got)
+	}
+
 	// dead session without any vendor id: refuses rather than silently forking
 	// a fresh conversation
 	r = &terminalRemote{output: map[string]string{"aiman pty get": "not_found"}}

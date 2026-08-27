@@ -171,6 +171,27 @@ func TestTrailingCtrlQPrefixOnlyHoldsOnceQIsIdentified(t *testing.T) {
 	}
 }
 
+func TestAttachOpenEntersAltScreenAndClears(t *testing.T) {
+	got := attachOpen()
+	for _, want := range []string{"\x1b[?1049h", "\x1b[2J", "\x1b[H"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("attach open missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestAttachCloseLeavesAltScreen(t *testing.T) {
+	got := attachClose()
+	if !strings.Contains(got, "\x1b[?1049l") {
+		t.Errorf("attach close must leave the alt screen, got %q", got)
+	}
+	for _, mode := range []string{"1000", "1002", "1006"} {
+		if !strings.Contains(got, "?"+mode+"l") {
+			t.Errorf("attach close missing mouse off ?%sl", mode)
+		}
+	}
+}
+
 func TestMouseTrackingOnEnablesSGRWheel(t *testing.T) {
 	on := mouseTrackingOn()
 	for _, want := range []string{"\x1b[?1000h", "\x1b[?1002h", "\x1b[?1006h"} {

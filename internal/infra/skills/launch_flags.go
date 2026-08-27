@@ -43,6 +43,29 @@ func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
 	return cmd
 }
 
+// withCodexInteractiveFlags is the flag set a PTY/tmux Codex session needs so
+// the TUI stays up: skip approval, sandbox, hook-trust, and in-app update
+// prompts. A trust or update dialog in this environment exits Codex and the
+// holder drops to a bare shell.
+func withCodexInteractiveFlags(cmd, worktree string) string {
+	cmd = ensureFlag(cmd, "--dangerously-bypass-approvals-and-sandbox")
+	cmd = ensureFlag(cmd, "--dangerously-bypass-hook-trust")
+	cmd = ensureFlag(cmd, "--disable in_app_updates")
+	if strings.TrimSpace(worktree) != "" {
+		cmd = ensureKeyedFlag(cmd, "--cd", worktree)
+	}
+	return cmd
+}
+
+// EnsureInteractiveLaunch adds per-agent flags a detached PTY session needs
+// so the TUI does not exit into the holder's fallback shell.
+func EnsureInteractiveLaunch(cmd, worktree string) string {
+	if agentBaseCommand(cmd) == "codex" {
+		return withCodexInteractiveFlags(cmd, worktree)
+	}
+	return cmd
+}
+
 func ensureKeyedFlag(cmd, flag, value string) string {
 	if strings.Contains(cmd, flag+" ") || strings.HasSuffix(cmd, flag) {
 		return cmd

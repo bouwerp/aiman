@@ -62,8 +62,7 @@ func Run(root, id string) (err error) {
 	}
 
 	//nolint:gosec // G204: running the operator-configured agent command is the purpose of this program
-	cmd := exec.Command("bash", "-l", "-c",
-		fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; %s; exec bash -i", spec.Command))
+	cmd := exec.Command("bash", "-l", "-c", childShell(spec.Command))
 	cmd.Dir = spec.Dir
 	// The holder allocates a real PTY, so the child is entitled to a terminal
 	// type — but the holder is spawned by aiman serve, a daemon with no tty and
@@ -333,6 +332,17 @@ func indexByte(s string, b byte) int {
 // xterm is the safe common denominator: every agent CLI recognises it, and it
 // matches what tmux hands its own panes.
 const defaultTERM = "xterm-256color"
+
+// childShell is the login-shell script that runs the agent inside the PTY.
+// TERM is exported here, after profile scripts, because bash -l can clobber
+// the holder process environment with TERM=dumb. Codex 0.150 then refuses
+// its TUI and the trailing exec bash is what an attach shows.
+func childShell(command string) string {
+	return fmt.Sprintf(
+		"export PATH=\"$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/.opencode/bin\"; export TERM=%s COLORTERM=truecolor LANG=\"${LANG:-%s}\"; %s; exec bash -i",
+		defaultTERM, defaultUTF8Locale, command,
+	)
+}
 
 // withTerminalEnv ensures TERM, COLORTERM, and a UTF-8 locale are present,
 // without overriding usable values that are already set.

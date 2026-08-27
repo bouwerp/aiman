@@ -6177,8 +6177,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				DurationSeconds: d.DurationSeconds,
 			})
 		}
-		// Pre-fill OpenRouter API key from local environment (user can override).
-		m.summary.SetOpenRouterKey(os.Getenv("OPENROUTER_API_KEY"))
 		if m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
 			m.loadingMsg = "Checking workspace..."
 			m.loadingNext = viewStateSummary
@@ -6206,7 +6204,6 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionCfg.Agent = summaryCfg.Agent
 		m.sessionCfg.PromptFree = summaryCfg.PromptFree
 		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
-		m.sessionCfg.OpenRouterAPIKey = summaryCfg.OpenRouterAPIKey
 		m.sessionCfg.InitialPrompt = summaryCfg.InitialPrompt
 
 		if m.sessionCfg.Mode == domain.SessionModeAutonomous {
@@ -7247,7 +7244,6 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 		m.sessionCfg.Agent = m.agentPicker.selected
 		m.agentPicker.selected = nil // prevent re-dispatch on subsequent keypresses
 		_ = appendDebugLog(fmt.Sprintf("[ui %s] agent selected: %s\n", time.Now().Format("15:04:05.000"), m.sessionCfg.Agent.Name))
-		m.sessionCfg.OpenRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
 		// Inject all globally stored secrets on restart.
 		if secrets, err := m.db.ListSecrets(context.Background()); err == nil {
 			m.sessionCfg.EnvSecrets = secrets
@@ -7405,9 +7401,6 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			_ = mgr.WriteFile(ctx, "/tmp/opencode-aiman.json", []byte(`{"permission":"allow"}`))
 			extraEnvFlags += ` -e OPENCODE_CONFIG=/tmp/opencode-aiman.json`
 			extraEnvFlags += ` -e 'OPENCODE_CONFIG_CONTENT={"permission":"allow"}'`
-		}
-		if sessionCfg.OpenRouterAPIKey != "" {
-			extraEnvFlags += fmt.Sprintf(" -e OPENROUTER_API_KEY=%s", sessionCfg.OpenRouterAPIKey)
 		}
 		for _, secret := range sessionCfg.EnvSecrets {
 			extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)

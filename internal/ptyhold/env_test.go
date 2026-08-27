@@ -2,6 +2,7 @@ package ptyhold
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,21 @@ func TestWithTerminalEnvReplacesNonUTF8Locale(t *testing.T) {
 	}
 	if !slices.Contains(got, "LANG="+defaultUTF8Locale) {
 		t.Fatalf("missing replacement locale: %v", got)
+	}
+}
+
+func TestChildShellForcesTERMAfterLoginProfile(t *testing.T) {
+	got := childShell("codex --dangerously-bypass-approvals-and-sandbox")
+	// bash -l sources the profile before this script. Codex 0.150 refuses
+	// to start its TUI when TERM is still dumb, then the holder drops to
+	// `exec bash -i` — which is the bare terminal operators attach to.
+	termAt := strings.Index(got, "TERM="+defaultTERM)
+	cmdAt := strings.Index(got, "codex ")
+	if termAt < 0 || cmdAt < 0 || termAt > cmdAt {
+		t.Fatalf("TERM must be forced after login profile and before the agent, got %q", got)
+	}
+	if !strings.Contains(got, "exec bash -i") {
+		t.Fatalf("missing fallback shell: %q", got)
 	}
 }
 

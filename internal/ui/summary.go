@@ -21,13 +21,10 @@ type SummaryModel struct {
 	adHoc         bool
 	confirmed     bool
 	focusIndex    int
-	inputs        []textinput.Model
 	width, height int
 	// AWS override fields — populated when the remote has SyncCredentials enabled
 	awsEnabled  bool
 	awsDefaults *domain.AWSConfig // original remote defaults (non-editable fields)
-	// OpenRouter key field
-	openRouterEnabled bool
 	// promptInput is a free-text initial prompt sent to the agent. Focused by default.
 	promptInput textinput.Model
 	// workspace fields
@@ -50,7 +47,6 @@ func NewSummaryModel(issueKey, branch string, repo domain.Repo, directory string
 		repo:        repo,
 		directory:   directory,
 		promptFree:  true,
-		inputs:      make([]textinput.Model, 0),
 		promptInput: newPromptInput(),
 	}
 
@@ -62,7 +58,6 @@ func NewAdHocSummaryModel(label string) SummaryModel {
 		branch:      label,
 		adHoc:       true,
 		promptFree:  true,
-		inputs:      make([]textinput.Model, 0),
 		promptInput: newPromptInput(),
 	}
 }
@@ -76,28 +71,6 @@ func (m *SummaryModel) SetAWSDefaults(cfg *domain.AWSConfig) {
 	}
 	m.awsDefaults = cfg
 	m.awsEnabled = false
-}
-
-// SetOpenRouterKey enables the OpenRouter API key section, pre-filling it with
-// the provided key (typically from the local OPENROUTER_API_KEY env var).
-// If key is empty the field is still shown so the user can enter one manually.
-func (m *SummaryModel) SetOpenRouterKey(key string) {
-	m.openRouterEnabled = true
-
-	orInput := textinput.New()
-	orInput.Placeholder = "sk-or-... (OPENROUTER_API_KEY)"
-	orInput.EchoMode = textinput.EchoPassword
-	orInput.SetValue(key)
-	orInput.SetWidth(40)
-
-	// Remove any stale openRouter input, then append the fresh one.
-	filtered := make([]textinput.Model, 0, len(m.inputs))
-	for _, in := range m.inputs {
-		if in.EchoMode != textinput.EchoPassword {
-			filtered = append(filtered, in)
-		}
-	}
-	m.inputs = append(filtered, orInput) //nolint:gocritic // filtered is a fresh slice built above, not an alias of m.inputs
 }
 
 func (m SummaryModel) Init() tea.Cmd {
@@ -123,17 +96,9 @@ func (m *SummaryModel) SetWorkspaceStatus(path string, exists bool) {
 	m.workspaceExists = exists
 }
 
-func (m SummaryModel) openRouterIdx() int { return 0 }
-
-// Focus index 0 is always the initial-prompt input. The AWS/OpenRouter inputs in
-// m.inputs occupy focus indices 1..len(m.inputs); the Create button is last.
-
-// inputFocusIndex maps an index into m.inputs to its focusIndex value.
-func (m SummaryModel) inputFocusIndex(i int) int { return i + 1 }
-
-// buttonFocusIndex returns the focusIndex value that corresponds to the Create button.
+// buttonFocusIndex is 1: focus 0 is the initial-prompt input, 1 is Create.
 func (m SummaryModel) buttonFocusIndex() int {
-	return len(m.inputs) + 1
+	return 1
 }
 
 func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -156,18 +121,10 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.focusIndex < 0 {
 				m.focusIndex = max
 			}
-			// Update focus states (focus index 0 = prompt input; 1.. = m.inputs).
 			if m.focusIndex == 0 {
 				m.promptInput.Focus()
 			} else {
 				m.promptInput.Blur()
-			}
-			for i := range m.inputs {
-				if m.inputFocusIndex(i) == m.focusIndex {
-					m.inputs[i].Focus()
-				} else {
-					m.inputs[i].Blur()
-				}
 			}
 			return m, nil
 		case "p":
@@ -190,12 +147,6 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.focusIndex == 0 {
 		var cmd tea.Cmd
 		m.promptInput, cmd = m.promptInput.Update(msg)
-		return m, cmd
-	}
-	if (m.awsEnabled || m.openRouterEnabled) && m.focusIndex >= 1 && m.focusIndex <= len(m.inputs) {
-		idx := m.focusIndex - 1
-		var cmd tea.Cmd
-		m.inputs[idx], cmd = m.inputs[idx].Update(msg)
 		return m, cmd
 	}
 
@@ -287,16 +238,6 @@ func (m SummaryModel) viewString() string {
 	}
 	b.WriteString(fmt.Sprintf("%-15s %s\n", promptLabel, m.promptInput.View()))
 
-	// OpenRouter API key
-	if m.openRouterEnabled {
-		b.WriteString("\n" + activeStyle.Render("OpenRouter") + "\n")
-		keyLabel := "  API Key: "
-		if m.focusIndex == m.inputFocusIndex(m.openRouterIdx()) {
-			keyLabel = activeStyle.Render("> API Key: ")
-		}
-		b.WriteString(fmt.Sprintf("%-15s %s\n", keyLabel, m.inputs[m.openRouterIdx()].View()))
-	}
-
 	b.WriteString("\n")
 
 	// Create button
@@ -349,11 +290,6 @@ func (m SummaryModel) GetSessionConfig() domain.SessionConfig {
 	if m.awsDefaults != nil {
 		aws := *m.awsDefaults
 		cfg.AWSConfig = &aws
-	}
-
-	// OpenRouter API key
-	if m.openRouterEnabled {
-		cfg.OpenRouterAPIKey = strings.TrimSpace(m.inputs[m.openRouterIdx()].Value())
 	}
 
 	// Initial prompt text entered by the user.

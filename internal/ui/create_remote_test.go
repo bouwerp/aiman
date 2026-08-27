@@ -49,7 +49,6 @@ func TestCanCreateRemotelyRefusesLocalOnlyState(t *testing.T) {
 	cases := map[string]func(*domain.SessionConfig){
 		"aws credentials": func(c *domain.SessionConfig) { c.AWSConfig = &domain.AWSConfig{} },
 		"env secrets":     func(c *domain.SessionConfig) { c.EnvSecrets = []domain.Secret{{Key: "K"}} },
-		"openrouter key":  func(c *domain.SessionConfig) { c.OpenRouterAPIKey = "sk-x" },
 		"autonomous":      func(c *domain.SessionConfig) { c.AutonomousConfig = &domain.AutonomousConfig{} },
 		"prior snapshot":  func(c *domain.SessionConfig) { c.PriorSnapshot = &domain.SessionSnapshot{} },
 		"attach existing": func(c *domain.SessionConfig) { c.AttachExisting = true },

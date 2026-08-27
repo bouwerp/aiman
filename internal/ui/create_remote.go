@@ -54,8 +54,6 @@ func canCreateRemotely(cfg domain.SessionConfig) (bool, string) {
 		return false, "per-session AWS credentials are minted on this machine"
 	case len(cfg.EnvSecrets) > 0:
 		return false, "session secrets come from this machine"
-	case cfg.OpenRouterAPIKey != "":
-		return false, "the OpenRouter key comes from this machine"
 	case cfg.AutonomousConfig != nil:
 		return false, "autonomous sessions are configured locally"
 	case cfg.PriorSnapshot != nil:

@@ -84,23 +84,18 @@ func TestSummaryModelHasNoAWSProfileFields(t *testing.T) {
 	}
 }
 
-func TestSummaryModelTabRoutesTypingToOpenRouterInput(t *testing.T) {
+func TestSummaryModelHasNoOpenRouterField(t *testing.T) {
 	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "repo"}, "")
-	m.SetOpenRouterKey("")
-	if m.focusIndex != 0 {
-		t.Fatalf("expected prompt focused (0), got %d", m.focusIndex)
+	view := m.viewString()
+	if strings.Contains(view, "OpenRouter") {
+		t.Fatal("session summary must not show an OpenRouter API key field")
+	}
+	if strings.Contains(view, "API Key") {
+		t.Fatal("session summary must not show an API key field")
 	}
 	updated, _ := m.Update(pressKey("tab"))
 	m = updated.(SummaryModel)
-	if m.focusIndex != 1 {
-		t.Fatalf("expected focus index 1 (OpenRouter) after tab, got %d", m.focusIndex)
-	}
-	updated, _ = m.Update(pressKey("X"))
-	m = updated.(SummaryModel)
-	if m.promptInput.Value() != "" {
-		t.Fatalf("prompt should stay empty; got %q", m.promptInput.Value())
-	}
-	if !strings.Contains(m.inputs[0].Value(), "X") {
-		t.Fatalf("expected OpenRouter input to receive the keystroke, got %q", m.inputs[0].Value())
+	if m.focusIndex != m.buttonFocusIndex() {
+		t.Fatalf("tab from prompt should land on Create, got %d", m.focusIndex)
 	}
 }
