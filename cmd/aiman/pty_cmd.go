@@ -184,7 +184,11 @@ func runPTYAttach(sock, id string) error {
 	if err != nil {
 		return fmt.Errorf("pty attach: raw mode: %w", err)
 	}
-	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
+	defer func() {
+		fmt.Fprint(os.Stdout, mouseTrackingOff())
+		_ = term.Restore(int(os.Stdin.Fd()), oldState)
+	}()
+	fmt.Fprint(os.Stdout, mouseTrackingOn())
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, resizeSignals()...)
@@ -375,6 +379,18 @@ func splitFirst(s string, sep byte) [2]string {
 		}
 	}
 	return [2]string{s, ""}
+}
+
+// mouseTrackingOn asks the attaching terminal to send SGR mouse events
+// (including the wheel). Claude's TUI does this itself, so wheel-scroll works
+// there; Grok/agy/Codex often never get their own DECSET to the client (or
+// send it only once in a dropped first frame), so PTY attach has to.
+func mouseTrackingOn() string {
+	return "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+}
+
+func mouseTrackingOff() string {
+	return "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
 }
 
 // detachKey is the classic ctrl+q byte. TUIs that enable the kitty keyboard

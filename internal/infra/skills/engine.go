@@ -594,12 +594,6 @@ func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, 
 	if promptFree {
 		cmd = ensureFlag(cmd, "--always-approve")
 	}
-	// Native terminal scrollback. --no-alt-screen alone is not enough: the
-	// fullscreen TUI still CUP-redraws in place on the primary buffer, so
-	// nothing accumulates for the attach client's wheel. --minimal prints
-	// finished turns into the terminal's own scrollback.
-	cmd = ensureFlag(cmd, "--no-alt-screen")
-	cmd = ensureFlag(cmd, "--minimal")
 
 	result := domain.PreparedSession{Command: cmd}
 	var promptFiles []string

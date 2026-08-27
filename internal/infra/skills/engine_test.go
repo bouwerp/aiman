@@ -687,12 +687,6 @@ func TestPrepareSession_GrokWithIssue_UsesAlwaysApproveAndSendKeys(t *testing.T)
 	if !strings.Contains(result.Command, "--always-approve") {
 		t.Errorf("expected --always-approve in grok command, got: %s", result.Command)
 	}
-	if !strings.Contains(result.Command, "--no-alt-screen") {
-		t.Errorf("expected --no-alt-screen so PTY attach can scroll, got: %s", result.Command)
-	}
-	if !strings.Contains(result.Command, "--minimal") {
-		t.Errorf("expected --minimal (scrollback-native rendering), got: %s", result.Command)
-	}
 
 	if result.InitialPrompt == "" || !strings.Contains(result.InitialPrompt, domain.AimanTaskFileName) {
 		t.Errorf("InitialPrompt should reference the task file, got: %s", result.InitialPrompt)

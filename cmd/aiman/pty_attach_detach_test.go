@@ -171,6 +171,41 @@ func TestTrailingCtrlQPrefixOnlyHoldsOnceQIsIdentified(t *testing.T) {
 	}
 }
 
+func TestMouseTrackingOnEnablesSGRWheel(t *testing.T) {
+	on := mouseTrackingOn()
+	for _, want := range []string{"\x1b[?1000h", "\x1b[?1002h", "\x1b[?1006h"} {
+		if !strings.Contains(on, want) {
+			t.Errorf("mouse on missing %q: %q", want, on)
+		}
+	}
+	if strings.Contains(on, "1003h") {
+		t.Error("any-motion tracking is too noisy for attach")
+	}
+}
+
+func TestMouseTrackingOffDisablesWhatOnEnabled(t *testing.T) {
+	on, off := mouseTrackingOn(), mouseTrackingOff()
+	for _, mode := range []string{"1000", "1002", "1006"} {
+		if !strings.Contains(on, "?"+mode+"h") {
+			t.Errorf("on missing ?%sh", mode)
+		}
+		if !strings.Contains(off, "?"+mode+"l") {
+			t.Errorf("off missing ?%sl", mode)
+		}
+	}
+}
+
+func TestDetachReaderPassesThroughSGRWheel(t *testing.T) {
+	rec := &closeRecorder{}
+	wheel := []byte("\x1b[<64;12;8M")
+	d := detachOnCtrlQ(newChunkReader(wheel), rec)
+	buf := make([]byte, 32)
+	n, err := d.Read(buf)
+	if err != nil || string(buf[:n]) != string(wheel) || d.Detached() {
+		t.Fatalf("wheel must reach the agent, got %q err=%v detached=%v", buf[:n], err, d.Detached())
+	}
+}
+
 func TestDetachReaderDetachOnFirstByte(t *testing.T) {
 	rec := &closeRecorder{}
 	d := detachOnCtrlQ(newChunkReader([]byte{detachKey}), rec)
