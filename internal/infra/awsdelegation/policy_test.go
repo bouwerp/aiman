@@ -116,6 +116,11 @@ func TestBuildRegionPolicy_AllowsIAMInspectWithoutRegion(t *testing.T) {
 		"iam:GetPolicy",
 		"iam:GetPolicyVersion",
 		"iam:SimulatePrincipalPolicy",
+		"iam:CreatePolicyVersion",
+		"iam:SetDefaultPolicyVersion",
+		"iam:ListPolicyVersions",
+		"iam:DeletePolicyVersion",
+		"iam:PutRolePolicy",
 	}
 	found := map[string]bool{}
 	for _, s := range p.Statement {
@@ -133,7 +138,7 @@ func TestBuildRegionPolicy_AllowsIAMInspectWithoutRegion(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("unconditional IAM inspect access missing %v, policy=%s", missing, got)
+		t.Fatalf("unconditional IAM policy access missing %v, policy=%s", missing, got)
 	}
 }
 
