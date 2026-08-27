@@ -462,6 +462,13 @@ func TestPTYAttachDoesNotDumpLFRenderedSnapshot(t *testing.T) {
 	}
 }
 
+func TestEncodeAttachScreenEmptySkipsClear(t *testing.T) {
+	got := string(encodeAttachScreen("  \n"))
+	if strings.Contains(got, "\x1b[2J") {
+		t.Fatalf("empty dump must not clear a local grow animation: %q", got)
+	}
+}
+
 func TestEncodeAttachScreenUsesCUPNotBareLF(t *testing.T) {
 	got := string(encodeAttachScreen("ROW_A\nROW_B"))
 	if !strings.Contains(got, "ROW_A") || !strings.Contains(got, "ROW_B") {

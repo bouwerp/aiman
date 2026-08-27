@@ -205,11 +205,12 @@ func runPTYAttach(sock, id string) error {
 	// screen so a full-screen agent cannot paint over leftover local output.
 	fmt.Fprint(os.Stdout, notice("[aiman] attached to "+id+" — press ctrl+q to detach (the session keeps running)"))
 	fmt.Fprint(os.Stdout, attachOpen())
+	playAttachGrow(os.Stdout, cols, rows, time.Sleep)
 
 	stdin := detachOnCtrlQ(os.Stdin, connResp)
-	// Two-step resize after the alt screen is cleared. kickAttachRedraw waits
-	// once so Relay is already copying; otherwise the redraw fills the
-	// subscribe buffer and is dropped.
+	// Two-step resize after the grow animation. A short lead lets Relay
+	// start copying; attachRedrawGap then holds the intermediate size past
+	// Ink's SIGWINCH debounce.
 	go kickAttachRedraw(connResp.Resize, cols, rows, time.Sleep)
 	if err := attachExitErr(connResp.Relay(stdin, os.Stdout), stdin.Detached()); err != nil {
 		return err
@@ -397,14 +398,29 @@ func mouseTrackingOff() string {
 	return "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
 }
 
+// attachRedrawLead is long enough for Relay to start copying after the grow
+// animation, and short enough that the first agent paint is not a long blank.
+const attachRedrawLead = 120 * time.Millisecond
+
 // attachRedrawGap is longer than Ink-style SIGWINCH debounce (~300ms). A
 // shorter pause restores the original size before the agent reads it, so it
 // skips a full layout and the cleared alt screen stays empty.
 const attachRedrawGap = 600 * time.Millisecond
 
+const (
+	attachGrowSteps      = 12
+	attachGrowFrameDelay = 16 * time.Millisecond
+	attachGrowMinCols    = 8
+	attachGrowMinRows    = 4
+)
+
 func attachRedrawNudge(cols, rows int) (int, int, bool) {
 	if cols <= 0 || rows <= 0 {
 		return 0, 0, false
+	}
+	startCols, startRows := cols*2/3, rows*2/3
+	if startCols >= 80 && startRows >= 24 && (startCols < cols || startRows < rows) {
+		return startCols, startRows, true
 	}
 	nc, nr := cols, rows
 	if cols > 3 {
@@ -431,10 +447,72 @@ func kickAttachRedraw(resize func(int, int) error, cols, rows int, sleep func(ti
 	if !ok {
 		return
 	}
-	sleep(attachRedrawGap)
+	sleep(attachRedrawLead)
 	_ = resize(nudgeCols, nudgeRows)
 	sleep(attachRedrawGap)
 	_ = resize(cols, rows)
+}
+
+func attachGrowBox(cols, rows, frame, steps int) (x, y, w, h int) {
+	if steps < 2 {
+		steps = 2
+	}
+	if frame < 0 {
+		frame = 0
+	}
+	if frame >= steps {
+		frame = steps - 1
+	}
+	t := float64(frame) / float64(steps-1)
+	u := 1 - t
+	e := 1 - u*u*u
+	minW, minH := 8, 3
+	if cols < minW {
+		minW = max(2, cols)
+	}
+	if rows < minH {
+		minH = max(2, rows)
+	}
+	w = minW + int(e*float64(cols-minW)+0.5)
+	h = minH + int(e*float64(rows-minH)+0.5)
+	w = min(cols, max(2, w))
+	h = min(rows, max(2, h))
+	return (cols-w)/2 + 1, (rows-h)/2 + 1, w, h
+}
+
+func hLine(left, fill, right rune, width int) string {
+	if width <= 1 {
+		return string(left)
+	}
+	if width == 2 {
+		return string(left) + string(right)
+	}
+	return string(left) + strings.Repeat(string(fill), width-2) + string(right)
+}
+
+func attachGrowFrame(cols, rows, frame, steps int) string {
+	x, y, w, h := attachGrowBox(cols, rows, frame, steps)
+	var b strings.Builder
+	b.WriteString("\x1b[2J\x1b[38;5;81m")
+	fmt.Fprintf(&b, "\x1b[%d;%dH%s", y, x, hLine('╭', '─', '╮', w))
+	for r := 1; r < h-1; r++ {
+		fmt.Fprintf(&b, "\x1b[%d;%dH│\x1b[%d;%dH│", y+r, x, y+r, x+w-1)
+	}
+	if h >= 2 {
+		fmt.Fprintf(&b, "\x1b[%d;%dH%s", y+h-1, x, hLine('╰', '─', '╯', w))
+	}
+	b.WriteString("\x1b[0m")
+	return b.String()
+}
+
+func playAttachGrow(w io.Writer, cols, rows int, sleep func(time.Duration)) {
+	if cols < attachGrowMinCols || rows < attachGrowMinRows {
+		return
+	}
+	for i := 0; i < attachGrowSteps; i++ {
+		fmt.Fprint(w, attachGrowFrame(cols, rows, i, attachGrowSteps))
+		sleep(attachGrowFrameDelay)
+	}
 }
 
 // attachOpen puts the attaching tty on a blank alt screen with mouse tracking
