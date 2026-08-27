@@ -173,6 +173,14 @@ func ensureFlag(cmd, flag string) string {
 	return fmt.Sprintf("%s %s", cmd, flag)
 }
 
+func ensureConfigOverride(cmd, key, value string) string {
+	needle := key + "="
+	if strings.Contains(cmd, needle) {
+		return cmd
+	}
+	return fmt.Sprintf("%s -c %s=%s", cmd, key, value)
+}
+
 func buildSessionPrompt(files []string) string {
 	switch len(files) {
 	case 0:
@@ -610,8 +618,9 @@ func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, 
 // prepareCodex prepares an OpenAI Codex CLI session. Codex has no reliable
 // cross-version system-prompt flag, so prompt skills are staged in a workspace
 // file and the interactive session is directed to read it (and the task file)
-// via tmux send-keys after startup. When promptFree is set the agent runs with
-// approvals and sandbox fully bypassed, matching aiman's autonomous semantics.
+// via tmux send-keys after startup. The session always trusts the worktree and
+// skips the startup upgrade prompt: a trust dialog or self-update in a PTY
+// session exits the TUI and leaves the operator at a bare shell.
 func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
@@ -623,8 +632,10 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 	}
 
 	cmd := agent.Command
-	if promptFree {
-		cmd = ensureFlag(cmd, "--dangerously-bypass-approvals-and-sandbox")
+	cmd = ensureFlag(cmd, "--dangerously-bypass-approvals-and-sandbox")
+	cmd = ensureConfigOverride(cmd, "check_for_upgrades_on_startup", "false")
+	if strings.TrimSpace(worktreePath) != "" {
+		cmd = ensureKeyedFlag(cmd, "--cd", worktreePath)
 	}
 
 	result := domain.PreparedSession{Command: cmd}

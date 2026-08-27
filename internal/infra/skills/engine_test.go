@@ -787,3 +787,24 @@ func TestPrepareSession_CodexWithPromptSkills_WritesPromptFileAndUsesSendKeys(t 
 		t.Errorf("InitialPrompt should direct the agent to the prompt file, got: %s", result.InitialPrompt)
 	}
 }
+
+func TestPrepareSession_CodexAlwaysTrustsWorkspaceAndSkipsUpgrade(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	agent := domain.Agent{Name: "Codex CLI", Command: "codex"}
+
+	result, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, false, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{
+		"--dangerously-bypass-approvals-and-sandbox",
+		"--cd /home/user/code/myrepo",
+		"check_for_upgrades_on_startup=false",
+	} {
+		if !strings.Contains(result.Command, want) {
+			t.Errorf("codex command missing %q, got: %s", want, result.Command)
+		}
+	}
+}
