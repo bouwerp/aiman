@@ -451,21 +451,27 @@ func indexCtrlQ(b []byte) (int, bool) {
 }
 
 // trailingCtrlQPrefix is the length of a proper prefix of a CSI ctrl+q
-// sequence at the end of b. A lone ESC is not held: that would delay the Esc
-// key until the next stdin read.
+// sequence at the end of b. Only prefixes that already contain "113" (the
+// codepoint for q) are held: holding a bare CSI introducer blocked stdin
+// until the next key, which made ctrl+q feel stuck after agy enabled kitty
+// keyboard reporting.
 func trailingCtrlQPrefix(b []byte) int {
-	max := 0
+	best := 0
 	for _, seq := range ctrlQSequences {
 		if len(seq) < 2 {
 			continue
 		}
 		for n := 2; n < len(seq); n++ {
-			if bytes.HasSuffix(b, seq[:n]) && n > max {
-				max = n
+			prefix := seq[:n]
+			if !bytes.Contains(prefix, []byte("113")) {
+				continue
+			}
+			if bytes.HasSuffix(b, prefix) && n > best {
+				best = n
 			}
 		}
 	}
-	return max
+	return best
 }
 
 // callAndPrintRaw issues a request whose params are pre-encoded JSON.

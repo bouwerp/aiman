@@ -150,6 +150,27 @@ func TestDetachReaderPassesThroughUnrelatedCSI(t *testing.T) {
 	}
 }
 
+func TestTrailingCtrlQPrefixOnlyHoldsOnceQIsIdentified(t *testing.T) {
+	cases := []struct {
+		in   string
+		hold int
+	}{
+		{"\x1b[A", 0},
+		{"\x1b[", 0},
+		{"\x1b[1;5A", 0},
+		{"\x1b[11~", 0},
+		{"\x1b[113", 5},
+		{"\x1b[113;5", 7},
+		{"\x1b[27;5;11", 0},
+		{"\x1b[27;5;113", 10},
+	}
+	for _, tc := range cases {
+		if got := trailingCtrlQPrefix([]byte(tc.in)); got != tc.hold {
+			t.Errorf("trailingCtrlQPrefix(%q) = %d, want %d", tc.in, got, tc.hold)
+		}
+	}
+}
+
 func TestDetachReaderDetachOnFirstByte(t *testing.T) {
 	rec := &closeRecorder{}
 	d := detachOnCtrlQ(newChunkReader([]byte{detachKey}), rec)
