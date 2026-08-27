@@ -282,6 +282,10 @@ func TestPTYAttachSameSizeSendsWINCH(t *testing.T) {
 	var mu sync.Mutex
 	var out bytes.Buffer
 	go func() { _ = conn.Relay(stdinR, &lockedWriter{mu: &mu, w: &out}) }()
+	time.Sleep(200 * time.Millisecond)
+	_ = conn.Resize(78, 23)
+	time.Sleep(200 * time.Millisecond)
+	_ = conn.Resize(80, 24)
 
 	var got string
 	eventually(t, 10*time.Second, func() bool {
@@ -324,6 +328,8 @@ signal.signal(signal.SIGWINCH,h); time.sleep(60)"`
 	var mu sync.Mutex
 	var out bytes.Buffer
 	go func() { _ = conn.Relay(stdinR, &lockedWriter{mu: &mu, w: &out}) }()
+	time.Sleep(200 * time.Millisecond)
+	_ = conn.Resize(80, 24)
 
 	var got string
 	eventually(t, 10*time.Second, func() bool {
