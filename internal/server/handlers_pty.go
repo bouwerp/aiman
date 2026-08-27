@@ -286,11 +286,13 @@ func attachScreenReset() []byte {
 }
 
 func encodeAttachScreen(text string) []byte {
+	if strings.TrimSpace(text) == "" {
+		// Client already entered the alt screen and may have drawn a grow
+		// animation; a second 2J would wipe it before the agent paints.
+		return []byte("\x1b[?1049h")
+	}
 	var b strings.Builder
 	b.Write(attachScreenReset())
-	if text == "" {
-		return []byte(b.String())
-	}
 	for i, row := range strings.Split(text, "\n") {
 		fmt.Fprintf(&b, "\x1b[%d;1H%s\x1b[K", i+1, row)
 	}

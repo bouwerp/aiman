@@ -60,8 +60,12 @@ func withCodexInteractiveFlags(cmd, worktree string) string {
 // EnsureInteractiveLaunch adds per-agent flags a detached PTY session needs
 // so the TUI stays in the foreground instead of exiting the holder.
 func EnsureInteractiveLaunch(cmd, worktree string) string {
-	if agentBaseCommand(cmd) == "codex" {
+	base := agentBaseCommand(cmd)
+	if base == "codex" {
 		return withCodexInteractiveFlags(cmd, worktree)
+	}
+	if base == "kilo" || base == "kilocode" {
+		return ensureFlag(cmd, "--auto")
 	}
 	return cmd
 }

@@ -133,9 +133,9 @@ func ParseStored(raw []byte) Report {
 // to the domain.Agent catalog name (internal/infra/agent.knownAgents) that
 // owns it. Only vendors whose config directory install.go actually installs
 // hooks into, and that unambiguously belong to one known agent, are listed —
-// this is a conservative best-effort guess, not exhaustive: OpenCode and Pi
-// report no path today, so a session run under either falls through to the
-// manual agent picker instead of being guessed at.
+// this is a conservative best-effort guess, not exhaustive. Pi reports no
+// path today, so a session run under it falls through to the manual agent
+// picker instead of being guessed at.
 var vendorPathHints = []struct {
 	substr string
 	name   string
@@ -145,6 +145,7 @@ var vendorPathHints = []struct {
 	{"/.copilot/", "GitHub Copilot CLI"},
 	{"/.cursor/", "Cursor"},
 	{"/.grok/", "Grok Build CLI"},
+	{"/.config/kilo/", "Kilo Code"},
 }
 
 // InferAgentName makes a best-effort guess at which known agent produced a
@@ -181,7 +182,8 @@ var vendorTextHints = []struct {
 	{"grok", "Grok Build CLI"},
 	{"antigravity", "Antigravity CLI"},
 	{"agy", "Antigravity CLI"},
-	{"opencode", "OpenCode"},
+	{"kilocode", "Kilo Code"},
+	{"kilo code", "Kilo Code"},
 	{"ageni", "Ageni"},
 }
 

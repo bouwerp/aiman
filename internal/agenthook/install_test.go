@@ -108,15 +108,15 @@ func TestEnsureOnHostWritesGrokOwnedFile(t *testing.T) {
 	}
 }
 
-func TestEnsureOnHostWritesOpenCodePlugin(t *testing.T) {
+func TestEnsureOnHostWritesKiloPlugin(t *testing.T) {
 	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".config", "kilo"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := EnsureOnHost(home); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "plugins", "aiman-native-session.js"))
+	raw, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "plugin", "aiman-native-session.js"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -71,6 +71,7 @@ func TestInferAgentNameFromText(t *testing.T) {
 		{"Cursor Agent <cursor@cursor.sh>", "Cursor"},
 		{"Grok Build <grok@x.ai>", "Grok Build CLI"},
 		{"Antigravity <agy@google.com>", "Antigravity CLI"},
+		{"Kilo Code <noreply@kilo.ai>", "Kilo Code"},
 		{"Ageni <ageni@example.com>", "Ageni"},
 		{"Some Human <human@example.com>", ""},
 		{"", ""},
@@ -93,7 +94,8 @@ func TestInferAgentName(t *testing.T) {
 		{"/home/dev/.copilot/sessions/session.json", "GitHub Copilot CLI"},
 		{"/home/dev/.cursor/chats/abc.json", "Cursor"},
 		{"/home/dev/.grok/sessions/abc.json", "Grok Build CLI"},
-		{"/home/dev/.opencode/storage/session/abc.json", ""}, // no vendor hint mapped
+		{"/home/dev/.config/kilo/storage/session/abc.json", "Kilo Code"},
+		{"/tmp/unknown-session.json", ""},
 		{"", ""},
 		{"   ", ""},
 	}

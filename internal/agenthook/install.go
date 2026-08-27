@@ -44,7 +44,7 @@ func EnsureOnHost(home string) ([]InstallResult, error) {
 	record(ensureCodex(home, script))
 	record(ensureCopilot(home, script))
 	record(ensureGemini(home, script))
-	record(ensureOpenCode(home))
+	record(ensureKilo(home))
 	record(ensurePi(home))
 	return out, first
 }
@@ -103,15 +103,12 @@ func ensureGemini(home, command string) (InstallResult, error) {
 	return writeJSONFile(filepath.Join(home, ".gemini", "config", "hooks", "aiman.json"), claudeOwnedDoc(command))
 }
 
-func ensureOpenCode(home string) (InstallResult, error) {
-	dir := filepath.Join(home, ".config", "opencode")
-	if !isDir(dir) {
-		dir = filepath.Join(home, ".opencode")
-	}
+func ensureKilo(home string) (InstallResult, error) {
+	dir := filepath.Join(home, ".config", "kilo")
 	if !isDir(dir) {
 		return InstallResult{}, nil
 	}
-	return writeTextFile(filepath.Join(dir, "plugins", "aiman-native-session.js"), openCodePlugin, 0o600)
+	return writeTextFile(filepath.Join(dir, "plugin", "aiman-native-session.js"), kiloPlugin, 0o600)
 }
 
 func ensurePi(home string) (InstallResult, error) {

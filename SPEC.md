@@ -27,7 +27,7 @@
 | **7. Scope** | `DirPicker` | Set the active working directory for the agent. |
 | **8. Session** | `TmuxManager` | `tmux new-session -d -s <branch>`. Forward SSH_AUTH_SOCK. |
 | **9. Skills** | `SkillEngine` | Sync Skill-Repo; map to `.clauderc`, Antigravity prompt/context files, or `gh` aliases. |
-| **10. Agent** | `AgentRunner` | Launch **Claude Code**, **Antigravity**, **OpenCode**, or **Copilot CLI**. |
+| **10. Agent** | `AgentRunner` | Launch **Claude Code**, **Antigravity**, **Kilo Code**, or **Copilot CLI**. |
 | **11. Sync** | `MutagenBridge` | Start `mutagen` sync between local and remote worktree. |
 
 ---
@@ -49,9 +49,9 @@ Aiman provides specialized bootstrapping for the following tools:
 * **Execution:** Primarily used for `gh copilot suggest` or `gh copilot explain` within the tmux environment.
 * **Skills:** Maps "Skills" from the git repo into custom shell aliases or context files that Copilot can reference.
 
-### D. OpenCode
-* **Strategy:** Connects to local/remote LLM backends (Ollama/vLLM).
-* **Context:** Maps the specific git worktree path to the OpenCode workspace.
+### D. Kilo Code
+* **Strategy:** Launches the Kilo CLI (`kilo`) TUI in the session worktree.
+* **Context:** Maps the git worktree path to the Kilo workspace; resume uses `--session`.
 
 ---
 
@@ -97,8 +97,8 @@ agents:
       bin: "agy"
     - name: "copilot"
       bin: "gh copilot"
-    - name: "opencode"
-      bin: "opencode"
+    - name: "kilo"
+      bin: "kilo"
 
 skills:
   repo: "https://github.com/realfi-co/agent-skills.git"

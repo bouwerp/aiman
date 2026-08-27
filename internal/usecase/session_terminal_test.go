@@ -230,17 +230,17 @@ func TestPaneShellCommandKeepsShellInsideLoginCommand(t *testing.T) {
 	}
 }
 
-func TestApplyOpenCodeAllowEnv(t *testing.T) {
+func TestApplyKiloAllowEnv(t *testing.T) {
 	r := &terminalRemote{}
 	env := map[string]string{}
-	ApplyOpenCodeAllowEnv(context.Background(), r, "opencode --foo", env)
-	if env["OPENCODE_CONFIG"] == "" || env["OPENCODE_CONFIG_CONTENT"] == "" {
-		t.Fatalf("opencode restart/create must inject allow-env, got %v", env)
+	ApplyKiloAllowEnv(context.Background(), r, "kilo --foo", env)
+	if env["KILO_CONFIG"] == "" || env["KILO_CONFIG_CONTENT"] == "" {
+		t.Fatalf("kilo restart/create must inject allow-env, got %v", env)
 	}
 	env = map[string]string{}
-	ApplyOpenCodeAllowEnv(context.Background(), r, "claude", env)
+	ApplyKiloAllowEnv(context.Background(), r, "claude", env)
 	if len(env) != 0 {
-		t.Fatalf("non-opencode must not get OPENCODE_*: %v", env)
+		t.Fatalf("non-kilo must not get KILO_*: %v", env)
 	}
 }
 

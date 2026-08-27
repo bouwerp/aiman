@@ -32,8 +32,12 @@ func TestApplyLaunchDefaults(t *testing.T) {
 	if !strings.Contains(got, "--thinking high") {
 		t.Fatalf("%q", got)
 	}
-	got = applyLaunchDefaults("opencode", "opencode", config.AgentDefaults{Effort: "high"})
-	if strings.Contains(got, "effort") || strings.Contains(got, "thinking") {
-		t.Fatalf("opencode must ignore effort: %q", got)
+	got = applyLaunchDefaults("kilo", "kilo", config.AgentDefaults{Effort: "high"})
+	if !strings.Contains(got, "--variant high") {
+		t.Fatalf("kilo must apply --variant: %q", got)
+	}
+	got = applyLaunchDefaults("cursor-agent", "cursor-agent", config.AgentDefaults{Effort: "high"})
+	if strings.Contains(got, "effort") || strings.Contains(got, "variant") {
+		t.Fatalf("cursor-agent must ignore effort: %q", got)
 	}
 }
