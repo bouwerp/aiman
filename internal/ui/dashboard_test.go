@@ -130,10 +130,10 @@ func TestRunTerminateStep_SkipsRemoteCleanupWhenRemoteMissing(t *testing.T) {
 		RepoName:     "org/repo",
 	}
 
-	if err := model.runTerminateStep(1, session, false); err != nil {
+	if err := model.runTerminateStep(stepIndex(t, false, "Killing tmux session"), session, false); err != nil {
 		t.Fatalf("expected missing remote kill step to be skipped, got %v", err)
 	}
-	if err := model.runTerminateStep(3, session, false); err != nil {
+	if err := model.runTerminateStep(stepIndex(t, false, "Removing git worktree"), session, false); err != nil {
 		t.Fatalf("expected missing remote worktree step to be skipped, got %v", err)
 	}
 }

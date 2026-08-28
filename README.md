@@ -273,6 +273,15 @@ Before termination runs, Aiman checks the session worktree and blocks terminatio
 - there are uncommitted tracked changes, or
 - the current branch has commits not pushed to its upstream (or has no upstream yet).
 
+Teardown's first step saves the session's pane as a snapshot, before the terminal
+is killed and before a forced discard throws away the tree it describes. It is
+stored cleaned and gzipped, with no AI summary — teardown does not wait on a
+model — and shows up in the Snapshot Browser alongside archived sessions. An
+unreadable or empty pane is reported as a skipped step, never a failure: a
+session you have finished with must always be removable.
+
+Use **archive** (`Ctrl+A`) instead when you want the summarised version.
+
 ### Archiving a Session
 
 Press `Ctrl+A` on a selected session. Aiman will:

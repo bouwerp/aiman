@@ -30,6 +30,26 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
+### Terminating a session keeps its pane ✅
+`ctrl+k` went straight from stopping the sync to killing the terminal, so the
+transcript was destroyed unread — the machinery to keep it already existed and
+only the archive flow (`a`) ever used it.
+
+Teardown now starts with a "Saving session context" step, before the kill and
+before a forced discard throws away the tree the pane describes.
+`SnapshotManager.SavePaneSnapshot` cleans and gzips the pane and persists it
+without asking the AI to summarise it: teardown cannot wait on a model, so it
+preserves the transcript rather than an interpretation of it. `SaveSnapshot`
+remains the summarising path behind archive.
+
+Every failure is a skip, never an error — a session being torn down is one the
+user has already finished with, and refusing to remove it because its pane could
+not be read is the worse outcome. An empty pane (an agent that died on creation)
+reports `ErrNothingToSnapshot` and stores nothing.
+
+Teardown step indices shifted by one. The tests that asserted on them now
+resolve steps by label, which is what they meant all along.
+
 ### Terminated sessions came straight back ✅
 `ctrl+k` ran the whole teardown and the session was still in the list on the next
 poll. Two faults, both from the dashboard treating its own database as the only

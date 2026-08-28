@@ -2195,12 +2195,15 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 	ctx := context.Background()
 
 	if index == 0 {
+		return m.terminateSaveContext(ctx, s)
+	}
+	if index == 1 {
 		return m.terminateStopSync(ctx, s)
 	}
 
-	effectiveIndex := index
+	effectiveIndex := index - 1
 	if forced {
-		if index == 1 {
+		if index == 2 {
 			return m.terminateDiscardChanges(ctx, s)
 		}
 		effectiveIndex--
@@ -2223,6 +2226,45 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 	default:
 		return nil
 	}
+}
+
+// terminateSaveContext keeps the session's pane before anything destroys it.
+//
+// It runs first for the obvious reason: killing the terminal is step two, and
+// after that the pane is gone for good. The snapshot skips AI summarisation —
+// teardown must not wait on a model — so it preserves the transcript rather
+// than an interpretation of it. The archive flow is still the way to get a
+// summarised snapshot.
+//
+// Every failure here is a skip, never an error: a session being torn down is
+// one the user has already finished with, and refusing to remove it because its
+// pane could not be read would be the worse outcome.
+func (m *Model) terminateSaveContext(ctx context.Context, s domain.Session) error {
+	if m.snapshotManager == nil {
+		return skipReason("no context saved (snapshots unavailable)")
+	}
+	remote, ok := resolveRemote(m.cfg, s)
+	if !ok {
+		return skipReason("no context saved (no remote configured)")
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	captureCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	rawPane, err := usecase.CaptureSessionPane(captureCtx, mgr, s)
+	if err != nil {
+		m.log("Skipping context save for %s: capture pane: %v", s.ID, err)
+		return skipReason("no context saved (pane unreadable)")
+	}
+	snap, err := m.snapshotManager.SavePaneSnapshot(ctx, &s, rawPane)
+	if errors.Is(err, usecase.ErrNothingToSnapshot) {
+		return skipReason("no context saved (pane was empty)")
+	}
+	if err != nil {
+		m.log("Skipping context save for %s: %v", s.ID, err)
+		return skipReason("no context saved (" + err.Error() + ")")
+	}
+	m.log("Saved context snapshot %s for session %s", snap.ID, s.ID)
+	return nil
 }
 
 // terminateStopSync stops the mutagen session for s, trying every name it might have been
