@@ -84,6 +84,9 @@ func walkSessionForest(nodes []item, children map[string][]item, collapsed map[s
 		it.treeDepth = depth
 		kids := children[it.session.ID]
 		it.hasChildren = len(kids) > 0
+		// Every descendant, not just the direct ones: the number's job is to say
+		// how much a collapsed row is hiding, and the deeper levels are hidden too.
+		it.childN = countDescendants(it.session.ID, children)
 		it.collapsed = collapsed[it.session.ID]
 		out = append(out, it)
 		if it.hasChildren && !it.collapsed {
@@ -91,4 +94,24 @@ func walkSessionForest(nodes []item, children map[string][]item, collapsed map[s
 		}
 	}
 	return out
+}
+
+// countDescendants totals the sessions under id at every depth. The forest is
+// built from parent ids that may point anywhere, so a cycle would not terminate
+// on its own; seen bounds it.
+func countDescendants(id string, children map[string][]item) int {
+	seen := map[string]bool{id: true}
+	var walk func(string) int
+	walk = func(parent string) int {
+		n := 0
+		for _, kid := range children[parent] {
+			if seen[kid.session.ID] {
+				continue
+			}
+			seen[kid.session.ID] = true
+			n += 1 + walk(kid.session.ID)
+		}
+		return n
+	}
+	return walk(id)
 }

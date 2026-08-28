@@ -11,6 +11,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	infraAgent "github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/skills"
+	"github.com/bouwerp/aiman/internal/pane"
 )
 
 // TerminalExecutor is the slice of RemoteExecutor the terminal-routing helpers
@@ -212,10 +213,87 @@ func parsePTYResizeApplied(out string) bool {
 // as a paste and inserts a newline instead of submitting, which left every
 // prompt sitting in the input box unsent.
 func SendPTYFile(ctx context.Context, remote TerminalExecutor, id, remotePath string) error {
-	_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
+	return SendPTYFileConfirmed(ctx, remote, id, remotePath, "")
+}
+
+// submitAttempts is how many Returns a composer that will not clear may get,
+// the first included.
+const submitAttempts = 3
+
+// submitSettle is how long to let the agent redraw before deciding whether the
+// composer cleared.
+var submitSettle = 2 * time.Second
+
+// SendPTYFileConfirmed types a remote file into the session, presses Return, and
+// checks that the text actually left the composer — pressing Return again if it
+// did not.
+//
+// One Return is not reliable. Agents drop input while they are mid-render or
+// still booting, so a prompt could sit in the input box fully typed and never
+// submitted, which looks from the outside like the agent ignoring its
+// instructions. marker is a distinctive tail of the prompt: while it is still
+// visible at the bottom of the pane, the turn has not started.
+//
+// An empty marker skips the check — Return is sent once, as before. Confirmation
+// is best-effort: a pane that cannot be captured is not a reason to fail a
+// delivery that may well have worked.
+func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remotePath, marker string) error {
+	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
 		"aiman pty input %[1]q --file %[2]q && sleep 1 && aiman pty input %[1]q --key enter",
-		id, remotePath))
-	return err
+		id, remotePath)); err != nil {
+		return err
+	}
+	marker = submitMarker(marker)
+	if marker == "" {
+		return nil
+	}
+	for attempt := 1; attempt < submitAttempts; attempt++ {
+		if err := sleepCtx(ctx, submitSettle); err != nil {
+			return nil
+		}
+		out, err := CapturePTYPane(ctx, remote, id, 0)
+		if err != nil {
+			return nil
+		}
+		if !strings.Contains(pane.StripANSI(out), marker) {
+			return nil
+		}
+		if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
+			"aiman pty input %q --key enter", id)); err != nil {
+			return nil
+		}
+	}
+	return nil
+}
+
+// submitMarker is the tail of the prompt to look for in the composer.
+//
+// The tail rather than the head: agents wrap and scroll a long prompt, so the
+// beginning may be off screen while the end sits on the composer line. Very
+// short prompts are matched whole; an empty one disables the check.
+func submitMarker(prompt string) string {
+	prompt = strings.TrimSpace(strings.ReplaceAll(prompt, "\n", " "))
+	if prompt == "" {
+		return ""
+	}
+	r := []rune(prompt)
+	const markerRunes = 24
+	if len(r) > markerRunes {
+		r = r[len(r)-markerRunes:]
+	}
+	return strings.TrimSpace(string(r))
+}
+
+// sleepCtx waits for d, or returns early when the context ends.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // KillPTYSession stops and removes a remote PTY session. Kill errors when the
@@ -316,7 +394,7 @@ func SendSessionPrompt(ctx context.Context, remote TerminalExecutor, s domain.Se
 		if err := remote.WriteFile(ctx, path, []byte(prompt)); err != nil {
 			return err
 		}
-		if err := SendPTYFile(ctx, remote, terminalID(s), path); err != nil {
+		if err := SendPTYFileConfirmed(ctx, remote, terminalID(s), path, prompt); err != nil {
 			return err
 		}
 		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %q", path))

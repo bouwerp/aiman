@@ -303,7 +303,24 @@ func (i item) plainTitle() string {
 		return i.headerPlainTitle()
 	}
 	prefix, activity := i.chrome()
-	return i.treeBranch() + prefix + i.displayName() + activity
+	return i.treeBranch() + prefix + i.displayName() + i.childBadge() + activity
+}
+
+// childBadge marks a session that has children of its own, and says how many.
+//
+// Without it the only clue was the tree drawing below the row, which is invisible
+// when the row is collapsed and easy to miss when it is not — so a session with
+// its own agents looked exactly like one without. The glyph matches the group
+// header's: ▾ expanded, ▸ collapsed.
+func (i item) childBadge() string {
+	if i.header || i.childN <= 0 {
+		return ""
+	}
+	glyph := "▾"
+	if i.collapsed {
+		glyph = "▸"
+	}
+	return fmt.Sprintf(" %s%d", glyph, i.childN)
 }
 
 func (d sessionListDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {

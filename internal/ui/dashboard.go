@@ -262,6 +262,7 @@ type item struct {
 	treeLast    bool   // last among siblings; draws └─ instead of ├─
 	treeDepth   int    // 0 for a group root, 1+ under a parent session
 	hasChildren bool
+	childN      int  // descendants under this session, at every depth
 	collapsed   bool // header or parent session: children are hidden
 }
 
@@ -411,6 +412,10 @@ type Model struct {
 	// immediately while making clear it is not yet confirmed against the remote.
 	discoveryPending       bool
 	terminatePrecheckError string
+	// terminateWithChildren carries the confirm dialog's "also terminate
+	// children" tick box. Reset every time the dialog opens: destroying a whole
+	// subtree must always be a deliberate choice, never a sticky default.
+	terminateWithChildren  bool
 	consoleOpen            bool
 	consoleLog             []string
 	consoleViewport        viewport.Model
@@ -2355,6 +2360,13 @@ func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) e
 		// Ad-hoc sessions have no worktree; skip removal.
 		return nil
 	}
+	// Sessions routinely share a worktree — a child created by an in-pane agent
+	// usually works in its parent's tree — so removing it on one session's
+	// teardown would pull the directory out from under a live sibling.
+	if other, shared := m.worktreeStillInUse(s); shared {
+		m.log("Skipping worktree removal for %s: %s is still used by %s", s.ID, s.WorktreePath, other)
+		return skipReason(fmt.Sprintf("worktree %s left in place (still used by %s)", s.WorktreePath, other))
+	}
 	remote, ok := resolveRemote(m.cfg, s)
 	if !ok {
 		return nil
@@ -3709,10 +3721,24 @@ func (m *Model) renderTerminateConfirm() string {
 			b.WriteString(failStyle.Render("Blocked: "+m.terminatePrecheckError) + "\n\n")
 		}
 		b.WriteString("This will:\n")
+		b.WriteString("  - Save the session's pane\n")
 		b.WriteString("  - Stop mutagen sync\n")
-		b.WriteString("  - Kill tmux session\n")
+		b.WriteString("  - Kill the agent's terminal\n")
 		b.WriteString("  - Remove git worktree\n")
 		b.WriteString("  - Clean up local files\n\n")
+		kids := m.terminationChildren(s)
+		if len(kids) > 0 {
+			box := "[ ]"
+			if m.terminateWithChildren {
+				box = "[x]"
+			}
+			b.WriteString(fmt.Sprintf("%s Also terminate %s  %s\n",
+				activeStyle.Render(box), pluralSessions(len(kids)), activeStyle.Render("[c]")+" toggle"))
+			if !m.terminateWithChildren {
+				b.WriteString(statusStyle.Render("Left alone they keep running with no parent.") + "\n")
+			}
+			b.WriteString("\n")
+		}
 		b.WriteString(activeStyle.Render("[y]") + " Confirm  " + activeStyle.Render("[f]") + " Force (discard changes)  " + activeStyle.Render("[n]") + " Cancel")
 
 		dialog := lipgloss.NewStyle().
@@ -5114,6 +5140,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	if msg.String() == "ctrl+k" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			m.terminatePrecheckError = ""
+			m.terminateWithChildren = false
 			m.state = viewStateTerminateConfirm
 			return m, nil, true
 		}
@@ -6411,11 +6438,18 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.terminatePrecheckError = ""
 			m.state = viewStateMain
 			return m, nil
+		case "c":
+			if sel := m.list.SelectedItem(); sel != nil {
+				if len(m.terminationChildren(sel.(item).session)) > 0 {
+					m.terminateWithChildren = !m.terminateWithChildren
+				}
+			}
+			return m, nil
 		case "f":
 			if sel := m.list.SelectedItem(); sel != nil {
 				s := sel.(item).session
 				m.terminatePrecheckError = ""
-				return m, m.startBackgroundTerminate(s, true)
+				return m, m.startTerminationBatch(s, true)
 			}
 		case "y":
 			if sel := m.list.SelectedItem(); sel != nil {
@@ -6425,7 +6459,7 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.terminatePrecheckError = ""
-				return m, m.startBackgroundTerminate(s, false)
+				return m, m.startTerminationBatch(s, false)
 			}
 		}
 	}
