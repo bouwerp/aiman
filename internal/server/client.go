@@ -168,15 +168,7 @@ func (a *AttachConn) Relay(in io.Reader, out io.Writer) error {
 		errCh <- err
 	}()
 	go func() {
-<<<<<<< HEAD
-		src := io.Reader(a.conn)
-		if a.r != nil {
-			src = a.r
-		}
-		_, err := io.Copy(out, src)
-=======
 		_, err := io.Copy(out, a.out())
->>>>>>> 3ff489d (feat: add aiman-gateway, a tsnet proxy for the phone API)
 		errCh <- err
 	}()
 	err := <-errCh
