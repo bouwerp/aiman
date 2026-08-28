@@ -27,12 +27,15 @@ const activityFlushInterval = time.Second
 type activityTracker struct {
 	dir     string
 	scanner titleScanner
+	modes   modeScanner
 
 	mu           sync.Mutex
 	bytes        int64
 	lastOutput   time.Time
 	title        string
 	titleChanged time.Time
+	altScreen    bool
+	mouse        bool
 	lastFlush    time.Time
 	dirty        bool
 }
@@ -47,6 +50,12 @@ func (a *activityTracker) observe(data []byte) {
 	now := time.Now()
 
 	a.mu.Lock()
+	a.modes.Feed(data)
+	alt, mouse := a.modes.Modes()
+	// A mode change is what attach is waiting for, so it flushes like a title
+	// change rather than waiting out the interval.
+	modesMoved := alt != a.altScreen || mouse != a.mouse
+	a.altScreen, a.mouse = alt, mouse
 	a.bytes += int64(len(data))
 	a.lastOutput = now
 	a.dirty = true
@@ -58,7 +67,7 @@ func (a *activityTracker) observe(data []byte) {
 			titleMoved = true
 		}
 	}
-	due := titleMoved || now.Sub(a.lastFlush) >= activityFlushInterval
+	due := titleMoved || modesMoved || now.Sub(a.lastFlush) >= activityFlushInterval
 	if !due {
 		a.mu.Unlock()
 		return
@@ -92,7 +101,7 @@ func (a *activityTracker) snapshotLocked() Activity {
 	// title several times a second — and second-granularity stamps could not
 	// tell two frames apart. RFC3339 parsing accepts the fraction, so readers
 	// need no special case.
-	act := Activity{Bytes: a.bytes, Title: a.title}
+	act := Activity{Bytes: a.bytes, Title: a.title, AltScreen: a.altScreen, Mouse: a.mouse}
 	if !a.lastOutput.IsZero() {
 		act.LastOutput = a.lastOutput.UTC().Format(time.RFC3339Nano)
 	}

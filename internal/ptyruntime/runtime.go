@@ -68,6 +68,11 @@ type SessionInfo struct {
 	OutputBytes  int64     `json:"output_bytes,omitempty"`
 	Title        string    `json:"title,omitempty"`
 	TitleChanged time.Time `json:"title_changed_at,omitempty"`
+
+	// AltScreen and Mouse are the terminal modes the agent turned on for
+	// itself. Attach mirrors them instead of asserting a fixed set.
+	AltScreen bool `json:"alt_screen,omitempty"`
+	Mouse     bool `json:"mouse,omitempty"`
 }
 
 // Manager creates and tracks holder-backed PTY sessions. It holds no process
@@ -209,6 +214,8 @@ func (m *Manager) Get(id string) (*SessionInfo, error) {
 	act := ptyhold.ReadActivity(m.root, id)
 	info.OutputBytes = act.Bytes
 	info.Title = act.Title
+	info.AltScreen = act.AltScreen
+	info.Mouse = act.Mouse
 	if t, ok := act.LastOutputAt(); ok {
 		info.LastOutput = t
 	}

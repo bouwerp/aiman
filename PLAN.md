@@ -30,6 +30,30 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
+### Attaching to codex could not scroll at all ✅
+`attachOpen` asserted a fixed policy on the attaching terminal: enter the
+alternate screen, then turn on SGR mouse reporting. That is right for a
+full-screen, mouse-driven TUI and wrong for anything else.
+
+codex is anything else. Its spool on regent0 contains no `?1049h` and no
+`?1000h/1002h/1003h/1006h` at all — it draws inline and never reads mouse
+events. So attach took away the scrollback codex depends on and simultaneously
+converted the wheel into escape sequences codex discards. Nothing could scroll.
+Claude turned out to be half-wrong the same way: it enables mouse but no alt
+screen, so it was being pushed onto an alt screen it never asked for.
+
+The holder already sees every byte the agent writes, so `modeScanner` records
+which modes the agent turns on for itself (chunk-boundary safe, bounded carry),
+publishes them in `Activity`, and attach mirrors them via `attachOpenFor`
+instead of guessing. Zero modes — the answer when serve cannot be reached — is
+the conservative one: the terminal keeps its own scrollback and its own wheel.
+
+Two details fall out. The grow animation paints absolute-positioned frames, so
+it only runs when aiman owns the screen; on the primary screen it would
+overwrite the user's output. And detach resets the union of what attach set and
+what the agent has since turned on, because an agent that enters the alt screen
+mid-session would otherwise leave the terminal stuck there.
+
 ### Child sessions were invisible, unkillable, and could miss a prompt ✅
 Three faults around sessions an in-pane agent creates under another session.
 

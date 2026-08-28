@@ -114,6 +114,12 @@ type Activity struct {
 	// moving is the most direct evidence there is that an agent is working, and
 	// unlike a rendered spinner it needs no pattern matching.
 	TitleChanged string `json:"title_changed_at,omitempty"`
+	// AltScreen and Mouse are the terminal modes the agent turned on for itself.
+	// Attach mirrors them rather than asserting a fixed set, because a client
+	// that reattaches mid-session never sees the setup the agent emitted on its
+	// first frame.
+	AltScreen bool `json:"alt_screen,omitempty"`
+	Mouse     bool `json:"mouse,omitempty"`
 }
 
 func writeFileAtomic(path string, data []byte) error {
