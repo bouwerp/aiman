@@ -233,12 +233,22 @@ func runPTYAttach(sock, id string) error {
 	}
 	defer connResp.Close()
 
+	// What the agent asked its own terminal for, observed by the holder. Read
+	// before raw mode so a failure can still report normally; an unreachable
+	// serve leaves modes zeroed, which is the conservative answer — the terminal
+	// keeps its scrollback and its wheel.
+	modes := attachModesFor(sock, id)
+
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return fmt.Errorf("pty attach: raw mode: %w", err)
 	}
 	defer func() {
-		fmt.Fprint(os.Stdout, attachClose())
+		// Re-read on the way out. An agent can enter the alternate screen or start
+		// reading the mouse after attach began — the relay passes those through and
+		// the terminal obeys them — so resetting only what attach itself set would
+		// hand the user back a terminal stuck on the alt screen.
+		fmt.Fprint(os.Stdout, attachCloseFor(modes.union(attachModesFor(sock, id))))
 		_ = term.Restore(int(os.Stdin.Fd()), oldState)
 	}()
 
@@ -253,11 +263,18 @@ func runPTYAttach(sock, id string) error {
 		}
 	}()
 
-	// Hint lives on the primary screen. attachOpen then switches to the alt
-	// screen so a full-screen agent cannot paint over leftover local output.
+	// Hint lives on the primary screen. For a full-screen agent attachOpenFor
+	// then switches to the alt screen so it cannot paint over leftover local
+	// output; an inline agent stays on the primary screen and keeps its
+	// scrollback.
 	fmt.Fprint(os.Stdout, notice("[aiman] attached to "+id+" — press ctrl+q to detach (the session keeps running)"))
-	fmt.Fprint(os.Stdout, attachOpen())
-	playAttachGrow(os.Stdout, cols, rows, time.Sleep)
+	fmt.Fprint(os.Stdout, attachOpenFor(modes))
+	// The grow animation paints absolute-positioned frames, which belong on a
+	// screen aiman owns. An inline agent stays on the primary screen, where those
+	// frames would overwrite the user's own output and land in their scrollback.
+	if modes.altScreen {
+		playAttachGrow(os.Stdout, cols, rows, time.Sleep)
+	}
 
 	stdin := detachOnCtrlQ(os.Stdin, connResp)
 	// Two-step resize after the grow animation. A short lead lets Relay
@@ -441,15 +458,60 @@ func splitFirst(s string, sep byte) [2]string {
 }
 
 // mouseTrackingOn asks the attaching terminal to send SGR mouse events
-// (including the wheel). Claude's TUI does this itself, so wheel-scroll works
-// there; Grok/agy/Codex often never get their own DECSET to the client (or
-// send it only once in a dropped first frame), so PTY attach has to.
+// (including the wheel). An agent that consumes mouse events sends this itself
+// on its first frame, which a client attaching later never sees — so attach
+// replays it on that agent's behalf.
 func mouseTrackingOn() string {
 	return "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
 }
 
 func mouseTrackingOff() string {
 	return "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
+}
+
+// attachModes are the terminal modes the attached agent runs with, as observed
+// by the holder from the agent's own output.
+type attachModes struct {
+	altScreen bool
+	mouse     bool
+}
+
+// union is the modes set in either, used at detach so a mode the agent turned
+// on mid-session is still reset.
+func (m attachModes) union(o attachModes) attachModes {
+	return attachModes{altScreen: m.altScreen || o.altScreen, mouse: m.mouse || o.mouse}
+}
+
+// attachOpenFor prepares the attaching terminal to mirror the agent's modes.
+//
+// Asserting a fixed set breaks any agent that deliberately does without one.
+// Codex draws inline and never enables mouse reporting: forcing it on turned the
+// wheel into escape sequences codex discards, and forcing the alternate screen
+// took away the scrollback it relies on, so its pane could not be scrolled at
+// all. Only an agent that painted a full screen needs the alt screen, and only
+// one that reads mouse events should be sent them.
+func attachOpenFor(m attachModes) string {
+	out := ""
+	if m.altScreen {
+		// Blank alt screen so leftover primary-screen text cannot show through a
+		// CUP-painted TUI.
+		out += "\x1b[?1049h\x1b[2J\x1b[H"
+	}
+	if m.mouse {
+		out += mouseTrackingOn()
+	}
+	return out
+}
+
+func attachCloseFor(m attachModes) string {
+	out := ""
+	if m.mouse {
+		out += mouseTrackingOff()
+	}
+	if m.altScreen {
+		out += "\x1b[?1049l"
+	}
+	return out
 }
 
 // attachRedrawLead is long enough for Relay to start copying after the grow
@@ -569,14 +631,14 @@ func playAttachGrow(w io.Writer, cols, rows int, sleep func(time.Duration)) {
 	}
 }
 
-// attachOpen puts the attaching tty on a blank alt screen with mouse tracking
-// so leftover primary-screen text cannot show through a CUP-painted TUI.
+// attachOpen is attachOpenFor for a full-screen, mouse-driven agent — the
+// historical behaviour, kept for callers with nothing better to go on.
 func attachOpen() string {
-	return "\x1b[?1049h\x1b[2J\x1b[H" + mouseTrackingOn()
+	return attachOpenFor(attachModes{altScreen: true, mouse: true})
 }
 
 func attachClose() string {
-	return mouseTrackingOff() + "\x1b[?1049l"
+	return attachCloseFor(attachModes{altScreen: true, mouse: true})
 }
 
 // detachKey is the classic ctrl+q byte. TUIs that enable the kitty keyboard
@@ -704,4 +766,30 @@ func runPTYHold(args []string) error {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// attachModesFor asks serve what terminal modes the agent is running with.
+//
+// Best-effort: anything that goes wrong leaves both modes off, which is the
+// conservative answer — the attaching terminal keeps its own scrollback and its
+// own wheel, rather than handing them to an agent that may not want them.
+func attachModesFor(sock, id string) attachModes {
+	resp, err := server.Call(sock, "pty.get", map[string]any{"id": id})
+	if err != nil || resp.Error != nil {
+		return attachModes{}
+	}
+	raw, err := json.Marshal(resp.Result)
+	if err != nil {
+		return attachModes{}
+	}
+	var out struct {
+		Session struct {
+			AltScreen bool `json:"alt_screen"`
+			Mouse     bool `json:"mouse"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return attachModes{}
+	}
+	return attachModes{altScreen: out.Session.AltScreen, mouse: out.Session.Mouse}
 }

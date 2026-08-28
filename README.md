@@ -345,6 +345,19 @@ invisible there by design — use **Menu → Revive Worktree** to find and resum
 
 Press `Ctrl+Y` on a selected session to recreate its mutagen sync binding using that session's current remote agent working directory and the canonical local path `~/.aiman/work/<session-id>`.
 
+### Attaching and scrolling
+
+Attach mirrors the terminal modes the agent turned on for itself, observed by
+the PTY holder from the agent's own output.
+
+- An agent that paints a full screen (`?1049h`) gets the alternate screen.
+- An agent that reads mouse events gets mouse reporting, so the wheel reaches it.
+- An agent that does neither — codex draws inline — keeps your terminal's own
+  scrollback and its own wheel.
+
+Asserting a fixed set breaks the third case both ways at once: no scrollback to
+scroll, and a wheel whose events the agent discards.
+
 ### Session backends
 
 Every session is hosted by a terminal runtime. **pty** (aiman serve's built-in runtime)
