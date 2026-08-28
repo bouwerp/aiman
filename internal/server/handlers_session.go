@@ -16,14 +16,19 @@ import (
 )
 
 type SessionInfo struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Group            string `json:"group"`
-	ParentID         string `json:"parent_id,omitempty"`
-	IssueKey         string `json:"issue_key,omitempty"`
-	Branch           string `json:"branch,omitempty"`
-	RepoName         string `json:"repo_name,omitempty"`
-	TmuxSession      string `json:"tmux_session,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Group       string `json:"group"`
+	ParentID    string `json:"parent_id,omitempty"`
+	IssueKey    string `json:"issue_key,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	RepoName    string `json:"repo_name,omitempty"`
+	TmuxSession string `json:"tmux_session,omitempty"`
+	// Backend is the terminal runtime hosting the session ("pty" or "tmux").
+	// Callers route pane capture, prompt delivery and teardown on it, and an
+	// absent value reads as tmux — so leaving it off the wire pointed every
+	// client at tmux for sessions that live in the PTY runtime.
+	Backend          string `json:"backend,omitempty"`
 	WorktreePath     string `json:"worktree_path,omitempty"`
 	WorkingDirectory string `json:"working_directory,omitempty"`
 	AgentName        string `json:"agent_name,omitempty"`
@@ -49,6 +54,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		Branch:           s.Branch,
 		RepoName:         s.RepoName,
 		TmuxSession:      s.TmuxSession,
+		Backend:          s.Backend,
 		WorktreePath:     s.WorktreePath,
 		WorkingDirectory: s.WorkingDirectory,
 		AgentName:        s.AgentName,
