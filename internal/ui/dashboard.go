@@ -210,6 +210,8 @@ func daemonKindLabel(kind string) string {
 	switch kind {
 	case string(remotesvc.KindServe):
 		return "agent API"
+	case string(remotesvc.KindGateway):
+		return "phone gateway"
 	case "":
 		return "trigger"
 	default:
@@ -613,7 +615,7 @@ func (m *Model) applyRemoteFilter() {
 	var flat []item
 	var daemonItems []list.Item
 	for _, s := range m.allSessions {
-		if s.TmuxSession == "aiman-trigger" || s.TmuxSession == "aiman-serve" {
+		if s.TmuxSession == "aiman-trigger" || s.TmuxSession == "aiman-serve" || s.TmuxSession == "aiman-gateway" {
 			continue // Skip daemon sessions in the main list
 		}
 		if m.remoteFilter == "" || s.RemoteHost == m.remoteFilter {
@@ -631,7 +633,7 @@ func (m *Model) applyRemoteFilter() {
 		if m.remoteFilter != "" && r.Host != m.remoteFilter {
 			continue
 		}
-		for _, kind := range []string{string(remotesvc.KindServe), string(remotesvc.KindTrigger)} {
+		for _, kind := range []string{string(remotesvc.KindServe), string(remotesvc.KindTrigger), string(remotesvc.KindGateway)} {
 			d, exists := m.daemons[domain.DaemonKey(r.Host, kind)]
 			if !exists {
 				d = domain.Daemon{RemoteHost: r.Host, Kind: kind, Status: domain.DaemonStatusStopped}
@@ -6759,6 +6761,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		probes = append(probes,
 			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindServe),
 			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindTrigger),
+			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindGateway),
 		)
 	}
 
@@ -7214,9 +7217,12 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 		daemonLines := []string{
 			activeStyle.Render(label) + "  " + d.RemoteHost,
 		}
-		if kind == string(remotesvc.KindServe) {
+		switch kind {
+		case string(remotesvc.KindServe):
 			daemonLines = append(daemonLines, "In-pane agents talk to this process (skill / aiman session).")
-		} else {
+		case string(remotesvc.KindGateway):
+			daemonLines = append(daemonLines, "Phone HTTP/WebSocket proxy in front of the agent API socket.")
+		default:
 			daemonLines = append(daemonLines, "Autonomous GitHub/cron trigger daemon.")
 		}
 		daemonLines = append(daemonLines, "Status: "+statusLabel)
@@ -7237,7 +7243,7 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 			daemonLines = append(daemonLines, "Last Seen: "+d.UpdatedAt.Format("15:04:05"))
 		}
 
-		if kind != string(remotesvc.KindServe) {
+		if kind == string(remotesvc.KindTrigger) || kind == "" {
 			var managed []string
 			for _, s := range m.allSessions {
 				if s.RemoteHost == d.RemoteHost && s.Mode == domain.SessionModeAutonomous {

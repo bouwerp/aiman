@@ -13,6 +13,7 @@ type Kind string
 const (
 	KindServe   Kind = "serve"
 	KindTrigger Kind = "trigger"
+	KindGateway Kind = "gateway"
 
 	// OpTimeout covers remote install/update (curl the GitHub binary) plus
 	// systemctl. The default SSH call deadline is too short for that.
@@ -20,52 +21,80 @@ const (
 )
 
 func (k Kind) Unit() string {
-	if k == KindTrigger {
+	switch k {
+	case KindTrigger:
 		return "aiman-trigger"
+	case KindGateway:
+		return "aiman-gateway"
+	default:
+		return "aiman-serve"
 	}
-	return "aiman-serve"
 }
 
 func (k Kind) Binary() string {
-	if k == KindTrigger {
+	switch k {
+	case KindTrigger:
 		return "aiman-trigger"
+	case KindGateway:
+		return "aiman-gateway"
+	default:
+		return "aiman"
 	}
-	return "aiman"
 }
 
 func (k Kind) ExecLine() string {
-	if k == KindTrigger {
+	switch k {
+	case KindTrigger:
 		return "%h/.local/bin/aiman-trigger"
+	case KindGateway:
+		return "%h/.local/bin/aiman-gateway"
+	default:
+		return "%h/.local/bin/aiman serve"
 	}
-	return "%h/.local/bin/aiman serve"
 }
 
 func (k Kind) LogFile() string {
-	if k == KindTrigger {
+	switch k {
+	case KindTrigger:
 		return "$HOME/.aiman/trigger.log"
+	case KindGateway:
+		return "$HOME/.aiman/gateway.log"
+	default:
+		return "$HOME/.aiman/serve.log"
 	}
-	return "$HOME/.aiman/serve.log"
 }
 
 func (k Kind) PidFile() string {
-	if k == KindTrigger {
+	switch k {
+	case KindTrigger:
 		return "$HOME/.aiman/trigger.pid"
+	case KindGateway:
+		return "$HOME/.aiman/gateway.pid"
+	default:
+		return "$HOME/.aiman/serve.pid"
 	}
-	return "$HOME/.aiman/serve.pid"
 }
 
 func (k Kind) InstallPipe() string {
-	if k == KindTrigger {
+	switch k {
+	case KindTrigger:
 		return "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | BINARY_NAME=aiman-trigger sh"
+	case KindGateway:
+		return "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | BINARY_NAME=aiman-gateway sh"
+	default:
+		return "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | sh"
 	}
-	return "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | sh"
 }
 
 func (k Kind) procPattern() string {
-	if k == KindTrigger {
+	switch k {
+	case KindTrigger:
 		return "[a]iman-trigger"
+	case KindGateway:
+		return "[a]iman-gateway"
+	default:
+		return "[a]iman serve"
 	}
-	return "[a]iman serve"
 }
 
 // killMode returns the systemd KillMode for the unit.
@@ -79,13 +108,13 @@ func (k Kind) procPattern() string {
 // agents with it. KillMode=process signals only the main process and leaves the
 // rest of the cgroup alone, which is exactly the contract the holders assume.
 //
-// The trigger daemon owns no such processes; the default group cleanup is the
-// right behaviour for its transient ssh children.
+// The trigger daemon and the phone gateway own no such processes; the default
+// group cleanup is the right behaviour for their children.
 func (k Kind) killMode() string {
-	if k == KindTrigger {
-		return ""
+	if k == KindServe {
+		return "KillMode=process\n"
 	}
-	return "KillMode=process\n"
+	return ""
 }
 
 func UnitFile(k Kind) string {

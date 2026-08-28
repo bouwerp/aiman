@@ -26,6 +26,7 @@ type Config struct {
 	AWS           AWSDefaults              `yaml:"aws,omitempty"`
 	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
 	Sync          SyncConfig               `yaml:"sync,omitempty"`
+	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
 	Remotes       []Remote                 `yaml:"remotes"`
 	ActiveRemote  string                   `yaml:"active_remote"`
 
@@ -44,6 +45,7 @@ type ServeConfig struct {
 	Git           GitConfig                `yaml:"git,omitempty"`
 	Skills        SkillsConfig             `yaml:"skills,omitempty"`
 	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
+	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
 }
 
 // MarshalServeConfig serializes the settings a remote Agent API needs.
@@ -56,6 +58,7 @@ func (c *Config) MarshalServeConfig() ([]byte, error) {
 		Git:           c.Git,
 		Skills:        c.Skills,
 		AgentDefaults: c.AgentDefaults,
+		Gateway:       c.Gateway,
 	})
 }
 
@@ -191,6 +194,27 @@ type FeatureFlags struct {
 	// in serve rather than the TUI, and a remote silently left behind loses them
 	// while looking healthy.
 	AutoUpdateRemotes *bool `yaml:"auto_update_remotes,omitempty"`
+}
+
+// GatewayConfig is the phone-gateway settings stored on the host that runs
+// aiman-gateway (typically the remote).
+type GatewayConfig struct {
+	// AllowLogins is the Tailscale login names WhoIs must match on the
+	// tailnet path. Empty means any identity WhoIs returns is accepted.
+	AllowLogins []string `yaml:"allow_logins,omitempty"`
+	// Funnel is whether `--funnel` is allowed. A pointer so an absent key
+	// means permitted; set false to refuse public Funnel even when the flag
+	// is passed. Funnel still has to be turned on with `--funnel`.
+	Funnel *bool `yaml:"funnel,omitempty"`
+}
+
+// GatewayFunnelPermitted reports whether the gateway may listen with Funnel.
+// Defaults to on; `--funnel` is still required to actually expose the port.
+func (c *Config) GatewayFunnelPermitted() bool {
+	if c == nil || c.Gateway.Funnel == nil {
+		return true
+	}
+	return *c.Gateway.Funnel
 }
 
 // AutoUpdateRemotes reports whether the client should update remotes that are

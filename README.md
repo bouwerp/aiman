@@ -38,6 +38,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Remotes update themselves**: The probe already reports each remote's version, so a serve running behind the client is updated automatically — almost every runtime fix lives in serve rather than the TUI, and a remote left behind loses them while still looking healthy. Set `features.auto_update_remotes: false` to opt out
 - **Shared context**: Durable markdown notes per host (`aiman context ls|find|get|put|pack|stats`); session create injects abstracts into `.aiman_context.md`, archive writes a note back. Menu → Shared context shows store size, lookups, and pack usage
 - **Mobile TUI (`aiman phone`)**: Termius over Tailscale. Uses the host `tailscale` CLI; the phone still needs the Tailscale app connected first
+- **Phone gateway (`aiman-gateway`)**: HTTP/WebSocket proxy in front of `aiman serve`'s unix socket, reached over Tailscale (Funnel opt-in). Separate binary so tsnet stays out of `aiman`
 - **Agent skill**: `aiman --skill` prints a Markdown skill gated on `AIMAN_ENV=1`
 
 ### AI Intelligence
@@ -648,6 +649,26 @@ aiman phone --json
 ```
 
 Prints MagicDNS name, `100.x` IPv4, SSH user, and Termius fields.
+
+### `aiman-gateway`
+
+Runs on the remote, next to `aiman serve`. It is a proxy: HTTP and WebSocket to the phone, the existing line protocol to `~/.aiman/aiman.sock`. It has no database and no flow manager.
+
+```bash
+aiman-gateway                         # tailnet only, :8080
+aiman-gateway --funnel                # public Funnel on :443; token is then the only auth
+aiman-gateway --allow-login you@x.ts.net
+```
+
+Auth is `Authorization: Bearer <token>` on every request except `GET /v1/health`. The token is created at `~/.aiman/gateway-token` (0600) and never printed. On the tailnet path, `WhoIs` must also succeed and match `gateway.allow_logins` when that list is set. Funnel supplies no identity; `--funnel` logs a warning and can be refused with `gateway.funnel: false`.
+
+Install from the TUI daemons tab (phone gateway row) or:
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | BINARY_NAME=aiman-gateway sh
+```
+
+The phone contract is `api/openapi.yaml`. Endpoints: `POST /v1/rpc`, `GET /v1/sessions`, `GET /v1/sessions/{id}`, `GET /v1/events` (WebSocket), `GET /v1/sessions/{id}/terminal` (WebSocket). Gateway-owned RPC: `push.register` / `push.unregister` (Expo tokens in `~/.aiman/gateway-push.json`, never logged). Default notify on `waiting_input`; `exited`/`errored` are opt-in; `working` is never sent. `cmd/aiman` does not import `tailscale.com`.
 
 Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refused: use `aiman session …`.
 

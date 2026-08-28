@@ -1,0 +1,387 @@
+openapi: 3.1.0
+info:
+  title: aiman gateway
+  version: 0.1.0
+  description: >
+    HTTP and WebSocket surface in front of `aiman serve`. Bearer token on every
+    request except GET /v1/health. POST /v1/rpc is the whole API; REST reads
+    are conveniences over the same socket methods.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+tags:
+  - name: health
+  - name: rpc
+  - name: sessions
+  - name: events
+  - name: terminal
+paths:
+  /v1/health:
+    get:
+      tags: [health]
+      security: []
+      operationId: health
+      summary: Unauthenticated liveness. No version, no session data.
+      responses:
+        "200":
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /v1/rpc:
+    post:
+      tags: [rpc]
+      operationId: rpc
+      summary: JSON-RPC-shaped proxy onto the unix socket, plus gateway-owned push methods.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RpcRequest"
+      responses:
+        "200":
+          description: Socket result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+        "400":
+          description: Invalid JSON, missing method, streaming method used over RPC, or socket-level error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+        "401":
+          description: Missing or wrong bearer token
+        "403":
+          description: Tailnet WhoIs failed or login not on the allow-list
+        "502":
+          description: Unix socket call failed
+  /v1/sessions:
+    get:
+      tags: [sessions]
+      operationId: listSessions
+      parameters:
+        - in: query
+          name: group
+          schema:
+            type: string
+      responses:
+        "200":
+          description: session.list result wrapped in RpcResponse
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+        "401":
+          description: unauthorized
+        "403":
+          description: forbidden
+  /v1/sessions/{id}:
+    get:
+      tags: [sessions]
+      operationId: getSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: session.get result wrapped in RpcResponse
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+        "401":
+          description: unauthorized
+  /v1/sessions/{id}/terminal:
+    get:
+      tags: [terminal]
+      operationId: attachTerminal
+      summary: WebSocket bridge of pty.attach. Phone UI is deferred.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - in: query
+          name: cols
+          schema:
+            type: integer
+            default: 80
+        - in: query
+          name: rows
+          schema:
+            type: integer
+            default: 24
+      responses:
+        "101":
+          description: Switching protocols
+        "401":
+          description: unauthorized
+  /v1/events:
+    get:
+      tags: [events]
+      operationId: sessionEvents
+      summary: >
+        WebSocket of SessionEvent objects, one JSON text frame per event.
+        Events are changes, not snapshots. Expect a keepalive roughly every 20s.
+      responses:
+        "101":
+          description: Switching protocols
+        "401":
+          description: unauthorized
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    SessionId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+  schemas:
+    Health:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+    AgentState:
+      type: string
+      enum:
+        - waiting_input
+        - working
+        - waiting_background
+        - idle
+        - exited
+        - errored
+        - unknown
+    StateConfidence:
+      type: string
+      enum: [high, low]
+    Session:
+      type: object
+      required: [id, name, group, self]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        group:
+          type: string
+        issue_key:
+          type: string
+        branch:
+          type: string
+        repo_name:
+          type: string
+        tmux_session:
+          type: string
+        worktree_path:
+          type: string
+        working_directory:
+          type: string
+        agent_name:
+          type: string
+        agent_session_id:
+          type: string
+        agent_session_path:
+          type: string
+        title:
+          type: string
+          description: Agent-set terminal title; the one-line "what is it doing".
+        status:
+          type: string
+        state:
+          $ref: "#/components/schemas/AgentState"
+        state_confidence:
+          $ref: "#/components/schemas/StateConfidence"
+        state_message:
+          type: string
+        state_source:
+          type: string
+        ended:
+          type: boolean
+        self:
+          type: boolean
+    RpcError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - invalid_params
+            - not_found
+            - name_taken
+            - server_not_running
+            - already_running
+            - agent_blocked
+            - timeout
+            - create_failed
+            - jira_unavailable
+            - protocol_mismatch
+        message:
+          type: string
+    RpcRequest:
+      type: object
+      required: [method]
+      properties:
+        id:
+          type: string
+        method:
+          type: string
+          enum:
+            - ping
+            - session.list
+            - session.get
+            - session.read
+            - session.prompt
+            - push.register
+            - push.unregister
+        params:
+          $ref: "#/components/schemas/RpcParams"
+    RpcParams:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        group:
+          type: string
+        lines:
+          type: integer
+        text:
+          type: string
+        force:
+          type: boolean
+          description: >
+            Override the default refusal. Phone UX confirms before sending
+            force true. Against today's unix socket, answering a
+            waiting_input session also requires force true.
+        token:
+          type: string
+          description: Expo push token. Never log this value.
+        device_id:
+          type: string
+        states:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentState"
+    RpcResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/PongResult"
+            - $ref: "#/components/schemas/SessionListResult"
+            - $ref: "#/components/schemas/SessionGetResult"
+            - $ref: "#/components/schemas/PaneReadResult"
+            - $ref: "#/components/schemas/PromptResult"
+            - $ref: "#/components/schemas/PushRegisterResult"
+            - $ref: "#/components/schemas/PushUnregisterResult"
+        error:
+          $ref: "#/components/schemas/RpcError"
+    PongResult:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          const: pong
+        version:
+          type: string
+        protocol:
+          type: integer
+    SessionListResult:
+      type: object
+      required: [type, sessions]
+      properties:
+        type:
+          type: string
+          const: session_list
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+    SessionGetResult:
+      type: object
+      required: [type, session]
+      properties:
+        type:
+          type: string
+          const: session
+        session:
+          $ref: "#/components/schemas/Session"
+    PaneReadResult:
+      type: object
+      required: [type, text]
+      properties:
+        type:
+          type: string
+          const: pane_read
+        session:
+          $ref: "#/components/schemas/Session"
+        text:
+          type: string
+    PromptResult:
+      type: object
+      required: [type, sent]
+      properties:
+        type:
+          type: string
+          const: prompt_result
+        sent:
+          type: boolean
+        state:
+          $ref: "#/components/schemas/AgentState"
+    PushRegisterResult:
+      type: object
+      required: [type, registered]
+      properties:
+        type:
+          type: string
+          const: push_registered
+        registered:
+          type: boolean
+    PushUnregisterResult:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          const: push_unregistered
+    SessionEvent:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [session_activity, session_gone, keepalive]
+        id:
+          type: string
+        title:
+          type: string
+        last_output:
+          type: string
+          format: date-time
+        title_changed_at:
+          type: string
+          format: date-time
+        output_bytes:
+          type: integer
+          format: int64
+        status:
+          type: string
+        state:
+          $ref: "#/components/schemas/AgentState"
+          description: >
+            Classifier state when the gateway knows it. Live serve events
+            currently omit this; the phone merges it when present and
+            otherwise keeps the last list/get value.
+        state_confidence:
+          $ref: "#/components/schemas/StateConfidence"

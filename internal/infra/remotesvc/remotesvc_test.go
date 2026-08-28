@@ -243,7 +243,7 @@ func TestServeUnitFileRaisesStartLimit(t *testing.T) {
 }
 
 func TestScriptsHaveNoFmtLeftovers(t *testing.T) {
-	for _, k := range []Kind{KindServe, KindTrigger} {
+	for _, k := range []Kind{KindServe, KindTrigger, KindGateway} {
 		scripts := map[string]string{
 			"install": InstallEnableScript(k),
 			"start":   StartScript(k),
@@ -275,6 +275,60 @@ func TestServeUnitLeavesPTYHoldersAlone(t *testing.T) {
 	// The trigger daemon owns nothing that should outlive it.
 	if tr := UnitFile(KindTrigger); strings.Contains(tr, "KillMode") {
 		t.Fatalf("trigger unit should keep default cgroup cleanup:\n%s", tr)
+	}
+	if gw := UnitFile(KindGateway); strings.Contains(gw, "KillMode") {
+		t.Fatalf("gateway unit should keep default cgroup cleanup:\n%s", gw)
+	}
+}
+
+func TestGatewayKindIdentity(t *testing.T) {
+	k := KindGateway
+	if k.Unit() != "aiman-gateway" {
+		t.Fatalf("unit %q", k.Unit())
+	}
+	if k.Binary() != "aiman-gateway" {
+		t.Fatalf("binary %q", k.Binary())
+	}
+	if !strings.Contains(k.ExecLine(), "aiman-gateway") || strings.Contains(k.ExecLine(), " serve") {
+		t.Fatalf("exec %q", k.ExecLine())
+	}
+	if k.LogFile() != "$HOME/.aiman/gateway.log" {
+		t.Fatalf("log %q", k.LogFile())
+	}
+	if k.PidFile() != "$HOME/.aiman/gateway.pid" {
+		t.Fatalf("pid %q", k.PidFile())
+	}
+	if k.procPattern() != "[a]iman-gateway" {
+		t.Fatalf("proc %q", k.procPattern())
+	}
+	pipe := k.InstallPipe()
+	if !strings.Contains(pipe, "BINARY_NAME=aiman-gateway") {
+		t.Fatalf("install pipe %q", pipe)
+	}
+	u := UnitFile(k)
+	if !strings.Contains(u, "aiman-gateway") {
+		t.Fatalf("unit file missing binary:\n%s", u)
+	}
+	if strings.Contains(u, "KillMode") {
+		t.Fatalf("gateway must not copy serve's KillMode=process:\n%s", u)
+	}
+	start := nohupStart(k)
+	if !strings.Contains(start, "aiman-gateway") || strings.Contains(start, "aiman-gateway serve") {
+		t.Fatalf("nohup start %q", start)
+	}
+	probe := ProbeScript(k)
+	if strings.Contains(probe, "aiman.sock") {
+		t.Fatalf("gateway probe must not claim serve's socket:\n%s", probe)
+	}
+}
+
+func TestStopGatewayDoesNotKillServe(t *testing.T) {
+	stop := StopScript(KindGateway)
+	if strings.Contains(stop, "[a]iman serve") {
+		t.Fatalf("gateway stop must not pkill serve:\n%s", stop)
+	}
+	if !strings.Contains(stop, "[a]iman-gateway") {
+		t.Fatalf("gateway stop missing pkill pattern:\n%s", stop)
 	}
 }
 

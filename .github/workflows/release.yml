@@ -21,28 +21,33 @@ jobs:
             goarch: amd64
             name: aiman-darwin-amd64
             trigger_name: aiman-trigger-darwin-amd64
+            gateway_name: aiman-gateway-darwin-amd64
           - os: macos-latest
             goos: darwin
             goarch: arm64
             name: aiman-darwin-arm64
             trigger_name: aiman-trigger-darwin-arm64
+            gateway_name: aiman-gateway-darwin-arm64
           # Linux builds
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
             name: aiman-linux-amd64
             trigger_name: aiman-trigger-linux-amd64
+            gateway_name: aiman-gateway-linux-amd64
           - os: ubuntu-latest
             goos: linux
             goarch: arm64
             name: aiman-linux-arm64
             trigger_name: aiman-trigger-linux-arm64
+            gateway_name: aiman-gateway-linux-arm64
           # Windows builds
           - os: ubuntu-latest
             goos: windows
             goarch: amd64
             name: aiman-windows-amd64.exe
             trigger_name: aiman-trigger-windows-amd64.exe
+            gateway_name: aiman-gateway-windows-amd64.exe
 
     steps:
       - name: Checkout code
@@ -70,11 +75,12 @@ jobs:
           LDFLAGS="-s -w -X main.version=${{ github.ref_name }} -X main.buildTime=${BUILD_TIME}"
           go build -v -ldflags="$LDFLAGS" -o ${{ matrix.name }} ./cmd/aiman
           go build -v -ldflags="$LDFLAGS" -o ${{ matrix.trigger_name }} ./cmd/aiman-trigger
+          go build -v -ldflags="$LDFLAGS" -o ${{ matrix.gateway_name }} ./cmd/aiman-gateway
 
       - name: Create packages (Unix)
         if: matrix.goos != 'windows'
         run: |
-          for BIN in ${{ matrix.name }} ${{ matrix.trigger_name }}; do
+          for BIN in ${{ matrix.name }} ${{ matrix.trigger_name }} ${{ matrix.gateway_name }}; do
             tar czf "${BIN}.tar.gz" "$BIN"
             shasum -a 256 "${BIN}.tar.gz" > "${BIN}.tar.gz.sha256"
           done
@@ -82,7 +88,7 @@ jobs:
       - name: Create packages (Windows)
         if: matrix.goos == 'windows'
         run: |
-          for BIN in ${{ matrix.name }} ${{ matrix.trigger_name }}; do
+          for BIN in ${{ matrix.name }} ${{ matrix.trigger_name }} ${{ matrix.gateway_name }}; do
             zip "${BIN}.zip" "$BIN"
             shasum -a 256 "${BIN}.zip" > "${BIN}.zip.sha256"
           done

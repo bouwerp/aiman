@@ -37,7 +37,12 @@ func (m *Model) maybeAutoUpdateServe(d domain.Daemon) tea.Cmd {
 	if !m.cfg.AutoUpdateRemotes() {
 		return nil
 	}
-	if d.Kind != string(remotesvc.KindServe) || d.Status != domain.DaemonStatusRunning {
+	switch d.Kind {
+	case string(remotesvc.KindServe), string(remotesvc.KindGateway):
+	default:
+		return nil
+	}
+	if d.Status != domain.DaemonStatusRunning {
 		return nil
 	}
 	remote, local, outdated := remotesvc.Outdated(d.Version, m.version)
@@ -47,14 +52,17 @@ func (m *Model) maybeAutoUpdateServe(d domain.Daemon) tea.Cmd {
 	if m.serveUpdateAt == nil {
 		m.serveUpdateAt = map[string]time.Time{}
 	}
-	if last, tried := m.serveUpdateAt[d.RemoteHost]; tried && time.Since(last) < autoUpdateRetryAfter {
+	key := d.RemoteHost + "\x00" + d.Kind
+	if last, tried := m.serveUpdateAt[key]; tried && time.Since(last) < autoUpdateRetryAfter {
 		return nil
 	}
-	m.serveUpdateAt[d.RemoteHost] = time.Now()
+	m.serveUpdateAt[key] = time.Now()
 
-	m.logPersistent("auto-updating serve on %s: %s -> %s", d.RemoteHost, remote, local)
+	kind := remotesvc.Kind(d.Kind)
+	m.logPersistent("auto-updating %s on %s: %s -> %s", kind, d.RemoteHost, remote, local)
+	label := daemonKindLabel(d.Kind)
 	return tea.Batch(
-		m.showToast("updating agent API on "+d.RemoteHost+" ("+remote.String()+" → "+local.String()+")", false, 8*time.Second),
-		remoteServiceOpCmd(m.cfg, d.RemoteHost, remotesvc.KindServe, "update", true),
+		m.showToast("updating "+label+" on "+d.RemoteHost+" ("+remote.String()+" → "+local.String()+")", false, 8*time.Second),
+		remoteServiceOpCmd(m.cfg, d.RemoteHost, kind, "update", true),
 	)
 }
