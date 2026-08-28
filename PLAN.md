@@ -1014,6 +1014,7 @@ write onto the rendered frame.
     - Wire instance lifecycle to Aiman’s remote registry.
 - [x] **Dev Console Panel**:
     - Collapsible dev console panel to view logs and debug output in-app (toggle with backtick key).
+- [x] **Phone gateway (`aiman-gateway`)**: HTTP/WebSocket proxy to the agent API unix socket over Tailscale tsnet. Bearer token plus WhoIs on the tailnet path; Funnel opt-in. Separate binary so `cmd/aiman` does not import `tailscale.com`. Lifecycle is a third `remotesvc.Kind`. Phone contract is `api/openapi.yaml`. Expo push (`push.register` / `push.unregister`) lives in the gateway, not serve.
 
 ## 4. Architectural Strategy (Reminder)
 Keep following the **Clean Architecture** pattern. Ensure that the `internal/usecase` layer remains the only place where domain entities are coordinated, and keep infrastructure-specific logic (like `mutagen` or `ssh` CLI flags) strictly within `internal/infra`.

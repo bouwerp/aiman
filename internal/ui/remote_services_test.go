@@ -32,8 +32,8 @@ func TestDaemonListHasServeAndTriggerPerRemote(t *testing.T) {
 	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	items := m.daemonList.Items()
-	if len(items) != 4 {
-		t.Fatalf("len=%d want 4 (2 remotes × serve+trigger)", len(items))
+	if len(items) != 6 {
+		t.Fatalf("len=%d want 6 (2 remotes × serve+trigger+gateway)", len(items))
 	}
 	first, ok := items[0].(daemonItem)
 	if !ok || first.daemon.Kind != string(remotesvc.KindServe) {

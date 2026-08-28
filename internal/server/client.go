@@ -127,6 +127,25 @@ func (f frameWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Read copies raw terminal output from the session. Attach output is not framed.
+func (a *AttachConn) Read(p []byte) (int, error) {
+	return a.out().Read(p)
+}
+
+func (a *AttachConn) out() io.Reader {
+	if a.r != nil {
+		return a.r
+	}
+	return a.conn
+}
+
+// WriteInput sends raw terminal bytes as an input frame.
+func (a *AttachConn) WriteInput(p []byte) error {
+	a.wmu.Lock()
+	defer a.wmu.Unlock()
+	return writeAttachFrame(a.conn, attachFrameInput, p)
+}
+
 // Resize updates the remote session's window size.
 func (a *AttachConn) Resize(cols, rows int) error {
 	if cols <= 0 || rows <= 0 || cols > 0xFFFF || rows > 0xFFFF {
@@ -149,11 +168,7 @@ func (a *AttachConn) Relay(in io.Reader, out io.Writer) error {
 		errCh <- err
 	}()
 	go func() {
-		src := io.Reader(a.conn)
-		if a.r != nil {
-			src = a.r
-		}
-		_, err := io.Copy(out, src)
+		_, err := io.Copy(out, a.out())
 		errCh <- err
 	}()
 	err := <-errCh

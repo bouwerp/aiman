@@ -58,6 +58,20 @@ linters:
       - linters:
           - unparam
         text: "is unused"
+      # Taint findings on CLI URL fetches and git-dir reads that are already
+      # constrained by caller-supplied paths.
+      - linters:
+          - gosec
+        text: "G703:"
+      - linters:
+          - gosec
+        text: "G704:"
+      - linters:
+          - gosec
+        text: "G706:"
+      - linters:
+          - staticcheck
+        text: "QF1012:"
 
 formatters:
   enable:

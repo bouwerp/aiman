@@ -28,12 +28,25 @@ func runningServe(version string) domain.Daemon {
 
 // Nearly every runtime fix lives in serve rather than the TUI, so a remote left
 // behind loses them while still looking healthy.
+func TestAutoUpdateRunsForAnOlderGateway(t *testing.T) {
+	m := autoUpdateModel("v0.19.10")
+	d := domain.Daemon{
+		RemoteHost: "regent0",
+		Kind:       string(remotesvc.KindGateway),
+		Status:     domain.DaemonStatusRunning,
+		Version:    "aiman-gateway v0.19.4",
+	}
+	if cmd := m.maybeAutoUpdateServe(d); cmd == nil {
+		t.Fatal("a gateway behind the client should be updated")
+	}
+}
+
 func TestAutoUpdateRunsForAnOlderServe(t *testing.T) {
 	m := autoUpdateModel("v0.19.10")
 	if cmd := m.maybeAutoUpdateServe(runningServe("aiman v0.19.4 (built x)")); cmd == nil {
 		t.Fatal("a serve behind the client should be updated")
 	}
-	if _, recorded := m.serveUpdateAt["regent0"]; !recorded {
+	if _, recorded := m.serveUpdateAt["regent0\x00"+string(remotesvc.KindServe)]; !recorded {
 		t.Error("the attempt should be recorded so it is not retried on every probe")
 	}
 }
@@ -89,7 +102,7 @@ func TestAutoUpdateBacksOffBetweenAttempts(t *testing.T) {
 		t.Error("a second probe moments later must not retry")
 	}
 	// Once the backoff expires it tries again — the remote may have been fixed.
-	m.serveUpdateAt["regent0"] = time.Now().Add(-autoUpdateRetryAfter - time.Minute)
+	m.serveUpdateAt["regent0\x00"+string(remotesvc.KindServe)] = time.Now().Add(-autoUpdateRetryAfter - time.Minute)
 	if cmd := m.maybeAutoUpdateServe(d); cmd == nil {
 		t.Error("after the backoff the update should be retried")
 	}

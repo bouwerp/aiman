@@ -74,6 +74,7 @@ func TestMarshalServeConfigIncludesServiceSettingsWithoutRemotePaths(t *testing.
 		Git:           GitConfig{IncludeOrgs: []string{"acme"}},
 		Skills:        SkillsConfig{Repo: "git@example.test:skills.git"},
 		AgentDefaults: map[string]AgentDefaults{"codex": {Model: "gpt-5", Effort: "high"}},
+		Gateway:       GatewayConfig{AllowLogins: []string{"user@example.test"}},
 		Remotes:       []Remote{{Host: "remote.example.test", Root: "/repos"}},
 	}
 
@@ -91,5 +92,25 @@ func TestMarshalServeConfigIncludesServiceSettingsWithoutRemotePaths(t *testing.
 	}
 	if got["integrations"] == nil || got["agent_defaults"] == nil || got["skills"] == nil {
 		t.Fatalf("serve config missing required settings: %s", body)
+	}
+	if got["gateway"] == nil {
+		t.Fatalf("serve config missing gateway settings: %s", body)
+	}
+}
+
+func TestGatewayFunnelPermittedDefaultsOn(t *testing.T) {
+	if !(*Config)(nil).GatewayFunnelPermitted() {
+		t.Fatal("nil config must permit funnel")
+	}
+	if !(&Config{}).GatewayFunnelPermitted() {
+		t.Fatal("absent funnel key must permit funnel")
+	}
+	off := false
+	if (&Config{Gateway: GatewayConfig{Funnel: &off}}).GatewayFunnelPermitted() {
+		t.Fatal("funnel: false must refuse --funnel")
+	}
+	on := true
+	if !(&Config{Gateway: GatewayConfig{Funnel: &on}}).GatewayFunnelPermitted() {
+		t.Fatal("funnel: true must permit --funnel")
 	}
 }

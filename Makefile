@@ -21,6 +21,8 @@ LDFLAGS := -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)
 build:
 	@echo "Building aiman $(VERSION)..."
 	go build -v -ldflags "$(LDFLAGS)" -o aiman ./cmd/aiman
+	go build -v -ldflags "$(LDFLAGS)" -o aiman-trigger ./cmd/aiman-trigger
+	go build -v -ldflags "$(LDFLAGS)" -o aiman-gateway ./cmd/aiman-gateway
 
 # Run tests
 test:
@@ -33,7 +35,7 @@ test:
 # module's own toolchain and CI runs the identical version. A system-installed
 # golangci-lint is deliberately not used: a binary built with an older Go than
 # the module targets refuses to run at all.
-GOLANGCI_LINT_VERSION ?= v2.7.2
+GOLANGCI_LINT_VERSION ?= v2.12.2
 GOLANGCI_LINT = go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 lint:
@@ -53,7 +55,7 @@ vet:
 # Clean build artifacts
 clean:
 	@echo "Cleaning..."
-	rm -f aiman
+	rm -f aiman aiman-trigger aiman-gateway
 	rm -f coverage.out
 
 # Install to GOPATH/bin
