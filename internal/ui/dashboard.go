@@ -2292,7 +2292,9 @@ func (m *Model) terminateDiscardChanges(ctx context.Context, s domain.Session) e
 }
 
 func (m *Model) terminateKillTmux(ctx context.Context, s domain.Session) error {
-	if !s.IsPTY() && s.TmuxSession == "" {
+	// An ID alone is enough: TerminateSessionTerminal tears down both runtimes,
+	// because a session's recorded backend can be wrong.
+	if s.ID == "" && s.TmuxSession == "" {
 		return nil
 	}
 	remote, ok := resolveRemote(m.cfg, s)
@@ -2465,6 +2467,16 @@ func (m *Model) terminateCleanCredentials(ctx context.Context, s domain.Session)
 func (m *Model) terminateDeleteRecord(ctx context.Context, s domain.Session) error {
 	if s.ID == "" {
 		return nil
+	}
+	// serve keeps its own database and the dashboard rebuilds its list from
+	// serve's live stream, so deleting only the local row let the session
+	// reappear on the next poll. The remote is forgotten first: leaving the
+	// local row in place is what makes a failure here visible and retryable.
+	if remote, ok := resolveRemote(m.cfg, s); ok {
+		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+		if err := usecase.ForgetSessionOnRemote(ctx, mgr, s.ID); err != nil {
+			return err
+		}
 	}
 	if m.db != nil {
 		return m.db.Delete(ctx, s.ID)
