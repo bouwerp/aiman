@@ -81,6 +81,7 @@ func (m *Model) renderTerminatingPanel(ts *terminatingSession, contentW int) str
 func terminateStepLabels(forced bool) []string {
 	if forced {
 		return []string{
+			"Saving session context",
 			"Stopping mutagen sync",
 			"Discarding changes (force)",
 			"Killing tmux session",
@@ -92,6 +93,7 @@ func terminateStepLabels(forced bool) []string {
 		}
 	}
 	return []string{
+		"Saving session context",
 		"Stopping mutagen sync",
 		"Killing tmux session",
 		"Stopping agent process",

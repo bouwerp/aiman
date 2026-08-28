@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -94,6 +95,50 @@ func (m *SnapshotManager) SaveSnapshot(ctx context.Context, session *domain.Sess
 		return nil, fmt.Errorf("failed to persist snapshot: %w", err)
 	}
 
+	return snap, nil
+}
+
+// ErrNothingToSnapshot reports that the pane held nothing worth keeping. It is
+// not a failure: a session whose agent died on creation has an empty pane, and
+// recording that would only fill the snapshot table with noise.
+var ErrNothingToSnapshot = errors.New("pane is empty")
+
+// SavePaneSnapshot stores a session's pane without asking the AI to summarise
+// it: clean, gzip, persist. It exists for teardown, which has to keep the pane
+// before the terminal is killed and cannot afford to wait on a model to do it.
+//
+// The snapshot therefore carries no Summary, Overview or NextSteps, and its
+// AgentState is unknown — the archive flow (SaveSnapshot) remains the path that
+// produces those. What it does preserve is the thing that is otherwise gone for
+// good the moment the terminal dies.
+//
+// An empty pane returns ErrNothingToSnapshot and persists nothing.
+func (m *SnapshotManager) SavePaneSnapshot(ctx context.Context, session *domain.Session, rawPane string) (*domain.SessionSnapshot, error) {
+	cleaned := pane.Clean(rawPane)
+	if strings.TrimSpace(cleaned) == "" {
+		return nil, ErrNothingToSnapshot
+	}
+
+	compressed, err := compressPaneContent(cleaned)
+	if err != nil {
+		return nil, fmt.Errorf("compressing pane: %w", err)
+	}
+
+	snap := &domain.SessionSnapshot{
+		ID:           uuid.New().String(),
+		SessionID:    session.ID,
+		IssueKey:     session.IssueKey,
+		Branch:       session.Branch,
+		RepoName:     session.RepoName,
+		AgentName:    session.AgentName,
+		WorktreePath: session.WorktreePath,
+		AgentState:   domain.AgentStateUnknown,
+		PaneContent:  compressed,
+		CreatedAt:    time.Now(),
+	}
+	if err := m.db.SaveSnapshot(ctx, snap); err != nil {
+		return nil, fmt.Errorf("failed to persist snapshot: %w", err)
+	}
 	return snap, nil
 }
 

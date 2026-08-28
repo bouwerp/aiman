@@ -46,8 +46,8 @@ func TestBackgroundTerminate_ConfirmReturnsToMain(t *testing.T) {
 	if ts.forced {
 		t.Error("'y' must not force-terminate")
 	}
-	if len(ts.steps) != 7 {
-		t.Errorf("expected 7 non-forced steps, got %d", len(ts.steps))
+	if len(ts.steps) != 8 {
+		t.Errorf("expected 8 non-forced steps, got %d", len(ts.steps))
 	}
 	// Session must still be listed, marked as terminating.
 	if len(model.allSessions) != 1 {
@@ -70,8 +70,8 @@ func TestBackgroundTerminate_ForcedUsesForcedSteps(t *testing.T) {
 	if ts == nil || !ts.forced {
 		t.Fatal("expected forced termination to be tracked")
 	}
-	if len(ts.steps) != 8 {
-		t.Errorf("expected 8 forced steps, got %d", len(ts.steps))
+	if len(ts.steps) != 9 {
+		t.Errorf("expected 9 forced steps, got %d", len(ts.steps))
 	}
 }
 
@@ -149,6 +149,19 @@ type errTestType struct{}
 
 func (errTestType) Error() string { return "boom" }
 
+// stepIndex resolves a teardown step by its label. Tests used to hardcode the
+// numbers, which silently pointed at the wrong step whenever one was inserted.
+func stepIndex(t *testing.T, forced bool, label string) int {
+	t.Helper()
+	for i, l := range terminateStepLabels(forced) {
+		if l == label {
+			return i
+		}
+	}
+	t.Fatalf("no teardown step labelled %q", label)
+	return -1
+}
+
 func TestRunTerminateStep_MainRepoWorktreeIsSkippedNotFailed(t *testing.T) {
 	cfg := &config.Config{Remotes: []config.Remote{{Host: "devbox", Root: "/home/code/repos"}}}
 	model := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
@@ -160,7 +173,7 @@ func TestRunTerminateStep_MainRepoWorktreeIsSkippedNotFailed(t *testing.T) {
 		RepoName:     "confirmrdsdetails",
 	}
 
-	err := model.runTerminateStep(3, s, false)
+	err := model.runTerminateStep(stepIndex(t, false, "Removing git worktree"), s, false)
 	var skip skipReason
 	if err == nil || !errors.As(err, &skip) {
 		t.Fatalf("expected a skipReason for main-repository worktree, got %v", err)
@@ -194,5 +207,43 @@ func TestBackgroundTerminate_SafetySkipIsNotAnError(t *testing.T) {
 	}
 	if !strings.Contains(model.snapshotToast, "left in place") {
 		t.Errorf("toast should mention the skipped cleanup, got %q", model.snapshotToast)
+	}
+}
+
+// The pane is gone the moment the terminal is killed, so the context save has
+// to be the very first step of a teardown — before the kill, and before a
+// forced discard throws away the working tree it describes.
+func TestTerminateSavesContextBeforeAnythingDestructive(t *testing.T) {
+	for _, forced := range []bool{false, true} {
+		labels := terminateStepLabels(forced)
+		if labels[0] != "Saving session context" {
+			t.Errorf("forced=%v: context save must be first, got %q", forced, labels[0])
+		}
+		save := stepIndex(t, forced, "Saving session context")
+		for _, destructive := range []string{"Killing tmux session", "Removing git worktree"} {
+			if save > stepIndex(t, forced, destructive) {
+				t.Errorf("forced=%v: context save runs after %q", forced, destructive)
+			}
+		}
+		if forced && save > stepIndex(t, forced, "Discarding changes (force)") {
+			t.Error("context save runs after the forced discard")
+		}
+	}
+}
+
+// A session being torn down is one the user has already finished with, so an
+// unreadable pane must never be the reason it cannot be removed.
+func TestTerminateSaveContextSkipsWhenTheRemoteIsUnknown(t *testing.T) {
+	cfg := &config.Config{Remotes: []config.Remote{{Host: "devbox", Root: "/home/code/repos"}}}
+	model := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	s := domain.Session{ID: "sess-3", RemoteHost: "gone", TmuxSession: "t"}
+
+	err := model.runTerminateStep(stepIndex(t, false, "Saving session context"), s, false)
+	var skip skipReason
+	if err == nil || !errors.As(err, &skip) {
+		t.Fatalf("expected a skipReason, got %v", err)
+	}
+	if !strings.Contains(string(skip), "no context saved") {
+		t.Errorf("skip reason should say the context was not saved, got %q", skip)
 	}
 }
