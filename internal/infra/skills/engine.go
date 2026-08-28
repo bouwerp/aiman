@@ -173,14 +173,6 @@ func ensureFlag(cmd, flag string) string {
 	return fmt.Sprintf("%s %s", cmd, flag)
 }
 
-func ensureConfigOverride(cmd, key, value string) string {
-	needle := key + "="
-	if strings.Contains(cmd, needle) {
-		return cmd
-	}
-	return fmt.Sprintf("%s -c %s=%s", cmd, key, value)
-}
-
 func buildSessionPrompt(files []string) string {
 	switch len(files) {
 	case 0:

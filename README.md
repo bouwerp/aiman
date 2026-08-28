@@ -403,6 +403,17 @@ By hand, the same thing:
 ssh myremote aiman session create --repo myrepo --branch WTB-123-thing --agent claude --prompt "..."
 ```
 
+Worktrees go under the same git root serve itself uses (`git.root`, else
+`$HOME/repos`, else `$HOME`). A caller's own worktree parent takes precedence so
+a child session lands beside its parent, but a worktree sitting directly in
+`$HOME` is never treated as a registry — otherwise one misplaced worktree gets
+inherited by every session created from it.
+
+Agents that ask "do you trust this directory?" on first run in a new worktree
+are answered with Return (the default is always "yes") before the initial prompt
+is typed. Without that the prompt lands in the dialog, which reads it as menu
+input and quits the agent.
+
 ### Fitting the preview
 
 Terminal text cannot be scaled, so the only way to make a session fit the preview

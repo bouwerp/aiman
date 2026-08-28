@@ -30,6 +30,30 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
+### Agent-created sessions died in a workspace-trust dialog ✅
+Every session an in-pane agent created through `aiman session create` came up
+dead: `exit=0`, an empty pane, the worktree untouched. Three faults compounded.
+
+- `createGitRoot` (`internal/server/create_root.go`) took the caller's worktree
+  parent as the registry root, so one worktree that had landed directly in
+  `$HOME` was inherited by every session created from it, and by every session
+  created from those in turn — worktrees kept appearing as `$HOME/<repo>@<branch>`
+  instead of under the configured serve git root. A worktree sitting in `$HOME`
+  is now never read as evidence of a registry, in the caller *or* in the majority
+  vote, so the answer falls back to `config.ServeGitRoot` (`$HOME/repos`).
+- A worktree outside the trusted root put the agent in a directory it had not
+  been trusted for, and codex answers that with a first-run trust dialog. The
+  dialog is a select list: `DeliverInitialPromptPTY` typed the initial prompt
+  straight into it, which selected "No, quit" and exited the agent cleanly. The
+  PTY path now clears the dialog with Return before typing anything, mirroring
+  what `sendKeysScript` already did for agy on the tmux path — and it runs even
+  when there is no prompt, so an ad-hoc session is not left parked on a menu.
+- `agenthook.ApplyReport` latched `AgentEnded` on and never cleared it. Claude
+  Code fires `SessionEnd` for reasons that do not stop the process (`/clear`,
+  `/compact`), so a session the user was still working in rendered as "exited"
+  for the rest of its life. Any later report carrying a lifecycle state now
+  retracts the end; identity-only and out-of-order reports still do not.
+
 ### Restart/recovery robustness ✅
 Restarting a session could leave a pane that only *looked* dead: both create and
 restart append `; exec bash -i` after the agent command so a crashed process

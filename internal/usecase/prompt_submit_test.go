@@ -27,9 +27,11 @@ func assertSubmits(t *testing.T, what, cmd string) {
 	}
 	// Return must be a separate write after a pause: an agent TUI that reads the
 	// text and the Return together treats it as a paste and inserts a newline.
-	keyAt := strings.Index(cmd, "--key enter")
-	sleepAt := strings.Index(cmd, "sleep 1")
-	if sleepAt < 0 || sleepAt > keyAt {
+	// The submitting Return is the last one — an earlier one may belong to the
+	// workspace-trust dialog the script clears first.
+	keyAt := strings.LastIndex(cmd, "--key enter")
+	sleepAt := strings.LastIndex(cmd[:keyAt], "sleep 1")
+	if sleepAt < 0 {
 		t.Errorf("%s should pause before pressing Return: %s", what, cmd)
 	}
 }
