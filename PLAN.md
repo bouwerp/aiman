@@ -30,6 +30,41 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
+### Child sessions were invisible, unkillable, and could miss a prompt ✅
+Three faults around sessions an in-pane agent creates under another session.
+
+- **Nothing marked a parent.** `item.hasChildren` was computed and used to drive
+  the collapse key, but never rendered — so a session with its own agents looked
+  exactly like one without, and a collapsed parent hid its subtree with no hint.
+  Rows now carry `▾N`/`▸N`, matching the group header's glyph. The count is every
+  descendant, because that is what a collapsed row is hiding.
+- **Terminate ignored children.** `ctrl+k` tore down one session and orphaned the
+  rest. The confirm dialog now offers `[c]` to also terminate them, off by
+  default — destroying a subtree must be deliberate. Children go first, deepest
+  first, since the parent's teardown removes the record they hang off. Sessions
+  already terminating are skipped rather than registered twice.
+- **A shared worktree could be deleted from under a live session.** Children
+  usually work in their parent's tree, so "also terminate children" made this
+  likely rather than theoretical. `terminateRemoveWorktree` now skips a path
+  another surviving session still uses, and names it.
+
+### Prompts landed in the composer without being submitted ✅
+A prompt sent to a codex session appeared fully typed in its input box and was
+never sent. `SendPTYFile` typed the text, paused a second and pressed Return
+once — but agents drop input while mid-render or still booting, so a single
+Return is not reliable.
+
+Reproduced on a fresh codex session: sending "Reply with exactly the word
+ACKNOWLEDGED…" while codex was still booting an MCP server left "with exactly
+the word ACKNOWLEDGED…" in the composer — the leading word was swallowed
+outright. The same race eats the Return instead when it lands differently.
+
+`SendPTYFileConfirmed` now checks the composer actually drained, using a tail of
+the prompt as the marker (agents wrap and scroll a long prompt, so the head goes
+off screen while the end sits on the composer line), and presses Return again if
+it did not — up to three attempts. An empty marker or an unreadable pane skips
+the check rather than failing a delivery that may well have worked.
+
 ### Child sessions previewed as "Loading…" forever ✅
 A session created by an in-pane agent nested correctly under its parent but its
 pane never appeared. `SessionInfo` — the shape `session.list` and the live event

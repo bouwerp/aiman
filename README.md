@@ -269,6 +269,11 @@ Ad-hoc sessions still get their own tmux session, mutagen sync, and AWS credenti
 
 Press `Ctrl+K` from the dashboard, then confirm with `y`.
 
+When the session has children of its own, the dialog offers `[c]` to terminate
+them too. It is off by default. Left alone, children keep running with no
+parent; taken along, they are torn down first, deepest first. A worktree shared
+with a session that is staying is never removed.
+
 Before termination runs, Aiman checks the session worktree and blocks termination when:
 - there are uncommitted tracked changes, or
 - the current branch has commits not pushed to its upstream (or has no upstream yet).
@@ -292,6 +297,13 @@ Press `Ctrl+A` on a selected session. Aiman will:
 4. Send to the AI model for a **long summary** (overview + action items) and a **short summary**
 5. Compress the cleaned content (gzip)
 6. Show a preview — press `Enter` to save, `ESC` to discard, `d` to dump raw/cleaned content to `/tmp/`
+
+### Session tree
+
+Sessions an agent creates through `aiman session create` nest under the session
+that created them. A parent row carries `▾N` (or `▸N` when collapsed) after its
+name, where N counts every descendant — press space on the row to fold the
+subtree away.
 
 ### Browsing Archived Sessions
 
