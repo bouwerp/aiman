@@ -221,6 +221,9 @@ func SendPTYFile(ctx context.Context, remote TerminalExecutor, id, remotePath st
 // KillPTYSession stops and removes a remote PTY session. Kill errors when the
 // session already exited, which is treated as success.
 func KillPTYSession(ctx context.Context, remote TerminalExecutor, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
 	_, _ = remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty kill %q", id))
 	_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty forget %q", id))
 	if err != nil && !strings.Contains(err.Error(), "not_found") && !strings.Contains(err.Error(), "has exited") {
@@ -325,8 +328,18 @@ func SendSessionPrompt(ctx context.Context, remote TerminalExecutor, s domain.Se
 // TerminateSessionTerminal stops the session's terminal process without
 // touching its worktree.
 func TerminateSessionTerminal(ctx context.Context, remote TerminalExecutor, s domain.Session) error {
-	if s.IsPTY() {
-		return KillPTYSession(ctx, remote, terminalID(s))
+	// Both runtimes are torn down regardless of the recorded backend, because
+	// the record is not reliable: a session created by an in-pane agent runs
+	// under the PTY runtime but reaches the dashboard through discovery and the
+	// live stream, neither of which carries Backend — so it reads as tmux and
+	// only tmux was killed, leaving the holder's directory behind and the
+	// session listed forever. Each teardown is a no-op when its runtime holds
+	// nothing under this handle.
+	if err := KillPTYSession(ctx, remote, terminalID(s)); err != nil {
+		return err
+	}
+	if strings.TrimSpace(s.TmuxSession) == "" {
+		return nil
 	}
 	_, err := remote.Execute(ctx, fmt.Sprintf("tmux kill-session -t %q 2>/dev/null || true", s.TmuxSession))
 	return err

@@ -318,8 +318,38 @@ func TestTerminateSessionTerminalRoutesByBackend(t *testing.T) {
 	if err := TerminateSessionTerminal(ctx, r, tmux); err != nil {
 		t.Fatalf("tmux terminate: %v", err)
 	}
-	if !strings.Contains(r.commands[0], "tmux kill-session") {
-		t.Fatalf("tmux terminate wrong: %s", r.commands[0])
+	if !strings.Contains(strings.Join(r.commands, "\n"), "tmux kill-session") {
+		t.Fatalf("tmux terminate wrong: %s", r.commands)
+	}
+}
+
+// A session created by an in-pane agent runs under the PTY runtime but reaches
+// the dashboard through discovery and the live stream, neither of which carries
+// Backend — so it reads as tmux. Killing only tmux left the holder's directory
+// behind and the session listed forever.
+func TestTerminateSessionTerminalTearsDownBothRuntimes(t *testing.T) {
+	r := &terminalRemote{}
+	mislabelled := domain.Session{ID: "sid", TmuxSession: "review-codex-dbsync", Backend: domain.BackendTmux}
+	if err := TerminateSessionTerminal(context.Background(), r, mislabelled); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	joined := strings.Join(r.commands, "\n")
+	for _, want := range []string{"aiman pty kill", "aiman pty forget", "tmux kill-session"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("teardown never ran %q: %s", want, joined)
+		}
+	}
+}
+
+// Terminating a discovered session with no id must not shell out to the PTY
+// runtime with an empty handle.
+func TestTerminateSessionTerminalSkipsPTYWithoutAnID(t *testing.T) {
+	r := &terminalRemote{}
+	if err := TerminateSessionTerminal(context.Background(), r, domain.Session{TmuxSession: "WTB-1"}); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	if strings.Contains(strings.Join(r.commands, "\n"), "aiman pty") {
+		t.Errorf("no id should mean no pty call: %s", r.commands)
 	}
 }
 

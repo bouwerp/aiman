@@ -93,6 +93,36 @@ func CreateSessionOnRemote(ctx context.Context, remote TerminalExecutor, spec Re
 	return parseRemoteCreateResult(out)
 }
 
+// ForgetSessionOnRemote removes the session from the remote serve's own
+// database, and drops whatever its PTY runtime still holds for it.
+//
+// The dashboard deletes its local row on teardown, but serve keeps a separate
+// database and the dashboard rebuilds its list from serve's live stream — so
+// without this a terminated session reappeared on the next poll and ctrl+k
+// looked like it had done nothing.
+//
+// Best-effort by design: a remote with no serve running, or one too old to know
+// the method, must not fail a teardown that has already killed the terminal.
+func ForgetSessionOnRemote(ctx context.Context, remote TerminalExecutor, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman session forget %q", sessionID))
+	if err == nil {
+		return nil
+	}
+	// "not found" is the goal state, and a remote without serve cannot be
+	// holding the row in the first place.
+	combined := strings.ToLower(strings.TrimSpace(out) + " " + err.Error())
+	for _, benign := range []string{"not_found", "server_not_running", "unknown method", "command not found"} {
+		if strings.Contains(combined, benign) {
+			return nil
+		}
+	}
+	return fmt.Errorf("remote forget: %s: %w", strings.TrimSpace(out), err)
+}
+
 // remoteCreateResult is the shape session.create answers with.
 type remoteCreateResult struct {
 	Result struct {

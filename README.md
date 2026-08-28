@@ -566,7 +566,7 @@ are thin clients over these; an agent can also speak the JSON directly.
 
 | Group | Methods |
 |---|---|
-| Sessions | `session.list`, `session.get`, `session.read`, `session.prompt`, `session.wait`, `session.create`, `session.rename`, `session.move` |
+| Sessions | `session.list`, `session.get`, `session.read`, `session.prompt`, `session.wait`, `session.create`, `session.rename`, `session.move`, `session.forget` |
 | PTY runtime | `pty.list`, `pty.get`, `pty.create`, `pty.input`, `pty.run`, `pty.wait-output`, `pty.capture`, `pty.resize`, `pty.kill`, `pty.forget` |
 | Live activity | `session.events` (streaming; takes over the connection like `pty.attach`) |
 | Shared context | `context.list`, `context.find`, `context.get`, `context.put`, `context.pack`, `context.stats` |
@@ -590,11 +590,18 @@ aiman session create --repo owner/repo --branch NAME --agent claude \
 aiman session create --quick --agent claude [--name NAME] [--orphan]
 aiman session rename <target> NEW-NAME
 aiman session move <target> --group GROUP
+aiman session forget <target>
 aiman session prompt <target> TEXT [--wait] [--until STATE] [--timeout 120s] [--force]
 aiman session wait <target> [--until idle|working|waiting_input|waiting_background|blocked] [--timeout 120s]
 aiman session read <target> [--lines 120]
 aiman session report-agent-session --from-stdin
 ```
+
+`forget` drops the session from serve's database and from its PTY runtime. It is
+what the dashboard's teardown calls: serve keeps its own database and the
+dashboard rebuilds its list from serve's live stream, so deleting only the
+dashboard's row let a terminated session reappear on the next poll. It does not
+touch the worktree or the branch.
 
 ### `aiman phone`
 

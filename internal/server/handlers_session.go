@@ -688,6 +688,38 @@ func (s *Server) handleRename(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "session", "session": info}}
 }
 
+// handleForget removes a session from this host's database and drops whatever
+// the PTY runtime still holds for it.
+//
+// Teardown runs from the dashboard, which deletes its own row — but serve keeps
+// its own database, and the dashboard rebuilds its list from serve's live
+// stream. Without this the row came straight back on the next poll, so a
+// terminated session was unkillable from the UI: ctrl+k appeared to do nothing.
+//
+// Forgetting is deliberately independent of whether the terminal is still
+// alive. The caller has already torn it down, and refusing to forget a session
+// whose holder outlived the kill would put the row right back out of reach.
+func (s *Server) handleForget(ctx context.Context, req Request) Response {
+	sess, fail, ok := s.resolveReq(ctx, req)
+	if !ok {
+		return fail
+	}
+	if s.pty != nil {
+		_ = s.pty.Kill(sess.ID)
+		_ = s.pty.Forget(sess.ID)
+	}
+	if s.repo != nil {
+		if err := s.repo.Delete(ctx, sess.ID); err != nil {
+			return errResp(req.ID, CodeInvalidParams, err.Error())
+		}
+	}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type": "session_forgotten",
+		"id":   sess.ID,
+		"name": sess.Name,
+	}}
+}
+
 func (s *Server) handleMove(ctx context.Context, req Request) Response {
 	sess, fail, ok := s.resolveReq(ctx, req)
 	if !ok {

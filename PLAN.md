@@ -30,6 +30,26 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
+### Terminated sessions came straight back ✅
+`ctrl+k` ran the whole teardown and the session was still in the list on the next
+poll. Two faults, both from the dashboard treating its own database as the only
+record.
+
+- `terminateDeleteRecord` deleted the local row only. serve keeps its own
+  database on the remote and the dashboard rebuilds its list from serve's live
+  stream, so the row came back within seconds. There was no way to remove it:
+  the protocol had no delete. New `session.forget` (`aiman session forget
+  <target>`) drops the row and whatever the PTY runtime still holds, and
+  teardown calls it *before* deleting locally — leaving the local row in place is
+  what makes a failure visible and retryable. Best-effort against a remote with
+  no serve, or one too old to know the method.
+- `TerminateSessionTerminal` routed on `Session.Backend`, which is not reliable:
+  a session created by an in-pane agent runs under the PTY runtime but reaches
+  the dashboard through discovery and the live stream, neither of which carries
+  `Backend` — so it read as tmux and only tmux was killed, leaving the holder's
+  directory behind. Both runtimes are now torn down regardless of the record;
+  each is a no-op when its runtime holds nothing under that handle.
+
 ### Agent-created sessions died in a workspace-trust dialog ✅
 Every session an in-pane agent created through `aiman session create` came up
 dead: `exit=0`, an empty pane, the worktree untouched. Three faults compounded.

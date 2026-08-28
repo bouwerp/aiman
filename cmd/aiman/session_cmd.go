@@ -69,7 +69,7 @@ func writeCLIError(code, msg string) {
 
 func runSession(args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|prompt|wait|read|report-agent-session> …\n")
+		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|prompt|wait|read|report-agent-session> …\n")
 		fmt.Fprintf(os.Stderr, "Are you an AI? Run: aiman --skill\n")
 		return errUsage
 	}
@@ -177,6 +177,12 @@ func runSession(args []string) error {
 			return errUsage
 		}
 		return callAndPrint(sock, "session.rename", map[string]any{"id": args[1], "name": args[2]})
+	case "forget":
+		if len(args) < 2 {
+			writeCLIError(server.CodeInvalidParams, "session forget requires a target")
+			return errUsage
+		}
+		return callAndPrint(sock, "session.forget", map[string]any{"id": args[1]})
 	case "move":
 		flags, rest := takeFlags(args[1:])
 		target := ""

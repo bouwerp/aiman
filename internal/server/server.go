@@ -133,6 +133,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleRename(ctx, req)
 	case "session.move":
 		return s.handleMove(ctx, req)
+	case "session.forget":
+		return s.handleForget(ctx, req)
 	case "session.report_agent_session":
 		return s.handleReportAgentSession(ctx, req)
 	case "context.put":
