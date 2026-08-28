@@ -283,6 +283,7 @@ func sessionFromInfo(host string, info server.SessionInfo) domain.Session {
 		RepoName:         info.RepoName,
 		RemoteHost:       host,
 		TmuxSession:      info.TmuxSession,
+		Backend:          info.Backend,
 		WorktreePath:     info.WorktreePath,
 		WorkingDirectory: info.WorkingDirectory,
 		AgentName:        info.AgentName,

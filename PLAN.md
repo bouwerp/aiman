@@ -30,6 +30,26 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
+### Child sessions previewed as "Loading…" forever ✅
+A session created by an in-pane agent nested correctly under its parent but its
+pane never appeared. `SessionInfo` — the shape `session.list` and the live event
+stream answer with — had no `Backend` field, so every session that reached the
+dashboard that way arrived with an empty backend. sqlite normalises empty to
+`tmux` on save, which made the wrong value stick, and `CaptureSessionPane`
+routes on it: the dashboard asked tmux for a session living in the PTY runtime
+and got `can't find pane` on every tick.
+
+serve already knew the answer — `mergeLiveSessions` reconciles stored rows
+against the running PTY runtime — it just never sent it. `Backend` now travels
+on the wire and `sessionFromInfo` keeps it.
+
+The reason it showed as a permanent placeholder rather than an error is separate:
+`applyTmuxOutput` treats `can't find pane` as transient and returns without
+touching the viewport. That is right while a session restarts, but only when
+there is a previous pane worth holding — with nothing loaded, the placeholder is
+all the user ever sees. A transient failure now surfaces unless real output is
+already on screen.
+
 ### Terminating a session keeps its pane ✅
 `ctrl+k` went straight from stopping the sync to killing the terminal, so the
 transcript was destroyed unread — the machinery to keep it already existed and

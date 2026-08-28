@@ -4133,6 +4133,13 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 	return m.forwardToFocused(msg, cmds)
 }
 
+// hasLoadedPane reports whether the preview is showing real captured output, as
+// opposed to the placeholder it starts on or nothing at all.
+func (m *Model) hasLoadedPane() bool {
+	out := strings.TrimSpace(m.tmuxOutput)
+	return out != "" && out != "Loading..."
+}
+
 func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	if msg.session == m.activeSession {
 		if msg.err != nil {
@@ -4142,7 +4149,12 @@ func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, t
 			isTransient := strings.Contains(errStr, "can't find pane") ||
 				strings.Contains(errStr, "no server running") ||
 				strings.Contains(errStr, "failed to connect to server")
-			if isTransient {
+			// Swallowing one only makes sense when there is a previous pane worth
+			// holding on screen. With nothing loaded yet the placeholder is all the
+			// user ever sees, and a session pointed at the wrong backend fails this
+			// way on every tick — so the preview sat at "Loading…" forever with no
+			// hint that anything was wrong.
+			if isTransient && m.hasLoadedPane() {
 				return m.forwardToFocused(msg, cmds)
 			}
 			// Non-transient errors are shown in the viewport.
