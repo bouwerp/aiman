@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -301,7 +302,7 @@ func TestDetachReaderPassesThroughSGRWheel(t *testing.T) {
 	d := detachOnCtrlQ(newChunkReader(wheel), rec)
 	buf := make([]byte, 32)
 	n, err := d.Read(buf)
-	if err != nil || string(buf[:n]) != string(wheel) || d.Detached() {
+	if err != nil || !bytes.Equal(buf[:n], wheel) || d.Detached() {
 		t.Fatalf("wheel must reach the agent, got %q err=%v detached=%v", buf[:n], err, d.Detached())
 	}
 }

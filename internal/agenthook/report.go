@@ -195,6 +195,14 @@ func ApplyReport(s *domain.Session, r Report, now time.Time) {
 	if r.Seq > 0 && s.HookStateSeq > 0 && r.Seq < s.HookStateSeq {
 		return
 	}
+	if !r.Ended {
+		// A live report retracts an earlier end. SessionEnd fires for reasons that
+		// do not stop the process — Claude Code emits it on /clear and on
+		// /compact — and AgentEnded was a one-way latch, so a session the user was
+		// still working in kept rendering as "exited" for the rest of its life.
+		// Any later report carrying a lifecycle state is proof the agent is alive.
+		s.AgentEnded = false
+	}
 	s.HookState = r.State
 	s.HookStateSource = r.Source
 	s.HookStateMessage = r.Message

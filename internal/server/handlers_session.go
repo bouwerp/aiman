@@ -632,7 +632,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if found, ok := resolveSession(existing, req.Caller); ok {
 		caller = &found
 	}
-	if root := createGitRoot(caller, existing); root != "" {
+	if root := createGitRoot(caller, existing, hostHome()); root != "" {
 		cfg.SSHManager = local.NewExecutor(root)
 	}
 	sess, err := s.create.CreateSession(ctx, cfg)

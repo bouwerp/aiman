@@ -63,3 +63,51 @@ func TestResolveHookStateTTL(t *testing.T) {
 		t.Fatal("ended")
 	}
 }
+
+// SessionEnd fires for reasons that do not stop the agent — Claude Code emits it
+// on /clear and on /compact — so the flag has to be retractable. It used to
+// latch, and a session the user was still working in rendered as "exited" for
+// the rest of its life.
+func TestApplyReportClearsEndedOnALaterLiveReport(t *testing.T) {
+	now := time.Now()
+	s := &domain.Session{}
+	ApplyReport(s, Report{Ended: true, Seq: 1}, now)
+	if !s.AgentEnded {
+		t.Fatal("SessionEnd should mark the session ended")
+	}
+	ApplyReport(s, Report{
+		State:  domain.AgentStateIdle,
+		Source: SourceIdlePrompt,
+		Seq:    2,
+	}, now)
+	if s.AgentEnded {
+		t.Error("a later live report must retract the end")
+	}
+	if st, ok := ResolveHookState(*s, now); !ok || st != domain.AgentStateIdle {
+		t.Errorf("got %q ok=%v, want the live idle state", st, ok)
+	}
+}
+
+// An identity-only report says nothing about the lifecycle, so it must not
+// resurrect a session that really did end.
+func TestApplyReportKeepsEndedForIdentityOnlyReports(t *testing.T) {
+	now := time.Now()
+	s := &domain.Session{}
+	ApplyReport(s, Report{Ended: true, Seq: 1}, now)
+	ApplyReport(s, Report{Native: Native{ID: "abc"}, Seq: 2}, now)
+	if !s.AgentEnded {
+		t.Error("an identity-only report must not clear AgentEnded")
+	}
+}
+
+// A stale report loses to the seq check before it can retract anything.
+func TestApplyReportIgnoresAnOutOfOrderLiveReport(t *testing.T) {
+	now := time.Now()
+	s := &domain.Session{}
+	ApplyReport(s, Report{State: domain.AgentStateWorking, Seq: 5}, now)
+	ApplyReport(s, Report{Ended: true, State: domain.AgentStateIdle, Seq: 6}, now)
+	ApplyReport(s, Report{State: domain.AgentStateWorking, Seq: 4}, now)
+	if !s.AgentEnded {
+		t.Error("an out-of-order report must not retract the end")
+	}
+}

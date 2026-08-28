@@ -623,32 +623,75 @@ func tmuxEnvFlags(env map[string]string) string {
 	return b.String()
 }
 
-// DeliverInitialPromptPTY sends the initial prompt to a freshly-created PTY
-// session: write the prompt remotely, type it through `aiman pty input`, then
-// press Enter. Fire-and-forget like the tmux path.
+// workspaceTrustRe matches the first-run "do you trust this directory" dialog
+// every agent puts up before it will read a project. Codex phrases it "Do you
+// trust the contents of this directory?", agy "Do you trust this folder?".
+const workspaceTrustRe = `[Dd]o you trust|[Tt]rust this folder|[Tt]rust the contents`
+
+// acceptWorkspaceTrustPTY is the shell fragment that clears a workspace-trust
+// dialog before anything is typed at the agent.
+//
+// The dialog is a select list, not a text field: characters it does not
+// recognise are treated as menu input, and a prompt typed into it selects "No,
+// quit" and kills the agent — exit 0, empty pane, no worktree touched. Enter
+// takes the highlighted default, which is "Yes, continue" in every agent that
+// asks.
+//
+// It polls rather than sleeping a fixed time because the dialog only appears
+// once the agent has finished booting, and gives up silently: an agent that
+// never asks must not have its prompt delayed by the full budget.
+func acceptWorkspaceTrustPTY(sessionID string) string {
+	return fmt.Sprintf(
+		"attempt=0; "+
+			"while [ $attempt -lt 10 ]; do "+
+			"pane=$(aiman pty capture %[1]q --lines 0 2>/dev/null || true); "+
+			"if printf '%%s' \"$pane\" | grep -qE %[2]q; then "+
+			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 3; break; "+
+			"fi; "+
+			"attempt=$((attempt+1)); sleep 1; "+
+			"done; ",
+		strings.TrimSpace(sessionID), workspaceTrustRe,
+	)
+}
+
+// DeliverInitialPromptPTY clears any workspace-trust dialog, then sends the
+// initial prompt to a freshly-created PTY session: write the prompt remotely,
+// type it through `aiman pty input`, then press Enter. Fire-and-forget like the
+// tmux path.
+//
+// The trust step runs even when there is no prompt to deliver, because an
+// unanswered dialog leaves the agent blocked on a menu instead of ready for
+// work.
+//
 // It takes the same narrow promptDeliverer as the tmux path: writing a file and
 // running a command is all delivery needs, and the wide executor made this
 // untestable.
 func DeliverInitialPromptPTY(ctx context.Context, remote promptDeliverer, sessionID, prompt string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
 	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return
+	promptPath := ""
+	if prompt != "" {
+		promptPath = fmt.Sprintf("/tmp/aiman-prompt-%s", sessionID)
+		if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
+			promptPath = "" // cannot deliver the prompt, but still clear the dialog
+		}
 	}
-	promptPath := fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
-	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
-		return
+	script := `export PATH="$HOME/.local/bin:$PATH"; sleep 3; ` + acceptWorkspaceTrustPTY(sessionID)
+	if promptPath != "" {
+		// Return goes in a second call, via --enter. `--data "\r"` was typing the
+		// two literal characters backslash and r into the agent's input box: POSIX
+		// shell does not interpret that escape inside double quotes. Keeping it a
+		// separate write after a pause also matters on its own — an agent TUI that
+		// receives text and Return in one read treats the lot as a paste and inserts
+		// a newline instead of submitting.
+		script += fmt.Sprintf(
+			`aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --key enter >/dev/null 2>&1; rm -f %q`,
+			sessionID, promptPath, sessionID, promptPath,
+		)
 	}
-	// Return goes in a second call, via --enter. `--data "\r"` was typing the
-	// two literal characters backslash and r into the agent's input box: POSIX
-	// shell does not interpret that escape inside double quotes. Keeping it a
-	// separate write after a pause also matters on its own — an agent TUI that
-	// receives text and Return in one read treats the lot as a paste and inserts
-	// a newline instead of submitting.
-	script := fmt.Sprintf(
-		`export PATH="$HOME/.local/bin:$PATH"; `+
-			`sleep 3; aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --key enter >/dev/null 2>&1; rm -f %q`,
-		strings.TrimSpace(sessionID), promptPath, strings.TrimSpace(sessionID), promptPath,
-	)
 	_, _ = remote.Execute(ctx, detachCommand(script))
 }
 
