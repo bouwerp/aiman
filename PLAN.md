@@ -30,6 +30,33 @@
 - **Mutagen Sync Recovery**: Recreate sync for a selected session from the dashboard.
 - **Git Intelligence**: Real-time git status and PR tracking integrated into the dashboard.
 
+### Three fixes salvaged from an unmerged branch ✅
+`restartwithagentisbroken` was never opened as a PR and never merged. Three of
+its changes were still absent from main and still correct.
+
+- **Shared context was appended after the task.** `InjectSharedContext` returned
+  `joinPrompt(prompt, ContextPackPrompt)`, so an agent read "do this task" before
+  "there are notes from earlier sessions". Agents act on the first instruction
+  and treat the rest as detail, which defeats the point of writing the notes.
+  Reversed.
+- **agy was launched asking for two efforts at once.** Every model in
+  `agyCatalog` carries its reasoning effort in the name — `gemini-3.7-flash-low`,
+  `gpt-oss-120b-medium` — and the catalog also sets `EffortFlag: "--effort"`, so
+  a configured effort was appended on top of a model that already had one.
+  `effortIsBakedIntoModel` now suppresses the flag for agy when the model name
+  ends in an effort suffix; every other agent is untouched.
+- **Restarting under a different agent kept the old agent's identity.** The
+  session's native session id, transcript path, title and hook state all
+  survived the switch, and a latched `AgentEnded` would have rendered the fresh
+  session as already exited. `adoptRestartAgent` clears them when the agent
+  changes and keeps them when it does not, because a same-agent restart is a
+  resume. Extracted from the handler so the rule is testable rather than
+  duplicated in a test.
+
+The other eleven stale branches were verified as already landed (ten via
+squash-merged PRs, and `fix/persist-groups-across-discovery`'s content reached
+main through `overlayPersistedSessionFields`) and deleted.
+
 ### Attaching to codex could not scroll at all ✅
 `attachOpen` asserted a fixed policy on the attaching terminal: enter the
 alternate screen, then turn on SGR mouse reporting. That is right for a

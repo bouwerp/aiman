@@ -7347,7 +7347,7 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 		m.priorSnapshotCandidate = nil
 		m.sessionCfg.PriorSnapshot = nil
 		if m.restartingSession != nil && m.sessionCfg.Agent != nil {
-			m.restartingSession.AgentName = m.sessionCfg.Agent.Name
+			adoptRestartAgent(m.restartingSession, m.sessionCfg.Agent.Name)
 		}
 		return m, m.startBackgroundRestart()
 	}

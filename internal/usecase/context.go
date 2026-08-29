@@ -73,7 +73,11 @@ func InjectSharedContext(ctx context.Context, remote contextRemote, worktreePath
 	if err := contextstore.WriteSessionPack(ctx, remote, worktreePath, pack); err != nil {
 		return prompt
 	}
-	return joinPrompt(prompt, ContextPackPrompt)
+	// Context first, task second. Agents act on the first instruction they read
+	// and treat what follows as detail, so a task ahead of the pointer to earlier
+	// notes gets started before the notes are opened — which is the whole point
+	// of writing them.
+	return joinPrompt(ContextPackPrompt, prompt)
 }
 
 func PutSnapshotContext(ctx context.Context, remote contextRemote, snap *domain.SessionSnapshot, group string) error {
