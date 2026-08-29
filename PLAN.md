@@ -1016,5 +1016,33 @@ write onto the rendered frame.
     - Collapsible dev console panel to view logs and debug output in-app (toggle with backtick key).
 - [x] **Phone gateway (`aiman-gateway`)**: HTTP/WebSocket proxy to the agent API unix socket over Tailscale tsnet. Bearer token plus WhoIs on the tailnet path; Funnel opt-in. Separate binary so `cmd/aiman` does not import `tailscale.com`. Lifecycle is a third `remotesvc.Kind`. Phone contract is `api/openapi.yaml`. Expo push (`push.register` / `push.unregister`) lives in the gateway, not serve.
 
+## 3b. Competitive Roadmap — the terminal front 🎯
+
+[herdr](https://github.com/ogulcancelik/herdr) occupies the same architecture as
+aiman's PTY backend: a session server owning PTYs, a thin TUI client, agent
+state in a sidebar, a socket API for agents to drive each other. It is a single
+Rust binary, ~19k stars, workspaces/tabs/panes, 15+ agents.
+
+The decision is to compete on the terminal as well as the workflow. Full detail
+and checklists live in README.md under Roadmap; the ordering rationale is:
+
+1. **Local mode first.** aiman cannot start without a remote, an SSH host and
+   `aiman serve` installed there, which is the entire adoption gap against a
+   single binary. `local.Executor` already satisfies the executor interfaces
+   `ssh.Manager` does — serve uses it — so the work is wiring, not design. It
+   also removes the remote-box dependency from CI, which is what phase 2 needs.
+2. **Then make the PTY layer boring.** Every release from v0.19.23 to v0.19.28
+   was a fix in this layer. Building panes on top of a layer that drops Returns
+   is worse than not building them. Wanted: a conformance harness driving a
+   scripted TUI under a real PTY (alt screen, mouse, kitty keyboard, bracketed
+   paste, first-run modal), with every fix from those releases as a case.
+3. **Then panes, tabs and spaces.** Composed *above* the holder, never inside
+   it: the holder's value is owning exactly one PTY and being otherwise dumb.
+   `ptyruntime/render.go` and `screen.go` are already the hard half.
+
+The differentiator to press on their own ground is `agenthook`: reported agent
+state beats inferred agent state, and it cannot be copied without the same
+per-agent integration work.
+
 ## 4. Architectural Strategy (Reminder)
 Keep following the **Clean Architecture** pattern. Ensure that the `internal/usecase` layer remains the only place where domain entities are coordinated, and keep infrastructure-specific logic (like `mutagen` or `ssh` CLI flags) strictly within `internal/infra`.
