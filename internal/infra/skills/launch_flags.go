@@ -26,6 +26,9 @@ func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
 	if effort == "" {
 		return cmd
 	}
+	if effortIsBakedIntoModel(base, resolvedModel(cmd, model)) {
+		return cmd
+	}
 	cat := agent.LaunchCatalogFor(base)
 	if !cat.SupportsEffort() {
 		return cmd
@@ -41,6 +44,43 @@ func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
 		cmd = ensureKeyedFlag(cmd, cat.EffortFlag, effort)
 	}
 	return cmd
+}
+
+// resolvedModel is the model the command will actually run with: the configured
+// default when there is one, otherwise whatever --model the command already
+// carries.
+func resolvedModel(cmd, configured string) string {
+	if configured != "" {
+		return configured
+	}
+	const flag = "--model "
+	idx := strings.Index(cmd, flag)
+	if idx < 0 {
+		return ""
+	}
+	fields := strings.Fields(cmd[idx+len(flag):])
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// effortIsBakedIntoModel reports whether the model name already carries the
+// reasoning effort, making a separate effort flag a contradiction.
+//
+// agy names its models that way — gemini-3.7-flash-low, gpt-oss-120b-medium —
+// while also accepting --effort, so a session configured with both was launched
+// asking for two different efforts at once.
+func effortIsBakedIntoModel(base, model string) bool {
+	if base != "agy" && base != "antigravity" {
+		return false
+	}
+	for _, suffix := range []string{"-low", "-medium", "-high"} {
+		if strings.HasSuffix(model, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // withCodexInteractiveFlags is the flag set a PTY/tmux Codex session needs so
