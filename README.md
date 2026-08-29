@@ -1092,17 +1092,104 @@ a serve restart.
 └──────────┘    └──────────┘    └──────────┘    └──────────┘
                                                         │
 ┌──────────┐    ┌──────────┐    ┌──────────┐           │
-│   Sync   │◀───│  Launch  │◀───│  Tmux    │◀──────────┘
-│ Mutagen  │    │  Agent   │    │ Session  │
+│   Sync   │◀───│  Launch  │◀───│ Terminal │◀──────────┘
+│ Mutagen  │    │  Agent   │    │ PTY/tmux │
 └──────────┘    └──────────┘    └──────────┘
 ```
 
 ## 🚧 Roadmap
 
+Aiman is two things stacked: a terminal multiplexer for coding agents, and a
+workflow that turns a ticket into a worktree, an agent, a PR and a snapshot.
+The second half has no real competition. The first half does — [herdr](https://github.com/ogulcancelik/herdr)
+is the same architecture (session server owning PTYs, thin TUI client, agent
+state in a sidebar, socket API for agents to drive each other) and it is good at
+it.
+
+The plan is to win on both. The order below is deliberate, and each phase pays
+for the next.
+
+### Phase 1 — Local mode: run aiman with nothing configured
+
+Today aiman cannot start without a remote: session lookup needs a configured
+host, every call goes through SSH, and the remote needs `aiman serve` installed.
+A competitor you run as a single binary wins on that alone.
+
+The pieces already exist — `local.Executor` satisfies the same interfaces as
+`ssh.Manager`, which is how `aiman serve` drives its own host — the TUI simply
+never wires them.
+
+- [ ] Treat "no remote configured" as localhost
+- [ ] Resolve a local executor instead of an SSH manager for local sessions
+- [ ] Skip SSH, mutagen and AWS delegation when host and target are the same machine
+- [ ] Splash and doctor checks degrade cleanly with no JIRA, no remote, no git host
+
+The remote, JIRA and AWS layers become the upgrade path rather than the entry fee.
+
+### Phase 2 — Make the PTY layer boring
+
+This is where every regression lives. `v0.19.23`–`v0.19.28` were all fixes here:
+prompts typed into a first-run trust dialog, the session backend missing from the
+wire, attach forcing terminal modes an agent never asked for, a dropped Return
+leaving a prompt unsent, teardown killing the wrong runtime, previews stuck on a
+placeholder.
+
+Head-to-head on the terminal means this layer stops producing surprises. Feature
+parity built on a layer that drops Returns is worse than no parity.
+
+- [ ] PTY conformance harness: a scripted TUI under a real PTY that enables the
+      alternate screen, mouse reporting, the kitty keyboard protocol, bracketed
+      paste, and a first-run modal
+- [ ] Assert attach/detach round-trips, resize, mode mirroring, prompt
+      submission, and scrollback against it
+- [ ] Every fix from `v0.19.23`–`v0.19.28` becomes a regression case
+- [ ] Run it on Linux and macOS in CI, and fix the flaky `TestPTYAttachSameSize*`
+
+Phase 1 is what makes this runnable in CI without a remote box, which is why it
+comes first.
+
+### Phase 3 — Panes, tabs and spaces
+
+Aiman is currently one session to one holder to one process; there is no pane
+model at all.
+
+Build the layout *above* the holder — several holders composed by the TUI into a
+split tree — never inside it. The holder's value is that it owns exactly one PTY
+and is otherwise dumb; making it a multiplexer forfeits that and rebuilds tmux
+inside our own process. The emulator in `internal/ptyruntime` (`render.go`,
+`screen.go`) already turns a spool into a rendered screen, which is the hard half
+of compositing.
+
+- [ ] Split tree, focus model and keybindings
+- [ ] Mouse-native drag-to-resize, mapped to `pty.resize` per holder
+- [ ] Tabs and spaces over the split tree
+- [ ] Detach/reattach restores the whole layout, not just a session
+
+### Where aiman should win on their ground
+
+Herdr infers agent state from process names and output patterns. Aiman gets
+lifecycle events from the agent itself through `internal/agenthook`, installed
+into each agent's own config. A sidebar whose state is *reported* rather than
+guessed is a better multiplexer, not merely a different one — and it is the part
+that cannot be copied without doing the per-agent integration work.
+
+- [ ] Make hook state the primary signal everywhere, with screen classification
+      as fallback rather than a competing opinion
+- [ ] Publish agent state over the socket API so agents can wait on each other
+      precisely
+- [ ] Extend hook coverage as agents are added
+
+### Also planned
+
+- [ ] Git intelligence panel
+- [ ] MOSH support
+
+### Shipped
+
 - [x] JIRA issue search with filtering
 - [x] Git branch name sanitization
 - [x] SSH multiplexing
-- [x] Tmux session management
+- [x] Tmux and built-in PTY session backends
 - [x] Real-time pane previews
 - [x] VS Code integration
 - [x] SQLite persistence for sessions
@@ -1118,14 +1205,14 @@ a serve restart.
 - [x] Session tunnel management (local port forwarding)
 - [x] AI session summaries (brief + long) with action items
 - [x] Session archiving and snapshot browser
+- [x] Pane kept automatically when a session is terminated
 - [x] Self-update (`aiman update`) and downgrade (`aiman downgrade [tag]`)
 - [x] Autonomous trigger daemon (`aiman-trigger`) released per platform and installable onto a remote from the Daemons tab
-- [x] Remote `aiman serve` + JSON `aiman session` CLI (list/get/create/prompt/wait/read/rename/move)
+- [x] Remote `aiman serve` + JSON `aiman session` CLI (list/get/create/prompt/wait/read/rename/move/forget)
 - [x] `aiman serve` / `aiman-trigger` as systemd `--user` services (linger), install/monitor/restart/update from the Daemons tab
 - [x] Session names and groups, TUI grouped sidebar, quick start (`N`) and rename (`e`)
+- [x] Child sessions: agents create sessions under themselves, shown as a tree
 - [x] Bundled agent skill (`aiman --skill`), gated on `AIMAN_ENV=1`
-- [ ] Git intelligence panel
-- [ ] MOSH support
 
 ## 🔧 Development
 
