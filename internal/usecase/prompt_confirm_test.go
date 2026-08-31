@@ -127,3 +127,38 @@ func TestSubmitMarkerFlattensNewlines(t *testing.T) {
 		t.Errorf("marker should be flat, got %q", got)
 	}
 }
+
+// After submit, Codex/Grok echo the prompt into the transcript above an empty
+// composer. Matching the whole pane would look "stuck" forever and keep
+// pressing Return into the next turn.
+func TestComposerStillHoldsLooksOnlyAtTheBottom(t *testing.T) {
+	prompt := "Review PR 439 and report what you find"
+	marker := submitMarker(prompt)
+	submitted := "user\n" + prompt + "\n• Working (2s)\n› "
+	if composerStillHolds(submitted, marker) {
+		t.Fatal("an echoed prompt above an empty composer must not count as stuck")
+	}
+	stuck := "• Ready\n› " + prompt
+	if !composerStillHolds(stuck, marker) {
+		t.Fatal("a prompt sitting on the composer line must count as stuck")
+	}
+}
+
+// Child-session create used to detach a one-shot Enter. Codex often drops that
+// Return while still booting, leaving the task typed and never submitted.
+func TestDeliverInitialPromptPTYRetriesAStuckComposer(t *testing.T) {
+	prompt := "Review PR 439 and report what you find"
+	r := &paneRemote{panes: []string{
+		"› " + prompt,
+		"• Working (2s)\n› ",
+	}}
+	DeliverInitialPromptPTY(context.Background(), r, "sess-1", prompt)
+	if got := r.enters(); got < 2 {
+		t.Fatalf("initial prompt must retry a stuck composer, got %d Returns in %v", got, r.cmds)
+	}
+	for _, c := range r.cmds {
+		if strings.Contains(c, "nohup") {
+			t.Fatalf("initial prompt delivery must not detach; create would return before submit: %s", c)
+		}
+	}
+}

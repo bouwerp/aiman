@@ -255,7 +255,7 @@ func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remo
 		if err != nil {
 			return nil
 		}
-		if !strings.Contains(pane.StripANSI(out), marker) {
+		if !composerStillHolds(out, marker) {
 			return nil
 		}
 		if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
@@ -282,6 +282,32 @@ func submitMarker(prompt string) string {
 		r = r[len(r)-markerRunes:]
 	}
 	return strings.TrimSpace(string(r))
+}
+
+// composerStillHolds reports whether marker is still sitting on the composer
+// line at the bottom of the pane, not merely present in scrollback.
+// Codex/Grok echo the submitted prompt into the transcript above an empty
+// input box; a whole-pane match would look stuck forever and keep pressing
+// Return into the next turn. The check is the last non-empty line only: that
+// is the composer after submit (› / ❯) or the end of a wrapped unsent prompt.
+func composerStillHolds(rawPane, marker string) bool {
+	marker = strings.TrimSpace(marker)
+	if marker == "" {
+		return false
+	}
+	text := strings.TrimRight(pane.StripANSI(rawPane), "\n")
+	if text == "" {
+		return false
+	}
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		return strings.Contains(line, marker)
+	}
+	return false
 }
 
 // sleepCtx waits for d, or returns early when the context ends.

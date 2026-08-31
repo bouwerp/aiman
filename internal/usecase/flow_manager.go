@@ -638,58 +638,65 @@ const workspaceTrustRe = `[Dd]o you trust|[Tt]rust this folder|[Tt]rust the cont
 // once the agent has finished booting, and gives up silently: an agent that
 // never asks must not have its prompt delayed by the full budget.
 func acceptWorkspaceTrustPTY(sessionID string) string {
+	// Composer glyphs mean the agent is past boot and ready for input. Break
+	// early on those so an already-trusted worktree does not burn the full
+	// poll budget before the initial prompt is typed.
+	const composerReadyRe = `[›❯]|Ask Codex|Ask Grok|\? for shortcuts`
 	return fmt.Sprintf(
 		"attempt=0; "+
-			"while [ $attempt -lt 10 ]; do "+
+			"while [ $attempt -lt 15 ]; do "+
 			"pane=$(aiman pty capture %[1]q --lines 0 2>/dev/null || true); "+
 			"if printf '%%s' \"$pane\" | grep -qE %[2]q; then "+
-			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 3; break; "+
+			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 2; break; "+
 			"fi; "+
+			"if printf '%%s' \"$pane\" | grep -qE %[3]q; then break; fi; "+
 			"attempt=$((attempt+1)); sleep 1; "+
 			"done; ",
-		strings.TrimSpace(sessionID), workspaceTrustRe,
+		strings.TrimSpace(sessionID), workspaceTrustRe, composerReadyRe,
 	)
 }
 
 // DeliverInitialPromptPTY clears any workspace-trust dialog, then sends the
-// initial prompt to a freshly-created PTY session: write the prompt remotely,
-// type it through `aiman pty input`, then press Enter. Fire-and-forget like the
-// tmux path.
+// initial prompt to a freshly-created PTY session and confirms it left the
+// composer. Child-session create (Codex/Grok spawned by a parent agent) used
+// to detach a one-shot Enter; agents that are still booting drop that Return
+// and leave the task typed but never submitted.
 //
 // The trust step runs even when there is no prompt to deliver, because an
 // unanswered dialog leaves the agent blocked on a menu instead of ready for
-// work.
-//
-// It takes the same narrow promptDeliverer as the tmux path: writing a file and
-// running a command is all delivery needs, and the wide executor made this
-// untestable.
+// work. Delivery is synchronous so session.create does not return before the
+// prompt has actually been submitted.
 func DeliverInitialPromptPTY(ctx context.Context, remote promptDeliverer, sessionID, prompt string) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return
 	}
 	prompt = strings.TrimSpace(prompt)
-	promptPath := ""
-	if prompt != "" {
-		promptPath = fmt.Sprintf("/tmp/aiman-prompt-%s", sessionID)
-		if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
-			promptPath = "" // cannot deliver the prompt, but still clear the dialog
-		}
+
+	// Trust clear is synchronous and bounded: detaching it raced the agent boot
+	// so the prompt was typed into a still-drawing TUI.
+	_, _ = remote.Execute(ctx, remoteAimanPreamble+acceptWorkspaceTrustPTY(sessionID))
+	if prompt == "" {
+		return
 	}
-	script := `export PATH="$HOME/.local/bin:$PATH"; sleep 3; ` + acceptWorkspaceTrustPTY(sessionID)
-	if promptPath != "" {
-		// Return goes in a second call, via --enter. `--data "\r"` was typing the
-		// two literal characters backslash and r into the agent's input box: POSIX
-		// shell does not interpret that escape inside double quotes. Keeping it a
-		// separate write after a pause also matters on its own — an agent TUI that
-		// receives text and Return in one read treats the lot as a paste and inserts
-		// a newline instead of submitting.
-		script += fmt.Sprintf(
-			`aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --key enter >/dev/null 2>&1; rm -f %q`,
-			sessionID, promptPath, sessionID, promptPath,
-		)
+
+	promptPath := fmt.Sprintf("/tmp/aiman-prompt-%s", sessionID)
+	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
+		return
 	}
-	_, _ = remote.Execute(ctx, detachCommand(script))
+	defer func() {
+		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %q", promptPath))
+	}()
+
+	te, ok := remote.(TerminalExecutor)
+	if !ok {
+		// Tests that only stub promptDeliverer still get a single typed Enter.
+		_, _ = remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
+			"aiman pty input %[1]q --file %[2]q && sleep 1 && aiman pty input %[1]q --key enter",
+			sessionID, promptPath))
+		return
+	}
+	_ = SendPTYFileConfirmed(ctx, te, sessionID, promptPath, prompt)
 }
 
 // launchPTYSession hands the agent to aiman serve's built-in PTY runtime
