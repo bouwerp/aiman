@@ -342,6 +342,12 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		session.AWSConfig = config.AWSConfig
 	}
 
+	// Trust the workspace before the agent boots. Claude Code reads
+	// ~/.claude.json at startup; trusting afterwards leaves the dialog up
+	// (and a prompt typed into it can quit the agent).
+	infraGit.ReportProgress(ctx, "Trusting workspace…")
+	m.trustWorkspaceBeforeLaunch(ctx, sshMgr, workingDir, session.WorktreePath)
+
 	// PTY is the default runtime. Env travels in the create payload, so no
 	// -e flags or shell escaping are needed; the command runs under bash -l
 	// inside a real PTY. Explicit session_backend: tmux still uses tmux.
@@ -428,22 +434,13 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 }
 
 // finaliseCreate runs the best-effort decoration and bookkeeping shared by both
-// backends after the terminal process is up: workspace trust, agent model
-// detection, JIRA transition, and the ACTIVE transition.
+// backends after the terminal process is up: agent model detection, JIRA
+// transition, and the ACTIVE transition. Workspace trust already ran before
+// the agent launched (see trustWorkspaceBeforeLaunch).
 func (m *FlowManager) finaliseCreate(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, workingDir string) (*domain.Session, error) {
-	// Trust the directory and read back the agent's model. Every one of these is
-	// best-effort decoration: the trust commands ignore their result, and the
-	// model only fills a display field. They are also expensive, because each
-	// boots an agent CLI on the remote — measured against a warm, idle box:
-	//
-	//	claude trust .          7.8s
-	//	copilot trust .         1.6s
-	//	claude config get model 21.8s
-	//
-	// Run sequentially and unreported, that is half a minute of silence after the
-	// last git message, which reads as a hung session creation. Run them together
-	// under one deadline instead, and say so while it happens.
-	infraGit.ReportProgress(ctx, "Trusting workspace and detecting agent…")
+	// Model detection boots an agent CLI on the remote (~20s for Claude) and
+	// only fills a display field, so it is bounded and best-effort.
+	infraGit.ReportProgress(ctx, "Detecting agent model…")
 	m.finaliseSessionBestEffort(ctx, sshMgr, session, config, workingDir)
 
 	// Transition JIRA issue if configured

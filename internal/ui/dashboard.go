@@ -3864,6 +3864,14 @@ func (m *Model) renderWorktreeExists() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog.Render(b.String()))
 }
 
+// showSessionActionError shows a generic error dialog for session actions
+// (attach, copy, open terminal). Do not route these through viewStateVSCodeError:
+// that dialog appends VS Code PATH install steps under unrelated failures.
+func (m *Model) showSessionActionError(msg string) {
+	m.lastError = msg
+	m.state = viewStateError
+}
+
 func (m *Model) renderVSCodeError() string {
 	var b strings.Builder
 	b.WriteString(activeStyle.Render("VS Code CLI Error") + "\n\n")
@@ -4704,8 +4712,7 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 				revived, rerr := usecase.ReviveIfNeeded(reviveCtx, mgr, &s)
 				reviveCancel()
 				if rerr != nil {
-					m.lastError = fmt.Sprintf("Cannot attach: %v (use 's' to restart the session instead)", rerr)
-					m.state = viewStateVSCodeError
+					m.showSessionActionError(fmt.Sprintf("Cannot attach: %v (use 's' to restart the session instead)", rerr))
 					return m, nil, true
 				}
 				if revived {
@@ -7518,6 +7525,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		// option guards to avoid the remain-on-exit race.
 		m.sendStatusFor(placeholderID, fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
 		logf("step3: restarting agent")
+		usecase.TrustWorkspacePaths(ctx, mgr, workingDir, gitignoreRoot)
 
 		if s.IsPTY() {
 			// Built-in PTY backend: replace the process by killing and

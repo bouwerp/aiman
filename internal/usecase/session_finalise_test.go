@@ -39,28 +39,6 @@ func (r *slowRemote) commands() []string {
 	return append([]string(nil), r.seen...)
 }
 
-// The trust commands and model lookup each boot an agent CLI on the remote.
-// Sequentially they measured ~31s; they must overlap.
-func TestFinaliseSessionRunsConcurrently(t *testing.T) {
-	remote := &slowRemote{delay: 300 * time.Millisecond}
-	fm := &FlowManager{}
-	session := &domain.Session{ID: "s1"}
-	cfg := domain.SessionConfig{Agent: &domain.Agent{Name: "Claude Code"}}
-
-	start := time.Now()
-	fm.finaliseSessionBestEffort(context.Background(), remote, session, cfg, "/repos/app@x")
-	elapsed := time.Since(start)
-
-	cmds := remote.commands()
-	if len(cmds) < 5 {
-		t.Fatalf("expected the trust commands and the model lookup, got %d: %v", len(cmds), cmds)
-	}
-	// Five commands at 300ms each is 1.5s sequentially; concurrently well under.
-	if elapsed > time.Second {
-		t.Errorf("finalisation took %s — the steps are not overlapping", elapsed.Round(time.Millisecond))
-	}
-}
-
 // A step that never returns must not hold session creation open.
 func TestFinaliseSessionIsBounded(t *testing.T) {
 	remote := &slowRemote{delay: time.Hour}
@@ -115,18 +93,15 @@ func TestFinaliseSessionRecordsDetectedModel(t *testing.T) {
 	}
 }
 
-func TestFinaliseSessionTrustsTheWorkingDirectory(t *testing.T) {
+func TestFinaliseSessionSkipsRemovedClaudeTrustCLI(t *testing.T) {
 	remote := &slowRemote{}
 	fm := &FlowManager{}
 	fm.finaliseSessionBestEffort(context.Background(), remote, &domain.Session{ID: "s"},
-		domain.SessionConfig{}, "/repos/app@x")
+		domain.SessionConfig{Agent: &domain.Agent{Name: "Claude Code"}}, "/repos/app@x")
 
 	joined := strings.Join(remote.commands(), "\n")
-	if !strings.Contains(joined, "safe.directory") {
-		t.Errorf("expected git safe.directory to be set, got:\n%s", joined)
-	}
-	if !strings.Contains(joined, "/repos/app@x") {
-		t.Errorf("expected the working directory to be used, got:\n%s", joined)
+	if strings.Contains(joined, "claude trust") {
+		t.Errorf("finalise must not call removed claude trust CLI, got:\n%s", joined)
 	}
 }
 
