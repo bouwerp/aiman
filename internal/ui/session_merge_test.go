@@ -172,3 +172,24 @@ func TestOverlayPersistedSessionFieldsKeepsBackend(t *testing.T) {
 		t.Fatalf("live scan cannot see backend; overlay must keep stored %q, got %q", domain.BackendPTY, got.Backend)
 	}
 }
+
+// After an agent switch the live row carries the new AgentName with an empty
+// native id. Overlay must not reattach the previous agent's conversation.
+func TestOverlayPersistedSessionFieldsDropsNativeIDAcrossAgentSwitch(t *testing.T) {
+	live := domain.Session{
+		ID: "s1", AgentName: "Grok Build CLI",
+		RemoteHost: "regent0", TmuxSession: "feat",
+	}
+	stored := domain.Session{
+		ID: "s1", AgentName: "Claude Code",
+		AgentSessionID: "00ca0f57", AgentSessionPath: "/home/code/.claude/projects/x.jsonl",
+		AgentEnded: true, HookState: "idle", HookStateSource: "session_end", HookStateSeq: 3,
+	}
+	got := overlayPersistedSessionFields(live, stored)
+	if got.AgentSessionID != "" || got.AgentSessionPath != "" {
+		t.Fatalf("previous agent's native id must not survive a switch: %+v", got)
+	}
+	if got.AgentEnded || got.HookState != "" {
+		t.Fatalf("previous agent's ended/hook state must not survive a switch: %+v", got)
+	}
+}

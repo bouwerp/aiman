@@ -272,6 +272,34 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 	return nil
 }
 
+// ClearNativeAgentIdentity drops vendor conversation identity and hook latch
+// fields. Save cannot clear them: COALESCE keeps the previous non-empty values
+// when discovery writes blanks. An agent switch needs a real wipe so the next
+// start does not --resume the previous agent's conversation.
+func (r *Repository) ClearNativeAgentIdentity(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE sessions SET
+			agent_session_id = '',
+			agent_session_path = '',
+			agent_title = '',
+			agent_ended = '',
+			hook_state = '',
+			hook_state_message = '',
+			hook_state_source = '',
+			hook_state_seq = 0,
+			hook_state_at = NULL,
+			updated_at = ?
+		WHERE id = ?;`, time.Now(), id)
+	if err != nil {
+		return fmt.Errorf("clearing native agent identity: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error) {
 	query := "SELECT " + sessionSelectCols + " FROM sessions WHERE id = ?;"
 	s, err := scanSession(r.db.QueryRowContext(ctx, query, id))

@@ -138,22 +138,26 @@ func overlayPersistedSessionFields(live, stored domain.Session) domain.Session {
 	if live.MutagenSyncID == "" {
 		live.MutagenSyncID = stored.MutagenSyncID
 	}
-	if live.AgentSessionID == "" {
-		live.AgentSessionID = stored.AgentSessionID
-	}
-	if live.AgentSessionPath == "" {
-		live.AgentSessionPath = stored.AgentSessionPath
-	}
-	if live.HookState == "" && live.HookStateAt.IsZero() && !live.AgentEnded {
-		live.AgentTitle = stored.AgentTitle
-		live.AgentEnded = stored.AgentEnded
-		live.HookState = stored.HookState
-		live.HookStateMessage = stored.HookStateMessage
-		live.HookStateSource = stored.HookStateSource
-		live.HookStateSeq = stored.HookStateSeq
-		live.HookStateAt = stored.HookStateAt
-	} else if live.AgentTitle == "" {
-		live.AgentTitle = stored.AgentTitle
+	sameAgent := live.AgentName == "" || stored.AgentName == "" ||
+		strings.EqualFold(live.AgentName, stored.AgentName)
+	if sameAgent {
+		if live.AgentSessionID == "" {
+			live.AgentSessionID = stored.AgentSessionID
+		}
+		if live.AgentSessionPath == "" {
+			live.AgentSessionPath = stored.AgentSessionPath
+		}
+		if live.HookState == "" && live.HookStateAt.IsZero() && !live.AgentEnded {
+			live.AgentTitle = stored.AgentTitle
+			live.AgentEnded = stored.AgentEnded
+			live.HookState = stored.HookState
+			live.HookStateMessage = stored.HookStateMessage
+			live.HookStateSource = stored.HookStateSource
+			live.HookStateSeq = stored.HookStateSeq
+			live.HookStateAt = stored.HookStateAt
+		} else if live.AgentTitle == "" {
+			live.AgentTitle = stored.AgentTitle
+		}
 	}
 	return live
 }

@@ -207,18 +207,22 @@ type SessionRepository interface {
 
 // SessionConfig holds the configuration for creating a new session.
 type SessionConfig struct {
-	Name           string
-	Group          string
-	ParentID       string // session that spawned this one; empty is a root
-	Quick          bool   // ad-hoc session with generated q{n} name in group "quick"
-	IssueKey       string
-	Issue          *Issue // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
-	Branch         string
-	Repo           Repo
-	Directory      string
-	Agent          *Agent
-	Skills         []Skill
-	PromptFree     bool
+	Name       string
+	Group      string
+	ParentID   string // session that spawned this one; empty is a root
+	Quick      bool   // ad-hoc session with generated q{n} name in group "quick"
+	IssueKey   string
+	Issue      *Issue // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
+	Branch     string
+	Repo       Repo
+	Directory  string
+	Agent      *Agent
+	Skills     []Skill
+	PromptFree bool
+	// FreshAgent skips native --resume and clears the remote sidecar. Set when
+	// restarting under a different agent so the previous vendor conversation
+	// is not handed to the new binary.
+	FreshAgent     bool
 	ExistingBranch bool           // start from an existing remote branch instead of creating a new one
 	AttachExisting bool           // attach to an already-existing worktree without attempting git setup
 	BaseBranch     string         // clone from this branch instead of the repository default branch

@@ -543,15 +543,23 @@ func reviveAgentCommand(agentName, worktree string) string {
 // NativeSessionID resolves the vendor conversation id for a session. The
 // remote sidecar file the hooks maintain wins: it reflects what the agent is
 // actually working on right now, while the stored field may lag behind.
+// A sidecar whose transcript path belongs to a different agent is ignored so
+// revive cannot --resume a Claude id into grok (or the reverse).
 func NativeSessionID(ctx context.Context, remote TerminalExecutor, s *domain.Session) string {
+	command := reviveAgentCommand(s.AgentName, s.WorkingDirectory)
 	if safe := agenthook.SafeSessionID(s.ID); safe != "" {
 		out, err := remote.Execute(ctx, fmt.Sprintf("cat \"$HOME/.aiman/native-sessions/%s\" 2>/dev/null || true", safe))
 		if err == nil {
 			if n := agenthook.ParseStored([]byte(out)); n.ID != "" {
-				agenthook.ApplyReport(s, n, time.Now())
-				return n.ID
+				if agenthook.NativeIdentityFitsCommand(command, n.Path) {
+					agenthook.ApplyReport(s, n, time.Now())
+					return n.ID
+				}
 			}
 		}
+	}
+	if !agenthook.NativeIdentityFitsCommand(command, s.AgentSessionPath) {
+		return ""
 	}
 	return strings.TrimSpace(s.AgentSessionID)
 }

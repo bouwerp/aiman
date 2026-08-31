@@ -447,15 +447,28 @@ func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
 
 func TestNativeSessionIDPrefersSidecar(t *testing.T) {
 	r := &terminalRemote{output: map[string]string{"native-sessions": `{"id":"sidecar-id"}`}}
-	s := domain.Session{ID: "sess", Backend: domain.BackendPTY, AgentSessionID: "stored-id"}
+	s := domain.Session{ID: "sess", Backend: domain.BackendPTY, AgentName: "claude", AgentSessionID: "stored-id"}
 	got := NativeSessionID(context.Background(), r, &s)
 	if got != "sidecar-id" {
 		t.Fatalf("NativeSessionID = %q", got)
 	}
 
 	r = &terminalRemote{}
-	s = domain.Session{ID: "sess", Backend: domain.BackendPTY, AgentSessionID: "stored-id"}
+	s = domain.Session{ID: "sess", Backend: domain.BackendPTY, AgentName: "claude", AgentSessionID: "stored-id"}
 	if got := NativeSessionID(context.Background(), r, &s); got != "stored-id" {
 		t.Fatalf("fallback to stored id failed: %q", got)
+	}
+}
+
+func TestNativeSessionIDRejectsCrossAgentSidecar(t *testing.T) {
+	r := &terminalRemote{output: map[string]string{
+		"native-sessions": `{"id":"00ca0f57","path":"/home/code/.claude/projects/x/00ca0f57.jsonl"}`,
+	}}
+	s := domain.Session{
+		ID: "sess", Backend: domain.BackendPTY, AgentName: "Grok Build CLI",
+		AgentSessionID: "stored-grok", AgentSessionPath: "/home/code/.grok/sessions/stored-grok",
+	}
+	if got := NativeSessionID(context.Background(), r, &s); got != "stored-grok" {
+		t.Fatalf("claude sidecar into grok must fall back to stored grok id, got %q", got)
 	}
 }

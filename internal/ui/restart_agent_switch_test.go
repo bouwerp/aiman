@@ -21,7 +21,9 @@ func dirtySession(agent string) *domain.Session {
 // fresh session as already exited.
 func TestRestartWithADifferentAgentClearsTheOldIdentity(t *testing.T) {
 	s := dirtySession("codex")
-	adoptRestartAgent(s, "claude")
+	if !adoptRestartAgent(s, "claude") {
+		t.Fatal("expected switched=true when the agent changes")
+	}
 
 	if s.AgentName != "claude" {
 		t.Errorf("agent not switched: %q", s.AgentName)
@@ -41,7 +43,9 @@ func TestRestartWithADifferentAgentClearsTheOldIdentity(t *testing.T) {
 // its own and must be kept.
 func TestRestartWithTheSameAgentKeepsItsIdentity(t *testing.T) {
 	s := dirtySession("codex")
-	adoptRestartAgent(s, "Codex")
+	if adoptRestartAgent(s, "Codex") {
+		t.Fatal("expected switched=false for a same-agent resume")
+	}
 
 	if s.AgentSessionID != "old-id" || s.AgentSessionPath != "/old/path.jsonl" {
 		t.Errorf("a same-agent restart must keep the transcript: %+v", s)

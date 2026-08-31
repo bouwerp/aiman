@@ -7,18 +7,21 @@ import (
 )
 
 // adoptRestartAgent points a session at the agent it is about to be restarted
-// with, dropping the previous agent's identity when they differ.
+// with, dropping the previous agent's identity when they differ. It returns
+// true when the agent changed (caller must also clear the remote sidecar and
+// skip native --resume).
 //
 // A session carries the running agent's native session id, transcript path,
 // title and hook state. None of that describes a different agent, and a latched
 // AgentEnded would render the freshly started session as already exited. A
 // restart with the same agent is a resume, so its transcript and state are still
 // its own and are kept.
-func adoptRestartAgent(s *domain.Session, agentName string) {
+func adoptRestartAgent(s *domain.Session, agentName string) bool {
 	if s == nil {
-		return
+		return false
 	}
-	if s.AgentName != "" && !strings.EqualFold(s.AgentName, agentName) {
+	switched := s.AgentName != "" && !strings.EqualFold(s.AgentName, agentName)
+	if switched {
 		s.AgentSessionID = ""
 		s.AgentSessionPath = ""
 		s.AgentTitle = ""
@@ -29,4 +32,5 @@ func adoptRestartAgent(s *domain.Session, agentName string) {
 		s.HookStateSeq = 0
 	}
 	s.AgentName = agentName
+	return switched
 }

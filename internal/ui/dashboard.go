@@ -7424,7 +7424,9 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 		m.priorSnapshotCandidate = nil
 		m.sessionCfg.PriorSnapshot = nil
 		if m.restartingSession != nil && m.sessionCfg.Agent != nil {
-			adoptRestartAgent(m.restartingSession, m.sessionCfg.Agent.Name)
+			if adoptRestartAgent(m.restartingSession, m.sessionCfg.Agent.Name) {
+				m.sessionCfg.FreshAgent = true
+			}
 		}
 		return m, m.startBackgroundRestart()
 	}
@@ -7542,7 +7544,15 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			}
 		}
 		sendKeysPrompt = usecase.InjectSharedContext(ctx, mgr, workingDir, s.Group, s.RepoName, sendKeysPrompt)
-		agentCmd = withRemoteNativeResume(ctx, mgr, s, agentCmd)
+		if sessionCfg.FreshAgent {
+			clearRemoteNativeSidecar(ctx, mgr, s.ID)
+			if clearer, ok := db.(interface {
+				ClearNativeAgentIdentity(context.Context, string) error
+			}); ok {
+				_ = clearer.ClearNativeAgentIdentity(ctx, s.ID)
+			}
+		}
+		agentCmd = withRemoteNativeResume(ctx, mgr, s, agentCmd, sessionCfg.FreshAgent)
 
 		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.kilo/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
 		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
