@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -9,9 +10,9 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
-// creatingSession tracks a session being created in the background. The
-// placeholder appears in the session list immediately after the summary is
-// confirmed, so the user can keep using other sessions while creation runs.
+// creatingSession tracks a session being created or restarted in the
+// background. The placeholder appears in the session list immediately after
+// confirmation, so the user can keep using other sessions while the work runs.
 type creatingSession struct {
 	placeholder domain.Session
 	cfg         domain.SessionConfig // captured config, used for worktree-exists retry
@@ -19,6 +20,8 @@ type creatingSession struct {
 	steps       []string             // verbose progress steps, shown in the preview panel
 	failed      bool
 	errMsg      string
+	restart     bool              // true when this entry is a restart of a real session
+	cancel      context.CancelFunc // aborts the in-flight goroutine; may be nil until started
 }
 
 // newCreatingPlaceholder builds the placeholder session shown in the list
@@ -74,16 +77,25 @@ func (cs *creatingSession) addStep(step string) {
 }
 
 // renderCreatingPanel renders the preview panel for a session that is being
-// created in the background: header, metadata, the verbose step log, and the
-// failure message when creation failed.
+// created or restarted in the background: header, metadata, the verbose step
+// log, and the failure message when the operation failed.
 func (m *Model) renderCreatingPanel(cs *creatingSession, contentW int) string {
 	s := cs.placeholder
 	var b strings.Builder
 
+	verb := "creation"
+	inProgress := "creating in background…"
+	whileHint := "You can switch to and use other sessions while this one is created."
+	if cs.restart {
+		verb = "restart"
+		inProgress = "restarting in background…"
+		whileHint = "You can switch to and use other sessions while this one restarts."
+	}
+
 	if cs.failed {
-		b.WriteString(activeStyle.Render("Session") + "  " + failStyle.Render("creation failed") + "\n")
+		b.WriteString(activeStyle.Render("Session") + "  " + failStyle.Render(verb+" failed") + "\n")
 	} else {
-		b.WriteString(activeStyle.Render("Session") + "  creating in background…\n")
+		b.WriteString(activeStyle.Render("Session") + "  " + inProgress + "\n")
 	}
 
 	var meta []string
@@ -129,7 +141,8 @@ func (m *Model) renderCreatingPanel(cs *creatingSession, contentW int) string {
 		b.WriteString("\n" + failStyle.Render("Error: "+cs.errMsg) + "\n")
 		b.WriteString(statusStyle.Render("Press ctrl+k to dismiss this entry.") + "\n")
 	} else {
-		b.WriteString("\n" + statusStyle.Render("You can switch to and use other sessions while this one is created.") + "\n")
+		b.WriteString("\n" + statusStyle.Render(whileHint) + "\n")
+		b.WriteString(statusStyle.Render("Press ctrl+k to cancel.") + "\n")
 	}
 
 	return b.String()

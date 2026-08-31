@@ -587,12 +587,51 @@ func (m *Model) isCreatingPlaceholder(id string) bool {
 // removeCreatingPlaceholder drops a placeholder from the tracking map and the
 // session list.
 func (m *Model) removeCreatingPlaceholder(id string) {
+	if cs, ok := m.creatingSessions[id]; ok && cs.cancel != nil {
+		cs.cancel()
+	}
 	delete(m.creatingSessions, id)
 	for i, s := range m.allSessions {
 		if s.ID == id {
 			m.allSessions = append(m.allSessions[:i], m.allSessions[i+1:]...)
 			break
 		}
+	}
+	m.applyRemoteFilter()
+}
+
+// cancelBackgroundOperation aborts an in-flight create or restart tracked in
+// creatingSessions. Ephemeral create placeholders are removed from the list;
+// restarts of real sessions keep the row and restore it to ACTIVE so the user
+// can try again.
+func (m *Model) cancelBackgroundOperation(id string) {
+	cs, ok := m.creatingSessions[id]
+	if !ok {
+		return
+	}
+	if cs.cancel != nil {
+		cs.cancel()
+	}
+	restart := cs.restart || !domain.IsEphemeralSessionID(id)
+	delete(m.creatingSessions, id)
+	if !restart {
+		for i, s := range m.allSessions {
+			if s.ID == id {
+				m.allSessions = append(m.allSessions[:i], m.allSessions[i+1:]...)
+				break
+			}
+		}
+		m.applyRemoteFilter()
+		return
+	}
+	for i, s := range m.allSessions {
+		if s.ID != id {
+			continue
+		}
+		if s.Status == domain.SessionStatusProvisioning || s.Status == domain.SessionStatusError {
+			m.allSessions[i].Status = domain.SessionStatusActive
+		}
+		break
 	}
 	m.applyRemoteFilter()
 }
@@ -1591,9 +1630,10 @@ type sessionCreateMsg struct {
 	err     error
 	status  string // optional progress message
 	warning string // non-fatal warning to surface after completion
-	// placeholderID identifies the background creation this message belongs
-	// to. Empty for foreground flows (e.g. session restart), which keep the
-	// blocking loading-screen behavior.
+	// placeholderID identifies the background create/restart this message
+	// belongs to. When empty on a finished session message, the handler also
+	// matches creatingSessions by session.ID so a missing ID cannot leave the
+	// progress UI stuck.
 	placeholderID string
 }
 
@@ -1955,7 +1995,16 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 		sessionCfg.SessionBackend = resolveSessionBackend(sessionCfg.SessionBackend, remote.SessionBackend)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	if cs, ok := m.creatingSessions[placeholderID]; ok {
+		if cs.cancel != nil {
+			cs.cancel()
+		}
+		cs.cancel = cancel
+	}
+
 	return func() tea.Msg {
+		defer cancel()
 		// Time every phase the flow already reports. Session creation spans SSH,
 		// git, tmux and mutagen, so without this a "it took ages" report leaves
 		// nothing to point at; the log now names the phase and its duration.
@@ -1968,7 +2017,6 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 		}
 		defer func() { phases.finish(m.logPersistent) }()
 
-		ctx := context.Background()
 		ctx = git.WithProgress(ctx, sendStatus)
 
 		if mgr, ok := sessionCfg.SSHManager.(*ssh.Manager); ok && sessionCfg.SessionBackend == domain.BackendPTY {
@@ -2054,9 +2102,16 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 // background session creation, identified by its placeholder ID.
 func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.Cmd) {
 	cs, ok := m.creatingSessions[msg.placeholderID]
+	if !ok && msg.placeholderID == "" && msg.session.ID != "" && msg.status == "" {
+		// Finished messages must clear tracking even when placeholderID is empty.
+		cs, ok = m.creatingSessions[msg.session.ID]
+		if ok {
+			msg.placeholderID = msg.session.ID
+		}
+	}
 	if !ok {
-		// Placeholder was dismissed. If the session finished anyway, still
-		// surface it in the list so the user doesn't lose a live session.
+		// Placeholder was dismissed/canceled. If the session finished anyway,
+		// still surface it in the list so the user doesn't lose a live session.
 		if msg.err == nil && msg.status == "" && msg.session.ID != "" {
 			m.allSessions = upsertSessionReplacing(m.allSessions, msg.placeholderID, msg.session)
 			m.applyRemoteFilter()
@@ -3078,13 +3133,20 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 }
 
 func (m *Model) applySessionCreateMsg(msg sessionCreateMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
-	// Background creations are correlated by placeholder ID and never
-	// touch the blocking loading screen.
+	// Background create/restart is correlated by placeholder ID. A finished
+	// message that omitted the ID still routes here when the session itself
+	// is tracked — otherwise the progress UI stays stuck forever.
 	if msg.placeholderID != "" {
 		return m.handleBackgroundCreateMsg(msg)
 	}
-	// Handled globally so that the result is never dropped if an unrelated message
-	// transitions the model out of viewStateLoading while the restart goroutine runs.
+	if msg.status == "" && msg.session.ID != "" {
+		if _, ok := m.creatingSessions[msg.session.ID]; ok {
+			msg.placeholderID = msg.session.ID
+			return m.handleBackgroundCreateMsg(msg)
+		}
+	}
+	// Legacy foreground path: keep status/error on the loading screen when
+	// nothing is tracked in creatingSessions.
 	if msg.status != "" {
 		if m.state == viewStateLoading {
 			m.loadingMsg = msg.status
@@ -4449,22 +4511,29 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 	}
 
-	// Background-creation placeholders have no tmux session, worktree, or
-	// sync yet — block session actions on them. ctrl+k dismisses a failed
-	// placeholder instead of running the terminate flow. Skip this on the
-	// Daemons tab so service keys still work while a session is creating.
+	// Background create/restart entries block session actions. ctrl+k cancels
+	// an in-flight operation or dismisses a failed placeholder, instead of
+	// running terminate. Skip this on the Daemons tab so service keys still
+	// work while a session is creating.
 	if m.currentTab != tabDaemons {
 		if sel := m.list.SelectedItem(); sel != nil {
 			if si, ok := sel.(item); ok {
 				if cs, creating := m.creatingSessions[si.session.ID]; creating {
 					switch msg.String() {
 					case "ctrl+k":
-						if cs.failed {
-							m.removeCreatingPlaceholder(si.session.ID)
+						wasRestart := cs.restart
+						m.cancelBackgroundOperation(si.session.ID)
+						toast := "⏹️  Creation canceled."
+						if wasRestart {
+							toast = "⏹️  Restart canceled."
 						}
-						return m, nil, true
+						return m, m.showToast(toast, false, 3*time.Second), true
 					case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y":
-						return m, m.showToast("⚠️  This session is still being created — wait for it to finish.", true, 4*time.Second), true
+						waitMsg := "⚠️  This session is still being created — wait for it to finish, or press ctrl+k to cancel."
+						if cs.restart {
+							waitMsg = "⚠️  This session is still restarting — wait for it to finish, or press ctrl+k to cancel."
+						}
+						return m, m.showToast(waitMsg, true, 4*time.Second), true
 					}
 				}
 				if m.isTerminatingSession(si.session.ID) {
@@ -4922,6 +4991,7 @@ func (m *Model) startBackgroundRestart() tea.Cmd {
 		placeholder: placeholder,
 		cfg:         m.sessionCfg,
 		remote:      m.selectedRemote,
+		restart:     true,
 	}
 
 	// A restart replaces an existing row; a revive adds a new one.
@@ -7374,12 +7444,21 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 	db := m.db
 	flowManager := m.flowManager
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	if cs, ok := m.creatingSessions[placeholderID]; ok {
+		if cs.cancel != nil {
+			cs.cancel()
+		}
+		cs.cancel = cancel
+	}
+
 	return func() (retMsg tea.Msg) {
 		logf := func(format string, args ...interface{}) {
 			line := fmt.Sprintf("[restart %s] "+format+"\n", append([]interface{}{time.Now().Format("15:04:05.000")}, args...)...)
 			_ = appendDebugLog(line)
 		}
 		defer func() {
+			cancel()
 			if r := recover(); r != nil {
 				retMsg = sessionCreateMsg{err: fmt.Errorf("restart panicked: %v", r), placeholderID: placeholderID}
 			}
@@ -7391,9 +7470,6 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			}())
 		}()
 		logf("started")
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
 
 		if s == nil {
 			return sessionCreateMsg{err: fmt.Errorf("no session to restart"), placeholderID: placeholderID}
@@ -7545,14 +7621,15 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 				Command: agentCmd,
 				Env:     env,
 			}); err != nil {
-				return sessionCreateMsg{err: fmt.Errorf("failed to restart PTY session: %w", err)}
+				return sessionCreateMsg{err: fmt.Errorf("failed to restart PTY session: %w", err), placeholderID: placeholderID}
 			}
 			usecase.DeliverInitialPromptPTY(ctx, mgr, s.ID, sendKeysPrompt)
 
+			s.Status = domain.SessionStatusActive
 			if db != nil {
 				_ = db.Save(ctx, s)
 			}
-			return sessionCreateMsg{session: *s}
+			return sessionCreateMsg{session: *s, placeholderID: placeholderID}
 		}
 		paneCmd := usecase.PaneShellCommand(agentBootstrap)
 		restartCmd := fmt.Sprintf(
@@ -7593,6 +7670,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		acceptTrust := sessionCfg.Agent != nil && usecase.IsAntigravityAgent(sessionCfg.Agent.Name, sessionCfg.Agent.Command)
 		usecase.DeliverInitialPrompt(ctx, mgr, s.TmuxSession, s.ID, sendKeysPrompt, acceptTrust)
 
+		s.Status = domain.SessionStatusActive
 		if db != nil {
 			_ = db.Save(ctx, s)
 		}
