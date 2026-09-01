@@ -57,10 +57,19 @@ var iamPolicyActions = []string{
 	"iam:PassRole",
 }
 
+// resourceDiscoveryActions are read-only inventory calls (Lambda, DynamoDB)
+// that a delegated session may need to run against the account regardless of
+// the locked working region, e.g. checking what exists elsewhere in the
+// account before switching regions.
+var resourceDiscoveryActions = []string{
+	"lambda:ListFunctions",
+	"dynamodb:ListTables",
+}
+
 // BuildRegionPolicy returns an inline IAM JSON policy that restricts all
 // actions to the given AWS regions via the aws:RequestedRegion condition,
-// plus unconditional Route53, IAM, and S3 access (those APIs are global or
-// need to work regardless of the session's locked region).
+// plus unconditional Route53, IAM, S3, and resource-discovery access (those
+// APIs are global or need to work regardless of the session's locked region).
 // Returns an empty string when regions is nil or empty.
 func BuildRegionPolicy(regions []string) string {
 	trimmed := make([]string, 0, len(regions))
@@ -113,6 +122,13 @@ func BuildRegionPolicy(regions []string) string {
 			{
 				Effect:   "Allow",
 				Action:   "s3:*",
+				Resource: "*",
+			},
+			// Account-wide inventory reads a delegated session may need
+			// regardless of the locked working region.
+			{
+				Effect:   "Allow",
+				Action:   resourceDiscoveryActions,
 				Resource: "*",
 			},
 		},
