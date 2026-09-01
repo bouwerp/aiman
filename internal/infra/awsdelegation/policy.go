@@ -57,13 +57,16 @@ var iamPolicyActions = []string{
 	"iam:PassRole",
 }
 
-// resourceDiscoveryActions are read-only inventory calls (Lambda, DynamoDB)
-// that a delegated session may need to run against the account regardless of
-// the locked working region, e.g. checking what exists elsewhere in the
-// account before switching regions.
+// resourceDiscoveryActions are read-only inventory and item-read calls
+// (Lambda, DynamoDB) that a delegated session may need to run against the
+// account regardless of the locked working region, e.g. checking what exists
+// elsewhere in the account before switching regions.
 var resourceDiscoveryActions = []string{
 	"lambda:ListFunctions",
 	"dynamodb:ListTables",
+	"dynamodb:GetItem",
+	"dynamodb:Query",
+	"dynamodb:Scan",
 }
 
 // BuildRegionPolicy returns an inline IAM JSON policy that restricts all
