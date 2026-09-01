@@ -207,7 +207,13 @@ func TestBuildRegionPolicy_AllowsResourceDiscoveryWithoutRegion(t *testing.T) {
 	if err := json.Unmarshal([]byte(got), &p); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	want := []string{"lambda:ListFunctions", "dynamodb:ListTables"}
+	want := []string{
+		"lambda:ListFunctions",
+		"dynamodb:ListTables",
+		"dynamodb:GetItem",
+		"dynamodb:Query",
+		"dynamodb:Scan",
+	}
 	found := map[string]bool{}
 	for _, s := range p.Statement {
 		if s.Condition != nil {
