@@ -63,6 +63,7 @@ var iamPolicyActions = []string{
 // elsewhere in the account before switching regions.
 var resourceDiscoveryActions = []string{
 	"lambda:ListFunctions",
+	"lambda:GetFunctionConfiguration",
 	"dynamodb:ListTables",
 	"dynamodb:GetItem",
 	"dynamodb:Query",
