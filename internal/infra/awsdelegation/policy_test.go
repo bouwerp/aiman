@@ -209,6 +209,7 @@ func TestBuildRegionPolicy_AllowsResourceDiscoveryWithoutRegion(t *testing.T) {
 	}
 	want := []string{
 		"lambda:ListFunctions",
+		"lambda:GetFunctionConfiguration",
 		"dynamodb:ListTables",
 		"dynamodb:GetItem",
 		"dynamodb:Query",
