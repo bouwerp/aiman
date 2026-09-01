@@ -20,7 +20,7 @@ type creatingSession struct {
 	steps       []string             // verbose progress steps, shown in the preview panel
 	failed      bool
 	errMsg      string
-	restart     bool              // true when this entry is a restart of a real session
+	restart     bool               // true when this entry is a restart of a real session
 	cancel      context.CancelFunc // aborts the in-flight goroutine; may be nil until started
 }
 
