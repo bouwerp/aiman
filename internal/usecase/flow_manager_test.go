@@ -84,14 +84,6 @@ func TestSendKeysScriptReadsPromptFromFile(t *testing.T) {
 	}
 }
 
-func TestDetachCommandEscapesSingleQuotes(t *testing.T) {
-	got := detachCommand("echo 'hi'")
-	want := `nohup bash -c 'echo '\''hi'\''' >/dev/null 2>&1 &`
-	if got != want {
-		t.Fatalf("detachCommand single-quote escaping wrong:\n got: %s\nwant: %s", got, want)
-	}
-}
-
 func TestDeliverInitialPromptRoutesPromptThroughFile(t *testing.T) {
 	// A prompt containing shell metacharacters must never appear in the executed
 	// command — it is written to a file and read back via cat.
@@ -105,12 +97,19 @@ func TestDeliverInitialPromptRoutesPromptThroughFile(t *testing.T) {
 	if f.writePath != "/tmp/aiman-prompt-abc-123" {
 		t.Fatalf("unexpected prompt path: %q", f.writePath)
 	}
-	if len(f.execCmds) != 1 {
-		t.Fatalf("expected exactly one Execute call, got %d", len(f.execCmds))
+	// Boot-wait, send, and the prompt-file cleanup (fakePromptDeliverer is not a
+	// PaneCapturer, so no confirm/retry round trips beyond that).
+	if len(f.execCmds) != 3 {
+		t.Fatalf("expected exactly three Execute calls, got %d: %q", len(f.execCmds), f.execCmds)
 	}
-	for _, frag := range []string{"$(touch /tmp/pwned)", "`id`", "do the thing"} {
-		if strings.Contains(f.execCmds[0], frag) {
-			t.Fatalf("prompt content leaked into command (%q): %s", frag, f.execCmds[0])
+	for _, cmd := range f.execCmds {
+		for _, frag := range []string{"$(touch /tmp/pwned)", "`id`", "do the thing"} {
+			if strings.Contains(cmd, frag) {
+				t.Fatalf("prompt content leaked into command (%q): %s", frag, cmd)
+			}
+		}
+		if strings.Contains(cmd, "nohup") {
+			t.Fatalf("initial prompt delivery must not detach; create would return before submit: %s", cmd)
 		}
 	}
 }
