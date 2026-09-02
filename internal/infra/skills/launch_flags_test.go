@@ -41,3 +41,31 @@ func TestApplyLaunchDefaults(t *testing.T) {
 		t.Fatalf("cursor-agent must ignore effort: %q", got)
 	}
 }
+
+func TestEnsureInteractiveLaunch(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{"codex", "codex", "--disable in_app_updates"},
+		{"kilo", "kilo", "--auto"},
+		{"kilocode alias", "kilocode", "--auto"},
+		{"grok", "grok", "--no-auto-update"},
+		{"grok-build alias", "grok-build", "--no-auto-update"},
+		{"cursor-agent", "cursor-agent", "--disable-auto-update"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := EnsureInteractiveLaunch(c.cmd, "/home/user/code/myrepo")
+			if !strings.Contains(got, c.want) {
+				t.Errorf("%s: expected %q in revived command, got: %s", c.name, c.want, got)
+			}
+		})
+	}
+
+	// An agent with no revival-time flags is passed through unchanged.
+	if got := EnsureInteractiveLaunch("claude", "/home/user/code/myrepo"); got != "claude" {
+		t.Errorf("expected claude command unchanged, got: %q", got)
+	}
+}

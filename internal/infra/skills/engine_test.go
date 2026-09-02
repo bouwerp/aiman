@@ -294,6 +294,9 @@ func TestPrepareSession_CursorWithIssue_UsesSendKeys(t *testing.T) {
 	if !strings.Contains(result.Command, "--force .") {
 		t.Errorf("expected --force . in command, got: %s", result.Command)
 	}
+	if !strings.Contains(result.Command, "--disable-auto-update") {
+		t.Errorf("expected --disable-auto-update in cursor command, got: %s", result.Command)
+	}
 	if strings.Contains(result.Command, ".aiman_task.md") {
 		t.Errorf("Cursor should NOT embed prompt in command (risk of headless exit), got: %s", result.Command)
 	}
@@ -687,9 +690,33 @@ func TestPrepareSession_GrokWithIssue_UsesAlwaysApproveAndSendKeys(t *testing.T)
 	if !strings.Contains(result.Command, "--always-approve") {
 		t.Errorf("expected --always-approve in grok command, got: %s", result.Command)
 	}
+	if !strings.Contains(result.Command, "--no-auto-update") {
+		t.Errorf("expected --no-auto-update in grok command, got: %s", result.Command)
+	}
 
 	if result.InitialPrompt == "" || !strings.Contains(result.InitialPrompt, domain.AimanTaskFileName) {
 		t.Errorf("InitialPrompt should reference the task file, got: %s", result.InitialPrompt)
+	}
+}
+
+func TestPrepareSession_GrokAlwaysDisablesAutoUpdate(t *testing.T) {
+	cfg := &config.Config{}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	agent := domain.Agent{Name: "Grok Build CLI", Command: "grok"}
+
+	// promptFree=false: --always-approve should be absent, but the
+	// update-disable flag must still be present — Grok's disruptive
+	// startup update check happens regardless of approval mode.
+	result, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, false, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Command, "--no-auto-update") {
+		t.Errorf("expected --no-auto-update in grok command regardless of promptFree, got: %s", result.Command)
+	}
+	if strings.Contains(result.Command, "--always-approve") {
+		t.Errorf("did not expect --always-approve when promptFree is false, got: %s", result.Command)
 	}
 }
 

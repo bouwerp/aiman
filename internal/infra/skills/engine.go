@@ -242,7 +242,10 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 		result, err = e.prepareCodex(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
 
 	case strings.Contains(name, "cursor"):
-		cmd := agent.Command
+		// --disable-auto-update always: a background self-update in this PTY
+		// session exits the TUI and leaves the holder at a bare shell, same
+		// failure mode as Codex's in-app updates.
+		cmd := ensureFlag(agent.Command, "--disable-auto-update")
 		if promptFree {
 			cmd = fmt.Sprintf("%s --force .", cmd)
 		} else {
@@ -571,6 +574,10 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 	return result, nil
 }
 
+// prepareGrok prepares an xAI Grok Build CLI session. --no-auto-update is
+// always applied: Grok otherwise contacts home for an update check on
+// startup, and a self-update in this PTY session exits the TUI and leaves
+// the holder at a bare shell, same failure mode as Codex's in-app updates.
 func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
@@ -582,7 +589,7 @@ func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, 
 		}
 	}
 
-	cmd := agent.Command
+	cmd := ensureFlag(agent.Command, "--no-auto-update")
 	if promptFree {
 		cmd = ensureFlag(cmd, "--always-approve")
 	}
