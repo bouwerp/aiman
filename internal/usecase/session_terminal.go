@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -237,32 +238,46 @@ var submitSettle = 2 * time.Second
 // An empty marker skips the check — Return is sent once, as before. Confirmation
 // is best-effort: a pane that cannot be captured is not a reason to fail a
 // delivery that may well have worked.
+//
+// Every outcome is logged (session id, attempts, elapsed): a submit this
+// heuristic-driven has no other way to leave evidence of a boot slow enough to
+// exhaust the retry budget, or an unrecognised composer shape that never
+// confirms even though the agent did receive the prompt.
 func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remotePath, marker string) error {
+	start := time.Now()
 	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
 		"aiman pty input %[1]q --file %[2]q && sleep 1 && aiman pty input %[1]q --key enter",
 		id, remotePath)); err != nil {
+		log.Printf("prompt-deliver session=%s send failed after %s: %v", id, time.Since(start), err)
 		return err
 	}
 	marker = submitMarker(marker)
 	if marker == "" {
+		log.Printf("prompt-deliver session=%s sent (no marker to confirm)", id)
 		return nil
 	}
 	for attempt := 1; attempt < submitAttempts; attempt++ {
 		if err := sleepCtx(ctx, submitSettle); err != nil {
+			log.Printf("prompt-deliver session=%s confirm canceled after attempt %d/%d: %v", id, attempt, submitAttempts, err)
 			return nil
 		}
 		out, err := CapturePTYPane(ctx, remote, id, 0)
 		if err != nil {
+			log.Printf("prompt-deliver session=%s pane unreadable at attempt %d/%d, assuming delivered: %v", id, attempt, submitAttempts, err)
 			return nil
 		}
 		if !composerStillHolds(out, marker) {
+			log.Printf("prompt-deliver session=%s submitted after %d/%d attempts (%s)", id, attempt, submitAttempts, time.Since(start))
 			return nil
 		}
+		log.Printf("prompt-deliver session=%s composer still holds prompt at attempt %d/%d, retrying Enter", id, attempt, submitAttempts)
 		if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
 			"aiman pty input %q --key enter", id)); err != nil {
+			log.Printf("prompt-deliver session=%s retry Enter failed at attempt %d/%d: %v", id, attempt, submitAttempts, err)
 			return nil
 		}
 	}
+	log.Printf("prompt-deliver session=%s gave up after %d attempts (%s) — composer may still hold the prompt", id, submitAttempts, time.Since(start))
 	return nil
 }
 

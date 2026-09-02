@@ -1,8 +1,10 @@
 package usecase
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"testing"
 
@@ -141,6 +143,37 @@ func TestSendPromptDoesNotInterpolatePrompt(t *testing.T) {
 	}
 	if strings.Contains(f.execCmds[0], "nohup") {
 		t.Fatalf("SendPrompt should not detach: %s", f.execCmds[0])
+	}
+}
+
+// logBootWait is the only evidence a slow boot leaves behind: without it, a
+// timed-out boot-wait and a normal one are indistinguishable from serve.log.
+func TestLogBootWaitReportsReasonAndAttempts(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	logBootWait("sess-1", "some pane noise\nAIMAN_BOOTWAIT:timeout:15\n")
+
+	got := buf.String()
+	for _, want := range []string{"session=sess-1", "reason=timeout", "attempts=15"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log output missing %q, got: %s", want, got)
+		}
+	}
+}
+
+func TestLogBootWaitToleratesMissingMarker(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	logBootWait("sess-1", "no marker in this output")
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no log line without a marker, got: %s", buf.String())
 	}
 }
 

@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -661,18 +662,39 @@ func acceptWorkspaceTrustPTY(sessionID string) string {
 	// early on those so an already-trusted worktree does not burn the full
 	// poll budget before the initial prompt is typed.
 	const composerReadyRe = `[›❯]|Ask Codex|Ask Grok|\? for shortcuts`
+	// The final echo is the only visibility into this loop's outcome: an
+	// AIMAN_BOOTWAIT:<reason>:<attempts> line that DeliverInitialPromptPTY logs,
+	// so a boot slow enough to exhaust the budget (reason=timeout) leaves
+	// evidence instead of a silent, unexplained stuck composer.
 	return fmt.Sprintf(
-		"attempt=0; "+
+		"attempt=0; reason=timeout; "+
 			"while [ $attempt -lt 15 ]; do "+
 			"pane=$(aiman pty capture %[1]q --lines 0 2>/dev/null || true); "+
 			"if printf '%%s' \"$pane\" | grep -qE %[2]q; then "+
-			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 2; break; "+
+			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 2; reason=trust; break; "+
 			"fi; "+
-			"if printf '%%s' \"$pane\" | grep -qE %[3]q; then break; fi; "+
+			"if printf '%%s' \"$pane\" | grep -qE %[3]q; then reason=ready; break; fi; "+
 			"attempt=$((attempt+1)); sleep 1; "+
-			"done; ",
+			"done; "+
+			"echo \"AIMAN_BOOTWAIT:$reason:$attempt\"; ",
 		strings.TrimSpace(sessionID), workspaceTrustRe, composerReadyRe,
 	)
+}
+
+// logBootWait reports acceptWorkspaceTrustPTY's outcome so a boot slow enough
+// to exhaust the poll budget (reason=timeout) is visible in serve.log instead
+// of only showing up later as an unexplained stuck composer.
+func logBootWait(sessionID, out string) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "AIMAN_BOOTWAIT:")
+		if !ok {
+			continue
+		}
+		reason, attempts, _ := strings.Cut(rest, ":")
+		log.Printf("prompt-deliver session=%s boot-wait reason=%s attempts=%s", sessionID, reason, attempts)
+		return
+	}
 }
 
 // DeliverInitialPromptPTY clears any workspace-trust dialog, then sends the
@@ -694,7 +716,8 @@ func DeliverInitialPromptPTY(ctx context.Context, remote promptDeliverer, sessio
 
 	// Trust clear is synchronous and bounded: detaching it raced the agent boot
 	// so the prompt was typed into a still-drawing TUI.
-	_, _ = remote.Execute(ctx, remoteAimanPreamble+acceptWorkspaceTrustPTY(sessionID))
+	bootOut, _ := remote.Execute(ctx, remoteAimanPreamble+acceptWorkspaceTrustPTY(sessionID))
+	logBootWait(sessionID, bootOut)
 	if prompt == "" {
 		return
 	}
