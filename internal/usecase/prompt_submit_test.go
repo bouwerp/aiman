@@ -30,7 +30,7 @@ func assertSubmits(t *testing.T, what, cmd string) {
 	// The submitting Return is the last one — an earlier one may belong to the
 	// workspace-trust dialog the script clears first.
 	keyAt := strings.LastIndex(cmd, "--key enter")
-	sleepAt := strings.LastIndex(cmd[:keyAt], "sleep 1")
+	sleepAt := strings.LastIndex(cmd[:keyAt], "sleep ")
 	if sleepAt < 0 {
 		t.Errorf("%s should pause before pressing Return: %s", what, cmd)
 	}
@@ -43,6 +43,33 @@ func TestDeliverInitialPromptPTYSubmitsThePrompt(t *testing.T) {
 		t.Fatal("nothing was sent")
 	}
 	assertSubmits(t, "DeliverInitialPromptPTY", r.joined())
+}
+
+// The initial pause is dynamic (formatSleepSeconds(initialSettle)), not a
+// hardcoded "sleep 1" — this pins the actual value so a future change to
+// initialSettle is a deliberate edit here, not a silent drift.
+func TestSendPTYFileConfirmedUsesInitialSettleForThePause(t *testing.T) {
+	r := &recordingRemote{}
+	if err := SendPTYFile(context.Background(), r, "sess-1", "/tmp/p"); err != nil {
+		t.Fatal(err)
+	}
+	want := "sleep " + formatSleepSeconds(initialSettle)
+	if !strings.Contains(r.joined(), want) {
+		t.Errorf("expected %q before Return, got: %s", want, r.joined())
+	}
+}
+
+func TestFormatSleepSeconds(t *testing.T) {
+	cases := map[time.Duration]string{
+		2 * time.Second:         "2",
+		1500 * time.Millisecond: "1.5",
+		0:                       "0",
+	}
+	for d, want := range cases {
+		if got := formatSleepSeconds(d); got != want {
+			t.Errorf("formatSleepSeconds(%s) = %q, want %q", d, got, want)
+		}
+	}
 }
 
 func TestSendPTYFileSubmitsThePrompt(t *testing.T) {

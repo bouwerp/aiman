@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -219,11 +220,29 @@ func SendPTYFile(ctx context.Context, remote TerminalExecutor, id, remotePath st
 
 // submitAttempts is how many Returns a composer that will not clear may get,
 // the first included.
-const submitAttempts = 3
+//
+// Live-observed on a host running ~10 concurrent agent sessions: three long
+// (multi-KB) follow-up prompts to already-running Codex sessions each left a
+// complete, correctly-typed prompt sitting in the composer, unsubmitted — the
+// old 3-attempt/~6s budget ran out before the terminal settled enough to take
+// Return as submit, not because Return was never delivered (a Return sent
+// manually well after the fact submitted cleanly every time, first try).
+const submitAttempts = 6
 
 // submitSettle is how long to let the agent redraw before deciding whether the
 // composer cleared.
 var submitSettle = 2 * time.Second
+
+// initialSettle is how long to wait after typing before the first Return, so
+// a long paste has time to finish rendering before Return risks landing mid-
+// paste and being read as a literal newline instead of submit.
+var initialSettle = 2 * time.Second
+
+// formatSleepSeconds renders d as an argument to the POSIX `sleep` builtin,
+// which accepts fractional seconds.
+func formatSleepSeconds(d time.Duration) string {
+	return strconv.FormatFloat(d.Seconds(), 'f', -1, 64)
+}
 
 // SendPTYFileConfirmed types a remote file into the session, presses Return, and
 // checks that the text actually left the composer — pressing Return again if it
@@ -246,8 +265,8 @@ var submitSettle = 2 * time.Second
 func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remotePath, marker string) error {
 	start := time.Now()
 	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-		"aiman pty input %[1]q --file %[2]q && sleep 1 && aiman pty input %[1]q --key enter",
-		id, remotePath)); err != nil {
+		"aiman pty input %[1]q --file %[2]q && sleep %[3]s && aiman pty input %[1]q --key enter",
+		id, remotePath, formatSleepSeconds(initialSettle))); err != nil {
 		log.Printf("prompt-deliver session=%s send failed after %s: %v", id, time.Since(start), err)
 		return err
 	}
