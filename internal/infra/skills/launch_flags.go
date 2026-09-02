@@ -107,6 +107,12 @@ func EnsureInteractiveLaunch(cmd, worktree string) string {
 	if base == "kilo" || base == "kilocode" {
 		return ensureFlag(cmd, "--auto")
 	}
+	if base == "grok" || base == "grok-build" {
+		return ensureFlag(cmd, "--no-auto-update")
+	}
+	if strings.Contains(base, "cursor") {
+		return ensureFlag(cmd, "--disable-auto-update")
+	}
 	return cmd
 }
 
