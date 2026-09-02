@@ -162,3 +162,68 @@ func TestDeliverInitialPromptPTYRetriesAStuckComposer(t *testing.T) {
 		}
 	}
 }
+
+// tmuxPaneRemote is paneRemote's tmux twin: it answers CaptureTmuxPane with a
+// scripted sequence of panes instead of a JSON-wrapped `pty capture` reply.
+type tmuxPaneRemote struct {
+	cmds   []string
+	panes  []string
+	paneAt int
+}
+
+func (r *tmuxPaneRemote) WriteFile(_ context.Context, _ string, _ []byte) error { return nil }
+
+func (r *tmuxPaneRemote) Execute(_ context.Context, cmd string) (string, error) {
+	r.cmds = append(r.cmds, cmd)
+	return "", nil
+}
+
+func (r *tmuxPaneRemote) CaptureTmuxPane(_ context.Context, _ string) (string, error) {
+	text := ""
+	if r.paneAt < len(r.panes) {
+		text = r.panes[r.paneAt]
+		r.paneAt++
+	} else if len(r.panes) > 0 {
+		text = r.panes[len(r.panes)-1]
+	}
+	return text, nil
+}
+
+func (r *tmuxPaneRemote) enters() int {
+	n := 0
+	for _, c := range r.cmds {
+		n += strings.Count(c, "Enter")
+	}
+	return n
+}
+
+// The tmux twin of TestDeliverInitialPromptPTYRetriesAStuckComposer: the
+// tmux delivery path never got the confirm/retry fix that landed for PTY, so
+// a child session on the tmux backend could still leave the task typed and
+// unsubmitted after a dropped Return.
+func TestDeliverInitialPromptRetriesAStuckTmuxComposer(t *testing.T) {
+	prompt := "Review PR 439 and report what you find"
+	r := &tmuxPaneRemote{panes: []string{
+		"› " + prompt,
+		"• Working (2s)\n› ",
+	}}
+	DeliverInitialPrompt(context.Background(), r, "my-session", "sess-1", prompt, false)
+	if got := r.enters(); got < 2 {
+		t.Fatalf("initial prompt must retry a stuck tmux composer, got %d Enters in %v", got, r.cmds)
+	}
+	for _, c := range r.cmds {
+		if strings.Contains(c, "nohup") {
+			t.Fatalf("initial prompt delivery must not detach; create would return before submit: %s", c)
+		}
+	}
+}
+
+// A tmux prompt that submits first time must not get a second Enter.
+func TestDeliverInitialPromptStopsOnceTmuxComposerClears(t *testing.T) {
+	prompt := "Review PR 439 and report what you find"
+	r := &tmuxPaneRemote{panes: []string{"• Working (2s)\n› Ask Codex to do anything"}}
+	DeliverInitialPrompt(context.Background(), r, "my-session", "sess-1", prompt, false)
+	if got := r.enters(); got != 1 {
+		t.Fatalf("expected exactly one Enter, got %d in %v", got, r.cmds)
+	}
+}

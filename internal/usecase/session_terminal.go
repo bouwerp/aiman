@@ -266,6 +266,38 @@ func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remo
 	return nil
 }
 
+// sendTmuxKeysConfirmed types a remote file into a tmux pane, presses Enter,
+// and checks that the text actually left the composer — pressing Enter again
+// if it did not. The tmux twin of SendPTYFileConfirmed; see its doc for why
+// one Enter is not reliable.
+func sendTmuxKeysConfirmed(ctx context.Context, remote PaneCapturer, tmuxName, remotePath, marker string) error {
+	if _, err := remote.Execute(ctx, fmt.Sprintf(
+		"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter",
+		tmuxName, remotePath, tmuxName)); err != nil {
+		return err
+	}
+	marker = submitMarker(marker)
+	if marker == "" {
+		return nil
+	}
+	for attempt := 1; attempt < submitAttempts; attempt++ {
+		if err := sleepCtx(ctx, submitSettle); err != nil {
+			return nil
+		}
+		out, err := remote.CaptureTmuxPane(ctx, tmuxName)
+		if err != nil {
+			return nil
+		}
+		if !composerStillHolds(out, marker) {
+			return nil
+		}
+		if _, err := remote.Execute(ctx, fmt.Sprintf("tmux send-keys -t %q Enter", tmuxName)); err != nil {
+			return nil
+		}
+	}
+	return nil
+}
+
 // submitMarker is the tail of the prompt to look for in the composer.
 //
 // The tail rather than the head: agents wrap and scroll a long prompt, so the

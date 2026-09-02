@@ -112,24 +112,23 @@ func sendKeysScript(tmuxName, promptPath string, acceptWorkspaceTrust bool) stri
 	)
 }
 
-// detachCommand wraps a script to run in the background via bash. The script is
-// single-quote escaped so the remote login shell passes it to bash verbatim
-// without interpreting its $(...) substitutions first.
-func detachCommand(script string) string {
-	escaped := strings.ReplaceAll(script, "'", `'\''`)
-	return fmt.Sprintf("nohup bash -c '%s' >/dev/null 2>&1 &", escaped)
-}
-
 // DeliverInitialPrompt sends the initial prompt to a freshly-started agent via
-// tmux send-keys. The prompt is written to a temp file (raw bytes over stdin, no
-// shell parsing) and read back on the remote, so arbitrary user-entered text —
-// including shell metacharacters — can never be executed. Best-effort: a write
-// failure aborts prompt delivery, and the background send itself is
-// fire-and-forget.
+// tmux send-keys, then confirms it left the composer. The prompt is written to
+// a temp file (raw bytes over stdin, no shell parsing) and read back on the
+// remote, so arbitrary user-entered text — including shell metacharacters —
+// can never be executed.
 //
-// When acceptWorkspaceTrust is set (Antigravity CLI / agy), the delivery script
-// also accepts agy's workspace-trust dialog before sending the prompt: agy shows
-// "Do you trust this folder?" on first run in a directory and its
+// Delivery used to detach a one-shot Enter into the background so
+// session.create could return immediately; Codex and Grok often drop that
+// Return while still booting, so the task sat in the composer unsent — the
+// same failure DeliverInitialPromptPTY was fixed for (see its doc). Delivery
+// is now synchronous: the boot-wait runs first, then the prompt is sent and
+// confirmed via SendTmuxKeysConfirmed's tmux equivalent, retrying the Enter if
+// the composer still holds the prompt's tail.
+//
+// When acceptWorkspaceTrust is set (Antigravity CLI / agy), the boot-wait
+// script also accepts agy's workspace-trust dialog before sending the prompt:
+// agy shows "Do you trust this folder?" on first run in a directory and its
 // --dangerously-skip-permissions flag does not dismiss it, so without this the
 // prompt lands in the dialog instead of the agent. The script still runs when
 // the prompt is empty in that case, so the dialog is cleared even for ad-hoc
@@ -148,7 +147,27 @@ func DeliverInitialPrompt(ctx context.Context, remote promptDeliverer, tmuxName,
 			promptPath = "" // cannot deliver the prompt, but still clear the trust dialog
 		}
 	}
-	_, _ = remote.Execute(ctx, detachCommand(sendKeysScript(tmuxName, promptPath, acceptWorkspaceTrust)))
+
+	// Boot-wait (and, for agy, the trust-dialog accept) runs on its own,
+	// synchronously: racing it against the send left the prompt typed into a
+	// still-drawing TUI.
+	_, _ = remote.Execute(ctx, sendKeysScript(tmuxName, "", acceptWorkspaceTrust))
+	if promptPath == "" {
+		return
+	}
+	defer func() {
+		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %q", promptPath))
+	}()
+
+	pc, ok := remote.(PaneCapturer)
+	if !ok {
+		// Tests that only stub promptDeliverer still get a single typed Enter.
+		_, _ = remote.Execute(ctx, fmt.Sprintf(
+			"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter",
+			tmuxName, promptPath, tmuxName))
+		return
+	}
+	_ = sendTmuxKeysConfirmed(ctx, pc, tmuxName, promptPath, prompt)
 }
 
 // SendPrompt types text into an already-running tmux session using the
