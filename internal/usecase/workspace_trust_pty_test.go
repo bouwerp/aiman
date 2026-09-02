@@ -54,6 +54,18 @@ func TestAcceptWorkspaceTrustPTYPressesReturn(t *testing.T) {
 	}
 }
 
+// The boot-wait's outcome is otherwise invisible: a slow boot that exhausts
+// the poll budget looks identical from the outside to a normal one, except
+// the prompt never submits. logBootWait's parsing depends on this exact shape.
+func TestAcceptWorkspaceTrustPTYReportsItsOutcome(t *testing.T) {
+	script := acceptWorkspaceTrustPTY("sess-1")
+	for _, want := range []string{"reason=timeout", "reason=trust", "reason=ready", `echo "AIMAN_BOOTWAIT:$reason:$attempt"`} {
+		if !strings.Contains(script, want) {
+			t.Errorf("boot-wait script missing %q: %s", want, script)
+		}
+	}
+}
+
 func TestDeliverInitialPromptPTYIgnoresAnEmptySessionID(t *testing.T) {
 	r := &recordingRemote{}
 	DeliverInitialPromptPTY(context.Background(), r, "  ", "do the thing")
