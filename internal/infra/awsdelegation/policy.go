@@ -28,9 +28,10 @@ var route53DNSActions = []string{
 	"route53:GetChange",
 }
 
-// iamPolicyActions are IAM APIs used to inspect a role's policies, simulate
-// access, and apply a policy-document change (managed versions or inline).
-// IAM is global (API in us-east-1); they have no RequestedRegion.
+// iamPolicyActions are IAM APIs used to inspect a role's or user's policies,
+// simulate access, and apply a policy-document change (managed versions or
+// inline, on either principal type). IAM is global (API in us-east-1); they
+// have no RequestedRegion.
 var iamPolicyActions = []string{
 	"iam:GetRole",
 	"iam:ListRolePolicies",
@@ -55,6 +56,17 @@ var iamPolicyActions = []string{
 	"iam:UntagRole",
 	"iam:ListRoles",
 	"iam:PassRole",
+	"iam:GetUser",
+	"iam:ListUsers",
+	"iam:ListUserPolicies",
+	"iam:GetUserPolicy",
+	"iam:PutUserPolicy",
+	"iam:DeleteUserPolicy",
+	"iam:ListAttachedUserPolicies",
+	"iam:AttachUserPolicy",
+	"iam:DetachUserPolicy",
+	"iam:TagUser",
+	"iam:UntagUser",
 }
 
 // resourceDiscoveryActions are read-only inventory and item-read calls
@@ -114,7 +126,7 @@ func BuildRegionPolicy(regions []string) string {
 				Resource: "*",
 			},
 			// IAM is global (API in us-east-1). A RequestedRegion lock
-			// otherwise denies ListRolePolicies / CreateRole.
+			// otherwise denies ListRolePolicies / CreateRole / PutUserPolicy.
 			{
 				Effect:   "Allow",
 				Action:   iamPolicyActions,

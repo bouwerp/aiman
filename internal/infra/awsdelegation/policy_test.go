@@ -132,6 +132,17 @@ func TestBuildRegionPolicy_AllowsIAMInspectWithoutRegion(t *testing.T) {
 		"iam:UntagRole",
 		"iam:ListRoles",
 		"iam:PassRole",
+		"iam:GetUser",
+		"iam:ListUsers",
+		"iam:ListUserPolicies",
+		"iam:GetUserPolicy",
+		"iam:PutUserPolicy",
+		"iam:DeleteUserPolicy",
+		"iam:ListAttachedUserPolicies",
+		"iam:AttachUserPolicy",
+		"iam:DetachUserPolicy",
+		"iam:TagUser",
+		"iam:UntagUser",
 	}
 	found := map[string]bool{}
 	for _, s := range p.Statement {
