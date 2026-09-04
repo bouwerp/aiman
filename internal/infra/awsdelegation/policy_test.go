@@ -2,6 +2,7 @@ package awsdelegation
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 )
 
@@ -61,6 +62,17 @@ func TestBuildRegionPolicy_Multi(t *testing.T) {
 	}
 	if len(regions) != 2 {
 		t.Errorf("expected 2 regions, got %d", len(regions))
+	}
+}
+
+func TestBuildRegionPolicy_LeavesPackedPolicyHeadroom(t *testing.T) {
+	// AWS does not publish the packed binary limit, so keep the plaintext well
+	// below its separate 2,048-byte request limit.
+	const maxPolicyBytes = 1000
+
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	if len(got) > maxPolicyBytes {
+		t.Fatalf("generated region policy is %d bytes, want at most %d", len(got), maxPolicyBytes)
 	}
 }
 
@@ -144,24 +156,32 @@ func TestBuildRegionPolicy_AllowsIAMInspectWithoutRegion(t *testing.T) {
 		"iam:TagUser",
 		"iam:UntagUser",
 	}
-	found := map[string]bool{}
+	var allowed []string
 	for _, s := range p.Statement {
 		if s.Condition != nil {
 			continue
 		}
-		for _, a := range actionList(s.Action) {
-			found[a] = true
-		}
+		allowed = append(allowed, actionList(s.Action)...)
 	}
 	var missing []string
 	for _, a := range want {
-		if !found[a] {
+		if !actionAllowed(allowed, a) {
 			missing = append(missing, a)
 		}
 	}
 	if len(missing) > 0 {
 		t.Fatalf("unconditional IAM policy access missing %v, policy=%s", missing, got)
 	}
+}
+
+func actionAllowed(patterns []string, action string) bool {
+	for _, pattern := range patterns {
+		matched, err := filepath.Match(pattern, action)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildRegionPolicy_AllowsS3WithoutRegion(t *testing.T) {

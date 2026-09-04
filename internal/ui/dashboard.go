@@ -1981,10 +1981,16 @@ func (m *Model) fetchAgents() tea.Cmd {
 	}
 }
 
+func (m *Model) creationInputs(placeholderID string) (domain.SessionConfig, config.Remote) {
+	if cs, ok := m.creatingSessions[placeholderID]; ok {
+		return cs.cfg, cs.remote
+	}
+	return m.sessionCfg, m.selectedRemote
+}
+
 func (m *Model) createSession(placeholderID string) tea.Cmd {
 	// Resolve the active remote at dispatch time (before goroutine runs)
-	sessionCfg := m.sessionCfg
-	remote := m.selectedRemote
+	sessionCfg, remote := m.creationInputs(placeholderID)
 	if remote.Host != "" {
 		sessionCfg.SSHManager = ssh.NewManager(ssh.Config{
 			Host: remote.Host,

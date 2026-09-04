@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -203,6 +204,10 @@ func IsAntigravityAgent(name, command string) bool {
 }
 
 func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionConfig) (*domain.Session, error) {
+	if config.Agent == nil {
+		return nil, errors.New("agent is required")
+	}
+
 	// Resolve which SSH manager to use (per-session remote overrides the default)
 	sshMgr := m.sshManager
 	if config.SSHManager != nil {

@@ -54,6 +54,25 @@ func TestStartBackgroundCreate_InsertsPlaceholderAndReturnsToMain(t *testing.T) 
 	}
 }
 
+func TestCreationInputsUseTrackedPlaceholderConfig(t *testing.T) {
+	model := newTestModelWithSummaryConfirmed(t)
+	wantAgent := &domain.Agent{Name: "Codex CLI", Command: "codex"}
+	model.sessionCfg.Agent = wantAgent
+	_ = model.startBackgroundCreate()
+	id := model.allSessions[0].ID
+
+	model.sessionCfg = domain.SessionConfig{}
+	model.selectedRemote = config.Remote{}
+
+	gotCfg, gotRemote := model.creationInputs(id)
+	if gotCfg.Agent != wantAgent {
+		t.Fatalf("retry agent = %+v, want original agent %+v", gotCfg.Agent, wantAgent)
+	}
+	if gotRemote.Host != "devbox" {
+		t.Fatalf("retry remote = %q, want devbox", gotRemote.Host)
+	}
+}
+
 func TestBackgroundCreate_StatusMessagesAccumulateSteps(t *testing.T) {
 	model := newTestModelWithSummaryConfirmed(t)
 	_ = model.startBackgroundCreate()
