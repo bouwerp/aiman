@@ -146,6 +146,7 @@ var vendorPathHints = []struct {
 	{"/.cursor/", "Cursor"},
 	{"/.grok/", "Grok Build CLI"},
 	{"/.config/kilo/", "Kilo Code"},
+	{"/muse/sessions/", "Muse Code"},
 }
 
 // InferAgentName makes a best-effort guess at which known agent produced a
@@ -185,6 +186,8 @@ var vendorTextHints = []struct {
 	{"kilocode", "Kilo Code"},
 	{"kilo code", "Kilo Code"},
 	{"ageni", "Ageni"},
+	{"muse code", "Muse Code"},
+	{"muse-code", "Muse Code"},
 }
 
 // InferAgentNameFromText makes a best-effort guess at which known agent a

@@ -113,6 +113,11 @@ func EnsureInteractiveLaunch(cmd, worktree string) string {
 	if strings.Contains(base, "cursor") {
 		return ensureFlag(cmd, "--disable-auto-update")
 	}
+	if base == "muse" {
+		// A trust prompt in a detached PTY stalls the session before skills
+		// and hooks load. --yolo, when present, already trusts the workspace.
+		return ensureFlag(cmd, "--trust-workspace")
+	}
 	return cmd
 }
 

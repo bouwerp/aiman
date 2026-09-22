@@ -23,7 +23,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **JIRA Integration**: Real-time search with VSCode-style filtering
 - **Smart Branch Names**: Auto-sanitizes issue titles for git compatibility
 - **Repo & Directory Picker**: Choose repo + subdirectory from the remote
-- **Multi-Agent Support**: Scans the remote and offers whichever of these it finds — Claude Code, Antigravity CLI (`agy`), Grok Build CLI, Codex CLI, Kilo Code (`kilo`), GitHub Copilot CLI, Cursor (`cursor-agent`), Pi, Ageni
+- **Multi-Agent Support**: Scans the remote and offers whichever of these it finds — Claude Code, Antigravity CLI (`agy`), Grok Build CLI, Codex CLI, Kilo Code (`kilo`), GitHub Copilot CLI, Cursor (`cursor-agent`), Pi, Muse Code (`muse`), Ageni
 - **Ad-hoc Sessions**: Create quick sessions without a JIRA issue, branch, or repo
 - **Quick start (`N`)**: Default remote, agent picker only, generated `q1`/`q2`/… in group `quick`
 - **Names and groups**: Every session has a unique display `name` and a `group`; the sidebar is a tree of groups, not a flat list
@@ -244,7 +244,7 @@ aiman
    - Invalid characters are blocked; spaces automatically become dashes
 6. **Select Repository**: Pick from your GitHub repos
 7. **Select Subdirectory**: Choose a repo subdirectory (or `.` for root)
-8. **Agent Selection**: Choose your AI coding assistant (Claude Code, Antigravity CLI, Copilot, Kilo Code, Cursor)
+8. **Agent Selection**: Choose your AI coding assistant (Claude Code, Antigravity CLI, Copilot, Kilo Code, Cursor, Muse Code)
 9. **Summary**: Review selected issue/branch/repo/dir/agent before creation
    - If AWS credential delegation is configured for the remote, editable **Profile** and **Region** fields appear — pre-filled with remote defaults, overridable per session (Tab cycles between fields)
 
@@ -780,7 +780,7 @@ That prints the Markdown skill (`internal/aimanskill/SKILL.md`, also under `skil
 
 `aiman serve` on start (and on restart) installs or updates the skill in each agent's user skill dir under `$HOME` (`.claude/skills/aiman`, `.cursor/skills/aiman`, and the other known loaders) and in every session worktree it knows about. Missing files are created; stale copies are replaced with the copy embedded in the binary. Session create still writes the worktree copy so a new session does not wait for a serve restart.
 
-It also registers **native-session hooks** in each installed agent's config. Every hooked agent reports vendor conversation id, `SessionEnd`, and (where the runtime has it) `Notification` `idle_prompt`. Kilo Code and Pi also report lifecycle `idle` / `working` / `blocked` with an optional block reason and session title. `aiman session wait` / `prompt --wait` prefer a fresh hook report over tmux screen classification. Restart uses the native id (`claude --resume`, `codex resume`, …). Ageni is not hooked. Missing agent config directories are left alone.
+It also registers **native-session hooks** in each installed agent's config. Every hooked agent reports vendor conversation id, `SessionEnd`, and (where the runtime has it) `Notification` `idle_prompt`. Kilo Code and Pi also report lifecycle `idle` / `working` / `blocked` with an optional block reason and session title. Muse Code reports `SessionStart`, `Stop` (turn idle), and `UserPromptSubmit` (working) through `~/.config/muse/settings.json`. `aiman session wait` / `prompt --wait` prefer a fresh hook report over tmux screen classification. Restart uses the native id (`claude --resume`, `codex resume`, `muse resume`, …). Ageni is not hooked. Missing agent config directories are left alone.
 
 Typical helper spawn from an in-pane agent:
 

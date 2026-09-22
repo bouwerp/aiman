@@ -41,6 +41,19 @@ func (r *terminalRemote) WriteFile(_ context.Context, path string, content []byt
 	return nil
 }
 
+func TestWriteMuseSessionIDOnlyForMuse(t *testing.T) {
+	r := &terminalRemote{}
+	WriteMuseSessionID(context.Background(), r, "/wt", "claude", "sess-1")
+	if len(r.written) != 0 {
+		t.Fatalf("claude wrote %v", r.written)
+	}
+	WriteMuseSessionID(context.Background(), r, "/wt", "muse --trust-workspace", "sess-1")
+	got := string(r.written["/wt/"+domain.AimanSessionIDFileName])
+	if got != "sess-1\n" {
+		t.Fatalf("%q", got)
+	}
+}
+
 func TestScanPTYSessionsParsesRuntimeList(t *testing.T) {
 	r := &terminalRemote{output: map[string]string{
 		"aiman pty list": `{

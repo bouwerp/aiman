@@ -75,6 +75,15 @@ func TestEnsureFileUpdatesStaleCopy(t *testing.T) {
 
 func TestUserSkillFilesAreUnderHome(t *testing.T) {
 	files := UserSkillFiles("/home/dev")
+	foundMuse := false
+	for _, p := range files {
+		if p == "/home/dev/.config/muse/skills/aiman/SKILL.md" {
+			foundMuse = true
+		}
+	}
+	if !foundMuse {
+		t.Fatalf("muse user skill missing: %v", files)
+	}
 	if len(files) < 4 {
 		t.Fatalf("want several agent skill paths, got %v", files)
 	}

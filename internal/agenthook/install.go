@@ -46,6 +46,7 @@ func EnsureOnHost(home string) ([]InstallResult, error) {
 	record(ensureGemini(home, script))
 	record(ensureKilo(home))
 	record(ensurePi(home))
+	record(ensureMuse(home))
 	return out, first
 }
 
@@ -109,6 +110,22 @@ func ensureKilo(home string) (InstallResult, error) {
 		return InstallResult{}, nil
 	}
 	return writeTextFile(filepath.Join(dir, "plugin", "aiman-native-session.js"), kiloPlugin, 0o600)
+}
+
+func ensureMuse(home string) (InstallResult, error) {
+	dir := filepath.Join(home, ".config", "muse")
+	if !isDir(dir) {
+		return InstallResult{}, nil
+	}
+	return upsertJSONFile(filepath.Join(dir, "settings.json"), func(root map[string]any) bool {
+		changed := false
+		if _, ok := root["schema_version"]; !ok {
+			// A settings file without this key fails every muse command.
+			root["schema_version"] = 1
+			changed = true
+		}
+		return upsertMuseIdentityHooks(root, museHookCommand(reporterPath(home))) || changed
+	})
 }
 
 func ensurePi(home string) (InstallResult, error) {

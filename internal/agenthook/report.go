@@ -107,6 +107,22 @@ func inferFromEvent(r *Report) {
 		if r.State == "" {
 			r.State = domain.AgentStateIdle
 		}
+	case ev == "stop":
+		// Muse Stop is the end of a turn, not the process. The TUI is waiting
+		// for the next prompt. SubagentStop must not match this exact event.
+		if r.State == "" {
+			r.State = domain.AgentStateIdle
+		}
+		if r.Source == "" {
+			r.Source = SourceLifecycle
+		}
+	case ev == "userpromptsubmit":
+		if r.State == "" {
+			r.State = domain.AgentStateWorking
+		}
+		if r.Source == "" {
+			r.Source = SourceLifecycle
+		}
 	case strings.Contains(ev, "notification"):
 		nt := strings.ToLower(r.Message)
 		if strings.Contains(nt, "idle") {

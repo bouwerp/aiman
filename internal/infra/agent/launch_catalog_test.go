@@ -61,6 +61,16 @@ func TestLaunchCatalogPiThinking(t *testing.T) {
 	}
 }
 
+func TestLaunchCatalogMuse(t *testing.T) {
+	c := LaunchCatalogFor("muse")
+	if c.EffortFlag != "--reasoning-effort" || !contains(c.Efforts, "ultra") || !contains(c.Efforts, "max") {
+		t.Fatalf("%+v", c)
+	}
+	if !contains(c.Models, "muse-spark-1.2") || !contains(c.Models, "muse-spark-1.3") {
+		t.Fatalf("%+v", c)
+	}
+}
+
 func TestLaunchCatalogCodexConfig(t *testing.T) {
 	c := LaunchCatalogFor("codex")
 	if c.EffortConfig != "model_reasoning_effort" || c.EffortFlag != "" {

@@ -45,6 +45,8 @@ func LaunchCatalogFor(base string) LaunchCatalog {
 		return cursorCatalog
 	case "pi":
 		return piCatalog
+	case "muse":
+		return museCatalog
 	default:
 		return LaunchCatalog{}
 	}
@@ -124,6 +126,18 @@ var copilotCatalog = LaunchCatalog{
 // cursor-agent --list-models. Effort is encoded in the model id, not a flag.
 var cursorCatalog = LaunchCatalog{
 	Models: cursorModels,
+}
+
+// muse --model and --reasoning-effort (Meta Muse Code). ultra maps to the
+// provider's highest tier; the Meta provider rejects none.
+var museCatalog = LaunchCatalog{
+	Models: []string{
+		"muse-spark-1.2",
+		"muse-spark-1.3",
+		"muse-spark-1.3-contributor",
+	},
+	Efforts:    []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
+	EffortFlag: "--reasoning-effort",
 }
 
 // pi --model examples from `pi --help` plus google IDs from `pi --list-models`.

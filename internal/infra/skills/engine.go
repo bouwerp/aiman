@@ -253,6 +253,9 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 		}
 		result = bareSession(cmd)
 
+	case name == "muse code" || baseCommand == "muse":
+		result, err = e.prepareMuse(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+
 	case strings.Contains(name, "copilot") || strings.Contains(strings.ToLower(agent.Command), "copilot"):
 		// Always allow all tools/paths/URLs so permission prompts don't block an autonomous session.
 		cmd := fmt.Sprintf("%s --allow-all", agent.Command)
@@ -570,6 +573,42 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
 	}
 
+	result.InitialPrompt = buildSessionPrompt(promptFiles)
+	return result, nil
+}
+
+// prepareMuse prepares a Meta Muse Code session. --trust-workspace is always
+// on: an untrusted workspace ignores project skills, rules, and hooks, and the
+// first-run trust prompt would stall a detached PTY. --yolo (no approval, no
+// sandbox) is only for prompt-free autonomous sessions.
+func (e *Engine) prepareMuse(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+	var prompts []string
+	for _, s := range selectedSkills {
+		if s.Type == domain.SkillTypePrompt {
+			if content, err := os.ReadFile(s.Path); err == nil {
+				prompts = append(prompts, string(content))
+			}
+		}
+	}
+
+	cmd := ensureFlag(agent.Command, "--trust-workspace")
+	if promptFree {
+		cmd = ensureFlag(cmd, "--yolo")
+	}
+
+	result := domain.PreparedSession{Command: cmd}
+	var promptFiles []string
+	if issue != nil {
+		promptFiles = append(promptFiles, domain.AimanTaskFileName)
+	}
+	if len(prompts) > 0 {
+		systemPrompt := strings.Join(prompts, "\n\n")
+		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
+		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+			return domain.PreparedSession{}, fmt.Errorf("failed to upload Muse prompt to remote: %w", err)
+		}
+		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
+	}
 	result.InitialPrompt = buildSessionPrompt(promptFiles)
 	return result, nil
 }

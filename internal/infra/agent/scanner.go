@@ -52,6 +52,11 @@ var knownAgents = []domain.Agent{
 		Description: "Pi Coding Agent (shittycodingagent.ai)",
 	},
 	{
+		Name:        "Muse Code",
+		Command:     "muse",
+		Description: "Meta Muse Code CLI",
+	},
+	{
 		Name:        "Ageni",
 		Command:     "ageni",
 		Description: "Ageni multi-provider coding agent (github.com/bouwerp/ageni)",

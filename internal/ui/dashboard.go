@@ -7550,6 +7550,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			}
 		}
 		sendKeysPrompt = usecase.InjectSharedContext(ctx, mgr, workingDir, s.Group, s.RepoName, sendKeysPrompt)
+		usecase.WriteMuseSessionID(ctx, mgr, workingDir, agentCmd, s.ID)
 		if sessionCfg.FreshAgent {
 			clearRemoteNativeSidecar(ctx, mgr, s.ID)
 			if clearer, ok := db.(interface {

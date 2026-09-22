@@ -147,6 +147,28 @@ func TestCommandExists_GoPathIncluded(t *testing.T) {
 	}
 }
 
+func TestScanAgents_DetectsMuse(t *testing.T) {
+	exec := &mockExecutor{
+		canRun: func(cmd string) bool {
+			return strings.Contains(cmd, "command -v muse")
+		},
+	}
+	scanner := NewScanner(exec)
+	agents, err := scanner.ScanAgents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range agents {
+		if a.Name == "Muse Code" {
+			if a.Command != "muse" {
+				t.Fatalf("command %q", a.Command)
+			}
+			return
+		}
+	}
+	t.Fatal("Muse Code not detected")
+}
+
 func TestScanAgents_DetectsAgeni(t *testing.T) {
 	exec := &mockExecutor{
 		canRun: func(cmd string) bool {

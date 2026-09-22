@@ -336,6 +336,42 @@ func TestPrepareSession_KiloWithIssue_UsesSendKeys(t *testing.T) {
 	}
 }
 
+func TestPrepareSession_MuseTrustsWorkspaceAndSkipsApprovalsWhenPromptFree(t *testing.T) {
+	cfg := &config.Config{AgentDefaults: map[string]config.AgentDefaults{
+		"muse": {Model: "muse-spark-1.3", Effort: "high"},
+	}}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	ctx := context.Background()
+	agent := domain.Agent{Name: "Muse Code", Command: "muse"}
+	issue := &domain.Issue{Key: "PROJ-1", Summary: "Add muse", Status: domain.IssueStatusTodo}
+
+	guarded, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(guarded.Command, "--trust-workspace") {
+		t.Fatalf("trust flag: %s", guarded.Command)
+	}
+	if strings.Contains(guarded.Command, "--yolo") {
+		t.Fatalf("yolo only when prompt-free: %s", guarded.Command)
+	}
+	if !strings.Contains(guarded.Command, "--model muse-spark-1.3") || !strings.Contains(guarded.Command, "--reasoning-effort high") {
+		t.Fatalf("defaults: %s", guarded.Command)
+	}
+	if !strings.Contains(guarded.InitialPrompt, domain.AimanTaskFileName) {
+		t.Fatalf("prompt: %s", guarded.InitialPrompt)
+	}
+
+	free, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(free.Command, "--yolo") || !strings.Contains(free.Command, "--trust-workspace") {
+		t.Fatalf("prompt-free: %s", free.Command)
+	}
+}
+
 func TestPrepareSession_CopilotAddsAllowAll(t *testing.T) {
 	cfg := &config.Config{}
 	engine := NewEngine(cfg)

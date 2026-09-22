@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -163,6 +164,25 @@ func upsertClaudeHook(root map[string]any, event, command, matcher string) bool 
 	}
 	hooks[event] = append(arr, group)
 	return true
+}
+
+// museHookCommand recovers AIMAN_ID when Muse's hook environment allowlist
+// drops it. Launch writes .aiman_session_id in the working directory.
+func museHookCommand(reporter string) string {
+	return fmt.Sprintf(
+		`id="${AIMAN_ID:-}"; if [ -z "$id" ]; then d="${PWD:-}"; while [ -n "$d" ] && [ "$d" != / ]; do if [ -f "$d/.aiman_session_id" ]; then id=$(tr -d '[:space:]' < "$d/.aiman_session_id"); break; fi; d=$(dirname "$d"); done; fi; [ -n "$id" ] || exit 0; AIMAN_ENV=1 AIMAN_ID="$id" exec %s`,
+		strconv.Quote(reporter),
+	)
+}
+
+func upsertMuseIdentityHooks(root map[string]any, command string) bool {
+	changed := false
+	for _, event := range []string{"SessionStart", "SessionEnd", "Stop", "UserPromptSubmit", "Notification"} {
+		if upsertClaudeHook(root, event, command, "*") {
+			changed = true
+		}
+	}
+	return changed
 }
 
 func upsertIdentityHooks(root map[string]any, command string) bool {

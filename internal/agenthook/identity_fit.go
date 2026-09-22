@@ -41,6 +41,8 @@ func nativePathVendor(path string) string {
 		return "pi"
 	case strings.Contains(path, "/.gemini/") || strings.Contains(path, "/antigravity/") || strings.Contains(path, "/agy/"):
 		return "agy"
+	case strings.Contains(path, "/muse/sessions/"):
+		return "muse"
 	default:
 		return ""
 	}
@@ -64,6 +66,8 @@ func nativeCommandVendor(base string) string {
 		return "pi"
 	case strings.Contains(base, "agy") || strings.Contains(base, "antigravity") || strings.Contains(base, "gemini"):
 		return "agy"
+	case base == "muse":
+		return "muse"
 	default:
 		return ""
 	}

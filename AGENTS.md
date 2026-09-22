@@ -10,7 +10,7 @@ Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full
 
 - Turns a JIRA ticket into a git worktree + tmux session + mutagen sync + AI agent in one flow
 - Tracks active sessions, provides live pane previews, git status, and AI summaries
-- Supports Claude Code, Antigravity CLI, GitHub Copilot, Kilo Code, and Cursor as agents
+- Supports Claude Code, Antigravity CLI, GitHub Copilot, Kilo Code, Cursor, Pi, and Muse Code as agents
 
 Binary: `aiman` — built from `./cmd/aiman/main.go`  
 Module: `github.com/bouwerp/aiman`  
@@ -184,7 +184,7 @@ Admin Menu (`m`) → **Agent API** is the settings page for `aiman serve` (one r
 
 Session create also calls `ensureRemoteServer` if `~/.aiman/aiman.sock` is missing.
 
-On start, `aiman serve` installs or updates the bundled skill (`internal/aimanskill`) in user-level agent skill dirs under `$HOME` and in each known session worktree, and registers native-session hooks (`internal/agenthook`) in each installed agent's config. Identity agents (Claude, Grok, Cursor, Codex, Copilot, agy) report session id, `SessionEnd`, and `idle_prompt`. Kilo Code and Pi also report lifecycle state. `session.wait` uses a hook report newer than 2 minutes instead of `pane.Classify`. Session create still writes the worktree skill copy. Ageni is not hooked.
+On start, `aiman serve` installs or updates the bundled skill (`internal/aimanskill`) in user-level agent skill dirs under `$HOME` and in each known session worktree, and registers native-session hooks (`internal/agenthook`) in each installed agent's config. Identity agents (Claude, Grok, Cursor, Codex, Copilot, agy, Muse Code) report session id, `SessionEnd`, and `idle_prompt` where the runtime has it. Muse Code uses `SessionStart`, `Stop`, and `UserPromptSubmit` in `~/.config/muse/settings.json` (`schema_version` 1). Kilo Code and Pi also report lifecycle state. `session.wait` uses a hook report newer than 2 minutes instead of `pane.Classify`. Session create still writes the worktree skill copy. Ageni is not hooked.
 
 SSH `systemctl --user` needs `XDG_RUNTIME_DIR` and the session bus; the scripts set those. Linger is enabled *before* `systemctl --user` so a first SSH to a host with no lingering user instance can still install.
 

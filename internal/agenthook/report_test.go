@@ -14,6 +14,20 @@ func TestExtractReportSessionEnd(t *testing.T) {
 	}
 }
 
+func TestExtractReportMuseStopIsIdleNotEnded(t *testing.T) {
+	r := ExtractReport([]byte(`{"hook_event_name":"Stop","session_id":"m1"}`))
+	if r.Ended || r.ID != "m1" || r.State != domain.AgentStateIdle {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestExtractReportMusePromptSubmitIsWorking(t *testing.T) {
+	r := ExtractReport([]byte(`{"hook_event_name":"UserPromptSubmit","session_id":"m1"}`))
+	if r.Ended || r.State != domain.AgentStateWorking || r.ID != "m1" {
+		t.Fatalf("%+v", r)
+	}
+}
+
 func TestExtractReportIdlePrompt(t *testing.T) {
 	r := ExtractReport([]byte(`{"hookEventName":"Notification","notification_type":"idle_prompt","sessionId":"s1"}`))
 	if r.State != domain.AgentStateIdle || r.Source != SourceIdlePrompt || r.ID != "s1" {

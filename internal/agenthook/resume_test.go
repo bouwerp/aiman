@@ -14,6 +14,7 @@ func TestWithResumePerAgent(t *testing.T) {
 		{"agy --dangerously-skip-permissions --add-dir .", "a1", "agy --conversation a1 --dangerously-skip-permissions --add-dir ."},
 		{"kilo", "o1", "kilo --session o1"},
 		{"pi --new", "s1", "pi --session s1 --new"},
+		{"muse --trust-workspace", "m1", "muse resume m1 --trust-workspace"},
 		{"claude --resume already", "x", "claude --resume already"},
 		{"claude", "", "claude"},
 	}

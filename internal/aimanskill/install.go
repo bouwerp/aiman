@@ -38,6 +38,7 @@ func UserSkillFiles(home string) []string {
 		filepath.Join(home, ".grok", rel),
 		filepath.Join(home, ".gemini", rel),
 		filepath.Join(home, ".config", "kilo", rel),
+		filepath.Join(home, ".config", "muse", rel),
 		filepath.Join(home, ".kilo", rel),
 	}
 }

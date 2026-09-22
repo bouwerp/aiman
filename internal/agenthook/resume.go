@@ -33,6 +33,9 @@ func WithResume(command, nativeID string) string {
 		return fields[0] + " --session " + nativeID + restArgs(fields[1:])
 	case strings.Contains(base, "pi"):
 		return fields[0] + " --session " + nativeID + restArgs(fields[1:])
+	case base == "muse":
+		// `muse resume <uuid>` opens the interactive TUI. `muse --resume` is not a flag.
+		return fields[0] + " resume " + nativeID + restArgs(fields[1:])
 	default:
 		return fields[0] + " --resume " + nativeID + restArgs(fields[1:])
 	}

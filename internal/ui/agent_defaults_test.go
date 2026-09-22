@@ -27,7 +27,7 @@ func TestAgentDefaultsEffortAvailability(t *testing.T) {
 	for _, r := range m.rows {
 		got[r.key] = r.hasEffort
 	}
-	if !got["claude"] || !got["grok"] || !got["codex"] || !got["agy"] || !got["copilot"] || !got["pi"] {
+	if !got["claude"] || !got["grok"] || !got["codex"] || !got["agy"] || !got["copilot"] || !got["pi"] || !got["muse"] {
 		t.Fatalf("effort agents: %+v", got)
 	}
 	if !got["kilo"] {

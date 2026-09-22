@@ -355,6 +355,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// this follows the "Read .aiman_task.md…" trigger; for ad-hoc sessions it becomes
 	// the entire prompt.
 	sendKeysPrompt = joinPrompt(sendKeysPrompt, config.InitialPrompt)
+	WriteMuseSessionID(ctx, sshMgr, workingDir, agentCmd, session.ID)
 
 	// Step 8: Session (Tmux). The display Name is a renameable alias and must
 	// not become the tmux target; kill/capture/attach stay on the branch.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +48,20 @@ type PTYSpec struct {
 // so a sibling `cmd; exec bash` never runs and remain-on-exit shows a dead pane.
 func PaneShellCommand(bootstrap string) string {
 	return fmt.Sprintf("bash -l -c '%s; exec bash -i'", bootstrap)
+}
+
+// WriteMuseSessionID records the Aiman session id where a Muse hook can read
+// it. Muse does not pass AIMAN_ID through to hook commands.
+func WriteMuseSessionID(ctx context.Context, remote TerminalExecutor, workdir, agentCmd, sessionID string) {
+	if remote == nil || infraAgent.CommandBase(agentCmd) != "muse" {
+		return
+	}
+	id := strings.TrimSpace(sessionID)
+	dir := strings.TrimSpace(workdir)
+	if id == "" || dir == "" {
+		return
+	}
+	_ = remote.WriteFile(ctx, filepath.Join(dir, domain.AimanSessionIDFileName), []byte(id+"\n"))
 }
 
 // ApplyKiloAllowEnv writes the auto-allow config and sets the env keys
@@ -594,6 +609,7 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 	for k, v := range aimanRuntimeEnv(s) {
 		env[k] = v
 	}
+	WriteMuseSessionID(ctx, remote, s.WorkingDirectory, resumed, s.ID)
 	if err := CreatePTYSession(ctx, remote, PTYSpec{
 		ID:      s.ID,
 		Name:    s.TmuxSession,

@@ -125,6 +125,52 @@ func TestEnsureOnHostWritesKiloPlugin(t *testing.T) {
 	}
 }
 
+func TestEnsureOnHostMergesMuseSettings(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "muse")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	orig := []byte("{\n  \"schema_version\": 1,\n  \"model\": \"muse-spark-1.2\"\n}\n")
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), orig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureOnHost(home); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	if root["model"] != "muse-spark-1.2" {
+		t.Fatalf("clobbered model: %s", raw)
+	}
+	if root["schema_version"] != float64(1) {
+		t.Fatalf("schema_version: %s", raw)
+	}
+	for _, ev := range []string{"SessionStart", "SessionEnd", "Stop", "UserPromptSubmit"} {
+		if !strings.Contains(string(raw), ev) {
+			t.Fatalf("missing %s: %s", ev, raw)
+		}
+	}
+	if !strings.Contains(string(raw), Marker) {
+		t.Fatalf("missing reporter: %s", raw)
+	}
+	again, err := EnsureOnHost(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range again {
+		if r.Path == filepath.Join(dir, "settings.json") && r.Action != ActionCurrent {
+			t.Fatalf("second ensure action=%s", r.Action)
+		}
+	}
+}
+
 func TestEnsureOnHostDoesNotTouchAgeni(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".ageni"), 0o700); err != nil {
