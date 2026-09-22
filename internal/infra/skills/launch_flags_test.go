@@ -54,7 +54,7 @@ func TestEnsureInteractiveLaunch(t *testing.T) {
 		{"grok", "grok", "--no-auto-update"},
 		{"grok-build alias", "grok-build", "--no-auto-update"},
 		{"cursor-agent", "cursor-agent", "--disable-auto-update"},
-		{"muse", "muse", "--trust-workspace"},
+		{"muse", "muse", "--yolo"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

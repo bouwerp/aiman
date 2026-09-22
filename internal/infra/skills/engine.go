@@ -577,10 +577,12 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 	return result, nil
 }
 
-// prepareMuse prepares a Meta Muse Code session. --trust-workspace is always
-// on: an untrusted workspace ignores project skills, rules, and hooks, and the
-// first-run trust prompt would stall a detached PTY. --yolo (no approval, no
-// sandbox) is only for prompt-free autonomous sessions.
+// prepareMuse prepares a Meta Muse Code session. --yolo is Muse's
+// equivalent of --dangerously-skip-permissions: approvals and the sandbox
+// off, workspace trusted for the run. Without it a detached PTY dies in the
+// permission UI ("cursor position could not be read") instead of reaching
+// the prompt. --trust-workspace stays as well so a build that ignores --yolo
+// still loads project skills and hooks.
 func (e *Engine) prepareMuse(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
@@ -591,10 +593,9 @@ func (e *Engine) prepareMuse(ctx context.Context, remote domain.RemoteExecutor, 
 		}
 	}
 
+	_ = promptFree
 	cmd := ensureFlag(agent.Command, "--trust-workspace")
-	if promptFree {
-		cmd = ensureFlag(cmd, "--yolo")
-	}
+	cmd = ensureFlag(cmd, "--yolo")
 
 	result := domain.PreparedSession{Command: cmd}
 	var promptFiles []string

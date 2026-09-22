@@ -350,11 +350,8 @@ func TestPrepareSession_MuseTrustsWorkspaceAndSkipsApprovalsWhenPromptFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(guarded.Command, "--trust-workspace") {
-		t.Fatalf("trust flag: %s", guarded.Command)
-	}
-	if strings.Contains(guarded.Command, "--yolo") {
-		t.Fatalf("yolo only when prompt-free: %s", guarded.Command)
+	if !strings.Contains(guarded.Command, "--trust-workspace") || !strings.Contains(guarded.Command, "--yolo") {
+		t.Fatalf("muse must launch bypassed: %s", guarded.Command)
 	}
 	if !strings.Contains(guarded.Command, "--model muse-spark-1.3") || !strings.Contains(guarded.Command, "--reasoning-effort high") {
 		t.Fatalf("defaults: %s", guarded.Command)

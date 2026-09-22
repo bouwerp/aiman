@@ -34,8 +34,10 @@ func WithResume(command, nativeID string) string {
 	case strings.Contains(base, "pi"):
 		return fields[0] + " --session " + nativeID + restArgs(fields[1:])
 	case base == "muse":
-		// `muse resume <uuid>` opens the interactive TUI. `muse --resume` is not a flag.
-		return fields[0] + " resume " + nativeID + restArgs(fields[1:])
+		// Root flags have to precede `resume`. `muse resume <id>` with the
+		// bypass flags after the id still opens the permission UI first, and
+		// that UI exits when it cannot read the cursor. `--resume` is not a flag.
+		return fields[0] + restArgs(fields[1:]) + " resume " + nativeID
 	default:
 		return fields[0] + " --resume " + nativeID + restArgs(fields[1:])
 	}

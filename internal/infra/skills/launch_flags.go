@@ -114,9 +114,11 @@ func EnsureInteractiveLaunch(cmd, worktree string) string {
 		return ensureFlag(cmd, "--disable-auto-update")
 	}
 	if base == "muse" {
-		// A trust prompt in a detached PTY stalls the session before skills
-		// and hooks load. --yolo, when present, already trusts the workspace.
-		return ensureFlag(cmd, "--trust-workspace")
+		// Revive rebuilds from the binary name, so it never sees the
+		// PrepareSession flags. A resume without --yolo exits in the
+		// permission UI before the conversation is restored.
+		cmd = ensureFlag(cmd, "--trust-workspace")
+		return ensureFlag(cmd, "--yolo")
 	}
 	return cmd
 }
