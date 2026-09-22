@@ -55,6 +55,21 @@ var iamPolicyActions = []string{
 	"iam:UntagUser",
 }
 
+// edgeGlobalActions are CloudFront calls. The API is global and does not
+// follow the session's locked working region, same as Route53.
+var edgeGlobalActions = []string{
+	"cloudfront:*",
+}
+
+// usEast1EdgeActions are CloudFormation and ACM calls that must succeed in
+// us-east-1 even when the delegated session is locked to another region.
+// A CloudFront distribution can only use an ACM certificate from us-east-1,
+// and the stack that requests that certificate has to be deployed there.
+var usEast1EdgeActions = []string{
+	"cloudformation:*",
+	"acm:*",
+}
+
 // resourceDiscoveryActions are read-only inventory and item-read calls
 // (Lambda, DynamoDB) that a delegated session may need to run against the
 // account regardless of the locked working region, e.g. checking what exists
@@ -132,6 +147,21 @@ func BuildRegionPolicy(regions []string) string {
 				Effect:   "Allow",
 				Action:   resourceDiscoveryActions,
 				Resource: "*",
+			},
+			{
+				Effect:   "Allow",
+				Action:   edgeGlobalActions,
+				Resource: "*",
+			},
+			{
+				Effect:   "Allow",
+				Action:   usEast1EdgeActions,
+				Resource: "*",
+				Condition: map[string]any{
+					"StringEquals": map[string]any{
+						"aws:RequestedRegion": "us-east-1",
+					},
+				},
 			},
 		},
 	}

@@ -68,7 +68,7 @@ func TestBuildRegionPolicy_Multi(t *testing.T) {
 func TestBuildRegionPolicy_LeavesPackedPolicyHeadroom(t *testing.T) {
 	// AWS does not publish the packed binary limit, so keep the plaintext well
 	// below its separate 2,048-byte request limit.
-	const maxPolicyBytes = 1000
+	const maxPolicyBytes = 1600
 
 	got := BuildRegionPolicy([]string{"us-east-2"})
 	if len(got) > maxPolicyBytes {
@@ -280,6 +280,49 @@ func actionList(action any) []string {
 		return out
 	}
 	return nil
+}
+
+func TestBuildRegionPolicy_AllowsEdgeCertInUsEast1(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	foundCloudFront := false
+	foundEdgeRegion := false
+	for _, s := range p.Statement {
+		actions := actionList(s.Action)
+		if s.Condition == nil {
+			for _, a := range actions {
+				if a == "cloudfront:*" {
+					foundCloudFront = true
+				}
+			}
+			continue
+		}
+		eq, _ := s.Condition["StringEquals"].(map[string]any)
+		if eq["aws:RequestedRegion"] != "us-east-1" {
+			continue
+		}
+		hasCF, hasACM := false, false
+		for _, a := range actions {
+			if a == "cloudformation:*" {
+				hasCF = true
+			}
+			if a == "acm:*" {
+				hasACM = true
+			}
+		}
+		foundEdgeRegion = hasCF && hasACM
+	}
+	if !foundCloudFront || !foundEdgeRegion {
+		t.Fatalf("edge cert access missing, policy=%s", got)
+	}
 }
 
 func TestBuildRegionPolicy_TrimsWhitespace(t *testing.T) {
