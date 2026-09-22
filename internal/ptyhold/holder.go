@@ -106,6 +106,13 @@ func Run(root, id string) (err error) {
 
 	hub := newFanout()
 	spool := newSpoolWriter(dir)
+	var ptyWrite sync.Mutex
+	writePTY := func(p []byte) error {
+		ptyWrite.Lock()
+		defer ptyWrite.Unlock()
+		_, werr := ptmx.Write(p)
+		return werr
+	}
 
 	// PTY -> spool + clients, recording what the output says about the session
 	// as it passes. Doing it here is what makes it free: the bytes are already
@@ -116,10 +123,14 @@ func Run(root, id string) (err error) {
 	go func() {
 		defer close(outputDone)
 		buf := make([]byte, 16<<10)
+		var cursor cursorQueryScanner
 		for {
 			n, rerr := ptmx.Read(buf)
 			if n > 0 {
 				data := append([]byte(nil), buf[:n]...)
+				if reply := cursor.Replies(data); len(reply) > 0 {
+					_ = writePTY(reply)
+				}
 				hub.broadcast(data)
 				spool.write(data)
 				act.observe(data)
@@ -151,7 +162,7 @@ func Run(root, id string) (err error) {
 				for {
 					n, rerr := conn.Read(buf)
 					if n > 0 {
-						if _, werr := ptmx.Write(buf[:n]); werr != nil {
+						if werr := writePTY(buf[:n]); werr != nil {
 							return
 						}
 					}
