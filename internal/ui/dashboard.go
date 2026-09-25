@@ -5159,11 +5159,13 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 				ctx := context.Background()
 				var allSessions []domain.Session
 				scannedHosts := make(map[string]bool)
+				reachableHosts := make(map[string]bool)
 				for _, r := range config.UniqueRemotes(remotes) {
 					mgr := ssh.NewManager(ssh.Config{Host: r.Host, User: r.User, Root: r.Root})
 					if err := mgr.Connect(ctx); err != nil {
 						continue
 					}
+					reachableHosts[r.Host] = true
 					sessions, ok := usecase.DiscoverHostSessions(ctx, mgr, mutagen.NewEngine(), r.Host)
 					if !ok {
 						// See runDiscovery's identical guard (startup.go): a failed
@@ -5176,8 +5178,9 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 					scannedHosts[r.Host] = true
 				}
 				return discoveryResultMsg{
-					sessions:     allSessions,
-					scannedHosts: scannedHosts,
+					sessions:       allSessions,
+					scannedHosts:   scannedHosts,
+					reachableHosts: reachableHosts,
 				}
 			}, true
 		}
@@ -6840,7 +6843,12 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 	m.allSessions = merged
 
 	var probes []tea.Cmd
-	for host := range msg.scannedHosts {
+	// Daemon probing only needs the SSH connection, not a successful tmux
+	// scan, so it is driven off reachableHosts rather than scannedHosts: a
+	// host whose tmux scan transiently failed this round must still have its
+	// serve/trigger/gateway daemons checked (and, via maybeAutoUpdateServe,
+	// auto-updated if behind).
+	for host := range msg.reachableHosts {
 		probes = append(probes,
 			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindServe),
 			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindTrigger),

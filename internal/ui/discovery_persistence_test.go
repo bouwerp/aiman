@@ -179,3 +179,27 @@ func TestDiscoveryKeepsPersistedGroupWhenIDsDiffer(t *testing.T) {
 		t.Fatal("group header missing after discovery")
 	}
 }
+
+// A host can be reachable over SSH while its tmux scan transiently fails —
+// the commit that stopped marking such a host as scanned (26700f7) says this
+// is common right at startup. scannedHosts must stay gated on the scan
+// succeeding (that gating protects the session-merge "confirmed dead" logic
+// above and must not loosen), but the daemon probe that drives
+// maybeAutoUpdateServe only needs the SSH connection, not a successful tmux
+// scan. Before reachableHosts existed, the probe loop iterated scannedHosts
+// only, so a host reachable-but-not-scanned silently never got probed and
+// auto-update-on-start could no-op for an entire session.
+func TestDiscoveryProbesReachableHostsEvenWhenScanFails(t *testing.T) {
+	repo := &savingSessionRepo{}
+	cfg := testCfg()
+	m := NewModel(cfg, nil, nil, repo, nil, nil, nil)
+
+	_, cmd := m.applyDiscoveryResult(discoveryResultMsg{
+		// scannedHosts intentionally empty: the tmux scan failed this round.
+		reachableHosts: map[string]bool{"regent0": true},
+	})
+
+	if cmd == nil {
+		t.Fatal("a reachable host should still get its serve/trigger/gateway daemons probed")
+	}
+}

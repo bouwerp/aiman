@@ -102,7 +102,14 @@ type checkResultMsg usecase.CheckResult
 
 type discoveryResult struct {
 	sessions     []domain.Session
-	scannedHosts map[string]bool // remotes that were successfully connected and scanned
+	scannedHosts map[string]bool // remotes whose tmux scan succeeded (session-merge "confirmed dead" gate)
+	// reachableHosts is every remote the SSH connection succeeded for, whether
+	// or not the tmux scan that follows also succeeds. The tmux scan can
+	// transiently fail — most likely right at startup, per 26700f7 — which
+	// must not stop the client from probing that host's serve/trigger/gateway
+	// daemons: that probe is what drives maybeAutoUpdateServe, and it is a
+	// read-only operation unrelated to tmux session discovery.
+	reachableHosts map[string]bool
 }
 
 type discoveryResultMsg discoveryResult
@@ -137,7 +144,7 @@ func runDiscovery(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
 		defer cancel()
-		result := discoveryResult{scannedHosts: make(map[string]bool)}
+		result := discoveryResult{scannedHosts: make(map[string]bool), reachableHosts: make(map[string]bool)}
 		if len(cfg.Remotes) == 0 {
 			return discoveryResultMsg(result)
 		}
@@ -155,6 +162,7 @@ func runDiscovery(cfg *config.Config) tea.Cmd {
 				// Skip unreachable remotes — don't block startup
 				continue
 			}
+			result.reachableHosts[remote.Host] = true
 			sessions, ok := usecase.DiscoverHostSessions(ctx, mgr, mutagen.NewEngine(), remote.Host)
 			if !ok {
 				continue
