@@ -65,9 +65,14 @@ var edgeGlobalActions = []string{
 // us-east-1 even when the delegated session is locked to another region.
 // A CloudFront distribution can only use an ACM certificate from us-east-1,
 // and the stack that requests that certificate has to be deployed there.
+// A CloudFront-scope WAFv2 WebACL is likewise only creatable in us-east-1,
+// and publishing its ARN to SSM Parameter Store for other stacks to consume
+// needs the matching write action there too.
 var usEast1EdgeActions = []string{
 	"cloudformation:*",
 	"acm:*",
+	"wafv2:*",
+	"ssm:PutParameter",
 }
 
 // resourceDiscoveryActions are read-only inventory and item-read calls

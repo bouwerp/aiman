@@ -325,6 +325,37 @@ func TestBuildRegionPolicy_AllowsEdgeCertInUsEast1(t *testing.T) {
 	}
 }
 
+func TestBuildRegionPolicy_AllowsWAFRateLimitInUsEast1(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	foundWAF, foundSSMPut := false, false
+	for _, s := range p.Statement {
+		eq, _ := s.Condition["StringEquals"].(map[string]any)
+		if eq["aws:RequestedRegion"] != "us-east-1" {
+			continue
+		}
+		for _, a := range actionList(s.Action) {
+			if a == "wafv2:*" {
+				foundWAF = true
+			}
+			if a == "ssm:PutParameter" {
+				foundSSMPut = true
+			}
+		}
+	}
+	if !foundWAF || !foundSSMPut {
+		t.Fatalf("WAF rate-limit / SSM parameter write access missing, policy=%s", got)
+	}
+}
+
 func TestBuildRegionPolicy_TrimsWhitespace(t *testing.T) {
 	got := BuildRegionPolicy([]string{"  us-east-2 ", " eu-west-1"})
 	if got == "" {
