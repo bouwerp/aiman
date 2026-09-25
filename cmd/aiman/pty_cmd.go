@@ -279,8 +279,9 @@ func runPTYAttach(sock, id string) error {
 	stdin := detachOnCtrlQ(os.Stdin, connResp)
 	// Two-step resize after the grow animation. A short lead lets Relay
 	// start copying; attachRedrawGap then holds the intermediate size past
-	// Ink's SIGWINCH debounce.
-	go kickAttachRedraw(connResp.Resize, cols, rows, time.Sleep)
+	// Ink's SIGWINCH debounce. Only a full-screen agent has the cleared alt
+	// screen this is meant to repaint; see kickAttachRedraw.
+	go kickAttachRedraw(modes, connResp.Resize, cols, rows, time.Sleep)
 	if err := attachExitErr(connResp.Relay(stdin, os.Stdout), stdin.Detached()); err != nil {
 		return err
 	}
@@ -558,7 +559,19 @@ func attachRedrawNudge(cols, rows int) (int, int, bool) {
 }
 
 // kickAttachRedraw forces a full agent layout onto the cleared alt screen.
-func kickAttachRedraw(resize func(int, int) error, cols, rows int, sleep func(time.Duration)) {
+//
+// Only an agent that painted a full screen has one to force: attachOpenFor
+// only clears the alt screen when modes.altScreen is set, so an inline agent
+// is left on the primary screen with none of this to paint onto. Resizing it
+// anyway still reaches the agent, and an agent that responds to a real size
+// change by reflowing and reprinting its history — rather than repainting a
+// screen it owns exclusively — puts that reprint into the terminal's actual
+// scrollback, which looks exactly like the whole session scrolling past on
+// attach.
+func kickAttachRedraw(modes attachModes, resize func(int, int) error, cols, rows int, sleep func(time.Duration)) {
+	if !modes.altScreen {
+		return
+	}
 	nudgeCols, nudgeRows, ok := attachRedrawNudge(cols, rows)
 	if !ok {
 		return

@@ -198,7 +198,7 @@ func TestAttachRedrawNudgeIsARealSizeChange(t *testing.T) {
 func TestKickAttachRedrawSendsNudgeThenRestore(t *testing.T) {
 	var sizes []string
 	var sleeps []time.Duration
-	kickAttachRedraw(func(cols, rows int) error {
+	kickAttachRedraw(attachModes{altScreen: true}, func(cols, rows int) error {
 		sizes = append(sizes, fmt.Sprintf("%dx%d", cols, rows))
 		return nil
 	}, 80, 24, func(d time.Duration) { sleeps = append(sleeps, d) })
@@ -215,12 +215,32 @@ func TestKickAttachRedrawSendsNudgeThenRestore(t *testing.T) {
 
 func TestKickAttachRedrawSkipsUnusableSizes(t *testing.T) {
 	called := 0
-	kickAttachRedraw(func(int, int) error {
+	kickAttachRedraw(attachModes{altScreen: true}, func(int, int) error {
 		called++
 		return nil
 	}, 0, 24, func(time.Duration) {})
 	if called != 0 {
 		t.Fatalf("unusable size must not resize, calls=%d", called)
+	}
+}
+
+// An inline agent (Muse Code observed doing this) has no cleared alt screen
+// for the redraw dance to paint onto. Forcing the resize anyway sends
+// whatever the agent does on a real SIGWINCH — reflowing and reprinting its
+// history with plain newlines — into the terminal's actual scrollback, which
+// is indistinguishable from the whole session scrolling past on attach.
+func TestKickAttachRedrawSkipsInlineAgents(t *testing.T) {
+	resizes := 0
+	sleeps := 0
+	kickAttachRedraw(attachModes{}, func(int, int) error {
+		resizes++
+		return nil
+	}, 80, 24, func(time.Duration) { sleeps++ })
+	if resizes != 0 {
+		t.Fatalf("inline agent must not be resized on attach, calls=%d", resizes)
+	}
+	if sleeps != 0 {
+		t.Fatalf("inline agent must not incur the redraw delay, sleeps=%d", sleeps)
 	}
 }
 
