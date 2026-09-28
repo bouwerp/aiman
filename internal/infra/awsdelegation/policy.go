@@ -53,6 +53,9 @@ var iamPolicyActions = []string{
 	"iam:*UserPolicy",
 	"iam:TagUser",
 	"iam:UntagUser",
+	// Access-key lifecycle. ListUser* does not cover ListAccessKeys, so a
+	// region lock otherwise denies rotating an IAM user's keys (SES SMTP).
+	"iam:*AccessKey*",
 }
 
 // edgeGlobalActions are CloudFront calls. The API is global and does not

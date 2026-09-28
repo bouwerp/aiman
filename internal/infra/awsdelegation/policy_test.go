@@ -155,6 +155,11 @@ func TestBuildRegionPolicy_AllowsIAMInspectWithoutRegion(t *testing.T) {
 		"iam:DetachUserPolicy",
 		"iam:TagUser",
 		"iam:UntagUser",
+		"iam:ListAccessKeys",
+		"iam:CreateAccessKey",
+		"iam:UpdateAccessKey",
+		"iam:DeleteAccessKey",
+		"iam:GetAccessKeyLastUsed",
 	}
 	var allowed []string
 	for _, s := range p.Statement {
