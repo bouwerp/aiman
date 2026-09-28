@@ -29,10 +29,12 @@ var route53DNSActions = []string{
 }
 
 // iamPolicyActions are IAM APIs used to inspect a role's or user's policies,
-// simulate access, and apply a policy-document change (managed versions or
-// inline, on either principal type). IAM is global (API in us-east-1); they
-// have no RequestedRegion. Narrow action-family wildcards keep the generated
-// session policy below STS's separate packed-policy limit.
+// simulate access, apply a policy-document change (managed versions or
+// inline, on either principal type), and manage the role/instance-profile
+// lifecycle needed to fully clean up and redeploy EC2-backed stacks. IAM is
+// global (API in us-east-1); they have no RequestedRegion. Narrow
+// action-family wildcards keep the generated session policy below STS's
+// separate packed-policy limit.
 var iamPolicyActions = []string{
 	"iam:GetRole*",
 	"iam:ListRole*",
@@ -43,6 +45,10 @@ var iamPolicyActions = []string{
 	"iam:*RolePolicy",
 	"iam:CreateRole",
 	"iam:DeleteRole",
+	"iam:CreateInstanceProfile",
+	"iam:DeleteInstanceProfile",
+	"iam:AddRoleToInstanceProfile",
+	"iam:RemoveRoleFromInstanceProfile",
 	"iam:UpdateRole",
 	"iam:TagRole",
 	"iam:UntagRole",
