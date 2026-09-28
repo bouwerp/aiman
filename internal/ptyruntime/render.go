@@ -57,19 +57,23 @@ func newTerminal(cols, rows int) vt10x.Terminal {
 // replaying its whole history: the runtime keeps one per session and feeds it
 // only the bytes that arrived since the last capture.
 func renderTerminal(term vt10x.Terminal, cols, rows int) string {
+	// Blank rows below the cursor are padding too.
+	return strings.TrimRight(strings.Join(screenRows(term, cols, rows), "\n"), "\n")
+}
+
+// screenRows snapshots the emulator's grid as one string per row, untrimmed,
+// so two snapshots of the same emulator can be diffed row by row. Takes the
+// emulator's lock like renderTerminal, so it must not be called with the lock
+// already held — and never nested inside a Write.
+func screenRows(term vt10x.Terminal, cols, rows int) []string {
 	term.Lock()
 	defer term.Unlock()
 
-	var b strings.Builder
-	b.Grow(rows * (cols + 1))
+	out := make([]string, 0, rows)
 	for y := 0; y < rows; y++ {
-		b.WriteString(renderRow(term, y, cols))
-		if y < rows-1 {
-			b.WriteByte('\n')
-		}
+		out = append(out, renderRow(term, y, cols))
 	}
-	// Blank rows below the cursor are padding too.
-	return strings.TrimRight(b.String(), "\n")
+	return out
 }
 
 // renderRow emits one screen row as text plus SGR colour.

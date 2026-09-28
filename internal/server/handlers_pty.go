@@ -242,13 +242,11 @@ func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {
 	// Rendered, not raw: the caller wants a screen, the way tmux capture-pane
 	// gives one. MaxBytes is deliberately not applied to the spool here —
 	// truncating the byte stream would cut mid-escape-sequence and corrupt the
-	// replay; the rendered screen is already bounded by the session's size.
-	text, err := s.pty.CaptureScreen(id)
+	// replay. Lines caps the tail; zero returns the retained scrollback, the
+	// way `tmux capture-pane -S -` hands back history for a preview to scroll.
+	text, err := s.pty.CaptureScrollback(id, params.Lines)
 	if err != nil {
 		return s.ptyErrResp(req.ID, err)
-	}
-	if params.Lines > 0 {
-		text = tailLines(text, params.Lines)
 	}
 	// The activity fields ride along so a caller judging what the session is
 	// doing gets the screen and the timings in one round trip. Silence and a
@@ -442,14 +440,6 @@ func writeResponse(conn io.Writer, resp Response) {
 		return
 	}
 	_, _ = conn.Write(out)
-}
-
-func tailLines(text string, lines int) string {
-	parts := strings.Split(text, "\n")
-	if len(parts) > lines {
-		return strings.Join(parts[len(parts)-lines:], "\n")
-	}
-	return text
 }
 
 // isPTYAttach reports whether a request line switches this connection to raw

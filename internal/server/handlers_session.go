@@ -407,17 +407,14 @@ func (s *Server) handleRead(ctx context.Context, req Request) Response {
 	_ = json.Unmarshal(req.Params, &params)
 	text := ""
 	if sess.IsPTY() && s.pty != nil {
-		screen, cerr := s.pty.CaptureScreen(sess.ID)
+		scroll, cerr := s.pty.CaptureScrollback(sess.ID, params.Lines)
 		if cerr != nil {
 			return errResp(req.ID, CodeInvalidParams, cerr.Error())
-		}
-		if params.Lines > 0 {
-			screen = tailLines(screen, params.Lines)
 		}
 		return Response{ID: req.ID, Result: map[string]any{
 			"type":    "pane_read",
 			"session": sessionInfo(sess, req.Caller),
-			"text":    screen,
+			"text":    scroll,
 		}}
 	}
 	if s.remote != nil {

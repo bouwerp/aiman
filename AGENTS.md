@@ -328,7 +328,9 @@ fan-out attach subscribers, and SIGTERM/SIGKILL kill grace. Sessions survive
 laptop disconnects but **not** a serve restart (documented limitation).
 
 Socket API (`internal/server/handlers_pty.go`): `pty.create/list/get/input/
-capture/kill/forget` are plain JSON methods; `pty.attach` answers once then
+capture/kill/forget` are plain JSON methods; `pty.capture` returns the
+journaled scrollback plus the live screen (the PTY equivalent of
+`tmux capture-pane -S -`, capped at 2000 lines); `pty.attach` answers once then
 takes over the connection: output streams out as raw bytes, client messages are
 framed (`internal/server/attach_framing.go` — `[len BE][kind][payload]`, kinds
 0x01 input, 0x02 resize), which is what makes live window resize possible.

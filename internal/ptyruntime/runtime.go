@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -88,7 +89,9 @@ type Manager struct {
 
 	// Long-lived terminal emulators, one per session being looked at, so a
 	// capture costs the output since the last one rather than the session's
-	// entire history (see screen.go).
+	// entire history (see screen.go). Each one also journals the lines that
+	// scroll off its grid, so previews and reads can scroll back the way
+	// `tmux capture-pane -S -` does.
 	screenMu sync.Mutex
 	screens  map[string]*screen
 
@@ -291,8 +294,10 @@ func (m *Manager) Capture(id string, maxBytes int) ([]byte, error) {
 // CaptureScreen is Capture rendered through a terminal emulator, at the
 // session's own size — the PTY equivalent of `tmux capture-pane -p`.
 //
-// Callers that display or classify a session want this, not Capture: the raw
-// spool is a byte stream full of cursor addressing and redraws, not a screen.
+// Callers that classify a session want this, not Capture: the raw spool is a
+// byte stream full of cursor addressing and redraws, not a screen. Callers
+// that display a session want CaptureScrollback instead, which carries the
+// history a preview or read scrolls back through.
 //
 // The emulator is kept between calls and fed only the output since the last one,
 // so this costs what the session has produced recently rather than everything it
@@ -310,6 +315,37 @@ func (m *Manager) CaptureScreen(id string) (string, error) {
 		rows = defaultRows
 	}
 	return m.screenFor(id).capture(m.root, id, cols, rows), nil
+}
+
+// CaptureScrollback returns the session's journaled history followed by its
+// live screen — the PTY equivalent of `tmux capture-pane -S -`. lines caps
+// the tail when positive; zero or negative returns everything retained.
+func (m *Manager) CaptureScrollback(id string, lines int) (string, error) {
+	info, err := m.Get(id)
+	if err != nil {
+		return "", err
+	}
+	cols, rows := parseSize(info.Size)
+	if cols <= 0 {
+		cols = defaultCols
+	}
+	if rows <= 0 {
+		rows = defaultRows
+	}
+	text := m.screenFor(id).captureScrollback(m.root, id, cols, rows)
+	if lines > 0 {
+		text = tailLines(text, lines)
+	}
+	return text, nil
+}
+
+// tailLines keeps the last n lines of text.
+func tailLines(text string, n int) string {
+	parts := strings.Split(text, "\n")
+	if len(parts) > n {
+		return strings.Join(parts[len(parts)-n:], "\n")
+	}
+	return text
 }
 
 // Kill terminates a session via the kill marker and waits for the holder to
