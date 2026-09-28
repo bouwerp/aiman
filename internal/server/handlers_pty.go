@@ -382,12 +382,25 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 
 	writeResponse(conn, Response{ID: req.ID, Result: map[string]any{"type": "pty_attached"}})
 
-	// Replay the current screen with CUP, not the raw spool and not LF-joined
-	// CaptureScreen text. Attach runs the client in raw mode, where LF is
-	// cursor-down without CR. CUP-addressed rows show chrome immediately;
-	// SIGWINCH then lets the agent paint live updates on top.
-	text, _ := s.pty.CaptureScreen(params.ID)
-	if _, err := conn.Write(encodeAttachScreen(text)); err != nil {
+	// An agent on the alternate screen (Claude, Grok) scrolls that buffer
+	// itself, and the attaching terminal has to be on it too. An inline agent
+	// (Muse) never enters it. Painting Muse there takes away the scrollback
+	// the wheel would otherwise move, and Muse does not read mouse events, so
+	// nothing in the full-screen attach can scroll.
+	view, all, _ := s.pty.CaptureFrame(params.ID)
+	alt := false
+	if info, ierr := s.pty.Get(params.ID); ierr == nil {
+		alt = info.AltScreen
+	}
+	var paint []byte
+	if alt {
+		// CUP, not LF. Attach runs the client in raw mode, where LF is
+		// cursor-down without CR.
+		paint = encodeAttachScreen(view, true)
+	} else {
+		paint = encodeInlineAttach(scrollbackAbove(all, view), view, params.Rows)
+	}
+	if _, err := conn.Write(paint); err != nil {
 		return
 	}
 	// Do not Resize here. Same-size TIOCSWINSZ before Relay starts fills
@@ -422,7 +435,18 @@ func attachScreenReset() []byte {
 	return []byte("\x1b[?1049h\x1b[2J\x1b[H")
 }
 
-func encodeAttachScreen(text string) []byte {
+// scrollbackAbove is the part of a capture that sits above the live screen.
+func scrollbackAbove(all, view string) string {
+	if view == "" || all == view || !strings.HasSuffix(all, view) {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(all, view), "\n")
+}
+
+func encodeAttachScreen(text string, altScreen bool) []byte {
+	if !altScreen {
+		return encodeInlineAttach("", text, 0)
+	}
 	if strings.TrimSpace(text) == "" {
 		// Client already entered the alt screen and may have drawn a grow
 		// animation; a second 2J would wipe it before the agent paints.
@@ -432,6 +456,52 @@ func encodeAttachScreen(text string) []byte {
 	b.Write(attachScreenReset())
 	for i, row := range strings.Split(text, "\n") {
 		fmt.Fprintf(&b, "\x1b[%d;1H%s\x1b[K", i+1, row)
+	}
+	return []byte(b.String())
+}
+
+// encodeInlineAttach paints an inline agent on the primary screen.
+//
+// History lines are CR LF, so each one scrolls into the terminal's scrollback
+// once the cursor is at the bottom. The live rows follow, padded out to the
+// attaching terminal's height, and the last row has no newline — a newline
+// there would scroll the live screen off. The alternate screen is not used:
+// it has no scrollback, and the wheel would have nothing to move.
+func encodeInlineAttach(history, viewport string, rows int) []byte {
+	var hist []string
+	if history != "" {
+		hist = strings.Split(history, "\n")
+	}
+	var view []string
+	if viewport != "" {
+		view = strings.Split(viewport, "\n")
+	}
+	if rows <= 0 {
+		rows = len(view)
+	}
+	if rows <= 0 {
+		rows = 1
+	}
+	if len(view) > rows {
+		hist = append(hist, view[:len(view)-rows]...)
+		view = view[len(view)-rows:]
+	}
+	for len(view) < rows {
+		view = append(view, "")
+	}
+	var b strings.Builder
+	for _, line := range hist {
+		b.WriteString(line)
+		b.WriteString("\x1b[K\r\n")
+	}
+	last := len(view) - 1
+	for i, line := range view {
+		b.WriteByte('\r')
+		b.WriteString(line)
+		b.WriteString("\x1b[K")
+		if i != last {
+			b.WriteString("\r\n")
+		}
 	}
 	return []byte(b.String())
 }

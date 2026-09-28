@@ -428,8 +428,8 @@ func TestPTYAttachResetsWithoutReplayingRawCUPHistory(t *testing.T) {
 	if !strings.Contains(got, "VISIBLE_NOW") {
 		t.Fatalf("attach must show the current screen immediately, got %q", got)
 	}
-	if !strings.Contains(got, "\x1b[2J") && !strings.Contains(got, "\x1b[?1049h") {
-		t.Fatalf("attach must reset the terminal before painting, got %q", got)
+	if strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("inline attach must not enter the alternate screen: %q", got)
 	}
 }
 
@@ -457,20 +457,102 @@ func TestPTYAttachDoesNotDumpLFRenderedSnapshot(t *testing.T) {
 	if strings.Contains(got, "ROW_A\nROW_B") {
 		t.Fatalf("attach dumped an LF-joined snapshot (shears in raw mode): %q", got)
 	}
-	if !strings.Contains(got, "\x1b[2J") && !strings.Contains(got, "\x1b[?1049h") {
-		t.Fatalf("attach must reset the terminal, got %q", got)
+	if strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("inline attach must not enter the alternate screen: %q", got)
+	}
+}
+
+// A full-screen agent asked for the alternate screen. Attach has to follow it
+// there; seeding primary-screen scrollback would fight the buffer it paints on.
+func TestPTYAttachAltScreenStaysOnTheAltScreen(t *testing.T) {
+	sock := startPTYServer(t)
+	cmd := "printf '\\033[?1049h\\033[1;1HALT_SCREEN'; sleep 60"
+	create := createPTY(t, sock, map[string]any{
+		"id": "alt", "command": cmd, "cols": 40, "rows": 8,
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	eventually(t, 10*time.Second, func() bool {
+		info, err := Call(sock, "pty.get", map[string]any{"id": "alt"})
+		if err != nil || info.Error != nil {
+			return false
+		}
+		return strings.Contains(resultJSON(t, info), `"alt_screen":true`)
+	})
+
+	got := attachOutput(t, sock, "alt")
+	if !strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("alt-screen attach must enter the alternate screen: %q", got)
+	}
+	if !strings.Contains(got, "ALT_SCREEN") {
+		t.Fatalf("alt-screen attach must show the live screen: %q", got)
+	}
+}
+
+// Lines that have scrolled off an inline session have to be in the attach
+// bytes as CR LF, ahead of the live screen, or the full-screen wheel has
+// nothing to scroll.
+func TestPTYAttachInlineSeedsScrolledOffLines(t *testing.T) {
+	sock := startPTYServer(t)
+	cmd := "i=1; while [ $i -le 20 ]; do printf 'L%02d\\n' \"$i\"; i=$((i+1)); done; sleep 60"
+	create := createPTY(t, sock, map[string]any{
+		"id": "scroll", "command": cmd, "cols": 40, "rows": 8,
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	eventually(t, 10*time.Second, func() bool {
+		text := captureText(t, sock, "scroll")
+		return strings.Contains(text, "L01") && strings.Contains(text, "L20")
+	})
+
+	got := attachOutput(t, sock, "scroll")
+	if strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("inline attach entered the alternate screen: %q", got)
+	}
+	if !strings.Contains(got, "L01\x1b[K\r\n") {
+		t.Fatalf("scrolled-off line was not seeded into scrollback: %q", got)
+	}
+	if strings.Index(got, "L01") > strings.Index(got, "L20") {
+		t.Fatalf("history should precede the live tail: %q", got)
+	}
+}
+
+// Muse stays on the primary screen and scrolls inside a region, so the lines
+// that leave the top never reach a normal terminal scrollback. Full-screen
+// attach has to write those lines with CR LF (so the wheel can reach them)
+// and must not enter the alternate screen, which has none.
+func TestEncodeInlineAttachSeedsScrollbackOnThePrimaryScreen(t *testing.T) {
+	got := string(encodeInlineAttach("H1\nH2\nH3", "V1\nV2", 2))
+	if strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("inline attach must stay on the primary screen: %q", got)
+	}
+	for _, line := range []string{"H1\x1b[K\r\n", "H2\x1b[K\r\n", "H3\x1b[K\r\n"} {
+		if !strings.Contains(got, line) {
+			t.Fatalf("history %q missing from %q", line, got)
+		}
+	}
+	if strings.Index(got, "H1") > strings.Index(got, "V1") {
+		t.Fatalf("history should precede the live screen: %q", got)
+	}
+	if !strings.Contains(got, "V1") || !strings.Contains(got, "V2") {
+		t.Fatalf("viewport missing: %q", got)
+	}
+	if strings.HasSuffix(got, "\n") {
+		t.Fatalf("a trailing newline scrolls the live screen off: %q", got)
 	}
 }
 
 func TestEncodeAttachScreenEmptySkipsClear(t *testing.T) {
-	got := string(encodeAttachScreen("  \n"))
+	got := string(encodeAttachScreen("  \n", true))
 	if strings.Contains(got, "\x1b[2J") {
 		t.Fatalf("empty dump must not clear a local grow animation: %q", got)
 	}
 }
 
 func TestEncodeAttachScreenUsesCUPNotBareLF(t *testing.T) {
-	got := string(encodeAttachScreen("ROW_A\nROW_B"))
+	got := string(encodeAttachScreen("ROW_A\nROW_B", true))
 	if !strings.Contains(got, "ROW_A") || !strings.Contains(got, "ROW_B") {
 		t.Fatalf("dump must include both rows: %q", got)
 	}
@@ -501,7 +583,7 @@ func attachOutput(t *testing.T, sock, id string) string {
 		mu.Lock()
 		got = out.String()
 		mu.Unlock()
-		return strings.Contains(got, "\x1b[2J") || strings.Contains(got, "\x1b[?1049h")
+		return strings.Contains(got, "\x1b[2J") || strings.Contains(got, "\x1b[?1049h") || strings.Contains(got, "\x1b[K")
 	})
 	return got
 }

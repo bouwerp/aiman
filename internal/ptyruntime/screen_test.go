@@ -1,6 +1,7 @@
 package ptyruntime
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,7 @@ func TestIncrementalCaptureMatchesFullReplay(t *testing.T) {
 	for _, f := range frames {
 		appendSpool(f)
 		all.WriteString(f)
-		got := sc.capture(m.root, "s", 40, 10)
+		_, got := sc.capture(m.root, "s", 40, 10)
 		want := RenderScreen([]byte(all.String()), 40, 10)
 		if got != want {
 			t.Fatalf("after %q:\n incremental: %q\n full replay: %q", f, got, want)
@@ -64,9 +65,9 @@ func TestCaptureWithNoNewOutputIsStable(t *testing.T) {
 	sc := m.screenFor("s")
 	appendSpool("hello\r\n")
 
-	first := sc.capture(m.root, "s", 40, 10)
+	_, first := sc.capture(m.root, "s", 40, 10)
 	for i := 0; i < 3; i++ {
-		if got := sc.capture(m.root, "s", 40, 10); got != first {
+		if _, got := sc.capture(m.root, "s", 40, 10); got != first {
 			t.Fatalf("capture %d changed with no new output: %q vs %q", i, got, first)
 		}
 	}
@@ -83,7 +84,7 @@ func TestCaptureRebuildsOnResize(t *testing.T) {
 	appendSpool("some output here\r\n")
 
 	sc.capture(m.root, "s", 40, 10)
-	wide := sc.capture(m.root, "s", 100, 30)
+	_, wide := sc.capture(m.root, "s", 100, 30)
 
 	if wide != RenderScreen([]byte("some output here\r\n"), 100, 30) {
 		t.Errorf("resized capture should match a full replay at the new size: %q", wide)
@@ -113,7 +114,7 @@ func TestCaptureSurvivesSpoolRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendSpool("after rotation\r\n")
-	got := sc.capture(m.root, "s", 40, 10)
+	_, got := sc.capture(m.root, "s", 40, 10)
 	if !strings.Contains(got, "after rotation") {
 		t.Fatalf("post-rotation output missing: %q", got)
 	}
@@ -124,12 +125,34 @@ func TestCaptureSurvivesSpoolRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendSpool("newest line\r\n")
-	got = sc.capture(m.root, "s", 40, 10)
+	_, got = sc.capture(m.root, "s", 40, 10)
 	if !strings.Contains(got, "newest line") {
 		t.Fatalf("newest output missing after second rotation: %q", got)
 	}
 	if strings.Count(got, "after rotation") > 1 {
 		t.Fatalf("content applied twice after rotation: %q", got)
+	}
+}
+
+// Attach paints the live screen only. The lines Muse scrolls off the top of
+// its transcript region stay in the preview text, above that screen.
+func TestViewportOmitsRegionScrollback(t *testing.T) {
+	m, appendSpool := screenFixture(t)
+	sc := m.screenFor("s")
+	var b strings.Builder
+	b.WriteString("\x1b[1;5r")
+	for i := 1; i <= 9; i++ {
+		fmt.Fprintf(&b, "\rHIST%d\n", i)
+	}
+	b.WriteString("\x1b[r")
+	appendSpool(b.String())
+
+	view, all := sc.capture(m.root, "s", 20, 8)
+	if strings.Contains(view, "HIST1") {
+		t.Fatalf("viewport must stay the live screen, got %q", view)
+	}
+	if !strings.Contains(all, "HIST1") || strings.Index(all, "HIST1") > strings.Index(all, "HIST9") {
+		t.Fatalf("preview text should lead with the scrolled-off lines, got %q", all)
 	}
 }
 

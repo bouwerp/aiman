@@ -1,6 +1,7 @@
 package ptyruntime
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,6 +199,47 @@ func TestColorParamForms(t *testing.T) {
 		if !strings.Contains(got, c.wantFG) {
 			t.Errorf("RenderScreen(%q) = %q, want it to contain %q", c.in, got, c.wantFG)
 		}
+	}
+}
+
+// Muse scrolls its transcript inside a region that stops above the composer.
+// A normal terminal only keeps scrollback when that region is the full screen,
+// so those lines vanish and the preview has nothing to page through. They have
+// to come back above the live screen.
+func TestRenderScreenKeepsLinesScrolledOffATopRegion(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("\x1b[1;5r")
+	for i := 1; i <= 9; i++ {
+		// CR, because a bare LF leaves the cursor in the column where the
+		// previous row ended and the next row is written indented.
+		fmt.Fprintf(&b, "\rHIST%d\n", i)
+	}
+	b.WriteString("\x1b[r")
+
+	got := ansiStrip(RenderScreen([]byte(b.String()), 20, 8))
+	if !strings.Contains(got, "HIST1") {
+		t.Fatalf("line that left the scroll region is gone:\n%s", got)
+	}
+	if strings.Index(got, "HIST1") > strings.Index(got, "HIST9") {
+		t.Fatalf("scrolled-off lines should precede the live tail:\n%s", got)
+	}
+}
+
+// Claude and Grok scroll inside the alternate screen. Those lines belong to
+// the agent, not to the preview's history, or a mouse-driven TUI would be
+// duplicated above its own viewport.
+func TestRenderScreenDropsAltScreenHistory(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("\x1b[?1049h")
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&b, "ALT%d\n", i)
+	}
+	got := ansiStrip(RenderScreen([]byte(b.String()), 20, 8))
+	if strings.Contains(got, "ALT1\n") || strings.HasPrefix(got, "ALT1") {
+		t.Fatalf("alternate-screen lines must not be kept as scrollback:\n%s", got)
+	}
+	if !strings.Contains(got, "ALT20") {
+		t.Fatalf("the live alt screen should still render, got:\n%s", got)
 	}
 }
 

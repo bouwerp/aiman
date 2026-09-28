@@ -27,14 +27,17 @@ const screenIdleTTL = 10 * time.Minute
 type screen struct {
 	mu       sync.Mutex
 	term     vt10x.Terminal
+	back     *scrollBuf
 	cols     int
 	rows     int
 	consumed int64 // length of the spool stream already applied
 	lastUsed time.Time
 }
 
-// capture brings the emulator up to date and renders it.
-func (s *screen) capture(root, id string, cols, rows int) string {
+// capture brings the emulator up to date. view is the live screen. all is that
+// screen with the lines that scrolled off the top of the primary screen above
+// it, which is what the preview pages through.
+func (s *screen) capture(root, id string, cols, rows int) (view, all string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -42,7 +45,7 @@ func (s *screen) capture(root, id string, cols, rows int) string {
 	// reflowed: vt10x does not reflow existing content the way the agent's own
 	// repaint will, and a stale-width screen is worse than a slow one.
 	if s.term == nil || s.cols != cols || s.rows != rows {
-		s.term = newTerminal(cols, rows)
+		s.term, s.back = newTerminal(cols, rows)
 		s.cols, s.rows = cols, rows
 		s.consumed = 0
 	}
@@ -53,7 +56,7 @@ func (s *screen) capture(root, id string, cols, rows int) string {
 		// has handed back the whole retained stream, and it has to go through a
 		// fresh emulator or it would be applied on top of a screen that already
 		// contains some of it.
-		s.term = newTerminal(cols, rows)
+		s.term, s.back = newTerminal(cols, rows)
 		s.cols, s.rows = cols, rows
 	}
 	if len(data) > 0 {
@@ -64,7 +67,15 @@ func (s *screen) capture(root, id string, cols, rows int) string {
 	s.consumed = total
 	s.lastUsed = time.Now()
 
-	return renderTerminal(s.term, cols, rows)
+	view = renderTerminal(s.term, cols, rows, nil)
+	var history []string
+	if s.back != nil {
+		history = s.back.lines
+	}
+	if len(history) == 0 {
+		return view, view
+	}
+	return view, renderTerminal(s.term, cols, rows, history)
 }
 
 // screenFor returns the session's emulator, creating one if needed, and drops

@@ -289,7 +289,12 @@ func (m *Manager) Capture(id string, maxBytes int) ([]byte, error) {
 }
 
 // CaptureScreen is Capture rendered through a terminal emulator, at the
-// session's own size — the PTY equivalent of `tmux capture-pane -p`.
+// session's own size — the PTY equivalent of `tmux capture-pane -p -S -`.
+//
+// Lines that scrolled off the top of the primary screen are included above the
+// live view, so the preview can page through them. An inline agent such as
+// Muse scrolls its transcript inside a region that is not the full screen, and
+// a normal terminal scrollback never receives those lines.
 //
 // Callers that display or classify a session want this, not Capture: the raw
 // spool is a byte stream full of cursor addressing and redraws, not a screen.
@@ -298,9 +303,23 @@ func (m *Manager) Capture(id string, maxBytes int) ([]byte, error) {
 // so this costs what the session has produced recently rather than everything it
 // has ever produced.
 func (m *Manager) CaptureScreen(id string) (string, error) {
+	_, all, err := m.CaptureFrame(id)
+	return all, err
+}
+
+// CaptureViewport is the live screen only.
+func (m *Manager) CaptureViewport(id string) (string, error) {
+	view, _, err := m.CaptureFrame(id)
+	return view, err
+}
+
+// CaptureFrame returns the live screen and the same screen with scrolled-off
+// lines above it. Attach uses both: the live screen is what it paints, and
+// the lines above it are written into the terminal's scrollback.
+func (m *Manager) CaptureFrame(id string) (view, all string, err error) {
 	info, err := m.Get(id)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	cols, rows := parseSize(info.Size)
 	if cols <= 0 {
@@ -309,7 +328,8 @@ func (m *Manager) CaptureScreen(id string) (string, error) {
 	if rows <= 0 {
 		rows = defaultRows
 	}
-	return m.screenFor(id).capture(m.root, id, cols, rows), nil
+	view, all = m.screenFor(id).capture(m.root, id, cols, rows)
+	return view, all, nil
 }
 
 // Kill terminates a session via the kill marker and waits for the holder to

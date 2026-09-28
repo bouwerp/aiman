@@ -35,20 +35,44 @@ func RenderScreen(spool []byte, cols, rows int) string {
 		rows = defaultRows
 	}
 
-	term := newTerminal(cols, rows)
+	term, back := newTerminal(cols, rows)
 	// Write takes the terminal's own lock, so it must not be called with the
 	// lock already held — doing so deadlocks on a non-reentrant mutex. Errors
 	// are immaterial: the emulator applies whatever it understands, and a
 	// malformed tail should still render everything before it.
 	_, _ = term.Write(spool)
-	return renderTerminal(term, cols, rows)
+	return renderTerminal(term, cols, rows, back.lines)
 }
 
-// newTerminal returns an emulator sized for a session.
-func newTerminal(cols, rows int) vt10x.Terminal {
+// maxScrollbackLines bounds history kept above the live screen. The preview
+// pages through it the way a tmux pane pages through capture-pane -S -.
+const maxScrollbackLines = 2000
+
+// scrollBuf is the lines that have left the top of the primary screen.
+type scrollBuf struct {
+	lines []string
+}
+
+func (b *scrollBuf) add(line string) {
+	if line == "" || b == nil {
+		return
+	}
+	b.lines = append(b.lines, line)
+	if extra := len(b.lines) - maxScrollbackLines; extra > 0 {
+		b.lines = append([]string(nil), b.lines[extra:]...)
+	}
+}
+
+// newTerminal returns an emulator sized for a session, plus the scrollback it
+// fills as lines leave the top of the primary screen.
+func newTerminal(cols, rows int) (vt10x.Terminal, *scrollBuf) {
 	term := vt10x.New()
 	term.Resize(cols, rows)
-	return term
+	back := &scrollBuf{}
+	vt10x.SetScrollOff(term, func(cells []vt10x.Glyph) {
+		back.add(renderGlyphs(cells))
+	})
+	return term, back
 }
 
 // renderTerminal turns an emulator's current screen into text with colour.
@@ -56,7 +80,7 @@ func newTerminal(cols, rows int) vt10x.Terminal {
 // Separate from RenderScreen so a long-lived emulator can be rendered without
 // replaying its whole history: the runtime keeps one per session and feeds it
 // only the bytes that arrived since the last capture.
-func renderTerminal(term vt10x.Terminal, cols, rows int) string {
+func renderTerminal(term vt10x.Terminal, cols, rows int, scrollback []string) string {
 	term.Lock()
 	defer term.Unlock()
 
@@ -69,7 +93,29 @@ func renderTerminal(term vt10x.Terminal, cols, rows int) string {
 		}
 	}
 	// Blank rows below the cursor are padding too.
-	return strings.TrimRight(b.String(), "\n")
+	screen := strings.TrimRight(b.String(), "\n")
+	if len(scrollback) == 0 {
+		return screen
+	}
+	var out strings.Builder
+	for _, line := range scrollback {
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	out.WriteString(screen)
+	return out.String()
+}
+
+// renderGlyphs is one row that has just left the screen, in the same form as
+// renderRow so history and the live screen use one colour encoding.
+func renderGlyphs(cells []vt10x.Glyph) string {
+	last := lastSignificantGlyph(cells)
+	if last < 0 {
+		return ""
+	}
+	var b strings.Builder
+	writeCells(&b, func(x int) vt10x.Glyph { return cells[x] }, last)
+	return b.String()
 }
 
 // renderRow emits one screen row as text plus SGR colour.
@@ -86,9 +132,20 @@ func renderRow(term vt10x.Terminal, y, cols int) string {
 		return ""
 	}
 	var b strings.Builder
+	writeCells(&b, func(x int) vt10x.Glyph { return term.Cell(x, y) }, last)
+	return b.String()
+}
+
+// writeCells emits columns 0..last with SGR colour changes, and seals the row
+// when a colour is still active.
+//
+// An unterminated run leaks the colour into whatever is drawn next: the rest
+// of the row, the following line, or the surrounding UI when the screen is
+// embedded in a panel.
+func writeCells(b *strings.Builder, cellAt func(int) vt10x.Glyph, last int) {
 	fg, bg := vt10x.DefaultFG, vt10x.DefaultBG
 	for x := 0; x <= last; x++ {
-		cell := term.Cell(x, y)
+		cell := cellAt(x)
 		if cell.FG != fg || cell.BG != bg {
 			fg, bg = cell.FG, cell.BG
 			b.WriteString("\x1b[" + fgParam(fg) + ";" + bgParam(bg) + "m")
@@ -99,13 +156,22 @@ func renderRow(term vt10x.Terminal, y, cols int) string {
 		}
 		b.WriteRune(ch)
 	}
-	// Terminate the row's styling. An unterminated run leaks the colour into
-	// whatever is drawn next — the rest of the row, the following line, or the
-	// surrounding UI when the screen is embedded in a panel.
 	if fg != vt10x.DefaultFG || bg != vt10x.DefaultBG {
 		b.WriteString("\x1b[0m")
 	}
-	return b.String()
+}
+
+func lastSignificantGlyph(cells []vt10x.Glyph) int {
+	for x := len(cells) - 1; x >= 0; x-- {
+		cell := cells[x]
+		if cell.Char != 0 && cell.Char != ' ' {
+			return x
+		}
+		if cell.BG != vt10x.DefaultBG {
+			return x
+		}
+	}
+	return -1
 }
 
 // lastSignificantCol is the rightmost column worth emitting, or -1 for a row

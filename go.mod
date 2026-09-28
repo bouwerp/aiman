@@ -82,3 +82,8 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+// Scrollback hook: lines that leave a top-anchored region are kept so
+// full-screen attach can place them in the terminal scrollback. Upstream
+// vt10x drops them.
+replace github.com/hinshun/vt10x => ./third_party/vt10x
