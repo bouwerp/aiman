@@ -146,12 +146,7 @@ func getAssumeRoleCreds(ctx context.Context, roleARN, sessionName, profile, sess
 	if err != nil {
 		errMsg := strings.TrimSpace(string(out))
 		if strings.Contains(errMsg, "AccessDenied") || strings.Contains(errMsg, "is not authorized") {
-			return nil, fmt.Errorf(
-				"aws sts assume-role: AccessDenied for role %s.\n"+
-					"The role must exist in the AWS account and its trust policy must allow your IAM principal.\n"+
-					"Either create the role with a trust policy granting your user sts:AssumeRole, "+
-					"or set a different role_name in the AWS delegation config.\n"+
-					"Original error: %s", roleARN, errMsg)
+			return nil, explainAssumeRoleFailure(profile, roleARN, errMsg)
 		}
 		return nil, fmt.Errorf("aws sts assume-role: %w — %s", err, errMsg)
 	}
@@ -161,6 +156,31 @@ func getAssumeRoleCreds(ctx context.Context, roleARN, sessionName, profile, sess
 		return nil, fmt.Errorf("parse aws JSON: %w", err)
 	}
 	return &o.Credentials, nil
+}
+
+// explainAssumeRoleFailure turns an STS AccessDenied into the next step that can
+// actually succeed. Root credentials are rejected by AWS before the role's trust
+// policy is evaluated, so the trust-policy hint would send the user the wrong way.
+func explainAssumeRoleFailure(profile, roleARN, errMsg string) error {
+	if strings.Contains(errMsg, "may not be assumed by root") {
+		src := strings.TrimSpace(profile)
+		if src == "" {
+			src = "the default credential chain"
+		} else {
+			src = fmt.Sprintf("profile %q", src)
+		}
+		return fmt.Errorf(
+			"aws sts assume-role: %s authenticates as the AWS account root, and root cannot call sts:AssumeRole (role %s). "+
+				"Put an IAM user or IAM Identity Center profile in source_profile. "+
+				"A trust policy cannot grant this to root. Original error: %s",
+			src, roleARN, errMsg)
+	}
+	return fmt.Errorf(
+		"aws sts assume-role: AccessDenied for role %s.\n"+
+			"The role must exist in the AWS account and its trust policy must allow your IAM principal.\n"+
+			"Either create the role with a trust policy granting your user sts:AssumeRole, "+
+			"or set a different role_name in the AWS delegation config.\n"+
+			"Original error: %s", roleARN, errMsg)
 }
 
 // FormatCredentialsSection returns the [profile] or [default] section for ~/.aws/credentials.

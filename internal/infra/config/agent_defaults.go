@@ -39,6 +39,17 @@ func (c *Config) AWSLocalProfileAllowed(name string) bool {
 	return false
 }
 
+// AllowLocalAWSProfile adds name to an explicit include_profiles list.
+// A nil list already allows every name, so it is left unset.
+func (c *Config) AllowLocalAWSProfile(name string) {
+	name = strings.TrimSpace(name)
+	if c == nil || name == "" || c.AWS.IncludeProfiles == nil || c.AWSLocalProfileAllowed(name) {
+		return
+	}
+	next := append(append([]string{}, *c.AWS.IncludeProfiles...), name)
+	c.AWS.IncludeProfiles = &next
+}
+
 // LocalSourceProfile is the ~/.aws profile used to mint this delegation.
 // source_profile wins; otherwise the remote profile name (or "default").
 func (d *AWSDelegation) LocalSourceProfile() string {

@@ -37,6 +37,21 @@ func TestAWSLocalProfileAllowed(t *testing.T) {
 	}
 }
 
+func TestAllowLocalAWSProfileAddsToExplicitList(t *testing.T) {
+	only := []string{"dev"}
+	cfg := &Config{AWS: AWSDefaults{IncludeProfiles: &only}}
+	cfg.AllowLocalAWSProfile("lab")
+	if !cfg.AWSLocalProfileAllowed("lab") || !cfg.AWSLocalProfileAllowed("dev") {
+		t.Fatalf("lab should join the allow list, got %v", *cfg.AWS.IncludeProfiles)
+	}
+
+	open := &Config{}
+	open.AllowLocalAWSProfile("lab")
+	if open.AWS.IncludeProfiles != nil {
+		t.Fatal("an omitted allow list already permits every profile")
+	}
+}
+
 func TestAWSDelegationLocalSourceProfile(t *testing.T) {
 	if (*AWSDelegation)(nil).LocalSourceProfile() != "" {
 		t.Fatal("nil")

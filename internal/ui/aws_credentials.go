@@ -430,13 +430,71 @@ func (m AWSCredentialsModel) buildEntries() tea.Cmd {
 	}
 }
 
+// mergeNewDelegations appends rows for syncing delegations that are not already
+// on screen. Rows already present keep their status, including a refresh that
+// is still in flight, so a profile saved while this page is busy shows up
+// without waiting for the process to restart.
+func (m *AWSCredentialsModel) mergeNewDelegations() []awsHostEntry {
+	if m == nil || m.cfg == nil {
+		return nil
+	}
+	have := make(map[string]bool, len(m.entries))
+	for _, e := range m.entries {
+		have[e.key] = true
+	}
+	var added []awsHostEntry
+	for _, r := range m.cfg.Remotes {
+		userAtHost := r.Host
+		if r.User != "" {
+			userAtHost = r.User + "@" + r.Host
+		}
+		for _, d := range r.AllDelegations() {
+			entry, ok := delegationHostEntry(m.cfg, userAtHost, r, d)
+			if !ok || have[entry.key] {
+				continue
+			}
+			have[entry.key] = true
+			m.entries = append(m.entries, entry)
+			added = append(added, entry)
+		}
+	}
+	return added
+}
+
+func delegationHostEntry(cfg *config.Config, userAtHost string, remote config.Remote, d *config.AWSDelegation) (awsHostEntry, bool) {
+	if d == nil || !d.SyncCredentials || cfg == nil || !cfg.AWSLocalProfileAllowed(d.LocalSourceProfile()) {
+		return awsHostEntry{}, false
+	}
+	remoteProfile := strings.TrimSpace(d.Profile)
+	if remoteProfile == "" {
+		remoteProfile = "default"
+	}
+	localProfile := strings.TrimSpace(d.SourceProfile)
+	return awsHostEntry{
+		key:           userAtHost + "|" + localProfile + "|" + remoteProfile,
+		userAtHost:    userAtHost,
+		localProfile:  localProfile,
+		remoteProfile: remoteProfile,
+		status:        awsCredStatusChecking,
+		del:           d,
+		remote:        remote,
+	}, true
+}
+
 // checkCredsCmd fires a credential probe for every entry in Checking state.
 func (m AWSCredentialsModel) checkCredsCmd() tea.Cmd {
-	var cmds []tea.Cmd
+	var pending []awsHostEntry
 	for _, e := range m.entries {
-		if e.status != awsCredStatusChecking {
-			continue
+		if e.status == awsCredStatusChecking {
+			pending = append(pending, e)
 		}
+	}
+	return m.checkEntriesCmd(pending)
+}
+
+func (m AWSCredentialsModel) checkEntriesCmd(entries []awsHostEntry) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, e := range entries {
 		key := e.key
 		remote := e.remote
 		profile := e.remoteProfile
@@ -857,7 +915,8 @@ func (m AWSCredentialsModel) handleCredentialTableKey(msg tea.KeyMsg) (tea.Model
 		m.message = fmt.Sprintf("Refreshing %d credential(s)…", len(targets))
 		return m, tea.Batch(cmds...)
 	case "c":
-		m.message = "Re-scanning remote profiles…"
+		m.refreshLocalNames()
+		m.message = "Re-scanning local and remote profiles…"
 		return m, m.buildEntries()
 	case "d":
 		if m.cursor < len(m.entries) {
@@ -1030,7 +1089,7 @@ func (m AWSCredentialsModel) viewString() string {
 		}
 	}
 
-	b.WriteString(helpStyle.Render("  r renew selected  •  shift+R refresh ALL  •  e rename selected profile  •  t lifetime of selected profile  •  d delete (remote + settings)  •  space toggle local  •  tab lists  •  c re-check all  •  ESC back") + "\n")
+	b.WriteString(helpStyle.Render("  r renew selected  •  shift+R refresh ALL  •  e rename selected profile  •  t lifetime of selected profile  •  d delete (remote + settings)  •  space toggle local  •  tab lists  •  c rescan local and remote  •  ESC back") + "\n")
 	b.WriteString(helpStyle.Render("  \"~\" marks an expiry estimated from the credentials file's age (pushed before aiman recorded expiry) — refresh to replace it with the exact time.") + "\n")
 
 	return b.String()

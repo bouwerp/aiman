@@ -134,6 +134,8 @@ type RemotesModel struct {
 	awsSyncCreds        bool
 	awsManagedRole      bool
 	awsResetting        bool
+	awsSelectedProfile  string
+	awsNotice           string
 }
 
 type scanResults struct {
@@ -319,39 +321,8 @@ func (m *RemotesModel) initDialog(host, user, root string) {
 }
 
 func (m *RemotesModel) initAWSDialog() {
-	// Find the delegation to seed the form with: prefer AWSDelegation (primary),
-	// but if AWSDelegations has entries, list them so the user knows multiple exist.
-	var d *config.AWSDelegation
-	if m.awsRemoteIdx >= 0 && m.awsRemoteIdx < len(m.cfg.Remotes) {
-		r := m.cfg.Remotes[m.awsRemoteIdx]
-		d = r.AWSDelegation
-		// If there are multiple delegations, prefer the first one but note the total.
-		if d == nil && len(r.AWSDelegations) > 0 {
-			d = r.AWSDelegations[0]
-		}
-	}
-
-	names, _ := awsdelegation.ListLocalAWSProfileNames()
-	if m.cfg != nil {
-		var allowed []string
-		for _, n := range names {
-			if m.cfg.AWSLocalProfileAllowed(n) {
-				allowed = append(allowed, n)
-			}
-		}
-		names = allowed
-	}
-	m.awsLocalProfiles = names
-	m.awsLocalPick = -1
-	if len(names) > 0 {
-		m.awsLocalPick = 0
-		for i, n := range names {
-			if n == "default" {
-				m.awsLocalPick = i
-				break
-			}
-		}
-	}
+	d := m.delegationToEdit()
+	m.refreshAWSLocalProfiles()
 
 	m.awsProfile = textinput.New()
 	m.awsProfile.Placeholder = awsdelegation.DefaultDelegatedProfileName
@@ -475,8 +446,31 @@ func (m RemotesModel) applyAWSFocus() (RemotesModel, tea.Cmd) {
 	return m, nil
 }
 
+// refreshAWSLocalProfiles rereads ~/.aws. The allow list does not hide names here:
+// this screen is how a profile gets chosen, including one that is not allowed yet.
+func (m *RemotesModel) refreshAWSLocalProfiles() {
+	names, _ := awsdelegation.ListLocalAWSProfileNames()
+	want := strings.TrimSpace(m.awsSource.Value())
+	if want == "" && m.awsLocalPick >= 0 && m.awsLocalPick < len(m.awsLocalProfiles) {
+		want = m.awsLocalProfiles[m.awsLocalPick]
+	}
+	m.awsLocalProfiles = names
+	m.awsLocalPick = -1
+	if len(names) == 0 {
+		return
+	}
+	m.awsLocalPick = 0
+	for i, n := range names {
+		if n == want || (want == "" && n == "default") {
+			m.awsLocalPick = i
+			break
+		}
+	}
+}
+
 // onEnterSourceFocus seeds source_profile from ~/.aws on this Mac when empty (same name is usually used on the remote).
 func (m RemotesModel) onEnterSourceFocus() RemotesModel {
+	m.refreshAWSLocalProfiles()
 	if len(m.awsLocalProfiles) == 0 {
 		return m
 	}
@@ -490,6 +484,81 @@ func (m RemotesModel) onEnterSourceFocus() RemotesModel {
 		m.awsSource.SetValue(m.awsLocalProfiles[m.awsLocalPick])
 	}
 	return m
+}
+
+func (m RemotesModel) savedDelegations() []*config.AWSDelegation {
+	if m.cfg == nil || m.awsRemoteIdx < 0 || m.awsRemoteIdx >= len(m.cfg.Remotes) {
+		return nil
+	}
+	var out []*config.AWSDelegation
+	for _, d := range m.cfg.Remotes[m.awsRemoteIdx].AllDelegations() {
+		if d != nil {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func (m RemotesModel) delegationToEdit() *config.AWSDelegation {
+	all := m.savedDelegations()
+	if len(all) == 0 {
+		return nil
+	}
+	want := strings.TrimSpace(m.awsSelectedProfile)
+	for _, d := range all {
+		if want != "" && delegationProfileName(d) == want {
+			return d
+		}
+	}
+	return all[0]
+}
+
+// switchSavedProfile loads another profile already stored for this remote.
+// A name that is not saved yet is left alone so typing a new profile is not discarded.
+func (m RemotesModel) switchSavedProfile(delta int) RemotesModel {
+	all := m.savedDelegations()
+	if len(all) == 0 {
+		return m
+	}
+	current := delegationProfileName(&config.AWSDelegation{Profile: m.awsProfile.Value()})
+	idx := -1
+	for i, d := range all {
+		if delegationProfileName(d) == current {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return m
+	}
+	idx = (idx + delta) % len(all)
+	if idx < 0 {
+		idx += len(all)
+	}
+	m.awsSelectedProfile = delegationProfileName(all[idx])
+	m.initAWSDialog()
+	return m
+}
+
+func (m RemotesModel) writeConfiguredProfiles(b *strings.Builder) {
+	b.WriteString(statusStyle.Render("  Configured profiles (up/down to switch, type a new name and enter to add):") + "\n")
+	all := m.savedDelegations()
+	if len(all) == 0 {
+		b.WriteString(statusStyle.Render("    (none yet)") + "\n")
+		return
+	}
+	current := strings.TrimSpace(m.awsProfile.Value())
+	if current == "" {
+		current = "default"
+	}
+	for _, d := range all {
+		name := delegationProfileName(d)
+		mark := "  "
+		if name == current {
+			mark = "> "
+		}
+		b.WriteString("  " + mark + name + "\n")
+	}
 }
 
 func (m RemotesModel) cycleLocalProfile(delta int) RemotesModel {
@@ -759,6 +828,7 @@ func (m RemotesModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.awsRemoteIdx < 0 {
 					return m, nil
 				}
+				m.awsNotice = ""
 				m.initAWSDialog()
 				m.state = remotesStateAWS
 				m2, cmd := m.applyAWSFocus()
@@ -941,6 +1011,10 @@ func (m RemotesModel) updateAWS(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.awsResetting = true
 			m.state = remotesStateAWSPushing
 			return m, tea.Batch(resetAWSDelegation(r.Host, r.User, r.Root, profiles), m.spinner.Tick)
+		case "up":
+			return m.switchSavedProfile(-1), nil
+		case "down":
+			return m.switchSavedProfile(1), nil
 		case "tab":
 			m.awsFocus = (m.awsFocus + 1) % awsFocusCount
 			return m.applyAWSFocus()
@@ -1126,6 +1200,8 @@ func (m RemotesModel) saveAWSAndPush() (tea.Model, tea.Cmd) {
 	// or add a new one. This preserves all other profiles already configured for
 	// this remote — configuring "prod" no longer overwrites "default".
 	upsertDelegation(&m.cfg.Remotes[m.awsRemoteIdx], d)
+	m.cfg.AllowLocalAWSProfile(src)
+	m.awsSelectedProfile = prof
 	_ = m.cfg.Save()
 
 	r := m.cfg.Remotes[m.awsRemoteIdx]
@@ -1145,27 +1221,35 @@ func (m RemotesModel) updateAWSPushing(msg tea.Msg) (tea.Model, tea.Cmd) {
 				action = "AWS reset"
 			}
 			m.testResult = failStyle.Render(fmt.Sprintf("%s failed: %v", action, res.err))
-		} else {
-			if res.reset {
-				msg := "Reset remote AWS delegation state"
-				if res.removed > 0 {
-					msg = fmt.Sprintf("Reset remote AWS delegation state (%d profile(s) removed)", res.removed)
-				}
-				m.testResult = successStyle.Render(msg + ".")
-			} else {
-				msg := "Updated remote ~/.aws/config"
-				if res.profile != "" {
-					msg = fmt.Sprintf("Updated remote ~/.aws/config (profile %q)", res.profile)
-				}
-				if res.syncedCreds {
-					msg += " and ~/.aws/credentials"
-				}
-				m.testResult = successStyle.Render(msg + ".")
-			}
+			m.scanResults = nil
+			m.awsResetting = false
+			m.state = remotesStateResult
+			return m, nil
 		}
-		m.scanResults = nil
+		if res.reset {
+			msg := "Reset remote AWS delegation state"
+			if res.removed > 0 {
+				msg = fmt.Sprintf("Reset remote AWS delegation state (%d profile(s) removed)", res.removed)
+			}
+			m.testResult = successStyle.Render(msg + ".")
+			m.scanResults = nil
+			m.awsResetting = false
+			m.state = remotesStateResult
+			return m, nil
+		}
+		note := "Updated remote ~/.aws/config"
+		if res.profile != "" {
+			note = fmt.Sprintf("Updated remote ~/.aws/config (profile %q)", res.profile)
+			m.awsSelectedProfile = res.profile
+		}
+		if res.syncedCreds {
+			note += " and ~/.aws/credentials"
+		}
+		m.awsNotice = note
 		m.awsResetting = false
-		m.state = remotesStateResult
+		m.scanResults = nil
+		m.initAWSDialog()
+		m.state = remotesStateAWS
 	}
 	return m, nil
 }
@@ -1254,23 +1338,10 @@ func (m RemotesModel) viewAWS() string {
 	b.WriteString(statusStyle.Render("  source_profile is written to the remote and must match a profile there with long-lived credentials.") + "\n")
 	b.WriteString(statusStyle.Render("  Account ID is derived locally via: aws sts get-caller-identity --profile <source_profile>.") + "\n")
 	b.WriteString(statusStyle.Render("  ←/→ on source_profile cycles names from this Mac’s ~/.aws.") + "\n")
-
-	// Show already-configured delegation profiles for this remote.
-	if m.awsRemoteIdx >= 0 && m.awsRemoteIdx < len(m.cfg.Remotes) {
-		r := m.cfg.Remotes[m.awsRemoteIdx]
-		all := r.AllDelegations()
-		if len(all) > 1 {
-			names := make([]string, 0, len(all))
-			for _, del := range all {
-				p := del.Profile
-				if p == "" {
-					p = "default"
-				}
-				names = append(names, p)
-			}
-			b.WriteString(statusStyle.Render(fmt.Sprintf("  Configured profiles (%d): %s — type another profile name below to edit it.", len(names), strings.Join(names, ", "))) + "\n")
-		}
+	if m.awsNotice != "" {
+		b.WriteString(successStyle.Render("  "+m.awsNotice) + "\n")
 	}
+	m.writeConfiguredProfiles(&b)
 	b.WriteString("\n")
 
 	b.WriteString(fmt.Sprintf("  %s %s\n\n", label("Delegated profile name (remote, default "+awsdelegation.DefaultDelegatedProfileName+"):", awsFocusProfile), m.awsProfile.View()))
@@ -1334,7 +1405,8 @@ func (m RemotesModel) viewAWS() string {
 
 	b.WriteString(statusStyle.Render("  Clear profile + source + role and press enter to reset this remote AWS setup completely.") + "\n")
 	b.WriteString(statusStyle.Render("  ctrl+r also clears managed ~/.aws entries and any legacy ~/.aiman/aws leftovers on that host.") + "\n\n")
-	b.WriteString("  " + activeStyle.Render("[tab]") + " next field  ")
+	b.WriteString("  " + activeStyle.Render("[up/down]") + " switch saved profile  ")
+	b.WriteString(activeStyle.Render("[tab]") + " next field  ")
 	b.WriteString(activeStyle.Render("[space/enter]") + " toggle sync  ")
 	b.WriteString(activeStyle.Render("[enter]") + " save & push  ")
 	b.WriteString(activeStyle.Render("[ctrl+r]") + " reset  ")

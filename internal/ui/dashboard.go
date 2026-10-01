@@ -5838,10 +5838,16 @@ func (m *Model) routeAWSCredentialsMsg(msg tea.Msg) tea.Cmd {
 func (m *Model) enterAWSCredentials() tea.Cmd {
 	m.state = viewStateAWSCredentials
 	if m.awsCredentials.Busy() {
+		m.awsCredentials.cfg = m.cfg
 		m.awsCredentials.width = m.width
 		m.awsCredentials.height = m.height
 		m.awsCredentials.externalRefresh = m.awsCredRefreshing
-		return nil
+		m.awsCredentials.refreshLocalNames()
+		added := m.awsCredentials.mergeNewDelegations()
+		if len(added) == 0 {
+			return nil
+		}
+		return m.awsCredentials.checkEntriesCmd(added)
 	}
 	m.awsCredentials = NewAWSCredentialsModel(m.cfg, m.doctorResults)
 	m.awsCredentials.width = m.width
