@@ -3329,8 +3329,12 @@ func (m *Model) applyAWSCredBulkRenewMsg(msg awsCredBulkRenewMsg, cmds []tea.Cmd
 			pollAWSCredExpiryCmd(m.cfg),
 		)
 	}
+	toast := fmt.Sprintf("🔑 Refreshed %d AWS credential(s)", msg.renewed)
+	if len(msg.notes) > 0 {
+		toast = toast + ". " + msg.notes[0]
+	}
 	return m, tea.Batch(
-		m.showToast(fmt.Sprintf("🔑 Refreshed %d AWS credential(s)", msg.renewed), false, 5*time.Second),
+		m.showToast(toast, false, 8*time.Second),
 		pollAWSCredExpiryCmd(m.cfg),
 	)
 }

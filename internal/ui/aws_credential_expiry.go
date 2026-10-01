@@ -96,6 +96,7 @@ type awsCredExpiryPollMsg struct {
 type awsCredBulkRenewMsg struct {
 	renewed  int
 	failures []string
+	notes    []string
 }
 
 func tickAWSCredExpiry() tea.Cmd {
@@ -277,9 +278,13 @@ func renewAllDelegatedCredentialsCmd(cfg *config.Config) tea.Cmd {
 			timeout := time.Duration(len(group)+1) * 90 * time.Second
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			for _, t := range group {
-				if _, err := pushFreshCredentials(ctx, mgr, t.del, t.profile); err != nil {
+				_, note, err := pushFreshCredentials(ctx, mgr, t.del, t.profile)
+				if err != nil {
 					result.failures = append(result.failures, fmt.Sprintf("%s [%s]: %v", t.userAtHost, t.profile, err))
 					continue
+				}
+				if note != "" {
+					result.notes = append(result.notes, fmt.Sprintf("%s [%s]: %s", t.userAtHost, t.profile, note))
 				}
 				result.renewed++
 			}

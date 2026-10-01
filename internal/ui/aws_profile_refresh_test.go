@@ -10,6 +10,21 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
+func TestRenewResultShowsRootSessionNote(t *testing.T) {
+	m := NewAWSCredentialsModel(&config.Config{}, nil)
+	m.entries = []awsHostEntry{{
+		key: "code@regent0|lab|lab", userAtHost: "code@regent0", remoteProfile: "lab",
+	}}
+	updated, _ := m.Update(awsCredRenewResultMsg{
+		key:  "code@regent0|lab|lab",
+		note: "account root session (1h max): root cannot assume a role",
+	})
+	got := updated.(AWSCredentialsModel).message
+	if !strings.Contains(got, "code@regent0") || !strings.Contains(got, "account root session") {
+		t.Fatalf("refresh must say the credentials are a root session, got %q", got)
+	}
+}
+
 func TestCredentialRescanSeesProfilesAddedWhileOpen(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -19,6 +19,22 @@ type SessionCredentials struct {
 	// remote credentials file (see ExpiryKey) so the credentials manager can show a
 	// time-to-expiry without minting anything.
 	Expiration time.Time `json:"Expiration"`
+	// RootSession is set when the source profile is the account root. Root cannot
+	// call sts:AssumeRole, so these credentials come from sts:GetSessionToken and
+	// are not the delegated role.
+	RootSession bool `json:"-"`
+}
+
+// RootSessionNotice is shown after a refresh that had to skip AssumeRole.
+const RootSessionNotice = "account root session (1h max): root cannot assume a role, so the delegated role and its region lock were not applied"
+
+// rootSessionMaxDuration is the longest sts:GetSessionToken AWS allows for the account root.
+const rootSessionMaxDuration = 3600
+
+// runAWS executes the AWS CLI. Tests replace it.
+var runAWS = func(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "aws", args...) // #nosec G204
+	return cmd.CombinedOutput()
 }
 
 type getSessionTokenOutput struct {
@@ -88,15 +104,39 @@ func GetTemporaryCredentials(ctx context.Context, profile string, opts ...Creden
 			// Role's MaxSessionDuration is less than our default; fall back to the role's own max.
 			creds, err = getAssumeRoleCreds(ctx, roleARN, sessionName, profile, o.SessionPolicy, 0)
 		}
+		if err != nil && assumeRoleDeniedByRoot(err) {
+			// Root can mint its own session token. It cannot assume a role, and
+			// GetSessionToken does not accept a session policy, so the region lock
+			// is not applied. Root's maximum duration is one hour.
+			creds, ferr := getSessionTokenCreds(ctx, profile, rootSessionDuration(o.DurationSeconds))
+			if ferr != nil {
+				return nil, fmt.Errorf("root cannot assume %s, and get-session-token failed: %w", roleARN, ferr)
+			}
+			creds.RootSession = true
+			return creds, nil
+		}
 		return creds, err
 	}
 
-	// For get-session-token, default to DefaultDurationSeconds (12h) when not configured.
 	dur := o.DurationSeconds
 	if dur <= 0 {
 		dur = DefaultDurationSeconds
 	}
+	return getSessionTokenCreds(ctx, profile, dur)
+}
 
+func assumeRoleDeniedByRoot(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "may not be assumed by root")
+}
+
+func rootSessionDuration(requested int) int {
+	if requested <= 0 || requested > rootSessionMaxDuration {
+		return rootSessionMaxDuration
+	}
+	return requested
+}
+
+func getSessionTokenCreds(ctx context.Context, profile string, dur int) (*SessionCredentials, error) {
 	p := strings.TrimSpace(profile)
 	args := []string{"sts", "get-session-token", "--output", "json"}
 	if p != "" {
@@ -106,8 +146,7 @@ func GetTemporaryCredentials(ctx context.Context, profile string, opts ...Creden
 		args = append(args, "--duration-seconds", fmt.Sprintf("%d", dur))
 	}
 
-	cmd := exec.CommandContext(ctx, "aws", args...)
-	out, err := cmd.CombinedOutput()
+	out, err := runAWS(ctx, args...)
 	if err != nil {
 		return nil, fmt.Errorf("aws sts get-session-token: %w — %s", err, strings.TrimSpace(string(out)))
 	}
@@ -141,8 +180,7 @@ func getAssumeRoleCreds(ctx context.Context, roleARN, sessionName, profile, sess
 		args = append(args, "--duration-seconds", fmt.Sprintf("%d", durationSeconds))
 	}
 
-	cmd := exec.CommandContext(ctx, "aws", args...) // #nosec G204
-	out, err := cmd.CombinedOutput()
+	out, err := runAWS(ctx, args...)
 	if err != nil {
 		errMsg := strings.TrimSpace(string(out))
 		if strings.Contains(errMsg, "AccessDenied") || strings.Contains(errMsg, "is not authorized") {

@@ -150,6 +150,7 @@ type awsPushMsg struct {
 	syncedCreds bool
 	reset       bool
 	removed     int
+	note        string
 }
 
 type awsAccountLookupMsg struct {
@@ -661,6 +662,7 @@ func pushAWSDelegation(host, user, root string, d *config.AWSDelegation) tea.Cmd
 		}
 
 		var syncedCreds bool
+		var rootNote string
 		if d != nil && d.SyncCredentials {
 			// Build an aws:RequestedRegion inline policy from d.Regions when no
 			// custom session policy is provided.
@@ -709,6 +711,9 @@ func pushAWSDelegation(host, user, root string, d *config.AWSDelegation) tea.Cmd
 				return awsPushMsg{err: fmt.Errorf("push credentials: %w", err), profile: p}
 			}
 			syncedCreds = true
+			if creds.RootSession {
+				rootNote = awsdelegation.RootSessionNotice
+			}
 
 			// If we synced credentials, the remote doesn't need to know about the source_profile or role_arn.
 			roleARN = ""
@@ -723,7 +728,7 @@ func pushAWSDelegation(host, user, root string, d *config.AWSDelegation) tea.Cmd
 			return awsPushMsg{err: err, profile: p}
 		}
 
-		return awsPushMsg{profile: p, syncedCreds: syncedCreds}
+		return awsPushMsg{profile: p, syncedCreds: syncedCreds, note: rootNote}
 	}
 }
 
@@ -1244,6 +1249,9 @@ func (m RemotesModel) updateAWSPushing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if res.syncedCreds {
 			note += " and ~/.aws/credentials"
+		}
+		if res.note != "" {
+			note += ". " + res.note
 		}
 		m.awsNotice = note
 		m.awsResetting = false
