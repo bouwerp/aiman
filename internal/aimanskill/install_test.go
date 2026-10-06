@@ -75,14 +75,17 @@ func TestEnsureFileUpdatesStaleCopy(t *testing.T) {
 
 func TestUserSkillFilesAreUnderHome(t *testing.T) {
 	files := UserSkillFiles("/home/dev")
-	foundMuse := false
+	found := map[string]bool{}
 	for _, p := range files {
-		if p == "/home/dev/.config/muse/skills/aiman/SKILL.md" {
-			foundMuse = true
-		}
+		found[p] = true
 	}
-	if !foundMuse {
-		t.Fatalf("muse user skill missing: %v", files)
+	for _, p := range []string{
+		"/home/dev/.config/muse/skills/aiman/SKILL.md",
+		"/home/dev/.deepcode/skills/aiman/SKILL.md",
+	} {
+		if !found[p] {
+			t.Fatalf("missing %s in %v", p, files)
+		}
 	}
 	if len(files) < 4 {
 		t.Fatalf("want several agent skill paths, got %v", files)
@@ -100,8 +103,9 @@ func TestUserSkillFilesAreUnderHome(t *testing.T) {
 func TestProjectSkillFilesAreUnderRoot(t *testing.T) {
 	files := ProjectSkillFiles("/wt")
 	want := map[string]bool{
-		"/wt/.agents/skills/aiman/SKILL.md": true,
-		"/wt/.claude/skills/aiman/SKILL.md": true,
+		"/wt/.agents/skills/aiman/SKILL.md":   true,
+		"/wt/.claude/skills/aiman/SKILL.md":   true,
+		"/wt/.deepcode/skills/aiman/SKILL.md": true,
 	}
 	found := 0
 	for _, p := range files {

@@ -9,6 +9,10 @@ type LaunchCatalog struct {
 	Efforts      []string
 	EffortFlag   string // e.g. --effort, --reasoning-effort, --thinking
 	EffortConfig string // Codex: model_reasoning_effort via -c
+	// ModelEnv and EffortEnv are shell assignments for CLIs that reject
+	// unknown flags. Deep Code reads DEEPCODE_MODEL and DEEPCODE_REASONING_EFFORT.
+	ModelEnv  string
+	EffortEnv string
 }
 
 // SupportsEffort reports whether the CLI exposes a reasoning-effort control.
@@ -47,6 +51,8 @@ func LaunchCatalogFor(base string) LaunchCatalog {
 		return piCatalog
 	case "muse":
 		return museCatalog
+	case "deepcode":
+		return deepcodeCatalog
 	default:
 		return LaunchCatalog{}
 	}
@@ -138,6 +144,21 @@ var museCatalog = LaunchCatalog{
 	},
 	Efforts:    []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
 	EffortFlag: "--reasoning-effort",
+}
+
+// Deep Code documents these model ids. deepseek-flash is the CLI default.
+// Reasoning effort is DEEPCODE_REASONING_EFFORT (low, high, max). The binary
+// accepts no --model or --reasoning-effort flag.
+var deepcodeCatalog = LaunchCatalog{
+	Models: []string{
+		"deepseek-flash",
+		"deepseek-v4-pro",
+		"deepseek-v4-flash",
+		"deepseek-v4-flash-vision-exp",
+	},
+	Efforts:   []string{"low", "high", "max"},
+	ModelEnv:  "DEEPCODE_MODEL",
+	EffortEnv: "DEEPCODE_REASONING_EFFORT",
 }
 
 // pi --model examples from `pi --help` plus google IDs from `pi --list-models`.

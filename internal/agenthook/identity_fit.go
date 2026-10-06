@@ -11,11 +11,11 @@ func NativeIdentityFitsCommand(command, path string) bool {
 	if path == "" {
 		return true
 	}
-	fields := strings.Fields(strings.TrimSpace(command))
-	if len(fields) == 0 {
+	_, argv := splitCommand(command)
+	if len(argv) == 0 {
 		return true
 	}
-	base := strings.ToLower(fields[0])
+	base := strings.ToLower(strings.Trim(argv[0], `"'`))
 	vendor := nativePathVendor(path)
 	if vendor == "" {
 		return true
@@ -43,6 +43,8 @@ func nativePathVendor(path string) string {
 		return "agy"
 	case strings.Contains(path, "/muse/sessions/"):
 		return "muse"
+	case strings.Contains(path, "/.deepcode/"):
+		return "deepcode"
 	default:
 		return ""
 	}
@@ -68,6 +70,8 @@ func nativeCommandVendor(base string) string {
 		return "agy"
 	case base == "muse":
 		return "muse"
+	case strings.Contains(base, "deepcode"):
+		return "deepcode"
 	default:
 		return ""
 	}

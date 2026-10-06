@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/aimanskill"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -255,6 +256,11 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 
 	case name == "muse code" || baseCommand == "muse":
 		result, err = e.prepareMuse(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+
+	case name == "deep code" || baseCommand == "deepcode":
+		// Deep Code rejects unknown flags. The launcher reports the session
+		// index; model and effort are env prefixes applied below.
+		result = bareSession(agenthook.DeepcodeCommand(agent.Command))
 
 	case strings.Contains(name, "copilot") || strings.Contains(strings.ToLower(agent.Command), "copilot"):
 		// Always allow all tools/paths/URLs so permission prompts don't block an autonomous session.

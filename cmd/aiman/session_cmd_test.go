@@ -20,6 +20,14 @@ func TestTakeFlagsFromStdinIsBoolean(t *testing.T) {
 	}
 }
 
+func TestRunDeepcodeWatchNoopsOutsideAiman(t *testing.T) {
+	t.Setenv("AIMAN_ENV", "")
+	t.Setenv("AIMAN_ID", "")
+	if err := runDeepcodeWatch([]string{"--dir", t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReportNativeToServeWhenDown(t *testing.T) {
 	err := reportNativeToServe(filepath.Join(t.TempDir(), "aiman.sock"), "s1", agenthook.Report{Native: agenthook.Native{ID: "n"}})
 	if err != nil {

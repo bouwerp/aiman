@@ -15,6 +15,8 @@ func TestNativeIdentityFitsCommand(t *testing.T) {
 		{"unknown-agent", "/somewhere/else", true},
 		{"muse --trust-workspace", "/home/code/.local/share/muse/sessions/2026/09/22/abc/session.jsonl", true},
 		{"claude", "/home/code/.local/share/muse/sessions/2026/09/22/abc/session.jsonl", false},
+		{"DEEPCODE_MODEL=deepseek-flash \"$HOME/.aiman/hooks/deepcode-launch.sh\"", "/home/dev/.deepcode/projects/-tmp-x/abc.jsonl", true},
+		{"DEEPCODE_MODEL=deepseek-flash \"$HOME/.aiman/hooks/deepcode-launch.sh\"", "/home/dev/.claude/projects/x/a.jsonl", false},
 	}
 	for _, c := range cases {
 		if got := NativeIdentityFitsCommand(c.cmd, c.path); got != c.want {

@@ -71,6 +71,19 @@ func TestLaunchCatalogMuse(t *testing.T) {
 	}
 }
 
+func TestLaunchCatalogDeepcode(t *testing.T) {
+	c := LaunchCatalogFor("deepcode")
+	if c.ModelEnv != "DEEPCODE_MODEL" || c.EffortEnv != "DEEPCODE_REASONING_EFFORT" {
+		t.Fatalf("%+v", c)
+	}
+	if !contains(c.Models, "deepseek-flash") || !contains(c.Models, "deepseek-v4-pro") {
+		t.Fatalf("%+v", c)
+	}
+	if !contains(c.Efforts, "low") || !contains(c.Efforts, "max") || c.EffortFlag != "" {
+		t.Fatalf("effort is an env var, not a flag: %+v", c)
+	}
+}
+
 func TestLaunchCatalogCodexConfig(t *testing.T) {
 	c := LaunchCatalogFor("codex")
 	if c.EffortConfig != "model_reasoning_effort" || c.EffortFlag != "" {

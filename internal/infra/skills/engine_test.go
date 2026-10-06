@@ -369,6 +369,33 @@ func TestPrepareSession_MuseTrustsWorkspaceAndSkipsApprovalsWhenPromptFree(t *te
 	}
 }
 
+func TestPrepareSession_DeepCodeUsesLauncherAndEnvDefaults(t *testing.T) {
+	cfg := &config.Config{AgentDefaults: map[string]config.AgentDefaults{
+		"deepcode": {Model: "deepseek-v4-pro", Effort: "max"},
+	}}
+	engine := NewEngine(cfg)
+	remote := newMockRemote()
+	agent := domain.Agent{Name: "Deep Code", Command: "deepcode"}
+	issue := &domain.Issue{Key: "PROJ-1", Summary: "Add deepcode", Status: domain.IssueStatusTodo}
+
+	got, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Command, "deepcode-launch.sh") {
+		t.Fatalf("launcher: %s", got.Command)
+	}
+	if !strings.Contains(got.Command, "DEEPCODE_MODEL=deepseek-v4-pro") || !strings.Contains(got.Command, "DEEPCODE_REASONING_EFFORT=max") {
+		t.Fatalf("env defaults: %s", got.Command)
+	}
+	if strings.Contains(got.Command, "--model") || strings.Contains(got.Command, "--reasoning-effort") || strings.Contains(got.Command, "--yolo") {
+		t.Fatalf("deepcode rejects those flags: %s", got.Command)
+	}
+	if !strings.Contains(got.InitialPrompt, domain.AimanTaskFileName) {
+		t.Fatalf("prompt: %s", got.InitialPrompt)
+	}
+}
+
 func TestPrepareSession_CopilotAddsAllowAll(t *testing.T) {
 	cfg := &config.Config{}
 	engine := NewEngine(cfg)

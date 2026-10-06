@@ -57,6 +57,11 @@ var knownAgents = []domain.Agent{
 		Description: "Meta Muse Code CLI",
 	},
 	{
+		Name:        "Deep Code",
+		Command:     "deepcode",
+		Description: "DeepSeek Deep Code CLI (@vegamo/deepcode-cli)",
+	},
+	{
 		Name:        "Ageni",
 		Command:     "ageni",
 		Description: "Ageni multi-provider coding agent (github.com/bouwerp/ageni)",

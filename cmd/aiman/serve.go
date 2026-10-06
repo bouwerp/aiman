@@ -164,6 +164,11 @@ systemd --user (installed by the TUI):
 On start it installs or updates the bundled agent skill under $HOME
 and in each known session worktree, and registers native-session hooks
 in each installed agent's config (Claude, Grok, Cursor, Codex, Copilot,
-agy, Kilo Code, Pi, Muse Code). Ageni is not hooked.
+agy, Kilo Code, Pi, Muse Code). Deep Code has no hook API: the same
+start installs ~/.aiman/hooks/deepcode-launch.sh, which watches
+~/.deepcode/projects/<code>/sessions-index.json via
+aiman session deepcode-watch. Resume is deepcode --resume <uuid>.
+Model and effort are DEEPCODE_MODEL and DEEPCODE_REASONING_EFFORT.
+Permissions stay the user's defaultMode. Ageni is not hooked.
 `)
 }

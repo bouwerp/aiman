@@ -15,6 +15,7 @@ func TestWithResumePerAgent(t *testing.T) {
 		{"kilo", "o1", "kilo --session o1"},
 		{"pi --new", "s1", "pi --session s1 --new"},
 		{"muse --trust-workspace --yolo", "m1", "muse --trust-workspace --yolo resume m1"},
+		{"DEEPCODE_MODEL=deepseek-flash DEEPCODE_REASONING_EFFORT=max \"$HOME/.aiman/hooks/deepcode-launch.sh\"", "123e4567-e89b-12d3-a456-426614174000", "DEEPCODE_MODEL=deepseek-flash DEEPCODE_REASONING_EFFORT=max \"$HOME/.aiman/hooks/deepcode-launch.sh\" --resume 123e4567-e89b-12d3-a456-426614174000"},
 		{"claude --resume already", "x", "claude --resume already"},
 		{"claude", "", "claude"},
 	}

@@ -69,12 +69,15 @@ func writeCLIError(code, msg string) {
 
 func runSession(args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|prompt|wait|read|report-agent-session> …\n")
+		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|prompt|wait|read|report-agent-session|deepcode-watch> …\n")
 		fmt.Fprintf(os.Stderr, "Are you an AI? Run: aiman --skill\n")
 		return errUsage
 	}
 	if args[0] == "report-agent-session" {
 		return runReportAgentSession(args[1:])
+	}
+	if args[0] == "deepcode-watch" {
+		return runDeepcodeWatch(args[1:])
 	}
 	sock, err := socketPath()
 	if err != nil {

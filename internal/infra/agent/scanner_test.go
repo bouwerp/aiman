@@ -169,6 +169,31 @@ func TestScanAgents_DetectsMuse(t *testing.T) {
 	t.Fatal("Muse Code not detected")
 }
 
+func TestScanAgents_DetectsDeepCode(t *testing.T) {
+	exec := &mockExecutor{
+		canRun: func(cmd string) bool {
+			return strings.Contains(cmd, "command -v deepcode")
+		},
+	}
+	scanner := NewScanner(exec)
+	agents, err := scanner.ScanAgents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range agents {
+		if a.Name == "Deep Code" {
+			if a.Command != "deepcode" {
+				t.Fatalf("command %q", a.Command)
+			}
+			if _, ok := FindKnown("deepcode"); !ok {
+				t.Fatal("FindKnown(deepcode)")
+			}
+			return
+		}
+	}
+	t.Fatal("Deep Code not detected")
+}
+
 func TestScanAgents_DetectsAgeni(t *testing.T) {
 	exec := &mockExecutor{
 		canRun: func(cmd string) bool {

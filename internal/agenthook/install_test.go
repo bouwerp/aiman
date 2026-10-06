@@ -14,7 +14,7 @@ func TestEnsureOnHostWritesReporterOnlyWhenNoAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 {
+	if len(results) != 2 {
 		t.Fatalf("results=%d %+v", len(results), results)
 	}
 	if results[0].Action != ActionInstalled {

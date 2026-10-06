@@ -2,8 +2,11 @@ package skills
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"unicode"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -20,6 +23,10 @@ func applyConfiguredLaunchFlags(cmd string, ag domain.Agent, cfg *config.Config)
 func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
 	model := strings.TrimSpace(d.Model)
 	effort := strings.TrimSpace(d.Effort)
+	cat := agent.LaunchCatalogFor(base)
+	if cat.ModelEnv != "" || cat.EffortEnv != "" {
+		return applyEnvLaunchDefaults(cmd, model, effort, cat)
+	}
 	if model != "" {
 		cmd = ensureKeyedFlag(cmd, "--model", model)
 	}
@@ -29,7 +36,6 @@ func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
 	if effortIsBakedIntoModel(base, resolvedModel(cmd, model)) {
 		return cmd
 	}
-	cat := agent.LaunchCatalogFor(base)
 	if !cat.SupportsEffort() {
 		return cmd
 	}
@@ -44,6 +50,59 @@ func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
 		cmd = ensureKeyedFlag(cmd, cat.EffortFlag, effort)
 	}
 	return cmd
+}
+
+// applyEnvLaunchDefaults prefixes KEY=value for CLIs that have no model flag.
+// A value already in the process environment is left alone: a shell assignment
+// in the command would override it. An assignment already on the command is
+// also left alone.
+func applyEnvLaunchDefaults(cmd, model, effort string, cat agent.LaunchCatalog) string {
+	if effort != "" && cat.EffortEnv != "" && cat.SupportsEffort() && os.Getenv(cat.EffortEnv) == "" {
+		cmd = ensureEnvAssign(cmd, cat.EffortEnv, effort)
+	}
+	if model != "" && cat.ModelEnv != "" && os.Getenv(cat.ModelEnv) == "" {
+		cmd = ensureEnvAssign(cmd, cat.ModelEnv, model)
+	}
+	return cmd
+}
+
+func ensureEnvAssign(cmd, key, value string) string {
+	if !safeEnvKey(key) || !safeEnvValue(value) || strings.Contains(cmd, key+"=") {
+		return cmd
+	}
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return key + "=" + value
+	}
+	return key + "=" + value + " " + cmd
+}
+
+func safeEnvKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || unicode.IsLetter(r):
+		case i > 0 && unicode.IsDigit(r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func safeEnvValue(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r == '_' || r == '-' || r == '.' || unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // resolvedModel is the model the command will actually run with: the configured
@@ -119,6 +178,9 @@ func EnsureInteractiveLaunch(cmd, worktree string) string {
 		// permission UI before the conversation is restored.
 		cmd = ensureFlag(cmd, "--trust-workspace")
 		return ensureFlag(cmd, "--yolo")
+	}
+	if base == "deepcode" || strings.Contains(base, "deepcode-launch.sh") {
+		return agenthook.DeepcodeCommand(cmd)
 	}
 	return cmd
 }

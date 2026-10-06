@@ -40,6 +40,21 @@ func TestApplyLaunchDefaults(t *testing.T) {
 	if strings.Contains(got, "effort") || strings.Contains(got, "variant") {
 		t.Fatalf("cursor-agent must ignore effort: %q", got)
 	}
+	got = applyLaunchDefaults("\"$HOME/.aiman/hooks/deepcode-launch.sh\"", "deepcode", config.AgentDefaults{Model: "deepseek-v4-pro", Effort: "high"})
+	if !strings.Contains(got, "DEEPCODE_MODEL=deepseek-v4-pro") || !strings.Contains(got, "DEEPCODE_REASONING_EFFORT=high") {
+		t.Fatalf("deepcode defaults are env assignments: %q", got)
+	}
+	if strings.Contains(got, "--model") || strings.Contains(got, "--reasoning-effort") {
+		t.Fatalf("deepcode rejects unknown flags: %q", got)
+	}
+	t.Setenv("DEEPCODE_MODEL", "from-env")
+	got = applyLaunchDefaults("deepcode", "deepcode", config.AgentDefaults{Model: "deepseek-flash", Effort: "low"})
+	if strings.Contains(got, "DEEPCODE_MODEL=") {
+		t.Fatalf("process env wins over settings: %q", got)
+	}
+	if !strings.Contains(got, "DEEPCODE_REASONING_EFFORT=low") {
+		t.Fatalf("effort still applies: %q", got)
+	}
 }
 
 func TestEnsureInteractiveLaunch(t *testing.T) {
@@ -55,6 +70,7 @@ func TestEnsureInteractiveLaunch(t *testing.T) {
 		{"grok-build alias", "grok-build", "--no-auto-update"},
 		{"cursor-agent", "cursor-agent", "--disable-auto-update"},
 		{"muse", "muse", "--yolo"},
+		{"deepcode", "deepcode", "deepcode-launch.sh"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

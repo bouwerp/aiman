@@ -38,6 +38,7 @@ func EnsureOnHost(home string) ([]InstallResult, error) {
 
 	script := reporterPath(home)
 	record(ensureReporter(script))
+	record(ensureDeepcodeLauncher(home))
 	record(ensureClaude(home, script))
 	record(ensureGrok(home, script))
 	record(ensureCursor(home, script))
@@ -126,6 +127,10 @@ func ensureMuse(home string) (InstallResult, error) {
 		}
 		return upsertMuseIdentityHooks(root, museHookCommand(reporterPath(home))) || changed
 	})
+}
+
+func ensureDeepcodeLauncher(home string) (InstallResult, error) {
+	return writeTextFile(filepath.Join(home, ".aiman", "hooks", "deepcode-launch.sh"), DeepcodeLaunchScript, 0o700)
 }
 
 func ensurePi(home string) (InstallResult, error) {
