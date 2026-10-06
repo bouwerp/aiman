@@ -475,6 +475,10 @@ func mouseTrackingOff() string {
 type attachModes struct {
 	altScreen bool
 	mouse     bool
+	// fitWidth is an inline agent whose layout is the terminal width and which
+	// repaints that layout in place. Deep Code is one. Muse is not: a size
+	// change makes it reprint history as ordinary newlines.
+	fitWidth bool
 }
 
 // union is the modes set in either, used at detach so a mode the agent turned
@@ -570,6 +574,12 @@ func attachRedrawNudge(cols, rows int) (int, int, bool) {
 // attach.
 func kickAttachRedraw(modes attachModes, resize func(int, int) error, cols, rows int, sleep func(time.Duration)) {
 	if !modes.altScreen {
+		// One change to the real client size. A nudge-then-restore is for an
+		// alt screen that debounces a size it already has; this agent is still
+		// at the 80x24 it was created with.
+		if modes.fitWidth && cols > 0 && rows > 0 {
+			_ = resize(cols, rows)
+		}
 		return
 	}
 	nudgeCols, nudgeRows, ok := attachRedrawNudge(cols, rows)
@@ -797,12 +807,25 @@ func attachModesFor(sock, id string) attachModes {
 	}
 	var out struct {
 		Session struct {
-			AltScreen bool `json:"alt_screen"`
-			Mouse     bool `json:"mouse"`
+			AltScreen bool   `json:"alt_screen"`
+			Mouse     bool   `json:"mouse"`
+			Command   string `json:"command"`
 		} `json:"session"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return attachModes{}
 	}
-	return attachModes{altScreen: out.Session.AltScreen, mouse: out.Session.Mouse}
+	return attachModes{
+		altScreen: out.Session.AltScreen,
+		mouse:     out.Session.Mouse,
+		fitWidth:  inlineWantsAttachSize(out.Session.Command),
+	}
+}
+
+// inlineWantsAttachSize reports whether an inline agent lays out to the
+// terminal width and repaints in place, so attach should size the PTY once.
+// Muse reprints its history as plain newlines on a size change, so it is
+// excluded.
+func inlineWantsAttachSize(command string) bool {
+	return strings.Contains(strings.ToLower(command), "deepcode")
 }

@@ -229,6 +229,30 @@ func TestKickAttachRedrawSkipsUnusableSizes(t *testing.T) {
 // whatever the agent does on a real SIGWINCH — reflowing and reprinting its
 // history with plain newlines — into the terminal's actual scrollback, which
 // is indistinguishable from the whole session scrolling past on attach.
+func TestKickAttachRedrawFitsDeepCodeOnce(t *testing.T) {
+	var sizes []string
+	sleeps := 0
+	kickAttachRedraw(attachModes{fitWidth: true}, func(cols, rows int) error {
+		sizes = append(sizes, fmt.Sprintf("%dx%d", cols, rows))
+		return nil
+	}, 155, 40, func(time.Duration) { sleeps++ })
+	if len(sizes) != 1 || sizes[0] != "155x40" {
+		t.Fatalf("deep code must be resized once to the client size, got %v", sizes)
+	}
+	if sleeps != 0 {
+		t.Fatalf("a single real size change must not wait out the alt-screen nudge, sleeps=%d", sleeps)
+	}
+}
+
+func TestInlineWantsAttachSize(t *testing.T) {
+	if !inlineWantsAttachSize(`"$HOME/.aiman/hooks/deepcode-launch.sh"`) {
+		t.Fatal("deep code launcher should be fitted to the client size")
+	}
+	if inlineWantsAttachSize("muse --trust-workspace --yolo") {
+		t.Fatal("muse must not be resized on attach")
+	}
+}
+
 func TestKickAttachRedrawSkipsInlineAgents(t *testing.T) {
 	resizes := 0
 	sleeps := 0
