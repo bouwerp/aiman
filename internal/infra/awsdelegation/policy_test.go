@@ -90,7 +90,7 @@ func TestBuildRegionPolicy_AllowsRoute53WithoutRegion(t *testing.T) {
 	if len(p.Statement) < 2 {
 		t.Fatalf("want a Route53 statement besides the region lock, got %d statements", len(p.Statement))
 	}
-	foundList, foundChange := false, false
+	foundList, foundChange, foundCreate := false, false, false
 	for _, s := range p.Statement {
 		if s.Condition != nil {
 			continue
@@ -102,9 +102,12 @@ func TestBuildRegionPolicy_AllowsRoute53WithoutRegion(t *testing.T) {
 			if a == "route53:ChangeResourceRecordSets" {
 				foundChange = true
 			}
+			if a == "route53:CreateHostedZone" {
+				foundCreate = true
+			}
 		}
 	}
-	if !foundList || !foundChange {
+	if !foundList || !foundChange || !foundCreate {
 		t.Fatalf("unconditional Route53 DNS access missing, policy=%s", got)
 	}
 }

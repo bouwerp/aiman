@@ -17,12 +17,13 @@ type regionPolicy struct {
 	Statement []regionPolicyStatement `json:"Statement"`
 }
 
-// route53DNSActions are hosted-zone APIs needed to find a zone and write ACM
-// (or similar) DNS validation records. They have no RequestedRegion.
+// route53DNSActions are hosted-zone APIs needed to create or find a zone and
+// write ACM (or similar) DNS validation records. They have no RequestedRegion.
 var route53DNSActions = []string{
 	"route53:ListHostedZones",
 	"route53:ListHostedZonesByName",
 	"route53:GetHostedZone",
+	"route53:CreateHostedZone",
 	"route53:ListResourceRecordSets",
 	"route53:ChangeResourceRecordSets",
 	"route53:GetChange",
@@ -128,7 +129,8 @@ func BuildRegionPolicy(regions []string) string {
 				},
 			},
 			// Route53 is global (API in us-east-1). A RequestedRegion lock
-			// otherwise denies ListHostedZones and ACM DNS validation records.
+			// otherwise denies CreateHostedZone, ListHostedZones, and ACM DNS
+			// validation records.
 			{
 				Effect:   "Allow",
 				Action:   route53DNSActions,
