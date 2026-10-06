@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/ptyhold"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/server"
 	"golang.org/x/term"
 )
@@ -827,5 +828,5 @@ func attachModesFor(sock, id string) attachModes {
 // Muse reprints its history as plain newlines on a size change, so it is
 // excluded.
 func inlineWantsAttachSize(command string) bool {
-	return strings.Contains(strings.ToLower(command), "deepcode")
+	return ptyruntime.FitsClient(command)
 }

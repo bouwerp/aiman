@@ -391,6 +391,13 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	alt := false
 	if info, ierr := s.pty.Get(params.ID); ierr == nil {
 		alt = info.AltScreen
+		// Deep Code is created at 80x24 and lays out from that size. The
+		// attach request already carries the client size. Applying it here
+		// covers a client that does not send a later resize. Muse is left
+		// alone: a size change makes it reprint history as plain newlines.
+		if ptyruntime.FitsClient(info.Command) && params.Cols > 0 && params.Rows > 0 {
+			_ = s.pty.Resize(params.ID, params.Cols, params.Rows)
+		}
 	}
 	var paint []byte
 	if alt {
@@ -398,15 +405,16 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 		// cursor-down without CR.
 		paint = encodeAttachScreen(view, true)
 	} else {
-		paint = encodeInlineAttach(scrollbackAbove(all, view), view, params.Rows)
+		paint = inlineHistoryPaint(scrollbackAbove(all, view), view, params.Rows)
 	}
 	if _, err := conn.Write(paint); err != nil {
 		return
 	}
-	// Do not Resize here. Same-size TIOCSWINSZ before Relay starts fills
-	// the subscribe buffer (and is dropped), and it starts Ink's SIGWINCH
-	// debounce so the client's later two-step restore looks like no change.
-	// The attach client kicks a two-step resize once Relay is copying.
+	// Do not resize again here. A same-size TIOCSWINSZ before Relay starts
+	// fills the subscribe buffer and starts Ink's SIGWINCH debounce, so the
+	// client's later two-step restore looks like no change. Deep Code was
+	// already given the client size above. The attach client kicks the
+	// two-step once Relay is copying.
 
 	// Connection -> session (framed: input + resize).
 	go handlePTYAttachConnInput(ctx, params.ID, func(data []byte) error {
@@ -482,9 +490,17 @@ func historySuffix(prev, next string) string {
 }
 
 func inlineHistoryPaint(extra, view string, rows int) []byte {
-	// Home, and a full-screen scroll region: the CR LF history below only
-	// reaches the terminal's scrollback from there.
-	return append([]byte("\x1b[r\x1b[H"), encodeInlineAttach(extra, view, rows)...)
+	// One synchronized update. The terminal applies every line before it
+	// paints, so attach opens on the live rows and the history is already
+	// scrollback. Without it, each CR LF is its own frame and the transcript
+	// scrolls past from the first line. Home sits inside the update so the
+	// viewport fills the screen when the cursor was left on the last row.
+	body := encodeInlineAttach(extra, view, rows)
+	out := make([]byte, 0, len(body)+16)
+	out = append(out, "\x1b[?2026h\x1b[r\x1b[H"...)
+	out = append(out, body...)
+	out = append(out, "\x1b[?2026l"...)
+	return out
 }
 
 func attachScreenReset() []byte {

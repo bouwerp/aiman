@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -38,6 +39,80 @@ func TestHistorySuffix(t *testing.T) {
 	if got := historySuffix("", "A"); got != "A" {
 		t.Fatalf("first history: %q", got)
 	}
+}
+
+// Attach used to print every history line as a newline. A terminal paints
+// each of those as it arrives, so the session scrolls past from the first
+// line. The seed has to be one synchronized update: the wheel still reaches
+// the history, and the screen that gets painted is the live one.
+func TestInlineHistoryPaintDoesNotReplayHistory(t *testing.T) {
+	var hist strings.Builder
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&hist, "H%02d\n", i)
+	}
+	paint := inlineHistoryPaint(strings.TrimRight(hist.String(), "\n"), "AA\nBB\nCC\nDD", 4)
+	got := string(paint)
+	if strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("inline paint must stay on the primary screen: %q", got)
+	}
+	open := strings.Index(got, "\x1b[?2026h")
+	closeAt := strings.LastIndex(got, "\x1b[?2026l")
+	if open != 0 || closeAt < 0 || closeAt+len("\x1b[?2026l") != len(got) {
+		t.Fatalf("history seed must be one synchronized update: %q", got)
+	}
+	outside := got[closeAt+len("\x1b[?2026l"):]
+	if strings.Contains(outside, "\n") {
+		t.Fatalf("newline outside the synchronized update: %q", outside)
+	}
+
+	term := vt10x.New(vt10x.WithSize(20, 4))
+	var scrolled []string
+	vt10x.SetScrollOff(term, func(line []vt10x.Glyph) {
+		var b strings.Builder
+		for _, g := range line {
+			if g.Char != 0 && g.Char != ' ' {
+				b.WriteRune(g.Char)
+			}
+		}
+		if b.Len() > 0 {
+			scrolled = append(scrolled, b.String())
+		}
+	})
+	// The cursor sits on the last row after the attach notice. Chunks arrive
+	// as separate reads. None of them may leave the first history line on screen.
+	_, _ = term.Write([]byte("\n\n\n"))
+	for i := 0; i < len(paint); i += 7 {
+		end := i + 7
+		if end > len(paint) {
+			end = len(paint)
+		}
+		if _, err := term.Write(paint[i:end]); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if end < len(paint) && rowText(term, 0) == "H00" {
+			t.Fatal("attach showed the start of history before the live screen")
+		}
+	}
+	for y, row := range []string{"AA", "BB", "CC", "DD"} {
+		if got := rowText(term, y); got != row {
+			t.Fatalf("row %d = %q, want %q", y, got, row)
+		}
+	}
+	if len(scrolled) == 0 || scrolled[0] != "H00" {
+		t.Fatalf("scrollback = %q", scrolled)
+	}
+}
+
+func rowText(term vt10x.Terminal, y int) string {
+	var b strings.Builder
+	for x := 0; x < 20; x++ {
+		ch := term.Cell(x, y).Char
+		if ch == 0 {
+			ch = ' '
+		}
+		b.WriteRune(ch)
+	}
+	return strings.TrimRight(b.String(), " ")
 }
 
 func TestInlineHistoryPaintPushesLineAndKeepsViewport(t *testing.T) {

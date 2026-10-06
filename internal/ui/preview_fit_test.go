@@ -174,7 +174,15 @@ func TestDesiredPreviewFitRequiresASizedPreview(t *testing.T) {
 	m := fitModel(t, 154, 40)
 	m.panelMode = panelModeTerminal
 	if _, ok := m.desiredPreviewFit(fitSession); ok {
-		t.Error("no fit should be wanted while the terminal panel is shown")
+		t.Error("a tmux session should not be fitted while the terminal panel is shown")
+	}
+	deep := domain.Session{ID: "pty-1", Backend: domain.BackendPTY, AgentName: "deepcode"}
+	if _, ok := m.desiredPreviewFit(deep); !ok {
+		t.Error("deep code in the terminal panel should be fitted to that panel")
+	}
+	muse := domain.Session{ID: "muse-1", Backend: domain.BackendPTY, AgentName: "muse"}
+	if _, ok := m.desiredPreviewFit(muse); ok {
+		t.Error("muse must not be resized from the terminal panel; a size change reprints its history")
 	}
 
 	unsized := &Model{panelMode: panelModePreview}

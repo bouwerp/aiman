@@ -2769,6 +2769,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.terminal.h = m.viewport.Height()
 			m.terminal.term.Resize(m.viewport.Width(), m.viewport.Height())
 		}
+		if it, ok := m.selectedSessionItem(); ok && !m.skipSessionPolling(it.session.ID) {
+			if fit := m.schedulePreviewFit(it.session); fit != nil {
+				cmds = append(cmds, fit)
+			}
+		}
 
 		// Propagate to sub-models
 		var subCmd tea.Cmd

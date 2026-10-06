@@ -511,6 +511,12 @@ func TestPTYAttachInlineSeedsScrolledOffLines(t *testing.T) {
 	if strings.Contains(got, "\x1b[?1049h") {
 		t.Fatalf("inline attach entered the alternate screen: %q", got)
 	}
+	if !strings.Contains(got, "\x1b[?2026h") || !strings.Contains(got, "\x1b[?2026l") {
+		t.Fatalf("inline attach must paint the history in one synchronized update: %q", got)
+	}
+	if strings.Index(got, "\x1b[?2026h") > strings.Index(got, "L01") {
+		t.Fatalf("synchronized update must open before the history: %q", got)
+	}
 	if !strings.Contains(got, "L01\x1b[K\r\n") {
 		t.Fatalf("scrolled-off line was not seeded into scrollback: %q", got)
 	}

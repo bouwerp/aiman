@@ -10,6 +10,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
@@ -54,7 +55,12 @@ func (f previewFit) size() string { return fmt.Sprintf("%dx%d", f.cols, f.rows) 
 // desiredPreviewFit is the size the previewed session should render at, or ok
 // false when there is nothing sensible to ask for.
 func (m *Model) desiredPreviewFit(s domain.Session) (previewFit, bool) {
-	if m.panelMode != panelModePreview {
+	// A tmux session open in the terminal panel follows that attach. Deep Code
+	// does not: it stays at the 80x24 it was created with unless the panel
+	// tells it the container size. Muse must not be resized. A size change
+	// makes it reprint history as ordinary newlines.
+	ptyInTerminal := m.panelMode == panelModeTerminal && s.IsPTY() && ptyruntime.FitsClient(s.AgentName)
+	if m.panelMode != panelModePreview && !ptyInTerminal {
 		return previewFit{}, false
 	}
 	cols, rows, ok := usecase.ClampTerminalSize(m.viewport.Width(), m.viewport.Height())

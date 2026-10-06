@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,13 @@ var ErrNotFound = errors.New("pty session not found")
 
 // killTimeout covers the holder's internal SIGTERM->SIGKILL grace plus slack.
 const killTimeout = 8 * time.Second
+
+// FitsClient reports whether this command's layout is the terminal width and
+// repaints that layout in place. Deep Code is one. Muse is not: a size change
+// makes it reprint history as ordinary newlines.
+func FitsClient(command string) bool {
+	return strings.Contains(strings.ToLower(command), "deepcode")
+}
 
 // Spec describes a session to create.
 type Spec struct {
