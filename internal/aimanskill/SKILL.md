@@ -105,12 +105,13 @@ The operator installs the app once from the manifest in Slack's App Manifest JSO
 
 ```bash
 aiman slack manifest
+aiman slack auth check --app A012
 aiman slack auth app
 aiman slack auth login
 aiman slack auth status
 ```
 
-`auth app` reads the client id from stdin. `auth login` opens Slack so that member can approve. If the browser is on another machine, forward port `43127` to this host first. Agents do not run `auth login`. If a command returns `slack_unconfigured`, tell the operator.
+`auth check` reads an app configuration token from stdin and compares that existing app with the manifest: user scopes, PKCE, and the `127.0.0.1:43127` redirect. A mismatch exits `slack_app_settings`. Do not print the configuration token. `auth app` reads the client id from stdin. `auth login` opens Slack so that member can approve, and refuses to save a token that is missing a required user scope. If the browser is on another machine, forward port `43127` to this host first. Agents do not run `auth check` or `auth login`. If a command returns `slack_unconfigured` or `slack_app_settings`, tell the operator.
 
 ```bash
 aiman slack channels

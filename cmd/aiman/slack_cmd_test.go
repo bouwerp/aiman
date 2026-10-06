@@ -55,7 +55,7 @@ func TestRunSlackAuthAppDoesNotEchoClientID(t *testing.T) {
 
 func TestRunSlackLoginDoesNotEchoToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"ok":true,"authed_user":{"id":"U9","access_token":"xoxp-from-login"},"team":{"name":"Acme"}}`)
+		_, _ = io.WriteString(w, `{"ok":true,"authed_user":{"id":"U9","access_token":"xoxp-from-login","scope":"`+strings.Join(slack.UserScopes, ",")+`"},"team":{"name":"Acme"}}`)
 	}))
 	defer srv.Close()
 	slack.APIBase = srv.URL + "/api/"
@@ -102,6 +102,39 @@ func TestRunSlackLoginDoesNotEchoToken(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "tok"))
 	if err != nil || !strings.Contains(string(got), "xoxp-from-login") {
 		t.Fatalf("file %q %v", got, err)
+	}
+}
+
+func TestRunSlackAuthCheckReportsGapsWithoutToken(t *testing.T) {
+	const secret = "xoxe.xoxp-config-secret"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+secret {
+			t.Error("bearer missing")
+		}
+		_, _ = io.WriteString(w, `{
+			"ok": true,
+			"manifest": {"oauth_config": {"redirect_urls": [], "scopes": {"user": ["chat:write"]}, "pkce_enabled": false}}
+		}`)
+	}))
+	defer srv.Close()
+	slack.APIBase = srv.URL + "/api/"
+	t.Cleanup(func() { slack.APIBase = "https://slack.com/api/" })
+	var out, errOut bytes.Buffer
+	err := runSlack(context.Background(), []string{"auth", "check", "--app", "A0123456789"}, strings.NewReader(secret+"\n"), &out, &errOut)
+	if err == nil {
+		t.Fatal("expected settings gap")
+	}
+	combined := out.String() + errOut.String()
+	if strings.Contains(combined, secret) {
+		t.Fatal("configuration token leaked")
+	}
+	if !strings.Contains(errOut.String(), `"code":"slack_app_settings"`) || !strings.Contains(errOut.String(), "pkce is off") {
+		t.Fatalf("stderr %s", errOut.String())
+	}
+	errOut.Reset()
+	err = runSlack(context.Background(), []string{"auth", "check"}, strings.NewReader(secret), &out, &errOut)
+	if err == nil || !strings.Contains(errOut.String(), `"code":"slack_params"`) || strings.Contains(errOut.String(), secret) {
+		t.Fatalf("app id stderr %s err %v", errOut.String(), err)
 	}
 }
 

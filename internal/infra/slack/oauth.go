@@ -140,6 +140,7 @@ func userTokenFromAccess(raw []byte) (Credentials, error) {
 		AuthedUser   struct {
 			ID          string `json:"id"`
 			AccessToken string `json:"access_token"`
+			Scope       string `json:"scope"`
 		} `json:"authed_user"`
 		Team struct {
 			Name string `json:"name"`
@@ -161,6 +162,9 @@ func userTokenFromAccess(raw []byte) (Credentials, error) {
 		token = out.AccessToken
 	}
 	if err := requireUserToken(token); err != nil {
+		return Credentials{}, err
+	}
+	if err := scopeGap(out.AuthedUser.Scope); err != nil {
 		return Credentials{}, err
 	}
 	team := out.Team.Name

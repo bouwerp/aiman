@@ -82,6 +82,10 @@ func slackAPI(errOut io.Writer, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return slackFail(errOut, "slack_timeout", err.Error())
 	}
+	var gap slack.SettingsGap
+	if errors.As(err, &gap) {
+		return slackFail(errOut, "slack_app_settings", err.Error())
+	}
 	return slackFail(errOut, "slack_api", err.Error())
 }
 
@@ -123,6 +127,8 @@ func runSlackAuth(ctx context.Context, args []string, in io.Reader, out, errOut 
 		return runSlackAuthApp(in, out, errOut)
 	case "login":
 		return runSlackAuthLogin(ctx, args[1:], out, errOut)
+	case "check":
+		return runSlackAuthCheck(ctx, args[1:], in, out, errOut)
 	case "status":
 		c, err := slackClient()
 		if err != nil {
@@ -151,6 +157,29 @@ func runSlackAuthApp(in io.Reader, out, errOut io.Writer) error {
 		return slackFail(errOut, "slack_token", err.Error())
 	}
 	return slackWrite(out, map[string]any{"ok": true})
+}
+
+func runSlackAuthCheck(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
+	flags, _ := takeFlags(args)
+	if flags["app"] == "" {
+		return slackFail(errOut, "slack_params", "check requires --app A012")
+	}
+	body, err := io.ReadAll(in)
+	if err != nil {
+		return err
+	}
+	err = slack.ExportApp(ctx, string(body), flags["app"])
+	if err == nil {
+		return slackWrite(out, map[string]any{"ok": true})
+	}
+	var gap slack.SettingsGap
+	if errors.As(err, &gap) {
+		return slackFail(errOut, "slack_app_settings", err.Error())
+	}
+	if errors.Is(err, slack.ErrConfigToken) || errors.Is(err, slack.ErrAppID) {
+		return slackFail(errOut, "slack_params", err.Error())
+	}
+	return slackAPI(errOut, err)
 }
 
 func runSlackAuthLogin(ctx context.Context, args []string, out, errOut io.Writer) error {

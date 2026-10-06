@@ -45,7 +45,7 @@ func TestExchangeOmitsClientSecret(t *testing.T) {
 		if form.Get("client_secret") != "" || form.Get("code_verifier") == "" {
 			t.Errorf("form %s", body)
 		}
-		_, _ = io.WriteString(w, `{"ok":true,"authed_user":{"id":"U9","access_token":"xoxp-user"},"team":{"name":"Acme"}}`)
+		_, _ = io.WriteString(w, `{"ok":true,"authed_user":{"id":"U9","access_token":"xoxp-user","scope":"`+strings.Join(UserScopes, ",")+`"},"team":{"name":"Acme"}}`)
 	}))
 	defer srv.Close()
 	APIBase = srv.URL + "/api/"
@@ -71,7 +71,7 @@ func TestExchangeRejectsBotTokenWithoutEcho(t *testing.T) {
 
 func TestCompleteLoginExchangesUserToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"ok":true,"authed_user":{"id":"U9","access_token":"xoxp-user"},"team":{"name":"Acme"}}`)
+		_, _ = io.WriteString(w, `{"ok":true,"authed_user":{"id":"U9","access_token":"xoxp-user","scope":"`+strings.Join(UserScopes, ",")+`"},"team":{"name":"Acme"}}`)
 	}))
 	defer srv.Close()
 	APIBase = srv.URL + "/api/"
@@ -100,5 +100,18 @@ func TestCompleteLoginExchangesUserToken(t *testing.T) {
 	})
 	if err != nil || creds.AccessToken != "xoxp-user" || creds.ClientID != "123.456" {
 		t.Fatalf("%s %v", creds.UserID, err)
+	}
+}
+
+func TestExchangeRejectsMissingUserScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"authed_user":{"id":"U9","access_token":"xoxp-user","scope":"chat:write"},"team":{"name":"Acme"}}`)
+	}))
+	defer srv.Close()
+	APIBase = srv.URL + "/api/"
+	t.Cleanup(func() { APIBase = "https://slack.com/api/" })
+	_, err := Exchange(context.Background(), "123.456", "code", "verifier", DefaultRedirectURL)
+	if err == nil || !strings.Contains(err.Error(), "channels:history") || strings.Contains(err.Error(), "xoxp-user") {
+		t.Fatalf("err %v", err)
 	}
 }

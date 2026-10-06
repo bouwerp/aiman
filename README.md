@@ -801,8 +801,9 @@ One Slack app serves every agent, posting as the member who approved it. Install
 
 ```bash
 aiman slack manifest
-aiman slack auth app          # client id on stdin
-aiman slack auth login        # browser approval; forward port 43127 if the browser is elsewhere
+aiman slack auth check --app A012   # existing app; configuration token on stdin
+aiman slack auth app                # client id on stdin
+aiman slack auth login              # browser approval; forward port 43127 if the browser is elsewhere
 aiman slack auth status
 aiman slack send --channel engineering --text "Build is green."
 aiman slack wait --channel engineering --thread 1711.000100 --timeout 5m
