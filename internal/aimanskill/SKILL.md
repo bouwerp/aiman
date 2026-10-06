@@ -97,6 +97,33 @@ aiman context import --agent claude --dry-run
 aiman context import --agent claude,agy --repo owner/repo
 ```
 
+## Slack
+
+Any agent posts, reads, and waits as the Slack member who approved the Aiman app. There is no bot user. The user token is `~/.aiman/slack-oauth.json` or `AIMAN_SLACK_USER_TOKEN`. Do not print it, and do not pass `--token`, `--client-id`, or `--client-secret`. These commands do not need `aiman serve`.
+
+The operator installs the app once from the manifest in Slack's App Manifest JSON editor (that editor keeps the `http://127.0.0.1` redirect), then:
+
+```bash
+aiman slack manifest
+aiman slack auth app
+aiman slack auth login
+aiman slack auth status
+```
+
+`auth app` reads the client id from stdin. `auth login` opens Slack so that member can approve. If the browser is on another machine, forward port `43127` to this host first. Agents do not run `auth login`. If a command returns `slack_unconfigured`, tell the operator.
+
+```bash
+aiman slack channels
+aiman slack history --channel engineering --limit 20
+aiman slack send --channel engineering --text "Build is green."
+aiman slack thread --channel C012 --ts 1711.000100
+aiman slack react --channel C012 --ts 1711.000100 --emoji eyes
+aiman slack user U012
+aiman slack wait --channel engineering --thread 1711.000100 --timeout 5m
+```
+
+`--channel` is a name or an id. `--thread` replies in that thread. `--text-file` or `--text -` sends a longer body. `send` posts as the approving member. `wait` returns the next message in the thread that is not from that member. If `--timeout` elapses it exits with `slack_timeout`. Commands print JSON.
+
 ## Safety
 
 - Use `--name` / `--group "$AIMAN_GROUP"` for helpers. They nest under you unless you pass `--orphan`. Do not steal focus from the user's TUI (there is none on this host).

@@ -11,6 +11,9 @@ func TestSkillDocumentsContextCLI(t *testing.T) {
 	if !strings.Contains(Text, "aiman context ls") || !strings.Contains(Text, "aiman context put") || !strings.Contains(Text, "aiman context import") {
 		t.Fatal("skill must document aiman context")
 	}
+	if !strings.Contains(Text, "aiman slack send") || !strings.Contains(Text, "aiman slack wait") {
+		t.Fatal("skill must document aiman slack")
+	}
 }
 
 func TestEnsureFileInstallsWhenMissing(t *testing.T) {

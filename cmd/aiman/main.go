@@ -59,7 +59,8 @@ func run() error {
 
 	// `pty` and `session` talk only to the agent API socket (and `pty hold` not
 	// even to that — it is the detached holder, handed an explicit --root and
-	// --id). Everything below exists for the TUI: loading config, opening the
+	// --id). `slack` talks to the Slack Web API with the host user token.
+	// Everything below exists for the TUI: loading config, opening the
 	// SQLite file and running its migrations, building the JIRA, git, SSH and
 	// flow plumbing. None of it is reachable from these commands, and paying for
 	// it costs about 48 ms per call — which the dashboard makes twice a second
@@ -74,6 +75,8 @@ func run() error {
 			return runPTY(parsed.Rest[1:])
 		case "session":
 			return runSession(parsed.Rest[1:])
+		case "slack":
+			return runSlack(context.Background(), parsed.Rest[1:], os.Stdin, os.Stdout, os.Stderr)
 		}
 	}
 
@@ -206,6 +209,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  session          list/get/create/prompt sessions (JSON; needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  pty              manage built-in PTY sessions (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  context          ls/find/get/put/pack shared notes (JSON; files if serve is down)\n")
+			fmt.Fprintf(os.Stderr, "  slack            post, read, and wait on the Aiman Slack app (JSON)\n")
 			fmt.Fprintf(os.Stderr, "  phone            Tailscale + Termius setup for this host\n")
 			fmt.Fprintf(os.Stderr, "  --skill          print the agent skill\n")
 			return errUsage

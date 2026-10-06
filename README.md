@@ -795,6 +795,21 @@ aiman session read reviewer --lines 120
 
 Do not run bare `aiman` from a pane (TUI). Do not run `aiman serve` to stop the server. Prefer names over UUIDs. Put helpers in `"$AIMAN_GROUP"`. Creates nest under the caller unless `--orphan`.
 
+### Slack
+
+One Slack app serves every agent, posting as the member who approved it. Install the manifest from Slack's App Manifest JSON editor, then:
+
+```bash
+aiman slack manifest
+aiman slack auth app          # client id on stdin
+aiman slack auth login        # browser approval; forward port 43127 if the browser is elsewhere
+aiman slack auth status
+aiman slack send --channel engineering --text "Build is green."
+aiman slack wait --channel engineering --thread 1711.000100 --timeout 5m
+```
+
+The credentials file is `~/.aiman/slack-oauth.json`, mode `0600`. `AIMAN_SLACK_USER_TOKEN` overrides the user token for one process. There is no bot user to invite.
+
 ## 📁 Configuration
 
 All data is stored in `~/.aiman/`:
