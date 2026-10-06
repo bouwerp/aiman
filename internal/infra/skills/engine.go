@@ -259,7 +259,11 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 
 	case name == "deep code" || baseCommand == "deepcode":
 		// Deep Code rejects unknown flags. The launcher reports the session
-		// index; model and effort are env prefixes applied below.
+		// index; model and effort are env prefixes applied below. The script
+		// has to be on the remote before the session shell execs it.
+		if err = InstallDeepcodeLauncher(ctx, remote); err != nil {
+			return domain.PreparedSession{}, err
+		}
 		result = bareSession(agenthook.DeepcodeCommand(agent.Command))
 
 	case strings.Contains(name, "copilot") || strings.Contains(strings.ToLower(agent.Command), "copilot"):

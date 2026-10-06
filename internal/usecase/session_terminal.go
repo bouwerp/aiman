@@ -599,6 +599,11 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 	}
 	nativeID := NativeSessionID(ctx, remote, s)
 	command := reviveAgentCommand(s.AgentName, s.WorkingDirectory)
+	if strings.Contains(command, "deepcode-launch.sh") {
+		if err := skills.InstallDeepcodeLauncher(ctx, remote); err != nil {
+			return err
+		}
+	}
 	resumed := agenthook.WithResume(command, nativeID)
 	if resumed == command && nativeID == "" {
 		// No vendor conversation id anywhere: relaunching would start a fresh

@@ -18,6 +18,7 @@ import (
 // mockRemote captures WriteFile calls and returns success for Execute calls.
 type mockRemote struct {
 	writtenFiles map[string][]byte
+	cmds         []string
 	root         string
 }
 
@@ -28,6 +29,10 @@ func newMockRemote() *mockRemote {
 func (m *mockRemote) Connect(ctx context.Context) error { return nil }
 func (m *mockRemote) GetRoot() string                   { return m.root }
 func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error) {
+	m.cmds = append(m.cmds, cmd)
+	if strings.Contains(cmd, `printf %s "$HOME"`) {
+		return "/home/user", nil
+	}
 	if strings.HasPrefix(cmd, "if [ -f ") {
 		for path := range m.writtenFiles {
 			if strings.Contains(cmd, path) {
@@ -393,6 +398,13 @@ func TestPrepareSession_DeepCodeUsesLauncherAndEnvDefaults(t *testing.T) {
 	}
 	if !strings.Contains(got.InitialPrompt, domain.AimanTaskFileName) {
 		t.Fatalf("prompt: %s", got.InitialPrompt)
+	}
+	script := remote.writtenFiles["/home/user/.aiman/hooks/deepcode-launch.sh"]
+	if !strings.Contains(string(script), "session deepcode-watch") || !strings.Contains(string(script), `deepcode "$@"`) {
+		t.Fatalf("launcher script was not installed on the remote: %q", script)
+	}
+	if !strings.Contains(strings.Join(remote.cmds, "\n"), `chmod 700 "/home/user/.aiman/hooks/deepcode-launch.sh"`) {
+		t.Fatalf("launcher must be executable, cmds:\n%s", strings.Join(remote.cmds, "\n"))
 	}
 }
 
