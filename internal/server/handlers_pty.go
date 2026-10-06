@@ -416,6 +416,10 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	}, conn)
 
 	// Live -> connection (output).
+	seeded := ""
+	if !alt {
+		seeded = scrollbackAbove(all, view)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -424,11 +428,63 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 			if !ok {
 				return
 			}
-			if _, werr := conn.Write(chunk); werr != nil {
+			out := chunk
+			if !alt {
+				// Muse replaces the transcript with cursor addressing, so the
+				// raw bytes never push the line that left into this terminal's
+				// scrollback. Paint that line, then the live screen.
+				out = s.inlineFollow(params.ID, params.Rows, &seeded, chunk)
+			}
+			if _, werr := conn.Write(out); werr != nil {
 				return
 			}
 		}
 	}
+}
+
+// inlineFollow forwards raw output until the preview history grows. The new
+// lines are then written the same way attach seeds scrollback, and the raw
+// chunk is not forwarded: it is the delta that produced the screen we just
+// painted.
+func (s *Server) inlineFollow(id string, rows int, seeded *string, chunk []byte) []byte {
+	view, all, err := s.pty.CaptureFrame(id)
+	if err != nil {
+		return chunk
+	}
+	hist := scrollbackAbove(all, view)
+	extra := historySuffix(*seeded, hist)
+	redrawn := s.pty.TakeRedrawn(id)
+	*seeded = hist
+	// A chunk that only line-feeds already scrolls the attached terminal.
+	// Repainting it would drop the raw bytes a shell uses to edit a line.
+	return followOutput(chunk, extra, redrawn, view, rows)
+}
+
+func followOutput(chunk []byte, extra string, redrawn []string, view string, rows int) []byte {
+	if len(redrawn) == 0 || extra == "" {
+		return chunk
+	}
+	return inlineHistoryPaint(extra, view, rows)
+}
+
+func historySuffix(prev, next string) string {
+	if next == "" || next == prev {
+		return ""
+	}
+	if prev == "" {
+		return next
+	}
+	prefix := prev + "\n"
+	if strings.HasPrefix(next, prefix) {
+		return next[len(prefix):]
+	}
+	return ""
+}
+
+func inlineHistoryPaint(extra, view string, rows int) []byte {
+	// Home, and a full-screen scroll region: the CR LF history below only
+	// reaches the terminal's scrollback from there.
+	return append([]byte("\x1b[r\x1b[H"), encodeInlineAttach(extra, view, rows)...)
 }
 
 func attachScreenReset() []byte {

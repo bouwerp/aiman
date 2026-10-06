@@ -332,6 +332,16 @@ func (m *Manager) CaptureFrame(id string) (view, all string, err error) {
 	return view, all, nil
 }
 
+// TakeRedrawn returns transcript lines that left the viewport by a repaint,
+// not by a linefeed, since the last call. Attach uses them so the terminal's
+// own scrollback gains a line the raw PTY bytes will not scroll.
+func (m *Manager) TakeRedrawn(id string) []string {
+	sc := m.screenFor(id)
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	return sc.takeRedrawn()
+}
+
 // Kill terminates a session via the kill marker and waits for the holder to
 // finish its cleanup.
 func (m *Manager) Kill(id string) error {

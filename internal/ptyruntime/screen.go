@@ -32,6 +32,11 @@ type screen struct {
 	rows     int
 	consumed int64 // length of the spool stream already applied
 	lastUsed time.Time
+	stored   int // scrollback lines last written beside the spool
+	// redrawn is transcript lines that left via a cursor-addressed repaint
+	// since the last take. A real linefeed is not recorded: the attached
+	// terminal already scrolled that row itself.
+	redrawn []string
 }
 
 // capture brings the emulator up to date. view is the live screen. all is that
@@ -44,10 +49,14 @@ func (s *screen) capture(root, id string, cols, rows int) (view, all string) {
 	// A resize reflows everything, so the screen is rebuilt rather than
 	// reflowed: vt10x does not reflow existing content the way the agent's own
 	// repaint will, and a stale-width screen is worse than a slow one.
-	if s.term == nil || s.cols != cols || s.rows != rows {
-		s.term, s.back = newTerminal(cols, rows)
-		s.cols, s.rows = cols, rows
-		s.consumed = 0
+	// Rebuilding throws away the in-memory scrollback. Lines Muse overwrote
+	// instead of scrolling off row 0 are not in the retained spool, so they
+	// are carried across and reloaded from disk.
+	var saved []string
+	rebuilding := s.term == nil || s.cols != cols || s.rows != rows
+	if rebuilding {
+		saved = append([]string(nil), s.backLines()...)
+		s.reset(cols, rows)
 	}
 
 	data, total := ptyhold.ReadSpoolFrom(root, id, s.consumed)
@@ -56,16 +65,29 @@ func (s *screen) capture(root, id string, cols, rows int) (view, all string) {
 		// has handed back the whole retained stream, and it has to go through a
 		// fresh emulator or it would be applied on top of a screen that already
 		// contains some of it.
-		s.term, s.back = newTerminal(cols, rows)
-		s.cols, s.rows = cols, rows
+		if !rebuilding {
+			saved = append([]string(nil), s.backLines()...)
+		}
+		rebuilding = true
+		s.reset(cols, rows)
+	}
+	if rebuilding && len(saved) == 0 {
+		saved = loadScrollback(root, id)
 	}
 	if len(data) > 0 {
 		// Write takes the emulator's own lock; renderTerminal takes it too, so
-		// they must not be nested.
-		_, _ = s.term.Write(data)
+		// they must not be nested. feed snapshots rows around each write.
+		// A rebuild replays bytes whose lines are already in the carried
+		// history. Recording them again would repaint that history into an
+		// attached terminal.
+		s.feed(data, cols, rows, !rebuilding)
+	}
+	if rebuilding {
+		s.back.lines = mergeScroll(saved, s.back.lines)
 	}
 	s.consumed = total
 	s.lastUsed = time.Now()
+	s.persistScrollback(root, id)
 
 	view = renderTerminal(s.term, cols, rows, nil)
 	var history []string
@@ -76,6 +98,19 @@ func (s *screen) capture(root, id string, cols, rows int) (view, all string) {
 		return view, view
 	}
 	return view, renderTerminal(s.term, cols, rows, history)
+}
+
+func (s *screen) backLines() []string {
+	if s.back == nil {
+		return nil
+	}
+	return s.back.lines
+}
+
+func (s *screen) reset(cols, rows int) {
+	s.term, s.back = newTerminal(cols, rows)
+	s.cols, s.rows = cols, rows
+	s.consumed = 0
 }
 
 // screenFor returns the session's emulator, creating one if needed, and drops
