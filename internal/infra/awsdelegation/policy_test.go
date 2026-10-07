@@ -463,6 +463,10 @@ func TestBuildRegionPolicy_AllowsUsEast1ServiceReads(t *testing.T) {
 		"secretsmanager:DescribeSecret",
 		"lambda:GetFunction",
 		"apigateway:GET",
+		"apigateway:POST",
+		"apigateway:PUT",
+		"apigateway:PATCH",
+		"apigateway:DELETE",
 	}
 	var allowed []string
 	for _, s := range p.Statement {
@@ -518,6 +522,7 @@ func TestBuildRegionPolicy_AllowsUsEast1KeyBackupAndLambda(t *testing.T) {
 		"kms:ScheduleKeyDeletion",
 		"dynamodb:UpdateTable",
 		"dynamodb:PutItem",
+		"dynamodb:DeleteItem",
 		"dynamodb:DescribeTimeToLive",
 		"lambda:UpdateFunctionConfiguration",
 		"lambda:UpdateFunctionCode",

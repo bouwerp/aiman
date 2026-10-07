@@ -86,20 +86,23 @@ var usEast1EdgeActions = []string{
 	"lambda:List*",
 	"lambda:UpdateFunction*",
 	"lambda:TagResource",
-	"apigateway:GET",
+	// Management API verbs. GET alone does not cover a terraform apply.
+	"apigateway:*",
 	"kms:*",
 	"backup:*",
 	"backup-storage:*",
-	// Table inspection, UpdateTable, and PutItem in us-east-1. Item reads
-	// (GetItem, Query, Scan, ListTables) are already unconditional. Describe*
-	// covers DescribeTimeToLive. PutItem in the locked region is the Action *
-	// statement.
+	// Table inspection and state-lock writes in us-east-1. Item reads (GetItem,
+	// Query, Scan, ListTables) are already unconditional. Describe* covers
+	// DescribeTimeToLive. PutItem and DeleteItem in the locked region are the
+	// Action * statement. The statements use Resource *, so one table ARN does
+	// not need its own allow.
 	"dynamodb:Describe*",
 	"dynamodb:List*",
 	"dynamodb:Get*",
 	"dynamodb:BatchGetItem",
 	"dynamodb:UpdateTable",
 	"dynamodb:PutItem",
+	"dynamodb:DeleteItem",
 }
 
 // kmsCreateActions are key creation, the tag call it makes, and PutKeyPolicy.
