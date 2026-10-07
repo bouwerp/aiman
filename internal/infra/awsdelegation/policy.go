@@ -79,11 +79,11 @@ var usEast1EdgeActions = []string{
 	"ssm:PutParameter",
 }
 
-// kmsTagActions cover tagging a key while it is created. CreateKey applies
-// tags through kms:TagResource in an authorization context that has no
-// aws:RequestedRegion, so the region lock denies the call even in the
-// session's working region.
-var kmsTagActions = []string{
+// kmsCreateActions are key creation and the tag call it makes. Both are
+// authorized without aws:RequestedRegion, so the region lock denies them
+// even in the session's working region.
+var kmsCreateActions = []string{
+	"kms:CreateKey",
 	"kms:TagResource",
 }
 
@@ -102,7 +102,7 @@ var resourceDiscoveryActions = []string{
 
 // BuildRegionPolicy returns an inline IAM JSON policy that restricts all
 // actions to the given AWS regions via the aws:RequestedRegion condition,
-// plus unconditional Route53, IAM, S3, KMS tagging, and resource-discovery
+// plus unconditional Route53, IAM, S3, KMS key creation, and resource-discovery
 // access (those APIs are global or need to work regardless of the session's
 // locked region).
 // Returns an empty string when regions is nil or empty.
@@ -174,7 +174,7 @@ func BuildRegionPolicy(regions []string) string {
 			},
 			{
 				Effect:   "Allow",
-				Action:   kmsTagActions,
+				Action:   kmsCreateActions,
 				Resource: "*",
 			},
 			{

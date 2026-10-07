@@ -364,7 +364,7 @@ func TestBuildRegionPolicy_AllowsWAFRateLimitInUsEast1(t *testing.T) {
 	}
 }
 
-func TestBuildRegionPolicy_AllowsKMSTagResourceWithoutRegion(t *testing.T) {
+func TestBuildRegionPolicy_AllowsKMSCreateWithoutRegion(t *testing.T) {
 	got := BuildRegionPolicy([]string{"us-east-2"})
 	var p struct {
 		Statement []struct {
@@ -375,19 +375,22 @@ func TestBuildRegionPolicy_AllowsKMSTagResourceWithoutRegion(t *testing.T) {
 	if err := json.Unmarshal([]byte(got), &p); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	found := false
+	foundTag, foundCreate := false, false
 	for _, s := range p.Statement {
 		if s.Condition != nil {
 			continue
 		}
 		for _, a := range actionList(s.Action) {
 			if a == "kms:TagResource" {
-				found = true
+				foundTag = true
+			}
+			if a == "kms:CreateKey" {
+				foundCreate = true
 			}
 		}
 	}
-	if !found {
-		t.Fatalf("unconditional kms:TagResource missing, policy=%s", got)
+	if !foundTag || !foundCreate {
+		t.Fatalf("unconditional kms:TagResource or kms:CreateKey missing, policy=%s", got)
 	}
 }
 
