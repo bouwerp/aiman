@@ -64,15 +64,20 @@ var edgeGlobalActions = []string{
 // us-east-1 even when the delegated session is locked to another region.
 // A CloudFront distribution can only use an ACM certificate from us-east-1,
 // and the stack that requests that certificate has to be deployed there.
-// A CloudFront-scope WAFv2 WebACL is likewise only creatable in us-east-1,
-// and publishing its ARN to SSM Parameter Store for other stacks to consume
-// needs the matching write action there too. DynamoDB reads are included so
-// a session locked to another region can still inspect us-east-1 tables.
+// A CloudFront-scope WAFv2 WebACL is likewise only creatable in us-east-1.
+// Stacks publish and read that ARN in SSM Parameter Store, so the write
+// and the parameter reads belong on this statement. DynamoDB reads are
+// included so a session locked to another region can still inspect
+// us-east-1 tables.
 var usEast1EdgeActions = []string{
 	"cloudformation:*",
 	"acm:*",
 	"wafv2:*",
 	"ssm:PutParameter",
+	// DescribeParam* is DescribeParameters. The full action name does not
+	// fit in the packed session policy. GetParameter is the value read.
+	"ssm:DescribeParam*",
+	"ssm:GetParameter",
 	// Secret, function, API Gateway, key, and backup-vault calls in us-east-1.
 	// The region lock otherwise denies them when the session is locked to
 	// another region. CreateKey, TagResource, and PutKeyPolicy stay

@@ -340,6 +340,37 @@ func TestBuildRegionPolicy_AllowsEdgeCertInUsEast1(t *testing.T) {
 	}
 }
 
+func TestBuildRegionPolicy_AllowsSSMParameterReadsInUsEast1(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	want := []string{"ssm:DescribeParameters", "ssm:GetParameter"}
+	var allowed []string
+	for _, s := range p.Statement {
+		eq, _ := s.Condition["StringEquals"].(map[string]any)
+		if eq["aws:RequestedRegion"] != "us-east-1" {
+			continue
+		}
+		allowed = append(allowed, actionList(s.Action)...)
+	}
+	var missing []string
+	for _, a := range want {
+		if !actionAllowed(allowed, a) {
+			missing = append(missing, a)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("us-east-1 SSM parameter reads missing %v, policy=%s", missing, got)
+	}
+}
+
 func TestBuildRegionPolicy_AllowsWAFRateLimitInUsEast1(t *testing.T) {
 	got := BuildRegionPolicy([]string{"us-east-2"})
 	var p struct {
