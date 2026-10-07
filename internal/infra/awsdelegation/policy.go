@@ -100,9 +100,17 @@ var usEast1EdgeActions = []string{
 	"dynamodb:List*",
 	"dynamodb:Get*",
 	"dynamodb:BatchGetItem",
-	"dynamodb:UpdateTable",
 	"dynamodb:PutItem",
 	"dynamodb:DeleteItem",
+}
+
+// anyRegionMutations are table and Lambda configuration writes. Action *
+// already allows them in the locked region. They have no region condition,
+// so the same calls work in every other region.
+var anyRegionMutations = []string{
+	"dynamodb:UpdateTable",
+	"dynamodb:UpdateContinuousBackups",
+	"lambda:UpdateFunctionConfiguration",
 }
 
 // kmsCreateActions are key creation, the tag call it makes, and PutKeyPolicy.
@@ -192,6 +200,11 @@ func BuildRegionPolicy(regions []string) string {
 			{
 				Effect:   "Allow",
 				Action:   resourceDiscoveryActions,
+				Resource: "*",
+			},
+			{
+				Effect:   "Allow",
+				Action:   anyRegionMutations,
 				Resource: "*",
 			},
 			{
