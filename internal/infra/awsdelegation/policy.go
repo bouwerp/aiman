@@ -27,6 +27,8 @@ var route53DNSActions = []string{
 	"route53:ListResourceRecordSets",
 	"route53:ChangeResourceRecordSets",
 	"route53:GetChange",
+	// Tag reads have no RequestedRegion, same as the other hosted-zone calls.
+	"route53:ListTagsForResource",
 }
 
 // iamPolicyActions are IAM APIs used to inspect a role's or user's policies,
@@ -83,6 +85,11 @@ var usEast1EdgeActions = []string{
 	"acm:*",
 	"wafv2:*",
 	"ssm:PutParameter",
+	// Secret, function, and API Gateway reads in us-east-1. The region lock
+	// otherwise denies them when the session is locked to another region.
+	"secretsmanager:DescribeSecret",
+	"lambda:GetFunction",
+	"apigateway:GET",
 	// Table and backup inspection in us-east-1. Item reads (GetItem, Query,
 	// Scan, ListTables) are already unconditional; Describe* and BatchGetItem
 	// are not, so a session locked to another region cannot inspect a
@@ -93,12 +100,13 @@ var usEast1EdgeActions = []string{
 	"dynamodb:BatchGetItem",
 }
 
-// kmsCreateActions are key creation and the tag call it makes. Both are
-// authorized without aws:RequestedRegion, so the region lock denies them
-// even in the session's working region.
+// kmsCreateActions are key creation, the tag call it makes, and PutKeyPolicy.
+// All three are authorized without aws:RequestedRegion, so the region lock
+// denies them even in the session's working region.
 var kmsCreateActions = []string{
 	"kms:CreateKey",
 	"kms:TagResource",
+	"kms:PutKeyPolicy",
 }
 
 // resourceDiscoveryActions are read-only inventory and item-read calls

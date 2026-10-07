@@ -90,7 +90,7 @@ func TestBuildRegionPolicy_AllowsRoute53WithoutRegion(t *testing.T) {
 	if len(p.Statement) < 2 {
 		t.Fatalf("want a Route53 statement besides the region lock, got %d statements", len(p.Statement))
 	}
-	foundList, foundChange, foundCreate := false, false, false
+	foundList, foundChange, foundCreate, foundTags := false, false, false, false
 	for _, s := range p.Statement {
 		if s.Condition != nil {
 			continue
@@ -105,9 +105,12 @@ func TestBuildRegionPolicy_AllowsRoute53WithoutRegion(t *testing.T) {
 			if a == "route53:CreateHostedZone" {
 				foundCreate = true
 			}
+			if a == "route53:ListTagsForResource" {
+				foundTags = true
+			}
 		}
 	}
-	if !foundList || !foundChange || !foundCreate {
+	if !foundList || !foundChange || !foundCreate || !foundTags {
 		t.Fatalf("unconditional Route53 DNS access missing, policy=%s", got)
 	}
 }
@@ -428,7 +431,7 @@ func TestBuildRegionPolicy_AllowsKMSCreateWithoutRegion(t *testing.T) {
 	if err := json.Unmarshal([]byte(got), &p); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	foundTag, foundCreate := false, false
+	foundTag, foundCreate, foundPut := false, false, false
 	for _, s := range p.Statement {
 		if s.Condition != nil {
 			continue
@@ -440,10 +443,52 @@ func TestBuildRegionPolicy_AllowsKMSCreateWithoutRegion(t *testing.T) {
 			if a == "kms:CreateKey" {
 				foundCreate = true
 			}
+			if a == "kms:PutKeyPolicy" {
+				foundPut = true
+			}
 		}
 	}
-	if !foundTag || !foundCreate {
-		t.Fatalf("unconditional kms:TagResource or kms:CreateKey missing, policy=%s", got)
+	if !foundTag || !foundCreate || !foundPut {
+		t.Fatalf("unconditional KMS key actions missing, policy=%s", got)
+	}
+}
+
+func TestBuildRegionPolicy_AllowsUsEast1ServiceReads(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	want := []string{
+		"secretsmanager:DescribeSecret",
+		"lambda:GetFunction",
+		"apigateway:GET",
+	}
+	var allowed []string
+	for _, s := range p.Statement {
+		if s.Condition == nil {
+			allowed = append(allowed, actionList(s.Action)...)
+			continue
+		}
+		eq, _ := s.Condition["StringEquals"].(map[string]any)
+		if eq["aws:RequestedRegion"] != "us-east-1" {
+			continue
+		}
+		allowed = append(allowed, actionList(s.Action)...)
+	}
+	var missing []string
+	for _, a := range want {
+		if !actionAllowed(allowed, a) {
+			missing = append(missing, a)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("us-east-1 service reads missing %v, policy=%s", missing, got)
 	}
 }
 
