@@ -90,14 +90,16 @@ var usEast1EdgeActions = []string{
 	"kms:*",
 	"backup:*",
 	"backup-storage:*",
-	// Table inspection and UpdateTable in us-east-1. Item reads (GetItem,
-	// Query, Scan, ListTables) are already unconditional. Describe* covers
-	// DescribeTimeToLive.
+	// Table inspection, UpdateTable, and PutItem in us-east-1. Item reads
+	// (GetItem, Query, Scan, ListTables) are already unconditional. Describe*
+	// covers DescribeTimeToLive. PutItem in the locked region is the Action *
+	// statement.
 	"dynamodb:Describe*",
 	"dynamodb:List*",
 	"dynamodb:Get*",
 	"dynamodb:BatchGetItem",
 	"dynamodb:UpdateTable",
+	"dynamodb:PutItem",
 }
 
 // kmsCreateActions are key creation, the tag call it makes, and PutKeyPolicy.

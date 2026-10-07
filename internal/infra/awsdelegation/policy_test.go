@@ -517,6 +517,7 @@ func TestBuildRegionPolicy_AllowsUsEast1KeyBackupAndLambda(t *testing.T) {
 		"kms:DeleteAlias",
 		"kms:ScheduleKeyDeletion",
 		"dynamodb:UpdateTable",
+		"dynamodb:PutItem",
 		"dynamodb:DescribeTimeToLive",
 		"lambda:UpdateFunctionConfiguration",
 		"lambda:UpdateFunctionCode",
