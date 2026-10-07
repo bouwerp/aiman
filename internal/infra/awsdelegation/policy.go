@@ -17,18 +17,14 @@ type regionPolicy struct {
 	Statement []regionPolicyStatement `json:"Statement"`
 }
 
-// route53DNSActions are hosted-zone APIs needed to create or find a zone and
-// write ACM (or similar) DNS validation records. They have no RequestedRegion.
+// route53DNSActions are hosted-zone reads and the writes needed to create a
+// zone and publish ACM validation records. Route53 has no RequestedRegion.
+// List* and Get* keep the generated session policy under the packed-policy cap.
 var route53DNSActions = []string{
-	"route53:ListHostedZones",
-	"route53:ListHostedZonesByName",
-	"route53:GetHostedZone",
+	"route53:List*",
+	"route53:Get*",
 	"route53:CreateHostedZone",
-	"route53:ListResourceRecordSets",
 	"route53:ChangeResourceRecordSets",
-	"route53:GetChange",
-	// Tag reads have no RequestedRegion, same as the other hosted-zone calls.
-	"route53:ListTagsForResource",
 }
 
 // iamPolicyActions are IAM APIs used to inspect a role's or user's policies,
@@ -37,10 +33,10 @@ var route53DNSActions = []string{
 // have no RequestedRegion. Narrow action-family wildcards keep the generated
 // session policy below STS's separate packed-policy limit.
 var iamPolicyActions = []string{
-	"iam:GetRole*",
-	"iam:ListRole*",
-	"iam:ListAttachedRolePolicies",
-	"iam:GetPolicy*",
+	// Get* and List* are the IAM reads. IAM has no RequestedRegion, so these
+	// cannot be limited to us-east-1. List* does not cover CreateAccessKey.
+	"iam:Get*",
+	"iam:List*",
 	"iam:SimulatePrincipalPolicy",
 	"iam:*PolicyVersion*",
 	"iam:*RolePolicy",
@@ -50,20 +46,12 @@ var iamPolicyActions = []string{
 	"iam:TagRole",
 	"iam:UntagRole",
 	"iam:PassRole",
-	"iam:GetUser*",
-	"iam:ListUser*",
-	"iam:ListAttachedUserPolicies",
 	"iam:*UserPolicy",
 	"iam:TagUser",
 	"iam:UntagUser",
-	// Access-key lifecycle. ListUser* does not cover ListAccessKeys, so a
-	// region lock otherwise denies rotating an IAM user's keys (SES SMTP).
+	// Access-key lifecycle. A region lock otherwise denies rotating an IAM
+	// user's keys (SES SMTP).
 	"iam:*AccessKey*",
-	// Remaining IAM reads. GetRole* / ListUser* do not cover ListPolicies,
-	// GetGroup, ListInstanceProfiles, or the account-summary calls. IAM has
-	// no RequestedRegion, so these cannot be limited to us-east-1.
-	"iam:Get*",
-	"iam:List*",
 }
 
 // edgeGlobalActions are CloudFront calls. The API is global and does not
@@ -85,11 +73,23 @@ var usEast1EdgeActions = []string{
 	"acm:*",
 	"wafv2:*",
 	"ssm:PutParameter",
-	// Secret, function, and API Gateway reads in us-east-1. The region lock
-	// otherwise denies them when the session is locked to another region.
+	// Secret, function, API Gateway, key, and backup-vault calls in us-east-1.
+	// The region lock otherwise denies them when the session is locked to
+	// another region. CreateKey, TagResource, and PutKeyPolicy stay
+	// unconditional: those checks have no RequestedRegion. Lambda Get* and
+	// List* are the read families.
 	"secretsmanager:DescribeSecret",
-	"lambda:GetFunction",
+	"lambda:Get*",
+	"lambda:List*",
 	"apigateway:GET",
+	"kms:EnableKeyRotation",
+	"kms:CreateAlias",
+	"kms:DescribeKey",
+	"kms:GetKeyPolicy",
+	"backup:CreateBackupVault",
+	"backup:DescribeBackupVault",
+	"backup:TagResource",
+	"backup:PutBackupVaultLockConfiguration",
 	// Table and backup inspection in us-east-1. Item reads (GetItem, Query,
 	// Scan, ListTables) are already unconditional; Describe* and BatchGetItem
 	// are not, so a session locked to another region cannot inspect a
