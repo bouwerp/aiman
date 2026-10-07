@@ -364,6 +364,33 @@ func TestBuildRegionPolicy_AllowsWAFRateLimitInUsEast1(t *testing.T) {
 	}
 }
 
+func TestBuildRegionPolicy_AllowsKMSTagResourceWithoutRegion(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	found := false
+	for _, s := range p.Statement {
+		if s.Condition != nil {
+			continue
+		}
+		for _, a := range actionList(s.Action) {
+			if a == "kms:TagResource" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("unconditional kms:TagResource missing, policy=%s", got)
+	}
+}
+
 func TestBuildRegionPolicy_TrimsWhitespace(t *testing.T) {
 	got := BuildRegionPolicy([]string{"  us-east-2 ", " eu-west-1"})
 	if got == "" {
