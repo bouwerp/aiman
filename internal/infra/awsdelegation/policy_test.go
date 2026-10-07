@@ -163,6 +163,15 @@ func TestBuildRegionPolicy_AllowsIAMInspectWithoutRegion(t *testing.T) {
 		"iam:UpdateAccessKey",
 		"iam:DeleteAccessKey",
 		"iam:GetAccessKeyLastUsed",
+		"iam:ListPolicies",
+		"iam:GetGroup",
+		"iam:ListGroups",
+		"iam:GetInstanceProfile",
+		"iam:ListInstanceProfiles",
+		"iam:GetAccountSummary",
+		"iam:ListAccountAliases",
+		"iam:GetAccountAuthorizationDetails",
+		"iam:ListEntitiesForPolicy",
 	}
 	var allowed []string
 	for _, s := range p.Statement {
@@ -361,6 +370,50 @@ func TestBuildRegionPolicy_AllowsWAFRateLimitInUsEast1(t *testing.T) {
 	}
 	if !foundWAF || !foundSSMPut {
 		t.Fatalf("WAF rate-limit / SSM parameter write access missing, policy=%s", got)
+	}
+}
+
+func TestBuildRegionPolicy_AllowsDynamoDBReadsInUsEast1(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	want := []string{
+		"dynamodb:DescribeTable",
+		"dynamodb:DescribeContinuousBackups",
+		"dynamodb:ListTagsOfResource",
+		"dynamodb:ListBackups",
+		"dynamodb:GetResourcePolicy",
+		"dynamodb:BatchGetItem",
+		"dynamodb:Query",
+		"dynamodb:Scan",
+	}
+	var allowed []string
+	for _, s := range p.Statement {
+		if s.Condition == nil {
+			allowed = append(allowed, actionList(s.Action)...)
+			continue
+		}
+		eq, _ := s.Condition["StringEquals"].(map[string]any)
+		if eq["aws:RequestedRegion"] != "us-east-1" {
+			continue
+		}
+		allowed = append(allowed, actionList(s.Action)...)
+	}
+	var missing []string
+	for _, a := range want {
+		if !actionAllowed(allowed, a) {
+			missing = append(missing, a)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("us-east-1 DynamoDB reads missing %v, policy=%s", missing, got)
 	}
 }
 

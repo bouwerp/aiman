@@ -57,6 +57,11 @@ var iamPolicyActions = []string{
 	// Access-key lifecycle. ListUser* does not cover ListAccessKeys, so a
 	// region lock otherwise denies rotating an IAM user's keys (SES SMTP).
 	"iam:*AccessKey*",
+	// Remaining IAM reads. GetRole* / ListUser* do not cover ListPolicies,
+	// GetGroup, ListInstanceProfiles, or the account-summary calls. IAM has
+	// no RequestedRegion, so these cannot be limited to us-east-1.
+	"iam:Get*",
+	"iam:List*",
 }
 
 // edgeGlobalActions are CloudFront calls. The API is global and does not
@@ -71,12 +76,21 @@ var edgeGlobalActions = []string{
 // and the stack that requests that certificate has to be deployed there.
 // A CloudFront-scope WAFv2 WebACL is likewise only creatable in us-east-1,
 // and publishing its ARN to SSM Parameter Store for other stacks to consume
-// needs the matching write action there too.
+// needs the matching write action there too. DynamoDB reads are included so
+// a session locked to another region can still inspect us-east-1 tables.
 var usEast1EdgeActions = []string{
 	"cloudformation:*",
 	"acm:*",
 	"wafv2:*",
 	"ssm:PutParameter",
+	// Table and backup inspection in us-east-1. Item reads (GetItem, Query,
+	// Scan, ListTables) are already unconditional; Describe* and BatchGetItem
+	// are not, so a session locked to another region cannot inspect a
+	// us-east-1 table.
+	"dynamodb:Describe*",
+	"dynamodb:List*",
+	"dynamodb:Get*",
+	"dynamodb:BatchGetItem",
 }
 
 // kmsCreateActions are key creation and the tag call it makes. Both are
