@@ -76,28 +76,28 @@ var usEast1EdgeActions = []string{
 	// Secret, function, API Gateway, key, and backup-vault calls in us-east-1.
 	// The region lock otherwise denies them when the session is locked to
 	// another region. CreateKey, TagResource, and PutKeyPolicy stay
-	// unconditional: those checks have no RequestedRegion. Lambda Get* and
-	// List* are the read families.
+	// unconditional: those checks have no RequestedRegion. Family wildcards
+	// keep the session policy under the packed-policy cap. kms:* includes
+	// alias deletion, deletion scheduling, grants, and data-key calls that
+	// vault creation requires. backup:* and backup-storage:* are the vault
+	// control plane and its storage companion.
 	"secretsmanager:DescribeSecret",
 	"lambda:Get*",
 	"lambda:List*",
+	"lambda:UpdateFunction*",
+	"lambda:TagResource",
 	"apigateway:GET",
-	"kms:EnableKeyRotation",
-	"kms:CreateAlias",
-	"kms:DescribeKey",
-	"kms:GetKeyPolicy",
-	"backup:CreateBackupVault",
-	"backup:DescribeBackupVault",
-	"backup:TagResource",
-	"backup:PutBackupVaultLockConfiguration",
-	// Table and backup inspection in us-east-1. Item reads (GetItem, Query,
-	// Scan, ListTables) are already unconditional; Describe* and BatchGetItem
-	// are not, so a session locked to another region cannot inspect a
-	// us-east-1 table.
+	"kms:*",
+	"backup:*",
+	"backup-storage:*",
+	// Table inspection and UpdateTable in us-east-1. Item reads (GetItem,
+	// Query, Scan, ListTables) are already unconditional. Describe* covers
+	// DescribeTimeToLive.
 	"dynamodb:Describe*",
 	"dynamodb:List*",
 	"dynamodb:Get*",
 	"dynamodb:BatchGetItem",
+	"dynamodb:UpdateTable",
 }
 
 // kmsCreateActions are key creation, the tag call it makes, and PutKeyPolicy.
