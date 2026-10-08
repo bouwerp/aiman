@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -261,6 +263,78 @@ func TestPTYAttachLiveResize(t *testing.T) {
 // A second attach at the same size used to skip SIGWINCH (TIOCSWINSZ is a
 // no-op when the winsize is unchanged). The client had already been cleared,
 // so Grok never repainted its chrome.
+// Each size change is a full clear and reflow. A mismatched full-screen
+// attach changes size once.
+func TestPTYAttachAltScreenFitsOnce(t *testing.T) {
+	sock := startPTYServer(t)
+	cmd := `python3 -c "import fcntl,signal,struct,sys,termios,time
+sys.stdout.write('\x1b[?1049hREADY'); sys.stdout.flush()
+def sz():
+ s=fcntl.ioctl(1,termios.TIOCGWINSZ,struct.pack('HHHH',0,0,0,0)); r,c,_,_=struct.unpack('HHHH',s); return c,r
+def h(*_):
+ c,r=sz(); sys.stdout.write('WINCH:%dx%d\n'%(c,r)); sys.stdout.flush()
+signal.signal(signal.SIGWINCH,h); time.sleep(60)"`
+	create := createPTY(t, sock, map[string]any{
+		"id": "fit-once", "command": cmd, "cols": 80, "rows": 24,
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	eventually(t, 5*time.Second, func() bool {
+		info, gerr := Call(sock, "pty.get", map[string]any{"id": "fit-once"})
+		return gerr == nil && info.Error == nil && strings.Contains(resultJSON(t, info), `"alt_screen":true`)
+	})
+
+	conn, err := AttachDial(sock, "fit-once", 100, 40)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer conn.Close()
+	stdinR, stdinW := io.Pipe()
+	defer stdinW.Close()
+	var mu sync.Mutex
+	var out bytes.Buffer
+	go func() { _ = conn.Relay(stdinR, &lockedWriter{mu: &mu, w: &out}) }()
+
+	var got string
+	eventually(t, 5*time.Second, func() bool {
+		mu.Lock()
+		got = out.String()
+		mu.Unlock()
+		return strings.Contains(got, "WINCH:100x40")
+	})
+	time.Sleep(400 * time.Millisecond)
+	mu.Lock()
+	got = out.String()
+	mu.Unlock()
+	if strings.Count(got, "WINCH:") != 1 || !strings.Contains(got, "WINCH:100x40") {
+		t.Fatalf("alt-screen attach must change size once, got %q", got)
+	}
+	if !strings.Contains(got, "READY") {
+		t.Fatalf("the current frame must be painted, got %q", got)
+	}
+}
+
+func TestPTYAttachAltScreenKeepsFrameWhenSizeMatches(t *testing.T) {
+	sock := startPTYServer(t)
+	cmd := `python3 -c "import sys,time; sys.stdout.write('\x1b[?1049hREADY'); sys.stdout.flush(); time.sleep(60)"`
+	create := createPTY(t, sock, map[string]any{
+		"id": "fit-same", "command": cmd, "cols": 80, "rows": 24,
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	eventually(t, 5*time.Second, func() bool {
+		info, gerr := Call(sock, "pty.get", map[string]any{"id": "fit-same"})
+		return gerr == nil && info.Error == nil && strings.Contains(resultJSON(t, info), `"alt_screen":true`)
+	})
+
+	got := attachOutput(t, sock, "fit-same")
+	if !strings.Contains(got, "READY") {
+		t.Fatalf("matching size must paint the captured frame, got %q", got)
+	}
+}
+
 func TestPTYAttachSameSizeSendsWINCH(t *testing.T) {
 	sock := startPTYServer(t)
 	cmd := `python3 -c "import signal,sys,time; signal.signal(signal.SIGWINCH, lambda *_: (sys.stdout.write('WINCHED\n'), sys.stdout.flush())); time.sleep(60)"`
@@ -547,6 +621,56 @@ func TestEncodeInlineAttachSeedsScrollbackOnThePrimaryScreen(t *testing.T) {
 	}
 	if strings.HasSuffix(got, "\n") {
 		t.Fatalf("a trailing newline scrolls the live screen off: %q", got)
+	}
+}
+
+func TestAttachAltPaintKeepsAMatchingFrame(t *testing.T) {
+	called := 0
+	got := string(attachAltPaint("ROW", "80x24", 80, 24, func(int, int) error {
+		called++
+		return nil
+	}))
+	if called != 0 {
+		t.Fatalf("matching size must not resize, calls=%d", called)
+	}
+	if !strings.Contains(got, "ROW") || !strings.Contains(got, "\x1b[2J") {
+		t.Fatalf("matching size paints the captured frame, got %q", got)
+	}
+}
+
+func TestAttachAltPaintResizesOnceAndKeepsTheFrame(t *testing.T) {
+	var gotSize string
+	calls := 0
+	got := string(attachAltPaint("OLD", "80x24", 160, 48, func(c, r int) error {
+		calls++
+		gotSize = fmt.Sprintf("%dx%d", c, r)
+		return nil
+	}))
+	if calls != 1 || gotSize != "160x48" {
+		t.Fatalf("size change must be sent once, calls=%d size=%q", calls, gotSize)
+	}
+	if !strings.Contains(got, "OLD") {
+		t.Fatalf("the current frame stays visible, got %q", got)
+	}
+}
+
+func TestAttachAltPaintFallsBackWhenResizeFails(t *testing.T) {
+	got := string(attachAltPaint("OLD", "80x24", 160, 48, func(int, int) error {
+		return errors.New("holder busy")
+	}))
+	if !strings.Contains(got, "OLD") {
+		t.Fatalf("failed resize keeps the captured frame, got %q", got)
+	}
+}
+
+func TestAttachAltPaintIgnoresAnUnknownSessionSize(t *testing.T) {
+	called := 0
+	got := string(attachAltPaint("ROW", "", 80, 24, func(int, int) error {
+		called++
+		return nil
+	}))
+	if called != 0 || !strings.Contains(got, "ROW") {
+		t.Fatalf("unknown size must keep the frame, calls=%d paint=%q", called, got)
 	}
 }
 

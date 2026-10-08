@@ -9,7 +9,6 @@ import (
 	"net"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestAttachExitErrTreatsDetachAsClean pins the contract that made attaching
@@ -174,53 +173,32 @@ func TestTrailingCtrlQPrefixOnlyHoldsOnceQIsIdentified(t *testing.T) {
 	}
 }
 
-func TestAttachRedrawNudgeIsARealSizeChange(t *testing.T) {
-	cases := []struct {
-		cols, rows, wantCols, wantRows int
-		ok                             bool
-	}{
-		{80, 24, 78, 23, true},
-		{160, 48, 106, 32, true},
-		{3, 24, 3, 23, true},
-		{1, 24, 1, 23, true},
-		{0, 24, 0, 0, false},
-		{80, 0, 0, 0, false},
-	}
-	for _, tc := range cases {
-		gotCols, gotRows, ok := attachRedrawNudge(tc.cols, tc.rows)
-		if ok != tc.ok || gotCols != tc.wantCols || gotRows != tc.wantRows {
-			t.Errorf("attachRedrawNudge(%d,%d)=%d,%d,%v want %d,%d,%v",
-				tc.cols, tc.rows, gotCols, gotRows, ok, tc.wantCols, tc.wantRows, tc.ok)
+func TestKickAttachRedrawDoesNotRepaintAltScreen(t *testing.T) {
+	for _, sz := range [][2]int{{80, 24}, {160, 48}, {0, 24}} {
+		resizes := 0
+		kickAttachRedraw(attachModes{altScreen: true}, func(int, int) error {
+			resizes++
+			return nil
+		}, sz[0], sz[1])
+		if resizes != 0 {
+			t.Fatalf("alt-screen %v must not resize, calls=%d", sz, resizes)
 		}
 	}
 }
 
-func TestKickAttachRedrawSendsNudgeThenRestore(t *testing.T) {
-	var sizes []string
-	var sleeps []time.Duration
-	kickAttachRedraw(attachModes{altScreen: true}, func(cols, rows int) error {
-		sizes = append(sizes, fmt.Sprintf("%dx%d", cols, rows))
+func TestDropRepeatSizeSkipsTheAttachSize(t *testing.T) {
+	var got []string
+	resize := dropRepeatSize(80, 24, func(c, r int) error {
+		got = append(got, fmt.Sprintf("%dx%d", c, r))
 		return nil
-	}, 80, 24, func(d time.Duration) { sleeps = append(sleeps, d) })
-	if len(sizes) != 2 || sizes[0] != "78x23" || sizes[1] != "80x24" {
-		t.Fatalf("kick must send two distinct sizes, got %v", sizes)
+	})
+	for _, sz := range [][2]int{{80, 24}, {80, 24}, {100, 40}, {100, 40}} {
+		if err := resize(sz[0], sz[1]); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if len(sleeps) != 2 || sleeps[0] != attachRedrawLead || sleeps[1] != attachRedrawGap {
-		t.Fatalf("lead then debounce gap, got %v", sleeps)
-	}
-	if attachRedrawGap < 500*time.Millisecond {
-		t.Fatalf("attachRedrawGap %s is shorter than Ink-style SIGWINCH debounce; the agent would only see the restored size", attachRedrawGap)
-	}
-}
-
-func TestKickAttachRedrawSkipsUnusableSizes(t *testing.T) {
-	called := 0
-	kickAttachRedraw(attachModes{altScreen: true}, func(int, int) error {
-		called++
-		return nil
-	}, 0, 24, func(time.Duration) {})
-	if called != 0 {
-		t.Fatalf("unusable size must not resize, calls=%d", called)
+	if len(got) != 1 || got[0] != "100x40" {
+		t.Fatalf("only a real change is sent, got %v", got)
 	}
 }
 
@@ -231,16 +209,12 @@ func TestKickAttachRedrawSkipsUnusableSizes(t *testing.T) {
 // is indistinguishable from the whole session scrolling past on attach.
 func TestKickAttachRedrawFitsDeepCodeOnce(t *testing.T) {
 	var sizes []string
-	sleeps := 0
 	kickAttachRedraw(attachModes{fitWidth: true}, func(cols, rows int) error {
 		sizes = append(sizes, fmt.Sprintf("%dx%d", cols, rows))
 		return nil
-	}, 155, 40, func(time.Duration) { sleeps++ })
+	}, 155, 40)
 	if len(sizes) != 1 || sizes[0] != "155x40" {
 		t.Fatalf("deep code must be resized once to the client size, got %v", sizes)
-	}
-	if sleeps != 0 {
-		t.Fatalf("a single real size change must not wait out the alt-screen nudge, sleeps=%d", sleeps)
 	}
 }
 
@@ -255,43 +229,12 @@ func TestInlineWantsAttachSize(t *testing.T) {
 
 func TestKickAttachRedrawSkipsInlineAgents(t *testing.T) {
 	resizes := 0
-	sleeps := 0
 	kickAttachRedraw(attachModes{}, func(int, int) error {
 		resizes++
 		return nil
-	}, 80, 24, func(time.Duration) { sleeps++ })
+	}, 80, 24)
 	if resizes != 0 {
 		t.Fatalf("inline agent must not be resized on attach, calls=%d", resizes)
-	}
-	if sleeps != 0 {
-		t.Fatalf("inline agent must not incur the redraw delay, sleeps=%d", sleeps)
-	}
-}
-
-func TestAttachGrowBoxExpandsFromCenter(t *testing.T) {
-	x0, y0, w0, h0 := attachGrowBox(80, 24, 0, attachGrowSteps)
-	x1, y1, w1, h1 := attachGrowBox(80, 24, attachGrowSteps-1, attachGrowSteps)
-	if w0 >= w1 || h0 >= h1 {
-		t.Fatalf("box must grow, start %dx%d end %dx%d", w0, h0, w1, h1)
-	}
-	if w1 != 80 || h1 != 24 {
-		t.Fatalf("last frame must fill the tty, got %dx%d", w1, h1)
-	}
-	if x1 != 1 || y1 != 1 {
-		t.Fatalf("full frame origin must be 1,1 got %d,%d", x1, y1)
-	}
-	if x0 <= x1 || y0 <= y1 {
-		t.Fatalf("origin must move toward the corner as the box grows, start %d,%d end %d,%d", x0, y0, x1, y1)
-	}
-}
-
-func TestAttachGrowFrameUsesCUPNotBareLF(t *testing.T) {
-	got := attachGrowFrame(40, 12, 4, attachGrowSteps)
-	if strings.Contains(got, "\n") {
-		t.Fatalf("raw-mode frames must not use bare LF: %q", got)
-	}
-	if !strings.Contains(got, "\x1b[") || !strings.Contains(got, "╭") {
-		t.Fatalf("frame must CUP-draw a box, got %q", got)
 	}
 }
 

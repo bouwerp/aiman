@@ -11,8 +11,8 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/bouwerp/aiman/internal/ptyhold"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
@@ -256,13 +256,18 @@ func runPTYAttach(sock, id string) error {
 		_ = term.Restore(int(os.Stdin.Fd()), oldState)
 	}()
 
+	// The size passed to attach is the one the server fits. Repeating it is
+	// not free: an unchanged TIOCSWINSZ makes the holder nudge and restore,
+	// and each step is a full agent clear and reflow. ssh -t also delivers
+	// SIGWINCH for that same size as the tty comes up.
+	resize := dropRepeatSize(cols, rows, connResp.Resize)
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, resizeSignals()...)
 	defer signal.Stop(stop)
 	go func() {
 		for range stop {
 			if c, r := terminalSize(); c > 0 && r > 0 {
-				_ = connResp.Resize(c, r)
+				_ = resize(c, r)
 			}
 		}
 	}()
@@ -273,19 +278,9 @@ func runPTYAttach(sock, id string) error {
 	// scrollback.
 	fmt.Fprint(os.Stdout, notice("[aiman] attached to "+id+" — press ctrl+q to detach (the session keeps running)"))
 	fmt.Fprint(os.Stdout, attachOpenFor(modes))
-	// The grow animation paints absolute-positioned frames, which belong on a
-	// screen aiman owns. An inline agent stays on the primary screen, where those
-	// frames would overwrite the user's own output and land in their scrollback.
-	if modes.altScreen {
-		playAttachGrow(os.Stdout, cols, rows, time.Sleep)
-	}
 
 	stdin := detachOnCtrlQ(os.Stdin, connResp)
-	// Two-step resize after the grow animation. A short lead lets Relay
-	// start copying; attachRedrawGap then holds the intermediate size past
-	// Ink's SIGWINCH debounce. Only a full-screen agent has the cleared alt
-	// screen this is meant to repaint; see kickAttachRedraw.
-	go kickAttachRedraw(modes, connResp.Resize, cols, rows, time.Sleep)
+	kickAttachRedraw(modes, resize, cols, rows)
 	if err := attachExitErr(connResp.Relay(stdin, os.Stdout), stdin.Detached()); err != nil {
 		return err
 	}
@@ -523,139 +518,40 @@ func attachCloseFor(m attachModes) string {
 	return out
 }
 
-// attachRedrawLead is long enough for Relay to start copying after the grow
-// animation, and short enough that the first agent paint is not a long blank.
-const attachRedrawLead = 120 * time.Millisecond
-
-// attachRedrawGap is longer than Ink-style SIGWINCH debounce (~300ms). A
-// shorter pause restores the original size before the agent reads it, so it
-// skips a full layout and the cleared alt screen stays empty.
-const attachRedrawGap = 600 * time.Millisecond
-
-const (
-	attachGrowSteps      = 12
-	attachGrowFrameDelay = 16 * time.Millisecond
-	attachGrowMinCols    = 8
-	attachGrowMinRows    = 4
-)
-
-func attachRedrawNudge(cols, rows int) (int, int, bool) {
-	if cols <= 0 || rows <= 0 {
-		return 0, 0, false
-	}
-	startCols, startRows := cols*2/3, rows*2/3
-	if startCols >= 80 && startRows >= 24 && (startCols < cols || startRows < rows) {
-		return startCols, startRows, true
-	}
-	nc, nr := cols, rows
-	if cols > 3 {
-		nc = cols - 2
-	}
-	if rows > 2 {
-		nr = rows - 1
-	}
-	if nc != cols || nr != rows {
-		return nc, nr, true
-	}
-	if cols > 1 {
-		return cols - 1, rows, true
-	}
-	if rows > 1 {
-		return cols, rows - 1, true
-	}
-	return 0, 0, false
-}
-
-// kickAttachRedraw forces a full agent layout onto the cleared alt screen.
-//
-// Only an agent that painted a full screen has one to force: attachOpenFor
-// only clears the alt screen when modes.altScreen is set, so an inline agent
-// is left on the primary screen with none of this to paint onto. Resizing it
-// anyway still reaches the agent, and an agent that responds to a real size
-// change by reflowing and reprinting its history — rather than repainting a
-// screen it owns exclusively — puts that reprint into the terminal's actual
-// scrollback, which looks exactly like the whole session scrolling past on
-// attach.
-func kickAttachRedraw(modes attachModes, resize func(int, int) error, cols, rows int, sleep func(time.Duration)) {
-	if !modes.altScreen {
-		// One change to the real client size. A nudge-then-restore is for an
-		// alt screen that debounces a size it already has; this agent is still
-		// at the 80x24 it was created with.
-		if modes.fitWidth && cols > 0 && rows > 0 {
-			_ = resize(cols, rows)
+// dropRepeatSize ignores a resize equal to the last one requested. A same-size
+// TIOCSWINSZ does not signal, so the holder nudges the PTY by one cell and
+// restores it, and the agent clears and redraws for each.
+func dropRepeatSize(cols, rows int, resize func(int, int) error) func(int, int) error {
+	var mu sync.Mutex
+	lastC, lastR := cols, rows
+	return func(c, r int) error {
+		if c <= 0 || r <= 0 {
+			return nil
 		}
+		mu.Lock()
+		defer mu.Unlock()
+		if c == lastC && r == lastR {
+			return nil
+		}
+		if err := resize(c, r); err != nil {
+			return err
+		}
+		lastC, lastR = c, r
+		return nil
+	}
+}
+
+// kickAttachRedraw sizes an inline agent that lays out to the terminal width.
+//
+// A full-screen agent is left alone. Its frame is already on the attach
+// stream, and a further size change makes it clear and reflow that frame.
+// An inline agent that reprints history on SIGWINCH (Muse) is also left
+// alone: that reprint lands in the terminal's real scrollback.
+func kickAttachRedraw(modes attachModes, resize func(int, int) error, cols, rows int) {
+	if modes.altScreen || !modes.fitWidth || cols <= 0 || rows <= 0 {
 		return
 	}
-	nudgeCols, nudgeRows, ok := attachRedrawNudge(cols, rows)
-	if !ok {
-		return
-	}
-	sleep(attachRedrawLead)
-	_ = resize(nudgeCols, nudgeRows)
-	sleep(attachRedrawGap)
 	_ = resize(cols, rows)
-}
-
-func attachGrowBox(cols, rows, frame, steps int) (x, y, w, h int) {
-	if steps < 2 {
-		steps = 2
-	}
-	if frame < 0 {
-		frame = 0
-	}
-	if frame >= steps {
-		frame = steps - 1
-	}
-	t := float64(frame) / float64(steps-1)
-	u := 1 - t
-	e := 1 - u*u*u
-	minW, minH := 8, 3
-	if cols < minW {
-		minW = max(2, cols)
-	}
-	if rows < minH {
-		minH = max(2, rows)
-	}
-	w = minW + int(e*float64(cols-minW)+0.5)
-	h = minH + int(e*float64(rows-minH)+0.5)
-	w = min(cols, max(2, w))
-	h = min(rows, max(2, h))
-	return (cols-w)/2 + 1, (rows-h)/2 + 1, w, h
-}
-
-func hLine(left, fill, right rune, width int) string {
-	if width <= 1 {
-		return string(left)
-	}
-	if width == 2 {
-		return string(left) + string(right)
-	}
-	return string(left) + strings.Repeat(string(fill), width-2) + string(right)
-}
-
-func attachGrowFrame(cols, rows, frame, steps int) string {
-	x, y, w, h := attachGrowBox(cols, rows, frame, steps)
-	var b strings.Builder
-	b.WriteString("\x1b[2J\x1b[38;5;81m")
-	fmt.Fprintf(&b, "\x1b[%d;%dH%s", y, x, hLine('╭', '─', '╮', w))
-	for r := 1; r < h-1; r++ {
-		fmt.Fprintf(&b, "\x1b[%d;%dH│\x1b[%d;%dH│", y+r, x, y+r, x+w-1)
-	}
-	if h >= 2 {
-		fmt.Fprintf(&b, "\x1b[%d;%dH%s", y+h-1, x, hLine('╰', '─', '╯', w))
-	}
-	b.WriteString("\x1b[0m")
-	return b.String()
-}
-
-func playAttachGrow(w io.Writer, cols, rows int, sleep func(time.Duration)) {
-	if cols < attachGrowMinCols || rows < attachGrowMinRows {
-		return
-	}
-	for i := 0; i < attachGrowSteps; i++ {
-		fmt.Fprint(w, attachGrowFrame(cols, rows, i, attachGrowSteps))
-		sleep(attachGrowFrameDelay)
-	}
 }
 
 // attachOpen is attachOpenFor for a full-screen, mouse-driven agent — the

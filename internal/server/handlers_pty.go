@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -418,8 +419,10 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	// nothing in the full-screen attach can scroll.
 	view, all, _ := s.pty.CaptureFrame(params.ID)
 	alt := false
+	sessionSize := ""
 	if info, ierr := s.pty.Get(params.ID); ierr == nil {
 		alt = info.AltScreen
+		sessionSize = info.Size
 		// Deep Code is created at 80x24 and lays out from that size. The
 		// attach request already carries the client size. Applying it here
 		// covers a client that does not send a later resize. Muse is left
@@ -432,18 +435,18 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	if alt {
 		// CUP, not LF. Attach runs the client in raw mode, where LF is
 		// cursor-down without CR.
-		paint = encodeAttachScreen(view, true)
+		paint = attachAltPaint(view, sessionSize, params.Cols, params.Rows, func(cols, rows int) error {
+			return s.pty.Resize(params.ID, cols, rows)
+		})
 	} else {
 		paint = inlineHistoryPaint(scrollbackAbove(all, view), view, params.Rows)
 	}
 	if _, err := conn.Write(paint); err != nil {
 		return
 	}
-	// Do not resize again here. A same-size TIOCSWINSZ before Relay starts
-	// fills the subscribe buffer and starts Ink's SIGWINCH debounce, so the
-	// client's later two-step restore looks like no change. Deep Code was
-	// already given the client size above. The attach client kicks the
-	// two-step once Relay is copying.
+	// Do not resize again here. A same-size TIOCSWINSZ makes the holder nudge
+	// so the kernel will signal, and that second layout clears the frame
+	// just painted. Deep Code and a mismatched alt screen are fitted above.
 
 	// Connection -> session (framed: input + resize).
 	go handlePTYAttachConnInput(ctx, params.ID, func(data []byte) error {
@@ -536,6 +539,34 @@ func attachScreenReset() []byte {
 	return []byte("\x1b[?1049h\x1b[2J\x1b[H")
 }
 
+// attachAltPaint is the first frame of a full-screen attach.
+//
+// The captured frame is painted as-is so the session is on screen even when
+// the agent does not redraw. A second size is sent only when the attaching
+// terminal differs: that is one SIGWINCH, and the agent reflows once. A
+// same-size change would make the holder nudge and restore, which is two
+// more clears.
+func attachAltPaint(view, sessionSize string, cols, rows int, resize func(int, int) error) []byte {
+	sc, sr := sessionWinsize(sessionSize)
+	if sc > 0 && sr > 0 && cols > 0 && rows > 0 && (sc != cols || sr != rows) {
+		_ = resize(cols, rows)
+	}
+	return encodeAttachScreen(view, true)
+}
+
+func sessionWinsize(size string) (int, int) {
+	parts := strings.SplitN(strings.TrimSpace(size), "x", 2)
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	cols, err1 := strconv.Atoi(parts[0])
+	rows, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || cols <= 0 || rows <= 0 {
+		return 0, 0
+	}
+	return cols, rows
+}
+
 // scrollbackAbove is the part of a capture that sits above the live screen.
 func scrollbackAbove(all, view string) string {
 	if view == "" || all == view || !strings.HasSuffix(all, view) {
@@ -549,8 +580,8 @@ func encodeAttachScreen(text string, altScreen bool) []byte {
 		return encodeInlineAttach("", text, 0)
 	}
 	if strings.TrimSpace(text) == "" {
-		// Client already entered the alt screen and may have drawn a grow
-		// animation; a second 2J would wipe it before the agent paints.
+		// The client has already entered the alt screen. Clearing again
+		// flashes a blank frame with nothing to put back.
 		return []byte("\x1b[?1049h")
 	}
 	var b strings.Builder
