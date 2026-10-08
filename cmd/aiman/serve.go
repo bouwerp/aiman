@@ -88,6 +88,7 @@ func runServe() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ensureMosh(ctx)
 	ensureAimanSkill(ctx, db)
 	ensureAgentHooks()
 	store := contextstore.NewFiles(contextstore.Root(dir))
@@ -161,7 +162,10 @@ Foreground on the remote (debugging):
 systemd --user (installed by the TUI):
   systemctl --user status aiman-serve
 
-On start it installs or updates the bundled agent skill under $HOME
+On start it installs mosh when mosh-server is missing, so tmux attach can
+use it. Without passwordless sudo it unpacks the distro package into
+~/.local/bin. A missing package manager is logged and serve still starts.
+It also installs or updates the bundled agent skill under $HOME
 and in each known session worktree, and registers native-session hooks
 in each installed agent's config (Claude, Grok, Cursor, Codex, Copilot,
 agy, Kilo Code, Pi, Muse Code). Deep Code has no hook API: the same

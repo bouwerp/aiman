@@ -92,21 +92,60 @@ func TestAttachPTYSessionSkipsX11(t *testing.T) {
 	}
 }
 
+// A laptop with mosh and a remote without mosh-server makes the mosh wrapper
+// die with exit status 10. PTY attach is a raw byte relay, so it stays on ssh
+// even when both sides have mosh: mosh would emulate the terminal the agent
+// is already drawing into.
+func TestAttachPTYSessionStaysOnSSHWhenMoshIsInstalled(t *testing.T) {
+	withMosh(t, true)
+	mgr := NewManager(Config{Host: "example.com", User: "code"})
+	args := strings.Join(mgr.AttachPTYSession("sess").Args, " ")
+	if strings.Contains(args, "mosh") || !strings.Contains(args, "ssh") || !strings.Contains(args, "pty attach") {
+		t.Fatalf("pty attach must stay on ssh: %s", args)
+	}
+}
+
+func TestAttachTmuxSessionSkipsMoshWhenRemoteHasNoServer(t *testing.T) {
+	withMosh(t, false)
+	mgr := NewManager(Config{Host: "example.com", User: "code"})
+	args := strings.Join(mgr.AttachTmuxSession("feature-x").Args, " ")
+	if strings.Contains(args, "mosh") || !strings.Contains(args, "-tty") {
+		t.Fatalf("tmux attach must fall back to ssh when the remote has no mosh-server: %s", args)
+	}
+}
+
 func TestAttachTmuxSessionUsesMoshWhenPresent(t *testing.T) {
-	prev := commandLookPath
+	withMosh(t, true)
+
+	mgr := NewManager(Config{Host: "example.com", User: "code"})
+	args := strings.Join(mgr.AttachTmuxSession("feature-x").Args, " ")
+	if !strings.Contains(args, "/usr/bin/mosh --server=/usr/bin/mosh-server code@example.com -- sh -c") || !strings.Contains(args, "exec tmux attach") {
+		t.Fatalf("mosh attach: %s", args)
+	}
+}
+
+// withMosh installs a local mosh client and sets whether the remote has
+// mosh-server. TestMain leaves both off so the rest of the suite never dials.
+func withMosh(t *testing.T, remote bool) {
+	t.Helper()
+	prevLook := commandLookPath
+	prevRemote := remoteHasMoshServer
 	commandLookPath = func(name string) (string, error) {
 		if name == "mosh" {
 			return "/usr/bin/mosh", nil
 		}
 		return "", errors.New("not found")
 	}
-	t.Cleanup(func() { commandLookPath = prev })
-
-	mgr := NewManager(Config{Host: "example.com", User: "code"})
-	args := strings.Join(mgr.AttachTmuxSession("feature-x").Args, " ")
-	if !strings.Contains(args, "/usr/bin/mosh code@example.com -- sh -c") || !strings.Contains(args, "exec tmux attach") {
-		t.Fatalf("mosh attach: %s", args)
+	remoteHasMoshServer = func(*Manager) (string, bool) {
+		if !remote {
+			return "", false
+		}
+		return "/usr/bin/mosh-server", true
 	}
+	t.Cleanup(func() {
+		commandLookPath = prevLook
+		remoteHasMoshServer = prevRemote
+	})
 }
 
 func TestTmuxAttachRemoteCommand_RestoresAutomaticSizing(t *testing.T) {

@@ -1023,7 +1023,7 @@ write onto the rendered frame.
     - Synchronize patterns to the remote dev server.
 - [x] **JIRA-Driven Initial Prompt**: When launching a session from a JIRA issue, the issue description is written to `.aiman_task.md` in the worktree and the agent receives an initial prompt to read it, gather context, and prepare a plan. Works for Claude Code, Antigravity, Cursor, and Kilo Code.
 - [ ] **Skill Injection**: Implement the logic to map local "skill" files to remote agent configuration paths before agent launch.
-- [x] **MOSH Support**: Interactive attach uses MOSH when `mosh` is on PATH, and SSH otherwise. Preview stays on SSH.
+- [x] **MOSH Support**: Tmux attach uses MOSH when the laptop has `mosh` and the remote has `mosh-server`, and SSH otherwise. PTY attach stays on SSH: it is a raw byte relay. Preview stays on SSH.
 - [x] **CI/CD Pipeline & Releases**: GitHub Actions workflow for:
     - Running tests, linting, and type checking on PRs.
     - Building executables for macOS (Intel & Apple Silicon), Linux, and Windows.

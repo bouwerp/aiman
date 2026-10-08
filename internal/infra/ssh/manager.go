@@ -93,6 +93,30 @@ const remotePathPreamble = `export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/u
 // ssh when mosh happens to be installed in the environment running the suite.
 var commandLookPath = exec.LookPath
 
+// remoteHasMoshServer returns the remote mosh-server path. A local client is
+// not enough: the mosh wrapper then dies with exit status 10. The path is
+// passed as --server because a user install lives in ~/.local/bin, which
+// SSH's default PATH does not search. Tests replace it so attach never dials.
+var remoteHasMoshServer = defaultRemoteHasMoshServer
+
+func defaultRemoteHasMoshServer(m *Manager) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, err := m.ExecuteWithTimeout(ctx, "command -v mosh-server", 8*time.Second)
+	if err != nil {
+		return "", false
+	}
+	return cleanMoshServerPath(out)
+}
+
+func cleanMoshServerPath(out string) (string, bool) {
+	path := strings.TrimSpace(out)
+	if path == "" || strings.ContainsAny(path, "\n\r \t") || !strings.HasPrefix(path, "/") {
+		return "", false
+	}
+	return path, true
+}
+
 // bulkSSHArgs is the option set for non-interactive exec and file copy.
 // Alive interval matches the events stream (30s). Compression is on. X11 is not.
 func bulkSSHArgs(controlPath string, multiplex bool) []string {
@@ -497,28 +521,46 @@ func ptyAttachRemoteCommand(sessionID string) string {
 	)
 }
 
-// AttachPTYSession returns the command that interactively attaches to a
-// built-in-PTY session on this remote. MOSH when it is installed, otherwise
-// ssh on its own uncompressed control socket.
+// AttachPTYSession returns the ssh command that interactively attaches to a
+// built-in-PTY session. The remote command is a raw byte relay (aiman pty
+// attach). Mosh emulates a terminal, so it would reinterpret that stream, and
+// a laptop mosh with no remote mosh-server exits 10 before the relay starts.
+// The socket is the uncompressed tty master, separate from the compressed
+// exec master, so keystrokes do not wait on bulk captures.
 func (m *Manager) AttachPTYSession(sessionID string) *exec.Cmd {
-	return m.interactiveAttach(ptyAttachRemoteCommand(sessionID), false)
+	return m.sshAttach(context.Background(), ptyAttachRemoteCommand(sessionID), false)
 }
 
 func (m *Manager) AttachTmuxSession(sessionName string) *exec.Cmd {
-	// -X stays on tmux attach so the remote clipboard can reach the local display.
+	// -X stays on the ssh fallback so the remote clipboard can reach the local display.
 	return m.interactiveAttach(tmuxAttachRemoteCommand(sessionName), true)
 }
 
-// interactiveAttach prefers MOSH for the keystroke path. The remote command
-// uses a shell because the PATH preamble is shell syntax. Compression stays
-// off: MOSH has its own codec, and the ssh fallback must not share the
-// compressed exec master or keystrokes wait on bulk captures.
+// interactiveAttach prefers MOSH for a tmux session when both the laptop and
+// the remote have it. The remote command uses a shell because the PATH
+// preamble is shell syntax. Compression stays off on the ssh fallback: MOSH
+// has its own codec, and that fallback must not share the compressed exec master.
 func (m *Manager) interactiveAttach(remoteCmd string, x11 bool) *exec.Cmd {
-	if path, err := commandLookPath("mosh"); err == nil {
-		//nolint:gosec // G204: path is LookPath("mosh"); the target is the operator's remote
-		return exec.Command(path, m.target(), "--", "sh", "-c", remoteCmd)
+	if client, server, ok := m.moshClient(); ok {
+		//nolint:gosec // G204: client is LookPath("mosh"); server is a remote absolute path
+		return exec.Command(client, "--server="+server, m.target(), "--", "sh", "-c", remoteCmd)
 	}
 	return m.sshAttach(context.Background(), remoteCmd, x11)
+}
+
+// moshClient is the local mosh binary and the remote mosh-server path.
+// Checking only the laptop PATH selects mosh against a host that has never
+// installed it, and the wrapper then exits 10.
+func (m *Manager) moshClient() (string, string, bool) {
+	path, err := commandLookPath("mosh")
+	if err != nil {
+		return "", "", false
+	}
+	server, ok := remoteHasMoshServer(m)
+	if !ok {
+		return "", "", false
+	}
+	return path, server, true
 }
 
 func (m *Manager) sshAttach(ctx context.Context, remoteCmd string, x11 bool) *exec.Cmd {
