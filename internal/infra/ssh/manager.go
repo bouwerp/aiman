@@ -89,6 +89,26 @@ const sshCommandTimeout = 30 * time.Second
 // /usr/local/bin on Intel) and ~/.local/bin are not in PATH by default.
 const remotePathPreamble = `export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:${HOME}/.local/bin:${PATH}"; `
 
+// commandLookPath resolves a local binary. Tests replace it so attach stays on
+// ssh when mosh happens to be installed in the environment running the suite.
+var commandLookPath = exec.LookPath
+
+// bulkSSHArgs is the option set for non-interactive exec and file copy.
+// Alive interval matches the events stream (30s). Compression is on. X11 is not.
+func bulkSSHArgs(controlPath string, multiplex bool) []string {
+	args := []string{
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "Compression=yes",
+		"-o", "ServerAliveInterval=30",
+		"-o", "ServerAliveCountMax=3",
+	}
+	if multiplex {
+		return append(args, "-o", "ControlMaster=auto", "-o", "ControlPersist=10m", "-S", controlPath)
+	}
+	return append(args, "-o", "ControlMaster=no")
+}
+
 func (m *Manager) Execute(ctx context.Context, cmdStr string) (string, error) {
 	return m.executeWithTimeout(ctx, cmdStr, sshCommandTimeout)
 }
@@ -119,19 +139,11 @@ func (m *Manager) executeWithTimeout(ctx context.Context, cmdStr string, timeout
 	run := func() (string, error) {
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		// We use ControlMaster=auto and ControlPersist to handle multiplexing automatically.
-		// ServerAliveInterval/CountMax ensure dead connections are detected within ~15s.
-		cmd := exec.CommandContext(callCtx, "ssh",
-			"-o", "BatchMode=yes",
-			"-o", "ConnectTimeout=10",
-			"-o", "ServerAliveInterval=5",
-			"-o", "ServerAliveCountMax=3",
-			"-o", "ControlMaster=auto",
-			"-o", "ControlPersist=10m",
-			"-S", cp,
-			"-A",
-			"-X",
-			target, fullCmd)
+		// ControlMaster is shared by bulk calls. Compression belongs here.
+		// X11 forwarding does not: it is only useful on an interactive attach,
+		// and negotiating it on every exec costs a round trip.
+		//nolint:gosec // G204: options are fixed; target and command are the operator's remote
+		cmd := exec.CommandContext(callCtx, "ssh", append(bulkSSHArgs(cp, true), "-A", target, fullCmd)...)
 
 		output, err := cmd.CombinedOutput()
 		outStr := strings.TrimSpace(string(output))
@@ -146,14 +158,8 @@ func (m *Manager) executeWithTimeout(ctx context.Context, cmdStr string, timeout
 		defer cancel()
 		// Final fallback without SSH multiplexing, for cases where the control
 		// socket/session is flaky but direct SSH still works.
-		cmd := exec.CommandContext(callCtx, "ssh",
-			"-o", "BatchMode=yes",
-			"-o", "ConnectTimeout=10",
-			"-o", "ServerAliveInterval=5",
-			"-o", "ServerAliveCountMax=3",
-			"-o", "ControlMaster=no",
-			"-A",
-			target, fullCmd)
+		//nolint:gosec // G204: options are fixed; target and command are the operator's remote
+		cmd := exec.CommandContext(callCtx, "ssh", append(bulkSSHArgs(cp, false), "-A", target, fullCmd)...)
 
 		output, err := cmd.CombinedOutput()
 		outStr := strings.TrimSpace(string(output))
@@ -213,22 +219,7 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
 		defer cancel()
 
-		args := []string{
-			"-o", "BatchMode=yes",
-			"-o", "ConnectTimeout=10",
-			"-o", "ServerAliveInterval=5",
-			"-o", "ServerAliveCountMax=3",
-		}
-		if useControlMaster {
-			args = append(args,
-				"-o", "ControlMaster=auto",
-				"-o", "ControlPersist=10m",
-				"-S", cp,
-			)
-		} else {
-			args = append(args, "-o", "ControlMaster=no")
-		}
-		args = append(args, "-A", "-X", target, fmt.Sprintf("cat > %q", path))
+		args := append(bulkSSHArgs(cp, useControlMaster), "-A", target, fmt.Sprintf("cat > %q", path))
 
 		cmd := exec.CommandContext(callCtx, "ssh", args...)
 		stdin, err := cmd.StdinPipe()
@@ -506,23 +497,50 @@ func ptyAttachRemoteCommand(sessionID string) string {
 	)
 }
 
-// AttachPTYSession returns the ssh command that interactively attaches to a
-// built-in-PTY session on this remote.
+// AttachPTYSession returns the command that interactively attaches to a
+// built-in-PTY session on this remote. MOSH when it is installed, otherwise
+// ssh on its own uncompressed control socket.
 func (m *Manager) AttachPTYSession(sessionID string) *exec.Cmd {
-	target := m.target()
-	return exec.Command("ssh", "-t", "-A", "-o", "BatchMode=yes", target, ptyAttachRemoteCommand(sessionID))
+	return m.interactiveAttach(ptyAttachRemoteCommand(sessionID), false)
 }
 
 func (m *Manager) AttachTmuxSession(sessionName string) *exec.Cmd {
-	target := m.target()
-	// Use -t for interactive tty allocation, -A for agent forwarding, and -X for X11 forwarding (clipboard)
-	return exec.Command("ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, tmuxAttachRemoteCommand(sessionName))
+	// -X stays on tmux attach so the remote clipboard can reach the local display.
+	return m.interactiveAttach(tmuxAttachRemoteCommand(sessionName), true)
+}
+
+// interactiveAttach prefers MOSH for the keystroke path. The remote command
+// uses a shell because the PATH preamble is shell syntax. Compression stays
+// off: MOSH has its own codec, and the ssh fallback must not share the
+// compressed exec master or keystrokes wait on bulk captures.
+func (m *Manager) interactiveAttach(remoteCmd string, x11 bool) *exec.Cmd {
+	if path, err := commandLookPath("mosh"); err == nil {
+		//nolint:gosec // G204: path is LookPath("mosh"); the target is the operator's remote
+		return exec.Command(path, m.target(), "--", "sh", "-c", remoteCmd)
+	}
+	return m.sshAttach(context.Background(), remoteCmd, x11)
+}
+
+func (m *Manager) sshAttach(ctx context.Context, remoteCmd string, x11 bool) *exec.Cmd {
+	cp := m.controlPath() + "-tty"
+	_ = os.MkdirAll(filepath.Dir(cp), 0700)
+	args := []string{"-t", "-A", "-o", "BatchMode=yes"}
+	if x11 {
+		args = append(args, "-X")
+	}
+	args = append(args,
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPersist=10m",
+		"-S", cp,
+		m.target(), remoteCmd,
+	)
+	return exec.CommandContext(ctx, "ssh", args...)
 }
 
 func (m *Manager) StreamTmuxSession(ctx context.Context, sessionName string) (io.ReadWriteCloser, error) {
-	target := m.target()
-	// -t for TTY, -A for agent forwarding, -X for X11 forwarding, tmux attach to the session
-	cmd := exec.CommandContext(ctx, "ssh", "-t", "-A", "-X", "-o", "BatchMode=yes", target, tmuxAttachRemoteCommand(sessionName))
+	// Same uncompressed tty master as attach, without MOSH: this path is a pair
+	// of pipes, and MOSH owns the terminal itself.
+	cmd := m.sshAttach(ctx, tmuxAttachRemoteCommand(sessionName), true)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

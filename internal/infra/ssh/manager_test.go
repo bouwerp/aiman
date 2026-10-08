@@ -1,9 +1,18 @@
 package ssh
 
 import (
+	"errors"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	commandLookPath = func(string) (string, error) {
+		return "", errors.New("not found")
+	}
+	os.Exit(m.Run())
+}
 
 func TestTmuxAttachRemoteCommand_EnablesMouseBeforeAttach(t *testing.T) {
 	cmd := tmuxAttachRemoteCommand("feature-x")
@@ -57,6 +66,49 @@ func TestIsTmuxNoServerError(t *testing.T) {
 // to manual sizing. Attaching has to hand that control back, or the window would
 // stay at the panel's width for a full-screen client and tmux would never fit it
 // to the terminal being attached.
+func TestBulkSSHArgsCompressesWithoutX11(t *testing.T) {
+	args := strings.Join(bulkSSHArgs("/tmp/sock", true), " ")
+	if !strings.Contains(args, "Compression=yes") || !strings.Contains(args, "ServerAliveInterval=30") {
+		t.Fatalf("bulk ssh should compress and keep a 30s alive interval: %s", args)
+	}
+	if strings.Contains(args, "-X") {
+		t.Fatalf("bulk ssh must not forward X11: %s", args)
+	}
+}
+
+func TestAttachTmuxSessionKeepsAnUncompressedTTYMaster(t *testing.T) {
+	mgr := NewManager(Config{Host: "example.com", User: "code"})
+	args := strings.Join(mgr.AttachTmuxSession("feature-x").Args, " ")
+	if strings.Contains(args, "Compression=yes") || !strings.Contains(args, "-tty") || !strings.Contains(args, " -X ") {
+		t.Fatalf("tmux attach should be uncompressed X11 on its own master: %s", args)
+	}
+}
+
+func TestAttachPTYSessionSkipsX11(t *testing.T) {
+	mgr := NewManager(Config{Host: "example.com", User: "code"})
+	args := strings.Join(mgr.AttachPTYSession("sess").Args, " ")
+	if strings.Contains(args, " -X ") || strings.Contains(args, "Compression=yes") {
+		t.Fatalf("pty attach should stay uncompressed and without X11: %s", args)
+	}
+}
+
+func TestAttachTmuxSessionUsesMoshWhenPresent(t *testing.T) {
+	prev := commandLookPath
+	commandLookPath = func(name string) (string, error) {
+		if name == "mosh" {
+			return "/usr/bin/mosh", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { commandLookPath = prev })
+
+	mgr := NewManager(Config{Host: "example.com", User: "code"})
+	args := strings.Join(mgr.AttachTmuxSession("feature-x").Args, " ")
+	if !strings.Contains(args, "/usr/bin/mosh code@example.com -- sh -c") || !strings.Contains(args, "exec tmux attach") {
+		t.Fatalf("mosh attach: %s", args)
+	}
+}
+
 func TestTmuxAttachRemoteCommand_RestoresAutomaticSizing(t *testing.T) {
 	cmd := tmuxAttachRemoteCommand("feature-x")
 	if !strings.Contains(cmd, `tmux set-option -t "feature-x" window-size latest`) {

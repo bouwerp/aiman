@@ -25,7 +25,7 @@ import (
 //	aiman pty list
 //	aiman pty create --id <aiman-session-id> --name <name> --dir <dir> --command <cmd> [--env K=V]…
 //	aiman pty get|kill|forget <id>
-//	aiman pty capture <id> [--lines N] [--max-bytes N]
+//	aiman pty capture <id> [--lines N] [--max-bytes N] [--have-hash HEX]
 //	aiman pty input <id> --data <text>
 //	aiman pty attach <id>   # raw interactive relay; terminal goes raw mode
 func runPTY(args []string) error {
@@ -83,6 +83,9 @@ func runPTY(args []string) error {
 			}
 			if n := flags["max-bytes"]; n != "" {
 				params["max_bytes"] = atoi(n)
+			}
+			if h := flags["have-hash"]; h != "" {
+				params["have_hash"] = h
 			}
 		case "input":
 			data, ok := flags["data"]
@@ -420,7 +423,7 @@ func printPTYUsage(w io.Writer) {
 
   aiman pty list
   aiman pty create --id ID --command "claude" [--dir DIR] [--env K=V,K2=V2] [--cols N --rows M]
-  aiman pty get|capture|kill|forget ID     (capture: --lines N or --max-bytes N)
+  aiman pty get|capture|kill|forget ID     (capture: --lines N, --max-bytes N, or --have-hash HEX)
   aiman pty run ID COMMAND                 (submit command + Enter)
   aiman pty wait-output ID --match TEXT|--regex RE [--timeout 120s]
   aiman pty resize ID --cols N --rows M

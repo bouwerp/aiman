@@ -13,6 +13,10 @@ import (
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
+// rememberedPane is the last rendered screen served for one session. The next
+// capture diffs against it. One memory per session, not per client: a client
+// whose hash does not match gets a full screen.
+
 type sessionCreator interface {
 	CreateSession(ctx context.Context, cfg domain.SessionConfig) (*domain.Session, error)
 }
@@ -33,6 +37,15 @@ type Server struct {
 	// preview fit cannot shrink a session out from under a fullscreen client.
 	attachMu sync.Mutex
 	attaches map[string]int
+
+	// panes remembers the last rendered capture per session so a preview poll
+	// can return a row patch instead of the whole screen.
+	paneMu sync.Mutex
+	panes  map[string]rememberedPane
+}
+
+type rememberedPane struct {
+	text string
 }
 
 func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecutor, create sessionCreator, ctxStore domain.ContextStore, ptyMgr *ptyruntime.Manager, version string) *Server {

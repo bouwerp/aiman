@@ -235,8 +235,9 @@ func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {
 		return fail
 	}
 	var params struct {
-		MaxBytes int `json:"max_bytes"`
-		Lines    int `json:"lines"`
+		MaxBytes int    `json:"max_bytes"`
+		Lines    int    `json:"lines"`
+		HaveHash string `json:"have_hash"`
 	}
 	_ = json.Unmarshal(req.Params, &params)
 	// Rendered, not raw: the caller wants a screen, the way tmux capture-pane
@@ -254,7 +255,16 @@ func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {
 	// doing gets the screen and the timings in one round trip. Silence and a
 	// moving title are what actually decide the answer; the screen is the
 	// fallback evidence.
-	result := map[string]any{"type": "pane_read", "text": text}
+	reply := s.previewReply(id, text, params.HaveHash)
+	result := map[string]any{"type": "pane_read", "hash": reply.Hash}
+	switch {
+	case reply.Unchanged:
+		result["unchanged"] = true
+	case len(reply.Rows) > 0:
+		result["rows"] = reply.Rows
+	default:
+		result["text"] = reply.Text
+	}
 	if info, ierr := s.pty.Get(id); ierr == nil {
 		if !info.LastOutput.IsZero() {
 			result["last_output"] = info.LastOutput.UTC().Format(time.RFC3339Nano)
@@ -269,6 +279,23 @@ func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: result}
 }
 
+func (s *Server) previewReply(id, text, haveHash string) pane.CaptureReply {
+	s.paneMu.Lock()
+	defer s.paneMu.Unlock()
+	if s.panes == nil {
+		s.panes = map[string]rememberedPane{}
+	}
+	reply := pane.ReplyFor(s.panes[id].text, text, haveHash)
+	s.panes[id] = rememberedPane{text: text}
+	return reply
+}
+
+func (s *Server) dropPaneMemory(id string) {
+	s.paneMu.Lock()
+	delete(s.panes, id)
+	s.paneMu.Unlock()
+}
+
 func (s *Server) handlePTYKill(ctx context.Context, req Request) Response {
 	id, fail, ok := s.resolvePTYID(req)
 	if !ok {
@@ -277,6 +304,7 @@ func (s *Server) handlePTYKill(ctx context.Context, req Request) Response {
 	if err := s.pty.Kill(id); err != nil {
 		return s.ptyErrResp(req.ID, err)
 	}
+	s.dropPaneMemory(id)
 	return Response{ID: req.ID, Result: map[string]any{"type": "pty_kill", "killed": true}}
 }
 
@@ -288,6 +316,7 @@ func (s *Server) handlePTYForget(ctx context.Context, req Request) Response {
 	if err := s.pty.Forget(id); err != nil {
 		return s.ptyErrResp(req.ID, err)
 	}
+	s.dropPaneMemory(id)
 	return Response{ID: req.ID, Result: map[string]any{"type": "pty_forget", "forgotten": true}}
 }
 

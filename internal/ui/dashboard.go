@@ -24,7 +24,6 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
@@ -475,6 +474,8 @@ type Model struct {
 	creatingSessions       map[string]*creatingSession    // background session creations, keyed by placeholder session ID
 	terminatingSessions    map[string]*terminatingSession // background session terminations, keyed by session ID
 	syncHealth             map[string]syncHealth          // mutagen sync health per session ID
+	paneCache              map[string]usecase.PaneCache   // last applied preview per session ID
+	previewBusy            bool                           // a preview poll is already on the wire
 	// serveUpdateAt records when each remote's agent API was last auto-updated,
 	// so a failing update is not retried on every probe (see serve_autoupdate.go).
 	serveUpdateAt map[string]time.Time
@@ -871,6 +872,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		creatingSessions:    make(map[string]*creatingSession),
 		terminatingSessions: make(map[string]*terminatingSession),
 		syncHealth:          make(map[string]syncHealth),
+		paneCache:           make(map[string]usecase.PaneCache),
 		daemonList:          dl,
 		daemons:             make(map[string]domain.Daemon),
 		agentAPIProbing:     make(map[string]bool),
@@ -1142,25 +1144,6 @@ func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
 	}
 }
 
-func fetchTmuxPane(cfg *config.Config, session domain.Session) tea.Cmd {
-	return func() tea.Msg {
-		remote, ok := resolveRemote(cfg, session)
-		if !ok {
-			return tmuxOutputMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
-		}
-
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		out, err := usecase.CaptureSessionPane(ctx, mgr, session)
-		return tmuxOutputMsg{
-			session: session.TmuxSession,
-			output:  out,
-			err:     err,
-		}
-	}
-}
-
 // summariseSessionCmd captures the current tmux pane and sends it to the local SLM
 // for analysis. Runs in a bubbletea goroutine — never blocks the TUI loop.
 func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, session domain.Session) tea.Cmd {
@@ -1326,32 +1309,6 @@ func putRemoteSnapshotContext(ctx context.Context, sess domain.Session, cfg *con
 	}
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 	_ = usecase.PutSnapshotContext(ctx, mgr, snap, sess.Group)
-}
-
-func checkInputHint(cfg *config.Config, session domain.Session) tea.Cmd {
-	return func() tea.Msg {
-		if !cfg.Features.InputPromptDetection {
-			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
-		}
-		if st, ok := agenthook.ResolveHookState(session, time.Now()); ok {
-			activity, needs := activityFromHook(st, session.AgentEnded)
-			return inputHintMsg{session: session.TmuxSession, needsInput: needs, activity: activity}
-		}
-		remote, ok := resolveRemote(cfg, session)
-		if !ok {
-			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
-		}
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		// One call for the pane and the timings. The classifier reasons about
-		// silence and a moving terminal title; passing only a pane left those
-		// branches permanently unreachable.
-		obs, err := usecase.ObserveSession(context.Background(), mgr, session)
-		if err != nil {
-			return inputHintMsg{session: session.TmuxSession, needsInput: false, activity: ""}
-		}
-		activity, needs := detectSessionActivityFrom(obs)
-		return inputHintMsg{session: session.TmuxSession, needsInput: needs, activity: activity}
-	}
 }
 
 func activityFromHook(st domain.AgentState, ended bool) (string, bool) {
@@ -2242,7 +2199,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 		m.activeSession = msg.session.TmuxSession
 		m.tmuxOutput = "Loading..."
 		m.setPreviewContent()
-		cmds = append(cmds, fetchTmuxPane(m.cfg, msg.session), fetchGitStatus(m.cfg, msg.session))
+		cmds = append(cmds, m.queuePreview(msg.session), fetchGitStatus(m.cfg, msg.session))
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -2801,6 +2758,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// the timer marked as armed forever, so no session would ever be fitted
 	// again.
 	switch msg := msg.(type) {
+	case previewRefreshMsg:
+		// Handled globally: leaving the session list must still clear previewBusy,
+		// or the next poll never starts.
+		return m, m.applyPreviewRefresh(msg)
 	case sessionEventMsg:
 		// Handled globally: the stream must keep being consumed whatever screen
 		// the user is on, or one unread event stalls it permanently.
@@ -3213,7 +3174,7 @@ func (m *Model) applySessionCreateMsg(msg sessionCreateMsg, cmds []tea.Cmd) (tea
 	m.setPreviewContent()
 	m.state = m.loadingNext
 
-	return m, tea.Batch(tickTmux(), fetchTmuxPane(m.cfg, msg.session), warnCmd)
+	return m, tea.Batch(tickTmux(), m.queuePreview(msg.session), warnCmd)
 }
 
 func (m *Model) applyTerminateStepMsg(msg terminateStepMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
@@ -4210,11 +4171,7 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 			m.activeSession = s.TmuxSession
 			m.tmuxOutput = "Loading..."
 			m.setPreviewContent()
-			cmds = append(cmds,
-				fetchTmuxPane(m.cfg, s),
-				checkInputHint(m.cfg, s),
-				fetchGitStatus(m.cfg, s),
-			)
+			cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s))
 		}
 	} else if m.currentTab == tabSessions {
 		if it, ok := m.selectedSessionItem(); ok {
@@ -4226,10 +4183,7 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 			// (tmux going away).
 			if !m.skipSessionPolling(s.ID) {
 				// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
-				cmds = append(cmds,
-					fetchTmuxPane(m.cfg, s),
-					checkInputHint(m.cfg, s),
-				)
+				cmds = append(cmds, m.queuePreview(s))
 				// Open or close activity streams as the PTY session set changes.
 				if cmd := m.ensureSessionStreams(); cmd != nil {
 					cmds = append(cmds, cmd)
@@ -4351,7 +4305,7 @@ func (m *Model) applyAttachDone(msg attachDoneMsg, cmds []tea.Cmd) (tea.Model, t
 		m.activeSession = s.TmuxSession
 		m.tmuxOutput = "Loading..."
 		m.setPreviewContent()
-		cmds = append(cmds, tickTmux(), fetchTmuxPane(m.cfg, s))
+		cmds = append(cmds, tickTmux(), m.queuePreview(s))
 	} else {
 		// Keep the poll chain alive: tickTmux is self-perpetuating, so dropping
 		// it here would leave the preview frozen until the next event.
@@ -4483,7 +4437,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 				if m.panelMode == panelModeTerminal {
 					cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s))
 				} else {
-					cmds = append(cmds, fetchTmuxPane(m.cfg, s), fetchGitStatus(m.cfg, s))
+					cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s))
 				}
 			}
 		}

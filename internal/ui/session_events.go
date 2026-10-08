@@ -175,7 +175,7 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		if sess, found := m.sessionByID(msg.event.ID); found {
 			state.lastRefresh = time.Now()
 			m.eventSeen[msg.event.ID] = state
-			return tea.Batch(next, checkInputHint(m.cfg, sess))
+			return tea.Batch(next, m.queuePreview(sess))
 		}
 	}
 	m.eventSeen[msg.event.ID] = state
@@ -331,7 +331,8 @@ func parseEventTime(v string) time.Time {
 	if strings.TrimSpace(v) == "" {
 		return time.Time{}
 	}
-	t, err := time.Parse(time.RFC3339, v)
+	// The holder publishes RFC3339Nano, so fractional seconds have to parse.
+	t, err := time.Parse(time.RFC3339Nano, v)
 	if err != nil {
 		return time.Time{}
 	}
