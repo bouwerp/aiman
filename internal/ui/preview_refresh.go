@@ -30,7 +30,12 @@ type previewRefreshMsg struct {
 // queuePreview starts one preview poll, or reclassifies from the cache when a
 // PTY event says the screen has not moved. A poll already on the wire is left
 // alone so captures cannot stack on a slow link.
+//
+// Callers blank the panel to "Loading..." before asking. That placeholder is
+// only honest when there is no frame yet: a skipped poll, or one still in
+// flight for another session, would otherwise leave it there for good.
 func (m *Model) queuePreview(s domain.Session) tea.Cmd {
+	m.showCachedPreview(s)
 	if m.previewBusy {
 		return nil
 	}
@@ -40,6 +45,21 @@ func (m *Model) queuePreview(s domain.Session) tea.Cmd {
 	}
 	m.previewBusy = true
 	return m.refreshPreview(s)
+}
+
+// showCachedPreview puts the last capture back when the panel is still the
+// placeholder. A loaded pane is left where the user scrolled it.
+func (m *Model) showCachedPreview(s domain.Session) {
+	if s.TmuxSession != m.activeSession || m.hasLoadedPane() || m.paneCache == nil {
+		return
+	}
+	text := m.paneCache[s.ID].Text
+	if text == "" {
+		return
+	}
+	m.tmuxOutput = text
+	m.setPreviewContent()
+	m.viewport.GotoBottom()
 }
 
 // paneChangedSinceCache reports whether a preview poll has to leave the machine.

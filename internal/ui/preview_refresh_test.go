@@ -30,6 +30,50 @@ func TestPTYPreviewSkipsWhenOutputIsUnchanged(t *testing.T) {
 	}
 }
 
+// Selecting a session blanks the panel to "Loading..." and then asks for a
+// poll. When the event stream says that screen has not moved, the poll is
+// skipped. The capture is already in memory; leaving the placeholder up makes
+// the preview look stuck.
+func TestUnchangedPreviewPaintsTheCachedScreen(t *testing.T) {
+	cfg := twoRemoteCfg()
+	s := domain.Session{ID: "s1", Backend: domain.BackendPTY, TmuxSession: "s1", RemoteHost: "10.0.1.5"}
+	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
+	when := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	m.paneCache[s.ID] = usecase.PaneCache{Text: "cached screen", OutputAt: when}
+	m.eventSeen = map[string]sessionEventState{s.ID: {lastOutput: when}}
+	m.activeSession = s.TmuxSession
+	m.tmuxOutput = "Loading..."
+
+	if cmd := m.queuePreview(s); cmd != nil {
+		t.Fatal("unchanged pty output should not start a poll")
+	}
+	if m.tmuxOutput != "cached screen" {
+		t.Fatalf("preview = %q, want the cached screen", m.tmuxOutput)
+	}
+}
+
+// A poll already on the wire must not be joined by another, but the session
+// just selected still has a frame. The placeholder stays only when there is
+// nothing to show.
+func TestBusyPollShowsTheCachedScreen(t *testing.T) {
+	cfg := twoRemoteCfg()
+	s := domain.Session{ID: "s1", Backend: domain.BackendPTY, TmuxSession: "s1", RemoteHost: "10.0.1.5"}
+	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
+	later := time.Date(2026, 10, 8, 12, 5, 0, 0, time.UTC)
+	m.paneCache[s.ID] = usecase.PaneCache{Text: "cached screen", OutputAt: later.Add(-time.Minute)}
+	m.eventSeen = map[string]sessionEventState{s.ID: {lastOutput: later}}
+	m.activeSession = s.TmuxSession
+	m.tmuxOutput = "Loading..."
+	m.previewBusy = true
+
+	if cmd := m.queuePreview(s); cmd != nil || !m.previewBusy {
+		t.Fatalf("cmd=%v busy=%v", cmd != nil, m.previewBusy)
+	}
+	if m.tmuxOutput != "cached screen" {
+		t.Fatalf("preview = %q, want the cached screen", m.tmuxOutput)
+	}
+}
+
 func TestPreviewPollDoesNotOverlap(t *testing.T) {
 	cfg := twoRemoteCfg()
 	s := domain.Session{ID: "s1", TmuxSession: "s1", RemoteHost: "10.0.1.5"}

@@ -11,13 +11,15 @@ import (
 
 func fitModel(t *testing.T, cols, rows int) *Model {
 	t.Helper()
-	m := &Model{panelMode: panelModePreview}
+	m := &Model{panelMode: panelModeTerminal}
 	m.viewport.SetWidth(cols)
 	m.viewport.SetHeight(rows)
 	return m
 }
 
-var fitSession = domain.Session{ID: "sess-1", TmuxSession: "demo"}
+// fitSession is Deep Code in the terminal panel: the one case that is still
+// resized. A preview capture does not resize anything.
+var fitSession = domain.Session{ID: "sess-1", TmuxSession: "demo", Backend: domain.BackendPTY, AgentName: "deepcode"}
 
 // TestSchedulePreviewFitArmsOnce is the bug this design exists to avoid: the
 // poll ticker runs faster than the debounce, so re-arming on every tick would
@@ -168,12 +170,35 @@ func TestDesiredPreviewFitAppliesFloors(t *testing.T) {
 	}
 }
 
+// The preview is a capture of the session as it is. Resizing it to the panel
+// makes a full-screen agent clear and redraw, and makes Muse reprint history,
+// so the pane stays in that redraw long after the capture has returned.
+func TestPreviewPanelDoesNotResizeTheSession(t *testing.T) {
+	m := &Model{panelMode: panelModePreview}
+	m.viewport.SetWidth(120)
+	m.viewport.SetHeight(40)
+	for _, s := range []domain.Session{
+		{ID: "grok", Backend: domain.BackendPTY, AgentName: "grok"},
+		{ID: "claude", Backend: domain.BackendPTY, AgentName: "claude"},
+		{ID: "muse", Backend: domain.BackendPTY, AgentName: "muse"},
+		{ID: "deep", Backend: domain.BackendPTY, AgentName: "deepcode"},
+		{ID: "tmux", TmuxSession: "demo"},
+	} {
+		if _, ok := m.desiredPreviewFit(s); ok {
+			t.Fatalf("preview must not resize %s", s.ID)
+		}
+		if cmd := m.schedulePreviewFit(s); cmd != nil {
+			t.Fatalf("preview must not schedule a resize for %s", s.ID)
+		}
+	}
+}
+
 // Nothing to fit when the preview is not what is on screen, or before the
 // panel has been sized.
 func TestDesiredPreviewFitRequiresASizedPreview(t *testing.T) {
 	m := fitModel(t, 154, 40)
 	m.panelMode = panelModeTerminal
-	if _, ok := m.desiredPreviewFit(fitSession); ok {
+	if _, ok := m.desiredPreviewFit(domain.Session{TmuxSession: "demo"}); ok {
 		t.Error("a tmux session should not be fitted while the terminal panel is shown")
 	}
 	deep := domain.Session{ID: "pty-1", Backend: domain.BackendPTY, AgentName: "deepcode"}

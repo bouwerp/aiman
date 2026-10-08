@@ -14,12 +14,11 @@ import (
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
-// Fitting the previewed session to the preview panel: terminal text cannot be
-// scaled, so the only way to make a session fit is to tell it that it is
-// narrower and let the agent repaint its own UI at that width. Remote sessions
-// are as wide as the terminal that last sized them (273 columns is typical),
-// while the panel is a fraction of that, so without this most of the screen sits
-// off to the right.
+// Sizing a session to the panel it is shown in. Terminal text cannot be
+// scaled. The preview does not ask the agent to redraw at the panel width:
+// that redraw is what makes the pane take seconds to appear, and the panel
+// pans across the capture instead. Deep Code in the terminal panel is sized,
+// because it lays out from the 80x24 it was created with and repaints in place.
 const (
 	// previewFitDebounce is how long the desired size has to settle. Dragging a
 	// window edge changes it many times a second and every change makes the
@@ -52,15 +51,17 @@ type previewFit struct {
 
 func (f previewFit) size() string { return fmt.Sprintf("%dx%d", f.cols, f.rows) }
 
-// desiredPreviewFit is the size the previewed session should render at, or ok
-// false when there is nothing sensible to ask for.
+// desiredPreviewFit is the size a session should be told to render at, or ok
+// false when the panel must not resize it.
+//
+// The preview captures the session as it already is and pans sideways. Asking
+// the agent to match the panel makes a full-screen TUI clear and redraw, and
+// makes an inline agent such as Muse reprint its history, so the pane the
+// user is waiting on is that redraw. Deep Code in the terminal panel is the
+// exception: it stays at 80x24 unless told the container size, and it
+// repaints that layout in place.
 func (m *Model) desiredPreviewFit(s domain.Session) (previewFit, bool) {
-	// A tmux session open in the terminal panel follows that attach. Deep Code
-	// does not: it stays at the 80x24 it was created with unless the panel
-	// tells it the container size. Muse must not be resized. A size change
-	// makes it reprint history as ordinary newlines.
-	ptyInTerminal := m.panelMode == panelModeTerminal && s.IsPTY() && ptyruntime.FitsClient(s.AgentName)
-	if m.panelMode != panelModePreview && !ptyInTerminal {
+	if m.panelMode != panelModeTerminal || !s.IsPTY() || !ptyruntime.FitsClient(s.AgentName) {
 		return previewFit{}, false
 	}
 	cols, rows, ok := usecase.ClampTerminalSize(m.viewport.Width(), m.viewport.Height())
