@@ -257,15 +257,8 @@ func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {
 	// moving title are what actually decide the answer; the screen is the
 	// fallback evidence.
 	reply := s.previewReply(id, text, params.HaveHash)
-	result := map[string]any{"type": "pane_read", "hash": reply.Hash}
-	switch {
-	case reply.Unchanged:
-		result["unchanged"] = true
-	case len(reply.Rows) > 0:
-		result["rows"] = reply.Rows
-	default:
-		result["text"] = reply.Text
-	}
+	result := paneCaptureFields(reply)
+	result["type"] = "pane_read"
 	if info, ierr := s.pty.Get(id); ierr == nil {
 		if !info.LastOutput.IsZero() {
 			result["last_output"] = info.LastOutput.UTC().Format(time.RFC3339Nano)
@@ -278,6 +271,28 @@ func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {
 		}
 	}
 	return Response{ID: req.ID, Result: result}
+}
+
+// paneCaptureFields is the wire body of a pane capture. A scroll sends the
+// dropped-line count and the new tail, not the screen the client already has.
+func paneCaptureFields(reply pane.CaptureReply) map[string]any {
+	result := map[string]any{"hash": reply.Hash}
+	switch {
+	case reply.Unchanged:
+		result["unchanged"] = true
+	case len(reply.Rows) > 0:
+		result["rows"] = reply.Rows
+	case reply.Append != "" || reply.Drop > 0:
+		if reply.Drop > 0 {
+			result["drop"] = reply.Drop
+		}
+		if reply.Append != "" {
+			result["append"] = reply.Append
+		}
+	default:
+		result["text"] = reply.Text
+	}
+	return result
 }
 
 func (s *Server) previewReply(id, text, haveHash string) pane.CaptureReply {

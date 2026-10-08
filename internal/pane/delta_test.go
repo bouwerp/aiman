@@ -73,3 +73,55 @@ func TestReplyForSendsFullTextWhenTheClientHashIsUnknown(t *testing.T) {
 		t.Fatalf("reply=%+v", reply)
 	}
 }
+
+func TestReplyForAppendsANewTail(t *testing.T) {
+	prev := "a\nb"
+	next := "a\nb\nc"
+	reply := ReplyFor(prev, next, ScreenHash(prev))
+	if reply.Text != "" || reply.Rows != nil || reply.Drop != 0 || reply.Append != "c" {
+		t.Fatalf("reply=%+v", reply)
+	}
+	if reply.Hash != ScreenHash(next) {
+		t.Fatalf("hash=%s", reply.Hash)
+	}
+	got, ok := ApplyScroll(prev, reply.Drop, reply.Append)
+	if !ok || got != next {
+		t.Fatalf("apply ok=%v got=%q", ok, got)
+	}
+}
+
+func TestReplyForScrollsASlidingWindow(t *testing.T) {
+	prev := "a\nb\nc"
+	next := "b\nc\nd"
+	reply := ReplyFor(prev, next, ScreenHash(prev))
+	if reply.Text != "" || reply.Rows != nil || reply.Drop != 1 || reply.Append != "d" {
+		t.Fatalf("reply=%+v", reply)
+	}
+	got, ok := ApplyScroll(prev, reply.Drop, reply.Append)
+	if !ok || got != next {
+		t.Fatalf("apply ok=%v got=%q", ok, got)
+	}
+}
+
+func TestReplyForReplacesWhenTheOverlapIsTooSmall(t *testing.T) {
+	prev := "a\nb"
+	next := "a\nb\nc\nd\ne"
+	reply := ReplyFor(prev, next, ScreenHash(prev))
+	if reply.Text != next || reply.Append != "" || reply.Drop != 0 {
+		t.Fatalf("reply=%+v", reply)
+	}
+}
+
+func TestReplyForReplacesAnEmptyScreen(t *testing.T) {
+	reply := ReplyFor("", "hello", ScreenHash(""))
+	if reply.Text != "hello" || reply.Append != "" || reply.Drop != 0 {
+		t.Fatalf("reply=%+v", reply)
+	}
+}
+
+func TestApplyScrollRejectsADropPastTheEnd(t *testing.T) {
+	_, ok := ApplyScroll("a\nb", 3, "c")
+	if ok {
+		t.Fatal("expected a drop past the end to fail")
+	}
+}

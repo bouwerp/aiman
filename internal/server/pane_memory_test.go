@@ -21,6 +21,23 @@ func TestPreviewReplyPatchesARememberedScreen(t *testing.T) {
 	}
 }
 
+func TestPaneCaptureSendsAnAppendWithoutTheScreen(t *testing.T) {
+	body := paneCaptureFields(pane.CaptureReply{
+		Hash:   "h",
+		Drop:   1,
+		Append: "d",
+	})
+	if body["append"] != "d" || body["drop"] != 1 {
+		t.Fatalf("body=%v", body)
+	}
+	if _, ok := body["text"]; ok {
+		t.Fatalf("append must not also send the screen: %v", body)
+	}
+	if _, ok := body["rows"]; ok {
+		t.Fatalf("append must not also send rows: %v", body)
+	}
+}
+
 func TestDropPaneMemoryForgetsTheScreen(t *testing.T) {
 	s := &Server{}
 	first := s.previewReply("s", "a\nb", "")

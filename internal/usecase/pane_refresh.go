@@ -240,20 +240,33 @@ func refreshTmuxPreview(ctx context.Context, remote PaneCapturer, s domain.Sessi
 	return upd, nil
 }
 
+// previewTailLines is the window a preview asks a PTY for. It matches the tmux
+// probe cap (-S -200). The session still keeps a much longer scrollback; that
+// transcript is what makes a preview crawl when every change resends it.
+const previewTailLines = 200
+
 func refreshPTYPreview(ctx context.Context, remote PaneCapturer, s domain.Session, cache PaneCache) (PreviewUpdate, error) {
-	cmd := fmt.Sprintf("aiman pty capture %q --lines 0", terminalID(s))
+	cmd := fmt.Sprintf("aiman pty capture %q --lines %d", terminalID(s), previewTailLines)
 	if cache.Hash != "" {
 		cmd += fmt.Sprintf(" --have-hash %q", cache.Hash)
 	}
 	out, err := remote.Execute(ctx, remoteAimanPreamble+cmd)
 	if err != nil {
-		return fullPaneFallback(ctx, remote, s)
+		return fullPTYPreview(ctx, remote, s)
 	}
 	upd, perr := applyPTYPreview(out, cache, time.Now())
 	if perr != nil {
-		return fullPaneFallback(ctx, remote, s)
+		return fullPTYPreview(ctx, remote, s)
 	}
 	return upd, nil
+}
+
+func fullPTYPreview(ctx context.Context, remote PaneCapturer, s domain.Session) (PreviewUpdate, error) {
+	text, err := CapturePTYPane(ctx, remote, terminalID(s), previewTailLines)
+	if err != nil {
+		return PreviewUpdate{}, err
+	}
+	return PreviewUpdate{Text: text, Cache: PaneCache{Text: text, Hash: pane.ScreenHash(text)}}, nil
 }
 
 func fullPaneFallback(ctx context.Context, remote PaneCapturer, s domain.Session) (PreviewUpdate, error) {
@@ -269,6 +282,8 @@ type ptyPreviewResult struct {
 	Hash         string          `json:"hash"`
 	Unchanged    bool            `json:"unchanged"`
 	Rows         []pane.RowPatch `json:"rows"`
+	Drop         int             `json:"drop"`
+	Append       string          `json:"append"`
 	LastOutput   string          `json:"last_output"`
 	TitleChanged string          `json:"title_changed_at"`
 }
@@ -300,6 +315,9 @@ func applyPTYPreview(raw string, cache PaneCache, now time.Time) (PreviewUpdate,
 	if len(res.Rows) > 0 {
 		return applyPTYRows(upd, cache.Text, res.Rows)
 	}
+	if res.Append != "" || res.Drop > 0 {
+		return applyPTYScroll(upd, cache.Text, res.Drop, res.Append)
+	}
 	if res.Text == "" {
 		return PreviewUpdate{}, fmt.Errorf("pty capture returned no text")
 	}
@@ -307,6 +325,19 @@ func applyPTYPreview(raw string, cache PaneCache, now time.Time) (PreviewUpdate,
 	upd.Cache.Text = res.Text
 	if upd.Cache.Hash == "" {
 		upd.Cache.Hash = pane.ScreenHash(res.Text)
+	}
+	return upd, nil
+}
+
+func applyPTYScroll(upd PreviewUpdate, prev string, drop int, appendText string) (PreviewUpdate, error) {
+	text, ok := pane.ApplyScroll(prev, drop, appendText)
+	if !ok {
+		return PreviewUpdate{}, fmt.Errorf("pane scroll did not apply")
+	}
+	upd.Text = text
+	upd.Cache.Text = text
+	if upd.Cache.Hash == "" {
+		upd.Cache.Hash = pane.ScreenHash(text)
 	}
 	return upd, nil
 }

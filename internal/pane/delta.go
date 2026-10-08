@@ -3,6 +3,7 @@ package pane
 import (
 	"encoding/hex"
 	"hash/fnv"
+	"slices"
 	"strings"
 )
 
@@ -14,13 +15,17 @@ type RowPatch struct {
 }
 
 // CaptureReply is what a pane capture owes a client that already has a screen.
-// Text is set for a full replace. Rows is set for a patch. Neither is set when
-// the screen is unchanged. Hash is the hash of the screen after this reply.
+// Text is a full replace. Rows is an in-place patch. Drop and Append move a
+// scrolling window: Drop lines leave the top and Append is joined onto the
+// bottom. None of those are set when the screen is unchanged. Hash is the hash
+// of the screen after this reply.
 type CaptureReply struct {
 	Unchanged bool
 	Hash      string
 	Text      string
 	Rows      []RowPatch
+	Drop      int
+	Append    string
 }
 
 // ScreenHash is the fingerprint a PTY capture stores and the client sends back.
@@ -56,6 +61,24 @@ func DiffScreen(prev, next string) (same bool, replace string, rows []RowPatch) 
 	return false, "", patches
 }
 
+// ApplyScroll drops lines from the top of prev and appends appendText.
+// ok is false when drop runs past the cached screen, so the caller can discard
+// its cache and ask for a full screen.
+func ApplyScroll(prev string, drop int, appendText string) (string, bool) {
+	if drop < 0 {
+		return "", false
+	}
+	lines := strings.Split(prev, "\n")
+	if drop > len(lines) {
+		return "", false
+	}
+	lines = lines[drop:]
+	if appendText != "" {
+		lines = append(lines, strings.Split(appendText, "\n")...)
+	}
+	return strings.Join(lines, "\n"), true
+}
+
 // ApplyScreen applies a full replace or a row patch. ok is false when a patch
 // names a row the previous screen does not have, so the caller can discard its
 // cache and ask for a full screen.
@@ -86,6 +109,9 @@ func ReplyFor(prevText, curText, haveHash string) CaptureReply {
 	if haveHash != ScreenHash(prevText) {
 		return CaptureReply{Hash: curHash, Text: curText}
 	}
+	if drop, appended, ok := scrollPatch(prevText, curText); ok {
+		return CaptureReply{Hash: curHash, Drop: drop, Append: appended}
+	}
 	same, replace, rows := DiffScreen(prevText, curText)
 	if same {
 		return CaptureReply{Unchanged: true, Hash: curHash}
@@ -94,4 +120,32 @@ func ReplyFor(prevText, curText, haveHash string) CaptureReply {
 		return CaptureReply{Hash: curHash, Text: replace}
 	}
 	return CaptureReply{Hash: curHash, Rows: rows}
+}
+
+// scrollPatch reports a screen that is the previous one with lines removed
+// from the top, lines added at the bottom, or both. The shared run has to be
+// at least half of the new screen; a shorter overlap is about as large as
+// sending the screen. A blank line on its own is not a scroll: the joined
+// suffix would be empty and the client could not tell it from no new lines.
+func scrollPatch(prev, next string) (int, string, bool) {
+	prevLines := strings.Split(prev, "\n")
+	nextLines := strings.Split(next, "\n")
+	for k := 0; k < len(prevLines); k++ {
+		overlap := len(prevLines) - k
+		if overlap > len(nextLines) || !slices.Equal(prevLines[k:], nextLines[:overlap]) {
+			continue
+		}
+		if overlap*2 < len(nextLines) {
+			return 0, "", false
+		}
+		added := nextLines[overlap:]
+		if len(added) == 1 && added[0] == "" {
+			return 0, "", false
+		}
+		if k == 0 && len(added) == 0 {
+			continue
+		}
+		return k, strings.Join(added, "\n"), true
+	}
+	return 0, "", false
 }
