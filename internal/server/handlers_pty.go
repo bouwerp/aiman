@@ -438,11 +438,11 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	if info, ierr := s.pty.Get(params.ID); ierr == nil {
 		alt = info.AltScreen
 		sessionSize = info.Size
-		// Deep Code is created at 80x24 and lays out from that size. The
-		// attach request already carries the client size. Applying it here
-		// covers a client that does not send a later resize. Muse is left
-		// alone: a size change makes it reprint history as plain newlines.
-		if ptyruntime.FitsClient(info.Command) && params.Cols > 0 && params.Rows > 0 {
+		// Muse, Codex, and Deep Code are created at 80x24 and lay out from
+		// that size. The attach request carries the client size. Apply it
+		// when it differs. A same-size TIOCSWINSZ makes the holder nudge,
+		// and a second layout starts before the first one has settled.
+		if ptyruntime.SizesWithClient(info.Command) && ptyruntime.SizeDiffers(sessionSize, params.Cols, params.Rows) {
 			_ = s.pty.Resize(params.ID, params.Cols, params.Rows)
 		}
 	}

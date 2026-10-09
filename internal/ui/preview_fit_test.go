@@ -170,9 +170,9 @@ func TestDesiredPreviewFitAppliesFloors(t *testing.T) {
 	}
 }
 
-// The preview is a capture of the session as it is. Resizing it to the panel
-// makes a full-screen agent clear and redraw, and makes Muse reprint history,
-// so the pane stays in that redraw long after the capture has returned.
+// A full-screen preview is a capture, and resizing it clears that capture.
+// Muse and Codex are the exception: they keep the 80x24 they were created
+// with until something tells them otherwise, so the preview sizes them once.
 func TestPreviewPanelDoesNotResizeTheSession(t *testing.T) {
 	m := &Model{panelMode: panelModePreview}
 	m.viewport.SetWidth(120)
@@ -180,7 +180,6 @@ func TestPreviewPanelDoesNotResizeTheSession(t *testing.T) {
 	for _, s := range []domain.Session{
 		{ID: "grok", Backend: domain.BackendPTY, AgentName: "grok"},
 		{ID: "claude", Backend: domain.BackendPTY, AgentName: "claude"},
-		{ID: "muse", Backend: domain.BackendPTY, AgentName: "muse"},
 		{ID: "deep", Backend: domain.BackendPTY, AgentName: "deepcode"},
 		{ID: "tmux", TmuxSession: "demo"},
 	} {
@@ -189,6 +188,14 @@ func TestPreviewPanelDoesNotResizeTheSession(t *testing.T) {
 		}
 		if cmd := m.schedulePreviewFit(s); cmd != nil {
 			t.Fatalf("preview must not schedule a resize for %s", s.ID)
+		}
+	}
+	for _, s := range []domain.Session{
+		{ID: "muse", Backend: domain.BackendPTY, AgentName: "Muse Code"},
+		{ID: "codex", Backend: domain.BackendPTY, AgentName: "Codex CLI"},
+	} {
+		if _, ok := m.desiredPreviewFit(s); !ok {
+			t.Fatalf("preview must size %s once so it can leave 80x24", s.ID)
 		}
 	}
 }
@@ -201,13 +208,17 @@ func TestDesiredPreviewFitRequiresASizedPreview(t *testing.T) {
 	if _, ok := m.desiredPreviewFit(domain.Session{TmuxSession: "demo"}); ok {
 		t.Error("a tmux session should not be fitted while the terminal panel is shown")
 	}
-	deep := domain.Session{ID: "pty-1", Backend: domain.BackendPTY, AgentName: "deepcode"}
+	deep := domain.Session{ID: "pty-1", Backend: domain.BackendPTY, AgentName: "Deep Code"}
 	if _, ok := m.desiredPreviewFit(deep); !ok {
 		t.Error("deep code in the terminal panel should be fitted to that panel")
 	}
-	muse := domain.Session{ID: "muse-1", Backend: domain.BackendPTY, AgentName: "muse"}
-	if _, ok := m.desiredPreviewFit(muse); ok {
-		t.Error("muse must not be resized from the terminal panel; a size change reprints its history")
+	muse := domain.Session{ID: "muse-1", Backend: domain.BackendPTY, AgentName: "Muse Code"}
+	if _, ok := m.desiredPreviewFit(muse); !ok {
+		t.Error("muse in the terminal panel should be fitted once to that panel")
+	}
+	codex := domain.Session{ID: "codex-1", Backend: domain.BackendPTY, AgentName: "Codex CLI"}
+	if _, ok := m.desiredPreviewFit(codex); !ok {
+		t.Error("codex in the terminal panel should be fitted once to that panel")
 	}
 
 	unsized := &Model{panelMode: panelModePreview}

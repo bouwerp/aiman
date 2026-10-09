@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +30,61 @@ const killTimeout = 8 * time.Second
 // repaints that layout in place. Deep Code is one. Muse is not: a size change
 // makes it reprint history as ordinary newlines.
 func FitsClient(command string) bool {
-	return strings.Contains(strings.ToLower(command), "deepcode")
+	return agentToken(command) == "deepcode"
+}
+
+// SizesWithClient reports whether the agent lays out from the PTY's winsize
+// and otherwise stays at the 80x24 it was created with. Muse and Codex are
+// inline, and Deep Code repaints in place. A full-screen agent already paints
+// into the size it has.
+func SizesWithClient(command string) bool {
+	switch agentToken(command) {
+	case "muse", "codex", "deepcode":
+		return true
+	default:
+		return false
+	}
+}
+
+// SizeDiffers reports whether cols x rows is a real change from the session's
+// current "WxH" size. A same-size TIOCSWINSZ makes the holder nudge by one
+// cell and restore, and Muse and Codex start a new layout for each signal, so
+// they never settle on the size they were just given.
+func SizeDiffers(current string, cols, rows int) bool {
+	if cols <= 0 || rows <= 0 {
+		return false
+	}
+	parts := strings.SplitN(strings.TrimSpace(current), "x", 2)
+	if len(parts) != 2 {
+		return true
+	}
+	sc, err1 := strconv.Atoi(parts[0])
+	sr, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || sc <= 0 || sr <= 0 {
+		return true
+	}
+	return sc != cols || sr != rows
+}
+
+// agentToken is the agent binary named by a launch command or a display name.
+// "Muse Code" and "muse --yolo" are both muse. "Deep Code" and the deepcode
+// launcher are both deepcode.
+func agentToken(name string) string {
+	compact := strings.ReplaceAll(strings.ToLower(name), " ", "")
+	if strings.Contains(compact, "deepcode") {
+		return "deepcode"
+	}
+	for _, field := range strings.Fields(strings.ToLower(name)) {
+		field = strings.Trim(field, `"'`)
+		if i := strings.LastIndex(field, "/"); i >= 0 {
+			field = field[i+1:]
+		}
+		switch field {
+		case "muse", "codex":
+			return field
+		}
+	}
+	return ""
 }
 
 // Spec describes a session to create.

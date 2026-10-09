@@ -15,10 +15,11 @@ import (
 )
 
 // Sizing a session to the panel it is shown in. Terminal text cannot be
-// scaled. The preview does not ask the agent to redraw at the panel width:
-// that redraw is what makes the pane take seconds to appear, and the panel
-// pans across the capture instead. Deep Code in the terminal panel is sized,
-// because it lays out from the 80x24 it was created with and repaints in place.
+// scaled. A full-screen agent is captured as it is and the panel pans: asking
+// it to match the panel clears the screen. Muse and Codex lay out from the
+// PTY size, so they are told the panel size once. Deep Code in the terminal
+// panel is sized the same way, because it stays at the 80x24 it was created
+// with until something resizes it.
 const (
 	// previewFitDebounce is how long the desired size has to settle. Dragging a
 	// window edge changes it many times a second and every change makes the
@@ -51,17 +52,31 @@ type previewFit struct {
 
 func (f previewFit) size() string { return fmt.Sprintf("%dx%d", f.cols, f.rows) }
 
+// sessionWantsPanelSize reports whether this panel should tell the agent its
+// size. Muse and Codex need it wherever they are shown. Deep Code needs it
+// in the terminal panel.
+func sessionWantsPanelSize(mode panelMode, agentName string) bool {
+	switch mode {
+	case panelModePreview:
+		return ptyruntime.SizesWithClient(agentName) && !ptyruntime.FitsClient(agentName)
+	case panelModeTerminal:
+		return ptyruntime.SizesWithClient(agentName)
+	default:
+		return false
+	}
+}
+
 // desiredPreviewFit is the size a session should be told to render at, or ok
 // false when the panel must not resize it.
 //
-// The preview captures the session as it already is and pans sideways. Asking
-// the agent to match the panel makes a full-screen TUI clear and redraw, and
-// makes an inline agent such as Muse reprint its history, so the pane the
-// user is waiting on is that redraw. Deep Code in the terminal panel is the
-// exception: it stays at 80x24 unless told the container size, and it
-// repaints that layout in place.
+// Muse and Codex are sized in either panel. They are created at 80x24 and
+// keep drawing there until a resize arrives, so the layout never settles on
+// the terminal the user is looking at. The fit is remembered, so a later
+// poll does not resize again. A full-screen agent is left alone: a resize
+// clears its screen. Deep Code is sized only from the terminal panel, where
+// someone is looking at it full size.
 func (m *Model) desiredPreviewFit(s domain.Session) (previewFit, bool) {
-	if m.panelMode != panelModeTerminal || !s.IsPTY() || !ptyruntime.FitsClient(s.AgentName) {
+	if !s.IsPTY() || !sessionWantsPanelSize(m.panelMode, s.AgentName) {
 		return previewFit{}, false
 	}
 	cols, rows, ok := usecase.ClampTerminalSize(m.viewport.Width(), m.viewport.Height())

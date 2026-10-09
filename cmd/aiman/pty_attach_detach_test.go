@@ -222,8 +222,14 @@ func TestInlineWantsAttachSize(t *testing.T) {
 	if !inlineWantsAttachSize(`"$HOME/.aiman/hooks/deepcode-launch.sh"`) {
 		t.Fatal("deep code launcher should be fitted to the client size")
 	}
-	if inlineWantsAttachSize("muse --trust-workspace --yolo") {
-		t.Fatal("muse must not be resized on attach")
+	if !inlineWantsAttachSize("muse --trust-workspace --yolo") {
+		t.Fatal("muse lays out from the PTY size and has to be told the client size")
+	}
+	if !inlineWantsAttachSize("codex --dangerously-bypass-approvals-and-sandbox") {
+		t.Fatal("codex lays out from the PTY size and has to be told the client size")
+	}
+	if inlineWantsAttachSize("claude --dangerously-skip-permissions") {
+		t.Fatal("a full-screen agent keeps the size it already has")
 	}
 }
 

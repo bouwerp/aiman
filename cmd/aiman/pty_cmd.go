@@ -474,9 +474,9 @@ func mouseTrackingOff() string {
 type attachModes struct {
 	altScreen bool
 	mouse     bool
-	// fitWidth is an inline agent whose layout is the terminal width and which
-	// repaints that layout in place. Deep Code is one. Muse is not: a size
-	// change makes it reprint history as ordinary newlines.
+	// fitWidth is an agent that lays out from the client size. Muse, Codex,
+	// and Deep Code are. A same-size request is still not sent: the holder
+	// would nudge and they would lay out twice.
 	fitWidth bool
 }
 
@@ -541,12 +541,12 @@ func dropRepeatSize(cols, rows int, resize func(int, int) error) func(int, int) 
 	}
 }
 
-// kickAttachRedraw sizes an inline agent that lays out to the terminal width.
+// kickAttachRedraw sizes an agent that lays out from the client size.
 //
 // A full-screen agent is left alone. Its frame is already on the attach
 // stream, and a further size change makes it clear and reflow that frame.
-// An inline agent that reprints history on SIGWINCH (Muse) is also left
-// alone: that reprint lands in the terminal's real scrollback.
+// The resize wrapper drops a repeat of the attach size, so this is one
+// signal when the PTY is still at the size it was created with.
 func kickAttachRedraw(modes attachModes, resize func(int, int) error, cols, rows int) {
 	if modes.altScreen || !modes.fitWidth || cols <= 0 || rows <= 0 {
 		return
@@ -722,10 +722,9 @@ func attachModesFor(sock, id string) attachModes {
 	}
 }
 
-// inlineWantsAttachSize reports whether an inline agent lays out to the
-// terminal width and repaints in place, so attach should size the PTY once.
-// Muse reprints its history as plain newlines on a size change, so it is
-// excluded.
+// inlineWantsAttachSize reports whether attach should size the PTY to the
+// client once. Muse, Codex, and Deep Code lay out from that size. A
+// full-screen agent already has a frame at its own size.
 func inlineWantsAttachSize(command string) bool {
-	return ptyruntime.FitsClient(command)
+	return ptyruntime.SizesWithClient(command)
 }
