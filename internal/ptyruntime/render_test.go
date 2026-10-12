@@ -205,6 +205,23 @@ func TestRenderScreenDropsTrailingBlankRows(t *testing.T) {
 	}
 }
 
+// Attach paints this grid and the agent then moves the cursor by row number.
+// Compressing the grid here leaves that cursor below the composer.
+func TestRenderScreenKeepsTheCursorOnItsRow(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("\x1b[H" + strings.Repeat("a", 50))
+	b.WriteString("\x1b[8;4H│ \u2588 │")
+	b.WriteString("\x1b[7;1H╭" + strings.Repeat("─", 18) + "╮")
+	b.WriteString("\x1b[9;1H╰" + strings.Repeat("─", 18) + "╯")
+	b.WriteString("\x1b[11;1Hstatus")
+
+	got := ansiStrip(RenderScreen([]byte(b.String()), 80, 12))
+	lines := strings.Split(got, "\n")
+	if len(lines) < 8 || !strings.Contains(lines[7], "\u2588") {
+		t.Fatalf("cursor row 8 was moved:\n%s", got)
+	}
+}
+
 // Grok pins a short composer under a tall grid. The rows between the
 // transcript and that composer are padding, and a cursor parked on the far
 // right still counts as a glyph, so the preview follows the padding.
@@ -219,7 +236,9 @@ func TestRenderScreenDropsTheGapAboveTheComposer(t *testing.T) {
 	b.WriteString("\x1b[11;1H│ prompt")
 	b.WriteString("\x1b[12;1Hstatus")
 
-	got := ansiStrip(RenderScreen([]byte(b.String()), 80, 12))
+	// The capture keeps the agent's rows. The preview drops the gap when it
+	// displays that capture.
+	got := ansiStrip(TightenBottomGap(RenderScreen([]byte(b.String()), 80, 12)))
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
 	if len(lines) == 0 || !strings.HasPrefix(lines[0], transcript) {
 		t.Fatalf("transcript should stay the first row, got %q", got)
@@ -237,6 +256,38 @@ func TestRenderScreenDropsTheGapAboveTheComposer(t *testing.T) {
 	}
 	if strings.Contains(got, "\u2588") {
 		t.Fatalf("a cursor parked past the transcript should not take a row:\n%s", got)
+	}
+}
+
+// The cursor sits on its own row inside the composer. That row is only a
+// border and a block, which is the same shape as padding, but deleting it
+// leaves the caret outside the box.
+func TestTightenBottomGapKeepsTheCursorInsideTheFrame(t *testing.T) {
+	transcript := strings.Repeat("a", 50)
+	in := strings.Join([]string{
+		transcript,
+		"",
+		"",
+		strings.Repeat(" ", 60) + "\u2588",
+		"╭" + strings.Repeat("─", 18) + "╮",
+		"│ \u2588 │",
+		"╰" + strings.Repeat("─", 18) + "╯",
+		"status",
+	}, "\n")
+	got := TightenBottomGap(in)
+	if strings.Contains(got, strings.Repeat(" ", 60)+"\u2588") {
+		t.Fatalf("cursor parked above the frame should not take a row:\n%s", got)
+	}
+	if strings.Contains(got, "\n\n") {
+		t.Fatalf("gap above the frame stayed:\n%s", got)
+	}
+	if !strings.Contains(got, "│ \u2588 │") {
+		t.Fatalf("cursor inside the frame was dropped:\n%s", got)
+	}
+	for _, row := range []string{"╭", "╰", "status", transcript} {
+		if !strings.Contains(got, row) {
+			t.Fatalf("missing %q in %s", row, got)
+		}
 	}
 }
 

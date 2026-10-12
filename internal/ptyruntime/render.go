@@ -95,10 +95,12 @@ func renderTerminal(term vt10x.Terminal, cols, rows int, scrollback []string) st
 	}
 	// Blank rows below the cursor are padding too. A background on those
 	// rows is still padding: the live UI is the last row that has a glyph,
-	// and following the coloured empty ones hides it. Grok also leaves a
-	// band of those rows between the transcript and a short composer, so
-	// the composer is tightened up under the last real line.
-	screen := TightenBottomGap(TrimTrailingBlankRows(strings.TrimRight(b.String(), "\n")))
+	// and following the coloured empty ones hides it. Rows above that are
+	// left where the agent put them. Attach paints this grid and the agent
+	// addresses the cursor by those row numbers, so collapsing the gap
+	// above the composer would leave the caret outside the box. The preview
+	// tightens that gap when it displays the capture.
+	screen := TrimTrailingBlankRows(strings.TrimRight(b.String(), "\n"))
 	if len(scrollback) == 0 {
 		return screen
 	}
@@ -220,12 +222,22 @@ func TightenBottomGap(screen string) string {
 		return screen
 	}
 	from := chromeBandStart(lines, last)
+	// The composer is the last box in the chrome band. Its cursor row is only
+	// a border and a block, the same shape as the padding above the box.
+	// Deleting that row takes the caret out of the box. Padding above the
+	// frame and below it can still go.
+	end, resume := len(lines), len(lines)
+	if top, bottom, ok := composerFrame(lines); ok {
+		end, resume = top, bottom+1
+	}
+	if from > end {
+		from = end
+	}
 	kept := append([]string(nil), lines[:from]...)
-	for _, line := range lines[from:] {
-		if !rowHasGlyph(line) || sparseChrome(line) {
-			continue
-		}
-		kept = append(kept, line)
+	kept = append(kept, dropChromePadding(lines[from:end])...)
+	if resume > end {
+		kept = append(kept, lines[end:resume]...)
+		kept = append(kept, dropChromePadding(lines[resume:])...)
 	}
 	if len(kept) == len(lines) {
 		return screen
@@ -279,6 +291,58 @@ func textRunes(line string) int {
 		}
 	}
 	return n
+}
+
+// dropChromePadding removes blank and cursor-only rows. Callers pass the
+// band above the composer and the band below it, never the box itself.
+func dropChromePadding(lines []string) []string {
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if !rowHasGlyph(line) || sparseChrome(line) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return kept
+}
+
+// composerFrame is the composer box near the bottom of the screen: two wide
+// rules with the cursor between them. A single rule, or two rules far apart,
+// is not that box.
+func composerFrame(lines []string) (top, bottom int, ok bool) {
+	floor := max(0, len(lines)-bottomChromeRows)
+	var rules []int
+	for i := floor; i < len(lines); i++ {
+		if boxRule(lines[i]) {
+			rules = append(rules, i)
+		}
+	}
+	if len(rules) < 2 {
+		return 0, 0, false
+	}
+	top, bottom = rules[0], rules[len(rules)-1]
+	if bottom-top > 12 {
+		top, bottom = rules[len(rules)-2], rules[len(rules)-1]
+		if bottom-top > 12 {
+			return 0, 0, false
+		}
+	}
+	return top, bottom, true
+}
+
+// boxRule reports a row that is a horizontal edge of a box.
+func boxRule(line string) bool {
+	n := 0
+	for _, r := range plainRow(line) {
+		if r < 0x2500 || r > 0x257F {
+			continue
+		}
+		n++
+		if n >= 8 {
+			return true
+		}
+	}
+	return false
 }
 
 // sparseChrome reports a composer row that is only a border or a cursor.
