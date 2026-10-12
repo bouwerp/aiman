@@ -5,10 +5,8 @@ import (
 	"testing"
 )
 
-// Codex draws inline and never enables mouse reporting. Forcing the alternate
-// screen on takes away the scrollback it relies on, and forcing mouse tracking
-// on turns the wheel into escape sequences it discards — between them the pane
-// cannot be scrolled at all.
+// An agent that asked for neither mode keeps the terminal's own scrollback
+// and wheel. Forcing either on is what makes that pane unscrollable.
 func TestAttachOpenLeavesAnInlineAgentAlone(t *testing.T) {
 	got := attachOpenFor(attachModes{})
 	if got != "" {

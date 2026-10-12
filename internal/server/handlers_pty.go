@@ -427,16 +427,23 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 
 	writeResponse(conn, Response{ID: req.ID, Result: map[string]any{"type": "pty_attached"}})
 
-	// An agent on the alternate screen (Claude, Grok) scrolls that buffer
-	// itself, and the attaching terminal has to be on it too. An inline agent
-	// (Muse) never enters it. Painting Muse there takes away the scrollback
-	// the wheel would otherwise move, and Muse does not read mouse events, so
-	// nothing in the full-screen attach can scroll.
+	// An agent on the alternate screen scrolls that buffer itself, and the
+	// attaching terminal has to be on it too. The emulator is consulted as
+	// well as activity.json: the alt-screen request is sent once, and a
+	// scanner that missed it leaves the file false while the spool still
+	// contains the sequence. An agent that asked for mouse reporting also
+	// owns the wheel and redraws with cursor addressing. Repainting those
+	// frames as primary-screen newlines resets the scroll region and the
+	// pane stops following the agent. An inline agent (Muse) does neither,
+	// and painting it on the alt screen would take away the scrollback the
+	// wheel moves.
 	view, all, _ := s.pty.CaptureFrame(params.ID)
-	alt := false
+	alt := s.pty.OnAltScreen(params.ID)
+	mouse := false
 	sessionSize := ""
 	if info, ierr := s.pty.Get(params.ID); ierr == nil {
-		alt = info.AltScreen
+		alt = alt || info.AltScreen
+		mouse = info.Mouse
 		sessionSize = info.Size
 		// Muse, Codex, and Deep Code are created at 80x24 and lay out from
 		// that size. The attach request carries the client size. Apply it
@@ -446,14 +453,18 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 			_ = s.pty.Resize(params.ID, params.Cols, params.Rows)
 		}
 	}
+	raw := alt || mouse
 	var paint []byte
-	if alt {
+	switch {
+	case alt:
 		// CUP, not LF. Attach runs the client in raw mode, where LF is
 		// cursor-down without CR.
 		paint = attachAltPaint(view, sessionSize, params.Cols, params.Rows, func(cols, rows int) error {
 			return s.pty.Resize(params.ID, cols, rows)
 		})
-	} else {
+	case mouse:
+		paint = encodeViewport(view)
+	default:
 		paint = inlineHistoryPaint(scrollbackAbove(all, view), view, params.Rows)
 	}
 	if _, err := conn.Write(paint); err != nil {
@@ -472,7 +483,7 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 
 	// Live -> connection (output).
 	seeded := ""
-	if !alt {
+	if !raw {
 		seeded = scrollbackAbove(all, view)
 	}
 	for {
@@ -484,7 +495,7 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 				return
 			}
 			out := chunk
-			if !alt {
+			if !raw {
 				// Muse replaces the transcript with cursor addressing, so the
 				// raw bytes never push the line that left into this terminal's
 				// scrollback. Paint that line, then the live screen.
@@ -599,8 +610,20 @@ func encodeAttachScreen(text string, altScreen bool) []byte {
 		// flashes a blank frame with nothing to put back.
 		return []byte("\x1b[?1049h")
 	}
+	out := make([]byte, 0, len(text)+len(attachScreenReset()))
+	out = append(out, attachScreenReset()...)
+	out = append(out, encodeViewport(text)...)
+	return out
+}
+
+// encodeViewport paints the live rows with cursor addressing. The client is
+// in raw mode, where a bare linefeed moves down without returning to column
+// one, so each row is placed explicitly and cleared to the end.
+func encodeViewport(text string) []byte {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
 	var b strings.Builder
-	b.Write(attachScreenReset())
 	for i, row := range strings.Split(text, "\n") {
 		fmt.Fprintf(&b, "\x1b[%d;1H%s\x1b[K", i+1, row)
 	}

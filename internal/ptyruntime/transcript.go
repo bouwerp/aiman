@@ -21,7 +21,7 @@ const transcriptFeedStep = 2048
 // still something the preview has to scroll to.
 const scrollbackName = "scrollback"
 
-func (s *screen) feed(data []byte, cols, rows int, record bool) {
+func (s *screen) feed(data []byte, cols, rows int, record, ownsWheel bool) {
 	for off := 0; off < len(data); off += transcriptFeedStep {
 		end := off + transcriptFeedStep
 		if end > len(data) {
@@ -30,9 +30,11 @@ func (s *screen) feed(data []byte, cols, rows int, record bool) {
 		before := snapshotRows(s.term, cols, rows)
 		from := len(s.back.lines)
 		_, _ = s.term.Write(data[off:end])
-		// The alternate screen is the agent's own buffer. Lines that leave it
-		// are not the preview's history.
-		if s.term.Mode()&vt10x.ModeAltScreen != 0 {
+		// The alternate screen is the agent's own buffer. A mouse-driven agent
+		// redraws that frame in place too, even after its alt-screen request
+		// has rotated out of the spool. Lines that leave either are not the
+		// preview's history.
+		if ownsWheel || s.term.Mode()&vt10x.ModeAltScreen != 0 {
 			continue
 		}
 		fresh := map[string]int{}

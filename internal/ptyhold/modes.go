@@ -61,20 +61,27 @@ func (m *modeScanner) Feed(data []byte) {
 		}
 		start := i + idx
 		end := -1
+		// A private-mode sequence is digits and semicolons only. A query such
+		// as ESC[?u shares the prefix and is not a DECSET; the modes that
+		// follow it in the same chunk still count. Only a sequence that runs
+		// off the end of this chunk is incomplete.
+		disqualified := false
 		for j := start + 3; j < len(buf); j++ {
 			c := buf[j]
 			if c == 'h' || c == 'l' {
 				end = j
 				break
 			}
-			// A private-mode sequence is digits and semicolons only. Anything
-			// else means this CSI is something other than DECSET/DECRST.
 			if (c < '0' || c > '9') && c != ';' {
+				disqualified = true
 				break
 			}
 		}
+		if disqualified {
+			i = start + 1
+			continue
+		}
 		if end < 0 {
-			// Either a partial sequence at the end of the chunk, or not a DECSET.
 			if len(buf)-start <= maxModeCarry {
 				m.carry = append([]byte(nil), buf[start:]...)
 			}

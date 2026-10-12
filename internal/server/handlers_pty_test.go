@@ -536,6 +536,40 @@ func TestPTYAttachDoesNotDumpLFRenderedSnapshot(t *testing.T) {
 	}
 }
 
+// Codex owns the wheel once it has asked for mouse reporting. Attach must
+// forward the agent's cursor-addressed frames. Repainting them as primary
+// screen newlines (resetting the scroll region and homing the cursor) is what
+// makes the pane jump and then stick.
+func TestPTYAttachMouseAgentKeepsCursorAddressedFrames(t *testing.T) {
+	sock := startPTYServer(t)
+	cmd := "printf '\\033[?1000h\\033[?1006h\\033[1;1HFRAME_ONE'; sleep 60"
+	create := createPTY(t, sock, map[string]any{
+		"id": "mouse-frame", "command": cmd, "cols": 40, "rows": 8,
+	})
+	if create.Error != nil {
+		t.Fatalf("create: %v", create.Error)
+	}
+	eventually(t, 10*time.Second, func() bool {
+		info, err := Call(sock, "pty.get", map[string]any{"id": "mouse-frame"})
+		if err != nil || info.Error != nil {
+			return false
+		}
+		raw := resultJSON(t, info)
+		return strings.Contains(raw, `"mouse":true`) && !strings.Contains(raw, `"alt_screen":true`)
+	})
+
+	got := attachOutput(t, sock, "mouse-frame")
+	if strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("mouse without the alt screen must stay on the primary screen: %q", got)
+	}
+	if strings.Contains(got, "\x1b[r") {
+		t.Fatalf("mouse agent's frame was repainted with a scroll-region reset: %q", got)
+	}
+	if !strings.Contains(got, "FRAME_ONE") || !strings.Contains(got, "\x1b[1;1H") {
+		t.Fatalf("frame must be cursor-addressed, got %q", got)
+	}
+}
+
 // A full-screen agent asked for the alternate screen. Attach has to follow it
 // there; seeding primary-screen scrollback would fight the buffer it paints on.
 func TestPTYAttachAltScreenStaysOnTheAltScreen(t *testing.T) {

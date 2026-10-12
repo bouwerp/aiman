@@ -270,6 +270,76 @@ func TestCaptureScrollbackSurvivesDiscardedSpool(t *testing.T) {
 	}
 }
 
+// Attach reads alt-screen from activity.json. A scanner that missed the one
+// DECSET leaves that file false, while the spool still contains it. The
+// emulator replays the spool, so it is the source that still knows.
+func TestOnAltScreenFollowsTheEmulator(t *testing.T) {
+	m, appendSpool := screenFixture(t)
+	if err := os.WriteFile(filepath.Join(m.root, "pty", "s", "activity.json"), []byte(`{"mouse":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	appendSpool("\x1b[?u\x1b[?1049h\x1b[1;1HFRAME")
+	view, _, err := m.CaptureFrame("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(view, "FRAME") {
+		t.Fatalf("capture missed the frame: %q", view)
+	}
+	if !m.OnAltScreen("s") {
+		t.Fatal("emulator is on the alt screen but activity does not say so")
+	}
+}
+
+// Codex enables mouse reporting and redraws with cursor addressing. Once the
+// startup bytes that entered the alt screen have rotated out of the spool,
+// the emulator is back on the primary screen, and those redraws look like a
+// Muse scroll. They are not preview history: the wheel belongs to the agent.
+func TestCaptureMouseRedrawIsNotScrollback(t *testing.T) {
+	m, appendSpool := screenFixture(t)
+	if err := os.WriteFile(filepath.Join(m.root, "pty", "s", "activity.json"), []byte(`{"mouse":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sc := m.screenFor("s")
+	appendSpool(cupPaint(
+		"SECRET line that should vanish",
+		"KEEP this row",
+		"KEEP this other row",
+	))
+	sc.capture(m.root, "s", 80, 8)
+	appendSpool(cupPaint(
+		"KEEP this row",
+		"KEEP this other row",
+		"FRESH row",
+	))
+	_, all := sc.capture(m.root, "s", 80, 8)
+	if strings.Contains(all, "SECRET") {
+		t.Fatalf("a mouse agent's redraw must not be kept as scrollback: %q", all)
+	}
+}
+
+// History already written beside the spool is reloaded after the emulator is
+// dropped. A mouse agent must not get that file back: it is the false
+// transcript captured before the wheel was known to belong to the agent.
+func TestCaptureMouseAgentDropsStoredScrollback(t *testing.T) {
+	m, appendSpool := screenFixture(t)
+	dir := filepath.Join(m.root, "pty", "s")
+	if err := os.WriteFile(filepath.Join(dir, "activity.json"), []byte(`{"mouse":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scrollback"), []byte("SECRET stored line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	appendSpool(cupPaint("KEEP this row", "KEEP this other row"))
+	if _, all := m.screenFor("s").capture(m.root, "s", 80, 8); strings.Contains(all, "SECRET") {
+		t.Fatalf("stored scrollback returned for a mouse agent: %q", all)
+	}
+	m.dropScreen("s")
+	if _, all := m.screenFor("s").capture(m.root, "s", 80, 8); strings.Contains(all, "SECRET") {
+		t.Fatalf("stored scrollback survived a fresh emulator: %q", all)
+	}
+}
+
 // A full-screen TUI scrolls inside the alternate screen. Lines it overwrites
 // belong to that buffer, not to the preview history.
 func TestCaptureAltScreenRedrawIsNotScrollback(t *testing.T) {

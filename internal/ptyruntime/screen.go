@@ -1,6 +1,7 @@
 package ptyruntime
 
 import (
+	"os"
 	"sync"
 	"time"
 
@@ -59,6 +60,11 @@ func (s *screen) capture(root, id string, cols, rows int) (view, all string) {
 		s.reset(cols, rows)
 	}
 
+	// Mouse reporting means the agent owns the wheel and redraws its own frame.
+	// Cursor-addressed updates on the primary screen would otherwise look like
+	// a transcript scrolling off, and the preview would page a history the
+	// agent has already replaced.
+	ownsWheel := ptyhold.ReadActivity(root, id).Mouse
 	data, total := ptyhold.ReadSpoolFrom(root, id, s.consumed)
 	if total < s.consumed {
 		// The spool rotated, so the offset no longer means anything: ReadSpoolFrom
@@ -71,8 +77,11 @@ func (s *screen) capture(root, id string, cols, rows int) (view, all string) {
 		rebuilding = true
 		s.reset(cols, rows)
 	}
-	if rebuilding && len(saved) == 0 {
+	if rebuilding && len(saved) == 0 && !ownsWheel {
 		saved = loadScrollback(root, id)
+	}
+	if ownsWheel {
+		saved = nil
 	}
 	if len(data) > 0 {
 		// Write takes the emulator's own lock; renderTerminal takes it too, so
@@ -80,10 +89,20 @@ func (s *screen) capture(root, id string, cols, rows int) (view, all string) {
 		// A rebuild replays bytes whose lines are already in the carried
 		// history. Recording them again would repaint that history into an
 		// attached terminal.
-		s.feed(data, cols, rows, !rebuilding)
+		s.feed(data, cols, rows, !rebuilding, ownsWheel)
 	}
-	if rebuilding {
+	if rebuilding && !ownsWheel {
 		s.back.lines = mergeScroll(saved, s.back.lines)
+	}
+	if ownsWheel && s.back != nil {
+		s.back.lines = nil
+		// stored starts at 0, matching an empty buffer, so a file left from
+		// before mouse reporting was known would never be removed.
+		if s.stored == 0 {
+			if _, err := os.Stat(scrollbackPath(root, id)); err == nil {
+				s.stored = -1
+			}
+		}
 	}
 	s.consumed = total
 	s.lastUsed = time.Now()
@@ -111,6 +130,19 @@ func (s *screen) reset(cols, rows int) {
 	s.term, s.back = newTerminal(cols, rows)
 	s.cols, s.rows = cols, rows
 	s.consumed = 0
+}
+
+// OnAltScreen reports whether the emulator is on the alternate screen.
+// CaptureFrame feeds the retained spool first, so a mode the activity file
+// missed is still visible here.
+func (m *Manager) OnAltScreen(id string) bool {
+	sc := m.screenFor(id)
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.term == nil {
+		return false
+	}
+	return sc.term.Mode()&vt10x.ModeAltScreen != 0
 }
 
 // screenFor returns the session's emulator, creating one if needed, and drops

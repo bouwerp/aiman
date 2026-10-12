@@ -488,12 +488,10 @@ func (m attachModes) union(o attachModes) attachModes {
 
 // attachOpenFor prepares the attaching terminal to mirror the agent's modes.
 //
-// Asserting a fixed set breaks any agent that deliberately does without one.
-// Codex draws inline and never enables mouse reporting: forcing it on turned the
-// wheel into escape sequences codex discards, and forcing the alternate screen
-// took away the scrollback it relies on, so its pane could not be scrolled at
-// all. Only an agent that painted a full screen needs the alt screen, and only
-// one that reads mouse events should be sent them.
+// Asserting a fixed set breaks an agent that deliberately does without one.
+// Forcing mouse reporting on turns the wheel into escape sequences that agent
+// drops, and forcing the alternate screen takes away the scrollback an inline
+// agent relies on. Mirror only the modes the agent asked for.
 func attachOpenFor(m attachModes) string {
 	out := ""
 	if m.altScreen {

@@ -1,6 +1,9 @@
 package ptyhold
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func scan(chunks ...string) (bool, bool) {
 	var m modeScanner
@@ -16,6 +19,30 @@ func TestModeScannerCodexUsesNeither(t *testing.T) {
 	alt, mouse := scan("\x1b[?2004h\x1b[>4;0m\x1b[>7u\x1b[?1004h\x1b[6n")
 	if alt || mouse {
 		t.Errorf("codex's own sequences imply alt=%v mouse=%v, want both false", alt, mouse)
+	}
+}
+
+// Codex 0.162 asks for the alt screen and mouse reporting after a private
+// query that is not a DECSET (`ESC[?u`). That query shares the DEC prefix.
+// Dropping the rest of the chunk leaves attach on the primary screen, where
+// the wheel and the agent's cursor-addressed redraws fight each other.
+func TestModeScannerCodexAltScreenSurvivesTheQuery(t *testing.T) {
+	const startup = "\x1b[?u\x1b[c\x1b[?2026h\x1b[?25l\x1b[?1049h\x1b[>4;0m\x1b[>7u\x1b[?1007l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h"
+	alt, mouse := scan(startup)
+	if !alt || !mouse {
+		t.Errorf("one chunk: alt=%v mouse=%v, want both true", alt, mouse)
+	}
+
+	// The query can end a read. The modes arrive in the next one, and a
+	// carried copy of the query must not swallow them.
+	split := strings.Index(startup, "\x1b[?u")
+	if split < 0 {
+		t.Fatal("startup has no query")
+	}
+	head := startup[:split+len("\x1b[?u")]
+	alt, mouse = scan(head, startup[len(head):])
+	if !alt || !mouse {
+		t.Errorf("split after query: alt=%v mouse=%v, want both true", alt, mouse)
 	}
 }
 
