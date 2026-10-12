@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -41,8 +42,33 @@ func sealPreviewLines(s string) string {
 // m.tmuxOutput stays the raw capture — it is what change detection compares and
 // what `Y` yanks — so the display form is derived here rather than stored.
 func (m *Model) setPreviewContent() {
-	m.previewCols = widestLine(m.tmuxOutput)
-	m.viewport.SetContent(sealPreviewLines(m.tmuxOutput))
+	// The raw capture stays intact for change detection and yank. The
+	// display drops the blank tail and, when the rest is shorter than the
+	// panel, sits the last real row on the bottom edge.
+	shown := ptyruntime.TrimTrailingBlankRows(m.tmuxOutput)
+	m.previewCols = widestLine(shown)
+	m.viewport.SetContent(sealPreviewLines(m.bottomAlignPreview(shown)))
+}
+
+// bottomAlignPreview pads a short capture at the top so the last real row
+// is the last visible row. The viewport otherwise top-aligns and fills the
+// remainder with empty space under the live UI.
+func (m *Model) bottomAlignPreview(s string) string {
+	if s == "" {
+		return s
+	}
+	visible := m.viewport.Height() - m.viewport.Style.GetVerticalFrameSize()
+	if visible <= 1 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) >= visible {
+		return s
+	}
+	pad := visible - len(lines)
+	out := make([]string, pad+len(lines))
+	copy(out[pad:], lines)
+	return strings.Join(out, "\n")
 }
 
 // widestLine is the visible width of the longest line, ignoring styling.

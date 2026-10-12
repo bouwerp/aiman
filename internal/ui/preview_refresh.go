@@ -60,6 +60,7 @@ func (m *Model) showCachedPreview(s domain.Session) {
 	m.tmuxOutput = text
 	m.setPreviewContent()
 	m.viewport.GotoBottom()
+	m.previewFollowing = true
 }
 
 // paneChangedSinceCache reports whether a preview poll has to leave the machine.

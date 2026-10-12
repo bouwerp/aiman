@@ -391,6 +391,12 @@ type Model struct {
 	// previewCols is the widest line in the current preview. Remote sessions are
 	// routinely wider than the panel, so this drives the pan hint.
 	previewCols int
+	// previewFollowing keeps the preview on the latest row. A deliberate
+	// scroll up clears it so later captures stay put. List keys and a
+	// height change do not: the viewport's pager shares k/up/b/u with the
+	// dashboard, and shrinking the window leaves the offset short of the
+	// tail, so the next capture sticks on the old rows.
+	previewFollowing bool
 	// Live session-activity streams, one per remote hosting a PTY session, and
 	// the latest each has said (see session_events.go).
 	streams   map[string]*sessionStream
@@ -2700,6 +2706,15 @@ func (m *Model) SetSize(width, height int) {
 	// Compact stacked session/git strip (~6–9 lines) + thin preview chrome; rest for tmux/terminal.
 	const compactMainUpperBudget = 12
 	m.viewport.SetHeight(max(6, mainHeight-compactMainUpperBudget))
+	if m.hasLoadedPane() {
+		y := m.viewport.YOffset()
+		m.setPreviewContent()
+		if m.previewFollowing {
+			m.viewport.GotoBottom()
+		} else {
+			m.viewport.SetYOffset(y)
+		}
+	}
 
 	if m.issuePicker.list.Title != "" {
 		m.issuePicker.SetSize(width, height)
@@ -4235,12 +4250,14 @@ func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, t
 
 		newOutput := msg.output
 
-		// Sticky scroll: only go to bottom if we were already at the bottom OR if it's the first load for this session.
-		wasAtBottom := m.viewport.AtBottom()
+		// Follow the tail unless the user has scrolled up. AtBottom alone
+		// misses a window shrink: the old offset is then short of the new
+		// bottom, and restoring it freezes the preview on the old rows.
+		follow := m.previewFollowing || m.viewport.AtBottom()
 		yOffset := m.viewport.YOffset()
 		isFirstLoad := !m.firstLoad[msg.session] && newOutput != "Loading..." && msg.err == nil
 		if isFirstLoad {
-			wasAtBottom = true
+			follow = true
 			m.firstLoad[msg.session] = true
 		}
 
@@ -4248,10 +4265,12 @@ func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, t
 		if newOutput != m.tmuxOutput || isFirstLoad {
 			m.tmuxOutput = newOutput
 			m.setPreviewContent()
-			if wasAtBottom {
+			if follow {
 				m.viewport.GotoBottom()
+				m.previewFollowing = true
 			} else {
 				m.viewport.SetYOffset(yOffset)
+				m.previewFollowing = m.viewport.AtBottom()
 			}
 		}
 	}
@@ -4379,10 +4398,14 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			} else {
 				m.viewport, cmd = m.viewport.Update(msg)
 				cmds = append(cmds, cmd)
+				if _, wheel := msg.(tea.MouseWheelMsg); wheel {
+					m.previewFollowing = m.viewport.AtBottom()
+				}
 			}
 		}
 	} else {
-		// Non-mouse messages go to both (keys are usually handled by focused component)
+		// Non-mouse messages go to the list. Keys stay there: the viewport
+		// pager is not a second handler for the same keystroke.
 		if m.currentTab == tabSessions {
 			m.list, cmd = m.list.Update(msg)
 		} else {
@@ -4390,6 +4413,9 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		}
 		cmds = append(cmds, cmd)
 
+		// The embedded terminal is typed into, so it keeps the key. The
+		// preview viewport does not: its pager treats k/up/b/u as scrolling
+		// and pins the view off the tail. Preview movement is handlePreviewKey.
 		if m.panelMode == panelModeTerminal && m.terminal != nil {
 			var tModel tea.Model
 			tModel, cmd = m.terminal.Update(msg)
@@ -4397,7 +4423,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 				m.terminal = &tm
 			}
 			cmds = append(cmds, cmd)
-		} else {
+		} else if _, isKey := msg.(tea.KeyPressMsg); !isKey {
 			m.viewport, cmd = m.viewport.Update(msg)
 			cmds = append(cmds, cmd)
 		}
@@ -4430,6 +4456,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			m.gitStatus = domain.GitStatus{} // Clear old status
 			m.lastGitStatusUpdate = time.Time{}
 			m.tmuxOutput = "Loading..."
+			m.previewFollowing = true
 			m.setPreviewContent()
 			// While a session is being created or torn down there is nothing to fetch —
 			// the preview panel shows that progress instead.
@@ -4529,6 +4556,7 @@ func (m *Model) handlePreviewKey(msg tea.KeyMsg) (tea.Model, bool) {
 	if msg.String() == "G" || msg.String() == "end" {
 		if m.panelMode == panelModePreview {
 			m.viewport.GotoBottom()
+			m.previewFollowing = true
 			return m, true
 		}
 	}
@@ -4539,25 +4567,31 @@ func (m *Model) handlePreviewKey(msg tea.KeyMsg) (tea.Model, bool) {
 	if m.panelMode == panelModePreview {
 		switch msg.String() {
 		case "[", "shift+up":
-			m.viewport.ScrollUp(3)
+			m.scrollPreview(func() { m.viewport.ScrollUp(3) })
 			return m, true
 		case "]", "shift+down":
-			m.viewport.ScrollDown(3)
+			m.scrollPreview(func() { m.viewport.ScrollDown(3) })
+			return m, true
+		case "left":
+			m.viewport.ScrollLeft(previewPanStep)
+			return m, true
+		case "right":
+			m.viewport.ScrollRight(previewPanStep)
 			return m, true
 		case "shift+pgup":
-			m.viewport.PageUp()
+			m.scrollPreview(m.viewport.PageUp)
 			return m, true
 		case "shift+pgdown":
-			m.viewport.PageDown()
+			m.scrollPreview(m.viewport.PageDown)
 			return m, true
 		case "pgup":
 			if !m.consoleOpen {
-				m.viewport.PageUp()
+				m.scrollPreview(m.viewport.PageUp)
 				return m, true
 			}
 		case "pgdown":
 			if !m.consoleOpen {
-				m.viewport.PageDown()
+				m.scrollPreview(m.viewport.PageDown)
 				return m, true
 			}
 		}
@@ -4599,6 +4633,18 @@ func (m *Model) handlePreviewKey(msg tea.KeyMsg) (tea.Model, bool) {
 		}
 	}
 	return m, false
+}
+
+// previewPanStep is how far ←/→ move across a capture wider than the panel.
+// It matches the viewport's own default horizontal step.
+const previewPanStep = 6
+
+// scrollPreview runs a viewport scroll and then records whether it landed
+// on the tail. Landing short of the tail stops later captures from yanking
+// the view back down.
+func (m *Model) scrollPreview(scroll func()) {
+	scroll()
+	m.previewFollowing = m.viewport.AtBottom()
 }
 
 // handleNavigationKey handles keys that change what the dashboard is showing rather than

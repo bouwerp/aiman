@@ -92,8 +92,10 @@ func renderTerminal(term vt10x.Terminal, cols, rows int, scrollback []string) st
 			b.WriteByte('\n')
 		}
 	}
-	// Blank rows below the cursor are padding too.
-	screen := strings.TrimRight(b.String(), "\n")
+	// Blank rows below the cursor are padding too. A background on those
+	// rows is still padding: the live UI is the last row that has a glyph,
+	// and following the coloured empty ones hides it.
+	screen := TrimTrailingBlankRows(strings.TrimRight(b.String(), "\n"))
 	if len(scrollback) == 0 {
 		return screen
 	}
@@ -172,6 +174,43 @@ func lastSignificantGlyph(cells []vt10x.Glyph) int {
 		}
 	}
 	return -1
+}
+
+// TrimTrailingBlankRows drops rows at the end of a rendered screen that
+// contain no glyphs. A background on those rows is padding, so the preview
+// follows empty space instead of the live UI above it. A screen that is
+// only a coloured bar is kept, because that bar is the content.
+func TrimTrailingBlankRows(screen string) string {
+	if screen == "" {
+		return ""
+	}
+	lines := strings.Split(screen, "\n")
+	end := len(lines)
+	for end > 0 && !rowHasGlyph(lines[end-1]) {
+		end--
+	}
+	if end == 0 || end == len(lines) {
+		return screen
+	}
+	return strings.Join(lines[:end], "\n")
+}
+
+// rowHasGlyph reports whether a rendered row has anything other than spaces.
+// SGR sequences are styling, not content.
+func rowHasGlyph(line string) bool {
+	for i := 0; i < len(line); i++ {
+		if line[i] == 0x1b && i+1 < len(line) && line[i+1] == '[' {
+			i += 2
+			for i < len(line) && line[i] != 'm' && line[i] != 0x1b {
+				i++
+			}
+			continue
+		}
+		if line[i] != ' ' && line[i] != '\t' {
+			return true
+		}
+	}
+	return false
 }
 
 // lastSignificantCol is the rightmost column worth emitting, or -1 for a row

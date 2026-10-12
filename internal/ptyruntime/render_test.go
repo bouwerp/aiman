@@ -176,6 +176,35 @@ func TestRenderScreenPlainStaysPlain(t *testing.T) {
 	}
 }
 
+// A full-screen agent paints a background across the whole grid, including the
+// rows under its composer. Those rows are not the latest output. Keeping them
+// makes the preview follow empty space and hide the live UI above it.
+func TestRenderScreenDropsTrailingBlankRows(t *testing.T) {
+	var padded strings.Builder
+	padded.WriteString("LIVE\r\n")
+	padded.WriteString("\x1b[48;5;236m")
+	for i := 0; i < 8; i++ {
+		padded.WriteString(strings.Repeat(" ", 12) + "\r\n")
+	}
+	got := ansiStrip(RenderScreen([]byte(padded.String()), 20, 12))
+	if lines := strings.Split(got, "\n"); len(lines) != 1 || strings.TrimSpace(lines[0]) != "LIVE" {
+		t.Fatalf("trailing blank rows must not follow the live line, got %q", got)
+	}
+
+	var kept strings.Builder
+	kept.WriteString("LIVE\r\n")
+	kept.WriteString("\x1b[48;5;236m" + strings.Repeat(" ", 12) + "\r\n")
+	kept.WriteString("\x1b[0mPROMPT")
+	got = ansiStrip(RenderScreen([]byte(kept.String()), 20, 8))
+	keptLines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if strings.TrimRight(keptLines[len(keptLines)-1], " ") != "PROMPT" {
+		t.Fatalf("a glyph on the last occupied row must stay, got %q", got)
+	}
+	if !strings.Contains(got, "LIVE") {
+		t.Fatalf("content above the prompt must stay, got %q", got)
+	}
+}
+
 // A blank cell carrying a background is visible, so it counts as content; a
 // truly empty row still renders empty.
 func TestRenderScreenKeepsColouredBlanks(t *testing.T) {
