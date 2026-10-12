@@ -205,6 +205,73 @@ func TestRenderScreenDropsTrailingBlankRows(t *testing.T) {
 	}
 }
 
+// Grok pins a short composer under a tall grid. The rows between the
+// transcript and that composer are padding, and a cursor parked on the far
+// right still counts as a glyph, so the preview follows the padding.
+func TestRenderScreenDropsTheGapAboveTheComposer(t *testing.T) {
+	transcript := strings.Repeat("a", 50)
+	var b strings.Builder
+	b.WriteString("\x1b[H" + transcript)
+	// Coloured padding, then a block cursor, then the composer and a short status.
+	b.WriteString("\x1b[3;1H\x1b[48;5;236m" + strings.Repeat(" ", 20) + "\x1b[0m")
+	b.WriteString("\x1b[8;70H\u2588")
+	b.WriteString("\x1b[10;1H" + strings.Repeat("─", 18))
+	b.WriteString("\x1b[11;1H│ prompt")
+	b.WriteString("\x1b[12;1Hstatus")
+
+	got := ansiStrip(RenderScreen([]byte(b.String()), 80, 12))
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], transcript) {
+		t.Fatalf("transcript should stay the first row, got %q", got)
+	}
+	if strings.TrimSpace(lines[len(lines)-1]) != "status" {
+		t.Fatalf("status row should stay, got %q", got)
+	}
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "" {
+			t.Fatalf("padding between the transcript and the composer stayed:\n%s", got)
+		}
+	}
+	if !strings.Contains(got, "prompt") || !strings.Contains(got, "──") {
+		t.Fatalf("composer should stay, got %q", got)
+	}
+	if strings.Contains(got, "\u2588") {
+		t.Fatalf("a cursor parked past the transcript should not take a row:\n%s", got)
+	}
+}
+
+// A blank line between two transcript lines is a paragraph, not composer padding.
+func TestTightenBottomGapKeepsParagraphBreaks(t *testing.T) {
+	first := strings.Repeat("a", 50)
+	second := strings.Repeat("b", 50)
+	in := first + "\n\n" + second
+	if got := TightenBottomGap(in); got != in {
+		t.Fatalf("paragraph break was removed: %q", got)
+	}
+}
+
+// The status line under Grok's composer is often as long as a transcript line.
+// The blank band above that status line is still padding.
+func TestTightenBottomGapDropsPaddingAboveALongStatus(t *testing.T) {
+	transcript := strings.Repeat("a", 50)
+	status := strings.Repeat("s", 60)
+	in := strings.Join([]string{
+		transcript,
+		"",
+		"",
+		"",
+		"│" + strings.Repeat(" ", 20) + "│",
+		"│ prompt",
+		"",
+		status,
+	}, "\n")
+	got := TightenBottomGap(in)
+	want := strings.Join([]string{transcript, "│ prompt", status}, "\n")
+	if got != want {
+		t.Fatalf("padding above a long status stayed:\n got %q\nwant %q", got, want)
+	}
+}
+
 // A blank cell carrying a background is visible, so it counts as content; a
 // truly empty row still renders empty.
 func TestRenderScreenKeepsColouredBlanks(t *testing.T) {

@@ -43,9 +43,9 @@ func sealPreviewLines(s string) string {
 // what `Y` yanks — so the display form is derived here rather than stored.
 func (m *Model) setPreviewContent() {
 	// The raw capture stays intact for change detection and yank. The
-	// display drops the blank tail and, when the rest is shorter than the
-	// panel, sits the last real row on the bottom edge.
-	shown := ptyruntime.TrimTrailingBlankRows(m.tmuxOutput)
+	// display drops the blank tail and the padding between a transcript and
+	// a short composer, then sits a short capture on the bottom edge.
+	shown := ptyruntime.TightenBottomGap(ptyruntime.TrimTrailingBlankRows(m.tmuxOutput))
 	m.previewCols = widestLine(shown)
 	m.viewport.SetContent(sealPreviewLines(m.bottomAlignPreview(shown)))
 }

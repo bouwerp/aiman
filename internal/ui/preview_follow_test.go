@@ -105,6 +105,40 @@ func TestPreviewSitsOnTheLastRealRow(t *testing.T) {
 	}
 }
 
+// Padding between a long transcript and Grok's short composer must not survive
+// into the preview, or the panel ends on empty rows.
+func TestPreviewDropsTheGapAboveTheComposer(t *testing.T) {
+	transcript := strings.Repeat("a", 50)
+	m := previewModel(t, "grok", "")
+	m.viewport.SetWidth(40)
+	m.viewport.SetHeight(14)
+	m.tmuxOutput = strings.Join([]string{
+		transcript,
+		"",
+		"",
+		"\x1b[48;5;236m" + strings.Repeat(" ", 12) + "\x1b[0m",
+		strings.Repeat("─", 12),
+		"│ prompt",
+		strings.Repeat("─", 12),
+		"",
+		"status",
+	}, "\n")
+	m.setPreviewContent()
+
+	content := m.viewport.GetContent()
+	idx := strings.Index(content, transcript)
+	if idx < 0 {
+		t.Fatalf("transcript missing from preview:\n%s", content)
+	}
+	body := content[idx:]
+	if strings.Contains(body, "\n\n") {
+		t.Fatalf("composer padding stayed in the preview:\n%s", content)
+	}
+	if !strings.Contains(content, transcript) || !strings.Contains(content, "status") || !strings.Contains(content, "prompt") {
+		t.Fatalf("transcript and composer should stay, got %q", content)
+	}
+}
+
 // The embedded terminal is the thing the user is typing into. Keeping preview
 // keys off the viewport must not swallow those keystrokes.
 func TestTerminalPanelStillReceivesKeys(t *testing.T) {

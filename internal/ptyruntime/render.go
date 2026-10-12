@@ -3,6 +3,7 @@ package ptyruntime
 import (
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/hinshun/vt10x"
 )
@@ -94,8 +95,10 @@ func renderTerminal(term vt10x.Terminal, cols, rows int, scrollback []string) st
 	}
 	// Blank rows below the cursor are padding too. A background on those
 	// rows is still padding: the live UI is the last row that has a glyph,
-	// and following the coloured empty ones hides it.
-	screen := TrimTrailingBlankRows(strings.TrimRight(b.String(), "\n"))
+	// and following the coloured empty ones hides it. Grok also leaves a
+	// band of those rows between the transcript and a short composer, so
+	// the composer is tightened up under the last real line.
+	screen := TightenBottomGap(TrimTrailingBlankRows(strings.TrimRight(b.String(), "\n")))
 	if len(scrollback) == 0 {
 		return screen
 	}
@@ -193,6 +196,125 @@ func TrimTrailingBlankRows(screen string) string {
 		return screen
 	}
 	return strings.Join(lines[:end], "\n")
+}
+
+// bottomTranscriptRunes is the shortest run of letters and digits that still
+// counts as a transcript line. The composer under it is allowed to be long
+// too: a status line of that length still sits at the bottom of the grid.
+const bottomTranscriptRunes = 40
+
+// bottomChromeRows is how far above the last transcript line the composer's
+// padding is allowed to reach. A blank line higher than that is a paragraph.
+const bottomChromeRows = 16
+
+// TightenBottomGap drops the blank padding a full-screen agent leaves between
+// its transcript and the composer. The composer itself stays. A single blank
+// line between two transcript lines stays.
+func TightenBottomGap(screen string) string {
+	if screen == "" {
+		return ""
+	}
+	lines := strings.Split(screen, "\n")
+	last := lastTranscriptRow(lines)
+	if last < 0 {
+		return screen
+	}
+	from := chromeBandStart(lines, last)
+	kept := append([]string(nil), lines[:from]...)
+	for _, line := range lines[from:] {
+		if !rowHasGlyph(line) || sparseChrome(line) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if len(kept) == len(lines) {
+		return screen
+	}
+	return strings.Join(kept, "\n")
+}
+
+func lastTranscriptRow(lines []string) int {
+	last := -1
+	for i, line := range lines {
+		if textRunes(line) >= bottomTranscriptRunes {
+			last = i
+		}
+	}
+	return last
+}
+
+// chromeBandStart is the first padding row under the previous transcript line.
+// The status line can be as long as a transcript line, so the band reaches up
+// through the short composer rows above it. One blank line with no composer
+// under it is a paragraph and is left where it is.
+func chromeBandStart(lines []string, last int) int {
+	start := last + 1
+	empties := 0
+	chrome := false
+	floor := max(0, last-bottomChromeRows)
+	for i := last - 1; i >= floor; i-- {
+		if textRunes(lines[i]) >= bottomTranscriptRunes {
+			break
+		}
+		start = i
+		if !rowHasGlyph(lines[i]) || sparseChrome(lines[i]) {
+			empties++
+			continue
+		}
+		chrome = true
+	}
+	if empties < 2 && !chrome {
+		return last + 1
+	}
+	return start
+}
+
+// textRunes counts letters and digits on a rendered row. SGR and box drawing
+// are chrome, not a line of the conversation.
+func textRunes(line string) int {
+	n := 0
+	for _, r := range plainRow(line) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			n++
+		}
+	}
+	return n
+}
+
+// sparseChrome reports a composer row that is only a border or a cursor.
+// A letter or a digit keeps the row: that is a prompt, not padding. A rule
+// painted across the grid has more than a few marks, so it stays too.
+func sparseChrome(line string) bool {
+	n := 0
+	for _, r := range plainRow(line) {
+		if r == ' ' || r == '\t' {
+			continue
+		}
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return false
+		}
+		n++
+		if n > 3 {
+			return false
+		}
+	}
+	return n > 0
+}
+
+// plainRow returns the runes of a rendered row with SGR sequences removed.
+func plainRow(line string) []rune {
+	var b strings.Builder
+	for i := 0; i < len(line); i++ {
+		if line[i] == 0x1b && i+1 < len(line) && line[i+1] == '[' {
+			i += 2
+			for i < len(line) && line[i] != 'm' && line[i] != 0x1b {
+				i++
+			}
+			continue
+		}
+		b.WriteByte(line[i])
+	}
+	return []rune(b.String())
 }
 
 // rowHasGlyph reports whether a rendered row has anything other than spaces.
