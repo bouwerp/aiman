@@ -745,11 +745,12 @@ func (m AWSCredentialsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if len(failMsgs) > 0 {
+		switch {
+		case len(failMsgs) > 0:
 			m.message = "✗ " + strings.Join(failMsgs, "; ")
-		} else if len(notes) > 0 {
+		case len(notes) > 0:
 			m.message = "Renewed — " + strings.Join(notes, "; ")
-		} else {
+		default:
 			m.message = "Renewed — verifying…"
 		}
 		return m, m.checkCredsCmd()
