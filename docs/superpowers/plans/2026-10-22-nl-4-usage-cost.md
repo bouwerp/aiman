@@ -18,7 +18,7 @@
 - Both terminal backends (tmux, pty) must work: usage depends only on `domain.Session.AgentSessionPath`, never on the backend.
 - SQLite is `modernc.org/sqlite`. Serve is the only writer of usage state; other processes read through the socket.
 - Import graph: `internal/gateway` → `internal/server` → `internal/usecase`. `internal/usage` imports only `internal/domain` and the standard library. `internal/server` may import `internal/usage`.
-- Costs are labelled `~$` everywhere they are shown. A model without a confirmed price (every Codex model until the user sets `usage.prices.<id>`) never shows `~$`: its tokens are shown instead. Placeholders never produce a cost.
+- Costs are labelled `~$` everywhere they are shown. Codex models show tokens **and** an estimated `~$` (user decision 2026-10-22): Task 1 fills their defaults from OpenAI's published API prices (cite the source URL in a comment next to the table). A model id with no published price uses the closest published sibling's price and is marked `Estimated: true`; it still produces a `~$`. Only a model id with no default and no `usage.prices.<id>` (e.g. an unknown future id) shows tokens without `~$`.
 - Noise budget: cost and cache % on the detail meta line only (never in the header or rows); `$` opens the usage view. No toasts for usage.
 - Tests that need key events use `pressKey`/`pressRune` from `internal/ui/keystrokes_test.go`.
 - Source comments describe the current code (no changelog narration).
@@ -63,7 +63,7 @@ Costs with default prices: Claude main `0.3139878`, subagent `0.003406`. Combine
 2. **History rewritten or copied.** `/compact`, `--resume` or a rewrite that changes the first uuid or shrinks the file must not double count. Pinned by `TestTrackerRewriteDoesNotDoubleCount` (Task 6).
 3. **Scan during a write.** A half-written last line must not be consumed or lost. Pinned by `TestParseClaudeStopsAtPartialLine` (Task 3) and `TestTrackerPicksUpCompletedLine` (Task 6).
 4. **Forgotten or archived sessions.** Their spend must stay in per-ticket and per-day rollups after the session row is deleted. Pinned by `TestUsageSessionsSurviveSessionDelete` (Task 5) and `TestReportByIssueKeepsForgottenSession` (Task 7).
-5. **Unpriced models.** Codex models (placeholders) and unknown Claude ids show tokens, never `~$` and never `$0.00`; a mixed total shows the priced part with `+`. Pinned by `TestCostSkipsUnconfirmedPrice` (Task 1), `TestReportMarksPartial` (Task 7), `TestFormatUsageCost` (Task 9), `TestUsageMetaUnpricedShowsTokens` (Task 10).
+5. **Unpriced models.** Model ids with no default and no configured price (unknown future ids) show tokens, never `~$` and never `$0.00`; a mixed total shows the priced part with `+`. Pinned by `TestCostSkipsUnconfirmedPrice` (Task 1), `TestReportMarksPartial` (Task 7), `TestFormatUsageCost` (Task 9), `TestUsageMetaUnpricedShowsTokens` (Task 10).
 
 ---
 
@@ -128,7 +128,8 @@ type UsageSessionMeta struct { SessionID, Name, Group, IssueKey, AgentName strin
 // internal/usage/price.go
 type Price struct {
     Input, Output, CacheRead, CacheWrite5m, CacheWrite1h float64 // USD per million tokens
-    Confirmed bool // false = placeholder the user must confirm; never used for cost
+    Confirmed bool // false = no known price; never used for cost
+    Estimated bool // price borrowed from a sibling model id; still used for cost
 }
 type PriceTable map[string]Price
 func DefaultPrices() PriceTable
@@ -167,7 +168,7 @@ func (p Price) Cost(t domain.TokenCounts) float64
 | `claude-sonnet-4-6` | 3 | 15 | 0.30 | 3.75 | 6 | true |
 | `claude-haiku-5-5` | 0.10 | 0.50 | 0.01 | 0.125 | 0.20 | true (≤100K-token prompts; the long-prompt tier is not modelled) |
 | `claude-haiku-4-5` | 1 | 5 | 0.10 | 1.25 | 2 | true |
-| `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `codex-auto-review` | 0 | 0 | 0 | 0 | 0 | **false: PLACEHOLDER, user must set `usage.prices.<id>`** |
+| `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `codex-auto-review` | from OpenAI's published API pricing (looked up in Task 1 with WebSearch/WebFetch; source URL in a comment) | | | | | true (`Estimated: true` when taken from a sibling model) |
 
 `Lookup`: exact key; else, for ids without `@`, the longest key `k` with `strings.HasPrefix(model, k+"-")`; ids with `@` match only exactly. Return false when not found or `!Confirmed`. `Cost` = Σ tokens × price / 1e6.
 
@@ -427,8 +428,9 @@ const NoTicketKey = "(no ticket)"
 
 - [ ] **Step 1: Write the failing tests** (fake store from Task 6 tests, seeded with buckets)
 - `TestSummarizeClaudeFixture`: the two Claude rows → `CostUSD` within `1e-9` of `0.3173938`, `Priced`, not `Partial`, ratio `0.7281946963744116`.
-- `TestReportMarksPartial`: Claude rows plus the Codex rows → `Partial`, `Unpriced == ["gpt-5.6-sol", "gpt-5.6-terra"]`, cost unchanged from the Claude-only total.
-- `TestReportOnlyUnpriced`: Codex rows only → `Priced == false`, `CostUSD == 0`.
+- `TestReportMarksPartial`: Claude rows plus a row for an unknown model id `gpt-9-unknown` → `Partial`, `Unpriced == ["gpt-9-unknown"]`, cost unchanged from the priced total.
+- `TestReportPricesCodex`: the Codex fixture rows → `Priced == true`, `CostUSD > 0`, computed from the Task 1 table.
+- `TestReportOnlyUnpriced`: rows for `gpt-9-unknown` only → `Priced == false`, `CostUSD == 0`.
 - `TestReportByIssueKeepsForgottenSession`: meta for `s1` (`PROJ-1`) exists, no live session → row `PROJ-1`; a session with empty issue lands in `NoTicketKey`. Rows sorted by `CostUSD` descending, then key.
 - `TestReportByDayUsesOffset`: a bucket at `2026-10-21T23` UTC with `TZOffsetMinutes: 120` lands in day `2026-10-22`; rows sorted by day descending.
 - `TestReportDaysWindow`: `Days: 1` with `Now` = `2026-10-22T12:00Z` excludes a bucket from `2026-10-20`.

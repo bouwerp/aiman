@@ -212,7 +212,7 @@ Mockup: https://claude.ai/artifact/UB1zh3xsG688W7YS57iyZq (A1).
 
 - Serve parses known transcripts (`AgentSessionPath`): Claude JSONL `message.usage` (input, output, cache creation, cache read, model); Codex JSONL `token_count`. Others report "unknown".
 - Incremental parsing keeps a byte offset plus the first record's id per file; a shrunk file or changed first id resets to zero (Claude rewrites on compact).
-- Totals per session in serve's DB. Price table in config with built-in defaults per model id. Costs are labelled `~$`. Models without a confirmed price (Codex until the user sets `usage.prices`) show tokens and no `~$`; placeholders never produce a cost.
+- Totals per session in serve's DB. Price table in config with built-in defaults per model id. Costs are labelled `~$`. Codex models show tokens and an estimated `~$` from OpenAI's published API prices (user decision). Only model ids with no known or configured price show tokens without `~$`.
 - `usage.get {session|group|issue|day}` returns tokens by kind, estimated cost and cache hit ratio `cache_read / (input + cache_read + cache_creation)`. CLI `aiman usage`.
 - Dashboard: cost and cache % on the detail meta line only. `$` opens a usage view with per-ticket and per-day rollups.
 
