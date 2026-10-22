@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -109,6 +110,24 @@ func (f *Files) Get(sessionID string) (domain.TodoList, error) {
 // Mutate applies fn to a copy of the list, normalises and stamps the result,
 // and writes it when anything changed.
 func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList) error) (domain.TodoList, Change, error) {
+	return f.update(sessionID, author, func(l *domain.TodoList, _ []Tombstone, _ time.Time) error {
+		return fn(l)
+	})
+}
+
+// Mirror merges the agent's own task-list snapshot into the session's list
+// (see Merge) and writes it as an agent change. deliveredAt is when the last
+// steering note reached the agent.
+func (f *Files) Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliveredAt time.Time) (domain.TodoList, Change, error) {
+	return f.update(sessionID, domain.AuthorAgent, func(l *domain.TodoList, tombs []Tombstone, now time.Time) error {
+		*l = Merge(*l, tombs, snap, deliveredAt, now)
+		return nil
+	})
+}
+
+// update is the shared write path of Mutate and Mirror. A change that only
+// alters NotInAgent is written and bumps Rev but carries no ops.
+func (f *Files) update(sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList, []Tombstone, time.Time) error) (domain.TodoList, Change, error) {
 	id, path, err := f.path(sessionID)
 	if err != nil {
 		return domain.TodoList{}, Change{}, err
@@ -125,7 +144,8 @@ func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*doma
 	next := prev
 	next.Items = append([]domain.TodoItem(nil), prev.Items...)
 	next.NotInAgent = append([]string(nil), prev.NotInAgent...)
-	if err := fn(&next); err != nil {
+	now := f.now()
+	if err := fn(&next, d.Tombstones, now); err != nil {
 		return prev, Change{}, err
 	}
 	next.SessionID = sessionID
@@ -143,10 +163,10 @@ func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*doma
 		return prev, Change{}, err
 	}
 	demoteExtraActive(prev, &next)
-	now := f.now()
+	next.NotInAgent = presentIDs(next, next.NotInAgent)
 	ops := Diff(prev, next)
 	stamp(prev, &next, ops, author, now)
-	if len(ops) == 0 {
+	if len(ops) == 0 && slices.Equal(prev.NotInAgent, next.NotInAgent) {
 		return prev, Change{Author: author, Rev: prev.Rev}, nil
 	}
 	d.Tombstones = addTombstones(d.Tombstones, prev, next, now)
@@ -157,6 +177,21 @@ func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*doma
 		return prev, Change{}, err
 	}
 	return next, Change{Author: author, Ops: ops, Rev: next.Rev}, nil
+}
+
+// presentIDs returns the ids that still name an item of l, in their given order.
+func presentIDs(l domain.TodoList, ids []string) []string {
+	have := make(map[string]bool, len(l.Items))
+	for _, it := range l.Items {
+		have[it.ID] = true
+	}
+	var out []string
+	for _, id := range ids {
+		if have[id] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func validate(l domain.TodoList) error {
