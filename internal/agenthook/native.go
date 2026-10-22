@@ -11,8 +11,11 @@ import (
 
 const nativeDirName = "native-sessions"
 
-// Marker is the substring used to find Aiman's hook command in agent configs.
+// Marker is the substring used to find Aiman's session reporter in agent configs.
 const Marker = "report-agent-session.sh"
+
+// TodoMarker is the substring used to find the to-do reporter in agent configs.
+const TodoMarker = "todo-report"
 
 // StoredPath is ~/.aiman/native-sessions/<session-id>. sessionID must be a
 // single path element (UUID-shaped); anything else is rejected so a crafted

@@ -11,16 +11,20 @@ const (
 	ActionCurrent   = "current"
 )
 
+// claudeTodoMatcher selects the to-do tools whose full list the reporter mirrors.
+// Tasks stay available from Claude; aiman does not set CLAUDE_CODE_ENABLE_TASKS.
+const claudeTodoMatcher = "TodoWrite|TaskCreate|TaskUpdate"
+
 // InstallResult is one path after EnsureOnHost.
 type InstallResult struct {
 	Path   string
 	Action string
 }
 
-// EnsureOnHost writes the reporter script and, when the agent config directory
-// already exists, registers a SessionStart (or equivalent) hook. Missing agent
-// dirs are skipped so unused tools are not given a config file. Ageni is not
-// installed: it has no hook system.
+// EnsureOnHost writes the session reporter and the to-do reporter and, when an
+// agent config directory already exists, registers that agent's hooks. Missing
+// agent dirs are skipped so unused tools are not given a config file. Ageni is
+// not installed: it has no hook system.
 func EnsureOnHost(home string) ([]InstallResult, error) {
 	var out []InstallResult
 	var first error
@@ -37,7 +41,8 @@ func EnsureOnHost(home string) ([]InstallResult, error) {
 	}
 
 	script := reporterPath(home)
-	record(ensureReporter(script))
+	record(ensureHookScript(script, reporterScript))
+	record(ensureHookScript(todoReporterPath(home), hookScript("todo report --from-stdin")))
 	record(ensureDeepcodeLauncher(home))
 	record(ensureClaude(home, script))
 	record(ensureGrok(home, script))
@@ -56,8 +61,12 @@ func ensureClaude(home, command string) (InstallResult, error) {
 	if !isDir(dir) {
 		return InstallResult{}, nil
 	}
+	todo := todoReporterPath(home)
 	return upsertJSONFile(filepath.Join(dir, "settings.json"), func(root map[string]any) bool {
-		return upsertIdentityHooks(root, command)
+		identity := upsertIdentityHooks(root, command)
+		turns := upsertTurnHooks(root, command)
+		todos := upsertTodoHook(root, todo, claudeTodoMatcher)
+		return identity || turns || todos
 	})
 }
 
@@ -84,7 +93,9 @@ func ensureCodex(home, command string) (InstallResult, error) {
 		return InstallResult{}, nil
 	}
 	return upsertJSONFile(filepath.Join(dir, "hooks.json"), func(root map[string]any) bool {
-		return upsertIdentityHooks(root, command)
+		identity := upsertIdentityHooks(root, command)
+		turns := upsertTurnHooks(root, command)
+		return identity || turns
 	})
 }
 

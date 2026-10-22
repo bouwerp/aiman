@@ -14,7 +14,7 @@ func TestEnsureOnHostWritesReporterOnlyWhenNoAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 2 {
+	if len(results) != 3 {
 		t.Fatalf("results=%d %+v", len(results), results)
 	}
 	if results[0].Action != ActionInstalled {
@@ -27,6 +27,199 @@ func TestEnsureOnHostWritesReporterOnlyWhenNoAgents(t *testing.T) {
 	if !strings.Contains(string(body), "report-agent-session --from-stdin") {
 		t.Fatalf("script: %s", body)
 	}
+	todo, err := os.ReadFile(todoReporterPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(todo) != hookScript("todo report --from-stdin") {
+		t.Fatalf("todo script:\n%s", todo)
+	}
+	if !strings.Contains(string(todo), `"$bin" todo report --from-stdin >/dev/null 2>&1 || true`) {
+		t.Fatalf("todo script: %s", todo)
+	}
+}
+
+func TestEnsureClaudeRegistersTodoAndTurnHooks(t *testing.T) {
+	home := t.TempDir()
+	claude := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claude, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureOnHost(home); err != nil {
+		t.Fatal(err)
+	}
+	root := readHookRoot(t, filepath.Join(claude, "settings.json"))
+	hooks, _ := root["hooks"].(map[string]any)
+	post, _ := hooks["PostToolUse"].([]any)
+	if len(post) != 1 {
+		t.Fatalf("PostToolUse groups=%d", len(post))
+	}
+	group, _ := post[0].(map[string]any)
+	if group["matcher"] != "TodoWrite|TaskCreate|TaskUpdate" {
+		t.Fatalf("matcher %v", group["matcher"])
+	}
+	if hookCommand(group) != todoReporterPath(home) {
+		t.Fatalf("todo command %q", hookCommand(group))
+	}
+	if !strings.Contains(hookCommand(group), TodoMarker) {
+		t.Fatalf("todo command %q", hookCommand(group))
+	}
+	for _, ev := range []string{"Stop", "UserPromptSubmit", "SessionStart"} {
+		arr, _ := hooks[ev].([]any)
+		if len(arr) != 1 {
+			t.Fatalf("%s groups=%d", ev, len(arr))
+		}
+		g, _ := arr[0].(map[string]any)
+		if hookCommand(g) != reporterPath(home) {
+			t.Fatalf("%s command %q", ev, hookCommand(g))
+		}
+		if !strings.Contains(hookCommand(g), Marker) {
+			t.Fatalf("%s command %q", ev, hookCommand(g))
+		}
+	}
+}
+
+func TestEnsureOnHostIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	claude := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claude, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureOnHost(home); err != nil {
+		t.Fatal(err)
+	}
+	again, err := EnsureOnHost(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) == 0 {
+		t.Fatal("no results")
+	}
+	for _, r := range again {
+		if r.Action != ActionCurrent {
+			t.Fatalf("second ensure %s action=%s", r.Path, r.Action)
+		}
+	}
+	root := readHookRoot(t, filepath.Join(claude, "settings.json"))
+	hooks, _ := root["hooks"].(map[string]any)
+	post, _ := hooks["PostToolUse"].([]any)
+	n := 0
+	for _, item := range post {
+		group, _ := item.(map[string]any)
+		if strings.Contains(hookCommand(group), TodoMarker) {
+			n++
+		}
+	}
+	if n != 1 || len(post) != 1 {
+		t.Fatalf("PostToolUse aiman groups=%d total=%d", n, len(post))
+	}
+}
+
+func TestUpsertTodoHookUpdatesMatcher(t *testing.T) {
+	cmd := "/tmp/home/.aiman/hooks/todo-report"
+	root := map[string]any{
+		"hooks": map[string]any{
+			"PostToolUse": []any{
+				map[string]any{
+					"matcher": "Bash",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": "echo pre"},
+					},
+				},
+				map[string]any{
+					"matcher": "TodoWrite",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": cmd},
+					},
+				},
+			},
+		},
+	}
+	if !upsertTodoHook(root, cmd, "TodoWrite|update_plan") {
+		t.Fatal("expected matcher rewrite")
+	}
+	if upsertTodoHook(root, cmd, "TodoWrite|update_plan") {
+		t.Fatal("expected no change on the second call")
+	}
+	hooks, _ := root["hooks"].(map[string]any)
+	post, _ := hooks["PostToolUse"].([]any)
+	if len(post) != 2 {
+		t.Fatalf("groups=%d", len(post))
+	}
+	bash, _ := post[0].(map[string]any)
+	if bash["matcher"] != "Bash" || hookCommand(bash) != "echo pre" {
+		t.Fatalf("foreign group changed: %#v", bash)
+	}
+	group, _ := post[1].(map[string]any)
+	if group["matcher"] != "TodoWrite|update_plan" {
+		t.Fatalf("matcher %v", group["matcher"])
+	}
+	if hookCommand(group) != cmd {
+		t.Fatalf("command %q", hookCommand(group))
+	}
+}
+
+func TestEnsureCodexTurnHooks(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureOnHost(home); err != nil {
+		t.Fatal(err)
+	}
+	rawPath := filepath.Join(dir, "hooks.json")
+	raw, err := os.ReadFile(rawPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "update_plan") || strings.Contains(string(raw), TodoMarker) || strings.Contains(string(raw), "PostToolUse") {
+		t.Fatalf("codex must not mirror to-dos: %s", raw)
+	}
+	root := readHookRoot(t, rawPath)
+	hooks, _ := root["hooks"].(map[string]any)
+	for _, ev := range []string{"Stop", "UserPromptSubmit", "SessionStart"} {
+		arr, _ := hooks[ev].([]any)
+		if len(arr) != 1 {
+			t.Fatalf("%s groups=%d %s", ev, len(arr), raw)
+		}
+		group, _ := arr[0].(map[string]any)
+		if hookCommand(group) != reporterPath(home) {
+			t.Fatalf("%s command %q", ev, hookCommand(group))
+		}
+	}
+	again, err := EnsureOnHost(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range again {
+		if r.Path == rawPath && r.Action != ActionCurrent {
+			t.Fatalf("second ensure action=%s", r.Action)
+		}
+	}
+}
+
+func readHookRoot(t *testing.T, path string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func hookCommand(group map[string]any) string {
+	hooks, _ := group["hooks"].([]any)
+	if len(hooks) == 0 {
+		return ""
+	}
+	item, _ := hooks[0].(map[string]any)
+	cmd, _ := item["command"].(string)
+	return cmd
 }
 
 func TestEnsureOnHostMergesClaudeWithoutClobber(t *testing.T) {

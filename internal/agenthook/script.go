@@ -8,13 +8,15 @@ import (
 
 const reporterName = "report-agent-session.sh"
 
-// reporterScript is invoked by every vendor hook. It always exits 0 so a
-// missing serve or a non-Aiman environment cannot fail the agent session.
-// AIMAN_BIN_PATH is honoured when set but never relied on: it used to be
-// injected by the session creator, which for the TUI is the laptop, so remote
-// sessions received a laptop-only path and every hook report silently failed.
-// Resolving the binary here works wherever the session actually runs.
-const reporterScript = `#!/bin/sh
+const todoReporterName = "todo-report"
+
+// hookScript is invoked by vendor hooks. It always exits 0 so a missing serve
+// or a non-Aiman environment cannot fail the agent session.
+// AIMAN_BIN_PATH is honoured when it points at an executable, but the script
+// resolves aiman itself otherwise: a session creator may inject a path from a
+// different machine than the one where the session runs.
+func hookScript(subcommand string) string {
+	return `#!/bin/sh
 [ "${AIMAN_ENV:-}" = 1 ] || exit 0
 [ -n "${AIMAN_ID:-}" ] || exit 0
 bin="${AIMAN_BIN_PATH:-}"
@@ -27,19 +29,27 @@ if [ -z "$bin" ] || [ ! -x "$bin" ]; then
     exit 0
   fi
 fi
-"$bin" session report-agent-session --from-stdin >/dev/null 2>&1 || true
+"$bin" ` + subcommand + ` >/dev/null 2>&1 || true
 exit 0
 `
+}
+
+// reporterScript is the session-lifecycle hook (identity and turn events).
+var reporterScript = hookScript("session report-agent-session --from-stdin")
 
 func reporterPath(home string) string {
 	return filepath.Join(home, ".aiman", "hooks", reporterName)
 }
 
-func ensureReporter(path string) (InstallResult, error) {
+func todoReporterPath(home string) string {
+	return filepath.Join(home, ".aiman", "hooks", todoReporterName)
+}
+
+func ensureHookScript(path, script string) (InstallResult, error) {
 	res := InstallResult{Path: path}
 	existing, err := os.ReadFile(path)
 	switch {
-	case err == nil && string(existing) == reporterScript:
+	case err == nil && string(existing) == script:
 		res.Action = ActionCurrent
 		return res, nil
 	case err == nil:
@@ -52,7 +62,7 @@ func ensureReporter(path string) (InstallResult, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return res, fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(reporterScript), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
 		return res, fmt.Errorf("writing %s: %w", path, err)
 	}
 	if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // G302: hook script must be executable by the agent

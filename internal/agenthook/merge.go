@@ -105,14 +105,14 @@ func writeTextFile(path, contents string, mode os.FileMode) (InstallResult, erro
 	return res, nil
 }
 
-func hasMarker(command string) bool {
-	return strings.Contains(command, Marker)
+func hasMarker(command, marker string) bool {
+	return marker != "" && strings.Contains(command, marker)
 }
 
-func replaceMarkedCommand(v any, command string) (found bool, changed bool) {
+func replaceMarkedCommand(v any, command, marker string) (found bool, changed bool) {
 	switch t := v.(type) {
 	case map[string]any:
-		if s, ok := t["command"].(string); ok && hasMarker(s) {
+		if s, ok := t["command"].(string); ok && hasMarker(s, marker) {
 			found = true
 			if s != command {
 				t["command"] = command
@@ -121,14 +121,14 @@ func replaceMarkedCommand(v any, command string) (found bool, changed bool) {
 			return found, changed
 		}
 		for _, child := range t {
-			f, c := replaceMarkedCommand(child, command)
+			f, c := replaceMarkedCommand(child, command, marker)
 			found = found || f
 			changed = changed || c
 		}
 		return found, changed
 	case []any:
 		for _, child := range t {
-			f, c := replaceMarkedCommand(child, command)
+			f, c := replaceMarkedCommand(child, command, marker)
 			found = found || f
 			changed = changed || c
 		}
@@ -136,6 +136,58 @@ func replaceMarkedCommand(v any, command string) (found bool, changed bool) {
 	default:
 		return false, false
 	}
+}
+
+func commandHasMarker(v any, marker string) bool {
+	switch t := v.(type) {
+	case map[string]any:
+		if s, ok := t["command"].(string); ok && hasMarker(s, marker) {
+			return true
+		}
+		for _, child := range t {
+			if commandHasMarker(child, marker) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range t {
+			if commandHasMarker(child, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func groupsWithMarker(arr []any, marker string) []map[string]any {
+	var out []map[string]any
+	for _, item := range arr {
+		group, ok := item.(map[string]any)
+		if !ok || !commandHasMarker(group, marker) {
+			continue
+		}
+		out = append(out, group)
+	}
+	return out
+}
+
+// rewriteMatcher sets matcher on groups already selected by marker.
+// An empty matcher clears one that no longer applies.
+func rewriteMatcher(groups []map[string]any, matcher string) bool {
+	changed := false
+	for _, group := range groups {
+		current, _ := group["matcher"].(string)
+		if current == matcher {
+			continue
+		}
+		if matcher == "" {
+			delete(group, "matcher")
+		} else {
+			group["matcher"] = matcher
+		}
+		changed = true
+	}
+	return changed
 }
 
 func claudeHookGroup(command string) map[string]any {
@@ -146,15 +198,19 @@ func claudeHookGroup(command string) map[string]any {
 	}
 }
 
-func upsertClaudeHook(root map[string]any, event, command, matcher string) bool {
+func upsertClaudeHook(root map[string]any, event, command, matcher, marker string) bool {
 	hooks, _ := root["hooks"].(map[string]any)
 	if hooks == nil {
 		hooks = map[string]any{}
 		root["hooks"] = hooks
 	}
 	arr, _ := hooks[event].([]any)
-	found, changed := replaceMarkedCommand(arr, command)
-	if found {
+	marked := groupsWithMarker(arr, marker)
+	if len(marked) > 0 {
+		_, changed := replaceMarkedCommand(arr, command, marker)
+		if rewriteMatcher(marked, matcher) {
+			changed = true
+		}
 		hooks[event] = arr
 		return changed
 	}
@@ -164,6 +220,18 @@ func upsertClaudeHook(root map[string]any, event, command, matcher string) bool 
 	}
 	hooks[event] = append(arr, group)
 	return true
+}
+
+// upsertTurnHooks reports Stop and UserPromptSubmit through the session reporter.
+func upsertTurnHooks(root map[string]any, command string) bool {
+	stop := upsertClaudeHook(root, "Stop", command, "", Marker)
+	submit := upsertClaudeHook(root, "UserPromptSubmit", command, "", Marker)
+	return stop || submit
+}
+
+// upsertTodoHook registers one PostToolUse group for the to-do reporter.
+func upsertTodoHook(root map[string]any, command, matcher string) bool {
+	return upsertClaudeHook(root, "PostToolUse", command, matcher, TodoMarker)
 }
 
 // museHookCommand recovers AIMAN_ID when Muse's hook environment allowlist
@@ -178,7 +246,7 @@ func museHookCommand(reporter string) string {
 func upsertMuseIdentityHooks(root map[string]any, command string) bool {
 	changed := false
 	for _, event := range []string{"SessionStart", "SessionEnd", "Stop", "UserPromptSubmit", "Notification"} {
-		if upsertClaudeHook(root, event, command, "*") {
+		if upsertClaudeHook(root, event, command, "*", Marker) {
 			changed = true
 		}
 	}
@@ -186,9 +254,9 @@ func upsertMuseIdentityHooks(root map[string]any, command string) bool {
 }
 
 func upsertIdentityHooks(root map[string]any, command string) bool {
-	a := upsertClaudeHook(root, "SessionStart", command, "")
-	b := upsertClaudeHook(root, "SessionEnd", command, "")
-	c := upsertClaudeHook(root, "Notification", command, "idle_prompt")
+	a := upsertClaudeHook(root, "SessionStart", command, "", Marker)
+	b := upsertClaudeHook(root, "SessionEnd", command, "", Marker)
+	c := upsertClaudeHook(root, "Notification", command, "idle_prompt", Marker)
 	return a || b || c
 }
 
@@ -209,7 +277,7 @@ func upsertCursorEvent(root map[string]any, command string) bool {
 
 func upsertTopLevelCommand(root map[string]any, event, command string) bool {
 	arr, _ := root[event].([]any)
-	found, changed := replaceMarkedCommand(arr, command)
+	found, changed := replaceMarkedCommand(arr, command, Marker)
 	if found {
 		root[event] = arr
 		return changed
