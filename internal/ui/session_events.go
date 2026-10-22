@@ -81,6 +81,7 @@ func (m *Model) startSessionStream(remote config.Remote) tea.Cmd {
 	return tea.Batch(
 		runSessionStream(cmd, st),
 		waitForSessionEvent(st),
+		registerSessionsCmd(remote, sessionsForHost(m.allSessions, remote.Host)),
 	)
 }
 
