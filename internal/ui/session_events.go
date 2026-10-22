@@ -55,6 +55,10 @@ type sessionStream struct {
 	host   string
 	events chan server.SessionEvent
 	cancel context.CancelFunc
+	// todoSwept is set once a full todo.summary has been scheduled for this
+	// connection. The first event of any type, keepalive included, is what
+	// proves serve is up.
+	todoSwept bool
 }
 
 // startSessionStream launches the stream for a remote and returns a command that
@@ -145,13 +149,23 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		return nil // the stream was stopped; stop consuming it
 	}
 	next := waitForSessionEvent(st)
+	sweep := m.maybeSweepTodos(st)
+	follow := func(extra tea.Cmd) tea.Cmd {
+		return tea.Batch(next, sweep, extra)
+	}
+
+	// To-do and steer events carry their own rev or queue count. They are not
+	// evidence the pane changed, so they must not fall through to the refresh.
+	if cmd, claimed := m.applyTodoEvent(msg.host, msg.event); claimed {
+		return follow(cmd)
+	}
 
 	if msg.event.Type == "keepalive" || (msg.event.ID == "" && msg.event.Type != "session_created") {
-		return next
+		return follow(nil)
 	}
 	if msg.event.Type == "session_created" && msg.event.Session != nil {
 		m.upsertLiveSession(sessionFromInfo(msg.host, *msg.event.Session))
-		return next
+		return follow(nil)
 	}
 	if m.eventSeen == nil {
 		m.eventSeen = map[string]sessionEventState{}
@@ -167,7 +181,7 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 	// idle, exited — needs the pane, so it stays with the classifier.
 	if cmds := m.markSessionBusyFromEvent(msg.event.ID, state); cmds != nil {
 		m.eventSeen[msg.event.ID] = state
-		return tea.Batch(next, cmds)
+		return follow(cmds)
 	}
 
 	// Otherwise ask the classifier, rate-limited: the title changes several
@@ -176,11 +190,11 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		if sess, found := m.sessionByID(msg.event.ID); found {
 			state.lastRefresh = time.Now()
 			m.eventSeen[msg.event.ID] = state
-			return tea.Batch(next, m.queuePreview(sess))
+			return follow(m.queuePreview(sess))
 		}
 	}
 	m.eventSeen[msg.event.ID] = state
-	return next
+	return follow(nil)
 }
 
 // sessionEventState is the latest a stream has said about one session.
@@ -218,6 +232,9 @@ func (m *Model) markSessionBusyFromEvent(id string, state sessionEventState) tea
 // applyStreamEnded forgets a dead stream and schedules a redial.
 func (m *Model) applyStreamEnded(msg sessionStreamEndedMsg) tea.Cmd {
 	delete(m.streams, msg.host)
+	// The next stream is a new connection. A host that looked too old, or whose
+	// serve was down, gets another chance once that connection is up.
+	delete(m.todoUnsupported, msg.host)
 	if msg.err != nil {
 		m.log("session events: %s ended (%v); retrying in %s", msg.host, msg.err, eventStreamRetryAfter)
 	}

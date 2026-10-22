@@ -401,6 +401,16 @@ type Model struct {
 	// the latest each has said (see session_events.go).
 	streams   map[string]*sessionStream
 	eventSeen map[string]sessionEventState
+	// To-do lists fetched from serve. todos holds list snapshots and steer
+	// status. todoSummaries holds progress for every session.
+	// todoUnsupported is keyed by remote host. promptSent is when a steer note
+	// was sent, compared with Steer.LastDeliveredAt.
+	todoClient      todoClient
+	todos           map[string]todoSnapshot
+	todoSummaries   map[string]todoSummary
+	todoInFlight    map[string]bool
+	todoUnsupported map[string]bool
+	promptSent      map[string]time.Time
 	// Auto-fitting the previewed session to the panel (see preview_fit.go).
 	fitApplied    map[string]string    // session ID -> size known to be in place
 	fitBackoff    map[string]time.Time // session ID -> do not retry before
@@ -879,6 +889,12 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		terminatingSessions: make(map[string]*terminatingSession),
 		syncHealth:          make(map[string]syncHealth),
 		paneCache:           make(map[string]usecase.PaneCache),
+		todoClient:          newSSHTodoClient(),
+		todos:               make(map[string]todoSnapshot),
+		todoSummaries:       make(map[string]todoSummary),
+		todoInFlight:        make(map[string]bool),
+		todoUnsupported:     make(map[string]bool),
+		promptSent:          make(map[string]time.Time),
 		daemonList:          dl,
 		daemons:             make(map[string]domain.Daemon),
 		agentAPIProbing:     make(map[string]bool),
@@ -2804,6 +2820,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.startSessionStream(remote)
 		}
 		return m, nil
+	case todoLoadedMsg:
+		m.applyTodoLoaded(msg)
+		return m, nil
+	case todoSweepMsg:
+		m.applyTodoSweep(msg)
+		return m, nil
 	case previewFitTickMsg:
 		return m, m.applyPreviewFitTick(msg)
 	case previewFitDoneMsg:
@@ -4202,7 +4224,7 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 			m.activeSession = s.TmuxSession
 			m.tmuxOutput = "Loading..."
 			m.setPreviewContent()
-			cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s))
+			cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), m.fetchTodosCmd(s))
 		}
 	} else if m.currentTab == tabSessions {
 		if it, ok := m.selectedSessionItem(); ok {
@@ -4483,6 +4505,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 					cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s))
 				}
 			}
+			cmds = append(cmds, m.fetchTodosCmd(s))
 		}
 	case tabDaemons:
 		newSel := m.daemonList.SelectedItem()
