@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "sess-1",
+  "tool_name": "TaskCreate",
+  "tool_input": {
+    "subject": "Outline README structure",
+    "description": "Decide on README sections (overview, installation, usage, contributing, license).",
+    "activeForm": "Outlining README structure"
+  }
+}

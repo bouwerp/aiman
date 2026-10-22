@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "sess-1",
+  "tool_name": "TaskUpdate",
+  "tool_input": {
+    "taskId": "1",
+    "status": "in_progress"
+  }
+}

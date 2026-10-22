@@ -1,0 +1,24 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "sess-1",
+  "tool_name": "TodoWrite",
+  "tool_input": {
+    "todos": [
+      {
+        "content": "Outline README sections (overview, setup, usage)",
+        "status": "in_progress",
+        "activeForm": "Outlining README sections"
+      },
+      {
+        "content": "Draft README content",
+        "status": "pending",
+        "activeForm": "Drafting README content"
+      },
+      {
+        "content": "Review and finalize README",
+        "status": "pending",
+        "activeForm": "Reviewing and finalizing README"
+      }
+    ]
+  }
+}
