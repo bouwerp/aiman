@@ -1,8 +1,10 @@
 package domain
 
 import (
+	"io"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // SanitizeBranchName normalizes a string for use as a git branch name (or
@@ -83,4 +85,29 @@ func sanitizeBranchSegment(seg string) string {
 		return ""
 	}
 	return s
+}
+
+const adHocAlphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+const adHocSuffixLen = 4
+
+// AdHocLabel returns prefix + second-resolution timestamp + a 4-char
+// [a-z0-9] suffix read from rnd, so two quick sessions created in the same
+// second get distinct branch, worktree and tmux names. If rnd fails, the
+// suffix is derived from the nanosecond field so it is never omitted.
+func AdHocLabel(prefix string, now time.Time, rnd io.Reader) string {
+	buf := make([]byte, adHocSuffixLen)
+	suffix := make([]byte, adHocSuffixLen)
+	if _, err := io.ReadFull(rnd, buf); err == nil {
+		for i, b := range buf {
+			suffix[i] = adHocAlphabet[int(b)%len(adHocAlphabet)]
+		}
+	} else {
+		n := now.Nanosecond() % (36 * 36 * 36 * 36)
+		for i := adHocSuffixLen - 1; i >= 0; i-- {
+			suffix[i] = adHocAlphabet[n%36]
+			n /= 36
+		}
+	}
+	return prefix + now.Format("20060102-150405") + "-" + string(suffix)
 }

@@ -1,8 +1,10 @@
 package domain
 
 import (
+	"crypto/rand"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSanitizeBranchName(t *testing.T) {
@@ -79,5 +81,33 @@ func TestSanitizeBranchName_pastedTableNoise(t *testing.T) {
 	// Should be mostly alphanumeric segments joined by single slashes or hyphens
 	if strings.Contains(got, " ") {
 		t.Errorf("no spaces allowed, got %q", got)
+	}
+}
+
+func TestAdHocLabelHasSecondsAndSuffix(t *testing.T) {
+	now := time.Date(2026, 10, 22, 15, 4, 5, 0, time.UTC)
+	got := AdHocLabel("adhoc-", now, strings.NewReader("\x00\x01\x02\x03"))
+	if got != "adhoc-20261022-150405-0123" {
+		t.Fatalf("got %q", got)
+	}
+	if SanitizeTmuxSessionName(got) != got {
+		t.Fatalf("not tmux-safe: %q", got)
+	}
+}
+
+func TestAdHocLabelDiffersWithinOneSecond(t *testing.T) {
+	now := time.Now()
+	a := AdHocLabel("adhoc-", now, rand.Reader)
+	b := AdHocLabel("adhoc-", now, rand.Reader)
+	if a == b {
+		t.Fatalf("collision %q", a)
+	}
+}
+
+func TestAdHocLabelFallsBackOnReaderError(t *testing.T) {
+	now := time.Date(2026, 10, 22, 15, 4, 5, 37, time.UTC)
+	got := AdHocLabel("adhoc-", now, strings.NewReader(""))
+	if got != "adhoc-20261022-150405-0011" {
+		t.Fatalf("got %q", got)
 	}
 }

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
@@ -219,7 +220,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	if config.AdHoc {
 		// Ad-hoc sessions use the Git-safe identifier, falling back to a timestamp.
 		if branch == "" {
-			branch = "adhoc-" + time.Now().Format("20060102-1504")
+			branch = domain.AdHocLabel("adhoc-", time.Now(), rand.Reader)
 		}
 	} else if !config.ExistingBranch {
 		if branch == "" && config.IssueKey != "" {
@@ -280,7 +281,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		// sanitized by the UI) as the directory name.
 		adHocDir := branch
 		if adHocDir == "" {
-			adHocDir = "adhoc-" + time.Now().Format("20060102-1504")
+			adHocDir = domain.AdHocLabel("adhoc-", time.Now(), rand.Reader)
 		}
 		session.WorktreePath = fmt.Sprintf("%s/%s", strings.TrimRight(sshMgr.GetRoot(), "/"), adHocDir)
 	case config.Repo.Name != "No Repository" && config.Repo.Name != "":
@@ -311,7 +312,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		// so the session never runs directly in the root.
 		subDir := branch
 		if subDir == "" {
-			subDir = "session-" + time.Now().Format("20060102-1504")
+			subDir = domain.AdHocLabel("session-", time.Now(), rand.Reader)
 		}
 		session.WorktreePath = fmt.Sprintf("%s/%s", strings.TrimRight(sshMgr.GetRoot(), "/"), subDir)
 	}
