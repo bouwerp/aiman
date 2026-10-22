@@ -11,6 +11,7 @@ import (
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/usecase"
 )
 
 // steerGateServer is a serve instance over a real repo holding one session.
@@ -103,27 +104,79 @@ func TestSteerHoldsWhenUnknown(t *testing.T) {
 	}
 }
 
-func TestDeliverSteerToPTY(t *testing.T) {
-	prevSettle, prevConfirm := steerSubmitSettle, steerConfirmEvery
-	steerSubmitSettle, steerConfirmEvery = 50*time.Millisecond, 50*time.Millisecond
-	t.Cleanup(func() { steerSubmitSettle, steerConfirmEvery = prevSettle, prevConfirm })
+// fastSteerSubmit shortens the PTY submit budget for one test.
+func fastSteerSubmit(t *testing.T) {
+	t.Helper()
+	prev := steerSubmitTiming
+	steerSubmitTiming = usecase.SubmitTiming{Initial: 50 * time.Millisecond, Settle: 50 * time.Millisecond, Attempts: 3}
+	t.Cleanup(func() { steerSubmitTiming = prev })
+}
 
+// catSession runs `cat` under a real PTY runtime and registers it as a pty
+// session on srv.
+func catSession(t *testing.T, id string) *Server {
+	t.Helper()
 	mgr := ptyruntime.NewManagerWithRoot(shortTempDir(t), append([]string(nil), holderBin...))
 	t.Cleanup(mgr.CloseAll)
-	if _, err := mgr.Create(ptyruntime.Spec{ID: "st1", Name: "st1", Command: "cat"}); err != nil {
+	if _, err := mgr.Create(ptyruntime.Spec{ID: id, Name: id, Command: "cat"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	t.Cleanup(func() { _ = mgr.Kill("st1") })
-
-	srv := steerGateServer(t, domain.Session{ID: "st1", Name: "st1", Group: "g", Backend: domain.BackendPTY})
+	t.Cleanup(func() { _ = mgr.Kill(id) })
+	srv := steerGateServer(t, domain.Session{ID: id, Name: id, Group: "g", Backend: domain.BackendPTY})
 	srv.pty = mgr
-	if err := srv.deliverSteer(context.Background(), "st1", "hello steer"); err != nil {
+	return srv
+}
+
+func TestDeliverSteerToPTY(t *testing.T) {
+	fastSteerSubmit(t)
+	srv := catSession(t, "st1")
+	if _, err := srv.deliverSteer(context.Background(), "st1", "hello steer"); err != nil {
 		t.Fatalf("deliverSteer: %v", err)
 	}
 	eventually(t, 5*time.Second, func() bool {
-		screen, err := mgr.CaptureScreen("st1")
+		screen, err := srv.pty.CaptureScreen("st1")
 		return err == nil && strings.Contains(screen, "hello steer")
 	})
+}
+
+// Serve's PTY submit uses the remote prompt path's proven budget, and its worst
+// case still fits inside one steering operation.
+func TestSteerSubmitBudget(t *testing.T) {
+	if steerSubmitTiming != usecase.DefaultSubmitTiming() {
+		t.Fatalf("steerSubmitTiming = %+v, want usecase.DefaultSubmitTiming() %+v", steerSubmitTiming, usecase.DefaultSubmitTiming())
+	}
+	worst := steerSubmitTiming.Initial + time.Duration(steerSubmitTiming.Attempts-1)*steerSubmitTiming.Settle
+	if worst >= steerOpTimeout {
+		t.Fatalf("worst-case submit %s does not fit steerOpTimeout %s", worst, steerOpTimeout)
+	}
+}
+
+// An idle report that lands after Return but before deliverSteer finishes
+// confirming is about the delivered note, so it opens the gate for the next.
+func TestIdleReportDuringConfirmOpensGate(t *testing.T) {
+	fastSteerSubmit(t)
+	srv := catSession(t, "st3")
+	submitAt, err := srv.deliverSteer(context.Background(), "st3", "first note")
+	returned := time.Now()
+	if err != nil {
+		t.Fatalf("deliverSteer: %v", err)
+	}
+	if !submitAt.Before(returned.Add(-steerSubmitTiming.Settle)) {
+		t.Fatalf("submitAt %v should precede the confirm loop that ended at %v", submitAt, returned)
+	}
+	sess, err := srv.repo.Get(context.Background(), "st3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.HookState = domain.AgentStateIdle
+	sess.HookStateSource = agenthook.SourceLifecycle
+	sess.HookStateAt = submitAt.Add(returned.Sub(submitAt) / 2)
+	if err := srv.repo.Save(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	if ready, held := srv.steerReady(context.Background(), "st3", submitAt); !ready {
+		t.Fatalf("steerReady = (false, %q), want ready on an idle report made after the submit", held)
+	}
 }
 
 func TestDeliverSteerToTmuxUsesLocalSendKeys(t *testing.T) {
@@ -134,7 +187,7 @@ func TestDeliverSteerToTmuxUsesLocalSendKeys(t *testing.T) {
 	}
 	remote := &fakeRemote{}
 	srv := New(nil, repo, remote, nil, nil, nil, "test")
-	if err := srv.deliverSteer(context.Background(), "st2", "hello tmux"); err != nil {
+	if _, err := srv.deliverSteer(context.Background(), "st2", "hello tmux"); err != nil {
 		t.Fatalf("deliverSteer: %v", err)
 	}
 	remote.mu.Lock()
@@ -142,6 +195,9 @@ func TestDeliverSteerToTmuxUsesLocalSendKeys(t *testing.T) {
 	remote.mu.Unlock()
 	if !strings.Contains(execs, `tmux send-keys -t "work"`) {
 		t.Fatalf("want a local tmux send-keys to \"work\", got:\n%s", execs)
+	}
+	if !strings.Contains(execs, `"/tmp/aiman-prompt-st2-steer"`) {
+		t.Fatalf("steering must use its own prompt file, got:\n%s", execs)
 	}
 	if strings.Contains(execs, "aiman pty input") {
 		t.Fatalf("tmux delivery must not go through the pty CLI, got:\n%s", execs)

@@ -51,7 +51,9 @@ type SteerStore interface {
 // note now (and if not, why), typing the note in, and the current list.
 type steerTarget interface {
 	steerReady(ctx context.Context, id string, lastDelivered time.Time) (bool, string)
-	deliverSteer(ctx context.Context, id, text string) error
+	// deliverSteer returns when the note was submitted (its first Return),
+	// which the gate compares agent reports against.
+	deliverSteer(ctx context.Context, id, text string) (time.Time, error)
 	todoList(id string) (domain.TodoList, error)
 }
 
@@ -378,14 +380,17 @@ func (s *steerer) deliver(ctx context.Context, id string) {
 			ids = append(ids, q.rec.ID)
 		}
 	}
-	if err := s.target.deliverSteer(ctx, id, strings.Join(texts, "\n\n")); err != nil {
+	at, err := s.target.deliverSteer(ctx, id, strings.Join(texts, "\n\n"))
+	if err != nil {
 		s.mu.Lock()
 		st.held = ""
 		st.lastError = err.Error()
 		s.mu.Unlock()
 		return
 	}
-	at := s.now()
+	if at.IsZero() {
+		at = s.now()
+	}
 	markErr := s.store.MarkSteerNotesDelivered(ctx, ids, at)
 
 	s.mu.Lock()

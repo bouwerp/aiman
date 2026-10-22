@@ -365,3 +365,25 @@ func TestResolveWorktreeAdHoc(t *testing.T) {
 		t.Fatalf("Path = %q, want /r/adhoc-x", wt.Path)
 	}
 }
+
+// A tagged send uses its own prompt file, so it cannot clobber or delete the
+// file an untagged send to the same session is still reading.
+func TestSendPromptTaggedUsesOwnFile(t *testing.T) {
+	f := &fakePromptDeliverer{}
+	if err := SendPromptTagged(context.Background(), f, "sess", "abc-123", "steer", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if f.writePath != "/tmp/aiman-prompt-abc-123-steer" {
+		t.Fatalf("write path = %q", f.writePath)
+	}
+	if len(f.execCmds) != 1 || !strings.Contains(f.execCmds[0], `"/tmp/aiman-prompt-abc-123-steer"`) {
+		t.Fatalf("script should read and remove the tagged file: %v", f.execCmds)
+	}
+	untagged := &fakePromptDeliverer{}
+	if err := SendPrompt(context.Background(), untagged, "sess", "abc-123", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if untagged.writePath != "/tmp/aiman-prompt-abc-123" {
+		t.Fatalf("untagged write path = %q", untagged.writePath)
+	}
+}

@@ -25,16 +25,13 @@ const (
 // the screen it shows is the one from before the note went in.
 const steerClassifierQuiet = 3 * time.Second
 
-// steerSubmitSettle is the pause between typing a note and pressing Return,
-// and steerConfirmEvery the pause between checks that Return was taken.
-// Variables so tests can shorten them.
-var (
-	steerSubmitSettle = 500 * time.Millisecond
-	steerConfirmEvery = time.Second
-)
+// steerSubmitTiming is the PTY submit budget: the remote prompt path's proven
+// values, whose worst case (about 12 s) fits inside steerOpTimeout. A variable
+// so tests can shorten it.
+var steerSubmitTiming = usecase.DefaultSubmitTiming()
 
-// steerConfirmChecks bounds the Return retries after a PTY delivery.
-const steerConfirmChecks = 3
+// steerPromptTag keeps steering's tmux prompt file apart from the laptop's.
+const steerPromptTag = "steer"
 
 var _ steerTarget = (*Server)(nil)
 
@@ -93,50 +90,37 @@ func (s *Server) steerReady(ctx context.Context, id string, lastDelivered time.T
 	}
 }
 
-// deliverSteer types text into the session's agent and submits it. Serve owns
-// the terminal: a pty session is written through the runtime in this process,
-// a tmux session through local send-keys.
-func (s *Server) deliverSteer(ctx context.Context, id, text string) error {
+// deliverSteer types text into the session's agent and submits it, and
+// returns when it pressed Return. Serve owns the terminal: a pty session is
+// written through the runtime in this process, a tmux session through local
+// send-keys.
+func (s *Server) deliverSteer(ctx context.Context, id, text string) (time.Time, error) {
 	sess, ok := s.steerSession(ctx, id)
 	if !ok {
-		return fmt.Errorf("steer: session %s not found", id)
+		return time.Time{}, fmt.Errorf("steer: session %s not found", id)
 	}
 	if !sess.IsPTY() {
 		if s.remote == nil {
-			return errors.New("steer: no executor for tmux delivery")
+			return time.Time{}, errors.New("steer: no executor for tmux delivery")
 		}
 		if sess.TmuxSession == "" {
-			return fmt.Errorf("steer: session %s has no tmux session", id)
+			return time.Time{}, fmt.Errorf("steer: session %s has no tmux session", id)
 		}
-		return usecase.SendPrompt(ctx, s.remote, sess.TmuxSession, sess.ID, text)
+		// The script returns right after its Enter, so this is the submit time
+		// to within a round trip.
+		if err := usecase.SendPromptTagged(ctx, s.remote, sess.TmuxSession, sess.ID, steerPromptTag, text); err != nil {
+			return time.Time{}, err
+		}
+		return time.Now(), nil
 	}
 	if s.pty == nil {
-		return errors.New("steer: pty runtime is not running")
+		return time.Time{}, errors.New("steer: pty runtime is not running")
 	}
-	if err := s.pty.Write(sess.ID, []byte(text)); err != nil {
-		return err
+	write := func(b string) func(context.Context) error {
+		return func(context.Context) error { return s.pty.Write(sess.ID, []byte(b)) }
 	}
-	if err := sleepSteer(ctx, steerSubmitSettle); err != nil {
-		return err
-	}
-	if err := s.pty.Write(sess.ID, []byte("\r")); err != nil {
-		return err
-	}
-	// The note is typed; a failed confirm is not a failed delivery, since
-	// retrying would type it a second time.
-	for range steerConfirmChecks {
-		if sleepSteer(ctx, steerConfirmEvery) != nil {
-			return nil
-		}
-		screen, err := s.pty.CaptureScreen(sess.ID)
-		if err != nil || !usecase.PromptStillInComposer(screen, text) {
-			return nil
-		}
-		if err := s.pty.Write(sess.ID, []byte("\r")); err != nil {
-			return nil
-		}
-	}
-	return nil
+	return usecase.TypeAndSubmit(ctx, text, steerSubmitTiming, write(text), write("\r"),
+		func(context.Context) (string, error) { return s.pty.CaptureScreen(sess.ID) })
 }
 
 // todoList is the session's current to-do list, empty before EnableTodos.
@@ -145,15 +129,4 @@ func (s *Server) todoList(id string) (domain.TodoList, error) {
 		return domain.TodoList{SessionID: id}, nil
 	}
 	return s.todos.Get(id)
-}
-
-func sleepSteer(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }

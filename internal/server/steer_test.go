@@ -80,6 +80,7 @@ type fakeSteerTarget struct {
 	ready      bool
 	held       string
 	deliverErr error
+	submitAt   time.Time
 	delivered  []string
 	list       domain.TodoList
 }
@@ -90,14 +91,14 @@ func (f *fakeSteerTarget) steerReady(context.Context, string, time.Time) (bool, 
 	return f.ready, f.held
 }
 
-func (f *fakeSteerTarget) deliverSteer(_ context.Context, _, text string) error {
+func (f *fakeSteerTarget) deliverSteer(_ context.Context, _, text string) (time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.deliverErr != nil {
-		return f.deliverErr
+		return time.Time{}, f.deliverErr
 	}
 	f.delivered = append(f.delivered, text)
-	return nil
+	return f.submitAt, nil
 }
 
 func (f *fakeSteerTarget) todoList(string) (domain.TodoList, error) {
@@ -398,4 +399,23 @@ func TestSteererNilKickAndForget(t *testing.T) {
 	var s *steerer
 	s.Kick("s1")
 	s.Forget("s1")
+}
+
+// The delivery time is when the note was submitted, not when the target
+// finished confirming it: agent reports in between are about this note.
+func TestSteererStampsSubmitTime(t *testing.T) {
+	submitAt := time.Now().Add(-10 * time.Second)
+	store := &fakeSteerStore{recs: []domain.SteerRecord{{ID: 1, SessionID: "s1", Author: domain.AuthorUser, Text: "n"}}, nextID: 1}
+	target := &fakeSteerTarget{ready: true, submitAt: submitAt}
+	s := newSteerer(store, target, nil, testSteerWindow)
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.deliver(context.Background(), "s1")
+	if got := s.Status("s1").LastDeliveredAt; !got.Equal(submitAt) {
+		t.Fatalf("LastDeliveredAt = %v, want the submit time %v", got, submitAt)
+	}
+	if got := store.records()[0].DeliveredAt; !got.Equal(submitAt) {
+		t.Fatalf("stored DeliveredAt = %v, want %v", got, submitAt)
+	}
 }

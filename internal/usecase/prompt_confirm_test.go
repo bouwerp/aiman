@@ -242,3 +242,59 @@ func TestPromptStillInComposer(t *testing.T) {
 		t.Fatal("an empty prompt disables the check")
 	}
 }
+
+// Serve types into its own PTY with the same budget the remote path learned it
+// needs; the defaults are that path's values, not a second set to drift.
+func TestDefaultSubmitTimingMatchesConfirmedPath(t *testing.T) {
+	got := DefaultSubmitTiming()
+	if got.Initial != initialSettle || got.Settle != submitSettle || got.Attempts != submitAttempts {
+		t.Fatalf("DefaultSubmitTiming = %+v, want initial %s settle %s attempts %d", got, initialSettle, submitSettle, submitAttempts)
+	}
+}
+
+// TypeAndSubmit reports when Return was first pressed, so a caller can tell
+// agent reports made after the submit from those made before it.
+func TestTypeAndSubmitRetriesAndReportsFirstReturn(t *testing.T) {
+	prompt := "Review PR 439 and report what you find"
+	panes := []string{"› " + prompt, "› " + prompt, "• Working\n› "}
+	var typed int
+	var enters []time.Time
+	capture := func(context.Context) (string, error) {
+		p := panes[0]
+		if len(panes) > 1 {
+			panes = panes[1:]
+		}
+		return p, nil
+	}
+	timing := SubmitTiming{Initial: time.Millisecond, Settle: time.Millisecond, Attempts: 6}
+	submitAt, err := TypeAndSubmit(context.Background(), prompt, timing,
+		func(context.Context) error { typed++; return nil },
+		func(context.Context) error { enters = append(enters, time.Now()); return nil },
+		capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typed != 1 || len(enters) != 3 {
+		t.Fatalf("typed %d, enters %d; want 1 and 3", typed, len(enters))
+	}
+	if submitAt.After(enters[0]) || enters[0].Sub(submitAt) > 50*time.Millisecond {
+		t.Fatalf("submitAt %v, first Return %v: want the stamp just before the first Return", submitAt, enters[0])
+	}
+}
+
+// The attempt budget caps Returns when the composer never clears.
+func TestTypeAndSubmitStopsAtAttemptBudget(t *testing.T) {
+	prompt := "stuck forever prompt text"
+	enters := 0
+	timing := SubmitTiming{Initial: time.Millisecond, Settle: time.Millisecond, Attempts: 4}
+	_, err := TypeAndSubmit(context.Background(), prompt, timing,
+		func(context.Context) error { return nil },
+		func(context.Context) error { enters++; return nil },
+		func(context.Context) (string, error) { return "› " + prompt, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enters != 4 {
+		t.Fatalf("enters = %d, want 4", enters)
+	}
+}

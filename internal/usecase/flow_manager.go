@@ -177,11 +177,22 @@ func DeliverInitialPrompt(ctx context.Context, remote promptDeliverer, tmuxName,
 // file-backed send-keys path. It does not wait for agent startup and does
 // not detach, so the caller can wait on pane state afterwards.
 func SendPrompt(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, prompt string) error {
+	return SendPromptTagged(ctx, remote, tmuxName, sessionID, "", prompt)
+}
+
+// SendPromptTagged is SendPrompt with its own prompt file per tag, so senders
+// that can run at the same time for one session (the laptop and serve's
+// steering) never overwrite or delete each other's file. An empty tag is the
+// plain SendPrompt file.
+func SendPromptTagged(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, tag, prompt string) error {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil
 	}
 	promptPath := fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
+	if tag = strings.TrimSpace(tag); tag != "" {
+		promptPath += "-" + tag
+	}
 	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
 		return err
 	}

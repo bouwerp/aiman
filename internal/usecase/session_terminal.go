@@ -285,33 +285,17 @@ func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remo
 		log.Printf("prompt-deliver session=%s send failed after %s: %v", id, time.Since(start), err)
 		return err
 	}
-	marker = submitMarker(marker)
-	if marker == "" {
-		log.Printf("prompt-deliver session=%s sent (no marker to confirm)", id)
+	label := "prompt-deliver session=" + id
+	if submitMarker(marker) == "" {
+		log.Printf("%s sent (no marker to confirm)", label)
 		return nil
 	}
-	for attempt := 1; attempt < submitAttempts; attempt++ {
-		if err := sleepCtx(ctx, submitSettle); err != nil {
-			log.Printf("prompt-deliver session=%s confirm canceled after attempt %d/%d: %v", id, attempt, submitAttempts, err)
-			return nil
-		}
-		out, err := CapturePTYPane(ctx, remote, id, 0)
-		if err != nil {
-			log.Printf("prompt-deliver session=%s pane unreadable at attempt %d/%d, assuming delivered: %v", id, attempt, submitAttempts, err)
-			return nil
-		}
-		if !composerStillHolds(out, marker) {
-			log.Printf("prompt-deliver session=%s submitted after %d/%d attempts (%s)", id, attempt, submitAttempts, time.Since(start))
-			return nil
-		}
-		log.Printf("prompt-deliver session=%s composer still holds prompt at attempt %d/%d, retrying Enter", id, attempt, submitAttempts)
-		if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-			"aiman pty input %q --key enter", id)); err != nil {
-			log.Printf("prompt-deliver session=%s retry Enter failed at attempt %d/%d: %v", id, attempt, submitAttempts, err)
-			return nil
-		}
-	}
-	log.Printf("prompt-deliver session=%s gave up after %d attempts (%s) — composer may still hold the prompt", id, submitAttempts, time.Since(start))
+	confirmSubmit(ctx, label, start, marker, DefaultSubmitTiming(),
+		func(ctx context.Context) (string, error) { return CapturePTYPane(ctx, remote, id, 0) },
+		func(ctx context.Context) error {
+			_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty input %q --key enter", id))
+			return err
+		})
 	return nil
 }
 
@@ -325,26 +309,93 @@ func sendTmuxKeysConfirmed(ctx context.Context, remote PaneCapturer, tmuxName, r
 		tmuxName, remotePath, tmuxName)); err != nil {
 		return err
 	}
-	marker = submitMarker(marker)
-	if marker == "" {
-		return nil
+	confirmSubmit(ctx, "", time.Now(), marker, DefaultSubmitTiming(),
+		func(ctx context.Context) (string, error) { return remote.CaptureTmuxPane(ctx, tmuxName) },
+		func(ctx context.Context) error {
+			_, err := remote.Execute(ctx, fmt.Sprintf("tmux send-keys -t %q Enter", tmuxName))
+			return err
+		})
+	return nil
+}
+
+// SubmitTiming is the budget for submitting a typed prompt: the pause before
+// the first Return, the pause before each check that the composer cleared,
+// and how many Returns the prompt may get, the first included.
+type SubmitTiming struct {
+	Initial  time.Duration
+	Settle   time.Duration
+	Attempts int
+}
+
+// DefaultSubmitTiming is the budget the confirmed prompt paths use. See
+// submitAttempts and initialSettle for why it is this long.
+func DefaultSubmitTiming() SubmitTiming {
+	return SubmitTiming{Initial: initialSettle, Settle: submitSettle, Attempts: submitAttempts}
+}
+
+// TypeAndSubmit types a prompt with typeText, waits timing.Initial, presses
+// Return with enter, and presses it again while capture shows the prompt still
+// in the composer, up to timing.Attempts Returns in all. It returns the time
+// taken just before the first Return, so a caller can tell agent reports about
+// this prompt from earlier ones. Errors are from typing or the first Return;
+// confirmation is best-effort, since retrying would type the prompt twice.
+func TypeAndSubmit(ctx context.Context, prompt string, timing SubmitTiming,
+	typeText, enter func(context.Context) error,
+	capture func(context.Context) (string, error),
+) (time.Time, error) {
+	start := time.Now()
+	if err := typeText(ctx); err != nil {
+		return time.Time{}, err
 	}
-	for attempt := 1; attempt < submitAttempts; attempt++ {
-		if err := sleepCtx(ctx, submitSettle); err != nil {
-			return nil
+	if err := sleepCtx(ctx, timing.Initial); err != nil {
+		return time.Time{}, err
+	}
+	submitAt := time.Now()
+	if err := enter(ctx); err != nil {
+		return time.Time{}, err
+	}
+	confirmSubmit(ctx, "", start, prompt, timing, capture, enter)
+	return submitAt, nil
+}
+
+// confirmSubmit is the shared confirm loop after the first Return: while the
+// tail of prompt still sits on the composer line, wait and press Return again.
+// A non-empty label logs each outcome. It never fails: a pane that cannot be
+// read is not a reason to fail a delivery that may well have worked.
+func confirmSubmit(ctx context.Context, label string, start time.Time, prompt string, timing SubmitTiming,
+	capture func(context.Context) (string, error),
+	enter func(context.Context) error,
+) {
+	logf := func(format string, args ...any) {
+		if label != "" {
+			log.Printf(label+" "+format, args...)
 		}
-		out, err := remote.CaptureTmuxPane(ctx, tmuxName)
+	}
+	marker := submitMarker(prompt)
+	if marker == "" {
+		return
+	}
+	for attempt := 1; attempt < timing.Attempts; attempt++ {
+		if err := sleepCtx(ctx, timing.Settle); err != nil {
+			logf("confirm canceled after attempt %d/%d: %v", attempt, timing.Attempts, err)
+			return
+		}
+		out, err := capture(ctx)
 		if err != nil {
-			return nil
+			logf("pane unreadable at attempt %d/%d, assuming delivered: %v", attempt, timing.Attempts, err)
+			return
 		}
 		if !composerStillHolds(out, marker) {
-			return nil
+			logf("submitted after %d/%d attempts (%s)", attempt, timing.Attempts, time.Since(start))
+			return
 		}
-		if _, err := remote.Execute(ctx, fmt.Sprintf("tmux send-keys -t %q Enter", tmuxName)); err != nil {
-			return nil
+		logf("composer still holds prompt at attempt %d/%d, retrying Enter", attempt, timing.Attempts)
+		if err := enter(ctx); err != nil {
+			logf("retry Enter failed at attempt %d/%d: %v", attempt, timing.Attempts, err)
+			return
 		}
 	}
-	return nil
+	logf("gave up after %d attempts (%s) — composer may still hold the prompt", timing.Attempts, time.Since(start))
 }
 
 // PromptStillInComposer reports whether prompt is still sitting unsent on the
