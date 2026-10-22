@@ -23,6 +23,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/server"
+	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
@@ -95,6 +96,8 @@ func runServe() error {
 	ptyMgr := ptyruntime.NewManager()
 	defer ptyMgr.CloseAll()
 	srv := server.New(ln, db, localExec, flow, store, ptyMgr, version)
+	todos := todo.NewFiles(filepath.Join(dir, "todos"))
+	srv.EnableTodos(todos, db)
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
 }

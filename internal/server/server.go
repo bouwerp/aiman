@@ -55,6 +55,9 @@ type Server struct {
 	steer *steerer
 	// target is the session side of steering, the Server itself outside tests.
 	target steerTarget
+	// todoLocks holds one *sync.Mutex per session id around a to-do write and
+	// its render.
+	todoLocks sync.Map
 }
 
 // todoStore is the to-do persistence serve needs: the shared Store plus the
@@ -89,6 +92,9 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 }
 
 func (s *Server) Serve(ctx context.Context) error {
+	if s.steer != nil {
+		go s.steer.Run(ctx)
+	}
 	go func() {
 		<-ctx.Done()
 		_ = s.ln.Close()
@@ -187,6 +193,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleContextPack(ctx, req)
 	case "context.stats":
 		return s.handleContextStats(ctx, req)
+	case "todo.get", "todo.summary", "todo.add", "todo.update", "todo.move", "todo.remove", "todo.mirror", "steer.send":
+		return s.handleTodo(ctx, req)
 	case "pty.create":
 		return s.handlePTYCreate(ctx, req)
 	case "pty.list":
