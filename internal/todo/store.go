@@ -38,6 +38,7 @@ type fileData struct {
 	List       domain.TodoList `json:"list"`
 	NextID     int             `json:"next_id"`
 	Tombstones []Tombstone     `json:"tombstones,omitempty"`
+	Retexts    []Retext        `json:"retexts,omitempty"`
 }
 
 // Files stores each list as <root>/<session id>.json.
@@ -110,7 +111,7 @@ func (f *Files) Get(sessionID string) (domain.TodoList, error) {
 // Mutate applies fn to a copy of the list, normalises and stamps the result,
 // and writes it when anything changed.
 func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList) error) (domain.TodoList, Change, error) {
-	return f.update(sessionID, author, func(l *domain.TodoList, _ []Tombstone, _ time.Time) error {
+	return f.update(sessionID, author, func(l *domain.TodoList, _ fileData, _ time.Time) error {
 		return fn(l)
 	})
 }
@@ -119,15 +120,15 @@ func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*doma
 // (see Merge) and writes it as an agent change. deliveredAt is when the last
 // steering note reached the agent.
 func (f *Files) Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliveredAt time.Time) (domain.TodoList, Change, error) {
-	return f.update(sessionID, domain.AuthorAgent, func(l *domain.TodoList, tombs []Tombstone, now time.Time) error {
-		*l = Merge(*l, tombs, snap, deliveredAt, now)
+	return f.update(sessionID, domain.AuthorAgent, func(l *domain.TodoList, d fileData, now time.Time) error {
+		*l = MergeWithRetexts(*l, d.Tombstones, d.Retexts, snap, deliveredAt, now)
 		return nil
 	})
 }
 
 // update is the shared write path of Mutate and Mirror. A change that only
 // alters NotInAgent is written and bumps Rev but carries no ops.
-func (f *Files) update(sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList, []Tombstone, time.Time) error) (domain.TodoList, Change, error) {
+func (f *Files) update(sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList, fileData, time.Time) error) (domain.TodoList, Change, error) {
 	id, path, err := f.path(sessionID)
 	if err != nil {
 		return domain.TodoList{}, Change{}, err
@@ -145,7 +146,7 @@ func (f *Files) update(sessionID string, author domain.TodoAuthor, fn func(*doma
 	next.Items = append([]domain.TodoItem(nil), prev.Items...)
 	next.NotInAgent = append([]string(nil), prev.NotInAgent...)
 	now := f.now()
-	if err := fn(&next, d.Tombstones, now); err != nil {
+	if err := fn(&next, d, now); err != nil {
 		return prev, Change{}, err
 	}
 	next.SessionID = sessionID
@@ -170,6 +171,9 @@ func (f *Files) update(sessionID string, author domain.TodoAuthor, fn func(*doma
 		return prev, Change{Author: author, Rev: prev.Rev}, nil
 	}
 	d.Tombstones = addTombstones(d.Tombstones, prev, next, now)
+	if author != domain.AuthorAgent {
+		d.Retexts = addRetexts(d.Retexts, prev, next, now)
+	}
 	next.Rev = prev.Rev + 1
 	next.UpdatedAt = now
 	d.List = next
@@ -291,6 +295,23 @@ func addTombstones(ts []Tombstone, prev, next domain.TodoList, now time.Time) []
 		ts = append([]Tombstone(nil), ts[len(ts)-maxTombstones:]...)
 	}
 	return ts
+}
+
+// addRetexts records the old text of every item whose text changed.
+func addRetexts(rs []Retext, prev, next domain.TodoList, now time.Time) []Retext {
+	old := make(map[string]string, len(prev.Items))
+	for _, it := range prev.Items {
+		old[it.ID] = it.Text
+	}
+	for _, it := range next.Items {
+		if t, ok := old[it.ID]; ok && t != it.Text {
+			rs = append(rs, Retext{ID: it.ID, OldText: Normalize(t), At: now})
+		}
+	}
+	if len(rs) > maxTombstones {
+		rs = append([]Retext(nil), rs[len(rs)-maxTombstones:]...)
+	}
+	return rs
 }
 
 func writeAtomic(dir, path string, d fileData) error {

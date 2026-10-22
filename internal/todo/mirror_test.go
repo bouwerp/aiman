@@ -313,3 +313,76 @@ func TestMirrorKeepsOneActive(t *testing.T) {
 		t.Fatalf("items = %+v", l.Items)
 	}
 }
+
+// clockFiles returns a store whose clock reads *at.
+func clockFiles(t *testing.T, at *time.Time) *Files {
+	t.Helper()
+	s := NewFiles(t.TempDir())
+	s.now = func() time.Time { return *at }
+	return s
+}
+
+func TestMirrorKeepsUndeliveredUserActive(t *testing.T) {
+	clock := before
+	s := clockFiles(t, &clock)
+	if _, _, err := s.Mirror("s1", []domain.TodoSnapshotItem{snapItem("Write code", domain.TodoPending)}, before); err != nil {
+		t.Fatal(err)
+	}
+	clock = after
+	if _, _, err := s.Mutate("s1", domain.AuthorUser, func(l *domain.TodoList) error {
+		l.Items = append(l.Items, domain.TodoItem{Text: "Deploy", State: domain.TodoActive})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clock = mergeNow
+	l, _, err := s.Mirror("s1", []domain.TodoSnapshotItem{
+		snapItem("Write code", domain.TodoActive), snapItem("Next step", domain.TodoActive),
+	}, delivered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := byID(t, l, "t2").State; st != domain.TodoActive {
+		t.Fatalf("user's active item demoted: %+v", l.Items)
+	}
+	for _, it := range l.Items {
+		if it.ID != "t2" && it.State == domain.TodoActive {
+			t.Fatalf("second active item: %+v", l.Items)
+		}
+	}
+}
+
+func TestMirrorMatchesUndeliveredRetext(t *testing.T) {
+	clock := before
+	s := clockFiles(t, &clock)
+	if _, _, err := s.Mutate("s1", domain.AuthorUser, add("Run preprod --check")); err != nil {
+		t.Fatal(err)
+	}
+	clock = after
+	if _, _, err := s.Mutate("s1", domain.AuthorUser, func(l *domain.TodoList) error {
+		l.Items[0].Text = "Run preprod --check --dry"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clock = mergeNow
+	l, _, err := s.Mirror("s1", []domain.TodoSnapshotItem{snapItem("Run preprod --check", domain.TodoActive)}, delivered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Items) != 1 || l.Items[0].Text != "Run preprod --check --dry" || l.Items[0].State != domain.TodoPending {
+		t.Fatalf("items = %+v", l.Items)
+	}
+	if len(l.NotInAgent) != 0 {
+		t.Fatalf("NotInAgent = %v", l.NotInAgent)
+	}
+}
+
+func TestMergeRetextRecordOnlyWhileUndelivered(t *testing.T) {
+	list := domain.TodoList{Items: []domain.TodoItem{item("t1", "Run preprod --check --dry", domain.TodoPending, domain.AuthorUser, before)}}
+	rec := []Retext{{ID: "t1", OldText: Normalize("Run preprod --check"), At: before}}
+	got := MergeWithRetexts(list, nil, rec, []domain.TodoSnapshotItem{snapItem("Run preprod --check", domain.TodoActive)}, delivered, mergeNow)
+	if len(got.Items) != 2 {
+		t.Fatalf("delivered retext should not match: %+v", got.Items)
+	}
+}
