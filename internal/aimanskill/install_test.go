@@ -16,6 +16,14 @@ func TestSkillDocumentsContextCLI(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsTodoCLI(t *testing.T) {
+	for _, span := range []string{"aiman todo list", "aiman todo done", "[aiman]", ".aiman_todo.md"} {
+		if !strings.Contains(Text, span) {
+			t.Fatalf("skill missing %q", span)
+		}
+	}
+}
+
 func TestEnsureFileInstallsWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "skills", "aiman", "SKILL.md")

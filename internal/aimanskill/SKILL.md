@@ -59,6 +59,25 @@ aiman session read reviewer --lines 120
 
 `--until blocked` means `waiting_input`. Do not prompt a session that is already waiting for input unless the user asked you to answer it (`--force`).
 
+## Your to-do list
+
+Every session has a to-do list owned by serve and shown to the user. At the start of a task, write your plan into it with `aiman todo add`, and keep it current.
+
+```bash
+aiman todo list
+aiman todo add "Write the failing test"
+aiman todo done t3
+aiman todo start t4
+```
+
+`aiman todo list` shows ids (`t3 ▸ …`). Use `aiman todo add|start|done|drop|edit|move|rm` with those ids. Keep exactly one item active. `--session` defaults to `$AIMAN_ID`.
+
+This is the list the user sees and edits, so use it even if your own to-do tool also exists. Claude's `TodoWrite` and Tasks tools are mirrored when used, but the CLI is the list to trust. Do not rely on that mirror. Codex has no to-do mirror, so Codex uses the CLI only.
+
+Messages starting `[aiman]` come from the operator or aiman. Follow them and update the list with the ids they name.
+
+`.aiman_todo.md` is generated. Do not edit or commit it.
+
 ## Run a command in another terminal
 
 Do not `session create` a coding agent to run tests or a server. Create a PTY in this directory, submit the command, wait for output, then read it:

@@ -57,6 +57,7 @@ internal/
   contextstore/
     files.go        — markdown+YAML store under ~/.aiman/context/
   ptyruntime/       — built-in PTY session runtime used by aiman serve
+  todo/             — per-session to-do lists: JSON store, agent-snapshot mirror, `.aiman_todo.md` render
   usecase/
     flow_manager.go — CreateSession (the main session-creation orchestrator)
     session_discoverer.go — discovers sessions from live remote (tmux/git/mutagen)
@@ -91,6 +92,7 @@ A `domain.Session` holds:
 | `ID` | UUID — primary key everywhere |
 | `IssueKey` | JIRA key, e.g. `PROJ-123` |
 | `Branch` | git branch name |
+| `BaseBranch` | ref the worktree branch was cut from; basis for diffs against the base |
 | `RepoName` | `owner/repo` GitHub slug |
 | `RemoteHost` | SSH host (from config) |
 | `WorktreePath` | absolute path to git worktree on the remote |
@@ -122,7 +124,7 @@ field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 
 **Why this matters:** The session discoverer (`Discover`) builds sessions from live remote state — it can only know what it can read from a running tmux process. Fields like `Branch`, `AgentName`, `WorktreePath`, and `WorkingDirectory` will often be empty in discovered sessions. Before this fix, discovery was silently overwriting the DB with empty strings on every scan cycle, causing restart to fail with "session has no working directory".
 
-**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `mutagen_sync_id`, `local_path`, `agent_name`, `agent_session_id`, `agent_session_path`, `agent_title`, `agent_ended`, `hook_state`, `hook_state_message`, `hook_state_source`.
+**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `base_branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `mutagen_sync_id`, `local_path`, `agent_name`, `agent_session_id`, `agent_session_path`, `agent_title`, `agent_ended`, `hook_state`, `hook_state_message`, `hook_state_source`.
 
 **Fields always overwritten:** `status`, `updated_at`.
 
@@ -185,6 +187,14 @@ Admin Menu (`m`) → **Agent API** is the settings page for `aiman serve` (one r
 Session create also calls `ensureRemoteServer` if `~/.aiman/aiman.sock` is missing.
 
 On start, `aiman serve` installs or updates the bundled skill (`internal/aimanskill`) in user-level agent skill dirs under `$HOME` and in each known session worktree, and registers native-session hooks (`internal/agenthook`) in each installed agent's config. Identity agents (Claude, Grok, Cursor, Codex, Copilot, agy, Muse Code) report session id, `SessionEnd`, and `idle_prompt` where the runtime has it. Muse Code uses `SessionStart`, `Stop`, and `UserPromptSubmit` in `~/.config/muse/settings.json` (`schema_version` 1). Kilo Code and Pi also report lifecycle state. Deep Code has no hook API: `deepcode-launch.sh` runs `aiman session deepcode-watch` on `~/.deepcode/projects/<code>/sessions-index.json`, then the CLI. Resume is `deepcode --resume <uuid>`. Model and effort are `DEEPCODE_MODEL` and `DEEPCODE_REASONING_EFFORT`. Permissions stay the user's `defaultMode`. `session.wait` uses a hook report newer than 2 minutes instead of `pane.Classify`. Session create still writes the worktree skill copy. Ageni is not hooked.
+
+`session.register` copies laptop sessions into serve's database. Identity fields come from the payload. When a row already exists, hook state, `AgentEnded`, `AgentTitle`, and `Status` stay on that row. `LocalPath`, `MutagenSyncID`, `Tunnels`, and `AWSConfig` are laptop-only and are dropped. Empty ids and ids with the `pending-` prefix are skipped.
+
+To-do lists are `internal/todo`, stored as `~/.aiman/todos/<id>.json`. `EnableTodos` restores the steering queue from sqlite `steer_notes`, then turns writes on. Handlers refuse to-do writes while the store is unset. `MutateTodos` applies the change under a per-session lock, renders `.aiman_todo.md` in the session working directory when one is set, publishes `todo_changed`, and queues a steering note unless the agent made the change. `todo.mirror` folds an agent task-list snapshot into the same list. A session writing its own list, and every `todo.mirror`, is the agent. Other callers are the user. `steer.send` may use author `aiman`. A session cannot steer itself. The store keeps at most one item active.
+
+Steering queues notes for the agent: free text, or the formatted summary of someone else's list change. Notes the agent authored are dropped, as are changes that only touch `Ref` links. A window of 800ms collapses what arrived into at most two persisted notes (one for list ops, one for joined text). The queue is in sqlite, so a serve restart neither loses nor repeats undelivered notes. Delivery waits until the agent is at a prompt. `AgentEnded` holds the note (`ended`). A hook report of `idle`, or `waiting_input` from an idle prompt, opens the gate only when `HookStateAt` is after the last delivery. Other `waiting_input` is `dialog`. Anything else reported by the hook is `working`. With no usable hook report, only a high-confidence idle pane classification opens the gate, and only more than 3 seconds after the last delivery. A hook report calls `Kick` so a new state can release a held note. `session.forget` drops that session's steering queue. It does not delete `~/.aiman/todos/<id>.json`.
+
+The event hub (`internal/server/events.go`) fans each `Publish` out to every `session.events` subscriber. Each subscriber buffers 64 events. A full buffer drops the event, so a stalled client cannot block a socket handler. A to-do write publishes `todo_changed` with the list `Rev`. The steerer publishes `steer` with the queued count, and `DeliveredAt` once a note is submitted. The type names `usage`, `notify`, and `verify` are reserved on the same stream.
 
 SSH `systemctl --user` needs `XDG_RUNTIME_DIR` and the session bus; the scripts set those. Linger is enabled *before* `systemctl --user` so a first SSH to a host with no lingering user instance can still install.
 
@@ -317,6 +327,8 @@ Key config fields:
 9. **AWS credential messages are routed globally, not by view state**: `awsCredLoadedMsg`, `awsCredCheckResultMsg`, `awsCredRenewResultMsg`, `awsCredBatchRenewResultMsg`, `awsCredRemoveResultMsg` and `awsCredRenameResultMsg` are handled in `Update` *before* the `switch m.state` dispatch and forwarded via `routeAWSCredentialsMsg`. Renewals and probes are bubbletea commands that keep running after the user leaves the page; routing them by view state drops the results (the remote gets new credentials but the model never learns and never re-verifies). Do not move them into `handleAWSCredentialsUpdate`. For the same reason, the 30s repaint tick (`awsCredTickMsg`) is owned by the dashboard, not by `AWSCredentialsModel.Init` — per-visit ticks would stack one chain per page visit. `enterAWSCredentials` must keep a `Busy()` model rather than rebuilding it.
 
 10. **AWS_PROFILE is sanitised, not trusted**: `usecase.SharedSessionAWSEnv` exports a profile only if it survives `SanitizeSessionAWSProfile` — legacy `aiman-<id>` names and names missing from `~/.aws` are dropped so the session falls back to the default credential chain rather than pointing at a profile that cannot resolve. Do not bypass it by setting `AWS_PROFILE` directly in tmux env code.
+
+11. **`AgentEnded` is not cleared by `Save`**: `agent_ended` is COALESCE-protected, and an unset `AgentEnded` is written as an empty string, so saving `AgentEnded: false` leaves a stored `"1"` in place. `agenthook.ApplyReport` clears the in-memory flag only when a later report carries a lifecycle state and is not itself an end. A report with no state returns first and leaves the latch set. `handleReportAgentSession` saves, then must call `Repository.ClearAgentEnded` when the flag flipped from true to false. That method writes `agent_ended = ''` directly. Dropping the call leaves the row ended after the process has reported it is alive. `ClearNativeAgentIdentity` also blanks `agent_ended`, but only as part of wiping vendor identity on an agent switch. It is not the report path.
 
 ---
 
