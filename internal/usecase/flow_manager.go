@@ -196,11 +196,15 @@ func SendPromptTagged(ctx context.Context, remote promptDeliverer, tmuxName, ses
 	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
 		return err
 	}
-	script := fmt.Sprintf(
-		"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter; rm -f %q",
-		tmuxName, promptPath, tmuxName, promptPath,
-	)
-	_, err := remote.Execute(ctx, script)
+	// The send's status is what comes back. Removing the file is a separate
+	// command so a failed send-keys cannot be masked by a successful rm.
+	_, err := remote.Execute(ctx, fmt.Sprintf(
+		"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter",
+		tmuxName, promptPath, tmuxName,
+	))
+	rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, _ = remote.Execute(rmCtx, fmt.Sprintf("rm -f %q", promptPath))
 	return err
 }
 

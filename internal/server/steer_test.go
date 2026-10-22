@@ -419,3 +419,133 @@ func TestSteererStampsSubmitTime(t *testing.T) {
 		t.Fatalf("stored DeliveredAt = %v, want %v", got, submitAt)
 	}
 }
+
+type errMarkStore struct {
+	fakeSteerStore
+	err   error
+	calls int
+}
+
+func (e *errMarkStore) MarkSteerNotesDelivered(ctx context.Context, ids []int64, at time.Time) error {
+	e.calls++
+	if e.err != nil {
+		return e.err
+	}
+	return e.fakeSteerStore.MarkSteerNotesDelivered(ctx, ids, at)
+}
+
+func TestSteererMarkFailureKeepsTheNote(t *testing.T) {
+	store := &errMarkStore{err: errors.New("disk full")}
+	store.recs = []domain.SteerRecord{{ID: 1, SessionID: "s1", Author: domain.AuthorUser, Text: "keep me"}}
+	store.nextID = 1
+	target := &fakeSteerTarget{ready: true}
+	log := &eventLog{}
+	s := newSteerer(store, target, log.publish, testSteerWindow)
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.deliver(context.Background(), "s1")
+	if st := s.Status("s1"); st.Queued != 1 || !strings.Contains(st.LastError, "disk full") {
+		t.Fatalf("status = %+v, want the note still queued", st)
+	}
+	if recs := store.records(); len(recs) != 1 || !recs[0].DeliveredAt.IsZero() {
+		t.Fatalf("store records = %+v", recs)
+	}
+	for _, ev := range log.all() {
+		if ev.DeliveredAt != "" {
+			t.Fatalf("published delivery despite a failed mark: %+v", ev)
+		}
+	}
+	s.deliver(context.Background(), "s1")
+	if got := target.deliveries(); len(got) != 1 {
+		t.Fatalf("deliveries = %q, want the note typed once", got)
+	}
+}
+
+// steerReady burning the whole budget must not cancel the submit that follows.
+type blockingReady struct {
+	fakeSteerTarget
+	deliverCanceled bool
+}
+
+func (b *blockingReady) steerReady(ctx context.Context, id string, last time.Time) (bool, string) {
+	<-ctx.Done()
+	return true, ""
+}
+
+func (b *blockingReady) deliverSteer(ctx context.Context, id, text string) (time.Time, error) {
+	if err := ctx.Err(); err != nil {
+		b.deliverCanceled = true
+		return time.Time{}, err
+	}
+	return b.fakeSteerTarget.deliverSteer(ctx, id, text)
+}
+
+func TestDeliverSubmitHasItsOwnBudget(t *testing.T) {
+	prev := steerOpTimeout
+	steerOpTimeout = 40 * time.Millisecond
+	t.Cleanup(func() { steerOpTimeout = prev })
+
+	store := &fakeSteerStore{recs: []domain.SteerRecord{{ID: 1, SessionID: "s1", Author: domain.AuthorUser, Text: "n"}}, nextID: 1}
+	target := &blockingReady{fakeSteerTarget: fakeSteerTarget{ready: true}}
+	s := newSteerer(store, target, nil, testSteerWindow)
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.deliver(context.Background(), "s1")
+	if target.deliverCanceled {
+		t.Fatal("deliverSteer ran on the context steerReady had already exhausted")
+	}
+	if got := target.deliveries(); len(got) != 1 {
+		t.Fatalf("deliveries = %q, want the note submitted on a fresh budget", got)
+	}
+}
+
+// A mark after the submit context has ended must still persist, and must not
+// claim delivery when it cannot.
+type cancelMarkStore struct {
+	fakeSteerStore
+	sawCanceled bool
+}
+
+func (c *cancelMarkStore) MarkSteerNotesDelivered(ctx context.Context, ids []int64, at time.Time) error {
+	if ctx.Err() != nil {
+		c.sawCanceled = true
+		return ctx.Err()
+	}
+	return c.fakeSteerStore.MarkSteerNotesDelivered(ctx, ids, at)
+}
+
+type burnDeliver struct {
+	fakeSteerTarget
+}
+
+func (b *burnDeliver) deliverSteer(ctx context.Context, id, text string) (time.Time, error) {
+	<-ctx.Done()
+	if _, err := b.fakeSteerTarget.deliverSteer(context.Background(), id, text); err != nil {
+		return time.Time{}, err
+	}
+	return time.Now().Add(-4 * time.Second), nil
+}
+
+func TestMarkDoesNotUseTheExpiredDeliveryContext(t *testing.T) {
+	prev := steerOpTimeout
+	steerOpTimeout = 40 * time.Millisecond
+	t.Cleanup(func() { steerOpTimeout = prev })
+
+	store := &cancelMarkStore{}
+	store.recs = []domain.SteerRecord{{ID: 1, SessionID: "s1", Author: domain.AuthorUser, Text: "n"}}
+	store.nextID = 1
+	target := &burnDeliver{fakeSteerTarget: fakeSteerTarget{ready: true}}
+	s := newSteerer(store, target, nil, testSteerWindow)
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.deliver(context.Background(), "s1")
+	if store.sawCanceled {
+		t.Fatal("mark ran on the expired delivery context")
+	}
+	if recs := store.records(); len(recs) != 1 || recs[0].DeliveredAt.IsZero() {
+		t.Fatalf("records = %+v, want the note marked delivered", recs)
+	}
+}

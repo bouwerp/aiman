@@ -133,16 +133,21 @@ func TestSendPromptDoesNotInterpolatePrompt(t *testing.T) {
 	if string(f.writeContent) != malicious {
 		t.Fatalf("prompt not written verbatim: %q", f.writeContent)
 	}
-	if len(f.execCmds) != 1 {
-		t.Fatalf("expected one Execute, got %d", len(f.execCmds))
+	if len(f.execCmds) == 0 {
+		t.Fatal("expected the send to run")
 	}
-	for _, frag := range []string{"$(touch /tmp/pwned)", "`id`", "do the thing"} {
-		if strings.Contains(f.execCmds[0], frag) {
-			t.Fatalf("prompt leaked into command (%q): %s", frag, f.execCmds[0])
+	for _, cmd := range f.execCmds {
+		for _, frag := range []string{"$(touch /tmp/pwned)", "`id`", "do the thing"} {
+			if strings.Contains(cmd, frag) {
+				t.Fatalf("prompt leaked into command (%q): %s", frag, cmd)
+			}
+		}
+		if strings.Contains(cmd, "nohup") {
+			t.Fatalf("SendPrompt should not detach: %s", cmd)
 		}
 	}
-	if strings.Contains(f.execCmds[0], "nohup") {
-		t.Fatalf("SendPrompt should not detach: %s", f.execCmds[0])
+	if strings.Contains(f.execCmds[0], "rm -f") {
+		t.Fatal("rm shares the send command, so its status would mask a failed send-keys")
 	}
 }
 
@@ -376,8 +381,12 @@ func TestSendPromptTaggedUsesOwnFile(t *testing.T) {
 	if f.writePath != "/tmp/aiman-prompt-abc-123-steer" {
 		t.Fatalf("write path = %q", f.writePath)
 	}
-	if len(f.execCmds) != 1 || !strings.Contains(f.execCmds[0], `"/tmp/aiman-prompt-abc-123-steer"`) {
+	joined := strings.Join(f.execCmds, "\n")
+	if !strings.Contains(joined, `"/tmp/aiman-prompt-abc-123-steer"`) || !strings.Contains(joined, "rm -f") {
 		t.Fatalf("script should read and remove the tagged file: %v", f.execCmds)
+	}
+	if strings.Contains(f.execCmds[0], "rm -f") {
+		t.Fatalf("rm shares the send command, so its status would mask a failed send-keys: %s", f.execCmds[0])
 	}
 	untagged := &fakePromptDeliverer{}
 	if err := SendPrompt(context.Background(), untagged, "sess", "abc-123", "hi"); err != nil {
@@ -385,5 +394,35 @@ func TestSendPromptTaggedUsesOwnFile(t *testing.T) {
 	}
 	if untagged.writePath != "/tmp/aiman-prompt-abc-123" {
 		t.Fatalf("untagged write path = %q", untagged.writePath)
+	}
+}
+
+// statusDeliverer emulates `cmd1 && cmd2; cmd3`: a failing send-keys must not
+// be hidden by a later rm in the same script.
+type statusDeliverer struct {
+	fakePromptDeliverer
+	failSend bool
+}
+
+func (f *statusDeliverer) Execute(_ context.Context, cmd string) (string, error) {
+	f.execCmds = append(f.execCmds, cmd)
+	var status error
+	for _, part := range strings.Split(cmd, ";") {
+		status = nil
+		for _, step := range strings.Split(part, "&&") {
+			if f.failSend && strings.Contains(step, "send-keys") {
+				status = errors.New("can't find session")
+				break
+			}
+		}
+	}
+	return "", status
+}
+
+func TestSendPromptTaggedStatusIsTheSend(t *testing.T) {
+	f := &statusDeliverer{failSend: true}
+	err := SendPromptTagged(context.Background(), f, "sess", "abc-123", "steer", "hello")
+	if err == nil {
+		t.Fatal("send-keys failed, but the script status was success")
 	}
 }

@@ -53,6 +53,13 @@ type Server struct {
 	// no-ops, so handlers call them unconditionally.
 	todos todoStore
 	steer *steerer
+
+	// steerMu guards in-flight typing and the time confirm last finished.
+	// A timeout after the text is in the composer must not type it again, and
+	// the classifier quiet window runs from confirm, not from the first Return.
+	steerMu      sync.Mutex
+	steerFlights map[string]steerFlight
+	steerSettled map[string]time.Time
 	// target is the session side of steering, the Server itself outside tests.
 	target steerTarget
 	// todoLocks holds one *sync.Mutex per session id around a to-do write and

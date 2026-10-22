@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -290,7 +291,7 @@ func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remo
 		log.Printf("%s sent (no marker to confirm)", label)
 		return nil
 	}
-	confirmSubmit(ctx, label, start, marker, DefaultSubmitTiming(),
+	_ = confirmSubmit(ctx, label, start, marker, DefaultSubmitTiming(),
 		func(ctx context.Context) (string, error) { return CapturePTYPane(ctx, remote, id, 0) },
 		func(ctx context.Context) error {
 			_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty input %q --key enter", id))
@@ -309,13 +310,12 @@ func sendTmuxKeysConfirmed(ctx context.Context, remote PaneCapturer, tmuxName, r
 		tmuxName, remotePath, tmuxName)); err != nil {
 		return err
 	}
-	confirmSubmit(ctx, "", time.Now(), marker, DefaultSubmitTiming(),
+	return confirmSubmit(ctx, "", time.Now(), marker, DefaultSubmitTiming(),
 		func(ctx context.Context) (string, error) { return remote.CaptureTmuxPane(ctx, tmuxName) },
 		func(ctx context.Context) error {
 			_, err := remote.Execute(ctx, fmt.Sprintf("tmux send-keys -t %q Enter", tmuxName))
 			return err
 		})
-	return nil
 }
 
 // SubmitTiming is the budget for submitting a typed prompt: the pause before
@@ -337,35 +337,87 @@ func DefaultSubmitTiming() SubmitTiming {
 // Return with enter, and presses it again while capture shows the prompt still
 // in the composer, up to timing.Attempts Returns in all. It returns the time
 // taken just before the first Return, so a caller can tell agent reports about
-// this prompt from earlier ones. Errors are from typing or the first Return;
-// confirmation is best-effort, since retrying would type the prompt twice.
-func TypeAndSubmit(ctx context.Context, prompt string, timing SubmitTiming,
+// this prompt from earlier ones.
+//
+// progress skips work a previous attempt already did. A context cancel during
+// the wait after typing still presses Return, on a context that cancel cannot
+// abort, so the text is not left in the composer for a second type. A cancel
+// during confirm returns ErrSubmitUnconfirmed: Return went in, but that is not
+// a successful delivery. Giving up after the attempt budget is still success,
+// because the text was submitted and typing it again would duplicate it.
+func TypeAndSubmit(ctx context.Context, prompt string, timing SubmitTiming, progress SubmitProgress,
 	typeText, enter func(context.Context) error,
 	capture func(context.Context) (string, error),
 ) (time.Time, error) {
-	start := time.Now()
-	if err := typeText(ctx); err != nil {
-		return time.Time{}, err
+	if !progress.SubmitAt.IsZero() {
+		return confirmOnly(ctx, prompt, timing, progress.SubmitAt, capture, enter)
 	}
+	if !progress.Typed {
+		if err := typeText(ctx); err != nil {
+			return time.Time{}, err
+		}
+	}
+	return submitTyped(ctx, prompt, timing, enter, capture)
+}
+
+// SubmitProgress is how far an earlier attempt got with the same text.
+// A retry passes it back so a note already in the composer is not typed again.
+type SubmitProgress struct {
+	Typed    bool
+	SubmitAt time.Time
+}
+
+// ErrTypedNotSubmitted means the text is in the composer and Return was not
+// pressed. Retrying must submit that text, not type it again.
+var ErrTypedNotSubmitted = errors.New("prompt typed but not submitted")
+
+// ErrSubmitUnconfirmed means Return was pressed but confirmation was canceled.
+// That is not a successful delivery, and a retry must not type the text again.
+var ErrSubmitUnconfirmed = errors.New("submit unconfirmed")
+
+// submitAfterCancel is how long Return may take after the caller's context
+// has ended. The text is already in the composer; this only presses Return.
+const submitAfterCancel = 5 * time.Second
+
+func confirmOnly(ctx context.Context, prompt string, timing SubmitTiming, submitAt time.Time,
+	capture func(context.Context) (string, error), enter func(context.Context) error,
+) (time.Time, error) {
+	if err := confirmSubmit(ctx, "", submitAt, prompt, timing, capture, enter); err != nil {
+		return submitAt, fmt.Errorf("%w: %w", ErrSubmitUnconfirmed, err)
+	}
+	return submitAt, nil
+}
+
+func submitTyped(ctx context.Context, prompt string, timing SubmitTiming,
+	enter func(context.Context) error, capture func(context.Context) (string, error),
+) (time.Time, error) {
+	enterCtx := ctx
 	if err := sleepCtx(ctx, timing.Initial); err != nil {
-		return time.Time{}, err
+		// A cancel here has already left the text in the composer. Press Return
+		// anyway so the next attempt does not type it a second time.
+		var cancel context.CancelFunc
+		enterCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), submitAfterCancel)
+		defer cancel()
 	}
 	submitAt := time.Now()
-	if err := enter(ctx); err != nil {
-		return time.Time{}, err
+	if err := enter(enterCtx); err != nil {
+		return time.Time{}, fmt.Errorf("%w: %w", ErrTypedNotSubmitted, err)
 	}
-	confirmSubmit(ctx, "", start, prompt, timing, capture, enter)
+	if err := confirmSubmit(ctx, "", submitAt, prompt, timing, capture, enter); err != nil {
+		return submitAt, fmt.Errorf("%w: %w", ErrSubmitUnconfirmed, err)
+	}
 	return submitAt, nil
 }
 
 // confirmSubmit is the shared confirm loop after the first Return: while the
 // tail of prompt still sits on the composer line, wait and press Return again.
-// A non-empty label logs each outcome. It never fails: a pane that cannot be
-// read is not a reason to fail a delivery that may well have worked.
+// A non-empty label logs each outcome. A pane that cannot be read is not an
+// error: the delivery may well have worked. A canceled context is an error,
+// so a caller does not treat an unfinished confirm as success.
 func confirmSubmit(ctx context.Context, label string, start time.Time, prompt string, timing SubmitTiming,
 	capture func(context.Context) (string, error),
 	enter func(context.Context) error,
-) {
+) error {
 	logf := func(format string, args ...any) {
 		if label != "" {
 			log.Printf(label+" "+format, args...)
@@ -373,29 +425,38 @@ func confirmSubmit(ctx context.Context, label string, start time.Time, prompt st
 	}
 	marker := submitMarker(prompt)
 	if marker == "" {
-		return
+		return nil
 	}
 	for attempt := 1; attempt < timing.Attempts; attempt++ {
 		if err := sleepCtx(ctx, timing.Settle); err != nil {
 			logf("confirm canceled after attempt %d/%d: %v", attempt, timing.Attempts, err)
-			return
+			return err
 		}
 		out, err := capture(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				logf("confirm canceled after attempt %d/%d: %v", attempt, timing.Attempts, ctx.Err())
+				return ctx.Err()
+			}
 			logf("pane unreadable at attempt %d/%d, assuming delivered: %v", attempt, timing.Attempts, err)
-			return
+			return nil
 		}
 		if !composerStillHolds(out, marker) {
 			logf("submitted after %d/%d attempts (%s)", attempt, timing.Attempts, time.Since(start))
-			return
+			return nil
 		}
 		logf("composer still holds prompt at attempt %d/%d, retrying Enter", attempt, timing.Attempts)
 		if err := enter(ctx); err != nil {
+			if ctx.Err() != nil {
+				logf("confirm canceled after attempt %d/%d: %v", attempt, timing.Attempts, ctx.Err())
+				return ctx.Err()
+			}
 			logf("retry Enter failed at attempt %d/%d: %v", attempt, timing.Attempts, err)
-			return
+			return nil
 		}
 	}
 	logf("gave up after %d attempts (%s) — composer may still hold the prompt", timing.Attempts, time.Since(start))
+	return nil
 }
 
 // PromptStillInComposer reports whether prompt is still sitting unsent on the

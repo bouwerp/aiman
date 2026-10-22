@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
@@ -180,6 +182,7 @@ func TestIdleReportDuringConfirmOpensGate(t *testing.T) {
 }
 
 func TestDeliverSteerToTmuxUsesLocalSendKeys(t *testing.T) {
+	fastSteerSubmit(t)
 	sess := domain.Session{ID: "st2", Name: "st2", Group: "g", TmuxSession: "work", Backend: domain.BackendTmux, Status: domain.SessionStatusActive}
 	repo := testRepo(t)
 	if err := repo.Save(context.Background(), &sess); err != nil {
@@ -201,6 +204,166 @@ func TestDeliverSteerToTmuxUsesLocalSendKeys(t *testing.T) {
 	}
 	if strings.Contains(execs, "aiman pty input") {
 		t.Fatalf("tmux delivery must not go through the pty CLI, got:\n%s", execs)
+	}
+}
+
+// shellRemote runs `;` and `&&` the way a shell does, so a send-keys failure
+// followed by `rm` is success when the script is written that way.
+type shellRemote struct {
+	fakeRemote
+	failSend bool
+	files    map[string][]byte
+}
+
+func (s *shellRemote) Execute(ctx context.Context, cmd string) (string, error) {
+	_, _ = s.fakeRemote.Execute(ctx, cmd)
+	var status error
+	for _, part := range strings.Split(cmd, ";") {
+		status = nil
+		for _, step := range strings.Split(part, "&&") {
+			if s.failSend && strings.Contains(step, "send-keys") {
+				status = errors.New("can't find session")
+				break
+			}
+		}
+	}
+	return "", status
+}
+
+func (s *shellRemote) WriteFile(_ context.Context, path string, content []byte) error {
+	if s.files == nil {
+		s.files = map[string][]byte{}
+	}
+	s.files[path] = append([]byte(nil), content...)
+	return nil
+}
+
+func TestDeliverSteerTmuxSendFailureStaysQueued(t *testing.T) {
+	sess := domain.Session{ID: "stf", Name: "stf", Group: "g", TmuxSession: "work", Backend: domain.BackendTmux, Status: domain.SessionStatusActive}
+	repo := testRepo(t)
+	if err := repo.Save(context.Background(), &sess); err != nil {
+		t.Fatal(err)
+	}
+	remote := &shellRemote{failSend: true}
+	srv := New(nil, repo, remote, nil, nil, nil, "test")
+	if _, err := srv.deliverSteer(context.Background(), "stf", "hello tmux"); err == nil {
+		t.Fatal("send-keys failed, but delivery reported success")
+	}
+}
+
+func TestDeliverSteerFlattensRealNote(t *testing.T) {
+	fastSteerSubmit(t)
+	note := todo.FormatSteerNote(
+		[]domain.TodoAuthor{domain.AuthorUser},
+		[]todo.Op{{Kind: todo.OpAdd, ID: "t1", Text: "Ship"}},
+		domain.TodoList{Items: []domain.TodoItem{{ID: "t1", Text: "Ship", State: domain.TodoPending}}},
+	)
+	if !strings.Contains(note, "\nCurrent list:\n") {
+		t.Fatalf("fixture is not the multi-line note:\n%s", note)
+	}
+
+	mgr := ptyruntime.NewManagerWithRoot(shortTempDir(t), append([]string(nil), holderBin...))
+	t.Cleanup(mgr.CloseAll)
+	if _, err := mgr.Create(ptyruntime.Spec{ID: "stn", Name: "stn", Command: "cat", Cols: 240, Rows: 24}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Kill("stn") })
+	srv := steerGateServer(t, domain.Session{ID: "stn", Name: "stn", Group: "g", Backend: domain.BackendPTY})
+	srv.pty = mgr
+	if _, err := srv.deliverSteer(context.Background(), "stn", note); err != nil {
+		t.Fatalf("deliverSteer: %v", err)
+	}
+	var screen string
+	eventually(t, 5*time.Second, func() bool {
+		var err error
+		screen, err = srv.pty.CaptureScreen("stn")
+		return err == nil && strings.Contains(screen, "[aiman]") && strings.Contains(screen, "Adjust your work")
+	})
+	for _, line := range strings.Split(screen, "\n") {
+		if strings.Contains(line, "[aiman]") && !strings.Contains(line, "Adjust your work") {
+			t.Fatalf("note submitted across lines:\n%s", screen)
+		}
+	}
+
+	sess := domain.Session{ID: "stn2", Name: "stn2", Group: "g", TmuxSession: "work", Backend: domain.BackendTmux, Status: domain.SessionStatusActive}
+	repo := testRepo(t)
+	if err := repo.Save(context.Background(), &sess); err != nil {
+		t.Fatal(err)
+	}
+	remote := &shellRemote{}
+	tmuxSrv := New(nil, repo, remote, nil, nil, nil, "test")
+	if _, err := tmuxSrv.deliverSteer(context.Background(), "stn2", "ping\nfrom user"); err != nil {
+		t.Fatalf("tmux deliver: %v", err)
+	}
+	var body []byte
+	for _, b := range remote.files {
+		body = b
+	}
+	if strings.Contains(string(body), "\n") {
+		t.Fatalf("tmux prompt file still has a newline:\n%s", body)
+	}
+	if strings.Contains(string(body), "[aiman]") {
+		t.Fatalf("free text gained the to-do wrapper: %s", body)
+	}
+	if string(body) != "ping from user" {
+		t.Fatalf("typed %q, want one line", body)
+	}
+}
+
+func TestSteerClassifierQuietUsesSettle(t *testing.T) {
+	sess := domain.Session{ID: "cq1", Name: "cq1", Group: "g", TmuxSession: "work", Backend: domain.BackendTmux, Status: domain.SessionStatusActive}
+	repo := testRepo(t)
+	if err := repo.Save(context.Background(), &sess); err != nil {
+		t.Fatal(err)
+	}
+	remote := &fakeRemote{pane: "bypass permissions on"}
+	srv := New(nil, repo, remote, nil, nil, nil, "test")
+	submit := time.Now().Add(-5 * time.Second)
+	if ready, held := srv.steerReady(context.Background(), "cq1", submit); !ready {
+		t.Fatalf("idle classifier with a 5s-old submit should be ready, held %q", held)
+	}
+	srv.noteSteerSettled("cq1")
+	if ready, _ := srv.steerReady(context.Background(), "cq1", submit); ready {
+		t.Fatal("confirm just finished; the classifier must hold the next note")
+	}
+}
+
+func TestClassifierQuietStartsWhenConfirmFinishes(t *testing.T) {
+	submit := time.Now().Add(-5 * time.Second)
+	settled := time.Now()
+	if !classifierQuietOpen(submit, time.Time{}, submit.Add(6*time.Second)) {
+		t.Fatal("with no settle time, the quiet window is measured from submit")
+	}
+	if classifierQuietOpen(submit, settled, settled.Add(time.Second)) {
+		t.Fatal("a note that arrived during confirm is eligible before the quiet window from when confirm finished")
+	}
+	if !classifierQuietOpen(submit, settled, settled.Add(steerClassifierQuiet+time.Millisecond)) {
+		t.Fatal("quiet window should open once 3s have passed since confirm")
+	}
+	if !classifierQuietOpen(time.Time{}, time.Time{}, time.Now()) {
+		t.Fatal("no prior delivery should not be held for quiet")
+	}
+}
+
+func TestDeliverSteerTimeoutDoesNotTypeTwice(t *testing.T) {
+	prev := steerSubmitTiming
+	steerSubmitTiming = usecase.SubmitTiming{Initial: time.Second, Settle: 20 * time.Millisecond, Attempts: 2}
+	t.Cleanup(func() { steerSubmitTiming = prev })
+	srv := catSession(t, "stto")
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if _, err := srv.deliverSteer(ctx, "stto", "once-only-note"); err == nil {
+		t.Fatal("a canceled confirm counted as success")
+	}
+	if _, err := srv.deliverSteer(context.Background(), "stto", "once-only-note"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	screen, err := srv.pty.CaptureScreen("stto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(screen, "once-only-noteonce-only-note") || !strings.Contains(screen, "once-only-note") {
+		t.Fatalf("note was typed more than once:\n%s", screen)
 	}
 }
 

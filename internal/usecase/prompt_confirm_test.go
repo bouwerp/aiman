@@ -267,7 +267,7 @@ func TestTypeAndSubmitRetriesAndReportsFirstReturn(t *testing.T) {
 		return p, nil
 	}
 	timing := SubmitTiming{Initial: time.Millisecond, Settle: time.Millisecond, Attempts: 6}
-	submitAt, err := TypeAndSubmit(context.Background(), prompt, timing,
+	submitAt, err := TypeAndSubmit(context.Background(), prompt, timing, SubmitProgress{},
 		func(context.Context) error { typed++; return nil },
 		func(context.Context) error { enters = append(enters, time.Now()); return nil },
 		capture)
@@ -287,7 +287,7 @@ func TestTypeAndSubmitStopsAtAttemptBudget(t *testing.T) {
 	prompt := "stuck forever prompt text"
 	enters := 0
 	timing := SubmitTiming{Initial: time.Millisecond, Settle: time.Millisecond, Attempts: 4}
-	_, err := TypeAndSubmit(context.Background(), prompt, timing,
+	_, err := TypeAndSubmit(context.Background(), prompt, timing, SubmitProgress{},
 		func(context.Context) error { return nil },
 		func(context.Context) error { enters++; return nil },
 		func(context.Context) (string, error) { return "› " + prompt, nil })
@@ -296,5 +296,42 @@ func TestTypeAndSubmitStopsAtAttemptBudget(t *testing.T) {
 	}
 	if enters != 4 {
 		t.Fatalf("enters = %d, want 4", enters)
+	}
+}
+
+// A cancel during the settle after typing must still press Return once, and
+// must not report success: the confirm loop never saw the composer.
+func TestTypeAndSubmitCancelAfterTypingStillPressesReturn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	typed, enters := 0, 0
+	started := make(chan struct{})
+	timing := SubmitTiming{Initial: time.Hour, Settle: time.Millisecond, Attempts: 2}
+	go func() {
+		<-started
+		cancel()
+	}()
+	_, err := TypeAndSubmit(ctx, "hello steer note", timing, SubmitProgress{},
+		func(context.Context) error {
+			typed++
+			close(started)
+			return nil
+		},
+		func(c context.Context) error {
+			if c.Err() != nil {
+				t.Errorf("Return ran on a canceled context: %v", c.Err())
+			}
+			enters++
+			return nil
+		},
+		func(context.Context) (string, error) { return "› ", nil })
+	if typed != 1 {
+		t.Fatalf("typed %d, want 1", typed)
+	}
+	if enters != 1 {
+		t.Fatalf("enters = %d, want 1 so a timeout does not leave the text to be typed again", enters)
+	}
+	if err == nil {
+		t.Fatal("a canceled confirm counted as success")
 	}
 }

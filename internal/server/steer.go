@@ -58,14 +58,19 @@ type steerTarget interface {
 }
 
 // steerOpTimeout bounds each store or target call so a hung session or
-// database cannot stall the delivery loop or a socket handler.
-const steerOpTimeout = 20 * time.Second
+// database cannot stall the delivery loop or a socket handler. A variable so
+// tests can shorten it; production stays at 20s, under the 30s socket cap.
+var steerOpTimeout = 20 * time.Second
 
 // queuedNote is an undelivered note. seq identifies it in memory because a
 // note whose AddSteerNote failed has no store ID but is still delivered.
 type queuedNote struct {
 	seq uint64
 	rec domain.SteerRecord
+	// submittedAt is set once the note has been typed and Return pressed, but
+	// the store mark failed. A later pass retries the mark and does not type
+	// the note again.
+	submittedAt time.Time
 }
 
 type steerSession struct {
@@ -361,52 +366,118 @@ func (s *steerer) deliver(ctx context.Context, id string) {
 	lastDelivered := st.lastDelivered
 	s.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(ctx, steerOpTimeout)
-	defer cancel()
+	// A note already typed stays queued until the mark lands. Retry that mark
+	// before typing anything else, and do not type the note again.
+	if sent, at, ok := submittedBatch(batch); ok {
+		s.finishDelivery(ctx, id, sent, at)
+		return
+	}
 
-	ready, held := s.target.steerReady(ctx, id, lastDelivered)
+	// Readiness and submit each get the full budget. One shared context let a
+	// slow gate cancel the submit, or a slow submit cancel the mark.
+	readyCtx, readyCancel := context.WithTimeout(ctx, steerOpTimeout)
+	ready, held := s.target.steerReady(readyCtx, id, lastDelivered)
+	readyCancel()
 	if !ready {
 		s.mu.Lock()
-		st.held = held
+		if st = s.sessions[id]; st != nil {
+			st.held = held
+		}
 		s.mu.Unlock()
 		return
 	}
 
+	deliverCtx, deliverCancel := context.WithTimeout(ctx, steerOpTimeout)
+	at, err := s.target.deliverSteer(deliverCtx, id, joinSteerText(batch))
+	deliverCancel()
+	if err != nil {
+		s.mu.Lock()
+		if st = s.sessions[id]; st != nil && !st.forgotten {
+			st.held = ""
+			st.lastError = err.Error()
+		}
+		s.mu.Unlock()
+		return
+	}
+	s.finishDelivery(ctx, id, batch, at)
+}
+
+func submittedBatch(batch []queuedNote) ([]queuedNote, time.Time, bool) {
+	var sent []queuedNote
+	var at time.Time
+	for _, q := range batch {
+		if q.submittedAt.IsZero() {
+			continue
+		}
+		sent = append(sent, q)
+		if q.submittedAt.After(at) {
+			at = q.submittedAt
+		}
+	}
+	return sent, at, len(sent) > 0
+}
+
+func joinSteerText(batch []queuedNote) string {
 	texts := make([]string, 0, len(batch))
-	var ids []int64
 	for _, q := range batch {
 		texts = append(texts, q.rec.Text)
+	}
+	return strings.Join(texts, "\n\n")
+}
+
+func noteIDs(batch []queuedNote) []int64 {
+	var ids []int64
+	for _, q := range batch {
 		if q.rec.ID != 0 {
 			ids = append(ids, q.rec.ID)
 		}
 	}
-	at, err := s.target.deliverSteer(ctx, id, strings.Join(texts, "\n\n"))
-	if err != nil {
-		s.mu.Lock()
-		st.held = ""
-		st.lastError = err.Error()
-		s.mu.Unlock()
-		return
+	return ids
+}
+
+func batchHasSeq(batch []queuedNote, seq uint64) bool {
+	for _, b := range batch {
+		if b.seq == seq {
+			return true
+		}
 	}
+	return false
+}
+
+// finishDelivery persists the submit. The mark uses its own context, so a
+// deadline that fired while typing does not fail it. A failed mark leaves the
+// notes queued and does not publish them as delivered.
+func (s *steerer) finishDelivery(ctx context.Context, id string, batch []queuedNote, at time.Time) {
 	if at.IsZero() {
 		at = s.now()
 	}
-	markErr := s.store.MarkSteerNotesDelivered(ctx, ids, at)
+	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), steerOpTimeout)
+	defer cancel()
+	markErr := s.store.MarkSteerNotesDelivered(markCtx, noteIDs(batch), at)
 
 	s.mu.Lock()
-	if st.forgotten {
+	st := s.sessions[id]
+	if st == nil || st.forgotten {
+		s.mu.Unlock()
+		return
+	}
+	if markErr != nil {
+		for i := range st.pending {
+			if batchHasSeq(batch, st.pending[i].seq) {
+				st.pending[i].submittedAt = at
+			}
+		}
+		st.held = ""
+		st.lastError = markErr.Error()
 		s.mu.Unlock()
 		return
 	}
 	st.pending = slices.DeleteFunc(st.pending, func(q queuedNote) bool {
-		return slices.ContainsFunc(batch, func(b queuedNote) bool { return b.seq == q.seq })
+		return batchHasSeq(batch, q.seq)
 	})
 	st.lastDelivered = at
 	st.held = ""
 	st.lastError = ""
-	if markErr != nil {
-		st.lastError = markErr.Error()
-	}
 	queued := len(st.pending)
 	s.mu.Unlock()
 

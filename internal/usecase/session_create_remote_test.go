@@ -134,6 +134,27 @@ func TestParseRemoteCreateResult(t *testing.T) {
 	}
 }
 
+// Serve sends backend so an absent value is not read as pty. The laptop must
+// keep a present pty, and must not invent one when the field is absent: Save
+// writes an empty backend as tmux.
+func TestParseRemoteCreateKeepsBackend(t *testing.T) {
+	withPty := strings.Replace(okCreateResponse, `"agent_name":"Claude Code"`, `"agent_name":"Claude Code","backend":"pty"`, 1)
+	sess, err := parseRemoteCreateResult(withPty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Backend != domain.BackendPTY {
+		t.Fatalf("Backend = %q, want pty", sess.Backend)
+	}
+	absent, err := parseRemoteCreateResult(okCreateResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if absent.Backend != "" {
+		t.Fatalf("absent backend = %q, want empty so Save keeps it as tmux", absent.Backend)
+	}
+}
+
 func TestSanitiseTempName(t *testing.T) {
 	cases := map[string]string{
 		"WTB-123-thing":    "WTB-123-thing",

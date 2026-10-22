@@ -152,6 +152,7 @@ type remoteCreateResult struct {
 			BaseBranch       string `json:"base_branch"`
 			RepoName         string `json:"repo_name"`
 			TmuxSession      string `json:"tmux_session"`
+			Backend          string `json:"backend"`
 			WorktreePath     string `json:"worktree_path"`
 			WorkingDirectory string `json:"working_directory"`
 			AgentName        string `json:"agent_name"`
@@ -188,6 +189,7 @@ func parseRemoteCreateResult(out string) (*domain.Session, error) {
 		BaseBranch:       s.BaseBranch,
 		RepoName:         s.RepoName,
 		TmuxSession:      s.TmuxSession,
+		Backend:          s.Backend,
 		WorktreePath:     s.WorktreePath,
 		WorkingDirectory: s.WorkingDirectory,
 		AgentName:        s.AgentName,
