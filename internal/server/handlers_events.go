@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
@@ -42,6 +43,17 @@ type SessionEvent struct {
 	// Session is filled on session_created so the dashboard can upsert without
 	// a second round trip.
 	Session *SessionInfo `json:"session,omitempty"`
+	// State is the hook-reported agent state on session_activity, or the
+	// review status on verify.
+	State string `json:"state,omitempty"`
+	// Rev is the todo list revision on todo_changed.
+	Rev int64 `json:"rev,omitempty"`
+	// Queued is how many steer messages are still waiting on steer.
+	Queued *int `json:"queued,omitempty"`
+	// DeliveredAt is RFC3339Nano, set on steer once a message reached the agent.
+	DeliveredAt string `json:"delivered_at,omitempty"`
+	// Kind classifies a notify event.
+	Kind string `json:"kind,omitempty"`
 }
 
 // isSessionEvents reports whether a request opens the event stream, which like
@@ -68,10 +80,9 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 		writeResponse(conn, errResp("", CodeInvalidParams, "invalid request"))
 		return
 	}
-	if s.pty == nil {
-		writeResponse(conn, errResp(req.ID, CodeInvalidParams, "no PTY runtime on this host"))
-		return
-	}
+	// Subscribe before replying so nothing published after the attach is lost.
+	hubCh, unsubscribe := s.hub.Subscribe()
+	defer unsubscribe()
 	writeResponse(conn, Response{ID: req.ID, Result: map[string]any{"type": "events_attached"}})
 
 	// A closed connection is only detectable on write, so the read side is
@@ -88,7 +99,10 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 	}()
 
 	enc := json.NewEncoder(conn)
+	// hookSeen is kept apart from seen: collectSessionEvents reports anything
+	// in seen that the PTY runtime does not list as gone.
 	seen := map[string]SessionEvent{}
+	hookSeen := map[string]SessionEvent{}
 	announced := map[string]struct{}{}
 	ticker := time.NewTicker(eventPollInterval)
 	defer ticker.Stop()
@@ -100,13 +114,23 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 			return
 		case <-closed:
 			return
+		case ev := <-hubCh:
+			if err := enc.Encode(ev); err != nil {
+				return
+			}
+			lastSent = time.Now()
+			continue
 		case <-ticker.C:
 		}
 
-		changed := collectSessionEvents(s.pty, seen)
+		var changed []SessionEvent
+		if s.pty != nil {
+			changed = collectSessionEvents(s.pty, seen)
+		}
 		if s.repo != nil {
 			if listed, lerr := s.repo.List(ctx); lerr == nil {
 				changed = append(changed, collectRepoCreatedEvents(listed, announced)...)
+				changed = append(changed, collectHookActivityEvents(listed, time.Now(), hookSeen)...)
 			}
 		}
 		for _, ev := range changed {
@@ -163,6 +187,33 @@ func collectSessionEvents(pty ptyLister, seen map[string]SessionEvent) []Session
 		}
 		delete(seen, id)
 		out = append(out, SessionEvent{Type: "session_gone", ID: id})
+	}
+	return out
+}
+
+// collectHookActivityEvents reports tmux sessions whose hook-reported state,
+// agent title or lifecycle status moved, and updates hookSeen in place. PTY
+// sessions are skipped: collectSessionEvents already covers them from the
+// runtime itself.
+func collectHookActivityEvents(sessions []domain.Session, now time.Time, hookSeen map[string]SessionEvent) []SessionEvent {
+	var out []SessionEvent
+	for _, s := range sessions {
+		if s.ID == "" || s.IsPTY() {
+			continue
+		}
+		state, _ := agenthook.ResolveHookState(s, now)
+		ev := SessionEvent{
+			Type:   "session_activity",
+			ID:     s.ID,
+			Title:  s.AgentTitle,
+			Status: string(s.Status),
+			State:  string(state),
+		}
+		if prev, ok := hookSeen[s.ID]; ok && prev == ev {
+			continue
+		}
+		hookSeen[s.ID] = ev
+		out = append(out, ev)
 	}
 	return out
 }

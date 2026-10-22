@@ -30,6 +30,9 @@ type Server struct {
 	pty      *ptyruntime.Manager
 	version  string
 
+	// hub carries events published by handlers to session.events streams.
+	hub *eventHub
+
 	mu     sync.Mutex
 	sessMu map[string]*sync.Mutex
 
@@ -62,6 +65,7 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 		version:  version,
 		sessMu:   map[string]*sync.Mutex{},
 		attaches: map[string]int{},
+		hub:      newEventHub(),
 	}
 }
 

@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
@@ -160,5 +162,139 @@ func TestSessionEventsStreamReachesAReader(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("timed out; session seen=%v title seen=%v", sawSession, sawTitle)
 		}
+	}
+}
+
+// startEventsServer is a serve with a store and no PTY runtime, as on a
+// tmux-only host.
+func startEventsServer(t *testing.T, repo domain.SessionRepository) (*Server, string) {
+	t.Helper()
+	dir := shortTempDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(ln, repo, nil, nil, nil, nil, "test")
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() { defer close(served); _ = srv.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-served })
+	return srv, SocketPath(dir)
+}
+
+// readEvents pumps the stream into a channel until it ends.
+func readEvents(conn *EventsConn) <-chan SessionEvent {
+	got := make(chan SessionEvent, 64)
+	go func() {
+		defer close(got)
+		for {
+			ev, err := conn.Next()
+			if err != nil {
+				return
+			}
+			got <- ev
+		}
+	}()
+	return got
+}
+
+func waitForEvent(t *testing.T, got <-chan SessionEvent, match func(SessionEvent) bool) SessionEvent {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev, ok := <-got:
+			if !ok {
+				t.Fatal("stream ended")
+			}
+			if match(ev) {
+				return ev
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for event")
+		}
+	}
+}
+
+func TestSessionEventsWithoutPTYRuntime(t *testing.T) {
+	repo := testRepo(t)
+	_, sock := startEventsServer(t, repo)
+
+	conn, err := EventsDial(sock)
+	if err != nil {
+		t.Fatalf("events dial: %v", err)
+	}
+	defer conn.Close()
+	got := readEvents(conn)
+
+	if err := repo.Save(context.Background(), &domain.Session{
+		ID: "tm1", TmuxSession: "tm1", Backend: domain.BackendTmux,
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForEvent(t, got, func(ev SessionEvent) bool { return ev.Type == "session_created" && ev.ID == "tm1" })
+}
+
+func TestSessionEventsCarriesHubEvents(t *testing.T) {
+	srv, sock := startEventsServer(t, testRepo(t))
+
+	conn, err := EventsDial(sock)
+	if err != nil {
+		t.Fatalf("events dial: %v", err)
+	}
+	defer conn.Close()
+	got := readEvents(conn)
+
+	// The subscription starts after the attach reply, so keep publishing until
+	// one lands rather than racing a single publish against it.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				srv.hub.Publish(SessionEvent{Type: "todo_changed", ID: "x", Rev: 3})
+			}
+		}
+	}()
+	ev := waitForEvent(t, got, func(ev SessionEvent) bool { return ev.Type == "todo_changed" })
+	if ev.ID != "x" || ev.Rev != 3 {
+		t.Fatalf("got %+v", ev)
+	}
+}
+
+func TestCollectHookActivityEventsOnlyTmux(t *testing.T) {
+	now := time.Now()
+	sessions := []domain.Session{
+		{ID: "p", Backend: domain.BackendPTY, Status: domain.SessionStatusActive,
+			HookState: domain.AgentStateIdle, HookStateSource: agenthook.SourceIdlePrompt, HookStateAt: now},
+		{ID: "t", Backend: domain.BackendTmux, Status: domain.SessionStatusActive, AgentTitle: "fixing",
+			HookState: domain.AgentStateIdle, HookStateSource: agenthook.SourceIdlePrompt, HookStateAt: now},
+	}
+	hookSeen := map[string]SessionEvent{}
+
+	evs := collectHookActivityEvents(sessions, now, hookSeen)
+	if len(evs) != 1 {
+		t.Fatalf("want one event for the tmux session, got %+v", evs)
+	}
+	ev := evs[0]
+	if ev.Type != "session_activity" || ev.ID != "t" || ev.State != string(domain.AgentStateIdle) ||
+		ev.Title != "fixing" || ev.Status != string(domain.SessionStatusActive) {
+		t.Fatalf("got %+v", ev)
+	}
+
+	if again := collectHookActivityEvents(sessions, now, hookSeen); len(again) != 0 {
+		t.Fatalf("unchanged session reported again: %+v", again)
+	}
+
+	sessions[1].HookState = domain.AgentStateWorking
+	sessions[1].HookStateSource = agenthook.SourceLifecycle
+	if moved := collectHookActivityEvents(sessions, now, hookSeen); len(moved) != 1 || moved[0].State != string(domain.AgentStateWorking) {
+		t.Fatalf("state change not reported: %+v", moved)
 	}
 }
