@@ -21,10 +21,10 @@
 7. **Hook dedupe is keyed on one marker** (`Marker = "report-agent-session.sh"`, `agenthook/native.go:15`). A second script would be appended on every serve start. Task 15 adds a marker parameter.
 8. **Merge rule needs a delivery guard** (spec rules 3–5 and the "survive the agent's next write" anti-goal conflict). Notes are held while the agent works, but `TodoWrite` fires mid-turn with the agent's stale view. The merge therefore ignores snapshot status for non-agent items changed after the last delivery, skips re-adding items the user removed after the last delivery (tombstones), and keeps the current order while such changes are undelivered.
 9. **Shared-interface extensions** (names every later plan uses; see `2026-10-22-nl-0-roadmap.md`): JSON tags on `TodoList`/`TodoItem`; `TodoList.NotInAgent []string` (`not_in_agent`) carries the ⚠ marker; free-text steering is `steer.send {session, text, as, mode}` with `mode` `note` (default, gated) or `answer` (answers a dialog at once, never queued); `todo.summary {sessions?}` feeds list progress bars; `SteerStatus.Pending []SteerNote` carries undelivered note texts (W6a); `SessionEvent` gains `state`, `rev`, `queued`, `delivered_at`, `kind`; `todo.OpRef` (Ref-only change, never steers, W8); `Server.MutateTodos`, `Server.TodoAccess()`, `Server.Steerer()` are the entry points for W4/W5/W8 wiring; `fsutil.WriteIfChanged` is the one local compare-before-write helper.
+10. **`internal/server` cannot be imported by `usecase`/`sqlite`**, so the persisted note type is `domain.SteerRecord`, and the register wire format is `domain.Session` marshalled with default Go field names.
 11. **One laptop→serve mechanism.** Every laptop call to a new socket method goes through `aiman rpc METHOD --params-stdin` (Task 3a), invoked by `usecase.ServeRPC`. Later plans add their methods to the `rpcMethods` allowlist instead of adding per-feature CLI subcommands for the laptop. Human/agent CLIs named in the spec (`aiman todo`, `aiman usage`, `aiman verify`) stay.
 12. **`Ref` prefixes** (one namespace across plans): `check:<name>` (W4 failed check), `review:<comment id>` (W4 PR review comment), `finding:<review id>/<finding id>` (W5 verifier finding), `child:<session id>` (W8 fan-out child). Plans own their helper functions; the prefixes must not overlap.
 13. **`resolveWorktree` extraction.** `flow_manager_test.go` has no fake git manager (only `TestCreateSessionRequiresAgent` touches `CreateSession`). Task 3 extracts the worktree switch into `resolveWorktree` and tests the base-branch rule as a pure function; nl-7 (`PreparedWorktree`) and nl-8 (`shouldBootstrap`) build on the same extraction.
-10. **`internal/server` cannot be imported by `usecase`/`sqlite`**, so the persisted note type is `domain.SteerRecord`, and the register wire format is `domain.Session` marshalled with default Go field names.
 
 ## Global Constraints
 
@@ -37,7 +37,8 @@
 - Coalescing window: 800 ms per session. Similarity threshold: 0.8 token Jaccard.
 - Steering note text is exact (spec W1 "Note text"); free text from `steer.send` is sent without the wrapper.
 - An agent's own write never produces a steering note (author `agent` never enqueues).
-- Source comments describe current code, not history. Run `graphify update .` after code changes.
+- Source comments describe current code, not history.
+- Before every code-task commit run `make ci` (`TestOllamaIntelligenceSummariseSession` is a known failure) and `graphify update .`.
 
 ## Review Focus
 
@@ -62,7 +63,7 @@
 
 - [ ] **Step 1: Install a capture hook in a scratch HOME for Claude**
 
-In a temp dir, write `.claude/settings.json` with `PostToolUse` matcher `TodoWrite|TaskCreate|TaskUpdate|TaskList` and `Stop`, each running `sh -c 'cat >> "$CAPTURE"'`. Run `HOME=$tmp CAPTURE=$tmp/claude.ndjson claude -p "Make a 3-item todo list for adding a README, mark the first in progress"` once with default env (Tasks) and once with `CLAUDE_CODE_ENABLE_TASKS=false` (to capture a `TodoWrite` fixture only; aiman never sets this variable). For the Tasks run, record whether `tool_response` carries the whole list and list any files Claude wrote under `$tmp/.claude/tasks/`. Copy credentials into the scratch HOME only by symlink to `~/.claude/.credentials.json`; never print them.
+In a temp dir, write `.claude/settings.json` with `PostToolUse` matcher `TodoWrite|TaskCreate|TaskUpdate|TaskList` and `Stop`, each running `sh -c 'cat >> "$CAPTURE"'`. Run `HOME=$tmp CAPTURE=$tmp/claude.ndjson claude -p "Make a 3-item todo list for adding a README, mark the first in progress"` once with default env (Tasks) and once with `CLAUDE_CODE_ENABLE_TASKS=false` (to capture a `TodoWrite` fixture only; aiman never sets this variable). For the Tasks run, record whether `tool_response` carries the whole list and list any files Claude wrote under `$tmp/.claude/tasks/`. Copy credentials into the scratch HOME only by symlink to `~/.claude/.credentials.json` (Codex: `~/.codex/auth.json` into `$tmp/.codex/`); never print them.
 
 - [ ] **Step 2: Same for Codex**
 
@@ -118,7 +119,7 @@ Byte → char mapping: `alphabet[b % 36]` with `alphabet = "0123456789abcdefghij
 - [ ] **Step 2: Run** `go test ./internal/domain -run TestAdHocLabel` → FAIL (undefined).
 - [ ] **Step 3: Implement**, then replace the three `time.Now().Format("20060102-1504")` labels in `CreateSession` with `domain.AdHocLabel("adhoc-"|"session-", time.Now(), rand.Reader)` (`crypto/rand`).
 - [ ] **Step 4: Run** `go test ./internal/domain ./internal/usecase` → PASS.
-- [ ] **Step 5: Commit** `fix: give quick sessions second-resolution labels with a random suffix`
+- [ ] **Step 5: Commit** `fix: give quick sessions second-resolution labels with a random suffix` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -139,12 +140,12 @@ Byte → char mapping: `alphabet[b % 36]` with `alphabet = "0123456789abcdefghij
 
 - [ ] **Step 1: Write failing tests**
 
-`TestSaveKeepsBaseBranchWhenEmpty` (save with `BaseBranch: "main"`, re-save with `""`, `Get` returns `"main"`). In `flow_manager_test.go` (it has no fake git manager, so test the extracted pieces): `TestSessionBaseBranch` (table: `("", "origin/main")` → `"origin/main"`; `("dev", "origin/main")` → `"dev"`; `("", "")` → `""`) and `TestResolveWorktreeAdHoc` (`(&FlowManager{}).resolveWorktree(ctx, fakeRoot("/r"), SessionConfig{AdHoc: true}, "adhoc-x")` → `Path == "/r/adhoc-x"`, with a nil `gitManager` proving no git call).
+`TestSaveKeepsBaseBranchWhenEmpty` (save with `BaseBranch: "main"`, re-save with `""`, `Get` returns `"main"`). In `flow_manager_test.go` (it has no fake git manager, so test the extracted pieces; add a minimal `fakeRoot(dir string) domain.RemoteExecutor` helper in this file that answers the root-dir lookup with `dir`): `TestSessionBaseBranch` (table: `("", "origin/main")` → `"origin/main"`; `("dev", "origin/main")` → `"dev"`; `("", "")` → `""`) and `TestResolveWorktreeAdHoc` (`(&FlowManager{}).resolveWorktree(ctx, fakeRoot("/r"), SessionConfig{AdHoc: true}, "adhoc-x")` → `Path == "/r/adhoc-x"`, with a nil `gitManager` proving no git call).
 
-- [ ] **Step 2: Run** `go test ./internal/infra/sqlite ./internal/usecase -run 'BaseBranch'` → FAIL.
+- [ ] **Step 2: Run** `go test ./internal/infra/sqlite ./internal/usecase -run 'BaseBranch|ResolveWorktree'` → FAIL.
 - [ ] **Step 3: Implement.** Extract `resolveWorktree`; then `session.BaseBranch = sessionBaseBranch(config.BaseBranch, wt.Base)`.
 - [ ] **Step 4: Run** `go test ./internal/infra/sqlite ./internal/usecase ./internal/server` → PASS.
-- [ ] **Step 5: Commit** `feat: record the base branch on each session`
+- [ ] **Step 5: Commit** `feat: record the base branch on each session` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -158,17 +159,17 @@ Byte → char mapping: `alphabet[b % 36]` with `alphabet = "0123456789abcdefghij
 **Interfaces:**
 - Consumes: `callAndPrintRaw(sock, method string, rawParams []byte) error` (`cmd/aiman/pty_cmd.go:663`), `socketPath()` (`cmd/aiman/session_cmd.go:33`), `remoteAimanPreamble`.
 - Produces (CLI): `var rpcMethods = map[string]bool{…}`, the one allowlist of methods the laptop may call. This plan registers `session.register`, `todo.get`, `todo.summary`, `todo.add`, `todo.update`, `todo.move`, `todo.remove`, `steer.send`. Later plans append theirs in their own task (nl-3a `handover.write`, `handover.point`; nl-3b `memory.jobs`, `memory.done`; nl-4 `usage.get`; nl-6 `ci.get`, `ci.watch`; nl-7 `verify.start`, `verify.status`; nl-9 `spec.fanout`) with one `TestRPCParams` row each.
-- Produces: `func rpcParams(method string, raw []byte, aimanEnv string) ([]byte, error)`: unknown method → `unknown method`; params must be a JSON object; a params object containing `"as"` is refused when `aimanEnv == "1"` (an agent must not author as the user, which would steer itself). `func runRPC(args []string, stdin io.Reader, getenv func(string) string) error`: usage `aiman rpc METHOD --params-stdin`.
-- Produces (usecase): `func ServeRPC(ctx context.Context, remote TerminalExecutor, method string, params any) (json.RawMessage, error)`: one SSH round trip, `remoteAimanPreamble + "printf %s '<base64 JSON>' | base64 -d | aiman rpc <method> --params-stdin"` (std base64 is safe inside single quotes, so no shell parses user text); returns the `result` object of the last JSON line. `var ErrRPCUnsupported` (output mentions `unknown method`, `unknown command`, `command not found`: serve or binary older than the method) and `var ErrServeNotRunning` (`server_not_running`); other `{"error":…}` answers become `*RPCError{Code, Message}`.
+- Produces: `func rpcParams(method string, raw []byte) ([]byte, error)`: unknown method → `unknown method`; params must be a JSON object. It does not inspect `as`: `deriveAuthor` (Task 13) is the single authority on authorship. `runRPC` prints the whole `server.Response` as one compact JSON line (`{"result":…}` or `{"error":{…}}`), not just the result, and exits non-zero on an error answer. `func runRPC(args []string, stdin io.Reader, getenv func(string) string) error`: usage `aiman rpc METHOD --params-stdin`.
+- Produces (usecase): `func ServeRPC(ctx context.Context, remote TerminalExecutor, method string, params any) (json.RawMessage, error)`: one SSH round trip, `remoteAimanPreamble + "printf %s '<base64 JSON>' | base64 -d | aiman rpc <method> --params-stdin"` (std base64 is safe inside single quotes, so no shell parses user text); parses the last JSON line of the output as a `server.Response` even when `Execute` returned an error (a non-zero `aiman rpc` exit still carries the `{"error":…}` line), then returns its `result`. `var ErrRPCUnsupported` (output mentions `unknown method`, `unknown command`, `command not found`: serve or binary older than the method) and `var ErrServeNotRunning` (`server_not_running`); other `{"error":…}` answers become `*RPCError{Code, Message}`.
 
 - [ ] **Step 1: Write the failing tests**
-  - `TestRPCParams` (table): `todo.add` + `{"session":"s1","text":"x","as":"user"}` + env `""` → ok, bytes unchanged; same with env `"1"` → error containing `as`; `session.forget` → `unknown method`; `todo.get` + `[1]` → error (not an object); `steer.send` + `{"session":"s1","text":"hi"}` + env `"1"` → ok.
+  - `TestRPCParams` (table): `todo.add` + `{"session":"s1","text":"x","as":"user"}` → ok, bytes unchanged; `session.forget` → `unknown method`; `todo.get` + `[1]` → error (not an object); `steer.send` + `{"session":"s1","text":"hi"}` → ok.
   - `TestServeRPCNeverShellParsesText`: recording executor; params text `"it's \"$(rm -rf ~)\" `+"`id`"+`\nnext ✓"` round-trips through the decoded base64 segment; the raw command contains no `$(`, backtick or newline.
   - `TestServeRPCErrors`: output `unknown method todo.summary` → `errors.Is(err, ErrRPCUnsupported)`; `{"error":{"code":"server_not_running"}}` → `ErrServeNotRunning`; `{"error":{"code":"not_found","message":"x"}}` → `*RPCError` with code `not_found`; `noise\n{"result":{"type":"todo_list"}}` → raw result.
 - [ ] **Step 2: Run** `go test ./cmd/aiman ./internal/usecase -run 'RPCParams|ServeRPC|SocketOnly'` → FAIL.
 - [ ] **Step 3: Implement.** Errors from `runRPC` go through `writeCLIError(server.CodeInvalidParams, …)` like `runSession`.
 - [ ] **Step 4: Run** the same command → PASS.
-- [ ] **Step 5: Commit** `feat: aiman rpc, the allowlisted laptop entry point to serve`
+- [ ] **Step 5: Commit** `feat: aiman rpc, the allowlisted laptop entry point to serve` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -178,7 +179,6 @@ Byte → char mapping: `alphabet[b % 36]` with `alphabet = "0123456789abcdefghij
 - Modify: `internal/server/server.go:128-180` (dispatch `session.register`)
 - Modify: `internal/server/handlers_session.go:753-807` (report handler), add `handleRegister`, `registrableSession`
 - Modify: `internal/infra/sqlite/repository.go` (add `ClearAgentEnded`)
-- Modify: `cmd/aiman/rpc_cmd.go` (no change: `session.register` is already allowlisted in Task 3a)
 - Modify: `internal/usecase/session_create_remote.go` (add `RegisterSessionsOnRemote`)
 - Test: `internal/server/handlers_session_test.go`, `internal/infra/sqlite/session_native_test.go`, `internal/usecase/session_create_remote_test.go`
 
@@ -204,7 +204,7 @@ func TestRegisterSessionsOnRemoteToleratesOldServe(t *testing.T) // fake executo
 - [ ] **Step 2: Run** `go test ./internal/server ./internal/infra/sqlite ./internal/usecase -run 'Register|LiveUnregistered|ClearsLatch|ClearAgentEnded'` → FAIL.
 - [ ] **Step 3: Implement.** Replace the comment at `handlers_session.go:262-264` so it states the current rule: discovered rows stay in memory until registered or reported.
 - [ ] **Step 4: Run** `go test ./internal/server ./internal/infra/sqlite ./internal/usecase ./cmd/aiman` → PASS.
-- [ ] **Step 5: Commit** `feat: let serve register laptop sessions and keep hook reports for all`
+- [ ] **Step 5: Commit** `feat: let serve register laptop sessions and keep hook reports for all` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -224,7 +224,7 @@ func TestRegisterSessionsOnRemoteToleratesOldServe(t *testing.T) // fake executo
 - [ ] **Step 2: Run** `go test ./internal/ui -run TestSessionsForHost` → FAIL.
 - [ ] **Step 3: Implement.** Snapshot `m.allSessions` before building the command (no model access inside the goroutine). Every stream (re)start registers, which covers serve restarts. In the create goroutine, call `usecase.RegisterSessionsOnRemote` with the `*ssh.Manager` from `sessionCfg.SSHManager` and log failures with `m.logPersistent`.
 - [ ] **Step 4: Run** `go test ./internal/ui` → PASS.
-- [ ] **Step 5: Commit** `feat: register laptop-created sessions with the remote serve`
+- [ ] **Step 5: Commit** `feat: register laptop-created sessions with the remote serve` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -239,21 +239,21 @@ func TestRegisterSessionsOnRemoteToleratesOldServe(t *testing.T) // fake executo
 **Interfaces:**
 - Produces: `type Hub interface { Publish(ev SessionEvent) }`; `type eventHub struct`; `func newEventHub() *eventHub`; `func (h *eventHub) Publish(ev SessionEvent)` (non-blocking; a full subscriber drops the event); `func (h *eventHub) Subscribe() (<-chan SessionEvent, func())` (buffer 64).
 - Produces `SessionEvent` fields: `State string json:"state,omitempty"`, `Rev int64 json:"rev,omitempty"`, `Queued *int json:"queued,omitempty"`, `DeliveredAt string json:"delivered_at,omitempty"` (RFC3339Nano), `Kind string json:"kind,omitempty"`. Types: `todo_changed` (id, rev), `steer` (id, queued, delivered_at), reserved `usage` (id; nl-4), `notify` (id, kind; nl-5), `verify` (id = worker, state = review status; nl-7).
-- Produces: `func collectHookActivityEvents(sessions []domain.Session, now time.Time, seen map[string]SessionEvent) []SessionEvent`: one `session_activity` per non-PTY session whose `{Title: AgentTitle, Status, State}` changed, where `State` is `agenthook.ResolveHookState` (empty when not resolved).
+- Produces: `func collectHookActivityEvents(sessions []domain.Session, now time.Time, hookSeen map[string]SessionEvent) []SessionEvent` (the loop keeps `hookSeen` separate from the PTY `seen` map so `collectSessionEvents` does not report these sessions as gone/active in turn): one `session_activity` per non-PTY session whose `{Title: AgentTitle, Status, State}` changed, where `State` is `agenthook.ResolveHookState` (empty when not resolved).
 
 - [ ] **Step 1: Write failing tests**
 
 ```go
 func TestHubFansOutAndDropsWhenFull(t *testing.T)            // two subscribers both get ev; 65th publish to an unread sub does not block
-func TestSessionEventsWithoutPTYRuntime(t *testing.T)        // New(ln, repo, nil, nil, nil, nil) → EventsDial succeeds; a saved session yields session_created
+func TestSessionEventsWithoutPTYRuntime(t *testing.T)        // New(ln, repo, nil, nil, nil, nil, "test") → EventsDial succeeds; a saved session yields session_created
 func TestSessionEventsCarriesHubEvents(t *testing.T)         // srv.hub.Publish(todo_changed id=x rev=3) → reader sees Type "todo_changed", Rev 3
 func TestCollectHookActivityEventsOnlyTmux(t *testing.T)     // pty session ignored; tmux session with fresh idle hook → State "idle"; unchanged second call → none
 ```
 
 - [ ] **Step 2: Run** `go test ./internal/server -run 'Hub|WithoutPTY|HubEvents|HookActivity'` → FAIL.
-- [ ] **Step 3: Implement.** Drop the `s.pty == nil` early return; call `collectSessionEvents` only when `s.pty != nil`; fold `collectHookActivityEvents` into the existing repo branch; add a `case ev := <-hubCh` to the select that encodes immediately.
+- [ ] **Step 3: Implement.** Drop the `s.pty == nil` early return; call `collectSessionEvents` only when `s.pty != nil`; fold `collectHookActivityEvents` (with its own `hookSeen := map[string]SessionEvent{}`) into the existing repo branch; add a `case ev := <-hubCh` to the select that encodes immediately.
 - [ ] **Step 4: Run** `go test ./internal/server` → PASS.
-- [ ] **Step 5: Commit** `feat: stream session events without a PTY runtime and via a hub`
+- [ ] **Step 5: Commit** `feat: stream session events without a PTY runtime and via a hub` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -266,7 +266,7 @@ func TestCollectHookActivityEventsOnlyTmux(t *testing.T)     // pty session igno
 
 **Interfaces:**
 - Produces (`domain`): `TodoState` consts `TodoPending="pending"`, `TodoActive="active"`, `TodoDone="done"`, `TodoDropped="dropped"`, `func (s TodoState) Valid() bool`, `func (s TodoState) Glyph() string` (✓ ▸ ○ –); `TodoAuthor` consts `AuthorUser`, `AuthorAgent`, `AuthorAiman`, `AuthorVerifier`; `TodoItem`/`TodoList` exactly as the spec, with tags `id,text,state,updated_by,updated_at,ref,omitempty` and `session_id,items,rev,updated_at`, plus `TodoList.NotInAgent []string json:"not_in_agent,omitempty"`; `TodoSnapshotItem{Text string json:"text"; Status TodoState json:"status"}`; `func NormalizeVendorTodoStatus(s string) TodoState` (`in_progress`→active, `completed`→done, ours pass through, unknown→pending).
-- Produces (`todo`): spec `Store` interface; `type Files struct`; `func NewFiles(root string) *Files`; `Get`; `Mutate`. File `<root>/<SafeSessionID>.json` holds `{"list":…, "next_id":n, "tombstones":[{"id","text","removed_at"}]}` (last 50 tombstones). Writes go to a temp file in the same dir, then rename; one `sync.Mutex` per session id.
+- Produces (`todo`): spec `Store` interface; `type Files struct`; `func NewFiles(root string) *Files`; `Get`; `Mutate`. File `<root>/<SafeSessionID>.json` holds `{"list":…, "next_id":n, "tombstones":[…]}` (last 50 tombstones); `type Tombstone struct{ ID string json:"id"; Text string json:"text"; RemovedAt time.Time json:"removed_at" }` (used by Task 8's `Merge`). Writes go to a temp file in the same dir, then rename; one `sync.Mutex` per session id.
 - Produces: `OpKind` consts `OpAdd`, `OpEdit`, `OpState`, `OpRemove`, `OpMove`, `OpRef`; `type Op struct{ Kind OpKind; ID, Text string; State domain.TodoState; ToIndex int; Ref string }`; `type Change struct{ Author domain.TodoAuthor; Ops []Op; Rev int64 }`; `func (c Change) Empty() bool`; `func (c Change) SteersAgent() bool` (false when `Author == agent` or every op is `OpRef`); `func Diff(before, after domain.TodoList) []Op`.
 - Mutate rules, after `fn`: reject empty text or invalid state (`ErrInvalid`, wrapped); assign `t<next_id>` to items with empty `ID` in order; if more than one item is `active`, keep the one whose state changed in this call (last in order) and demote the rest to `pending`; stamp per `stamp(prev, next, author, now)`: new or text changed → `UpdatedBy=author, UpdatedAt=now`; only state/position changed → same, except `author==agent` on a non-agent item leaves both untouched; add tombstones for removed ids; if `Diff` is empty return the unchanged list and an empty `Change` without writing; else `Rev++`, `UpdatedAt=now`, write.
 - Diff: adds, removes, edits, state changes, `OpRef` when only an item's `Ref` changed (W8 links a fan-out child this way; without it `Mutate` would treat a Ref-only change as a no-op and drop it); moves are surviving items outside the longest increasing subsequence of their before-positions, `ToIndex` = new 0-based index. `OpRef` is excluded from steering notes (see Task 9 and Task 11).
@@ -287,7 +287,7 @@ func TestDiffRefOnly(t *testing.T)                     // only t3.Ref changes �
 - [ ] **Step 2: Run** `go test -race ./internal/todo` → FAIL.
 - [ ] **Step 3: Implement** in the files above (inject `now func() time.Time` on `Files`, default `time.Now`).
 - [ ] **Step 4: Run** `go test -race ./internal/todo ./internal/domain` → PASS.
-- [ ] **Step 5: Commit** `feat: add the serve-owned to-do store`
+- [ ] **Step 5: Commit** `feat: add the serve-owned to-do store` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -305,7 +305,7 @@ func TestDiffRefOnly(t *testing.T)                     // only t3.Ref changes �
 - [ ] **Step 1: Write failing tests** (table-driven where natural)
 
 ```go
-func TestMergeExactAndFuzzyMatch(t *testing.T)            // "Run preprod --check" ~ "run preprod check" (exact after Normalize); "Add rollback test" vs "Add a rollback test" ≥0.8
+func TestMergeExactAndFuzzyMatch(t *testing.T)            // "Run preprod --check" ~ "run preprod check" (exact after Normalize); "Add rollback test to deploy script" vs "Add a rollback test to deploy script" ≥0.8 (threshold stays 0.8)
 func TestMergeAgentItemTakesSnapshot(t *testing.T)        // rule 3: text, status, position
 func TestMergeUserItemTakesOnlyStatus(t *testing.T)       // rule 4, delivered: text and UpdatedBy unchanged, State from snapshot
 func TestMergeKeepsUndeliveredUserState(t *testing.T)     // user set t2 done after deliveredAt; snapshot says in_progress → stays done
@@ -320,14 +320,14 @@ func TestMirrorNeverProducesAgentNoteAuthor(t *testing.T) // Change.Author == Au
 - [ ] **Step 2: Run** `go test ./internal/todo -run 'Merge|Mirror'` → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `go test -race ./internal/todo` → PASS.
-- [ ] **Step 5: Commit** `feat: merge agent to-do snapshots without losing user edits`
+- [ ] **Step 5: Commit** `feat: merge agent to-do snapshots without losing user edits` (run `make ci` and `graphify update .` first)
 
 ---
 
 ### Task 9: `.aiman_todo.md` rendering and steering-note formatting
 
 **Files:**
-- Create: `internal/todo/render.go`, `internal/fsutil/write.go`
+- Create: `internal/todo/render.go`, `internal/fsutil/write.go`, `internal/fsutil/write_test.go`
 - Modify: `internal/domain/session_files.go` (add `AimanTodoFileName = ".aiman_todo.md"`, `AimanScaffoldHeader`)
 - Modify: `internal/contextstore/files.go:539-555` (`WriteSessionPack` uses `domain.AimanScaffoldHeader`; output unchanged)
 - Test: `internal/todo/render_test.go`, existing `internal/contextstore` tests
@@ -335,7 +335,7 @@ func TestMirrorNeverProducesAgentNoteAuthor(t *testing.T) // Change.Author == Au
 **Interfaces:**
 - Produces: `domain.AimanScaffoldHeader` = the exact three-line comment plus the "> **Do not commit this file.** …" blockquote and blank line from `WriteSessionPack`.
 - Produces: `func fsutil.WriteIfChanged(path string, content []byte, mode os.FileMode) (changed bool, err error)` (reads first; writes temp + rename only when bytes differ). It is the one local compare-before-write helper: nl-3a (`.aiman_handover.md`) and nl-8 (cache hygiene) use it instead of their own.
-- Produces: `func FormatList(list domain.TodoList) string` (one line per non-dropped item: `"t3 ▸ Run preprod --check"`); `func FormatSteerNote(authors []domain.TodoAuthor, ops []Op, list domain.TodoList) string` (renders no line for `OpRef`); `func Render(list domain.TodoList) string`; `func WriteRendered(dir string, list domain.TodoList) (changed bool, err error)` (`fsutil.WriteIfChanged` on `dir/.aiman_todo.md`).
+- Produces: `func FormatLine(it domain.TodoItem) string` (`"t3 ▸ Run preprod --check"`, the one line format; the CLI reuses it); `func FormatList(list domain.TodoList) string` (`FormatLine` per non-dropped item); `func FormatSteerNote(authors []domain.TodoAuthor, ops []Op, list domain.TodoList) string` (renders no line for `OpRef`); `func Render(list domain.TodoList) string`; `func WriteRendered(dir string, list domain.TodoList) (changed bool, err error)` (`fsutil.WriteIfChanged` on `dir/.aiman_todo.md`).
 - Change lines: add `"+ t7 Add rollback test"`, edit `"~ t3 now: <text>"`, state done `"✓ t2 done"`, active `"▸ t3 active"`, pending `"○ t3 pending"`, dropped `"- t5 dropped"`, remove `"- t5 removed"`, move `"↕ t4 moved to <ToIndex+1>"`. Authors join as `"user"`, `"user and aiman"`, `"user, aiman and verifier"`.
 - Render body: header, `# To-do list`, `- [x] t1 …` / `- [ ] t3 ▸ … (active)` / `- [ ] t4 …` / `- [~] t5 … (dropped)`, then ``Update it with `aiman todo`; ids are stable.``. No rev and no timestamps, so unchanged items give identical bytes.
 
@@ -356,8 +356,8 @@ func TestRenderStartsWithScaffoldHeader(t *testing.T)
 
 - [ ] **Step 2: Run** `go test ./internal/todo ./internal/fsutil ./internal/contextstore -run 'Format|Render|Pack|WriteIfChanged'` → FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `go test ./internal/todo ./internal/contextstore` → PASS.
-- [ ] **Step 5: Commit** `feat: render .aiman_todo.md and steering notes`
+- [ ] **Step 4: Run** `go test ./internal/todo ./internal/fsutil ./internal/contextstore` → PASS.
+- [ ] **Step 5: Commit** `feat: render .aiman_todo.md and steering notes` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -371,13 +371,13 @@ func TestRenderStartsWithScaffoldHeader(t *testing.T)
 
 **Interfaces:**
 - Produces: `domain.SteerRecord{ID int64; SessionID string; Author TodoAuthor; Text string; CreatedAt, DeliveredAt time.Time}`.
-- Produces: table `steer_notes(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL, created_at DATETIME NOT NULL, delivered_at DATETIME)` plus index on `(session_id, delivered_at)`. Methods: `AddSteerNote(ctx, *domain.SteerRecord) error` (sets `ID`), `ListUndeliveredSteerNotes(ctx) ([]domain.SteerRecord, error)` (ordered by id), `MarkSteerNotesDelivered(ctx, ids []int64, at time.Time) error`, `DeleteSteerNotes(ctx, sessionID string) error`.
+- Produces: table `steer_notes(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL, created_at DATETIME NOT NULL, delivered_at DATETIME)` plus index on `(session_id, delivered_at)`. Methods: `AddSteerNote(ctx, *domain.SteerRecord) error` (sets `ID`), `ListUndeliveredSteerNotes(ctx) ([]domain.SteerRecord, error)` (ordered by id), `MarkSteerNotesDelivered(ctx, ids []int64, at time.Time) error`, `DeleteSteerNotes(ctx, sessionID string) error`, `LastSteerDelivery(ctx, sessionID string) (time.Time, error)` (max `delivered_at` for the session, zero when none; keeps the delivery guard of Task 8 correct after a restart).
 
-- [ ] **Step 1: Write failing test** `TestSteerNotesRoundTrip`: add two for s1, one for s2; mark s1's first delivered; list → the other two in id order; delete s2 → one left.
+- [ ] **Step 1: Write failing test** `TestSteerNotesRoundTrip`: add two for s1, one for s2; mark s1's first delivered; list → the other two in id order; delete s2 → one left; `LastSteerDelivery(s1)` equals the marked time, `LastSteerDelivery(s2)` is zero.
 - [ ] **Step 2: Run** `go test ./internal/infra/sqlite -run SteerNotes` → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `go test ./internal/infra/sqlite` → PASS.
-- [ ] **Step 5: Commit** `feat: persist undelivered steering notes`
+- [ ] **Step 5: Commit** `feat: persist undelivered steering notes` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -393,8 +393,8 @@ func TestRenderStartsWithScaffoldHeader(t *testing.T)
 - Produces: `type SteerNote struct{ SessionID string json:"session_id"; Author domain.TodoAuthor json:"author"; Text string json:"text" }` (spec shape plus tags).
 - Produces: `type SteerStatus struct{ Queued int json:"queued"; LastDeliveredAt time.Time json:"last_delivered_at,omitzero"; LastError string json:"last_error,omitempty"; Held string json:"held,omitempty"; Pending []SteerNote json:"pending,omitempty" }` (`Held` ∈ `working|dialog|ended|unknown`; `Pending` = undelivered notes oldest first, read from the persisted queue; nl-3a puts them in the handover and the TUI does not need them).
 - Produces: `type SteerStore interface { AddSteerNote; ListUndeliveredSteerNotes; MarkSteerNotesDelivered; DeleteSteerNotes }` (signatures from Task 10); `type steerTarget interface { steerReady(ctx context.Context, id string, lastDelivered time.Time) (bool, string); deliverSteer(ctx context.Context, id, text string) error; todoList(id string) (domain.TodoList, error) }`.
-- Produces: `func newSteerer(store SteerStore, target steerTarget, publish func(SessionEvent), window time.Duration) *steerer`; methods `Enqueue`, `EnqueueTodo(sessionID string, author domain.TodoAuthor, ops []todo.Op)`, `Status`, `Kick(sessionID string)`, `Undelivered(sessionID string) []domain.SteerRecord` (for W6a), `Forget(sessionID string)`, `Load(ctx) error`, `Run(ctx)`.
-- Behaviour: `EnqueueTodo` returns at once when every op is `OpRef`. The first enqueue for a session opens an 800 ms window (`window` param). At flush, accumulated todo ops (from all authors in the window) become one note via `FormatSteerNote` against `todoList(id)`, and free texts join with a blank line into a second note; each is persisted (`AddSteerNote`) and a `steer` event published. `Run` wakes on `Kick` or a 1 s ticker. For each session with undelivered notes it asks `steerReady`; when ready it joins all undelivered texts with a blank line, calls `deliverSteer`, then `MarkSteerNotesDelivered`, updates `LastDeliveredAt`, and publishes `steer`. On error it sets `LastError` and retries on the next tick. `Load` reads undelivered rows once at start; `Forget` drops memory state and calls `DeleteSteerNotes`.
+- Produces: `func newSteerer(store SteerStore, target steerTarget, publish func(SessionEvent), window time.Duration) *steerer`; methods `Enqueue`, `EnqueueTodo(sessionID string, author domain.TodoAuthor, ops []todo.Op)`, `Status`, `Kick(sessionID string)`, `Forget(sessionID string)`, `Load(ctx) error`, `Run(ctx)`.
+- Behaviour: `EnqueueTodo` returns at once when every op is `OpRef`. The first enqueue for a session opens an 800 ms window (`window` param). At flush, accumulated todo ops (from all authors in the window) become one note via `FormatSteerNote` against `todoList(id)`, and free texts join with a blank line into a second note; each is persisted (`AddSteerNote`) and a `steer` event published. `Run` wakes on `Kick` or a 1 s ticker. For each session with undelivered notes it asks `steerReady`; when ready it joins all undelivered texts with a blank line, calls `deliverSteer`, then `MarkSteerNotesDelivered`, updates `LastDeliveredAt`, and publishes `steer`. On error it sets `LastError` and retries on the next tick. `Load` reads undelivered rows once at start and seeds each session's `LastDeliveredAt` from `LastSteerDelivery` (add it to `SteerStore`), so the merge guard survives a restart; `Forget` drops memory state and calls `DeleteSteerNotes`.
 
 - [ ] **Step 1: Write failing tests** (fake store, fake target, `window = 20*time.Millisecond`)
 
@@ -407,12 +407,13 @@ func TestSteererRecordsDeliveryError(t *testing.T)        // deliver returns err
 func TestSteererPublishesSteerEvents(t *testing.T)        // publish sees Type "steer" with *Queued 1, then *Queued 0 and DeliveredAt set
 func TestEnqueueTodoIgnoresRefOnly(t *testing.T)          // EnqueueTodo with only OpRef ops → nothing queued, no event
 func TestSteerStatusListsPending(t *testing.T)            // 2 undelivered notes → Status().Pending has both texts, oldest first
+func TestSteererLoadSeedsLastDelivered(t *testing.T)      // store has a delivered note at T; Load → Status().LastDeliveredAt == T (restart keeps the delivery guard)
 ```
 
-- [ ] **Step 2: Run** `go test -race ./internal/server -run Steerer` → FAIL.
+- [ ] **Step 2: Run** `go test -race ./internal/server -run 'Steerer|EnqueueTodo|SteerStatus'` → FAIL.
 - [ ] **Step 3: Implement** (one goroutine in `Run`; a mutex guards per-session state; flush timers via `time.AfterFunc`).
-- [ ] **Step 4: Run** `go test -race ./internal/server -run Steerer` → PASS.
-- [ ] **Step 5: Commit** `feat: add the steering queue with coalescing and persistence`
+- [ ] **Step 4: Run** `go test -race ./internal/server -run 'Steerer|EnqueueTodo|SteerStatus'` → PASS.
+- [ ] **Step 5: Commit** `feat: add the steering queue with coalescing and persistence` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -421,13 +422,14 @@ func TestSteerStatusListsPending(t *testing.T)            // 2 undelivered notes
 **Files:**
 - Create: `internal/server/steer_delivery.go`
 - Modify: `internal/usecase/session_terminal.go:355-390` (export `PromptStillInComposer(pane, prompt string) bool` wrapping `submitMarker` + `composerStillHolds`)
+- Modify: `internal/server/server.go` (declare fields `todos todoStore` and `steer *steerer`, plus `target steerTarget` defaulting to `s`; declare the `todoStore` interface here, Task 13 consumes it; `(*steerer).Kick` and `Forget` are nil-safe so handlers call them before `EnableTodos`)
 - Modify: `internal/server/handlers_session.go:753-807` (`s.steer.Kick(id)` after a saved report), `:708-727` (forget calls `s.steer.Forget`)
 - Test: `internal/server/steer_delivery_test.go`
 
 **Interfaces:**
 - Produces: `func (s *Server) steerReady(ctx context.Context, id string, lastDelivered time.Time) (bool, string)`: resolve the session (`loadSessions`); `AgentEnded` → `(false, "ended")`. If `agenthook.ResolveHookState` resolves: `idle` → ready only if `HookStateAt.After(lastDelivered)`; `waiting_input` with source `idle_prompt` → ready under the same freshness rule; `waiting_input` → `"dialog"`; else `"working"`. Otherwise `s.classify` (guard `s.pty == nil` for PTY sessions): confidence `High` and `idle` and `time.Since(lastDelivered) > 3*time.Second` → ready; `waiting_input` → `"dialog"`; else `"unknown"`.
 - Produces: `func (s *Server) deliverSteer(ctx context.Context, id, text string) error`. PTY: `s.pty.Write(id, text)`, wait 500 ms, write `"\r"`, then up to 3 checks 1 s apart with `CaptureScreen` + `usecase.PromptStillInComposer`, resending `"\r"` when it still holds. Tmux: `usecase.SendPrompt(ctx, s.remote, sess.TmuxSession, sess.ID, text)`. Never calls `usecase.SendSessionPrompt`.
-- Produces: `func (s *Server) todoList(id string) (domain.TodoList, error)` (delegates to the store).
+- Produces: `func (s *Server) todoList(id string) (domain.TodoList, error)` (delegates to the store). Tests replace the unexported `s.target steerTarget` (default `s`) to inject readiness and delivery.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -439,13 +441,13 @@ func TestSteerHoldsOnDialog(t *testing.T)                        // waiting_inpu
 func TestSteerReadyOnIdlePromptWaiting(t *testing.T)             // waiting_input, source idle_prompt, fresh → ready
 func TestDeliverSteerToPTY(t *testing.T)                         // startPTYServer-style server with `cat` session id "st1"; deliverSteer("hello steer") → pty capture contains "hello steer"
 func TestDeliverSteerToTmuxUsesLocalSendKeys(t *testing.T)       // fakeRemote: execs contain `tmux send-keys -t "work"` and no `aiman pty input`
-func TestReportKicksSteerer(t *testing.T)                        // report state idle → fake steerer saw Kick("id")
+func TestReportKicksSteerer(t *testing.T)                        // real newSteerer with fake store and a recording target; held note + report state idle → delivered (Kick reached the steerer)
 ```
 
 - [ ] **Step 2: Run** `go test ./internal/server ./internal/usecase -run 'Steer|DeliverSteer|Kicks|PromptStill'` → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `go test -race ./internal/server ./internal/usecase` → PASS.
-- [ ] **Step 5: Commit** `feat: gate steering on agent readiness and deliver from serve`
+- [ ] **Step 5: Commit** `feat: gate steering on agent readiness and deliver from serve` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -453,24 +455,24 @@ func TestReportKicksSteerer(t *testing.T)                        // report state
 
 **Files:**
 - Create: `internal/server/handlers_todo.go`
-- Modify: `internal/server/server.go` (fields `todos todoStore`, `steer *steerer`; `EnableTodos`; dispatch; `Serve` starts `steer.Run` when enabled)
-- Modify: `cmd/aiman/serve.go:91-98` (`todo.NewFiles(filepath.Join(dir, "todos"))`, `srv.EnableTodos(store, db)`)
+- Modify: `internal/server/server.go` (fields `todos`, `steer`, `target` already declared in Task 12; `EnableTodos` builds the steerer with `s.target`; dispatch; `Serve` starts `steer.Run` when enabled)
+- Modify: `cmd/aiman/serve.go:91-98` (`todos := todo.NewFiles(filepath.Join(dir, "todos"))`, `srv.EnableTodos(todos, db)`)
 - Test: `internal/server/handlers_todo_test.go`
 
 **Interfaces:**
 - Consumes: Tasks 6–12.
-- Produces: `type todoStore interface { todo.Store; Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliveredAt time.Time) (domain.TodoList, todo.Change, error) }`; `func (s *Server) EnableTodos(store todoStore, notes SteerStore)` (builds the steerer with package var `steerCoalesceWindow = 800 * time.Millisecond`, which tests shorten, and calls `steer.Load`).
-- Produces: `func deriveAuthor(method, callerID, targetID, as string) (domain.TodoAuthor, error)`: `todo.mirror` → agent; `callerID == targetID` → agent (for `steer.send` this is refused instead: `invalid_params` "a session cannot steer itself"); `as` empty or `"user"` → user; `"aiman"` → aiman only for `steer.send` (`aiman-trigger` calls the socket directly; `aiman rpc` refuses any `as` from inside a session); other `as` → `invalid_params`.
+- Consumes: `type todoStore interface { todo.Store; Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliveredAt time.Time) (domain.TodoList, todo.Change, error) }`; `func (s *Server) EnableTodos(store todoStore, notes SteerStore)` (builds the steerer with package var `steerCoalesceWindow = 800 * time.Millisecond`, which tests shorten, and calls `steer.Load`).
+- Produces: `func deriveAuthor(method, callerID, targetID, as string) (domain.TodoAuthor, error)`: `todo.mirror` → agent; `callerID == targetID` → agent (for `steer.send` this is refused instead: `invalid_params` "a session cannot steer itself"); `as` empty or `"user"` → user; `"aiman"` → aiman only for `steer.send` (`aiman-trigger` calls the socket directly); this function is the only authorship check (`aiman rpc` forwards `as` untouched); other `as` → `invalid_params`.
 - Produces: `func (s *Server) MutateTodos(ctx context.Context, sess domain.Session, author domain.TodoAuthor, fn func(*domain.TodoList) error) (domain.TodoList, error)` (exported; the entry point W4/W5/W8 use). After a non-empty change: `todo.WriteRendered(sess.WorkingDirectory, list)` (logged, not fatal; skipped when the dir is empty), publish `todo_changed{id, rev}`, and when `change.SteersAgent()` `s.steer.EnqueueTodo(id, author, change.Ops)`.
 - Produces: `type TodoAccess struct{ s *Server }` with `Get(sessionID string) (domain.TodoList, error)` and `Mutate(ctx context.Context, sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList) error) error` (resolves the session via `loadSessions`, then `MutateTodos`); `func (s *Server) TodoAccess() TodoAccess`. This is the one adapter serve hands to `ciwatch` (nl-6), `verify` (nl-7) and `fanout` (nl-9), whose consumer-side `Todos` interfaces all have exactly these two methods.
-- Produces: `func (s *Server) Steerer() Steerer` (nil-safe interface for `cmd/aiman/serve.go` wiring of W4).
+- Produces: `func (s *Server) Steerer() Steerer` (for `cmd/aiman/serve.go` wiring of W4); when to-dos are not enabled it returns a no-op `Steerer` value (never a typed-nil `*steerer` inside the interface).
 - Methods (params; all take `session` resolved via `resolveSession(loadSessions)` and optional `as`): `todo.get` → `{"type":"todo_list","list":…,"steer":SteerStatus}`; `todo.add {text, after?, ref?}` → `{"type":"todo_list","list":…,"id":"t7"}` (`after` unknown → `not_found`); `todo.update {id, text?, state?}`; `todo.move {id, to_index}` (clamped); `todo.remove {id}`; `todo.mirror {items:[{text,status}]}` (status through `NormalizeVendorTodoStatus`; `deliveredAt` from `s.steer.Status(id).LastDeliveredAt`); `todo.summary {sessions?: [id…]}` (no `session` param; omitted `sessions` means every session serve knows) → `{"type":"todo_summary","sessions":{"<id>":{"done":n,"total":m,"active":"<active item text or empty>","rev":r}}}` (`total` excludes dropped items; sessions without a list are omitted; reads files only, one call per host for the dashboard's progress bars); `steer.send {session, text, as?, mode?}`:
   - `mode` `"note"` (default): `Enqueue(SteerNote{Author: derived})`, delivered through the W1 gate → `{"type":"steer_status","steer":…}`.
   - `mode` `"answer"`: never queued or persisted. Types `text` at once with `deliverSteer` only when `steerReady` reports `"dialog"` (the agent is in `waiting_input` on a permission/choice dialog); otherwise answers without typing. Result `{"type":"steer_status","steer":…,"answered":bool}`. `aiman-trigger`'s autonomous unblocker uses it (nl-6), so the unblocker keeps working while notes stay gated.
   - Unknown `mode` → `invalid_params`.
   Unknown item id → `not_found`. Without `EnableTodos` every method returns `invalid_params` "to-dos not enabled".
 
-- [ ] **Step 1: Write failing tests** (server with sqlite `testRepo`, `todo.NewFiles(t.TempDir())`, a fake `steerTarget` that is never ready)
+- [ ] **Step 1: Write failing tests** (server with sqlite `testRepo`, `todo.NewFiles(t.TempDir())`, a fake `steerTarget` assigned to `s.target`, never ready)
 
 ```go
 func TestTodoAddFromUserSteers(t *testing.T)            // todo.add as user → list has t1, steer status Queued becomes 1 after the window
@@ -492,7 +494,7 @@ func TestTodoAccessMutateUsesServePath(t *testing.T)    // TodoAccess().Mutate a
 - [ ] **Step 2: Run** `go test ./internal/server -run 'Todo|DeriveAuthor|SteerSend'` → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `go test -race ./internal/server ./cmd/aiman` → PASS.
-- [ ] **Step 5: Commit** `feat: expose to-dos and steering on the agent API`
+- [ ] **Step 5: Commit** `feat: expose to-dos and steering on the agent API` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -501,14 +503,14 @@ func TestTodoAccessMutateUsesServePath(t *testing.T)    // TodoAccess().Mutate a
 **Files:**
 - Create: `cmd/aiman/todo_cmd.go`
 - Create: `internal/agenthook/todo.go`
-- Modify: `cmd/aiman/main.go:73-80` (early `case "todo": return runTodo(parsed.Rest[1:])`)
+- Modify: `cmd/aiman/main.go:73-80` (early `case "todo": return runTodo(parsed.Rest[1:], os.Stdin, os.Getenv)`)
 - Modify: `cmd/aiman/session_cmd.go:205-208` (`"json": true` in `boolSessionFlags`)
 - Test: `cmd/aiman/todo_cmd_test.go`, `internal/agenthook/todo_test.go`, `cmd/aiman/socket_only_dispatch_test.go` (add `{"todo", "list"}`)
 
 **Interfaces:**
 - Consumes: Task 13 methods; Task 1 fixtures.
 - Produces: `func ExtractTodoSnapshot(raw []byte, readTasks func(listRef string) ([]domain.TodoSnapshotItem, error)) ([]domain.TodoSnapshotItem, bool)`: `ok` only when `tool_name` is `TodoWrite` with an array `tool_input.todos[]{content,status}`; or `TaskCreate`/`TaskUpdate` and Task 1 found a full-list source (`claude-tasks-full-list`), in which case the full list comes from the response or from `readTasks` (subject → text, `pending|in_progress|completed` through `NormalizeVendorTodoStatus`, deleted tasks omitted); or (if Task 1 said yes) `update_plan` with `tool_input.plan[]{step,status}`. An empty array is `ok` (the agent cleared its list). A Tasks payload without a readable full list is not `ok` (never mirror a partial list).
-- Produces: `func runTodo(args []string) error`; `func formatTodoLines(list domain.TodoList) string` (same lines as `todo.FormatList`, dropped items shown as `t5 – text`).
+- Produces: `func runTodo(args []string, stdin io.Reader, getenv func(string) string) error`; `func formatTodoLines(list domain.TodoList) string` (`todo.FormatLine` per item, dropped items included as `t5 – text`; no second copy of the line format).
 - CLI: `list | add TEXT… [--after ID] | start ID | done ID | drop ID | edit ID TEXT… | move ID POS | rm ID | report --from-stdin`, flags `--session NAME` (default `$AIMAN_ID`; neither → usage error), `--as user`, `--json`. `move` POS is 1-based (`to_index = POS-1`). Non-JSON output prints the list after every command. `report` always returns nil, prints nothing, needs `AIMAN_ID`, and calls `todo.mirror` only when `ExtractTodoSnapshot` is `ok`.
 
 - [ ] **Step 1: Write failing tests**
@@ -517,7 +519,7 @@ func TestTodoAccessMutateUsesServePath(t *testing.T)    // TodoAccess().Mutate a
 func TestExtractTodoSnapshotClaude(t *testing.T)          // fixture → 3 items, statuses pending/active/done
 func TestExtractTodoSnapshotClaudeTasks(t *testing.T)     // TaskUpdate fixture + fake readTasks returning 3 tasks → 3 items; readTasks error → ok=false (skipped when Task 1 found no full-list source)
 func TestExtractTodoSnapshotRejectsUnrelated(t *testing.T) // Bash PostToolUse, "not json", {"tool_name":"TodoWrite"} without todos → ok=false
-func TestTodoReportNoopsOnGarbage(t *testing.T)           // AIMAN_ID=x, stdin "garbage", no server → returns nil, no output
+func TestTodoReportNoopsOnGarbage(t *testing.T)           // runTodo(["report","--from-stdin"], "garbage", getenv AIMAN_ID=x) against a fake socket listener (AIMAN_SOCK) → returns nil, no output, the listener saw zero requests
 func TestTodoMovePositionIsOneBased(t *testing.T)         // todoParams("move", ["t4","2"]) → to_index 1
 func TestTodoRequiresSession(t *testing.T)                // no AIMAN_ID, no --session → errUsage
 ```
@@ -526,14 +528,14 @@ Factor `todoParams(cmd string, rest []string, flags map[string]string) (method s
 - [ ] **Step 2: Run** `go test ./cmd/aiman ./internal/agenthook -run 'Todo|ExtractTodo|SocketOnly'` → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `go test ./cmd/aiman ./internal/agenthook` → PASS.
-- [ ] **Step 5: Commit** `feat: add the aiman todo CLI and hook reporter entry point`
+- [ ] **Step 5: Commit** `feat: add the aiman todo CLI and hook reporter entry point` (run `make ci` and `graphify update .` first)
 
 ---
 
 ### Task 15: Hook registration — to-do reporter and turn hooks
 
 **Files:**
-- Modify: `internal/agenthook/script.go` (generic `ensureScript(path, body string)`; add `todoReporterScript`, `todoReporterPath(home)` = `~/.aiman/hooks/todo-report`)
+- Modify: `internal/agenthook/script.go` (`hookScript(subcommand string) string` generates both scripts: the existing reporter and the todo reporter; `todoReporterPath(home)` = `~/.aiman/hooks/todo-report`)
 - Modify: `internal/agenthook/native.go:15` (add `TodoMarker = "todo-report"`)
 - Modify: `internal/agenthook/merge.go:108-169` (`hasMarker`/`replaceMarkedCommand`/`upsertClaudeHook` take a marker; a found group with a different `matcher` gets it rewritten), add `upsertTurnHooks(root, command)` (`Stop`, `UserPromptSubmit`) and `upsertTodoHook(root, command, matcher)` (`PostToolUse`)
 - Modify: `internal/agenthook/install.go:24-89` (write the todo script; `ensureClaude` adds turn hooks + `PostToolUse` matcher `TodoWrite|TaskCreate|TaskUpdate` (the Tasks names only if Task 1 found a full-list source); `ensureCodex` adds turn hooks + `update_plan` only if Task 1 said yes)
@@ -542,7 +544,7 @@ Factor `todoParams(cmd string, rest []string, flags map[string]string) (method s
 aiman does not set `CLAUDE_CODE_ENABLE_TASKS`; Claude keeps its Tasks tools.
 
 **Interfaces:**
-- Produces: todo script identical to `reporterScript` except the last command is `"$bin" todo report --from-stdin >/dev/null 2>&1 || true`.
+- Produces: the todo script is `hookScript("todo report --from-stdin")`: identical to the reporter script except the last command is `"$bin" todo report --from-stdin >/dev/null 2>&1 || true`. Writing it adds a result to `EnsureOnHost`: update the existing install test to expect 3 results.
 - Produces: `upsertClaudeHook(root, event, command, matcher, marker string) bool` (marker parameter added). nl-3a's `upsertCompactHook` calls it with `Marker`.
 
 - [ ] **Step 1: Write failing tests**
@@ -558,7 +560,7 @@ Existing tests that count hook groups for Copilot/Grok/Cursor must keep passing 
 - [ ] **Step 2: Run** `go test ./internal/agenthook -run 'Ensure|UpsertTodo'` → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `go test ./internal/agenthook` → PASS.
-- [ ] **Step 5: Commit** `feat: mirror Claude and Codex to-do tools and report turn ends`
+- [ ] **Step 5: Commit** `feat: mirror Claude and Codex to-do tools and report turn ends` (run `make ci` and `graphify update .` first)
 
 ---
 
@@ -567,7 +569,7 @@ Existing tests that count hook groups for Copilot/Grok/Cursor must keep passing 
 **Files:**
 - Modify: `internal/aimanskill/SKILL.md` (new `## Your to-do list` section after `## Prompt and wait`, before `## Run a command in another terminal`)
 - Modify: `internal/aimanskill/install_test.go` (extend `TestSkillDocumentsContextCLI` or add `TestSkillDocumentsTodoCLI`)
-- Modify: `AGENTS.md` (repo layout: `internal/todo`; session model: `BaseBranch`; serve section: register, to-dos, steering, hub; gotcha on the `AgentEnded` clear path)
+- Modify: `AGENTS.md` (repo layout: `internal/todo`; session model: `BaseBranch` (also add `base_branch` to the COALESCE-protected field list); serve section: register, to-dos, steering, hub; gotcha on the `AgentEnded` clear path)
 
 **Interfaces:**
 - Section content: every session has a to-do list owned by serve and shown to the user; at the start of a task write your plan into it with `aiman todo add`, and keep it current; `aiman todo list` shows ids (`t3 ▸ …`); use `aiman todo add|start|done|drop|edit|move|rm` with those ids; keep exactly one item active; this is the list the user sees and edits, so use it even if your own to-do tool also exists (Claude's `TodoWrite` and Tasks tools are mirrored when used, but do not rely on that); messages starting `[aiman]` come from the operator or aiman: follow them and update the list with the ids they name; `.aiman_todo.md` is generated, do not edit or commit it.
