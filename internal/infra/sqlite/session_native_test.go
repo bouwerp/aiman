@@ -122,3 +122,30 @@ func TestSaveAndGetHookState(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestSaveKeepsBaseBranchWhenEmpty(t *testing.T) {
+	repo, err := NewRepository(filepath.Join(t.TempDir(), "aiman.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "s1", BaseBranch: "main",
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "s1", Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BaseBranch != "main" {
+		t.Fatalf("BaseBranch = %q, want main", got.BaseBranch)
+	}
+}

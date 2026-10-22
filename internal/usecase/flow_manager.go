@@ -204,6 +204,64 @@ func IsAntigravityAgent(name, command string) bool {
 	return len(fields) > 0 && fields[0] == "agy"
 }
 
+// sessionBaseBranch is the base ref recorded on a session: the one the caller
+// asked for, else the one the worktree setup detected.
+func sessionBaseBranch(configured, detected string) string {
+	if configured != "" {
+		return configured
+	}
+	return detected
+}
+
+// resolveWorktree provisions (or locates) the directory a session runs in.
+// Ad-hoc and no-repository sessions get a named subdirectory of the remote
+// root; repository sessions get a git worktree.
+func (m *FlowManager) resolveWorktree(ctx context.Context, sshMgr domain.RemoteExecutor, config domain.SessionConfig, branch string) (domain.Worktree, error) {
+	switch {
+	case config.AdHoc:
+		// Ad-hoc sessions get their own subdirectory under the repos root so
+		// they never run in the root itself.  Use the branch label (already
+		// sanitized by the UI) as the directory name.
+		adHocDir := branch
+		if adHocDir == "" {
+			adHocDir = domain.AdHocLabel("adhoc-", time.Now(), rand.Reader)
+		}
+		return domain.Worktree{Path: fmt.Sprintf("%s/%s", strings.TrimRight(sshMgr.GetRoot(), "/"), adHocDir)}, nil
+	case config.Repo.Name != "No Repository" && config.Repo.Name != "":
+		var worktree domain.Worktree
+		var err error
+		switch {
+		case config.AttachExisting:
+			worktree, err = m.gitManager.FindExistingWorktree(ctx, sshMgr, config.Repo, branch)
+		case config.ReuseWorkspace:
+			worktree, err = m.gitManager.SetupSharedWorkspace(ctx, sshMgr, config.Repo, branch)
+		case config.ExistingBranch:
+			worktree, err = m.gitManager.SetupRemoteWorktreeFromBranch(ctx, sshMgr, config.Repo, branch)
+		default:
+			worktree, err = m.gitManager.SetupRemoteWorktree(ctx, sshMgr, config.Repo, branch, config.BaseBranch)
+		}
+		if err != nil {
+			return domain.Worktree{}, fmt.Errorf("failed to setup worktree: %w", err)
+		}
+		// Safety: sessions must never run inside the main repository directory.
+		if !config.ReuseWorkspace {
+			mainRepo := infraGit.ComputeMainRepoPath(sshMgr.GetRoot(), config.Repo.Name)
+			if filepath.Clean(worktree.Path) == mainRepo {
+				return domain.Worktree{}, fmt.Errorf("safety: session working directory %q is the main repository — sessions must use a git worktree (a sibling directory), not the main repo itself", worktree.Path)
+			}
+		}
+		return worktree, nil
+	default:
+		// No repository selected — create a named subdirectory under the root
+		// so the session never runs directly in the root.
+		subDir := branch
+		if subDir == "" {
+			subDir = domain.AdHocLabel("session-", time.Now(), rand.Reader)
+		}
+		return domain.Worktree{Path: fmt.Sprintf("%s/%s", strings.TrimRight(sshMgr.GetRoot(), "/"), subDir)}, nil
+	}
+}
+
 func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionConfig) (*domain.Session, error) {
 	if config.Agent == nil {
 		return nil, errors.New("agent is required")
@@ -272,50 +330,12 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	}
 
 	// Step 6: Isolate (Worktree)
-	var worktree domain.Worktree
-	var err error
-	switch {
-	case config.AdHoc:
-		// Ad-hoc sessions get their own subdirectory under the repos root so
-		// they never run in the root itself.  Use the branch label (already
-		// sanitized by the UI) as the directory name.
-		adHocDir := branch
-		if adHocDir == "" {
-			adHocDir = domain.AdHocLabel("adhoc-", time.Now(), rand.Reader)
-		}
-		session.WorktreePath = fmt.Sprintf("%s/%s", strings.TrimRight(sshMgr.GetRoot(), "/"), adHocDir)
-	case config.Repo.Name != "No Repository" && config.Repo.Name != "":
-		switch {
-		case config.AttachExisting:
-			worktree, err = m.gitManager.FindExistingWorktree(ctx, sshMgr, config.Repo, branch)
-		case config.ReuseWorkspace:
-			worktree, err = m.gitManager.SetupSharedWorkspace(ctx, sshMgr, config.Repo, branch)
-		case config.ExistingBranch:
-			worktree, err = m.gitManager.SetupRemoteWorktreeFromBranch(ctx, sshMgr, config.Repo, branch)
-		default:
-			worktree, err = m.gitManager.SetupRemoteWorktree(ctx, sshMgr, config.Repo, branch, config.BaseBranch)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to setup worktree: %w", err)
-		}
-		// Safety: sessions must never run inside the main repository directory.
-		if !config.ReuseWorkspace {
-			mainRepo := infraGit.ComputeMainRepoPath(sshMgr.GetRoot(), config.Repo.Name)
-			if filepath.Clean(worktree.Path) == mainRepo {
-				return nil, fmt.Errorf("safety: session working directory %q is the main repository — sessions must use a git worktree (a sibling directory), not the main repo itself", worktree.Path)
-			}
-		}
-		session.WorktreePath = worktree.Path
-
-	default:
-		// No repository selected — create a named subdirectory under the root
-		// so the session never runs directly in the root.
-		subDir := branch
-		if subDir == "" {
-			subDir = domain.AdHocLabel("session-", time.Now(), rand.Reader)
-		}
-		session.WorktreePath = fmt.Sprintf("%s/%s", strings.TrimRight(sshMgr.GetRoot(), "/"), subDir)
+	wt, err := m.resolveWorktree(ctx, sshMgr, config, branch)
+	if err != nil {
+		return nil, err
 	}
+	session.WorktreePath = wt.Path
+	session.BaseBranch = sessionBaseBranch(config.BaseBranch, wt.Base)
 
 	if !config.AdHoc {
 		// Ignore session-local task stub so it is not committed from the worktree.

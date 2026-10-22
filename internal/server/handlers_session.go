@@ -22,6 +22,7 @@ type SessionInfo struct {
 	ParentID    string `json:"parent_id,omitempty"`
 	IssueKey    string `json:"issue_key,omitempty"`
 	Branch      string `json:"branch,omitempty"`
+	BaseBranch  string `json:"base_branch,omitempty"`
 	RepoName    string `json:"repo_name,omitempty"`
 	TmuxSession string `json:"tmux_session,omitempty"`
 	// Backend is the terminal runtime hosting the session ("pty" or "tmux").
@@ -50,6 +51,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		Name:             s.Name,
 		Group:            s.Group,
 		ParentID:         s.ParentID,
+		BaseBranch:       s.BaseBranch,
 		IssueKey:         s.IssueKey,
 		Branch:           s.Branch,
 		RepoName:         s.RepoName,

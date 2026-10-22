@@ -58,6 +58,7 @@ type Session struct {
 	ParentID         string // session that spawned this one; empty is a root
 	IssueKey         string
 	Branch           string
+	BaseBranch       string // ref the worktree branch was cut from; basis for diffs against the base
 	RepoName         string
 	RemoteHost       string
 	WorktreePath     string

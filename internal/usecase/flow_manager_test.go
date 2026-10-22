@@ -331,3 +331,37 @@ func TestIsAntigravityAgent(t *testing.T) {
 		}
 	}
 }
+
+// rootOnlyRemote answers GetRoot and nothing else; any other call panics on
+// the nil embedded interface, which proves a code path stayed off the remote.
+type rootOnlyRemote struct {
+	domain.RemoteExecutor
+	root string
+}
+
+func (r rootOnlyRemote) GetRoot() string { return r.root }
+
+func fakeRoot(dir string) domain.RemoteExecutor { return rootOnlyRemote{root: dir} }
+
+func TestSessionBaseBranch(t *testing.T) {
+	cases := []struct{ configured, detected, want string }{
+		{"", "origin/main", "origin/main"},
+		{"dev", "origin/main", "dev"},
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		if got := sessionBaseBranch(c.configured, c.detected); got != c.want {
+			t.Errorf("sessionBaseBranch(%q, %q) = %q, want %q", c.configured, c.detected, got, c.want)
+		}
+	}
+}
+
+func TestResolveWorktreeAdHoc(t *testing.T) {
+	wt, err := (&FlowManager{}).resolveWorktree(context.Background(), fakeRoot("/r"), domain.SessionConfig{AdHoc: true}, "adhoc-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wt.Path != "/r/adhoc-x" {
+		t.Fatalf("Path = %q, want /r/adhoc-x", wt.Path)
+	}
+}

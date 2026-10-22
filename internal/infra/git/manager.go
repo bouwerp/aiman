@@ -392,6 +392,7 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	return domain.Worktree{
 		Path:   resolvedPath,
 		Branch: branch,
+		Base:   baseBranch,
 	}, nil
 }
 

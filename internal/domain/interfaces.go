@@ -152,4 +152,7 @@ type Repo struct {
 type Worktree struct {
 	Path   string
 	Branch string
+	// Base is the ref the branch was cut from; empty when the worktree was
+	// attached or reused rather than created.
+	Base string
 }

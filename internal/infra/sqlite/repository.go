@@ -101,6 +101,7 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN hook_state_seq INTEGER")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN hook_state_at DATETIME")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN parent_id TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN base_branch TEXT")
 
 	// Columns added by ALTER TABLE leave NULL on every pre-existing row, and
 	// Save's `COALESCE(NULLIF(excluded.mode, ''), sessions.mode)` keeps that NULL
@@ -215,14 +216,15 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 	}
 
 	query := `
-	INSERT INTO sessions (id, name, group_name, parent_id, issue_key, branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, backend, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO sessions (id, name, group_name, parent_id, issue_key, branch, base_branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, backend, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		name = COALESCE(NULLIF(excluded.name, ''), sessions.name),
 		group_name = COALESCE(NULLIF(excluded.group_name, ''), sessions.group_name),
 		parent_id = COALESCE(NULLIF(excluded.parent_id, ''), sessions.parent_id),
 		issue_key = COALESCE(NULLIF(excluded.issue_key, ''), sessions.issue_key),
 		branch = COALESCE(NULLIF(excluded.branch, ''), sessions.branch),
+		base_branch = COALESCE(NULLIF(excluded.base_branch, ''), sessions.base_branch),
 		repo_name = COALESCE(NULLIF(excluded.repo_name, ''), sessions.repo_name),
 		remote_host = COALESCE(NULLIF(excluded.remote_host, ''), sessions.remote_host),
 		worktree_path = COALESCE(NULLIF(excluded.worktree_path, ''), sessions.worktree_path),
@@ -265,7 +267,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		hookAt = s.HookStateAt
 	}
 	_, err := r.db.ExecContext(ctx, query,
-		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, sessionBackend(s.Backend), s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.CreatedAt, updatedAt)
+		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, sessionBackend(s.Backend), s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
