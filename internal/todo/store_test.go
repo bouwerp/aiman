@@ -170,3 +170,32 @@ func TestDiffRefOnly(t *testing.T) {
 		t.Fatalf("ch=%+v rev=%d", ch, l.Rev)
 	}
 }
+
+func TestIndexShiftKeepsStamp(t *testing.T) {
+	setup := func() (*Files, domain.TodoItem) {
+		s := NewFiles(t.TempDir())
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		s.now = func() time.Time { return base }
+		_, _, _ = s.Mutate("s1", domain.AuthorAgent, add("a"))
+		_, _, _ = s.Mutate("s1", domain.AuthorAgent, add("b"))
+		l, _, _ := s.Mutate("s1", domain.AuthorUser, add("c"))
+		s.now = func() time.Time { return base.Add(time.Hour) }
+		return s, l.Items[1]
+	}
+	s, t2 := setup()
+	l, _, err := s.Mutate("s1", domain.AuthorUser, func(l *domain.TodoList) error {
+		l.Items = l.Items[1:]
+		return nil
+	})
+	if err != nil || l.Items[0].ID != "t2" || l.Items[0].UpdatedBy != t2.UpdatedBy || !l.Items[0].UpdatedAt.Equal(t2.UpdatedAt) {
+		t.Fatalf("remove: %+v want %+v err %v", l.Items[0], t2, err)
+	}
+	s, t2 = setup()
+	l, _, err = s.Mutate("s1", domain.AuthorUser, func(l *domain.TodoList) error {
+		l.Items = append([]domain.TodoItem{l.Items[0], {Text: "new", State: domain.TodoPending}}, l.Items[1:]...)
+		return nil
+	})
+	if err != nil || l.Items[2].ID != "t2" || l.Items[2].UpdatedBy != t2.UpdatedBy || !l.Items[2].UpdatedAt.Equal(t2.UpdatedAt) {
+		t.Fatalf("insert: %+v want %+v err %v", l.Items[2], t2, err)
+	}
+}

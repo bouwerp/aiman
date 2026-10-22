@@ -144,9 +144,8 @@ func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*doma
 	}
 	demoteExtraActive(prev, &next)
 	now := f.now()
-	stamp(prev, &next, author, now)
-
 	ops := Diff(prev, next)
+	stamp(prev, &next, ops, author, now)
 	if len(ops) == 0 {
 		return prev, Change{Author: author, Rev: prev.Rev}, nil
 	}
@@ -208,12 +207,19 @@ func demoteExtraActive(prev domain.TodoList, next *domain.TodoList) {
 }
 
 // stamp sets UpdatedBy/UpdatedAt. New or retexted items belong to the author.
-// A state or position change does too, except that the agent mirroring its own
+// A state, ref or reorder change does too (only items Diff reports as moved
+// count as reordered, not ones merely shifted by an add or remove), except that the agent mirroring its own
 // progress leaves a user's or aiman's item attributed as before.
-func stamp(prev domain.TodoList, next *domain.TodoList, author domain.TodoAuthor, now time.Time) {
+func stamp(prev domain.TodoList, next *domain.TodoList, ops []Op, author domain.TodoAuthor, now time.Time) {
 	old := map[string]int{}
 	for i, it := range prev.Items {
 		old[it.ID] = i
+	}
+	moved := map[string]bool{}
+	for _, op := range ops {
+		if op.Kind == OpMove {
+			moved[op.ID] = true
+		}
 	}
 	for i := range next.Items {
 		it := &next.Items[i]
@@ -227,7 +233,7 @@ func stamp(prev domain.TodoList, next *domain.TodoList, author domain.TodoAuthor
 		switch {
 		case p.Text != it.Text:
 			it.UpdatedBy, it.UpdatedAt = author, now
-		case p.State != it.State || pi != i:
+		case p.State != it.State || p.Ref != it.Ref || moved[it.ID]:
 			if author == domain.AuthorAgent && p.UpdatedBy != domain.AuthorAgent {
 				continue
 			}
