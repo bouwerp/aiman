@@ -32,6 +32,7 @@ func TestSocketOnlyCommandsSkipTheDatabase(t *testing.T) {
 		{"pty", "list"},
 		{"pty", "capture", "nope"},
 		{"session", "list"},
+		{"rpc", "todo.get"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			home := t.TempDir()

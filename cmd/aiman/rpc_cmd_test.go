@@ -1,0 +1,43 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestRPCParams(t *testing.T) {
+	cases := []struct {
+		name    string
+		method  string
+		raw     string
+		wantErr string
+	}{
+		{"todo.add ok", "todo.add", `{"session":"s1","text":"x","as":"user"}`, ""},
+		{"unknown method", "session.forget", `{}`, "unknown method"},
+		{"not an object", "todo.get", `[1]`, "object"},
+		{"steer.send ok", "steer.send", `{"session":"s1","text":"hi"}`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := rpcParams(tc.method, []byte(tc.raw))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.raw {
+				t.Fatalf("params changed: %s", got)
+			}
+		})
+	}
+}
+
+func TestRPCMethodsNeverAllowMirror(t *testing.T) {
+	if rpcMethods["todo.mirror"] {
+		t.Fatal("todo.mirror must not be reachable from the laptop")
+	}
+}

@@ -75,6 +75,8 @@ func run() error {
 			return runPTY(parsed.Rest[1:])
 		case "session":
 			return runSession(parsed.Rest[1:])
+		case "rpc":
+			return runRPC(parsed.Rest[1:], os.Stdin, os.Getenv)
 		case "slack":
 			return runSlack(context.Background(), parsed.Rest[1:], os.Stdin, os.Stdout, os.Stderr)
 		}
