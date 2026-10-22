@@ -23,6 +23,7 @@ Success: on an ordinary day the user attaches to a session only when they choose
 7. Restarts and agent switches carry a real handover; shared memory gets typed notes, ranked search and expiry.
 8. Sessions start cheaper and faster (worktree bootstrap, RTK, graphify, cache hygiene).
 9. A ticket can be split into a spec plus to-dos and fanned out to worker sessions.
+10. Every session carries domain checklists, a definition of done, the tools it needs, a deliberate model/effort choice and an independent reviewer.
 
 ## Non-goals
 
@@ -284,6 +285,17 @@ repos:
 - Children open PRs into the planner branch. The planner's item shows ◐ while the child works and is marked done (author `aiman`, which steers the planner) when the child's PR is merged into the planner branch, or, with `verify.before_pr`, when its verifier passes and its PR is open.
 - The planner opens the final PR to the default branch.
 
+## W9. Session quality kit
+
+Research (`docs/superpowers/research/2026-10-22-agent-personas.md`) found that "you are an expert" persona framing does not reliably improve coding output, while the content a persona would carry does. The user chose to drop personas and give every session that content instead, whatever the agent.
+
+- **Domain checklists.** Markdown files in `.aiman/checklists/` (repo) and `~/.aiman/checklists/` (user, pushed to remotes), each with frontmatter `applies_to` (file globs) and a short checklist body. At create, restart and agent switch, serve lists the checklists whose globs match files in the worktree (and, once the agent has edited files, the changed files) and references them by path in `.aiman_task.md`. The verifier (W5) receives the same checklists as its review rubric.
+- **Definition of done.** `.aiman_task.md` gets a "Done when" section built from the JIRA acceptance criteria (when present) plus a per-repo default (`repos.<slug>.done_when`, e.g. `make ci` green, tests added, PR open). The to-do list always ends with the item `Done-when met` (author `aiman`, `Ref = done`), which the agent ticks only when every condition holds. The verifier checks the Done-when conditions and reports unmet ones as REQUIRED findings.
+- **Right tools.** `repos.<slug>.requires` lists binaries and MCP servers. Session create checks them on the remote; the wizard shows missing ones with a warning and lets the user continue.
+- **Model and effort.** `agent_defaults` stays; `repos.<slug>.agent_overrides` and role overrides (`roles.verifier`, `roles.planner`, `roles.worker`: agent, model, effort) apply at launch.
+- **Independent reviewer.** W5. Before an agent opens a PR, the skill tells it to run `aiman verify --wait` when `verify.before_pr` is on, and the dashboard offers `V` on any session with commits ahead of its base.
+- Checklist and Done-when text is fixed for the life of a session, so it stays in the agent's cached prompt prefix.
+
 ---
 
 ## Order
@@ -300,6 +312,7 @@ Revised from the plans' real dependencies (details in `2026-10-22-nl-0-roadmap.m
 8. W5 verifier (nl-7): needs nl-1, nl-2, nl-3b, nl-5
 9. W7 starts (nl-8): needs nl-1, nl-4 (`$` view), nl-5, nl-7 (`PreparedWorktree`)
 10. W8 spec mode (nl-9): needs nl-1, nl-2, nl-5, nl-7
+11. W9 session quality kit (nl-10): needs nl-1 (to-dos), nl-7 (verifier rubric), nl-8 (repo config block), nl-9 (planner/worker roles)
 
 Each ships on its own and is tagged as a release.
 
