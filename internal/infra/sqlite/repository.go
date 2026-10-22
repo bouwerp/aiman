@@ -302,6 +302,20 @@ func (r *Repository) ClearNativeAgentIdentity(ctx context.Context, id string) er
 	return nil
 }
 
+// ClearAgentEnded retracts the SessionEnd latch. Save cannot: its COALESCE
+// keeps the stored value when the incoming one is empty, and an unset
+// AgentEnded is stored as empty.
+func (r *Repository) ClearAgentEnded(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	if _, err := r.db.ExecContext(ctx, `UPDATE sessions SET agent_ended = '' WHERE id = ?;`, id); err != nil {
+		return fmt.Errorf("clearing agent ended: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error) {
 	query := "SELECT " + sessionSelectCols + " FROM sessions WHERE id = ?;"
 	s, err := scanSession(r.db.QueryRowContext(ctx, query, id))

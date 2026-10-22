@@ -261,9 +261,10 @@ func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 		}
 	}
 
-	// Then fold in what is running here. Sessions absent from the local
-	// database are labelled in memory only: this host is not their owner, so
-	// writing rows for them would put identity in two places and let it drift.
+	// Then fold in what is running here. Discovered sessions absent from the
+	// local database are labelled in memory only; they become rows when the
+	// laptop registers them (session.register) or an agent hook reports for
+	// them, so identity is never invented in two places.
 	stored := len(list)
 	list = mergeLiveSessions(list, s.liveSessions(ctx))
 	for i := stored; i < len(list); i++ {
@@ -790,10 +791,19 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 	}
 	if s.repo != nil {
 		sess, err := s.repo.Get(ctx, sessionID)
-		if err == nil {
+		if err != nil {
+			sess = s.liveSessionByID(ctx, sessionID)
+		}
+		if sess != nil {
+			wasEnded := sess.AgentEnded
 			agenthook.ApplyReport(sess, rep, time.Now())
 			if err := s.repo.Save(ctx, sess); err != nil {
 				return errResp(req.ID, CodeInvalidParams, err.Error())
+			}
+			if clr, ok := s.repo.(agentEndedClearer); ok && wasEnded && !sess.AgentEnded {
+				if err := clr.ClearAgentEnded(ctx, sess.ID); err != nil {
+					return errResp(req.ID, CodeInvalidParams, err.Error())
+				}
 			}
 		}
 	}
@@ -835,4 +845,82 @@ func resolveSession(list []domain.Session, target string) (domain.Session, bool)
 		}
 	}
 	return domain.Session{}, false
+}
+
+// agentEndedClearer is implemented by repositories that can retract a stored
+// SessionEnd; Save alone cannot, because it never writes an empty value over a
+// non-empty one.
+type agentEndedClearer interface {
+	ClearAgentEnded(ctx context.Context, id string) error
+}
+
+// liveSessionByID returns the session with this id when it is running on this
+// host but has no row yet, or nil.
+func (s *Server) liveSessionByID(ctx context.Context, id string) *domain.Session {
+	list, err := s.loadSessions(ctx)
+	if err != nil {
+		return nil
+	}
+	for i := range list {
+		if list[i].ID == id {
+			sess := list[i]
+			return &sess
+		}
+	}
+	return nil
+}
+
+// registrableSession builds the row serve stores for a session the laptop
+// registers. Identity comes from the laptop; state that serve observes first
+// hand (hook reports, status) is kept from the existing row, and fields only
+// meaningful on the laptop are dropped.
+func registrableSession(in domain.Session, existing *domain.Session) domain.Session {
+	out := in
+	out.LocalPath = ""
+	out.MutagenSyncID = ""
+	out.Tunnels = nil
+	out.AWSConfig = nil
+	if existing == nil {
+		return out
+	}
+	out.HookState = existing.HookState
+	out.HookStateMessage = existing.HookStateMessage
+	out.HookStateSource = existing.HookStateSource
+	out.HookStateSeq = existing.HookStateSeq
+	out.HookStateAt = existing.HookStateAt
+	out.AgentEnded = existing.AgentEnded
+	out.AgentTitle = existing.AgentTitle
+	out.Status = existing.Status
+	return out
+}
+
+func (s *Server) handleRegister(ctx context.Context, req Request) Response {
+	var params struct {
+		Sessions []domain.Session `json:"sessions"`
+	}
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return errResp(req.ID, CodeInvalidParams, "invalid params")
+		}
+	}
+	ids := []string{}
+	if s.repo != nil {
+		for _, in := range params.Sessions {
+			id := strings.TrimSpace(in.ID)
+			if id == "" || strings.HasPrefix(id, "pending-") {
+				continue
+			}
+			in.ID = id
+			existing, err := s.repo.Get(ctx, id)
+			if err != nil {
+				existing = nil
+			}
+			row := registrableSession(in, existing)
+			if err := s.repo.Save(ctx, &row); err != nil {
+				return errResp(req.ID, CodeInvalidParams, err.Error())
+			}
+			ids = append(ids, id)
+		}
+	}
+	return Response{ID: req.ID, Result: map[string]any{"type": "sessions_registered", "ids": ids}}
 }

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -153,5 +154,19 @@ func TestSanitiseTempName(t *testing.T) {
 		if strings.Contains(long, bad) {
 			t.Errorf("name contains %q: %q", bad, long)
 		}
+	}
+}
+
+func TestRegisterSessionsOnRemoteToleratesOldServe(t *testing.T) {
+	rec := &rpcRecorder{out: "unknown command \"rpc\" for \"aiman\"", err: errors.New("exit status 1")}
+	if err := RegisterSessionsOnRemote(context.Background(), rec, []domain.Session{{ID: "a"}}); err != nil {
+		t.Fatalf("old serve must be tolerated: %v", err)
+	}
+	if !strings.Contains(rec.cmd, "aiman rpc session.register") {
+		t.Fatalf("cmd = %q", rec.cmd)
+	}
+	rec = &rpcRecorder{out: `{"result":{"type":"sessions_registered","ids":["a"]}}`}
+	if err := RegisterSessionsOnRemote(context.Background(), rec, []domain.Session{{ID: "a"}}); err != nil {
+		t.Fatal(err)
 	}
 }

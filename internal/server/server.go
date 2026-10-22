@@ -148,6 +148,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleMove(ctx, req)
 	case "session.forget":
 		return s.handleForget(ctx, req)
+	case "session.register":
+		return s.handleRegister(ctx, req)
 	case "session.report_agent_session":
 		return s.handleReportAgentSession(ctx, req)
 	case "context.put":

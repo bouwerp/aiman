@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -121,6 +122,22 @@ func ForgetSessionOnRemote(ctx context.Context, remote TerminalExecutor, session
 		}
 	}
 	return fmt.Errorf("remote forget: %s: %w", strings.TrimSpace(out), err)
+}
+
+// RegisterSessionsOnRemote hands sessions the laptop owns to the remote's serve
+// so it persists them and can accept their hook reports.
+//
+// A remote whose serve is stopped or too old to know the method is not an
+// error: registration is retried the next time the dashboard syncs.
+func RegisterSessionsOnRemote(ctx context.Context, remote TerminalExecutor, sessions []domain.Session) error {
+	if len(sessions) == 0 {
+		return nil
+	}
+	_, err := ServeRPC(ctx, remote, "session.register", map[string]any{"sessions": sessions})
+	if errors.Is(err, ErrRPCUnsupported) || errors.Is(err, ErrServeNotRunning) {
+		return nil
+	}
+	return err
 }
 
 // remoteCreateResult is the shape session.create answers with.

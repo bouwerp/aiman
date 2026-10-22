@@ -728,3 +728,143 @@ func TestSessionCreatePromptFreeDefaultsToTrue(t *testing.T) {
 		})
 	}
 }
+
+func sessionByName(t *testing.T, sock, name string) SessionInfo {
+	t.Helper()
+	resp, err := Call(sock, "session.get", map[string]any{"id": name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("get %q: %+v", name, resp.Error)
+	}
+	raw, _ := json.Marshal(resp.Result)
+	var one struct {
+		Session SessionInfo `json:"session"`
+	}
+	if err := json.Unmarshal(raw, &one); err != nil {
+		t.Fatal(err)
+	}
+	return one.Session
+}
+
+func TestSessionRegisterPersistsLaptopSession(t *testing.T) {
+	repo := testRepo(t)
+	sock := startTestServer(t, repo)
+	resp, err := Call(sock, "session.register", map[string]any{"sessions": []domain.Session{
+		{ID: "lap-1", Name: "impl", Group: "g", Branch: "feat-x", BaseBranch: "main",
+			WorktreePath: "/w/x", Status: domain.SessionStatusActive, CreatedAt: time.Now()},
+		{ID: "pending-abc", Name: "skip"},
+		{ID: ""},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("%+v", resp.Error)
+	}
+	raw, _ := json.Marshal(resp.Result)
+	if !strings.Contains(string(raw), "sessions_registered") || !strings.Contains(string(raw), "lap-1") || strings.Contains(string(raw), "pending-abc") {
+		t.Fatalf("result: %s", raw)
+	}
+	got := sessionByName(t, sock, "impl")
+	if got.Branch != "feat-x" || got.WorktreePath != "/w/x" || got.BaseBranch != "main" {
+		t.Fatalf("%+v", got)
+	}
+	if _, err := repo.Get(context.Background(), "lap-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Get(context.Background(), "pending-abc"); err == nil {
+		t.Fatal("pending id was stored")
+	}
+}
+
+func TestSessionRegisterKeepsServeRuntimeState(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "lap-1", Name: "impl", Group: "g", HookState: domain.AgentStateWorking,
+		HookStateSource: "lifecycle", Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestServer(t, repo)
+	if _, err := Call(sock, "session.register", map[string]any{"sessions": []domain.Session{{
+		ID: "lap-1", Name: "impl", Group: "g", Branch: "b", HookState: domain.AgentStateIdle,
+		LocalPath: "/laptop/only", MutagenSyncID: "sync", Status: domain.SessionStatusActive,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, "lap-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HookState != domain.AgentStateWorking {
+		t.Fatalf("HookState = %q, want working", got.HookState)
+	}
+	if got.LocalPath != "" || got.MutagenSyncID != "" {
+		t.Fatalf("laptop-only fields stored: %+v", got)
+	}
+	if got.Branch != "b" {
+		t.Fatalf("identity not updated: %+v", got)
+	}
+}
+
+func TestReportAgentSessionPersistsLiveUnregistered(t *testing.T) {
+	repo := testRepo(t)
+	remote := &fakeRemote{
+		tmuxSessions: []string{"live-sess"},
+		tmuxEnv:      map[string]string{"live-sess": "live-1"},
+	}
+	dir := shortTempDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = New(ln, repo, remote, nil, nil, nil, "t").Serve(ctx) }()
+	resp, err := Call(SocketPath(dir), "session.report_agent_session", map[string]any{
+		"id": "live-1", "state": "idle", "source": "lifecycle",
+	})
+	if err != nil || resp.Error != nil {
+		t.Fatalf("%v %+v", err, resp)
+	}
+	got, err := repo.Get(context.Background(), "live-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HookState != domain.AgentStateIdle {
+		t.Fatalf("HookState = %q", got.HookState)
+	}
+}
+
+func TestReportAfterEndClearsLatch(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "id-a", Name: "impl", Group: "g",
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestServer(t, repo)
+	if _, err := Call(sock, "session.report_agent_session", map[string]any{"id": "id-a", "ended": true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := repo.Get(ctx, "id-a"); !got.AgentEnded {
+		t.Fatal("ended not stored")
+	}
+	if _, err := Call(sock, "session.report_agent_session", map[string]any{
+		"id": "id-a", "state": "working", "source": "lifecycle",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, "id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentEnded {
+		t.Fatal("AgentEnded still latched after a live report")
+	}
+}
