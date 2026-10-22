@@ -182,6 +182,20 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create scheduled_prompts table: %w", err)
 	}
 
+	steerQuery := `
+	CREATE TABLE IF NOT EXISTS steer_notes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL,
+		author TEXT NOT NULL,
+		text TEXT NOT NULL,
+		created_at DATETIME NOT NULL,
+		delivered_at DATETIME
+	);
+	CREATE INDEX IF NOT EXISTS idx_steer_notes_session_delivered ON steer_notes (session_id, delivered_at);`
+	if _, err := db.Exec(steerQuery); err != nil {
+		return nil, fmt.Errorf("failed to create steer_notes table: %w", err)
+	}
+
 	return &Repository{
 		db:            db,
 		clearedOnOpen: clearedAWSProfiles,
