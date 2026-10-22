@@ -717,6 +717,7 @@ func (s *Server) handleForget(ctx context.Context, req Request) Response {
 		_ = s.pty.Kill(sess.ID)
 		_ = s.pty.Forget(sess.ID)
 	}
+	s.steer.Forget(sess.ID)
 	if s.repo != nil {
 		if err := s.repo.Delete(ctx, sess.ID); err != nil {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
@@ -805,6 +806,8 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 					return errResp(req.ID, CodeInvalidParams, err.Error())
 				}
 			}
+			// A new state may open the delivery gate for held notes.
+			s.steer.Kick(sess.ID)
 		}
 	}
 	return Response{ID: req.ID, Result: map[string]any{

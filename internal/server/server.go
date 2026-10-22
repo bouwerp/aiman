@@ -8,9 +8,11 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/todo"
 )
 
 // rememberedPane is the last rendered screen served for one session. The next
@@ -45,6 +47,21 @@ type Server struct {
 	// can return a row patch instead of the whole screen.
 	paneMu sync.Mutex
 	panes  map[string]rememberedPane
+
+	// todos holds each session's to-do list and steer queues notes for agents.
+	// Both stay nil until EnableTodos; Kick and Forget on a nil steerer are
+	// no-ops, so handlers call them unconditionally.
+	todos todoStore
+	steer *steerer
+	// target is the session side of steering, the Server itself outside tests.
+	target steerTarget
+}
+
+// todoStore is the to-do persistence serve needs: the shared Store plus the
+// merge of an agent's own task-list snapshot.
+type todoStore interface {
+	todo.Store
+	Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliveredAt time.Time) (domain.TodoList, todo.Change, error)
 }
 
 type rememberedPane struct {
@@ -55,7 +72,7 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 	if version == "" {
 		version = "dev"
 	}
-	return &Server{
+	s := &Server{
 		ln:       ln,
 		repo:     repo,
 		remote:   remote,
@@ -67,6 +84,8 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 		attaches: map[string]int{},
 		hub:      newEventHub(),
 	}
+	s.target = s
+	return s
 }
 
 func (s *Server) Serve(ctx context.Context) error {

@@ -347,6 +347,13 @@ func sendTmuxKeysConfirmed(ctx context.Context, remote PaneCapturer, tmuxName, r
 	return nil
 }
 
+// PromptStillInComposer reports whether prompt is still sitting unsent on the
+// composer line of pane, using the same tail-of-prompt check as the confirm
+// loops here. An empty prompt never counts as held.
+func PromptStillInComposer(pane, prompt string) bool {
+	return composerStillHolds(pane, submitMarker(prompt))
+}
+
 // submitMarker is the tail of the prompt to look for in the composer.
 //
 // The tail rather than the head: agents wrap and scroll a long prompt, so the

@@ -227,3 +227,18 @@ func TestDeliverInitialPromptStopsOnceTmuxComposerClears(t *testing.T) {
 		t.Fatalf("expected exactly one Enter, got %d in %v", got, r.cmds)
 	}
 }
+
+// Serve confirms its own deliveries against a locally captured screen, with
+// the same tail-of-prompt check the laptop-side confirm loop uses.
+func TestPromptStillInComposer(t *testing.T) {
+	prompt := "Your to-do list was changed\nAdjust your work to match"
+	if !PromptStillInComposer("• Ready\n› Your to-do list was changed Adjust your work to match", prompt) {
+		t.Fatal("a prompt on the composer line must count as held")
+	}
+	if PromptStillInComposer("Adjust your work to match\n• Working (1s)\n› ", prompt) {
+		t.Fatal("an echoed prompt above an empty composer must not count as held")
+	}
+	if PromptStillInComposer("› anything", "  ") {
+		t.Fatal("an empty prompt disables the check")
+	}
+}
