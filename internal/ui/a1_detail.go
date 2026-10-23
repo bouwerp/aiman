@@ -1,0 +1,517 @@
+package ui
+
+import (
+	"fmt"
+	"image/color"
+	"math"
+	"strings"
+	"time"
+
+	"charm.land/lipgloss/v2"
+	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/charmbracelet/x/ansi"
+)
+
+// detailMetaExtras is cost, token, and review state for one session.
+// Later plans fill it. Nothing writes it yet, so the map stays empty.
+type detailMetaExtras struct {
+	CostUSD    float64
+	HasCost    bool
+	Tokens     int64
+	CacheRatio float64
+	HasCache   bool
+	Reviewing  bool
+	WatchingPR int
+}
+
+// todoView is one session's to-do list as the detail pane draws it.
+// Cursor -1 is unfocused. Input is an already rendered add or edit line,
+// empty when the row is not being edited.
+type todoView struct {
+	Snap     todoSnapshot
+	Cursor   int
+	Question []string
+	Input    string
+}
+
+// maxTodoRows is the detail pane's to-do window. A longer list keeps the
+// focused row visible and spends the last row on "+k more".
+const maxTodoRows = 8
+
+func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width int) string {
+	var parts []string
+	if agent := metaAgent(s); agent != "" {
+		parts = append(parts, agent)
+	}
+	if !s.CreatedAt.IsZero() {
+		parts = append(parts, shortElapsed(now.Sub(s.CreatedAt)))
+	}
+	if s.Branch != "" {
+		parts = append(parts, s.Branch)
+	}
+	if x.HasCost {
+		parts = append(parts, fmt.Sprintf("~$%.2f", x.CostUSD))
+	} else if x.Tokens > 0 {
+		parts = append(parts, formatTokens(x.Tokens))
+	}
+	if x.HasCache {
+		parts = append(parts, fmt.Sprintf("cache %d%%", int(math.Round(x.CacheRatio*100))))
+	}
+	if x.Reviewing {
+		parts = append(parts, "reviewing…")
+	}
+	if x.WatchingPR > 0 {
+		parts = append(parts, fmt.Sprintf("watching PR #%d", x.WatchingPR))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return truncateToWidth(dimText(strings.Join(parts, " · ")), width)
+}
+
+func metaAgent(s domain.Session) string {
+	return strings.TrimSpace(strings.TrimSpace(s.AgentName) + " " + strings.TrimSpace(s.AgentModel))
+}
+
+// shortElapsed is the age of a session on the meta line.
+// Under a minute is "now"; otherwise the largest unit, "42m", "3h", or "2d".
+func shortElapsed(d time.Duration) string {
+	if d < time.Minute {
+		return "now"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	}
+	return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+}
+
+func formatTokens(n int64) string {
+	if n >= 1_000_000 {
+		if n%1_000_000 == 0 {
+			return fmt.Sprintf("%dM tok", n/1_000_000)
+		}
+		return fmt.Sprintf("%.1fM tok", float64(n)/1_000_000)
+	}
+	k := n / 1000
+	if k < 1 {
+		k = 1
+	}
+	return fmt.Sprintf("%dk tok", k)
+}
+
+// renderGitPRLine is the one-line git and pull-request summary.
+// A branch name alone draws nothing: ahead, behind, a dirty count, or a PR
+// is what makes the line exist. "No open PR" is only appended on that line.
+func renderGitPRLine(st domain.GitStatus, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	changed := st.StagedCount + st.UnstagedCount + st.UntrackedCount
+	drift := st.Ahead != 0 || st.Behind != 0
+	if !drift && changed == 0 && st.PullRequest == nil {
+		return ""
+	}
+	var left []string
+	if drift {
+		left = append(left, dimText(fmt.Sprintf("↑%d↓%d", st.Ahead, st.Behind)))
+	}
+	if changed > 0 {
+		left = append(left, dimText(fmt.Sprintf("%d changed", changed)))
+	}
+	right := gitRightParts(st.PullRequest)
+	for {
+		line := joinParts(append(append([]string{}, left...), right...))
+		if lipgloss.Width(line) <= width {
+			return line
+		}
+		if len(left) > 0 {
+			left = left[1:]
+			continue
+		}
+		if len(right) > 1 {
+			right = right[:len(right)-1]
+			continue
+		}
+		return ansi.Truncate(line, width, "…")
+	}
+}
+
+func gitRightParts(pr *domain.PullRequest) []string {
+	if pr == nil {
+		return []string{dimText("No open PR")}
+	}
+	parts := []string{renderPRIdentity(pr)}
+	if ci := renderCI(pr); ci != "" {
+		parts = append(parts, ci)
+	}
+	return append(parts, renderPRActions())
+}
+
+func renderPRIdentity(pr *domain.PullRequest) string {
+	state := pr.DisplayState
+	if state == "" {
+		state = pr.State
+	}
+	eff, label := reviewPresentation(pr)
+	line := dimText(fmt.Sprintf("PR #%d", pr.Number))
+	if state != "" {
+		line += dimText(" " + state)
+	}
+	if label != "" {
+		line += dimText(" ") + lipgloss.NewStyle().Foreground(prReviewForeground(eff)).Render(label)
+	}
+	return line
+}
+
+func reviewPresentation(pr *domain.PullRequest) (eff, label string) {
+	label = pr.ReviewStatus
+	if label == "" && pr.ReviewDecision != "" {
+		label = strings.ToLower(pr.ReviewDecision)
+	}
+	eff = pr.ReviewStatus
+	if eff != "" {
+		return eff, label
+	}
+	switch strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)) {
+	case "APPROVED":
+		eff = "approved"
+	case "CHANGES_REQUESTED":
+		eff = "changes_requested"
+	default:
+		eff = label
+	}
+	return eff, label
+}
+
+func renderCI(pr *domain.PullRequest) string {
+	if pr.ChecksSummary == "" || pr.ChecksStatus == "none" {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(checksColor(pr.ChecksStatus)).Render("CI:" + pr.ChecksSummary)
+}
+
+func checksColor(status string) color.Color {
+	switch status {
+	case "success":
+		return lipgloss.Color("#00FF00")
+	case "failure":
+		return lipgloss.Color("#FF0000")
+	case "pending":
+		return lipgloss.Color("#FFA500")
+	default:
+		return lipgloss.Color("#7D7D7D")
+	}
+}
+
+func renderPRActions() string {
+	review := lipgloss.NewStyle().Foreground(a1Dim).Render("Review PR")
+	approved := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Render("Approved")
+	changes := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Render("Request Changes")
+	return review + "  " + approved + "  " + changes
+}
+
+func renderTodoLines(v todoView, width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	if !v.Snap.HasList {
+		return []string{truncateToWidth(dimText("no to-do list yet"), width)}
+	}
+	items := v.Snap.List.Items
+	start, end, more := todoWindow(len(items), todoFocus(v))
+	rows := make([]string, 0, maxTodoRows)
+	activeRow := -1
+	for i := start; i < end; i++ {
+		if activeRow < 0 && items[i].State == domain.TodoActive {
+			activeRow = len(rows)
+		}
+		rows = append(rows, renderTodoRow(items[i], v.Snap.List.NotInAgent, v.Cursor == i, width))
+	}
+	rows = insertLines(rows, questionAt(activeRow, len(rows)), formatQuestionLines(v.Question, width))
+	if more > 0 {
+		rows = append(rows, truncateToWidth(dimText(fmt.Sprintf("+%d more", more)), width))
+	}
+	if v.Input != "" {
+		rows = append(rows, truncateToWidth(v.Input, width))
+	}
+	return rows
+}
+
+func todoFocus(v todoView) int {
+	if v.Cursor >= 0 {
+		return v.Cursor
+	}
+	for i, it := range v.Snap.List.Items {
+		if it.State == domain.TodoActive {
+			return i
+		}
+	}
+	return 0
+}
+
+// todoWindow picks the slice that contains target. Lists longer than
+// maxTodoRows reserve the last rendered row for the hidden count.
+func todoWindow(n, target int) (start, end, more int) {
+	if n <= 0 {
+		return 0, 0, 0
+	}
+	if n <= maxTodoRows {
+		return 0, n, 0
+	}
+	visible := maxTodoRows - 1
+	if target < 0 {
+		target = 0
+	}
+	if target >= n {
+		target = n - 1
+	}
+	start = target - visible + 1
+	if start < 0 {
+		start = 0
+	}
+	end = start + visible
+	if end > n {
+		end = n
+		start = end - visible
+	}
+	if start < 0 {
+		start = 0
+	}
+	return start, end, n - (end - start)
+}
+
+func renderTodoRow(it domain.TodoItem, notIn []string, selected bool, width int) string {
+	line := todoGlyphAndText(it, selected)
+	if todoNotInAgent(it.ID, notIn) {
+		line += a1Text(" ⚠ not in agent's list", a1Wait, false, selected)
+	}
+	line = truncateToWidth(line, width)
+	if !selected {
+		return line
+	}
+	if gap := width - lipgloss.Width(line); gap > 0 {
+		line += a1Pad(gap, true)
+	}
+	return line
+}
+
+func todoGlyphAndText(it domain.TodoItem, selected bool) string {
+	g := it.State.Glyph()
+	switch it.State {
+	case domain.TodoDone:
+		return a1Text(g+" ", a1Dim, false, selected) + a1Text(it.Text, a1Dim, false, selected)
+	case domain.TodoActive:
+		return a1Text(g+" ", a1Wait, false, selected) + a1Text(it.Text, a1BoldText, true, selected)
+	case domain.TodoDropped:
+		return a1Text(g+" ", a1Dim, false, selected) + droppedText(it.Text, selected)
+	default:
+		text := it.Text
+		if selected {
+			text = a1Text(it.Text, a1BoldText, false, true)
+		}
+		return a1Text(g+" ", a1Dim, false, selected) + text
+	}
+}
+
+func droppedText(text string, selected bool) string {
+	st := lipgloss.NewStyle().Foreground(a1Dim).Strikethrough(true)
+	if selected {
+		st = st.Background(a1SelectedBg)
+	}
+	return st.Render(text)
+}
+
+func todoNotInAgent(id string, ids []string) bool {
+	for _, other := range ids {
+		if other == id {
+			return true
+		}
+	}
+	return false
+}
+
+func questionAt(activeRow, n int) int {
+	if activeRow < 0 {
+		return n
+	}
+	return activeRow + 1
+}
+
+func formatQuestionLines(lines []string, width int) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, truncateToWidth("  "+a1Text("│ "+line, a1Wait, false, false), width))
+	}
+	return out
+}
+
+// waitingQuestion wraps a hook question to at most three lines.
+// Any other hook state, including idle with a message, draws nothing.
+func waitingQuestion(it item, width int) []string {
+	if it.session.HookState != domain.AgentStateWaitingInput || it.session.HookStateMessage == "" {
+		return nil
+	}
+	return wrapPlain(it.session.HookStateMessage, questionTextWidth(width), 3)
+}
+
+func questionTextWidth(width int) int {
+	w := width - lipgloss.Width("  │ ")
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
+func wrapPlain(s string, width, maxLines int) []string {
+	words := strings.Fields(s)
+	if len(words) == 0 || maxLines <= 0 || width <= 0 {
+		return nil
+	}
+	var lines []string
+	cur := ""
+	for _, w := range words {
+		if len(lines) == maxLines {
+			break
+		}
+		next, wrapped := nextWrap(cur, w, width)
+		if wrapped && cur != "" {
+			lines = append(lines, cur)
+			cur = ""
+			if len(lines) == maxLines {
+				break
+			}
+			next, _ = nextWrap("", w, width)
+		}
+		cur = next
+	}
+	if cur != "" && len(lines) < maxLines {
+		lines = append(lines, cur)
+	}
+	return lines
+}
+
+func nextWrap(cur, word string, width int) (string, bool) {
+	if lipgloss.Width(word) > width {
+		if cur != "" {
+			return cur, true
+		}
+		return truncatePlain(word, width), false
+	}
+	if cur == "" {
+		return word, false
+	}
+	next := cur + " " + word
+	if lipgloss.Width(next) > width {
+		return cur, true
+	}
+	return next, false
+}
+
+func renderDetailTitle(s domain.Session, width int) string {
+	var text string
+	switch {
+	case s.IssueKey != "" && s.Name != "":
+		text = s.IssueKey + " · " + s.Name
+	case s.IssueKey != "":
+		text = s.IssueKey
+	default:
+		text = s.Name
+	}
+	if text == "" {
+		return ""
+	}
+	return truncateToWidth(a1Text(text, a1BoldText, true, false), width)
+}
+
+func (m *Model) renderSessionDetail(it item, width int) string {
+	var head []string
+	if title := renderDetailTitle(it.session, width); title != "" {
+		head = append(head, title)
+	}
+	if meta := renderMetaLine(it.session, m.metaFor(it.session.ID), time.Now(), width); meta != "" {
+		head = append(head, meta)
+	}
+	if git := renderGitPRLine(m.gitStatus, width); git != "" {
+		head = append(head, git)
+	}
+	todos := m.sessionTodoLines(it, width)
+	lines := head
+	if len(head) > 0 && len(todos) > 0 {
+		lines = append(lines, "")
+	}
+	lines = append(lines, todos...)
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) metaFor(id string) detailMetaExtras {
+	if m.metaExtras == nil {
+		return detailMetaExtras{}
+	}
+	return m.metaExtras[id]
+}
+
+func (m *Model) sessionTodoLines(it item, width int) []string {
+	if m.todoUnsupported[it.session.RemoteHost] {
+		return []string{truncateToWidth(dimText("to-dos unavailable on this remote"), width)}
+	}
+	snap := todoSnapshot{}
+	if m.todos != nil {
+		snap = m.todos[it.session.ID]
+	}
+	return renderTodoLines(todoView{
+		Snap:     snap,
+		Cursor:   -1,
+		Question: waitingQuestion(it, width),
+	}, width)
+}
+
+func dimText(s string) string {
+	return a1Text(s, a1Dim, false, false)
+}
+
+func joinParts(parts []string) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if strings.TrimSpace(ansi.Strip(p)) == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, dimText(" · "))
+}
+
+func insertLines(dst []string, at int, extra []string) []string {
+	if len(extra) == 0 {
+		return dst
+	}
+	if at < 0 {
+		at = 0
+	}
+	if at > len(dst) {
+		at = len(dst)
+	}
+	out := make([]string, 0, len(dst)+len(extra))
+	out = append(out, dst[:at]...)
+	out = append(out, extra...)
+	out = append(out, dst[at:]...)
+	return out
+}
+
+func truncateToWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	return ansi.Truncate(s, width, "…")
+}

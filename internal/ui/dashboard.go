@@ -46,7 +46,6 @@ var (
 	statusStyle  = lipgloss.NewStyle().PaddingLeft(2).Italic(true).Foreground(lipgloss.Color("#7D7D7D"))
 	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00"))
 	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
-	naStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	titleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("62")).Bold(true).Underline(true)
 	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
 )
@@ -436,12 +435,15 @@ type Model struct {
 	// terminateWithChildren carries the confirm dialog's "also terminate
 	// children" tick box. Reset every time the dialog opens: destroying a whole
 	// subtree must always be a deliberate choice, never a sticky default.
-	terminateWithChildren  bool
-	consoleOpen            bool
-	consoleLog             []string
-	consoleViewport        viewport.Model
-	gitStatus              domain.GitStatus
-	lastGitStatusUpdate    time.Time
+	terminateWithChildren bool
+	consoleOpen           bool
+	consoleLog            []string
+	consoleViewport       viewport.Model
+	gitStatus             domain.GitStatus
+	lastGitStatusUpdate   time.Time
+	// metaExtras is per-session cost, token, cache, and review state.
+	// Later plans fill it. It stays empty until then.
+	metaExtras             map[string]detailMetaExtras
 	restartingSession      *domain.Session
 	changingDirSession     *domain.Session
 	renamingSessionID      string
@@ -904,6 +906,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		paneCache:           make(map[string]usecase.PaneCache),
 		todoClient:          newSSHTodoClient(),
 		todos:               make(map[string]todoSnapshot),
+		metaExtras:          make(map[string]detailMetaExtras),
 		todoSummaries:       make(map[string]todoSummary),
 		todoInFlight:        make(map[string]bool),
 		todoUnsupported:     make(map[string]bool),
@@ -2726,12 +2729,9 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 	h, v := docStyle.GetFrameSize()
 
-	// mainChrome is what the dashboard spends around the panes: the PR button
-	// row, the help bar, and the blank lines between them. The startup-check
-	// readout and the "Remotes: N configured" line used to sit here too; the
-	// rows they reserved now go to the panes, which is what the space is for.
-	const mainChrome = 7
-	mainHeight := height - v - mainChrome
+	// a1Chrome is the rows around the panes: header, gap, prompt line, hint line.
+	const a1Chrome = 4
+	mainHeight := height - v - a1Chrome
 
 	m.list.SetSize(width/3-h, mainHeight) // Sidebar width
 	m.menu.SetSize(width-h, height-v)
@@ -2741,9 +2741,10 @@ func (m *Model) SetSize(width, height int) {
 
 	// Viewport takes up the bottom part of the main panel
 	m.viewport.SetWidth(m.mainContentWidth())
-	// Compact stacked session/git strip (~6–9 lines) + thin preview chrome; rest for tmux/terminal.
-	const compactMainUpperBudget = 12
-	m.viewport.SetHeight(max(6, mainHeight-compactMainUpperBudget))
+	// a1DetailBudget is the detail pane: title, meta, git/PR line, gap,
+	// up to 8 to-do rows, up to 3 question rows, gap, preview caption.
+	const a1DetailBudget = 16
+	m.viewport.SetHeight(max(6, mainHeight-a1DetailBudget))
 	if m.hasLoadedPane() {
 		y := m.viewport.YOffset()
 		m.setPreviewContent()
@@ -7034,15 +7035,10 @@ func prReviewForeground(status string) color.Color {
 	}
 }
 
-// mainPanelFrame is what the main panel's style spends on chrome: a one-column
-// left border plus two columns of left padding (see renderMainView).
-//
-// lipgloss counts a style's border and padding *inside* its Width, so the space
-// left for content is Width minus this. Sizing the viewport to Width minus the
-// padding alone left it one column too wide, and lipgloss wrapped every line by
-// exactly one character — which, once previews were fitted to the panel and
-// every line ran the full width, meant every line of the agent's box wrapped.
-const mainPanelFrame = 3
+// mainPanelFrame is the left padding inside the main panel's Width.
+// There is no border. lipgloss counts padding inside Width, so a line wider
+// than Width minus this wraps. The viewport uses the same width.
+const mainPanelFrame = 2
 
 // mainPanelWidth is the total width of the main panel, chrome included.
 func (m *Model) mainPanelWidth() int {
@@ -7085,11 +7081,16 @@ func (m *Model) renderMainView() string {
 	}
 
 	mainStyle := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, false, true). // Left border only
 		PaddingLeft(2).
 		Width(mainWidth)
 
-	content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainStyle.Render(mainContent))
+	columns := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainStyle.Render(mainContent))
+
+	headerW := m.width - 4 // docStyle margins
+	if headerW < 1 {
+		headerW = 1
+	}
+	header := renderA1Header(m.a1HostLabel(), sessionRowCount(m.list.Items()), needsYouCount(m.list.Items()), m.discoveryPending, headerW)
 
 	helpText := "n: new • e: rename • g: group • enter: collapse • f: filter • c: scope • t: tunnels • s: resume • S: switch agent • y: copy • r: refresh • i: AI • ctrl+k: term • m: menu • q: quit"
 	if m.currentTab == tabDaemons {
@@ -7115,24 +7116,7 @@ func (m *Model) renderMainView() string {
 		MarginTop(1).
 		Render(bottomLine)
 
-	// PR Buttons (matching Figma)
-	var prButtons string
-	if _, ok := m.selectedSessionItem(); ok {
-		if m.gitStatus.PullRequest != nil {
-			btnStyle := lipgloss.NewStyle().
-				Padding(0, 1).
-				MarginRight(1).
-				Background(lipgloss.Color("235"))
-
-			reviewBtn := btnStyle.Render("Review PR")
-			approveBtn := btnStyle.Foreground(lipgloss.Color("#00FF00")).Render("Approved")
-			requestBtn := btnStyle.Foreground(lipgloss.Color("#FF0000")).Render("Request Changes")
-
-			prButtons = "\n\n" + reviewBtn + approveBtn + requestBtn
-		}
-	}
-
-	body := content + "\n" + prButtons + "\n" + helpBar
+	body := header + "\n\n" + columns + "\n" + helpBar
 	if banner := m.renderAWSCredExpiryBanner(); banner != "" {
 		body = banner + "\n" + body
 	}
@@ -7141,212 +7125,76 @@ func (m *Model) renderMainView() string {
 
 // renderSessionPanel builds the right-hand panel for the currently selected row.
 func (m *Model) renderSessionPanel(mainWidth int) string {
-	var mainContent string
-	if it, ok := m.selectedSessionItem(); ok {
-		s := it.session
-		contentW := mainWidth - mainPanelFrame
-		if contentW < 20 {
-			contentW = 20
-		}
-
-		maxPath := min(contentW, 80)
-		wtDisp := truncateRunes(s.WorktreePath, maxPath)
-		sum := fmt.Sprintf("%s · %s · %s · %s", s.TmuxSession, s.RemoteHost, s.RepoName, s.Status)
-		sum = truncateRunes(sum, max(10, contentW-12))
-		sessionLines := []string{
-			activeStyle.Render("Session") + "  " + sum,
-			wtDisp,
-		}
-		var meta []string
-		if s.WorkingDirectory != "" && s.WorkingDirectory != s.WorktreePath {
-			scope := s.WorkingDirectory
-			if strings.HasPrefix(scope, s.WorktreePath) {
-				scope = "." + strings.TrimPrefix(scope, s.WorktreePath)
-			}
-			meta = append(meta, truncateRunes(scope, 28))
-		}
-		if s.MutagenSyncID != "" {
-			if h, tracked := m.syncHealth[s.ID]; tracked && h.stale {
-				meta = append(meta, naStyle.Render("N/A"))
-			} else if tracked && h.status != "" {
-				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32))+statusStyle.Render(" ("+truncateRunes(h.status, 24)+")"))
-			} else {
-				meta = append(meta, "sync:"+successStyle.Render(truncateRunes(s.LocalPath, 32)))
-			}
-		} else {
-			meta = append(meta, naStyle.Render("N/A"))
-		}
-		if s.IssueKey != "" {
-			meta = append(meta, s.IssueKey)
-		}
-		if len(s.Tunnels) > 0 {
-			meta = append(meta, fmt.Sprintf("tunnels:%d", len(s.Tunnels)))
-		}
-		meta = append(meta, s.CreatedAt.Format("2006-01-02 15:04"))
-		sessionLines = append(sessionLines, strings.Join(meta, " · "))
-
-		gitLines := m.renderGitLines(contentW)
-
-		sep := statusStyle.Render(strings.Repeat("─", contentW))
-		infoRaw := strings.Join(sessionLines, "\n") + "\n" + sep + "\n" + strings.Join(gitLines, "\n")
-		infoPanel := lipgloss.NewStyle().Width(contentW).Render(infoRaw)
-
-		// AI insight panel — shown below git status when available or loading
-
-		// Snapshot toast
-		snapshotBar := ""
-		if m.snapshotToast != "" {
-			toastStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-			if m.snapshotToastError {
-				toastStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-			}
-			snapshotBar = "\n" + toastStyle.Render(m.snapshotToast) + "\n"
-		}
-
-		var outputPanel strings.Builder
-		outputPanel.WriteString("\n" + strings.Repeat("─", contentW) + "\n")
-		modeName := "Preview"
-		if m.panelMode == panelModeTerminal {
-			modeName = "Terminal"
-		}
-		scrollHint := ""
-		if m.panelMode == panelModePreview {
-			scrollHint = "  " + statusStyle.Render("[/] scroll") + m.previewPanHint()
-		}
-		outputPanel.WriteString(statusStyle.Render(modeName+" · ctrl+s fullscreen") + scrollHint + "\n")
-
-		if m.panelMode == panelModeTerminal && m.terminal != nil {
-			outputPanel.WriteString(m.terminal.viewString())
-		} else {
-			outputPanel.WriteString(m.viewport.View())
-		}
-
-		if cs, creating := m.creatingSessions[s.ID]; creating {
-			// Background creation in progress (or failed): the preview panel
-			// shows the verbose creation steps instead of session panels.
-			mainContent = m.renderCreatingPanel(cs, contentW) + snapshotBar
-		} else if ts, terminating := m.terminatingSessions[s.ID]; terminating {
-			// Background termination: show step progress in the preview panel.
-			mainContent = m.renderTerminatingPanel(ts, contentW) + snapshotBar
-		} else {
-			mainContent = infoPanel + snapshotBar + outputPanel.String()
-		}
+	it, ok := m.selectedSessionItem()
+	if !ok {
+		return ""
 	}
-	return mainContent
+	contentW := mainWidth - mainPanelFrame
+	if contentW < 1 {
+		contentW = 1
+	}
+	toast := m.snapshotToastBlock()
+	s := it.session
+	if cs, creating := m.creatingSessions[s.ID]; creating {
+		return m.renderCreatingPanel(cs, contentW) + toast
+	}
+	if ts, terminating := m.terminatingSessions[s.ID]; terminating {
+		return m.renderTerminatingPanel(ts, contentW) + toast
+	}
+	return m.renderDetailAndPreview(it, contentW, toast)
 }
 
-// renderGitLines builds the git and pull-request rows of the session panel.
-func (m *Model) renderGitLines(contentW int) []string {
-	var gitLines []string
-	if m.gitStatus.Branch == "" {
-		gitLines = append(gitLines, activeStyle.Render("Git")+"  "+statusStyle.Render("Loading…"))
+func (m *Model) renderDetailAndPreview(it item, contentW int, toast string) string {
+	var b strings.Builder
+	if detail := m.renderSessionDetail(it, contentW); detail != "" {
+		b.WriteString(detail)
+		b.WriteByte('\n')
+	}
+	if toast != "" {
+		b.WriteString(strings.TrimPrefix(toast, "\n"))
+	}
+	b.WriteString(m.renderPreviewCaption(contentW))
+	b.WriteByte('\n')
+	if m.panelMode == panelModeTerminal && m.terminal != nil {
+		b.WriteString(m.terminal.viewString())
 	} else {
-		br := m.gitStatus.Branch
-		if m.gitStatus.Ahead > 0 || m.gitStatus.Behind > 0 {
-			br += fmt.Sprintf(" ↑%d↓%d", m.gitStatus.Ahead, m.gitStatus.Behind)
-		}
-		var ch string
-		if m.gitStatus.StagedCount > 0 || m.gitStatus.UnstagedCount > 0 || m.gitStatus.UntrackedCount > 0 {
-			ch = fmt.Sprintf("%ds · %du · %d?",
-				m.gitStatus.StagedCount, m.gitStatus.UnstagedCount, m.gitStatus.UntrackedCount)
-		} else {
-			ch = "clean"
-		}
-		gitHead := activeStyle.Render("Git") + "  " + br + " · " + ch
-		if !m.lastGitStatusUpdate.IsZero() {
-			gitHead += statusStyle.Render(" · PR@" + m.lastGitStatusUpdate.Format("15:04:05"))
-		}
-		gitLines = append(gitLines, gitHead)
+		b.WriteString(m.viewport.View())
+	}
+	return b.String()
+}
 
-		if pr := m.gitStatus.PullRequest; pr != nil {
-			stateLabel := pr.DisplayState
-			if stateLabel == "" {
-				stateLabel = strings.ToLower(pr.State)
-			}
-			titleMax := contentW - 24
-			if titleMax < 14 {
-				titleMax = 14
-			}
-			prLine := fmt.Sprintf("  #%d %s · %s", pr.Number, truncateRunes(pr.Title, titleMax), strings.ToUpper(stateLabel))
-			if pr.IsDraft {
-				prLine += " · draft"
-			}
-			if pr.Merged {
-				prLine += " · merged"
-			}
-			if pr.CommentCount > 0 {
-				prLine += fmt.Sprintf(" · %dc", pr.CommentCount)
-			}
-			gitLines = append(gitLines, truncateRunes(prLine, contentW))
+func (m *Model) renderPreviewCaption(width int) string {
+	modeName := "Preview"
+	if m.panelMode == panelModeTerminal {
+		modeName = "Terminal"
+	}
+	scrollHint := ""
+	if m.panelMode == panelModePreview {
+		scrollHint = "  " + statusStyle.Render("[/] scroll") + m.previewPanHint()
+	}
+	return truncateToWidth(statusStyle.Render(modeName+" · ctrl+s fullscreen")+scrollHint, width)
+}
 
-			revKey := pr.ReviewStatus
-			if revKey == "" && pr.ReviewDecision != "" {
-				revKey = strings.ToLower(pr.ReviewDecision)
-			}
-			revLabel := "R:" + revKey
-			if revLabel == "R:" {
-				revLabel = "R:—"
-			}
-			effRev := pr.ReviewStatus
-			if effRev == "" {
-				switch strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)) {
-				case "APPROVED":
-					effRev = "approved"
-				case "CHANGES_REQUESTED":
-					effRev = "changes_requested"
-				}
-			}
-			revStyled := lipgloss.NewStyle().Foreground(prReviewForeground(effRev)).Render(revLabel)
+func (m *Model) snapshotToastBlock() string {
+	if m.snapshotToast == "" {
+		return ""
+	}
+	toastStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	if m.snapshotToastError {
+		toastStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	}
+	return "\n" + toastStyle.Render(m.snapshotToast) + "\n"
+}
 
-			var thStyled string
-			if pr.UnresolvedReviewThreads >= 0 {
-				thStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D7D7D"))
-				if pr.UnresolvedReviewThreads > 0 {
-					thStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500"))
-				}
-				thStyled = thStyle.Render(fmt.Sprintf("threads:%d", pr.UnresolvedReviewThreads))
-			} else {
-				thStyled = statusStyle.Render("threads:?")
-			}
-
-			mergeColor := lipgloss.Color("#7D7D7D")
-			mergeTxt := "merge:?"
-			switch strings.ToUpper(strings.TrimSpace(pr.Mergeable)) {
-			case "CONFLICTING":
-				mergeColor = lipgloss.Color("#FF0000")
-				mergeTxt = "merge:conflict"
-			case "MERGEABLE":
-				mergeColor = lipgloss.Color("#00FF00")
-				mergeTxt = "merge:ok"
-			case "UNKNOWN":
-				mergeTxt = "merge:…"
-			}
-			if pr.HasMergeConflict || strings.EqualFold(pr.MergeStateStatus, "DIRTY") {
-				mergeColor = lipgloss.Color("#FF0000")
-				mergeTxt = "merge:dirty"
-			}
-			mergeStyled := lipgloss.NewStyle().Foreground(mergeColor).Render(mergeTxt)
-
-			var parts []string
-			parts = append(parts, revStyled, thStyled, mergeStyled)
-			if pr.ChecksStatus != "none" && pr.ChecksSummary != "" {
-				chkColor := lipgloss.Color("#7D7D7D")
-				switch pr.ChecksStatus {
-				case "success":
-					chkColor = lipgloss.Color("#00FF00")
-				case "failure":
-					chkColor = lipgloss.Color("#FF0000")
-				case "pending":
-					chkColor = lipgloss.Color("#FFA500")
-				}
-				parts = append(parts, lipgloss.NewStyle().Foreground(chkColor).Render("CI:"+pr.ChecksSummary))
-			}
-			gitLines = append(gitLines, "  "+strings.Join(parts, "  "))
-		} else {
-			gitLines = append(gitLines, "  "+statusStyle.Render("No open PR (or gh unavailable)"))
+func sessionRowCount(items []list.Item) int {
+	n := 0
+	for _, li := range items {
+		it, ok := li.(item)
+		if ok && !it.header {
+			n++
 		}
 	}
-	return gitLines
+	return n
 }
 
 // renderDaemonPanel builds the right-hand panel for the currently selected row.

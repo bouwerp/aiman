@@ -11,15 +11,14 @@ import (
 // that depends on its frame cost so a change to one is caught by the other.
 func mainPanelStyle(mainWidth int) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, false, true).
 		PaddingLeft(2).
 		Width(mainWidth)
 }
 
 // TestMainPanelFrameMatchesTheStyle pins the constant against the style it
-// describes: lipgloss counts border and padding inside Width, so the content
-// area is Width minus the frame. If the border or padding changes, this fails
-// rather than silently reintroducing a one-column overflow.
+// describes: lipgloss counts padding inside Width, so the content area is
+// Width minus the frame. If the padding changes, this fails rather than
+// silently wrapping every full-width line.
 func TestMainPanelFrameMatchesTheStyle(t *testing.T) {
 	const mainWidth = 100
 	st := mainPanelStyle(mainWidth)

@@ -209,12 +209,17 @@ func TestRenderSessionPanelSyncIsNA(t *testing.T) {
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.SetSize(140, 44)
 	m.applyRemoteFilter()
-	got := m.renderSessionPanel(90)
-	if strings.Contains(got, "no sync") || strings.Contains(got, "STALE") || strings.Contains(got, "⚠") {
-		t.Fatalf("info panel must not show a sync error, got:\n%s", got)
+	m.gitStatus = domain.GitStatus{
+		Ahead:       1,
+		PullRequest: &domain.PullRequest{Number: 9, State: "OPEN"},
 	}
-	if !strings.Contains(ansi.Strip(got), "N/A") {
-		t.Fatalf("info panel must show N/A for absent sync, got:\n%s", got)
+	got := m.renderSessionPanel(90)
+	plain := ansi.Strip(got)
+	if strings.Contains(plain, "no sync") || strings.Contains(plain, "STALE") || strings.Contains(plain, "N/A") || strings.Contains(got, "⚠") {
+		t.Fatalf("detail must not show the sync/N/A strip, got:\n%s", plain)
+	}
+	if !strings.Contains(plain, "PR #9") {
+		t.Fatalf("git/PR info should stay on the detail, got:\n%s", plain)
 	}
 
 	s.MutagenSyncID = "aiman-sync-s1"
@@ -222,11 +227,12 @@ func TestRenderSessionPanelSyncIsNA(t *testing.T) {
 	m.syncHealth = map[string]syncHealth{s.ID: {stale: true, reason: "missing"}}
 	m.applyRemoteFilter()
 	got = m.renderSessionPanel(90)
-	if strings.Contains(got, "STALE") || strings.Contains(got, "⚠") {
-		t.Fatalf("stale sync must not render as error, got:\n%s", got)
+	plain = ansi.Strip(got)
+	if strings.Contains(plain, "STALE") || strings.Contains(plain, "N/A") || strings.Contains(got, "⚠") {
+		t.Fatalf("stale sync must not render on the detail, got:\n%s", plain)
 	}
-	if !strings.Contains(ansi.Strip(got), "N/A") {
-		t.Fatalf("stale sync must show N/A, got:\n%s", got)
+	if !strings.Contains(plain, "PR #9") {
+		t.Fatalf("git/PR info should stay when sync is stale, got:\n%s", plain)
 	}
 }
 

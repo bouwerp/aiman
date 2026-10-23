@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // renderModelForAllStates builds a Model with every sub-model initialised, so a render of
@@ -68,17 +69,25 @@ func TestEveryViewStateRendersWithoutPanic(t *testing.T) {
 	}
 }
 
-// The session panel is assembled from renderSessionPanel + renderGitLines after the split;
-// assert the pieces still land in the output.
-func TestMainViewShowsSessionAndGitDetail(t *testing.T) {
+// The session panel is the A1 detail pane: header, meta, git/PR, to-dos, preview.
+func TestMainViewShowsA1Detail(t *testing.T) {
 	m := renderModelForAllStates(t)
-	m.gitStatus = domain.GitStatus{Branch: "feature/x", Ahead: 1, StagedCount: 2}
+	m.gitStatus = domain.GitStatus{
+		Branch:      "feature/x",
+		Ahead:       1,
+		StagedCount: 2,
+		PullRequest: &domain.PullRequest{Number: 12, State: "OPEN", ReviewStatus: "approved", ChecksStatus: "success", ChecksSummary: "1/1"},
+	}
 	m.viewport.SetContent("agent output line 1\nagent output line 2")
 
 	out := m.renderMainView()
-	for _, want := range []string{"AIM-1", "org/repo", "feature/x", "Git", "agent output line 1"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("expected %q in the main view, got:\n%s", want, out)
+	plain := ansi.Strip(out)
+	for _, want := range []string{"AIM-1", "Claude Code", "feature/x", "no to-do list yet", "agent output line 1", "aiman ·", "PR #12"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("expected %q in the main view, got:\n%s", want, plain)
 		}
+	}
+	if strings.Contains(plain, "Git") {
+		t.Errorf("git heading should be gone, got:\n%s", plain)
 	}
 }

@@ -22,7 +22,7 @@ func TestDashboardFitsItsTerminal(t *testing.T) {
 	}).Update(startupReadyMsg{})
 	dash := next.(*Model)
 
-	for _, size := range [][2]int{{120, 30}, {154, 40}, {200, 50}, {240, 60}, {300, 24}} {
+	for _, size := range [][2]int{{80, 24}, {120, 30}, {154, 40}, {200, 50}, {240, 60}, {300, 24}} {
 		width, height := size[0], size[1]
 		dash.SetSize(width, height)
 		view := dash.View().Content
