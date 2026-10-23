@@ -167,6 +167,31 @@ func TestQuestionOnlyWhenWaiting(t *testing.T) {
 	}
 }
 
+func TestQuestionRendersWhenThereIsNoList(t *testing.T) {
+	m := &Model{}
+	it := item{session: domain.Session{
+		HookState:        domain.AgentStateWaitingInput,
+		HookStateMessage: "Proceed with handover?",
+	}}
+	lines := strings.Split(ansi.Strip(m.renderSessionDetail(it, 80)), "\n")
+	if len(lines) < 2 || lines[0] != "no to-do list yet" || !strings.Contains(lines[1], "│ Proceed with handover?") {
+		t.Fatalf("question not under the empty list: %q", lines)
+	}
+}
+
+func TestQuestionRendersWhenTodosUnsupported(t *testing.T) {
+	m := &Model{todoUnsupported: map[string]bool{"regent0": true}}
+	it := item{session: domain.Session{
+		RemoteHost:       "regent0",
+		HookState:        domain.AgentStateWaitingInput,
+		HookStateMessage: "Proceed with handover?",
+	}}
+	lines := strings.Split(ansi.Strip(m.renderSessionDetail(it, 80)), "\n")
+	if len(lines) < 2 || lines[0] != "to-dos unavailable on this remote" || !strings.Contains(lines[1], "│ Proceed with handover?") {
+		t.Fatalf("question not under the unsupported status: %q", lines)
+	}
+}
+
 func TestTodoWindowKeepsCursorVisible(t *testing.T) {
 	orig := lipgloss.Writer.Profile
 	lipgloss.Writer.Profile = colorprofile.TrueColor

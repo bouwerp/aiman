@@ -218,7 +218,7 @@ func renderTodoLines(v todoView, width int) []string {
 		return nil
 	}
 	if !v.Snap.HasList {
-		return []string{truncateToWidth(dimText("no to-do list yet"), width)}
+		return statusThenFollow(dimText("no to-do list yet"), v.Question, v.Input, width)
 	}
 	items := v.Snap.List.Items
 	start, end, more := todoWindow(len(items), todoFocus(v))
@@ -458,7 +458,7 @@ func (m *Model) metaFor(id string) detailMetaExtras {
 
 func (m *Model) sessionTodoLines(it item, width int) []string {
 	if m.todoUnsupported[it.session.RemoteHost] {
-		return []string{truncateToWidth(dimText("to-dos unavailable on this remote"), width)}
+		return statusThenFollow(dimText("to-dos unavailable on this remote"), waitingQuestion(it, width), "", width)
 	}
 	snap := todoSnapshot{}
 	if m.todos != nil {
@@ -473,6 +473,17 @@ func (m *Model) sessionTodoLines(it item, width int) []string {
 
 func dimText(s string) string {
 	return a1Text(s, a1Dim, false, false)
+}
+
+// statusThenFollow draws a waiting question, and an add/edit line, under a
+// status row. The status is not a list, but the question still belongs there.
+func statusThenFollow(status string, question []string, input string, width int) []string {
+	lines := []string{truncateToWidth(status, width)}
+	lines = append(lines, formatQuestionLines(question, width)...)
+	if input != "" {
+		lines = append(lines, truncateToWidth(input, width))
+	}
+	return lines
 }
 
 func joinParts(parts []string) string {
