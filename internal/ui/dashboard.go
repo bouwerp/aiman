@@ -265,6 +265,10 @@ type item struct {
 	hasChildren bool
 	childN      int  // descendants under this session, at every depth
 	collapsed   bool // header or parent session: children are hidden
+	todoDone    int
+	todoTotal   int
+	hasTodos    bool
+	escalated   bool // CI failure that needs the user; the row glyph treats it like waiting
 }
 
 func (i item) Title() string {
@@ -569,6 +573,9 @@ func (m *Model) makeItem(s domain.Session) item {
 		session:    s,
 		remoteName: remoteNameForHost(m.cfg, s.RemoteHost),
 	}
+	if sum, ok := m.todoSummaries[s.ID]; ok {
+		it.todoDone, it.todoTotal, it.hasTodos = todoProgressFields(sum)
+	}
 	if cs, ok := m.creatingSessions[s.ID]; ok {
 		if cs.failed {
 			it.activity = "create-failed"
@@ -787,7 +794,13 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		items[i] = item{session: s, remoteName: remoteNameForHost(cfg, s.RemoteHost)}
 	}
 
-	l := list.New(items, newSessionListDelegate(), 0, 0)
+	del := newSessionListDelegate()
+	del.ShowDescription = false
+	del.SetSpacing(0)
+	l := list.New(items, del, 0, 0)
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
 	l.Title = "Aiman Dashboard - Active Sessions"
 	l.AdditionalFullHelpKeys = func() []key.Binding {
 		return []key.Binding{

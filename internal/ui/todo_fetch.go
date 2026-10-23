@@ -234,16 +234,19 @@ func (m *Model) noteTodoRPCError(host string, err error) {
 	m.log("todos on %s: %v", host, err)
 }
 
-// refreshTodoProgress finds the list row whose session matches id.
-// Summary progress is kept on todoSummaries; this is where a change meets the row.
+// refreshTodoProgress copies the cached summary onto the matching list row.
 func (m *Model) refreshTodoProgress(id string) {
-	if _, ok := m.todoSummaries[id]; !ok {
+	sum, ok := m.todoSummaries[id]
+	if !ok {
 		return
 	}
-	for _, it := range m.list.Items() {
+	for idx, it := range m.list.Items() {
 		sessItem, ok := it.(item)
-		if ok && !sessItem.header && sessItem.session.ID == id {
-			return
+		if !ok || sessItem.header || sessItem.session.ID != id {
+			continue
 		}
+		sessItem.todoDone, sessItem.todoTotal, sessItem.hasTodos = todoProgressFields(sum)
+		m.list.SetItem(idx, sessItem)
+		return
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/remotesvc"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
-	"github.com/charmbracelet/x/ansi"
 )
 
 func groupRollup(items []item) string {
@@ -337,12 +336,7 @@ func (d sessionListDelegate) Render(w io.Writer, m list.Model, index int, listIt
 		_, _ = fmt.Fprint(w, renderSessionHeader(it, selected)+"\n")
 		return
 	}
-	title, desc := renderSessionRow(d, it, selected, m.Width())
-	if d.ShowDescription {
-		_, _ = fmt.Fprintf(w, "%s\n%s", title, desc)
-		return
-	}
-	_, _ = fmt.Fprint(w, title)
+	_, _ = fmt.Fprint(w, renderA1Row(it, selected, m.Width()))
 }
 
 func renderSessionHeader(it item, selected bool) string {
@@ -374,38 +368,6 @@ func renderSessionHeader(it item, selected bool) string {
 		row = row.Background(headerSelBg)
 	}
 	return row.Render(line)
-}
-
-func renderSessionRow(d sessionListDelegate, it item, selected bool, width int) (string, string) {
-	prefix, activity := it.chrome()
-	state := lipgloss.NewStyle().Foreground(sessionStateColor(it))
-	if selected {
-		state = state.Bold(true)
-	}
-	tree := lipgloss.NewStyle().Foreground(stateColorIdle).Render(it.treeBranch())
-	nameStyle := d.Styles.NormalTitle.UnsetPadding().Foreground(stateColorName)
-	if selected {
-		nameStyle = d.Styles.SelectedTitle.UnsetPadding().UnsetBorderStyle().Foreground(lipgloss.Color("#EE6FF8"))
-	}
-	line := tree + state.Render(prefix) + nameStyle.Render(it.displayName()) + state.Render(activity)
-	pad := 2
-	if selected {
-		pad = 1
-	}
-	textwidth := width - pad
-	if textwidth < 8 {
-		textwidth = 8
-	}
-	line = ansi.Truncate(line, textwidth, "…")
-	titleStyle := d.Styles.NormalTitle.UnsetForeground()
-	descStyle := d.Styles.NormalDesc
-	if selected {
-		titleStyle = d.Styles.SelectedTitle.UnsetForeground()
-		descStyle = d.Styles.SelectedDesc
-	}
-	desc := it.Description()
-	desc = ansi.Truncate(desc, textwidth, "…")
-	return titleStyle.Render(line), descStyle.Render(desc)
 }
 
 func (m *Model) startQuickSession() (tea.Model, tea.Cmd) {
