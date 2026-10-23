@@ -333,7 +333,7 @@ func (d sessionListDelegate) Render(w io.Writer, m list.Model, index int, listIt
 	}
 	selected := index == m.Index()
 	if it.header {
-		_, _ = fmt.Fprint(w, renderSessionHeader(it, selected)+"\n")
+		_, _ = fmt.Fprint(w, renderSessionHeader(it, selected))
 		return
 	}
 	_, _ = fmt.Fprint(w, renderA1Row(it, selected, m.Width()))

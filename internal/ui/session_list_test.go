@@ -108,6 +108,33 @@ func TestSessionListDelegatePaintsState(t *testing.T) {
 	}
 }
 
+func TestGroupHeaderRenderStaysOneLine(t *testing.T) {
+	header := item{
+		header:     true,
+		session:    domain.Session{Group: "WTB-1925"},
+		activity:   "waiting",
+		remoteName: "regent0",
+		groupN:     2,
+	}
+	row := item{session: domain.Session{Name: "impl", IssueKey: "WTB-1"}, activity: "busy"}
+	items := []list.Item{header, row}
+	l := list.New(items, newSessionListDelegate(), 48, 12)
+	d := newSessionListDelegate()
+
+	var b strings.Builder
+	d.Render(&b, l, 0, header)
+	headerOut := b.String()
+	if strings.Contains(headerOut, "\n") {
+		t.Fatalf("header must be one line, got %q", headerOut)
+	}
+	b.Reset()
+	d.Render(&b, l, 1, row)
+	joined := headerOut + b.String()
+	if strings.Contains(joined, "\n") {
+		t.Fatalf("header plus the next row must not insert a blank line, got %q", joined)
+	}
+}
+
 func TestGroupedSessionItemsHeadersAndRollup(t *testing.T) {
 	flat := []item{
 		{session: domain.Session{ID: "2", Name: "reviewer", Group: "WTB-1925"}, needsInput: true, remoteName: "regent0"},
