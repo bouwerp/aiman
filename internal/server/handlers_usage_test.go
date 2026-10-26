@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -56,7 +57,7 @@ func TestUsageGetMethod(t *testing.T) {
 		res := usageGet(t, srv, map[string]any{
 			"session": "only-name", "by": "model", "days": 7, "tz_offset_minutes": 120,
 		})
-		if res.Type != "usage" || res.Report.Known || res.Report.Total.CostUSD != 0 || len(res.Report.Rows) != 0 {
+		if res.Type != "usage" || res.Session != "s3" || res.Usage.Known || res.Usage.Total.CostUSD != 0 || len(res.Usage.Rows) != 0 {
 			t.Fatalf("%+v", res)
 		}
 	})
@@ -65,33 +66,37 @@ func TestUsageGetMethod(t *testing.T) {
 		res := usageGet(t, srv, map[string]any{
 			"session": "work/fix-login", "by": "model", "days": 7, "tz_offset_minutes": 120,
 		})
-		if res.Type != "usage" || res.Report.Total.CostUSD != 1 || len(res.Report.Rows) != 1 || res.Report.Rows[0].Key != "claude-haiku-4-5" || !res.Report.Known {
+		if res.Type != "usage" || res.Session != "s1" || res.Usage.Total.CostUSD != 1 || len(res.Usage.Rows) != 1 || res.Usage.Rows[0].Key != "claude-haiku-4-5" || !res.Usage.Known {
 			t.Fatalf("%+v", res)
 		}
 		other := usageGet(t, srv, map[string]any{"session": "other/fix-login", "by": "session"})
-		if other.Report.Total.CostUSD != 2 || len(other.Report.Rows) != 1 || other.Report.Rows[0].Key != "s2" {
-			t.Fatalf("%+v", other.Report)
+		if other.Session != "s2" || other.Usage.Total.CostUSD != 2 || len(other.Usage.Rows) != 1 || other.Usage.Rows[0].Key != "s2" {
+			t.Fatalf("%+v", other)
 		}
 	})
 
 	t.Run("id", func(t *testing.T) {
 		res := usageGet(t, srv, map[string]any{"session": "s1"})
-		if res.Report.Total.CostUSD != 1 || len(res.Report.Rows) != 0 {
-			t.Fatalf("%+v", res.Report)
+		if res.Session != "s1" || res.Usage.Total.CostUSD != 1 || len(res.Usage.Rows) != 0 {
+			t.Fatalf("%+v", res)
 		}
 	})
 
 	t.Run("all sessions", func(t *testing.T) {
-		res := usageGet(t, srv, map[string]any{"by": "issue", "days": 7})
-		if res.Report.Total.CostUSD != 3 || len(res.Report.Rows) != 2 {
-			t.Fatalf("%+v", res.Report)
+		resp := rpc(t, srv, "", "usage.get", map[string]any{"by": "issue", "days": 7})
+		raw, err := json.Marshal(resp.Result)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-
-	t.Run("unknown session", func(t *testing.T) {
-		resp := rpc(t, srv, "", "usage.get", map[string]any{"session": "nope"})
-		if resp.Error == nil || resp.Error.Code != CodeNotFound {
-			t.Fatalf("%+v", resp.Error)
+		if !strings.Contains(string(raw), `"session":""`) {
+			t.Fatalf("missing empty session: %s", raw)
+		}
+		var res usageGetResult
+		if err := json.Unmarshal(raw, &res); err != nil {
+			t.Fatal(err)
+		}
+		if res.Usage.Total.CostUSD != 3 || len(res.Usage.Rows) != 2 {
+			t.Fatalf("%+v", res.Usage)
 		}
 	})
 
@@ -119,11 +124,58 @@ func TestPublishUsageEvent(t *testing.T) {
 	srv.PublishUsage("s1")
 	select {
 	case ev := <-ch:
-		if ev.Type != "usage_changed" || ev.ID != "s1" {
+		if ev.Type != "usage" || ev.ID != "s1" {
 			t.Fatalf("%+v", ev)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("no usage_changed event")
+		t.Fatal("no usage event")
+	}
+}
+
+func TestUsageGetResolvesSessionName(t *testing.T) {
+	repo := testRepo(t)
+	if err := repo.Save(context.Background(), &domain.Session{ID: "s1", Name: "fix-login"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := &queryRecorder{}
+	srv := New(nil, repo, nil, nil, nil, nil, "test")
+	srv.reporter = rec
+	var res usageGetResult
+	rpcOK(t, srv, "", "usage.get", map[string]any{
+		"session": "fix-login", "by": "day", "days": 7, "tz_offset_minutes": 120,
+	}, &res)
+	if res.Session != "s1" {
+		t.Fatalf("session = %q", res.Session)
+	}
+	want := usage.Query{SessionID: "s1", By: "day", Days: 7, TZOffsetMinutes: 120}
+	if rec.q != want {
+		t.Fatalf("query = %+v", rec.q)
+	}
+}
+
+func TestUsageGetUnknownSession(t *testing.T) {
+	srv := New(nil, testRepo(t), nil, nil, nil, nil, "test")
+	srv.EnableUsage(context.Background(), nil, usage.Reporter{})
+	resp := rpc(t, srv, "", "usage.get", map[string]any{"session": "nope"})
+	if resp.Error == nil || resp.Error.Code != CodeInvalidParams || resp.Error.Message != `unknown session "nope"` {
+		t.Fatalf("%+v", resp.Error)
+	}
+}
+
+func TestUsageGetRejectsBadBy(t *testing.T) {
+	srv := New(nil, testRepo(t), nil, nil, nil, nil, "test")
+	srv.EnableUsage(context.Background(), nil, usage.Reporter{})
+	resp := rpc(t, srv, "", "usage.get", map[string]any{"by": "week"})
+	if resp.Error == nil || resp.Error.Code != CodeInvalidParams {
+		t.Fatalf("%+v", resp.Error)
+	}
+}
+
+func TestUsageGetWithoutTracker(t *testing.T) {
+	srv := New(nil, testRepo(t), nil, nil, nil, nil, "test")
+	resp := rpc(t, srv, "", "usage.get", map[string]any{"session": "s1"})
+	if resp.Error == nil || resp.Error.Message != "usage tracking is not running on this host" {
+		t.Fatalf("%+v", resp.Error)
 	}
 }
 
@@ -215,8 +267,18 @@ func waitLister(t *testing.T, l *blockingLister, n int) {
 }
 
 type usageGetResult struct {
-	Type   string       `json:"type"`
-	Report usage.Report `json:"report"`
+	Type    string       `json:"type"`
+	Session string       `json:"session"`
+	Usage   usage.Report `json:"usage"`
+}
+
+type queryRecorder struct {
+	q usage.Query
+}
+
+func (r *queryRecorder) Report(_ context.Context, q usage.Query) (usage.Report, error) {
+	r.q = q
+	return usage.Report{}, nil
 }
 
 type usageFixture struct {

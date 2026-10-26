@@ -3,10 +3,16 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/usage"
 )
+
+// usageReporter prices a query. *usage.Reporter satisfies it.
+type usageReporter interface {
+	Report(ctx context.Context, q usage.Query) (usage.Report, error)
+}
 
 // EnableUsage serves usage.get from rep and, when tr is set, scans transcripts
 // every usage.ScanInterval until ctx is cancelled. A nil tracker is stored so
@@ -26,7 +32,7 @@ func (s *Server) PublishUsage(sessionID string) {
 	if s == nil || s.hub == nil {
 		return
 	}
-	s.hub.Publish(SessionEvent{Type: "usage_changed", ID: sessionID})
+	s.hub.Publish(SessionEvent{Type: "usage", ID: sessionID})
 }
 
 func (s *Server) kickUsage() {
@@ -75,7 +81,11 @@ func (s *Server) handleUsageGet(ctx context.Context, req Request) Response {
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	return Response{ID: req.ID, Result: map[string]any{"type": "usage", "report": rep}}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type":    "usage",
+		"session": sessionID,
+		"usage":   rep,
+	}}
 }
 
 func validUsageBy(by string) bool {
@@ -87,8 +97,8 @@ func validUsageBy(by string) bool {
 	}
 }
 
-// resolveUsageSession matches todo.get: id, name, or group/name.
-// An empty target is every session. An unknown target is not_found.
+// resolveUsageSession matches id, name, or group/name.
+// An empty target is every session. An unknown target is invalid_params.
 func (s *Server) resolveUsageSession(ctx context.Context, reqID, target string) (string, Response, bool) {
 	target = strings.TrimSpace(target)
 	if target == "" {
@@ -100,7 +110,7 @@ func (s *Server) resolveUsageSession(ctx context.Context, reqID, target string) 
 	}
 	sess, ok := resolveSession(list, target)
 	if !ok {
-		return "", errResp(reqID, CodeNotFound, "session not found"), false
+		return "", errResp(reqID, CodeInvalidParams, fmt.Sprintf("unknown session %q", target)), false
 	}
 	return sess.ID, Response{}, true
 }

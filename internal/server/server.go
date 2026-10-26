@@ -67,7 +67,7 @@ type Server struct {
 	// usage follows transcripts. reporter prices the stored buckets for usage.get.
 	// Both stay nil until EnableUsage, and a nil tracker kick is a no-op.
 	usage    *usage.Tracker
-	reporter *usage.Reporter
+	reporter usageReporter
 	// todoLocks holds one *sync.Mutex per session id around a to-do write and
 	// its render.
 	todoLocks sync.Map
