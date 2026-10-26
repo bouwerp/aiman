@@ -465,8 +465,10 @@ type Model struct {
 	gitStatus             domain.GitStatus
 	lastGitStatusUpdate   time.Time
 	// metaExtras is per-session cost, token, cache, and review state.
-	// Later plans fill it. It stays empty until then.
+	// usage.get fills the cost fields.
 	metaExtras             map[string]detailMetaExtras
+	usageFetchedAt         map[string]time.Time // when usage.get for that session was last started
+	usageInFlight          map[string]bool      // true until that call returns
 	restartingSession      *domain.Session
 	changingDirSession     *domain.Session
 	renamingSessionID      string
@@ -942,6 +944,8 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		todoClient:          newSSHTodoClient(),
 		todos:               make(map[string]todoSnapshot),
 		metaExtras:          make(map[string]detailMetaExtras),
+		usageFetchedAt:      make(map[string]time.Time),
+		usageInFlight:       make(map[string]bool),
 		todoSummaries:       make(map[string]todoSummary),
 		todoInFlight:        make(map[string]bool),
 		todoUnsupported:     make(map[string]bool),
@@ -2894,9 +2898,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.startSessionStream(remote)
 		}
 		return m, nil
-	case todoLoadedMsg, promptSentMsg, todoMutatedMsg:
-		// These results are global: a fetch, a reply, or a failed to-do
-		// write can finish after the user has left the session list.
+	case todoLoadedMsg, promptSentMsg, todoMutatedMsg, usageMsg:
+		// These results are global: a fetch, a reply, a failed to-do
+		// write, or a usage report can finish after the user has left
+		// the session list.
 		return m.applyTrackedSessionMsg(msg)
 	case todoSweepMsg:
 		m.applyTodoSweep(msg)
@@ -4318,7 +4323,11 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 			m.activeSession = s.TmuxSession
 			m.tmuxOutput = "Loading..."
 			m.setPreviewContent()
-			cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), m.fetchTodosCmd(s))
+			var usageCmd tea.Cmd
+			if !m.skipSessionPolling(s.ID) {
+				usageCmd = m.maybeFetchUsage(s, false)
+			}
+			cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), m.fetchTodosCmd(s), usageCmd)
 		}
 	} else if m.currentTab == tabSessions {
 		if it, ok := m.selectedSessionItem(); ok {
@@ -4600,10 +4609,11 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			// While a session is being created or torn down there is nothing to fetch —
 			// the preview panel shows that progress instead.
 			if !m.skipSessionPolling(s.ID) {
+				usageCmd := m.maybeFetchUsage(s, false)
 				if m.panelMode == panelModeTerminal {
-					cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s))
+					cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s), usageCmd)
 				} else {
-					cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s))
+					cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), usageCmd)
 				}
 			}
 			cmds = append(cmds, m.fetchTodosCmd(s))

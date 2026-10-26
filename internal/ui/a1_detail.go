@@ -12,8 +12,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// detailMetaExtras is cost, token, and review state for one session.
-// Later plans fill it. Nothing writes it yet, so the map stays empty.
+// detailMetaExtras is cost, token, cache, and review state for one session.
+// usage.get fills the cost fields. Reviewing and WatchingPR are not part of that report.
 type detailMetaExtras struct {
 	CostUSD    float64
 	HasCost    bool

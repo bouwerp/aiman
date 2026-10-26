@@ -159,6 +159,11 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 	if cmd, claimed := m.applyTodoEvent(msg.host, msg.event); claimed {
 		return follow(cmd)
 	}
+	// usage is a report change, not pane activity. Refresh the selected
+	// session and leave eventSeen alone so the pane is not polled.
+	if msg.event.Type == "usage" {
+		return follow(m.usageEventFetch(msg.event.ID))
+	}
 
 	if msg.event.Type == "keepalive" || (msg.event.ID == "" && msg.event.Type != "session_created") {
 		return follow(nil)
