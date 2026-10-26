@@ -123,6 +123,79 @@ func TestPromptSendErrorRestoresText(t *testing.T) {
 	}
 }
 
+func TestPromptFailedSendStaysOnTheSessionThatSentIt(t *testing.T) {
+	a := domain.Session{ID: "a", IssueKey: "AIM-1", Name: "one", RemoteHost: "regent0"}
+	b := domain.Session{ID: "b", IssueKey: "AIM-2", Name: "two", RemoteHost: "regent0"}
+
+	t.Run("empty neighbour", func(t *testing.T) {
+		m, fake := promptModel(a, b)
+		fake.err = errors.New("offline")
+		m, cmd := sendThenLeave(t, m, "for a")
+
+		next, _ := m.Update(pressKey("down"))
+		m = next.(*Model)
+		if m.promptInput.Value() != "" {
+			t.Fatalf("B field = %q before the error", m.promptInput.Value())
+		}
+		next, _ = m.Update(cmd())
+		m = next.(*Model)
+		if m.promptInput.Value() != "" {
+			t.Fatalf("B field received %q", m.promptInput.Value())
+		}
+		if m.promptBuf["a"] != "for a" {
+			t.Fatalf("A draft = %q", m.promptBuf["a"])
+		}
+		next, _ = m.Update(pressKey("up"))
+		m = next.(*Model)
+		if m.promptInput.Value() != "for a" {
+			t.Fatalf("A field = %q", m.promptInput.Value())
+		}
+	})
+
+	t.Run("neighbour already has a draft", func(t *testing.T) {
+		m, fake := promptModel(a, b)
+		fake.err = errors.New("offline")
+		m, cmd := sendThenLeave(t, m, "for a")
+
+		next, _ := m.Update(pressKey("down"))
+		m = next.(*Model)
+		next, _ = m.Update(pressKey("ctrl+p"))
+		m = next.(*Model)
+		next, _ = m.Update(pressKey("keep b"))
+		m = next.(*Model)
+		next, _ = m.Update(cmd())
+		m = next.(*Model)
+		if m.promptInput.Value() != "keep b" {
+			t.Fatalf("B draft = %q", m.promptInput.Value())
+		}
+		if m.promptBuf["a"] != "for a" {
+			t.Fatalf("A draft = %q", m.promptBuf["a"])
+		}
+		next, _ = m.Update(pressKey("esc"))
+		m = next.(*Model)
+		next, _ = m.Update(pressKey("up"))
+		m = next.(*Model)
+		if m.promptInput.Value() != "for a" {
+			t.Fatalf("A field = %q", m.promptInput.Value())
+		}
+	})
+}
+
+func sendThenLeave(t *testing.T, m *Model, text string) (*Model, tea.Cmd) {
+	t.Helper()
+	next, _ := m.Update(pressKey("ctrl+p"))
+	m = next.(*Model)
+	next, _ = m.Update(pressKey(text))
+	m = next.(*Model)
+	next, cmd := m.Update(pressKey("enter"))
+	m = next.(*Model)
+	if cmd == nil {
+		t.Fatal("enter did not send")
+	}
+	next, _ = m.Update(pressKey("esc"))
+	return next.(*Model), cmd
+}
+
 func TestPromptSecondEnterWaitsAndStaleResultIsIgnored(t *testing.T) {
 	const id = "s1"
 	m, fake := promptModel(domain.Session{ID: id, Name: "impl", RemoteHost: "regent0"})

@@ -229,10 +229,11 @@ func (m *Model) applyPromptSent(msg promptSentMsg) tea.Cmd {
 		if m.promptSent != nil {
 			delete(m.promptSent, msg.sessionID)
 		}
-		// A line typed after the send is newer than the failed note.
-		if text != "" && m.promptInput.Value() == "" {
-			m.ensurePromptInput()
-			m.promptInput.SetValue(text)
+		// The note belongs to the session that sent it. The shared field
+		// gets it only while that session is the one on screen, and only
+		// when nothing newer is already typed there.
+		if text != "" {
+			m.restoreFailedPrompt(msg.sessionID, text)
 		}
 		return m.showToast("⚠️  Reply not sent: "+msg.err.Error(), true, 3*time.Second)
 	}
@@ -249,6 +250,24 @@ func (m *Model) applyPromptSent(msg promptSentMsg) tea.Cmd {
 	snap.Steer = msg.steer
 	m.todos[msg.sessionID] = snap
 	return nil
+}
+
+func (m *Model) restoreFailedPrompt(id, text string) {
+	if m.promptFor == id {
+		if m.promptInput.Value() != "" {
+			return
+		}
+		m.ensurePromptInput()
+		m.promptInput.SetValue(text)
+		return
+	}
+	if m.promptBuf != nil && m.promptBuf[id] != "" {
+		return
+	}
+	if m.promptBuf == nil {
+		m.promptBuf = map[string]string{}
+	}
+	m.promptBuf[id] = text
 }
 
 func promptTarget(s domain.Session) string {
