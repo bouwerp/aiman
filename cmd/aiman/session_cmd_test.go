@@ -2,9 +2,12 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
+	"github.com/bouwerp/aiman/internal/domain"
 )
 
 func TestTakeFlagsFromStdinIsBoolean(t *testing.T) {
@@ -46,5 +49,27 @@ func TestReportParamsForwardsPreCompactEvent(t *testing.T) {
 	}
 	if params["id"] != "aim-1" {
 		t.Fatalf("id=%v", params["id"])
+	}
+}
+
+func TestFormatSessionEvent(t *testing.T) {
+	ev := domain.SessionEvent{
+		Seq: 2, Kind: domain.EventHookReported, Actor: domain.EventActorAgent,
+		At:      time.Date(2026, 10, 26, 20, 0, 0, 0, time.UTC),
+		Payload: []byte(`{"state":"idle"}`),
+	}
+	got := formatSessionEvent(ev)
+	for _, want := range []string{"2 hook.reported agent 2026-10-26T20:00:00Z", `{"state":"idle"}`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("%q missing %q", got, want)
+		}
+	}
+}
+
+func TestFormatSessionEventTruncatesPayload(t *testing.T) {
+	ev := domain.SessionEvent{Seq: 1, Kind: domain.EventHookReported, Payload: []byte(strings.Repeat("x", 200))}
+	got := formatSessionEvent(ev)
+	if !strings.HasSuffix(got, "...") || len(got) > 200 {
+		t.Fatalf("payload not truncated: %q", got)
 	}
 }

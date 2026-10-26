@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -69,7 +70,7 @@ func writeCLIError(code, msg string) {
 
 func runSession(args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|prompt|wait|read|log|report-agent-session|deepcode-watch> …\n")
+		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|prompt|wait|read|log|replay|report-agent-session|deepcode-watch> …\n")
 		fmt.Fprintf(os.Stderr, "Are you an AI? Run: aiman --skill\n")
 		return errUsage
 	}
@@ -114,14 +115,19 @@ func runSession(args []string) error {
 			return errUsage
 		}
 		flags, _ := takeFlags(args[2:])
-		params := map[string]any{"session": args[1]}
-		if n := flags["since"]; n != "" {
-			params["since_seq"] = atoi(n)
+		return callSessionLog(sock, args[1], flags)
+	case "replay":
+		if len(args) < 2 {
+			writeCLIError(server.CodeInvalidParams, "session replay requires a target")
+			return errUsage
 		}
-		if n := flags["limit"]; n != "" {
-			params["limit"] = atoi(n)
+		flags, _ := takeFlags(args[2:])
+		out := flags["out"]
+		if out == "" {
+			writeCLIError(server.CodeInvalidParams, "session replay <target> --out DIR")
+			return errUsage
 		}
-		return callAndPrint(sock, "session.log", params)
+		return callAndPrint(sock, "session.replay", map[string]any{"session": args[1], "out": out})
 	case "prompt":
 		if len(args) < 3 {
 			writeCLIError(server.CodeInvalidParams, "session prompt <target> TEXT")
@@ -385,6 +391,55 @@ func callAndPrint(sock, method string, params any) error {
 		return errors.New(resp.Error.Message)
 	}
 	return writeJSON(resp.Result)
+}
+
+// callSessionLog prints one line per event unless --json is set.
+func callSessionLog(sock, target string, flags map[string]string) error {
+	params := map[string]any{"session": target}
+	if n := flags["since"]; n != "" {
+		params["since_seq"] = atoi(n)
+	}
+	if n := flags["limit"]; n != "" {
+		params["limit"] = atoi(n)
+	}
+	resp, err := server.Call(sock, "session.log", params)
+	if err != nil {
+		code := server.CodeServerNotRunning
+		if !errors.Is(err, server.ErrServerNotRunning) {
+			code = server.CodeInvalidParams
+		}
+		writeCLIError(code, err.Error())
+		return err
+	}
+	if resp.Error != nil {
+		writeCLIError(resp.Error.Code, resp.Error.Message)
+		return errors.New(resp.Error.Message)
+	}
+	if flags["json"] == "1" {
+		return writeJSON(resp.Result)
+	}
+	raw, err := json.Marshal(resp.Result)
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Events []domain.SessionEvent `json:"events"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return err
+	}
+	for _, ev := range result.Events {
+		fmt.Fprintln(os.Stdout, formatSessionEvent(ev))
+	}
+	return nil
+}
+
+func formatSessionEvent(ev domain.SessionEvent) string {
+	payload := string(ev.Payload)
+	if len(payload) > 80 {
+		payload = payload[:77] + "..."
+	}
+	return fmt.Sprintf("%d %s %s %s %s", ev.Seq, ev.Kind, ev.Actor, ev.At.Format(time.RFC3339), payload)
 }
 
 func blockBareTUI(aimanEnv string, tty bool) bool {

@@ -174,6 +174,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleRead(ctx, req)
 	case "session.log":
 		return s.handleSessionLog(ctx, req)
+	case "session.replay":
+		return s.handleSessionReplay(ctx, req)
 	case "session.prompt":
 		return s.handlePrompt(ctx, req)
 	case "session.wait":

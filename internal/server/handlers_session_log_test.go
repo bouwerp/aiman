@@ -225,3 +225,39 @@ func TestForgetAppendsSessionEnded(t *testing.T) {
 		t.Fatalf("actor = %q", ev.Actor)
 	}
 }
+
+func TestSessionReplayWritesBundle(t *testing.T) {
+	repo := logRepo(t)
+	if err := repo.Save(context.Background(), &domain.Session{
+		ID: "s1", Name: "s1", WorkingDirectory: t.TempDir(), Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AppendSessionEvent(context.Background(), domain.SessionEvent{
+		SessionID: "s1", Actor: domain.EventActorUser, Kind: domain.EventSessionCreated,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestServer(t, repo)
+	out := t.TempDir()
+	resp, err := Call(sock, "session.replay", map[string]any{"session": "s1", "out": out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := resultMap(t, resp)
+	bundle, ok := m["bundle"].(map[string]any)
+	if !ok || bundle["manifest"] == "" || bundle["events"] == "" {
+		t.Fatalf("bundle = %#v", m["bundle"])
+	}
+}
+
+func TestSessionReplayRequiresOut(t *testing.T) {
+	sock := startTestServer(t, logRepo(t))
+	resp, err := Call(sock, "session.replay", map[string]any{"session": "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error == nil || resp.Error.Code != CodeInvalidParams {
+		t.Fatalf("error = %+v", resp.Error)
+	}
+}
