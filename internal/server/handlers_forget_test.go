@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -49,5 +51,37 @@ func TestSessionForgetReportsAnUnknownTarget(t *testing.T) {
 	}
 	if resp.Error == nil || resp.Error.Code != CodeNotFound {
 		t.Fatalf("got %+v, want %s", resp.Error, CodeNotFound)
+	}
+}
+
+func TestForgetWritesHandoverBeforeKill(t *testing.T) {
+	repo := testRepo(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir,
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestServer(t, repo)
+	resp, err := Call(sock, "session.forget", map[string]any{"id": "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("forget: %+v", resp.Error)
+	}
+	if _, err := os.Stat(filepath.Join(dir, domain.AimanHandoverFileName)); err != nil {
+		t.Fatalf("handover file: %v", err)
+	}
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range list {
+		if s.ID == "s1" {
+			t.Fatal("the row survived session.forget")
+		}
 	}
 }

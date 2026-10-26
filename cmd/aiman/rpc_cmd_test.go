@@ -16,6 +16,8 @@ func TestRPCParams(t *testing.T) {
 		{"unknown method", "session.forget", `{}`, "unknown method"},
 		{"not an object", "todo.get", `[1]`, "object"},
 		{"steer.send ok", "steer.send", `{"session":"s1","text":"hi"}`, ""},
+		{"handover.write ok", "handover.write", `{"session":"s1","reason":"archive"}`, ""},
+		{"handover.point ok", "handover.point", `{"session":"s1"}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -708,11 +708,14 @@ func (s *Server) handleRename(ctx context.Context, req Request) Response {
 // Forgetting is deliberately independent of whether the terminal is still
 // alive. The caller has already torn it down, and refusing to forget a session
 // whose holder outlived the kill would put the row right back out of reach.
+// The handover is written first. A failed write is logged and the row is
+// still deleted.
 func (s *Server) handleForget(ctx context.Context, req Request) Response {
 	sess, fail, ok := s.resolveReq(ctx, req)
 	if !ok {
 		return fail
 	}
+	s.noteForgetHandover(ctx, sess)
 	if s.pty != nil {
 		_ = s.pty.Kill(sess.ID)
 		_ = s.pty.Forget(sess.ID)
@@ -807,6 +810,11 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 				if err := clr.ClearAgentEnded(ctx, sess.ID); err != nil {
 					return errResp(req.ID, CodeInvalidParams, err.Error())
 				}
+			}
+			// Compaction waits on this hook, so the file is the pre-compact pane.
+			// SessionEnd does not write a handover.
+			if strings.EqualFold(rep.Event, agenthook.EventPreCompact) {
+				s.notePreCompactHandover(ctx, *sess)
 			}
 			// A new state may open the delivery gate for held notes.
 			s.steer.Kick(sess.ID)

@@ -2,12 +2,15 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -15,6 +18,10 @@ import (
 	"github.com/bouwerp/aiman/internal/handover"
 	"github.com/bouwerp/aiman/internal/pane"
 )
+
+// HandoverPointerNote is the steer text queued when a handover file is already
+// on disk. The agent reads that file instead of a pasted copy of it.
+const HandoverPointerNote = "[aiman] This session's terminal was restarted. Your last handover is in .aiman_handover.md; read it if you lost track."
 
 // handoverResult is one written handover. Written is false when the file
 // bytes were already current.
@@ -26,6 +33,145 @@ type handoverResult struct {
 
 func handoverNoteID(sessionID string) string {
 	return "handover-" + contextstore.SafeKey(sessionID)
+}
+
+// handoverCall is the params object for handover.write and handover.point.
+type handoverCall struct {
+	Session string `json:"session"`
+	Reason  string `json:"reason"`
+}
+
+func decodeHandoverCall(req Request) (handoverCall, *Response) {
+	var p handoverCall
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			r := errResp(req.ID, CodeInvalidParams, "invalid params")
+			return p, &r
+		}
+	}
+	return p, nil
+}
+
+func validHandoverReason(reason string) bool {
+	switch reason {
+	case "archive", "forget", "restart", "agent_switch", "pre_compact":
+		return true
+	default:
+		return false
+	}
+}
+
+// lookupHandoverSession resolves session the way todo.* does: id, name, or
+// group/name. A miss returns not_found without starting handover work.
+func (s *Server) lookupHandoverSession(ctx context.Context, id, name string) (domain.Session, *Response) {
+	if strings.TrimSpace(name) == "" {
+		r := errResp(id, CodeInvalidParams, "session is required")
+		return domain.Session{}, &r
+	}
+	list, err := s.loadSessions(ctx)
+	if err != nil {
+		r := errResp(id, CodeInvalidParams, err.Error())
+		return domain.Session{}, &r
+	}
+	sess, ok := resolveSession(list, name)
+	if !ok {
+		r := errResp(id, CodeNotFound, "session not found")
+		return domain.Session{}, &r
+	}
+	return sess, nil
+}
+
+func (s *Server) handleHandoverWrite(ctx context.Context, req Request) Response {
+	p, bad := decodeHandoverCall(req)
+	if bad != nil {
+		return *bad
+	}
+	if !validHandoverReason(p.Reason) {
+		return errResp(req.ID, CodeInvalidParams, "reason must be one of archive, forget, restart, agent_switch, pre_compact")
+	}
+	sess, bad := s.lookupHandoverSession(ctx, req.ID, p.Session)
+	if bad != nil {
+		return *bad
+	}
+	// 20s stays under the 30s socket deadline. The slow work is pane capture
+	// and git diff, and an unknown session has already returned.
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	res, err := s.writeHandover(ctx, sess, p.Reason)
+	if err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type":    "handover",
+		"path":    res.Path,
+		"written": res.Written,
+		"note_id": res.NoteID,
+		"exists":  true,
+	}}
+}
+
+func (s *Server) handleHandoverPoint(ctx context.Context, req Request) Response {
+	p, bad := decodeHandoverCall(req)
+	if bad != nil {
+		return *bad
+	}
+	sess, bad := s.lookupHandoverSession(ctx, req.ID, p.Session)
+	if bad != nil {
+		return *bad
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return Response{ID: req.ID, Result: map[string]any{
+		"type":   "handover_point",
+		"queued": s.queueHandoverPointer(ctx, sess),
+	}}
+}
+
+// queueHandoverPointer enqueues HandoverPointerNote only when the handover
+// file is already in the session directory. No directory, no file, or no
+// steerer queues nothing.
+func (s *Server) queueHandoverPointer(ctx context.Context, sess domain.Session) bool {
+	if ctx.Err() != nil || s.steer == nil || !handoverFileExists(sess) {
+		return false
+	}
+	s.steer.Enqueue(SteerNote{
+		SessionID: sess.ID,
+		Author:    domain.AuthorAiman,
+		Text:      HandoverPointerNote,
+	})
+	return true
+}
+
+func handoverFileExists(sess domain.Session) bool {
+	dir := strings.TrimSpace(sess.WorkingDirectory)
+	if dir == "" {
+		dir = strings.TrimSpace(sess.WorktreePath)
+	}
+	if dir == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(dir, domain.AimanHandoverFileName))
+	return err == nil && !info.IsDir()
+}
+
+// notePreCompactHandover writes the handover on the request context. The
+// agent's compaction waits for the hook, so this stays synchronous and does
+// not add a second timeout. A write error is logged and the report still succeeds.
+func (s *Server) notePreCompactHandover(ctx context.Context, sess domain.Session) {
+	if _, err := s.writeHandover(ctx, sess, "pre_compact"); err != nil {
+		log.Printf("handover: pre_compact %s: %v", sess.ID, err)
+	}
+}
+
+// noteForgetHandover writes before the terminal is killed. The 10s budget
+// stops a stuck diff from holding forget, and a failure still leaves the
+// row to be deleted.
+func (s *Server) noteForgetHandover(ctx context.Context, sess domain.Session) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := s.writeHandover(ctx, sess, "forget"); err != nil {
+		log.Printf("handover: forget %s: %v", sess.ID, err)
+	}
 }
 
 // writeHandover gathers the session's pane, list, undelivered notes, and diff

@@ -200,6 +200,10 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleContextPack(ctx, req)
 	case "context.stats":
 		return s.handleContextStats(ctx, req)
+	case "handover.write":
+		return s.handleHandoverWrite(ctx, req)
+	case "handover.point":
+		return s.handleHandoverPoint(ctx, req)
 	case "todo.get", "todo.summary", "todo.add", "todo.update", "todo.move", "todo.remove", "todo.mirror", "steer.send":
 		return s.handleTodo(ctx, req)
 	case "pty.create":

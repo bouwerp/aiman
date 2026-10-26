@@ -19,6 +19,30 @@ import (
 
 func paneText(s string) string { return s }
 
+func handoverCallSession(t *testing.T, dir string) string {
+	t.Helper()
+	repo := testRepo(t)
+	if err := repo.Save(context.Background(), &domain.Session{
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir,
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return startTestServer(t, repo)
+}
+
+func resultMap(t *testing.T, resp Response) map[string]any {
+	t.Helper()
+	if resp.Error != nil {
+		t.Fatalf("rpc: %v", resp.Error)
+	}
+	m, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("result = %#v", resp.Result)
+	}
+	return m
+}
+
 func todosWith(id, text, state string) todoStore {
 	return &stubTodos{list: domain.TodoList{
 		Rev:   1,
@@ -445,5 +469,135 @@ func TestPaneTailKeepsLast40Lines(t *testing.T) {
 	}
 	if parts[0] != "L061" || parts[len(parts)-1] != "L100" {
 		t.Fatalf("window %q .. %q", parts[0], parts[len(parts)-1])
+	}
+}
+
+func TestHandoverWriteMethod(t *testing.T) {
+	dir := t.TempDir()
+	sock := handoverCallSession(t, dir)
+	resp, err := Call(sock, "handover.write", map[string]any{"session": "s1", "reason": "archive"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := resultMap(t, resp)
+	wantPath := filepath.Join(dir, domain.AimanHandoverFileName)
+	if m["type"] != "handover" || m["written"] != true || m["exists"] != true || m["note_id"] != "handover-s1" || m["path"] != wantPath {
+		t.Fatalf("result = %#v", m)
+	}
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandoverWriteRejectsUnknownReason(t *testing.T) {
+	sock := handoverCallSession(t, t.TempDir())
+	for _, reason := range []string{"nap", ""} {
+		resp, err := Call(sock, "handover.write", map[string]any{"session": "s1", "reason": reason})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Error == nil || resp.Error.Code != CodeInvalidParams || !strings.Contains(resp.Error.Message, "reason") || strings.Contains(resp.Error.Message, "unknown method") {
+			t.Fatalf("reason %q: %+v", reason, resp.Error)
+		}
+	}
+}
+
+// A missing session is not_found and must not wait out the handover budget.
+func TestHandoverWriteUnknownSession(t *testing.T) {
+	sock := startTestServer(t, testRepo(t))
+	start := time.Now()
+	resp, err := Call(sock, "handover.write", map[string]any{"session": "missing", "reason": "archive"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) >= 2*time.Second {
+		t.Fatalf("unknown session took %s", time.Since(start))
+	}
+	if resp.Error == nil || resp.Error.Code != CodeNotFound {
+		t.Fatalf("got %+v, want %s", resp.Error, CodeNotFound)
+	}
+}
+
+func TestHandoverWriteNoWorkingDirectory(t *testing.T) {
+	sock := handoverCallSession(t, "")
+	resp, err := Call(sock, "handover.write", map[string]any{"session": "s1", "reason": "restart"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error == nil || resp.Error.Code != CodeInvalidParams || !strings.Contains(resp.Error.Message, "session has no working directory") {
+		t.Fatalf("got %+v", resp.Error)
+	}
+}
+
+func TestPreCompactReportWritesHandover(t *testing.T) {
+	dir := t.TempDir()
+	sock := handoverCallSession(t, dir)
+	resp, err := Call(sock, "session.report_agent_session", map[string]any{
+		"id": "s1", "agent_session_id": "c1", "event": "PreCompact",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("report: %+v", resp.Error)
+	}
+	if _, err := os.Stat(filepath.Join(dir, domain.AimanHandoverFileName)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionEndReportDoesNotWriteHandover(t *testing.T) {
+	dir := t.TempDir()
+	sock := handoverCallSession(t, dir)
+	resp, err := Call(sock, "session.report_agent_session", map[string]any{
+		"id": "s1", "ended": true, "event": "SessionEnd",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("report: %+v", resp.Error)
+	}
+	if _, err := os.Stat(filepath.Join(dir, domain.AimanHandoverFileName)); !os.IsNotExist(err) {
+		t.Fatalf("handover file err = %v, want not exist", err)
+	}
+}
+
+func TestHandoverPointQueuesOnlyWhenFileExists(t *testing.T) {
+	dir := t.TempDir()
+	srv, _, _ := todoServer(t, domain.Session{
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+	})
+	var absent struct {
+		Type   string `json:"type"`
+		Queued bool   `json:"queued"`
+	}
+	rpcOK(t, srv, "", "handover.point", map[string]any{"session": "s1"}, &absent)
+	if absent.Type != "handover_point" || absent.Queued {
+		t.Fatalf("absent file: %+v", absent)
+	}
+	// Enqueue coalesces before Status.Pending shows the note. Wait that window
+	// out so a pointer queued with no file cannot hide in the buffer.
+	settle()
+	if st := srv.steer.Status("s1"); len(st.Pending) != 0 || st.Queued != 0 {
+		t.Fatalf("enqueued without a file: %+v", st)
+	}
+
+	path := filepath.Join(dir, domain.AimanHandoverFileName)
+	if err := os.WriteFile(path, []byte("handover\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var present struct {
+		Type   string `json:"type"`
+		Queued bool   `json:"queued"`
+	}
+	rpcOK(t, srv, "", "handover.point", map[string]any{"session": "s1"}, &present)
+	if present.Type != "handover_point" || !present.Queued {
+		t.Fatalf("file present: %+v", present)
+	}
+	eventually(t, 2*time.Second, func() bool { return len(srv.steer.Status("s1").Pending) == 1 })
+	note := srv.steer.Status("s1").Pending[0]
+	if note.Text != HandoverPointerNote || note.Author != domain.AuthorAiman {
+		t.Fatalf("note = %+v", note)
 	}
 }
