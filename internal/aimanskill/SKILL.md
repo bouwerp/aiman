@@ -108,6 +108,8 @@ aiman context pack --group "$AIMAN_GROUP" --repo owner/repo
 
 On `put`, pass `--group "$AIMAN_GROUP"` or `--repo owner/repo`. Body is remaining args, `--body-file`, or stdin. If serve is down, these commands still read and write the files on this host. Do not commit `.aiman_context.md`.
 
+`.aiman_handover.md` is written on restart and compaction. Read it when resuming. Never commit it.
+
 Import this host's agent memories (Claude auto-memory, Grok `~/.grok/memory`, Codex `~/.codex/memories`, agy walkthroughs) into the store. Re-running overwrites the same notes. Do not import from a laptop pane; run it on the host where the agents wrote the files:
 
 ```bash

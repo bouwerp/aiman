@@ -1382,6 +1382,8 @@ func putRemoteSnapshotContext(ctx context.Context, sess domain.Session, cfg *con
 		return
 	}
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	// A failed handover must not fail a snapshot that is already saved.
+	_, _ = usecase.WriteHandoverOnRemote(ctx, mgr, sess.ID, "archive")
 	_ = usecase.PutSnapshotContext(ctx, mgr, snap, sess.Group)
 }
 
@@ -7589,29 +7591,27 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			logf("gitignore update skipped: %v", err)
 		}
 
-		// Step 1: ask the current agent for a restart handoff before replacing it.
-		// A missing or failed handoff must never block the restart itself — the
-		// best-effort wrapper swallows any error (not just a timeout) and the
-		// new agent simply starts without one.
-		summaryPath := filepath.Join(workingDir, domain.AimanSessionSummaryFileName)
-		m.sendStatusFor(placeholderID, "Capturing restart handoff...")
-		logf("step1: capturing restart handoff to %s", summaryPath)
+		// Step 1: ask serve to write the handover before replacing the agent.
+		// A missing file falls back to the agent-written summary inside
+		// PrepareRestartHandoff. Either failure still lets the restart continue.
+		m.sendStatusFor(placeholderID, "Writing handover...")
+		logf("step1: writing handover")
 		summaryCtx, summaryCancel := context.WithTimeout(ctx, 90*time.Second)
-		summaryCreated, note := usecase.CaptureSessionHandoffBestEffort(summaryCtx, mgr, *s, summaryPath)
+		mode, note := usecase.PrepareRestartHandoff(summaryCtx, mgr, *s, workingDir, restartHandoverReason(sessionCfg), 90*time.Second)
 		summaryCancel()
 		if note != "" {
 			logf("step1: %s", note)
 			m.sendStatusFor(placeholderID, note)
 		}
-		logf("step1 ok: summaryCreated=%t", summaryCreated)
+		logf("step1 ok: mode=%d", mode)
 
-		// Step 2: build the new agent command after the restart handoff file exists.
+		// Step 2: build the new agent command after the handover attempt.
 		m.sendStatusFor(placeholderID, fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
 		logf("step2: preparing agent command")
 		agentCmd := sessionCfg.Agent.Command
 		var sendKeysPrompt string
 		resumeSnapshot := sessionCfg.PriorSnapshot
-		if summaryCreated {
+		if mode != usecase.HandoffNone {
 			resumeSnapshot = nil
 		}
 		if flowManager != nil && flowManager.SkillEngine != nil {
@@ -7621,6 +7621,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 				sendKeysPrompt = prepared.InitialPrompt
 			}
 		}
+		sendKeysPrompt = restartPrompt(sendKeysPrompt, mode)
 		sendKeysPrompt = usecase.InjectSharedContext(ctx, mgr, workingDir, s.Group, s.RepoName, sendKeysPrompt)
 		usecase.WriteMuseSessionID(ctx, mgr, workingDir, agentCmd, s.ID)
 		if sessionCfg.FreshAgent {

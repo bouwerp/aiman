@@ -194,6 +194,8 @@ To-do lists are `internal/todo`, stored as `~/.aiman/todos/<id>.json`. `EnableTo
 
 Steering queues notes for the agent: free text, or the formatted summary of someone else's list change. Notes the agent authored are dropped, as are changes that only touch `Ref` links. A window of 800ms collapses what arrived into at most two persisted notes (one for list ops, one for joined text). The queue is in sqlite, so a serve restart neither loses nor repeats undelivered notes. Delivery waits until the agent is at a prompt. `AgentEnded` holds the note (`ended`). A hook report of `idle`, or `waiting_input` from an idle prompt, opens the gate only when `HookStateAt` is after the last delivery. Other `waiting_input` is `dialog`. Anything else reported by the hook is `working`. With no usable hook report, only a high-confidence idle pane classification opens the gate, and only more than 3 seconds after the last delivery. A hook report calls `Kick` so a new state can release a held note. `session.forget` drops that session's steering queue. It does not delete `~/.aiman/todos/<id>.json`.
 
+`handover.write` writes `.aiman_handover.md` in the session directory and stores the shared-context note `handover-<id>`. The reason is `archive`, `forget`, `restart`, `agent_switch`, or `pre_compact`. The file is written only when its bytes change. `handover.point` queues a steering note that names that file, and only when the file is already there. A revive calls `handover.point`, so the note waits on the delivery gate instead of being typed while the agent is booting.
+
 The event hub (`internal/server/events.go`) fans each `Publish` out to every `session.events` subscriber. Each subscriber buffers 64 events. A full buffer drops the event, so a stalled client cannot block a socket handler. A to-do write publishes `todo_changed` with the list `Rev`. The steerer publishes `steer` with the queued count, and `DeliveredAt` once a note is submitted. The type names `usage`, `notify`, and `verify` are reserved on the same stream.
 
 SSH `systemctl --user` needs `XDG_RUNTIME_DIR` and the session bus; the scripts set those. Linger is enabled *before* `systemctl --user` so a first SSH to a host with no lingering user instance can still install.
@@ -204,11 +206,11 @@ Do not run serve inside tmux. Probe on select, `r`, after an op, and after disco
 
 ## Session Restart
 
-**File:** `internal/ui/dashboard.go` — `restartSession()` (~line 4885)
+**File:** `internal/ui/dashboard.go` — `restartSession()` (~line 7520)
 
 The restart flow (triggered by `s` / `ctrl+r`, including switching agent):
 1. Agent picker (same or different agent)
-2. Ask the current agent to write `.aiman_session_summary.md`, then Ctrl+C
+2. Serve writes `.aiman_handover.md`. The agent-written `.aiman_session_summary.md` is only the fallback.
 3. `PrepareSession` for the chosen agent (configured `--model` / effort flags, summary prompt)
 4. **1 SSH call**: `tmux kill-session … && tmux new-session … "bash -l -c '<agent>; exec bash'"`
 5. send-keys the handoff prompt
