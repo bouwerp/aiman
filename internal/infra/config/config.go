@@ -27,6 +27,7 @@ type Config struct {
 	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
 	Sync          SyncConfig               `yaml:"sync,omitempty"`
 	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
+	Usage         UsageConfig              `yaml:"usage,omitempty"`
 	Remotes       []Remote                 `yaml:"remotes"`
 	ActiveRemote  string                   `yaml:"active_remote"`
 
@@ -46,6 +47,7 @@ type ServeConfig struct {
 	Skills        SkillsConfig             `yaml:"skills,omitempty"`
 	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
 	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
+	Usage         UsageConfig              `yaml:"usage,omitempty"`
 }
 
 // MarshalServeConfig serializes the settings a remote Agent API needs.
@@ -59,7 +61,23 @@ func (c *Config) MarshalServeConfig() ([]byte, error) {
 		Skills:        c.Skills,
 		AgentDefaults: c.AgentDefaults,
 		Gateway:       c.Gateway,
+		Usage:         c.Usage,
 	})
+}
+
+// UsageConfig is the user's per-model price overrides, copied to the remote
+// serve config. Prices are USD per million tokens.
+type UsageConfig struct {
+	Prices map[string]ModelPrice `yaml:"prices,omitempty"`
+}
+
+// ModelPrice is one model's token prices. Omitted numbers decode as zero.
+type ModelPrice struct {
+	Input        float64 `yaml:"input"`
+	Output       float64 `yaml:"output"`
+	CacheRead    float64 `yaml:"cache_read"`
+	CacheWrite5m float64 `yaml:"cache_write_5m"`
+	CacheWrite1h float64 `yaml:"cache_write_1h"`
 }
 
 // AWSDefaults sets what the AWS fields on the session summary screen start

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -95,6 +96,52 @@ func TestMarshalServeConfigIncludesServiceSettingsWithoutRemotePaths(t *testing.
 	}
 	if got["gateway"] == nil {
 		t.Fatalf("serve config missing gateway settings: %s", body)
+	}
+}
+
+func TestUsagePricesRoundTrip(t *testing.T) {
+	const raw = `
+usage:
+  prices:
+    gpt-5.6-terra:
+      input: 1.5
+      output: 12
+      cache_read: 0.15
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, ok := cfg.Usage.Prices["gpt-5.6-terra"]
+	if !ok {
+		t.Fatalf("missing gpt-5.6-terra: %#v", cfg.Usage)
+	}
+	if got.Output != 12 {
+		t.Fatalf("Output = %v, want 12", got.Output)
+	}
+	if got.Input != 1.5 || got.CacheRead != 0.15 {
+		t.Fatalf("price = %+v, want input 1.5 cache_read 0.15", got)
+	}
+	if got.CacheWrite5m != 0 || got.CacheWrite1h != 0 {
+		t.Fatalf("omitted cache-write fields = %v %v, want 0", got.CacheWrite5m, got.CacheWrite1h)
+	}
+}
+
+func TestMarshalServeConfigCarriesUsage(t *testing.T) {
+	cfg := &Config{
+		Usage: UsageConfig{
+			Prices: map[string]ModelPrice{
+				"gpt-5.6-terra": {Input: 1.5, Output: 12, CacheRead: 0.15},
+			},
+		},
+	}
+	body, err := cfg.MarshalServeConfig()
+	if err != nil {
+		t.Fatalf("MarshalServeConfig: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "usage:") || !strings.Contains(text, "gpt-5.6-terra:") {
+		t.Fatalf("serve config missing usage prices:\n%s", text)
 	}
 }
 
