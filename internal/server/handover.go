@@ -105,9 +105,6 @@ func (s *Server) handleHandoverWrite(ctx context.Context, req Request) Response 
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventHandoverWritten, map[string]any{
-		"path": res.Path, "written": res.Written, "reason": p.Reason,
-	})
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":    "handover",
 		"path":    res.Path,
@@ -218,6 +215,9 @@ func (s *Server) writeHandover(ctx context.Context, sess domain.Session, reason 
 	}
 	id := handoverNoteID(sess.ID)
 	s.putHandoverNote(ctx, sess, in, id, changed)
+	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventHandoverWritten, map[string]any{
+		"path": path, "written": changed, "reason": reason,
+	})
 	return handoverResult{Path: path, Written: changed, NoteID: id}, nil
 }
 
