@@ -17,7 +17,7 @@ type Query struct {
 	Issue           string
 	Day             string // "2006-01-02" in the query's zone
 	By              string // "", "session", "issue", "day", "model"
-	Days            int    // 0 = all time; otherwise hours within the last N days of the zone
+	Days            int    // 0 = all time; otherwise hours in [now minus N days, now] in the query zone
 	TZOffsetMinutes int
 }
 
@@ -179,19 +179,16 @@ func (r Reporter) anyCursor(ctx context.Context, ids []string) (bool, error) {
 	return false, nil
 }
 
-// inWindow is the last q.Days calendar dates in the query zone, including the date of now.
-// The zone matters: midnight is local, so a late UTC hour can fall on the next local day.
+// inWindow keeps hours in the trailing window [now minus N days, now] in the query zone.
+// A zero or negative Days is all time. An hour after now is outside the window.
 func (r Reporter) inWindow(hour time.Time, q Query) bool {
 	if q.Days <= 0 {
 		return true
 	}
-	loc := queryLocation(q.TZOffsetMinutes)
-	local := r.now().In(loc)
-	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-	start = start.AddDate(0, 0, 1-q.Days)
-	end := start.AddDate(0, 0, q.Days)
+	now := r.now().In(queryLocation(q.TZOffsetMinutes))
+	start := now.AddDate(0, 0, -q.Days)
 	h := hour.UTC()
-	return !h.Before(start.UTC()) && h.Before(end.UTC())
+	return !h.Before(start) && !h.After(now)
 }
 
 func inDay(hour time.Time, q Query) bool {

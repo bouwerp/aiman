@@ -235,12 +235,18 @@ func TestReportDaysWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Last 1 day of the zone is the local calendar day that contains Now.
-	if got.Total.Tokens.Input != 4 {
-		t.Fatalf("input = %d, want 4 (2026-10-20 is outside the day)", got.Total.Tokens.Input)
+	// Days 1 is [Now minus 1 day, Now]: 2026-10-21T23 stays, 2026-10-20 and 2026-10-23 do not.
+	if got.Total.Tokens.Input != 14 {
+		t.Fatalf("input = %d, want 14", got.Total.Tokens.Input)
 	}
-	if len(got.Rows) != 1 || got.Rows[0].Key != "2026-10-22" {
-		t.Fatalf("rows = %+v", got.Rows)
+	wantDays := []string{"2026-10-22", "2026-10-21"}
+	if len(got.Rows) != len(wantDays) {
+		t.Fatalf("rows = %+v, want %v", got.Rows, wantDays)
+	}
+	for i, day := range wantDays {
+		if got.Rows[i].Key != day {
+			t.Fatalf("row %d = %s, want %s (rows %+v)", i, got.Rows[i].Key, day, got.Rows)
+		}
 	}
 	all, err := rep.Report(context.Background(), Query{SessionID: "s1", Days: 0})
 	if err != nil {
