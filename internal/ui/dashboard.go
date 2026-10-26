@@ -427,6 +427,13 @@ type Model struct {
 	// promptDraft is the text of a reply still waiting on steer.send.
 	// While a session has an entry the prompt line says sending….
 	promptDraft map[string]string
+	// focusedSessionID is the session whose to-do list has the keys.
+	// todoCursor indexes that cached list. todoEdit is set while a row is
+	// being added or renamed. An empty edit id means add.
+	focusedSessionID string
+	todoCursor       int
+	todoEdit         *todoEditState
+	todoInput        textinput.Model
 	// Auto-fitting the previewed session to the panel (see preview_fit.go).
 	fitApplied    map[string]string    // session ID -> size known to be in place
 	fitBackoff    map[string]time.Time // session ID -> do not retry before
@@ -801,6 +808,7 @@ func (m *Model) applyRemoteFilter() {
 	if m.discoveryPending {
 		m.list.Title += " · scanning remotes…"
 	}
+	m.exitFocusIfSessionGone()
 }
 
 func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSessions []domain.Session, db domain.SessionRepository, flowManager *usecase.FlowManager, intelligence domain.IntelligenceProvider, snapshotManager *usecase.SnapshotManager, initialLogs ...string) *Model {
@@ -2857,9 +2865,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.startSessionStream(remote)
 		}
 		return m, nil
-	case todoLoadedMsg, promptSentMsg:
-		// Both results are global: a fetch or a reply can finish after the
-		// user has left the session list.
+	case todoLoadedMsg, promptSentMsg, todoMutatedMsg:
+		// These results are global: a fetch, a reply, or a failed to-do
+		// write can finish after the user has left the session list.
 		return m.applyTrackedSessionMsg(msg)
 	case todoSweepMsg:
 		m.applyTodoSweep(msg)
@@ -4248,6 +4256,14 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	}
+	if m.focus == focusTodos && m.todoEdit != nil {
+		if _, isKey := msg.(tea.KeyPressMsg); !isKey {
+			m.ensureTodoInput()
+			var cmd tea.Cmd
+			m.todoInput, cmd = m.todoInput.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+	}
 
 	return m.forwardToFocused(msg, cmds)
 }
@@ -4646,6 +4662,9 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		switch msg.String() {
 		case "ctrl+p":
 			return m, m.enterPromptFocus(), true
+		case "ctrl+t":
+			m.enterTodoFocus()
+			return m, nil, true
 		case "?":
 			m.showKeys = !m.showKeys
 			if m.width > 0 && m.height > 0 {

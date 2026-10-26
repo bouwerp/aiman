@@ -464,10 +464,17 @@ func (m *Model) sessionTodoLines(it item, width int) []string {
 	if m.todos != nil {
 		snap = m.todos[it.session.ID]
 	}
+	cursor := -1
+	input := ""
+	if m.focus == focusTodos && it.session.ID == m.focusedSessionID {
+		cursor = m.todoCursor
+		input = m.todoEditLine(width)
+	}
 	return renderTodoLines(todoView{
 		Snap:     snap,
-		Cursor:   -1,
+		Cursor:   cursor,
 		Question: waitingQuestion(it, width),
+		Input:    input,
 	}, width)
 }
 

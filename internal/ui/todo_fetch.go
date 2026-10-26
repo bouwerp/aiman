@@ -168,6 +168,7 @@ func (m *Model) applySteerEvent(ev server.SessionEvent) {
 }
 
 func (m *Model) applyTodoLoaded(msg todoLoadedMsg) {
+	follow := m.todoCursorFollowID(msg.sessionID)
 	if m.todoInFlight != nil {
 		delete(m.todoInFlight, msg.sessionID)
 	}
@@ -184,6 +185,7 @@ func (m *Model) applyTodoLoaded(msg todoLoadedMsg) {
 	m.todos[msg.sessionID] = msg.snap
 	m.putTodoSummary(msg.sessionID, summaryFromList(msg.snap.List))
 	m.refreshTodoProgress(msg.sessionID)
+	m.restoreTodoCursor(msg.sessionID, follow)
 }
 
 func (m *Model) applyTodoSweep(msg todoSweepMsg) {
