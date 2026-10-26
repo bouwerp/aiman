@@ -8,7 +8,7 @@ Plans: `docs/superpowers/plans/2026-10-22-nl-*.md` (one per workstream; index an
 
 The user runs several agent sessions at once across remotes and vendors. Today the only way to know what a session is doing, or to change its course, is to attach, read the pane, and type. Nothing shows a session's plan. In the user's words: "having to go in to multiple sessions and see what was happening, or to steer and re prompt, and rarely do sessions have a visible to do list, which I think must be standard and editable."
 
-The next level makes aiman the place where you watch and steer every session without entering any of them. On that foundation it adds the research-backed improvements: handovers and better memory, cost visibility, notifications, CI and review reaction, cross-vendor verification, cheaper starts, and spec-driven fan-out.
+The next level makes aiman the place where you watch and steer every session without entering any of them. On that foundation it adds the research-backed improvements: handovers and better memory, cost visibility, notifications, CI and review reaction, cross-vendor verification, cheaper starts, and a coordinator in every session that keeps small work and splits the rest.
 
 Success: on an ordinary day the user attaches to a session only when they choose to, not because it is the only way to find out what is going on.
 
@@ -22,7 +22,7 @@ Success: on an ordinary day the user attaches to a session only when they choose
 6. A different-vendor reviewer checks a session's work before a PR goes out.
 7. Restarts and agent switches carry a real handover; shared memory gets typed notes, ranked search and expiry.
 8. Sessions start cheaper and faster (worktree bootstrap, RTK, graphify, cache hygiene).
-9. A ticket can be split into a spec plus to-dos and fanned out to worker sessions.
+9. Every session starts as the coordinator. It implements a simple, short-lived task itself, and splits anything larger into child Aiman sessions chosen from the preferred-agent list.
 10. Every session carries domain checklists, a definition of done, the tools it needs, a deliberate model/effort choice and an independent reviewer.
 
 ## Non-goals
@@ -278,12 +278,30 @@ repos:
 - graphify: if present on the remote, `CreateSession` runs `nice graphify update .` in the background after the agent starts, and `.aiman_task.md` mentions `graphify query`.
 - Cache hygiene: every writer of skills, hooks, task, context, todo and handover files compares content first and leaves unchanged files untouched.
 
-## W8. Spec mode and fan-out
+## W8. Coordinator
 
-- Wizard mode "Spec" creates a planner session. Its prompt asks for `docs/specs/<ISSUE>.md`, committed on the planner branch, and a to-do list where each item is an independently buildable task.
-- The user edits the list in A1. `F` on the planner (checked free in the plan) opens a picker of pending to-dos. Each selected item becomes a worker child session branching from the planner branch, with the spec and that one to-do as its task. The planner's to-do gets `Ref = child:<child id>` (a Ref-only change, which does not steer).
-- Children open PRs into the planner branch. The planner's item shows ◐ while the child works and is marked done (author `aiman`, which steers the planner) when the child's PR is merged into the planner branch, or, with `verify.before_pr`, when its verifier passes and its PR is open.
-- The planner opens the final PR to the default branch.
+Every session starts as the coordinator of its own task. The bundled skill says so before the agent edits anything. The coordinator reads the task (the JIRA issue, the branch prompt, or a steering note) and assesses the scope. There is no separate Spec wizard mode and no fan-out key. Splitting is the coordinator's job.
+
+- A simple, short-lived task stays in this session. The coordinator implements it and does not spawn a child for work it can finish in one sitting.
+- Anything larger must be broken into smaller tasks on the coordinator's to-do list. Each of those tasks is implemented by a child Aiman session. A child is a real session: its own worktree, terminal, and agent. A vendor subagent inside the coordinator's process does not count.
+- The user can still edit the list and steer. The user can start or stop a child from the dashboard. The coordinator does not wait for that before it splits.
+- A child branches from the coordinator's branch. The coordinator's to-do gets `Ref = child:<id>` (a Ref-only change, which does not steer). The child opens its PR into the coordinator's branch. The item shows ◐ while the child works and is marked done (author `aiman`, which steers the coordinator) when that PR is merged, or, with `verify.before_pr`, when the child's verifier passes and its PR is open. The coordinator opens the final PR to the default branch.
+- When more than one child needs a shared contract, the coordinator commits `docs/specs/<ISSUE>.md` on its branch before it starts them. One child can start from its to-do text alone.
+
+Preferred agents are an ordered list the user can update. The admin menu, next to Agent defaults, edits it. The file is `~/.aiman/config.yaml`, which serve reads:
+
+```yaml
+agents:
+  preferred: [claude, grok, codex]
+```
+
+- The coordinator must use this list, in order. The first name installed on that remote wins. `agent_defaults` still supplies that binary's model and effort.
+- A session started without an explicit agent launches as that first installed name. When the task stays in the session, that is the agent that does the work. The same rule picks each child's agent.
+- An agent the user picked in the wizard is the coordinator session's own agent. The list does not switch that session out from under the user. Children of that session still come from the list.
+- If none of the preferred agents is installed on the remote, the coordinator does not invent one. It leaves those to-dos unassigned and tells the user which names it tried.
+- `roles.verifier` stays a separate choice, so the reviewer can be a different vendor from the child. `roles.planner` and `roles.worker` do not replace `agents.preferred`.
+
+`docs/superpowers/plans/2026-10-22-nl-9-spec-fanout.md` implements this section. It does not start until nl-2, nl-5, and nl-7 have landed.
 
 ## W9. Session quality kit
 
@@ -292,7 +310,7 @@ Research (`docs/superpowers/research/2026-10-22-agent-personas.md`) found that "
 - **Domain checklists.** Markdown files in `.aiman/checklists/` (repo) and `~/.aiman/checklists/` (user, pushed to remotes), each with frontmatter `applies_to` (file globs) and a short checklist body. At create, restart and agent switch, serve lists the checklists whose globs match files in the worktree (and, once the agent has edited files, the changed files) and references them by path in `.aiman_task.md`. The verifier (W5) receives the same checklists as its review rubric.
 - **Definition of done.** `.aiman_task.md` gets a "Done when" section built from the JIRA acceptance criteria (when present) plus a per-repo default (`repos.<slug>.done_when`, e.g. `make ci` green, tests added, PR open). The to-do list always ends with the item `Done-when met` (author `aiman`, `Ref = done`), which the agent ticks only when every condition holds. The verifier checks the Done-when conditions and reports unmet ones as REQUIRED findings.
 - **Right tools.** `repos.<slug>.requires` lists binaries and MCP servers. Session create checks them on the remote; the wizard shows missing ones with a warning and lets the user continue.
-- **Model and effort.** `agent_defaults` stays; `repos.<slug>.agent_overrides` and role overrides (`roles.verifier`, `roles.planner`, `roles.worker`: agent, model, effort) apply at launch.
+- **Model and effort.** `agent_defaults` stays; `repos.<slug>.agent_overrides` and `roles.verifier` (agent, model, effort) apply at launch. Which agent a child runs is `agents.preferred` (W8), not a per-role agent name.
 - **Independent reviewer.** W5. Before an agent opens a PR, the skill tells it to run `aiman verify --wait` when `verify.before_pr` is on, and the dashboard offers `V` on any session with commits ahead of its base.
 - Checklist and Done-when text is fixed for the life of a session, so it stays in the agent's cached prompt prefix.
 
@@ -311,8 +329,8 @@ Revised from the plans' real dependencies (details in `2026-10-22-nl-0-roadmap.m
 7. W6b memory (nl-3b): needs nl-3a; must precede W5 (review notes are typed)
 8. W5 verifier (nl-7): needs nl-1, nl-2, nl-3b, nl-5
 9. W7 starts (nl-8): needs nl-1, nl-4 (`$` view), nl-5, nl-7 (`PreparedWorktree`)
-10. W8 spec mode (nl-9): needs nl-1, nl-2, nl-5, nl-7
-11. W9 session quality kit (nl-10): needs nl-1 (to-dos), nl-7 (verifier rubric), nl-8 (repo config block), nl-9 (planner/worker roles)
+10. W8 coordinator (nl-9): needs nl-1, nl-2, nl-5, nl-7
+11. W9 session quality kit (nl-10): needs nl-1 (to-dos), nl-7 (verifier rubric), nl-8 (repo config block), nl-9 (child sessions and `agents.preferred`)
 
 Each ships on its own and is tagged as a release.
 
@@ -325,7 +343,8 @@ Each ships on its own and is tagged as a release.
 - `i` and `t` as focus keys, with chord fallbacks.
 - The CI watcher lives in serve, not `aiman-trigger`.
 - Verifier snapshot via a temporary-index commit; completion marker in `.aiman_review.md`.
-- Spec files committed at `docs/specs/<ISSUE>.md`; children PR into the planner branch.
+- Every session is the coordinator. A simple, short-lived task stays in that session. Larger work is split into child Aiman sessions. `agents.preferred` is the ordered list the coordinator uses, and the user can edit it in settings. A wizard agent choice applies only to the session being created.
+- A shared spec is committed at `docs/specs/<ISSUE>.md` when more than one child needs it. Children PR into the coordinator's branch.
 - Memory candidates need explicit acceptance; the summariser stays on the laptop.
 - Header shows no cost; cost lives on the detail line and in the `$` view.
 - RTK installs its Apache-2.0 edition (`RTK_EDITION=oss`) rather than the BUSL-1.1 default.
