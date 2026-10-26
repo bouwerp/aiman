@@ -3,7 +3,6 @@ package harness
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -91,14 +90,4 @@ func TestDriverRecordsTmuxSendKeys(t *testing.T) {
 	if typed := countSendKeys(h.Execs()); typed < 2 {
 		t.Fatalf("send-keys commands = %d, execs = %v", typed, h.Execs())
 	}
-}
-
-func countSendKeys(execs []string) int {
-	n := 0
-	for _, cmd := range execs {
-		if strings.Contains(cmd, "tmux send-keys") {
-			n++
-		}
-	}
-	return n
 }
