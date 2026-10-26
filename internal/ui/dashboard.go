@@ -414,6 +414,14 @@ type Model struct {
 	todoInFlight    map[string]bool
 	todoUnsupported map[string]bool
 	promptSent      map[string]time.Time
+	// focus selects who receives keys on the sessions tab: the list, the
+	// reply line, or the to-do list.
+	focus       a1Focus
+	promptInput textinput.Model
+	showKeys    bool
+	// promptDraft is the text of a reply still waiting on steer.send.
+	// While a session has an entry the prompt line says sending….
+	promptDraft map[string]string
 	// Auto-fitting the previewed session to the panel (see preview_fit.go).
 	fitApplied    map[string]string    // session ID -> size known to be in place
 	fitBackoff    map[string]time.Time // session ID -> do not retry before
@@ -817,6 +825,8 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "manage tunnels")),
 			key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "admin menu")),
 			key.NewBinding(key.WithKeys("ctrl+s", "a"), key.WithHelp("a", "attach full terminal")),
+			key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "reply to session")),
+			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "edit to-dos")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
 			key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "copy local path")),
 			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy session output (visible)")),
@@ -911,6 +921,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		todoInFlight:        make(map[string]bool),
 		todoUnsupported:     make(map[string]bool),
 		promptSent:          make(map[string]time.Time),
+		promptInput:         newReplyInput(),
 		daemonList:          dl,
 		daemons:             make(map[string]domain.Daemon),
 		agentAPIProbing:     make(map[string]bool),
@@ -2834,9 +2845,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.startSessionStream(remote)
 		}
 		return m, nil
-	case todoLoadedMsg:
-		m.applyTodoLoaded(msg)
-		return m, nil
+	case todoLoadedMsg, promptSentMsg:
+		// Both results are global: a fetch or a reply can finish after the
+		// user has left the session list.
+		return m.applyTrackedSessionMsg(msg)
 	case todoSweepMsg:
 		m.applyTodoSweep(msg)
 		return m, nil
@@ -4214,6 +4226,17 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Cursor blinks and other non-key messages belong to the reply field
+	// while it is focused. Keys are already handled above.
+	if m.focus == focusPrompt {
+		if _, isKey := msg.(tea.KeyPressMsg); !isKey {
+			m.ensurePromptInput()
+			var cmd tea.Cmd
+			m.promptInput, cmd = m.promptInput.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+	}
+
 	return m.forwardToFocused(msg, cmds)
 }
 
@@ -4545,6 +4568,11 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 }
 
 func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	if m.focus != focusList {
+		if model, cmd, handled := m.handleFocusedKey(msg); handled {
+			return model, cmd, true
+		}
+	}
 	lst := &m.list
 	if m.currentTab == tabDaemons {
 		lst = &m.daemonList
@@ -4577,7 +4605,7 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 							toast = "⏹️  Restart canceled."
 						}
 						return m, m.showToast(toast, false, 3*time.Second), true
-					case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y":
+					case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+p", "ctrl+t":
 						waitMsg := "⚠️  This session is still being created — wait for it to finish, or press ctrl+k to cancel."
 						if cs.restart {
 							waitMsg = "⚠️  This session is still restarting — wait for it to finish, or press ctrl+k to cancel."
@@ -4587,7 +4615,7 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 				}
 				if m.isTerminatingSession(si.session.ID) {
 					switch msg.String() {
-					case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+k":
+					case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+k", "ctrl+p", "ctrl+t":
 						return m, m.showToast("⚠️  This session is being terminated.", true, 4*time.Second), true
 					}
 				}
@@ -4595,6 +4623,15 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 	}
 
+	if m.currentTab == tabSessions {
+		switch msg.String() {
+		case "ctrl+p":
+			return m, m.enterPromptFocus(), true
+		case "?":
+			m.showKeys = !m.showKeys
+			return m, nil, true
+		}
+	}
 	if model, handled := m.handlePreviewKey(msg); handled {
 		return model, nil, true
 	}
@@ -7092,31 +7129,12 @@ func (m *Model) renderMainView() string {
 	}
 	header := renderA1Header(m.a1HostLabel(), sessionRowCount(m.list.Items()), needsYouCount(m.list.Items()), m.discoveryPending, headerW)
 
-	helpText := "n: new • e: rename • g: group • enter: collapse • f: filter • c: scope • t: tunnels • s: resume • S: switch agent • y: copy • r: refresh • i: AI • ctrl+k: term • m: menu • q: quit"
-	if m.currentTab == tabDaemons {
-		helpText = "agent API: i install • s restart • c reload • u update • r probe • ctrl+k stop • tab: sessions • q: quit"
-	}
-	versionText := m.version
-
 	contentWidth := m.width - 4 // docStyle margins
-	var bottomLine string
-	if lipgloss.Width(helpText)+lipgloss.Width(versionText) <= contentWidth {
-		pad := contentWidth - lipgloss.Width(helpText) - lipgloss.Width(versionText)
-		bottomLine = helpText + strings.Repeat(" ", pad) + versionText
-	} else {
-		// The help line does not fit. Truncating keeps the bar one row; letting
-		// it run over wraps it and pushes the whole layout past the bottom of
-		// the terminal.
-		room := contentWidth - lipgloss.Width(versionText) - 1
-		bottomLine = ansi.Truncate(helpText, max(0, room), "…") + " " + versionText
+	if contentWidth < 1 {
+		contentWidth = 1
 	}
 
-	helpBar := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		MarginTop(1).
-		Render(bottomLine)
-
-	body := header + "\n\n" + columns + "\n" + helpBar
+	body := header + "\n\n" + columns + "\n" + m.mainFooter(contentWidth)
 	if banner := m.renderAWSCredExpiryBanner(); banner != "" {
 		body = banner + "\n" + body
 	}
