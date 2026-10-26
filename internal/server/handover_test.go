@@ -124,7 +124,7 @@ func TestWriteHandoverWritesFileAndNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(body)
-	for _, want := range []string{"t2 ▸ Fix parser", "[aiman] note A", "FAIL parser", "Fixing parser"} {
+	for _, want := range []string{"t2 ▸ Fix parser", "[aiman] note A", "FAIL parser", "## Goal", "## Evidence", "## Verification"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("file missing %q\n%s", want, text)
 		}
@@ -638,9 +638,9 @@ func TestHandoverKeepsTmuxPaneWhenDiffBlocks(t *testing.T) {
 	if !strings.Contains(text, "(unavailable)") {
 		t.Fatalf("cancelled diff must stay an empty stat:\n%s", text)
 	}
-	screen := strings.Index(text, "## Last screen")
+	screen := strings.Index(text, "## Evidence")
 	if screen < 0 || strings.Index(text, pane) < screen {
-		t.Fatalf("pane is not in the last screen:\n%s", text)
+		t.Fatalf("pane is not in the evidence section:\n%s", text)
 	}
 }
 
@@ -695,7 +695,76 @@ func TestHandoverPointQueuesOnlyWhenFileExists(t *testing.T) {
 	}
 	eventually(t, 2*time.Second, func() bool { return len(srv.steer.Status("s1").Pending) == 1 })
 	note := srv.steer.Status("s1").Pending[0]
-	if note.Text != HandoverPointerNote || note.Author != domain.AuthorAiman {
+	if note.Text != HandoverRestartNote || note.Author != domain.AuthorAiman {
+		t.Fatalf("note = %+v", note)
+	}
+}
+
+func TestHandoverPointPreCompactUsesCompactionNote(t *testing.T) {
+	dir := t.TempDir()
+	srv, _, _ := todoServer(t, domain.Session{
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+	})
+	path := filepath.Join(dir, domain.AimanHandoverFileName)
+	if err := os.WriteFile(path, []byte("handover\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Type   string `json:"type"`
+		Queued bool   `json:"queued"`
+	}
+	rpcOK(t, srv, "", "handover.point", map[string]any{"session": "s1", "reason": "pre_compact"}, &res)
+	if res.Type != "handover_point" || !res.Queued {
+		t.Fatalf("result = %+v", res)
+	}
+	eventually(t, 2*time.Second, func() bool { return len(srv.steer.Status("s1").Pending) == 1 })
+	note := srv.steer.Status("s1").Pending[0]
+	if note.Text != HandoverCompactionNote || note.Author != domain.AuthorAiman {
+		t.Fatalf("note = %+v", note)
+	}
+}
+
+func TestHandoverPointArchiveQueuesNothing(t *testing.T) {
+	dir := t.TempDir()
+	srv, _, _ := todoServer(t, domain.Session{
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+	})
+	path := filepath.Join(dir, domain.AimanHandoverFileName)
+	if err := os.WriteFile(path, []byte("handover\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Type   string `json:"type"`
+		Queued bool   `json:"queued"`
+	}
+	rpcOK(t, srv, "", "handover.point", map[string]any{"session": "s1", "reason": "archive"}, &res)
+	if res.Type != "handover_point" || res.Queued {
+		t.Fatalf("result = %+v", res)
+	}
+	settle()
+	if st := srv.steer.Status("s1"); len(st.Pending) != 0 || st.Queued != 0 {
+		t.Fatalf("archive queued a pointer: %+v", st)
+	}
+}
+
+func TestPreCompactReportQueuesCompactionPointer(t *testing.T) {
+	dir := t.TempDir()
+	srv, _, _ := todoServer(t, domain.Session{
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+	})
+	resp := srv.handleReportAgentSession(context.Background(), Request{
+		ID: "1", Method: "session.report_agent_session",
+		Params: []byte(`{"id":"s1","agent_session_id":"c1","event":"PreCompact"}`),
+	})
+	if resp.Error != nil {
+		t.Fatalf("report: %v", resp.Error)
+	}
+	if _, err := os.Stat(filepath.Join(dir, domain.AimanHandoverFileName)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 2*time.Second, func() bool { return len(srv.steer.Status("s1").Pending) == 1 })
+	note := srv.steer.Status("s1").Pending[0]
+	if note.Text != HandoverCompactionNote || note.Author != domain.AuthorAiman {
 		t.Fatalf("note = %+v", note)
 	}
 }

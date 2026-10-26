@@ -10,17 +10,38 @@ import (
 func TestRenderSections(t *testing.T) {
 	in := Input{Label: "WTB-12", Reason: "restart", Agent: "claude", Branch: "wtb-12", BaseBranch: "main",
 		Todos: &domain.TodoList{Items: []domain.TodoItem{
-			{ID: "t1", Text: "Write test", State: domain.TodoState("done")},
-			{ID: "t2", Text: "Fix parser", State: domain.TodoState("active")},
-			{ID: "t3", Text: "Docs", State: domain.TodoState("pending")}}},
+			{ID: "t1", Text: "Write test", State: domain.TodoDone},
+			{ID: "t2", Text: "Fix parser", State: domain.TodoActive},
+			{ID: "t3", Text: "Docs", State: domain.TodoPending}}},
 		Undelivered: []string{"[aiman] Your to-do list was changed by user:\n+ t4 Add rollback test"},
-		DiffStat:    " a.go | 3 ++-\n 1 file changed", HookTitle: "Fixing parser", PaneTail: "line1\nline2"}
+		DiffStat:    " a.go | 3 ++-\n 1 file changed", HookTitle: "Fixing parser", HookMessage: "almost",
+		Blocked: "permission prompt", PaneTail: "line1\nline2",
+		Evidence: Evidence{
+			TestCommand: "go test ./...",
+			TestOutput:  "FAIL parser",
+			ErrorTrace:  "panic: parser",
+			Commands:    []string{"go test ./...", "git status"},
+			Files:       []string{"b.go"},
+		},
+		Verification: "passed",
+	}
 	out := Render(in)
 	prev := -1
-	for _, want := range []string{"DO NOT COMMIT", "# Handover: WTB-12", "Reason: restart",
+	for _, want := range []string{
+		"DO NOT COMMIT", "# Handover: WTB-12", "Reason: restart",
 		"Reason: restart · Agent: claude · Branch: wtb-12 (base main)",
-		"t1 ✓ Write test", "t2 ▸ Fix parser", "t3 ○ Docs", "## Undelivered notes", "+ t4 Add rollback test",
-		"## Changed files (git diff --stat main)", "a.go | 3 ++-", "Fixing parser", "## Last screen", "line2"} {
+		"## Goal", "Fix parser",
+		"## Constraints & Preferences", "See .aiman_task.md",
+		"## Progress", "Done: 1", "In progress: 1", "Pending: 1", "Blocked: permission prompt",
+		"t1 ✓ Write test", "t2 ▸ Fix parser", "t3 ○ Docs",
+		"## Key Decisions", "None recorded",
+		"## Next Steps", "- t2 ▸ Fix parser", "- t3 ○ Docs",
+		"## Critical Context", "Agent: almost", "Undelivered notes", "+ t4 Add rollback test",
+		"## Evidence", "Diff (git diff --stat main)", "a.go | 3 ++-", "Last screen (40 lines)", "line2",
+		"Test command", "go test ./...", "Test output", "FAIL parser", "Error", "panic: parser",
+		"Files", "b.go", "Commands", "git status",
+		"## Verification", "passed",
+	} {
 		i := strings.Index(out, want)
 		if i < 0 {
 			t.Errorf("missing %q", want)
@@ -37,24 +58,44 @@ func TestRenderSections(t *testing.T) {
 	if out != domain.AimanScaffoldHeader+NoteBody(in) {
 		t.Error("Render must be the scaffold header plus NoteBody")
 	}
+	if missing := MissingSections(out); len(missing) != 0 {
+		t.Fatalf("missing sections: %v", missing)
+	}
 }
 
-func TestRenderOmitsUndeliveredWhenNone(t *testing.T) {
-	if strings.Contains(Render(Input{Label: "x", Reason: "forget"}), "## Undelivered notes") {
-		t.Fatal("undelivered section present with no notes")
+func TestRenderGoalFallsBackToHookTitleAndDefault(t *testing.T) {
+	title := NoteBody(Input{Reason: "restart", HookTitle: "Fixing parser"})
+	if !strings.Contains(title, "## Goal\n\nFixing parser") {
+		t.Fatalf("hook title goal:\n%s", title)
+	}
+	bare := NoteBody(Input{Reason: "restart"})
+	if !strings.Contains(bare, "## Goal\n\nContinue the session.") {
+		t.Fatalf("default goal:\n%s", bare)
+	}
+}
+
+func TestRenderCriticalContextNone(t *testing.T) {
+	out := NoteBody(Input{Reason: "forget"})
+	if !strings.Contains(out, "## Critical Context\n\nNone.") {
+		t.Fatalf("critical context:\n%s", out)
+	}
+	if strings.Contains(out, "## Undelivered notes") {
+		t.Fatal("legacy undelivered heading present")
 	}
 }
 
 func TestRenderNoTodoList(t *testing.T) {
 	out := Render(Input{Todos: nil, Reason: "archive"})
-	if !strings.Contains(out, "No to-do list.") {
-		t.Fatalf("missing empty-list line:\n%s", out)
+	for _, want := range []string{"No to-do list.", "Blocked: none", "No open items."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
 	}
 }
 
 func TestRenderDiffUnavailable(t *testing.T) {
 	out := Render(Input{BaseBranch: "main", DiffStat: ""})
-	if !strings.Contains(out, "## Changed files (git diff --stat main)") || !strings.Contains(out, "(unavailable)") {
+	if !strings.Contains(out, "Diff (git diff --stat main):") || !strings.Contains(out, "(unavailable)") {
 		t.Fatalf("diff:\n%s", out)
 	}
 }
@@ -99,9 +140,13 @@ func TestRenderFencesDiffStatNotesAndBacktickTodos(t *testing.T) {
 			t.Errorf("missing fence:\n%s\n---\n%s", want, out)
 		}
 	}
-	screen := strings.Index(out, "## Last screen")
-	if screen < 0 || screen < strings.Index(out, diff) || screen < strings.Index(out, note) {
-		t.Fatalf("last screen heading not after the fenced diff and note:\n%s", out)
+	evidence := strings.Index(out, "## Evidence")
+	contextHeading := strings.Index(out, "## Critical Context")
+	if evidence < 0 || contextHeading < 0 || evidence < contextHeading || evidence > strings.Index(out, diff) {
+		t.Fatalf("evidence heading is not between context and the diff:\n%s", out)
+	}
+	if strings.Index(out, note) > evidence {
+		t.Fatalf("undelivered note leaked into evidence:\n%s", out)
 	}
 	plain := "t2 " + domain.TodoPending.Glyph() + " plain line"
 	if !strings.Contains(out, plain) {
@@ -156,21 +201,46 @@ func TestRenderAppendsDroppedTodos(t *testing.T) {
 	}
 }
 
-func TestRenderAgentStatusOmitsEmptyLines(t *testing.T) {
+func TestRenderHookMessageOnlyInCriticalContext(t *testing.T) {
 	both := NoteBody(Input{HookTitle: "Fixing parser", HookMessage: "almost"})
-	if !strings.Contains(both, "## Last agent status") || !strings.Contains(both, "Title: Fixing parser") || !strings.Contains(both, "Message: almost") {
+	if !strings.Contains(both, "## Goal\n\nFixing parser") || !strings.Contains(both, "Agent: almost") {
 		t.Fatalf("both:\n%s", both)
 	}
+	if strings.Contains(both, "Title: Fixing parser") {
+		t.Fatalf("legacy title label leaked:\n%s", both)
+	}
 	titleOnly := NoteBody(Input{HookTitle: "Fixing parser"})
-	if strings.Contains(titleOnly, "Message:") {
+	if strings.Contains(titleOnly, "Agent: almost") {
 		t.Fatalf("empty message leaked:\n%s", titleOnly)
 	}
 	messageOnly := NoteBody(Input{HookMessage: "almost"})
-	if strings.Contains(messageOnly, "Title:") {
-		t.Fatalf("empty title leaked:\n%s", messageOnly)
+	if !strings.Contains(messageOnly, "Agent: almost") {
+		t.Fatalf("message-only context:\n%s", messageOnly)
 	}
-	if strings.Contains(NoteBody(Input{}), "## Last agent status") {
-		t.Fatal("status section present with no title or message")
+	if !strings.Contains(NoteBody(Input{}), "## Critical Context\n\nNone.") {
+		t.Fatal("empty hook message did not render as None.")
+	}
+}
+
+func TestMissingSections(t *testing.T) {
+	all := MissingSections("")
+	if len(all) != len(RequiredSections) {
+		t.Fatalf("empty markdown missing %d, want %d", len(all), len(RequiredSections))
+	}
+	rendered := Render(Input{Reason: "restart", PaneTail: "x"})
+	if missing := MissingSections(rendered); len(missing) != 0 {
+		t.Fatalf("rendered missing: %v", missing)
+	}
+	without := strings.Replace(rendered, "## Verification", "## Not verification", 1)
+	missing := MissingSections(without)
+	if len(missing) != 1 || missing[0] != "## Verification" {
+		t.Fatalf("missing = %v", missing)
+	}
+}
+
+func TestVerificationDefaultsToNotRecorded(t *testing.T) {
+	if got := verification(""); got != "not recorded" {
+		t.Fatalf("verification = %q", got)
 	}
 }
 

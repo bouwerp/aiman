@@ -19,9 +19,13 @@ import (
 	"github.com/bouwerp/aiman/internal/pane"
 )
 
-// HandoverPointerNote is the steer text queued when a handover file is already
-// on disk. The agent reads that file instead of a pasted copy of it.
-const HandoverPointerNote = "[aiman] This session's terminal was restarted. Your last handover is in .aiman_handover.md; read it if you lost track."
+// HandoverRestartNote is the steer text queued when a handover file is already
+// on disk after a terminal restart. The agent reads that file instead of a
+// pasted copy of it.
+const HandoverRestartNote = "[aiman] This session's terminal was restarted. Your last handover is in .aiman_handover.md; read it if you lost track."
+
+// HandoverCompactionNote is the same pointer after a PreCompact handover.
+const HandoverCompactionNote = "[aiman] Your context was compacted. Your handover is in .aiman_handover.md; read it if you lost track."
 
 // handoverResult is one written handover. Written is false when the file
 // bytes were already current.
@@ -115,6 +119,9 @@ func (s *Server) handleHandoverPoint(ctx context.Context, req Request) Response 
 	if bad != nil {
 		return *bad
 	}
+	if p.Reason != "" && !validHandoverReason(p.Reason) {
+		return errResp(req.ID, CodeInvalidParams, "reason must be one of archive, forget, restart, agent_switch, pre_compact")
+	}
 	sess, bad := s.lookupHandoverSession(ctx, req.ID, p.Session)
 	if bad != nil {
 		return *bad
@@ -123,21 +130,29 @@ func (s *Server) handleHandoverPoint(ctx context.Context, req Request) Response 
 	defer cancel()
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":   "handover_point",
-		"queued": s.queueHandoverPointer(ctx, sess),
+		"queued": s.queueHandoverPointer(ctx, sess, p.Reason),
 	}}
 }
 
-// queueHandoverPointer enqueues HandoverPointerNote only when the handover
-// file is already in the session directory. No directory, no file, or no
-// steerer queues nothing.
-func (s *Server) queueHandoverPointer(ctx context.Context, sess domain.Session) bool {
+// queueHandoverPointer enqueues the restart or compaction pointer only when the
+// handover file is already in the session directory. No directory, no file, no
+// steerer, or an archive/forget reason queues nothing.
+func (s *Server) queueHandoverPointer(ctx context.Context, sess domain.Session, reason string) bool {
 	if ctx.Err() != nil || s.steer == nil || !handoverFileExists(sess) {
+		return false
+	}
+	text := HandoverRestartNote
+	switch reason {
+	case "pre_compact":
+		text = HandoverCompactionNote
+	case "", "restart", "agent_switch":
+	default:
 		return false
 	}
 	s.steer.Enqueue(SteerNote{
 		SessionID: sess.ID,
 		Author:    domain.AuthorAiman,
-		Text:      HandoverPointerNote,
+		Text:      text,
 	})
 	return true
 }
@@ -158,15 +173,18 @@ func handoverFileExists(sess domain.Session) bool {
 // Production stays at 20s, under the 30s socket cap. Tests shorten it.
 var preCompactHandoverTimeout = 20 * time.Second
 
-// notePreCompactHandover writes the handover before the report returns. The
-// 20s budget stays under the 30s socket cap. A wedged diff is cancelled and
-// becomes an empty stat. A write error is logged and the report still succeeds.
+// notePreCompactHandover writes the handover before the report returns and
+// queues a compaction pointer. The 20s budget stays under the 30s socket cap.
+// A wedged diff is cancelled and becomes an empty stat. A write error is
+// logged and the report still succeeds; a failed write queues no pointer.
 func (s *Server) notePreCompactHandover(ctx context.Context, sess domain.Session) {
 	ctx, cancel := context.WithTimeout(ctx, preCompactHandoverTimeout)
 	defer cancel()
 	if _, err := s.writeHandover(ctx, sess, "pre_compact"); err != nil {
 		log.Printf("handover: pre_compact %s: %v", sess.ID, err)
+		return
 	}
+	s.queueHandoverPointer(ctx, sess, "pre_compact")
 }
 
 // noteForgetHandover writes before the terminal is killed. The 10s budget
@@ -232,7 +250,22 @@ func (s *Server) handoverInput(ctx context.Context, sess domain.Session, reason,
 		DiffStat:    stat,
 		HookTitle:   sess.AgentTitle,
 		HookMessage: sess.HookStateMessage,
+		Blocked:     handoverBlocked(sess),
 		PaneTail:    pane,
+	}
+}
+
+// handoverBlocked is the agent's own waiting reason, when the hook reported
+// one. It is context for the next agent, not a health verdict.
+func handoverBlocked(sess domain.Session) string {
+	switch sess.HookState {
+	case domain.AgentStateWaitingInput, domain.AgentStateWaitingBackground:
+		if msg := strings.TrimSpace(sess.HookStateMessage); msg != "" {
+			return msg
+		}
+		return string(sess.HookState)
+	default:
+		return ""
 	}
 }
 
