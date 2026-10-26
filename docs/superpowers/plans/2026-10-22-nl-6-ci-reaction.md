@@ -217,7 +217,7 @@ type Store interface { // satisfied by *sqlite.Repository
     ResetPRWatch(ctx context.Context, sessionID string) error
 }
 type Sessions interface{ List(ctx context.Context) ([]domain.Session, error) }
-type Todos interface { // nl-1 Server.TodoAccess(); same shape as verify.Todos and fanout.Todos
+type Todos interface { // nl-1 Server.TodoAccess(); same shape as verify.Todos
     Get(sessionID string) (domain.TodoList, error)
     Mutate(ctx context.Context, sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList) error) error
 }

@@ -4,7 +4,7 @@
 
 **Goal:** Give every repository session the content a persona would carry: matching domain checklists, a "Done when" definition with a pinned `Done-when met` to-do, a tools check at create, per-repo and per-role model/effort overrides, and a verifier that grades against the same checklists and conditions.
 
-**Architecture:** A new pure package `internal/quality` parses checklists, renders and parses the kit blocks of `.aiman_task.md`, and builds the remote shell scripts (list, match, requires, push). `usecase.BuildQualityKit` runs those scripts through the creating process's `RemoteExecutor` (the laptop over SSH, or serve locally), so laptop and serve creates behave the same. The skill engine writes the kit into `.aiman_task.md` once at create and refreshes only the checklist block at restart. Serve owns the `Done-when met` item (new `todo.ensure_done`), and the verifier reads the kit back from the worker's task file.
+**Architecture:** A new pure package `internal/quality` parses checklists, renders and parses the kit blocks of `.aiman_task.md`, and builds the remote shell scripts (list, match, requires, push). `usecase.BuildQualityKit` runs those scripts through the creating process's `RemoteExecutor` (the laptop over SSH, or serve locally), so laptop and serve creates behave the same. The skill engine writes the kit into `.aiman_task.md` once at create and refreshes only the checklist block at restart. Serve owns the `Done-when met` item (new `todo.ensure_done`), and the verifier reads the kit back from the session's task file.
 
 **Tech Stack:** Go 1.26, `gopkg.in/yaml.v3` (frontmatter, already a dependency), git `:(glob)` pathspecs, Bubble Tea v2.
 
@@ -31,8 +31,6 @@ repos:
       claude: {model: opus, effort: high}
 roles:
   verifier: {agent: codex, model: "", effort: high}
-  planner:  {agent: claude, model: opus, effort: high}
-  worker:   {agent: "", model: sonnet, effort: ""}
 integrations:
   jira:
     acceptance_criteria_field: customfield_10035   # optional
@@ -83,10 +81,10 @@ integrations:
 - Produces:
   - `RepoBootstrap` gains `DoneWhen []string yaml:"done_when,omitempty"`, `Requires []string yaml:"requires,omitempty"`, `AgentOverrides map[string]AgentDefaults yaml:"agent_overrides,omitempty"`.
   - `func LookupRepo(repos map[string]RepoBootstrap, slug string) (RepoBootstrap, bool)` (exact, then case-insensitive); `RepoBootstrapFor` calls it.
-  - `type RoleOverride struct { Agent, Model, Effort string }` (yaml `agent,model,effort`, omitempty); `type RolesConfig struct { Verifier, Planner, Worker RoleOverride }` (yaml `verifier,planner,worker`); `Config.Roles` and `ServeConfig.Roles` (`yaml:"roles,omitempty"`), copied by `MarshalServeConfig`.
-  - `func (r RolesConfig) For(role string) RoleOverride`: `"reviewer"`→Verifier, `"planner"`→Planner, `""` and `"worker"`→Worker.
+  - `type RoleOverride struct { Agent, Model, Effort string }` (yaml `agent,model,effort`, omitempty); `type RolesConfig struct { Verifier RoleOverride }` (yaml `verifier`); `Config.Roles` and `ServeConfig.Roles` (`yaml:"roles,omitempty"`), copied by `MarshalServeConfig`. There is no planner or worker role.
+  - `func (r RolesConfig) For(role string) RoleOverride`: `"reviewer"`→Verifier. Any other role, including `""`, `"planner"`, and `"worker"`, is the zero override.
   - `func (c *Config) RoleAgent(role string) string` (trimmed `For(role).Agent`).
-  - `func (c *Config) ResolveLaunchDefaults(name, command, repo, role string) AgentDefaults`: start from `LaunchDefaultsFor`; overlay non-empty `Model`/`Effort` from `LookupRepo(c.Repos, repo).AgentOverrides` matched by the same key rule as `LaunchDefaultsFor`; then overlay the role's non-empty `Model`/`Effort` only when the role's `Agent` is empty or equals the command's first field (lowercased).
+  - `func (c *Config) ResolveLaunchDefaults(name, command, repo, role string) AgentDefaults`: start from `LaunchDefaultsFor`; overlay non-empty `Model`/`Effort` from `LookupRepo(c.Repos, repo).AgentOverrides` matched by the same key rule as `LaunchDefaultsFor`; then overlay the verifier role's non-empty `Model`/`Effort` only when the role is reviewer and the role's `Agent` is empty or equals the command's first field (lowercased). Do not overlay a planner or worker role. An empty role does not change model or effort.
   - `func (c *Config) ReviewerCandidates() []string`: `Roles.Verifier.Agent` (when set) followed by `Verify.Agents`, de-duplicated, order kept.
   - `JiraConfig.AcceptanceCriteriaField string yaml:"acceptance_criteria_field,omitempty"`.
 
@@ -94,12 +92,12 @@ integrations:
 
 ```go
 func TestResolveLaunchDefaultsPrecedence(t *testing.T)
-// agent_defaults claude{model:sonnet,effort:low}; repos["o/r"].agent_overrides claude{effort:high}; roles.planner{agent:claude, model:opus}
-// ("Claude Code","claude","o/r","") → {sonnet, high}; ("Claude Code","claude","O/R","planner") → {opus, high}
-// roles.planner{agent:codex, model:o3} with command "claude" → role ignored → {sonnet, high}; unknown repo → {sonnet, low}
-func TestRolesFor(t *testing.T)                 // "reviewer"→Verifier, "planner"→Planner, ""/"worker"→Worker
+// agent_defaults claude{model:sonnet,effort:low}; repos["o/r"].agent_overrides claude{effort:high}; roles.verifier{agent:"", model:opus}
+// ("Claude Code","claude","o/r","") → {sonnet, high}; ("Claude Code","claude","O/R","verifier") → {opus, high}
+// roles.verifier{agent:codex, model:o3} with command "claude" → role ignored → {sonnet, high}; unknown repo → {sonnet, low}
+func TestRolesFor(t *testing.T)                 // "reviewer"→Verifier; "planner", "", "worker" → zero RoleOverride
 func TestReviewerCandidates(t *testing.T)       // roles.verifier.agent "codex", verify.agents [claude, codex] → [codex, claude]; empty role → [claude, codex]
-func TestMarshalServeConfigCarriesRolesAndRepoKit(t *testing.T) // YAML round-trip keeps roles.worker.model and repos["o/r"].done_when, requires, agent_overrides
+func TestMarshalServeConfigCarriesRolesAndRepoKit(t *testing.T) // YAML round-trip keeps roles.verifier and repos["o/r"].done_when, requires, agent_overrides. No planner or worker key.
 func TestLookupRepoCaseInsensitive(t *testing.T)
 ```
 
@@ -344,17 +342,17 @@ func TestKitSkippedForReviewerAndAdHoc(t *testing.T)     // pure: shouldBuildKit
 **Files:**
 - Modify: `internal/ui/dashboard.go:7485-7600` (`restartSession`: before `PrepareSession` at `:7585`), `:1566-1582` (`workspaceStatusMsg`, `fetchWorkspaceStatus`), `:2851-2856` (handler), `:6960-6972` (`applyScanAgents`)
 - Modify: `internal/ui/summary.go:13-33`, `:94-97`, `:199-205` (warning line), `internal/ui/agent_picker.go:23-45`
-- Modify: `internal/fanout/fanout.go` (nl-9 T5: `Deps.WorkerAgent`), `cmd/aiman/serve.go` (fan-out and verifier wiring)
-- Test: `internal/ui/summary_test.go`, `internal/ui/agent_picker_test.go`, `internal/ui/restart_agent_switch_test.go`, `internal/fanout/fanout_test.go`
+- Modify: `cmd/aiman/serve.go` (verifier wiring)
+- Test: `internal/ui/summary_test.go`, `internal/ui/agent_picker_test.go`, `internal/ui/restart_agent_switch_test.go`
 
 **Interfaces:**
 - Consumes: `BuildQualityKit` (with `Restart: true`), `PushUserChecklists`, `CheckRequires`, `(*config.Config).RoleAgent`, `ReviewerCandidates`.
-- Produces: `workspaceStatusMsg.missing []string`; `func (m *SummaryModel) SetMissingTools(missing []string)`; `func (m *AgentPickerModel) Preselect(command string) bool`; `fanout.Deps.WorkerAgent string`.
+- Produces: `workspaceStatusMsg.missing []string`; `func (m *SummaryModel) SetMissingTools(missing []string)`; `func (m *AgentPickerModel) Preselect(command string) bool`.
 - Rules:
   - Restart (includes agent switch) captures `cfg` at dispatch time with the other values (AGENTS.md "Session Restart"), pushes user checklists, builds the kit with `Restart: true` against `s.WorktreePath`, and passes it to `PrepareSession`. The Done-when block and the to-do are never touched at restart.
   - `fetchWorkspaceStatus` keeps one SSH call for the repo-exists test; when the repo block has `requires` it makes a second call to `CheckRequires` (the worktree may not exist yet, so the `.mcp.json` check uses the main clone path). The summary shows one wait-coloured line `⚠ Missing on remote: gh, mcp:atlassian (create anyway with enter)`; enter still creates.
-  - `applyScanAgents` calls `Preselect(m.cfg.RoleAgent(string(m.sessionCfg.Role)))` when the scan belongs to the create wizard; a role agent that is not installed leaves the cursor at the top.
-  - Fan-out child agent: `r.Agent`, else `Deps.WorkerAgent` (serve passes `cfg.RoleAgent("worker")`), else the planner's agent (nl-9's rule).
+  - `applyScanAgents` calls `Preselect(m.cfg.RoleAgent(string(m.sessionCfg.Role)))` when the scan belongs to the create wizard; a role agent that is not installed leaves the cursor at the top. Only the reviewer role has an agent.
+  - Child session agents come from `agents.preferred` (nl-9). Do not modify `internal/fanout`, and do not pass `cfg.RoleAgent("worker")` or a planner agent.
   - Verifier wiring passes `Agents: cfg.ReviewerCandidates()` instead of `cfg.Verify.Agents` (nl-7 T9).
 
 - [ ] **Step 1: Write the failing tests**
@@ -364,12 +362,11 @@ func TestSummaryShowsMissingTools(t *testing.T)        // SetMissingTools([gh]) 
 func TestSummaryNoWarningWhenNothingMissing(t *testing.T)
 func TestAgentPickerPreselect(t *testing.T)            // agents [claude, codex]; Preselect("codex") → SelectedItem is codex; Preselect("grok") → false, cursor 0
 func TestRestartPassesKitWithoutDoneWhen(t *testing.T) // fake SkillEngine records kit: DoneWhen == nil, Repo == s.RepoName
-func TestFanOutUsesWorkerRoleAgent(t *testing.T)       // r.Agent "", WorkerAgent "codex" → CreateChild got Agent "codex"
 ```
 
-- [ ] **Step 2: Run** `go test ./internal/ui/ ./internal/fanout/ -run 'MissingTools|NoWarning|Preselect|RestartPassesKit|WorkerRoleAgent'` → FAIL.
+- [ ] **Step 2: Run** `go test ./internal/ui/ -run 'MissingTools|NoWarning|Preselect|RestartPassesKit'` → FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `go test -race ./internal/ui/ ./internal/fanout/ ./cmd/...` → PASS.
+- [ ] **Step 4: Run** `go test -race ./internal/ui/ ./cmd/...` → PASS.
 - [ ] **Step 5: Commit** `feat(ui): refresh checklists on restart, warn on missing tools, preselect role agents`
 
 ---
@@ -384,7 +381,7 @@ func TestFanOutUsesWorkerRoleAgent(t *testing.T)       // r.Agent "", WorkerAgen
 - Consumes: `quality.ParseTaskKit`, `quality.DoneWhenFindingPrefix`, `todo.DoneRef`.
 - Produces: `BriefInput` gains `DoneWhen []string` and `Rubric []RubricItem`; `type RubricItem struct { Path, Body string }`.
 - Rules:
-  - `Start` parses the worker's task text (already read for `BriefInput.Task`) with `ParseTaskKit`, reads each checklist path with `os.ReadFile` capped at 16 KiB (serve runs on the session host; unreadable paths are skipped and named in the brief as "not readable").
+  - `Start` parses the session's task text (already read for `BriefInput.Task`) with `ParseTaskKit`, reads each checklist path with `os.ReadFile` capped at 16 KiB (serve runs on the session host; unreadable paths are skipped and named in the brief as "not readable").
   - `BuildBrief` adds, after the to-do list: `## Review rubric` with each checklist as `### <path>` plus its body; and when `DoneWhen` is non-empty, `## Done-when conditions` listing them with the exact instruction: ``For every condition that does not hold in this snapshot, write a finding `## [REQUIRED] Done-when not met: <condition>` explaining what is missing.``
   - On completion, in the same `Todos.Mutate` that adds finding to-dos: when any REQUIRED finding's title starts with `DoneWhenFindingPrefix` and the `Ref == todo.DoneRef` item is `done`, set it back to `pending` (author verifier). A clean pass changes nothing.
 
@@ -394,8 +391,8 @@ func TestFanOutUsesWorkerRoleAgent(t *testing.T)       // r.Agent "", WorkerAgen
 func TestBuildBriefIncludesRubricAndDoneWhen(t *testing.T) // Rubric [{"/r/.aiman/checklists/go.md","- [ ] wrap errors"}], DoneWhen ["tests added"] →
                                                            // contains "## Review rubric", "- [ ] wrap errors", "Done-when not met: <condition>", "tests added"
 func TestBuildBriefOmitsEmptyKit(t *testing.T)             // no "## Review rubric", no "## Done-when conditions"
-func TestStartReadsKitFromWorkerTask(t *testing.T)         // worker .aiman_task.md with kit blocks and a real checklist file → brief written to the reviewer worktree contains its body
-func TestCompleteReopensDoneItem(t *testing.T)             // worker list has done item in state done; review "## [REQUIRED] Done-when not met: tests added" → item pending, UpdatedBy verifier
+func TestStartReadsKitFromSessionTask(t *testing.T)        // session .aiman_task.md with kit blocks and a real checklist file → brief written to the reviewer worktree contains its body
+func TestCompleteReopensDoneItem(t *testing.T)             // session list has done item in state done; review "## [REQUIRED] Done-when not met: tests added" → item pending, UpdatedBy verifier
 func TestCompleteLeavesDoneItemOnCleanPass(t *testing.T)
 ```
 
@@ -453,7 +450,7 @@ func TestHintLineOffersVerify(t *testing.T) // selected session AheadOfBase 2 �
 6. **JIRA acceptance criteria are not in the client today.** Added: an optional `integrations.jira.acceptance_criteria_field` custom field, else list items under an "Acceptance criteria"/"Definition of done" heading in the description.
 7. **`requires` is one flat list with an `mcp:` prefix** for MCP servers. MCP presence is a config-file key check per agent (Claude, Codex, Cursor, Gemini/agy); other agents report "cannot check". Running `claude mcp list` was rejected: it health-checks every server and can exceed the 30 s budget.
 8. **The wizard warning is on the summary screen**, where the agent (needed for the MCP check) is known.
-9. **`roles.worker` also covers ordinary sessions** (empty role), not only nl-9 fan-out children. A role's model and effort apply only when the role names no agent or names the one being launched. `roles.verifier.agent` is the first reviewer candidate, ahead of `verify.agents`.
+9. **There is no `roles.planner` or `roles.worker`.** Child agents come from `agents.preferred` (nl-9), not a worker role. `roles.verifier` stays. `roles.verifier.agent` is the first reviewer candidate, ahead of `verify.agents`. The verifier's model and effort apply only when that role names no agent or names the one being launched.
 10. **Role agents preselect, not force.** The wizard's agent picker starts on the role's agent; an explicit choice always wins.
 11. **`V` is "offered" as a hint-line prefix** (`V verify · `), the only noise-budget-safe place. "Ahead of base" needs a new `GitStatus.AheadOfBase`, because `GitStatus.Ahead` counts against the upstream (`internal/infra/git/manager.go:1107-1111`).
 12. **New fields live on nl-8's `RepoBootstrap`** rather than a renamed `RepoConfig`, to keep nl-8's names. The type name now undersells it; rename later if it bothers anyone.
