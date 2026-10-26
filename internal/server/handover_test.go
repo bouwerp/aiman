@@ -546,6 +546,55 @@ func TestPreCompactReportWritesHandover(t *testing.T) {
 	}
 }
 
+// ctxBlockedRemote's Execute waits until ctx ends. A diff with no deadline
+// never returns.
+type ctxBlockedRemote struct{ *fakeRemote }
+
+func (ctxBlockedRemote) Execute(ctx context.Context, _ string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func TestPreCompactReportReturnsWhileDiffIsBlocked(t *testing.T) {
+	if preCompactHandoverTimeout != 20*time.Second {
+		t.Fatalf("production budget %s, want 20s", preCompactHandoverTimeout)
+	}
+	preCompactHandoverTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { preCompactHandoverTimeout = 20 * time.Second })
+
+	dir := t.TempDir()
+	repo := testRepo(t)
+	if err := repo.Save(context.Background(), &domain.Session{
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1",
+		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(nil, repo, ctxBlockedRemote{fakeRemote: &fakeRemote{}}, nil, nil, nil, "test")
+	start := time.Now()
+	done := make(chan Response, 1)
+	go func() {
+		done <- srv.handleReportAgentSession(context.Background(), Request{
+			ID: "1", Method: "session.report_agent_session",
+			Params: []byte(`{"id":"s1","agent_session_id":"c1","event":"PreCompact"}`),
+		})
+	}()
+	select {
+	case resp := <-done:
+		if time.Since(start) >= 2*time.Second {
+			t.Fatalf("report took %s, want well under 20s", time.Since(start))
+		}
+		if resp.Error != nil {
+			t.Fatalf("report: %v", resp.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("report still blocked; PreCompact handover has no deadline")
+	}
+	if _, err := os.Stat(filepath.Join(dir, domain.AimanHandoverFileName)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSessionEndReportDoesNotWriteHandover(t *testing.T) {
 	dir := t.TempDir()
 	sock := handoverCallSession(t, dir)

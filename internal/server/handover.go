@@ -154,10 +154,16 @@ func handoverFileExists(sess domain.Session) bool {
 	return err == nil && !info.IsDir()
 }
 
-// notePreCompactHandover writes the handover on the request context. The
-// agent's compaction waits for the hook, so this stays synchronous and does
-// not add a second timeout. A write error is logged and the report still succeeds.
+// preCompactHandoverTimeout bounds the synchronous PreCompact handover.
+// Production stays at 20s, under the 30s socket cap. Tests shorten it.
+var preCompactHandoverTimeout = 20 * time.Second
+
+// notePreCompactHandover writes the handover before the report returns. The
+// 20s budget stays under the 30s socket cap. A wedged diff is cancelled and
+// becomes an empty stat. A write error is logged and the report still succeeds.
 func (s *Server) notePreCompactHandover(ctx context.Context, sess domain.Session) {
+	ctx, cancel := context.WithTimeout(ctx, preCompactHandoverTimeout)
+	defer cancel()
 	if _, err := s.writeHandover(ctx, sess, "pre_compact"); err != nil {
 		log.Printf("handover: pre_compact %s: %v", sess.ID, err)
 	}
