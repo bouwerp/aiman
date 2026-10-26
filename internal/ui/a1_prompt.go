@@ -30,8 +30,7 @@ const (
 func (m *Model) applyTrackedSessionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case todoLoadedMsg:
-		m.applyTodoLoaded(msg)
-		return m, nil
+		return m, m.applyTodoLoaded(msg)
 	case todoMutatedMsg:
 		return m, m.applyTodoMutated(msg)
 	case promptSentMsg:
@@ -258,7 +257,7 @@ func (m *Model) applyPromptSent(msg promptSentMsg) tea.Cmd {
 		m.todos = map[string]todoSnapshot{}
 	}
 	snap := m.todos[msg.sessionID]
-	snap.Steer = msg.steer
+	snap.Steer = mergeSteer(snap.Steer, msg.steer)
 	m.todos[msg.sessionID] = snap
 	return nil
 }

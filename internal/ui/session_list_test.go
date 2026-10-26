@@ -4,10 +4,12 @@ import (
 	"image/color"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -132,6 +134,61 @@ func TestGroupHeaderRenderStaysOneLine(t *testing.T) {
 	joined := headerOut + b.String()
 	if strings.Contains(joined, "\n") {
 		t.Fatalf("header plus the next row must not insert a blank line, got %q", joined)
+	}
+}
+
+func TestSessionHeaderTruncatesToListWidth(t *testing.T) {
+	header := item{
+		header:     true,
+		session:    domain.Session{Group: strings.Repeat("VeryLongGroupName", 6)},
+		activity:   "waiting",
+		remoteName: "a-remote-name-that-is-also-long",
+		groupN:     12,
+	}
+	const width = 24
+	l := list.New([]list.Item{header}, newSessionListDelegate(), width, 5)
+	var b strings.Builder
+	newSessionListDelegate().Render(&b, l, 0, header)
+	out := b.String()
+	if strings.Contains(out, "\n") {
+		t.Fatalf("header wrapped: %q", out)
+	}
+	if got := lipgloss.Width(out); got > width {
+		t.Fatalf("width %d, list is %d", got, width)
+	}
+}
+
+func TestCollapsedGroupStillCountsSessions(t *testing.T) {
+	cfg := &config.Config{Remotes: []config.Remote{{Name: "regent0", Host: "10.0.1.5"}}}
+	now := time.Now()
+	sessions := []domain.Session{
+		{ID: "a", Name: "impl", Group: "G", RemoteHost: "10.0.1.5", TmuxSession: "a", CreatedAt: now},
+		{ID: "b", Name: "review", Group: "G", RemoteHost: "10.0.1.5", TmuxSession: "b", CreatedAt: now.Add(-time.Second)},
+		{ID: "c", Name: "other", Group: "G", RemoteHost: "10.9.9.9", TmuxSession: "c", CreatedAt: now},
+	}
+	m := NewModel(cfg, nil, sessions, nil, nil, nil, nil)
+	m.remoteFilter = "10.0.1.5"
+	m.applyRemoteFilter()
+	items := m.list.Items()
+	for i, li := range items {
+		it, ok := li.(item)
+		if ok && it.session.ID == "b" {
+			it.needsInput = true
+			items[i] = it
+		}
+	}
+	m.list.SetItems(items)
+	m.list.Select(0)
+	if _, _, ok := m.toggleSelectedGroupCollapsed(); !ok {
+		t.Fatal("header did not collapse")
+	}
+	m.SetSize(120, 40)
+	plain := ansi.Strip(m.View().Content)
+	if !strings.Contains(plain, "2 sessions") {
+		t.Fatalf("session count dropped:\n%s", plain)
+	}
+	if !strings.Contains(plain, "1 needs you") {
+		t.Fatalf("needs-you dropped the collapsed row:\n%s", plain)
 	}
 }
 

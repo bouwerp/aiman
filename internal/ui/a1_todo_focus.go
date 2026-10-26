@@ -20,12 +20,14 @@ type todoEditState struct {
 	after string
 }
 
-// todoMutatedMsg is a failed to-do write.
-// A successful write comes back as todoLoadedMsg, after Apply and Get.
+// todoMutatedMsg is a failed to-do write, or a write that landed whose
+// list could not be read back. saved distinguishes those: a retry of a
+// saved edit would add a second item.
 type todoMutatedMsg struct {
 	host      string
 	sessionID string
 	err       error
+	saved     bool
 }
 
 func newTodoInput() textinput.Model {
@@ -218,7 +220,7 @@ func (m *Model) toggleFocusedTodo() tea.Cmd {
 		return nil
 	}
 	st := domain.TodoDone
-	if it.State == domain.TodoDone {
+	if it.State == domain.TodoDone || it.State == domain.TodoDropped {
 		st = domain.TodoPending
 	}
 	return m.setFocusedTodoState(st)
@@ -262,11 +264,17 @@ func (m *Model) mutateFocused(op todoOp) tea.Cmd {
 }
 
 // todoMutateCmd applies one op and then reads the list back.
-// Apply failure or Get failure is todoMutatedMsg. Success is todoLoadedMsg.
+// Each call has its own 30s budget: Apply can use the whole window and
+// still leave Get a full one. Apply failure is todoMutatedMsg. A Get
+// failure after Apply succeeded says the list could not be reloaded.
+// Success is todoLoadedMsg.
 func (m *Model) todoMutateCmd(s domain.Session, op todoOp) tea.Cmd {
-	host := s.RemoteHost
-	id := s.ID
 	remote, hasRemote := resolveRemote(m.cfg, s)
+	host := s.RemoteHost
+	if hasRemote {
+		host = remote.Host
+	}
+	id := s.ID
 	client := m.todoClient
 	return func() tea.Msg {
 		if !hasRemote {
@@ -275,14 +283,17 @@ func (m *Model) todoMutateCmd(s domain.Session, op todoOp) tea.Cmd {
 		if client == nil {
 			return todoMutatedMsg{host: host, sessionID: id, err: errors.New("todo client is not configured")}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := client.Apply(ctx, remote, op); err != nil {
-			return todoMutatedMsg{host: host, sessionID: id, err: err}
-		}
-		snap, err := client.Get(ctx, remote, id)
+		applyCtx, cancelApply := context.WithTimeout(context.Background(), 30*time.Second)
+		err := client.Apply(applyCtx, remote, op)
+		cancelApply()
 		if err != nil {
 			return todoMutatedMsg{host: host, sessionID: id, err: err}
+		}
+		getCtx, cancelGet := context.WithTimeout(context.Background(), 30*time.Second)
+		snap, err := client.Get(getCtx, remote, id)
+		cancelGet()
+		if err != nil {
+			return todoMutatedMsg{host: host, sessionID: id, err: err, saved: true}
 		}
 		return todoLoadedMsg{host: host, sessionID: id, snap: snap}
 	}
@@ -293,6 +304,9 @@ func (m *Model) applyTodoMutated(msg todoMutatedMsg) tea.Cmd {
 		return nil
 	}
 	m.log("to-do %s on %s: %v", msg.sessionID, msg.host, msg.err)
+	if msg.saved {
+		return m.showToast("⚠️  To-do saved, but the list could not be reloaded: "+msg.err.Error(), true, 3*time.Second)
+	}
 	return m.showToast("⚠️  To-do not saved: "+msg.err.Error(), true, 3*time.Second)
 }
 

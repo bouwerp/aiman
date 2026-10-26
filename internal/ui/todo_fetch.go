@@ -31,15 +31,18 @@ type todoSweepMsg struct {
 // fetchTodosCmd loads the full list for one session.
 // It returns nil when this host cannot serve to-dos, a fetch for the session
 // is already in flight, or the session is being created or terminated.
+// The unsupported flag and the loaded message use the resolved host: a blank
+// session host still falls back to the active remote, and that is the host
+// a restarted stream clears.
 func (m *Model) fetchTodosCmd(s domain.Session) tea.Cmd {
 	if s.ID == "" || m.todoClient == nil {
 		return nil
 	}
-	if m.todoUnsupported[s.RemoteHost] || m.todoInFlight[s.ID] || m.skipSessionPolling(s.ID) {
+	if m.todoInFlight[s.ID] || m.skipSessionPolling(s.ID) {
 		return nil
 	}
 	remote, ok := resolveRemote(m.cfg, s)
-	if !ok {
+	if !ok || m.todoUnsupported[remote.Host] {
 		return nil
 	}
 	if m.todoInFlight == nil {
@@ -47,7 +50,7 @@ func (m *Model) fetchTodosCmd(s domain.Session) tea.Cmd {
 	}
 	m.todoInFlight[s.ID] = true
 	client := m.todoClient
-	host := s.RemoteHost
+	host := remote.Host
 	id := s.ID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -117,6 +120,10 @@ func (m *Model) todoChangedCmd(host string, ev server.SessionEvent) tea.Cmd {
 		return nil
 	}
 	if m.sessionIsSelected(ev.ID) {
+		if m.todoInFlight[ev.ID] {
+			m.noteTodoPending(ev.ID, ev.Rev)
+			return nil
+		}
 		if s, ok := m.sessionByID(ev.ID); ok {
 			return m.fetchTodosCmd(s)
 		}
@@ -126,6 +133,45 @@ func (m *Model) todoChangedCmd(host string, ev server.SessionEvent) tea.Cmd {
 		return nil
 	}
 	return m.sweepTodosCmd(host, []string{ev.ID})
+}
+
+// noteTodoPending records a rev whose get was skipped because one was
+// already in flight. A later load that lands short of it fetches once more.
+func (m *Model) noteTodoPending(id string, rev int64) {
+	if id == "" || rev <= 0 {
+		return
+	}
+	if m.todoPendingRev == nil {
+		m.todoPendingRev = map[string]int64{}
+	}
+	if rev > m.todoPendingRev[id] {
+		m.todoPendingRev[id] = rev
+	}
+}
+
+// fetchPendingTodo starts one more get when the landed rev is older than a
+// rev that was skipped. The pending rev is cleared as that get starts, so a
+// short answer does not retry forever. A newer skip during the get records
+// the next rev.
+func (m *Model) fetchPendingTodo(id string, landed int64) tea.Cmd {
+	want := m.todoPendingRev[id]
+	if want == 0 || want <= landed {
+		delete(m.todoPendingRev, id)
+		return nil
+	}
+	s, ok := m.sessionByID(id)
+	if !ok {
+		if it, sel := m.selectedSessionItem(); sel && it.session.ID == id {
+			s = it.session
+			ok = true
+		}
+	}
+	if !ok {
+		delete(m.todoPendingRev, id)
+		return nil
+	}
+	delete(m.todoPendingRev, id)
+	return m.fetchTodosCmd(s)
 }
 
 func (m *Model) sessionIsSelected(id string) bool {
@@ -167,25 +213,43 @@ func (m *Model) applySteerEvent(ev server.SessionEvent) {
 	m.todos[ev.ID] = snap
 }
 
-func (m *Model) applyTodoLoaded(msg todoLoadedMsg) {
+// mergeSteer keeps a delivery that is already newer than the snapshot a
+// load or steer.send just returned. That snapshot must not raise Queued
+// back over the newer event, or the prompt stays "queued" after delivery.
+func mergeSteer(current, incoming server.SteerStatus) server.SteerStatus {
+	out := incoming
+	if !current.LastDeliveredAt.After(incoming.LastDeliveredAt) {
+		return out
+	}
+	out.LastDeliveredAt = current.LastDeliveredAt
+	if incoming.Queued > current.Queued {
+		out.Queued = current.Queued
+	}
+	return out
+}
+
+func (m *Model) applyTodoLoaded(msg todoLoadedMsg) tea.Cmd {
 	follow := m.todoCursorFollowID(msg.sessionID)
 	if m.todoInFlight != nil {
 		delete(m.todoInFlight, msg.sessionID)
 	}
 	if msg.err != nil {
 		m.noteTodoRPCError(msg.host, msg.err)
-		return
+		return m.fetchPendingTodo(msg.sessionID, m.cachedTodoRev(msg.sessionID))
 	}
 	if msg.snap.List.Rev < m.cachedTodoRev(msg.sessionID) {
-		return
+		return m.fetchPendingTodo(msg.sessionID, m.cachedTodoRev(msg.sessionID))
 	}
 	if m.todos == nil {
 		m.todos = map[string]todoSnapshot{}
 	}
+	prev := m.todos[msg.sessionID]
+	msg.snap.Steer = mergeSteer(prev.Steer, msg.snap.Steer)
 	m.todos[msg.sessionID] = msg.snap
 	m.putTodoSummary(msg.sessionID, summaryFromList(msg.snap.List))
 	m.refreshTodoProgress(msg.sessionID)
 	m.restoreTodoCursor(msg.sessionID, follow)
+	return m.fetchPendingTodo(msg.sessionID, msg.snap.List.Rev)
 }
 
 func (m *Model) applyTodoSweep(msg todoSweepMsg) {

@@ -333,13 +333,16 @@ func (d sessionListDelegate) Render(w io.Writer, m list.Model, index int, listIt
 	}
 	selected := index == m.Index()
 	if it.header {
-		_, _ = fmt.Fprint(w, renderSessionHeader(it, selected))
+		_, _ = fmt.Fprint(w, renderSessionHeader(it, selected, m.Width()))
 		return
 	}
 	_, _ = fmt.Fprint(w, renderA1Row(it, selected, m.Width()))
 }
 
-func renderSessionHeader(it item, selected bool) string {
+func renderSessionHeader(it item, selected bool, width int) string {
+	if width <= 0 {
+		return ""
+	}
 	label := domain.GroupLabel(it.session.Group)
 	count := ""
 	if it.groupN > 0 {
@@ -362,8 +365,13 @@ func renderSessionHeader(it item, selected bool) string {
 	if it.remoteName != "" {
 		remote = lipgloss.NewStyle().Foreground(stateColorIdle).Render(" [" + it.remoteName + "]")
 	}
-	line := head + act + remote
-	row := lipgloss.NewStyle().Padding(0, 0, 0, 2)
+	const pad = 2
+	inner := width - pad
+	if inner < 1 {
+		inner = width
+	}
+	line := truncateToWidth(head+act+remote, inner)
+	row := lipgloss.NewStyle().Padding(0, 0, 0, width-inner).MaxWidth(width)
 	if selected {
 		row = row.Background(headerSelBg)
 	}

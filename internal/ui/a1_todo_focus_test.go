@@ -1,13 +1,17 @@
 package ui
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/server"
 )
 
@@ -264,6 +268,90 @@ func TestTodoFocusDropsWhenSessionGone(t *testing.T) {
 	}
 	if len(fake.ops) != 0 {
 		t.Fatalf("ops = %+v", fake.ops)
+	}
+}
+
+type splitDeadlineClient struct {
+	applyDL time.Time
+	getDL   time.Time
+	getErr  error
+	snap    todoSnapshot
+}
+
+func (c *splitDeadlineClient) Get(ctx context.Context, _ config.Remote, _ string) (todoSnapshot, error) {
+	if dl, ok := ctx.Deadline(); ok {
+		c.getDL = dl
+	}
+	if c.getErr != nil {
+		return todoSnapshot{}, c.getErr
+	}
+	return c.snap, nil
+}
+
+func (c *splitDeadlineClient) Summary(context.Context, config.Remote, []string) (map[string]todoSummary, error) {
+	return nil, nil
+}
+
+func (c *splitDeadlineClient) Apply(ctx context.Context, _ config.Remote, _ todoOp) error {
+	if dl, ok := ctx.Deadline(); ok {
+		c.applyDL = dl
+	}
+	return nil
+}
+
+func (c *splitDeadlineClient) Prompt(context.Context, config.Remote, string, string) (server.SteerStatus, error) {
+	return server.SteerStatus{}, nil
+}
+
+func TestTodoMutateGetHasItsOwnDeadline(t *testing.T) {
+	m, _ := todoFocusModel()
+	c := &splitDeadlineClient{getErr: errors.New("slow")}
+	m.todoClient = c
+	m = enterTodoFocus(t, m)
+	next, cmd := m.Update(pressKey("s"))
+	m = next.(*Model)
+	if cmd == nil {
+		t.Fatal("expected a mutation command")
+	}
+	msg := cmd()
+	if c.applyDL.IsZero() || c.getDL.IsZero() {
+		t.Fatal("Apply and Get must both carry a deadline")
+	}
+	if !c.getDL.After(c.applyDL) {
+		t.Fatalf("Get reused Apply's deadline: apply %s get %s", c.applyDL, c.getDL)
+	}
+	mutated, ok := msg.(todoMutatedMsg)
+	if !ok {
+		t.Fatalf("got %T", msg)
+	}
+	next, _ = m.Update(mutated)
+	m = next.(*Model)
+	if strings.Contains(m.snapshotToast, "not saved") {
+		t.Fatalf("toast claims the edit was lost: %q", m.snapshotToast)
+	}
+	if !strings.Contains(m.snapshotToast, "could not be reloaded") {
+		t.Fatalf("toast %q", m.snapshotToast)
+	}
+}
+
+func TestSpaceOnDroppedSetsPending(t *testing.T) {
+	m, fake := todoFocusModel()
+	list := m.todos["s1"].List
+	list.Items = append(list.Items, domain.TodoItem{ID: "t4", Text: "skip", State: domain.TodoDropped})
+	snap := m.todos["s1"]
+	snap.List = list
+	m.todos["s1"] = snap
+	m = enterTodoFocus(t, m)
+	var cmd tea.Cmd
+	for _, key := range []string{"down", "down", "space"} {
+		var next tea.Model
+		next, cmd = m.Update(pressKey(key))
+		m = next.(*Model)
+	}
+	runMutation(t, cmd)
+	op := requireOp(t, fake)
+	if op.Params["id"] != "t4" || op.Params["state"] != string(domain.TodoPending) {
+		t.Fatalf("params %+v", op.Params)
 	}
 }
 

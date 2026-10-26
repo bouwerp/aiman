@@ -406,12 +406,15 @@ type Model struct {
 	eventSeen map[string]sessionEventState
 	// To-do lists fetched from serve. todos holds list snapshots and steer
 	// status. todoSummaries holds progress for every session.
-	// todoUnsupported is keyed by remote host. promptSent is when a steer note
-	// was sent, compared with Steer.LastDeliveredAt.
+	// todoUnsupported is keyed by the resolved remote host, not a blank
+	// session host. todoPendingRev is a todo_changed rev skipped because a
+	// get for that session was already in flight. promptSent is when a steer
+	// note was sent, compared with Steer.LastDeliveredAt.
 	todoClient      todoClient
 	todos           map[string]todoSnapshot
 	todoSummaries   map[string]todoSummary
 	todoInFlight    map[string]bool
+	todoPendingRev  map[string]int64
 	todoUnsupported map[string]bool
 	promptSent      map[string]time.Time
 	// focus selects who receives keys on the sessions tab: the list, the
@@ -474,6 +477,7 @@ type Model struct {
 	runTargetSelected      int                  // 1-based index into cfg.Remotes while the run-target picker is open; 0 = none
 	remoteFilter           string               // "" = all remotes, otherwise a Remote.Host to filter by
 	allSessions            []domain.Session     // unfiltered master session list
+	filteredSessions       []item               // remote-filtered sessions, including ones a collapsed group hides
 	collapsedGroups        map[string]bool      // groupCollapseKey → hidden children
 	collapsedSessions      map[string]bool      // parent session ID → hidden children
 	assigningSessionID     string
@@ -697,6 +701,7 @@ func (m *Model) applyRemoteFilter() {
 	sort.Slice(m.allSessions, func(i, j int) bool {
 		return m.allSessions[i].CreatedAt.After(m.allSessions[j].CreatedAt)
 	})
+	prior := m.rowChromeByID()
 	var flat []item
 	var daemonItems []list.Item
 	for _, s := range m.allSessions {
@@ -704,9 +709,16 @@ func (m *Model) applyRemoteFilter() {
 			continue // Skip daemon sessions in the main list
 		}
 		if m.remoteFilter == "" || s.RemoteHost == m.remoteFilter {
-			flat = append(flat, m.makeItem(s))
+			it := m.makeItem(s)
+			if prev, ok := prior[s.ID]; ok {
+				it = keepRowChrome(it, prev)
+			}
+			flat = append(flat, it)
 		}
 	}
+	rows := make([]item, len(flat))
+	copy(rows, flat)
+	m.filteredSessions = rows
 	filtered := groupedSessionItems(flat, m.collapsedGroups, m.collapsedSessions)
 
 	selHost, selKind := "", ""
@@ -1406,6 +1418,16 @@ func firstSyncingDelegation(remote config.Remote) *config.AWSDelegation {
 		}
 	}
 	return nil
+}
+
+// todoRemoteHost is the host a to-do call actually uses. A blank session
+// host still resolves, and that resolved host is the unsupported-flag key.
+func todoRemoteHost(cfg *config.Config, s domain.Session) string {
+	remote, ok := resolveRemote(cfg, s)
+	if !ok {
+		return s.RemoteHost
+	}
+	return remote.Host
 }
 
 func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, bool) {
@@ -2794,10 +2816,15 @@ func (m *Model) applySessionChrome() {
 	mainHeight := m.height - v - m.sessionChrome()
 	m.list.SetSize(m.width/3-h, mainHeight)
 	m.viewport.SetWidth(m.mainContentWidth())
-	// a1DetailBudget is the detail pane: title, meta, git/PR line, gap,
-	// up to 8 to-do rows, up to 3 question rows, gap, preview caption.
+	// No selected session has no detail to measure. The constant is only
+	// that fallback. A selected session gives the preview whatever the
+	// column has left after the detail, and the detail is clipped to fit.
 	const a1DetailBudget = 16
-	m.viewport.SetHeight(m.previewHeight(mainHeight, a1DetailBudget))
+	height := m.previewHeight(mainHeight, a1DetailBudget)
+	if it, ok := m.selectedSessionItem(); ok {
+		_, height = m.fitSessionColumn(it, m.mainContentWidth(), m.snapshotToastBlock(), mainHeight)
+	}
+	m.viewport.SetHeight(height)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -7168,7 +7195,8 @@ func (m *Model) renderMainView() string {
 	if headerW < 1 {
 		headerW = 1
 	}
-	header := renderA1Header(m.a1HostLabel(), sessionRowCount(m.list.Items()), needsYouCount(m.list.Items()), m.discoveryPending, headerW)
+	sessions, needs := m.headerSessionCounts()
+	header := renderA1Header(m.a1HostLabel(), sessions, needs, m.discoveryPending, headerW)
 
 	contentWidth := m.width - 4 // docStyle margins
 	if contentWidth < 1 {
@@ -7204,8 +7232,10 @@ func (m *Model) renderSessionPanel(mainWidth int) string {
 }
 
 func (m *Model) renderDetailAndPreview(it item, contentW int, toast string) string {
+	detail, preview := m.fitSessionColumn(it, contentW, toast, m.list.Height())
+	m.viewport.SetHeight(preview)
 	var b strings.Builder
-	if detail := m.renderSessionDetail(it, contentW); detail != "" {
+	if detail != "" {
 		b.WriteString(detail)
 		b.WriteByte('\n')
 	}
@@ -7213,11 +7243,13 @@ func (m *Model) renderDetailAndPreview(it item, contentW int, toast string) stri
 		b.WriteString(strings.TrimPrefix(toast, "\n"))
 	}
 	b.WriteString(m.renderPreviewCaption(contentW))
-	b.WriteByte('\n')
-	if m.panelMode == panelModeTerminal && m.terminal != nil {
-		b.WriteString(m.terminal.viewString())
-	} else {
-		b.WriteString(m.viewport.View())
+	if preview > 0 {
+		b.WriteByte('\n')
+		if m.panelMode == panelModeTerminal && m.terminal != nil {
+			b.WriteString(m.terminal.viewString())
+		} else {
+			b.WriteString(m.viewport.View())
+		}
 	}
 	return b.String()
 }
@@ -7254,6 +7286,64 @@ func sessionRowCount(items []list.Item) int {
 		}
 	}
 	return n
+}
+
+// headerSessionCounts counts remote-filtered sessions, including rows a
+// collapsed group is hiding. Group headers are not sessions.
+func (m *Model) headerSessionCounts() (sessions, needs int) {
+	items := m.sessionsForHeader()
+	return sessionRowCount(items), needsYouCount(items)
+}
+
+func (m *Model) sessionsForHeader() []list.Item {
+	if m.filteredSessions == nil {
+		return m.list.Items()
+	}
+	live := map[string]item{}
+	for _, li := range m.list.Items() {
+		it, ok := li.(item)
+		if ok && !it.header && it.session.ID != "" {
+			live[it.session.ID] = it
+		}
+	}
+	out := make([]list.Item, 0, len(m.filteredSessions))
+	for _, it := range m.filteredSessions {
+		if cur, ok := live[it.session.ID]; ok {
+			it = cur
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// rowChromeByID is the latest activity for each session. List rows win,
+// because a hint can land after the last filter. Hidden rows stay on the
+// filtered copy.
+func (m *Model) rowChromeByID() map[string]item {
+	out := map[string]item{}
+	for _, it := range m.filteredSessions {
+		if it.session.ID != "" && !it.header {
+			out[it.session.ID] = it
+		}
+	}
+	for _, li := range m.list.Items() {
+		it, ok := li.(item)
+		if ok && !it.header && it.session.ID != "" {
+			out[it.session.ID] = it
+		}
+	}
+	return out
+}
+
+// keepRowChrome copies waiting and failure state onto a rebuilt row.
+// makeItem already set creating and terminating, and those stay.
+func keepRowChrome(it, prev item) item {
+	if it.activity == "" {
+		it.activity = prev.activity
+	}
+	it.needsInput = prev.needsInput
+	it.escalated = prev.escalated
+	return it
 }
 
 // renderDaemonPanel builds the right-hand panel for the currently selected row.

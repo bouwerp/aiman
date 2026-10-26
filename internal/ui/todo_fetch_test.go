@@ -258,6 +258,118 @@ func TestFirstEventSweepsOnce(t *testing.T) {
 	}
 }
 
+func TestTodoChangedDuringFetchIsNotDropped(t *testing.T) {
+	sess := domain.Session{ID: "p", RemoteHost: "regent0"}
+	m, fake := todoEventModel(sess)
+	m.todoInFlight = map[string]bool{sess.ID: true}
+	fake.snap = newTodoSnapshot(domain.TodoList{SessionID: "p", Rev: 2}, server.SteerStatus{})
+
+	cmd, claimed := m.applyTodoEvent("regent0", server.SessionEvent{Type: "todo_changed", ID: "p", Rev: 4})
+	if !claimed {
+		t.Fatal("todo_changed is still claimed while a get is in flight")
+	}
+	if cmd != nil {
+		t.Fatal("an in-flight get must not start a second one")
+	}
+	if len(fake.gets) != 0 {
+		t.Fatalf("gets %#v", fake.gets)
+	}
+
+	fake.snap = newTodoSnapshot(domain.TodoList{SessionID: "p", Rev: 4}, server.SteerStatus{})
+	var next tea.Model
+	next, cmd = m.Update(todoLoadedMsg{
+		host:      "regent0",
+		sessionID: "p",
+		snap:      newTodoSnapshot(domain.TodoList{SessionID: "p", Rev: 2}, server.SteerStatus{}),
+	})
+	m = next.(*Model)
+	if cmd == nil {
+		t.Fatal("a load short of the skipped rev must fetch once more")
+	}
+	msgs := runCmd(t, cmd)
+	loaded, ok := msgs[0].(todoLoadedMsg)
+	if !ok || loaded.sessionID != "p" {
+		t.Fatalf("follow-up %#v", msgs)
+	}
+	if len(fake.gets) != 1 {
+		t.Fatalf("gets %#v", fake.gets)
+	}
+	next, cmd = m.Update(loaded)
+	m = next.(*Model)
+	if cmd != nil {
+		t.Fatal("the list caught up; no further fetch")
+	}
+	if m.todos["p"].List.Rev != 4 {
+		t.Fatalf("rev %d", m.todos["p"].List.Rev)
+	}
+}
+
+func TestLoadKeepsNewerSteer(t *testing.T) {
+	m, _ := todoEventModel(domain.Session{ID: "p", RemoteHost: "regent0"})
+	delivered := time.Date(2026, 10, 22, 10, 0, 5, 0, time.UTC)
+	m.todos = map[string]todoSnapshot{
+		"p": newTodoSnapshot(domain.TodoList{SessionID: "p", Rev: 2}, server.SteerStatus{
+			Queued:          0,
+			LastDeliveredAt: delivered,
+		}),
+	}
+	m.applyTodoLoaded(todoLoadedMsg{
+		host:      "regent0",
+		sessionID: "p",
+		snap: newTodoSnapshot(domain.TodoList{
+			SessionID: "p",
+			Rev:       3,
+			Items:     []domain.TodoItem{{ID: "t1", Text: "next"}},
+		}, server.SteerStatus{
+			Queued:          1,
+			LastDeliveredAt: delivered.Add(-time.Minute),
+		}),
+	})
+	got := m.todos["p"].Steer
+	if !got.LastDeliveredAt.Equal(delivered) {
+		t.Fatalf("LastDeliveredAt %s", got.LastDeliveredAt)
+	}
+	if got.Queued != 0 {
+		t.Fatalf("Queued %d", got.Queued)
+	}
+	if m.todos["p"].List.Rev != 3 {
+		t.Fatalf("list rev %d", m.todos["p"].List.Rev)
+	}
+}
+
+func TestBlankHostUnsupportedUsesResolvedHost(t *testing.T) {
+	sess := domain.Session{ID: "p"}
+	m, fake := todoEventModel(sess)
+	fake.err = fmt.Errorf("todo.get: %w", usecase.ErrRPCUnsupported)
+
+	cmd := m.fetchTodosCmd(sess)
+	if cmd == nil {
+		t.Fatal("empty RemoteHost still resolves a remote")
+	}
+	msgs := runCmd(t, cmd)
+	loaded, ok := msgs[0].(todoLoadedMsg)
+	if !ok {
+		t.Fatalf("got %#v", msgs[0])
+	}
+	if loaded.host != "regent0" {
+		t.Fatalf("host %q", loaded.host)
+	}
+	m.applyTodoLoaded(loaded)
+	if !m.todoUnsupported["regent0"] {
+		t.Fatalf("unsupported %#v", m.todoUnsupported)
+	}
+	if m.todoUnsupported[""] {
+		t.Fatal("empty host must not be the unsupported key")
+	}
+	m.applyStreamEnded(sessionStreamEndedMsg{host: "regent0"})
+	if m.todoUnsupported["regent0"] {
+		t.Fatal("stream restart must clear the resolved host")
+	}
+	if m.fetchTodosCmd(sess) == nil {
+		t.Fatal("fetch should resume after the stream restarts")
+	}
+}
+
 func TestSelectionChangeFetchesTodos(t *testing.T) {
 	now := time.Now()
 	first := domain.Session{

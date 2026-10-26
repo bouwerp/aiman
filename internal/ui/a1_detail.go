@@ -429,6 +429,68 @@ func renderDetailTitle(s domain.Session, width int) string {
 	return truncateToWidth(a1Text(text, a1BoldText, true, false), width)
 }
 
+// fitSessionColumn clips the detail so the column stays within `column`
+// rows, and returns the preview height that is left. The viewport's own
+// border is part of the rendered height, so the height passed to SetHeight
+// is whatever still fits, not a fixed floor.
+func (m *Model) fitSessionColumn(it item, width int, toast string, column int) (string, int) {
+	if column < 1 {
+		m.viewport.SetHeight(0)
+		return "", 0
+	}
+	caption := m.renderPreviewCaption(width)
+	detail := m.renderSessionDetail(it, width)
+	lines := strings.Split(detail, "\n")
+	if detail == "" {
+		lines = nil
+	}
+	for {
+		body := ""
+		if len(lines) > 0 {
+			body = strings.Join(lines, "\n")
+		}
+		aboveH := lipgloss.Height(composeAbovePreview(body, toast, caption))
+		room := column - aboveH
+		if preview, ok := m.previewHeightWithin(room); ok {
+			return body, preview
+		}
+		if len(lines) == 0 {
+			m.viewport.SetHeight(0)
+			return "", 0
+		}
+		lines = lines[:len(lines)-1]
+	}
+}
+
+// previewHeightWithin is the largest SetHeight whose rendered viewport is
+// at most room rows. The viewport style can draw more rows than SetHeight
+// when the height is smaller than its frame.
+func (m *Model) previewHeightWithin(room int) (int, bool) {
+	for preview := room; preview > 0; preview-- {
+		m.viewport.SetHeight(preview)
+		if lipgloss.Height(m.viewport.View()) <= room {
+			return preview, true
+		}
+	}
+	return 0, false
+}
+
+// composeAbovePreview is the detail, toast, and caption without the newline
+// that joins the preview. Height of this string plus the preview height is
+// the column.
+func composeAbovePreview(detail, toast, caption string) string {
+	var b strings.Builder
+	if detail != "" {
+		b.WriteString(detail)
+		b.WriteByte('\n')
+	}
+	if toast != "" {
+		b.WriteString(strings.TrimPrefix(toast, "\n"))
+	}
+	b.WriteString(caption)
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func (m *Model) renderSessionDetail(it item, width int) string {
 	var head []string
 	if title := renderDetailTitle(it.session, width); title != "" {
@@ -457,7 +519,7 @@ func (m *Model) metaFor(id string) detailMetaExtras {
 }
 
 func (m *Model) sessionTodoLines(it item, width int) []string {
-	if m.todoUnsupported[it.session.RemoteHost] {
+	if m.todoUnsupported[todoRemoteHost(m.cfg, it.session)] {
 		return statusThenFollow(dimText("to-dos unavailable on this remote"), waitingQuestion(it, width), "", width)
 	}
 	snap := todoSnapshot{}
