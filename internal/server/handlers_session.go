@@ -765,6 +765,7 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 		Title            string `json:"title"`
 		Ended            bool   `json:"ended"`
 		Seq              int64  `json:"seq"`
+		Event            string `json:"event"`
 	}
 	if len(req.Params) > 0 {
 		if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -786,6 +787,7 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 		Title:   strings.TrimSpace(params.Title),
 		Ended:   params.Ended,
 		Seq:     params.Seq,
+		Event:   strings.TrimSpace(params.Event),
 	}
 	if sessionID == "" || (rep.ID == "" && rep.State == "" && !rep.Ended && rep.Title == "") {
 		return errResp(req.ID, CodeInvalidParams, "id plus agent_session_id, state, title, or ended is required")

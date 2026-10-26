@@ -290,6 +290,9 @@ func runReportAgentSession(args []string) error {
 		if got.Seq != 0 {
 			rep.Seq = got.Seq
 		}
+		if rep.Event == "" {
+			rep.Event = got.Event
+		}
 	}
 	sessionID := strings.TrimSpace(os.Getenv("AIMAN_ID"))
 	if sessionID == "" {
@@ -324,8 +327,8 @@ func reportAgentSessionResult(sessionID string, r agenthook.Report) map[string]a
 	}
 }
 
-func reportNativeToServe(sock, sessionID string, r agenthook.Report) error {
-	resp, err := server.Call(sock, "session.report_agent_session", map[string]any{
+func reportParams(sessionID string, r agenthook.Report) map[string]any {
+	return map[string]any{
 		"id":                 sessionID,
 		"agent_session_id":   r.ID,
 		"agent_session_path": r.Path,
@@ -335,7 +338,12 @@ func reportNativeToServe(sock, sessionID string, r agenthook.Report) error {
 		"title":              r.Title,
 		"ended":              r.Ended,
 		"seq":                r.Seq,
-	})
+		"event":              r.Event,
+	}
+}
+
+func reportNativeToServe(sock, sessionID string, r agenthook.Report) error {
+	resp, err := server.Call(sock, "session.report_agent_session", reportParams(sessionID, r))
 	if err != nil {
 		if errors.Is(err, server.ErrServerNotRunning) {
 			return nil

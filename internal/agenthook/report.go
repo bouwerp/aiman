@@ -14,6 +14,9 @@ const (
 	SourceIdlePrompt = "idle_prompt"
 	SourceSessionEnd = "session_end"
 
+	// EventPreCompact is the Claude and Codex hook fired before context compaction.
+	EventPreCompact = "PreCompact"
+
 	hookTTL = 2 * time.Minute
 )
 

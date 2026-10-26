@@ -222,6 +222,87 @@ func hookCommand(group map[string]any) string {
 	return cmd
 }
 
+func mustMkdir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readHooks(t *testing.T, path string) map[string]any {
+	t.Helper()
+	root := readHookRoot(t, path)
+	hooks, _ := root["hooks"].(map[string]any)
+	if hooks == nil {
+		t.Fatalf("no hooks in %s", path)
+	}
+	return hooks
+}
+
+func hookHasMarker(v any) bool {
+	return markedHookGroups(v) > 0
+}
+
+func markedHookGroups(v any) int {
+	arr, _ := v.([]any)
+	n := 0
+	for _, item := range arr {
+		group, _ := item.(map[string]any)
+		if strings.Contains(hookCommand(group), Marker) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestEnsureOnHostRegistersPreCompactForClaudeAndCodexOnly(t *testing.T) {
+	home := t.TempDir()
+	for _, d := range []string{".claude", ".codex", ".copilot"} {
+		mustMkdir(t, filepath.Join(home, d))
+	}
+	if _, err := EnsureOnHost(home); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{".claude/settings.json", ".codex/hooks.json"} {
+		hooks := readHooks(t, filepath.Join(home, f))
+		if !hookHasMarker(hooks["PreCompact"]) {
+			t.Errorf("%s: PreCompact missing", f)
+		}
+	}
+	if _, ok := readHooks(t, filepath.Join(home, ".copilot/settings.json"))["PreCompact"]; ok {
+		t.Error("copilot must not get PreCompact")
+	}
+}
+
+func TestEnsureOnHostPreCompactIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	mustMkdir(t, filepath.Join(home, ".claude"))
+	if _, err := EnsureOnHost(home); err != nil {
+		t.Fatal(err)
+	}
+	again, err := EnsureOnHost(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(home, ".claude", "settings.json")
+	found := false
+	for _, r := range again {
+		if r.Path != settings {
+			continue
+		}
+		found = true
+		if r.Action != ActionCurrent {
+			t.Fatalf("second ensure %s action=%s", r.Path, r.Action)
+		}
+	}
+	if !found {
+		t.Fatal("second ensure did not report .claude/settings.json")
+	}
+	if n := markedHookGroups(readHooks(t, settings)["PreCompact"]); n != 1 {
+		t.Fatalf("PreCompact marked groups=%d", n)
+	}
+}
+
 func TestEnsureOnHostMergesClaudeWithoutClobber(t *testing.T) {
 	home := t.TempDir()
 	claude := filepath.Join(home, ".claude")

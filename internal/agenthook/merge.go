@@ -260,6 +260,12 @@ func upsertIdentityHooks(root map[string]any, command string) bool {
 	return a || b || c
 }
 
+// upsertCompactHook registers PreCompact on the session reporter.
+// The matcher stays empty so both manual and auto compaction fire it.
+func upsertCompactHook(root map[string]any, command string) bool {
+	return upsertClaudeHook(root, EventPreCompact, command, "", Marker)
+}
+
 func cursorCommandEntry(command string) map[string]any {
 	return map[string]any{"command": command}
 }

@@ -34,3 +34,17 @@ func TestReportNativeToServeWhenDown(t *testing.T) {
 		t.Fatalf("missing serve must be silent: %v", err)
 	}
 }
+
+func TestReportParamsForwardsPreCompactEvent(t *testing.T) {
+	got := agenthook.ExtractReport([]byte(`{"session_id":"abc","hook_event_name":"PreCompact","trigger":"auto"}`))
+	params := reportParams("aim-1", got)
+	if params["event"] != "PreCompact" {
+		t.Fatalf("event=%v", params["event"])
+	}
+	if params["agent_session_id"] != "abc" {
+		t.Fatalf("agent_session_id=%v", params["agent_session_id"])
+	}
+	if params["id"] != "aim-1" {
+		t.Fatalf("id=%v", params["id"])
+	}
+}

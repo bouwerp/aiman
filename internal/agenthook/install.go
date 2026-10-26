@@ -64,9 +64,10 @@ func ensureClaude(home, command string) (InstallResult, error) {
 	todo := todoReporterPath(home)
 	return upsertJSONFile(filepath.Join(dir, "settings.json"), func(root map[string]any) bool {
 		identity := upsertIdentityHooks(root, command)
+		compact := upsertCompactHook(root, command)
 		turns := upsertTurnHooks(root, command)
 		todos := upsertTodoHook(root, todo, claudeTodoMatcher)
-		return identity || turns || todos
+		return identity || compact || turns || todos
 	})
 }
 
@@ -94,8 +95,9 @@ func ensureCodex(home, command string) (InstallResult, error) {
 	}
 	return upsertJSONFile(filepath.Join(dir, "hooks.json"), func(root map[string]any) bool {
 		identity := upsertIdentityHooks(root, command)
+		compact := upsertCompactHook(root, command)
 		turns := upsertTurnHooks(root, command)
-		return identity || turns
+		return identity || compact || turns
 	})
 }
 
