@@ -61,6 +61,9 @@ func TestParseCodexFixture(t *testing.T) {
 	if st.Last != wantLast {
 		t.Fatalf("last = %+v, want %+v", st.Last, wantLast)
 	}
+	if st.Seen != 65613 {
+		t.Fatalf("seen = %d, want 65613", st.Seen)
+	}
 }
 
 func TestParseCodexSubtractsCached(t *testing.T) {
@@ -166,7 +169,11 @@ func TestParseCodexUsesFieldSumWhenTotalIsZero(t *testing.T) {
 }
 
 func TestParseCodexEqualTotalKeepsLast(t *testing.T) {
-	st := CodexState{Model: "gpt-5.6-terra", Last: CodexTotals{Input: 100, Cached: 40, CacheWrite: 1, Output: 20}}
+	st := CodexState{
+		Model: "gpt-5.6-terra",
+		Seen:  120,
+		Last:  CodexTotals{Input: 100, Cached: 40, CacheWrite: 1, Output: 20},
+	}
 	before := st
 	for _, total := range []int64{120, 11} {
 		line := codexCountLine("2026-10-22T08:00:00Z", 500, 10, 0, 80, total)
@@ -181,18 +188,31 @@ func TestParseCodexEqualTotalKeepsLast(t *testing.T) {
 }
 
 func TestParseCodexTotalTokensGatesFields(t *testing.T) {
-	st := CodexState{Last: CodexTotals{Input: 100, Output: 20}}
-	line := codexCountLine("2026-10-22T08:00:00Z", 90, 0, 0, 10, 121)
-	recs, _, err := ParseCodex(strings.NewReader(line), &st)
+	var b strings.Builder
+	b.WriteString(codexCountLine("2026-10-22T08:00:00Z", 100, 0, 0, 50, 1000))
+	b.WriteString(codexCountLine("2026-10-22T08:00:01Z", 200, 0, 0, 80, 280))
+	body := b.String()
+	var st CodexState
+	recs, _, err := ParseCodex(strings.NewReader(body), &st)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recs) != 1 || !recs[0].Tokens.IsZero() {
+	if len(recs) != 2 || recs[0].Tokens.Output != 50 || recs[1].Tokens.Output != 30 {
 		t.Fatalf("records = %+v", recs)
 	}
-	wantLast := CodexTotals{Input: 90, Output: 10}
-	if st.Last != wantLast {
-		t.Fatalf("last = %+v, want %+v", st.Last, wantLast)
+	if st.Last != (CodexTotals{Input: 200, Output: 80}) {
+		t.Fatalf("last = %+v", st.Last)
+	}
+	before := st
+	again, _, err := ParseCodex(strings.NewReader(body), &st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 || st != before {
+		t.Fatalf("replay records %+v state %+v", again, st)
+	}
+	if st.Seen != 1000 {
+		t.Fatalf("seen = %d, want 1000", st.Seen)
 	}
 }
 

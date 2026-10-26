@@ -23,10 +23,13 @@ type CodexTotals struct {
 	Output     int64
 }
 
-// CodexState is the model and last cumulative totals for one Codex transcript.
+// CodexState is the model, the last field snapshot, and the high watermark.
+// Seen is the greatest reported total already accepted. total_tokens can
+// disagree with input_tokens+output_tokens, so Last alone cannot remember it.
 type CodexState struct {
 	Model string      `json:"model"`
 	Last  CodexTotals `json:"last"`
+	Seen  int64       `json:"seen"`
 }
 
 // ParseCodex reads a Codex rollout JSONL transcript.
@@ -121,21 +124,42 @@ func applyCodexLine(line []byte, st *CodexState) (domain.UsageRecord, bool) {
 
 func codexRecord(row codexLine, st *CodexState) (domain.UsageRecord, bool) {
 	usage := row.totalUsage()
-	if usage == nil || usage.reportedTotal() <= st.Last.sum() {
+	if usage == nil {
+		return domain.UsageRecord{}, false
+	}
+	reported := usage.reportedTotal()
+	cur := usage.totals()
+	if !countCodexSnapshot(st, reported, cur) {
 		return domain.UsageRecord{}, false
 	}
 	at, err := time.Parse(time.RFC3339Nano, row.Timestamp)
 	if err != nil {
 		return domain.UsageRecord{}, false
 	}
-	cur := usage.totals()
 	rec := domain.UsageRecord{
 		Model:  codexModel(st.Model),
 		At:     at,
 		Tokens: cur.delta(st.Last),
 	}
 	st.Last = cur
+	if reported > st.Seen {
+		st.Seen = reported
+	}
 	return rec, true
+}
+
+// countCodexSnapshot is true when the field snapshot moved forward.
+// Seen stays the greatest reported total. A later event whose reported total
+// is lower can still count when that total covers the new snapshot, so an
+// inflated total_tokens cannot rewind Last or hide the increase.
+func countCodexSnapshot(st *CodexState, reported int64, cur CodexTotals) bool {
+	if cur.sum() <= st.Last.sum() {
+		return false
+	}
+	if reported > st.Seen {
+		return true
+	}
+	return reported >= cur.sum()
 }
 
 func (row codexLine) totalUsage() *codexUsage {
