@@ -24,14 +24,15 @@ const (
 	focusTodos
 )
 
-// applyTrackedSessionMsg handles a to-do load or a reply result.
-// Both stay on the global path so a finished call still lands after the
+// applyTrackedSessionMsg handles a to-do load, a failed to-do write, or a reply.
+// They stay on the global path so a finished call still lands after the
 // user leaves the session list.
 func (m *Model) applyTrackedSessionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case todoLoadedMsg:
-		m.applyTodoLoaded(msg)
-		return m, nil
+		return m, m.applyTodoLoaded(msg)
+	case todoMutatedMsg:
+		return m, m.applyTodoMutated(msg)
 	case promptSentMsg:
 		return m, m.applyPromptSent(msg)
 	default:
@@ -133,15 +134,24 @@ func (m *Model) forwardWhileReplying(msg tea.Msg, cmds []tea.Cmd) (tea.Model, te
 	return m, tea.Batch(cmds...)
 }
 
-// handleFocusedKey takes keys while the reply line has focus.
-// To-do focus has no key handler here, so those keys stay with the list.
-// ctrl+c is not consumed: it still quits.
+// handleFocusedKey takes keys while the reply line or the to-do list has focus.
+// ctrl+c is not consumed: it still quits. A to-do focus whose session row is
+// gone drops the key instead of editing the list.
 func (m *Model) handleFocusedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	if m.focus != focusPrompt || msg.String() == "ctrl+c" {
+	if msg.String() == "ctrl+c" || (m.focus != focusPrompt && m.focus != focusTodos) {
 		return m, nil, false
 	}
-	model, cmd := m.handlePromptKey(msg)
-	return model, cmd, true
+	m.exitFocusIfSessionGone()
+	switch m.focus {
+	case focusPrompt:
+		model, cmd := m.handlePromptKey(msg)
+		return model, cmd, true
+	case focusTodos:
+		model, cmd := m.handleTodoKey(msg)
+		return model, cmd, true
+	default:
+		return m, nil, true
+	}
 }
 
 func (m *Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -247,7 +257,7 @@ func (m *Model) applyPromptSent(msg promptSentMsg) tea.Cmd {
 		m.todos = map[string]todoSnapshot{}
 	}
 	snap := m.todos[msg.sessionID]
-	snap.Steer = msg.steer
+	snap.Steer = mergeSteer(snap.Steer, msg.steer)
 	m.todos[msg.sessionID] = snap
 	return nil
 }

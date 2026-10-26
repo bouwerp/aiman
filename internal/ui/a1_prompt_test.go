@@ -375,6 +375,35 @@ func TestPromptMarkerShownAfterSend(t *testing.T) {
 	}
 }
 
+func TestPromptSentKeepsNewerSteer(t *testing.T) {
+	const id = "s1"
+	m, _ := promptModel(domain.Session{ID: id, IssueKey: "AIM-9", Name: "impl", RemoteHost: "regent0"})
+	sent := time.Date(2026, 10, 22, 10, 0, 0, 0, time.UTC)
+	delivered := sent.Add(2 * time.Second)
+	m.todos = map[string]todoSnapshot{
+		id: newTodoSnapshot(domain.TodoList{SessionID: id, Rev: 1}, server.SteerStatus{
+			Queued:          0,
+			LastDeliveredAt: delivered,
+		}),
+	}
+	m.applyPromptSent(promptSentMsg{
+		host:      "regent0",
+		sessionID: id,
+		sentAt:    sent,
+		steer:     server.SteerStatus{Queued: 1, LastDeliveredAt: sent},
+	})
+	got := m.todos[id].Steer
+	if !got.LastDeliveredAt.Equal(delivered) {
+		t.Fatalf("LastDeliveredAt %s", got.LastDeliveredAt)
+	}
+	if got.Queued != 0 {
+		t.Fatalf("Queued %d", got.Queued)
+	}
+	if plain := ansi.Strip(m.renderMainView()); !strings.Contains(plain, "delivered") {
+		t.Fatalf("marker stayed queued:\n%s", plain)
+	}
+}
+
 func TestHintLineByFocus(t *testing.T) {
 	m := &Model{version: "v9"}
 	cases := []struct {
