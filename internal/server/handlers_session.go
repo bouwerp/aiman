@@ -830,6 +830,8 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 			}
 			// A new state may open the delivery gate for held notes.
 			s.steer.Kick(sess.ID)
+			// Kick only asks for a scan. A transcript error stays in that scan.
+			s.kickUsage()
 			s.appendEvent(ctx, sess.ID, domain.EventActorAgent, domain.EventHookReported, map[string]any{
 				"event": rep.Event, "state": string(rep.State), "source": rep.Source,
 				"message": rep.Message, "title": rep.Title, "seq": rep.Seq, "ended": rep.Ended,

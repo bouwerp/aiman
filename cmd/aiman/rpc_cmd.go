@@ -25,6 +25,7 @@ var rpcMethods = map[string]bool{
 	"steer.send":       true,
 	"handover.write":   true,
 	"handover.point":   true,
+	"usage.get":        true,
 }
 
 // rpcParams validates the method and params. It passes the bytes through

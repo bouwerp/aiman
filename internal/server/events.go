@@ -7,8 +7,8 @@ import "sync"
 const hubBuffer = 64
 
 // Hub is where request handlers announce changes that event-stream clients
-// should hear about without polling: todo_changed, steer, and the reserved
-// usage, notify and verify types.
+// should hear about without polling: todo_changed, steer, usage_changed, and
+// the reserved notify and verify types.
 type Hub interface {
 	Publish(ev SessionEvent)
 }

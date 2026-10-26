@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/aimanskill"
@@ -24,6 +25,7 @@ import (
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/todo"
+	"github.com/bouwerp/aiman/internal/usage"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
@@ -98,6 +100,13 @@ func runServe() error {
 	srv := server.New(ln, db, localExec, flow, store, ptyMgr, version)
 	todos := todo.NewFiles(filepath.Join(dir, "todos"))
 	srv.EnableTodos(todos, db)
+	tracker := usage.NewTracker(db, db, srv.PublishUsage)
+	rep := usage.Reporter{
+		Store:  db,
+		Prices: usage.DefaultPrices().Merge(usagePrices(cfg)),
+		Now:    time.Now,
+	}
+	srv.EnableUsage(ctx, tracker, rep)
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
 }
@@ -148,6 +157,26 @@ func serveWantsHelp(args []string) bool {
 	return false
 }
 
+// usagePrices turns configured USD-per-million rows into confirmed prices.
+// An empty table leaves the built-in defaults in place.
+func usagePrices(cfg *config.Config) usage.PriceTable {
+	if cfg == nil || len(cfg.Usage.Prices) == 0 {
+		return nil
+	}
+	out := make(usage.PriceTable, len(cfg.Usage.Prices))
+	for id, p := range cfg.Usage.Prices {
+		out[id] = usage.Price{
+			Input:        p.Input,
+			Output:       p.Output,
+			CacheRead:    p.CacheRead,
+			CacheWrite5m: p.CacheWrite5m,
+			CacheWrite1h: p.CacheWrite1h,
+			Confirmed:    true,
+		}
+	}
+	return out
+}
+
 func printServeUsage(w io.Writer) {
 	fmt.Fprint(w, `aiman serve — agent API on THIS host
 
@@ -177,5 +206,6 @@ start installs ~/.aiman/hooks/deepcode-launch.sh, which watches
 aiman session deepcode-watch. Resume is deepcode --resume <uuid>.
 Model and effort are DEEPCODE_MODEL and DEEPCODE_REASONING_EFFORT.
 Permissions stay the user's defaultMode. Ageni is not hooked.
+usage.get reports token totals from Claude and Codex transcripts.
 `)
 }

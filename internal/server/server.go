@@ -13,6 +13,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/todo"
+	"github.com/bouwerp/aiman/internal/usage"
 )
 
 // rememberedPane is the last rendered screen served for one session. The next
@@ -62,6 +63,11 @@ type Server struct {
 	steerSettled map[string]time.Time
 	// target is the session side of steering, the Server itself outside tests.
 	target steerTarget
+
+	// usage follows transcripts. reporter prices the stored buckets for usage.get.
+	// Both stay nil until EnableUsage, and a nil tracker kick is a no-op.
+	usage    *usage.Tracker
+	reporter *usage.Reporter
 	// todoLocks holds one *sync.Mutex per session id around a to-do write and
 	// its render.
 	todoLocks sync.Map
@@ -204,6 +210,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleContextPack(ctx, req)
 	case "context.stats":
 		return s.handleContextStats(ctx, req)
+	case "usage.get":
+		return s.handleUsageGet(ctx, req)
 	case "handover.write":
 		return s.handleHandoverWrite(ctx, req)
 	case "handover.point":
