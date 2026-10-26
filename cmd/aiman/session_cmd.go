@@ -69,7 +69,7 @@ func writeCLIError(code, msg string) {
 
 func runSession(args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|prompt|wait|read|report-agent-session|deepcode-watch> …\n")
+		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|prompt|wait|read|log|report-agent-session|deepcode-watch> …\n")
 		fmt.Fprintf(os.Stderr, "Are you an AI? Run: aiman --skill\n")
 		return errUsage
 	}
@@ -108,6 +108,20 @@ func runSession(args []string) error {
 			params["lines"] = atoi(n)
 		}
 		return callAndPrint(sock, "session.read", params)
+	case "log":
+		if len(args) < 2 {
+			writeCLIError(server.CodeInvalidParams, "session log requires a target")
+			return errUsage
+		}
+		flags, _ := takeFlags(args[2:])
+		params := map[string]any{"session": args[1]}
+		if n := flags["since"]; n != "" {
+			params["since_seq"] = atoi(n)
+		}
+		if n := flags["limit"]; n != "" {
+			params["limit"] = atoi(n)
+		}
+		return callAndPrint(sock, "session.log", params)
 	case "prompt":
 		if len(args) < 3 {
 			writeCLIError(server.CodeInvalidParams, "session prompt <target> TEXT")

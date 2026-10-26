@@ -198,6 +198,8 @@ Steering queues notes for the agent: free text, or the formatted summary of some
 
 The event hub (`internal/server/events.go`) fans each `Publish` out to every `session.events` subscriber. Each subscriber buffers 64 events. A full buffer drops the event, so a stalled client cannot block a socket handler. A to-do write publishes `todo_changed` with the list `Rev`. The steerer publishes `steer` with the queued count, and `DeliveredAt` once a note is submitted. The type names `usage`, `notify`, and `verify` are reserved on the same stream.
 
+`session_events` is the durable append-only ledger behind the hub. `Server.appendEvent` writes one row (`session_id, seq, at, actor, kind, payload, hash`) and never fails the request; the sequence is allocated by the INSERT, and `hash` is sha256(payload). It records create, prompt, hook, handover and session-end facts; to-do, steer, verify and budget events join as their handlers land. The table is never read on the request path and has no COALESCE rules. `session.log` reads it (`since_seq`, `limit`) and `aiman session log` is the CLI. The event hub is still the live stream; the ledger is the history.
+
 SSH `systemctl --user` needs `XDG_RUNTIME_DIR` and the session bus; the scripts set those. Linger is enabled *before* `systemctl --user` so a first SSH to a host with no lingering user instance can still install.
 
 Do not run serve inside tmux. Probe on select, `r`, after an op, and after discovery — not on the tmux pane ticker.

@@ -475,6 +475,13 @@ func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
 	if err := usecase.SendSessionPrompt(ctx, s.remote, sess, params.Text); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
+	actor := domain.EventActorUser
+	if req.Caller != "" && req.Caller == sess.ID {
+		actor = domain.EventActorAgent
+	}
+	s.appendEvent(ctx, sess.ID, actor, domain.EventPromptSubmitted, map[string]any{
+		"chars": len(params.Text), "force": params.Force, "wait": params.Wait,
+	})
 	result := map[string]any{"type": "prompt_result", "sent": true}
 	if params.Wait {
 		until := parseUntil(params.Until)
@@ -656,6 +663,10 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeCreateFailed, err.Error())
 		}
 	}
+	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionCreated, map[string]any{
+		"name": name, "group": group, "repo": params.Repo, "branch": params.Branch,
+		"agent": params.Agent, "backend": cfg.SessionBackend, "quick": params.Quick,
+	})
 	info := sessionInfo(*sess, req.Caller)
 	return Response{ID: req.ID, Result: map[string]any{"type": "session", "session": info}}
 }
@@ -726,6 +737,7 @@ func (s *Server) handleForget(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
 	}
+	s.appendEvent(ctx, sess.ID, domain.EventActorUser, domain.EventSessionEnded, map[string]any{"reason": "forget"})
 	return Response{ID: req.ID, Result: map[string]any{
 		"type": "session_forgotten",
 		"id":   sess.ID,
@@ -818,6 +830,15 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 			}
 			// A new state may open the delivery gate for held notes.
 			s.steer.Kick(sess.ID)
+			s.appendEvent(ctx, sess.ID, domain.EventActorAgent, domain.EventHookReported, map[string]any{
+				"event": rep.Event, "state": string(rep.State), "source": rep.Source,
+				"message": rep.Message, "title": rep.Title, "seq": rep.Seq, "ended": rep.Ended,
+			})
+			if rep.Ended {
+				s.appendEvent(ctx, sess.ID, domain.EventActorAgent, domain.EventSessionEnded, map[string]any{
+					"reason": "session_end", "event": rep.Event,
+				})
+			}
 		}
 	}
 	return Response{ID: req.ID, Result: map[string]any{
@@ -931,6 +952,11 @@ func (s *Server) handleRegister(ctx context.Context, req Request) Response {
 			row := registrableSession(in, existing)
 			if err := s.repo.Save(ctx, &row); err != nil {
 				return errResp(req.ID, CodeInvalidParams, err.Error())
+			}
+			if existing == nil {
+				s.appendEvent(ctx, id, domain.EventActorAiman, domain.EventSessionCreated, map[string]any{
+					"name": row.Name, "group": row.Group, "source": "register",
+				})
 			}
 			ids = append(ids, id)
 		}

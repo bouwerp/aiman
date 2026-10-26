@@ -18,6 +18,7 @@ func TestRPCParams(t *testing.T) {
 		{"steer.send ok", "steer.send", `{"session":"s1","text":"hi"}`, ""},
 		{"handover.write ok", "handover.write", `{"session":"s1","reason":"archive"}`, ""},
 		{"handover.point ok", "handover.point", `{"session":"s1"}`, ""},
+		{"session.log ok", "session.log", `{"session":"s1"}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
