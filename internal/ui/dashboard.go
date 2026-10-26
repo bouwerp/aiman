@@ -419,6 +419,11 @@ type Model struct {
 	focus       a1Focus
 	promptInput textinput.Model
 	showKeys    bool
+	// promptFor is the session the reply field belongs to. enter sends to
+	// this id, not to whichever row is selected at that moment.
+	promptFor string
+	// promptBuf holds unsent reply text for sessions other than promptFor.
+	promptBuf map[string]string
 	// promptDraft is the text of a reply still waiting on steer.send.
 	// While a session has an entry the prompt line says sending….
 	promptDraft map[string]string
@@ -2740,22 +2745,16 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 	h, v := docStyle.GetFrameSize()
 
-	// a1Chrome is the rows around the panes: header, gap, prompt line, hint line.
-	const a1Chrome = 4
-	mainHeight := height - v - a1Chrome
+	// sessionChrome is the rows around the panes. The long key list adds one
+	// when it wraps, and the panes give that row up.
+	m.applySessionChrome()
 
-	m.list.SetSize(width/3-h, mainHeight) // Sidebar width
 	m.menu.SetSize(width-h, height-v)
 	m.remotes.list.SetSize(width-h-4, height-v-6)
 	m.remotes.width = width
 	m.remotes.height = height
 
 	// Viewport takes up the bottom part of the main panel
-	m.viewport.SetWidth(m.mainContentWidth())
-	// a1DetailBudget is the detail pane: title, meta, git/PR line, gap,
-	// up to 8 to-do rows, up to 3 question rows, gap, preview caption.
-	const a1DetailBudget = 16
-	m.viewport.SetHeight(max(6, mainHeight-a1DetailBudget))
 	if m.hasLoadedPane() {
 		y := m.viewport.YOffset()
 		m.setPreviewContent()
@@ -2778,6 +2777,19 @@ func (m *Model) SetSize(width, height int) {
 
 	m.triggerDetailsVP.SetWidth(width - 12)
 	m.triggerDetailsVP.SetHeight(height - 12)
+}
+
+// applySessionChrome sizes the session list and the preview for the current
+// footer. `?` calls this on its own: the other lists are not part of that row.
+func (m *Model) applySessionChrome() {
+	h, v := docStyle.GetFrameSize()
+	mainHeight := m.height - v - m.sessionChrome()
+	m.list.SetSize(m.width/3-h, mainHeight)
+	m.viewport.SetWidth(m.mainContentWidth())
+	// a1DetailBudget is the detail pane: title, meta, git/PR line, gap,
+	// up to 8 to-do rows, up to 3 question rows, gap, preview caption.
+	const a1DetailBudget = 16
+	m.viewport.SetHeight(m.previewHeight(mainHeight, a1DetailBudget))
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -4433,6 +4445,11 @@ func (m *Model) applyAISummary(msg aiSummaryMsg, cmds []tea.Cmd) (tea.Model, tea
 // daemon list, the preview viewport, or the embedded terminal — and issues follow-up
 // fetches when the selection changed as a result.
 func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	// A reply owns the selection. List keys and clicks must not move it,
+	// or the note would leave with no visible target.
+	if m.focus == focusPrompt {
+		return m.forwardWhileReplying(msg, cmds)
+	}
 	// Capture list selection changes to trigger immediate fetch
 	oldSelID := ""
 	oldHeader := false
@@ -4519,6 +4536,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		}
 		if newHeader {
 			if !oldHeader {
+				m.swapPromptDraft(oldSelID, "")
 				m.activeSession = ""
 				m.gitStatus = domain.GitStatus{}
 				m.lastGitStatusUpdate = time.Time{}
@@ -4526,6 +4544,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 				m.viewport.SetContent("")
 			}
 		} else if oldSelID != newSelID && newSelID != "" {
+			m.swapPromptDraft(oldSelID, newSelID)
 			s := selItem.session
 			m.activeSession = s.TmuxSession
 			m.gitStatus = domain.GitStatus{} // Clear old status
@@ -4629,6 +4648,9 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			return m, m.enterPromptFocus(), true
 		case "?":
 			m.showKeys = !m.showKeys
+			if m.width > 0 && m.height > 0 {
+				m.applySessionChrome()
+			}
 			return m, nil, true
 		}
 	}

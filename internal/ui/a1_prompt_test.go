@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/charmbracelet/x/ansi"
@@ -117,6 +120,159 @@ func TestPromptSendErrorRestoresText(t *testing.T) {
 	}
 	if _, sent := m.promptSent["s1"]; sent {
 		t.Fatal("a failed send left a prompt timestamp")
+	}
+}
+
+func TestPromptSecondEnterWaitsAndStaleResultIsIgnored(t *testing.T) {
+	const id = "s1"
+	m, fake := promptModel(domain.Session{ID: id, Name: "impl", RemoteHost: "regent0"})
+	next, _ := m.Update(pressKey("ctrl+p"))
+	m = next.(*Model)
+	next, _ = m.Update(pressKey("first"))
+	m = next.(*Model)
+	next, cmd := m.Update(pressKey("enter"))
+	m = next.(*Model)
+	if cmd == nil {
+		t.Fatal("first enter did not send")
+	}
+
+	next, _ = m.Update(pressKey("second"))
+	m = next.(*Model)
+	next, again := m.Update(pressKey("enter"))
+	m = next.(*Model)
+	if again != nil {
+		_ = again()
+	}
+	_ = cmd()
+	if len(fake.prompts) != 1 || fake.prompts[0].Text != "first" {
+		t.Fatalf("prompts = %+v, want only the first note", fake.prompts)
+	}
+	if m.promptInput.Value() != "second" {
+		t.Fatalf("input = %q, want the unsent second line", m.promptInput.Value())
+	}
+
+	sent := m.promptSent[id]
+	next, _ = m.Update(promptSentMsg{
+		host: "regent0", sessionID: id, sentAt: sent.Add(-time.Second), err: errors.New("late"),
+	})
+	m = next.(*Model)
+	if m.promptInput.Value() != "second" {
+		t.Fatalf("stale error set input to %q", m.promptInput.Value())
+	}
+	if !m.promptSent[id].Equal(sent) {
+		t.Fatal("stale result replaced the in-flight send time")
+	}
+
+	next, _ = m.Update(promptSentMsg{
+		host: "regent0", sessionID: id, sentAt: sent, err: errors.New("offline"),
+	})
+	m = next.(*Model)
+	if m.promptInput.Value() != "second" {
+		t.Fatalf("error restored over a newer line: %q", m.promptInput.Value())
+	}
+}
+
+func TestPromptSubmitsToTheSessionThatOpenedIt(t *testing.T) {
+	a := domain.Session{ID: "a", IssueKey: "AIM-1", Name: "one", RemoteHost: "regent0"}
+	b := domain.Session{ID: "b", IssueKey: "AIM-2", Name: "two", RemoteHost: "regent0"}
+	m, fake := promptModel(a, b)
+	next, _ := m.Update(pressKey("ctrl+p"))
+	m = next.(*Model)
+	next, _ = m.Update(pressKey("note"))
+	m = next.(*Model)
+	m.list.Select(1)
+
+	_, cmd := m.Update(pressKey("enter"))
+	if cmd == nil {
+		t.Fatal("expected a send")
+	}
+	_ = cmd()
+	if len(fake.prompts) != 1 || fake.prompts[0].Session != "a" || fake.prompts[0].Text != "note" {
+		t.Fatalf("prompts = %+v, want session a", fake.prompts)
+	}
+}
+
+func TestPromptDraftFollowsTheSelectedSession(t *testing.T) {
+	a := domain.Session{ID: "a", IssueKey: "AIM-1", Name: "one", RemoteHost: "regent0"}
+	b := domain.Session{ID: "b", IssueKey: "AIM-2", Name: "two", RemoteHost: "regent0"}
+	m, _ := promptModel(a, b)
+	next, _ := m.Update(pressKey("ctrl+p"))
+	m = next.(*Model)
+	next, _ = m.Update(pressKey("for a"))
+	m = next.(*Model)
+	next, _ = m.Update(pressKey("esc"))
+	m = next.(*Model)
+	next, _ = m.Update(pressKey("down"))
+	m = next.(*Model)
+
+	if m.promptInput.Value() != "" {
+		t.Fatalf("AIM-2 is showing %q", m.promptInput.Value())
+	}
+	if plain := ansi.Strip(m.renderMainView()); !strings.Contains(plain, "Reply to AIM-2") {
+		t.Fatalf("unfocused line:\n%s", plain)
+	}
+	next, _ = m.Update(pressKey("up"))
+	m = next.(*Model)
+	if m.promptInput.Value() != "for a" {
+		t.Fatalf("AIM-1 draft = %q", m.promptInput.Value())
+	}
+}
+
+func TestPromptFocusBlocksListSelection(t *testing.T) {
+	a := domain.Session{ID: "a", IssueKey: "AIM-1", Name: "one", RemoteHost: "regent0"}
+	b := domain.Session{ID: "b", IssueKey: "AIM-2", Name: "two", RemoteHost: "regent0"}
+	m, _ := promptModel(a, b)
+	next, _ := m.Update(pressKey("ctrl+p"))
+	m = next.(*Model)
+	idx := m.list.Index()
+
+	next, _ = m.forwardToFocused(pressKey("down"), nil)
+	m = next.(*Model)
+	if m.list.Index() != idx {
+		t.Fatalf("list index %d, want %d while replying", m.list.Index(), idx)
+	}
+	click := tea.MouseClickMsg{X: 2, Y: 4, Button: tea.MouseLeft}
+	next, _ = m.Update(click)
+	m = next.(*Model)
+	if got, _ := m.selectedSessionItem(); got.session.ID != "a" {
+		t.Fatalf("mouse moved the reply onto %s", got.session.ID)
+	}
+}
+
+func TestQuestionKeepsTheDashboardInTheTerminal(t *testing.T) {
+	next, _ := newTestStartupModel(&startupSessionRepo{
+		sessions: []domain.Session{
+			{ID: "a", Name: "impl", Group: "G", RemoteHost: "regent0", TmuxSession: "t1"},
+			{ID: "b", Name: "review", Group: "G", RemoteHost: "regent0", TmuxSession: "t2"},
+		},
+	}).Update(startupReadyMsg{})
+	dash := next.(*Model)
+	dash.SetSize(80, 24)
+	beforeList := dash.list.Height()
+	beforeView := dash.viewport.Height()
+
+	next, _ = dash.Update(pressKey("?"))
+	dash = next.(*Model)
+	view := dash.View().Content
+	if h := lipgloss.Height(view); h > 24 {
+		t.Fatalf("80x24 with keys open is %d rows", h)
+	}
+	plain := ansi.Strip(view)
+	if !strings.Contains(plain, "n: new") || !strings.Contains(plain, "t: tunnels") {
+		t.Fatalf("help is not two lines:\n%s", plain)
+	}
+	if dash.list.Height() != beforeList-1 || dash.viewport.Height() != beforeView-1 {
+		t.Fatalf("list %d->%d viewport %d->%d, want both one row shorter",
+			beforeList, dash.list.Height(), beforeView, dash.viewport.Height())
+	}
+
+	next, _ = dash.Update(pressKey("?"))
+	dash = next.(*Model)
+	if h := lipgloss.Height(dash.View().Content); h > 24 {
+		t.Fatalf("after closing keys, height %d", h)
+	}
+	if dash.list.Height() != beforeList || dash.viewport.Height() != beforeView {
+		t.Fatalf("chrome was not given back: list %d viewport %d", dash.list.Height(), dash.viewport.Height())
 	}
 }
 

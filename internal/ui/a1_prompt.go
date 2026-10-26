@@ -77,11 +77,60 @@ func (m *Model) ensurePromptInput() {
 
 func (m *Model) enterPromptFocus() tea.Cmd {
 	m.ensurePromptInput()
-	m.focus = focusPrompt
-	if it, ok := m.selectedSessionItem(); ok {
+	if it, ok := m.selectedSessionItem(); ok && !it.header {
+		if m.promptFor != it.session.ID {
+			m.swapPromptDraft(m.promptFor, it.session.ID)
+		}
 		m.promptInput.Placeholder = "Reply to " + promptTarget(it.session) + "…"
 	}
+	m.focus = focusPrompt
 	return m.promptInput.Focus()
+}
+
+// swapPromptDraft keeps each session's unsent reply with that session.
+func (m *Model) swapPromptDraft(from, to string) {
+	if from == to {
+		return
+	}
+	m.stashPromptBuf(from)
+	m.promptFor = to
+	m.ensurePromptInput()
+	next := ""
+	if m.promptBuf != nil {
+		next = m.promptBuf[to]
+	}
+	m.promptInput.SetValue(next)
+}
+
+func (m *Model) stashPromptBuf(id string) {
+	if id == "" {
+		return
+	}
+	if m.promptBuf == nil {
+		m.promptBuf = map[string]string{}
+	}
+	text := ""
+	if m.promptInput.EchoCharacter != 0 {
+		text = m.promptInput.Value()
+	}
+	if text == "" {
+		delete(m.promptBuf, id)
+		return
+	}
+	m.promptBuf[id] = text
+}
+
+// forwardWhileReplying keeps the reply line's cursor blinks, and mouse
+// over the preview, but does not let the session list move.
+func (m *Model) forwardWhileReplying(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	mouse, isMouse := msg.(tea.MouseMsg)
+	if !isMouse || mouse.Mouse().X < (m.width/3+4) {
+		return m, tea.Batch(cmds...)
+	}
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	cmds = append(cmds, cmd)
+	return m, tea.Batch(cmds...)
 }
 
 // handleFocusedKey takes keys while the reply line has focus.
@@ -120,12 +169,20 @@ func (m *Model) submitPrompt() tea.Cmd {
 	if text == "" {
 		return nil
 	}
-	it, ok := m.selectedSessionItem()
+	sess, ok := m.sessionByID(m.promptFor)
 	if !ok {
+		it, sel := m.selectedSessionItem()
+		if !sel || it.header {
+			return nil
+		}
+		sess = it.session
+		m.promptFor = sess.ID
+	}
+	id := sess.ID
+	if _, sending := m.promptDraft[id]; sending {
 		return nil
 	}
-	id := it.session.ID
-	host := it.session.RemoteHost
+	host := sess.RemoteHost
 	sentAt := time.Now()
 	if m.promptSent == nil {
 		m.promptSent = map[string]time.Time{}
@@ -137,7 +194,7 @@ func (m *Model) submitPrompt() tea.Cmd {
 	m.promptDraft[id] = text
 	m.promptInput.SetValue("")
 
-	remote, hasRemote := resolveRemote(m.cfg, it.session)
+	remote, hasRemote := resolveRemote(m.cfg, sess)
 	client := m.todoClient
 	return func() tea.Msg {
 		if !hasRemote {
@@ -157,6 +214,11 @@ func (m *Model) submitPrompt() tea.Cmd {
 // A failed send restores the typed text and clears the send time so the
 // line does not claim the note was queued.
 func (m *Model) applyPromptSent(msg promptSentMsg) tea.Cmd {
+	if m.promptSent != nil {
+		if latest, ok := m.promptSent[msg.sessionID]; ok && !latest.Equal(msg.sentAt) {
+			return nil
+		}
+	}
 	text := ""
 	if m.promptDraft != nil {
 		text = m.promptDraft[msg.sessionID]
@@ -167,7 +229,8 @@ func (m *Model) applyPromptSent(msg promptSentMsg) tea.Cmd {
 		if m.promptSent != nil {
 			delete(m.promptSent, msg.sessionID)
 		}
-		if text != "" {
+		// A line typed after the send is newer than the failed note.
+		if text != "" && m.promptInput.Value() == "" {
 			m.ensurePromptInput()
 			m.promptInput.SetValue(text)
 		}
@@ -297,8 +360,47 @@ func hintFor(focus a1Focus) string {
 	}
 }
 
+// a1Chrome is the rows around the panes: header, gap, prompt line, hint line.
+// A wrapped key list is one row more; sessionChrome reports that.
+const a1Chrome = 4
+
+func (m *Model) sessionChrome() int {
+	if m.helpWraps() {
+		return a1Chrome + 1
+	}
+	return a1Chrome
+}
+
+// helpWraps reports that `?` is showing a second help line on the sessions tab.
+func (m *Model) helpWraps() bool {
+	if !m.showKeys || m.currentTab != tabSessions {
+		return false
+	}
+	width := m.width - 4
+	if width < 1 {
+		width = 1
+	}
+	_, second := splitHelp(sessionKeysHelp, helpRoom(width, m.version))
+	return second != ""
+}
+
+// previewHeight is the pane under the detail block. A wrapped key list takes
+// one of those rows back, including when the pane is already at its floor.
+func (m *Model) previewHeight(mainHeight, detailBudget int) int {
+	height := max(6, mainHeight-detailBudget)
+	if !m.helpWraps() {
+		return height
+	}
+	opened := max(6, mainHeight+1-detailBudget)
+	if height == opened {
+		return max(1, opened-1)
+	}
+	return height
+}
+
 // mainFooter is the prompt row plus the hint, or the agent API help on the
-// daemons tab. The sessions footer is two rows, matching a1Chrome.
+// daemons tab. The sessions footer is two rows, matching a1Chrome, or three
+// when the key list wraps.
 func (m *Model) mainFooter(width int) string {
 	if m.currentTab == tabDaemons {
 		line := alignRight(daemonKeysHelp, m.version, width)
@@ -311,13 +413,17 @@ func (m *Model) mainFooter(width int) string {
 	return m.sessionPromptLine(width) + "\n" + below
 }
 
+func helpRoom(width int, version string) int {
+	verW := lipgloss.Width(version)
+	if verW > 0 && width-verW-1 > 0 {
+		return width - verW - 1
+	}
+	return width
+}
+
 func (m *Model) keysHelp(width int) string {
 	style := lipgloss.NewStyle().Foreground(a1Dim)
-	room := width
-	verW := lipgloss.Width(m.version)
-	if verW > 0 && width-verW-1 > 0 {
-		room = width - verW - 1
-	}
+	room := helpRoom(width, m.version)
 	first, second := splitHelp(sessionKeysHelp, room)
 	if second == "" {
 		return style.Render(alignRight(first, m.version, width))
