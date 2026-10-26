@@ -204,6 +204,8 @@ SSH `systemctl --user` needs `XDG_RUNTIME_DIR` and the session bus; the scripts 
 
 Do not run serve inside tmux. Probe on select, `r`, after an op, and after discovery — not on the tmux pane ticker.
 
+`aiman serve` runs a usage tracker (`internal/usage`) that scans Claude and Codex transcripts into per-session hourly model buckets and prices them when they are read. `usage.get` returns `{"type":"usage","session":"<id or empty>","usage":<report>}`: an empty session is every session on that host, and `by` of `issue` (30 days) or `day` (14 days) with `tz_offset_minutes` (the laptop zone offset in minutes) builds the rollup. `aiman usage` is that call from the CLI. `$` on the sessions tab opens the same rollup, last 30 days by ticket, with `tab` for the last 14 days by day. The cost column is `usage.FormatUsageCost` and is `-` when the row has no priced tokens. Unpriced model ids are listed under the table. Each host can show one dim extra line under its name; the usage view leaves that line empty.
+
 ---
 
 ## Session Restart

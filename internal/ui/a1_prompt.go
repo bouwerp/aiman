@@ -25,8 +25,8 @@ const (
 )
 
 // applyTrackedSessionMsg handles a to-do load, a failed to-do write, a reply,
-// or a usage report. They stay on the global path so a finished call still
-// lands after the user leaves the session list.
+// a session usage report, or a host rollup. They stay on the global path so a
+// finished call still lands after the user leaves the session list.
 func (m *Model) applyTrackedSessionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case todoLoadedMsg:
@@ -37,6 +37,9 @@ func (m *Model) applyTrackedSessionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.applyPromptSent(msg)
 	case usageMsg:
 		m.applyUsageMsg(msg)
+		return m, nil
+	case usageRollupMsg:
+		m.applyUsageRollup(msg)
 		return m, nil
 	default:
 		return m, nil

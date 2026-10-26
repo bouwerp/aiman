@@ -172,6 +172,7 @@ const (
 	viewStateNewGroup
 	viewStateAgentDefaults
 	viewStateContextStats
+	viewStateUsage
 	viewStateReviveRemotePicker // pick which remote to scan for abandoned worktrees
 	viewStateReviveList         // list of abandoned worktrees found, with candidate agent(s)
 	viewStateReviveAgentPick    // short pick-list when a worktree has 2+ agent candidates
@@ -371,6 +372,7 @@ type Model struct {
 	generalSetup         GeneralSetupModel
 	agentDefaults        AgentDefaultsModel
 	contextStats         ContextStatsModel
+	usageView            UsageViewModel
 	aiSetup              AISetupModel
 	secretsSetup         SecretsSetupModel
 	awsCredentials       AWSCredentialsModel
@@ -868,6 +870,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "view trigger details (autonomous)")),
 			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "sessions / agent API")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
+			key.NewBinding(key.WithKeys("$"), key.WithHelp("$", "usage and cost")),
 		}
 	}
 
@@ -2898,10 +2901,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.startSessionStream(remote)
 		}
 		return m, nil
-	case todoLoadedMsg, promptSentMsg, todoMutatedMsg, usageMsg:
+	case todoLoadedMsg, promptSentMsg, todoMutatedMsg, usageMsg, usageRollupMsg:
 		// These results are global: a fetch, a reply, a failed to-do
 		// write, or a usage report can finish after the user has left
-		// the session list.
+		// the session list. The rollup is the same path so $ stays
+		// filled in after the user leaves that screen.
 		return m.applyTrackedSessionMsg(msg)
 	case todoSweepMsg:
 		m.applyTodoSweep(msg)
@@ -3030,6 +3034,9 @@ func (m *Model) dispatchSettingsUpdate(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return model, cmd, true
 	case viewStateContextStats:
 		model, cmd := m.handleContextStatsUpdate(msg)
+		return model, cmd, true
+	case viewStateUsage:
+		model, cmd := m.handleUsageViewUpdate(msg)
 		return model, cmd, true
 	case viewStateAISettings:
 		model, cmd := m.handleAISetupUpdate(msg)
@@ -3467,6 +3474,8 @@ func (m *Model) renderSettingsView() (string, bool) {
 		return m.agentDefaults.viewString(), true
 	case viewStateContextStats:
 		return m.contextStats.viewString(), true
+	case viewStateUsage:
+		return m.usageView.viewString(), true
 	case viewStateAISettings:
 		return m.aiSetup.viewString(), true
 	case viewStateReviveRemotePicker:
@@ -4924,6 +4933,9 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if msg.String() == "m" {
 		m.state = viewStateMenu
 		return m, nil, true
+	}
+	if msg.String() == "$" && m.currentTab == tabSessions {
+		return m, m.enterUsageView(), true
 	}
 	if msg.String() == "q" || msg.String() == "esc" {
 		m.state = viewStateQuitConfirm
