@@ -690,3 +690,100 @@ git commit -m "docs: tell agents to verify before opening a PR"
 7. **`reviewing…` is derived from a live reviewer child** in the session list, not a new event type. `SessionInfo` gains `role`.
 8. **`review_done` only for REQUIRED findings.** A clean pass (or one with only suggestions) is logged by serve and stored as a `review` note, with no toast or push; the noise budget lists "review findings". Every finished review publishes a `verify` hub event so the TUI can clear `reviewing…` without a notification.
 9. **Finding to-dos use `Ref = "finding:<review id>/<finding id>"`** (nl-1 prefix table), distinct from nl-6's `review:<comment id>` for PR review comments.
+
+---
+
+## Research amendments — 2026-10-26
+
+Source: `docs/superpowers/research/2026-10-26-harness-research.md` §What the
+research adds (3) and the feed's "writer ≠ judge" / "done is structural" posts
+(2026-10-12, 2026-07-16, 2026-08-27). These tasks make a pass mean something
+more than "no findings were written".
+
+### Task 13: Evidence record and pass criteria
+
+**Files:**
+- Modify: `internal/verify/review.go`, `internal/verify/manager.go`, `internal/verify/brief.go`
+- Create: `internal/verify/evidence.go`, `internal/verify/evidence_test.go`
+- Modify: `internal/infra/config/config.go` (`VerifyConfig.TestCommand`, `Reproduce`), `cmd/aiman/verify_cmd.go`
+- Test: `internal/verify/manager_complete_test.go`, `internal/verify/review_test.go`
+
+**Interfaces:**
+```go
+type Evidence struct {
+    Command  string
+    ExitCode int
+    Output   string    // last 200 lines, verbatim
+    RanAt    time.Time
+    TreeHash string
+}
+// Review adds TreeHash, BaseSHA, Evidence.
+func (r Review) Passed() bool // complete && Required == 0 && Evidence.Command != "" && Evidence.ExitCode == 0
+```
+`verify.test_command` (global) and `repos.<slug>.verify_command` (per repo)
+name the command. The manager, not the reviewer, runs it host-side in a second
+detached worktree at the same snapshot commit, after the reviewer stops and
+before cleanup. The reviewer never supplies the evidence; a reviewer that edits
+its worktree cannot fake a pass. If no command is configured, `Passed()` is
+false and `--wait` prints `no test command configured` — an unverifiable review
+is not a pass.
+
+`--wait` prints `evidence: <command> → exit <n>` plus the last 20 output lines
+when it fails. `Review.Passed` (the field) is replaced by `Passed()`; update all
+callers, including nl-9's `BeforePR` seam.
+
+- [ ] **Step 1: Write the failing tests**
+  - `TestPassedRequiresEvidence`: complete/0 findings/no command → false; complete/0/exit 0 → true; complete/0/exit 1 → false.
+  - `TestManagerRunsConfiguredCommand`: a fake command writes `ok` and exits 0 → evidence recorded in the review JSON.
+  - `TestManagerRunsInSecondWorktree`: the reviewer's worktree is untouched; the evidence worktree is removed.
+  - `TestMissingCommandIsIncomplete`: no config → status `incomplete`, reason names the config key.
+- [ ] **Step 2: Run** `go test ./internal/verify/ -run 'Passed|Evidence|ConfiguredCommand'` → FAIL.
+- [ ] **Step 3: Implement.** Reuse the snapshot's commit object; `git worktree add --detach <tmp> <tree-ish>`, run the command with a 15-min cap and a 200-line output cap, remove the worktree in a `defer`. A command that cannot start is an `incomplete` review, not a crash.
+- [ ] **Step 4: Run** the tests and `make ci` → PASS.
+- [ ] **Step 5: Commit** `feat(verify): bind a pass to test evidence`
+
+### Task 14: Structural before-PR gate and reproduce-first
+
+**Files:**
+- Create: `internal/agenthook/policy.go`, `internal/agenthook/policy_test.go`
+- Modify: `internal/agenthook/merge.go`, `internal/agenthook/install.go`, `internal/agenthook/report.go`
+- Modify: `internal/server/handlers_verify.go`, `internal/server/handlers_session.go` (`SessionInfo.Unprotected`), `internal/ui/a1_detail.go`
+- Modify: `cmd/aiman/verify_cmd.go` (`--gate`)
+- Test: `internal/agenthook/install_test.go`, `cmd/aiman/verify_cmd_test.go`, `internal/ui/a1_detail_test.go`
+
+**Behaviour:**
+- `aiman verify --gate` computes the current tree hash (the same temporary-index
+  commit the review uses), calls `verify.status {tree_hash}`, and exits 0 when
+  the latest review is `Passed()` or `verify` is disabled; otherwise exit 2 with
+  one line naming the required findings. This is the hook entry point.
+- `agenthook` registers a `PreToolUse` hook for Claude (and Codex only when its
+  hook surface supports a pre-tool event) matching the Bash tool whose command
+  contains `gh pr create`. Exit 2 blocks the call and Claude feeds stderr back
+  to the model. The hook is installed only when `verify.before_pr` is true, and
+  is marked with its own marker so an update does not duplicate it.
+- Capability matrix: Claude supports `PreToolUse` today. Codex is registered
+  only after Task 1 of this plan (or a spike) confirms its hook surface exposes
+  a pre-tool event; until then Codex is `unprotected`, not assumed. Agents
+  without support get no hook; `SessionInfo.Unprotected` is true for them when
+  `before_pr` is on, and the meta line shows `verify advisory`. Never pretend a
+  guard exists.
+- Reproduce-first: when `verify.reproduce` is true (or the issue type is `Bug`
+  and the flag is unset), the manager runs `verify.test_command` on a worktree
+  at `BaseSHA` **before** the reviewer starts. If it exits 0, the bug is not
+  reproduced; the review ends `incomplete` with one REQUIRED finding
+  `not reproducible` and no reviewer is spawned. If the command is missing,
+  skip with a logged warning, not a failure.
+- `PreToolUse` denial is appended to the ledger as `verify.recorded` with
+  `kind=gate` (nl-11 T1), so a blocked PR is auditable.
+
+- [ ] **Step 1: Write the failing tests**
+  - `TestGateDeniesWithoutPass`: no review → exit 2, message names `aiman verify --wait`.
+  - `TestGateAllowsPassedReview`: `Passed()` → exit 0.
+  - `TestGateDisabledIsZero`: `before_pr: false` → exit 0 without a review.
+  - `TestPreToolUseInstalledForClaudeAndCodex`: hook file contains the marker and the `gh pr create` matcher; a second install does not duplicate.
+  - `TestUnprotectedWhenNoHook`: an agent without PreToolUse and `before_pr: true` → `SessionInfo.Unprotected`, meta line `verify advisory`.
+  - `TestReproduceFirstIncompleteWhenBasePasses`: base run exits 0 → incomplete, one REQUIRED `not reproducible`, no reviewer session.
+- [ ] **Step 2: Run** `go test ./internal/agenthook/ ./cmd/aiman/ ./internal/ui/ ./internal/verify/ -run 'Gate|PreToolUse|Unprotected|Reproduce'` → FAIL.
+- [ ] **Step 3: Implement.** The hook script is generated like the existing hooks (`internal/agenthook/script.go`) and calls `aiman verify --gate`; it must finish under the 30 s socket budget. The gate uses the same tree-hash helper as the manager; do not reimplement the commit logic.
+- [ ] **Step 4: Run** the tests and `make ci` → PASS.
+- [ ] **Step 5: Commit** `feat(agenthook): gate PR creation on a passing review`

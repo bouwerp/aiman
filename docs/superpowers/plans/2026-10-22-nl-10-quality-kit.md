@@ -462,3 +462,44 @@ func TestHintLineOffersVerify(t *testing.T) // selected session AheadOfBase 2 �
 
 - Should `Done-when met` also be added for sessions without conditions, with a built-in default (`tests pass`, `changes committed`)? This plan says no (deviation 4).
 - Should deleting a checklist on the laptop delete the pushed copy? This plan says no (deviation 14).
+
+---
+
+## Research amendments — 2026-10-26
+
+Source: `docs/superpowers/research/2026-10-26-harness-research.md` §What the
+research adds (7) and the feed's "done is structural" post (2026-07-16). This
+task turns `Done-when met` from a self-reported item into a gate.
+
+### Task 12: Evidence-backed `Done-when`
+
+**Files:**
+- Modify: `internal/todo/store.go` (reject an agent tick on `Ref=done`), `internal/todo/store_test.go`
+- Modify: `internal/usecase/done_items.go`, `internal/server/handlers_todo.go`
+- Modify: `internal/verify/manager.go` (call `DoneItems.MarkMet` on `Passed()`)
+- Modify: `internal/ui/a1_detail.go` (render the item state), `internal/ui/a1_detail_test.go`
+- Test: `internal/usecase/done_items_test.go`, `internal/server/handlers_todo_test.go`, `internal/verify/manager_complete_test.go`
+
+**Behaviour:**
+- `todo.update {state: done}` on an item whose `Ref == "done"`:
+  - `author=agent` → rejected with `done item is evidence-backed; run aiman verify`
+  - `author=aiman` → allowed only through `DoneItems.MarkMet`
+  - `author=user` → allowed (the user can always override)
+- `verify.Manager` calls `DoneItems.MarkMet(workerID)` when `Review.Passed()`
+  (nl-7 T13). MarkMet mutates the list as `aiman` once, appends `todo.changed`,
+  and steers the coordinator once. A later failing review does not un-tick it
+  (the user can).
+- The TUI renders `✓ Done-when met` when done; otherwise `○` with the existing
+  `V verify · ` hint line. No new key, no toast.
+- If the list has no `Done-when` item (nl-10 deviation 4), nothing changes.
+
+- [ ] **Step 1: Write the failing tests**
+  - `TestAgentCannotTickDoneWhen`: agent update → error, item unchanged.
+  - `TestUserCanAlwaysTick`: user update → done.
+  - `TestVerifierPassTicksDoneWhen`: `Review.Passed()` → item done once, author `aiman`, one steer note.
+  - `TestVerifierFailLeavesItemOpen`: no tick.
+  - `TestDoneWhenRenders`: done → `✓ Done-when met`; open → `○`.
+- [ ] **Step 2: Run** `go test ./internal/todo/ ./internal/usecase/ ./internal/server/ ./internal/ui/ -run 'DoneWhen|Done'` → FAIL.
+- [ ] **Step 3: Implement.** The check lives in `todo.Files.update`, not only in the handler, so every caller (laptop, serve, CLI) obeys it. The `author` is derived, never a free parameter (nl-1 T13).
+- [ ] **Step 4: Run** the tests and `make ci` → PASS.
+- [ ] **Step 5: Commit** `feat(todo): only evidence ticks Done-when`

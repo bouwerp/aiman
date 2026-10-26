@@ -365,3 +365,92 @@ func TestRestartPromptAddsHandover(t *testing.T) {
 5. **The restart prompt points at the file** instead of inlining 40 screen lines plus a diff stat into a prompt that is typed with send-keys.
 6. **Revive pointer goes through the Steerer** (`handover.point`), so it obeys the delivery gate instead of typing into an agent that is booting.
 7. `restart_handoff.go:26` is verified (`CaptureRestartSessionSummary`). The flow is kept as the fallback, not deleted.
+
+---
+
+## Research amendments — 2026-10-26
+
+Source: `docs/superpowers/research/2026-10-26-harness-research.md` §What the
+research adds (4) and the course's ADR-0006. These tasks are additive follow-ups
+to the shipped handover. They make the file the compaction protocol, not only a
+restart artifact.
+
+### Task 7: Fixed handover skeleton and verbatim evidence
+
+**Files:**
+- Modify: `internal/handover/render.go`, `internal/handover/render_test.go`
+- Modify: `internal/server/handover.go` (Input construction), `internal/server/handover_test.go`
+
+**Interfaces:**
+```go
+type Evidence struct {
+    TestCommand string
+    TestOutput  string
+    ErrorTrace  string
+    Commands    []string
+    Files       []string
+}
+type Input struct {
+    // existing fields …
+    Evidence     Evidence
+    Verification string // "passed", "incomplete", "not recorded"
+}
+func MissingSections(md string) []string // required headings absent, in order
+```
+Required headings, in this order:
+`## Goal`, `## Constraints & Preferences`, `## Progress`, `## Key Decisions`,
+`## Next Steps`, `## Critical Context`, `## Evidence`, `## Verification`.
+
+The content is derived, not summarised — serve has no model:
+- **Goal**: the active to-do text, else `HookTitle`, else `"Continue the session."`
+- **Constraints & Preferences**: `"See .aiman_task.md and the to-do list."` plus the hook message when present.
+- **Progress**: `Done: n · In progress: n · Blocked: n`, then the to-do lines (the existing `formatTodos` output).
+- **Key Decisions**: `"None recorded in this handover."` — do not invent decisions.
+- **Next Steps**: pending and active items, in list order.
+- **Critical Context**: undelivered steering notes, oldest first.
+- **Evidence**: `git diff --stat` in a fence, then the last `PaneLines` cleaned lines. Keep error, test-failure and stack-trace lines verbatim; do not strip or summarise them. A line is "evidence" when it matches `(?i)(error|fail|panic|traceback|assert|expected|actual|exit status|FAIL)` or it is one of the last 10 lines.
+- **Verification**: the latest review status for the worker, else `"not recorded"`. Read it lazily; if nl-7 is not in the tree, the string is `"not recorded"`.
+
+Remove the old `## To-do list`, `## Changed files`, `## Last agent status` and
+`## Last screen` headings; their content moves under Progress/Critical
+Context/Evidence. Update `TestNoteBody` and the server tests that assert the old
+headings. `Abstract` keeps its current fallback chain.
+
+- [ ] **Step 1: Write the failing tests**
+  - `TestHandoverHasRequiredSections`: every heading appears exactly once, in order.
+  - `TestHandoverEvidenceKeepsErrorLines`: a pane tail with `go test` failure lines keeps them verbatim; a progress-bar line is dropped by `pane.Clean` before it reaches the renderer.
+  - `TestHandoverGoalFallsBack`: no active item and no hook title → `Continue the session.`
+  - `TestMissingSections`: a body missing `## Evidence` and `## Verification` returns exactly those two.
+  - `TestHandoverVerificationNotRecorded`: no review → `not recorded`.
+- [ ] **Step 2: Run** `go test ./internal/handover/ ./internal/server/ -run 'Handover|MissingSections'` → FAIL.
+- [ ] **Step 3: Implement.** Keep `Render` a pure function of `Input` (no git, clock or network). `writeHandover` fills `Evidence.TestCommand` from the repo's `verify_command` when configured (nl-7 T13), `Files` from `git diff --name-only`, and `Commands` from the to-do `Ref`s when they name checks. Everything else is derived.
+- [ ] **Step 4: Run** the tests and `make ci` → PASS.
+- [ ] **Step 5: Commit** `feat(handover): fixed skeleton and verbatim evidence`
+
+### Task 8: Reason-aware pointer after compaction
+
+**Files:**
+- Modify: `internal/server/handover.go`, `internal/server/handover_test.go`
+- Modify: `cmd/aiman/rpc_cmd.go` (allowlist unchanged; `handover.point` params gain `reason`)
+
+**Interfaces:**
+```go
+const (
+    HandoverRestartNote    = "[aiman] This session's terminal was restarted. Your last handover is in .aiman_handover.md; read it if you lost track."
+    HandoverCompactionNote = "[aiman] Your context was compacted. Your handover is in .aiman_handover.md; read it if you lost track."
+)
+func (s *Server) queueHandoverPointer(ctx context.Context, sess domain.Session, reason string) bool
+```
+`handover.point` accepts `{session, reason?}`; `reason` defaults to `restart` and
+accepts the same five values as `handover.write`. `notePreCompactHandover`
+writes the file and then queues `HandoverCompactionNote` best-effort inside the
+same 20 s budget. Do not queue on `archive` or `forget` (the session is ending).
+
+- [ ] **Step 1: Write the failing tests**
+  - `TestPreCompactQueuesCompactionPointer`: a `PreCompact` report writes the file and enqueues exactly one note whose text is `HandoverCompactionNote`.
+  - `TestPointUsesReasonText`: `handover.point` with `reason=pre_compact` uses the compaction text; `restart` (or empty) uses the restart text.
+  - `TestPointDoesNotQueueForArchive`: reason `archive` queues nothing.
+- [ ] **Step 2: Run** `go test ./internal/server/ -run 'PreCompact|PointUsesReason'` → FAIL.
+- [ ] **Step 3: Implement.** `queueHandoverPointer` checks `ctx.Err`, `s.steer` and `handoverFileExists` before enqueuing, as today. The pointer is a normal steer note, so the delivery gate holds it until the agent is idle after compaction.
+- [ ] **Step 4: Run** the tests and `make ci` → PASS.
+- [ ] **Step 5: Commit** `fix(handover): point at the file after compaction`

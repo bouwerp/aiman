@@ -611,3 +611,108 @@ Layout: title `Usage · last 30 days by ticket` / `Usage · last 14 days by day`
 3. **Fast-mode cache prices** for `claude-opus-5-5@fast` assume 2× like input/output; only input/output are published in the reference used.
 4. **Day boundaries** use the laptop's UTC offset at query time, so a DST change shifts old days by an hour.
 5. **Dependencies.** Task 8 needs nl-1 Task 6 (`s.hub *eventHub`); Task 10 needs nl-2's `m.metaExtras` (including `Tokens`).
+
+---
+
+## Research amendments — 2026-10-26
+
+Source: `docs/superpowers/research/2026-10-26-harness-research.md` §What the
+research adds (2). T1–T4 have shipped; these tasks extend T5's schema and
+T7/T8/T10 before T5 writes the tables. They are additive.
+
+### Task 12: Context occupancy and window
+
+**Files:**
+- Modify: `internal/domain/usage.go`, `internal/usage/claude.go`, `internal/usage/codex.go`
+- Create: `internal/usage/window.go`, `internal/usage/window_test.go`
+- Modify: `internal/infra/sqlite/repository.go` (`usage_sessions` columns), `internal/usage/tracker.go`
+- Modify: `internal/server/handlers_usage.go`, `internal/ui/usage_fetch.go`, `internal/ui/a1_detail.go`
+
+**Interfaces:**
+```go
+// usage_sessions gains:
+//   last_input_tokens INTEGER NOT NULL DEFAULT 0
+//   context_window    INTEGER NOT NULL DEFAULT 0
+//   context_source    TEXT NOT NULL DEFAULT ''
+type Report struct {
+    // existing fields …
+    ContextTokens int64
+    ContextWindow int64
+    ContextPct    float64
+    ContextSource string // "explicit" | "table" | "fallback"
+}
+func ResolveWindow(model string, explicit int) (tokens int, source string)
+```
+Rules:
+- Claude: the last `type:"assistant"` record's `message.usage.input_tokens + cache_read_input_tokens`. Do not add cache creation; it is a write this turn and the next turn reads it. A `<synthetic>` record never counts.
+- Codex: the last `event_msg`/`token_count` record's `last_token_usage.input_tokens`. Codex's `input_tokens` already includes cached input; do not add `cached_input_tokens` again.
+- `ResolveWindow`: explicit config `usage.context_window_tokens` wins; else a confirmed table row; else `200_000` with `source="fallback"`. Only confirmed rows belong in the table. Do not guess a window for an unknown model.
+- The tracker writes the latest values on every scan; `usage.get` returns them. `renderMetaLine` appends `ctx 62%` after the cache percentage, dim; `>80%` amber, `>95%` red. No new key, no header change.
+
+- [ ] **Step 1: Write the failing tests**
+  - `TestResolveWindowOrder`: explicit wins and the table is not consulted; a confirmed row wins over fallback; unknown → 200k + `fallback`.
+  - `TestContextTokensClaudeUsesLastAssistant`: two assistant turns, the later one wins; a `<synthetic>` later line does not.
+  - `TestContextTokensCodexDoesNotDoubleCount`: `input_tokens=1000, cached=400` → 1000, not 1400.
+  - `TestMetaLineContextGauge`: 62% renders `ctx 62%`; 85% uses the warn style; no context data renders nothing.
+- [ ] **Step 2: Run** `go test ./internal/usage/ ./internal/ui/ -run 'Window|ContextTokens|ContextGauge'` → FAIL.
+- [ ] **Step 3: Implement.** Persist the values in `usage_sessions` in the same upsert as the totals. The context value is the last turn, not a sum; do not add it to `usage_buckets`.
+- [ ] **Step 4: Run** the tests and `make ci` → PASS.
+- [ ] **Step 5: Commit** `feat(usage): context occupancy and window gauge`
+
+### Task 13: Session health metrics
+
+**Files:**
+- Create: `internal/usage/health.go`, `internal/usage/health_test.go`
+- Modify: `internal/usage/claude.go`, `internal/usage/codex.go` (collect tool calls), `internal/usage/tracker.go`, `internal/server/handlers_usage.go`, `internal/ui/usage_view.go`
+
+**Interfaces:**
+```go
+type Health struct {
+    Known           bool
+    ToolCalls       int
+    ReadCalls       int
+    EditCalls       int
+    EditsWithoutRead int
+    ReadEditRatio   float64
+    FirstTestAt     time.Time
+    Retries         int
+}
+```
+- Claude: `tool_use` blocks in assistant records; name and `input.file_path`/`input.command`. Codex: `function_call` / `local_shell_call` records. An unfamiliar shape sets `Known=false` and leaves every count zero; never guess.
+- `EditsWithoutRead`: an `Edit`/`Write` to a path that was not previously `Read` in the same session. Normalise against `Session.WorktreePath`; a path outside it counts as unknown, not an edit.
+- `FirstTestAt`: the first shell command matching the configurable `usage.test_commands` list (default `go test`, `pytest`, `npm test`, `make test`, `just test`).
+- `Retries`: tool results containing `ModelRetry` / `retry` markers, when the format exposes them.
+- Surface: `usage.get` includes `Health`; the `$` view adds a `READ:EDIT` column only for `Known` rows, and a `first test` line under the per-host summary. No dashboard noise.
+
+- [ ] **Step 1: Write the failing tests** with fixtures: a Claude run that reads then edits → ratio 1.0/0 edits-without-read; an edit with no prior read → 1; a Codex fixture; an unknown record shape → `Known=false`.
+- [ ] **Step 2: Run** `go test ./internal/usage/ -run Health` → FAIL.
+- [ ] **Step 3: Implement.** Parse tool calls in the same pass as usage; do not re-read the file. Keep the parser tolerant: a malformed tool block is skipped, never fatal.
+- [ ] **Step 4: Run** the tests and `make ci` → PASS.
+- [ ] **Step 5: Commit** `feat(usage): read:edit and test-loop health`
+
+### Task 14: Token budgets
+
+**Files:**
+- Modify: `internal/domain/session.go` (`BudgetTokens int64`), `internal/infra/sqlite/repository.go` (`sessions.budget_tokens`), `cmd/aiman/session_cmd.go` (`--budget-tokens`), `internal/usage/tracker.go`, `internal/server/handlers_usage.go`, `internal/ui/usage_fetch.go`
+
+**Interfaces:**
+```go
+// config: usage.budgets.default_tokens (0 = none)
+// session create --budget-tokens N (0 = none)
+// usage.get → {budget: {tokens, used, pct, state}}; state: "" | "warn" | "over"
+// hub event: usage.budget {id, state}
+```
+When the tracker crosses 70% and 100% of the session budget, append
+`usage.budget` to the ledger (nl-11 T1) and publish the hub event **once per
+threshold per session**. The TUI shows a dim `70%` marker and a toast at 100%.
+Do not auto-stop the agent: aiman cannot enforce "concise" across vendors, and a
+hard stop would lose work.
+
+- [ ] **Step 1: Write the failing tests**
+  - `TestBudgetThresholdsEmitOnce`: 69% → no event; 71% → warn once; 75% → no second warning; 101% → over once.
+  - `TestBudgetIsPerSession`: two sessions, separate thresholds.
+  - `TestBudgetZeroIsNone`.
+- [ ] **Step 2: Run** `go test ./internal/usage/ ./internal/server/ -run Budget` → FAIL.
+- [ ] **Step 3: Implement.** Store the last emitted state in `usage_sessions` so a serve restart does not repeat a threshold. The budget is a session column, COALESCE-protected like the other identity fields.
+- [ ] **Step 4: Run** the tests and `make ci` → PASS.
+- [ ] **Step 5: Commit** `feat(usage): per-session token budgets`

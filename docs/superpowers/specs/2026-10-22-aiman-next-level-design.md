@@ -24,11 +24,13 @@ Success: on an ordinary day the user attaches to a session only when they choose
 8. Sessions start cheaper and faster (worktree bootstrap, RTK, graphify, cache hygiene).
 9. Every session starts as the coordinator. It implements a simple, short-lived task itself, and splits anything larger into child Aiman sessions chosen from the preferred-agent list.
 10. Every session carries domain checklists, a definition of done, the tools it needs, a deliberate model/effort choice and an independent reviewer.
+11. A behavioural eval suite proves the harness still works: a replayable session ledger, deterministic fake-agent cases, and an opt-in real-agent track. (Added 2026-10-26 from the harness research.)
 
 ## Non-goals
 
 - A board/kanban view (layout C rejected) or an inbox-sorted list (layout B rejected).
 - ACP/A2A, OpenTelemetry receivers, Langfuse export, LLM gateways, model routing, sandboxing, local mode.
+- Public coding benchmarks (SWE-bench, Terminal-Bench) and LLM judges in the deterministic eval path. The eval suite grades aiman's own behaviour, not a model leaderboard.
 - Nested to-dos, estimates, due dates.
 
 ## Anti-goals
@@ -316,6 +318,21 @@ Research (`docs/superpowers/research/2026-10-22-agent-personas.md`) found that "
 
 ---
 
+## W10. Harness evals and session ledger (added 2026-10-26)
+
+Research (`docs/superpowers/research/2026-10-26-harness-research.md`) found the one harness primitive the rest of this design lacks: an evaluation interface. The next level changes the steering gate, to-do merge, handover, usage, verifier and coordinator; without a regression suite, every one of them is an unmeasured change.
+
+- **Session ledger.** Serve appends every lifecycle event to an append-only `session_events` table (`session_id, seq, at, actor, kind, payload, hash`). It is the durable history the in-memory Hub does not keep; it is never read on the request path.
+- **Replay bundle.** `aiman session log` and `aiman session replay` expose the ledger and the artifacts a case needs (todo, handover, review). This is the substrate for mining and forensics.
+- **Deterministic eval suite.** A top-level `evals/` package with a fake agent that speaks the hook protocol and an in-process serve on a temp socket. Cases cover create, prompt-once, steer-held/delivered, to-do mirror, handover, restart, terminate, child spawn, verification and usage. Metrics are code, not judges.
+- **Oracle sanity.** A good fake agent passes every case; a deliberately broken one fails the case it should. Floors are never lowered, and a capped run is never judged.
+- **Two tracks.** `make eval` is free, offline and in CI. The real-agent track is opt-in (`AIMAN_EVAL_REAL=1`), cost-capped, and nightly.
+- **No new TUI key.** The suite is a CLI/`make` surface; the PTY conformance harness (README phase 2) still owns the TUI.
+
+Plan: `2026-10-22-nl-11-evals.md`.
+
+---
+
 ## Order
 
 Revised from the plans' real dependencies (details in `2026-10-22-nl-0-roadmap.md`):
@@ -324,10 +341,12 @@ Revised from the plans' real dependencies (details in `2026-10-22-nl-0-roadmap.m
 2. W1 dashboard A1 (nl-2): needs nl-1
 3. W6a handover (nl-3a): needs nl-1 (`SteerStatus.Pending`, `fsutil`, `aiman rpc`)
 4. W3 usage (nl-4): needs nl-1's Hub and nl-2's meta-line hook
+4a. W10a evals (nl-11 T1–T5): needs nl-1, nl-2, nl-3a and nl-4 T1; run beside W2/W4/W6b, not last
 5. W2 notifications (nl-5): needs nl-1's Hub and the W0 `session.events` fix; after nl-4 (config signature)
 6. W4 CI reaction (nl-6): needs nl-1, nl-2, nl-5
 7. W6b memory (nl-3b): needs nl-3a; must precede W5 (review notes are typed)
 8. W5 verifier (nl-7): needs nl-1, nl-2, nl-3b, nl-5
+8a. W10b evals (nl-11 T6–T8): needs nl-7 and nl-4 T8/T12
 9. W7 starts (nl-8): needs nl-1, nl-4 (`$` view), nl-5, nl-7 (`PreparedWorktree`)
 10. W8 coordinator (nl-9): needs nl-1, nl-2, nl-5, nl-7
 11. W9 session quality kit (nl-10): needs nl-1 (to-dos), nl-7 (verifier rubric), nl-8 (repo config block), nl-9 (child sessions and `agents.preferred`)
@@ -350,3 +369,5 @@ Each ships on its own and is tagged as a release.
 - RTK installs its Apache-2.0 edition (`RTK_EDITION=oss`) rather than the BUSL-1.1 default.
 - `steer.send` mode `answer` for the trigger's unblocker, so it keeps answering dialogs while notes stay gated.
 - A `verify` event for every finished review, so the TUI clears `reviewing…` without a notification on a clean pass.
+- Evals are deterministic first: a fake agent, code metrics, and oracle sanity. A judge is not in the deterministic path, and a capped run is never judged. The real-agent track is opt-in and cost-capped. No Opik/Kitaru dependency.
+- `session_events` is one append-only SQLite table, not an event-sourcing rewrite. It is the durable history the Hub does not keep and is never read on the request path.

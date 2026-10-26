@@ -14,7 +14,7 @@
 - nl-1: `domain.Session.BaseBranch`, `domain.TodoItem.Ref`, `todo.OpRef` (a Ref-only change never steers), `domain.AuthorAiman`, `(*Server).TodoAccess()`, `session.create` (`internal/server/handlers_session.go` `handleCreate`).
 - nl-2: `todoView`, `renderTodoLines`, `rowGlyph`.
 - nl-5: `(*Server).NotifyRecorder().Emit`, `domain.NotifyError`, `notify.Label`.
-- nl-7: `verify.Manager.LatestFor`, `verify.Review.Passed`. `verify.before_pr` is nl-10's flag. This plan takes a `BeforePR func(id string) bool` that returns false until nl-10 wires it.
+- nl-7: `verify.Manager.LatestFor`, `verify.Review.Passed()`. `verify.before_pr` is nl-10's flag. This plan takes a `BeforePR func(id string) bool` that returns false until nl-10 wires it.
 
 Do not add `SessionRolePlanner` or `SessionRoleWorker`. A child is an ordinary session with `ParentID` set. `roles.verifier` stays nl-7 and nl-10. `roles.planner` and `roles.worker` are withdrawn.
 
@@ -239,3 +239,61 @@ func (t *Tracker) TrackOnce(ctx context.Context)
 - Preferred list, order, settings, empty agent, explicit wizard agent, no invented agent: Tasks 1 and 2.
 - `roles.verifier` untouched. `roles.planner` / `roles.worker` not introduced.
 - nl-10, when it reaches `ResolveLaunchDefaults`, must not add a planner or worker role agent. Child agent selection stays `PickAgent`.
+
+---
+
+## Research amendments — 2026-10-26
+
+Source: `docs/superpowers/research/2026-10-26-harness-research.md` §What the
+research adds (6) and the course's ADR-0017 (input contract, output validation,
+labelled aggregate). This task hardens the chosen coordinator path; it does not
+reintroduce a fan-out key or a spec wizard.
+
+### Task 7: Child brief contract and report evidence
+
+**Files:**
+- Modify: `internal/domain/session.go` (`SessionConfig.Brief`), `internal/domain/session_files.go` (`AimanReportFileName`)
+- Create: `internal/coordinator/brief.go`, `internal/coordinator/report.go`
+- Modify: `internal/usecase/flow_manager.go` (write the brief into `.aiman_task.md`), `internal/server/handlers_session.go` (`session.create` accepts `brief` / `brief_file`), `cmd/aiman/session_cmd.go` (`--brief-file`)
+- Modify: `internal/coordinator/tracker.go` (validate the report before marking the parent item done), `internal/aimanskill/SKILL.md` (coordinator section)
+- Test: `internal/coordinator/brief_test.go`, `internal/coordinator/report_test.go`, `internal/coordinator/tracker_test.go`
+
+**Interfaces:**
+```go
+type Brief struct { Question, Scope, Report string }
+func ParseBrief(md string) (Brief, error)      // three headings, non-empty, ≥ 8 words total
+func ValidateReport(md string) error           // ≥ 1 file path or test command cited
+const AimanReportFileName = ".aiman_report.md"
+```
+- `session.create --for <todo>` gains `--brief-file <path>` (or `brief` in the
+  socket params). The coordinator writes the brief with exactly three headings:
+  `## Question`, `## Scope`, `## Report must contain`. A missing heading or a
+  body under 8 words is rejected with one line naming the problem. This is the
+  course's input contract; it is a validation, not a quality judge.
+- `CreateSession` prepends the brief to the child's `.aiman_task.md` (before the
+  JIRA description). The child's skill section says: before opening a PR, write
+  `.aiman_report.md` with `## What changed`, `## Files`, `## Tests run`, and name
+  the commands and their results.
+- The tracker, when the child's PR lands (Task 5), reads `.aiman_report.md` from
+  the child's worktree. `ValidateReport` requires at least one repo-relative
+  path or a test command. A missing or evidence-free report does **not** mark
+  the parent item done; it leaves the item open and steers the coordinator with
+  `[aiman] child <name> returned no evidence; ask it for .aiman_report.md
+  before marking t<N> done.` The child's PR may still merge; the parent's item is
+  the contract that fails.
+- Budget: pass `usage.budgets.child_tokens` (nl-4 T14) as the child's
+  `--budget-tokens` when set. No new config key.
+- Do not add a fan-out key, a spec wizard, or a Go threshold for "simple vs
+  large"; the skill's coordinator section remains the only rule.
+
+- [ ] **Step 1: Write the failing tests**
+  - `TestBriefRequiresThreeHeadings`: missing `## Scope` → error naming it.
+  - `TestBriefWordFloor`: three headings with five words total → error; eight → ok.
+  - `TestChildTaskStartsWithBrief`: `.aiman_task.md` begins with the three headings before the JIRA text.
+  - `TestReportRequiresEvidence`: a report with only prose → error; one naming `internal/x.go` and `go test ./...` → ok.
+  - `TestChildWithoutReportKeepsParentItemOpen`: tracker with a merged PR and no report → item stays pending, one steer note, no done mutation.
+  - `TestChildWithReportMarksDone`: report present → item done (author `aiman`) once.
+- [ ] **Step 2: Run** `go test ./internal/coordinator/ ./internal/usecase/ -run 'Brief|Report|Child'` → FAIL.
+- [ ] **Step 3: Implement.** `ParseBrief` and `ValidateReport` are pure string functions. The tracker reads the report through the child session's `WorkingDirectory` on the remote (`RemoteExecutor`), not a local file. A read error is "no evidence", not a crash.
+- [ ] **Step 4: Run** the tests and `make ci` → PASS.
+- [ ] **Step 5: Commit** `feat(coordinator): require a brief and evidence from children`
