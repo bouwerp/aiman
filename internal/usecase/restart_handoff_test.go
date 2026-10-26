@@ -18,6 +18,8 @@ type restartRemote struct {
 	fileExists           bool
 	sendPromptWritesFile bool
 	failOn               string // command substring that triggers a hard error
+	ptyRunning           bool
+	rpcOut               map[string]string // rpc method → stdout for that call
 }
 
 func (r *restartRemote) Connect(context.Context) error { return nil }
@@ -41,6 +43,15 @@ func (r *restartRemote) Execute(_ context.Context, cmd string) (string, error) {
 	case strings.HasPrefix(cmd, "if [ -f "):
 		if r.fileExists {
 			return "1", nil
+		}
+		return "", nil
+	case strings.Contains(cmd, "aiman rpc handover.write"):
+		return r.rpcOut["handover.write"], nil
+	case strings.Contains(cmd, "aiman rpc handover.point"):
+		return r.rpcOut["handover.point"], nil
+	case strings.Contains(cmd, "aiman pty get"):
+		if r.ptyRunning {
+			return `{"session":{"status":"running"}}`, nil
 		}
 		return "", nil
 	default:

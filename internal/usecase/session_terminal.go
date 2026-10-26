@@ -758,6 +758,7 @@ func ReviveIfNeeded(ctx context.Context, remote TerminalExecutor, s *domain.Sess
 	if err := RevivePTYSession(ctx, remote, s); err != nil {
 		return false, err
 	}
+	pointAtHandover(ctx, remote, s.ID)
 	return true, nil
 }
 
