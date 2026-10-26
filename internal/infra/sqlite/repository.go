@@ -196,6 +196,10 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create steer_notes table: %w", err)
 	}
 
+	if err := ensureUsageTables(db); err != nil {
+		return nil, fmt.Errorf("failed to create usage tables: %w", err)
+	}
+
 	return &Repository{
 		db:            db,
 		clearedOnOpen: clearedAWSProfiles,
