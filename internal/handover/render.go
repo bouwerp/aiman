@@ -40,13 +40,13 @@ func NoteBody(in Input) string {
 	fmt.Fprintf(&b, "Reason: %s · Agent: %s · Branch: %s (base %s)\n\n", in.Reason, in.Agent, in.Branch, in.BaseBranch)
 	writeSection(&b, "## To-do list", formatTodos(in.Todos))
 	if len(in.Undelivered) > 0 {
-		writeSection(&b, "## Undelivered notes", strings.Join(in.Undelivered, "\n\n"))
+		writeSection(&b, "## Undelivered notes", fenceNotes(in.Undelivered))
 	}
-	writeSection(&b, fmt.Sprintf("## Changed files (git diff --stat %s)", in.BaseBranch), diffStat(in.DiffStat))
+	writeSection(&b, fmt.Sprintf("## Changed files (git diff --stat %s)", in.BaseBranch), codeFence(diffStat(in.DiffStat)))
 	if status := agentStatus(in); status != "" {
 		writeSection(&b, "## Last agent status", status)
 	}
-	writeSection(&b, fmt.Sprintf("## Last screen (%d lines)", PaneLines), paneFence(in.PaneTail))
+	writeSection(&b, fmt.Sprintf("## Last screen (%d lines)", PaneLines), codeFence(in.PaneTail))
 	return b.String()
 }
 
@@ -78,16 +78,34 @@ func formatTodos(list *domain.TodoList) string {
 		return "No to-do list."
 	}
 	var lines []string
-	if cur := todo.FormatList(*list); cur != "" {
-		lines = append(lines, cur)
+	for _, it := range list.Items {
+		if it.State == domain.TodoDropped {
+			continue
+		}
+		lines = append(lines, fenceTodoLine(it.Text, todo.FormatLine(it)))
 	}
 	for _, it := range list.Items {
 		if it.State != domain.TodoDropped {
 			continue
 		}
-		lines = append(lines, todo.FormatLine(it)+" (dropped)")
+		lines = append(lines, fenceTodoLine(it.Text, todo.FormatLine(it)+" (dropped)"))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func fenceTodoLine(text, line string) string {
+	if !strings.Contains(text, "`") {
+		return line
+	}
+	return codeFence(line)
+}
+
+func fenceNotes(notes []string) string {
+	fenced := make([]string, len(notes))
+	for i, note := range notes {
+		fenced[i] = codeFence(note)
+	}
+	return strings.Join(fenced, "\n\n")
 }
 
 func diffStat(stat string) string {
@@ -118,9 +136,9 @@ func writeSection(b *strings.Builder, heading, body string) {
 	b.WriteByte('\n')
 }
 
-// paneFence wraps content in a backtick fence longer than any run inside it,
-// so a tail that itself contains fences stays one code block.
-func paneFence(content string) string {
+// codeFence wraps content in a backtick fence longer than any run inside it,
+// so a section that itself contains fences stays one code block.
+func codeFence(content string) string {
 	n := 3
 	run := 0
 	for _, r := range content {

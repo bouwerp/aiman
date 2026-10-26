@@ -75,6 +75,43 @@ func TestRenderFenceLongerThanContent(t *testing.T) {
 	}
 }
 
+func TestRenderFencesDiffStatNotesAndBacktickTodos(t *testing.T) {
+	diff := "x\n```\ny"
+	note := "look at ``` this"
+	todoText := "ship ``` now"
+	line := "t1 " + domain.TodoActive.Glyph() + " " + todoText
+	out := Render(Input{
+		BaseBranch:  "main",
+		DiffStat:    diff,
+		Undelivered: []string{note},
+		Todos: &domain.TodoList{Rev: 1, Items: []domain.TodoItem{
+			{ID: "t1", Text: todoText, State: domain.TodoActive},
+			{ID: "t2", Text: "plain line", State: domain.TodoPending},
+		}},
+		PaneTail: "screen line",
+	})
+	for _, want := range []string{
+		"````\n" + diff + "\n````",
+		"````\n" + note + "\n````",
+		"````\n" + line + "\n````",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing fence:\n%s\n---\n%s", want, out)
+		}
+	}
+	screen := strings.Index(out, "## Last screen")
+	if screen < 0 || screen < strings.Index(out, diff) || screen < strings.Index(out, note) {
+		t.Fatalf("last screen heading not after the fenced diff and note:\n%s", out)
+	}
+	plain := "t2 " + domain.TodoPending.Glyph() + " plain line"
+	if !strings.Contains(out, plain) {
+		t.Fatalf("plain to-do line missing:\n%s", out)
+	}
+	if strings.Contains(out, "````\n"+plain+"\n````") {
+		t.Fatal("a to-do line with no backtick run was fenced")
+	}
+}
+
 func TestRenderIsDeterministic(t *testing.T) {
 	in := Input{Label: "WTB-12", Reason: "restart", Agent: "claude", Branch: "wtb-12", BaseBranch: "main",
 		HookTitle: "Fixing parser", HookMessage: "still running", PaneTail: "line1\nline2", DiffStat: "a.go | 1 +"}

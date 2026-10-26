@@ -595,6 +595,55 @@ func TestPreCompactReportReturnsWhileDiffIsBlocked(t *testing.T) {
 	}
 }
 
+// diffBlocksRemote's Execute waits until ctx is done. CaptureTmuxPane fails
+// once that context is already cancelled, which is what a real tmux capture
+// does when git has used up the deadline.
+type diffBlocksRemote struct{ *fakeRemote }
+
+func (diffBlocksRemote) Execute(ctx context.Context, _ string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (r diffBlocksRemote) CaptureTmuxPane(ctx context.Context, name string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return r.fakeRemote.CaptureTmuxPane(ctx, name)
+}
+
+func TestHandoverKeepsTmuxPaneWhenDiffBlocks(t *testing.T) {
+	dir := t.TempDir()
+	const pane = "still on the last screen"
+	srv := &Server{remote: diffBlocksRemote{fakeRemote: &fakeRemote{pane: pane}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	res, err := srv.writeHandover(ctx, domain.Session{
+		ID: "s1", Name: "s1", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+	}, "pre_compact")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !res.Written {
+		t.Fatal("blocked diff must still be a successful write")
+	}
+	body, err := os.ReadFile(res.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, pane) {
+		t.Fatalf("tmux pane missing after diff blocked until ctx was done:\n%s", text)
+	}
+	if !strings.Contains(text, "(unavailable)") {
+		t.Fatalf("cancelled diff must stay an empty stat:\n%s", text)
+	}
+	screen := strings.Index(text, "## Last screen")
+	if screen < 0 || strings.Index(text, pane) < screen {
+		t.Fatalf("pane is not in the last screen:\n%s", text)
+	}
+}
+
 func TestSessionEndReportDoesNotWriteHandover(t *testing.T) {
 	dir := t.TempDir()
 	sock := handoverCallSession(t, dir)

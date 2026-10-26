@@ -213,6 +213,10 @@ func handoverDir(sess domain.Session) (string, error) {
 
 func (s *Server) handoverInput(ctx context.Context, sess domain.Session, reason, dir string) handover.Input {
 	base := strings.TrimSpace(sess.BaseBranch)
+	// The pane read is local and short. Git shares this deadline, so a diff
+	// that runs the context out must not cancel the capture. An empty stat
+	// is still a successful write.
+	pane := s.handoverPane(ctx, sess)
 	stat := ""
 	if s.remote != nil {
 		stat = diffStat(ctx, s.remote, dir, base)
@@ -228,7 +232,7 @@ func (s *Server) handoverInput(ctx context.Context, sess domain.Session, reason,
 		DiffStat:    stat,
 		HookTitle:   sess.AgentTitle,
 		HookMessage: sess.HookStateMessage,
-		PaneTail:    s.handoverPane(ctx, sess),
+		PaneTail:    pane,
 	}
 }
 
