@@ -9,6 +9,27 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
+func TestFormatUsageCost(t *testing.T) {
+	cases := []struct {
+		name string
+		s    Summary
+		want string
+	}{
+		{name: "dollars", s: Summary{CostUSD: 1.234, Priced: true}, want: "~$1.23"},
+		{name: "under a cent", s: Summary{CostUSD: 0.004, Priced: true}, want: "~$<0.01"},
+		{name: "large", s: Summary{CostUSD: 123.4, Priced: true}, want: "~$123"},
+		{name: "partial", s: Summary{CostUSD: 1.234, Priced: true, Partial: true}, want: "~$1.23+"},
+		{name: "unpriced", s: Summary{CostUSD: 1.234, Priced: false}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FormatUsageCost(tc.s); got != tc.want {
+				t.Fatalf("FormatUsageCost() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSummarizeClaudeFixture(t *testing.T) {
 	buckets := []domain.UsageBucket{
 		{

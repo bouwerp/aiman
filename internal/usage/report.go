@@ -3,7 +3,9 @@ package usage
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -263,4 +265,47 @@ func sortRows(rows []Row, by string) {
 		}
 		return strings.Compare(a.Key, b.Key)
 	})
+}
+
+// FormatUsageCost renders a priced estimate. An unpriced summary is empty so
+// the caller can show tokens instead. A partial mix keeps the priced amount
+// and suffixes "+". A positive amount under one cent stays "~$<0.01". An
+// amount of $100 or more drops the cents.
+func FormatUsageCost(s Summary) string {
+	if !s.Priced {
+		return ""
+	}
+	text := formatUSD(s.CostUSD)
+	if s.Partial {
+		text += "+"
+	}
+	return text
+}
+
+func formatUSD(cost float64) string {
+	if cost > 0 && cost < 0.01 {
+		return "~$<0.01"
+	}
+	if cost >= 100 {
+		return fmt.Sprintf("~$%.0f", cost)
+	}
+	return fmt.Sprintf("~$%.2f", cost)
+}
+
+// FormatTokens renders a count with one decimal digit. The suffixes start at
+// 1000 ("k") and 1000000 ("M"). Smaller counts stay plain integers.
+func FormatTokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return formatScaled(n, 1_000_000, "M")
+	case n >= 1_000:
+		return formatScaled(n, 1_000, "k")
+	default:
+		return strconv.FormatInt(n, 10)
+	}
+}
+
+func formatScaled(n, unit int64, suffix string) string {
+	scaled := math.Round(float64(n)/float64(unit)*10) / 10
+	return strconv.FormatFloat(scaled, 'f', 1, 64) + suffix
 }
