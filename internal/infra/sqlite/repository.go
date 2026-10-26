@@ -200,6 +200,10 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create usage tables: %w", err)
 	}
 
+	if err := ensureSessionEvents(db); err != nil {
+		return nil, fmt.Errorf("failed to create session events table: %w", err)
+	}
+
 	return &Repository{
 		db:            db,
 		clearedOnOpen: clearedAWSProfiles,
