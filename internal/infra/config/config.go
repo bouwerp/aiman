@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,8 +31,10 @@ type Config struct {
 	Usage         UsageConfig              `yaml:"usage,omitempty"`
 	// Notifications configures push/webhook/Slack delivery.
 	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
-	Remotes       []Remote            `yaml:"remotes"`
-	ActiveRemote  string              `yaml:"active_remote"`
+	// Verify configures aiman verify reviewer sessions.
+	Verify       VerifyConfig `yaml:"verify,omitempty"`
+	Remotes      []Remote     `yaml:"remotes"`
+	ActiveRemote string       `yaml:"active_remote"`
 
 	// PermissionsTightened records that Load had to remove group/other access
 	// from the config file, meaning the API token in it had been readable by
@@ -52,6 +55,19 @@ type ServeConfig struct {
 	Usage         UsageConfig              `yaml:"usage,omitempty"`
 	// Notifications configures push/webhook/Slack delivery.
 	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
+	// Verify configures aiman verify reviewer sessions.
+	Verify VerifyConfig `yaml:"verify,omitempty"`
+}
+
+// VerifyConfig configures reviewer sessions started by aiman verify.
+type VerifyConfig struct {
+	// Agents are reviewer candidates in order of preference; the first one
+	// installed that differs from the worker's agent is used.
+	Agents []string `yaml:"agents,omitempty"`
+	// BeforePR asks agents to run a review before opening a pull request.
+	BeforePR bool `yaml:"before_pr,omitempty"`
+	// Timeout bounds one review; zero means the verifier's default.
+	Timeout time.Duration `yaml:"timeout,omitempty"`
 }
 
 // MarshalServeConfig serializes the settings a remote Agent API needs.
@@ -67,6 +83,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Gateway:       c.Gateway,
 		Usage:         c.Usage,
 		Notifications: c.NotificationsFor(host),
+		Verify:        c.Verify,
 	})
 }
 

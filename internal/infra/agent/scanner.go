@@ -236,6 +236,12 @@ func (s *Scanner) ScanAgents(ctx context.Context) ([]domain.Agent, error) {
 	return available, nil
 }
 
+// Installed reports whether command resolves on the scanned host, looking in
+// the login shells and the usual per-user bin directories.
+func (s *Scanner) Installed(ctx context.Context, command string) bool {
+	return s.commandExists(ctx, command)
+}
+
 func (s *Scanner) commandExists(ctx context.Context, cmd string) bool {
 	pathSuffix := "$HOME/.local/bin:$HOME/.kilo/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:$HOME/go/bin:/usr/local/go/bin:/usr/local/bin:/opt/homebrew/bin"
 	checks := []string{

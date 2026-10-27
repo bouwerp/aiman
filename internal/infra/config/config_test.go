@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -197,5 +198,20 @@ func TestGatewayFunnelPermittedDefaultsOn(t *testing.T) {
 	on := true
 	if !(&Config{Gateway: GatewayConfig{Funnel: &on}}).GatewayFunnelPermitted() {
 		t.Fatal("funnel: true must permit --funnel")
+	}
+}
+
+func TestMarshalServeConfigCarriesVerify(t *testing.T) {
+	cfg := &Config{Verify: VerifyConfig{Agents: []string{"codex", "claude"}, BeforePR: true, Timeout: 20 * time.Minute}}
+	body, err := cfg.MarshalServeConfig("h")
+	if err != nil {
+		t.Fatalf("MarshalServeConfig: %v", err)
+	}
+	var got ServeConfig
+	if err := yaml.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Verify, cfg.Verify) {
+		t.Fatalf("verify = %+v, want %+v\n%s", got.Verify, cfg.Verify, body)
 	}
 }
