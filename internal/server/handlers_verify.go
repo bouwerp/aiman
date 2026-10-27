@@ -74,8 +74,9 @@ func (s *Server) handleVerifyStatus(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeInvalidParams, "verify not available")
 	}
 	var p struct {
-		Review  string `json:"review"`
-		Session string `json:"session"`
+		Review   string `json:"review"`
+		Session  string `json:"session"`
+		TreeHash string `json:"tree_hash"`
 	}
 	if len(req.Params) > 0 {
 		if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -100,11 +101,27 @@ func (s *Server) handleVerifyStatus(ctx context.Context, req Request) Response {
 	if !ok {
 		return errResp(req.ID, CodeNotFound, "session not found")
 	}
+	if p.TreeHash != "" {
+		return s.verifyStatusForTree(req.ID, sess, p.TreeHash)
+	}
 	r, ok := s.verifier.LatestFor(sess.ID)
 	if !ok {
 		return errResp(req.ID, CodeNotFound, "no review for this session")
 	}
 	return reviewResponse(req.ID, r)
+}
+
+// verifyStatusForTree answers the before-PR gate: a disabled review when
+// before_pr is off, else the latest review of exactly this tree.
+func (s *Server) verifyStatusForTree(id string, sess domain.Session, tree string) Response {
+	if !s.verifier.BeforePR() {
+		return reviewResponse(id, verify.Review{WorkerID: sess.ID, Tree: tree, Status: verify.StatusDisabled})
+	}
+	r, ok := s.verifier.ForTree(sess.ID, tree)
+	if !ok {
+		return errResp(id, CodeNotFound, "no review of this tree")
+	}
+	return reviewResponse(id, r)
 }
 
 func reviewResponse(id string, r verify.Review) Response {

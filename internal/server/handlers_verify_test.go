@@ -58,6 +58,31 @@ func gitWorktree(t *testing.T) string {
 	return wt
 }
 
+func TestVerifyStatusByTreeHash(t *testing.T) {
+	srv, store := verifyServer(t, &blockingCreator{})
+	if err := store.Put(verify.Review{ID: "a", WorkerID: "w1", Tree: "t1", Status: verify.StatusComplete, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// before_pr is off in verifyServer: the gate is told verify is disabled.
+	var res reviewResult
+	rpcOK(t, srv, "w1", "verify.status", map[string]any{"tree_hash": "t1"}, &res)
+	if res.Review.Status != verify.StatusDisabled {
+		t.Fatalf("disabled: %+v", res.Review)
+	}
+
+	deps := srv.VerifyDeps(store, func(string) bool { return true })
+	m := verify.NewManager(verify.Config{BeforePR: true}, deps)
+	t.Cleanup(m.Close)
+	srv.SetVerifier(m)
+	rpcOK(t, srv, "w1", "verify.status", map[string]any{"tree_hash": "t1"}, &res)
+	if res.Review.ID != "a" {
+		t.Fatalf("by tree: %+v", res.Review)
+	}
+	if resp := rpc(t, srv, "w1", "verify.status", map[string]any{"tree_hash": "other"}); resp.Error == nil || resp.Error.Code != CodeNotFound {
+		t.Fatalf("other tree: %+v", resp)
+	}
+}
+
 // verifyServer is a serve instance with a worker w1 on a real git worktree, a
 // reviewer r1, and a verify manager over its own adapters.
 func verifyServer(t *testing.T, creator *blockingCreator) (*Server, *verify.Store) {

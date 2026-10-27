@@ -182,7 +182,7 @@ func runServe() error {
 
 	scanner := agent.NewScanner(localExec)
 	verifier := verify.NewManager(
-		verify.Config{Agents: cfg.Verify.Agents, BeforePR: cfg.Verify.BeforePR, Timeout: cfg.Verify.Timeout, TestCommand: cfg.Verify.TestCommand},
+		verify.Config{Agents: cfg.Verify.Agents, BeforePR: cfg.Verify.BeforePR, Timeout: cfg.Verify.Timeout, TestCommand: cfg.Verify.TestCommand, Reproduce: cfg.Verify.Reproduce},
 		srv.VerifyDeps(verify.NewStore(filepath.Join(dir, "reviews")), func(command string) bool {
 			return scanner.Installed(ctx, command)
 		}),

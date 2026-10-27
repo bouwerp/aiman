@@ -36,12 +36,18 @@ type Evidence struct {
 // the run pass. A non-zero exit is evidence; a command that cannot start is
 // an error.
 func runEvidence(ctx context.Context, r Review, command string, now func() time.Time) (Evidence, error) {
+	return runAt(ctx, r, r.Commit, "evidence", command, now)
+}
+
+// runAt runs command in a throwaway detached worktree at commit, beside the
+// worker's as <repo>@<label>-<id8>, and removes it afterwards.
+func runAt(ctx context.Context, r Review, commit, label, command string, now func() time.Time) (Evidence, error) {
 	if strings.TrimSpace(command) == "" {
 		return Evidence{}, errNoTestCommand
 	}
 	repo, _, _ := strings.Cut(filepath.Base(r.RepoWorktree), "@")
-	path := filepath.Join(filepath.Dir(r.RepoWorktree), repo+"@evidence-"+r.ID[:8])
-	if err := AddDetachedWorktree(ctx, r.RepoWorktree, path, r.Commit); err != nil {
+	path := filepath.Join(filepath.Dir(r.RepoWorktree), repo+"@"+label+"-"+r.ID[:8])
+	if err := AddDetachedWorktree(ctx, r.RepoWorktree, path, commit); err != nil {
 		return Evidence{}, err
 	}
 	defer func() { _ = RemoveWorktree(context.WithoutCancel(ctx), r.RepoWorktree, path) }()

@@ -38,7 +38,14 @@ type Config struct {
 	// TestCommand is run on the snapshot to back a pass; empty means no
 	// review can pass.
 	TestCommand string
+	// Reproduce runs TestCommand at the base before a reviewer starts and
+	// expects it to fail. Sessions carry no issue type, so unset means off.
+	Reproduce *bool
 }
+
+// errNotReproduced ends a review whose test command already passes at the
+// base: the change has nothing demonstrable to fix.
+var errNotReproduced = errors.New("test command passes at the base")
 
 // Sessions is serve's session registry as the manager needs it.
 type Sessions interface {
@@ -207,6 +214,25 @@ func (m *Manager) Status(id string) (Review, error) {
 	return m.d.Store.Get(id)
 }
 
+// BeforePR reports whether agents are asked to pass a review before a PR.
+func (m *Manager) BeforePR() bool { return m.cfg.BeforePR }
+
+// ForTree returns the worker's most recent review of tree.
+func (m *Manager) ForTree(workerID, tree string) (Review, bool) {
+	all, err := m.d.Store.List()
+	if err != nil {
+		return Review{}, false
+	}
+	var best Review
+	found := false
+	for _, r := range all {
+		if r.WorkerID == workerID && r.Tree == tree && (!found || r.StartedAt.After(best.StartedAt)) {
+			best, found = r, true
+		}
+	}
+	return best, found
+}
+
 // LatestFor returns the worker's most recently started review.
 func (m *Manager) LatestFor(workerID string) (Review, bool) {
 	all, err := m.d.Store.List()
@@ -230,6 +256,10 @@ func (m *Manager) LatestFor(workerID string) (Review, bool) {
 // Any failure ends the review as failed and removes what was built.
 func (m *Manager) launch(ctx context.Context, r Review, worker domain.Session) {
 	reviewerSess, err := m.prepare(ctx, &r, worker)
+	if errors.Is(err, errNotReproduced) {
+		m.notReproduced(ctx, r, worker)
+		return
+	}
 	if err != nil {
 		r.Status = StatusFailed
 		r.Error = err.Error()
@@ -253,6 +283,9 @@ func (m *Manager) prepare(ctx context.Context, r *Review, worker domain.Session)
 	}
 	r.BaseRef = base
 	r.BaseSHA = base
+	if err := m.reproduce(ctx, r); err != nil {
+		return domain.Session{}, err
+	}
 	diff, err := DiffAgainst(ctx, worker.WorktreePath, base, r.Commit, MaxPatchBytes)
 	if err != nil {
 		return domain.Session{}, err
@@ -324,6 +357,51 @@ func (m *Manager) Resume(context.Context) {
 			m.goBG(func(ctx context.Context) { m.cleanup(ctx, r) })
 		}
 	}
+}
+
+// reproduce runs the test command at the base when reproduce-first is on.
+// It returns errNotReproduced, with the run kept as the review's evidence,
+// when the base already passes. A missing command skips the check.
+func (m *Manager) reproduce(ctx context.Context, r *Review) error {
+	if m.cfg.Reproduce == nil || !*m.cfg.Reproduce {
+		return nil
+	}
+	if strings.TrimSpace(m.cfg.TestCommand) == "" {
+		log.Printf("verify: review %s: reproduce is on but verify.test_command is not set; skipping", r.ID)
+		return nil
+	}
+	ev, err := runAt(ctx, *r, r.BaseSHA, "repro", m.cfg.TestCommand, m.d.Now)
+	if err != nil {
+		return err
+	}
+	if ev.ExitCode == 0 {
+		r.Evidence = ev
+		return errNotReproduced
+	}
+	return nil
+}
+
+// notReproduced ends a review without a reviewer: one REQUIRED finding,
+// handed to the worker like any other.
+func (m *Manager) notReproduced(ctx context.Context, r Review, worker domain.Session) {
+	r.Findings = []Finding{{
+		ID:       "f1",
+		Severity: SeverityRequired,
+		Title:    "not reproducible",
+		Body:     fmt.Sprintf("`%s` already exits 0 at the base %s, so the change has no failing test to fix.", m.cfg.TestCommand, r.BaseSHA),
+	}}
+	r.Required, r.Suggestions = 1, 0
+	if err := m.addFindingTodos(ctx, r); err != nil {
+		log.Printf("verify: review %s: to-dos: %v", r.ID, err)
+	}
+	r.Status = StatusIncomplete
+	r.Error = errNotReproduced.Error()
+	r.FinishedAt = m.d.Now()
+	if m.d.Notifier != nil {
+		m.d.Notifier.ReviewFinished(ctx, worker, r)
+	}
+	m.save(r)
+	m.cleanup(ctx, r)
 }
 
 // watch follows a running review until it finishes, then cleans up.
