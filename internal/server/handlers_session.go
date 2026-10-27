@@ -44,7 +44,10 @@ type SessionInfo struct {
 	StateMessage     string `json:"state_message,omitempty"`
 	StateSource      string `json:"state_source,omitempty"`
 	Ended            bool   `json:"ended,omitempty"`
-	Self             bool   `json:"self"`
+	// Unprotected means before_pr is on but the agent has no pre-tool hook
+	// to block gh pr create, so the gate is advisory only.
+	Unprotected bool `json:"unprotected,omitempty"`
+	Self        bool `json:"self"`
 }
 
 func sessionInfo(s domain.Session, callerID string) SessionInfo {
@@ -88,6 +91,7 @@ func (s *Server) decorateState(ctx context.Context, info *SessionInfo, sess doma
 	live := s.liveSession(ctx, sess)
 	info.Title = live.AgentTitle
 	info.Ended = live.AgentEnded
+	info.Unprotected = s.verifier != nil && s.verifier.BeforePR() && !agenthook.GuardsPRCreate(live.AgentName)
 	st, conf := s.classify(ctx, live)
 	info.State = string(st)
 	switch conf {

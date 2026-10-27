@@ -237,3 +237,32 @@ func TestServeNotifierCleanPassIsQuiet(t *testing.T) {
 	}
 	nextVerifyEvent(t, ch)
 }
+
+func TestUnprotectedWhenNoHook(t *testing.T) {
+	srv, store := verifyServer(t, &blockingCreator{})
+	get := func(id string) SessionInfo {
+		t.Helper()
+		var res struct {
+			Session SessionInfo `json:"session"`
+		}
+		rpcOK(t, srv, "", "session.get", map[string]any{"id": id}, &res)
+		return res.Session
+	}
+	// before_pr off: nothing is unprotected.
+	if get("w1").Unprotected {
+		t.Fatal("unprotected with before_pr off")
+	}
+	m := verify.NewManager(verify.Config{BeforePR: true}, srv.VerifyDeps(store, func(string) bool { return true }))
+	t.Cleanup(m.Close)
+	srv.SetVerifier(m)
+	if get("w1").Unprotected {
+		t.Fatal("a Claude session has the PreToolUse guard")
+	}
+	codex := domain.Session{ID: "c1", Name: "cx", Group: "g", AgentName: "codex", Status: domain.SessionStatusActive}
+	if err := srv.repo.Save(context.Background(), &codex); err != nil {
+		t.Fatal(err)
+	}
+	if !get("c1").Unprotected {
+		t.Fatal("a codex session has no guard and must be unprotected")
+	}
+}
