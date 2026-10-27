@@ -95,6 +95,18 @@ func runServe() error {
 	ensureAimanSkill(ctx, db)
 	ensureAgentHooks()
 	store := contextstore.NewFiles(contextstore.Root(dir))
+	if ix, err := contextstore.OpenIndex(db.DB()); err != nil {
+		log.Printf("context index unavailable: %v", err)
+	} else {
+		reindexStart := time.Now()
+		updated, removed, err := store.Reindex(ctx)
+		if err != nil {
+			log.Printf("context index reindex: %v", err)
+		} else {
+			log.Printf("context index: reindexed %d, removed %d in %s", updated, removed, time.Since(reindexStart).Round(time.Millisecond))
+		}
+		store.AttachIndex(ix)
+	}
 	ptyMgr := ptyruntime.NewManager()
 	defer ptyMgr.CloseAll()
 	srv := server.New(ln, db, localExec, flow, store, ptyMgr, version)

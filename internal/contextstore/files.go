@@ -2,13 +2,17 @@ package contextstore
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -39,9 +43,11 @@ type fileMeta struct {
 
 // Files is a markdown directory store under root (typically ~/.aiman/context).
 type Files struct {
-	root string
-	mu   sync.Mutex
-	ops  persistedStats
+	root     string
+	mu       sync.Mutex
+	ops      persistedStats
+	ix       *Index
+	ixBroken atomic.Bool
 }
 
 func NewFiles(root string) *Files {
@@ -54,7 +60,97 @@ func Root(aimanDir string) string {
 	return path.Join(strings.TrimRight(aimanDir, "/\\"), DirName)
 }
 
-func (s *Files) Put(_ context.Context, e domain.ContextEntry) (stored domain.ContextEntry, err error) {
+// AttachIndex makes this store use ix for reads, search and packs. The CLI and
+// laptop leave it unattached and keep using the scan.
+func (s *Files) AttachIndex(ix *Index) {
+	s.ix = ix
+	s.ixBroken.Store(false)
+}
+
+func (s *Files) indexOK() bool {
+	return s.ix != nil && !s.ixBroken.Load()
+}
+
+func (s *Files) indexFailed(err error) {
+	if s.ixBroken.CompareAndSwap(false, true) {
+		log.Printf("context index unavailable: %v", err)
+	}
+}
+
+// Reindex brings the index up to date from file mtimes. It reads only files
+// newer than the stored high-water mark and drops ids whose files are gone.
+func (s *Files) Reindex(ctx context.Context) (updated, removed int, err error) {
+	if s.ix == nil {
+		return 0, 0, nil
+	}
+	high, err := s.ix.HighWater(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	paths, err := s.ix.Paths(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	seen := make(map[string]bool, len(paths))
+	maxMtime := high
+	if _, statErr := os.Stat(s.root); statErr == nil {
+		walkErr := fs.WalkDir(os.DirFS(s.root), ".", func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !strings.HasSuffix(p, ".md") || strings.HasSuffix(p, ".tmp") {
+				return nil
+			}
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			abs := path.Join(s.root, p)
+			seen[abs] = true
+			if info.ModTime().After(maxMtime) {
+				maxMtime = info.ModTime()
+			}
+			if !info.ModTime().After(high) {
+				return nil
+			}
+			raw, err := os.ReadFile(abs)
+			if err != nil {
+				return nil
+			}
+			e, err := decode(raw)
+			if err != nil || e.ID == "" {
+				return nil
+			}
+			if err := s.ix.Upsert(ctx, e, abs, info.ModTime()); err != nil {
+				return err
+			}
+			updated++
+			return nil
+		})
+		if walkErr != nil {
+			return updated, removed, walkErr
+		}
+	} else if !os.IsNotExist(statErr) {
+		return 0, 0, statErr
+	}
+	for id, p := range paths {
+		if seen[p] {
+			continue
+		}
+		if err := s.ix.Remove(ctx, id); err != nil {
+			return updated, removed, err
+		}
+		removed++
+	}
+	if maxMtime.After(high) {
+		if err := s.ix.SetHighWater(ctx, maxMtime); err != nil {
+			return updated, removed, err
+		}
+	}
+	return updated, removed, nil
+}
+
+func (s *Files) Put(ctx context.Context, e domain.ContextEntry) (stored domain.ContextEntry, err error) {
 	start := time.Now()
 	n := 0
 	defer func() { s.observe("put", start, err, n) }()
@@ -79,16 +175,40 @@ func (s *Files) Put(_ context.Context, e domain.ContextEntry) (stored domain.Con
 		_ = os.Remove(tmp)
 		return domain.ContextEntry{}, fmt.Errorf("renaming %s: %w", p, err)
 	}
+	if s.indexOK() {
+		mtime := time.Now()
+		if info, statErr := os.Stat(p); statErr == nil {
+			mtime = info.ModTime()
+		}
+		if indexErr := s.ix.Upsert(ctx, e, p, mtime); indexErr != nil {
+			s.indexFailed(indexErr)
+		}
+	}
 	return e, nil
 }
 
-func (s *Files) Get(_ context.Context, id string) (found *domain.ContextEntry, err error) {
+func (s *Files) Get(ctx context.Context, id string) (found *domain.ContextEntry, err error) {
 	start := time.Now()
 	n := 0
 	defer func() { s.observe("get", start, err, n) }()
 	id = SafeKey(id)
 	if id == "" {
 		return nil, fmt.Errorf("invalid id")
+	}
+	if s.indexOK() {
+		p, pathErr := s.ix.PathOf(ctx, id)
+		if pathErr == nil {
+			raw, readErr := os.ReadFile(p)
+			if readErr == nil {
+				e, decodeErr := decode(raw)
+				if decodeErr == nil && e.ID == id {
+					n = len(e.Body)
+					return &e, nil
+				}
+			}
+		} else if !errors.Is(pathErr, sql.ErrNoRows) {
+			s.indexFailed(pathErr)
+		}
 	}
 	err = s.walk(func(e domain.ContextEntry) error {
 		if e.ID == id {
@@ -110,25 +230,41 @@ func (s *Files) Get(_ context.Context, id string) (found *domain.ContextEntry, e
 	return found, nil
 }
 
-func (s *Files) List(_ context.Context, q domain.ContextQuery) ([]domain.ContextEntry, error) {
-	return s.timedCollect("list", q, false, false)
+func (s *Files) List(ctx context.Context, q domain.ContextQuery) ([]domain.ContextEntry, error) {
+	return s.timedCollect(ctx, "list", q, false, false)
 }
 
-func (s *Files) Find(_ context.Context, q domain.ContextQuery) ([]domain.ContextEntry, error) {
-	return s.timedCollect("find", q, true, true)
+func (s *Files) Find(ctx context.Context, q domain.ContextQuery) ([]domain.ContextEntry, error) {
+	return s.timedCollect(ctx, "find", q, true, true)
 }
 
-func (s *Files) timedCollect(op string, q domain.ContextQuery, text, live bool) (list []domain.ContextEntry, err error) {
+func (s *Files) timedCollect(ctx context.Context, op string, q domain.ContextQuery, text, live bool) (list []domain.ContextEntry, err error) {
 	start := time.Now()
 	defer func() { s.observe(op, start, err, len(list)) }()
+	if live && text && s.indexOK() {
+		if strings.TrimSpace(q.Text) == "" {
+			return nil, nil
+		}
+		if list, err = s.ix.Search(ctx, q, true, time.Now()); err == nil {
+			return list, nil
+		}
+		s.indexFailed(err)
+	}
 	return s.collect(q, text, live)
 }
 
-func (s *Files) Pack(_ context.Context, q domain.ContextQuery) (text string, err error) {
+func (s *Files) Pack(ctx context.Context, q domain.ContextQuery) (text string, err error) {
 	start := time.Now()
 	defer func() { s.observe("pack", start, err, len(text)) }()
 	if q.Limit <= 0 {
 		q.Limit = defaultPackLimit
+	}
+	if s.indexOK() {
+		entries, indexErr := s.ix.Search(ctx, q, true, time.Now())
+		if indexErr == nil {
+			return FormatPack(entries), nil
+		}
+		s.indexFailed(indexErr)
 	}
 	entries, err := s.collect(q, strings.TrimSpace(q.Text) != "", true)
 	if err != nil {
@@ -185,7 +321,53 @@ func (s *Files) measure() (notes int, bytes int64, ns map[string]int) {
 func (s *Files) PackSession(ctx context.Context, group, repo string) (text string) {
 	start := time.Now()
 	defer func() { s.observe("pack", start, nil, len(text)) }()
+	if s.indexOK() {
+		packed, err := s.packSessionIndexed(ctx, group, repo)
+		if err == nil {
+			return packed
+		}
+		s.indexFailed(err)
+	}
 	return packForSessionUnmetered(ctx, s, group, repo)
+}
+
+func (s *Files) packSessionIndexed(ctx context.Context, group, repo string) (string, error) {
+	seen := make(map[string]bool)
+	var all []domain.ContextEntry
+	add := func(ns, key string) error {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil
+		}
+		list, err := s.ix.Search(ctx, domain.ContextQuery{
+			Namespace: ns, Key: key, Limit: defaultPackLimit,
+		}, true, time.Now())
+		if err != nil {
+			return err
+		}
+		for _, e := range list {
+			if seen[e.ID] {
+				continue
+			}
+			seen[e.ID] = true
+			all = append(all, e)
+		}
+		return nil
+	}
+	for _, target := range [][2]string{
+		{domain.ContextNSGroup, group},
+		{domain.ContextNSRepo, repo},
+		{domain.ContextNSHost, "host"},
+	} {
+		if err := add(target[0], target[1]); err != nil {
+			return "", err
+		}
+	}
+	Rank(all)
+	if len(all) > defaultPackLimit {
+		all = all[:defaultPackLimit]
+	}
+	return FormatPack(all), nil
 }
 
 func (s *Files) collect(q domain.ContextQuery, requireText, live bool) ([]domain.ContextEntry, error) {
