@@ -89,8 +89,31 @@ type Session struct {
 	Tunnels          []Tunnel
 	AWSConfig        *AWSConfig // role/region/policy used to refresh the shared remote AWS credential set; persisted for refresh
 	BudgetTokens     int64      // per-session token budget; 0 means none
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// WatchPR is the PR-watch override: WatchPROn, WatchPROff, or empty to
+	// follow the mode default (see WatchesPR).
+	WatchPR   string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// PR-watch overrides stored in Session.WatchPR.
+const (
+	WatchPROn  = "on"
+	WatchPROff = "off"
+)
+
+// WatchesPR reports whether serve should watch this session's PR. An explicit
+// override wins; otherwise autonomous sessions are watched, because nobody is
+// at the pane to notice a red check.
+func (s Session) WatchesPR() bool {
+	switch s.WatchPR {
+	case WatchPROn:
+		return true
+	case WatchPROff:
+		return false
+	default:
+		return s.Mode == SessionModeAutonomous
+	}
 }
 
 // Tunnel defines a local SSH port forward bound to a session.

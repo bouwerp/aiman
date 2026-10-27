@@ -101,6 +101,7 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN hook_state_seq INTEGER")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN hook_state_at DATETIME")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN parent_id TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN watch_pr TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN base_branch TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN budget_tokens INTEGER NOT NULL DEFAULT 0")
 
@@ -209,6 +210,10 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create notification tables: %w", err)
 	}
 
+	if err := ensureCITables(db); err != nil {
+		return nil, fmt.Errorf("failed to create CI tables: %w", err)
+	}
+
 	return &Repository{
 		db:            db,
 		clearedOnOpen: clearedAWSProfiles,
@@ -243,8 +248,8 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 	}
 
 	query := `
-	INSERT INTO sessions (id, name, group_name, parent_id, issue_key, branch, base_branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, backend, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, budget_tokens, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO sessions (id, name, group_name, parent_id, issue_key, branch, base_branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, backend, mutagen_sync_id, local_path, agent_name, agent_model, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, budget_tokens, watch_pr, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		name = COALESCE(NULLIF(excluded.name, ''), sessions.name),
 		group_name = COALESCE(NULLIF(excluded.group_name, ''), sessions.group_name),
@@ -279,6 +284,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		hook_state_seq = CASE WHEN excluded.hook_state_seq = 0 THEN sessions.hook_state_seq ELSE excluded.hook_state_seq END,
 		hook_state_at = COALESCE(excluded.hook_state_at, sessions.hook_state_at),
 		budget_tokens = CASE WHEN excluded.budget_tokens != 0 THEN excluded.budget_tokens ELSE sessions.budget_tokens END,
+		watch_pr = COALESCE(NULLIF(excluded.watch_pr, ''), sessions.watch_pr),
 		updated_at = excluded.updated_at;
 	`
 
@@ -295,7 +301,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		hookAt = s.HookStateAt
 	}
 	_, err := r.db.ExecContext(ctx, query,
-		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, sessionBackend(s.Backend), s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.BudgetTokens, s.CreatedAt, updatedAt)
+		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, sessionBackend(s.Backend), s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.BudgetTokens, s.WatchPR, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
