@@ -30,7 +30,7 @@ const (
 func runVerify(args []string) error {
 	flags, rest := takeFlags(args)
 	if len(rest) != 0 {
-		fmt.Fprintln(os.Stderr, "Usage: aiman verify [--session NAME] [--agent NAME] [--wait] [--if-enabled] [--timeout DUR] [--json]")
+		fmt.Fprintln(os.Stderr, "Usage: aiman verify [--session NAME] [--agent NAME] [--wait] [--if-enabled] [--gate] [--timeout DUR] [--json]")
 		return errUsage
 	}
 	timeout := defaultVerifyWaitTimeout
