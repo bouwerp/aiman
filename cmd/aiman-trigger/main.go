@@ -87,10 +87,11 @@ func run() error {
 
 	// 4. Initialize FlowManager dependencies
 	jiraProvider := jira.NewProvider(jira.Config{
-		URL:           cfg.Integrations.Jira.URL,
-		Email:         cfg.Integrations.Jira.Email,
-		APIToken:      cfg.Integrations.Jira.APIToken,
-		IssueStatuses: cfg.Integrations.Jira.IssueStatuses,
+		URL:                     cfg.Integrations.Jira.URL,
+		Email:                   cfg.Integrations.Jira.Email,
+		APIToken:                cfg.Integrations.Jira.APIToken,
+		IssueStatuses:           cfg.Integrations.Jira.IssueStatuses,
+		AcceptanceCriteriaField: cfg.Integrations.Jira.AcceptanceCriteriaField,
 	})
 	gitManager := git.NewManager(&cfg.Git)
 	localManager := local.NewExecutor("") // Default empty, overridden per-session

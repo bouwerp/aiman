@@ -1523,10 +1523,11 @@ func (m *Model) searchJira(query string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		jiraProvider := jira.NewProvider(jira.Config{
-			URL:           m.cfg.Integrations.Jira.URL,
-			Email:         m.cfg.Integrations.Jira.Email,
-			APIToken:      m.cfg.Integrations.Jira.APIToken,
-			IssueStatuses: m.cfg.Integrations.Jira.IssueStatuses,
+			URL:                     m.cfg.Integrations.Jira.URL,
+			Email:                   m.cfg.Integrations.Jira.Email,
+			APIToken:                m.cfg.Integrations.Jira.APIToken,
+			IssueStatuses:           m.cfg.Integrations.Jira.IssueStatuses,
+			AcceptanceCriteriaField: m.cfg.Integrations.Jira.AcceptanceCriteriaField,
 		})
 
 		issues, err := jiraProvider.SearchIssues(ctx, query)

@@ -78,10 +78,11 @@ func runServe() error {
 	root := config.ServeGitRoot(cfg, home, config.DirExists)
 	localExec := local.NewExecutor(root)
 	jiraProvider := jira.NewProvider(jira.Config{
-		URL:           cfg.Integrations.Jira.URL,
-		Email:         cfg.Integrations.Jira.Email,
-		APIToken:      cfg.Integrations.Jira.APIToken,
-		IssueStatuses: cfg.Integrations.Jira.IssueStatuses,
+		URL:                     cfg.Integrations.Jira.URL,
+		Email:                   cfg.Integrations.Jira.Email,
+		APIToken:                cfg.Integrations.Jira.APIToken,
+		IssueStatuses:           cfg.Integrations.Jira.IssueStatuses,
+		AcceptanceCriteriaField: cfg.Integrations.Jira.AcceptanceCriteriaField,
 	})
 	gitManager := git.NewManager(&cfg.Git)
 	flow := usecase.NewFlowManager(jiraProvider, &cfg.Integrations.Jira, gitManager, localExec, domain.NewGitSlugger(), skills.NewEngine(cfg))
