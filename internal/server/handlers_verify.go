@@ -77,6 +77,9 @@ func (s *Server) handleVerifyStatus(ctx context.Context, req Request) Response {
 		Review   string `json:"review"`
 		Session  string `json:"session"`
 		TreeHash string `json:"tree_hash"`
+		// Gate marks the before-PR gate asking; a denial is recorded in
+		// the session's ledger so a blocked PR is auditable.
+		Gate bool `json:"gate"`
 	}
 	if len(req.Params) > 0 {
 		if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -102,7 +105,7 @@ func (s *Server) handleVerifyStatus(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeNotFound, "session not found")
 	}
 	if p.TreeHash != "" {
-		return s.verifyStatusForTree(req.ID, sess, p.TreeHash)
+		return s.verifyStatusForTree(ctx, req.ID, sess, p.TreeHash, p.Gate)
 	}
 	r, ok := s.verifier.LatestFor(sess.ID)
 	if !ok {
@@ -112,12 +115,23 @@ func (s *Server) handleVerifyStatus(ctx context.Context, req Request) Response {
 }
 
 // verifyStatusForTree answers the before-PR gate: a disabled review when
-// before_pr is off, else the latest review of exactly this tree.
-func (s *Server) verifyStatusForTree(id string, sess domain.Session, tree string) Response {
+// before_pr is off, else the latest review of exactly this tree. When the
+// gate asks and the answer is not a pass, the denial goes to the ledger.
+func (s *Server) verifyStatusForTree(ctx context.Context, id string, sess domain.Session, tree string, gate bool) Response {
 	if !s.verifier.BeforePR() {
 		return reviewResponse(id, verify.Review{WorkerID: sess.ID, Tree: tree, Status: verify.StatusDisabled})
 	}
 	r, ok := s.verifier.ForTree(sess.ID, tree)
+	if gate && (!ok || !r.Passed()) {
+		payload := map[string]any{"kind": "gate", "tree": tree, "reason": "no review of this tree"}
+		if ok {
+			payload["review"] = r.ID
+			payload["status"] = string(r.Status)
+			payload["required"] = r.Required
+			payload["reason"] = "review did not pass"
+		}
+		s.appendEvent(ctx, sess.ID, domain.EventActorVerifier, domain.EventVerifyRecorded, payload)
+	}
 	if !ok {
 		return errResp(id, CodeNotFound, "no review of this tree")
 	}

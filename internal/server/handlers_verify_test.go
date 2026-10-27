@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/verify"
 )
@@ -236,6 +238,45 @@ func TestServeNotifierCleanPassIsQuiet(t *testing.T) {
 		t.Fatalf("a clean pass notified: %+v", store.rows)
 	}
 	nextVerifyEvent(t, ch)
+}
+
+func TestGateDenialIsRecorded(t *testing.T) {
+	srv, store := verifyServer(t, &blockingCreator{})
+	m := verify.NewManager(verify.Config{BeforePR: true}, srv.VerifyDeps(store, func(string) bool { return true }))
+	t.Cleanup(m.Close)
+	srv.SetVerifier(m)
+	now := time.Now()
+	for _, r := range []verify.Review{
+		{ID: "bad", WorkerID: "w1", Tree: "t-bad", Status: verify.StatusComplete, Required: 2, StartedAt: now},
+		{ID: "good", WorkerID: "w1", Tree: "t-good", Status: verify.StatusComplete, Evidence: verify.Evidence{Command: "make test"}, StartedAt: now},
+	} {
+		if err := store.Put(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rpc(t, srv, "w1", "verify.status", map[string]any{"tree_hash": "t-bad", "gate": true})
+	rpc(t, srv, "w1", "verify.status", map[string]any{"tree_hash": "t-none", "gate": true})
+	rpc(t, srv, "w1", "verify.status", map[string]any{"tree_hash": "t-good", "gate": true})
+	rpc(t, srv, "w1", "verify.status", map[string]any{"tree_hash": "t-bad"}) // not the gate: no record
+
+	events, err := srv.repo.(*sqlite.Repository).ListSessionEvents(context.Background(), "w1", 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gates []map[string]any
+	for _, ev := range events {
+		if ev.Kind != domain.EventVerifyRecorded {
+			continue
+		}
+		var p map[string]any
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			t.Fatal(err)
+		}
+		gates = append(gates, p)
+	}
+	if len(gates) != 2 || gates[0]["review"] != "bad" || gates[0]["kind"] != "gate" || gates[1]["tree"] != "t-none" {
+		t.Fatalf("gate records %+v", gates)
+	}
 }
 
 func TestUnprotectedWhenNoHook(t *testing.T) {
