@@ -29,6 +29,7 @@ type Harness struct {
 	Repo   *sqlite.Repository
 
 	t      *testing.T
+	srv    *server.Server
 	remote *FakeRemote
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -63,7 +64,7 @@ func New(t *testing.T) *Harness {
 		defer close(done)
 		_ = srv.Serve(ctx)
 	}()
-	h := &Harness{Dir: dir, Socket: server.SocketPath(dir), Repo: repo, t: t, remote: remote, cancel: cancel, done: done}
+	h := &Harness{Dir: dir, Socket: server.SocketPath(dir), Repo: repo, t: t, srv: srv, remote: remote, cancel: cancel, done: done}
 	t.Cleanup(h.Close)
 	return h
 }

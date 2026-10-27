@@ -9,17 +9,26 @@ agent binary and no network.
 
 The current suite covers:
 
+- `create-ticket`: the fake creator writes `.aiman_task.md`, the ledger records
+  `session.created`, and no to-do list is created yet.
 - `prompt-once`: an idle session receives one steer, typed and submitted once.
 - `steer-held-dialog` / `steer-held-working`: a note is held until the agent
   reports idle, then delivered once.
 - `todo-mirror`: an agent status-only mirror keeps the user's text.
+- `todo-user-edit`: a user change steers once, an agent mirror does not, and
+  `todo.changed` is recorded.
 - `handover-restart` / `handover-precompact`: the fixed handover skeleton and
   the restart or compaction pointer.
+- `terminate-keeps-pane`: the terminal is stopped, but the row and the last
+  capture survive until archive or forget.
+- `usage-context`: a two-turn Claude transcript reports the last turn's
+  input + cache_read against the explicit context window.
 - `event-sequence`: the session ledger's per-session sequence is contiguous and
   every payload has a hash.
 
-Cases that need features still landing are added with those features:
-`restart-preserves-worktree`, `terminate-keeps-pane` and `child-spawn`.
+`restart-preserves-worktree` and `child-spawn` are added with the restart
+harness and the coordinator. The verification cases skip with `waiting on nl-7`;
+`usage-budget` skips with `waiting on nl-4 T14`.
 
 ## Metrics
 
