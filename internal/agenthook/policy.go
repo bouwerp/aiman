@@ -10,10 +10,10 @@ import (
 // GateMarker identifies the generated before-PR gate script.
 const GateMarker = "verify-gate.sh"
 
-// SupportsPreToolUse reports whether the agent exposes a pre-tool hook that
-// can block a Bash call. Claude does; the others are advisory until their
-// hook surface is verified.
-func SupportsPreToolUse(agentName string) bool {
+// GuardsPRCreate reports whether the agent has a PreToolUse hook that can
+// block a Bash call. Claude does; the others are advisory until their hook
+// surface is verified.
+func GuardsPRCreate(agentName string) bool {
 	command := strings.TrimSpace(agentName)
 	if known, ok := agent.FindKnown(command); ok {
 		command = agent.CommandBase(known.Command)
@@ -22,6 +22,9 @@ func SupportsPreToolUse(agentName string) bool {
 	}
 	return command == "claude"
 }
+
+// SupportsPreToolUse is the older name for GuardsPRCreate.
+func SupportsPreToolUse(agentName string) bool { return GuardsPRCreate(agentName) }
 
 func gatePath(home string) string {
 	return filepath.Join(home, ".aiman", "hooks", GateMarker)
