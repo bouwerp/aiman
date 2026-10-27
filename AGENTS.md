@@ -32,9 +32,10 @@ go test ./...    # tests (skip -race if Go stdlib version mismatch)
 `make eval` runs the cases under `evals/` against an in-process `aiman serve`,
 a temp SQLite database and a temp Unix socket, with a fake remote and fake
 creator. It needs no SSH host, agent binary or network, and removes its temp
-directory. It is not part of `make ci`; CI runs it as a separate five-minute
-job. Only an opt-in real-agent track would spend money, and that track is
-nightly, cost-capped and never part of CI.
+directory. It covers lifecycle, steering, to-dos, handover, usage and the
+verify pass/deny/reproduce paths. It is not part of `make ci`; CI runs it as a
+separate five-minute job. Only the opt-in `-tags evalreal` track spends money,
+and that track is nightly, cost-capped and never part of CI.
 
 **Known pre-existing test failure:** `TestOllamaIntelligenceSummariseSession` in `internal/infra/ai` — requires a local Ollama instance, always fails in CI. Ignore it.
 

@@ -25,11 +25,19 @@ The current suite covers:
   input + cache_read against the explicit context window.
 - `usage-budget`: crossing 70% and 100% emits one `usage.budget` event per
   threshold, and `usage.get` reports the same used tokens and state.
+- `verify-pass`: a reviewer marker plus a successful `verify.test_command`
+  records evidence and reaches `Passed`.
+- `verify-missing-evidence`: no test command leaves the review incomplete and
+  open.
+- `verify-blocked-pr`: a before-PR gate with no passing review of the tree is
+  denied and writes `verify.recorded` with `kind=gate`.
+- `verify-reproduce-first`: a base that already passes ends the review with a
+  `not reproducible` finding and spawns no reviewer.
 - `event-sequence`: the session ledger's per-session sequence is contiguous and
   every payload has a hash.
 
 `restart-preserves-worktree` and `child-spawn` are added with the restart
-harness and the coordinator. The verification cases skip with `waiting on nl-7`.
+harness and the coordinator.
 
 ## Metrics
 
@@ -38,9 +46,9 @@ harness and the coordinator. The verification cases skip with `waiting on nl-7`.
 `prompt_submitted_once`, `steer_delivered_after_ready`,
 `no_duplicate_steer`, `handover_sections_complete`,
 `todo_mirror_preserves_user_text`, `worktree_untouched_on_restart`,
-`event_sequence_contiguous`. `verify_evidence_present` joins after the verifier
-lands. A metric is 0 or 1 with a reason; a case passes only when every metric
-that applies is 1.
+`event_sequence_contiguous`, and `verify_evidence_present` on verifier cases.
+A metric is 0 or 1 with a reason; a case passes only when every metric that
+applies is 1.
 
 ## Oracle
 
@@ -48,9 +56,29 @@ that applies is 1.
 the good variant passes every case and the broken variant fails exactly the
 metrics it breaks. A broken harness cannot score like a good one.
 
+## Real-agent track
+
+The real-agent track is opt-in and never runs in `make ci` or `make eval`. It
+is compiled only with `-tags evalreal` and requires:
+
+```bash
+AIMAN_EVAL_REAL=1
+AIMAN_EVAL_AGENT=claude
+AIMAN_EVAL_DRIVER=/path/to/a/real-agent-driver
+AIMAN_EVAL_BUDGET_USD=5
+go test -tags evalreal -v ./evals/harness -run TestRealAgent -count=1
+```
+
+The driver receives `AIMAN_EVAL_CASE`, `AIMAN_EVAL_PROMPT`, `AIMAN_EVAL_OUT`
+and `AIMAN_EVAL_AGENT` for each of the five cases. It must run in the current
+worktree, write its ledger/evidence under `AIMAN_EVAL_OUT`, and may write
+`cost.json` (`{"usd": ...}`). The runner writes a summary per run under
+`evals/out/<run-id>/`, stops at the budget cap, and marks the run `capped`; a
+capped run is never judged. `.github/workflows/eval-nightly.yml` runs the same
+command nightly when the repository secrets are configured.
+
 ## Scope
 
 This suite grades aiman's harness, not a model. It uses no LLM judge and no
-public coding benchmark. The opt-in real-agent track is planned as a nightly,
-cost-capped run and never part of CI; until it lands, `make eval` is entirely
-fake-agent and spends nothing. A capped run is never judged.
+public coding benchmark. `make eval` is fake-agent and spends nothing; only the
+opt-in track above uses a real agent and money.
