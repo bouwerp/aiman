@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"io"
 	"os"
@@ -49,6 +50,13 @@ func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error) {
 		if content, held := m.writtenFiles[p]; held {
 			sum := sha256.Sum256(content)
 			return hex.EncodeToString(sum[:]) + "  " + p + "\n", nil
+		}
+		return "", nil
+	}
+	if rest, ok := strings.CutPrefix(cmd, "test -f '"); ok {
+		p, _, _ := strings.Cut(rest, "'")
+		if content, held := m.writtenFiles[p]; held {
+			return remoteFileMarker + "\n" + base64.StdEncoding.EncodeToString(content), nil
 		}
 		return "", nil
 	}
@@ -99,7 +107,7 @@ func TestPrepareSession_AppliesAgentDefaults(t *testing.T) {
 		"claude": {Model: "sonnet", Effort: "medium"},
 	}}
 	engine := NewEngine(cfg)
-	result, err := engine.PrepareSession(context.Background(), newMockRemote(), "/wt", domain.Agent{Name: "Claude Code", Command: "claude"}, nil, true, nil, nil)
+	result, err := engine.PrepareSession(context.Background(), newMockRemote(), "/wt", domain.Agent{Name: "Claude Code", Command: "claude"}, nil, true, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +132,7 @@ func TestPrepareSession_ClaudeWithIssue_UsesSendKeys(t *testing.T) {
 
 	agent := domain.Agent{Name: "Claude Code", Command: "claude"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -168,7 +176,7 @@ func TestPrepareSession_InstallsBundledAimanSkill(t *testing.T) {
 	engine := NewEngine(&config.Config{})
 	remote := newMockRemote()
 	agent := domain.Agent{Name: "Claude Code", Command: "claude"}
-	if _, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, true, nil, nil); err != nil {
+	if _, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, true, nil, nil, domain.QualityKit{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range aimanskill.ProjectSkillFiles("/home/user/code/myrepo") {
@@ -190,7 +198,7 @@ func TestPrepareSession_ClaudeWithoutIssue(t *testing.T) {
 
 	agent := domain.Agent{Name: "Claude Code", Command: "claude"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -226,7 +234,7 @@ func TestPrepareSession_AntigravityWithIssue_UsesSendKeys(t *testing.T) {
 
 	agent := domain.Agent{Name: "Antigravity CLI", Command: "agy"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +279,7 @@ func TestPrepareSession_AntigravityWithPromptSkills_WritesPromptFileAndUsesSendK
 		Type: domain.SkillTypePrompt,
 	}}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, true, nil, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, true, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -307,7 +315,7 @@ func TestPrepareSession_CursorWithIssue_UsesSendKeys(t *testing.T) {
 
 	agent := domain.Agent{Name: "Cursor", Command: "cursor-agent"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -347,7 +355,7 @@ func TestPrepareSession_KiloWithIssue_UsesSendKeys(t *testing.T) {
 
 	agent := domain.Agent{Name: "Kilo Code", Command: "kilo"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -373,7 +381,7 @@ func TestPrepareSession_MuseTrustsWorkspaceAndSkipsApprovalsWhenPromptFree(t *te
 	agent := domain.Agent{Name: "Muse Code", Command: "muse"}
 	issue := &domain.Issue{Key: "PROJ-1", Summary: "Add muse", Status: domain.IssueStatusTodo}
 
-	guarded, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
+	guarded, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +395,7 @@ func TestPrepareSession_MuseTrustsWorkspaceAndSkipsApprovalsWhenPromptFree(t *te
 		t.Fatalf("prompt: %s", guarded.InitialPrompt)
 	}
 
-	free, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil, nil)
+	free, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +413,7 @@ func TestPrepareSession_DeepCodeUsesLauncherAndEnvDefaults(t *testing.T) {
 	agent := domain.Agent{Name: "Deep Code", Command: "deepcode"}
 	issue := &domain.Issue{Key: "PROJ-1", Summary: "Add deepcode", Status: domain.IssueStatusTodo}
 
-	got, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
+	got, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, false, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +446,7 @@ func TestPrepareSession_CopilotAddsAllowAll(t *testing.T) {
 
 	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -459,7 +467,7 @@ func TestPrepareSession_CopilotPromptFreeAddsAutopilot(t *testing.T) {
 
 	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -481,7 +489,7 @@ func TestPrepareSession_CopilotWithIssue_IncludesInitialTaskPrompt(t *testing.T)
 	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
 	issue := &domain.Issue{Key: "PROJ-7", Summary: "Wire startup prompt"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -508,7 +516,7 @@ func TestPrepareSession_CopilotWithSnapshot_WritesSessionSummaryFile(t *testing.
 		CreatedAt: time.Date(2026, 5, 28, 10, 30, 0, 0, time.UTC),
 	}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil, snapshot)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil, snapshot, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -534,7 +542,7 @@ func TestPrepareSession_UsesExistingSessionSummaryFilePrompt(t *testing.T) {
 
 	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "copilot"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -553,7 +561,7 @@ func TestPrepareSession_GHCopilotWithIssue_WritesTaskAndPrompt(t *testing.T) {
 	agent := domain.Agent{Name: "GitHub Copilot CLI", Command: "gh copilot"}
 	issue := &domain.Issue{Key: "PROJ-8", Summary: "Seed prompt via gh copilot path"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, false, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -581,7 +589,7 @@ func TestWriteTaskFile_Content(t *testing.T) {
 		Assignee:    "alice",
 	}
 
-	err := writeTaskFile(ctx, remote, "/work/repo", issue, nil)
+	err := writeTaskFile(ctx, remote, "/work/repo", issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -623,7 +631,7 @@ func TestWriteTaskFileMentionsGraphifyWhenPresent(t *testing.T) {
 	remote := newMockRemote()
 	remote.graphify = true
 	issue := &domain.Issue{Key: "DATA-7", Summary: "s", Status: domain.IssueStatusTodo}
-	if err := writeTaskFile(context.Background(), remote, "/work/repo", issue, nil); err != nil {
+	if err := writeTaskFile(context.Background(), remote, "/work/repo", issue, nil, domain.QualityKit{}); err != nil {
 		t.Fatal(err)
 	}
 	content := string(remote.writtenFiles["/work/repo/.aiman_task.md"])
@@ -640,7 +648,7 @@ func TestWriteTaskFileMentionsGraphifyWhenPresent(t *testing.T) {
 func TestWriteTaskFileOmitsGraphifyWhenAbsent(t *testing.T) {
 	remote := newMockRemote()
 	issue := &domain.Issue{Key: "DATA-7", Summary: "s", Status: domain.IssueStatusTodo}
-	if err := writeTaskFile(context.Background(), remote, "/work/repo", issue, nil); err != nil {
+	if err := writeTaskFile(context.Background(), remote, "/work/repo", issue, nil, domain.QualityKit{}); err != nil {
 		t.Fatal(err)
 	}
 	if content := string(remote.writtenFiles["/work/repo/.aiman_task.md"]); strings.Contains(content, "graphify") {
@@ -710,7 +718,7 @@ func TestWriteTaskFile_NoDescription(t *testing.T) {
 		Status:  domain.IssueStatusTodo,
 	}
 
-	err := writeTaskFile(ctx, remote, "/work/repo", issue, nil)
+	err := writeTaskFile(ctx, remote, "/work/repo", issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -737,7 +745,7 @@ func TestPrepareSession_AgeniWithIssue_UsesSendKeys(t *testing.T) {
 	}
 	agent := domain.Agent{Name: "Ageni", Command: "ageni"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -768,7 +776,7 @@ func TestPrepareSession_AgeniWithPromptSkills_WritesPromptFileAndUsesSendKeys(t 
 	skills := []domain.Skill{{Name: "tdd", Type: domain.SkillTypePrompt, Path: skillFile}}
 	agent := domain.Agent{Name: "Ageni", Command: "ageni"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, true, nil, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, true, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -801,7 +809,7 @@ func TestPrepareSession_GrokWithIssue_UsesAlwaysApproveAndSendKeys(t *testing.T)
 
 	agent := domain.Agent{Name: "Grok Build CLI", Command: "grok"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -831,7 +839,7 @@ func TestPrepareSession_GrokAlwaysDisablesAutoUpdate(t *testing.T) {
 	// promptFree=false: --always-approve should be absent, but the
 	// update-disable flag must still be present — Grok's disruptive
 	// startup update check happens regardless of approval mode.
-	result, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, false, nil, nil)
+	result, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, false, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -856,7 +864,7 @@ func TestPrepareSession_GrokWithPromptSkills_WritesPromptFileAndUsesSendKeys(t *
 	skills := []domain.Skill{{Name: "grok-skill", Type: domain.SkillTypePrompt, Path: skillFile}}
 	agent := domain.Agent{Name: "Grok Build CLI", Command: "grok"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, true, nil, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, true, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -889,7 +897,7 @@ func TestPrepareSession_CodexWithIssue_UsesBypassAndSendKeys(t *testing.T) {
 
 	agent := domain.Agent{Name: "Codex CLI", Command: "codex"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, nil, true, issue, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -920,7 +928,7 @@ func TestPrepareSession_CodexWithPromptSkills_WritesPromptFileAndUsesSendKeys(t 
 	skills := []domain.Skill{{Name: "codex-skill", Type: domain.SkillTypePrompt, Path: skillFile}}
 	agent := domain.Agent{Name: "Codex CLI", Command: "codex"}
 
-	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, false, nil, nil)
+	result, err := engine.PrepareSession(ctx, remote, "/home/user/code/myrepo", agent, skills, false, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -944,7 +952,7 @@ func TestPrepareSession_CodexAlwaysTrustsWorkspaceAndSkipsUpgrade(t *testing.T) 
 	remote := newMockRemote()
 	agent := domain.Agent{Name: "Codex CLI", Command: "codex"}
 
-	result, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, false, nil, nil)
+	result, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, false, nil, nil, domain.QualityKit{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -976,7 +984,7 @@ func TestPrepareSessionTwiceWritesOnce(t *testing.T) {
 	ctx := context.Background()
 	wt := "/home/user/code/repo"
 
-	if _, err := engine.PrepareSession(ctx, remote, wt, agent, selected, true, issue, nil); err != nil {
+	if _, err := engine.PrepareSession(ctx, remote, wt, agent, selected, true, issue, nil, domain.QualityKit{}); err != nil {
 		t.Fatal(err)
 	}
 	watched := append([]string{
@@ -990,7 +998,7 @@ func TestPrepareSessionTwiceWritesOnce(t *testing.T) {
 	}
 
 	remote.writes = map[string]int{}
-	if _, err := engine.PrepareSession(ctx, remote, wt, agent, selected, true, issue, nil); err != nil {
+	if _, err := engine.PrepareSession(ctx, remote, wt, agent, selected, true, issue, nil, domain.QualityKit{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range watched {

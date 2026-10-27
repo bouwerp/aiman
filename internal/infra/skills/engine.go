@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/graphify"
 	"github.com/bouwerp/aiman/internal/infra/remotefile"
+	"github.com/bouwerp/aiman/internal/quality"
 )
 
 type Engine struct {
@@ -193,17 +195,30 @@ func buildSessionPrompt(files []string) string {
 	}
 }
 
-func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue, snapshot *domain.SessionSnapshot) (domain.PreparedSession, error) {
+func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue, snapshot *domain.SessionSnapshot, kit domain.QualityKit) (domain.PreparedSession, error) {
 	name := strings.ToLower(agent.Name)
 	baseCommand := agentBaseCommand(agent.Command)
+	launchRepo, launchRole := kit.Repo, string(kit.Role)
+	if kit.Role == domain.SessionRoleReviewer {
+		// A reviewer gets its own brief; the kit only picks its launch flags.
+		kit = domain.QualityKit{}
+	}
 
 	_ = installBundledAimanSkill(ctx, remote, worktreePath)
 
-	// Write JIRA task file if an issue is provided.
+	// Write JIRA task file if an issue is provided; otherwise a non-empty kit
+	// gets a task file of its own.
+	hasTask := issue != nil
+	kitOnly := false
 	if issue != nil {
-		if err := writeTaskFile(ctx, remote, worktreePath, issue, snapshot); err != nil {
+		if err := writeTaskFile(ctx, remote, worktreePath, issue, snapshot, kit); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to write task file: %w", err)
 		}
+	} else if !kit.Empty() {
+		if err := writeKitTaskFile(ctx, remote, worktreePath, kit); err != nil {
+			return domain.PreparedSession{}, fmt.Errorf("failed to write task file: %w", err)
+		}
+		hasTask, kitOnly = true, true
 	}
 
 	summaryExists, err := ensureSessionSummaryFile(ctx, remote, worktreePath, issue, snapshot)
@@ -214,10 +229,10 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	var result domain.PreparedSession
 
 	// bareSession covers agents that need nothing but their command, carrying the initial
-	// prompt only when there is an issue to describe.
+	// prompt only when there is a task file to read.
 	bareSession := func(command string) domain.PreparedSession {
 		ps := domain.PreparedSession{Command: command}
-		if issue != nil {
+		if hasTask {
 			ps.InitialPrompt = initialPrompt
 		}
 		return ps
@@ -227,22 +242,22 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	// ordered most-specific first; the default covers agents that just take a bare command.
 	switch {
 	case strings.Contains(name, "claude"):
-		result, err = e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+		result, err = e.prepareClaude(ctx, remote, worktreePath, agent, selectedSkills, promptFree, hasTask)
 
 	case strings.Contains(name, "antigravity") || baseCommand == "agy":
-		result, err = e.prepareAntigravity(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+		result, err = e.prepareAntigravity(ctx, remote, worktreePath, agent, selectedSkills, promptFree, hasTask)
 
 	case strings.Contains(name, "kilo"):
 		result = bareSession(ensureFlag(agent.Command, "--auto"))
 
 	case strings.Contains(name, "ageni") || baseCommand == "ageni":
-		result, err = e.prepareAgeni(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+		result, err = e.prepareAgeni(ctx, remote, worktreePath, agent, selectedSkills, promptFree, hasTask)
 
 	case strings.Contains(name, "grok") || baseCommand == "grok" || baseCommand == "grok-build":
-		result, err = e.prepareGrok(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+		result, err = e.prepareGrok(ctx, remote, worktreePath, agent, selectedSkills, promptFree, hasTask)
 
 	case strings.Contains(name, "codex") || baseCommand == "codex":
-		result, err = e.prepareCodex(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+		result, err = e.prepareCodex(ctx, remote, worktreePath, agent, selectedSkills, promptFree, hasTask)
 
 	case strings.Contains(name, "cursor"):
 		// --disable-auto-update always: a background self-update in this PTY
@@ -257,7 +272,7 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 		result = bareSession(cmd)
 
 	case name == "muse code" || baseCommand == "muse":
-		result, err = e.prepareMuse(ctx, remote, worktreePath, agent, selectedSkills, promptFree, issue)
+		result, err = e.prepareMuse(ctx, remote, worktreePath, agent, selectedSkills, promptFree, hasTask)
 
 	case name == "deep code" || baseCommand == "deepcode":
 		// Deep Code rejects unknown flags. The launcher reports the session
@@ -282,11 +297,69 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	if err != nil {
 		return domain.PreparedSession{}, err
 	}
+	if kitOnly && result.InitialPrompt == initialPrompt {
+		result.InitialPrompt = quality.KitPrompt
+	}
 	if summaryExists {
 		result.InitialPrompt = appendPrompt(result.InitialPrompt, sessionSummaryPrompt)
 	}
-	result.Command = applyConfiguredLaunchFlags(result.Command, agent, e.cfg)
+	result.Command = applyConfiguredLaunchFlags(result.Command, agent, e.cfg, launchRepo, launchRole)
 	return result, nil
+}
+
+// writeKitTaskFile refreshes the kit blocks of an existing task file, or
+// writes a kit-only one. A nil kit.DoneWhen leaves the Done-when block as it
+// is, so it never changes after create. The file is written only when its
+// bytes change.
+func writeKitTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, kit domain.QualityKit) error {
+	taskPath := filepath.Join(worktreePath, domain.AimanTaskFileName)
+	existing, found, err := readRemoteFile(ctx, remote, taskPath)
+	if err != nil {
+		return err
+	}
+	checklists := quality.RenderChecklistBlock(kit.Checklists)
+	var content string
+	if !found || strings.TrimSpace(existing) == "" {
+		content = quality.KitOnlyTaskFile(quality.RenderDoneWhenBlock(kit.DoneWhen), checklists)
+	} else {
+		var doneWhen *string
+		if kit.DoneWhen != nil {
+			block := quality.RenderDoneWhenBlock(kit.DoneWhen)
+			doneWhen = &block
+		}
+		content = quality.ReplaceKitBlocks(existing, doneWhen, checklists)
+	}
+	_, err = remotefile.WriteIfChanged(ctx, remote, taskPath, []byte(content))
+	return err
+}
+
+// remoteFileMarker precedes the base64 body in readRemoteFile's output, so
+// login-shell noise before it is ignored.
+const remoteFileMarker = "__AIMAN_FILE__"
+
+// readRemoteFile returns a remote file's exact bytes in one round trip. The
+// body travels as base64 because SSH output is whitespace-trimmed, which
+// would change the trailing newline and force a rewrite on every start.
+func readRemoteFile(ctx context.Context, remote domain.RemoteExecutor, p string) (string, bool, error) {
+	q := shellQuote(p)
+	out, err := remote.Execute(ctx, "test -f "+q+" && printf '%s\\n' "+remoteFileMarker+" && base64 < "+q+" || true")
+	if err != nil {
+		return "", false, err
+	}
+	_, body, found := strings.Cut(out, remoteFileMarker+"\n")
+	if !found {
+		return "", false, nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(body), ""))
+	if err != nil {
+		return "", false, fmt.Errorf("decode %s: %w", p, err)
+	}
+	return string(raw), true, nil
+}
+
+// shellQuote wraps s in single quotes for POSIX sh.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func appendPrompt(existing, extra string) string {
@@ -331,8 +404,9 @@ func remoteFileExists(ctx context.Context, remote domain.RemoteExecutor, path st
 // writeTaskFile writes the JIRA issue context and working guidelines to
 // .aiman_task.md in the worktree. The agent's initial prompt tells it to
 // read this file, so all substantive instructions live here rather than in
-// the tmux send-keys string.
-func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, issue *domain.Issue, snapshot *domain.SessionSnapshot) error {
+// the tmux send-keys string. The kit blocks sit between the description and
+// the working guidelines.
+func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, issue *domain.Issue, snapshot *domain.SessionSnapshot, kit domain.QualityKit) error {
 	var sb strings.Builder
 
 	// --- Housekeeping notice ---
@@ -356,6 +430,13 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 		sb.WriteString("_No description provided._")
 	}
 	sb.WriteString("\n\n")
+
+	// --- Quality kit: fixed at create so it stays in the cached prefix ---
+	for _, block := range []string{quality.RenderDoneWhenBlock(kit.DoneWhen), quality.RenderChecklistBlock(kit.Checklists)} {
+		if block != "" {
+			sb.WriteString(block + "\n")
+		}
+	}
 
 	// --- Working guidelines ---
 	sb.WriteString("---\n\n")
@@ -476,7 +557,7 @@ func writeSessionSummaryFile(ctx context.Context, remote domain.RemoteExecutor, 
 	return err
 }
 
-func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, hasTask bool) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -497,7 +578,7 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 	// quoted text inside the tmux "bash -l -c '...'" wrapper causes nested
 	// quoting breakage. send-keys avoids this entirely.
 	result := domain.PreparedSession{Command: cmd}
-	if issue != nil {
+	if hasTask {
 		result.InitialPrompt = initialPrompt
 	}
 
@@ -524,7 +605,7 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 // it (and the task file) via tmux send-keys after startup. Provider/API-key
 // configuration lives in ~/.ageni/.env on the remote; aiman-injected env vars
 // like OPENROUTER_API_KEY are picked up directly from the session environment.
-func (e *Engine) prepareAgeni(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+func (e *Engine) prepareAgeni(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, hasTask bool) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -539,7 +620,7 @@ func (e *Engine) prepareAgeni(ctx context.Context, remote domain.RemoteExecutor,
 	// --new skips Ageni's session picker and starts a fresh session directly.
 	result := domain.PreparedSession{Command: ensureFlag(agent.Command, "--new")}
 	var promptFiles []string
-	if issue != nil {
+	if hasTask {
 		promptFiles = append(promptFiles, domain.AimanTaskFileName)
 	}
 
@@ -556,7 +637,7 @@ func (e *Engine) prepareAgeni(ctx context.Context, remote domain.RemoteExecutor,
 	return result, nil
 }
 
-func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, hasTask bool) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -574,7 +655,7 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 	result := domain.PreparedSession{Command: cmd}
 	var promptFiles []string
 
-	if issue != nil {
+	if hasTask {
 		promptFiles = append(promptFiles, domain.AimanTaskFileName)
 	}
 
@@ -600,7 +681,7 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 // permission UI ("cursor position could not be read") instead of reaching
 // the prompt. --trust-workspace stays as well so a build that ignores --yolo
 // still loads project skills and hooks.
-func (e *Engine) prepareMuse(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+func (e *Engine) prepareMuse(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, hasTask bool) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -616,7 +697,7 @@ func (e *Engine) prepareMuse(ctx context.Context, remote domain.RemoteExecutor, 
 
 	result := domain.PreparedSession{Command: cmd}
 	var promptFiles []string
-	if issue != nil {
+	if hasTask {
 		promptFiles = append(promptFiles, domain.AimanTaskFileName)
 	}
 	if len(prompts) > 0 {
@@ -635,7 +716,7 @@ func (e *Engine) prepareMuse(ctx context.Context, remote domain.RemoteExecutor, 
 // always applied: Grok otherwise contacts home for an update check on
 // startup, and a self-update in this PTY session exits the TUI and leaves
 // the holder at a bare shell, same failure mode as Codex's in-app updates.
-func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, hasTask bool) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -654,7 +735,7 @@ func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, 
 	result := domain.PreparedSession{Command: cmd}
 	var promptFiles []string
 
-	if issue != nil {
+	if hasTask {
 		promptFiles = append(promptFiles, domain.AimanTaskFileName)
 	}
 
@@ -677,7 +758,7 @@ func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, 
 // via tmux send-keys after startup. The session always trusts the worktree and
 // skips the startup upgrade prompt: a trust dialog or self-update in a PTY
 // session exits the TUI and leaves the operator at a bare shell.
-func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
+func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, hasTask bool) (domain.PreparedSession, error) {
 	var prompts []string
 	for _, s := range selectedSkills {
 		if s.Type == domain.SkillTypePrompt {
@@ -692,7 +773,7 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 	result := domain.PreparedSession{Command: cmd}
 	var promptFiles []string
 
-	if issue != nil {
+	if hasTask {
 		promptFiles = append(promptFiles, domain.AimanTaskFileName)
 	}
 

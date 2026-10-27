@@ -1,11 +1,42 @@
 package skills
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
+
+func TestLaunchFlagsUseRepoAndRole(t *testing.T) {
+	cfg := &config.Config{
+		AgentDefaults: map[string]config.AgentDefaults{"claude": {Model: "sonnet"}},
+		Repos: map[string]config.RepoBootstrap{
+			"o/r": {AgentOverrides: map[string]config.AgentDefaults{"claude": {Model: "opus"}}},
+		},
+		Roles: config.RolesConfig{Verifier: config.RoleOverride{Effort: "high"}},
+	}
+	ag := domain.Agent{Name: "Claude Code", Command: "claude"}
+	if got := applyConfiguredLaunchFlags("claude", ag, cfg, "o/r", ""); !strings.Contains(got, "--model opus") {
+		t.Fatalf("repo override: %q", got)
+	}
+	if got := applyConfiguredLaunchFlags("claude", ag, cfg, "x/y", ""); !strings.Contains(got, "--model sonnet") {
+		t.Fatalf("agent default elsewhere: %q", got)
+	}
+	got := applyConfiguredLaunchFlags("claude", ag, cfg, "o/r", string(domain.SessionRoleReviewer))
+	if !strings.Contains(got, "--model opus") || !strings.Contains(got, "--effort high") {
+		t.Fatalf("reviewer role: %q", got)
+	}
+
+	res, err := NewEngine(cfg).PrepareSession(context.Background(), newMockRemote(), "/wt", ag, nil, true, nil, nil, domain.QualityKit{Repo: "o/r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Command, "--model opus") {
+		t.Fatalf("PrepareSession must apply the repo override: %q", res.Command)
+	}
+}
 
 func TestApplyLaunchDefaults(t *testing.T) {
 	got := applyLaunchDefaults("claude --dangerously-skip-permissions", "claude", config.AgentDefaults{Model: "sonnet", Effort: "medium"})

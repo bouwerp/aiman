@@ -7716,7 +7716,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			resumeSnapshot = nil
 		}
 		if flowManager != nil && flowManager.SkillEngine != nil {
-			prepared, err := flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *sessionCfg.Agent, sessionCfg.Skills, sessionCfg.PromptFree, nil, resumeSnapshot)
+			prepared, err := flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *sessionCfg.Agent, sessionCfg.Skills, sessionCfg.PromptFree, nil, resumeSnapshot, domain.QualityKit{Repo: s.RepoName, Role: s.Role})
 			if err == nil {
 				agentCmd = prepared.Command
 				sendKeysPrompt = prepared.InitialPrompt

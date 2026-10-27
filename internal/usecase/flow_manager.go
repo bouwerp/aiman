@@ -471,7 +471,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	agentCmd := config.Agent.Command
 	var sendKeysPrompt string
 	if m.SkillEngine != nil {
-		prepared, err := m.SkillEngine.PrepareSession(ctx, sshMgr, workingDir, *config.Agent, config.Skills, config.PromptFree, config.Issue, config.PriorSnapshot)
+		prepared, err := m.SkillEngine.PrepareSession(ctx, sshMgr, workingDir, *config.Agent, config.Skills, config.PromptFree, config.Issue, config.PriorSnapshot, domain.QualityKit{Repo: config.Repo.Name, Role: config.Role})
 		if err == nil {
 			agentCmd = prepared.Command
 			sendKeysPrompt = prepared.InitialPrompt

@@ -12,11 +12,14 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
-func applyConfiguredLaunchFlags(cmd string, ag domain.Agent, cfg *config.Config) string {
+// applyConfiguredLaunchFlags adds the model and effort resolved for this
+// agent in this repo and role: agent_defaults, then the repo's
+// agent_overrides, then the verifier role.
+func applyConfiguredLaunchFlags(cmd string, ag domain.Agent, cfg *config.Config, repo, role string) string {
 	if cfg == nil {
 		return cmd
 	}
-	d := cfg.LaunchDefaultsFor(ag.Name, ag.Command)
+	d := cfg.ResolveLaunchDefaults(ag.Name, ag.Command, repo, role)
 	return applyLaunchDefaults(cmd, agentBaseCommand(ag.Command), d)
 }
 

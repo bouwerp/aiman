@@ -46,5 +46,10 @@ type SkillEngine interface {
 	// injected into the task file, and when issue is nil it can be materialized
 	// as a restart handoff file (.aiman_session_summary.md) so the next agent can
 	// resume from the previous session state.
-	PrepareSession(ctx context.Context, remote RemoteExecutor, worktreePath string, agent Agent, selectedSkills []Skill, promptFree bool, issue *Issue, snapshot *SessionSnapshot) (PreparedSession, error)
+	// kit is the session's quality kit. With an issue its blocks go into the
+	// task file; without one a non-empty kit refreshes the kit blocks of an
+	// existing task file (or writes a kit-only one) and the agent is told to
+	// read it. A reviewer session ignores the kit apart from Repo and Role,
+	// which pick the launch model and effort.
+	PrepareSession(ctx context.Context, remote RemoteExecutor, worktreePath string, agent Agent, selectedSkills []Skill, promptFree bool, issue *Issue, snapshot *SessionSnapshot, kit QualityKit) (PreparedSession, error)
 }
