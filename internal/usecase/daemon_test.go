@@ -2,7 +2,9 @@ package usecase
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -17,6 +19,7 @@ type daemonRepo struct {
 	sessions map[string]domain.Session
 	prompts  []domain.ScheduledPrompt
 	saved    []domain.ScheduledPrompt
+	getErr   error
 }
 
 func (r *daemonRepo) List(context.Context) ([]domain.Session, error) {
@@ -28,9 +31,12 @@ func (r *daemonRepo) List(context.Context) ([]domain.Session, error) {
 }
 
 func (r *daemonRepo) Get(_ context.Context, id string) (*domain.Session, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
 	s, ok := r.sessions[id]
 	if !ok {
-		return nil, errors.New("not found")
+		return nil, fmt.Errorf("session not found: %w", sql.ErrNoRows)
 	}
 	return &s, nil
 }
@@ -78,9 +84,26 @@ func TestDueForPollHonoursFrequency(t *testing.T) {
 		{"r0", 0, 300 * time.Second, true},
 	}
 	for _, st := range steps {
-		if got := d.dueForPoll(st.rule, st.freq, t0.Add(st.at)); got != st.want {
+		now := t0.Add(st.at)
+		got := d.dueForPoll(st.rule, st.freq, now)
+		if got != st.want {
 			t.Errorf("dueForPoll(%s, %d, t0+%s) = %v, want %v", st.rule, st.freq, st.at, got, st.want)
 		}
+		if got {
+			d.markPolled(st.rule, now)
+		}
+	}
+}
+
+// A poll that failed is not recorded, so the rule is due again on the next tick.
+func TestFailedPollStaysDue(t *testing.T) {
+	d := NewDaemon(&config.Config{}, &daemonRepo{}, nil, &recordingSender{})
+	t0 := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	if !d.dueForPoll("r", 120, t0) {
+		t.Fatal("first poll not due")
+	}
+	if !d.dueForPoll("r", 120, t0.Add(30*time.Second)) {
+		t.Fatal("an unrecorded poll delayed the retry")
 	}
 }
 
@@ -135,6 +158,33 @@ func TestScheduledPromptRetriesWhenServeDown(t *testing.T) {
 	}
 	if len(repo.saved) != 0 {
 		t.Fatalf("SaveScheduledPrompt called %d times while serve is down; LastRunAt must not advance", len(repo.saved))
+	}
+}
+
+func TestScheduledPromptRetriesOnTransientRead(t *testing.T) {
+	repo := scheduledPromptRepo()
+	repo.getErr = errors.New("database is locked")
+	d := NewDaemon(&config.Config{}, repo, nil, &recordingSender{delivered: true})
+
+	if err := d.pollScheduledPrompts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.saved) != 0 {
+		t.Fatal("LastRunAt advanced after a failed session read; the prompt would be lost")
+	}
+}
+
+func TestScheduledPromptSkipsDeletedTarget(t *testing.T) {
+	repo := scheduledPromptRepo()
+	repo.prompts[0].SessionIDs = []string{"a", "gone"}
+	sender := &recordingSender{delivered: true}
+	d := NewDaemon(&config.Config{}, repo, nil, sender)
+
+	if err := d.pollScheduledPrompts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.sent) != 1 || len(repo.saved) != 1 {
+		t.Fatalf("sent %+v saved %d; a deleted target must not block the others", sender.sent, len(repo.saved))
 	}
 }
 

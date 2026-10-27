@@ -178,3 +178,18 @@ func TestNoPRRecordsZero(t *testing.T) {
 		t.Fatalf("state %+v %v", st, err)
 	}
 }
+
+func TestEmptyDirIsRefused(t *testing.T) {
+	r := newRig(t)
+	s := testSession()
+	s.WorktreePath, s.WorkingDirectory = "", ""
+	if err := r.w.PollSession(context.Background(), s); err == nil {
+		t.Fatal("want error")
+	}
+	if len(r.gh.viewed) != 0 {
+		t.Fatalf("gh ran with no directory: %q", r.gh.viewed)
+	}
+	if st, _ := r.store.LoadPRWatch(context.Background(), "s1"); st.LastError == "" {
+		t.Fatal("LastError not recorded")
+	}
+}

@@ -178,8 +178,13 @@ func sessionDir(s domain.Session) string {
 	return s.WorkingDirectory
 }
 
-// PollSession reads the session's PR once and reacts to it. A gh failure is
-// recorded as LastError and returned; nothing else changes.
+// errNoDir refuses a poll that would run gh in serve's own directory and so
+// read whichever repository that happens to be.
+var errNoDir = errors.New("session has no worktree or working directory")
+
+// PollSession reads the session's PR once and reacts to it. A failure is
+// recorded as LastError and returned; a gh failure reading the PR changes
+// nothing else.
 func (w *Watcher) PollSession(ctx context.Context, s domain.Session) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -188,18 +193,18 @@ func (w *Watcher) PollSession(ctx context.Context, s domain.Session) error {
 	if err != nil {
 		return err
 	}
-	pr, err := w.d.GitHub.PRView(ctx, sessionDir(s))
 	st.LastPolledAt = w.d.Now()
+	dir := sessionDir(s)
+	if dir == "" {
+		return w.fail(ctx, st, errNoDir)
+	}
+	pr, err := w.d.GitHub.PRView(ctx, dir)
 	switch {
 	case errors.Is(err, ErrNoPR):
 		st.PRNumber, st.PRState, st.HeadSHA, st.LastError = 0, "", "", ""
 		return w.d.State.SavePRWatch(ctx, st)
 	case err != nil:
-		st.LastError = err.Error()
-		if serr := w.d.State.SavePRWatch(ctx, st); serr != nil {
-			return errors.Join(err, serr)
-		}
-		return err
+		return w.fail(ctx, st, err)
 	}
 	st.PRNumber, st.PRState, st.HeadSHA, st.LastError = pr.Number, pr.State, pr.HeadSHA, ""
 	if err := w.d.State.SavePRWatch(ctx, st); err != nil {
@@ -209,7 +214,20 @@ func (w *Watcher) PollSession(ctx context.Context, s domain.Session) error {
 		return nil
 	}
 	if err := w.reactToChecks(ctx, s, pr); err != nil {
-		return err
+		return w.fail(ctx, st, err)
 	}
-	return w.reactToComments(ctx, s, st, pr)
+	if err := w.reactToComments(ctx, s, st, pr); err != nil {
+		return w.fail(ctx, st, err)
+	}
+	return nil
+}
+
+// fail stores err as the session's LastError, so ci.get can say why the
+// watch stopped making progress, and returns it.
+func (w *Watcher) fail(ctx context.Context, st domain.PRWatchState, err error) error {
+	st.LastError = err.Error()
+	if serr := w.d.State.SavePRWatch(ctx, st); serr != nil {
+		return errors.Join(err, serr)
+	}
+	return err
 }

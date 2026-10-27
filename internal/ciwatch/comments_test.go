@@ -2,6 +2,7 @@ package ciwatch
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -169,5 +170,30 @@ func TestOpenReviewTodoNotDuplicated(t *testing.T) {
 	r.poll(t, testSession())
 	if len(r.todos.items()) != 1 || len(r.steers.all()) != 1 {
 		t.Fatalf("todos %d steers %d", len(r.todos.items()), len(r.steers.all()))
+	}
+}
+
+func TestCommentReadFailureIsLastError(t *testing.T) {
+	r := newRig(t)
+	r.gh.viewer = "me"
+	r.gh.setPR(openPR())
+	r.gh.commErr = errors.New("gh api: rate limited")
+	if err := r.w.PollSession(context.Background(), testSession()); err == nil {
+		t.Fatal("want error")
+	}
+	st, err := r.store.LoadPRWatch(context.Background(), "s1")
+	if err != nil || st.LastError != "gh api: rate limited" || st.PRNumber != 42 {
+		t.Fatalf("state %+v %v", st, err)
+	}
+}
+
+func TestEmptyCommentHasReadableTitle(t *testing.T) {
+	r := newRig(t)
+	r.gh.viewer = "me"
+	r.gh.setPR(openPR())
+	r.gh.comments = []ReviewComment{{ID: 5, Body: "  \n ", Path: "a.go", Line: 3, Author: "rev", CreatedAt: r.now}}
+	r.poll(t, testSession())
+	if items := r.todos.items(); len(items) != 1 || items[0].Text != "Address review: <empty comment> (a.go:3)" {
+		t.Fatalf("todos %+v", items)
 	}
 }

@@ -21,6 +21,7 @@ type fakeGH struct {
 	logs     map[int64]string
 	logErr   error
 	comments []ReviewComment
+	commErr  error
 	viewer   string
 	viewErr  error
 	viewed   []string
@@ -50,7 +51,7 @@ func (f *fakeGH) FailedJobLog(_ context.Context, _ string, jobID int64) (string,
 func (f *fakeGH) ReviewComments(context.Context, string, int) ([]ReviewComment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]ReviewComment(nil), f.comments...), nil
+	return append([]ReviewComment(nil), f.comments...), f.commErr
 }
 
 func (f *fakeGH) ViewerLogin(context.Context) (string, error) {

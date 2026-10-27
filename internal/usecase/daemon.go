@@ -3,6 +3,7 @@ package usecase
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,7 +111,8 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 			continue
 		}
 
-		if !d.dueForPoll(s.ID, s.AutonomousConfig.PollFrequencySecs, time.Now()) {
+		now := time.Now()
+		if !d.dueForPoll(s.ID, s.AutonomousConfig.PollFrequencySecs, now) {
 			continue
 		}
 
@@ -154,6 +156,7 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 			log.Printf("Failed to parse GitHub issues for repo %s: %v", s.AutonomousConfig.GitHubRepo, err)
 			continue
 		}
+		d.markPolled(s.ID, now)
 
 		// 3. For each issue, check if an ephemeral agent is already handling it
 		for _, issue := range issues {
@@ -233,18 +236,20 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 	return nil
 }
 
-// dueForPoll reports whether a rule's poll interval has elapsed and, when it
-// has, records now as the rule's last poll.
+// dueForPoll reports whether a rule's poll interval has elapsed since its last
+// successful poll.
 func (d *Daemon) dueForPoll(ruleID string, freqSecs int, now time.Time) bool {
 	if freqSecs <= 0 {
 		freqSecs = defaultTriggerPollSecs
 	}
 	last, polled := d.lastPolled[ruleID]
-	if polled && now.Sub(last) < time.Duration(freqSecs)*time.Second {
-		return false
-	}
-	d.lastPolled[ruleID] = now
-	return true
+	return !polled || now.Sub(last) >= time.Duration(freqSecs)*time.Second
+}
+
+// markPolled records a successful poll. A failed gh call leaves the rule due,
+// so it retries on the next tick instead of a full interval later.
+func (d *Daemon) markPolled(ruleID string, at time.Time) {
+	d.lastPolled[ruleID] = at
 }
 
 func (d *Daemon) capturePane(ctx context.Context, s domain.Session) (string, error) {
@@ -351,10 +356,15 @@ func (d *Daemon) pollScheduledPrompts(ctx context.Context) error {
 }
 
 // triggerPrompt queues the prompt for every target session that still exists.
+// Only a session that is gone is skipped; any other read error fails the run
+// so LastRunAt stays put and the prompt is retried.
 func (d *Daemon) triggerPrompt(ctx context.Context, p *domain.ScheduledPrompt) error {
 	var errs []error
 	for _, sessID := range p.SessionIDs {
 		if _, err := d.db.Get(ctx, sessID); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				errs = append(errs, fmt.Errorf("session %s: %w", sessID, err))
+			}
 			continue
 		}
 		if _, err := d.sender.SendPrompt(ctx, sessID, p.Prompt, SendNote); err != nil {

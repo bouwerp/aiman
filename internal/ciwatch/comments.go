@@ -15,6 +15,9 @@ const (
 	reviewTitleRunes = 80
 	// reviewBodyBytes caps the comment body in the steering note.
 	reviewBodyBytes = 4000
+	// emptyReviewTitle stands in for a comment with no text, such as a
+	// suggestion block GitHub renders from metadata.
+	emptyReviewTitle = "<empty comment>"
 )
 
 // ReviewRef is the to-do Ref that links an item to a review comment.
@@ -119,7 +122,7 @@ func reviewTitle(body string) string {
 		}
 		return line
 	}
-	return ""
+	return emptyReviewTitle
 }
 
 // truncateBody cuts body to reviewBodyBytes on a rune boundary.
