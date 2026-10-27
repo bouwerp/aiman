@@ -16,6 +16,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	infraGit "github.com/bouwerp/aiman/internal/infra/git"
+	"github.com/bouwerp/aiman/internal/infra/graphify"
 	"github.com/google/uuid"
 )
 
@@ -560,6 +561,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 // transition, and the ACTIVE transition. Workspace trust already ran before
 // the agent launched (see trustWorkspaceBeforeLaunch).
 func (m *FlowManager) finaliseCreate(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, workingDir string) (*domain.Session, error) {
+	// The graph build runs detached once the agent is up, so it never holds
+	// the create; the script is a no-op without graphify or a git checkout.
+	if session.WorktreePath != "" {
+		if _, err := sshMgr.Execute(ctx, graphify.BackgroundUpdateScript(session.WorktreePath)); err != nil {
+			infraGit.ReportProgress(ctx, fmt.Sprintf("graphify update not started: %v", err))
+		}
+	}
+
 	// Model detection boots an agent CLI on the remote (~20s for Claude) and
 	// only fills a display field, so it is bounded and best-effort.
 	infraGit.ReportProgress(ctx, "Detecting agent model…")

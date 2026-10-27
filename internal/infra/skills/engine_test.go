@@ -13,6 +13,7 @@ import (
 	"github.com/bouwerp/aiman/internal/aimanskill"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/graphify"
 )
 
 // mockRemote captures WriteFile calls and returns success for Execute calls.
@@ -20,6 +21,8 @@ type mockRemote struct {
 	writtenFiles map[string][]byte
 	cmds         []string
 	root         string
+	// graphify makes the graphify probe report an installed binary.
+	graphify bool
 }
 
 func newMockRemote() *mockRemote {
@@ -32,6 +35,9 @@ func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error) {
 	m.cmds = append(m.cmds, cmd)
 	if strings.Contains(cmd, `printf %s "$HOME"`) {
 		return "/home/user", nil
+	}
+	if m.graphify && cmd == graphify.ProbeCommand() {
+		return "GRAPHIFY=1\n", nil
 	}
 	if strings.HasPrefix(cmd, "if [ -f ") {
 		for path := range m.writtenFiles {
@@ -594,6 +600,35 @@ func TestWriteTaskFile_Content(t *testing.T) {
 		if !strings.Contains(content, s) {
 			t.Errorf("task file should contain %q, got:\n%s", s, content)
 		}
+	}
+}
+
+func TestWriteTaskFileMentionsGraphifyWhenPresent(t *testing.T) {
+	remote := newMockRemote()
+	remote.graphify = true
+	issue := &domain.Issue{Key: "DATA-7", Summary: "s", Status: domain.IssueStatusTodo}
+	if err := writeTaskFile(context.Background(), remote, "/work/repo", issue, nil); err != nil {
+		t.Fatal(err)
+	}
+	content := string(remote.writtenFiles["/work/repo/.aiman_task.md"])
+	if !strings.Contains(content, "graphify query") {
+		t.Fatalf("task file should point at graphify query, got:\n%s", content)
+	}
+	shared := strings.Index(content, "**Shared context.**")
+	graph := strings.Index(content, "**Code graph.**")
+	if shared < 0 || graph < shared {
+		t.Fatalf("code graph line should follow the shared context line, got:\n%s", content)
+	}
+}
+
+func TestWriteTaskFileOmitsGraphifyWhenAbsent(t *testing.T) {
+	remote := newMockRemote()
+	issue := &domain.Issue{Key: "DATA-7", Summary: "s", Status: domain.IssueStatusTodo}
+	if err := writeTaskFile(context.Background(), remote, "/work/repo", issue, nil); err != nil {
+		t.Fatal(err)
+	}
+	if content := string(remote.writtenFiles["/work/repo/.aiman_task.md"]); strings.Contains(content, "graphify") {
+		t.Fatalf("task file should not mention graphify when it is absent, got:\n%s", content)
 	}
 }
 
