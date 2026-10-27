@@ -184,7 +184,7 @@ func runSession(args []string) error {
 		}
 		if v := flags["budget-tokens"]; v != "" {
 			bt, err := strconv.ParseInt(v, 10, 64)
-			if err != nil {
+			if err != nil || bt < 0 {
 				writeCLIError(server.CodeInvalidParams, "budget-tokens must be a non-negative integer: "+v)
 				return errUsage
 			}

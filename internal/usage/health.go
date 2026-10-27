@@ -332,9 +332,11 @@ func codexActionCommand(raw json.RawMessage, fallback string) string {
 }
 
 // accFromStored rebuilds an accumulator from stored counts and read paths.
+// A stored known health with file-tool counts keeps shell-only appends known.
 func accFromStored(h Health, readsJSON string) *healthAcc {
 	acc := newHealthAcc()
 	acc.h = h
+	acc.fileTool = h.ReadCalls > 0 || h.EditCalls > 0
 	if readsJSON != "" {
 		var paths []string
 		if err := json.Unmarshal([]byte(readsJSON), &paths); err == nil {

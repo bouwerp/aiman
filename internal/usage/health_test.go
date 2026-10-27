@@ -68,6 +68,14 @@ func TestHealthClaudeFirstTestAndRetry(t *testing.T) {
 	}
 }
 
+func TestHealthStoredFileToolsStayKnown(t *testing.T) {
+	acc := accFromStored(Health{Known: true, ReadCalls: 1, EditCalls: 1}, "")
+	acc.applyTool("Bash", "", "go test ./...", "/wt", nil, time.Now())
+	if h := acc.finish(); !h.Known {
+		t.Fatalf("health = %+v, want stored file tools to keep Known", h)
+	}
+}
+
 func TestHealthCodexExecCommand(t *testing.T) {
 	// Shell-only rollout: exec_command + custom_tool_call exec. No file
 	// tools, so health is not known (no READ:EDIT data to show).
