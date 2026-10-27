@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -112,17 +111,17 @@ func (s *Files) Get(_ context.Context, id string) (found *domain.ContextEntry, e
 }
 
 func (s *Files) List(_ context.Context, q domain.ContextQuery) ([]domain.ContextEntry, error) {
-	return s.timedCollect("list", q, false)
+	return s.timedCollect("list", q, false, false)
 }
 
 func (s *Files) Find(_ context.Context, q domain.ContextQuery) ([]domain.ContextEntry, error) {
-	return s.timedCollect("find", q, true)
+	return s.timedCollect("find", q, true, true)
 }
 
-func (s *Files) timedCollect(op string, q domain.ContextQuery, text bool) (list []domain.ContextEntry, err error) {
+func (s *Files) timedCollect(op string, q domain.ContextQuery, text, live bool) (list []domain.ContextEntry, err error) {
 	start := time.Now()
 	defer func() { s.observe(op, start, err, len(list)) }()
-	return s.collect(q, text)
+	return s.collect(q, text, live)
 }
 
 func (s *Files) Pack(_ context.Context, q domain.ContextQuery) (text string, err error) {
@@ -131,7 +130,7 @@ func (s *Files) Pack(_ context.Context, q domain.ContextQuery) (text string, err
 	if q.Limit <= 0 {
 		q.Limit = defaultPackLimit
 	}
-	entries, err := s.collect(q, strings.TrimSpace(q.Text) != "")
+	entries, err := s.collect(q, strings.TrimSpace(q.Text) != "", true)
 	if err != nil {
 		return "", err
 	}
@@ -189,7 +188,7 @@ func (s *Files) PackSession(ctx context.Context, group, repo string) (text strin
 	return packForSessionUnmetered(ctx, s, group, repo)
 }
 
-func (s *Files) collect(q domain.ContextQuery, requireText bool) ([]domain.ContextEntry, error) {
+func (s *Files) collect(q domain.ContextQuery, requireText, live bool) ([]domain.ContextEntry, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		limit = defaultListLimit
@@ -198,29 +197,35 @@ func (s *Files) collect(q domain.ContextQuery, requireText bool) ([]domain.Conte
 	if requireText && needle == "" {
 		return nil, nil
 	}
-	var out []domain.ContextEntry
-	err := s.walk(func(e domain.ContextEntry) error {
-		if q.Namespace != "" && e.Namespace != q.Namespace {
-			return nil
-		}
-		if q.Key != "" && e.Key != q.Key && SafeKey(q.Key) != e.Key {
-			return nil
-		}
-		if needle != "" && !matchText(e, needle) {
-			return nil
-		}
-		out = append(out, e)
+	var all []domain.ContextEntry
+	if err := s.walk(func(e domain.ContextEntry) error {
+		all = append(all, e)
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].CreatedAt.After(out[j].CreatedAt)
+	var superseded map[string]bool
+	if live {
+		superseded = Superseded(all)
+	}
+	now := time.Now()
+	var out []domain.ContextEntry
+	for _, e := range all {
+		if q.Namespace != "" && e.Namespace != q.Namespace {
+			continue
 		}
-		return out[i].ID > out[j].ID
-	})
+		if q.Key != "" && e.Key != q.Key && SafeKey(q.Key) != e.Key {
+			continue
+		}
+		if needle != "" && !matchText(e, needle) {
+			continue
+		}
+		if live && !Live(e, superseded, now) {
+			continue
+		}
+		out = append(out, e)
+	}
+	Rank(out)
 	if len(out) > limit {
 		out = out[:limit]
 	}
@@ -442,7 +447,7 @@ func packForSessionUnmetered(_ context.Context, s *Files, group, repo string) st
 		if key == "" {
 			return
 		}
-		list, err := s.collect(domain.ContextQuery{Namespace: ns, Key: key, Limit: defaultPackLimit}, false)
+		list, err := s.collect(domain.ContextQuery{Namespace: ns, Key: key, Limit: defaultPackLimit}, false, true)
 		if err != nil {
 			return
 		}
@@ -457,6 +462,7 @@ func packForSessionUnmetered(_ context.Context, s *Files, group, repo string) st
 	add(domain.ContextNSGroup, group)
 	add(domain.ContextNSRepo, repo)
 	add(domain.ContextNSHost, "host")
+	Rank(all)
 	if len(all) > defaultPackLimit {
 		all = all[:defaultPackLimit]
 	}
@@ -486,6 +492,16 @@ func packFromLists(ctx context.Context, store domain.ContextStore, group, repo s
 	add(domain.ContextNSGroup, group)
 	add(domain.ContextNSRepo, repo)
 	add(domain.ContextNSHost, "host")
+	superseded := Superseded(all)
+	now := time.Now()
+	live := all[:0]
+	for _, e := range all {
+		if Live(e, superseded, now) {
+			live = append(live, e)
+		}
+	}
+	all = live
+	Rank(all)
 	if len(all) > defaultPackLimit {
 		all = all[:defaultPackLimit]
 	}
@@ -501,7 +517,11 @@ func FormatPack(entries []domain.ContextEntry) string {
 	b.WriteString("# Shared context\n\n")
 	b.WriteString("Notes from earlier sessions on this host. Use `aiman context get ID` for the full note.\n\n")
 	for _, e := range entries {
-		fmt.Fprintf(&b, "- **%s** (`%s`): %s\n", e.Title, e.ID, e.Abstract)
+		typ := e.Type
+		if typ == "" {
+			typ = domain.ContextTypeFact
+		}
+		fmt.Fprintf(&b, "- **%s** [%s] (`%s`): %s\n", e.Title, typ, e.ID, e.Abstract)
 	}
 	return strings.TrimSpace(b.String()) + "\n"
 }
