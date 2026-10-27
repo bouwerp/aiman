@@ -50,5 +50,6 @@ metrics it breaks. A broken harness cannot score like a good one.
 ## Scope
 
 This suite grades aiman's harness, not a model. It uses no LLM judge and no
-public coding benchmark. The real-agent track is opt-in, cost-capped and
-nightly; a capped run is never judged.
+public coding benchmark. The opt-in real-agent track is planned as a nightly,
+cost-capped run and never part of CI; until it lands, `make eval` is entirely
+fake-agent and spends nothing. A capped run is never judged.

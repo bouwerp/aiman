@@ -1301,9 +1301,19 @@ make fmt
 # Run all CI checks locally (format + vet + test + lint)
 make ci
 
+# Run the deterministic harness evals
+make eval
+
 # Clean build artifacts
 make clean
 ```
+
+`make eval` runs the cases under `evals/` against an in-process `aiman serve`,
+a temp SQLite database and a temp Unix socket, with a fake remote and fake
+agent. It needs no SSH host, agent binary or network, and leaves no files
+behind. `make ci` stays the unit and race gate; CI also runs `make eval` in a
+separate five-minute job. Only the opt-in real-agent track spends money, and
+that track is nightly, cost-capped and never part of CI.
 
 ### CI/CD Pipeline
 

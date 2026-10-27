@@ -22,11 +22,19 @@ Current release: **v0.14.0**
 ## Build & Test
 
 ```bash
-make ci          # fmt + vet + test + lint (full CI — run before every commit)
+make ci          # fmt + vet + test + lint (full CI: run before every commit)
+make eval        # deterministic harness evals (fake remote, temp DB and socket)
 make build       # go build -o aiman ./cmd/aiman
 go build ./...   # quick build check
 go test ./...    # tests (skip -race if Go stdlib version mismatch)
 ```
+
+`make eval` runs the cases under `evals/` against an in-process `aiman serve`,
+a temp SQLite database and a temp Unix socket, with a fake remote and fake
+creator. It needs no SSH host, agent binary or network, and removes its temp
+directory. It is not part of `make ci`; CI runs it as a separate five-minute
+job. Only an opt-in real-agent track would spend money, and that track is
+nightly, cost-capped and never part of CI.
 
 **Known pre-existing test failure:** `TestOllamaIntelligenceSummariseSession` in `internal/infra/ai` — requires a local Ollama instance, always fails in CI. Ignore it.
 
