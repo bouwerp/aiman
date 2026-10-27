@@ -70,6 +70,8 @@ type Watcher struct {
 	mu sync.Mutex
 	// viewer is the gh login, cached once known; guarded by mu.
 	viewer string
+	// kicks asks Run to poll one session now.
+	kicks chan string
 }
 
 // New returns a watcher over d.
@@ -77,7 +79,95 @@ func New(d Deps) *Watcher {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Watcher{d: d}
+	return &Watcher{d: d, kicks: make(chan string, 16)}
+}
+
+// Watched reports whether a session's PR should be polled now.
+func Watched(s domain.Session) bool {
+	return s.WatchesPR() && s.Status == domain.SessionStatusActive && !s.AgentEnded && sessionDir(s) != ""
+}
+
+// Run polls every watched session now and then every PollInterval, and polls
+// one session at once when it is kicked. It returns when ctx is done.
+func (w *Watcher) Run(ctx context.Context) {
+	w.pollAll(ctx)
+	t := time.NewTicker(PollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			w.pollAll(ctx)
+		case id := <-w.kicks:
+			w.pollOne(ctx, id)
+		}
+	}
+}
+
+// Kick asks Run to poll a session now. It never blocks; a kick arriving while
+// 16 are pending is dropped, and the ticker covers it.
+func (w *Watcher) Kick(sessionID string) {
+	select {
+	case w.kicks <- sessionID:
+	default:
+	}
+}
+
+// pollAll polls every watched session. A failing poll is recorded as that
+// session's LastError and does not stop the others.
+func (w *Watcher) pollAll(ctx context.Context) {
+	list, err := w.d.Sessions.List(ctx)
+	if err != nil {
+		return
+	}
+	for _, s := range list {
+		if ctx.Err() != nil {
+			return
+		}
+		if Watched(s) {
+			_ = w.PollSession(ctx, s)
+		}
+	}
+}
+
+func (w *Watcher) pollOne(ctx context.Context, id string) {
+	list, err := w.d.Sessions.List(ctx)
+	if err != nil {
+		return
+	}
+	for _, s := range list {
+		if s.ID == id && Watched(s) {
+			_ = w.PollSession(ctx, s)
+			return
+		}
+	}
+}
+
+// SetWatch starts the session's watch afresh. Turning it on records now as
+// WatchSince, so review comments already on the PR are not steered.
+func (w *Watcher) SetWatch(ctx context.Context, sessionID string, on bool) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.d.State.ResetPRWatch(ctx, sessionID); err != nil {
+		return err
+	}
+	if !on {
+		return nil
+	}
+	return w.d.State.SavePRWatch(ctx, domain.PRWatchState{SessionID: sessionID, WatchSince: w.d.Now()})
+}
+
+// Status is the session's stored watcher state.
+func (w *Watcher) Status(ctx context.Context, sessionID string) (domain.PRWatchState, error) {
+	return w.d.State.LoadPRWatch(ctx, sessionID)
+}
+
+// Forget drops every CI row for a session.
+func (w *Watcher) Forget(ctx context.Context, sessionID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.d.State.ResetPRWatch(ctx, sessionID)
 }
 
 // sessionDir is where gh runs for a session.

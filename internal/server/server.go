@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/notify"
@@ -78,6 +79,9 @@ type Server struct {
 
 	// memoryJobs queues handover-derived memory candidates for the laptop.
 	memoryJobs *memoryjob.Queue
+
+	// ciWatch polls watched sessions' PRs; nil until SetCIWatcher.
+	ciWatch *ciwatch.Watcher
 
 	notifyRec  *notify.Recorder
 	notifyLog  NotifyLog
@@ -243,6 +247,10 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleReportAgentSession(ctx, req)
 	case "notify.since":
 		return s.handleNotifySince(ctx, req)
+	case "ci.get":
+		return s.handleCIGet(ctx, req)
+	case "ci.watch":
+		return s.handleCIWatch(ctx, req)
 	case "context.put":
 		return s.handleContextPut(ctx, req)
 	case "context.get":

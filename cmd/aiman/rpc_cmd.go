@@ -30,6 +30,8 @@ var rpcMethods = map[string]bool{
 	"context.verify":   true,
 	"memory.jobs":      true,
 	"memory.done":      true,
+	"ci.get":           true,
+	"ci.watch":         true,
 }
 
 // rpcParams validates the method and params. It passes the bytes through

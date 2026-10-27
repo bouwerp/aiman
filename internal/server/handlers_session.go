@@ -738,6 +738,9 @@ func (s *Server) handleForget(ctx context.Context, req Request) Response {
 	if rec := s.NotifyRecorder(); rec != nil {
 		rec.Forget(sess.ID)
 	}
+	if s.ciWatch != nil {
+		_ = s.ciWatch.Forget(ctx, sess.ID)
+	}
 	if s.repo != nil {
 		if err := s.repo.Delete(ctx, sess.ID); err != nil {
 			return errResp(req.ID, CodeInvalidParams, err.Error())

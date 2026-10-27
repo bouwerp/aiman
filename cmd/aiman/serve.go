@@ -13,6 +13,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/aimanskill"
+	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -160,6 +161,23 @@ func runServe() error {
 		go notify.NewDispatcher(notify.StoreSource{Store: db}, notify.StoreCursor{Name: "serve", DB: db}, sinks...).Run(ctx, 2*time.Second)
 	}
 
+	ciDeps := ciwatch.Deps{
+		Sessions: db,
+		GitHub:   ciwatch.GHCLI{},
+		Todos:    srv.TodoAccess(),
+		Steer: func(id string, author domain.TodoAuthor, text string) {
+			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: author, Text: text})
+		},
+		State: db,
+	}
+	// A nil *Recorder in the interface would not compare equal to nil.
+	if rec := srv.NotifyRecorder(); rec != nil {
+		ciDeps.Notify = rec
+	}
+	ciWatcher := ciwatch.New(ciDeps)
+	srv.SetCIWatcher(ciWatcher)
+	go ciWatcher.Run(ctx)
+
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
 }
@@ -260,5 +278,7 @@ aiman session deepcode-watch. Resume is deepcode --resume <uuid>.
 Model and effort are DEEPCODE_MODEL and DEEPCODE_REASONING_EFFORT.
 Permissions stay the user's defaultMode. Ageni is not hooked.
 usage.get reports token totals from Claude and Codex transcripts.
+It watches the PR of each session with watch_pr on (the default for
+autonomous sessions) and steers failed checks and review comments.
 `)
 }
