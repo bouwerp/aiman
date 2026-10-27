@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/todo"
+	"github.com/bouwerp/aiman/internal/usage"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
@@ -31,6 +32,7 @@ type Harness struct {
 	t      *testing.T
 	srv    *server.Server
 	remote *FakeRemote
+	usage  *usage.Tracker
 	cancel context.CancelFunc
 	done   chan struct{}
 	once   sync.Once

@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/usage"
@@ -16,8 +17,18 @@ func (h *Harness) EnableUsage(window int) error {
 		Prices: usage.DefaultPrices(),
 		Now:    time.Now,
 	})
-	tracker := usage.NewTracker(h.Repo, h.Repo, nil)
-	tracker.SetContextWindow(window)
-	_, err := tracker.ScanOnce(context.Background())
+	h.usage = usage.NewTracker(h.Repo, h.Repo, nil)
+	h.usage.SetContextWindow(window)
+	h.usage.SetBudgetHandler(h.srv.PublishBudget)
+	_, err := h.usage.ScanOnce(context.Background())
+	return err
+}
+
+// ScanUsage runs one more tracker pass after the transcript changes.
+func (h *Harness) ScanUsage() error {
+	if h.usage == nil {
+		return fmt.Errorf("usage is not enabled")
+	}
+	_, err := h.usage.ScanOnce(context.Background())
 	return err
 }

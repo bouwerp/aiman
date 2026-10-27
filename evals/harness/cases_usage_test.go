@@ -10,5 +10,8 @@ func TestUsageContext(t *testing.T) {
 }
 
 func TestUsageBudget(t *testing.T) {
-	t.Skip("waiting on nl-4 T14")
+	res := CaseUsageBudget().Run(t)
+	if !res.Passed {
+		t.Fatalf("usage-budget failed: %+v", res.Metrics)
+	}
 }

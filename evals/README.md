@@ -23,12 +23,13 @@ The current suite covers:
   capture survive until archive or forget.
 - `usage-context`: a two-turn Claude transcript reports the last turn's
   input + cache_read against the explicit context window.
+- `usage-budget`: crossing 70% and 100% emits one `usage.budget` event per
+  threshold, and `usage.get` reports the same used tokens and state.
 - `event-sequence`: the session ledger's per-session sequence is contiguous and
   every payload has a hash.
 
 `restart-preserves-worktree` and `child-spawn` are added with the restart
-harness and the coordinator. The verification cases skip with `waiting on nl-7`;
-`usage-budget` skips with `waiting on nl-4 T14`.
+harness and the coordinator. The verification cases skip with `waiting on nl-7`.
 
 ## Metrics
 
