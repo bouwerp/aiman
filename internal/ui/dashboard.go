@@ -2121,6 +2121,12 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			} else {
 				sendStatus("Handing creation to the remote...")
 				session, rerr := createSessionRemotely(ctx, mgr, sessionCfg, sessionCfg.RemoteHost)
+				if rerr != nil && isPreferredAgentChoice(sessionCfg.Agent) {
+					// Only serve can pick from agents.preferred, so its refusal
+					// is the answer; a local create has no agent to run.
+					m.logPersistent("remote create failed for branch %q: %v", sessionCfg.Branch, rerr)
+					return sessionCreateMsg{err: rerr, placeholderID: placeholderID}
+				}
 				if rerr != nil {
 					// Fall through to the local flow: a remote that refused the
 					// request has created nothing, so retrying locally is safe.
@@ -2138,6 +2144,10 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 					return sessionCreateMsg{session: *session, placeholderID: placeholderID}
 				}
 			}
+		}
+
+		if isPreferredAgentChoice(sessionCfg.Agent) {
+			return sessionCreateMsg{err: errPreferredNeedsServe, placeholderID: placeholderID}
 		}
 
 		// Use FlowManager to create the session
@@ -7198,6 +7208,7 @@ func (m *Model) applyScanAgents(msg agent.ScanAgentsMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.agentPicker = NewAgentPickerModel(msg.Agents)
+	m.agentPicker.allowPreferred = m.loadingNext == viewStateAgentPicker
 	h, v := docStyle.GetFrameSize()
 	m.agentPicker.SetSize(m.width-h, m.height-v)
 	m.state = m.loadingNext

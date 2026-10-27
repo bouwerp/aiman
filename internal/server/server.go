@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/ciwatch"
+	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/notify"
@@ -86,6 +87,12 @@ type Server struct {
 	// verifier runs reviewer sessions; nil until SetVerifier.
 	verifier *verify.Manager
 
+	// preferredAgents is agents.preferred; agentInstalled reports whether a
+	// command resolves on this host. session.create with no agent picks from
+	// them. Both stay empty until SetAgentChoice.
+	preferredAgents []string
+	agentInstalled  func(ctx context.Context, command string) bool
+
 	notifyRec  *notify.Recorder
 	notifyLog  NotifyLog
 	notifyMu   sync.RWMutex
@@ -97,6 +104,26 @@ type Server struct {
 // could not open the queue; memory.jobs then returns an empty list.
 func (s *Server) SetMemoryJobs(q *memoryjob.Queue) {
 	s.memoryJobs = q
+}
+
+// SetAgentChoice sets the agents.preferred list and the probe that reports
+// whether a command is installed on this host.
+func (s *Server) SetAgentChoice(preferred []string, installed func(ctx context.Context, command string) bool) {
+	s.preferredAgents = append([]string(nil), preferred...)
+	s.agentInstalled = installed
+}
+
+// pickAgent returns the first agents.preferred command installed on this host.
+func (s *Server) pickAgent(ctx context.Context) (string, error) {
+	var installed []string
+	if s.agentInstalled != nil {
+		for _, name := range s.preferredAgents {
+			if name = strings.TrimSpace(name); name != "" && s.agentInstalled(ctx, name) {
+				installed = append(installed, name)
+			}
+		}
+	}
+	return coordinator.PickAgent(s.preferredAgents, installed)
 }
 
 // todoStore is the to-do persistence serve needs: the shared Store plus the

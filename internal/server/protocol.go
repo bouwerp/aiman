@@ -19,6 +19,7 @@ const (
 	CodeJiraUnavailable  = "jira_unavailable"
 	CodeProtocolMismatch = "protocol_mismatch"
 	CodeNoReviewer       = "no_reviewer_agent"
+	CodeNoPreferredAgent = "no_preferred_agent"
 )
 
 type Request struct {

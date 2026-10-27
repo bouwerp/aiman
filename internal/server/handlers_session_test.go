@@ -877,3 +877,68 @@ func TestSessionInfoCarriesRole(t *testing.T) {
 		t.Fatalf("worker role=%q", got)
 	}
 }
+
+// pickServer is a serve instance with a fake creator and an agents.preferred
+// list, where only the installed commands resolve on the host.
+func pickServer(t *testing.T, preferred []string, installed ...string) (*Server, domain.SessionRepository, *fakeCreator) {
+	t.Helper()
+	repo := testRepo(t)
+	creator := &fakeCreator{}
+	srv := New(nil, repo, nil, creator, nil, nil, "test")
+	have := map[string]bool{}
+	for _, c := range installed {
+		have[c] = true
+	}
+	srv.SetAgentChoice(preferred, func(_ context.Context, command string) bool { return have[command] })
+	return srv, repo, creator
+}
+
+func TestCreateUsesPreferredWhenAgentEmpty(t *testing.T) {
+	srv, repo, creator := pickServer(t, []string{"codex", "claude"}, "claude")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.Agent == nil || creator.cfg.Agent.Command != "claude" || creator.cfg.Agent.Name != "claude" {
+		t.Fatalf("agent = %+v, want claude", creator.cfg.Agent)
+	}
+	got, err := repo.Get(context.Background(), "new-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentName != "claude" {
+		t.Fatalf("saved agent = %q, want claude", got.AgentName)
+	}
+}
+
+func TestExplicitAgentBeatsPreferred(t *testing.T) {
+	srv, _, creator := pickServer(t, []string{"claude"}, "claude", "grok")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true, "agent": "grok"})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.Agent == nil || creator.cfg.Agent.Command != "grok" {
+		t.Fatalf("agent = %+v, want grok", creator.cfg.Agent)
+	}
+}
+
+func TestCreateReportsNoPreferredAgent(t *testing.T) {
+	srv, repo, creator := pickServer(t, []string{"codex", "claude"})
+	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true})
+	if resp.Error == nil || resp.Error.Code != CodeNoPreferredAgent {
+		t.Fatalf("error = %+v, want %s", resp.Error, CodeNoPreferredAgent)
+	}
+	if !strings.Contains(resp.Error.Message, "codex") || !strings.Contains(resp.Error.Message, "claude") {
+		t.Fatalf("message %q must name the tried agents", resp.Error.Message)
+	}
+	if creator.cfg.Agent != nil {
+		t.Fatalf("create ran with %+v", creator.cfg.Agent)
+	}
+	list, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("saved %d sessions, want none", len(list))
+	}
+}

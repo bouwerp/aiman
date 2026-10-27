@@ -95,13 +95,19 @@ func TestCreateSessionOnRemoteAlwaysSendsPromptFree(t *testing.T) {
 	}
 }
 
-func TestCreateSessionOnRemoteRequiresAnAgent(t *testing.T) {
+// An empty agent is left off the params so serve picks from agents.preferred.
+func TestCreateSessionOnRemoteLeavesEmptyAgentToServe(t *testing.T) {
 	r := &createRemote{out: okCreateResponse}
-	if _, err := CreateSessionOnRemote(context.Background(), r, RemoteCreateSpec{Repo: "r"}); err == nil {
-		t.Error("an agent command is required")
+	if _, err := CreateSessionOnRemote(context.Background(), r, RemoteCreateSpec{Repo: "r", Branch: "b"}); err != nil {
+		t.Fatalf("create: %v", err)
 	}
-	if len(r.cmds) != 0 {
-		t.Error("nothing should be sent without an agent")
+	for _, v := range r.written {
+		if strings.Contains(string(v), `"agent"`) {
+			t.Errorf("empty agent was sent: %s", v)
+		}
+	}
+	if len(r.written) != 1 {
+		t.Fatalf("written %d params files, want 1", len(r.written))
 	}
 }
 

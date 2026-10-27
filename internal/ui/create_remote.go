@@ -2,7 +2,7 @@ package ui
 
 import (
 	"context"
-	"strings"
+	"errors"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -32,12 +32,17 @@ func remoteCreateSpecFrom(cfg domain.SessionConfig) usecase.RemoteCreateSpec {
 		ExistingBranch: cfg.ExistingBranch,
 		PromptFree:     cfg.PromptFree,
 	}
-	if cfg.Agent != nil {
+	if cfg.Agent != nil && !isPreferredAgentChoice(cfg.Agent) {
 		spec.Agent = cfg.Agent.Command
 		spec.AgentName = cfg.Agent.Name
 	}
 	return spec
 }
+
+// errPreferredNeedsServe is the create error when no agent was chosen and the
+// remote's agent API, the only side that reads agents.preferred, cannot take
+// the create.
+var errPreferredNeedsServe = errors.New("no agent chosen: only the remote agent API can pick from agents.preferred; select an agent or start the agent API")
 
 // canCreateRemotely reports whether this session can be handed to the remote.
 //
@@ -48,8 +53,8 @@ func remoteCreateSpecFrom(cfg domain.SessionConfig) usecase.RemoteCreateSpec {
 // state.
 func canCreateRemotely(cfg domain.SessionConfig) (bool, string) {
 	switch {
-	case cfg.Agent == nil || strings.TrimSpace(cfg.Agent.Command) == "":
-		return false, "no agent command"
+	case cfg.Agent == nil:
+		return false, "no agent chosen"
 	case cfg.AWSConfig != nil:
 		return false, "per-session AWS credentials are minted on this machine"
 	case len(cfg.EnvSecrets) > 0:

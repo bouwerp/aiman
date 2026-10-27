@@ -45,11 +45,11 @@ type RemoteCreateSpec struct {
 // machine's ~/.aws. Both are reconciled by the dashboard when it next sees the
 // session.
 func CreateSessionOnRemote(ctx context.Context, remote TerminalExecutor, spec RemoteCreateSpec) (*domain.Session, error) {
-	if strings.TrimSpace(spec.Agent) == "" {
-		return nil, fmt.Errorf("remote create: agent is required")
-	}
-	params := map[string]any{"agent": spec.Agent}
+	// An empty agent is left off, so serve launches the first agents.preferred
+	// command installed on the remote.
+	params := map[string]any{}
 	for key, val := range map[string]string{
+		"agent":      spec.Agent,
 		"name":       spec.Name,
 		"group":      spec.Group,
 		"repo":       spec.Repo,

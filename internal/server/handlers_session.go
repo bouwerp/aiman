@@ -596,11 +596,16 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	if strings.TrimSpace(params.Agent) == "" {
-		return errResp(req.ID, CodeInvalidParams, "agent is required")
-	}
 	if !params.Quick && (params.Repo == "" || params.Branch == "") {
-		return errResp(req.ID, CodeInvalidParams, "repo, branch, and agent are required (or --quick)")
+		return errResp(req.ID, CodeInvalidParams, "repo and branch are required (or --quick)")
+	}
+	if strings.TrimSpace(params.Agent) == "" {
+		// An explicit agent always wins; only an empty one reads agents.preferred.
+		picked, perr := s.pickAgent(ctx)
+		if perr != nil {
+			return errResp(req.ID, CodeNoPreferredAgent, perr.Error())
+		}
+		params.Agent, params.AgentName = picked, ""
 	}
 	existing, err := s.loadSessions(ctx)
 	if err != nil {
