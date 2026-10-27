@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/todo"
+	"github.com/bouwerp/aiman/internal/usecase"
 )
 
 // Harness is one in-process serve, its temp database, and the fake remote the
@@ -157,6 +158,18 @@ func (h *Harness) Events(sessionID string) []domain.SessionEvent {
 // Execs is every command the fake remote received.
 func (h *Harness) Execs() []string {
 	return h.remote.Execs()
+}
+
+// SetPane sets the pane the fake remote captures.
+func (h *Harness) SetPane(text string) { h.remote.Pane = text }
+
+// Pane is the fake remote's current capture.
+func (h *Harness) Pane() string { return h.remote.Pane }
+
+// TerminateSession runs the production terminal teardown against the fake
+// remote. It does not touch the session row.
+func (h *Harness) TerminateSession(s domain.Session) error {
+	return usecase.TerminateSessionTerminal(context.Background(), h.remote, s)
 }
 
 // Artifacts reads the files a metric may inspect. Missing files are omitted.
