@@ -23,6 +23,7 @@ const usageFetchMinInterval = 10 * time.Second
 type usageMsg struct {
 	sessionID string
 	rep       usage.Report
+	budget    usage.Budget
 	err       error
 }
 
@@ -49,12 +50,13 @@ func fetchSessionUsageCmd(cfg *config.Config, s domain.Session) tea.Cmd {
 			return usageMsg{sessionID: s.ID, err: err}
 		}
 		var body struct {
-			Usage usage.Report `json:"usage"`
+			Usage  usage.Report `json:"usage"`
+			Budget usage.Budget `json:"budget"`
 		}
 		if err := json.Unmarshal(raw, &body); err != nil {
 			return usageMsg{sessionID: s.ID, err: fmt.Errorf("decode usage: %w", err)}
 		}
-		return usageMsg{sessionID: s.ID, rep: body.Usage}
+		return usageMsg{sessionID: s.ID, rep: body.Usage, budget: body.Budget}
 	}
 }
 
@@ -110,7 +112,7 @@ func (m *Model) usageEventFetch(id string) tea.Cmd {
 // applyUsageToExtras copies a report onto the cost fields.
 // Reviewing and WatchingPR are left unchanged.
 // Known false clears cost, tokens, cache, and the context gauge so a stale figure does not linger.
-func applyUsageToExtras(x detailMetaExtras, rep usage.Report) detailMetaExtras {
+func applyUsageToExtras(x detailMetaExtras, rep usage.Report, budget ...usage.Budget) detailMetaExtras {
 	x.HasCost = false
 	x.HasCache = false
 	x.CostUSD = 0
@@ -118,6 +120,12 @@ func applyUsageToExtras(x detailMetaExtras, rep usage.Report) detailMetaExtras {
 	x.CacheRatio = 0
 	x.ContextPct = 0
 	x.ContextWindow = 0
+	x.BudgetPct = 0
+	x.BudgetState = ""
+	if len(budget) > 0 {
+		x.BudgetPct = budget[0].Pct
+		x.BudgetState = budget[0].State
+	}
 	if !rep.Known {
 		return x
 	}
@@ -138,14 +146,19 @@ func applyUsageToExtras(x detailMetaExtras, rep usage.Report) detailMetaExtras {
 	return x
 }
 
-func (m *Model) applyUsageMsg(msg usageMsg) {
+func (m *Model) applyUsageMsg(msg usageMsg) tea.Cmd {
 	delete(m.usageInFlight, msg.sessionID)
 	if msg.err != nil {
 		m.log("usage %s: %v", msg.sessionID, msg.err)
-		return
+		return nil
 	}
 	if m.metaExtras == nil {
 		m.metaExtras = map[string]detailMetaExtras{}
 	}
-	m.metaExtras[msg.sessionID] = applyUsageToExtras(m.metaExtras[msg.sessionID], msg.rep)
+	prev := m.metaExtras[msg.sessionID]
+	m.metaExtras[msg.sessionID] = applyUsageToExtras(prev, msg.rep, msg.budget)
+	if msg.budget.State == "over" && prev.BudgetState != "over" {
+		return m.showToast("token budget exceeded", true, 4*time.Second)
+	}
+	return nil
 }

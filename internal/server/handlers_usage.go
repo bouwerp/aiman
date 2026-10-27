@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/usage"
 )
 
@@ -37,6 +38,26 @@ func (s *Server) PublishUsage(sessionID string) {
 		return
 	}
 	s.hub.Publish(SessionEvent{Type: "usage", ID: sessionID})
+}
+
+// SetUsageDefaultBudget records usage.budgets.default_tokens.
+func (s *Server) SetUsageDefaultBudget(tokens int64) {
+	if s == nil {
+		return
+	}
+	s.usageDefaultBudget = tokens
+}
+
+// PublishBudget records a budget threshold in the ledger and on the hub.
+// It never stops the agent.
+func (s *Server) PublishBudget(sessionID, state string) {
+	if s == nil {
+		return
+	}
+	s.appendEvent(context.Background(), sessionID, domain.EventActorAiman, domain.EventUsageBudget, map[string]any{"state": state})
+	if s.hub != nil {
+		s.hub.Publish(SessionEvent{Type: "usage.budget", ID: sessionID, State: state})
+	}
 }
 
 func (s *Server) kickUsage() {
@@ -93,12 +114,31 @@ func (s *Server) handleUsageGet(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
 	}
+	budget := s.usageBudget(ctx, sessionID, rep)
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":    "usage",
 		"session": sessionID,
 		"usage":   rep,
 		"health":  health,
+		"budget":  budget,
 	}}
+}
+
+// usageBudget prices one session's report against its budget.
+// A host-wide query has no single budget and returns zero.
+func (s *Server) usageBudget(ctx context.Context, sessionID string, rep usage.Report) usage.Budget {
+	tokens := rep.Total.Tokens
+	used := tokens.Input + tokens.Output + tokens.CacheRead + tokens.CacheCreation()
+	if sessionID == "" {
+		return usage.Budget{Used: used}
+	}
+	budget := s.usageDefaultBudget
+	if list, err := s.loadSessions(ctx); err == nil {
+		if sess, ok := resolveSession(list, sessionID); ok && sess.BudgetTokens > 0 {
+			budget = sess.BudgetTokens
+		}
+	}
+	return usage.BudgetFor(budget, used)
 }
 
 func validUsageBy(by string) bool {

@@ -97,4 +97,6 @@ type UsageSessionMeta struct {
 	HealthRetries          int
 	HealthReads            string // JSON array of normalised read paths
 	HasHealth              bool
+	BudgetState            string // last emitted budget state: "", "warn", "over"
+	HasBudgetState         bool
 }

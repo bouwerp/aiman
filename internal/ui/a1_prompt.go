@@ -36,8 +36,7 @@ func (m *Model) applyTrackedSessionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case promptSentMsg:
 		return m, m.applyPromptSent(msg)
 	case usageMsg:
-		m.applyUsageMsg(msg)
-		return m, nil
+		return m, m.applyUsageMsg(msg)
 	case usageRollupMsg:
 		m.applyUsageRollup(msg)
 		return m, nil

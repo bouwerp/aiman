@@ -341,6 +341,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		Mode:           mode,
 		TriggerSource:  config.TriggerSource,
 		TriggerEventID: config.TriggerEventID,
+		BudgetTokens:   config.BudgetTokens,
 		CreatedAt:      time.Now(),
 	}
 

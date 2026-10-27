@@ -68,6 +68,22 @@ func TestHealthClaudeFirstTestAndRetry(t *testing.T) {
 	}
 }
 
+func TestHealthCodexExecCommand(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"timestamp":"2026-10-22T06:08:01.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"go test ./internal/usage/\",\"workdir\":\"/wt\"}"}}` + "\n")
+	b.WriteString(`{"timestamp":"2026-10-22T06:08:02.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","arguments":"{\"cmd\":\"go build ./...\",\"workdir\":\"/wt\"}"}}` + "\n")
+	h, err := CodexHealth(strings.NewReader(b.String()), "/wt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.Known || h.ToolCalls != 2 || h.ReadCalls != 0 || h.EditCalls != 0 {
+		t.Fatalf("health = %+v", h)
+	}
+	if h.FirstTestAt.IsZero() {
+		t.Fatalf("FirstTestAt zero, want exec_command test time: %+v", h)
+	}
+}
+
 func TestHealthCodexReadThenEdit(t *testing.T) {
 	var b strings.Builder
 	b.WriteString(`{"timestamp":"2026-10-22T06:08:01.000Z","type":"response_item","payload":{"type":"function_call","name":"Read","arguments":"{\"file_path\":\"/wt/a.go\"}"}}` + "\n")

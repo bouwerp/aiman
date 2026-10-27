@@ -103,6 +103,9 @@ func runServe() error {
 	tracker := usage.NewTracker(db, db, srv.PublishUsage)
 	tracker.SetContextWindow(cfg.Usage.ContextWindowTokens)
 	tracker.SetTestCommands(cfg.Usage.TestCommands)
+	tracker.SetDefaultBudget(cfg.Usage.Budgets.DefaultTokens)
+	tracker.SetBudgetHandler(srv.PublishBudget)
+	srv.SetUsageDefaultBudget(cfg.Usage.Budgets.DefaultTokens)
 	rep := usage.Reporter{
 		Store:  db,
 		Prices: usage.DefaultPrices().Merge(usagePrices(cfg)),

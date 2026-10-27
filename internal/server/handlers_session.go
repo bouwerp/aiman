@@ -578,6 +578,8 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		// AgentName is the agent's display name when it differs from the command
 		// ("Claude Code" against "claude"). Absent means the command is the name.
 		AgentName string `json:"agent_name"`
+		// BudgetTokens is the per-session token budget; 0 means none.
+		BudgetTokens int64 `json:"budget_tokens"`
 		// PromptFree suppresses the task file the skill engine writes from the
 		// JIRA issue. A pointer because absent has to keep meaning "true": that is
 		// what an agent creating an ad-hoc sibling wants, and it was the only
@@ -640,6 +642,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		// The agent's launch model and effort come from this host's own agent
 		// defaults, which serve install keeps in step with the laptop's config.
 		Agent:          &domain.Agent{Name: agentName, Command: params.Agent},
+		BudgetTokens:   params.BudgetTokens,
 		Repo:           domain.Repo{Name: params.Repo},
 		SessionBackend: domain.ResolveSessionBackend(params.Backend, ""),
 		ExistingBranch: params.ExistingBranch,

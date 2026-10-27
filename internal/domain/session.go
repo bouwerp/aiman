@@ -88,6 +88,7 @@ type Session struct {
 	AutonomousConfig *AutonomousConfig // Specific configuration for autonomous polling
 	Tunnels          []Tunnel
 	AWSConfig        *AWSConfig // role/region/policy used to refresh the shared remote AWS credential set; persisted for refresh
+	BudgetTokens     int64      // per-session token budget; 0 means none
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -251,6 +252,8 @@ type SessionConfig struct {
 	// to the agent's initial prompt (after any JIRA task trigger) and delivered via
 	// tmux send-keys. Empty means no extra prompt text.
 	InitialPrompt string
+	// BudgetTokens is the per-session token budget; 0 means none.
+	BudgetTokens int64
 	// AutonomousConfig configures polling rules if Mode is AUTONOMOUS.
 	AutonomousConfig *AutonomousConfig
 

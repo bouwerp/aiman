@@ -22,6 +22,8 @@ type detailMetaExtras struct {
 	HasCache      bool
 	ContextPct    float64 // latest turn / window; 0 when the window is unset
 	ContextWindow int64   // 0 hides the gauge
+	BudgetPct     float64 // used / budget; 0 hides the marker
+	BudgetState   string  // "", "warn", "over"
 	Reviewing     bool
 	WatchingPR    int
 }
@@ -63,6 +65,9 @@ func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width i
 	if gauge := contextGauge(x); gauge != "" {
 		parts = append(parts, gauge)
 	}
+	if marker := budgetMarker(x); marker != "" {
+		parts = append(parts, marker)
+	}
 	if x.Reviewing {
 		add("reviewing…")
 	}
@@ -73,6 +78,15 @@ func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width i
 		return ""
 	}
 	return truncateToWidth(joinParts(parts), width)
+}
+
+// budgetMarker is a dim budget percentage on the meta line.
+// Only warn (70%+) and over (100%+) show; below that stays quiet.
+func budgetMarker(x detailMetaExtras) string {
+	if x.BudgetState == "" {
+		return ""
+	}
+	return dimText(fmt.Sprintf("budget %d%%", int(math.Round(x.BudgetPct*100))))
 }
 
 // contextGauge is "ctx N%" after the cache percentage.

@@ -44,9 +44,11 @@ func parseClaudeHealth(r io.Reader, worktree string, cmds []string, acc *healthA
 	var sample contextSample
 	seen := make(map[string]struct{})
 	consumed, err := readLines(r, func(line []byte) error {
-		acc.claudeLine(line, worktree, cmds)
 		rec, ok := parseClaudeLine(line)
 		if !ok {
+			// Not a usage record — may be a user message carrying tool_result
+			// retry markers. Process for health without dedupe (no message ID).
+			acc.claudeLine(line, worktree, cmds)
 			return nil
 		}
 		if rec.ID != "" {
@@ -55,6 +57,7 @@ func parseClaudeHealth(r io.Reader, worktree string, cmds []string, acc *healthA
 			}
 			seen[rec.ID] = struct{}{}
 		}
+		acc.claudeLine(line, worktree, cmds)
 		recs = append(recs, rec)
 		sample = contextSample{
 			Tokens: rec.Tokens.Input + rec.Tokens.CacheRead,

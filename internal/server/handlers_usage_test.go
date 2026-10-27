@@ -179,6 +179,30 @@ func TestUsageGetWithoutTracker(t *testing.T) {
 	}
 }
 
+func TestUsageGetIncludesHealth(t *testing.T) {
+	repo := testRepo(t)
+	if err := repo.Save(context.Background(), &domain.Session{ID: "s1", Name: "fix-login"}); err != nil {
+		t.Fatal(err)
+	}
+	store := usageFixture{
+		metas: []domain.UsageSessionMeta{
+			{SessionID: "s1", Name: "fix-login", HealthKnown: true, HealthReadCalls: 3, HealthEditCalls: 1, HealthFirstTestAt: time.Date(2026, time.October, 22, 7, 25, 15, 0, time.UTC)},
+		},
+	}
+	srv := New(nil, repo, nil, nil, nil, nil, "test")
+	now := time.Date(2026, time.October, 22, 12, 0, 0, 0, time.UTC)
+	srv.EnableUsage(context.Background(), nil, usage.Reporter{Store: store, Prices: usage.DefaultPrices(), Now: func() time.Time { return now }})
+	var raw map[string]any
+	rpcOK(t, srv, "", "usage.get", map[string]any{"session": "s1", "by": "day", "days": 7, "tz_offset_minutes": 120}, &raw)
+	health, ok := raw["health"].(map[string]any)
+	if !ok {
+		t.Fatalf("health missing from result: %+v", raw)
+	}
+	if health["known"] != true || health["read_calls"] != float64(3) || health["edit_calls"] != float64(1) {
+		t.Fatalf("health = %+v", health)
+	}
+}
+
 func TestReportAgentSessionKicksUsage(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()

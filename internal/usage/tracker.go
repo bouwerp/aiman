@@ -57,6 +57,24 @@ type Tracker struct {
 	kick          chan struct{}
 	contextWindow int
 	testCommands  []string
+	defaultBudget int64
+	onBudget      func(sessionID, state string)
+}
+
+// SetDefaultBudget records usage.budgets.default_tokens. Zero is none.
+func (t *Tracker) SetDefaultBudget(tokens int64) {
+	if t == nil {
+		return
+	}
+	t.defaultBudget = tokens
+}
+
+// SetBudgetHandler records the budget-threshold callback (ledger + hub).
+func (t *Tracker) SetBudgetHandler(fn func(sessionID, state string)) {
+	if t == nil {
+		return
+	}
+	t.onBudget = fn
 }
 
 // SetTestCommands records usage.test_commands for first-test detection.
@@ -123,6 +141,7 @@ func (t *Tracker) ScanOnce(ctx context.Context) ([]string, error) {
 		if err != nil {
 			return changed, err
 		}
+		t.checkBudget(ctx, s)
 		if !ok {
 			continue
 		}
@@ -189,7 +208,10 @@ func (t *Tracker) scanSession(ctx context.Context, s domain.Session) (bool, erro
 	if worktree == "" {
 		worktree = s.WorkingDirectory
 	}
-	prior, _ := t.priorHealth(ctx, s.ID)
+	prior, err := t.priorHealth(ctx, s.ID)
+	if err != nil {
+		return false, err
+	}
 	healthAcc := prior
 	healthDirty := false
 	for _, path := range sessionPaths(s.AgentSessionPath, cursors) {
@@ -237,6 +259,47 @@ func (t *Tracker) scanSession(ctx context.Context, s domain.Session) (bool, erro
 		}
 	}
 	return changed, nil
+}
+
+// checkBudget emits once per threshold per session. The last emitted
+// state lives in usage_sessions so a serve restart does not repeat it.
+func (t *Tracker) checkBudget(ctx context.Context, s domain.Session) {
+	budget := s.BudgetTokens
+	if budget <= 0 {
+		budget = t.defaultBudget
+	}
+	if budget <= 0 {
+		return
+	}
+	buckets, err := t.store.UsageBuckets(ctx, []string{s.ID}, time.Time{})
+	if err != nil {
+		log.Printf("usage tracker: budget %s: %v", s.ID, err)
+		return
+	}
+	var used int64
+	for _, b := range buckets {
+		used += b.Tokens.Input + b.Tokens.Output + b.Tokens.CacheRead + b.Tokens.CacheCreation()
+	}
+	last := ""
+	if metas, err := t.store.UsageSessions(ctx); err == nil {
+		for _, m := range metas {
+			if m.SessionID == s.ID {
+				last = m.BudgetState
+			}
+		}
+	}
+	emit, next := NextBudgetEmit(last, budget, used)
+	if next == last && emit == "" {
+		return
+	}
+	meta := domain.UsageSessionMeta{SessionID: s.ID, BudgetState: next, HasBudgetState: true}
+	if err := t.store.UpsertUsageSession(ctx, meta); err != nil {
+		log.Printf("usage tracker: budget state %s: %v", s.ID, err)
+		return
+	}
+	if emit != "" && t.onBudget != nil {
+		t.onBudget(s.ID, emit)
+	}
 }
 
 func (t *Tracker) priorHealth(ctx context.Context, sessionID string) (*healthAcc, error) {

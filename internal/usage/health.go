@@ -28,14 +28,16 @@ type Health struct {
 var DefaultTestCommands = []string{"go test", "pytest", "npm test", "make test", "just test"}
 
 // healthAcc accumulates Health plus the set of paths already read, which
-// EditsWithoutRead needs across incremental scans.
+// EditsWithoutRead needs across incremental scans. seen dedupes repeated
+// Claude assistant records that share a message id.
 type healthAcc struct {
 	h     Health
 	reads map[string]bool
+	seen  map[string]bool
 }
 
 func newHealthAcc() *healthAcc {
-	return &healthAcc{reads: map[string]bool{}}
+	return &healthAcc{reads: map[string]bool{}, seen: map[string]bool{}}
 }
 
 func (a *healthAcc) finish() Health {
@@ -84,6 +86,7 @@ type claudeHealthRow struct {
 	Type      string `json:"type"`
 	Timestamp string `json:"timestamp"`
 	Message   struct {
+		ID      string        `json:"id"`
 		Content []claudeBlock `json:"content"`
 	} `json:"message"`
 }
@@ -95,6 +98,12 @@ func (a *healthAcc) claudeLine(line []byte, worktree string, cmds []string) {
 	}
 	if row.Type != "assistant" && row.Type != "user" {
 		return
+	}
+	if row.Type == "assistant" && row.Message.ID != "" {
+		if a.seen[row.Message.ID] {
+			return
+		}
+		a.seen[row.Message.ID] = true
 	}
 	at := parseHealthTime(row.Timestamp)
 	for _, block := range row.Message.Content {
@@ -155,6 +164,11 @@ func (a *healthAcc) codexLine(line []byte, worktree string, cmds []string) {
 	case "function_call":
 		path, command := codexArgs(row.Payload.Arguments)
 		a.applyTool(row.Payload.Name, path, command, worktree, cmds, at)
+	case "custom_tool_call":
+		if row.Payload.Name == "exec" {
+			path, command := codexArgs(row.Payload.Arguments)
+			a.applyTool("Bash", path, command, worktree, cmds, at)
+		}
 	case "local_shell_call":
 		a.applyTool("Bash", "", codexActionCommand(row.Payload.Action, row.Payload.Command), worktree, cmds, at)
 	}
@@ -269,6 +283,8 @@ func codexArgs(raw json.RawMessage) (path, command string) {
 		FilePath string `json:"file_path"`
 		Path     string `json:"path"`
 		Command  string `json:"command"`
+		Cmd      string `json:"cmd"`
+		Workdir  string `json:"workdir"`
 	}
 	if err := json.Unmarshal(body, &args); err != nil {
 		return "", ""
@@ -277,7 +293,14 @@ func codexArgs(raw json.RawMessage) (path, command string) {
 	if path == "" {
 		path = args.Path
 	}
-	return path, args.Command
+	if path == "" {
+		path = args.Workdir
+	}
+	command = args.Command
+	if command == "" {
+		command = args.Cmd
+	}
+	return path, command
 }
 
 func codexActionCommand(raw json.RawMessage, fallback string) string {

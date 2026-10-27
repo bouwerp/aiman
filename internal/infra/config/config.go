@@ -69,10 +69,16 @@ func (c *Config) MarshalServeConfig() ([]byte, error) {
 // remote serve config. Prices are USD per million tokens.
 // ContextWindowTokens is an explicit window for every model. Zero means the
 // key was omitted and does not win over a confirmed table row.
+// UsageBudgets holds token-budget defaults. DefaultTokens 0 means none.
+type UsageBudgets struct {
+	DefaultTokens int64 `yaml:"default_tokens,omitempty"`
+}
+
 type UsageConfig struct {
 	Prices              map[string]ModelPrice `yaml:"prices,omitempty"`
 	ContextWindowTokens int                   `yaml:"context_window_tokens,omitempty"`
 	TestCommands        []string              `yaml:"test_commands,omitempty"`
+	Budgets             UsageBudgets          `yaml:"budgets,omitempty"`
 }
 
 // ModelPrice is one model's token prices. Omitted numbers decode as zero.

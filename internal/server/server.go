@@ -68,6 +68,8 @@ type Server struct {
 	// Both stay nil until EnableUsage, and a nil tracker kick is a no-op.
 	usage    *usage.Tracker
 	reporter usageReporter
+	// usageDefaultBudget is usage.budgets.default_tokens; 0 is none.
+	usageDefaultBudget int64
 	// todoLocks holds one *sync.Mutex per session id around a to-do write and
 	// its render.
 	todoLocks sync.Map

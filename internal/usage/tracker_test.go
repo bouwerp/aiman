@@ -814,8 +814,12 @@ func (m *memStore) UpsertUsageSession(_ context.Context, meta domain.UsageSessio
 		meta.HealthRetries = prev.HealthRetries
 		meta.HealthReads = prev.HealthReads
 	}
+	if !meta.HasBudgetState {
+		meta.BudgetState = prev.BudgetState
+	}
 	meta.HasContext = false
 	meta.HasHealth = false
+	meta.HasBudgetState = false
 	m.metas[meta.SessionID] = meta
 	return nil
 }

@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -177,6 +178,41 @@ func TestUsageViewRendersRows(t *testing.T) {
 	}
 	if strings.Contains(codex, "~$") || !strings.Contains(codex, "-") || !strings.Contains(codex, "1.5k") || !strings.Contains(codex, "42") {
 		t.Fatalf("codex row = %q", codex)
+	}
+}
+
+func TestUsageViewRendersHealthOnHostLine(t *testing.T) {
+	m := UsageViewModel{
+		mode: usageByIssue,
+		hosts: []usageHost{
+			{
+				host:  "alpha",
+				extra: healthExtra(usage.Health{
+					Known:        true,
+					ReadCalls:    5,
+					EditCalls:    2,
+					FirstTestAt:  time.Date(2026, time.October, 22, 14, 23, 0, 0, time.UTC),
+				}),
+				rows: map[usageViewMode][]usage.Row{
+					usageByIssue: {},
+				},
+			},
+		},
+	}
+	plain := ansi.Strip(m.viewString())
+	// READ:EDIT must appear on the same line as the host name, not below it.
+	if !strings.Contains(plain, "alpha") || !strings.Contains(plain, "READ:EDIT 5:2") {
+		t.Fatalf("health not on host line:\n%s", plain)
+	}
+	// It must not appear as a separate indented line below the host.
+	lines := strings.Split(plain, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "READ:EDIT 5:2") && strings.Contains(line, "alpha") {
+			// Found on same line - correct
+		}
+		if strings.TrimSpace(line) == "READ:EDIT 5:2 · first test 14:23" {
+			t.Fatalf("health on separate line below host:\n%s", plain)
+		}
 	}
 }
 

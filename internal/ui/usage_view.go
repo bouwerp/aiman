@@ -436,11 +436,11 @@ func (h usageHost) statusLine(dim lipgloss.Style, mode usageViewMode) string {
 	if h.rows[mode] == nil && h.err != "" {
 		return "  " + h.host + "  " + failStyle.Render(truncateRunes(h.err, 80)) + "\n"
 	}
-	line := "  " + h.host + "\n"
+	line := "  " + h.host
 	if h.extra != "" {
-		line += dim.Render("  "+h.extra) + "\n"
+		line += "   " + dim.Render(h.extra)
 	}
-	return line
+	return line + "\n"
 }
 
 func usageUnpricedIDs(hosts []usageHost) []string {
