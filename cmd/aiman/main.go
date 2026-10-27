@@ -42,7 +42,7 @@ func configPathForNotice() string {
 
 func main() {
 	if err := run(); err != nil {
-		if !errors.Is(err, errUsage) {
+		if !errors.Is(err, errUsage) && !errors.Is(err, errVerifyNotPassed) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		os.Exit(1)
@@ -82,6 +82,8 @@ func run() error {
 			return runTodo(parsed.Rest[1:], os.Stdin, os.Getenv)
 		case "usage":
 			return runUsage(parsed.Rest[1:], os.Stdout)
+		case "verify":
+			return runVerify(parsed.Rest[1:])
 		case "slack":
 			return runSlack(context.Background(), parsed.Rest[1:], os.Stdin, os.Stdout, os.Stderr)
 		}
