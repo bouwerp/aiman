@@ -3,6 +3,7 @@ package ciwatch
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/notify"
@@ -113,7 +114,7 @@ func (w *Watcher) escalate(ctx context.Context, s domain.Session, pr PRView, c C
 func (w *Watcher) checkNote(ctx context.Context, s domain.Session, pr PRView, c Check, todoID string) string {
 	head := fmt.Sprintf("[aiman] CI check %q failed on %s (PR #%d), to-do %s.\n", c.Name, shortSHA(pr.HeadSHA), pr.Number, todoID)
 	if c.JobID != 0 {
-		if log, err := w.d.GitHub.FailedJobLog(ctx, sessionDir(s), c.JobID); err == nil {
+		if log, err := w.d.GitHub.FailedJobLog(ctx, sessionDir(s), c.JobID); err == nil && strings.TrimSpace(log) != "" {
 			return head + fmt.Sprintf("Last %d lines of `gh run view --job %d --log-failed`:\n", LogTailLines, c.JobID) + log
 		}
 	}

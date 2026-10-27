@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -739,7 +740,10 @@ func (s *Server) handleForget(ctx context.Context, req Request) Response {
 		rec.Forget(sess.ID)
 	}
 	if s.ciWatch != nil {
-		_ = s.ciWatch.Forget(ctx, sess.ID)
+		// A failed reset leaves orphan CI rows; it must not block the delete.
+		if err := s.ciWatch.Forget(ctx, sess.ID); err != nil {
+			log.Printf("ci: forget %s: %v", sess.ID, err)
+		}
 	}
 	if s.repo != nil {
 		if err := s.repo.Delete(ctx, sess.ID); err != nil {

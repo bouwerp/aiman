@@ -70,8 +70,9 @@ func (s *Server) handleCIGet(ctx context.Context, req Request) Response {
 	return s.ciResponse(ctx, req.ID, sess)
 }
 
-// handleCIWatch stores the explicit on/off choice on the session, restarts
-// its watch state and, when on, polls at once.
+// handleCIWatch restarts the session's watch state, then stores the explicit
+// on/off choice on it and, when on, polls at once. The flag is saved last so
+// a failed reset never leaves it claiming a watch the rows do not match.
 func (s *Server) handleCIWatch(ctx context.Context, req Request) Response {
 	p, sess, fail := s.ciRequest(ctx, req)
 	if fail != nil {
@@ -84,13 +85,13 @@ func (s *Server) handleCIWatch(ctx context.Context, req Request) Response {
 	if *p.On {
 		sess.WatchPR = domain.WatchPROn
 	}
+	if err := s.ciWatch.SetWatch(ctx, sess.ID, *p.On); err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
 	if s.repo != nil {
 		if err := s.repo.Save(ctx, &sess); err != nil {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
-	}
-	if err := s.ciWatch.SetWatch(ctx, sess.ID, *p.On); err != nil {
-		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	if *p.On {
 		s.ciWatch.Kick(sess.ID)

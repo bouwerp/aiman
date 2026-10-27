@@ -193,3 +193,14 @@ func TestEmptyDirIsRefused(t *testing.T) {
 		t.Fatal("LastError not recorded")
 	}
 }
+
+func TestBlankLogFallsBackToURL(t *testing.T) {
+	r := newRig(t)
+	r.gh.setPR(failingLint("aaaaaaa1"))
+	r.gh.logs[222] = "\n  \n"
+	r.poll(t, testSession())
+	notes := r.steers.all()
+	if len(notes) != 1 || !strings.HasSuffix(notes[0], "Log unavailable: https://github.com/o/r/actions/runs/111/job/222") {
+		t.Fatalf("notes %q", notes)
+	}
+}
