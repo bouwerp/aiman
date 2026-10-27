@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
 // With nothing to select, enter leaves the choice to serve's agents.preferred
@@ -46,5 +48,51 @@ func TestPreferredChoiceIsHandedToServe(t *testing.T) {
 	spec := remoteCreateSpecFrom(cfg)
 	if spec.Agent != "" || spec.AgentName != "" {
 		t.Fatalf("spec agent = %q / %q, want both empty so serve picks", spec.Agent, spec.AgentName)
+	}
+}
+
+func TestAgentPickerPreselect(t *testing.T) {
+	agents := []domain.Agent{
+		{Name: "Claude Code", Command: "claude --dangerously-skip-permissions"},
+		{Name: "Codex", Command: "codex"},
+	}
+	m := NewAgentPickerModel(agents)
+	if !m.Preselect("codex") {
+		t.Fatal("Preselect(codex) = false")
+	}
+	if got, ok := m.list.SelectedItem().(agentItem); !ok || got.agent.Command != "codex" {
+		t.Fatalf("selected %+v, want codex", m.list.SelectedItem())
+	}
+
+	m = NewAgentPickerModel(agents)
+	if m.Preselect("grok") {
+		t.Fatal("Preselect(grok) = true for an agent that is not installed")
+	}
+	if m.Preselect("") {
+		t.Fatal(`Preselect("") = true`)
+	}
+	if m.list.Index() != 0 {
+		t.Fatalf("cursor %d, want 0", m.list.Index())
+	}
+}
+
+// The create wizard starts the picker on the reviewer role's agent; a restart
+// picker does not.
+func TestWizardScanPreselectsRoleAgent(t *testing.T) {
+	agents := []domain.Agent{{Name: "Claude Code", Command: "claude"}, {Name: "Codex", Command: "codex"}}
+	cfg := &config.Config{Roles: config.RolesConfig{Verifier: config.RoleOverride{Agent: "codex"}}}
+
+	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.sessionCfg.Role = domain.SessionRoleReviewer
+	m.loadingNext = viewStateAgentPicker
+	m.applyScanAgents(agent.ScanAgentsMsg{Agents: agents})
+	if got, ok := m.agentPicker.list.SelectedItem().(agentItem); !ok || got.agent.Command != "codex" {
+		t.Fatalf("wizard picker on %+v, want codex", m.agentPicker.list.SelectedItem())
+	}
+
+	m.loadingNext = viewStateRestartAgentPicker
+	m.applyScanAgents(agent.ScanAgentsMsg{Agents: agents})
+	if m.agentPicker.list.Index() != 0 {
+		t.Fatalf("restart picker cursor %d, want 0", m.agentPicker.list.Index())
 	}
 }

@@ -1679,20 +1679,43 @@ type branchesMsg struct {
 type workspaceStatusMsg struct {
 	path   string
 	exists bool
+	// missing lists the repo's required tools the remote lacks.
+	missing []string
 }
 
 func (m *Model) fetchWorkspaceStatus(remote *config.Remote, repoName string) tea.Cmd {
+	var requires []string
+	if r, ok := config.LookupRepo(m.cfg.Repos, repoName); ok {
+		requires = r.Requires
+	}
+	var agentCmd string
+	if m.sessionCfg.Agent != nil {
+		agentCmd = m.sessionCfg.Agent.Command
+	}
+	root := remote.Root
+	sshCfg := ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		mainRepoPath := git.ComputeMainRepoPath(remote.Root, repoName)
-		_, err := mgr.Execute(ctx, fmt.Sprintf("test -d %q", mainRepoPath))
-		if err != nil {
-			return workspaceStatusMsg{path: mainRepoPath, exists: false}
-		}
-		return workspaceStatusMsg{path: mainRepoPath, exists: true}
+		return workspaceStatus(ctx, ssh.NewManager(sshCfg), root, repoName, requires, agentCmd)
 	}
+}
+
+// workspaceStatus tests whether the main clone exists and, when the repo has
+// requires, which of them the remote lacks. The worktree may not exist yet,
+// so the .mcp.json check reads the main clone. A failed check reports
+// nothing missing: the summary warning is advisory.
+func workspaceStatus(ctx context.Context, remote domain.RemoteExecutor, root, repoName string, requires []string, agentCmd string) workspaceStatusMsg {
+	mainRepoPath := git.ComputeMainRepoPath(root, repoName)
+	_, err := remote.Execute(ctx, fmt.Sprintf("test -d %q", mainRepoPath))
+	msg := workspaceStatusMsg{path: mainRepoPath, exists: err == nil}
+	if len(requires) > 0 {
+		missing, err := usecase.CheckRequires(ctx, remote, mainRepoPath, agentCmd, requires)
+		if err == nil {
+			msg.missing = missing
+		}
+	}
+	return msg
 }
 
 type dirsMsg struct {
@@ -2994,6 +3017,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case workspaceStatusMsg:
 		if m.loadingNext == viewStateSummary {
 			m.summary.SetWorkspaceStatus(msg.path, msg.exists)
+			m.summary.SetMissingTools(msg.missing)
 			m.state = viewStateSummary
 			return m, nil
 		}
@@ -7209,7 +7233,12 @@ func (m *Model) applyScanAgents(msg agent.ScanAgentsMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.agentPicker = NewAgentPickerModel(msg.Agents)
-	m.agentPicker.allowPreferred = m.loadingNext == viewStateAgentPicker
+	// Only the create wizard scans into viewStateAgentPicker; a restart has
+	// its own picker state.
+	if m.loadingNext == viewStateAgentPicker {
+		m.agentPicker.allowPreferred = true
+		m.agentPicker.Preselect(m.cfg.RoleAgent(string(m.sessionCfg.Role)))
+	}
 	h, v := docStyle.GetFrameSize()
 	m.agentPicker.SetSize(m.width-h, m.height-v)
 	m.state = m.loadingNext
@@ -7626,6 +7655,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 	cfg := m.cfg
 	db := m.db
 	flowManager := m.flowManager
+	checklistDir := laptopChecklistDir()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	if cs, ok := m.creatingSessions[placeholderID]; ok {
@@ -7716,7 +7746,18 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			resumeSnapshot = nil
 		}
 		if flowManager != nil && flowManager.SkillEngine != nil {
-			prepared, err := flowManager.SkillEngine.PrepareSession(ctx, mgr, workingDir, *sessionCfg.Agent, sessionCfg.Skills, sessionCfg.PromptFree, nil, resumeSnapshot, domain.QualityKit{Repo: s.RepoName, Role: s.Role})
+			prepared, notes, err := prepareRestartSession(ctx, mgr, flowManager.SkillEngine, restartPrep{
+				Cfg:          cfg,
+				Session:      *s,
+				WorkingDir:   workingDir,
+				SessionCfg:   sessionCfg,
+				Snapshot:     resumeSnapshot,
+				ChecklistDir: checklistDir,
+			})
+			for _, n := range notes {
+				logf("step2: %s", n)
+				m.sendStatusFor(placeholderID, n)
+			}
 			if err == nil {
 				agentCmd = prepared.Command
 				sendKeysPrompt = prepared.InitialPrompt

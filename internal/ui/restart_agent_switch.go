@@ -1,9 +1,16 @@
 package ui
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/quality"
+	"github.com/bouwerp/aiman/internal/usecase"
 )
 
 // adoptRestartAgent points a session at the agent it is about to be restarted
@@ -33,4 +40,71 @@ func adoptRestartAgent(s *domain.Session, agentName string) bool {
 	}
 	s.AgentName = agentName
 	return switched
+}
+
+// restartPrep is what a restart's PrepareSession call needs, captured at
+// dispatch time.
+type restartPrep struct {
+	Cfg        *config.Config
+	Session    domain.Session
+	WorkingDir string
+	SessionCfg domain.SessionConfig
+	Snapshot   *domain.SessionSnapshot
+	// ChecklistDir is the laptop's user checklist directory pushed before
+	// the kit is built; empty skips the push.
+	ChecklistDir string
+}
+
+// prepareRestartSession refreshes the session's checklists and prepares the
+// agent launch. The kit's DoneWhen is nil, so the skill engine rewrites only
+// the checklist block and keeps the Done-when block from create: that text
+// stays fixed for the session's life, and the Done-when to-do is not touched.
+// Kit problems come back as notes and never fail the restart.
+func prepareRestartSession(ctx context.Context, remote domain.RemoteExecutor, engine domain.SkillEngine, p restartPrep) (domain.PreparedSession, []string, error) {
+	kit, notes := restartKit(ctx, remote, p)
+	prepared, err := engine.PrepareSession(ctx, remote, p.WorkingDir, *p.SessionCfg.Agent, p.SessionCfg.Skills, p.SessionCfg.PromptFree, nil, p.Snapshot, kit)
+	return prepared, notes, err
+}
+
+// restartKit pushes the user checklists and rebuilds the checklist half of
+// the kit. Only repository sessions get one; a reviewer keeps Repo and Role,
+// which pick its launch flags.
+func restartKit(ctx context.Context, remote domain.RemoteExecutor, p restartPrep) (domain.QualityKit, []string) {
+	s := p.Session
+	kit := domain.QualityKit{Repo: s.RepoName, Role: s.Role}
+	if s.RepoName == "" || s.RepoName == "No Repository" || s.Role == domain.SessionRoleReviewer {
+		return kit, nil
+	}
+	var notes []string
+	if p.ChecklistDir != "" {
+		if _, err := usecase.PushUserChecklists(ctx, remote, p.ChecklistDir); err != nil {
+			notes = append(notes, fmt.Sprintf("Checklists not pushed: %v", err))
+		}
+	}
+	var repoCfg config.RepoBootstrap
+	if p.Cfg != nil {
+		repoCfg, _ = config.LookupRepo(p.Cfg.Repos, s.RepoName)
+	}
+	built, buildNotes, err := usecase.BuildQualityKit(ctx, remote, usecase.KitInput{
+		Repo:     s.RepoName,
+		Worktree: s.WorktreePath,
+		Role:     s.Role,
+		RepoCfg:  repoCfg,
+		Restart:  true,
+	})
+	notes = append(notes, buildNotes...)
+	if err != nil {
+		return kit, append(notes, fmt.Sprintf("Quality kit not built: %v", err))
+	}
+	return built, notes
+}
+
+// laptopChecklistDir is the local user checklist directory pushed to the
+// remote, or "" when the home directory is unknown.
+func laptopChecklistDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, quality.UserChecklistDir)
 }

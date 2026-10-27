@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
@@ -97,5 +99,29 @@ func TestSummaryModelHasNoOpenRouterField(t *testing.T) {
 	m = updated.(SummaryModel)
 	if m.focusIndex != m.buttonFocusIndex() {
 		t.Fatalf("tab from prompt should land on Create, got %d", m.focusIndex)
+	}
+}
+
+func TestSummaryShowsMissingTools(t *testing.T) {
+	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "o/r"}, "")
+	m.SetAgent(&domain.Agent{Name: "Claude"})
+	m.SetMissingTools([]string{"gh", "mcp:atlassian"})
+	// The summary box is 70 columns wide, so the warning wraps.
+	got := ansi.Strip(m.viewString())
+	if !strings.Contains(got, "⚠ Missing on remote: gh, mcp:atlassian") || !strings.Contains(got, "(create anyway with") {
+		t.Fatalf("no missing-tools warning in:\n%s", got)
+	}
+	updated, _ := m.Update(pressKey("enter"))
+	if !updated.(SummaryModel).IsConfirmed() {
+		t.Fatal("enter must still create when tools are missing")
+	}
+}
+
+func TestSummaryNoWarningWhenNothingMissing(t *testing.T) {
+	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "o/r"}, "")
+	m.SetAgent(&domain.Agent{Name: "Claude"})
+	m.SetMissingTools(nil)
+	if got := m.viewString(); strings.Contains(got, "Missing on remote") {
+		t.Fatalf("unexpected warning in:\n%s", got)
 	}
 }

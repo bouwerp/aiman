@@ -30,6 +30,9 @@ type SummaryModel struct {
 	// workspace fields
 	workspacePath   string
 	workspaceExists bool
+	// missingTools are the repo's required tools the remote lacks. They are
+	// a warning only; enter still creates.
+	missingTools []string
 }
 
 func newPromptInput() textinput.Model {
@@ -94,6 +97,11 @@ func (m *SummaryModel) SetSize(width, height int) {
 func (m *SummaryModel) SetWorkspaceStatus(path string, exists bool) {
 	m.workspacePath = path
 	m.workspaceExists = exists
+}
+
+// SetMissingTools records the repo's required tools the remote lacks.
+func (m *SummaryModel) SetMissingTools(missing []string) {
+	m.missingTools = missing
 }
 
 // buttonFocusIndex is 1: focus 0 is the initial-prompt input, 1 is Create.
@@ -220,6 +228,11 @@ func (m SummaryModel) viewString() string {
 		backend = domain.DefaultSessionBackend
 	}
 	b.WriteString(fmt.Sprintf("%-15s %s\n", "Backend:", backend))
+
+	if len(m.missingTools) > 0 {
+		warn := lipgloss.NewStyle().Foreground(a1Wait)
+		b.WriteString(warn.Render("⚠ Missing on remote: "+strings.Join(m.missingTools, ", ")+" (create anyway with enter)") + "\n")
+	}
 
 	if !m.adHoc {
 		// Prompt Free

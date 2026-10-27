@@ -58,6 +58,28 @@ func (m *AgentPickerModel) SetSize(width, height int) {
 	m.list.SetSize(width-h, height-v)
 }
 
+// Preselect moves the cursor to the agent whose command's binary is command
+// (case-insensitive). It returns false and leaves the cursor in place when no
+// listed agent matches, so a role agent that is not installed has no effect.
+func (m *AgentPickerModel) Preselect(command string) bool {
+	want := strings.Fields(strings.ToLower(command))
+	if len(want) == 0 {
+		return false
+	}
+	for i, it := range m.list.Items() {
+		ai, ok := it.(agentItem)
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(strings.ToLower(ai.agent.Command))
+		if len(fields) > 0 && fields[0] == want[0] {
+			m.list.Select(i)
+			return true
+		}
+	}
+	return false
+}
+
 // preferredAgentChoice is the picker's answer when the user confirms without
 // an agent: no command, so serve launches the first agents.preferred command
 // installed on the remote.
