@@ -33,6 +33,10 @@ func (n *NoopIntelligence) GenerateCommitMessage(_ context.Context, _ string) (s
 	return "", domain.ErrIntelligenceUnavailable
 }
 
+func (n *NoopIntelligence) ProposeMemories(_ context.Context, _ string) ([]domain.MemoryCandidate, error) {
+	return nil, domain.ErrIntelligenceUnavailable
+}
+
 // ClassifyActivity reports unknown so callers fall back to the deterministic
 // classifier rather than treating "AI disabled" as a verdict.
 func (n *NoopIntelligence) ClassifyActivity(context.Context, string) (domain.AgentState, string, error) {

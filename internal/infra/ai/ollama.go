@@ -115,6 +115,26 @@ var (
   },
   "required": ["subject"]
 }`)
+
+	memoryCandidatesSchema = json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type":     {"type": "string", "enum": ["decision","pitfall","convention","fact"]},
+          "title":    {"type": "string"},
+          "abstract": {"type": "string"},
+          "body":     {"type": "string"}
+        },
+        "required": ["type","title","abstract","body"]
+      }
+    }
+  },
+  "required": ["candidates"]
+}`)
 )
 
 // System prompts for each use case.
@@ -146,6 +166,14 @@ Respond ONLY with a valid JSON array matching the schema.`
 Format: type(scope): short description (max 72 chars).
 Types: feat, fix, refactor, test, docs, chore, style, perf.
 Optionally add a concise body for complex changes.
+Respond ONLY with valid JSON matching the schema.`
+
+	memoryCandidatesSystemPrompt = `You extract durable lessons from a coding session's handover.
+Return notes a future session on this repository needs: decisions, pitfalls, conventions, or facts.
+Do not return a status report or a summary of what happened.
+Each note needs a short title, a one-sentence abstract, and a body with the detail.
+Use only decision, pitfall, convention, or fact as the type.
+Return an empty candidates array when there is nothing durable to keep.
 Respond ONLY with valid JSON matching the schema.`
 )
 
@@ -402,6 +430,52 @@ func (o *OllamaIntelligence) GenerateCommitMessage(ctx context.Context, diff str
 		return result.Subject + "\n\n" + result.Body, nil
 	}
 	return result.Subject, nil
+}
+
+// ProposeMemories extracts at most MaxMemoryCandidates typed notes.
+func (o *OllamaIntelligence) ProposeMemories(ctx context.Context, source string) ([]domain.MemoryCandidate, error) {
+	prompt := fmt.Sprintf("Handover source:\n\n```\n%s\n```", tailTruncate(source, MaxTailChars))
+	raw, err := o.generate(ctx, memoryCandidatesSystemPrompt, prompt, memoryCandidatesSchema, defaultMaxTokens)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Candidates []struct {
+			Type     string `json:"type"`
+			Title    string `json:"title"`
+			Abstract string `json:"abstract"`
+			Body     string `json:"body"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse memory candidates: %w (raw: %.200s)", err, raw)
+	}
+	out := make([]domain.MemoryCandidate, 0, domain.MaxMemoryCandidates)
+	for _, c := range result.Candidates {
+		typ, ok := domain.ParseContextType(c.Type)
+		if !ok {
+			continue
+		}
+		switch typ {
+		case domain.ContextTypeDecision, domain.ContextTypePitfall, domain.ContextTypeConvention, domain.ContextTypeFact:
+		default:
+			continue
+		}
+		title := strings.TrimSpace(c.Title)
+		if title == "" {
+			continue
+		}
+		out = append(out, domain.MemoryCandidate{
+			Type:     typ,
+			Title:    title,
+			Abstract: c.Abstract,
+			Body:     c.Body,
+		})
+		if len(out) == domain.MaxMemoryCandidates {
+			break
+		}
+	}
+	return out, nil
 }
 
 // generate sends a single-turn generation request to Ollama.

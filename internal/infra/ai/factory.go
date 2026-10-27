@@ -85,6 +85,13 @@ func (l *lazyIntelligence) GenerateCommitMessage(ctx context.Context, diff strin
 	return l.delegate.GenerateCommitMessage(ctx, diff)
 }
 
+func (l *lazyIntelligence) ProposeMemories(ctx context.Context, source string) ([]domain.MemoryCandidate, error) {
+	if !l.checkOnce(ctx) {
+		return nil, domain.ErrIntelligenceUnavailable
+	}
+	return l.delegate.ProposeMemories(ctx, source)
+}
+
 // ClassifyActivity delegates once the backend has been confirmed reachable.
 func (l *lazyIntelligence) ClassifyActivity(ctx context.Context, paneTail string) (domain.AgentState, string, error) {
 	if !l.checkOnce(ctx) {

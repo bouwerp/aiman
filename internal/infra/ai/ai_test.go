@@ -34,6 +34,10 @@ func TestNoopIntelligence(t *testing.T) {
 		t.Errorf("SuggestPatterns: want ErrIntelligenceUnavailable, got %v", err)
 	}
 
+	if _, err := noop.ProposeMemories(ctx, "handover"); err != domain.ErrIntelligenceUnavailable {
+		t.Errorf("ProposeMemories: want ErrIntelligenceUnavailable, got %v", err)
+	}
+
 	if _, err := noop.GenerateCommitMessage(ctx, "diff"); err != domain.ErrIntelligenceUnavailable {
 		t.Errorf("GenerateCommitMessage: want ErrIntelligenceUnavailable, got %v", err)
 	}
@@ -91,6 +95,46 @@ func TestOllamaIntelligenceSummariseSession(t *testing.T) {
 	}
 	if len(result.Overview) != 1 || result.Overview[0] != "Writing tests for the auth module." {
 		t.Errorf("Overview: unexpected %v", result.Overview)
+	}
+}
+
+func TestOllamaIntelligenceProposeMemories(t *testing.T) {
+	candidates := make([]map[string]string, 0, 8)
+	for i := 0; i < 6; i++ {
+		candidates = append(candidates, map[string]string{
+			"type": "decision", "title": "Candidate", "abstract": "abstract", "body": "body",
+		})
+	}
+	candidates = append(candidates,
+		map[string]string{"type": "handover", "title": "Bad type", "abstract": "a", "body": "b"},
+		map[string]string{"type": "fact", "title": "", "abstract": "a", "body": "b"},
+	)
+	raw, err := json.Marshal(map[string]any{"candidates": candidates})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/generate" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"response": string(raw), "done": true})
+	}))
+	defer srv.Close()
+
+	client := ai.NewOllamaIntelligence(srv.URL, "test-model")
+	got, err := client.ProposeMemories(context.Background(), "handover source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != domain.MaxMemoryCandidates {
+		t.Fatalf("candidates = %d, want %d", len(got), domain.MaxMemoryCandidates)
+	}
+	for _, c := range got {
+		if c.Type != domain.ContextTypeDecision || c.Title == "" {
+			t.Fatalf("candidate = %+v", c)
+		}
 	}
 }
 

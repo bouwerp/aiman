@@ -37,6 +37,20 @@ type IntelligenceProvider interface {
 
 	// GenerateCommitMessage drafts a conventional commit message from a git diff.
 	GenerateCommitMessage(ctx context.Context, diff string) (string, error)
+
+	// ProposeMemories extracts durable, typed notes from a handover source.
+	ProposeMemories(ctx context.Context, source string) ([]MemoryCandidate, error)
+}
+
+// MaxMemoryCandidates caps one handover's proposals.
+const MaxMemoryCandidates = 5
+
+// MemoryCandidate is one durable note proposed from a handover.
+type MemoryCandidate struct {
+	Type     ContextType `json:"type"`
+	Title    string      `json:"title"`
+	Abstract string      `json:"abstract"`
+	Body     string      `json:"body"`
 }
 
 // SessionSummary is the structured result of analysing a coding agent's tmux output.
