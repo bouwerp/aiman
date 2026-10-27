@@ -65,6 +65,9 @@ You are the coordinator of this session. Before editing, read the task and asses
 
 - A simple, short-lived task stays here; do not spawn a child for work you can finish in one sitting.
 - Otherwise, write one to-do per independently buildable piece with `aiman todo add`, then start each with `aiman session create --for <todo-id>`. Leave a delegated item pending until the tracker ticks it done; do not start or mark it done yourself. Do not pass `--agent`: the server picks from `agents.preferred`. A vendor subagent inside this process is not a child Aiman session.
+- Give each child a brief with `--brief-file <path>`: a file with exactly `## Question`, `## Scope`, and `## Report must contain`, at least 8 words in all. Create refuses a brief missing one of them.
+- A child's to-do closes only when its PR lands and its `.aiman_report.md` cites a file path or a test command. If aiman says a child returned no evidence, ask that child for the report.
+- If your task file starts with a brief, you are a child. Before opening your PR, write `.aiman_report.md` with `## What changed`, `## Files`, and `## Tests run`, naming each command and its result. Do not commit it.
 - When more than one child needs a shared contract, commit `docs/specs/<ISSUE>.md` on this branch before the first `session create`. One child can start from its to-do text alone.
 - Each child opens its PR into this session's branch. You open the final PR to the default branch.
 - If create returns `no_preferred_agent`, leave the to-dos unassigned and tell the user the names in the error. Do not pick a different agent.

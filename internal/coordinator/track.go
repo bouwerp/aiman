@@ -9,6 +9,7 @@ import (
 	"log"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -40,8 +41,9 @@ type Notifier interface {
 }
 
 // Tracker marks a parent's to-do done when the child linked by its child:
-// Ref lands a PR on the parent's branch. It keeps no state of its own, so a
-// fresh Tracker resumes from the stored Refs.
+// Ref lands a PR on the parent's branch with a report that cites evidence. Its
+// only state is which items it already asked about, so a fresh Tracker resumes
+// from the stored Refs.
 type Tracker struct {
 	Todos    Todos
 	Sessions func() ([]domain.Session, error)
@@ -49,6 +51,16 @@ type Tracker struct {
 	Passed   func(childID string) bool  // nil means false; nl-7's LatestFor.Passed
 	BeforePR func(parentID string) bool // nil means false; nl-10 sets this from verify.before_pr
 	Notify   Notifier                   // nil drops the missing-child notification
+	// Report reads the child's .aiman_report.md. nil, or a read error, is no
+	// evidence.
+	Report func(ctx context.Context, child domain.Session) (string, error)
+	// Steer queues a note for the parent's agent as aiman. nil drops it.
+	Steer func(parentID, text string)
+
+	// asked holds the items whose coordinator was already told the child
+	// returned no evidence, so the note is sent once per serve run.
+	mu    sync.Mutex
+	asked map[string]bool
 }
 
 // Run calls TrackOnce now and then every interval until ctx ends.
@@ -67,8 +79,9 @@ func (t *Tracker) Run(ctx context.Context, interval time.Duration) {
 }
 
 // TrackOnce walks every session's list and settles each open item linked to
-// a child: done when the child's PR has landed, unlinked when the child
-// session no longer exists. A failure on one item is logged and skipped.
+// a child: done when the child's PR has landed and its report cites evidence,
+// unlinked when the child session no longer exists. A failure on one item is
+// logged and skipped.
 func (t *Tracker) TrackOnce(ctx context.Context) {
 	sessions, err := t.Sessions()
 	if err != nil {
@@ -95,9 +108,14 @@ func (t *Tracker) TrackOnce(ctx context.Context) {
 				t.unlink(ctx, parent, it, childID)
 				continue
 			}
-			if t.landed(ctx, parent, child) {
-				t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone })
+			if !t.landed(ctx, parent, child) {
+				continue
 			}
+			if err := t.evidence(ctx, child); err != nil {
+				t.askForReport(parent, it, child, err)
+				continue
+			}
+			t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone })
 		}
 	}
 }
@@ -120,6 +138,44 @@ func (t *Tracker) landed(ctx context.Context, parent, child domain.Session) bool
 	return pr.Open &&
 		t.BeforePR != nil && t.BeforePR(parent.ID) &&
 		t.Passed != nil && t.Passed(child.ID)
+}
+
+// evidence reads and validates the child's report.
+func (t *Tracker) evidence(ctx context.Context, child domain.Session) error {
+	if t.Report == nil {
+		return errors.New("no report reader")
+	}
+	md, err := t.Report(ctx, child)
+	if err != nil {
+		return err
+	}
+	return ValidateReport(md)
+}
+
+// askForReport steers the coordinator once to get the child's report. The
+// item stays open: the child's PR may land, but the item is the contract.
+func (t *Tracker) askForReport(parent domain.Session, it domain.TodoItem, child domain.Session, why error) {
+	key := parent.ID + "/" + it.ID + "/" + child.ID
+	t.mu.Lock()
+	if t.asked == nil {
+		t.asked = map[string]bool{}
+	}
+	done := t.asked[key]
+	t.asked[key] = true
+	t.mu.Unlock()
+	if done {
+		return
+	}
+	log.Printf("coordinator: report of %s: %v", child.ID, why)
+	if t.Steer == nil {
+		return
+	}
+	name := child.Name
+	if name == "" {
+		name = child.ID
+	}
+	t.Steer(parent.ID, fmt.Sprintf("[aiman] child %s returned no evidence; ask it for %s before marking %s done.",
+		name, domain.AimanReportFileName, it.ID))
 }
 
 // unlink clears a Ref whose child session is gone and tells the user. The

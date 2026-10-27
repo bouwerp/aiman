@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -969,18 +970,19 @@ func forServer(t *testing.T, t3Ref string) (*Server, *fakeCreator) {
 	return srv, creator
 }
 
-func parentItem(t *testing.T, srv *Server, id string) domain.TodoItem {
+// parentT3 returns the parent p's item t3.
+func parentT3(t *testing.T, srv *Server) domain.TodoItem {
 	t.Helper()
 	l, err := srv.TodoAccess().Get("p")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, it := range l.Items {
-		if it.ID == id {
+		if it.ID == "t3" {
 			return it
 		}
 	}
-	t.Fatalf("item %s not found", id)
+	t.Fatal("item p/t3 not found")
 	return domain.TodoItem{}
 }
 
@@ -1003,7 +1005,7 @@ func TestCreateForLinksParent(t *testing.T) {
 	if cfg.Agent == nil || cfg.Agent.Command != "claude" {
 		t.Fatalf("agent = %+v, want the preferred claude", cfg.Agent)
 	}
-	if it := parentItem(t, srv, "t3"); it.Ref != "child:new-id" || it.State != domain.TodoPending {
+	if it := parentT3(t, srv); it.Ref != "child:new-id" || it.State != domain.TodoPending {
 		t.Fatalf("t3 = %+v, want pending with ref child:new-id", it)
 	}
 	settle()
@@ -1021,7 +1023,7 @@ func TestCreateForRefusesLinkedItem(t *testing.T) {
 	if creator.calls != 0 {
 		t.Fatalf("created %d sessions, want none", creator.calls)
 	}
-	if it := parentItem(t, srv, "t3"); it.Ref != "child:old" {
+	if it := parentT3(t, srv); it.Ref != "child:old" {
 		t.Fatalf("t3 ref = %q, want child:old", it.Ref)
 	}
 }
@@ -1072,7 +1074,50 @@ func TestCreateForForgetsChildWhenLinkFails(t *testing.T) {
 	if _, err := srv.repo.Get(context.Background(), "new-id"); err == nil {
 		t.Fatal("the child row survived a failed link")
 	}
-	if it := parentItem(t, srv, "t3"); it.Ref != "child:other" {
+	if it := parentT3(t, srv); it.Ref != "child:other" {
 		t.Fatalf("t3 ref = %q, want child:other", it.Ref)
+	}
+}
+
+const testBrief = "## Question\n\nDoes the parser accept nested lists?\n\n## Scope\n\ninternal/parse only.\n\n## Report must contain\n\nThe tests you ran.\n"
+
+func TestCreateForCarriesBrief(t *testing.T) {
+	srv, creator := forServer(t, "")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p", "brief": testBrief})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.Brief != testBrief {
+		t.Fatalf("cfg.Brief = %q, want the brief", creator.cfg.Brief)
+	}
+}
+
+func TestCreateReadsBriefFile(t *testing.T) {
+	srv, creator := forServer(t, "")
+	path := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(path, []byte(testBrief), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p", "brief_file": path})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.Brief != testBrief {
+		t.Fatalf("cfg.Brief = %q, want the file's brief", creator.cfg.Brief)
+	}
+}
+
+func TestCreateRejectsBadBrief(t *testing.T) {
+	srv, creator := forServer(t, "")
+	bad := strings.Replace(testBrief, "## Scope", "## Notes", 1)
+	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p", "brief": bad})
+	if resp.Error == nil || resp.Error.Code != CodeInvalidParams || !strings.Contains(resp.Error.Message, "## Scope") {
+		t.Fatalf("error = %+v, want invalid_params naming ## Scope", resp.Error)
+	}
+	if creator.calls != 0 {
+		t.Fatalf("created %d sessions, want none", creator.calls)
+	}
+	if it := parentT3(t, srv); it.Ref != "" {
+		t.Fatalf("t3 ref = %q, want unlinked", it.Ref)
 	}
 }

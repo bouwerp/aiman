@@ -17,6 +17,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 	infraGit "github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/graphify"
+	"github.com/bouwerp/aiman/internal/infra/remotefile"
 	"github.com/google/uuid"
 )
 
@@ -113,6 +114,38 @@ func joinPrompt(base, user string) string {
 	default:
 		return base + " " + user
 	}
+}
+
+// taskBriefMarker separates login-shell noise from the task file in
+// WriteTaskBrief's read.
+const taskBriefMarker = "__AIMAN_TASK__"
+
+// WriteTaskBrief puts brief at the top of dir's task file, after the scaffold
+// header and before any JIRA task already written there. A file that already
+// starts with the brief is left as it is.
+func WriteTaskBrief(ctx context.Context, remote remotefile.Writer, dir, brief string) error {
+	path := filepath.Join(dir, domain.AimanTaskFileName)
+	out, err := remote.Execute(ctx, fmt.Sprintf("echo %s; cat -- %q 2>/dev/null || true", taskBriefMarker, path))
+	if err != nil {
+		return fmt.Errorf("read %s: %w", domain.AimanTaskFileName, err)
+	}
+	_, existing, ok := strings.Cut(out, taskBriefMarker+"\n")
+	if !ok {
+		return fmt.Errorf("read %s: marker missing from output", domain.AimanTaskFileName)
+	}
+	body := strings.TrimPrefix(existing, domain.AimanScaffoldHeader)
+	if !strings.HasPrefix(body, brief) {
+		body = joinTaskSections(brief, body)
+	}
+	_, err = remotefile.WriteIfChanged(ctx, remote, path, []byte(domain.AimanScaffoldHeader+body))
+	return err
+}
+
+func joinTaskSections(first, rest string) string {
+	if strings.TrimSpace(rest) == "" {
+		return first
+	}
+	return strings.TrimRight(first, "\n") + "\n\n" + rest
 }
 
 // promptDeliverer is the narrow slice of RemoteExecutor that deliverInitialPrompt
@@ -442,6 +475,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		if err == nil {
 			agentCmd = prepared.Command
 			sendKeysPrompt = prepared.InitialPrompt
+		}
+	}
+	if config.Brief != "" {
+		if err := WriteTaskBrief(ctx, sshMgr, workingDir, config.Brief); err != nil {
+			return nil, fmt.Errorf("failed to write the brief: %w", err)
+		}
+		if !strings.Contains(sendKeysPrompt, domain.AimanTaskFileName) {
+			sendKeysPrompt = joinPrompt(sendKeysPrompt, "Read your brief in "+domain.AimanTaskFileName+" first.")
 		}
 	}
 	sendKeysPrompt = InjectSharedContext(ctx, sshMgr, workingDir, session.Group, session.RepoName, sendKeysPrompt)

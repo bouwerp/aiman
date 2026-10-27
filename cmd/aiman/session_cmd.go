@@ -226,6 +226,15 @@ func sessionCreateParams(flags map[string]string) (map[string]any, error) {
 		}
 		params["budget_tokens"] = bt
 	}
+	// The brief is sent as file content in the request, so a shell never
+	// parses it and serve validates the same text the caller read.
+	if bf := flags["brief-file"]; bf != "" {
+		raw, err := os.ReadFile(bf)
+		if err != nil {
+			return nil, errors.New("brief-file unreadable: " + err.Error())
+		}
+		params["brief"] = string(raw)
+	}
 	if _, ok := flags["quick"]; ok {
 		params["quick"] = true
 	}

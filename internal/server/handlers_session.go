@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -597,6 +598,10 @@ type createParams struct {
 	// For is a to-do id in the parent's list. The new session is the child
 	// that works on it, and the item's Ref links to it.
 	For string `json:"for"`
+	// Brief is the child's brief (## Question, ## Scope, ## Report must
+	// contain). BriefFile is a path on this host to read it from instead.
+	Brief     string `json:"brief"`
+	BriefFile string `json:"brief_file"`
 }
 
 func (s *Server) handleCreate(ctx context.Context, req Request) Response {
@@ -622,6 +627,10 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	}
 	if !params.Quick && (params.Repo == "" || params.Branch == "") {
 		return errResp(req.ID, CodeInvalidParams, "repo and branch are required (or --quick)")
+	}
+	brief, berr := readBrief(params.Brief, params.BriefFile)
+	if berr != nil {
+		return errResp(req.ID, CodeInvalidParams, berr.Error())
 	}
 	if strings.TrimSpace(params.Agent) == "" {
 		// An explicit agent always wins; only an empty one reads agents.preferred.
@@ -666,6 +675,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		Branch:        params.Branch,
 		Directory:     params.Dir,
 		InitialPrompt: params.Prompt,
+		Brief:         brief,
 		BaseBranch:    params.Base,
 		// The agent's launch model and effort come from this host's own agent
 		// defaults, which serve install keeps in step with the laptop's config.
@@ -763,6 +773,26 @@ func (s *Server) applyFor(params *createParams, parentID string, existing []doma
 		}
 	}
 	return parent, "", nil
+}
+
+// readBrief validates the brief text or the file it is in, and returns it in
+// its canonical form. Neither given is no brief.
+func readBrief(text, file string) (string, error) {
+	if text == "" && file != "" {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("brief_file: %w", err)
+		}
+		text = string(raw)
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", nil
+	}
+	b, err := coordinator.ParseBrief(text)
+	if err != nil {
+		return "", err
+	}
+	return b.Markdown(), nil
 }
 
 // linkChild sets the parent's to-do Ref to the child as aiman. It refuses an

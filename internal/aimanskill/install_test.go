@@ -197,6 +197,17 @@ func TestSkillDescribesVerify(t *testing.T) {
 	}
 }
 
+func TestSkillStatesChildContract(t *testing.T) {
+	for _, want := range []string{
+		"--brief-file", "## Question", "## Scope", "## Report must contain",
+		".aiman_report.md", "## What changed", "## Files", "## Tests run",
+	} {
+		if !strings.Contains(Text, want) {
+			t.Fatalf("skill missing %q", want)
+		}
+	}
+}
+
 func TestSkillStatesCoordinator(t *testing.T) {
 	for _, want := range []string{"coordinator", "simple, short-lived", "child Aiman session", "agents.preferred", "docs/specs/", "do not spawn a child", "vendor subagent", "Leave a delegated item pending"} {
 		if !strings.Contains(Text, want) {

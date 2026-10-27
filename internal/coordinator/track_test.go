@@ -74,13 +74,23 @@ func (f *fakeNotify) Emit(_ context.Context, sessionID, _ string, kind domain.No
 	return nil
 }
 
+type steerNote struct {
+	session string
+	text    string
+}
+
 // fixture is a parent "p" on branch feat/x whose item t3 links to child c1.
+// c1's report cites a file and a test command unless a test replaces it.
 type fixture struct {
 	todos   *fakeTodos
 	notify  *fakeNotify
 	probed  []string
+	steered []steerNote
+	report  func() (string, error)
 	tracker *Tracker
 }
+
+const evidenceReport = "## What changed\n\nParser.\n\n## Files\n\n- internal/parse/list.go\n\n## Tests run\n\ngo test ./... ok\n"
 
 func newFixture(ref string, pr PRState) *fixture {
 	f := &fixture{
@@ -90,6 +100,7 @@ func newFixture(ref string, pr PRState) *fixture {
 			}},
 		}},
 		notify: &fakeNotify{},
+		report: func() (string, error) { return evidenceReport, nil },
 	}
 	sessions := []domain.Session{
 		{ID: "p", Name: "parent", Branch: "feat/x"},
@@ -102,6 +113,13 @@ func newFixture(ref string, pr PRState) *fixture {
 			f.probed = append(f.probed, child.ID)
 			return pr, nil
 		},
+		Report: func(_ context.Context, child domain.Session) (string, error) {
+			if child.ID != "c1" {
+				return "", errors.New("unexpected child " + child.ID)
+			}
+			return f.report()
+		},
+		Steer:  func(id, text string) { f.steered = append(f.steered, steerNote{session: id, text: text}) },
 		Notify: f.notify,
 	}
 	return f
@@ -188,6 +206,7 @@ func TestTrackResumesFromRefs(t *testing.T) {
 		PR: func(context.Context, domain.Session) (PRState, error) {
 			return PRState{Base: "feat/x", Merged: true}, nil
 		},
+		Report: first.tracker.Report,
 	}
 	restarted.TrackOnce(context.Background())
 
@@ -279,4 +298,77 @@ func TestParsePRState(t *testing.T) {
 	if _, err := ParsePRState([]byte("not json")); err == nil {
 		t.Fatal("ParsePRState(not json) = nil error")
 	}
+}
+
+func TestChildWithoutReportKeepsParentItemOpen(t *testing.T) {
+	for name, report := range map[string]func() (string, error){
+		"missing":       func() (string, error) { return "", errors.New("no such file") },
+		"evidence-free": func() (string, error) { return "## What changed\n\nIt works now.\n", nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture("child:c1", PRState{Base: "feat/x", Merged: true})
+			f.report = report
+			f.tracker.TrackOnce(context.Background())
+			f.tracker.TrackOnce(context.Background())
+
+			if it := f.todos.t3(t); it.State != domain.TodoPending || it.Ref != "child:c1" {
+				t.Fatalf("t3 = %+v, want pending and still linked", it)
+			}
+			if len(f.todos.mutations) != 0 {
+				t.Fatalf("mutations = %+v, want none", f.todos.mutations)
+			}
+			if len(f.steered) != 1 {
+				t.Fatalf("steered %+v, want one note", f.steered)
+			}
+			n := f.steered[0]
+			want := "[aiman] child child returned no evidence; ask it for .aiman_report.md before marking t3 done."
+			if n.session != "p" || n.text != want {
+				t.Fatalf("note = %+v, want %q to p", n, want)
+			}
+		})
+	}
+}
+
+func TestChildWithReportMarksDone(t *testing.T) {
+	f := newFixture("child:c1", PRState{Base: "feat/x", Merged: true})
+	f.tracker.TrackOnce(context.Background())
+	f.tracker.TrackOnce(context.Background())
+
+	if it := f.todos.t3(t); it.State != domain.TodoDone {
+		t.Fatalf("t3 state = %s, want done", it.State)
+	}
+	if len(f.todos.mutations) != 1 || f.todos.mutations[0].author != domain.AuthorAiman {
+		t.Fatalf("mutations = %+v, want one by aiman", f.todos.mutations)
+	}
+	if len(f.steered) != 0 {
+		t.Fatalf("steered %+v, want none", f.steered)
+	}
+}
+
+func TestReadReportFromWorkingDirectory(t *testing.T) {
+	x := &fakeExec{out: "noise\n" + reportMarker + "\n" + evidenceReport}
+	read := ExecReport(x)
+	got, err := read(context.Background(), domain.Session{WorkingDirectory: "/w/child", WorktreePath: "/w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != evidenceReport {
+		t.Fatalf("report = %q", got)
+	}
+	if !strings.Contains(x.cmd, "/w/child/.aiman_report.md") {
+		t.Fatalf("cmd %q must read the working directory's report", x.cmd)
+	}
+	if _, err := read(context.Background(), domain.Session{}); err == nil {
+		t.Fatal("a session with no directory must be no evidence")
+	}
+}
+
+type fakeExec struct {
+	out string
+	cmd string
+}
+
+func (f *fakeExec) Execute(_ context.Context, cmd string) (string, error) {
+	f.cmd = cmd
+	return f.out, nil
 }

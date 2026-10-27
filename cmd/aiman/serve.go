@@ -204,6 +204,10 @@ func runServe() error {
 		},
 		// verify.before_pr does not gate child completion until nl-10.
 		BeforePR: func(string) bool { return false },
+		Report:   coordinator.ExecReport(localExec),
+		Steer: func(id, text string) {
+			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: domain.AuthorAiman, Text: text})
+		},
 	}
 	if rec := srv.NotifyRecorder(); rec != nil {
 		childTracker.Notify = rec

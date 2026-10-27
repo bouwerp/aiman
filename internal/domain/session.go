@@ -288,6 +288,9 @@ type SessionConfig struct {
 	// to the agent's initial prompt (after any JIRA task trigger) and delivered via
 	// tmux send-keys. Empty means no extra prompt text.
 	InitialPrompt string
+	// Brief is a child's validated brief (Question, Scope, Report must
+	// contain). It opens the child's task file. Empty means none.
+	Brief string
 	// BudgetTokens is the per-session token budget; 0 means none.
 	BudgetTokens int64
 	// AutonomousConfig configures polling rules if Mode is AUTONOMOUS.

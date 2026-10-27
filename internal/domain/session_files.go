@@ -8,6 +8,9 @@ const (
 	AimanTodoFileName           = ".aiman_todo.md"
 	AimanHandoverFileName       = ".aiman_handover.md"
 	AimanReviewFileName         = ".aiman_review.md"
+	// AimanReportFileName is a child's evidence for its parent: what changed,
+	// the files, and the tests run. Its parent's to-do closes only with it.
+	AimanReportFileName = ".aiman_report.md"
 	// AimanSessionIDFileName is the worktree marker Muse hooks read. Muse
 	// strips AIMAN_ID from the hook environment, so the id cannot travel
 	// as a variable.

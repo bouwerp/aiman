@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,6 +35,31 @@ func TestSessionCreateForFlag(t *testing.T) {
 	}
 	if _, ok := params["agent"]; ok {
 		t.Fatalf("params = %v, an unset agent must stay off the wire", params)
+	}
+}
+
+// The brief travels as file content in the params, never on argv.
+func TestSessionCreateBriefFileFlag(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "brief.md")
+	const brief = "## Question\n\nWhy?\n"
+	if err := os.WriteFile(path, []byte(brief), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	flags, _ := takeFlags([]string{"--for", "t3", "--brief-file", path})
+	params, err := sessionCreateParams(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["brief"] != brief {
+		t.Fatalf("brief = %v, want the file's content", params["brief"])
+	}
+	if _, ok := params["brief-file"]; ok {
+		t.Fatalf("params = %v, the path must not be sent as a param", params)
+	}
+
+	flags, _ = takeFlags([]string{"--brief-file", filepath.Join(t.TempDir(), "missing.md")})
+	if _, err := sessionCreateParams(flags); err == nil {
+		t.Fatal("an unreadable brief file must be an error")
 	}
 }
 
