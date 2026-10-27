@@ -28,15 +28,20 @@ type Finding struct {
 
 var (
 	findingHeader = regexp.MustCompile(`(?i)^##\s*\[(REQUIRED|SUGGESTION)\]\s*(.+)$`)
-	sectionHeader = regexp.MustCompile(`^##\s+`)
+	sectionHeader = regexp.MustCompile(`^##\s*`)
 	locationRE    = regexp.MustCompile(`[\w./-]+:\d+`)
 )
 
 // ParseReview extracts findings and reports whether the completion marker is
 // present. Unknown section headers end the previous finding and are ignored.
 func ParseReview(text string) (findings []Finding, complete bool) {
-	complete = strings.Contains(text, CompleteMarker)
 	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == CompleteMarker {
+			complete = true
+			break
+		}
+	}
 	for i := 0; i < len(lines); {
 		match := findingHeader.FindStringSubmatch(strings.TrimSpace(lines[i]))
 		if match == nil {

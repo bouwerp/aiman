@@ -77,3 +77,32 @@ func TestWaitDisabled(t *testing.T) {
 		t.Fatalf("out = %q", out.String())
 	}
 }
+
+func TestWaitJSONRequiredStillFails(t *testing.T) {
+	var out bytes.Buffer
+	err := waitForReview(verifySequence(verify.Review{ID: "r1", Status: verify.StatusComplete, Required: 1}), "r1", time.Second, time.Millisecond, &out, true)
+	if !errors.Is(err, errVerifyNotPassed) {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(out.String(), `"status": "complete"`) {
+		t.Fatalf("out = %q", out.String())
+	}
+}
+
+func TestWaitRetriesTransientStatusError(t *testing.T) {
+	attempts := 0
+	call := func(string, any) (server.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return server.Response{}, errors.New("temporary")
+		}
+		return server.Response{Result: map[string]any{"review": verify.Review{ID: "r1", Status: verify.StatusComplete}}}, nil
+	}
+	var out bytes.Buffer
+	if err := waitForReview(call, "r1", time.Second, time.Millisecond, &out); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || !strings.Contains(out.String(), "verify: passed") {
+		t.Fatalf("attempts=%d out=%q", attempts, out.String())
+	}
+}

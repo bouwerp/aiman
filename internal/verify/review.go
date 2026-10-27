@@ -73,7 +73,7 @@ func NewStore(dir string) *Store { return &Store{dir: dir} }
 
 // Put writes a review atomically: temp file, then rename.
 func (s *Store) Put(r Review) error {
-	if strings.TrimSpace(r.ID) == "" || strings.ContainsAny(r.ID, `/\`) {
+	if !validReviewID(r.ID) {
 		return fmt.Errorf("invalid review id %q", r.ID)
 	}
 	body, err := json.MarshalIndent(r, "", "  ")
@@ -107,6 +107,9 @@ func (s *Store) Put(r Review) error {
 
 // Get reads one review.
 func (s *Store) Get(id string) (Review, error) {
+	if !validReviewID(id) {
+		return Review{}, ErrNotFound
+	}
 	body, err := os.ReadFile(filepath.Join(s.dir, id+".json"))
 	if os.IsNotExist(err) {
 		return Review{}, ErrNotFound
@@ -138,7 +141,7 @@ func (s *Store) List() ([]Review, error) {
 		id := strings.TrimSuffix(entry.Name(), ".json")
 		r, err := s.Get(id)
 		if err != nil {
-			return nil, err
+			continue // one corrupt record must not hide the others
 		}
 		out = append(out, r)
 	}
@@ -149,4 +152,18 @@ func (s *Store) List() ([]Review, error) {
 		return out[i].ID > out[j].ID
 	})
 	return out, nil
+}
+
+func validReviewID(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" || strings.Contains(id, "..") || strings.ContainsAny(id, `/\`) {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }

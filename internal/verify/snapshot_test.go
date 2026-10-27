@@ -158,3 +158,14 @@ func TestDiffAgainstTruncates(t *testing.T) {
 		t.Fatalf("diff = truncated %v len %d stat %q base %q", diff.Truncated, len(diff.Patch), diff.Stat, diff.MergeBase)
 	}
 }
+
+func TestTakeSnapshotWithoutGitIdentity(t *testing.T) {
+	repo := newTestRepo(t)
+	runTestGit(t, repo, "config", "--unset", "user.name")
+	runTestGit(t, repo, "config", "--unset", "user.email")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	if _, err := TakeSnapshot(context.Background(), repo); err != nil {
+		t.Fatalf("snapshot without identity: %v", err)
+	}
+}

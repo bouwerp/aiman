@@ -85,7 +85,11 @@ func waitForReview(call func(method string, params any) (server.Response, error)
 	for {
 		resp, err := call("verify.status", map[string]any{"review": id})
 		if err != nil {
-			return err
+			if !time.Now().Before(deadline) {
+				return err
+			}
+			time.Sleep(every)
+			continue
 		}
 		review, err := decodeVerifyReview(resp)
 		if err != nil {
@@ -93,7 +97,10 @@ func waitForReview(call func(method string, params any) (server.Response, error)
 		}
 		if !review.Status.Active() {
 			if len(asJSON) > 0 && asJSON[0] {
-				return printVerifyJSON(out, review)
+				if err := printVerifyJSON(out, review); err != nil {
+					return err
+				}
+				return verifyResultError(review)
 			}
 			return writeFinalReview(out, review)
 		}
@@ -157,6 +164,15 @@ func writeFinalReview(out io.Writer, review verify.Review) error {
 		fmt.Fprintf(out, "review %s\n", review.Status)
 		return errVerifyNotPassed
 	}
+}
+
+// verifyResultError is the exit status for a final review, independent of
+// whether it was printed as text or JSON.
+func verifyResultError(review verify.Review) error {
+	if review.Status == verify.StatusDisabled || review.Passed() {
+		return nil
+	}
+	return errVerifyNotPassed
 }
 
 func printVerifyJSON(out io.Writer, review verify.Review) error {

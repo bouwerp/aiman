@@ -31,3 +31,17 @@ func TestParseReviewIgnoresUnknownTags(t *testing.T) {
 		t.Fatalf("findings = %+v", got)
 	}
 }
+
+func TestParseReviewHandlesCompactHeaders(t *testing.T) {
+	got, complete := ParseReview("## [SUGGESTION] First\na.go:1\nbody\n##[REQUIRED] Second\nb.go:2\nbody\n" + CompleteMarker + "\n")
+	if !complete || len(got) != 2 || got[1].Severity != SeverityRequired {
+		t.Fatalf("complete=%v findings=%+v", complete, got)
+	}
+}
+
+func TestParseReviewMarkerMustBeItsOwnLine(t *testing.T) {
+	got, complete := ParseReview("## [REQUIRED] First\na.go:1\nthe marker " + CompleteMarker + " is quoted here\n")
+	if complete {
+		t.Fatalf("inline marker counted as complete: %+v", got)
+	}
+}

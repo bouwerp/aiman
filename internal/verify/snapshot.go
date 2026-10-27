@@ -36,7 +36,7 @@ func TakeSnapshot(ctx context.Context, worktree string) (Snapshot, error) {
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 	index := filepath.Join(tmp, "index")
-	env := append(os.Environ(), "GIT_INDEX_FILE="+index)
+	env := withGitIdentity(append(os.Environ(), "GIT_INDEX_FILE="+index))
 
 	if _, err := runGit(ctx, worktree, env, "read-tree", "HEAD"); err != nil {
 		return Snapshot{}, err
@@ -49,7 +49,7 @@ func TakeSnapshot(ctx context.Context, worktree string) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	tree = strings.TrimSpace(tree)
-	commit, err := runGit(ctx, worktree, nil, "commit-tree", tree, "-p", "HEAD", "-m", "aiman review snapshot")
+	commit, err := runGit(ctx, worktree, env, "commit-tree", tree, "-p", "HEAD", "-m", "aiman review snapshot")
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -153,4 +153,25 @@ func runGit(ctx context.Context, dir string, env []string, args ...string) (stri
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
 	}
 	return string(out), nil
+}
+
+func withGitIdentity(env []string) []string {
+	defaults := map[string]string{
+		"GIT_AUTHOR_NAME":     "Aiman",
+		"GIT_AUTHOR_EMAIL":    "aiman@localhost",
+		"GIT_COMMITTER_NAME":  "Aiman",
+		"GIT_COMMITTER_EMAIL": "aiman@localhost",
+	}
+	have := make(map[string]bool, len(env))
+	for _, entry := range env {
+		if key, _, ok := strings.Cut(entry, "="); ok {
+			have[key] = true
+		}
+	}
+	for key, value := range defaults {
+		if !have[key] {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
 }
