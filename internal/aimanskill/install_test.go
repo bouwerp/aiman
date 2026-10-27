@@ -198,7 +198,7 @@ func TestSkillDescribesVerify(t *testing.T) {
 }
 
 func TestSkillStatesCoordinator(t *testing.T) {
-	for _, want := range []string{"coordinator", "simple, short-lived", "child Aiman session", "agents.preferred", "docs/specs/", "do not spawn a child", "vendor subagent"} {
+	for _, want := range []string{"coordinator", "simple, short-lived", "child Aiman session", "agents.preferred", "docs/specs/", "do not spawn a child", "vendor subagent", "Leave a delegated item pending"} {
 		if !strings.Contains(Text, want) {
 			t.Fatalf("skill missing %q", want)
 		}
@@ -207,5 +207,15 @@ func TestSkillStatesCoordinator(t *testing.T) {
 		if strings.Contains(Text, forbidden) {
 			t.Fatalf("skill must not contain %q", forbidden)
 		}
+	}
+}
+
+func TestSkillDescriptionCoversCoordinator(t *testing.T) {
+	head := Text
+	if i := strings.Index(head, "---\n\n# Aiman"); i > 0 {
+		head = head[:i]
+	}
+	if !strings.Contains(head, "coordinate work") || !strings.Contains(head, "child sessions") {
+		t.Fatalf("skill description does not load for coordinator work: %q", head)
 	}
 }
