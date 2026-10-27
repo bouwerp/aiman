@@ -32,9 +32,12 @@ type Config struct {
 	// Notifications configures push/webhook/Slack delivery.
 	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
 	// Verify configures aiman verify reviewer sessions.
-	Verify       VerifyConfig `yaml:"verify,omitempty"`
-	Remotes      []Remote     `yaml:"remotes"`
-	ActiveRemote string       `yaml:"active_remote"`
+	Verify VerifyConfig `yaml:"verify,omitempty"`
+	// Repos maps an owner/name slug to the bootstrap applied to its new
+	// worktrees.
+	Repos        map[string]RepoBootstrap `yaml:"repos,omitempty"`
+	Remotes      []Remote                 `yaml:"remotes"`
+	ActiveRemote string                   `yaml:"active_remote"`
 
 	// PermissionsTightened records that Load had to remove group/other access
 	// from the config file, meaning the API token in it had been readable by
@@ -57,6 +60,9 @@ type ServeConfig struct {
 	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
 	// Verify configures aiman verify reviewer sessions.
 	Verify VerifyConfig `yaml:"verify,omitempty"`
+	// Repos maps an owner/name slug to the bootstrap applied to its new
+	// worktrees.
+	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
 }
 
 // VerifyConfig configures reviewer sessions started by aiman verify.
@@ -90,6 +96,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Usage:         c.Usage,
 		Notifications: c.NotificationsFor(host),
 		Verify:        c.Verify,
+		Repos:         c.Repos,
 	})
 }
 
