@@ -103,6 +103,13 @@ func (m *Model) togglePRWatchCmd(s domain.Session) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	if m.ciToggling[s.ID] {
+		return m.showToast("PR watch change already in progress…", false, 2*time.Second)
+	}
+	if m.ciToggling == nil {
+		m.ciToggling = map[string]bool{}
+	}
+	m.ciToggling[s.ID] = true
 	st, cached := m.ciStatus[s.ID]
 	on := nextPRWatch(s, st, cached)
 	client := m.ciClient
@@ -131,12 +138,16 @@ func (m *Model) handleWatchKey() tea.Cmd {
 // applyCIStatus caches a ci.get or ci.watch answer, fills the meta line and
 // the needs-you flag, and toasts the outcome of a toggle.
 func (m *Model) applyCIStatus(msg ciStatusMsg) tea.Cmd {
-	if !msg.toggled && m.ciInFlight != nil {
+	if msg.toggled {
+		delete(m.ciToggling, msg.id)
+	} else {
 		delete(m.ciInFlight, msg.id)
 	}
 	if msg.err != nil {
 		return m.noteCIError(msg)
 	}
+	// Any answer proves the host can serve ci.get again.
+	delete(m.ciUnsupported, msg.host)
 	if m.ciStatus == nil {
 		m.ciStatus = map[string]usecase.CIStatus{}
 	}

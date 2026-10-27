@@ -426,6 +426,7 @@ type Model struct {
 	ciClient      ciClient
 	ciStatus      map[string]usecase.CIStatus
 	ciInFlight    map[string]bool
+	ciToggling    map[string]bool // a ci.watch is pending; w waits for it
 	ciUnsupported map[string]bool
 	// focus selects who receives keys on the sessions tab: the list, the
 	// reply line, or the to-do list.

@@ -157,3 +157,36 @@ func TestCIEscalationNotifyFetchesStatus(t *testing.T) {
 		t.Fatal("a non-CI notification started a ci.get")
 	}
 }
+
+func TestCISuccessClearsUnsupportedHost(t *testing.T) {
+	m, _ := promptModel(domain.Session{ID: "s1", Name: "impl", RemoteHost: "regent0"})
+	m.ciClient = &fakeCIClient{}
+	m.ciUnsupported = map[string]bool{"regent0": true}
+	next, _ := m.Update(ciStatusMsg{id: "s1", host: "regent0", status: usecase.CIStatus{Watch: true}, toggled: true})
+	m = next.(*Model)
+	if m.ciUnsupported["regent0"] {
+		t.Fatal("a successful ci.watch left the host marked unsupported")
+	}
+	s, _ := m.sessionByID("s1")
+	if m.fetchCIStatusCmd(s) == nil {
+		t.Fatal("ci.get still suppressed after a successful answer")
+	}
+}
+
+func TestWKeyWaitsForPendingToggle(t *testing.T) {
+	m, _ := promptModel(domain.Session{ID: "s1", Name: "impl", RemoteHost: "regent0"})
+	fake := &fakeCIClient{}
+	m.ciClient = fake
+	next, first := m.Update(pressRune('w'))
+	m = next.(*Model)
+	next, _ = m.Update(pressRune('w'))
+	m = next.(*Model)
+	if !strings.Contains(m.snapshotToast, "already in progress") {
+		t.Fatalf("toast = %q", m.snapshotToast)
+	}
+	next, _ = m.Update(first())
+	m = next.(*Model)
+	if _, cmd := m.Update(pressRune('w')); cmd == nil {
+		t.Fatal("w stayed blocked after the toggle answered")
+	}
+}
