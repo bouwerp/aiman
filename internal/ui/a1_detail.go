@@ -15,13 +15,15 @@ import (
 // detailMetaExtras is cost, token, cache, and review state for one session.
 // usage.get fills the cost fields. Reviewing and WatchingPR are not part of that report.
 type detailMetaExtras struct {
-	CostUSD    float64
-	HasCost    bool
-	Tokens     int64
-	CacheRatio float64
-	HasCache   bool
-	Reviewing  bool
-	WatchingPR int
+	CostUSD       float64
+	HasCost       bool
+	Tokens        int64
+	CacheRatio    float64
+	HasCache      bool
+	ContextPct    float64 // latest turn / window; 0 when the window is unset
+	ContextWindow int64   // 0 hides the gauge
+	Reviewing     bool
+	WatchingPR    int
 }
 
 // todoView is one session's to-do list as the detail pane draws it.
@@ -40,33 +42,63 @@ const maxTodoRows = 8
 
 func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width int) string {
 	var parts []string
-	if agent := metaAgent(s); agent != "" {
-		parts = append(parts, agent)
+	add := func(text string) {
+		if text != "" {
+			parts = append(parts, dimText(text))
+		}
 	}
+	add(metaAgent(s))
 	if !s.CreatedAt.IsZero() {
-		parts = append(parts, shortElapsed(now.Sub(s.CreatedAt)))
+		add(shortElapsed(now.Sub(s.CreatedAt)))
 	}
-	if s.Branch != "" {
-		parts = append(parts, s.Branch)
-	}
+	add(s.Branch)
 	if x.HasCost {
-		parts = append(parts, fmt.Sprintf("~$%.2f", x.CostUSD))
+		add(fmt.Sprintf("~$%.2f", x.CostUSD))
 	} else if x.Tokens > 0 {
-		parts = append(parts, formatTokens(x.Tokens))
+		add(formatTokens(x.Tokens))
 	}
 	if x.HasCache {
-		parts = append(parts, fmt.Sprintf("cache %d%%", int(math.Round(x.CacheRatio*100))))
+		add(fmt.Sprintf("cache %d%%", int(math.Round(x.CacheRatio*100))))
+	}
+	if gauge := contextGauge(x); gauge != "" {
+		parts = append(parts, gauge)
 	}
 	if x.Reviewing {
-		parts = append(parts, "reviewing…")
+		add("reviewing…")
 	}
 	if x.WatchingPR > 0 {
-		parts = append(parts, fmt.Sprintf("watching PR #%d", x.WatchingPR))
+		add(fmt.Sprintf("watching PR #%d", x.WatchingPR))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	return truncateToWidth(dimText(strings.Join(parts, " · ")), width)
+	return truncateToWidth(joinParts(parts), width)
+}
+
+// contextGauge is "ctx N%" after the cache percentage.
+// A zero window appends nothing. At or below 80% the text is dim. Above 80%
+// it uses the detail pane's warn color. Above 95% it uses the CI failure red.
+func contextGauge(x detailMetaExtras) string {
+	if x.ContextWindow <= 0 {
+		return ""
+	}
+	pct := x.ContextPct
+	if pct < 0 {
+		pct = 0
+	}
+	text := fmt.Sprintf("ctx %d%%", int(math.Round(pct*100)))
+	return a1Text(text, contextGaugeColor(pct), false, false)
+}
+
+func contextGaugeColor(pct float64) color.Color {
+	switch {
+	case pct > 0.95:
+		return checksColor("failure")
+	case pct > 0.80:
+		return a1Wait
+	default:
+		return a1Dim
+	}
 }
 
 func metaAgent(s domain.Session) string {

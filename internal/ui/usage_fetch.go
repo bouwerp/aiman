@@ -109,13 +109,15 @@ func (m *Model) usageEventFetch(id string) tea.Cmd {
 
 // applyUsageToExtras copies a report onto the cost fields.
 // Reviewing and WatchingPR are left unchanged.
-// Known false clears cost, tokens, and cache so a stale figure does not linger.
+// Known false clears cost, tokens, cache, and the context gauge so a stale figure does not linger.
 func applyUsageToExtras(x detailMetaExtras, rep usage.Report) detailMetaExtras {
 	x.HasCost = false
 	x.HasCache = false
 	x.CostUSD = 0
 	x.Tokens = 0
 	x.CacheRatio = 0
+	x.ContextPct = 0
+	x.ContextWindow = 0
 	if !rep.Known {
 		return x
 	}
@@ -128,6 +130,10 @@ func applyUsageToExtras(x detailMetaExtras, rep usage.Report) detailMetaExtras {
 	if rep.Total.CacheHitRatio != nil {
 		x.HasCache = true
 		x.CacheRatio = *rep.Total.CacheHitRatio
+	}
+	if rep.ContextWindow > 0 {
+		x.ContextWindow = rep.ContextWindow
+		x.ContextPct = rep.ContextPct
 	}
 	return x
 }

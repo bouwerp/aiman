@@ -41,6 +41,51 @@ func TestMetaLineSkipsMissingFields(t *testing.T) {
 	}
 }
 
+func TestMetaLineContextGauge(t *testing.T) {
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	s := domain.Session{AgentName: "claude", AgentModel: "opus", Branch: "wtb-2445-standby", CreatedAt: now.Add(-42 * time.Minute)}
+	base := detailMetaExtras{HasCache: true, CacheRatio: 0.5}
+
+	at62 := base
+	at62.ContextWindow = 200_000
+	at62.ContextPct = 0.62
+	line := renderMetaLine(s, at62, now, 200)
+	plain := ansi.Strip(line)
+	if !strings.HasSuffix(plain, "cache 50% · ctx 62%") {
+		t.Fatalf("62%% line %q", plain)
+	}
+	if !strings.Contains(line, a1Text("ctx 62%", a1Dim, false, false)) {
+		t.Fatalf("62%% gauge is not dim: %q", line)
+	}
+
+	at85 := base
+	at85.ContextWindow = 200_000
+	at85.ContextPct = 0.85
+	line = renderMetaLine(s, at85, now, 200)
+	if !strings.Contains(ansi.Strip(line), "ctx 85%") {
+		t.Fatalf("85%% line %q", ansi.Strip(line))
+	}
+	if !strings.Contains(line, a1Text("ctx 85%", a1Wait, false, false)) {
+		t.Fatalf("85%% gauge is not the warn style: %q", line)
+	}
+
+	at96 := base
+	at96.ContextWindow = 200_000
+	at96.ContextPct = 0.96
+	line = renderMetaLine(s, at96, now, 200)
+	if !strings.Contains(ansi.Strip(line), "ctx 96%") {
+		t.Fatalf("96%% line %q", ansi.Strip(line))
+	}
+	if !strings.Contains(line, a1Text("ctx 96%", checksColor("failure"), false, false)) {
+		t.Fatalf("96%% gauge is not the red style: %q", line)
+	}
+
+	plain = ansi.Strip(renderMetaLine(s, base, now, 200))
+	if strings.Contains(plain, "ctx") {
+		t.Fatalf("no context data rendered %q", plain)
+	}
+}
+
 func TestGitPRLineCompact(t *testing.T) {
 	st := domain.GitStatus{
 		Ahead:          2,

@@ -101,6 +101,7 @@ func runServe() error {
 	todos := todo.NewFiles(filepath.Join(dir, "todos"))
 	srv.EnableTodos(todos, db)
 	tracker := usage.NewTracker(db, db, srv.PublishUsage)
+	tracker.SetContextWindow(cfg.Usage.ContextWindowTokens)
 	rep := usage.Reporter{
 		Store:  db,
 		Prices: usage.DefaultPrices().Merge(usagePrices(cfg)),

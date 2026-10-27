@@ -71,10 +71,19 @@ type UsageCursor struct {
 }
 
 // UsageSessionMeta is the session identity copied onto usage rows.
+// LastInputTokens is the latest turn's context occupancy, not a sum of turns.
+// ContextWindow and ContextSource are the window chosen for that turn.
+// HasContext marks a write that observed a turn (or a full reread with none).
+// A write without it leaves the three occupancy columns unchanged.
+// HasContext is not stored.
 type UsageSessionMeta struct {
-	SessionID string
-	Name      string
-	Group     string
-	IssueKey  string
-	AgentName string
+	SessionID       string
+	Name            string
+	Group           string
+	IssueKey        string
+	AgentName       string
+	LastInputTokens int64
+	ContextWindow   int64
+	ContextSource   string
+	HasContext      bool
 }

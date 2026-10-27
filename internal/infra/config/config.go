@@ -65,10 +65,13 @@ func (c *Config) MarshalServeConfig() ([]byte, error) {
 	})
 }
 
-// UsageConfig is the user's per-model price overrides, copied to the remote
-// serve config. Prices are USD per million tokens.
+// UsageConfig is usage pricing and the optional context window, copied to the
+// remote serve config. Prices are USD per million tokens.
+// ContextWindowTokens is an explicit window for every model. Zero means the
+// key was omitted and does not win over a confirmed table row.
 type UsageConfig struct {
-	Prices map[string]ModelPrice `yaml:"prices,omitempty"`
+	Prices              map[string]ModelPrice `yaml:"prices,omitempty"`
+	ContextWindowTokens int                   `yaml:"context_window_tokens,omitempty"`
 }
 
 // ModelPrice is one model's token prices. Omitted numbers decode as zero.

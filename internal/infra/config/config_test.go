@@ -127,6 +127,29 @@ usage:
 	}
 }
 
+func TestContextWindowOmittedIsZero(t *testing.T) {
+	raw, err := (&Config{}).MarshalServeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "context_window_tokens") {
+		t.Fatalf("omitted key was written:\n%s", raw)
+	}
+	cfg := &Config{}
+	cfg.Usage.ContextWindowTokens = 200_000
+	raw, err = cfg.MarshalServeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loaded Config
+	if err := yaml.Unmarshal(raw, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Usage.ContextWindowTokens != 200_000 {
+		t.Fatalf("ContextWindowTokens = %d", loaded.Usage.ContextWindowTokens)
+	}
+}
+
 func TestMarshalServeConfigCarriesUsage(t *testing.T) {
 	cfg := &Config{
 		Usage: UsageConfig{

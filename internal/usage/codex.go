@@ -37,18 +37,41 @@ type CodexState struct {
 // state and does not panic. consumed counts bytes through the last complete
 // line, including its newline.
 func ParseCodex(r io.Reader, st *CodexState) ([]domain.UsageRecord, int64, error) {
+	recs, n, _, err := parseCodex(r, st)
+	return recs, n, err
+}
+
+// CodexContextTokens is the last counted token_count turn's occupancy.
+// Occupancy is last_token_usage.input_tokens. That field already includes
+// cached input, so cached_input_tokens is not added again. A snapshot that
+// does not increase the cumulative total is not counted. ok is false when no
+// counted turn carried last_token_usage.
+func CodexContextTokens(r io.Reader) (int64, bool, error) {
+	_, _, sample, err := parseCodex(r, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	return sample.Tokens, sample.OK, nil
+}
+
+func parseCodex(r io.Reader, st *CodexState) ([]domain.UsageRecord, int64, contextSample, error) {
 	if st == nil {
 		st = &CodexState{}
 	}
 	var recs []domain.UsageRecord
+	var sample contextSample
 	consumed, err := readLines(r, func(line []byte) error {
-		rec, ok := applyCodexLine(line, st)
-		if ok {
-			recs = append(recs, rec)
+		rec, turn, ok := applyCodexLine(line, st)
+		if !ok {
+			return nil
+		}
+		recs = append(recs, rec)
+		if turn.OK {
+			sample = turn
 		}
 		return nil
 	})
-	return recs, consumed, err
+	return recs, consumed, sample, err
 }
 
 // CodexFingerprint identifies a rollout from its head bytes.
@@ -94,6 +117,7 @@ type codexPayload struct {
 
 type codexInfo struct {
 	Total *codexUsage `json:"total_token_usage"`
+	Last  *codexUsage `json:"last_token_usage"`
 }
 
 type codexUsage struct {
@@ -104,37 +128,37 @@ type codexUsage struct {
 	TotalTokens           int64 `json:"total_tokens"`
 }
 
-func applyCodexLine(line []byte, st *CodexState) (domain.UsageRecord, bool) {
+func applyCodexLine(line []byte, st *CodexState) (domain.UsageRecord, contextSample, bool) {
 	if !bytes.Contains(line, []byte("turn_context")) && !bytes.Contains(line, []byte("token_count")) {
-		return domain.UsageRecord{}, false
+		return domain.UsageRecord{}, contextSample{}, false
 	}
 	var row codexLine
 	if err := json.Unmarshal(line, &row); err != nil {
-		return domain.UsageRecord{}, false
+		return domain.UsageRecord{}, contextSample{}, false
 	}
 	if row.Type == "turn_context" {
 		st.Model = row.Payload.Model
-		return domain.UsageRecord{}, false
+		return domain.UsageRecord{}, contextSample{}, false
 	}
 	if row.Payload.Type != "token_count" {
-		return domain.UsageRecord{}, false
+		return domain.UsageRecord{}, contextSample{}, false
 	}
 	return codexRecord(row, st)
 }
 
-func codexRecord(row codexLine, st *CodexState) (domain.UsageRecord, bool) {
+func codexRecord(row codexLine, st *CodexState) (domain.UsageRecord, contextSample, bool) {
 	usage := row.totalUsage()
 	if usage == nil {
-		return domain.UsageRecord{}, false
+		return domain.UsageRecord{}, contextSample{}, false
 	}
 	reported := usage.reportedTotal()
 	cur := usage.totals()
 	if !countCodexSnapshot(st, reported, cur) {
-		return domain.UsageRecord{}, false
+		return domain.UsageRecord{}, contextSample{}, false
 	}
 	at, err := time.Parse(time.RFC3339Nano, row.Timestamp)
 	if err != nil {
-		return domain.UsageRecord{}, false
+		return domain.UsageRecord{}, contextSample{}, false
 	}
 	rec := domain.UsageRecord{
 		Model:  codexModel(st.Model),
@@ -145,7 +169,16 @@ func codexRecord(row codexLine, st *CodexState) (domain.UsageRecord, bool) {
 	if reported > st.Seen {
 		st.Seen = reported
 	}
-	return rec, true
+	return rec, codexTurn(row, rec.Model), true
+}
+
+// codexTurn reads occupancy from last_token_usage.input_tokens.
+// The cumulative total_token_usage snapshot is the billing delta, not the window fill.
+func codexTurn(row codexLine, model string) contextSample {
+	if row.Payload.Info == nil || row.Payload.Info.Last == nil {
+		return contextSample{}
+	}
+	return contextSample{Tokens: row.Payload.Info.Last.InputTokens, Model: model, OK: true}
 }
 
 // countCodexSnapshot is true when the field snapshot moved forward.

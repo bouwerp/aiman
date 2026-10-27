@@ -51,10 +51,21 @@ type SessionLister interface {
 
 // Tracker follows transcript files from stored cursors.
 type Tracker struct {
-	store    Store
-	sessions SessionLister
-	onChange func(sessionID string)
-	kick     chan struct{}
+	store         Store
+	sessions      SessionLister
+	onChange      func(sessionID string)
+	kick          chan struct{}
+	contextWindow int
+}
+
+// SetContextWindow records usage.context_window_tokens.
+// A non-positive value does not win: ResolveWindow then uses a confirmed
+// table row or the fallback.
+func (t *Tracker) SetContextWindow(tokens int) {
+	if t == nil {
+		return
+	}
+	t.contextWindow = tokens
 }
 
 // NewTracker records the stores the tracker reads.
@@ -161,23 +172,62 @@ func (t *Tracker) scanSession(ctx context.Context, s domain.Session) (bool, erro
 		return false, fmt.Errorf("listing usage cursors %s: %w", s.ID, err)
 	}
 	changed := false
+	var occupancy contextSample
+	haveOccupancy := false
+	clearOccupancy := false
 	for _, path := range sessionPaths(s.AgentSessionPath, cursors) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		added, cur, applied, err := t.scanFile(ctx, s.ID, path, cursors)
+		got, err := t.scanFile(ctx, s.ID, path, cursors)
 		if err != nil {
 			log.Printf("usage tracker: %s: %v", path, err)
 			continue
 		}
-		if applied {
-			cursors = putCursor(cursors, cur)
+		if got.applied {
+			cursors = putCursor(cursors, got.cursor)
 		}
-		if added {
+		if got.added {
 			changed = true
 		}
+		if path != s.AgentSessionPath || !got.applied {
+			continue
+		}
+		if got.sample.OK {
+			occupancy = got.sample
+			haveOccupancy = true
+			clearOccupancy = false
+			continue
+		}
+		if got.fromZero {
+			clearOccupancy = true
+			haveOccupancy = false
+		}
+	}
+	if err := t.storeContext(ctx, meta, occupancy, haveOccupancy, clearOccupancy); err != nil {
+		return false, err
 	}
 	return changed, nil
+}
+
+// storeContext writes the main transcript's latest occupancy.
+// A label-only upsert leaves a stored turn in place. A full reread with no
+// counted turn clears it. Subagent files are not the session window.
+func (t *Tracker) storeContext(ctx context.Context, meta domain.UsageSessionMeta, sample contextSample, have, clear bool) error {
+	if !have && !clear {
+		return nil
+	}
+	if have {
+		window, source := ResolveWindow(sample.Model, t.contextWindow)
+		meta.LastInputTokens = sample.Tokens
+		meta.ContextWindow = int64(window)
+		meta.ContextSource = source
+	}
+	meta.HasContext = true
+	if err := t.store.UpsertUsageSession(ctx, meta); err != nil {
+		return fmt.Errorf("saving usage context %s: %w", meta.SessionID, err)
+	}
+	return nil
 }
 
 // sessionPaths is the stored cursor paths, the current agent transcript, and
@@ -224,35 +274,44 @@ func claudeSubagents(path string) []string {
 	return matches
 }
 
+// fileScan is one transcript read. applied is false when size and mtime matched
+// and the file was not parsed. fromZero is a read that started at the first byte.
+type fileScan struct {
+	added    bool
+	cursor   domain.UsageCursor
+	applied  bool
+	fromZero bool
+	sample   contextSample
+}
+
 // scanFile stats path and skips ApplyUsage when size and mtime are unchanged.
-// added is ApplyUsage's result. applied is false when the stat matched.
-func (t *Tracker) scanFile(ctx context.Context, sessionID, path string, cursors []domain.UsageCursor) (bool, domain.UsageCursor, bool, error) {
+func (t *Tracker) scanFile(ctx context.Context, sessionID, path string, cursors []domain.UsageCursor) (fileScan, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return false, domain.UsageCursor{}, false, err
+		return fileScan{}, err
 	}
 	prev, has := cursorByPath(cursors, path)
 	if has && info.Size() == prev.Size && info.ModTime().Equal(prev.ModTime) {
-		return false, prev, false, nil
+		return fileScan{cursor: prev}, nil
 	}
 	f, err := os.Open(path) //nolint:gosec // G304: path is a transcript the session or an existing cursor already names
 	if err != nil {
-		return false, domain.UsageCursor{}, false, err
+		return fileScan{}, err
 	}
 	defer f.Close()
 
 	kind := KindForPath(path)
 	fp, err := readFingerprint(f, kind)
 	if err != nil {
-		return false, domain.UsageCursor{}, false, err
+		return fileScan{}, err
 	}
 	offset, reset := resumeOffset(prev, has, info.Size(), fp)
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return false, domain.UsageCursor{}, false, err
+		return fileScan{}, err
 	}
-	recs, consumed, state, err := parseTranscript(kind, f, cursors, path, fp, reset)
+	recs, consumed, state, sample, err := parseTranscript(kind, f, cursors, path, fp, reset)
 	if err != nil {
-		return false, domain.UsageCursor{}, false, err
+		return fileScan{}, err
 	}
 	cur := domain.UsageCursor{
 		SessionID:   sessionID,
@@ -265,9 +324,9 @@ func (t *Tracker) scanFile(ctx context.Context, sessionID, path string, cursors 
 	}
 	added, err := t.store.ApplyUsage(ctx, cur, recs)
 	if err != nil {
-		return false, domain.UsageCursor{}, false, err
+		return fileScan{}, err
 	}
-	return added, cur, true, nil
+	return fileScan{added: added, cursor: cur, applied: true, fromZero: offset == 0, sample: sample}, nil
 }
 
 func resumeOffset(prev domain.UsageCursor, has bool, size int64, fp string) (int64, bool) {
@@ -290,27 +349,27 @@ func readFingerprint(f *os.File, kind Kind) (string, error) {
 	return ClaudeFingerprint(head), nil
 }
 
-func parseTranscript(kind Kind, r io.Reader, cursors []domain.UsageCursor, path, fp string, reset bool) ([]domain.UsageRecord, int64, string, error) {
+func parseTranscript(kind Kind, r io.Reader, cursors []domain.UsageCursor, path, fp string, reset bool) ([]domain.UsageRecord, int64, string, contextSample, error) {
 	switch kind {
 	case KindClaude:
-		recs, n, err := ParseClaude(r)
-		return recs, n, "", err
+		recs, n, sample, err := parseClaude(r)
+		return recs, n, "", sample, err
 	case KindCodex:
 		st, err := codexStateFor(cursors, path, fp, reset)
 		if err != nil {
-			return nil, 0, "", err
+			return nil, 0, "", contextSample{}, err
 		}
-		recs, n, err := ParseCodex(r, &st)
+		recs, n, sample, err := parseCodex(r, &st)
 		if err != nil {
-			return nil, 0, "", err
+			return nil, 0, "", contextSample{}, err
 		}
 		raw, err := marshalCodexState(st)
 		if err != nil {
-			return nil, 0, "", err
+			return nil, 0, "", contextSample{}, err
 		}
-		return recs, n, raw, nil
+		return recs, n, raw, sample, nil
 	default:
-		return nil, 0, "", fmt.Errorf("unknown transcript kind %q", kind)
+		return nil, 0, "", contextSample{}, fmt.Errorf("unknown transcript kind %q", kind)
 	}
 }
 

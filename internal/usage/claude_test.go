@@ -150,6 +150,19 @@ func TestParseClaudeSplitsCacheTTL(t *testing.T) {
 	}
 }
 
+func TestContextTokensClaudeUsesLastAssistant(t *testing.T) {
+	first := assistantLine("msg_1", "claude-opus-5-5", `"input_tokens":10,"cache_read_input_tokens":5,"cache_creation_input_tokens":100,"output_tokens":1`)
+	second := assistantLine("msg_2", "claude-opus-5-5", `"input_tokens":20,"cache_read_input_tokens":7,"cache_creation_input_tokens":900,"output_tokens":1`)
+	synthetic := assistantLine("msg_syn", "<synthetic>", `"input_tokens":500,"cache_read_input_tokens":500,"output_tokens":1`)
+	got, ok, err := ClaudeContextTokens(strings.NewReader(first + second + synthetic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || got != 27 {
+		t.Fatalf("tokens = %d ok=%v, want 27 from the later assistant (input + cache read, not cache creation)", got, ok)
+	}
+}
+
 func TestParseClaudeFastSpeed(t *testing.T) {
 	fast := assistantLine("msg_fast", "claude-opus-5-5", `"input_tokens":1,"output_tokens":2,"speed":"fast"`)
 	recs, _, err := ParseClaude(strings.NewReader(fast))

@@ -16,6 +16,21 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
+func TestTrackerContextUsesExplicitWindow(t *testing.T) {
+	mainPath := copyClaudeTree(t)
+	env := newScanEnv(domain.Session{
+		ID: "s1", AgentName: "claude", AgentSessionPath: mainPath,
+	})
+	env.tracker.SetContextWindow(123_456)
+	if _, err := env.tracker.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := env.store.meta("s1")
+	if got.LastInputTokens != 2+71787 || got.ContextWindow != 123_456 || got.ContextSource != "explicit" {
+		t.Fatalf("meta = %+v", got)
+	}
+}
+
 func TestTrackerScansClaudeAndSubagents(t *testing.T) {
 	mainPath := copyClaudeTree(t)
 	env := newScanEnv(domain.Session{
@@ -38,9 +53,16 @@ func TestTrackerScansClaudeAndSubagents(t *testing.T) {
 	}
 	wantMeta := domain.UsageSessionMeta{
 		SessionID: "s1", Name: "alpha", Group: "work", IssueKey: "PROJ-6", AgentName: "claude",
+		LastInputTokens: 2 + 71787, ContextWindow: 200_000, ContextSource: "fallback",
 	}
 	if got := env.store.meta("s1"); got != wantMeta {
 		t.Fatalf("meta = %+v, want %+v", got, wantMeta)
+	}
+	if _, err := env.tracker.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.store.meta("s1"); got != wantMeta {
+		t.Fatalf("second scan meta = %+v, want %+v", got, wantMeta)
 	}
 	want := []domain.UsageBucket{
 		{
@@ -776,6 +798,13 @@ func (m *memStore) putCursorLocked(cur domain.UsageCursor) {
 func (m *memStore) UpsertUsageSession(_ context.Context, meta domain.UsageSessionMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	prev := m.metas[meta.SessionID]
+	if !meta.HasContext {
+		meta.LastInputTokens = prev.LastInputTokens
+		meta.ContextWindow = prev.ContextWindow
+		meta.ContextSource = prev.ContextSource
+	}
+	meta.HasContext = false
 	m.metas[meta.SessionID] = meta
 	return nil
 }

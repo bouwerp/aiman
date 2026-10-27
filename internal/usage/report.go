@@ -44,6 +44,13 @@ type Report struct {
 	Rows     []Row    `json:"rows,omitempty"`
 	Unpriced []string `json:"unpriced,omitempty"` // sorted model ids
 	Known    bool     `json:"known"`              // false: no transcript we can read
+	// Context fields are the latest turn for a one-session query.
+	// A query that matches any other number of sessions leaves them zero.
+	// ContextPct is ContextTokens/ContextWindow when the window is positive.
+	ContextTokens int64   `json:"context_tokens"`
+	ContextWindow int64   `json:"context_window"`
+	ContextPct    float64 `json:"context_pct"`
+	ContextSource string  `json:"context_source"`
 }
 
 // NoTicketKey is the issue row for a session whose issue is empty.
@@ -70,12 +77,32 @@ func (r Reporter) Report(ctx context.Context, q Query) (Report, error) {
 		return Report{}, err
 	}
 	summary, unpriced := Summarize(buckets, r.Prices)
-	return Report{
+	rep := Report{
 		Total:    summary,
 		Rows:     rollup(buckets, metas, r.Prices, q),
 		Unpriced: unpriced,
 		Known:    known,
-	}, nil
+	}
+	return attachContext(rep, metas, ids), nil
+}
+
+// attachContext copies the stored last turn onto a one-session report.
+// Context is not a sum across sessions and is not taken from usage_buckets.
+func attachContext(rep Report, metas map[string]domain.UsageSessionMeta, ids []string) Report {
+	if len(ids) != 1 {
+		return rep
+	}
+	meta, ok := metas[ids[0]]
+	if !ok {
+		return rep
+	}
+	rep.ContextTokens = meta.LastInputTokens
+	rep.ContextWindow = meta.ContextWindow
+	rep.ContextSource = meta.ContextSource
+	if meta.ContextWindow > 0 {
+		rep.ContextPct = float64(meta.LastInputTokens) / float64(meta.ContextWindow)
+	}
+	return rep
 }
 
 // Summarize prices each bucket. Unpriced models are a sorted unique list and add no cost.

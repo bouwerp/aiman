@@ -278,6 +278,33 @@ func TestReportDaysWindow(t *testing.T) {
 	}
 }
 
+func TestReportContextIsLastTurnNotASum(t *testing.T) {
+	store := newMemStore()
+	ctx := context.Background()
+	for _, meta := range []domain.UsageSessionMeta{
+		{SessionID: "s1", IssueKey: "PROJ-1", LastInputTokens: 124_000, ContextWindow: 200_000, ContextSource: "fallback", HasContext: true},
+		{SessionID: "s2", IssueKey: "PROJ-1", LastInputTokens: 10, ContextWindow: 200_000, ContextSource: "table", HasContext: true},
+	} {
+		if err := store.UpsertUsageSession(ctx, meta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	one := report(t, store, Query{SessionID: "s1"})
+	if one.ContextTokens != 124_000 || one.ContextWindow != 200_000 || one.ContextSource != "fallback" {
+		t.Fatalf("one session = %+v", one)
+	}
+	if one.ContextPct != float64(124_000)/float64(200_000) {
+		t.Fatalf("ContextPct = %v", one.ContextPct)
+	}
+	both := report(t, store, Query{Issue: "PROJ-1"})
+	if both.ContextTokens != 0 || both.ContextWindow != 0 || both.ContextPct != 0 || both.ContextSource != "" {
+		t.Fatalf("rollup copied context: %+v", both)
+	}
+	if got := store.meta("s2"); got.LastInputTokens != 10 || got.ContextSource != "table" {
+		t.Fatalf("stored s2 = %+v", got)
+	}
+}
+
 func TestReportUnknownSession(t *testing.T) {
 	store := newMemStore()
 	store.seedCursor(domain.UsageCursor{SessionID: "watched", Path: "/tmp/watched.jsonl"})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -47,10 +48,29 @@ CREATE TABLE IF NOT EXISTS usage_sessions (
 	group_name TEXT NOT NULL DEFAULT '',
 	issue_key TEXT NOT NULL DEFAULT '',
 	agent_name TEXT NOT NULL DEFAULT '',
+	last_input_tokens INTEGER NOT NULL DEFAULT 0,
+	context_window INTEGER NOT NULL DEFAULT 0,
+	context_source TEXT NOT NULL DEFAULT '',
 	updated_at DATETIME
 );`
 	if _, err := db.ExecContext(context.Background(), ddl); err != nil {
 		return err
+	}
+	return ensureUsageContextColumns(db)
+}
+
+// ensureUsageContextColumns adds occupancy columns to a usage_sessions table
+// created before those columns existed. CREATE TABLE IF NOT EXISTS does not
+// alter an existing table.
+func ensureUsageContextColumns(db *sql.DB) error {
+	for _, stmt := range []string{
+		`ALTER TABLE usage_sessions ADD COLUMN last_input_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE usage_sessions ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE usage_sessions ADD COLUMN context_source TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.ExecContext(context.Background(), stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("ensuring usage context columns: %w", err)
+		}
 	}
 	return nil
 }
@@ -174,17 +194,31 @@ func upsertUsageCursor(ctx context.Context, tx *sql.Tx, cur domain.UsageCursor) 
 
 // UpsertUsageSession copies session labels onto the usage row. An empty name,
 // group, issue key, or agent name leaves the stored value in place.
+// Occupancy columns change only when HasContext is set, so a label refresh
+// does not wipe the last turn. A HasContext write replaces them, including
+// a later turn whose token count is smaller.
 func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessionMeta) error {
+	has := 0
+	if m.HasContext {
+		has = 1
+	}
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO usage_sessions (session_id, name, group_name, issue_key, agent_name, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO usage_sessions (
+			session_id, name, group_name, issue_key, agent_name,
+			last_input_tokens, context_window, context_source, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			name = COALESCE(NULLIF(excluded.name, ''), usage_sessions.name),
 			group_name = COALESCE(NULLIF(excluded.group_name, ''), usage_sessions.group_name),
 			issue_key = COALESCE(NULLIF(excluded.issue_key, ''), usage_sessions.issue_key),
 			agent_name = COALESCE(NULLIF(excluded.agent_name, ''), usage_sessions.agent_name),
+			last_input_tokens = CASE WHEN ? = 1 THEN excluded.last_input_tokens ELSE usage_sessions.last_input_tokens END,
+			context_window = CASE WHEN ? = 1 THEN excluded.context_window ELSE usage_sessions.context_window END,
+			context_source = CASE WHEN ? = 1 THEN excluded.context_source ELSE usage_sessions.context_source END,
 			updated_at = excluded.updated_at`,
-		m.SessionID, m.Name, m.Group, m.IssueKey, m.AgentName, time.Now().UTC())
+		m.SessionID, m.Name, m.Group, m.IssueKey, m.AgentName,
+		m.LastInputTokens, m.ContextWindow, m.ContextSource, time.Now().UTC(),
+		has, has, has)
 	if err != nil {
 		return fmt.Errorf("saving usage session: %w", err)
 	}
@@ -195,7 +229,8 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 // have been deleted from the sessions table.
 func (r *Repository) UsageSessions(ctx context.Context) ([]domain.UsageSessionMeta, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT session_id, name, group_name, issue_key, agent_name
+		SELECT session_id, name, group_name, issue_key, agent_name,
+			last_input_tokens, context_window, context_source
 		FROM usage_sessions ORDER BY session_id`)
 	if err != nil {
 		return nil, fmt.Errorf("listing usage sessions: %w", err)
@@ -204,7 +239,10 @@ func (r *Repository) UsageSessions(ctx context.Context) ([]domain.UsageSessionMe
 	var out []domain.UsageSessionMeta
 	for rows.Next() {
 		var m domain.UsageSessionMeta
-		if err := rows.Scan(&m.SessionID, &m.Name, &m.Group, &m.IssueKey, &m.AgentName); err != nil {
+		if err := rows.Scan(
+			&m.SessionID, &m.Name, &m.Group, &m.IssueKey, &m.AgentName,
+			&m.LastInputTokens, &m.ContextWindow, &m.ContextSource,
+		); err != nil {
 			return nil, fmt.Errorf("listing usage sessions: %w", err)
 		}
 		out = append(out, m)

@@ -15,7 +15,25 @@ import (
 // It returns one UsageRecord per assistant message id. consumed counts bytes
 // through the last complete line, including its newline.
 func ParseClaude(r io.Reader) ([]domain.UsageRecord, int64, error) {
+	recs, n, _, err := parseClaude(r)
+	return recs, n, err
+}
+
+// ClaudeContextTokens is the last counted assistant turn's occupancy.
+// Occupancy is input_tokens + cache_read_input_tokens. Cache creation is a
+// write on this turn, so it is not part of the window the next turn reads.
+// A model of "<synthetic>" never counts. ok is false when no turn counted.
+func ClaudeContextTokens(r io.Reader) (int64, bool, error) {
+	_, _, sample, err := parseClaude(r)
+	if err != nil {
+		return 0, false, err
+	}
+	return sample.Tokens, sample.OK, nil
+}
+
+func parseClaude(r io.Reader) ([]domain.UsageRecord, int64, contextSample, error) {
 	var recs []domain.UsageRecord
+	var sample contextSample
 	seen := make(map[string]struct{})
 	consumed, err := readLines(r, func(line []byte) error {
 		rec, ok := parseClaudeLine(line)
@@ -29,9 +47,14 @@ func ParseClaude(r io.Reader) ([]domain.UsageRecord, int64, error) {
 			seen[rec.ID] = struct{}{}
 		}
 		recs = append(recs, rec)
+		sample = contextSample{
+			Tokens: rec.Tokens.Input + rec.Tokens.CacheRead,
+			Model:  rec.Model,
+			OK:     true,
+		}
 		return nil
 	})
-	return recs, consumed, err
+	return recs, consumed, sample, err
 }
 
 // ClaudeFingerprint identifies a transcript from its head bytes.

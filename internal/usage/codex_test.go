@@ -66,6 +66,19 @@ func TestParseCodexFixture(t *testing.T) {
 	}
 }
 
+func TestContextTokensCodexDoesNotDoubleCount(t *testing.T) {
+	const line = `{"timestamp":"2026-10-22T06:08:08.910Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":1,"total_tokens":1001},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":1,"total_tokens":1001}}}}` + "\n"
+	// A later snapshot that does not increase the cumulative total is not counted.
+	const later = `{"timestamp":"2026-10-22T06:08:09.910Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":1,"total_tokens":1001},"last_token_usage":{"input_tokens":1400,"cached_input_tokens":400,"output_tokens":1,"total_tokens":1401}}}}` + "\n"
+	got, ok, err := CodexContextTokens(strings.NewReader(line + later))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || got != 1000 {
+		t.Fatalf("tokens = %d ok=%v, want 1000 (last_token_usage.input_tokens, not input+cached)", got, ok)
+	}
+}
+
 func TestParseCodexSubtractsCached(t *testing.T) {
 	var st CodexState
 	recs, _, err := ParseCodex(bytes.NewReader(readFixture(t, codexFixture)), &st)
