@@ -12,6 +12,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/memoryjob"
+	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usage"
@@ -77,6 +78,12 @@ type Server struct {
 
 	// memoryJobs queues handover-derived memory candidates for the laptop.
 	memoryJobs *memoryjob.Queue
+
+	notifyRec  *notify.Recorder
+	notifyLog  NotifyLog
+	notifyMu   sync.RWMutex
+	notifyStop context.CancelFunc
+	notifyDone chan struct{}
 }
 
 // SetMemoryJobs attaches the memory-candidate queue. It stays nil when serve
@@ -91,6 +98,17 @@ type todoStore interface {
 	todo.Store
 	Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliveredAt time.Time) (domain.TodoList, todo.Change, error)
 }
+
+// NotifyLog reads the notification ledger.
+type NotifyLog interface {
+	NotificationsSince(ctx context.Context, after int64, limit int) ([]domain.Notification, error)
+	LastNotificationSeq(ctx context.Context) (int64, error)
+}
+
+const (
+	notifySweepEvery = 2 * time.Second
+	notifyRetention  = 7 * 24 * time.Hour
+)
 
 type rememberedPane struct {
 	text string
@@ -119,6 +137,19 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 func (s *Server) Serve(ctx context.Context) error {
 	if s.steer != nil {
 		go s.steer.Run(ctx)
+	}
+	if rec := s.NotifyRecorder(); rec != nil {
+		nctx, cancel := context.WithCancel(ctx)
+		s.notifyMu.Lock()
+		s.notifyStop = cancel
+		s.notifyDone = make(chan struct{})
+		done := s.notifyDone
+		s.notifyMu.Unlock()
+		go func() {
+			defer close(done)
+			defer cancel()
+			s.runNotifySweep(nctx)
+		}()
 	}
 	go func() {
 		<-ctx.Done()
@@ -210,6 +241,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleRegister(ctx, req)
 	case "session.report_agent_session":
 		return s.handleReportAgentSession(ctx, req)
+	case "notify.since":
+		return s.handleNotifySince(ctx, req)
 	case "context.put":
 		return s.handleContextPut(ctx, req)
 	case "context.get":
@@ -281,4 +314,26 @@ func (s *Server) lockSession(id string) func() {
 
 func errResp(id, code, msg string) Response {
 	return Response{ID: id, Error: &Error{Code: code, Message: msg}}
+}
+
+// EnableNotifications wires the notification recorder and log. Must be called before Serve.
+func (s *Server) EnableNotifications(rec *notify.Recorder, log NotifyLog) {
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+	s.notifyRec = rec
+	s.notifyLog = log
+}
+
+// NotifyRecorder returns the recorder if notifications are enabled.
+func (s *Server) NotifyRecorder() *notify.Recorder {
+	s.notifyMu.RLock()
+	defer s.notifyMu.RUnlock()
+	return s.notifyRec
+}
+
+// HubPublish publishes an event to all subscribers.
+func (s *Server) HubPublish(ev SessionEvent) {
+	if s.hub != nil {
+		s.hub.Publish(ev)
+	}
 }

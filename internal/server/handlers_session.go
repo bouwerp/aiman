@@ -735,6 +735,9 @@ func (s *Server) handleForget(ctx context.Context, req Request) Response {
 		_ = s.pty.Forget(sess.ID)
 	}
 	s.steer.Forget(sess.ID)
+	if rec := s.NotifyRecorder(); rec != nil {
+		rec.Forget(sess.ID)
+	}
 	if s.repo != nil {
 		if err := s.repo.Delete(ctx, sess.ID); err != nil {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
@@ -821,6 +824,7 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 			if err := s.repo.Save(ctx, sess); err != nil {
 				return errResp(req.ID, CodeInvalidParams, err.Error())
 			}
+			s.notifyObserve(ctx, *sess)
 			if clr, ok := s.repo.(agentEndedClearer); ok && wasEnded && !sess.AgentEnded {
 				if err := clr.ClearAgentEnded(ctx, sess.ID); err != nil {
 					return errResp(req.ID, CodeInvalidParams, err.Error())

@@ -21,8 +21,10 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/jira"
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/infra/skills"
+	"github.com/bouwerp/aiman/internal/infra/slack"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/memoryjob"
+	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/todo"
@@ -130,6 +132,34 @@ func runServe() error {
 		Now:    time.Now,
 	}
 	srv.EnableUsage(ctx, tracker, rep)
+
+	// notifications
+	n := cfg.Notifications
+	host, _ := os.Hostname()
+	publish := func(sessID string, kind domain.NotifyKind) {
+		srv.HubPublish(server.SessionEvent{Type: "notify", ID: sessID, Kind: string(kind)})
+	}
+	events := map[domain.NotifyKind]bool{}
+	for _, k := range n.EventKinds() {
+		events[k] = true
+	}
+	rec := notify.NewRecorder(db, notify.Settings{Events: events, MinInterval: n.MinIntervalDuration(), Host: host}, publish)
+	srv.EnableNotifications(rec, db)
+	var sinks []notify.Sink
+	if n.Webhook != "" {
+		sinks = append(sinks, &notify.WebhookSink{URL: n.Webhook})
+	}
+	if n.SlackChannel != "" {
+		if tok, err := slack.ReadToken(slack.TokenPath(dir)); err == nil {
+			sinks = append(sinks, &notify.SlackSink{Client: &slack.Client{Token: tok}, Channel: n.SlackChannel})
+		} else {
+			log.Printf("notify: slack_channel set but no Slack user token; run aiman slack auth")
+		}
+	}
+	if len(sinks) > 0 {
+		go notify.NewDispatcher(notify.StoreSource{Store: db}, notify.StoreCursor{Name: "serve", DB: db}, sinks...).Run(ctx, 2*time.Second)
+	}
+
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
 }
