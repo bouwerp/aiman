@@ -38,3 +38,6 @@ aiman.db
 .kilo/skills/
 graphify-out/
 .superpowers/
+
+# opt-in real-agent eval bundles
+evals/out/

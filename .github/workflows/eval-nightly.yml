@@ -1,0 +1,33 @@
+name: Harness real-agent eval
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  real-agent:
+    name: Opt-in real-agent track
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - run: go mod download
+      - name: Run real-agent cases
+        env:
+          AIMAN_EVAL_REAL: ${{ secrets.AIMAN_EVAL_REAL }}
+          AIMAN_EVAL_AGENT: claude
+          AIMAN_EVAL_DRIVER: ${{ secrets.AIMAN_EVAL_DRIVER }}
+          AIMAN_EVAL_BUDGET_USD: "5"
+        run: go test -tags evalreal -v ./evals/harness -run TestRealAgent -count=1 -timeout=60m
+      - name: Upload bundles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-agent-${{ github.run_id }}
+          path: evals/out
+          if-no-files-found: ignore
