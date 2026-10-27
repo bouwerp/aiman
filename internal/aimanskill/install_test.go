@@ -230,3 +230,15 @@ func TestSkillDescriptionCoversCoordinator(t *testing.T) {
 		t.Fatalf("skill description does not load for coordinator work: %q", head)
 	}
 }
+
+func TestSkillStatesDoneWhen(t *testing.T) {
+	for _, want := range []string{
+		"The last item, `Done-when met`, belongs to aiman.",
+		"Tick it only when every condition in the \"Done when\" section of `.aiman_task.md` holds.",
+		"work through each checklist",
+	} {
+		if !strings.Contains(Text, want) {
+			t.Fatalf("skill missing %q", want)
+		}
+	}
+}

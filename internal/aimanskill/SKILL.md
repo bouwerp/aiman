@@ -76,6 +76,9 @@ You are the coordinator of this session. Before editing, read the task and asses
 
 Every session has a to-do list owned by serve and shown to the user. At the start of a task, write your plan into it with `aiman todo add`, and keep it current.
 
+The last item, `Done-when met`, belongs to aiman. Tick it only when every condition in the "Done when" section of `.aiman_task.md` holds. Before finishing, work through each checklist that file lists.
+
+
 ```bash
 aiman todo list
 aiman todo add "Write the failing test"

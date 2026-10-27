@@ -282,6 +282,43 @@ worktree's git dir, and `/graphify-out/` is added to `info/exclude` when the rep
 not already ignore it. A JIRA session's `.aiman_task.md` gains one line pointing the
 agent at `graphify query`. Without graphify nothing runs.
 
+#### Session quality kit
+
+A repository session can carry its domain checklists and a definition of done. The
+`repos:` block also supplies the kit:
+
+```yaml
+repos:
+  owner/name:
+    done_when: ["`make ci` green", "tests added", "PR open"]
+    requires: [gh, make, "mcp:atlassian"]
+    agent_overrides:
+      claude: {model: opus, effort: high}
+roles:
+  verifier: {agent: codex, model: "", effort: high}
+integrations:
+  jira:
+    acceptance_criteria_field: customfield_10035
+```
+
+Checklists live in `~/.aiman/checklists/*.md` (user) or `<worktree>/.aiman/checklists/*.md`
+(repo). Each file may start with YAML frontmatter whose `applies_to` is a string or list
+of globs; files without it apply to every repository session. A slash-free glob such as
+`*.go` matches at any depth, and a repo checklist shadows a user checklist with the same
+name. The laptop pushes user checklists to the remote; deletions are not propagated.
+
+The Done-when conditions come from the JIRA acceptance criteria first, then the repo
+defaults, de-duplicated. They are fixed in `.aiman_task.md` for the session's life. The
+last to-do is `Done-when met`; only a passing `aiman verify` with evidence ticks it, and a
+review that finds a condition unmet reopens it. A child session also writes
+`.aiman_report.md` before its PR, and its parent item closes only when that report cites a
+file or a test command.
+
+`requires` entries are checked when the wizard reaches the summary; missing tools show a
+warning but do not block create. Launch model/effort precedence is `agent_defaults` <
+`repos.<slug>.agent_overrides` < `roles.verifier`. The `V verify` hint appears for a
+non-reviewer session with commits ahead of its base.
+
 ### Creating an Ad-hoc Session
 
 Skip the JIRA/branch/repo flow and jump straight to agent selection:

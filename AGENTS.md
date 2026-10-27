@@ -278,6 +278,7 @@ The TUI wizard (`n` key) drives the user through:
 - write `.aiman_task.md` (JIRA description + prior snapshot context)
 - `tmux new-session` with agent command
 - `mutagen sync create`
+- build the quality kit: push `~/.aiman/checklists`, check repo `requires`, list/match repo and user checklists, merge JIRA acceptance criteria with repo `done_when`, and write the kit blocks into `.aiman_task.md`; add the `Done-when met` to-do when conditions exist
 - push AWS STS credentials
 
 After the agent starts, `CreateSession` runs `nice graphify update .` detached in the worktree when `graphify` is on the remote PATH (`internal/infra/graphify`), adding `/graphify-out/` to `info/exclude` when the repo does not ignore it. `.aiman_task.md` then gains one line pointing at `graphify query`.
@@ -326,7 +327,10 @@ Key config fields:
 - `agent_defaults` — per-binary `model` and `effort` applied at session launch
 - `aws.include_profiles` — local `~/.aws` profiles aiman may use (omit = all)
 - `skills.repo` — git URL for skills repository
-- `repos` — per-repo worktree bootstrap keyed by `owner/name`: `copy` and `symlink` (paths relative to the repo root, taken from the main checkout, never overwriting) and `setup` (runs detached; log `aiman-setup.log` in the worktree's git dir). `CreateSession` applies it after the worktree is resolved, only for worktrees that create made (not attach, reuse, ad-hoc, no-repo or prepared). `MarshalServeConfig` copies it so serve-side creates see it.
+- `repos` — per-repo worktree bootstrap keyed by `owner/name`: `copy` and `symlink` (paths relative to the repo root, taken from the main checkout, never overwriting) and `setup` (runs detached; log `aiman-setup.log` in the worktree's git dir). The same block carries the session quality kit: `done_when` (default Done-when conditions), `requires` (tools or `mcp:<name>` entries), and `agent_overrides` (per-agent model/effort). `CreateSession` applies it after the worktree is resolved, only for worktrees that create made (not attach, reuse, ad-hoc, no-repo or prepared). `MarshalServeConfig` copies it so serve-side creates see it.
+- `integrations.jira.acceptance_criteria_field` — optional JIRA custom field id whose values become acceptance criteria; otherwise the list under the description's acceptance-criteria heading is used.
+- `roles.verifier` — reviewer agent/model/effort override; role agent goes first in `ReviewerCandidates()`, ahead of `verify.agents`. Launch precedence is `agent_defaults` < `repos.<slug>.agent_overrides` < `roles.verifier`.
+- `agents.preferred` — ordered child-agent commands a coordinator may start.
 
 `config.DirName = ".aiman"` — used to construct all local paths.
 
