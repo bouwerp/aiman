@@ -155,8 +155,22 @@ func (s *Server) afterTodoChange(sess domain.Session, author domain.TodoAuthor, 
 		}
 	}
 	s.hub.Publish(SessionEvent{Type: "todo_changed", ID: sess.ID, Rev: list.Rev})
+	s.appendEvent(context.Background(), sess.ID, todoEventActor(author), domain.EventTodoChanged, map[string]any{
+		"rev": list.Rev, "author": string(author),
+	})
 	if change.SteersAgent() {
 		s.steer.EnqueueTodo(sess.ID, author, change.Ops)
+	}
+}
+
+func todoEventActor(author domain.TodoAuthor) domain.EventActor {
+	switch author {
+	case domain.AuthorAgent:
+		return domain.EventActorAgent
+	case domain.AuthorAiman:
+		return domain.EventActorAiman
+	default:
+		return domain.EventActorUser
 	}
 }
 

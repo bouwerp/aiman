@@ -154,6 +154,36 @@ func CaseTodoMirror() Case {
 	}}
 }
 
+// CaseTodoUserEditSteers checks a user change steers once and an agent change
+// does not.
+func CaseTodoUserEditSteers() Case {
+	return Case{Name: "todo-user-edit", Setup: idleSession, Assert: func(h *Harness) []MetricResult {
+		if _, err := h.Call("todo.add", map[string]any{"session": "s1", "text": "Fix bug", "as": "user"}); err != nil {
+			return []MetricResult{score("todo_add", false, err.Error())}
+		}
+		delivered := waitUntil(5*time.Second, func() bool { return typedSteers(h.Execs()) >= 1 })
+		before := typedSteers(h.Execs())
+		if _, err := h.Call("todo.mirror", map[string]any{"session": "s1", "items": []map[string]any{
+			{"text": "Fix bug", "status": "completed"},
+		}}); err != nil {
+			return []MetricResult{score("todo_mirror", false, err.Error())}
+		}
+		time.Sleep(1200 * time.Millisecond)
+		after := typedSteers(h.Execs())
+		changed := 0
+		for _, ev := range h.Events("s1") {
+			if ev.Kind == domain.EventTodoChanged {
+				changed++
+			}
+		}
+		return []MetricResult{
+			score("user_edit_steers_once", delivered && before == 1, "user edit did not steer exactly once"),
+			score("agent_change_does_not_steer", after == before, "agent mirror steered"),
+			score("todo_changed_recorded", changed >= 1, "todo.changed event missing"),
+		}
+	}}
+}
+
 // CaseHandoverRestart checks the fixed skeleton and the restart pointer.
 func CaseHandoverRestart() Case {
 	return Case{Name: "handover-restart", Setup: idleSession, Assert: func(h *Harness) []MetricResult {
@@ -267,6 +297,7 @@ func LifecycleCases() []Case {
 		CaseSteerHeldDialog(),
 		CaseSteerHeldWorking(),
 		CaseTodoMirror(),
+		CaseTodoUserEditSteers(),
 		CaseHandoverRestart(),
 		CaseHandoverPrecompact(),
 		CaseEventSequence(),
