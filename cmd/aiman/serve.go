@@ -17,6 +17,7 @@ import (
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
@@ -31,6 +32,7 @@ import (
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usage"
 	"github.com/bouwerp/aiman/internal/usecase"
+	"github.com/bouwerp/aiman/internal/verify"
 )
 
 func runServe() error {
@@ -178,6 +180,17 @@ func runServe() error {
 	srv.SetCIWatcher(ciWatcher)
 	go ciWatcher.Run(ctx)
 
+	scanner := agent.NewScanner(localExec)
+	verifier := verify.NewManager(
+		verify.Config{Agents: cfg.Verify.Agents, BeforePR: cfg.Verify.BeforePR, Timeout: cfg.Verify.Timeout},
+		srv.VerifyDeps(verify.NewStore(filepath.Join(dir, "reviews")), func(command string) bool {
+			return scanner.Installed(ctx, command)
+		}),
+	)
+	srv.SetVerifier(verifier)
+	verifier.Resume(ctx)
+	defer verifier.Close()
+
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
 }
@@ -280,5 +293,7 @@ Permissions stay the user's defaultMode. Ageni is not hooked.
 usage.get reports token totals from Claude and Codex transcripts.
 It watches the PR of each session with watch_pr on (the default for
 autonomous sessions) and steers failed checks and review comments.
+verify.start runs a hidden reviewer from a different agent on a snapshot
+of a session's tree; REQUIRED findings become that session's to-dos.
 `)
 }

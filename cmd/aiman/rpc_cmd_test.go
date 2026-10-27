@@ -26,6 +26,8 @@ func TestRPCParams(t *testing.T) {
 		{"context.verify ok", "context.verify", `{"id":"n1"}`, ""},
 		{"ci.get ok", "ci.get", `{"session":"s1"}`, ""},
 		{"ci.watch ok", "ci.watch", `{"session":"s1","on":false}`, ""},
+		{"verify.start ok", "verify.start", `{"session":"s1"}`, ""},
+		{"verify.status ok", "verify.status", `{"review":"r1"}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

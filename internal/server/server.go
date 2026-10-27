@@ -17,6 +17,7 @@ import (
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usage"
+	"github.com/bouwerp/aiman/internal/verify"
 )
 
 // rememberedPane is the last rendered screen served for one session. The next
@@ -82,6 +83,8 @@ type Server struct {
 
 	// ciWatch polls watched sessions' PRs; nil until SetCIWatcher.
 	ciWatch *ciwatch.Watcher
+	// verifier runs reviewer sessions; nil until SetVerifier.
+	verifier *verify.Manager
 
 	notifyRec  *notify.Recorder
 	notifyLog  NotifyLog
@@ -247,6 +250,10 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleReportAgentSession(ctx, req)
 	case "notify.since":
 		return s.handleNotifySince(ctx, req)
+	case "verify.start":
+		return s.handleVerifyStart(ctx, req)
+	case "verify.status":
+		return s.handleVerifyStatus(ctx, req)
 	case "ci.get":
 		return s.handleCIGet(ctx, req)
 	case "ci.watch":

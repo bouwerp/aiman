@@ -727,12 +727,9 @@ func (s *Server) handleRename(ctx context.Context, req Request) Response {
 // whose holder outlived the kill would put the row right back out of reach.
 // The handover is written first. A failed write is logged and the row is
 // still deleted.
-func (s *Server) handleForget(ctx context.Context, req Request) Response {
-	sess, fail, ok := s.resolveReq(ctx, req)
-	if !ok {
-		return fail
-	}
-	s.noteForgetHandover(ctx, sess)
+// dropSession stops a session's pty and deletes everything serve holds for
+// it: steering queue, notification state, CI rows and the stored row.
+func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
 	if s.pty != nil {
 		_ = s.pty.Kill(sess.ID)
 		_ = s.pty.Forget(sess.ID)
@@ -748,9 +745,19 @@ func (s *Server) handleForget(ctx context.Context, req Request) Response {
 		}
 	}
 	if s.repo != nil {
-		if err := s.repo.Delete(ctx, sess.ID); err != nil {
-			return errResp(req.ID, CodeInvalidParams, err.Error())
-		}
+		return s.repo.Delete(ctx, sess.ID)
+	}
+	return nil
+}
+
+func (s *Server) handleForget(ctx context.Context, req Request) Response {
+	sess, fail, ok := s.resolveReq(ctx, req)
+	if !ok {
+		return fail
+	}
+	s.noteForgetHandover(ctx, sess)
+	if err := s.dropSession(ctx, sess); err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	s.appendEvent(ctx, sess.ID, domain.EventActorUser, domain.EventSessionEnded, map[string]any{"reason": "forget"})
 	return Response{ID: req.ID, Result: map[string]any{
