@@ -176,31 +176,10 @@ func runSession(args []string) error {
 			}
 			return callAndPrintRaw(sock, "session.create", raw)
 		}
-		params := map[string]any{}
-		for _, k := range []string{"name", "group", "parent", "repo", "branch", "agent", "dir", "prompt", "issue", "base", "backend"} {
-			if flags[k] != "" {
-				params[k] = flags[k]
-			}
-		}
-		if v := flags["budget-tokens"]; v != "" {
-			bt, err := strconv.ParseInt(v, 10, 64)
-			if err != nil || bt < 0 {
-				writeCLIError(server.CodeInvalidParams, "budget-tokens must be a non-negative integer: "+v)
-				return errUsage
-			}
-			params["budget_tokens"] = bt
-		}
-		if _, ok := flags["quick"]; ok {
-			params["quick"] = true
-		}
-		if _, ok := flags["orphan"]; ok {
-			params["orphan"] = true
-		}
-		if _, ok := flags["existing"]; ok {
-			params["existing"] = true
-		}
-		if _, ok := flags["existing-branch"]; ok {
-			params["existing_branch"] = true
+		params, perr := sessionCreateParams(flags)
+		if perr != nil {
+			writeCLIError(server.CodeInvalidParams, perr.Error())
+			return errUsage
 		}
 		return callAndPrint(sock, "session.create", params)
 	case "rename":
@@ -230,6 +209,36 @@ func runSession(args []string) error {
 		writeCLIError(server.CodeInvalidParams, "unknown session command "+args[0])
 		return errUsage
 	}
+}
+
+// sessionCreateParams maps `session create` flags to session.create params.
+func sessionCreateParams(flags map[string]string) (map[string]any, error) {
+	params := map[string]any{}
+	for _, k := range []string{"name", "group", "parent", "for", "repo", "branch", "agent", "dir", "prompt", "issue", "base", "backend"} {
+		if flags[k] != "" {
+			params[k] = flags[k]
+		}
+	}
+	if v := flags["budget-tokens"]; v != "" {
+		bt, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || bt < 0 {
+			return nil, errors.New("budget-tokens must be a non-negative integer: " + v)
+		}
+		params["budget_tokens"] = bt
+	}
+	if _, ok := flags["quick"]; ok {
+		params["quick"] = true
+	}
+	if _, ok := flags["orphan"]; ok {
+		params["orphan"] = true
+	}
+	if _, ok := flags["existing"]; ok {
+		params["existing"] = true
+	}
+	if _, ok := flags["existing-branch"]; ok {
+		params["existing_branch"] = true
+	}
+	return params, nil
 }
 
 var boolSessionFlags = map[string]bool{

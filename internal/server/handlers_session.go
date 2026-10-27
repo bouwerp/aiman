@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
+	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/pane"
@@ -561,40 +563,62 @@ func (s *Server) waitState(ctx context.Context, sess domain.Session, until domai
 	}
 }
 
+// createParams are session.create's parameters.
+type createParams struct {
+	Name   string `json:"name"`
+	Group  string `json:"group"`
+	Parent string `json:"parent"`
+	Orphan bool   `json:"orphan"`
+	Quick  bool   `json:"quick"`
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	Agent  string `json:"agent"`
+	Dir    string `json:"dir"`
+	Prompt string `json:"prompt"`
+	Issue  string `json:"issue"`
+	Base   string `json:"base"`
+	// Backend picks the terminal runtime ("tmux" or "pty"). The dashboard
+	// offers this per session, so a remote-side create has to carry it or a
+	// pty session would silently come up under tmux.
+	Backend string `json:"backend"`
+	// ExistingBranch starts from a branch that already exists on the remote
+	// instead of creating one.
+	ExistingBranch bool `json:"existing_branch"`
+	// AgentName is the agent's display name when it differs from the command
+	// ("Claude Code" against "claude"). Absent means the command is the name.
+	AgentName string `json:"agent_name"`
+	// BudgetTokens is the per-session token budget; 0 means none.
+	BudgetTokens int64 `json:"budget_tokens"`
+	// PromptFree suppresses the task file the skill engine writes from the
+	// JIRA issue. A pointer because absent has to keep meaning "true": that is
+	// what an agent creating an ad-hoc sibling wants, and it was the only
+	// behaviour before callers could ask for a task-driven session.
+	PromptFree *bool `json:"prompt_free"`
+	// For is a to-do id in the parent's list. The new session is the child
+	// that works on it, and the item's Ref links to it.
+	For string `json:"for"`
+}
+
 func (s *Server) handleCreate(ctx context.Context, req Request) Response {
-	var params struct {
-		Name   string `json:"name"`
-		Group  string `json:"group"`
-		Parent string `json:"parent"`
-		Orphan bool   `json:"orphan"`
-		Quick  bool   `json:"quick"`
-		Repo   string `json:"repo"`
-		Branch string `json:"branch"`
-		Agent  string `json:"agent"`
-		Dir    string `json:"dir"`
-		Prompt string `json:"prompt"`
-		Issue  string `json:"issue"`
-		Base   string `json:"base"`
-		// Backend picks the terminal runtime ("tmux" or "pty"). The dashboard
-		// offers this per session, so a remote-side create has to carry it or a
-		// pty session would silently come up under tmux.
-		Backend string `json:"backend"`
-		// ExistingBranch starts from a branch that already exists on the remote
-		// instead of creating one.
-		ExistingBranch bool `json:"existing_branch"`
-		// AgentName is the agent's display name when it differs from the command
-		// ("Claude Code" against "claude"). Absent means the command is the name.
-		AgentName string `json:"agent_name"`
-		// BudgetTokens is the per-session token budget; 0 means none.
-		BudgetTokens int64 `json:"budget_tokens"`
-		// PromptFree suppresses the task file the skill engine writes from the
-		// JIRA issue. A pointer because absent has to keep meaning "true": that is
-		// what an agent creating an ad-hoc sibling wants, and it was the only
-		// behaviour before callers could ask for a task-driven session.
-		PromptFree *bool `json:"prompt_free"`
-	}
+	var params createParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	existing, err := s.loadSessions(ctx)
+	if err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	parentID, perr := domain.ResolveCreateParent(params.Orphan, params.Parent, req.Caller, "", existing)
+	if perr != nil {
+		return errResp(req.ID, CodeInvalidParams, perr.Error())
+	}
+	var forParent *domain.Session
+	if strings.TrimSpace(params.For) != "" {
+		parent, code, ferr := s.applyFor(&params, parentID, existing)
+		if ferr != nil {
+			return errResp(req.ID, code, ferr.Error())
+		}
+		forParent = &parent
 	}
 	if !params.Quick && (params.Repo == "" || params.Branch == "") {
 		return errResp(req.ID, CodeInvalidParams, "repo and branch are required (or --quick)")
@@ -606,10 +630,6 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeNoPreferredAgent, perr.Error())
 		}
 		params.Agent, params.AgentName = picked, ""
-	}
-	existing, err := s.loadSessions(ctx)
-	if err != nil {
-		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	name := params.Name
 	if name == "" {
@@ -624,10 +644,6 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeNameTaken, "name already in use")
 	}
 	group := domain.AssignSessionGroup(params.Group, params.Issue, params.Repo, params.Quick)
-	parentID, perr := domain.ResolveCreateParent(params.Orphan, params.Parent, req.Caller, "", existing)
-	if perr != nil {
-		return errResp(req.ID, CodeInvalidParams, perr.Error())
-	}
 	promptFree := true
 	if params.PromptFree != nil {
 		promptFree = *params.PromptFree
@@ -663,6 +679,10 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if found, ok := resolveSession(existing, req.Caller); ok {
 		caller = &found
 	}
+	if forParent != nil {
+		// The child is a sibling worktree of its parent's repository.
+		caller = forParent
+	}
 	if root := createGitRoot(caller, existing, hostHome()); root != "" {
 		cfg.SSHManager = local.NewExecutor(root)
 	}
@@ -678,12 +698,87 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeCreateFailed, err.Error())
 		}
 	}
+	if forParent != nil {
+		if err := s.linkChild(ctx, forParent.ID, params.For, sess.ID); err != nil {
+			// An unlinked child is never tracked, and its row would take the name a
+			// retry needs, so it is forgotten.
+			if derr := s.dropSession(ctx, *sess); derr != nil {
+				log.Printf("session.create: forget unlinked child %s: %v", sess.ID, derr)
+			}
+			return errResp(req.ID, CodeCreateFailed, err.Error())
+		}
+	}
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionCreated, map[string]any{
 		"name": name, "group": group, "repo": params.Repo, "branch": params.Branch,
 		"agent": params.Agent, "backend": cfg.SessionBackend, "quick": params.Quick,
 	})
 	info := sessionInfo(*sess, req.Caller)
 	return Response{ID: req.ID, Result: map[string]any{"type": "session", "session": info}}
+}
+
+// applyFor fills a child's create parameters from its parent and the parent's
+// to-do item params.For. The item must exist and carry no Ref. The returned
+// code is the error's response code.
+func (s *Server) applyFor(params *createParams, parentID string, existing []domain.Session) (domain.Session, string, error) {
+	params.For = strings.TrimSpace(params.For)
+	if parentID == "" {
+		return domain.Session{}, CodeInvalidParams, errors.New("for needs a parent session (--parent, or run inside one)")
+	}
+	parent, ok := resolveSession(existing, parentID)
+	if !ok {
+		return domain.Session{}, CodeNotFound, fmt.Errorf("parent session %s not found", parentID)
+	}
+	if parent.Branch == "" {
+		return domain.Session{}, CodeInvalidParams, fmt.Errorf("parent session %s has no branch to cut a child from", parent.Name)
+	}
+	list, err := s.TodoAccess().Get(parent.ID)
+	if err != nil {
+		return domain.Session{}, CodeInvalidParams, err
+	}
+	i, err := findTodo(&list, params.For)
+	if err != nil {
+		return domain.Session{}, CodeNotFound, fmt.Errorf("%w in session %s", err, parent.Name)
+	}
+	item := list.Items[i]
+	if item.Ref != "" {
+		return domain.Session{}, CodeInvalidParams, fmt.Errorf("to-do %s is already linked to %s", item.ID, item.Ref)
+	}
+	if params.Branch == "" {
+		params.Branch = coordinator.ChildBranch(parent.Branch, item.ID)
+	}
+	defaults := []struct {
+		dst *string
+		src string
+	}{
+		{&params.Base, parent.Branch},
+		{&params.Repo, parent.RepoName},
+		{&params.Issue, parent.IssueKey},
+		{&params.Group, parent.Group},
+		{&params.Backend, parent.Backend},
+		{&params.Prompt, item.Text},
+	}
+	for _, d := range defaults {
+		if strings.TrimSpace(*d.dst) == "" {
+			*d.dst = d.src
+		}
+	}
+	return parent, "", nil
+}
+
+// linkChild sets the parent's to-do Ref to the child as aiman. It refuses an
+// item linked meanwhile, so two creates for one item cannot both link.
+func (s *Server) linkChild(ctx context.Context, parentID, todoID, childID string) error {
+	return s.TodoAccess().Mutate(ctx, parentID, domain.AuthorAiman, func(l *domain.TodoList) error {
+		i, err := findTodo(l, todoID)
+		if err != nil {
+			return fmt.Errorf("link child: %w", err)
+		}
+		if ref := l.Items[i].Ref; ref != "" {
+			return fmt.Errorf("to-do %s was linked to %s while the child was created", todoID, ref)
+		}
+		l.Items[i].Ref = coordinator.ChildRef(childID)
+		return nil
+	})
 }
 
 func (s *Server) handleRename(ctx context.Context, req Request) Response {

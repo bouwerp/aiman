@@ -942,3 +942,137 @@ func TestCreateReportsNoPreferredAgent(t *testing.T) {
 		t.Fatalf("saved %d sessions, want none", len(list))
 	}
 }
+
+// forServer is a todo-enabled serve with a fake creator, preferred agent
+// claude installed, and parent "p" on feat/proj-1 holding items t1..t3.
+func forServer(t *testing.T, t3Ref string) (*Server, *fakeCreator) {
+	t.Helper()
+	srv, _, _ := todoServer(t, domain.Session{
+		ID: "p", Name: "parent", Branch: "feat/proj-1", BaseBranch: "main",
+		RepoName: "owner/r", Backend: domain.BackendTmux, TmuxSession: "p",
+	})
+	creator := &fakeCreator{}
+	srv.create = creator
+	srv.SetAgentChoice([]string{"claude"}, func(context.Context, string) bool { return true })
+	// Seeded as the agent, which never steers, so a later note is the create's.
+	err := srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAgent, func(l *domain.TodoList) error {
+		l.Items = append(l.Items,
+			domain.TodoItem{ID: "t1", Text: "Plan", State: domain.TodoDone},
+			domain.TodoItem{ID: "t2", Text: "Spec", State: domain.TodoPending},
+			domain.TodoItem{ID: "t3", Text: "Add the parser", State: domain.TodoPending, Ref: t3Ref},
+		)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, creator
+}
+
+func parentItem(t *testing.T, srv *Server, id string) domain.TodoItem {
+	t.Helper()
+	l, err := srv.TodoAccess().Get("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range l.Items {
+		if it.ID == id {
+			return it
+		}
+	}
+	t.Fatalf("item %s not found", id)
+	return domain.TodoItem{}
+}
+
+func TestCreateForLinksParent(t *testing.T) {
+	srv, creator := forServer(t, "")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p"})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	cfg := creator.cfg
+	if cfg.Branch != "feat/proj-1--t3" || cfg.BaseBranch != "feat/proj-1" {
+		t.Fatalf("branch %q base %q, want feat/proj-1--t3 off feat/proj-1", cfg.Branch, cfg.BaseBranch)
+	}
+	if cfg.InitialPrompt != "Add the parser" {
+		t.Fatalf("prompt = %q", cfg.InitialPrompt)
+	}
+	if cfg.ParentID != "p" || cfg.Repo.Name != "owner/r" || cfg.SessionBackend != domain.BackendTmux {
+		t.Fatalf("cfg parent %q repo %q backend %q", cfg.ParentID, cfg.Repo.Name, cfg.SessionBackend)
+	}
+	if cfg.Agent == nil || cfg.Agent.Command != "claude" {
+		t.Fatalf("agent = %+v, want the preferred claude", cfg.Agent)
+	}
+	if it := parentItem(t, srv, "t3"); it.Ref != "child:new-id" || it.State != domain.TodoPending {
+		t.Fatalf("t3 = %+v, want pending with ref child:new-id", it)
+	}
+	settle()
+	if q := srv.Steerer().Status("p").Queued; q != 0 {
+		t.Fatalf("linking queued %d steer notes, want none", q)
+	}
+}
+
+func TestCreateForRefusesLinkedItem(t *testing.T) {
+	srv, creator := forServer(t, "child:old")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p"})
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "child:old") {
+		t.Fatalf("error = %+v, want a refusal naming child:old", resp.Error)
+	}
+	if creator.calls != 0 {
+		t.Fatalf("created %d sessions, want none", creator.calls)
+	}
+	if it := parentItem(t, srv, "t3"); it.Ref != "child:old" {
+		t.Fatalf("t3 ref = %q, want child:old", it.Ref)
+	}
+}
+
+func TestCreateForUnknownItem(t *testing.T) {
+	srv, creator := forServer(t, "")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t9", "parent": "p"})
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "t9") {
+		t.Fatalf("error = %+v, want one naming t9", resp.Error)
+	}
+	if creator.calls != 0 {
+		t.Fatalf("created %d sessions, want none", creator.calls)
+	}
+}
+
+func TestCreateForRequiresParent(t *testing.T) {
+	srv, creator := forServer(t, "")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3"})
+	if resp.Error == nil || resp.Error.Code != CodeInvalidParams {
+		t.Fatalf("error = %+v, want invalid_params", resp.Error)
+	}
+	if creator.calls != 0 {
+		t.Fatalf("created %d sessions, want none", creator.calls)
+	}
+}
+
+// The item is linked by someone else while the child is being created. The
+// child is forgotten, so neither a dangling row nor a second link remains.
+func TestCreateForForgetsChildWhenLinkFails(t *testing.T) {
+	srv, creator := forServer(t, "")
+	creator.onCreate = func() {
+		err := srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAgent, func(l *domain.TodoList) error {
+			for i := range l.Items {
+				if l.Items[i].ID == "t3" {
+					l.Items[i].Ref = "child:other"
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p"})
+	if resp.Error == nil || resp.Error.Code != CodeCreateFailed {
+		t.Fatalf("error = %+v, want create_failed", resp.Error)
+	}
+	if _, err := srv.repo.Get(context.Background(), "new-id"); err == nil {
+		t.Fatal("the child row survived a failed link")
+	}
+	if it := parentItem(t, srv, "t3"); it.Ref != "child:other" {
+		t.Fatalf("t3 ref = %q, want child:other", it.Ref)
+	}
+}

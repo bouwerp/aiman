@@ -23,6 +23,20 @@ func TestTakeFlagsFromStdinIsBoolean(t *testing.T) {
 	}
 }
 
+func TestSessionCreateForFlag(t *testing.T) {
+	flags, _ := takeFlags([]string{"--for", "t3", "--parent", "p"})
+	params, err := sessionCreateParams(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["for"] != "t3" || params["parent"] != "p" {
+		t.Fatalf("params = %v, want for t3 and parent p", params)
+	}
+	if _, ok := params["agent"]; ok {
+		t.Fatalf("params = %v, an unset agent must stay off the wire", params)
+	}
+}
+
 func TestRunDeepcodeWatchNoopsOutsideAiman(t *testing.T) {
 	t.Setenv("AIMAN_ENV", "")
 	t.Setenv("AIMAN_ID", "")

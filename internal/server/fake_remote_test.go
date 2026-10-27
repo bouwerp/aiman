@@ -61,12 +61,20 @@ func (f *fakeRemote) ProvisionRemote(context.Context, []domain.ProvisionStep, ch
 func (f *fakeRemote) Close() error { return nil }
 
 type fakeCreator struct {
-	cfg  domain.SessionConfig
-	sess *domain.Session
+	cfg   domain.SessionConfig
+	sess  *domain.Session
+	calls int
+	// onCreate runs inside CreateSession, standing in for whatever happens on
+	// the host while a create is in flight.
+	onCreate func()
 }
 
 func (f *fakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) (*domain.Session, error) {
 	f.cfg = cfg
+	f.calls++
+	if f.onCreate != nil {
+		f.onCreate()
+	}
 	if f.sess != nil {
 		return f.sess, nil
 	}
@@ -76,7 +84,7 @@ func (f *fakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig)
 	}
 	return &domain.Session{
 		ID: "new-id", Name: cfg.Name, Group: cfg.Group, Branch: cfg.Branch,
-		AgentName: agent, Status: domain.SessionStatusActive,
+		BaseBranch: cfg.BaseBranch, AgentName: agent, Status: domain.SessionStatusActive,
 		TmuxSession: cfg.Branch,
 	}, nil
 }
