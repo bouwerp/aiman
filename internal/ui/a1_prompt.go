@@ -400,7 +400,7 @@ func (m *Model) hintLine(width int) string {
 
 // offerVerify is the quiet hint for a worker that has commits to review.
 func offerVerify(s domain.Session, st domain.GitStatus, reviewing bool) bool {
-	return s.Role != domain.SessionRoleReviewer && !reviewing && st.AheadOfBase > 0
+	return s.BaseBranch != "" && s.Role != domain.SessionRoleReviewer && !reviewing && st.AheadOfBase > 0
 }
 
 func hintFor(focus a1Focus) string {

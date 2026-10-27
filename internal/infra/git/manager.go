@@ -1089,6 +1089,9 @@ func (m *Manager) CommitsAheadOfBase(ctx context.Context, remote domain.RemoteEx
 	if strings.TrimSpace(base) == "" {
 		return 0, nil
 	}
+	// detectBaseBranch falls back to HEAD when no branch convention exists.
+	// HEAD..HEAD is intentionally zero: without a known base there is no
+	// meaningful ahead count, so the V offer stays off.
 	// base and path come from stored session fields, so both are quoted for
 	// the remote shell; Go's %q would leave $ and backticks live.
 	dir, ref := shellQuote(path), shellQuote("origin/"+base)

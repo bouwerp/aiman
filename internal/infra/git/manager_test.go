@@ -824,6 +824,9 @@ func TestCommitsAheadOfBase(t *testing.T) {
 	if n, err := m.CommitsAheadOfBase(context.Background(), ex, repo, ""); err != nil || n != 0 {
 		t.Fatalf("empty base = %d, %v", n, err)
 	}
+	if n, err := m.CommitsAheadOfBase(context.Background(), ex, repo, "HEAD"); err != nil || n != 0 {
+		t.Fatalf("HEAD fallback = %d, %v; want 0", n, err)
+	}
 	if _, err := m.CommitsAheadOfBase(context.Background(), ex, repo, "missing"); err == nil {
 		t.Fatal("missing base should error")
 	}

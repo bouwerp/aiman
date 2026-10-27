@@ -480,15 +480,22 @@ func TestHintLineOffersVerify(t *testing.T) {
 		t.Fatalf("reviewing hint = %q", got)
 	}
 	m.allSessions = nil
-	m.gitStatus.AheadOfBase = 2
-	m.list.Select(0)
-	m.sessionCfg.Role = domain.SessionRoleReviewer
 	// The selected session's stored role, not the wizard role, decides.
 	if offerVerify(s, m.gitStatus, false) != true {
 		t.Fatal("worker should be offered verify")
 	}
-	s.Role = domain.SessionRoleReviewer
-	if offerVerify(s, m.gitStatus, false) {
-		t.Fatal("reviewer must not be offered verify")
+	reviewer := domain.Session{ID: "rev", Name: "reviewer", RemoteHost: "regent0", BaseBranch: "main", Role: domain.SessionRoleReviewer}
+	m, _ = promptModel(reviewer)
+	m.list.Select(0)
+	m.gitStatus = domain.GitStatus{AheadOfBase: 2}
+	if got := ansi.Strip(m.hintLine(100)); strings.HasPrefix(got, "V verify · ") {
+		t.Fatalf("reviewer hint = %q", got)
+	}
+	noBase := domain.Session{ID: "s2", Name: "no-base", RemoteHost: "regent0"}
+	m, _ = promptModel(noBase)
+	m.list.Select(0)
+	m.gitStatus = domain.GitStatus{AheadOfBase: 2}
+	if got := ansi.Strip(m.hintLine(100)); strings.HasPrefix(got, "V verify · ") {
+		t.Fatalf("missing-base hint = %q", got)
 	}
 }
