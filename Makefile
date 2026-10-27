@@ -1,4 +1,4 @@
-.PHONY: help build test lint clean install run fmt vet
+.PHONY: help build test lint clean install run fmt vet eval
 
 # Default target
 help:
@@ -8,6 +8,7 @@ help:
 	@echo "  lint       - Run golangci-lint"
 	@echo "  fmt        - Format code with gofmt"
 	@echo "  vet        - Run go vet"
+	@echo "  eval       - Run the deterministic harness eval suite"
 	@echo "  clean      - Remove build artifacts"
 	@echo "  install    - Install aiman to GOPATH/bin"
 	@echo "  run        - Build and run aiman"
@@ -51,6 +52,12 @@ fmt:
 vet:
 	@echo "Running go vet..."
 	go vet ./...
+
+# Run the deterministic harness eval suite. It is not part of `ci`: each case
+# starts an in-process serve on a temp unix socket.
+eval:
+	@echo "Running harness evals..."
+	go test -v ./evals/... -count=1 -timeout=5m
 
 # Clean build artifacts
 clean:

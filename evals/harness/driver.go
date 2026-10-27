@@ -45,7 +45,8 @@ func New(t *testing.T) *Harness {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	ln, err := server.Listen(dir)
 	if err != nil {
-		t.Fatal(err)
+		t.Skipf("evals: cannot create a unix socket: %v", err)
+		return nil
 	}
 	repo, err := sqlite.NewRepository(filepath.Join(dir, "aiman.db"))
 	if err != nil {
@@ -156,4 +157,16 @@ func (h *Harness) Events(sessionID string) []domain.SessionEvent {
 // Execs is every command the fake remote received.
 func (h *Harness) Execs() []string {
 	return h.remote.Execs()
+}
+
+// Artifacts reads the files a metric may inspect. Missing files are omitted.
+func (h *Harness) Artifacts() map[string]string {
+	out := map[string]string{}
+	if raw, err := os.ReadFile(filepath.Join(h.Dir, "sessions", "s1", domain.AimanHandoverFileName)); err == nil {
+		out["handover"] = string(raw)
+	}
+	if raw, err := os.ReadFile(filepath.Join(h.Dir, "todos", "s1.json")); err == nil {
+		out["todo"] = string(raw)
+	}
+	return out
 }

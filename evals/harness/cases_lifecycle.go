@@ -26,6 +26,7 @@ type Result struct {
 	Metrics []MetricResult
 	Events  []domain.SessionEvent
 	Execs   []string
+	Files   map[string]string
 	Err     error
 }
 
@@ -47,14 +48,14 @@ func (c Case) Run(t *testing.T) Result {
 		}
 	}
 	metrics := c2.Assert(h)
-	res := Result{Name: c2.Name, Metrics: metrics, Execs: h.Execs()}
+	res := Result{Name: c2.Name, Metrics: metrics, Events: h.Events("s1"), Execs: h.Execs(), Files: h.Artifacts()}
 	res.Passed = true
 	for _, m := range metrics {
 		if m.Score < 1 {
 			res.Passed = false
 		}
 	}
-	return res
+	return Evaluate(res)
 }
 
 func waitUntil(timeout time.Duration, fn func() bool) bool {
@@ -230,9 +231,38 @@ func CaseEventSequence() Case {
 	}}
 }
 
+// CaseCreateTicket checks creation writes the task file and the first event,
+// without creating a to-do list.
+func CaseCreateTicket() Case {
+	return Case{Name: "create-ticket", Assert: func(h *Harness) []MetricResult {
+		resp, err := h.Call("session.create", map[string]any{"name": "s1", "agent": "claude", "quick": true})
+		if err != nil {
+			return []MetricResult{score("session_create", false, err.Error())}
+		}
+		m, _ := resp.Result.(map[string]any)
+		info, _ := m["session"].(map[string]any)
+		id, _ := info["id"].(string)
+		wd, _ := info["working_directory"].(string)
+		_, taskErr := os.Stat(filepath.Join(wd, domain.AimanTaskFileName))
+		created := false
+		for _, ev := range h.Events(id) {
+			if ev.Kind == domain.EventSessionCreated {
+				created = true
+			}
+		}
+		_, todoErr := os.Stat(filepath.Join(h.Dir, "todos", id+".json"))
+		return []MetricResult{
+			score("session_created_event", created, "missing session.created"),
+			score("task_file_written", taskErr == nil, "missing .aiman_task.md"),
+			score("no_todo_list_yet", os.IsNotExist(todoErr), "to-do list exists"),
+		}
+	}}
+}
+
 // LifecycleCases is the deterministic suite Task 4 runs.
 func LifecycleCases() []Case {
 	return []Case{
+		CaseCreateTicket(),
 		CasePromptOnce(),
 		CaseSteerHeldDialog(),
 		CaseSteerHeldWorking(),
