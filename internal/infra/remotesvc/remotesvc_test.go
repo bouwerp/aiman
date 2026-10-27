@@ -385,3 +385,23 @@ func TestStopScriptsSpareHolderProcesses(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeServeReportsRTK(t *testing.T) {
+	s := ProbeScript(KindServe)
+	rtkAt := strings.Index(s, "echo RTK=")
+	logsAt := strings.Index(s, "---LOGS---")
+	if rtkAt < 0 || rtkAt > logsAt {
+		t.Fatalf("serve probe must echo RTK= before ---LOGS---:\n%s", s)
+	}
+	if strings.Contains(ProbeScript(KindTrigger), "RTK=") {
+		t.Fatal("trigger probe should not report RTK")
+	}
+	st := ParseProbe(KindServe, "h", "DRIVER=systemd\nACTIVE=active\nRTK=rtk 0.40.1\n---LOGS---\nRTK=from a log line\n")
+	if st.RTKVersion != "rtk 0.40.1" {
+		t.Fatalf("RTKVersion %q", st.RTKVersion)
+	}
+	st = ParseProbe(KindServe, "h", "DRIVER=systemd\nACTIVE=active\nRTK=missing\n---LOGS---\n")
+	if st.RTKVersion != "" {
+		t.Fatalf("RTK=missing gave %q", st.RTKVersion)
+	}
+}

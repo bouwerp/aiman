@@ -240,6 +240,7 @@ func ProbeScript(k Kind) string {
 	if k == KindServe {
 		// A leftover sock after a crash is not a live listener.
 		sockCheck = `if [ "$ACTIVE" = active ] && [ -S "$HOME/.aiman/aiman.sock" ]; then echo SOCKET=1; else echo SOCKET=0; fi`
+		sockCheck += "\n" + rtkCheck
 	}
 	procCheck := fmt.Sprintf("pgrep -f '%s' >/dev/null", k.procPattern())
 	return userRuntimeEnv() + fmt.Sprintf(`
@@ -276,6 +277,16 @@ fi
 tail -n 40 %s 2>/dev/null || true
 `, unit, unit, pid, pid, procCheck, unit, bin, bin, bin, bin, sockCheck, unit, logf)
 }
+
+// rtkCheck reports the rtk version on the serve probe. The rtk installer puts
+// the binary in ~/.local/bin, which a non-login SSH shell may not have on PATH.
+const rtkCheck = `if command -v rtk >/dev/null 2>&1; then
+  echo RTK=$(rtk --version 2>/dev/null | head -1)
+elif [ -x "$HOME/.local/bin/rtk" ]; then
+  echo RTK=$("$HOME/.local/bin/rtk" --version 2>/dev/null | head -1)
+else
+  echo RTK=missing
+fi`
 
 func nohupStart(k Kind) string {
 	bin := "$HOME/.local/bin/" + k.Binary()
@@ -320,6 +331,10 @@ func ParseProbe(kind Kind, host, stdout string) domain.Daemon {
 			d.Version = val
 		case "SOCKET":
 			d.SocketOK = val == "1"
+		case "RTK":
+			if val != "missing" {
+				d.RTKVersion = val
+			}
 		}
 	}
 	d.Logs = strings.TrimRight(logs, "\n")

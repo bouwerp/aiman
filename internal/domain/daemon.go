@@ -17,6 +17,7 @@ type Daemon struct {
 	Driver     string // systemd, nohup, tmux, none
 	Version    string
 	SocketOK   bool
+	RTKVersion string // serve probe only; empty when rtk is not installed
 	Logs       string
 	UpdatedAt  time.Time
 }
