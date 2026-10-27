@@ -868,3 +868,12 @@ func TestReportAfterEndClearsLatch(t *testing.T) {
 		t.Fatal("AgentEnded still latched after a live report")
 	}
 }
+
+func TestSessionInfoCarriesRole(t *testing.T) {
+	if got := sessionInfo(domain.Session{Role: domain.SessionRoleReviewer}, "").Role; got != "reviewer" {
+		t.Fatalf("role=%q", got)
+	}
+	if got := sessionInfo(domain.Session{}, "").Role; got != "" {
+		t.Fatalf("worker role=%q", got)
+	}
+}

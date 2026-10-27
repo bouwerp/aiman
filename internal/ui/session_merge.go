@@ -111,6 +111,9 @@ func overlayPersistedSessionFields(live, stored domain.Session) domain.Session {
 	if live.ParentID == "" {
 		live.ParentID = stored.ParentID
 	}
+	if live.Role == "" {
+		live.Role = stored.Role
+	}
 	if stored.WorkingDirectory != "" {
 		live.WorkingDirectory = stored.WorkingDirectory
 	}

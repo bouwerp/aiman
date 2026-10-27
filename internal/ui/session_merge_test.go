@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/bouwerp/aiman/internal/server"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -191,5 +192,19 @@ func TestOverlayPersistedSessionFieldsDropsNativeIDAcrossAgentSwitch(t *testing.
 	}
 	if got.AgentEnded || got.HookState != "" {
 		t.Fatalf("previous agent's ended/hook state must not survive a switch: %+v", got)
+	}
+}
+
+func TestOverlayKeepsStoredRole(t *testing.T) {
+	live := domain.Session{ID: "rev", RemoteHost: "regent0", TmuxSession: "rev"}
+	stored := domain.Session{ID: "rev", Role: domain.SessionRoleReviewer, TmuxSession: "rev"}
+	if got := overlayPersistedSessionFields(live, stored); got.Role != domain.SessionRoleReviewer {
+		t.Fatalf("live scan cannot see role; overlay must keep stored, got %q", got.Role)
+	}
+}
+
+func TestSessionFromInfoMapsRole(t *testing.T) {
+	if got := sessionFromInfo("regent0", server.SessionInfo{ID: "rev", Role: "reviewer"}); got.Role != domain.SessionRoleReviewer {
+		t.Fatalf("role=%q", got.Role)
 	}
 }

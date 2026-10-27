@@ -333,6 +333,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		Name:           config.Name,
 		Group:          config.Group,
 		ParentID:       config.ParentID,
+		Role:           config.Role,
 		IssueKey:       config.IssueKey,
 		Branch:         branch,
 		RepoName:       config.Repo.Name,

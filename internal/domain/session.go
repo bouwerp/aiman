@@ -56,6 +56,7 @@ type Session struct {
 	Name             string // display alias, unique per host; independent of Branch and the worktree
 	Group            string // work bucket; empty persists as GroupUngrouped
 	ParentID         string // session that spawned this one; empty is a root
+	Role             SessionRole
 	IssueKey         string
 	Branch           string
 	BaseBranch       string // ref the worktree branch was cut from; basis for diffs against the base
@@ -95,6 +96,12 @@ type Session struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// SessionRole says what a session is for. Empty is an ordinary worker.
+type SessionRole string
+
+// SessionRoleReviewer is a hidden verifier session reviewing a worker's tree.
+const SessionRoleReviewer SessionRole = "reviewer"
 
 // PR-watch overrides stored in Session.WatchPR.
 const (
@@ -235,7 +242,8 @@ type SessionConfig struct {
 	Name       string
 	Group      string
 	ParentID   string // session that spawned this one; empty is a root
-	Quick      bool   // ad-hoc session with generated q{n} name in group "quick"
+	Role       SessionRole
+	Quick      bool // ad-hoc session with generated q{n} name in group "quick"
 	IssueKey   string
 	Issue      *Issue // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
 	Branch     string

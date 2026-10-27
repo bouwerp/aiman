@@ -21,6 +21,7 @@ type SessionInfo struct {
 	Name        string `json:"name"`
 	Group       string `json:"group"`
 	ParentID    string `json:"parent_id,omitempty"`
+	Role        string `json:"role,omitempty"`
 	IssueKey    string `json:"issue_key,omitempty"`
 	Branch      string `json:"branch,omitempty"`
 	BaseBranch  string `json:"base_branch,omitempty"`
@@ -52,6 +53,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		Name:             s.Name,
 		Group:            s.Group,
 		ParentID:         s.ParentID,
+		Role:             string(s.Role),
 		BaseBranch:       s.BaseBranch,
 		IssueKey:         s.IssueKey,
 		Branch:           s.Branch,

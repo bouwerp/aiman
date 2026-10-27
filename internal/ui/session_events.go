@@ -329,6 +329,7 @@ func sessionFromInfo(host string, info server.SessionInfo) domain.Session {
 		Name:             info.Name,
 		Group:            info.Group,
 		ParentID:         info.ParentID,
+		Role:             domain.SessionRole(info.Role),
 		IssueKey:         info.IssueKey,
 		Branch:           info.Branch,
 		RepoName:         info.RepoName,
