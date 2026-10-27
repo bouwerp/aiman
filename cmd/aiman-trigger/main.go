@@ -107,6 +107,7 @@ func run() error {
 		skillEngine,
 	)
 	flowManager.SetRepoBootstrap(cfg.Repos)
+	flowManager.SetRoles(cfg.Roles)
 
 	dir, err := config.GetDir()
 	if err != nil {

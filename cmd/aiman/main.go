@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,6 +20,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/skills"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/bouwerp/aiman/internal/quality"
 	"github.com/bouwerp/aiman/internal/ui"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
@@ -162,6 +164,10 @@ func run() error {
 	slugger := domain.NewGitSlugger()
 	flowManager := usecase.NewFlowManager(jiraProvider, &cfg.Integrations.Jira, gitManager, sshManager, slugger, skillEngine)
 	flowManager.SetRepoBootstrap(cfg.Repos)
+	flowManager.SetRoles(cfg.Roles)
+	if home, err := os.UserHomeDir(); err == nil {
+		flowManager.SetUserChecklistDir(filepath.Join(home, quality.UserChecklistDir))
+	}
 
 	// 6. Handle commands
 	if len(os.Args) > 1 {

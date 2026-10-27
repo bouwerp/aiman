@@ -12,6 +12,10 @@ import (
 // shells often lack them.
 const pathPrefix = "export PATH=\"$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH\"; "
 
+// PathPrefix is the PATH export other remote tool probes share with the
+// graphify probe.
+const PathPrefix = pathPrefix
+
 // TaskFileLine is the .aiman_task.md guardrail shown when graphify is present.
 const TaskFileLine = "- **Code graph.** `graphify` is installed and a graph of this repository is being built in the background into `graphify-out/`. For codebase questions run `graphify query \"<question>\"` first; use `graphify path \"A\" \"B\"` for relationships and `graphify explain \"X\"` for one concept.\n"
 

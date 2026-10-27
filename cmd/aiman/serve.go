@@ -87,6 +87,7 @@ func runServe() error {
 	gitManager := git.NewManager(&cfg.Git)
 	flow := usecase.NewFlowManager(jiraProvider, &cfg.Integrations.Jira, gitManager, localExec, domain.NewGitSlugger(), skills.NewEngine(cfg))
 	flow.SetRepoBootstrap(cfg.Repos)
+	flow.SetRoles(cfg.Roles)
 
 	dir, err := config.GetDir()
 	if err != nil {
@@ -119,6 +120,7 @@ func runServe() error {
 	ptyMgr := ptyruntime.NewManager()
 	defer ptyMgr.CloseAll()
 	srv := server.New(ln, db, localExec, flow, store, ptyMgr, version)
+	flow.SetDoneItems(srv.DoneItems())
 	if jobs, err := memoryjob.Open(db.DB()); err != nil {
 		log.Printf("memory jobs unavailable: %v", err)
 	} else {

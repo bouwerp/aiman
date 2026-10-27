@@ -30,6 +30,13 @@ type FlowManager struct {
 	SkillEngine  domain.SkillEngine
 	// repos holds the per-repository worktree bootstrap from config.
 	repos map[string]config.RepoBootstrap
+	// roles holds the per-role agent, model and effort overrides.
+	roles config.RolesConfig
+	// userChecklistDir is the laptop's checklist directory pushed to the
+	// remote at create; empty where the process already runs on the remote.
+	userChecklistDir string
+	// doneItems adds the Done-when met to-do for sessions with conditions.
+	doneItems DoneItems
 }
 
 func NewFlowManager(
@@ -47,7 +54,75 @@ func NewFlowManager(
 		sshManager:   sshManager,
 		slugger:      slugger,
 		SkillEngine:  skillEngine,
+		doneItems:    RemoteDoneItems{},
 	}
+}
+
+// SetUserChecklistDir sets the local checklist directory pushed to the
+// remote before each repository create. Leave it unset when the process runs
+// on the remote, whose home already holds the user checklists.
+func (m *FlowManager) SetUserChecklistDir(dir string) {
+	m.userChecklistDir = dir
+}
+
+// SetDoneItems replaces how the Done-when met to-do is added. The default
+// goes through the remote serve; serve itself passes its direct store path.
+func (m *FlowManager) SetDoneItems(d DoneItems) {
+	if d != nil {
+		m.doneItems = d
+	}
+}
+
+// SetRoles sets the per-role overrides.
+func (m *FlowManager) SetRoles(r config.RolesConfig) {
+	m.roles = r
+}
+
+// Roles returns the per-role overrides.
+func (m *FlowManager) Roles() config.RolesConfig {
+	return m.roles
+}
+
+// buildKit pushes the user's checklists, reports required tools the remote
+// lacks, and builds the session's quality kit. Every failure is a progress
+// line; none fails the create.
+func (m *FlowManager) buildKit(ctx context.Context, sshMgr domain.RemoteExecutor, cfg domain.SessionConfig, worktree, agentCommand string) domain.QualityKit {
+	kit := domain.QualityKit{Repo: cfg.Repo.Name, Role: cfg.Role}
+	if !shouldBuildKit(cfg) {
+		return kit
+	}
+	repoCfg, _ := config.LookupRepo(m.repos, cfg.Repo.Name)
+	if m.userChecklistDir != "" {
+		if _, err := PushUserChecklists(ctx, sshMgr, m.userChecklistDir); err != nil {
+			infraGit.ReportProgress(ctx, fmt.Sprintf("Checklists not pushed: %v", err))
+		}
+	}
+	if len(repoCfg.Requires) > 0 {
+		infraGit.ReportProgress(ctx, "Checking required tools…")
+		missing, err := CheckRequires(ctx, sshMgr, worktree, agentCommand, repoCfg.Requires)
+		if err != nil {
+			infraGit.ReportProgress(ctx, fmt.Sprintf("Required tools not checked: %v", err))
+		}
+		for _, e := range missing {
+			infraGit.ReportProgress(ctx, "Missing on remote: "+e)
+		}
+	}
+	infraGit.ReportProgress(ctx, "Building quality kit…")
+	built, notes, err := BuildQualityKit(ctx, sshMgr, KitInput{
+		Repo:     cfg.Repo.Name,
+		Worktree: worktree,
+		Role:     cfg.Role,
+		Issue:    cfg.Issue,
+		RepoCfg:  repoCfg,
+	})
+	for _, n := range notes {
+		infraGit.ReportProgress(ctx, n)
+	}
+	if err != nil {
+		infraGit.ReportProgress(ctx, fmt.Sprintf("Quality kit not built: %v", err))
+		return kit
+	}
+	return built
 }
 
 // SetRepoBootstrap sets the per-repository bootstrap applied to worktrees
@@ -470,11 +545,16 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// Step 9 & 10: Skills & Agent
 	agentCmd := config.Agent.Command
 	var sendKeysPrompt string
+	// kit stays empty unless the skill engine writes it into the task file,
+	// so the Done-when met to-do exists only alongside its conditions.
+	var kit domain.QualityKit
 	if m.SkillEngine != nil {
-		prepared, err := m.SkillEngine.PrepareSession(ctx, sshMgr, workingDir, *config.Agent, config.Skills, config.PromptFree, config.Issue, config.PriorSnapshot, domain.QualityKit{Repo: config.Repo.Name, Role: config.Role})
+		built := m.buildKit(ctx, sshMgr, config, session.WorktreePath, config.Agent.Command)
+		prepared, err := m.SkillEngine.PrepareSession(ctx, sshMgr, workingDir, *config.Agent, config.Skills, config.PromptFree, config.Issue, config.PriorSnapshot, built)
 		if err == nil {
 			agentCmd = prepared.Command
 			sendKeysPrompt = prepared.InitialPrompt
+			kit = built
 		}
 	}
 	if config.Brief != "" {
@@ -517,7 +597,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// inside a real PTY. Explicit session_backend: tmux still uses tmux.
 	config.SessionBackend = domain.ResolveSessionBackend(config.SessionBackend, "")
 	if config.SessionBackend == domain.BackendPTY {
-		return m.launchPTYSession(ctx, sshMgr, session, config, workingDir, tmuxName, agentCmd, sendKeysPrompt, awsEnv)
+		return m.launchPTYSession(ctx, sshMgr, session, config, kit, workingDir, tmuxName, agentCmd, sendKeysPrompt, awsEnv)
 	}
 
 	// Start the session and immediately set remain-on-exit in a single SSH call to avoid
@@ -594,14 +674,14 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	session.TmuxSession = tmuxName
 
-	return m.finaliseCreate(ctx, sshMgr, session, config, workingDir)
+	return m.finaliseCreate(ctx, sshMgr, session, config, kit, workingDir)
 }
 
 // finaliseCreate runs the best-effort decoration and bookkeeping shared by both
 // backends after the terminal process is up: agent model detection, JIRA
 // transition, and the ACTIVE transition. Workspace trust already ran before
 // the agent launched (see trustWorkspaceBeforeLaunch).
-func (m *FlowManager) finaliseCreate(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, workingDir string) (*domain.Session, error) {
+func (m *FlowManager) finaliseCreate(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, kit domain.QualityKit, workingDir string) (*domain.Session, error) {
 	// The graph build runs detached once the agent is up, so it never holds
 	// the create; the script is a no-op without graphify or a git checkout.
 	if session.WorktreePath != "" {
@@ -622,6 +702,14 @@ func (m *FlowManager) finaliseCreate(ctx context.Context, sshMgr domain.RemoteEx
 
 	if err := session.Transition(domain.SessionStatusActive); err != nil {
 		return nil, err
+	}
+
+	// The task file names the Done-when met to-do, so it is added only when
+	// the kit carries conditions.
+	if len(kit.DoneWhen) > 0 && m.doneItems != nil {
+		if err := m.doneItems.Ensure(ctx, sshMgr, *session); err != nil {
+			infraGit.ReportProgress(ctx, fmt.Sprintf("Done-when to-do not added: %v", err))
+		}
 	}
 
 	return session, nil
@@ -896,7 +984,7 @@ func DeliverInitialPromptPTY(ctx context.Context, remote promptDeliverer, sessio
 // launchPTYSession hands the agent to aiman serve's built-in PTY runtime
 // instead of tmux. Env travels in the create payload, so no -e flags or shell
 // escaping are needed; the command runs under bash -l inside a real PTY.
-func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, workingDir, tmuxName, agentCmd string, sendKeysPrompt string, awsEnv map[string]string) (*domain.Session, error) {
+func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, kit domain.QualityKit, workingDir, tmuxName, agentCmd string, sendKeysPrompt string, awsEnv map[string]string) (*domain.Session, error) {
 	if !PTYRuntimeAvailable(ctx, sshMgr) {
 		return nil, fmt.Errorf(
 			"the PTY backend needs aiman serve running on the remote (TUI: m → Agent API \u2192 i then s), or set session_backend back to tmux")
@@ -933,7 +1021,7 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 	session.Backend = domain.BackendPTY
 	session.TmuxSession = tmuxName // display handle; kill/capture route via Backend
 
-	return m.finaliseCreate(ctx, sshMgr, session, config, workingDir)
+	return m.finaliseCreate(ctx, sshMgr, session, config, kit, workingDir)
 }
 
 // issueType is the JIRA type of the issue a session starts from, if any.

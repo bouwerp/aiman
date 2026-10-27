@@ -29,6 +29,8 @@ var writeFileAllowlist = map[string]bool{
 	"ApplyKiloAllowEnv":               true,
 	"EnsureClaudeWorkspaceTrusted":    true,
 	"WriteIfChanged":                  true,
+	// Compares sha256 for all files in one listing call before writing.
+	"PushUserChecklists": true,
 }
 
 // scaffoldingDirs are the packages whose writers can touch files that sit in
@@ -39,6 +41,7 @@ var scaffoldingDirs = []string{
 	"internal/usecase",
 	"internal/server",
 	"internal/todo",
+	"internal/quality",
 }
 
 // TestScaffoldingWritersCompareFirst fails when a scaffolding writer calls
