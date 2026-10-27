@@ -2,7 +2,9 @@ package contextstore
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,8 @@ import (
 
 // seedNotes fills s with n notes spread over five groups, three repos and the
 // host namespace. One note in fifty mentions "session cookie".
+//
+//nolint:unparam // every benchmark seeds the same 1,000-note corpus
 func seedNotes(tb testing.TB, s *Files, n int) []domain.ContextEntry {
 	tb.Helper()
 	ctx := context.Background()
@@ -83,6 +87,52 @@ func BenchmarkScanGet1000(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := s.Get(ctx, id); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkIndex1000(b *testing.B) *Index {
+	b.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(b.TempDir(), "context.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	ix, err := OpenIndex(db)
+	if err != nil {
+		b.Fatal(err)
+	}
+	s := NewFiles(b.TempDir())
+	notes := seedNotes(b, s, 1000)
+	ctx := context.Background()
+	for _, e := range notes {
+		if err := ix.Upsert(ctx, e, absPath(s.root, e), e.CreatedAt); err != nil {
+			b.Fatal(err)
+		}
+	}
+	return ix
+}
+
+func BenchmarkIndexFind1000(b *testing.B) {
+	ix := benchmarkIndex1000(b)
+	ctx := context.Background()
+	query := domain.ContextQuery{Text: "session cookie"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ix.Search(ctx, query, true, time.Now()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkIndexPackSession1000(b *testing.B) {
+	ix := benchmarkIndex1000(b)
+	ctx := context.Background()
+	query := domain.ContextQuery{Namespace: domain.ContextNSGroup, Key: "g1"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ix.Search(ctx, query, true, time.Now()); err != nil {
 			b.Fatal(err)
 		}
 	}

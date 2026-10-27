@@ -390,6 +390,12 @@ func (r *Repository) Close() error {
 	return r.db.Close()
 }
 
+// DB exposes the underlying handle for packages that own their own tables in
+// the same file, such as the context index.
+func (r *Repository) DB() *sql.DB {
+	return r.db
+}
+
 // SaveSnapshot creates or replaces a session snapshot.
 func (r *Repository) SaveSnapshot(ctx context.Context, s *domain.SessionSnapshot) error {
 	stepsJSON, err := json.Marshal(s.NextSteps)
