@@ -34,15 +34,15 @@ type serveConfigWriter interface {
 	WriteFile(ctx context.Context, path string, content []byte) error
 }
 
-func writeServeConfig(ctx context.Context, cfg *config.Config, remote serveConfigWriter) error {
-	body, err := cfg.MarshalServeConfig()
+func writeServeConfig(ctx context.Context, cfg *config.Config, host string, remote serveConfigWriter) error {
+	raw, err := cfg.MarshalServeConfig(host)
 	if err != nil {
 		return fmt.Errorf("serializing Agent API settings: %w", err)
 	}
 	if _, err := remote.Execute(ctx, `install -d -m 700 "$HOME/.aiman" && (umask 077; touch "$HOME/.aiman/config.yaml") && chmod 600 "$HOME/.aiman/config.yaml"`); err != nil {
 		return fmt.Errorf("creating remote Agent API config directory: %w", err)
 	}
-	if err := remote.WriteFile(ctx, ".aiman/config.yaml", body); err != nil {
+	if err := remote.WriteFile(ctx, ".aiman/config.yaml", raw); err != nil {
 		return fmt.Errorf("writing remote Agent API settings: %w", err)
 	}
 	if _, err := remote.Execute(ctx, `chmod 600 "$HOME/.aiman/config.yaml"`); err != nil {
@@ -59,7 +59,7 @@ func syncRemoteServeConfig(cfg *config.Config, host string) error {
 	mgr := ssh.NewManager(ssh.Config{Host: r.Host, User: r.User, Root: r.Root})
 	ctx, cancel := context.WithTimeout(context.Background(), remotesvc.OpTimeout)
 	defer cancel()
-	return writeServeConfig(ctx, cfg, mgr)
+	return writeServeConfig(ctx, cfg, host, mgr)
 }
 
 func (m *Model) selectedDaemon() (domain.Daemon, bool) {

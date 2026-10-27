@@ -106,7 +106,7 @@ func TestWriteServeConfigSyncsJiraSettingsWithPrivatePermissions(t *testing.T) {
 		Remotes: []config.Remote{{Host: "remote.example.test", Root: "/repos"}},
 	}
 
-	if err := writeServeConfig(context.Background(), cfg, writer); err != nil {
+	if err := writeServeConfig(context.Background(), cfg, "remote.example.test", writer); err != nil {
 		t.Fatalf("writeServeConfig: %v", err)
 	}
 	if writer.path != ".aiman/config.yaml" {

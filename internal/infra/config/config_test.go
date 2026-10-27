@@ -64,6 +64,7 @@ func TestSaveFailsWhenConfigDirCannotBeCreated(t *testing.T) {
 }
 
 func TestMarshalServeConfigIncludesServiceSettingsWithoutRemotePaths(t *testing.T) {
+	off := false
 	cfg := &Config{
 		Integrations: Integrations{Jira: JiraConfig{
 			URL:              "https://jira.example.test",
@@ -76,10 +77,11 @@ func TestMarshalServeConfigIncludesServiceSettingsWithoutRemotePaths(t *testing.
 		Skills:        SkillsConfig{Repo: "git@example.test:skills.git"},
 		AgentDefaults: map[string]AgentDefaults{"codex": {Model: "gpt-5", Effort: "high"}},
 		Gateway:       GatewayConfig{AllowLogins: []string{"user@example.test"}},
-		Remotes:       []Remote{{Host: "remote.example.test", Root: "/repos"}},
+		Remotes:       []Remote{{Host: "remote.example.test", Root: "/repos", Notifications: &NotificationsConfig{SlackChannel: "#ops", Phone: &off}}},
+		Notifications: NotificationsConfig{Webhook: "https://ntfy.sh/global"},
 	}
 
-	body, err := cfg.MarshalServeConfig()
+	body, err := cfg.MarshalServeConfig("remote.example.test")
 	if err != nil {
 		t.Fatalf("MarshalServeConfig: %v", err)
 	}
@@ -96,6 +98,19 @@ func TestMarshalServeConfigIncludesServiceSettingsWithoutRemotePaths(t *testing.
 	}
 	if got["gateway"] == nil {
 		t.Fatalf("serve config missing gateway settings: %s", body)
+	}
+	notif, ok := got["notifications"].(map[string]any)
+	if !ok {
+		t.Fatalf("notifications missing: %s", body)
+	}
+	if notif["slack_channel"] != "#ops" {
+		t.Fatalf("notifications = %#v", notif)
+	}
+	if notif["webhook"] != "https://ntfy.sh/global" {
+		t.Fatalf("notifications = %#v", notif)
+	}
+	if notif["phone"] != false {
+		t.Fatalf("notifications = %#v", notif)
 	}
 }
 
@@ -128,7 +143,7 @@ usage:
 }
 
 func TestContextWindowOmittedIsZero(t *testing.T) {
-	raw, err := (&Config{}).MarshalServeConfig()
+	raw, err := (&Config{}).MarshalServeConfig("x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +152,7 @@ func TestContextWindowOmittedIsZero(t *testing.T) {
 	}
 	cfg := &Config{}
 	cfg.Usage.ContextWindowTokens = 200_000
-	raw, err = cfg.MarshalServeConfig()
+	raw, err = cfg.MarshalServeConfig("r")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +173,7 @@ func TestMarshalServeConfigCarriesUsage(t *testing.T) {
 			},
 		},
 	}
-	body, err := cfg.MarshalServeConfig()
+	body, err := cfg.MarshalServeConfig("r")
 	if err != nil {
 		t.Fatalf("MarshalServeConfig: %v", err)
 	}

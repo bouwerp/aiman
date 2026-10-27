@@ -28,6 +28,8 @@ type Config struct {
 	Sync          SyncConfig               `yaml:"sync,omitempty"`
 	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
 	Usage         UsageConfig              `yaml:"usage,omitempty"`
+	// Notifications configures push/webhook/Slack delivery.
+	Notifications NotificationsConfig     `yaml:"notifications,omitempty"`
 	Remotes       []Remote                 `yaml:"remotes"`
 	ActiveRemote  string                   `yaml:"active_remote"`
 
@@ -47,11 +49,13 @@ type ServeConfig struct {
 	Skills        SkillsConfig             `yaml:"skills,omitempty"`
 	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
 	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
-	Usage         UsageConfig              `yaml:"usage,omitempty"`
+	Usage         UsageConfig          `yaml:"usage,omitempty"`
+	// Notifications configures push/webhook/Slack delivery.
+	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
 }
 
 // MarshalServeConfig serializes the settings a remote Agent API needs.
-func (c *Config) MarshalServeConfig() ([]byte, error) {
+func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 	if c == nil {
 		return yaml.Marshal(ServeConfig{})
 	}
@@ -62,7 +66,39 @@ func (c *Config) MarshalServeConfig() ([]byte, error) {
 		AgentDefaults: c.AgentDefaults,
 		Gateway:       c.Gateway,
 		Usage:         c.Usage,
+		Notifications: c.NotificationsFor(host),
 	})
+}
+
+// NotificationsFor returns notifications config merged with remote overrides.
+func (c *Config) NotificationsFor(host string) NotificationsConfig {
+	if c == nil {
+		return NotificationsConfig{}
+	}
+	out := c.Notifications
+	for _, r := range c.Remotes {
+		if r.Host != host || r.Notifications == nil {
+			continue
+		}
+		o := r.Notifications
+		if o.Events != nil {
+			out.Events = append([]string(nil), o.Events...)
+		}
+		if o.Phone != nil {
+			out.Phone = o.Phone
+		}
+		if o.Webhook != "" {
+			out.Webhook = o.Webhook
+		}
+		if o.SlackChannel != "" {
+			out.SlackChannel = o.SlackChannel
+		}
+		if o.MinInterval != "" {
+			out.MinInterval = o.MinInterval
+		}
+		break
+	}
+	return out
 }
 
 // UsageConfig is usage pricing and the optional context window, copied to the
@@ -283,6 +319,8 @@ type Remote struct {
 	// SessionBackend selects how new sessions host their terminal on this
 	// remote: "pty" (default) or "tmux". Empty inherits the product default (pty).
 	SessionBackend string `yaml:"session_backend,omitempty"`
+	// Notifications configures push/webhook/Slack delivery.
+	Notifications *NotificationsConfig `yaml:"notifications,omitempty"`
 }
 
 // AWSDelegation is stored in aiman config; role_arn on the remote is derived from
