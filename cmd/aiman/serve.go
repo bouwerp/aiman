@@ -15,6 +15,7 @@ import (
 	"github.com/bouwerp/aiman/internal/aimanskill"
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/contextstore"
+	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
@@ -191,6 +192,22 @@ func runServe() error {
 	srv.SetVerifier(verifier)
 	verifier.Resume(ctx)
 	defer verifier.Close()
+
+	childTracker := &coordinator.Tracker{
+		Todos:    srv.TodoAccess(),
+		Sessions: func() ([]domain.Session, error) { return db.List(ctx) },
+		PR:       coordinator.GHPR,
+		Passed: func(childID string) bool {
+			r, ok := verifier.LatestFor(childID)
+			return ok && r.Passed()
+		},
+		// verify.before_pr does not gate child completion until nl-10.
+		BeforePR: func(string) bool { return false },
+	}
+	if rec := srv.NotifyRecorder(); rec != nil {
+		childTracker.Notify = rec
+	}
+	go childTracker.Run(ctx, coordinator.TrackInterval)
 
 	log.Printf("aiman serve listening on %s", filepath.Join(dir, "aiman.sock"))
 	return srv.Serve(ctx)
