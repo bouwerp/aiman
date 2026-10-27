@@ -57,6 +57,7 @@ type Session struct {
 	Group            string // work bucket; empty persists as GroupUngrouped
 	ParentID         string // session that spawned this one; empty is a root
 	Role             SessionRole
+	Unprotected      bool // before_pr is on but the agent has no PreToolUse guard
 	IssueKey         string
 	Branch           string
 	BaseBranch       string // ref the worktree branch was cut from; basis for diffs against the base

@@ -15,17 +15,18 @@ import (
 // detailMetaExtras is cost, token, cache, and review state for one session.
 // usage.get fills the cost fields. Reviewing and WatchingPR are not part of that report.
 type detailMetaExtras struct {
-	CostUSD       float64
-	HasCost       bool
-	Tokens        int64
-	CacheRatio    float64
-	HasCache      bool
-	ContextPct    float64 // latest turn / window; 0 when the window is unset
-	ContextWindow int64   // 0 hides the gauge
-	BudgetPct     float64 // used / budget; 0 hides the marker
-	BudgetState   string  // "", "warn", "over"
-	Reviewing     bool
-	WatchingPR    int
+	CostUSD        float64
+	HasCost        bool
+	Tokens         int64
+	CacheRatio     float64
+	HasCache       bool
+	ContextPct     float64 // latest turn / window; 0 when the window is unset
+	ContextWindow  int64   // 0 hides the gauge
+	BudgetPct      float64 // used / budget; 0 hides the marker
+	BudgetState    string  // "", "warn", "over"
+	Reviewing      bool
+	VerifyAdvisory bool
+	WatchingPR     int
 }
 
 // todoView is one session's to-do list as the detail pane draws it.
@@ -70,6 +71,9 @@ func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width i
 	}
 	if x.Reviewing {
 		add("reviewing…")
+	}
+	if x.VerifyAdvisory {
+		add("verify advisory")
 	}
 	if x.WatchingPR > 0 {
 		add(fmt.Sprintf("watching PR #%d", x.WatchingPR))
@@ -544,6 +548,7 @@ func (m *Model) renderSessionDetail(it item, width int) string {
 	}
 	extras := m.metaFor(it.session.ID)
 	extras.Reviewing = reviewerRunning(it.session.ID, m.allSessions)
+	extras.VerifyAdvisory = it.session.Unprotected
 	if meta := renderMetaLine(it.session, extras, time.Now(), width); meta != "" {
 		head = append(head, meta)
 	}

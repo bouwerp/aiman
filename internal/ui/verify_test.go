@@ -118,3 +118,18 @@ func TestVerifyStartedExistingReviewDoesNotSayStarting(t *testing.T) {
 		t.Fatalf("toast = %q", m.snapshotToast)
 	}
 }
+
+func TestVerifyAdvisoryMetaLine(t *testing.T) {
+	m, _ := promptModel(domain.Session{ID: "w1", Name: "impl", RemoteHost: "regent0", Unprotected: true})
+	got := m.renderSessionDetail(m.makeItem(domain.Session{ID: "w1", Name: "impl", RemoteHost: "regent0", Unprotected: true}), 120)
+	if !strings.Contains(got, "verify advisory") {
+		t.Fatalf("detail = %q", got)
+	}
+}
+
+func TestSessionFromInfoMapsUnprotected(t *testing.T) {
+	got := sessionFromInfo("regent0", server.SessionInfo{ID: "w1", Unprotected: true})
+	if !got.Unprotected {
+		t.Fatal("unprotected flag was dropped")
+	}
+}
