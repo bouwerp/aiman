@@ -36,9 +36,9 @@ type Sink interface {
 
 // Dispatcher delivers notifications from source to sinks.
 type Dispatcher struct {
-	src   Source
-	cur   Cursor
-	sinks []Sink
+	src      Source
+	cur      Cursor
+	sinks    []Sink
 	attempts map[int64]int
 	done     map[int64]map[string]bool
 }
@@ -46,9 +46,9 @@ type Dispatcher struct {
 // NewDispatcher creates a dispatcher.
 func NewDispatcher(src Source, cur Cursor, sinks ...Sink) *Dispatcher {
 	return &Dispatcher{
-		src:   src,
-		cur:   cur,
-		sinks: sinks,
+		src:      src,
+		cur:      cur,
+		sinks:    sinks,
 		attempts: map[int64]int{},
 		done:     map[int64]map[string]bool{},
 	}
