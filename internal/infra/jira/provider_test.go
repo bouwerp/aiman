@@ -19,6 +19,7 @@ func TestProvider_GetIssue(t *testing.T) {
 				"summary": "Fix all bugs",
 				"description": "Fix them all now",
 				"status": { "name": "TODO" },
+				"issuetype": { "name": "Bug" },
 				"assignee": { "displayName": "Pieter" },
 				"created": "2024-03-01T10:00:00Z",
 				"updated": "2024-03-01T12:00:00Z"
@@ -47,5 +48,8 @@ func TestProvider_GetIssue(t *testing.T) {
 	}
 	if issue.Status != domain.IssueStatusTodo {
 		t.Errorf("expected status TODO, got %s", issue.Status)
+	}
+	if issue.Type != "Bug" {
+		t.Errorf("expected type Bug, got %q", issue.Type)
 	}
 }

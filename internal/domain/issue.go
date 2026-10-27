@@ -31,6 +31,7 @@ type Issue struct {
 	Summary     string
 	Description string
 	Status      IssueStatus
+	Type        string // JIRA issue type name, e.g. "Bug" or "Story"
 	Assignee    string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

@@ -337,6 +337,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		ParentID:       config.ParentID,
 		Role:           config.Role,
 		IssueKey:       config.IssueKey,
+		IssueType:      issueType(config.Issue),
 		Branch:         branch,
 		RepoName:       config.Repo.Name,
 		AgentName:      agentName,
@@ -832,6 +833,14 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 
 // shellQuote wraps s for POSIX sh so a value containing spaces or shell
 // metacharacters survives as a single argument.
+// issueType is the JIRA type of the issue a session starts from, if any.
+func issueType(issue *domain.Issue) string {
+	if issue == nil {
+		return ""
+	}
+	return issue.Type
+}
+
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

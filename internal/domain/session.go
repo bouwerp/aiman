@@ -59,6 +59,7 @@ type Session struct {
 	Role             SessionRole
 	Unprotected      bool // before_pr is on but the agent has no PreToolUse guard
 	IssueKey         string
+	IssueType        string // JIRA issue type when the session came from an issue, e.g. "Bug"
 	Branch           string
 	BaseBranch       string // ref the worktree branch was cut from; basis for diffs against the base
 	RepoName         string

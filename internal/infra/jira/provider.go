@@ -44,6 +44,9 @@ type jiraIssue struct {
 		Status      struct {
 			Name string `json:"name"`
 		} `json:"status"`
+		IssueType struct {
+			Name string `json:"name"`
+		} `json:"issuetype"`
 		Assignee struct {
 			DisplayName string `json:"displayName"`
 		} `json:"assignee"`
@@ -75,7 +78,7 @@ func (p *Provider) fetchIssues(ctx context.Context, jql string, maxResults int) 
 
 	params := url.Values{}
 	params.Add("jql", jql)
-	params.Add("fields", "summary,description,status,assignee,created,updated")
+	params.Add("fields", "summary,description,status,issuetype,assignee,created,updated")
 	params.Add("maxResults", fmt.Sprintf("%d", maxResults))
 	u.RawQuery = params.Encode()
 
@@ -256,6 +259,7 @@ func (p *Provider) toDomainIssue(ji jiraIssue) domain.Issue {
 		Summary:     ji.Fields.Summary,
 		Description: desc,
 		Status:      domain.IssueStatus(ji.Fields.Status.Name),
+		Type:        ji.Fields.IssueType.Name,
 		Assignee:    assignee,
 		CreatedAt:   created,
 		UpdatedAt:   updated,
