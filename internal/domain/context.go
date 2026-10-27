@@ -86,6 +86,15 @@ type ContextEntry struct {
 	CreatedAt  time.Time
 }
 
+// ContextHit is the compact shape returned by context.find.
+type ContextHit struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	Abstract string `json:"abstract"`
+	Age      string `json:"age"`
+}
+
 // ContextQuery selects notes. Empty fields are wildcards. Text filters
 // title, abstract, and body (substring). Limit 0 means a default cap.
 type ContextQuery struct {

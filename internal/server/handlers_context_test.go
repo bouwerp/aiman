@@ -90,9 +90,25 @@ func TestContextPutGetListFindPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var findRes struct {
+		Type string           `json:"type"`
+		Hits []map[string]any `json:"hits"`
+	}
 	raw, _ = json.Marshal(found.Result)
-	if err := json.Unmarshal(raw, &listRes); err != nil || len(listRes.Notes) != 1 {
+	if err := json.Unmarshal(raw, &findRes); err != nil || len(findRes.Hits) != 1 {
 		t.Fatalf("find %s", raw)
+	}
+	if findRes.Type != "context_find" {
+		t.Fatalf("find type = %q", findRes.Type)
+	}
+	hit := findRes.Hits[0]
+	if len(hit) != 5 || hit["id"] == "" || hit["type"] != "fact" || hit["title"] != "Auth cookie" || hit["abstract"] == "" || hit["age"] == "" {
+		t.Fatalf("find hit = %#v", hit)
+	}
+	for _, key := range []string{"body", "ns", "key", "created", "session"} {
+		if _, ok := hit[key]; ok {
+			t.Fatalf("find hit leaked %q: %#v", key, hit)
+		}
 	}
 
 	pack, err := Call(sock, "context.pack", map[string]any{"group": "WTB-1"})
@@ -190,5 +206,31 @@ func TestContextPutTypedOverSocket(t *testing.T) {
 	}
 	if res.Note.ValidUntil != "2030-01-01T00:00:00Z" {
 		t.Fatalf("valid_until = %q", res.Note.ValidUntil)
+	}
+}
+
+func TestContextFindRankedHits(t *testing.T) {
+	sock := startContextServer(t)
+	for _, note := range []map[string]any{
+		{"title": "Fact", "body": "needle", "group": "G1", "type": "fact"},
+		{"title": "Decision", "body": "needle", "group": "G1", "type": "decision"},
+	} {
+		if resp, err := Call(sock, "context.put", note); err != nil || resp.Error != nil {
+			t.Fatalf("put %v: %v %+v", note, err, resp.Error)
+		}
+	}
+	resp, err := Call(sock, "context.find", map[string]any{"text": "needle"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Hits []map[string]any `json:"hits"`
+	}
+	raw, _ := json.Marshal(resp.Result)
+	if err := json.Unmarshal(raw, &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 2 || res.Hits[0]["type"] != "decision" {
+		t.Fatalf("hits = %#v", res.Hits)
 	}
 }

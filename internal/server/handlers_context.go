@@ -198,7 +198,10 @@ func (s *Server) handleContextFind(ctx context.Context, req Request) Response {
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	return contextListResult(req.ID, "context_find", list)
+	return Response{ID: req.ID, Result: map[string]any{
+		"type": "context_find",
+		"hits": contextstore.Hits(list, time.Now()),
+	}}
 }
 
 func (s *Server) handleContextPack(ctx context.Context, req Request) Response {

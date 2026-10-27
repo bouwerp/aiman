@@ -143,3 +143,18 @@ func titles(list []domain.ContextEntry) []string {
 	}
 	return out
 }
+
+func TestHits(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	hits := Hits([]domain.ContextEntry{{
+		ID: "id1", Type: domain.ContextTypeDecision, Title: "Auth",
+		Abstract: "Use the API host.", CreatedAt: now.Add(-3 * time.Hour),
+	}}, now)
+	if len(hits) != 1 {
+		t.Fatalf("hits = %+v", hits)
+	}
+	got := hits[0]
+	if got.ID != "id1" || got.Type != "decision" || got.Title != "Auth" || got.Abstract != "Use the API host." || got.Age != "3h" {
+		t.Fatalf("hit = %+v", got)
+	}
+}

@@ -71,3 +71,22 @@ func Age(created, now time.Time) string {
 	}
 	return fmt.Sprintf("%dy", int(d/(365*24*time.Hour)))
 }
+
+// Hits renders compact, body-free results for context.find.
+func Hits(list []domain.ContextEntry, now time.Time) []domain.ContextHit {
+	out := make([]domain.ContextHit, 0, len(list))
+	for _, e := range list {
+		typ := e.Type
+		if typ == "" {
+			typ = domain.ContextTypeFact
+		}
+		out = append(out, domain.ContextHit{
+			ID:       e.ID,
+			Type:     string(typ),
+			Title:    e.Title,
+			Abstract: e.Abstract,
+			Age:      Age(e.CreatedAt, now),
+		})
+	}
+	return out
+}

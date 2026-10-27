@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -100,5 +101,37 @@ func TestContextRPCTypedPut(t *testing.T) {
 	}
 	if params["type"] != "decision" || params["supersedes"] != "old-1" || params["valid_until"] != "2030-01-01T00:00:00Z" {
 		t.Fatalf("params = %#v", params)
+	}
+}
+
+func TestContextViaFilesFindHits(t *testing.T) {
+	store := contextstore.NewFiles(t.TempDir())
+	for _, note := range []domain.ContextEntry{
+		{Namespace: domain.ContextNSGroup, Key: "G1", Title: "Fact", Body: "needle", Type: domain.ContextTypeFact},
+		{Namespace: domain.ContextNSGroup, Key: "G1", Title: "Decision", Body: "needle", Type: domain.ContextTypeDecision},
+	} {
+		if _, err := store.Put(context.Background(), note); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = contextViaFiles(store, "find", []string{"needle"})
+	})
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	var res struct {
+		Type string           `json:"type"`
+		Hits []map[string]any `json:"hits"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output %q: %v", out, err)
+	}
+	if res.Type != "context_find" || len(res.Hits) != 2 || res.Hits[0]["type"] != "decision" {
+		t.Fatalf("find output = %s", out)
+	}
+	if len(res.Hits[0]) != 5 {
+		t.Fatalf("hit fields = %#v", res.Hits[0])
 	}
 }

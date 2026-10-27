@@ -96,13 +96,14 @@ aiman pty forget "$wid"
 
 ## Shared context
 
-This host keeps durable notes in `~/.aiman/context/` (markdown with YAML frontmatter). Prefer `aiman context` over inventing a sidecar. `ls`/`find` return abstracts; `get` returns the full body. Session create injects a pack of abstracts into `.aiman_context.md`. `aiman context stats` reports store size, op counts, and lookup times.
+This host keeps durable notes in `~/.aiman/context/` (markdown with YAML frontmatter). Prefer `aiman context` over inventing a sidecar. `find` returns ranked compact hits (`id`, `type`, `title`, `abstract`, `age`); `get` returns the full body. Session create injects a pack of abstracts into `.aiman_context.md`. `find` and packs hide superseded and expired notes. `aiman context stats` reports store size, op counts, and lookup times.
 
 ```bash
 aiman context ls --group "$AIMAN_GROUP"
 aiman context find "session cookie"
 aiman context get ID
-aiman context put --title "Auth cookie" --abstract "Set it on the API host." --group "$AIMAN_GROUP"
+aiman context put --title "Auth cookie" --abstract "Set it on the API host." --group "$AIMAN_GROUP" --type pitfall --valid-until 30d
+aiman context put --title "Use API host" --group "$AIMAN_GROUP" --supersedes OLD_ID
 aiman context pack --group "$AIMAN_GROUP" --repo owner/repo
 ```
 

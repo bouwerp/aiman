@@ -231,7 +231,7 @@ func contextViaFiles(store *contextstore.Files, cmd string, args []string) error
 		if err != nil {
 			return err
 		}
-		return writeJSON(map[string]any{"type": "context_find", "notes": notesJSON(list, false)})
+		return writeJSON(map[string]any{"type": "context_find", "hits": contextstore.Hits(list, time.Now())})
 	case "get":
 		if len(rest) < 1 {
 			writeCLIError(server.CodeInvalidParams, "context get requires an id")
