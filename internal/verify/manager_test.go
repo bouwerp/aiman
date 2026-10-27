@@ -129,3 +129,22 @@ func TestStartFailsCleanly(t *testing.T) {
 		t.Fatalf("review worktree left behind: %v", err)
 	}
 }
+
+func TestStartReadsTaskFromWorktreeWithoutWorkingDir(t *testing.T) {
+	r := newMRig(t, Config{})
+	w := r.worker
+	w.WorkingDirectory = ""
+	if err := os.WriteFile(filepath.Join(w.WorktreePath, domain.AimanTaskFileName), []byte("Root task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.sessions.sessions["w1"] = w
+	rv, err := r.m.Start(context.Background(), StartRequest{WorkerID: "w1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := r.waitStatus(t, rv.ID, StatusRunning)
+	brief, err := os.ReadFile(filepath.Join(running.Worktree, domain.AimanTaskFileName))
+	if err != nil || !strings.Contains(string(brief), "Root task.") {
+		t.Fatalf("brief %q %v", brief, err)
+	}
+}

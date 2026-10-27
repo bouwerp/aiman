@@ -257,7 +257,9 @@ func (m *Manager) prepare(ctx context.Context, r *Review, worker domain.Session)
 		return domain.Session{}, err
 	}
 
-	task, _ := os.ReadFile(filepath.Join(worker.WorkingDirectory, domain.AimanTaskFileName))
+	// An old or discovered session may have no WorkingDirectory; read the
+	// task from the same relative place in its worktree, never serve's cwd.
+	task, _ := os.ReadFile(filepath.Join(worker.WorktreePath, r.Dir, domain.AimanTaskFileName))
 	todos, _ := m.d.Todos.Get(worker.ID)
 	brief := BuildBrief(BriefInput{
 		WorkerName: worker.Name,
