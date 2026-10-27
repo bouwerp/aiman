@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -353,7 +354,7 @@ func renderTodoRow(it domain.TodoItem, notIn []string, selected bool, width int,
 func todoGlyphAndText(it domain.TodoItem, selected bool, refGlyph func(string) (string, bool)) string {
 	g := it.State.Glyph()
 	if it.State == domain.TodoPending && refGlyph != nil {
-		if id, ok := childRefID(it.Ref); ok {
+		if id, ok := coordinator.ChildID(it.Ref); ok {
 			if glyph, ok := refGlyph(id); ok {
 				g = glyph
 			}
@@ -603,15 +604,9 @@ func (m *Model) sessionTodoLines(it item, width int) []string {
 	}, width)
 }
 
-func childRefID(ref string) (string, bool) {
-	id, ok := strings.CutPrefix(ref, "child:")
-	id = strings.TrimSpace(id)
-	return id, ok && id != ""
-}
-
 // todoRefGlyph maps a linked child session to the glyph its row uses.
 func (m *Model) todoRefGlyph(childID string) (string, bool) {
-	for _, raw := range m.list.Items() {
+	for _, raw := range m.sessionsForHeader() {
 		row, ok := raw.(item)
 		if !ok || row.session.ID != childID {
 			continue
