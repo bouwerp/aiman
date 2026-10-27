@@ -136,6 +136,9 @@ func TestWriteHandoverWritesFileAndNote(t *testing.T) {
 	if note.Title != "Handover: WTB-12" {
 		t.Errorf("title %q", note.Title)
 	}
+	if note.Type != domain.ContextTypeHandover {
+		t.Errorf("type %q, want handover", note.Type)
+	}
 	if note.Abstract != "Fix parser" {
 		t.Errorf("abstract %q", note.Abstract)
 	}

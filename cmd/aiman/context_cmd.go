@@ -22,6 +22,8 @@ func printContextUsage(w io.Writer) {
   find QUERY [--group G | --repo R] [--limit N]
   get ID
   put --title T [--abstract A] [--group G | --repo R] [--body-file FILE]
+      [--type decision|pitfall|convention|fact|handover|review|summary]
+      [--supersedes ID] [--valid-until 2026-12-31|30d|RFC3339]
   pack [--group G] [--repo R] [--limit N]
   stats
   import [--agent all|claude,grok,codex,agy] [--group G] [--repo R] [--dry-run]
@@ -144,6 +146,20 @@ func contextRPC(cmd string, args []string) (string, map[string]any, error) {
 			writeCLIError(server.CodeInvalidParams, "context put requires --title")
 			return "", nil, errUsage
 		}
+		if t := flags["type"]; t != "" {
+			params["type"] = t
+		}
+		if s := flags["supersedes"]; s != "" {
+			params["supersedes"] = s
+		}
+		if v := flags["valid-until"]; v != "" {
+			at, err := parseValidUntil(v, time.Now())
+			if err != nil {
+				writeCLIError(server.CodeInvalidParams, err.Error())
+				return "", nil, err
+			}
+			params["valid_until"] = at.UTC().Format(time.RFC3339)
+		}
 		return "context.put", params, nil
 	case "pack":
 		if t := strings.Join(rest, " "); t != "" {
@@ -238,10 +254,20 @@ func contextViaFiles(store *contextstore.Files, cmd string, args []string) error
 			return errUsage
 		}
 		e := domain.ContextEntry{
-			Title:     flags["title"],
-			Abstract:  flags["abstract"],
-			Body:      body,
-			SessionID: strings.TrimSpace(os.Getenv("AIMAN_ID")),
+			Title:      flags["title"],
+			Abstract:   flags["abstract"],
+			Body:       body,
+			SessionID:  strings.TrimSpace(os.Getenv("AIMAN_ID")),
+			Type:       domain.ContextType(flags["type"]),
+			Supersedes: flags["supersedes"],
+		}
+		if v := flags["valid-until"]; v != "" {
+			at, err := parseValidUntil(v, time.Now())
+			if err != nil {
+				writeCLIError(server.CodeInvalidParams, err.Error())
+				return err
+			}
+			e.ValidUntil = at
 		}
 		e.Namespace, e.Key = contextNSKey(flags)
 		stored, err := store.Put(ctx, e)
@@ -301,6 +327,10 @@ func notesJSON(list []domain.ContextEntry, body bool) []map[string]any {
 	return out
 }
 
+func parseValidUntil(value string, now time.Time) (time.Time, error) {
+	return domain.ParseContextValidUntil(value, now)
+}
+
 func noteJSON(e domain.ContextEntry, body bool) map[string]any {
 	n := map[string]any{
 		"id":       e.ID,
@@ -308,6 +338,13 @@ func noteJSON(e domain.ContextEntry, body bool) map[string]any {
 		"key":      e.Key,
 		"title":    e.Title,
 		"abstract": e.Abstract,
+		"type":     string(e.Type),
+	}
+	if e.Supersedes != "" {
+		n["supersedes"] = e.Supersedes
+	}
+	if !e.ValidUntil.IsZero() {
+		n["valid_until"] = e.ValidUntil.UTC().Format(time.RFC3339)
 	}
 	if e.SessionID != "" {
 		n["session"] = e.SessionID

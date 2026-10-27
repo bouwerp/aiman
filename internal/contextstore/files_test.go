@@ -2,6 +2,7 @@ package contextstore
 
 import (
 	"context"
+	"os"
 	"path"
 	"strings"
 	"testing"
@@ -159,5 +160,96 @@ func TestListEmptyRoot(t *testing.T) {
 	list, err := s.List(context.Background(), domain.ContextQuery{})
 	if err != nil || len(list) != 0 {
 		t.Fatalf("%v %+v", err, list)
+	}
+}
+
+func TestPutRoundTripsTypedFields(t *testing.T) {
+	s := NewFiles(t.TempDir())
+	valid := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	stored, err := s.Put(context.Background(), domain.ContextEntry{
+		Namespace: domain.ContextNSGroup, Key: "G1", Title: "Typed",
+		Type: domain.ContextTypePitfall, Supersedes: "old-1", ValidUntil: valid,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(context.Background(), stored.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != domain.ContextTypePitfall || got.Supersedes != "old-1" || !got.ValidUntil.Equal(valid) {
+		t.Fatalf("got %+v", got)
+	}
+	raw, err := os.ReadFile(absPath(s.root, stored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "type: pitfall") {
+		t.Fatalf("file missing type:\n%s", raw)
+	}
+}
+
+func TestUntypedNoteReadsAsFact(t *testing.T) {
+	s := NewFiles(t.TempDir())
+	writeRawNote(t, s, "legacy_1", `id: legacy_1
+ns: host
+key: host
+title: Legacy
+abstract: old
+created: 2026-01-01T00:00:00Z
+`)
+	got, err := s.Get(context.Background(), "legacy_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != domain.ContextTypeFact {
+		t.Fatalf("type = %q, want fact", got.Type)
+	}
+}
+
+func TestPutRejectsUnknownType(t *testing.T) {
+	s := NewFiles(t.TempDir())
+	_, err := s.Put(context.Background(), domain.ContextEntry{Title: "x", Type: "banana"})
+	if err == nil || !strings.Contains(err.Error(), "invalid type") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestHandEditedBadFieldsStillLoad(t *testing.T) {
+	s := NewFiles(t.TempDir())
+	writeRawNote(t, s, "edited_1", `id: edited_1
+ns: host
+key: host
+title: Edited
+abstract: old
+type: Banana
+valid_until: soon
+created: 2026-01-01T00:00:00Z
+`)
+	got, err := s.Get(context.Background(), "edited_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != domain.ContextTypeFact || !got.ValidUntil.IsZero() {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestSnapshotEntryIsSummary(t *testing.T) {
+	e := EntryFromSnapshot(&domain.SessionSnapshot{Summary: "Fixed auth"}, "", "sid")
+	if e.Type != domain.ContextTypeSummary {
+		t.Fatalf("type = %q, want summary", e.Type)
+	}
+}
+
+func writeRawNote(t *testing.T, s *Files, id, frontmatter string) {
+	t.Helper()
+	p := path.Join(s.root, "host", "host", id+".md")
+	if err := os.MkdirAll(path.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := "---\n" + frontmatter + "---\n\nbody\n"
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

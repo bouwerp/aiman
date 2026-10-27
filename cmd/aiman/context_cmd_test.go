@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -68,5 +69,36 @@ func TestContextRPCRequiresTitle(t *testing.T) {
 	_, _, err := contextRPC("put", []string{"--abstract", "x"})
 	if err == nil {
 		t.Fatal("expected usage error")
+	}
+}
+
+func TestParseValidUntil(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	got, err := parseValidUntil("30d", now)
+	if err != nil || !got.Equal(now.Add(720*time.Hour)) {
+		t.Fatalf("30d = %v %v", got, err)
+	}
+	got, err = parseValidUntil("2026-12-31", now)
+	if err != nil || got.Format(time.RFC3339) != "2026-12-31T00:00:00Z" {
+		t.Fatalf("date = %v %v", got, err)
+	}
+	got, err = parseValidUntil("2030-01-01T10:30:00Z", now)
+	if err != nil || got.Format(time.RFC3339) != "2030-01-01T10:30:00Z" {
+		t.Fatalf("rfc3339 = %v %v", got, err)
+	}
+	if _, err := parseValidUntil("x", now); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestContextRPCTypedPut(t *testing.T) {
+	_, params, err := contextRPC("put", []string{
+		"--title", "T", "--type", "decision", "--supersedes", "old-1", "--valid-until", "2030-01-01",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["type"] != "decision" || params["supersedes"] != "old-1" || params["valid_until"] != "2030-01-01T00:00:00Z" {
+		t.Fatalf("params = %#v", params)
 	}
 }

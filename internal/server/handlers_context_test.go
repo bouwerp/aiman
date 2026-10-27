@@ -162,3 +162,33 @@ func TestContextStoreUnavailable(t *testing.T) {
 		t.Fatalf("want unavailable, got %+v", resp.Error)
 	}
 }
+
+func TestContextPutTypedOverSocket(t *testing.T) {
+	sock := startContextServer(t)
+	put, err := Call(sock, "context.put", map[string]any{
+		"title":       "Auth decision",
+		"group":       "WTB-1",
+		"type":        "decision",
+		"supersedes":  "old-1",
+		"valid_until": "2030-01-01",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if put.Error != nil {
+		t.Fatalf("put: %+v", put.Error)
+	}
+	var res struct {
+		Note ContextNote `json:"note"`
+	}
+	raw, _ := json.Marshal(put.Result)
+	if err := json.Unmarshal(raw, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Note.Type != "decision" || res.Note.Supersedes != "old-1" {
+		t.Fatalf("note = %+v", res.Note)
+	}
+	if res.Note.ValidUntil != "2030-01-01T00:00:00Z" {
+		t.Fatalf("valid_until = %q", res.Note.ValidUntil)
+	}
+}

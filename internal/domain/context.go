@@ -2,6 +2,9 @@ package domain
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -11,16 +14,76 @@ const (
 	ContextNSHost  = "host"
 )
 
+// ContextType is the kind of note a context entry holds.
+type ContextType string
+
+const (
+	ContextTypeDecision   ContextType = "decision"
+	ContextTypePitfall    ContextType = "pitfall"
+	ContextTypeConvention ContextType = "convention"
+	ContextTypeFact       ContextType = "fact"
+	ContextTypeHandover   ContextType = "handover"
+	ContextTypeReview     ContextType = "review"
+	ContextTypeSummary    ContextType = "summary"
+)
+
+// ParseContextType is case-insensitive. An empty value reads as fact.
+func ParseContextType(s string) (ContextType, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "fact":
+		return ContextTypeFact, true
+	case "decision":
+		return ContextTypeDecision, true
+	case "pitfall":
+		return ContextTypePitfall, true
+	case "convention":
+		return ContextTypeConvention, true
+	case "handover":
+		return ContextTypeHandover, true
+	case "review":
+		return ContextTypeReview, true
+	case "summary":
+		return ContextTypeSummary, true
+	default:
+		return "", false
+	}
+}
+
+// ParseContextValidUntil accepts an RFC3339 timestamp, a YYYY-MM-DD date, or
+// a day duration such as 30d. Empty means no expiry.
+func ParseContextValidUntil(value string, now time.Time) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	if strings.HasSuffix(value, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(value, "d"))
+		if err == nil && days >= 0 {
+			return now.UTC().Add(time.Duration(days) * 24 * time.Hour), nil
+		}
+	}
+	if at, err := time.Parse(time.RFC3339, value); err == nil {
+		return at, nil
+	}
+	if at, err := time.Parse("2006-01-02", value); err == nil {
+		return at.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("invalid valid_until %q", value)
+}
+
 // ContextEntry is one durable note in the shared context store.
 type ContextEntry struct {
-	ID        string
-	Namespace string
-	Key       string
-	Title     string
-	Abstract  string
-	Body      string
-	SessionID string
-	CreatedAt time.Time
+	ID         string
+	Namespace  string
+	Key        string
+	Title      string
+	Abstract   string
+	Body       string
+	SessionID  string
+	Type       ContextType
+	Supersedes string
+	ValidUntil time.Time
+	CreatedAt  time.Time
 }
 
 // ContextQuery selects notes. Empty fields are wildcards. Text filters

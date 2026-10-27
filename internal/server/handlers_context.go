@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -11,14 +12,17 @@ import (
 )
 
 type ContextNote struct {
-	ID        string `json:"id"`
-	Namespace string `json:"ns"`
-	Key       string `json:"key"`
-	Title     string `json:"title"`
-	Abstract  string `json:"abstract"`
-	Body      string `json:"body,omitempty"`
-	Session   string `json:"session,omitempty"`
-	Created   string `json:"created,omitempty"`
+	ID         string `json:"id"`
+	Namespace  string `json:"ns"`
+	Key        string `json:"key"`
+	Title      string `json:"title"`
+	Abstract   string `json:"abstract"`
+	Type       string `json:"type,omitempty"`
+	Supersedes string `json:"supersedes,omitempty"`
+	ValidUntil string `json:"valid_until,omitempty"`
+	Body       string `json:"body,omitempty"`
+	Session    string `json:"session,omitempty"`
+	Created    string `json:"created,omitempty"`
 }
 
 type contextQueryParams struct {
@@ -31,25 +35,33 @@ type contextQueryParams struct {
 }
 
 type contextPutParams struct {
-	ID       string `json:"id"`
-	NS       string `json:"ns"`
-	Key      string `json:"key"`
-	Title    string `json:"title"`
-	Abstract string `json:"abstract"`
-	Body     string `json:"body"`
-	Session  string `json:"session"`
-	Group    string `json:"group"`
-	Repo     string `json:"repo"`
+	ID         string `json:"id"`
+	NS         string `json:"ns"`
+	Key        string `json:"key"`
+	Title      string `json:"title"`
+	Abstract   string `json:"abstract"`
+	Body       string `json:"body"`
+	Session    string `json:"session"`
+	Group      string `json:"group"`
+	Repo       string `json:"repo"`
+	Type       string `json:"type"`
+	Supersedes string `json:"supersedes"`
+	ValidUntil string `json:"valid_until"`
 }
 
 func contextNote(e domain.ContextEntry, body bool) ContextNote {
 	n := ContextNote{
-		ID:        e.ID,
-		Namespace: e.Namespace,
-		Key:       e.Key,
-		Title:     e.Title,
-		Abstract:  e.Abstract,
-		Session:   e.SessionID,
+		ID:         e.ID,
+		Namespace:  e.Namespace,
+		Key:        e.Key,
+		Title:      e.Title,
+		Abstract:   e.Abstract,
+		Type:       string(e.Type),
+		Supersedes: e.Supersedes,
+		Session:    e.SessionID,
+	}
+	if !e.ValidUntil.IsZero() {
+		n.ValidUntil = e.ValidUntil.UTC().Format(time.RFC3339)
 	}
 	if !e.CreatedAt.IsZero() {
 		n.Created = e.CreatedAt.UTC().Format(time.RFC3339)
@@ -73,16 +85,27 @@ func (p contextQueryParams) query() domain.ContextQuery {
 	return q
 }
 
-func (p contextPutParams) entry() domain.ContextEntry {
+func (p contextPutParams) entry(now time.Time) (domain.ContextEntry, error) {
 	e := domain.ContextEntry{
-		ID:        p.ID,
-		Namespace: p.NS,
-		Key:       p.Key,
-		Title:     p.Title,
-		Abstract:  p.Abstract,
-		Body:      p.Body,
-		SessionID: p.Session,
+		ID:         p.ID,
+		Namespace:  p.NS,
+		Key:        p.Key,
+		Title:      p.Title,
+		Abstract:   p.Abstract,
+		Body:       p.Body,
+		SessionID:  p.Session,
+		Supersedes: p.Supersedes,
 	}
+	typ, ok := domain.ParseContextType(p.Type)
+	if !ok {
+		return e, fmt.Errorf("invalid type %q", p.Type)
+	}
+	e.Type = typ
+	validUntil, err := domain.ParseContextValidUntil(p.ValidUntil, now)
+	if err != nil {
+		return e, err
+	}
+	e.ValidUntil = validUntil
 	if e.Namespace == "" && strings.TrimSpace(p.Group) != "" {
 		e.Namespace = domain.ContextNSGroup
 		e.Key = p.Group
@@ -91,7 +114,7 @@ func (p contextPutParams) entry() domain.ContextEntry {
 		e.Namespace = domain.ContextNSRepo
 		e.Key = p.Repo
 	}
-	return e
+	return e, nil
 }
 
 func (s *Server) requireStore(id string) (domain.ContextStore, Response, bool) {
@@ -118,7 +141,11 @@ func (s *Server) handleContextPut(ctx context.Context, req Request) Response {
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	stored, err := store.Put(ctx, p.entry())
+	entry, err := p.entry(time.Now())
+	if err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	stored, err := store.Put(ctx, entry)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}

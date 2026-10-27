@@ -26,13 +26,16 @@ const (
 )
 
 type fileMeta struct {
-	ID       string `yaml:"id"`
-	NS       string `yaml:"ns"`
-	Key      string `yaml:"key"`
-	Title    string `yaml:"title"`
-	Abstract string `yaml:"abstract"`
-	Session  string `yaml:"session,omitempty"`
-	Created  string `yaml:"created"`
+	ID         string `yaml:"id"`
+	NS         string `yaml:"ns"`
+	Key        string `yaml:"key"`
+	Title      string `yaml:"title"`
+	Abstract   string `yaml:"abstract"`
+	Type       string `yaml:"type,omitempty"`
+	Supersedes string `yaml:"supersedes,omitempty"`
+	ValidUntil string `yaml:"valid_until,omitempty"`
+	Session    string `yaml:"session,omitempty"`
+	Created    string `yaml:"created"`
 }
 
 // Files is a markdown directory store under root (typically ~/.aiman/context).
@@ -296,6 +299,16 @@ func normalize(e domain.ContextEntry) (domain.ContextEntry, error) {
 	}
 	e.Body = strings.TrimSpace(e.Body)
 	e.SessionID = strings.TrimSpace(e.SessionID)
+	typ, ok := domain.ParseContextType(string(e.Type))
+	if !ok {
+		return e, fmt.Errorf("invalid type %q", e.Type)
+	}
+	e.Type = typ
+	rawSupersedes := strings.TrimSpace(e.Supersedes)
+	e.Supersedes = SafeKey(e.Supersedes)
+	if rawSupersedes != "" && e.Supersedes == "" {
+		return e, fmt.Errorf("invalid supersedes %q", rawSupersedes)
+	}
 	if e.ID == "" {
 		e.ID = uuid.NewString()
 	}
@@ -340,14 +353,21 @@ func absPath(root string, e domain.ContextEntry) string {
 }
 
 func encode(e domain.ContextEntry) ([]byte, error) {
+	validUntil := ""
+	if !e.ValidUntil.IsZero() {
+		validUntil = e.ValidUntil.UTC().Format(time.RFC3339)
+	}
 	meta := fileMeta{
-		ID:       e.ID,
-		NS:       e.Namespace,
-		Key:      e.Key,
-		Title:    e.Title,
-		Abstract: e.Abstract,
-		Session:  e.SessionID,
-		Created:  e.CreatedAt.UTC().Format(time.RFC3339),
+		ID:         e.ID,
+		NS:         e.Namespace,
+		Key:        e.Key,
+		Title:      e.Title,
+		Abstract:   e.Abstract,
+		Type:       string(e.Type),
+		Supersedes: e.Supersedes,
+		ValidUntil: validUntil,
+		Session:    e.SessionID,
+		Created:    e.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	y, err := yaml.Marshal(meta)
 	if err != nil {
@@ -380,15 +400,23 @@ func decode(raw []byte) (domain.ContextEntry, error) {
 	}
 	body := strings.TrimSpace(rest[end+4:])
 	created, _ := time.Parse(time.RFC3339, meta.Created)
+	typ, ok := domain.ParseContextType(meta.Type)
+	if !ok {
+		typ = domain.ContextTypeFact
+	}
+	validUntil, _ := time.Parse(time.RFC3339, meta.ValidUntil)
 	return domain.ContextEntry{
-		ID:        meta.ID,
-		Namespace: meta.NS,
-		Key:       meta.Key,
-		Title:     meta.Title,
-		Abstract:  meta.Abstract,
-		Body:      body,
-		SessionID: meta.Session,
-		CreatedAt: created,
+		ID:         meta.ID,
+		Namespace:  meta.NS,
+		Key:        meta.Key,
+		Title:      meta.Title,
+		Abstract:   meta.Abstract,
+		Body:       body,
+		SessionID:  meta.Session,
+		Type:       typ,
+		Supersedes: SafeKey(meta.Supersedes),
+		ValidUntil: validUntil,
+		CreatedAt:  created,
 	}, nil
 }
 
@@ -496,6 +524,7 @@ func EntryFromSnapshot(snap *domain.SessionSnapshot, group, sessionID string) do
 	e := domain.ContextEntry{
 		Title:     strings.TrimSpace(snap.Summary),
 		SessionID: sessionID,
+		Type:      domain.ContextTypeSummary,
 		CreatedAt: snap.CreatedAt,
 	}
 	if e.Title == "" {
