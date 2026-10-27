@@ -96,7 +96,7 @@ func TestWaitRetriesTransientStatusError(t *testing.T) {
 		if attempts == 1 {
 			return server.Response{}, errors.New("temporary")
 		}
-		return server.Response{Result: map[string]any{"review": verify.Review{ID: "r1", Status: verify.StatusComplete}}}, nil
+		return server.Response{Result: map[string]any{"review": verify.Review{ID: "r1", Status: verify.StatusComplete, Evidence: verify.Evidence{Command: "go test", ExitCode: 0}}}}, nil
 	}
 	var out bytes.Buffer
 	if err := waitForReview(call, "r1", time.Second, time.Millisecond, &out); err != nil {
