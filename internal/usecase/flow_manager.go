@@ -831,8 +831,6 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 	return m.finaliseCreate(ctx, sshMgr, session, config, workingDir)
 }
 
-// shellQuote wraps s for POSIX sh so a value containing spaces or shell
-// metacharacters survives as a single argument.
 // issueType is the JIRA type of the issue a session starts from, if any.
 func issueType(issue *domain.Issue) string {
 	if issue == nil {
@@ -841,6 +839,8 @@ func issueType(issue *domain.Issue) string {
 	return issue.Type
 }
 
+// shellQuote wraps s for POSIX sh so a value containing spaces or shell
+// metacharacters survives as a single argument.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
