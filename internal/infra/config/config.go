@@ -26,6 +26,7 @@ type Config struct {
 	AI            AIConfig                 `yaml:"ai,omitempty"`
 	AWS           AWSDefaults              `yaml:"aws,omitempty"`
 	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
+	Agents        AgentsConfig             `yaml:"agents,omitempty"`
 	Sync          SyncConfig               `yaml:"sync,omitempty"`
 	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
 	Usage         UsageConfig              `yaml:"usage,omitempty"`
@@ -54,6 +55,7 @@ type ServeConfig struct {
 	Git           GitConfig                `yaml:"git,omitempty"`
 	Skills        SkillsConfig             `yaml:"skills,omitempty"`
 	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
+	Agents        AgentsConfig             `yaml:"agents,omitempty"`
 	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
 	Usage         UsageConfig              `yaml:"usage,omitempty"`
 	// Notifications configures push/webhook/Slack delivery.
@@ -63,6 +65,12 @@ type ServeConfig struct {
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
+}
+
+// AgentsConfig configures agent selection shared by coordinator sessions.
+type AgentsConfig struct {
+	// Preferred is the order in which a coordinator may start child agents.
+	Preferred []string `yaml:"preferred,omitempty"`
 }
 
 // VerifyConfig configures reviewer sessions started by aiman verify.
@@ -92,6 +100,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Git:           c.Git,
 		Skills:        c.Skills,
 		AgentDefaults: c.AgentDefaults,
+		Agents:        c.Agents,
 		Gateway:       c.Gateway,
 		Usage:         c.Usage,
 		Notifications: c.NotificationsFor(host),

@@ -171,6 +171,7 @@ const (
 	viewStateAssignGroup
 	viewStateNewGroup
 	viewStateAgentDefaults
+	viewStateAgentPreferred
 	viewStateContextStats
 	viewStateUsage
 	viewStateReviveRemotePicker // pick which remote to scan for abandoned worktrees
@@ -372,6 +373,7 @@ type Model struct {
 	gitSetup             GitSetupModel
 	generalSetup         GeneralSetupModel
 	agentDefaults        AgentDefaultsModel
+	agentPreferred       AgentPreferredModel
 	contextStats         ContextStatsModel
 	usageView            UsageViewModel
 	aiSetup              AISetupModel
@@ -914,6 +916,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 		menuItem{title: "Agent defaults", desc: "Default model and thinking effort per agent", action: viewStateAgentDefaults},
+		menuItem{title: "Preferred agents", desc: "Order of agents a coordinator may start", action: viewStateAgentPreferred},
 		menuItem{title: "Shared context", desc: "Store size, lookups, and pack usage on remotes", action: viewStateContextStats},
 		menuItem{title: "Memory candidates", desc: memoryMenuDesc(0), action: viewStateMemoryCandidates},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
@@ -3053,6 +3056,9 @@ func (m *Model) dispatchSettingsUpdate(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case viewStateAgentDefaults:
 		model, cmd := m.handleAgentDefaultsUpdate(msg)
 		return model, cmd, true
+	case viewStateAgentPreferred:
+		model, cmd := m.handleAgentPreferredUpdate(msg)
+		return model, cmd, true
 	case viewStateContextStats:
 		model, cmd := m.handleContextStatsUpdate(msg)
 		return model, cmd, true
@@ -3496,6 +3502,8 @@ func (m *Model) renderSettingsView() (string, bool) {
 	switch m.state {
 	case viewStateAgentDefaults:
 		return m.agentDefaults.viewString(), true
+	case viewStateAgentPreferred:
+		return m.agentPreferred.viewString(), true
 	case viewStateContextStats:
 		return m.contextStats.viewString(), true
 	case viewStateUsage:
@@ -5545,6 +5553,11 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = i.action
 					return m, m.agentDefaults.Init()
 				}
+				if i.action == viewStateAgentPreferred {
+					m.agentPreferred = NewAgentPreferredModel(m.cfg)
+					m.state = i.action
+					return m, m.agentPreferred.Init()
+				}
 				if i.action == viewStateContextStats {
 					return m, m.enterContextStats()
 				}
@@ -5987,6 +6000,20 @@ func (m *Model) handleGeneralSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.generalSetup = subModel.(GeneralSetupModel)
 	if m.generalSetup.saved {
 		m.generalSetup.saved = false
+		m.state = viewStateMenu
+	}
+	return m, cmd
+}
+
+func (m *Model) handleAgentPreferredUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
+		m.state = viewStateMenu
+		return m, nil
+	}
+	subModel, cmd := m.agentPreferred.Update(msg)
+	m.agentPreferred = subModel.(AgentPreferredModel)
+	if m.agentPreferred.saved {
+		m.agentPreferred.saved = false
 		m.state = viewStateMenu
 	}
 	return m, cmd

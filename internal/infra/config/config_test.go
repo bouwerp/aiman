@@ -215,3 +215,25 @@ func TestMarshalServeConfigCarriesVerify(t *testing.T) {
 		t.Fatalf("verify = %+v, want %+v\n%s", got.Verify, cfg.Verify, body)
 	}
 }
+
+func TestMarshalServeConfigCarriesPreferred(t *testing.T) {
+	cfg := &Config{Agents: AgentsConfig{Preferred: []string{"claude", "grok"}}}
+	body, err := cfg.MarshalServeConfig("h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ServeConfig
+	if err := yaml.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Agents.Preferred, []string{"claude", "grok"}) {
+		t.Fatalf("preferred = %v\n%s", got.Agents.Preferred, body)
+	}
+	var omitted ServeConfig
+	if err := yaml.Unmarshal([]byte("{}"), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if omitted.Agents.Preferred != nil {
+		t.Fatalf("omitted preferred = %v", omitted.Agents.Preferred)
+	}
+}
