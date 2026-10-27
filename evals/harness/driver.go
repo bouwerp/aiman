@@ -20,6 +20,7 @@ import (
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usage"
 	"github.com/bouwerp/aiman/internal/usecase"
+	"github.com/bouwerp/aiman/internal/verify"
 )
 
 // Harness is one in-process serve, its temp database, and the fake remote the
@@ -29,13 +30,16 @@ type Harness struct {
 	Socket string
 	Repo   *sqlite.Repository
 
-	t      *testing.T
-	srv    *server.Server
-	remote *FakeRemote
-	usage  *usage.Tracker
-	cancel context.CancelFunc
-	done   chan struct{}
-	once   sync.Once
+	t        *testing.T
+	srv      *server.Server
+	remote   *FakeRemote
+	usage    *usage.Tracker
+	verifier *verify.Manager
+	reviews  *verify.Store
+	terminal *evalTerminal
+	cancel   context.CancelFunc
+	done     chan struct{}
+	once     sync.Once
 }
 
 // New starts serve on a short temp socket. pty is nil, so every session must
@@ -74,6 +78,9 @@ func New(t *testing.T) *Harness {
 // Close stops serve and closes the database. Safe to call more than once.
 func (h *Harness) Close() {
 	h.once.Do(func() {
+		if h.verifier != nil {
+			h.verifier.Close()
+		}
 		h.cancel()
 		select {
 		case <-h.done:
@@ -161,6 +168,15 @@ func (h *Harness) Events(sessionID string) []domain.SessionEvent {
 // Execs is every command the fake remote received.
 func (h *Harness) Execs() []string {
 	return h.remote.Execs()
+}
+
+// RepoDir is the registered session's worktree path.
+func (h *Harness) RepoDir(id string) string {
+	sess, err := h.Repo.Get(context.Background(), id)
+	if err != nil {
+		return ""
+	}
+	return sess.WorktreePath
 }
 
 // SetPane sets the pane the fake remote captures.
