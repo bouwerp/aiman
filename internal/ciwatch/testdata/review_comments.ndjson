@@ -1,0 +1,2 @@
+{"id":5,"body":"Rename this.","path":"internal/a.go","line":null,"original_line":17,"in_reply_to_id":null,"created_at":"2026-10-27T12:00:00Z","user":"alice"}
+{"id":6,"body":"Done.","path":"internal/a.go","line":20,"original_line":17,"in_reply_to_id":5,"created_at":"2026-10-27T12:05:00Z","user":"bob"}
