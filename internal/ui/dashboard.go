@@ -3029,10 +3029,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applySyncHealthMsg(msg, cmds)
 	case sessionCreateMsg:
 		return m.applySessionCreateMsg(msg, cmds)
-	case daemonProbeMsg:
-		return m.applyDaemonProbe(msg)
-	case serviceOpMsg:
-		return m.applyServiceOp(msg)
+	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg:
+		return m.routeRemoteServiceMsg(msg)
 	case discoveryResultMsg:
 		// Startup and refresh both deliver this after the dashboard is already
 		// on the main list. Routing by view state drops the scan, so a create

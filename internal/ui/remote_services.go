@@ -10,6 +10,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/remotesvc"
+	"github.com/bouwerp/aiman/internal/infra/rtk"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 )
 
@@ -150,6 +151,89 @@ func remoteServiceOpCmd(cfg *config.Config, host string, kind remotesvc.Kind, op
 		_, err := runRemoteScript(cfg, host, script)
 		return serviceOpMsg{host: host, kind: kind, op: op, auto: auto, err: err}
 	}
+}
+
+// rtkInstallMsg is the result of rtkInstallCmd. report is parsed even when
+// err is set, because a wrong binary exits non-zero.
+type rtkInstallMsg struct {
+	host   string
+	report rtk.InstallReport
+	err    error
+}
+
+// rtkInstallCmd installs RTK on host and registers its agent hooks. It runs
+// under remotesvc.OpTimeout like the service ops.
+func rtkInstallCmd(cfg *config.Config, host string) tea.Cmd {
+	return func() tea.Msg {
+		out, err := runRemoteScript(cfg, host, rtk.InstallScript())
+		return rtkInstallMsg{host: host, report: rtk.ParseInstall(out), err: err}
+	}
+}
+
+func (m *Model) applyRTKInstall(msg rtkInstallMsg) (tea.Model, tea.Cmd) {
+	m.state = m.loadingNext
+	reprobe := probeRemoteServiceCmd(m.cfg, msg.host, remotesvc.KindServe)
+	if msg.report.WrongBinary {
+		toast := `⚠️  another "rtk" is on PATH on ` + msg.host + " (Rust Type Kit?)"
+		return m, tea.Batch(m.showToast(toast, true, 8*time.Second), reprobe)
+	}
+	if msg.err != nil {
+		m.lastError = fmt.Sprintf("install RTK on %s: %v", msg.host, msg.err)
+		m.state = viewStateError
+		return m, nil
+	}
+	toast, failed := rtkInstallToast(msg.host, msg.report)
+	return m, tea.Batch(m.showToast(toast, failed, 6*time.Second), reprobe)
+}
+
+// rtkInstallToast lists hooks in rtk.HookTargets order. Any failed hook
+// makes the toast an error.
+func rtkInstallToast(host string, r rtk.InstallReport) (string, bool) {
+	var ok, failed []string
+	for _, h := range rtk.HookTargets {
+		registered, present := r.Hooks[h.Binary]
+		switch {
+		case !present:
+		case registered:
+			ok = append(ok, h.Binary)
+		default:
+			failed = append(failed, h.Binary)
+		}
+	}
+	toast := "✓  RTK " + r.Version + " on " + host
+	if len(ok) > 0 {
+		toast += " · hooks: " + strings.Join(ok, ", ")
+	}
+	if len(failed) > 0 {
+		toast += " · failed: " + strings.Join(failed, ", ")
+	}
+	return toast, len(failed) > 0
+}
+
+func (m *Model) runSelectedRTKInstall() (tea.Model, tea.Cmd) {
+	d, ok := m.selectedAgentAPIDaemon()
+	if !ok {
+		return m, nil
+	}
+	m.loadingMsg = "Installing RTK on " + d.RemoteHost + "..."
+	m.loadingNext = viewStateAgentAPI
+	m.state = viewStateLoading
+	return m, rtkInstallCmd(m.cfg, d.RemoteHost)
+}
+
+// routeRemoteServiceMsg handles probe and op results on every view: an op
+// started on the Agent API page or the Daemons tab finishes after the user
+// may have moved on.
+func (m *Model) routeRemoteServiceMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case daemonProbeMsg:
+		return m.applyDaemonProbe(msg)
+	case serviceOpMsg:
+		return m.applyServiceOp(msg)
+	case rtkInstallMsg:
+		return m.applyRTKInstall(msg)
+	}
+	return m, nil
 }
 
 func (m *Model) applyDaemonProbe(msg daemonProbeMsg) (tea.Model, tea.Cmd) {

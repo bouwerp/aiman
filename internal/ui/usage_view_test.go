@@ -223,6 +223,19 @@ func TestUsageViewRendersHealthOnHostLine(t *testing.T) {
 	}
 }
 
+func TestUsageRollupAddsRTKGainToHostLine(t *testing.T) {
+	h := usageHost{host: "alpha"}
+	h.applyRollup(usageRollupMsg{
+		host:   "alpha",
+		mode:   usageByIssue,
+		health: usage.Health{Known: true, ReadCalls: 5, EditCalls: 2},
+		rtk:    "rtk: 1.2M tokens saved (80%) over 300 commands",
+	}, usageByIssue)
+	if want := "READ:EDIT 5:2 · rtk: 1.2M tokens saved (80%) over 300 commands"; h.extra != want {
+		t.Fatalf("extra = %q, want %q", h.extra, want)
+	}
+}
+
 func TestUsageViewTabSwitchesMode(t *testing.T) {
 	cfg := twoRemoteCfg()
 	m := NewModel(cfg, nil, nil, nil, nil, nil, nil)

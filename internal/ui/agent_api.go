@@ -9,6 +9,8 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/remotesvc"
+	"github.com/bouwerp/aiman/internal/infra/rtk"
+	"github.com/bouwerp/aiman/internal/usage"
 )
 
 func (m *Model) enterAgentAPI() tea.Cmd {
@@ -96,6 +98,8 @@ func (m *Model) handleAgentAPIUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "ctrl+k":
 		model, cmd, _ := m.runSelectedServiceOp("stop", "Stopping")
 		return model, cmd
+	case "t":
+		return m.runSelectedRTKInstall()
 	case "r":
 		if d, ok := m.selectedAgentAPIDaemon(); ok {
 			m.markAgentAPIProbing(d.RemoteHost)
@@ -181,8 +185,11 @@ func (m *Model) renderAgentAPIView() string {
 		b.WriteString("\n")
 		if m.agentAPIProbing[d.RemoteHost] {
 			b.WriteString("  " + dimStyle.Render("Probing remote…") + "\n")
-		} else if hint := agentAPIStatusHint(d); hint != "" {
-			b.WriteString("  " + hint + "\n")
+		} else {
+			if hint := agentAPIStatusHint(d); hint != "" {
+				b.WriteString("  " + hint + "\n")
+			}
+			b.WriteString("  " + agentAPIRTKLine(d) + "\n")
 		}
 		if logs := strings.TrimSpace(d.Logs); logs != "" {
 			b.WriteString("\n" + dimStyle.Render("  Logs") + "\n")
@@ -192,8 +199,25 @@ func (m *Model) renderAgentAPIView() string {
 		}
 	}
 
-	b.WriteString("\n  " + dimStyle.Render("i install/enable  s restart  c reload  u update  r probe  ctrl+k stop  esc back") + "\n")
+	b.WriteString("\n  " + dimStyle.Render("i install/enable  s restart  c reload  u update  t install RTK  r probe  ctrl+k stop  esc back") + "\n")
 	return docStyle.Render(b.String())
+}
+
+// agentAPIRTKLine reports the RTK version from the last serve probe.
+func agentAPIRTKLine(d domain.Daemon) string {
+	if d.RTKVersion == "" {
+		return "RTK: not installed (t to install)"
+	}
+	return "RTK: " + d.RTKVersion
+}
+
+// rtkGainLine is the per-host line on the $ view. A host without RTK shows
+// nothing.
+func rtkGainLine(g rtk.Gain, installed bool) string {
+	if !installed {
+		return ""
+	}
+	return fmt.Sprintf("rtk: %s tokens saved (%.0f%%) over %d commands", usage.FormatTokens(g.SavedTokens), g.SavingsPct, g.Commands)
 }
 
 func agentAPIStatusHint(d domain.Daemon) string {

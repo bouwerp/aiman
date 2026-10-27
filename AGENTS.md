@@ -191,7 +191,10 @@ Admin Menu (`m`) → **Agent API** is the settings page for `aiman serve` (one r
 | `c` | Reload (restart; serve re-reads remote `~/.aiman/config.yaml`) |
 | `u` | Update binary from GitHub, then restart |
 | `ctrl+k` | Stop |
+| `t` | Install RTK and register its agent hooks (`internal/infra/rtk`) |
 | `r` | Probe driver/status/version/socket/logs |
+
+`t` runs `rtk.InstallScript` under `remotesvc.OpTimeout` and reports an `rtkInstallMsg`, routed in `Update` next to `serviceOpMsg`; the model then re-probes serve. The serve probe prints `RTK=<version>` into `Daemon.RTKVersion`, which the page shows as `RTK: <version>` or `RTK: not installed (t to install)`. Hooks are registered only for `rtk.HookTargets` (Claude, Codex, Cursor, Gemini, Copilot, Pi). The `$` usage view runs `rtk.FetchGain` per host and appends `rtkGainLine` to `usageHost.extra`. Never run plain `rtk gain`: without `--format json` it can open a live dashboard. Never export `RTK_VERSION` into the install script's environment; RTK's `install.sh` reads it as a version pin.
 
 Session create also calls `ensureRemoteServer` if `~/.aiman/aiman.sock` is missing.
 
@@ -277,6 +280,8 @@ The TUI wizard (`n` key) drives the user through:
 - `mutagen sync create`
 - push AWS STS credentials
 
+After the agent starts, `CreateSession` runs `nice graphify update .` detached in the worktree when `graphify` is on the remote PATH (`internal/infra/graphify`), adding `/graphify-out/` to `info/exclude` when the repo does not ignore it. `.aiman_task.md` then gains one line pointing at `graphify query`.
+
 Status messages flow back to the TUI via `m.sendStatus()` → `statusMsg` → rendered in `viewStateLoading`.
 
 ---
@@ -321,6 +326,7 @@ Key config fields:
 - `agent_defaults` — per-binary `model` and `effort` applied at session launch
 - `aws.include_profiles` — local `~/.aws` profiles aiman may use (omit = all)
 - `skills.repo` — git URL for skills repository
+- `repos` — per-repo worktree bootstrap keyed by `owner/name`: `copy` and `symlink` (paths relative to the repo root, taken from the main checkout, never overwriting) and `setup` (runs detached; log `aiman-setup.log` in the worktree's git dir). `CreateSession` applies it after the worktree is resolved, only for worktrees that create made (not attach, reuse, ad-hoc, no-repo or prepared). `MarshalServeConfig` copies it so serve-side creates see it.
 
 `config.DirName = ".aiman"` — used to construct all local paths.
 

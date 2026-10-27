@@ -248,6 +248,40 @@ aiman
 9. **Summary**: Review selected issue/branch/repo/dir/agent before creation
    - If AWS credential delegation is configured for the remote, editable **Profile** and **Region** fields appear — pre-filled with remote defaults, overridable per session (Tab cycles between fields)
 
+#### Worktree bootstrap and code graph
+
+A fresh worktree has no `.env.local`, no `node_modules` and no build cache. The `repos:`
+config block, keyed by `owner/name`, prepares it during create:
+
+```yaml
+repos:
+  owner/name:
+    copy: [.env.local]          # copied from the main checkout
+    symlink: [node_modules]     # linked to the main checkout's copy
+    setup: "make deps"          # runs in the background in the worktree
+```
+
+- Paths are relative to the repo root. Absolute paths and `..` are rejected when the
+  config is validated.
+- A path missing in the main checkout is skipped. A path that already exists in the
+  worktree is never overwritten.
+- Each symlink is added to the repo's `info/exclude`, because a `node_modules/` ignore
+  pattern does not match a symlink.
+- `setup` runs detached, so a slow `npm ci` holds neither the create nor the agent
+  launch. Its log is `aiman-setup.log` in the worktree's git dir, and the initial prompt
+  tells the agent to check it before building or running tests.
+- Bootstrap runs only for a worktree the create made (new or existing branch). Attaching,
+  reusing a workspace, ad-hoc, no-repo and prepared reviewer worktrees are skipped. A
+  bootstrap failure is reported as a progress line and does not fail the create.
+- It runs inside `CreateSession`, so laptop creates and serve's `session.create` both
+  apply it. The Agent API settings sync copies `repos:` to the remote.
+
+When `graphify` is on the remote's PATH, aiman starts `nice graphify update .` in the
+worktree after the agent launches. It runs detached, logs to `aiman-graphify.log` in the
+worktree's git dir, and `/graphify-out/` is added to `info/exclude` when the repo does
+not already ignore it. A JIRA session's `.aiman_task.md` gains one line pointing the
+agent at `graphify query`. Without graphify nothing runs.
+
 ### Creating an Ad-hoc Session
 
 Skip the JIRA/branch/repo flow and jump straight to agent selection:
@@ -572,7 +606,28 @@ Creating a session also starts it if `~/.aiman/aiman.sock` is missing. `aiman se
 | `c` | Reload (restart; serve re-reads remote `~/.aiman/config.yaml`) |
 | `u` | Reinstall the latest GitHub release, then restart |
 | `ctrl+k` | Stop |
+| `t` | Install [RTK](https://github.com/rtk-ai/rtk) and register its agent hooks |
 | `r` | Probe status, version, socket (serve), and logs |
+
+#### RTK
+
+[RTK](https://github.com/rtk-ai/rtk) is a CLI proxy that shrinks command output before it
+reaches the agent. `t` installs it on the selected remote:
+
+- Installs into `~/.local/bin` with RTK's install script (no sudo), the Apache-2.0 edition
+  (`RTK_EDITION=oss`), with telemetry blocked (`RTK_TELEMETRY_DISABLED=1`). An `rtk`
+  already on PATH is kept.
+- Checks that `rtk` is RTK and not Rust Type Kit (`cargo install rtk`). A wrong binary
+  stops the install with a warning toast.
+- Runs `rtk init --global … --auto-patch` for each installed agent RTK can hook
+  user-globally: Claude Code (`claude`), Codex, Cursor (`cursor-agent`), Gemini, Copilot
+  and Pi. Antigravity and Kilo Code hooks are project-scoped in RTK; Grok, Muse Code,
+  Deep Code and Ageni are not supported. The toast lists hooks that registered and any
+  that failed.
+
+The detail area under the selected remote shows `RTK: <version>` from the serve probe, or
+`RTK: not installed (t to install)`. The `$` usage view adds each host's all-time savings
+from `rtk gain --all --format json` to its host line.
 
 Linger is enabled *before* `systemctl --user` so the first SSH to a host with no lingering user instance can still install. Scripts set `XDG_RUNTIME_DIR` and the session bus so `systemctl --user` works over SSH. If user systemd is still unavailable, Aiman falls back to `nohup` plus `~/.aiman/serve.pid` (or `trigger.pid`).
 
@@ -935,6 +990,14 @@ remotes:
     #   - profile: prod
     #     source_profile: my-prod-profile
     #     account_id: "210987654321"
+
+# Per-repo worktree bootstrap, keyed by owner/name. See
+# "Worktree bootstrap and code graph".
+repos:
+  mycompany/web:
+    copy: [.env.local]
+    symlink: [node_modules]
+    setup: "make deps"
 
 active_remote: devbox
 ```

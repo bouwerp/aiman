@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/rtk"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/usage"
 	"github.com/bouwerp/aiman/internal/usecase"
@@ -29,8 +30,8 @@ const (
 
 const usageViewFooter = "tab by ticket/day  r refresh  esc back"
 
-// usageHost is one remote's rollup. extra is one dim line under the host
-// name; this view leaves it empty. unpriced is the visible mode's model ids.
+// usageHost is one remote's rollup. extra is the dim text on the host line:
+// tool-call health and RTK savings. unpriced is the visible mode's model ids.
 // unpricedBy keeps the other mode so a late fetch does not overwrite the
 // list on screen.
 type usageHost struct {
@@ -57,6 +58,7 @@ type usageRollupMsg struct {
 	mode   usageViewMode
 	rep    usage.Report
 	health usage.Health
+	rtk    string
 	err    error
 }
 
@@ -101,7 +103,7 @@ func newUsageView(cfg *config.Config) UsageViewModel {
 func fetchUsageRollupCmd(cfg *config.Config, host string, mode usageViewMode) tea.Cmd {
 	return func() tea.Msg {
 		rep, health, err := fetchUsageRollup(cfg, host, mode)
-		return usageRollupMsg{host: host, mode: mode, rep: rep, health: health, err: err}
+		return usageRollupMsg{host: host, mode: mode, rep: rep, health: health, rtk: fetchRTKGainLine(cfg, host), err: err}
 	}
 }
 
@@ -125,6 +127,23 @@ func fetchUsageRollup(cfg *config.Config, host string, mode usageViewMode) (usag
 		return usage.Report{}, usage.Health{}, fmt.Errorf("decode usage: %w", err)
 	}
 	return body.Usage, body.Health, nil
+}
+
+// fetchRTKGainLine reads `rtk gain` over SSH. RTK savings are an extra, so
+// a failure leaves the line empty rather than failing the rollup.
+func fetchRTKGainLine(cfg *config.Config, host string) string {
+	remote, ok := remoteForHost(cfg, host)
+	if !ok {
+		return ""
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	g, installed, err := rtk.FetchGain(ctx, mgr)
+	if err != nil {
+		return ""
+	}
+	return rtkGainLine(g, installed)
 }
 
 func fetchUsageRollups(cfg *config.Config, hosts []usageHost, mode usageViewMode) tea.Cmd {
@@ -172,7 +191,7 @@ func (h *usageHost) applyRollup(msg usageRollupMsg, current usageViewMode) {
 	}
 	h.rows[msg.mode] = rows
 	h.health = msg.health
-	h.extra = healthExtra(msg.health)
+	h.extra = joinNonEmpty(" · ", healthExtra(msg.health), msg.rtk)
 	h.rememberUnpriced(msg.mode, msg.rep.Unpriced)
 	if msg.mode != current {
 		return
@@ -427,6 +446,16 @@ func healthExtra(h usage.Health) string {
 		line += " · first test " + h.FirstTestAt.Format("15:04")
 	}
 	return line
+}
+
+func joinNonEmpty(sep string, parts ...string) string {
+	kept := parts[:0:0]
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, sep)
 }
 
 func (h usageHost) statusLine(dim lipgloss.Style, mode usageViewMode) string {
