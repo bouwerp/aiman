@@ -150,7 +150,7 @@ func FetchGain(ctx context.Context, ex Executor) (g Gain, installed bool, err er
 	if err != nil {
 		return Gain{}, false, fmt.Errorf("rtk gain: %w", err)
 	}
-	if strings.TrimSpace(out) == missingMarker {
+	if hasLine(out, missingMarker) {
 		return Gain{}, false, nil
 	}
 	// SSH output is combined, so stderr noise can surround the JSON object.
@@ -160,4 +160,15 @@ func FetchGain(ctx context.Context, ex Executor) (g Gain, installed bool, err er
 	}
 	g, err = ParseGain([]byte(out[start : end+1]))
 	return g, true, err
+}
+
+// hasLine reports whether out has a line equal to want. A login shell can
+// print profile noise around the line the command itself writes.
+func hasLine(out, want string) bool {
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
 }

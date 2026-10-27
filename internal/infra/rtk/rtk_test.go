@@ -111,3 +111,11 @@ func TestFetchGainExecuteError(t *testing.T) {
 		t.Fatalf("installed=%v err=%v", installed, err)
 	}
 }
+
+// A login shell's profile noise around the marker still means "not installed".
+func TestFetchGainMissingWithShellNoise(t *testing.T) {
+	g, installed, err := FetchGain(context.Background(), &fakeExecutor{out: "Welcome to devbox\nnvm: using node 22\nRTK_MISSING\n"})
+	if err != nil || installed || g != (Gain{}) {
+		t.Fatalf("got %+v installed=%v err=%v", g, installed, err)
+	}
+}
