@@ -68,6 +68,8 @@ type Watcher struct {
 	// mu serialises polls, so a Kick and the ticker never react to the same
 	// PR state twice.
 	mu sync.Mutex
+	// viewer is the gh login, cached once known; guarded by mu.
+	viewer string
 }
 
 // New returns a watcher over d.
@@ -120,9 +122,4 @@ func (w *Watcher) PollSession(ctx context.Context, s domain.Session) error {
 		return err
 	}
 	return w.reactToComments(ctx, s, st, pr)
-}
-
-// reactToComments is filled in by the review-comment reaction.
-func (w *Watcher) reactToComments(context.Context, domain.Session, domain.PRWatchState, PRView) error {
-	return nil
 }
