@@ -34,6 +34,10 @@ type healthAcc struct {
 	h     Health
 	reads map[string]bool
 	seen  map[string]bool
+	// fileTool is true when at least one Read/Edit/Write targeted a real
+	// worktree path. Shell-only rollouts (exec_command, local_shell_call)
+	// do not make health known.
+	fileTool bool
 }
 
 func newHealthAcc() *healthAcc {
@@ -44,6 +48,9 @@ func (a *healthAcc) finish() Health {
 	a.h.ReadEditRatio = 0
 	if a.h.EditCalls > 0 {
 		a.h.ReadEditRatio = float64(a.h.ReadCalls) / float64(a.h.EditCalls)
+	}
+	if !a.fileTool {
+		a.h.Known = false
 	}
 	return a.h
 }
@@ -189,13 +196,17 @@ func (a *healthAcc) applyTool(name, path, command, worktree string, cmds []strin
 	switch name {
 	case "Read":
 		a.h.ReadCalls++
-		if key, ok := healthPathKey(worktree, path); ok {
+		if key, ok := healthPathKey(worktree, path); ok && path != "" {
 			a.reads[key] = true
+			a.fileTool = true
 		}
 	case "Edit", "Write":
 		key, ok := healthPathKey(worktree, path)
 		if path != "" && !ok {
 			return
+		}
+		if path != "" && ok {
+			a.fileTool = true
 		}
 		a.h.EditCalls++
 		if key != "" && !a.reads[key] {

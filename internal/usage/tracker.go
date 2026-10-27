@@ -281,7 +281,10 @@ func (t *Tracker) checkBudget(ctx context.Context, s domain.Session) {
 		used += b.Tokens.Input + b.Tokens.Output + b.Tokens.CacheRead + b.Tokens.CacheCreation()
 	}
 	last := ""
-	if metas, err := t.store.UsageSessions(ctx); err == nil {
+	if metas, err := t.store.UsageSessions(ctx); err != nil {
+		log.Printf("usage tracker: budget %s: %v", s.ID, err)
+		return
+	} else {
 		for _, m := range metas {
 			if m.SessionID == s.ID {
 				last = m.BudgetState

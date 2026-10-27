@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -182,7 +183,12 @@ func runSession(args []string) error {
 			}
 		}
 		if v := flags["budget-tokens"]; v != "" {
-			params["budget_tokens"] = atoi64(v)
+			bt, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				writeCLIError(server.CodeInvalidParams, "budget-tokens must be a non-negative integer: "+v)
+				return errUsage
+			}
+			params["budget_tokens"] = bt
 		}
 		if _, ok := flags["quick"]; ok {
 			params["quick"] = true
@@ -249,17 +255,6 @@ func takeFlags(args []string) (map[string]string, []string) {
 		flags[key] = "1"
 	}
 	return flags, rest
-}
-
-func atoi64(s string) int64 {
-	var n int64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return n
-		}
-		n = n*10 + int64(c-'0')
-	}
-	return n
 }
 
 func atoi(s string) int {

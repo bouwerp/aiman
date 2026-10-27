@@ -69,6 +69,8 @@ func TestHealthClaudeFirstTestAndRetry(t *testing.T) {
 }
 
 func TestHealthCodexExecCommand(t *testing.T) {
+	// Shell-only rollout: exec_command + custom_tool_call exec. No file
+	// tools, so health is not known (no READ:EDIT data to show).
 	var b strings.Builder
 	b.WriteString(`{"timestamp":"2026-10-22T06:08:01.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"go test ./internal/usage/\",\"workdir\":\"/wt\"}"}}` + "\n")
 	b.WriteString(`{"timestamp":"2026-10-22T06:08:02.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","arguments":"{\"cmd\":\"go build ./...\",\"workdir\":\"/wt\"}"}}` + "\n")
@@ -76,8 +78,8 @@ func TestHealthCodexExecCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !h.Known || h.ToolCalls != 2 || h.ReadCalls != 0 || h.EditCalls != 0 {
-		t.Fatalf("health = %+v", h)
+	if h.Known || h.ToolCalls != 2 || h.ReadCalls != 0 || h.EditCalls != 0 {
+		t.Fatalf("health = %+v, want Known=false for shell-only rollout", h)
 	}
 	if h.FirstTestAt.IsZero() {
 		t.Fatalf("FirstTestAt zero, want exec_command test time: %+v", h)
