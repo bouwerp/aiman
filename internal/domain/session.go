@@ -256,13 +256,16 @@ type SessionConfig struct {
 	// restarting under a different agent so the previous vendor conversation
 	// is not handed to the new binary.
 	FreshAgent     bool
-	ExistingBranch bool           // start from an existing remote branch instead of creating a new one
-	AttachExisting bool           // attach to an already-existing worktree without attempting git setup
-	BaseBranch     string         // clone from this branch instead of the repository default branch
-	ReuseWorkspace bool           // bypass git worktree and execute directly in the main clone
-	AdHoc          bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
-	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
-	RemoteHost     string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
+	ExistingBranch bool   // start from an existing remote branch instead of creating a new one
+	AttachExisting bool   // attach to an already-existing worktree without attempting git setup
+	BaseBranch     string // clone from this branch instead of the repository default branch
+	// PreparedWorktree is an existing directory used as the worktree as is,
+	// with no clone, fetch or worktree add (a verifier's detached snapshot).
+	PreparedWorktree string
+	ReuseWorkspace   bool           // bypass git worktree and execute directly in the main clone
+	AdHoc            bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
+	SSHManager       RemoteExecutor // remote to create the session on; uses FlowManager default if nil
+	RemoteHost       string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
 	// SessionBackend selects the terminal runtime for this session:
 	// "pty" (default, aiman serve's built-in runtime) or "tmux".
 	SessionBackend string

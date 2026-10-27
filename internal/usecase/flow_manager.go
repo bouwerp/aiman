@@ -233,6 +233,8 @@ func sessionBaseBranch(configured, detected string) string {
 // root; repository sessions get a git worktree.
 func (m *FlowManager) resolveWorktree(ctx context.Context, sshMgr domain.RemoteExecutor, config domain.SessionConfig, branch string) (domain.Worktree, error) {
 	switch {
+	case config.PreparedWorktree != "":
+		return domain.Worktree{Path: config.PreparedWorktree}, nil
 	case config.AdHoc:
 		// Ad-hoc sessions get their own subdirectory under the repos root so
 		// they never run in the root itself.  Use the branch label (already
