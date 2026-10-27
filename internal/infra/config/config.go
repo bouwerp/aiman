@@ -70,8 +70,12 @@ type ServeConfig struct {
 // AgentsConfig configures agent selection shared by coordinator sessions.
 type AgentsConfig struct {
 	// Preferred is the order in which a coordinator may start child agents.
-	Preferred []string `yaml:"preferred,omitempty"`
+	Preferred []string `yaml:"preferred"`
 }
+
+// IsZero keeps an untouched agents block out of the config while still
+// writing preferred: [] when the user clears a list.
+func (a AgentsConfig) IsZero() bool { return a.Preferred == nil }
 
 // VerifyConfig configures reviewer sessions started by aiman verify.
 type VerifyConfig struct {

@@ -6006,7 +6006,7 @@ func (m *Model) handleGeneralSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleAgentPreferredUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" && !m.agentPreferred.adding {
 		m.state = viewStateMenu
 		return m, nil
 	}
