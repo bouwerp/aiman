@@ -1,0 +1,65 @@
+<style>
+  .tui{font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.45;background:#0f1115;color:#d6d6d6;padding:10px;border-radius:6px;white-space:pre;overflow-x:auto}
+  .y{color:#e5c07b}.g{color:#98c379}.r{color:#e06c75}.b{color:#61afef}.d{color:#6b7280}.m{color:#c678dd}.inv{background:#2b3240}
+</style>
+
+<h2>How should you see and steer every session without going into each one?</h2>
+<p class="subtitle">Three layouts for the main aiman screen. Each session has a to-do list you can see and edit. Click the one closest to what you want; mixing them is fine, just say so in the terminal.</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Session list with progress, to-dos shown beside it</h3>
+      <p>The list you have today, with each session's to-do progress added. The selected session's to-do list and last message show on the right. Edit to-dos and type a prompt without attaching.</p>
+<div class="tui"><span class="d">SESSIONS                          │ WTB-2445 sundae standby  </span><span class="y">● waiting for you</span>
+<span class="inv"><span class="y">●</span> WTB-2445 sundae standby   3/7 ▮▮▮▯▯▯▯</span> │ <span class="d">TO-DO</span>   <span class="d">(a add · e edit · space done · J/K move)</span>
+<span class="b">◐</span> WTB-2468 operator roles  5/6 ▮▮▮▮▮▯ │  <span class="g">✓</span> Add standby template
+<span class="b">◐</span> review: muse            1/3 ▮▯▯     │  <span class="g">✓</span> Teardown ordering
+<span class="g">✓</span> WTB-2446 NAT rehearsal  4/4 ▮▮▮▮  │  <span class="g">✓</span> Lease expiry check
+<span class="d">○</span> aiman next-level        0/0       │  <span class="y">▸</span> Run preprod --check  <span class="y">← asks: proceed? (y/n)</span>
+                                  │  ○ Publisher handover rehearsal
+                                  │  ○ Update runbook 13
+                                  │  ○ Open PR
+                                  │ <span class="d">LAST: "Standby is 5.59M slots behind…"</span>
+                                  │ <span class="m">› prompt: _</span>   <span class="d">(enter sends · ctrl+a attach)</span></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Inbox: sessions that need you first</h3>
+      <p>Sorted by who needs you: waiting for input, failed, finished. Each row shows the question being asked and the current to-do. Answer inline and move to the next, like an email inbox.</p>
+<div class="tui"><span class="y">NEEDS YOU (2)</span>
+<span class="inv"><span class="y">▸ WTB-2445</span>  step 4/7 Run preprod --check                 </span>
+    <span class="y">"Standby is behind the primary. Proceed with handover? (y/n)"</span>
+    <span class="m">› reply: _</span>        <span class="d">[y] yes  [n] no  [t] to-dos  [a] attach</span>
+  <span class="r">✗ review: muse</span>  step 1/3 Read the diff  <span class="r">agent exited</span>
+
+<span class="b">WORKING (2)</span>
+  <span class="b">◐</span> WTB-2468  5/6  Write migration test         <span class="d">12m</span>
+  <span class="b">◐</span> aiman     0/0  <span class="d">(no to-do list yet)</span>          <span class="d">3m</span>
+
+<span class="g">DONE (1)</span>
+  <span class="g">✓</span> WTB-2446  4/4  PR #2771 ready for review</div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Board: every session's to-dos side by side</h3>
+      <p>One column per session showing its full to-do list. Good for seeing everything at once; gets tight past four or five sessions.</p>
+<div class="tui"><span class="y">WTB-2445 ●</span>          <span class="b">WTB-2468 ◐</span>          <span class="b">review:muse ◐</span>
+<span class="g">✓</span> Standby template    <span class="g">✓</span> Role constants       <span class="b">▸</span> Read the diff
+<span class="g">✓</span> Teardown order      <span class="g">✓</span> reinitializer(4)    ○ Check tests
+<span class="g">✓</span> Lease expiry        <span class="g">✓</span> Migration script    ○ Post findings
+<span class="y">▸ preprod --check ?</span>  <span class="g">✓</span> Receipt guard
+○ Handover          <span class="g">✓</span> Docs
+○ Runbook 13        <span class="b">▸</span> Migration test
+○ Open PR
+<span class="m">› _</span>                 <span class="m">› _</span>                  <span class="m">› _</span></div>
+    </div>
+  </div>
+</div>

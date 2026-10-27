@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_internal_infra_slack_manifest_go", "label": "manifest.go", "file_type": "code", "source_file": "internal/infra/slack/manifest.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

@@ -90,14 +90,11 @@ func slackAPI(errOut io.Writer, err error) error {
 }
 
 func slackTokenPath() (string, error) {
-	if p := strings.TrimSpace(os.Getenv("AIMAN_SLACK_TOKEN_FILE")); p != "" {
-		return p, nil
-	}
 	dir, err := config.GetDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "slack-oauth.json"), nil
+	return slack.TokenPath(dir), nil
 }
 
 func slackClient() (*slack.Client, error) {
