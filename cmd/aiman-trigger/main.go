@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -13,8 +14,44 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/infra/skills"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
+	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
+
+// socketSender steers sessions through serve's steer.send. The trigger runs on
+// the remote, so it talks to the socket directly rather than through aiman rpc.
+type socketSender struct {
+	path string
+}
+
+func (s socketSender) SendPrompt(_ context.Context, sessionID, text string, mode usecase.SendMode) (bool, error) {
+	resp, err := server.Call(s.path, "steer.send", map[string]any{
+		"session": sessionID,
+		"text":    text,
+		"as":      "aiman",
+		"mode":    string(mode),
+	})
+	if err != nil {
+		return false, err
+	}
+	if resp.Error != nil {
+		return false, fmt.Errorf("steer.send: %s: %s", resp.Error.Code, resp.Error.Message)
+	}
+	if mode != usecase.SendAnswer {
+		return true, nil
+	}
+	raw, err := json.Marshal(resp.Result)
+	if err != nil {
+		return false, err
+	}
+	var result struct {
+		Answered bool `json:"answered"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return false, fmt.Errorf("steer.send result: %w", err)
+	}
+	return result.Answered, nil
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -69,7 +106,11 @@ func run() error {
 		skillEngine,
 	)
 
-	daemon := usecase.NewDaemon(cfg, db, flowManager)
+	dir, err := config.GetDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+	daemon := usecase.NewDaemon(cfg, db, flowManager, socketSender{path: server.SocketPath(dir)})
 
 	log.Println("Starting autonomous agent trigger daemon...")
 	if err := daemon.Run(context.Background()); err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os/exec"
@@ -16,18 +17,48 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// SendMode selects how serve delivers a prompt to an agent.
+type SendMode string
+
+const (
+	// SendNote queues the text behind serve's delivery gate.
+	SendNote SendMode = "note"
+	// SendAnswer types the text at once, but only while the agent shows a dialog.
+	SendAnswer SendMode = "answer"
+)
+
+// PromptSender hands text to serve, which owns typing into terminals.
+type PromptSender interface {
+	// SendPrompt returns delivered=false without error when an answer found no dialog to answer.
+	SendPrompt(ctx context.Context, sessionID, text string, mode SendMode) (delivered bool, err error)
+}
+
+// defaultTriggerPollSecs applies when a rule has no PollFrequencySecs; it
+// matches the wizard default. The 30 s daemon tick is the floor.
+const defaultTriggerPollSecs = 300
+
+const unblockPrompt = "Please carry on autonomously as far as you can until it is absolutely impossible."
+
 type Daemon struct {
 	cfg         *config.Config
 	db          domain.SessionRepository
 	flowManager *FlowManager
+	sender      PromptSender
+	capture     func(ctx context.Context, s domain.Session) (string, error)
+	// lastPolled is keyed by rule session id. Run is single-goroutine, so no lock.
+	lastPolled map[string]time.Time
 }
 
-func NewDaemon(cfg *config.Config, db domain.SessionRepository, fm *FlowManager) *Daemon {
-	return &Daemon{
+func NewDaemon(cfg *config.Config, db domain.SessionRepository, fm *FlowManager, sender PromptSender) *Daemon {
+	d := &Daemon{
 		cfg:         cfg,
 		db:          db,
 		flowManager: fm,
+		sender:      sender,
+		lastPolled:  make(map[string]time.Time),
 	}
+	d.capture = d.capturePane
+	return d
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
@@ -79,7 +110,9 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 			continue
 		}
 
-		// TODO: Throttle polling per rule based on s.AutonomousConfig.PollFrequencySecs
+		if !d.dueForPoll(s.ID, s.AutonomousConfig.PollFrequencySecs, time.Now()) {
+			continue
+		}
 
 		// Calculate active concurrency for this repo trigger
 		activeCount := 0
@@ -200,6 +233,31 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 	return nil
 }
 
+// dueForPoll reports whether a rule's poll interval has elapsed and, when it
+// has, records now as the rule's last poll.
+func (d *Daemon) dueForPoll(ruleID string, freqSecs int, now time.Time) bool {
+	if freqSecs <= 0 {
+		freqSecs = defaultTriggerPollSecs
+	}
+	last, polled := d.lastPolled[ruleID]
+	if polled && now.Sub(last) < time.Duration(freqSecs)*time.Second {
+		return false
+	}
+	d.lastPolled[ruleID] = now
+	return true
+}
+
+func (d *Daemon) capturePane(ctx context.Context, s domain.Session) (string, error) {
+	var remoteRoot string
+	for _, r := range d.cfg.Remotes {
+		if r.Host == s.RemoteHost {
+			remoteRoot = r.Root
+			break
+		}
+	}
+	return CaptureSessionPane(ctx, local.NewExecutor(remoteRoot), s)
+}
+
 func (d *Daemon) monitorPanes(ctx context.Context) error {
 	sessions, err := d.db.List(ctx)
 	if err != nil {
@@ -207,18 +265,8 @@ func (d *Daemon) monitorPanes(ctx context.Context) error {
 	}
 
 	for _, s := range sessions {
-		// Only monitor active autonomous sessions that have a tmux pane
-		if s.Mode == domain.SessionModeAutonomous && s.Status == domain.SessionStatusActive && s.TmuxSession != "" {
-			var remoteRoot string
-			for _, r := range d.cfg.Remotes {
-				if r.Host == s.RemoteHost {
-					remoteRoot = r.Root
-					break
-				}
-			}
-			executor := local.NewExecutor(remoteRoot)
-
-			out, err := CaptureSessionPane(ctx, executor, s)
+		if s.Mode == domain.SessionModeAutonomous && s.Status == domain.SessionStatusActive {
+			out, err := d.capture(ctx, s)
 			if err != nil || out == "" {
 				continue
 			}
@@ -249,9 +297,12 @@ func (d *Daemon) monitorPanes(ctx context.Context) error {
 			}
 
 			if needsUnblock {
-				log.Printf("Detected hung input in autonomous session %s", s.TmuxSession)
-				unblockCmd := fmt.Sprintf("tmux send-keys -t %q %q Enter", s.TmuxSession, "Please carry on autonomously as far as you can until it is absolutely impossible.")
-				_, _ = executor.Execute(ctx, unblockCmd)
+				log.Printf("Detected hung input in autonomous session %s", s.ID)
+				// Answer mode types only while serve also sees a dialog; otherwise
+				// nothing is sent and the next tick re-checks.
+				if _, err := d.sender.SendPrompt(ctx, s.ID, unblockPrompt, SendAnswer); err != nil {
+					log.Printf("Failed to unblock session %s: %v", s.ID, err)
+				}
 			}
 		}
 	}
@@ -282,7 +333,12 @@ func (d *Daemon) pollScheduledPrompts(ctx context.Context) error {
 		nextRun := schedule.Next(lastRun)
 		if !now.Before(nextRun) {
 			log.Printf("Triggering scheduled prompt %s", p.ID)
-			d.triggerPrompt(ctx, &p)
+			// LastRunAt advances only once every target has the prompt, so a
+			// prompt fired while serve is down retries on the next tick.
+			if err := d.triggerPrompt(ctx, &p); err != nil {
+				log.Printf("Scheduled prompt %s not delivered, retrying next tick: %v", p.ID, err)
+				continue
+			}
 
 			p.LastRunAt = now
 			if err := d.db.SaveScheduledPrompt(ctx, &p); err != nil {
@@ -294,23 +350,16 @@ func (d *Daemon) pollScheduledPrompts(ctx context.Context) error {
 	return nil
 }
 
-func (d *Daemon) triggerPrompt(ctx context.Context, p *domain.ScheduledPrompt) {
+// triggerPrompt queues the prompt for every target session that still exists.
+func (d *Daemon) triggerPrompt(ctx context.Context, p *domain.ScheduledPrompt) error {
+	var errs []error
 	for _, sessID := range p.SessionIDs {
-		s, err := d.db.Get(ctx, sessID)
-		if err != nil || s.TmuxSession == "" {
+		if _, err := d.db.Get(ctx, sessID); err != nil {
 			continue
 		}
-
-		var remoteRoot string
-		for _, r := range d.cfg.Remotes {
-			if r.Host == s.RemoteHost {
-				remoteRoot = r.Root
-				break
-			}
+		if _, err := d.sender.SendPrompt(ctx, sessID, p.Prompt, SendNote); err != nil {
+			errs = append(errs, fmt.Errorf("session %s: %w", sessID, err))
 		}
-		executor := local.NewExecutor(remoteRoot)
-
-		cmd := fmt.Sprintf("tmux send-keys -t %q %q Enter", s.TmuxSession, p.Prompt)
-		_, _ = executor.Execute(ctx, cmd)
 	}
+	return errors.Join(errs...)
 }
