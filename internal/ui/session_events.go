@@ -170,9 +170,10 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		return follow(m.usageEventFetch(msg.event.ID))
 	}
 	// serve has already decided this session needs the user. It is not
-	// pane activity either, so it never queues a refresh.
+	// pane activity either, so it never queues a refresh. A CI escalation
+	// also reads ci.get so that row shows the needs-you glyph.
 	if msg.event.Type == "notify" {
-		return follow(m.notifyToast(msg.event))
+		return follow(tea.Batch(m.notifyToast(msg.event), m.ciEscalationFetch(msg.event)))
 	}
 
 	if msg.event.Type == "keepalive" || (msg.event.ID == "" && msg.event.Type != "session_created") {
@@ -266,6 +267,7 @@ func (m *Model) applyStreamEnded(msg sessionStreamEndedMsg) tea.Cmd {
 	// The next stream is a new connection. A host that looked too old, or whose
 	// serve was down, gets another chance once that connection is up.
 	delete(m.todoUnsupported, msg.host)
+	delete(m.ciUnsupported, msg.host)
 	if msg.err != nil {
 		m.log("session events: %s ended (%v); retrying in %s", msg.host, msg.err, eventStreamRetryAfter)
 	}

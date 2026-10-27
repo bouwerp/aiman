@@ -421,6 +421,12 @@ type Model struct {
 	todoPendingRev  map[string]int64
 	todoUnsupported map[string]bool
 	promptSent      map[string]time.Time
+	// PR watch state from ci.get and ci.watch. ciUnsupported is keyed by the
+	// resolved remote host, like todoUnsupported.
+	ciClient      ciClient
+	ciStatus      map[string]usecase.CIStatus
+	ciInFlight    map[string]bool
+	ciUnsupported map[string]bool
 	// focus selects who receives keys on the sessions tab: the list, the
 	// reply line, or the to-do list.
 	focus       a1Focus
@@ -608,6 +614,8 @@ func (m *Model) makeItem(s domain.Session) item {
 	if sum, ok := m.todoSummaries[s.ID]; ok {
 		it.todoDone, it.todoTotal, it.hasTodos = todoProgressFields(sum)
 	}
+	st, ok := m.ciStatus[s.ID]
+	it.escalated = ciNeedsUser(st, ok)
 	if cs, ok := m.creatingSessions[s.ID]; ok {
 		if cs.failed {
 			it.activity = "create-failed"
@@ -870,6 +878,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "terminate session")),
 			key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter by remote")),
 			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "view trigger details (autonomous)")),
+			key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "watch PR (CI + reviews)")),
 			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "sessions / agent API")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 			key.NewBinding(key.WithKeys("$"), key.WithHelp("$", "usage and cost")),
@@ -956,6 +965,10 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		todoSummaries:       make(map[string]todoSummary),
 		todoInFlight:        make(map[string]bool),
 		todoUnsupported:     make(map[string]bool),
+		ciClient:            sshCIClient{dial: dialRemoteSSH},
+		ciStatus:            make(map[string]usecase.CIStatus),
+		ciInFlight:          make(map[string]bool),
+		ciUnsupported:       make(map[string]bool),
 		promptSent:          make(map[string]time.Time),
 		promptInput:         newReplyInput(),
 		daemonList:          dl,
@@ -2906,9 +2919,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case todoLoadedMsg, promptSentMsg, todoMutatedMsg, usageMsg, usageRollupMsg,
-		memoryJobsMsg, memoryProposalMsg, memorySavedMsg, memoryJobDoneMsg:
+		memoryJobsMsg, memoryProposalMsg, memorySavedMsg, memoryJobDoneMsg, ciStatusMsg:
 		// These results are global: a fetch, a reply, a failed to-do
-		// write, or a usage report can finish after the user has left
+		// write, a usage report or a PR watch answer can finish after the user has left
 		// the session list. The rollup is the same path so $ stays
 		// filled in after the user leaves that screen.
 		return m.applyTrackedSessionMsg(msg)
@@ -4346,7 +4359,7 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 			if !m.skipSessionPolling(s.ID) {
 				usageCmd = m.maybeFetchUsage(s, false)
 			}
-			cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), m.fetchTodosCmd(s), usageCmd)
+			cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), m.fetchTodosCmd(s), m.fetchCIStatusCmd(s), usageCmd)
 		}
 	} else if m.currentTab == tabSessions {
 		if it, ok := m.selectedSessionItem(); ok {
@@ -4635,7 +4648,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 					cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), usageCmd)
 				}
 			}
-			cmds = append(cmds, m.fetchTodosCmd(s))
+			cmds = append(cmds, m.fetchTodosCmd(s), m.fetchCIStatusCmd(s))
 		}
 	case tabDaemons:
 		newSel := m.daemonList.SelectedItem()
@@ -4967,10 +4980,13 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 // attaching a terminal, opening VS Code, and copying output or the local path.
 func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch msg.String() {
-	case "ctrl+s", "a", "v", "y", "Y", "p":
+	case "ctrl+s", "a", "v", "y", "Y", "p", "w":
 		if _, ok := m.selectedSessionItem(); !ok {
 			return m, nil, true
 		}
+	}
+	if msg.String() == "w" {
+		return m, m.handleWatchKey(), true
 	}
 	if msg.String() == "ctrl+s" || msg.String() == "a" {
 		if sel := m.list.SelectedItem(); sel != nil {

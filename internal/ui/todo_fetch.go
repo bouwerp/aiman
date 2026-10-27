@@ -120,17 +120,19 @@ func (m *Model) todoChangedCmd(host string, ev server.SessionEvent) tea.Cmd {
 		return nil
 	}
 	if m.sessionIsSelected(ev.ID) {
+		s, ok := m.sessionByID(ev.ID)
+		if !ok {
+			it, _ := m.selectedSessionItem()
+			s = it.session
+		}
+		// The PR watcher changes the list when a check fails or a review
+		// lands, so the selected session's PR watch is read again too.
+		ci := m.fetchCIStatusCmd(s)
 		if m.todoInFlight[ev.ID] {
 			m.noteTodoPending(ev.ID, ev.Rev)
-			return nil
+			return ci
 		}
-		if s, ok := m.sessionByID(ev.ID); ok {
-			return m.fetchTodosCmd(s)
-		}
-		if it, ok := m.selectedSessionItem(); ok {
-			return m.fetchTodosCmd(it.session)
-		}
-		return nil
+		return tea.Batch(m.fetchTodosCmd(s), ci)
 	}
 	return m.sweepTodosCmd(host, []string{ev.ID})
 }
