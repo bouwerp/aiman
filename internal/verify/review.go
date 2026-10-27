@@ -39,6 +39,7 @@ type Review struct {
 	Tree         string `json:"tree"`
 	Commit       string `json:"commit"`
 	BaseRef      string `json:"base_ref"`
+	BaseSHA      string `json:"base_sha,omitempty"`
 	RepoWorktree string `json:"repo_worktree"`
 	Worktree     string `json:"worktree"`
 	// Dir is the worker's working directory relative to its worktree; the
@@ -47,6 +48,7 @@ type Review struct {
 	Error       string    `json:"error"`
 	Status      Status    `json:"status"`
 	Findings    []Finding `json:"findings"`
+	Evidence    Evidence  `json:"evidence"`
 	Required    int       `json:"required"`
 	Suggestions int       `json:"suggestions"`
 	CleanedUp   bool      `json:"cleaned_up"`
@@ -54,9 +56,11 @@ type Review struct {
 	FinishedAt  time.Time `json:"finished_at"`
 }
 
-// Passed reports a complete review with no required findings.
+// Passed reports a complete review with no required findings whose test
+// command, run by the manager on the snapshot, exited 0. A review with no
+// evidence cannot pass.
 func (r Review) Passed() bool {
-	return r.Status == StatusComplete && r.Required == 0
+	return r.Status == StatusComplete && r.Required == 0 && r.Evidence.Command != "" && r.Evidence.ExitCode == 0
 }
 
 // ErrNotFound means the review id is not in the store.

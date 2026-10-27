@@ -26,7 +26,7 @@ func TestWaitExitCodePassed(t *testing.T) {
 	var out bytes.Buffer
 	err := waitForReview(verifySequence(
 		verify.Review{ID: "r1", Status: verify.StatusRunning},
-		verify.Review{ID: "r1", Status: verify.StatusComplete},
+		verify.Review{ID: "r1", Status: verify.StatusComplete, Evidence: verify.Evidence{Command: "make test"}},
 	), "r1", time.Second, time.Millisecond, &out)
 	if err != nil {
 		t.Fatal(err)

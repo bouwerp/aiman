@@ -256,6 +256,14 @@ func newMRig(t *testing.T, cfg Config) *mrig {
 	if cfg.Agents == nil {
 		cfg.Agents = []string{"claude", "codex"}
 	}
+	// Most tests are about the reviewer, not the evidence: give them a
+	// command that passes. "-" asks for no command at all.
+	switch cfg.TestCommand {
+	case "":
+		cfg.TestCommand = "true"
+	case "-":
+		cfg.TestCommand = ""
+	}
 	r.m = NewManager(cfg, Deps{
 		Store: r.store, Sessions: r.sessions, Terminal: r.term, Todos: r.todos,
 		Context: r.ctx, Notifier: r.notify,

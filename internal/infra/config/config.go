@@ -68,6 +68,12 @@ type VerifyConfig struct {
 	BeforePR bool `yaml:"before_pr,omitempty"`
 	// Timeout bounds one review; zero means the verifier's default.
 	Timeout time.Duration `yaml:"timeout,omitempty"`
+	// TestCommand runs on the reviewed snapshot; a review passes only when
+	// it exits 0. Without it no review can pass.
+	TestCommand string `yaml:"test_command,omitempty"`
+	// Reproduce runs TestCommand at the base before the reviewer starts and
+	// expects it to fail. Unset means on for Bug issues only.
+	Reproduce *bool `yaml:"reproduce,omitempty"`
 }
 
 // MarshalServeConfig serializes the settings a remote Agent API needs.

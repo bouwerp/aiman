@@ -35,6 +35,9 @@ type Config struct {
 	Agents   []string
 	BeforePR bool
 	Timeout  time.Duration // zero means DefaultTimeout
+	// TestCommand is run on the snapshot to back a pass; empty means no
+	// review can pass.
+	TestCommand string
 }
 
 // Sessions is serve's session registry as the manager needs it.
@@ -249,6 +252,7 @@ func (m *Manager) prepare(ctx context.Context, r *Review, worker domain.Session)
 		return domain.Session{}, err
 	}
 	r.BaseRef = base
+	r.BaseSHA = base
 	diff, err := DiffAgainst(ctx, worker.WorktreePath, base, r.Commit, MaxPatchBytes)
 	if err != nil {
 		return domain.Session{}, err
@@ -405,6 +409,14 @@ func (m *Manager) finish(ctx context.Context, r Review, status Status, text stri
 		if err != nil {
 			log.Printf("verify: review %s: context: %v", r.ID, err)
 		}
+	}
+	if status == StatusComplete {
+		ev, err := runEvidence(ctx, r, m.cfg.TestCommand, m.d.Now)
+		if err != nil {
+			status = StatusIncomplete
+			r.Error = err.Error()
+		}
+		r.Evidence = ev
 	}
 	r.Status = status
 	r.FinishedAt = m.d.Now()

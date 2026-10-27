@@ -141,7 +141,7 @@ func TestResumeWatchesRunningReviews(t *testing.T) {
 	rv := r.running(t)
 	r.m.Close() // serve stops mid-review
 
-	m2 := NewManager(Config{Agents: []string{"claude", "codex"}}, r.m.d)
+	m2 := NewManager(Config{Agents: []string{"claude", "codex"}, TestCommand: "true"}, r.m.d)
 	t.Cleanup(m2.Close)
 	r.m = m2
 	m2.Resume(context.Background())

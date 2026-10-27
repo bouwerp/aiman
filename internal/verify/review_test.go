@@ -73,8 +73,9 @@ func TestReviewPassed(t *testing.T) {
 		r    Review
 		want bool
 	}{
-		{Review{Status: StatusComplete}, true},
-		{Review{Status: StatusComplete, Required: 1}, false},
+		{Review{Status: StatusComplete, Evidence: Evidence{Command: "make test"}}, true},
+		{Review{Status: StatusComplete}, false},
+		{Review{Status: StatusComplete, Required: 1, Evidence: Evidence{Command: "make test"}}, false},
 		{Review{Status: StatusIncomplete}, false},
 		{Review{Status: StatusTimedOut}, false},
 	}
