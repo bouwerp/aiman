@@ -26,6 +26,9 @@ var rpcMethods = map[string]bool{
 	"handover.write":   true,
 	"handover.point":   true,
 	"usage.get":        true,
+	"context.put":      true,
+	"memory.jobs":      true,
+	"memory.done":      true,
 }
 
 // rpcParams validates the method and params. It passes the bytes through

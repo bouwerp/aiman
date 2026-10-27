@@ -16,6 +16,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/fsutil"
 	"github.com/bouwerp/aiman/internal/handover"
+	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/pane"
 )
 
@@ -218,6 +219,18 @@ func (s *Server) writeHandover(ctx context.Context, sess domain.Session, reason 
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventHandoverWritten, map[string]any{
 		"path": path, "written": changed, "reason": reason,
 	})
+	if changed && s.memoryJobs != nil {
+		if err := s.memoryJobs.Enqueue(ctx, memoryjob.Job{
+			SessionID: sess.ID,
+			Reason:    reason,
+			Group:     sess.Group,
+			Repo:      sess.RepoName,
+			Label:     in.Label,
+			Source:    handover.NoteBody(in),
+		}); err != nil {
+			log.Printf("memory job: %s: %v", sess.ID, err)
+		}
+	}
 	return handoverResult{Path: path, Written: changed, NoteID: id}, nil
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/infra/skills"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
+	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/todo"
@@ -110,6 +111,11 @@ func runServe() error {
 	ptyMgr := ptyruntime.NewManager()
 	defer ptyMgr.CloseAll()
 	srv := server.New(ln, db, localExec, flow, store, ptyMgr, version)
+	if jobs, err := memoryjob.Open(db.DB()); err != nil {
+		log.Printf("memory jobs unavailable: %v", err)
+	} else {
+		srv.SetMemoryJobs(jobs)
+	}
 	todos := todo.NewFiles(filepath.Join(dir, "todos"))
 	srv.EnableTodos(todos, db)
 	tracker := usage.NewTracker(db, db, srv.PublishUsage)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usage"
@@ -73,6 +74,15 @@ type Server struct {
 	// todoLocks holds one *sync.Mutex per session id around a to-do write and
 	// its render.
 	todoLocks sync.Map
+
+	// memoryJobs queues handover-derived memory candidates for the laptop.
+	memoryJobs *memoryjob.Queue
+}
+
+// SetMemoryJobs attaches the memory-candidate queue. It stays nil when serve
+// could not open the queue; memory.jobs then returns an empty list.
+func (s *Server) SetMemoryJobs(q *memoryjob.Queue) {
+	s.memoryJobs = q
 }
 
 // todoStore is the to-do persistence serve needs: the shared Store plus the
@@ -218,6 +228,10 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleHandoverWrite(ctx, req)
 	case "handover.point":
 		return s.handleHandoverPoint(ctx, req)
+	case "memory.jobs":
+		return s.handleMemoryJobs(ctx, req)
+	case "memory.done":
+		return s.handleMemoryDone(ctx, req)
 	case "todo.get", "todo.summary", "todo.add", "todo.update", "todo.move", "todo.remove", "todo.mirror", "steer.send":
 		return s.handleTodo(ctx, req)
 	case "pty.create":
