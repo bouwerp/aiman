@@ -9,7 +9,51 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/quality"
 )
+
+func TestStartReadsKitFromSessionTask(t *testing.T) {
+	r := newMRig(t, Config{})
+	list := filepath.Join(t.TempDir(), "go.md")
+	if err := os.WriteFile(list, []byte("- [ ] wrap errors with %w\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(t.TempDir(), "gone.md")
+	dw := quality.RenderDoneWhenBlock([]string{"tests added"})
+	cl := quality.RenderChecklistBlock([]domain.Checklist{{Path: list}, {Path: missing}})
+	task := quality.ReplaceKitBlocks("# Task\n\nAdd x.\n", &dw, cl)
+	if err := os.WriteFile(filepath.Join(r.worker.WorkingDirectory, domain.AimanTaskFileName), []byte(task), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rv, err := r.m.Start(context.Background(), StartRequest{WorkerID: "w1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := r.waitStatus(t, rv.ID, StatusRunning)
+	brief, err := os.ReadFile(filepath.Join(running.Worktree, running.Dir, domain.AimanTaskFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"## Review rubric", "### " + list + "\n\n- [ ] wrap errors with %w", "### " + missing + "\n\nnot readable",
+		"## Done-when conditions", "- tests added",
+	} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief missing %q:\n%s", want, brief)
+		}
+	}
+}
+
+func TestReadRubricCapsBody(t *testing.T) {
+	list := filepath.Join(t.TempDir(), "big.md")
+	if err := os.WriteFile(list, []byte(strings.Repeat("x", 2*maxRubricBytes)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := readRubric([]string{list})
+	if len(got) != 1 || len(got[0].Body) != maxRubricBytes {
+		t.Fatalf("rubric %d items", len(got))
+	}
+}
 
 func TestStartIfEnabledDisabled(t *testing.T) {
 	r := newMRig(t, Config{BeforePR: false})

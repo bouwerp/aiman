@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/quality"
 	"github.com/bouwerp/aiman/internal/todo"
 )
 
@@ -19,7 +20,23 @@ type BriefInput struct {
 	Diff       Diff
 	Task       string
 	Todos      []domain.TodoItem
+	// DoneWhen are the worker's Done-when conditions, from its task file.
+	DoneWhen []string
+	// Rubric are the checklists the worker was asked to work through.
+	Rubric []RubricItem
 }
+
+// RubricItem is one checklist the reviewer grades against. An empty Body
+// means the checklist could not be read on the session host.
+type RubricItem struct {
+	Path string
+	Body string
+}
+
+// doneWhenInstruction tells the reviewer how to report an unmet condition;
+// the title prefix is what reopens the worker's Done-when item.
+const doneWhenInstruction = "For every condition that does not hold in this snapshot, write a finding `## [REQUIRED] " +
+	quality.DoneWhenFindingPrefix + "<condition>` explaining what is missing."
 
 // BuildBrief renders the reviewer's .aiman_task.md.
 func BuildBrief(in BriefInput) string {
@@ -44,6 +61,8 @@ func BuildBrief(in BriefInput) string {
 		b.WriteString("No to-dos.")
 	}
 	b.WriteString("\n\n")
+	writeRubric(&b, in.Rubric)
+	writeDoneWhen(&b, in.DoneWhen)
 
 	b.WriteString("## Diff\n\n")
 	if in.Diff.Stat != "" {
@@ -70,4 +89,31 @@ func BuildBrief(in BriefInput) string {
 	b.WriteString(CompleteMarker)
 	b.WriteString("\n")
 	return b.String()
+}
+
+func writeRubric(b *strings.Builder, rubric []RubricItem) {
+	if len(rubric) == 0 {
+		return
+	}
+	b.WriteString("## Review rubric\n\n")
+	for _, r := range rubric {
+		fmt.Fprintf(b, "### %s\n\n", r.Path)
+		if body := strings.TrimSpace(r.Body); body != "" {
+			b.WriteString(body)
+		} else {
+			b.WriteString("not readable")
+		}
+		b.WriteString("\n\n")
+	}
+}
+
+func writeDoneWhen(b *strings.Builder, conds []string) {
+	if len(conds) == 0 {
+		return
+	}
+	b.WriteString("## Done-when conditions\n\n")
+	for _, c := range conds {
+		b.WriteString("- " + c + "\n")
+	}
+	b.WriteString("\n" + doneWhenInstruction + "\n\n")
 }

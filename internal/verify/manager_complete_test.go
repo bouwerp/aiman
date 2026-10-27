@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/quality"
+	"github.com/bouwerp/aiman/internal/todo"
 )
 
 const sampleReview = `# Review
@@ -168,5 +170,65 @@ func TestResumeCleansFinishedButNotCleaned(t *testing.T) {
 	cleaned := r.waitCleaned(t, rv.ID)
 	if _, err := os.Stat(cleaned.Worktree); !os.IsNotExist(err) {
 		t.Fatalf("worktree left: %v", err)
+	}
+}
+
+func doneItemList(state domain.TodoState) *domain.TodoList {
+	return &domain.TodoList{SessionID: "w1", Items: []domain.TodoItem{
+		{ID: "t9", Text: todo.DoneItemText, Ref: todo.DoneRef, State: state, UpdatedBy: domain.AuthorAgent},
+	}}
+}
+
+func doneItem(t *testing.T, r *mrig) domain.TodoItem {
+	t.Helper()
+	l, _ := r.todos.Get("w1")
+	for _, it := range l.Items {
+		if it.Ref == todo.DoneRef {
+			return it
+		}
+	}
+	t.Fatal("done item gone")
+	return domain.TodoItem{}
+}
+
+func TestCompleteReopensDoneItem(t *testing.T) {
+	r := newMRig(t, Config{})
+	r.term.stopKills = true
+	r.todos.lists["w1"] = doneItemList(domain.TodoDone)
+	rv := r.running(t)
+	writeReview(t, rv, "## [REQUIRED] "+quality.DoneWhenFindingPrefix+"tests added\nNo test covers x.\n\n"+CompleteMarker)
+	r.waitStatus(t, rv.ID, StatusComplete)
+	if it := doneItem(t, r); it.State != domain.TodoPending || it.UpdatedBy != domain.AuthorVerifier {
+		t.Fatalf("done item %+v", it)
+	}
+	if authors := r.todos.authorList(); len(authors) != 1 {
+		t.Fatalf("want one mutation, got %v", authors)
+	}
+}
+
+func TestCompleteLeavesDoneItemOnCleanPass(t *testing.T) {
+	r := newMRig(t, Config{})
+	r.term.stopKills = true
+	r.todos.lists["w1"] = doneItemList(domain.TodoDone)
+	rv := r.running(t)
+	writeReview(t, rv, "# Review\n\nNothing to report.\n\n"+CompleteMarker)
+	r.waitStatus(t, rv.ID, StatusComplete)
+	if it := doneItem(t, r); it.State != domain.TodoDone || it.UpdatedBy != domain.AuthorAgent {
+		t.Fatalf("done item %+v", it)
+	}
+	if authors := r.todos.authorList(); len(authors) != 0 {
+		t.Fatalf("clean pass mutated the list: %v", authors)
+	}
+}
+
+func TestCompleteOtherFindingLeavesDoneItem(t *testing.T) {
+	r := newMRig(t, Config{})
+	r.term.stopKills = true
+	r.todos.lists["w1"] = doneItemList(domain.TodoDone)
+	rv := r.running(t)
+	writeReview(t, rv, sampleReview+CompleteMarker)
+	r.waitStatus(t, rv.ID, StatusComplete)
+	if it := doneItem(t, r); it.State != domain.TodoDone {
+		t.Fatalf("done item reopened by an unrelated finding: %+v", it)
 	}
 }

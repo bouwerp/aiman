@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/quality"
+	"github.com/bouwerp/aiman/internal/todo"
 )
 
 // ErrReviewerSession refuses to review a reviewer, which would recurse.
@@ -298,6 +301,7 @@ func (m *Manager) prepare(ctx context.Context, r *Review, worker domain.Session)
 	// task from the same relative place in its worktree, never serve's cwd.
 	task, _ := os.ReadFile(filepath.Join(worker.WorktreePath, r.Dir, domain.AimanTaskFileName))
 	todos, _ := m.d.Todos.Get(worker.ID)
+	doneWhen, checklists := quality.ParseTaskKit(string(task))
 	brief := BuildBrief(BriefInput{
 		WorkerName: worker.Name,
 		BaseRef:    base,
@@ -305,6 +309,8 @@ func (m *Manager) prepare(ctx context.Context, r *Review, worker domain.Session)
 		Diff:       diff,
 		Task:       string(task),
 		Todos:      todos.Items,
+		DoneWhen:   doneWhen,
+		Rubric:     readRubric(checklists),
 	})
 	dir := filepath.Join(r.Worktree, r.Dir)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -506,12 +512,18 @@ func (m *Manager) finish(ctx context.Context, r Review, status Status, text stri
 }
 
 // addFindingTodos adds every REQUIRED finding the worker does not already
-// have open, in one mutation, so a repeat review does not duplicate them.
+// have open, in one mutation, so a repeat review does not duplicate them. A
+// REQUIRED Done-when finding also sets a ticked Done-when item back to
+// pending in that mutation.
 func (m *Manager) addFindingTodos(ctx context.Context, r Review) error {
 	if r.Required == 0 {
 		return nil
 	}
+	reopen := doneWhenUnmet(r.Findings)
 	return m.d.Todos.Mutate(ctx, r.WorkerID, domain.AuthorVerifier, func(l *domain.TodoList) error {
+		if reopen {
+			reopenDoneItem(l)
+		}
 		open := map[string]bool{}
 		for _, it := range l.Items {
 			if it.State == domain.TodoPending || it.State == domain.TodoActive {
@@ -531,6 +543,59 @@ func (m *Manager) addFindingTodos(ctx context.Context, r Review) error {
 		}
 		return nil
 	})
+}
+
+// doneWhenUnmet reports whether a REQUIRED finding names an unmet Done-when
+// condition.
+func doneWhenUnmet(findings []Finding) bool {
+	for _, f := range findings {
+		if f.Severity == SeverityRequired && strings.HasPrefix(f.Title, quality.DoneWhenFindingPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// reopenDoneItem sets a done Done-when item back to pending.
+func reopenDoneItem(l *domain.TodoList) {
+	for i := range l.Items {
+		if l.Items[i].Ref == todo.DoneRef && l.Items[i].State == domain.TodoDone {
+			l.Items[i].State = domain.TodoPending
+			l.Items[i].UpdatedBy = domain.AuthorVerifier
+		}
+	}
+}
+
+// maxRubricBytes caps how much of each checklist goes into a brief.
+const maxRubricBytes = 16 << 10
+
+// readRubric reads each checklist on the session host, capped at
+// maxRubricBytes. A path that cannot be read stays in the rubric with an
+// empty body so the brief names it; a readable but blank file is dropped.
+func readRubric(paths []string) []RubricItem {
+	var out []RubricItem
+	for _, p := range paths {
+		body, err := readCapped(p)
+		if err != nil {
+			out = append(out, RubricItem{Path: p})
+			continue
+		}
+		if strings.TrimSpace(body) == "" {
+			continue
+		}
+		out = append(out, RubricItem{Path: p, Body: body})
+	}
+	return out
+}
+
+func readCapped(path string) (string, error) {
+	f, err := os.Open(path) //nolint:gosec // checklist paths come from the session's own task file
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(io.LimitReader(f, maxRubricBytes))
+	return string(b), err
 }
 
 func findingTodoText(f Finding) string {
