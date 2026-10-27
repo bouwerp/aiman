@@ -10,6 +10,7 @@ import (
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/remotefile"
 )
 
 const ContextPackPrompt = `Read ` + domain.AimanContextFileName + ` — it contains notes from earlier sessions on this host. Use aiman context get ID for the full note.`
@@ -101,7 +102,8 @@ func PutSnapshotContext(ctx context.Context, remote contextRemote, snap *domain.
 	if _, err := remote.Execute(ctx, "mkdir -p "+posixQuote(filepath.Dir(p))); err != nil {
 		return fmt.Errorf("creating context dir: %w", err)
 	}
-	return remote.WriteFile(ctx, p, body)
+	_, err = remotefile.WriteIfChanged(ctx, remote, p, body)
+	return err
 }
 
 func posixQuote(s string) string {

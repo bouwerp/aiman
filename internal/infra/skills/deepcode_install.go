@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
+	"github.com/bouwerp/aiman/internal/infra/remotefile"
 )
 
 // remoteWriter is the slice of a remote that can drop the Deep Code launcher
@@ -19,9 +20,10 @@ type remoteWriter interface {
 }
 
 // InstallDeepcodeLauncher writes ~/.aiman/hooks/deepcode-launch.sh on the
-// remote and marks it executable. WriteFile's mode is not the remote mode
-// (local writes are 0600, ssh cat follows umask), so the chmod is required:
-// the session shell execs the script directly.
+// remote when its content differs and marks it executable. WriteFile's mode is
+// not the remote mode (local writes are 0600, ssh cat follows umask), so a
+// written script needs the chmod: the session shell execs it directly. An
+// unchanged script kept the mode it was given when it was written.
 func InstallDeepcodeLauncher(ctx context.Context, remote remoteWriter) error {
 	if remote == nil {
 		return fmt.Errorf("deepcode launcher: no remote")
@@ -38,8 +40,12 @@ func InstallDeepcodeLauncher(ctx context.Context, remote remoteWriter) error {
 	if _, err := remote.Execute(ctx, fmt.Sprintf("mkdir -p %q", filepath.Dir(path))); err != nil {
 		return fmt.Errorf("deepcode launcher dir: %w", err)
 	}
-	if err := remote.WriteFile(ctx, path, []byte(agenthook.DeepcodeLaunchScript)); err != nil {
+	changed, err := remotefile.WriteIfChanged(ctx, remote, path, []byte(agenthook.DeepcodeLaunchScript))
+	if err != nil {
 		return fmt.Errorf("deepcode launcher: %w", err)
+	}
+	if !changed {
+		return nil
 	}
 	if _, err := remote.Execute(ctx, fmt.Sprintf("chmod 700 %q", path)); err != nil {
 		return fmt.Errorf("deepcode launcher mode: %w", err)

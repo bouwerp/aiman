@@ -45,6 +45,11 @@ func upsertJSONFile(path string, mutate func(map[string]any) bool) (InstallResul
 		return res, err
 	}
 	body = append(body, '\n')
+	if res.Action == ActionUpdated && bytes.Equal(existing, body) {
+		// mutate can report a change that re-marshals to the same bytes.
+		res.Action = ActionCurrent
+		return res, nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return res, fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}

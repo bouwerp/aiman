@@ -14,6 +14,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/graphify"
+	"github.com/bouwerp/aiman/internal/infra/remotefile"
 )
 
 type Engine struct {
@@ -90,7 +91,7 @@ func installBundledAimanSkill(ctx context.Context, remote domain.RemoteExecutor,
 	var first error
 	for _, p := range aimanskill.ProjectSkillFiles(worktreePath) {
 		_, _ = remote.Execute(ctx, fmt.Sprintf("mkdir -p %q", path.Dir(p)))
-		if err := remote.WriteFile(ctx, p, []byte(aimanskill.Text)); err != nil && first == nil {
+		if _, err := remotefile.WriteIfChanged(ctx, remote, p, []byte(aimanskill.Text)); err != nil && first == nil {
 			first = err
 		}
 	}
@@ -418,7 +419,8 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 	}
 
 	taskPath := filepath.Join(worktreePath, domain.AimanTaskFileName)
-	return remote.WriteFile(ctx, taskPath, []byte(sb.String()))
+	_, err := remotefile.WriteIfChanged(ctx, remote, taskPath, []byte(sb.String()))
+	return err
 }
 
 func writeSessionSummaryFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, snapshot *domain.SessionSnapshot) error {
@@ -470,7 +472,8 @@ func writeSessionSummaryFile(ctx context.Context, remote domain.RemoteExecutor, 
 	sb.WriteString("> Continue from this handoff before making further changes.\n")
 
 	summaryPath := filepath.Join(worktreePath, domain.AimanSessionSummaryFileName)
-	return remote.WriteFile(ctx, summaryPath, []byte(sb.String()))
+	_, err := remotefile.WriteIfChanged(ctx, remote, summaryPath, []byte(sb.String()))
+	return err
 }
 
 func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, issue *domain.Issue) (domain.PreparedSession, error) {
@@ -507,7 +510,7 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 
 	// Create a remote file with the system prompt
 	remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
-	if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+	if _, err := remotefile.WriteIfChanged(ctx, remote, remotePromptPath, []byte(systemPrompt)); err != nil {
 		return domain.PreparedSession{}, fmt.Errorf("failed to upload system prompt to remote: %w", err)
 	}
 
@@ -543,7 +546,7 @@ func (e *Engine) prepareAgeni(ctx context.Context, remote domain.RemoteExecutor,
 	if len(prompts) > 0 {
 		systemPrompt := strings.Join(prompts, "\n\n")
 		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
-		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+		if _, err := remotefile.WriteIfChanged(ctx, remote, remotePromptPath, []byte(systemPrompt)); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to upload Ageni prompt to remote: %w", err)
 		}
 		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
@@ -581,7 +584,7 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 	if len(prompts) > 0 {
 		systemPrompt := strings.Join(prompts, "\n\n")
 		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
-		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+		if _, err := remotefile.WriteIfChanged(ctx, remote, remotePromptPath, []byte(systemPrompt)); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to upload Antigravity prompt to remote: %w", err)
 		}
 		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
@@ -619,7 +622,7 @@ func (e *Engine) prepareMuse(ctx context.Context, remote domain.RemoteExecutor, 
 	if len(prompts) > 0 {
 		systemPrompt := strings.Join(prompts, "\n\n")
 		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
-		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+		if _, err := remotefile.WriteIfChanged(ctx, remote, remotePromptPath, []byte(systemPrompt)); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to upload Muse prompt to remote: %w", err)
 		}
 		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
@@ -658,7 +661,7 @@ func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, 
 	if len(prompts) > 0 {
 		systemPrompt := strings.Join(prompts, "\n\n")
 		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
-		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+		if _, err := remotefile.WriteIfChanged(ctx, remote, remotePromptPath, []byte(systemPrompt)); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to upload Grok prompt to remote: %w", err)
 		}
 		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))
@@ -696,7 +699,7 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 	if len(prompts) > 0 {
 		systemPrompt := strings.Join(prompts, "\n\n")
 		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
-		if err := remote.WriteFile(ctx, remotePromptPath, []byte(systemPrompt)); err != nil {
+		if _, err := remotefile.WriteIfChanged(ctx, remote, remotePromptPath, []byte(systemPrompt)); err != nil {
 			return domain.PreparedSession{}, fmt.Errorf("failed to upload Codex prompt to remote: %w", err)
 		}
 		promptFiles = append(promptFiles, filepath.Base(remotePromptPath))

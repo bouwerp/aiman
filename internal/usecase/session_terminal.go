@@ -14,6 +14,7 @@ import (
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	infraAgent "github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/infra/remotefile"
 	"github.com/bouwerp/aiman/internal/infra/skills"
 	"github.com/bouwerp/aiman/internal/pane"
 )
@@ -62,7 +63,7 @@ func WriteMuseSessionID(ctx context.Context, remote TerminalExecutor, workdir, a
 	if id == "" || dir == "" {
 		return
 	}
-	_ = remote.WriteFile(ctx, filepath.Join(dir, domain.AimanSessionIDFileName), []byte(id+"\n"))
+	_, _ = remotefile.WriteIfChanged(ctx, remote, filepath.Join(dir, domain.AimanSessionIDFileName), []byte(id+"\n"))
 }
 
 // ApplyKiloAllowEnv writes the auto-allow config and sets the env keys

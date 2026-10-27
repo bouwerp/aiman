@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEnsureOnHostWritesReporterOnlyWhenNoAgents(t *testing.T) {
@@ -482,5 +483,74 @@ func TestReporterScriptResolvesBinaryWithoutInjectedPath(t *testing.T) {
 	// Still a no-op outside an aiman session, and still never fails the agent.
 	if !strings.Contains(reporterScript, `[ "${AIMAN_ENV:-}" = 1 ] || exit 0`) {
 		t.Error("reporter must stay inert outside an aiman session")
+	}
+}
+
+func TestEnsureOnHostSecondRunWritesNothing(t *testing.T) {
+	home := t.TempDir()
+	for _, d := range []string{".claude", ".grok", ".cursor", ".codex", ".copilot", ".gemini", ".pi",
+		filepath.Join(".config", "kilo"), filepath.Join(".config", "muse")} {
+		if err := os.MkdirAll(filepath.Join(home, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := EnsureOnHost(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Unix(1_000_000_000, 0)
+	for _, r := range first {
+		if err := os.Chtimes(r.Path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	again, err := EnsureOnHost(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != len(first) {
+		t.Fatalf("results %d then %d", len(first), len(again))
+	}
+	for _, r := range again {
+		if r.Action != ActionCurrent {
+			t.Errorf("second ensure %s action=%s", r.Path, r.Action)
+		}
+		st, err := os.Stat(r.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.ModTime().Equal(old) {
+			t.Errorf("second ensure rewrote %s", r.Path)
+		}
+	}
+}
+
+func TestUpsertJSONFileSameBytesIsCurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	body := "{\n  \"a\": 1\n}\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Unix(1_000_000_000, 0)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// mutate reports a change but leaves the document as it was.
+	res, err := upsertJSONFile(path, func(root map[string]any) bool {
+		root["a"] = 1
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Action != ActionCurrent {
+		t.Fatalf("action=%s, want %s", res.Action, ActionCurrent)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.ModTime().Equal(old) {
+		t.Fatal("file was rewritten")
 	}
 }

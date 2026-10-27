@@ -2,6 +2,8 @@ package skills
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"os/exec"
@@ -19,14 +21,16 @@ import (
 // mockRemote captures WriteFile calls and returns success for Execute calls.
 type mockRemote struct {
 	writtenFiles map[string][]byte
-	cmds         []string
-	root         string
+	// writes counts WriteFile calls per path.
+	writes map[string]int
+	cmds   []string
+	root   string
 	// graphify makes the graphify probe report an installed binary.
 	graphify bool
 }
 
 func newMockRemote() *mockRemote {
-	return &mockRemote{writtenFiles: make(map[string][]byte), root: "/home/user/code"}
+	return &mockRemote{writtenFiles: make(map[string][]byte), writes: make(map[string]int), root: "/home/user/code"}
 }
 
 func (m *mockRemote) Connect(ctx context.Context) error { return nil }
@@ -39,6 +43,15 @@ func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error) {
 	if m.graphify && cmd == graphify.ProbeCommand() {
 		return "GRAPHIFY=1\n", nil
 	}
+	// remotefile.WriteIfChanged hashes the file first; answer for files held.
+	if rest, ok := strings.CutPrefix(cmd, "sha256sum -- '"); ok {
+		p, _, _ := strings.Cut(rest, "'")
+		if content, held := m.writtenFiles[p]; held {
+			sum := sha256.Sum256(content)
+			return hex.EncodeToString(sum[:]) + "  " + p + "\n", nil
+		}
+		return "", nil
+	}
 	if strings.HasPrefix(cmd, "if [ -f ") {
 		for path := range m.writtenFiles {
 			if strings.Contains(cmd, path) {
@@ -50,6 +63,9 @@ func (m *mockRemote) Execute(ctx context.Context, cmd string) (string, error) {
 }
 func (m *mockRemote) WriteFile(ctx context.Context, path string, content []byte) error {
 	m.writtenFiles[path] = content
+	if m.writes != nil {
+		m.writes[path]++
+	}
 	return nil
 }
 func (m *mockRemote) ValidateDir(ctx context.Context, path string) error     { return nil }
@@ -945,4 +961,72 @@ func TestPrepareSession_CodexAlwaysTrustsWorkspaceAndSkipsUpgrade(t *testing.T) 
 	if strings.Contains(result.Command, "check_for_upgrades_on_startup") {
 		t.Errorf("codex has no such config key; it is ignored or fatal under --strict-config: %s", result.Command)
 	}
+}
+
+func TestPrepareSessionTwiceWritesOnce(t *testing.T) {
+	skillFile := filepath.Join(t.TempDir(), "SKILL.md")
+	if err := os.WriteFile(skillFile, []byte("Use TDD."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selected := []domain.Skill{{Name: "tdd", Type: domain.SkillTypePrompt, Path: skillFile}}
+	issue := &domain.Issue{Key: "PROJ-7", Summary: "Cache", Description: "Keep prefixes stable."}
+	agent := domain.Agent{Name: "Claude Code", Command: "claude"}
+	engine := NewEngine(&config.Config{})
+	remote := newMockRemote()
+	ctx := context.Background()
+	wt := "/home/user/code/repo"
+
+	if _, err := engine.PrepareSession(ctx, remote, wt, agent, selected, true, issue, nil); err != nil {
+		t.Fatal(err)
+	}
+	watched := append([]string{
+		filepath.Join(wt, domain.AimanTaskFileName),
+		filepath.Join(wt, domain.AimanPromptFileName),
+	}, aimanskill.ProjectSkillFiles(wt)...)
+	for _, p := range watched {
+		if remote.writes[p] != 1 {
+			t.Fatalf("first prepare wrote %s %d times, want 1", p, remote.writes[p])
+		}
+	}
+
+	remote.writes = map[string]int{}
+	if _, err := engine.PrepareSession(ctx, remote, wt, agent, selected, true, issue, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range watched {
+		if n := remote.writes[p]; n != 0 {
+			t.Errorf("second prepare wrote unchanged %s %d times", p, n)
+		}
+	}
+}
+
+func TestInstallDeepcodeLauncherUnchangedSkipsChmod(t *testing.T) {
+	remote := newMockRemote()
+	ctx := context.Background()
+	if err := InstallDeepcodeLauncher(ctx, remote); err != nil {
+		t.Fatal(err)
+	}
+	if !hasCmdPrefix(remote.cmds, "chmod 700 ") {
+		t.Fatalf("first install did not chmod: %v", remote.cmds)
+	}
+	remote.cmds = nil
+	remote.writes = map[string]int{}
+	if err := InstallDeepcodeLauncher(ctx, remote); err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.writes) != 0 {
+		t.Errorf("second install wrote %v", remote.writes)
+	}
+	if hasCmdPrefix(remote.cmds, "chmod ") {
+		t.Errorf("second install ran chmod: %v", remote.cmds)
+	}
+}
+
+func hasCmdPrefix(cmds []string, prefix string) bool {
+	for _, c := range cmds {
+		if strings.HasPrefix(c, prefix) {
+			return true
+		}
+	}
+	return false
 }

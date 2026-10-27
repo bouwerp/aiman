@@ -2,6 +2,8 @@ package contextstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path"
 	"strings"
@@ -96,7 +98,23 @@ func TestPackForSession(t *testing.T) {
 }
 
 type memWriter struct {
-	files map[string][]byte
+	files  map[string][]byte
+	writes int
+}
+
+// Execute answers the sha256sum probe remotefile.WriteIfChanged sends.
+func (m *memWriter) Execute(_ context.Context, cmd string) (string, error) {
+	rest, ok := strings.CutPrefix(cmd, "sha256sum -- '")
+	if !ok {
+		return "", nil
+	}
+	p, _, _ := strings.Cut(rest, "'")
+	content, held := m.files[p]
+	if !held {
+		return "", nil
+	}
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:]) + "  " + p + "\n", nil
 }
 
 func (m *memWriter) WriteFile(_ context.Context, path string, content []byte) error {
@@ -104,6 +122,7 @@ func (m *memWriter) WriteFile(_ context.Context, path string, content []byte) er
 		m.files = map[string][]byte{}
 	}
 	m.files[path] = content
+	m.writes++
 	return nil
 }
 
@@ -115,6 +134,26 @@ func TestWriteSessionPack(t *testing.T) {
 	got := string(w.files["/wt/"+domain.AimanContextFileName])
 	if !strings.Contains(got, "DO NOT COMMIT") || !strings.Contains(got, "Shared context") {
 		t.Fatalf("%s", got)
+	}
+}
+
+func TestWriteSessionPackUnchangedSkipsWrite(t *testing.T) {
+	w := &memWriter{}
+	ctx := context.Background()
+	pack := "# Shared context\n\n- **n** (`id`): a\n"
+	for range 2 {
+		if err := WriteSessionPack(ctx, w, "/wt", pack); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w.writes != 1 {
+		t.Fatalf("writes = %d, want 1", w.writes)
+	}
+	if err := WriteSessionPack(ctx, w, "/wt", pack+"- **m** (`id2`): b\n"); err != nil {
+		t.Fatal(err)
+	}
+	if w.writes != 2 {
+		t.Fatalf("changed pack writes = %d, want 2", w.writes)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/remotefile"
 )
 
 const (
@@ -828,10 +829,12 @@ func EntryFromSnapshot(snap *domain.SessionSnapshot, group, sessionID string) do
 }
 
 type remoteWriter interface {
+	Execute(ctx context.Context, cmd string) (string, error)
 	WriteFile(ctx context.Context, path string, content []byte) error
 }
 
-// WriteSessionPack writes pack markdown into worktree/.aiman_context.md.
+// WriteSessionPack writes pack markdown into worktree/.aiman_context.md when
+// it differs from the file already there.
 func WriteSessionPack(ctx context.Context, remote remoteWriter, worktreePath, pack string) error {
 	if remote == nil || strings.TrimSpace(pack) == "" {
 		return nil
@@ -843,5 +846,6 @@ func WriteSessionPack(ctx context.Context, remote remoteWriter, worktreePath, pa
 		b.WriteByte('\n')
 	}
 	p := filepath.Join(worktreePath, domain.AimanContextFileName)
-	return remote.WriteFile(ctx, p, []byte(b.String()))
+	_, err := remotefile.WriteIfChanged(ctx, remote, p, []byte(b.String()))
+	return err
 }
