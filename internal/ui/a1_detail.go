@@ -37,6 +37,8 @@ type todoView struct {
 	Cursor   int
 	Question []string
 	Input    string
+	// RefGlyph replaces a pending row's ○ with the child session's glyph.
+	RefGlyph func(ref string) (glyph string, ok bool)
 }
 
 // maxTodoRows is the detail pane's to-do window. A longer list keeps the
@@ -278,7 +280,7 @@ func renderTodoLines(v todoView, width int) []string {
 		if activeRow < 0 && items[i].State == domain.TodoActive {
 			activeRow = len(rows)
 		}
-		rows = append(rows, renderTodoRow(items[i], v.Snap.List.NotInAgent, v.Cursor == i, width))
+		rows = append(rows, renderTodoRow(items[i], v.Snap.List.NotInAgent, v.Cursor == i, width, v.RefGlyph))
 	}
 	rows = insertLines(rows, questionAt(activeRow, len(rows)), formatQuestionLines(v.Question, width))
 	if more > 0 {
@@ -333,8 +335,8 @@ func todoWindow(n, target int) (start, end, more int) {
 	return start, end, n - (end - start)
 }
 
-func renderTodoRow(it domain.TodoItem, notIn []string, selected bool, width int) string {
-	line := todoGlyphAndText(it, selected)
+func renderTodoRow(it domain.TodoItem, notIn []string, selected bool, width int, refGlyph func(string) (string, bool)) string {
+	line := todoGlyphAndText(it, selected, refGlyph)
 	if todoNotInAgent(it.ID, notIn) {
 		line += a1Text(" ⚠ not in agent's list", a1Wait, false, selected)
 	}
@@ -348,8 +350,15 @@ func renderTodoRow(it domain.TodoItem, notIn []string, selected bool, width int)
 	return line
 }
 
-func todoGlyphAndText(it domain.TodoItem, selected bool) string {
+func todoGlyphAndText(it domain.TodoItem, selected bool, refGlyph func(string) (string, bool)) string {
 	g := it.State.Glyph()
+	if it.State == domain.TodoPending && refGlyph != nil {
+		if id, ok := childRefID(it.Ref); ok {
+			if glyph, ok := refGlyph(id); ok {
+				g = glyph
+			}
+		}
+	}
 	switch it.State {
 	case domain.TodoDone:
 		return a1Text(g+" ", a1Dim, false, selected) + a1Text(it.Text, a1Dim, false, selected)
@@ -590,7 +599,27 @@ func (m *Model) sessionTodoLines(it item, width int) []string {
 		Cursor:   cursor,
 		Question: waitingQuestion(it, width),
 		Input:    input,
+		RefGlyph: m.todoRefGlyph,
 	}, width)
+}
+
+func childRefID(ref string) (string, bool) {
+	id, ok := strings.CutPrefix(ref, "child:")
+	id = strings.TrimSpace(id)
+	return id, ok && id != ""
+}
+
+// todoRefGlyph maps a linked child session to the glyph its row uses.
+func (m *Model) todoRefGlyph(childID string) (string, bool) {
+	for _, raw := range m.list.Items() {
+		row, ok := raw.(item)
+		if !ok || row.session.ID != childID {
+			continue
+		}
+		glyph, _ := rowGlyph(row)
+		return glyph, glyph != ""
+	}
+	return "", false
 }
 
 func dimText(s string) string {
