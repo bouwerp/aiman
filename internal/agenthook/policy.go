@@ -23,9 +23,6 @@ func GuardsPRCreate(agentName string) bool {
 	return command == "claude"
 }
 
-// SupportsPreToolUse is the older name for GuardsPRCreate.
-func SupportsPreToolUse(agentName string) bool { return GuardsPRCreate(agentName) }
-
 func gatePath(home string) string {
 	return filepath.Join(home, ".aiman", "hooks", GateMarker)
 }
@@ -36,7 +33,7 @@ const verifyGateScript = `#!/bin/sh
 [ -n "${AIMAN_ID:-}" ] || exit 0
 input=$(cat)
 case "$input" in
-  *"gh pr create"*) ;;
+  *"gh pr create"*|*"gh pr new"*|*"gh -R "*" pr create"*|*"gh -R "*" pr new"*|*"gh --repo "*" pr create"*|*"gh --repo "*" pr new"*) ;;
   *) exit 0 ;;
 esac
 bin="${AIMAN_BIN_PATH:-}"
@@ -46,11 +43,43 @@ if [ -z "$bin" ] || [ ! -x "$bin" ]; then
   elif [ -x "$HOME/.local/bin/aiman" ]; then
     bin="$HOME/.local/bin/aiman"
   else
-    exit 0
+    echo "aiman verify gate: aiman binary not found" >&2
+    exit 2
   fi
 fi
-"$bin" verify --gate
+if command -v timeout >/dev/null 2>&1; then
+  timeout 15 "$bin" verify --gate
+else
+  "$bin" verify --gate
+fi
 `
+
+// removePreToolUseHook drops marker-owned Bash gate groups.
+func removePreToolUseHook(root map[string]any) bool {
+	hooks, ok := root["hooks"].(map[string]any)
+	if !ok {
+		return false
+	}
+	groups, _ := hooks["PreToolUse"].([]any)
+	kept := make([]any, 0, len(groups))
+	changed := false
+	for _, group := range groups {
+		if commandHasMarker(group, GateMarker) {
+			changed = true
+			continue
+		}
+		kept = append(kept, group)
+	}
+	if !changed {
+		return false
+	}
+	if len(kept) == 0 {
+		delete(hooks, "PreToolUse")
+	} else {
+		hooks["PreToolUse"] = kept
+	}
+	return true
+}
 
 // upsertPreToolUseHook installs one marker-owned Bash gate group.
 func upsertPreToolUseHook(root map[string]any, command string) bool {

@@ -55,7 +55,7 @@ func TestWaitExitCodeRequired(t *testing.T) {
 
 func TestWaitExitCodeIncomplete(t *testing.T) {
 	var out bytes.Buffer
-	err := waitForReview(verifySequence(verify.Review{ID: "r1", Status: verify.StatusIncomplete}), "r1", time.Second, time.Millisecond, &out)
+	err := waitForReview(verifySequence(verify.Review{ID: "r1", Status: verify.StatusIncomplete, Error: "no test command configured (verify.test_command)"}), "r1", time.Second, time.Millisecond, &out)
 	if !errors.Is(err, errVerifyNotPassed) || !strings.Contains(out.String(), "review incomplete") {
 		t.Fatalf("err=%v out=%q", err, out.String())
 	}
@@ -121,7 +121,7 @@ func TestWaitPrintsEvidence(t *testing.T) {
 
 func TestWaitPrintsMissingCommand(t *testing.T) {
 	var out bytes.Buffer
-	err := waitForReview(verifySequence(verify.Review{ID: "r1", Status: verify.StatusIncomplete}), "r1", time.Second, time.Millisecond, &out)
+	err := waitForReview(verifySequence(verify.Review{ID: "r1", Status: verify.StatusIncomplete, Error: "no test command configured (verify.test_command)"}), "r1", time.Second, time.Millisecond, &out)
 	if !errors.Is(err, errVerifyNotPassed) || !strings.Contains(out.String(), "no test command configured") {
 		t.Fatalf("err=%v out=%q", err, out.String())
 	}
@@ -184,5 +184,33 @@ func TestWaitPrintsFailingEvidence(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("out missing %q: %q", want, out.String())
 		}
+	}
+}
+
+func TestWaitCrashedReviewerDoesNotSayMissingCommand(t *testing.T) {
+	var out bytes.Buffer
+	err := waitForReview(verifySequence(verify.Review{ID: "r1", Status: verify.StatusIncomplete, Error: "reviewer exited before the marker"}), "r1", time.Second, time.Millisecond, &out)
+	if !errors.Is(err, errVerifyNotPassed) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(out.String(), "no test command configured") {
+		t.Fatalf("crashed reviewer printed a missing-command reason: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "reviewer exited before the marker") {
+		t.Fatalf("out = %q", out.String())
+	}
+}
+
+func TestGateSendsGateFlag(t *testing.T) {
+	var got map[string]any
+	call := func(_ string, params any) (server.Response, error) {
+		got, _ = params.(map[string]any)
+		return server.Response{Result: map[string]any{"review": verify.Review{Status: verify.StatusDisabled}}}, nil
+	}
+	if err := gateStatus(call, "tree", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if got["gate"] != true || got["tree_hash"] != "tree" || got["session"] != "s1" {
+		t.Fatalf("params = %#v", got)
 	}
 }

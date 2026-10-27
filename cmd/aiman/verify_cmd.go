@@ -172,7 +172,7 @@ func writeFinalReview(out io.Writer, review verify.Review) error {
 		fmt.Fprintln(out, "verify: disabled")
 		return nil
 	case verify.StatusComplete:
-		writeEvidence(out, review.Evidence)
+		writeEvidence(out, review)
 		if review.Passed() {
 			fmt.Fprintln(out, "verify: passed")
 			return nil
@@ -185,7 +185,7 @@ func writeFinalReview(out io.Writer, review verify.Review) error {
 		}
 		return errVerifyNotPassed
 	case verify.StatusIncomplete:
-		writeEvidence(out, review.Evidence)
+		writeEvidence(out, review)
 		fmt.Fprintln(out, "review incomplete")
 		return errVerifyNotPassed
 	default:
@@ -194,15 +194,16 @@ func writeFinalReview(out io.Writer, review verify.Review) error {
 	}
 }
 
-// verifyResultError is the exit status for a final review, independent of
-// whether it was printed as text or JSON.
 // runVerifyGate checks the current tree against the latest passing review.
 func runVerifyGate(flags map[string]string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "verify: cannot read the current directory: %v\n", err)
+		return errVerifyGateBlocked
 	}
-	hash, err := verify.TreeHash(context.Background(), cwd)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	hash, err := verify.TreeHash(ctx, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "verify: cannot hash the current tree: %v\n", err)
 		return errVerifyGateBlocked
@@ -219,7 +220,7 @@ func runVerifyGate(flags map[string]string) error {
 }
 
 func gateStatus(call func(string, any) (server.Response, error), hash, session string) error {
-	params := map[string]any{"tree_hash": hash}
+	params := map[string]any{"tree_hash": hash, "gate": true}
 	if session != "" {
 		params["session"] = session
 	}
@@ -236,18 +237,37 @@ func gateStatus(call func(string, any) (server.Response, error), hash, session s
 	if review.Status == verify.StatusDisabled || review.Passed() {
 		return nil
 	}
-	required := review.Required
-	if required == 0 {
-		fmt.Fprintln(os.Stderr, "verify: review is not passed; run `aiman verify --wait`")
+	if review.Required == 0 {
+		reason := strings.TrimSpace(review.Error)
+		if reason == "" {
+			reason = "review " + string(review.Status)
+		}
+		fmt.Fprintf(os.Stderr, "verify: not passed (%s); run `aiman verify --wait`\n", reason)
 		return errVerifyGateBlocked
 	}
-	fmt.Fprintf(os.Stderr, "verify: blocked by %d REQUIRED finding(s); run `aiman verify --wait` and fix them\n", required)
+	fmt.Fprintf(os.Stderr, "verify: blocked by %d REQUIRED finding(s); run `aiman verify --wait` and fix them\n", review.Required)
+	for _, f := range review.Findings {
+		if f.Severity != verify.SeverityRequired {
+			continue
+		}
+		where := f.Location
+		if where == "" {
+			where = "no location"
+		}
+		fmt.Fprintf(os.Stderr, "  - %s (%s)\n", f.Title, where)
+	}
 	return errVerifyGateBlocked
 }
 
-func writeEvidence(out io.Writer, ev verify.Evidence) {
+func writeEvidence(out io.Writer, review verify.Review) {
+	ev := review.Evidence
 	if ev.Command == "" {
-		fmt.Fprintln(out, "no test command configured")
+		switch {
+		case strings.Contains(review.Error, "no test command configured"):
+			fmt.Fprintln(out, "no test command configured")
+		case strings.TrimSpace(review.Error) != "":
+			fmt.Fprintf(out, "review error: %s\n", review.Error)
+		}
 		return
 	}
 	fmt.Fprintf(out, "evidence: %s → exit %d\n", ev.Command, ev.ExitCode)
@@ -262,6 +282,8 @@ func writeEvidence(out io.Writer, ev verify.Evidence) {
 	}
 }
 
+// verifyResultError is the exit status for a final review, independent of
+// whether it was printed as text or JSON.
 func verifyResultError(review verify.Review) error {
 	if review.Status == verify.StatusDisabled || review.Passed() {
 		return nil

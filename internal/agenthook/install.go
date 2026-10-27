@@ -2,6 +2,7 @@ package agenthook
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -46,6 +47,8 @@ func EnsureOnHost(home string, beforePR ...bool) ([]InstallResult, error) {
 	record(ensureHookScript(todoReporterPath(home), hookScript("todo report --from-stdin")))
 	if policy {
 		record(ensureHookScript(gatePath(home), verifyGateScript))
+	} else if err := os.Remove(gatePath(home)); err != nil && !os.IsNotExist(err) {
+		record(InstallResult{}, err)
 	}
 	record(ensureDeepcodeLauncher(home))
 	record(ensureClaude(home, script, policy))
@@ -74,6 +77,8 @@ func ensureClaude(home, command string, beforePR bool) (InstallResult, error) {
 		gate := false
 		if beforePR {
 			gate = upsertPreToolUseHook(root, gatePath(home))
+		} else {
+			gate = removePreToolUseHook(root)
 		}
 		return identity || compact || turns || todos || gate
 	})
