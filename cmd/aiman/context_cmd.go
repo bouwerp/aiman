@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +25,7 @@ func printContextUsage(w io.Writer) {
   get ID
   put --title T [--abstract A] [--group G | --repo R] [--body-file FILE]
       [--type decision|pitfall|convention|fact|handover|review|summary]
+  verify ID [--source file:PATH]
       [--supersedes ID] [--valid-until 2026-12-31|30d|RFC3339]
   pack [--group G] [--repo R] [--limit N]
   stats
@@ -166,6 +169,16 @@ func contextRPC(cmd string, args []string) (string, map[string]any, error) {
 			params["text"] = t
 		}
 		return "context.pack", params, nil
+	case "verify":
+		if len(rest) < 1 {
+			writeCLIError(server.CodeInvalidParams, "context verify requires an id")
+			return "", nil, errUsage
+		}
+		params := map[string]any{"id": rest[0]}
+		if source := flags["source"]; source != "" {
+			params["source"] = source
+		}
+		return "context.verify", params, nil
 	case "stats":
 		return "context.stats", map[string]any{}, nil
 	default:
@@ -288,6 +301,36 @@ func contextViaFiles(store *contextstore.Files, cmd string, args []string) error
 			}
 		}
 		return writeJSON(map[string]any{"type": "context_pack", "text": text})
+	case "verify":
+		if len(rest) < 1 {
+			writeCLIError(server.CodeInvalidParams, "context verify requires an id")
+			return errUsage
+		}
+		got, err := store.Get(ctx, rest[0])
+		if err != nil {
+			writeCLIError(server.CodeNotFound, err.Error())
+			return err
+		}
+		got.Verified = true
+		got.VerifiedAt = time.Now().UTC()
+		if source := flags["source"]; source != "" {
+			got.Source = source
+			if path, ok := strings.CutPrefix(source, "file:"); ok {
+				body, err := os.ReadFile(path)
+				if err != nil {
+					writeCLIError(server.CodeInvalidParams, err.Error())
+					return err
+				}
+				sum := sha256.Sum256(body)
+				got.SourceHash = hex.EncodeToString(sum[:])
+			}
+		}
+		stored, err := store.Put(ctx, *got)
+		if err != nil {
+			writeCLIError(server.CodeInvalidParams, err.Error())
+			return err
+		}
+		return writeJSON(map[string]any{"type": "context_verified", "note": noteJSON(stored, true)})
 	case "stats":
 		st, err := store.Stats(ctx)
 		if err != nil {
@@ -342,6 +385,24 @@ func noteJSON(e domain.ContextEntry, body bool) map[string]any {
 	}
 	if e.Supersedes != "" {
 		n["supersedes"] = e.Supersedes
+	}
+	if e.Author != "" {
+		n["author"] = string(e.Author)
+	}
+	if e.Verified {
+		n["verified"] = true
+	}
+	if !e.VerifiedAt.IsZero() {
+		n["verified_at"] = e.VerifiedAt.UTC().Format(time.RFC3339)
+	}
+	if e.Source != "" {
+		n["source"] = e.Source
+	}
+	if e.SourceHash != "" {
+		n["source_hash"] = e.SourceHash
+	}
+	if e.Confidence != "" {
+		n["confidence"] = string(e.Confidence)
 	}
 	if !e.ValidUntil.IsZero() {
 		n["valid_until"] = e.ValidUntil.UTC().Format(time.RFC3339)

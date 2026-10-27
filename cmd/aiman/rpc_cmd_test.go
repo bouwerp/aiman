@@ -23,6 +23,7 @@ func TestRPCParams(t *testing.T) {
 		{"context.put ok", "context.put", `{"title":"T","body":"b"}`, ""},
 		{"memory.jobs ok", "memory.jobs", `{}`, ""},
 		{"memory.done ok", "memory.done", `{"id":"j1"}`, ""},
+		{"context.verify ok", "context.verify", `{"id":"n1"}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

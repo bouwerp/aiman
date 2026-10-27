@@ -135,3 +135,38 @@ func TestContextViaFilesFindHits(t *testing.T) {
 		t.Fatalf("hit fields = %#v", res.Hits[0])
 	}
 }
+
+func TestContextViaFilesVerify(t *testing.T) {
+	store := contextstore.NewFiles(t.TempDir())
+	stored, err := store.Put(context.Background(), domain.ContextEntry{Title: "Verify", Body: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "source.md")
+	if err := os.WriteFile(source, []byte("evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = contextViaFiles(store, "verify", []string{stored.ID, "--source", "file:" + source})
+	})
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	var res struct {
+		Note map[string]any `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output %q: %v", out, err)
+	}
+	if res.Note["verified"] != true || res.Note["source_hash"] == "" {
+		t.Fatalf("note = %#v", res.Note)
+	}
+}
+
+func TestContextRPCVerify(t *testing.T) {
+	method, params, err := contextRPC("verify", []string{"id1", "--source", "file:/tmp/x"})
+	if err != nil || method != "context.verify" || params["id"] != "id1" || params["source"] != "file:/tmp/x" {
+		t.Fatalf("%s %#v %v", method, params, err)
+	}
+}

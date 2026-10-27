@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +23,12 @@ type ContextNote struct {
 	Type       string `json:"type,omitempty"`
 	Supersedes string `json:"supersedes,omitempty"`
 	ValidUntil string `json:"valid_until,omitempty"`
+	Author     string `json:"author,omitempty"`
+	Verified   bool   `json:"verified,omitempty"`
+	VerifiedAt string `json:"verified_at,omitempty"`
+	Source     string `json:"source,omitempty"`
+	SourceHash string `json:"source_hash,omitempty"`
+	Confidence string `json:"confidence,omitempty"`
 	Body       string `json:"body,omitempty"`
 	Session    string `json:"session,omitempty"`
 	Created    string `json:"created,omitempty"`
@@ -47,6 +56,10 @@ type contextPutParams struct {
 	Type       string `json:"type"`
 	Supersedes string `json:"supersedes"`
 	ValidUntil string `json:"valid_until"`
+	Author     string `json:"author"`
+	Source     string `json:"source"`
+	Confidence string `json:"confidence"`
+	Verified   bool   `json:"verified"`
 }
 
 func contextNote(e domain.ContextEntry, body bool) ContextNote {
@@ -58,10 +71,18 @@ func contextNote(e domain.ContextEntry, body bool) ContextNote {
 		Abstract:   e.Abstract,
 		Type:       string(e.Type),
 		Supersedes: e.Supersedes,
+		Author:     string(e.Author),
+		Verified:   e.Verified,
+		Source:     e.Source,
+		SourceHash: e.SourceHash,
+		Confidence: string(e.Confidence),
 		Session:    e.SessionID,
 	}
 	if !e.ValidUntil.IsZero() {
 		n.ValidUntil = e.ValidUntil.UTC().Format(time.RFC3339)
+	}
+	if !e.VerifiedAt.IsZero() {
+		n.VerifiedAt = e.VerifiedAt.UTC().Format(time.RFC3339)
 	}
 	if !e.CreatedAt.IsZero() {
 		n.Created = e.CreatedAt.UTC().Format(time.RFC3339)
@@ -95,6 +116,12 @@ func (p contextPutParams) entry(now time.Time) (domain.ContextEntry, error) {
 		Body:       p.Body,
 		SessionID:  p.Session,
 		Supersedes: p.Supersedes,
+		Author:     domain.ContextAuthor(p.Author),
+		Source:     p.Source,
+		Confidence: domain.ContextConfidence(p.Confidence),
+	}
+	if p.Verified {
+		return e, fmt.Errorf("verified is set by context verify")
 	}
 	typ, ok := domain.ParseContextType(p.Type)
 	if !ok {
@@ -249,5 +276,45 @@ func contextListResult(id, typ string, list []domain.ContextEntry) Response {
 	return Response{ID: id, Result: map[string]any{
 		"type":  typ,
 		"notes": notes,
+	}}
+}
+
+func (s *Server) handleContextVerify(ctx context.Context, req Request) Response {
+	store, fail, ok := s.requireStore(req.ID)
+	if !ok {
+		return fail
+	}
+	var p struct {
+		ID     string `json:"id"`
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(req.Params, &p); err != nil || strings.TrimSpace(p.ID) == "" {
+		return errResp(req.ID, CodeInvalidParams, "id is required")
+	}
+	got, err := store.Get(ctx, p.ID)
+	if err != nil {
+		return errResp(req.ID, CodeNotFound, err.Error())
+	}
+	e := *got
+	e.Verified = true
+	e.VerifiedAt = time.Now().UTC()
+	if source := strings.TrimSpace(p.Source); source != "" {
+		e.Source = source
+		if path, ok := strings.CutPrefix(source, "file:"); ok {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return errResp(req.ID, CodeInvalidParams, err.Error())
+			}
+			sum := sha256.Sum256(body)
+			e.SourceHash = hex.EncodeToString(sum[:])
+		}
+	}
+	stored, err := store.Put(ctx, e)
+	if err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type": "context_verified",
+		"note": contextNote(stored, true),
 	}}
 }

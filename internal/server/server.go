@@ -255,6 +255,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleContextPack(ctx, req)
 	case "context.stats":
 		return s.handleContextStats(ctx, req)
+	case "context.verify":
+		return s.handleContextVerify(ctx, req)
 	case "usage.get":
 		return s.handleUsageGet(ctx, req)
 	case "handover.write":

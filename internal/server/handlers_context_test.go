@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -232,5 +234,49 @@ func TestContextFindRankedHits(t *testing.T) {
 	}
 	if len(res.Hits) != 2 || res.Hits[0]["type"] != "decision" {
 		t.Fatalf("hits = %#v", res.Hits)
+	}
+}
+
+func TestContextVerifyRecordsSourceHash(t *testing.T) {
+	sock := startContextServer(t)
+	put, err := Call(sock, "context.put", map[string]any{"title": "Verify me", "body": "body"})
+	if err != nil || put.Error != nil {
+		t.Fatalf("put: %v %+v", err, put.Error)
+	}
+	var putRes struct {
+		ID string `json:"id"`
+	}
+	raw, _ := json.Marshal(put.Result)
+	if err := json.Unmarshal(raw, &putRes); err != nil || putRes.ID == "" {
+		t.Fatalf("put result %s: %v", raw, err)
+	}
+	path := filepath.Join(t.TempDir(), "source.md")
+	if err := os.WriteFile(path, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	verify, err := Call(sock, "context.verify", map[string]any{"id": putRes.ID, "source": "file:" + path})
+	if err != nil || verify.Error != nil {
+		t.Fatalf("verify: %v %+v", err, verify.Error)
+	}
+	var res struct {
+		Note ContextNote `json:"note"`
+	}
+	raw, _ = json.Marshal(verify.Result)
+	if err := json.Unmarshal(raw, &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.Note.Verified || res.Note.SourceHash == "" || res.Note.VerifiedAt == "" {
+		t.Fatalf("verified note = %+v", res.Note)
+	}
+}
+
+func TestContextPutRejectsVerified(t *testing.T) {
+	sock := startContextServer(t)
+	resp, err := Call(sock, "context.put", map[string]any{"title": "Nope", "verified": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "context verify") {
+		t.Fatalf("want verified rejection, got %+v", resp.Error)
 	}
 }

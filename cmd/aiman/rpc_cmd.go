@@ -27,6 +27,7 @@ var rpcMethods = map[string]bool{
 	"handover.point":   true,
 	"usage.get":        true,
 	"context.put":      true,
+	"context.verify":   true,
 	"memory.jobs":      true,
 	"memory.done":      true,
 }
