@@ -186,12 +186,12 @@ func TestUsageViewRendersHealthOnHostLine(t *testing.T) {
 		mode: usageByIssue,
 		hosts: []usageHost{
 			{
-				host:  "alpha",
+				host: "alpha",
 				extra: healthExtra(usage.Health{
-					Known:        true,
-					ReadCalls:    5,
-					EditCalls:    2,
-					FirstTestAt:  time.Date(2026, time.October, 22, 14, 23, 0, 0, time.UTC),
+					Known:       true,
+					ReadCalls:   5,
+					EditCalls:   2,
+					FirstTestAt: time.Date(2026, time.October, 22, 14, 23, 0, 0, time.UTC),
 				}),
 				rows: map[usageViewMode][]usage.Row{
 					usageByIssue: {},
@@ -206,13 +206,20 @@ func TestUsageViewRendersHealthOnHostLine(t *testing.T) {
 	}
 	// It must not appear as a separate indented line below the host.
 	lines := strings.Split(plain, "\n")
+	found := false
 	for _, line := range lines {
-		if strings.Contains(line, "READ:EDIT 5:2") && strings.Contains(line, "alpha") {
-			// Found on same line - correct
+		if strings.Contains(line, "READ:EDIT 5:2") {
+			if !strings.Contains(line, "alpha") {
+				t.Fatalf("health not on the host line:\n%s", plain)
+			}
+			found = true
 		}
 		if strings.TrimSpace(line) == "READ:EDIT 5:2 · first test 14:23" {
 			t.Fatalf("health on separate line below host:\n%s", plain)
 		}
+	}
+	if !found {
+		t.Fatalf("health missing from view:\n%s", plain)
 	}
 }
 
