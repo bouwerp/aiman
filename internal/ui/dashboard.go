@@ -176,6 +176,7 @@ const (
 	viewStateReviveRemotePicker // pick which remote to scan for abandoned worktrees
 	viewStateReviveList         // list of abandoned worktrees found, with candidate agent(s)
 	viewStateReviveAgentPick    // short pick-list when a worktree has 2+ agent candidates
+	viewStateMemoryCandidates   // review memory notes proposed from handovers
 )
 
 type mainTab int
@@ -378,6 +379,7 @@ type Model struct {
 	awsCredentials       AWSCredentialsModel
 	snapshotBrowser      SnapshotBrowserModel
 	scheduledPrompts     ScheduledPromptsModel
+	memoryCandidates     MemoryCandidatesModel
 	revive               ReviveWorktreeModel
 	revivePickCandidates []string // set when a revive-list selection has 2+ agent candidates, for viewStateReviveAgentPick
 	picker               RepoPickerModel
@@ -899,6 +901,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 		menuItem{title: "Agent defaults", desc: "Default model and thinking effort per agent", action: viewStateAgentDefaults},
 		menuItem{title: "Shared context", desc: "Store size, lookups, and pack usage on remotes", action: viewStateContextStats},
+		menuItem{title: "Memory candidates", desc: memoryMenuDesc(0), action: viewStateMemoryCandidates},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
 		menuItem{title: "Secrets", desc: "Manage env-var secrets for injection into sessions", action: viewStateSecretsSetup},
 		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
@@ -931,6 +934,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		aiSetup:             NewAISetupModel(cfg),
 		secretsSetup:        NewSecretsSetupModel(db),
 		scheduledPrompts:    NewScheduledPromptsModel(db),
+		memoryCandidates:    NewMemoryCandidatesModel(cfg, intelligence),
 		doctorResults:       doctorResults,
 		viewport:            vp,
 		firstLoad:           make(map[string]bool),
@@ -2901,7 +2905,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.startSessionStream(remote)
 		}
 		return m, nil
-	case todoLoadedMsg, promptSentMsg, todoMutatedMsg, usageMsg, usageRollupMsg:
+	case todoLoadedMsg, promptSentMsg, todoMutatedMsg, usageMsg, usageRollupMsg,
+		memoryJobsMsg, memoryProposalMsg, memorySavedMsg, memoryJobDoneMsg:
 		// These results are global: a fetch, a reply, a failed to-do
 		// write, or a usage report can finish after the user has left
 		// the session list. The rollup is the same path so $ stays
@@ -3040,6 +3045,9 @@ func (m *Model) dispatchSettingsUpdate(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return model, cmd, true
 	case viewStateAISettings:
 		model, cmd := m.handleAISetupUpdate(msg)
+		return model, cmd, true
+	case viewStateMemoryCandidates:
+		model, cmd := m.handleMemoryCandidatesUpdate(msg)
 		return model, cmd, true
 	case viewStateReviveRemotePicker:
 		model, cmd := m.handleReviveRemotePickerUpdate(msg)
@@ -3478,6 +3486,8 @@ func (m *Model) renderSettingsView() (string, bool) {
 		return m.usageView.viewString(), true
 	case viewStateAISettings:
 		return m.aiSetup.viewString(), true
+	case viewStateMemoryCandidates:
+		return m.memoryCandidates.viewString(), true
 	case viewStateReviveRemotePicker:
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.remotes.list.View()), true
 	case viewStateReviveList:
@@ -5449,6 +5459,14 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		if msg.String() == "enter" {
 			if i, ok := m.menu.SelectedItem().(menuItem); ok {
+				if i.action == viewStateMemoryCandidates {
+					m.state = i.action
+					var cmds []tea.Cmd
+					for _, r := range config.UniqueRemotes(m.cfg.Remotes) {
+						cmds = append(cmds, fetchMemoryJobsCmd(m.cfg, r.Host))
+					}
+					return m, tea.Batch(cmds...)
+				}
 				if i.action == viewStateRemotes {
 					m.remotes = NewRemotesModel(m.cfg)
 					m.remotes.width = m.width

@@ -40,6 +40,11 @@ func (m *Model) applyTrackedSessionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case usageRollupMsg:
 		m.applyUsageRollup(msg)
 		return m, nil
+	case memoryJobsMsg, memoryProposalMsg, memorySavedMsg, memoryJobDoneMsg:
+		model, cmd := m.memoryCandidates.Update(msg)
+		m.memoryCandidates = model
+		m.syncMemoryMenuDesc()
+		return m, cmd
 	default:
 		return m, nil
 	}

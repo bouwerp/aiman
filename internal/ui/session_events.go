@@ -86,6 +86,7 @@ func (m *Model) startSessionStream(remote config.Remote) tea.Cmd {
 		runSessionStream(cmd, st),
 		waitForSessionEvent(st),
 		registerSessionsCmd(remote, sessionsForHost(m.allSessions, remote.Host)),
+		fetchMemoryJobsCmd(m.cfg, remote.Host),
 	)
 }
 
