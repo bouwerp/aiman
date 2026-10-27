@@ -1,1 +1,0 @@
-{"nodes": [{"id": "$graphify-root$_internal_agenthook_plugin_go", "label": "plugin.go", "file_type": "code", "source_file": "internal/agenthook/plugin.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

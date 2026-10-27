@@ -26,3 +26,15 @@ aiman.db
 
 # Aiman: generated session scaffolding (do not commit)
 .aiman_*
+
+# Generated agent skill installs and code graphs (do not commit)
+.agents/skills/
+.claude/skills/
+.codex/skills/
+.cursor/skills/
+.deepcode/skills/
+.gemini/skills/
+.grok/skills/
+.kilo/skills/
+graphify-out/
+.superpowers/
