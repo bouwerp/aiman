@@ -148,3 +148,23 @@ func TestStartReadsTaskFromWorktreeWithoutWorkingDir(t *testing.T) {
 		t.Fatalf("brief %q %v", brief, err)
 	}
 }
+
+// A reviewer that crashed leaves an incomplete review; the same tree starts
+// a fresh one rather than re-reporting the crash.
+func TestStartRetriesIncompleteReview(t *testing.T) {
+	r := newMRig(t, Config{})
+	first, err := r.m.Start(context.Background(), StartRequest{WorkerID: "w1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.waitStatus(t, first.ID, StatusRunning)
+	r.term.kill("rev-1")
+	r.waitStatus(t, first.ID, StatusIncomplete)
+	second, err := r.m.Start(context.Background(), StartRequest{WorkerID: "w1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID == first.ID {
+		t.Fatal("an incomplete review was reused")
+	}
+}

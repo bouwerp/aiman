@@ -191,8 +191,8 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Review, error) {
 }
 
 // reviewForTree finds the worker's review of tree that is still useful: one
-// running, or one that finished with a result. Failed and timed-out reviews
-// are retried.
+// running, or one that completed. Incomplete (the reviewer stopped without
+// finishing), failed and timed-out reviews are retried with a fresh reviewer.
 func (m *Manager) reviewForTree(workerID, tree string) (Review, bool) {
 	all, err := m.d.Store.List()
 	if err != nil {
@@ -202,7 +202,7 @@ func (m *Manager) reviewForTree(workerID, tree string) (Review, bool) {
 		if r.WorkerID != workerID || r.Tree != tree {
 			continue
 		}
-		if r.Status.Active() || r.Status == StatusComplete || r.Status == StatusIncomplete {
+		if r.Status.Active() || r.Status == StatusComplete {
 			return r, true
 		}
 	}
