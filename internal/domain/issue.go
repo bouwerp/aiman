@@ -32,9 +32,12 @@ type Issue struct {
 	Description string
 	Status      IssueStatus
 	Type        string // JIRA issue type name, e.g. "Bug" or "Story"
-	Assignee    string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// AcceptanceCriteria comes from the configured JIRA custom field, else the
+	// list under the description's acceptance-criteria heading. Nil when neither has items.
+	AcceptanceCriteria []string
+	Assignee           string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (i Issue) Slug() string {

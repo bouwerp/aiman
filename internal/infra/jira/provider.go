@@ -20,6 +20,10 @@ type Config struct {
 	// IssueStatuses limits the issue picker to these statuses. Empty means
 	// DefaultIssueStatuses.
 	IssueStatuses []string
+	// AcceptanceCriteriaField is an optional custom field key (e.g.
+	// "customfield_10035") holding acceptance criteria. Empty means the
+	// description's acceptance-criteria section is used.
+	AcceptanceCriteriaField string
 }
 
 type Provider struct {
@@ -53,6 +57,24 @@ type jiraIssue struct {
 		Created string `json:"created"`
 		Updated string `json:"updated"`
 	} `json:"fields"`
+	// RawFields keeps the undecoded fields object so a configured custom field
+	// can be read by key.
+	RawFields json.RawMessage `json:"-"`
+}
+
+func (ji *jiraIssue) UnmarshalJSON(data []byte) error {
+	type plain jiraIssue
+	var raw struct {
+		Fields json.RawMessage `json:"fields"`
+	}
+	if err := json.Unmarshal(data, (*plain)(ji)); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	ji.RawFields = raw.Fields
+	return nil
 }
 
 type jiraSearchResponse struct {
@@ -78,7 +100,11 @@ func (p *Provider) fetchIssues(ctx context.Context, jql string, maxResults int) 
 
 	params := url.Values{}
 	params.Add("jql", jql)
-	params.Add("fields", "summary,description,status,issuetype,assignee,created,updated")
+	fields := "summary,description,status,issuetype,assignee,created,updated"
+	if f := strings.TrimSpace(p.config.AcceptanceCriteriaField); f != "" {
+		fields += "," + f
+	}
+	params.Add("fields", fields)
 	params.Add("maxResults", fmt.Sprintf("%d", maxResults))
 	u.RawQuery = params.Encode()
 
@@ -252,16 +278,21 @@ func (p *Provider) toDomainIssue(ji jiraIssue) domain.Issue {
 	}
 
 	desc := formatIssueDescription(ji.Fields.Description)
+	ac := customFieldAcceptanceCriteria(ji.RawFields, strings.TrimSpace(p.config.AcceptanceCriteriaField))
+	if len(ac) == 0 {
+		ac = ExtractAcceptanceCriteria(desc)
+	}
 
 	return domain.Issue{
-		ID:          ji.Key,
-		Key:         ji.Key,
-		Summary:     ji.Fields.Summary,
-		Description: desc,
-		Status:      domain.IssueStatus(ji.Fields.Status.Name),
-		Type:        ji.Fields.IssueType.Name,
-		Assignee:    assignee,
-		CreatedAt:   created,
-		UpdatedAt:   updated,
+		ID:                 ji.Key,
+		Key:                ji.Key,
+		Summary:            ji.Fields.Summary,
+		Description:        desc,
+		Status:             domain.IssueStatus(ji.Fields.Status.Name),
+		Type:               ji.Fields.IssueType.Name,
+		AcceptanceCriteria: ac,
+		Assignee:           assignee,
+		CreatedAt:          created,
+		UpdatedAt:          updated,
 	}
 }
