@@ -542,7 +542,9 @@ func (m *Model) renderSessionDetail(it item, width int) string {
 	if title := renderDetailTitle(it.session, width); title != "" {
 		head = append(head, title)
 	}
-	if meta := renderMetaLine(it.session, m.metaFor(it.session.ID), time.Now(), width); meta != "" {
+	extras := m.metaFor(it.session.ID)
+	extras.Reviewing = reviewerRunning(it.session.ID, m.allSessions)
+	if meta := renderMetaLine(it.session, extras, time.Now(), width); meta != "" {
 		head = append(head, meta)
 	}
 	if git := renderGitPRLine(m.gitStatus, width); git != "" {

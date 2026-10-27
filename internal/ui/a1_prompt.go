@@ -42,6 +42,8 @@ func (m *Model) applyTrackedSessionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ciStatusMsg:
 		return m, m.applyCIStatus(msg)
+	case verifyStartedMsg:
+		return m, m.applyVerifyStarted(msg)
 	case memoryJobsMsg, memoryProposalMsg, memorySavedMsg, memoryJobDoneMsg:
 		model, cmd := m.memoryCandidates.Update(msg)
 		m.memoryCandidates = model

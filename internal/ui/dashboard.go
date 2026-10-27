@@ -720,6 +720,9 @@ func (m *Model) applyRemoteFilter() {
 	var flat []item
 	var daemonItems []list.Item
 	for _, s := range m.allSessions {
+		if s.Role == domain.SessionRoleReviewer {
+			continue
+		}
 		if s.TmuxSession == "aiman-trigger" || s.TmuxSession == "aiman-serve" || s.TmuxSession == "aiman-gateway" {
 			continue // Skip daemon sessions in the main list
 		}
@@ -868,6 +871,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "reply to session")),
 			key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "edit to-dos")),
 			key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "open vscode")),
+			key.NewBinding(key.WithKeys("V"), key.WithHelp("V", "verify with a different agent")),
 			key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "copy local path")),
 			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy session output (visible)")),
 			key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy session output (full preview)")),
@@ -2920,7 +2924,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case todoLoadedMsg, promptSentMsg, todoMutatedMsg, usageMsg, usageRollupMsg,
-		memoryJobsMsg, memoryProposalMsg, memorySavedMsg, memoryJobDoneMsg, ciStatusMsg:
+		memoryJobsMsg, memoryProposalMsg, memorySavedMsg, memoryJobDoneMsg, ciStatusMsg, verifyStartedMsg:
 		// These results are global: a fetch, a reply, a failed to-do
 		// write, a usage report or a PR watch answer can finish after the user has left
 		// the session list. The rollup is the same path so $ stays
@@ -4712,7 +4716,7 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 							toast = "⏹️  Restart canceled."
 						}
 						return m, m.showToast(toast, false, 3*time.Second), true
-					case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+p", "ctrl+t":
+					case "s", "ctrl+r", "c", "t", "v", "V", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+p", "ctrl+t":
 						waitMsg := "⚠️  This session is still being created — wait for it to finish, or press ctrl+k to cancel."
 						if cs.restart {
 							waitMsg = "⚠️  This session is still restarting — wait for it to finish, or press ctrl+k to cancel."
@@ -4722,7 +4726,7 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 				}
 				if m.isTerminatingSession(si.session.ID) {
 					switch msg.String() {
-					case "s", "ctrl+r", "c", "t", "v", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+k", "ctrl+p", "ctrl+t":
+					case "s", "ctrl+r", "c", "t", "v", "V", "p", "i", "ctrl+a", "ctrl+y", "ctrl+s", "a", "w", "y", "Y", "ctrl+k", "ctrl+p", "ctrl+t":
 						return m, m.showToast("⚠️  This session is being terminated.", true, 4*time.Second), true
 					}
 				}
@@ -5282,6 +5286,9 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			}
 			return m, nil, true
 		}
+	}
+	if msg.String() == "V" && m.currentTab == tabSessions {
+		return m.startVerify()
 	}
 	if msg.String() == "ctrl+r" || msg.String() == "s" || msg.String() == "S" {
 		if sel := m.list.SelectedItem(); sel != nil {

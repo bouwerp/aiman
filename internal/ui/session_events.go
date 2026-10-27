@@ -169,6 +169,12 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 	if msg.event.Type == "usage" {
 		return follow(m.usageEventFetch(msg.event.ID))
 	}
+	// A finished review has no pane activity to refresh. Drop its hidden
+	// reviewer row so the reviewing marker clears even for tmux reviewers.
+	if msg.event.Type == "verify" {
+		m.dropReviewerRows(msg.event.ID)
+		return follow(nil)
+	}
 	// serve has already decided this session needs the user. It is not
 	// pane activity either, so it never queues a refresh. A CI escalation
 	// also reads ci.get so that row shows the needs-you glyph.
