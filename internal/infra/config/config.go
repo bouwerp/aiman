@@ -29,9 +29,9 @@ type Config struct {
 	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
 	Usage         UsageConfig              `yaml:"usage,omitempty"`
 	// Notifications configures push/webhook/Slack delivery.
-	Notifications NotificationsConfig     `yaml:"notifications,omitempty"`
-	Remotes       []Remote                 `yaml:"remotes"`
-	ActiveRemote  string                   `yaml:"active_remote"`
+	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
+	Remotes       []Remote            `yaml:"remotes"`
+	ActiveRemote  string              `yaml:"active_remote"`
 
 	// PermissionsTightened records that Load had to remove group/other access
 	// from the config file, meaning the API token in it had been readable by
@@ -49,7 +49,7 @@ type ServeConfig struct {
 	Skills        SkillsConfig             `yaml:"skills,omitempty"`
 	AgentDefaults map[string]AgentDefaults `yaml:"agent_defaults,omitempty"`
 	Gateway       GatewayConfig            `yaml:"gateway,omitempty"`
-	Usage         UsageConfig          `yaml:"usage,omitempty"`
+	Usage         UsageConfig              `yaml:"usage,omitempty"`
 	// Notifications configures push/webhook/Slack delivery.
 	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
 }
