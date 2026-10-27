@@ -43,6 +43,7 @@ type fileMeta struct {
 	Source     string `yaml:"source,omitempty"`
 	SourceHash string `yaml:"source_hash,omitempty"`
 	Confidence string `yaml:"confidence,omitempty"`
+	Evidence   string `yaml:"evidence,omitempty"`
 	Session    string `yaml:"session,omitempty"`
 	Created    string `yaml:"created"`
 }
@@ -510,10 +511,14 @@ func normalize(e domain.ContextEntry) (domain.ContextEntry, error) {
 	default:
 		return e, fmt.Errorf("invalid confidence %q", e.Confidence)
 	}
+	e.Evidence = strings.TrimSpace(e.Evidence)
 	rawSupersedes := strings.TrimSpace(e.Supersedes)
 	e.Supersedes = SafeKey(e.Supersedes)
 	if rawSupersedes != "" && e.Supersedes == "" {
 		return e, fmt.Errorf("invalid supersedes %q", rawSupersedes)
+	}
+	if e.Type == domain.ContextTypeHabit && rawSupersedes != "" && e.Evidence == "" {
+		return e, fmt.Errorf("superseding a habit requires --evidence")
 	}
 	if e.ID == "" {
 		e.ID = uuid.NewString()
@@ -582,6 +587,7 @@ func encode(e domain.ContextEntry) ([]byte, error) {
 		Source:     e.Source,
 		SourceHash: e.SourceHash,
 		Confidence: string(e.Confidence),
+		Evidence:   e.Evidence,
 		Session:    e.SessionID,
 		Created:    e.CreatedAt.UTC().Format(time.RFC3339),
 	}
@@ -652,6 +658,7 @@ func decode(raw []byte) (domain.ContextEntry, error) {
 		Source:     meta.Source,
 		SourceHash: meta.SourceHash,
 		Confidence: confidence,
+		Evidence:   meta.Evidence,
 		CreatedAt:  created,
 	}, nil
 }
@@ -747,12 +754,20 @@ func FormatPack(entries []domain.ContextEntry) string {
 	var b strings.Builder
 	b.WriteString("# Shared context\n\n")
 	b.WriteString("Notes from earlier sessions on this host. Use `aiman context get ID` for the full note.\n\n")
+	emitted := 0
 	for _, e := range entries {
+		if e.Type == domain.ContextTypeHabit && !e.Verified {
+			continue // an unverified habit is a suggestion, not a rule
+		}
 		typ := e.Type
 		if typ == "" {
 			typ = domain.ContextTypeFact
 		}
 		fmt.Fprintf(&b, "- **%s** [%s] (`%s`): %s\n", e.Title, typ, e.ID, e.Abstract)
+		emitted++
+	}
+	if emitted == 0 {
+		return ""
 	}
 	return strings.TrimSpace(b.String()) + "\n"
 }

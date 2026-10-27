@@ -200,3 +200,15 @@ func TestHitsStatusAndStale(t *testing.T) {
 		t.Fatalf("stale status = %q", hits[0].Status)
 	}
 }
+
+func TestHabitWithEvidenceRanks(t *testing.T) {
+	now := time.Now().UTC()
+	list := []domain.ContextEntry{
+		{ID: "fact", Type: domain.ContextTypeFact, CreatedAt: now},
+		{ID: "habit", Type: domain.ContextTypeHabit, Evidence: "session:1", CreatedAt: now.Add(-time.Hour)},
+	}
+	Rank(list)
+	if list[0].ID != "habit" {
+		t.Fatalf("habit not in the rule tier: %v", titles(list))
+	}
+}

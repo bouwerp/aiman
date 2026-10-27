@@ -51,7 +51,7 @@ func Rank(list []domain.ContextEntry) {
 
 func rankTier(e domain.ContextEntry) int {
 	switch e.Type {
-	case domain.ContextTypeDecision, domain.ContextTypePitfall, domain.ContextTypeConvention:
+	case domain.ContextTypeDecision, domain.ContextTypePitfall, domain.ContextTypeConvention, domain.ContextTypeHabit:
 		return 0
 	default:
 		return 1

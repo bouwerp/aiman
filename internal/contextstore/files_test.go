@@ -301,3 +301,53 @@ func writeRawNote(t *testing.T, s *Files, id, frontmatter string) {
 		t.Fatal(err)
 	}
 }
+
+func TestHabitSupersedeRequiresEvidence(t *testing.T) {
+	s := NewFiles(t.TempDir())
+	first, err := s.Put(context.Background(), domain.ContextEntry{Title: "Old habit", Type: domain.ContextTypeHabit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Put(context.Background(), domain.ContextEntry{
+		Title: "New habit", Type: domain.ContextTypeHabit, Supersedes: first.ID,
+	})
+	if err == nil {
+		t.Fatal("habit supersede without evidence succeeded")
+	}
+	stored, err := s.Put(context.Background(), domain.ContextEntry{
+		Title: "New habit", Type: domain.ContextTypeHabit, Supersedes: first.ID, Evidence: "session:abc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Evidence != "session:abc" {
+		t.Fatalf("evidence = %q", stored.Evidence)
+	}
+}
+
+func TestFactSupersedeNeedsNoEvidence(t *testing.T) {
+	s := NewFiles(t.TempDir())
+	first, err := s.Put(context.Background(), domain.ContextEntry{Title: "Old fact"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Put(context.Background(), domain.ContextEntry{Title: "New fact", Supersedes: first.ID}); err != nil {
+		t.Fatalf("fact supersede: %v", err)
+	}
+}
+
+func TestUnverifiedHabitNotPacked(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []domain.ContextEntry{
+		{ID: "habit", Type: domain.ContextTypeHabit, Title: "Unverified habit", Abstract: "suggestion", CreatedAt: now},
+		{ID: "fact", Type: domain.ContextTypeFact, Title: "Fact", Abstract: "truth", CreatedAt: now},
+	}
+	pack := FormatPack(entries)
+	if strings.Contains(pack, "Unverified habit") || !strings.Contains(pack, "Fact") {
+		t.Fatalf("pack = %q", pack)
+	}
+	entries[0].Verified = true
+	if pack := FormatPack(entries); !strings.Contains(pack, "Unverified habit") {
+		t.Fatalf("verified habit missing: %q", pack)
+	}
+}

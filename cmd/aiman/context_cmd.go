@@ -24,7 +24,7 @@ func printContextUsage(w io.Writer) {
   find QUERY [--group G | --repo R] [--limit N]
   get ID
   put --title T [--abstract A] [--group G | --repo R] [--body-file FILE]
-      [--type decision|pitfall|convention|fact|handover|review|summary]
+      [--type decision|pitfall|convention|habit|fact|handover|review|summary]
   verify ID [--source file:PATH]
       [--supersedes ID] [--valid-until 2026-12-31|30d|RFC3339]
   pack [--group G] [--repo R] [--limit N]
@@ -161,6 +161,9 @@ func contextRPC(cmd string, args []string) (string, map[string]any, error) {
 		if confidence := flags["confidence"]; confidence != "" {
 			params["confidence"] = confidence
 		}
+		if evidence := flags["evidence"]; evidence != "" {
+			params["evidence"] = evidence
+		}
 		if t := flags["type"]; t != "" {
 			params["type"] = t
 		}
@@ -293,6 +296,7 @@ func contextViaFiles(store *contextstore.Files, cmd string, args []string) error
 			Author:     domain.ContextAuthor(author),
 			Source:     flags["source"],
 			Confidence: domain.ContextConfidence(flags["confidence"]),
+			Evidence:   flags["evidence"],
 		}
 		if v := flags["valid-until"]; v != "" {
 			at, err := parseValidUntil(v, time.Now())
@@ -423,6 +427,9 @@ func noteJSON(e domain.ContextEntry, body bool) map[string]any {
 	}
 	if e.Confidence != "" {
 		n["confidence"] = string(e.Confidence)
+	}
+	if e.Evidence != "" {
+		n["evidence"] = e.Evidence
 	}
 	if !e.ValidUntil.IsZero() {
 		n["valid_until"] = e.ValidUntil.UTC().Format(time.RFC3339)

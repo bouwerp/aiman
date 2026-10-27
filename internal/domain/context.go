@@ -21,6 +21,7 @@ const (
 	ContextTypeDecision   ContextType = "decision"
 	ContextTypePitfall    ContextType = "pitfall"
 	ContextTypeConvention ContextType = "convention"
+	ContextTypeHabit      ContextType = "habit"
 	ContextTypeFact       ContextType = "fact"
 	ContextTypeHandover   ContextType = "handover"
 	ContextTypeReview     ContextType = "review"
@@ -38,6 +39,8 @@ func ParseContextType(s string) (ContextType, bool) {
 		return ContextTypePitfall, true
 	case "convention":
 		return ContextTypeConvention, true
+	case "habit":
+		return ContextTypeHabit, true
 	case "handover":
 		return ContextTypeHandover, true
 	case "review":
@@ -110,6 +113,7 @@ type ContextEntry struct {
 	Source     string
 	SourceHash string
 	Confidence ContextConfidence
+	Evidence   string
 }
 
 // ContextHit is the compact shape returned by context.find.

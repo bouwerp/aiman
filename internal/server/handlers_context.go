@@ -29,6 +29,7 @@ type ContextNote struct {
 	Source     string `json:"source,omitempty"`
 	SourceHash string `json:"source_hash,omitempty"`
 	Confidence string `json:"confidence,omitempty"`
+	Evidence   string `json:"evidence,omitempty"`
 	Body       string `json:"body,omitempty"`
 	Session    string `json:"session,omitempty"`
 	Created    string `json:"created,omitempty"`
@@ -59,6 +60,7 @@ type contextPutParams struct {
 	Author     string `json:"author"`
 	Source     string `json:"source"`
 	Confidence string `json:"confidence"`
+	Evidence   string `json:"evidence"`
 	Verified   bool   `json:"verified"`
 }
 
@@ -76,6 +78,7 @@ func contextNote(e domain.ContextEntry, body bool) ContextNote {
 		Source:     e.Source,
 		SourceHash: e.SourceHash,
 		Confidence: string(e.Confidence),
+		Evidence:   e.Evidence,
 		Session:    e.SessionID,
 	}
 	if !e.ValidUntil.IsZero() {
@@ -119,6 +122,7 @@ func (p contextPutParams) entry(now time.Time) (domain.ContextEntry, error) {
 		Author:     domain.ContextAuthor(p.Author),
 		Source:     p.Source,
 		Confidence: domain.ContextConfidence(p.Confidence),
+		Evidence:   p.Evidence,
 	}
 	if p.Verified {
 		return e, fmt.Errorf("verified is set by context verify")
