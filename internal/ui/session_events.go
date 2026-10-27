@@ -13,6 +13,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/server"
 )
@@ -35,6 +36,9 @@ const (
 	// eventStreamRetryAfter is how long to wait before redialling a stream that
 	// ended — most often because serve is not running on that remote.
 	eventStreamRetryAfter = 60 * time.Second
+
+	// notifyToastDelay is how long a needs-you toast stays up.
+	notifyToastDelay = 8 * time.Second
 )
 
 // sessionEventMsg carries one event from a remote's stream.
@@ -165,6 +169,11 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 	if msg.event.Type == "usage" {
 		return follow(m.usageEventFetch(msg.event.ID))
 	}
+	// serve has already decided this session needs the user. It is not
+	// pane activity either, so it never queues a refresh.
+	if msg.event.Type == "notify" {
+		return follow(m.notifyToast(msg.event))
+	}
 
 	if msg.event.Type == "keepalive" || (msg.event.ID == "" && msg.event.Type != "session_created") {
 		return follow(nil)
@@ -201,6 +210,22 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 	}
 	m.eventSeen[msg.event.ID] = state
 	return follow(nil)
+}
+
+// notifyToast raises a toast for a notification that needs the user and
+// returns nil for any other kind, so ended stays quiet in the TUI.
+func (m *Model) notifyToast(ev server.SessionEvent) tea.Cmd {
+	kind := domain.NotifyKind(ev.Kind)
+	if !domain.NeedsYou(kind) {
+		return nil
+	}
+	label := ev.ID
+	if s, found := m.sessionByID(ev.ID); found {
+		label = notify.Label(s.IssueKey, s.Name, s.ID)
+	} else if r := []rune(ev.ID); len(r) > 8 {
+		label = string(r[:8])
+	}
+	return m.showToast("● "+label+": "+domain.EventLabel(kind), kind == domain.NotifyError, notifyToastDelay)
 }
 
 // sessionEventState is the latest a stream has said about one session.

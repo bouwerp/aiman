@@ -604,6 +604,7 @@ are thin clients over these; an agent can also speak the JSON directly.
 | Sessions | `session.list`, `session.get`, `session.read`, `session.prompt`, `session.wait`, `session.create`, `session.rename`, `session.move`, `session.forget` |
 | PTY runtime | `pty.list`, `pty.get`, `pty.create`, `pty.input`, `pty.run`, `pty.wait-output`, `pty.capture`, `pty.resize`, `pty.kill`, `pty.forget` |
 | Live activity | `session.events` (streaming; takes over the connection like `pty.attach`) |
+| Notifications | `notify.since` (`after`, `limit`; `after: -1` returns only the tail seq) |
 | Shared context | `context.list`, `context.find`, `context.get`, `context.put`, `context.pack`, `context.stats` |
 
 Errors come back with a machine-readable `code` — `server_not_running`, `not_found`,
@@ -668,7 +669,7 @@ Install from the TUI daemons tab (phone gateway row) or:
 curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | BINARY_NAME=aiman-gateway sh
 ```
 
-The phone contract is `api/openapi.yaml`. Endpoints: `POST /v1/rpc`, `GET /v1/sessions`, `GET /v1/sessions/{id}`, `GET /v1/events` (WebSocket), `GET /v1/sessions/{id}/terminal` (WebSocket). Gateway-owned RPC: `push.register` / `push.unregister` (Expo tokens in `~/.aiman/gateway-push.json`, never logged). Default notify on `waiting_input`; `exited`/`errored` are opt-in; `working` is never sent. `cmd/aiman` does not import `tailscale.com`.
+The phone contract is `api/openapi.yaml`. Endpoints: `POST /v1/rpc`, `GET /v1/sessions`, `GET /v1/sessions/{id}`, `GET /v1/events` (WebSocket), `GET /v1/sessions/{id}/terminal` (WebSocket). Gateway-owned RPC: `push.register` / `push.unregister` (Expo tokens in `~/.aiman/gateway-push.json`, never logged). The gateway does not infer state. It reads serve's notification log through `notify.since` and pushes each entry to the devices subscribed to it (see [Notifications](#notifications)). A device's default subscription is `waiting_input`; `exited`/`errored` are opt-in; `working` is never sent. `ci_escalation` and `review_done` ride the `waiting_input` subscription. Phone push is off when `notifications.phone` is `false`. `cmd/aiman` does not import `tailscale.com`.
 
 Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refused: use `aiman session …`.
 
@@ -937,6 +938,37 @@ remotes:
 
 active_remote: devbox
 ```
+
+### Notifications
+
+`aiman serve` decides when a session needs you, once, and appends that decision to a notification log in the remote `~/.aiman/aiman.db`. Every channel reads the log; none of them guesses state on its own.
+
+```yaml
+notifications:
+  events: [waiting_input, ended, error, ci_escalation, review_done]  # default
+  phone: true             # push through aiman-gateway (default true)
+  webhook: ""             # POST plain text, e.g. an ntfy topic URL
+  slack_channel: ""       # needs `aiman slack auth` on the remote
+  min_interval: 2m        # at most one per session and event kind per interval
+
+remotes:
+  - name: devbox
+    host: devbox.company.com
+    notifications:        # optional; overrides the global block for this host
+      slack_channel: devbox-agents
+```
+
+Edit this on the laptop. Install, restart, reload and update push the resolved block for each host into the remote config, which overwrites edits made there.
+
+Only high-confidence states count: a hook report, or a pane classified at high confidence. The first observation of each session after serve starts records its state without notifying, so a restart does not re-announce every waiting session. Entries are kept for 7 days.
+
+| Channel | Delivered by | Cursor |
+|---|---|---|
+| Webhook / ntfy, Slack | `aiman serve` | `serve`, in the database |
+| Phone push | `aiman-gateway` | its own; starts at the log tail |
+| TUI toast | the dashboard, from the `notify` event on `session.events` | none (live only) |
+
+A sink that fails is retried on its own, up to 3 attempts per entry, without resending to sinks that succeeded. The TUI toasts only `waiting_input`, `error`, `ci_escalation` and `review_done`; `ended` never toasts. Message text is `<ticket or name> on <host>: <event> · <question or last line>`, one line, capped at 200 runes.
 
 ### AWS Credential Delegation
 

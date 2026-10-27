@@ -145,3 +145,49 @@ func TestSessionFromInfoKeepsTheBackend(t *testing.T) {
 		t.Errorf("parent dropped: %+v", s)
 	}
 }
+
+// A notify event whose kind needs the user raises a toast naming the session.
+func TestNotifyEventToastsWhenNeedsYou(t *testing.T) {
+	m := eventModel(domain.Session{ID: "s1", IssueKey: "PROJ-1", RemoteHost: "regent0"})
+	m.ensureSessionStreams()
+	cmd := m.applySessionEvent(sessionEventMsg{host: "regent0", event: server.SessionEvent{Type: "notify", ID: "s1", Kind: "waiting_input"}})
+	if cmd == nil || m.snapshotToast != "● PROJ-1: waiting for input" {
+		t.Fatalf("toast %q", m.snapshotToast)
+	}
+	if m.snapshotToastError {
+		t.Fatal("waiting_input is not an error toast")
+	}
+}
+
+// ended is logged for the phone and webhooks but never interrupts the TUI.
+func TestNotifyEventEndedIsQuiet(t *testing.T) {
+	m := eventModel(domain.Session{ID: "s1", IssueKey: "PROJ-1", RemoteHost: "regent0"})
+	m.ensureSessionStreams()
+	m.applySessionEvent(sessionEventMsg{host: "regent0", event: server.SessionEvent{Type: "notify", ID: "s1", Kind: "ended"}})
+	if m.snapshotToast != "" {
+		t.Fatalf("ended should not toast, got %q", m.snapshotToast)
+	}
+}
+
+// A notification is not pane activity, so it must not trigger a refresh.
+func TestNotifyEventDoesNotQueuePreview(t *testing.T) {
+	m := eventModel(domain.Session{ID: "s1", IssueKey: "PROJ-1", RemoteHost: "regent0"})
+	m.ensureSessionStreams()
+	m.applySessionEvent(sessionEventMsg{host: "regent0", event: server.SessionEvent{Type: "notify", ID: "s1", Kind: "error"}})
+	if !m.eventSeen["s1"].lastRefresh.IsZero() {
+		t.Fatal("a notify event queued a preview refresh")
+	}
+	if !m.snapshotToastError {
+		t.Fatal("an error notification should be an error toast")
+	}
+}
+
+// An id the dashboard does not know yet is shortened rather than dropped.
+func TestNotifyEventUnknownSessionUsesShortID(t *testing.T) {
+	m := eventModel()
+	m.ensureSessionStreams()
+	m.applySessionEvent(sessionEventMsg{host: "regent0", event: server.SessionEvent{Type: "notify", ID: "0123456789abcdef", Kind: "review_done"}})
+	if m.snapshotToast != "● 01234567: review done" {
+		t.Fatalf("toast %q", m.snapshotToast)
+	}
+}
