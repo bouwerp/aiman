@@ -32,23 +32,26 @@ func (s Status) Active() bool {
 
 // Review is one verifier run.
 type Review struct {
-	ID           string    `json:"id"`
-	WorkerID     string    `json:"worker_id"`
-	ReviewerID   string    `json:"reviewer_id"`
-	Agent        string    `json:"agent"`
-	Tree         string    `json:"tree"`
-	Commit       string    `json:"commit"`
-	BaseRef      string    `json:"base_ref"`
-	RepoWorktree string    `json:"repo_worktree"`
-	Worktree     string    `json:"worktree"`
-	Error        string    `json:"error"`
-	Status       Status    `json:"status"`
-	Findings     []Finding `json:"findings"`
-	Required     int       `json:"required"`
-	Suggestions  int       `json:"suggestions"`
-	CleanedUp    bool      `json:"cleaned_up"`
-	StartedAt    time.Time `json:"started_at"`
-	FinishedAt   time.Time `json:"finished_at"`
+	ID           string `json:"id"`
+	WorkerID     string `json:"worker_id"`
+	ReviewerID   string `json:"reviewer_id"`
+	Agent        string `json:"agent"`
+	Tree         string `json:"tree"`
+	Commit       string `json:"commit"`
+	BaseRef      string `json:"base_ref"`
+	RepoWorktree string `json:"repo_worktree"`
+	Worktree     string `json:"worktree"`
+	// Dir is the worker's working directory relative to its worktree; the
+	// reviewer runs, and writes its review, in the same place.
+	Dir         string    `json:"dir,omitempty"`
+	Error       string    `json:"error"`
+	Status      Status    `json:"status"`
+	Findings    []Finding `json:"findings"`
+	Required    int       `json:"required"`
+	Suggestions int       `json:"suggestions"`
+	CleanedUp   bool      `json:"cleaned_up"`
+	StartedAt   time.Time `json:"started_at"`
+	FinishedAt  time.Time `json:"finished_at"`
 }
 
 // Passed reports a complete review with no required findings.
