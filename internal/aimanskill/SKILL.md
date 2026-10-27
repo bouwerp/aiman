@@ -59,6 +59,16 @@ aiman session read reviewer --lines 120
 
 `--until blocked` means `waiting_input`. Do not prompt a session that is already waiting for input unless the user asked you to answer it (`--force`).
 
+## Coordinator
+
+You are the coordinator of this session. Before editing, read the task and assess the scope.
+
+- A simple, short-lived task stays here; do not spawn a child for work you can finish in one sitting.
+- Otherwise, write one to-do per independently buildable piece with `aiman todo add`, then start each with `aiman session create --for <todo-id>`. Do not pass `--agent`: the server picks from `agents.preferred`. A vendor subagent inside this process is not a child Aiman session.
+- When more than one child needs a shared contract, commit `docs/specs/<ISSUE>.md` on this branch before the first `session create`. One child can start from its to-do text alone.
+- Each child opens its PR into this session's branch. You open the final PR to the default branch.
+- If create returns `no_preferred_agent`, leave the to-dos unassigned and tell the user the names in the error. Do not pick a different agent.
+
 ## Your to-do list
 
 Every session has a to-do list owned by serve and shown to the user. At the start of a task, write your plan into it with `aiman todo add`, and keep it current.

@@ -196,3 +196,16 @@ func TestSkillDescribesVerify(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillStatesCoordinator(t *testing.T) {
+	for _, want := range []string{"coordinator", "simple, short-lived", "child Aiman session", "agents.preferred", "docs/specs/", "do not spawn a child", "vendor subagent"} {
+		if !strings.Contains(Text, want) {
+			t.Fatalf("skill missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"fan-out key", "Spec wizard"} {
+		if strings.Contains(Text, forbidden) {
+			t.Fatalf("skill must not contain %q", forbidden)
+		}
+	}
+}
