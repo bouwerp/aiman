@@ -828,3 +828,28 @@ func TestCommitsAheadOfBase(t *testing.T) {
 		t.Fatal("missing base should error")
 	}
 }
+
+// The base and path come from stored session fields and go into a remote
+// shell command, so neither may be able to run anything.
+func TestCommitsAheadOfBaseQuotesBaseAndPath(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "re$HOME po")
+	runGit(t, root, "init", "-q", repo)
+	runGit(t, repo, "config", "user.name", "Aiman Test")
+	runGit(t, repo, "config", "user.email", "aiman@example.com")
+	runGit(t, repo, "commit", "-q", "--allow-empty", "-m", "base")
+	runGit(t, repo, "branch", "-M", "main")
+	runGit(t, repo, "commit", "-q", "--allow-empty", "-m", "one")
+
+	marker := filepath.Join(root, "pwned")
+	evil := "x';touch " + marker + ";'"
+	m := NewManager(nil)
+	ex := local.NewExecutor("")
+	_, _ = m.CommitsAheadOfBase(context.Background(), ex, repo, evil)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("a crafted base ran a command: %v", err)
+	}
+	if n, err := m.CommitsAheadOfBase(context.Background(), ex, repo, "main~1"); err != nil || n != 1 {
+		t.Fatalf("path with $ and a space: ahead = %d, %v; want 1", n, err)
+	}
+}

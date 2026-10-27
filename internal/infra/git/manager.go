@@ -1089,7 +1089,10 @@ func (m *Manager) CommitsAheadOfBase(ctx context.Context, remote domain.RemoteEx
 	if strings.TrimSpace(base) == "" {
 		return 0, nil
 	}
-	cmd := fmt.Sprintf("git -C %q rev-list --count \"$(git -C %q rev-parse -q --verify 'origin/%s' || echo '%s')\"..HEAD", path, path, base, base)
+	// base and path come from stored session fields, so both are quoted for
+	// the remote shell; Go's %q would leave $ and backticks live.
+	dir, ref := shellQuote(path), shellQuote("origin/"+base)
+	cmd := fmt.Sprintf(`git -C %s rev-list --count "$(git -C %s rev-parse -q --verify %s || printf '%%s' %s)..HEAD"`, dir, dir, ref, shellQuote(base))
 	out, err := remote.Execute(ctx, cmd)
 	if err != nil {
 		return 0, fmt.Errorf("count commits ahead of %s: %w", base, err)
@@ -1160,4 +1163,10 @@ func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor
 	status.PullRequest = resolvePullRequestForBranch(ctx, remote, path, owner, repo, ok, status.Branch)
 
 	return status, nil
+}
+
+// shellQuote wraps s in single quotes for a POSIX shell, escaping any single
+// quote it contains.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
