@@ -387,6 +387,7 @@ func (s *Server) putHandoverNote(ctx context.Context, sess domain.Session, in ha
 		Body:      handover.NoteBody(in),
 		SessionID: sess.ID,
 		Type:      domain.ContextTypeHandover,
+		Author:    domain.ContextAuthorAiman,
 	})
 	if err != nil {
 		log.Printf("handover: context note %s: %v", id, err)

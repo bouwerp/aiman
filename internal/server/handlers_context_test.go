@@ -104,7 +104,7 @@ func TestContextPutGetListFindPack(t *testing.T) {
 		t.Fatalf("find type = %q", findRes.Type)
 	}
 	hit := findRes.Hits[0]
-	if len(hit) != 5 || hit["id"] == "" || hit["type"] != "fact" || hit["title"] != "Auth cookie" || hit["abstract"] == "" || hit["age"] == "" {
+	if len(hit) != 6 || hit["id"] == "" || hit["type"] != "fact" || hit["title"] != "Auth cookie" || hit["abstract"] == "" || hit["age"] == "" || hit["status"] != "unverified" {
 		t.Fatalf("find hit = %#v", hit)
 	}
 	for _, key := range []string{"body", "ns", "key", "created", "session"} {

@@ -119,6 +119,7 @@ type ContextHit struct {
 	Title    string `json:"title"`
 	Abstract string `json:"abstract"`
 	Age      string `json:"age"`
+	Status   string `json:"status"`
 }
 
 // ContextQuery selects notes. Empty fields are wildcards. Text filters

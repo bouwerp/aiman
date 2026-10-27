@@ -131,7 +131,7 @@ func TestContextViaFilesFindHits(t *testing.T) {
 	if res.Type != "context_find" || len(res.Hits) != 2 || res.Hits[0]["type"] != "decision" {
 		t.Fatalf("find output = %s", out)
 	}
-	if len(res.Hits[0]) != 5 {
+	if len(res.Hits[0]) != 6 {
 		t.Fatalf("hit fields = %#v", res.Hits[0])
 	}
 }
@@ -168,5 +168,19 @@ func TestContextRPCVerify(t *testing.T) {
 	method, params, err := contextRPC("verify", []string{"id1", "--source", "file:/tmp/x"})
 	if err != nil || method != "context.verify" || params["id"] != "id1" || params["source"] != "file:/tmp/x" {
 		t.Fatalf("%s %#v %v", method, params, err)
+	}
+}
+
+func TestContextPutAuthor(t *testing.T) {
+	t.Setenv("AIMAN_ENV", "1")
+	if got, err := contextPutAuthor(map[string]string{}); err != nil || got != "agent" {
+		t.Fatalf("agent = %q %v", got, err)
+	}
+	if _, err := contextPutAuthor(map[string]string{"author": "human"}); err == nil {
+		t.Fatal("expected laptop-only rejection")
+	}
+	t.Setenv("AIMAN_ENV", "")
+	if got, err := contextPutAuthor(map[string]string{}); err != nil || got != "human" {
+		t.Fatalf("human = %q %v", got, err)
 	}
 }

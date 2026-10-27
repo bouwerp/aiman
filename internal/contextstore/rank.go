@@ -1,8 +1,12 @@
 package contextstore
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -89,7 +93,31 @@ func Hits(list []domain.ContextEntry, now time.Time) []domain.ContextHit {
 			Title:    e.Title,
 			Abstract: e.Abstract,
 			Age:      Age(e.CreatedAt, now),
+			Status:   hitStatus(e),
 		})
 	}
 	return out
+}
+
+func hitStatus(e domain.ContextEntry) string {
+	if e.SourceHash != "" && sourceChanged(e.Source, e.SourceHash) {
+		return "stale"
+	}
+	if e.Verified {
+		return "verified"
+	}
+	return "unverified"
+}
+
+func sourceChanged(source, want string) bool {
+	path, ok := strings.CutPrefix(source, "file:")
+	if !ok {
+		return false
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return true
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:]) != want
 }

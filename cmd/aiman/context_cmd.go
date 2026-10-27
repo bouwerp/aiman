@@ -149,6 +149,18 @@ func contextRPC(cmd string, args []string) (string, map[string]any, error) {
 			writeCLIError(server.CodeInvalidParams, "context put requires --title")
 			return "", nil, errUsage
 		}
+		author, err := contextPutAuthor(flags)
+		if err != nil {
+			writeCLIError(server.CodeInvalidParams, err.Error())
+			return "", nil, err
+		}
+		params["author"] = author
+		if source := flags["source"]; source != "" {
+			params["source"] = source
+		}
+		if confidence := flags["confidence"]; confidence != "" {
+			params["confidence"] = confidence
+		}
 		if t := flags["type"]; t != "" {
 			params["type"] = t
 		}
@@ -266,6 +278,11 @@ func contextViaFiles(store *contextstore.Files, cmd string, args []string) error
 			writeCLIError(server.CodeInvalidParams, "context put requires --title")
 			return errUsage
 		}
+		author, err := contextPutAuthor(flags)
+		if err != nil {
+			writeCLIError(server.CodeInvalidParams, err.Error())
+			return err
+		}
 		e := domain.ContextEntry{
 			Title:      flags["title"],
 			Abstract:   flags["abstract"],
@@ -273,6 +290,9 @@ func contextViaFiles(store *contextstore.Files, cmd string, args []string) error
 			SessionID:  strings.TrimSpace(os.Getenv("AIMAN_ID")),
 			Type:       domain.ContextType(flags["type"]),
 			Supersedes: flags["supersedes"],
+			Author:     domain.ContextAuthor(author),
+			Source:     flags["source"],
+			Confidence: domain.ContextConfidence(flags["confidence"]),
 		}
 		if v := flags["valid-until"]; v != "" {
 			at, err := parseValidUntil(v, time.Now())
@@ -417,4 +437,17 @@ func noteJSON(e domain.ContextEntry, body bool) map[string]any {
 		n["body"] = e.Body
 	}
 	return n
+}
+
+func contextPutAuthor(flags map[string]string) (string, error) {
+	if strings.TrimSpace(os.Getenv("AIMAN_ENV")) == "1" {
+		if a := strings.TrimSpace(flags["author"]); a != "" && a != string(domain.ContextAuthorAgent) {
+			return "", fmt.Errorf("--author is laptop-only")
+		}
+		return string(domain.ContextAuthorAgent), nil
+	}
+	if a := strings.TrimSpace(flags["author"]); a != "" {
+		return a, nil
+	}
+	return string(domain.ContextAuthorHuman), nil
 }

@@ -2,6 +2,10 @@ package contextstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -168,5 +172,31 @@ func TestPackRanksVerifiedFirst(t *testing.T) {
 	Rank(list)
 	if list[0].ID != "verified" {
 		t.Fatalf("order = %v", titles(list))
+	}
+}
+
+func TestHitsStatusAndStale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "source.md")
+	if err := os.WriteFile(path, []byte("v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("v1"))
+	now := time.Now().UTC()
+	hits := Hits([]domain.ContextEntry{{
+		ID: "verified", Type: domain.ContextTypeFact, Title: "V", CreatedAt: now,
+		Verified: true, Source: "file:" + path, SourceHash: hex.EncodeToString(sum[:]),
+	}}, now)
+	if hits[0].Status != "verified" {
+		t.Fatalf("status = %q", hits[0].Status)
+	}
+	if err := os.WriteFile(path, []byte("v2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hits = Hits([]domain.ContextEntry{{
+		ID: "stale", Type: domain.ContextTypeFact, Title: "S", CreatedAt: now,
+		Verified: true, Source: "file:" + path, SourceHash: hex.EncodeToString(sum[:]),
+	}}, now)
+	if hits[0].Status != "stale" {
+		t.Fatalf("stale status = %q", hits[0].Status)
 	}
 }
