@@ -85,3 +85,31 @@ func TestReviewPassed(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreRejectsPathTraversal(t *testing.T) {
+	s := NewStore(t.TempDir())
+	if _, err := s.Get("../secret"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get err = %v", err)
+	}
+	if err := s.Put(Review{ID: "../secret"}); err == nil {
+		t.Fatal("Put accepted a path traversal id")
+	}
+}
+
+func TestStoreListSkipsCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Put(Review{ID: "good", Status: StatusComplete}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bad.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != "good" {
+		t.Fatalf("list = %+v", list)
+	}
+}
