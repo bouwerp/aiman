@@ -99,7 +99,7 @@ func runServe() error {
 	defer stop()
 	ensureMosh(ctx)
 	ensureAimanSkill(ctx, db)
-	ensureAgentHooks()
+	ensureAgentHooks(cfg.Verify.BeforePR)
 	store := contextstore.NewFiles(contextstore.Root(dir))
 	if ix, err := contextstore.OpenIndex(db.DB()); err != nil {
 		log.Printf("context index unavailable: %v", err)
@@ -219,13 +219,13 @@ func ensureAimanSkill(ctx context.Context, db domain.SessionRepository) {
 	log.Printf("aiman skill: %s", aimanskill.Summarize(results))
 }
 
-func ensureAgentHooks() {
+func ensureAgentHooks(beforePR bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		log.Printf("aiman hooks: home: %v", err)
 		return
 	}
-	results, err := agenthook.EnsureOnHost(home)
+	results, err := agenthook.EnsureOnHost(home, beforePR)
 	if err != nil {
 		log.Printf("aiman hooks: %v", err)
 	}

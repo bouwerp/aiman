@@ -45,6 +45,9 @@ func main() {
 		if !errors.Is(err, errUsage) && !errors.Is(err, errVerifyNotPassed) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
+		if errors.Is(err, errVerifyGateBlocked) {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 }

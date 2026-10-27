@@ -106,3 +106,51 @@ func TestWaitRetriesTransientStatusError(t *testing.T) {
 		t.Fatalf("attempts=%d out=%q", attempts, out.String())
 	}
 }
+
+func TestWaitPrintsEvidence(t *testing.T) {
+	var out bytes.Buffer
+	err := waitForReview(verifySequence(verify.Review{
+		ID: "r1", Status: verify.StatusComplete,
+		Evidence: verify.Evidence{Command: "go test ./...", ExitCode: 0},
+	}), "r1", time.Second, time.Millisecond, &out)
+	if err != nil || !strings.Contains(out.String(), "evidence: go test ./... → exit 0") {
+		t.Fatalf("err=%v out=%q", err, out.String())
+	}
+}
+
+func TestWaitPrintsMissingCommand(t *testing.T) {
+	var out bytes.Buffer
+	err := waitForReview(verifySequence(verify.Review{ID: "r1", Status: verify.StatusIncomplete}), "r1", time.Second, time.Millisecond, &out)
+	if !errors.Is(err, errVerifyNotPassed) || !strings.Contains(out.String(), "no test command configured") {
+		t.Fatalf("err=%v out=%q", err, out.String())
+	}
+}
+
+func TestGateAllowsPassedReview(t *testing.T) {
+	call := func(string, any) (server.Response, error) {
+		return server.Response{Result: map[string]any{"review": verify.Review{
+			Status: verify.StatusComplete, Evidence: verify.Evidence{Command: "go test", ExitCode: 0},
+		}}}, nil
+	}
+	if err := gateStatus(call, "tree", ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGateDeniesWithoutPass(t *testing.T) {
+	call := func(string, any) (server.Response, error) {
+		return server.Response{Error: &server.Error{Code: server.CodeNotFound, Message: "no review"}}, nil
+	}
+	if err := gateStatus(call, "tree", ""); !errors.Is(err, errVerifyGateBlocked) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGateDisabledIsZero(t *testing.T) {
+	call := func(string, any) (server.Response, error) {
+		return server.Response{Result: map[string]any{"review": verify.Review{Status: verify.StatusDisabled}}}, nil
+	}
+	if err := gateStatus(call, "tree", ""); err != nil {
+		t.Fatal(err)
+	}
+}

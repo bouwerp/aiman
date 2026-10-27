@@ -25,7 +25,8 @@ type InstallResult struct {
 // agent config directory already exists, registers that agent's hooks. Missing
 // agent dirs are skipped so unused tools are not given a config file. Ageni is
 // not installed: it has no hook system.
-func EnsureOnHost(home string) ([]InstallResult, error) {
+func EnsureOnHost(home string, beforePR ...bool) ([]InstallResult, error) {
+	policy := len(beforePR) > 0 && beforePR[0]
 	var out []InstallResult
 	var first error
 	record := func(res InstallResult, err error) {
@@ -43,8 +44,11 @@ func EnsureOnHost(home string) ([]InstallResult, error) {
 	script := reporterPath(home)
 	record(ensureHookScript(script, reporterScript))
 	record(ensureHookScript(todoReporterPath(home), hookScript("todo report --from-stdin")))
+	if policy {
+		record(ensureHookScript(gatePath(home), verifyGateScript))
+	}
 	record(ensureDeepcodeLauncher(home))
-	record(ensureClaude(home, script))
+	record(ensureClaude(home, script, policy))
 	record(ensureGrok(home, script))
 	record(ensureCursor(home, script))
 	record(ensureCodex(home, script))
@@ -56,7 +60,7 @@ func EnsureOnHost(home string) ([]InstallResult, error) {
 	return out, first
 }
 
-func ensureClaude(home, command string) (InstallResult, error) {
+func ensureClaude(home, command string, beforePR bool) (InstallResult, error) {
 	dir := filepath.Join(home, ".claude")
 	if !isDir(dir) {
 		return InstallResult{}, nil
@@ -67,7 +71,11 @@ func ensureClaude(home, command string) (InstallResult, error) {
 		compact := upsertCompactHook(root, command)
 		turns := upsertTurnHooks(root, command)
 		todos := upsertTodoHook(root, todo, claudeTodoMatcher)
-		return identity || compact || turns || todos
+		gate := false
+		if beforePR {
+			gate = upsertPreToolUseHook(root, gatePath(home))
+		}
+		return identity || compact || turns || todos || gate
 	})
 }
 

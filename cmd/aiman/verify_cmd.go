@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,9 @@ import (
 // errVerifyNotPassed is returned after the findings have been written to
 // stdout, so main can exit 1 without an extra Error: line.
 var errVerifyNotPassed = errors.New("verify: not passed")
+
+// errVerifyGateBlocked is returned with exit status 2 for a PreToolUse gate.
+var errVerifyGateBlocked = errors.New("verify: gate blocked")
 
 const (
 	defaultVerifyWaitTimeout = 9 * time.Minute
@@ -39,6 +43,9 @@ func runVerify(args []string) error {
 		timeout = d
 	}
 	params := map[string]any{}
+	if flags["gate"] == "1" {
+		return runVerifyGate(flags)
+	}
 	if v := strings.TrimSpace(flags["session"]); v != "" {
 		params["session"] = v
 	}
@@ -146,6 +153,7 @@ func writeFinalReview(out io.Writer, review verify.Review) error {
 		fmt.Fprintln(out, "verify: disabled")
 		return nil
 	case verify.StatusComplete:
+		writeEvidence(out, review.Evidence)
 		if review.Passed() {
 			fmt.Fprintln(out, "verify: passed")
 			return nil
@@ -158,6 +166,7 @@ func writeFinalReview(out io.Writer, review verify.Review) error {
 		}
 		return errVerifyNotPassed
 	case verify.StatusIncomplete:
+		writeEvidence(out, review.Evidence)
 		fmt.Fprintln(out, "review incomplete")
 		return errVerifyNotPassed
 	default:
@@ -168,6 +177,72 @@ func writeFinalReview(out io.Writer, review verify.Review) error {
 
 // verifyResultError is the exit status for a final review, independent of
 // whether it was printed as text or JSON.
+// runVerifyGate checks the current tree against the latest passing review.
+func runVerifyGate(flags map[string]string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	hash, err := verify.TreeHash(context.Background(), cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "verify: cannot hash the current tree: %v\n", err)
+		return errVerifyGateBlocked
+	}
+	sock, err := socketPath()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "verify: no passing review; run `aiman verify --wait`")
+		return errVerifyGateBlocked
+	}
+	call := func(method string, p any) (server.Response, error) {
+		return server.Call(sock, method, p)
+	}
+	return gateStatus(call, hash, strings.TrimSpace(flags["session"]))
+}
+
+func gateStatus(call func(string, any) (server.Response, error), hash, session string) error {
+	params := map[string]any{"tree_hash": hash}
+	if session != "" {
+		params["session"] = session
+	}
+	resp, err := call("verify.status", params)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "verify: no passing review; run `aiman verify --wait`")
+		return errVerifyGateBlocked
+	}
+	review, err := decodeVerifyReview(resp)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "verify: no passing review; run `aiman verify --wait`")
+		return errVerifyGateBlocked
+	}
+	if review.Status == verify.StatusDisabled || review.Passed() {
+		return nil
+	}
+	required := review.Required
+	if required == 0 {
+		fmt.Fprintln(os.Stderr, "verify: review is not passed; run `aiman verify --wait`")
+		return errVerifyGateBlocked
+	}
+	fmt.Fprintf(os.Stderr, "verify: blocked by %d REQUIRED finding(s); run `aiman verify --wait` and fix them\n", required)
+	return errVerifyGateBlocked
+}
+
+func writeEvidence(out io.Writer, ev verify.Evidence) {
+	if ev.Command == "" {
+		fmt.Fprintln(out, "no test command configured")
+		return
+	}
+	fmt.Fprintf(out, "evidence: %s → exit %d\n", ev.Command, ev.ExitCode)
+	if ev.ExitCode != 0 {
+		lines := strings.Split(strings.TrimSuffix(ev.Output, "\n"), "\n")
+		if len(lines) > 20 {
+			lines = lines[len(lines)-20:]
+		}
+		for _, line := range lines {
+			fmt.Fprintln(out, line)
+		}
+	}
+}
+
 func verifyResultError(review verify.Review) error {
 	if review.Status == verify.StatusDisabled || review.Passed() {
 		return nil
