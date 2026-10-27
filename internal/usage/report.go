@@ -86,6 +86,46 @@ func (r Reporter) Report(ctx context.Context, q Query) (Report, error) {
 	return attachContext(rep, metas, ids), nil
 }
 
+// HealthFor aggregates stored per-session health over the query selection.
+// Known is true only when at least one session is selected and every
+// selected session is Known.
+func (r Reporter) HealthFor(ctx context.Context, q Query) (Health, error) {
+	metas, ids, err := r.sessionIDs(ctx, q)
+	if err != nil {
+		return Health{}, err
+	}
+	return aggregateHealth(metas, ids), nil
+}
+
+func aggregateHealth(metas map[string]domain.UsageSessionMeta, ids []string) Health {
+	if len(ids) == 0 {
+		return Health{}
+	}
+	var out Health
+	out.Known = true
+	for _, id := range ids {
+		meta, ok := metas[id]
+		if !ok || !meta.HealthKnown {
+			out.Known = false
+		}
+		if !ok {
+			continue
+		}
+		out.ToolCalls += meta.HealthToolCalls
+		out.ReadCalls += meta.HealthReadCalls
+		out.EditCalls += meta.HealthEditCalls
+		out.EditsWithoutRead += meta.HealthEditsWithoutRead
+		out.Retries += meta.HealthRetries
+		if !meta.HealthFirstTestAt.IsZero() && (out.FirstTestAt.IsZero() || meta.HealthFirstTestAt.Before(out.FirstTestAt)) {
+			out.FirstTestAt = meta.HealthFirstTestAt
+		}
+	}
+	if out.EditCalls > 0 {
+		out.ReadEditRatio = float64(out.ReadCalls) / float64(out.EditCalls)
+	}
+	return out
+}
+
 // attachContext copies the stored last turn onto a one-session report.
 // Context is not a sum across sessions and is not taken from usage_buckets.
 func attachContext(rep Report, metas map[string]domain.UsageSessionMeta, ids []string) Report {

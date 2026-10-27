@@ -56,6 +56,16 @@ type Tracker struct {
 	onChange      func(sessionID string)
 	kick          chan struct{}
 	contextWindow int
+	testCommands  []string
+}
+
+// SetTestCommands records usage.test_commands for first-test detection.
+// An empty list means DefaultTestCommands.
+func (t *Tracker) SetTestCommands(cmds []string) {
+	if t == nil {
+		return
+	}
+	t.testCommands = cmds
 }
 
 // SetContextWindow records usage.context_window_tokens.
@@ -175,11 +185,23 @@ func (t *Tracker) scanSession(ctx context.Context, s domain.Session) (bool, erro
 	var occupancy contextSample
 	haveOccupancy := false
 	clearOccupancy := false
+	worktree := s.WorktreePath
+	if worktree == "" {
+		worktree = s.WorkingDirectory
+	}
+	prior, _ := t.priorHealth(ctx, s.ID)
+	healthAcc := prior
+	healthDirty := false
 	for _, path := range sessionPaths(s.AgentSessionPath, cursors) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		got, err := t.scanFile(ctx, s.ID, path, cursors)
+		isMain := path == s.AgentSessionPath
+		start := healthAcc
+		if !isMain {
+			start = newHealthAcc()
+		}
+		got, err := t.scanFile(ctx, s.ID, path, cursors, worktree, start)
 		if err != nil {
 			log.Printf("usage tracker: %s: %v", path, err)
 			continue
@@ -190,9 +212,11 @@ func (t *Tracker) scanSession(ctx context.Context, s domain.Session) (bool, erro
 		if got.added {
 			changed = true
 		}
-		if path != s.AgentSessionPath || !got.applied {
+		if !isMain || !got.applied {
 			continue
 		}
+		healthAcc = got.health
+		healthDirty = true
 		if got.sample.OK {
 			occupancy = got.sample
 			haveOccupancy = true
@@ -207,7 +231,49 @@ func (t *Tracker) scanSession(ctx context.Context, s domain.Session) (bool, erro
 	if err := t.storeContext(ctx, meta, occupancy, haveOccupancy, clearOccupancy); err != nil {
 		return false, err
 	}
+	if healthDirty {
+		if err := t.storeHealth(ctx, meta, healthAcc); err != nil {
+			return false, err
+		}
+	}
 	return changed, nil
+}
+
+func (t *Tracker) priorHealth(ctx context.Context, sessionID string) (*healthAcc, error) {
+	metas, err := t.store.UsageSessions(ctx)
+	if err != nil {
+		return newHealthAcc(), err
+	}
+	for _, m := range metas {
+		if m.SessionID != sessionID {
+			continue
+		}
+		h := Health{
+			Known: m.HealthKnown, ToolCalls: m.HealthToolCalls,
+			ReadCalls: m.HealthReadCalls, EditCalls: m.HealthEditCalls,
+			EditsWithoutRead: m.HealthEditsWithoutRead,
+			FirstTestAt:      m.HealthFirstTestAt, Retries: m.HealthRetries,
+		}
+		return accFromStored(h, m.HealthReads), nil
+	}
+	return newHealthAcc(), nil
+}
+
+func (t *Tracker) storeHealth(ctx context.Context, meta domain.UsageSessionMeta, acc *healthAcc) error {
+	h := acc.finish()
+	meta.HealthKnown = h.Known
+	meta.HealthToolCalls = h.ToolCalls
+	meta.HealthReadCalls = h.ReadCalls
+	meta.HealthEditCalls = h.EditCalls
+	meta.HealthEditsWithoutRead = h.EditsWithoutRead
+	meta.HealthFirstTestAt = h.FirstTestAt
+	meta.HealthRetries = h.Retries
+	meta.HealthReads = acc.readsJSON()
+	meta.HasHealth = true
+	if err := t.store.UpsertUsageSession(ctx, meta); err != nil {
+		return fmt.Errorf("saving usage health %s: %w", meta.SessionID, err)
+	}
+	return nil
 }
 
 // storeContext writes the main transcript's latest occupancy.
@@ -282,10 +348,11 @@ type fileScan struct {
 	applied  bool
 	fromZero bool
 	sample   contextSample
+	health   *healthAcc
 }
 
 // scanFile stats path and skips ApplyUsage when size and mtime are unchanged.
-func (t *Tracker) scanFile(ctx context.Context, sessionID, path string, cursors []domain.UsageCursor) (fileScan, error) {
+func (t *Tracker) scanFile(ctx context.Context, sessionID, path string, cursors []domain.UsageCursor, worktree string, health *healthAcc) (fileScan, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return fileScan{}, err
@@ -309,7 +376,11 @@ func (t *Tracker) scanFile(ctx context.Context, sessionID, path string, cursors 
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return fileScan{}, err
 	}
-	recs, consumed, state, sample, err := parseTranscript(kind, f, cursors, path, fp, reset)
+	acc := health
+	if reset {
+		acc = newHealthAcc()
+	}
+	recs, consumed, state, sample, acc, err := parseTranscript(kind, f, cursors, path, fp, reset, worktree, t.testCommands, acc)
 	if err != nil {
 		return fileScan{}, err
 	}
@@ -326,7 +397,7 @@ func (t *Tracker) scanFile(ctx context.Context, sessionID, path string, cursors 
 	if err != nil {
 		return fileScan{}, err
 	}
-	return fileScan{added: added, cursor: cur, applied: true, fromZero: offset == 0, sample: sample}, nil
+	return fileScan{added: added, cursor: cur, applied: true, fromZero: offset == 0, sample: sample, health: acc}, nil
 }
 
 func resumeOffset(prev domain.UsageCursor, has bool, size int64, fp string) (int64, bool) {
@@ -349,27 +420,27 @@ func readFingerprint(f *os.File, kind Kind) (string, error) {
 	return ClaudeFingerprint(head), nil
 }
 
-func parseTranscript(kind Kind, r io.Reader, cursors []domain.UsageCursor, path, fp string, reset bool) ([]domain.UsageRecord, int64, string, contextSample, error) {
+func parseTranscript(kind Kind, r io.Reader, cursors []domain.UsageCursor, path, fp string, reset bool, worktree string, cmds []string, acc *healthAcc) ([]domain.UsageRecord, int64, string, contextSample, *healthAcc, error) {
 	switch kind {
 	case KindClaude:
-		recs, n, sample, err := parseClaude(r)
-		return recs, n, "", sample, err
+		recs, n, sample, acc, err := parseClaudeHealth(r, worktree, cmds, acc)
+		return recs, n, "", sample, acc, err
 	case KindCodex:
 		st, err := codexStateFor(cursors, path, fp, reset)
 		if err != nil {
-			return nil, 0, "", contextSample{}, err
+			return nil, 0, "", contextSample{}, acc, err
 		}
-		recs, n, sample, err := parseCodex(r, &st)
+		recs, n, sample, acc, err := parseCodexHealth(r, &st, worktree, cmds, acc)
 		if err != nil {
-			return nil, 0, "", contextSample{}, err
+			return nil, 0, "", contextSample{}, acc, err
 		}
 		raw, err := marshalCodexState(st)
 		if err != nil {
-			return nil, 0, "", contextSample{}, err
+			return nil, 0, "", contextSample{}, acc, err
 		}
-		return recs, n, raw, sample, nil
+		return recs, n, raw, sample, acc, nil
 	default:
-		return nil, 0, "", contextSample{}, fmt.Errorf("unknown transcript kind %q", kind)
+		return nil, 0, "", contextSample{}, acc, fmt.Errorf("unknown transcript kind %q", kind)
 	}
 }
 

@@ -41,6 +41,7 @@ type usageHost struct {
 	err        string
 	busy       bool
 	extra      string
+	health     usage.Health
 }
 
 // UsageViewModel is the $ screen: per-ticket or per-day cost across remotes.
@@ -52,10 +53,11 @@ type UsageViewModel struct {
 
 // usageRollupMsg is one host's usage.get rollup for the $ view.
 type usageRollupMsg struct {
-	host string
-	mode usageViewMode
-	rep  usage.Report
-	err  error
+	host   string
+	mode   usageViewMode
+	rep    usage.Report
+	health usage.Health
+	err    error
 }
 
 // usageRollupParams is the usage.get body for a host-wide rollup.
@@ -98,30 +100,31 @@ func newUsageView(cfg *config.Config) UsageViewModel {
 // The laptop's current offset is the zone the day window is reported in.
 func fetchUsageRollupCmd(cfg *config.Config, host string, mode usageViewMode) tea.Cmd {
 	return func() tea.Msg {
-		rep, err := fetchUsageRollup(cfg, host, mode)
-		return usageRollupMsg{host: host, mode: mode, rep: rep, err: err}
+		rep, health, err := fetchUsageRollup(cfg, host, mode)
+		return usageRollupMsg{host: host, mode: mode, rep: rep, health: health, err: err}
 	}
 }
 
-func fetchUsageRollup(cfg *config.Config, host string, mode usageViewMode) (usage.Report, error) {
+func fetchUsageRollup(cfg *config.Config, host string, mode usageViewMode) (usage.Report, usage.Health, error) {
 	remote, ok := remoteForHost(cfg, host)
 	if !ok {
-		return usage.Report{}, fmt.Errorf("remote not found")
+		return usage.Report{}, usage.Health{}, fmt.Errorf("remote not found")
 	}
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	raw, err := usecase.ServeRPC(ctx, mgr, "usage.get", usageRollupQuery(mode))
 	if err != nil {
-		return usage.Report{}, err
+		return usage.Report{}, usage.Health{}, err
 	}
 	var body struct {
-		Usage usage.Report `json:"usage"`
+		Usage  usage.Report `json:"usage"`
+		Health usage.Health `json:"health"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return usage.Report{}, fmt.Errorf("decode usage: %w", err)
+		return usage.Report{}, usage.Health{}, fmt.Errorf("decode usage: %w", err)
 	}
-	return body.Usage, nil
+	return body.Usage, body.Health, nil
 }
 
 func fetchUsageRollups(cfg *config.Config, hosts []usageHost, mode usageViewMode) tea.Cmd {
@@ -168,6 +171,8 @@ func (h *usageHost) applyRollup(msg usageRollupMsg, current usageViewMode) {
 		rows = []usage.Row{}
 	}
 	h.rows[msg.mode] = rows
+	h.health = msg.health
+	h.extra = healthExtra(msg.health)
 	h.rememberUnpriced(msg.mode, msg.rep.Unpriced)
 	if msg.mode != current {
 		return
@@ -409,6 +414,19 @@ func usageCacheCell(s usage.Summary) string {
 	}
 	pct := math.Round(*s.CacheHitRatio * 100)
 	return strconv.FormatFloat(pct, 'f', 0, 64) + "%"
+}
+
+// healthExtra renders the per-host health summary. Unknown health shows
+// nothing at all.
+func healthExtra(h usage.Health) string {
+	if !h.Known {
+		return ""
+	}
+	line := fmt.Sprintf("READ:EDIT %d:%d", h.ReadCalls, h.EditCalls)
+	if !h.FirstTestAt.IsZero() {
+		line += " · first test " + h.FirstTestAt.Format("15:04")
+	}
+	return line
 }
 
 func (h usageHost) statusLine(dim lipgloss.Style, mode usageViewMode) string {

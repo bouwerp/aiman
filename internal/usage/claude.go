@@ -32,10 +32,19 @@ func ClaudeContextTokens(r io.Reader) (int64, bool, error) {
 }
 
 func parseClaude(r io.Reader) ([]domain.UsageRecord, int64, contextSample, error) {
+	recs, n, sample, _, err := parseClaudeHealth(r, "", nil, newHealthAcc())
+	return recs, n, sample, err
+}
+
+func parseClaudeHealth(r io.Reader, worktree string, cmds []string, acc *healthAcc) ([]domain.UsageRecord, int64, contextSample, *healthAcc, error) {
+	if acc == nil {
+		acc = newHealthAcc()
+	}
 	var recs []domain.UsageRecord
 	var sample contextSample
 	seen := make(map[string]struct{})
 	consumed, err := readLines(r, func(line []byte) error {
+		acc.claudeLine(line, worktree, cmds)
 		rec, ok := parseClaudeLine(line)
 		if !ok {
 			return nil
@@ -54,7 +63,7 @@ func parseClaude(r io.Reader) ([]domain.UsageRecord, int64, contextSample, error
 		}
 		return nil
 	})
-	return recs, consumed, sample, err
+	return recs, consumed, sample, acc, err
 }
 
 // ClaudeFingerprint identifies a transcript from its head bytes.

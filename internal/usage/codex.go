@@ -55,12 +55,21 @@ func CodexContextTokens(r io.Reader) (int64, bool, error) {
 }
 
 func parseCodex(r io.Reader, st *CodexState) ([]domain.UsageRecord, int64, contextSample, error) {
+	recs, n, sample, _, err := parseCodexHealth(r, st, "", nil, newHealthAcc())
+	return recs, n, sample, err
+}
+
+func parseCodexHealth(r io.Reader, st *CodexState, worktree string, cmds []string, acc *healthAcc) ([]domain.UsageRecord, int64, contextSample, *healthAcc, error) {
 	if st == nil {
 		st = &CodexState{}
+	}
+	if acc == nil {
+		acc = newHealthAcc()
 	}
 	var recs []domain.UsageRecord
 	var sample contextSample
 	consumed, err := readLines(r, func(line []byte) error {
+		acc.codexLine(line, worktree, cmds)
 		rec, turn, ok := applyCodexLine(line, st)
 		if !ok {
 			return nil
@@ -71,7 +80,7 @@ func parseCodex(r io.Reader, st *CodexState) ([]domain.UsageRecord, int64, conte
 		}
 		return nil
 	})
-	return recs, consumed, sample, err
+	return recs, consumed, sample, acc, err
 }
 
 // CodexFingerprint identifies a rollout from its head bytes.

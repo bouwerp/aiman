@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS usage_sessions (
 	last_input_tokens INTEGER NOT NULL DEFAULT 0,
 	context_window INTEGER NOT NULL DEFAULT 0,
 	context_source TEXT NOT NULL DEFAULT '',
+	health_known INTEGER NOT NULL DEFAULT 0,
+	health_tool_calls INTEGER NOT NULL DEFAULT 0,
+	health_read_calls INTEGER NOT NULL DEFAULT 0,
+	health_edit_calls INTEGER NOT NULL DEFAULT 0,
+	health_edits_without_read INTEGER NOT NULL DEFAULT 0,
+	health_first_test_at DATETIME,
+	health_retries INTEGER NOT NULL DEFAULT 0,
+	health_reads TEXT NOT NULL DEFAULT '',
 	updated_at DATETIME
 );`
 	if _, err := db.ExecContext(context.Background(), ddl); err != nil {
@@ -59,14 +67,22 @@ CREATE TABLE IF NOT EXISTS usage_sessions (
 	return ensureUsageContextColumns(db)
 }
 
-// ensureUsageContextColumns adds occupancy columns to a usage_sessions table
-// created before those columns existed. CREATE TABLE IF NOT EXISTS does not
-// alter an existing table.
+// ensureUsageContextColumns adds occupancy and health columns to a
+// usage_sessions table created before those columns existed.
+// CREATE TABLE IF NOT EXISTS does not alter an existing table.
 func ensureUsageContextColumns(db *sql.DB) error {
 	for _, stmt := range []string{
 		`ALTER TABLE usage_sessions ADD COLUMN last_input_tokens INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE usage_sessions ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE usage_sessions ADD COLUMN context_source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE usage_sessions ADD COLUMN health_known INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE usage_sessions ADD COLUMN health_tool_calls INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE usage_sessions ADD COLUMN health_read_calls INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE usage_sessions ADD COLUMN health_edit_calls INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE usage_sessions ADD COLUMN health_edits_without_read INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE usage_sessions ADD COLUMN health_first_test_at DATETIME`,
+		`ALTER TABLE usage_sessions ADD COLUMN health_retries INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE usage_sessions ADD COLUMN health_reads TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.ExecContext(context.Background(), stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("ensuring usage context columns: %w", err)
@@ -202,11 +218,26 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 	if m.HasContext {
 		has = 1
 	}
+	hasHealth := 0
+	if m.HasHealth {
+		hasHealth = 1
+	}
+	known := 0
+	if m.HealthKnown {
+		known = 1
+	}
+	var firstTest any
+	if !m.HealthFirstTestAt.IsZero() {
+		firstTest = m.HealthFirstTestAt.UTC()
+	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO usage_sessions (
 			session_id, name, group_name, issue_key, agent_name,
-			last_input_tokens, context_window, context_source, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			last_input_tokens, context_window, context_source,
+			health_known, health_tool_calls, health_read_calls, health_edit_calls,
+			health_edits_without_read, health_first_test_at, health_retries, health_reads,
+			updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			name = COALESCE(NULLIF(excluded.name, ''), usage_sessions.name),
 			group_name = COALESCE(NULLIF(excluded.group_name, ''), usage_sessions.group_name),
@@ -215,10 +246,22 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 			last_input_tokens = CASE WHEN ? = 1 THEN excluded.last_input_tokens ELSE usage_sessions.last_input_tokens END,
 			context_window = CASE WHEN ? = 1 THEN excluded.context_window ELSE usage_sessions.context_window END,
 			context_source = CASE WHEN ? = 1 THEN excluded.context_source ELSE usage_sessions.context_source END,
+			health_known = CASE WHEN ? = 1 THEN excluded.health_known ELSE usage_sessions.health_known END,
+			health_tool_calls = CASE WHEN ? = 1 THEN excluded.health_tool_calls ELSE usage_sessions.health_tool_calls END,
+			health_read_calls = CASE WHEN ? = 1 THEN excluded.health_read_calls ELSE usage_sessions.health_read_calls END,
+			health_edit_calls = CASE WHEN ? = 1 THEN excluded.health_edit_calls ELSE usage_sessions.health_edit_calls END,
+			health_edits_without_read = CASE WHEN ? = 1 THEN excluded.health_edits_without_read ELSE usage_sessions.health_edits_without_read END,
+			health_first_test_at = CASE WHEN ? = 1 THEN excluded.health_first_test_at ELSE usage_sessions.health_first_test_at END,
+			health_retries = CASE WHEN ? = 1 THEN excluded.health_retries ELSE usage_sessions.health_retries END,
+			health_reads = CASE WHEN ? = 1 THEN excluded.health_reads ELSE usage_sessions.health_reads END,
 			updated_at = excluded.updated_at`,
 		m.SessionID, m.Name, m.Group, m.IssueKey, m.AgentName,
-		m.LastInputTokens, m.ContextWindow, m.ContextSource, time.Now().UTC(),
-		has, has, has)
+		m.LastInputTokens, m.ContextWindow, m.ContextSource,
+		known, m.HealthToolCalls, m.HealthReadCalls, m.HealthEditCalls,
+		m.HealthEditsWithoutRead, firstTest, m.HealthRetries, m.HealthReads,
+		time.Now().UTC(),
+		has, has, has,
+		hasHealth, hasHealth, hasHealth, hasHealth, hasHealth, hasHealth, hasHealth, hasHealth)
 	if err != nil {
 		return fmt.Errorf("saving usage session: %w", err)
 	}
@@ -230,7 +273,9 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 func (r *Repository) UsageSessions(ctx context.Context) ([]domain.UsageSessionMeta, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT session_id, name, group_name, issue_key, agent_name,
-			last_input_tokens, context_window, context_source
+			last_input_tokens, context_window, context_source,
+			health_known, health_tool_calls, health_read_calls, health_edit_calls,
+			health_edits_without_read, health_first_test_at, health_retries, health_reads
 		FROM usage_sessions ORDER BY session_id`)
 	if err != nil {
 		return nil, fmt.Errorf("listing usage sessions: %w", err)
@@ -239,11 +284,19 @@ func (r *Repository) UsageSessions(ctx context.Context) ([]domain.UsageSessionMe
 	var out []domain.UsageSessionMeta
 	for rows.Next() {
 		var m domain.UsageSessionMeta
+		var known int
+		var firstTest sql.NullTime
 		if err := rows.Scan(
 			&m.SessionID, &m.Name, &m.Group, &m.IssueKey, &m.AgentName,
 			&m.LastInputTokens, &m.ContextWindow, &m.ContextSource,
+			&known, &m.HealthToolCalls, &m.HealthReadCalls, &m.HealthEditCalls,
+			&m.HealthEditsWithoutRead, &firstTest, &m.HealthRetries, &m.HealthReads,
 		); err != nil {
 			return nil, fmt.Errorf("listing usage sessions: %w", err)
+		}
+		m.HealthKnown = known != 0
+		if firstTest.Valid {
+			m.HealthFirstTestAt = firstTest.Time
 		}
 		out = append(out, m)
 	}

@@ -72,6 +72,7 @@ func (c *Config) MarshalServeConfig() ([]byte, error) {
 type UsageConfig struct {
 	Prices              map[string]ModelPrice `yaml:"prices,omitempty"`
 	ContextWindowTokens int                   `yaml:"context_window_tokens,omitempty"`
+	TestCommands        []string              `yaml:"test_commands,omitempty"`
 }
 
 // ModelPrice is one model's token prices. Omitted numbers decode as zero.

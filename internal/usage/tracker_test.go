@@ -804,7 +804,18 @@ func (m *memStore) UpsertUsageSession(_ context.Context, meta domain.UsageSessio
 		meta.ContextWindow = prev.ContextWindow
 		meta.ContextSource = prev.ContextSource
 	}
+	if !meta.HasHealth {
+		meta.HealthKnown = prev.HealthKnown
+		meta.HealthToolCalls = prev.HealthToolCalls
+		meta.HealthReadCalls = prev.HealthReadCalls
+		meta.HealthEditCalls = prev.HealthEditCalls
+		meta.HealthEditsWithoutRead = prev.HealthEditsWithoutRead
+		meta.HealthFirstTestAt = prev.HealthFirstTestAt
+		meta.HealthRetries = prev.HealthRetries
+		meta.HealthReads = prev.HealthReads
+	}
 	meta.HasContext = false
+	meta.HasHealth = false
 	m.metas[meta.SessionID] = meta
 	return nil
 }

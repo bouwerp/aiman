@@ -14,6 +14,10 @@ type usageReporter interface {
 	Report(ctx context.Context, q usage.Query) (usage.Report, error)
 }
 
+type usageHealthReporter interface {
+	HealthFor(ctx context.Context, q usage.Query) (usage.Health, error)
+}
+
 // EnableUsage serves usage.get from rep and, when tr is set, scans transcripts
 // every usage.ScanInterval until ctx is cancelled. A nil tracker is stored so
 // later kicks stay no-ops.
@@ -69,7 +73,7 @@ func (s *Server) handleUsageGet(ctx context.Context, req Request) Response {
 	if !ok {
 		return fail
 	}
-	rep, err := s.reporter.Report(ctx, usage.Query{
+	query := usage.Query{
 		SessionID:       sessionID,
 		Group:           p.Group,
 		Issue:           p.Issue,
@@ -77,14 +81,23 @@ func (s *Server) handleUsageGet(ctx context.Context, req Request) Response {
 		By:              p.By,
 		Days:            p.Days,
 		TZOffsetMinutes: p.TZOffsetMinutes,
-	})
+	}
+	rep, err := s.reporter.Report(ctx, query)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	health := usage.Health{}
+	if hr, ok := s.reporter.(usageHealthReporter); ok {
+		health, err = hr.HealthFor(ctx, query)
+		if err != nil {
+			return errResp(req.ID, CodeInvalidParams, err.Error())
+		}
 	}
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":    "usage",
 		"session": sessionID,
 		"usage":   rep,
+		"health":  health,
 	}}
 }
 
