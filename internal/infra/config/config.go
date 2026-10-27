@@ -36,9 +36,11 @@ type Config struct {
 	Verify VerifyConfig `yaml:"verify,omitempty"`
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
-	Repos        map[string]RepoBootstrap `yaml:"repos,omitempty"`
-	Remotes      []Remote                 `yaml:"remotes"`
-	ActiveRemote string                   `yaml:"active_remote"`
+	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
+	// Roles overrides agent, model and effort for sessions with a role.
+	Roles        RolesConfig `yaml:"roles,omitempty"`
+	Remotes      []Remote    `yaml:"remotes"`
+	ActiveRemote string      `yaml:"active_remote"`
 
 	// PermissionsTightened records that Load had to remove group/other access
 	// from the config file, meaning the API token in it had been readable by
@@ -65,6 +67,8 @@ type ServeConfig struct {
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
+	// Roles overrides agent, model and effort for sessions with a role.
+	Roles RolesConfig `yaml:"roles,omitempty"`
 }
 
 // AgentsConfig configures agent selection shared by coordinator sessions.
@@ -110,6 +114,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Notifications: c.NotificationsFor(host),
 		Verify:        c.Verify,
 		Repos:         c.Repos,
+		Roles:         c.Roles,
 	})
 }
 
@@ -341,6 +346,9 @@ type JiraConfig struct {
 	// IssueStatuses limits the issue picker to issues in these statuses. Empty falls back
 	// to jira.DefaultIssueStatuses.
 	IssueStatuses []string `yaml:"issue_statuses,omitempty"`
+	// AcceptanceCriteriaField is the custom field id holding acceptance
+	// criteria. Empty means they come from the description.
+	AcceptanceCriteriaField string `yaml:"acceptance_criteria_field,omitempty"`
 }
 
 type Remote struct {

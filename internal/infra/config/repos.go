@@ -13,6 +13,14 @@ type RepoBootstrap struct {
 	Copy    []string `yaml:"copy,omitempty"`
 	Symlink []string `yaml:"symlink,omitempty"`
 	Setup   string   `yaml:"setup,omitempty"`
+	// DoneWhen are the repo's default completion conditions for a session.
+	DoneWhen []string `yaml:"done_when,omitempty"`
+	// Requires lists tools a session needs; an "mcp:" prefix names an MCP
+	// server.
+	Requires []string `yaml:"requires,omitempty"`
+	// AgentOverrides replace agent_defaults model/effort in this repo and
+	// are keyed the same way.
+	AgentOverrides map[string]AgentDefaults `yaml:"agent_overrides,omitempty"`
 }
 
 // RepoBootstrapFor returns the bootstrap for an owner/name repo slug,
@@ -21,11 +29,17 @@ func (c *Config) RepoBootstrapFor(repo string) (RepoBootstrap, bool) {
 	if c == nil {
 		return RepoBootstrap{}, false
 	}
-	if b, ok := c.Repos[repo]; ok {
+	return LookupRepo(c.Repos, repo)
+}
+
+// LookupRepo finds an owner/name slug in repos, matching the exact key first
+// and then ignoring case.
+func LookupRepo(repos map[string]RepoBootstrap, slug string) (RepoBootstrap, bool) {
+	if b, ok := repos[slug]; ok {
 		return b, true
 	}
-	for k, b := range c.Repos {
-		if strings.EqualFold(k, repo) {
+	for k, b := range repos {
+		if strings.EqualFold(k, slug) {
 			return b, true
 		}
 	}

@@ -4,16 +4,25 @@ import "strings"
 
 // LaunchDefaultsFor returns configured model/effort for an agent command or name.
 func (c *Config) LaunchDefaultsFor(name, command string) AgentDefaults {
-	if c == nil || len(c.AgentDefaults) == 0 {
+	if c == nil {
+		return AgentDefaults{}
+	}
+	return matchAgentDefaults(c.AgentDefaults, name, command)
+}
+
+// matchAgentDefaults picks the entry keyed by the command's first field
+// (lowercased), else the first key contained in the lowercased name.
+func matchAgentDefaults(m map[string]AgentDefaults, name, command string) AgentDefaults {
+	if len(m) == 0 {
 		return AgentDefaults{}
 	}
 	if fields := strings.Fields(strings.ToLower(strings.TrimSpace(command))); len(fields) > 0 {
-		if d, ok := c.AgentDefaults[fields[0]]; ok {
+		if d, ok := m[fields[0]]; ok {
 			return d
 		}
 	}
 	n := strings.ToLower(name)
-	for k, d := range c.AgentDefaults {
+	for k, d := range m {
 		if k != "" && strings.Contains(n, k) {
 			return d
 		}

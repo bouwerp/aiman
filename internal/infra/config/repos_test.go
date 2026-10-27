@@ -65,3 +65,23 @@ func TestMarshalServeConfigCarriesRepos(t *testing.T) {
 		t.Fatalf("repos not carried: %s", body)
 	}
 }
+
+func TestLookupRepoCaseInsensitive(t *testing.T) {
+	repos := map[string]RepoBootstrap{
+		"Owner/Name": {Setup: "folded"},
+		"owner/name": {Setup: "exact"},
+		"other/repo": {Setup: "other"},
+	}
+	if got, ok := LookupRepo(repos, "owner/name"); !ok || got.Setup != "exact" {
+		t.Fatalf("exact = %+v, %v", got, ok)
+	}
+	if got, ok := LookupRepo(repos, "OTHER/Repo"); !ok || got.Setup != "other" {
+		t.Fatalf("folded = %+v, %v", got, ok)
+	}
+	if _, ok := LookupRepo(repos, "missing/repo"); ok {
+		t.Fatal("missing repo should not be found")
+	}
+	if _, ok := LookupRepo(nil, "owner/name"); ok {
+		t.Fatal("nil map should find nothing")
+	}
+}
