@@ -188,3 +188,11 @@ func hasPrefixDir(path, root string) bool {
 func startsWithDotDot(rel string) bool {
 	return len(rel) >= 2 && rel[0] == '.' && rel[1] == '.'
 }
+
+func TestSkillDescribesVerify(t *testing.T) {
+	for _, want := range []string{"aiman verify --wait --if-enabled", "gh pr create"} {
+		if !strings.Contains(Text, want) {
+			t.Fatalf("skill missing %q", want)
+		}
+	}
+}

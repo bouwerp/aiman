@@ -147,6 +147,18 @@ aiman slack wait --channel engineering --thread 1711.000100 --timeout 5m
 
 `--channel` is a name or an id. `--thread` replies in that thread. `--text-file` or `--text -` sends a longer body. `send` posts as the approving member. `wait` returns the next message in the thread that is not from that member. If `--timeout` elapses it exits with `slack_timeout`. Commands print JSON.
 
+## Before you open a pull request
+
+Run this before every `gh pr create`:
+
+    aiman verify --wait --if-enabled
+
+- Exit 0: open the PR. `verify: disabled` means this host does not require review.
+- Exit 1 with findings: each REQUIRED finding is also on your to-do list. Fix them, then run the command again.
+- Exit 1 with "still running": run the same command again. It waits on the same review.
+
+Do not run `aiman verify` from a reviewer session.
+
 ## Safety
 
 - Use `--name` / `--group "$AIMAN_GROUP"` for helpers. They nest under you unless you pass `--orphan`. Do not steal focus from the user's TUI (there is none on this host).
