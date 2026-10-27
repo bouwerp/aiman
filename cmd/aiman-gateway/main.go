@@ -15,6 +15,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/gateway"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/server"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tsnet"
@@ -108,8 +109,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	notify := gateway.NewNotifier(pushStore, nil)
-	go notify.Watch(ctx, sock)
+	if cfg.Notifications.PhoneEnabled() {
+		go notify.NewDispatcher(gateway.SocketSource{Socket: sock}, notify.FileCursor{Path: filepath.Join(dir, gateway.NotifyCursorFileName)}, gateway.NewPhoneSink(pushStore, nil)).Run(ctx, 2*time.Second)
+	}
 	httpSrv := &http.Server{
 		Handler:           (&gateway.Server{Socket: sock, Auth: auth, Push: pushStore}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
