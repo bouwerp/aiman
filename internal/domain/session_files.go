@@ -7,6 +7,7 @@ const (
 	AimanContextFileName        = ".aiman_context.md"
 	AimanTodoFileName           = ".aiman_todo.md"
 	AimanHandoverFileName       = ".aiman_handover.md"
+	AimanReviewFileName         = ".aiman_review.md"
 	// AimanSessionIDFileName is the worktree marker Muse hooks read. Muse
 	// strips AIMAN_ID from the hook environment, so the id cannot travel
 	// as a variable.
