@@ -105,6 +105,7 @@ func run() error {
 		slugger,
 		skillEngine,
 	)
+	flowManager.SetRepoBootstrap(cfg.Repos)
 
 	dir, err := config.GetDir()
 	if err != nil {

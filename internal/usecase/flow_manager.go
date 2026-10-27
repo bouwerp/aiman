@@ -26,6 +26,8 @@ type FlowManager struct {
 	sshManager   domain.RemoteExecutor
 	slugger      domain.Slugger
 	SkillEngine  domain.SkillEngine
+	// repos holds the per-repository worktree bootstrap from config.
+	repos map[string]config.RepoBootstrap
 }
 
 func NewFlowManager(
@@ -44,6 +46,55 @@ func NewFlowManager(
 		slugger:      slugger,
 		SkillEngine:  skillEngine,
 	}
+}
+
+// SetRepoBootstrap sets the per-repository bootstrap applied to worktrees
+// CreateSession makes. Call it once while wiring, before any create.
+func (m *FlowManager) SetRepoBootstrap(repos map[string]config.RepoBootstrap) {
+	m.repos = repos
+}
+
+// shouldBootstrap reports whether this create makes a fresh worktree of a
+// repository. Attached, reused, prepared, ad-hoc and no-repo directories
+// already exist or are not checkouts, so they are left as they are.
+func shouldBootstrap(config domain.SessionConfig) bool {
+	if config.Repo.Name == "" || config.Repo.Name == "No Repository" {
+		return false
+	}
+	return !config.AdHoc && !config.AttachExisting && !config.ReuseWorkspace && config.PreparedWorktree == ""
+}
+
+// bootstrapPromptNote tells the agent that setup is still running and where
+// its log is.
+func bootstrapPromptNote(setup, logPath string) string {
+	return fmt.Sprintf("Worktree setup (`%s`) is running in the background; its log is %s. Check it has finished before building or running tests.", setup, logPath)
+}
+
+// applyBootstrap runs the configured bootstrap for a fresh worktree and
+// returns the setup log path, empty when no setup started. Failures are
+// reported as progress and never fail the create.
+func (m *FlowManager) applyBootstrap(ctx context.Context, sshMgr domain.RemoteExecutor, cfg domain.SessionConfig, worktree string) (setup, logPath string) {
+	if !shouldBootstrap(cfg) {
+		return "", ""
+	}
+	b, ok := (&config.Config{Repos: m.repos}).RepoBootstrapFor(cfg.Repo.Name)
+	if !ok {
+		return "", ""
+	}
+	infraGit.ReportProgress(ctx, "Bootstrapping worktree…")
+	mainRepo := infraGit.ComputeMainRepoPath(sshMgr.GetRoot(), cfg.Repo.Name)
+	res, err := ApplyWorktreeBootstrap(ctx, sshMgr, mainRepo, worktree, b)
+	if err != nil {
+		infraGit.ReportProgress(ctx, fmt.Sprintf("Worktree bootstrap failed: %v", err))
+		return "", ""
+	}
+	for _, p := range res.Skipped {
+		infraGit.ReportProgress(ctx, fmt.Sprintf("Worktree bootstrap skipped %s (missing in the main checkout or already present)", p))
+	}
+	if res.SetupLog == "" {
+		return "", ""
+	}
+	return b.Setup, res.SetupLog
 }
 
 // joinPrompt appends user-entered prompt text to a base agent prompt. The base is
@@ -356,6 +407,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	}
 	session.WorktreePath = wt.Path
 	session.BaseBranch = sessionBaseBranch(config.BaseBranch, wt.Base)
+	setup, setupLog := m.applyBootstrap(ctx, sshMgr, config, session.WorktreePath)
 
 	if !config.AdHoc {
 		// Ignore session-local task stub so it is not committed from the worktree.
@@ -396,6 +448,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	// this follows the "Read .aiman_task.md…" trigger; for ad-hoc sessions it becomes
 	// the entire prompt.
 	sendKeysPrompt = joinPrompt(sendKeysPrompt, config.InitialPrompt)
+	if setupLog != "" {
+		sendKeysPrompt = joinPrompt(sendKeysPrompt, bootstrapPromptNote(setup, setupLog))
+	}
 	WriteMuseSessionID(ctx, sshMgr, workingDir, agentCmd, session.ID)
 
 	// Step 8: Session (Tmux). The display Name is a renameable alias and must

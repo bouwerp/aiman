@@ -160,6 +160,7 @@ func run() error {
 	skillEngine := skills.NewEngine(cfg)
 	slugger := domain.NewGitSlugger()
 	flowManager := usecase.NewFlowManager(jiraProvider, &cfg.Integrations.Jira, gitManager, sshManager, slugger, skillEngine)
+	flowManager.SetRepoBootstrap(cfg.Repos)
 
 	// 6. Handle commands
 	if len(os.Args) > 1 {

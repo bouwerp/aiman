@@ -426,3 +426,36 @@ func TestSendPromptTaggedStatusIsTheSend(t *testing.T) {
 		t.Fatal("send-keys failed, but the script status was success")
 	}
 }
+
+func TestShouldBootstrap(t *testing.T) {
+	repo := domain.Repo{Name: "owner/name"}
+	cases := []struct {
+		name string
+		cfg  domain.SessionConfig
+		want bool
+	}{
+		{"new worktree", domain.SessionConfig{Repo: repo}, true},
+		{"existing branch", domain.SessionConfig{Repo: repo, ExistingBranch: true}, true},
+		{"attach existing", domain.SessionConfig{Repo: repo, AttachExisting: true}, false},
+		{"reuse workspace", domain.SessionConfig{Repo: repo, ReuseWorkspace: true}, false},
+		{"ad hoc", domain.SessionConfig{Repo: repo, AdHoc: true}, false},
+		{"prepared worktree", domain.SessionConfig{Repo: repo, PreparedWorktree: "/w/review"}, false},
+		{"no repository", domain.SessionConfig{Repo: domain.Repo{Name: "No Repository"}}, false},
+		{"empty repo", domain.SessionConfig{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldBootstrap(tc.cfg); got != tc.want {
+				t.Fatalf("shouldBootstrap = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBootstrapPromptNote(t *testing.T) {
+	got := bootstrapPromptNote("make deps", "/r/.git/worktrees/x/aiman-setup.log")
+	want := "Worktree setup (`make deps`) is running in the background; its log is /r/.git/worktrees/x/aiman-setup.log. Check it has finished before building or running tests."
+	if got != want {
+		t.Fatalf("bootstrapPromptNote =\n%q\nwant\n%q", got, want)
+	}
+}
