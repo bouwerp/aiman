@@ -83,3 +83,29 @@ func TestMergeTicksDoneItemFromSnapshot(t *testing.T) {
 		t.Fatalf("done item = %+v", got.Items)
 	}
 }
+
+func TestAgentCannotTickDoneWhen(t *testing.T) {
+	f := NewFiles(t.TempDir())
+	if _, _, err := f.Mutate("s", domain.AuthorUser, func(l *domain.TodoList) error {
+		l.Items = []domain.TodoItem{{Text: DoneItemText, State: domain.TodoPending, Ref: DoneRef}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Mutate("s", domain.AuthorAgent, func(l *domain.TodoList) error {
+		l.Items[0].State = domain.TodoDone
+		return nil
+	}); err == nil {
+		t.Fatal("agent ticked the Done-when item")
+	}
+	list, err := f.Get("s")
+	if err != nil || list.Items[0].State != domain.TodoPending {
+		t.Fatalf("item after rejected tick = %+v, %v", list.Items, err)
+	}
+	if _, _, err := f.Mutate("s", domain.AuthorUser, func(l *domain.TodoList) error {
+		l.Items[0].State = domain.TodoDone
+		return nil
+	}); err != nil {
+		t.Fatalf("user tick: %v", err)
+	}
+}

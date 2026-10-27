@@ -111,7 +111,7 @@ func (f *Files) Get(sessionID string) (domain.TodoList, error) {
 // Mutate applies fn to a copy of the list, normalises and stamps the result,
 // and writes it when anything changed.
 func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList) error) (domain.TodoList, Change, error) {
-	return f.update(sessionID, author, func(l *domain.TodoList, _ fileData, _ time.Time) error {
+	return f.update(sessionID, author, false, func(l *domain.TodoList, _ fileData, _ time.Time) error {
 		return fn(l)
 	})
 }
@@ -120,7 +120,7 @@ func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*doma
 // (see Merge) and writes it as an agent change. deliveredAt is when the last
 // steering note reached the agent.
 func (f *Files) Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliveredAt time.Time) (domain.TodoList, Change, error) {
-	return f.update(sessionID, domain.AuthorAgent, func(l *domain.TodoList, d fileData, now time.Time) error {
+	return f.update(sessionID, domain.AuthorAgent, true, func(l *domain.TodoList, d fileData, now time.Time) error {
 		*l = MergeWithRetexts(*l, d.Tombstones, d.Retexts, snap, deliveredAt, now)
 		return nil
 	})
@@ -128,7 +128,7 @@ func (f *Files) Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliver
 
 // update is the shared write path of Mutate and Mirror. A change that only
 // alters NotInAgent is written and bumps Rev but carries no ops.
-func (f *Files) update(sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList, fileData, time.Time) error) (domain.TodoList, Change, error) {
+func (f *Files) update(sessionID string, author domain.TodoAuthor, allowDoneTick bool, fn func(*domain.TodoList, fileData, time.Time) error) (domain.TodoList, Change, error) {
 	id, path, err := f.path(sessionID)
 	if err != nil {
 		return domain.TodoList{}, Change{}, err
@@ -150,6 +150,13 @@ func (f *Files) update(sessionID string, author domain.TodoAuthor, fn func(*doma
 		return prev, Change{}, err
 	}
 	pinDoneLast(&next)
+	if !allowDoneTick && author == domain.AuthorAgent {
+		for _, it := range next.Items {
+			if it.Ref == DoneRef && it.State == domain.TodoDone {
+				return prev, Change{}, fmt.Errorf("%w: done item is evidence-backed; run aiman verify", ErrInvalid)
+			}
+		}
+	}
 	next.SessionID = sessionID
 
 	if err := validate(next); err != nil {

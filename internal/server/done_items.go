@@ -17,3 +17,8 @@ func (d serverDoneItems) Ensure(_ context.Context, _ domain.RemoteExecutor, sess
 	_, _, err := d.s.ensureDone(sess)
 	return err
 }
+
+func (d serverDoneItems) MarkMet(_ context.Context, sess domain.Session) error {
+	_, _, err := d.s.markDoneMet(sess)
+	return err
+}

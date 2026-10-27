@@ -544,3 +544,24 @@ func TestServerDoneItemsEnsure(t *testing.T) {
 		t.Fatalf("list = %+v, %v", list, err)
 	}
 }
+
+func TestDoneItemsMarkMetSteersOnce(t *testing.T) {
+	srv, _, notes := todoServer(t, todoSession("s1"))
+	if _, _, err := srv.ensureDone(mustSession(t, srv, "s1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.DoneItems().MarkMet(context.Background(), mustSession(t, srv, "s1")); err != nil {
+		t.Fatal(err)
+	}
+	list, err := srv.TodoAccess().Get("s1")
+	if err != nil || list.Items[0].State != domain.TodoDone || list.Items[0].UpdatedBy != domain.AuthorAiman {
+		t.Fatalf("done item = %+v, %v", list.Items, err)
+	}
+	if err := srv.DoneItems().MarkMet(context.Background(), mustSession(t, srv, "s1")); err != nil {
+		t.Fatal(err)
+	}
+	settle()
+	if recs := notes.records(); len(recs) != 1 || recs[0].Author != domain.AuthorAiman {
+		t.Fatalf("steer records = %+v, want one aiman note", recs)
+	}
+}

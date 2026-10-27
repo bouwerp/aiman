@@ -309,7 +309,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleMemoryJobs(ctx, req)
 	case "memory.done":
 		return s.handleMemoryDone(ctx, req)
-	case "todo.get", "todo.summary", "todo.add", "todo.update", "todo.move", "todo.remove", "todo.mirror", "todo.ensure_done", "steer.send":
+	case "todo.get", "todo.summary", "todo.add", "todo.update", "todo.move", "todo.remove", "todo.mirror", "todo.ensure_done", "todo.mark_met", "steer.send":
 		return s.handleTodo(ctx, req)
 	case "pty.create":
 		return s.handlePTYCreate(ctx, req)

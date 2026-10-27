@@ -297,6 +297,8 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 	switch req.Method {
 	case "todo.ensure_done":
 		return s.handleTodoEnsureDone(ctx, req, sess)
+	case "todo.mark_met":
+		return s.handleTodoMarkMet(req, sess)
 	case "steer.send":
 		return s.handleSteerSend(ctx, req, p, sess, author)
 	case "todo.mirror":
@@ -397,6 +399,41 @@ func (s *Server) ensureDone(sess domain.Session) (domain.TodoList, bool, error) 
 	}
 	s.afterTodoChange(sess, domain.AuthorAiman, list, change, prev.Rev, false)
 	return list, added, nil
+}
+
+func (s *Server) markDoneMet(sess domain.Session) (domain.TodoList, bool, error) {
+	if s.todos == nil {
+		return domain.TodoList{}, false, errTodosDisabled
+	}
+	unlock := s.todoLock(sess.ID)
+	defer unlock()
+	prev, err := s.todos.Get(sess.ID)
+	if err != nil {
+		return prev, false, err
+	}
+	changed := false
+	list, change, err := s.todos.Mutate(sess.ID, domain.AuthorAiman, func(l *domain.TodoList) error {
+		for i := range l.Items {
+			if l.Items[i].Ref == todo.DoneRef && l.Items[i].State != domain.TodoDone {
+				l.Items[i].State = domain.TodoDone
+				changed = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return prev, false, err
+	}
+	s.afterTodoChange(sess, domain.AuthorAiman, list, change, prev.Rev, true)
+	return list, changed, nil
+}
+
+func (s *Server) handleTodoMarkMet(req Request, sess domain.Session) Response {
+	list, changed, err := s.markDoneMet(sess)
+	if err != nil {
+		return todoErrResp(req.ID, err)
+	}
+	return Response{ID: req.ID, Result: map[string]any{"type": "todo_list", "list": list, "changed": changed}}
 }
 
 func (s *Server) handleTodoEnsureDone(_ context.Context, req Request, sess domain.Session) Response {

@@ -10,6 +10,9 @@ import (
 // DoneItems ensures a session's list has the evidence-backed Done-when item.
 type DoneItems interface {
 	Ensure(ctx context.Context, remote domain.RemoteExecutor, s domain.Session) error
+	// MarkMet ticks the Done-when item after a passing review. It is called
+	// by serve's verifier, not by a laptop create.
+	MarkMet(ctx context.Context, s domain.Session) error
 }
 
 // RemoteDoneItems is the laptop-side implementation: register the session with
@@ -26,4 +29,10 @@ func (RemoteDoneItems) Ensure(ctx context.Context, remote domain.RemoteExecutor,
 		return nil
 	}
 	return err
+}
+
+// MarkMet is host-only: verification runs in serve, which uses the direct
+// server adapter. A laptop caller has no verifier to mark from.
+func (RemoteDoneItems) MarkMet(context.Context, domain.Session) error {
+	return errors.New("done marker is host-only")
 }
