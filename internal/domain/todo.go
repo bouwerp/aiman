@@ -54,7 +54,8 @@ type TodoItem struct {
 	UpdatedBy TodoAuthor `json:"updated_by,omitempty"`
 	UpdatedAt time.Time  `json:"updated_at,omitempty"`
 	// Ref optionally links the item to another object, prefixed:
-	// "child:<id>", "check:<name>", "review:<comment id>", "finding:<review id>/<id>".
+	// "child:<id>", "check:<name>", "review:<comment id>", "finding:<review id>/<id>",
+	// "done".
 	Ref string `json:"ref,omitempty"`
 }
 

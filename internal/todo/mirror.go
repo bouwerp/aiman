@@ -124,6 +124,9 @@ func MergeWithRetexts(list domain.TodoList, tombs []Tombstone, retexts []Retext,
 		it := &items[i]
 		switch {
 		case matched[i]:
+		case it.Ref == DoneRef:
+			// The Done-when item is aiman's; the agent's task list not
+			// mentioning it is normal and must not mark it missing or drop it.
 		case it.UpdatedBy == domain.AuthorAgent:
 			it.State = domain.TodoDropped
 		case !undelivered(*it):
@@ -166,9 +169,11 @@ func MergeWithRetexts(list domain.TodoList, tombs []Tombstone, retexts []Retext,
 	if anyUndelivered {
 		items = append(items, added...)
 		out.Items = items
+		pinDoneLast(&out)
 		return out
 	}
 	out.Items = snapshotOrder(items, added, matched, ordered)
+	pinDoneLast(&out)
 	return out
 }
 

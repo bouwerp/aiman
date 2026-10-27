@@ -22,6 +22,7 @@ var rpcMethods = map[string]bool{
 	"todo.update":      true,
 	"todo.move":        true,
 	"todo.remove":      true,
+	"todo.ensure_done": true,
 	"steer.send":       true,
 	"handover.write":   true,
 	"handover.point":   true,

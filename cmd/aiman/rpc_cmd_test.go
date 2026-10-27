@@ -28,6 +28,7 @@ func TestRPCParams(t *testing.T) {
 		{"ci.watch ok", "ci.watch", `{"session":"s1","on":false}`, ""},
 		{"verify.start ok", "verify.start", `{"session":"s1"}`, ""},
 		{"verify.status ok", "verify.status", `{"review":"r1"}`, ""},
+		{"todo.ensure_done ok", "todo.ensure_done", `{"session":"s1"}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

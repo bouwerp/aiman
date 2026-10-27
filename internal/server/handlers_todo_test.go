@@ -498,3 +498,49 @@ func TestTodoAccessMutateUsesServePath(t *testing.T) {
 		t.Fatal("Mutate on unknown session should fail")
 	}
 }
+
+func TestTodoEnsureDoneDoesNotSteer(t *testing.T) {
+	srv, _, notes := todoServer(t, todoSession("s1"))
+	ch, cancel := srv.hub.Subscribe()
+	defer cancel()
+	var res struct {
+		Type  string          `json:"type"`
+		List  domain.TodoList `json:"list"`
+		Added bool            `json:"added"`
+	}
+	rpcOK(t, srv, "", "todo.ensure_done", map[string]any{"session": "s1"}, &res)
+	if res.Type != "todo_list" || !res.Added {
+		t.Fatalf("result = %+v", res)
+	}
+	if len(res.List.Items) != 1 || res.List.Items[0].Ref != todo.DoneRef || res.List.Items[0].Text != todo.DoneItemText {
+		t.Fatalf("list = %+v", res.List.Items)
+	}
+	select {
+	case ev := <-ch:
+		if ev.Type != "todo_changed" || ev.ID != "s1" {
+			t.Fatalf("event = %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no todo_changed")
+	}
+	// The Done item is explained by the task file; ensuring it must not steer.
+	settle()
+	if recs := notes.records(); len(recs) != 0 {
+		t.Fatalf("steer records = %+v, want none", recs)
+	}
+	rpcOK(t, srv, "", "todo.ensure_done", map[string]any{"session": "s1"}, &res)
+	if res.Added {
+		t.Fatal("second ensure added another Done item")
+	}
+}
+
+func TestServerDoneItemsEnsure(t *testing.T) {
+	srv, _, _ := todoServer(t, todoSession("s1"))
+	if err := srv.DoneItems().Ensure(context.Background(), nil, mustSession(t, srv, "s1")); err != nil {
+		t.Fatal(err)
+	}
+	list, err := srv.TodoAccess().Get("s1")
+	if err != nil || len(list.Items) != 1 || list.Items[0].Ref != todo.DoneRef {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+}

@@ -149,6 +149,7 @@ func (f *Files) update(sessionID string, author domain.TodoAuthor, fn func(*doma
 	if err := fn(&next, d, now); err != nil {
 		return prev, Change{}, err
 	}
+	pinDoneLast(&next)
 	next.SessionID = sessionID
 
 	if err := validate(next); err != nil {

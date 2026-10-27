@@ -122,7 +122,7 @@ func (s *Server) mutateTodos(sess domain.Session, author domain.TodoAuthor, fn f
 	if err != nil {
 		return list, change, err
 	}
-	s.afterTodoChange(sess, author, list, change, prevRev)
+	s.afterTodoChange(sess, author, list, change, prevRev, true)
 	return list, change, nil
 }
 
@@ -139,13 +139,13 @@ func (s *Server) mirrorTodos(sess domain.Session, snap []domain.TodoSnapshotItem
 	if err != nil {
 		return list, err
 	}
-	s.afterTodoChange(sess, domain.AuthorAgent, list, change, prev.Rev)
+	s.afterTodoChange(sess, domain.AuthorAgent, list, change, prev.Rev, true)
 	return list, nil
 }
 
 // afterTodoChange renders, announces and steers a written list. A write that
 // changed only NotInAgent still bumps Rev, so readers refresh on it too.
-func (s *Server) afterTodoChange(sess domain.Session, author domain.TodoAuthor, list domain.TodoList, change todo.Change, prevRev int64) {
+func (s *Server) afterTodoChange(sess domain.Session, author domain.TodoAuthor, list domain.TodoList, change todo.Change, prevRev int64, steer bool) {
 	if change.Empty() && list.Rev == prevRev {
 		return
 	}
@@ -158,7 +158,7 @@ func (s *Server) afterTodoChange(sess domain.Session, author domain.TodoAuthor, 
 	s.appendEvent(context.Background(), sess.ID, todoEventActor(author), domain.EventTodoChanged, map[string]any{
 		"rev": list.Rev, "author": string(author),
 	})
-	if change.SteersAgent() {
+	if steer && change.SteersAgent() {
 		s.steer.EnqueueTodo(sess.ID, author, change.Ops)
 	}
 }
@@ -295,6 +295,8 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	switch req.Method {
+	case "todo.ensure_done":
+		return s.handleTodoEnsureDone(ctx, req, sess)
 	case "steer.send":
 		return s.handleSteerSend(ctx, req, p, sess, author)
 	case "todo.mirror":
@@ -371,6 +373,40 @@ func todoUpdateFn(p todoParams) (func(*domain.TodoList) error, error) {
 		}
 		return nil
 	}, nil
+}
+
+// ensureDone adds the Done-when item without steering the agent. It is
+// idempotent and still renders and announces a real change.
+func (s *Server) ensureDone(sess domain.Session) (domain.TodoList, bool, error) {
+	if s.todos == nil {
+		return domain.TodoList{}, false, errTodosDisabled
+	}
+	unlock := s.todoLock(sess.ID)
+	defer unlock()
+	prev, err := s.todos.Get(sess.ID)
+	if err != nil {
+		return prev, false, err
+	}
+	added := false
+	list, change, err := s.todos.Mutate(sess.ID, domain.AuthorAiman, func(l *domain.TodoList) error {
+		added = todo.EnsureDoneItem(l)
+		return nil
+	})
+	if err != nil {
+		return prev, false, err
+	}
+	s.afterTodoChange(sess, domain.AuthorAiman, list, change, prev.Rev, false)
+	return list, added, nil
+}
+
+func (s *Server) handleTodoEnsureDone(_ context.Context, req Request, sess domain.Session) Response {
+	list, added, err := s.ensureDone(sess)
+	if err != nil {
+		return todoErrResp(req.ID, err)
+	}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type": "todo_list", "list": list, "added": added,
+	}}
 }
 
 func (s *Server) handleTodoAdd(req Request, p todoParams, sess domain.Session, author domain.TodoAuthor) Response {
