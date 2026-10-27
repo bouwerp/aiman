@@ -1,6 +1,9 @@
 package verify
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseReview(t *testing.T) {
 	text := "# Review\n\n## [REQUIRED] Nil map write\ninternal/a.go:42\nwrites to m before make.\n\n" +
@@ -43,5 +46,16 @@ func TestParseReviewMarkerMustBeItsOwnLine(t *testing.T) {
 	got, complete := ParseReview("## [REQUIRED] First\na.go:1\nthe marker " + CompleteMarker + " is quoted here\n")
 	if complete {
 		t.Fatalf("inline marker counted as complete: %+v", got)
+	}
+}
+
+func TestParseReviewIndentedAndSubheadingBody(t *testing.T) {
+	got, _ := ParseReview("## [SUGGESTION] First\na.go:1\nbody\n  ## [REQUIRED] Second\nb.go:2\nbody\n")
+	if len(got) != 2 || got[1].Severity != SeverityRequired {
+		t.Fatalf("findings = %+v", got)
+	}
+	body, _ := ParseReview("## [REQUIRED] First\na.go:1\n### detail\nstill body\n")
+	if len(body) != 1 || !strings.Contains(body[0].Body, "### detail\nstill body") {
+		t.Fatalf("subheading truncated body: %+v", body)
 	}
 }

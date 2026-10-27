@@ -89,6 +89,8 @@ func waitForReview(call func(method string, params any) (server.Response, error)
 		every = defaultVerifyPollEvery
 	}
 	deadline := time.Now().Add(timeout)
+	jsonOut := len(asJSON) > 0 && asJSON[0]
+	var last verify.Review
 	for {
 		resp, err := call("verify.status", map[string]any{"review": id})
 		if err != nil {
@@ -102,6 +104,7 @@ func waitForReview(call func(method string, params any) (server.Response, error)
 		if err != nil {
 			return err
 		}
+		last = review
 		if !review.Status.Active() {
 			if len(asJSON) > 0 && asJSON[0] {
 				if err := printVerifyJSON(out, review); err != nil {
@@ -112,7 +115,15 @@ func waitForReview(call func(method string, params any) (server.Response, error)
 			return writeFinalReview(out, review)
 		}
 		if !time.Now().Before(deadline) {
-			fmt.Fprintln(out, "still running; run `aiman verify --wait` again")
+			if jsonOut {
+				if last.ID != "" {
+					_ = printVerifyJSON(out, last)
+				} else {
+					fmt.Fprintln(out, `{"status":"running"}`)
+				}
+			} else {
+				fmt.Fprintln(out, "still running; run `aiman verify --wait` again")
+			}
 			return errVerifyNotPassed
 		}
 		remain := time.Until(deadline)
@@ -120,7 +131,15 @@ func waitForReview(call func(method string, params any) (server.Response, error)
 			every = remain
 		}
 		if every <= 0 {
-			fmt.Fprintln(out, "still running; run `aiman verify --wait` again")
+			if jsonOut {
+				if last.ID != "" {
+					_ = printVerifyJSON(out, last)
+				} else {
+					fmt.Fprintln(out, `{"status":"running"}`)
+				}
+			} else {
+				fmt.Fprintln(out, "still running; run `aiman verify --wait` again")
+			}
 			return errVerifyNotPassed
 		}
 		time.Sleep(every)

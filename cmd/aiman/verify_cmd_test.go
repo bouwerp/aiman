@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -152,5 +153,36 @@ func TestGateDisabledIsZero(t *testing.T) {
 	}
 	if err := gateStatus(call, "tree", ""); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWaitJSONTimeoutStaysJSON(t *testing.T) {
+	var out bytes.Buffer
+	err := waitForReview(verifySequence(verify.Review{ID: "r1", Status: verify.StatusRunning}), "r1", 20*time.Millisecond, 5*time.Millisecond, &out, true)
+	if !errors.Is(err, errVerifyNotPassed) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(out.String(), "still running") {
+		t.Fatalf("plain text on JSON timeout: %q", out.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(out.Bytes(), &body); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out.String())
+	}
+}
+
+func TestWaitPrintsFailingEvidence(t *testing.T) {
+	var out bytes.Buffer
+	err := waitForReview(verifySequence(verify.Review{
+		ID: "r1", Status: verify.StatusComplete,
+		Evidence: verify.Evidence{Command: "go test ./...", ExitCode: 1, Output: "FAIL\nline 2\n"},
+	}), "r1", time.Second, time.Millisecond, &out)
+	if !errors.Is(err, errVerifyNotPassed) {
+		t.Fatalf("err = %v", err)
+	}
+	for _, want := range []string{"evidence: go test ./... → exit 1", "FAIL", "line 2"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("out missing %q: %q", want, out.String())
+		}
 	}
 }

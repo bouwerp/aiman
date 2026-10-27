@@ -77,6 +77,8 @@ func TestVerifyEventDropsReviewerRows(t *testing.T) {
 	worker := domain.Session{ID: "w1", Name: "impl", RemoteHost: "regent0"}
 	reviewer := domain.Session{ID: "r1", Role: domain.SessionRoleReviewer, ParentID: "w1", RemoteHost: "regent0"}
 	m, _ := promptModel(worker, reviewer)
+	db := &mockSessionRepo{}
+	m.db = db
 	m.daemonList = list.New(nil, list.NewDefaultDelegate(), 40, 20)
 	m.streams["regent0"] = &sessionStream{host: "regent0", events: make(chan server.SessionEvent, 1)}
 	m.applySessionEvent(sessionEventMsg{host: "regent0", event: server.SessionEvent{Type: "verify", ID: "w1"}})
@@ -84,6 +86,15 @@ func TestVerifyEventDropsReviewerRows(t *testing.T) {
 		if s.ID == "r1" {
 			t.Fatal("reviewer row was not dropped")
 		}
+	}
+	found := false
+	for _, id := range db.deleted {
+		if id == "r1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("reviewer row was not deleted from the laptop DB: %v", db.deleted)
 	}
 }
 
@@ -97,5 +108,13 @@ func TestApplyRemoteFilterHidesReviewers(t *testing.T) {
 		if row, ok := it.(item); ok && row.session.ID == "r1" {
 			t.Fatal("reviewer row is visible")
 		}
+	}
+}
+
+func TestVerifyStartedExistingReviewDoesNotSayStarting(t *testing.T) {
+	m, _ := promptModel(domain.Session{ID: "w1", Name: "impl", RemoteHost: "regent0"})
+	m.applyVerifyStarted(verifyStartedMsg{sessionID: "w1", status: "complete"})
+	if strings.Contains(m.snapshotToast, "Review starting") || !strings.Contains(m.snapshotToast, "Existing review: complete") {
+		t.Fatalf("toast = %q", m.snapshotToast)
 	}
 }

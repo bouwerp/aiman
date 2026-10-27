@@ -17,6 +17,7 @@ type mockSessionRepo struct {
 	getErr    error
 	listErr   error
 	deleteErr error
+	deleted   []string
 }
 
 func (m *mockSessionRepo) Save(ctx context.Context, s *domain.Session) error {
@@ -32,6 +33,7 @@ func (m *mockSessionRepo) List(ctx context.Context) ([]domain.Session, error) {
 }
 
 func (m *mockSessionRepo) Delete(ctx context.Context, id string) error {
+	m.deleted = append(m.deleted, id)
 	return m.deleteErr
 }
 

@@ -28,7 +28,7 @@ type Finding struct {
 
 var (
 	findingHeader = regexp.MustCompile(`(?i)^##\s*\[(REQUIRED|SUGGESTION)\]\s*(.+)$`)
-	sectionHeader = regexp.MustCompile(`^##\s*`)
+	sectionHeader = regexp.MustCompile(`^##(?:\s|\[)`)
 	locationRE    = regexp.MustCompile(`[\w./-]+:\d+`)
 )
 
@@ -51,7 +51,7 @@ func ParseReview(text string) (findings []Finding, complete bool) {
 		j := i + 1
 		for j < len(lines) {
 			line := strings.TrimSpace(lines[j])
-			if sectionHeader.MatchString(lines[j]) || line == CompleteMarker {
+			if sectionHeader.MatchString(line) || line == CompleteMarker {
 				break
 			}
 			j++
