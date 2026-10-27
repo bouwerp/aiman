@@ -11,7 +11,6 @@ import (
 type fakeStore struct {
 	rows        []domain.Notification
 	last        map[[2]string]time.Time
-	publishes   [][2]string
 	appendCalls int
 }
 

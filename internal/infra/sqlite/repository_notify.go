@@ -44,7 +44,7 @@ func (r *Repository) AppendIfDue(ctx context.Context, n domain.Notification, min
 	if err != nil {
 		return domain.Notification{}, false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var last sql.NullTime
 	if err := tx.QueryRowContext(ctx, `SELECT notified_at FROM notify_last WHERE session_id=? AND kind=?`, n.SessionID, string(n.Kind)).Scan(&last); err != nil && err != sql.ErrNoRows {
 		return domain.Notification{}, false, err
