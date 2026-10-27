@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1119,5 +1120,65 @@ func TestCreateRejectsBadBrief(t *testing.T) {
 	}
 	if it := parentT3(t, srv); it.Ref != "" {
 		t.Fatalf("t3 ref = %q, want unlinked", it.Ref)
+	}
+}
+
+// A tmux child whose link fails is torn down, not just forgotten: its tmux
+// session is killed and its worktree and branch are removed, so a retry can
+// recreate them.
+func TestCreateForRollbackTearsDownTmuxChild(t *testing.T) {
+	srv, creator := forServer(t, "")
+	remote := &fakeRemote{}
+	srv.remote = remote
+	creator.sess = &domain.Session{
+		ID: "new-id", Name: "child", Status: domain.SessionStatusActive, Backend: domain.BackendTmux,
+		TmuxSession: "child-tmux", WorktreePath: "/r/repo@feat--t3", Branch: "feat--t3",
+	}
+	creator.onCreate = func() {
+		_ = srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAgent, func(l *domain.TodoList) error {
+			for i := range l.Items {
+				if l.Items[i].ID == "t3" {
+					l.Items[i].Ref = "child:other"
+				}
+			}
+			return nil
+		})
+	}
+	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p"})
+	if resp.Error == nil || resp.Error.Code != CodeCreateFailed {
+		t.Fatalf("error = %+v, want create_failed", resp.Error)
+	}
+	all := strings.Join(remote.execs, "\n")
+	for _, want := range []string{"tmux kill-session -t '=child-tmux'", "worktree remove --force", "'/r/repo@feat--t3'", "branch -D 'feat--t3'"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("rollback did not run %q; ran:\n%s", want, all)
+		}
+	}
+}
+
+func TestDiscardWorktreeScriptRemovesWorktreeAndBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := shortTempDir(t)
+	main := filepath.Join(root, "repo")
+	wt := filepath.Join(root, "repo@feat--t3")
+	for _, args := range [][]string{
+		{"init", "-b", "main", main},
+		{"-C", main, "-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "--allow-empty", "-m", "base"},
+		{"-C", main, "worktree", "add", "-b", "feat--t3", wt},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if out, err := exec.Command("bash", "-c", discardWorktreeScript(wt, "feat--t3")).CombinedOutput(); err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Fatalf("worktree still present: %v", err)
+	}
+	if out, _ := exec.Command("git", "-C", main, "branch", "--list", "feat--t3").Output(); strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("branch still present: %q", out)
 	}
 }

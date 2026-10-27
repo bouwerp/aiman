@@ -710,10 +710,10 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	}
 	if forParent != nil {
 		if err := s.linkChild(ctx, forParent.ID, params.For, sess.ID); err != nil {
-			// An unlinked child is never tracked, and its row would take the name a
-			// retry needs, so it is forgotten.
-			if derr := s.dropSession(ctx, *sess); derr != nil {
-				log.Printf("session.create: forget unlinked child %s: %v", sess.ID, derr)
+			// An unlinked child is never tracked, and its row, worktree and branch
+			// would block a retry, so it is torn down.
+			if derr := s.discardChild(ctx, *sess); derr != nil {
+				log.Printf("session.create: discard unlinked child %s: %v", sess.ID, derr)
 			}
 			return errResp(req.ID, CodeCreateFailed, err.Error())
 		}
@@ -861,6 +861,38 @@ func (s *Server) handleRename(ctx context.Context, req Request) Response {
 // whose holder outlived the kill would put the row right back out of reach.
 // The handover is written first. A failed write is logged and the row is
 // still deleted.
+// discardChild undoes a create that cannot stand: it stops the terminal on
+// either backend, removes the worktree and branch the create made, then
+// drops the row. Each step is best effort so a partial failure still frees
+// the name for a retry.
+func (s *Server) discardChild(ctx context.Context, sess domain.Session) error {
+	if err := (serverTerminal{s}).Stop(ctx, sess); err != nil {
+		log.Printf("session.create: stop %s: %v", sess.ID, err)
+	}
+	if s.remote != nil && sess.WorktreePath != "" {
+		if _, err := s.remote.Execute(ctx, discardWorktreeScript(sess.WorktreePath, sess.Branch)); err != nil {
+			log.Printf("session.create: remove worktree of %s: %v", sess.ID, err)
+		}
+	}
+	return s.dropSession(ctx, sess)
+}
+
+// discardWorktreeScript removes a linked worktree and its branch from the main
+// checkout. git refuses to remove a worktree from inside it, so the main
+// checkout is found through the common git dir. A path that is not a linked
+// worktree is left alone.
+func discardWorktreeScript(worktree, branch string) string {
+	script := "wt=" + quoteArg(worktree) + `
+main="$(cd "$wt" 2>/dev/null && cd "$(git rev-parse --git-common-dir)/.." && pwd)" || exit 0
+[ -n "$main" ] && [ "$main" != "$(cd "$wt" && pwd)" ] || exit 0
+git -C "$main" worktree remove --force "$wt"
+`
+	if branch != "" {
+		script += `git -C "$main" branch -D ` + quoteArg(branch) + " >/dev/null 2>&1 || true\n"
+	}
+	return script
+}
+
 // dropSession stops a session's pty and deletes everything serve holds for
 // it: steering queue, notification state, CI rows and the stored row.
 func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
