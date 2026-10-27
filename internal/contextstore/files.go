@@ -37,6 +37,12 @@ type fileMeta struct {
 	Type       string `yaml:"type,omitempty"`
 	Supersedes string `yaml:"supersedes,omitempty"`
 	ValidUntil string `yaml:"valid_until,omitempty"`
+	Author     string `yaml:"author,omitempty"`
+	Verified   bool   `yaml:"verified,omitempty"`
+	VerifiedAt string `yaml:"verified_at,omitempty"`
+	Source     string `yaml:"source,omitempty"`
+	SourceHash string `yaml:"source_hash,omitempty"`
+	Confidence string `yaml:"confidence,omitempty"`
 	Session    string `yaml:"session,omitempty"`
 	Created    string `yaml:"created"`
 }
@@ -491,6 +497,19 @@ func normalize(e domain.ContextEntry) (domain.ContextEntry, error) {
 		return e, fmt.Errorf("invalid type %q", e.Type)
 	}
 	e.Type = typ
+	switch e.Author {
+	case "":
+		e.Author = domain.ContextAuthorUnknown
+	case domain.ContextAuthorAgent, domain.ContextAuthorHuman, domain.ContextAuthorAiman,
+		domain.ContextAuthorVerifier, domain.ContextAuthorUnknown:
+	default:
+		return e, fmt.Errorf("invalid author %q", e.Author)
+	}
+	switch e.Confidence {
+	case "", domain.ContextConfidenceLow, domain.ContextConfidenceMedium, domain.ContextConfidenceHigh:
+	default:
+		return e, fmt.Errorf("invalid confidence %q", e.Confidence)
+	}
 	rawSupersedes := strings.TrimSpace(e.Supersedes)
 	e.Supersedes = SafeKey(e.Supersedes)
 	if rawSupersedes != "" && e.Supersedes == "" {
@@ -544,6 +563,10 @@ func encode(e domain.ContextEntry) ([]byte, error) {
 	if !e.ValidUntil.IsZero() {
 		validUntil = e.ValidUntil.UTC().Format(time.RFC3339)
 	}
+	verifiedAt := ""
+	if !e.VerifiedAt.IsZero() {
+		verifiedAt = e.VerifiedAt.UTC().Format(time.RFC3339)
+	}
 	meta := fileMeta{
 		ID:         e.ID,
 		NS:         e.Namespace,
@@ -553,6 +576,12 @@ func encode(e domain.ContextEntry) ([]byte, error) {
 		Type:       string(e.Type),
 		Supersedes: e.Supersedes,
 		ValidUntil: validUntil,
+		Author:     string(e.Author),
+		Verified:   e.Verified,
+		VerifiedAt: verifiedAt,
+		Source:     e.Source,
+		SourceHash: e.SourceHash,
+		Confidence: string(e.Confidence),
 		Session:    e.SessionID,
 		Created:    e.CreatedAt.UTC().Format(time.RFC3339),
 	}
@@ -592,6 +621,20 @@ func decode(raw []byte) (domain.ContextEntry, error) {
 		typ = domain.ContextTypeFact
 	}
 	validUntil, _ := time.Parse(time.RFC3339, meta.ValidUntil)
+	verifiedAt, _ := time.Parse(time.RFC3339, meta.VerifiedAt)
+	author := domain.ContextAuthor(meta.Author)
+	switch author {
+	case domain.ContextAuthorAgent, domain.ContextAuthorHuman, domain.ContextAuthorAiman,
+		domain.ContextAuthorVerifier, domain.ContextAuthorUnknown:
+	default:
+		author = domain.ContextAuthorUnknown
+	}
+	confidence := domain.ContextConfidence(meta.Confidence)
+	switch confidence {
+	case domain.ContextConfidenceLow, domain.ContextConfidenceMedium, domain.ContextConfidenceHigh:
+	default:
+		confidence = ""
+	}
 	return domain.ContextEntry{
 		ID:         meta.ID,
 		Namespace:  meta.NS,
@@ -603,6 +646,12 @@ func decode(raw []byte) (domain.ContextEntry, error) {
 		Type:       typ,
 		Supersedes: SafeKey(meta.Supersedes),
 		ValidUntil: validUntil,
+		Author:     author,
+		Verified:   meta.Verified,
+		VerifiedAt: verifiedAt,
+		Source:     meta.Source,
+		SourceHash: meta.SourceHash,
+		Confidence: confidence,
 		CreatedAt:  created,
 	}, nil
 }

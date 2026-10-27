@@ -242,6 +242,54 @@ func TestSnapshotEntryIsSummary(t *testing.T) {
 	}
 }
 
+func TestProvenanceRoundTrip(t *testing.T) {
+	s := NewFiles(t.TempDir())
+	at := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stored, err := s.Put(context.Background(), domain.ContextEntry{
+		Title: "Verified note", Author: domain.ContextAuthorHuman, Verified: true,
+		VerifiedAt: at, Source: "file:docs/auth.md", SourceHash: "abc123",
+		Confidence: domain.ContextConfidenceHigh,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(context.Background(), stored.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Author != domain.ContextAuthorHuman || !got.Verified || !got.VerifiedAt.Equal(at) ||
+		got.Source != "file:docs/auth.md" || got.SourceHash != "abc123" || got.Confidence != domain.ContextConfidenceHigh {
+		t.Fatalf("got %+v", got)
+	}
+	raw, err := os.ReadFile(absPath(s.root, stored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"author: human", "verified: true", "source: file:docs/auth.md", "source_hash: abc123", "confidence: high"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("file missing %q:\n%s", want, raw)
+		}
+	}
+}
+
+func TestLegacyNoteIsUnverifiedUnknown(t *testing.T) {
+	s := NewFiles(t.TempDir())
+	writeRawNote(t, s, "legacy_prov", `id: legacy_prov
+ns: host
+key: host
+title: Legacy provenance
+abstract: old
+created: 2026-01-01T00:00:00Z
+`)
+	got, err := s.Get(context.Background(), "legacy_prov")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Author != domain.ContextAuthorUnknown || got.Verified || got.Confidence != "" {
+		t.Fatalf("legacy = %+v", got)
+	}
+}
+
 func writeRawNote(t *testing.T, s *Files, id, frontmatter string) {
 	t.Helper()
 	p := path.Join(s.root, "host", "host", id+".md")

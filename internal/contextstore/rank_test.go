@@ -158,3 +158,15 @@ func TestHits(t *testing.T) {
 		t.Fatalf("hit = %+v", got)
 	}
 }
+
+func TestPackRanksVerifiedFirst(t *testing.T) {
+	now := time.Now().UTC()
+	list := []domain.ContextEntry{
+		{ID: "unverified", Type: domain.ContextTypePitfall, CreatedAt: now},
+		{ID: "verified", Type: domain.ContextTypePitfall, Verified: true, CreatedAt: now.Add(-time.Hour)},
+	}
+	Rank(list)
+	if list[0].ID != "verified" {
+		t.Fatalf("order = %v", titles(list))
+	}
+}

@@ -71,6 +71,26 @@ func ParseContextValidUntil(value string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid valid_until %q", value)
 }
 
+// ContextAuthor records who wrote a note.
+type ContextAuthor string
+
+const (
+	ContextAuthorAgent    ContextAuthor = "agent"
+	ContextAuthorHuman    ContextAuthor = "human"
+	ContextAuthorAiman    ContextAuthor = "aiman"
+	ContextAuthorVerifier ContextAuthor = "verifier"
+	ContextAuthorUnknown  ContextAuthor = "unknown"
+)
+
+// ContextConfidence records how strongly a note is held.
+type ContextConfidence string
+
+const (
+	ContextConfidenceLow    ContextConfidence = "low"
+	ContextConfidenceMedium ContextConfidence = "medium"
+	ContextConfidenceHigh   ContextConfidence = "high"
+)
+
 // ContextEntry is one durable note in the shared context store.
 type ContextEntry struct {
 	ID         string
@@ -84,6 +104,12 @@ type ContextEntry struct {
 	Supersedes string
 	ValidUntil time.Time
 	CreatedAt  time.Time
+	Author     ContextAuthor
+	Verified   bool
+	VerifiedAt time.Time
+	Source     string
+	SourceHash string
+	Confidence ContextConfidence
 }
 
 // ContextHit is the compact shape returned by context.find.

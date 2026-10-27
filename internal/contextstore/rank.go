@@ -35,6 +35,9 @@ func Rank(list []domain.ContextEntry) {
 		if ti != tj {
 			return ti < tj
 		}
+		if list[i].Verified != list[j].Verified {
+			return list[i].Verified
+		}
 		if !list[i].CreatedAt.Equal(list[j].CreatedAt) {
 			return list[i].CreatedAt.After(list[j].CreatedAt)
 		}
