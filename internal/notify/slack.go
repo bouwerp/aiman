@@ -31,14 +31,10 @@ func slackEscape(text string) string {
 func (s *SlackSink) resolve(ctx context.Context) (string, error) {
 	s.mu.RLock()
 	cid := s.cid
-	err := s.resol
+	_ = s.resol
 	s.mu.RUnlock()
 	if cid != "" {
 		return cid, nil
-	}
-	if err != nil && s.cid == "" {
-		// allow retry on next send if resolution failed before? tests say "retried on the next send if resolution failed"
-		// but easier to just try again
 	}
 
 	// try resolve
