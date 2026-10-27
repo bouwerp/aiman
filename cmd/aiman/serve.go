@@ -187,11 +187,14 @@ func runServe() error {
 
 	scanner := agent.NewScanner(localExec)
 	srv.SetAgentChoice(cfg.Agents.Preferred, scanner.Installed)
+	verifyDeps := srv.VerifyDeps(verify.NewStore(filepath.Join(dir, "reviews")), func(command string) bool {
+		return scanner.Installed(ctx, command)
+	})
+	// Only a passing review with evidence ticks Done-when met.
+	verifyDeps.Done = srv.DoneItems()
 	verifier := verify.NewManager(
 		verify.Config{Agents: cfg.ReviewerCandidates(), BeforePR: cfg.Verify.BeforePR, Timeout: cfg.Verify.Timeout, TestCommand: cfg.Verify.TestCommand, Reproduce: cfg.Verify.Reproduce},
-		srv.VerifyDeps(verify.NewStore(filepath.Join(dir, "reviews")), func(command string) bool {
-			return scanner.Installed(ctx, command)
-		}),
+		verifyDeps,
 	)
 	srv.SetVerifier(verifier)
 	verifier.Resume(ctx)

@@ -232,3 +232,43 @@ func TestCompleteOtherFindingLeavesDoneItem(t *testing.T) {
 		t.Fatalf("done item reopened by an unrelated finding: %+v", it)
 	}
 }
+
+const cleanReview = "# Review\n\nNothing to report.\n\n" + CompleteMarker
+
+func TestVerifierPassTicksDoneWhen(t *testing.T) {
+	r := newMRig(t, Config{})
+	r.term.stopKills = true
+	rv := r.running(t)
+	writeReview(t, rv, cleanReview)
+	if done := r.waitStatus(t, rv.ID, StatusComplete); !done.Passed() {
+		t.Fatalf("review did not pass: %+v", done)
+	}
+	if got := r.done.marked(); !slices.Equal(got, []string{"w1"}) {
+		t.Fatalf("MarkMet calls %v, want [w1]", got)
+	}
+}
+
+func TestVerifierFailLeavesItemOpen(t *testing.T) {
+	cases := map[string]struct {
+		cfg    Config
+		review string
+	}{
+		"required finding": {Config{}, sampleReview + CompleteMarker},
+		"failing evidence": {Config{TestCommand: "false"}, cleanReview},
+		"no test command":  {Config{TestCommand: "-"}, cleanReview},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newMRig(t, tc.cfg)
+			r.term.stopKills = true
+			rv := r.running(t)
+			writeReview(t, rv, tc.review)
+			if got := r.waitCleaned(t, rv.ID); got.Passed() {
+				t.Fatalf("review passed: %+v", got)
+			}
+			if got := r.done.marked(); len(got) != 0 {
+				t.Fatalf("MarkMet called for %v on a review that did not pass", got)
+			}
+		})
+	}
+}

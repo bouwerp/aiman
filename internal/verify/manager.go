@@ -75,6 +75,12 @@ type Notifier interface {
 	ReviewFinished(ctx context.Context, worker domain.Session, r Review)
 }
 
+// DoneMarker ticks a worker's Done-when met item. Only a passing review
+// with evidence may tick it; usecase.DoneItems implements it in serve.
+type DoneMarker interface {
+	MarkMet(ctx context.Context, s domain.Session) error
+}
+
 // Deps are the manager's collaborators.
 type Deps struct {
 	Store     *Store
@@ -83,6 +89,7 @@ type Deps struct {
 	Todos     Todos
 	Context   domain.ContextStore
 	Notifier  Notifier
+	Done      DoneMarker // nil leaves Done-when items alone
 	Installed func(string) bool
 	Now       func() time.Time // nil means time.Now
 	Poll      time.Duration    // zero means 5s
@@ -504,6 +511,12 @@ func (m *Manager) finish(ctx context.Context, r Review, status Status, text stri
 	}
 	r.Status = status
 	r.FinishedAt = m.d.Now()
+	// A later failing review does not un-tick the item; the user can.
+	if r.Passed() && m.d.Done != nil {
+		if err := m.d.Done.MarkMet(ctx, worker); err != nil {
+			log.Printf("verify: review %s: done-when: %v", r.ID, err)
+		}
+	}
 	if m.d.Notifier != nil {
 		m.d.Notifier.ReviewFinished(ctx, worker, r)
 	}

@@ -204,8 +204,28 @@ func (f *fakeContext) all() []domain.ContextEntry {
 	return append([]domain.ContextEntry(nil), f.puts...)
 }
 
+// fakeDone records the sessions MarkMet was called for.
+type fakeDone struct {
+	mu  sync.Mutex
+	ids []string
+}
+
+func (f *fakeDone) MarkMet(_ context.Context, s domain.Session) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ids = append(f.ids, s.ID)
+	return nil
+}
+
+func (f *fakeDone) marked() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ids...)
+}
+
 type mrig struct {
 	m        *Manager
+	done     *fakeDone
 	sessions *fakeSessions
 	term     *fakeTerminal
 	todos    *fakeTodos
@@ -250,6 +270,7 @@ func newMRig(t *testing.T, cfg Config) *mrig {
 		todos:    &fakeTodos{lists: map[string]*domain.TodoList{}},
 		notify:   &fakeNotifier{},
 		ctx:      &fakeContext{},
+		done:     &fakeDone{},
 		store:    NewStore(filepath.Join(root, "reviews")),
 		worker:   worker,
 	}
@@ -266,7 +287,7 @@ func newMRig(t *testing.T, cfg Config) *mrig {
 	}
 	r.m = NewManager(cfg, Deps{
 		Store: r.store, Sessions: r.sessions, Terminal: r.term, Todos: r.todos,
-		Context: r.ctx, Notifier: r.notify,
+		Context: r.ctx, Notifier: r.notify, Done: r.done,
 		Installed: func(c string) bool { return c == "claude" || c == "codex" },
 		Poll:      10 * time.Millisecond,
 	})
