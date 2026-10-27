@@ -296,6 +296,10 @@ repos:
       claude: {model: opus, effort: high}
 roles:
   verifier: {agent: codex, model: "", effort: high}
+verify:
+  test_command: "make test"     # the review passes only when this exits 0
+  before_pr: true               # block gh pr create until a review passes
+  reproduce: true               # prove a bug reproduces on the base first
 integrations:
   jira:
     acceptance_criteria_field: customfield_10035
@@ -317,7 +321,14 @@ file or a test command.
 `requires` entries are checked when the wizard reaches the summary; missing tools show a
 warning but do not block create. Launch model/effort precedence is `agent_defaults` <
 `repos.<slug>.agent_overrides` < `roles.verifier`. The `V verify` hint appears for a
-non-reviewer session with commits ahead of its base.
+non-reviewer session with commits ahead of its base; `verify.test_command` supplies the
+evidence a passing review needs.
+
+Coordinators start child sessions with `aiman session create --for <todo-id>`; the server
+picks the first installed command from `agents.preferred` when `--agent` is omitted. Give a
+child an explicit input contract with `--brief-file <path>` (the three headings described
+in the bundled skill). A child writes `.aiman_report.md` before its PR, and the parent's
+item stays open until that report cites a file or a test command.
 
 ### Creating an Ad-hoc Session
 
@@ -712,8 +723,9 @@ From inside a pane (or any process on the remote with the socket):
 ```bash
 aiman session list [--group GROUP]
 aiman session get <target>
-aiman session create --repo owner/repo --branch NAME --agent claude \
+aiman session create --repo owner/repo --branch NAME [--agent AGENT] \
     [--name NAME] [--group GROUP] [--parent ID] [--orphan] \
+    [--for TODO-ID] [--brief-file PATH] \
     [--dir SUBDIR] [--prompt TEXT] [--issue KEY] [--base BRANCH] [--existing]
 aiman session create --quick --agent claude [--name NAME] [--orphan]
 aiman session rename <target> NEW-NAME
@@ -767,7 +779,7 @@ Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refus
 
 `<target>` is resolved in this order: unique `name`, `group/name`, UUID (`id`), tmux session name.
 
-`--quick` is ad-hoc, group `quick`, generated `q1`/`q2`/…, current host. `--agent` is required. A create from a session (RPC `caller` / `AIMAN_ID`) nests under that session on the dashboard; `--orphan` makes a root. The dashboard hears `session_created` on the existing `session.events` stream, so a new helper appears without `r`. `--wait` on prompt sends then waits until the first of `idle`, `waiting_input`, or `errored`. Default timeout is 120s; `--timeout 0` means no limit. `--until blocked` is an alias for `waiting_input`. Prompting a session that is already waiting for input fails with `agent_blocked` unless `--force`.
+`--quick` is ad-hoc, group `quick`, generated `q1`/`q2`/…, current host. `--agent` is optional: when omitted, serve starts the first installed `agents.preferred` command. `--for` links the new child to a parent to-do and derives its branch, base, repo, issue, group, backend and prompt from that parent; `--brief-file` sends the file contents as the child's input contract. A create from a session (RPC `caller` / `AIMAN_ID`) nests under that session on the dashboard; `--orphan` makes a root. The dashboard hears `session_created` on the existing `session.events` stream, so a new helper appears without `r`. `--wait` on prompt sends then waits until the first of `idle`, `waiting_input`, or `errored`. Default timeout is 120s; `--timeout 0` means no limit. `--until blocked` is an alias for `waiting_input`. Prompting a session that is already waiting for input fails with `agent_blocked` unless `--force`.
 
 Rename changes the display name only. It does not rename tmux or the git worktree.
 

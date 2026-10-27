@@ -331,6 +331,7 @@ Key config fields:
 - `integrations.jira.acceptance_criteria_field` — optional JIRA custom field id whose values become acceptance criteria; otherwise the list under the description's acceptance-criteria heading is used.
 - `roles.verifier` — reviewer agent/model/effort override; role agent goes first in `ReviewerCandidates()`, ahead of `verify.agents`. Launch precedence is `agent_defaults` < `repos.<slug>.agent_overrides` < `roles.verifier`.
 - `agents.preferred` — ordered child-agent commands a coordinator may start.
+- `verify.test_command` — command run against a reviewer snapshot; a review passes only when it exits 0. `verify.before_pr` gates PR creation on a passing review; `verify.reproduce` runs the test command at the base first.
 
 `config.DirName = ".aiman"` — used to construct all local paths.
 
