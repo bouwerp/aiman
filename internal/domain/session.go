@@ -141,8 +141,10 @@ type GitStatus struct {
 	UnstagedCount   int
 	PullRequest     *PullRequest
 	UnpushedCommits int
-	TrackingRemote  string
-	HasUpstream     bool
+	// AheadOfBase counts commits on this worktree since the session base.
+	AheadOfBase    int
+	TrackingRemote string
+	HasUpstream    bool
 }
 
 type PullRequest struct {

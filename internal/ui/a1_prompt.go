@@ -389,7 +389,18 @@ func stylePromptMarker(marker string) string {
 }
 
 func (m *Model) hintLine(width int) string {
-	return lipgloss.NewStyle().Foreground(a1Dim).Render(alignRight(hintFor(m.focus), m.version, width))
+	text := hintFor(m.focus)
+	if m.focus == focusList {
+		if it, ok := m.selectedSessionItem(); ok && offerVerify(it.session, m.gitStatus, reviewerRunning(it.session.ID, m.allSessions)) {
+			text = "V verify · " + text
+		}
+	}
+	return lipgloss.NewStyle().Foreground(a1Dim).Render(alignRight(text, m.version, width))
+}
+
+// offerVerify is the quiet hint for a worker that has commits to review.
+func offerVerify(s domain.Session, st domain.GitStatus, reviewing bool) bool {
+	return s.Role != domain.SessionRoleReviewer && !reviewing && st.AheadOfBase > 0
 }
 
 func hintFor(focus a1Focus) string {

@@ -1242,6 +1242,11 @@ func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
 
 		gitMgr := git.NewManager(&cfg.Git)
 		status, err := gitMgr.GetGitStatus(ctx, mgr, s.WorktreePath)
+		if err == nil && s.BaseBranch != "" {
+			if n, nerr := gitMgr.CommitsAheadOfBase(ctx, mgr, s.WorktreePath, s.BaseBranch); nerr == nil {
+				status.AheadOfBase = n
+			}
+		}
 		return gitStatusMsg{
 			session: s.TmuxSession,
 			status:  status,

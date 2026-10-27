@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/local"
 )
 
 // mockRemote implements domain.RemoteExecutor for testing
@@ -794,5 +795,36 @@ func runGit(t *testing.T, dir string, args ...string) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(out))
+	}
+}
+
+func TestCommitsAheadOfBase(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "config", "user.name", "Aiman Test")
+	runGit(t, repo, "config", "user.email", "aiman@example.com")
+	os.WriteFile(filepath.Join(repo, "base"), []byte("base\n"), 0o644)
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-q", "-m", "base")
+	runGit(t, repo, "branch", "-M", "main")
+	runGit(t, repo, "checkout", "-q", "-b", "feature")
+	for i := 0; i < 2; i++ {
+		name := fmt.Sprintf("f%d", i)
+		if err := os.WriteFile(filepath.Join(repo, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, repo, "add", name)
+		runGit(t, repo, "commit", "-q", "-m", name)
+	}
+	m := NewManager(nil)
+	ex := local.NewExecutor("")
+	if n, err := m.CommitsAheadOfBase(context.Background(), ex, repo, "main"); err != nil || n != 2 {
+		t.Fatalf("ahead = %d, %v; want 2", n, err)
+	}
+	if n, err := m.CommitsAheadOfBase(context.Background(), ex, repo, ""); err != nil || n != 0 {
+		t.Fatalf("empty base = %d, %v", n, err)
+	}
+	if _, err := m.CommitsAheadOfBase(context.Background(), ex, repo, "missing"); err == nil {
+		t.Fatal("missing base should error")
 	}
 }

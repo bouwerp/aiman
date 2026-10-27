@@ -1082,6 +1082,25 @@ func FetchOrganizations(ctx context.Context) ([]string, error) {
 	return orgs, nil
 }
 
+// CommitsAheadOfBase counts commits from the session's base ref to HEAD. It
+// prefers origin/<base> and falls back to the local ref. An empty base is
+// zero, not an error.
+func (m *Manager) CommitsAheadOfBase(ctx context.Context, remote domain.RemoteExecutor, path, base string) (int, error) {
+	if strings.TrimSpace(base) == "" {
+		return 0, nil
+	}
+	cmd := fmt.Sprintf("git -C %q rev-list --count \"$(git -C %q rev-parse -q --verify 'origin/%s' || echo '%s')\"..HEAD", path, path, base, base)
+	out, err := remote.Execute(ctx, cmd)
+	if err != nil {
+		return 0, fmt.Errorf("count commits ahead of %s: %w", base, err)
+	}
+	var n int
+	if _, err := fmt.Sscanf(strings.TrimSpace(out), "%d", &n); err != nil {
+		return 0, fmt.Errorf("count commits ahead of %s: %w", base, err)
+	}
+	return n, nil
+}
+
 func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor, path string) (domain.GitStatus, error) {
 	status := domain.GitStatus{}
 

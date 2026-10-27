@@ -461,3 +461,34 @@ func TestQuestionTogglesKeyHelp(t *testing.T) {
 		t.Fatalf("hint line not restored:\n%s", plain)
 	}
 }
+
+func TestHintLineOffersVerify(t *testing.T) {
+	s := domain.Session{ID: "s1", Name: "impl", RemoteHost: "regent0", BaseBranch: "main"}
+	m, _ := promptModel(s)
+	m.list.Select(0)
+	m.gitStatus = domain.GitStatus{AheadOfBase: 2}
+	if got := ansi.Strip(m.hintLine(100)); !strings.HasPrefix(got, "V verify · ") {
+		t.Fatalf("hint = %q, want V verify prefix", got)
+	}
+	m.gitStatus.AheadOfBase = 0
+	if got := ansi.Strip(m.hintLine(100)); strings.HasPrefix(got, "V verify · ") {
+		t.Fatalf("zero ahead hint = %q", got)
+	}
+	m.gitStatus.AheadOfBase = 2
+	m.allSessions = []domain.Session{{ID: "rev", Role: domain.SessionRoleReviewer, ParentID: "s1"}}
+	if got := ansi.Strip(m.hintLine(100)); strings.HasPrefix(got, "V verify · ") {
+		t.Fatalf("reviewing hint = %q", got)
+	}
+	m.allSessions = nil
+	m.gitStatus.AheadOfBase = 2
+	m.list.Select(0)
+	m.sessionCfg.Role = domain.SessionRoleReviewer
+	// The selected session's stored role, not the wizard role, decides.
+	if offerVerify(s, m.gitStatus, false) != true {
+		t.Fatal("worker should be offered verify")
+	}
+	s.Role = domain.SessionRoleReviewer
+	if offerVerify(s, m.gitStatus, false) {
+		t.Fatal("reviewer must not be offered verify")
+	}
+}
