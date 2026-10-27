@@ -205,6 +205,10 @@ func NewRepository(dbPath string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create session events table: %w", err)
 	}
 
+	if err := ensureNotifyTables(db); err != nil {
+		return nil, fmt.Errorf("failed to create notification tables: %w", err)
+	}
+
 	return &Repository{
 		db:            db,
 		clearedOnOpen: clearedAWSProfiles,
