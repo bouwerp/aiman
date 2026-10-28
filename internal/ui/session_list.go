@@ -117,6 +117,46 @@ func (m *Model) selectedSessionItem() (item, bool) {
 	return it, true
 }
 
+func selectSessionByID(l *list.Model, rows []list.Item, id string) bool {
+	for i, it := range rows {
+		if si, ok := it.(item); ok && !si.header && si.session.ID == id {
+			l.Select(i)
+			return true
+		}
+	}
+	return false
+}
+
+// revealSession expands the collapsed parents and group hiding a listed
+// session, so a rebuild keeps the selection on it instead of its header. It
+// reports whether anything was expanded.
+func (m *Model) revealSession(flat []item, id string) bool {
+	byID := itemByID(flat)
+	it, ok := byID[id]
+	if !ok {
+		return false
+	}
+	changed := false
+	if gk := groupHomeKey(it, byID); m.collapsedGroups[gk] {
+		delete(m.collapsedGroups, gk)
+		changed = true
+	}
+	seen := map[string]bool{id: true}
+	for pid := it.session.ParentID; pid != "" && !seen[pid]; {
+		seen[pid] = true
+		if m.collapsedSessions[pid] {
+			delete(m.collapsedSessions, pid)
+			changed = true
+		}
+		parent, ok := byID[pid]
+		if !ok {
+			break
+		}
+		pid = parent.session.ParentID
+	}
+	return changed
+}
+
 func (m *Model) selectFirstSessionRow() {
 	for i, it := range m.list.Items() {
 		if si, ok := it.(item); ok && !si.header {

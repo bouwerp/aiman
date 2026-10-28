@@ -477,19 +477,25 @@ type Model struct {
 	restartingSession *domain.Session
 	// legacyStoppedID is the legacy tmux session the user confirmed as stopped
 	// on its host; the next restart of that session may move it to pty.
-	legacyStoppedID        string
-	changingDirSession     *domain.Session
-	renamingSessionID      string
-	flowManager            *usecase.FlowManager
-	firstLoad              map[string]bool
-	busySince              map[string]time.Time // when each session entered "busy" state
-	selectedRemote         config.Remote        // remote chosen for the current new-session wizard
-	runTargetSelected      int                  // 1-based index into cfg.Remotes while the run-target picker is open; 0 = none
-	remoteFilter           string               // "" = all remotes, otherwise a Remote.Host to filter by
-	allSessions            []domain.Session     // unfiltered master session list
-	filteredSessions       []item               // remote-filtered sessions, including ones a collapsed group hides
-	collapsedGroups        map[string]bool      // groupCollapseKey → hidden children
-	collapsedSessions      map[string]bool      // parent session ID → hidden children
+	legacyStoppedID    string
+	changingDirSession *domain.Session
+	renamingSessionID  string
+	flowManager        *usecase.FlowManager
+	firstLoad          map[string]bool
+	busySince          map[string]time.Time // when each session entered "busy" state
+	selectedRemote     config.Remote        // remote chosen for the current new-session wizard
+	runTargetSelected  int                  // 1-based index into cfg.Remotes while the run-target picker is open; 0 = none
+	remoteFilter       string               // "" = all remotes, otherwise a Remote.Host to filter by
+	allSessions        []domain.Session     // unfiltered master session list
+	filteredSessions   []item               // remote-filtered sessions, including ones a collapsed group hides
+	collapsedGroups    map[string]bool      // groupCollapseKey → hidden children
+	collapsedSessions  map[string]bool      // parent session ID → hidden children
+	// selectedMisses counts consecutive scans that left out the selected
+	// session (selectedMissID). See keepSelectedThroughMiss.
+	selectedMissID string
+	selectedMisses int
+	// lastScanIDs is the set of session ids the previous discovery returned.
+	lastScanIDs            map[string]bool
 	assigningSessionID     string
 	assignChoices          []assignChoice
 	assignCursor           int
@@ -757,34 +763,11 @@ func (m *Model) applyRemoteFilter() {
 	m.list.SetItems(filtered)
 	switch {
 	case selectedID != "":
-		found := false
-		for i, it := range filtered {
-			si, ok := it.(item)
-			if !ok {
-				continue
-			}
-			if !si.header && si.session.ID == selectedID {
-				m.list.Select(i)
-				found = true
-				break
-			}
-		}
-		if !found {
-			// Session row may have been collapsed; land on its group header.
-			for _, s := range m.allSessions {
-				if s.ID != selectedID {
-					continue
-				}
-				want := groupCollapseKey(s.Group, remoteNameForHost(m.cfg, s.RemoteHost))
-				for i, it := range filtered {
-					if si, ok := it.(item); ok && si.header && groupCollapseKey(si.session.Group, si.remoteName) == want {
-						m.list.Select(i)
-						found = true
-						break
-					}
-				}
-				break
-			}
+		found := selectSessionByID(&m.list, filtered, selectedID)
+		if !found && m.revealSession(flat, selectedID) {
+			filtered = groupedSessionItems(flat, m.collapsedGroups, m.collapsedSessions)
+			m.list.SetItems(filtered)
+			found = selectSessionByID(&m.list, filtered, selectedID)
 		}
 		if !found {
 			m.selectFirstSessionRow()
@@ -991,16 +974,36 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 }
 
 type tmuxTickMsg time.Time
+
+// tmuxOutputMsg is one capture for the preview. session is the previewKey of
+// the session it came from.
 type tmuxOutputMsg struct {
 	session string
 	output  string
 	err     error
 }
 
+// inputHintMsg carries a session's activity. id is the aiman session id; the
+// terminal name in session is only the fallback, since siblings can share one.
 type inputHintMsg struct {
 	session    string
+	id         string
 	needsInput bool
 	activity   string
+}
+
+func (msg inputHintMsg) key() string {
+	if msg.id != "" {
+		return msg.id
+	}
+	return msg.session
+}
+
+func hintMatches(msg inputHintMsg, s domain.Session) bool {
+	if msg.id != "" {
+		return s.ID == msg.id
+	}
+	return s.TmuxSession == msg.session
 }
 
 type aiSummaryMsg struct {
@@ -1211,12 +1214,12 @@ func tickGit() tea.Cmd {
 func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
 	return func() tea.Msg {
 		if s.WorktreePath == "" {
-			return gitStatusMsg{session: s.TmuxSession, err: fmt.Errorf("no worktree path")}
+			return gitStatusMsg{session: previewKey(s), err: fmt.Errorf("no worktree path")}
 		}
 
 		remote, ok := resolveRemote(cfg, s)
 		if !ok {
-			return gitStatusMsg{session: s.TmuxSession, err: fmt.Errorf("no remote found")}
+			return gitStatusMsg{session: previewKey(s), err: fmt.Errorf("no remote found")}
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1224,7 +1227,7 @@ func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
 
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		if err := mgr.Connect(ctx); err != nil {
-			return gitStatusMsg{session: s.TmuxSession, err: err}
+			return gitStatusMsg{session: previewKey(s), err: err}
 		}
 
 		gitMgr := git.NewManager(&cfg.Git)
@@ -1235,7 +1238,7 @@ func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
 			}
 		}
 		return gitStatusMsg{
-			session: s.TmuxSession,
+			session: previewKey(s),
 			status:  status,
 			err:     err,
 		}
@@ -2279,7 +2282,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 				break
 			}
 		}
-		m.activeSession = msg.session.TmuxSession
+		m.activeSession = previewKey(msg.session)
 		m.tmuxOutput = "Loading..."
 		m.setPreviewContent()
 		cmds = append(cmds, m.queuePreview(msg.session), fetchGitStatus(m.cfg, msg.session))
@@ -3326,7 +3329,7 @@ func (m *Model) applySessionCreateMsg(msg sessionCreateMsg, cmds []tea.Cmd) (tea
 		warnCmd = m.showToast("⚠️  "+msg.warning, true, 8*time.Second)
 	}
 
-	m.activeSession = msg.session.TmuxSession
+	m.activeSession = previewKey(msg.session)
 	m.tmuxOutput = "Loading..."
 	m.setPreviewContent()
 	m.state = m.loadingNext
@@ -4344,7 +4347,7 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 		}
 		if it, ok := m.selectedSessionItem(); ok {
 			s := it.session
-			m.activeSession = s.TmuxSession
+			m.activeSession = previewKey(s)
 			m.tmuxOutput = "Loading..."
 			m.setPreviewContent()
 			var usageCmd tea.Cmd
@@ -4356,8 +4359,8 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 	} else if m.currentTab == tabSessions {
 		if it, ok := m.selectedSessionItem(); ok {
 			s := it.session
-			if m.activeSession != s.TmuxSession {
-				m.activeSession = s.TmuxSession
+			if m.activeSession != previewKey(s) {
+				m.activeSession = previewKey(s)
 			}
 			// Skip sessions being created (no terminal yet) or terminated
 			// (terminal going away).
@@ -4449,21 +4452,22 @@ func (m *Model) applyInputHint(msg inputHintMsg, cmds []tea.Cmd) (tea.Model, tea
 		// If it exceeds the liveness threshold, flag it as stale so the user
 		// knows the agent may be hung rather than actively thinking.
 		const livenessThreshold = 5 * time.Minute
+		key := msg.key()
 		if msg.activity == "busy" {
-			if _, tracked := m.busySince[msg.session]; !tracked {
-				m.busySince[msg.session] = time.Now()
-			} else if time.Since(m.busySince[msg.session]) > livenessThreshold {
+			if _, tracked := m.busySince[key]; !tracked {
+				m.busySince[key] = time.Now()
+			} else if time.Since(m.busySince[key]) > livenessThreshold {
 				msg.activity = "stale"
 			}
 		} else {
 			// Session is no longer busy — reset the watchdog clock.
-			delete(m.busySince, msg.session)
+			delete(m.busySince, key)
 		}
 
 		items := m.list.Items()
 		for idx, it := range items {
-			if sessItem, ok := it.(item); ok {
-				if sessItem.session.TmuxSession == msg.session {
+			if sessItem, ok := it.(item); ok && !sessItem.header {
+				if hintMatches(msg, sessItem.session) {
 					sessItem.needsInput = msg.needsInput
 					sessItem.activity = msg.activity
 					items[idx] = sessItem
@@ -4485,7 +4489,7 @@ func (m *Model) applyAttachDone(msg attachDoneMsg, cmds []tea.Cmd) (tea.Model, t
 	m.state = viewStateMain
 	if sel := m.list.SelectedItem(); sel != nil {
 		s := sel.(item).session
-		m.activeSession = s.TmuxSession
+		m.activeSession = previewKey(s)
 		m.tmuxOutput = "Loading..."
 		m.setPreviewContent()
 		cmds = append(cmds, tickTmux(), m.queuePreview(s))
@@ -4607,7 +4611,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		} else if oldSelID != newSelID && newSelID != "" {
 			m.swapPromptDraft(oldSelID, newSelID)
 			s := selItem.session
-			m.activeSession = s.TmuxSession
+			m.activeSession = previewKey(s)
 			m.gitStatus = domain.GitStatus{} // Clear old status
 			m.lastGitStatusUpdate = time.Time{}
 			m.tmuxOutput = "Loading..."
@@ -6614,7 +6618,7 @@ func (m *Model) startBackgroundCreate() tea.Cmd {
 			break
 		}
 	}
-	m.activeSession = placeholder.TmuxSession
+	m.activeSession = previewKey(placeholder)
 	m.state = viewStateMain
 	return m.createSession(placeholder.ID)
 }
@@ -6968,7 +6972,11 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 	// from remotes we couldn't reach this scan. Sessions from scanned remotes
 	// that weren't discovered are dead — skip them.
 	seenID := make(map[string]bool)
-	seenTmux := make(map[string]bool)
+	seenTmux := make(map[string]domain.Session)
+	terminalTaken := func(s domain.Session) bool {
+		holder, ok := seenTmux[sessionTmuxKey(s)]
+		return ok && sameTerminal(holder, s)
+	}
 	merged := []domain.Session{}
 	for _, s := range msg.sessions {
 		if domain.IsEphemeralSessionID(s.ID) {
@@ -6986,7 +6994,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 			continue
 		}
 		tk := sessionTmuxKey(s)
-		if tk != "" && seenTmux[tk] {
+		if tk != "" && terminalTaken(s) {
 			continue
 		}
 
@@ -6999,8 +7007,8 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 
 		merged = append(merged, s)
 		seenID[s.ID] = true
-		if tk != "" {
-			seenTmux[tk] = true
+		if _, taken := seenTmux[tk]; tk != "" && !taken {
+			seenTmux[tk] = s
 		}
 	}
 	for id, s := range dbSessions {
@@ -7013,11 +7021,8 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		if seenID[id] {
 			continue
 		}
-		tk := ""
-		if s.TmuxSession != "" {
-			tk = s.RemoteHost + "\x00" + s.TmuxSession
-		}
-		if tk != "" && seenTmux[tk] {
+		tk := sessionTmuxKey(s)
+		if tk != "" && terminalTaken(s) {
 			continue
 		}
 		// Skip sessions from remotes that were successfully scanned: they're
@@ -7032,8 +7037,8 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		}
 		merged = append(merged, s)
 		seenID[id] = true
-		if tk != "" {
-			seenTmux[tk] = true
+		if _, taken := seenTmux[tk]; tk != "" && !taken {
+			seenTmux[tk] = s
 		}
 	}
 
@@ -7045,7 +7050,12 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		}
 	}
 
-	m.allSessions = merged
+	prevScan := m.lastScanIDs
+	m.lastScanIDs = make(map[string]bool, len(msg.sessions))
+	for _, s := range msg.sessions {
+		m.lastScanIDs[s.ID] = true
+	}
+	m.allSessions = m.keepSelectedThroughMiss(merged, prevScan)
 
 	var probes []tea.Cmd
 	// Daemon probing only needs the SSH connection, not a successful session
@@ -7066,6 +7076,51 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		m.state = viewStateMain
 	}
 	return m, tea.Batch(probes...)
+}
+
+// selectedMissGrace is how many consecutive scans may leave out the selected
+// session before its row goes.
+const selectedMissGrace = 2
+
+// keepSelectedThroughMiss holds the selected session's row when a scan leaves
+// it out. One scan can miss a live session (a slow PTY list, a session between
+// restart steps), and dropping the row moves the selection and the preview to
+// another session. Only a session the previous scan returned is held, so a
+// stored row that was never live still goes at once. A session still missing
+// after selectedMissGrace scans is gone, and one being torn down is never held.
+func (m *Model) keepSelectedThroughMiss(merged []domain.Session, prevScan map[string]bool) []domain.Session {
+	it, ok := m.selectedSessionItem()
+	if !ok || it.session.ID == "" {
+		m.selectedMissID, m.selectedMisses = "", 0
+		return merged
+	}
+	id := it.session.ID
+	for _, s := range merged {
+		if s.ID == id {
+			m.selectedMissID, m.selectedMisses = "", 0
+			return merged
+		}
+	}
+	if m.isTerminatingSession(id) {
+		return merged
+	}
+	if m.selectedMissID != id {
+		if !prevScan[id] {
+			return merged
+		}
+		m.selectedMissID, m.selectedMisses = id, 0
+	}
+	m.selectedMisses++
+	if m.selectedMisses > selectedMissGrace {
+		m.selectedMissID, m.selectedMisses = "", 0
+		return merged
+	}
+	for _, s := range m.allSessions {
+		if s.ID == id {
+			return append(merged, s)
+		}
+	}
+	return merged
 }
 
 func (m *Model) applyRecreateMutagen(msg recreateMutagenMsg) (tea.Model, tea.Cmd) {

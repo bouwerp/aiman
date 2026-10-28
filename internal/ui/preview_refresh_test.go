@@ -41,7 +41,7 @@ func TestUnchangedPreviewPaintsTheCachedScreen(t *testing.T) {
 	when := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	m.paneCache[s.ID] = usecase.PaneCache{Text: "cached screen", OutputAt: when}
 	m.eventSeen = map[string]sessionEventState{s.ID: {lastOutput: when}}
-	m.activeSession = s.TmuxSession
+	m.activeSession = previewKey(s)
 	m.tmuxOutput = "Loading..."
 
 	if cmd := m.queuePreview(s); cmd != nil {
@@ -62,7 +62,7 @@ func TestBusyPollShowsTheCachedScreen(t *testing.T) {
 	later := time.Date(2026, 10, 8, 12, 5, 0, 0, time.UTC)
 	m.paneCache[s.ID] = usecase.PaneCache{Text: "cached screen", OutputAt: later.Add(-time.Minute)}
 	m.eventSeen = map[string]sessionEventState{s.ID: {lastOutput: later}}
-	m.activeSession = s.TmuxSession
+	m.activeSession = previewKey(s)
 	m.tmuxOutput = "Loading..."
 	m.previewBusy = true
 
@@ -89,7 +89,7 @@ func TestUnchangedPreviewKeepsTheViewport(t *testing.T) {
 	s := domain.Session{ID: "s1", Name: "impl", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
-	m.activeSession = "impl"
+	m.activeSession = previewKey(s)
 	m.tmuxOutput = "old screen"
 	m.previewBusy = true
 	_ = m.applyPreviewRefresh(previewRefreshMsg{
@@ -109,7 +109,7 @@ func TestChangedPreviewReplacesTheViewport(t *testing.T) {
 	s := domain.Session{ID: "s1", Name: "impl", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
-	m.activeSession = "impl"
+	m.activeSession = previewKey(s)
 	m.tmuxOutput = "old screen"
 	m.previewBusy = true
 	_ = m.applyPreviewRefresh(previewRefreshMsg{

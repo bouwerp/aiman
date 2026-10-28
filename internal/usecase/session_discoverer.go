@@ -50,7 +50,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		if seenIDs[s.ID] {
 			return
 		}
-		if s.TmuxSession != "" && seenNames[s.TmuxSession] {
+		if s.TmuxSession != "" && seenNames[s.TmuxSession] && !hasOwnTerminal(s) {
 			return
 		}
 		seenIDs[s.ID] = true
@@ -347,6 +347,7 @@ func dedupeDiscoveredSessions(sessions []domain.Session) []domain.Session {
 	})
 
 	seenTmux := make(map[string]bool)
+	seenOwn := make(map[string]bool)
 	coveredWT := make(map[string]bool)
 	coverPaths := func(s domain.Session) {
 		h := s.RemoteHost
@@ -365,7 +366,12 @@ func dedupeDiscoveredSessions(sessions []domain.Session) []domain.Session {
 		}
 		if s.TmuxSession != "" {
 			key := s.RemoteHost + "\x00" + s.TmuxSession
-			if seenTmux[key] {
+			if hasOwnTerminal(s) {
+				if seenOwn[s.ID] {
+					continue
+				}
+				seenOwn[s.ID] = true
+			} else if seenTmux[key] {
 				continue
 			}
 			seenTmux[key] = true
@@ -383,6 +389,12 @@ func dedupeDiscoveredSessions(sessions []domain.Session) []domain.Session {
 		coverPaths(s)
 	}
 	return out
+}
+
+// hasOwnTerminal reports whether s is a live PTY session with its own id. PTY
+// names are labels, so two such sessions sharing a name are still two sessions.
+func hasOwnTerminal(s domain.Session) bool {
+	return s.IsPTY() && s.ID != "" && s.Status != domain.SessionStatusInactive
 }
 
 func sessionDedupePriority(s domain.Session) int {

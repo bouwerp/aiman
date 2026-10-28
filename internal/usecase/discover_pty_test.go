@@ -100,6 +100,27 @@ func TestDiscoverKeepsSyncOfLiveAdHocPTYSession(t *testing.T) {
 	}
 }
 
+// PTY terminal names are labels, not unique on a host: two review children of
+// one parent can share one. Both are sessions, so discovery returns both.
+func TestDiscoverKeepsPTYSessionsThatShareAName(t *testing.T) {
+	remote := &batchRemote{}
+	remote.outputs = ptyListOutput(
+		`{"id":"child-grok","name":"adhoc-20261022-1130","dir":"/repos/app@nl","status":"running"},` +
+			`{"id":"child-muse","name":"adhoc-20261022-1130","dir":"/repos/app@nl","status":"running"}`)
+
+	sessions, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).Discover(context.Background(), "regent0")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, s := range sessions {
+		ids[s.ID] = true
+	}
+	if !ids["child-grok"] || !ids["child-muse"] {
+		t.Fatalf("want both sessions sharing a name, got %+v", sessions)
+	}
+}
+
 // With no live session on its path, an aiman-named sync is still an orphan.
 func TestDiscoverStillTerminatesOrphanAimanSync(t *testing.T) {
 	remote := &batchRemote{}

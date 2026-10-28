@@ -14,8 +14,9 @@ import (
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
-// previewRefreshMsg is one preview poll. session is the terminal name the viewport
-// is keyed by, matching tmuxOutputMsg. id is the aiman session id the cache uses.
+// previewRefreshMsg is one preview poll. id is the aiman session id that keys
+// the cache and the viewport; session is the terminal name, used only when the
+// id is missing.
 type previewRefreshMsg struct {
 	session    string
 	id         string
@@ -50,7 +51,7 @@ func (m *Model) queuePreview(s domain.Session) tea.Cmd {
 // showCachedPreview puts the last capture back when the panel is still the
 // placeholder. A loaded pane is left where the user scrolled it.
 func (m *Model) showCachedPreview(s domain.Session) {
-	if s.TmuxSession != m.activeSession || m.hasLoadedPane() || m.paneCache == nil {
+	if previewKey(s) != m.activeSession || m.hasLoadedPane() || m.paneCache == nil {
 		return
 	}
 	text := m.paneCache[s.ID].Text
@@ -100,7 +101,7 @@ func (m *Model) noteCachedActivity(s domain.Session) {
 		}
 	}
 	activity, needs := classifyPreview(m.cfg, s, cache.Text, sinceOut, sinceTitle)
-	_, _ = m.applyInputHint(inputHintMsg{session: s.TmuxSession, needsInput: needs, activity: activity}, nil)
+	_, _ = m.applyInputHint(inputHintMsg{session: s.TmuxSession, id: s.ID, needsInput: needs, activity: activity}, nil)
 }
 
 func (m *Model) refreshPreview(session domain.Session) tea.Cmd {
@@ -146,6 +147,13 @@ func classifyPreview(cfg *config.Config, session domain.Session, text string, si
 	})
 }
 
+func (msg previewRefreshMsg) key() string {
+	if msg.id != "" {
+		return msg.id
+	}
+	return msg.session
+}
+
 func (m *Model) applyPreviewRefresh(msg previewRefreshMsg) tea.Cmd {
 	m.previewBusy = false
 	if m.paneCache == nil {
@@ -155,19 +163,19 @@ func (m *Model) applyPreviewRefresh(msg previewRefreshMsg) tea.Cmd {
 		cached := m.paneCache[msg.id]
 		cached.Hash = ""
 		m.paneCache[msg.id] = cached
-		if msg.session != m.activeSession {
+		if msg.key() != m.activeSession {
 			return nil
 		}
-		_, cmd := m.applyTmuxOutput(tmuxOutputMsg{session: msg.session, err: msg.err}, nil)
+		_, cmd := m.applyTmuxOutput(tmuxOutputMsg{session: msg.key(), err: msg.err}, nil)
 		return cmd
 	}
 	m.storePaneCache(msg)
 	var cmds []tea.Cmd
-	if msg.session == m.activeSession && !msg.unchanged {
-		_, cmd := m.applyTmuxOutput(tmuxOutputMsg{session: msg.session, output: msg.text}, nil)
+	if msg.key() == m.activeSession && !msg.unchanged {
+		_, cmd := m.applyTmuxOutput(tmuxOutputMsg{session: msg.key(), output: msg.text}, nil)
 		cmds = append(cmds, cmd)
 	}
-	_, cmd := m.applyInputHint(inputHintMsg{session: msg.session, needsInput: msg.needsInput, activity: msg.activity}, nil)
+	_, cmd := m.applyInputHint(inputHintMsg{session: msg.session, id: msg.id, needsInput: msg.needsInput, activity: msg.activity}, nil)
 	cmds = append(cmds, cmd)
 	return tea.Batch(cmds...)
 }

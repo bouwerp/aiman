@@ -17,6 +17,26 @@ func shouldMergeDiscoveredSession(s domain.Session, dbSessions map[string]domain
 	return ok
 }
 
+// previewKey identifies a session in the preview, activity and git status
+// messages. Terminal names are not unique (two children can share one), so the
+// id wins and the name is only the fallback for a session without one.
+func previewKey(s domain.Session) string {
+	if s.ID != "" {
+		return s.ID
+	}
+	return s.TmuxSession
+}
+
+// sameTerminal reports whether two rows with the same host and terminal name
+// are one session. PTY names are labels, so two PTY sessions with ids of their
+// own stay distinct.
+func sameTerminal(a, b domain.Session) bool {
+	if a.IsPTY() && b.IsPTY() && a.ID != "" && b.ID != "" {
+		return a.ID == b.ID
+	}
+	return true
+}
+
 func sessionTmuxKey(s domain.Session) string {
 	if s.TmuxSession == "" {
 		return ""
@@ -89,8 +109,9 @@ func lookupPersistedSession(live domain.Session, byID, byTmux map[string]domain.
 		return s, true
 	}
 	if k := sessionTmuxKey(live); k != "" {
-		s, ok := byTmux[k]
-		return s, ok
+		if s, ok := byTmux[k]; ok && sameTerminal(live, s) {
+			return s, true
+		}
 	}
 	return domain.Session{}, false
 }
