@@ -13,7 +13,7 @@ Aiman automates the entire development workflow:
 5. **Choose Subdirectory** — Pick a repo sub-folder (monorepo-friendly)
 6. **Scan Agents** — Detect available agents on the remote
 7. **Review Summary** — Confirm settings (and override AWS credentials) before creation
-8. **Create Session** — Worktree + terminal (tmux, or the built-in PTY runtime) + agent launch + mutagen sync + AWS credentials
+8. **Create Session** — Worktree + terminal (the built-in PTY runtime) + agent launch + mutagen sync + AWS credentials
 
 Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 
@@ -27,10 +27,10 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Ad-hoc Sessions**: Create quick sessions without a JIRA issue, branch, or repo
 - **Quick start (`N`)**: Default remote, agent picker only, generated `q1`/`q2`/… in group `quick`
 - **Names and groups**: Every session has a unique display `name` and a `group`; the sidebar is a tree of groups, not a flat list
-- **Session Management**: Track active sessions with live pane previews (tmux or PTY)
+- **Session Management**: Track active sessions with live pane previews
 - **Creation runs on the remote**: The wizard hands the whole create to the remote's `aiman serve`, which does the worktree, agent launch and prompt itself. Close aiman the moment you confirm — even mid-create — and it still completes. See [Remote-side session creation](#remote-side-session-creation)
 - **Agent defaults**: Menu → Agent defaults sets per-agent launch model and thinking/reasoning effort (e.g. Claude `sonnet` + `medium`, Grok `4.6` + `medium`)
-- **Resume / restart (`s`)**: Save a handoff, then resume with the last-known agent automatically — no picker, no re-asking — including a worktree revived after a tmux crash or reboot. Falls back to the agent picker only when the agent can't be determined. Use `S` to deliberately switch agents instead
+- **Resume / restart (`s`)**: Save a handoff, then resume with the last-known agent automatically — no picker, no re-asking — including a worktree revived after its agent exited or the host rebooted. Falls back to the agent picker only when the agent can't be determined. Use `S` to deliberately switch agents instead
 - **Agent-exited detection**: A pane that fell back to a bare shell (crashed or never-started agent) shows as a distinct `⚠ agent exited` state instead of blending in with idle
 - **Revive Worktree** (Menu → Revive Worktree): finds worktrees under a remote's repo root that aiman has never tracked before (hand-created, or from before this existed) and lists each with the agent(s) that plausibly worked there, detected from git commit trailers — not project files, which are often committed and shared across every worktree of a repo. Zero candidates opens the full agent picker, one revives immediately, two or more show a short pick-list instead of guessing
 - **AWS profile allowlist**: Menu → AWS Credentials toggles which local `~/.aws` profiles aiman uses; delete removes the remote profile and the config entry so it does not come back
@@ -42,8 +42,8 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 - **Agent skill**: `aiman --skill` prints a Markdown skill gated on `AIMAN_ENV=1`
 
 ### AI Intelligence
-- **Session activity detection**: Reports whether an agent is working, waiting on background agents, blocked on a question, or idle — no model required. Built on signals the runtime knows rather than the screen alone: how long the session has been silent (tmux's `#{session_activity}`, or the PTY holder's own record) and whether the agent's terminal title is still moving, which is where agents advertise what they are doing. The rendered pane is the fallback evidence, not the primary
-- **Pushed, not polled**: For PTY remotes the dashboard holds a `session.events` stream open, so it hears the moment a session's output or title changes instead of asking every half second
+- **Session activity detection**: Reports whether an agent is working, waiting on background agents, blocked on a question, or idle — no model required. Built on signals the runtime knows rather than the screen alone: how long the session has been silent (the PTY holder's own record) and whether the agent's terminal title is still moving, which is where agents advertise what they are doing. The rendered pane is the fallback evidence, not the primary
+- **Pushed, not polled**: The dashboard holds a `session.events` stream open, so it hears the moment a session's output or title changes instead of asking every half second
 - **Brief AI Summary**: Short summary shown in the session list sidebar (per active session)
 - **Long AI Summary**: Detailed summary with action items generated at archive time
 - **Session Archive**: Compress, AI-summarise, and persist a session snapshot in one step
@@ -53,8 +53,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 ### Remote Development
 - **SSH Multiplexing**: High-performance connections with ControlMaster
 - **Mutagen Sync**: Real-time file sync between local and remote, excluding dependency and build directories by default so a new session starts syncing in seconds rather than minutes
-- **Tmux Integration**: Native tmux session management
-- **Built-in PTY runtime (opt-in)**: Host sessions in `aiman serve`'s own PTY runtime instead of tmux, per remote or per session. Sessions survive a serve restart and are re-adopted; see [Session backends](#session-backends)
+- **Built-in terminal runtime**: Sessions run in `aiman serve`'s own PTY runtime. They survive a serve restart or update; see [Terminal runtime](#terminal-runtime). Coming from tmux? See [Upgrading from tmux](#upgrading-from-tmux)
 
 ### AWS Credential Delegation
 - **Shared AWS credential sync**: Automatically syncs your local `~/.aws` configuration to the remote
@@ -158,7 +157,6 @@ mv aiman ~/.local/bin/
 
 ### Optional
 - **Go 1.26+**: Only needed if building from source (not required for pre-built binaries)
-- **tmux**: Hosts sessions on the remote. Required unless you opt that remote into the built-in PTY backend instead — see [Session backends](#session-backends)
 - **mutagen**: For local/remote file syncing
 - **code** (VS Code CLI): For IDE integration
 - **AWS CLI**: Required for AWS credential delegation (`aws sts`)
@@ -201,7 +199,7 @@ aiman
 | `↑/↓` | Navigate sessions |
 | `Enter` | Select item |
 | `ESC` / `q` | Quit (asks to confirm). Inside a screen or an active list filter, cancels instead |
-| `a` | **Attach** to tmux session (full terminal) |
+| `a` | **Attach** to the session's terminal (detach with `ctrl+q`) |
 | `s` | **Resume / restart** — auto-detects the last agent and resumes it, no picker |
 | `S` | **Switch agent** — always shows the agent picker |
 | `c` | **Change** directory scope for the session |
@@ -361,7 +359,7 @@ Skip the JIRA/branch/repo flow and jump straight to agent selection:
 For an even shorter path, `N` creates a quick session directly on the default remote:
 agent picker only, auto-named `q1`/`q2`/… in group `quick`.
 
-Ad-hoc sessions still get their own tmux session, mutagen sync, and AWS credentials.
+Ad-hoc sessions still get their own terminal, mutagen sync, and AWS credentials.
 
 **Faster path:** `N` on the dashboard. It uses the active (or filtered) remote, skips JIRA/branch/repo, opens the agent picker, and names the session `q1`, `q2`, … in group `quick`. Rename afterwards with `e`.
 
@@ -391,7 +389,7 @@ Use **archive** (`Ctrl+A`) instead when you want the summarised version.
 
 Press `Ctrl+A` on a selected session. Aiman will:
 
-1. Capture the full tmux pane scrollback
+1. Capture the session's full scrollback
 2. Strip ANSI escape sequences and collapse noise (package manager spam, progress bars, timestamps)
 3. Preserve user prompts and agent conversation content
 4. Send to the AI model for a **long summary** (overview + action items) and a **short summary**
@@ -422,10 +420,9 @@ file's transcript path — and restarts it in place with no picker and no re-ask
 
 1. Asks the current agent (if one is running) for a restart handoff; a failed or
    missing handoff never blocks the restart, the new agent just starts without one
-2. Respawns the agent process in the existing tmux pane (`respawn-pane`), or starts a
-   fresh tmux session in the **same working directory** if the session itself is gone
-   (host reboot, tmux server crash) — the git worktree, branch, and all files are
-   always untouched
+2. Replaces the agent process in the session's PTY, in the **same working
+   directory**, whether the old process is still running or gone (agent exited, host
+   reboot). The git worktree, branch, and all files are always untouched
 3. Resumes the agent's own native conversation (`--resume`/`--session`/…) when a prior
    conversation id is known
 
@@ -458,35 +455,19 @@ the PTY holder from the agent's own output.
 Asserting a fixed set breaks the third case both ways at once: no scrollback to
 scroll, and a wheel whose events the agent discards.
 
-### Session backends
+### Terminal runtime
 
-Every session is hosted by a terminal runtime. **pty** (aiman serve's built-in runtime)
-is the default. `tmux` remains available per remote or per session.
-
-Set a remote's default in `~/.aiman/config.yaml` only if you want tmux (or to pin pty
-explicitly):
-
-```yaml
-remotes:
-  - host: devbox
-    user: code
-    root: /home/code/repos
-    session_backend: tmux     # omit for pty (the default); "tmux" or "pty"
-```
-
-The run-target step of the new-session wizard always offers `b` to flip the backend for
-the session being created, starting from the remote's configured default. The summary
-screen shows the backend it will use. Session create installs/starts `aiman serve` on
-the remote when the socket is missing, so a first pty session does not require a
-manual Agent API install.
+Every session runs in the PTY runtime of the remote's `aiman serve`. Session create
+installs and starts `aiman serve` on the remote when its socket is missing, so a first
+session does not require a manual Agent API install.
 
 PTY sessions are owned by detached *holder* processes rather than by `aiman serve`
-itself, so they survive a serve restart or crash and are re-adopted when it comes
-back — the same guarantee tmux gives.
+itself, so they survive a serve restart, update or crash, and serve finds them again
+when it comes back.
 
 That durability depends on the generated systemd unit setting `KillMode=process`.
 A holder is placed in its own session (`setsid`), which is enough to escape
-process-group signals, but a process cannot leave the cgroup it inherited — so
+process-group signals, but a process cannot leave the cgroup it inherited, so
 under systemd's default `KillMode=control-group`, stopping serve would SIGTERM
 every holder along with it. If you manage the unit by hand, keep that setting.
 
@@ -496,8 +477,6 @@ Inspect and drive them directly with:
 aiman pty list
 aiman pty get <id>
 aiman pty attach <id>     # interactive; detach with ctrl+q, which leaves it running
-                          #   (a PTY session has no tmux prefix, so ctrl+b d does
-                          #    nothing — the attach banner reminds you of ctrl+q)
 aiman pty capture <id>    # read the pane without attaching
 aiman pty resize <id> --cols N --rows M
 aiman pty events          # stream session activity as JSON lines
@@ -508,6 +487,32 @@ aiman pty forget <id>     # drop an exited session's directory
 ```
 
 `aiman pty hold` is the holder itself and is not meant to be run by hand.
+
+The runtime needs a Unix remote: it uses `setsid` and `SIGWINCH`, so the Windows build
+omits it.
+
+### Upgrading from tmux
+
+aiman no longer runs tmux. New sessions always use the terminal runtime above, and
+tmux is not needed on the remote.
+
+Sessions created while aiman still ran tmux stay in the list as legacy rows, marked
+`tmux (legacy) · stop it on the host, then s`. aiman does not attach to, preview,
+prompt, revive or stop them, because a second agent on the same conversation would
+fight the one still running in tmux. To move one over:
+
+1. Run the stop command aiman shows on the remote it names:
+   `tmux kill-session -t '=<name>'`.
+2. Select the row and press `s`. Confirm that the tmux session is stopped.
+3. aiman restarts the agent in the PTY runtime in the same worktree, resuming its
+   conversation when it knows the id. The row is an ordinary session from then on.
+
+To get rid of a legacy row instead, stop its tmux session the same way, then terminate
+it with `Ctrl+K`. aiman leaves the tmux session to you and still removes the worktree
+after its usual checks.
+
+`remotes[].session_backend` in `~/.aiman/config.yaml` is ignored and reported as a
+config warning; remove the key.
 
 ### Remote-side session creation
 
@@ -563,27 +568,19 @@ The previewed session is therefore resized to the panel, automatically:
   applied.
 - **Never below 80x24.** Agent TUIs assume a classic terminal and start dropping
   their own columns below that, so a smaller panel scrolls and pans instead.
-- **Attached tmux sessions are left alone.** Someone is watching, and shrinking the
-  window would resize their view out from under them. The check and the resize are a
-  single remote command, so nothing can attach in between.
-- **Attaching hands sizing back.** tmux windows are set to `window-size manual` to
-  hold the fitted size (tmux would otherwise refit to its smallest client), and the
-  attach path sets `window-size latest` so the terminal you attach with wins. A PTY
-  session needs no such restore: attaching sends its own size in the handshake.
+- **Attaching hands sizing back.** Attaching sends the attaching terminal's own size
+  in the handshake, so the terminal you attach with wins.
 
 `aiman pty resize <id> --cols N --rows M` does the same thing by hand.
 
 The pane is rendered before it is shown: the spool is a raw byte stream of cursor
 addressing and redraws, so previews and activity detection replay it through a terminal
-emulator at the session's own size, the way `tmux capture-pane` returns a screen. The
-render keeps the agent's colours, emitting foreground and background per run and closing
-each row's styling, so a PTY preview reads like a tmux one.
+emulator at the session's own size and return the rendered screen. The render keeps
+the agent's colours, emitting foreground and background per run and closing each row's
+styling.
 Sessions also get `TERM=xterm-256color` and `COLORTERM=truecolor` — `aiman serve` is a
 daemon with no tty, so without that the agent inherits no terminal type and emits no
 colour.
-
-Requires a Unix remote: the runtime uses `setsid` and `SIGWINCH`, so the Windows build
-omits it. Use the tmux backend there.
 
 ### Administrative Menu
 
@@ -637,11 +634,11 @@ aiman repos
 
 ## Agent API (`aiman serve`)
 
-Agents inside a session talk to **one server per remote**, not to the laptop TUI. That process is `aiman serve` (the agent API). The skill (`aiman --skill`) and `aiman session …` are clients of it. tmux (or the built-in PTY runtime) hosts the terminal. Mutagen, JIRA tokens, and the laptop SQLite file stay on the laptop.
+Agents inside a session talk to **one server per remote**, not to the laptop TUI. That process is `aiman serve` (the agent API). The skill (`aiman --skill`) and `aiman session …` are clients of it. Its PTY runtime hosts the terminal. Mutagen, JIRA tokens, and the laptop SQLite file stay on the laptop.
 
-`session list` reports the sessions actually running on that host, discovered from tmux
-and the PTY runtime — it does not depend on the laptop having told the remote about them.
-A session with no display name is addressable by its tmux/PTY session name, and grouped
+`session list` reports the sessions actually running on that host, discovered from
+the PTY runtime; it does not depend on the laptop having told the remote about them.
+A session with no display name is addressable by its terminal name, and grouped
 by its issue key.
 
 There is no HTTP, MCP, or TCP port. The CLI is a thin JSON wrapper over `~/.aiman/aiman.sock`.
@@ -786,7 +783,7 @@ Errors come back with a machine-readable `code` — `server_not_running`, `not_f
 `invalid_params`, `agent_blocked`, `already_running` — so callers can branch on the
 reason rather than parsing prose.
 
-The server uses the remote `~/.aiman/config.yaml` (often sparse) and `~/.aiman/aiman.db`. Session create on the remote does **not** start mutagen or push AWS STS; those remain TUI/laptop concerns. The new tmux session inherits whatever is already in remote `~/.aws`.
+The server uses the remote `~/.aiman/config.yaml` (often sparse) and `~/.aiman/aiman.db`. Session create on the remote does **not** start mutagen or push AWS STS; those remain TUI/laptop concerns. The new session inherits whatever is already in remote `~/.aws`.
 
 ### `aiman session` CLI
 
@@ -849,11 +846,11 @@ The phone contract is `api/openapi.yaml`. Endpoints: `POST /v1/rpc`, `GET /v1/se
 
 Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refused: use `aiman session …`.
 
-`<target>` is resolved in this order: unique `name`, `group/name`, UUID (`id`), tmux session name.
+`<target>` is resolved in this order: unique `name`, `group/name`, UUID (`id`), terminal name.
 
 `--quick` is ad-hoc, group `quick`, generated `q1`/`q2`/…, current host. `--agent` is optional: when omitted, serve starts the first installed `agents.preferred` command. `--for` links the new child to a parent to-do and derives its branch, base, repo, issue, group, backend and prompt from that parent; `--brief-file` sends the file contents as the child's input contract. A create from a session (RPC `caller` / `AIMAN_ID`) nests under that session on the dashboard; `--orphan` makes a root. The dashboard hears `session_created` on the existing `session.events` stream, so a new helper appears without `r`. `--wait` on prompt sends then waits until the first of `idle`, `waiting_input`, or `errored`. Default timeout is 120s; `--timeout 0` means no limit. `--until blocked` is an alias for `waiting_input`. Prompting a session that is already waiting for input fails with `agent_blocked` unless `--force`.
 
-Rename changes the display name only. It does not rename tmux or the git worktree.
+Rename changes the display name only. It does not rename the terminal or the git worktree.
 
 Stdout is indented JSON. Server errors are JSON on stderr, exit 1. Usage errors exit 2.
 
@@ -892,7 +889,7 @@ Stdout is indented JSON. Server errors are JSON on stderr, exit 1. Usage errors 
 | `already_running` | Another `aiman serve` holds the lock |
 | `agent_blocked` | Target is `waiting_input` and `--force` was not set |
 | `timeout` | `--wait` / `wait` hit `--timeout` |
-| `create_failed` | Worktree/tmux create failed |
+| `create_failed` | Worktree or terminal create failed |
 | `jira_unavailable` | `--issue` given but JIRA is not configured on the remote |
 
 ### `aiman context` CLI
@@ -935,7 +932,7 @@ Empty group is stored as `ungrouped` so discovery cannot blank it.
 
 ### Environment (inside a pane)
 
-`CreateSession` injects these into the session environment (tmux or PTY) (not overridable by stored secrets):
+`CreateSession` injects these into the session environment (not overridable by stored secrets):
 
 | Variable | Value |
 |---|---|
@@ -959,7 +956,7 @@ That prints the Markdown skill (`internal/aimanskill/SKILL.md`, also under `skil
 
 `aiman serve` on start (and on restart) installs or updates the skill in each agent's user skill dir under `$HOME` (`.claude/skills/aiman`, `.cursor/skills/aiman`, and the other known loaders) and in every session worktree it knows about. Missing files are created; stale copies are replaced with the copy embedded in the binary. Session create still writes the worktree copy so a new session does not wait for a serve restart.
 
-It also registers **native-session hooks** in each installed agent's config. Every hooked agent reports vendor conversation id, `SessionEnd`, and (where the runtime has it) `Notification` `idle_prompt`. Kilo Code and Pi also report lifecycle `idle` / `working` / `blocked` with an optional block reason and session title. Pi's extension (`~/.pi/agent/extensions/aiman-native-session.ts`) also reports its session file, so `aiman usage` counts Pi tokens, and restart resumes with `pi --session <id>`. Muse Code reports `SessionStart`, `Stop` (turn idle), and `UserPromptSubmit` (working) through `~/.config/muse/settings.json`. Deep Code has no hook API. `aiman serve` installs `~/.aiman/hooks/deepcode-launch.sh`, which runs `aiman session deepcode-watch` against `~/.deepcode/projects/<code>/sessions-index.json` and then the CLI. Resume is `deepcode --resume <uuid>`. Model and reasoning effort are `DEEPCODE_MODEL` and `DEEPCODE_REASONING_EFFORT`. Permissions stay the user's `defaultMode`. `aiman session wait` / `prompt --wait` prefer a fresh hook report over tmux screen classification. Restart uses the native id (`claude --resume`, `codex resume`, `muse resume`, `deepcode --resume`, …). Ageni is not hooked. Missing agent config directories are left alone.
+It also registers **native-session hooks** in each installed agent's config. Every hooked agent reports vendor conversation id, `SessionEnd`, and (where the runtime has it) `Notification` `idle_prompt`. Kilo Code and Pi also report lifecycle `idle` / `working` / `blocked` with an optional block reason and session title. Pi's extension (`~/.pi/agent/extensions/aiman-native-session.ts`) also reports its session file, so `aiman usage` counts Pi tokens, and restart resumes with `pi --session <id>`. Muse Code reports `SessionStart`, `Stop` (turn idle), and `UserPromptSubmit` (working) through `~/.config/muse/settings.json`. Deep Code has no hook API. `aiman serve` installs `~/.aiman/hooks/deepcode-launch.sh`, which runs `aiman session deepcode-watch` against `~/.deepcode/projects/<code>/sessions-index.json` and then the CLI. Resume is `deepcode --resume <uuid>`. Model and reasoning effort are `DEEPCODE_MODEL` and `DEEPCODE_REASONING_EFFORT`. Permissions stay the user's `defaultMode`. `aiman session wait` / `prompt --wait` prefer a fresh hook report over screen classification. Restart uses the native id (`claude --resume`, `codex resume`, `muse resume`, `deepcode --resume`, …). Ageni is not hooked. Missing agent config directories are left alone.
 
 Typical helper spawn from an in-pane agent:
 
@@ -1107,9 +1104,6 @@ remotes:
     host: devbox.company.com
     user: developer
     root: /home/developer/repos
-    # Terminal runtime for sessions on this remote: omit for pty (default), or "tmux".
-    # Only a default — the run-target screen can override it per session.
-    # session_backend: tmux
     aws_delegation:
       profile: default                         # name of the profile written on the remote
       source_profile: my-local-aws-profile   # local ~/.aws profile with long-lived creds
@@ -1177,7 +1171,7 @@ When `sync_credentials: true`, each new session on that remote gets:
 
 1. Fresh STS tokens pushed into the remote `~/.aws/credentials`
 2. The remote `~/.aws/config` updated for the managed profile/default region
-3. Only region env vars injected into tmux when needed (`AWS_REGION` / `AWS_DEFAULT_REGION`)
+3. Only region env vars injected into the session environment when needed (`AWS_REGION` / `AWS_DEFAULT_REGION`)
 
 #### Setting the default profile
 
@@ -1214,8 +1208,8 @@ The profile and region can differ per session; all other settings (role, account
 The dashboard reports whether each session is **working**, **needs input**, or
 **idle**. This is decided without a model, from two cheap signals:
 
-- `#{session_activity}` — tmux's own timestamp of when a session last produced
-  output. One call answers for every session, with no pane capture.
+- The PTY holder's own record of when a session last produced output
+  (`activity.json`). Reading it needs no pane capture.
 - The tail of the pane — an advancing elapsed timer means work in progress, a
   rendered choice list means the agent is blocked, and an agent sitting at its
   own input box means the turn is finished.
@@ -1321,16 +1315,14 @@ independent of it once started:
 ```
 laptop                          remote host
 ──────                          ───────────
-aiman (TUI) ──ssh──────────────► tmux ──► agent
-            │                    │
-            │                    └─ or ─► aiman serve ──► ptyhold (holder) ──► agent
+aiman (TUI) ──ssh──────────────► aiman serve ──► ptyhold (holder) ──► agent
+            │
             └──ssh──────────────► aiman-trigger (scheduled / GitHub-driven runs)
 ```
 
 The laptop owns mutagen, JIRA credentials and the authoritative SQLite database.
-`aiman serve` answers the agent API over a Unix socket and, when the PTY backend
-is used, owns the terminals — via detached holder processes, so sessions outlive
-a serve restart.
+`aiman serve` answers the agent API over a Unix socket and owns the terminals
+through detached holder processes, so sessions outlive a serve restart.
 
 ### Key Components
 
@@ -1341,8 +1333,8 @@ a serve restart.
 - **Worktree and terminal lifecycle**: not single types — worktree setup lives in `internal/infra/git`, while session start/stop/restart is coordinated in `internal/usecase` (`flow_manager.go`, `session_terminal.go`, `restart_handoff.go`) and driven from `internal/ui`
 - **`SkillEngine`**: Agent configuration injection
 - **`aiman serve`**: Headless Unix-socket JSON server on the remote (`internal/server`)
-- **`ptyruntime` / `ptyhold`**: The built-in PTY backend. `ptyruntime` is a thin client over a file-and-socket contract; `ptyhold` is the detached holder process that actually owns a terminal, which is what lets a session survive a serve restart
-- **`pane`**: Classifies what a session is doing (working, blocked on a question, waiting on background agents, idle, agent exited) from the tail of the pane plus tmux's own last-output timestamp — no model required
+- **`ptyruntime` / `ptyhold`**: The terminal runtime. `ptyruntime` is a thin client over a file-and-socket contract; `ptyhold` is the detached holder process that actually owns a terminal, which is what lets a session survive a serve restart
+- **`pane`**: Classifies what a session is doing (working, blocked on a question, waiting on background agents, idle, agent exited) from the tail of the pane plus the holder's last-output timestamp — no model required
 - **`agenthook`**: Installs per-vendor hooks so agents report their own lifecycle (session id, title, idle/blocked, session end) back to aiman, and infers which agent worked in a directory when reviving one
 - **`contextstore`**: The shared markdown note store behind `aiman context`
 - **`remotesvc`**: Installs and supervises the two remote daemons (`aiman serve`, `aiman-trigger`) over systemd `--user`, falling back to `nohup`
@@ -1363,7 +1355,7 @@ a serve restart.
                                                         │
 ┌──────────┐    ┌──────────┐    ┌──────────┐           │
 │   Sync   │◀───│  Launch  │◀───│ Terminal │◀──────────┘
-│ Mutagen  │    │  Agent   │    │ PTY/tmux │
+│ Mutagen  │    │  Agent   │    │   PTY    │
 └──────────┘    └──────────┘    └──────────┘
 ```
 
@@ -1452,14 +1444,13 @@ that cannot be copied without doing the per-agent integration work.
 ### Also planned
 
 - [ ] Git intelligence panel
-- [ ] MOSH support
 
 ### Shipped
 
 - [x] JIRA issue search with filtering
 - [x] Git branch name sanitization
 - [x] SSH multiplexing
-- [x] Tmux and built-in PTY session backends
+- [x] Built-in PTY terminal runtime
 - [x] Real-time pane previews
 - [x] VS Code integration
 - [x] SQLite persistence for sessions

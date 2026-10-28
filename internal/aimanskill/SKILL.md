@@ -5,7 +5,7 @@ description: "Use in any Aiman coding session: coordinate work, split it into ch
 
 # Aiman
 
-Aiman runs coding-agent sessions in tmux on this machine. The `aiman` CLI talks to the **agent API** (`aiman serve`) over a local Unix socket. The laptop operator starts that process from Admin Menu (`m`) → **Agent API** → `i`. Do not start or stop it yourself. If a command returns `server_not_running`, tell the operator the agent API is down.
+Aiman runs coding-agent sessions in its built-in terminal runtime (`aiman serve`) on this machine. The `aiman` CLI talks to the **agent API** (`aiman serve`) over a local Unix socket. The laptop operator starts that process from Admin Menu (`m`) → **Agent API** → `i`. Do not start or stop it yourself. If a command returns `server_not_running`, tell the operator the agent API is down.
 
 Before any control command:
 
@@ -43,7 +43,7 @@ Quick ad-hoc session:
 aiman session create --quick --agent claude
 ```
 
-Rename (does not rename tmux):
+Rename (does not rename the terminal or worktree):
 
 ```bash
 aiman session rename q1 spike

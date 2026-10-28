@@ -8,7 +8,7 @@ This file documents the architecture, key files, known gotchas, and current stat
 
 Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full lifecycle of remote AI coding sessions:
 
-- Turns a JIRA ticket into a git worktree + tmux session + mutagen sync + AI agent in one flow
+- Turns a JIRA ticket into a git worktree + terminal session + mutagen sync + AI agent in one flow
 - Tracks active sessions, provides live pane previews, git status, and AI summaries
 - Supports Claude Code, Antigravity CLI, GitHub Copilot, Kilo Code, Cursor, Pi, Muse Code, and Deep Code as agents
 
@@ -65,11 +65,12 @@ internal/
     aws.go          — AWSConfig type
   contextstore/
     files.go        — markdown+YAML store under ~/.aiman/context/
-  ptyruntime/       — built-in PTY session runtime used by aiman serve
+  ptyhold/          — durable PTY holder process and its on-disk contract
+  ptyruntime/       — serve's client over ptyhold (the terminal runtime)
   todo/             — per-session to-do lists: JSON store, agent-snapshot mirror, `.aiman_todo.md` render
   usecase/
     flow_manager.go — CreateSession (the main session-creation orchestrator)
-    session_discoverer.go — discovers sessions from live remote (tmux/git/mutagen)
+    session_discoverer.go — discovers sessions from live remote (PTY/git/mutagen)
     snapshot.go     — SnapshotManager (archive, compress, AI summarise)
     doctor.go       — startup health checks
   infra/
@@ -85,7 +86,7 @@ internal/
     awsdelegation/  — STS token push to remote profiles
     agent/          — agent scanning on remote
   pane/
-    clean.go        — strips ANSI/noise from tmux pane captures
+    clean.go        — strips ANSI/noise from pane captures
   ui/
     dashboard.go    — entire TUI (5000+ lines); all views, key handlers, message types
 ```
@@ -106,7 +107,8 @@ A `domain.Session` holds:
 | `RemoteHost` | SSH host (from config) |
 | `WorktreePath` | absolute path to git worktree on the remote |
 | `WorkingDirectory` | active sub-directory inside worktree (what the agent cwd is) |
-| `TmuxSession` | tmux session name on the remote |
+| `TerminalName` | human-readable terminal name (the PTY is addressed by `ID`); sqlite column `tmux_session`, JSON key `TmuxSession` |
+| `Backend` | `pty` for every session aiman runs, `tmux` for a legacy row, empty when no terminal is recorded |
 | `MutagenSyncID` | mutagen sync session name (usually `aiman-sync-<ID>`) |
 | `LocalPath` | `~/.aiman/work/<ID>` — local mutagen sync root |
 | `AgentName` | agent binary name, e.g. `claude` |
@@ -133,13 +135,15 @@ The `Save` method uses `INSERT … ON CONFLICT(id) DO UPDATE SET`. As of **v0.6.
 field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 ```
 
-**Why this matters:** The session discoverer (`Discover`) builds sessions from live remote state — it can only know what it can read from a running tmux process. Fields like `Branch`, `AgentName`, `WorktreePath`, and `WorkingDirectory` will often be empty in discovered sessions. Before this fix, discovery was silently overwriting the DB with empty strings on every scan cycle, causing restart to fail with "session has no working directory".
+**Why this matters:** The session discoverer (`Discover`) builds sessions from live remote state — it can only know what the PTY runtime and mutagen report. Fields like `Branch`, `AgentName`, `WorktreePath`, and `WorkingDirectory` will often be empty in discovered sessions. Before this fix, discovery was silently overwriting the DB with empty strings on every scan cycle, causing restart to fail with "session has no working directory".
 
-**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `base_branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `mutagen_sync_id`, `local_path`, `agent_name`, `agent_model`, `launch_model`, `launch_effort`, `agent_session_id`, `agent_session_path`, `agent_title`, `agent_ended`, `hook_state`, `hook_state_message`, `hook_state_source`, `watch_pr`, `role`, `issue_type`.
+**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `base_branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `backend`, `mutagen_sync_id`, `local_path`, `agent_name`, `agent_model`, `launch_model`, `launch_effort`, `agent_session_id`, `agent_session_path`, `agent_title`, `agent_ended`, `hook_state`, `hook_state_message`, `hook_state_source`, `watch_pr`, `role`, `issue_type`.
 
 **Fields always overwritten:** `status`, `updated_at`.
 
 **Fields with null-safe COALESCE (not empty-string):** `tunnels_json`, `aws_profile`, `aws_config_json`.
+
+The `tmux_session` column keeps its name and holds `TerminalName`. `backend` is `pty`, `tmux` (a legacy row, `domain.BackendLegacyTmux`) or empty (no terminal recorded). Opening the DB sets a NULL `backend`, a row written before the column existed, to `tmux`; an empty value stays empty.
 
 ---
 
@@ -147,13 +151,18 @@ field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 
 **File:** `internal/usecase/session_discoverer.go`
 
-`Discover(ctx, host)` scans the remote for running tmux sessions, correlates them with mutagen syncs, and returns `[]domain.Session`. It can only populate fields it can read live:
+`Discover(ctx, host)` asks the remote serve for its PTY sessions (`ScanPTYSessions`, `aiman pty list` over SSH), adds worktrees with no live session and mutagen syncs with no session, overlays hook reports, and returns `[]domain.Session`. It never asks tmux. `ScanPTYSessions` returns an empty list for a remote with no aiman binary and `ErrServeDown` when serve does not answer. A failed scan, `ErrServeDown` included, fails the whole call, because the merge step reads the result as every session on the host and would otherwise mark known sessions dead.
 
-- `TmuxSession`, `WorkingDirectory` (from `AIMAN_ID` env var in tmux pane)
-- `MutagenSyncID` (from `mutagen sync list`)
-- Basic git branch info if the CWD is a git repo
+It can only populate fields it can read live:
 
-It does **not** read `Name`, `Group`, `Branch`, `AgentName`, `IssueKey`, `WorktreePath`, or `LocalPath` — those come from the DB.
+- `ID`, `TerminalName`, `WorkingDirectory`, `Backend` (`pty`) from the PTY record
+- `MutagenSyncID` and `LocalPath` from the matching mutagen sync (`mutagen sync list`), which also sets status `SYNCING`
+
+It does **not** read `Name`, `Group`, `Branch`, `AgentName`, `IssueKey` or `WorktreePath`; those come from the DB.
+
+Sessions merge by ID. Discovery keeps every live PTY session with an ID of its own even when two share a terminal name (children of one parent can). The dashboard merge (`lookupPersistedSession`) matches a stored row by ID first and falls back to `sessionTerminalKey` (host plus terminal name) only for rows without one. Preview captures, activity hints and git status are keyed by session ID. A selected session missing from one scan keeps its row for up to two scans.
+
+A legacy tmux row is never discovered. It stays listed as inactive, in memory only, until the user stops it and restarts it into pty.
 
 `applyDiscoveryResult` overlays those DB fields onto live sessions (`overlayPersistedSessionFields`) so a scan cannot flatten names and groups in the TUI. Save still uses COALESCE so empty discovery writes do not wipe the DB.
 
@@ -172,7 +181,7 @@ Key behaviours:
 - Socket path: `~/.aiman/sockets/ssh-<sha1(user@host)[:16]>.sock`
 - Per-call timeout: **30 seconds** (`Execute`). `ExecuteWithTimeout` is for work that exceeds that (remote install/update uses `remotesvc.OpTimeout`, 3 minutes).
 - On transport errors: clears socket, retries up to 2×, then falls back to `ControlMaster=no`
-- `ResetControlSocket()`: sends `ssh -O exit` to gracefully stop the master, then removes the socket file. Call this before disruptive remote operations (e.g. tmux kill-session) to ensure a clean connection for the next call.
+- `ResetControlSocket()`: sends `ssh -O exit` to gracefully stop the master, then removes the socket file. Call this before disruptive remote operations (e.g. stopping a session) to ensure a clean connection for the next call.
 
 **Do not** add "permission denied" removal from `isRetriableSSHTransportError` without testing — it causes 4× retries on auth failures which wastes 120s.
 
@@ -182,7 +191,7 @@ Key behaviours:
 
 **File:** `internal/infra/remotesvc/remotesvc.go`
 
-`aiman serve` and `aiman-trigger` run on remotes as systemd `--user` units (`aiman-serve.service`, `aiman-trigger.service`) with `loginctl enable-linger`. They are independent of the laptop TUI and of tmux. If user systemd is unavailable, fallback is `nohup` plus `~/.aiman/{serve,trigger}.pid`.
+`aiman serve` and `aiman-trigger` run on remotes as systemd `--user` units (`aiman-serve.service`, `aiman-trigger.service`) with `loginctl enable-linger`. They are independent of the laptop TUI. If user systemd is unavailable, fallback is `nohup` plus `~/.aiman/{serve,trigger}.pid`.
 
 Admin Menu (`m`) → **Agent API** is the settings page for `aiman serve` (one row per remote). The Daemons tab (Tab) also lists **agent API** and **trigger**. The skill talks to the agent API only. Start it with `i` on that settings page.
 
@@ -224,7 +233,7 @@ Notifications are `internal/notify`. Serve is the only writer of the log (sqlite
 
 SSH `systemctl --user` needs `XDG_RUNTIME_DIR` and the session bus; the scripts set those. Linger is enabled *before* `systemctl --user` so a first SSH to a host with no lingering user instance can still install.
 
-Do not run serve inside tmux. Probe on select, `r`, after an op, and after discovery — not on the tmux pane ticker.
+Probe on select, `r`, after an op, and after discovery, not on the pane ticker.
 
 `aiman serve` runs a usage tracker (`internal/usage`) that scans Claude, Codex and Pi transcripts into per-session hourly model buckets and prices them when they are read. `usage.get` returns `{"type":"usage","session":"<id or empty>","usage":<report>}`: an empty session is every session on that host, and `by` of `issue` (30 days) or `day` (14 days) with `tz_offset_minutes` (the laptop zone offset in minutes) builds the rollup. `aiman usage` is that call from the CLI. `$` on the sessions tab opens the same rollup, last 30 days by ticket, with `tab` for the last 14 days by day. The cost column is `usage.FormatUsageCost` and is `-` when the row has no priced tokens. Unpriced model ids are listed under the table. Each host can show one dim extra line under its name; the usage view leaves that line empty.
 
@@ -234,18 +243,18 @@ serve keeps agent CLIs current through `agentupdate.Manager` (`cmd/aiman/agent_u
 
 ## Session Restart
 
-**File:** `internal/ui/dashboard.go` — `restartSession()` (~line 7520)
+**Files:** `internal/ui/dashboard.go` (`restartSession()`), `internal/ui/restart_terminal.go` (`restartTerminal`)
 
 The restart flow (triggered by `s` / `ctrl+r`, including switching agent):
 1. Agent picker (same or different agent)
 2. Serve writes `.aiman_handover.md`. The agent-written `.aiman_session_summary.md` is only the fallback.
 3. `PrepareSession` for the chosen agent (configured `--model` / effort flags, summary prompt). The same agent gets the session's `LaunchModel`/`LaunchEffort` as its pick; `adoptRestartAgent` clears them on a switch and `ClearNativeAgentIdentity` wipes them in the DB
-4. **1 SSH call**: `tmux kill-session … && tmux new-session … "bash -l -c '<agent>; exec bash'"`
-5. send-keys the handoff prompt
+4. `restartTerminal`: `usecase.RecreatePTYSession` replaces the agent process in serve's PTY runtime under the same session ID
+5. `DeliverInitialPromptPTY` sends the handoff prompt
 
-**The worktree is never touched.** Only the tmux process + agent is replaced.
+**The worktree is never touched.** Only the agent process is replaced.
 
-**The worktree is never touched.** Only the tmux process + agent is replaced.
+A legacy tmux row restarts only after the user confirms they stopped it on the host (`LegacyStopped`); `s` on such a row shows the stop command first. A successful restart sets `Backend` to `pty`.
 
 State captured at goroutine dispatch time (before the goroutine starts) to avoid data races:
 - `s` (session copy)
@@ -265,8 +274,7 @@ The TUI wizard (`n` key) drives the user through:
 
 1. Run-target picker (`viewStateRunTargetPicker`) → a configured remote server. Shown for
    any remote count, including zero, so a fresh install still has somewhere actionable to go.
-   Number selects; `b` toggles the terminal backend (tmux/pty) for this session only —
-   tmux and pty sessions run side by side on one host; `enter` confirms.
+   Number selects; `enter` confirms.
 2. Mode picker → JIRA issue / new branch / existing branch / ad-hoc / autonomous trigger
 3. JIRA issue picker → `m.sessionCfg.IssueKey` / `m.sessionCfg.Issue`. Only issues assigned
    to the current user in `integrations.jira.issue_statuses` (default:
@@ -284,7 +292,7 @@ The TUI wizard (`n` key) drives the user through:
 - places worktrees in repo-scoped sibling directories named `<repo>@<branch>` to avoid cross-repo path collisions
 - trust the working directory for the agent
 - write `.aiman_task.md` (JIRA description + prior snapshot context)
-- `tmux new-session` with agent command
+- `pty.create` in the remote serve with the agent command
 - `mutagen sync create`
 - build the quality kit: push `~/.aiman/checklists`, check repo `requires`, list/match repo and user checklists, merge JIRA acceptance criteria with repo `done_when`, and write the kit blocks into `.aiman_task.md`; add the `Done-when met` to-do when conditions exist
 - push AWS STS credentials
@@ -368,7 +376,7 @@ Key config fields:
 
 9. **AWS credential messages are routed globally, not by view state**: `awsCredLoadedMsg`, `awsCredCheckResultMsg`, `awsCredRenewResultMsg`, `awsCredBatchRenewResultMsg`, `awsCredRemoveResultMsg` and `awsCredRenameResultMsg` are handled in `Update` *before* the `switch m.state` dispatch and forwarded via `routeAWSCredentialsMsg`. Renewals and probes are bubbletea commands that keep running after the user leaves the page; routing them by view state drops the results (the remote gets new credentials but the model never learns and never re-verifies). Do not move them into `handleAWSCredentialsUpdate`. For the same reason, the 30s repaint tick (`awsCredTickMsg`) is owned by the dashboard, not by `AWSCredentialsModel.Init` — per-visit ticks would stack one chain per page visit. `enterAWSCredentials` must keep a `Busy()` model rather than rebuilding it.
 
-10. **AWS_PROFILE is sanitised, not trusted**: `usecase.SharedSessionAWSEnv` exports a profile only if it survives `SanitizeSessionAWSProfile` — legacy `aiman-<id>` names and names missing from `~/.aws` are dropped so the session falls back to the default credential chain rather than pointing at a profile that cannot resolve. Do not bypass it by setting `AWS_PROFILE` directly in tmux env code.
+10. **AWS_PROFILE is sanitised, not trusted**: `usecase.SharedSessionAWSEnv` exports a profile only if it survives `SanitizeSessionAWSProfile` — legacy `aiman-<id>` names and names missing from `~/.aws` are dropped so the session falls back to the default credential chain rather than pointing at a profile that cannot resolve. Do not bypass it by setting `AWS_PROFILE` directly in the terminal environment code.
 
 11. **`AgentEnded` is not cleared by `Save`**: `agent_ended` is COALESCE-protected, and an unset `AgentEnded` is written as an empty string, so saving `AgentEnded: false` leaves a stored `"1"` in place. `agenthook.ApplyReport` clears the in-memory flag only when a later report carries a lifecycle state and is not itself an end. A report with no state returns first and leaves the latch set. `handleReportAgentSession` saves, then must call `Repository.ClearAgentEnded` when the flag flipped from true to false. That method writes `agent_ended = ''` directly. Dropping the call leaves the row ended after the process has reported it is alive. `ClearNativeAgentIdentity` also blanks `agent_ended`, but only as part of wiping vendor identity on an agent switch. It is not the report path.
 
@@ -376,24 +384,33 @@ Key config fields:
 
 ---
 
-## Built-in PTY Runtime (opt-in alternative to tmux)
+## Terminal runtime
 
-`internal/ptyruntime` runs inside `aiman serve`: each session is a real PTY
-(creack/pty) whose master is owned by the daemon, with a 1 MiB scrollback ring,
-fan-out attach subscribers, and SIGTERM/SIGKILL kill grace. Sessions survive
-laptop disconnects but **not** a serve restart (documented limitation).
+Every session runs in the PTY runtime of the remote `aiman serve`. aiman never
+starts, attaches to or stops tmux.
+
+`internal/ptyhold` is the durable holder: `aiman pty hold` is a small process,
+detached with `setsid`, that owns one PTY. Its state is files under
+`~/.aiman/pty/<id>/` (`request.json`, `meta.json`, an append-only `spool`
+rotated to `spool.old` at 8 MiB, `term.sock`, `resize`, `kill`, `exit`,
+`activity.json`). `internal/ptyruntime` is serve's thin client over that
+contract. The serve unit uses `KillMode=process`, so stopping, restarting or
+updating serve leaves holders and their agents running; the next serve finds
+them again by scanning `~/.aiman/pty/`. Sessions also survive laptop
+disconnects. A holder ends when its agent exits, on `pty.kill`, or on a host
+reboot.
 
 Socket API (`internal/server/handlers_pty.go`): `pty.create/list/get/input/
-capture/kill/forget` are plain JSON methods; `pty.attach` answers once then
-takes over the connection: output streams out as raw bytes, client messages are
-framed (`internal/server/attach_framing.go` — `[len BE][kind][payload]`, kinds
-0x01 input, 0x02 resize), which is what makes live window resize possible.
+capture/resize/run/kill/forget` are plain JSON methods; `pty.attach` answers
+once then takes over the connection: output streams out as raw bytes, client
+messages are framed (`internal/server/attach_framing.go`, `[len BE][kind][payload]`,
+kinds 0x01 input, 0x02 resize), which is what makes live window resize possible.
 
-**Serve-restart recovery**: a serve restart kills PTY processes but not agent
-conversations. Attaching to a pty-backed session whose process is gone revives
-it transparently via `usecase.ReviveIfNeeded` — the agent relaunches with its
-stored `LaunchModel`/`LaunchEffort` and its native resume flag (sidecar id first, stored `AgentSessionID` as fallback;
-refuses if neither exists so it never silently forks a fresh conversation).
+**Revive**: when a session's holder is gone (the agent exited or the host
+rebooted), attaching revives it via `usecase.ReviveIfNeeded`. The agent
+relaunches with its stored `LaunchModel`/`LaunchEffort` and its native resume
+flag (sidecar id first, stored `AgentSessionID` as fallback; refuses if neither
+exists so it never silently forks a fresh conversation).
 
 **Boot wait**: `acceptWorkspaceTrustPTY` polls the new pty (budget 20) before
 the first prompt is typed. Each poll checks, in order: a startup update dialog
@@ -410,23 +427,29 @@ forget|attach`. Attach puts the local tty in raw mode and relays; ctrl+q
 detaches without stopping the session. `--params-file` / `--file` flags keep
 secrets and prompt text out of argv.
 
-Session model: `domain.Session.Backend` is `"pty"` (default for new sessions) or `"tmux"`;
-persisted in the sqlite `backend` column with COALESCE protection like other
-identity fields. Empty persisted `backend` still means tmux (pre-field rows). New
-sessions default to `"pty"` unless `remotes[].session_backend` or the wizard `b`
-toggle selects `"tmux"`.
 The laptop drives everything through SSH (`$HOME/.local/bin/aiman pty …`),
 routed by `usecase.CaptureSessionPane / SendSessionPrompt /
-TerminateSessionTerminal` — call those instead of RemoteExecutor tmux methods
-so both backends stay supported.
+TerminateSessionTerminal`. Call those rather than building pty commands.
+`remotes[].session_backend` is ignored with a config warning.
 
+**Legacy tmux rows**: a session created when aiman still ran tmux keeps
+`Backend` `tmux` (`domain.IsLegacyTmux`). The row shows the badge
+`tmux (legacy) · stop it on the host, then s`. Attach, revive, capture and
+prompts refuse it with `domain.LegacyTmuxError`, whose `Hint` names the host and the
+exact stop command (`tmux kill-session -t '=<name>'`); serve answers
+`CodeLegacyTerminal`. Terminate leaves the tmux session to the user and still
+removes the worktree after confirmation. `s` asks the user to confirm the tmux
+session is stopped, then restarts the agent into pty. Non-test string literals
+that run or name tmux live only in `internal/domain/legacy_tmux.go` and
+`internal/ui/legacy_tmux.go`; `internal/usecase/notmux_guard_test.go` fails on
+one anywhere else, and on any literal naming mosh.
 
+---
 
 ## Remaining TODOs (from PLAN.md)
 
-- **Remote VM Bootstrapper**: Connect to a new VM and install baseline tooling (git, tmux, go, node, claude, cursor, agy, kilo, acli), configure SSH keys, and authenticate agents.
+- **Remote VM Bootstrapper**: Connect to a new VM and install baseline tooling (git, go, node, claude, cursor, agy, kilo, acli), configure SSH keys, and authenticate agents.
 - **AI Compute Monitoring**: Provider subscription/usage monitoring (Anthropic, Google, OpenAI) — credit balances and usage tracking.
-- **MOSH Support**: Hand off to MOSH for high-latency interactive connections.
 - **Agentic Patterns**: Robust orchestrator-worker-validator patterns; translate for each supported coding tool.
 
 ---

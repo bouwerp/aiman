@@ -179,6 +179,7 @@ components:
           type: string
         tmux_session:
           type: string
+          description: Terminal name; key kept for compatibility.
         worktree_path:
           type: string
         working_directory:
