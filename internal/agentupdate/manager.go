@@ -50,6 +50,20 @@ type Outcome struct {
 	Reason   string `json:"reason,omitempty"`
 }
 
+// Applied describes one finished update attempt.
+type Applied struct {
+	Agent string
+	// From is the version before the update and To the version the
+	// re-probe found; To is empty when the re-probe failed.
+	From string
+	To   string
+	OK   bool
+	// Err is the failure, such as "needs root: <command>".
+	Err string
+	// Auto is true for updates auto mode started inside the window.
+	Auto bool
+}
+
 // Manager owns the version state on one host: it probes, reports status,
 // and applies updates through the Runner, one at a time.
 type Manager struct {
@@ -72,6 +86,9 @@ type Manager struct {
 	// newer version and the policy notifies. The version is recorded as
 	// notified only when this is set.
 	OnNewVersion func(AgentState)
+	// OnApplied runs after every update attempt that reached the update
+	// command, successful or not.
+	OnApplied func(Applied)
 	// BaseCtx parents updates started by Request, which outlive the
 	// request. Nil is context.Background.
 	BaseCtx context.Context
@@ -330,10 +347,12 @@ func (m *Manager) start(agent string, sessions []LiveSession, background bool) O
 	m.updating[agent] = true
 	m.wg.Add(1)
 	m.mu.Unlock()
+	// A background start answers agents.update; a foreground start is
+	// auto mode applying a due update.
 	if background {
-		go m.apply(e, a)
+		go m.apply(e, a, false)
 	} else {
-		m.apply(e, a)
+		m.apply(e, a, true)
 	}
 	return Outcome{Agent: agent, Accepted: true}
 }
@@ -348,7 +367,7 @@ func (m *Manager) baseCtx() context.Context {
 // apply runs one update, re-probes the agent and records the attempt. The
 // gate is checked again under applyMu, since a queued update may start
 // after a session began working.
-func (m *Manager) apply(e Entry, before AgentState) {
+func (m *Manager) apply(e Entry, before AgentState, auto bool) {
 	defer m.wg.Done()
 	defer func() {
 		m.mu.Lock()
@@ -382,6 +401,9 @@ func (m *Manager) apply(e Entry, before AgentState) {
 	}
 	m.saveLocked()
 	m.mu.Unlock()
+	if m.OnApplied != nil {
+		m.OnApplied(Applied{Agent: e.Agent, From: lu.From, To: lu.To, OK: res.OK, Err: lu.Log, Auto: auto})
+	}
 	if !res.OK {
 		m.logf("agent updates: %s failed: %s", e.Agent, lu.Log)
 		return

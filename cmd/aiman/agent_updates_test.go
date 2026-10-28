@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agentupdate"
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
@@ -92,6 +94,72 @@ func TestNewAgentUpdatesPolicy(t *testing.T) {
 	bad := newAgentUpdates(config.AgentUpdateConfig{Mode: "sometimes", Window: "nope", CheckEvery: time.Hour}, dir, agentUpdateDeps{Logf: t.Logf})
 	if bad.Policy.Mode != agentupdate.ModeNotify || bad.CheckEvery != time.Hour {
 		t.Fatalf("invalid config should fall back to notify: %+v", bad.Policy)
+	}
+}
+
+type fakeNotifier struct {
+	mu   sync.Mutex
+	sent []string
+}
+
+func (f *fakeNotifier) Emit(_ context.Context, sessionID, label string, kind domain.NotifyKind, detail string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, fmt.Sprintf("%s|%s|%s|%s", sessionID, label, kind, detail))
+	return nil
+}
+
+func TestAgentUpdateNotificationTextPerMode(t *testing.T) {
+	inWindow := func() time.Time { return time.Date(2026, 10, 28, 4, 0, 0, 0, time.Local) }
+	cases := []struct {
+		name string
+		cfg  config.AgentUpdateConfig
+		fail bool
+		want []string
+	}{
+		{"notify", config.AgentUpdateConfig{Mode: "notify"}, false,
+			[]string{"|claude|agent_update|claude 1.0.0 → 1.0.1 on regent (press a on Agent API)"}},
+		{"auto", config.AgentUpdateConfig{Mode: "auto"}, false,
+			[]string{"|claude|agent_update|updated claude 1.0.0 → 1.0.1"}},
+		{"auto failed", config.AgentUpdateConfig{Mode: "auto"}, true,
+			[]string{"|claude|agent_update|claude update failed: claude update: exit status 1"}},
+		{"auto held", config.AgentUpdateConfig{Mode: "auto", Hold: []string{"claude"}}, false,
+			[]string{"|claude|agent_update|claude 1.0.0 → 1.0.1 on regent (press a on Agent API)"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			host := &claudeHost{installed: "1.0.0", fail: tc.fail}
+			m := newAgentUpdates(tc.cfg, t.TempDir(), agentUpdateDeps{Exec: host, HTTP: claudeLatest{}, Logf: t.Logf})
+			claude, _ := agentupdate.Lookup("claude")
+			m.Entries = []agentupdate.Entry{claude}
+			m.Now = inWindow
+			n := &fakeNotifier{}
+			wireAgentUpdateNotify(context.Background(), m, n, "regent")
+			m.Sweep(context.Background())
+			m.Sweep(context.Background())
+			m.Wait()
+			if strings.Join(n.sent, "\n") != strings.Join(tc.want, "\n") {
+				t.Fatalf("sent %q, want %q", n.sent, tc.want)
+			}
+		})
+	}
+}
+
+func TestManualUpdateIsNotNotified(t *testing.T) {
+	host := &claudeHost{installed: "1.0.0"}
+	m := newAgentUpdates(config.AgentUpdateConfig{Mode: "auto", Hold: []string{"claude"}}, t.TempDir(), agentUpdateDeps{Exec: host, HTTP: claudeLatest{}, Logf: t.Logf})
+	claude, _ := agentupdate.Lookup("claude")
+	m.Entries = []agentupdate.Entry{claude}
+	n := &fakeNotifier{}
+	wireAgentUpdateNotify(context.Background(), m, n, "regent")
+	if _, err := m.Request(context.Background(), "claude", false); err != nil {
+		t.Fatal(err)
+	}
+	m.Wait()
+	for _, s := range n.sent {
+		if strings.Contains(s, "updated") {
+			t.Fatalf("manual update notified: %q", n.sent)
+		}
 	}
 }
 

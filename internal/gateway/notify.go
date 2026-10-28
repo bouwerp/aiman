@@ -110,7 +110,8 @@ func phoneStateFor(k domain.NotifyKind) string {
 }
 
 func (p *phoneSink) Send(ctx context.Context, n domain.Notification) error {
-	if p == nil || p.store == nil {
+	// Phone pushes open a session; an agent update belongs to no session.
+	if p == nil || p.store == nil || n.Kind == domain.NotifyAgentUpdate {
 		return nil
 	}
 	ps := phoneStateFor(n.Kind)

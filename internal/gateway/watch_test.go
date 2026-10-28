@@ -107,6 +107,12 @@ func TestPhoneSinkMapsKindsToDeviceStates(t *testing.T) {
 	if len(sent) != 0 {
 		t.Fatalf("ended should not send to waiting_input device: %+v", sent)
 	}
+	if err := sink.Send(context.Background(), domain.Notification{Kind: domain.NotifyAgentUpdate, Text: "codex 0.1 → 0.2"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("agent_update has no session to open: %+v", sent)
+	}
 	sent = nil
 	store2, _ := OpenPushStore(filepath.Join(dir, "p2.json"))
 	_ = store2.Register(PushDevice{Token: "t2", DeviceID: "d2", States: []string{"exited"}})

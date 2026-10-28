@@ -672,7 +672,44 @@ Creating a session also starts it if `~/.aiman/aiman.sock` is missing. `aiman se
 | `u` | Reinstall the latest GitHub release, then restart |
 | `ctrl+k` | Stop |
 | `t` | Install [RTK](https://github.com/rtk-ai/rtk) and register its agent hooks |
+| `a` | Open **Agents on &lt;host&gt;**: agent CLI versions and updates |
 | `r` | Probe status, version, socket (serve), and logs |
+
+#### Agent updates
+
+`aiman serve` keeps the agent CLIs on its host current. Sessions aiman launches run with each
+agent's own self-updater turned off (env vars and flags per process; your config files are
+not touched), and serve applies updates itself, one at a time, never with sudo.
+
+```yaml
+agents:
+  update:
+    mode: auto            # off | notify | auto (default auto)
+    window: "03:00-06:00" # host-local; auto applies updates only inside it
+    check_every: 6h
+    hold: []              # never updated automatically; manual updates still work
+```
+
+- `off`: no guards, probes or notifications.
+- `notify`: probes, and one `agent_update` notification per new version:
+  `codex 0.164.0 → 0.170.0 on <host> (press a on Agent API)`.
+- `auto`: applies updates inside the window and notifies the result
+  (`updated codex 0.164.0 → 0.170.0` or `codex update failed: <first line>`). Held agents
+  still get the new-version notification.
+
+An update waits while a session of that agent is working; an agent installed in place
+(npm and similar prefixes) waits while any session of it runs. Running sessions keep the
+old version until they restart. State is `~/.aiman/agent-versions.json` and every run is
+logged to `~/.aiman/logs/agent-updates.log`.
+
+**Agents on &lt;host&gt;** (`a` on the Agent API page) lists Agent, Installed, Latest, Method and
+Status (`current`, `update available`, `updating`, `deferred: …`, `needs root`, `failed`,
+`latest unknown`, `not installed`; `(held)` marks held agents). Keys: `u` update the
+selected agent, `U` update every outdated agent, `r` re-probe, `esc` back. While an update
+runs the page refreshes every 2 seconds.
+
+On the host, `aiman agents status [--json] [--refresh]` and
+`aiman agents update <agent>|--all` make the same `agents.status` and `agents.update` calls.
 
 #### RTK
 
@@ -1076,7 +1113,7 @@ active_remote: devbox
 
 ```yaml
 notifications:
-  events: [waiting_input, ended, error, ci_escalation, review_done]  # default
+  events: [waiting_input, ended, error, ci_escalation, review_done, agent_update]  # default
   phone: true             # push through aiman-gateway (default true)
   webhook: ""             # POST plain text, e.g. an ntfy topic URL
   slack_channel: ""       # needs `aiman slack auth` on the remote
@@ -1099,7 +1136,7 @@ Only high-confidence states count: a hook report, or a pane classified at high c
 | Phone push | `aiman-gateway` | its own; starts at the log tail |
 | TUI toast | the dashboard, from the `notify` event on `session.events` | none (live only) |
 
-A sink that fails is retried on its own, up to 3 attempts per entry, without resending to sinks that succeeded. The TUI toasts only `waiting_input`, `error`, `ci_escalation` and `review_done`; `ended` never toasts. Message text is `<ticket or name> on <host>: <event> · <question or last line>`, one line, capped at 200 runes.
+A sink that fails is retried on its own, up to 3 attempts per entry, without resending to sinks that succeeded. The TUI toasts only `waiting_input`, `error`, `ci_escalation` and `review_done`; `ended` never toasts. Message text is `<ticket or name> on <host>: <event> · <question or last line>`, one line, capped at 200 runes. `agent_update` belongs to the host, not a session: its text is the whole message (see [Agent updates](#agent-updates)), `min_interval` does not apply to it, it never toasts and it is not pushed to the phone.
 
 ### AWS Credential Delegation
 

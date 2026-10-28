@@ -11,11 +11,14 @@ const (
 	NotifyError        NotifyKind = "error"
 	NotifyCIEscalation NotifyKind = "ci_escalation"
 	NotifyReviewDone   NotifyKind = "review_done"
+	// NotifyAgentUpdate is a host-level event with no session: a new agent
+	// version, or the result of an automatic update.
+	NotifyAgentUpdate NotifyKind = "agent_update"
 )
 
 // AllNotifyKinds returns the supported notification kinds in order.
 func AllNotifyKinds() []NotifyKind {
-	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone}
+	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate}
 }
 
 // NeedsYou reports whether the user must act.
@@ -41,6 +44,8 @@ func EventLabel(k NotifyKind) string {
 		return "CI needs you"
 	case NotifyReviewDone:
 		return "review done"
+	case NotifyAgentUpdate:
+		return "agent update"
 	default:
 		return string(k)
 	}

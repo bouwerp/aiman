@@ -9,7 +9,7 @@ import (
 
 func TestNotificationsDefaults(t *testing.T) {
 	var n NotificationsConfig
-	if got := n.EventKinds(); len(got) != 5 {
+	if got := n.EventKinds(); len(got) != len(domain.AllNotifyKinds()) {
 		t.Fatalf("events %v", got)
 	}
 	if !n.PhoneEnabled() {

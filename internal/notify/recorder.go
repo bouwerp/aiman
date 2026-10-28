@@ -121,7 +121,10 @@ func (r *Recorder) Observe(ctx context.Context, o Observation) error {
 	return nil
 }
 
-// Emit bypasses transitions and forces a notification if allowed.
+// Emit bypasses transitions and forces a notification if allowed. An empty
+// sessionID is a host-level event; min_interval does not apply to it, since
+// its callers dedupe their own events and one shared key would drop distinct
+// ones.
 func (r *Recorder) Emit(ctx context.Context, sessionID, label string, kind domain.NotifyKind, detail string) error {
 	if r == nil {
 		return nil
@@ -138,7 +141,11 @@ func (r *Recorder) Emit(ctx context.Context, sessionID, label string, kind domai
 		Text:      text,
 		At:        time.Now(),
 	}
-	nn, ok, err := r.store.AppendIfDue(ctx, n, r.settings.MinInterval)
+	interval := r.settings.MinInterval
+	if sessionID == "" {
+		interval = 0
+	}
+	nn, ok, err := r.store.AppendIfDue(ctx, n, interval)
 	if err != nil {
 		return err
 	}

@@ -329,6 +329,34 @@ func TestSweepDefersBusyAgentAndRetries(t *testing.T) {
 	}
 }
 
+func TestOnAppliedReportsAutoAndManualAttempts(t *testing.T) {
+	f := newFixture(t, ModeAuto, "deepcode")
+	var got []Applied
+	var mu sync.Mutex
+	f.m.OnApplied = func(a Applied) {
+		mu.Lock()
+		got = append(got, a)
+		mu.Unlock()
+	}
+	f.m.Sweep(context.Background())
+	f.host.failWith = "npm ERR! code EACCES\n"
+	if _, err := f.m.Request(context.Background(), "deepcode", false); err != nil {
+		t.Fatal(err)
+	}
+	f.m.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("applied %+v", got)
+	}
+	if a := got[0]; a.Agent != "claude" || !a.Auto || !a.OK || a.From != "2.1.312" || a.To != "2.1.315" {
+		t.Fatalf("auto %+v", a)
+	}
+	if a := got[1]; a.Agent != "deepcode" || a.Auto || a.OK || !strings.HasPrefix(a.Err, "needs root: ") {
+		t.Fatalf("manual %+v", a)
+	}
+}
+
 func TestSweepOffModeDoesNothing(t *testing.T) {
 	f := newFixture(t, ModeOff)
 	f.m.Sweep(context.Background())

@@ -140,6 +140,22 @@ func TestRecorderEmitBypassesTransitions(t *testing.T) {
 	}
 }
 
+func TestRecorderEmitHostEventSkipsMinInterval(t *testing.T) {
+	s := &fakeStore{}
+	r := NewRecorder(s, Settings{Events: map[domain.NotifyKind]bool{domain.NotifyAgentUpdate: true}, MinInterval: time.Hour, Host: "h"}, nil)
+	for _, text := range []string{"codex 0.164.0 → 0.170.0 on h (press a on Agent API)", "claude 2.1.312 → 2.1.315 on h (press a on Agent API)"} {
+		if err := r.Emit(context.Background(), "", "x", domain.NotifyAgentUpdate, text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(s.rows) != 2 {
+		t.Fatalf("rows = %d, want both host events", len(s.rows))
+	}
+	if s.rows[0].SessionID != "" || s.rows[0].Text != "codex 0.164.0 → 0.170.0 on h (press a on Agent API)" {
+		t.Fatalf("row %+v", s.rows[0])
+	}
+}
+
 func TestNilRecorderIsNoop(t *testing.T) {
 	var r *Recorder
 	if err := r.Emit(context.Background(), "s1", "x", domain.NotifyError, "d"); err != nil {

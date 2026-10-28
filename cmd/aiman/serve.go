@@ -178,8 +178,7 @@ func runServe() error {
 	})
 	agentUpdates.Sessions = srv.LiveAgentSessions
 	agentUpdates.BaseCtx = ctx
-	// OnNewVersion stays unset until the agent_update notification lands;
-	// until then no version is recorded as notified.
+	wireAgentUpdateNotify(ctx, agentUpdates, srv.NotifyRecorder(), host)
 	srv.SetAgentUpdates(agentUpdates, host)
 	go agentUpdates.Run(ctx)
 

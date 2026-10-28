@@ -178,6 +178,7 @@ const (
 	viewStateReviveList         // list of abandoned worktrees found, with candidate agent(s)
 	viewStateReviveAgentPick    // short pick-list when a worktree has 2+ agent candidates
 	viewStateMemoryCandidates   // review memory notes proposed from handovers
+	viewStateAgentUpdates       // "Agents on <host>": versions and updates of agent CLIs
 )
 
 type mainTab int
@@ -366,6 +367,7 @@ type Model struct {
 	daemons              map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
 	agentAPICursor       int                      // selected remote on the Agent API settings page
 	agentAPIProbing      map[string]bool          // host → probe SSH call in flight
+	agentUpdates         *agentUpdatesView        // "Agents on <host>" page state
 	currentTab           mainTab
 	menu                 list.Model
 	remotes              RemotesModel
@@ -3097,7 +3099,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applySyncHealthMsg(msg, cmds)
 	case sessionCreateMsg:
 		return m.applySessionCreateMsg(msg, cmds)
-	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg:
+	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg, agentsStatusMsg, agentsUpdateMsg, agentsPollMsg:
 		return m.routeRemoteServiceMsg(msg)
 	case discoveryResultMsg:
 		// Startup and refresh both deliver this after the dashboard is already
@@ -3189,6 +3191,10 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 
 	case viewStateAgentAPI:
 		model, cmd := m.handleAgentAPIUpdate(msg)
+		return model, cmd, true
+
+	case viewStateAgentUpdates:
+		model, cmd := m.handleAgentUpdatesUpdate(msg)
 		return model, cmd, true
 
 	case viewStateSnapshotBrowser:
@@ -3619,6 +3625,9 @@ func (m *Model) renderView() string {
 
 	case viewStateAgentAPI:
 		return m.renderAgentAPIView()
+
+	case viewStateAgentUpdates:
+		return m.renderAgentUpdatesView()
 
 	case viewStateSnapshotBrowser:
 		return docStyle.Render(m.snapshotBrowser.viewString())

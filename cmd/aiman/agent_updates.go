@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/agentupdate"
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
@@ -53,6 +55,55 @@ func newAgentUpdates(cfg config.AgentUpdateConfig, dir string, deps agentUpdateD
 		m.AfterUpdate = func(string) { deps.EnsureHooks() }
 	}
 	return m
+}
+
+// agentNotifier is the part of notify.Recorder agent updates use.
+type agentNotifier interface {
+	Emit(ctx context.Context, sessionID, label string, kind domain.NotifyKind, detail string) error
+}
+
+// wireAgentUpdateNotify raises agent_update notifications with no session
+// id. A new version is announced in notify mode, and in auto mode only for
+// held agents, since auto mode reports the update it applies instead. Only
+// automatic updates are reported; a manual one answers on the agents page.
+func wireAgentUpdateNotify(ctx context.Context, m *agentupdate.Manager, n agentNotifier, host string) {
+	emit := func(agent, text string) {
+		if err := n.Emit(ctx, "", agent, domain.NotifyAgentUpdate, text); err != nil {
+			log.Printf("agent updates: notify %s: %v", agent, err)
+		}
+	}
+	m.OnNewVersion = func(a agentupdate.AgentState) {
+		if m.Policy.Mode == agentupdate.ModeAuto && !m.Policy.Held(a.Agent) {
+			return
+		}
+		emit(a.Agent, agentNewVersionText(a, host))
+	}
+	m.OnApplied = func(a agentupdate.Applied) {
+		if a.Auto {
+			emit(a.Agent, agentAppliedText(a))
+		}
+	}
+}
+
+// agentNewVersionText is the notification for a newly published version.
+func agentNewVersionText(a agentupdate.AgentState, host string) string {
+	return fmt.Sprintf("%s %s → %s on %s (press a on Agent API)", a.Agent, a.Installed, a.Latest, host)
+}
+
+// agentAppliedText reports one automatic update: the versions on success,
+// the first line of the error on failure.
+func agentAppliedText(a agentupdate.Applied) string {
+	if !a.OK {
+		msg := strings.TrimSpace(a.Err)
+		if i := strings.IndexByte(msg, '\n'); i >= 0 {
+			msg = strings.TrimSpace(msg[:i])
+		}
+		return fmt.Sprintf("%s update failed: %s", a.Agent, msg)
+	}
+	if a.To == "" {
+		return fmt.Sprintf("updated %s from %s", a.Agent, a.From)
+	}
+	return fmt.Sprintf("updated %s %s → %s", a.Agent, a.From, a.To)
 }
 
 // agentPathDirs are the per-user install prefixes agents use. Serve runs
