@@ -296,6 +296,10 @@ repos:
       claude: {model: opus, effort: high}
 roles:
   verifier: {agent: codex, model: "", effort: high}
+  handover: {agent: "", model: "", effort: ""}   # handover child; empty model = cheap model
+handover:
+  child: true                   # default on; false keeps the mechanical handover only
+  timeout: 10m                  # limit for one child run
 verify:
   test_command: "make test"     # the review passes only when this exits 0
   before_pr: true               # block gh pr create until a review passes
@@ -323,6 +327,18 @@ warning but do not block create. Launch model/effort precedence is `agent_defaul
 `repos.<slug>.agent_overrides` < `roles.verifier`. The `V verify` hint appears for a
 non-reviewer session with commits ahead of its base; `verify.test_command` supplies the
 evidence a passing review needs.
+
+Every handover (archive, forget, restart, agent switch, pre-compact) first writes a
+mechanical `.aiman_handover.md`. With `handover.child` on, serve then starts a hidden
+child agent in `~/.aiman/handovers/<run-id>/` that reads the transcript, rewrites the
+handover, and proposes memory candidates. The child agent is the first installed of
+`roles.handover.agent`, `agents.preferred`, then the worker's own agent. With no
+`roles.handover.model` it runs a cheap model: `haiku` for Claude, `gpt-5.4-mini` for
+Codex, `gpt-5-mini` for Copilot, `gemini-3.7-flash-low` for agy. The child runs
+prompt-free and is only told not to edit, commit or push. A failed, incomplete or
+timed-out child (`handover.timeout`, default 10m) leaves the mechanical handover in place.
+A pre-compact pointer waits until the child finishes, and a restart or agent switch gets a
+note to re-read the rewritten file.
 
 Coordinators start child sessions with `aiman session create --for <todo-id>`; the server
 picks the first installed command from `agents.preferred` when `--agent` is omitted. Give a
@@ -583,6 +599,7 @@ Press `m` to access, in order:
 | **General Settings** | Experimental and general feature flags |
 | **Agent defaults** | Per-agent launch model and thinking/reasoning effort |
 | **Shared context** | Store size, lookups, and pack usage per remote |
+| **Memory candidates** | Accept, edit or drop notes proposed from handovers |
 | **AI Settings** | Enable the local model; Ollama host and model choice |
 | **Secrets** | Env-var secrets injected into new sessions |
 | **AWS Credentials** | Status, lifetime and renewal of delegated profiles; profile allowlist |
@@ -837,6 +854,8 @@ aiman context import [--agent all|claude,grok,codex,agy] [--group GROUP] [--repo
 ```
 
 `ls`/`find` return abstracts. `get` returns the body. Create and restart pack abstracts into `.aiman_context.md`. Archiving a session writes one note from the snapshot summary.
+
+Each handover also queues proposed memory notes on serve. Menu → **Memory candidates** lists them per remote: `a` accepts (saved under the session's group, else its repo), `e` edits, `d` drops. The handover child supplies the candidates. Ollama is only a fallback: it proposes for a job that arrived without candidates when `ai.enabled` is on, and otherwise that job is cleared.
 
 `import` copies this host's agent memories into the store: Claude auto-memory under `~/.claude/projects/*/memory/`, Grok `~/.grok/memory/**/MEMORY.md`, Codex `~/.codex/memories/*.md`, and agy `walkthrough.md` files. Project notes go under the git origin slug when it can be inferred. Re-running overwrites the same ids. `--group` / `--repo` pin every imported note to that namespace.
 
