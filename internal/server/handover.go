@@ -311,13 +311,22 @@ func (s *Server) writeHandover(ctx context.Context, sess domain.Session, reason 
 	return handoverResult{Path: path, Written: changed, NoteID: id, Child: child}, nil
 }
 
-// childRewroteSameState reports whether the file on disk is a child's rewrite
-// of a render identical to sha.
+// childRewroteSameState reports whether the file on disk is, byte for byte,
+// a child's rewrite of a render identical to sha.
 func (s *Server) childRewroteSameState(sessionID, sha, path string) bool {
 	if s.handovers == nil {
 		return false
 	}
-	return s.handovers.LastMechanicalSHA(sessionID) == sha && regularFileExists(path)
+	mech, applied := s.handovers.LastApplied(sessionID)
+	if mech != sha || applied == "" {
+		return false
+	}
+	body, err := os.ReadFile(path) //nolint:gosec // path is the session's handover file
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:]) == applied
 }
 
 // startHandoverChild starts a handover child, or joins the active one, and
@@ -485,7 +494,7 @@ func (s *Server) putHandoverNote(ctx context.Context, sess domain.Session, in ha
 			return
 		}
 	}
-	ns, key := handoverNamespace(sess)
+	ns, key := handover.NoteNamespace(sess.Group, sess.IssueKey, sess.RepoName)
 	_, err := s.ctxStore.Put(ctx, domain.ContextEntry{
 		ID:        id,
 		Namespace: ns,
@@ -500,21 +509,6 @@ func (s *Server) putHandoverNote(ctx context.Context, sess domain.Session, in ha
 	if err != nil {
 		log.Printf("handover: context note %s: %v", id, err)
 	}
-}
-
-// handoverNamespace matches contextstore.EntryFromSnapshot: group, else the
-// issue key as a group, else the repo, else the host note.
-func handoverNamespace(sess domain.Session) (string, string) {
-	if g := strings.TrimSpace(sess.Group); g != "" {
-		return domain.ContextNSGroup, g
-	}
-	if issue := strings.TrimSpace(sess.IssueKey); issue != "" {
-		return domain.ContextNSGroup, issue
-	}
-	if repo := strings.TrimSpace(sess.RepoName); repo != "" {
-		return domain.ContextNSRepo, repo
-	}
-	return domain.ContextNSHost, "host"
 }
 
 // diffStat is `git diff --stat` against the merge base of base and HEAD.

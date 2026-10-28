@@ -158,12 +158,33 @@ type serverSessions struct {
 	cleanupReason string
 }
 
+// Get wraps domain.ErrSessionNotFound only when the registry was read and
+// has no such session; a failed read is a different error.
 func (a serverSessions) Get(ctx context.Context, id string) (domain.Session, error) {
-	sess, ok := a.s.findSession(ctx, id)
+	list, err := a.s.loadSessions(ctx)
+	if err != nil {
+		return domain.Session{}, fmt.Errorf("reading sessions for %s: %w", id, err)
+	}
+	sess, ok := resolveSession(list, id)
 	if !ok {
-		return domain.Session{}, fmt.Errorf("session %s not found", id)
+		return domain.Session{}, fmt.Errorf("session %s: %w", id, domain.ErrSessionNotFound)
 	}
 	return a.s.liveSession(ctx, sess), nil
+}
+
+// Children lists the sessions whose parent is parentID.
+func (a serverSessions) Children(ctx context.Context, parentID string) ([]domain.Session, error) {
+	list, err := a.s.loadSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.Session
+	for _, sess := range list {
+		if sess.ParentID == parentID {
+			out = append(out, sess)
+		}
+	}
+	return out, nil
 }
 
 // CreateChild creates the child through serve's creator and stores the

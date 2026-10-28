@@ -85,8 +85,8 @@ func TestSuccess(t *testing.T) {
 	if _, err := os.Stat(run.Dir); !os.IsNotExist(err) {
 		t.Fatalf("scratch dir left: %v", err)
 	}
-	if got := r.m.LastMechanicalSHA("w1"); got != "sha-1" {
-		t.Fatalf("LastMechanicalSHA %q", got)
+	if got, _ := r.m.LastApplied("w1"); got != "sha-1" {
+		t.Fatalf("LastApplied %q", got)
 	}
 }
 
@@ -161,8 +161,8 @@ func assertFallback(t *testing.T, r *rig) {
 	if notes := r.steer.all(); len(notes) != 0 {
 		t.Fatalf("steer %+v", notes)
 	}
-	if got := r.m.LastMechanicalSHA("w1"); got != "" {
-		t.Fatalf("LastMechanicalSHA %q after a fallback", got)
+	if got, _ := r.m.LastApplied("w1"); got != "" {
+		t.Fatalf("LastApplied %q after a fallback", got)
 	}
 }
 

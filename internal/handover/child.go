@@ -3,6 +3,8 @@ package handover
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -22,6 +24,9 @@ const (
 
 // MaxChildHandoverBytes caps the handover a child may produce.
 const MaxChildHandoverBytes = 64 << 10
+
+// MaxChildMemoriesBytes caps the memories.json a child may produce.
+const MaxChildMemoriesBytes = 256 << 10
 
 // BriefInput is what a handover child is told. All paths are absolute because
 // the child's working directory is not guaranteed to be Dir.
@@ -83,6 +88,17 @@ func ChildBrief(in BriefInput) string {
 	return b.String()
 }
 
+// ReadChildFile reads at most limit+1 bytes of path, enough for a parser to
+// see that the file is over limit without loading all of it.
+func ReadChildFile(path string, limit int) ([]byte, error) {
+	f, err := os.Open(path) //nolint:gosec // path is inside the run's scratch directory
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(io.LimitReader(f, int64(limit)+1))
+}
+
 // ParseChildHandover validates a child's handover.md and returns its text.
 func ParseChildHandover(raw []byte) (string, error) {
 	if len(raw) > MaxChildHandoverBytes {
@@ -98,8 +114,12 @@ func ParseChildHandover(raw []byte) (string, error) {
 	return md, nil
 }
 
-// ParseChildCandidates reads a child's memories.json. Invalid JSON yields nil.
+// ParseChildCandidates reads a child's memories.json. Invalid JSON, or a file
+// over MaxChildMemoriesBytes, yields nil.
 func ParseChildCandidates(raw []byte) []domain.MemoryCandidate {
+	if len(raw) > MaxChildMemoriesBytes {
+		return nil
+	}
 	var result struct {
 		Candidates []domain.MemoryCandidate `json:"candidates"`
 	}

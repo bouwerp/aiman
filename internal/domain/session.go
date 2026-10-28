@@ -179,6 +179,10 @@ type PullRequest struct {
 
 var ErrInvalidTransition = errors.New("invalid session state transition")
 
+// ErrSessionNotFound means a session lookup found no such session. Other
+// lookup errors mean the registry could not be read.
+var ErrSessionNotFound = errors.New("session not found")
+
 func (s *Session) Transition(target SessionStatus) error {
 	switch s.Status {
 	case "", SessionStatusInactive:

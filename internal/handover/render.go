@@ -104,6 +104,23 @@ func Abstract(in Input) string {
 	return "Handover at " + in.Reason
 }
 
+// NoteNamespace is where a session's handover note lives, matching
+// contextstore.EntryFromSnapshot: the group, else the issue key as a group,
+// else the repo, else the host note. Serve's mechanical write and the handover
+// child both use it, so they store one note.
+func NoteNamespace(group, issueKey, repo string) (string, string) {
+	if g := strings.TrimSpace(group); g != "" {
+		return domain.ContextNSGroup, g
+	}
+	if issue := strings.TrimSpace(issueKey); issue != "" {
+		return domain.ContextNSGroup, issue
+	}
+	if r := strings.TrimSpace(repo); r != "" {
+		return domain.ContextNSRepo, r
+	}
+	return domain.ContextNSHost, "host"
+}
+
 func goal(in Input) string {
 	if text, ok := activeText(in.Todos); ok {
 		return text

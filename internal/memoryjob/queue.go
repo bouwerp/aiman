@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -55,7 +56,8 @@ func Open(db *sql.DB) (*Queue, error) {
 	return &Queue{db: db}, nil
 }
 
-// Enqueue replaces any unfinished job for the same session.
+// Enqueue replaces any unfinished job for the same session. A job whose id is
+// already stored, pending or done, is left as it is.
 func (q *Queue) Enqueue(ctx context.Context, j Job) error {
 	if j.ID == "" {
 		j.ID = uuid.NewString()
@@ -76,6 +78,13 @@ func (q *Queue) Enqueue(ctx context.Context, j Job) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var exists int
+	switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM memory_jobs WHERE id = ?`, j.ID).Scan(&exists); {
+	case err == nil:
+		return nil // already queued or handed out; a retry must not queue it again
+	case !errors.Is(err, sql.ErrNoRows):
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM memory_jobs WHERE session_id = ? AND done = 0`, j.SessionID); err != nil {
 		return err
 	}

@@ -2,7 +2,6 @@ package handoverchild
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,16 +21,46 @@ type fakeSessions struct {
 	created   []domain.SessionConfig
 	forgotten []string
 	createErr error
+	getErr    map[string]error // transient lookup errors by id
 }
 
-func (f *fakeSessions) Get(_ context.Context, id string) (domain.Session, error) {
+// Get fails like serve's registry: a cancelled context or a read error is
+// not ErrSessionNotFound.
+func (f *fakeSessions) Get(ctx context.Context, id string) (domain.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.Session{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.getErr[id]; err != nil {
+		return domain.Session{}, err
+	}
 	s, ok := f.sessions[id]
 	if !ok {
-		return domain.Session{}, errors.New("session not found")
+		return domain.Session{}, fmt.Errorf("session %s: %w", id, domain.ErrSessionNotFound)
 	}
 	return s, nil
+}
+
+func (f *fakeSessions) Children(_ context.Context, parentID string) ([]domain.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []domain.Session
+	for _, s := range f.sessions {
+		if s.ParentID == parentID {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeSessions) setGetErr(id string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr == nil {
+		f.getErr = map[string]error{}
+	}
+	f.getErr[id] = err
 }
 
 func (f *fakeSessions) CreateChild(_ context.Context, cfg domain.SessionConfig) (domain.Session, error) {
@@ -43,7 +72,7 @@ func (f *fakeSessions) CreateChild(_ context.Context, cfg domain.SessionConfig) 
 	}
 	s := domain.Session{
 		ID: fmt.Sprintf("child-%d", len(f.created)), Name: cfg.Name, ParentID: cfg.ParentID, Role: cfg.Role,
-		WorktreePath: cfg.PreparedWorktree, WorkingDirectory: cfg.PreparedWorktree, Status: domain.SessionStatusActive,
+		Branch: cfg.Branch, WorktreePath: cfg.PreparedWorktree, WorkingDirectory: cfg.PreparedWorktree, Status: domain.SessionStatusActive,
 	}
 	f.sessions[s.ID] = s
 	return s, nil
@@ -161,7 +190,10 @@ type fakeContext struct {
 	puts []domain.ContextEntry
 }
 
-func (f *fakeContext) Put(_ context.Context, e domain.ContextEntry) (domain.ContextEntry, error) {
+func (f *fakeContext) Put(ctx context.Context, e domain.ContextEntry) (domain.ContextEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.ContextEntry{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.puts = append(f.puts, e)
@@ -179,7 +211,10 @@ type fakeJobs struct {
 	jobs []memoryjob.Job
 }
 
-func (f *fakeJobs) Enqueue(_ context.Context, j memoryjob.Job) error {
+func (f *fakeJobs) Enqueue(ctx context.Context, j memoryjob.Job) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.jobs = append(f.jobs, j)

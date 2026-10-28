@@ -156,3 +156,26 @@ func TestJobOmitsEmptyCandidatesFromJSON(t *testing.T) {
 		t.Fatalf("json = %s", b)
 	}
 }
+
+func TestEnqueueSameIDIsNoOp(t *testing.T) {
+	q := openQueue(t)
+	ctx := context.Background()
+	j := Job{ID: "run-1", SessionID: "s1", Source: "first"}
+	if err := q.Enqueue(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Done(ctx, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	// A retried enqueue of a job already handed out must not queue it again.
+	if err := q.Enqueue(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := q.Pending(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("pending = %+v, want none", jobs)
+	}
+}

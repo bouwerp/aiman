@@ -46,6 +46,7 @@ type Run struct {
 	Transcript   string   `json:"transcript,omitempty"` // worker AgentSessionPath at start
 	Worktree     string   `json:"worktree,omitempty"`
 	Group        string   `json:"group,omitempty"`
+	IssueKey     string   `json:"issue_key,omitempty"`
 	Repo         string   `json:"repo,omitempty"`
 	Label        string   `json:"label,omitempty"`
 	Abstract     string   `json:"abstract,omitempty"`
@@ -54,15 +55,17 @@ type Run struct {
 	Mechanical    string `json:"mechanical,omitempty"`
 	MechanicalSHA string `json:"mechanical_sha,omitempty"`
 	// HeldPointer is a steering note withheld until the run ends.
-	HeldPointer     string    `json:"held_pointer,omitempty"`
-	PointerReleased bool      `json:"pointer_released,omitempty"`
-	Applied         bool      `json:"applied,omitempty"` // child handover written to the worker
-	Candidates      int       `json:"candidates,omitempty"`
-	Status          Status    `json:"status"`
-	Error           string    `json:"error,omitempty"`
-	CleanedUp       bool      `json:"cleaned_up,omitempty"`
-	StartedAt       time.Time `json:"started_at"`
-	FinishedAt      time.Time `json:"finished_at,omitzero"`
+	HeldPointer     string `json:"held_pointer,omitempty"`
+	PointerReleased bool   `json:"pointer_released,omitempty"`
+	Applied         bool   `json:"applied,omitempty"` // child handover written to the worker
+	// AppliedSHA is the sha256 of the worker file the child's handover became.
+	AppliedSHA string    `json:"applied_sha,omitempty"`
+	Candidates int       `json:"candidates,omitempty"`
+	Status     Status    `json:"status"`
+	Error      string    `json:"error,omitempty"`
+	CleanedUp  bool      `json:"cleaned_up,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at,omitzero"`
 }
 
 // ErrNotFound means the run id is not in the store.
@@ -124,6 +127,19 @@ func (s *Store) Get(id string) (Run, error) {
 		return Run{}, fmt.Errorf("decode run %s: %w", id, err)
 	}
 	return r, nil
+}
+
+// Delete removes one run. A missing run is not an error.
+func (s *Store) Delete(id string) error {
+	if !validRunID(id) {
+		return ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.Remove(filepath.Join(s.dir, id+".json")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // List returns every run, newest StartedAt first.

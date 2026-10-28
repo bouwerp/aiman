@@ -3,6 +3,7 @@ package handoverchild
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -169,6 +170,12 @@ func (m *Manager) Start(_ context.Context, req StartRequest) (runID string, star
 			return "", false, err
 		}
 		r.LaterReasons = append(r.LaterReasons, req.Reason)
+		// The newest render is the fallback if this child fails.
+		if len(req.Mechanical) > 0 {
+			r.Mechanical, r.MechanicalSHA = string(req.Mechanical), req.MechanicalSHA
+			r.Label, r.Abstract = req.Label, req.Abstract
+			r.Group, r.IssueKey, r.Repo = w.Group, w.IssueKey, w.RepoName
+		}
 		m.saveLocked(r)
 		return id, false, nil
 	}
@@ -181,6 +188,7 @@ func (m *Manager) Start(_ context.Context, req StartRequest) (runID string, star
 		Transcript:    w.AgentSessionPath,
 		Worktree:      w.WorktreePath,
 		Group:         w.Group,
+		IssueKey:      w.IssueKey,
 		Repo:          w.RepoName,
 		Label:         req.Label,
 		Abstract:      req.Abstract,
@@ -223,53 +231,115 @@ func (m *Manager) HoldPointer(sessionID, text string) bool {
 	return m.saveLocked(r)
 }
 
-// LastMechanicalSHA is the mechanical fingerprint of the worker's newest run
-// when that run wrote the worker's handover file, else "". A matching new
-// render means the file on disk is a child's rewrite of the same state.
-func (m *Manager) LastMechanicalSHA(sessionID string) string {
+// LastApplied returns the fingerprints of the worker's newest run when that
+// run wrote the worker's handover file: the sha256 of the mechanical render it
+// replaced and of the file it wrote. Both are "" otherwise. A new render with
+// the same mechanical sha, over a file with the applied sha, means the file on
+// disk is still the child's rewrite of the same state.
+func (m *Manager) LastApplied(sessionID string) (mechanicalSHA, appliedSHA string) {
 	all, err := m.d.Store.List()
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	for _, r := range all {
 		if r.SessionID != sessionID {
 			continue
 		}
 		if r.Applied {
-			return r.MechanicalSHA
+			return r.MechanicalSHA, r.AppliedSHA
 		}
-		return ""
+		return "", ""
 	}
-	return ""
+	return "", ""
 }
 
 // Resume picks up runs a previous serve left behind: running ones are watched
-// again, starting ones fail with the mechanical fallback, and finished ones
-// that were not cleaned up are cleaned now.
+// again, starting ones fail with the mechanical fallback after any child they
+// created is found, and finished ones that were not cleaned up are cleaned
+// now. Cleaned-up runs that LastApplied no longer reads are deleted.
 func (m *Manager) Resume(context.Context) {
 	all, err := m.d.Store.List()
 	if err != nil {
 		log.Printf("handoverchild: resume: %v", err)
 		return
 	}
+	m.prune(all)
 	for _, r := range all {
 		switch {
 		case r.Status == StatusRunning:
-			m.mu.Lock()
-			m.active[r.SessionID] = r.ID
-			m.mu.Unlock()
+			m.setActive(r)
 			m.goBG(func(ctx context.Context) { m.watch(ctx, r) })
 		case r.Status == StatusStarting:
+			m.setActive(r)
 			m.goBG(func(ctx context.Context) {
-				m.finish(ctx, r.ID, StatusFailed, "serve restarted before the child started")
+				m.adoptOrphan(ctx, r)
+				m.retry(ctx, func() bool {
+					return m.finish(ctx, r.ID, StatusFailed, "serve restarted before the child started")
+				})
 			})
 		case !r.CleanedUp:
 			m.goBG(func(ctx context.Context) {
-				m.releasePointer(ctx, r.ID)
-				m.cleanup(ctx, r.ID)
+				if m.retry(ctx, func() bool { return m.releasePointer(ctx, r.ID) }) {
+					m.cleanup(ctx, r.ID)
+				}
 			})
 		}
 	}
+}
+
+func (m *Manager) setActive(r Run) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.active[r.SessionID] = r.ID
+}
+
+// retry calls fn every Poll until it reports done or ctx ends, and reports
+// whether fn got done.
+func (m *Manager) retry(ctx context.Context, fn func() bool) bool {
+	for !fn() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(m.d.Poll):
+		}
+	}
+	return true
+}
+
+// ChildLister lists the sessions whose parent is parentID. Serve's registry
+// implements it; without it a child created just before a crash is left for
+// the user to forget.
+type ChildLister interface {
+	Children(ctx context.Context, parentID string) ([]domain.Session, error)
+}
+
+// adoptOrphan records on a starting run the child a crashed serve created but
+// did not save, matched by parent, role, and the run's branch or scratch
+// directory, so cleanup stops and forgets it.
+func (m *Manager) adoptOrphan(ctx context.Context, r Run) {
+	lister, ok := m.d.Sessions.(ChildLister)
+	if r.ChildID != "" || !ok {
+		return
+	}
+	kids, err := lister.Children(ctx, r.SessionID)
+	if err != nil {
+		log.Printf("handoverchild: run %s: list children: %v", r.ID, err)
+		return
+	}
+	branch := childBranch(r.ID)
+	for _, k := range kids {
+		if k.Role != domain.SessionRoleHandover {
+			continue
+		}
+		if k.Branch == branch || (r.Dir != "" && (k.WorktreePath == r.Dir || k.WorkingDirectory == r.Dir)) {
+			m.update(r.ID, func(x *Run) { x.ChildID = k.ID })
+			return
+		}
+	}
+}
+
+func childBranch(runID string) string {
+	return "handover-" + runID[:min(8, len(runID))]
 }
 
 // launch builds the scratch directory and creates the child session. A
@@ -283,11 +353,17 @@ func (m *Manager) launch(ctx context.Context, r Run, worker domain.Session) {
 		if agentName != "" {
 			m.update(r.ID, func(x *Run) { x.Agent = agentName })
 		}
-		m.finish(ctx, r.ID, StatusFailed, err.Error())
+		m.retry(ctx, func() bool { return m.finish(ctx, r.ID, StatusFailed, err.Error()) })
 		return
 	}
-	r, ok := m.update(r.ID, func(x *Run) {
-		x.ChildID, x.Agent, x.Status = child.ID, agentName, StatusRunning
+	// The child id is saved first, so cleanup can always find the child. A
+	// failed save is retried; a crash before it leaves adoptOrphan to Resume.
+	id, ok := r.ID, false
+	m.retry(ctx, func() bool {
+		r, ok = m.update(id, func(x *Run) {
+			x.ChildID, x.Agent, x.Status = child.ID, agentName, StatusRunning
+		})
+		return ok
 	})
 	if !ok {
 		return
@@ -327,7 +403,7 @@ func (m *Manager) prepare(ctx context.Context, r Run, worker domain.Session) (do
 		Group:            worker.Group,
 		ParentID:         worker.ID,
 		Role:             domain.SessionRoleHandover,
-		Branch:           "handover-" + r.ID[:min(8, len(r.ID))],
+		Branch:           childBranch(r.ID),
 		Agent:            &childAgent,
 		AdHoc:            true,
 		PromptFree:       true,
@@ -372,7 +448,8 @@ func (m *Manager) watch(ctx context.Context, r Run) {
 }
 
 // check finishes the run when the child wrote the done marker, exited, or ran
-// out of time. It reports whether the run is finished.
+// out of time. It reports whether the run is finished; a finish that could not
+// read the worker is retried on the next poll.
 func (m *Manager) check(ctx context.Context, r Run) bool {
 	var status Status
 	switch {
@@ -385,18 +462,33 @@ func (m *Manager) check(ctx context.Context, r Run) bool {
 	default:
 		return false
 	}
-	m.finish(ctx, r.ID, status, "")
-	return true
+	return m.finish(ctx, r.ID, status, "")
 }
 
 // childExited treats a SessionEnd report, a dead terminal or a missing
-// session as the child having stopped.
+// session as the child having stopped. A registry that cannot answer is not
+// an exit.
 func (m *Manager) childExited(ctx context.Context, id string) bool {
-	s, err := m.d.Sessions.Get(ctx, id)
+	s, present, err := m.session(ctx, id)
 	if err != nil {
-		return true
+		log.Printf("handoverchild: read child %s: %v", id, err)
+		return false
 	}
-	return s.AgentEnded || !m.d.Terminal.Alive(ctx, s)
+	return !present || s.AgentEnded || !m.d.Terminal.Alive(ctx, s)
+}
+
+// session reads one session. A missing session is present false with a nil
+// error; any other error means the registry could not answer.
+func (m *Manager) session(ctx context.Context, id string) (domain.Session, bool, error) {
+	s, err := m.d.Sessions.Get(ctx, id)
+	switch {
+	case err == nil:
+		return s, true, nil
+	case errors.Is(err, domain.ErrSessionNotFound):
+		return domain.Session{}, false, nil
+	default:
+		return domain.Session{}, false, err
+	}
 }
 
 // outputs are what a complete child left in its scratch directory.
@@ -408,48 +500,61 @@ type outputs struct {
 
 func readOutputs(dir string) outputs {
 	var o outputs
-	raw, err := os.ReadFile(filepath.Join(dir, handover.HandoverFile))
+	raw, err := handover.ReadChildFile(filepath.Join(dir, handover.HandoverFile), handover.MaxChildHandoverBytes)
 	if err == nil {
 		o.handover, err = handover.ParseChildHandover(raw)
 	}
 	if err != nil {
 		o.err = "child handover rejected: " + err.Error()
 	}
-	if raw, err := os.ReadFile(filepath.Join(dir, handover.MemoriesFile)); err == nil {
+	if raw, err := handover.ReadChildFile(filepath.Join(dir, handover.MemoriesFile), handover.MaxChildMemoriesBytes); err == nil {
 		o.candidates = handover.ParseChildCandidates(raw)
 	}
 	return o
 }
 
+// applyTimeout bounds one finish attempt. The attempt runs on its own context
+// so a Close mid-finish still writes the note and queues the memory job.
+const applyTimeout = 30 * time.Second
+
 // finish applies the run's outcome, records it, and cleans up. Only a
 // complete run contributes outputs; every other status falls back to the
 // mechanical handover. A gone worker gets no file and no steer, but the note
-// and the memory job still go out.
-func (m *Manager) finish(ctx context.Context, id string, status Status, errText string) {
+// and the memory job still go out. It reports false when the worker could not
+// be read or the outcome could not be saved, and the caller retries. Every
+// step before the save is safe to repeat.
+func (m *Manager) finish(ctx context.Context, id string, status Status, errText string) bool {
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), applyTimeout)
+	defer cancel()
 	r, err := m.d.Store.Get(id)
 	if err != nil {
 		log.Printf("handoverchild: finish %s: %v", id, err)
-		return
+		return errors.Is(err, ErrNotFound)
+	}
+	worker, present, err := m.session(actx, r.SessionID)
+	if err != nil {
+		log.Printf("handoverchild: run %s: read worker: %v", r.ID, err)
+		return false
 	}
 	var out outputs
 	if status == StatusComplete {
 		out = readOutputs(r.Dir)
 		errText = out.err
 	}
-	worker, werr := m.d.Sessions.Get(ctx, r.SessionID)
-	workerExists := werr == nil
 
-	applied := false
-	if out.handover != "" && workerExists {
-		applied = m.writeWorkerFile(worker, out.handover)
+	applied, appliedSHA := false, ""
+	if out.handover != "" && present {
+		appliedSHA, applied = m.writeWorkerFile(worker, out.handover)
 	}
 	body := out.handover
 	if body == "" {
 		body = strings.TrimPrefix(r.Mechanical, domain.AimanScaffoldHeader)
 	}
-	m.putNote(ctx, r, worker, workerExists, body)
+	m.putNote(actx, r, worker, present, body)
 	if m.d.Jobs != nil {
-		if err := m.d.Jobs.Enqueue(ctx, memoryjob.Job{
+		// The run id makes a retried enqueue a no-op.
+		if err := m.d.Jobs.Enqueue(actx, memoryjob.Job{
+			ID:         r.ID,
 			SessionID:  r.SessionID,
 			Reason:     r.Reason,
 			Group:      r.Group,
@@ -464,30 +569,55 @@ func (m *Manager) finish(ctx context.Context, id string, status Status, errText 
 
 	r, ok := m.update(id, func(x *Run) {
 		x.Status, x.Error, x.Applied, x.Candidates = status, errText, applied, len(out.candidates)
+		x.AppliedSHA = appliedSHA
 		x.FinishedAt = m.d.Now()
 	})
 	if !ok {
-		return
+		return false
 	}
-	if !m.releasePointer(ctx, id) && applied && (r.Reason == "restart" || r.Reason == "agent_switch") {
+	if !m.deliverPointer(id, present) && applied && (r.Reason == "restart" || r.Reason == "agent_switch") {
 		m.steer(r.SessionID, HandoverRefreshedNote)
 	}
-	m.ledger(ctx, r.SessionID, domain.EventHandoverChildFinished, map[string]any{
+	m.ledger(actx, r.SessionID, domain.EventHandoverChildFinished, map[string]any{
 		"run": r.ID, "agent": r.Agent, "reason": r.Reason, "status": string(status),
 		"candidates": len(out.candidates), "error": errText,
 	})
+	// Cleanup follows ctx so Close does not wait out cleanupWait; an
+	// interrupted cleanup is left for Resume.
 	m.cleanup(ctx, id)
+	m.pruneStore()
+	return true
 }
 
-// releasePointer queues the run's held pointer once, when the worker still
-// exists, and reports whether the run held one. A crash between the queue and
-// the save delivers it twice, which is accepted.
+// releasePointer delivers a finished run's held pointer for Resume. It
+// reports false, leaving the pointer held, when the worker could not be read.
 func (m *Manager) releasePointer(ctx context.Context, id string) bool {
+	r, err := m.d.Store.Get(id)
+	if err != nil {
+		return errors.Is(err, ErrNotFound)
+	}
+	if r.HeldPointer == "" || r.PointerReleased {
+		return true
+	}
+	_, present, err := m.session(ctx, r.SessionID)
+	if err != nil {
+		log.Printf("handoverchild: run %s: read worker: %v", r.ID, err)
+		return false
+	}
+	m.deliverPointer(id, present)
+	return true
+}
+
+// deliverPointer queues the run's held pointer once, when the worker is
+// present, and reports whether the run held one. A gone worker's pointer is
+// marked released without a steer. A crash between the queue and the save
+// delivers it twice, which is accepted.
+func (m *Manager) deliverPointer(id string, present bool) bool {
 	r, err := m.d.Store.Get(id)
 	if err != nil || r.HeldPointer == "" || r.PointerReleased {
 		return false
 	}
-	if _, err := m.d.Sessions.Get(ctx, r.SessionID); err == nil {
+	if present {
 		m.steer(r.SessionID, r.HeldPointer)
 	}
 	m.update(id, func(x *Run) { x.PointerReleased = true })
@@ -495,38 +625,41 @@ func (m *Manager) releasePointer(ctx context.Context, id string) bool {
 }
 
 // writeWorkerFile replaces the worker's .aiman_handover.md with the child's
-// handover under the scaffold header, when the worker directory exists.
-func (m *Manager) writeWorkerFile(worker domain.Session, md string) bool {
+// handover under the scaffold header, when the worker directory exists. It
+// returns the sha256 of the bytes written.
+func (m *Manager) writeWorkerFile(worker domain.Session, md string) (string, bool) {
 	dir := strings.TrimSpace(worker.WorkingDirectory)
 	if dir == "" {
 		dir = strings.TrimSpace(worker.WorktreePath)
 	}
 	if dir == "" {
-		return false
+		return "", false
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return false
+		return "", false
 	}
 	if !strings.HasPrefix(md, domain.AimanScaffoldHeader) {
 		md = domain.AimanScaffoldHeader + md
 	}
 	if _, err := fsutil.WriteIfChanged(filepath.Join(dir, domain.AimanHandoverFileName), []byte(md), 0o644); err != nil {
 		log.Printf("handoverchild: write handover for %s: %v", worker.ID, err)
-		return false
+		return "", false
 	}
-	return true
+	sum := sha256.Sum256([]byte(md))
+	return hex.EncodeToString(sum[:]), true
 }
 
-// putNote stores the shared-context note handover-<worker id>, the same id
-// serve's mechanical write uses.
-func (m *Manager) putNote(ctx context.Context, r Run, worker domain.Session, workerExists bool, body string) {
+// putNote stores the shared-context note handover-<worker id> in the same
+// namespace serve's mechanical write uses. A gone worker's namespace comes
+// from the fields the run captured at start.
+func (m *Manager) putNote(ctx context.Context, r Run, worker domain.Session, present bool, body string) {
 	if m.d.Context == nil {
 		return
 	}
-	if !workerExists {
-		worker = domain.Session{ID: r.SessionID, Group: r.Group, RepoName: r.Repo}
+	if !present {
+		worker = domain.Session{ID: r.SessionID, Group: r.Group, IssueKey: r.IssueKey, RepoName: r.Repo}
 	}
-	ns, key := noteNamespace(worker)
+	ns, key := handover.NoteNamespace(worker.Group, worker.IssueKey, worker.RepoName)
 	_, err := m.d.Context.Put(ctx, domain.ContextEntry{
 		ID:        "handover-" + contextstore.SafeKey(r.SessionID),
 		Namespace: ns,
@@ -543,31 +676,49 @@ func (m *Manager) putNote(ctx context.Context, r Run, worker domain.Session, wor
 	}
 }
 
-// noteNamespace matches serve's handover note: group, else the issue key as a
-// group, else the repo, else the host note.
-func noteNamespace(sess domain.Session) (string, string) {
-	if g := strings.TrimSpace(sess.Group); g != "" {
-		return domain.ContextNSGroup, g
+// pruneStore deletes runs that are cleaned up and not their session's newest.
+func (m *Manager) pruneStore() {
+	all, err := m.d.Store.List()
+	if err != nil {
+		log.Printf("handoverchild: prune: %v", err)
+		return
 	}
-	if issue := strings.TrimSpace(sess.IssueKey); issue != "" {
-		return domain.ContextNSGroup, issue
+	m.prune(all)
+}
+
+// prune deletes, from all (newest first), the cleaned-up runs that are not
+// their session's newest. The newest stays because LastApplied reads it, and
+// a run not yet cleaned up stays for Resume.
+func (m *Manager) prune(all []Run) {
+	seen := map[string]bool{}
+	for _, r := range all {
+		newest := !seen[r.SessionID]
+		seen[r.SessionID] = true
+		if newest || !r.CleanedUp {
+			continue
+		}
+		if err := m.d.Store.Delete(r.ID); err != nil {
+			log.Printf("handoverchild: prune run %s: %v", r.ID, err)
+		}
 	}
-	if repo := strings.TrimSpace(sess.RepoName); repo != "" {
-		return domain.ContextNSRepo, repo
-	}
-	return domain.ContextNSHost, "host"
 }
 
 // cleanup stops the child, waits for its process to go, forgets it and
-// removes the scratch directory. If the process outlives cleanupWait the run
-// stays uncleaned so Resume retries.
+// removes the scratch directory. If the process outlives cleanupWait, or the
+// registry cannot say whether the child exists, the run stays uncleaned so
+// Resume retries.
 func (m *Manager) cleanup(ctx context.Context, id string) {
 	r, err := m.d.Store.Get(id)
 	if err != nil {
 		return
 	}
 	if r.ChildID != "" {
-		if child, err := m.d.Sessions.Get(ctx, r.ChildID); err == nil {
+		child, present, err := m.session(ctx, r.ChildID)
+		if err != nil {
+			log.Printf("handoverchild: run %s: read child: %v", r.ID, err)
+			return
+		}
+		if present {
 			if err := m.d.Terminal.Stop(ctx, child); err != nil {
 				log.Printf("handoverchild: run %s: stop child: %v", r.ID, err)
 			}
