@@ -124,6 +124,12 @@ func NewRepository(dbPath string) (*Repository, error) {
 	if _, err := db.Exec("UPDATE sessions SET group_name = '' WHERE group_name IS NULL"); err != nil {
 		return nil, fmt.Errorf("failed to normalise session group: %w", err)
 	}
+	// A NULL backend is a row written before the column existed, when every
+	// session ran in tmux. Mark it legacy so it is never revived as pty. An
+	// empty backend means no terminal is recorded and stays as it is.
+	if _, err := db.Exec("UPDATE sessions SET backend = ? WHERE backend IS NULL", domain.BackendLegacyTmux); err != nil {
+		return nil, fmt.Errorf("failed to mark legacy tmux sessions: %w", err)
+	}
 
 	// Sessions created before v0.8.11 stored per-session "aiman-<id>" AWS profiles that
 	// are no longer written to ~/.aws. Drop them on open so those sessions stop
@@ -305,7 +311,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		hookAt = s.HookStateAt
 	}
 	_, err := r.db.ExecContext(ctx, query,
-		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, sessionBackend(s.Backend), s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.BudgetTokens, s.WatchPR, string(s.Role), s.IssueType, s.CreatedAt, updatedAt)
+		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, s.Backend, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.BudgetTokens, s.WatchPR, string(s.Role), s.IssueType, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
@@ -663,13 +669,4 @@ func scanScheduledPrompt(row spScanner) (*domain.ScheduledPrompt, error) {
 		sp.LastRunAt = lastRunAt.Time
 	}
 	return &sp, nil
-}
-
-// sessionBackend normalises an empty backend to tmux so rows written after the
-// field existed are always explicit.
-func sessionBackend(b string) string {
-	if b == "" {
-		return domain.BackendTmux
-	}
-	return b
 }

@@ -50,6 +50,9 @@ type Config struct {
 	PermissionsTightened bool `yaml:"-"`
 	// PermissionsError records why the repair failed, if it did. Not persisted.
 	PermissionsError error `yaml:"-"`
+	// Warnings lists config keys Load accepted but ignores. The caller shows
+	// them to the user. Not persisted.
+	Warnings []string `yaml:"-"`
 }
 
 // ServeConfig is the subset of settings used by aiman serve on a remote host.
@@ -504,8 +507,39 @@ func Load() (*Config, error) {
 	tightened, permErr := SecureConfigFile(path)
 	cfg.PermissionsTightened = tightened
 	cfg.PermissionsError = permErr
+	cfg.Warnings = ignoredKeyWarnings(data)
 
 	return &cfg, nil
+}
+
+// ignoredKeyWarnings decodes the raw file a second time to find keys that
+// still parse but no longer do anything. A shadow decode sees what the user
+// wrote even after the field leaves Config. It never fails Load: the main
+// decode already accepted the file.
+func ignoredKeyWarnings(data []byte) []string {
+	var shadow struct {
+		Remotes []struct {
+			Name           string `yaml:"name"`
+			Host           string `yaml:"host"`
+			SessionBackend string `yaml:"session_backend"`
+		} `yaml:"remotes"`
+	}
+	if err := yaml.Unmarshal(data, &shadow); err != nil {
+		return nil
+	}
+	var warnings []string
+	for _, r := range shadow.Remotes {
+		if r.SessionBackend == "" {
+			continue
+		}
+		name := r.Name
+		if name == "" {
+			name = r.Host
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"remotes[%s].session_backend is ignored: every session runs in the built-in pty terminal; remove the key", name))
+	}
+	return warnings
 }
 
 // configFileMode is the only permission set appropriate for a file holding a

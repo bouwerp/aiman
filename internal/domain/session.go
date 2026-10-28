@@ -324,9 +324,9 @@ type ScheduledPrompt struct {
 	LastRunAt  time.Time `json:"last_run_at"`
 }
 
-// Session backend values. Empty on a persisted Session means tmux (rows
-// written before the field existed). Empty on SessionConfig means "use the
-// product default" — DefaultSessionBackend.
+// Session backend values. Empty on a persisted Session means no terminal is
+// recorded; rows written before the field existed are BackendLegacyTmux.
+// Empty on SessionConfig means "use the product default", DefaultSessionBackend.
 const (
 	BackendTmux           = "tmux"
 	BackendPTY            = "pty"

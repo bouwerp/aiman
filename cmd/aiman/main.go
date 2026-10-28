@@ -125,6 +125,9 @@ func run() error {
 	if cfg.PermissionsError != nil {
 		fmt.Fprintf(os.Stderr, "aiman: warning: %v\n", cfg.PermissionsError)
 	}
+	for _, w := range cfg.Warnings {
+		fmt.Fprintf(os.Stderr, "aiman: warning: %s\n", w)
+	}
 
 	// 3. Initialize Database
 	dbPath, err := config.GetDBPath()

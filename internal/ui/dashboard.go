@@ -6807,10 +6807,10 @@ func (m *Model) createAutonomousRule() tea.Cmd {
 			query := fmt.Sprintf(`
 INSERT INTO sessions (
 	id, repo_name, agent_name, status, mode, trigger_source, remote_host,
-	autonomous_config_json, aws_config_json, created_at, updated_at
+	autonomous_config_json, aws_config_json, backend, created_at, updated_at
 ) VALUES (
 	'%s', '%s', '%s', '%s', '%s', '%s', '%s',
-	'%s', '%s', current_timestamp, current_timestamp
+	'%s', '%s', '', current_timestamp, current_timestamp
 ) ON CONFLICT(id) DO UPDATE SET
 	repo_name=excluded.repo_name,
 	agent_name=excluded.agent_name,
