@@ -110,6 +110,8 @@ A `domain.Session` holds:
 | `MutagenSyncID` | mutagen sync session name (usually `aiman-sync-<ID>`) |
 | `LocalPath` | `~/.aiman/work/<ID>` — local mutagen sync root |
 | `AgentName` | agent binary name, e.g. `claude` |
+| `AgentModel` | model shown in the TUI: the launch model, else the one detected at create; never passed to a launch |
+| `LaunchModel` / `LaunchEffort` | per-launch model and effort from an `agents.preferred` entry; same-agent restart and revive reuse them, an agent switch clears them |
 | `AgentSessionID` | vendor conversation id for resume (`claude --resume`, `grok --resume`, …) |
 | `AgentSessionPath` | optional vendor transcript / session file |
 | `AgentTitle` | vendor session title when a hook reports one |
@@ -133,7 +135,7 @@ field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 
 **Why this matters:** The session discoverer (`Discover`) builds sessions from live remote state — it can only know what it can read from a running tmux process. Fields like `Branch`, `AgentName`, `WorktreePath`, and `WorkingDirectory` will often be empty in discovered sessions. Before this fix, discovery was silently overwriting the DB with empty strings on every scan cycle, causing restart to fail with "session has no working directory".
 
-**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `base_branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `mutagen_sync_id`, `local_path`, `agent_name`, `agent_session_id`, `agent_session_path`, `agent_title`, `agent_ended`, `hook_state`, `hook_state_message`, `hook_state_source`, `watch_pr`, `role`, `issue_type`.
+**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `base_branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `mutagen_sync_id`, `local_path`, `agent_name`, `agent_model`, `launch_model`, `launch_effort`, `agent_session_id`, `agent_session_path`, `agent_title`, `agent_ended`, `hook_state`, `hook_state_message`, `hook_state_source`, `watch_pr`, `role`, `issue_type`.
 
 **Fields always overwritten:** `status`, `updated_at`.
 
@@ -200,7 +202,7 @@ Session create also calls `ensureRemoteServer` if `~/.aiman/aiman.sock` is missi
 
 On start, `aiman serve` installs or updates the bundled skill (`internal/aimanskill`) in user-level agent skill dirs under `$HOME` and in each known session worktree, and registers native-session hooks (`internal/agenthook`) in each installed agent's config. Identity agents (Claude, Grok, Cursor, Codex, Copilot, agy, Muse Code) report session id, `SessionEnd`, and `idle_prompt` where the runtime has it. Muse Code uses `SessionStart`, `Stop`, and `UserPromptSubmit` in `~/.config/muse/settings.json` (`schema_version` 1). Kilo Code and Pi also report lifecycle state. Pi (pi.dev, `@earendil-works/pi-coding-agent` 1.4) gets `~/.pi/agent/extensions/aiman-native-session.ts`: `session_start` is idle with the session id and file, `agent_start` is working, `agent_settled` (not `agent_end`, which retries and queued work follow) is idle, `ui_prompt_start` is waiting_input, and `session_shutdown` with reason `quit` is the end. Plugin `seq` is `Date.now()`-based, because serve drops a report whose seq is below the last one applied. Pi resume is `pi --session <id>`; session files are `~/.pi/agent/sessions/--<cwd>--/<ts>_<id>.jsonl`. Pre-launch trust also writes the worktree into `~/.pi/agent/trust.json` (never flipping a `false`). Pi's model flag takes `provider/id:<thinking>`; `--thinking` (off…max) overrides that suffix, so aiman skips `--thinking` when the model carries a level. Deep Code has no hook API: `deepcode-launch.sh` runs `aiman session deepcode-watch` on `~/.deepcode/projects/<code>/sessions-index.json`, then the CLI. Resume is `deepcode --resume <uuid>`. Model and effort are `DEEPCODE_MODEL` and `DEEPCODE_REASONING_EFFORT`. Permissions stay the user's `defaultMode`. `session.wait` uses a hook report newer than 2 minutes instead of `pane.Classify`. Session create still writes the worktree skill copy. Ageni is not hooked.
 
-`session.register` copies laptop sessions into serve's database. Identity fields come from the payload. When a row already exists, hook state, `AgentEnded`, `AgentTitle`, and `Status` stay on that row. `LocalPath`, `MutagenSyncID`, `Tunnels`, and `AWSConfig` are laptop-only and are dropped. Empty ids and ids with the `pending-` prefix are skipped.
+`session.register` copies laptop sessions into serve's database. Identity fields come from the payload. When a row already exists, hook state, `AgentEnded`, `AgentTitle`, and `Status` stay on that row. A payload naming a different agent with no launch model clears the row's `launch_model` and `launch_effort` (`ClearLaunchModel`). `LocalPath`, `MutagenSyncID`, `Tunnels`, and `AWSConfig` are laptop-only and are dropped. Empty ids and ids with the `pending-` prefix are skipped.
 
 To-do lists are `internal/todo`, stored as `~/.aiman/todos/<id>.json`. `EnableTodos` restores the steering queue from sqlite `steer_notes`, then turns writes on. Handlers refuse to-do writes while the store is unset. `MutateTodos` applies the change under a per-session lock, renders `.aiman_todo.md` in the session working directory when one is set, publishes `todo_changed`, and queues a steering note unless the agent made the change. `todo.mirror` folds an agent task-list snapshot into the same list. A session writing its own list, and every `todo.mirror`, is the agent. Other callers are the user. `steer.send` may use author `aiman`. A session cannot steer itself. The store keeps at most one item active.
 
@@ -237,7 +239,7 @@ serve keeps agent CLIs current through `agentupdate.Manager` (`cmd/aiman/agent_u
 The restart flow (triggered by `s` / `ctrl+r`, including switching agent):
 1. Agent picker (same or different agent)
 2. Serve writes `.aiman_handover.md`. The agent-written `.aiman_session_summary.md` is only the fallback.
-3. `PrepareSession` for the chosen agent (configured `--model` / effort flags, summary prompt)
+3. `PrepareSession` for the chosen agent (configured `--model` / effort flags, summary prompt). The same agent gets the session's `LaunchModel`/`LaunchEffort` as its pick; `adoptRestartAgent` clears them on a switch and `ClearNativeAgentIdentity` wipes them in the DB
 4. **1 SSH call**: `tmux kill-session … && tmux new-session … "bash -l -c '<agent>; exec bash'"`
 5. send-keys the handoff prompt
 
@@ -390,7 +392,7 @@ framed (`internal/server/attach_framing.go` — `[len BE][kind][payload]`, kinds
 **Serve-restart recovery**: a serve restart kills PTY processes but not agent
 conversations. Attaching to a pty-backed session whose process is gone revives
 it transparently via `usecase.ReviveIfNeeded` — the agent relaunches with its
-native resume flag (sidecar id first, stored `AgentSessionID` as fallback;
+stored `LaunchModel`/`LaunchEffort` and its native resume flag (sidecar id first, stored `AgentSessionID` as fallback;
 refuses if neither exists so it never silently forks a fresh conversation).
 
 **Boot wait**: `acceptWorkspaceTrustPTY` polls the new pty (budget 20) before

@@ -19,7 +19,7 @@ import (
 // skip native --resume).
 //
 // A session carries the running agent's native session id, transcript path,
-// title and hook state. None of that describes a different agent, and a latched
+// title, hook state and launch model. None of that describes a different agent, and a latched
 // AgentEnded would render the freshly started session as already exited. A
 // restart with the same agent is a resume, so its transcript and state are still
 // its own and are kept.
@@ -37,6 +37,8 @@ func adoptRestartAgent(s *domain.Session, agentName string) bool {
 		s.HookStateMessage = ""
 		s.HookStateSource = ""
 		s.HookStateSeq = 0
+		s.LaunchModel = ""
+		s.LaunchEffort = ""
 	}
 	s.AgentName = agentName
 	return switched
@@ -56,13 +58,16 @@ type restartPrep struct {
 }
 
 // prepareRestartSession refreshes the session's checklists and prepares the
-// agent launch. The kit's DoneWhen is nil, so the skill engine rewrites only
-// the checklist block and keeps the Done-when block from create: that text
-// stays fixed for the session's life, and the Done-when to-do is not touched.
-// Kit problems come back as notes and never fail the restart.
+// agent launch with the session's stored launch model and effort, which
+// adoptRestartAgent has already cleared on an agent switch. The kit's
+// DoneWhen is nil, so the skill engine rewrites only the checklist block and
+// keeps the Done-when block from create: that text stays fixed for the
+// session's life, and the Done-when to-do is not touched. Kit problems come
+// back as notes and never fail the restart.
 func prepareRestartSession(ctx context.Context, remote domain.RemoteExecutor, engine domain.SkillEngine, p restartPrep) (domain.PreparedSession, []string, error) {
 	kit, notes := restartKit(ctx, remote, p)
-	prepared, err := engine.PrepareSession(ctx, remote, p.WorkingDir, *p.SessionCfg.Agent, p.SessionCfg.Skills, p.SessionCfg.PromptFree, nil, p.Snapshot, kit)
+	agent := p.SessionCfg.Agent.WithSessionLaunch(p.Session)
+	prepared, err := engine.PrepareSession(ctx, remote, p.WorkingDir, agent, p.SessionCfg.Skills, p.SessionCfg.PromptFree, nil, p.Snapshot, kit)
 	return prepared, notes, err
 }
 

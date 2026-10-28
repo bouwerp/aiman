@@ -39,6 +39,10 @@ type SessionInfo struct {
 	WorktreePath     string `json:"worktree_path,omitempty"`
 	WorkingDirectory string `json:"working_directory,omitempty"`
 	AgentName        string `json:"agent_name,omitempty"`
+	// LaunchModel and LaunchEffort are the per-launch model and effort the
+	// session was created with, so the laptop relaunches with them too.
+	LaunchModel      string `json:"launch_model,omitempty"`
+	LaunchEffort     string `json:"launch_effort,omitempty"`
 	AgentSessionID   string `json:"agent_session_id,omitempty"`
 	AgentSessionPath string `json:"agent_session_path,omitempty"`
 	Title            string `json:"title,omitempty"`
@@ -70,6 +74,8 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		WorktreePath:     s.WorktreePath,
 		WorkingDirectory: s.WorkingDirectory,
 		AgentName:        s.AgentName,
+		LaunchModel:      s.LaunchModel,
+		LaunchEffort:     s.LaunchEffort,
 		AgentSessionID:   s.AgentSessionID,
 		AgentSessionPath: s.AgentSessionPath,
 		Title:            s.AgentTitle,
@@ -1107,6 +1113,25 @@ func registrableSession(in domain.Session, existing *domain.Session) domain.Sess
 	return out
 }
 
+// dropSwitchedLaunchModel clears the stored launch model and effort when the
+// laptop registers a session under a different agent and sends none: they
+// belong to the previous agent, and Save keeps them otherwise.
+func (s *Server) dropSwitchedLaunchModel(ctx context.Context, row domain.Session, existing *domain.Session) error {
+	if existing == nil || row.AgentName == "" || strings.EqualFold(row.AgentName, existing.AgentName) {
+		return nil
+	}
+	if row.LaunchModel != "" || row.LaunchEffort != "" || (existing.LaunchModel == "" && existing.LaunchEffort == "") {
+		return nil
+	}
+	clearer, ok := s.repo.(interface {
+		ClearLaunchModel(context.Context, string) error
+	})
+	if !ok {
+		return nil
+	}
+	return clearer.ClearLaunchModel(ctx, row.ID)
+}
+
 func (s *Server) handleRegister(ctx context.Context, req Request) Response {
 	var params struct {
 		Sessions []domain.Session `json:"sessions"`
@@ -1130,6 +1155,9 @@ func (s *Server) handleRegister(ctx context.Context, req Request) Response {
 			}
 			row := registrableSession(in, existing)
 			if err := s.repo.Save(ctx, &row); err != nil {
+				return errResp(req.ID, CodeInvalidParams, err.Error())
+			}
+			if err := s.dropSwitchedLaunchModel(ctx, row, existing); err != nil {
 				return errResp(req.ID, CodeInvalidParams, err.Error())
 			}
 			if existing == nil {

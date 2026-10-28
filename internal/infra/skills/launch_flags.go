@@ -30,6 +30,13 @@ func applyConfiguredLaunchFlags(cmd string, ag domain.Agent, cfg *config.Config,
 	return applyLaunchDefaults(cmd, base, d)
 }
 
+// WithLaunchModel adds the model and effort a session was launched with to a
+// relaunch command for agent, the binary the session runs. A flag or env
+// assignment the command already carries is left alone.
+func WithLaunchModel(cmd, agent, model, effort string) string {
+	return applyLaunchDefaults(cmd, agentBaseCommand(agent), config.AgentDefaults{Model: model, Effort: effort})
+}
+
 func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {
 	model := strings.TrimSpace(d.Model)
 	effort := strings.TrimSpace(d.Effort)

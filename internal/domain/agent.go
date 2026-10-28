@@ -15,6 +15,19 @@ type Agent struct {
 	LaunchEffort string
 }
 
+// WithSessionLaunch returns a with the session's stored launch model and
+// effort filled in where a names none, so a relaunch of the same agent keeps
+// the values the session was created with.
+func (a Agent) WithSessionLaunch(s Session) Agent {
+	if a.LaunchModel == "" {
+		a.LaunchModel = s.LaunchModel
+	}
+	if a.LaunchEffort == "" {
+		a.LaunchEffort = s.LaunchEffort
+	}
+	return a
+}
+
 // AgentScanner defines the interface for scanning available agents on a remote server.
 type AgentScanner interface {
 	ScanAgents(ctx context.Context) ([]Agent, error)

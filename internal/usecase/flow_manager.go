@@ -460,9 +460,10 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	}
 
 	// Create Session record
-	agentName := ""
+	var agentName, launchModel, launchEffort string
 	if config.Agent != nil {
 		agentName = config.Agent.Name
+		launchModel, launchEffort = config.Agent.LaunchModel, config.Agent.LaunchEffort
 	}
 	mode := config.Mode
 	if mode == "" {
@@ -480,6 +481,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		Branch:         branch,
 		RepoName:       config.Repo.Name,
 		AgentName:      agentName,
+		AgentModel:     launchModel,
+		LaunchModel:    launchModel,
+		LaunchEffort:   launchEffort,
 		Status:         domain.SessionStatusProvisioning,
 		Mode:           mode,
 		TriggerSource:  config.TriggerSource,

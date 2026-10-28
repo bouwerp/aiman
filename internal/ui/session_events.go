@@ -346,6 +346,8 @@ func sessionFromInfo(host string, info server.SessionInfo) domain.Session {
 		WorktreePath:     info.WorktreePath,
 		WorkingDirectory: info.WorkingDirectory,
 		AgentName:        info.AgentName,
+		LaunchModel:      info.LaunchModel,
+		LaunchEffort:     info.LaunchEffort,
 		AgentSessionID:   info.AgentSessionID,
 		AgentSessionPath: info.AgentSessionPath,
 		AgentTitle:       info.Title,

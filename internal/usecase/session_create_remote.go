@@ -156,6 +156,8 @@ type remoteCreateResult struct {
 			WorktreePath     string `json:"worktree_path"`
 			WorkingDirectory string `json:"working_directory"`
 			AgentName        string `json:"agent_name"`
+			LaunchModel      string `json:"launch_model"`
+			LaunchEffort     string `json:"launch_effort"`
 		} `json:"session"`
 	} `json:"result"`
 	Error *struct {
@@ -193,6 +195,9 @@ func parseRemoteCreateResult(out string) (*domain.Session, error) {
 		WorktreePath:     s.WorktreePath,
 		WorkingDirectory: s.WorkingDirectory,
 		AgentName:        s.AgentName,
+		AgentModel:       s.LaunchModel,
+		LaunchModel:      s.LaunchModel,
+		LaunchEffort:     s.LaunchEffort,
 		Status:           domain.SessionStatusActive,
 	}, nil
 }

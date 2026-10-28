@@ -70,11 +70,17 @@ type Session struct {
 	// Backend is the terminal runtime hosting the session: "pty" (default
 	// for new sessions) or "tmux". Empty on a stored row means tmux: those
 	// rows were written before the field existed.
-	Backend          string
-	MutagenSyncID    string
-	LocalPath        string
-	AgentName        string
-	AgentModel       string // LLM model in use (e.g. "claude-opus-4-5"); detected at session creation
+	Backend       string
+	MutagenSyncID string
+	LocalPath     string
+	AgentName     string
+	AgentModel    string // LLM model in use (e.g. "claude-opus-4-5"); shown in the TUI, never passed to a launch
+	// LaunchModel and LaunchEffort are the per-launch model and effort the
+	// session was created with (an agents.preferred entry). Restart with the
+	// same agent and revive launch with them again; an agent switch clears
+	// them. Empty means the configured defaults.
+	LaunchModel      string
+	LaunchEffort     string
 	AgentSessionID   string // vendor conversation id for resume (claude --resume, grok --resume, …)
 	AgentSessionPath string // optional vendor transcript / session file
 	AgentTitle       string // vendor session title, when a hook reports one

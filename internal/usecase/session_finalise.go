@@ -29,6 +29,11 @@ func (m *FlowManager) finaliseSessionBestEffort(
 	if remote == nil || session == nil || config.Agent == nil {
 		return
 	}
+	if session.LaunchModel != "" {
+		// The launch model is the one in use; detection would report the default.
+		session.AgentModel = session.LaunchModel
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, bestEffortFinaliseTimeout)
 	defer cancel()

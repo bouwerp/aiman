@@ -709,6 +709,7 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 	}
 	nativeID := NativeSessionID(ctx, remote, s)
 	command := reviveAgentCommand(s.AgentName, s.WorkingDirectory, !opts.NoUpdateGuard)
+	command = skills.WithLaunchModel(command, reviveAgentBinary(s.AgentName), s.LaunchModel, s.LaunchEffort)
 	if strings.Contains(command, "deepcode-launch.sh") {
 		if err := skills.InstallDeepcodeLauncher(ctx, remote); err != nil {
 			return err
@@ -769,11 +770,15 @@ func ReviveIfNeeded(ctx context.Context, remote TerminalExecutor, s *domain.Sess
 // or it produces `Codex resume <id> CLI` and the holder falls through to bash.
 // guard adds the self-update guard flags.
 func reviveAgentCommand(agentName, worktree string, guard bool) string {
-	cmd := strings.TrimSpace(agentName)
+	return skills.InteractiveLaunch(reviveAgentBinary(agentName), worktree, guard)
+}
+
+// reviveAgentBinary maps a persisted AgentName to the agent's binary.
+func reviveAgentBinary(agentName string) string {
 	if known, ok := infraAgent.FindKnown(agentName); ok {
-		cmd = known.Command
+		return known.Command
 	}
-	return skills.InteractiveLaunch(cmd, worktree, guard)
+	return strings.TrimSpace(agentName)
 }
 
 // NativeSessionID resolves the vendor conversation id for a session. The
