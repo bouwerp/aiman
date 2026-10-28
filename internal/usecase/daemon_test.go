@@ -188,25 +188,6 @@ func TestScheduledPromptSkipsDeletedTarget(t *testing.T) {
 	}
 }
 
-func TestUnblockerUsesAnswerMode(t *testing.T) {
-	repo := &daemonRepo{sessions: map[string]domain.Session{
-		"auto": {ID: "auto", Backend: domain.BackendPTY, Mode: domain.SessionModeAutonomous, Status: domain.SessionStatusActive},
-	}}
-	sender := &recordingSender{delivered: false}
-	d := NewDaemon(&config.Config{}, repo, nil, sender)
-	d.capture = func(context.Context, domain.Session) (string, error) {
-		return "Run the migration?\nDo you want to proceed? (y/n)\n", nil
-	}
-
-	if err := d.monitorPanes(context.Background()); err != nil {
-		t.Fatalf("monitorPanes: %v (delivered=false must not be an error)", err)
-	}
-	want := sentPrompt{session: "auto", text: unblockPrompt, mode: SendAnswer}
-	if len(sender.sent) != 1 || sender.sent[0] != want {
-		t.Fatalf("sent %+v, want [%+v]", sender.sent, want)
-	}
-}
-
 func TestTriggerHasNoRawSendKeys(t *testing.T) {
 	src, err := os.ReadFile("daemon.go")
 	if err != nil {

@@ -78,6 +78,9 @@ type Server struct {
 	// todoLocks holds one *sync.Mutex per session id around a to-do write and
 	// its render.
 	todoLocks sync.Map
+	// uncertainPanes holds the hash of the last low-confidence pane recorded
+	// per session id, so a pane that does not change is recorded once.
+	uncertainPanes sync.Map
 
 	// memoryJobs queues handover-derived memory candidates for the laptop.
 	memoryJobs *memoryjob.Queue

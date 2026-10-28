@@ -38,28 +38,23 @@ type PromptSender interface {
 // matches the wizard default. The 30 s daemon tick is the floor.
 const defaultTriggerPollSecs = 300
 
-const unblockPrompt = "Please carry on autonomously as far as you can until it is absolutely impossible."
-
 type Daemon struct {
 	cfg         *config.Config
 	db          domain.SessionRepository
 	flowManager *FlowManager
 	sender      PromptSender
-	capture     func(ctx context.Context, s domain.Session) (string, error)
 	// lastPolled is keyed by rule session id. Run is single-goroutine, so no lock.
 	lastPolled map[string]time.Time
 }
 
 func NewDaemon(cfg *config.Config, db domain.SessionRepository, fm *FlowManager, sender PromptSender) *Daemon {
-	d := &Daemon{
+	return &Daemon{
 		cfg:         cfg,
 		db:          db,
 		flowManager: fm,
 		sender:      sender,
 		lastPolled:  make(map[string]time.Time),
 	}
-	d.capture = d.capturePane
-	return d
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
@@ -87,12 +82,9 @@ func (d *Daemon) poll(ctx context.Context) {
 		log.Printf("GitHub polling error: %v", err)
 	}
 
-	// 2. Monitor tmux panes for blocked agents
-	if err := d.monitorPanes(ctx); err != nil {
-		log.Printf("Pane monitoring error: %v", err)
-	}
-
-	// 3. Trigger Scheduled Prompts
+	// 2. Trigger Scheduled Prompts. A session blocked on a dialog is left
+	// for a human: serve's notification sweep reports waiting_input, and
+	// nothing here answers a permission prompt.
 	if err := d.pollScheduledPrompts(ctx); err != nil {
 		log.Printf("Scheduled prompt polling error: %v", err)
 	}
@@ -250,68 +242,6 @@ func (d *Daemon) dueForPoll(ruleID string, freqSecs int, now time.Time) bool {
 // so it retries on the next tick instead of a full interval later.
 func (d *Daemon) markPolled(ruleID string, at time.Time) {
 	d.lastPolled[ruleID] = at
-}
-
-func (d *Daemon) capturePane(ctx context.Context, s domain.Session) (string, error) {
-	var remoteRoot string
-	for _, r := range d.cfg.Remotes {
-		if r.Host == s.RemoteHost {
-			remoteRoot = r.Root
-			break
-		}
-	}
-	return CaptureSessionPane(ctx, local.NewExecutor(remoteRoot), s)
-}
-
-func (d *Daemon) monitorPanes(ctx context.Context) error {
-	sessions, err := d.db.List(ctx)
-	if err != nil {
-		return err
-	}
-
-	for _, s := range sessions {
-		if s.Mode == domain.SessionModeAutonomous && s.Status == domain.SessionStatusActive {
-			out, err := d.capture(ctx, s)
-			if err != nil || out == "" {
-				continue
-			}
-
-			lines := strings.Split(strings.TrimSpace(out), "\n")
-			if len(lines) == 0 {
-				continue
-			}
-
-			// Check the last few lines for a prompt
-			checkLines := lines
-			if len(checkLines) > 3 {
-				checkLines = checkLines[len(checkLines)-3:]
-			}
-
-			needsUnblock := false
-			for _, line := range checkLines {
-				lower := strings.ToLower(strings.TrimSpace(line))
-				if strings.Contains(lower, "y/n") ||
-					strings.Contains(lower, "yes/no") ||
-					strings.Contains(lower, "press enter") ||
-					strings.Contains(lower, "allow execution") ||
-					strings.Contains(lower, "action required") ||
-					strings.Contains(lower, "allow once") {
-					needsUnblock = true
-					break
-				}
-			}
-
-			if needsUnblock {
-				log.Printf("Detected hung input in autonomous session %s", s.ID)
-				// Answer mode types only while serve also sees a dialog; otherwise
-				// nothing is sent and the next tick re-checks.
-				if _, err := d.sender.SendPrompt(ctx, s.ID, unblockPrompt, SendAnswer); err != nil {
-					log.Printf("Failed to unblock session %s: %v", s.ID, err)
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func (d *Daemon) pollScheduledPrompts(ctx context.Context) error {

@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -141,6 +143,7 @@ func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.Agen
 			}
 		}
 		r := pane.Classify(obs)
+		s.recordUncertainPane(ctx, live, screen, r)
 		return r.State, r.Confidence
 	}
 	text, err := s.remote.CaptureTmuxPane(ctx, live.TmuxSession)
@@ -148,7 +151,28 @@ func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.Agen
 		return domain.AgentStateUnknown, pane.Low
 	}
 	r := pane.Classify(pane.Observation{Pane: text})
+	s.recordUncertainPane(ctx, live, text, r)
 	return r.State, r.Confidence
+}
+
+// recordUncertainPane appends pane.uncertain when the rules classified a
+// captured pane at low confidence. Only the hash of the cleaned pane is
+// stored, never its text, and an unchanged pane is recorded once.
+func (s *Server) recordUncertainPane(ctx context.Context, sess domain.Session, text string, r pane.Result) {
+	if r.Confidence == pane.High {
+		return
+	}
+	sum := sha256.Sum256([]byte(pane.Clean(text)))
+	hash := hex.EncodeToString(sum[:])
+	if prev, loaded := s.uncertainPanes.Swap(sess.ID, hash); loaded && prev == hash {
+		return
+	}
+	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventPaneUncertain, map[string]string{
+		"agent":     sess.AgentName,
+		"backend":   sess.Backend,
+		"state":     string(r.State),
+		"pane_hash": hash,
+	})
 }
 
 func parseUntil(v string) domain.AgentState {
@@ -901,6 +925,7 @@ func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
 		_ = s.pty.Forget(sess.ID)
 	}
 	s.steer.Forget(sess.ID)
+	s.uncertainPanes.Delete(sess.ID)
 	if rec := s.NotifyRecorder(); rec != nil {
 		rec.Forget(sess.ID)
 	}

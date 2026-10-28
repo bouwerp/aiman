@@ -9,6 +9,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
+	"github.com/bouwerp/aiman/internal/pane"
 )
 
 func logRepo(t *testing.T) *sqlite.Repository {
@@ -259,5 +260,36 @@ func TestSessionReplayRequiresOut(t *testing.T) {
 	}
 	if resp.Error == nil || resp.Error.Code != CodeInvalidParams {
 		t.Fatalf("error = %+v", resp.Error)
+	}
+}
+
+func TestUncertainPaneRecordedOncePerPane(t *testing.T) {
+	ctx := context.Background()
+	repo := logRepo(t)
+	s := &Server{repo: repo}
+	sess := domain.Session{ID: "s1", AgentName: "deepcode", Backend: domain.BackendPTY}
+	low := pane.Result{State: domain.AgentStateUnknown, Confidence: pane.Low}
+
+	s.recordUncertainPane(ctx, sess, "thinking...", low)
+	s.recordUncertainPane(ctx, sess, "thinking...", low)
+	s.recordUncertainPane(ctx, sess, "thinking...", pane.Result{State: domain.AgentStateIdle, Confidence: pane.High})
+	s.recordUncertainPane(ctx, sess, "still thinking...", low)
+
+	events, err := repo.ListSessionEvents(ctx, "s1", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2 (one per distinct low-confidence pane)", len(events))
+	}
+	var p map[string]string
+	if err := json.Unmarshal(events[0].Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if events[0].Kind != domain.EventPaneUncertain || p["agent"] != "deepcode" || p["backend"] != "pty" || len(p["pane_hash"]) != 64 {
+		t.Fatalf("event = %+v payload = %v", events[0], p)
+	}
+	if _, ok := p["pane"]; ok {
+		t.Fatal("payload must not carry pane text")
 	}
 }
