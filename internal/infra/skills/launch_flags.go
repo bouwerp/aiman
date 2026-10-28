@@ -15,14 +15,13 @@ import (
 
 // applyConfiguredLaunchFlags adds the model and effort resolved for this
 // agent in this repo and role: agent_defaults, then the repo's
-// agent_overrides, then the role override. A handover child with no role
-// model runs the agent's Cheap model instead of the first two.
+// agent_overrides, then the agent's LaunchModel/LaunchEffort (a preferred
+// entry), then the role override. A handover child with no role model runs
+// the agent's Cheap model instead of the first two.
 func applyConfiguredLaunchFlags(cmd string, ag domain.Agent, cfg *config.Config, repo, role string) string {
-	if cfg == nil {
-		return cmd
-	}
 	base := agentBaseCommand(ag.Command)
-	d := cfg.ResolveLaunchDefaults(ag.Name, ag.Command, repo, role)
+	pick := config.AgentDefaults{Model: ag.LaunchModel, Effort: ag.LaunchEffort}
+	d := cfg.ResolveLaunchDefaultsWith(ag.Name, ag.Command, repo, role, pick)
 	if role == string(domain.SessionRoleHandover) && strings.TrimSpace(cfg.RoleOverrideFor(role, ag.Command).Model) == "" {
 		if cheap := agent.LaunchCatalogFor(base).Cheap; cheap != "" {
 			d.Model = cheap

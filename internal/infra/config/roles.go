@@ -46,13 +46,21 @@ func (c *Config) RoleAgent(role string) string {
 // ResolveLaunchDefaults layers model and effort for one launch: agent_defaults,
 // then the repo's agent_overrides, then the role override (see RoleOverrideFor).
 func (c *Config) ResolveLaunchDefaults(name, command, repo, role string) AgentDefaults {
+	return c.ResolveLaunchDefaultsWith(name, command, repo, role, AgentDefaults{})
+}
+
+// ResolveLaunchDefaultsWith is ResolveLaunchDefaults with pick, the model and
+// effort of an agents.preferred entry, layered between the repo's
+// agent_overrides and the role override.
+func (c *Config) ResolveLaunchDefaultsWith(name, command, repo, role string, pick AgentDefaults) AgentDefaults {
 	if c == nil {
-		return AgentDefaults{}
+		return overlayDefaults(AgentDefaults{}, pick)
 	}
 	d := c.LaunchDefaultsFor(name, command)
 	if r, ok := LookupRepo(c.Repos, repo); ok {
 		d = overlayDefaults(d, matchAgentDefaults(r.AgentOverrides, name, command))
 	}
+	d = overlayDefaults(d, pick)
 	ro := c.RoleOverrideFor(role, command)
 	return overlayDefaults(d, AgentDefaults{Model: ro.Model, Effort: ro.Effort})
 }
@@ -97,7 +105,7 @@ func (c *Config) HandoverCandidates(workerAgent string) []string {
 	if c == nil {
 		return uniqueAgents([]string{workerAgent})
 	}
-	names := append([]string{c.Roles.Handover.Agent}, c.Agents.Preferred...)
+	names := append([]string{c.Roles.Handover.Agent}, c.Agents.PreferredCommands()...)
 	return uniqueAgents(append(names, workerAgent))
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
@@ -881,7 +882,7 @@ func TestSessionInfoCarriesRole(t *testing.T) {
 
 // pickServer is a serve instance with a fake creator and an agents.preferred
 // list, where only the installed commands resolve on the host.
-func pickServer(t *testing.T, preferred []string, installed ...string) (*Server, domain.SessionRepository, *fakeCreator) {
+func pickServer(t *testing.T, preferred []config.PreferredAgent, installed ...string) (*Server, domain.SessionRepository, *fakeCreator) {
 	t.Helper()
 	repo := testRepo(t)
 	creator := &fakeCreator{}
@@ -895,7 +896,7 @@ func pickServer(t *testing.T, preferred []string, installed ...string) (*Server,
 }
 
 func TestCreateUsesPreferredWhenAgentEmpty(t *testing.T) {
-	srv, repo, creator := pickServer(t, []string{"codex", "claude"}, "claude")
+	srv, repo, creator := pickServer(t, config.PreferredFromCommands("codex", "claude"), "claude")
 	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true})
 	if resp.Error != nil {
 		t.Fatalf("create: %+v", resp.Error)
@@ -912,8 +913,34 @@ func TestCreateUsesPreferredWhenAgentEmpty(t *testing.T) {
 	}
 }
 
+// A picked entry hands its model and effort to the launch; an explicit agent
+// carries none.
+func TestCreateCarriesPreferredModelAndEffort(t *testing.T) {
+	preferred := []config.PreferredAgent{
+		{Agent: "codex", Model: "gpt-5"},
+		{Agent: "pi", Model: "openrouter/qwen/qwen3-coder", Effort: "high"},
+		{Agent: "pi", Model: "deepseek/deepseek-flash"},
+	}
+	srv, _, creator := pickServer(t, preferred, "pi")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	a := creator.cfg.Agent
+	if a == nil || a.Command != "pi" || a.LaunchModel != "openrouter/qwen/qwen3-coder" || a.LaunchEffort != "high" {
+		t.Fatalf("agent = %+v", a)
+	}
+	resp = rpc(t, srv, "", "session.create", map[string]any{"quick": true, "agent": "pi"})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if a := creator.cfg.Agent; a.LaunchModel != "" || a.LaunchEffort != "" {
+		t.Fatalf("explicit agent took a preferred model: %+v", a)
+	}
+}
+
 func TestExplicitAgentBeatsPreferred(t *testing.T) {
-	srv, _, creator := pickServer(t, []string{"claude"}, "claude", "grok")
+	srv, _, creator := pickServer(t, config.PreferredFromCommands("claude"), "claude", "grok")
 	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true, "agent": "grok"})
 	if resp.Error != nil {
 		t.Fatalf("create: %+v", resp.Error)
@@ -924,7 +951,7 @@ func TestExplicitAgentBeatsPreferred(t *testing.T) {
 }
 
 func TestCreateReportsNoPreferredAgent(t *testing.T) {
-	srv, repo, creator := pickServer(t, []string{"codex", "claude"})
+	srv, repo, creator := pickServer(t, config.PreferredFromCommands("codex", "claude"))
 	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true})
 	if resp.Error == nil || resp.Error.Code != CodeNoPreferredAgent {
 		t.Fatalf("error = %+v, want %s", resp.Error, CodeNoPreferredAgent)
@@ -954,7 +981,7 @@ func forServer(t *testing.T, t3Ref string) (*Server, *fakeCreator) {
 	})
 	creator := &fakeCreator{}
 	srv.create = creator
-	srv.SetAgentChoice([]string{"claude"}, func(context.Context, string) bool { return true })
+	srv.SetAgentChoice(config.PreferredFromCommands("claude"), func(context.Context, string) bool { return true })
 	// Seeded as the agent, which never steers, so a later note is the create's.
 	err := srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAgent, func(l *domain.TodoList) error {
 		l.Items = append(l.Items,

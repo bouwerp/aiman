@@ -344,25 +344,28 @@ func (i tunnelItem) FilterValue() string {
 }
 
 type Model struct {
-	version              string
-	cfg                  *config.Config
-	db                   domain.SessionRepository
-	Program              *tea.Program
-	state                viewState
-	list                 list.Model
-	daemonList           list.Model
-	daemons              map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
-	agentAPICursor       int                      // selected remote on the Agent API settings page
-	agentAPIProbing      map[string]bool          // host → probe SSH call in flight
-	agentUpdates         *agentUpdatesView        // "Agents on <host>" page state
-	currentTab           mainTab
-	menu                 list.Model
-	remotes              RemotesModel
-	setup                SetupModel
-	gitSetup             GitSetupModel
-	generalSetup         GeneralSetupModel
-	agentDefaults        AgentDefaultsModel
-	agentPreferred       AgentPreferredModel
+	version         string
+	cfg             *config.Config
+	db              domain.SessionRepository
+	Program         *tea.Program
+	state           viewState
+	list            list.Model
+	daemonList      list.Model
+	daemons         map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
+	agentAPICursor  int                      // selected remote on the Agent API settings page
+	agentAPIProbing map[string]bool          // host → probe SSH call in flight
+	agentUpdates    *agentUpdatesView        // "Agents on <host>" page state
+	currentTab      mainTab
+	menu            list.Model
+	remotes         RemotesModel
+	setup           SetupModel
+	gitSetup        GitSetupModel
+	generalSetup    GeneralSetupModel
+	agentDefaults   AgentDefaultsModel
+	agentPreferred  AgentPreferredModel
+	// agentModelLister lists agent models on a remote for the preferred
+	// agents page; nil uses SSH through the shared model cache.
+	agentModelLister     func(config.Remote) modelLister
 	contextStats         ContextStatsModel
 	usageView            UsageViewModel
 	aiSetup              AISetupModel
@@ -905,7 +908,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 		menuItem{title: "Agent defaults", desc: "Default model and thinking effort per agent", action: viewStateAgentDefaults},
-		menuItem{title: "Preferred agents", desc: "Order of agents a coordinator may start", action: viewStateAgentPreferred},
+		menuItem{title: "Preferred agents", desc: "Agents and models a coordinator may start, in order", action: viewStateAgentPreferred},
 		menuItem{title: "Shared context", desc: "Store size, lookups, and pack usage on remotes", action: viewStateContextStats},
 		menuItem{title: "Memory candidates", desc: memoryMenuDesc(0), action: viewStateMemoryCandidates},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
@@ -5507,7 +5510,7 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.agentDefaults.Init()
 				}
 				if i.action == viewStateAgentPreferred {
-					m.agentPreferred = NewAgentPreferredModel(m.cfg)
+					m.agentPreferred = m.newAgentPreferredModel()
 					m.state = i.action
 					return m, m.agentPreferred.Init()
 				}
@@ -5958,8 +5961,23 @@ func (m *Model) handleGeneralSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// newAgentPreferredModel opens the preferred agents page on the default
+// remote, which is where agent models are listed.
+func (m *Model) newAgentPreferredModel() AgentPreferredModel {
+	remote, _ := m.defaultRemote()
+	lister := remoteModelLister
+	if m.agentModelLister != nil {
+		lister = m.agentModelLister
+	}
+	host := remote.Name
+	if host == "" {
+		host = remote.Host
+	}
+	return NewAgentPreferredModel(m.cfg, host, lister(remote))
+}
+
 func (m *Model) handleAgentPreferredUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" && !m.agentPreferred.adding {
+	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" && !m.agentPreferred.inFlow() {
 		m.state = viewStateMenu
 		return m, nil
 	}

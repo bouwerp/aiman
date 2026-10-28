@@ -618,13 +618,15 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if berr != nil {
 		return errResp(req.ID, CodeInvalidParams, berr.Error())
 	}
+	var launchModel, launchEffort string
 	if strings.TrimSpace(params.Agent) == "" {
 		// An explicit agent always wins; only an empty one reads agents.preferred.
 		picked, perr := s.pickAgent(ctx)
 		if perr != nil {
 			return errResp(req.ID, CodeNoPreferredAgent, perr.Error())
 		}
-		params.Agent, params.AgentName = picked, ""
+		params.Agent, params.AgentName = picked.Agent, ""
+		launchModel, launchEffort = picked.Model, picked.Effort
 	}
 	name := params.Name
 	if name == "" {
@@ -664,8 +666,9 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		Brief:         brief,
 		BaseBranch:    params.Base,
 		// The agent's launch model and effort come from this host's own agent
-		// defaults, which serve install keeps in step with the laptop's config.
-		Agent:          &domain.Agent{Name: agentName, Command: params.Agent},
+		// defaults, which serve install keeps in step with the laptop's config,
+		// unless the picked agents.preferred entry names its own.
+		Agent:          &domain.Agent{Name: agentName, Command: params.Agent, LaunchModel: launchModel, LaunchEffort: launchEffort},
 		BudgetTokens:   params.BudgetTokens,
 		Repo:           domain.Repo{Name: params.Repo},
 		ExistingBranch: params.ExistingBranch,

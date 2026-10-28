@@ -68,7 +68,7 @@ func TestHandoverConfigYAMLRoundTrip(t *testing.T) {
 func TestHandoverCandidates(t *testing.T) {
 	cfg := &Config{
 		Roles:  RolesConfig{Handover: RoleOverride{Agent: " codex "}},
-		Agents: AgentsConfig{Preferred: []string{"claude", "codex", " ", "agy"}},
+		Agents: AgentsConfig{Preferred: PreferredFromCommands("claude", "codex", " ", "agy")},
 	}
 	if got, want := cfg.HandoverCandidates("agy"), []string{"codex", "claude", "agy"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("candidates = %v, want %v", got, want)

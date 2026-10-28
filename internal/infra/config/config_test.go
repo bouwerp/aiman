@@ -217,7 +217,7 @@ func TestMarshalServeConfigCarriesVerify(t *testing.T) {
 }
 
 func TestMarshalServeConfigCarriesPreferred(t *testing.T) {
-	cfg := &Config{Agents: AgentsConfig{Preferred: []string{"claude", "grok"}}}
+	cfg := &Config{Agents: AgentsConfig{Preferred: []PreferredAgent{{Agent: "claude"}, {Agent: "pi", Model: "openrouter/qwen/qwen3-coder", Effort: "high"}}}}
 	body, err := cfg.MarshalServeConfig("h")
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestMarshalServeConfigCarriesPreferred(t *testing.T) {
 	if err := yaml.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.Agents.Preferred, []string{"claude", "grok"}) {
+	if !reflect.DeepEqual(got.Agents.Preferred, cfg.Agents.Preferred) {
 		t.Fatalf("preferred = %v\n%s", got.Agents.Preferred, body)
 	}
 	var omitted ServeConfig

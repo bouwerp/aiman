@@ -82,7 +82,8 @@ type ServeConfig struct {
 // how serve keeps installed agents up to date.
 type AgentsConfig struct {
 	// Preferred is the order in which a coordinator may start child agents.
-	Preferred []string `yaml:"preferred"`
+	// The same agent may appear more than once with different models.
+	Preferred []PreferredAgent `yaml:"preferred"`
 	// Update is agents.update.
 	Update AgentUpdateConfig `yaml:"update,omitempty"`
 }
@@ -95,7 +96,7 @@ func (a AgentsConfig) IsZero() bool { return a.Preferred == nil && a.Update.IsZe
 // just update does not gain an empty preferred list on the way back in.
 func (a AgentsConfig) MarshalYAML() (any, error) {
 	type out struct {
-		Preferred *[]string         `yaml:"preferred,omitempty"`
+		Preferred *[]PreferredAgent `yaml:"preferred,omitempty"`
 		Update    AgentUpdateConfig `yaml:"update,omitempty"`
 	}
 	o := out{Update: a.Update}

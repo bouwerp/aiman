@@ -324,9 +324,9 @@ file or a test command.
 
 `requires` entries are checked when the wizard reaches the summary; missing tools show a
 warning but do not block create. Launch model/effort precedence is `agent_defaults` <
-`repos.<slug>.agent_overrides` < `roles.verifier`. The `V verify` hint appears for a
-non-reviewer session with commits ahead of its base; `verify.test_command` supplies the
-evidence a passing review needs.
+`repos.<slug>.agent_overrides` < picked `agents.preferred` entry < `roles.verifier`. The
+`V verify` hint appears for a non-reviewer session with commits ahead of its base;
+`verify.test_command` supplies the evidence a passing review needs.
 
 Every handover (archive, forget, restart, agent switch, pre-compact) first writes a
 mechanical `.aiman_handover.md`. With `handover.child` on, serve then starts a hidden
@@ -341,7 +341,8 @@ A pre-compact pointer waits until the child finishes, and a restart or agent swi
 note to re-read the rewritten file.
 
 Coordinators start child sessions with `aiman session create --for <todo-id>`; the server
-picks the first installed command from `agents.preferred` when `--agent` is omitted. Give a
+picks the first `agents.preferred` entry whose agent is installed when `--agent` is omitted,
+and launches it with that entry's model and effort. Give a
 child an explicit input contract with `--brief-file <path>` (the three headings described
 in the bundled skill). A child writes `.aiman_report.md` before its PR, and the parent's
 item stays open until that report cites a file or a test command.
@@ -1056,6 +1057,21 @@ agent_defaults:
   "Grok Build CLI":
     model: "4.6"
     effort: medium
+
+agents:
+  # Agents a coordinator may start for child sessions, in order. serve starts
+  # the first entry whose agent is installed on the host. An entry is a command,
+  # or agent/model/effort; an entry's model and effort override agent_defaults
+  # and repo agent_overrides for that child. The same agent may appear more than
+  # once with different models. Editable in Menu → Preferred agents, which lists
+  # Pi's providers and models from the default remote (`pi --list-models`).
+  preferred:
+    - agent: pi
+      model: openrouter/qwen/qwen3-coder
+      effort: high
+    - agent: pi
+      model: deepseek/deepseek-flash
+    - claude
 
 ai:
   enabled: true

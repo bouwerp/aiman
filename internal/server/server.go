@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handoverchild"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
@@ -129,7 +131,7 @@ type Server struct {
 	// preferredAgents is agents.preferred; agentInstalled reports whether a
 	// command resolves on this host. session.create with no agent picks from
 	// them. Both stay empty until SetAgentChoice.
-	preferredAgents []string
+	preferredAgents []config.PreferredAgent
 	agentInstalled  func(ctx context.Context, command string) bool
 
 	// agentUpdates reports and applies agent CLI updates; nil until
@@ -152,17 +154,18 @@ func (s *Server) SetMemoryJobs(q *memoryjob.Queue) {
 
 // SetAgentChoice sets the agents.preferred list and the probe that reports
 // whether a command is installed on this host.
-func (s *Server) SetAgentChoice(preferred []string, installed func(ctx context.Context, command string) bool) {
-	s.preferredAgents = append([]string(nil), preferred...)
+func (s *Server) SetAgentChoice(preferred []config.PreferredAgent, installed func(ctx context.Context, command string) bool) {
+	s.preferredAgents = append([]config.PreferredAgent(nil), preferred...)
 	s.agentInstalled = installed
 }
 
-// pickAgent returns the first agents.preferred command installed on this host.
-func (s *Server) pickAgent(ctx context.Context) (string, error) {
+// pickAgent returns the first agents.preferred entry whose command is
+// installed on this host.
+func (s *Server) pickAgent(ctx context.Context) (config.PreferredAgent, error) {
 	var installed []string
 	if s.agentInstalled != nil {
-		for _, name := range s.preferredAgents {
-			if name = strings.TrimSpace(name); name != "" && s.agentInstalled(ctx, name) {
+		for _, p := range s.preferredAgents {
+			if name := p.Command(); name != "" && !slices.Contains(installed, name) && s.agentInstalled(ctx, name) {
 				installed = append(installed, name)
 			}
 		}

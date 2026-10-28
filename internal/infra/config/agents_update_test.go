@@ -72,7 +72,7 @@ func TestAgentsConfigIsZeroAccountsForUpdate(t *testing.T) {
 	if strings.Contains(string(body), "preferred") {
 		t.Fatalf("unset preferred written:\n%s", body)
 	}
-	cleared, err := yaml.Marshal(Config{Agents: AgentsConfig{Preferred: []string{}}})
+	cleared, err := yaml.Marshal(Config{Agents: AgentsConfig{Preferred: PreferredFromCommands()}})
 	if err != nil {
 		t.Fatal(err)
 	}
