@@ -7,7 +7,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// PreferredAgent is one agents.preferred entry: an agent command, optionally
+// PreferredAgent is one agents.smart or agents.preferred entry: an agent command, optionally
 // with the model and effort a child started from this entry runs with. Empty
 // Model or Effort leaves that setting to agent_defaults and the repo's
 // agent_overrides.
@@ -46,7 +46,7 @@ func (p *PreferredAgent) UnmarshalYAML(n *yaml.Node) error {
 		*p = PreferredAgent(f)
 		return nil
 	default:
-		return fmt.Errorf("line %d: agents.preferred entry must be a command or an agent/model/effort mapping", n.Line)
+		return fmt.Errorf("line %d: agents entry must be a command or an agent/model/effort mapping", n.Line)
 	}
 }
 

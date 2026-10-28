@@ -81,8 +81,12 @@ type Session struct {
 	// session was created with (an agents.preferred entry). Restart with the
 	// same agent and revive launch with them again; an agent switch clears
 	// them. Empty means the configured defaults.
-	LaunchModel      string
-	LaunchEffort     string
+	LaunchModel  string
+	LaunchEffort string
+	// Tier is the model tier (smart or worker) the launch entry came from,
+	// after any fallback. Empty means the agent was chosen explicitly. It is
+	// kept and cleared together with LaunchModel and LaunchEffort.
+	Tier             string
 	AgentSessionID   string // vendor conversation id for resume (claude --resume, grok --resume, …)
 	AgentSessionPath string // optional vendor transcript / session file
 	AgentTitle       string // vendor session title, when a hook reports one
@@ -265,17 +269,20 @@ type SessionRepository interface {
 
 // SessionConfig holds the configuration for creating a new session.
 type SessionConfig struct {
-	Name       string
-	Group      string
-	ParentID   string // session that spawned this one; empty is a root
-	Role       SessionRole
-	Quick      bool // ad-hoc session with generated q{n} name in group "quick"
-	IssueKey   string
-	Issue      *Issue // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
-	Branch     string
-	Repo       Repo
-	Directory  string
-	Agent      *Agent
+	Name      string
+	Group     string
+	ParentID  string // session that spawned this one; empty is a root
+	Role      SessionRole
+	Quick     bool // ad-hoc session with generated q{n} name in group "quick"
+	IssueKey  string
+	Issue     *Issue // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
+	Branch    string
+	Repo      Repo
+	Directory string
+	Agent     *Agent
+	// Tier is the model tier Agent was picked from; empty for an explicit
+	// agent. CreateSession copies it onto the session.
+	Tier       string
 	Skills     []Skill
 	PromptFree bool
 	// FreshAgent skips native --resume and clears the remote sidecar. Set when

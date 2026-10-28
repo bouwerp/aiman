@@ -81,25 +81,36 @@ type ServeConfig struct {
 // AgentsConfig configures agent selection shared by coordinator sessions and
 // how serve keeps installed agents up to date.
 type AgentsConfig struct {
-	// Preferred is the order in which a coordinator may start child agents.
-	// The same agent may appear more than once with different models.
+	// Smart is the smart tier: the agents, in order, for planning, design,
+	// ambiguous debugging, review and user-created sessions.
+	Smart []PreferredAgent `yaml:"smart,omitempty"`
+	// Preferred is the worker tier: the order in which a coordinator may
+	// start child agents for well-specified tasks. The same agent may appear
+	// more than once with different models.
 	Preferred []PreferredAgent `yaml:"preferred"`
 	// Update is agents.update.
 	Update AgentUpdateConfig `yaml:"update,omitempty"`
 }
 
 // IsZero keeps an untouched agents block out of the config while still
-// writing preferred: [] when the user clears a list.
-func (a AgentsConfig) IsZero() bool { return a.Preferred == nil && a.Update.IsZero() }
+// writing smart: [] or preferred: [] when the user clears a list.
+func (a AgentsConfig) IsZero() bool {
+	return a.Smart == nil && a.Preferred == nil && a.Update.IsZero()
+}
 
-// MarshalYAML writes preferred only when it is set, so a block that carries
-// just update does not gain an empty preferred list on the way back in.
+// MarshalYAML writes smart and preferred only when they are set, so a block
+// that carries just update does not gain empty lists on the way back in.
 func (a AgentsConfig) MarshalYAML() (any, error) {
 	type out struct {
+		Smart     *[]PreferredAgent `yaml:"smart,omitempty"`
 		Preferred *[]PreferredAgent `yaml:"preferred,omitempty"`
 		Update    AgentUpdateConfig `yaml:"update,omitempty"`
 	}
 	o := out{Update: a.Update}
+	if a.Smart != nil {
+		s := a.Smart
+		o.Smart = &s
+	}
 	if a.Preferred != nil {
 		p := a.Preferred
 		o.Preferred = &p
