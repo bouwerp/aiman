@@ -30,17 +30,29 @@ func TestPreferredEditorReordersAndSaves(t *testing.T) {
 
 	next, _ = m.Update(pressRune('a'))
 	m = next.(AgentPreferredModel)
-	for _, r := range "codex" {
-		next, _ = m.Update(pressRune(r))
-		m = next.(AgentPreferredModel)
+	if !m.adding || len(m.choices) == 0 {
+		t.Fatalf("adding=%v choices=%v", m.adding, m.choices)
 	}
-	if !m.adding || m.input != "codex" {
-		t.Fatalf("adding=%v input=%q", m.adding, m.input)
+	codex := -1
+	for i, c := range m.choices {
+		if c.command == "claude" || c.command == "grok" {
+			t.Fatalf("picker offers %q, which is already preferred", c.command)
+		}
+		if c.command == "codex" {
+			codex = i
+		}
+	}
+	if codex < 0 {
+		t.Fatalf("codex missing from supported agents: %v", m.choices)
+	}
+	for i := 0; i < codex; i++ {
+		next, _ = m.Update(pressKey("down"))
+		m = next.(AgentPreferredModel)
 	}
 	next, _ = m.Update(pressKey("enter"))
 	m = next.(AgentPreferredModel)
-	if len(m.items) != 3 || m.items[2] != "codex" {
-		t.Fatalf("append = %v", m.items)
+	if m.adding || len(m.items) != 3 || m.items[2] != "codex" {
+		t.Fatalf("adding=%v append = %v", m.adding, m.items)
 	}
 	next, _ = m.Update(pressRune('d'))
 	m = next.(AgentPreferredModel)
@@ -116,5 +128,29 @@ func TestPreferredClearedListRoundTrips(t *testing.T) {
 	}
 	if loaded.Agents.Preferred == nil || len(loaded.Agents.Preferred) != 0 {
 		t.Fatalf("cleared preferred reloaded as %#v", loaded.Agents.Preferred)
+	}
+}
+
+func TestPreferredEditorAcceptsTypedCommand(t *testing.T) {
+	m := NewAgentPreferredModel(&config.Config{})
+	next, _ := m.Update(pressRune('a'))
+	m = next.(AgentPreferredModel)
+	for range m.choices {
+		next, _ = m.Update(pressKey("down"))
+		m = next.(AgentPreferredModel)
+	}
+	next, _ = m.Update(pressKey("enter"))
+	m = next.(AgentPreferredModel)
+	if !m.typing {
+		t.Fatal("the last row must switch to typing a command")
+	}
+	for _, r := range "my-agent" {
+		next, _ = m.Update(pressRune(r))
+		m = next.(AgentPreferredModel)
+	}
+	next, _ = m.Update(pressKey("enter"))
+	m = next.(AgentPreferredModel)
+	if m.adding || len(m.items) != 1 || m.items[0] != "my-agent" {
+		t.Fatalf("adding=%v items=%v", m.adding, m.items)
 	}
 }
