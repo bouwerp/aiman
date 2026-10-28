@@ -11,13 +11,13 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
-func TestTmuxNameForCreateUsesBranchNotDisplayName(t *testing.T) {
-	got := tmuxNameForCreate("wtb-1925-auth", "spike")
-	want := domain.SanitizeTmuxSessionName("wtb-1925-auth")
+func TestTerminalNameForCreateUsesBranchNotDisplayName(t *testing.T) {
+	got := terminalNameForCreate("wtb-1925-auth", "spike")
+	want := domain.TerminalNameFromBranch("wtb-1925-auth")
 	if got != want {
-		t.Fatalf("tmuxNameForCreate = %q, want branch-derived %q (not the display name)", got, want)
+		t.Fatalf("terminalNameForCreate = %q, want branch-derived %q (not the display name)", got, want)
 	}
-	if got == domain.SanitizeTmuxSessionName("spike") && want != got {
+	if got == domain.TerminalNameFromBranch("spike") && want != got {
 		t.Fatal("display name must not become the tmux session")
 	}
 }

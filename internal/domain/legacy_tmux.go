@@ -31,7 +31,7 @@ type LegacyTmuxError struct {
 
 // NewLegacyTmuxError builds the refusal for s.
 func NewLegacyTmuxError(s Session) error {
-	return &LegacyTmuxError{Host: s.RemoteHost, Name: s.TmuxSession}
+	return &LegacyTmuxError{Host: s.RemoteHost, Name: s.TerminalName}
 }
 
 // StopCommand is the exact command the user runs on the host. The '=' prefix

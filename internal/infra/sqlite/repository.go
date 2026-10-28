@@ -315,7 +315,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		hookAt = s.HookStateAt
 	}
 	_, err := r.db.ExecContext(ctx, query,
-		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TmuxSession, s.Backend, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, s.LaunchModel, s.LaunchEffort, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.BudgetTokens, s.WatchPR, string(s.Role), s.IssueType, s.CreatedAt, updatedAt)
+		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TerminalName, s.Backend, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, s.LaunchModel, s.LaunchEffort, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.BudgetTokens, s.WatchPR, string(s.Role), s.IssueType, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}

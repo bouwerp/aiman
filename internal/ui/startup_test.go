@@ -61,8 +61,8 @@ func (m *startupSessionRepo) DeleteScheduledPrompt(context.Context, string) erro
 func TestLoadConfiguredSessions_PrunesRemovedRemoteSessions(t *testing.T) {
 	repo := &startupSessionRepo{
 		sessions: []domain.Session{
-			{ID: "gone", RemoteHost: "devbox", TmuxSession: "PB-720"},
-			{ID: "keep", RemoteHost: "still-here", TmuxSession: "PB-721"},
+			{ID: "gone", RemoteHost: "devbox", TerminalName: "PB-720"},
+			{ID: "keep", RemoteHost: "still-here", TerminalName: "PB-721"},
 		},
 	}
 	cfg := &config.Config{
@@ -84,8 +84,8 @@ func TestLoadConfiguredSessions_PrunesRemovedRemoteSessions(t *testing.T) {
 func TestLoadConfiguredSessions_PrunesEphemeralIDs(t *testing.T) {
 	repo := &startupSessionRepo{
 		sessions: []domain.Session{
-			{ID: "pending-1", RemoteHost: "still-here", TmuxSession: "feature-pb-1"},
-			{ID: "keep", RemoteHost: "still-here", TmuxSession: "PB-721"},
+			{ID: "pending-1", RemoteHost: "still-here", TerminalName: "feature-pb-1"},
+			{ID: "keep", RemoteHost: "still-here", TerminalName: "PB-721"},
 		},
 	}
 	cfg := &config.Config{Remotes: []config.Remote{{Host: "still-here"}}}
@@ -108,8 +108,8 @@ func TestLoadConfiguredSessions_PrunesEphemeralIDs(t *testing.T) {
 func TestLoadConfiguredSessions_EmptyRemotesNeverMassDeletes(t *testing.T) {
 	repo := &startupSessionRepo{
 		sessions: []domain.Session{
-			{ID: "s1", RemoteHost: "devbox", TmuxSession: "PB-1"},
-			{ID: "s2", RemoteHost: "regent0", TmuxSession: "PB-2"},
+			{ID: "s1", RemoteHost: "devbox", TerminalName: "PB-1"},
+			{ID: "s2", RemoteHost: "regent0", TerminalName: "PB-2"},
 		},
 	}
 	cfg := &config.Config{Remotes: nil}

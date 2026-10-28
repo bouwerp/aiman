@@ -110,7 +110,7 @@ func TestWriteHandoverWritesFileAndNote(t *testing.T) {
 	dir := t.TempDir()
 	srv := newHandoverTestServer(t, paneText("$ go test\nFAIL parser"), todosWith("t2", "Fix parser", "active"), pending("[aiman] note A"))
 	sess := domain.Session{
-		ID: "s1", Name: "WTB-12", WorkingDirectory: dir, TmuxSession: "wtb", AgentTitle: "Fixing parser",
+		ID: "s1", Name: "WTB-12", WorkingDirectory: dir, TerminalName: "wtb", AgentTitle: "Fixing parser",
 	}
 	res, err := srv.writeHandover(context.Background(), sess, "restart")
 	if err != nil {
@@ -168,7 +168,7 @@ func TestWriteHandoverUnchangedIsNotRewritten(t *testing.T) {
 	store := &countingContext{ContextStore: contextstore.NewFiles(t.TempDir())}
 	srv := newHandoverTestServer(t, paneText("idle"), todosWith("t2", "Fix parser", "active"), pending("[aiman] note A"))
 	srv.ctxStore = store
-	sess := domain.Session{ID: "s1", Name: "WTB-12", WorkingDirectory: dir, TmuxSession: "wtb", AgentTitle: "Fixing parser"}
+	sess := domain.Session{ID: "s1", Name: "WTB-12", WorkingDirectory: dir, TerminalName: "wtb", AgentTitle: "Fixing parser"}
 	res, err := srv.writeHandover(context.Background(), sess, "restart")
 	if err != nil {
 		t.Fatal(err)
@@ -356,7 +356,7 @@ func TestWriteHandoverCaptureErrorIsEmptyTail(t *testing.T) {
 	dir := t.TempDir()
 	srv := newHandoverTestServer(t, "SECRET", nil, "")
 	srv.pty = paneRuntime("SECRET") // no session, so the capture fails
-	res, err := srv.writeHandover(context.Background(), domain.Session{ID: "s1", Name: "n", WorkingDirectory: dir, TmuxSession: "wtb"}, "restart")
+	res, err := srv.writeHandover(context.Background(), domain.Session{ID: "s1", Name: "n", WorkingDirectory: dir, TerminalName: "wtb"}, "restart")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +578,7 @@ func TestPreCompactReportReturnsWhileDiffIsBlocked(t *testing.T) {
 	dir := t.TempDir()
 	repo := testRepo(t)
 	if err := repo.Save(context.Background(), &domain.Session{
-		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1",
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TerminalName: "s1",
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -624,7 +624,7 @@ func TestHandoverKeepsPaneWhenDiffBlocks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
 	res, err := srv.writeHandover(ctx, domain.Session{
-		ID: "s1", Name: "s1", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
+		ID: "s1", Name: "s1", WorkingDirectory: dir, TerminalName: "s1", Backend: domain.BackendPTY,
 	}, "pre_compact")
 	if err != nil {
 		t.Fatalf("write: %v", err)
@@ -669,7 +669,7 @@ func TestSessionEndReportDoesNotWriteHandover(t *testing.T) {
 func TestHandoverPointQueuesOnlyWhenFileExists(t *testing.T) {
 	dir := t.TempDir()
 	srv, _, _ := todoServer(t, domain.Session{
-		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TerminalName: "s1", Backend: domain.BackendPTY,
 	})
 	var absent struct {
 		Type   string `json:"type"`
@@ -708,7 +708,7 @@ func TestHandoverPointQueuesOnlyWhenFileExists(t *testing.T) {
 func TestHandoverPointPreCompactUsesCompactionNote(t *testing.T) {
 	dir := t.TempDir()
 	srv, _, _ := todoServer(t, domain.Session{
-		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TerminalName: "s1", Backend: domain.BackendPTY,
 	})
 	path := filepath.Join(dir, domain.AimanHandoverFileName)
 	if err := os.WriteFile(path, []byte("handover\n"), 0o644); err != nil {
@@ -732,7 +732,7 @@ func TestHandoverPointPreCompactUsesCompactionNote(t *testing.T) {
 func TestHandoverPointArchiveQueuesNothing(t *testing.T) {
 	dir := t.TempDir()
 	srv, _, _ := todoServer(t, domain.Session{
-		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TerminalName: "s1", Backend: domain.BackendPTY,
 	})
 	path := filepath.Join(dir, domain.AimanHandoverFileName)
 	if err := os.WriteFile(path, []byte("handover\n"), 0o644); err != nil {
@@ -755,7 +755,7 @@ func TestHandoverPointArchiveQueuesNothing(t *testing.T) {
 func TestPreCompactReportQueuesCompactionPointer(t *testing.T) {
 	dir := t.TempDir()
 	srv, _, _ := todoServer(t, domain.Session{
-		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TerminalName: "s1", Backend: domain.BackendPTY,
 	})
 	resp := srv.handleReportAgentSession(context.Background(), Request{
 		ID: "1", Method: "session.report_agent_session",

@@ -87,8 +87,8 @@ func TestTerminateSaveContextIgnoresHandoverFailure(t *testing.T) {
 }
 
 func TestHandoverRoleSessionsLeftOutOfList(t *testing.T) {
-	worker := domain.Session{ID: "w1", Name: "impl", TmuxSession: "w1", RemoteHost: "10.0.1.5"}
-	child := domain.Session{ID: "h1", Name: "handover", TmuxSession: "h1", RemoteHost: "10.0.1.5", Role: domain.SessionRoleHandover, ParentID: "w1"}
+	worker := domain.Session{ID: "w1", Name: "impl", TerminalName: "w1", RemoteHost: "10.0.1.5"}
+	child := domain.Session{ID: "h1", Name: "handover", TerminalName: "h1", RemoteHost: "10.0.1.5", Role: domain.SessionRoleHandover, ParentID: "w1"}
 	m := NewModel(twoRemoteCfg(), nil, []domain.Session{worker, child}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	if len(m.filteredSessions) != 1 || m.filteredSessions[0].session.ID != "w1" {

@@ -132,11 +132,11 @@ func TestBackgroundCreate_SuccessReplacesPlaceholder(t *testing.T) {
 	id := model.allSessions[0].ID
 
 	real := domain.Session{
-		ID:          "real-1",
-		TmuxSession: "pb-1",
-		RepoName:    "org/repo",
-		RemoteHost:  "devbox",
-		Status:      domain.SessionStatusActive,
+		ID:           "real-1",
+		TerminalName: "pb-1",
+		RepoName:     "org/repo",
+		RemoteHost:   "devbox",
+		Status:       domain.SessionStatusActive,
 	}
 	updated, _ := model.Update(sessionCreateMsg{placeholderID: id, session: real})
 	model = updated.(*Model)
@@ -211,8 +211,8 @@ func TestBackgroundCreate_WorktreeExistsInUseGetsSuffix(t *testing.T) {
 	if ph.Branch != "feature/pb-1-1" {
 		t.Errorf("expected placeholder Branch suffixed to feature/pb-1-1, got %q", ph.Branch)
 	}
-	if ph.TmuxSession != "feature-pb-1-1" {
-		t.Errorf("expected placeholder TmuxSession to be feature-pb-1-1, got %q", ph.TmuxSession)
+	if ph.TerminalName != "feature-pb-1-1" {
+		t.Errorf("expected placeholder TerminalName to be feature-pb-1-1, got %q", ph.TerminalName)
 	}
 }
 
@@ -242,12 +242,12 @@ func TestBackgroundCreate_DiscoveryDoesNotCloneInFlightSession(t *testing.T) {
 	id := model.allSessions[0].ID
 
 	live := domain.Session{
-		ID:          "real-1",
-		TmuxSession: "feature-pb-1",
-		Branch:      "feature/pb-1",
-		RepoName:    "org/repo",
-		RemoteHost:  "devbox",
-		Status:      domain.SessionStatusActive,
+		ID:           "real-1",
+		TerminalName: "feature-pb-1",
+		Branch:       "feature/pb-1",
+		RepoName:     "org/repo",
+		RemoteHost:   "devbox",
+		Status:       domain.SessionStatusActive,
 	}
 	model.applyDiscoveryResult(discoveryResultMsg{
 		sessions:     []domain.Session{live},
@@ -278,12 +278,12 @@ func TestBackgroundCreate_AssignGroupDuringCreateKeepsOneSession(t *testing.T) {
 	}
 
 	live := domain.Session{
-		ID:          "real-1",
-		TmuxSession: "feature-pb-1",
-		Branch:      "feature/pb-1",
-		RepoName:    "org/repo",
-		RemoteHost:  "devbox",
-		Status:      domain.SessionStatusActive,
+		ID:           "real-1",
+		TerminalName: "feature-pb-1",
+		Branch:       "feature/pb-1",
+		RepoName:     "org/repo",
+		RemoteHost:   "devbox",
+		Status:       domain.SessionStatusActive,
 	}
 	model.applyDiscoveryResult(discoveryResultMsg{
 		sessions:     []domain.Session{live},
@@ -323,7 +323,7 @@ func TestBackgroundCreate_ReadyToastAutoClears(t *testing.T) {
 	_ = model.startBackgroundCreate()
 	id := model.allSessions[0].ID
 
-	updated, _ := model.Update(sessionCreateMsg{placeholderID: id, session: domain.Session{ID: "real-1", TmuxSession: "pb-1", RemoteHost: "devbox"}})
+	updated, _ := model.Update(sessionCreateMsg{placeholderID: id, session: domain.Session{ID: "real-1", TerminalName: "pb-1", RemoteHost: "devbox"}})
 	model = updated.(*Model)
 
 	if !strings.Contains(model.snapshotToast, "is ready") {

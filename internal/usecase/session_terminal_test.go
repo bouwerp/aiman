@@ -322,7 +322,7 @@ func TestCreatePTYSessionWritesParamsFile(t *testing.T) {
 // runtime with an empty handle.
 func TestTerminateSessionTerminalSkipsPTYWithoutAnID(t *testing.T) {
 	r := &terminalRemote{}
-	if err := TerminateSessionTerminal(context.Background(), r, domain.Session{TmuxSession: "WTB-1"}); err != nil {
+	if err := TerminateSessionTerminal(context.Background(), r, domain.Session{TerminalName: "WTB-1"}); err != nil {
 		t.Fatalf("terminate: %v", err)
 	}
 	if strings.Contains(strings.Join(r.commands, "\n"), "aiman pty") {
@@ -348,7 +348,7 @@ func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
 		"native-sessions": "",
 	}}
 	s := domain.Session{ID: "dead", Backend: domain.BackendPTY, AgentName: "claude",
-		AgentSessionID: "conv-42", WorkingDirectory: "/w", TmuxSession: "feat"}
+		AgentSessionID: "conv-42", WorkingDirectory: "/w", TerminalName: "feat"}
 	revived, err = ReviveIfNeeded(ctx, r, &s, ReviveOptions{})
 	if err != nil || !revived {
 		t.Fatalf("expected revival: %v / %v", revived, err)

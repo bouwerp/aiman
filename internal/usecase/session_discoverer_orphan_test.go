@@ -31,8 +31,8 @@ func TestDiscoverSkipsMainWorktrees(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected only the linked worktree, got %d: %+v", len(sessions), sessions)
 	}
-	if sessions[0].TmuxSession != "app@feature" {
-		t.Errorf("TmuxSession = %q, want app@feature", sessions[0].TmuxSession)
+	if sessions[0].TerminalName != "app@feature" {
+		t.Errorf("TerminalName = %q, want app@feature", sessions[0].TerminalName)
 	}
 }
 

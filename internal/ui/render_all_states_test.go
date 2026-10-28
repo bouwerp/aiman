@@ -16,7 +16,7 @@ func renderModelForAllStates(t *testing.T) *Model {
 	cfg := twoRemoteCfg()
 	s := domain.Session{
 		ID: "s1", IssueKey: "AIM-1", RepoName: "org/repo", Branch: "feature/x",
-		TmuxSession: "aiman-s1", RemoteHost: "10.0.1.5", Status: domain.SessionStatusActive,
+		TerminalName: "aiman-s1", RemoteHost: "10.0.1.5", Status: domain.SessionStatusActive,
 		WorktreePath: "/home/ubuntu/repo@feature-x", AgentName: "Claude Code",
 		MutagenSyncID: "sync-1", LocalPath: "/tmp/local",
 	}

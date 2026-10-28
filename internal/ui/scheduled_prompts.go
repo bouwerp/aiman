@@ -403,7 +403,7 @@ func (m ScheduledPromptsModel) viewSelectSessions() string {
 				name = "unknown branch"
 			}
 
-			line := fmt.Sprintf("%s %s [%s]", check, s.TmuxSession, name)
+			line := fmt.Sprintf("%s %s [%s]", check, s.TerminalName, name)
 			if i == m.sessionCursor {
 				line = activeStyle.Render(line)
 			}

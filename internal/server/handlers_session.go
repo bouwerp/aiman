@@ -23,16 +23,16 @@ import (
 )
 
 type SessionInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Group       string `json:"group"`
-	ParentID    string `json:"parent_id,omitempty"`
-	Role        string `json:"role,omitempty"`
-	IssueKey    string `json:"issue_key,omitempty"`
-	Branch      string `json:"branch,omitempty"`
-	BaseBranch  string `json:"base_branch,omitempty"`
-	RepoName    string `json:"repo_name,omitempty"`
-	TmuxSession string `json:"tmux_session,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Group        string `json:"group"`
+	ParentID     string `json:"parent_id,omitempty"`
+	Role         string `json:"role,omitempty"`
+	IssueKey     string `json:"issue_key,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	BaseBranch   string `json:"base_branch,omitempty"`
+	RepoName     string `json:"repo_name,omitempty"`
+	TerminalName string `json:"tmux_session,omitempty"`
 	// Backend is "pty", or "tmux" for a legacy row aiman no longer runs.
 	// Clients use it to show and refuse legacy rows.
 	Backend          string `json:"backend,omitempty"`
@@ -69,7 +69,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		IssueKey:         s.IssueKey,
 		Branch:           s.Branch,
 		RepoName:         s.RepoName,
-		TmuxSession:      s.TmuxSession,
+		TerminalName:     s.TerminalName,
 		Backend:          s.Backend,
 		WorktreePath:     s.WorktreePath,
 		WorkingDirectory: s.WorkingDirectory,
@@ -196,7 +196,7 @@ func (s *Server) liveSessions(context.Context) []domain.Session {
 		}
 		out = append(out, domain.Session{
 			ID:               id,
-			TmuxSession:      info.Name,
+			TerminalName:     info.Name,
 			Backend:          domain.BackendPTY,
 			WorkingDirectory: info.Dir,
 			Status:           domain.SessionStatusActive,
@@ -221,8 +221,8 @@ func mergeLiveSessions(stored, live []domain.Session) []domain.Session {
 	out := stored
 	for _, l := range live {
 		if i, ok := byID[l.ID]; ok {
-			if l.TmuxSession != "" {
-				out[i].TmuxSession = l.TmuxSession
+			if l.TerminalName != "" {
+				out[i].TerminalName = l.TerminalName
 			}
 			if l.WorkingDirectory != "" {
 				out[i].WorkingDirectory = l.WorkingDirectory
@@ -296,7 +296,7 @@ func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 // already shown in the dashboard, so it is what an agent should be able to use.
 func labelDiscovered(sess *domain.Session, others []domain.Session) {
 	if sess.IssueKey == "" {
-		sess.IssueKey = domain.ExtractKey(sess.TmuxSession)
+		sess.IssueKey = domain.ExtractKey(sess.TerminalName)
 	}
 	if sess.Group == "" {
 		sess.Group = domain.AssignSessionGroup("", sess.IssueKey, sess.RepoName, false)
@@ -304,7 +304,7 @@ func labelDiscovered(sess *domain.Session, others []domain.Session) {
 	if sess.Name != "" {
 		return
 	}
-	name := strings.TrimSpace(sess.TmuxSession)
+	name := strings.TrimSpace(sess.TerminalName)
 	if name == "" {
 		name = sess.ID
 	}
@@ -328,7 +328,7 @@ func (s *Server) backfill(sess *domain.Session, existing []domain.Session) {
 		sess.Group = domain.AssignSessionGroup("", sess.IssueKey, sess.RepoName, false)
 	}
 	if sess.Name == "" {
-		preferred := sess.TmuxSession
+		preferred := sess.TerminalName
 		name, err := domain.AssignSessionName(others, preferred, false)
 		if err != nil {
 			name = "s1"
@@ -1059,7 +1059,7 @@ func resolveSession(list []domain.Session, target string) (domain.Session, bool)
 		}
 	}
 	for _, s := range list {
-		if s.TmuxSession == target {
+		if s.TerminalName == target {
 			return s, true
 		}
 	}

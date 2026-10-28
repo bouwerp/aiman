@@ -93,7 +93,7 @@ func (m *Model) yankSessionOutputToClipboard(fullBuffer bool) bool {
 	}
 	var raw string
 	if fullBuffer {
-		raw = m.tmuxOutput
+		raw = m.paneOutput
 	} else {
 		raw = m.viewport.View()
 	}
@@ -319,7 +319,7 @@ func (i item) Description() string {
 }
 
 func (i item) FilterValue() string {
-	return i.session.Name + " " + i.session.Group + " " + i.session.IssueKey + " " + i.session.TmuxSession + " " + i.session.RepoName + " " + i.remoteName
+	return i.session.Name + " " + i.session.Group + " " + i.session.IssueKey + " " + i.session.TerminalName + " " + i.session.RepoName + " " + i.remoteName
 }
 
 type tunnelItem struct {
@@ -387,7 +387,7 @@ type Model struct {
 	doctorResults        []usecase.CheckResult
 	width, height        int
 	viewport             viewport.Model
-	tmuxOutput           string
+	paneOutput           string
 	// previewCols is the widest line in the current preview. Remote sessions are
 	// routinely wider than the panel, so this drives the pan hint.
 	previewCols int
@@ -973,11 +973,11 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	return model
 }
 
-type tmuxTickMsg time.Time
+type paneTickMsg time.Time
 
-// tmuxOutputMsg is one capture for the preview. session is the previewKey of
+// paneOutputMsg is one capture for the preview. session is the previewKey of
 // the session it came from.
-type tmuxOutputMsg struct {
+type paneOutputMsg struct {
 	session string
 	output  string
 	err     error
@@ -1003,7 +1003,7 @@ func hintMatches(msg inputHintMsg, s domain.Session) bool {
 	if msg.id != "" {
 		return s.ID == msg.id
 	}
-	return s.TmuxSession == msg.session
+	return s.TerminalName == msg.session
 }
 
 type aiSummaryMsg struct {
@@ -1199,9 +1199,9 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 	return nil
 }
 
-func tickTmux() tea.Cmd {
+func tickPane() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
-		return tmuxTickMsg(t)
+		return paneTickMsg(t)
 	})
 }
 
@@ -1251,17 +1251,17 @@ func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, 
 	return func() tea.Msg {
 		remote, ok := resolveRemote(cfg, session)
 		if !ok {
-			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
+			return aiSummaryMsg{session: session.TerminalName, err: fmt.Errorf("no remote configured")}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		pane, err := usecase.CaptureSessionPane(context.Background(), mgr, session)
 		if err != nil {
-			return aiSummaryMsg{session: session.TmuxSession, err: fmt.Errorf("capture pane: %w", err)}
+			return aiSummaryMsg{session: session.TerminalName, err: fmt.Errorf("capture pane: %w", err)}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		summary, err := intel.SummariseBriefly(ctx, pane)
-		return aiSummaryMsg{session: session.TmuxSession, summary: summary, err: err}
+		return aiSummaryMsg{session: session.TerminalName, summary: summary, err: err}
 	}
 }
 
@@ -1269,20 +1269,20 @@ func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, 
 func fetchTriggerDetailsCmd(cfg *config.Config, session domain.Session) tea.Cmd {
 	return func() tea.Msg {
 		if session.TriggerEventID == "" {
-			return triggerDetailsMsg{session: session.TmuxSession, err: fmt.Errorf("no trigger event ID")}
+			return triggerDetailsMsg{session: session.TerminalName, err: fmt.Errorf("no trigger event ID")}
 		}
 		remote, ok := resolveRemote(cfg, session)
 		if !ok {
-			return triggerDetailsMsg{session: session.TmuxSession, err: fmt.Errorf("no remote configured")}
+			return triggerDetailsMsg{session: session.TerminalName, err: fmt.Errorf("no remote configured")}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
 		cmd := fmt.Sprintf("gh issue view %s --repo %s", session.TriggerEventID, session.RepoName)
 		out, err := mgr.Execute(context.Background(), cmd)
 		if err != nil {
-			return triggerDetailsMsg{session: session.TmuxSession, err: fmt.Errorf("failed to fetch issue: %w\nOutput: %s", err, out)}
+			return triggerDetailsMsg{session: session.TerminalName, err: fmt.Errorf("failed to fetch issue: %w\nOutput: %s", err, out)}
 		}
-		return triggerDetailsMsg{session: session.TmuxSession, details: out, err: nil}
+		return triggerDetailsMsg{session: session.TerminalName, details: out, err: nil}
 	}
 }
 
@@ -1790,9 +1790,9 @@ func (m *Model) recreateMutagenSync(s domain.Session, background bool) tea.Cmd {
 			target = fmt.Sprintf("%s@%s", remote.User, remote.Host)
 		}
 
-		tmuxName := s.TmuxSession
-		if tmuxName == "" {
-			tmuxName = filepath.Base(s.WorktreePath)
+		terminalName := s.TerminalName
+		if terminalName == "" {
+			terminalName = filepath.Base(s.WorktreePath)
 		}
 
 		s.ID = strings.TrimSpace(s.ID)
@@ -1828,9 +1828,9 @@ func (m *Model) recreateMutagenSync(s domain.Session, background bool) tea.Cmd {
 
 		terminateCandidates := []string{
 			s.MutagenSyncID,
-			s.TmuxSession,
+			s.TerminalName,
 			filepath.Base(s.LocalPath),
-			tmuxName,
+			terminalName,
 		}
 		terminated := map[string]bool{syncName: true, tempSyncName: true}
 		for _, candidate := range terminateCandidates {
@@ -2083,7 +2083,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 						sessionCfg.Branch, rerr)
 				} else {
 					m.logPersistent("remote created session %s (%s) on %s; sync and credentials reconcile locally",
-						session.TmuxSession, session.ID, sessionCfg.RemoteHost)
+						session.TerminalName, session.ID, sessionCfg.RemoteHost)
 					if m.db != nil {
 						session.UpdatedAt = time.Now()
 						if serr := m.db.Save(ctx, session); serr != nil {
@@ -2108,7 +2108,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			m.logPersistent("CreateSession failed for branch %q: %v", sessionCfg.Branch, err)
 			return sessionCreateMsg{err: err, placeholderID: placeholderID}
 		}
-		m.logPersistent("worktree and terminal ready: terminal=%q id=%s", session.TmuxSession, session.ID)
+		m.logPersistent("worktree and terminal ready: terminal=%q id=%s", session.TerminalName, session.ID)
 
 		session.ID = strings.TrimSpace(session.ID)
 		if session.ID == "" {
@@ -2128,9 +2128,9 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 		if m.db != nil {
 			session.UpdatedAt = time.Now()
 			if err := m.db.Save(ctx, session); err != nil {
-				m.logPersistent("failed to save session %s (%s): %v", session.TmuxSession, session.ID, err)
+				m.logPersistent("failed to save session %s (%s): %v", session.TerminalName, session.ID, err)
 			} else {
-				m.logPersistent("saved session %s (%s) sync=%q", session.TmuxSession, session.ID, session.MutagenSyncID)
+				m.logPersistent("saved session %s (%s) sync=%q", session.TerminalName, session.ID, session.MutagenSyncID)
 			}
 		}
 
@@ -2216,7 +2216,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 						cs.cfg.AttachExisting = false
 						// Update the placeholder so the list shows the suffixed name while creating.
 						cs.placeholder.Branch = newBranch
-						cs.placeholder.TmuxSession = domain.SanitizeTmuxSessionName(newBranch)
+						cs.placeholder.TerminalName = domain.TerminalNameFromBranch(newBranch)
 						for i, s := range m.allSessions {
 							if s.ID == msg.placeholderID {
 								m.allSessions[i] = cs.placeholder
@@ -2269,7 +2269,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 	if msg.warning != "" {
 		toastCmd = m.showToast("⚠️  "+msg.warning, true, 8*time.Second)
 	} else {
-		toastCmd = m.showToast(fmt.Sprintf("✅ Session %s is ready", msg.session.TmuxSession), false, 5*time.Second)
+		toastCmd = m.showToast(fmt.Sprintf("✅ Session %s is ready", msg.session.TerminalName), false, 5*time.Second)
 	}
 
 	cmds := []tea.Cmd{toastCmd, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...))}
@@ -2283,7 +2283,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 			}
 		}
 		m.activeSession = previewKey(msg.session)
-		m.tmuxOutput = "Loading..."
+		m.paneOutput = "Loading..."
 		m.setPreviewContent()
 		cmds = append(cmds, m.queuePreview(msg.session), fetchGitStatus(m.cfg, msg.session))
 	}
@@ -2413,8 +2413,8 @@ func (m *Model) terminateStopSync(ctx context.Context, s domain.Session) error {
 	if s.MutagenSyncID != "" {
 		candidates = append(candidates, s.MutagenSyncID)
 	}
-	if s.TmuxSession != "" {
-		candidates = append(candidates, s.TmuxSession)
+	if s.TerminalName != "" {
+		candidates = append(candidates, s.TerminalName)
 	}
 	if s.LocalPath != "" {
 		candidates = append(candidates, filepath.Base(s.LocalPath))
@@ -2687,7 +2687,7 @@ func (m *Model) Init() tea.Cmd {
 	}
 	return tea.Batch(
 		toast,
-		tickTmux(),
+		tickPane(),
 		tickGit(),
 		tickSyncHealth(),
 		checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...)),
@@ -3330,11 +3330,11 @@ func (m *Model) applySessionCreateMsg(msg sessionCreateMsg, cmds []tea.Cmd) (tea
 	}
 
 	m.activeSession = previewKey(msg.session)
-	m.tmuxOutput = "Loading..."
+	m.paneOutput = "Loading..."
 	m.setPreviewContent()
 	m.state = m.loadingNext
 
-	return m, tea.Batch(tickTmux(), m.queuePreview(msg.session), warnCmd)
+	return m, tea.Batch(tickPane(), m.queuePreview(msg.session), warnCmd)
 }
 
 func (m *Model) applyTerminateStepMsg(msg terminateStepMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
@@ -3350,12 +3350,12 @@ func (m *Model) applyTerminateStepMsg(msg terminateStepMsg, cmds []tea.Cmd) (tea
 			// Safety skip, not a failure — the step declined to act
 			// (e.g. refusing to delete a main repository).
 			ts.skips = append(ts.skips, string(skip))
-			m.log("Terminate %s — step %q skipped: %s", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], string(skip))
+			m.log("Terminate %s — step %q skipped: %s", ts.session.TerminalName, ts.steps[min(msg.index, len(ts.steps)-1)], string(skip))
 		} else {
 			if msg.index < len(ts.errs) {
 				ts.errs[msg.index] = msg.err.Error()
 			}
-			m.log("Terminate %s — step %q failed: %v", ts.session.TmuxSession, ts.steps[min(msg.index, len(ts.steps)-1)], msg.err)
+			m.log("Terminate %s — step %q failed: %v", ts.session.TerminalName, ts.steps[min(msg.index, len(ts.steps)-1)], msg.err)
 		}
 	}
 	next := msg.index + 1
@@ -3369,7 +3369,7 @@ func (m *Model) applyTerminateStepMsg(msg terminateStepMsg, cmds []tea.Cmd) (tea
 	for _, s := range m.allSessions {
 		same := s.ID == ts.session.ID
 		if ts.session.ID == "" {
-			same = s.TmuxSession == ts.session.TmuxSession
+			same = s.TerminalName == ts.session.TerminalName
 		}
 		if !same {
 			remaining = append(remaining, s)
@@ -3384,12 +3384,12 @@ func (m *Model) applyTerminateStepMsg(msg terminateStepMsg, cmds []tea.Cmd) (tea
 		}
 	}
 	if errCount > 0 {
-		return m, m.showToast(fmt.Sprintf("⚠️  Session %s terminated with %d error(s) — see console (`)", ts.session.TmuxSession, errCount), true, 8*time.Second)
+		return m, m.showToast(fmt.Sprintf("⚠️  Session %s terminated with %d error(s) — see console (`)", ts.session.TerminalName, errCount), true, 8*time.Second)
 	}
 	if len(ts.skips) > 0 {
-		return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated — %s", ts.session.TmuxSession, ts.skips[0]), false, 8*time.Second)
+		return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated — %s", ts.session.TerminalName, ts.skips[0]), false, 8*time.Second)
 	}
-	return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated", ts.session.TmuxSession), false, 5*time.Second)
+	return m, m.showToast(fmt.Sprintf("🗑  Session %s terminated", ts.session.TerminalName), false, 5*time.Second)
 }
 
 func (m *Model) applySyncHealthMsg(msg syncHealthMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
@@ -3676,7 +3676,7 @@ func (m *Model) renderArchivePreview() string {
 	var header strings.Builder
 	header.WriteString(activeStyle.Render("📦 Archive Session") + "\n\n")
 	if p != nil {
-		meta := fmt.Sprintf("%s  ·  %s  ·  %s", p.session.TmuxSession, p.session.RepoName, p.session.AgentName)
+		meta := fmt.Sprintf("%s  ·  %s  ·  %s", p.session.TerminalName, p.session.RepoName, p.session.AgentName)
 		if p.session.Branch != "" {
 			meta += "  ·  " + p.session.Branch
 		}
@@ -3883,7 +3883,7 @@ func (m *Model) renderArchiveProgress() string {
 	if m.archivePreview != nil {
 		muted := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 		b.WriteString(muted.Render(fmt.Sprintf(
-			"%s  ·  %s", m.archivePreview.session.TmuxSession, m.archivePreview.session.RepoName,
+			"%s  ·  %s", m.archivePreview.session.TerminalName, m.archivePreview.session.RepoName,
 		)) + "\n\n")
 	}
 	checkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
@@ -3922,7 +3922,7 @@ func (m *Model) renderTerminateConfirm() string {
 		s := sel.(item).session
 		var b strings.Builder
 		b.WriteString(failStyle.Render("Terminate session?") + "\n\n")
-		b.WriteString(fmt.Sprintf("Session: %s\n", s.TmuxSession))
+		b.WriteString(fmt.Sprintf("Session: %s\n", s.TerminalName))
 		b.WriteString(fmt.Sprintf("Host: %s\n", s.RemoteHost))
 		b.WriteString(fmt.Sprintf("Repo: %s\n", s.RepoName))
 		b.WriteString(fmt.Sprintf("Branch: %s\n\n", s.Branch))
@@ -4028,7 +4028,7 @@ func (m *Model) renderTunnelManagerView() string {
 	var b strings.Builder
 	title := "Session Tunnels"
 	if m.tunnelSession != nil {
-		title = fmt.Sprintf("Session Tunnels: %s", m.tunnelSession.TmuxSession)
+		title = fmt.Sprintf("Session Tunnels: %s", m.tunnelSession.TerminalName)
 	}
 	b.WriteString(titleStyle.Render(title) + "\n\n")
 	if m.tunnelError != "" {
@@ -4101,7 +4101,7 @@ func (m *Model) renderVSCodeError() string {
 func (m *Model) renderChangeDirConfirm() string {
 	var b strings.Builder
 	b.WriteString(activeStyle.Render("Confirm Scope Change") + "\n\n")
-	b.WriteString(fmt.Sprintf("Session: %s\n", m.changingDirSession.TmuxSession))
+	b.WriteString(fmt.Sprintf("Session: %s\n", m.changingDirSession.TerminalName))
 	b.WriteString(fmt.Sprintf("New Scope: %s\n\n", m.sessionCfg.Directory))
 	b.WriteString("Changing the scope requires restarting the Mutagen sync and the agent.\n")
 	b.WriteString("The agent will be restarted in the new subdirectory.\n\n")
@@ -4155,7 +4155,7 @@ func (m *Model) renderRestartConfirm() string {
 	}
 	var b strings.Builder
 	b.WriteString(activeStyle.Render("Confirm Session Restart") + "\n\n")
-	b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TmuxSession))
+	b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TerminalName))
 	if known := m.sessionCfg.Agent; known != nil {
 		b.WriteString(fmt.Sprintf("The current agent writes a handoff, then %s resumes in its place.\n\n", known.Name))
 	} else {
@@ -4223,8 +4223,8 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 	case attachDoneMsg:
 		return m.applyAttachDone(msg, cmds)
-	case tmuxTickMsg:
-		return m.applyTmuxTick(msg, cmds)
+	case paneTickMsg:
+		return m.applyPaneTick(msg, cmds)
 	case gitTickMsg:
 		cmds = append(cmds, tickGit())
 		if m.state == viewStateLoading {
@@ -4245,8 +4245,8 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.log("Git status error for %s: %v", msg.session, msg.err)
 			}
 		}
-	case tmuxOutputMsg:
-		return m.applyTmuxOutput(msg, cmds)
+	case paneOutputMsg:
+		return m.applyPaneOutput(msg, cmds)
 	case inputHintMsg:
 		return m.applyInputHint(msg, cmds)
 	case classifyProbeMsg:
@@ -4329,8 +4329,8 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.forwardToFocused(msg, cmds)
 }
 
-func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
-	cmds = append(cmds, tickTmux())
+func (m *Model) applyPaneTick(msg paneTickMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	cmds = append(cmds, tickPane())
 
 	// Don't make SSH calls while we're in a loading/provisioning state —
 	// the restart goroutine is already using the same ControlMaster socket
@@ -4348,7 +4348,7 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 		if it, ok := m.selectedSessionItem(); ok {
 			s := it.session
 			m.activeSession = previewKey(s)
-			m.tmuxOutput = "Loading..."
+			m.paneOutput = "Loading..."
 			m.setPreviewContent()
 			var usageCmd tea.Cmd
 			if !m.skipSessionPolling(s.ID) {
@@ -4386,11 +4386,11 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 // hasLoadedPane reports whether the preview is showing real captured output, as
 // opposed to the placeholder it starts on or nothing at all.
 func (m *Model) hasLoadedPane() bool {
-	out := strings.TrimSpace(m.tmuxOutput)
+	out := strings.TrimSpace(m.paneOutput)
 	return out != "" && out != "Loading..."
 }
 
-func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+func (m *Model) applyPaneOutput(msg paneOutputMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	if msg.session == m.activeSession {
 		if msg.err != nil {
 			// Transient pane-unavailability errors (session restarting, serve
@@ -4409,8 +4409,8 @@ func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, t
 			}
 			// Non-transient errors are shown in the viewport.
 			newOutput := failStyle.Render("Failed to capture pane: " + errStr)
-			if newOutput != m.tmuxOutput {
-				m.tmuxOutput = newOutput
+			if newOutput != m.paneOutput {
+				m.paneOutput = newOutput
 				m.setPreviewContent()
 			}
 			return m.forwardToFocused(msg, cmds)
@@ -4430,8 +4430,8 @@ func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, t
 		}
 
 		// Only update viewport content when it actually changed.
-		if newOutput != m.tmuxOutput || isFirstLoad {
-			m.tmuxOutput = newOutput
+		if newOutput != m.paneOutput || isFirstLoad {
+			m.paneOutput = newOutput
 			m.setPreviewContent()
 			if follow {
 				m.viewport.GotoBottom()
@@ -4490,13 +4490,13 @@ func (m *Model) applyAttachDone(msg attachDoneMsg, cmds []tea.Cmd) (tea.Model, t
 	if sel := m.list.SelectedItem(); sel != nil {
 		s := sel.(item).session
 		m.activeSession = previewKey(s)
-		m.tmuxOutput = "Loading..."
+		m.paneOutput = "Loading..."
 		m.setPreviewContent()
-		cmds = append(cmds, tickTmux(), m.queuePreview(s))
+		cmds = append(cmds, tickPane(), m.queuePreview(s))
 	} else {
-		// Keep the poll chain alive: tickTmux is self-perpetuating, so dropping
+		// Keep the poll chain alive: tickPane is self-perpetuating, so dropping
 		// it here would leave the preview frozen until the next event.
-		cmds = append(cmds, tickTmux())
+		cmds = append(cmds, tickPane())
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -4605,7 +4605,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 				m.activeSession = ""
 				m.gitStatus = domain.GitStatus{}
 				m.lastGitStatusUpdate = time.Time{}
-				m.tmuxOutput = ""
+				m.paneOutput = ""
 				m.viewport.SetContent("")
 			}
 		} else if oldSelID != newSelID && newSelID != "" {
@@ -4614,7 +4614,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			m.activeSession = previewKey(s)
 			m.gitStatus = domain.GitStatus{} // Clear old status
 			m.lastGitStatusUpdate = time.Time{}
-			m.tmuxOutput = "Loading..."
+			m.paneOutput = "Loading..."
 			m.previewFollowing = true
 			m.setPreviewContent()
 			// While a session is being created or torn down there is nothing to fetch —
@@ -4639,7 +4639,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			if kind == "" {
 				kind = remotesvc.KindTrigger
 			}
-			m.tmuxOutput = "Loading " + string(kind) + " logs..."
+			m.paneOutput = "Loading " + string(kind) + " logs..."
 			m.setPreviewContent()
 			cmds = append(cmds, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind))
 		}
@@ -4832,7 +4832,7 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 				if kind == "" {
 					kind = remotesvc.KindTrigger
 				}
-				m.tmuxOutput = "Loading " + string(kind) + " logs..."
+				m.paneOutput = "Loading " + string(kind) + " logs..."
 				m.setPreviewContent()
 				return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind), true
 			}
@@ -4893,7 +4893,7 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		initial := it.session.Name
 		if initial == "" {
-			initial = it.session.TmuxSession
+			initial = it.session.TerminalName
 		}
 		m.genericInput = NewTextInputModel("Rename session", "name", initial)
 		m.genericInput.textInput.CharLimit = 48
@@ -4981,7 +4981,7 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 				time.Sleep(2 * time.Second) // give the agent a moment to boot
 			}
 			c := mgr.AttachPTYSession(s.ID)
-			m.loadingMsg = fmt.Sprintf("Connecting to session %s...", s.TmuxSession)
+			m.loadingMsg = fmt.Sprintf("Connecting to session %s...", s.TerminalName)
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
 			return m, tea.Sequence(
@@ -5024,7 +5024,7 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		m.log("p pressed")
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
-			m.log("Selected session: %s, LocalPath: %s", s.TmuxSession, s.LocalPath)
+			m.log("Selected session: %s, LocalPath: %s", s.TerminalName, s.LocalPath)
 			if s.LocalPath == "" {
 				m.log("ERROR: No local path")
 				m.lastError = "No local sync path available for this session"
@@ -5227,8 +5227,8 @@ func (m *Model) startAgentPickerRestart() (tea.Model, tea.Cmd) {
 func (m *Model) restartSelectedSession(selectedSess domain.Session, forceSwitch bool) (tea.Model, tea.Cmd) {
 	m.prepareRestartTarget(selectedSess)
 
-	m.log("Preparing to restart session %q (ID: %s)", selectedSess.TmuxSession, selectedSess.ID)
-	_ = appendDebugLog(fmt.Sprintf("[ui %s] restart triggered: session=%s status=%s\n", time.Now().Format("15:04:05.000"), selectedSess.TmuxSession, selectedSess.Status))
+	m.log("Preparing to restart session %q (ID: %s)", selectedSess.TerminalName, selectedSess.ID)
+	_ = appendDebugLog(fmt.Sprintf("[ui %s] restart triggered: session=%s status=%s\n", time.Now().Format("15:04:05.000"), selectedSess.TerminalName, selectedSess.Status))
 
 	// "S" always means "switch agent": show the picker even when the
 	// agent is already known. "s"/"ctrl+r" resolve the last-known agent
@@ -5278,7 +5278,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 				if kind == "" {
 					kind = remotesvc.KindTrigger
 				}
-				m.tmuxOutput = "Refreshing..."
+				m.paneOutput = "Refreshing..."
 				m.setPreviewContent()
 				return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind), true
 			}
@@ -6933,7 +6933,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 			}
 		}
 	}
-	dbByTmux := persistedByTmux(dbSessions)
+	dbByTerminal := persistedByTerminal(dbSessions)
 
 	// Carry existing timestamps so a scan does not clobber updated_at, and
 	// persist only what shouldMergeDiscoveredSession accepts.
@@ -6947,7 +6947,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		if m.db == nil {
 			break
 		}
-		if existing, ok := lookupPersistedSession(msg.sessions[i], dbSessions, dbByTmux); ok {
+		if existing, ok := lookupPersistedSession(msg.sessions[i], dbSessions, dbByTerminal); ok {
 			if !existing.UpdatedAt.IsZero() {
 				msg.sessions[i].UpdatedAt = existing.UpdatedAt
 			}
@@ -6972,9 +6972,9 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 	// from remotes we couldn't reach this scan. Sessions from scanned remotes
 	// that weren't discovered are dead — skip them.
 	seenID := make(map[string]bool)
-	seenTmux := make(map[string]domain.Session)
+	seenTerminal := make(map[string]domain.Session)
 	terminalTaken := func(s domain.Session) bool {
-		holder, ok := seenTmux[sessionTmuxKey(s)]
+		holder, ok := seenTerminal[sessionTerminalKey(s)]
 		return ok && sameTerminal(holder, s)
 	}
 	merged := []domain.Session{}
@@ -6993,12 +6993,12 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		if seenID[s.ID] {
 			continue
 		}
-		tk := sessionTmuxKey(s)
+		tk := sessionTerminalKey(s)
 		if tk != "" && terminalTaken(s) {
 			continue
 		}
 
-		if dbSess, ok := lookupPersistedSession(s, dbSessions, dbByTmux); ok {
+		if dbSess, ok := lookupPersistedSession(s, dbSessions, dbByTerminal); ok {
 			s = overlayPersistedSessionFields(s, dbSess)
 			if dbSess.ID != "" && !domain.IsEphemeralSessionID(dbSess.ID) {
 				s.ID = dbSess.ID
@@ -7007,8 +7007,8 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 
 		merged = append(merged, s)
 		seenID[s.ID] = true
-		if _, taken := seenTmux[tk]; tk != "" && !taken {
-			seenTmux[tk] = s
+		if _, taken := seenTerminal[tk]; tk != "" && !taken {
+			seenTerminal[tk] = s
 		}
 	}
 	for id, s := range dbSessions {
@@ -7021,7 +7021,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		if seenID[id] {
 			continue
 		}
-		tk := sessionTmuxKey(s)
+		tk := sessionTerminalKey(s)
 		if tk != "" && terminalTaken(s) {
 			continue
 		}
@@ -7037,8 +7037,8 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		}
 		merged = append(merged, s)
 		seenID[id] = true
-		if _, taken := seenTmux[tk]; tk != "" && !taken {
-			seenTmux[tk] = s
+		if _, taken := seenTerminal[tk]; tk != "" && !taken {
+			seenTerminal[tk] = s
 		}
 	}
 
@@ -7646,7 +7646,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			return sessionCreateMsg{err: fmt.Errorf("session has no working directory"), placeholderID: placeholderID}
 		}
 
-		logf("session=%s remote=%s@%s workingDir=%s agent=%s", s.TmuxSession, remote.User, remote.Host, workingDir, sessionCfg.Agent.Command)
+		logf("session=%s remote=%s@%s workingDir=%s agent=%s", s.TerminalName, remote.User, remote.Host, workingDir, sessionCfg.Agent.Command)
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
 		gitignoreRoot := s.WorktreePath
@@ -7725,7 +7725,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		}
 
 		// Step 3: replace the agent process in the remote PTY runtime.
-		m.sendStatusFor(placeholderID, fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
+		m.sendStatusFor(placeholderID, fmt.Sprintf("Restarting agent in %s...", s.TerminalName))
 		logf("step3: restarting agent")
 		if err := restartTerminal(ctx, mgr, s, restartTerminalSpec{
 			WorkingDir:    workingDir,
@@ -7865,7 +7865,7 @@ func (m *Model) handleArchivePreviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "d":
 			// Dump raw and cleaned pane content to /tmp for inspection.
 			if p := m.archivePreview; p != nil {
-				name := p.session.TmuxSession
+				name := p.session.TerminalName
 				rawPath := filepath.Join(os.TempDir(), "aiman-"+name+"-raw.txt")
 				cleanedPath := filepath.Join(os.TempDir(), "aiman-"+name+"-cleaned.txt")
 				_ = os.WriteFile(rawPath, []byte(p.rawPane), 0600)

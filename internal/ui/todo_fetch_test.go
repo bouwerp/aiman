@@ -374,11 +374,11 @@ func TestSelectionChangeFetchesTodos(t *testing.T) {
 	now := time.Now()
 	first := domain.Session{
 		ID: "a", Name: "first", Group: "G", RemoteHost: "regent0",
-		TmuxSession: "a", CreatedAt: now,
+		TerminalName: "a", CreatedAt: now,
 	}
 	second := domain.Session{
 		ID: "b", Name: "second", Group: "G", RemoteHost: "regent0",
-		TmuxSession: "b", CreatedAt: now.Add(-time.Minute),
+		TerminalName: "b", CreatedAt: now.Add(-time.Minute),
 	}
 	cfg := &config.Config{Remotes: []config.Remote{{Host: "regent0", User: "code"}}}
 	m := NewModel(cfg, nil, []domain.Session{first, second}, nil, nil, nil, nil)

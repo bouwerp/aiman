@@ -22,7 +22,7 @@ func TestListToleratesNullModeAndStatus(t *testing.T) {
 
 	ctx := context.Background()
 	live := &domain.Session{
-		ID: "live", TmuxSession: "WTB-1", RemoteHost: "regent0",
+		ID: "live", TerminalName: "WTB-1", RemoteHost: "regent0",
 		Status: domain.SessionStatusSyncing, Mode: domain.SessionModeInteractive,
 	}
 	if err := repo.Save(ctx, live); err != nil {
@@ -60,7 +60,7 @@ func TestListToleratesNullModeAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get failed on a NULL mode/status row: %v", err)
 	}
-	if got.TmuxSession != "old-session" {
+	if got.TerminalName != "old-session" {
 		t.Errorf("Get returned %+v", got)
 	}
 }

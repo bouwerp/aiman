@@ -18,9 +18,9 @@ func TestUsageGetMethod(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	for _, sess := range []domain.Session{
-		{ID: "s1", Name: "fix-login", Group: "work", TmuxSession: "s1", Status: domain.SessionStatusActive},
-		{ID: "s2", Name: "fix-login", Group: "other", TmuxSession: "s2", Status: domain.SessionStatusActive},
-		{ID: "s3", Name: "only-name", Group: "work", TmuxSession: "s3", Status: domain.SessionStatusActive},
+		{ID: "s1", Name: "fix-login", Group: "work", TerminalName: "s1", Status: domain.SessionStatusActive},
+		{ID: "s2", Name: "fix-login", Group: "other", TerminalName: "s2", Status: domain.SessionStatusActive},
+		{ID: "s3", Name: "only-name", Group: "work", TerminalName: "s3", Status: domain.SessionStatusActive},
 	} {
 		if err := repo.Save(ctx, &sess); err != nil {
 			t.Fatal(err)
@@ -207,7 +207,7 @@ func TestReportAgentSessionKicksUsage(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "s1", Name: "fix-login", Group: "work", TmuxSession: "s1",
+		ID: "s1", Name: "fix-login", Group: "work", TerminalName: "s1",
 		Status: domain.SessionStatusActive,
 	}); err != nil {
 		t.Fatal(err)

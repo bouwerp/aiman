@@ -46,7 +46,7 @@ func TestCreateSessionOnRemoteSendsParamsAsAFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if sess.ID != "abc-123" || sess.TmuxSession != "WTB-1-thing" {
+	if sess.ID != "abc-123" || sess.TerminalName != "WTB-1-thing" {
 		t.Errorf("session not parsed: %+v", sess)
 	}
 	if len(r.written) != 1 {

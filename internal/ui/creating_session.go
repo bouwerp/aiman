@@ -40,18 +40,18 @@ func newCreatingPlaceholder(cfg domain.SessionConfig, remote config.Remote) doma
 	}
 	now := time.Now()
 	return domain.Session{
-		ID:          fmt.Sprintf("%s%d", domain.EphemeralSessionIDPrefix, now.UnixNano()),
-		Name:        cfg.Name,
-		Group:       cfg.Group,
-		IssueKey:    cfg.IssueKey,
-		Branch:      cfg.Branch,
-		RepoName:    cfg.Repo.Name,
-		RemoteHost:  remote.Host,
-		TmuxSession: label,
-		AgentName:   agentName,
-		Status:      domain.SessionStatusProvisioning,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:           fmt.Sprintf("%s%d", domain.EphemeralSessionIDPrefix, now.UnixNano()),
+		Name:         cfg.Name,
+		Group:        cfg.Group,
+		IssueKey:     cfg.IssueKey,
+		Branch:       cfg.Branch,
+		RepoName:     cfg.Repo.Name,
+		RemoteHost:   remote.Host,
+		TerminalName: label,
+		AgentName:    agentName,
+		Status:       domain.SessionStatusProvisioning,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 }
 

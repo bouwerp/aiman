@@ -38,7 +38,7 @@ var _ PTYRuntime = (*ptyfake.FakePTY)(nil)
 func legacyRow() domain.Session {
 	const id = "old"
 	return domain.Session{
-		ID: id, Name: id, Group: "g", TmuxSession: "old-" + id, RemoteHost: "box",
+		ID: id, Name: id, Group: "g", TerminalName: "old-" + id, RemoteHost: "box",
 		Backend: domain.BackendLegacyTmux,
 	}
 }
@@ -78,7 +78,7 @@ func TestLiveSessionsUsesInProcessRuntime(t *testing.T) {
 		t.Fatalf("live = %+v, want only the running session", live)
 	}
 	l := live[0]
-	if l.ID != "s1" || l.TmuxSession != "term-s1" || l.WorkingDirectory != "/w/s1" || l.Backend != domain.BackendPTY || l.Status != domain.SessionStatusActive {
+	if l.ID != "s1" || l.TerminalName != "term-s1" || l.WorkingDirectory != "/w/s1" || l.Backend != domain.BackendPTY || l.Status != domain.SessionStatusActive {
 		t.Fatalf("live = %+v", l)
 	}
 	if len(remote.execs) != 0 {
@@ -145,7 +145,7 @@ func TestVerifyTerminalIsPTYOnly(t *testing.T) {
 	term := serverTerminal{s: srv}
 	ctx := context.Background()
 	// A row without a recorded backend is a pty session.
-	sess := domain.Session{ID: "r1", TmuxSession: "rev"}
+	sess := domain.Session{ID: "r1", TerminalName: "rev"}
 	if !term.Alive(ctx, sess) {
 		t.Fatal("running pty session reported dead")
 	}

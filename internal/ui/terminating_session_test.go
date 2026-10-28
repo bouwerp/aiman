@@ -15,7 +15,7 @@ func newTestModelWithTerminatableSession(t *testing.T) (*Model, domain.Session) 
 	t.Helper()
 	s := domain.Session{
 		ID:           "sess-1",
-		TmuxSession:  "pb-1",
+		TerminalName: "pb-1",
 		RemoteHost:   "gone-host",
 		WorktreePath: "/home/dev/pb-1",
 		RepoName:     "org/repo",
@@ -167,7 +167,7 @@ func TestRunTerminateStep_MainRepoWorktreeIsSkippedNotFailed(t *testing.T) {
 	model := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
 	s := domain.Session{
 		ID:           "sess-2",
-		TmuxSession:  "confirmrdsdetails",
+		TerminalName: "confirmrdsdetails",
 		RemoteHost:   "devbox",
 		WorktreePath: "/home/code/repos/confirmrdsdetails",
 		RepoName:     "confirmrdsdetails",
@@ -236,7 +236,7 @@ func TestTerminateSavesContextBeforeAnythingDestructive(t *testing.T) {
 func TestTerminateSaveContextSkipsWhenTheRemoteIsUnknown(t *testing.T) {
 	cfg := &config.Config{Remotes: []config.Remote{{Host: "devbox", Root: "/home/code/repos"}}}
 	model := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
-	s := domain.Session{ID: "sess-3", RemoteHost: "gone", TmuxSession: "t"}
+	s := domain.Session{ID: "sess-3", RemoteHost: "gone", TerminalName: "t"}
 
 	err := model.runTerminateStep(stepIndex(t, false, "Saving session context"), s, false)
 	var skip skipReason

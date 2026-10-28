@@ -96,7 +96,7 @@ func (m BranchInputModel) viewString() string {
 			m.textInput.View(),
 			identifier,
 			identifier,
-			domain.SanitizeTmuxSessionName(identifier),
+			domain.TerminalNameFromBranch(identifier),
 		)))
 }
 

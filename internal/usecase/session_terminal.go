@@ -693,7 +693,7 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 	WriteMuseSessionID(ctx, remote, s.WorkingDirectory, resumed, s.ID)
 	if err := CreatePTYSession(ctx, remote, PTYSpec{
 		ID:            s.ID,
-		Name:          s.TmuxSession,
+		Name:          s.TerminalName,
 		Dir:           s.WorkingDirectory,
 		Command:       resumed,
 		Env:           env,

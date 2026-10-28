@@ -2,7 +2,7 @@ package domain
 
 import "testing"
 
-func TestSanitizeTmuxSessionName(t *testing.T) {
+func TestTerminalNameFromBranch(t *testing.T) {
 	tests := []struct {
 		name   string
 		branch string
@@ -11,7 +11,7 @@ func TestSanitizeTmuxSessionName(t *testing.T) {
 		{
 			// The regression: a dot made the session unaddressable, so terminate
 			// left it running and the next create hit "duplicate session".
-			name:   "dot becomes underscore, matching what tmux stores",
+			name:   "dot becomes underscore",
 			branch: "WTB-1817-orderdao.getByStatus-returns-newest-first-missing-Scan",
 			want:   "WTB-1817-orderdao_getByStatus-returns-newest-first-missing-Scan",
 		},
@@ -44,8 +44,8 @@ func TestSanitizeTmuxSessionName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SanitizeTmuxSessionName(tt.branch); got != tt.want {
-				t.Errorf("SanitizeTmuxSessionName(%q) = %q, want %q", tt.branch, got, tt.want)
+			if got := TerminalNameFromBranch(tt.branch); got != tt.want {
+				t.Errorf("TerminalNameFromBranch(%q) = %q, want %q", tt.branch, got, tt.want)
 			}
 		})
 	}
@@ -53,23 +53,23 @@ func TestSanitizeTmuxSessionName(t *testing.T) {
 
 // A sanitized name must survive a second pass unchanged, otherwise discovery
 // and termination would keep rewriting the name they are trying to match.
-func TestSanitizeTmuxSessionNameIsIdempotent(t *testing.T) {
+func TestTerminalNameFromBranchIsIdempotent(t *testing.T) {
 	for _, branch := range []string{
 		"feat/api.v2",
 		"WTB-1817-orderdao.getByStatus",
 		"plain-name",
 		"a:b.c/d",
 	} {
-		once := SanitizeTmuxSessionName(branch)
-		if twice := SanitizeTmuxSessionName(once); twice != once {
+		once := TerminalNameFromBranch(branch)
+		if twice := TerminalNameFromBranch(once); twice != once {
 			t.Errorf("not idempotent for %q: %q then %q", branch, once, twice)
 		}
 	}
 }
 
-// tmux target syntax is session:window.pane, so neither separator may survive.
-func TestSanitizeTmuxSessionNameLeavesNoTargetSeparators(t *testing.T) {
-	got := SanitizeTmuxSessionName("a.b:c/d.e")
+// Neither target separator survives the mapping.
+func TestTerminalNameFromBranchLeavesNoTargetSeparators(t *testing.T) {
+	got := TerminalNameFromBranch("a.b:c/d.e")
 	for _, bad := range []rune{'.', ':'} {
 		for _, r := range got {
 			if r == bad {

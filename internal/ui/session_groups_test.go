@@ -45,7 +45,7 @@ func TestCollapsedGroupHidesChildren(t *testing.T) {
 
 func TestToggleCollapseKeepsHeaderSelected(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TerminalName: "impl", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	m.list.Select(0)
@@ -166,7 +166,7 @@ func TestAssignNewGroupFromPicker(t *testing.T) {
 
 func TestGKeyOpensAssignGroup(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "impl", Group: "quick", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "impl", Group: "quick", TerminalName: "impl", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	got := pressMainKey(m, 'g')

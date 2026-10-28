@@ -139,11 +139,11 @@ func TestAgentsUpdateDeferredWhileWorking(t *testing.T) {
 	srv, m, host, repo := agentsServer(t)
 	ctx := context.Background()
 	for _, s := range []domain.Session{
-		{ID: "w1", TmuxSession: "w1", AgentName: "claude --model opus", Status: domain.SessionStatusActive,
+		{ID: "w1", TerminalName: "w1", AgentName: "claude --model opus", Status: domain.SessionStatusActive,
 			HookState: domain.AgentStateWorking, HookStateSource: agenthook.SourceLifecycle, HookStateAt: time.Now()},
-		{ID: "i1", TmuxSession: "i1", AgentName: "claude", Status: domain.SessionStatusActive,
+		{ID: "i1", TerminalName: "i1", AgentName: "claude", Status: domain.SessionStatusActive,
 			HookState: domain.AgentStateIdle, HookStateSource: agenthook.SourceLifecycle, HookStateAt: time.Now()},
-		{ID: "gone", TmuxSession: "gone", AgentName: "claude", Status: domain.SessionStatusInactive,
+		{ID: "gone", TerminalName: "gone", AgentName: "claude", Status: domain.SessionStatusInactive,
 			HookState: domain.AgentStateWorking, HookStateSource: agenthook.SourceLifecycle, HookStateAt: time.Now()},
 	} {
 		if err := repo.Save(ctx, &s); err != nil {

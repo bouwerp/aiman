@@ -42,7 +42,7 @@ func scanSession(scanner sessionRowScanner) (domain.Session, error) {
 	s.RemoteHost = remoteHost.String
 	s.WorktreePath = worktreePath.String
 	s.WorkingDirectory = workingDir.String
-	s.TmuxSession = tmuxSession.String
+	s.TerminalName = tmuxSession.String
 	s.Backend = backend.String
 	s.MutagenSyncID = mutagenSyncID.String
 	s.LocalPath = localPath.String

@@ -99,7 +99,7 @@ func (m *Model) worktreeStillInUse(s domain.Session) (string, bool) {
 		}
 		name := other.Name
 		if name == "" {
-			name = other.TmuxSession
+			name = other.TerminalName
 		}
 		if name == "" {
 			name = other.ID

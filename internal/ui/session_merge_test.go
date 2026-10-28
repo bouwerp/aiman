@@ -10,7 +10,7 @@ import (
 func TestCreatingPlaceholderMatchesLive(t *testing.T) {
 	ph := domain.Session{
 		ID: "pending-1", RemoteHost: "devbox",
-		TmuxSession: "feature/pb-1", Branch: "feature/pb-1", RepoName: "org/repo",
+		TerminalName: "feature/pb-1", Branch: "feature/pb-1", RepoName: "org/repo",
 	}
 	tests := []struct {
 		name string
@@ -19,7 +19,7 @@ func TestCreatingPlaceholderMatchesLive(t *testing.T) {
 	}{
 		{
 			name: "sanitized tmux name",
-			live: domain.Session{ID: "real-1", RemoteHost: "devbox", TmuxSession: "feature-pb-1"},
+			live: domain.Session{ID: "real-1", RemoteHost: "devbox", TerminalName: "feature-pb-1"},
 			want: true,
 		},
 		{
@@ -29,12 +29,12 @@ func TestCreatingPlaceholderMatchesLive(t *testing.T) {
 		},
 		{
 			name: "different host",
-			live: domain.Session{ID: "real-1", RemoteHost: "other", TmuxSession: "feature-pb-1"},
+			live: domain.Session{ID: "real-1", RemoteHost: "other", TerminalName: "feature-pb-1"},
 			want: false,
 		},
 		{
 			name: "unrelated branch",
-			live: domain.Session{ID: "other", RemoteHost: "devbox", TmuxSession: "other", Branch: "main", RepoName: "org/repo"},
+			live: domain.Session{ID: "other", RemoteHost: "devbox", TerminalName: "other", Branch: "main", RepoName: "org/repo"},
 			want: false,
 		},
 	}
@@ -99,28 +99,28 @@ func TestShouldMergeDiscoveredSession(t *testing.T) {
 	}
 }
 
-func TestLookupPersistedSessionFallsBackToTmux(t *testing.T) {
+func TestLookupPersistedSessionFallsBackToTerminalName(t *testing.T) {
 	stored := domain.Session{
 		ID: "db-id", Name: "impl", Group: "WTB-1925",
-		RemoteHost: "regent0", TmuxSession: "wtb-1925-fix",
+		RemoteHost: "regent0", TerminalName: "wtb-1925-fix",
 	}
 	byID := map[string]domain.Session{stored.ID: stored}
-	byTmux := map[string]domain.Session{sessionTmuxKey(stored): stored}
+	byTerminal := map[string]domain.Session{sessionTerminalKey(stored): stored}
 
-	liveSameID := domain.Session{ID: "db-id", RemoteHost: "regent0", TmuxSession: "wtb-1925-fix"}
-	got, ok := lookupPersistedSession(liveSameID, byID, byTmux)
+	liveSameID := domain.Session{ID: "db-id", RemoteHost: "regent0", TerminalName: "wtb-1925-fix"}
+	got, ok := lookupPersistedSession(liveSameID, byID, byTerminal)
 	if !ok || got.ID != "db-id" {
 		t.Fatalf("id lookup: %+v ok=%v", got, ok)
 	}
 
-	liveNewID := domain.Session{ID: "fresh-uuid", RemoteHost: "regent0", TmuxSession: "wtb-1925-fix"}
-	got, ok = lookupPersistedSession(liveNewID, byID, byTmux)
+	liveNewID := domain.Session{ID: "fresh-uuid", RemoteHost: "regent0", TerminalName: "wtb-1925-fix"}
+	got, ok = lookupPersistedSession(liveNewID, byID, byTerminal)
 	if !ok || got.Group != "WTB-1925" || got.ID != "db-id" {
 		t.Fatalf("tmux fallback: %+v ok=%v", got, ok)
 	}
 
-	miss := domain.Session{ID: "x", RemoteHost: "regent0", TmuxSession: "other"}
-	if _, ok := lookupPersistedSession(miss, byID, byTmux); ok {
+	miss := domain.Session{ID: "x", RemoteHost: "regent0", TerminalName: "other"}
+	if _, ok := lookupPersistedSession(miss, byID, byTerminal); ok {
 		t.Fatal("unrelated tmux must not match")
 	}
 }
@@ -128,7 +128,7 @@ func TestLookupPersistedSessionFallsBackToTmux(t *testing.T) {
 func TestOverlayPersistedSessionFieldsKeepsNameAndGroup(t *testing.T) {
 	live := domain.Session{
 		ID: "s1", Status: domain.SessionStatusActive,
-		TmuxSession: "wtb-1", RemoteHost: "regent0",
+		TerminalName: "wtb-1", RemoteHost: "regent0",
 	}
 	stored := domain.Session{
 		ID: "s1", Name: "impl", Group: "WTB-1925",
@@ -142,7 +142,7 @@ func TestOverlayPersistedSessionFieldsKeepsNameAndGroup(t *testing.T) {
 	if got.Name != "impl" || got.Group != "WTB-1925" {
 		t.Fatalf("name=%q group=%q", got.Name, got.Group)
 	}
-	if got.TmuxSession != "wtb-1" || got.RemoteHost != "regent0" {
+	if got.TerminalName != "wtb-1" || got.RemoteHost != "regent0" {
 		t.Fatalf("live identity clobbered: %+v", got)
 	}
 	if got.IssueKey != "WTB-1925" || got.RepoName != "org/repo" {
@@ -157,8 +157,8 @@ func TestOverlayPersistedSessionFieldsKeepsNameAndGroup(t *testing.T) {
 }
 
 func TestOverlayPersistedSessionFieldsKeepsParentID(t *testing.T) {
-	live := domain.Session{ID: "child", RemoteHost: "regent0", TmuxSession: "rev"}
-	stored := domain.Session{ID: "child", ParentID: "parent", TmuxSession: "rev"}
+	live := domain.Session{ID: "child", RemoteHost: "regent0", TerminalName: "rev"}
+	stored := domain.Session{ID: "child", ParentID: "parent", TerminalName: "rev"}
 	got := overlayPersistedSessionFields(live, stored)
 	if got.ParentID != "parent" {
 		t.Fatalf("live scan cannot see parent; overlay must keep stored, got %q", got.ParentID)
@@ -166,8 +166,8 @@ func TestOverlayPersistedSessionFieldsKeepsParentID(t *testing.T) {
 }
 
 func TestOverlayPersistedSessionFieldsKeepsBackend(t *testing.T) {
-	live := domain.Session{ID: "s1", RemoteHost: "regent0", TmuxSession: "feat"}
-	stored := domain.Session{ID: "s1", Backend: domain.BackendPTY, TmuxSession: "feat"}
+	live := domain.Session{ID: "s1", RemoteHost: "regent0", TerminalName: "feat"}
+	stored := domain.Session{ID: "s1", Backend: domain.BackendPTY, TerminalName: "feat"}
 	got := overlayPersistedSessionFields(live, stored)
 	if got.Backend != domain.BackendPTY {
 		t.Fatalf("live scan cannot see backend; overlay must keep stored %q, got %q", domain.BackendPTY, got.Backend)
@@ -179,7 +179,7 @@ func TestOverlayPersistedSessionFieldsKeepsBackend(t *testing.T) {
 func TestOverlayPersistedSessionFieldsDropsNativeIDAcrossAgentSwitch(t *testing.T) {
 	live := domain.Session{
 		ID: "s1", AgentName: "Grok Build CLI",
-		RemoteHost: "regent0", TmuxSession: "feat",
+		RemoteHost: "regent0", TerminalName: "feat",
 	}
 	stored := domain.Session{
 		ID: "s1", AgentName: "Claude Code",
@@ -196,8 +196,8 @@ func TestOverlayPersistedSessionFieldsDropsNativeIDAcrossAgentSwitch(t *testing.
 }
 
 func TestOverlayKeepsStoredRole(t *testing.T) {
-	live := domain.Session{ID: "rev", RemoteHost: "regent0", TmuxSession: "rev"}
-	stored := domain.Session{ID: "rev", Role: domain.SessionRoleReviewer, TmuxSession: "rev"}
+	live := domain.Session{ID: "rev", RemoteHost: "regent0", TerminalName: "rev"}
+	stored := domain.Session{ID: "rev", Role: domain.SessionRoleReviewer, TerminalName: "rev"}
 	if got := overlayPersistedSessionFields(live, stored); got.Role != domain.SessionRoleReviewer {
 		t.Fatalf("live scan cannot see role; overlay must keep stored, got %q", got.Role)
 	}

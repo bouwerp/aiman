@@ -15,12 +15,12 @@ const sharedTerminal = "adhoc-20261022-1130"
 func siblingSessions() []domain.Session {
 	at := time.Date(2026, 10, 22, 11, 30, 0, 0, time.UTC)
 	return []domain.Session{
-		{ID: "parent", Name: "nl", TmuxSession: "nl", RemoteHost: "10.0.1.5", Backend: domain.BackendPTY,
+		{ID: "parent", Name: "nl", TerminalName: "nl", RemoteHost: "10.0.1.5", Backend: domain.BackendPTY,
 			Status: domain.SessionStatusActive, CreatedAt: at},
-		{ID: "child-grok", Name: "nl-review-grok", ParentID: "parent", TmuxSession: sharedTerminal,
+		{ID: "child-grok", Name: "nl-review-grok", ParentID: "parent", TerminalName: sharedTerminal,
 			RemoteHost: "10.0.1.5", Backend: domain.BackendPTY, Status: domain.SessionStatusActive,
 			WorkingDirectory: "/repos/app@nl", CreatedAt: at.Add(time.Minute)},
-		{ID: "child-muse", Name: "nl-review-muse", ParentID: "parent", TmuxSession: sharedTerminal,
+		{ID: "child-muse", Name: "nl-review-muse", ParentID: "parent", TerminalName: sharedTerminal,
 			RemoteHost: "10.0.1.5", Backend: domain.BackendPTY, Status: domain.SessionStatusActive,
 			WorkingDirectory: "/repos/app@nl", CreatedAt: at.Add(2 * time.Minute)},
 	}
@@ -46,7 +46,7 @@ func selectMuse(t *testing.T, m *Model) {
 	for i, it := range m.list.Items() {
 		if si, ok := it.(item); ok && !si.header && si.session.ID == id {
 			m.list.Select(i)
-			_, _ = m.applyTmuxTick(tmuxTickMsg(time.Now()), nil)
+			_, _ = m.applyPaneTick(paneTickMsg(time.Now()), nil)
 			return
 		}
 	}
@@ -103,8 +103,8 @@ func TestSiblingCaptureDoesNotReplaceTheSelectedPreview(t *testing.T) {
 		cache: usecase.PaneCache{Text: "grok screen", Hash: "g"},
 	})
 
-	if m.tmuxOutput != "muse screen" {
-		t.Fatalf("preview = %q, want the selected child's screen", m.tmuxOutput)
+	if m.paneOutput != "muse screen" {
+		t.Fatalf("preview = %q, want the selected child's screen", m.paneOutput)
 	}
 }
 

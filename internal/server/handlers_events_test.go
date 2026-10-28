@@ -226,7 +226,7 @@ func TestSessionEventsWithoutPTYRuntime(t *testing.T) {
 	got := readEvents(conn)
 
 	if err := repo.Save(context.Background(), &domain.Session{
-		ID: "tm1", TmuxSession: "tm1", Backend: domain.BackendPTY,
+		ID: "tm1", TerminalName: "tm1", Backend: domain.BackendPTY,
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)

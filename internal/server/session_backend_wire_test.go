@@ -17,7 +17,7 @@ func TestSessionListCarriesTheBackend(t *testing.T) {
 	ctx := context.Background()
 	if err := repo.Save(ctx, &domain.Session{
 		ID: "child-1", Name: "review-treasury-prs", Group: "pr-review",
-		ParentID: "parent-1", TmuxSession: "fix-yield", Backend: domain.BackendPTY,
+		ParentID: "parent-1", TerminalName: "fix-yield", Backend: domain.BackendPTY,
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)

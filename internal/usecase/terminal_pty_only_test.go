@@ -11,7 +11,7 @@ import (
 
 // legacyRow is a session an older aiman left running in tmux.
 func legacyRow() domain.Session {
-	return domain.Session{ID: "old", TmuxSession: "WTB-1", RemoteHost: "regent0", Backend: domain.BackendLegacyTmux}
+	return domain.Session{ID: "old", TerminalName: "WTB-1", RemoteHost: "regent0", Backend: domain.BackendLegacyTmux}
 }
 
 // requireLegacyRefusal checks err is the legacy refusal naming host and stop
@@ -46,7 +46,7 @@ var ptyBackends = []string{domain.BackendPTY, ""}
 func TestSendSessionPromptGoesToPTY(t *testing.T) {
 	for _, backend := range ptyBackends {
 		r := &terminalRemote{}
-		s := domain.Session{ID: "pid", TmuxSession: "WTB-1", Backend: backend}
+		s := domain.Session{ID: "pid", TerminalName: "WTB-1", Backend: backend}
 		if err := SendSessionPrompt(context.Background(), r, s, "do things"); err != nil {
 			t.Fatalf("backend %q: %v", backend, err)
 		}
@@ -66,7 +66,7 @@ func TestSendSessionPromptRefusesLegacy(t *testing.T) {
 func TestTerminateSessionTerminalGoesToPTY(t *testing.T) {
 	for _, backend := range ptyBackends {
 		r := &terminalRemote{}
-		s := domain.Session{ID: "pid", TmuxSession: "WTB-1", Backend: backend}
+		s := domain.Session{ID: "pid", TerminalName: "WTB-1", Backend: backend}
 		if err := TerminateSessionTerminal(context.Background(), r, s); err != nil {
 			t.Fatalf("backend %q: %v", backend, err)
 		}
@@ -88,7 +88,7 @@ func TestTerminateSessionTerminalRefusesLegacy(t *testing.T) {
 func TestCaptureSessionPaneGoesToPTY(t *testing.T) {
 	for _, backend := range ptyBackends {
 		r := &terminalRemote{output: map[string]string{"aiman pty capture": `{"text":"pane-bytes"}`}}
-		out, err := CaptureSessionPane(context.Background(), r, domain.Session{ID: "pid", TmuxSession: "WTB-1", Backend: backend})
+		out, err := CaptureSessionPane(context.Background(), r, domain.Session{ID: "pid", TerminalName: "WTB-1", Backend: backend})
 		if err != nil || out != "pane-bytes" {
 			t.Fatalf("backend %q: %q / %v", backend, out, err)
 		}
@@ -105,7 +105,7 @@ func TestCaptureSessionPaneRefusesLegacy(t *testing.T) {
 func TestObserveSessionGoesToPTY(t *testing.T) {
 	for _, backend := range ptyBackends {
 		r := &terminalRemote{output: map[string]string{"aiman pty capture": `{"text":"hello"}`}}
-		obs, err := ObserveSession(context.Background(), r, domain.Session{ID: "pid", TmuxSession: "WTB-1", Backend: backend})
+		obs, err := ObserveSession(context.Background(), r, domain.Session{ID: "pid", TerminalName: "WTB-1", Backend: backend})
 		if err != nil || obs.Pane != "hello" {
 			t.Fatalf("backend %q: %+v / %v", backend, obs, err)
 		}
@@ -122,7 +122,7 @@ func TestObserveSessionRefusesLegacy(t *testing.T) {
 func TestRefreshPreviewGoesToPTY(t *testing.T) {
 	for _, backend := range ptyBackends {
 		r := &terminalRemote{output: map[string]string{"aiman pty capture": `{"text":"hello","hash":"h1"}`}}
-		upd, err := RefreshPreview(context.Background(), r, domain.Session{ID: "pid", TmuxSession: "WTB-1", Backend: backend}, PaneCache{})
+		upd, err := RefreshPreview(context.Background(), r, domain.Session{ID: "pid", TerminalName: "WTB-1", Backend: backend}, PaneCache{})
 		if err != nil || upd.Text != "hello" {
 			t.Fatalf("backend %q: %+v / %v", backend, upd, err)
 		}
@@ -139,7 +139,7 @@ func TestRefreshPreviewRefusesLegacy(t *testing.T) {
 func TestResizeSessionTerminalGoesToPTY(t *testing.T) {
 	for _, backend := range ptyBackends {
 		r := &terminalRemote{output: map[string]string{"aiman pty resize": `{"applied":true}`}}
-		applied, err := ResizeSessionTerminal(context.Background(), r, domain.Session{ID: "pid", TmuxSession: "WTB-1", Backend: backend}, 120, 40)
+		applied, err := ResizeSessionTerminal(context.Background(), r, domain.Session{ID: "pid", TerminalName: "WTB-1", Backend: backend}, 120, 40)
 		if err != nil || !applied {
 			t.Fatalf("backend %q: %v / %v", backend, applied, err)
 		}
@@ -177,7 +177,7 @@ func TestReviveIfNeededRevivesEmptyBackend(t *testing.T) {
 		"aiman pty get":   `{"error":{"code":"not_found"}}`,
 		"native-sessions": "",
 	}}
-	s := domain.Session{ID: "dead", AgentName: "claude", AgentSessionID: "conv-42", WorkingDirectory: "/w", TmuxSession: "feat"}
+	s := domain.Session{ID: "dead", AgentName: "claude", AgentSessionID: "conv-42", WorkingDirectory: "/w", TerminalName: "feat"}
 	revived, err := ReviveIfNeeded(context.Background(), r, &s, ReviveOptions{})
 	if err != nil || !revived {
 		t.Fatalf("expected revival: %v / %v", revived, err)
@@ -196,7 +196,7 @@ func TestReviveIfNeededRevivesEmptyBackend(t *testing.T) {
 
 func TestCaptureSessionHandoffUsesPTYOnly(t *testing.T) {
 	r := &terminalRemote{}
-	_, _ = CaptureSessionHandoffBestEffort(context.Background(), r, domain.Session{ID: "sid", TmuxSession: "WTB-1"}, "/w/summary.md")
+	_, _ = CaptureSessionHandoffBestEffort(context.Background(), r, domain.Session{ID: "sid", TerminalName: "WTB-1"}, "/w/summary.md")
 	requireNoTmux(t, r.commands)
 	if !strings.Contains(strings.Join(r.commands, "\n"), "aiman pty capture") {
 		t.Fatalf("expected a pty capture: %v", r.commands)

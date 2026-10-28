@@ -45,7 +45,7 @@ func todoServer(t *testing.T, sessions ...domain.Session) (*Server, *fakeSteerTa
 }
 
 func todoSession(id string) domain.Session {
-	return domain.Session{ID: id, TmuxSession: id, Backend: domain.BackendPTY}
+	return domain.Session{ID: id, TerminalName: id, Backend: domain.BackendPTY}
 }
 
 // rpc dispatches one request as caller and returns the response.

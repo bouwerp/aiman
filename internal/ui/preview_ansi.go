@@ -39,13 +39,13 @@ func sealPreviewLines(s string) string {
 
 // setPreviewContent pushes the captured pane into the preview viewport.
 //
-// m.tmuxOutput stays the raw capture — it is what change detection compares and
+// m.paneOutput stays the raw capture — it is what change detection compares and
 // what `Y` yanks — so the display form is derived here rather than stored.
 func (m *Model) setPreviewContent() {
 	// The raw capture stays intact for change detection and yank. The
 	// display drops the blank tail and the padding between a transcript and
 	// a short composer, then sits a short capture on the bottom edge.
-	shown := ptyruntime.TightenBottomGap(ptyruntime.TrimTrailingBlankRows(m.tmuxOutput))
+	shown := ptyruntime.TightenBottomGap(ptyruntime.TrimTrailingBlankRows(m.paneOutput))
 	m.previewCols = widestLine(shown)
 	m.viewport.SetContent(sealPreviewLines(m.bottomAlignPreview(shown)))
 }

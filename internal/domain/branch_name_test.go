@@ -90,7 +90,7 @@ func TestAdHocLabelHasSecondsAndSuffix(t *testing.T) {
 	if got != "adhoc-20261022-150405-0123" {
 		t.Fatalf("got %q", got)
 	}
-	if SanitizeTmuxSessionName(got) != got {
+	if TerminalNameFromBranch(got) != got {
 		t.Fatalf("not tmux-safe: %q", got)
 	}
 }

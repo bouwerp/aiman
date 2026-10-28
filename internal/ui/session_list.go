@@ -297,9 +297,9 @@ func (i item) displayName() string {
 	label := i.session.Name
 	if label == "" {
 		if i.session.IssueKey != "" {
-			label = fmt.Sprintf("%s (%s)", i.session.IssueKey, i.session.TmuxSession)
+			label = fmt.Sprintf("%s (%s)", i.session.IssueKey, i.session.TerminalName)
 		} else {
-			label = i.session.TmuxSession
+			label = i.session.TerminalName
 		}
 	}
 	if title := strings.TrimSpace(i.session.AgentTitle); title != "" {

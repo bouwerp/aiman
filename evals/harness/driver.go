@@ -143,15 +143,15 @@ func (h *Harness) RegisterSession(s domain.Session) {
 	if s.WorktreePath == "" {
 		s.WorktreePath = s.WorkingDirectory
 	}
-	if s.TmuxSession == "" {
-		s.TmuxSession = "term-" + s.ID
+	if s.TerminalName == "" {
+		s.TerminalName = "term-" + s.ID
 	}
 	if err := h.Repo.Save(context.Background(), &s); err != nil {
 		h.t.Fatal(err)
 	}
 	// A legacy tmux row has no terminal aiman can reach.
 	if !s.IsLegacyTmux() {
-		h.pty.Add(ptyruntime.SessionInfo{ID: s.ID, Name: s.TmuxSession, Dir: s.WorkingDirectory, Command: s.AgentName})
+		h.pty.Add(ptyruntime.SessionInfo{ID: s.ID, Name: s.TerminalName, Dir: s.WorkingDirectory, Command: s.AgentName})
 	}
 }
 

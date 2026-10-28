@@ -24,7 +24,7 @@ func previewKey(s domain.Session) string {
 	if s.ID != "" {
 		return s.ID
 	}
-	return s.TmuxSession
+	return s.TerminalName
 }
 
 // sameTerminal reports whether two rows with the same host and terminal name
@@ -37,17 +37,17 @@ func sameTerminal(a, b domain.Session) bool {
 	return true
 }
 
-func sessionTmuxKey(s domain.Session) string {
-	if s.TmuxSession == "" {
+func sessionTerminalKey(s domain.Session) string {
+	if s.TerminalName == "" {
 		return ""
 	}
-	return s.RemoteHost + "\x00" + s.TmuxSession
+	return s.RemoteHost + "\x00" + s.TerminalName
 }
 
 // creatingPlaceholderMatchesLive reports whether a discovered session is the
 // in-flight create represented by placeholder. Placeholder IDs are ephemeral
-// (`pending-*`) and tmux names are often unsanitized branch labels, so ID and
-// exact tmux equality both miss.
+// (`pending-*`) and terminal names are often unsanitized branch labels, so ID
+// and exact terminal-name equality both miss.
 func creatingPlaceholderMatchesLive(placeholder, live domain.Session) bool {
 	if placeholder.RemoteHost == "" || live.RemoteHost == "" || placeholder.RemoteHost != live.RemoteHost {
 		return false
@@ -55,9 +55,9 @@ func creatingPlaceholderMatchesLive(placeholder, live domain.Session) bool {
 	if live.ID == "" || live.ID == placeholder.ID {
 		return false
 	}
-	phTmux := domain.SanitizeTmuxSessionName(placeholder.TmuxSession)
-	liveTmux := domain.SanitizeTmuxSessionName(live.TmuxSession)
-	if phTmux != "" && phTmux == liveTmux {
+	phTerminal := domain.TerminalNameFromBranch(placeholder.TerminalName)
+	liveTerminal := domain.TerminalNameFromBranch(live.TerminalName)
+	if phTerminal != "" && phTerminal == liveTerminal {
 		return true
 	}
 	if placeholder.Branch == "" || placeholder.Branch != live.Branch {
@@ -94,22 +94,22 @@ func upsertSessionReplacing(sessions []domain.Session, placeholderID string, liv
 	return out
 }
 
-func persistedByTmux(sessions map[string]domain.Session) map[string]domain.Session {
+func persistedByTerminal(sessions map[string]domain.Session) map[string]domain.Session {
 	out := make(map[string]domain.Session, len(sessions))
 	for _, s := range sessions {
-		if k := sessionTmuxKey(s); k != "" {
+		if k := sessionTerminalKey(s); k != "" {
 			out[k] = s
 		}
 	}
 	return out
 }
 
-func lookupPersistedSession(live domain.Session, byID, byTmux map[string]domain.Session) (domain.Session, bool) {
+func lookupPersistedSession(live domain.Session, byID, byTerminal map[string]domain.Session) (domain.Session, bool) {
 	if s, ok := byID[live.ID]; ok {
 		return s, true
 	}
-	if k := sessionTmuxKey(live); k != "" {
-		if s, ok := byTmux[k]; ok && sameTerminal(live, s) {
+	if k := sessionTerminalKey(live); k != "" {
+		if s, ok := byTerminal[k]; ok && sameTerminal(live, s) {
 			return s, true
 		}
 	}

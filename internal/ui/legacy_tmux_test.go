@@ -12,7 +12,7 @@ import (
 
 func legacyRow() domain.Session {
 	return domain.Session{
-		ID: "legacy-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
+		ID: "legacy-1", RemoteHost: "devbox", TerminalName: "PB-1", RepoName: "org/repo",
 		Status: domain.SessionStatusInactive, AgentName: "Codex CLI",
 		Backend: domain.BackendLegacyTmux,
 	}
@@ -164,7 +164,7 @@ func TestApplyDiscoveryKeepsLegacyRowInactiveOnScannedHost(t *testing.T) {
 
 func TestApplyDiscoveryStillDropsDeadPTYRowOnScannedHost(t *testing.T) {
 	for _, backend := range []string{domain.BackendPTY, ""} {
-		dead := domain.Session{ID: "dead-1", RemoteHost: "regent0", TmuxSession: "PB-9",
+		dead := domain.Session{ID: "dead-1", RemoteHost: "regent0", TerminalName: "PB-9",
 			Status: domain.SessionStatusActive, Backend: backend}
 		repo := &savingSessionRepo{startupSessionRepo: startupSessionRepo{sessions: []domain.Session{dead}}}
 		m := NewModel(testCfg(), nil, []domain.Session{dead}, repo, nil, nil, nil)
@@ -193,7 +193,7 @@ func TestItemDescriptionMarksLegacyTmux(t *testing.T) {
 
 func TestStartupToastCountsLegacySessions(t *testing.T) {
 	a, b := legacyRow(), legacyRow()
-	b.ID, b.TmuxSession = "legacy-2", "PB-2"
+	b.ID, b.TerminalName = "legacy-2", "PB-2"
 	pty := legacyRow()
 	pty.ID, pty.Backend = "pty-1", domain.BackendPTY
 	cfg := &config.Config{Remotes: []config.Remote{{Host: "devbox"}}}

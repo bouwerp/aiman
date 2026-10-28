@@ -46,13 +46,13 @@ func TestSessionListAndGet(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "id-b", Name: "reviewer", Group: "WTB-1", TmuxSession: "rev",
+		ID: "id-b", Name: "reviewer", Group: "WTB-1", TerminalName: "rev",
 		AgentName: "grok", Status: domain.SessionStatusActive, CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "id-a", Name: "impl", Group: "WTB-1", TmuxSession: "imp",
+		ID: "id-a", Name: "impl", Group: "WTB-1", TerminalName: "imp",
 		AgentName: "claude", Status: domain.SessionStatusActive, CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -137,13 +137,13 @@ func TestSessionListMarksSelf(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "id-a", Name: "impl", Group: "g", TmuxSession: "imp",
+		ID: "id-a", Name: "impl", Group: "g", TerminalName: "imp",
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "id-b", Name: "reviewer", Group: "g", TmuxSession: "rev",
+		ID: "id-b", Name: "reviewer", Group: "g", TerminalName: "rev",
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestSessionListBackfillsName(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "legacy", TmuxSession: "old-tmux", IssueKey: "WTB-9",
+		ID: "legacy", TerminalName: "old-tmux", IssueKey: "WTB-9",
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -211,7 +211,7 @@ func TestSessionPromptBlocked(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "id-b", Name: "reviewer", Group: "WTB-1", TmuxSession: "rev",
+		ID: "id-b", Name: "reviewer", Group: "WTB-1", TerminalName: "rev",
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -479,7 +479,7 @@ func TestReportAgentSessionUpdatesExisting(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "id-a", Name: "impl", Group: "g", TmuxSession: "imp",
+		ID: "id-a", Name: "impl", Group: "g", TerminalName: "imp",
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -563,7 +563,7 @@ func TestReportAgentStateAndWait(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "id-a", Name: "impl", Group: "g", TmuxSession: "imp",
+		ID: "id-a", Name: "impl", Group: "g", TerminalName: "imp",
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -977,7 +977,7 @@ func forServer(t *testing.T, t3Ref string) (*Server, *fakeCreator) {
 	t.Helper()
 	srv, _, _ := todoServer(t, domain.Session{
 		ID: "p", Name: "parent", Branch: "feat/proj-1", BaseBranch: "main",
-		RepoName: "owner/r", Backend: domain.BackendPTY, TmuxSession: "p",
+		RepoName: "owner/r", Backend: domain.BackendPTY, TerminalName: "p",
 	})
 	creator := &fakeCreator{}
 	srv.create = creator
@@ -1161,7 +1161,7 @@ func TestCreateForRollbackTearsDownPTYChild(t *testing.T) {
 	srv.pty = pty
 	creator.sess = &domain.Session{
 		ID: "new-id", Name: "child", Status: domain.SessionStatusActive, Backend: domain.BackendPTY,
-		TmuxSession: "child-term", WorktreePath: "/r/repo@feat--t3", Branch: "feat--t3",
+		TerminalName: "child-term", WorktreePath: "/r/repo@feat--t3", Branch: "feat--t3",
 	}
 	creator.onCreate = func() {
 		_ = srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAgent, func(l *domain.TodoList) error {

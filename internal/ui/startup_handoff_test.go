@@ -19,7 +19,7 @@ func newTestStartupModel(repo domain.SessionRepository) StartupModel {
 func TestStartupHandsOffImmediately(t *testing.T) {
 	repo := &startupSessionRepo{
 		sessions: []domain.Session{
-			{ID: "from-db", Name: "impl", Group: "WTB-1925", RemoteHost: "regent0", TmuxSession: "WTB-1"},
+			{ID: "from-db", Name: "impl", Group: "WTB-1925", RemoteHost: "regent0", TerminalName: "WTB-1"},
 		},
 	}
 
@@ -77,7 +77,7 @@ func TestStartupReplaysEarlyDiscovery(t *testing.T) {
 	sm := newTestStartupModel(&startupSessionRepo{})
 
 	next, _ := sm.Update(discoveryResultMsg{
-		sessions:     []domain.Session{{ID: "discovered", RemoteHost: "regent0", TmuxSession: "WTB-2"}},
+		sessions:     []domain.Session{{ID: "discovered", RemoteHost: "regent0", TerminalName: "WTB-2"}},
 		scannedHosts: map[string]bool{"regent0": true},
 	})
 	sm, ok := next.(StartupModel)
@@ -106,7 +106,7 @@ func TestDashboardAppliesDiscoveryOnMainView(t *testing.T) {
 	}
 
 	updated, _ := dash.Update(discoveryResultMsg{
-		sessions:     []domain.Session{{ID: "live", RemoteHost: "regent0", TmuxSession: "WTB-2", Status: domain.SessionStatusActive}},
+		sessions:     []domain.Session{{ID: "live", RemoteHost: "regent0", TerminalName: "WTB-2", Status: domain.SessionStatusActive}},
 		scannedHosts: map[string]bool{"regent0": true},
 	})
 	dash = updated.(*Model)

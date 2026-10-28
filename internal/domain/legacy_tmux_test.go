@@ -23,7 +23,7 @@ func TestIsLegacyTmux(t *testing.T) {
 }
 
 func TestLegacyTmuxErrorHintNamesHostAndCommand(t *testing.T) {
-	s := Session{ID: "abc", RemoteHost: "regent0", TmuxSession: "WTB-1", Backend: BackendLegacyTmux}
+	s := Session{ID: "abc", RemoteHost: "regent0", TerminalName: "WTB-1", Backend: BackendLegacyTmux}
 	err := NewLegacyTmuxError(s)
 
 	if !errors.Is(err, ErrLegacyTmuxSession) {
@@ -48,7 +48,7 @@ func TestLegacyTmuxErrorHintNamesHostAndCommand(t *testing.T) {
 }
 
 func TestLegacyTmuxErrorQuotesSingleQuoteInName(t *testing.T) {
-	err := NewLegacyTmuxError(Session{RemoteHost: "h", TmuxSession: "it's"})
+	err := NewLegacyTmuxError(Session{RemoteHost: "h", TerminalName: "it's"})
 	var lt *LegacyTmuxError
 	if !errors.As(err, &lt) {
 		t.Fatal("errors.As failed")

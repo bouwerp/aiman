@@ -104,7 +104,7 @@ func TestA1RowShowsProgress(t *testing.T) {
 }
 
 func TestA1RowWithoutListHasNoBar(t *testing.T) {
-	it := item{session: domain.Session{IssueKey: "WTB-1", Name: "impl", TmuxSession: "impl"}}
+	it := item{session: domain.Session{IssueKey: "WTB-1", Name: "impl", TerminalName: "impl"}}
 	plain := ansi.Strip(renderA1Row(it, false, 60))
 	if strings.Contains(plain, "━") || strings.Contains(plain, "/") {
 		t.Fatalf("session without a list must not show a bar or n/m, got %q", plain)

@@ -162,9 +162,9 @@ func TestCollapsedGroupStillCountsSessions(t *testing.T) {
 	cfg := &config.Config{Remotes: []config.Remote{{Name: "regent0", Host: "10.0.1.5"}}}
 	now := time.Now()
 	sessions := []domain.Session{
-		{ID: "a", Name: "impl", Group: "G", RemoteHost: "10.0.1.5", TmuxSession: "a", CreatedAt: now},
-		{ID: "b", Name: "review", Group: "G", RemoteHost: "10.0.1.5", TmuxSession: "b", CreatedAt: now.Add(-time.Second)},
-		{ID: "c", Name: "other", Group: "G", RemoteHost: "10.9.9.9", TmuxSession: "c", CreatedAt: now},
+		{ID: "a", Name: "impl", Group: "G", RemoteHost: "10.0.1.5", TerminalName: "a", CreatedAt: now},
+		{ID: "b", Name: "review", Group: "G", RemoteHost: "10.0.1.5", TerminalName: "b", CreatedAt: now.Add(-time.Second)},
+		{ID: "c", Name: "other", Group: "G", RemoteHost: "10.9.9.9", TerminalName: "c", CreatedAt: now},
 	}
 	m := NewModel(cfg, nil, sessions, nil, nil, nil, nil)
 	m.remoteFilter = "10.0.1.5"
@@ -259,7 +259,7 @@ func TestGroupedSessionTitlesNestUnderHeader(t *testing.T) {
 func TestRenderSessionPanelSyncIsNA(t *testing.T) {
 	cfg := twoRemoteCfg()
 	s := domain.Session{
-		ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl",
+		ID: "s1", Name: "impl", Group: "WTB-1", TerminalName: "impl",
 		RemoteHost: "10.0.1.5", RepoName: "org/repo", WorktreePath: "/home/u/repo",
 		Status: domain.SessionStatusActive,
 	}
@@ -296,7 +296,7 @@ func TestRenderSessionPanelSyncIsNA(t *testing.T) {
 func TestRenderSessionPanelBlankWhenHeaderSelected(t *testing.T) {
 	cfg := twoRemoteCfg()
 	s := domain.Session{
-		ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl",
+		ID: "s1", Name: "impl", Group: "WTB-1", TerminalName: "impl",
 		RemoteHost: "10.0.1.5", RepoName: "org/repo", WorktreePath: "/home/u/repo",
 		Status: domain.SessionStatusActive,
 	}
@@ -323,7 +323,7 @@ func TestRenderSessionPanelBlankWhenHeaderSelected(t *testing.T) {
 
 func TestApplyRemoteFilterSelectsFirstSessionNotHeader(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TerminalName: "impl", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	it, ok := m.selectedSessionItem()
@@ -337,7 +337,7 @@ func TestApplyRemoteFilterSelectsFirstSessionNotHeader(t *testing.T) {
 
 func TestSnapOffGroupHeaderDownSelectsChildSession(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TerminalName: "impl", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	m.list.Select(0)
@@ -354,8 +354,8 @@ func TestSnapOffGroupHeaderDownSelectsChildSession(t *testing.T) {
 func TestSnapOffGroupHeaderUpSelectsPreviousGroupSession(t *testing.T) {
 	cfg := twoRemoteCfg()
 	sessions := []domain.Session{
-		{ID: "a", Name: "impl", Group: "WTB-1", TmuxSession: "a", RemoteHost: "10.0.1.5"},
-		{ID: "b", Name: "q1", Group: "quick", TmuxSession: "b", RemoteHost: "10.0.1.5"},
+		{ID: "a", Name: "impl", Group: "WTB-1", TerminalName: "a", RemoteHost: "10.0.1.5"},
+		{ID: "b", Name: "q1", Group: "quick", TerminalName: "b", RemoteHost: "10.0.1.5"},
 	}
 	m := NewModel(cfg, nil, sessions, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
@@ -380,7 +380,7 @@ func TestSnapOffGroupHeaderUpSelectsPreviousGroupSession(t *testing.T) {
 
 func TestSessionSearchEscCancelsAndStaysOnDashboard(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TerminalName: "impl", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 
 	updated, _ := m.handleMainUpdate(pressKey("/"))
@@ -421,14 +421,14 @@ func TestSessionSearchEscClearsAppliedFilter(t *testing.T) {
 	}
 }
 
-func TestInitialTmuxTickSelectsSessionNotHeader(t *testing.T) {
+func TestInitialPaneTickSelectsSessionNotHeader(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TmuxSession: "impl", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "impl", Group: "WTB-1", TerminalName: "impl", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	m.list.Select(0)
 	m.initialLoad = true
-	_, _ = m.applyTmuxTick(tmuxTickMsg{}, nil)
+	_, _ = m.applyPaneTick(paneTickMsg{}, nil)
 	it, ok := m.selectedSessionItem()
 	if !ok || it.session.ID != "s1" {
 		t.Fatalf("after first tick want session s1, ok=%v id=%q header=%v", ok, it.session.ID, it.header)

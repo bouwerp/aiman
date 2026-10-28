@@ -110,14 +110,14 @@ func (c FakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) 
 		RepoName:         cfg.Repo.Name,
 		WorktreePath:     dir,
 		WorkingDirectory: dir,
-		TmuxSession:      "term-" + id,
+		TerminalName:     "term-" + id,
 		AgentName:        agent,
 		Backend:          domain.BackendPTY,
 		Status:           domain.SessionStatusActive,
 		CreatedAt:        time.Now().UTC(),
 	}
 	if c.PTY != nil {
-		c.PTY.Add(ptyruntime.SessionInfo{ID: id, Name: sess.TmuxSession, Dir: dir, Command: agent})
+		c.PTY.Add(ptyruntime.SessionInfo{ID: id, Name: sess.TerminalName, Dir: dir, Command: agent})
 	}
 	return sess, nil
 }

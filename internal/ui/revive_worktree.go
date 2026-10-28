@@ -37,8 +37,8 @@ func (i reviveItem) Title() string {
 	switch {
 	case i.session.Branch != "":
 		label += " @ " + i.session.Branch
-	case i.session.TmuxSession != "":
-		label += " @ " + i.session.TmuxSession
+	case i.session.TerminalName != "":
+		label += " @ " + i.session.TerminalName
 	}
 	return label
 }

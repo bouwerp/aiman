@@ -36,7 +36,7 @@ func TestUnseenWorktreeSessions_EmptyKnownIDsKeepsAll(t *testing.T) {
 func newTestModelForRevive(t *testing.T) *Model {
 	t.Helper()
 	sess := domain.Session{
-		ID: "wt-1", RemoteHost: "devbox", TmuxSession: "app-feature",
+		ID: "wt-1", RemoteHost: "devbox", TerminalName: "app-feature",
 		RepoName: "app", WorktreePath: "/repos/app@feature", WorkingDirectory: "/repos/app@feature",
 		Status: domain.SessionStatusInactive,
 	}

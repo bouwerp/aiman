@@ -110,7 +110,7 @@ func TestFailedPollStaysDue(t *testing.T) {
 func scheduledPromptRepo() *daemonRepo {
 	return &daemonRepo{
 		sessions: map[string]domain.Session{
-			"a": {ID: "a", TmuxSession: "aiman-a"},
+			"a": {ID: "a", TerminalName: "aiman-a"},
 			"b": {ID: "b", Backend: domain.BackendPTY},
 		},
 		prompts: []domain.ScheduledPrompt{{

@@ -120,14 +120,14 @@ func TestRunTerminateStep_SkipsRemoteCleanupWhenRemoteMissing(t *testing.T) {
 	model := NewModel(cfg, nil, []domain.Session{{
 		ID:           "stale",
 		RemoteHost:   "devbox",
-		TmuxSession:  "PP12PB-720",
+		TerminalName: "PP12PB-720",
 		WorktreePath: "/home/dev/PB-720",
 		RepoName:     "org/repo",
 	}}, &mockSessionRepo{}, nil, nil, nil)
 	session := domain.Session{
 		ID:           "stale",
 		RemoteHost:   "devbox",
-		TmuxSession:  "PP12PB-720",
+		TerminalName: "PP12PB-720",
 		WorktreePath: "/home/dev/PB-720",
 		RepoName:     "org/repo",
 	}

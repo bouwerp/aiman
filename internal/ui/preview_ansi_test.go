@@ -140,18 +140,18 @@ func TestPreviewPanHintOnlyWhenContentOverflows(t *testing.T) {
 // intact — the raw form is what change detection compares and what Y yanks.
 func TestSetPreviewContentSealsWithoutMutatingRaw(t *testing.T) {
 	raw := "\x1b[38;2;255;255;255m\x1b[48;2;10;10;10mopen styling"
-	m := &Model{tmuxOutput: raw}
+	m := &Model{paneOutput: raw}
 	m.viewport.SetWidth(120)
 	m.viewport.SetHeight(10)
 	m.setPreviewContent()
 
-	if m.tmuxOutput != raw {
-		t.Errorf("raw capture must not be rewritten: %q", m.tmuxOutput)
+	if m.paneOutput != raw {
+		t.Errorf("raw capture must not be rewritten: %q", m.paneOutput)
 	}
 	if m.previewCols != ansi.StringWidth(raw) {
 		t.Errorf("previewCols = %d, want %d", m.previewCols, ansi.StringWidth(raw))
 	}
-	if styleOpenAtEnd(sealPreviewLines(m.tmuxOutput)) {
+	if styleOpenAtEnd(sealPreviewLines(m.paneOutput)) {
 		t.Error("displayed content must be sealed")
 	}
 }

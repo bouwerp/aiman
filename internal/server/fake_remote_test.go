@@ -57,6 +57,6 @@ func (f *fakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig)
 	return &domain.Session{
 		ID: "new-id", Name: cfg.Name, Group: cfg.Group, Branch: cfg.Branch,
 		BaseBranch: cfg.BaseBranch, AgentName: agent, Status: domain.SessionStatusActive,
-		TmuxSession: cfg.Branch,
+		TerminalName: cfg.Branch,
 	}, nil
 }

@@ -46,7 +46,7 @@ const classifyProbeTimeout = 20 * time.Second
 // or negative when unknown.
 func classifySessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, session domain.Session, since time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		out := classifyProbeMsg{session: session.TmuxSession}
+		out := classifyProbeMsg{session: session.TerminalName}
 
 		remote, ok := resolveRemote(cfg, session)
 		if !ok {

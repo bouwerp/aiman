@@ -58,7 +58,7 @@ func (m *Model) showCachedPreview(s domain.Session) {
 	if text == "" {
 		return
 	}
-	m.tmuxOutput = text
+	m.paneOutput = text
 	m.setPreviewContent()
 	m.viewport.GotoBottom()
 	m.previewFollowing = true
@@ -101,7 +101,7 @@ func (m *Model) noteCachedActivity(s domain.Session) {
 		}
 	}
 	activity, needs := classifyPreview(m.cfg, s, cache.Text, sinceOut, sinceTitle)
-	_, _ = m.applyInputHint(inputHintMsg{session: s.TmuxSession, id: s.ID, needsInput: needs, activity: activity}, nil)
+	_, _ = m.applyInputHint(inputHintMsg{session: s.TerminalName, id: s.ID, needsInput: needs, activity: activity}, nil)
 }
 
 func (m *Model) refreshPreview(session domain.Session) tea.Cmd {
@@ -111,7 +111,7 @@ func (m *Model) refreshPreview(session domain.Session) tea.Cmd {
 	}
 	cfg := m.cfg
 	return func() tea.Msg {
-		msg := previewRefreshMsg{session: session.TmuxSession, id: session.ID}
+		msg := previewRefreshMsg{session: session.TerminalName, id: session.ID}
 		remote, ok := resolveRemote(cfg, session)
 		if !ok {
 			msg.err = fmt.Errorf("no remote configured")
@@ -166,13 +166,13 @@ func (m *Model) applyPreviewRefresh(msg previewRefreshMsg) tea.Cmd {
 		if msg.key() != m.activeSession {
 			return nil
 		}
-		_, cmd := m.applyTmuxOutput(tmuxOutputMsg{session: msg.key(), err: msg.err}, nil)
+		_, cmd := m.applyPaneOutput(paneOutputMsg{session: msg.key(), err: msg.err}, nil)
 		return cmd
 	}
 	m.storePaneCache(msg)
 	var cmds []tea.Cmd
 	if msg.key() == m.activeSession && !msg.unchanged {
-		_, cmd := m.applyTmuxOutput(tmuxOutputMsg{session: msg.key(), output: msg.text}, nil)
+		_, cmd := m.applyPaneOutput(paneOutputMsg{session: msg.key(), output: msg.text}, nil)
 		cmds = append(cmds, cmd)
 	}
 	_, cmd := m.applyInputHint(inputHintMsg{session: msg.session, id: msg.id, needsInput: msg.needsInput, activity: msg.activity}, nil)

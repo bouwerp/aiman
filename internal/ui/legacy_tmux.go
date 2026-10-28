@@ -28,7 +28,7 @@ func legacyTmuxError(s domain.Session) *domain.LegacyTmuxError {
 	if errors.As(domain.NewLegacyTmuxError(s), &lt) {
 		return lt
 	}
-	return &domain.LegacyTmuxError{Host: s.RemoteHost, Name: s.TmuxSession}
+	return &domain.LegacyTmuxError{Host: s.RemoteHost, Name: s.TerminalName}
 }
 
 // legacyTmuxToast refuses an action on a legacy row with the move hint.
@@ -65,7 +65,7 @@ func (m *Model) noteLegacyStopped() {
 func (m *Model) renderLegacyRestartConfirm(s domain.Session) string {
 	var b strings.Builder
 	b.WriteString(activeStyle.Render("Move Session to pty") + "\n\n")
-	b.WriteString(fmt.Sprintf("Session %q\n\n", s.TmuxSession))
+	b.WriteString(fmt.Sprintf("Session %q\n\n", s.TerminalName))
 	b.WriteString(legacyStopInstructions(s) + "\n\n")
 	b.WriteString("The restart then resumes the agent in pty.\n\n")
 	b.WriteString(activeStyle.Render("[y]") + " I stopped it, same agent  " +

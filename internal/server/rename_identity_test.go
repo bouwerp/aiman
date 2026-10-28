@@ -8,7 +8,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
-func TestSessionRenameLeavesBranchWorktreeAndTmux(t *testing.T) {
+func TestSessionRenameLeavesBranchWorktreeAndTerminal(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	orig := &domain.Session{
@@ -17,7 +17,7 @@ func TestSessionRenameLeavesBranchWorktreeAndTmux(t *testing.T) {
 		Group:        "quick",
 		Branch:       "adhoc-20260821-1200",
 		WorktreePath: "/home/dev/adhoc-20260821-1200",
-		TmuxSession:  "adhoc-20260821-1200",
+		TerminalName: "adhoc-20260821-1200",
 		Status:       domain.SessionStatusActive,
 		CreatedAt:    time.Now(),
 	}
@@ -53,7 +53,7 @@ func TestSessionRenameLeavesBranchWorktreeAndTmux(t *testing.T) {
 	if got.WorktreePath != orig.WorktreePath {
 		t.Fatalf("WorktreePath changed: %q -> %q", orig.WorktreePath, got.WorktreePath)
 	}
-	if got.TmuxSession != orig.TmuxSession {
-		t.Fatalf("TmuxSession changed: %q -> %q", orig.TmuxSession, got.TmuxSession)
+	if got.TerminalName != orig.TerminalName {
+		t.Fatalf("TerminalName changed: %q -> %q", orig.TerminalName, got.TerminalName)
 	}
 }

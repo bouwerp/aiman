@@ -67,7 +67,7 @@ func (r *discovererRemote) ProvisionRemote(context.Context, []domain.ProvisionSt
 }
 func (r *discovererRemote) Close() error { return nil }
 
-func TestHandleOrphanAimanNamedSync_TerminatesWhenNoTmuxPathMatch(t *testing.T) {
+func TestHandleOrphanAimanNamedSync_TerminatesWhenNoTerminalPathMatch(t *testing.T) {
 	rec := &recordingSyncEngine{}
 	d := &SessionDiscoverer{syncEngine: rec}
 	ms := domain.SyncSession{
@@ -133,7 +133,7 @@ func TestDiscover_KeepsHealthyOrphanWorktree(t *testing.T) {
 	if sessions[0].WorktreePath != "/home/dev/feature-x" {
 		t.Fatalf("unexpected worktree path: %+v", sessions[0])
 	}
-	if sessions[0].TmuxSession != "feature-x" {
+	if sessions[0].TerminalName != "feature-x" {
 		t.Fatalf("unexpected tmux/session label: %+v", sessions[0])
 	}
 	if sessions[0].Status != domain.SessionStatusInactive {
@@ -141,7 +141,7 @@ func TestDiscover_KeepsHealthyOrphanWorktree(t *testing.T) {
 	}
 }
 
-func TestHandleOrphanAimanNamedSync_NoTerminateWhenTmuxMatchesPath(t *testing.T) {
+func TestHandleOrphanAimanNamedSync_NoTerminateWhenTerminalMatchesPath(t *testing.T) {
 	rec := &recordingSyncEngine{}
 	d := &SessionDiscoverer{syncEngine: rec}
 	ms := domain.SyncSession{
@@ -228,9 +228,9 @@ func TestIsSessionMatch_StableNameMatch(t *testing.T) {
 	}
 }
 
-func TestIsSessionMatch_TmuxNameMatch(t *testing.T) {
+func TestIsSessionMatch_TerminalNameMatch(t *testing.T) {
 	d := &SessionDiscoverer{}
-	session := domain.Session{TmuxSession: "feature-branch"}
+	session := domain.Session{TerminalName: "feature-branch"}
 	ms := domain.SyncSession{Name: "feature-branch"}
 	if !d.isSessionMatch(session, ms) {
 		t.Error("expected tmux name match")
@@ -367,10 +367,10 @@ func TestDedupeDiscoveredSessions_DropsAimanSyncGhostsAndOrphanDup(t *testing.T)
 	host := "regent0"
 	wt := "/home/dev/wt-branch"
 	sessions := []domain.Session{
-		{RemoteHost: host, TmuxSession: "wt-branch", Status: domain.SessionStatusActive, WorktreePath: wt, WorkingDirectory: wt},
-		{RemoteHost: host, TmuxSession: "wt-branch", Status: domain.SessionStatusInactive, WorktreePath: wt, ID: "other-id"},
-		{RemoteHost: host, TmuxSession: "aiman-sync-abc", WorktreePath: wt},
-		{RemoteHost: host, TmuxSession: "wt-branch", Status: domain.SessionStatusInactive, WorktreePath: wt, WorkingDirectory: wt},
+		{RemoteHost: host, TerminalName: "wt-branch", Status: domain.SessionStatusActive, WorktreePath: wt, WorkingDirectory: wt},
+		{RemoteHost: host, TerminalName: "wt-branch", Status: domain.SessionStatusInactive, WorktreePath: wt, ID: "other-id"},
+		{RemoteHost: host, TerminalName: "aiman-sync-abc", WorktreePath: wt},
+		{RemoteHost: host, TerminalName: "wt-branch", Status: domain.SessionStatusInactive, WorktreePath: wt, WorkingDirectory: wt},
 	}
 	out := dedupeDiscoveredSessions(sessions)
 	if len(out) != 1 {

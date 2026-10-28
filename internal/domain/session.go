@@ -66,7 +66,9 @@ type Session struct {
 	RemoteHost       string
 	WorktreePath     string
 	WorkingDirectory string
-	TmuxSession      string
+	// TerminalName is the human-readable terminal name. The JSON key stays
+	// TmuxSession so session.register payloads keep their wire shape.
+	TerminalName string `json:"TmuxSession"`
 	// Backend is the terminal runtime hosting the session: BackendPTY, or
 	// BackendLegacyTmux for a row aiman no longer runs. Empty means no
 	// terminal is recorded (a discovery result).

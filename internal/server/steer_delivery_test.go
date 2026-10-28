@@ -31,7 +31,7 @@ func steerGateServer(t *testing.T, sess domain.Session) *Server {
 
 func hookedSession(id string, state domain.AgentState, source string, at time.Time) domain.Session {
 	return domain.Session{
-		ID: id, Name: id, Group: "g", TmuxSession: id, Backend: domain.BackendPTY,
+		ID: id, Name: id, Group: "g", TerminalName: id, Backend: domain.BackendPTY,
 		HookState: state, HookStateSource: source, HookStateAt: at,
 	}
 }
@@ -242,7 +242,7 @@ func TestDeliverSteerFlattensRealNote(t *testing.T) {
 }
 
 func TestSteerClassifierQuietUsesSettle(t *testing.T) {
-	srv := steerGateServer(t, domain.Session{ID: "cq1", Name: "cq1", Group: "g", TmuxSession: "work", Backend: domain.BackendPTY})
+	srv := steerGateServer(t, domain.Session{ID: "cq1", Name: "cq1", Group: "g", TerminalName: "work", Backend: domain.BackendPTY})
 	fake := ptyfake.New()
 	fake.Add(ptyruntime.SessionInfo{ID: "cq1"})
 	fake.SetScreen("cq1", "bypass permissions on")

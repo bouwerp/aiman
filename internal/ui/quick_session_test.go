@@ -71,7 +71,7 @@ func TestStartQuickSessionDoesNotCopyNameOntoBranch(t *testing.T) {
 
 func TestRenameKeyOpensInput(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TmuxSession: "q1", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TerminalName: "q1", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	updated, _, handled := m.handleMainKeyMsg(pressKey("e"))

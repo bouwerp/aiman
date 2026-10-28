@@ -73,7 +73,7 @@ func TestParsePTYResizeApplied(t *testing.T) {
 
 func TestResizeSessionTerminalRejectsUnusableSizes(t *testing.T) {
 	r := &recordingRemote{}
-	s := domain.Session{ID: "abc", TmuxSession: "demo"}
+	s := domain.Session{ID: "abc", TerminalName: "demo"}
 	for _, sz := range [][2]int{{0, 40}, {154, 0}, {-1, -1}} {
 		if _, err := ResizeSessionTerminal(context.Background(), r, s, sz[0], sz[1]); err == nil {
 			t.Errorf("expected an error for %dx%d", sz[0], sz[1])
@@ -86,7 +86,7 @@ func TestResizeSessionTerminalRejectsUnusableSizes(t *testing.T) {
 
 func TestResizeSessionTerminalPropagatesTransportErrors(t *testing.T) {
 	r := &recordingRemote{err: errors.New("ssh died")}
-	s := domain.Session{ID: "abc", TmuxSession: "demo"}
+	s := domain.Session{ID: "abc", TerminalName: "demo"}
 	if _, err := ResizeSessionTerminal(context.Background(), r, s, 154, 40); err == nil {
 		t.Error("a transport failure must surface")
 	}

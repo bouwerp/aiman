@@ -50,15 +50,15 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		if seenIDs[s.ID] {
 			return
 		}
-		if s.TmuxSession != "" && seenNames[s.TmuxSession] && !hasOwnTerminal(s) {
+		if s.TerminalName != "" && seenNames[s.TerminalName] && !hasOwnTerminal(s) {
 			return
 		}
 		seenIDs[s.ID] = true
 		if s.WorktreePath != "" {
 			seenWorktrees[s.WorktreePath] = true
 		}
-		if s.TmuxSession != "" {
-			seenNames[s.TmuxSession] = true
+		if s.TerminalName != "" {
+			seenNames[s.TerminalName] = true
 		}
 		sessions = append(sessions, s)
 	}
@@ -71,7 +71,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		session := d.sessionFromPTYRecord(host, rec, mutagenSessions)
 		livePathPairs = append(livePathPairs, domain.Session{
 			ID:               session.ID,
-			TmuxSession:      session.TmuxSession,
+			TerminalName:     session.TerminalName,
 			WorkingDirectory: session.WorkingDirectory,
 		})
 		if session.MutagenSyncID != "" {
@@ -128,7 +128,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		}
 
 		session := domain.Session{
-			TmuxSession:      ms.Name,
+			TerminalName:     ms.Name,
 			RemoteHost:       host,
 			Status:           domain.SessionStatusInactive,
 			WorktreePath:     remotePath,
@@ -156,7 +156,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 func (d *SessionDiscoverer) sessionFromPTYRecord(host string, rec PTYRecord, mutagenSessions []domain.SyncSession) domain.Session {
 	session := domain.Session{
 		ID:               strings.TrimSpace(rec.ID),
-		TmuxSession:      rec.Name,
+		TerminalName:     rec.Name,
 		Backend:          domain.BackendPTY,
 		RemoteHost:       host,
 		WorkingDirectory: normalizePath(rec.Dir),
@@ -203,7 +203,7 @@ func (d *SessionDiscoverer) orphanSessionFromWorktreeRecord(host string, rec dom
 	wtBase := filepath.Base(normalizedWT)
 
 	session := domain.Session{
-		TmuxSession:      wtBase,
+		TerminalName:     wtBase,
 		RemoteHost:       host,
 		Status:           domain.SessionStatusInactive,
 		WorktreePath:     normalizedWT,
@@ -221,7 +221,7 @@ func (d *SessionDiscoverer) orphanSessionFromWorktreeRecord(host string, rec dom
 	parts := strings.Split(rec.RepoPath, "/")
 	session.RepoName = parts[len(parts)-1]
 
-	session.IssueKey = domain.ExtractKey(session.TmuxSession)
+	session.IssueKey = domain.ExtractKey(session.TerminalName)
 	if session.IssueKey == "" {
 		session.IssueKey = domain.ExtractKey(normalizedWT)
 	}
@@ -330,11 +330,11 @@ func (d *SessionDiscoverer) isDiscoverableOrphanWorktree(ctx context.Context, re
 
 const aimanSyncNamePrefix = "aiman-sync-"
 
-func isAimanSyncTmuxName(name string) bool {
+func isAimanSyncTerminalName(name string) bool {
 	return strings.HasPrefix(strings.TrimSpace(name), aimanSyncNamePrefix)
 }
 
-// dedupeDiscoveredSessions removes mutagen ghost rows (TmuxSession aiman-sync-*), collapses
+// dedupeDiscoveredSessions removes mutagen ghost rows (TerminalName aiman-sync-*), collapses
 // duplicate terminal names, and drops orphan worktrees already covered by a live session.
 func dedupeDiscoveredSessions(sessions []domain.Session) []domain.Session {
 	if len(sessions) == 0 {
@@ -346,7 +346,7 @@ func dedupeDiscoveredSessions(sessions []domain.Session) []domain.Session {
 		return sessionDedupePriority(scored[i]) > sessionDedupePriority(scored[j])
 	})
 
-	seenTmux := make(map[string]bool)
+	seenTerminal := make(map[string]bool)
 	seenOwn := make(map[string]bool)
 	coveredWT := make(map[string]bool)
 	coverPaths := func(s domain.Session) {
@@ -361,20 +361,20 @@ func dedupeDiscoveredSessions(sessions []domain.Session) []domain.Session {
 
 	var out []domain.Session
 	for _, s := range scored {
-		if isAimanSyncTmuxName(s.TmuxSession) {
+		if isAimanSyncTerminalName(s.TerminalName) {
 			continue
 		}
-		if s.TmuxSession != "" {
-			key := s.RemoteHost + "\x00" + s.TmuxSession
+		if s.TerminalName != "" {
+			key := s.RemoteHost + "\x00" + s.TerminalName
 			if hasOwnTerminal(s) {
 				if seenOwn[s.ID] {
 					continue
 				}
 				seenOwn[s.ID] = true
-			} else if seenTmux[key] {
+			} else if seenTerminal[key] {
 				continue
 			}
-			seenTmux[key] = true
+			seenTerminal[key] = true
 			out = append(out, s)
 			coverPaths(s)
 			continue
@@ -398,10 +398,10 @@ func hasOwnTerminal(s domain.Session) bool {
 }
 
 func sessionDedupePriority(s domain.Session) int {
-	if isAimanSyncTmuxName(s.TmuxSession) {
+	if isAimanSyncTerminalName(s.TerminalName) {
 		return -1
 	}
-	if s.TmuxSession == "" {
+	if s.TerminalName == "" {
 		return 0
 	}
 	if s.Status == domain.SessionStatusActive {
@@ -461,8 +461,8 @@ func (d *SessionDiscoverer) isSessionMatch(session domain.Session, ms domain.Syn
 	}
 
 	// 3. Fallback for older sessions: name-based match
-	if session.TmuxSession != "" {
-		if ms.Name == session.TmuxSession || strings.HasPrefix(ms.Name, session.TmuxSession+"-") {
+	if session.TerminalName != "" {
+		if ms.Name == session.TerminalName || strings.HasPrefix(ms.Name, session.TerminalName+"-") {
 			return true
 		}
 	}

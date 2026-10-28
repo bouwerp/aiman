@@ -39,18 +39,13 @@ func SanitizeBranchName(s string) string {
 	return s
 }
 
-// SanitizeTmuxSessionName maps a branch name onto the name tmux will actually
-// store for it.
+// TerminalNameFromBranch maps a branch name onto the session's terminal name.
 //
-// tmux parses a target as session:window.pane, so a session name containing
-// "." or ":" can never be addressed again: `kill-session -t "a.b"` reports
-// "can't find pane: b" and leaves the session running. tmux itself rewrites "."
-// to "_" when creating the session, so the name aiman remembers must match that
-// rewrite or every later capture-pane, send-keys and kill-session silently
-// targets nothing.
-func SanitizeTmuxSessionName(branch string) string {
+// "/" becomes "-", and "." and ":" become "_". The mapping matches the names
+// stored on legacy rows, so a terminal name compares equal across old and new
+// sessions for the same branch.
+func TerminalNameFromBranch(branch string) string {
 	s := strings.ReplaceAll(branch, "/", "-")
-	// Match tmux's own normalisation rather than inventing a different one.
 	s = strings.ReplaceAll(s, ".", "_")
 	s = strings.ReplaceAll(s, ":", "_")
 	return s
@@ -93,7 +88,7 @@ const adHocSuffixLen = 4
 
 // AdHocLabel returns prefix + second-resolution timestamp + a 4-char
 // [a-z0-9] suffix read from rnd, so two quick sessions created in the same
-// second get distinct branch, worktree and tmux names. If rnd fails, the
+// second get distinct branch, worktree and terminal names. If rnd fails, the
 // suffix is derived from the nanosecond field so it is never omitted.
 func AdHocLabel(prefix string, now time.Time, rnd io.Reader) string {
 	buf := make([]byte, adHocSuffixLen)

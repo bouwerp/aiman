@@ -53,7 +53,7 @@ func restartTerminal(ctx context.Context, remote usecase.TerminalExecutor, s *do
 	usecase.ApplyKiloAllowEnv(ctx, remote, spec.AgentCmd, env)
 	if err := usecase.RecreatePTYSession(ctx, remote, usecase.PTYSpec{
 		ID:            s.ID,
-		Name:          s.TmuxSession,
+		Name:          s.TerminalName,
 		Dir:           spec.WorkingDir,
 		Command:       spec.AgentCmd,
 		Env:           env,

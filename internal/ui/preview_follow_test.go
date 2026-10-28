@@ -31,13 +31,13 @@ func TestPreviewKeepsUpWithTheTailAfterAResize(t *testing.T) {
 	m := previewModel(t, "grok", "")
 	m.viewport.SetWidth(40)
 	m.viewport.SetHeight(10)
-	_, _ = m.applyTmuxOutput(tmuxOutputMsg{session: "grok", output: previewLines(40)}, nil)
+	_, _ = m.applyPaneOutput(paneOutputMsg{session: "grok", output: previewLines(40)}, nil)
 	if !m.viewport.AtBottom() {
 		t.Fatal("the first paint should sit on the latest row")
 	}
 
 	m.viewport.SetHeight(6)
-	_, _ = m.applyTmuxOutput(tmuxOutputMsg{session: "grok", output: previewLines(41)}, nil)
+	_, _ = m.applyPaneOutput(paneOutputMsg{session: "grok", output: previewLines(41)}, nil)
 	if !strings.Contains(lastPreviewLine(m), "row-40") {
 		t.Fatalf("preview stuck above the latest row, last visible %q", lastPreviewLine(m))
 	}
@@ -49,13 +49,13 @@ func TestPreviewStaysPutAfterScrollingUp(t *testing.T) {
 	m := previewModel(t, "grok", "")
 	m.viewport.SetWidth(40)
 	m.viewport.SetHeight(10)
-	_, _ = m.applyTmuxOutput(tmuxOutputMsg{session: "grok", output: previewLines(40)}, nil)
+	_, _ = m.applyPaneOutput(paneOutputMsg{session: "grok", output: previewLines(40)}, nil)
 	if _, handled := m.handlePreviewKey(pressKey("[")); !handled {
 		t.Fatal("scroll up should be handled")
 	}
 	parked := m.viewport.YOffset()
 
-	_, _ = m.applyTmuxOutput(tmuxOutputMsg{session: "grok", output: previewLines(45)}, nil)
+	_, _ = m.applyPaneOutput(paneOutputMsg{session: "grok", output: previewLines(45)}, nil)
 	if m.viewport.YOffset() != parked {
 		t.Fatalf("scrolled preview jumped from %d to %d", parked, m.viewport.YOffset())
 	}
@@ -71,7 +71,7 @@ func TestListNavigationDoesNotFreezeThePreview(t *testing.T) {
 	m.viewport.SetWidth(40)
 	m.viewport.SetHeight(10)
 	m.state = viewStateMain
-	_, _ = m.applyTmuxOutput(tmuxOutputMsg{session: "grok", output: previewLines(40)}, nil)
+	_, _ = m.applyPaneOutput(paneOutputMsg{session: "grok", output: previewLines(40)}, nil)
 	bottom := m.viewport.YOffset()
 
 	updated, _ := m.Update(pressKey("k"))
@@ -88,7 +88,7 @@ func TestPreviewSitsOnTheLastRealRow(t *testing.T) {
 	m := previewModel(t, "grok", "")
 	m.viewport.SetWidth(40)
 	m.viewport.SetHeight(14)
-	m.tmuxOutput = "LIVE\n   \n   \n\x1b[48;5;236m            \x1b[0m"
+	m.paneOutput = "LIVE\n   \n   \n\x1b[48;5;236m            \x1b[0m"
 	m.setPreviewContent()
 
 	lines := strings.Split(m.viewport.View(), "\n")
@@ -110,7 +110,7 @@ func TestPreviewDropsTheGapAboveTheComposer(t *testing.T) {
 	m := previewModel(t, "grok", "")
 	m.viewport.SetWidth(40)
 	m.viewport.SetHeight(14)
-	m.tmuxOutput = strings.Join([]string{
+	m.paneOutput = strings.Join([]string{
 		transcript,
 		"",
 		"",

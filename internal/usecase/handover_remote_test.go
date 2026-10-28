@@ -45,7 +45,7 @@ func TestPrepareRestartHandoffUsesServeHandover(t *testing.T) {
 	remote := &restartRemote{rpcOut: map[string]string{
 		"handover.write": `{"result":{"type":"handover","path":"/w/.aiman_handover.md","written":true,"exists":true}}`,
 	}}
-	s := domain.Session{ID: "s1", TmuxSession: "sess", WorkingDirectory: "/w"}
+	s := domain.Session{ID: "s1", TerminalName: "sess", WorkingDirectory: "/w"}
 
 	mode, note := PrepareRestartHandoff(context.Background(), remote, s, "/w", "restart", time.Second)
 	if mode != HandoffHandover {
@@ -93,7 +93,7 @@ func TestPrepareRestartHandoffUsesServeHandover(t *testing.T) {
 
 func TestPrepareRestartHandoffFallsBackOnUnknownMethod(t *testing.T) {
 	withFastSummaryPoll(t)
-	s := domain.Session{ID: "s1", TmuxSession: "sess", WorkingDirectory: "/w"}
+	s := domain.Session{ID: "s1", TerminalName: "sess", WorkingDirectory: "/w"}
 
 	t.Run("file appears", func(t *testing.T) {
 		remote := &restartRemote{
@@ -148,7 +148,7 @@ func TestPrepareRestartHandoffFallsBackOnUnknownMethod(t *testing.T) {
 
 func TestPrepareRestartHandoffFallsBackOnOtherFailures(t *testing.T) {
 	withFastSummaryPoll(t)
-	s := domain.Session{ID: "s1", TmuxSession: "sess", WorkingDirectory: "/w"}
+	s := domain.Session{ID: "s1", TerminalName: "sess", WorkingDirectory: "/w"}
 	for _, tt := range []struct {
 		name string
 		out  string
@@ -178,7 +178,7 @@ func TestPrepareRestartHandoffPassesReason(t *testing.T) {
 	remote := &restartRemote{rpcOut: map[string]string{
 		"handover.write": `{"result":{"path":"/w/.aiman_handover.md","written":true,"exists":true}}`,
 	}}
-	s := domain.Session{ID: "s1", TmuxSession: "sess"}
+	s := domain.Session{ID: "s1", TerminalName: "sess"}
 
 	mode, _ := PrepareRestartHandoff(context.Background(), remote, s, "/w", "agent_switch", time.Second)
 	if mode != HandoffHandover {
@@ -196,7 +196,7 @@ func TestReviveIfNeededPointsAtHandover(t *testing.T) {
 	}}
 	s := domain.Session{
 		ID: "dead", Backend: domain.BackendPTY, AgentName: "claude",
-		AgentSessionID: "conv-42", WorkingDirectory: "/w", TmuxSession: "feat",
+		AgentSessionID: "conv-42", WorkingDirectory: "/w", TerminalName: "feat",
 	}
 
 	revived, err := ReviveIfNeeded(context.Background(), remote, &s, ReviveOptions{})

@@ -270,7 +270,7 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fmt.Sprintf("[startup] db=%d discoveryDone=%v err=%v", len(dbSessions), m.discoveryDone, err),
 		}
 		for _, s := range dbSessions {
-			startupLogs = append(startupLogs, fmt.Sprintf("[startup] db:   id=%s tmux=%s worktree=%s", s.ID, s.TmuxSession, s.WorktreePath))
+			startupLogs = append(startupLogs, fmt.Sprintf("[startup] db:   id=%s terminal=%s worktree=%s", s.ID, s.TerminalName, s.WorktreePath))
 		}
 
 		mainModel := NewModel(m.cfg, m.results, dbSessions, m.db, m.flowManager, m.intelligence, m.snapshotManager, startupLogs...)

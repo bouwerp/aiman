@@ -40,7 +40,7 @@ func (r *recordingTerminal) all() string {
 
 func legacyRestartSession() *domain.Session {
 	return &domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "PB-1",
 		WorkingDirectory: "/work/repo@PB-1", Backend: domain.BackendLegacyTmux,
 		Status: domain.SessionStatusActive, AgentName: "claude",
 	}
@@ -84,7 +84,7 @@ func TestRestartTerminalLegacyRequiresConfirmation(t *testing.T) {
 func TestRestartTerminalPTYDoesNotTouchTmux(t *testing.T) {
 	remote := &recordingTerminal{}
 	s := &domain.Session{
-		ID: "sess-2", RemoteHost: "devbox", TmuxSession: "PB-2",
+		ID: "sess-2", RemoteHost: "devbox", TerminalName: "PB-2",
 		WorkingDirectory: "/work/repo@PB-2", Backend: domain.BackendPTY,
 	}
 	err := restartTerminal(context.Background(), remote, s, restartTerminalSpec{

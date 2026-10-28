@@ -14,7 +14,7 @@ import (
 // when the returned session ID matches the in-flight restart.
 func TestBackgroundRestart_SuccessClearsTrackingEvenWithoutPlaceholderID(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "evm-indexer-investigation",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "evm-indexer-investigation",
 		RepoName: "org/repo", Status: domain.SessionStatusActive, AgentName: "Claude Code",
 		Backend: domain.BackendPTY, WorkingDirectory: "/home/code/repos/repo",
 	})
@@ -46,7 +46,7 @@ func TestBackgroundRestart_SuccessClearsTrackingEvenWithoutPlaceholderID(t *test
 // session row; unlike a failed create placeholder, the real session stays.
 func TestCancelBackgroundRestart_CtrlKAbortsAndRestoresSession(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "evm-indexer-investigation",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "evm-indexer-investigation",
 		RepoName: "org/repo", Status: domain.SessionStatusActive, AgentName: "Claude Code",
 		Backend: domain.BackendPTY, WorkingDirectory: "/home/code/repos/repo",
 	})
@@ -126,7 +126,7 @@ func TestCancelBackgroundCreate_CtrlKRemovesPlaceholder(t *testing.T) {
 // The restart progress panel must tell the user how to cancel.
 func TestRenderCreatingPanel_RestartShowsCancelHint(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "feat",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "feat",
 		Status: domain.SessionStatusActive,
 	})
 	sess := model.allSessions[0]
@@ -148,7 +148,7 @@ func TestRenderCreatingPanel_RestartShowsCancelHint(t *testing.T) {
 // Late success after cancel must not resurrect a canceled restart entry.
 func TestBackgroundRestart_LateSuccessAfterCancelIsIgnored(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "feat",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "feat",
 		Status: domain.SessionStatusActive, AgentName: "Claude Code",
 		Backend: domain.BackendPTY,
 	})

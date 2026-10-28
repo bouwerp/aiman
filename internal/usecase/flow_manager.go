@@ -439,7 +439,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	// Step 8: Terminal. The display Name is a renameable alias and must not
 	// become the terminal name; the name stays on the branch.
-	tmuxName := tmuxNameForCreate(branch, session.Name)
+	terminalName := terminalNameForCreate(branch, session.Name)
 
 	// Set AWS environment variables using the globally synced profile.
 	awsEnv := map[string]string{}
@@ -455,7 +455,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	m.trustWorkspaceBeforeLaunch(ctx, sshMgr, workingDir, session.WorktreePath)
 
 	// Every session runs in the PTY runtime.
-	return m.launchPTYSession(ctx, sshMgr, session, config, kit, workingDir, tmuxName, agentCmd, sendKeysPrompt, awsEnv)
+	return m.launchPTYSession(ctx, sshMgr, session, config, kit, workingDir, terminalName, agentCmd, sendKeysPrompt, awsEnv)
 }
 
 // finaliseCreate runs the best-effort decoration and bookkeeping after the
@@ -578,11 +578,11 @@ func SharedSessionAWSEnv(profileName, region string) map[string]string {
 	return env
 }
 
-// tmuxNameForCreate is the terminal name for a new Aiman session.
+// terminalNameForCreate is the terminal name for a new Aiman session.
 // displayName is ignored: renaming the session must not imply renaming the
 // terminal or the worktree, so create never seeds the name from the alias.
-func tmuxNameForCreate(branch, _ string) string {
-	return domain.SanitizeTmuxSessionName(branch)
+func terminalNameForCreate(branch, _ string) string {
+	return domain.TerminalNameFromBranch(branch)
 }
 
 // SessionRuntimeEnv is the AIMAN_* environment for a session. Secrets must not
@@ -743,7 +743,7 @@ func DeliverInitialPromptPTY(ctx context.Context, remote promptDeliverer, sessio
 // launchPTYSession hands the agent to aiman serve's built-in PTY runtime. Env
 // travels in the create payload, so no shell escaping is needed; the command
 // runs under bash -l inside a real PTY.
-func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, kit domain.QualityKit, workingDir, tmuxName, agentCmd string, sendKeysPrompt string, awsEnv map[string]string) (*domain.Session, error) {
+func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, kit domain.QualityKit, workingDir, terminalName, agentCmd string, sendKeysPrompt string, awsEnv map[string]string) (*domain.Session, error) {
 	if !PTYRuntimeAvailable(ctx, sshMgr) {
 		return nil, fmt.Errorf(
 			"sessions need aiman serve running on the remote (TUI: m \u2192 Agent API \u2192 i then s)")
@@ -768,7 +768,7 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 	} else {
 		if err := CreatePTYSession(ctx, sshMgr, PTYSpec{
 			ID:            session.ID,
-			Name:          tmuxName,
+			Name:          terminalName,
 			Dir:           workingDir,
 			Command:       agentCmd,
 			Env:           env,
@@ -779,7 +779,7 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 		DeliverInitialPromptPTY(ctx, sshMgr, session.ID, sendKeysPrompt)
 	}
 	session.Backend = domain.BackendPTY
-	session.TmuxSession = tmuxName // display name; the PTY is addressed by session.ID
+	session.TerminalName = terminalName // display name; the PTY is addressed by session.ID
 
 	return m.finaliseCreate(ctx, sshMgr, session, config, kit, workingDir)
 }

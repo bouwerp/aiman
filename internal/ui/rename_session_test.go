@@ -9,7 +9,7 @@ import (
 
 func TestRenameEnterConfirmsNewName(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TmuxSession: "q1", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TerminalName: "q1", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	updated, _, _ := m.handleMainKeyMsg(pressKey("e"))
@@ -27,7 +27,7 @@ func TestRenameEnterConfirmsNewName(t *testing.T) {
 
 func TestRenameEnterAsCtrlJConfirms(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TmuxSession: "q1", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TerminalName: "q1", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	updated, _, _ := m.handleMainKeyMsg(pressKey("e"))
@@ -45,7 +45,7 @@ func TestRenameEnterAsCtrlJConfirms(t *testing.T) {
 
 func TestRenameInvalidNameStaysAndShowsError(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TmuxSession: "q1", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TerminalName: "q1", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	updated, _, _ := m.handleMainKeyMsg(pressKey("e"))
@@ -66,7 +66,7 @@ func TestRenameInvalidNameStaysAndShowsError(t *testing.T) {
 
 func TestRenameConfirmsEvenIfListLosesSelection(t *testing.T) {
 	cfg := twoRemoteCfg()
-	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TmuxSession: "q1", RemoteHost: "10.0.1.5"}
+	s := domain.Session{ID: "s1", Name: "q1", Group: "quick", TerminalName: "q1", RemoteHost: "10.0.1.5"}
 	m := NewModel(cfg, nil, []domain.Session{s}, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	updated, _, _ := m.handleMainKeyMsg(pressKey("e"))

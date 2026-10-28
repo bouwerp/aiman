@@ -12,7 +12,7 @@ func previewModel(t *testing.T, active, output string) *Model {
 	t.Helper()
 	m := NewModel(&config.Config{}, nil, nil, &mockSessionRepo{}, nil, nil, nil)
 	m.activeSession = active
-	m.tmuxOutput = output
+	m.paneOutput = output
 	return m
 }
 
@@ -22,16 +22,16 @@ func previewModel(t *testing.T, active, output string) *Model {
 // every tick, so the preview sat at "Loading…" forever with no hint of trouble.
 func TestTransientPaneErrorSurfacesWhenNothingHasLoaded(t *testing.T) {
 	m := previewModel(t, "fix-yield", "Loading...")
-	_, _ = m.applyTmuxOutput(tmuxOutputMsg{
+	_, _ = m.applyPaneOutput(paneOutputMsg{
 		session: "fix-yield",
 		err:     errors.New("can't find pane: fix-yield"),
 	}, nil)
 
-	if strings.TrimSpace(m.tmuxOutput) == "Loading..." {
+	if strings.TrimSpace(m.paneOutput) == "Loading..." {
 		t.Fatal("the preview is still showing the placeholder")
 	}
-	if !strings.Contains(m.tmuxOutput, "can't find pane") {
-		t.Errorf("the failure should be visible, got %q", m.tmuxOutput)
+	if !strings.Contains(m.paneOutput, "can't find pane") {
+		t.Errorf("the failure should be visible, got %q", m.paneOutput)
 	}
 }
 
@@ -39,24 +39,24 @@ func TestTransientPaneErrorSurfacesWhenNothingHasLoaded(t *testing.T) {
 // user is reading.
 func TestTransientPaneErrorKeepsAnAlreadyLoadedPane(t *testing.T) {
 	m := previewModel(t, "fix-yield", "agent output worth keeping")
-	_, _ = m.applyTmuxOutput(tmuxOutputMsg{
+	_, _ = m.applyPaneOutput(paneOutputMsg{
 		session: "fix-yield",
 		err:     errors.New("no server running on /tmp/tmux-1004/default"),
 	}, nil)
 
-	if m.tmuxOutput != "agent output worth keeping" {
-		t.Errorf("a loaded pane must survive a transient error, got %q", m.tmuxOutput)
+	if m.paneOutput != "agent output worth keeping" {
+		t.Errorf("a loaded pane must survive a transient error, got %q", m.paneOutput)
 	}
 }
 
 func TestTransientPaneErrorSurfacesOnAnEmptyPreview(t *testing.T) {
 	m := previewModel(t, "fix-yield", "")
-	_, _ = m.applyTmuxOutput(tmuxOutputMsg{
+	_, _ = m.applyPaneOutput(paneOutputMsg{
 		session: "fix-yield",
 		err:     errors.New("can't find pane: fix-yield"),
 	}, nil)
 
-	if !strings.Contains(m.tmuxOutput, "can't find pane") {
-		t.Errorf("the failure should be visible, got %q", m.tmuxOutput)
+	if !strings.Contains(m.paneOutput, "can't find pane") {
+		t.Errorf("the failure should be visible, got %q", m.paneOutput)
 	}
 }

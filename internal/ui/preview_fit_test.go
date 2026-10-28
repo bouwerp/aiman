@@ -19,7 +19,7 @@ func fitModel(t *testing.T, cols, rows int) *Model {
 
 // fitSession is Muse Code, which the preview sizes once so it can leave the
 // 80x24 it was created with.
-var fitSession = domain.Session{ID: "sess-1", TmuxSession: "demo", Backend: domain.BackendPTY, AgentName: "Muse Code"}
+var fitSession = domain.Session{ID: "sess-1", TerminalName: "demo", Backend: domain.BackendPTY, AgentName: "Muse Code"}
 
 // TestSchedulePreviewFitArmsOnce is the bug this design exists to avoid: the
 // poll ticker runs faster than the debounce, so re-arming on every tick would
@@ -181,7 +181,7 @@ func TestPreviewPanelDoesNotResizeTheSession(t *testing.T) {
 		{ID: "grok", Backend: domain.BackendPTY, AgentName: "grok"},
 		{ID: "claude", Backend: domain.BackendPTY, AgentName: "claude"},
 		{ID: "deep", Backend: domain.BackendPTY, AgentName: "deepcode"},
-		{ID: "tmux", TmuxSession: "demo", Backend: domain.BackendLegacyTmux, AgentName: "Muse Code"},
+		{ID: "tmux", TerminalName: "demo", Backend: domain.BackendLegacyTmux, AgentName: "Muse Code"},
 	} {
 		if _, ok := m.desiredPreviewFit(s); ok {
 			t.Fatalf("preview must not resize %s", s.ID)

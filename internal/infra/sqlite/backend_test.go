@@ -76,10 +76,10 @@ func TestSaveEmptyBackendKeepsStoredPTY(t *testing.T) {
 	defer repo.Close()
 	ctx := context.Background()
 
-	if err := repo.Save(ctx, &domain.Session{ID: "s1", TmuxSession: "WTB-1", Backend: domain.BackendPTY}); err != nil {
+	if err := repo.Save(ctx, &domain.Session{ID: "s1", TerminalName: "WTB-1", Backend: domain.BackendPTY}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Save(ctx, &domain.Session{ID: "s1", TmuxSession: "WTB-1"}); err != nil {
+	if err := repo.Save(ctx, &domain.Session{ID: "s1", TerminalName: "WTB-1"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := repo.Get(ctx, "s1")
@@ -96,7 +96,7 @@ func TestSaveEmptyBackendOnNewRowStaysEmpty(t *testing.T) {
 	defer repo.Close()
 	ctx := context.Background()
 
-	if err := repo.Save(ctx, &domain.Session{ID: "s2", TmuxSession: "WTB-2"}); err != nil {
+	if err := repo.Save(ctx, &domain.Session{ID: "s2", TerminalName: "WTB-2"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := repo.Get(ctx, "s2")

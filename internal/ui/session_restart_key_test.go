@@ -21,7 +21,7 @@ func newTestModelWithSession(t *testing.T, s domain.Session) *Model {
 // the restart runs in the background like session creation.
 func TestHandleSessionManageKey_KnownAgentResumesWithoutPicker(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "PB-1", RepoName: "org/repo",
 		Status: domain.SessionStatusInactive, AgentName: "Codex CLI",
 	})
 
@@ -48,7 +48,7 @@ func TestHandleSessionManageKey_KnownAgentResumesWithoutPicker(t *testing.T) {
 // than guessing, or getting stuck.
 func TestHandleSessionManageKey_UnknownAgentFallsBackToPicker(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "PB-1", RepoName: "org/repo",
 		Status: domain.SessionStatusInactive, AgentName: "Some Unheard Of CLI",
 	})
 
@@ -72,7 +72,7 @@ func TestHandleSessionManageKey_UnknownAgentFallsBackToPicker(t *testing.T) {
 // that leads to an auto-resume or the picker.
 func TestHandleSessionManageKey_ActiveSessionAlwaysConfirmsFirst(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "PB-1", RepoName: "org/repo",
 		Status: domain.SessionStatusActive, AgentName: "Codex CLI",
 	})
 
@@ -93,7 +93,7 @@ func TestHandleSessionManageKey_ActiveSessionAlwaysConfirmsFirst(t *testing.T) {
 // when the agent is already known.
 func TestHandleSessionManageKey_ForceSwitchAlwaysShowsPicker(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "PB-1", RepoName: "org/repo",
 		Status: domain.SessionStatusInactive, AgentName: "Codex CLI",
 	})
 
@@ -117,7 +117,7 @@ func TestHandleSessionManageKey_ForceSwitchAlwaysShowsPicker(t *testing.T) {
 // agent was already resolved before the confirm dialog appeared.
 func TestHandleRestartConfirmUpdate_KnownAgentSkipsPicker(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "PB-1", RepoName: "org/repo",
 		Status: domain.SessionStatusActive, AgentName: "Codex CLI",
 	})
 	sess := model.allSessions[0]
@@ -144,7 +144,7 @@ func TestHandleRestartConfirmUpdate_KnownAgentSkipsPicker(t *testing.T) {
 // the list already does; without the same key here, yes/no is the only choice.
 func TestHandleRestartConfirmUpdate_SwitchAgentOpensPicker(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "PB-1", RepoName: "org/repo",
 		Status: domain.SessionStatusActive, AgentName: "Codex CLI",
 	})
 	sess := model.allSessions[0]
@@ -172,7 +172,7 @@ func TestHandleRestartConfirmUpdate_SwitchAgentOpensPicker(t *testing.T) {
 
 func TestHandleRestartConfirmUpdate_NoKnownAgentGoesToPicker(t *testing.T) {
 	model := newTestModelWithSession(t, domain.Session{
-		ID: "sess-1", RemoteHost: "devbox", TmuxSession: "PB-1", RepoName: "org/repo",
+		ID: "sess-1", RemoteHost: "devbox", TerminalName: "PB-1", RepoName: "org/repo",
 		Status: domain.SessionStatusActive,
 	})
 	sess := model.allSessions[0]

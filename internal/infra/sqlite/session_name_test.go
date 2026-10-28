@@ -16,7 +16,7 @@ func TestSaveIgnoresEphemeralSessionID(t *testing.T) {
 	}
 	defer repo.Close()
 	ctx := context.Background()
-	if err := repo.Save(ctx, &domain.Session{ID: "pending-1", TmuxSession: "x"}); err != nil {
+	if err := repo.Save(ctx, &domain.Session{ID: "pending-1", TerminalName: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	list, err := repo.List(ctx)
@@ -35,7 +35,7 @@ func TestOpenDropsEphemeralSessionIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := repo.Save(ctx, &domain.Session{ID: "keep", TmuxSession: "live"}); err != nil {
+	if err := repo.Save(ctx, &domain.Session{ID: "keep", TerminalName: "live"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.db.Exec(`INSERT INTO sessions (id, tmux_session, created_at, updated_at)

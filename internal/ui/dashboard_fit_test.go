@@ -18,8 +18,8 @@ import (
 func TestDashboardFitsItsTerminal(t *testing.T) {
 	next, _ := newTestStartupModel(&startupSessionRepo{
 		sessions: []domain.Session{
-			{ID: "a", Name: "impl", Group: "G", RemoteHost: "regent0", TmuxSession: "t1"},
-			{ID: "b", Name: "review", Group: "G", RemoteHost: "regent0", TmuxSession: "t2"},
+			{ID: "a", Name: "impl", Group: "G", RemoteHost: "regent0", TerminalName: "t1"},
+			{ID: "b", Name: "review", Group: "G", RemoteHost: "regent0", TerminalName: "t2"},
 		},
 	}).Update(startupReadyMsg{})
 	dash := next.(*Model)

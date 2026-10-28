@@ -38,12 +38,12 @@ func TestDiscoveryDoesNotPersistUnknownInactiveSessions(t *testing.T) {
 	m.applyDiscoveryResult(discoveryResultMsg{
 		scannedHosts: map[string]bool{"regent0": true},
 		sessions: []domain.Session{
-			{ID: "live", RemoteHost: "regent0", TmuxSession: "WTB-1", Status: domain.SessionStatusActive},
-			{ID: "syncing", RemoteHost: "regent0", TmuxSession: "WTB-2", Status: domain.SessionStatusSyncing},
+			{ID: "live", RemoteHost: "regent0", TerminalName: "WTB-1", Status: domain.SessionStatusActive},
+			{ID: "syncing", RemoteHost: "regent0", TerminalName: "WTB-2", Status: domain.SessionStatusSyncing},
 			// An orphan worktree the database has never heard of.
-			{ID: "orphan-1", RemoteHost: "regent0", TmuxSession: "app@stray", Status: domain.SessionStatusInactive,
+			{ID: "orphan-1", RemoteHost: "regent0", TerminalName: "app@stray", Status: domain.SessionStatusInactive,
 				WorktreePath: "/repos/app@stray"},
-			{ID: "orphan-2", RemoteHost: "regent0", TmuxSession: "agent-abc", Status: domain.SessionStatusInactive,
+			{ID: "orphan-2", RemoteHost: "regent0", TerminalName: "agent-abc", Status: domain.SessionStatusInactive,
 				WorktreePath: "/repos/app/.claude/worktrees/agent-abc"},
 		},
 	})
@@ -81,7 +81,7 @@ func TestDiscoveryDoesNotPersistUnknownInactiveSessions(t *testing.T) {
 // keep showing — the fix above must not throw those away.
 func TestDiscoveryKeepsKnownInactiveSessions(t *testing.T) {
 	known := domain.Session{
-		ID: "aiman-made", RemoteHost: "regent0", TmuxSession: "app@feature",
+		ID: "aiman-made", RemoteHost: "regent0", TerminalName: "app@feature",
 		Status: domain.SessionStatusInactive, WorktreePath: "/repos/app@feature",
 	}
 	repo := &savingSessionRepo{startupSessionRepo: startupSessionRepo{sessions: []domain.Session{known}}}
@@ -112,7 +112,7 @@ func TestDiscoveryKeepsKnownInactiveSessions(t *testing.T) {
 func TestDiscoveryKeepsPersistedNameAndGroup(t *testing.T) {
 	known := domain.Session{
 		ID: "s1", Name: "impl", Group: "WTB-1925",
-		RemoteHost: "regent0", TmuxSession: "wtb-1925-fix",
+		RemoteHost: "regent0", TerminalName: "wtb-1925-fix",
 		Status: domain.SessionStatusActive,
 	}
 	repo := &savingSessionRepo{startupSessionRepo: startupSessionRepo{sessions: []domain.Session{known}}}
@@ -120,7 +120,7 @@ func TestDiscoveryKeepsPersistedNameAndGroup(t *testing.T) {
 	m := NewModel(cfg, nil, []domain.Session{known}, repo, nil, nil, nil)
 
 	live := domain.Session{
-		ID: "s1", RemoteHost: "regent0", TmuxSession: "wtb-1925-fix",
+		ID: "s1", RemoteHost: "regent0", TerminalName: "wtb-1925-fix",
 		Status: domain.SessionStatusActive,
 	}
 	m.applyDiscoveryResult(discoveryResultMsg{
@@ -140,7 +140,7 @@ func TestDiscoveryKeepsPersistedNameAndGroup(t *testing.T) {
 func TestDiscoveryKeepsPersistedGroupWhenIDsDiffer(t *testing.T) {
 	known := domain.Session{
 		ID: "db-id", Name: "impl", Group: "WTB-1925",
-		RemoteHost: "regent0", TmuxSession: "wtb-1925-fix",
+		RemoteHost: "regent0", TerminalName: "wtb-1925-fix",
 		Status: domain.SessionStatusActive,
 	}
 	repo := &savingSessionRepo{startupSessionRepo: startupSessionRepo{sessions: []domain.Session{known}}}
@@ -148,7 +148,7 @@ func TestDiscoveryKeepsPersistedGroupWhenIDsDiffer(t *testing.T) {
 	m := NewModel(cfg, nil, []domain.Session{known}, repo, nil, nil, nil)
 
 	live := domain.Session{
-		ID: "fresh-uuid", RemoteHost: "regent0", TmuxSession: "wtb-1925-fix",
+		ID: "fresh-uuid", RemoteHost: "regent0", TerminalName: "wtb-1925-fix",
 		Status: domain.SessionStatusActive,
 	}
 	m.applyDiscoveryResult(discoveryResultMsg{

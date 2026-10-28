@@ -17,7 +17,7 @@ func TestSessionForgetRemovesTheRow(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	if err := repo.Save(ctx, &domain.Session{
-		ID: "dead-1", Name: "sol", Group: "pr-439-review", TmuxSession: "fix-yield",
+		ID: "dead-1", Name: "sol", Group: "pr-439-review", TerminalName: "fix-yield",
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)

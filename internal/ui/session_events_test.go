@@ -131,11 +131,11 @@ func TestRemoteByHost(t *testing.T) {
 // it is what marks a legacy tmux row.
 func TestSessionFromInfoKeepsTheBackend(t *testing.T) {
 	s := sessionFromInfo("regent0", server.SessionInfo{
-		ID:          "child-1",
-		Name:        "review-treasury-prs",
-		ParentID:    "parent-1",
-		TmuxSession: "fix-yield",
-		Backend:     domain.BackendPTY,
+		ID:           "child-1",
+		Name:         "review-treasury-prs",
+		ParentID:     "parent-1",
+		TerminalName: "fix-yield",
+		Backend:      domain.BackendPTY,
 	})
 	if s.Backend != domain.BackendPTY {
 		t.Errorf("backend dropped: got %q", s.Backend)

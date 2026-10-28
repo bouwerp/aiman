@@ -252,11 +252,11 @@ func (m *Model) applyDaemonProbe(msg daemonProbeMsg) (tea.Model, tea.Cmd) {
 	// behind the client is noticed.
 	autoUpdate := m.maybeAutoUpdateServe(d)
 	if sel, ok := m.selectedDaemon(); ok && sel.RemoteHost == d.RemoteHost && sel.Kind == d.Kind {
-		m.tmuxOutput = d.Logs
+		m.paneOutput = d.Logs
 		if d.Logs == "" {
-			m.tmuxOutput = "(no logs)"
+			m.paneOutput = "(no logs)"
 		}
-		m.viewport.SetContent(m.tmuxOutput)
+		m.viewport.SetContent(m.paneOutput)
 	}
 	return m, autoUpdate
 }
