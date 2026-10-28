@@ -28,7 +28,9 @@ var writeFileAllowlist = map[string]bool{
 	"SendSessionPrompt":               true,
 	"ApplyKiloAllowEnv":               true,
 	"EnsureClaudeWorkspaceTrusted":    true,
-	"WriteIfChanged":                  true,
+	// Writes only when a path is newly trusted.
+	"EnsurePiWorkspaceTrusted": true,
+	"WriteIfChanged":           true,
 	// Compares sha256 for all files in one listing call before writing.
 	"PushUserChecklists": true,
 }

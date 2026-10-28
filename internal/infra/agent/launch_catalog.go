@@ -168,7 +168,8 @@ var deepcodeCatalog = LaunchCatalog{
 	EffortEnv: "DEEPCODE_REASONING_EFFORT",
 }
 
-// pi --model examples from `pi --help` plus google IDs from `pi --list-models`.
+// pi 1.4 --model examples from `pi --help` plus google IDs from `pi --list-models`.
+// --model also takes "provider/id:<thinking>"; --thinking wins over that suffix.
 // Effort is --thinking.
 var piCatalog = LaunchCatalog{
 	Models: []string{
@@ -180,6 +181,6 @@ var piCatalog = LaunchCatalog{
 		"google/gemini-3-flash-preview",
 		"google/gemini-3.1-pro-preview",
 	},
-	Efforts:    []string{"off", "minimal", "low", "medium", "high", "xhigh"},
+	Efforts:    []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"},
 	EffortFlag: "--thinking",
 }

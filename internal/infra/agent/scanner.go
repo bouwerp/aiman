@@ -49,7 +49,7 @@ var knownAgents = []domain.Agent{
 	{
 		Name:        "Pi",
 		Command:     "pi",
-		Description: "Pi Coding Agent (shittycodingagent.ai)",
+		Description: "Pi coding agent (pi.dev)",
 	},
 	{
 		Name:        "Muse Code",

@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLaunchCatalogForClaudeHasModelsAndEffort(t *testing.T) {
 	c := LaunchCatalogFor("claude")
@@ -56,8 +59,17 @@ func TestLaunchCatalogCursorModelsFromCLI(t *testing.T) {
 
 func TestLaunchCatalogPiThinking(t *testing.T) {
 	c := LaunchCatalogFor("pi")
-	if c.EffortFlag != "--thinking" || !contains(c.Efforts, "xhigh") {
+	// pi 1.4 --help: off, minimal, low, medium, high, xhigh, max.
+	if c.EffortFlag != "--thinking" || !contains(c.Efforts, "xhigh") || !contains(c.Efforts, "max") {
 		t.Fatalf("%+v", c)
+	}
+}
+
+func TestKnownAgentsPiDescription(t *testing.T) {
+	for _, a := range KnownAgents() {
+		if a.Command == "pi" && (strings.Contains(a.Description, "shittycodingagent") || !strings.Contains(a.Description, "pi.dev")) {
+			t.Fatalf("stale Pi description %q", a.Description)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package skills
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -140,7 +141,14 @@ func resolvedModel(cmd, configured string) string {
 // agy names its models that way — gemini-3.7-flash-low, gpt-oss-120b-medium —
 // while also accepting --effort, so a session configured with both was launched
 // asking for two different efforts at once.
+//
+// Pi takes "provider/id:<thinking>" and lets --thinking override the suffix,
+// so an effort flag would silently replace the configured level.
 func effortIsBakedIntoModel(base, model string) bool {
+	if base == "pi" {
+		i := strings.LastIndex(model, ":")
+		return i >= 0 && slices.Contains(agent.LaunchCatalogFor("pi").Efforts, model[i+1:])
+	}
 	if base != "agy" && base != "antigravity" {
 		return false
 	}

@@ -149,6 +149,20 @@ func TestApplyLaunchDefaults(t *testing.T) {
 	if !strings.Contains(got, "--thinking high") {
 		t.Fatalf("%q", got)
 	}
+	got = applyLaunchDefaults("pi", "pi", config.AgentDefaults{Effort: "max"})
+	if !strings.Contains(got, "--thinking max") {
+		t.Fatalf("pi 1.4 accepts max: %q", got)
+	}
+	// Pi's --thinking overrides a "model:level" suffix, so a separate effort
+	// would silently replace the level the model was configured with.
+	got = applyLaunchDefaults("pi", "pi", config.AgentDefaults{Model: "sonnet:high", Effort: "low"})
+	if !strings.Contains(got, "--model sonnet:high") || strings.Contains(got, "--thinking") {
+		t.Fatalf("pi model:level must not get --thinking: %q", got)
+	}
+	got = applyLaunchDefaults("pi", "pi", config.AgentDefaults{Model: "openrouter/anthropic/claude-opus-4.1:batch", Effort: "low"})
+	if !strings.Contains(got, "--thinking low") {
+		t.Fatalf("a non-level suffix is part of the model id: %q", got)
+	}
 	got = applyLaunchDefaults("kilo", "kilo", config.AgentDefaults{Effort: "high"})
 	if !strings.Contains(got, "--variant high") {
 		t.Fatalf("kilo must apply --variant: %q", got)

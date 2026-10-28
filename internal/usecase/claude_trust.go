@@ -134,6 +134,7 @@ func TrustWorkspacePaths(ctx context.Context, remote workspaceTrustRemote, worki
 	// Claude first: its trust dialog is what blocks a fresh PTY session, and the
 	// fix is a JSON write rather than a CLI that no longer exists.
 	_ = EnsureClaudeWorkspaceTrusted(ctx, remote, paths...)
+	_ = EnsurePiWorkspaceTrusted(ctx, remote, paths...)
 
 	for _, p := range paths {
 		_, _ = remote.Execute(ctx, fmt.Sprintf(
