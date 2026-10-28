@@ -15,14 +15,13 @@ import (
 	"github.com/bouwerp/aiman/internal/server"
 )
 
-// evalCoordinator is the tracker's fake world: the PR each child has, and the
-// steers and notifications the tracker raised.
+// evalCoordinator is the tracker's fake world: the PR each child has and the
+// notifications the tracker raised.
 type evalCoordinator struct {
 	tracker *coordinator.Tracker
 
 	mu       sync.Mutex
 	prs      map[string]coordinator.PRState
-	steers   []string
 	notified []string
 }
 
@@ -59,9 +58,6 @@ func (h *Harness) EnableCoordinator() {
 			return string(raw), err
 		},
 		Steer: func(id, text string) {
-			c.mu.Lock()
-			c.steers = append(c.steers, id+": "+text)
-			c.mu.Unlock()
 			h.srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: domain.AuthorAiman, Text: text})
 		},
 		Notify: c,
@@ -79,15 +75,6 @@ func (h *Harness) SetChildPR(childID string, pr coordinator.PRState) {
 // TrackOnce runs one tracker pass.
 func (h *Harness) TrackOnce() {
 	h.coord.tracker.TrackOnce(context.Background())
-}
-
-// Steers is every note the tracker queued, as "<session>: <text>". The
-// steerer collapses notes queued close together into one typed note, so the
-// pane cannot count repeats.
-func (h *Harness) Steers() []string {
-	h.coord.mu.Lock()
-	defer h.coord.mu.Unlock()
-	return append([]string(nil), h.coord.steers...)
 }
 
 // Notified is every notification the tracker raised, as "<session>: <detail>".

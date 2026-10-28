@@ -79,12 +79,14 @@ func itemState(h *Harness) domain.TodoState {
 	return it.State
 }
 
-// noEvidenceSteers counts the notes typed into the parent asking for a report.
-func noEvidenceSteers(h *Harness) int {
+// noEvidenceAsks counts the report asks typed into the parent. The steerer
+// joins notes queued together into one typed message, so asks are counted in
+// the text, not per write.
+func noEvidenceAsks(h *Harness) int {
 	n := 0
 	for _, w := range h.Writes() {
-		if w.ID == "s1" && strings.Contains(w.Data, noEvidence) {
-			n++
+		if w.ID == "s1" {
+			n += strings.Count(w.Data, noEvidence)
 		}
 	}
 	return n
@@ -113,19 +115,19 @@ func CaseChildSpawn() Case {
 		h.SetChildPR(child.ID, coordinator.PRState{Base: parentBranch, Merged: true})
 		h.TrackOnce()
 		done := itemState(h)
-		time.Sleep(1200 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 		return []MetricResult{
 			childLinked(h, child),
 			score("child_waits_for_land", wrongBase == domain.TodoPending && open == domain.TodoPending,
 				"t1 was "+string(wrongBase)+" after a merge into main and "+string(open)+" with the PR open"),
 			score("child_item_settled", done == domain.TodoDone, "t1 is "+string(done)+" after the merge"),
-			score("no_evidence_steer", noEvidenceSteers(h) == 0, "the parent was asked for a report it already has"),
+			score("no_evidence_steer", noEvidenceAsks(h) == 0, "the parent was asked for a report it already has"),
 		}
 	}}
 }
 
 // CaseChildNoEvidence lands the child's PR with no report. t1 stays open, and
-// across two passes the parent is asked for the report once and sees it.
+// across two passes the parent's pane receives the report ask once.
 func CaseChildNoEvidence() Case {
 	return Case{Name: "child-no-evidence", Setup: coordinatorParent, Assert: func(h *Harness) []MetricResult {
 		child, fail := spawnChild(h)
@@ -135,19 +137,14 @@ func CaseChildNoEvidence() Case {
 		h.SetChildPR(child.ID, coordinator.PRState{Base: parentBranch, Merged: true})
 		h.TrackOnce()
 		h.TrackOnce()
-		typed := waitUntil(5*time.Second, func() bool { return noEvidenceSteers(h) >= 1 })
-		asks := 0
-		for _, n := range h.Steers() {
-			if strings.HasPrefix(n, "s1: ") && strings.Contains(n, noEvidence) {
-				asks++
-			}
-		}
+		// Delivery takes the coalescing window plus the submit settle, about 5s.
+		waitUntil(10*time.Second, func() bool { return !h.srv.Steerer().Status("s1").LastDeliveredAt.IsZero() })
+		asks := noEvidenceAsks(h)
 		state := itemState(h)
 		return []MetricResult{
 			childLinked(h, child),
 			score("child_evidence_required", state == domain.TodoPending, "t1 is "+string(state)+" without a report"),
-			score("evidence_steer_once", asks == 1, "asked for the report "+strconv.Itoa(asks)+" times"),
-			score("evidence_steer_typed", typed, "the ask never reached the parent's pane"),
+			score("evidence_steer_once", asks == 1, "the pane received the report ask "+strconv.Itoa(asks)+" times"),
 		}
 	}}
 }
