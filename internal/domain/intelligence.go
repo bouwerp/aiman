@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"errors"
+	"strings"
 )
 
 // ErrIntelligenceUnavailable is returned when the local AI backend is not reachable
@@ -51,6 +52,38 @@ type MemoryCandidate struct {
 	Title    string      `json:"title"`
 	Abstract string      `json:"abstract"`
 	Body     string      `json:"body"`
+}
+
+// FilterMemoryCandidates keeps candidates typed decision, pitfall, convention
+// or fact (an empty type reads as fact) with a non-blank title, trims the
+// title, and stops at MaxMemoryCandidates. Input order is kept.
+func FilterMemoryCandidates(in []MemoryCandidate) []MemoryCandidate {
+	out := make([]MemoryCandidate, 0, MaxMemoryCandidates)
+	for _, c := range in {
+		typ, ok := ParseContextType(string(c.Type))
+		if !ok {
+			continue
+		}
+		switch typ {
+		case ContextTypeDecision, ContextTypePitfall, ContextTypeConvention, ContextTypeFact:
+		default:
+			continue
+		}
+		title := strings.TrimSpace(c.Title)
+		if title == "" {
+			continue
+		}
+		out = append(out, MemoryCandidate{
+			Type:     typ,
+			Title:    title,
+			Abstract: c.Abstract,
+			Body:     c.Body,
+		})
+		if len(out) == MaxMemoryCandidates {
+			break
+		}
+	}
+	return out
 }
 
 // SessionSummary is the structured result of analysing a coding agent's tmux output.

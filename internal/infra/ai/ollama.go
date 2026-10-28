@@ -440,42 +440,12 @@ func (o *OllamaIntelligence) ProposeMemories(ctx context.Context, source string)
 		return nil, err
 	}
 	var result struct {
-		Candidates []struct {
-			Type     string `json:"type"`
-			Title    string `json:"title"`
-			Abstract string `json:"abstract"`
-			Body     string `json:"body"`
-		} `json:"candidates"`
+		Candidates []domain.MemoryCandidate `json:"candidates"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse memory candidates: %w (raw: %.200s)", err, raw)
 	}
-	out := make([]domain.MemoryCandidate, 0, domain.MaxMemoryCandidates)
-	for _, c := range result.Candidates {
-		typ, ok := domain.ParseContextType(c.Type)
-		if !ok {
-			continue
-		}
-		switch typ {
-		case domain.ContextTypeDecision, domain.ContextTypePitfall, domain.ContextTypeConvention, domain.ContextTypeFact:
-		default:
-			continue
-		}
-		title := strings.TrimSpace(c.Title)
-		if title == "" {
-			continue
-		}
-		out = append(out, domain.MemoryCandidate{
-			Type:     typ,
-			Title:    title,
-			Abstract: c.Abstract,
-			Body:     c.Body,
-		})
-		if len(out) == domain.MaxMemoryCandidates {
-			break
-		}
-	}
-	return out, nil
+	return domain.FilterMemoryCandidates(result.Candidates), nil
 }
 
 // generate sends a single-turn generation request to Ollama.
