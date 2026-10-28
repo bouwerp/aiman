@@ -139,13 +139,13 @@ var (
 
 // System prompts for each use case.
 const (
-	sessionBriefSystemPrompt = `You are monitoring an AI coding agent's tmux session. Respond ONLY with valid JSON.
+	sessionBriefSystemPrompt = `You are monitoring an AI coding agent's terminal session. Respond ONLY with valid JSON.
 agent_state: idle|working|waiting_input|waiting_background|errored|unknown.
 topic: ≤8 words describing what the session is about, derived from the initial user prompt at the start of SESSION START. Use noun phrases, no verbs. Examples: "AWS session-scoped credential isolation", "Auth module JWT refactor", "Fix pagination bug in orders API". If no clear initial prompt is visible, infer from the overall activity.
 summary: one sentence describing current status. Write in present participle, NO subject. NEVER start with "The agent", "It", or any noun/pronoun subject. WRONG: "The agent is running tests." RIGHT: "Running tests after fixing the auth middleware timeout." Include file names or error text if visible.
 actions: only items needing immediate human response (blocked on approval, unanswered question, unresolvable error). Empty array if none.`
 
-	sessionSummarySystemPrompt = `You are monitoring an AI coding agent's tmux session. Respond ONLY with valid JSON.
+	sessionSummarySystemPrompt = `You are monitoring an AI coding agent's terminal session. Respond ONLY with valid JSON.
 When SESSION START is provided, treat the initial user prompt there as the primary goal of the session — use it to anchor the overview.
 agent_state: idle|working|waiting_input|waiting_background|errored|unknown.
 overview: array of 2-4 sentences, one per element. First sentence states the session goal (derived from the initial prompt). Remaining sentences cover accomplishments and current status. Write each in present participle — NO subject of any kind. NEVER use "The agent", "It", "The model", or any other subject. WRONG: "The agent implemented the feature." RIGHT: "Implementing user authentication endpoints in the API layer."
@@ -511,7 +511,7 @@ func (o *OllamaIntelligence) generateWith(ctx context.Context, model, system, pr
 }
 
 // tailTruncate returns the last maxChars characters of s, prefixed with a truncation notice.
-// Keeping the tail is important for tmux pane content — the most recent output is most relevant.
+// Keeping the tail matters for terminal pane content: the most recent output is most relevant.
 func tailTruncate(s string, maxChars int) string {
 	if len(s) <= maxChars {
 		return s

@@ -11,10 +11,9 @@ import (
 
 // observeRemote records the command and returns canned output.
 type observeRemote struct {
-	cmds     []string
-	out      string
-	err      error
-	fallback string
+	cmds []string
+	out  string
+	err  error
 }
 
 func (o *observeRemote) Execute(_ context.Context, cmd string) (string, error) {
@@ -22,9 +21,6 @@ func (o *observeRemote) Execute(_ context.Context, cmd string) (string, error) {
 	return o.out, o.err
 }
 func (o *observeRemote) WriteFile(_ context.Context, _ string, _ []byte) error { return nil }
-func (o *observeRemote) CaptureTmuxPane(_ context.Context, _ string) (string, error) {
-	return o.fallback, nil
-}
 
 func TestObservePTYSessionReadsHolderActivity(t *testing.T) {
 	lastOut := time.Now().Add(-3 * time.Second).UTC().Format(time.RFC3339Nano)

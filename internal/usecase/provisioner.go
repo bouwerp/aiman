@@ -29,7 +29,7 @@ func (p *Provisioner) GetSteps() []domain.ProvisionStep {
 		{
 			ID:      "base-tools",
 			Name:    "Install Base Tools",
-			Command: "if command -v tmux >/dev/null 2>&1 && command -v git >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 && command -v wget >/dev/null 2>&1; then echo 'Base tools already installed'; else sudo apt-get update && sudo apt-get install -y tmux git curl wget; fi",
+			Command: "if command -v git >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 && command -v wget >/dev/null 2>&1; then echo 'Base tools already installed'; else sudo apt-get update && sudo apt-get install -y git curl wget; fi",
 		},
 		{
 			ID:      "nodejs",

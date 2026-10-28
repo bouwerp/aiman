@@ -157,8 +157,8 @@ func (e *Engine) ListSkills() ([]domain.Skill, error) {
 
 // initialPrompt is the instruction sent to the agent when a JIRA issue is attached.
 // The detailed context and working guidelines live in .aiman_task.md which is
-// written to the worktree. This trigger is kept short because it is delivered
-// via tmux send-keys.
+// written to the worktree. This trigger is kept short because it is typed
+// into the agent's PTY.
 const initialPrompt = `Read ` + domain.AimanTaskFileName + ` — it contains the task, acceptance criteria, and your working guidelines for this session. Start by presenting your implementation plan.`
 
 const sessionSummaryPrompt = `Read ` + domain.AimanSessionSummaryFileName + ` — it contains the latest session handoff, current state, and next steps. Continue from that state before making changes.`
@@ -408,7 +408,7 @@ func remoteFileExists(ctx context.Context, remote domain.RemoteExecutor, path st
 // writeTaskFile writes the JIRA issue context and working guidelines to
 // .aiman_task.md in the worktree. The agent's initial prompt tells it to
 // read this file, so all substantive instructions live here rather than in
-// the tmux send-keys string. The kit blocks sit between the description and
+// the typed prompt. The kit blocks sit between the description and
 // the working guidelines.
 func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, issue *domain.Issue, snapshot *domain.SessionSnapshot, kit domain.QualityKit) error {
 	var sb strings.Builder
@@ -577,10 +577,10 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 		cmd = fmt.Sprintf("%s --dangerously-skip-permissions", cmd)
 	}
 
-	// Use tmux send-keys for the initial prompt rather than a positional arg.
-	// Although Claude Code supports `claude "msg"` interactively, embedding
-	// quoted text inside the tmux "bash -l -c '...'" wrapper causes nested
-	// quoting breakage. send-keys avoids this entirely.
+	// The initial prompt is typed into the PTY rather than passed as a
+	// positional arg. Although Claude Code supports `claude "msg"`
+	// interactively, embedding quoted text inside the launch shell command
+	// breaks on nested quoting. Typing it avoids this entirely.
 	result := domain.PreparedSession{Command: cmd}
 	if hasTask {
 		result.InitialPrompt = initialPrompt
@@ -606,7 +606,7 @@ func (e *Engine) prepareClaude(ctx context.Context, remote domain.RemoteExecutor
 // prepareAgeni prepares an Ageni (github.com/bouwerp/ageni) session. Ageni v1
 // has no CLI flags for auto-approval or initial prompts, so prompt skills are
 // staged in a workspace file and the interactive session is directed to read
-// it (and the task file) via tmux send-keys after startup. Provider/API-key
+// it (and the task file) by a prompt typed after startup. Provider/API-key
 // configuration lives in ~/.ageni/.env on the remote; aiman-injected env vars
 // like OPENROUTER_API_KEY are picked up directly from the session environment.
 func (e *Engine) prepareAgeni(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, hasTask bool) (domain.PreparedSession, error) {
@@ -665,7 +665,7 @@ func (e *Engine) prepareAntigravity(ctx context.Context, remote domain.RemoteExe
 
 	// Antigravity does not document a Gemini-style system-instruction env var, so
 	// we stage prompt skills in a workspace file and direct the interactive
-	// session to read it via tmux send-keys after startup.
+	// session to read it by a prompt typed after startup.
 	if len(prompts) > 0 {
 		systemPrompt := strings.Join(prompts, "\n\n")
 		remotePromptPath := filepath.Join(worktreePath, domain.AimanPromptFileName)
@@ -759,7 +759,7 @@ func (e *Engine) prepareGrok(ctx context.Context, remote domain.RemoteExecutor, 
 // prepareCodex prepares an OpenAI Codex CLI session. Codex has no reliable
 // cross-version system-prompt flag, so prompt skills are staged in a workspace
 // file and the interactive session is directed to read it (and the task file)
-// via tmux send-keys after startup. The session always trusts the worktree and
+// by a prompt typed after startup. The session always trusts the worktree and
 // skips the startup upgrade prompt: a trust dialog or self-update in a PTY
 // session exits the TUI and leaves the operator at a bare shell.
 func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor, worktreePath string, agent domain.Agent, selectedSkills []domain.Skill, promptFree bool, hasTask bool) (domain.PreparedSession, error) {

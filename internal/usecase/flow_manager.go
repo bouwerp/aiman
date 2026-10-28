@@ -8,7 +8,6 @@ import (
 	"log"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -231,131 +230,11 @@ func joinTaskSections(first, rest string) string {
 	return strings.TrimRight(first, "\n") + "\n\n" + rest
 }
 
-// promptDeliverer is the narrow slice of RemoteExecutor that deliverInitialPrompt
+// promptDeliverer is the narrow slice of RemoteExecutor that prompt delivery
 // needs. Keeping it small makes the delivery path independently testable.
 type promptDeliverer interface {
 	WriteFile(ctx context.Context, path string, content []byte) error
 	Execute(ctx context.Context, cmd string) (string, error)
-}
-
-// sendKeysScript builds the remote shell script that waits for the agent to come
-// up, types the prompt, submits it, then removes the prompt file. The prompt is
-// read from promptPath via command substitution ("$(cat ...)") rather than
-// interpolated into the command, so its contents are never parsed by any shell.
-func sendKeysScript(tmuxName, promptPath string, acceptWorkspaceTrust bool) string {
-	wait := fmt.Sprintf(
-		"attempt=0; "+
-			"while [ $attempt -lt 20 ]; do "+
-			"pane_cmd=$(tmux display-message -p -t %q '#{pane_current_command}' 2>/dev/null || true); "+
-			"if [ \"$pane_cmd\" != \"bash\" ] && [ \"$pane_cmd\" != \"sh\" ] && [ \"$pane_cmd\" != \"zsh\" ]; then break; fi; "+
-			"attempt=$((attempt+1)); sleep 1; "+
-			"done; "+
-			"sleep 3; ",
-		tmuxName,
-	)
-	if acceptWorkspaceTrust {
-		// agy is launched through a wrapper shell, so pane_current_command stays
-		// "bash" and the readiness loop above never breaks. Poll the rendered pane
-		// instead: accept the workspace-trust dialog if it appears (agy's
-		// --dangerously-skip-permissions flag does not dismiss it), otherwise break
-		// once the chat input is ready.
-		wait = fmt.Sprintf(
-			"attempt=0; "+
-				"while [ $attempt -lt 10 ]; do "+
-				"pane=$(tmux capture-pane -t %q -p 2>/dev/null || true); "+
-				"if printf '%%s' \"$pane\" | grep -qi 'trust this folder'; then "+
-				"tmux send-keys -t %q Enter; sleep 3; break; "+
-				"fi; "+
-				"if printf '%%s' \"$pane\" | grep -qi '? for shortcuts'; then break; fi; "+
-				"attempt=$((attempt+1)); sleep 1; "+
-				"done; "+
-				"sleep 1; ",
-			tmuxName, tmuxName,
-		)
-	}
-	if promptPath == "" {
-		return wait
-	}
-	return wait + fmt.Sprintf(
-		"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter; "+
-			"rm -f %q",
-		tmuxName, promptPath, tmuxName, promptPath,
-	)
-}
-
-// DeliverInitialPrompt sends the initial prompt to a freshly-started agent via
-// tmux send-keys, then confirms it left the composer. The prompt is written to
-// a temp file (raw bytes over stdin, no shell parsing) and read back on the
-// remote, so arbitrary user-entered text — including shell metacharacters —
-// can never be executed.
-//
-// Delivery used to detach a one-shot Enter into the background so
-// session.create could return immediately; Codex and Grok often drop that
-// Return while still booting, so the task sat in the composer unsent — the
-// same failure DeliverInitialPromptPTY was fixed for (see its doc). Delivery
-// is now synchronous: the boot-wait runs first, then the prompt is sent and
-// confirmed via SendTmuxKeysConfirmed's tmux equivalent, retrying the Enter if
-// the composer still holds the prompt's tail.
-//
-// When acceptWorkspaceTrust is set (Antigravity CLI / agy), the boot-wait
-// script also accepts agy's workspace-trust dialog before sending the prompt:
-// agy shows "Do you trust this folder?" on first run in a directory and its
-// --dangerously-skip-permissions flag does not dismiss it, so without this the
-// prompt lands in the dialog instead of the agent. The script still runs when
-// the prompt is empty in that case, so the dialog is cleared even for ad-hoc
-// agy sessions.
-//
-// Deprecated: removed in nl-13 T5. Sessions run in the PTY runtime; use
-// DeliverInitialPromptPTY.
-func DeliverInitialPrompt(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, prompt string, acceptWorkspaceTrust bool) {
-	if prompt == "" && !acceptWorkspaceTrust {
-		return
-	}
-	var promptPath string
-	if prompt != "" {
-		promptPath = fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
-		if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
-			if !acceptWorkspaceTrust {
-				return
-			}
-			promptPath = "" // cannot deliver the prompt, but still clear the trust dialog
-		}
-	}
-
-	// Boot-wait (and, for agy, the trust-dialog accept) runs on its own,
-	// synchronously: racing it against the send left the prompt typed into a
-	// still-drawing TUI.
-	_, _ = remote.Execute(ctx, sendKeysScript(tmuxName, "", acceptWorkspaceTrust))
-	if promptPath == "" {
-		return
-	}
-	defer func() {
-		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %q", promptPath))
-	}()
-
-	pc, ok := remote.(PaneCapturer)
-	if !ok {
-		// Tests that only stub promptDeliverer still get a single typed Enter.
-		_, _ = remote.Execute(ctx, fmt.Sprintf(
-			"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter",
-			tmuxName, promptPath, tmuxName))
-		return
-	}
-	_ = sendTmuxKeysConfirmed(ctx, pc, tmuxName, promptPath, prompt)
-}
-
-// IsAntigravityAgent reports whether the agent is Antigravity CLI (agy). agy is
-// special-cased for prompt delivery because it presents a workspace-trust dialog
-// on first run that --dangerously-skip-permissions does not dismiss.
-//
-// Deprecated: removed in nl-13 T5. Only the tmux prompt path asks; the PTY
-// boot wait accepts every agent's trust dialog.
-func IsAntigravityAgent(name, command string) bool {
-	if strings.Contains(strings.ToLower(name), "antigravity") {
-		return true
-	}
-	fields := strings.Fields(strings.TrimSpace(strings.ToLower(command)))
-	return len(fields) > 0 && fields[0] == "agy"
 }
 
 // sessionBaseBranch is the base ref recorded on a session: the one the caller
@@ -575,7 +454,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	infraGit.ReportProgress(ctx, "Trusting workspace…")
 	m.trustWorkspaceBeforeLaunch(ctx, sshMgr, workingDir, session.WorktreePath)
 
-	// Every session runs in the PTY runtime; config.SessionBackend is ignored.
+	// Every session runs in the PTY runtime.
 	return m.launchPTYSession(ctx, sshMgr, session, config, kit, workingDir, tmuxName, agentCmd, sendKeysPrompt, awsEnv)
 }
 
@@ -742,35 +621,6 @@ func aimanRuntimeEnv(session *domain.Session) map[string]string {
 	// hook reporter resolves the binary itself. Anything that genuinely needs
 	// to override them can still set them in the session environment.
 	return env
-}
-
-// TmuxEnvFlags formats tmux -e flags with a shell-quoted NAME=value so a
-// space in a session name cannot split respawn-pane and drop the pane command.
-//
-// Deprecated: removed in nl-13 T5. PTY env travels in the create payload.
-func TmuxEnvFlags(env map[string]string) string {
-	return tmuxEnvFlags(env)
-}
-
-func tmuxEnvFlags(env map[string]string) string {
-	if len(env) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(env))
-	for key := range env {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	var b strings.Builder
-	for _, key := range keys {
-		if value := strings.TrimSpace(env[key]); value != "" {
-			// Quoted, not interpolated: an env value with a space or a shell
-			// metacharacter would otherwise split into extra tmux arguments.
-			b.WriteString(fmt.Sprintf(" -e %s", shellQuote(key+"="+value)))
-		}
-	}
-	return b.String()
 }
 
 // workspaceTrustRe matches the first-run "do you trust this directory" dialog

@@ -166,7 +166,7 @@ func effortIsBakedIntoModel(base, model string) bool {
 	return false
 }
 
-// withCodexInteractiveFlags is the flag set a PTY/tmux Codex session needs so
+// withCodexInteractiveFlags is the flag set a PTY Codex session needs so
 // the TUI stays up: skip approval, sandbox, hook-trust, and in-app update
 // prompts. A trust or update dialog in this environment exits Codex and the
 // holder drops to a bare shell.

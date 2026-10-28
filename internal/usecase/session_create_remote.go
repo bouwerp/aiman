@@ -22,7 +22,6 @@ type RemoteCreateSpec struct {
 	Prompt         string
 	Issue          string
 	BaseBranch     string
-	Backend        string
 	AgentName      string
 	Quick          bool
 	ExistingBranch bool
@@ -58,7 +57,6 @@ func CreateSessionOnRemote(ctx context.Context, remote TerminalExecutor, spec Re
 		"prompt":     spec.Prompt,
 		"issue":      spec.Issue,
 		"base":       spec.BaseBranch,
-		"backend":    spec.Backend,
 		"agent_name": spec.AgentName,
 	} {
 		if strings.TrimSpace(val) != "" {

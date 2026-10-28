@@ -179,6 +179,22 @@ func TestLifecycleScriptsSetRuntimeDir(t *testing.T) {
 	}
 }
 
+// aiman never runs tmux: stop does not kill a tmux session and the probe has
+// no tmux driver.
+func TestLifecycleScriptsRunNoTmux(t *testing.T) {
+	for _, k := range []Kind{KindServe, KindTrigger, KindGateway} {
+		for name, s := range map[string]string{
+			"stop":  StopScript(k),
+			"probe": ProbeScript(k),
+			"start": StartScript(k),
+		} {
+			if strings.Contains(s, "tmux") {
+				t.Fatalf("%s %s script mentions tmux:\n%s", k.Unit(), name, s)
+			}
+		}
+	}
+}
+
 func TestProbeScriptDoesNotConcatIsActiveFallback(t *testing.T) {
 	s := ProbeScript(KindServe)
 	if strings.Contains(s, "is-active") && strings.Contains(s, "|| echo inactive") {

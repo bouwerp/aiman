@@ -86,7 +86,7 @@ func FilterMemoryCandidates(in []MemoryCandidate) []MemoryCandidate {
 	return out
 }
 
-// SessionSummary is the structured result of analysing a coding agent's tmux output.
+// SessionSummary is the structured result of analysing a coding agent's terminal output.
 type SessionSummary struct {
 	// Topic is a short phrase (≤8 words) describing what the session is about,
 	// derived from the initial user prompt. Used in the sidebar above the status line.
@@ -106,7 +106,7 @@ type SessionSummary struct {
 	AgentState AgentState `json:"agent_state"`
 }
 
-// AgentState describes the observable state of a coding agent in a tmux session.
+// AgentState describes the observable state of a coding agent in a terminal session.
 type AgentState string
 
 const (

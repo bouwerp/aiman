@@ -418,7 +418,6 @@ func (m *Manager) prepare(ctx context.Context, r Run, worker domain.Session) (do
 		PreparedWorktree: r.Dir,
 		InitialPrompt:    "Read " + filepath.Join(r.Dir, handover.BriefFile) + " and follow it.",
 		RemoteHost:       worker.RemoteHost,
-		SessionBackend:   worker.Backend,
 	})
 	return child, agentName, err
 }

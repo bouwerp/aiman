@@ -9,43 +9,17 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
-// tmuxTrapRemote is a batch discovery remote that counts every call into the
-// tmux side of RemoteExecutor, so a test can prove discovery never asks tmux.
-type tmuxTrapRemote struct {
-	batchRemote
-	tmuxMethodCalls int
-}
-
-func (r *tmuxTrapRemote) ScanTmuxSessions(context.Context) ([]string, error) {
-	r.tmuxMethodCalls++
-	return []string{"live-tmux"}, nil
-}
-
-func (r *tmuxTrapRemote) GetTmuxSessionEnv(context.Context, string, string) (string, error) {
-	r.tmuxMethodCalls++
-	return "", nil
-}
-
-func (r *tmuxTrapRemote) GetTmuxSessionCWD(context.Context, string) (string, error) {
-	r.tmuxMethodCalls++
-	return "", nil
-}
-
 func ptyListOutput(sessions string) map[string]string {
 	return map[string]string{scanPTYSessionsCmd: `{"sessions":[` + sessions + `]}`}
 }
 
 func TestDiscoverRunsNoTmux(t *testing.T) {
-	remote := &tmuxTrapRemote{}
+	remote := &batchRemote{}
 	remote.outputs = ptyListOutput(`{"id":"p1","name":"feat","dir":"/repos/app@feat","status":"running"}`)
-	remote.tmuxRecords = []domain.TmuxSessionRecord{{Name: "live-tmux", AimanID: "t1", CWD: "/repos/app@t"}}
 
 	sessions, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).Discover(context.Background(), "regent0")
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
-	}
-	if remote.tmuxMethodCalls != 0 || remote.tmuxCalls != 0 {
-		t.Fatalf("discovery asked tmux: methods=%d batch=%d", remote.tmuxMethodCalls, remote.tmuxCalls)
 	}
 	requireNoTmux(t, remote.commands)
 	if len(sessions) != 1 || sessions[0].ID != "p1" || sessions[0].Backend != domain.BackendPTY {
@@ -53,8 +27,8 @@ func TestDiscoverRunsNoTmux(t *testing.T) {
 	}
 }
 
-// PTY sessions get the same mutagen overlay tmux sessions used to get, so the
-// dashboard knows their sync and local path.
+// PTY sessions get the mutagen overlay, so the dashboard knows their sync and
+// local path.
 func TestDiscoverPTYSessionGetsMutagenOverlay(t *testing.T) {
 	remote := &batchRemote{}
 	remote.outputs = ptyListOutput(`{"id":"p1","name":"feat","dir":"/repos/app@feat/svc","status":"running"}`)
@@ -174,15 +148,14 @@ func (r *adHocCreateRemote) WriteFile(_ context.Context, path string, content []
 	return nil
 }
 
-func TestCreateSessionIgnoresTmuxBackend(t *testing.T) {
+func TestCreateSessionLaunchesPTY(t *testing.T) {
 	remote := &adHocCreateRemote{}
 	m := &FlowManager{}
 	sess, err := m.CreateSession(context.Background(), domain.SessionConfig{
-		AdHoc:          true,
-		Branch:         "adhoc-x",
-		Agent:          &domain.Agent{Name: "Claude Code", Command: "claude"},
-		SSHManager:     remote,
-		SessionBackend: "tmux",
+		AdHoc:      true,
+		Branch:     "adhoc-x",
+		Agent:      &domain.Agent{Name: "Claude Code", Command: "claude"},
+		SSHManager: remote,
 	})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)

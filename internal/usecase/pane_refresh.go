@@ -18,10 +18,6 @@ type PaneCache struct {
 	Text     string
 	OutputAt time.Time
 	TitleAt  time.Time
-	// HistorySize is never set by a PTY poll. The UI still copies it.
-	//
-	// Deprecated: removed in nl-13 T5.
-	HistorySize int
 }
 
 // PreviewUpdate is one preview poll. Unchanged means Text is the cached screen

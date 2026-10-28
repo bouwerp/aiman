@@ -52,11 +52,13 @@ func TestPrintServeUsageTellsOperatorTheTUIPath(t *testing.T) {
 		"~/.aiman/aiman.sock",
 		"Do not run this on your laptop",
 		"native-session hooks",
-		"installs mosh when mosh-server is missing",
 		"usage.get",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("usage missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "mosh") || strings.Contains(out, "tmux") {
+		t.Fatalf("usage still mentions mosh or tmux:\n%s", out)
 	}
 }

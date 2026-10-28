@@ -94,12 +94,12 @@ func TestUnchangedPreviewKeepsTheViewport(t *testing.T) {
 	m.previewBusy = true
 	_ = m.applyPreviewRefresh(previewRefreshMsg{
 		session: "impl", id: "s1", unchanged: true, text: "old screen",
-		cache: usecase.PaneCache{Hash: "h", HistorySize: 3, Text: "old screen"},
+		cache: usecase.PaneCache{Hash: "h", Text: "old screen"},
 	})
 	if m.previewBusy || m.tmuxOutput != "old screen" {
 		t.Fatalf("busy=%v out=%q", m.previewBusy, m.tmuxOutput)
 	}
-	if m.paneCache["s1"].Hash != "h" || m.paneCache["s1"].HistorySize != 3 {
+	if m.paneCache["s1"].Hash != "h" {
 		t.Fatalf("cache=%+v", m.paneCache["s1"])
 	}
 }

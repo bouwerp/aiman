@@ -343,7 +343,6 @@ func (m *Manager) prepare(ctx context.Context, r *Review, worker domain.Session)
 		PreparedWorktree: r.Worktree,
 		InitialPrompt:    InitialPrompt,
 		RemoteHost:       worker.RemoteHost,
-		SessionBackend:   worker.Backend,
 	})
 }
 

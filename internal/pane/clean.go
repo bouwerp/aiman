@@ -1,4 +1,4 @@
-// Package pane provides utilities for cleaning and compressing tmux pane output
+// Package pane provides utilities for cleaning and compressing terminal pane output
 // before it is sent to an AI model or persisted as a snapshot.
 package pane
 
@@ -14,15 +14,14 @@ var ansiEscape = regexp.MustCompile(`\x1b(\[[0-9;?]*[a-zA-Z]|\][^\x07]*\x07|[()]
 // StripANSI removes escape sequences, leaving the visible text.
 //
 // Anything that pattern-matches pane content needs this first. Captured panes
-// arrive styled (tmux capture-pane is invoked with -e, and the PTY renderer
-// emits colour of its own), and agents colour words individually — so a phrase
-// like "esc to interrupt" can carry an SGR sequence between any two characters,
+// arrive styled (the PTY renderer emits colour), and agents colour words
+// individually, so a phrase like "esc to interrupt" can carry an SGR sequence between any two characters,
 // which silently defeats a regex written against the plain text.
 func StripANSI(s string) string {
 	return ansiEscape.ReplaceAllString(s, "")
 }
 
-// Clean applies the full cleaning pipeline to raw tmux pane content:
+// Clean applies the full cleaning pipeline to raw pane content:
 //  1. Strip ANSI/VT100 escape sequences
 //  2. Collapse consecutive duplicate lines into "line [×N]"
 //  3. Collapse runs of blank lines into a single blank line

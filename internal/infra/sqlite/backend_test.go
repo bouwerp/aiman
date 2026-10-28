@@ -86,7 +86,7 @@ func TestSaveEmptyBackendKeepsStoredPTY(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Backend != domain.BackendPTY || !got.IsPTY() {
+	if got.Backend != domain.BackendPTY {
 		t.Errorf("Backend = %q after an empty-backend save, want %q", got.Backend, domain.BackendPTY)
 	}
 }

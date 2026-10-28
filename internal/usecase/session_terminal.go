@@ -26,14 +26,6 @@ type TerminalExecutor interface {
 	WriteFile(ctx context.Context, path string, content []byte) error
 }
 
-// PaneCapturer adds tmux pane capture to TerminalExecutor.
-//
-// Deprecated: removed in nl-13 T5. Only DeliverInitialPrompt still uses it.
-type PaneCapturer interface {
-	TerminalExecutor
-	CaptureTmuxPane(ctx context.Context, sessionName string) (string, error)
-}
-
 // remoteAimanPreamble makes the serve-installed binary resolvable over
 // non-interactive SSH (it lives in ~/.local/bin), and puts the user npm
 // prefix ahead of the system one so an agent moved there by
@@ -50,15 +42,6 @@ type PTYSpec struct {
 	// NoUpdateGuard leaves out the env that disables the agent's own
 	// updater (agents.update.mode off).
 	NoUpdateGuard bool
-}
-
-// PaneShellCommand is the tmux pane command that runs the agent. The trailing
-// exec bash lives inside the same bash -c as the agent: tmux execs one command,
-// so a sibling `cmd; exec bash` never runs and remain-on-exit shows a dead pane.
-//
-// Deprecated: removed in nl-13 T5.
-func PaneShellCommand(bootstrap string) string {
-	return fmt.Sprintf("bash -l -c '%s; exec bash -i'", bootstrap)
 }
 
 // WriteMuseSessionID records the Aiman session id where a Muse hook can read
@@ -281,24 +264,6 @@ func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remo
 			return err
 		})
 	return nil
-}
-
-// sendTmuxKeysConfirmed types a remote file into a tmux pane, presses Enter,
-// and checks that the text actually left the composer, pressing Enter again
-// if it did not. See SendPTYFileConfirmed for why one Enter is not reliable.
-// Only the deprecated DeliverInitialPrompt calls it.
-func sendTmuxKeysConfirmed(ctx context.Context, remote PaneCapturer, tmuxName, remotePath, marker string) error {
-	if _, err := remote.Execute(ctx, fmt.Sprintf(
-		"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter",
-		tmuxName, remotePath, tmuxName)); err != nil {
-		return err
-	}
-	return confirmSubmit(ctx, "", time.Now(), marker, DefaultSubmitTiming(),
-		func(ctx context.Context) (string, error) { return remote.CaptureTmuxPane(ctx, tmuxName) },
-		func(ctx context.Context) error {
-			_, err := remote.Execute(ctx, fmt.Sprintf("tmux send-keys -t %q Enter", tmuxName))
-			return err
-		})
 }
 
 // SubmitTiming is the budget for submitting a typed prompt: the pause before

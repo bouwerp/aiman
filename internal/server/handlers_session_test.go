@@ -1026,8 +1026,8 @@ func TestCreateForLinksParent(t *testing.T) {
 	if cfg.InitialPrompt != "Add the parser" {
 		t.Fatalf("prompt = %q", cfg.InitialPrompt)
 	}
-	if cfg.ParentID != "p" || cfg.Repo.Name != "owner/r" || cfg.SessionBackend != "" {
-		t.Fatalf("cfg parent %q repo %q backend %q", cfg.ParentID, cfg.Repo.Name, cfg.SessionBackend)
+	if cfg.ParentID != "p" || cfg.Repo.Name != "owner/r" {
+		t.Fatalf("cfg parent %q repo %q", cfg.ParentID, cfg.Repo.Name)
 	}
 	if cfg.Agent == nil || cfg.Agent.Command != "claude" {
 		t.Fatalf("agent = %+v, want the preferred claude", cfg.Agent)

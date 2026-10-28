@@ -222,9 +222,8 @@ if [ -f %s ]; then
   rm -f %s
 fi
 pkill -f '%s' >/dev/null 2>&1 || true
-tmux kill-session -t %s >/dev/null 2>&1 || true
 true
-`, unit, unit, pid, pid, pid, k.procPattern(), unit)
+`, unit, unit, pid, pid, pid, k.procPattern())
 }
 
 func UpdateScript(k Kind) string {
@@ -256,9 +255,6 @@ elif [ -f %s ] && kill -0 "$(cat %s)" 2>/dev/null; then
 elif %s; then
   DRIVER=nohup
   ACTIVE=active
-elif tmux has-session -t %s 2>/dev/null; then
-  DRIVER=tmux
-  ACTIVE=active
 fi
 echo DRIVER=$DRIVER
 echo ACTIVE=$ACTIVE
@@ -275,7 +271,7 @@ if [ "$DRIVER" = systemd ]; then
   journalctl --user -u %s.service -n 40 --no-pager 2>/dev/null || true
 fi
 tail -n 40 %s 2>/dev/null || true
-`, unit, unit, pid, pid, procCheck, unit, bin, bin, bin, bin, sockCheck, unit, logf)
+`, unit, unit, pid, pid, procCheck, bin, bin, bin, bin, sockCheck, unit, logf)
 }
 
 // rtkCheck reports the rtk version on the serve probe. The rtk installer puts

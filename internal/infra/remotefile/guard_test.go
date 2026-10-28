@@ -17,10 +17,8 @@ import (
 // directly. Each writes a transient /tmp file or a config file outside an
 // agent's cached prompt prefix, or is the compare-first helper itself.
 var writeFileAllowlist = map[string]bool{
-	"DeliverInitialPrompt":            true,
 	"SendPrompt":                      true,
 	"SendPromptTagged":                true,
-	"deliverTmuxSteer":                true,
 	"DeliverInitialPromptPTY":         true,
 	"CaptureRestartSessionSummaryPTY": true,
 	"CreateSessionOnRemote":           true,

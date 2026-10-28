@@ -3,8 +3,6 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"io"
-	"os/exec"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -73,27 +71,12 @@ func (r *restartRemote) summaryPrompted() bool {
 	}
 	return false
 }
-func (r *restartRemote) ValidateDir(context.Context, string) error { return nil }
-func (r *restartRemote) ScanTmuxSessions(context.Context) ([]string, error) {
-	return nil, nil
-}
+func (r *restartRemote) ValidateDir(context.Context, string) error      { return nil }
 func (r *restartRemote) ScanGitRepos(context.Context) ([]string, error) { return nil, nil }
 func (r *restartRemote) ScanWorktrees(context.Context, string) ([]string, error) {
 	return nil, nil
 }
 func (r *restartRemote) GetGitRoot(context.Context, string) (string, error) { return "", nil }
-func (r *restartRemote) GetTmuxSessionCWD(context.Context, string) (string, error) {
-	return "", nil
-}
-func (r *restartRemote) GetTmuxSessionEnv(context.Context, string, string) (string, error) {
-	return "", nil
-}
-func (r *restartRemote) CaptureTmuxPane(context.Context, string) (string, error) { return "", nil }
-func (r *restartRemote) AttachTmuxSession(string) *exec.Cmd                      { return nil }
-func (r *restartRemote) StreamTmuxSession(context.Context, string) (io.ReadWriteCloser, error) {
-	return nil, nil
-}
-func (r *restartRemote) StartTmuxSession(context.Context, string) error { return nil }
 func (r *restartRemote) ProvisionRemote(context.Context, []domain.ProvisionStep, chan<- domain.ProvisionProgress) error {
 	return nil
 }

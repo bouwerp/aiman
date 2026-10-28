@@ -3,8 +3,6 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"io"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -57,9 +55,6 @@ func (r *discovererRemote) ValidateDir(_ context.Context, path string) error {
 	}
 	return fmt.Errorf("directory not found: %s", path)
 }
-func (r *discovererRemote) ScanTmuxSessions(context.Context) ([]string, error) {
-	return nil, fmt.Errorf("discovery must not scan tmux")
-}
 func (r *discovererRemote) ScanGitRepos(context.Context) ([]string, error) { return r.repoPaths, nil }
 func (r *discovererRemote) ScanWorktrees(_ context.Context, repoPath string) ([]string, error) {
 	return r.worktreesByRepo[repoPath], nil
@@ -67,18 +62,6 @@ func (r *discovererRemote) ScanWorktrees(_ context.Context, repoPath string) ([]
 func (r *discovererRemote) GetGitRoot(context.Context, string) (string, error) {
 	return "", fmt.Errorf("no git root")
 }
-func (r *discovererRemote) GetTmuxSessionCWD(context.Context, string) (string, error) {
-	return "", fmt.Errorf("no tmux cwd")
-}
-func (r *discovererRemote) GetTmuxSessionEnv(context.Context, string, string) (string, error) {
-	return "", nil
-}
-func (r *discovererRemote) CaptureTmuxPane(context.Context, string) (string, error) { return "", nil }
-func (r *discovererRemote) AttachTmuxSession(string) *exec.Cmd                      { return nil }
-func (r *discovererRemote) StreamTmuxSession(context.Context, string) (io.ReadWriteCloser, error) {
-	return nil, nil
-}
-func (r *discovererRemote) StartTmuxSession(context.Context, string) error { return nil }
 func (r *discovererRemote) ProvisionRemote(context.Context, []domain.ProvisionStep, chan<- domain.ProvisionProgress) error {
 	return nil
 }

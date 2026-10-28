@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"io"
-	"os/exec"
 	"sync"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -24,28 +22,11 @@ func (f *fakeRemote) Execute(_ context.Context, cmd string) (string, error) {
 }
 func (f *fakeRemote) WriteFile(context.Context, string, []byte) error { return nil }
 func (f *fakeRemote) ValidateDir(context.Context, string) error       { return nil }
-func (f *fakeRemote) ScanTmuxSessions(context.Context) ([]string, error) {
-	return nil, nil
-}
-func (f *fakeRemote) ScanGitRepos(context.Context) ([]string, error) { return nil, nil }
+func (f *fakeRemote) ScanGitRepos(context.Context) ([]string, error)  { return nil, nil }
 func (f *fakeRemote) ScanWorktrees(context.Context, string) ([]string, error) {
 	return nil, nil
 }
 func (f *fakeRemote) GetGitRoot(context.Context, string) (string, error) { return "", nil }
-func (f *fakeRemote) GetTmuxSessionCWD(context.Context, string) (string, error) {
-	return "", nil
-}
-func (f *fakeRemote) GetTmuxSessionEnv(context.Context, string, string) (string, error) {
-	return "", nil
-}
-func (f *fakeRemote) CaptureTmuxPane(context.Context, string) (string, error) {
-	return "", nil
-}
-func (f *fakeRemote) AttachTmuxSession(string) *exec.Cmd { return nil }
-func (f *fakeRemote) StreamTmuxSession(context.Context, string) (io.ReadWriteCloser, error) {
-	return nil, nil
-}
-func (f *fakeRemote) StartTmuxSession(context.Context, string) error { return nil }
 func (f *fakeRemote) ProvisionRemote(context.Context, []domain.ProvisionStep, chan<- domain.ProvisionProgress) error {
 	return nil
 }

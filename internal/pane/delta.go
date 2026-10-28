@@ -29,8 +29,8 @@ type CaptureReply struct {
 }
 
 // ScreenHash is the fingerprint a PTY capture stores and the client sends back.
-// It is not a security hash. tmux probes use the remote's sha256 instead, and
-// the client stores that string as-is rather than recomputing it.
+// It is not a security hash. The client stores the string as sent rather than
+// recomputing it.
 func ScreenHash(text string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(text))

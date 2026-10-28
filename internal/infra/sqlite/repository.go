@@ -130,7 +130,7 @@ func NewRepository(dbPath string) (*Repository, error) {
 	// session ran in tmux. Mark it legacy so it is never revived as pty. An
 	// empty backend means no terminal is recorded and stays as it is.
 	if _, err := db.Exec("UPDATE sessions SET backend = ? WHERE backend IS NULL", domain.BackendLegacyTmux); err != nil {
-		return nil, fmt.Errorf("failed to mark legacy tmux sessions: %w", err)
+		return nil, fmt.Errorf("failed to mark sessions with no backend as legacy: %w", err)
 	}
 
 	// Sessions created before v0.8.11 stored per-session "aiman-<id>" AWS profiles that

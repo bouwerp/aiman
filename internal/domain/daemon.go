@@ -14,7 +14,7 @@ type Daemon struct {
 	RemoteHost string
 	Kind       string // "serve" or "trigger"
 	Status     DaemonStatus
-	Driver     string // systemd, nohup, tmux, none
+	Driver     string // systemd, nohup, none
 	Version    string
 	SocketOK   bool
 	RTKVersion string // serve probe only; empty when rtk is not installed

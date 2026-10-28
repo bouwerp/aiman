@@ -5,9 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,27 +74,12 @@ func (m *mockRemote) WriteFile(ctx context.Context, path string, content []byte)
 	}
 	return nil
 }
-func (m *mockRemote) ValidateDir(ctx context.Context, path string) error     { return nil }
-func (m *mockRemote) ScanTmuxSessions(ctx context.Context) ([]string, error) { return nil, nil }
-func (m *mockRemote) ScanGitRepos(ctx context.Context) ([]string, error)     { return nil, nil }
+func (m *mockRemote) ValidateDir(ctx context.Context, path string) error { return nil }
+func (m *mockRemote) ScanGitRepos(ctx context.Context) ([]string, error) { return nil, nil }
 func (m *mockRemote) ScanWorktrees(ctx context.Context, repoPath string) ([]string, error) {
 	return nil, nil
 }
 func (m *mockRemote) GetGitRoot(ctx context.Context, path string) (string, error) { return "", nil }
-func (m *mockRemote) GetTmuxSessionCWD(ctx context.Context, name string) (string, error) {
-	return "", nil
-}
-func (m *mockRemote) GetTmuxSessionEnv(ctx context.Context, name, envVar string) (string, error) {
-	return "", nil
-}
-func (m *mockRemote) CaptureTmuxPane(ctx context.Context, name string) (string, error) {
-	return "", nil
-}
-func (m *mockRemote) AttachTmuxSession(name string) *exec.Cmd { return nil }
-func (m *mockRemote) StreamTmuxSession(ctx context.Context, name string) (io.ReadWriteCloser, error) {
-	return nil, nil
-}
-func (m *mockRemote) StartTmuxSession(ctx context.Context, name string) error { return nil }
 func (m *mockRemote) ProvisionRemote(ctx context.Context, steps []domain.ProvisionStep, progress chan<- domain.ProvisionProgress) error {
 	return nil
 }
@@ -155,15 +138,15 @@ func TestPrepareSession_ClaudeWithIssue_UsesSendKeys(t *testing.T) {
 	}
 
 	// Command should have --dangerously-skip-permissions but NOT the prompt
-	// (prompt is sent via tmux send-keys to avoid nested quoting breakage)
+	// (prompt is typed into the PTY to avoid nested quoting breakage)
 	if !strings.Contains(result.Command, "--dangerously-skip-permissions") {
 		t.Errorf("expected --dangerously-skip-permissions in command, got: %s", result.Command)
 	}
 	if strings.Contains(result.Command, ".aiman_task.md") {
-		t.Errorf("Claude should NOT embed prompt in command (nested quoting breaks tmux), got: %s", result.Command)
+		t.Errorf("Claude should NOT embed prompt in command (nested quoting breaks the launch command), got: %s", result.Command)
 	}
 
-	// Should use InitialPrompt for tmux send-keys
+	// Should use InitialPrompt typed into the PTY
 	if result.InitialPrompt == "" {
 		t.Error("expected non-empty InitialPrompt for Claude (uses send-keys)")
 	}
@@ -252,7 +235,7 @@ func TestPrepareSession_AntigravityWithIssue_UsesSendKeys(t *testing.T) {
 		t.Errorf("Antigravity should NOT embed prompt in command, got: %s", result.Command)
 	}
 
-	// Should use InitialPrompt for tmux send-keys instead
+	// Should use InitialPrompt typed into the PTY instead
 	if result.InitialPrompt == "" {
 		t.Error("expected non-empty InitialPrompt for Antigravity (uses send-keys)")
 	}
@@ -336,7 +319,7 @@ func TestPrepareSession_CursorWithIssue_UsesSendKeys(t *testing.T) {
 		t.Errorf("Cursor should NOT embed prompt in command (risk of headless exit), got: %s", result.Command)
 	}
 
-	// Should use InitialPrompt for tmux send-keys
+	// Should use InitialPrompt typed into the PTY
 	if result.InitialPrompt == "" {
 		t.Error("expected non-empty InitialPrompt for Cursor (uses send-keys)")
 	}

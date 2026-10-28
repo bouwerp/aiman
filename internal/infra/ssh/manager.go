@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,34 +87,6 @@ const sshCommandTimeout = 30 * time.Second
 // profiles, so Homebrew binaries (/opt/homebrew/bin on Apple Silicon,
 // /usr/local/bin on Intel) and ~/.local/bin are not in PATH by default.
 const remotePathPreamble = `export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:${HOME}/.local/bin:${PATH}"; `
-
-// commandLookPath resolves a local binary. Tests replace it so attach stays on
-// ssh when mosh happens to be installed in the environment running the suite.
-var commandLookPath = exec.LookPath
-
-// remoteHasMoshServer returns the remote mosh-server path. A local client is
-// not enough: the mosh wrapper then dies with exit status 10. The path is
-// passed as --server because a user install lives in ~/.local/bin, which
-// SSH's default PATH does not search. Tests replace it so attach never dials.
-var remoteHasMoshServer = defaultRemoteHasMoshServer
-
-func defaultRemoteHasMoshServer(m *Manager) (string, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	out, err := m.ExecuteWithTimeout(ctx, "command -v mosh-server", 8*time.Second)
-	if err != nil {
-		return "", false
-	}
-	return cleanMoshServerPath(out)
-}
-
-func cleanMoshServerPath(out string) (string, bool) {
-	path := strings.TrimSpace(out)
-	if path == "" || strings.ContainsAny(path, "\n\r \t") || !strings.HasPrefix(path, "/") {
-		return "", false
-	}
-	return path, true
-}
 
 // bulkSSHArgs is the option set for non-interactive exec and file copy.
 // Alive interval matches the events stream (30s). Compression is on. X11 is not.
@@ -282,8 +253,8 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 }
 
 // ResetControlSocket gracefully exits the existing ControlMaster (if any)
-// and removes the socket file. Call this after disruptive operations like
-// tmux kill-session that may leave the SSH master in a broken state.
+// and removes the socket file. Call this after disruptive operations that
+// may leave the SSH master in a broken state.
 // The next Execute/WriteFile call will establish a fresh ControlMaster.
 func (m *Manager) ResetControlSocket() {
 	cp := m.controlPath()
@@ -303,40 +274,6 @@ func (m *Manager) ValidateDir(ctx context.Context, path string) error {
 		return fmt.Errorf("directory %s not found or not accessible: %w", path, err)
 	}
 	return nil
-}
-
-func (m *Manager) ScanTmuxSessions(ctx context.Context) ([]string, error) {
-	// tmux ls -F '#S'
-	output, err := m.Execute(ctx, "tmux ls -F '#S'")
-	if err != nil {
-		// `tmux ls` with no server exits non-zero — that is genuinely "no
-		// sessions", not a failure. Anything else (SSH transport, timeout)
-		// must propagate: swallowing it made a failed scan look like a host
-		// with zero sessions, which the discovery merge then read as every
-		// known session on that host being confirmed dead.
-		if isTmuxNoServerError(err.Error()) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to scan tmux sessions: %w", err)
-	}
-
-	sessions := []string{}
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			sessions = append(sessions, line)
-		}
-	}
-	return sessions, nil
-}
-
-// isTmuxNoServerError reports whether an error from `tmux ls` just means no
-// tmux server is running, across the phrasings tmux versions use.
-func isTmuxNoServerError(errText string) bool {
-	s := strings.ToLower(errText)
-	return strings.Contains(s, "no server running") ||
-		strings.Contains(s, "error connecting to") ||
-		strings.Contains(s, "no sessions")
 }
 
 func (m *Manager) ScanGitRepos(ctx context.Context) ([]string, error) {
@@ -422,96 +359,6 @@ func (m *Manager) GetGitRoot(ctx context.Context, path string) (string, error) {
 	return strings.TrimSpace(output), nil
 }
 
-func (m *Manager) GetTmuxSessionCWD(ctx context.Context, sessionName string) (string, error) {
-	// tmux display-message -p -F "#{pane_current_path}" -t <sessionName>
-	cmd := fmt.Sprintf("tmux display-message -p -F '#{pane_current_path}' -t %q", sessionName)
-	output, err := m.Execute(ctx, cmd)
-	if err != nil {
-		return "", fmt.Errorf("failed to get tmux session CWD: %w", err)
-	}
-	return strings.TrimSpace(output), nil
-}
-
-func (m *Manager) GetTmuxSessionEnv(ctx context.Context, sessionName, envVar string) (string, error) {
-	// tmux show-environment -t <sessionName> <envVar>
-	// Output is usually "VAR=value", so we need to strip the prefix
-	cmd := fmt.Sprintf("tmux show-environment -t %q %s", sessionName, envVar)
-	output, err := m.Execute(ctx, cmd)
-	if err != nil {
-		return "", fmt.Errorf("failed to get tmux session env: %w", err)
-	}
-	prefix := envVar + "="
-	if strings.HasPrefix(output, prefix) {
-		return strings.TrimPrefix(output, prefix), nil
-	}
-	return strings.TrimSpace(output), nil
-}
-
-func (m *Manager) CaptureTmuxPane(ctx context.Context, sessionName string) (string, error) {
-	if sessionName == "" {
-		return "", fmt.Errorf("capture pane: session name is empty")
-	}
-	// Capture the full scrollback history (-S - means from the beginning of history)
-	cmdStr := fmt.Sprintf("tmux capture-pane -p -e -S - -t %q", sessionName)
-
-	var output string
-	var err error
-
-	isTransient := func(out, errStr string) bool {
-		combined := out + errStr
-		return strings.Contains(combined, "can't find pane") ||
-			strings.Contains(combined, "failed to connect to server") ||
-			strings.Contains(combined, "no server running") ||
-			strings.Contains(combined, "connect to new control master")
-	}
-
-	// Retry up to 8 times with increasing delay if session/server is not yet available.
-	// This handles the race where the tmux server or pane hasn't fully started yet
-	// (e.g. immediately after a session restart).
-	for i := 0; i < 8; i++ {
-		output, err = m.Execute(ctx, cmdStr)
-		if err == nil {
-			break
-		}
-		errStr := err.Error()
-		if !isTransient(output, errStr) {
-			return "", fmt.Errorf("failed to capture tmux pane: %w", err)
-		}
-		// Wait a bit before retry
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(time.Duration(400*(i+1)) * time.Millisecond):
-		}
-	}
-
-	if err != nil {
-		return "", fmt.Errorf("failed to capture tmux pane after retries: %w", err)
-	}
-
-	// Trim trailing empty lines for cleaner preview
-	lines := strings.Split(output, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.TrimSpace(lines[i]) != "" {
-			return strings.Join(lines[:i+1], "\n"), nil
-		}
-	}
-
-	return output, nil
-}
-
-func tmuxAttachRemoteCommand(sessionName string) string {
-	// window-size is set back to `latest` because fitting a session to the
-	// dashboard's preview panel switches it to manual sizing. Without this the
-	// window would stay at the panel's width for a full-screen client too, and
-	// tmux would never fit it to the terminal being attached.
-	return remotePathPreamble + fmt.Sprintf(
-		"tmux set-option -t %q mouse on >/dev/null 2>&1 || tmux set-option -g mouse on >/dev/null 2>&1; "+
-			"tmux set-option -t %q window-size latest >/dev/null 2>&1; exec tmux attach -t %q",
-		sessionName, sessionName, sessionName,
-	)
-}
-
 // ptyAttachRemoteCommand hands the terminal to the serve daemon's PTY runtime.
 // ctrl+q detaches without touching the session.
 func ptyAttachRemoteCommand(sessionID string) string {
@@ -523,117 +370,22 @@ func ptyAttachRemoteCommand(sessionID string) string {
 
 // AttachPTYSession returns the ssh command that interactively attaches to a
 // built-in-PTY session. The remote command is a raw byte relay (aiman pty
-// attach). Mosh emulates a terminal, so it would reinterpret that stream, and
-// a laptop mosh with no remote mosh-server exits 10 before the relay starts.
-// The socket is the uncompressed tty master, separate from the compressed
-// exec master, so keystrokes do not wait on bulk captures.
+// attach). The socket is the uncompressed tty master, separate from the
+// compressed exec master, so keystrokes do not wait on bulk captures.
 func (m *Manager) AttachPTYSession(sessionID string) *exec.Cmd {
-	return m.sshAttach(context.Background(), ptyAttachRemoteCommand(sessionID), false)
+	return m.sshAttach(context.Background(), ptyAttachRemoteCommand(sessionID))
 }
 
-func (m *Manager) AttachTmuxSession(sessionName string) *exec.Cmd {
-	// -X stays on the ssh fallback so the remote clipboard can reach the local display.
-	return m.interactiveAttach(tmuxAttachRemoteCommand(sessionName), true)
-}
-
-// interactiveAttach prefers MOSH for a tmux session when both the laptop and
-// the remote have it. The remote command uses a shell because the PATH
-// preamble is shell syntax. Compression stays off on the ssh fallback: MOSH
-// has its own codec, and that fallback must not share the compressed exec master.
-func (m *Manager) interactiveAttach(remoteCmd string, x11 bool) *exec.Cmd {
-	if client, server, ok := m.moshClient(); ok {
-		//nolint:gosec // G204: client is LookPath("mosh"); server is a remote absolute path
-		return exec.Command(client, "--server="+server, m.target(), "--", "sh", "-c", remoteCmd)
-	}
-	return m.sshAttach(context.Background(), remoteCmd, x11)
-}
-
-// moshClient is the local mosh binary and the remote mosh-server path.
-// Checking only the laptop PATH selects mosh against a host that has never
-// installed it, and the wrapper then exits 10.
-func (m *Manager) moshClient() (string, string, bool) {
-	path, err := commandLookPath("mosh")
-	if err != nil {
-		return "", "", false
-	}
-	server, ok := remoteHasMoshServer(m)
-	if !ok {
-		return "", "", false
-	}
-	return path, server, true
-}
-
-func (m *Manager) sshAttach(ctx context.Context, remoteCmd string, x11 bool) *exec.Cmd {
+func (m *Manager) sshAttach(ctx context.Context, remoteCmd string) *exec.Cmd {
 	cp := m.controlPath() + "-tty"
 	_ = os.MkdirAll(filepath.Dir(cp), 0700)
-	args := []string{"-t", "-A", "-o", "BatchMode=yes"}
-	if x11 {
-		args = append(args, "-X")
-	}
-	args = append(args,
+	args := []string{"-t", "-A", "-o", "BatchMode=yes",
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPersist=10m",
 		"-S", cp,
 		m.target(), remoteCmd,
-	)
+	}
 	return exec.CommandContext(ctx, "ssh", args...)
-}
-
-func (m *Manager) StreamTmuxSession(ctx context.Context, sessionName string) (io.ReadWriteCloser, error) {
-	// Same uncompressed tty master as attach, without MOSH: this path is a pair
-	// of pipes, and MOSH owns the terminal itself.
-	cmd := m.sshAttach(ctx, tmuxAttachRemoteCommand(sessionName), true)
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	return &commandStream{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: stdout,
-	}, nil
-}
-
-type commandStream struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-}
-
-func (s *commandStream) Read(p []byte) (n int, err error) {
-	return s.stdout.Read(p)
-}
-
-func (s *commandStream) Write(p []byte) (n int, err error) {
-	return s.stdin.Write(p)
-}
-
-func (s *commandStream) Close() error {
-	// The pipes are being torn down alongside the process; killing it below is
-	// what actually matters, so pipe-close errors are not worth propagating.
-	_ = s.stdin.Close()
-	_ = s.stdout.Close()
-	if s.cmd.Process != nil {
-		return s.cmd.Process.Kill()
-	}
-	return nil
-}
-
-func (m *Manager) StartTmuxSession(ctx context.Context, name string) error {
-	// Step 8 of SPEC: tmux new-session -d -s <branch>
-	cmdStr := fmt.Sprintf("tmux new-session -d -s %s", name)
-	_, err := m.Execute(ctx, cmdStr)
-	return err
 }
 
 func (m *Manager) ProvisionRemote(ctx context.Context, steps []domain.ProvisionStep, progress chan<- domain.ProvisionProgress) error {

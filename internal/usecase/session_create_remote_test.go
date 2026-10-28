@@ -40,7 +40,7 @@ func TestCreateSessionOnRemoteSendsParamsAsAFile(t *testing.T) {
 	spec := RemoteCreateSpec{
 		Agent: "claude", AgentName: "Claude Code", Repo: "realfi", Branch: "WTB-1-thing",
 		Prompt: `weird "quotes" and $(rm -rf /) and 'ticks'`, Issue: "WTB-1",
-		Backend: "pty", PromptFree: false,
+		PromptFree: false,
 	}
 	sess, err := CreateSessionOnRemote(context.Background(), r, spec)
 	if err != nil {
@@ -56,7 +56,7 @@ func TestCreateSessionOnRemoteSendsParamsAsAFile(t *testing.T) {
 	for _, v := range r.written {
 		body = v
 	}
-	for _, want := range []string{`"agent":"claude"`, `"agent_name":"Claude Code"`, `"backend":"pty"`, `"prompt_free":false`} {
+	for _, want := range []string{`"agent":"claude"`, `"agent_name":"Claude Code"`, `"prompt_free":false`} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("params missing %s: %s", want, body)
 		}

@@ -483,9 +483,6 @@ type Remote struct {
 	AWSDefaultProfile string `yaml:"aws_default_profile,omitempty"`
 	// AWSDefaultRegion overrides the global aws.default_region for this remote.
 	AWSDefaultRegion string `yaml:"aws_default_region,omitempty"`
-	// SessionBackend selects how new sessions host their terminal on this
-	// remote: "pty" (default) or "tmux". Empty inherits the product default (pty).
-	SessionBackend string `yaml:"session_backend,omitempty"`
 	// Notifications configures push/webhook/Slack delivery.
 	Notifications *NotificationsConfig `yaml:"notifications,omitempty"`
 }

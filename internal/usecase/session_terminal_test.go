@@ -32,8 +32,6 @@ func (r *terminalRemote) Execute(_ context.Context, cmd string) (string, error) 
 	return "", nil
 }
 
-func (r *terminalRemote) CaptureTmuxPane(context.Context, string) (string, error) { return "", nil }
-
 func (r *terminalRemote) WriteFile(_ context.Context, path string, content []byte) error {
 	if r.written == nil {
 		r.written = map[string][]byte{}
@@ -229,19 +227,6 @@ func (r *killThenGoneRemote) WriteFile(_ context.Context, path string, content [
 	}
 	r.written[path] = content
 	return nil
-}
-
-func TestPaneShellCommandKeepsShellInsideLoginCommand(t *testing.T) {
-	got := PaneShellCommand("export PATH=foo; grok --always-approve")
-	if !strings.HasPrefix(got, "bash -l -c '") {
-		t.Fatalf("want a login-shell wrapper, got %q", got)
-	}
-	if strings.Contains(got, "'; exec bash") {
-		t.Fatal("tmux execs one pane command; a sibling exec bash never runs and remain-on-exit shows a dead pane")
-	}
-	if !strings.Contains(got, "; exec bash -i'") {
-		t.Fatalf("agent exit must exec bash inside the same -c, got %q", got)
-	}
 }
 
 func TestApplyKiloAllowEnv(t *testing.T) {

@@ -31,7 +31,7 @@ func previewKey(s domain.Session) string {
 // are one session. PTY names are labels, so two PTY sessions with ids of their
 // own stay distinct.
 func sameTerminal(a, b domain.Session) bool {
-	if a.IsPTY() && b.IsPTY() && a.ID != "" && b.ID != "" {
+	if a.Backend == domain.BackendPTY && b.Backend == domain.BackendPTY && a.ID != "" && b.ID != "" {
 		return a.ID == b.ID
 	}
 	return true

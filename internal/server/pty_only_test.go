@@ -102,8 +102,8 @@ func TestCreateIgnoresBackendParam(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("create: %+v", resp.Error)
 	}
-	if creator.cfg.SessionBackend != "" {
-		t.Fatalf("SessionBackend = %q, want the param ignored", creator.cfg.SessionBackend)
+	if creator.cfg.Agent == nil || creator.cfg.Agent.Command != "claude" {
+		t.Fatalf("create with a backend param should still launch the agent: %+v", creator.cfg.Agent)
 	}
 }
 

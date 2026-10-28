@@ -394,7 +394,7 @@ func dedupeDiscoveredSessions(sessions []domain.Session) []domain.Session {
 // hasOwnTerminal reports whether s is a live PTY session with its own id. PTY
 // names are labels, so two such sessions sharing a name are still two sessions.
 func hasOwnTerminal(s domain.Session) bool {
-	return s.IsPTY() && s.ID != "" && s.Status != domain.SessionStatusInactive
+	return s.Backend == domain.BackendPTY && s.ID != "" && s.Status != domain.SessionStatusInactive
 }
 
 func sessionDedupePriority(s domain.Session) int {

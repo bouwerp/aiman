@@ -67,9 +67,9 @@ type Session struct {
 	WorktreePath     string
 	WorkingDirectory string
 	TmuxSession      string
-	// Backend is the terminal runtime hosting the session: "pty" (default
-	// for new sessions) or "tmux". Empty on a stored row means tmux: those
-	// rows were written before the field existed.
+	// Backend is the terminal runtime hosting the session: BackendPTY, or
+	// BackendLegacyTmux for a row aiman no longer runs. Empty means no
+	// terminal is recorded (a discovery result).
 	Backend       string
 	MutagenSyncID string
 	LocalPath     string
@@ -290,9 +290,6 @@ type SessionConfig struct {
 	AdHoc            bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
 	SSHManager       RemoteExecutor // remote to create the session on; uses FlowManager default if nil
 	RemoteHost       string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
-	// SessionBackend selects the terminal runtime for this session:
-	// "pty" (default, aiman serve's built-in runtime) or "tmux".
-	SessionBackend string
 	// PriorSnapshot is an optional snapshot from a previous session on the same branch/issue.
 	// When set, its summary and next steps are injected into the agent task file so the
 	// new session can continue from where the prior one left off.
@@ -304,11 +301,11 @@ type SessionConfig struct {
 	// SyncCredentials enabled).
 	AWSConfig *AWSConfig
 	// EnvSecrets is the list of global secrets selected for injection into this session.
-	// Each secret is added as a -e KEY=VALUE flag to the tmux new-session command.
+	// Each secret is exported into the agent's PTY environment.
 	EnvSecrets []Secret
 	// InitialPrompt is free-text entered in the session summary dialog. It is appended
-	// to the agent's initial prompt (after any JIRA task trigger) and delivered via
-	// tmux send-keys. Empty means no extra prompt text.
+	// to the agent's initial prompt (after any JIRA task trigger) and typed into
+	// the agent's PTY. Empty means no extra prompt text.
 	InitialPrompt string
 	// Brief is a child's validated brief (Question, Scope, Report must
 	// contain). It opens the child's task file. Empty means none.
@@ -334,26 +331,6 @@ type ScheduledPrompt struct {
 	LastRunAt  time.Time `json:"last_run_at"`
 }
 
-// Session backend values. Empty on a persisted Session means no terminal is
-// recorded; rows written before the field existed are BackendLegacyTmux.
-// Empty on SessionConfig means "use the product default", DefaultSessionBackend.
-const (
-	BackendTmux           = "tmux"
-	BackendPTY            = "pty"
-	DefaultSessionBackend = BackendPTY
-)
-
-// IsPTY reports whether this session runs under the built-in PTY runtime.
-func (s Session) IsPTY() bool { return s.Backend == BackendPTY }
-
-// ResolveSessionBackend picks the runtime for a session being created.
-// A per-session choice wins; otherwise the remote default; otherwise PTY.
-func ResolveSessionBackend(chosen, remoteDefault string) string {
-	if chosen != "" {
-		return chosen
-	}
-	if remoteDefault != "" {
-		return remoteDefault
-	}
-	return DefaultSessionBackend
-}
+// BackendPTY marks a session hosted by aiman serve's built-in PTY runtime.
+// Every new session uses it; see BackendLegacyTmux for old rows.
+const BackendPTY = "pty"

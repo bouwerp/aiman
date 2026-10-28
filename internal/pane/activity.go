@@ -51,8 +51,8 @@ type Observation struct {
 	// Previous is the pane from the last sample, for change detection. Empty
 	// when there is no prior sample.
 	Previous string
-	// SinceOutput is how long ago the session last produced output, from tmux's
-	// own bookkeeping or the PTY holder's. Negative means unknown.
+	// SinceOutput is how long ago the session last produced output, from the
+	// PTY holder's bookkeeping. Negative means unknown.
 	SinceOutput time.Duration
 	// SinceTitleChange is how long ago the session's terminal title changed.
 	// Zero or negative means unknown — unlike SinceOutput, the zero value has to

@@ -285,7 +285,7 @@ func (i item) Description() string {
 	// A legacy tmux row cannot be attached, revived or stopped by aiman, so it
 	// says so and names the way out.
 	if i.session.IsLegacyTmux() {
-		agentPart = " | tmux (legacy) · stop it on the host, then s" + agentPart
+		agentPart = legacyTmuxBadge + agentPart
 	}
 	createdPart := ""
 	if !i.session.CreatedAt.IsZero() {
@@ -2108,7 +2108,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			m.logPersistent("CreateSession failed for branch %q: %v", sessionCfg.Branch, err)
 			return sessionCreateMsg{err: err, placeholderID: placeholderID}
 		}
-		m.logPersistent("worktree and tmux ready: tmux=%q id=%s", session.TmuxSession, session.ID)
+		m.logPersistent("worktree and terminal ready: terminal=%q id=%s", session.TmuxSession, session.ID)
 
 		session.ID = strings.TrimSpace(session.ID)
 		if session.ID == "" {
@@ -2471,7 +2471,7 @@ func (m *Model) terminateDiscardChanges(ctx context.Context, s domain.Session) e
 // tmux.
 func (m *Model) terminateStopTerminal(ctx context.Context, s domain.Session) error {
 	if s.IsLegacyTmux() {
-		return skipReason("tmux session left to the user")
+		return skipReason(legacyTmuxTerminateSkip)
 	}
 	if s.ID == "" {
 		return nil

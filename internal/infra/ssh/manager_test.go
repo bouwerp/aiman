@@ -1,71 +1,10 @@
 package ssh
 
 import (
-	"errors"
-	"os"
 	"strings"
 	"testing"
 )
 
-func TestMain(m *testing.M) {
-	commandLookPath = func(string) (string, error) {
-		return "", errors.New("not found")
-	}
-	os.Exit(m.Run())
-}
-
-func TestTmuxAttachRemoteCommand_EnablesMouseBeforeAttach(t *testing.T) {
-	cmd := tmuxAttachRemoteCommand("feature-x")
-	if !strings.Contains(cmd, `tmux set-option -t "feature-x" mouse on`) {
-		t.Fatalf("expected session mouse enable, got %q", cmd)
-	}
-	if !strings.Contains(cmd, `exec tmux attach -t "feature-x"`) {
-		t.Fatalf("expected tmux attach command, got %q", cmd)
-	}
-}
-
-func TestAttachTmuxSession_UsesMouseEnablingWrapper(t *testing.T) {
-	mgr := NewManager(Config{Host: "example.com", User: "code"})
-	cmd := mgr.AttachTmuxSession("feature-x")
-
-	args := strings.Join(cmd.Args, " ")
-	if !strings.Contains(args, `tmux set-option -t "feature-x" mouse on`) {
-		t.Fatalf("expected ssh command to enable tmux mouse support, got %q", args)
-	}
-	if !strings.Contains(args, `exec tmux attach -t "feature-x"`) {
-		t.Fatalf("expected ssh command to attach tmux session, got %q", args)
-	}
-}
-
-// A missing tmux server is "no sessions"; anything else from `tmux ls` is a
-// real failure that must propagate so a failed scan is never read as a host
-// with zero sessions.
-func TestIsTmuxNoServerError(t *testing.T) {
-	noServer := []string{
-		"remote command failed on code@regent0: exit status 1\nOutput: no server running on /tmp/tmux-1000/default",
-		"remote command failed on code@regent0: exit status 1\nOutput: error connecting to /tmp/tmux-1000/default (No such file or directory)",
-	}
-	for _, s := range noServer {
-		if !isTmuxNoServerError(s) {
-			t.Errorf("expected no-server classification for %q", s)
-		}
-	}
-
-	realFailures := []string{
-		"remote command failed on code@regent0: exit status 255\nOutput: ssh: connect to host regent0 port 22: Operation timed out",
-		"remote command failed on code@regent0: signal: killed\nOutput: ",
-	}
-	for _, s := range realFailures {
-		if isTmuxNoServerError(s) {
-			t.Errorf("expected real-failure classification for %q", s)
-		}
-	}
-}
-
-// Fitting a session to the dashboard's preview panel switches its tmux window
-// to manual sizing. Attaching has to hand that control back, or the window would
-// stay at the panel's width for a full-screen client and tmux would never fit it
-// to the terminal being attached.
 func TestBulkSSHArgsCompressesWithoutX11(t *testing.T) {
 	args := strings.Join(bulkSSHArgs("/tmp/sock", true), " ")
 	if !strings.Contains(args, "Compression=yes") || !strings.Contains(args, "ServerAliveInterval=30") {
@@ -76,85 +15,24 @@ func TestBulkSSHArgsCompressesWithoutX11(t *testing.T) {
 	}
 }
 
-func TestAttachTmuxSessionKeepsAnUncompressedTTYMaster(t *testing.T) {
-	mgr := NewManager(Config{Host: "example.com", User: "code"})
-	args := strings.Join(mgr.AttachTmuxSession("feature-x").Args, " ")
-	if strings.Contains(args, "Compression=yes") || !strings.Contains(args, "-tty") || !strings.Contains(args, " -X ") {
-		t.Fatalf("tmux attach should be uncompressed X11 on its own master: %s", args)
-	}
-}
-
 func TestAttachPTYSessionSkipsX11(t *testing.T) {
 	mgr := NewManager(Config{Host: "example.com", User: "code"})
 	args := strings.Join(mgr.AttachPTYSession("sess").Args, " ")
 	if strings.Contains(args, " -X ") || strings.Contains(args, "Compression=yes") {
 		t.Fatalf("pty attach should stay uncompressed and without X11: %s", args)
 	}
+	if !strings.Contains(args, "-tty") {
+		t.Fatalf("pty attach should use its own tty master: %s", args)
+	}
 }
 
-// A laptop with mosh and a remote without mosh-server makes the mosh wrapper
-// die with exit status 10. PTY attach is a raw byte relay, so it stays on ssh
-// even when both sides have mosh: mosh would emulate the terminal the agent
-// is already drawing into.
-func TestAttachPTYSessionStaysOnSSHWhenMoshIsInstalled(t *testing.T) {
-	withMosh(t, true)
+// PTY attach is a raw byte relay over ssh: a terminal emulator in between
+// would reinterpret the stream the agent is drawing.
+func TestAttachPTYSessionRunsOverSSH(t *testing.T) {
 	mgr := NewManager(Config{Host: "example.com", User: "code"})
-	args := strings.Join(mgr.AttachPTYSession("sess").Args, " ")
-	if strings.Contains(args, "mosh") || !strings.Contains(args, "ssh") || !strings.Contains(args, "pty attach") {
-		t.Fatalf("pty attach must stay on ssh: %s", args)
-	}
-}
-
-func TestAttachTmuxSessionSkipsMoshWhenRemoteHasNoServer(t *testing.T) {
-	withMosh(t, false)
-	mgr := NewManager(Config{Host: "example.com", User: "code"})
-	args := strings.Join(mgr.AttachTmuxSession("feature-x").Args, " ")
-	if strings.Contains(args, "mosh") || !strings.Contains(args, "-tty") {
-		t.Fatalf("tmux attach must fall back to ssh when the remote has no mosh-server: %s", args)
-	}
-}
-
-func TestAttachTmuxSessionUsesMoshWhenPresent(t *testing.T) {
-	withMosh(t, true)
-
-	mgr := NewManager(Config{Host: "example.com", User: "code"})
-	args := strings.Join(mgr.AttachTmuxSession("feature-x").Args, " ")
-	if !strings.Contains(args, "/usr/bin/mosh --server=/usr/bin/mosh-server code@example.com -- sh -c") || !strings.Contains(args, "exec tmux attach") {
-		t.Fatalf("mosh attach: %s", args)
-	}
-}
-
-// withMosh installs a local mosh client and sets whether the remote has
-// mosh-server. TestMain leaves both off so the rest of the suite never dials.
-func withMosh(t *testing.T, remote bool) {
-	t.Helper()
-	prevLook := commandLookPath
-	prevRemote := remoteHasMoshServer
-	commandLookPath = func(name string) (string, error) {
-		if name == "mosh" {
-			return "/usr/bin/mosh", nil
-		}
-		return "", errors.New("not found")
-	}
-	remoteHasMoshServer = func(*Manager) (string, bool) {
-		if !remote {
-			return "", false
-		}
-		return "/usr/bin/mosh-server", true
-	}
-	t.Cleanup(func() {
-		commandLookPath = prevLook
-		remoteHasMoshServer = prevRemote
-	})
-}
-
-func TestTmuxAttachRemoteCommand_RestoresAutomaticSizing(t *testing.T) {
-	cmd := tmuxAttachRemoteCommand("feature-x")
-	if !strings.Contains(cmd, `tmux set-option -t "feature-x" window-size latest`) {
-		t.Fatalf("attach must restore automatic window sizing, got %q", cmd)
-	}
-	// It has to happen before the attach, since exec replaces the shell.
-	if strings.Index(cmd, "window-size latest") > strings.Index(cmd, "exec tmux attach") {
-		t.Fatalf("window-size must be restored before exec, got %q", cmd)
+	cmd := mgr.AttachPTYSession("sess")
+	args := strings.Join(cmd.Args, " ")
+	if cmd.Args[0] != "ssh" || !strings.Contains(args, "pty attach") {
+		t.Fatalf("pty attach must run aiman pty attach over ssh: %s", args)
 	}
 }

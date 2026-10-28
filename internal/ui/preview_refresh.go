@@ -189,7 +189,6 @@ func (m *Model) storePaneCache(msg previewRefreshMsg) {
 	if msg.cache.Hash != "" {
 		prev.Hash = msg.cache.Hash
 	}
-	prev.HistorySize = msg.cache.HistorySize
 	if !msg.cache.OutputAt.IsZero() {
 		prev.OutputAt = msg.cache.OutputAt
 	}

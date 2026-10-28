@@ -9,13 +9,12 @@ import (
 )
 
 type scriptRemote struct {
-	cmd      string
-	cmds     []string
-	out      string
-	next     string
-	err      error
-	captured string
-	calls    int
+	cmd   string
+	cmds  []string
+	out   string
+	next  string
+	err   error
+	calls int
 }
 
 func (s *scriptRemote) Execute(_ context.Context, cmd string) (string, error) {
@@ -38,10 +37,6 @@ func (s *scriptRemote) Execute(_ context.Context, cmd string) (string, error) {
 }
 
 func (s *scriptRemote) WriteFile(context.Context, string, []byte) error { return nil }
-
-func (s *scriptRemote) CaptureTmuxPane(context.Context, string) (string, error) {
-	return s.captured, nil
-}
 
 func TestRefreshPTYSendsTheCachedHash(t *testing.T) {
 	remote := &scriptRemote{out: `{"unchanged":true,"hash":"abc"}`}

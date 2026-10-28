@@ -14,20 +14,9 @@ import (
 // per-item scan calls.
 type batchRemote struct {
 	discovererRemote
-	tmuxRecords []domain.TmuxSessionRecord
-	wtRecords   []domain.WorktreeRecord
-	tmuxErr     error
-	wtErr       error
-	tmuxCalls   int
-	wtCalls     int
-}
-
-func (b *batchRemote) ScanTmuxSessionDetails(context.Context) ([]domain.TmuxSessionRecord, error) {
-	b.tmuxCalls++
-	if b.tmuxErr != nil {
-		return nil, b.tmuxErr
-	}
-	return b.tmuxRecords, nil
+	wtRecords []domain.WorktreeRecord
+	wtErr     error
+	wtCalls   int
 }
 
 func (b *batchRemote) ScanWorktreeTree(context.Context) ([]domain.WorktreeRecord, error) {
@@ -76,8 +65,8 @@ func TestDiscoverUsesBatchPathWhenAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if remote.wtCalls != 1 || remote.tmuxCalls != 0 {
-		t.Errorf("want one worktree batch call and no tmux call, got worktree=%d tmux=%d", remote.wtCalls, remote.tmuxCalls)
+	if remote.wtCalls != 1 {
+		t.Errorf("want one worktree batch call, got %d", remote.wtCalls)
 	}
 	for _, c := range remote.commands {
 		// Fixed single-round-trip scans are allowed: the PTY runtime list and

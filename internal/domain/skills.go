@@ -20,11 +20,11 @@ const (
 )
 
 // PreparedSession holds the agent launch command and an optional initial prompt
-// that should be sent to the agent via tmux send-keys after it has started.
+// that is typed into the agent's PTY after it has started.
 type PreparedSession struct {
 	// Command is the shell command to start the agent (e.g. "claude --dangerously-skip-permissions").
 	Command string
-	// InitialPrompt, if non-empty, should be typed into the tmux pane after the
+	// InitialPrompt, if non-empty, should be typed into the PTY after the
 	// agent is running. Only agents that are confirmed to accept an inline initial
 	// message (currently Claude Code) embed the prompt directly in Command instead.
 	InitialPrompt string

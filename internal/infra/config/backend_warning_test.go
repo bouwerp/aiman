@@ -43,3 +43,33 @@ func TestLoadNoWarningWithoutSessionBackend(t *testing.T) {
 		t.Errorf("Warnings = %q, want none", cfg.Warnings)
 	}
 }
+
+// Loading then saving a config drops the ignored key, so the warning stops
+// once the config is saved.
+func TestConfigSaveDropsSessionBackend(t *testing.T) {
+	cfg := loadConfigText(t, "remotes:\n  - name: devbox\n    host: devbox.local\n    session_backend: tmux\n")
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	path, err := GetConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "session_backend") {
+		t.Fatalf("saved config still has session_backend:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "devbox.local") {
+		t.Fatalf("saved config lost the remote:\n%s", raw)
+	}
+	again, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Warnings) != 0 {
+		t.Fatalf("Warnings after save = %q, want none", again.Warnings)
+	}
+}

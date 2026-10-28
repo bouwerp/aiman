@@ -3,7 +3,6 @@ package git
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,22 +45,9 @@ func (m *mockRemote) Execute(_ context.Context, cmd string) (string, error) {
 // Stub all other RemoteExecutor methods
 func (m *mockRemote) Connect(context.Context) error                           { return nil }
 func (m *mockRemote) WriteFile(context.Context, string, []byte) error         { return nil }
-func (m *mockRemote) ScanTmuxSessions(context.Context) ([]string, error)      { return nil, nil }
 func (m *mockRemote) ScanGitRepos(context.Context) ([]string, error)          { return nil, nil }
 func (m *mockRemote) ScanWorktrees(context.Context, string) ([]string, error) { return nil, nil }
 func (m *mockRemote) GetGitRoot(context.Context, string) (string, error)      { return "", nil }
-func (m *mockRemote) GetTmuxSessionCWD(context.Context, string) (string, error) {
-	return "", nil
-}
-func (m *mockRemote) GetTmuxSessionEnv(context.Context, string, string) (string, error) {
-	return "", nil
-}
-func (m *mockRemote) CaptureTmuxPane(context.Context, string) (string, error) { return "", nil }
-func (m *mockRemote) AttachTmuxSession(string) *exec.Cmd                      { return nil }
-func (m *mockRemote) StreamTmuxSession(context.Context, string) (io.ReadWriteCloser, error) {
-	return nil, nil
-}
-func (m *mockRemote) StartTmuxSession(context.Context, string) error { return nil }
 func (m *mockRemote) ProvisionRemote(_ context.Context, _ []domain.ProvisionStep, _ chan<- domain.ProvisionProgress) error {
 	return nil
 }

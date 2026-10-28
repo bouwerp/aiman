@@ -13,6 +13,14 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
+// legacyTmuxBadge is the session-row label for a legacy row. aiman cannot
+// attach, revive or stop it, so the label names the way out.
+const legacyTmuxBadge = " | tmux (legacy) · stop it on the host, then s"
+
+// legacyTmuxTerminateSkip is the terminate step note for a legacy row: the
+// confirm dialog showed the stop command and aiman never runs tmux.
+const legacyTmuxTerminateSkip = "tmux session left to the user"
+
 // legacyTmuxError is the stop instruction for a legacy row: the host and the
 // exact command the user runs there.
 func legacyTmuxError(s domain.Session) *domain.LegacyTmuxError {

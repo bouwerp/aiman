@@ -214,7 +214,7 @@ func runSession(args []string) error {
 // sessionCreateParams maps `session create` flags to session.create params.
 func sessionCreateParams(flags map[string]string) (map[string]any, error) {
 	params := map[string]any{}
-	for _, k := range []string{"name", "group", "parent", "for", "repo", "branch", "agent", "dir", "prompt", "issue", "base", "backend"} {
+	for _, k := range []string{"name", "group", "parent", "for", "repo", "branch", "agent", "dir", "prompt", "issue", "base"} {
 		if flags[k] != "" {
 			params[k] = flags[k]
 		}

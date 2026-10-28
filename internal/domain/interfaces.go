@@ -2,8 +2,6 @@ package domain
 
 import (
 	"context"
-	"io"
-	"os/exec"
 	"time"
 )
 
@@ -54,31 +52,14 @@ type WorktreeRecord struct {
 	AimanID string
 }
 
-// TmuxSessionRecord is one remote tmux session with the per-session facts
-// discovery needs, gathered in a single pass on the remote.
-type TmuxSessionRecord struct {
-	Name string
-	// AimanID comes from the tmux session environment (AIMAN_ID).
-	AimanID string
-	CWD     string
-	GitRoot string
-	// FileAimanID is the id stored in the worktree's git metadata, used when
-	// the tmux environment carries none.
-	FileAimanID string
-	RemoteURL   string
-}
-
 // BatchDiscovery is an optional capability a RemoteExecutor may implement to
 // answer a whole discovery pass in a fixed number of round trips rather than
-// one per repo, worktree and tmux session. Discovery type-asserts for it and
+// one per repo and worktree. Discovery type-asserts for it and
 // falls back to the per-item calls on RemoteExecutor when it is absent.
 type BatchDiscovery interface {
 	// ScanWorktreeTree returns every worktree under the configured root,
 	// pruning stale registrations as it goes.
 	ScanWorktreeTree(ctx context.Context) ([]WorktreeRecord, error)
-	// ScanTmuxSessionDetails returns every tmux session with its resolved
-	// working directory, git root, origin URL and aiman ids.
-	ScanTmuxSessionDetails(ctx context.Context) ([]TmuxSessionRecord, error)
 }
 
 // RemoteExecutor manages remote connections and command execution.
@@ -88,16 +69,9 @@ type RemoteExecutor interface {
 	Execute(ctx context.Context, cmd string) (string, error)
 	WriteFile(ctx context.Context, path string, content []byte) error
 	ValidateDir(ctx context.Context, path string) error
-	ScanTmuxSessions(ctx context.Context) ([]string, error)
 	ScanGitRepos(ctx context.Context) ([]string, error)
 	ScanWorktrees(ctx context.Context, repoPath string) ([]string, error)
 	GetGitRoot(ctx context.Context, path string) (string, error)
-	GetTmuxSessionCWD(ctx context.Context, sessionName string) (string, error)
-	GetTmuxSessionEnv(ctx context.Context, sessionName, envVar string) (string, error)
-	CaptureTmuxPane(ctx context.Context, sessionName string) (string, error)
-	AttachTmuxSession(sessionName string) *exec.Cmd
-	StreamTmuxSession(ctx context.Context, sessionName string) (io.ReadWriteCloser, error)
-	StartTmuxSession(ctx context.Context, name string) error
 	ProvisionRemote(ctx context.Context, steps []ProvisionStep, progress chan<- ProvisionProgress) error
 	Close() error
 }
