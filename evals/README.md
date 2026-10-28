@@ -43,9 +43,17 @@ The current suite covers:
   `not reproducible` finding and spawns no reviewer.
 - `event-sequence`: the session ledger's per-session sequence is contiguous and
   every payload has a hash.
+- `child-spawn`: `session.create --for t1` links the parent's item to a child
+  branched off the parent's branch. The production `coordinator.Tracker`, fed
+  fake PR states, leaves t1 open for a PR merged into another base or still
+  open, then marks it done once the PR merges into the parent's branch with a
+  report citing a file and a test command.
+- `child-no-evidence`: a merged child with no report keeps t1 open, and two
+  tracker passes ask the parent for the report once.
+- `child-vanished`: a forgotten child clears t1's link, keeps it open, and
+  raises one notification.
 
-`restart-preserves-worktree` and `child-spawn` are added with the restart
-harness and the coordinator.
+`restart-preserves-worktree` is added with the restart harness.
 
 ## Metrics
 

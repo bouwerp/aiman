@@ -509,6 +509,9 @@ func LifecycleCases() []Case {
 		CaseHandoverChildFallback(),
 		CaseTerminateKeepsPane(),
 		CaseEventSequence(),
+		CaseChildSpawn(),
+		CaseChildNoEvidence(),
+		CaseChildVanished(),
 	}
 }
 

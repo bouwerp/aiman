@@ -46,6 +46,8 @@ type Harness struct {
 	handovers    *handoverchild.Manager
 	handoverRuns *handoverchild.Store
 
+	coord *evalCoordinator
+
 	cancel context.CancelFunc
 	done   chan struct{}
 	once   sync.Once
