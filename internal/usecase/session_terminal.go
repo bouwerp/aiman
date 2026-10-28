@@ -700,7 +700,7 @@ func PTYSessionExists(ctx context.Context, remote TerminalExecutor, id string) b
 //
 // A legacy tmux row returns its *domain.LegacyTmuxError: its agent may still
 // run in tmux, and a second one on the same conversation would fight it.
-func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Session) error {
+func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Session, opts ReviveOptions) error {
 	if s.IsLegacyTmux() {
 		return domain.NewLegacyTmuxError(*s)
 	}
@@ -708,7 +708,7 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 		return fmt.Errorf("session %s cannot be revived: no agent recorded", s.ID)
 	}
 	nativeID := NativeSessionID(ctx, remote, s)
-	command := reviveAgentCommand(s.AgentName, s.WorkingDirectory)
+	command := reviveAgentCommand(s.AgentName, s.WorkingDirectory, !opts.NoUpdateGuard)
 	if strings.Contains(command, "deepcode-launch.sh") {
 		if err := skills.InstallDeepcodeLauncher(ctx, remote); err != nil {
 			return err
@@ -726,29 +726,38 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 	}
 	WriteMuseSessionID(ctx, remote, s.WorkingDirectory, resumed, s.ID)
 	if err := CreatePTYSession(ctx, remote, PTYSpec{
-		ID:      s.ID,
-		Name:    s.TmuxSession,
-		Dir:     s.WorkingDirectory,
-		Command: resumed,
-		Env:     env,
+		ID:            s.ID,
+		Name:          s.TmuxSession,
+		Dir:           s.WorkingDirectory,
+		Command:       resumed,
+		Env:           env,
+		NoUpdateGuard: opts.NoUpdateGuard,
 	}); err != nil {
 		return err
 	}
 	return nil
 }
 
+// ReviveOptions carries the launch settings revive cannot read from the
+// session row.
+type ReviveOptions struct {
+	// NoUpdateGuard leaves the agent's own updater on: no guard flags and no
+	// guard env (agents.update.mode off, config.AgentUpdateGuards false).
+	NoUpdateGuard bool
+}
+
 // ReviveIfNeeded revives the session only when the remote runtime no longer
 // holds it. Returns whether a revival happened. An empty backend revives like
 // pty; a legacy tmux row returns its *domain.LegacyTmuxError without asking
 // the remote anything.
-func ReviveIfNeeded(ctx context.Context, remote TerminalExecutor, s *domain.Session) (bool, error) {
+func ReviveIfNeeded(ctx context.Context, remote TerminalExecutor, s *domain.Session, opts ReviveOptions) (bool, error) {
 	if s.IsLegacyTmux() {
 		return false, domain.NewLegacyTmuxError(*s)
 	}
 	if PTYSessionExists(ctx, remote, s.ID) {
 		return false, nil
 	}
-	if err := RevivePTYSession(ctx, remote, s); err != nil {
+	if err := RevivePTYSession(ctx, remote, s, opts); err != nil {
 		return false, err
 	}
 	pointAtHandover(ctx, remote, s.ID)
@@ -758,12 +767,13 @@ func ReviveIfNeeded(ctx context.Context, remote TerminalExecutor, s *domain.Sess
 // reviveAgentCommand maps a persisted AgentName ("Codex CLI") to the binary
 // plus interactive flags. WithResume must see the binary, not the display name,
 // or it produces `Codex resume <id> CLI` and the holder falls through to bash.
-func reviveAgentCommand(agentName, worktree string) string {
+// guard adds the self-update guard flags.
+func reviveAgentCommand(agentName, worktree string, guard bool) string {
 	cmd := strings.TrimSpace(agentName)
 	if known, ok := infraAgent.FindKnown(agentName); ok {
 		cmd = known.Command
 	}
-	return skills.EnsureInteractiveLaunch(cmd, worktree)
+	return skills.InteractiveLaunch(cmd, worktree, guard)
 }
 
 // NativeSessionID resolves the vendor conversation id for a session. The
@@ -772,7 +782,7 @@ func reviveAgentCommand(agentName, worktree string) string {
 // A sidecar whose transcript path belongs to a different agent is ignored so
 // revive cannot --resume a Claude id into grok (or the reverse).
 func NativeSessionID(ctx context.Context, remote TerminalExecutor, s *domain.Session) string {
-	command := reviveAgentCommand(s.AgentName, s.WorkingDirectory)
+	command := reviveAgentCommand(s.AgentName, s.WorkingDirectory, true)
 	if safe := agenthook.SafeSessionID(s.ID); safe != "" {
 		out, err := remote.Execute(ctx, fmt.Sprintf("cat \"$HOME/.aiman/native-sessions/%s\" 2>/dev/null || true", safe))
 		if err == nil {

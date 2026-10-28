@@ -176,10 +176,21 @@ func withCodexInteractiveFlags(cmd, worktree string) string {
 
 // EnsureInteractiveLaunch adds per-agent flags a detached PTY session needs
 // so the TUI stays in the foreground instead of exiting the holder, plus the
-// agent's self-update guard flags. Revive calls it without a config, so the
-// guard flags are always added here.
+// agent's self-update guard flags.
 func EnsureInteractiveLaunch(cmd, worktree string) string {
-	return WithSelfUpdateGuardFlags(ensureInteractiveFlags(cmd, worktree))
+	return InteractiveLaunch(cmd, worktree, true)
+}
+
+// InteractiveLaunch is EnsureInteractiveLaunch with the self-update guard
+// flags optional: guard is false when agents.update.mode is off. Codex keeps
+// --disable in_app_updates either way, since its update dialog exits the
+// holder.
+func InteractiveLaunch(cmd, worktree string, guard bool) string {
+	cmd = ensureInteractiveFlags(cmd, worktree)
+	if guard {
+		cmd = WithSelfUpdateGuardFlags(cmd)
+	}
+	return cmd
 }
 
 // WithSelfUpdateGuardFlags adds the launch flags that disable the agent's own

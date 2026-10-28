@@ -199,7 +199,7 @@ func TestReviveIfNeededPointsAtHandover(t *testing.T) {
 		AgentSessionID: "conv-42", WorkingDirectory: "/w", TmuxSession: "feat",
 	}
 
-	revived, err := ReviveIfNeeded(context.Background(), remote, &s)
+	revived, err := ReviveIfNeeded(context.Background(), remote, &s, ReviveOptions{})
 	if err != nil || !revived {
 		t.Fatalf("revived=%v err=%v", revived, err)
 	}
@@ -218,7 +218,7 @@ func TestReviveIfNeededNoRevivalNoPointer(t *testing.T) {
 	t.Run("live pty", func(t *testing.T) {
 		remote := &restartRemote{ptyRunning: true}
 		s := domain.Session{ID: "pid", Backend: domain.BackendPTY, AgentName: "claude", AgentSessionID: "conv-42"}
-		revived, err := ReviveIfNeeded(context.Background(), remote, &s)
+		revived, err := ReviveIfNeeded(context.Background(), remote, &s, ReviveOptions{})
 		if err != nil || revived {
 			t.Fatalf("revived=%v err=%v", revived, err)
 		}
@@ -230,7 +230,7 @@ func TestReviveIfNeededNoRevivalNoPointer(t *testing.T) {
 	t.Run("failed revive", func(t *testing.T) {
 		remote := &restartRemote{}
 		s := domain.Session{ID: "lost", Backend: domain.BackendPTY, AgentName: "claude"}
-		if _, err := ReviveIfNeeded(context.Background(), remote, &s); err == nil {
+		if _, err := ReviveIfNeeded(context.Background(), remote, &s, ReviveOptions{}); err == nil {
 			t.Fatal("revival without an agent session id must fail")
 		}
 		if commandIndex(remote.commands, "aiman rpc handover.point") >= 0 || commandIndex(remote.commands, "aiman pty create") >= 0 {

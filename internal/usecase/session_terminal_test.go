@@ -352,7 +352,7 @@ func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
 	r := &terminalRemote{output: map[string]string{
 		"aiman pty get": `{"session":{"id":"pid","status":"running"}}`,
 	}}
-	revived, err := ReviveIfNeeded(ctx, r, &domain.Session{ID: "pid", Backend: domain.BackendPTY})
+	revived, err := ReviveIfNeeded(ctx, r, &domain.Session{ID: "pid", Backend: domain.BackendPTY}, ReviveOptions{})
 	if err != nil || revived {
 		t.Fatalf("live session must not revive: %v / %v", revived, err)
 	}
@@ -364,7 +364,7 @@ func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
 	}}
 	s := domain.Session{ID: "dead", Backend: domain.BackendPTY, AgentName: "claude",
 		AgentSessionID: "conv-42", WorkingDirectory: "/w", TmuxSession: "feat"}
-	revived, err = ReviveIfNeeded(ctx, r, &s)
+	revived, err = ReviveIfNeeded(ctx, r, &s, ReviveOptions{})
 	if err != nil || !revived {
 		t.Fatalf("expected revival: %v / %v", revived, err)
 	}
@@ -387,7 +387,7 @@ func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
 	}}
 	codex := domain.Session{ID: "cx", Backend: domain.BackendPTY, AgentName: "Codex CLI",
 		AgentSessionID: "thread-9", WorkingDirectory: "/wt"}
-	if _, err := ReviveIfNeeded(ctx, r, &codex); err != nil {
+	if _, err := ReviveIfNeeded(ctx, r, &codex, ReviveOptions{}); err != nil {
 		t.Fatalf("codex revival: %v", err)
 	}
 	var got string
@@ -411,8 +411,53 @@ func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
 	// a fresh conversation
 	r = &terminalRemote{output: map[string]string{"aiman pty get": "not_found"}}
 	s2 := domain.Session{ID: "lost", Backend: domain.BackendPTY, AgentName: "claude"}
-	if _, err := ReviveIfNeeded(ctx, r, &s2); err == nil {
+	if _, err := ReviveIfNeeded(ctx, r, &s2, ReviveOptions{}); err == nil {
 		t.Fatal("revival without an agent session id must fail")
+	}
+}
+
+// TestReviveHonoursUpdateGuardSetting checks that agents.update.mode off
+// reaches revive: no guard env and no guard flags, while the default adds
+// both.
+func TestReviveHonoursUpdateGuardSetting(t *testing.T) {
+	revive := func(t *testing.T, agentName string, opts ReviveOptions) string {
+		t.Helper()
+		r := &terminalRemote{output: map[string]string{
+			"aiman pty get":   `{"error":{"code":"not_found","message":"pty session not found"}}`,
+			"native-sessions": "",
+		}}
+		s := domain.Session{ID: "g", Backend: domain.BackendPTY, AgentName: agentName,
+			AgentSessionID: "conv-1", WorkingDirectory: "/w"}
+		if _, err := ReviveIfNeeded(context.Background(), r, &s, opts); err != nil {
+			t.Fatalf("%s revive: %v", agentName, err)
+		}
+		var payload string
+		for path, body := range r.written {
+			if strings.HasPrefix(path, "/tmp/aiman-pty-g") {
+				payload += string(body)
+			}
+		}
+		if payload == "" {
+			t.Fatalf("no create payload: %v", r.written)
+		}
+		return payload
+	}
+
+	if got := revive(t, "claude", ReviveOptions{}); !strings.Contains(got, `"DISABLE_AUTOUPDATER":"1"`) {
+		t.Errorf("default claude revive lacks the guard env: %s", got)
+	}
+	if got := revive(t, "claude", ReviveOptions{NoUpdateGuard: true}); strings.Contains(got, "DISABLE_AUTOUPDATER") {
+		t.Errorf("mode off claude revive has the guard env: %s", got)
+	}
+	if got := revive(t, "codex", ReviveOptions{}); !strings.Contains(got, "check_for_update_on_startup=false") {
+		t.Errorf("default codex revive lacks the guard flag: %s", got)
+	}
+	got := revive(t, "codex", ReviveOptions{NoUpdateGuard: true})
+	if strings.Contains(got, "check_for_update_on_startup") {
+		t.Errorf("mode off codex revive has the guard flag: %s", got)
+	}
+	if !strings.Contains(got, "--disable in_app_updates") {
+		t.Errorf("codex revive must keep --disable in_app_updates, its update dialog exits the holder: %s", got)
 	}
 }
 

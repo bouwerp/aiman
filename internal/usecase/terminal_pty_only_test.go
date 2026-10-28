@@ -163,7 +163,7 @@ func TestReviveIfNeededRefusesLegacy(t *testing.T) {
 	s := legacyRow()
 	s.AgentName = "claude"
 	s.AgentSessionID = "conv-1"
-	revived, err := ReviveIfNeeded(context.Background(), r, &s)
+	revived, err := ReviveIfNeeded(context.Background(), r, &s, ReviveOptions{})
 	if revived {
 		t.Fatal("a legacy row must not revive")
 	}
@@ -178,7 +178,7 @@ func TestReviveIfNeededRevivesEmptyBackend(t *testing.T) {
 		"native-sessions": "",
 	}}
 	s := domain.Session{ID: "dead", AgentName: "claude", AgentSessionID: "conv-42", WorkingDirectory: "/w", TmuxSession: "feat"}
-	revived, err := ReviveIfNeeded(context.Background(), r, &s)
+	revived, err := ReviveIfNeeded(context.Background(), r, &s, ReviveOptions{})
 	if err != nil || !revived {
 		t.Fatalf("expected revival: %v / %v", revived, err)
 	}

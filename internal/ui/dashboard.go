@@ -4963,7 +4963,7 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			// conversations. Revive with the agent's native resume flag so
 			// attach picks the conversation back up.
 			reviveCtx, reviveCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			revived, rerr := usecase.ReviveIfNeeded(reviveCtx, mgr, &s)
+			revived, rerr := usecase.ReviveIfNeeded(reviveCtx, mgr, &s, usecase.ReviveOptions{NoUpdateGuard: !m.cfg.AgentUpdateGuards()})
 			reviveCancel()
 			if rerr != nil {
 				m.showSessionActionError(fmt.Sprintf("Cannot attach: %v (use 's' to restart the session instead)", rerr))
