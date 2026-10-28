@@ -3,9 +3,12 @@ package memoryjob
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/google/uuid"
 )
 
@@ -19,12 +22,16 @@ type Job struct {
 	Label     string    `json:"label"`
 	Source    string    `json:"source"`
 	Created   time.Time `json:"created"`
+	// Candidates are proposals made by a handover child. A job without
+	// them leaves proposing to the laptop.
+	Candidates []domain.MemoryCandidate `json:"candidates,omitempty"`
 }
 
 // Queue stores memory-candidate jobs in serve's SQLite file.
 type Queue struct{ db *sql.DB }
 
-// Open creates the job table when it is absent.
+// Open creates the job table when it is absent and adds columns that a
+// table created by an older schema lacks.
 func Open(db *sql.DB) (*Queue, error) {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS memory_jobs(
 		id TEXT PRIMARY KEY,
@@ -35,10 +42,15 @@ func Open(db *sql.DB) (*Queue, error) {
 		label TEXT,
 		source TEXT,
 		created INTEGER NOT NULL,
-		done INTEGER NOT NULL DEFAULT 0
+		done INTEGER NOT NULL DEFAULT 0,
+		candidates TEXT
 	);`)
 	if err != nil {
 		return nil, fmt.Errorf("opening memory jobs: %w", err)
+	}
+	// CREATE TABLE IF NOT EXISTS does not alter an existing table.
+	if _, err := db.Exec(`ALTER TABLE memory_jobs ADD COLUMN candidates TEXT`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return nil, fmt.Errorf("adding memory job candidates: %w", err)
 	}
 	return &Queue{db: db}, nil
 }
@@ -51,6 +63,14 @@ func (q *Queue) Enqueue(ctx context.Context, j Job) error {
 	if j.Created.IsZero() {
 		j.Created = time.Now().UTC()
 	}
+	var candidates sql.NullString
+	if len(j.Candidates) > 0 {
+		b, err := json.Marshal(j.Candidates)
+		if err != nil {
+			return fmt.Errorf("encoding memory candidates: %w", err)
+		}
+		candidates = sql.NullString{String: string(b), Valid: true}
+	}
 	tx, err := q.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -60,9 +80,9 @@ func (q *Queue) Enqueue(ctx context.Context, j Job) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO memory_jobs(id, session_id, reason, group_name, repo_name, label, source, created, done)
-		 VALUES(?,?,?,?,?,?,?,?,0)`,
-		j.ID, j.SessionID, j.Reason, j.Group, j.Repo, j.Label, j.Source, j.Created.UnixNano()); err != nil {
+		`INSERT INTO memory_jobs(id, session_id, reason, group_name, repo_name, label, source, created, done, candidates)
+		 VALUES(?,?,?,?,?,?,?,?,0,?)`,
+		j.ID, j.SessionID, j.Reason, j.Group, j.Repo, j.Label, j.Source, j.Created.UnixNano(), candidates); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -71,7 +91,7 @@ func (q *Queue) Enqueue(ctx context.Context, j Job) error {
 // Pending returns unfinished jobs oldest first.
 func (q *Queue) Pending(ctx context.Context) ([]Job, error) {
 	rows, err := q.db.QueryContext(ctx,
-		`SELECT id, session_id, reason, group_name, repo_name, label, source, created
+		`SELECT id, session_id, reason, group_name, repo_name, label, source, created, candidates
 		 FROM memory_jobs WHERE done = 0 ORDER BY created ASC, id ASC`)
 	if err != nil {
 		return nil, err
@@ -81,8 +101,14 @@ func (q *Queue) Pending(ctx context.Context) ([]Job, error) {
 	for rows.Next() {
 		var j Job
 		var created int64
-		if err := rows.Scan(&j.ID, &j.SessionID, &j.Reason, &j.Group, &j.Repo, &j.Label, &j.Source, &created); err != nil {
+		var candidates sql.NullString
+		if err := rows.Scan(&j.ID, &j.SessionID, &j.Reason, &j.Group, &j.Repo, &j.Label, &j.Source, &created, &candidates); err != nil {
 			return nil, err
+		}
+		if candidates.String != "" {
+			if err := json.Unmarshal([]byte(candidates.String), &j.Candidates); err != nil {
+				return nil, fmt.Errorf("decoding memory candidates for job %s: %w", j.ID, err)
+			}
 		}
 		j.Created = time.Unix(0, created).UTC()
 		out = append(out, j)
