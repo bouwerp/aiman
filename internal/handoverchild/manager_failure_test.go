@@ -265,3 +265,120 @@ func TestOversizedMemoriesGiveNoCandidates(t *testing.T) {
 		t.Fatalf("run %+v, want the oversized memories ignored", done)
 	}
 }
+
+// pastBound moves the fake clock beyond the rig's lookup bound.
+func (r *rig) pastBound() { r.clock.advance(10*time.Minute + lookupGrace + time.Second) }
+
+func TestFinishGivesUpOnPermanentWorkerLookup(t *testing.T) {
+	r := newRig(t)
+	id := r.start(t, "restart")
+	run := r.waitRunning(t, id)
+	r.m.HoldPointer("w1", "restart pointer")
+	r.sessions.setGetErr("w1", errLocked)
+	writeOutputs(t, run.Dir, validChildHandover(), childMemories)
+	settle()
+	if got, _ := r.store.Get(id); got.Status != StatusRunning {
+		t.Fatalf("run %+v ended before the bound", got)
+	}
+
+	r.pastBound()
+	done := r.waitCleaned(t, id)
+	settle()
+	if done.Status != StatusFailed || done.Applied || !done.PointerReleased || !strings.Contains(done.Error, "could not be read") {
+		t.Fatalf("run %+v", done)
+	}
+	if r.m.Active("w1") {
+		t.Fatal("worker still has an active run")
+	}
+	if notes := r.steer.all(); len(notes) != 1 || notes[0].text != "restart pointer" {
+		t.Fatalf("steer %+v, want the held pointer once", notes)
+	}
+	if jobs := r.jobs.all(); len(jobs) != 1 || jobs[0].ID != id || jobs[0].Source != mechanicalBody || len(jobs[0].Candidates) != 0 {
+		t.Fatalf("jobs %+v, want one mechanical job", jobs)
+	}
+	if puts := r.ctx.all(); len(puts) != 1 || puts[0].Body != mechanicalBody {
+		t.Fatalf("puts %+v", puts)
+	}
+	var finished []ledgerEvent
+	for _, ev := range r.ledger.all() {
+		if ev.kind == domain.EventHandoverChildFinished {
+			finished = append(finished, ev)
+		}
+	}
+	if len(finished) != 1 || finished[0].payload["status"] != string(StatusFailed) {
+		t.Fatalf("finished events %+v", finished)
+	}
+	if strings.Contains(r.workerFile(t), "child text") {
+		t.Fatal("child handover written to an unreadable worker")
+	}
+}
+
+func TestTransientLookupRecoversBeforeBound(t *testing.T) {
+	r := newRig(t)
+	id := r.start(t, "restart")
+	run := r.waitRunning(t, id)
+	r.m.HoldPointer("w1", "restart pointer")
+	r.sessions.setGetErr("w1", errLocked)
+	writeOutputs(t, run.Dir, validChildHandover(), childMemories)
+	r.clock.advance(10*time.Minute + lookupGrace - time.Second)
+	settle()
+	if got, _ := r.store.Get(id); got.Status != StatusRunning {
+		t.Fatalf("run %+v ended inside the bound", got)
+	}
+	r.sessions.setGetErr("w1", nil)
+	done := r.waitCleaned(t, id)
+	if done.Status != StatusComplete || !done.Applied || !done.PointerReleased {
+		t.Fatalf("run %+v", done)
+	}
+	if notes := r.steer.all(); len(notes) != 1 || notes[0].text != "restart pointer" {
+		t.Fatalf("steer %+v", notes)
+	}
+	if jobs := r.jobs.all(); len(jobs) != 1 || len(jobs[0].Candidates) != 1 {
+		t.Fatalf("jobs %+v", jobs)
+	}
+}
+
+func TestResumeReleasesPointerPastBound(t *testing.T) {
+	r := newRig(t)
+	dir := filepath.Join(r.base, "run-held")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.putRun(t, Run{ID: "run-held", SessionID: "w1", Reason: "pre_compact", Dir: dir,
+		HeldPointer: "compaction pointer", Status: StatusComplete, StartedAt: r.clock.Now(), FinishedAt: r.clock.Now()})
+	r.sessions.setGetErr("w1", errLocked)
+	r.pastBound()
+	r.m.Resume(context.Background())
+	done := r.waitCleaned(t, "run-held")
+	settle()
+	if !done.PointerReleased {
+		t.Fatalf("run %+v", done)
+	}
+	if notes := r.steer.all(); len(notes) != 1 || notes[0].text != "compaction pointer" {
+		t.Fatalf("steer %+v", notes)
+	}
+}
+
+func TestResumeEndsRunningRunPastBound(t *testing.T) {
+	r := newRig(t)
+	dir := filepath.Join(r.base, "run-live")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.putRun(t, Run{ID: "run-live", SessionID: "w1", Reason: "archive", Dir: dir, Label: "w1",
+		Mechanical: string(mechanicalRender()), HeldPointer: "pointer", Status: StatusRunning, StartedAt: r.clock.Now()})
+	r.sessions.setGetErr("w1", errLocked)
+	r.pastBound()
+	r.m.Resume(context.Background())
+	done := r.waitCleaned(t, "run-live")
+	settle()
+	if done.Status != StatusFailed || !done.PointerReleased {
+		t.Fatalf("run %+v", done)
+	}
+	if notes := r.steer.all(); len(notes) != 1 {
+		t.Fatalf("steer %+v", notes)
+	}
+	if jobs := r.jobs.all(); len(jobs) != 1 || jobs[0].ID != "run-live" || jobs[0].Source != mechanicalBody {
+		t.Fatalf("jobs %+v", jobs)
+	}
+}

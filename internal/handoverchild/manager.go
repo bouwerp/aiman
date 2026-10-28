@@ -36,6 +36,14 @@ var ErrHiddenSession = errors.New("hidden sessions get no handover child")
 // defaultPoll is how often a running child's marker and process are checked.
 const defaultPoll = 5 * time.Second
 
+// lookupGrace is how long past Timeout a run waits for the worker lookup to
+// succeed. By Timeout the child is done or stopped, so the only thing left to
+// wait for is the registry. A fixed grace, rather than a multiple of Timeout,
+// keeps a long child timeout from also stretching how long a broken registry
+// holds the worker's pointer notes; five minutes still rides out a restarting
+// or locked database across dozens of polls.
+const lookupGrace = 5 * time.Minute
+
 // cleanupWait is how long cleanup waits for a stopped child to exit before
 // leaving the run uncleaned for Resume to retry.
 const cleanupWait = 30 * time.Second
@@ -521,7 +529,8 @@ const applyTimeout = 30 * time.Second
 // complete run contributes outputs; every other status falls back to the
 // mechanical handover. A gone worker gets no file and no steer, but the note
 // and the memory job still go out. It reports false when the worker could not
-// be read or the outcome could not be saved, and the caller retries. Every
+// be read or the outcome could not be saved, and the caller retries. Past the
+// lookup bound an unreadable worker fails the run instead of retrying. Every
 // step before the save is safe to repeat.
 func (m *Manager) finish(ctx context.Context, id string, status Status, errText string) bool {
 	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), applyTimeout)
@@ -532,9 +541,18 @@ func (m *Manager) finish(ctx context.Context, id string, status Status, errText 
 		return errors.Is(err, ErrNotFound)
 	}
 	worker, present, err := m.session(actx, r.SessionID)
+	unreadable := false
 	if err != nil {
 		log.Printf("handoverchild: run %s: read worker: %v", r.ID, err)
-		return false
+		if !m.pastLookupBound(r) {
+			return false
+		}
+		// The worker may still exist, so its pointer is steered below, but
+		// no file is written and the mechanical render is the outcome.
+		unreadable = true
+		status = StatusFailed
+		errText = fmt.Sprintf("worker %s could not be read for %s past the run start: %v",
+			r.SessionID, m.d.Timeout+lookupGrace, err)
 	}
 	var out outputs
 	if status == StatusComplete {
@@ -575,7 +593,7 @@ func (m *Manager) finish(ctx context.Context, id string, status Status, errText 
 	if !ok {
 		return false
 	}
-	if !m.deliverPointer(id, present) && applied && (r.Reason == "restart" || r.Reason == "agent_switch") {
+	if !m.deliverPointer(id, present || unreadable) && applied && (r.Reason == "restart" || r.Reason == "agent_switch") {
 		m.steer(r.SessionID, HandoverRefreshedNote)
 	}
 	m.ledger(actx, r.SessionID, domain.EventHandoverChildFinished, map[string]any{
@@ -589,8 +607,16 @@ func (m *Manager) finish(ctx context.Context, id string, status Status, errText 
 	return true
 }
 
+// pastLookupBound reports whether the run started more than Timeout plus
+// lookupGrace ago, after which an unreadable worker no longer holds it.
+func (m *Manager) pastLookupBound(r Run) bool {
+	return m.d.Now().Sub(r.StartedAt) > m.d.Timeout+lookupGrace
+}
+
 // releasePointer delivers a finished run's held pointer for Resume. It
-// reports false, leaving the pointer held, when the worker could not be read.
+// reports false, leaving the pointer held, when the worker could not be read
+// and the run is inside its lookup bound. Past the bound the pointer is
+// steered without knowing whether the worker exists.
 func (m *Manager) releasePointer(ctx context.Context, id string) bool {
 	r, err := m.d.Store.Get(id)
 	if err != nil {
@@ -602,7 +628,10 @@ func (m *Manager) releasePointer(ctx context.Context, id string) bool {
 	_, present, err := m.session(ctx, r.SessionID)
 	if err != nil {
 		log.Printf("handoverchild: run %s: read worker: %v", r.ID, err)
-		return false
+		if !m.pastLookupBound(r) {
+			return false
+		}
+		present = true
 	}
 	m.deliverPointer(id, present)
 	return true
