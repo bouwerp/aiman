@@ -1,7 +1,10 @@
 package harness
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +14,8 @@ import (
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handover"
+	"github.com/bouwerp/aiman/internal/handoverchild"
+	"github.com/bouwerp/aiman/internal/server"
 )
 
 // MetricResult is one deterministic check. Score is 0 or 1.
@@ -235,6 +240,177 @@ func CaseHandoverPrecompact() Case {
 	}}
 }
 
+// childHandover is a valid handover a case writes as the child's output.
+const childHandover = `# Handover: s1
+
+## Goal
+
+Ship the retry fix.
+
+## Constraints & Preferences
+
+Keep the public API.
+
+## Progress
+
+Retry loop written; tests pending.
+
+## Key Decisions
+
+Back off exponentially, capped at 30s.
+
+## Next Steps
+
+Run go test ./... and open the PR.
+
+## Critical Context
+
+The flaky test is TestRetryBackoff.
+
+## Evidence
+
+None yet.
+
+## Verification
+
+go test ./... must pass.
+`
+
+// childMemories holds two valid candidates and one the filter drops.
+const childMemories = `{"candidates":[
+  {"type":"decision","title":"Exponential backoff","abstract":"Retries back off.","body":"Capped at 30s."},
+  {"type":"pitfall","title":"Flaky TestRetryBackoff","abstract":"Timing-sensitive.","body":"Use a fake clock."},
+  {"type":"decision","title":"  "}
+]}`
+
+// workingSession keeps steering notes queued, so a case can read them.
+func workingSession(h *Harness) {
+	h.RegisterSession(domain.Session{
+		ID: "s1", AgentName: "claude", HookState: domain.AgentStateWorking, HookStateAt: time.Now().UTC(),
+	})
+}
+
+// startPreCompactChild writes a pre_compact handover, which starts a child,
+// then asks for the compaction pointer. It returns the run id and the
+// mechanical file; an empty run id means the metrics hold the failure.
+func startPreCompactChild(h *Harness) (run string, mechanical []byte, metrics []MetricResult) {
+	resp, err := h.Call("handover.write", map[string]any{"session": "s1", "reason": "pre_compact"})
+	if err != nil {
+		return "", nil, []MetricResult{score("handover_write", false, err.Error())}
+	}
+	m, _ := resp.Result.(map[string]any)
+	run, _ = m["child"].(string)
+	path, _ := m["path"].(string)
+	mechanical, rerr := os.ReadFile(path)
+	if run == "" || rerr != nil {
+		return "", nil, []MetricResult{score("handover_child_started", false, fmt.Sprintf("child %q, read %v", run, rerr))}
+	}
+	point, err := h.Call("handover.point", map[string]any{"session": "s1", "reason": "pre_compact"})
+	accepted := false
+	if err == nil {
+		pm, _ := point.Result.(map[string]any)
+		accepted, _ = pm["queued"].(bool)
+	}
+	time.Sleep(100 * time.Millisecond)
+	held := accepted && h.HandoverActive("s1") && len(h.SteerPending("s1")) == 0
+	return run, mechanical, []MetricResult{
+		score("handover_child_started", true, ""),
+		score("pointer_held_while_running", held, "pointer was not held while the child ran"),
+	}
+}
+
+func pointerQueued(h *Harness) bool {
+	return waitUntil(5*time.Second, func() bool {
+		for _, n := range h.SteerPending("s1") {
+			if n.Text == server.HandoverCompactionNote {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func memoryJobCandidates(h *Harness) (jobs, candidates int, err error) {
+	list, err := h.MemoryJobs("s1")
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, j := range list {
+		candidates += len(j.Candidates)
+	}
+	return len(list), candidates, nil
+}
+
+func childFinished(h *Harness, status handoverchild.Status) bool {
+	for _, ev := range h.Events("s1") {
+		if ev.Kind != domain.EventHandoverChildFinished {
+			continue
+		}
+		var payload struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(ev.Payload, &payload) == nil && payload.Status == string(status) {
+			return true
+		}
+	}
+	return false
+}
+
+// CaseHandoverChild runs a pre_compact handover child to completion: the
+// pointer is held while it runs, its handover replaces the mechanical file,
+// its candidates reach the memory job, and the pointer is then queued.
+func CaseHandoverChild() Case {
+	return Case{Name: "handover-child", Setup: func(h *Harness) error {
+		workingSession(h)
+		return h.EnableHandovers(30 * time.Second)
+	}, Assert: func(h *Harness) []MetricResult {
+		run, _, metrics := startPreCompactChild(h)
+		if run == "" {
+			return metrics
+		}
+		if err := h.WriteHandoverOutputs(run, childHandover, childMemories); err != nil {
+			return append(metrics, score("child_outputs_written", false, err.Error()))
+		}
+		r, done := h.WaitHandoverRun(run)
+		got, rerr := os.ReadFile(filepath.Join(h.Dir, "sessions", "s1", domain.AimanHandoverFileName))
+		applied := rerr == nil && string(got) == domain.AimanScaffoldHeader+childHandover
+		jobs, candidates, jerr := memoryJobCandidates(h)
+		return append(metrics,
+			score("child_run_complete", done && r.Status == handoverchild.StatusComplete, fmt.Sprintf("run %q cleaned %v", r.Status, r.CleanedUp)),
+			score("child_handover_applied", applied, "worker handover is not the child's"),
+			score("memory_job_has_candidates", jerr == nil && jobs == 1 && candidates == 2,
+				fmt.Sprintf("%d jobs, %d candidates, %v", jobs, candidates, jerr)),
+			score("compaction_pointer_queued", pointerQueued(h), "pointer was not released"),
+			score("child_finished_recorded", childFinished(h, handoverchild.StatusComplete), "handover.child_finished missing"),
+		)
+	}}
+}
+
+// CaseHandoverChildFallback lets a child time out: the mechanical file stays,
+// the pointer is released, and the memory job carries no candidates.
+func CaseHandoverChildFallback() Case {
+	return Case{Name: "handover-child-fallback", Setup: func(h *Harness) error {
+		workingSession(h)
+		return h.EnableHandovers(time.Second)
+	}, Assert: func(h *Harness) []MetricResult {
+		run, mechanical, metrics := startPreCompactChild(h)
+		if run == "" {
+			return metrics
+		}
+		r, done := h.WaitHandoverRun(run)
+		got, rerr := os.ReadFile(filepath.Join(h.Dir, "sessions", "s1", domain.AimanHandoverFileName))
+		jobs, candidates, jerr := memoryJobCandidates(h)
+		return append(metrics,
+			score("child_run_timed_out", done && r.Status == handoverchild.StatusTimedOut, fmt.Sprintf("run %q cleaned %v", r.Status, r.CleanedUp)),
+			score("mechanical_handover_kept", rerr == nil && bytes.Equal(got, mechanical), "worker handover changed"),
+			score("memory_job_without_candidates", jerr == nil && jobs == 1 && candidates == 0,
+				fmt.Sprintf("%d jobs, %d candidates, %v", jobs, candidates, jerr)),
+			score("compaction_pointer_queued", pointerQueued(h), "pointer was not released"),
+			score("child_finished_recorded", childFinished(h, handoverchild.StatusTimedOut), "handover.child_finished missing"),
+		)
+	}}
+}
+
 // CaseTerminateKeepsPane stops the terminal but leaves the row and the last
 // capture in place; archive or forget removes the row.
 func CaseTerminateKeepsPane() Case {
@@ -331,6 +507,8 @@ func LifecycleCases() []Case {
 		CaseTodoUserEditSteers(),
 		CaseHandoverRestart(),
 		CaseHandoverPrecompact(),
+		CaseHandoverChild(),
+		CaseHandoverChildFallback(),
 		CaseTerminateKeepsPane(),
 		CaseEventSequence(),
 	}

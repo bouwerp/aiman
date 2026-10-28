@@ -19,6 +19,14 @@ The current suite covers:
   `todo.changed` is recorded.
 - `handover-restart` / `handover-precompact`: the fixed handover skeleton and
   the restart or compaction pointer.
+- `handover-child`: a `pre_compact` handover starts a handover child (played
+  by the case, which writes `handover.md`, `memories.json` and `done` into the
+  run's scratch dir). The compaction pointer is held while the child runs;
+  then the worker's `.aiman_handover.md` is the child's, the memory job carries
+  its candidates, and the pointer is queued.
+- `handover-child-fallback`: a child that writes nothing times out. The
+  mechanical handover stays, the memory job has no candidates, and the held
+  pointer is released.
 - `terminate-keeps-pane`: the terminal is stopped, but the row and the last
   capture survive until archive or forget.
 - `usage-context`: a two-turn Claude transcript reports the last turn's

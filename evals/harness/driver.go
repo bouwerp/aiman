@@ -15,6 +15,7 @@ import (
 	"github.com/bouwerp/aiman/evals/fakeagent"
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/todo"
@@ -37,9 +38,13 @@ type Harness struct {
 	verifier *verify.Manager
 	reviews  *verify.Store
 	terminal *evalTerminal
-	cancel   context.CancelFunc
-	done     chan struct{}
-	once     sync.Once
+
+	handovers    *handoverchild.Manager
+	handoverRuns *handoverchild.Store
+
+	cancel context.CancelFunc
+	done   chan struct{}
+	once   sync.Once
 }
 
 // New starts serve on a short temp socket. pty is nil, so every session must
@@ -81,6 +86,7 @@ func (h *Harness) Close() {
 		if h.verifier != nil {
 			h.verifier.Close()
 		}
+		h.closeHandovers()
 		h.cancel()
 		select {
 		case <-h.done:

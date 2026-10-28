@@ -17,3 +17,17 @@ func TestLifecycleCases(t *testing.T) {
 		})
 	}
 }
+
+func TestHandoverChild(t *testing.T) {
+	res := CaseHandoverChild().Run(t)
+	if !res.Passed {
+		t.Fatalf("handover-child failed: %+v", res.Metrics)
+	}
+}
+
+func TestHandoverChildFallback(t *testing.T) {
+	res := CaseHandoverChildFallback().Run(t)
+	if !res.Passed {
+		t.Fatalf("handover-child-fallback failed: %+v", res.Metrics)
+	}
+}
