@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 )
 
@@ -97,5 +99,74 @@ func TestMenuShowsProposalCount(t *testing.T) {
 	}
 	if got := memoryMenuDesc(3); got != "3 proposed notes to review" {
 		t.Fatalf("three = %q", got)
+	}
+}
+
+type fakeMemoryIntel struct {
+	domain.IntelligenceProvider
+	calls int
+}
+
+func (f *fakeMemoryIntel) ProposeMemories(context.Context, string) ([]domain.MemoryCandidate, error) {
+	f.calls++
+	return []domain.MemoryCandidate{{Type: domain.ContextTypeFact, Title: "From intel"}}, nil
+}
+
+func memoryCfg(aiOn bool) *config.Config {
+	return &config.Config{AI: config.AIConfig{Enabled: aiOn}}
+}
+
+func TestMemoryJobWithCandidatesShowsWithoutIntel(t *testing.T) {
+	intel := &fakeMemoryIntel{}
+	m := NewMemoryCandidatesModel(memoryCfg(true), intel)
+	job := memoryjob.Job{ID: "j1", Label: "PROJ-1", Candidates: []domain.MemoryCandidate{
+		{Type: domain.ContextTypeDecision, Title: "Child", Abstract: "a", Body: "b"},
+	}}
+	m, cmd := m.Update(memoryJobsMsg{host: "h1", jobs: []memoryjob.Job{job}})
+	if cmd != nil {
+		_ = cmd()
+	}
+	if got := m.Pending(); got != 1 {
+		t.Fatalf("pending = %d, want 1", got)
+	}
+	if intel.calls != 0 {
+		t.Fatalf("intel calls = %d, want 0", intel.calls)
+	}
+	if m.busy {
+		t.Fatal("busy after a job that needed no proposing")
+	}
+}
+
+func TestMemoryJobWithoutCandidatesAIOffMarksDone(t *testing.T) {
+	intel := &fakeMemoryIntel{}
+	m := NewMemoryCandidatesModel(memoryCfg(false), intel)
+	m, cmd := m.Update(memoryJobsMsg{host: "h1", jobs: []memoryjob.Job{{ID: "j1"}}})
+	if cmd == nil {
+		t.Fatal("no command for a job without candidates")
+	}
+	done, ok := cmd().(memoryJobDoneMsg)
+	if !ok || done.job != "j1" {
+		t.Fatalf("command returned %#v, want memoryJobDoneMsg for j1", done)
+	}
+	if intel.calls != 0 {
+		t.Fatalf("intel calls = %d, want 0", intel.calls)
+	}
+	if m.busy {
+		t.Fatal("busy with AI off")
+	}
+}
+
+func TestMemoryJobWithoutCandidatesAIOnCallsIntel(t *testing.T) {
+	intel := &fakeMemoryIntel{}
+	m := NewMemoryCandidatesModel(memoryCfg(true), intel)
+	_, cmd := m.Update(memoryJobsMsg{host: "h1", jobs: []memoryjob.Job{{ID: "j1", Source: "handover"}}})
+	if cmd == nil {
+		t.Fatal("no command for a job without candidates")
+	}
+	if _, ok := cmd().(memoryProposalMsg); !ok {
+		t.Fatal("command did not propose memories")
+	}
+	if intel.calls != 1 {
+		t.Fatalf("intel calls = %d, want 1", intel.calls)
 	}
 }

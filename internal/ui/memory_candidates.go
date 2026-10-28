@@ -97,14 +97,24 @@ func (m MemoryCandidatesModel) Update(msg tea.Msg) (MemoryCandidatesModel, tea.C
 			return m, nil
 		}
 		var cmds []tea.Cmd
+		proposing := false
 		for _, j := range msg.jobs {
 			if m.proposed[j.ID] {
 				continue
 			}
 			m.proposed[j.ID] = true
-			cmds = append(cmds, proposeMemoriesCmd(m.intel, msg.host, j))
+			switch {
+			case len(j.Candidates) > 0:
+				m.addProposal(msg.host, j, j.Candidates)
+			case m.aiEnabled():
+				proposing = true
+				cmds = append(cmds, proposeMemoriesCmd(m.intel, msg.host, j))
+			default:
+				// Nothing can propose for this job; clear it from the queue.
+				cmds = append(cmds, markMemoryJobDoneCmd(m.cfg, msg.host, j.ID))
+			}
 		}
-		if len(cmds) > 0 {
+		if proposing {
 			m.busy = true
 		}
 		return m, tea.Batch(cmds...)
@@ -120,10 +130,7 @@ func (m MemoryCandidatesModel) Update(msg tea.Msg) (MemoryCandidatesModel, tea.C
 			}
 			return m, nil
 		}
-		m.proposals = append(m.proposals, memoryProposal{
-			host: msg.host, job: msg.job, candidates: msg.candidates,
-			decided: make([]bool, len(msg.candidates)),
-		})
+		m.addProposal(msg.host, msg.job, msg.candidates)
 		return m, nil
 	case memorySavedMsg:
 		if msg.err != nil {
@@ -146,6 +153,19 @@ func (m MemoryCandidatesModel) Update(msg tea.Msg) (MemoryCandidatesModel, tea.C
 		}
 		return m, nil
 	}
+}
+
+func (m *MemoryCandidatesModel) addProposal(host string, j memoryjob.Job, candidates []domain.MemoryCandidate) {
+	m.proposals = append(m.proposals, memoryProposal{
+		host: host, job: j, candidates: candidates,
+		decided: make([]bool, len(candidates)),
+	})
+}
+
+// aiEnabled reports whether the laptop model may propose for jobs that
+// arrive without candidates.
+func (m MemoryCandidatesModel) aiEnabled() bool {
+	return m.cfg != nil && m.cfg.AI.Enabled
 }
 
 func (m MemoryCandidatesModel) updateList(msg tea.KeyPressMsg) (MemoryCandidatesModel, tea.Cmd) {

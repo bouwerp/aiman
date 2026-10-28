@@ -67,12 +67,12 @@ func prepareRestartSession(ctx context.Context, remote domain.RemoteExecutor, en
 }
 
 // restartKit pushes the user checklists and rebuilds the checklist half of
-// the kit. Only repository sessions get one; a reviewer keeps Repo and Role,
-// which pick its launch flags.
+// the kit. Only repository sessions get one; a hidden helper (reviewer,
+// handover) keeps Repo and Role, which pick its launch flags.
 func restartKit(ctx context.Context, remote domain.RemoteExecutor, p restartPrep) (domain.QualityKit, []string) {
 	s := p.Session
 	kit := domain.QualityKit{Repo: s.RepoName, Role: s.Role}
-	if s.RepoName == "" || s.RepoName == "No Repository" || s.Role == domain.SessionRoleReviewer {
+	if s.RepoName == "" || s.RepoName == "No Repository" || s.Role.Hidden() {
 		return kit, nil
 	}
 	var notes []string

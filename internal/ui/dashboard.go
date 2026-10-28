@@ -425,7 +425,9 @@ type Model struct {
 	promptSent      map[string]time.Time
 	// PR watch state from ci.get and ci.watch. ciUnsupported is keyed by the
 	// resolved remote host, like todoUnsupported.
-	ciClient      ciClient
+	ciClient ciClient
+	// handoverDial reaches serve for the forget handover at teardown.
+	handoverDial  func(config.Remote) usecase.TerminalExecutor
 	ciStatus      map[string]usecase.CIStatus
 	ciInFlight    map[string]bool
 	ciToggling    map[string]bool // a ci.watch is pending; w waits for it
@@ -722,7 +724,7 @@ func (m *Model) applyRemoteFilter() {
 	var flat []item
 	var daemonItems []list.Item
 	for _, s := range m.allSessions {
-		if s.Role == domain.SessionRoleReviewer {
+		if s.Role.Hidden() {
 			continue
 		}
 		if s.TmuxSession == "aiman-trigger" || s.TmuxSession == "aiman-serve" || s.TmuxSession == "aiman-gateway" {
@@ -974,6 +976,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		todoInFlight:        make(map[string]bool),
 		todoUnsupported:     make(map[string]bool),
 		ciClient:            sshCIClient{dial: dialRemoteSSH},
+		handoverDial:        dialRemoteSSH,
 		ciStatus:            make(map[string]usecase.CIStatus),
 		ciInFlight:          make(map[string]bool),
 		ciUnsupported:       make(map[string]bool),
@@ -2427,16 +2430,21 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 // than an interpretation of it. The archive flow is still the way to get a
 // summarised snapshot.
 //
+// Before the snapshot it asks serve for the forget handover, while the
+// worktree still exists; serve's own forget handover comes after the worktree
+// is removed and cannot write the file.
+//
 // Every failure here is a skip, never an error: a session being torn down is
 // one the user has already finished with, and refusing to remove it because its
 // pane could not be read would be the worse outcome.
 func (m *Model) terminateSaveContext(ctx context.Context, s domain.Session) error {
-	if m.snapshotManager == nil {
-		return skipReason("no context saved (snapshots unavailable)")
-	}
 	remote, ok := resolveRemote(m.cfg, s)
 	if !ok {
 		return skipReason("no context saved (no remote configured)")
+	}
+	m.writeForgetHandover(ctx, remote, s)
+	if m.snapshotManager == nil {
+		return skipReason("no context saved (snapshots unavailable)")
 	}
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 	captureCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -2456,6 +2464,23 @@ func (m *Model) terminateSaveContext(ctx context.Context, s domain.Session) erro
 	}
 	m.log("Saved context snapshot %s for session %s", snap.ID, s.ID)
 	return nil
+}
+
+// writeForgetHandover is best effort and capped at 20s: a failure is logged
+// and teardown carries on.
+func (m *Model) writeForgetHandover(ctx context.Context, remote config.Remote, s domain.Session) {
+	if s.ID == "" || domain.IsEphemeralSessionID(s.ID) {
+		return
+	}
+	dial := m.handoverDial
+	if dial == nil {
+		dial = dialRemoteSSH
+	}
+	writeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if _, err := usecase.WriteHandoverOnRemote(writeCtx, dial(remote), s.ID, "forget"); err != nil {
+		m.log("Skipping forget handover for %s: %v", s.ID, err)
+	}
 }
 
 // terminateStopSync stops the mutagen session for s, trying every name it might have been
