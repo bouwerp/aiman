@@ -13,6 +13,9 @@ type LaunchCatalog struct {
 	// unknown flags. Deep Code reads DEEPCODE_MODEL and DEEPCODE_REASONING_EFFORT.
 	ModelEnv  string
 	EffortEnv string
+	// Cheap is the low-cost model for helper sessions such as the handover
+	// child. Empty means the CLI's default model.
+	Cheap string
 }
 
 // SupportsEffort reports whether the CLI exposes a reasoning-effort control.
@@ -66,6 +69,7 @@ var claudeCatalog = LaunchCatalog{
 	},
 	Efforts:    []string{"low", "medium", "high", "xhigh", "max"},
 	EffortFlag: "--effort",
+	Cheap:      "haiku",
 }
 
 // grok models and grok --help --reasoning-effort (alias --effort).
@@ -86,6 +90,7 @@ var agyCatalog = LaunchCatalog{
 	},
 	Efforts:    []string{"low", "medium", "high"},
 	EffortFlag: "--effort",
+	Cheap:      "gemini-3.7-flash-low",
 }
 
 // Codex --model plus -c model_reasoning_effort (docs: minimal|low|medium|high|xhigh).
@@ -96,6 +101,7 @@ var codexCatalog = LaunchCatalog{
 	},
 	Efforts:      []string{"minimal", "low", "medium", "high", "xhigh"},
 	EffortConfig: "model_reasoning_effort",
+	Cheap:        "gpt-5.4-mini",
 }
 
 // kilo models: provider/model IDs from `kilo models`. --variant is reasoning effort.
@@ -127,6 +133,7 @@ var copilotCatalog = LaunchCatalog{
 	},
 	Efforts:    []string{"none", "low", "medium", "high", "xhigh", "max"},
 	EffortFlag: "--effort",
+	Cheap:      "gpt-5-mini",
 }
 
 // cursor-agent --list-models. Effort is encoded in the model id, not a flag.

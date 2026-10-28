@@ -2,8 +2,11 @@ package config
 
 import "strings"
 
-// roleReviewer matches domain.SessionRoleReviewer, the verifier session role.
-const roleReviewer = "reviewer"
+// Role names match domain.SessionRoleReviewer and domain.SessionRoleHandover.
+const (
+	roleReviewer = "reviewer"
+	roleHandover = "handover"
+)
 
 // RoleOverride picks the agent, model and effort for sessions with a role.
 // Empty fields leave the usual choice in place.
@@ -13,16 +16,21 @@ type RoleOverride struct {
 	Effort string `yaml:"effort,omitempty"`
 }
 
-// RolesConfig holds per-role overrides. Only the verifier has one; child
+// RolesConfig holds per-role overrides for aiman's helper sessions. Child
 // agents come from agents.preferred.
 type RolesConfig struct {
 	Verifier RoleOverride `yaml:"verifier,omitempty"`
+	Handover RoleOverride `yaml:"handover,omitempty"`
 }
 
-// For returns the override for a session role. Only "reviewer" has one.
+// For returns the override for a session role: "reviewer" or "handover".
+// Other roles have none.
 func (r RolesConfig) For(role string) RoleOverride {
-	if role == roleReviewer {
+	switch role {
+	case roleReviewer:
 		return r.Verifier
+	case roleHandover:
+		return r.Handover
 	}
 	return RoleOverride{}
 }
@@ -36,8 +44,7 @@ func (c *Config) RoleAgent(role string) string {
 }
 
 // ResolveLaunchDefaults layers model and effort for one launch: agent_defaults,
-// then the repo's agent_overrides, then the verifier role. The role applies
-// only to a reviewer and only when it names no agent or the one launched.
+// then the repo's agent_overrides, then the role override (see RoleOverrideFor).
 func (c *Config) ResolveLaunchDefaults(name, command, repo, role string) AgentDefaults {
 	if c == nil {
 		return AgentDefaults{}
@@ -46,15 +53,23 @@ func (c *Config) ResolveLaunchDefaults(name, command, repo, role string) AgentDe
 	if r, ok := LookupRepo(c.Repos, repo); ok {
 		d = overlayDefaults(d, matchAgentDefaults(r.AgentOverrides, name, command))
 	}
-	if role == roleReviewer {
-		ro := c.Roles.Verifier
-		agent := strings.ToLower(strings.TrimSpace(ro.Agent))
-		fields := strings.Fields(strings.ToLower(command))
-		if agent == "" || (len(fields) > 0 && fields[0] == agent) {
-			d = overlayDefaults(d, AgentDefaults{Model: ro.Model, Effort: ro.Effort})
-		}
+	ro := c.RoleOverrideFor(role, command)
+	return overlayDefaults(d, AgentDefaults{Model: ro.Model, Effort: ro.Effort})
+}
+
+// RoleOverrideFor returns the role's override when it applies to this launch:
+// the role names no agent, or names the command's binary. Otherwise it is zero.
+func (c *Config) RoleOverrideFor(role, command string) RoleOverride {
+	if c == nil {
+		return RoleOverride{}
 	}
-	return d
+	ro := c.Roles.For(role)
+	agent := strings.ToLower(strings.TrimSpace(ro.Agent))
+	fields := strings.Fields(strings.ToLower(command))
+	if agent == "" || (len(fields) > 0 && fields[0] == agent) {
+		return ro
+	}
+	return RoleOverride{}
 }
 
 func overlayDefaults(base, top AgentDefaults) AgentDefaults {
@@ -73,19 +88,30 @@ func (c *Config) ReviewerCandidates() []string {
 	if c == nil {
 		return nil
 	}
+	return uniqueAgents(append([]string{c.Roles.Verifier.Agent}, c.Verify.Agents...))
+}
+
+// HandoverCandidates lists handover child agents in order: roles.handover.agent,
+// then agents.preferred, then the worker's own agent, without duplicates.
+func (c *Config) HandoverCandidates(workerAgent string) []string {
+	if c == nil {
+		return uniqueAgents([]string{workerAgent})
+	}
+	names := append([]string{c.Roles.Handover.Agent}, c.Agents.Preferred...)
+	return uniqueAgents(append(names, workerAgent))
+}
+
+// uniqueAgents trims each name and drops blanks and repeats, keeping order.
+func uniqueAgents(names []string) []string {
 	var out []string
 	seen := map[string]bool{}
-	add := func(a string) {
+	for _, a := range names {
 		a = strings.TrimSpace(a)
 		if a == "" || seen[a] {
-			return
+			continue
 		}
 		seen[a] = true
 		out = append(out, a)
-	}
-	add(c.Roles.Verifier.Agent)
-	for _, a := range c.Verify.Agents {
-		add(a)
 	}
 	return out
 }

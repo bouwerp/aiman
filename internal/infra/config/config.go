@@ -34,6 +34,8 @@ type Config struct {
 	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
 	// Verify configures aiman verify reviewer sessions.
 	Verify VerifyConfig `yaml:"verify,omitempty"`
+	// Handover configures the handover child agent.
+	Handover HandoverConfig `yaml:"handover,omitempty"`
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
@@ -64,6 +66,8 @@ type ServeConfig struct {
 	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
 	// Verify configures aiman verify reviewer sessions.
 	Verify VerifyConfig `yaml:"verify,omitempty"`
+	// Handover configures the handover child agent.
+	Handover HandoverConfig `yaml:"handover,omitempty"`
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
@@ -98,6 +102,32 @@ type VerifyConfig struct {
 	Reproduce *bool `yaml:"reproduce,omitempty"`
 }
 
+// DefaultHandoverTimeout bounds one handover child run when handover.timeout
+// is unset.
+const DefaultHandoverTimeout = 10 * time.Minute
+
+// HandoverConfig configures the child agent that rewrites a session's
+// handover and proposes memory candidates.
+type HandoverConfig struct {
+	// Child turns the handover child on or off. Unset means on.
+	Child *bool `yaml:"child,omitempty"`
+	// Timeout bounds one child run; zero means DefaultHandoverTimeout.
+	Timeout time.Duration `yaml:"timeout,omitempty"`
+}
+
+// ChildEnabled reports whether a handover trigger starts a child agent.
+func (h HandoverConfig) ChildEnabled() bool {
+	return h.Child == nil || *h.Child
+}
+
+// ChildTimeout is the configured run limit, or DefaultHandoverTimeout.
+func (h HandoverConfig) ChildTimeout() time.Duration {
+	if h.Timeout > 0 {
+		return h.Timeout
+	}
+	return DefaultHandoverTimeout
+}
+
 // MarshalServeConfig serializes the settings a remote Agent API needs.
 func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 	if c == nil {
@@ -113,6 +143,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Usage:         c.Usage,
 		Notifications: c.NotificationsFor(host),
 		Verify:        c.Verify,
+		Handover:      c.Handover,
 		Repos:         c.Repos,
 		Roles:         c.Roles,
 	})

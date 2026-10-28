@@ -105,6 +105,16 @@ type SessionRole string
 // SessionRoleReviewer is a hidden verifier session reviewing a worker's tree.
 const SessionRoleReviewer SessionRole = "reviewer"
 
+// SessionRoleHandover is a hidden child session that rewrites a worker's
+// handover from its transcript and proposes memory candidates.
+const SessionRoleHandover SessionRole = "handover"
+
+// Hidden reports whether sessions with this role are aiman's own helpers
+// (reviewer, handover) rather than work the user steers.
+func (r SessionRole) Hidden() bool {
+	return r == SessionRoleReviewer || r == SessionRoleHandover
+}
+
 // PR-watch overrides stored in Session.WatchPR.
 const (
 	WatchPROn  = "on"

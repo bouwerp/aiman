@@ -21,6 +21,10 @@ const (
 	EventVerifyRecorded  EventKind = "verify.recorded"
 	EventUsageBudget     EventKind = "usage.budget"
 	EventSessionEnded    EventKind = "session.ended"
+	// EventHandoverChildStarted and EventHandoverChildFinished bracket one
+	// handover child run on the worker's ledger.
+	EventHandoverChildStarted  EventKind = "handover.child_started"
+	EventHandoverChildFinished EventKind = "handover.child_finished"
 	// EventPaneUncertain records a pane the rules could not classify with high
 	// confidence. It measures how often a model tier would be needed.
 	EventPaneUncertain EventKind = "pane.uncertain"

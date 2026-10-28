@@ -14,13 +14,20 @@ import (
 
 // applyConfiguredLaunchFlags adds the model and effort resolved for this
 // agent in this repo and role: agent_defaults, then the repo's
-// agent_overrides, then the verifier role.
+// agent_overrides, then the role override. A handover child with no role
+// model runs the agent's Cheap model instead of the first two.
 func applyConfiguredLaunchFlags(cmd string, ag domain.Agent, cfg *config.Config, repo, role string) string {
 	if cfg == nil {
 		return cmd
 	}
+	base := agentBaseCommand(ag.Command)
 	d := cfg.ResolveLaunchDefaults(ag.Name, ag.Command, repo, role)
-	return applyLaunchDefaults(cmd, agentBaseCommand(ag.Command), d)
+	if role == string(domain.SessionRoleHandover) && strings.TrimSpace(cfg.RoleOverrideFor(role, ag.Command).Model) == "" {
+		if cheap := agent.LaunchCatalogFor(base).Cheap; cheap != "" {
+			d.Model = cheap
+		}
+	}
+	return applyLaunchDefaults(cmd, base, d)
 }
 
 func applyLaunchDefaults(cmd, base string, d config.AgentDefaults) string {

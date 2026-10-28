@@ -100,6 +100,32 @@ func TestCommandBase(t *testing.T) {
 	}
 }
 
+func TestLaunchCatalogCheap(t *testing.T) {
+	cases := map[string]string{
+		"claude":       "haiku",
+		"claude-code":  "haiku",
+		"codex":        "gpt-5.4-mini",
+		"copilot":      "gpt-5-mini",
+		"agy":          "gemini-3.7-flash-low",
+		"grok":         "",
+		"kilo":         "",
+		"cursor-agent": "",
+		"pi":           "",
+		"muse":         "",
+		"deepcode":     "",
+		"unknown":      "",
+	}
+	for base, want := range cases {
+		cat := LaunchCatalogFor(base)
+		if cat.Cheap != want {
+			t.Errorf("%s Cheap = %q, want %q", base, cat.Cheap, want)
+		}
+		if want != "" && !contains(cat.Models, want) {
+			t.Errorf("%s Cheap %q is not in Models", base, want)
+		}
+	}
+}
+
 func contains(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {
