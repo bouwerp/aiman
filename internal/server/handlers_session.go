@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/pane"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
@@ -32,10 +33,8 @@ type SessionInfo struct {
 	BaseBranch  string `json:"base_branch,omitempty"`
 	RepoName    string `json:"repo_name,omitempty"`
 	TmuxSession string `json:"tmux_session,omitempty"`
-	// Backend is the terminal runtime hosting the session ("pty" or "tmux").
-	// Callers route pane capture, prompt delivery and teardown on it, and an
-	// absent value reads as tmux — so leaving it off the wire pointed every
-	// client at tmux for sessions that live in the PTY runtime.
+	// Backend is "pty", or "tmux" for a legacy row aiman no longer runs.
+	// Clients use it to show and refuse legacy rows.
 	Backend          string `json:"backend,omitempty"`
 	WorktreePath     string `json:"worktree_path,omitempty"`
 	WorkingDirectory string `json:"working_directory,omitempty"`
@@ -118,40 +117,30 @@ func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.Agen
 	if st, ok := agenthook.ResolveHookState(live, time.Now()); ok {
 		return st, pane.High
 	}
-	if s.remote == nil || live.TmuxSession == "" {
+	if s.pty == nil || live.IsLegacyTmux() {
 		return domain.AgentStateUnknown, pane.Low
 	}
-	if live.IsPTY() {
-		// The PTY runtime lives in this process; skip the remote hop.
-		// pane.Classify was written against rendered tmux output, so it needs a
-		// screen here too, not the raw spool.
-		screen, cerr := s.pty.CaptureScreen(live.ID)
-		if cerr != nil {
-			return domain.AgentStateUnknown, pane.Low
-		}
-		obs := pane.Observation{Pane: screen, SinceOutput: -1, SinceTitleChange: -1}
-		// The holder publishes when output last arrived and when the agent last
-		// changed its terminal title. Both are certain, where the screen is
-		// evidence to be interpreted.
-		if info, ierr := s.pty.Get(live.ID); ierr == nil {
-			now := time.Now()
-			if !info.LastOutput.IsZero() && !now.Before(info.LastOutput) {
-				obs.SinceOutput = now.Sub(info.LastOutput)
-			}
-			if !info.TitleChanged.IsZero() && !now.Before(info.TitleChanged) {
-				obs.SinceTitleChange = now.Sub(info.TitleChanged)
-			}
-		}
-		r := pane.Classify(obs)
-		s.recordUncertainPane(ctx, live, screen, r)
-		return r.State, r.Confidence
-	}
-	text, err := s.remote.CaptureTmuxPane(ctx, live.TmuxSession)
-	if err != nil {
+	// The PTY runtime lives in this process. pane.Classify reads a rendered
+	// screen, not the raw spool.
+	screen, cerr := s.pty.CaptureScreen(live.ID)
+	if cerr != nil {
 		return domain.AgentStateUnknown, pane.Low
 	}
-	r := pane.Classify(pane.Observation{Pane: text})
-	s.recordUncertainPane(ctx, live, text, r)
+	obs := pane.Observation{Pane: screen, SinceOutput: -1, SinceTitleChange: -1}
+	// The holder publishes when output last arrived and when the agent last
+	// changed its terminal title. Both are certain, where the screen is
+	// evidence to be interpreted.
+	if info, ierr := s.pty.Get(live.ID); ierr == nil {
+		now := time.Now()
+		if !info.LastOutput.IsZero() && !now.Before(info.LastOutput) {
+			obs.SinceOutput = now.Sub(info.LastOutput)
+		}
+		if !info.TitleChanged.IsZero() && !now.Before(info.TitleChanged) {
+			obs.SinceTitleChange = now.Sub(info.TitleChanged)
+		}
+	}
+	r := pane.Classify(obs)
+	s.recordUncertainPane(ctx, live, screen, r)
 	return r.State, r.Confidence
 }
 
@@ -188,64 +177,40 @@ func parseUntil(v string) domain.AgentState {
 // serve's own database is not a usable index of them: sessions are created by
 // the laptop TUI, which persists to the *laptop's* database, so the remote's
 // copy stays empty and a DB-only listing reported no sessions at all while six
-// were running. serve holds a local executor, so it can just look.
-//
-// A tmux session is only counted when it carries AIMAN_ID, which is both the
-// join key and the filter: it excludes tmux sessions that are not aiman's,
-// including serve's and the trigger daemon's own.
-func (s *Server) liveSessions(ctx context.Context) []domain.Session {
-	if s.remote == nil {
+// were running. serve owns the PTY runtime, so it asks it directly.
+func (s *Server) liveSessions(context.Context) []domain.Session {
+	if s.pty == nil {
 		return nil
 	}
 	var out []domain.Session
-
-	names, err := s.remote.ScanTmuxSessions(ctx)
-	if err == nil {
-		for _, name := range names {
-			id, iderr := s.remote.GetTmuxSessionEnv(ctx, name, "AIMAN_ID")
-			id = strings.TrimSpace(id)
-			if iderr != nil || id == "" {
-				continue
-			}
-			sess := domain.Session{
-				ID:          id,
-				TmuxSession: name,
-				Backend:     domain.BackendTmux,
-				Status:      domain.SessionStatusActive,
-			}
-			if cwd, cerr := s.remote.GetTmuxSessionCWD(ctx, name); cerr == nil {
-				sess.WorkingDirectory = strings.TrimSpace(cwd)
-			}
-			out = append(out, sess)
+	for _, info := range s.pty.List() {
+		id := strings.TrimSpace(info.ID)
+		if id == "" || info.Status != ptyruntime.StatusRunning {
+			continue
 		}
-	}
-
-	// PTY-hosted sessions carry the aiman id directly.
-	if recs, perr := usecase.ScanPTYSessions(ctx, s.remote); perr == nil {
-		for _, rec := range recs {
-			id := strings.TrimSpace(rec.ID)
-			if id == "" || rec.Status != "running" {
-				continue
-			}
-			out = append(out, domain.Session{
-				ID:               id,
-				TmuxSession:      rec.Name,
-				Backend:          domain.BackendPTY,
-				WorkingDirectory: rec.Dir,
-				Status:           domain.SessionStatusActive,
-			})
-		}
+		out = append(out, domain.Session{
+			ID:               id,
+			TmuxSession:      info.Name,
+			Backend:          domain.BackendPTY,
+			WorkingDirectory: info.Dir,
+			Status:           domain.SessionStatusActive,
+		})
 	}
 	return out
 }
 
 // mergeLiveSessions folds what is running on this host into the stored list.
 // Stored records win for identity the host cannot know (name, group, issue,
-// branch, repo); liveness and terminal facts come from the host.
+// branch, repo); liveness and terminal facts come from the host. A stored
+// legacy tmux row is inactive: aiman cannot reach its terminal. A live PTY
+// with the same id means it already moved to pty.
 func mergeLiveSessions(stored, live []domain.Session) []domain.Session {
 	byID := make(map[string]int, len(stored))
 	for i := range stored {
 		byID[stored[i].ID] = i
+		if stored[i].IsLegacyTmux() {
+			stored[i].Status = domain.SessionStatusInactive
+		}
 	}
 	out := stored
 	for _, l := range live {
@@ -319,9 +284,9 @@ func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 //
 // It deliberately does not use backfill/AssignSessionName: those serve the
 // creation flow, where the first session earns the friendly name "impl" and a
-// long tmux name fails ValidateSessionName and is discarded. That turned six
+// long terminal name fails ValidateSessionName and is discarded. That turned six
 // distinct sessions into impl, impl-2 … impl-6 — unidentifiable, and useless
-// for addressing a specific sibling. The tmux/PTY session name is the label
+// for addressing a specific sibling. The terminal name is the label
 // already shown in the dashboard, so it is what an agent should be able to use.
 func labelDiscovered(sess *domain.Session, others []domain.Session) {
 	if sess.IssueKey == "" {
@@ -338,7 +303,7 @@ func labelDiscovered(sess *domain.Session, others []domain.Session) {
 		name = sess.ID
 	}
 	// Names address sessions, so they must stay distinct even if two hosts ever
-	// present the same tmux name.
+	// present the same terminal name.
 	base := name
 	for n := 2; domain.NameTaken(others, name); n++ {
 		name = fmt.Sprintf("%s-%d", base, n)
@@ -442,43 +407,38 @@ func (s *Server) handleRead(ctx context.Context, req Request) Response {
 		Lines int `json:"lines"`
 	}
 	_ = json.Unmarshal(req.Params, &params)
-	text := ""
-	if sess.IsPTY() && s.pty != nil {
+	if sess.IsLegacyTmux() {
+		return legacyTerminalResp(req.ID, sess)
+	}
+	var text string
+	switch {
+	case s.pty != nil:
 		screen, cerr := s.pty.CaptureScreen(sess.ID)
 		if cerr != nil {
 			return errResp(req.ID, CodeInvalidParams, cerr.Error())
 		}
-		if params.Lines > 0 {
-			screen = tailLines(screen, params.Lines)
-		}
-		return Response{ID: req.ID, Result: map[string]any{
-			"type":    "pane_read",
-			"session": sessionInfo(sess, req.Caller),
-			"text":    screen,
-		}}
-	}
-	if s.remote != nil {
-		var err error
-		if sess.IsPTY() {
-			text, err = usecase.CapturePTYPane(ctx, s.remote, sess.ID, params.Lines)
-		} else {
-			text, err = s.remote.CaptureTmuxPane(ctx, sess.TmuxSession)
-		}
+		text = screen
+	case s.remote != nil:
+		raw, err := usecase.CapturePTYPane(ctx, s.remote, sess.ID, params.Lines)
 		if err != nil {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
+		text = raw
 	}
 	if params.Lines > 0 {
-		lines := strings.Split(text, "\n")
-		if len(lines) > params.Lines {
-			text = strings.Join(lines[len(lines)-params.Lines:], "\n")
-		}
+		text = tailLines(text, params.Lines)
 	}
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":    "pane_read",
 		"session": sessionInfo(sess, req.Caller),
 		"text":    text,
 	}}
+}
+
+// legacyTerminalResp refuses a session that still runs in tmux. The message
+// names the host and the command that stops it there.
+func legacyTerminalResp(id string, sess domain.Session) Response {
+	return errResp(id, CodeLegacyTerminal, domain.NewLegacyTmuxError(sess).Error())
 }
 
 func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
@@ -497,6 +457,9 @@ func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
+	if sess.IsLegacyTmux() {
+		return legacyTerminalResp(req.ID, sess)
+	}
 	unlock := s.lockSession(sess.ID)
 	defer unlock()
 	st, _ := s.classify(ctx, sess)
@@ -507,6 +470,9 @@ func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeInvalidParams, "no remote executor")
 	}
 	if err := usecase.SendSessionPrompt(ctx, s.remote, sess, params.Text); err != nil {
+		if errors.Is(err, domain.ErrLegacyTmuxSession) {
+			return errResp(req.ID, CodeLegacyTerminal, err.Error())
+		}
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	actor := domain.EventActorUser
@@ -602,10 +568,6 @@ type createParams struct {
 	Prompt string `json:"prompt"`
 	Issue  string `json:"issue"`
 	Base   string `json:"base"`
-	// Backend picks the terminal runtime ("tmux" or "pty"). The dashboard
-	// offers this per session, so a remote-side create has to carry it or a
-	// pty session would silently come up under tmux.
-	Backend string `json:"backend"`
 	// ExistingBranch starts from a branch that already exists on the remote
 	// instead of creating one.
 	ExistingBranch bool `json:"existing_branch"`
@@ -706,7 +668,6 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		Agent:          &domain.Agent{Name: agentName, Command: params.Agent},
 		BudgetTokens:   params.BudgetTokens,
 		Repo:           domain.Repo{Name: params.Repo},
-		SessionBackend: domain.ResolveSessionBackend(params.Backend, ""),
 		ExistingBranch: params.ExistingBranch,
 	}
 	var caller *domain.Session
@@ -744,7 +705,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	}
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionCreated, map[string]any{
 		"name": name, "group": group, "repo": params.Repo, "branch": params.Branch,
-		"agent": params.Agent, "backend": cfg.SessionBackend, "quick": params.Quick,
+		"agent": params.Agent, "quick": params.Quick,
 	})
 	info := sessionInfo(*sess, req.Caller)
 	return Response{ID: req.ID, Result: map[string]any{"type": "session", "session": info}}
@@ -788,7 +749,6 @@ func (s *Server) applyFor(params *createParams, parentID string, existing []doma
 		{&params.Repo, parent.RepoName},
 		{&params.Issue, parent.IssueKey},
 		{&params.Group, parent.Group},
-		{&params.Backend, parent.Backend},
 		{&params.Prompt, item.Text},
 	}
 	for _, d := range defaults {

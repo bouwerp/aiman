@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +11,7 @@ import (
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
@@ -31,7 +31,7 @@ func steerGateServer(t *testing.T, sess domain.Session) *Server {
 
 func hookedSession(id string, state domain.AgentState, source string, at time.Time) domain.Session {
 	return domain.Session{
-		ID: id, Name: id, Group: "g", TmuxSession: id, Backend: domain.BackendTmux,
+		ID: id, Name: id, Group: "g", TmuxSession: id, Backend: domain.BackendPTY,
 		HookState: state, HookStateSource: source, HookStateAt: at,
 	}
 }
@@ -181,73 +181,13 @@ func TestIdleReportDuringConfirmOpensGate(t *testing.T) {
 	}
 }
 
-func TestDeliverSteerToTmuxUsesLocalSendKeys(t *testing.T) {
+// A note the runtime refuses stays queued: delivery reports the error.
+func TestDeliverSteerPTYWriteFailureStaysQueued(t *testing.T) {
 	fastSteerSubmit(t)
-	sess := domain.Session{ID: "st2", Name: "st2", Group: "g", TmuxSession: "work", Backend: domain.BackendTmux, Status: domain.SessionStatusActive}
-	repo := testRepo(t)
-	if err := repo.Save(context.Background(), &sess); err != nil {
-		t.Fatal(err)
-	}
-	remote := &fakeRemote{}
-	srv := New(nil, repo, remote, nil, nil, nil, "test")
-	if _, err := srv.deliverSteer(context.Background(), "st2", "hello tmux"); err != nil {
-		t.Fatalf("deliverSteer: %v", err)
-	}
-	remote.mu.Lock()
-	execs := strings.Join(remote.execs, "\n")
-	remote.mu.Unlock()
-	if !strings.Contains(execs, `tmux send-keys -t "work"`) {
-		t.Fatalf("want a local tmux send-keys to \"work\", got:\n%s", execs)
-	}
-	if !strings.Contains(execs, `"/tmp/aiman-prompt-st2-steer"`) {
-		t.Fatalf("steering must use its own prompt file, got:\n%s", execs)
-	}
-	if strings.Contains(execs, "aiman pty input") {
-		t.Fatalf("tmux delivery must not go through the pty CLI, got:\n%s", execs)
-	}
-}
-
-// shellRemote runs `;` and `&&` the way a shell does, so a send-keys failure
-// followed by `rm` is success when the script is written that way.
-type shellRemote struct {
-	fakeRemote
-	failSend bool
-	files    map[string][]byte
-}
-
-func (s *shellRemote) Execute(ctx context.Context, cmd string) (string, error) {
-	_, _ = s.fakeRemote.Execute(ctx, cmd)
-	var status error
-	for _, part := range strings.Split(cmd, ";") {
-		status = nil
-		for _, step := range strings.Split(part, "&&") {
-			if s.failSend && strings.Contains(step, "send-keys") {
-				status = errors.New("can't find session")
-				break
-			}
-		}
-	}
-	return "", status
-}
-
-func (s *shellRemote) WriteFile(_ context.Context, path string, content []byte) error {
-	if s.files == nil {
-		s.files = map[string][]byte{}
-	}
-	s.files[path] = append([]byte(nil), content...)
-	return nil
-}
-
-func TestDeliverSteerTmuxSendFailureStaysQueued(t *testing.T) {
-	sess := domain.Session{ID: "stf", Name: "stf", Group: "g", TmuxSession: "work", Backend: domain.BackendTmux, Status: domain.SessionStatusActive}
-	repo := testRepo(t)
-	if err := repo.Save(context.Background(), &sess); err != nil {
-		t.Fatal(err)
-	}
-	remote := &shellRemote{failSend: true}
-	srv := New(nil, repo, remote, nil, nil, nil, "test")
-	if _, err := srv.deliverSteer(context.Background(), "stf", "hello tmux"); err == nil {
-		t.Fatal("send-keys failed, but delivery reported success")
+	srv := steerGateServer(t, domain.Session{ID: "stf", Name: "stf", Group: "g", Backend: domain.BackendPTY})
+	srv.pty = ptyfake.New() // no such PTY, so every write fails
+	if _, err := srv.deliverSteer(context.Background(), "stf", "hello"); err == nil {
+		t.Fatal("the write failed, but delivery reported success")
 	}
 }
 
@@ -285,39 +225,28 @@ func TestDeliverSteerFlattensRealNote(t *testing.T) {
 		}
 	}
 
-	sess := domain.Session{ID: "stn2", Name: "stn2", Group: "g", TmuxSession: "work", Backend: domain.BackendTmux, Status: domain.SessionStatusActive}
-	repo := testRepo(t)
-	if err := repo.Save(context.Background(), &sess); err != nil {
-		t.Fatal(err)
+	fake := ptyfake.New()
+	fake.Add(ptyruntime.SessionInfo{ID: "stn2"})
+	srv2 := steerGateServer(t, domain.Session{ID: "stn2", Name: "stn2", Group: "g", Backend: domain.BackendPTY})
+	srv2.pty = fake
+	if _, err := srv2.deliverSteer(context.Background(), "stn2", "ping\nfrom user"); err != nil {
+		t.Fatalf("deliver: %v", err)
 	}
-	remote := &shellRemote{}
-	tmuxSrv := New(nil, repo, remote, nil, nil, nil, "test")
-	if _, err := tmuxSrv.deliverSteer(context.Background(), "stn2", "ping\nfrom user"); err != nil {
-		t.Fatalf("tmux deliver: %v", err)
+	writes := fake.Writes()
+	if len(writes) == 0 {
+		t.Fatal("nothing was typed")
 	}
-	var body []byte
-	for _, b := range remote.files {
-		body = b
-	}
-	if strings.Contains(string(body), "\n") {
-		t.Fatalf("tmux prompt file still has a newline:\n%s", body)
-	}
-	if strings.Contains(string(body), "[aiman]") {
-		t.Fatalf("free text gained the to-do wrapper: %s", body)
-	}
-	if string(body) != "ping from user" {
-		t.Fatalf("typed %q, want one line", body)
+	if body := writes[0].Data; body != "ping from user" {
+		t.Fatalf("typed %q, want one line without the to-do wrapper", body)
 	}
 }
 
 func TestSteerClassifierQuietUsesSettle(t *testing.T) {
-	sess := domain.Session{ID: "cq1", Name: "cq1", Group: "g", TmuxSession: "work", Backend: domain.BackendTmux, Status: domain.SessionStatusActive}
-	repo := testRepo(t)
-	if err := repo.Save(context.Background(), &sess); err != nil {
-		t.Fatal(err)
-	}
-	remote := &fakeRemote{pane: "bypass permissions on"}
-	srv := New(nil, repo, remote, nil, nil, nil, "test")
+	srv := steerGateServer(t, domain.Session{ID: "cq1", Name: "cq1", Group: "g", TmuxSession: "work", Backend: domain.BackendPTY})
+	fake := ptyfake.New()
+	fake.Add(ptyruntime.SessionInfo{ID: "cq1"})
+	fake.SetScreen("cq1", "bypass permissions on")
+	srv.pty = fake
 	submit := time.Now().Add(-5 * time.Second)
 	if ready, held := srv.steerReady(context.Background(), "cq1", submit); !ready {
 		t.Fatalf("idle classifier with a 5s-old submit should be ready, held %q", held)
@@ -412,7 +341,7 @@ func TestReportKicksSteerer(t *testing.T) {
 
 // Forget drops the session's steering queue along with the row.
 func TestForgetDropsSteerQueue(t *testing.T) {
-	srv := steerGateServer(t, domain.Session{ID: "sf1", Name: "sf1", Group: "g", Backend: domain.BackendTmux})
+	srv := steerGateServer(t, domain.Session{ID: "sf1", Name: "sf1", Group: "g", Backend: domain.BackendPTY})
 	store := &fakeSteerStore{}
 	srv.steer = newSteerer(store, &fakeSteerTarget{}, nil, testSteerWindow)
 	params, _ := json.Marshal(map[string]any{"id": "sf1"})

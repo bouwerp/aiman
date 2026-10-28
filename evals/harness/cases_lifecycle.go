@@ -15,6 +15,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handover"
 	"github.com/bouwerp/aiman/internal/handoverchild"
+	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 	"github.com/bouwerp/aiman/internal/server"
 )
 
@@ -32,6 +33,7 @@ type Result struct {
 	Metrics []MetricResult
 	Events  []domain.SessionEvent
 	Execs   []string
+	Writes  []ptyfake.Write
 	Files   map[string]string
 	Err     error
 }
@@ -54,7 +56,7 @@ func (c Case) Run(t *testing.T) Result {
 		}
 	}
 	metrics := c2.Assert(h)
-	res := Result{Name: c2.Name, Metrics: metrics, Events: h.Events("s1"), Execs: h.Execs(), Files: h.Artifacts()}
+	res := Result{Name: c2.Name, Metrics: metrics, Events: h.Events("s1"), Execs: h.Execs(), Writes: h.Writes(), Files: h.Artifacts()}
 	res.Passed = true
 	for _, m := range metrics {
 		if m.Score < 1 {
@@ -97,14 +99,14 @@ func CasePromptOnce() Case {
 		if _, err := h.Call("steer.send", map[string]any{"session": "s1", "text": "go"}); err != nil {
 			return []MetricResult{score("steer_sent", false, err.Error())}
 		}
-		ok := waitUntil(5*time.Second, func() bool { return countSendKeys(h.Execs()) >= 2 })
+		ok := waitUntil(5*time.Second, func() bool { return countSendKeys(h.Writes()) >= 2 })
 		if !ok {
 			return []MetricResult{score("prompt_submitted_once", false, "note was not delivered")}
 		}
 		time.Sleep(1200 * time.Millisecond)
 		return []MetricResult{
-			score("prompt_submitted_once", countSendKeys(h.Execs()) == 2, "note was typed more than once"),
-			score("no_duplicate_steer", countSendKeys(h.Execs()) == 2, "duplicate delivery"),
+			score("prompt_submitted_once", countSendKeys(h.Writes()) == 2, "note was typed more than once"),
+			score("no_duplicate_steer", countSendKeys(h.Writes()) == 2, "duplicate delivery"),
 		}
 	}}
 }
@@ -120,14 +122,14 @@ func heldSteerCase(name, heldState string) Case {
 			return []MetricResult{score("steer_sent", false, err.Error())}
 		}
 		time.Sleep(1200 * time.Millisecond)
-		held := countSendKeys(h.Execs()) == 0
+		held := countSendKeys(h.Writes()) == 0
 		if !held {
 			return []MetricResult{score("steer_delivered_after_ready", false, "delivered while held")}
 		}
 		if err := h.Report([]byte(`{"id":"s1","event":"Stop","state":"idle","source":"idle_prompt"}`)); err != nil {
 			return []MetricResult{score("idle_report", false, err.Error())}
 		}
-		delivered := waitUntil(5*time.Second, func() bool { return countSendKeys(h.Execs()) >= 2 })
+		delivered := waitUntil(5*time.Second, func() bool { return countSendKeys(h.Writes()) >= 2 })
 		return []MetricResult{
 			score("steer_delivered_after_ready", delivered, "note was not delivered after idle"),
 		}
@@ -167,15 +169,15 @@ func CaseTodoUserEditSteers() Case {
 		if _, err := h.Call("todo.add", map[string]any{"session": "s1", "text": "Fix bug", "as": "user"}); err != nil {
 			return []MetricResult{score("todo_add", false, err.Error())}
 		}
-		delivered := waitUntil(5*time.Second, func() bool { return typedSteers(h.Execs()) >= 1 })
-		before := typedSteers(h.Execs())
+		delivered := waitUntil(5*time.Second, func() bool { return typedSteers(h.Writes()) >= 1 })
+		before := typedSteers(h.Writes())
 		if _, err := h.Call("todo.mirror", map[string]any{"session": "s1", "items": []map[string]any{
 			{"text": "Fix bug", "status": "completed"},
 		}}); err != nil {
 			return []MetricResult{score("todo_mirror", false, err.Error())}
 		}
 		time.Sleep(1200 * time.Millisecond)
-		after := typedSteers(h.Execs())
+		after := typedSteers(h.Writes())
 		changed := 0
 		for _, ev := range h.Events("s1") {
 			if ev.Kind == domain.EventTodoChanged {
@@ -416,7 +418,7 @@ func CaseHandoverChildFallback() Case {
 func CaseTerminateKeepsPane() Case {
 	return Case{Name: "terminate-keeps-pane", Setup: func(h *Harness) error {
 		h.SetPane("last screen")
-		h.RegisterSession(domain.Session{ID: "s1", TmuxSession: "term-s1", Backend: domain.BackendPTY})
+		h.RegisterSession(domain.Session{ID: "s1"})
 		return nil
 	}, Assert: func(h *Harness) []MetricResult {
 		sess, err := h.Repo.Get(context.Background(), "s1")
@@ -427,14 +429,10 @@ func CaseTerminateKeepsPane() Case {
 			return []MetricResult{score("terminate", false, err.Error())}
 		}
 		_, rowErr := h.Repo.Get(context.Background(), "s1")
-		issued := false
-		for _, cmd := range h.Execs() {
-			if strings.Contains(cmd, "aiman pty kill") {
-				issued = true
-			}
-		}
+		kills := h.Kills()
+		issued := len(kills) > 0 && kills[0] == "s1"
 		return []MetricResult{
-			score("terminate_issued", issued, "no aiman pty kill"),
+			score("terminate_issued", issued, fmt.Sprintf("pty kills %v, want s1", kills)),
 			score("session_row_kept", rowErr == nil, "session row disappeared"),
 			score("pane_snapshot_kept", h.Pane() == "last screen", "pane snapshot changed"),
 		}
@@ -541,12 +539,8 @@ func contains(items []string, want string) bool {
 	return false
 }
 
-func countSendKeys(execs []string) int {
-	n := 0
-	for _, cmd := range execs {
-		if strings.Contains(cmd, "tmux send-keys") {
-			n++
-		}
-	}
-	return n
+// countSendKeys counts every write into a terminal: a delivered note is two,
+// the text and the Return that submits it.
+func countSendKeys(writes []ptyfake.Write) int {
+	return len(writes)
 }

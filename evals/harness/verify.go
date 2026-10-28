@@ -125,7 +125,7 @@ func (s evalSessions) Get(ctx context.Context, id string) (domain.Session, error
 }
 
 func (s evalSessions) CreateChild(ctx context.Context, cfg domain.SessionConfig) (domain.Session, error) {
-	sess, err := (FakeCreator{Dir: s.h.Dir}).CreateSession(ctx, cfg)
+	sess, err := (FakeCreator{Dir: s.h.Dir, PTY: s.h.pty}).CreateSession(ctx, cfg)
 	if err != nil {
 		return domain.Session{}, err
 	}
@@ -133,7 +133,6 @@ func (s evalSessions) CreateChild(ctx context.Context, cfg domain.SessionConfig)
 	if err := s.h.Repo.Save(ctx, sess); err != nil {
 		return domain.Session{}, err
 	}
-	s.h.remote.addSession(sess.TmuxSession, sess.WorkingDirectory)
 	return *sess, nil
 }
 

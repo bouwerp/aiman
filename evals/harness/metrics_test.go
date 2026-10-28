@@ -4,12 +4,13 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 )
 
 func TestMetricPromptDuplicateFails(t *testing.T) {
-	res := Evaluate(Result{Name: "prompt-once", Execs: []string{
-		`tmux send-keys -t "s1" -l -- "one"`,
-		`tmux send-keys -t "s1" -l -- "two"`,
+	res := Evaluate(Result{Name: "prompt-once", Writes: []ptyfake.Write{
+		{ID: "s1", Data: "one"}, {ID: "s1", Data: "\r"},
+		{ID: "s1", Data: "two"}, {ID: "s1", Data: "\r"},
 	}})
 	if res.Passed {
 		t.Fatalf("duplicate prompt passed: %+v", res.Metrics)

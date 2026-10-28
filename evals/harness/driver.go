@@ -17,6 +17,8 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usage"
@@ -24,8 +26,8 @@ import (
 	"github.com/bouwerp/aiman/internal/verify"
 )
 
-// Harness is one in-process serve, its temp database, and the fake remote the
-// case observes. It starts no SSH connection and no terminal runtime.
+// Harness is one in-process serve, its temp database, and the fake remote and
+// PTY runtime the case observes. It starts no SSH connection and no process.
 type Harness struct {
 	Dir    string
 	Socket string
@@ -34,6 +36,8 @@ type Harness struct {
 	t        *testing.T
 	srv      *server.Server
 	remote   *FakeRemote
+	pty      *ptyfake.FakePTY
+	pane     string
 	usage    *usage.Tracker
 	verifier *verify.Manager
 	reviews  *verify.Store
@@ -47,8 +51,8 @@ type Harness struct {
 	once   sync.Once
 }
 
-// New starts serve on a short temp socket. pty is nil, so every session must
-// be a tmux session; the fake remote stands in for the terminal.
+// New starts serve on a short temp socket over a FakePTY: every session's
+// terminal is a scripted screen, and typing into it is recorded.
 func New(t *testing.T) *Harness {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "aimaneval-")
@@ -65,9 +69,10 @@ func New(t *testing.T) *Harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := NewFakeRemote(dir)
-	srv := server.New(ln, repo, remote, FakeCreator{Dir: dir},
-		contextstore.NewFiles(filepath.Join(dir, "context")), nil, "eval")
+	pty := ptyfake.New()
+	remote := NewFakeRemote(dir, pty)
+	srv := server.New(ln, repo, remote, FakeCreator{Dir: dir, PTY: pty},
+		contextstore.NewFiles(filepath.Join(dir, "context")), pty, "eval")
 	srv.EnableTodos(todo.NewFiles(filepath.Join(dir, "todos")), repo)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -75,7 +80,7 @@ func New(t *testing.T) *Harness {
 		defer close(done)
 		_ = srv.Serve(ctx)
 	}()
-	h := &Harness{Dir: dir, Socket: server.SocketPath(dir), Repo: repo, t: t, srv: srv, remote: remote, cancel: cancel, done: done}
+	h := &Harness{Dir: dir, Socket: server.SocketPath(dir), Repo: repo, t: t, srv: srv, remote: remote, pty: pty, cancel: cancel, done: done}
 	t.Cleanup(h.Close)
 	return h
 }
@@ -110,8 +115,8 @@ func (h *Harness) Call(method string, params any) (server.Response, error) {
 	return resp, nil
 }
 
-// RegisterSession persists a session and tells the fake remote which tmux
-// session exists. Empty id, name, status, backend and directory are filled.
+// RegisterSession persists a session and adds its terminal to the FakePTY.
+// Empty id, name, status, backend and directory are filled.
 func (h *Harness) RegisterSession(s domain.Session) {
 	h.t.Helper()
 	if s.ID == "" {
@@ -127,7 +132,7 @@ func (h *Harness) RegisterSession(s domain.Session) {
 		s.CreatedAt = time.Now().UTC()
 	}
 	if s.Backend == "" {
-		s.Backend = domain.BackendTmux
+		s.Backend = domain.BackendPTY
 	}
 	if s.WorkingDirectory == "" {
 		s.WorkingDirectory = filepath.Join(h.Dir, "sessions", s.ID)
@@ -139,12 +144,15 @@ func (h *Harness) RegisterSession(s domain.Session) {
 		s.WorktreePath = s.WorkingDirectory
 	}
 	if s.TmuxSession == "" {
-		s.TmuxSession = "tmux-" + s.ID
+		s.TmuxSession = "term-" + s.ID
 	}
 	if err := h.Repo.Save(context.Background(), &s); err != nil {
 		h.t.Fatal(err)
 	}
-	h.remote.addSession(s.TmuxSession, s.WorkingDirectory)
+	// A legacy tmux row has no terminal aiman can reach.
+	if !s.IsLegacyTmux() {
+		h.pty.Add(ptyruntime.SessionInfo{ID: s.ID, Name: s.TmuxSession, Dir: s.WorkingDirectory, Command: s.AgentName})
+	}
 }
 
 // Report sends a vendor hook payload exactly as the hook script would.
@@ -185,11 +193,24 @@ func (h *Harness) RepoDir(id string) string {
 	return sess.WorktreePath
 }
 
-// SetPane sets the pane the fake remote captures.
-func (h *Harness) SetPane(text string) { h.remote.Pane = text }
+// Writes is every Write the FakePTY received.
+func (h *Harness) Writes() []ptyfake.Write {
+	return h.pty.Writes()
+}
 
-// Pane is the fake remote's current capture.
-func (h *Harness) Pane() string { return h.remote.Pane }
+// Kills is every session id the FakePTY was asked to kill.
+func (h *Harness) Kills() []string {
+	return h.pty.Kills()
+}
+
+// SetPane sets the screen every FakePTY session shows.
+func (h *Harness) SetPane(text string) {
+	h.pane = text
+	h.pty.SetDefaultScreen(text)
+}
+
+// Pane is the screen SetPane last set.
+func (h *Harness) Pane() string { return h.pane }
 
 // TerminateSession runs the production terminal teardown against the fake
 // remote. It does not touch the session row.

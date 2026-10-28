@@ -14,6 +14,8 @@ import (
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/local"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 	"github.com/bouwerp/aiman/internal/todo"
 )
 
@@ -75,17 +77,22 @@ func (c *countingContext) Put(ctx context.Context, e domain.ContextEntry) (domai
 	return c.ContextStore.Put(ctx, e)
 }
 
-// errPane fails pane capture. Execute stays the embedded remote's empty result.
-type errPane struct{ *fakeRemote }
-
-func (errPane) CaptureTmuxPane(context.Context, string) (string, error) {
-	return "", errors.New("capture failed")
+// paneRuntime is a PTY runtime whose sessions ids all show pane. With no ids,
+// every capture fails.
+func paneRuntime(pane string, ids ...string) *ptyfake.FakePTY {
+	f := ptyfake.New()
+	f.SetDefaultScreen(pane)
+	for _, id := range ids {
+		f.Add(ptyruntime.SessionInfo{ID: id})
+	}
+	return f
 }
 
 func newHandoverTestServer(t *testing.T, pane string, todos todoStore, note string) *Server {
 	t.Helper()
 	srv := &Server{
-		remote:   &fakeRemote{pane: pane},
+		remote:   &fakeRemote{},
+		pty:      paneRuntime(pane, "s1"),
 		ctxStore: contextstore.NewFiles(t.TempDir()),
 		todos:    todos,
 	}
@@ -322,7 +329,7 @@ func TestWriteHandoverRevZeroIsNoList(t *testing.T) {
 
 func TestWriteHandoverNilDeps(t *testing.T) {
 	dir := t.TempDir()
-	srv := &Server{remote: &fakeRemote{pane: "still here"}}
+	srv := &Server{remote: &fakeRemote{}, pty: paneRuntime("still here", "s1")}
 	res, err := srv.writeHandover(context.Background(), domain.Session{
 		ID: "s1", Name: "n", WorkingDirectory: dir, Backend: domain.BackendPTY,
 	}, "archive")
@@ -348,7 +355,7 @@ func TestWriteHandoverNilDeps(t *testing.T) {
 func TestWriteHandoverCaptureErrorIsEmptyTail(t *testing.T) {
 	dir := t.TempDir()
 	srv := newHandoverTestServer(t, "SECRET", nil, "")
-	srv.remote = errPane{fakeRemote: srv.remote.(*fakeRemote)}
+	srv.pty = paneRuntime("SECRET") // no session, so the capture fails
 	res, err := srv.writeHandover(context.Background(), domain.Session{ID: "s1", Name: "n", WorkingDirectory: dir, TmuxSession: "wtb"}, "restart")
 	if err != nil {
 		t.Fatal(err)
@@ -601,9 +608,8 @@ func TestPreCompactReportReturnsWhileDiffIsBlocked(t *testing.T) {
 	}
 }
 
-// diffBlocksRemote's Execute waits until ctx is done. CaptureTmuxPane fails
-// once that context is already cancelled, which is what a real tmux capture
-// does when git has used up the deadline.
+// diffBlocksRemote's Execute waits until ctx is done, the way the diff does
+// when it uses up the deadline.
 type diffBlocksRemote struct{ *fakeRemote }
 
 func (diffBlocksRemote) Execute(ctx context.Context, _ string) (string, error) {
@@ -611,21 +617,14 @@ func (diffBlocksRemote) Execute(ctx context.Context, _ string) (string, error) {
 	return "", ctx.Err()
 }
 
-func (r diffBlocksRemote) CaptureTmuxPane(ctx context.Context, name string) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return r.fakeRemote.CaptureTmuxPane(ctx, name)
-}
-
-func TestHandoverKeepsTmuxPaneWhenDiffBlocks(t *testing.T) {
+func TestHandoverKeepsPaneWhenDiffBlocks(t *testing.T) {
 	dir := t.TempDir()
 	const pane = "still on the last screen"
-	srv := &Server{remote: diffBlocksRemote{fakeRemote: &fakeRemote{pane: pane}}}
+	srv := &Server{remote: diffBlocksRemote{fakeRemote: &fakeRemote{}}, pty: paneRuntime(pane, "s1")}
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
 	res, err := srv.writeHandover(ctx, domain.Session{
-		ID: "s1", Name: "s1", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+		ID: "s1", Name: "s1", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
 	}, "pre_compact")
 	if err != nil {
 		t.Fatalf("write: %v", err)
@@ -639,7 +638,7 @@ func TestHandoverKeepsTmuxPaneWhenDiffBlocks(t *testing.T) {
 	}
 	text := string(body)
 	if !strings.Contains(text, pane) {
-		t.Fatalf("tmux pane missing after diff blocked until ctx was done:\n%s", text)
+		t.Fatalf("pane missing after diff blocked until ctx was done:\n%s", text)
 	}
 	if !strings.Contains(text, "(unavailable)") {
 		t.Fatalf("cancelled diff must stay an empty stat:\n%s", text)
@@ -670,7 +669,7 @@ func TestSessionEndReportDoesNotWriteHandover(t *testing.T) {
 func TestHandoverPointQueuesOnlyWhenFileExists(t *testing.T) {
 	dir := t.TempDir()
 	srv, _, _ := todoServer(t, domain.Session{
-		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
 	})
 	var absent struct {
 		Type   string `json:"type"`
@@ -709,7 +708,7 @@ func TestHandoverPointQueuesOnlyWhenFileExists(t *testing.T) {
 func TestHandoverPointPreCompactUsesCompactionNote(t *testing.T) {
 	dir := t.TempDir()
 	srv, _, _ := todoServer(t, domain.Session{
-		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
 	})
 	path := filepath.Join(dir, domain.AimanHandoverFileName)
 	if err := os.WriteFile(path, []byte("handover\n"), 0o644); err != nil {
@@ -733,7 +732,7 @@ func TestHandoverPointPreCompactUsesCompactionNote(t *testing.T) {
 func TestHandoverPointArchiveQueuesNothing(t *testing.T) {
 	dir := t.TempDir()
 	srv, _, _ := todoServer(t, domain.Session{
-		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
 	})
 	path := filepath.Join(dir, domain.AimanHandoverFileName)
 	if err := os.WriteFile(path, []byte("handover\n"), 0o644); err != nil {
@@ -756,7 +755,7 @@ func TestHandoverPointArchiveQueuesNothing(t *testing.T) {
 func TestPreCompactReportQueuesCompactionPointer(t *testing.T) {
 	dir := t.TempDir()
 	srv, _, _ := todoServer(t, domain.Session{
-		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendTmux,
+		ID: "s1", Name: "s1", Group: "g", WorkingDirectory: dir, TmuxSession: "s1", Backend: domain.BackendPTY,
 	})
 	resp := srv.handleReportAgentSession(context.Background(), Request{
 		ID: "1", Method: "session.report_agent_session",

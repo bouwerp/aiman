@@ -11,7 +11,7 @@ import (
 // default row installs. Steering never dismisses it: the boot wait does that,
 // and a dialog that survives it is left for the user.
 func (s *Server) updateDialogShowing(sess domain.Session) bool {
-	if !sess.IsPTY() || s.pty == nil {
+	if sess.IsLegacyTmux() || s.pty == nil {
 		return false
 	}
 	screen, err := s.pty.CaptureScreen(sess.ID)

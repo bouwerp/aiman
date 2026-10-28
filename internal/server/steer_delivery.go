@@ -19,6 +19,9 @@ const (
 	steerHeldDialog  = "dialog"
 	steerHeldWorking = "working"
 	steerHeldUnknown = "unknown"
+	// steerHeldLegacy holds notes for a session that still runs in tmux.
+	// aiman no longer types into tmux, so the note waits for a move to pty.
+	steerHeldLegacy = "legacy_terminal"
 )
 
 // steerClassifierQuiet is how long after a delivery the pane classifier must
@@ -47,9 +50,6 @@ func classifierQuietOpen(lastDelivered, settled, now time.Time) bool {
 // so tests can shorten it.
 var steerSubmitTiming = usecase.DefaultSubmitTiming()
 
-// steerPromptTag keeps steering's tmux prompt file apart from the laptop's.
-const steerPromptTag = "steer"
-
 var _ steerTarget = (*Server)(nil)
 
 // steerSession resolves id against the sessions this host knows.
@@ -76,6 +76,9 @@ func (s *Server) steerReady(ctx context.Context, id string, lastDelivered time.T
 	if !ok {
 		return false, steerHeldUnknown
 	}
+	if sess.IsLegacyTmux() {
+		return false, steerHeldLegacy
+	}
 	if sess.AgentEnded {
 		return false, steerHeldEnded
 	}
@@ -97,7 +100,7 @@ func (s *Server) steerReady(ctx context.Context, id string, lastDelivered time.T
 			return false, steerHeldWorking
 		}
 	}
-	if sess.IsPTY() && s.pty == nil {
+	if s.pty == nil {
 		return false, steerHeldUnknown
 	}
 	st, conf := s.classify(ctx, sess)
@@ -112,22 +115,19 @@ func (s *Server) steerReady(ctx context.Context, id string, lastDelivered time.T
 }
 
 // deliverSteer types text into the session's agent and submits it, and
-// returns when it pressed Return. Serve owns the terminal: a pty session is
-// written through the runtime in this process, a tmux session through local
-// send-keys.
+// returns when it pressed Return. Serve owns the terminal, so the text is
+// written through the PTY runtime in this process. A legacy tmux session is
+// never typed into.
 func (s *Server) deliverSteer(ctx context.Context, id, text string) (time.Time, error) {
 	sess, ok := s.steerSession(ctx, id)
 	if !ok {
 		return time.Time{}, fmt.Errorf("steer: session %s not found", id)
 	}
-	text = steerOneLine(text)
-	var at time.Time
-	var err error
-	if !sess.IsPTY() {
-		at, err = s.deliverTmuxSteer(ctx, sess, text)
-	} else {
-		at, err = s.deliverPTYSteer(ctx, sess, text)
+	if sess.IsLegacyTmux() {
+		return time.Time{}, domain.NewLegacyTmuxError(sess)
 	}
+	text = steerOneLine(text)
+	at, err := s.deliverPTYSteer(ctx, sess, text)
 	return s.finishSteerSubmit(id, text, at, err)
 }
 
@@ -156,43 +156,6 @@ func (s *Server) deliverPTYSteer(ctx context.Context, sess domain.Session, text 
 	return usecase.TypeAndSubmit(ctx, text, steerSubmitTiming, s.steerProgress(sess.ID, text),
 		write(text), write("\r"),
 		func(context.Context) (string, error) { return s.pty.CaptureScreen(sess.ID) })
-}
-
-func (s *Server) deliverTmuxSteer(ctx context.Context, sess domain.Session, text string) (time.Time, error) {
-	if s.remote == nil {
-		return time.Time{}, errors.New("steer: no executor for tmux delivery")
-	}
-	if sess.TmuxSession == "" {
-		return time.Time{}, fmt.Errorf("steer: session %s has no tmux session", sess.ID)
-	}
-	path := fmt.Sprintf("/tmp/aiman-prompt-%s-%s", strings.TrimSpace(sess.ID), steerPromptTag)
-	typeText := func(ctx context.Context) error {
-		if err := s.remote.WriteFile(ctx, path, []byte(text)); err != nil {
-			return err
-		}
-		// Status is the send's. Removing the file cannot mask a failed send-keys.
-		_, err := s.remote.Execute(ctx, fmt.Sprintf(
-			"tmux send-keys -t %q -l -- \"$(cat %q)\"", sess.TmuxSession, path))
-		s.removeSteerPrompt(path)
-		return err
-	}
-	enter := func(ctx context.Context) error {
-		_, err := s.remote.Execute(ctx, fmt.Sprintf("tmux send-keys -t %q Enter", sess.TmuxSession))
-		return err
-	}
-	capture := func(ctx context.Context) (string, error) {
-		return s.remote.CaptureTmuxPane(ctx, sess.TmuxSession)
-	}
-	return usecase.TypeAndSubmit(ctx, text, steerSubmitTiming, s.steerProgress(sess.ID, text), typeText, enter, capture)
-}
-
-func (s *Server) removeSteerPrompt(path string) {
-	if s.remote == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, _ = s.remote.Execute(ctx, fmt.Sprintf("rm -f %q", path))
 }
 
 // steerFlight is one session's unfinished type. text is the one-line payload.

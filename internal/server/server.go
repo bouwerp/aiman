@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -31,13 +32,43 @@ type sessionCreator interface {
 	CreateSession(ctx context.Context, cfg domain.SessionConfig) (*domain.Session, error)
 }
 
+// PTYRuntime is the slice of the PTY runtime serve uses. Production passes a
+// *ptyruntime.Manager; a nil runtime means serve hosts no terminals.
+type PTYRuntime interface {
+	Create(spec ptyruntime.Spec) (*ptyruntime.SessionInfo, error)
+	List() []ptyruntime.SessionInfo
+	Get(id string) (*ptyruntime.SessionInfo, error)
+	Write(id string, data []byte) error
+	Resize(id string, cols, rows int) error
+	Capture(id string, maxBytes int) ([]byte, error)
+	CaptureScreen(id string) (string, error)
+	CaptureFrame(id string) (view, all string, err error)
+	TakeRedrawn(id string) []string
+	OnAltScreen(id string) bool
+	Kill(id string) error
+	Forget(id string) error
+	Subscribe(id string) ([]byte, <-chan []byte, func(), error)
+}
+
+var _ PTYRuntime = (*ptyruntime.Manager)(nil)
+
+// isNilPTY reports a nil interface or an interface holding a nil pointer, so
+// a typed nil never reaches the s.pty != nil checks.
+func isNilPTY(p PTYRuntime) bool {
+	if p == nil {
+		return true
+	}
+	v := reflect.ValueOf(p)
+	return v.Kind() == reflect.Pointer && v.IsNil()
+}
+
 type Server struct {
 	ln       *Listener
 	repo     domain.SessionRepository
 	remote   domain.RemoteExecutor
 	create   sessionCreator
 	ctxStore domain.ContextStore
-	pty      *ptyruntime.Manager
+	pty      PTYRuntime
 	version  string
 
 	// hub carries events published by handlers to session.events streams.
@@ -161,9 +192,12 @@ type rememberedPane struct {
 	text string
 }
 
-func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecutor, create sessionCreator, ctxStore domain.ContextStore, ptyMgr *ptyruntime.Manager, version string) *Server {
+func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecutor, create sessionCreator, ctxStore domain.ContextStore, ptyMgr PTYRuntime, version string) *Server {
 	if version == "" {
 		version = "dev"
+	}
+	if isNilPTY(ptyMgr) {
+		ptyMgr = nil
 	}
 	s := &Server{
 		ln:       ln,

@@ -35,7 +35,7 @@ func (c *blockingCreator) CreateSession(ctx context.Context, cfg domain.SessionC
 	c.n++
 	id := "rev-" + string(rune('0'+c.n))
 	c.mu.Unlock()
-	return &domain.Session{ID: id, WorktreePath: cfg.PreparedWorktree, Status: domain.SessionStatusActive, Backend: cfg.SessionBackend}, nil
+	return &domain.Session{ID: id, WorktreePath: cfg.PreparedWorktree, Status: domain.SessionStatusActive, Backend: domain.BackendPTY}, nil
 }
 
 func gitWorktree(t *testing.T) string {

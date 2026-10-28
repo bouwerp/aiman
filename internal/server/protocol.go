@@ -20,6 +20,9 @@ const (
 	CodeProtocolMismatch = "protocol_mismatch"
 	CodeNoReviewer       = "no_reviewer_agent"
 	CodeNoPreferredAgent = "no_preferred_agent"
+	// CodeLegacyTerminal refuses a session that still runs in tmux. The
+	// message carries the command that stops it on the host.
+	CodeLegacyTerminal = "legacy_terminal"
 )
 
 type Request struct {

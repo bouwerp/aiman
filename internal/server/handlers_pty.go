@@ -241,8 +241,7 @@ func (s *Server) handlePTYCapture(ctx context.Context, req Request) Response {
 		HaveHash string `json:"have_hash"`
 	}
 	_ = json.Unmarshal(req.Params, &params)
-	// Rendered, not raw: the caller wants a screen, the way tmux capture-pane
-	// gives one. MaxBytes is deliberately not applied to the spool here —
+	// Rendered, not raw: the caller wants a screen. MaxBytes is deliberately not applied to the spool here —
 	// truncating the byte stream would cut mid-escape-sequence and corrupt the
 	// replay; the rendered screen is already bounded by the session's size.
 	text, err := s.pty.CaptureScreen(id)

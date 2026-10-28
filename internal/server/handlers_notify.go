@@ -11,7 +11,7 @@ import (
 )
 
 // observeSession builds an observation for a session.
-func (s *Server) observeSession(ctx context.Context, sess domain.Session) notify.Observation {
+func (s *Server) observeSession(_ context.Context, sess domain.Session) notify.Observation {
 	label := notify.Label(sess.IssueKey, sess.Name, sess.ID)
 	obs := notify.Observation{
 		SessionID: sess.ID,
@@ -20,55 +20,22 @@ func (s *Server) observeSession(ctx context.Context, sess domain.Session) notify
 		State:     sess.HookState,
 	}
 	obs.Question = sess.HookStateMessage
-	// Try to capture last line
-	var lastLine string
-	if sess.Backend == "pty" && s.pty != nil {
-		if b, err := s.pty.CaptureScreen(sess.ID); err == nil && b != "" {
-			if line := lastNonEmptyLine(b); line != "" {
-				lastLine = line
-			}
-		}
-	} else if sess.TmuxSession != "" && s.remote != nil {
-		if out, err := s.remote.CaptureTmuxPane(ctx, sess.TmuxSession); err == nil {
-			for i := len(out) - 1; i >= 0; {
-				// find line start
-				j := i
-				for j >= 0 && out[j] != '\n' && out[j] != '\r' {
-					j--
-				}
-				start := j + 1
-				if start <= i {
-					// trim manually to avoid converting
-					s := out[start : i+1]
-					// trim space
-					t := 0
-					for t < len(s) && (s[t] == ' ' || s[t] == '\t' || s[t] == '\r') {
-						t++
-					}
-					r := len(s)
-					for r > t && (s[r-1] == ' ' || s[r-1] == '\t' || s[r-1] == '\r') {
-						r--
-					}
-					if r > t {
-						b := make([]byte, r-t)
-						copy(b, s[t:r])
-						lastLine = string(b)
-						break
-					}
-				}
-				i = j - 1
-				if i >= 0 && ((out[i+1] == '\n' && out[i] == '\r') || (out[i+1] == '\r' && out[i] == '\n')) {
-					i--
-				}
-			}
-		}
-	}
-	if lastLine != "" {
-		obs.LastLine = func() string { return lastLine }
-	} else {
-		obs.LastLine = func() string { return "" }
-	}
+	line := s.lastScreenLine(sess)
+	obs.LastLine = func() string { return line }
 	return obs
+}
+
+// lastScreenLine is the last non-empty line of the session's PTY screen, or
+// empty when serve cannot read it.
+func (s *Server) lastScreenLine(sess domain.Session) string {
+	if sess.IsLegacyTmux() || s.pty == nil {
+		return ""
+	}
+	screen, err := s.pty.CaptureScreen(sess.ID)
+	if err != nil {
+		return ""
+	}
+	return lastNonEmptyLine(screen)
 }
 
 func lastNonEmptyLine(s string) string {

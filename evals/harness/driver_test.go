@@ -77,7 +77,7 @@ func TestFakeAgentPreCompactWritesHandover(t *testing.T) {
 	}
 }
 
-func TestDriverRecordsTmuxSendKeys(t *testing.T) {
+func TestDriverRecordsPTYWrites(t *testing.T) {
 	h := New(t)
 	h.RegisterSession(domain.Session{
 		ID: "s1", HookState: domain.AgentStateIdle, HookStateAt: time.Now().UTC(),
@@ -86,8 +86,9 @@ func TestDriverRecordsTmuxSendKeys(t *testing.T) {
 	if _, err := h.Call("steer.send", map[string]any{"session": "s1", "text": "go"}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, 5*time.Second, func() bool { return countSendKeys(h.Execs()) >= 2 })
-	if typed := countSendKeys(h.Execs()); typed < 2 {
-		t.Fatalf("send-keys commands = %d, execs = %v", typed, h.Execs())
+	waitFor(t, 5*time.Second, func() bool { return countSendKeys(h.Writes()) >= 2 })
+	writes := h.Writes()
+	if len(writes) < 2 || writes[0].ID != "s1" || writes[0].Data != "go" || writes[1].Data != "\r" {
+		t.Fatalf("writes = %+v, want the note then Return", writes)
 	}
 }

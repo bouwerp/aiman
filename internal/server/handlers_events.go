@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
@@ -99,10 +98,7 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 	}()
 
 	enc := json.NewEncoder(conn)
-	// hookSeen is kept apart from seen: collectSessionEvents reports anything
-	// in seen that the PTY runtime does not list as gone.
 	seen := map[string]SessionEvent{}
-	hookSeen := map[string]SessionEvent{}
 	announced := map[string]struct{}{}
 	ticker := time.NewTicker(eventPollInterval)
 	defer ticker.Stop()
@@ -130,7 +126,6 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 		if s.repo != nil {
 			if listed, lerr := s.repo.List(ctx); lerr == nil {
 				changed = append(changed, collectRepoCreatedEvents(listed, announced)...)
-				changed = append(changed, collectHookActivityEvents(listed, time.Now(), hookSeen)...)
 			}
 		}
 		for _, ev := range changed {
@@ -187,33 +182,6 @@ func collectSessionEvents(pty ptyLister, seen map[string]SessionEvent) []Session
 		}
 		delete(seen, id)
 		out = append(out, SessionEvent{Type: "session_gone", ID: id})
-	}
-	return out
-}
-
-// collectHookActivityEvents reports tmux sessions whose hook-reported state,
-// agent title or lifecycle status moved, and updates hookSeen in place. PTY
-// sessions are skipped: collectSessionEvents already covers them from the
-// runtime itself.
-func collectHookActivityEvents(sessions []domain.Session, now time.Time, hookSeen map[string]SessionEvent) []SessionEvent {
-	var out []SessionEvent
-	for _, s := range sessions {
-		if s.ID == "" || s.IsPTY() {
-			continue
-		}
-		state, _ := agenthook.ResolveHookState(s, now)
-		ev := SessionEvent{
-			Type:   "session_activity",
-			ID:     s.ID,
-			Title:  s.AgentTitle,
-			Status: string(s.Status),
-			State:  string(state),
-		}
-		if prev, ok := hookSeen[s.ID]; ok && prev == ev {
-			continue
-		}
-		hookSeen[s.ID] = ev
-		out = append(out, ev)
 	}
 	return out
 }

@@ -142,7 +142,7 @@ func reviewResponse(id string, r verify.Review) Response {
 	return Response{ID: id, Result: map[string]any{"type": "review", "review": r}}
 }
 
-// findSession resolves a name, id or tmux name among serve's sessions.
+// findSession resolves a name, id or terminal name among serve's sessions.
 func (s *Server) findSession(ctx context.Context, target string) (domain.Session, bool) {
 	list, err := s.loadSessions(ctx)
 	if err != nil {
@@ -193,7 +193,6 @@ func (a serverSessions) CreateChild(ctx context.Context, cfg domain.SessionConfi
 	if a.s.create == nil {
 		return domain.Session{}, errors.New("session create is not available")
 	}
-	cfg.SessionBackend = domain.ResolveSessionBackend(cfg.SessionBackend, "")
 	sess, err := a.s.create.CreateSession(ctx, cfg)
 	if err != nil {
 		return domain.Session{}, err
@@ -222,36 +221,27 @@ func (a serverSessions) Forget(ctx context.Context, id string) error {
 	return nil
 }
 
-// serverTerminal checks and stops a session's process on either backend.
+// serverTerminal checks and stops a session's process in serve's PTY runtime.
 type serverTerminal struct{ s *Server }
 
-func (a serverTerminal) Alive(ctx context.Context, sess domain.Session) bool {
-	if sess.Backend == domain.BackendPTY {
-		if a.s.pty == nil {
-			return false
-		}
-		info, err := a.s.pty.Get(sess.ID)
-		return err == nil && info.Status == ptyruntime.StatusRunning
-	}
-	if a.s.remote == nil || sess.TmuxSession == "" {
+func (a serverTerminal) Alive(_ context.Context, sess domain.Session) bool {
+	if a.s.pty == nil || sess.IsLegacyTmux() {
 		return false
 	}
-	_, err := a.s.remote.Execute(ctx, "tmux has-session -t "+quoteArg("="+sess.TmuxSession))
-	return err == nil
+	info, err := a.s.pty.Get(sess.ID)
+	return err == nil && info.Status == ptyruntime.StatusRunning
 }
 
-func (a serverTerminal) Stop(ctx context.Context, sess domain.Session) error {
-	if sess.Backend == domain.BackendPTY {
-		if a.s.pty == nil {
-			return nil
-		}
-		return a.s.pty.Kill(sess.ID)
+// Stop kills the session's PTY. A legacy tmux session is refused: aiman
+// never runs tmux, so the user stops it on the host.
+func (a serverTerminal) Stop(_ context.Context, sess domain.Session) error {
+	if sess.IsLegacyTmux() {
+		return domain.NewLegacyTmuxError(sess)
 	}
-	if a.s.remote == nil || sess.TmuxSession == "" {
+	if a.s.pty == nil {
 		return nil
 	}
-	_, err := a.s.remote.Execute(ctx, "tmux kill-session -t "+quoteArg("="+sess.TmuxSession))
-	return err
+	return a.s.pty.Kill(sess.ID)
 }
 
 // quoteArg single-quotes s for a POSIX shell.

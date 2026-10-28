@@ -8,6 +8,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handover"
+	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 )
 
 // Metric is one deterministic check over a completed case. Applies keeps a
@@ -29,7 +30,7 @@ func StandardMetrics() []Metric {
 				return strings.HasPrefix(r.Name, "prompt") || strings.HasPrefix(r.Name, "steer-")
 			},
 			Score: func(r Result) MetricResult {
-				n := typedSteers(r.Execs)
+				n := typedSteers(r.Writes)
 				return score("prompt_submitted_once", n == 1, "typed "+strconv.Itoa(n)+" times")
 			},
 		},
@@ -39,7 +40,7 @@ func StandardMetrics() []Metric {
 				return strings.HasPrefix(r.Name, "prompt") || strings.HasPrefix(r.Name, "steer-")
 			},
 			Score: func(r Result) MetricResult {
-				if typedSteers(r.Execs) == 0 {
+				if typedSteers(r.Writes) == 0 {
 					return score("steer_delivered_after_ready", false, "note was never typed")
 				}
 				if strings.HasPrefix(r.Name, "steer-") && !hasIdleReport(r.Events) {
@@ -54,7 +55,7 @@ func StandardMetrics() []Metric {
 				return strings.HasPrefix(r.Name, "prompt") || strings.HasPrefix(r.Name, "steer-")
 			},
 			Score: func(r Result) MetricResult {
-				n := typedSteers(r.Execs)
+				n := typedSteers(r.Writes)
 				return score("no_duplicate_steer", n <= 1, "typed "+strconv.Itoa(n)+" times")
 			},
 		},
@@ -149,10 +150,12 @@ func passWord(ok bool) string {
 	return "FAIL"
 }
 
-func typedSteers(execs []string) int {
+// typedSteers counts the writes that typed text, leaving out the Return that
+// submits it.
+func typedSteers(writes []ptyfake.Write) int {
 	n := 0
-	for _, cmd := range execs {
-		if strings.Contains(cmd, "tmux send-keys") && strings.Contains(cmd, " -l ") {
+	for _, w := range writes {
+		if strings.Trim(w.Data, "\r\n") != "" {
 			n++
 		}
 	}

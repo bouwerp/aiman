@@ -4,36 +4,57 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 )
 
 // FakeRemote implements the remote operations the server calls during a case.
 // Everything else is embedded as nil: a case that reaches an unimplemented
 // method fails loudly instead of pretending the remote did something.
+//
+// `aiman pty kill` and `aiman pty forget` go to PTY, the way the CLI reaches
+// serve's runtime over the socket.
 type FakeRemote struct {
 	domain.RemoteExecutor
-	Dir  string
-	Pane string
+	Dir string
+	PTY *ptyfake.FakePTY
 
-	mu       sync.Mutex
-	execs    []string
-	sessions map[string]string
+	mu    sync.Mutex
+	execs []string
 }
 
-func NewFakeRemote(dir string) *FakeRemote {
-	return &FakeRemote{Dir: dir, sessions: map[string]string{}}
+func NewFakeRemote(dir string, pty *ptyfake.FakePTY) *FakeRemote {
+	return &FakeRemote{Dir: dir, PTY: pty}
 }
+
+// ptyCLI matches the runtime calls KillPTYSession makes through the CLI. The
+// id is Go-quoted.
+var ptyCLI = regexp.MustCompile(`aiman pty (kill|forget) ("(?:[^"\\]|\\.)*")`)
 
 func (r *FakeRemote) Execute(_ context.Context, cmd string) (string, error) {
 	r.mu.Lock()
 	r.execs = append(r.execs, cmd)
 	r.mu.Unlock()
-	return "", nil
+	m := ptyCLI.FindStringSubmatch(cmd)
+	if m == nil || r.PTY == nil {
+		return "", nil
+	}
+	id, err := strconv.Unquote(m[2])
+	if err != nil {
+		return "", err
+	}
+	if m[1] == "kill" {
+		return "", r.PTY.Kill(id)
+	}
+	return "", r.PTY.Forget(id)
 }
 
 func (r *FakeRemote) GetRoot() string { return r.Dir }
@@ -44,55 +65,13 @@ func (r *FakeRemote) WriteFile(_ context.Context, path string, content []byte) e
 
 func (r *FakeRemote) ValidateDir(context.Context, string) error { return nil }
 
-func (r *FakeRemote) ScanTmuxSessions(context.Context) ([]string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]string, 0, len(r.sessions))
-	for name := range r.sessions {
-		out = append(out, name)
-	}
-	return out, nil
-}
-
 func (r *FakeRemote) ScanGitRepos(context.Context) ([]string, error) { return nil, nil }
 
 func (r *FakeRemote) ScanWorktrees(context.Context, string) ([]string, error) { return nil, nil }
 
 func (r *FakeRemote) GetGitRoot(context.Context, string) (string, error) { return "", nil }
 
-func (r *FakeRemote) GetTmuxSessionCWD(_ context.Context, name string) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if cwd, ok := r.sessions[name]; ok {
-		return cwd, nil
-	}
-	return r.Dir, nil
-}
-
-func (r *FakeRemote) GetTmuxSessionEnv(context.Context, string, string) (string, error) {
-	return "", nil
-}
-
-func (r *FakeRemote) CaptureTmuxPane(context.Context, string) (string, error) {
-	return r.Pane, nil
-}
-
-func (r *FakeRemote) StartTmuxSession(_ context.Context, name string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.sessions[name]; !ok {
-		r.sessions[name] = r.Dir
-	}
-	return nil
-}
-
 func (r *FakeRemote) Close() error { return nil }
-
-func (r *FakeRemote) addSession(name, dir string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.sessions[name] = dir
-}
 
 // Execs returns a copy of the commands Execute received.
 func (r *FakeRemote) Execs() []string {
@@ -101,9 +80,11 @@ func (r *FakeRemote) Execs() []string {
 	return append([]string(nil), r.execs...)
 }
 
-// FakeCreator returns a session without cloning a repo or starting a terminal.
+// FakeCreator returns a session without cloning a repo or starting an agent.
+// With PTY set, the session's terminal is added to that runtime.
 type FakeCreator struct {
 	Dir string
+	PTY *ptyfake.FakePTY
 }
 
 func (c FakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) (*domain.Session, error) {
@@ -119,7 +100,7 @@ func (c FakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) 
 	if cfg.Agent != nil {
 		agent = cfg.Agent.Command
 	}
-	return &domain.Session{
+	sess := &domain.Session{
 		ID:               id,
 		Name:             cfg.Name,
 		Group:            cfg.Group,
@@ -129,10 +110,14 @@ func (c FakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) 
 		RepoName:         cfg.Repo.Name,
 		WorktreePath:     dir,
 		WorkingDirectory: dir,
-		TmuxSession:      "tmux-" + id,
+		TmuxSession:      "term-" + id,
 		AgentName:        agent,
-		Backend:          domain.BackendTmux,
+		Backend:          domain.BackendPTY,
 		Status:           domain.SessionStatusActive,
 		CreatedAt:        time.Now().UTC(),
-	}, nil
+	}
+	if c.PTY != nil {
+		c.PTY.Add(ptyruntime.SessionInfo{ID: id, Name: sess.TmuxSession, Dir: dir, Command: agent})
+	}
+	return sess, nil
 }

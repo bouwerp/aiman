@@ -12,6 +12,8 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 )
 
 func startTestServer(t *testing.T, repo domain.SessionRepository) string {
@@ -213,7 +215,10 @@ func TestSessionPromptBlocked(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	remote := &fakeRemote{pane: "Allow execution of `rm -rf build/`? [y/N]"}
+	remote := &fakeRemote{}
+	pty := ptyfake.New()
+	pty.Add(ptyruntime.SessionInfo{ID: "id-b", Name: "rev"})
+	pty.SetScreen("id-b", "Allow execution of `rm -rf build/`? [y/N]")
 	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
@@ -221,7 +226,7 @@ func TestSessionPromptBlocked(t *testing.T) {
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = New(ln, repo, remote, nil, nil, nil, "t").Serve(cctx) }()
+	go func() { _ = New(ln, repo, remote, nil, nil, pty, "t").Serve(cctx) }()
 	sock := SocketPath(dir)
 
 	resp, err := Call(sock, "session.prompt", map[string]any{"id": "reviewer", "text": "yes"})
@@ -231,12 +236,12 @@ func TestSessionPromptBlocked(t *testing.T) {
 	if resp.Error == nil || resp.Error.Code != CodeAgentBlocked {
 		t.Fatalf("want agent_blocked, got %+v", resp.Error)
 	}
-	// Asserts what this test is actually about: no prompt was delivered.
-	// It used to require zero commands outright, which stopped being a fair
-	// proxy once listing a session legitimately enumerates what is running on
-	// the host (tmux/pty discovery) before deciding anything.
+	// No prompt was delivered, through the runtime or the CLI.
+	if len(pty.Writes()) != 0 {
+		t.Fatalf("must not deliver a prompt when blocked: %v", pty.Writes())
+	}
 	for _, cmd := range remote.execs {
-		if strings.Contains(cmd, "send-keys") || strings.Contains(cmd, "pty input") {
+		if strings.Contains(cmd, "pty input") {
 			t.Fatalf("must not deliver a prompt when blocked: %v", remote.execs)
 		}
 	}
@@ -638,14 +643,10 @@ func TestReportSessionEnd(t *testing.T) {
 // agent with nothing to address and no way to prompt a sibling.
 func TestSessionListIncludesLiveSessionsMissingFromTheDB(t *testing.T) {
 	repo := testRepo(t)
-	remote := &fakeRemote{
-		tmuxSessions: []string{"treasury@WTB-1896", "not-aiman"},
-		// Only the aiman-managed session carries AIMAN_ID; the other must be
-		// ignored, which is how serve's and the trigger daemon's own tmux
-		// sessions stay out of the list.
-		tmuxEnv: map[string]string{"treasury@WTB-1896": "live-id-1"},
-		tmuxCWD: map[string]string{"treasury@WTB-1896": "/home/code/repos/treasury@WTB-1896"},
-	}
+	pty := ptyfake.New()
+	pty.Add(ptyruntime.SessionInfo{ID: "live-id-1", Name: "treasury@WTB-1896", Dir: "/home/code/repos/treasury@WTB-1896"})
+	// An exited PTY is not a live session.
+	pty.Add(ptyruntime.SessionInfo{ID: "done-1", Name: "done", Status: ptyruntime.StatusExited})
 	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
@@ -653,7 +654,7 @@ func TestSessionListIncludesLiveSessionsMissingFromTheDB(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = New(ln, repo, remote, nil, nil, nil, "t").Serve(ctx) }()
+	go func() { _ = New(ln, repo, nil, nil, nil, pty, "t").Serve(ctx) }()
 	sock := SocketPath(dir)
 
 	resp, err := Call(sock, "session.list", map[string]any{})
@@ -678,11 +679,11 @@ func TestSessionListIncludesLiveSessionsMissingFromTheDB(t *testing.T) {
 	if got.ID != "live-id-1" {
 		t.Errorf("ID = %q, want live-id-1", got.ID)
 	}
-	// Named after the tmux session, not the creation-flow's "impl": six
+	// Named after the terminal, not the creation-flow's "impl": six
 	// discovered sessions all called impl-N are indistinguishable and useless
 	// for addressing a specific sibling.
 	if got.Name != "treasury@WTB-1896" {
-		t.Errorf("Name = %q, want the tmux session name", got.Name)
+		t.Errorf("Name = %q, want the terminal name", got.Name)
 	}
 	// And the issue key drives the group, so sessions bucket usefully.
 	if got.Group != "WTB-1896" {
@@ -814,10 +815,8 @@ func TestSessionRegisterKeepsServeRuntimeState(t *testing.T) {
 
 func TestReportAgentSessionPersistsLiveUnregistered(t *testing.T) {
 	repo := testRepo(t)
-	remote := &fakeRemote{
-		tmuxSessions: []string{"live-sess"},
-		tmuxEnv:      map[string]string{"live-sess": "live-1"},
-	}
+	pty := ptyfake.New()
+	pty.Add(ptyruntime.SessionInfo{ID: "live-1", Name: "live-sess"})
 	dir := shortTempDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
@@ -825,7 +824,7 @@ func TestReportAgentSessionPersistsLiveUnregistered(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = New(ln, repo, remote, nil, nil, nil, "t").Serve(ctx) }()
+	go func() { _ = New(ln, repo, nil, nil, nil, pty, "t").Serve(ctx) }()
 	resp, err := Call(SocketPath(dir), "session.report_agent_session", map[string]any{
 		"id": "live-1", "state": "idle", "source": "lifecycle",
 	})
@@ -951,7 +950,7 @@ func forServer(t *testing.T, t3Ref string) (*Server, *fakeCreator) {
 	t.Helper()
 	srv, _, _ := todoServer(t, domain.Session{
 		ID: "p", Name: "parent", Branch: "feat/proj-1", BaseBranch: "main",
-		RepoName: "owner/r", Backend: domain.BackendTmux, TmuxSession: "p",
+		RepoName: "owner/r", Backend: domain.BackendPTY, TmuxSession: "p",
 	})
 	creator := &fakeCreator{}
 	srv.create = creator
@@ -1000,7 +999,7 @@ func TestCreateForLinksParent(t *testing.T) {
 	if cfg.InitialPrompt != "Add the parser" {
 		t.Fatalf("prompt = %q", cfg.InitialPrompt)
 	}
-	if cfg.ParentID != "p" || cfg.Repo.Name != "owner/r" || cfg.SessionBackend != domain.BackendTmux {
+	if cfg.ParentID != "p" || cfg.Repo.Name != "owner/r" || cfg.SessionBackend != "" {
 		t.Fatalf("cfg parent %q repo %q backend %q", cfg.ParentID, cfg.Repo.Name, cfg.SessionBackend)
 	}
 	if cfg.Agent == nil || cfg.Agent.Command != "claude" {
@@ -1123,16 +1122,19 @@ func TestCreateRejectsBadBrief(t *testing.T) {
 	}
 }
 
-// A tmux child whose link fails is torn down, not just forgotten: its tmux
-// session is killed and its worktree and branch are removed, so a retry can
-// recreate them.
-func TestCreateForRollbackTearsDownTmuxChild(t *testing.T) {
+// A child whose link fails is torn down, not just forgotten: its PTY is
+// killed and its worktree and branch are removed, so a retry can recreate
+// them.
+func TestCreateForRollbackTearsDownPTYChild(t *testing.T) {
 	srv, creator := forServer(t, "")
 	remote := &fakeRemote{}
 	srv.remote = remote
+	pty := ptyfake.New()
+	pty.Add(ptyruntime.SessionInfo{ID: "new-id", Name: "child-term"})
+	srv.pty = pty
 	creator.sess = &domain.Session{
-		ID: "new-id", Name: "child", Status: domain.SessionStatusActive, Backend: domain.BackendTmux,
-		TmuxSession: "child-tmux", WorktreePath: "/r/repo@feat--t3", Branch: "feat--t3",
+		ID: "new-id", Name: "child", Status: domain.SessionStatusActive, Backend: domain.BackendPTY,
+		TmuxSession: "child-term", WorktreePath: "/r/repo@feat--t3", Branch: "feat--t3",
 	}
 	creator.onCreate = func() {
 		_ = srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAgent, func(l *domain.TodoList) error {
@@ -1148,8 +1150,14 @@ func TestCreateForRollbackTearsDownTmuxChild(t *testing.T) {
 	if resp.Error == nil || resp.Error.Code != CodeCreateFailed {
 		t.Fatalf("error = %+v, want create_failed", resp.Error)
 	}
+	if kills := pty.Kills(); len(kills) == 0 || kills[0] != "new-id" {
+		t.Errorf("rollback did not kill the child's pty; kills = %v", kills)
+	}
 	all := strings.Join(remote.execs, "\n")
-	for _, want := range []string{"tmux kill-session -t '=child-tmux'", "worktree remove --force", "'/r/repo@feat--t3'", "branch -D 'feat--t3'"} {
+	if strings.Contains(all, "tmux") {
+		t.Errorf("rollback ran tmux:\n%s", all)
+	}
+	for _, want := range []string{"worktree remove --force", "'/r/repo@feat--t3'", "branch -D 'feat--t3'"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("rollback did not run %q; ran:\n%s", want, all)
 		}

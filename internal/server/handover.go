@@ -462,13 +462,10 @@ func (s *Server) handoverPane(ctx context.Context, sess domain.Session) string {
 }
 
 func (s *Server) captureHandoverPane(ctx context.Context, sess domain.Session) (string, error) {
-	if sess.IsPTY() && s.pty != nil {
-		return s.pty.CaptureScreen(sess.ID)
-	}
-	if s.remote == nil {
+	if sess.IsLegacyTmux() || s.pty == nil {
 		return "", nil
 	}
-	return s.remote.CaptureTmuxPane(ctx, sess.TmuxSession)
+	return s.pty.CaptureScreen(sess.ID)
 }
 
 // paneTail keeps the last handover.PaneLines of a cleaned capture. Trailing
