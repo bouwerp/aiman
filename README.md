@@ -322,25 +322,33 @@ file or a test command.
 
 `requires` entries are checked when the wizard reaches the summary; missing tools show a
 warning but do not block create. Launch model/effort precedence is `agent_defaults` <
-`repos.<slug>.agent_overrides` < picked `agents.preferred` entry < `roles.verifier`. The
-`V verify` hint appears for a non-reviewer session with commits ahead of its base;
-`verify.test_command` supplies the evidence a passing review needs.
+`repos.<slug>.agent_overrides` < picked tier entry < `roles.verifier`. The reviewer comes
+from `roles.verifier.agent`, then `verify.agents`, then the smart tier; an entry that names
+a different model reviews even when its binary matches the worker's, so an all-Pi setup
+still gets an independent reviewer. The `V verify` hint appears for a non-reviewer session
+with commits ahead of its base; `verify.test_command` supplies the evidence a passing
+review needs.
 
 Every handover (archive, forget, restart, agent switch, pre-compact) first writes a
 mechanical `.aiman_handover.md`. With `handover.child` on, serve then starts a hidden
 child agent in `~/.aiman/handovers/<run-id>/` that reads the transcript, rewrites the
 handover, and proposes memory candidates. The child agent is the first installed of
-`roles.handover.agent`, `agents.preferred`, then the worker's own agent. With no
-`roles.handover.model` it runs a cheap model: `haiku` for Claude, `gpt-5.4-mini` for
-Codex, `gpt-5-mini` for Copilot, `gemini-3.7-flash-low` for agy. The child runs
+`roles.handover.agent`, the worker tier (`agents.preferred`, with each entry's model),
+then the worker's own agent. With no role model and no entry model it runs a cheap model:
+`haiku` for Claude, `gpt-5.4-mini` for Codex, `gpt-5-mini` for Copilot,
+`gemini-3.7-flash-low` for agy. The child runs
 prompt-free and is only told not to edit, commit or push. A failed, incomplete or
 timed-out child (`handover.timeout`, default 10m) leaves the mechanical handover in place.
 A pre-compact pointer waits until the child finishes, and a restart or agent switch gets a
 note to re-read the rewritten file.
 
 Coordinators start child sessions with `aiman session create --for <todo-id>`; the server
-picks the first `agents.preferred` entry whose agent is installed when `--agent` is omitted,
-and launches it with that entry's model and effort. Give a
+picks a model tier when `--agent` is omitted, and launches the first installed entry of
+that tier with its model and effort. `--tier worker` (the default for a child) suits a
+well-specified task; `--tier smart` suits planning, ambiguous debugging, cross-cutting
+integration, review, or long-running work. A session the user starts defaults to smart; a
+tier with no installed entry falls back to the other one and reports `tier_fallback`.
+`--model` and `--effort` apply only with an explicit `--agent`. Give a
 child an explicit input contract with `--brief-file <path>` (the three headings described
 in the bundled skill). A child writes `.aiman_report.md` before its PR, and the parent's
 item stays open until that report cites a file or a test command.
@@ -793,10 +801,11 @@ From inside a pane (or any process on the remote with the socket):
 aiman session list [--group GROUP]
 aiman session get <target>
 aiman session create --repo owner/repo --branch NAME [--agent AGENT] \
+    [--tier smart|worker] [--model MODEL] [--effort EFFORT] \
     [--name NAME] [--group GROUP] [--parent ID] [--orphan] \
     [--for TODO-ID] [--brief-file PATH] \
     [--dir SUBDIR] [--prompt TEXT] [--issue KEY] [--base BRANCH] [--existing]
-aiman session create --quick --agent claude [--name NAME] [--orphan]
+aiman session create --quick [--tier smart|worker] [--name NAME] [--orphan]
 aiman session rename <target> NEW-NAME
 aiman session move <target> --group GROUP
 aiman session forget <target>
@@ -848,7 +857,7 @@ Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refus
 
 `<target>` is resolved in this order: unique `name`, `group/name`, UUID (`id`), terminal name.
 
-`--quick` is ad-hoc, group `quick`, generated `q1`/`q2`/…, current host. `--agent` is optional: when omitted, serve starts the first installed `agents.preferred` command. `--for` links the new child to a parent to-do and derives its branch, base, repo, issue, group, backend and prompt from that parent; `--brief-file` sends the file contents as the child's input contract. A create from a session (RPC `caller` / `AIMAN_ID`) nests under that session on the dashboard; `--orphan` makes a root. The dashboard hears `session_created` on the existing `session.events` stream, so a new helper appears without `r`. `--wait` on prompt sends then waits until the first of `idle`, `waiting_input`, or `errored`. Default timeout is 120s; `--timeout 0` means no limit. `--until blocked` is an alias for `waiting_input`. Prompting a session that is already waiting for input fails with `agent_blocked` unless `--force`.
+`--quick` is ad-hoc, group `quick`, generated `q1`/`q2`/…, current host. `--agent` is optional: when omitted, serve picks from a model tier, `--tier smart|worker` (default smart for a session you start, worker for a child), starting the first installed entry of that tier. `--model` and `--effort` apply only with `--agent`. `--for` links the new child to a parent to-do and derives its branch, base, repo, issue, group, backend and prompt from that parent; `--brief-file` sends the file contents as the child's input contract. A create from a session (RPC `caller` / `AIMAN_ID`) nests under that session on the dashboard; `--orphan` makes a root. The dashboard hears `session_created` on the existing `session.events` stream, so a new helper appears without `r`. `--wait` on prompt sends then waits until the first of `idle`, `waiting_input`, or `errored`. Default timeout is 120s; `--timeout 0` means no limit. `--until blocked` is an alias for `waiting_input`. Prompting a session that is already waiting for input fails with `agent_blocked` unless `--force`.
 
 Rename changes the display name only. It does not rename the terminal or the git worktree.
 
@@ -1056,12 +1065,25 @@ agent_defaults:
     effort: medium
 
 agents:
-  # Agents a coordinator may start for child sessions, in order. serve starts
-  # the first entry whose agent is installed on the host. An entry is a command,
-  # or agent/model/effort; an entry's model and effort override agent_defaults
-  # and repo agent_overrides for that child. The same agent may appear more than
-  # once with different models. Editable in Menu → Preferred agents, which lists
-  # Pi's providers and models from the default remote (`pi --list-models`).
+  # The smart tier: agents a planning, debugging, integration, review or
+  # long-running session is launched from, in order. serve starts the first
+  # entry whose agent is installed; a smart request with nothing installed
+  # falls back to the worker tier. An entry is a command, or agent/model/effort.
+  # Editable in Menu → Model tiers.
+  smart:
+    - agent: pi
+      model: openrouter/moonshotai/kimi-k3
+      effort: high
+    - agent: claude
+      model: opus
+      effort: high
+  # The worker tier: agents a coordinator may start for child sessions, in
+  # order. `worker` is also the default tier for a child, and a worker request
+  # with nothing installed falls back to smart. An entry's model and effort
+  # override agent_defaults and repo agent_overrides for that session. The same
+  # agent may appear more than once with different models. Editable in
+  # Menu → Model tiers, which lists Pi's providers and models from the default
+  # remote (`pi --list-models`).
   preferred:
     - agent: pi
       model: openrouter/qwen/qwen3-coder
