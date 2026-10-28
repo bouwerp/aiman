@@ -89,6 +89,7 @@ func runServe() error {
 	flow := usecase.NewFlowManager(jiraProvider, &cfg.Integrations.Jira, gitManager, localExec, domain.NewGitSlugger(), skills.NewEngine(cfg))
 	flow.SetRepoBootstrap(cfg.Repos)
 	flow.SetRoles(cfg.Roles)
+	flow.SetUpdateGuards(cfg.AgentUpdateGuards())
 
 	dir, err := config.GetDir()
 	if err != nil {

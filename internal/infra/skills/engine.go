@@ -304,6 +304,9 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	if summaryExists {
 		result.InitialPrompt = appendPrompt(result.InitialPrompt, sessionSummaryPrompt)
 	}
+	if e.cfg.AgentUpdateGuards() {
+		result.Command = WithSelfUpdateGuardFlags(result.Command)
+	}
 	result.Command = applyConfiguredLaunchFlags(result.Command, agent, e.cfg, launchRepo, launchRole)
 	return result, nil
 }

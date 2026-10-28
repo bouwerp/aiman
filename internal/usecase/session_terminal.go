@@ -43,6 +43,9 @@ type PTYSpec struct {
 	Dir     string
 	Command string
 	Env     map[string]string
+	// NoUpdateGuard leaves out the env that disables the agent's own
+	// updater (agents.update.mode off).
+	NoUpdateGuard bool
 }
 
 // PaneShellCommand is the tmux pane command that runs the agent. The trailing
@@ -88,11 +91,14 @@ func CreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec
 		"dir":     spec.Dir,
 		"command": spec.Command,
 	}
-	if len(spec.Env) > 0 {
-		env := map[string]string{}
-		for k, v := range spec.Env {
-			env[k] = v
-		}
+	env := map[string]string{}
+	for k, v := range spec.Env {
+		env[k] = v
+	}
+	if !spec.NoUpdateGuard {
+		mergeUpdateGuardEnv(env, spec.Command)
+	}
+	if len(env) > 0 {
 		params["env"] = env
 	}
 	raw, err := json.Marshal(params)
@@ -108,6 +114,17 @@ func CreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec
 		return fmt.Errorf("pty create: %s: %w", strings.TrimSpace(out), err)
 	}
 	return nil
+}
+
+// mergeUpdateGuardEnv adds the env that disables the agent's own updater
+// (infraAgent.GuardFor). This is the one place guard env enters a session; a
+// key the caller already set is never overwritten.
+func mergeUpdateGuardEnv(env map[string]string, command string) {
+	for k, v := range infraAgent.GuardFor(infraAgent.BaseOf(command)).Env {
+		if _, set := env[k]; !set {
+			env[k] = v
+		}
+	}
 }
 
 // CapturePTYPane returns recent output from a remote PTY session.

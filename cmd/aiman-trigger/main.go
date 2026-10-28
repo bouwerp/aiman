@@ -108,6 +108,7 @@ func run() error {
 	)
 	flowManager.SetRepoBootstrap(cfg.Repos)
 	flowManager.SetRoles(cfg.Roles)
+	flowManager.SetUpdateGuards(cfg.AgentUpdateGuards())
 
 	dir, err := config.GetDir()
 	if err != nil {

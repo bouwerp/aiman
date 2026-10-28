@@ -82,11 +82,31 @@ type ServeConfig struct {
 type AgentsConfig struct {
 	// Preferred is the order in which a coordinator may start child agents.
 	Preferred []string `yaml:"preferred"`
+	// Update configures how agent CLIs are kept up to date.
+	Update AgentUpdateConfig `yaml:"update,omitempty"`
+}
+
+// AgentUpdateConfig is the agents.update block.
+type AgentUpdateConfig struct {
+	// Mode is off, notify or auto; empty means auto. Off launches agents
+	// without the guards that disable their own self-updaters.
+	Mode string `yaml:"mode,omitempty"`
 }
 
 // IsZero keeps an untouched agents block out of the config while still
 // writing preferred: [] when the user clears a list.
-func (a AgentsConfig) IsZero() bool { return a.Preferred == nil }
+func (a AgentsConfig) IsZero() bool {
+	return a.Preferred == nil && a.Update == (AgentUpdateConfig{})
+}
+
+// AgentUpdateGuards reports whether aiman launches agents with their
+// self-updaters disabled. Only agents.update.mode off turns that off.
+func (c *Config) AgentUpdateGuards() bool {
+	if c == nil {
+		return true
+	}
+	return !strings.EqualFold(strings.TrimSpace(c.Agents.Update.Mode), "off")
+}
 
 // VerifyConfig configures reviewer sessions started by aiman verify.
 type VerifyConfig struct {

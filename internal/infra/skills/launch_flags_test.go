@@ -198,8 +198,60 @@ func TestEnsureInteractiveLaunch(t *testing.T) {
 		})
 	}
 
-	// An agent with no revival-time flags is passed through unchanged.
+	// An agent with no revival-time flags is passed through unchanged; its
+	// update guard is env, added at CreatePTYSession.
 	if got := EnsureInteractiveLaunch("claude", "/home/user/code/myrepo"); got != "claude" {
 		t.Errorf("expected claude command unchanged, got: %q", got)
+	}
+}
+
+func TestEnsureInteractiveLaunchAddsUpdateGuardFlags(t *testing.T) {
+	for cmd, want := range map[string]string{
+		"codex":          "-c check_for_update_on_startup=false",
+		"copilot":        "--no-auto-update",
+		"grok":           "--no-auto-update",
+		"cursor-agent":   "--disable-auto-update",
+		"/opt/bin/codex": "--disable in_app_updates",
+	} {
+		if got := EnsureInteractiveLaunch(cmd, ""); !strings.Contains(got, want) {
+			t.Errorf("EnsureInteractiveLaunch(%q) = %q, want %q", cmd, got, want)
+		}
+	}
+	// A setting the command already makes is the user's choice.
+	got := EnsureInteractiveLaunch("codex -c check_for_update_on_startup=true", "")
+	if strings.Contains(got, "check_for_update_on_startup=false") {
+		t.Errorf("the command's own -c setting must win: %q", got)
+	}
+	if got := EnsureInteractiveLaunch("copilot --no-auto-update", ""); strings.Count(got, "--no-auto-update") != 1 {
+		t.Errorf("guard flag duplicated: %q", got)
+	}
+}
+
+func TestPrepareSessionAddsUpdateGuardFlagsUnlessOff(t *testing.T) {
+	codex := domain.Agent{Name: "Codex CLI", Command: "codex"}
+	copilot := domain.Agent{Name: "GitHub Copilot", Command: "copilot"}
+	prep := func(cfg *config.Config, ag domain.Agent) string {
+		t.Helper()
+		res, err := NewEngine(cfg).PrepareSession(context.Background(), newMockRemote(), "/wt", ag, nil, true, nil, nil, domain.QualityKit{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Command
+	}
+	auto := &config.Config{Agents: config.AgentsConfig{Update: config.AgentUpdateConfig{Mode: "auto"}}}
+	for _, cfg := range []*config.Config{{}, auto} {
+		if got := prep(cfg, codex); !strings.Contains(got, "-c check_for_update_on_startup=false") {
+			t.Errorf("codex: %q", got)
+		}
+		if got := prep(cfg, copilot); !strings.Contains(got, "--no-auto-update") {
+			t.Errorf("copilot: %q", got)
+		}
+	}
+	off := &config.Config{Agents: config.AgentsConfig{Update: config.AgentUpdateConfig{Mode: "off"}}}
+	if got := prep(off, copilot); strings.Contains(got, "--no-auto-update") {
+		t.Errorf("mode off must not add guard flags: %q", got)
+	}
+	if got := prep(off, codex); strings.Contains(got, "check_for_update_on_startup") {
+		t.Errorf("mode off must not add guard flags: %q", got)
 	}
 }

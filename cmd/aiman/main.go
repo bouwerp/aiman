@@ -168,6 +168,7 @@ func run() error {
 	flowManager := usecase.NewFlowManager(jiraProvider, &cfg.Integrations.Jira, gitManager, sshManager, slugger, skillEngine)
 	flowManager.SetRepoBootstrap(cfg.Repos)
 	flowManager.SetRoles(cfg.Roles)
+	flowManager.SetUpdateGuards(cfg.AgentUpdateGuards())
 	if home, err := os.UserHomeDir(); err == nil {
 		flowManager.SetUserChecklistDir(filepath.Join(home, quality.UserChecklistDir))
 	}

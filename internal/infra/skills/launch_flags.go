@@ -167,8 +167,30 @@ func withCodexInteractiveFlags(cmd, worktree string) string {
 }
 
 // EnsureInteractiveLaunch adds per-agent flags a detached PTY session needs
-// so the TUI stays in the foreground instead of exiting the holder.
+// so the TUI stays in the foreground instead of exiting the holder, plus the
+// agent's self-update guard flags. Revive calls it without a config, so the
+// guard flags are always added here.
 func EnsureInteractiveLaunch(cmd, worktree string) string {
+	return WithSelfUpdateGuardFlags(ensureInteractiveFlags(cmd, worktree))
+}
+
+// WithSelfUpdateGuardFlags adds the launch flags that disable the agent's own
+// updater (agent.GuardFor). A Codex `-c key=value` whose key the command
+// already sets is left to the command.
+func WithSelfUpdateGuardFlags(cmd string) string {
+	for _, flag := range agent.GuardFor(agent.BaseOf(cmd)).Flags {
+		if rest, ok := strings.CutPrefix(flag, "-c "); ok {
+			key, _, _ := strings.Cut(rest, "=")
+			if strings.Contains(cmd, key+"=") {
+				continue
+			}
+		}
+		cmd = ensureFlag(cmd, flag)
+	}
+	return cmd
+}
+
+func ensureInteractiveFlags(cmd, worktree string) string {
 	base := agentBaseCommand(cmd)
 	if base == "codex" {
 		return withCodexInteractiveFlags(cmd, worktree)

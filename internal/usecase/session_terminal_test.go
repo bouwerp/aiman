@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -254,6 +255,57 @@ func TestApplyKiloAllowEnv(t *testing.T) {
 	ApplyKiloAllowEnv(context.Background(), r, "claude", env)
 	if len(env) != 0 {
 		t.Fatalf("non-kilo must not get KILO_*: %v", env)
+	}
+}
+
+// ptyCreateEnv returns the env CreatePTYSession sent in its params file.
+func ptyCreateEnv(t *testing.T, spec PTYSpec) map[string]string {
+	t.Helper()
+	r := &terminalRemote{}
+	if err := CreatePTYSession(context.Background(), r, spec); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for path, body := range r.written {
+		if !strings.HasPrefix(path, "/tmp/aiman-pty-") {
+			continue
+		}
+		var params struct {
+			Env map[string]string `json:"env"`
+		}
+		if err := json.Unmarshal(body, &params); err != nil {
+			t.Fatal(err)
+		}
+		return params.Env
+	}
+	t.Fatalf("no params file written: %v", r.written)
+	return nil
+}
+
+func TestCreatePTYSessionAddsUpdateGuardEnv(t *testing.T) {
+	env := ptyCreateEnv(t, PTYSpec{ID: "sid", Command: "claude --resume x", Env: map[string]string{"AWS_PROFILE": "prod"}})
+	if env["DISABLE_AUTOUPDATER"] != "1" || env["AWS_PROFILE"] != "prod" {
+		t.Fatalf("claude env = %v", env)
+	}
+	env = ptyCreateEnv(t, PTYSpec{ID: "sid", Command: "MUSE_X=1 /home/u/.local/bin/muse --yolo"})
+	if env["MUSE_NO_AUTO_UPDATE"] != "1" {
+		t.Fatalf("muse env = %v", env)
+	}
+	if env := ptyCreateEnv(t, PTYSpec{ID: "sid", Command: "bash"}); len(env) != 0 {
+		t.Fatalf("an unknown command got guard env: %v", env)
+	}
+}
+
+func TestCreatePTYSessionUserEnvWinsOverGuard(t *testing.T) {
+	env := ptyCreateEnv(t, PTYSpec{ID: "sid", Command: "pi", Env: map[string]string{"PI_SKIP_VERSION_CHECK": "0"}})
+	if env["PI_SKIP_VERSION_CHECK"] != "0" {
+		t.Fatalf("guard overwrote the caller's value: %v", env)
+	}
+}
+
+func TestCreatePTYSessionNoUpdateGuard(t *testing.T) {
+	env := ptyCreateEnv(t, PTYSpec{ID: "sid", Command: "claude", NoUpdateGuard: true, Env: map[string]string{"A": "b"}})
+	if _, ok := env["DISABLE_AUTOUPDATER"]; ok {
+		t.Fatalf("mode off still added guard env: %v", env)
 	}
 }
 

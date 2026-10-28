@@ -37,6 +37,8 @@ type FlowManager struct {
 	userChecklistDir string
 	// doneItems adds the Done-when met to-do for sessions with conditions.
 	doneItems DoneItems
+	// noUpdateGuard launches agents with their own updaters left on.
+	noUpdateGuard bool
 }
 
 func NewFlowManager(
@@ -71,6 +73,12 @@ func (m *FlowManager) SetDoneItems(d DoneItems) {
 	if d != nil {
 		m.doneItems = d
 	}
+}
+
+// SetUpdateGuards sets whether created sessions disable the agent's own
+// updater (config.AgentUpdateGuards). The default is on.
+func (m *FlowManager) SetUpdateGuards(on bool) {
+	m.noUpdateGuard = !on
 }
 
 // SetRoles sets the per-role overrides.
@@ -1024,11 +1032,12 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 		infraGit.ReportProgress(ctx, "Adopting existing PTY session...")
 	} else {
 		if err := CreatePTYSession(ctx, sshMgr, PTYSpec{
-			ID:      session.ID,
-			Name:    tmuxName,
-			Dir:     workingDir,
-			Command: agentCmd,
-			Env:     env,
+			ID:            session.ID,
+			Name:          tmuxName,
+			Dir:           workingDir,
+			Command:       agentCmd,
+			Env:           env,
+			NoUpdateGuard: m.noUpdateGuard,
 		}); err != nil {
 			return nil, fmt.Errorf("failed to start PTY session: %w", err)
 		}

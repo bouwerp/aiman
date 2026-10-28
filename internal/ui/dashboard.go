@@ -7877,11 +7877,12 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 			}
 			usecase.ApplyKiloAllowEnv(ctx, mgr, agentCmd, env)
 			if err := usecase.RecreatePTYSession(ctx, mgr, usecase.PTYSpec{
-				ID:      s.ID,
-				Name:    s.TmuxSession,
-				Dir:     workingDir,
-				Command: agentCmd,
-				Env:     env,
+				ID:            s.ID,
+				Name:          s.TmuxSession,
+				Dir:           workingDir,
+				Command:       agentCmd,
+				Env:           env,
+				NoUpdateGuard: !cfg.AgentUpdateGuards(),
 			}); err != nil {
 				return sessionCreateMsg{err: fmt.Errorf("failed to restart PTY session: %w", err), placeholderID: placeholderID}
 			}
