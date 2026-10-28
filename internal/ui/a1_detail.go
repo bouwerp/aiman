@@ -54,6 +54,7 @@ func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width i
 		}
 	}
 	add(metaAgent(s))
+	add(s.Tier)
 	if !s.CreatedAt.IsZero() {
 		add(shortElapsed(now.Sub(s.CreatedAt)))
 	}

@@ -95,9 +95,10 @@ type Deps struct {
 	Context   ContextWriter
 	Jobs      Jobs
 	Installed func(string) bool
-	// Candidates lists child agents in preference order for a worker agent;
+	// Candidates lists child agents in preference order for a worker agent,
+	// each with the model and effort its tier entry names;
 	// config.(*Config).HandoverCandidates in serve.
-	Candidates func(workerAgent string) []string
+	Candidates func(workerAgent string) []config.PreferredAgent
 	// BaseDir holds one scratch directory per run (~/.aiman/handovers).
 	BaseDir string
 	Now     func() time.Time // nil means time.Now
@@ -353,7 +354,8 @@ func childBranch(runID string) string {
 // launch builds the scratch directory and creates the child session. A
 // failure ends the run as failed with the mechanical fallback.
 func (m *Manager) launch(ctx context.Context, r Run, worker domain.Session) {
-	child, agentName, err := m.prepare(ctx, r, worker)
+	child, pick, err := m.prepare(ctx, r, worker)
+	agentName := pick.Agent
 	if err != nil {
 		if ctx.Err() != nil {
 			return // Close; Resume fails the starting run next time
@@ -382,28 +384,35 @@ func (m *Manager) launch(ctx context.Context, r Run, worker domain.Session) {
 	m.watch(ctx, r)
 }
 
-func (m *Manager) prepare(ctx context.Context, r Run, worker domain.Session) (domain.Session, string, error) {
-	agentName := m.pickAgent(worker.AgentName)
+func (m *Manager) prepare(ctx context.Context, r Run, worker domain.Session) (domain.Session, config.PreferredAgent, error) {
+	pick := m.pickAgent(worker.AgentName)
+	agentName := pick.Agent
 	if agentName == "" {
-		return domain.Session{}, "", errors.New("no handover agent is installed")
+		return domain.Session{}, config.PreferredAgent{}, errors.New("no handover agent is installed")
 	}
 	if err := os.MkdirAll(r.Dir, 0o700); err != nil {
-		return domain.Session{}, agentName, err
+		return domain.Session{}, pick, err
 	}
 	if out, err := exec.CommandContext(ctx, "git", "-C", r.Dir, "init", "-q").CombinedOutput(); err != nil { //nolint:gosec // r.Dir is the run's scratch directory under BaseDir
-		return domain.Session{}, agentName, fmt.Errorf("git init %s: %v: %s", r.Dir, err, strings.TrimSpace(string(out)))
+		return domain.Session{}, pick, fmt.Errorf("git init %s: %v: %s", r.Dir, err, strings.TrimSpace(string(out)))
 	}
 	brief := handover.ChildBrief(handover.BriefInput{
 		Dir: r.Dir, Transcript: r.Transcript, Worktree: r.Worktree, Reason: r.Reason,
 	})
 	if err := os.WriteFile(filepath.Join(r.Dir, handover.BriefFile), []byte(brief), 0o600); err != nil {
-		return domain.Session{}, agentName, err
+		return domain.Session{}, pick, err
 	}
 	if err := os.WriteFile(filepath.Join(r.Dir, handover.MechanicalFile), []byte(r.Mechanical), 0o600); err != nil {
-		return domain.Session{}, agentName, err
+		return domain.Session{}, pick, err
 	}
-	childAgent := domain.Agent{Name: agentName, Command: agentName}
+	// The tier entry's model and effort travel with the pick, so a handover
+	// child runs the worker entry's cheap model rather than the role default.
+	childAgent := domain.Agent{
+		Name: agentName, Command: agentName,
+		LaunchModel: pick.Model, LaunchEffort: pick.Effort,
+	}
 	if known, ok := agent.FindKnown(agentName); ok {
+		known.LaunchModel, known.LaunchEffort = pick.Model, pick.Effort
 		childAgent = known
 	}
 	child, err := m.d.Sessions.CreateChild(ctx, domain.SessionConfig{
@@ -419,23 +428,25 @@ func (m *Manager) prepare(ctx context.Context, r Run, worker domain.Session) (do
 		InitialPrompt:    "Read " + filepath.Join(r.Dir, handover.BriefFile) + " and follow it.",
 		RemoteHost:       worker.RemoteHost,
 	})
-	return child, agentName, err
+	return child, pick, err
 }
 
-// pickAgent is the first installed candidate for the worker's agent.
-func (m *Manager) pickAgent(workerAgent string) string {
-	var names []string
+// pickAgent is the first installed candidate for the worker's agent, with the
+// model and effort its tier entry names.
+func (m *Manager) pickAgent(workerAgent string) config.PreferredAgent {
+	var entries []config.PreferredAgent
 	if m.d.Candidates != nil {
-		names = m.d.Candidates(workerAgent)
+		entries = m.d.Candidates(workerAgent)
 	} else if workerAgent != "" {
-		names = []string{workerAgent}
+		entries = []config.PreferredAgent{{Agent: workerAgent}}
 	}
-	for _, name := range names {
-		if m.d.Installed != nil && m.d.Installed(name) {
-			return name
+	for _, entry := range entries {
+		if name := entry.Command(); name != "" && m.d.Installed != nil && m.d.Installed(name) {
+			entry.Agent = name
+			return entry
 		}
 	}
-	return ""
+	return config.PreferredAgent{}
 }
 
 // watch follows a running child until it finishes.

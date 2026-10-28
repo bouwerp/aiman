@@ -14,6 +14,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // piModels is a slice of real `pi --list-models` output, parsed.
@@ -443,5 +444,101 @@ func TestPreferredEditorAcceptsTypedCommand(t *testing.T) {
 	m = selectRow(t, m, "Default")
 	if m.inFlow() || len(m.items) != 1 || m.items[0] != (config.PreferredAgent{Agent: "my-agent"}) {
 		t.Fatalf("step=%v items=%v", m.step, m.items)
+	}
+}
+
+// The page edits both tiers: tab switches, and enter saves both lists.
+func TestModelTiersTabsSaveBoth(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Smart:     []config.PreferredAgent{{Agent: "pi", Model: "kimi-k3"}},
+		Preferred: config.PreferredFromCommands("claude"),
+	}}
+	m := NewAgentPreferredModel(cfg, "", nil)
+	// A smart tier with entries is the tab the page opens on.
+	if m.tab != config.TierSmart || len(m.items) != 1 || m.items[0].Agent != "pi" {
+		t.Fatalf("opened on %q with %v", m.tab, m.items)
+	}
+	m = send(t, m, pressKey("tab"))
+	if m.tab != config.TierWorker || len(m.items) != 1 || m.items[0].Agent != "claude" {
+		t.Fatalf("after tab: %q %v", m.tab, m.items)
+	}
+	m = send(t, m, pressRune('a'))
+	m = pickAgentRow(t, m, "codex")
+	m = selectRow(t, m, "Default")
+	m = selectRow(t, m, "Default")
+	if len(m.items) != 2 {
+		t.Fatalf("worker items = %v", m.items)
+	}
+	m = send(t, m, pressKey("tab"))
+	if m.tab != config.TierSmart || len(m.items) != 1 {
+		t.Fatalf("back on %q with %v", m.tab, m.items)
+	}
+	m = send(t, m, pressRune('d'))
+	m = send(t, m, pressKey("enter"))
+	if !m.saved {
+		t.Fatalf("not saved: %v", m.err)
+	}
+	wantSmart := []config.PreferredAgent{}
+	if !slices.Equal(cfg.Agents.Smart, wantSmart) {
+		t.Fatalf("saved smart = %+v", cfg.Agents.Smart)
+	}
+	wantWorker := []config.PreferredAgent{{Agent: "claude"}, {Agent: "codex"}}
+	if !slices.Equal(cfg.Agents.Preferred, wantWorker) {
+		t.Fatalf("saved worker = %+v", cfg.Agents.Preferred)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agents.Smart == nil || len(loaded.Agents.Smart) != 0 {
+		t.Fatalf("cleared smart reloaded as %#v", loaded.Agents.Smart)
+	}
+	if !slices.Equal(loaded.Agents.Preferred, wantWorker) {
+		t.Fatalf("reloaded worker = %+v", loaded.Agents.Preferred)
+	}
+}
+
+// An empty smart tier stays unset, so the file does not gain a smart key.
+func TestModelTiersLeavesUnsetTierUnset(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{Agents: config.AgentsConfig{Preferred: config.PreferredFromCommands("claude")}}
+	m := NewAgentPreferredModel(cfg, "", nil)
+	m = send(t, m, pressKey("enter"))
+	if !m.saved {
+		t.Fatalf("not saved: %v", m.err)
+	}
+	if cfg.Agents.Smart != nil {
+		t.Fatalf("unset smart became %#v", cfg.Agents.Smart)
+	}
+	raw, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".aiman", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "smart:") {
+		t.Fatalf("config gained a smart key:\n%s", raw)
+	}
+}
+
+// Each tab shows its own guidance and empty-tab hint.
+func TestModelTiersViewTabs(t *testing.T) {
+	m := NewAgentPreferredModel(&config.Config{}, "", nil)
+	view := ansi.Strip(m.viewString())
+	if !strings.Contains(view, "Model tiers") || !strings.Contains(view, "smart (0)") || !strings.Contains(view, "worker (0)") {
+		t.Fatalf("view:\n%s", view)
+	}
+	if !strings.Contains(view, "a worker request falls back to the smart tier") {
+		t.Fatalf("worker hint missing:\n%s", view)
+	}
+	if !strings.Contains(view, "Used for: a well-specified task") {
+		t.Fatalf("worker guidance missing:\n%s", view)
+	}
+	m = send(t, m, pressKey("tab"))
+	view = ansi.Strip(m.viewString())
+	if !strings.Contains(view, "a smart request falls back to the worker tier") {
+		t.Fatalf("smart hint missing:\n%s", view)
+	}
+	if !strings.Contains(view, "Used for: planning or design") {
+		t.Fatalf("smart guidance missing:\n%s", view)
 	}
 }

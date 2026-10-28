@@ -891,7 +891,7 @@ func pickServer(t *testing.T, preferred []config.PreferredAgent, installed ...st
 	for _, c := range installed {
 		have[c] = true
 	}
-	srv.SetAgentChoice(preferred, func(_ context.Context, command string) bool { return have[command] })
+	srv.SetAgentChoice(config.AgentsConfig{Preferred: preferred}, func(_ context.Context, command string) bool { return have[command] })
 	return srv, repo, creator
 }
 
@@ -981,7 +981,7 @@ func forServer(t *testing.T, t3Ref string) (*Server, *fakeCreator) {
 	})
 	creator := &fakeCreator{}
 	srv.create = creator
-	srv.SetAgentChoice(config.PreferredFromCommands("claude"), func(context.Context, string) bool { return true })
+	srv.SetAgentChoice(config.AgentsConfig{Preferred: config.PreferredFromCommands("claude")}, func(context.Context, string) bool { return true })
 	// Seeded as the agent, which never steers, so a later note is the create's.
 	err := srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAgent, func(l *domain.TodoList) error {
 		l.Items = append(l.Items,
@@ -1215,5 +1215,176 @@ func TestDiscardWorktreeScriptRemovesWorktreeAndBranch(t *testing.T) {
 	}
 	if out, _ := exec.Command("git", "-C", main, "branch", "--list", "feat--t3").Output(); strings.TrimSpace(string(out)) != "" {
 		t.Fatalf("branch still present: %q", out)
+	}
+}
+
+// tierServer is a serve instance with both tiers and the given commands
+// installed.
+func tierServer(t *testing.T, smart, worker []config.PreferredAgent, installed ...string) (*Server, domain.SessionRepository, *fakeCreator) {
+	t.Helper()
+	repo := testRepo(t)
+	creator := &fakeCreator{}
+	srv := New(nil, repo, nil, creator, nil, nil, "test")
+	have := map[string]bool{}
+	for _, c := range installed {
+		have[c] = true
+	}
+	srv.SetAgentChoice(config.AgentsConfig{Smart: smart, Preferred: worker},
+		func(_ context.Context, command string) bool { return have[command] })
+	return srv, repo, creator
+}
+
+// A user-started create with no agent uses the smart tier and records it.
+func TestCreateDefaultsToSmartTier(t *testing.T) {
+	srv, repo, creator := tierServer(t,
+		[]config.PreferredAgent{{Agent: "pi", Model: "kimi-k3", Effort: "high"}},
+		config.PreferredFromCommands("claude"), "pi", "claude")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	a := creator.cfg.Agent
+	if a == nil || a.Command != "pi" || a.LaunchModel != "kimi-k3" || a.LaunchEffort != "high" {
+		t.Fatalf("agent = %+v, want the smart entry", a)
+	}
+	if creator.cfg.Tier != config.TierSmart {
+		t.Fatalf("cfg tier = %q, want smart", creator.cfg.Tier)
+	}
+	got, err := repo.Get(context.Background(), "new-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Tier != config.TierSmart || got.LaunchModel != "kimi-k3" {
+		t.Fatalf("saved tier/model = %q/%q", got.Tier, got.LaunchModel)
+	}
+}
+
+// A child created inside a session defaults to the worker tier.
+func TestCreateInsideSessionDefaultsToWorkerTier(t *testing.T) {
+	srv, _, _ := tierServer(t, nil, config.PreferredFromCommands("claude"), "pi", "claude")
+	if err := srv.repo.Save(context.Background(), &domain.Session{ID: "p", Name: "parent", Branch: "feat/x"}); err != nil {
+		t.Fatal(err)
+	}
+	creator := srv.create.(*fakeCreator)
+	resp := rpc(t, srv, "p", "session.create", map[string]any{"quick": true})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.Tier != config.TierWorker {
+		t.Fatalf("cfg tier = %q, want worker", creator.cfg.Tier)
+	}
+	if creator.cfg.Agent == nil || creator.cfg.Agent.Command != "claude" {
+		t.Fatalf("agent = %+v", creator.cfg.Agent)
+	}
+}
+
+func TestCreateTierFlagPicksThatTier(t *testing.T) {
+	srv, _, creator := tierServer(t,
+		[]config.PreferredAgent{{Agent: "pi", Model: "kimi-k3"}},
+		config.PreferredFromCommands("claude"), "pi", "claude")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true, "tier": "worker"})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.Tier != config.TierWorker || creator.cfg.Agent.Command != "claude" {
+		t.Fatalf("tier/agent = %q/%+v", creator.cfg.Tier, creator.cfg.Agent)
+	}
+}
+
+// An uninstalled tier falls back to the other one and says so.
+func TestCreateTierFallsBack(t *testing.T) {
+	srv, _, creator := tierServer(t,
+		[]config.PreferredAgent{{Agent: "pi", Model: "kimi-k3"}},
+		config.PreferredFromCommands("claude"), "claude")
+	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true, "tier": "smart"})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	if creator.cfg.Tier != config.TierWorker || creator.cfg.Agent.Command != "claude" {
+		t.Fatalf("tier/agent = %q/%+v", creator.cfg.Tier, creator.cfg.Agent)
+	}
+	result, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("result = %#v", resp.Result)
+	}
+	if result["tier_fallback"] != true || result["requested_tier"] != "smart" {
+		t.Fatalf("fallback reporting = %#v", result)
+	}
+}
+
+func TestCreateTierRejectsBadCombinations(t *testing.T) {
+	srv, _, _ := tierServer(t, nil, config.PreferredFromCommands("claude"), "claude")
+	cases := map[string]map[string]any{
+		"unknown tier":    {"quick": true, "tier": "fast"},
+		"tier with agent": {"quick": true, "tier": "smart", "agent": "claude"},
+		"model no agent":  {"quick": true, "model": "opus"},
+		"effort no agent": {"quick": true, "effort": "high"},
+	}
+	for name, params := range cases {
+		t.Run(name, func(t *testing.T) {
+			resp := rpc(t, srv, "", "session.create", params)
+			if resp.Error == nil || resp.Error.Code != CodeInvalidParams {
+				t.Fatalf("error = %+v, want %s", resp.Error, CodeInvalidParams)
+			}
+		})
+	}
+}
+
+// An explicit agent with a model carries both, and no tier.
+func TestCreateExplicitAgentTakesModelAndEffort(t *testing.T) {
+	srv, _, creator := tierServer(t, nil, config.PreferredFromCommands("claude"), "claude", "pi")
+	resp := rpc(t, srv, "", "session.create", map[string]any{
+		"quick": true, "agent": "pi", "model": "kimi-k3", "effort": "high",
+	})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	a := creator.cfg.Agent
+	if a == nil || a.Command != "pi" || a.LaunchModel != "kimi-k3" || a.LaunchEffort != "high" {
+		t.Fatalf("agent = %+v", a)
+	}
+	if creator.cfg.Tier != "" {
+		t.Fatalf("explicit agent got tier %q", creator.cfg.Tier)
+	}
+}
+
+func TestSessionInfoCarriesTier(t *testing.T) {
+	if got := sessionInfo(domain.Session{Tier: "smart"}, "").Tier; got != "smart" {
+		t.Fatalf("tier = %q", got)
+	}
+}
+
+// The created event records which tier was asked for, which one ran, the
+// model and whether a fallback happened.
+func TestCreateLedgerRecordsTier(t *testing.T) {
+	repo := logRepo(t)
+	srv := New(nil, repo, nil, &fakeCreator{}, nil, nil, "test")
+	srv.SetAgentChoice(config.AgentsConfig{
+		Smart:     []config.PreferredAgent{{Agent: "pi", Model: "kimi-k3", Effort: "high"}},
+		Preferred: config.PreferredFromCommands("claude"),
+	}, func(_ context.Context, command string) bool { return command == "claude" })
+	resp := rpc(t, srv, "", "session.create", map[string]any{"quick": true, "tier": "smart"})
+	if resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	events, err := repo.ListSessionEvents(context.Background(), "new-id", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Kind != domain.EventSessionCreated {
+		t.Fatalf("events = %+v", events)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"tier": "worker", "requested_tier": "smart", "tier_fallback": true,
+		"model": "", "effort": "", "agent": "claude",
+	}
+	for k, v := range want {
+		if payload[k] != v {
+			t.Errorf("%s = %#v, want %#v (payload %#v)", k, payload[k], v, payload)
+		}
 	}
 }

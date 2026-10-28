@@ -113,3 +113,27 @@ func TestFormatSessionEventTruncatesPayload(t *testing.T) {
 		t.Fatalf("payload not truncated: %q", got)
 	}
 }
+
+// A tier and its model/effort flags reach the params unchanged.
+func TestSessionCreateTierFlags(t *testing.T) {
+	flags, _ := takeFlags([]string{"--quick", "--tier", "smart"})
+	params, err := sessionCreateParams(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["tier"] != "smart" {
+		t.Fatalf("params = %v, want tier smart", params)
+	}
+	if _, ok := params["agent"]; ok {
+		t.Fatalf("params = %v, a tier must not carry an agent", params)
+	}
+
+	flags, _ = takeFlags([]string{"--quick", "--agent", "pi", "--model", "kimi-k3", "--effort", "high"})
+	params, err = sessionCreateParams(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["model"] != "kimi-k3" || params["effort"] != "high" || params["agent"] != "pi" {
+		t.Fatalf("params = %v", params)
+	}
+}

@@ -291,3 +291,17 @@ func stripLines(lines []string) []string {
 	}
 	return out
 }
+
+// The tier sits right after the agent and model.
+func TestMetaLineShowsTier(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	plain := ansi.Strip(renderMetaLine(domain.Session{
+		AgentName: "pi", AgentModel: "kimi-k3", Tier: "worker",
+	}, detailMetaExtras{}, now, 120))
+	if plain != "pi kimi-k3 · worker" {
+		t.Fatalf("meta %q", plain)
+	}
+	if got := ansi.Strip(renderMetaLine(domain.Session{AgentName: "pi"}, detailMetaExtras{}, now, 120)); got != "pi" {
+		t.Fatalf("no tier: %q", got)
+	}
+}

@@ -22,7 +22,11 @@ func applyConfiguredLaunchFlags(cmd string, ag domain.Agent, cfg *config.Config,
 	base := agentBaseCommand(ag.Command)
 	pick := config.AgentDefaults{Model: ag.LaunchModel, Effort: ag.LaunchEffort}
 	d := cfg.ResolveLaunchDefaultsWith(ag.Name, ag.Command, repo, role, pick)
-	if role == string(domain.SessionRoleHandover) && strings.TrimSpace(cfg.RoleOverrideFor(role, ag.Command).Model) == "" {
+	// Cheap applies only when neither the role nor the picked tier entry
+	// names a model; otherwise the configured model is what the child runs.
+	if role == string(domain.SessionRoleHandover) &&
+		strings.TrimSpace(cfg.RoleOverrideFor(role, ag.Command).Model) == "" &&
+		strings.TrimSpace(ag.LaunchModel) == "" {
 		if cheap := agent.LaunchCatalogFor(base).Cheap; cheap != "" {
 			d.Model = cheap
 		}

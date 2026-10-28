@@ -30,6 +30,7 @@ func remoteCreateSpecFrom(cfg domain.SessionConfig) usecase.RemoteCreateSpec {
 		Quick:          cfg.Quick,
 		ExistingBranch: cfg.ExistingBranch,
 		PromptFree:     cfg.PromptFree,
+		Tier:           cfg.Tier,
 	}
 	if cfg.Agent != nil && !isPreferredAgentChoice(cfg.Agent) {
 		spec.Agent = cfg.Agent.Command

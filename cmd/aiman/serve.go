@@ -201,7 +201,7 @@ func runServe() error {
 	go ciWatcher.Run(ctx)
 
 	scanner := agent.NewScanner(localExec)
-	srv.SetAgentChoice(cfg.Agents.Preferred, scanner.Installed)
+	srv.SetAgentChoice(cfg.Agents, scanner.Installed)
 	verifyDeps := srv.VerifyDeps(verify.NewStore(filepath.Join(dir, "reviews")), func(command string) bool {
 		return scanner.Installed(ctx, command)
 	})

@@ -128,11 +128,11 @@ type Server struct {
 	// writeHandover keeps the mechanical write and enqueues the memory job.
 	handovers *handoverchild.Manager
 
-	// preferredAgents is agents.preferred; agentInstalled reports whether a
-	// command resolves on this host. session.create with no agent picks from
-	// them. Both stay empty until SetAgentChoice.
-	preferredAgents []config.PreferredAgent
-	agentInstalled  func(ctx context.Context, command string) bool
+	// agents is the model tiers from this host's config; agentInstalled
+	// reports whether a command resolves on this host. session.create with no
+	// agent picks from the tiers. Both stay empty until SetAgentChoice.
+	agents         config.AgentsConfig
+	agentInstalled func(ctx context.Context, command string) bool
 
 	// agentUpdates reports and applies agent CLI updates; nil until
 	// SetAgentUpdates. agentHost names this host in its replies.
@@ -152,25 +152,35 @@ func (s *Server) SetMemoryJobs(q *memoryjob.Queue) {
 	s.memoryJobs = q
 }
 
-// SetAgentChoice sets the agents.preferred list and the probe that reports
-// whether a command is installed on this host.
-func (s *Server) SetAgentChoice(preferred []config.PreferredAgent, installed func(ctx context.Context, command string) bool) {
-	s.preferredAgents = append([]config.PreferredAgent(nil), preferred...)
+// SetAgentChoice sets the model tiers and the probe that reports whether a
+// command is installed on this host.
+func (s *Server) SetAgentChoice(agents config.AgentsConfig, installed func(ctx context.Context, command string) bool) {
+	s.agents = config.AgentsConfig{
+		Smart:     append([]config.PreferredAgent(nil), agents.Smart...),
+		Preferred: append([]config.PreferredAgent(nil), agents.Preferred...),
+		Update:    agents.Update,
+	}
 	s.agentInstalled = installed
 }
 
-// pickAgent returns the first agents.preferred entry whose command is
-// installed on this host.
-func (s *Server) pickAgent(ctx context.Context) (config.PreferredAgent, error) {
+// pickAgent returns the first installed entry of tier, falling back to the
+// other tier when it has none.
+func (s *Server) pickAgent(ctx context.Context, tier string) (coordinator.Pick, error) {
 	var installed []string
 	if s.agentInstalled != nil {
-		for _, p := range s.preferredAgents {
-			if name := p.Command(); name != "" && !slices.Contains(installed, name) && s.agentInstalled(ctx, name) {
-				installed = append(installed, name)
+		for _, tier := range []string{config.TierSmart, config.TierWorker} {
+			for _, e := range s.agents.Tier(tier) {
+				name := e.Command()
+				if name == "" || slices.Contains(installed, name) {
+					continue
+				}
+				if s.agentInstalled(ctx, name) {
+					installed = append(installed, name)
+				}
 			}
 		}
 	}
-	return coordinator.PickAgent(s.preferredAgents, installed)
+	return coordinator.PickTier(s.agents, tier, installed)
 }
 
 // todoStore is the to-do persistence serve needs: the shared Store plus the

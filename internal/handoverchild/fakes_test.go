@@ -12,6 +12,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handover"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 )
 
@@ -297,19 +298,21 @@ func newRig(t *testing.T) *rig {
 
 func (r *rig) newManager() *Manager {
 	return NewManager(Deps{
-		Store:      r.store,
-		Sessions:   r.sessions,
-		Terminal:   r.term,
-		Steer:      r.steer,
-		Ledger:     r.ledger,
-		Context:    r.ctx,
-		Jobs:       r.jobs,
-		Installed:  func(a string) bool { return a == "claude" },
-		Candidates: func(worker string) []string { return []string{"codex", worker} },
-		BaseDir:    r.base,
-		Now:        r.clock.Now,
-		Poll:       2 * time.Millisecond,
-		Timeout:    10 * time.Minute,
+		Store:     r.store,
+		Sessions:  r.sessions,
+		Terminal:  r.term,
+		Steer:     r.steer,
+		Ledger:    r.ledger,
+		Context:   r.ctx,
+		Jobs:      r.jobs,
+		Installed: func(a string) bool { return a == "claude" },
+		Candidates: func(worker string) []config.PreferredAgent {
+			return []config.PreferredAgent{{Agent: "codex"}, {Agent: worker}}
+		},
+		BaseDir: r.base,
+		Now:     r.clock.Now,
+		Poll:    2 * time.Millisecond,
+		Timeout: 10 * time.Minute,
 	})
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
 type fakeSessions struct {
@@ -275,7 +276,7 @@ func newMRig(t *testing.T, cfg Config) *mrig {
 		worker:   worker,
 	}
 	if cfg.Agents == nil {
-		cfg.Agents = []string{"claude", "codex"}
+		cfg.Agents = config.PreferredFromCommands("claude", "codex")
 	}
 	// Most tests are about the reviewer, not the evidence: give them a
 	// command that passes. "-" asks for no command at all.

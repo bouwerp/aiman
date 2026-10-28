@@ -14,6 +14,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handoverchild"
+	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
 // childSessions knows the worker and holds CreateChild until release closes,
@@ -55,7 +56,7 @@ func withHandoverChild(t *testing.T, srv *Server, worker domain.Session) (*hando
 	d := srv.HandoverDeps(store, func(string) bool { return true })
 	d.Sessions = sessions
 	d.Terminal = deadTerminal{}
-	d.Candidates = func(string) []string { return []string{"claude"} }
+	d.Candidates = func(string) []config.PreferredAgent { return config.PreferredFromCommands("claude") }
 	d.BaseDir = base
 	d.Poll = 10 * time.Millisecond
 	m := handoverchild.NewManager(d)

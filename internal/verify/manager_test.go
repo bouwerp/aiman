@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/quality"
 )
 
@@ -79,7 +80,7 @@ func TestStartRejectsHiddenSession(t *testing.T) {
 }
 
 func TestStartNoReviewer(t *testing.T) {
-	r := newMRig(t, Config{Agents: []string{"claude"}})
+	r := newMRig(t, Config{Agents: config.PreferredFromCommands("claude")})
 	if _, err := r.m.Start(context.Background(), StartRequest{WorkerID: "w1"}); !errors.Is(err, ErrNoReviewer) {
 		t.Fatalf("err %v", err)
 	}

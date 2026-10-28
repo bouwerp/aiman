@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Role names match domain.SessionRoleReviewer and domain.SessionRoleHandover.
 const (
@@ -90,36 +93,54 @@ func overlayDefaults(base, top AgentDefaults) AgentDefaults {
 	return base
 }
 
-// ReviewerCandidates lists reviewer agents in order: roles.verifier.agent,
-// then verify.agents, without duplicates.
-func (c *Config) ReviewerCandidates() []string {
+// ReviewerCandidates lists reviewer entries in order: roles.verifier, then
+// verify.agents, then the smart tier, without duplicates. The role entry
+// carries the role's model and effort so the pick keeps them.
+func (c *Config) ReviewerCandidates() []PreferredAgent {
 	if c == nil {
 		return nil
 	}
-	return uniqueAgents(append([]string{c.Roles.Verifier.Agent}, c.Verify.Agents...))
-}
-
-// HandoverCandidates lists handover child agents in order: roles.handover.agent,
-// then agents.preferred, then the worker's own agent, without duplicates.
-func (c *Config) HandoverCandidates(workerAgent string) []string {
-	if c == nil {
-		return uniqueAgents([]string{workerAgent})
+	var out []PreferredAgent
+	if role := c.Roles.Verifier; strings.TrimSpace(role.Agent) != "" {
+		out = append(out, PreferredAgent(role))
 	}
-	names := append([]string{c.Roles.Handover.Agent}, c.Agents.PreferredCommands()...)
-	return uniqueAgents(append(names, workerAgent))
+	for _, name := range c.Verify.Agents {
+		out = append(out, PreferredAgent{Agent: name})
+	}
+	out = append(out, c.Agents.Smart...)
+	return uniqueEntries(out)
 }
 
-// uniqueAgents trims each name and drops blanks and repeats, keeping order.
-func uniqueAgents(names []string) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, a := range names {
-		a = strings.TrimSpace(a)
-		if a == "" || seen[a] {
+// HandoverCandidates lists handover child entries in order: roles.handover,
+// then the worker tier (with each entry's model), then the worker's own
+// agent, without duplicates. The role entry carries the role's model and
+// effort so the pick keeps them.
+func (c *Config) HandoverCandidates(workerAgent string) []PreferredAgent {
+	if c == nil {
+		return uniqueEntries([]PreferredAgent{{Agent: workerAgent}})
+	}
+	var out []PreferredAgent
+	if role := c.Roles.Handover; strings.TrimSpace(role.Agent) != "" {
+		out = append(out, PreferredAgent(role))
+	}
+	out = append(out, c.Agents.Preferred...)
+	out = append(out, PreferredAgent{Agent: workerAgent})
+	return uniqueEntries(out)
+}
+
+// uniqueEntries trims each command, drops blanks and exact repeats (agent,
+// model and effort), keeping order. The same agent may stay with a different
+// model: that is the point of a per-entry model.
+func uniqueEntries(entries []PreferredAgent) []PreferredAgent {
+	var out []PreferredAgent
+	for _, e := range entries {
+		e.Agent = strings.TrimSpace(e.Agent)
+		e.Model = strings.TrimSpace(e.Model)
+		e.Effort = strings.TrimSpace(e.Effort)
+		if e.Agent == "" || slices.Contains(out, e) {
 			continue
 		}
-		seen[a] = true
-		out = append(out, a)
+		out = append(out, e)
 	}
 	return out
 }

@@ -891,7 +891,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "Git Configuration", desc: "Configure repositories and organizations", action: viewStateGitSetup},
 		menuItem{title: "General Settings", desc: "Experimental and general features", action: viewStateGeneralSettings},
 		menuItem{title: "Agent defaults", desc: "Default model and thinking effort per agent", action: viewStateAgentDefaults},
-		menuItem{title: "Preferred agents", desc: "Agents and models a coordinator may start, in order", action: viewStateAgentPreferred},
+		menuItem{title: "Model tiers", desc: "Smart and worker agents and models, in order", action: viewStateAgentPreferred},
 		menuItem{title: "Shared context", desc: "Store size, lookups, and pack usage on remotes", action: viewStateContextStats},
 		menuItem{title: "Memory candidates", desc: memoryMenuDesc(0), action: viewStateMemoryCandidates},
 		menuItem{title: "AI Settings", desc: "Enable local AI and configure Ollama model/host", action: viewStateAISettings},
@@ -6532,6 +6532,10 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.agentPicker = subModel.(AgentPickerModel)
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
+		// A tier row names no agent: serve picks from that tier. Choosing an
+		// agent clears it, since the two are exclusive.
+		m.sessionCfg.Tier = m.agentPicker.selectedTier
+		m.agentPicker.selectedTier = ""
 		m.sessionCfg.PromptFree = true
 		if m.sessionCfg.Quick {
 			return m.startQuickSession()
@@ -7179,6 +7183,13 @@ func (m *Model) applyScanAgents(msg agent.ScanAgentsMsg) (tea.Model, tea.Cmd) {
 	// its own picker state.
 	if m.loadingNext == viewStateAgentPicker {
 		m.agentPicker.allowPreferred = true
+		// The create wizard chooses a tier as well as a binary; the cursor
+		// starts on smart when that tier has entries.
+		var tiers config.AgentsConfig
+		if m.cfg != nil {
+			tiers = m.cfg.Agents
+		}
+		m.agentPicker.EnableTiers(tiers)
 		m.agentPicker.Preselect(m.cfg.RoleAgent(string(m.sessionCfg.Role)))
 	}
 	h, v := docStyle.GetFrameSize()

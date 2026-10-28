@@ -175,6 +175,9 @@ func overlayPersistedSessionFields(live, stored domain.Session) domain.Session {
 			live.LaunchModel = stored.LaunchModel
 			live.LaunchEffort = stored.LaunchEffort
 		}
+		if live.Tier == "" {
+			live.Tier = stored.Tier
+		}
 		if live.HookState == "" && live.HookStateAt.IsZero() && !live.AgentEnded {
 			live.AgentTitle = stored.AgentTitle
 			live.AgentEnded = stored.AgentEnded

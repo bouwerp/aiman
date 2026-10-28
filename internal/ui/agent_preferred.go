@@ -82,12 +82,18 @@ type pickRow struct {
 // pickWindow is how many rows a model or effort list shows at once.
 const pickWindow = 12
 
-// AgentPreferredModel edits the ordered list of agents, with optional model
-// and effort, that a coordinator uses when it starts child sessions.
+// AgentPreferredModel edits the two model tiers: agents.smart and
+// agents.preferred (the worker tier), each an ordered list of agents with an
+// optional model and effort. The active tab is edited in place.
 type AgentPreferredModel struct {
-	cfg    *config.Config
-	items  []config.PreferredAgent
-	cursor int
+	cfg *config.Config
+	// tab is the tier being edited; drafts and cursors hold both tiers so a
+	// tab switch keeps unsaved work.
+	tab     string
+	items   []config.PreferredAgent
+	cursor  int
+	drafts  map[string][]config.PreferredAgent
+	cursors map[string]int
 
 	// host names the remote whose models the editor lists; list runs there.
 	host string
@@ -114,15 +120,72 @@ type AgentPreferredModel struct {
 	err   error
 }
 
-// NewAgentPreferredModel opens the editor on cfg's agents.preferred. host and
-// list are the remote models are listed from; a nil list means model choice
-// falls back to typing for agents that list models on the host.
+// NewAgentPreferredModel opens the editor on cfg's model tiers, on the tab
+// that has entries. host and list are the remote models are listed from; a nil
+// list means model choice falls back to typing for agents that list models on
+// the host.
 func NewAgentPreferredModel(cfg *config.Config, host string, list modelLister) AgentPreferredModel {
-	m := AgentPreferredModel{cfg: cfg, host: host, list: list, editIndex: -1}
-	if cfg != nil {
-		m.items = append([]config.PreferredAgent{}, cfg.Agents.Preferred...)
+	m := AgentPreferredModel{
+		cfg: cfg, host: host, list: list, editIndex: -1,
+		drafts:  map[string][]config.PreferredAgent{},
+		cursors: map[string]int{},
 	}
+	for _, tier := range tierTabs {
+		var entries []config.PreferredAgent
+		if cfg != nil {
+			entries = cloneEntries(cfg.Agents.Tier(tier))
+		}
+		m.drafts[tier] = entries
+	}
+	// Open on the tier that has entries: a fresh worker-only config lands on
+	// the tab its list is on, and a smart tier is the first thing to see.
+	m.tab = config.TierWorker
+	if cfg != nil && len(cfg.Agents.Smart) > 0 {
+		m.tab = config.TierSmart
+	}
+	m.items = m.drafts[m.tab]
 	return m
+}
+
+// tierTabs is the tab order on the page.
+var tierTabs = []string{config.TierSmart, config.TierWorker}
+
+// cloneEntries copies entries, keeping a nil list nil so an unset tier stays
+// unset instead of being written as an empty list.
+func cloneEntries(entries []config.PreferredAgent) []config.PreferredAgent {
+	if entries == nil {
+		return nil
+	}
+	return append([]config.PreferredAgent{}, entries...)
+}
+
+// stash records the active tab's list and cursor before a tab switch or save.
+func (m *AgentPreferredModel) stash() {
+	m.drafts[m.tab] = m.items
+	m.cursors[m.tab] = m.cursor
+}
+
+// switchTab makes tier the active tab, keeping the other tab's unsaved work.
+func (m *AgentPreferredModel) switchTab(tier string) {
+	if tier == m.tab || !config.ValidTier(tier) {
+		return
+	}
+	m.stash()
+	m.tab = tier
+	m.items = m.drafts[tier]
+	m.cursor = m.cursors[tier]
+	if m.cursor >= len(m.items) {
+		m.cursor = max(0, len(m.items)-1)
+	}
+}
+
+// nextTab is the tier tab in direction (+1 forward, -1 back), wrapping.
+func (m AgentPreferredModel) nextTab(dir int) string {
+	i := slices.Index(tierTabs, m.tab)
+	if i < 0 {
+		return config.TierSmart
+	}
+	return tierTabs[(i+dir+len(tierTabs))%len(tierTabs)]
 }
 
 func (m AgentPreferredModel) Init() tea.Cmd { return nil }
@@ -161,6 +224,12 @@ func (m AgentPreferredModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m AgentPreferredModel) updateList(km tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch km.String() {
+	case "tab":
+		m.switchTab(m.nextTab(1))
+		return m, nil
+	case "shift+tab":
+		m.switchTab(m.nextTab(-1))
+		return m, nil
 	case "j", "down":
 		if m.cursor < len(m.items)-1 {
 			m.cursor++
@@ -480,7 +549,10 @@ func (m AgentPreferredModel) save() (tea.Model, tea.Cmd) {
 		m.err = fmt.Errorf("config is not loaded")
 		return m, nil
 	}
-	m.cfg.Agents.Preferred = append([]config.PreferredAgent{}, m.items...)
+	m.stash()
+	for _, tier := range tierTabs {
+		m.cfg.Agents.SetTier(tier, cloneEntries(m.drafts[tier]))
+	}
 	if err := m.cfg.Save(); err != nil {
 		m.err = err
 		return m, nil
@@ -491,14 +563,16 @@ func (m AgentPreferredModel) save() (tea.Model, tea.Cmd) {
 
 func (m AgentPreferredModel) viewString() string {
 	if m.saved {
-		return "Preferred agents saved!\n"
+		return "Model tiers saved!\n"
 	}
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	var b strings.Builder
-	b.WriteString("Preferred agents\n")
-	b.WriteString("Agents and models a coordinator may start, in order. The server picks the first installed one.\n\n")
+	b.WriteString("Model tiers\n")
+	b.WriteString("Smart and worker agents and models, in order. The server launches the first installed entry of the tier it is asked for.\n\n")
+	b.WriteString(m.tabBar(dim) + "\n")
+	b.WriteString(dim.Render("  Used for: "+tierUsedFor(m.tab)) + "\n")
 	if len(m.items) == 0 {
-		b.WriteString(dim.Render("  (none: a child create fails until one is added)") + "\n")
+		b.WriteString(dim.Render("  (empty: "+tierEmptyHint(m.tab)+")") + "\n")
 	}
 	for i, p := range m.items {
 		row := fmt.Sprintf("%2d. %s", i+1, p.Label())
@@ -521,7 +595,7 @@ func (m AgentPreferredModel) viewString() string {
 func (m AgentPreferredModel) help() string {
 	switch m.step {
 	case stepList:
-		return "(j/k or arrows move, J/K reorder, a add, e edit model/effort, d delete, enter save, esc cancel)"
+		return "(tab switches tier, j/k or arrows move, J/K reorder, a add, e edit model/effort, d delete, enter save, esc cancel)"
 	case stepAgent, stepProvider, stepEffort:
 		return "(j/k or arrows choose, enter select, esc back)"
 	case stepModel:
@@ -576,6 +650,40 @@ func (m AgentPreferredModel) flowView(dim lipgloss.Style) string {
 		m.writeRows(&b, dim)
 	}
 	return b.String()
+}
+
+// tabBar is the smart/worker tab strip with each tier's entry count.
+func (m AgentPreferredModel) tabBar(dim lipgloss.Style) string {
+	parts := make([]string, 0, len(tierTabs))
+	for _, tier := range tierTabs {
+		count := len(m.drafts[tier])
+		if tier == m.tab {
+			count = len(m.items)
+		}
+		label := fmt.Sprintf(" %s (%d) ", tier, count)
+		if tier == m.tab {
+			parts = append(parts, activeStyle.Render(label))
+			continue
+		}
+		parts = append(parts, dim.Render(label))
+	}
+	return "  " + strings.Join(parts, " ")
+}
+
+// tierUsedFor is the one-line guidance under the tab strip.
+func tierUsedFor(tier string) string {
+	if tier == config.TierSmart {
+		return "planning or design, ambiguous debugging, cross-cutting integration, review, long-running work"
+	}
+	return "a well-specified task: mechanical edits, a small diff, making tests pass"
+}
+
+// tierEmptyHint says what an empty tier falls back to.
+func tierEmptyHint(tier string) string {
+	if tier == config.TierSmart {
+		return "a smart request falls back to the worker tier"
+	}
+	return "a worker request falls back to the smart tier"
 }
 
 // writeRows renders a window of pickWindow rows around the selection.

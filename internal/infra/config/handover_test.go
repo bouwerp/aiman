@@ -67,23 +67,36 @@ func TestHandoverConfigYAMLRoundTrip(t *testing.T) {
 
 func TestHandoverCandidates(t *testing.T) {
 	cfg := &Config{
-		Roles:  RolesConfig{Handover: RoleOverride{Agent: " codex "}},
-		Agents: AgentsConfig{Preferred: PreferredFromCommands("claude", "codex", " ", "agy")},
+		Roles: RolesConfig{Handover: RoleOverride{Agent: " codex ", Effort: "high"}},
+		Agents: AgentsConfig{Preferred: []PreferredAgent{
+			{Agent: "claude", Model: "sonnet"},
+			{Agent: "codex"},
+			{Agent: " "},
+			{Agent: "agy"},
+		}},
 	}
-	if got, want := cfg.HandoverCandidates("agy"), []string{"codex", "claude", "agy"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("candidates = %v, want %v", got, want)
+	want := []PreferredAgent{
+		{Agent: "codex", Effort: "high"},
+		{Agent: "claude", Model: "sonnet"},
+		{Agent: "codex"},
+		{Agent: "agy"},
 	}
-	if got, want := cfg.HandoverCandidates("pi"), []string{"codex", "claude", "agy", "pi"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("candidates = %v, want %v", got, want)
+	if got := cfg.HandoverCandidates("agy"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates = %+v, want %+v", got, want)
 	}
-	if got, want := (&Config{}).HandoverCandidates("claude"), []string{"claude"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("worker only = %v, want %v", got, want)
+	// The worker's own agent comes last, with no model.
+	want = append(want, PreferredAgent{Agent: "pi"})
+	if got := cfg.HandoverCandidates("pi"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates = %+v, want %+v", got, want)
+	}
+	if got, want := (&Config{}).HandoverCandidates("claude"), []PreferredAgent{{Agent: "claude"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("worker only = %+v, want %+v", got, want)
 	}
 	if got := (&Config{}).HandoverCandidates(""); len(got) != 0 {
-		t.Fatalf("nothing configured = %v", got)
+		t.Fatalf("nothing configured = %+v", got)
 	}
-	if got, want := (*Config)(nil).HandoverCandidates("claude"), []string{"claude"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("nil config = %v, want %v", got, want)
+	if got, want := (*Config)(nil).HandoverCandidates("claude"), []PreferredAgent{{Agent: "claude"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("nil config = %+v, want %+v", got, want)
 	}
 }
 

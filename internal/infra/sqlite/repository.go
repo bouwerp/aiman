@@ -86,6 +86,7 @@ func NewRepository(dbPath string) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN agent_model TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN launch_model TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN launch_effort TEXT")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN tier TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN mode TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN backend TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN trigger_source TEXT")
@@ -258,8 +259,8 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 	}
 
 	query := `
-	INSERT INTO sessions (id, name, group_name, parent_id, issue_key, branch, base_branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, backend, mutagen_sync_id, local_path, agent_name, agent_model, launch_model, launch_effort, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, budget_tokens, watch_pr, role, issue_type, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO sessions (id, name, group_name, parent_id, issue_key, branch, base_branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, backend, mutagen_sync_id, local_path, agent_name, agent_model, launch_model, launch_effort, tier, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, budget_tokens, watch_pr, role, issue_type, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		name = COALESCE(NULLIF(excluded.name, ''), sessions.name),
 		group_name = COALESCE(NULLIF(excluded.group_name, ''), sessions.group_name),
@@ -279,6 +280,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		agent_model = COALESCE(NULLIF(excluded.agent_model, ''), sessions.agent_model),
 		launch_model = COALESCE(NULLIF(excluded.launch_model, ''), sessions.launch_model),
 		launch_effort = COALESCE(NULLIF(excluded.launch_effort, ''), sessions.launch_effort),
+		tier = COALESCE(NULLIF(excluded.tier, ''), sessions.tier),
 		status = excluded.status,
 		mode = COALESCE(NULLIF(excluded.mode, ''), sessions.mode),
 		trigger_source = COALESCE(NULLIF(excluded.trigger_source, ''), sessions.trigger_source),
@@ -315,7 +317,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 		hookAt = s.HookStateAt
 	}
 	_, err := r.db.ExecContext(ctx, query,
-		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TerminalName, s.Backend, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, s.LaunchModel, s.LaunchEffort, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.BudgetTokens, s.WatchPR, string(s.Role), s.IssueType, s.CreatedAt, updatedAt)
+		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TerminalName, s.Backend, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, s.LaunchModel, s.LaunchEffort, s.Tier, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.BudgetTokens, s.WatchPR, string(s.Role), s.IssueType, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
@@ -323,7 +325,7 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 }
 
 // ClearNativeAgentIdentity drops vendor conversation identity, hook latch
-// fields and the launch model and effort. Save cannot clear them: COALESCE
+// fields and the launch model, effort and tier. Save cannot clear them: COALESCE
 // keeps the previous non-empty values when discovery writes blanks. An agent
 // switch needs a real wipe so the next start does not --resume the previous
 // agent's conversation or pass it the previous agent's model.
@@ -340,6 +342,7 @@ func (r *Repository) ClearNativeAgentIdentity(ctx context.Context, id string) er
 			agent_ended = '',
 			launch_model = '',
 			launch_effort = '',
+			tier = '',
 			hook_state = '',
 			hook_state_message = '',
 			hook_state_source = '',
@@ -357,7 +360,7 @@ func (r *Repository) ClearNativeAgentIdentity(ctx context.Context, id string) er
 // cannot clear. serve calls it when a registered session names a different
 // agent than its row.
 func (r *Repository) ClearLaunchModel(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET launch_model = '', launch_effort = '', updated_at = ? WHERE id = ?;`,
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET launch_model = '', launch_effort = '', tier = '', updated_at = ? WHERE id = ?;`,
 		time.Now(), strings.TrimSpace(id))
 	if err != nil {
 		return fmt.Errorf("clearing launch model: %w", err)

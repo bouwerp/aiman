@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -94,5 +95,73 @@ func TestWizardScanPreselectsRoleAgent(t *testing.T) {
 	m.applyScanAgents(agent.ScanAgentsMsg{Agents: agents})
 	if m.agentPicker.list.Index() != 0 {
 		t.Fatalf("restart picker cursor %d, want 0", m.agentPicker.list.Index())
+	}
+}
+
+// The create wizard offers a tier row per tier; smart is the cursor when it
+// has entries, worker when it does not.
+func TestAgentPickerTierRows(t *testing.T) {
+	agents := []domain.Agent{{Name: "Claude Code", Command: "claude"}}
+	smart := []config.PreferredAgent{{Agent: "pi", Model: "kimi-k3"}}
+
+	m := NewAgentPickerModel(agents)
+	m.EnableTiers(config.AgentsConfig{Smart: smart, Preferred: config.PreferredFromCommands("claude")})
+	items := m.list.Items()
+	if len(items) != 3 {
+		t.Fatalf("items = %d, want two tier rows and one agent", len(items))
+	}
+	if got := m.list.Index(); got != 0 {
+		t.Fatalf("cursor %d, want 0 (smart has entries)", got)
+	}
+	first, ok := items[0].(tierItem)
+	if !ok || first.tier != config.TierSmart || !strings.Contains(first.label, "pi  kimi-k3") {
+		t.Fatalf("smart row = %#v", items[0])
+	}
+	next, _ := m.Update(pressKey("enter"))
+	m = next.(AgentPickerModel)
+	if m.selectedTier != config.TierSmart {
+		t.Fatalf("selectedTier = %q", m.selectedTier)
+	}
+	if m.selected == nil || m.selected.Command != "" || m.selected.Name != "Smart tier" {
+		t.Fatalf("selected = %+v, want a tier choice with no command", m.selected)
+	}
+	if !isPreferredAgentChoice(m.selected) {
+		t.Fatal("a tier choice must leave the agent to serve")
+	}
+
+	// With smart empty the cursor starts on the worker row.
+	m = NewAgentPickerModel(agents)
+	m.EnableTiers(config.AgentsConfig{Preferred: config.PreferredFromCommands("claude")})
+	if got := m.list.Index(); got != 1 {
+		t.Fatalf("cursor %d, want 1 (smart is empty)", got)
+	}
+	if row, ok := m.list.Items()[0].(tierItem); !ok || !strings.Contains(row.label, "empty") {
+		t.Fatalf("empty smart row = %#v", m.list.Items()[0])
+	}
+	next, _ = m.Update(pressKey("enter"))
+	if got := next.(AgentPickerModel).selectedTier; got != config.TierWorker {
+		t.Fatalf("selectedTier = %q, want worker", got)
+	}
+
+	// Choosing an agent after a tier clears the tier.
+	next, _ = m.Update(pressKey("down"))
+	m = next.(AgentPickerModel)
+	next, _ = m.Update(pressKey("enter"))
+	if got := next.(AgentPickerModel); got.selectedTier != "" || got.selected == nil || got.selected.Command != "claude" {
+		t.Fatalf("agent choice = %#v", got)
+	}
+}
+
+func TestTierChoiceIsSentToServe(t *testing.T) {
+	cfg := domain.SessionConfig{
+		Agent: preferredTierChoice(config.TierSmart), Tier: config.TierSmart,
+		Repo: domain.Repo{Name: "r"}, Branch: "b",
+	}
+	if ok, why := canCreateRemotely(cfg); !ok {
+		t.Fatalf("tier choice refused remotely: %s", why)
+	}
+	spec := remoteCreateSpecFrom(cfg)
+	if spec.Agent != "" || spec.Tier != config.TierSmart {
+		t.Fatalf("spec = %+v, want tier smart and no agent", spec)
 	}
 }

@@ -77,18 +77,31 @@ func TestRolesFor(t *testing.T) {
 
 func TestReviewerCandidates(t *testing.T) {
 	cfg := &Config{
-		Roles:  RolesConfig{Verifier: RoleOverride{Agent: "codex"}},
+		Roles:  RolesConfig{Verifier: RoleOverride{Agent: "codex", Model: "gpt-5", Effort: "high"}},
 		Verify: VerifyConfig{Agents: []string{"claude", "codex"}},
+		Agents: AgentsConfig{Smart: []PreferredAgent{{Agent: "pi", Model: "kimi-k3"}}},
 	}
-	if got := cfg.ReviewerCandidates(); !reflect.DeepEqual(got, []string{"codex", "claude"}) {
-		t.Fatalf("with role = %v", got)
+	want := []PreferredAgent{
+		{Agent: "codex", Model: "gpt-5", Effort: "high"},
+		{Agent: "claude"},
+		{Agent: "codex"},
+		{Agent: "pi", Model: "kimi-k3"},
+	}
+	if got := cfg.ReviewerCandidates(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("with role = %+v", got)
 	}
 	cfg.Roles = RolesConfig{}
-	if got := cfg.ReviewerCandidates(); !reflect.DeepEqual(got, []string{"claude", "codex"}) {
-		t.Fatalf("without role = %v", got)
+	// The bare verify.agents entry and the smart entry for the same binary
+	// are different candidates: only the smart one names a model.
+	cfg.Agents.Smart = append(cfg.Agents.Smart, PreferredAgent{Agent: "codex", Model: "other"})
+	want = []PreferredAgent{
+		{Agent: "claude"}, {Agent: "codex"}, {Agent: "pi", Model: "kimi-k3"}, {Agent: "codex", Model: "other"},
+	}
+	if got := cfg.ReviewerCandidates(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("without role = %+v", got)
 	}
 	if got := (*Config)(nil).ReviewerCandidates(); len(got) != 0 {
-		t.Fatalf("nil config = %v", got)
+		t.Fatalf("nil config = %+v", got)
 	}
 }
 

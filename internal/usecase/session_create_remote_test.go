@@ -95,7 +95,52 @@ func TestCreateSessionOnRemoteAlwaysSendsPromptFree(t *testing.T) {
 	}
 }
 
-// An empty agent is left off the params so serve picks from agents.preferred.
+// A tier travels without an agent, so serve picks the tier's first installed
+// entry, and a model travels only with an explicit agent.
+func TestCreateSessionOnRemoteSendsTier(t *testing.T) {
+	r := &createRemote{out: okCreateResponse}
+	_, err := CreateSessionOnRemote(context.Background(), r,
+		RemoteCreateSpec{Repo: "r", Branch: "b", Tier: "smart"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var body string
+	for _, v := range r.written {
+		body = string(v)
+	}
+	if !strings.Contains(body, `"tier":"smart"`) {
+		t.Errorf("tier not sent: %s", body)
+	}
+	if strings.Contains(body, `"agent"`) {
+		t.Errorf("a tier must not send an agent: %s", body)
+	}
+
+	r = &createRemote{out: okCreateResponse}
+	if _, err := CreateSessionOnRemote(context.Background(), r,
+		RemoteCreateSpec{Repo: "r", Branch: "b", Agent: "pi", Model: "kimi-k3", Effort: "high"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, v := range r.written {
+		body = string(v)
+	}
+	for _, want := range []string{`"model":"kimi-k3"`, `"effort":"high"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("params missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestParseRemoteCreateResultCarriesTier(t *testing.T) {
+	sess, err := parseRemoteCreateResult(`{"result":{"session":{"id":"a1","tier":"smart","launch_model":"kimi-k3"}}}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if sess.Tier != "smart" || sess.LaunchModel != "kimi-k3" {
+		t.Fatalf("session = %+v", sess)
+	}
+}
+
+// An empty agent is left off the params so serve picks from the model tiers.
 func TestCreateSessionOnRemoteLeavesEmptyAgentToServe(t *testing.T) {
 	r := &createRemote{out: okCreateResponse}
 	if _, err := CreateSessionOnRemote(context.Background(), r, RemoteCreateSpec{Repo: "r", Branch: "b"}); err != nil {

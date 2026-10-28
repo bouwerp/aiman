@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/verify"
@@ -98,7 +99,7 @@ func verifyServer(t *testing.T, creator *blockingCreator) (*Server, *verify.Stor
 	store := verify.NewStore(filepath.Join(shortTempDir(t), "reviews"))
 	deps := srv.VerifyDeps(store, func(c string) bool { return c == "codex" })
 	deps.Poll = 10 * time.Millisecond
-	m := verify.NewManager(verify.Config{Agents: []string{"claude", "codex"}}, deps)
+	m := verify.NewManager(verify.Config{Agents: config.PreferredFromCommands("claude", "codex")}, deps)
 	t.Cleanup(m.Close)
 	srv.SetVerifier(m)
 	return srv, store

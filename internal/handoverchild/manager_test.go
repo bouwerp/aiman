@@ -12,6 +12,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handover"
+	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
 func TestSuccess(t *testing.T) {
@@ -287,7 +288,7 @@ func TestNoInstalledAgentFails(t *testing.T) {
 	r.m = NewManager(Deps{
 		Store: r.store, Sessions: r.sessions, Terminal: r.term, Steer: r.steer, Ledger: r.ledger,
 		Context: r.ctx, Jobs: r.jobs, Installed: func(string) bool { return false },
-		Candidates: func(w string) []string { return []string{w} }, BaseDir: r.base, Now: r.clock.Now, Poll: time.Millisecond,
+		Candidates: func(w string) []config.PreferredAgent { return []config.PreferredAgent{{Agent: w}} }, BaseDir: r.base, Now: r.clock.Now, Poll: time.Millisecond,
 	})
 	t.Cleanup(r.m.Close)
 	id := r.start(t, "archive")
@@ -400,5 +401,30 @@ func (r *rig) putRun(t *testing.T, run Run) {
 	t.Helper()
 	if err := r.store.Put(run); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The picked worker-tier entry brings its model and effort: a handover child
+// runs the cheap model the tier names, not the role default.
+func TestPickAgentKeepsTierEntryModel(t *testing.T) {
+	m := NewManager(Deps{
+		Installed: func(a string) bool { return a == "pi" },
+		Candidates: func(string) []config.PreferredAgent {
+			return []config.PreferredAgent{
+				{Agent: "claude"},
+				{Agent: "pi", Model: "openrouter/z-ai/glm-5.3"},
+				{Agent: "pi", Model: "openrouter/deepseek/deepseek-v4.1-flash"},
+			}
+		},
+		BaseDir: t.TempDir(),
+	})
+	t.Cleanup(m.Close)
+	got := m.pickAgent("claude")
+	want := config.PreferredAgent{Agent: "pi", Model: "openrouter/z-ai/glm-5.3"}
+	if got != want {
+		t.Fatalf("pickAgent = %+v, want %+v", got, want)
+	}
+	if got := (NewManager(Deps{Installed: func(string) bool { return false }})).pickAgent("claude"); got.Agent != "" {
+		t.Fatalf("nothing installed must pick nothing, got %+v", got)
 	}
 }

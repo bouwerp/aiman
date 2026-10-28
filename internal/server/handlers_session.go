@@ -16,6 +16,7 @@ import (
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
@@ -41,8 +42,10 @@ type SessionInfo struct {
 	AgentName        string `json:"agent_name,omitempty"`
 	// LaunchModel and LaunchEffort are the per-launch model and effort the
 	// session was created with, so the laptop relaunches with them too.
-	LaunchModel      string `json:"launch_model,omitempty"`
-	LaunchEffort     string `json:"launch_effort,omitempty"`
+	LaunchModel  string `json:"launch_model,omitempty"`
+	LaunchEffort string `json:"launch_effort,omitempty"`
+	// Tier is the model tier the session was created from, after fallback.
+	Tier             string `json:"tier,omitempty"`
 	AgentSessionID   string `json:"agent_session_id,omitempty"`
 	AgentSessionPath string `json:"agent_session_path,omitempty"`
 	Title            string `json:"title,omitempty"`
@@ -76,6 +79,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		AgentName:        s.AgentName,
 		LaunchModel:      s.LaunchModel,
 		LaunchEffort:     s.LaunchEffort,
+		Tier:             s.Tier,
 		AgentSessionID:   s.AgentSessionID,
 		AgentSessionPath: s.AgentSessionPath,
 		Title:            s.AgentTitle,
@@ -570,6 +574,13 @@ type createParams struct {
 	Repo   string `json:"repo"`
 	Branch string `json:"branch"`
 	Agent  string `json:"agent"`
+	// Tier is the model tier to launch from: "smart" or "worker". It is
+	// exclusive with Agent. Empty means smart for a session the user starts
+	// and worker for one created inside a session.
+	Tier string `json:"tier"`
+	// Model and Effort override the launch for an explicit Agent only.
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
 	Dir    string `json:"dir"`
 	Prompt string `json:"prompt"`
 	Issue  string `json:"issue"`
@@ -624,15 +635,28 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if berr != nil {
 		return errResp(req.ID, CodeInvalidParams, berr.Error())
 	}
-	var launchModel, launchEffort string
+	tier, model, effort, terr := s.tierChoice(params)
+	if terr != nil {
+		return errResp(req.ID, CodeInvalidParams, terr.Error())
+	}
+	var launchModel, launchEffort, sessionTier, requestedTier string
+	tierFallback := false
 	if strings.TrimSpace(params.Agent) == "" {
-		// An explicit agent always wins; only an empty one reads agents.preferred.
-		picked, perr := s.pickAgent(ctx)
+		// An explicit agent always wins; only an empty one reads the tiers. A
+		// user-started session defaults to smart, a child to worker.
+		want := tier
+		if want == "" {
+			want = defaultTier(parentID)
+		}
+		picked, perr := s.pickAgent(ctx, want)
 		if perr != nil {
 			return errResp(req.ID, CodeNoPreferredAgent, perr.Error())
 		}
-		params.Agent, params.AgentName = picked.Agent, ""
-		launchModel, launchEffort = picked.Model, picked.Effort
+		params.Agent, params.AgentName = picked.Entry.Agent, ""
+		launchModel, launchEffort = picked.Entry.Model, picked.Entry.Effort
+		sessionTier, requestedTier, tierFallback = picked.Tier, picked.Requested, picked.FellBack
+	} else {
+		launchModel, launchEffort = model, effort
 	}
 	name := params.Name
 	if name == "" {
@@ -673,8 +697,9 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		BaseBranch:    params.Base,
 		// The agent's launch model and effort come from this host's own agent
 		// defaults, which serve install keeps in step with the laptop's config,
-		// unless the picked agents.preferred entry names its own.
+		// unless the picked tier entry (or an explicit --model) names its own.
 		Agent:          &domain.Agent{Name: agentName, Command: params.Agent, LaunchModel: launchModel, LaunchEffort: launchEffort},
+		Tier:           sessionTier,
 		BudgetTokens:   params.BudgetTokens,
 		Repo:           domain.Repo{Name: params.Repo},
 		ExistingBranch: params.ExistingBranch,
@@ -697,6 +722,15 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	sess.Name = name
 	sess.Group = group
 	sess.ParentID = parentID
+	// The creator copies these from the config it was given; keep the row
+	// honest even for a creator that does not.
+	sess.Tier = sessionTier
+	if sess.LaunchModel == "" {
+		sess.LaunchModel = launchModel
+	}
+	if sess.LaunchEffort == "" {
+		sess.LaunchEffort = launchEffort
+	}
 	if s.repo != nil {
 		if err := s.repo.Save(ctx, sess); err != nil {
 			return errResp(req.ID, CodeCreateFailed, err.Error())
@@ -715,9 +749,44 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionCreated, map[string]any{
 		"name": name, "group": group, "repo": params.Repo, "branch": params.Branch,
 		"agent": params.Agent, "quick": params.Quick,
+		"tier": sessionTier, "requested_tier": requestedTier,
+		"model": launchModel, "effort": launchEffort, "tier_fallback": tierFallback,
 	})
 	info := sessionInfo(*sess, req.Caller)
-	return Response{ID: req.ID, Result: map[string]any{"type": "session", "session": info}}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type": "session", "session": info,
+		"tier_fallback": tierFallback, "requested_tier": requestedTier,
+	}}
+}
+
+// tierChoice validates the tier, model and effort parameters. A tier is
+// exclusive with an explicit agent, and a model or effort needs an agent to
+// apply to.
+func (s *Server) tierChoice(params createParams) (tier, model, effort string, err error) {
+	tier = strings.ToLower(strings.TrimSpace(params.Tier))
+	model = strings.TrimSpace(params.Model)
+	effort = strings.TrimSpace(params.Effort)
+	agent := strings.TrimSpace(params.Agent)
+	if tier != "" && !config.ValidTier(tier) {
+		return "", "", "", fmt.Errorf("tier must be %s or %s, not %q", config.TierSmart, config.TierWorker, params.Tier)
+	}
+	if tier != "" && agent != "" {
+		return "", "", "", errors.New("tier and agent are exclusive: a tier picks the agent")
+	}
+	if (model != "" || effort != "") && agent == "" {
+		return "", "", "", errors.New("model and effort need an explicit agent")
+	}
+	return tier, model, effort, nil
+}
+
+// defaultTier is the tier a create starts from when none was asked for: the
+// smart tier for a session the user starts, the worker tier for a child
+// created inside a session.
+func defaultTier(parentID string) string {
+	if strings.TrimSpace(parentID) == "" {
+		return config.TierSmart
+	}
+	return config.TierWorker
 }
 
 // applyFor fills a child's create parameters from its parent and the parent's

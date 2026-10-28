@@ -13,11 +13,18 @@ import (
 // RemoteCreateSpec is what the wizard decided, in the form serve's
 // session.create accepts.
 type RemoteCreateSpec struct {
-	Name           string
-	Group          string
-	Repo           string
-	Branch         string
-	Agent          string
+	Name   string
+	Group  string
+	Repo   string
+	Branch string
+	Agent  string
+	// Tier is the model tier to launch from when Agent is empty: smart or
+	// worker. An empty tier is serve's default (smart for a user-started
+	// session, worker for a child).
+	Tier string
+	// Model and Effort override the launch for an explicit Agent.
+	Model          string
+	Effort         string
 	Dir            string
 	Prompt         string
 	Issue          string
@@ -44,11 +51,14 @@ type RemoteCreateSpec struct {
 // machine's ~/.aws. Both are reconciled by the dashboard when it next sees the
 // session.
 func CreateSessionOnRemote(ctx context.Context, remote TerminalExecutor, spec RemoteCreateSpec) (*domain.Session, error) {
-	// An empty agent is left off, so serve launches the first agents.preferred
-	// command installed on the remote.
+	// An empty agent is left off, so serve picks from the model tiers; an
+	// explicit tier with no agent is how the caller says which tier to try.
 	params := map[string]any{}
 	for key, val := range map[string]string{
 		"agent":      spec.Agent,
+		"tier":       spec.Tier,
+		"model":      spec.Model,
+		"effort":     spec.Effort,
 		"name":       spec.Name,
 		"group":      spec.Group,
 		"repo":       spec.Repo,
@@ -156,6 +166,7 @@ type remoteCreateResult struct {
 			AgentName        string `json:"agent_name"`
 			LaunchModel      string `json:"launch_model"`
 			LaunchEffort     string `json:"launch_effort"`
+			Tier             string `json:"tier"`
 		} `json:"session"`
 	} `json:"result"`
 	Error *struct {
@@ -196,6 +207,7 @@ func parseRemoteCreateResult(out string) (*domain.Session, error) {
 		AgentModel:       s.LaunchModel,
 		LaunchModel:      s.LaunchModel,
 		LaunchEffort:     s.LaunchEffort,
+		Tier:             s.Tier,
 		Status:           domain.SessionStatusActive,
 	}, nil
 }

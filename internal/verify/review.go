@@ -36,6 +36,8 @@ type Review struct {
 	WorkerID     string `json:"worker_id"`
 	ReviewerID   string `json:"reviewer_id"`
 	Agent        string `json:"agent"`
+	AgentModel   string `json:"agent_model,omitempty"`  // the picked entry's model
+	AgentEffort  string `json:"agent_effort,omitempty"` // the picked entry's effort
 	Tree         string `json:"tree"`
 	Commit       string `json:"commit"`
 	BaseRef      string `json:"base_ref"`

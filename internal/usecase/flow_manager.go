@@ -363,6 +363,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		AgentModel:     launchModel,
 		LaunchModel:    launchModel,
 		LaunchEffort:   launchEffort,
+		Tier:           config.Tier,
 		Status:         domain.SessionStatusProvisioning,
 		Mode:           mode,
 		TriggerSource:  config.TriggerSource,

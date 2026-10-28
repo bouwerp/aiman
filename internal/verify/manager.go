@@ -19,6 +19,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/quality"
 	"github.com/bouwerp/aiman/internal/todo"
 )
@@ -35,7 +36,9 @@ const cleanupWait = 30 * time.Second
 
 // Config is the verify block of serve's config.
 type Config struct {
-	Agents   []string
+	// Agents are the reviewer candidates in order, each with an optional
+	// model and effort: the role, verify.agents, then the smart tier.
+	Agents   []config.PreferredAgent
 	BeforePR bool
 	Timeout  time.Duration // zero means DefaultTimeout
 	// TestCommand is run on the snapshot to back a pass; empty means no
@@ -165,7 +168,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Review, error) {
 	if worker.WorktreePath == "" {
 		return Review{}, fmt.Errorf("session %s has no worktree", worker.ID)
 	}
-	reviewer, err := PickReviewer(m.cfg.Agents, worker.AgentName, req.Agent, m.d.Installed)
+	reviewer, err := PickReviewer(m.cfg.Agents, worker.AgentName, worker.LaunchModel, req.Agent, m.d.Installed)
 	if err != nil {
 		return Review{}, err
 	}
@@ -184,7 +187,9 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Review, error) {
 	r := Review{
 		ID:           id,
 		WorkerID:     worker.ID,
-		Agent:        reviewer,
+		Agent:        reviewer.Command(),
+		AgentModel:   reviewer.Model,
+		AgentEffort:  reviewer.Effort,
 		Tree:         snap.Tree,
 		Commit:       snap.Commit,
 		RepoWorktree: worker.WorktreePath,
@@ -327,8 +332,12 @@ func (m *Manager) prepare(ctx context.Context, r *Review, worker domain.Session)
 		return domain.Session{}, err
 	}
 
-	reviewerAgent := domain.Agent{Name: r.Agent, Command: r.Agent}
+	reviewerAgent := domain.Agent{
+		Name: r.Agent, Command: r.Agent,
+		LaunchModel: r.AgentModel, LaunchEffort: r.AgentEffort,
+	}
 	if known, ok := agent.FindKnown(r.Agent); ok {
+		known.LaunchModel, known.LaunchEffort = r.AgentModel, r.AgentEffort
 		reviewerAgent = known
 	}
 	return m.d.Sessions.CreateChild(ctx, domain.SessionConfig{

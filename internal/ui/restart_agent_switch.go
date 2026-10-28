@@ -39,6 +39,7 @@ func adoptRestartAgent(s *domain.Session, agentName string) bool {
 		s.HookStateSeq = 0
 		s.LaunchModel = ""
 		s.LaunchEffort = ""
+		s.Tier = ""
 	}
 	s.AgentName = agentName
 	return switched

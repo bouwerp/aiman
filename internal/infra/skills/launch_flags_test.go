@@ -94,6 +94,15 @@ func TestLaunchFlagsHandoverRoleUsesCheap(t *testing.T) {
 			notWant: []string{"--model"},
 		},
 		{
+			name: "a tier entry model beats Cheap",
+			cfg:  &config.Config{},
+			ag:   domain.Agent{Name: "Claude Code", Command: "claude", LaunchModel: "sonnet", LaunchEffort: "low"},
+			role: handover,
+			// The tier entry supplies the model, so Cheap does not replace it.
+			want:    []string{"--model sonnet", "--effort low"},
+			notWant: []string{"haiku"},
+		},
+		{
 			name: "worker keeps agent_defaults",
 			cfg:  &config.Config{AgentDefaults: map[string]config.AgentDefaults{"claude": {Model: "opus"}}},
 			ag:   claude, role: "",
