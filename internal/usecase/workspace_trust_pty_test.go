@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -71,5 +72,26 @@ func TestDeliverInitialPromptPTYIgnoresAnEmptySessionID(t *testing.T) {
 	DeliverInitialPromptPTY(context.Background(), r, "  ", "do the thing")
 	if len(r.cmds) != 0 {
 		t.Errorf("nothing should be sent without a session id: %v", r.cmds)
+	}
+}
+
+// Pi asks "Trust project folder?" and its composer has no prompt glyph; the
+// footer's context gauge ("0.0%/1.0M") only renders once it is ready.
+func TestBootWaitPatternsMatchPi(t *testing.T) {
+	trust := regexp.MustCompile(workspaceTrustRe)
+	ready := regexp.MustCompile(composerReadyRe)
+	piTrust := " Trust project folder?\n /home/code/repos/x\n\n → Trust\n   Do not trust\n"
+	piReady := "────\n \n────\n~/repos/x\n0.0%/1.0M (auto)                 deepseek-flash • high\n"
+	if !trust.MatchString(piTrust) {
+		t.Error("Pi's trust dialog is not recognised")
+	}
+	if ready.MatchString(piTrust) {
+		t.Error("Pi's trust dialog must not count as a ready composer")
+	}
+	if !ready.MatchString(piReady) {
+		t.Error("Pi's ready screen is not recognised")
+	}
+	if trust.MatchString(piReady) {
+		t.Error("Pi's ready screen must not count as a trust dialog")
 	}
 }

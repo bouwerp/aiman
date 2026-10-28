@@ -882,8 +882,15 @@ func tmuxEnvFlags(env map[string]string) string {
 
 // workspaceTrustRe matches the first-run "do you trust this directory" dialog
 // every agent puts up before it will read a project. Codex phrases it "Do you
-// trust the contents of this directory?", agy "Do you trust this folder?".
-const workspaceTrustRe = `[Dd]o you trust|[Tt]rust this folder|[Tt]rust the contents`
+// trust the contents of this directory?", agy "Do you trust this folder?", Pi
+// "Trust project folder?".
+const workspaceTrustRe = `[Dd]o you trust|[Tt]rust this folder|[Tt]rust the contents|[Tt]rust project folder`
+
+// composerReadyRe matches a screen where the agent is past boot and ready for
+// input: a prompt glyph, a Codex or Grok placeholder, Claude's shortcut hint,
+// or Pi's footer context gauge ("0.0%/1.0M"), which Pi draws only once its
+// composer is up.
+const composerReadyRe = `[›❯]|Ask Codex|Ask Grok|\? for shortcuts|[0-9]%/[0-9.]+[kKM]`
 
 // acceptWorkspaceTrustPTY is the shell fragment that clears a workspace-trust
 // dialog before anything is typed at the agent.
@@ -898,10 +905,8 @@ const workspaceTrustRe = `[Dd]o you trust|[Tt]rust this folder|[Tt]rust the cont
 // once the agent has finished booting, and gives up silently: an agent that
 // never asks must not have its prompt delayed by the full budget.
 func acceptWorkspaceTrustPTY(sessionID string) string {
-	// Composer glyphs mean the agent is past boot and ready for input. Break
-	// early on those so an already-trusted worktree does not burn the full
-	// poll budget before the initial prompt is typed.
-	const composerReadyRe = `[›❯]|Ask Codex|Ask Grok|\? for shortcuts`
+	// A ready composer breaks the loop early so an already-trusted worktree
+	// does not burn the full poll budget before the initial prompt is typed.
 	// The final echo is the only visibility into this loop's outcome: an
 	// AIMAN_BOOTWAIT:<reason>:<attempts> line that DeliverInitialPromptPTY logs,
 	// so a boot slow enough to exhaust the budget (reason=timeout) leaves
