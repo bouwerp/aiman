@@ -2,6 +2,7 @@ package agent
 
 import (
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -101,12 +102,52 @@ type UpdateDialog struct {
 // gate recognise. Enter or a digit would pick "Update now" or "Install" in
 // these menus, so every Key skips instead.
 var UpdateDialogs = []UpdateDialog{
-	// "✨ Update available!" with rows such as "Update now" and "Skip until
-	// next version"; the highlighted row starts with "›".
-	{Agent: "codex", Re: `Update available!|Skip until next version`, Key: "esc"},
-	// "Deep Code latest version has been released: A -> B" with "Esc to
-	// ignore once".
+	// The modal reads "Update available · A → B" over "› 1. Update now",
+	// "2. Skip", "3. Skip until next version". Codex also prints a
+	// non-blocking "✨ Update available! A -> B" banner above a ready
+	// composer, so only the menu row identifies the modal.
+	{Agent: "codex", Re: `Skip until next version`, Key: "esc"},
+	// "Deep Code latest version has been released: A -> B" over a numbered
+	// menu and "Esc to ignore once".
 	{Agent: "deepcode", Re: `latest version has been released`, Key: "esc"},
+}
+
+// UpdateDialogTailLines is how many rows at the bottom of a rendered screen
+// are searched for an update dialog. A live dialog is the last thing drawn.
+// Deep Code leaves a dismissed prompt in the primary screen and scrollback,
+// so matching the whole screen would see it long after it was answered.
+const UpdateDialogTailLines = 12
+
+// MatchUpdateDialog reports the update dialog drawn at the bottom of screen.
+func MatchUpdateDialog(screen string) (UpdateDialog, bool) {
+	tail := screenTail(screen, UpdateDialogTailLines)
+	for _, d := range UpdateDialogs {
+		if updateDialogRes[d.Agent].MatchString(tail) {
+			return d, true
+		}
+	}
+	return UpdateDialog{}, false
+}
+
+var updateDialogRes = func() map[string]*regexp.Regexp {
+	out := make(map[string]*regexp.Regexp, len(UpdateDialogs))
+	for _, d := range UpdateDialogs {
+		out[d.Agent] = regexp.MustCompile(d.Re)
+	}
+	return out
+}()
+
+// screenTail is the last n rows of screen once trailing blank rows are
+// dropped, the same rows `aiman pty capture --lines n` returns.
+func screenTail(screen string, n int) string {
+	rows := strings.Split(strings.TrimRight(screen, "\n"), "\n")
+	for len(rows) > 0 && strings.TrimSpace(rows[len(rows)-1]) == "" {
+		rows = rows[:len(rows)-1]
+	}
+	if len(rows) > n {
+		rows = rows[len(rows)-n:]
+	}
+	return strings.Join(rows, "\n")
 }
 
 // BaseOf returns the canonical agent binary a launch command runs. Leading

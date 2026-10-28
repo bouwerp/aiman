@@ -390,6 +390,16 @@ it transparently via `usecase.ReviveIfNeeded` — the agent relaunches with its
 native resume flag (sidecar id first, stored `AgentSessionID` as fallback;
 refuses if neither exists so it never silently forks a fresh conversation).
 
+**Boot wait**: `acceptWorkspaceTrustPTY` polls the new pty (budget 20) before
+the first prompt is typed. Each poll checks, in order: a startup update dialog
+from `infraAgent.UpdateDialogs` in the bottom `UpdateDialogTailLines` rows
+(press its skip key, never Enter, and keep polling), a workspace-trust dialog
+(Enter), then a ready composer. The outcome line is
+`AIMAN_BOOTWAIT:<timeout|trust|ready|update>:<attempts>`. Codex's update menu
+rows start with `›`, so the update check must stay ahead of `composerReadyRe`.
+`steerReady` holds `dialog` while a pty screen ends in one of those dialogs,
+whatever the hook reports. Fixtures are in `internal/usecase/testdata/bootdialogs/`.
+
 CLI (`cmd/aiman/pty_cmd.go`): `aiman pty list|create|get|capture|input|kill|
 forget|attach`. Attach puts the local tty in raw mode and relays; ctrl+q
 detaches without stopping the session. `--params-file` / `--file` flags keep

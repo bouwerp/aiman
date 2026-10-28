@@ -892,16 +892,23 @@ const workspaceTrustRe = `[Dd]o you trust|[Tt]rust this folder|[Tt]rust the cont
 // composer is up.
 const composerReadyRe = `[›❯]|Ask Codex|Ask Grok|\? for shortcuts|[0-9]%/[0-9.]+[kKM]`
 
-// acceptWorkspaceTrustPTY is the shell fragment that clears a workspace-trust
-// dialog before anything is typed at the agent.
+// bootWaitBudget is how many polls the PTY boot wait makes before it gives up.
+const bootWaitBudget = 20
+
+// acceptWorkspaceTrustPTY is the shell fragment that clears startup dialogs
+// before anything is typed at the agent: first an update dialog, then a
+// workspace-trust dialog.
 //
-// The dialog is a select list, not a text field: characters it does not
-// recognise are treated as menu input, and a prompt typed into it selects "No,
-// quit" and kills the agent — exit 0, empty pane, no worktree touched. Enter
+// Both are select lists, not text fields: characters they do not recognise
+// are treated as menu input. A prompt typed into the trust dialog selects "No,
+// quit" and kills the agent (exit 0, empty pane, no worktree touched); Enter
 // takes the highlighted default, which is "Yes, continue" in every agent that
-// asks.
+// asks. An update dialog's default is "Update now" or "Install", so it gets
+// its skip key instead (bootUpdateDialogBranch) and the loop keeps polling.
+// Update dialogs are checked first because Codex's menu rows start with "›",
+// which composerReadyRe would read as a ready composer.
 //
-// It polls rather than sleeping a fixed time because the dialog only appears
+// It polls rather than sleeping a fixed time because the dialogs only appear
 // once the agent has finished booting, and gives up silently: an agent that
 // never asks must not have its prompt delayed by the full budget.
 func acceptWorkspaceTrustPTY(sessionID string) string {
@@ -910,10 +917,13 @@ func acceptWorkspaceTrustPTY(sessionID string) string {
 	// The final echo is the only visibility into this loop's outcome: an
 	// AIMAN_BOOTWAIT:<reason>:<attempts> line that DeliverInitialPromptPTY logs,
 	// so a boot slow enough to exhaust the budget (reason=timeout) leaves
-	// evidence instead of a silent, unexplained stuck composer.
+	// evidence instead of a silent, unexplained stuck composer. reason=update
+	// means an update dialog was skipped on the way.
+	id := strings.TrimSpace(sessionID)
 	return fmt.Sprintf(
-		"attempt=0; reason=timeout; "+
-			"while [ $attempt -lt 15 ]; do "+
+		"attempt=0; reason=timeout; upd=0; "+
+			"while [ $attempt -lt %[4]d ]; do "+
+			"%[5]s"+
 			"pane=$(aiman pty capture %[1]q --lines 0 2>/dev/null || true); "+
 			"if printf '%%s' \"$pane\" | grep -qE %[2]q; then "+
 			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 2; reason=trust; break; "+
@@ -921,8 +931,9 @@ func acceptWorkspaceTrustPTY(sessionID string) string {
 			"if printf '%%s' \"$pane\" | grep -qE %[3]q; then reason=ready; break; fi; "+
 			"attempt=$((attempt+1)); sleep 1; "+
 			"done; "+
+			"if [ $upd = 1 ]; then reason=update; fi; "+
 			"echo \"AIMAN_BOOTWAIT:$reason:$attempt\"; ",
-		strings.TrimSpace(sessionID), workspaceTrustRe, composerReadyRe,
+		id, workspaceTrustRe, composerReadyRe, bootWaitBudget, bootUpdateDialogBranch(id),
 	)
 }
 

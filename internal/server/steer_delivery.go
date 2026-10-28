@@ -63,7 +63,8 @@ func (s *Server) steerSession(ctx context.Context, id string) (domain.Session, b
 
 // steerReady is the delivery gate. A note goes in when the agent waits at its
 // prompt: a hook report of idle, or waiting_input raised by an idle prompt.
-// Working and permission or choice dialogs hold it, as does an ended agent.
+// Working and permission or choice dialogs hold it, as does an ended agent
+// and an update dialog on a pty screen, whatever the hook last said.
 // Sessions without a usable hook report fall back to the pane classifier, and
 // only a high-confidence idle opens the gate.
 //
@@ -77,6 +78,9 @@ func (s *Server) steerReady(ctx context.Context, id string, lastDelivered time.T
 	}
 	if sess.AgentEnded {
 		return false, steerHeldEnded
+	}
+	if s.updateDialogShowing(sess) {
+		return false, steerHeldDialog
 	}
 	if st, ok := agenthook.ResolveHookState(sess, time.Now()); ok {
 		fresh := lastDelivered.IsZero() || sess.HookStateAt.After(lastDelivered)
