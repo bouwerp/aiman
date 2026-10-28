@@ -318,6 +318,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleAgentsStatus(ctx, req)
 	case "agents.update":
 		return s.handleAgentsUpdate(ctx, req)
+	case "agents.move_prefix":
+		return s.handleAgentsMovePrefix(ctx, req)
 	case "handover.write":
 		return s.handleHandoverWrite(ctx, req)
 	case "handover.point":

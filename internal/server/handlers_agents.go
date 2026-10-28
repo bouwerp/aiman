@@ -91,6 +91,39 @@ func (s *Server) handleAgentsStatus(ctx context.Context, req Request) Response {
 	}}
 }
 
+type agentsMovePrefixParams struct {
+	Agent string `json:"agent"`
+}
+
+// handleAgentsMovePrefix reinstalls an npm agent under the user prefix in the
+// background (Manager.MovePrefix). It never runs sudo and never uninstalls
+// the root-owned copy.
+func (s *Server) handleAgentsMovePrefix(ctx context.Context, req Request) Response {
+	if s.agentUpdates == nil {
+		return errResp(req.ID, CodeInvalidParams, "agent updates are not running on this host")
+	}
+	var p agentsMovePrefixParams
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return errResp(req.ID, CodeInvalidParams, err.Error())
+		}
+	}
+	if strings.TrimSpace(p.Agent) == "" {
+		return errResp(req.ID, CodeInvalidParams, "agent is required")
+	}
+	pctx, cancel := context.WithTimeout(ctx, agentsRefreshTimeout)
+	defer cancel()
+	out, err := s.agentUpdates.MovePrefix(pctx, p.Agent)
+	if err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	return Response{ID: req.ID, Result: map[string]any{
+		"type":   "agents_move_prefix",
+		"host":   s.agentHost,
+		"result": out,
+	}}
+}
+
 type agentsUpdateParams struct {
 	Agent string `json:"agent"`
 	All   bool   `json:"all"`

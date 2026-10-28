@@ -10,6 +10,10 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
+// claudeInstallCommand installs Claude Code with the official native
+// installer unless a claude is already on PATH.
+const claudeInstallCommand = `export PATH="$HOME/.local/bin:$PATH"; if command -v claude >/dev/null 2>&1 || command -v claude-code >/dev/null 2>&1; then echo 'Claude Code already installed'; else curl -fsSL https://claude.ai/install.sh | bash && command -v claude; fi`
+
 type Provisioner struct {
 	remoteExecutor domain.RemoteExecutor
 }
@@ -33,9 +37,12 @@ func (p *Provisioner) GetSteps() []domain.ProvisionStep {
 			Command: "if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then echo 'Node.js already installed'; else curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs; fi",
 		},
 		{
-			ID:      "claude-code",
-			Name:    "Install Claude Code",
-			Command: "if command -v claude >/dev/null 2>&1 || command -v claude-code >/dev/null 2>&1; then echo 'Claude Code already installed'; else npm install -g @anthropic-ai/claude-code || (mkdir -p ~/.npm-global && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code); fi",
+			ID:   "claude-code",
+			Name: "Install Claude Code",
+			// The native installer puts claude in ~/.local/bin and needs no
+			// npm or root; it asks nothing, and the final command -v fails the
+			// step when the download did not install anything.
+			Command: claudeInstallCommand,
 		},
 		{
 			ID:      "ageni",

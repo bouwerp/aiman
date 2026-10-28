@@ -19,6 +19,16 @@ func TestWithTerminalEnvAddsUTF8WhenMissing(t *testing.T) {
 	}
 }
 
+func TestChildShellPutsUserNpmPrefixFirst(t *testing.T) {
+	got := childShell("deepcode")
+	if !strings.HasPrefix(got, `export PATH="$HOME/.npm-global/bin:$PATH:`) {
+		t.Fatalf("user npm prefix must precede the system PATH: %s", got)
+	}
+	if strings.Count(got, ".npm-global/bin") != 1 {
+		t.Fatalf("npm prefix listed twice: %s", got)
+	}
+}
+
 func TestWithTerminalEnvKeepsExistingUTF8Locale(t *testing.T) {
 	got := withTerminalEnv([]string{"LANG=en_US.UTF-8", "TERM=xterm-256color"})
 	if !slices.Contains(got, "LANG=en_US.UTF-8") {

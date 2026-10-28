@@ -175,6 +175,7 @@ func runServe() error {
 		Exec:        pathExec{base: agentupdate.LocalExec{}, home: home},
 		HTTP:        agentupdate.HTTPFetcher{},
 		EnsureHooks: func() { ensureAgentHooks(cfg.Verify.BeforePR) },
+		Home:        home,
 	})
 	agentUpdates.Sessions = srv.LiveAgentSessions
 	agentUpdates.BaseCtx = ctx

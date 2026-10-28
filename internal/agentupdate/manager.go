@@ -41,6 +41,9 @@ type AgentStatus struct {
 	Reason string `json:"reason,omitempty"`
 	// Held is true for agents on agents.update.hold.
 	Held bool `json:"held,omitempty"`
+	// RootOwned is true for a package-manager install whose files root owns,
+	// so updating it needs root. The agents page then offers MovePrefix.
+	RootOwned bool `json:"root_owned,omitempty"`
 }
 
 // Outcome answers one agents.update target.
@@ -89,6 +92,11 @@ type Manager struct {
 	// OnApplied runs after every update attempt that reached the update
 	// command, successful or not.
 	OnApplied func(Applied)
+	// Home is the user's home directory, where MovePrefix puts the npm
+	// prefix.
+	Home string
+	// RootOwned reports whether root owns path. Nil is OwnedByRoot.
+	RootOwned func(path string) bool
 	// BaseCtx parents updates started by Request, which outlive the
 	// request. Nil is context.Background.
 	BaseCtx context.Context
@@ -267,9 +275,19 @@ func (m *Manager) Status(ctx context.Context, refresh bool) ([]AgentStatus, erro
 		}
 		row := AgentStatus{AgentState: a, Held: m.Policy.Held(e.Agent)}
 		row.Status, row.Reason = m.statusLocked(a, sessions)
+		if a.Method.packageManager() && a.Path != "" {
+			row.RootOwned = m.rootOwned(a.Path)
+		}
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+func (m *Manager) rootOwned(path string) bool {
+	if m.RootOwned != nil {
+		return m.RootOwned(path)
+	}
+	return OwnedByRoot(path)
 }
 
 func (m *Manager) statusLocked(a AgentState, sessions []LiveSession) (status, reason string) {
@@ -325,9 +343,16 @@ func (m *Manager) Request(ctx context.Context, agent string, all bool) ([]Outcom
 	return out, nil
 }
 
-// start checks one target and, when it may run, applies it. background runs
-// the update in a goroutine; otherwise start returns after it finishes.
+// start checks one target and, when it may run, applies its update command.
+// background runs the update in a goroutine; otherwise start returns after it
+// finishes.
 func (m *Manager) start(agent string, sessions []LiveSession, background bool) Outcome {
+	return m.startWith(agent, sessions, nil, background)
+}
+
+// startWith is start with the commands to run; nil is the agent's update
+// command for its install method.
+func (m *Manager) startWith(agent string, sessions []LiveSession, cmds []Command, background bool) Outcome {
 	e, _ := m.entry(agent)
 	m.mu.Lock()
 	st := m.loadLocked()
@@ -349,10 +374,13 @@ func (m *Manager) start(agent string, sessions []LiveSession, background bool) O
 	m.mu.Unlock()
 	// A background start answers agents.update; a foreground start is
 	// auto mode applying a due update.
+	if cmds == nil {
+		cmds = []Command{e.UpdateCommand(a.Method)}
+	}
 	if background {
-		go m.apply(e, a, false)
+		go m.apply(e, a, cmds, false)
 	} else {
-		m.apply(e, a, true)
+		m.apply(e, a, cmds, true)
 	}
 	return Outcome{Agent: agent, Accepted: true}
 }
@@ -364,10 +392,10 @@ func (m *Manager) baseCtx() context.Context {
 	return context.Background()
 }
 
-// apply runs one update, re-probes the agent and records the attempt. The
-// gate is checked again under applyMu, since a queued update may start
-// after a session began working.
-func (m *Manager) apply(e Entry, before AgentState, auto bool) {
+// apply runs cmds in order, stopping at the first failure, then re-probes
+// the agent and records the attempt. The gate is checked again under applyMu,
+// since a queued update may start after a session began working.
+func (m *Manager) apply(e Entry, before AgentState, cmds []Command, auto bool) {
 	defer m.wg.Done()
 	defer func() {
 		m.mu.Lock()
@@ -381,7 +409,12 @@ func (m *Manager) apply(e Entry, before AgentState, auto bool) {
 		m.logf("agent updates: %s %s", e.Agent, why)
 		return
 	}
-	res := m.Runner.Run(ctx, e.Agent, e.UpdateCommand(before.Method))
+	var res Result
+	for _, c := range cmds {
+		if res = m.Runner.Run(ctx, e.Agent, c); !res.OK {
+			break
+		}
+	}
 	after, installed := m.Prober.Probe(ctx, e)
 	lu := &LastUpdate{At: m.now().UTC(), From: before.Installed, Target: before.Latest, OK: res.OK}
 	if res.Err != nil {

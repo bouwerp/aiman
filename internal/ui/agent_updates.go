@@ -41,6 +41,9 @@ type agentUpdatesView struct {
 	// pollQueued is set while a poll tick is pending, so status answers
 	// arriving close together never start a second tick chain.
 	pollQueued bool
+	// confirmMove names the agent whose move to the user npm prefix waits
+	// on the confirm screen.
+	confirmMove string
 }
 
 type agentsStatusMsg struct {
@@ -58,6 +61,43 @@ type agentsUpdateMsg struct {
 }
 
 type agentsPollMsg struct{ host string }
+
+type agentsMoveMsg struct {
+	host   string
+	result agentupdate.Outcome
+	err    error
+}
+
+func agentsMoveCmd(r config.Remote, agent string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), agentsRPCTimeout)
+		defer cancel()
+		raw, err := agentsRPC(ctx, r, "agents.move_prefix", map[string]any{"agent": agent})
+		if err != nil {
+			return agentsMoveMsg{host: r.Host, err: err}
+		}
+		var res struct {
+			Result agentupdate.Outcome `json:"result"`
+		}
+		if err := json.Unmarshal(raw, &res); err != nil {
+			return agentsMoveMsg{host: r.Host, err: fmt.Errorf("agents.move_prefix: %w", err)}
+		}
+		return agentsMoveMsg{host: r.Host, result: res.Result}
+	}
+}
+
+// movePrefixLines are the exact commands the confirm screen shows.
+func movePrefixLines(agent string) []string {
+	e, ok := agentupdate.Lookup(agent)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, c := range agentupdate.MovePrefixCommands("~", e) {
+		out = append(out, c.String())
+	}
+	return out
+}
 
 func agentsStatusCmd(r config.Remote, refresh bool) tea.Cmd {
 	return func() tea.Msg {
@@ -148,9 +188,24 @@ func (m *Model) handleAgentUpdatesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok || v == nil {
 		return m, nil
 	}
+	if v.confirmMove != "" {
+		return m, v.handleMoveConfirm(km.String())
+	}
 	switch km.String() {
 	case "esc", "q":
 		m.state = viewStateAgentAPI
+		return m, nil
+	case "m":
+		row, ok := v.selected()
+		if !ok {
+			return m, nil
+		}
+		if !agentupdate.CanMovePrefix(row) {
+			v.notice = "m moves an npm install in a root-owned prefix to ~/.npm-global"
+			return m, nil
+		}
+		v.notice = ""
+		v.confirmMove = row.Agent
 		return m, nil
 	case "up", "k":
 		if v.cursor > 0 {
@@ -184,6 +239,21 @@ func (m *Model) handleAgentUpdatesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, agentsUpdateCmd(v.remote, map[string]any{"all": true})
 	}
 	return m, nil
+}
+
+// handleMoveConfirm answers the move confirm screen: y or enter runs
+// agents.move_prefix, n or esc goes back to the list.
+func (v *agentUpdatesView) handleMoveConfirm(key string) tea.Cmd {
+	switch key {
+	case "y", "enter":
+		agent := v.confirmMove
+		v.confirmMove = ""
+		v.notice = "moving " + agent + " to ~/.npm-global…"
+		return agentsMoveCmd(v.remote, agent)
+	case "n", "esc", "q":
+		v.confirmMove = ""
+	}
+	return nil
 }
 
 // routeAgentUpdatesMsg applies agents.* results on any view; answers for
@@ -227,6 +297,22 @@ func (m *Model) routeAgentUpdatesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		v.err = ""
 		v.notice = agentsUpdateNotice(msg.results)
+		return m, agentsStatusCmd(v.remote, false)
+	case agentsMoveMsg:
+		if v == nil || v.remote.Host != msg.host {
+			return m, nil
+		}
+		if msg.err != nil {
+			v.notice = ""
+			v.err = msg.err.Error()
+			return m, nil
+		}
+		v.err = ""
+		if msg.result.Accepted {
+			v.notice = "moving " + msg.result.Agent + " to ~/.npm-global"
+		} else {
+			v.notice = msg.result.Agent + ": " + msg.result.Reason
+		}
 		return m, agentsStatusCmd(v.remote, false)
 	}
 	return m, nil
@@ -297,6 +383,9 @@ func (m *Model) renderAgentUpdatesView() string {
 		host = v.remote.Name
 	}
 	var b strings.Builder
+	if v.confirmMove != "" {
+		return docStyle.Render(renderMoveConfirm(v.confirmMove, host, titleStyle, dimStyle))
+	}
 	b.WriteString("\n  " + titleStyle.Render("Agents on "+host) + "\n\n")
 	if v.mode != "" {
 		line := "mode " + v.mode
@@ -342,6 +431,27 @@ func (m *Model) renderAgentUpdatesView() string {
 	if v.err != "" {
 		b.WriteString("\n  " + errStyle.Render(v.err) + "\n")
 	}
-	b.WriteString("\n  " + dimStyle.Render("u update selected  U update all outdated  r refresh  esc back") + "\n")
+	keys := "u update selected  U update all outdated  r refresh  esc back"
+	if row, ok := v.selected(); ok && agentupdate.CanMovePrefix(row) {
+		keys = "u update selected  U update all outdated  m move to user prefix  r refresh  esc back"
+	}
+	b.WriteString("\n  " + dimStyle.Render(keys) + "\n")
 	return docStyle.Render(b.String())
+}
+
+// renderMoveConfirm lists exactly what agents.move_prefix runs on host.
+func renderMoveConfirm(agent, host string, titleStyle, dimStyle lipgloss.Style) string {
+	var b strings.Builder
+	b.WriteString("\n  " + titleStyle.Render("Move "+agent+" to the user npm prefix on "+host) + "\n\n")
+	b.WriteString("  The install is in a root-owned npm prefix, so updating it needs root.\n")
+	b.WriteString("  aiman serve runs, as you and never with sudo:\n\n")
+	for _, line := range movePrefixLines(agent) {
+		b.WriteString("    " + line + "\n")
+	}
+	b.WriteString("\n  ~/.npm-global/bin comes before the system paths in the PATH aiman uses on\n")
+	b.WriteString("  this host (remote calls, agent launches, serve's update runner).\n")
+	b.WriteString("  The root-owned copy stays installed; removing it needs root.\n")
+	b.WriteString("  Running sessions keep the old copy until they restart.\n")
+	b.WriteString("\n  " + dimStyle.Render("y run  n cancel") + "\n")
+	return b.String()
 }

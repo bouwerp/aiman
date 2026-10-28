@@ -154,6 +154,63 @@ func TestAgentUpdatesPollsOnlyWhileUpdating(t *testing.T) {
 	}
 }
 
+func TestAgentUpdatesMoveDeepcodeToUserPrefix(t *testing.T) {
+	m, calls := agentsPage(t)
+	deepcode := agentupdate.AgentStatus{
+		AgentState: agentupdate.AgentState{Agent: "deepcode", Installed: "0.6.1", Latest: "0.6.2", Method: agentupdate.MethodNPM,
+			Path: "/usr/lib/node_modules/@vegamo/deepcode-cli/dist/cli.js"},
+		Status: agentupdate.StatusAvailable, RootOwned: true,
+	}
+	m.agentUpdates.rows = append(m.agentUpdates.rows, deepcode)
+
+	// claude is native: m only explains itself.
+	if _, cmd := m.handleAgentUpdatesUpdate(pressKey("m")); cmd != nil || m.agentUpdates.confirmMove != "" {
+		t.Fatal("m offered a move for a native install")
+	}
+	m.handleAgentUpdatesUpdate(pressKey("down"))
+	m.handleAgentUpdatesUpdate(pressKey("down"))
+	if !strings.Contains(m.renderAgentUpdatesView(), "m move to user prefix") {
+		t.Fatal("footer does not offer m for a root-owned npm install")
+	}
+	m.handleAgentUpdatesUpdate(pressKey("m"))
+	if m.agentUpdates.confirmMove != "deepcode" {
+		t.Fatalf("confirm %q", m.agentUpdates.confirmMove)
+	}
+	out := m.renderAgentUpdatesView()
+	for _, want := range []string{
+		"npm config set prefix ~/.npm-global",
+		"npm install -g @vegamo/deepcode-cli@latest",
+		"~/.npm-global/bin comes before the system paths",
+		"y run  n cancel",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("confirm screen missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "sudo ") {
+		t.Fatalf("confirm screen mentions sudo as a command:\n%s", out)
+	}
+
+	m.handleAgentUpdatesUpdate(pressKey("n"))
+	if m.agentUpdates.confirmMove != "" || len(*calls) != 1 {
+		t.Fatalf("n: confirm %q calls %+v", m.agentUpdates.confirmMove, *calls)
+	}
+	m.handleAgentUpdatesUpdate(pressKey("m"))
+	_, cmd := m.handleAgentUpdatesUpdate(pressKey("y"))
+	if cmd == nil {
+		t.Fatal("y: no command")
+	}
+	cmd()
+	last := (*calls)[len(*calls)-1]
+	if last.method != "agents.move_prefix" || !reflect.DeepEqual(last.params, map[string]any{"agent": "deepcode"}) {
+		t.Fatalf("call %+v", last)
+	}
+	_, cmd = m.routeRemoteServiceMsg(agentsMoveMsg{host: "10.0.1.5", result: agentupdate.Outcome{Agent: "deepcode", Accepted: true}})
+	if cmd == nil || !strings.Contains(m.agentUpdates.notice, "moving deepcode") {
+		t.Fatalf("move answer: notice %q", m.agentUpdates.notice)
+	}
+}
+
 func TestAgentsUpdateNotice(t *testing.T) {
 	got := agentsUpdateNotice([]agentupdate.Outcome{{Agent: "claude", Accepted: true}, {Agent: "codex", Reason: "deferred: 1 session busy"}})
 	if got != "updating claude · codex: deferred: 1 session busy" {

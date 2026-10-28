@@ -165,3 +165,59 @@ func TestAgentsUpdateDeferredWhileWorking(t *testing.T) {
 		t.Fatalf("status %+v", st.Agents[0])
 	}
 }
+
+// npmHost fakes deepcode in the system npm prefix; the move sets the user
+// prefix and reinstalls there.
+type npmHost struct {
+	mu  sync.Mutex
+	ran []string
+}
+
+func (h *npmHost) Run(_ context.Context, c agentupdate.Command) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	j := strings.Join(c.Argv, " ")
+	switch {
+	case strings.Contains(j, "command -v deepcode"):
+		return "/usr/lib/node_modules/@vegamo/deepcode-cli/dist/cli.js\n", nil
+	case j == "deepcode --version", strings.HasPrefix(j, "npm view"):
+		return "0.6.1\n", nil
+	case strings.HasPrefix(j, "npm "):
+		h.ran = append(h.ran, j)
+		return "", nil
+	}
+	return "", errors.New("exit status 127")
+}
+
+func TestAgentsMovePrefix(t *testing.T) {
+	srv, m, _, _ := agentsServer(t)
+	host := &npmHost{}
+	deepcode, _ := agentupdate.Lookup("deepcode")
+	m.Entries = []agentupdate.Entry{deepcode}
+	m.Prober = &agentupdate.Prober{Exec: host, HTTP: agentHTTP{}}
+	m.Runner = agentupdate.NewRunner(host, "")
+	m.Home = "/home/u"
+	m.RootOwned = func(string) bool { return true }
+
+	var st agentsStatusResult
+	rpcOK(t, srv, "", "agents.status", map[string]any{"refresh": true}, &st)
+	if !st.Agents[0].RootOwned {
+		t.Fatalf("status %+v", st.Agents[0])
+	}
+	var res struct {
+		Type   string              `json:"type"`
+		Host   string              `json:"host"`
+		Result agentupdate.Outcome `json:"result"`
+	}
+	rpcOK(t, srv, "", "agents.move_prefix", map[string]any{"agent": "deepcode"}, &res)
+	m.Wait()
+	if res.Type != "agents_move_prefix" || res.Host != "regent" || !res.Result.Accepted {
+		t.Fatalf("move %+v", res)
+	}
+	if got := strings.Join(host.ran, "\n"); got != "npm config set prefix /home/u/.npm-global\nnpm install -g @vegamo/deepcode-cli@latest" {
+		t.Fatalf("ran %q", got)
+	}
+	if resp := rpc(t, srv, "", "agents.move_prefix", map[string]any{}); resp.Error == nil || resp.Error.Code != CodeInvalidParams {
+		t.Fatalf("empty agent %+v", resp)
+	}
+}

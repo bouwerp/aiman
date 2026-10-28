@@ -592,7 +592,7 @@ Press `m` to access, in order:
 |---|---|
 | **Manage Remote Servers** | Add, scan `known_hosts`, edit, or test SSH connections |
 | **Agent API** | Install, start, reload, update or stop `aiman serve` per remote |
-| **Provision Remote Server** | Install baseline tooling on a fresh host (gh, agents, node, skills) |
+| **Provision Remote Server** | Install baseline tooling on a fresh host (gh, agents, node, skills); Claude Code uses its native installer (`curl -fsSL https://claude.ai/install.sh \| bash`), not npm |
 | **Auth Setup Wizard** | Guided auth checks and instructions per remote tool |
 | **JIRA Configuration** | URL, email, API token, and which issue statuses the picker offers |
 | **Git Configuration** | Which repositories and orgs the repo picker lists |
@@ -711,6 +711,22 @@ runs the page refreshes every 2 seconds.
 On the host, `aiman agents status [--json] [--refresh]` and
 `aiman agents update <agent>|--all` make the same `agents.status` and `agents.update` calls.
 
+**Deep Code in a root-owned npm prefix.** `npm install -g` into `/usr/lib/node_modules`
+needs root, so its update shows `needs root`. When the selected npm install is root-owned
+(or its update needed root), the page offers `m` "move to user prefix". The confirm screen
+lists exactly what serve runs, as you and never with sudo:
+
+```bash
+npm config set prefix ~/.npm-global
+npm install -g @vegamo/deepcode-cli@latest
+```
+
+`~/.npm-global/bin` comes before the system paths in every PATH aiman uses on the host
+(remote calls, PTY agent launches, serve's update runner), so the user copy wins. The
+root-owned copy is never uninstalled; that needs root. The RPC is
+`agents.move_prefix {agent}`, answered with `{"type":"agents_move_prefix","host","result":{agent, accepted, reason}}`;
+serve re-probes the agent afterwards.
+
 #### RTK
 
 [RTK](https://github.com/rtk-ai/rtk) is a CLI proxy that shrinks command output before it
@@ -762,6 +778,7 @@ are thin clients over these; an agent can also speak the JSON directly.
 | PTY runtime | `pty.list`, `pty.get`, `pty.create`, `pty.input`, `pty.run`, `pty.wait-output`, `pty.capture`, `pty.resize`, `pty.kill`, `pty.forget` |
 | Live activity | `session.events` (streaming; takes over the connection like `pty.attach`) |
 | Notifications | `notify.since` (`after`, `limit`; `after: -1` returns only the tail seq) |
+| Agent updates | `agents.status`, `agents.update`, `agents.move_prefix` (see [Agent updates](#agent-updates)) |
 | Shared context | `context.list`, `context.find`, `context.get`, `context.put`, `context.pack`, `context.stats` |
 
 Errors come back with a machine-readable `code` — `server_not_running`, `not_found`,

@@ -35,8 +35,10 @@ type PaneCapturer interface {
 }
 
 // remoteAimanPreamble makes the serve-installed binary resolvable over
-// non-interactive SSH (it lives in ~/.local/bin).
-const remoteAimanPreamble = `export PATH="$HOME/.local/bin:$PATH"; `
+// non-interactive SSH (it lives in ~/.local/bin), and puts the user npm
+// prefix ahead of the system one so an agent moved there by
+// agents.move_prefix wins over a root-owned copy.
+const remoteAimanPreamble = `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; `
 
 // PTYSpec is what flow_manager hands to the remote `aiman pty create`.
 type PTYSpec struct {

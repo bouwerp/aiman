@@ -21,6 +21,8 @@ type agentUpdateDeps struct {
 	// update can replace the agent's config defaults.
 	EnsureHooks func()
 	Logf        func(format string, args ...any)
+	// Home is where agents.move_prefix puts the user npm prefix.
+	Home string
 }
 
 // newAgentUpdates builds the manager for agents.update. State lives in
@@ -50,6 +52,7 @@ func newAgentUpdates(cfg config.AgentUpdateConfig, dir string, deps agentUpdateD
 		CheckEvery:      cfg.CheckEveryOrDefault(),
 		FirstProbeDelay: agentupdate.DefaultFirstProbeDelay,
 		Logf:            logf,
+		Home:            deps.Home,
 	}
 	if deps.EnsureHooks != nil {
 		m.AfterUpdate = func(string) { deps.EnsureHooks() }
@@ -109,12 +112,13 @@ func agentAppliedText(a agentupdate.Applied) string {
 // agentPathDirs are the per-user install prefixes agents use. Serve runs
 // under systemd with a short PATH, so probes and updates add these.
 var agentPathDirs = []string{
-	".local/bin", ".kilo/bin", ".npm-global/bin", "bin", ".bun/bin",
+	".local/bin", ".kilo/bin", "bin", ".bun/bin",
 	".local/share/pnpm", ".yarn/bin",
 }
 
 // pathExec runs commands with the agent install prefixes appended to PATH,
-// unless the command sets PATH itself.
+// unless the command sets PATH itself. The user npm prefix comes first, so an
+// agent moved there by agents.move_prefix wins over a root-owned copy.
 type pathExec struct {
 	base agentupdate.Executor
 	home string
@@ -126,7 +130,7 @@ func (p pathExec) Run(ctx context.Context, c agentupdate.Command) (string, error
 		for k, v := range c.Env {
 			env[k] = v
 		}
-		dirs := []string{os.Getenv("PATH")}
+		dirs := []string{filepath.Join(p.home, agentupdate.UserPrefixDir, "bin"), os.Getenv("PATH")}
 		for _, d := range agentPathDirs {
 			dirs = append(dirs, filepath.Join(p.home, d))
 		}

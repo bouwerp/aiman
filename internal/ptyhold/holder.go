@@ -394,10 +394,12 @@ const defaultTERM = "xterm-256color"
 // TERM is exported here, after profile scripts, because bash -l can clobber
 // the holder process environment with TERM=dumb. There is no fallback shell:
 // when the agent exits the holder exits, so attach can revive instead of
-// presenting an empty pane.
+// presenting an empty pane. The user npm prefix comes before the system PATH
+// so an agent reinstalled there (agents.move_prefix) wins over a root-owned
+// copy; the other user prefixes come after it.
 func childShell(command string) string {
 	return fmt.Sprintf(
-		"export PATH=\"$PATH:$HOME/.local/bin:$HOME/.kilo/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; export TERM=%s COLORTERM=truecolor LANG=\"${LANG:-%s}\"; %s",
+		"export PATH=\"$HOME/.npm-global/bin:$PATH:$HOME/.local/bin:$HOME/.kilo/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; export TERM=%s COLORTERM=truecolor LANG=\"${LANG:-%s}\"; %s",
 		defaultTERM, defaultUTF8Locale, command,
 	)
 }

@@ -170,8 +170,8 @@ func TestAgentUpdatePathExecExtendsPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := host.env[0]["PATH"]
-	if !strings.Contains(p, "/home/u/.local/bin") || !strings.Contains(p, "/home/u/.npm-global/bin") {
-		t.Fatalf("PATH = %q", p)
+	if !strings.Contains(p, "/home/u/.local/bin") || !strings.HasPrefix(p, "/home/u/.npm-global/bin:"+os.Getenv("PATH")) {
+		t.Fatalf("PATH = %q, want the user npm prefix before the system PATH", p)
 	}
 	if _, err := ex.Run(context.Background(), agentupdate.Command{Argv: []string{"claude", "--version"}, Env: map[string]string{"PATH": "/x"}}); err != nil {
 		t.Fatal(err)
