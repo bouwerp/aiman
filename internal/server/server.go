@@ -13,6 +13,7 @@ import (
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
@@ -89,6 +90,9 @@ type Server struct {
 	ciWatch *ciwatch.Watcher
 	// verifier runs reviewer sessions; nil until SetVerifier.
 	verifier *verify.Manager
+	// handovers runs handover child agents; nil until SetHandovers, and then
+	// writeHandover keeps the mechanical write and enqueues the memory job.
+	handovers *handoverchild.Manager
 
 	// preferredAgents is agents.preferred; agentInstalled reports whether a
 	// command resolves on this host. session.create with no agent picks from

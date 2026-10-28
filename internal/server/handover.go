@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/fsutil"
 	"github.com/bouwerp/aiman/internal/handover"
+	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/pane"
 )
@@ -29,11 +32,57 @@ const HandoverRestartNote = "[aiman] This session's terminal was restarted. Your
 const HandoverCompactionNote = "[aiman] Your context was compacted. Your handover is in .aiman_handover.md; read it if you lost track."
 
 // handoverResult is one written handover. Written is false when the file
-// bytes were already current.
+// bytes were already current. Child is the handover child run that started or
+// was already active; it is empty when no child runs.
 type handoverResult struct {
 	Path    string `json:"path"`
 	Written bool   `json:"written"` // file content changed
 	NoteID  string `json:"note_id"`
+	Child   string `json:"child,omitempty"`
+}
+
+// SetHandovers attaches the handover child manager. Call it before Serve and
+// before the manager's Resume.
+func (s *Server) SetHandovers(m *handoverchild.Manager) {
+	s.handovers = m
+}
+
+// HandoverDeps returns the handover child manager's collaborators backed by
+// this server. The caller sets Candidates, BaseDir and Timeout.
+func (s *Server) HandoverDeps(store *handoverchild.Store, installed func(string) bool) handoverchild.Deps {
+	d := handoverchild.Deps{
+		Store:     store,
+		Sessions:  serverSessions{s: s, cleanupReason: "child_cleanup"},
+		Terminal:  serverTerminal{s},
+		Steer:     serveSteerAiman{s},
+		Ledger:    serveLedger{s},
+		Installed: installed,
+	}
+	// A typed nil would pass the manager's nil checks and then panic.
+	if s.ctxStore != nil {
+		d.Context = s.ctxStore
+	}
+	if s.memoryJobs != nil {
+		d.Jobs = s.memoryJobs
+	}
+	return d
+}
+
+// serveSteerAiman queues a note with author aiman on serve's steerer.
+type serveSteerAiman struct{ s *Server }
+
+func (a serveSteerAiman) SteerAsAiman(sessionID, text string) {
+	if a.s.steer == nil {
+		return
+	}
+	a.s.steer.Enqueue(SteerNote{SessionID: sessionID, Author: domain.AuthorAiman, Text: text})
+}
+
+// serveLedger appends session_events rows with actor aiman.
+type serveLedger struct{ s *Server }
+
+func (a serveLedger) Append(ctx context.Context, sessionID string, kind domain.EventKind, payload map[string]any) {
+	a.s.appendEvent(ctx, sessionID, domain.EventActorAiman, kind, payload)
 }
 
 func handoverNoteID(sessionID string) string {
@@ -106,13 +155,17 @@ func (s *Server) handleHandoverWrite(ctx context.Context, req Request) Response 
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	return Response{ID: req.ID, Result: map[string]any{
+	result := map[string]any{
 		"type":    "handover",
 		"path":    res.Path,
 		"written": res.Written,
 		"note_id": res.NoteID,
-		"exists":  true,
-	}}
+		"exists":  res.Path != "",
+	}
+	if res.Child != "" {
+		result["child"] = res.Child
+	}
+	return Response{ID: req.ID, Result: result}
 }
 
 func (s *Server) handleHandoverPoint(ctx context.Context, req Request) Response {
@@ -137,7 +190,8 @@ func (s *Server) handleHandoverPoint(ctx context.Context, req Request) Response 
 
 // queueHandoverPointer enqueues the restart or compaction pointer only when the
 // handover file is already in the session directory. No directory, no file, no
-// steerer, or an archive/forget reason queues nothing.
+// steerer, or an archive/forget reason queues nothing. While a handover child
+// runs for the session, the pointer is held on the run and queued when it ends.
 func (s *Server) queueHandoverPointer(ctx context.Context, sess domain.Session, reason string) bool {
 	if ctx.Err() != nil || s.steer == nil || !handoverFileExists(sess) {
 		return false
@@ -150,6 +204,9 @@ func (s *Server) queueHandoverPointer(ctx context.Context, sess domain.Session, 
 	default:
 		return false
 	}
+	if s.handovers != nil && s.handovers.HoldPointer(sess.ID, text) {
+		return true
+	}
 	s.steer.Enqueue(SteerNote{
 		SessionID: sess.ID,
 		Author:    domain.AuthorAiman,
@@ -159,14 +216,15 @@ func (s *Server) queueHandoverPointer(ctx context.Context, sess domain.Session, 
 }
 
 func handoverFileExists(sess domain.Session) bool {
-	dir := strings.TrimSpace(sess.WorkingDirectory)
-	if dir == "" {
-		dir = strings.TrimSpace(sess.WorktreePath)
-	}
-	if dir == "" {
+	dir, err := handoverDir(sess)
+	if err != nil {
 		return false
 	}
-	info, err := os.Stat(filepath.Join(dir, domain.AimanHandoverFileName))
+	return regularFileExists(filepath.Join(dir, domain.AimanHandoverFileName))
+}
+
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
 
@@ -202,24 +260,43 @@ func (s *Server) noteForgetHandover(ctx context.Context, sess domain.Session) {
 // writeHandover gathers the session's pane, list, undelivered notes, and diff
 // stat, then writes .aiman_handover.md. The context note is updated when the
 // file changed or the note is not stored yet. A note-put failure is logged;
-// the file write is the result the caller gets.
+// the file write is the result the caller gets. Hidden sessions get no
+// handover.
+//
+// With a handover child manager, every write also starts a child (or joins
+// the active one), and the run enqueues the memory job and stores the final
+// note when it ends. A render whose sha256 matches the run that last rewrote
+// the file leaves that rewrite in place and starts nothing.
 func (s *Server) writeHandover(ctx context.Context, sess domain.Session, reason string) (handoverResult, error) {
+	if sess.Role.Hidden() {
+		return handoverResult{}, nil
+	}
 	dir, err := handoverDir(sess)
 	if err != nil {
 		return handoverResult{}, err
 	}
 	in := s.handoverInput(ctx, sess, reason, dir)
+	rendered := []byte(handover.Render(in))
+	sum := sha256.Sum256(rendered)
+	sha := hex.EncodeToString(sum[:])
 	path := filepath.Join(dir, domain.AimanHandoverFileName)
-	changed, err := fsutil.WriteIfChanged(path, []byte(handover.Render(in)), 0o644)
+	id := handoverNoteID(sess.ID)
+	if s.childRewroteSameState(sess.ID, sha, path) {
+		s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventHandoverWritten, map[string]any{
+			"path": path, "written": false, "reason": reason, "kept": "child",
+		})
+		return handoverResult{Path: path, NoteID: id}, nil
+	}
+	changed, err := fsutil.WriteIfChanged(path, rendered, 0o644)
 	if err != nil {
 		return handoverResult{}, fmt.Errorf("writing handover: %w", err)
 	}
-	id := handoverNoteID(sess.ID)
 	s.putHandoverNote(ctx, sess, in, id, changed)
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventHandoverWritten, map[string]any{
 		"path": path, "written": changed, "reason": reason,
 	})
-	if changed && s.memoryJobs != nil {
+	child := s.startHandoverChild(ctx, sess, reason, in, rendered, sha)
+	if child == "" && changed && s.memoryJobs != nil {
 		if err := s.memoryJobs.Enqueue(ctx, memoryjob.Job{
 			SessionID: sess.ID,
 			Reason:    reason,
@@ -231,7 +308,38 @@ func (s *Server) writeHandover(ctx context.Context, sess domain.Session, reason 
 			log.Printf("memory job: %s: %v", sess.ID, err)
 		}
 	}
-	return handoverResult{Path: path, Written: changed, NoteID: id}, nil
+	return handoverResult{Path: path, Written: changed, NoteID: id, Child: child}, nil
+}
+
+// childRewroteSameState reports whether the file on disk is a child's rewrite
+// of a render identical to sha.
+func (s *Server) childRewroteSameState(sessionID, sha, path string) bool {
+	if s.handovers == nil {
+		return false
+	}
+	return s.handovers.LastMechanicalSHA(sessionID) == sha && regularFileExists(path)
+}
+
+// startHandoverChild starts a handover child, or joins the active one, and
+// returns its run id. A refused start returns "" so the caller enqueues the
+// memory job itself.
+func (s *Server) startHandoverChild(ctx context.Context, sess domain.Session, reason string, in handover.Input, rendered []byte, sha string) string {
+	if s.handovers == nil {
+		return ""
+	}
+	run, _, err := s.handovers.Start(ctx, handoverchild.StartRequest{
+		Worker:        sess,
+		Reason:        reason,
+		Mechanical:    rendered,
+		MechanicalSHA: sha,
+		Label:         in.Label,
+		Abstract:      handover.Abstract(in),
+	})
+	if err != nil {
+		log.Printf("handover: child for %s: %v", sess.ID, err)
+		return ""
+	}
+	return run
 }
 
 func handoverDir(sess domain.Session) (string, error) {

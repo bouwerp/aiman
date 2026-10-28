@@ -25,7 +25,7 @@ func (s *Server) SetVerifier(v *verify.Manager) {
 func (s *Server) VerifyDeps(store *verify.Store, installed func(string) bool) verify.Deps {
 	return verify.Deps{
 		Store:     store,
-		Sessions:  serverSessions{s},
+		Sessions:  serverSessions{s: s, cleanupReason: "review_cleanup"},
 		Terminal:  serverTerminal{s},
 		Todos:     s.TodoAccess(),
 		Context:   s.ctxStore,
@@ -151,8 +151,12 @@ func (s *Server) findSession(ctx context.Context, target string) (domain.Session
 	return resolveSession(list, target)
 }
 
-// serverSessions is the manager's session registry.
-type serverSessions struct{ s *Server }
+// serverSessions is a child manager's session registry. cleanupReason is the
+// session-ended reason Forget records for the children that manager drops.
+type serverSessions struct {
+	s             *Server
+	cleanupReason string
+}
 
 func (a serverSessions) Get(ctx context.Context, id string) (domain.Session, error) {
 	sess, ok := a.s.findSession(ctx, id)
@@ -162,7 +166,7 @@ func (a serverSessions) Get(ctx context.Context, id string) (domain.Session, err
 	return a.s.liveSession(ctx, sess), nil
 }
 
-// CreateChild creates the reviewer through serve's creator and stores the
+// CreateChild creates the child through serve's creator and stores the
 // identity fields the creator does not set.
 func (a serverSessions) CreateChild(ctx context.Context, cfg domain.SessionConfig) (domain.Session, error) {
 	if a.s.create == nil {
@@ -193,7 +197,7 @@ func (a serverSessions) Forget(ctx context.Context, id string) error {
 	if err := a.s.dropSession(ctx, sess); err != nil {
 		return err
 	}
-	a.s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionEnded, map[string]any{"reason": "review_cleanup"})
+	a.s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionEnded, map[string]any{"reason": a.cleanupReason})
 	return nil
 }
 

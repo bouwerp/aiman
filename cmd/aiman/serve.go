@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
@@ -199,6 +200,21 @@ func runServe() error {
 	srv.SetVerifier(verifier)
 	verifier.Resume(ctx)
 	defer verifier.Close()
+
+	if cfg.Handover.ChildEnabled() {
+		handoverDeps := srv.HandoverDeps(handoverchild.NewStore(filepath.Join(dir, "handover-runs")), func(command string) bool {
+			return scanner.Installed(ctx, command)
+		})
+		handoverDeps.Candidates = cfg.HandoverCandidates
+		handoverDeps.BaseDir = filepath.Join(dir, "handovers")
+		handoverDeps.Timeout = cfg.Handover.ChildTimeout()
+		handovers := handoverchild.NewManager(handoverDeps)
+		// Resume first so a run left active by the last serve absorbs new
+		// triggers instead of starting a second child.
+		handovers.Resume(ctx)
+		srv.SetHandovers(handovers)
+		defer handovers.Close()
+	}
 
 	childTracker := &coordinator.Tracker{
 		Todos:    srv.TodoAccess(),
