@@ -26,6 +26,8 @@ const (
 	KindClaude Kind = "claude"
 	// KindCodex is a Codex rollout JSONL transcript.
 	KindCodex Kind = "codex"
+	// KindPi is a Pi session JSONL file.
+	KindPi Kind = "pi"
 )
 
 // ScanInterval is the default gap between transcript scans.
@@ -109,8 +111,9 @@ func NewTracker(store Store, sessions SessionLister, onChange func(sessionID str
 }
 
 // KindForPath reports claude for a ".jsonl" path under "/.claude/projects/",
-// and codex for a ".jsonl" path under "/.codex/sessions/". Anything else,
-// including .grok, is KindUnknown and is not given a cursor.
+// codex for one under "/.codex/sessions/", and pi for one under
+// "/.pi/agent/sessions/". Anything else, including .grok, is KindUnknown and
+// is not given a cursor.
 func KindForPath(path string) Kind {
 	if !strings.HasSuffix(path, ".jsonl") {
 		return KindUnknown
@@ -120,6 +123,8 @@ func KindForPath(path string) Kind {
 		return KindClaude
 	case strings.Contains(path, "/.codex/sessions/"):
 		return KindCodex
+	case strings.Contains(path, "/.pi/agent/sessions/"):
+		return KindPi
 	default:
 		return KindUnknown
 	}
@@ -505,6 +510,9 @@ func parseTranscript(kind Kind, r io.Reader, cursors []domain.UsageCursor, path,
 			return nil, 0, "", contextSample{}, acc, err
 		}
 		return recs, n, raw, sample, acc, nil
+	case KindPi:
+		recs, n, sample, err := parsePi(r)
+		return recs, n, "", sample, acc, err
 	default:
 		return nil, 0, "", contextSample{}, acc, fmt.Errorf("unknown transcript kind %q", kind)
 	}
