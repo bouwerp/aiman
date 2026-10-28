@@ -160,6 +160,8 @@ func (d *SessionDiscoverer) sessionFromPTYRecord(host string, rec PTYRecord, mut
 		Backend:          domain.BackendPTY,
 		RemoteHost:       host,
 		WorkingDirectory: normalizePath(rec.Dir),
+		Role:             rec.Role,
+		ParentID:         rec.ParentID,
 		Status:           domain.SessionStatusActive,
 		CreatedAt:        time.Now(),
 	}

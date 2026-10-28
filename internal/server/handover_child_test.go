@@ -116,6 +116,29 @@ func TestWriteHandoverChildOwnsMemoryJob(t *testing.T) {
 	})
 }
 
+// A shell an agent opened with pty create has no agent. Its handover file is
+// still written, but no child is launched to summarise it.
+func TestWriteHandoverNoAgentStartsNoChild(t *testing.T) {
+	srv := newHandoverTestServer(t, paneText("$ npx hardhat test"), todosWith("t1", "Ship it", "pending"), "")
+	sess := domain.Session{ID: "s1-shell", Name: "s1-shell", WorkingDirectory: t.TempDir()}
+	store, _ := withHandoverChild(t, srv, sess)
+
+	res, err := srv.writeHandover(context.Background(), sess, "forget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Written || res.Child != "" {
+		t.Fatalf("result %+v, want a written file and no child", res)
+	}
+	runs, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("%d handover runs, want none", len(runs))
+	}
+}
+
 func TestPreCompactPointerHeldUntilRunEnds(t *testing.T) {
 	srv := newHandoverTestServer(t, paneText("$ go test"), nil, "")
 	st := newSteerer(&fakeSteerStore{}, &fakeSteerTarget{}, nil, time.Millisecond)

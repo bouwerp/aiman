@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
@@ -51,9 +53,34 @@ func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "pty_session", "session": info}}
 }
 
+// ptyListEntry is a runtime session plus the role and parent serve's database
+// holds for it. The laptop builds sessions from this list, so without them a
+// hidden helper (reviewer, handover) would show up as an ordinary session.
+type ptyListEntry struct {
+	ptyruntime.SessionInfo
+	Role     domain.SessionRole `json:"role,omitempty"`
+	ParentID string             `json:"parent_id,omitempty"`
+}
+
 func (s *Server) handlePTYList(ctx context.Context, req Request) Response {
 	list := s.pty.List()
-	return Response{ID: req.ID, Result: map[string]any{"type": "pty_list", "sessions": list}}
+	rows := map[string]domain.Session{}
+	if s.repo != nil {
+		stored, err := s.repo.List(ctx)
+		if err != nil {
+			// The runtime list is still right; only the annotation is missing.
+			log.Printf("pty.list: sessions: %v", err)
+		}
+		for _, row := range stored {
+			rows[row.ID] = row
+		}
+	}
+	out := make([]ptyListEntry, 0, len(list))
+	for _, info := range list {
+		row := rows[info.ID]
+		out = append(out, ptyListEntry{SessionInfo: info, Role: row.Role, ParentID: row.ParentID})
+	}
+	return Response{ID: req.ID, Result: map[string]any{"type": "pty_list", "sessions": out}}
 }
 
 func (s *Server) resolvePTYID(req Request) (string, Response, bool) {

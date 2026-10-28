@@ -333,7 +333,9 @@ func (s *Server) childRewroteSameState(sessionID, sha, path string) bool {
 // returns its run id. A refused start returns "" so the caller enqueues the
 // memory job itself.
 func (s *Server) startHandoverChild(ctx context.Context, sess domain.Session, reason string, in handover.Input, rendered []byte, sha string) string {
-	if s.handovers == nil {
+	// A terminal with no agent (a shell an agent opened with pty create) has
+	// no conversation to read; a child would spend an agent run on nothing.
+	if s.handovers == nil || strings.TrimSpace(sess.AgentName) == "" {
 		return ""
 	}
 	run, _, err := s.handovers.Start(ctx, handoverchild.StartRequest{

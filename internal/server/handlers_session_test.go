@@ -202,7 +202,9 @@ func TestSessionListBackfillsName(t *testing.T) {
 	if err := json.Unmarshal(raw, &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Sessions) != 1 || list.Sessions[0].Name == "" || list.Sessions[0].Group == "" {
+	// Named after the terminal: a registered row is not the creation flow's
+	// first session, so it must not take "impl".
+	if len(list.Sessions) != 1 || list.Sessions[0].Name != "old-tmux" || list.Sessions[0].Group == "" {
 		t.Fatalf("backfill = %s", raw)
 	}
 }

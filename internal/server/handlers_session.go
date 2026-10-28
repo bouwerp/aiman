@@ -292,8 +292,8 @@ func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 // labelDiscovered names a session found running on this host but absent from
 // its database.
 //
-// It deliberately does not use backfill/AssignSessionName: those serve the
-// creation flow, where the first session earns the friendly name "impl" and a
+// It deliberately does not use AssignSessionName: that serves the creation
+// flow, where the first session earns the friendly name "impl" and a
 // long terminal name fails ValidateSessionName and is discarded. That turned six
 // distinct sessions into impl, impl-2 … impl-6 — unidentifiable, and useless
 // for addressing a specific sibling. The terminal name is the label
@@ -305,20 +305,24 @@ func labelDiscovered(sess *domain.Session, others []domain.Session) {
 	if sess.Group == "" {
 		sess.Group = domain.AssignSessionGroup("", sess.IssueKey, sess.RepoName, false)
 	}
-	if sess.Name != "" {
-		return
+	if sess.Name == "" {
+		sess.Name = terminalLabel(*sess, others)
 	}
+}
+
+// terminalLabel is sess's terminal name, else its id, suffixed until no other
+// session has it. Names address sessions, so they must stay distinct even if
+// two hosts ever present the same terminal name.
+func terminalLabel(sess domain.Session, others []domain.Session) string {
 	name := strings.TrimSpace(sess.TerminalName)
 	if name == "" {
 		name = sess.ID
 	}
-	// Names address sessions, so they must stay distinct even if two hosts ever
-	// present the same terminal name.
 	base := name
 	for n := 2; domain.NameTaken(others, name); n++ {
 		name = fmt.Sprintf("%s-%d", base, n)
 	}
-	sess.Name = name
+	return name
 }
 
 func (s *Server) backfill(sess *domain.Session, existing []domain.Session) {
@@ -332,12 +336,9 @@ func (s *Server) backfill(sess *domain.Session, existing []domain.Session) {
 		sess.Group = domain.AssignSessionGroup("", sess.IssueKey, sess.RepoName, false)
 	}
 	if sess.Name == "" {
-		preferred := sess.TerminalName
-		name, err := domain.AssignSessionName(others, preferred, false)
-		if err != nil {
-			name = "s1"
-		}
-		sess.Name = name
+		// A stored row with no name was registered from the laptop or written
+		// by a hook, not created here, so it is named like a discovered one.
+		sess.Name = terminalLabel(*sess, others)
 	}
 }
 

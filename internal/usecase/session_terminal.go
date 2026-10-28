@@ -602,6 +602,10 @@ type PTYRecord struct {
 	Dir     string `json:"dir"`
 	Status  string `json:"status"`
 	Command string `json:"command"`
+	// Role and ParentID come from serve's database; an older serve sends
+	// neither.
+	Role     domain.SessionRole `json:"role,omitempty"`
+	ParentID string             `json:"parent_id,omitempty"`
 }
 
 // ErrServeDown means the remote has aiman installed but its serve daemon did

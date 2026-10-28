@@ -174,3 +174,26 @@ func TestCreateSessionLaunchesPTY(t *testing.T) {
 		t.Fatalf("no pty create params written: %v", remote.written)
 	}
 }
+
+// serve's pty.list names each helper's role and parent; discovery keeps them
+// so the dashboard can hide reviewer and handover children.
+func TestDiscoverKeepsRoleAndParentFromPTYList(t *testing.T) {
+	remote := &batchRemote{}
+	remote.outputs = ptyListOutput(`{"id":"w","name":"feat","dir":"/repos/app@feat","status":"running"},` +
+		`{"id":"h","name":"feat-handover-1a2b","dir":"/home/me/.aiman/handovers/r1","status":"running","role":"handover","parent_id":"w"}`)
+
+	sessions, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).Discover(context.Background(), "regent0")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	byID := map[string]domain.Session{}
+	for _, s := range sessions {
+		byID[s.ID] = s
+	}
+	if h := byID["h"]; h.Role != domain.SessionRoleHandover || h.ParentID != "w" || !h.Role.Hidden() {
+		t.Fatalf("handover child = %+v, want a hidden handover role under w", h)
+	}
+	if w := byID["w"]; w.Role != "" || w.ParentID != "" {
+		t.Fatalf("worker = %+v, want no role or parent", w)
+	}
+}

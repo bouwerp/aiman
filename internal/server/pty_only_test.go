@@ -169,3 +169,38 @@ func TestVerifyTerminalIsPTYOnly(t *testing.T) {
 		t.Fatalf("verify terminal ran remote commands: %v", remote.execs)
 	}
 }
+
+// The laptop builds sessions from pty.list, so a hidden helper must carry its
+// role there or it shows up as an ordinary session.
+func TestPTYListCarriesRoleAndParent(t *testing.T) {
+	srv, pty, _ := ptyServer(t,
+		domain.Session{ID: "w", Name: "worker", Backend: domain.BackendPTY},
+		domain.Session{ID: "h", Name: "worker-handover-1a2b", Backend: domain.BackendPTY, ParentID: "w", Role: domain.SessionRoleHandover},
+	)
+	pty.Add(ptyruntime.SessionInfo{ID: "w", Name: "worker"})
+	pty.Add(ptyruntime.SessionInfo{ID: "h", Name: "worker-handover-1a2b"})
+	pty.Add(ptyruntime.SessionInfo{ID: "loose", Name: "shell"})
+
+	resp := rpc(t, srv, "", "pty.list", map[string]any{})
+	if resp.Error != nil {
+		t.Fatalf("pty.list: %+v", resp.Error)
+	}
+	m, _ := resp.Result.(map[string]any)
+	list, _ := m["sessions"].([]ptyListEntry)
+	got := map[string]ptyListEntry{}
+	for _, e := range list {
+		got[e.ID] = e
+	}
+	if len(got) != 3 {
+		t.Fatalf("listed %d sessions, want 3: %+v", len(got), list)
+	}
+	if h := got["h"]; h.Role != domain.SessionRoleHandover || h.ParentID != "w" {
+		t.Fatalf("handover child = %+v, want role handover under w", h)
+	}
+	if w := got["w"]; w.Role != "" || w.ParentID != "" {
+		t.Fatalf("worker = %+v, want no role or parent", w)
+	}
+	if l := got["loose"]; l.Name != "shell" || l.Role != "" {
+		t.Fatalf("unstored session = %+v, want it listed bare", l)
+	}
+}
