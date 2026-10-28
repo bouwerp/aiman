@@ -55,7 +55,7 @@ func TestPrepareRestartHandoffUsesServeHandover(t *testing.T) {
 		t.Fatalf("note = %q", note)
 	}
 	joined := strings.Join(remote.commands, "\n")
-	if strings.Contains(joined, "SESSION_SUMMARY_SAVED") {
+	if remote.summaryPrompted() {
 		t.Fatalf("summary prompt was sent:\n%s", joined)
 	}
 	rmAt := commandIndex(remote.commands, "rm -f ")
@@ -82,7 +82,7 @@ func TestPrepareRestartHandoffUsesServeHandover(t *testing.T) {
 			t.Fatalf("mode = %v", mode)
 		}
 		joined := strings.Join(remote.commands, "\n")
-		if strings.Contains(joined, "SESSION_SUMMARY_SAVED") {
+		if remote.summaryPrompted() {
 			t.Fatal("summary prompt was sent for an existing handover")
 		}
 		if !strings.Contains(joined, `"/w/.aiman_session_summary.md"`) || !strings.Contains(joined, `"/w/.aiman_session_summary.md.tmp"`) {
@@ -97,7 +97,7 @@ func TestPrepareRestartHandoffFallsBackOnUnknownMethod(t *testing.T) {
 
 	t.Run("file appears", func(t *testing.T) {
 		remote := &restartRemote{
-			paneCommand:          "node",
+			pane:                 "> working",
 			sendPromptWritesFile: true,
 			rpcOut:               map[string]string{"handover.write": "unknown method"},
 		}
@@ -108,15 +108,15 @@ func TestPrepareRestartHandoffFallsBackOnUnknownMethod(t *testing.T) {
 		if note != "" {
 			t.Fatalf("note = %q", note)
 		}
-		if !strings.Contains(strings.Join(remote.commands, "\n"), "SESSION_SUMMARY_SAVED") {
+		if !remote.summaryPrompted() {
 			t.Fatalf("summary flow did not run:\n%s", strings.Join(remote.commands, "\n"))
 		}
 	})
 
 	t.Run("file never appears", func(t *testing.T) {
 		remote := &restartRemote{
-			paneCommand: "node",
-			rpcOut:      map[string]string{"handover.write": "unknown method"},
+			pane:   "> working",
+			rpcOut: map[string]string{"handover.write": "unknown method"},
 		}
 		mode, note := prepareHandoffWithin(t, remote, s, 20*time.Millisecond)
 		if mode != HandoffNone {
@@ -125,16 +125,16 @@ func TestPrepareRestartHandoffFallsBackOnUnknownMethod(t *testing.T) {
 		if note != "" {
 			t.Fatalf("note = %q", note)
 		}
-		if !strings.Contains(strings.Join(remote.commands, "\n"), "SESSION_SUMMARY_SAVED") {
+		if !remote.summaryPrompted() {
 			t.Fatalf("summary flow did not run:\n%s", strings.Join(remote.commands, "\n"))
 		}
 	})
 
 	t.Run("capture error is the note", func(t *testing.T) {
 		remote := &restartRemote{
-			paneCommand: "node",
-			failOn:      "#{pane_current_command}",
-			rpcOut:      map[string]string{"handover.write": "unknown method"},
+			pane:   "> working",
+			failOn: "aiman pty input",
+			rpcOut: map[string]string{"handover.write": "unknown method"},
 		}
 		mode, note := PrepareRestartHandoff(context.Background(), remote, s, "/w", "restart", time.Second)
 		if mode != HandoffNone {
@@ -159,7 +159,7 @@ func TestPrepareRestartHandoffFallsBackOnOtherFailures(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			remote := &restartRemote{
-				paneCommand:          "node",
+				pane:                 "> working",
 				sendPromptWritesFile: true,
 				rpcOut:               map[string]string{"handover.write": tt.out},
 			}
@@ -167,7 +167,7 @@ func TestPrepareRestartHandoffFallsBackOnOtherFailures(t *testing.T) {
 			if mode != HandoffSummary {
 				t.Fatalf("mode = %v, note %q", mode, note)
 			}
-			if !strings.Contains(strings.Join(remote.commands, "\n"), "SESSION_SUMMARY_SAVED") {
+			if !remote.summaryPrompted() {
 				t.Fatal("summary flow did not run")
 			}
 		})

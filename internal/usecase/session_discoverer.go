@@ -25,29 +25,32 @@ func NewSessionDiscoverer(remoteExecutor domain.RemoteExecutor, syncEngine domai
 	}
 }
 
+// Discover lists the sessions on host: the live PTY sessions serve holds,
+// worktrees with no live session, and mutagen syncs with no session, then
+// overlays hook reports. It never asks tmux. A failed PTY scan (ErrServeDown
+// included) or worktree sweep fails the whole call, because the merge step
+// reads the result as every session on the host.
 func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain.Session, error) {
-	// 1. Scan tmux sessions. gatherTmuxRecords collapses this into one round
-	// trip when the executor supports batch discovery.
-	tmuxRecords, err := d.gatherTmuxRecords(ctx)
+	ptyRecords, err := ScanPTYSessions(ctx, d.remoteExecutor)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Get mutagen sessions
 	mutagenSessions, _ := d.syncEngine.ListSyncSessions(ctx)
 
 	sessions := []domain.Session{}
 	seenIDs := make(map[string]bool)
 	seenWorktrees := make(map[string]bool)
-	seenTmuxNames := make(map[string]bool)
+	seenNames := make(map[string]bool)
 	seenMutagenIDs := make(map[string]bool)
-	var tmuxPathPairs []domain.Session
+	// livePathPairs are the live sessions an aiman-named sync may belong to.
+	var livePathPairs []domain.Session
 
 	addSession := func(s domain.Session) {
 		if seenIDs[s.ID] {
 			return
 		}
-		if s.TmuxSession != "" && seenTmuxNames[s.TmuxSession] {
+		if s.TmuxSession != "" && seenNames[s.TmuxSession] {
 			return
 		}
 		seenIDs[s.ID] = true
@@ -55,67 +58,31 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 			seenWorktrees[s.WorktreePath] = true
 		}
 		if s.TmuxSession != "" {
-			seenTmuxNames[s.TmuxSession] = true
+			seenNames[s.TmuxSession] = true
 		}
 		sessions = append(sessions, s)
 	}
 
-	// Process tmux sessions
-	for _, rec := range tmuxRecords {
-		session := d.sessionFromRecord(host, rec, mutagenSessions)
-		if session.WorktreePath != "" || session.WorkingDirectory != "" {
-			tmuxPathPairs = append(tmuxPathPairs, domain.Session{
-				WorktreePath:     session.WorktreePath,
-				WorkingDirectory: session.WorkingDirectory,
-			})
-		}
-		if session.MutagenSyncID != "" {
-			seenMutagenIDs[session.MutagenSyncID] = true
-			// Also mark by the mutagen session's internal UUID so the orphaned-sync
-			// section (which checks ms.ID) doesn't re-add the same sync.
-			for _, ms := range mutagenSessions {
-				if ms.Name == session.MutagenSyncID || ms.ID == session.MutagenSyncID {
-					seenMutagenIDs[ms.ID] = true
-					seenMutagenIDs[ms.Name] = true
-					break
-				}
-			}
-		}
-		addSession(session)
-	}
-
-	// 2b. Scan built-in-PTY sessions hosted by aiman serve on this remote.
-	// These carry the aiman session id directly, so no env archaeology is needed.
-	//
-	// A failed scan fails the whole Discover, exactly like the worktree sweep
-	// below: returning partial results would let the merge step conclude that
-	// the PTY sessions it already knows about are dead. A remote with no
-	// runtime at all reports an empty list rather than an error.
-	ptyRecords, err := ScanPTYSessions(ctx, d.remoteExecutor)
-	if err != nil {
-		return nil, err
-	}
+	// 1. Live PTY sessions. These carry the aiman session id directly.
 	for _, rec := range ptyRecords {
 		if rec.ID == "" || rec.Status != "running" {
 			continue
 		}
-		addSession(domain.Session{
-			ID:               strings.TrimSpace(rec.ID),
-			TmuxSession:      rec.Name,
-			Backend:          domain.BackendPTY,
-			RemoteHost:       host,
-			WorkingDirectory: rec.Dir,
-			Status:           domain.SessionStatusActive,
-			CreatedAt:        time.Now(),
+		session := d.sessionFromPTYRecord(host, rec, mutagenSessions)
+		livePathPairs = append(livePathPairs, domain.Session{
+			ID:               session.ID,
+			TmuxSession:      session.TmuxSession,
+			WorkingDirectory: session.WorkingDirectory,
 		})
+		if session.MutagenSyncID != "" {
+			markSyncSeen(seenMutagenIDs, mutagenSessions, session.MutagenSyncID)
+		}
+		addSession(session)
 	}
 
-	// 3. Scan for orphaned worktrees. gatherWorktreeRecords resolves each
-	// worktree's liveness and aiman id on the remote, so the whole sweep costs
-	// one round trip when the executor supports batch discovery. A failed
-	// sweep fails the whole Discover: a partial result would be read by the
-	// merge step as "these are ALL the sessions on this host", killing the
-	// ones the failed part would have found.
+	// 2. Orphaned worktrees. gatherWorktreeRecords resolves each worktree's
+	// liveness and aiman id on the remote, so the whole sweep costs one round
+	// trip when the executor supports batch discovery.
 	worktreeRecords, err := d.gatherWorktreeRecords(ctx)
 	if err != nil {
 		return nil, err
@@ -126,29 +93,25 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		}
 		normalizedWT := normalizePath(rec.WorktreePath)
 		wtBase := filepath.Base(normalizedWT)
-		if seenWorktrees[normalizedWT] || seenTmuxNames[wtBase] {
+		if seenWorktrees[normalizedWT] || seenNames[wtBase] {
 			continue
 		}
 		addSession(d.orphanSessionFromWorktreeRecord(host, rec, mutagenSessions, seenMutagenIDs))
 	}
 
-	// 4. Scan for orphaned mutagen syncs that don't match any tmux session.
-	// If a sync has an aiman-id label it came from a managed session; if
-	// the corresponding tmux session is gone the sync is a leftover from a
-	// terminated session — auto-terminate it instead of surfacing a ghost.
+	// 3. Mutagen syncs that match no session. An aiman-managed sync whose
+	// session is gone is a leftover from a terminated session: terminate it
+	// instead of surfacing a ghost.
 	for _, ms := range mutagenSessions {
 		if seenMutagenIDs[ms.ID] || seenMutagenIDs[ms.Name] {
 			continue
 		}
 
-		// Never surface aiman-managed sync names as fake sessions; terminate orphans.
 		if strings.TrimSpace(ms.Name) != "" && strings.HasPrefix(strings.TrimSpace(ms.Name), aimanSyncNamePrefix) {
-			_ = d.handleOrphanAimanNamedSync(ctx, host, ms, tmuxPathPairs)
+			_ = d.handleOrphanAimanNamedSync(ctx, host, ms, livePathPairs)
 			continue
 		}
 
-		// If the sync has an aiman-id label but no tmux session exists for
-		// it, this is a leftover from a terminated session. Clean it up.
 		if aid, ok := ms.Labels["aiman-id"]; ok && aid != "" {
 			d.syncEngine.TerminateSync(ctx, ms.Name)
 			continue
@@ -184,6 +147,49 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 	sessions = dedupeDiscoveredSessions(sessions)
 	d.enrichHookReports(ctx, sessions)
 	return sessions, nil
+}
+
+// sessionFromPTYRecord builds an active session from a live PTY record and
+// overlays the first mutagen sync that belongs to it: its local path, its
+// sync name and the syncing status. WorktreePath stays empty: the record
+// only knows the working directory, and the database keeps the worktree.
+func (d *SessionDiscoverer) sessionFromPTYRecord(host string, rec PTYRecord, mutagenSessions []domain.SyncSession) domain.Session {
+	session := domain.Session{
+		ID:               strings.TrimSpace(rec.ID),
+		TmuxSession:      rec.Name,
+		Backend:          domain.BackendPTY,
+		RemoteHost:       host,
+		WorkingDirectory: normalizePath(rec.Dir),
+		Status:           domain.SessionStatusActive,
+		CreatedAt:        time.Now(),
+	}
+	for _, ms := range mutagenSessions {
+		if !d.isSessionMatch(session, ms) {
+			continue
+		}
+		session.LocalPath = normalizePath(ms.LocalPath)
+		if ms.Name != "" {
+			session.MutagenSyncID = ms.Name
+		} else {
+			session.MutagenSyncID = ms.ID
+		}
+		session.Status = domain.SessionStatusSyncing
+		break
+	}
+	return session
+}
+
+// markSyncSeen marks a claimed sync by name and by mutagen's own id, so the
+// orphan-sync pass, which checks both, does not claim it again.
+func markSyncSeen(seen map[string]bool, mutagenSessions []domain.SyncSession, syncID string) {
+	seen[syncID] = true
+	for _, ms := range mutagenSessions {
+		if ms.Name == syncID || ms.ID == syncID {
+			seen[ms.ID] = true
+			seen[ms.Name] = true
+			return
+		}
+	}
 }
 
 // orphanSessionFromWorktreeRecord converts one live worktree record into an
@@ -237,7 +243,7 @@ func (d *SessionDiscoverer) orphanSessionFromWorktreeRecord(host string, rec dom
 }
 
 // OrphanWorktreeSessions scans the whole configured repo root for every
-// worktree not backed by a live tmux session (Discover's step 3, run
+// worktree not backed by a live session (Discover's step 2, run
 // standalone) — including ones aiman has never tracked before, which
 // Discover's own callers deliberately hide from the main session list to
 // avoid flooding it. Used on demand by the "revive worktree" flow, which
@@ -329,7 +335,7 @@ func isAimanSyncTmuxName(name string) bool {
 }
 
 // dedupeDiscoveredSessions removes mutagen ghost rows (TmuxSession aiman-sync-*), collapses
-// duplicate tmux entries, and drops orphan worktrees already covered by a live tmux session.
+// duplicate terminal names, and drops orphan worktrees already covered by a live session.
 func dedupeDiscoveredSessions(sessions []domain.Session) []domain.Session {
 	if len(sessions) == 0 {
 		return sessions
@@ -394,15 +400,14 @@ func sessionDedupePriority(s domain.Session) int {
 
 // handleOrphanAimanNamedSync handles unmatched mutagen sessions created by aiman
 // (name aiman-sync-<session-id>). Returns true if this list entry must not become
-// a synthetic dashboard row. Terminates the sync when no tmux session matches the
-// same remote path (mutagen list usually omits Labels:, so aiman-id cleanup alone
-// never runs).
-func (d *SessionDiscoverer) handleOrphanAimanNamedSync(ctx context.Context, discoverHost string, ms domain.SyncSession, tmuxPathPairs []domain.Session) bool {
+// a synthetic dashboard row. Terminates the sync when no live session matches it
+// (mutagen list usually omits Labels:, so aiman-id cleanup alone never runs).
+func (d *SessionDiscoverer) handleOrphanAimanNamedSync(ctx context.Context, discoverHost string, ms domain.SyncSession, livePathPairs []domain.Session) bool {
 	syncName := strings.TrimSpace(ms.Name)
 	if syncName == "" || !strings.HasPrefix(syncName, aimanSyncNamePrefix) {
 		return false
 	}
-	// Mutagen list is machine-global; tmux scan is per SSH host. Never terminate
+	// Mutagen list is machine-global; the session scan is per SSH host. Never terminate
 	// or relabel another remote's sync when viewing this host.
 	if discoverHost != "" && ms.RemoteEndpoint != "" {
 		if h := sshHostFromEndpoint(ms.RemoteEndpoint); h != "" && h != discoverHost {
@@ -410,7 +415,7 @@ func (d *SessionDiscoverer) handleOrphanAimanNamedSync(ctx context.Context, disc
 		}
 	}
 	matched := false
-	for _, ts := range tmuxPathPairs {
+	for _, ts := range livePathPairs {
 		if d.isSessionMatch(ts, ms) {
 			matched = true
 			break
@@ -498,32 +503,4 @@ func normalizePath(p string) string {
 		p = strings.TrimSuffix(p, "/")
 	}
 	return p
-}
-
-// extractRepoNameFromURL parses a git remote URL and returns the "org/repo" name.
-// Handles both SSH (git@github.com:org/repo.git) and HTTPS (https://github.com/org/repo.git).
-func extractRepoNameFromURL(remoteURL string) string {
-	remoteURL = strings.TrimSpace(remoteURL)
-	if remoteURL == "" {
-		return ""
-	}
-
-	// HTTPS URL: https://github.com/org/repo.git
-	if strings.Contains(remoteURL, "://") {
-		cleaned := strings.TrimSuffix(remoteURL, ".git")
-		parts := strings.Split(cleaned, "/")
-		if len(parts) >= 2 {
-			return parts[len(parts)-2] + "/" + parts[len(parts)-1]
-		}
-		return ""
-	}
-
-	// SSH URL: git@github.com:org/repo.git
-	if idx := strings.Index(remoteURL, ":"); idx > 0 {
-		name := remoteURL[idx+1:]
-		name = strings.TrimSuffix(name, ".git")
-		return name
-	}
-
-	return ""
 }

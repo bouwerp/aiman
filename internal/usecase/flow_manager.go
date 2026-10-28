@@ -184,8 +184,8 @@ func (m *FlowManager) applyBootstrap(ctx context.Context, sshMgr domain.RemoteEx
 
 // joinPrompt appends user-entered prompt text to a base agent prompt. The base is
 // typically the JIRA task trigger (empty for ad-hoc sessions). A single space
-// separates the two parts so the combined prompt is delivered as one line via
-// tmux send-keys (newlines are deliberately avoided — some agents submit on them).
+// separates the two parts so the combined prompt is typed as one line
+// (newlines are deliberately avoided: some agents submit on them).
 func joinPrompt(base, user string) string {
 	base = strings.TrimSpace(base)
 	user = strings.TrimSpace(user)
@@ -304,6 +304,9 @@ func sendKeysScript(tmuxName, promptPath string, acceptWorkspaceTrust bool) stri
 // prompt lands in the dialog instead of the agent. The script still runs when
 // the prompt is empty in that case, so the dialog is cleared even for ad-hoc
 // agy sessions.
+//
+// Deprecated: removed in nl-13 T5. Sessions run in the PTY runtime; use
+// DeliverInitialPromptPTY.
 func DeliverInitialPrompt(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, prompt string, acceptWorkspaceTrust bool) {
 	if prompt == "" && !acceptWorkspaceTrust {
 		return
@@ -341,44 +344,12 @@ func DeliverInitialPrompt(ctx context.Context, remote promptDeliverer, tmuxName,
 	_ = sendTmuxKeysConfirmed(ctx, pc, tmuxName, promptPath, prompt)
 }
 
-// SendPrompt types text into an already-running tmux session using the
-// file-backed send-keys path. It does not wait for agent startup and does
-// not detach, so the caller can wait on pane state afterwards.
-func SendPrompt(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, prompt string) error {
-	return SendPromptTagged(ctx, remote, tmuxName, sessionID, "", prompt)
-}
-
-// SendPromptTagged is SendPrompt with its own prompt file per tag, so senders
-// that can run at the same time for one session (the laptop and serve's
-// steering) never overwrite or delete each other's file. An empty tag is the
-// plain SendPrompt file.
-func SendPromptTagged(ctx context.Context, remote promptDeliverer, tmuxName, sessionID, tag, prompt string) error {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return nil
-	}
-	promptPath := fmt.Sprintf("/tmp/aiman-prompt-%s", strings.TrimSpace(sessionID))
-	if tag = strings.TrimSpace(tag); tag != "" {
-		promptPath += "-" + tag
-	}
-	if err := remote.WriteFile(ctx, promptPath, []byte(prompt)); err != nil {
-		return err
-	}
-	// The send's status is what comes back. Removing the file is a separate
-	// command so a failed send-keys cannot be masked by a successful rm.
-	_, err := remote.Execute(ctx, fmt.Sprintf(
-		"tmux send-keys -t %q -l -- \"$(cat %q)\" && sleep 1 && tmux send-keys -t %q Enter",
-		tmuxName, promptPath, tmuxName,
-	))
-	rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	_, _ = remote.Execute(rmCtx, fmt.Sprintf("rm -f %q", promptPath))
-	return err
-}
-
 // IsAntigravityAgent reports whether the agent is Antigravity CLI (agy). agy is
 // special-cased for prompt delivery because it presents a workspace-trust dialog
 // on first run that --dangerously-skip-permissions does not dismiss.
+//
+// Deprecated: removed in nl-13 T5. Only the tmux prompt path asks; the PTY
+// boot wait accepts every agent's trust dialog.
 func IsAntigravityAgent(name, command string) bool {
 	if strings.Contains(strings.ToLower(name), "antigravity") {
 		return true
@@ -583,8 +554,8 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	}
 	WriteMuseSessionID(ctx, sshMgr, workingDir, agentCmd, session.ID)
 
-	// Step 8: Session (Tmux). The display Name is a renameable alias and must
-	// not become the tmux target; kill/capture/attach stay on the branch.
+	// Step 8: Terminal. The display Name is a renameable alias and must not
+	// become the terminal name; the name stays on the branch.
 	tmuxName := tmuxNameForCreate(branch, session.Name)
 
 	// Set AWS environment variables using the globally synced profile.
@@ -600,93 +571,12 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	infraGit.ReportProgress(ctx, "Trusting workspace…")
 	m.trustWorkspaceBeforeLaunch(ctx, sshMgr, workingDir, session.WorktreePath)
 
-	// PTY is the default runtime. Env travels in the create payload, so no
-	// -e flags or shell escaping are needed; the command runs under bash -l
-	// inside a real PTY. Explicit session_backend: tmux still uses tmux.
-	config.SessionBackend = domain.ResolveSessionBackend(config.SessionBackend, "")
-	if config.SessionBackend == domain.BackendPTY {
-		return m.launchPTYSession(ctx, sshMgr, session, config, kit, workingDir, tmuxName, agentCmd, sendKeysPrompt, awsEnv)
-	}
-
-	// Start the session and immediately set remain-on-exit in a single SSH call to avoid
-	// a race condition: if the agent exits before the separate set-option call runs, the
-	// session (and server) would already be gone.
-	// We also append "; exec bash" so that if the agent exits for any reason, the pane
-	// drops to an interactive shell instead of closing — the user can inspect the error.
-	// Use tmux's -e flag to inject AIMAN_ID into the tmux session environment so
-	// that `tmux show-environment` can reliably retrieve it during discovery.
-	// Exporting it only inside the bash command would make it available to the shell
-	// but invisible to tmux show-environment, causing discovery to generate a random
-	// UUID and produce duplicate session entries.
-	// The login shell (-l) ensures PATH is populated from ~/.bash_profile / ~/.profile
-	// so tools like claude that are installed in ~/.local/bin are found.
-	// We also append common user-local bin paths explicitly to avoid false
-	// "command not found" failures for tools installed outside default login PATH.
-	agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.kilo/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
-	// Escape single quotes for bash -c '...'
-	agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
-
-	extraEnvFlags := tmuxEnvFlags(awsEnv)
-	kiloEnv := map[string]string{}
-	ApplyKiloAllowEnv(ctx, sshMgr, agentCmd, kiloEnv)
-	extraEnvFlags += tmuxEnvFlags(kiloEnv)
-	for _, secret := range config.EnvSecrets {
-		extraEnvFlags += fmt.Sprintf(" -e %s=%s", secret.Key, secret.Value)
-	}
-	// AIMAN_* is injected last so session secrets cannot override the gate.
-	extraEnvFlags += tmuxEnvFlags(aimanRuntimeEnv(session))
-	// Ensure the tmux server is running before touching global options
-	// (set-window-option -g fails silently if no server exists yet, leaving
-	// the default remain-on-exit=off that would cause the session to vanish
-	// the moment the pane process exits for any reason).
-	//
-	// Also temporarily disable destroy-unattached in case ~/.tmux.conf sets
-	// it — that option kills sessions with no attached clients.
-	startCmd := fmt.Sprintf(
-		"tmux start-server 2>/dev/null || true; "+
-			"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
-			"tmux set-window-option -g remain-on-exit on 2>/dev/null || true; "+
-			"tmux new-session -d -s %q -c %q -e AIMAN_ID=%s%s %q; "+
-			"_RC=$?; "+
-			"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
-			"tmux set-window-option -g remain-on-exit off 2>/dev/null || true; "+
-			"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
-			"exit $_RC",
-		tmuxName, workingDir, strings.TrimSpace(session.ID), extraEnvFlags, PaneShellCommand(agentBootstrap), tmuxName,
-	)
-	// Attaching means adopting whatever is already on the remote, tmux included.
-	// An interrupted create leaves a live worktree and tmux session behind with
-	// no database row; the retry resolved the worktree but then collided here
-	// with "duplicate session", so a recoverable state failed on every attempt.
-	adopted := config.AttachExisting && tmuxSessionExists(ctx, sshMgr, tmuxName)
-	if adopted {
-		infraGit.ReportProgress(ctx, fmt.Sprintf("Attaching to existing tmux session %s...", tmuxName))
-	}
-
-	if !adopted {
-		infraGit.ReportProgress(ctx, "Launching agent in tmux...")
-		_, err = sshMgr.Execute(ctx, startCmd)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start tmux session: %w", err)
-		}
-
-		// If the agent doesn't support an inline initial prompt (i.e. it would run
-		// headlessly and exit), we send the prompt via tmux send-keys after a short
-		// delay so the agent has time to start up interactively.
-		//
-		// Skipped when adopting: that agent is mid-conversation, and injecting a
-		// fresh task prompt would interrupt whatever it is doing.
-		acceptTrust := config.Agent != nil && IsAntigravityAgent(config.Agent.Name, config.Agent.Command)
-		DeliverInitialPrompt(ctx, sshMgr, tmuxName, session.ID, sendKeysPrompt, acceptTrust)
-	}
-
-	session.TmuxSession = tmuxName
-
-	return m.finaliseCreate(ctx, sshMgr, session, config, kit, workingDir)
+	// Every session runs in the PTY runtime; config.SessionBackend is ignored.
+	return m.launchPTYSession(ctx, sshMgr, session, config, kit, workingDir, tmuxName, agentCmd, sendKeysPrompt, awsEnv)
 }
 
-// finaliseCreate runs the best-effort decoration and bookkeeping shared by both
-// backends after the terminal process is up: agent model detection, JIRA
+// finaliseCreate runs the best-effort decoration and bookkeeping after the
+// terminal process is up: agent model detection, JIRA
 // transition, and the ACTIVE transition. Workspace trust already ran before
 // the agent launched (see trustWorkspaceBeforeLaunch).
 func (m *FlowManager) finaliseCreate(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, kit domain.QualityKit, workingDir string) (*domain.Session, error) {
@@ -724,17 +614,6 @@ func (m *FlowManager) finaliseCreate(ctx context.Context, sshMgr domain.RemoteEx
 }
 
 // Deprecated: Use CreateSession instead
-// tmuxSessionExists reports whether the remote already has a session by this
-// name. `tmux has-session` exits non-zero when it does not, which Execute
-// surfaces as an error rather than as a value, so the result is echoed instead.
-func tmuxSessionExists(ctx context.Context, remote domain.RemoteExecutor, name string) bool {
-	if strings.TrimSpace(name) == "" {
-		return false
-	}
-	out, err := remote.Execute(ctx, fmt.Sprintf("tmux has-session -t %q 2>/dev/null && echo YES || echo NO", name))
-	return err == nil && strings.Contains(out, "YES")
-}
-
 func (m *FlowManager) StartNewFlow(ctx context.Context, issueKey string, repoName string) (*domain.Session, error) {
 	return m.CreateSession(ctx, domain.SessionConfig{
 		IssueKey:   issueKey,
@@ -816,15 +695,15 @@ func SharedSessionAWSEnv(profileName, region string) map[string]string {
 	return env
 }
 
-// SessionRuntimeEnv is the AIMAN_* tmux environment for a session. Secrets
-// must not override these keys.
-// tmuxNameForCreate is the tmux session name for a new Aiman session.
-// displayName is ignored: renaming the session must not imply renaming tmux
-// or the worktree, so create never seeds tmux from the alias.
+// tmuxNameForCreate is the terminal name for a new Aiman session.
+// displayName is ignored: renaming the session must not imply renaming the
+// terminal or the worktree, so create never seeds the name from the alias.
 func tmuxNameForCreate(branch, _ string) string {
 	return domain.SanitizeTmuxSessionName(branch)
 }
 
+// SessionRuntimeEnv is the AIMAN_* environment for a session. Secrets must not
+// override these keys.
 func SessionRuntimeEnv(session *domain.Session) map[string]string {
 	return aimanRuntimeEnv(session)
 }
@@ -863,6 +742,8 @@ func aimanRuntimeEnv(session *domain.Session) map[string]string {
 
 // TmuxEnvFlags formats tmux -e flags with a shell-quoted NAME=value so a
 // space in a session name cannot split respawn-pane and drop the pane command.
+//
+// Deprecated: removed in nl-13 T5. PTY env travels in the create payload.
 func TmuxEnvFlags(env map[string]string) string {
 	return tmuxEnvFlags(env)
 }
@@ -1005,13 +886,13 @@ func DeliverInitialPromptPTY(ctx context.Context, remote promptDeliverer, sessio
 	_ = SendPTYFileConfirmed(ctx, te, sessionID, promptPath, prompt)
 }
 
-// launchPTYSession hands the agent to aiman serve's built-in PTY runtime
-// instead of tmux. Env travels in the create payload, so no -e flags or shell
-// escaping are needed; the command runs under bash -l inside a real PTY.
+// launchPTYSession hands the agent to aiman serve's built-in PTY runtime. Env
+// travels in the create payload, so no shell escaping is needed; the command
+// runs under bash -l inside a real PTY.
 func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, kit domain.QualityKit, workingDir, tmuxName, agentCmd string, sendKeysPrompt string, awsEnv map[string]string) (*domain.Session, error) {
 	if !PTYRuntimeAvailable(ctx, sshMgr) {
 		return nil, fmt.Errorf(
-			"the PTY backend needs aiman serve running on the remote (TUI: m → Agent API \u2192 i then s), or set session_backend back to tmux")
+			"sessions need aiman serve running on the remote (TUI: m \u2192 Agent API \u2192 i then s)")
 	}
 	infraGit.ReportProgress(ctx, "Launching agent in built-in PTY...")
 	env := make(map[string]string, len(awsEnv)+4)
@@ -1044,7 +925,7 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 		DeliverInitialPromptPTY(ctx, sshMgr, session.ID, sendKeysPrompt)
 	}
 	session.Backend = domain.BackendPTY
-	session.TmuxSession = tmuxName // display handle; kill/capture route via Backend
+	session.TmuxSession = tmuxName // display name; the PTY is addressed by session.ID
 
 	return m.finaliseCreate(ctx, sshMgr, session, config, kit, workingDir)
 }

@@ -211,15 +211,7 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 					continue
 				}
 
-				// The session starts in PROVISIONING. We should transition it and start it properly.
-				// For the daemon, we need a lightweight way to start the session, or we can use
-				// a daemon-specific launcher if FlowManager doesn't do the full launch synchronously.
-				// Wait, FlowManager.CreateSession handles git worktree setup and db save.
-				// To actually launch the agent in tmux, we need to call `LaunchSession` or similar?
-				// FlowManager's CreateSession only *sets up* the worktree.
-				// Wait, Aiman's FlowManager was decoupled from launching? No, `CreateSession` creates the worktree,
-				// but the caller usually calls `m.startBackgroundSession(session, cfg)` in dashboard.go.
-				// We need the daemon to execute the tmux launch via SSH.
+				// CreateSession has already launched the agent in the PTY runtime.
 				log.Printf("Provisioned worktree for ephemeral session %s (ID: %s)", session.Branch, session.ID)
 			}
 		}

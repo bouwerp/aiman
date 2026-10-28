@@ -416,7 +416,7 @@ func CaseHandoverChildFallback() Case {
 func CaseTerminateKeepsPane() Case {
 	return Case{Name: "terminate-keeps-pane", Setup: func(h *Harness) error {
 		h.SetPane("last screen")
-		h.RegisterSession(domain.Session{ID: "s1", TmuxSession: "tmux-s1"})
+		h.RegisterSession(domain.Session{ID: "s1", TmuxSession: "term-s1", Backend: domain.BackendPTY})
 		return nil
 	}, Assert: func(h *Harness) []MetricResult {
 		sess, err := h.Repo.Get(context.Background(), "s1")
@@ -429,12 +429,12 @@ func CaseTerminateKeepsPane() Case {
 		_, rowErr := h.Repo.Get(context.Background(), "s1")
 		issued := false
 		for _, cmd := range h.Execs() {
-			if strings.Contains(cmd, "tmux kill-session") {
+			if strings.Contains(cmd, "aiman pty kill") {
 				issued = true
 			}
 		}
 		return []MetricResult{
-			score("terminate_issued", issued, "no tmux kill-session"),
+			score("terminate_issued", issued, "no aiman pty kill"),
 			score("session_row_kept", rowErr == nil, "session row disappeared"),
 			score("pane_snapshot_kept", h.Pane() == "last screen", "pane snapshot changed"),
 		}

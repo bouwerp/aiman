@@ -72,6 +72,11 @@ linters:
       - linters:
           - staticcheck
         text: "QF1012:"
+      # nl-13 marks the tmux helpers the TUI still calls as deprecated until
+      # T5 deletes them together with this rule.
+      - linters:
+          - staticcheck
+        text: "SA1019: .* removed in nl-13 T5"
 
 formatters:
   enable:

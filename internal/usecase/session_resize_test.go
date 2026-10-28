@@ -41,38 +41,6 @@ func TestResizeSessionTerminalPTYUsesTheRuntime(t *testing.T) {
 	}
 }
 
-// tmux fits a window to its smallest attached client, so a resize against an
-// automatically sized window is silently undone: manual sizing has to be set
-// every time, since an attach resets it.
-func TestResizeSessionTerminalTmuxSetsManualSizing(t *testing.T) {
-	r := &recordingRemote{out: "AIMAN_FIT=applied\n"}
-	s := domain.Session{ID: "abc", TmuxSession: "demo"}
-
-	applied, err := ResizeSessionTerminal(context.Background(), r, s, 154, 40)
-	if err != nil {
-		t.Fatalf("resize: %v", err)
-	}
-	if !applied {
-		t.Error("expected the resize to be reported as applied")
-	}
-	cmd := r.joined()
-	for _, want := range []string{
-		"window-size manual",
-		"resize-window",
-		"-x 154",
-		"-y 40",
-		"#{session_attached}",
-	} {
-		if !strings.Contains(cmd, want) {
-			t.Errorf("command missing %q: %s", want, cmd)
-		}
-	}
-	// One round trip: the guard and the resize cannot be split without racing.
-	if len(r.cmds) != 1 {
-		t.Errorf("expected a single remote command, got %d", len(r.cmds))
-	}
-}
-
 // Someone watching an attached session must not have the window resized under
 // them. That is a decision, not a failure, so it is reported as "not applied".
 func TestResizeSessionTerminalPTYLeavesAttachedAlone(t *testing.T) {
@@ -103,19 +71,6 @@ func TestParsePTYResizeApplied(t *testing.T) {
 	}
 }
 
-func TestResizeSessionTerminalLeavesAttachedSessionsAlone(t *testing.T) {
-	r := &recordingRemote{out: "AIMAN_FIT=attached\n"}
-	s := domain.Session{ID: "abc", TmuxSession: "demo"}
-
-	applied, err := ResizeSessionTerminal(context.Background(), r, s, 154, 40)
-	if err != nil {
-		t.Fatalf("an attached session is not an error: %v", err)
-	}
-	if applied {
-		t.Error("must not report a resize that was declined")
-	}
-}
-
 func TestResizeSessionTerminalRejectsUnusableSizes(t *testing.T) {
 	r := &recordingRemote{}
 	s := domain.Session{ID: "abc", TmuxSession: "demo"}
@@ -126,13 +81,6 @@ func TestResizeSessionTerminalRejectsUnusableSizes(t *testing.T) {
 	}
 	if len(r.cmds) != 0 {
 		t.Errorf("nothing should have been sent remotely: %v", r.cmds)
-	}
-}
-
-func TestResizeSessionTerminalNeedsATmuxName(t *testing.T) {
-	r := &recordingRemote{}
-	if _, err := ResizeSessionTerminal(context.Background(), r, domain.Session{ID: "abc"}, 154, 40); err == nil {
-		t.Error("a tmux session with no name cannot be resized")
 	}
 }
 
@@ -163,21 +111,5 @@ func TestClampTerminalSizeAppliesFloors(t *testing.T) {
 	}
 	if _, _, ok := ClampTerminalSize(0, 0); ok {
 		t.Error("a zero size is not a request to clamp")
-	}
-}
-
-func TestParseFitOutcome(t *testing.T) {
-	if applied, err := ParseFitOutcome("AIMAN_FIT=applied"); !applied || err != nil {
-		t.Errorf("applied: got %v / %v", applied, err)
-	}
-	if applied, err := ParseFitOutcome("AIMAN_FIT=attached"); applied || err != nil {
-		t.Errorf("attached: got %v / %v", applied, err)
-	}
-	if _, err := ParseFitOutcome("AIMAN_FIT=failed"); err == nil {
-		t.Error("a declined resize should be an error")
-	}
-	// Unrecognised output must not be read as success.
-	if applied, err := ParseFitOutcome("no such session"); applied || err == nil {
-		t.Errorf("garbage output: got %v / %v", applied, err)
 	}
 }

@@ -115,7 +115,7 @@ func TestScanPTYSessionsFailsRatherThanReportingNone(t *testing.T) {
 }
 
 // The scan must survive a remote that has no aiman binary at all without
-// reporting failure, or discovery would break for every tmux-only remote.
+// reporting failure: such a host simply has no sessions.
 func TestScanPTYSessionsCmdGuardsOnBinaryPresence(t *testing.T) {
 	if !strings.Contains(scanPTYSessionsCmd, "command -v aiman") {
 		t.Error("scan command must check for the binary before invoking it")
@@ -333,79 +333,6 @@ func TestCreatePTYSessionWritesParamsFile(t *testing.T) {
 	}
 }
 
-func TestSendSessionPromptRoutesByBackend(t *testing.T) {
-	ctx := context.Background()
-
-	// tmux session keeps the legacy path
-	r := &terminalRemote{}
-	tmux := domain.Session{TmuxSession: "WTB-1", ID: "tid"}
-	if err := SendSessionPrompt(ctx, r, tmux, "hello"); err != nil {
-		t.Fatalf("tmux prompt: %v", err)
-	}
-	if len(r.commands) == 0 || !strings.Contains(r.commands[0], "tmux send-keys") {
-		t.Fatalf("tmux prompt did not use send-keys: %v", r.commands)
-	}
-
-	// pty session goes through input --file plus an Enter press
-	r = &terminalRemote{}
-	ptySess := domain.Session{ID: "pid", Backend: domain.BackendPTY}
-	if err := SendSessionPrompt(ctx, r, ptySess, "do things"); err != nil {
-		t.Fatalf("pty prompt: %v", err)
-	}
-	joined := strings.Join(r.commands, "\n")
-	if !strings.Contains(joined, "aiman pty input \"pid\" --file") {
-		t.Fatalf("pty prompt missing file input: %s", joined)
-	}
-	var promptBody []byte
-	for _, body := range r.written {
-		promptBody = body
-	}
-	if string(promptBody) != "do things" {
-		t.Fatalf("prompt file content wrong: %q", promptBody)
-	}
-}
-
-func TestTerminateSessionTerminalRoutesByBackend(t *testing.T) {
-	ctx := context.Background()
-
-	r := &terminalRemote{}
-	ptySess := domain.Session{ID: "pid", Backend: domain.BackendPTY}
-	if err := TerminateSessionTerminal(ctx, r, ptySess); err != nil {
-		t.Fatalf("pty terminate: %v", err)
-	}
-	joined := strings.Join(r.commands, "\n")
-	if !strings.Contains(joined, "aiman pty kill") || !strings.Contains(joined, "aiman pty forget") {
-		t.Fatalf("pty terminate commands wrong: %s", joined)
-	}
-
-	r = &terminalRemote{}
-	tmux := domain.Session{TmuxSession: "WTB-1"}
-	if err := TerminateSessionTerminal(ctx, r, tmux); err != nil {
-		t.Fatalf("tmux terminate: %v", err)
-	}
-	if !strings.Contains(strings.Join(r.commands, "\n"), "tmux kill-session") {
-		t.Fatalf("tmux terminate wrong: %s", r.commands)
-	}
-}
-
-// A session created by an in-pane agent runs under the PTY runtime but reaches
-// the dashboard through discovery and the live stream, neither of which carries
-// Backend — so it reads as tmux. Killing only tmux left the holder's directory
-// behind and the session listed forever.
-func TestTerminateSessionTerminalTearsDownBothRuntimes(t *testing.T) {
-	r := &terminalRemote{}
-	mislabelled := domain.Session{ID: "sid", TmuxSession: "review-codex-dbsync", Backend: domain.BackendTmux}
-	if err := TerminateSessionTerminal(context.Background(), r, mislabelled); err != nil {
-		t.Fatalf("terminate: %v", err)
-	}
-	joined := strings.Join(r.commands, "\n")
-	for _, want := range []string{"aiman pty kill", "aiman pty forget", "tmux kill-session"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("teardown never ran %q: %s", want, joined)
-		}
-	}
-}
-
 // Terminating a discovered session with no id must not shell out to the PTY
 // runtime with an empty handle.
 func TestTerminateSessionTerminalSkipsPTYWithoutAnID(t *testing.T) {
@@ -418,35 +345,14 @@ func TestTerminateSessionTerminalSkipsPTYWithoutAnID(t *testing.T) {
 	}
 }
 
-func TestCaptureSessionPaneRoutesByBackend(t *testing.T) {
-	ctx := context.Background()
-	r := &terminalRemote{output: map[string]string{
-		"aiman pty capture": `{"type":"pane_read","text":"pane-bytes"}`,
-	}}
-	out, err := CaptureSessionPane(ctx, r, domain.Session{ID: "pid", Backend: domain.BackendPTY})
-	if err != nil {
-		t.Fatalf("capture: %v", err)
-	}
-	if out != "pane-bytes" {
-		t.Fatalf("capture text = %q", out)
-	}
-}
-
 func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
 	ctx := context.Background()
 
-	// tmux sessions never revive
-	r := &terminalRemote{}
-	revived, err := ReviveIfNeeded(ctx, r, &domain.Session{ID: "x"})
-	if err != nil || revived {
-		t.Fatalf("tmux session must not revive: %v / %v", revived, err)
-	}
-
 	// live pty session: no-op
-	r = &terminalRemote{output: map[string]string{
+	r := &terminalRemote{output: map[string]string{
 		"aiman pty get": `{"session":{"id":"pid","status":"running"}}`,
 	}}
-	revived, err = ReviveIfNeeded(ctx, r, &domain.Session{ID: "pid", Backend: domain.BackendPTY})
+	revived, err := ReviveIfNeeded(ctx, r, &domain.Session{ID: "pid", Backend: domain.BackendPTY})
 	if err != nil || revived {
 		t.Fatalf("live session must not revive: %v / %v", revived, err)
 	}

@@ -124,33 +124,6 @@ func TestDeliverInitialPromptSkipsEmpty(t *testing.T) {
 	}
 }
 
-func TestSendPromptDoesNotInterpolatePrompt(t *testing.T) {
-	malicious := "do the thing $(touch /tmp/pwned) `id`"
-	f := &fakePromptDeliverer{}
-	if err := SendPrompt(context.Background(), f, "sess", "abc-123", malicious); err != nil {
-		t.Fatal(err)
-	}
-	if string(f.writeContent) != malicious {
-		t.Fatalf("prompt not written verbatim: %q", f.writeContent)
-	}
-	if len(f.execCmds) == 0 {
-		t.Fatal("expected the send to run")
-	}
-	for _, cmd := range f.execCmds {
-		for _, frag := range []string{"$(touch /tmp/pwned)", "`id`", "do the thing"} {
-			if strings.Contains(cmd, frag) {
-				t.Fatalf("prompt leaked into command (%q): %s", frag, cmd)
-			}
-		}
-		if strings.Contains(cmd, "nohup") {
-			t.Fatalf("SendPrompt should not detach: %s", cmd)
-		}
-	}
-	if strings.Contains(f.execCmds[0], "rm -f") {
-		t.Fatal("rm shares the send command, so its status would mask a failed send-keys")
-	}
-}
-
 // logBootWait is the only evidence a slow boot leaves behind: without it, a
 // timed-out boot-wait and a normal one are indistinguishable from serve.log.
 func TestLogBootWaitReportsReasonAndAttempts(t *testing.T) {
@@ -368,62 +341,6 @@ func TestResolveWorktreeAdHoc(t *testing.T) {
 	}
 	if wt.Path != "/r/adhoc-x" {
 		t.Fatalf("Path = %q, want /r/adhoc-x", wt.Path)
-	}
-}
-
-// A tagged send uses its own prompt file, so it cannot clobber or delete the
-// file an untagged send to the same session is still reading.
-func TestSendPromptTaggedUsesOwnFile(t *testing.T) {
-	f := &fakePromptDeliverer{}
-	if err := SendPromptTagged(context.Background(), f, "sess", "abc-123", "steer", "hi"); err != nil {
-		t.Fatal(err)
-	}
-	if f.writePath != "/tmp/aiman-prompt-abc-123-steer" {
-		t.Fatalf("write path = %q", f.writePath)
-	}
-	joined := strings.Join(f.execCmds, "\n")
-	if !strings.Contains(joined, `"/tmp/aiman-prompt-abc-123-steer"`) || !strings.Contains(joined, "rm -f") {
-		t.Fatalf("script should read and remove the tagged file: %v", f.execCmds)
-	}
-	if strings.Contains(f.execCmds[0], "rm -f") {
-		t.Fatalf("rm shares the send command, so its status would mask a failed send-keys: %s", f.execCmds[0])
-	}
-	untagged := &fakePromptDeliverer{}
-	if err := SendPrompt(context.Background(), untagged, "sess", "abc-123", "hi"); err != nil {
-		t.Fatal(err)
-	}
-	if untagged.writePath != "/tmp/aiman-prompt-abc-123" {
-		t.Fatalf("untagged write path = %q", untagged.writePath)
-	}
-}
-
-// statusDeliverer emulates `cmd1 && cmd2; cmd3`: a failing send-keys must not
-// be hidden by a later rm in the same script.
-type statusDeliverer struct {
-	fakePromptDeliverer
-	failSend bool
-}
-
-func (f *statusDeliverer) Execute(_ context.Context, cmd string) (string, error) {
-	f.execCmds = append(f.execCmds, cmd)
-	var status error
-	for _, part := range strings.Split(cmd, ";") {
-		status = nil
-		for _, step := range strings.Split(part, "&&") {
-			if f.failSend && strings.Contains(step, "send-keys") {
-				status = errors.New("can't find session")
-				break
-			}
-		}
-	}
-	return "", status
-}
-
-func TestSendPromptTaggedStatusIsTheSend(t *testing.T) {
-	f := &statusDeliverer{failSend: true}
-	err := SendPromptTagged(context.Background(), f, "sess", "abc-123", "steer", "hello")
-	if err == nil {
-		t.Fatal("send-keys failed, but the script status was success")
 	}
 }
 

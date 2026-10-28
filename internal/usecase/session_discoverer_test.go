@@ -13,6 +13,7 @@ import (
 
 type recordingSyncEngine struct {
 	terminated []string
+	syncs      []domain.SyncSession
 }
 
 func (r *recordingSyncEngine) StartSync(context.Context, string, string, string, map[string]string, domain.SyncMode) error {
@@ -24,14 +25,13 @@ func (r *recordingSyncEngine) GetSyncStatus(_ context.Context, _ string) (string
 	return "", nil
 }
 func (r *recordingSyncEngine) ListSyncSessions(context.Context) ([]domain.SyncSession, error) {
-	return nil, nil
+	return r.syncs, nil
 }
 func (r *recordingSyncEngine) TerminateSync(_ context.Context, name string) {
 	r.terminated = append(r.terminated, name)
 }
 
 type discovererRemote struct {
-	tmuxSessions    []string
 	repoPaths       []string
 	worktreesByRepo map[string][]string
 	validDirs       map[string]bool
@@ -58,7 +58,7 @@ func (r *discovererRemote) ValidateDir(_ context.Context, path string) error {
 	return fmt.Errorf("directory not found: %s", path)
 }
 func (r *discovererRemote) ScanTmuxSessions(context.Context) ([]string, error) {
-	return r.tmuxSessions, nil
+	return nil, fmt.Errorf("discovery must not scan tmux")
 }
 func (r *discovererRemote) ScanGitRepos(context.Context) ([]string, error) { return r.repoPaths, nil }
 func (r *discovererRemote) ScanWorktrees(_ context.Context, repoPath string) ([]string, error) {
@@ -359,49 +359,6 @@ func TestIsSessionMatch_TrailingSlashNormalized(t *testing.T) {
 	}
 }
 
-func TestExtractRepoNameFromURL_SSHFormat(t *testing.T) {
-	tests := []struct {
-		url      string
-		expected string
-	}{
-		{"git@github.com:org/my-repo.git", "org/my-repo"},
-		{"git@github.com:org/my-repo", "org/my-repo"},
-		{"git@gitlab.com:company/project.git", "company/project"},
-	}
-	for _, tt := range tests {
-		result := extractRepoNameFromURL(tt.url)
-		if result != tt.expected {
-			t.Errorf("extractRepoNameFromURL(%q) = %q, want %q", tt.url, result, tt.expected)
-		}
-	}
-}
-
-func TestExtractRepoNameFromURL_HTTPSFormat(t *testing.T) {
-	tests := []struct {
-		url      string
-		expected string
-	}{
-		{"https://github.com/org/my-repo.git", "org/my-repo"},
-		{"https://github.com/org/my-repo", "org/my-repo"},
-		{"https://gitlab.com/company/project.git", "company/project"},
-	}
-	for _, tt := range tests {
-		result := extractRepoNameFromURL(tt.url)
-		if result != tt.expected {
-			t.Errorf("extractRepoNameFromURL(%q) = %q, want %q", tt.url, result, tt.expected)
-		}
-	}
-}
-
-func TestExtractRepoNameFromURL_EmptyAndInvalid(t *testing.T) {
-	if result := extractRepoNameFromURL(""); result != "" {
-		t.Errorf("expected empty for empty URL, got %q", result)
-	}
-	if result := extractRepoNameFromURL("   "); result != "" {
-		t.Errorf("expected empty for whitespace URL, got %q", result)
-	}
-}
-
 func TestNormalizePath(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -441,35 +398,8 @@ func TestDedupeDiscoveredSessions_DropsAimanSyncGhostsAndOrphanDup(t *testing.T)
 	}
 }
 
-// failingTmuxRemote forces Discover's tmux scan to fail on both the batch
-// and per-item paths (discovererRemote implements neither
-// domain.BatchDiscovery nor an erroring ScanTmuxSessions on its own).
-type failingTmuxRemote struct {
-	discovererRemote
-}
-
-func (r *failingTmuxRemote) ScanTmuxSessions(context.Context) ([]string, error) {
-	return nil, fmt.Errorf("ssh: connection lost")
-}
-
-// DiscoverHostSessions must report failure distinctly from "found nothing":
-// callers (internal/ui/startup.go's runDiscovery, the dashboard's "r"
-// refresh) rely on that distinction to avoid marking a host "scanned" on a
-// transient error, which would otherwise tell the merge step every database
-// session for that host is confirmed dead.
-func TestDiscoverHostSessionsReportsFailureOnScanError(t *testing.T) {
-	remote := &failingTmuxRemote{}
-	sessions, ok := DiscoverHostSessions(context.Background(), remote, &recordingSyncEngine{}, "regent0")
-	if ok {
-		t.Fatal("expected ok=false when the scan fails")
-	}
-	if sessions != nil {
-		t.Errorf("expected no sessions on failure, got %+v", sessions)
-	}
-}
-
 func TestDiscoverHostSessionsReportsSuccessEvenWithNoSessions(t *testing.T) {
-	remote := &discovererRemote{tmuxSessions: []string{}}
+	remote := &discovererRemote{}
 	_, ok := DiscoverHostSessions(context.Background(), remote, &recordingSyncEngine{}, "regent0")
 	if !ok {
 		t.Fatal("expected ok=true on a clean scan, even with zero sessions found")
@@ -493,25 +423,6 @@ func TestDiscoverFailsWhenPTYScanFails(t *testing.T) {
 	}
 	if _, ok := DiscoverHostSessions(context.Background(), remote, &recordingSyncEngine{}, "regent0"); ok {
 		t.Fatal("expected ok=false so the host is not marked scanned")
-	}
-}
-
-// A remote with no PTY runtime is not a failure: it simply has no PTY
-// sessions, and discovery must keep working for every tmux-only remote.
-func TestDiscoverSucceedsWhenRemoteHasNoPTYRuntime(t *testing.T) {
-	remote := &batchRemote{
-		discovererRemote: discovererRemote{
-			outputs: map[string]string{scanPTYSessionsCmd: `{"sessions":[]}`},
-		},
-		tmuxRecords: []domain.TmuxSessionRecord{{Name: "PB-1", AimanID: "id-1", CWD: "/repos/app"}},
-	}
-
-	sessions, ok := DiscoverHostSessions(context.Background(), remote, &recordingSyncEngine{}, "regent0")
-	if !ok {
-		t.Fatal("a remote without the pty runtime must still scan cleanly")
-	}
-	if len(sessions) != 1 || sessions[0].TmuxSession != "PB-1" {
-		t.Fatalf("expected the tmux session to survive, got %+v", sessions)
 	}
 }
 
