@@ -3,6 +3,7 @@ package agenthook
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,5 +147,45 @@ func TestDeepcodeLaunchScriptReportsAndExecsCLI(t *testing.T) {
 	}
 	if strings.Contains(DeepcodeLaunchScript, "exec deepcode") {
 		t.Fatal("exec would drop the watcher before it can report session end")
+	}
+}
+
+// A pending update in update-check.json makes Deep Code open an install
+// prompt before the app. The launcher clears it inside aiman sessions only.
+func TestDeepcodeLaunchScriptClearsPendingUpdateUnderAiman(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	run := func(aimanEnv string) bool {
+		t.Helper()
+		home := t.TempDir()
+		bin := t.TempDir()
+		state := filepath.Join(home, ".deepcode", "update-check.json")
+		if err := os.MkdirAll(filepath.Dir(state), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(state, []byte(`{"pending":{"latestVersion":"9.9.9"}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "deepcode"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		script := filepath.Join(bin, "deepcode-launch.sh")
+		if err := os.WriteFile(script, []byte(DeepcodeLaunchScript), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", script)
+		cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin", "AIMAN_ENV=" + aimanEnv}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("launcher: %v\n%s", err, out)
+		}
+		_, err := os.Stat(state)
+		return err == nil
+	}
+	if run("1") {
+		t.Error("AIMAN_ENV=1 must remove update-check.json")
+	}
+	if !run("") {
+		t.Error("outside aiman the user's update-check.json must stay")
 	}
 }

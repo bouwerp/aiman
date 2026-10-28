@@ -27,8 +27,15 @@ const (
 // runs the CLI. Deep Code has no hook events; the index is where conversation
 // id, title, and status (including ask_permission and waiting_for_user) land.
 // The CLI stays in the foreground so this process can still report session end.
+//
+// Deep Code has no switch for its updater: a background check records a newer
+// release in ~/.deepcode/update-check.json, and the next start shows an
+// install prompt before the app. Inside an aiman session that file is removed
+// first, so the prompt never blocks the boot; aiman serve owns updates. The
+// boot wait's esc on the prompt is the backstop.
 const DeepcodeLaunchScript = `#!/bin/sh
 [ "${AIMAN_ENV:-}" = 1 ] || { deepcode "$@"; exit $?; }
+rm -f "$HOME/.deepcode/update-check.json"
 [ -n "${AIMAN_ID:-}" ] || { deepcode "$@"; exit $?; }
 bin="${AIMAN_BIN_PATH:-}"
 if [ -z "$bin" ] || [ ! -x "$bin" ]; then
