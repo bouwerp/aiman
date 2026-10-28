@@ -258,8 +258,9 @@ var catalog = []Entry{
 	},
 	{
 		// ageni ignores unknown flags and installs, so the only probe it ever
-		// sees is --version.
+		// sees is --version. The latest version comes from GitHub releases.
 		Agent:         "ageni",
+		Latest:        LatestSource{Kind: LatestHTTPJSON, URL: "https://api.github.com/repos/bouwerp/ageni/releases/latest", Fields: []string{"tag_name"}},
 		Update:        cmd("ageni", "update"),
 		defaultMethod: MethodStandalone,
 	},

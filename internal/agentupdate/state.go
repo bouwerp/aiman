@@ -14,8 +14,11 @@ type LastUpdate struct {
 	At   time.Time `json:"at"`
 	From string    `json:"from,omitempty"`
 	To   string    `json:"to,omitempty"`
-	OK   bool      `json:"ok"`
-	Log  string    `json:"log,omitempty"`
+	// Target is the latest version known when the update started. Auto mode
+	// does not retry a failed update until a newer target appears.
+	Target string `json:"target,omitempty"`
+	OK     bool   `json:"ok"`
+	Log    string `json:"log,omitempty"`
 }
 
 // AgentState is what the last probe learned about one agent.
@@ -37,7 +40,9 @@ func (a AgentState) Outdated() bool {
 
 // State is the per-host version file (~/.aiman/agent-versions.json).
 type State struct {
-	Agents map[string]AgentState `json:"agents"`
+	// CheckedAt is when every agent was last probed. Zero means never.
+	CheckedAt time.Time             `json:"checked_at,omitempty"`
+	Agents    map[string]AgentState `json:"agents"`
 	// Notified maps an agent to the latest version a notification was sent
 	// for. A new latest version replaces the entry, so the set stays one
 	// key per agent.

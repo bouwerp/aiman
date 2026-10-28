@@ -78,25 +78,86 @@ type ServeConfig struct {
 	Roles RolesConfig `yaml:"roles,omitempty"`
 }
 
-// AgentsConfig configures agent selection shared by coordinator sessions.
+// AgentsConfig configures agent selection shared by coordinator sessions and
+// how serve keeps installed agents up to date.
 type AgentsConfig struct {
 	// Preferred is the order in which a coordinator may start child agents.
 	Preferred []string `yaml:"preferred"`
-	// Update configures how agent CLIs are kept up to date.
+	// Update is agents.update.
 	Update AgentUpdateConfig `yaml:"update,omitempty"`
-}
-
-// AgentUpdateConfig is the agents.update block.
-type AgentUpdateConfig struct {
-	// Mode is off, notify or auto; empty means auto. Off launches agents
-	// without the guards that disable their own self-updaters.
-	Mode string `yaml:"mode,omitempty"`
 }
 
 // IsZero keeps an untouched agents block out of the config while still
 // writing preferred: [] when the user clears a list.
-func (a AgentsConfig) IsZero() bool {
-	return a.Preferred == nil && a.Update == (AgentUpdateConfig{})
+func (a AgentsConfig) IsZero() bool { return a.Preferred == nil && a.Update.IsZero() }
+
+// MarshalYAML writes preferred only when it is set, so a block that carries
+// just update does not gain an empty preferred list on the way back in.
+func (a AgentsConfig) MarshalYAML() (any, error) {
+	type out struct {
+		Preferred *[]string         `yaml:"preferred,omitempty"`
+		Update    AgentUpdateConfig `yaml:"update,omitempty"`
+	}
+	o := out{Update: a.Update}
+	if a.Preferred != nil {
+		p := a.Preferred
+		o.Preferred = &p
+	}
+	return o, nil
+}
+
+// Defaults for an unset agents.update block.
+const (
+	DefaultAgentUpdateMode       = "auto"
+	DefaultAgentUpdateWindow     = "03:00-06:00"
+	DefaultAgentUpdateCheckEvery = 6 * time.Hour
+)
+
+// AgentUpdateConfig is agents.update: how serve probes installed agents for
+// new versions and when it applies them.
+type AgentUpdateConfig struct {
+	// Mode is off, notify or auto. Empty is DefaultAgentUpdateMode. Off
+	// launches agents without the guards that disable their own
+	// self-updaters.
+	Mode string `yaml:"mode,omitempty"`
+	// Window is the host-local "HH:MM-HH:MM" range in which auto mode
+	// applies updates. Empty is DefaultAgentUpdateWindow.
+	Window string `yaml:"window,omitempty"`
+	// CheckEvery is the probe interval. Zero is DefaultAgentUpdateCheckEvery.
+	CheckEvery time.Duration `yaml:"check_every,omitempty"`
+	// Hold lists agent commands that are never updated automatically.
+	// Manual updates still run.
+	Hold []string `yaml:"hold,omitempty"`
+}
+
+// IsZero reports whether no agents.update key is set.
+func (u AgentUpdateConfig) IsZero() bool {
+	return u.Mode == "" && u.Window == "" && u.CheckEvery == 0 && u.Hold == nil
+}
+
+// ModeOrDefault is the configured mode, or DefaultAgentUpdateMode.
+func (u AgentUpdateConfig) ModeOrDefault() string {
+	if m := strings.TrimSpace(u.Mode); m != "" {
+		return m
+	}
+	return DefaultAgentUpdateMode
+}
+
+// WindowOrDefault is the configured window, or DefaultAgentUpdateWindow.
+func (u AgentUpdateConfig) WindowOrDefault() string {
+	if w := strings.TrimSpace(u.Window); w != "" {
+		return w
+	}
+	return DefaultAgentUpdateWindow
+}
+
+// CheckEveryOrDefault is the configured interval, or
+// DefaultAgentUpdateCheckEvery.
+func (u AgentUpdateConfig) CheckEveryOrDefault() time.Duration {
+	if u.CheckEvery > 0 {
+		return u.CheckEvery
+	}
+	return DefaultAgentUpdateCheckEvery
 }
 
 // AgentUpdateGuards reports whether aiman launches agents with their

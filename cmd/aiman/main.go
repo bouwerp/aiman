@@ -62,7 +62,7 @@ func run() error {
 	}
 	os.Args = append([]string{os.Args[0]}, parsed.Rest...)
 
-	// `pty`, `session`, `rpc`, `todo` and `usage` talk only to the agent API
+	// `pty`, `session`, `rpc`, `todo`, `usage` and `agents` talk only to the agent API
 	// socket (and `pty hold` not even to that: it is the detached holder,
 	// handed an explicit --root and --id). `slack` talks to the Slack Web API
 	// with the host user token.
@@ -87,6 +87,8 @@ func run() error {
 			return runTodo(parsed.Rest[1:], os.Stdin, os.Getenv)
 		case "usage":
 			return runUsage(parsed.Rest[1:], os.Stdout)
+		case "agents":
+			return runAgents(parsed.Rest[1:], os.Stdout)
 		case "verify":
 			return runVerify(parsed.Rest[1:])
 		case "slack":
@@ -232,6 +234,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  serve            agent API on this host (install remotes from TUI: m → Agent API → i)\n")
 			fmt.Fprintf(os.Stderr, "  session          list/get/create/prompt sessions (JSON; needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  usage            token totals and ~$ cost (needs serve)\n")
+			fmt.Fprintf(os.Stderr, "  agents           agent CLI versions and updates (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  pty              manage built-in PTY sessions (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  context          ls/find/get/put/pack shared notes (JSON; files if serve is down)\n")
 			fmt.Fprintf(os.Stderr, "  slack            post, read, and wait on the Aiman Slack app (JSON)\n")

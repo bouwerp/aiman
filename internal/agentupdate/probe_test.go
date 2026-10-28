@@ -132,6 +132,7 @@ func TestProbeFillsState(t *testing.T) {
 	h := &fakeHTTP{bodies: map[string]string{
 		"https://pi.dev/api/latest-version":                       `{"version":"0.72.0"}`,
 		"https://downloads.claude.ai/claude-code-releases/stable": "2.1.315\n",
+		ageniLatestURL: `{"tag_name":"v0.39.0","name":"v0.39.0"}`,
 	}}
 	p := &Prober{Exec: ex, HTTP: h}
 	got := p.ProbeAll(context.Background(), Catalog())
@@ -144,7 +145,7 @@ func TestProbeFillsState(t *testing.T) {
 		"pi":       {"0.71.2", "0.72.0"},
 		"deepcode": {"0.6.1", "0.6.2"},
 		"agy":      {"0.9.3", ""},
-		"ageni":    {"0.38.121", ""},
+		"ageni":    {"0.38.121", "0.39.0"},
 	}
 	for agent, w := range want {
 		s, ok := got[agent]
@@ -203,5 +204,27 @@ func TestProbeRunsWithGuardEnv(t *testing.T) {
 		if strings.Contains(strings.Join(c.Argv, " "), "claude --version") && c.Env["DISABLE_AUTOUPDATER"] != "1" {
 			t.Errorf("claude probe without guard env: %+v", c)
 		}
+	}
+}
+
+const ageniLatestURL = "https://api.github.com/repos/bouwerp/ageni/releases/latest"
+
+func TestAgeniLatestReadsGitHubRelease(t *testing.T) {
+	ex := everythingInstalled()
+	h := &fakeHTTP{bodies: map[string]string{ageniLatestURL: `{"tag_name":"v0.40.2","draft":false}`}}
+	p := &Prober{Exec: ex, HTTP: h}
+	e, _ := Lookup("ageni")
+	s, installed := p.Probe(context.Background(), e)
+	if !installed {
+		t.Fatal("ageni not installed")
+	}
+	if s.Latest != "0.40.2" || s.Installed != "0.38.121" {
+		t.Fatalf("ageni: installed %q latest %q err %q", s.Installed, s.Latest, s.Error)
+	}
+	if len(h.urls) != 1 || h.urls[0] != ageniLatestURL {
+		t.Fatalf("fetched %v", h.urls)
+	}
+	if !s.Outdated() {
+		t.Fatal("0.38.121 < 0.40.2 should be outdated")
 	}
 }

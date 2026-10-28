@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
+	"github.com/bouwerp/aiman/internal/agentupdate"
 	"github.com/bouwerp/aiman/internal/aimanskill"
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/contextstore"
@@ -169,6 +170,18 @@ func runServe() error {
 	if len(sinks) > 0 {
 		go notify.NewDispatcher(notify.StoreSource{Store: db}, notify.StoreCursor{Name: "serve", DB: db}, sinks...).Run(ctx, 2*time.Second)
 	}
+
+	agentUpdates := newAgentUpdates(cfg.Agents.Update, dir, agentUpdateDeps{
+		Exec:        pathExec{base: agentupdate.LocalExec{}, home: home},
+		HTTP:        agentupdate.HTTPFetcher{},
+		EnsureHooks: func() { ensureAgentHooks(cfg.Verify.BeforePR) },
+	})
+	agentUpdates.Sessions = srv.LiveAgentSessions
+	agentUpdates.BaseCtx = ctx
+	// OnNewVersion stays unset until the agent_update notification lands;
+	// until then no version is recorded as notified.
+	srv.SetAgentUpdates(agentUpdates, host)
+	go agentUpdates.Run(ctx)
 
 	ciDeps := ciwatch.Deps{
 		Sessions: db,

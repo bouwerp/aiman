@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agentupdate"
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -99,6 +100,11 @@ type Server struct {
 	// them. Both stay empty until SetAgentChoice.
 	preferredAgents []string
 	agentInstalled  func(ctx context.Context, command string) bool
+
+	// agentUpdates reports and applies agent CLI updates; nil until
+	// SetAgentUpdates. agentHost names this host in its replies.
+	agentUpdates *agentupdate.Manager
+	agentHost    string
 
 	notifyRec  *notify.Recorder
 	notifyLog  NotifyLog
@@ -308,6 +314,10 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleContextVerify(ctx, req)
 	case "usage.get":
 		return s.handleUsageGet(ctx, req)
+	case "agents.status":
+		return s.handleAgentsStatus(ctx, req)
+	case "agents.update":
+		return s.handleAgentsUpdate(ctx, req)
 	case "handover.write":
 		return s.handleHandoverWrite(ctx, req)
 	case "handover.point":
