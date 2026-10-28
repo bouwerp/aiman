@@ -170,7 +170,7 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		return follow(m.usageEventFetch(msg.event.ID))
 	}
 	// A finished review has no pane activity to refresh. Drop its hidden
-	// reviewer row so the reviewing marker clears even for tmux reviewers.
+	// reviewer row so the reviewing marker clears for every reviewer.
 	if msg.event.Type == "verify" {
 		m.dropReviewerRows(msg.event.ID)
 		return follow(nil)

@@ -52,31 +52,21 @@ type previewFit struct {
 
 func (f previewFit) size() string { return fmt.Sprintf("%dx%d", f.cols, f.rows) }
 
-// sessionWantsPanelSize reports whether this panel should tell the agent its
-// size. Muse and Codex need it wherever they are shown. Deep Code needs it
-// in the terminal panel.
-func sessionWantsPanelSize(mode panelMode, agentName string) bool {
-	switch mode {
-	case panelModePreview:
-		return ptyruntime.SizesWithClient(agentName) && !ptyruntime.FitsClient(agentName)
-	case panelModeTerminal:
-		return ptyruntime.SizesWithClient(agentName)
-	default:
-		return false
-	}
+// sessionWantsPanelSize reports whether the preview should tell the agent its
+// size. Muse and Codex need it wherever they are shown.
+func sessionWantsPanelSize(agentName string) bool {
+	return ptyruntime.SizesWithClient(agentName) && !ptyruntime.FitsClient(agentName)
 }
 
 // desiredPreviewFit is the size a session should be told to render at, or ok
 // false when the panel must not resize it.
 //
-// Muse and Codex are sized in either panel. They are created at 80x24 and
-// keep drawing there until a resize arrives, so the layout never settles on
-// the terminal the user is looking at. The fit is remembered, so a later
-// poll does not resize again. A full-screen agent is left alone: a resize
-// clears its screen. Deep Code is sized only from the terminal panel, where
-// someone is looking at it full size.
+// Muse and Codex are created at 80x24 and keep drawing there until a resize
+// arrives, so the layout never settles on the terminal the user is looking
+// at. The fit is remembered, so a later poll does not resize again. A
+// full-screen agent is left alone: a resize clears its screen.
 func (m *Model) desiredPreviewFit(s domain.Session) (previewFit, bool) {
-	if !s.IsPTY() || !sessionWantsPanelSize(m.panelMode, s.AgentName) {
+	if s.IsLegacyTmux() || !sessionWantsPanelSize(s.AgentName) {
 		return previewFit{}, false
 	}
 	cols, rows, ok := usecase.ClampTerminalSize(m.viewport.Width(), m.viewport.Height())
@@ -168,8 +158,8 @@ func fitSessionCmd(cfg *config.Config, want previewFit) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
-		// A tmux session with someone attached is left alone; the usecase makes
-		// that call and reports it as "not applied" rather than an error.
+		// The usecase reports a resize it declined as "not applied" rather
+		// than an error.
 		applied, err := usecase.ResizeSessionTerminal(ctx, mgr, want.session, want.cols, want.rows)
 		done.applied, done.err = applied, err
 		return done

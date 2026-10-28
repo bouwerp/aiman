@@ -91,7 +91,7 @@ func (m BranchInputModel) viewString() string {
 	}
 	return lipgloss.Place(80, 10, lipgloss.Center, lipgloss.Center,
 		style.Render(fmt.Sprintf(
-			"%s\n\n%s\n\nBranch: %s\nWorktree: <repository>@%s\nTmux session: %s\n\n(enter to confirm, esc to cancel)",
+			"%s\n\n%s\n\nBranch: %s\nWorktree: <repository>@%s\nTerminal: %s\n\n(enter to confirm, esc to cancel)",
 			title,
 			m.textInput.View(),
 			identifier,

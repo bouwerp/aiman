@@ -222,7 +222,7 @@ func (m *Model) chooseReviveTarget(i reviveItem) (tea.Model, tea.Cmd) {
 
 // reviveWithAgentName resolves name to a runnable agent.KnownAgents entry
 // and jumps straight into the existing background-restart machinery — no
-// new session-launch logic needed, it already starts a fresh tmux session
+// new session-launch logic needed, it already starts a fresh terminal session
 // in an existing worktree with no live pane, and the dashboard stays usable
 // while it runs. Falls back to the full picker if the candidate name
 // somehow doesn't resolve (a hint matched a vendor this aiman build doesn't

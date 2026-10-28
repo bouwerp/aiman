@@ -11,15 +11,15 @@ import (
 
 func fitModel(t *testing.T, cols, rows int) *Model {
 	t.Helper()
-	m := &Model{panelMode: panelModeTerminal}
+	m := &Model{}
 	m.viewport.SetWidth(cols)
 	m.viewport.SetHeight(rows)
 	return m
 }
 
-// fitSession is Deep Code in the terminal panel: the one case that is still
-// resized. A preview capture does not resize anything.
-var fitSession = domain.Session{ID: "sess-1", TmuxSession: "demo", Backend: domain.BackendPTY, AgentName: "deepcode"}
+// fitSession is Muse Code, which the preview sizes once so it can leave the
+// 80x24 it was created with.
+var fitSession = domain.Session{ID: "sess-1", TmuxSession: "demo", Backend: domain.BackendPTY, AgentName: "Muse Code"}
 
 // TestSchedulePreviewFitArmsOnce is the bug this design exists to avoid: the
 // poll ticker runs faster than the debounce, so re-arming on every tick would
@@ -174,14 +174,14 @@ func TestDesiredPreviewFitAppliesFloors(t *testing.T) {
 // Muse and Codex are the exception: they keep the 80x24 they were created
 // with until something tells them otherwise, so the preview sizes them once.
 func TestPreviewPanelDoesNotResizeTheSession(t *testing.T) {
-	m := &Model{panelMode: panelModePreview}
+	m := &Model{}
 	m.viewport.SetWidth(120)
 	m.viewport.SetHeight(40)
 	for _, s := range []domain.Session{
 		{ID: "grok", Backend: domain.BackendPTY, AgentName: "grok"},
 		{ID: "claude", Backend: domain.BackendPTY, AgentName: "claude"},
 		{ID: "deep", Backend: domain.BackendPTY, AgentName: "deepcode"},
-		{ID: "tmux", TmuxSession: "demo"},
+		{ID: "tmux", TmuxSession: "demo", Backend: domain.BackendLegacyTmux, AgentName: "Muse Code"},
 	} {
 		if _, ok := m.desiredPreviewFit(s); ok {
 			t.Fatalf("preview must not resize %s", s.ID)
@@ -200,28 +200,9 @@ func TestPreviewPanelDoesNotResizeTheSession(t *testing.T) {
 	}
 }
 
-// Nothing to fit when the preview is not what is on screen, or before the
-// panel has been sized.
+// Nothing to fit before the panel has been sized.
 func TestDesiredPreviewFitRequiresASizedPreview(t *testing.T) {
-	m := fitModel(t, 154, 40)
-	m.panelMode = panelModeTerminal
-	if _, ok := m.desiredPreviewFit(domain.Session{TmuxSession: "demo"}); ok {
-		t.Error("a tmux session should not be fitted while the terminal panel is shown")
-	}
-	deep := domain.Session{ID: "pty-1", Backend: domain.BackendPTY, AgentName: "Deep Code"}
-	if _, ok := m.desiredPreviewFit(deep); !ok {
-		t.Error("deep code in the terminal panel should be fitted to that panel")
-	}
-	muse := domain.Session{ID: "muse-1", Backend: domain.BackendPTY, AgentName: "Muse Code"}
-	if _, ok := m.desiredPreviewFit(muse); !ok {
-		t.Error("muse in the terminal panel should be fitted once to that panel")
-	}
-	codex := domain.Session{ID: "codex-1", Backend: domain.BackendPTY, AgentName: "Codex CLI"}
-	if _, ok := m.desiredPreviewFit(codex); !ok {
-		t.Error("codex in the terminal panel should be fitted once to that panel")
-	}
-
-	unsized := &Model{panelMode: panelModePreview}
+	unsized := &Model{}
 	if _, ok := unsized.desiredPreviewFit(fitSession); ok {
 		t.Error("no fit should be wanted before the panel has a size")
 	}

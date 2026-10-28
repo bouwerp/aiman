@@ -2,9 +2,7 @@ package ui
 
 import (
 	"fmt"
-	"io"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -137,39 +135,4 @@ func TestPreviewDropsTheGapAboveTheComposer(t *testing.T) {
 	if !strings.Contains(content, transcript) || !strings.Contains(content, "status") || !strings.Contains(content, "prompt") {
 		t.Fatalf("transcript and composer should stay, got %q", content)
 	}
-}
-
-// The embedded terminal is the thing the user is typing into. Keeping preview
-// keys off the viewport must not swallow those keystrokes.
-func TestTerminalPanelStillReceivesKeys(t *testing.T) {
-	rw := &captureKeyRW{}
-	term := NewTerminalModel(rw, 40, 10)
-	m := previewModel(t, "grok", "screen")
-	m.panelMode = panelModeTerminal
-	m.terminal = &term
-	m.state = viewStateMain
-
-	if _, _ = m.Update(pressKey("x")); rw.text() != "x" {
-		t.Fatalf("terminal panel got %q, want the key", rw.text())
-	}
-}
-
-type captureKeyRW struct {
-	mu  sync.Mutex
-	buf []byte
-}
-
-func (c *captureKeyRW) Read([]byte) (int, error) { return 0, io.EOF }
-
-func (c *captureKeyRW) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.buf = append(c.buf, p...)
-	return len(p), nil
-}
-
-func (c *captureKeyRW) text() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return string(c.buf)
 }

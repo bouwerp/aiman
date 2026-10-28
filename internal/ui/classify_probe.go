@@ -41,7 +41,10 @@ const classifyProbeTimeout = 20 * time.Second
 // one at high confidence and the model was never needed — so rather than run it
 // automatically on a hot path, it is bound to a key and shown side by side.
 // Where the two disagree is the evidence for whether the tier earns its place.
-func classifySessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, session domain.Session) tea.Cmd {
+//
+// since is how long ago serve's event stream last saw output from the session,
+// or negative when unknown.
+func classifySessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, session domain.Session, since time.Duration) tea.Cmd {
 	return func() tea.Msg {
 		out := classifyProbeMsg{session: session.TmuxSession}
 
@@ -59,14 +62,6 @@ func classifySessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, s
 		if err != nil {
 			out.err = fmt.Errorf("capture pane: %w", err)
 			return out
-		}
-
-		// tmux's own last-output timestamp, the cheapest signal there is.
-		since := time.Duration(-1)
-		if ages, aerr := mgr.SessionActivityAges(ctx); aerr == nil {
-			if age, found := ages[session.TmuxSession]; found {
-				since = age
-			}
 		}
 
 		res := pane.Classify(pane.Observation{Pane: paneOut, SinceOutput: since})

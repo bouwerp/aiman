@@ -17,7 +17,7 @@ func TestBranchInputKeepsSessionNameAndPreviewsIdentifiers(t *testing.T) {
 	for _, want := range []string{
 		"Branch: Deploy-API-phase-2",
 		"Worktree: <repository>@Deploy-API-phase-2",
-		"Tmux session: Deploy-API-phase-2",
+		"Terminal: Deploy-API-phase-2",
 	} {
 		if !strings.Contains(m.viewString(), want) {
 			t.Fatalf("preview missing %q:\n%s", want, m.viewString())

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
-	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -93,12 +92,9 @@ func (m *Model) yankSessionOutputToClipboard(fullBuffer bool) bool {
 		return false
 	}
 	var raw string
-	switch {
-	case m.panelMode == panelModeTerminal && m.terminal != nil:
-		raw = m.terminal.viewString()
-	case fullBuffer:
+	if fullBuffer {
 		raw = m.tmuxOutput
-	default:
+	} else {
 		raw = m.viewport.View()
 	}
 	text := normalizeMultiline(ansi.Strip(raw))
@@ -188,13 +184,6 @@ const (
 	tabDaemons
 )
 
-type panelMode int
-
-const (
-	panelModePreview panelMode = iota
-	panelModeTerminal
-)
-
 type menuItem struct {
 	title, desc string
 	action      viewState
@@ -238,7 +227,7 @@ func (i daemonItem) Description() string {
 		}
 		if i.daemon.Status != domain.DaemonStatusRunning {
 			switch i.daemon.Driver {
-			case "systemd", "nohup", "tmux":
+			case "systemd", "nohup":
 				extra += "  press s to restart"
 			default:
 				extra += "  press i to install"
@@ -293,11 +282,10 @@ func (i item) Description() string {
 	if i.session.Branch != "" {
 		agentPart = " | Branch: " + i.session.Branch + agentPart
 	}
-	// Mark the backend only when it is not the tmux default: a PTY session is
-	// reattached and torn down differently, so which runtime hosts it has to be
-	// visible rather than something the user has to remember per session.
-	if i.session.IsPTY() {
-		agentPart = " | pty" + agentPart
+	// A legacy tmux row cannot be attached, revived or stopped by aiman, so it
+	// says so and names the way out.
+	if i.session.IsLegacyTmux() {
+		agentPart = " | tmux (legacy) · stop it on the host, then s" + agentPart
 	}
 	createdPart := ""
 	if !i.session.CreatedAt.IsZero() {
@@ -361,7 +349,6 @@ type Model struct {
 	db                   domain.SessionRepository
 	Program              *tea.Program
 	state                viewState
-	panelMode            panelMode
 	list                 list.Model
 	daemonList           list.Model
 	daemons              map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
@@ -397,7 +384,6 @@ type Model struct {
 	doctorResults        []usecase.CheckResult
 	width, height        int
 	viewport             viewport.Model
-	terminal             *TerminalModel
 	tmuxOutput           string
 	// previewCols is the widest line in the current preview. Remote sessions are
 	// routinely wider than the panel, so this drives the pan hint.
@@ -461,7 +447,6 @@ type Model struct {
 	fitArmed      bool
 	fitGen        int
 	activeSession string
-	termCloser    io.Closer
 	lastError     string
 	loadingMsg    string
 	sessionCfg    domain.SessionConfig
@@ -483,10 +468,13 @@ type Model struct {
 	lastGitStatusUpdate   time.Time
 	// metaExtras is per-session cost, token, cache, and review state.
 	// usage.get fills the cost fields.
-	metaExtras             map[string]detailMetaExtras
-	usageFetchedAt         map[string]time.Time // when usage.get for that session was last started
-	usageInFlight          map[string]bool      // true until that call returns
-	restartingSession      *domain.Session
+	metaExtras        map[string]detailMetaExtras
+	usageFetchedAt    map[string]time.Time // when usage.get for that session was last started
+	usageInFlight     map[string]bool      // true until that call returns
+	restartingSession *domain.Session
+	// legacyStoppedID is the legacy tmux session the user confirmed as stopped
+	// on its host; the next restart of that session may move it to pty.
+	legacyStoppedID        string
 	changingDirSession     *domain.Session
 	renamingSessionID      string
 	flowManager            *usecase.FlowManager
@@ -571,7 +559,7 @@ type archivePreviewData struct {
 	session        domain.Session
 	summary        *domain.SessionSummary
 	rawPane        string // full raw pane capture (for inspection/dump)
-	rawPaneLen     int    // chars captured from tmux (before cleaning)
+	rawPaneLen     int    // chars captured from the pane (before cleaning)
 	cleanedPaneLen int    // chars after pane.Clean() (before truncation)
 	compressedSize int    // bytes of gzip-compressed cleaned pane
 	cleanedPane    string // full cleaned pane text (for head/tail preview)
@@ -641,7 +629,7 @@ func (m *Model) makeItem(s domain.Session) item {
 	return it
 }
 
-// skipSessionPolling reports whether background SSH polling (tmux pane, git
+// skipSessionPolling reports whether background SSH polling (pane, git
 // status, input hints) should be skipped for a session — true for creation
 // placeholders and sessions being terminated.
 func (m *Model) skipSessionPolling(id string) bool {
@@ -649,7 +637,7 @@ func (m *Model) skipSessionPolling(id string) bool {
 }
 
 // isCreatingPlaceholder reports whether the session is a background-creation
-// placeholder (no tmux session or remote state exists for it yet).
+// placeholder (no terminal or remote state exists for it yet).
 func (m *Model) isCreatingPlaceholder(id string) bool {
 	_, ok := m.creatingSessions[id]
 	return ok
@@ -728,9 +716,6 @@ func (m *Model) applyRemoteFilter() {
 	for _, s := range m.allSessions {
 		if s.Role.Hidden() {
 			continue
-		}
-		if s.TmuxSession == "aiman-trigger" || s.TmuxSession == "aiman-serve" || s.TmuxSession == "aiman-gateway" {
-			continue // Skip daemon sessions in the main list
 		}
 		if m.remoteFilter == "" || s.RemoteHost == m.remoteFilter {
 			it := m.makeItem(s)
@@ -945,7 +930,6 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		db:                  db,
 		flowManager:         flowManager,
 		state:               viewStateMain,
-		panelMode:           panelModePreview,
 		list:                l,
 		menu:                m,
 		remotes:             NewRemotesModel(cfg),
@@ -1042,11 +1026,6 @@ type snapshotToastMsg struct {
 type snapshotPreviewMsg struct {
 	snapshot *domain.SessionSnapshot // nil = no snapshot found
 }
-type tmuxTerminalMsg struct {
-	stream io.ReadWriteCloser
-	err    error
-}
-
 type gitStatusMsg struct {
 	session string
 	status  domain.GitStatus
@@ -1260,7 +1239,7 @@ func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
 	}
 }
 
-// summariseSessionCmd captures the current tmux pane and sends it to the local SLM
+// summariseSessionCmd captures the current pane and sends it to the local SLM
 // for analysis. Runs in a bubbletea goroutine — never blocks the TUI loop.
 func summariseSessionCmd(cfg *config.Config, intel domain.IntelligenceProvider, session domain.Session) tea.Cmd {
 	return func() tea.Msg {
@@ -1506,29 +1485,6 @@ func resolveRemote(cfg *config.Config, session domain.Session) (config.Remote, b
 	return config.Remote{}, false
 }
 
-func (m *Model) initTerminal(session domain.Session) tea.Cmd {
-	return func() tea.Msg {
-		if m.termCloser != nil {
-			// Tearing down the embedded terminal; a close error has nowhere useful to go.
-			_ = m.termCloser.Close()
-			m.termCloser = nil
-		}
-
-		remote, ok := resolveRemote(m.cfg, session)
-		if !ok {
-			return tmuxTerminalMsg{err: fmt.Errorf("no remote configured")}
-		}
-
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		stream, err := mgr.StreamTmuxSession(context.Background(), session.TmuxSession)
-		if err != nil {
-			return tmuxTerminalMsg{err: err}
-		}
-
-		return tmuxTerminalMsg{stream: stream}
-	}
-}
-
 func (m *Model) searchJira(query string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -1748,21 +1704,14 @@ type sessionCreateMsg struct {
 
 type attachMsg struct {
 	cmd *exec.Cmd
-	pty bool
 }
 
 type attachDoneMsg struct {
 	err error
-	pty bool
 }
 
-// attachFailure describes a failed attach in terms of the backend that was
-// actually used; a PTY session has no tmux server involved at all.
 func attachFailure(msg attachDoneMsg) string {
-	if msg.pty {
-		return fmt.Sprintf("Failed to attach to PTY session: %v", msg.err)
-	}
-	return fmt.Sprintf("Failed to attach to tmux session: %v", msg.err)
+	return fmt.Sprintf("Failed to attach to PTY session: %v", msg.err)
 }
 
 type terminateStepMsg struct {
@@ -1813,35 +1762,6 @@ func (m *Model) normalizeLocalSyncedWorktree(ctx context.Context, engine domain.
 	}
 }
 
-func tmuxSessionEnvCommand(sessionName, key, value string) string {
-	if value == "" {
-		return fmt.Sprintf("tmux set-environment -t %q -u %s 2>/dev/null || true; ", sessionName, key)
-	}
-	return fmt.Sprintf("tmux set-environment -t %q %s %q 2>/dev/null || true; ", sessionName, key, value)
-}
-
-func tmuxSessionEnvCommands(sessionName string, env map[string]string, unsetKeys ...string) string {
-	keys := make([]string, 0, len(env))
-	for key := range env {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	sort.Strings(unsetKeys)
-
-	var b strings.Builder
-	for _, key := range unsetKeys {
-		b.WriteString(tmuxSessionEnvCommand(sessionName, key, ""))
-	}
-	for _, key := range keys {
-		b.WriteString(tmuxSessionEnvCommand(sessionName, key, env[key]))
-	}
-	return b.String()
-}
-
-func tmuxExtraEnvFlags(env map[string]string) string {
-	return usecase.TmuxEnvFlags(env)
-}
-
 func (m *Model) recreateMutagenSync(s domain.Session, background bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -1851,22 +1771,12 @@ func (m *Model) recreateMutagenSync(s domain.Session, background bool) tea.Cmd {
 		if !ok {
 			return recreateMutagenMsg{background: background, session: s, err: fmt.Errorf("no remote configured")}
 		}
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-
-		// Use persisted WorkingDirectory if available, otherwise try to fetch from tmux or fallback to worktree
 		remoteSyncDir := s.WorkingDirectory
-		if remoteSyncDir == "" && s.TmuxSession != "" {
-			fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
-			if cwd, err := mgr.GetTmuxSessionCWD(fetchCtx, s.TmuxSession); err == nil && strings.TrimSpace(cwd) != "" {
-				remoteSyncDir = strings.TrimSpace(cwd)
-			}
-			fetchCancel()
-		}
 		if remoteSyncDir == "" {
 			remoteSyncDir = s.WorktreePath
 		}
 		if remoteSyncDir == "" {
-			return recreateMutagenMsg{background: background, session: s, err: fmt.Errorf("session has no remote working directory (WorkingDirectory, WorktreePath, and tmux CWD are all empty)")}
+			return recreateMutagenMsg{background: background, session: s, err: fmt.Errorf("session has no remote working directory (WorkingDirectory and WorktreePath are both empty)")}
 		}
 
 		target := remote.Host
@@ -2107,7 +2017,6 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			Root: remote.Root,
 		})
 		sessionCfg.RemoteHost = remote.Host
-		sessionCfg.SessionBackend = resolveSessionBackend(sessionCfg.SessionBackend, remote.SessionBackend)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2121,7 +2030,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 	return func() tea.Msg {
 		defer cancel()
 		// Time every phase the flow already reports. Session creation spans SSH,
-		// git, tmux and mutagen, so without this a "it took ages" report leaves
+		// git, the terminal and mutagen, so without this a "it took ages" report leaves
 		// nothing to point at; the log now names the phase and its duration.
 		phases := newPhaseTimer()
 		sendStatus := func(s string) {
@@ -2134,7 +2043,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 
 		ctx = git.WithProgress(ctx, sendStatus)
 
-		if mgr, ok := sessionCfg.SSHManager.(*ssh.Manager); ok && sessionCfg.SessionBackend == domain.BackendPTY {
+		if mgr, ok := sessionCfg.SSHManager.(*ssh.Manager); ok {
 			sendStatus("Ensuring agent API...")
 			if err := m.ensureRemoteServer(ctx, mgr); err != nil {
 				m.log("ensure agent API: %v", err)
@@ -2382,8 +2291,8 @@ func (m *Model) runTerminateStepCmd(s domain.Session, forced bool, index int) te
 }
 
 // runTerminateStep performs one step of session teardown. The steps are ordered so that
-// nothing destructive runs before the session has been detached: sync first, then tmux,
-// then the worktree, then local files, credentials, and finally the database row.
+// nothing destructive runs before the session has been detached: sync first, then the
+// terminal, then the worktree, then local files, credentials, and finally the database row.
 //
 // A forced termination inserts a "discard local changes" step at index 1 and shifts the
 // rest down by one, which is why the index is remapped before dispatch.
@@ -2407,9 +2316,9 @@ func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error
 
 	switch effectiveIndex {
 	case 1:
-		return m.terminateKillTmux(ctx, s)
+		return m.terminateStopTerminal(ctx, s)
 	case 2:
-		// Stop agent process — killing the tmux session already did this.
+		// Stop agent process: stopping the terminal already did this.
 		return nil
 	case 3:
 		return m.terminateRemoveWorktree(ctx, s)
@@ -2490,7 +2399,7 @@ func (m *Model) writeForgetHandover(ctx context.Context, remote config.Remote, s
 func (m *Model) terminateStopSync(ctx context.Context, s domain.Session) error {
 	// Build a list of candidate names to try. The canonical name is
 	// "aiman-sync-{session-id}" but older sessions or DB rows may store
-	// the mutagen UUID, tmux session name, or nothing at all.
+	// the mutagen UUID, the terminal name, or nothing at all.
 	var candidates []string
 	if s.ID != "" {
 		candidates = append(candidates, "aiman-sync-"+s.ID)
@@ -2551,10 +2460,14 @@ func (m *Model) terminateDiscardChanges(ctx context.Context, s domain.Session) e
 	return err
 }
 
-func (m *Model) terminateKillTmux(ctx context.Context, s domain.Session) error {
-	// An ID alone is enough: TerminateSessionTerminal tears down both runtimes,
-	// because a session's recorded backend can be wrong.
-	if s.ID == "" && s.TmuxSession == "" {
+// terminateStopTerminal stops the session's PTY. A legacy tmux session is the
+// user's to stop: the confirm dialog showed the command, and aiman never runs
+// tmux.
+func (m *Model) terminateStopTerminal(ctx context.Context, s domain.Session) error {
+	if s.IsLegacyTmux() {
+		return skipReason("tmux session left to the user")
+	}
+	if s.ID == "" {
 		return nil
 	}
 	remote, ok := resolveRemote(m.cfg, s)
@@ -2762,7 +2675,12 @@ func extractRepoName(fullName string) string {
 
 func (m *Model) Init() tea.Cmd {
 	m.initialLoad = true
+	var toast tea.Cmd
+	if text := startupNotice(m.cfg, m.allSessions); text != "" {
+		toast = m.showToast(text, true, 15*time.Second)
+	}
 	return tea.Batch(
+		toast,
 		tickTmux(),
 		tickGit(),
 		tickSyncHealth(),
@@ -2933,11 +2851,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Global window size handling
 	if msg, ok := msg.(tea.WindowSizeMsg); ok {
 		m.SetSize(msg.Width, msg.Height)
-		if m.terminal != nil {
-			m.terminal.w = m.viewport.Width()
-			m.terminal.h = m.viewport.Height()
-			m.terminal.term.Resize(m.viewport.Width(), m.viewport.Height())
-		}
 		if it, ok := m.selectedSessionItem(); ok && !m.skipSessionPolling(it.session.ID) {
 			if fit := m.schedulePreviewFit(it.session); fit != nil {
 				cmds = append(cmds, fit)
@@ -4010,10 +3923,15 @@ func (m *Model) renderTerminateConfirm() string {
 		if m.terminatePrecheckError != "" {
 			b.WriteString(failStyle.Render("Blocked: "+m.terminatePrecheckError) + "\n\n")
 		}
+		if s.IsLegacyTmux() {
+			b.WriteString(legacyStopInstructions(s) + "\n\n")
+		}
 		b.WriteString("This will:\n")
 		b.WriteString("  - Save the session's pane\n")
 		b.WriteString("  - Stop mutagen sync\n")
-		b.WriteString("  - Kill the agent's terminal\n")
+		if !s.IsLegacyTmux() {
+			b.WriteString("  - Kill the agent's terminal\n")
+		}
 		b.WriteString("  - Remove git worktree\n")
 		b.WriteString("  - Clean up local files\n\n")
 		kids := m.terminationChildren(s)
@@ -4080,20 +3998,14 @@ func (m *Model) renderRunTargetPicker() string {
 		if m.runTargetSelected == i+1 {
 			marker = "*"
 		}
-		backend := domain.ResolveSessionBackend("", r.SessionBackend)
-		b.WriteString(fmt.Sprintf(" %s %s  %s (%s@%s)  [%s]\n",
-			marker, activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host, backend))
+		b.WriteString(fmt.Sprintf(" %s %s  %s (%s@%s)\n",
+			marker, activeStyle.Render(fmt.Sprintf("[%d]", i+1)), label, r.User, r.Host))
 	}
 	if len(m.cfg.Remotes) == 0 {
 		b.WriteString(dim.Render("  No remote servers configured \u2014 add one in Admin Menu.") + "\n")
 	}
 	if m.runTargetSelected > 0 {
-		current, other := "pty", "tmux"
-		if m.sessionCfg.SessionBackend != domain.BackendPTY {
-			current, other = "tmux", "pty"
-		}
-		b.WriteString("\n" + activeStyle.Render(fmt.Sprintf("  backend for this session: %s", current)))
-		b.WriteString("\n" + dim.Render(fmt.Sprintf("  enter: continue   b: use %s for this session   esc: cancel", other)))
+		b.WriteString("\n" + dim.Render("  enter: continue   esc: cancel"))
 	} else {
 		b.WriteString("\n" + dim.Render("  esc: cancel"))
 	}
@@ -4232,6 +4144,9 @@ func (m *Model) renderQuitConfirm() string {
 }
 
 func (m *Model) renderRestartConfirm() string {
+	if s := m.restartingSession; s != nil && s.IsLegacyTmux() {
+		return m.renderLegacyRestartConfirm(*s)
+	}
 	var b strings.Builder
 	b.WriteString(activeStyle.Render("Confirm Session Restart") + "\n\n")
 	b.WriteString(fmt.Sprintf("Session %q is currently active.\n", m.restartingSession.TmuxSession))
@@ -4298,21 +4213,10 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case attachMsg:
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-			return attachDoneMsg{err: err, pty: msg.pty}
+			return attachDoneMsg{err: err}
 		})
 	case attachDoneMsg:
 		return m.applyAttachDone(msg, cmds)
-	case tmuxTerminalMsg:
-		if msg.err != nil {
-			m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
-			m.panelMode = panelModePreview
-			m.state = viewStateMain
-			return m, nil
-		}
-		m.termCloser = msg.stream
-		term := NewTerminalModel(msg.stream, m.viewport.Width(), m.viewport.Height())
-		m.terminal = &term
-		return m, nil
 	case tmuxTickMsg:
 		return m.applyTmuxTick(msg, cmds)
 	case gitTickMsg:
@@ -4452,10 +4356,10 @@ func (m *Model) applyTmuxTick(msg tmuxTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 			if m.activeSession != s.TmuxSession {
 				m.activeSession = s.TmuxSession
 			}
-			// Skip sessions being created (no tmux yet) or terminated
-			// (tmux going away).
+			// Skip sessions being created (no terminal yet) or terminated
+			// (terminal going away).
 			if !m.skipSessionPolling(s.ID) {
-				// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change — not every tmux poll.
+				// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change, not every pane poll.
 				cmds = append(cmds, m.queuePreview(s))
 				// Open or close activity streams as the PTY session set changes.
 				if cmd := m.ensureSessionStreams(); cmd != nil {
@@ -4483,7 +4387,7 @@ func (m *Model) hasLoadedPane() bool {
 func (m *Model) applyTmuxOutput(msg tmuxOutputMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	if msg.session == m.activeSession {
 		if msg.err != nil {
-			// Transient pane-unavailability errors (session restarting, tmux server
+			// Transient pane-unavailability errors (session restarting, serve
 			// starting up) are silently ignored — the next tick will retry.
 			errStr := msg.err.Error()
 			isTransient := strings.Contains(errStr, "can't find pane") ||
@@ -4576,7 +4480,6 @@ func (m *Model) applyAttachDone(msg attachDoneMsg, cmds []tea.Cmd) (tea.Model, t
 		return m, nil
 	}
 	m.state = viewStateMain
-	m.panelMode = panelModePreview
 	if sel := m.list.SelectedItem(); sel != nil {
 		s := sel.(item).session
 		m.activeSession = s.TmuxSession
@@ -4651,19 +4554,10 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			}
 			cmds = append(cmds, cmd)
 		} else {
-			if m.panelMode == panelModeTerminal && m.terminal != nil {
-				var tModel tea.Model
-				tModel, cmd = m.terminal.Update(msg)
-				if tm, ok := tModel.(TerminalModel); ok {
-					m.terminal = &tm
-				}
-				cmds = append(cmds, cmd)
-			} else {
-				m.viewport, cmd = m.viewport.Update(msg)
-				cmds = append(cmds, cmd)
-				if _, wheel := msg.(tea.MouseWheelMsg); wheel {
-					m.previewFollowing = m.viewport.AtBottom()
-				}
+			m.viewport, cmd = m.viewport.Update(msg)
+			cmds = append(cmds, cmd)
+			if _, wheel := msg.(tea.MouseWheelMsg); wheel {
+				m.previewFollowing = m.viewport.AtBottom()
 			}
 		}
 	} else {
@@ -4676,17 +4570,10 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 		}
 		cmds = append(cmds, cmd)
 
-		// The embedded terminal is typed into, so it keeps the key. The
-		// preview viewport does not: its pager treats k/up/b/u as scrolling
-		// and pins the view off the tail. Preview movement is handlePreviewKey.
-		if m.panelMode == panelModeTerminal && m.terminal != nil {
-			var tModel tea.Model
-			tModel, cmd = m.terminal.Update(msg)
-			if tm, ok := tModel.(TerminalModel); ok {
-				m.terminal = &tm
-			}
-			cmds = append(cmds, cmd)
-		} else if _, isKey := msg.(tea.KeyPressMsg); !isKey {
+		// Keys never reach the preview viewport: its pager treats k/up/b/u as
+		// scrolling and pins the view off the tail. Preview movement is
+		// handlePreviewKey.
+		if _, isKey := msg.(tea.KeyPressMsg); !isKey {
 			m.viewport, cmd = m.viewport.Update(msg)
 			cmds = append(cmds, cmd)
 		}
@@ -4727,11 +4614,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			// the preview panel shows that progress instead.
 			if !m.skipSessionPolling(s.ID) {
 				usageCmd := m.maybeFetchUsage(s, false)
-				if m.panelMode == panelModeTerminal {
-					cmds = append(cmds, m.initTerminal(s), fetchGitStatus(m.cfg, s), usageCmd)
-				} else {
-					cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), usageCmd)
-				}
+				cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), usageCmd)
 			}
 			cmds = append(cmds, m.fetchTodosCmd(s), m.fetchCIStatusCmd(s))
 		}
@@ -4841,46 +4724,42 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 // handlePreviewKey handles keys that move around the output panel or the debug console.
 func (m *Model) handlePreviewKey(msg tea.KeyMsg) (tea.Model, bool) {
 	if msg.String() == "G" || msg.String() == "end" {
-		if m.panelMode == panelModePreview {
-			m.viewport.GotoBottom()
-			m.previewFollowing = true
-			return m, true
-		}
+		m.viewport.GotoBottom()
+		m.previewFollowing = true
+		return m, true
 	}
 
 	// Scroll the preview panel. Use [ / ] (or shift+arrow as fallback) so that
 	// the keybindings are not intercepted by the local terminal emulator.
 	// Plain pgup/pgdown also scroll the preview when the console is not open.
-	if m.panelMode == panelModePreview {
-		switch msg.String() {
-		case "[", "shift+up":
-			m.scrollPreview(func() { m.viewport.ScrollUp(3) })
-			return m, true
-		case "]", "shift+down":
-			m.scrollPreview(func() { m.viewport.ScrollDown(3) })
-			return m, true
-		case "left":
-			m.viewport.ScrollLeft(previewPanStep)
-			return m, true
-		case "right":
-			m.viewport.ScrollRight(previewPanStep)
-			return m, true
-		case "shift+pgup":
+	switch msg.String() {
+	case "[", "shift+up":
+		m.scrollPreview(func() { m.viewport.ScrollUp(3) })
+		return m, true
+	case "]", "shift+down":
+		m.scrollPreview(func() { m.viewport.ScrollDown(3) })
+		return m, true
+	case "left":
+		m.viewport.ScrollLeft(previewPanStep)
+		return m, true
+	case "right":
+		m.viewport.ScrollRight(previewPanStep)
+		return m, true
+	case "shift+pgup":
+		m.scrollPreview(m.viewport.PageUp)
+		return m, true
+	case "shift+pgdown":
+		m.scrollPreview(m.viewport.PageDown)
+		return m, true
+	case "pgup":
+		if !m.consoleOpen {
 			m.scrollPreview(m.viewport.PageUp)
 			return m, true
-		case "shift+pgdown":
+		}
+	case "pgdown":
+		if !m.consoleOpen {
 			m.scrollPreview(m.viewport.PageDown)
 			return m, true
-		case "pgup":
-			if !m.consoleOpen {
-				m.scrollPreview(m.viewport.PageUp)
-				return m, true
-			}
-		case "pgdown":
-			if !m.consoleOpen {
-				m.scrollPreview(m.viewport.PageDown)
-				return m, true
-			}
 		}
 	}
 
@@ -5050,10 +4929,6 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 	if msg.String() == "ctrl+c" {
-		if m.termCloser != nil {
-			// Tearing down the embedded terminal; a close error has nowhere useful to go.
-			_ = m.termCloser.Close()
-		}
 		return m, tea.Quit, true
 	}
 	return m, nil, false
@@ -5080,33 +4955,31 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			if !ok {
 				return m, nil, true
 			}
+			if s.IsLegacyTmux() {
+				return m, m.legacyTmuxToast(s), true
+			}
 			mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-			if s.IsPTY() {
-				// A serve restart on the remote kills PTY processes but not the
-				// conversations. Revive with the agent's native resume flag so
-				// attach picks the conversation back up.
-				reviveCtx, reviveCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				revived, rerr := usecase.ReviveIfNeeded(reviveCtx, mgr, &s)
-				reviveCancel()
-				if rerr != nil {
-					m.showSessionActionError(fmt.Sprintf("Cannot attach: %v (use 's' to restart the session instead)", rerr))
-					return m, nil, true
-				}
-				if revived {
-					m.log("revived pty session %s from agent resume", s.ID)
-					time.Sleep(2 * time.Second) // give the agent a moment to boot
-				}
+			// A serve restart on the remote kills PTY processes but not the
+			// conversations. Revive with the agent's native resume flag so
+			// attach picks the conversation back up.
+			reviveCtx, reviveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			revived, rerr := usecase.ReviveIfNeeded(reviveCtx, mgr, &s)
+			reviveCancel()
+			if rerr != nil {
+				m.showSessionActionError(fmt.Sprintf("Cannot attach: %v (use 's' to restart the session instead)", rerr))
+				return m, nil, true
 			}
-			c := mgr.AttachTmuxSession(s.TmuxSession)
-			if s.IsPTY() {
-				c = mgr.AttachPTYSession(s.ID)
+			if revived {
+				m.log("revived pty session %s from agent resume", s.ID)
+				time.Sleep(2 * time.Second) // give the agent a moment to boot
 			}
+			c := mgr.AttachPTYSession(s.ID)
 			m.loadingMsg = fmt.Sprintf("Connecting to session %s...", s.TmuxSession)
 			m.loadingNext = viewStateMain
 			m.state = viewStateLoading
 			return m, tea.Sequence(
 				tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
-					return attachMsg{cmd: c, pty: s.IsPTY()}
+					return attachMsg{cmd: c}
 				}),
 			), true
 		}
@@ -5249,7 +5122,7 @@ func (m *Model) handleIntelligenceKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	// Classify rather than summarise: the rules and the model both answer, so
 	// their disagreements are visible. That is the evidence for whether the
 	// model tier is worth running automatically.
-	return classifySessionCmd(m.cfg, m.intelligence, s), true
+	return classifySessionCmd(m.cfg, m.intelligence, s, m.sinceLastOutput(s.ID)), true
 }
 
 // prepareRestartTarget sets m.restartingSession, m.selectedRemote, and the
@@ -5262,6 +5135,7 @@ func (m *Model) prepareRestartTarget(s domain.Session) {
 		m.selectedRemote = remote
 	}
 	m.restartingSession = &s
+	m.legacyStoppedID = ""
 	m.sessionCfg = domain.SessionConfig{
 		IssueKey:   s.IssueKey,
 		Branch:     s.Branch,
@@ -5341,6 +5215,43 @@ func (m *Model) startAgentPickerRestart() (tea.Model, tea.Cmd) {
 	return m, m.fetchAgents()
 }
 
+// restartSelectedSession starts the restart flow for s. forceSwitch ("S")
+// always shows the agent picker.
+func (m *Model) restartSelectedSession(selectedSess domain.Session, forceSwitch bool) (tea.Model, tea.Cmd) {
+	m.prepareRestartTarget(selectedSess)
+
+	m.log("Preparing to restart session %q (ID: %s)", selectedSess.TmuxSession, selectedSess.ID)
+	_ = appendDebugLog(fmt.Sprintf("[ui %s] restart triggered: session=%s status=%s\n", time.Now().Format("15:04:05.000"), selectedSess.TmuxSession, selectedSess.Status))
+
+	// "S" always means "switch agent": show the picker even when the
+	// agent is already known. "s"/"ctrl+r" resolve the last-known agent
+	// (from the DB, or inferred from a hook sidecar during discovery)
+	// and skip the picker entirely: that is the whole point of
+	// reviving a session without re-asking every time.
+	var knownAgent *domain.Agent
+	if !forceSwitch {
+		if resolved, ok := agent.FindKnown(selectedSess.AgentName); ok {
+			knownAgent = &resolved
+		}
+	}
+	m.sessionCfg.Agent = knownAgent
+
+	// A live session's pane is about to be replaced either way, so still
+	// confirm before touching it; a legacy row confirms that the user stopped
+	// its tmux session. Whether that leads to an auto-resume or the picker is
+	// decided by handleRestartConfirmUpdate.
+	if selectedSess.IsLegacyTmux() || selectedSess.Status == domain.SessionStatusActive || selectedSess.Status == domain.SessionStatusSyncing {
+		m.state = viewStateRestartConfirm
+		return m, nil
+	}
+
+	if knownAgent != nil {
+		return m, m.startBackgroundRestart()
+	}
+
+	return m.startAgentPickerRestart()
+}
+
 func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if m.currentTab == tabDaemons {
 		switch msg.String() {
@@ -5372,39 +5283,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	}
 	if msg.String() == "ctrl+r" || msg.String() == "s" || msg.String() == "S" {
 		if sel := m.list.SelectedItem(); sel != nil {
-			selectedSess := sel.(item).session
-			m.prepareRestartTarget(selectedSess)
-
-			m.log("Preparing to restart session %q (ID: %s)", selectedSess.TmuxSession, selectedSess.ID)
-			_ = appendDebugLog(fmt.Sprintf("[ui %s] restart triggered: session=%s status=%s\n", time.Now().Format("15:04:05.000"), selectedSess.TmuxSession, selectedSess.Status))
-
-			// "S" always means "switch agent": show the picker even when the
-			// agent is already known. "s"/"ctrl+r" resolve the last-known agent
-			// (from the DB, or inferred from a hook sidecar during discovery)
-			// and skip the picker entirely — that is the whole point of
-			// reviving a session without re-asking every time.
-			forceSwitch := msg.String() == "S"
-			var knownAgent *domain.Agent
-			if !forceSwitch {
-				if resolved, ok := agent.FindKnown(selectedSess.AgentName); ok {
-					knownAgent = &resolved
-				}
-			}
-			m.sessionCfg.Agent = knownAgent
-
-			// A live session's pane is about to be replaced either way, so
-			// still confirm before touching it — whether that leads to an
-			// auto-resume or the picker is decided by handleRestartConfirmUpdate.
-			if selectedSess.Status == domain.SessionStatusActive || selectedSess.Status == domain.SessionStatusSyncing {
-				m.state = viewStateRestartConfirm
-				return m, nil, true
-			}
-
-			if knownAgent != nil {
-				return m, m.startBackgroundRestart(), true
-			}
-
-			model, cmd := m.startAgentPickerRestart()
+			model, cmd := m.restartSelectedSession(sel.(item).session, msg.String() == "S")
 			return model, cmd, true
 		}
 	}
@@ -6209,16 +6088,6 @@ func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) { 
 			m.runTargetSelected = 0
 			m.state = viewStateMain
 			return m, nil
-		case "b", "B":
-			// tmux and pty sessions run side by side on one host; this picks the
-			// backend for the session being created only (the remote's config
-			// default is the starting point).
-			if m.sessionCfg.SessionBackend == domain.BackendPTY {
-				m.sessionCfg.SessionBackend = domain.BackendTmux
-			} else {
-				m.sessionCfg.SessionBackend = domain.BackendPTY
-			}
-			return m, nil
 		case "enter":
 			if m.runTargetSelected >= 1 && m.runTargetSelected <= len(m.cfg.Remotes) {
 				r := m.cfg.Remotes[m.runTargetSelected-1]
@@ -6234,35 +6103,16 @@ func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) { 
 			}
 			if idx >= 1 && idx <= len(m.cfg.Remotes) {
 				m.runTargetSelected = idx
-				// Start from the remote's configured default each time a remote
-				// is picked so the toggle never leaks between wizard runs.
-				m.sessionCfg.SessionBackend = domain.ResolveSessionBackend("", m.cfg.Remotes[idx-1].SessionBackend)
 			}
 		}
 	}
 	return m, nil
 }
 
-// resolveSessionBackend picks the terminal runtime for a session being created.
-//
-// A remote's session_backend is a *default*: it applies only when nothing was
-// chosen for this session. Overwriting the chosen value with it made the
-// run-target picker's "b" toggle inert — and that toggle is the only way to run
-// pty on a remote that defaults to tmux.
-func resolveSessionBackend(chosen, remoteDefault string) string {
-	return domain.ResolveSessionBackend(chosen, remoteDefault)
-}
-
 // resetSessionCfg starts a fresh session config for the mode picker's branches while
-// keeping what was chosen on the run-target screen before it.
-//
-// That means the backend as well as the host: it used to carry only the host,
-// so picking any mode threw away a "b" toggle from the previous screen and
-// every session came out tmux regardless. The toggle was still drawn, which
-// made it look like the pty option had quietly stopped existing.
+// keeping the host chosen on the run-target screen before it.
 func (m *Model) resetSessionCfg(cfg domain.SessionConfig) {
 	cfg.RemoteHost = m.selectedRemote.Host
-	cfg.SessionBackend = m.sessionCfg.SessionBackend
 	m.sessionCfg = cfg
 }
 
@@ -6670,7 +6520,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
 		}
 		m.summary.SetAgent(m.sessionCfg.Agent)
-		m.summary.SetBackend(m.sessionCfg.SessionBackend)
 		m.summary.SetSize(m.width, m.height)
 		// Populate AWS override fields when the remote has SyncCredentials enabled.
 		// AllDelegations covers both the singular aws_delegation and the plural
@@ -6896,10 +6745,6 @@ func (m *Model) handleQuitConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y":
-			if m.termCloser != nil {
-				// Tearing down the embedded terminal; a close error has nowhere useful to go.
-				_ = m.termCloser.Close()
-			}
 			return m, tea.Quit
 		case "n", "esc", "q":
 			m.state = viewStateMain
@@ -6985,12 +6830,10 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyDiscoveryResult(msg)
 	case attachMsg:
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-			return attachDoneMsg{err: err, pty: msg.pty}
+			return attachDoneMsg{err: err}
 		})
 	case attachDoneMsg:
 		return m.applyAttachDone(msg, nil)
-	case tmuxTerminalMsg:
-		return m.applyTmuxTerminal(msg)
 	case reposMsg:
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("Failed to fetch repos: %v", msg.err)
@@ -7114,7 +6957,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 			continue
 		}
 		if m.creatingPlaceholderFor(s) != nil {
-			// Live tmux is already the in-flight create. Keep the placeholder
+			// The live terminal is already the in-flight create. Keep the placeholder
 			// until create finishes so the list does not grow a twin row.
 			continue
 		}
@@ -7159,9 +7002,15 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		if tk != "" && seenTmux[tk] {
 			continue
 		}
-		// Skip sessions from remotes that were successfully scanned — they're dead
+		// Skip sessions from remotes that were successfully scanned: they're
+		// dead. A legacy tmux row is never discovered, since aiman no longer
+		// scans tmux, so it stays listed as inactive (in memory only) until the
+		// user stops it and restarts it into pty.
 		if s.RemoteHost != "" && msg.scannedHosts[s.RemoteHost] {
-			continue
+			if !s.IsLegacyTmux() {
+				continue
+			}
+			s.Status = domain.SessionStatusInactive
 		}
 		merged = append(merged, s)
 		seenID[id] = true
@@ -7181,9 +7030,9 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 	m.allSessions = merged
 
 	var probes []tea.Cmd
-	// Daemon probing only needs the SSH connection, not a successful tmux
+	// Daemon probing only needs the SSH connection, not a successful session
 	// scan, so it is driven off reachableHosts rather than scannedHosts: a
-	// host whose tmux scan transiently failed this round must still have its
+	// host whose session scan transiently failed this round must still have its
 	// serve/trigger/gateway daemons checked (and, via maybeAutoUpdateServe,
 	// auto-updated if behind).
 	for host := range msg.reachableHosts {
@@ -7243,25 +7092,6 @@ func (m *Model) applyRecreateMutagen(msg recreateMutagenMsg) (tea.Model, tea.Cmd
 
 	m.state = viewStateMain
 	return m, checkSyncHealth(m.cfg, append([]domain.Session(nil), m.allSessions...))
-}
-
-func (m *Model) applyTmuxTerminal(msg tmuxTerminalMsg) (tea.Model, tea.Cmd) {
-	// Don't interrupt an in-progress restart with a stale terminal stream.
-	if m.restartingSession != nil {
-		return m, nil
-	}
-	if msg.err != nil {
-		m.tmuxOutput = failStyle.Render("Failed to stream session: " + msg.err.Error())
-		m.panelMode = panelModePreview
-		m.state = viewStateMain
-		return m, nil
-	}
-	m.termCloser = msg.stream
-	term := NewTerminalModel(msg.stream, m.viewport.Width(), m.viewport.Height())
-	m.terminal = &term
-	m.panelMode = panelModeTerminal
-	m.state = viewStateMain
-	return m, nil
 }
 
 func (m *Model) applyScanAgents(msg agent.ScanAgentsMsg) (tea.Model, tea.Cmd) {
@@ -7416,25 +7246,14 @@ func (m *Model) renderDetailAndPreview(it item, contentW int, toast string) stri
 	b.WriteString(m.renderPreviewCaption(contentW))
 	if preview > 0 {
 		b.WriteByte('\n')
-		if m.panelMode == panelModeTerminal && m.terminal != nil {
-			b.WriteString(m.terminal.viewString())
-		} else {
-			b.WriteString(m.viewport.View())
-		}
+		b.WriteString(m.viewport.View())
 	}
 	return b.String()
 }
 
 func (m *Model) renderPreviewCaption(width int) string {
-	modeName := "Preview"
-	if m.panelMode == panelModeTerminal {
-		modeName = "Terminal"
-	}
-	scrollHint := ""
-	if m.panelMode == panelModePreview {
-		scrollHint = "  " + statusStyle.Render("[/] scroll") + m.previewPanHint()
-	}
-	return truncateToWidth(statusStyle.Render(modeName+" · ctrl+s fullscreen")+scrollHint, width)
+	scrollHint := "  " + statusStyle.Render("[/] scroll") + m.previewPanHint()
+	return truncateToWidth(statusStyle.Render("Preview · ctrl+s fullscreen")+scrollHint, width)
 }
 
 func (m *Model) snapshotToastBlock() string {
@@ -7695,6 +7514,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 	db := m.db
 	flowManager := m.flowManager
 	checklistDir := laptopChecklistDir()
+	legacyStopped := s != nil && m.legacyStoppedID != "" && m.legacyStoppedID == s.ID
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	if cs, ok := m.creatingSessions[placeholderID]; ok {
@@ -7730,6 +7550,9 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		s.ID = strings.TrimSpace(s.ID)
 		if s.ID == "" {
 			return sessionCreateMsg{err: fmt.Errorf("session ID is empty"), placeholderID: placeholderID}
+		}
+		if err := legacyRestartBlocked(*s, legacyStopped); err != nil {
+			return sessionCreateMsg{err: err, placeholderID: placeholderID}
 		}
 
 		if sessionCfg.Agent == nil {
@@ -7815,134 +7638,37 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		}
 		agentCmd = withRemoteNativeResume(ctx, mgr, s, agentCmd, sessionCfg.FreshAgent)
 
-		agentBootstrap := fmt.Sprintf("export PATH=\"$PATH:$HOME/.local/bin:$HOME/.kilo/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; %s", agentCmd)
-		agentBootstrap = strings.ReplaceAll(agentBootstrap, "'", "'\\''")
-
-		awsEnv := map[string]string{}
+		env := map[string]string{}
 		awsCfg := s.AWSConfig
 		if sessionCfg.AWSConfig != nil {
 			awsCfg = sessionCfg.AWSConfig
 		}
 		if awsCfg != nil {
-			awsEnv = usecase.SharedSessionAWSEnv(awsCfg.SourceProfile, awsCfg.Region)
+			env = usecase.SharedSessionAWSEnv(awsCfg.SourceProfile, awsCfg.Region)
 			s.AWSConfig = awsCfg
 		}
 		for k, v := range usecase.SessionRuntimeEnv(s) {
-			awsEnv[k] = v
+			env[k] = v
 		}
-		extraEnvFlags := tmuxExtraEnvFlags(awsEnv)
-		awsEnvCmd := tmuxSessionEnvCommands(
-			s.TmuxSession,
-			awsEnv,
-			"AWS_PROFILE",
-			"AWS_SHARED_CREDENTIALS_FILE",
-			"AWS_CONFIG_FILE",
-			"AWS_REGION",
-			"AWS_DEFAULT_REGION",
-			"AIMAN_ID",
-			"AIMAN_ENV",
-			"AIMAN_SESSION_ID",
-			"AIMAN_SESSION_NAME",
-			"AIMAN_GROUP",
-			"AIMAN_SOCKET_PATH",
-			"AIMAN_BIN_PATH",
-		)
-		if strings.Contains(strings.ToLower(agentCmd), "kilo") {
-			_ = mgr.WriteFile(ctx, "/tmp/kilo-aiman.json", []byte(`{"permission":"allow"}`))
-			extraEnvFlags += usecase.TmuxEnvFlags(map[string]string{
-				"KILO_CONFIG":         "/tmp/kilo-aiman.json",
-				"KILO_CONFIG_CONTENT": `{"permission":"allow"}`,
-			})
-		}
-		secretEnv := map[string]string{}
-		for _, secret := range sessionCfg.EnvSecrets {
-			secretEnv[secret.Key] = secret.Value
-		}
-		extraEnvFlags += usecase.TmuxEnvFlags(secretEnv)
 
-		// Step 3: start the new agent in a fresh pane process.
-		//
-		// If the tmux session already exists (the common case — agent exited or
-		// user just wants a different agent), use respawn-pane -k to replace the
-		// running process in-place. This preserves the session, the mutagen sync,
-		// and the working directory without any teardown.
-		//
-		// If the session is gone (remote reboot, manual kill, etc.) fall back to
-		// creating a fresh session with new-session, using start-server + global
-		// option guards to avoid the remain-on-exit race.
+		// Step 3: replace the agent process in the remote PTY runtime.
 		m.sendStatusFor(placeholderID, fmt.Sprintf("Restarting agent in %s...", s.TmuxSession))
 		logf("step3: restarting agent")
-		usecase.TrustWorkspacePaths(ctx, mgr, workingDir, gitignoreRoot)
-
-		if s.IsPTY() {
-			// Built-in PTY backend: replace the process by killing and
-			// re-creating the session inside the remote serve daemon.
-			env := map[string]string{}
-			for k, v := range awsEnv {
-				env[k] = v
-			}
-			for _, secret := range sessionCfg.EnvSecrets {
-				env[secret.Key] = secret.Value
-			}
-			usecase.ApplyKiloAllowEnv(ctx, mgr, agentCmd, env)
-			if err := usecase.RecreatePTYSession(ctx, mgr, usecase.PTYSpec{
-				ID:            s.ID,
-				Name:          s.TmuxSession,
-				Dir:           workingDir,
-				Command:       agentCmd,
-				Env:           env,
-				NoUpdateGuard: !cfg.AgentUpdateGuards(),
-			}); err != nil {
-				return sessionCreateMsg{err: fmt.Errorf("failed to restart PTY session: %w", err), placeholderID: placeholderID}
-			}
-			usecase.DeliverInitialPromptPTY(ctx, mgr, s.ID, sendKeysPrompt)
-
-			s.Status = domain.SessionStatusActive
-			if db != nil {
-				_ = db.Save(ctx, s)
-			}
-			return sessionCreateMsg{session: *s, placeholderID: placeholderID}
-		}
-		paneCmd := usecase.PaneShellCommand(agentBootstrap)
-		restartCmd := fmt.Sprintf(
-			"if tmux has-session -t %q 2>/dev/null; then "+
-				"%s"+
-				"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
-				"tmux respawn-pane -k -t %q -c %q%s %q; "+
-				"else "+
-				"tmux start-server 2>/dev/null || true; "+
-				"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
-				"tmux set-window-option -g remain-on-exit on 2>/dev/null || true; "+
-				"tmux new-session -d -s %q -c %q%s %q; "+
-				"_RC=$?; "+
-				"%s"+
-				"tmux set-window-option -t %q remain-on-exit on 2>/dev/null || true; "+
-				"tmux set-window-option -g remain-on-exit off 2>/dev/null || true; "+
-				"tmux set-option -g destroy-unattached off 2>/dev/null || true; "+
-				"exit $_RC; "+
-				"fi",
-			// has-session
-			s.TmuxSession,
-			// respawn-pane branch
-			awsEnvCmd,
-			s.TmuxSession,
-			s.TmuxSession, workingDir, extraEnvFlags, paneCmd,
-			// new-session branch
-			s.TmuxSession, workingDir, extraEnvFlags, paneCmd,
-			awsEnvCmd,
-			s.TmuxSession,
-		)
-		logf("step3: restartCmd=%s", restartCmd)
-		if _, err := mgr.Execute(ctx, restartCmd); err != nil {
+		if err := restartTerminal(ctx, mgr, s, restartTerminalSpec{
+			WorkingDir:    workingDir,
+			WorktreeRoot:  gitignoreRoot,
+			AgentCmd:      agentCmd,
+			Env:           env,
+			Secrets:       sessionCfg.EnvSecrets,
+			Prompt:        sendKeysPrompt,
+			NoUpdateGuard: !cfg.AgentUpdateGuards(),
+			LegacyStopped: legacyStopped,
+		}); err != nil {
 			logf("step3 FAILED: %v", err)
-			return sessionCreateMsg{err: fmt.Errorf("failed to restart agent in session %q: %w", s.TmuxSession, err), placeholderID: placeholderID}
+			return sessionCreateMsg{err: err, placeholderID: placeholderID}
 		}
 		logf("step3 ok")
 
-		acceptTrust := sessionCfg.Agent != nil && usecase.IsAntigravityAgent(sessionCfg.Agent.Name, sessionCfg.Agent.Command)
-		usecase.DeliverInitialPrompt(ctx, mgr, s.TmuxSession, s.ID, sendKeysPrompt, acceptTrust)
-
-		s.Status = domain.SessionStatusActive
 		if db != nil {
 			_ = db.Save(ctx, s)
 		}
@@ -7988,6 +7714,7 @@ func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y", "enter":
+			m.noteLegacyStopped()
 			// A known agent was already resolved before this confirm (see
 			// handleSessionManageKey) — skip the picker and resume directly.
 			if m.sessionCfg.Agent != nil {
@@ -7995,11 +7722,13 @@ func (m *Model) handleRestartConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.startAgentPickerRestart()
 		case "S":
+			m.noteLegacyStopped()
 			m.sessionCfg.Agent = nil
 			return m.startAgentPickerRestart()
 		case "n", "esc":
 			m.state = viewStateMain
 			m.restartingSession = nil
+			m.legacyStoppedID = ""
 			return m, nil
 		}
 	}

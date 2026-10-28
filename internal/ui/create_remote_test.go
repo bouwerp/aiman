@@ -11,13 +11,12 @@ import (
 // as its display name.
 func TestRemoteCreateSpecCarriesCommandAndName(t *testing.T) {
 	spec := remoteCreateSpecFrom(domain.SessionConfig{
-		Agent:          &domain.Agent{Name: "Claude Code", Command: "claude"},
-		Repo:           domain.Repo{Name: "realfi"},
-		Branch:         "WTB-1-thing",
-		IssueKey:       "WTB-1",
-		SessionBackend: domain.BackendPTY,
-		InitialPrompt:  "do the thing",
-		PromptFree:     false,
+		Agent:         &domain.Agent{Name: "Claude Code", Command: "claude"},
+		Repo:          domain.Repo{Name: "realfi"},
+		Branch:        "WTB-1-thing",
+		IssueKey:      "WTB-1",
+		InitialPrompt: "do the thing",
+		PromptFree:    false,
 	})
 	if spec.Agent != "claude" {
 		t.Errorf("the remote must be given the command to run, got %q", spec.Agent)
@@ -27,7 +26,7 @@ func TestRemoteCreateSpecCarriesCommandAndName(t *testing.T) {
 	}
 	for _, pair := range [][2]string{
 		{spec.Repo, "realfi"}, {spec.Branch, "WTB-1-thing"},
-		{spec.Issue, "WTB-1"}, {spec.Backend, domain.BackendPTY},
+		{spec.Issue, "WTB-1"},
 		{spec.Prompt, "do the thing"},
 	} {
 		if pair[0] != pair[1] {

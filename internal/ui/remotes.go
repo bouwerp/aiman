@@ -1466,7 +1466,7 @@ func (m RemotesModel) viewResult() string {
 			b.WriteString(failStyle.Render(fmt.Sprintf("  Error: %v\n", m.scanResults.err)))
 		} else {
 			b.WriteString(successStyle.Render("  Connection & scan successful!") + "\n\n")
-			b.WriteString(fmt.Sprintf("  Found %d tmux sessions\n", len(m.scanResults.sessions)))
+			b.WriteString(fmt.Sprintf("  Found %d sessions\n", len(m.scanResults.sessions)))
 			b.WriteString(fmt.Sprintf("  Found %d git repositories in %s\n", len(m.scanResults.repos), m.testingRoot))
 		}
 	} else {

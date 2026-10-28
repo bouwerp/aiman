@@ -102,13 +102,13 @@ type checkResultMsg usecase.CheckResult
 
 type discoveryResult struct {
 	sessions     []domain.Session
-	scannedHosts map[string]bool // remotes whose tmux scan succeeded (session-merge "confirmed dead" gate)
+	scannedHosts map[string]bool // remotes whose session scan succeeded (session-merge "confirmed dead" gate)
 	// reachableHosts is every remote the SSH connection succeeded for, whether
-	// or not the tmux scan that follows also succeeds. The tmux scan can
+	// or not the session scan that follows also succeeds. The session scan can
 	// transiently fail — most likely right at startup, per 26700f7 — which
 	// must not stop the client from probing that host's serve/trigger/gateway
 	// daemons: that probe is what drives maybeAutoUpdateServe, and it is a
-	// read-only operation unrelated to tmux session discovery.
+	// read-only operation unrelated to session discovery.
 	reachableHosts map[string]bool
 }
 

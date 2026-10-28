@@ -10,7 +10,7 @@ import (
 // phaseTimer records how long each reported phase of a long operation took.
 //
 // Session creation reports progress through a status callback as it moves across
-// SSH, git, tmux and mutagen. Timing those same messages turns "it took ages"
+// SSH, git, the terminal and mutagen. Timing those same messages turns "it took ages"
 // into a named phase and a duration, without adding instrumentation points that
 // can drift from the phases the user actually sees.
 type phaseTimer struct {

@@ -6,23 +6,14 @@ import (
 	"testing"
 )
 
-// TestAttachFailureNamesTheRealBackend guards against telling the user a tmux
-// attach failed for a session that never involved tmux. A PTY session is hosted
-// by a holder process, so "tmux" in the message sends them looking in the wrong
-// place entirely.
+// TestAttachFailureNamesTheRealBackend: every attach goes to the PTY runtime,
+// so a failure must name it and never send the user looking for tmux.
 func TestAttachFailureNamesTheRealBackend(t *testing.T) {
-	err := errors.New("exit status 1")
-
-	pty := attachFailure(attachDoneMsg{err: err, pty: true})
-	if strings.Contains(strings.ToLower(pty), "tmux") {
-		t.Fatalf("PTY attach failure must not mention tmux, got %q", pty)
+	msg := attachFailure(attachDoneMsg{err: errors.New("exit status 1")})
+	if strings.Contains(strings.ToLower(msg), "tmux") {
+		t.Fatalf("attach failure must not mention tmux, got %q", msg)
 	}
-	if !strings.Contains(pty, "PTY") || !strings.Contains(pty, "exit status 1") {
-		t.Fatalf("PTY message must name the backend and the cause, got %q", pty)
-	}
-
-	tmux := attachFailure(attachDoneMsg{err: err})
-	if !strings.Contains(tmux, "tmux") || !strings.Contains(tmux, "exit status 1") {
-		t.Fatalf("tmux message must name the backend and the cause, got %q", tmux)
+	if !strings.Contains(msg, "PTY") || !strings.Contains(msg, "exit status 1") {
+		t.Fatalf("message must name the backend and the cause, got %q", msg)
 	}
 }

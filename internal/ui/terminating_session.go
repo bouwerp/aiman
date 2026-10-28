@@ -84,7 +84,7 @@ func terminateStepLabels(forced bool) []string {
 			"Saving session context",
 			"Stopping mutagen sync",
 			"Discarding changes (force)",
-			"Killing tmux session",
+			"Stopping terminal",
 			"Stopping agent process",
 			"Removing git worktree",
 			"Cleaning local files",
@@ -95,7 +95,7 @@ func terminateStepLabels(forced bool) []string {
 	return []string{
 		"Saving session context",
 		"Stopping mutagen sync",
-		"Killing tmux session",
+		"Stopping terminal",
 		"Stopping agent process",
 		"Removing git worktree",
 		"Cleaning local files",

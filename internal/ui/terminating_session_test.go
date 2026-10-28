@@ -98,7 +98,7 @@ func TestBackgroundTerminate_StepsProgressAndComplete(t *testing.T) {
 
 	// Preview panel shows progress.
 	panel := model.renderTerminatingPanel(ts, 80)
-	if !strings.Contains(panel, "Killing tmux session") {
+	if !strings.Contains(panel, "Stopping terminal") {
 		t.Errorf("expected step labels in panel, got:\n%s", panel)
 	}
 
@@ -220,7 +220,7 @@ func TestTerminateSavesContextBeforeAnythingDestructive(t *testing.T) {
 			t.Errorf("forced=%v: context save must be first, got %q", forced, labels[0])
 		}
 		save := stepIndex(t, forced, "Saving session context")
-		for _, destructive := range []string{"Killing tmux session", "Removing git worktree"} {
+		for _, destructive := range []string{"Stopping terminal", "Removing git worktree"} {
 			if save > stepIndex(t, forced, destructive) {
 				t.Errorf("forced=%v: context save runs after %q", forced, destructive)
 			}

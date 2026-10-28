@@ -33,38 +33,6 @@ func TestDashboardViewHonoursMouseToggle(t *testing.T) {
 	}
 }
 
-func TestKeypressBytesEncodesTerminalSequences(t *testing.T) {
-	cases := []struct {
-		key  tea.KeyPressMsg
-		want string
-	}{
-		{pressKey("enter"), "\r"},
-		{pressKey("backspace"), "\x7f"},
-		{pressKey("tab"), "\t"},
-		{pressKey("esc"), "\x1b"},
-		{pressKey("up"), "\x1b[A"},
-		{pressKey("down"), "\x1b[B"},
-		{pressKey("right"), "\x1b[C"},
-		{pressKey("left"), "\x1b[D"},
-		{pressKey("pgup"), "\x1b[5~"},
-		{pressKey("pgdown"), "\x1b[6~"},
-		// Ctrl+<letter> clears the upper three bits.
-		{pressKey("ctrl+a"), "\x01"},
-		{pressKey("ctrl+c"), "\x03"},
-		{pressKey("ctrl+z"), "\x1a"},
-		{pressKey("?"), "?"},
-		{pressRune('x'), "x"},
-	}
-	for _, tc := range cases {
-		if got := string(keypressBytes(tc.key)); got != tc.want {
-			t.Errorf("keypressBytes(%q) = %q, want %q", tc.key.String(), got, tc.want)
-		}
-	}
-	if b := keypressBytes(tea.KeyPressMsg{}); b != nil {
-		t.Errorf("empty key must encode to nil, got %q", string(b))
-	}
-}
-
 // TestPressKeyMatchesProductionBindings guards the harness itself: every
 // keystroke name used in tests must produce a KeyPressMsg whose String()
 // matches what bubbletea v2 delivers at runtime.

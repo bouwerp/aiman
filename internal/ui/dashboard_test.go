@@ -132,7 +132,7 @@ func TestRunTerminateStep_SkipsRemoteCleanupWhenRemoteMissing(t *testing.T) {
 		RepoName:     "org/repo",
 	}
 
-	if err := model.runTerminateStep(stepIndex(t, false, "Killing tmux session"), session, false); err != nil {
+	if err := model.runTerminateStep(stepIndex(t, false, "Stopping terminal"), session, false); err != nil {
 		t.Fatalf("expected missing remote kill step to be skipped, got %v", err)
 	}
 	if err := model.runTerminateStep(stepIndex(t, false, "Removing git worktree"), session, false); err != nil {
@@ -263,49 +263,5 @@ func TestNonWorktreeExistsErrorHandling(t *testing.T) {
 	// Verify error message is set
 	if m.lastError == "" {
 		t.Error("Expected lastError to be set for non-WORKTREE_EXISTS error")
-	}
-}
-
-func TestTmuxSessionEnvCommand_SetsProfileWhenPresent(t *testing.T) {
-	got := tmuxSessionEnvCommand("session-1", "AWS_PROFILE", "aiman-58f485ff")
-	want := `tmux set-environment -t "session-1" AWS_PROFILE "aiman-58f485ff" 2>/dev/null || true; `
-	if got != want {
-		t.Fatalf("unexpected command:\nwant: %q\ngot:  %q", want, got)
-	}
-}
-
-func TestTmuxSessionEnvCommand_UnsetsProfileWhenEmpty(t *testing.T) {
-	got := tmuxSessionEnvCommand("session-1", "AWS_PROFILE", "")
-	want := `tmux set-environment -t "session-1" -u AWS_PROFILE 2>/dev/null || true; `
-	if got != want {
-		t.Fatalf("unexpected command:\nwant: %q\ngot:  %q", want, got)
-	}
-}
-
-func TestTmuxSessionEnvCommands_OrdersUnsetThenSet(t *testing.T) {
-	got := tmuxSessionEnvCommands("session-1", map[string]string{
-		"AWS_CONFIG_FILE":             "/tmp/config",
-		"AWS_SHARED_CREDENTIALS_FILE": "/tmp/creds",
-	}, "AWS_PROFILE")
-	want := `tmux set-environment -t "session-1" -u AWS_PROFILE 2>/dev/null || true; ` +
-		`tmux set-environment -t "session-1" AWS_CONFIG_FILE "/tmp/config" 2>/dev/null || true; ` +
-		`tmux set-environment -t "session-1" AWS_SHARED_CREDENTIALS_FILE "/tmp/creds" 2>/dev/null || true; `
-	if got != want {
-		t.Fatalf("unexpected command chain:\nwant: %q\ngot:  %q", want, got)
-	}
-}
-
-func TestTmuxSessionEnvCommands_MigratesSharedAWSMode(t *testing.T) {
-	got := tmuxSessionEnvCommands("session-1", map[string]string{
-		"AWS_REGION":         "eu-west-1",
-		"AWS_DEFAULT_REGION": "eu-west-1",
-	}, "AWS_PROFILE", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE")
-	want := `tmux set-environment -t "session-1" -u AWS_CONFIG_FILE 2>/dev/null || true; ` +
-		`tmux set-environment -t "session-1" -u AWS_PROFILE 2>/dev/null || true; ` +
-		`tmux set-environment -t "session-1" -u AWS_SHARED_CREDENTIALS_FILE 2>/dev/null || true; ` +
-		`tmux set-environment -t "session-1" AWS_DEFAULT_REGION "eu-west-1" 2>/dev/null || true; ` +
-		`tmux set-environment -t "session-1" AWS_REGION "eu-west-1" 2>/dev/null || true; `
-	if got != want {
-		t.Fatalf("unexpected shared AWS migration command chain:\nwant: %q\ngot:  %q", want, got)
 	}
 }

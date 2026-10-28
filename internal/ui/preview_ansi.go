@@ -11,7 +11,7 @@ import (
 
 // sealPreviewLines terminates any colour left open at the end of each line.
 //
-// Captured pane content is styled but not self-contained. `tmux capture-pane -e`
+// Captured pane content is styled but not self-contained. A styled capture
 // reproduces whatever the agent painted and stops there, so a pane whose agent
 // sets a foreground and background per line hands back lines that never reset —
 // in one real capture, 53 of 54 lines left colour open and none ended in a

@@ -230,7 +230,7 @@ func agentAPIStatusHint(d domain.Daemon) string {
 		return "Process is up but the socket is down. Press s to restart."
 	}
 	switch d.Driver {
-	case "systemd", "nohup", "tmux":
+	case "systemd", "nohup":
 		if d.Status == domain.DaemonStatusError {
 			return "Service is installed but failed. Press s to restart (clears a crash loop). Logs are below."
 		}

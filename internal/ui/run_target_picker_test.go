@@ -76,62 +76,6 @@ func TestRunTargetPickerSelectThenConfirm(t *testing.T) {
 	}
 }
 
-// tmux and pty sessions run side by side: b flips the backend for this session
-// only, starting from the remote's configured default.
-func TestRunTargetPickerDefaultsToPTY(t *testing.T) {
-	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
-	m = pickKey(m, "1")
-	if m.sessionCfg.SessionBackend != domain.BackendPTY {
-		t.Fatalf("new sessions default to pty, got %q", m.sessionCfg.SessionBackend)
-	}
-}
-
-func TestRunTargetPickerTogglesBackend(t *testing.T) {
-	cfg := twoRemoteCfg()
-	cfg.Remotes[0].SessionBackend = domain.BackendPTY
-
-	m := &Model{cfg: cfg, state: viewStateRunTargetPicker}
-	m = pickKey(m, "1")
-	if m.sessionCfg.SessionBackend != domain.BackendPTY {
-		t.Fatalf("remote default (pty) not seeded, got %q", m.sessionCfg.SessionBackend)
-	}
-
-	m = pickKey(m, "b")
-	if m.sessionCfg.SessionBackend != domain.BackendTmux {
-		t.Fatalf("b must toggle to tmux, got %q", m.sessionCfg.SessionBackend)
-	}
-	if m.state != viewStateRunTargetPicker {
-		t.Fatalf("toggle must stay on the picker, got %v", m.state)
-	}
-
-	m = pickKey(m, "enter")
-	if m.sessionCfg.SessionBackend != domain.BackendTmux {
-		t.Fatalf("toggled backend must carry into sessionCfg, got %q", m.sessionCfg.SessionBackend)
-	}
-}
-
-func TestRunTargetPickerBackendDoesNotLeakBetweenRuns(t *testing.T) {
-	cfg := twoRemoteCfg()
-	cfg.Remotes[0].SessionBackend = domain.BackendPTY
-
-	m := &Model{cfg: cfg, state: viewStateRunTargetPicker}
-	m = pickKey(m, "1")
-	m = pickKey(m, "b") // flip to tmux
-	_ = pickKey(m, "esc")
-
-	m2 := pressMainKey(&Model{cfg: cfg, state: viewStateMain}, 'n')
-	if m2.state != viewStateRunTargetPicker {
-		t.Fatalf("expected picker, got %v", m2.state)
-	}
-	if m2.runTargetSelected != 0 {
-		t.Fatalf("stale selection across wizard runs: %d", m2.runTargetSelected)
-	}
-	m2 = pickKey(m2, "1")
-	if m2.sessionCfg.SessionBackend != domain.BackendPTY {
-		t.Fatalf("previous toggle leaked into a fresh wizard run: %q", m2.sessionCfg.SessionBackend)
-	}
-}
-
 func TestRunTargetPickerIgnoresOutOfRangeIndex(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker}
 	updated, _ := m.handleRunTargetPickerUpdate(pressKey("7"))
@@ -159,7 +103,7 @@ func TestRunTargetPickerEnterWithoutSelectionStays(t *testing.T) {
 func TestRunTargetPickerViewListsRemotes(t *testing.T) {
 	m := &Model{cfg: twoRemoteCfg(), state: viewStateRunTargetPicker, width: 100, height: 40}
 	out := m.renderView()
-	for _, want := range []string{"dev-box", "build-2", "[1]", "[2]", "[pty]"} {
+	for _, want := range []string{"dev-box", "build-2", "[1]", "[2]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in the picker, got:\n%s", want, out)
 		}

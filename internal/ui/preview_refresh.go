@@ -14,7 +14,7 @@ import (
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
-// previewRefreshMsg is one preview poll. session is the tmux name the viewport
+// previewRefreshMsg is one preview poll. session is the terminal name the viewport
 // is keyed by, matching tmuxOutputMsg. id is the aiman session id the cache uses.
 type previewRefreshMsg struct {
 	session    string
@@ -64,13 +64,9 @@ func (m *Model) showCachedPreview(s domain.Session) {
 }
 
 // paneChangedSinceCache reports whether a preview poll has to leave the machine.
-// tmux has no event stream, so it always probes. The probe itself is a short
-// header when the remote hash still matches. A PTY with the same last_output
-// as the cache stays local.
+// The probe itself is a short header when the remote hash still matches. A
+// session with the same last_output as the cache stays local.
 func (m *Model) paneChangedSinceCache(s domain.Session) bool {
-	if !s.IsPTY() {
-		return true
-	}
 	cache := m.paneCache[s.ID]
 	if cache.Text == "" {
 		return true
@@ -82,17 +78,23 @@ func (m *Model) paneChangedSinceCache(s domain.Session) bool {
 	return !ev.lastOutput.Equal(cache.OutputAt)
 }
 
+// sinceLastOutput is how long ago the event stream last saw output from the
+// session, or -1 when it has not.
+func (m *Model) sinceLastOutput(id string) time.Duration {
+	if ev, ok := m.eventSeen[id]; ok && !ev.lastOutput.IsZero() {
+		return time.Since(ev.lastOutput)
+	}
+	return -1
+}
+
 func (m *Model) noteCachedActivity(s domain.Session) {
 	if m.cfg == nil || !m.cfg.Features.InputPromptDetection {
 		return
 	}
 	cache := m.paneCache[s.ID]
-	sinceOut := time.Duration(-1)
+	sinceOut := m.sinceLastOutput(s.ID)
 	sinceTitle := time.Duration(-1)
 	if ev, ok := m.eventSeen[s.ID]; ok {
-		if !ev.lastOutput.IsZero() {
-			sinceOut = time.Since(ev.lastOutput)
-		}
 		if !ev.titleChanged.IsZero() {
 			sinceTitle = time.Since(ev.titleChanged)
 		}

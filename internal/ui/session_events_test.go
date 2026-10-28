@@ -127,9 +127,8 @@ func TestRemoteByHost(t *testing.T) {
 }
 
 // A child session created by an in-pane agent reaches the dashboard through
-// serve's live stream and nothing else. Dropping Backend there made it read as
-// tmux, so pane capture asked tmux for a session that lives in the PTY runtime
-// and the preview never left "Loading…".
+// serve's live stream and nothing else, so the stream has to carry Backend:
+// it is what marks a legacy tmux row.
 func TestSessionFromInfoKeepsTheBackend(t *testing.T) {
 	s := sessionFromInfo("regent0", server.SessionInfo{
 		ID:          "child-1",
@@ -138,7 +137,7 @@ func TestSessionFromInfoKeepsTheBackend(t *testing.T) {
 		TmuxSession: "fix-yield",
 		Backend:     domain.BackendPTY,
 	})
-	if !s.IsPTY() {
+	if s.Backend != domain.BackendPTY {
 		t.Errorf("backend dropped: got %q", s.Backend)
 	}
 	if s.ParentID != "parent-1" {

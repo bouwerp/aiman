@@ -27,7 +27,6 @@ func remoteCreateSpecFrom(cfg domain.SessionConfig) usecase.RemoteCreateSpec {
 		Prompt:         cfg.InitialPrompt,
 		Issue:          cfg.IssueKey,
 		BaseBranch:     cfg.BaseBranch,
-		Backend:        domain.ResolveSessionBackend(cfg.SessionBackend, ""),
 		Quick:          cfg.Quick,
 		ExistingBranch: cfg.ExistingBranch,
 		PromptFree:     cfg.PromptFree,
@@ -87,7 +86,7 @@ func createSessionRemotely(ctx context.Context, mgr *ssh.Manager, cfg domain.Ses
 	}
 	session.RemoteHost = host
 	if session.Backend == "" {
-		session.Backend = cfg.SessionBackend
+		session.Backend = domain.BackendPTY
 	}
 	return session, nil
 }
