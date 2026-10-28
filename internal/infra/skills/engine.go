@@ -199,8 +199,9 @@ func (e *Engine) PrepareSession(ctx context.Context, remote domain.RemoteExecuto
 	name := strings.ToLower(agent.Name)
 	baseCommand := agentBaseCommand(agent.Command)
 	launchRepo, launchRole := kit.Repo, string(kit.Role)
-	if kit.Role == domain.SessionRoleReviewer {
-		// A reviewer gets its own brief; the kit only picks its launch flags.
+	if kit.Role.Hidden() {
+		// A reviewer or handover child gets its own brief; the kit only picks
+		// its launch flags.
 		kit = domain.QualityKit{}
 	}
 

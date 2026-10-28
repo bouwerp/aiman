@@ -117,19 +117,21 @@ func TestRefreshKitKeepsDoneWhen(t *testing.T) {
 	}
 }
 
-func TestPrepareSessionReviewerIgnoresKit(t *testing.T) {
-	remote := newMockRemote()
-	kit := domain.QualityKit{Repo: "o/r", Role: domain.SessionRoleReviewer, DoneWhen: []string{"A"}, Checklists: []domain.Checklist{goChecklist()}}
-	agent := domain.Agent{Name: "Claude Code", Command: "claude"}
-	got, err := NewEngine(&config.Config{}).PrepareSession(context.Background(), remote, kitWT, agent, nil, true, nil, nil, kit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := remote.writtenFiles[kitTaskPath]; ok {
-		t.Fatal("reviewer session must not get a kit task file")
-	}
-	if got.InitialPrompt != "" {
-		t.Fatalf("reviewer prompt %q", got.InitialPrompt)
+func TestPrepareSessionHiddenRoleIgnoresKit(t *testing.T) {
+	for _, role := range []domain.SessionRole{domain.SessionRoleReviewer, domain.SessionRoleHandover} {
+		remote := newMockRemote()
+		kit := domain.QualityKit{Repo: "o/r", Role: role, DoneWhen: []string{"A"}, Checklists: []domain.Checklist{goChecklist()}}
+		agent := domain.Agent{Name: "Claude Code", Command: "claude"}
+		got, err := NewEngine(&config.Config{}).PrepareSession(context.Background(), remote, kitWT, agent, nil, true, nil, nil, kit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := remote.writtenFiles[kitTaskPath]; ok {
+			t.Fatalf("%s session must not get a kit task file", role)
+		}
+		if got.InitialPrompt != "" {
+			t.Fatalf("%s prompt %q", role, got.InitialPrompt)
+		}
 	}
 }
 

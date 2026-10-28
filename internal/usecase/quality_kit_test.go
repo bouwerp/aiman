@@ -232,6 +232,7 @@ func TestKitSkippedForReviewerAndAdHoc(t *testing.T) {
 		{"no repository", domain.SessionConfig{Repo: domain.Repo{Name: "No Repository"}}, false},
 		{"ad hoc", domain.SessionConfig{Repo: domain.Repo{Name: "o/r"}, AdHoc: true}, false},
 		{"reviewer", domain.SessionConfig{Repo: domain.Repo{Name: "o/r"}, Role: domain.SessionRoleReviewer}, false},
+		{"handover", domain.SessionConfig{Repo: domain.Repo{Name: "o/r"}, Role: domain.SessionRoleHandover}, false},
 	}
 	for _, tc := range cases {
 		if got := shouldBuildKit(tc.cfg); got != tc.want {

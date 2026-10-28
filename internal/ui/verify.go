@@ -36,8 +36,8 @@ func (m *Model) startVerify() (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 	s := it.session
-	if s.Role == domain.SessionRoleReviewer {
-		return m, m.showToast("⚠️  A reviewer session cannot start another review.", true, 4*time.Second), true
+	if s.Role.Hidden() {
+		return m, m.showToast("⚠️  A reviewer or handover session cannot start a review.", true, 4*time.Second), true
 	}
 	remote, ok := resolveRemote(m.cfg, s)
 	if !ok {

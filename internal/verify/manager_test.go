@@ -66,13 +66,15 @@ func TestStartIfEnabledDisabled(t *testing.T) {
 	}
 }
 
-func TestStartRejectsReviewerSession(t *testing.T) {
+func TestStartRejectsHiddenSession(t *testing.T) {
 	r := newMRig(t, Config{})
-	rev := r.worker
-	rev.ID, rev.Role = "r0", domain.SessionRoleReviewer
-	r.sessions.sessions[rev.ID] = rev
-	if _, err := r.m.Start(context.Background(), StartRequest{WorkerID: "r0"}); !errors.Is(err, ErrReviewerSession) {
-		t.Fatalf("err %v", err)
+	for _, role := range []domain.SessionRole{domain.SessionRoleReviewer, domain.SessionRoleHandover} {
+		hidden := r.worker
+		hidden.ID, hidden.Role = "h-"+string(role), role
+		r.sessions.sessions[hidden.ID] = hidden
+		if _, err := r.m.Start(context.Background(), StartRequest{WorkerID: hidden.ID}); !errors.Is(err, ErrReviewerSession) {
+			t.Fatalf("%s: err %v", role, err)
+		}
 	}
 }
 

@@ -27,12 +27,12 @@ type KitInput struct {
 }
 
 // shouldBuildKit reports whether a create gets a quality kit: repository
-// sessions only, never ad-hoc, no-repo or reviewer sessions.
+// sessions only, never ad-hoc, no-repo, reviewer or handover sessions.
 func shouldBuildKit(cfg domain.SessionConfig) bool {
 	if cfg.Repo.Name == "" || cfg.Repo.Name == "No Repository" {
 		return false
 	}
-	return !cfg.AdHoc && cfg.Role != domain.SessionRoleReviewer
+	return !cfg.AdHoc && !cfg.Role.Hidden()
 }
 
 // BuildQualityKit lists the repo and user checklists on the session host,

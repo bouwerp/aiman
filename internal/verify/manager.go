@@ -23,8 +23,8 @@ import (
 	"github.com/bouwerp/aiman/internal/todo"
 )
 
-// ErrReviewerSession refuses to review a reviewer, which would recurse.
-var ErrReviewerSession = errors.New("cannot verify a reviewer session")
+// ErrReviewerSession refuses to review a hidden reviewer or handover session.
+var ErrReviewerSession = errors.New("cannot verify a reviewer or handover session")
 
 // defaultPoll is how often a running review's file and process are checked.
 const defaultPoll = 5 * time.Second
@@ -156,7 +156,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Review, error) {
 	if err != nil {
 		return Review{}, err
 	}
-	if worker.Role == domain.SessionRoleReviewer {
+	if worker.Role.Hidden() {
 		return Review{}, ErrReviewerSession
 	}
 	if req.IfEnabled && !m.cfg.BeforePR {
