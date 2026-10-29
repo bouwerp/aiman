@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -97,14 +99,19 @@ func (p *Publisher) publish(ctx context.Context, body []byte, localDir, repoName
 	return p.publishRepo(ctx, repoName, key, body)
 }
 
-// checkPrivate refuses a GitHub docs repository that is not private or
-// internal: design pages describe private code. The first success per
-// repository is remembered; a filesystem path or a non-GitHub URL is not
-// checked.
+// checkPrivate refuses a docs repository that is not private or internal:
+// design pages describe private code. Only a local filesystem location is
+// exempt. A GitHub location must report private or internal visibility (the
+// first success per repository is remembered). Any other location is refused,
+// because its visibility cannot be checked.
 func (p *Publisher) checkPrivate(ctx context.Context) error {
-	slug, ok := githubSlug(strings.TrimSpace(p.Cfg.Repo))
-	if !ok {
+	repo := strings.TrimSpace(p.Cfg.Repo)
+	if isLocalLocation(repo) {
 		return nil
+	}
+	slug, ok := githubSlug(repo)
+	if !ok {
+		return fmt.Errorf("%w: design repo %q: its visibility cannot be checked; use a github.com repository or a local path", ErrInvalid, repo)
 	}
 	p.mu.Lock()
 	seen := p.private[slug]
@@ -130,21 +137,64 @@ func (p *Publisher) checkPrivate(ctx context.Context) error {
 	return nil
 }
 
-// githubSlug is the owner/name of a GitHub repository given as a slug or a
-// github.com URL. Anything else (a path, another host) is not GitHub.
+// isLocalLocation reports whether repo is a local filesystem location: an
+// absolute path, a path starting with ./ or ../, or a file:// URL.
+func isLocalLocation(repo string) bool {
+	return filepath.IsAbs(repo) || strings.HasPrefix(repo, "./") || strings.HasPrefix(repo, "../") ||
+		strings.HasPrefix(strings.ToLower(repo), "file://")
+}
+
+// githubSlugRe matches the owner/name part of a GitHub repository.
+var githubSlugRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+// githubSlug is the owner/name of a GitHub repository given as a slug or as a
+// github.com or www.github.com location (https://, ssh://, ssh://git@ or
+// git@host:), host and scheme matched case-insensitively. Anything else is
+// not GitHub.
 func githubSlug(repo string) (string, bool) {
-	if !isGitLocation(repo) {
-		return repo, repo != ""
+	rest, ok := githubPath(repo)
+	if !ok {
+		return "", false
 	}
-	for _, prefix := range []string{"https://github.com/", "http://github.com/", "ssh://git@github.com/", "git@github.com:"} {
-		if rest, ok := strings.CutPrefix(repo, prefix); ok {
-			rest = strings.TrimSuffix(strings.TrimSuffix(rest, "/"), ".git")
-			if owner, name, ok := strings.Cut(rest, "/"); ok && owner != "" && name != "" && !strings.Contains(name, "/") {
-				return rest, true
-			}
+	rest = strings.TrimSuffix(strings.TrimSuffix(rest, "/"), ".git")
+	if !githubSlugRe.MatchString(rest) || strings.HasPrefix(rest, ".") {
+		return "", false
+	}
+	return rest, true
+}
+
+// githubPath strips a GitHub host prefix from repo and returns the rest. A
+// value with no scheme and no scp-style host is returned whole, as a slug.
+func githubPath(repo string) (string, bool) {
+	if user, rest, ok := strings.Cut(repo, "@"); ok && !strings.Contains(repo, "://") {
+		host, path, ok := strings.Cut(rest, ":")
+		return path, ok && strings.EqualFold(user, "git") && isGitHubHost(host)
+	}
+	if !strings.Contains(repo, "://") {
+		return repo, true
+	}
+	u, err := url.Parse(repo)
+	if err != nil || !isGitHubHost(u.Host) {
+		return "", false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https", "http":
+		if u.User != nil {
+			return "", false
 		}
+	case "ssh":
+		if u.User != nil && u.User.String() != "git" {
+			return "", false
+		}
+	default:
+		return "", false
 	}
-	return "", false
+	return strings.TrimPrefix(u.Path, "/"), true
+}
+
+func isGitHubHost(host string) bool {
+	host = strings.ToLower(host)
+	return host == "github.com" || host == "www.github.com"
 }
 
 func (p *Publisher) publishLocal(base, key string, body []byte) (Result, error) {

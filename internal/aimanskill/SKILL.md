@@ -78,7 +78,7 @@ aiman design publish .aiman_design.md
 aiman todo gate
 ```
 
-Publish prints the page URL and the Pages build state. Give the operator the link. If it prints a local path instead (no docs repository configured), give the operator that path. Only a `.md` file inside your working directory publishes. Publish refuses a docs repository that is not private or internal, and any other failure is `publish_failed` (a publish may take up to 3 minutes); tell the operator the error. Run `aiman todo gate` once, after the first publish: it adds the pinned `Design approved` to-do. Every change republishes the same file, so the link stays the same.
+Publish prints the page URL and the Pages build state. Give the operator the link. If it prints a local path instead (no docs repository configured), give the operator that path. Only a `.md` file inside your working directory publishes. Publish refuses a docs repository that is not private or internal, and one whose visibility it cannot check (only a github.com repository or a local path is accepted), and any other failure is `publish_failed` (a publish may take up to 3 minutes); tell the operator the error. Run `aiman todo gate` once, after the first publish: it adds the pinned `Design approved` to-do. Every change republishes the same file, so the link stays the same.
 
 - Ask the open questions one at a time. With each, explain what it decides, the options and what each costs, so answering builds understanding.
 - When the operator asks you to explain something, at any point, update the page, republish, then answer with the link.

@@ -328,3 +328,64 @@ func TestExecRunDisablesPromptsAndHonoursContext(t *testing.T) {
 		t.Fatal("run ignored the context")
 	}
 }
+
+func TestCheckPrivateByLocation(t *testing.T) {
+	tests := []struct {
+		repo     string
+		wantSlug string // gh is asked about this slug; empty means no gh call
+		refused  bool
+	}{
+		{repo: "acme/docs", wantSlug: "acme/docs"},
+		{repo: "acme/docs.git", wantSlug: "acme/docs"},
+		{repo: "https://github.com/acme/docs", wantSlug: "acme/docs"},
+		{repo: "https://GitHub.com/acme/docs.git", wantSlug: "acme/docs"},
+		{repo: "https://www.github.com/acme/docs", wantSlug: "acme/docs"},
+		{repo: "HTTPS://WWW.GITHUB.COM/acme/docs/", wantSlug: "acme/docs"},
+		{repo: "ssh://git@github.com/acme/docs.git", wantSlug: "acme/docs"},
+		{repo: "ssh://github.com/acme/docs", wantSlug: "acme/docs"},
+		{repo: "ssh://git@www.github.com/acme/docs", wantSlug: "acme/docs"},
+		{repo: "git@github.com:acme/docs.git", wantSlug: "acme/docs"},
+		{repo: "git@GitHub.com:acme/docs", wantSlug: "acme/docs"},
+		{repo: "git@www.github.com:acme/docs", wantSlug: "acme/docs"},
+		{repo: "/srv/git/docs.git"},
+		{repo: "./docs.git"},
+		{repo: "../docs.git"},
+		{repo: "file:///srv/git/docs.git"},
+		{repo: "FILE:///srv/git/docs.git"},
+		{repo: "https://gitlab.com/acme/docs.git", refused: true},
+		{repo: "ssh://git@example.com/acme/docs.git", refused: true},
+		{repo: "git@example.com:acme/docs.git", refused: true},
+		{repo: "https://github.example.com/acme/docs.git", refused: true},
+		{repo: "git@github.example.com:acme/docs.git", refused: true},
+		{repo: "https://github.com.evil.io/acme/docs", refused: true},
+		{repo: "https://github.com/acme", refused: true},
+		{repo: "docs.git", refused: true},
+		{repo: "a/b/c", refused: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.repo, func(t *testing.T) {
+			var calls []string
+			p := &Publisher{Cfg: config.DesignConfig{Repo: tt.repo}, Run: visibilityRun(&calls, "private")}
+			err := p.checkPrivate(context.Background())
+			if tt.refused {
+				if err == nil || !strings.Contains(err.Error(), tt.repo) || !strings.Contains(err.Error(), "visibility cannot be checked") {
+					t.Fatalf("err %v, want a refusal naming the location", err)
+				}
+				if len(calls) != 0 {
+					t.Fatalf("calls %v, want none", calls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if tt.wantSlug != "" {
+				want = 1
+			}
+			if n := countPrefix(calls, "gh api repos/"+tt.wantSlug+" -q .visibility"); n != want || len(calls) != want {
+				t.Fatalf("calls %v, want %d check of %q", calls, want, tt.wantSlug)
+			}
+		})
+	}
+}
