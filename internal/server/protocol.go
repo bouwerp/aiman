@@ -16,6 +16,7 @@ const (
 	CodeAgentBlocked     = "agent_blocked"
 	CodeTimeout          = "timeout"
 	CodeCreateFailed     = "create_failed"
+	CodePublishFailed    = "publish_failed"
 	CodeJiraUnavailable  = "jira_unavailable"
 	CodeProtocolMismatch = "protocol_mismatch"
 	CodeNoReviewer       = "no_reviewer_agent"

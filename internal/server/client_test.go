@@ -118,3 +118,14 @@ func TestRelayReadsRawConnWhenNoHandshakeReader(t *testing.T) {
 	outMu.Unlock()
 	t.Fatalf("got %q, want hello-raw", got)
 }
+
+// design.publish outlives the server's own publish deadline, so the client
+// reads the server's answer instead of timing out first.
+func TestCallDeadline(t *testing.T) {
+	if got := callDeadline("design.publish"); got <= DesignPublishTimeout {
+		t.Fatalf("design.publish deadline %v, want more than %v", got, DesignPublishTimeout)
+	}
+	if got := callDeadline("session.list"); got != 30*time.Second {
+		t.Fatalf("session.list deadline %v, want 30s", got)
+	}
+}

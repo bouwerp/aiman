@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
@@ -168,8 +169,8 @@ func TestPublishLocalWhenUnset(t *testing.T) {
 	if err := os.MkdirAll(gitDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := &Publisher{Home: t.TempDir(), LocalDir: gitDir, Run: realRun(&calls)}
-	res, err := p.Publish(context.Background(), writeSrc(t, "# one\n"), "r", "PROJ-1")
+	p := &Publisher{Home: t.TempDir(), Run: realRun(&calls)}
+	res, err := p.PublishBytes(context.Background(), []byte("# one\n"), gitDir, "r", "PROJ-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,8 +225,106 @@ func TestPublishRecoversDirtyCheckout(t *testing.T) {
 func TestPublishRejectsDotNames(t *testing.T) {
 	p := &Publisher{Home: t.TempDir()}
 	for _, repo := range []string{".", "..", "a/b", ""} {
-		if _, err := p.PublishBytes(context.Background(), []byte("x"), repo, "K-1"); err == nil {
-			t.Errorf("repo %q accepted", repo)
+		if _, err := p.PublishBytes(context.Background(), []byte("x"), "", repo, "K-1"); !errors.Is(err, ErrInvalid) {
+			t.Errorf("repo %q: err %v, want ErrInvalid", repo, err)
 		}
+	}
+}
+
+// visibilityRun answers gh api repos/<slug> with vis and fails the clone, so
+// a publish stops right after the visibility check.
+func visibilityRun(calls *[]string, vis string) func(context.Context, string, string, ...string) (string, error) {
+	return func(_ context.Context, _ string, name string, args ...string) (string, error) {
+		call := name + " " + strings.Join(args, " ")
+		*calls = append(*calls, call)
+		if strings.HasPrefix(call, "gh api repos/") && strings.HasSuffix(call, "-q .visibility") {
+			return vis, nil
+		}
+		return "", errors.New("no clone in tests")
+	}
+}
+
+func countPrefix(calls []string, prefix string) int {
+	n := 0
+	for _, c := range calls {
+		if strings.HasPrefix(c, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestPublishRefusesPublicRepo(t *testing.T) {
+	for _, repo := range []string{"acme/docs", "https://github.com/acme/docs.git", "git@github.com:acme/docs.git"} {
+		var calls []string
+		p := &Publisher{Cfg: config.DesignConfig{Repo: repo}, Home: t.TempDir(), Run: visibilityRun(&calls, "public")}
+		_, err := p.PublishBytes(context.Background(), []byte("x"), "", "r", "K-1")
+		if err == nil || !strings.Contains(err.Error(), "public") {
+			t.Fatalf("%s: err %v, want a public-repo refusal", repo, err)
+		}
+		if countPrefix(calls, "gh api repos/acme/docs -q .visibility") != 1 || countPrefix(calls, "gh repo clone")+countPrefix(calls, "git clone") != 0 {
+			t.Fatalf("%s: calls %v, want one visibility check and no clone", repo, calls)
+		}
+	}
+}
+
+func TestPublishChecksVisibilityOnce(t *testing.T) {
+	for _, vis := range []string{"private", "internal"} {
+		var calls []string
+		p := &Publisher{Cfg: config.DesignConfig{Repo: "acme/docs"}, Home: t.TempDir(), Run: visibilityRun(&calls, vis)}
+		for range 2 {
+			_, err := p.PublishBytes(context.Background(), []byte("x"), "", "r", "K-1")
+			if err == nil || !strings.Contains(err.Error(), "clone") {
+				t.Fatalf("%s: err %v, want the clone failure", vis, err)
+			}
+		}
+		if n := countPrefix(calls, "gh api repos/acme/docs -q .visibility"); n != 1 {
+			t.Fatalf("%s: %d visibility checks, want 1: %v", vis, n, calls)
+		}
+	}
+}
+
+func TestPublishSkipsVisibilityForPath(t *testing.T) {
+	var calls []string
+	p := newPub(t, bareRepo(t), &calls)
+	if _, err := p.Publish(context.Background(), writeSrc(t, "# one\n"), "r", "PROJ-1"); err != nil {
+		t.Fatal(err)
+	}
+	if n := countPrefix(calls, "gh api repos/") - countPrefix(calls, "gh api repos/"+p.Cfg.Repo+"/pages"); n != 0 {
+		t.Fatalf("visibility checked for a filesystem repo: %v", calls)
+	}
+}
+
+func TestLockFileHonoursContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock")
+	unlock, err := lockFile(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := lockFile(ctx, path); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err %v, want a deadline error", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("lock wait ignored the context")
+	}
+}
+
+func TestExecRunDisablesPromptsAndHonoursContext(t *testing.T) {
+	out, err := ExecRun(context.Background(), t.TempDir(), "sh", "-c", "echo $GIT_TERMINAL_PROMPT")
+	if err != nil || out != "0" {
+		t.Fatalf("GIT_TERMINAL_PROMPT = %q, %v; want 0", out, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := ExecRun(ctx, t.TempDir(), "sleep", "30"); err == nil {
+		t.Fatal("a cancelled run succeeded")
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("run ignored the context")
 	}
 }

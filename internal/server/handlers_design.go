@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/design"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -19,7 +20,13 @@ func (s *Server) SetDesignPublisher(p *design.Publisher) {
 	s.designer = p
 }
 
+// DesignPublishTimeout bounds one design.publish: clone, fetch, push and the
+// Pages lookups. CallRaw waits a little longer so it reads the answer.
+const DesignPublishTimeout = 3 * time.Minute
+
 func (s *Server) handleDesignPublish(ctx context.Context, req Request) Response {
+	ctx, cancel := context.WithTimeout(ctx, DesignPublishTimeout)
+	defer cancel()
 	if s.designer == nil {
 		return errResp(req.ID, CodeInvalidParams, "design publishing is not available")
 	}
@@ -56,11 +63,12 @@ func (s *Server) handleDesignPublish(ctx context.Context, req Request) Response 
 	if key == "" {
 		key = design.Key(sess.IssueKey, sess.Branch)
 	}
-	pub := *s.designer
-	pub.LocalDir = gitDirOf(wd)
-	res, err := pub.PublishBytes(ctx, md, repoBase(sess.RepoName), key)
-	if err != nil {
+	res, err := s.designer.PublishBytes(ctx, md, gitDirOf(wd), repoBase(sess.RepoName), key)
+	if errors.Is(err, design.ErrInvalid) {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	if err != nil {
+		return errResp(req.ID, CodePublishFailed, err.Error())
 	}
 	accepted, rejected, deferred := design.CountTriage(string(md))
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventDesignPublished, map[string]any{
@@ -117,8 +125,8 @@ func gitDirOf(dir string) string {
 }
 
 // readConfined reads file (relative to wd) after resolving symlinks, and only
-// when the result lies inside the session's working directory or worktree, so
-// an agent cannot publish files such as ~/.aiman/config.yaml.
+// when it is a .md file inside the session's working directory or worktree,
+// so an agent cannot publish files such as ~/.aiman/config.yaml.
 func readConfined(sess domain.Session, wd, file string) ([]byte, error) {
 	src := file
 	if !filepath.IsAbs(src) {
@@ -127,6 +135,9 @@ func readConfined(sess domain.Session, wd, file string) ([]byte, error) {
 	real, err := filepath.EvalSymlinks(src)
 	if err != nil {
 		return nil, fmt.Errorf("design file: %w", err)
+	}
+	if !isMarkdown(src) || !isMarkdown(real) {
+		return nil, errors.New("design file must be a .md file")
 	}
 	for _, root := range []string{wd, sess.WorktreePath} {
 		if root == "" {
@@ -145,4 +156,8 @@ func readConfined(sess domain.Session, wd, file string) ([]byte, error) {
 		}
 	}
 	return nil, errors.New("design file must be inside the session's working directory")
+}
+
+func isMarkdown(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".md")
 }

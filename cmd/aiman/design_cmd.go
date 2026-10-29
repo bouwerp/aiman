@@ -64,7 +64,7 @@ func callDesign(params map[string]any) error {
 	if err != nil {
 		code := server.CodeServerNotRunning
 		if !errors.Is(err, server.ErrServerNotRunning) {
-			code = server.CodeInvalidParams
+			code = server.CodePublishFailed
 		}
 		writeCLIError(code, err.Error())
 		return err

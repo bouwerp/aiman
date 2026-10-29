@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
@@ -35,21 +36,27 @@ type Result struct {
 	Local bool `json:"local,omitempty"`
 }
 
+// ErrInvalid marks a publish refused for its input (a bad key or repository
+// name) rather than failed while publishing.
+var ErrInvalid = errors.New("invalid design publish")
+
 // Publisher copies a page into a host checkout of the docs repository and
-// pushes it to main.
+// pushes it to main. Share one Publisher per process: it remembers which
+// repositories passed the visibility check.
 type Publisher struct {
 	Cfg config.DesignConfig
 	// Home holds .aiman/design-repo and its lock.
 	Home string
-	// LocalDir is the session's git directory, where a page lands when
-	// Cfg.Repo is unset.
-	LocalDir string
 	// Run executes a command in dir and returns its combined output.
 	Run func(ctx context.Context, dir string, name string, args ...string) (string, error)
+
+	mu      sync.Mutex
+	private map[string]bool // GitHub repositories seen private or internal
 }
 
 // Publish copies src to <design.dir>/<repoName>/<key>.md and returns where it
-// went. Concurrent calls on one host serialise on a file lock.
+// went. Without a docs repository the page lands beside src. Concurrent calls
+// on one host serialise on a file lock.
 func (p *Publisher) Publish(ctx context.Context, src, repoName, key string) (Result, error) {
 	body, err := os.ReadFile(src)
 	if err != nil {
@@ -59,26 +66,30 @@ func (p *Publisher) Publish(ctx context.Context, src, repoName, key string) (Res
 }
 
 // PublishBytes publishes body, so a caller that also inspects the page works
-// from exactly the bytes that were published. Local mode needs LocalDir.
-func (p *Publisher) PublishBytes(ctx context.Context, body []byte, repoName, key string) (Result, error) {
-	return p.publish(ctx, body, "", repoName, key)
+// from exactly the bytes that were published. Without a docs repository the
+// page lands under localDir, the session's git directory.
+func (p *Publisher) PublishBytes(ctx context.Context, body []byte, localDir, repoName, key string) (Result, error) {
+	return p.publish(ctx, body, localDir, repoName, key)
 }
 
 func safeName(s string) bool {
 	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\`)
 }
 
-func (p *Publisher) publish(ctx context.Context, body []byte, srcDir, repoName, key string) (Result, error) {
+func (p *Publisher) publish(ctx context.Context, body []byte, localDir, repoName, key string) (Result, error) {
 	if !safeName(key) {
-		return Result{}, fmt.Errorf("invalid design key %q", key)
+		return Result{}, fmt.Errorf("%w: key %q", ErrInvalid, key)
 	}
 	if !safeName(repoName) {
-		return Result{}, fmt.Errorf("invalid repo name %q", repoName)
+		return Result{}, fmt.Errorf("%w: repo name %q", ErrInvalid, repoName)
 	}
 	if strings.TrimSpace(p.Cfg.Repo) == "" {
-		return p.publishLocal(srcDir, key, body)
+		return p.publishLocal(localDir, key, body)
 	}
-	unlock, err := lockFile(filepath.Join(p.Home, lockRel))
+	if err := p.checkPrivate(ctx); err != nil {
+		return Result{}, err
+	}
+	unlock, err := lockFile(ctx, filepath.Join(p.Home, lockRel))
 	if err != nil {
 		return Result{}, err
 	}
@@ -86,11 +97,57 @@ func (p *Publisher) publish(ctx context.Context, body []byte, srcDir, repoName, 
 	return p.publishRepo(ctx, repoName, key, body)
 }
 
-func (p *Publisher) publishLocal(srcDir, key string, body []byte) (Result, error) {
-	base := p.LocalDir
-	if base == "" {
-		base = srcDir
+// checkPrivate refuses a GitHub docs repository that is not private or
+// internal: design pages describe private code. The first success per
+// repository is remembered; a filesystem path or a non-GitHub URL is not
+// checked.
+func (p *Publisher) checkPrivate(ctx context.Context) error {
+	slug, ok := githubSlug(strings.TrimSpace(p.Cfg.Repo))
+	if !ok {
+		return nil
 	}
+	p.mu.Lock()
+	seen := p.private[slug]
+	p.mu.Unlock()
+	if seen {
+		return nil
+	}
+	out, err := p.Run(ctx, p.Home, "gh", "api", "repos/"+slug, "-q", ".visibility")
+	if err != nil {
+		return fmt.Errorf("check visibility of %s: %w: %s", slug, err, firstLine(out))
+	}
+	switch vis := strings.ToLower(strings.TrimSpace(out)); vis {
+	case "private", "internal":
+	default:
+		return fmt.Errorf("design repo %s is %s; design pages publish only to a private or internal repository", slug, vis)
+	}
+	p.mu.Lock()
+	if p.private == nil {
+		p.private = map[string]bool{}
+	}
+	p.private[slug] = true
+	p.mu.Unlock()
+	return nil
+}
+
+// githubSlug is the owner/name of a GitHub repository given as a slug or a
+// github.com URL. Anything else (a path, another host) is not GitHub.
+func githubSlug(repo string) (string, bool) {
+	if !isGitLocation(repo) {
+		return repo, repo != ""
+	}
+	for _, prefix := range []string{"https://github.com/", "http://github.com/", "ssh://git@github.com/", "git@github.com:"} {
+		if rest, ok := strings.CutPrefix(repo, prefix); ok {
+			rest = strings.TrimSuffix(strings.TrimSuffix(rest, "/"), ".git")
+			if owner, name, ok := strings.Cut(rest, "/"); ok && owner != "" && name != "" && !strings.Contains(name, "/") {
+				return rest, true
+			}
+		}
+	}
+	return "", false
+}
+
+func (p *Publisher) publishLocal(base, key string, body []byte) (Result, error) {
 	if base == "" {
 		return Result{}, errors.New("no directory for a local design page")
 	}

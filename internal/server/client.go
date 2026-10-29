@@ -43,7 +43,7 @@ func Call(socketPath, method string, params any) (Response, error) {
 		return Response{}, fmt.Errorf("%w: %v", ErrServerNotRunning, err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(callDeadline(method)))
 	if _, err := conn.Write(append(body, '\n')); err != nil {
 		return Response{}, err
 	}
@@ -196,7 +196,7 @@ func CallRaw(socketPath, method string, rawParams json.RawMessage) (Response, er
 		return Response{}, fmt.Errorf("%w: %v", ErrServerNotRunning, err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(callDeadline(method)))
 	if _, err := conn.Write(append(body, '\n')); err != nil {
 		return Response{}, err
 	}
@@ -276,3 +276,12 @@ func (e *EventsConn) Next() (SessionEvent, error) {
 
 // Close ends the stream.
 func (e *EventsConn) Close() error { return e.conn.Close() }
+
+// callDeadline is how long CallRaw waits for method's answer: 30s, or a
+// little past the server's own limit for design.publish.
+func callDeadline(method string) time.Duration {
+	if method == "design.publish" {
+		return DesignPublishTimeout + 15*time.Second
+	}
+	return 30 * time.Second
+}
