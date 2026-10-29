@@ -89,6 +89,8 @@ func run() error {
 			return runUsage(parsed.Rest[1:], os.Stdout)
 		case "agents":
 			return runAgents(parsed.Rest[1:], os.Stdout)
+		case "design":
+			return runDesign(parsed.Rest[1:], os.Getenv)
 		case "verify":
 			return runVerify(parsed.Rest[1:])
 		case "slack":

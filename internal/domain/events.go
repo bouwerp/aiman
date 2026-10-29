@@ -31,6 +31,9 @@ const (
 	// EventDesignApproved records the operator's approval that closed a
 	// session's design gate; its payload carries the approving quote.
 	EventDesignApproved EventKind = "design.approved"
+	// EventDesignPublished records a design page push: revision, url and the
+	// Decisions-table triage counts.
+	EventDesignPublished EventKind = "design.published"
 	// EventConsultFinished records a consult's report on its parent's ledger:
 	// objection counts by severity and the verdict.
 	EventConsultFinished EventKind = "consult.finished"

@@ -237,3 +237,21 @@ func TestMarshalServeConfigCarriesPreferred(t *testing.T) {
 		t.Fatalf("omitted preferred = %v", omitted.Agents.Preferred)
 	}
 }
+
+func TestMarshalServeConfigCopiesDesign(t *testing.T) {
+	cfg := &Config{Design: DesignConfig{Repo: "acme/docs", Dir: "docs/d", Site: "https://acme.example/"}}
+	body, err := cfg.MarshalServeConfig("h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ServeConfig
+	if err := yaml.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Design != cfg.Design {
+		t.Fatalf("design = %+v", got.Design)
+	}
+	if (DesignConfig{}).DirOrDefault() != "docs/designs" || got.Design.DirOrDefault() != "docs/d" {
+		t.Fatal("DirOrDefault")
+	}
+}

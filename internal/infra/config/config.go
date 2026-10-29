@@ -36,6 +36,8 @@ type Config struct {
 	Verify VerifyConfig `yaml:"verify,omitempty"`
 	// Handover configures the handover child agent.
 	Handover HandoverConfig `yaml:"handover,omitempty"`
+	// Design configures where coordinator design pages are published.
+	Design DesignConfig `yaml:"design,omitempty"`
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
@@ -71,6 +73,8 @@ type ServeConfig struct {
 	Verify VerifyConfig `yaml:"verify,omitempty"`
 	// Handover configures the handover child agent.
 	Handover HandoverConfig `yaml:"handover,omitempty"`
+	// Design configures where coordinator design pages are published.
+	Design DesignConfig `yaml:"design,omitempty"`
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
@@ -224,6 +228,29 @@ func (h HandoverConfig) ChildTimeout() time.Duration {
 	return DefaultHandoverTimeout
 }
 
+// DefaultDesignDir is the directory design pages live in when design.dir is
+// unset.
+const DefaultDesignDir = "docs/designs"
+
+// DesignConfig names the docs repository design pages are published to.
+type DesignConfig struct {
+	// Repo is the owner/name of the docs repository, or a git URL or local
+	// path. Empty keeps pages in the session's git directory.
+	Repo string `yaml:"repo,omitempty"`
+	// Dir is the directory in Repo holding the pages.
+	Dir string `yaml:"dir,omitempty"`
+	// Site is the base URL of the rendered site. Empty asks GitHub Pages.
+	Site string `yaml:"site,omitempty"`
+}
+
+// DirOrDefault is Dir, or DefaultDesignDir when unset.
+func (d DesignConfig) DirOrDefault() string {
+	if dir := strings.Trim(strings.TrimSpace(d.Dir), "/"); dir != "" {
+		return dir
+	}
+	return DefaultDesignDir
+}
+
 // MarshalServeConfig serializes the settings a remote Agent API needs.
 func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 	if c == nil {
@@ -240,6 +267,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Notifications: c.NotificationsFor(host),
 		Verify:        c.Verify,
 		Handover:      c.Handover,
+		Design:        c.Design,
 		Repos:         c.Repos,
 		Roles:         c.Roles,
 	})

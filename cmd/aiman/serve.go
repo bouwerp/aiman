@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/debuglog"
+	"github.com/bouwerp/aiman/internal/design"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/infra/agent"
@@ -230,6 +231,8 @@ func runServe() error {
 		srv.SetHandovers(handovers)
 		defer handovers.Close()
 	}
+
+	srv.SetDesignPublisher(&design.Publisher{Cfg: cfg.Design, Home: home, Run: design.ExecRun})
 
 	childTracker := &coordinator.Tracker{
 		Todos:    srv.TodoAccess(),

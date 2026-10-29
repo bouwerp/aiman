@@ -15,6 +15,7 @@ import (
 	"github.com/bouwerp/aiman/internal/agentupdate"
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/coordinator"
+	"github.com/bouwerp/aiman/internal/design"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -129,6 +130,8 @@ type Server struct {
 	// handovers runs handover child agents; nil until SetHandovers, and then
 	// writeHandover keeps the mechanical write and enqueues the memory job.
 	handovers *handoverchild.Manager
+	// designer publishes design pages; nil until SetDesignPublisher.
+	designer *design.Publisher
 
 	// agents is the model tiers from this host's config; agentInstalled
 	// reports whether a command resolves on this host. session.create with no
@@ -374,6 +377,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleAgentsUpdate(ctx, req)
 	case "agents.move_prefix":
 		return s.handleAgentsMovePrefix(ctx, req)
+	case "design.publish":
+		return s.handleDesignPublish(ctx, req)
 	case "handover.write":
 		return s.handleHandoverWrite(ctx, req)
 	case "handover.point":
