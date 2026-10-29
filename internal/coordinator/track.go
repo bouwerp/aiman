@@ -161,9 +161,28 @@ func (t *Tracker) trackConsult(ctx context.Context, parent domain.Session, it do
 			"high": r.High, "medium": r.Medium, "low": r.Low, "verdict": r.Verdict,
 		})
 	}
+	t.steerConsultReport(parent, it, r.Verdict, md)
 	if t.Retire != nil {
 		t.Retire(ctx, child)
 	}
+}
+
+// consultNoteLimit caps the report text a consult note carries.
+const consultNoteLimit = 16 << 10
+
+// steerConsultReport hands a settled consult's report to its coordinator.
+// Retire removes the consult's scratch directory, so this note is the only
+// copy of the objections the coordinator gets.
+func (t *Tracker) steerConsultReport(parent domain.Session, it domain.TodoItem, verdict, md string) {
+	if t.Steer == nil {
+		return
+	}
+	md = strings.TrimSpace(md)
+	if len(md) > consultNoteLimit {
+		md = strings.ToValidUTF8(md[:consultNoteLimit], "") + "\n[report truncated]"
+	}
+	t.Steer(parent.ID, fmt.Sprintf("[aiman] consult for %s finished with verdict %s. Copy each objection into the design page's Decisions table with your triage (accept, reject or defer, and why), then republish:\n%s",
+		it.ID, verdict, md))
 }
 
 // landed reports whether the child's PR targets the parent's branch and is

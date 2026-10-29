@@ -420,8 +420,15 @@ func TestConsultSettlesOnReport(t *testing.T) {
 	if len(*retired) != 1 || (*retired)[0] != "c1" {
 		t.Fatalf("retired = %v, want c1", *retired)
 	}
-	if len(f.steered) != 0 {
-		t.Fatalf("steered %+v", f.steered)
+	// Retire removes the scratch directory, so the report reaches the
+	// coordinator only through this note.
+	if len(f.steered) != 1 || f.steered[0].session != "p" {
+		t.Fatalf("steered %+v, want one note to p", f.steered)
+	}
+	for _, want := range []string{"t3", "reject", "- [high] a", "Decisions"} {
+		if !strings.Contains(f.steered[0].text, want) {
+			t.Fatalf("note %q missing %q", f.steered[0].text, want)
+		}
 	}
 }
 
