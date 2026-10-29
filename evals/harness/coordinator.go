@@ -32,14 +32,19 @@ func (c *evalCoordinator) Emit(_ context.Context, sessionID, _ string, _ domain.
 	return nil
 }
 
-// EnableCoordinator makes claude the installed worker tier, so session.create
-// --for can pick an agent, and attaches the production coordinator.Tracker.
-// Its PRs come from SetChildPR, its reports are the child's report file on
-// disk, and it steers through serve's real steerer. It runs only on TrackOnce,
-// never on a timer.
+// EnableCoordinator makes claude the installed smart and worker tiers, so
+// session.create --for and --consult can pick an agent, and attaches the
+// production coordinator.Tracker. Its PRs come from SetChildPR, its reports
+// are the child's report file on disk, it steers through serve's real steerer,
+// and it records and retires consults through serve. It runs only on
+// TrackOnce, never on a timer. Consult scratch directories go under the
+// harness dir.
 func (h *Harness) EnableCoordinator() {
-	h.srv.SetAgentChoice(config.AgentsConfig{Preferred: config.PreferredFromCommands("claude")},
-		func(context.Context, string) bool { return true })
+	h.srv.SetAgentChoice(config.AgentsConfig{
+		Smart:     config.PreferredFromCommands("claude"),
+		Preferred: config.PreferredFromCommands("claude"),
+	}, func(context.Context, string) bool { return true })
+	h.srv.SetConsultDir(filepath.Join(h.Dir, "consults"))
 	c := &evalCoordinator{prs: map[string]coordinator.PRState{}}
 	c.tracker = &coordinator.Tracker{
 		Todos:    h.srv.TodoAccess(),
@@ -61,6 +66,8 @@ func (h *Harness) EnableCoordinator() {
 			h.srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: domain.AuthorAiman, Text: text})
 		},
 		Notify: c,
+		Ledger: h.srv.AppendLedger,
+		Retire: h.srv.RetireConsult,
 	}
 	h.coord = c
 }

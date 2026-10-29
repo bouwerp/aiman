@@ -121,10 +121,14 @@ const SessionRoleReviewer SessionRole = "reviewer"
 // handover from its transcript and proposes memory candidates.
 const SessionRoleHandover SessionRole = "handover"
 
+// SessionRoleConsult is a hidden smart-tier child that challenges its
+// parent's design read-only and reports objections and a verdict.
+const SessionRoleConsult SessionRole = "consult"
+
 // Hidden reports whether sessions with this role are aiman's own helpers
-// (reviewer, handover) rather than work the user steers.
+// (reviewer, handover, consult) rather than work the user steers.
 func (r SessionRole) Hidden() bool {
-	return r == SessionRoleReviewer || r == SessionRoleHandover
+	return r == SessionRoleReviewer || r == SessionRoleHandover || r == SessionRoleConsult
 }
 
 // PR-watch overrides stored in Session.WatchPR.

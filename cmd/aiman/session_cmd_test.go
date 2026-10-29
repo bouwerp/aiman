@@ -137,3 +137,18 @@ func TestSessionCreateTierFlags(t *testing.T) {
 		t.Fatalf("params = %v", params)
 	}
 }
+
+func TestSessionCreateConsultFlag(t *testing.T) {
+	flags, _ := takeFlags([]string{"--for", "t3", "--consult", "--brief-file", "x"})
+	if flags["brief-file"] != "x" {
+		t.Fatalf("--consult swallowed the next flag: %v", flags)
+	}
+	delete(flags, "brief-file")
+	params, err := sessionCreateParams(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["consult"] != true || params["for"] != "t3" {
+		t.Fatalf("params = %v, want consult true for t3", params)
+	}
+}

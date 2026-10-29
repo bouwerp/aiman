@@ -513,6 +513,7 @@ func LifecycleCases() []Case {
 		CaseChildNoEvidence(),
 		CaseChildVanished(),
 		CaseDesignGate(),
+		CaseConsultClosesOnReport(),
 	}
 }
 

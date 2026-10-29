@@ -28,6 +28,9 @@ const (
 	CodeGateNeedsOperator = "gate_needs_operator"
 	// CodeDesignNotApproved refuses delegation while the parent's design gate is open.
 	CodeDesignNotApproved = "design_not_approved"
+	// CodeConsultNeedsSmart refuses a consult when the smart tier has no
+	// installed agent; a consult never falls back to the worker tier.
+	CodeConsultNeedsSmart = "consult_needs_smart"
 )
 
 type Request struct {

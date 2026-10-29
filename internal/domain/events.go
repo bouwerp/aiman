@@ -31,6 +31,9 @@ const (
 	// EventDesignApproved records the operator's approval that closed a
 	// session's design gate; its payload carries the approving quote.
 	EventDesignApproved EventKind = "design.approved"
+	// EventConsultFinished records a consult's report on its parent's ledger:
+	// objection counts by severity and the verdict.
+	EventConsultFinished EventKind = "consult.finished"
 )
 
 // EventActor is who caused the event. `unknown` exists for rows imported from a

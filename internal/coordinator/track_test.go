@@ -372,3 +372,81 @@ func (f *fakeExec) Execute(_ context.Context, cmd string) (string, error) {
 	f.cmd = cmd
 	return f.out, nil
 }
+
+type ledgerRow struct {
+	session string
+	kind    domain.EventKind
+	payload map[string]any
+}
+
+// consultFixture turns the fixture's child c1 into a consult with no PR.
+func consultFixture(report string) (*fixture, *[]ledgerRow, *[]string) {
+	f := newFixture("child:c1", PRState{})
+	f.report = func() (string, error) { return report, nil }
+	sessions := []domain.Session{
+		{ID: "p", Name: "parent", Branch: "feat/x"},
+		{ID: "c1", Name: "consult", ParentID: "p", Role: domain.SessionRoleConsult},
+	}
+	f.tracker.Sessions = func() ([]domain.Session, error) { return sessions, nil }
+	rows := &[]ledgerRow{}
+	retired := &[]string{}
+	f.tracker.Ledger = func(_ context.Context, id string, kind domain.EventKind, payload map[string]any) {
+		*rows = append(*rows, ledgerRow{session: id, kind: kind, payload: payload})
+	}
+	f.tracker.Retire = func(_ context.Context, child domain.Session) { *retired = append(*retired, child.ID) }
+	return f, rows, retired
+}
+
+func TestConsultSettlesOnReport(t *testing.T) {
+	report := "## Objections\n\n- [high] a\n- [medium] b\n- [low] c\n- [low] d\n\n## Verdict\n\nreject\n"
+	f, rows, retired := consultFixture(report)
+	f.tracker.TrackOnce(context.Background())
+
+	if it := f.todos.t3(t); it.State != domain.TodoDone {
+		t.Fatalf("t3 state = %s, want done", it.State)
+	}
+	if len(f.probed) != 0 {
+		t.Fatalf("the tracker asked for a consult's PR: %v", f.probed)
+	}
+	if len(*rows) != 1 || (*rows)[0].session != "p" || (*rows)[0].kind != domain.EventConsultFinished {
+		t.Fatalf("ledger = %+v, want one consult.finished on p", *rows)
+	}
+	want := map[string]any{"child": "c1", "todo": "t3", "high": 1, "medium": 1, "low": 2, "verdict": "reject"}
+	for k, v := range want {
+		if (*rows)[0].payload[k] != v {
+			t.Fatalf("payload[%s] = %v, want %v", k, (*rows)[0].payload[k], v)
+		}
+	}
+	if len(*retired) != 1 || (*retired)[0] != "c1" {
+		t.Fatalf("retired = %v, want c1", *retired)
+	}
+	if len(f.steered) != 0 {
+		t.Fatalf("steered %+v", f.steered)
+	}
+}
+
+func TestConsultWaitsForReport(t *testing.T) {
+	f, rows, retired := consultFixture("")
+	f.tracker.TrackOnce(context.Background())
+	if it := f.todos.t3(t); it.State != domain.TodoPending {
+		t.Fatalf("t3 state = %s, want pending", it.State)
+	}
+	if len(*rows)+len(*retired)+len(f.steered) != 0 {
+		t.Fatalf("a missing report did something: rows %v retired %v steered %v", *rows, *retired, f.steered)
+	}
+}
+
+func TestConsultUnparsableReportAsksOnce(t *testing.T) {
+	f, rows, retired := consultFixture("I looked; it seems fine.\n")
+	f.tracker.TrackOnce(context.Background())
+	f.tracker.TrackOnce(context.Background())
+	if it := f.todos.t3(t); it.State != domain.TodoPending {
+		t.Fatalf("t3 state = %s, want pending", it.State)
+	}
+	if len(f.steered) != 1 || f.steered[0].session != "p" {
+		t.Fatalf("steered = %+v, want one note to p", f.steered)
+	}
+	if len(*rows)+len(*retired) != 0 {
+		t.Fatalf("rows %v retired %v", *rows, *retired)
+	}
+}

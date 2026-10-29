@@ -202,6 +202,7 @@ func runServe() error {
 
 	scanner := agent.NewScanner(localExec)
 	srv.SetAgentChoice(cfg.Agents, scanner.Installed)
+	srv.SetConsultDir(filepath.Join(dir, "consults"))
 	verifyDeps := srv.VerifyDeps(verify.NewStore(filepath.Join(dir, "reviews")), func(command string) bool {
 		return scanner.Installed(ctx, command)
 	})
@@ -244,6 +245,8 @@ func runServe() error {
 		Steer: func(id, text string) {
 			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: domain.AuthorAiman, Text: text})
 		},
+		Ledger: srv.AppendLedger,
+		Retire: srv.RetireConsult,
 	}
 	if rec := srv.NotifyRecorder(); rec != nil {
 		childTracker.Notify = rec

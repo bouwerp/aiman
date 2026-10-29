@@ -56,6 +56,11 @@ type Tracker struct {
 	Report func(ctx context.Context, child domain.Session) (string, error)
 	// Steer queues a note for the parent's agent as aiman. nil drops it.
 	Steer func(parentID, text string)
+	// Ledger appends a session_events row as aiman. nil drops it.
+	Ledger func(ctx context.Context, sessionID string, kind domain.EventKind, payload map[string]any)
+	// Retire stops and forgets a consult whose report settled its item and
+	// removes its scratch directory. nil leaves the consult running.
+	Retire func(ctx context.Context, child domain.Session)
 
 	// asked holds the items whose coordinator was already told the child
 	// returned no evidence, so the note is sent once per serve run.
@@ -80,8 +85,8 @@ func (t *Tracker) Run(ctx context.Context, interval time.Duration) {
 
 // TrackOnce walks every session's list and settles each open item linked to
 // a child: done when the child's PR has landed and its report cites evidence,
-// unlinked when the child session no longer exists. A failure on one item is
-// logged and skipped.
+// or, for a consult, when its report parses; unlinked when the child session
+// no longer exists. A failure on one item is logged and skipped.
 func (t *Tracker) TrackOnce(ctx context.Context) {
 	sessions, err := t.Sessions()
 	if err != nil {
@@ -108,6 +113,10 @@ func (t *Tracker) TrackOnce(ctx context.Context) {
 				t.unlink(ctx, parent, it, childID)
 				continue
 			}
+			if child.Role == domain.SessionRoleConsult {
+				t.trackConsult(ctx, parent, it, child)
+				continue
+			}
 			if !t.landed(ctx, parent, child) {
 				continue
 			}
@@ -117,6 +126,41 @@ func (t *Tracker) TrackOnce(ctx context.Context) {
 			}
 			t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone })
 		}
+	}
+}
+
+// trackConsult settles a consult's item on its report alone: a consult has
+// no branch and no PR. An absent report means the consult is still working;
+// one that does not parse asks the coordinator once. Once the item is done the
+// counts and verdict go on the parent's ledger and the consult is retired.
+func (t *Tracker) trackConsult(ctx context.Context, parent domain.Session, it domain.TodoItem, child domain.Session) {
+	if t.Report == nil {
+		return
+	}
+	md, err := t.Report(ctx, child)
+	if err != nil {
+		log.Printf("coordinator: consult report of %s: %v", child.ID, err)
+		return
+	}
+	if strings.TrimSpace(md) == "" {
+		return
+	}
+	r, err := ParseConsultReport(md)
+	if err != nil {
+		t.askForReport(parent, it, child, err)
+		return
+	}
+	if !t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone }) {
+		return
+	}
+	if t.Ledger != nil {
+		t.Ledger(ctx, parent.ID, domain.EventConsultFinished, map[string]any{
+			"child": child.ID, "todo": it.ID,
+			"high": r.High, "medium": r.Medium, "low": r.Low, "verdict": r.Verdict,
+		})
+	}
+	if t.Retire != nil {
+		t.Retire(ctx, child)
 	}
 }
 

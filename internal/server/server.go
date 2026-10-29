@@ -135,6 +135,9 @@ type Server struct {
 	// agent picks from the tiers. Both stay empty until SetAgentChoice.
 	agents         config.AgentsConfig
 	agentInstalled func(ctx context.Context, command string) bool
+	// consultDir holds consult scratch directories; empty is
+	// ~/.aiman/consults (SetConsultDir).
+	consultDir string
 
 	// agentUpdates reports and applies agent CLI updates; nil until
 	// SetAgentUpdates. agentHost names this host in its replies.

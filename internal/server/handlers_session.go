@@ -607,6 +607,10 @@ type createParams struct {
 	// contain). BriefFile is a path on this host to read it from instead.
 	Brief     string `json:"brief"`
 	BriefFile string `json:"brief_file"`
+	// Consult makes the child for item For a hidden smart-tier consult that
+	// reviews the parent's design read-only. It needs a brief and is allowed
+	// while the parent's design gate is open.
+	Consult bool `json:"consult"`
 }
 
 func (s *Server) handleCreate(ctx context.Context, req Request) Response {
@@ -622,6 +626,9 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if perr != nil {
 		return errResp(req.ID, CodeInvalidParams, perr.Error())
 	}
+	if params.Consult {
+		return s.handleConsult(ctx, req, params, parentID, existing)
+	}
 	var forParent *domain.Session
 	if strings.TrimSpace(params.For) != "" {
 		parent, code, ferr := s.applyFor(&params, parentID, existing)
@@ -633,7 +640,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if !params.Quick && (params.Repo == "" || params.Branch == "") {
 		return errResp(req.ID, CodeInvalidParams, "repo and branch are required (or --quick)")
 	}
-	brief, berr := readBrief(params.Brief, params.BriefFile)
+	brief, berr := readBrief(params.Brief, params.BriefFile, false)
 	if berr != nil {
 		return errResp(req.ID, CodeInvalidParams, berr.Error())
 	}
@@ -843,8 +850,9 @@ func (s *Server) applyFor(params *createParams, parentID string, existing []doma
 }
 
 // readBrief validates the brief text or the file it is in, and returns it in
-// its canonical form. Neither given is no brief.
-func readBrief(text, file string) (string, error) {
+// its canonical form: a consult brief when consult is set, else a child brief.
+// Neither given is no brief.
+func readBrief(text, file string, consult bool) (string, error) {
 	if text == "" && file != "" {
 		raw, err := os.ReadFile(file)
 		if err != nil {
@@ -854,6 +862,13 @@ func readBrief(text, file string) (string, error) {
 	}
 	if strings.TrimSpace(text) == "" {
 		return "", nil
+	}
+	if consult {
+		b, err := coordinator.ParseConsultBrief(text)
+		if err != nil {
+			return "", err
+		}
+		return b.Markdown(), nil
 	}
 	b, err := coordinator.ParseBrief(text)
 	if err != nil {
