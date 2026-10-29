@@ -286,10 +286,10 @@ The TUI wizard (`n` key) drives the user through:
 4. Branch name editor
 5. Repo picker (via `gh repo list`)
 6. Directory picker (remote subdirectory of repo)
-7. Agent picker (scans the remote for installed agents). The create wizard lists two tier
-   rows above the agents — "Smart tier: <first entry>" and "Worker tier: <first entry>" —
-   and the cursor starts on smart when `agents.smart` has entries. Choosing a tier sends
-   `tier` and no agent; choosing an agent clears the tier.
+7. Agent picker (scans the remote for installed agents). It lists only those agents; there
+   are no tier rows. Enter on an agent sends that agent and no tier. With no agents listed,
+   enter lets serve pick (smart tier for a session the user starts). The role agent is
+   preselected. The restart and agent-switch picker lists agents only as well.
 8. Summary + AWS override screen
 9. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine
 

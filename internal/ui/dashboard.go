@@ -6532,10 +6532,6 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.agentPicker = subModel.(AgentPickerModel)
 	if m.agentPicker.selected != nil {
 		m.sessionCfg.Agent = m.agentPicker.selected
-		// A tier row names no agent: serve picks from that tier. Choosing an
-		// agent clears it, since the two are exclusive.
-		m.sessionCfg.Tier = m.agentPicker.selectedTier
-		m.agentPicker.selectedTier = ""
 		m.sessionCfg.PromptFree = true
 		if m.sessionCfg.Quick {
 			return m.startQuickSession()
@@ -7183,13 +7179,6 @@ func (m *Model) applyScanAgents(msg agent.ScanAgentsMsg) (tea.Model, tea.Cmd) {
 	// its own picker state.
 	if m.loadingNext == viewStateAgentPicker {
 		m.agentPicker.allowPreferred = true
-		// The create wizard chooses a tier as well as a binary; the cursor
-		// starts on smart when that tier has entries.
-		var tiers config.AgentsConfig
-		if m.cfg != nil {
-			tiers = m.cfg.Agents
-		}
-		m.agentPicker.EnableTiers(tiers)
 		m.agentPicker.Preselect(m.cfg.RoleAgent(string(m.sessionCfg.Role)))
 	}
 	h, v := docStyle.GetFrameSize()
