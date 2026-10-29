@@ -441,8 +441,16 @@ type Model struct {
 	// being added or renamed. An empty edit id means add.
 	focusedSessionID string
 	todoCursor       int
-	todoEdit         *todoEditState
-	todoInput        textinput.Model
+	// todoExpanded is per session and survives list refreshes; leaving
+	// focus keeps it, so the list stays as the user left it. detailRoom is
+	// the rows fitSessionColumn offers the detail block; todoRowBudget is
+	// what is left for the list after the header lines. Both are 0 outside
+	// a layout pass, which means the collapsed cap.
+	todoExpanded  map[string]bool
+	detailRoom    int
+	todoRowBudget int
+	todoEdit      *todoEditState
+	todoInput     textinput.Model
 	// Auto-fitting the previewed session to the panel (see preview_fit.go).
 	fitApplied    map[string]string    // session ID -> size known to be in place
 	fitBackoff    map[string]time.Time // session ID -> do not retry before

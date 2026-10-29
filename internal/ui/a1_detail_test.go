@@ -154,9 +154,9 @@ func TestTodoLinesRenderStates(t *testing.T) {
 		t.Fatalf("lines %d: %q", len(lines), lines)
 	}
 	want := []string{
-		"✓ Add standby template",
 		"▸ Run preprod --check",
 		"○ Open PR",
+		"✓ Add standby template",
 		"– Old idea ⚠ not in agent's list",
 	}
 	for i, line := range lines {

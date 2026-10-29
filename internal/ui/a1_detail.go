@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,10 +41,17 @@ type todoView struct {
 	Input    string
 	// RefGlyph replaces a pending row's ○ with the child session's glyph.
 	RefGlyph func(ref string) (glyph string, ok bool)
+	// Expanded lifts the maxTodoRows cap up to MaxRows, the rows the pane
+	// has for the whole list block. MaxRows <= 0 keeps the collapsed cap.
+	Expanded bool
+	MaxRows  int
 }
 
-// maxTodoRows is the detail pane's to-do window. A longer list keeps the
-// focused row visible and spends the last row on "+k more".
+// todoExpandKey toggles the expanded list while the to-dos are focused.
+const todoExpandKey = "v"
+
+// maxTodoRows is the collapsed to-do window. A longer list keeps the
+// focused row visible and spends the last row on the hidden count.
 const maxTodoRows = 8
 
 func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width int) string {
@@ -275,18 +283,21 @@ func renderTodoLines(v todoView, width int) []string {
 		return statusThenFollow(dimText("no to-do list yet"), v.Question, v.Input, width)
 	}
 	items := v.Snap.List.Items
-	start, end, more := todoWindow(len(items), todoFocus(v))
-	rows := make([]string, 0, maxTodoRows)
+	order := todoDisplayOrder(items)
+	question := formatQuestionLines(v.Question, width)
+	start, end, more := todoWindow(len(order), todoFocus(v, order), v.itemRows(len(question)))
+	rows := make([]string, 0, end-start+len(question)+2)
 	activeRow := -1
-	for i := start; i < end; i++ {
+	for pos := start; pos < end; pos++ {
+		i := order[pos]
 		if activeRow < 0 && items[i].State == domain.TodoActive {
 			activeRow = len(rows)
 		}
 		rows = append(rows, renderTodoRow(items[i], v.Snap.List.NotInAgent, v.Cursor == i, width, v.RefGlyph))
 	}
-	rows = insertLines(rows, questionAt(activeRow, len(rows)), formatQuestionLines(v.Question, width))
+	rows = insertLines(rows, questionAt(activeRow, len(rows)), question)
 	if more > 0 {
-		rows = append(rows, truncateToWidth(dimText(fmt.Sprintf("+%d more", more)), width))
+		rows = append(rows, truncateToWidth(dimText(todoMoreText(items, order, start, end, v)), width))
 	}
 	if v.Input != "" {
 		rows = append(rows, truncateToWidth(v.Input, width))
@@ -294,28 +305,96 @@ func renderTodoLines(v todoView, width int) []string {
 	return rows
 }
 
-func todoFocus(v todoView) int {
-	if v.Cursor >= 0 {
-		return v.Cursor
+// itemRows is how many rows the item window may use. Collapsed is
+// maxTodoRows. Expanded uses MaxRows, the rows the pane has for the whole
+// list block, less the question and input lines drawn around the items.
+func (v todoView) itemRows(questionLines int) int {
+	if !v.Expanded || v.MaxRows <= 0 {
+		return maxTodoRows
 	}
-	for i, it := range v.Snap.List.Items {
-		if it.State == domain.TodoActive {
-			return i
+	rows := v.MaxRows - questionLines
+	if v.Input != "" {
+		rows--
+	}
+	if rows < 2 {
+		rows = 2
+	}
+	return rows
+}
+
+// todoMoreText names what the overflow row hides. A collapsed list also
+// says how to expand it; a focused one only names the key.
+func todoMoreText(items []domain.TodoItem, order []int, start, end int, v todoView) string {
+	hidden := len(order) - (end - start)
+	text := fmt.Sprintf("+%d more", hidden)
+	done := 0
+	for pos, i := range order {
+		if (pos < start || pos >= end) && items[i].State == domain.TodoDone {
+			done++
+		}
+	}
+	if done > 0 {
+		text += fmt.Sprintf(" (%d done)", done)
+	}
+	switch {
+	case v.Expanded:
+		return text
+	case v.Cursor >= 0:
+		return text + " · " + todoExpandKey + " to expand"
+	default:
+		return text + " · ctrl+t then " + todoExpandKey + " to expand"
+	}
+}
+
+// todoDisplayOrder lists item indexes in the order the panel draws them:
+// active, then every other open state, then done, then dropped. List order
+// holds within a group. Stored order is untouched; callers map a display
+// position back to the real item through the returned indexes.
+func todoDisplayOrder(items []domain.TodoItem) []int {
+	rank := func(s domain.TodoState) int {
+		switch s {
+		case domain.TodoActive:
+			return 0
+		case domain.TodoDone:
+			return 2
+		case domain.TodoDropped:
+			return 3
+		default:
+			return 1
+		}
+	}
+	order := make([]int, len(items))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return rank(items[order[a]].State) < rank(items[order[b]].State)
+	})
+	return order
+}
+
+// todoFocus is the display position the window must keep visible.
+func todoFocus(v todoView, order []int) int {
+	if v.Cursor >= 0 {
+		for pos, i := range order {
+			if i == v.Cursor {
+				return pos
+			}
 		}
 	}
 	return 0
 }
 
-// todoWindow picks the slice that contains target. Lists longer than
-// maxTodoRows reserve the last rendered row for the hidden count.
-func todoWindow(n, target int) (start, end, more int) {
+// todoWindow picks the slice of display positions that contains target.
+// A list longer than rows reserves the last row for the hidden count.
+func todoWindow(n, target, rows int) (start, end, more int) {
 	if n <= 0 {
 		return 0, 0, 0
 	}
-	if n <= maxTodoRows {
+	if n <= rows {
 		return 0, n, 0
 	}
-	visible := maxTodoRows - 1
+	visible := rows - 1
 	if target < 0 {
 		target = 0
 	}
@@ -490,6 +569,9 @@ func renderDetailTitle(s domain.Session, width int) string {
 	return truncateToWidth(a1Text(text, a1BoldText, true, false), width)
 }
 
+// minPreviewRows is the preview height an expanded to-do list leaves alone.
+const minPreviewRows = 3
+
 // fitSessionColumn clips the detail so the column stays within `column`
 // rows, and returns the preview height that is left. The viewport's own
 // border is part of the rendered height, so the height passed to SetHeight
@@ -500,7 +582,9 @@ func (m *Model) fitSessionColumn(it item, width int, toast string, column int) (
 		return "", 0
 	}
 	caption := m.renderPreviewCaption(width)
+	m.detailRoom = column - lipgloss.Height(composeAbovePreview("", toast, caption)) - minPreviewRows
 	detail := m.renderSessionDetail(it, width)
+	m.detailRoom = 0
 	lines := strings.Split(detail, "\n")
 	if detail == "" {
 		lines = nil
@@ -566,6 +650,10 @@ func (m *Model) renderSessionDetail(it item, width int) string {
 	if git := renderGitPRLine(m.gitStatus, width); git != "" {
 		head = append(head, git)
 	}
+	m.todoRowBudget = 0
+	if m.detailRoom > 0 {
+		m.todoRowBudget = m.detailRoom - len(head) - 1
+	}
 	todos := m.sessionTodoLines(it, width)
 	lines := head
 	if len(head) > 0 && len(todos) > 0 {
@@ -602,6 +690,8 @@ func (m *Model) sessionTodoLines(it item, width int) []string {
 		Question: waitingQuestion(it, width),
 		Input:    input,
 		RefGlyph: m.todoRefGlyph,
+		Expanded: m.todoExpanded[it.session.ID],
+		MaxRows:  m.todoRowBudget,
 	}, width)
 }
 

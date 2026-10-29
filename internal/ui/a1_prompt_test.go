@@ -412,7 +412,7 @@ func TestHintLineByFocus(t *testing.T) {
 	}{
 		{focusList, "ctrl+p reply · ctrl+t to-dos · a attach · ? keys"},
 		{focusPrompt, "enter send · esc back"},
-		{focusTodos, "a add · e edit · space done · s start · d drop · x delete · J/K move · esc back"},
+		{focusTodos, "a add · e edit · space done · s start · d drop · x delete · J/K move · v expand · esc back"},
 	}
 	for _, c := range cases {
 		m.focus = c.focus

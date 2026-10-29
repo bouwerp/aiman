@@ -48,7 +48,7 @@ func (m *Model) ensureTodoInput() {
 }
 
 // enterTodoFocus records the selected session and parks the cursor on its
-// active item, or on the first row when nothing is active.
+// active item, or on the first displayed row when nothing is active.
 func (m *Model) enterTodoFocus() {
 	it, ok := m.selectedSessionItem()
 	if !ok {
@@ -58,11 +58,9 @@ func (m *Model) enterTodoFocus() {
 	m.focus = focusTodos
 	m.todoEdit = nil
 	m.todoCursor = 0
-	for i, item := range m.focusedTodoItems() {
-		if item.State == domain.TodoActive {
-			m.todoCursor = i
-			break
-		}
+	items := m.focusedTodoItems()
+	if order := todoDisplayOrder(items); len(order) > 0 {
+		m.todoCursor = order[0]
 	}
 }
 
@@ -110,9 +108,19 @@ func (m *Model) handleTodoKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.beginEditFocusedTodo()
 	case "a":
 		return m, m.beginAddTodo()
+	case todoExpandKey:
+		m.toggleTodoExpanded()
+		return m, nil
 	default:
 		return m, nil
 	}
+}
+
+func (m *Model) toggleTodoExpanded() {
+	if m.todoExpanded == nil {
+		m.todoExpanded = make(map[string]bool)
+	}
+	m.todoExpanded[m.focusedSessionID] = !m.todoExpanded[m.focusedSessionID]
 }
 
 func (m *Model) handleEmptyTodoKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -334,20 +342,30 @@ func (m *Model) todoItemByID(id string) (domain.TodoItem, bool) {
 	return domain.TodoItem{}, false
 }
 
+// moveTodoCursor steps through the rows in display order. todoCursor stays
+// an index into the stored list, so every edit still hits the right item.
 func (m *Model) moveTodoCursor(delta int) {
-	n := len(m.focusedTodoItems())
-	if n == 0 {
+	items := m.focusedTodoItems()
+	if len(items) == 0 {
 		m.todoCursor = 0
 		return
 	}
-	next := m.todoCursor + delta
-	if next < 0 {
-		next = 0
+	order := todoDisplayOrder(items)
+	pos := 0
+	for p, i := range order {
+		if i == m.todoCursor {
+			pos = p
+			break
+		}
 	}
-	if next >= n {
-		next = n - 1
+	pos += delta
+	if pos < 0 {
+		pos = 0
 	}
-	m.todoCursor = next
+	if pos >= len(order) {
+		pos = len(order) - 1
+	}
+	m.todoCursor = order[pos]
 }
 
 // todoCursorFollowID is the item the cursor is on, so a refreshed list can

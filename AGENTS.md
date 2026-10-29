@@ -336,7 +336,7 @@ The entire UI is one large `Model` struct with a `viewState` enum. Key patterns:
 - **Discovery**: `discoveryResultMsg` fired every N seconds with all discovered sessions
 - **Debug console**: toggled with backtick; shows `m.debugLines []string`
 - **Mutagen sync progress**: `mutagenProgressMsg` used during `Ctrl+Y` recreate
-- **A1 focus modes**: `ctrl+p` focuses the reply line and `ctrl+t` focuses the selected session's to-do list (`focusTodos`). Keys edit that cached list through the agent API. `todo_changed` and `steer` update the cache and never refresh the pane.
+- **A1 focus modes**: `ctrl+p` focuses the reply line and `ctrl+t` focuses the selected session's to-do list (`focusTodos`). Keys edit that cached list through the agent API. The panel draws items active, other open, done, dropped (`todoDisplayOrder`); `todoCursor` stays an index into the stored list and `j`/`k` walk display order. Collapsed shows `maxTodoRows` rows with a `+k more (n done)` line; `v` toggles an expanded list per session (`todoExpanded`), sized to the rows the detail pane has. `todo_changed` and `steer` update the cache and never refresh the pane.
 
 ---
 

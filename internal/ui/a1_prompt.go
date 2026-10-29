@@ -408,7 +408,7 @@ func hintFor(focus a1Focus) string {
 	case focusPrompt:
 		return "enter send · esc back"
 	case focusTodos:
-		return "a add · e edit · space done · s start · d drop · x delete · J/K move · esc back"
+		return "a add · e edit · space done · s start · d drop · x delete · J/K move · v expand · esc back"
 	default:
 		return "ctrl+p reply · ctrl+t to-dos · a attach · ? keys"
 	}

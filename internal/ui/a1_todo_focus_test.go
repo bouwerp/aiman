@@ -99,13 +99,13 @@ func TestTodoKeysSendOps(t *testing.T) {
 		wantOp  bool
 	}{
 		{name: "space on t3", keys: []string{"down", "space"}, method: "todo.update", id: "t3", state: "done", wantOp: true},
-		{name: "space on t1", keys: []string{"up", "space"}, method: "todo.update", id: "t1", state: "pending", wantOp: true},
+		{name: "space on t1", keys: []string{"down", "down", "space"}, method: "todo.update", id: "t1", state: "pending", wantOp: true},
 		{name: "s on t3", keys: []string{"down", "s"}, method: "todo.update", id: "t3", state: "active", wantOp: true},
 		{name: "d", keys: []string{"d"}, method: "todo.update", id: "t2", state: "dropped", wantOp: true},
 		{name: "x", keys: []string{"x"}, method: "todo.remove", id: "t2", wantOp: true},
 		{name: "J on t2", keys: []string{"J"}, method: "todo.move", id: "t2", toIndex: &to2, wantOp: true},
 		{name: "K on t2", keys: []string{"K"}, method: "todo.move", id: "t2", toIndex: &to0, wantOp: true},
-		{name: "K on t1", keys: []string{"up", "K"}, wantOp: false},
+		{name: "K on t1", keys: []string{"down", "down", "K"}, wantOp: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -343,7 +343,7 @@ func TestSpaceOnDroppedSetsPending(t *testing.T) {
 	m.todos["s1"] = snap
 	m = enterTodoFocus(t, m)
 	var cmd tea.Cmd
-	for _, key := range []string{"down", "down", "space"} {
+	for _, key := range []string{"down", "down", "down", "space"} {
 		var next tea.Model
 		next, cmd = m.Update(pressKey(key))
 		m = next.(*Model)
