@@ -2,6 +2,8 @@ package harness
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -146,6 +148,44 @@ func CaseVerifyReproduceFirst() Case {
 		return []MetricResult{
 			score("verify_reproduce_first", found, "not reproducible finding missing"),
 			score("verify_no_reviewer_spawned", done.ReviewerID == "", "a reviewer was spawned"),
+		}
+	}}
+}
+
+// CaseProtectedAcceptanceTests checks that a worker whose diff edits a test
+// file its brief protects gets an incomplete review with a REQUIRED finding.
+func CaseProtectedAcceptanceTests() Case {
+	return Case{Name: "protected-acceptance-tests", Setup: func(h *Harness) error {
+		if err := setupVerifySession(h, verify.Config{BeforePR: true, TestCommand: "true"}); err != nil {
+			return err
+		}
+		task := "# Task\n\n<!-- aiman:brief -->\n## Objective\n\nAdd the b file to package a today.\n\n## Contract\n\nPackage a exports nothing new.\n\n" +
+			"## Owns\n\na.go\n\n## Out of scope\n\nEverything else.\n\n## Acceptance tests\n\nProtected file b.go and `true`.\n\n" +
+			"## Report must contain\n\nCommands and exit codes.\n\n## Escalate when\n\nThe shape changes.\n<!-- /aiman:brief -->\n"
+		return os.WriteFile(filepath.Join(h.RepoDir("s1"), domain.AimanTaskFileName), []byte(task), 0o600)
+	}, Assert: func(h *Harness) []MetricResult {
+		rv, err := h.StartVerify("s1")
+		if err != nil {
+			return []MetricResult{score("protected_acceptance_denied", false, err.Error())}
+		}
+		if _, ok := h.WaitReview(rv.ID, verify.StatusRunning); !ok {
+			return []MetricResult{score("protected_acceptance_denied", false, "review did not reach running")}
+		}
+		if err := h.WriteReview(rv.ID, "# Review\n\n"+verify.CompleteMarker+"\n"); err != nil {
+			return []MetricResult{score("protected_acceptance_denied", false, err.Error())}
+		}
+		done, ok := h.WaitReview(rv.ID, verify.StatusIncomplete)
+		if !ok {
+			return []MetricResult{score("protected_acceptance_denied", false, "review did not become incomplete")}
+		}
+		found := false
+		for _, f := range done.Findings {
+			if f.Severity == verify.SeverityRequired && f.Title == "Acceptance test edited: b.go" {
+				found = true
+			}
+		}
+		return []MetricResult{
+			score("protected_acceptance_denied", found && !done.Passed(), "edit of a protected acceptance test was not denied"),
 		}
 	}}
 }

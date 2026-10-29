@@ -29,3 +29,10 @@ func TestVerifyReproduceFirst(t *testing.T) {
 		t.Fatalf("verify-reproduce-first failed: %+v", res.Metrics)
 	}
 }
+
+func TestProtectedAcceptanceTests(t *testing.T) {
+	res := CaseProtectedAcceptanceTests().Run(t)
+	if !res.Passed {
+		t.Fatalf("protected-acceptance-tests failed: %+v", res.Metrics)
+	}
+}

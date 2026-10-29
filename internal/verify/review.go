@@ -54,8 +54,13 @@ type Review struct {
 	Required    int       `json:"required"`
 	Suggestions int       `json:"suggestions"`
 	CleanedUp   bool      `json:"cleaned_up"`
-	StartedAt   time.Time `json:"started_at"`
-	FinishedAt  time.Time `json:"finished_at"`
+	// AcceptanceCommands are the brief's acceptance commands, run after the
+	// test command. TouchedAcceptance are the brief's protected test files the
+	// worker's diff changes.
+	AcceptanceCommands []string  `json:"acceptance_commands,omitempty"`
+	TouchedAcceptance  []string  `json:"touched_acceptance,omitempty"`
+	StartedAt          time.Time `json:"started_at"`
+	FinishedAt         time.Time `json:"finished_at"`
 }
 
 // Passed reports a complete review with no required findings whose test

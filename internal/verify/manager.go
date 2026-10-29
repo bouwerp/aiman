@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -314,6 +315,7 @@ func (m *Manager) prepare(ctx context.Context, r *Review, worker domain.Session)
 	task, _ := os.ReadFile(filepath.Join(worker.WorktreePath, r.Dir, domain.AimanTaskFileName))
 	todos, _ := m.d.Todos.Get(worker.ID)
 	doneWhen, checklists := quality.ParseTaskKit(string(task))
+	acceptancePlan(ctx, r, worker.WorktreePath, string(task), base, diff)
 	brief := BuildBrief(BriefInput{
 		WorkerName: worker.Name,
 		BaseRef:    base,
@@ -480,6 +482,22 @@ func (m *Manager) finish(ctx context.Context, r Review, status Status, text stri
 	if err != nil {
 		worker = domain.Session{ID: r.WorkerID}
 	}
+	if status == StatusComplete {
+		ev, err := runEvidence(ctx, r, m.cfg.TestCommand, m.d.Now)
+		if err != nil {
+			status = StatusIncomplete
+			r.Error = err.Error()
+		}
+		r.Evidence = ev
+	}
+	// Acceptance commands run only when the test command ran: a review that
+	// could not be verified is not made to look verified by them.
+	extra := m.acceptanceFindings(ctx, r, status == StatusComplete)
+	if len(r.TouchedAcceptance) > 0 && status == StatusComplete {
+		status = StatusIncomplete
+		r.Error = "acceptance test edited"
+	}
+	findings = append(slices.Clone(findings), extra...)
 	r.Findings = findings
 	r.Required, r.Suggestions = 0, 0
 	for _, f := range findings {
@@ -508,14 +526,6 @@ func (m *Manager) finish(ctx context.Context, r Review, status Status, text stri
 		if err != nil {
 			log.Printf("verify: review %s: context: %v", r.ID, err)
 		}
-	}
-	if status == StatusComplete {
-		ev, err := runEvidence(ctx, r, m.cfg.TestCommand, m.d.Now)
-		if err != nil {
-			status = StatusIncomplete
-			r.Error = err.Error()
-		}
-		r.Evidence = ev
 	}
 	r.Status = status
 	r.FinishedAt = m.d.Now()
