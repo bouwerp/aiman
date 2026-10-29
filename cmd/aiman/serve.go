@@ -248,8 +248,11 @@ func runServe() error {
 		Steer: func(id, text string) {
 			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: domain.AuthorAiman, Text: text})
 		},
-		Ledger: srv.AppendLedger,
-		Retire: srv.RetireConsult,
+		Ledger:         srv.AppendLedger,
+		Retire:         srv.RetireConsult,
+		KeepReport:     srv.KeepConsultReport,
+		Alive:          srv.ConsultAlive,
+		ConsultTimeout: cfg.Handover.ChildTimeout(),
 	}
 	if rec := srv.NotifyRecorder(); rec != nil {
 		childTracker.Notify = rec

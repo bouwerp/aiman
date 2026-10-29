@@ -177,7 +177,8 @@ func consultConfig(parent domain.Session, pick config.PreferredAgent, dir, id st
 		PreparedWorktree: dir,
 		RemoteHost:       parent.RemoteHost,
 		InitialPrompt: "Read " + domain.AimanTaskFileName + " and follow your brief. The parent worktree is " +
-			worktree + "; read it, do not edit it.",
+			worktree + "; read it, do not edit it. Write your report to " +
+			filepath.Join(dir, domain.AimanReportFileName) + ", never into the parent worktree.",
 	}
 }
 
@@ -227,6 +228,32 @@ func (s *Server) RetireConsult(ctx context.Context, child domain.Session) {
 	if err := os.RemoveAll(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("consult: remove %s: %v", dir, err)
 	}
+}
+
+// KeepConsultReport copies a consult's report to <consult base>/<id>.report.md,
+// beside the scratch directory RetireConsult removes, and returns its path.
+func (s *Server) KeepConsultReport(_ context.Context, child domain.Session, md string) (string, error) {
+	base := s.consultBase()
+	if base == "" {
+		return "", errors.New("no home directory for consult reports")
+	}
+	if child.ID == "" || child.ID != filepath.Base(child.ID) || strings.ContainsAny(child.ID, `/\`) || child.ID == ".." {
+		return "", fmt.Errorf("consult id %q is not a file name", child.ID)
+	}
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(base, child.ID+".report.md")
+	if err := os.WriteFile(path, []byte(md), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ConsultAlive reports whether a consult's terminal still runs in serve's
+// PTY runtime.
+func (s *Server) ConsultAlive(ctx context.Context, child domain.Session) bool {
+	return serverTerminal{s}.Alive(ctx, child)
 }
 
 // AppendLedger writes one session_events row with actor aiman. It never fails.

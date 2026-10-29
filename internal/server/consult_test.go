@@ -56,6 +56,9 @@ func TestCreateConsult(t *testing.T) {
 	if !strings.Contains(cfg.InitialPrompt, ".aiman_task.md") {
 		t.Fatalf("prompt %q does not point at the task file", cfg.InitialPrompt)
 	}
+	if report := filepath.Join(cfg.PreparedWorktree, domain.AimanReportFileName); !strings.Contains(cfg.InitialPrompt, report) {
+		t.Fatalf("prompt %q does not name the report path %s", cfg.InitialPrompt, report)
+	}
 	task, err := os.ReadFile(filepath.Join(cfg.PreparedWorktree, domain.AimanTaskFileName))
 	if err != nil || !strings.Contains(string(task), "What is wrong with this design?") {
 		t.Fatalf("task file %q, %v", task, err)
@@ -163,5 +166,41 @@ func TestRetireConsultKeepsForeignDir(t *testing.T) {
 	srv.RetireConsult(context.Background(), domain.Session{ID: "x", Role: domain.SessionRoleConsult, WorkingDirectory: dir})
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("foreign dir removed: %v", err)
+	}
+}
+
+// The kept report sits beside the scratch directory, so retire leaves it.
+func TestKeepConsultReportSurvivesRetire(t *testing.T) {
+	srv, creator, home := consultServer(t, []config.PreferredAgent{{Agent: "codex"}})
+	if resp := rpc(t, srv, "", "session.create", consultParams()); resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+	row, err := srv.repo.Get(context.Background(), "new-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := srv.KeepConsultReport(context.Background(), *row, "## Verdict\n\napprove\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".aiman", "consults", "new-id.report.md"); path != want {
+		t.Fatalf("kept at %s, want %s", path, want)
+	}
+	srv.RetireConsult(context.Background(), *row)
+	if _, err := os.Stat(creator.cfg.PreparedWorktree); !os.IsNotExist(err) {
+		t.Fatalf("scratch dir survived retire: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "## Verdict\n\napprove\n" {
+		t.Fatalf("kept report %q, %v", got, err)
+	}
+}
+
+func TestKeepConsultReportRefusesBadID(t *testing.T) {
+	srv, _, _ := consultServer(t, nil)
+	for _, id := range []string{"", "../x", "a/b"} {
+		if _, err := srv.KeepConsultReport(context.Background(), domain.Session{ID: id}, "x"); err == nil {
+			t.Fatalf("id %q kept", id)
+		}
 	}
 }

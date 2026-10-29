@@ -130,7 +130,8 @@ func consultFinished(h *Harness, sessionID string) (int, map[string]any) {
 // CaseConsultClosesOnReport starts a consult for t1 while s1's design gate is
 // open, writes its report and runs one tracker pass. t1 closes with no PR,
 // s1's ledger holds consult.finished with the counts and verdict, and the
-// consult's row and scratch directory are gone.
+// consult's row and scratch directory are gone while its report is kept
+// beside them.
 func CaseConsultClosesOnReport() Case {
 	return Case{Name: "consult-closes-on-report", Setup: func(h *Harness) error {
 		if err := coordinatorParent(h); err != nil {
@@ -173,6 +174,9 @@ func CaseConsultClosesOnReport() Case {
 		_, dirErr := os.Stat(consult.WorkingDirectory)
 		out = append(out, score("consult_retired", rowErr != nil && errors.Is(dirErr, fs.ErrNotExist),
 			fmt.Sprintf("row err %v, dir err %v", rowErr, dirErr)))
+		kept, keptErr := os.ReadFile(filepath.Join(h.Dir, "consults", consult.ID+".report.md"))
+		out = append(out, score("consult_report_kept", keptErr == nil && string(kept) == consultReportText,
+			fmt.Sprintf("kept %d bytes, err %v", len(kept), keptErr)))
 		return out
 	}}
 }

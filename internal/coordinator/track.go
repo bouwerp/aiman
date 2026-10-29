@@ -58,12 +58,23 @@ type Tracker struct {
 	Steer func(parentID, text string)
 	// Ledger appends a session_events row as aiman. nil drops it.
 	Ledger func(ctx context.Context, sessionID string, kind domain.EventKind, payload map[string]any)
-	// Retire stops and forgets a consult whose report settled its item and
-	// removes its scratch directory. nil leaves the consult running.
+	// Retire stops and forgets a consult and removes its scratch directory.
+	// nil leaves the consult running.
 	Retire func(ctx context.Context, child domain.Session)
+	// KeepReport copies a consult's report outside the directory Retire
+	// removes and returns the copy's path. nil points the note at the
+	// consult's own report, which Retire removes.
+	KeepReport func(ctx context.Context, child domain.Session, md string) (string, error)
+	// Alive reports whether a consult's terminal still runs. nil is alive.
+	Alive func(ctx context.Context, child domain.Session) bool
+	// ConsultTimeout is how long a consult may run without a report. Zero
+	// waits for ever.
+	ConsultTimeout time.Duration
+	// Now is the clock. nil is time.Now.
+	Now func() time.Time
 
-	// asked holds the items whose coordinator was already told the child
-	// returned no evidence, so the note is sent once per serve run.
+	// asked holds the notes already sent (a missing report, surprises), so
+	// each goes out once per serve run.
 	mu    sync.Mutex
 	asked map[string]bool
 }
@@ -86,7 +97,8 @@ func (t *Tracker) Run(ctx context.Context, interval time.Duration) {
 // TrackOnce walks every session's list and settles each open item linked to
 // a child: done when the child's PR has landed and its report cites evidence,
 // or, for a consult, when its report parses; unlinked when the child session
-// no longer exists. A failure on one item is logged and skipped.
+// no longer exists. It then retires every consult no open item links. A
+// failure on one item is logged and skipped.
 func (t *Tracker) TrackOnce(ctx context.Context) {
 	sessions, err := t.Sessions()
 	if err != nil {
@@ -97,12 +109,15 @@ func (t *Tracker) TrackOnce(ctx context.Context) {
 	for _, s := range sessions {
 		byID[s.ID] = s
 	}
+	linked := map[string]bool{}
+	listed := map[string]bool{}
 	for _, parent := range sessions {
 		list, err := t.Todos.Get(parent.ID)
 		if err != nil {
 			log.Printf("coordinator: to-dos of %s: %v", parent.ID, err)
 			continue
 		}
+		listed[parent.ID] = true
 		for _, it := range list.Items {
 			childID, ok := ChildID(it.Ref)
 			if !ok || it.State == domain.TodoDone || it.State == domain.TodoDropped {
@@ -114,75 +129,30 @@ func (t *Tracker) TrackOnce(ctx context.Context) {
 				continue
 			}
 			if child.Role == domain.SessionRoleConsult {
+				// Settled, abandoned or still held: the sweep leaves it.
+				linked[childID] = true
 				t.trackConsult(ctx, parent, it, child)
 				continue
 			}
-			if !t.landed(ctx, parent, child) {
-				continue
-			}
-			md, err := t.evidence(ctx, child)
-			if err != nil {
-				t.askForReport(parent, it, child, err)
-				continue
-			}
-			t.steerSurprises(parent, child, md)
-			t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone })
+			t.trackChild(ctx, parent, it, child)
 		}
 	}
+	t.sweepConsults(ctx, sessions, linked, listed)
 }
 
-// trackConsult settles a consult's item on its report alone: a consult has
-// no branch and no PR. An absent report means the consult is still working;
-// one that does not parse asks the coordinator once. Once the item is done the
-// counts and verdict go on the parent's ledger and the consult is retired.
-func (t *Tracker) trackConsult(ctx context.Context, parent domain.Session, it domain.TodoItem, child domain.Session) {
-	if t.Report == nil {
+// trackChild marks a PR child's item done once its PR landed with a report
+// that cites evidence.
+func (t *Tracker) trackChild(ctx context.Context, parent domain.Session, it domain.TodoItem, child domain.Session) {
+	if !t.landed(ctx, parent, child) {
 		return
 	}
-	md, err := t.Report(ctx, child)
-	if err != nil {
-		log.Printf("coordinator: consult report of %s: %v", child.ID, err)
-		return
-	}
-	if strings.TrimSpace(md) == "" {
-		return
-	}
-	r, err := ParseConsultReport(md)
+	md, err := t.evidence(ctx, child)
 	if err != nil {
 		t.askForReport(parent, it, child, err)
 		return
 	}
-	if !t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone }) {
-		return
-	}
-	if t.Ledger != nil {
-		t.Ledger(ctx, parent.ID, domain.EventConsultFinished, map[string]any{
-			"child": child.ID, "todo": it.ID,
-			"high": r.High, "medium": r.Medium, "low": r.Low, "verdict": r.Verdict,
-		})
-	}
-	t.steerConsultReport(parent, it, r.Verdict, md)
-	if t.Retire != nil {
-		t.Retire(ctx, child)
-	}
-}
-
-// consultNoteLimit caps the report text a consult note carries.
-const consultNoteLimit = 16 << 10
-
-// steerConsultReport hands a settled consult's report to its coordinator.
-// Retire removes the consult's scratch directory, so this note is the only
-// copy of the objections the coordinator gets.
-func (t *Tracker) steerConsultReport(parent domain.Session, it domain.TodoItem, verdict, md string) {
-	if t.Steer == nil {
-		return
-	}
-	md = strings.TrimSpace(md)
-	if len(md) > consultNoteLimit {
-		md = strings.ToValidUTF8(md[:consultNoteLimit], "") + "\n[report truncated]"
-	}
-	t.Steer(parent.ID, fmt.Sprintf("[aiman] consult for %s finished with verdict %s. Copy each objection into the design page's Decisions table with your triage (accept, reject or defer, and why), then republish:\n%s",
-		it.ID, verdict, md))
+	t.steerSurprises(parent, child, md)
+	t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone })
 }
 
 // landed reports whether the child's PR targets the parent's branch and is
@@ -225,15 +195,7 @@ func (t *Tracker) steerSurprises(parent domain.Session, child domain.Session, md
 	if !any || t.Steer == nil {
 		return
 	}
-	key := "surprises/" + parent.ID + "/" + child.ID
-	t.mu.Lock()
-	if t.asked == nil {
-		t.asked = map[string]bool{}
-	}
-	done := t.asked[key]
-	t.asked[key] = true
-	t.mu.Unlock()
-	if done {
+	if !t.firstAsk("surprises/" + parent.ID + "/" + child.ID) {
 		return
 	}
 	t.Steer(parent.ID, fmt.Sprintf("[aiman] child %s reported surprises that may affect other pieces; re-read the design before starting dependent pieces:\n%s", child.ID, text))
@@ -242,15 +204,7 @@ func (t *Tracker) steerSurprises(parent domain.Session, child domain.Session, md
 // askForReport steers the coordinator once to get the child's report. The
 // item stays open: the child's PR may land, but the item is the contract.
 func (t *Tracker) askForReport(parent domain.Session, it domain.TodoItem, child domain.Session, why error) {
-	key := parent.ID + "/" + it.ID + "/" + child.ID
-	t.mu.Lock()
-	if t.asked == nil {
-		t.asked = map[string]bool{}
-	}
-	done := t.asked[key]
-	t.asked[key] = true
-	t.mu.Unlock()
-	if done {
+	if !t.firstAsk(parent.ID + "/" + it.ID + "/" + child.ID) {
 		return
 	}
 	log.Printf("coordinator: report of %s: %v", child.ID, why)
@@ -263,6 +217,20 @@ func (t *Tracker) askForReport(parent domain.Session, it domain.TodoItem, child 
 	}
 	t.Steer(parent.ID, fmt.Sprintf("[aiman] child %s returned no evidence; ask it for %s before marking %s done.",
 		name, domain.AimanReportFileName, it.ID))
+}
+
+// firstAsk records key and reports whether it was new in this serve run.
+func (t *Tracker) firstAsk(key string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.asked == nil {
+		t.asked = map[string]bool{}
+	}
+	if t.asked[key] {
+		return false
+	}
+	t.asked[key] = true
+	return true
 }
 
 // unlink clears a Ref whose child session is gone and tells the user. The

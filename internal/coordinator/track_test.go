@@ -3,9 +3,11 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
@@ -82,12 +84,14 @@ type steerNote struct {
 // fixture is a parent "p" on branch feat/x whose item t3 links to child c1.
 // c1's report cites a file and a test command unless a test replaces it.
 type fixture struct {
-	todos   *fakeTodos
-	notify  *fakeNotify
-	probed  []string
-	steered []steerNote
-	report  func() (string, error)
-	tracker *Tracker
+	todos    *fakeTodos
+	notify   *fakeNotify
+	probed   []string
+	steered  []steerNote
+	report   func() (string, error)
+	sessions []domain.Session
+	kept     map[string]string
+	tracker  *Tracker
 }
 
 const evidenceReport = "## What changed\n\nParser.\n\n## Evidence\n\n- internal/parse/list.go\n- go test ./... exit 0\n\n## Surprises\n\nnone\n"
@@ -379,27 +383,43 @@ type ledgerRow struct {
 	payload map[string]any
 }
 
+// consultNow is the fixture clock; the consult was created 5 minutes earlier.
+var consultNow = time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+
 // consultFixture turns the fixture's child c1 into a consult with no PR.
+// Kept reports land in kept, keyed by child ID.
 func consultFixture(report string) (*fixture, *[]ledgerRow, *[]string) {
 	f := newFixture("child:c1", PRState{})
 	f.report = func() (string, error) { return report, nil }
-	sessions := []domain.Session{
+	f.sessions = []domain.Session{
 		{ID: "p", Name: "parent", Branch: "feat/x"},
-		{ID: "c1", Name: "consult", ParentID: "p", Role: domain.SessionRoleConsult},
+		{ID: "c1", Name: "consult", ParentID: "p", Role: domain.SessionRoleConsult, CreatedAt: consultNow.Add(-5 * time.Minute)},
 	}
-	f.tracker.Sessions = func() ([]domain.Session, error) { return sessions, nil }
+	f.tracker.Sessions = func() ([]domain.Session, error) { return f.sessions, nil }
+	f.tracker.Now = func() time.Time { return consultNow }
+	f.tracker.ConsultTimeout = 10 * time.Minute
+	f.kept = map[string]string{}
+	f.tracker.KeepReport = func(_ context.Context, child domain.Session, md string) (string, error) {
+		f.kept[child.ID] = md
+		return "/home/u/.aiman/consults/" + child.ID + ".report.md", nil
+	}
 	rows := &[]ledgerRow{}
 	retired := &[]string{}
 	f.tracker.Ledger = func(_ context.Context, id string, kind domain.EventKind, payload map[string]any) {
 		*rows = append(*rows, ledgerRow{session: id, kind: kind, payload: payload})
 	}
-	f.tracker.Retire = func(_ context.Context, child domain.Session) { *retired = append(*retired, child.ID) }
+	// Like RetireConsult, retiring forgets the consult's row.
+	f.tracker.Retire = func(_ context.Context, child domain.Session) {
+		*retired = append(*retired, child.ID)
+		f.sessions = slices.DeleteFunc(f.sessions, func(s domain.Session) bool { return s.ID == child.ID })
+	}
 	return f, rows, retired
 }
 
+const rejectReport = "## Objections\n\n- [high] a\n- [medium] b\n- [low] c\n- [low] d\n\n## Verdict\n\nreject\n"
+
 func TestConsultSettlesOnReport(t *testing.T) {
-	report := "## Objections\n\n- [high] a\n- [medium] b\n- [low] c\n- [low] d\n\n## Verdict\n\nreject\n"
-	f, rows, retired := consultFixture(report)
+	f, rows, retired := consultFixture(rejectReport)
 	f.tracker.TrackOnce(context.Background())
 
 	if it := f.todos.t3(t); it.State != domain.TodoDone {
@@ -420,23 +440,34 @@ func TestConsultSettlesOnReport(t *testing.T) {
 	if len(*retired) != 1 || (*retired)[0] != "c1" {
 		t.Fatalf("retired = %v, want c1", *retired)
 	}
-	// Retire removes the scratch directory, so the report reaches the
-	// coordinator only through this note.
-	if len(f.steered) != 1 || f.steered[0].session != "p" {
-		t.Fatalf("steered %+v, want one note to p", f.steered)
+	if f.kept["c1"] != rejectReport {
+		t.Fatalf("kept report = %q, want the consult's report", f.kept["c1"])
 	}
-	for _, want := range []string{"t3", "reject", "- [high] a", "Decisions"} {
-		if !strings.Contains(f.steered[0].text, want) {
-			t.Fatalf("note %q missing %q", f.steered[0].text, want)
-		}
+	note := "[aiman] consult c1 for t3: verdict reject, 1 high, 1 medium, 2 low. Report: /home/u/.aiman/consults/c1.report.md. Triage every objection in the design's Decisions table."
+	if len(f.steered) != 1 || f.steered[0].session != "p" || f.steered[0].text != note {
+		t.Fatalf("steered %+v, want one note %q", f.steered, note)
+	}
+}
+
+func TestConsultKeepReportFailureWaits(t *testing.T) {
+	f, rows, retired := consultFixture(rejectReport)
+	f.tracker.KeepReport = func(context.Context, domain.Session, string) (string, error) {
+		return "", errors.New("disk full")
+	}
+	f.tracker.TrackOnce(context.Background())
+	if it := f.todos.t3(t); it.State != domain.TodoPending || it.Ref != "child:c1" {
+		t.Fatalf("t3 = %+v, want pending and linked", it)
+	}
+	if len(*rows)+len(*retired)+len(f.steered) != 0 {
+		t.Fatalf("rows %v retired %v steered %v", *rows, *retired, f.steered)
 	}
 }
 
 func TestConsultWaitsForReport(t *testing.T) {
 	f, rows, retired := consultFixture("")
 	f.tracker.TrackOnce(context.Background())
-	if it := f.todos.t3(t); it.State != domain.TodoPending {
-		t.Fatalf("t3 state = %s, want pending", it.State)
+	if it := f.todos.t3(t); it.State != domain.TodoPending || it.Ref != "child:c1" {
+		t.Fatalf("t3 = %+v, want pending and linked", it)
 	}
 	if len(*rows)+len(*retired)+len(f.steered) != 0 {
 		t.Fatalf("a missing report did something: rows %v retired %v steered %v", *rows, *retired, f.steered)
@@ -453,8 +484,99 @@ func TestConsultUnparsableReportAsksOnce(t *testing.T) {
 	if len(f.steered) != 1 || f.steered[0].session != "p" {
 		t.Fatalf("steered = %+v, want one note to p", f.steered)
 	}
+	text := f.steered[0].text
+	for _, want := range []string{"consult c1 for t3", "## Objections", "## Verdict"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("note %q missing %q", text, want)
+		}
+	}
+	if strings.Contains(text, "returned no evidence") {
+		t.Fatalf("note %q uses the PR-child wording", text)
+	}
 	if len(*rows)+len(*retired) != 0 {
 		t.Fatalf("rows %v retired %v", *rows, *retired)
+	}
+}
+
+// TestConsultGivesUp covers every way a consult ends without a usable
+// report: the item is unlinked and stays pending, the consult is retired and
+// the coordinator is told once.
+func TestConsultGivesUp(t *testing.T) {
+	cases := []struct {
+		name   string
+		report string
+		change func(f *fixture)
+	}{
+		{"timed out", "", func(f *fixture) { f.sessions[1].CreatedAt = consultNow.Add(-11 * time.Minute) }},
+		{"agent ended", "", func(f *fixture) { f.sessions[1].AgentEnded = true }},
+		{"holder gone", "", func(f *fixture) {
+			f.tracker.Alive = func(context.Context, domain.Session) bool { return false }
+		}},
+		{"ended with a bad report", "no verdict here\n", func(f *fixture) { f.sessions[1].AgentEnded = true }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, rows, retired := consultFixture(tc.report)
+			tc.change(f)
+			f.tracker.TrackOnce(context.Background())
+			f.tracker.TrackOnce(context.Background())
+
+			if it := f.todos.t3(t); it.State != domain.TodoPending || it.Ref != "" {
+				t.Fatalf("t3 = %+v, want pending and unlinked", it)
+			}
+			if len(*retired) != 1 || (*retired)[0] != "c1" {
+				t.Fatalf("retired = %v, want c1 once", *retired)
+			}
+			note := "[aiman] consult c1 for t3 produced no report; ask again or proceed without it."
+			if len(f.steered) != 1 || f.steered[0].session != "p" || f.steered[0].text != note {
+				t.Fatalf("steered %+v, want one note %q", f.steered, note)
+			}
+			if len(*rows) != 0 {
+				t.Fatalf("ledger %v, want none", *rows)
+			}
+		})
+	}
+}
+
+func TestConsultAliveWithinTimeoutWaits(t *testing.T) {
+	f, _, retired := consultFixture("")
+	f.tracker.Alive = func(context.Context, domain.Session) bool { return true }
+	f.tracker.TrackOnce(context.Background())
+	if len(*retired) != 0 || len(f.steered) != 0 {
+		t.Fatalf("retired %v steered %v, want nothing", *retired, f.steered)
+	}
+}
+
+// TestConsultSweepRetiresOrphans retires a consult no open item links: its
+// item is done or dropped (serve stopped between settle and retire), or
+// nothing links it (serve stopped between start and link). A consult younger
+// than the link grace is left alone.
+func TestConsultSweepRetiresOrphans(t *testing.T) {
+	cases := []struct {
+		name    string
+		item    domain.TodoItem
+		created time.Time
+		want    bool
+	}{
+		{"item done", domain.TodoItem{ID: "t3", State: domain.TodoDone, Ref: "child:c1"}, consultNow.Add(-5 * time.Minute), true},
+		{"item dropped", domain.TodoItem{ID: "t3", State: domain.TodoDropped, Ref: "child:c1"}, consultNow.Add(-5 * time.Minute), true},
+		{"never linked", domain.TodoItem{ID: "t3", State: domain.TodoPending}, consultNow.Add(-5 * time.Minute), true},
+		{"just started", domain.TodoItem{ID: "t3", State: domain.TodoPending}, consultNow.Add(-10 * time.Second), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _, retired := consultFixture("")
+			f.todos.lists["p"] = domain.TodoList{SessionID: "p", Items: []domain.TodoItem{tc.item}}
+			f.sessions[1].CreatedAt = tc.created
+			f.tracker.TrackOnce(context.Background())
+			got := len(*retired) == 1 && (*retired)[0] == "c1"
+			if got != tc.want || len(*retired) > 1 {
+				t.Fatalf("retired = %v, want retired %v", *retired, tc.want)
+			}
+			if len(f.steered) != 0 {
+				t.Fatalf("steered %+v, want none", f.steered)
+			}
+		})
 	}
 }
 
