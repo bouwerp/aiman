@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -250,16 +251,20 @@ func (m *Model) removeFocusedTodo() tea.Cmd {
 	return m.mutateFocused(opRemove(m.focusedSessionID, it.ID))
 }
 
-// moveFocusedTodo sends the move. The ends are a no-op.
-// The cursor stays on the item when the reloaded list lands.
+// moveFocusedTodo moves the item past its neighbour in display order: K to
+// just before the item shown above it, J to just after the one shown below.
+// The RPC takes the item's final stored index, which is the neighbour's
+// current stored index in both directions. The ends are a no-op. The cursor
+// stays on the item when the reloaded list lands.
 func (m *Model) moveFocusedTodo(delta int) tea.Cmd {
 	items := m.focusedTodoItems()
-	from := m.todoCursor
-	to := from + delta
-	if from < 0 || from >= len(items) || to < 0 || to >= len(items) {
+	order := todoDisplayOrder(items)
+	pos := slices.Index(order, m.todoCursor)
+	to := pos + delta
+	if pos < 0 || to < 0 || to >= len(order) {
 		return nil
 	}
-	return m.mutateFocused(opMove(m.focusedSessionID, items[from].ID, to))
+	return m.mutateFocused(opMove(m.focusedSessionID, items[m.todoCursor].ID, order[to]))
 }
 
 func (m *Model) mutateFocused(op todoOp) tea.Cmd {

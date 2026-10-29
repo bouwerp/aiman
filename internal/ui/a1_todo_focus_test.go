@@ -88,7 +88,7 @@ func TestTodoKeysSendOps(t *testing.T) {
 	// Params["state"] is the wire string. A domain.TodoState compare is false
 	// even when the value is the right word.
 	to2 := 2
-	to0 := 0
+	to1 := 1
 	cases := []struct {
 		name    string
 		keys    []string
@@ -104,8 +104,9 @@ func TestTodoKeysSendOps(t *testing.T) {
 		{name: "d", keys: []string{"d"}, method: "todo.update", id: "t2", state: "dropped", wantOp: true},
 		{name: "x", keys: []string{"x"}, method: "todo.remove", id: "t2", wantOp: true},
 		{name: "J on t2", keys: []string{"J"}, method: "todo.move", id: "t2", toIndex: &to2, wantOp: true},
-		{name: "K on t2", keys: []string{"K"}, method: "todo.move", id: "t2", toIndex: &to0, wantOp: true},
-		{name: "K on t1", keys: []string{"down", "down", "K"}, wantOp: false},
+		{name: "K on t2 is the top row", keys: []string{"K"}, wantOp: false},
+		{name: "K on t3", keys: []string{"down", "K"}, method: "todo.move", id: "t3", toIndex: &to1, wantOp: true},
+		{name: "J on t1 is the bottom row", keys: []string{"down", "down", "J"}, wantOp: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
