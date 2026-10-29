@@ -88,7 +88,7 @@ func (s *Server) handleUsageGet(ctx context.Context, req Request) Response {
 		}
 	}
 	if !validUsageBy(p.By) {
-		return errResp(req.ID, CodeInvalidParams, "by must be session, issue, day, or model")
+		return errResp(req.ID, CodeInvalidParams, "by must be session, issue, day, model, or role")
 	}
 	sessionID, fail, ok := s.resolveUsageSession(ctx, req.ID, p.Session)
 	if !ok {
@@ -143,7 +143,7 @@ func (s *Server) usageBudget(ctx context.Context, sessionID string, rep usage.Re
 
 func validUsageBy(by string) bool {
 	switch by {
-	case "", "session", "issue", "day", "model":
+	case "", "session", "issue", "day", "model", "role":
 		return true
 	default:
 		return false

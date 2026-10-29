@@ -379,3 +379,14 @@ func (l *blockingLister) count() int {
 	defer l.mu.Unlock()
 	return l.n
 }
+
+func TestUsageGetAcceptsByRole(t *testing.T) {
+	srv := New(nil, testRepo(t), nil, nil, nil, nil, "test")
+	rec := &queryRecorder{}
+	srv.reporter = rec
+	var res usageGetResult
+	rpcOK(t, srv, "", "usage.get", map[string]any{"by": "role"}, &res)
+	if rec.q.By != "role" {
+		t.Fatalf("query = %+v", rec.q)
+	}
+}

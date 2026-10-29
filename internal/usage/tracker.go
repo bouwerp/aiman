@@ -197,6 +197,8 @@ func (t *Tracker) scanSession(ctx context.Context, s domain.Session) (bool, erro
 		Group:     s.Group,
 		IssueKey:  s.IssueKey,
 		AgentName: s.AgentName,
+		Role:      string(s.Role),
+		ParentID:  s.ParentID,
 	}
 	if err := t.store.UpsertUsageSession(ctx, meta); err != nil {
 		return false, fmt.Errorf("saving usage session %s: %w", s.ID, err)

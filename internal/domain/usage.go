@@ -84,6 +84,8 @@ type UsageSessionMeta struct {
 	Group                  string
 	IssueKey               string
 	AgentName              string
+	Role                   string // session role; empty is an ordinary session
+	ParentID               string // spawning session; empty is a root
 	LastInputTokens        int64
 	ContextWindow          int64
 	ContextSource          string

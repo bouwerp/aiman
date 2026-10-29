@@ -331,3 +331,23 @@ func TestUpsertUsageSessionKeepsFields(t *testing.T) {
 		t.Fatalf("updated_at = %q", updated)
 	}
 }
+
+func TestUsageSessionRoleRoundTrip(t *testing.T) {
+	repo := openUsageRepo(t)
+	ctx := context.Background()
+	if err := repo.UpsertUsageSession(ctx, domain.UsageSessionMeta{
+		SessionID: "s1", Role: "consult", ParentID: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpsertUsageSession(ctx, domain.UsageSessionMeta{SessionID: "s1", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.UsageSessions(ctx)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("sessions = %+v, err %v", got, err)
+	}
+	if got[0].Role != "consult" || got[0].ParentID != "p1" {
+		t.Fatalf("meta = %+v", got[0])
+	}
+}

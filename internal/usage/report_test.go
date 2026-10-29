@@ -390,3 +390,36 @@ func near(t *testing.T, got, want float64) {
 		t.Fatalf("got %.10f, want %.10f", got, want)
 	}
 }
+
+func TestRollupByRole(t *testing.T) {
+	store := newMemStore()
+	hour := time.Date(2026, 10, 22, 4, 0, 0, 0, time.UTC)
+	for _, s := range []struct {
+		meta domain.UsageSessionMeta
+		in   int64
+	}{
+		{domain.UsageSessionMeta{SessionID: "c"}, 4_000_000},
+		{domain.UsageSessionMeta{SessionID: "w", ParentID: "c"}, 3_000_000},
+		{domain.UsageSessionMeta{SessionID: "k", ParentID: "c", Role: "consult"}, 2_000_000},
+		{domain.UsageSessionMeta{SessionID: "r", ParentID: "c", Role: "reviewer"}, 1_000_000},
+	} {
+		if err := store.UpsertUsageSession(context.Background(), s.meta); err != nil {
+			t.Fatal(err)
+		}
+		seedBucket(store, domain.UsageBucket{
+			SessionID: s.meta.SessionID, Hour: hour, Model: "claude-haiku-4-5",
+			Tokens: domain.TokenCounts{Input: s.in},
+		})
+	}
+	got := report(t, store, Query{By: "role"})
+	wantKeys := []string{"coordinator", "child", "consult", "reviewer"}
+	if len(got.Rows) != len(wantKeys) {
+		t.Fatalf("rows = %+v", got.Rows)
+	}
+	for i, key := range wantKeys {
+		if got.Rows[i].Key != key {
+			t.Fatalf("row %d key = %s, want %s", i, got.Rows[i].Key, key)
+		}
+		near(t, got.Rows[i].Summary.CostUSD, float64(4-i))
+	}
+}

@@ -20,7 +20,7 @@ const usageTableHeader = "KEY  INPUT  OUTPUT  CACHE_READ  CACHE_WRITE  ~COST  CA
 func runUsage(args []string, out io.Writer) error {
 	flags, rest := takeFlags(args)
 	if len(rest) != 0 {
-		fmt.Fprintf(os.Stderr, "Usage: aiman usage [--session ID] [--group NAME] [--issue KEY] [--day YYYY-MM-DD] [--by session|issue|day|model] [--days N] [--tz-offset-minutes N] [--json]\n")
+		fmt.Fprintf(os.Stderr, "Usage: aiman usage [--session ID] [--group NAME] [--issue KEY] [--day YYYY-MM-DD] [--by session|issue|day|model|role] [--days N] [--tz-offset-minutes N] [--json]\n")
 		return errUsage
 	}
 	params, err := usageParams(flags)

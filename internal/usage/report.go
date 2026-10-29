@@ -18,7 +18,7 @@ type Query struct {
 	Group           string
 	Issue           string
 	Day             string // "2006-01-02" in the query's zone
-	By              string // "", "session", "issue", "day", "model"
+	By              string // "", "session", "issue", "day", "model", "role"
 	Days            int    // 0 = all time; otherwise hours in [now minus N days, now] in the query zone
 	TZOffsetMinutes int
 }
@@ -283,7 +283,7 @@ func dayKey(hour time.Time, offsetMin int) string {
 }
 
 func rollup(buckets []domain.UsageBucket, metas map[string]domain.UsageSessionMeta, prices PriceTable, q Query) []Row {
-	if q.By != "session" && q.By != "issue" && q.By != "day" && q.By != "model" {
+	if q.By != "session" && q.By != "issue" && q.By != "day" && q.By != "model" && q.By != "role" {
 		return nil
 	}
 	grouped := map[string][]domain.UsageBucket{}
@@ -314,8 +314,23 @@ func bucketKey(bucket domain.UsageBucket, metas map[string]domain.UsageSessionMe
 		return NoTicketKey
 	case "day":
 		return dayKey(bucket.Hour, q.TZOffsetMinutes)
+	case "role":
+		return roleKey(metas[bucket.SessionID])
 	default:
 		return bucket.Model
+	}
+}
+
+// roleKey names the cost bucket of a session: its role when set, else child
+// when a session spawned it, else coordinator.
+func roleKey(m domain.UsageSessionMeta) string {
+	switch {
+	case m.Role != "":
+		return m.Role
+	case m.ParentID != "":
+		return "child"
+	default:
+		return "coordinator"
 	}
 }
 
