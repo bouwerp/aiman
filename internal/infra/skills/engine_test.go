@@ -170,6 +170,10 @@ func TestPrepareSession_InstallsBundledAimanSkill(t *testing.T) {
 		if string(got) != aimanskill.Text {
 			t.Fatalf("%s content mismatch", p)
 		}
+		tpl := aimanskill.Sibling(p, aimanskill.TemplateName)
+		if string(remote.writtenFiles[tpl]) != aimanskill.Template {
+			t.Fatalf("%s missing or does not match the template", tpl)
+		}
 	}
 }
 

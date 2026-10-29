@@ -93,8 +93,11 @@ func installBundledAimanSkill(ctx context.Context, remote domain.RemoteExecutor,
 	var first error
 	for _, p := range aimanskill.ProjectSkillFiles(worktreePath) {
 		_, _ = remote.Execute(ctx, fmt.Sprintf("mkdir -p %q", path.Dir(p)))
-		if _, err := remotefile.WriteIfChanged(ctx, remote, p, []byte(aimanskill.Text)); err != nil && first == nil {
-			first = err
+		for _, f := range aimanskill.Bundle() {
+			dst := aimanskill.Sibling(p, f.Name)
+			if _, err := remotefile.WriteIfChanged(ctx, remote, dst, []byte(f.Content)); err != nil && first == nil {
+				first = err
+			}
 		}
 	}
 	return first

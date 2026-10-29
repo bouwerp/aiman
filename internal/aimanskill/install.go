@@ -63,15 +63,53 @@ func ProjectSkillFiles(root string) []string {
 	}
 }
 
+// BundleFile is one file of the skill, installed in every aiman skill dir.
+type BundleFile struct {
+	Name    string
+	Content string
+}
+
+// Bundle is the skill's file set: SKILL.md and the design page template.
+func Bundle() []BundleFile {
+	return []BundleFile{{Name: "SKILL.md", Content: Text}, {Name: TemplateName, Content: Template}}
+}
+
+// Sibling replaces the file name of a skill path, keeping its separator, so
+// it works on host paths and on slash-joined remote paths alike.
+func Sibling(skillPath, name string) string {
+	return skillPath[:strings.LastIndexAny(skillPath, "/\\")+1] + name
+}
+
 // EnsureFile writes the embedded skill when the path is missing or stale.
 func EnsureFile(path string) (FileResult, error) {
+	return ensureContent(path, Text)
+}
+
+// ensureBundle ensures every bundle file beside the skill path.
+func ensureBundle(skillPath string) ([]FileResult, error) {
+	var out []FileResult
+	var first error
+	for _, f := range Bundle() {
+		res, err := ensureContent(Sibling(skillPath, f.Name), f.Content)
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			continue
+		}
+		out = append(out, res)
+	}
+	return out, first
+}
+
+func ensureContent(path, content string) (FileResult, error) {
 	res := FileResult{Path: path}
-	if path == "" || Text == "" {
+	if path == "" || content == "" {
 		return res, nil
 	}
 	existing, err := os.ReadFile(path)
 	switch {
-	case err == nil && string(existing) == Text:
+	case err == nil && string(existing) == content:
 		res.Action = ActionCurrent
 		return res, nil
 	case err == nil:
@@ -84,26 +122,26 @@ func EnsureFile(path string) (FileResult, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return res, fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(Text), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return res, fmt.Errorf("writing %s: %w", path, err)
 	}
 	return res, nil
 }
 
-// EnsureOnHost installs or updates the skill in user-level agent dirs and in
-// each existing project root. Missing project roots are skipped.
+// EnsureOnHost installs or updates the skill's file set in user-level agent
+// dirs and in each existing project root. Missing project roots are skipped.
 func EnsureOnHost(home string, projectRoots []string) ([]FileResult, error) {
 	var out []FileResult
 	var first error
-	for _, p := range UserSkillFiles(home) {
-		res, err := EnsureFile(p)
-		if err != nil {
-			if first == nil {
-				first = err
-			}
-			continue
+	ensure := func(skillPath string) {
+		res, err := ensureBundle(skillPath)
+		out = append(out, res...)
+		if err != nil && first == nil {
+			first = err
 		}
-		out = append(out, res)
+	}
+	for _, p := range UserSkillFiles(home) {
+		ensure(p)
 	}
 	seen := map[string]bool{}
 	for _, root := range projectRoots {
@@ -117,14 +155,7 @@ func EnsureOnHost(home string, projectRoots []string) ([]FileResult, error) {
 			continue
 		}
 		for _, p := range ProjectSkillFiles(root) {
-			res, err := EnsureFile(p)
-			if err != nil {
-				if first == nil {
-					first = err
-				}
-				continue
-			}
-			out = append(out, res)
+			ensure(p)
 		}
 	}
 	return out, first

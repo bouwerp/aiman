@@ -243,3 +243,88 @@ func TestSkillStatesDoneWhen(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureOnHostInstallsTemplate(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	if Template == "" {
+		t.Fatal("design template is not embedded")
+	}
+	if _, err := EnsureOnHost(home, []string{project}); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{
+		filepath.Join(home, ".claude", "skills", "aiman"),
+		filepath.Join(project, ".agents", "skills", "aiman"),
+	} {
+		for name, want := range map[string]string{"SKILL.md": Text, TemplateName: Template} {
+			got, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Fatalf("%s/%s does not match the embed", dir, name)
+			}
+		}
+	}
+	again, err := EnsureOnHost(home, []string{project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range again {
+		if r.Action != ActionCurrent {
+			t.Fatalf("second run: %s %s", r.Path, r.Action)
+		}
+	}
+	if len(again) != 2*(len(UserSkillFiles(home))+len(ProjectSkillFiles(project))) {
+		t.Fatalf("second run ensured %d files", len(again))
+	}
+}
+
+func TestSkillStatesDesignFirst(t *testing.T) {
+	design := strings.Index(Text, "## Design first")
+	coord := strings.Index(Text, "## Coordinator")
+	if design < 0 || coord < 0 || design > coord {
+		t.Fatal("## Design first must come before ## Coordinator")
+	}
+	for _, want := range []string{
+		"**Trivial**", "**Small**", "**Project**", TemplateName,
+		"aiman design publish", "aiman todo gate", "aiman todo approve-design --quote",
+		"session create --consult", "## Question", "## Scope", "## Objections", "## Verdict",
+		"`[high]`", "`approve`", "consult_needs_smart", "gate_needs_operator", "design_not_approved",
+		"| Objection | Severity | Triage | Reason |",
+		"| Piece | Owns files | Parallel group | Depends on | Complexity | Tier | Acceptance tests |",
+		"at most 4 children", "Never approve on a consult verdict", "as built", "## What changed", "## Files",
+	} {
+		if !strings.Contains(Text, want) {
+			t.Fatalf("skill missing %q", want)
+		}
+	}
+}
+
+func TestTemplateSectionsInReadingOrder(t *testing.T) {
+	last := -1
+	for _, h := range []string{
+		"## The problem", "## How it works today", "## Glossary", "## Proposed design",
+		"## A scenario, end to end", "## Alternatives considered", "## Open questions",
+		"## Decisions", "## Breakdown", "## What you should be able to explain after reading",
+	} {
+		i := strings.Index(Template, h)
+		if i <= last {
+			t.Fatalf("template section %q missing or out of order", h)
+		}
+		last = i
+	}
+	for _, want := range []string{
+		"classDef new fill:#d4f7d4", "classDef changed fill:#fde9b8", "classDef removed stroke-dasharray:4,fill:#f9d0d0",
+		"| Objection | Severity | Triage | Reason |",
+		"| Piece | Owns files | Parallel group | Depends on | Complexity | Tier | Acceptance tests |",
+	} {
+		if !strings.Contains(Template, want) {
+			t.Fatalf("template missing %q", want)
+		}
+	}
+	if strings.Contains(Text+Template, "—") {
+		t.Fatal("skill or template contains an em-dash")
+	}
+}
