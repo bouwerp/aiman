@@ -20,6 +20,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
@@ -812,6 +813,9 @@ func (s *Server) applyFor(params *createParams, parentID string, existing []doma
 	i, err := findTodo(&list, params.For)
 	if err != nil {
 		return domain.Session{}, CodeNotFound, fmt.Errorf("%w in session %s", err, parent.Name)
+	}
+	if todo.GateOpen(list) {
+		return domain.Session{}, CodeDesignNotApproved, fmt.Errorf("session %s has an open design gate: get the operator's approval, then run aiman todo approve-design", parent.Name)
 	}
 	item := list.Items[i]
 	if item.Ref != "" {

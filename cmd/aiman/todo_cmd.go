@@ -48,7 +48,8 @@ func runTodo(args []string, stdin io.Reader, getenv func(string) string) error {
 }
 
 func todoUsage() error {
-	fmt.Fprintf(os.Stderr, "Usage: aiman todo <list|add|start|done|drop|edit|move|rm|report> [--session NAME] [--as USER] [--json]\n")
+	fmt.Fprintf(os.Stderr, "Usage: aiman todo <list|add|start|done|drop|edit|move|rm|gate|approve-design|report> [--session NAME] [--as USER] [--json]\n")
+	fmt.Fprintf(os.Stderr, "approve-design --quote \"<operator's words>\" closes the design gate that gate added.\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
 	return errUsage
 }
@@ -71,6 +72,17 @@ func todoParams(cmd string, rest []string, flags map[string]string) (string, map
 		return todoEditParams(rest)
 	case "move":
 		return todoMoveParams(rest)
+	case "gate":
+		if len(rest) != 0 {
+			return "", nil, errUsage
+		}
+		return "todo.gate", map[string]any{}, nil
+	case "approve-design":
+		quote := strings.TrimSpace(flags["quote"])
+		if len(rest) != 0 || quote == "" {
+			return "", nil, errUsage
+		}
+		return "todo.approve_design", map[string]any{"quote": quote}, nil
 	case "rm":
 		if len(rest) != 1 || rest[0] == "" {
 			return "", nil, errUsage

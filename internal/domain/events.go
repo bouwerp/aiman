@@ -28,6 +28,9 @@ const (
 	// EventPaneUncertain records a pane the rules could not classify with high
 	// confidence. It measures how often a model tier would be needed.
 	EventPaneUncertain EventKind = "pane.uncertain"
+	// EventDesignApproved records the operator's approval that closed a
+	// session's design gate; its payload carries the approving quote.
+	EventDesignApproved EventKind = "design.approved"
 )
 
 // EventActor is who caused the event. `unknown` exists for rows imported from a

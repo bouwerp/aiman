@@ -1,0 +1,121 @@
+package server
+
+import (
+	"context"
+	"testing"
+
+	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/todo"
+)
+
+// gateServer has an owner session "own" with an open gate item and a second
+// session "other".
+func gateServer(t *testing.T) *Server {
+	t.Helper()
+	srv, _, _ := todoServer(t, todoSession("own"), todoSession("other"))
+	var res todoListResult
+	rpcOK(t, srv, "", "todo.gate", map[string]any{"session": "own"}, &res)
+	return srv
+}
+
+func gateID(t *testing.T, srv *Server) string {
+	t.Helper()
+	list, err := srv.todos.Get("own")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range list.Items {
+		if it.Ref == "gate:design" {
+			return it.ID
+		}
+	}
+	t.Fatal("no gate item")
+	return ""
+}
+
+func wantCode(t *testing.T, resp Response, code string) {
+	t.Helper()
+	if resp.Error == nil || resp.Error.Code != code {
+		t.Fatalf("response = %+v, want code %s", resp.Error, code)
+	}
+}
+
+func TestGateRefusesSessionCallers(t *testing.T) {
+	srv := gateServer(t)
+	id := gateID(t, srv)
+	for _, caller := range []string{"own", "other"} {
+		wantCode(t, rpc(t, srv, caller, "todo.update", map[string]any{"session": "own", "id": id, "state": "done"}), CodeGateNeedsOperator)
+		wantCode(t, rpc(t, srv, caller, "todo.update", map[string]any{"session": "own", "id": id, "state": "dropped"}), CodeGateNeedsOperator)
+		wantCode(t, rpc(t, srv, caller, "todo.remove", map[string]any{"session": "own", "id": id}), CodeGateNeedsOperator)
+	}
+}
+
+func TestGateOperatorTicks(t *testing.T) {
+	srv := gateServer(t)
+	id := gateID(t, srv)
+	rpcOK(t, srv, "", "todo.update", map[string]any{"session": "own", "id": id, "state": "done"}, nil)
+}
+
+func TestApproveDesign(t *testing.T) {
+	srv := gateServer(t)
+	wantCode(t, rpc(t, srv, "own", "todo.approve_design", map[string]any{"session": "own", "quote": "  "}), CodeInvalidParams)
+	wantCode(t, rpc(t, srv, "other", "todo.approve_design", map[string]any{"session": "own", "quote": "go ahead"}), CodeGateNeedsOperator)
+	rpcOK(t, srv, "own", "todo.approve_design", map[string]any{"session": "own", "quote": "go ahead"}, nil)
+	list, _ := srv.todos.Get("own")
+	for _, it := range list.Items {
+		if it.Ref == "gate:design" && it.State != domain.TodoDone {
+			t.Fatalf("gate state %s", it.State)
+		}
+	}
+	rows, err := srv.repo.(sessionEventLister).ListSessionEvents(context.Background(), "own", 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range rows {
+		if r.Kind == domain.EventDesignApproved {
+			n++
+			if string(r.Payload) != `{"quote":"go ahead"}` {
+				t.Fatalf("payload %s", r.Payload)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("design.approved rows = %d", n)
+	}
+}
+
+func TestForBlockedByOpenGate(t *testing.T) {
+	srv, creator := forServer(t, "")
+	create := func() Response {
+		return rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p"})
+	}
+	// The seeded items carry explicit ids, so give the gate one too.
+	err := srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAiman, func(l *domain.TodoList) error {
+		todo.AddGate(l)
+		for i := range l.Items {
+			if l.Items[i].Ref == todo.DesignGateRef {
+				l.Items[i].ID = "g1"
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, create(), CodeDesignNotApproved)
+	if creator.calls != 0 {
+		t.Fatalf("created %d sessions while the gate was open", creator.calls)
+	}
+	rpcOK(t, srv, "p", "todo.approve_design", map[string]any{"session": "p", "quote": "ship it"}, nil)
+	if resp := create(); resp.Error != nil {
+		t.Fatalf("create after approval: %+v", resp.Error)
+	}
+}
+
+func TestForAllowedWithoutGate(t *testing.T) {
+	srv, _ := forServer(t, "")
+	if resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p"}); resp.Error != nil {
+		t.Fatalf("create: %+v", resp.Error)
+	}
+}

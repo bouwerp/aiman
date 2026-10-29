@@ -512,6 +512,7 @@ func LifecycleCases() []Case {
 		CaseChildSpawn(),
 		CaseChildNoEvidence(),
 		CaseChildVanished(),
+		CaseDesignGate(),
 	}
 }
 

@@ -121,8 +121,9 @@ func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*doma
 // steering note reached the agent.
 func (f *Files) Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliveredAt time.Time) (domain.TodoList, Change, error) {
 	return f.update(sessionID, domain.AuthorAgent, true, func(l *domain.TodoList, d fileData, now time.Time) error {
+		prev := *l
 		*l = MergeWithRetexts(*l, d.Tombstones, d.Retexts, snap, deliveredAt, now)
-		return nil
+		return GuardGate(prev, *l)
 	})
 }
 

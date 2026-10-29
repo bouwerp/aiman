@@ -215,6 +215,7 @@ type todoParams struct {
 	ToIndex int              `json:"to_index"`
 	Items   []todoMirrorItem `json:"items"`
 	Mode    string           `json:"mode"`
+	Quote   string           `json:"quote"`
 }
 
 type todoMirrorItem struct {
@@ -253,6 +254,8 @@ func todoErrResp(id string, err error) Response {
 	switch {
 	case errors.Is(err, errTodoNotFound):
 		return errResp(id, CodeNotFound, err.Error())
+	case errors.Is(err, todo.ErrGateLocked):
+		return errResp(id, CodeGateNeedsOperator, err.Error())
 	default:
 		return errResp(id, CodeInvalidParams, err.Error())
 	}
@@ -299,6 +302,10 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 		return s.handleTodoEnsureDone(ctx, req, sess)
 	case "todo.mark_met":
 		return s.handleTodoMarkMet(req, sess)
+	case "todo.gate":
+		return s.handleTodoGate(req, sess)
+	case "todo.approve_design":
+		return s.handleApproveDesign(ctx, req, p, sess)
 	case "steer.send":
 		return s.handleSteerSend(ctx, req, p, sess, author)
 	case "todo.mirror":
@@ -338,7 +345,7 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	list, err := s.MutateTodos(ctx, sess, author, fn)
+	list, err := s.MutateTodos(ctx, sess, author, guardGate(req.Caller, fn))
 	if err != nil {
 		return todoErrResp(req.ID, err)
 	}
@@ -454,7 +461,7 @@ func (s *Server) handleTodoAdd(req Request, p todoParams, sess domain.Session, a
 	if text == "" {
 		return errResp(req.ID, CodeInvalidParams, "text is required")
 	}
-	list, change, err := s.mutateTodos(sess, author, func(l *domain.TodoList) error {
+	list, change, err := s.mutateTodos(sess, author, guardGate(req.Caller, func(l *domain.TodoList) error {
 		at := len(l.Items)
 		if p.After != "" {
 			i, err := findTodo(l, p.After)
@@ -466,7 +473,7 @@ func (s *Server) handleTodoAdd(req Request, p todoParams, sess domain.Session, a
 		item := domain.TodoItem{Text: text, State: domain.TodoPending, Ref: strings.TrimSpace(p.Ref)}
 		l.Items = append(l.Items[:at], append([]domain.TodoItem{item}, l.Items[at:]...)...)
 		return nil
-	})
+	}))
 	if err != nil {
 		return todoErrResp(req.ID, err)
 	}
@@ -586,4 +593,90 @@ func (s *Server) handleTodoSummary(ctx context.Context, req Request) Response {
 		out[id] = e
 	}
 	return Response{ID: req.ID, Result: map[string]any{"type": "todo_summary", "sessions": out}}
+}
+
+// guardGate wraps fn so a session caller (a non-empty caller) cannot change an
+// open design gate. An empty caller is the operator, who may.
+func guardGate(caller string, fn func(*domain.TodoList) error) func(*domain.TodoList) error {
+	if caller == "" {
+		return fn
+	}
+	return func(l *domain.TodoList) error {
+		prev := *l
+		prev.Items = append([]domain.TodoItem(nil), l.Items...)
+		if err := fn(l); err != nil {
+			return err
+		}
+		return todo.GuardGate(prev, *l)
+	}
+}
+
+// mutateQuiet applies fn as aiman without steering the agent, and still
+// renders and announces a real change.
+func (s *Server) mutateQuiet(sess domain.Session, fn func(*domain.TodoList) error) (domain.TodoList, error) {
+	if s.todos == nil {
+		return domain.TodoList{}, errTodosDisabled
+	}
+	unlock := s.todoLock(sess.ID)
+	defer unlock()
+	prev, err := s.todos.Get(sess.ID)
+	if err != nil {
+		return prev, err
+	}
+	list, change, err := s.todos.Mutate(sess.ID, domain.AuthorAiman, fn)
+	if err != nil {
+		return prev, err
+	}
+	s.afterTodoChange(sess, domain.AuthorAiman, list, change, prev.Rev, false)
+	return list, nil
+}
+
+// handleTodoGate adds the open design gate to the session's list.
+func (s *Server) handleTodoGate(req Request, sess domain.Session) Response {
+	added := false
+	list, err := s.mutateQuiet(sess, func(l *domain.TodoList) error {
+		added = todo.AddGate(l)
+		return nil
+	})
+	if err != nil {
+		return todoErrResp(req.ID, err)
+	}
+	return Response{ID: req.ID, Result: map[string]any{"type": "todo_list", "list": list, "added": added}}
+}
+
+// handleApproveDesign closes the session's design gate on the strength of the
+// operator's quote. Only the session itself may call it: the quote is the
+// operator's words relayed by the session, recorded in the ledger.
+func (s *Server) handleApproveDesign(ctx context.Context, req Request, p todoParams, sess domain.Session) Response {
+	if req.Caller != sess.ID {
+		return errResp(req.ID, CodeGateNeedsOperator, "only the session itself can record its design approval")
+	}
+	quote := strings.TrimSpace(p.Quote)
+	if quote == "" {
+		return errResp(req.ID, CodeInvalidParams, "quote is required: the operator's words approving the design")
+	}
+	closed, found := false, false
+	list, err := s.mutateQuiet(sess, func(l *domain.TodoList) error {
+		for i := range l.Items {
+			if l.Items[i].Ref != todo.DesignGateRef {
+				continue
+			}
+			found = true
+			if l.Items[i].State != domain.TodoDone {
+				l.Items[i].State = domain.TodoDone
+				closed = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return todoErrResp(req.ID, err)
+	}
+	if !found {
+		return errResp(req.ID, CodeInvalidParams, "session has no design gate")
+	}
+	if closed {
+		s.appendEvent(ctx, sess.ID, domain.EventActorAgent, domain.EventDesignApproved, map[string]any{"quote": quote})
+	}
+	return Response{ID: req.ID, Result: map[string]any{"type": "todo_list", "list": list, "approved": closed}}
 }

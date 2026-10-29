@@ -270,3 +270,17 @@ func captureStdIO(t *testing.T, fn func()) (string, string) {
 	}
 	return stdout.String(), stderr.String()
 }
+
+func TestTodoParamsGateCommands(t *testing.T) {
+	method, params, err := todoParams("gate", nil, nil)
+	if err != nil || method != "todo.gate" || len(params) != 0 {
+		t.Fatalf("gate = %s %v %v", method, params, err)
+	}
+	method, params, err = todoParams("approve-design", nil, map[string]string{"quote": " go ahead "})
+	if err != nil || method != "todo.approve_design" || params["quote"] != "go ahead" {
+		t.Fatalf("approve-design = %s %v %v", method, params, err)
+	}
+	if _, _, err = todoParams("approve-design", nil, map[string]string{}); err == nil {
+		t.Fatal("approve-design without a quote must fail")
+	}
+}

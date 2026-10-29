@@ -23,6 +23,11 @@ const (
 	// CodeLegacyTerminal refuses a session that still runs in tmux. The
 	// message carries the command that stops it on the host.
 	CodeLegacyTerminal = "legacy_terminal"
+	// CodeGateNeedsOperator refuses a session's attempt to close, drop, remove
+	// or edit the open design gate, or to approve a design for another session.
+	CodeGateNeedsOperator = "gate_needs_operator"
+	// CodeDesignNotApproved refuses delegation while the parent's design gate is open.
+	CodeDesignNotApproved = "design_not_approved"
 )
 
 type Request struct {

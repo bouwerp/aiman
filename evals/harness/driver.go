@@ -117,6 +117,25 @@ func (h *Harness) Call(method string, params any) (server.Response, error) {
 	return resp, nil
 }
 
+// CallAs is Call sent as the session caller; an empty caller is the operator.
+// The client reads the caller from AIMAN_ID, so the variable is set for the
+// call and restored.
+func (h *Harness) CallAs(caller, method string, params any) (server.Response, error) {
+	h.t.Helper()
+	old, had := os.LookupEnv("AIMAN_ID")
+	if err := os.Setenv("AIMAN_ID", caller); err != nil {
+		return server.Response{}, err
+	}
+	defer func() {
+		if had {
+			_ = os.Setenv("AIMAN_ID", old)
+		} else {
+			_ = os.Unsetenv("AIMAN_ID")
+		}
+	}()
+	return h.Call(method, params)
+}
+
 // RegisterSession persists a session and adds its terminal to the FakePTY.
 // Empty id, name, status, backend and directory are filled.
 func (h *Harness) RegisterSession(s domain.Session) {
