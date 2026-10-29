@@ -167,13 +167,7 @@ func (d *Daemon) pollGitHub(ctx context.Context) error {
 			if !active {
 				log.Printf("Found new issue %d in %s! Spawning ephemeral agent...", issue.Number, s.AutonomousConfig.GitHubRepo)
 
-				prompt := fmt.Sprintf("You are an autonomous AI agent handling GitHub issue #%d - %s\n\nIssue Description:\n%s\n\n", issue.Number, issue.Title, issue.Body)
-				prompt += "Your task is to implement the fix or feature requested in this issue.\n"
-				prompt += "When you are finished:\n"
-				prompt += "1. Create a Pull Request (PR) with your changes.\n"
-				prompt += fmt.Sprintf("2. Summarise your session in detail and post it as a comment on issue #%d, including the PR link.\n", issue.Number)
-				prompt += fmt.Sprintf("3. If you need more information or clarification from the user, post a comment on issue #%d and wait for a reply. You must periodically check the issue for new comments using the gh cli.\n", issue.Number)
-				prompt += "4. Once the PR is open and you have commented on the issue, you may terminate your session."
+				prompt := autonomousIssuePrompt(issue.Number, issue.Title, issue.Body)
 
 				cfg := domain.SessionConfig{
 					AdHoc:          false,
@@ -294,4 +288,19 @@ func (d *Daemon) triggerPrompt(ctx context.Context, p *domain.ScheduledPrompt) e
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// autonomousIssuePrompt is the initial prompt for an agent handling a GitHub
+// issue on its own. It sizes and designs before implementing, and keeps the
+// reply-polling instruction for missing information.
+func autonomousIssuePrompt(number int, title, body string) string {
+	prompt := fmt.Sprintf("You are an autonomous AI agent handling GitHub issue #%d - %s\n\nIssue Description:\n%s\n\n", number, title, body)
+	prompt += "Your task is to implement the fix or feature requested in this issue.\n"
+	prompt += "Before implementing, size the task. For anything beyond a trivial fix, write the design page, publish it with aiman design publish, and run one consult with aiman session create --consult, on another model family when one is installed. If an objection of severity high is still unresolved, stop and wait for input; do not implement. Link the design in your issue comment.\n"
+	prompt += "When you are finished:\n"
+	prompt += "1. Create a Pull Request (PR) with your changes.\n"
+	prompt += fmt.Sprintf("2. Summarise your session in detail and post it as a comment on issue #%d, including the PR link.\n", number)
+	prompt += fmt.Sprintf("3. If you need more information or clarification from the user, post a comment on issue #%d and wait for a reply. You must periodically check the issue for new comments using the gh cli.\n", number)
+	prompt += "4. Once the PR is open and you have commented on the issue, you may terminate your session."
+	return prompt
 }

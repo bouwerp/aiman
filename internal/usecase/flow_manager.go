@@ -18,6 +18,7 @@ import (
 	infraGit "github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/graphify"
 	"github.com/bouwerp/aiman/internal/infra/remotefile"
+	"github.com/bouwerp/aiman/internal/infra/skills"
 	"github.com/google/uuid"
 )
 
@@ -224,6 +225,16 @@ func WriteTaskBrief(ctx context.Context, remote remotefile.Writer, dir, brief st
 	}
 	_, err = remotefile.WriteIfChanged(ctx, remote, path, []byte(domain.AimanScaffoldHeader+body))
 	return err
+}
+
+// designFirstPrompt appends skills.DesignFirstSuffix to a non-empty initial
+// prompt. Hidden roles, briefed children and autonomous sessions skip it: a
+// brief is the child's design, and the autonomous prompt carries its own.
+func designFirstPrompt(prompt string, cfg domain.SessionConfig) string {
+	if strings.TrimSpace(prompt) == "" || cfg.Role.Hidden() || cfg.Brief != "" || cfg.Mode == domain.SessionModeAutonomous {
+		return prompt
+	}
+	return joinPrompt(prompt, skills.DesignFirstSuffix)
 }
 
 func joinTaskSections(first, rest string) string {
@@ -439,6 +450,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	if setupLog != "" {
 		sendKeysPrompt = joinPrompt(sendKeysPrompt, bootstrapPromptNote(setup, setupLog))
 	}
+	sendKeysPrompt = designFirstPrompt(sendKeysPrompt, config)
 	WriteMuseSessionID(ctx, sshMgr, workingDir, agentCmd, session.ID)
 
 	// Step 8: Terminal. The display Name is a renameable alias and must not

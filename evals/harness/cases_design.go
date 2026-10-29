@@ -232,3 +232,23 @@ func CaseBriefStructure() Case {
 		)
 	}}
 }
+
+// CaseChildPromptNoWait checks that a --for child's task file tells it to skip
+// the design-first flow and not wait for confirmation.
+func CaseChildPromptNoWait() Case {
+	return Case{Name: "child-prompt-no-wait", Setup: coordinatorParent, Assert: func(h *Harness) []MetricResult {
+		child, fail := spawnChildWith(h, map[string]any{"brief": structuredBrief})
+		if fail != nil {
+			return fail
+		}
+		raw, err := os.ReadFile(filepath.Join(child.WorkingDirectory, domain.AimanTaskFileName))
+		if err != nil {
+			return []MetricResult{score("child_task_file", false, err.Error())}
+		}
+		task := string(raw)
+		return []MetricResult{
+			score("child_skips_design", strings.Contains(task, "skip the Design first section") && strings.Contains(task, "do not wait for confirmation"), "task file lacks the child guidelines"),
+			score("child_no_suffix", !strings.Contains(task, "say your call before editing"), "task file carries the design-first suffix"),
+		}
+	}}
+}

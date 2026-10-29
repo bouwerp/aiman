@@ -197,3 +197,17 @@ func TestTriggerHasNoRawSendKeys(t *testing.T) {
 		t.Fatal("daemon.go types into terminals directly; route prompts through the PromptSender")
 	}
 }
+
+func TestAutonomousPromptDesign(t *testing.T) {
+	got := autonomousIssuePrompt(7, "Title", "Body")
+	const want = "Before implementing, size the task. For anything beyond a trivial fix, write the design page, publish it with aiman design publish, and run one consult with aiman session create --consult, on another model family when one is installed. If an objection of severity high is still unresolved, stop and wait for input; do not implement. Link the design in your issue comment."
+	if !strings.Contains(got, want) {
+		t.Fatalf("prompt lacks the design line:\n%s", got)
+	}
+	if strings.Index(got, want) > strings.Index(got, "When you are finished:") {
+		t.Fatal("design line must come before the finish list")
+	}
+	if !strings.Contains(got, "wait for a reply") {
+		t.Fatal("item 3 polling text must stay")
+	}
+}

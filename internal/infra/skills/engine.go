@@ -451,7 +451,7 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 	sb.WriteString("## Workflow\n\n")
 	sb.WriteString("1. **Understand first.** Read the task description above carefully. Identify what is being asked, what the acceptance criteria are, and what is explicitly out of scope.\n")
 	sb.WriteString("2. **Explore the codebase.** Before writing any code, navigate the repository to understand the existing architecture, conventions, and patterns. Identify the modules, layers, and files relevant to the task.\n")
-	sb.WriteString("3. **Present a plan.** Outline your implementation approach — what you will change, where, and why. Call out trade-offs or assumptions. Wait for confirmation before proceeding unless the task is trivially small.\n")
+	sb.WriteString("3. **Design first.** Follow the aiman skill's Design first section: size the task, publish the design page, run a consult, and wait for the operator's approval before delegating. A trivial task needs only a short plan.\n")
 	sb.WriteString("4. **Write tests first.** Follow a test-driven approach: write a failing test that captures the expected behaviour, then implement the code to make it pass. For bug fixes, write a test that reproduces the bug before fixing it.\n")
 	sb.WriteString("5. **Implement incrementally.** Make small, focused changes. Compile and run tests after each meaningful step to catch regressions early.\n")
 	sb.WriteString("6. **Verify before finishing.** Ensure the code compiles, all tests pass (including pre-existing ones), and the change works end-to-end where possible.\n\n")
@@ -793,3 +793,8 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 	result.InitialPrompt = buildSessionPrompt(promptFiles)
 	return result, nil
 }
+
+// DesignFirstSuffix is appended to the initial prompt of an ordinary
+// interactive session so the agent sizes the task and states its call before
+// it edits. CreateSession applies it; the engine's own prompts do not carry it.
+const DesignFirstSuffix = "Use the aiman skill's Design first section: size the task after exploring the code and say your call before editing."

@@ -93,7 +93,11 @@ func (c FakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) 
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, domain.AimanTaskFileName), []byte("# Task\n"), 0o600); err != nil {
+	task := "# Task\n"
+	if cfg.Brief != "" {
+		task = cfg.Brief + "\n" + task
+	}
+	if err := os.WriteFile(filepath.Join(dir, domain.AimanTaskFileName), []byte(task), 0o600); err != nil {
 		return nil, err
 	}
 	agent := ""

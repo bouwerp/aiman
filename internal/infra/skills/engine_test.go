@@ -1021,3 +1021,19 @@ func hasCmdPrefix(cmds []string, prefix string) bool {
 	}
 	return false
 }
+
+func TestWorkingGuidelinesDesignFirst(t *testing.T) {
+	remote := newMockRemote()
+	issue := &domain.Issue{Key: "PROJ-1", Summary: "s", Description: "d"}
+	if err := writeTaskFile(context.Background(), remote, "/work/repo", issue, nil, domain.QualityKit{}); err != nil {
+		t.Fatal(err)
+	}
+	body := string(remote.writtenFiles["/work/repo/.aiman_task.md"])
+	const want = "3. **Design first.** Follow the aiman skill's Design first section: size the task, publish the design page, run a consult, and wait for the operator's approval before delegating. A trivial task needs only a short plan."
+	if !strings.Contains(body, want) {
+		t.Errorf("task file lacks the design-first step")
+	}
+	if strings.Contains(body, "Wait for confirmation") {
+		t.Errorf("task file still tells the agent to wait for confirmation")
+	}
+}

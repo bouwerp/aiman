@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/skills"
 )
 
 func TestTerminalNameForCreateUsesBranchNotDisplayName(t *testing.T) {
@@ -233,5 +234,52 @@ func TestBootstrapPromptNote(t *testing.T) {
 	want := "Worktree setup (`make deps`) is running in the background; its log is /r/.git/worktrees/x/aiman-setup.log. Check it has finished before building or running tests."
 	if got != want {
 		t.Fatalf("bootstrapPromptNote =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestInitialPromptsCarryDesignSuffix(t *testing.T) {
+	cases := map[string]string{
+		"jira":     "Read .aiman_task.md and start work on PROJ-1.",
+		"kit-only": "Read .aiman_task.md first.",
+		"ad-hoc":   "fix the flaky parser test",
+	}
+	for name, prompt := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := designFirstPrompt(prompt, domain.SessionConfig{})
+			if !strings.HasPrefix(got, prompt+" ") || !strings.HasSuffix(got, skills.DesignFirstSuffix) {
+				t.Fatalf("prompt = %q, want %q followed by the suffix", got, prompt)
+			}
+			if strings.Count(got, skills.DesignFirstSuffix) != 1 {
+				t.Fatalf("suffix repeated in %q", got)
+			}
+		})
+	}
+}
+
+func TestHiddenRolesGetNoSuffix(t *testing.T) {
+	for _, role := range []domain.SessionRole{domain.SessionRoleReviewer, domain.SessionRoleHandover, domain.SessionRoleConsult} {
+		if got := designFirstPrompt("review this", domain.SessionConfig{Role: role}); got != "review this" {
+			t.Errorf("role %q prompt = %q, want it unchanged", role, got)
+		}
+	}
+}
+
+func TestEmptyPromptStaysEmpty(t *testing.T) {
+	if got := designFirstPrompt("", domain.SessionConfig{Quick: true}); got != "" {
+		t.Fatalf("prompt = %q, want empty", got)
+	}
+}
+
+func TestBriefedChildGetsNoSuffix(t *testing.T) {
+	cfg := domain.SessionConfig{Brief: "## Objective\nx"}
+	if got := designFirstPrompt("Read your brief first.", cfg); got != "Read your brief first." {
+		t.Fatalf("prompt = %q, want it unchanged", got)
+	}
+}
+
+func TestAutonomousSessionGetsNoSuffix(t *testing.T) {
+	cfg := domain.SessionConfig{Mode: domain.SessionModeAutonomous}
+	if got := designFirstPrompt("fix issue 4", cfg); got != "fix issue 4" {
+		t.Fatalf("prompt = %q, want it unchanged", got)
 	}
 }
