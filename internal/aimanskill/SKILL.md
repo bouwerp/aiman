@@ -116,9 +116,24 @@ Add the breakdown before asking for approval; the operator approves it with the 
 
 Pieces share a parallel group only when they own disjoint files and share no unsettled contract; otherwise run them in sequence or merge them. Run at most 4 children at once. Write each piece's acceptance tests and commit them on this branch before the first child starts. Children may not edit them, and verify runs their commands. Do not tell children to write more tests.
 
-List escalation triggers in each brief's `## Escalate when`: the contract does not match the code; a second test failure with the same cause; a decision the design does not cover. A child that hits one asks a smart consult instead of guessing.
+List escalation triggers in each brief's `## Escalate when`: the contract does not match the code; a second test failure with the same cause; a decision the design does not cover; the piece is harder than its rated complexity once the child has explored the code. A child that hits one escalates as in Escalating (children too) instead of guessing.
 
 While children run, coordinate: do not implement their pieces. The work is done only when every piece's report and review are in. When it merges, republish the page as built, with a "Deviations from the approved design" list. Write child and final PR descriptions in the page's terms, with its link.
+
+### Autonomous sessions
+
+An autonomous session has no operator: there is no gate and no operator questions. Size the task as above. For anything beyond trivial, publish the design and run one consult; the consult runs on another model family when one is installed. An `approve` or `revise` verdict stands in for approval once every objection is triaged. An unresolved high-severity objection means stop and wait for input; do not implement. A `reject` verdict gets one revision and one more consult; a second rejecting verdict also means stop and wait for input. Serve's notification sweep reports the waiting session to the user. Link the design in your issue comment.
+
+## Escalating (children too)
+
+Children read this section. Escalate instead of guessing when a condition under your brief's `## Escalate when` holds, or when the piece is harder than its brief rated it once you have explored the code:
+
+```bash
+aiman todo add "<question>"
+aiman session create --consult --for <todo-id> --brief-file .aiman_consult_brief.md
+```
+
+The brief file has exactly `## Question`, `## Scope` and `## Report must contain`. Ask one question and name what you doubt; under Scope list the paths to read; under Report must contain ask for `.aiman_report.md` with `## Objections` (bullets starting `[high]`, `[medium]` or `[low]`) and `## Verdict` (`approve`, `revise` or `reject`). Then wait for the `[aiman]` note: it carries the verdict, the counts per severity and the path of the kept report. Read the report and act on it. If the note says the consult produced no report, ask again or proceed and say so in your report's Surprises.
 
 ## Coordinator
 

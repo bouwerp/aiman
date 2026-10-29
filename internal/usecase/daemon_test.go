@@ -200,7 +200,11 @@ func TestTriggerHasNoRawSendKeys(t *testing.T) {
 
 func TestAutonomousPromptDesign(t *testing.T) {
 	got := autonomousIssuePrompt(7, "Title", "Body")
-	const want = "Before implementing, size the task. For anything beyond a trivial fix, write the design page, publish it with aiman design publish, and run one consult with aiman session create --consult, on another model family when one is installed. If an objection of severity high is still unresolved, stop and wait for input; do not implement. Link the design in your issue comment."
+	const want = "Before implementing, size the task. For anything beyond a trivial fix, write the design page, publish it with aiman design publish, and run one consult with aiman session create --consult, on another model family when one is installed. " +
+		"No operator approves your design: an approve or revise verdict stands in for approval. " +
+		"If an objection of severity high is still unresolved, stop and wait for input; do not implement. " +
+		"On a reject verdict, revise the design and run one more consult; if that one also rejects, stop and wait for input. " +
+		"Link the design in your issue comment."
 	if !strings.Contains(got, want) {
 		t.Fatalf("prompt lacks the design line:\n%s", got)
 	}

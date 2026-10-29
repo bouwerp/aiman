@@ -328,3 +328,46 @@ func TestTemplateSectionsInReadingOrder(t *testing.T) {
 		t.Fatal("skill or template contains an em-dash")
 	}
 }
+
+// section returns the text of the "## " section starting at heading, up to
+// the next "## " heading.
+func section(t *testing.T, heading string) string {
+	t.Helper()
+	start := strings.Index(Text, heading+"\n")
+	if start < 0 {
+		t.Fatalf("skill has no %q", heading)
+	}
+	rest := Text[start+len(heading):]
+	if end := strings.Index(rest, "\n## "); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
+}
+
+func TestSkillStatesAutonomousDesign(t *testing.T) {
+	design := section(t, "## Design first")
+	for _, want := range []string{
+		"### Autonomous sessions", "no gate", "another model family", "stands in for approval",
+		"high-severity objection", "second", "stop and wait for input", "notification", "issue comment",
+	} {
+		if !strings.Contains(design, want) {
+			t.Fatalf("Design first missing %q", want)
+		}
+	}
+}
+
+// Children skip Design first, so escalation lives in its own section.
+func TestSkillEscalationReachesChildren(t *testing.T) {
+	if strings.Contains(section(t, "## Design first"), "## Escalating") {
+		t.Fatal("escalation is inside Design first, which children skip")
+	}
+	esc := section(t, "## Escalating (children too)")
+	for _, want := range []string{
+		`aiman todo add "<question>"`, "aiman session create --consult --for <todo-id> --brief-file",
+		"## Question", "## Scope", "## Report must contain", "[aiman]", "harder than",
+	} {
+		if !strings.Contains(esc, want) {
+			t.Fatalf("Escalating missing %q", want)
+		}
+	}
+}

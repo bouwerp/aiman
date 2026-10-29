@@ -296,7 +296,11 @@ func (d *Daemon) triggerPrompt(ctx context.Context, p *domain.ScheduledPrompt) e
 func autonomousIssuePrompt(number int, title, body string) string {
 	prompt := fmt.Sprintf("You are an autonomous AI agent handling GitHub issue #%d - %s\n\nIssue Description:\n%s\n\n", number, title, body)
 	prompt += "Your task is to implement the fix or feature requested in this issue.\n"
-	prompt += "Before implementing, size the task. For anything beyond a trivial fix, write the design page, publish it with aiman design publish, and run one consult with aiman session create --consult, on another model family when one is installed. If an objection of severity high is still unresolved, stop and wait for input; do not implement. Link the design in your issue comment.\n"
+	prompt += "Before implementing, size the task. For anything beyond a trivial fix, write the design page, publish it with aiman design publish, and run one consult with aiman session create --consult, on another model family when one is installed. " +
+		"No operator approves your design: an approve or revise verdict stands in for approval. " +
+		"If an objection of severity high is still unresolved, stop and wait for input; do not implement. " +
+		"On a reject verdict, revise the design and run one more consult; if that one also rejects, stop and wait for input. " +
+		"Link the design in your issue comment.\n"
 	prompt += "When you are finished:\n"
 	prompt += "1. Create a Pull Request (PR) with your changes.\n"
 	prompt += fmt.Sprintf("2. Summarise your session in detail and post it as a comment on issue #%d, including the PR link.\n", number)

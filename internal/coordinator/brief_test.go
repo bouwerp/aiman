@@ -125,3 +125,17 @@ func TestBriefFromTaskFile(t *testing.T) {
 		t.Fatal("accepted an old-shape brief")
 	}
 }
+
+// A child cannot read the Design first section, so the escalation mechanics
+// and triggers must reach it through the guidelines.
+func TestChildGuidelinesEscalation(t *testing.T) {
+	for _, want := range []string{
+		"Escalate when", "harder than", `aiman todo add "<question>"`,
+		"aiman session create --consult --for <todo-id> --brief-file <file>",
+		"## Question", "## Scope", "## Report must contain", "[aiman]", "Escalating (children too)",
+	} {
+		if !strings.Contains(ChildGuidelines, want) {
+			t.Fatalf("ChildGuidelines missing %q:\n%s", want, ChildGuidelines)
+		}
+	}
+}

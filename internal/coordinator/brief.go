@@ -31,7 +31,9 @@ const (
 // ChildGuidelines is appended to a child's brief, inside the markers.
 const ChildGuidelines = "You are a child session. Your brief is your design: skip the Design first section of the aiman skill and do not wait for confirmation. " +
 	"Do not edit the files listed under Acceptance tests. " +
-	"If an Escalate when condition holds, ask a smart consult (aiman session create --consult) before guessing. " +
+	"Escalate instead of guessing when an Escalate when condition holds, or when the piece is harder than its brief rated it once you have explored the code: " +
+	"run aiman todo add \"<question>\", then aiman session create --consult --for <todo-id> --brief-file <file>, where the file has exactly ## Question, ## Scope and ## Report must contain, " +
+	"then wait for the [aiman] note with the verdict and the report path (the aiman skill's Escalating (children too) section has the details). " +
 	"Write .aiman_report.md with ## Evidence (each command and its exit code) and ## Surprises (anything that affects other pieces, or \"none\")."
 
 // ParseBrief reads a child brief with exactly the headings `## Objective`,
