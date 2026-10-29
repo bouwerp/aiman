@@ -3,8 +3,11 @@ package server
 import (
 	"context"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
 type peerPIDKey struct{}
@@ -59,19 +62,49 @@ func descendsFrom(pid int, roots map[int]bool, parent func(int) (int, bool)) boo
 	return false
 }
 
-// inHolderTree reports whether pid is, or descends from, a live pty holder.
-// Processes a session's agent spawns are such descendants.
+// inHolderTree reports whether pid is, or descends from, the process a live
+// pty holder runs (the session's agent). Processes the agent spawns are such
+// descendants.
 func (s *Server) inHolderTree(pid int) bool {
 	if s.pty == nil {
 		return false
 	}
+	return descendsFrom(pid, holderRoots(s.pty.List(), heldByHolder), parentPID)
+}
+
+// holderRoots is the PIDs of the running sessions in infos that held
+// confirms. A record's PID (the holder's child) can outlive its holder and be
+// reused by any process, so a PID counts only while a holder still runs it.
+func holderRoots(infos []ptyruntime.SessionInfo, held func(int) bool) map[int]bool {
 	roots := map[int]bool{}
-	for _, info := range s.pty.List() {
-		if info.PID > 1 {
+	for _, info := range infos {
+		if info.PID > 1 && info.Status == ptyruntime.StatusRunning && held(info.PID) {
 			roots[info.PID] = true
 		}
 	}
-	return descendsFrom(pid, roots, parentPID)
+	return roots
+}
+
+// heldByHolder reports whether pid is alive and its parent is a live
+// `aiman pty hold` process.
+func heldByHolder(pid int) bool {
+	pp, ok := parentPID(pid)
+	return ok && isHolderProc(pp)
+}
+
+// isHolderProc reports whether pid is a live `aiman pty hold` process, from
+// /proc/<pid>/cmdline.
+func isHolderProc(pid int) bool {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	return err == nil && isHolderCmdline(raw)
+}
+
+// isHolderCmdline reports whether a NUL-separated command line is a holder's:
+// `<binary> pty hold ... --id <id>`, as ptyhold.Spawn starts it. The binary's
+// name is not checked, so a renamed aiman still counts.
+func isHolderCmdline(raw []byte) bool {
+	args := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+	return len(args) >= 3 && args[1] == "pty" && args[2] == "hold" && slices.Contains(args[3:], "--id")
 }
 
 // isSessionCall reports whether req came from a session. A request naming a
