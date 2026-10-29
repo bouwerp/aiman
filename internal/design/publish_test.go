@@ -184,3 +184,48 @@ func TestPublishLocalWhenUnset(t *testing.T) {
 		t.Fatalf("calls %v", calls)
 	}
 }
+
+func TestPublishRecoversDirtyCheckout(t *testing.T) {
+	bare := bareRepo(t)
+	var calls []string
+	p := newPub(t, bare, &calls)
+	ctx := context.Background()
+	if _, err := p.Publish(ctx, writeSrc(t, "# one\n"), "r", "PROJ-1"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(p.Home, checkoutRel)
+	// An unpushed commit for the same page, plus a staged change and junk.
+	if err := os.WriteFile(filepath.Join(dir, "docs/designs/r/PROJ-1.md"), []byte("# stray\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "commit", "-am", "design(r): PROJ-1 rev 2")
+	if err := os.WriteFile(filepath.Join(dir, "docs/designs/r/PROJ-1.md"), []byte("# staged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "junk.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", ".")
+
+	res, err := p.Publish(ctx, writeSrc(t, "# two\n"), "r", "PROJ-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Revision != 2 {
+		t.Fatalf("revision %d, want 2", res.Revision)
+	}
+	check := filepath.Join(t.TempDir(), "check")
+	git(t, filepath.Dir(check), "clone", bare, check)
+	if _, err := os.Stat(filepath.Join(check, "junk.txt")); err == nil {
+		t.Fatal("junk was pushed")
+	}
+}
+
+func TestPublishRejectsDotNames(t *testing.T) {
+	p := &Publisher{Home: t.TempDir()}
+	for _, repo := range []string{".", "..", "a/b", ""} {
+		if _, err := p.PublishBytes(context.Background(), []byte("x"), repo, "K-1"); err == nil {
+			t.Errorf("repo %q accepted", repo)
+		}
+	}
+}

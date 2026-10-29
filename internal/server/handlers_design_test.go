@@ -48,3 +48,38 @@ func TestRepoBase(t *testing.T) {
 		}
 	}
 }
+
+func TestDesignPublishConfinesFile(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, "wt")
+	outside := filepath.Join(root, "secret.yaml")
+	for _, d := range []string{filepath.Join(wt, ".git")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(outside, []byte("token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(wt, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "ok.md"), []byte("ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sess := todoSession("s1")
+	sess.WorkingDirectory = wt
+	sess.IssueKey = "PROJ-1"
+	srv, _, _ := todoServer(t, sess)
+	srv.SetDesignPublisher(&design.Publisher{Home: t.TempDir(), Run: design.ExecRun})
+
+	for name, file := range map[string]string{"absolute": outside, "dotdot": "../secret.yaml", "symlink": "link.md"} {
+		resp := rpc(t, srv, "s1", "design.publish", map[string]any{"file": file})
+		if resp.Error == nil || resp.Error.Code != CodeInvalidParams {
+			t.Errorf("%s: want invalid_params, got %+v", name, resp)
+		}
+	}
+	if resp := rpc(t, srv, "s1", "design.publish", map[string]any{"file": "ok.md"}); resp.Error != nil {
+		t.Fatalf("inside file rejected: %v", resp.Error)
+	}
+}

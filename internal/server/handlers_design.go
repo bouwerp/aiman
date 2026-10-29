@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,9 +48,9 @@ func (s *Server) handleDesignPublish(ctx context.Context, req Request) Response 
 	if wd == "" {
 		return errResp(req.ID, CodeInvalidParams, "session has no working directory")
 	}
-	src := p.File
-	if !filepath.IsAbs(src) {
-		src = filepath.Join(wd, src)
+	md, err := readConfined(sess, wd, p.File)
+	if err != nil {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	key := strings.TrimSpace(p.Key)
 	if key == "" {
@@ -56,11 +58,10 @@ func (s *Server) handleDesignPublish(ctx context.Context, req Request) Response 
 	}
 	pub := *s.designer
 	pub.LocalDir = gitDirOf(wd)
-	res, err := pub.Publish(ctx, src, repoBase(sess.RepoName), key)
+	res, err := pub.PublishBytes(ctx, md, repoBase(sess.RepoName), key)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	md, _ := os.ReadFile(src)
 	accepted, rejected, deferred := design.CountTriage(string(md))
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventDesignPublished, map[string]any{
 		"revision": res.Revision, "url": res.URL,
@@ -113,4 +114,35 @@ func gitDirOf(dir string) string {
 			return ""
 		}
 	}
+}
+
+// readConfined reads file (relative to wd) after resolving symlinks, and only
+// when the result lies inside the session's working directory or worktree, so
+// an agent cannot publish files such as ~/.aiman/config.yaml.
+func readConfined(sess domain.Session, wd, file string) ([]byte, error) {
+	src := file
+	if !filepath.IsAbs(src) {
+		src = filepath.Join(wd, src)
+	}
+	real, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return nil, fmt.Errorf("design file: %w", err)
+	}
+	for _, root := range []string{wd, sess.WorktreePath} {
+		if root == "" {
+			continue
+		}
+		r, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			continue
+		}
+		if rel, err := filepath.Rel(r, real); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			b, err := os.ReadFile(real)
+			if err != nil {
+				return nil, fmt.Errorf("read design: %w", err)
+			}
+			return b, nil
+		}
+	}
+	return nil, errors.New("design file must be inside the session's working directory")
 }

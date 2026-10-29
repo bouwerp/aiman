@@ -51,18 +51,32 @@ type Publisher struct {
 // Publish copies src to <design.dir>/<repoName>/<key>.md and returns where it
 // went. Concurrent calls on one host serialise on a file lock.
 func (p *Publisher) Publish(ctx context.Context, src, repoName, key string) (Result, error) {
-	if key == "" || strings.ContainsAny(key, `/\`) || key == "." || key == ".." {
-		return Result{}, fmt.Errorf("invalid design key %q", key)
-	}
-	if repoName == "" || strings.ContainsAny(repoName, `/\`) {
-		return Result{}, fmt.Errorf("invalid repo name %q", repoName)
-	}
 	body, err := os.ReadFile(src)
 	if err != nil {
 		return Result{}, fmt.Errorf("read design: %w", err)
 	}
+	return p.publish(ctx, body, filepath.Dir(src), repoName, key)
+}
+
+// PublishBytes publishes body, so a caller that also inspects the page works
+// from exactly the bytes that were published. Local mode needs LocalDir.
+func (p *Publisher) PublishBytes(ctx context.Context, body []byte, repoName, key string) (Result, error) {
+	return p.publish(ctx, body, "", repoName, key)
+}
+
+func safeName(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\`)
+}
+
+func (p *Publisher) publish(ctx context.Context, body []byte, srcDir, repoName, key string) (Result, error) {
+	if !safeName(key) {
+		return Result{}, fmt.Errorf("invalid design key %q", key)
+	}
+	if !safeName(repoName) {
+		return Result{}, fmt.Errorf("invalid repo name %q", repoName)
+	}
 	if strings.TrimSpace(p.Cfg.Repo) == "" {
-		return p.publishLocal(src, key, body)
+		return p.publishLocal(srcDir, key, body)
 	}
 	unlock, err := lockFile(filepath.Join(p.Home, lockRel))
 	if err != nil {
@@ -72,10 +86,13 @@ func (p *Publisher) Publish(ctx context.Context, src, repoName, key string) (Res
 	return p.publishRepo(ctx, repoName, key, body)
 }
 
-func (p *Publisher) publishLocal(src, key string, body []byte) (Result, error) {
+func (p *Publisher) publishLocal(srcDir, key string, body []byte) (Result, error) {
 	base := p.LocalDir
 	if base == "" {
-		base = filepath.Dir(src)
+		base = srcDir
+	}
+	if base == "" {
+		return Result{}, errors.New("no directory for a local design page")
 	}
 	dst := filepath.Join(base, "aiman-design", key+".md")
 	if err := writeFile(dst, body); err != nil {
@@ -99,7 +116,7 @@ func (p *Publisher) publishRepo(ctx context.Context, repoName, key string, body 
 	if err := p.ensureCheckout(ctx, dir); err != nil {
 		return Result{}, err
 	}
-	if _, err := p.git(ctx, dir, "pull", "--rebase"); err != nil {
+	if err := p.syncCheckout(ctx, dir); err != nil {
 		return Result{}, err
 	}
 	rel := path.Join(p.Cfg.DirOrDefault(), repoName, key+".md")
@@ -120,10 +137,27 @@ func (p *Publisher) publishRepo(ctx context.Context, repoName, key string, body 
 			return Result{}, err
 		}
 		if err := p.push(ctx, dir); err != nil {
+			// Drop the unpushed commit so it does not inflate the next revision.
+			_ = p.syncCheckout(ctx, dir)
 			return Result{}, err
 		}
 	}
 	return Result{Path: rel, URL: p.pageURL(ctx, dir, rel), Build: p.build(ctx, dir), Revision: rev}, nil
+}
+
+// syncCheckout makes the aiman-owned checkout match origin/main exactly:
+// whatever an earlier failed publish left (a rebase in progress, a staged
+// change, an unpushed commit) is discarded.
+func (p *Publisher) syncCheckout(ctx context.Context, dir string) error {
+	_, _ = p.git(ctx, dir, "rebase", "--abort")
+	if _, err := p.git(ctx, dir, "fetch", "origin"); err != nil {
+		return err
+	}
+	if _, err := p.git(ctx, dir, "reset", "--hard", "origin/main"); err != nil {
+		return err
+	}
+	_, err := p.git(ctx, dir, "clean", "-fd")
+	return err
 }
 
 // revisions counts the commits on HEAD that touched rel.
