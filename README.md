@@ -317,8 +317,8 @@ The Done-when conditions come from the JIRA acceptance criteria first, then the 
 defaults, de-duplicated. They are fixed in `.aiman_task.md` for the session's life. The
 last to-do is `Done-when met`; only a passing `aiman verify` with evidence ticks it, and a
 review that finds a condition unmet reopens it. A child session also writes
-`.aiman_report.md` before its PR, and its parent item closes only when that report cites a
-file or a test command.
+`.aiman_report.md` before its PR, and its parent item closes only when that report has
+`## Evidence` citing a file or a test command and a `## Surprises` section.
 
 `requires` entries are checked when the wizard reaches the summary; missing tools show a
 warning but do not block create. Launch model/effort precedence is `agent_defaults` <
@@ -349,9 +349,9 @@ well-specified task; `--tier smart` suits planning, ambiguous debugging, cross-c
 integration, review, or long-running work. A session the user starts defaults to smart; a
 tier with no installed entry falls back to the other one and reports `tier_fallback`.
 `--model` and `--effort` apply only with an explicit `--agent`. Give a
-child an explicit input contract with `--brief-file <path>` (the three headings described
-in the bundled skill). A child writes `.aiman_report.md` before its PR, and the parent's
-item stays open until that report cites a file or a test command.
+child an explicit input contract with `--brief-file <path>` (the seven headings described
+in the bundled skill: Objective, Contract, Owns, Out of scope, Acceptance tests, Report must contain, Escalate when). A child writes `.aiman_report.md` before its PR, and the parent's
+item stays open until that report has an `## Evidence` section citing a file or a test command and a `## Surprises` section.
 
 ### Creating an Ad-hoc Session
 

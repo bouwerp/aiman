@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -203,8 +204,9 @@ func joinPrompt(base, user string) string {
 const taskBriefMarker = "__AIMAN_TASK__"
 
 // WriteTaskBrief puts brief at the top of dir's task file, after the scaffold
-// header and before any JIRA task already written there. A file that already
-// starts with the brief is left as it is.
+// header and before any JIRA task already written there, between the brief
+// markers (coordinator.BriefFromTaskFile reads it back). A file that already
+// starts with the marked brief is left as it is.
 func WriteTaskBrief(ctx context.Context, remote remotefile.Writer, dir, brief string) error {
 	path := filepath.Join(dir, domain.AimanTaskFileName)
 	out, err := remote.Execute(ctx, fmt.Sprintf("echo %s; cat -- %q 2>/dev/null || true", taskBriefMarker, path))
@@ -216,8 +218,9 @@ func WriteTaskBrief(ctx context.Context, remote remotefile.Writer, dir, brief st
 		return fmt.Errorf("read %s: marker missing from output", domain.AimanTaskFileName)
 	}
 	body := strings.TrimPrefix(existing, domain.AimanScaffoldHeader)
-	if !strings.HasPrefix(body, brief) {
-		body = joinTaskSections(brief, body)
+	marked := coordinator.BriefStartMarker + "\n" + strings.TrimRight(brief, "\n") + "\n" + coordinator.BriefEndMarker + "\n"
+	if !strings.HasPrefix(body, marked) {
+		body = joinTaskSections(marked, body)
 	}
 	_, err = remotefile.WriteIfChanged(ctx, remote, path, []byte(domain.AimanScaffoldHeader+body))
 	return err

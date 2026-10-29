@@ -10,7 +10,8 @@ import (
 	"github.com/bouwerp/aiman/internal/usage"
 )
 
-// errNoEvidence is a report that cites neither a repo path nor a test command.
+// errNoEvidence is a report whose Evidence section cites neither a repo path
+// nor a test command.
 var errNoEvidence = errors.New("report cites no repo-relative file path and no test command")
 
 // reportTestCommands extends usage.DefaultTestCommands with other common
@@ -18,22 +19,71 @@ var errNoEvidence = errors.New("report cites no repo-relative file path and no t
 var reportTestCommands = append(append([]string(nil), usage.DefaultTestCommands...),
 	"make ci", "cargo test", "npm run test", "pnpm test", "yarn test", "bun test")
 
-// ValidateReport checks a child's .aiman_report.md for evidence: at least one
-// repo-relative file path or one test command. It checks for citations, not
-// whether they are true.
+// errNoSurprises and errNoEvidenceSection name a report heading that is
+// absent.
+var (
+	errNoSurprises       = errors.New("report has no ## Surprises section; add it, with \"none\" if nothing affects other pieces")
+	errNoEvidenceSection = errors.New("report has no ## Evidence section; list each command run with its exit code")
+)
+
+// ValidateReport checks a child's .aiman_report.md: it needs `## Evidence`
+// and `## Surprises` sections, and the Evidence section must cite at least
+// one repo-relative file path or one test command. It checks for citations,
+// not whether they are true.
 func ValidateReport(md string) error {
-	lower := strings.ToLower(md)
+	evidence, hasEvidence := reportSection(md, "Evidence")
+	_, hasSurprises := reportSection(md, "Surprises")
+	switch {
+	case !hasEvidence:
+		return errNoEvidenceSection
+	case !hasSurprises:
+		return errNoSurprises
+	}
+	lower := strings.ToLower(evidence)
 	for _, cmd := range reportTestCommands {
 		if strings.Contains(lower, cmd) {
 			return nil
 		}
 	}
-	for _, tok := range strings.Fields(md) {
+	for _, tok := range strings.Fields(evidence) {
 		if isRepoPath(strings.Trim(tok, "`'\"()[]{}<>,.;:*")) {
 			return nil
 		}
 	}
 	return errNoEvidence
+}
+
+// ReportSurprises returns the text of the report's `## Surprises` section and
+// whether it says anything: "none", "n/a" and their punctuated or bulleted
+// forms are not surprises.
+func ReportSurprises(md string) (string, bool) {
+	text, ok := reportSection(md, "Surprises")
+	if !ok {
+		return "", false
+	}
+	norm := strings.ToLower(strings.Trim(strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(text), "-*")), " .!"))
+	if norm == "" || norm == "none" || norm == "n/a" {
+		return "", false
+	}
+	return text, true
+}
+
+// reportSection returns the trimmed body of the `## name` section, up to the
+// next `## ` heading.
+func reportSection(md, name string) (string, bool) {
+	var body strings.Builder
+	in, found := false, false
+	for _, line := range strings.Split(md, "\n") {
+		if h, ok := strings.CutPrefix(strings.TrimSpace(line), "## "); ok {
+			in = strings.EqualFold(strings.TrimSpace(h), name)
+			found = found || in
+			continue
+		}
+		if in {
+			body.WriteString(line + "\n")
+		}
+	}
+	return strings.TrimSpace(body.String()), found
 }
 
 // isRepoPath reports whether tok looks like a path inside a repository: a

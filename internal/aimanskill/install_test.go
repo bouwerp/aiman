@@ -199,8 +199,9 @@ func TestSkillDescribesVerify(t *testing.T) {
 
 func TestSkillStatesChildContract(t *testing.T) {
 	for _, want := range []string{
-		"--brief-file", "## Question", "## Scope", "## Report must contain",
-		".aiman_report.md", "## What changed", "## Files", "## Tests run",
+		"--brief-file", "## Objective", "## Contract", "## Owns", "## Out of scope",
+		"## Acceptance tests", "## Report must contain", "## Escalate when",
+		".aiman_report.md", "## Evidence", "## Surprises",
 	} {
 		if !strings.Contains(Text, want) {
 			t.Fatalf("skill missing %q", want)

@@ -34,7 +34,16 @@ func coordinatorParent(h *Harness) error {
 // spawnChild runs `aiman session create --for t1 --parent s1` and returns the
 // child's row.
 func spawnChild(h *Harness) (domain.Session, []MetricResult) {
-	resp, err := h.Call("session.create", map[string]any{"for": "t1", "parent": "s1"})
+	return spawnChildWith(h, nil)
+}
+
+// spawnChildWith is spawnChild with extra session.create parameters.
+func spawnChildWith(h *Harness, extra map[string]any) (domain.Session, []MetricResult) {
+	params := map[string]any{"for": "t1", "parent": "s1"}
+	for k, v := range extra {
+		params[k] = v
+	}
+	resp, err := h.Call("session.create", params)
 	if err != nil {
 		return domain.Session{}, []MetricResult{score("child_created", false, err.Error())}
 	}
@@ -102,7 +111,7 @@ func CaseChildSpawn() Case {
 		if fail != nil {
 			return fail
 		}
-		report := "## Changed\n\n- internal/parse/parse.go\n\n## Tests\n\ngo test ./internal/parse/...\n"
+		report := "## Changed\n\nParser.\n\n## Evidence\n\n- internal/parse/parse.go\n- go test ./internal/parse/... exit 0\n\n## Surprises\n\nnone\n"
 		if err := os.WriteFile(filepath.Join(child.WorkingDirectory, domain.AimanReportFileName), []byte(report), 0o600); err != nil {
 			return []MetricResult{score("child_report", false, err.Error())}
 		}

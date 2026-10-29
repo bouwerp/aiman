@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
@@ -30,7 +31,10 @@ func (f *fileExec) WriteFile(_ context.Context, path string, content []byte) err
 	return nil
 }
 
-const testBrief = "## Question\n\nDoes the parser accept nested lists?\n\n## Scope\n\ninternal/parse only.\n\n## Report must contain\n\nThe tests you ran.\n"
+const testBrief = "## Objective\n\nParse nested lists.\n\n## Owns\n\ninternal/parse only.\n\n## Report must contain\n\nThe tests you ran.\n"
+
+// wrappedBrief is testBrief as the task file carries it.
+const wrappedBrief = coordinator.BriefStartMarker + "\n" + testBrief + coordinator.BriefEndMarker + "\n"
 
 func TestChildTaskStartsWithBrief(t *testing.T) {
 	path := "/w/child/" + domain.AimanTaskFileName
@@ -45,13 +49,14 @@ func TestChildTaskStartsWithBrief(t *testing.T) {
 	if !ok {
 		t.Fatalf("task file lost its scaffold header:\n%s", got)
 	}
-	if !strings.HasPrefix(body, "## Question\n") {
+	if !strings.HasPrefix(body, wrappedBrief) {
 		t.Fatalf("task body starts %q, want the brief", body[:min(40, len(body))])
 	}
-	q, s, r, j := strings.Index(body, "## Question"), strings.Index(body, "## Scope"),
-		strings.Index(body, "## Report must contain"), strings.Index(body, "JIRA description text.")
-	if q >= s || s >= r || r >= j {
-		t.Fatalf("order question %d scope %d report %d jira %d:\n%s", q, s, r, j, body)
+	if strings.Contains(got, coordinator.ChildGuidelines) {
+		t.Fatalf("WriteTaskBrief added child guidelines:\n%s", got)
+	}
+	if end, j := strings.Index(body, coordinator.BriefEndMarker), strings.Index(body, "JIRA description text."); end < 0 || end >= j {
+		t.Fatalf("brief end marker %d, jira %d:\n%s", end, j, body)
 	}
 	if strings.Count(got, domain.AimanScaffoldHeader) != 1 {
 		t.Fatalf("scaffold header repeated:\n%s", got)
@@ -72,7 +77,7 @@ func TestTaskBriefWithoutTaskFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := x.files["/w/child/"+domain.AimanTaskFileName]
-	if got != domain.AimanScaffoldHeader+testBrief {
+	if got != domain.AimanScaffoldHeader+wrappedBrief {
 		t.Fatalf("task file = %q", got)
 	}
 }

@@ -850,8 +850,8 @@ func (s *Server) applyFor(params *createParams, parentID string, existing []doma
 }
 
 // readBrief validates the brief text or the file it is in, and returns it in
-// its canonical form: a consult brief when consult is set, else a child brief.
-// Neither given is no brief.
+// its canonical form: a consult brief when consult is set, else a child brief
+// followed by coordinator.ChildGuidelines. Neither given is no brief.
 func readBrief(text, file string, consult bool) (string, error) {
 	if text == "" && file != "" {
 		raw, err := os.ReadFile(file)
@@ -874,7 +874,7 @@ func readBrief(text, file string, consult bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return b.Markdown(), nil
+	return b.Markdown() + "\n" + coordinator.ChildGuidelines + "\n", nil
 }
 
 // linkChild sets the parent's to-do Ref to the child as aiman. It refuses an

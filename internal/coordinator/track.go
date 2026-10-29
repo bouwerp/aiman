@@ -120,10 +120,12 @@ func (t *Tracker) TrackOnce(ctx context.Context) {
 			if !t.landed(ctx, parent, child) {
 				continue
 			}
-			if err := t.evidence(ctx, child); err != nil {
+			md, err := t.evidence(ctx, child)
+			if err != nil {
 				t.askForReport(parent, it, child, err)
 				continue
 			}
+			t.steerSurprises(parent, child, md)
 			t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone })
 		}
 	}
@@ -184,16 +186,38 @@ func (t *Tracker) landed(ctx context.Context, parent, child domain.Session) bool
 		t.Passed != nil && t.Passed(child.ID)
 }
 
-// evidence reads and validates the child's report.
-func (t *Tracker) evidence(ctx context.Context, child domain.Session) error {
+// evidence reads and validates the child's report and returns its text.
+func (t *Tracker) evidence(ctx context.Context, child domain.Session) (string, error) {
 	if t.Report == nil {
-		return errors.New("no report reader")
+		return "", errors.New("no report reader")
 	}
 	md, err := t.Report(ctx, child)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return ValidateReport(md)
+	return md, ValidateReport(md)
+}
+
+// steerSurprises tells the coordinator once per child when a landed child's
+// report names surprises, so it re-reads the design before starting pieces
+// that depend on this one.
+func (t *Tracker) steerSurprises(parent domain.Session, child domain.Session, md string) {
+	text, any := ReportSurprises(md)
+	if !any || t.Steer == nil {
+		return
+	}
+	key := "surprises/" + parent.ID + "/" + child.ID
+	t.mu.Lock()
+	if t.asked == nil {
+		t.asked = map[string]bool{}
+	}
+	done := t.asked[key]
+	t.asked[key] = true
+	t.mu.Unlock()
+	if done {
+		return
+	}
+	t.Steer(parent.ID, fmt.Sprintf("[aiman] child %s reported surprises that may affect other pieces; re-read the design before starting dependent pieces:\n%s", child.ID, text))
 }
 
 // askForReport steers the coordinator once to get the child's report. The

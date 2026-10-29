@@ -514,6 +514,7 @@ func LifecycleCases() []Case {
 		CaseChildVanished(),
 		CaseDesignGate(),
 		CaseConsultClosesOnReport(),
+		CaseBriefStructure(),
 	}
 }
 

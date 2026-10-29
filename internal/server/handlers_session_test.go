@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
@@ -1108,7 +1109,11 @@ func TestCreateForForgetsChildWhenLinkFails(t *testing.T) {
 	}
 }
 
-const testBrief = "## Question\n\nDoes the parser accept nested lists?\n\n## Scope\n\ninternal/parse only.\n\n## Report must contain\n\nThe tests you ran.\n"
+const testBrief = "## Objective\n\nParse nested lists in the reader.\n\n## Contract\n\ndocs/specs/PROJ-1.md\n\n## Owns\n\ninternal/parse\n\n" +
+	"## Out of scope\n\nThe renderer.\n\n## Acceptance tests\n\n`go test ./internal/parse/...`\n\n## Report must contain\n\nThe tests you ran.\n\n## Escalate when\n\nThe tree shape changes.\n"
+
+// childBrief is testBrief as a child receives it: the guidelines follow it.
+const childBrief = testBrief + "\n" + coordinator.ChildGuidelines + "\n"
 
 func TestCreateForCarriesBrief(t *testing.T) {
 	srv, creator := forServer(t, "")
@@ -1116,7 +1121,7 @@ func TestCreateForCarriesBrief(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("create: %+v", resp.Error)
 	}
-	if creator.cfg.Brief != testBrief {
+	if creator.cfg.Brief != childBrief {
 		t.Fatalf("cfg.Brief = %q, want the brief", creator.cfg.Brief)
 	}
 }
@@ -1131,17 +1136,17 @@ func TestCreateReadsBriefFile(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("create: %+v", resp.Error)
 	}
-	if creator.cfg.Brief != testBrief {
+	if creator.cfg.Brief != childBrief {
 		t.Fatalf("cfg.Brief = %q, want the file's brief", creator.cfg.Brief)
 	}
 }
 
 func TestCreateRejectsBadBrief(t *testing.T) {
 	srv, creator := forServer(t, "")
-	bad := strings.Replace(testBrief, "## Scope", "## Notes", 1)
+	bad := strings.Replace(testBrief, "## Owns", "## Notes", 1)
 	resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p", "brief": bad})
-	if resp.Error == nil || resp.Error.Code != CodeInvalidParams || !strings.Contains(resp.Error.Message, "## Scope") {
-		t.Fatalf("error = %+v, want invalid_params naming ## Scope", resp.Error)
+	if resp.Error == nil || resp.Error.Code != CodeInvalidParams || !strings.Contains(resp.Error.Message, "## Owns") {
+		t.Fatalf("error = %+v, want invalid_params naming ## Owns", resp.Error)
 	}
 	if creator.calls != 0 {
 		t.Fatalf("created %d sessions, want none", creator.calls)

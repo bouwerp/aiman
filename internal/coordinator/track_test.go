@@ -90,7 +90,7 @@ type fixture struct {
 	tracker *Tracker
 }
 
-const evidenceReport = "## What changed\n\nParser.\n\n## Files\n\n- internal/parse/list.go\n\n## Tests run\n\ngo test ./... ok\n"
+const evidenceReport = "## What changed\n\nParser.\n\n## Evidence\n\n- internal/parse/list.go\n- go test ./... exit 0\n\n## Surprises\n\nnone\n"
 
 func newFixture(ref string, pr PRState) *fixture {
 	f := &fixture{
@@ -448,5 +448,30 @@ func TestConsultUnparsableReportAsksOnce(t *testing.T) {
 	}
 	if len(*rows)+len(*retired) != 0 {
 		t.Fatalf("rows %v retired %v", *rows, *retired)
+	}
+}
+
+func TestTrackerSteersSurprisesOnce(t *testing.T) {
+	f := newFixture("child:c1", PRState{Base: "feat/x", Merged: true})
+	f.report = func() (string, error) {
+		return "## Evidence\n\ngo test ./... exit 0\n\n## Surprises\n\nThe Store interface gained Close.\n", nil
+	}
+	f.tracker.TrackOnce(context.Background())
+	f.tracker.TrackOnce(context.Background())
+
+	if it := f.todos.t3(t); it.State != domain.TodoDone {
+		t.Fatalf("t3 state = %s, want done", it.State)
+	}
+	want := "[aiman] child c1 reported surprises that may affect other pieces; re-read the design before starting dependent pieces:\nThe Store interface gained Close."
+	if len(f.steered) != 1 || f.steered[0].session != "p" || f.steered[0].text != want {
+		t.Fatalf("steered %+v, want one note %q", f.steered, want)
+	}
+}
+
+func TestTrackerNoSteerWhenSurprisesNone(t *testing.T) {
+	f := newFixture("child:c1", PRState{Base: "feat/x", Merged: true})
+	f.tracker.TrackOnce(context.Background())
+	if len(f.steered) != 0 {
+		t.Fatalf("steered %+v, want none", f.steered)
 	}
 }

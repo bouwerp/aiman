@@ -8,7 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 
+	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/todo"
 )
@@ -170,5 +174,61 @@ func CaseConsultClosesOnReport() Case {
 		out = append(out, score("consult_retired", rowErr != nil && errors.Is(dirErr, fs.ErrNotExist),
 			fmt.Sprintf("row err %v, dir err %v", rowErr, dirErr)))
 		return out
+	}}
+}
+
+const structuredBrief = "## Objective\n\nParse nested lists.\n\n## Contract\n\ndocs/specs/PROJ-1.md\n\n## Owns\n\ninternal/parse\n\n" +
+	"## Out of scope\n\nThe renderer.\n\n## Acceptance tests\n\n`go test ./internal/parse/...`\n\n## Report must contain\n\nCommands and exit codes.\n\n" +
+	"## Escalate when\n\nThe tree shape changes.\n"
+
+const surprisesText = "The Store interface gained Close."
+
+// surpriseSteers counts the surprise notes typed into s1.
+func surpriseSteers(h *Harness) int {
+	n := 0
+	for _, w := range h.Writes() {
+		if w.ID == "s1" {
+			n += strings.Count(w.Data, "reported surprises that may affect other pieces")
+		}
+	}
+	return n
+}
+
+// CaseBriefStructure checks that a brief missing ## Acceptance tests is
+// refused, that a landed child whose report lacks ## Surprises leaves t1
+// open, and that a report whose Surprises is not "none" closes t1 and steers
+// the coordinator once.
+func CaseBriefStructure() Case {
+	return Case{Name: "brief-structure", Setup: coordinatorParent, Assert: func(h *Harness) []MetricResult {
+		bad := strings.Replace(structuredBrief, "## Acceptance tests", "## Checks", 1)
+		_, err := h.Call("session.create", map[string]any{"for": "t1", "parent": "s1", "brief": bad})
+		out := []MetricResult{
+			score("brief_missing_refused", err != nil && strings.Contains(err.Error(), "invalid_params"), errText(err)),
+		}
+		child, fail := spawnChildWith(h, map[string]any{"brief": structuredBrief})
+		if fail != nil {
+			return append(out, fail...)
+		}
+		write := func(md string) error {
+			return os.WriteFile(filepath.Join(child.WorkingDirectory, domain.AimanReportFileName), []byte(md), 0o600)
+		}
+		const evidence = "## Evidence\n\n- internal/parse/parse.go\n- go test ./internal/parse/... exit 0\n"
+		if err := write(evidence); err != nil {
+			return append(out, score("child_report", false, err.Error()))
+		}
+		h.SetChildPR(child.ID, coordinator.PRState{Base: parentBranch, Merged: true})
+		h.TrackOnce()
+		noSurprises := itemState(h)
+		if err := write(evidence + "\n## Surprises\n\n" + surprisesText + "\n"); err != nil {
+			return append(out, score("child_report", false, err.Error()))
+		}
+		h.TrackOnce()
+		h.TrackOnce()
+		waitUntil(10*time.Second, func() bool { return !h.srv.Steerer().Status("s1").LastDeliveredAt.IsZero() })
+		return append(out,
+			score("no_surprises_section_open", noSurprises == domain.TodoPending, "t1 is "+string(noSurprises)+" without ## Surprises"),
+			score("surprises_close_item", itemState(h) == domain.TodoDone, "t1 is "+string(itemState(h))),
+			score("surprises_steer_once", surpriseSteers(h) == 1, "the pane received the surprises note "+strconv.Itoa(surpriseSteers(h))+" times"),
+		)
 	}}
 }
