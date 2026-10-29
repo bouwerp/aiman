@@ -123,7 +123,7 @@ func (f *Files) Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliver
 	return f.update(sessionID, domain.AuthorAgent, true, func(l *domain.TodoList, d fileData, now time.Time) error {
 		prev := *l
 		*l = MergeWithRetexts(*l, d.Tombstones, d.Retexts, snap, deliveredAt, now)
-		return GuardGate(prev, *l)
+		return ClampGate(prev, l)
 	})
 }
 

@@ -63,3 +63,20 @@ func GuardGate(prev, next domain.TodoList) error {
 	}
 	return nil
 }
+
+// ClampGate restores an open gate's State, Text and Ref from prev after a merge
+// that may have ticked, dropped or renamed it, and keeps everything else in
+// next. It returns ErrGateLocked only when the gate item is gone.
+func ClampGate(prev domain.TodoList, next *domain.TodoList) error {
+	for _, was := range prev.Items {
+		if !gateIsOpen(was) {
+			continue
+		}
+		i := slices.IndexFunc(next.Items, func(it domain.TodoItem) bool { return it.ID == was.ID })
+		if i < 0 {
+			return fmt.Errorf("%w: item %s was removed", ErrGateLocked, was.ID)
+		}
+		next.Items[i].State, next.Items[i].Text, next.Items[i].Ref = was.State, was.Text, was.Ref
+	}
+	return nil
+}

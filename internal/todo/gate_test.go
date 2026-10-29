@@ -3,6 +3,7 @@ package todo
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
@@ -64,5 +65,47 @@ func TestGuardGateRefusesBypass(t *testing.T) {
 	noGate := domain.TodoList{Items: []domain.TodoItem{{ID: "t1", Text: "a", State: domain.TodoPending}}}
 	if err := GuardGate(noGate, domain.TodoList{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMirrorClampsOpenGate(t *testing.T) {
+	s := NewFiles(t.TempDir())
+	if _, _, err := s.Mutate("s1", domain.AuthorAiman, func(l *domain.TodoList) error {
+		l.Items = append(l.Items, domain.TodoItem{Text: "Write docs", State: domain.TodoPending})
+		AddGate(l)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snap := []domain.TodoSnapshotItem{
+		{Text: DesignGateText, Status: domain.TodoDone},
+		{Text: "Write docs", Status: domain.TodoActive},
+		{Text: "Run tests", Status: domain.TodoPending},
+	}
+	l, _, err := s.Mirror("s1", snap, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("mirror: %v", err)
+	}
+	if !GateOpen(l) {
+		t.Fatalf("gate closed by the snapshot: %+v", l.Items)
+	}
+	states := map[string]domain.TodoState{}
+	for _, it := range l.Items {
+		states[it.Text] = it.State
+	}
+	if states["Write docs"] != domain.TodoActive {
+		t.Fatalf("other snapshot changes not applied: %+v", l.Items)
+	}
+	if _, ok := states["Run tests"]; !ok {
+		t.Fatalf("new snapshot item missing: %+v", l.Items)
+	}
+}
+
+func TestClampGateErrorsWhenGateGone(t *testing.T) {
+	prev := gateList()
+	next := gateList()
+	next.Items = append(next.Items[:1], next.Items[2:]...)
+	if err := ClampGate(prev, &next); !errors.Is(err, ErrGateLocked) {
+		t.Fatalf("err = %v", err)
 	}
 }

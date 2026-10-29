@@ -71,7 +71,9 @@ type Server struct {
 	create   sessionCreator
 	ctxStore domain.ContextStore
 	pty      PTYRuntime
-	version  string
+	// procInSession overrides inHolderTree, so tests can fake the ancestry check.
+	procInSession func(pid int) bool
+	version       string
 
 	// hub carries events published by handlers to session.events streams.
 	hub *eventHub
@@ -263,6 +265,8 @@ func (s *Server) Serve(ctx context.Context) error {
 
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	pid, pidOK := peerPID(conn)
+	ctx = withPeerPID(ctx, pid, pidOK)
 	r := bufio.NewReader(conn)
 	for {
 		line, err := r.ReadBytes('\n')

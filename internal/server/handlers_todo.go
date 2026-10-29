@@ -311,7 +311,7 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 	case "todo.mirror":
 		return s.handleTodoMirror(req, p, sess)
 	case "todo.add":
-		return s.handleTodoAdd(req, p, sess, author)
+		return s.handleTodoAdd(req, p, sess, author, s.isSessionCall(ctx, req))
 	}
 
 	var fn func(*domain.TodoList) error
@@ -345,7 +345,7 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	list, err := s.MutateTodos(ctx, sess, author, guardGate(req.Caller, fn))
+	list, err := s.MutateTodos(ctx, sess, author, guardGate(s.isSessionCall(ctx, req), fn))
 	if err != nil {
 		return todoErrResp(req.ID, err)
 	}
@@ -453,7 +453,7 @@ func (s *Server) handleTodoEnsureDone(_ context.Context, req Request, sess domai
 	}}
 }
 
-func (s *Server) handleTodoAdd(req Request, p todoParams, sess domain.Session, author domain.TodoAuthor) Response {
+func (s *Server) handleTodoAdd(req Request, p todoParams, sess domain.Session, author domain.TodoAuthor, fromSession bool) Response {
 	text := ""
 	if p.Text != nil {
 		text = oneLine(*p.Text)
@@ -461,7 +461,7 @@ func (s *Server) handleTodoAdd(req Request, p todoParams, sess domain.Session, a
 	if text == "" {
 		return errResp(req.ID, CodeInvalidParams, "text is required")
 	}
-	list, change, err := s.mutateTodos(sess, author, guardGate(req.Caller, func(l *domain.TodoList) error {
+	list, change, err := s.mutateTodos(sess, author, guardGate(fromSession, func(l *domain.TodoList) error {
 		at := len(l.Items)
 		if p.After != "" {
 			i, err := findTodo(l, p.After)
@@ -595,10 +595,10 @@ func (s *Server) handleTodoSummary(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "todo_summary", "sessions": out}}
 }
 
-// guardGate wraps fn so a session caller (a non-empty caller) cannot change an
-// open design gate. An empty caller is the operator, who may.
-func guardGate(caller string, fn func(*domain.TodoList) error) func(*domain.TodoList) error {
-	if caller == "" {
+// guardGate wraps fn so a session call cannot change an open design gate.
+// Anything else is the operator, who may.
+func guardGate(fromSession bool, fn func(*domain.TodoList) error) func(*domain.TodoList) error {
+	if !fromSession {
 		return fn
 	}
 	return func(l *domain.TodoList) error {

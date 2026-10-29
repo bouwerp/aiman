@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -117,5 +118,54 @@ func TestForAllowedWithoutGate(t *testing.T) {
 	srv, _ := forServer(t, "")
 	if resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p"}); resp.Error != nil {
 		t.Fatalf("create: %+v", resp.Error)
+	}
+}
+
+func TestMirrorCannotCloseGate(t *testing.T) {
+	srv := gateServer(t)
+	resp := rpc(t, srv, "own", "todo.mirror", map[string]any{"session": "own", "items": []map[string]any{
+		{"text": "Design approved", "status": "completed"},
+		{"text": "Write the parser", "status": "in_progress"},
+	}})
+	if resp.Error != nil {
+		t.Fatalf("mirror: %+v", resp.Error)
+	}
+	list, _ := srv.todos.Get("own")
+	if !todo.GateOpen(list) {
+		t.Fatalf("mirror closed the gate: %+v", list.Items)
+	}
+	found := false
+	for _, it := range list.Items {
+		found = found || it.Text == "Write the parser"
+	}
+	if !found {
+		t.Fatalf("mirror dropped the other items: %+v", list.Items)
+	}
+}
+
+func TestEmptyCallerFromHolderTreeIsSession(t *testing.T) {
+	srv := gateServer(t)
+	srv.procInSession = func(pid int) bool { return pid == 4242 }
+	id := gateID(t, srv)
+	call := func(pid int) Response {
+		b, _ := json.Marshal(map[string]any{"session": "own", "id": id, "state": "done"})
+		line, _ := json.Marshal(Request{ID: "1", Method: "todo.update", Params: b})
+		return srv.dispatch(withPeerPID(context.Background(), pid, true), line)
+	}
+	wantCode(t, call(4242), CodeGateNeedsOperator)
+	if resp := call(77); resp.Error != nil {
+		t.Fatalf("unrelated process refused: %+v", resp.Error)
+	}
+}
+
+func TestDescendsFrom(t *testing.T) {
+	parents := map[int]int{30: 20, 20: 10, 10: 1, 50: 40}
+	parent := func(p int) (int, bool) { pp, ok := parents[p]; return pp, ok }
+	roots := map[int]bool{10: true}
+	if !descendsFrom(30, roots, parent) || !descendsFrom(10, roots, parent) {
+		t.Fatal("descendant not found")
+	}
+	if descendsFrom(50, roots, parent) || descendsFrom(99, roots, parent) {
+		t.Fatal("unrelated process matched")
 	}
 }
