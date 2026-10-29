@@ -774,6 +774,8 @@ func (m *FlowManager) launchPTYSession(ctx context.Context, sshMgr domain.Remote
 			Command:       agentCmd,
 			Env:           env,
 			NoUpdateGuard: m.noUpdateGuard,
+			Role:          config.Role,
+			ParentID:      config.ParentID,
 		}); err != nil {
 			return nil, fmt.Errorf("failed to start PTY session: %w", err)
 		}

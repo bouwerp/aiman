@@ -293,13 +293,23 @@ func (i item) chrome() (prefix, activity string) {
 	return prefix, activity
 }
 
+// terminalOrID labels a session that has no name. A shell an agent opened
+// with pty create may have no terminal name either; the id is still unique,
+// where an empty label leaves a blank row.
+func terminalOrID(s domain.Session) string {
+	if name := strings.TrimSpace(s.TerminalName); name != "" {
+		return name
+	}
+	return s.ID
+}
+
 func (i item) displayName() string {
 	label := i.session.Name
 	if label == "" {
-		if i.session.IssueKey != "" {
+		if i.session.IssueKey != "" && i.session.TerminalName != "" {
 			label = fmt.Sprintf("%s (%s)", i.session.IssueKey, i.session.TerminalName)
 		} else {
-			label = i.session.TerminalName
+			label = terminalOrID(i.session)
 		}
 	}
 	if title := strings.TrimSpace(i.session.AgentTitle); title != "" {

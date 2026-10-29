@@ -318,6 +318,33 @@ func TestCreatePTYSessionWritesParamsFile(t *testing.T) {
 	}
 }
 
+func TestCreatePTYSessionSendsRoleAndParent(t *testing.T) {
+	r := &terminalRemote{}
+	err := CreatePTYSession(context.Background(), r, PTYSpec{
+		ID: "sid", Command: "claude", Role: domain.SessionRoleHandover, ParentID: "w",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for path, body := range r.written {
+		if !strings.HasPrefix(path, "/tmp/aiman-pty-") {
+			continue
+		}
+		var params struct {
+			Role     string `json:"role"`
+			ParentID string `json:"parent_id"`
+		}
+		if err := json.Unmarshal(body, &params); err != nil {
+			t.Fatal(err)
+		}
+		if params.Role != "handover" || params.ParentID != "w" {
+			t.Fatalf("params = %s, want role handover under w", body)
+		}
+		return
+	}
+	t.Fatalf("no params file written: %v", r.written)
+}
+
 // Terminating a discovered session with no id must not shell out to the PTY
 // runtime with an empty handle.
 func TestTerminateSessionTerminalSkipsPTYWithoutAnID(t *testing.T) {

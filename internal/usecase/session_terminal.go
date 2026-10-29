@@ -42,6 +42,10 @@ type PTYSpec struct {
 	// NoUpdateGuard leaves out the env that disables the agent's own
 	// updater (agents.update.mode off).
 	NoUpdateGuard bool
+	// Role and ParentID go to the holder, so pty.list reports a hidden
+	// helper as one before serve has saved its row.
+	Role     domain.SessionRole
+	ParentID string
 }
 
 // WriteMuseSessionID records the Aiman session id where a Muse hook can read
@@ -79,6 +83,12 @@ func CreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec
 		"name":    spec.Name,
 		"dir":     spec.Dir,
 		"command": spec.Command,
+	}
+	if spec.Role != "" {
+		params["role"] = string(spec.Role)
+	}
+	if spec.ParentID != "" {
+		params["parent_id"] = spec.ParentID
 	}
 	env := map[string]string{}
 	for k, v := range spec.Env {
@@ -702,6 +712,8 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 		Command:       resumed,
 		Env:           env,
 		NoUpdateGuard: opts.NoUpdateGuard,
+		Role:          s.Role,
+		ParentID:      s.ParentID,
 	}); err != nil {
 		return err
 	}

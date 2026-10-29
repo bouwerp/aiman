@@ -101,6 +101,8 @@ type Spec struct {
 	Env map[string]string
 	// Cols/Rows set the initial window size (0 defaults to 80x24).
 	Cols, Rows int
+	// Role and ParentID are the aiman session's, recorded with the holder.
+	Role, ParentID string
 }
 
 // Status describes the lifecycle state of a session.
@@ -122,6 +124,10 @@ type SessionInfo struct {
 	ExitErr string    `json:"exit_error,omitempty"`
 	Started time.Time `json:"started_at"`
 	Size    string    `json:"size,omitempty"`
+	// Role and ParentID are what the creator recorded. pty.list fills them
+	// from serve's database when the holder has none.
+	Role     string `json:"role,omitempty"`
+	ParentID string `json:"parent_id,omitempty"`
 
 	// What the session's own output says about it, published by the holder as it
 	// passes (see ptyhold.Activity). Reading this is O(1), where judging a
@@ -230,6 +236,9 @@ func (m *Manager) Create(spec Spec) (*SessionInfo, error) {
 		Env:     spec.Env,
 		Cols:    spec.Cols,
 		Rows:    spec.Rows,
+
+		Role:     spec.Role,
+		ParentID: spec.ParentID,
 	}, m.holderCmd()); err != nil {
 		return nil, fmt.Errorf("pty: start %q: %w", spec.Command, err)
 	}
@@ -270,6 +279,9 @@ func (m *Manager) Get(id string) (*SessionInfo, error) {
 		Status:  status,
 		ExitErr: insp.Exit,
 		Size:    insp.Meta.Size,
+
+		Role:     insp.Meta.Role,
+		ParentID: insp.Meta.ParentID,
 	}
 	if t, terr := time.Parse(time.RFC3339, insp.Meta.Started); terr == nil {
 		info.Started = t

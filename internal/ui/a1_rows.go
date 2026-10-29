@@ -92,7 +92,7 @@ func rowIndent(depth int) string {
 func rowName(it item) string {
 	name := it.session.Name
 	if name == "" {
-		name = it.session.TerminalName
+		name = terminalOrID(it.session)
 	}
 	// An expanded parent already shows its children, so the badge is only
 	// useful while they are hidden.

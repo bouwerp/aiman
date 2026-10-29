@@ -31,6 +31,9 @@ func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 		Env     map[string]string `json:"env"`
 		Cols    int               `json:"cols"`
 		Rows    int               `json:"rows"`
+		// Role and ParentID are the aiman session's; see ptyruntime.Spec.
+		Role     string `json:"role"`
+		ParentID string `json:"parent_id"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
@@ -46,6 +49,9 @@ func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 		Env:     params.Env,
 		Cols:    params.Cols,
 		Rows:    params.Rows,
+
+		Role:     params.Role,
+		ParentID: params.ParentID,
 	})
 	if err != nil {
 		return s.ptyErrResp(req.ID, err)
@@ -53,15 +59,10 @@ func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "pty_session", "session": info}}
 }
 
-// ptyListEntry is a runtime session plus the role and parent serve's database
-// holds for it. The laptop builds sessions from this list, so without them a
-// hidden helper (reviewer, handover) would show up as an ordinary session.
-type ptyListEntry struct {
-	ptyruntime.SessionInfo
-	Role     domain.SessionRole `json:"role,omitempty"`
-	ParentID string             `json:"parent_id,omitempty"`
-}
-
+// handlePTYList lists the runtime's sessions with the role and parent serve's
+// database holds for each. The laptop builds sessions from this list, so a
+// hidden helper (reviewer, handover) without them would show up as an ordinary
+// session. The holder's own record covers the seconds before the row exists.
 func (s *Server) handlePTYList(ctx context.Context, req Request) Response {
 	list := s.pty.List()
 	rows := map[string]domain.Session{}
@@ -75,12 +76,16 @@ func (s *Server) handlePTYList(ctx context.Context, req Request) Response {
 			rows[row.ID] = row
 		}
 	}
-	out := make([]ptyListEntry, 0, len(list))
-	for _, info := range list {
-		row := rows[info.ID]
-		out = append(out, ptyListEntry{SessionInfo: info, Role: row.Role, ParentID: row.ParentID})
+	for i := range list {
+		row := rows[list[i].ID]
+		if row.Role != "" {
+			list[i].Role = string(row.Role)
+		}
+		if row.ParentID != "" {
+			list[i].ParentID = row.ParentID
+		}
 	}
-	return Response{ID: req.ID, Result: map[string]any{"type": "pty_list", "sessions": out}}
+	return Response{ID: req.ID, Result: map[string]any{"type": "pty_list", "sessions": list}}
 }
 
 func (s *Server) resolvePTYID(req Request) (string, Response, bool) {

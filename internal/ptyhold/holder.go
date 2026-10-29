@@ -91,6 +91,9 @@ func Run(root, id string) (err error) {
 		PID:     cmd.Process.Pid,
 		Started: time.Now().UTC().Format(time.RFC3339),
 		Size:    fmt.Sprintf("%dx%d", cols, rows),
+
+		Role:     spec.Role,
+		ParentID: spec.ParentID,
 	}
 	if err := writeMeta(dir, meta); err != nil {
 		return fmt.Errorf("holder: write meta: %w", err)

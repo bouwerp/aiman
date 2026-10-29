@@ -90,6 +90,22 @@ func TestHolderCreateEchoAndCapture(t *testing.T) {
 	}
 }
 
+// The role and parent a creator passes survive into the holder's record, so a
+// list taken before serve saves the row still knows a hidden helper.
+func TestHolderRecordsRoleAndParent(t *testing.T) {
+	m := newTestManager(t)
+	if _, err := m.Create(Spec{ID: "c1", Name: "w-handover-1a", Command: "sleep 300", Role: "handover", ParentID: "w"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	info, err := m.Get("c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Role != "handover" || info.ParentID != "w" {
+		t.Fatalf("info = %+v, want role handover under w", info)
+	}
+}
+
 func TestHolderWriteReachesShell(t *testing.T) {
 	m := newTestManager(t)
 	if _, err := m.Create(Spec{ID: "sh", Command: "bash -i"}); err != nil {

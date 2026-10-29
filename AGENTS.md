@@ -157,7 +157,7 @@ The `tmux_session` column keeps its name and holds `TerminalName`. `backend` is 
 It can only populate fields it can read live:
 
 - `ID`, `TerminalName`, `WorkingDirectory`, `Backend` (`pty`) from the PTY record
-- `Role` and `ParentID`, which serve's `pty.list` adds from its database, so the dashboard hides reviewer and handover children (an older serve sends neither)
+- `Role` and `ParentID` from `pty.list`: serve's database row, else what the creator passed to `pty.create` (kept in the holder's `meta.json`, so a helper is hidden before its row is saved). The dashboard hides reviewer and handover children; an older serve sends neither
 - `MutagenSyncID` and `LocalPath` from the matching mutagen sync (`mutagen sync list`), which also sets status `SYNCING`
 
 It does **not** read `Name`, `Group`, `Branch`, `AgentName`, `IssueKey` or `WorktreePath`; those come from the DB. A row stored without a name (registered from the laptop or written by a hook) is named after its terminal, like a discovered one, never `impl`.
@@ -403,7 +403,7 @@ starts, attaches to or stops tmux.
 detached with `setsid`, that owns one PTY. Its state is files under
 `~/.aiman/pty/<id>/` (`request.json`, `meta.json`, an append-only `spool`
 rotated to `spool.old` at 8 MiB, `term.sock`, `resize`, `kill`, `exit`,
-`activity.json`). `internal/ptyruntime` is serve's thin client over that
+`activity.json`). `meta.json` also records the session's `role` and `parent_id` when the creator passed them. `internal/ptyruntime` is serve's thin client over that
 contract. The serve unit uses `KillMode=process`, so stopping, restarting or
 updating serve leaves holders and their agents running; the next serve finds
 them again by scanning `~/.aiman/pty/`. Sessions also survive laptop

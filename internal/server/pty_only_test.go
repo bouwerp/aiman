@@ -171,7 +171,8 @@ func TestVerifyTerminalIsPTYOnly(t *testing.T) {
 }
 
 // The laptop builds sessions from pty.list, so a hidden helper must carry its
-// role there or it shows up as an ordinary session.
+// role there or it shows up as an ordinary session. The database row wins;
+// the holder's record covers a child whose row is not saved yet.
 func TestPTYListCarriesRoleAndParent(t *testing.T) {
 	srv, pty, _ := ptyServer(t,
 		domain.Session{ID: "w", Name: "worker", Backend: domain.BackendPTY},
@@ -179,6 +180,7 @@ func TestPTYListCarriesRoleAndParent(t *testing.T) {
 	)
 	pty.Add(ptyruntime.SessionInfo{ID: "w", Name: "worker"})
 	pty.Add(ptyruntime.SessionInfo{ID: "h", Name: "worker-handover-1a2b"})
+	pty.Add(ptyruntime.SessionInfo{ID: "booting", Name: "worker-review-9f", Role: "reviewer", ParentID: "w"})
 	pty.Add(ptyruntime.SessionInfo{ID: "loose", Name: "shell"})
 
 	resp := rpc(t, srv, "", "pty.list", map[string]any{})
@@ -186,16 +188,19 @@ func TestPTYListCarriesRoleAndParent(t *testing.T) {
 		t.Fatalf("pty.list: %+v", resp.Error)
 	}
 	m, _ := resp.Result.(map[string]any)
-	list, _ := m["sessions"].([]ptyListEntry)
-	got := map[string]ptyListEntry{}
+	list, _ := m["sessions"].([]ptyruntime.SessionInfo)
+	got := map[string]ptyruntime.SessionInfo{}
 	for _, e := range list {
 		got[e.ID] = e
 	}
-	if len(got) != 3 {
-		t.Fatalf("listed %d sessions, want 3: %+v", len(got), list)
+	if len(got) != 4 {
+		t.Fatalf("listed %d sessions, want 4: %+v", len(got), list)
 	}
-	if h := got["h"]; h.Role != domain.SessionRoleHandover || h.ParentID != "w" {
+	if h := got["h"]; h.Role != "handover" || h.ParentID != "w" {
 		t.Fatalf("handover child = %+v, want role handover under w", h)
+	}
+	if b := got["booting"]; b.Role != "reviewer" || b.ParentID != "w" {
+		t.Fatalf("child with no row yet = %+v, want the holder's role and parent", b)
 	}
 	if w := got["w"]; w.Role != "" || w.ParentID != "" {
 		t.Fatalf("worker = %+v, want no role or parent", w)

@@ -69,6 +69,10 @@ type Spec struct {
 	Env     map[string]string `json:"env,omitempty"`
 	Cols    int               `json:"cols,omitempty"`
 	Rows    int               `json:"rows,omitempty"`
+	// Role and ParentID are the aiman session's, so a list of terminals can
+	// tell a hidden helper from its first moment, before serve has a row.
+	Role     string `json:"role,omitempty"`
+	ParentID string `json:"parent_id,omitempty"`
 }
 
 // Dir returns the session directory for id under root.
@@ -89,6 +93,9 @@ type Meta struct {
 	// the real PTY, so it is the only thing that can report this; without it
 	// callers could request a resize but never read one back.
 	Size string `json:"size,omitempty"`
+	// Role and ParentID are copied from the Spec.
+	Role     string `json:"role,omitempty"`
+	ParentID string `json:"parent_id,omitempty"`
 }
 
 // Activity is the holder's rolling view of a live session, refreshed as output
