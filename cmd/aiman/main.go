@@ -64,8 +64,8 @@ func run() error {
 
 	// `pty`, `session`, `rpc`, `todo`, `usage`, `agents`, `design`, `verify`
 	// and `review` talk only to the agent API socket (and `pty hold` not even
-	// to that: it is the detached holder, handed an explicit --root and --id). `slack` talks to the Slack Web API
-	// with the host user token.
+	// to that: it is the detached holder, handed an explicit --root and --id).
+	// `slack` talks to the Slack Web API with the host user token.
 	// Everything below exists for the TUI: loading config, opening the
 	// SQLite file and running its migrations, building the JIRA, git, SSH and
 	// flow plumbing. None of it is reachable from these commands, and paying for

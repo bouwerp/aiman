@@ -26,6 +26,7 @@ func TestReviewParams(t *testing.T) {
 		{"reveal single", []string{"reveal", "--single"}, "s1", "review.reveal", map[string]any{"session": "s1", "single": true}},
 		{"reveal named", []string{"reveal", "--session", "pr-7"}, "", "review.reveal", map[string]any{"session": "pr-7"}},
 		{"refresh", []string{"refresh"}, "s1", "review.refresh", map[string]any{"session": "s1"}},
+		{"refresh forced", []string{"refresh", "--force"}, "s1", "review.refresh", map[string]any{"session": "s1", "force": true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,6 +46,7 @@ func TestReviewParams(t *testing.T) {
 		"refresh single": {"refresh", "--single", "--session", "s1"},
 		"extra argument": {"reveal", "x", "--session", "s1"},
 		"unknown flag":   {"reveal", "--force", "--session", "s1"},
+		"bogus flag":     {"refresh", "--bogus", "--session", "s1"},
 	} {
 		if _, _, err := reviewRPC(args, env("")); !errors.Is(err, errUsage) {
 			t.Errorf("%s: err %v, want usage", name, err)

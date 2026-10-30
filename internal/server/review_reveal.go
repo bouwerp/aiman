@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/review"
 	"github.com/bouwerp/aiman/internal/todo"
@@ -22,6 +23,7 @@ var errNotReady = errors.New("review not ready")
 type reviewCall struct {
 	Session string `json:"session"`
 	Single  bool   `json:"single"`
+	Force   bool   `json:"force"`
 }
 
 // reviewTarget is a review session a reveal or refresh acts on.
@@ -92,15 +94,15 @@ func (s *Server) handleReviewReveal(ctx context.Context, req Request) Response {
 	}
 	pr, err := s.reviewGH.PR(ctx, t.ref)
 	if err != nil {
-		return errResp(req.ID, CodeInvalidParams, fmt.Sprintf("read %s: %v", t.ref, err))
+		return errResp(req.ID, CodeCreateFailed, fmt.Sprintf("read %s: %v", t.ref, err))
 	}
 	path := filepath.Join(s.reviewScratch(t.sess.ID), review.DescriptionFileName)
 	if err := os.WriteFile(path, []byte(review.Description(pr)), 0o600); err != nil {
-		return errResp(req.ID, CodeInvalidParams, err.Error())
+		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
 	st.Revealed, st.Single = true, single
 	if err := review.SaveState(s.reviewBase(), t.sess.ID, st); err != nil {
-		return errResp(req.ID, CodeInvalidParams, err.Error())
+		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
 	s.appendEvent(ctx, t.sess.ID, domain.EventActorAiman, domain.EventReviewRevealed, map[string]any{"single": single})
 	return Response{ID: req.ID, Result: map[string]any{"type": "review", "session": t.sess.ID, "state": st, "description": path}}
@@ -144,9 +146,10 @@ func (s *Server) revealReady(ctx context.Context, sess domain.Session, single bo
 	return true, nil
 }
 
-// consultOutcomes reads the session's ledger since its last refresh: how many
-// consults finished, and the ids of every consult that finished or was
-// abandoned.
+// consultOutcomes reads the session's ledger: how many consults finished
+// since its last refresh, and the ids of every consult that ever finished or
+// was abandoned. A consult with such a row has ended even when its stored row
+// could not be forgotten.
 func (s *Server) consultOutcomes(ctx context.Context, id string) (int, map[string]bool, error) {
 	lister, ok := s.repo.(sessionEventLister)
 	if !ok {
@@ -163,7 +166,7 @@ func (s *Server) consultOutcomes(ctx context.Context, id string) (int, map[strin
 			since = ev.Seq
 			switch ev.Kind {
 			case domain.EventReviewRefreshed:
-				finished, ended = 0, map[string]bool{}
+				finished = 0
 			case domain.EventConsultFinished, domain.EventConsultAbandoned:
 				var p struct {
 					Child string `json:"child"`
@@ -184,14 +187,23 @@ func (s *Server) consultOutcomes(ctx context.Context, id string) (int, map[strin
 	}
 }
 
-// handleReviewRefresh restages the review at the PR's current head: the PR
-// worktree is fetched, reset hard to the new head and soft to the new merge
-// base, .aiman_review is rewritten, the description is withdrawn, the state
-// returns to blind and the blind, informed and gate to-dos reopen.
+// handleReviewRefresh restages the review at the PR's current head. It first
+// withdraws the description, so a refresh that fails part-way leaves the
+// review blind. It then retires every consult still running (each reviewed
+// the old head), restages the PR worktree (fetched, reset hard to the new head
+// and soft to the new merge base), rewrites .aiman_review, returns the state
+// to blind and reopens the blind, informed and gate to-dos. A head that has
+// not moved is a no-op unless force is set. Only the review session itself or
+// the operator may refresh it.
 func (s *Server) handleReviewRefresh(ctx context.Context, req Request) Response {
 	t, fail := s.resolveReview(ctx, req)
 	if fail != nil {
 		return *fail
+	}
+	if req.Caller != "" {
+		if caller, ok := s.findSession(ctx, req.Caller); !ok || caller.ID != t.sess.ID {
+			return errResp(req.ID, CodeGateNeedsOperator, fmt.Sprintf("only %s or the operator can refresh its review", t.sess.Name))
+		}
 	}
 	if s.reviewWT == nil {
 		return errResp(req.ID, CodeInvalidParams, "review not configured")
@@ -201,13 +213,23 @@ func (s *Server) handleReviewRefresh(ctx context.Context, req Request) Response 
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, fmt.Sprintf("review state of %s: %v", t.sess.Name, err))
 	}
-	meta, code, err := s.restageReview(ctx, t)
+	pr, err := s.reviewGH.PR(ctx, t.ref)
 	if err != nil {
-		return errResp(req.ID, code, err.Error())
+		return errResp(req.ID, CodeCreateFailed, fmt.Sprintf("read %s: %v", t.ref, err))
+	}
+	if pr.HeadSHA != "" && pr.HeadSHA == st.HeadSHA && !t.call.Force {
+		return Response{ID: req.ID, Result: map[string]any{"type": "review", "session": t.sess.ID, "refreshed": false, "state": st}}
 	}
 	desc := filepath.Join(s.reviewScratch(t.sess.ID), review.DescriptionFileName)
 	if err := os.Remove(desc); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
+	}
+	if err := s.retireReviewConsults(ctx, t.sess.ID); err != nil {
+		return errResp(req.ID, CodeCreateFailed, err.Error())
+	}
+	meta, code, err := s.restageReview(ctx, t, pr)
+	if err != nil {
+		return errResp(req.ID, code, err.Error())
 	}
 	from := st.HeadSHA
 	st = review.State{Ref: st.Ref, HeadSHA: meta.HeadSHA}
@@ -218,16 +240,41 @@ func (s *Server) handleReviewRefresh(ctx context.Context, req Request) Response 
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
 	s.appendEvent(ctx, t.sess.ID, domain.EventActorAiman, domain.EventReviewRefreshed, map[string]any{"from": from, "to": meta.HeadSHA})
-	return Response{ID: req.ID, Result: map[string]any{"type": "review", "session": t.sess.ID, "state": st}}
+	return Response{ID: req.ID, Result: map[string]any{"type": "review", "session": t.sess.ID, "refreshed": true, "state": st}}
+}
+
+// retireReviewConsults unlinks, records abandoned and retires every consult of
+// review id still stored: each reviewed the head a refresh replaces.
+func (s *Server) retireReviewConsults(ctx context.Context, id string) error {
+	sessions, err := s.loadSessions(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range sessions {
+		if c.Role != domain.SessionRoleConsult || c.ParentID != id {
+			continue
+		}
+		todoID := ""
+		err := s.TodoAccess().Mutate(ctx, id, domain.AuthorAiman, func(l *domain.TodoList) error {
+			for i := range l.Items {
+				if l.Items[i].Ref == coordinator.ChildRef(c.ID) {
+					l.Items[i].Ref, todoID = "", l.Items[i].ID
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("unlink consult %s: %w", c.ID, err)
+		}
+		s.appendEvent(ctx, id, domain.EventActorAiman, domain.EventConsultAbandoned, map[string]any{"child": c.ID, "todo": todoID, "reason": "refresh"})
+		s.RetireConsult(ctx, c)
+	}
+	return nil
 }
 
 // restageReview stages the PR worktree at the PR's current head and rewrites
 // the review files. On error it returns the response code.
-func (s *Server) restageReview(ctx context.Context, t reviewTarget) (reviewMeta, string, error) {
-	pr, err := s.reviewGH.PR(ctx, t.ref)
-	if err != nil {
-		return reviewMeta{}, CodeInvalidParams, fmt.Errorf("read %s: %w", t.ref, err)
-	}
+func (s *Server) restageReview(ctx context.Context, t reviewTarget, pr review.PR) (reviewMeta, string, error) {
 	existing, err := s.loadSessions(ctx)
 	if err != nil {
 		return reviewMeta{}, CodeCreateFailed, err

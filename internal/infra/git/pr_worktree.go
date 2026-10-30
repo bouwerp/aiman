@@ -145,9 +145,9 @@ func checkoutPRHead(ctx context.Context, remote domain.RemoteExecutor, repoPath,
 		if out, err := remote.Execute(ctx, "git -C "+wt+" fetch -q origin "+pull+" 2>&1"); err != nil {
 			return fmt.Errorf("fetch %s: %w: %s", pull, err, strings.TrimSpace(out))
 		}
-		// The worktree is detached, so the hard reset moves no branch; it drops
-		// the files staged from the previous head before the new soft reset.
-		if out, err := remote.Execute(ctx, "git -C "+wt+" checkout -q --detach && git -C "+wt+" reset -q --hard FETCH_HEAD 2>&1"); err != nil {
+		// The worktree is made detached, so the hard reset moves no branch; it
+		// drops the files staged from the previous head before the soft reset.
+		if out, err := remote.Execute(ctx, "git -C "+wt+" reset -q --hard FETCH_HEAD 2>&1"); err != nil {
 			return fmt.Errorf("check out %s: %w: %s", pull, err, strings.TrimSpace(out))
 		}
 		return nil

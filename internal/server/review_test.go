@@ -725,3 +725,166 @@ func reviewGateID(t *testing.T, srv *Server, id string) string {
 	t.Fatal("no review gate")
 	return ""
 }
+
+// movePRHead makes the fake GitHub report a new head for o/r#7.
+func movePRHead(r reviewRig, head string) {
+	r.srv.SetReviewGitHub(&fakeGitHub{prs: map[int]review.PR{7: {
+		Number: 7, Title: "Add the parser", Author: "alice", Body: "secret description",
+		BaseRef: "main", HeadRef: "feat/parser", HeadSHA: head,
+	}}})
+}
+
+func refreshResult(t *testing.T, srv *Server, caller string, params map[string]any) map[string]any {
+	t.Helper()
+	var res map[string]any
+	rpcOK(t, srv, caller, "review.refresh", params, &res)
+	return res
+}
+
+// A consult started before a refresh reviewed the old head: refresh retires
+// it and records it abandoned, so only a consult started afterwards can
+// satisfy the next reveal.
+func TestRefreshRetiresRunningConsults(t *testing.T) {
+	r := newReviewRig(t)
+	info := createReview(t, r.srv)
+	tickTodo(t, r.srv, info.ID, reviewBlindRef)
+	startConsult(t, r.srv, info.ID, "c1")
+	movePRHead(r, "def456")
+	refreshResult(t, r.srv, "", map[string]any{"session": info.ID})
+
+	if _, err := r.srv.repo.Get(context.Background(), "c1"); err == nil {
+		t.Fatal("the old consult is still stored")
+	}
+	var abandoned map[string]any
+	for _, ev := range ledger(t, r.srv, info.ID) {
+		if ev.Kind == domain.EventConsultAbandoned {
+			_ = json.Unmarshal(ev.Payload, &abandoned)
+		}
+	}
+	if abandoned["child"] != "c1" || abandoned["reason"] != "refresh" || abandoned["todo"] == "" {
+		t.Fatalf("consult.abandoned %v", abandoned)
+	}
+	list, err := r.srv.TodoAccess().Get(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range list.Items {
+		if it.Ref == "child:c1" {
+			t.Fatalf("item %s still links the retired consult", it.ID)
+		}
+	}
+	tickTodo(t, r.srv, info.ID, reviewBlindRef)
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID}); code != CodeReviewNotReady {
+		t.Fatalf("reveal after refresh with no new consult: code %q", code)
+	}
+	startConsult(t, r.srv, info.ID, "c2")
+	endConsult(t, r.srv, info.ID, "c2", domain.EventConsultFinished)
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID}); code != "" {
+		t.Fatalf("reveal after the new consult finished: code %q", code)
+	}
+}
+
+// A consult whose row could not be forgotten still counts as ended once the
+// ledger records it.
+func TestRevealEndedConsultRowLeftBehind(t *testing.T) {
+	r := newReviewRig(t)
+	info := createReview(t, r.srv)
+	tickTodo(t, r.srv, info.ID, reviewBlindRef)
+	startConsult(t, r.srv, info.ID, "c1")
+	r.srv.AppendLedger(context.Background(), info.ID, domain.EventConsultFinished, map[string]any{"child": "c1", "todo": "t7"})
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID}); code != "" {
+		t.Fatalf("reveal with a finished consult whose row remains: code %q", code)
+	}
+	// After a refresh the old consult no longer counts as a reviewer, but its
+	// leftover row does not block the reveal either.
+	r.srv.AppendLedger(context.Background(), info.ID, domain.EventReviewRefreshed, map[string]any{"from": "a", "to": "b"})
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID}); code != CodeReviewNotReady {
+		t.Fatalf("reveal after refresh without single: code %q", code)
+	}
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID, "single": true}); code != "" {
+		t.Fatalf("single reveal with a leftover ended consult row: code %q", code)
+	}
+}
+
+// GitHub and local write failures are create_failed, not caller errors.
+func TestReviewFailuresAreCreateFailed(t *testing.T) {
+	r := newReviewRig(t)
+	info := createReview(t, r.srv)
+	tickTodo(t, r.srv, info.ID, reviewBlindRef)
+	r.srv.SetReviewGitHub(&fakeGitHub{})
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID, "single": true}); code != CodeCreateFailed {
+		t.Fatalf("reveal with GitHub down: code %q", code)
+	}
+	if resp := rpc(t, r.srv, "", "review.refresh", map[string]any{"session": info.ID}); resp.Error == nil || resp.Error.Code != CodeCreateFailed {
+		t.Fatalf("refresh with GitHub down: %+v", resp.Error)
+	}
+	movePRHead(r, "abc123")
+	// The scratch directory is gone, so the description cannot be written.
+	if err := os.RemoveAll(filepath.Join(r.stateDir, info.ID, "work")); err != nil {
+		t.Fatal(err)
+	}
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID, "single": true}); code != CodeCreateFailed {
+		t.Fatalf("reveal with no scratch directory: code %q", code)
+	}
+}
+
+// A refresh that fails part-way has already withdrawn the description.
+func TestRefreshWithdrawsDescriptionFirst(t *testing.T) {
+	r := newReviewRig(t)
+	info := createReview(t, r.srv)
+	tickTodo(t, r.srv, info.ID, reviewBlindRef)
+	rpcOK(t, r.srv, "", "review.reveal", map[string]any{"session": info.ID, "single": true}, nil)
+	desc := filepath.Join(r.stateDir, info.ID, "work", ".aiman_pr_description.md")
+	if _, err := os.Stat(desc); err != nil {
+		t.Fatal(err)
+	}
+	movePRHead(r, "def456")
+	r.worktrees.err = errors.New("fetch failed")
+	if resp := rpc(t, r.srv, "", "review.refresh", map[string]any{"session": info.ID}); resp.Error == nil || resp.Error.Code != CodeCreateFailed {
+		t.Fatalf("refresh %+v", resp.Error)
+	}
+	if _, err := os.Stat(desc); !os.IsNotExist(err) {
+		t.Fatalf("description survived a failed refresh: %v", err)
+	}
+}
+
+// A head that has not moved is a no-op unless forced.
+func TestRefreshNoOpWhenHeadUnchanged(t *testing.T) {
+	r := newReviewRig(t)
+	info := createReview(t, r.srv)
+	tickTodo(t, r.srv, info.ID, reviewBlindRef)
+	rpcOK(t, r.srv, "", "review.reveal", map[string]any{"session": info.ID, "single": true}, nil)
+	res := refreshResult(t, r.srv, "", map[string]any{"session": info.ID})
+	if res["refreshed"] != false || res["type"] != "review" {
+		t.Fatalf("unchanged refresh %v", res)
+	}
+	st, err := review.LoadState(r.stateDir, info.ID)
+	if err != nil || !st.Revealed {
+		t.Fatalf("state after a no-op refresh %+v (%v)", st, err)
+	}
+	if todoStates(t, r.srv, info.ID)[reviewBlindRef] != domain.TodoDone {
+		t.Fatal("a no-op refresh reopened the blind review")
+	}
+	res = refreshResult(t, r.srv, "", map[string]any{"session": info.ID, "force": true})
+	if res["refreshed"] != true {
+		t.Fatalf("forced refresh %v", res)
+	}
+	if st, _ := review.LoadState(r.stateDir, info.ID); st.Revealed {
+		t.Fatal("forced refresh left the review revealed")
+	}
+}
+
+// Only the review session itself or the operator may refresh it.
+func TestRefreshRefusesOtherSession(t *testing.T) {
+	r := newReviewRig(t)
+	info := createReview(t, r.srv)
+	other := domain.Session{ID: "plain", Name: "plain", Status: domain.SessionStatusActive}
+	if err := r.srv.repo.Save(context.Background(), &other); err != nil {
+		t.Fatal(err)
+	}
+	if resp := rpc(t, r.srv, "plain", "review.refresh", map[string]any{"session": info.ID}); resp.Error == nil || resp.Error.Code != CodeGateNeedsOperator {
+		t.Fatalf("refresh by another session: %+v", resp.Error)
+	}
+	refreshResult(t, r.srv, info.ID, map[string]any{})
+	refreshResult(t, r.srv, "", map[string]any{"session": info.ID})
+}
