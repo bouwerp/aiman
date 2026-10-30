@@ -22,13 +22,13 @@ func staleHandoverRow(s domain.Session) bool {
 	return handoverChildTerminalRe.MatchString(s.Name) || handoverChildTerminalRe.MatchString(s.TerminalName)
 }
 
-// dropGoneHelperRow removes a helper (hidden role) or child (ParentID) row
-// whose terminal serve reported gone. A hidden helper's laptop row is deleted
-// too; a visible child's stays stored for a later scan to judge.
+// dropGoneHelperRow removes a hidden helper's row, in memory and in the
+// laptop DB, once serve reports its terminal gone. Any other row, a visible
+// child included, stays listed for a scan to judge: the user may revive it.
 func (m *Model) dropGoneHelperRow(id string) {
 	idx := -1
 	for i, s := range m.allSessions {
-		if s.ID == id && (s.Role.Hidden() || s.ParentID != "") {
+		if s.ID == id && s.Role.Hidden() {
 			idx = i
 			break
 		}
@@ -36,9 +36,8 @@ func (m *Model) dropGoneHelperRow(id string) {
 	if idx < 0 {
 		return
 	}
-	gone := m.allSessions[idx]
 	m.allSessions = append(m.allSessions[:idx], m.allSessions[idx+1:]...)
-	if m.db != nil && gone.Role.Hidden() {
+	if m.db != nil {
 		if err := m.db.Delete(context.Background(), id); err != nil {
 			m.log("session_gone: delete helper row %s: %v", id, err)
 		}

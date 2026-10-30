@@ -16,9 +16,10 @@ func sessionIDs(list []domain.Session) []string {
 	return out
 }
 
-// session_gone for a helper or child removes its row; a top-level worker
-// stays listed until a scan decides.
-func TestSessionGoneDropsHelperAndChildRows(t *testing.T) {
+// session_gone removes a hidden helper's row. A visible child (a --for child
+// or a PR review session) and a top-level worker stay listed until a scan
+// decides.
+func TestSessionGoneDropsOnlyHiddenHelperRows(t *testing.T) {
 	m := eventModel(
 		domain.Session{ID: "w", Name: "impl", RemoteHost: "regent0"},
 		domain.Session{ID: "h", Name: "handover", Role: domain.SessionRoleHandover, ParentID: "w", RemoteHost: "regent0"},
@@ -31,8 +32,58 @@ func TestSessionGoneDropsHelperAndChildRows(t *testing.T) {
 			t.Fatal("session_gone stalled the stream")
 		}
 	}
-	if got := sessionIDs(m.allSessions); !slices.Equal(got, []string{"w"}) {
-		t.Fatalf("allSessions = %v, want only the worker", got)
+	if got := sessionIDs(m.allSessions); !slices.Equal(got, []string{"w", "c"}) {
+		t.Fatalf("allSessions = %v, want the worker and the visible child", got)
+	}
+}
+
+// A consult row first announced without its role is hidden once serve
+// announces it again with the role: the live role wins over the stored empty
+// one.
+func TestReannouncedRoleHidesStaleRow(t *testing.T) {
+	m := NewModel(testCfg(), nil, nil, &savingSessionRepo{}, nil, nil, nil)
+	m.allSessions = []domain.Session{
+		{ID: "w", Name: "impl", RemoteHost: "regent0"},
+		{ID: "k", Name: "adhoc-20261030T101500", TerminalName: "adhoc-20261030T101500", RemoteHost: "regent0"},
+	}
+	m.ensureSessionStreams()
+	m.streams["regent0"].todoSwept = true
+	info := server.SessionInfo{ID: "k", Name: "consult", Role: string(domain.SessionRoleConsult), ParentID: "w", TerminalName: "adhoc-20261030T101500"}
+	m.applySessionEvent(sessionEventMsg{host: "regent0", event: server.SessionEvent{Type: "session_created", ID: "k", Session: &info}})
+	got, ok := m.sessionByID("k")
+	if !ok || got.Role != domain.SessionRoleConsult {
+		t.Fatalf("row = %+v, want role consult", got)
+	}
+	m.applyRemoteFilter()
+	listed := map[string]bool{}
+	for _, it := range m.list.Items() {
+		if row, ok := it.(item); ok {
+			listed[row.session.ID] = true
+		}
+	}
+	if !listed["w"] || listed["k"] {
+		t.Fatalf("listed = %v, want the worker and not the consult row", listed)
+	}
+}
+
+// A role-less row whose terminal is named like a handover child but is live
+// is the user's own session and stays stored.
+func TestDiscoveryKeepsLiveRolelessHandoverNamedRow(t *testing.T) {
+	repo := &savingSessionRepo{startupSessionRepo: startupSessionRepo{sessions: []domain.Session{
+		{ID: "mine", Name: "handover-1a2b3c4d", RemoteHost: "regent0", TerminalName: "handover-1a2b3c4d", Status: domain.SessionStatusActive},
+	}}}
+	m := NewModel(testCfg(), nil, nil, repo, nil, nil, nil)
+	m.applyDiscoveryResult(discoveryResultMsg{
+		scannedHosts: map[string]bool{"regent0": true},
+		sessions: []domain.Session{
+			{ID: "mine", RemoteHost: "regent0", TerminalName: "handover-1a2b3c4d", Status: domain.SessionStatusActive},
+		},
+	})
+	if len(repo.deletedID) != 0 {
+		t.Fatalf("deleted = %v, want the live row kept", repo.deletedID)
+	}
+	if _, ok := m.sessionByID("mine"); !ok {
+		t.Fatal("live row dropped from the list")
 	}
 }
 

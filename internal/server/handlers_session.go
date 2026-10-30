@@ -1109,7 +1109,8 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 // few seconds before the creator saves the row, and a row saved from the live
 // record first would be named after its terminal. That report reaches the
 // recorder, the steerer and the ledger but is not saved; the creator's save
-// is the first identity write.
+// is the first identity write. The helper's row therefore has no agent
+// session id until its second report.
 func (s *Server) applyAgentReport(ctx context.Context, sessionID string, rep agenthook.Report) error {
 	sess, err := s.repo.Get(ctx, sessionID)
 	persist := true

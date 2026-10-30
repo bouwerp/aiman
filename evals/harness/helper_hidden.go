@@ -13,9 +13,9 @@ import (
 )
 
 // helperReportGap holds a child's row back after its first hook report for
-// longer than serve's event poll, the way a real agent reports seconds before
-// the creator saves the row.
-const helperReportGap = 800 * time.Millisecond
+// more than two of serve's event polls, so a stream poll always lands in the
+// gap, the way a real agent reports seconds before the creator saves the row.
+const helperReportGap = 2*server.EventPollInterval + 200*time.Millisecond
 
 // onChildTerminal runs the hook set by SetChildTerminalHook, if any.
 func (h *Harness) onChildTerminal(id string) {

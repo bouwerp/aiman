@@ -7039,8 +7039,8 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 		// user stops it and restarts it into pty.
 		if s.RemoteHost != "" && msg.scannedHosts[s.RemoteHost] {
 			if !s.IsLegacyTmux() {
-				// A role-less handover child row is a leftover of an
-				// announcement made before serve knew the role.
+				// Role-less rows named like a handover child whose terminal
+				// is gone are deleted: the role filter cannot hide them.
 				if staleHandoverRow(s) && m.db != nil {
 					_ = m.db.Delete(ctx, id)
 				}

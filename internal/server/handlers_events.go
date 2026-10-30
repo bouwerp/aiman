@@ -10,13 +10,14 @@ import (
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
-// eventPollInterval is how often serve looks for activity changes.
+// EventPollInterval is how often serve looks for activity changes and new
+// rows to announce.
 //
 // This is a local stat of a handful of small files, so it can be far tighter
 // than anything the dashboard could do over SSH — which is the point: the
 // dashboard used to make an SSH round trip per session per poll to learn the
 // same thing.
-const eventPollInterval = 300 * time.Millisecond
+const EventPollInterval = 300 * time.Millisecond
 
 // eventKeepalive bounds how long the stream can stay silent. A reader blocked on
 // a dead connection learns nothing from silence; a periodic empty event lets it
@@ -100,7 +101,7 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 	enc := json.NewEncoder(conn)
 	seen := map[string]SessionEvent{}
 	announced := map[string]string{}
-	ticker := time.NewTicker(eventPollInterval)
+	ticker := time.NewTicker(EventPollInterval)
 	defer ticker.Stop()
 	lastSent := time.Now()
 
