@@ -35,7 +35,8 @@ const (
 	// CodeReviewExists refuses a review create while a live session already
 	// reviews that pull request.
 	CodeReviewExists = "review_exists"
-	// CodeReviewNotReady refuses a reveal before the blind passes are done.
+	// CodeReviewNotReady refuses a reveal before the blind passes are done,
+	// and a post before the description has been revealed.
 	CodeReviewNotReady = "review_not_ready"
 	// CodeReviewIncomplete refuses a post while the review file lacks the
 	// operator's answers or a call on every finding.
@@ -43,6 +44,9 @@ const (
 	// CodeReviewHeadMoved refuses a post when the PR head is no longer the
 	// one the review was staged from.
 	CodeReviewHeadMoved = "review_head_moved"
+	// CodeReviewAlreadyPosted refuses a second post until a refresh reopens
+	// the Post the review to-do.
+	CodeReviewAlreadyPosted = "review_already_posted"
 )
 
 type Request struct {

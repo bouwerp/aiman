@@ -83,6 +83,19 @@ func newPostRig(t *testing.T, body string) postRig {
 	return postRig{reviewRig: r, info: info, gh: gh, file: "review.md"}
 }
 
+// revealReview marks the review's description as revealed so a post can run.
+func revealReview(t *testing.T, p postRig) {
+	t.Helper()
+	st, err := review.LoadState(p.stateDir, p.info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Revealed = true
+	if err := review.SaveState(p.stateDir, p.info.ID, st); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (p postRig) post(t *testing.T, params map[string]any) Response {
 	t.Helper()
 	if _, ok := params["file"]; !ok {
@@ -153,10 +166,23 @@ func TestPostRefusals(t *testing.T) {
 			})
 		}},
 		{name: "incomplete", body: "# Review: o/r#7\n\n## Summary\n\nx\n", code: CodeReviewIncomplete},
+		{name: "not revealed", body: completeReview, code: CodeReviewNotReady},
 		{name: "head moved", body: completeReview, code: CodeReviewHeadMoved, mutate: func(t *testing.T, p postRig) {
+			revealReview(t, p)
 			p.gh.prs[7] = review.PR{Number: 7, HeadSHA: "def456"}
 		}},
-		{name: "approve", body: completeReview, code: CodeInvalidParams, params: map[string]any{"event": "APPROVE"}},
+		{name: "approve", body: completeReview, code: CodeInvalidParams, params: map[string]any{"event": "APPROVE"}, mutate: revealReview},
+		{name: "approve while gate open", body: completeReview, code: CodeGateNeedsOperator, params: map[string]any{"event": "APPROVE"}, mutate: func(t *testing.T, p postRig) {
+			reopen := map[string]bool{todo.ReviewGateRef: true}
+			_ = p.srv.TodoAccess().Mutate(t.Context(), p.info.ID, domain.AuthorAiman, func(l *domain.TodoList) error {
+				for i := range l.Items {
+					if reopen[l.Items[i].Ref] {
+						l.Items[i].State = domain.TodoPending
+					}
+				}
+				return nil
+			})
+		}},
 		{name: "outside worktree", body: completeReview, code: CodeInvalidParams, params: map[string]any{"file": "../../../etc/passwd.md"}},
 	}
 	for _, tc := range cases {
@@ -180,8 +206,34 @@ func TestPostRefusals(t *testing.T) {
 	}
 }
 
+func TestPostAlreadyPosted(t *testing.T) {
+	p := newPostRig(t, completeReview)
+	revealReview(t, p)
+	if resp := p.post(t, map[string]any{}); resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	resp := p.post(t, map[string]any{})
+	if resp.Error == nil || resp.Error.Code != CodeReviewAlreadyPosted {
+		t.Fatalf("second post %+v, want %s", resp.Error, CodeReviewAlreadyPosted)
+	}
+	if len(p.gh.posts) != 1 {
+		t.Fatalf("%d posts after the repeat", len(p.gh.posts))
+	}
+	if err := p.srv.reopenReviewTodos(t.Context(), p.info.ID); err != nil {
+		t.Fatal(err)
+	}
+	tickTodo(t, p.srv, p.info.ID, todo.ReviewGateRef)
+	if resp := p.post(t, map[string]any{}); resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	if len(p.gh.posts) != 2 {
+		t.Fatalf("%d posts after reopen, want 2", len(p.gh.posts))
+	}
+}
+
 func TestPostPostsAgreedOnly(t *testing.T) {
 	p := newPostRig(t, completeReview)
+	revealReview(t, p)
 	resp := p.post(t, map[string]any{})
 	if resp.Error != nil {
 		t.Fatal(resp.Error)

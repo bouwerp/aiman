@@ -74,6 +74,17 @@ func openReviewGate(h *Harness, id, body string) error {
 	return nil
 }
 
+// markRevealed records that the operator has seen the PR description, which
+// a post requires. The evals skip the consult path and set the flag directly.
+func markRevealed(h *Harness, id string) error {
+	st, err := review.LoadState(h.ReviewDir(), id)
+	if err != nil {
+		return err
+	}
+	st.Revealed = true
+	return review.SaveState(h.ReviewDir(), id, st)
+}
+
 // postCode is the error code of a review.post by the session, or "" when it
 // succeeded.
 func postCode(h *Harness, id string) (string, string) {
@@ -109,10 +120,18 @@ func CaseReviewGate() Case {
 		if err := approveReview(h, id); err != nil {
 			return append(out, score("gate_approved", false, err.Error()))
 		}
+		code, _ = postCode(h, id)
+		out = append(out, score("post_refused_before_reveal", code == "review_not_ready", "code "+code))
+		if err := markRevealed(h, id); err != nil {
+			return append(out, score("revealed", false, err.Error()))
+		}
 		code, msg := postCode(h, id)
 		posts := gh.Posts()
 		out = append(out, score("post_after_approval", code == "", code+" "+msg),
 			score("one_review_posted", len(posts) == 1, "posts"))
+		code, _ = postCode(h, id)
+		out = append(out, score("second_post_refused", code == "review_already_posted", "code "+code),
+			score("still_one_review", len(gh.Posts()) == 1, "posts"))
 		if len(posts) == 1 {
 			p := posts[0]
 			out = append(out, score("post_is_comment_at_head", p.Event == "COMMENT" && p.CommitID == reviewHead, p.Event+" "+p.CommitID),
@@ -137,6 +156,9 @@ func CaseReviewHeadMoved() Case {
 		}
 		if err := approveReview(h, id); err != nil {
 			return append(out, score("gate_approved", false, err.Error()))
+		}
+		if err := markRevealed(h, id); err != nil {
+			return append(out, score("revealed", false, err.Error()))
 		}
 		ref, _ := review.ParseRef(reviewRef)
 		gh.SetPR(ref, review.PR{Number: 7, Title: "Add the parser", Author: "alice", Body: "b", BaseRef: "main", HeadRef: "feat/parser", HeadSHA: "def456"})

@@ -17,7 +17,7 @@
 - Worktree directory `<repo>@pr-<n>` (detached at the PR head). Brief page key `pr-<n>`.
 - Files serve writes in the worktree: `.aiman_review/diff.patch`, `.aiman_review/files.txt`, `.aiman_review/meta.json`; after reveal, `.aiman_pr_description.md`. All match the existing `.aiman_*` git-exclude glob or get added to `info/exclude`.
 - Gate: Ref `gate:review`, text `Review approved`; closes like the design gate (operator tick, or `aiman todo approve-review --quote`).
-- Error codes (exact): `review_exists`, `review_incomplete`, `review_head_moved`, `review_not_ready`.
+- Error codes (exact): `review_exists`, `review_incomplete`, `review_head_moved`, `review_not_ready`, `review_already_posted`.
 - Ledger kinds (exact): `review.started`, `review.revealed`, `review.refreshed`, `review.approved`, `review.posted`, `consult.abandoned`.
 - Config: `review.consult_timeout`, default 30 minutes; pushed to serve by `MarshalServeConfig`.
 - Posting: event `COMMENT` or `REQUEST_CHANGES`, never `APPROVE`; only findings with `Call: agree` become inline comments; comment bodies start with `blocking:`, `suggestion:`, `question:` or `nit:`.

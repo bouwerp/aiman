@@ -192,7 +192,7 @@ func (s *Server) consultOutcomes(ctx context.Context, id string) (int, map[strin
 // review blind. It then retires every consult still running (each reviewed
 // the old head), restages the PR worktree (fetched, reset hard to the new head
 // and soft to the new merge base), rewrites .aiman_review, returns the state
-// to blind and reopens the blind, informed and gate to-dos. A head that has
+// to blind and reopens the blind, informed, post and gate to-dos. A head that has
 // not moved is a no-op unless force is set. Only the review session itself or
 // the operator may refresh it.
 func (s *Server) handleReviewRefresh(ctx context.Context, req Request) Response {
@@ -304,10 +304,10 @@ func (s *Server) restageReview(ctx context.Context, t reviewTarget, pr review.PR
 	return meta, "", nil
 }
 
-// reopenReviewTodos sets the blind and informed to-dos and the review gate
-// back to pending, as aiman.
+// reopenReviewTodos sets the blind, informed and post to-dos and the review
+// gate back to pending, as aiman.
 func (s *Server) reopenReviewTodos(ctx context.Context, id string) error {
-	reopen := map[string]bool{reviewBlindRef: true, reviewInformedRef: true, todo.ReviewGateRef: true}
+	reopen := map[string]bool{reviewBlindRef: true, reviewInformedRef: true, todo.ReviewGateRef: true, reviewPostRef: true}
 	return s.TodoAccess().Mutate(ctx, id, domain.AuthorAiman, func(l *domain.TodoList) error {
 		for i := range l.Items {
 			if reopen[l.Items[i].Ref] {

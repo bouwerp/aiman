@@ -615,8 +615,8 @@ func commitFile(t *testing.T, dir, name, body string) {
 // TestRefreshResets moves the PR head (rebased onto a newer main, dropping
 // old.txt) and refreshes: the worktree is staged against the new merge base
 // with nothing left from the old head, the review files and state name the
-// new head, the description is withdrawn, the phase and gate reopen and the
-// ledger records the move.
+// new head, the description is withdrawn, the phase, post to-do and gate
+// reopen and the ledger records the move.
 func TestRefreshResets(t *testing.T) {
 	upstream, root := refreshUpstream(t)
 	r := newReviewRig(t)
@@ -637,6 +637,7 @@ func TestRefreshResets(t *testing.T) {
 	}
 	tickTodo(t, r.srv, info.ID, reviewBlindRef)
 	tickTodo(t, r.srv, info.ID, reviewInformedRef)
+	tickTodo(t, r.srv, info.ID, reviewPostRef)
 	err = r.srv.TodoAccess().Mutate(context.Background(), info.ID, domain.AuthorAiman, func(l *domain.TodoList) error {
 		todo.AddGate(l, todo.ReviewGateRef)
 		return nil
@@ -697,7 +698,7 @@ func TestRefreshResets(t *testing.T) {
 		t.Fatalf("description not withdrawn: %v", err)
 	}
 	states := todoStates(t, r.srv, info.ID)
-	for _, ref := range []string{reviewBlindRef, reviewInformedRef, todo.ReviewGateRef} {
+	for _, ref := range []string{reviewBlindRef, reviewInformedRef, todo.ReviewGateRef, reviewPostRef} {
 		if states[ref] != domain.TodoPending {
 			t.Errorf("%s is %s, want pending", ref, states[ref])
 		}

@@ -142,10 +142,10 @@ func readConfined(sess domain.Session, wd, file string) ([]byte, error) {
 	}
 	real, err := filepath.EvalSymlinks(src)
 	if err != nil {
-		return nil, fmt.Errorf("design file: %w", err)
+		return nil, fmt.Errorf("markdown file: %w", err)
 	}
 	if !isMarkdown(src) || !isMarkdown(real) {
-		return nil, errors.New("design file must be a .md file")
+		return nil, errors.New("markdown file must be a .md file")
 	}
 	for _, root := range []string{wd, sess.WorktreePath} {
 		if root == "" {
@@ -158,12 +158,12 @@ func readConfined(sess domain.Session, wd, file string) ([]byte, error) {
 		if rel, err := filepath.Rel(r, real); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			b, err := os.ReadFile(real)
 			if err != nil {
-				return nil, fmt.Errorf("read design: %w", err)
+				return nil, fmt.Errorf("read markdown file: %w", err)
 			}
 			return b, nil
 		}
 	}
-	return nil, errors.New("design file must be inside the session's working directory")
+	return nil, errors.New("markdown file must be inside the session's working directory")
 }
 
 func isMarkdown(path string) bool {
