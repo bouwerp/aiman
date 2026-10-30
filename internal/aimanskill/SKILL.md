@@ -124,6 +124,113 @@ While children run, coordinate: do not implement their pieces. The work is done 
 
 An autonomous session has no operator: there is no gate and no operator questions. Size the task as above. For anything beyond trivial, publish the design and run one consult; the consult runs on another model family when one is installed. An `approve` or `revise` verdict stands in for approval once every objection is triaged. An unresolved high-severity objection means stop and wait for input; do not implement. A `reject` verdict gets one revision and one more consult; a second rejecting verdict also means stop and wait for input. Serve's notification sweep reports the waiting session to the user. Link the design in your issue comment.
 
+## Review mode
+
+You are in review mode when this session's `ReviewPR` is set (`owner/repo#n`). Follow this section instead of Design first. Do not spawn children with `--for`. Escalating (children too) does not apply. Never approve the PR and never push to it.
+
+Start from `.aiman_review/meta.json`, `.aiman_review/files.txt` and `.aiman_review/diff.patch`. Do not read the PR description, commit messages or `gh pr view` until `aiman review reveal` succeeds. The PR's changes are staged on purpose so editors mark them; never commit, stash or reset in this worktree.
+
+Run PR code (tests, scripts, builds) only through `aiman review run`, never directly on the host:
+
+```bash
+aiman review run -- go test ./...
+aiman review coverage
+aiman review debug --lang go
+```
+
+`aiman review coverage` writes `.aiman_review/coverage.md`. Run it before the brief. Changed lines no test ran become `question` findings; the brief shows the ran and missed totals.
+
+### Phases
+
+1. **Blind primary pass** of the staged diff. Group a PR over 400 changed lines into chunks of about 400 by package or directory, pick an explicit reading order, and review in that order.
+2. **Blind consult**: one `session create --consult --for` whose brief says **do not read the PR description**. Same three headings as any consult (`## Question`, `## Scope`, `## Report must contain`). Scope lists `.aiman_review/diff.patch`, `.aiman_review/files.txt` and the worktree paths to read. Report must contain `.aiman_report.md` with `## Objections` (file:line, `[high]`/`[medium]`/`[low]`) and `## Verdict`.
+3. Tick `Blind review`, then **reveal**:
+
+```bash
+aiman review reveal
+```
+
+Reveal refuses with `review_not_ready` until that to-do is done and every consult of this session has a `consult.finished` or `consult.abandoned` ledger row. With no finished consult, pass `--single` (`aiman review reveal --single`); the posted summary then says one agent reviewed. Reveal writes `.aiman_pr_description.md`.
+4. **Informed pass** of the description plus the diff, and an **informed consult** whose brief may name `.aiman_pr_description.md`.
+5. **Merge and dedupe** both agents' findings. Verify each finding (a failing test or reproduction via `aiman review run`, or a pointer to the exact code). Relabel an unverified finding `question`. Labels are `blocking`, `suggestion`, `question`, `nit`.
+
+If the PR head moved, refresh and start again from the blind pass:
+
+```bash
+aiman review refresh
+```
+
+### Brief, questions, review file
+
+Write `.aiman_review/reading-order.txt` (one `path:line` per line, the order to read) with the brief, and offer `aiman review debug` to the operator so they can step the staged worktree from the laptop.
+
+Publish the brief with `aiman design publish --key pr-<n>` (n is the PR number). First revision, in order:
+
+1. **Why**: the problem the PR solves, in two or three sentences.
+2. **How**: the approach in a paragraph, with a small diagram when the change spans components.
+3. **Most critical fixes**: file:line links with one line each.
+4. **Most far-reaching changes**: changed contracts and their callers (the blast radius), with counts.
+5. **Reading order**: files or chunks in the order to read them, plus the coverage totals.
+
+Then ask the operator these three questions in the terminal, one at a time, and wait for each answer before the next:
+
+- What is the PR doing, why, and how does the change achieve it?
+- Where is the functionality used: what is the blast radius?
+- Can the outcome be achieved with less code or less complexity?
+
+Record the operator's words as quotes in the review file. Add the agents' answers and the findings only in a second publish, after those answers: findings grouped `blocking` / `suggestion` / `question` / `nit`, each with source and evidence. The operator then agrees or disagrees with each finding; record that call as a quoted `Call:` in the file.
+
+The review file is:
+
+```
+# Review: owner/repo#123
+
+## Answers
+
+### What, why, how
+> <operator's words>
+
+### Blast radius
+> <operator's words>
+
+### Less code
+> <operator's words>
+
+## Findings
+
+### F1 blocking internal/x/y.go:42
+Verified: yes (go test ./internal/x/ -run TestY fails)
+Source: primary
+Call: agree "<operator's words>"
+
+<comment body>
+
+## Summary
+
+<review summary>
+```
+
+`Verified:` is `yes (<evidence>)` or `no`; an unverified finding must be labelled `question`. `Source:` is `primary`, `secondary` or `both`. `Call:` is `agree` or `disagree`, each followed by a quoted operator answer.
+
+### Gate and post
+
+The first brief publish adds `gate:review` (`Review approved`). Only the operator closes it: they tick it, or type approval and you run:
+
+```bash
+aiman todo approve-review --quote "approved, go ahead"
+```
+
+Never `aiman todo done` the gate. Then post:
+
+```bash
+aiman review post .aiman_review.md
+aiman review post .aiman_review.md --request-changes
+```
+
+Default event is `COMMENT`; `--request-changes` is `REQUEST_CHANGES`. Never `APPROVE`. Only findings with `Call: agree` become inline comments; bodies start with `blocking:`, `suggestion:`, `question:` or `nit:`.
+
+Post refuses: `gate_needs_operator` while the gate is open; `review_already_posted` after a successful post until a refresh; `review_not_ready` before reveal; `review_incomplete` when an answer or a finding call is missing, or a non-question finding is unverified; `review_head_moved` when the PR head is no longer the staged SHA. `review.coverage` refuses with `review_no_coverage` when no coverage method applies. Tell the operator the error.
+
 ## Escalating (children too)
 
 Children read this section. Escalate instead of guessing when a condition under your brief's `## Escalate when` holds, or when the piece is harder than its brief rated it once you have explored the code:

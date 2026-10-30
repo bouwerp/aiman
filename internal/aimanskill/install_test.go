@@ -197,6 +197,23 @@ func TestSkillDescribesVerify(t *testing.T) {
 	}
 }
 
+func TestSkillDescribesReviewMode(t *testing.T) {
+	for _, want := range []string{
+		"## Review mode",
+		"aiman review reveal",
+		"aiman review post",
+		"approve-review",
+		"blocking",
+		"suggestion",
+		"question",
+		"nit",
+	} {
+		if !strings.Contains(Text, want) {
+			t.Fatalf("skill missing %q", want)
+		}
+	}
+}
+
 func TestSkillStatesChildContract(t *testing.T) {
 	for _, want := range []string{
 		"--brief-file", "## Objective", "## Contract", "## Owns", "## Out of scope",
