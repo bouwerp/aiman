@@ -125,7 +125,7 @@ func (s evalSessions) Get(ctx context.Context, id string) (domain.Session, error
 }
 
 func (s evalSessions) CreateChild(ctx context.Context, cfg domain.SessionConfig) (domain.Session, error) {
-	sess, err := (FakeCreator{Dir: s.h.Dir, PTY: s.h.pty}).CreateSession(ctx, cfg)
+	sess, err := (FakeCreator{Dir: s.h.Dir, PTY: s.h.pty, OnTerminal: s.h.onChildTerminal}).CreateSession(ctx, cfg)
 	if err != nil {
 		return domain.Session{}, err
 	}

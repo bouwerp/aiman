@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,6 +48,10 @@ type Harness struct {
 	handoverRuns *handoverchild.Store
 
 	coord *evalCoordinator
+
+	// childTerminalHook runs between a child's terminal starting and its row
+	// being saved. Serve's goroutines read it, so it is atomic.
+	childTerminalHook atomic.Pointer[func(id string)]
 
 	cancel context.CancelFunc
 	done   chan struct{}

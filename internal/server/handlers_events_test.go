@@ -84,7 +84,7 @@ func TestCollectRepoCreatedEventsEmitsOnce(t *testing.T) {
 	sessions := []domain.Session{
 		{ID: "new", Name: "reviewer", ParentID: "parent", Status: domain.SessionStatusActive},
 	}
-	announced := map[string]struct{}{}
+	announced := map[string]string{}
 	first := collectRepoCreatedEvents(sessions, announced)
 	if len(first) != 1 || first[0].Type != "session_created" || first[0].ID != "new" {
 		t.Fatalf("first pass: %+v", first)
