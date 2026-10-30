@@ -1013,8 +1013,13 @@ git -C "$main" worktree remove --force "$wt"
 }
 
 // dropSession stops a session's pty and deletes everything serve holds for
-// it: steering queue, notification state, CI rows and the stored row.
+// it: steering queue, notification state, CI rows, the stored row, and a
+// review session's sandbox and scratch.
 func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
+	s.downReviewSandbox(ctx, sess)
+	if sess.ReviewPR != "" {
+		s.removeReviewFiles(sess.ID)
+	}
 	if s.pty != nil {
 		_ = s.pty.Kill(sess.ID)
 		_ = s.pty.Forget(sess.ID)

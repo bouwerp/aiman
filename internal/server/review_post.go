@@ -24,6 +24,8 @@ func (s *Server) dispatchReview(ctx context.Context, req Request) Response {
 		return s.handleReviewReveal(ctx, req)
 	case "review.post":
 		return s.handleReviewPost(ctx, req)
+	case "review.run":
+		return s.handleReviewRun(ctx, req)
 	default:
 		return s.handleReviewRefresh(ctx, req)
 	}

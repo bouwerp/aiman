@@ -54,6 +54,9 @@ const (
 	// session: the event, comment counts per label and whether one agent
 	// reviewed alone.
 	EventReviewPosted EventKind = "review.posted"
+	// EventReviewRun records one sandbox command: n is the run log number
+	// and exit is the command's exit code.
+	EventReviewRun EventKind = "review.run"
 	// EventConsultAbandoned records on the parent's ledger a consult that
 	// ended without a usable report: the child and the to-do it was for.
 	EventConsultAbandoned EventKind = "consult.abandoned"

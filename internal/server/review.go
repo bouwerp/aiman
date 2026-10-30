@@ -64,6 +64,19 @@ func (s *Server) SetReviewDir(dir string) {
 	s.reviewDir = dir
 }
 
+// SetReviewRunner sets the sandbox runner for review.run. A zero Runner
+// leaves run disabled.
+func (s *Server) SetReviewRunner(r review.Runner) {
+	s.reviewRunner = r
+}
+
+// SetReviewConfig sets review.sandbox and repos.<slug>.review used to pick
+// the sandbox image and network.
+func (s *Server) SetReviewConfig(cfg config.ReviewConfig, repos map[string]config.RepoBootstrap) {
+	s.reviewCfg = cfg
+	s.reviewRepos = repos
+}
+
 // reviewBase is the directory holding every review's state and scratch
 // directory.
 func (s *Server) reviewBase() string {
@@ -197,6 +210,10 @@ func (s *Server) startReview(ctx context.Context, req Request, plan reviewPlan, 
 	}
 	scratch, err := s.prepareReviewScratch(ctx, remote, id, meta)
 	if err != nil {
+		s.removeReviewFiles(id)
+		return errResp(req.ID, CodeCreateFailed, err.Error())
+	}
+	if err := s.exportReviewTree(ctx, remote, wt.Path, id); err != nil {
 		s.removeReviewFiles(id)
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}

@@ -301,6 +301,9 @@ func (s *Server) restageReview(ctx context.Context, t reviewTarget, pr review.PR
 	if err := writeReviewFiles(ctx, remote, s.reviewScratch(t.sess.ID), meta); err != nil {
 		return reviewMeta{}, CodeCreateFailed, err
 	}
+	if err := s.exportReviewTree(ctx, remote, wt.Path, t.sess.ID); err != nil {
+		return reviewMeta{}, CodeCreateFailed, err
+	}
 	return meta, "", nil
 }
 

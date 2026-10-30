@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/server"
 )
@@ -15,6 +16,9 @@ func runReview(args []string, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	if method == "review.run" {
+		return callReviewRun(params)
+	}
 	return callReview(method, params)
 }
 
@@ -22,15 +26,30 @@ func reviewUsage() error {
 	fmt.Fprintf(os.Stderr, "Usage: aiman review reveal [--single] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review refresh [--force] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review post <file> [--request-changes] [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman review run [--timeout 10m] [--session NAME] -- <cmd...>\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
 	return errUsage
 }
 
-// reviewRPC maps the CLI arguments onto review.reveal or review.refresh.
+// reviewRunCLIError is a sandbox command's exit code, so main can os.Exit
+// with it and skip the extra Error: line.
+type reviewRunCLIError struct{ exit int }
+
+func (e reviewRunCLIError) Error() string {
+	return fmt.Sprintf("review run exit %d", e.exit)
+}
+
+// reviewRPC maps the CLI arguments onto review.* methods.
 // Only reveal takes --single, only refresh takes --force, and only post takes
 // a file and --request-changes (the default event is COMMENT).
 func reviewRPC(args []string, getenv func(string) string) (string, map[string]any, error) {
-	if len(args) == 0 || (args[0] != "reveal" && args[0] != "refresh" && args[0] != "post") {
+	if len(args) == 0 {
+		return "", nil, reviewUsage()
+	}
+	if args[0] == "run" {
+		return reviewRunRPC(args[1:], getenv)
+	}
+	if args[0] != "reveal" && args[0] != "refresh" && args[0] != "post" {
 		return "", nil, reviewUsage()
 	}
 	verb := args[0]
@@ -73,6 +92,85 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 		}
 	}
 	return "review." + verb, params, nil
+}
+
+func reviewRunRPC(args []string, getenv func(string) string) (string, map[string]any, error) {
+	session, timeout := "", 10*time.Minute
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--":
+			cmd := append([]string(nil), args[i+1:]...)
+			if session == "" {
+				session = strings.TrimSpace(getenv("AIMAN_ID"))
+			}
+			if session == "" || len(cmd) == 0 {
+				return "", nil, reviewUsage()
+			}
+			return "review.run", map[string]any{
+				"session": session, "cmd": cmd, "timeout_seconds": int(timeout / time.Second),
+			}, nil
+		case args[i] == "--session" && i+1 < len(args):
+			session = strings.TrimSpace(args[i+1])
+			i++
+		case args[i] == "--timeout" && i+1 < len(args):
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil || d <= 0 {
+				return "", nil, reviewUsage()
+			}
+			timeout = d
+			i++
+		default:
+			return "", nil, reviewUsage()
+		}
+	}
+	return "", nil, reviewUsage()
+}
+
+func callReviewRun(params map[string]any) error {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	sock, err := socketPath()
+	if err != nil {
+		writeCLIError(server.CodeServerNotRunning, err.Error())
+		return err
+	}
+	wait := server.ReviewRunTimeout + 15*time.Second
+	if n, ok := params["timeout_seconds"].(int); ok && n > 0 {
+		if d := time.Duration(n)*time.Second + 15*time.Second; d > wait {
+			wait = d
+		}
+	}
+	resp, err := server.CallRawWait(sock, "review.run", raw, wait)
+	if err != nil {
+		code := server.CodeServerNotRunning
+		if !errors.Is(err, server.ErrServerNotRunning) {
+			code = server.CodeInvalidParams
+		}
+		writeCLIError(code, err.Error())
+		return err
+	}
+	if resp.Error != nil {
+		writeCLIError(resp.Error.Code, resp.Error.Message)
+		return errors.New(resp.Error.Message)
+	}
+	var res struct {
+		Output string `json:"output"`
+		Exit   int    `json:"exit"`
+	}
+	b, err := json.Marshal(resp.Result)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, &res); err != nil {
+		return err
+	}
+	fmt.Fprint(os.Stdout, res.Output)
+	if res.Exit == 0 {
+		return nil
+	}
+	return reviewRunCLIError{exit: res.Exit}
 }
 
 func callReview(method string, params map[string]any) error {

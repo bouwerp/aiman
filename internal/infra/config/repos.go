@@ -21,6 +21,13 @@ type RepoBootstrap struct {
 	// AgentOverrides replace agent_defaults model/effort in this repo and
 	// are keyed the same way.
 	AgentOverrides map[string]AgentDefaults `yaml:"agent_overrides,omitempty"`
+	// Review is per-repo review sandbox settings.
+	Review RepoReview `yaml:"review,omitempty"`
+}
+
+// RepoReview is repos.<slug>.review: the sandbox image override.
+type RepoReview struct {
+	Image string `yaml:"image,omitempty"`
 }
 
 // RepoBootstrapFor returns the bootstrap for an owner/name repo slug,

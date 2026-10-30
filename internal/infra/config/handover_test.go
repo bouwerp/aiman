@@ -152,3 +152,28 @@ func TestReviewConfigConsultTimeout(t *testing.T) {
 		t.Fatalf("serve config lost review.consult_timeout: %s", body)
 	}
 }
+
+func TestReviewSandboxNetworkAndImage(t *testing.T) {
+	var cfg Config
+	raw := []byte("review:\n  sandbox:\n    network: none\nrepos:\n  o/r:\n    review:\n      image: golang:1.26\n")
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Review.Sandbox.Network != "none" {
+		t.Fatalf("sandbox.network %q", cfg.Review.Sandbox.Network)
+	}
+	if cfg.Repos["o/r"].Review.Image != "golang:1.26" {
+		t.Fatalf("repo review.image %q", cfg.Repos["o/r"].Review.Image)
+	}
+	body, err := cfg.MarshalServeConfig("h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back ServeConfig
+	if err := yaml.Unmarshal(body, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Review.Sandbox.Network != "none" || back.Repos["o/r"].Review.Image != "golang:1.26" {
+		t.Fatalf("serve config lost sandbox/image: %s", body)
+	}
+}

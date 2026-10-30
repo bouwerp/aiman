@@ -30,6 +30,8 @@ func TestReviewParams(t *testing.T) {
 		{"post", []string{"post", "review.md"}, "s1", "review.post", map[string]any{"session": "s1", "file": "review.md", "event": "COMMENT"}},
 		{"post request changes", []string{"post", "review.md", "--request-changes"}, "s1", "review.post", map[string]any{"session": "s1", "file": "review.md", "event": "REQUEST_CHANGES"}},
 		{"post flag first", []string{"post", "--request-changes", "--session", "s2", "r.md"}, "", "review.post", map[string]any{"session": "s2", "file": "r.md", "event": "REQUEST_CHANGES"}},
+		{"run from env", []string{"run", "--", "go", "test", "./..."}, "s1", "review.run", map[string]any{"session": "s1", "cmd": []string{"go", "test", "./..."}, "timeout_seconds": 600}},
+		{"run named timeout", []string{"run", "--timeout", "5m", "--session", "pr-7", "--", "go", "version"}, "", "review.run", map[string]any{"session": "pr-7", "cmd": []string{"go", "version"}, "timeout_seconds": 300}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,6 +55,8 @@ func TestReviewParams(t *testing.T) {
 		"extra argument": {"reveal", "x", "--session", "s1"},
 		"unknown flag":   {"reveal", "--force", "--session", "s1"},
 		"bogus flag":     {"refresh", "--bogus", "--session", "s1"},
+		"run no cmd":     {"run", "--session", "s1"},
+		"run no dash":    {"run", "--session", "s1", "go", "test"},
 	} {
 		if _, _, err := reviewRPC(args, env("")); !errors.Is(err, errUsage) {
 			t.Errorf("%s: err %v, want usage", name, err)

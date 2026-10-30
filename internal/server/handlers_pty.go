@@ -351,6 +351,9 @@ func (s *Server) handlePTYKill(ctx context.Context, req Request) Response {
 	if err := s.pty.Kill(id); err != nil {
 		return s.ptyErrResp(req.ID, err)
 	}
+	if sess, ok := s.findSession(ctx, id); ok {
+		s.downReviewSandbox(ctx, sess)
+	}
 	s.dropPaneMemory(id)
 	return Response{ID: req.ID, Result: map[string]any{"type": "pty_kill", "killed": true}}
 }

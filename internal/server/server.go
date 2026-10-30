@@ -147,10 +147,13 @@ type Server struct {
 	// fail until both are set. reviewDir holds each review's state file and
 	// scratch directory; empty is ~/.aiman/pr-reviews. reviewLocks holds one
 	// *sync.Mutex per PR ref around a review create.
-	reviewGH    review.GitHub
-	reviewWT    ReviewWorktrees
-	reviewDir   string
-	reviewLocks sync.Map
+	reviewGH     review.GitHub
+	reviewWT     ReviewWorktrees
+	reviewDir    string
+	reviewLocks  sync.Map
+	reviewRunner review.Runner
+	reviewCfg    config.ReviewConfig
+	reviewRepos  map[string]config.RepoBootstrap
 
 	// agentUpdates reports and applies agent CLI updates; nil until
 	// SetAgentUpdates. agentHost names this host in its replies.
@@ -389,7 +392,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleAgentsMovePrefix(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)
-	case "review.reveal", "review.post", "review.refresh":
+	case "review.reveal", "review.post", "review.refresh", "review.run":
 		return s.dispatchReview(ctx, req)
 	case "handover.write":
 		return s.handleHandoverWrite(ctx, req)

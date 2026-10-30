@@ -235,7 +235,8 @@ func (a serverTerminal) Alive(_ context.Context, sess domain.Session) bool {
 
 // Stop kills the session's PTY. A legacy tmux session is refused: aiman
 // never runs tmux, so the user stops it on the host.
-func (a serverTerminal) Stop(_ context.Context, sess domain.Session) error {
+func (a serverTerminal) Stop(ctx context.Context, sess domain.Session) error {
+	a.s.downReviewSandbox(ctx, sess)
 	if sess.IsLegacyTmux() {
 		return domain.NewLegacyTmuxError(sess)
 	}

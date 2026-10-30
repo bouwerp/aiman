@@ -181,6 +181,14 @@ func (a *AttachConn) Close() error { return a.conn.Close() }
 
 // CallRaw is Call with caller-provided params JSON.
 func CallRaw(socketPath, method string, rawParams json.RawMessage) (Response, error) {
+	return CallRawWait(socketPath, method, rawParams, callDeadline(method))
+}
+
+// CallRawWait is CallRaw with an explicit wait. wait <= 0 uses callDeadline.
+func CallRawWait(socketPath, method string, rawParams json.RawMessage, wait time.Duration) (Response, error) {
+	if wait <= 0 {
+		wait = callDeadline(method)
+	}
 	req := Request{
 		ID:     uuid.NewString(),
 		Method: method,
@@ -196,7 +204,7 @@ func CallRaw(socketPath, method string, rawParams json.RawMessage) (Response, er
 		return Response{}, fmt.Errorf("%w: %v", ErrServerNotRunning, err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(callDeadline(method)))
+	_ = conn.SetDeadline(time.Now().Add(wait))
 	if _, err := conn.Write(append(body, '\n')); err != nil {
 		return Response{}, err
 	}
@@ -285,6 +293,8 @@ func callDeadline(method string) time.Duration {
 		return DesignPublishTimeout + 15*time.Second
 	case "review.post":
 		return ReviewPostTimeout + 15*time.Second
+	case "review.run":
+		return ReviewRunTimeout + 15*time.Second
 	}
 	return 30 * time.Second
 }

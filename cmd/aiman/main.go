@@ -44,6 +44,10 @@ func configPathForNotice() string {
 
 func main() {
 	if err := run(); err != nil {
+		var runErr reviewRunCLIError
+		if errors.As(err, &runErr) {
+			os.Exit(runErr.exit)
+		}
 		if !errors.Is(err, errUsage) && !errors.Is(err, errVerifyNotPassed) && !errors.Is(err, errVerifyGateBlocked) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}

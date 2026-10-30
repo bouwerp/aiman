@@ -209,6 +209,8 @@ func runServe() error {
 	srv.SetReviewGitHub(&review.GHCLI{Run: review.ExecRun, RunInput: review.ExecRunInput})
 	srv.SetReviewWorktrees(gitManager)
 	srv.SetReviewDir(filepath.Join(dir, "pr-reviews"))
+	srv.SetReviewRunner(review.Runner{Docker: review.DockerExec, UID: os.Getuid(), GID: os.Getgid()})
+	srv.SetReviewConfig(cfg.Review, cfg.Repos)
 	verifyDeps := srv.VerifyDeps(verify.NewStore(filepath.Join(dir, "reviews")), func(command string) bool {
 		return scanner.Installed(ctx, command)
 	})

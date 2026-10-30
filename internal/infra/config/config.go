@@ -242,6 +242,14 @@ type ReviewConfig struct {
 	// ConsultTimeout is how long a review session's consult may run without a
 	// report; zero means DefaultReviewConsultTimeout.
 	ConsultTimeout time.Duration `yaml:"consult_timeout,omitempty"`
+	// Sandbox holds the compose network for review.run. Empty is compose's
+	// default (bridge); "none" is offline.
+	Sandbox ReviewSandboxConfig `yaml:"sandbox,omitempty"`
+}
+
+// ReviewSandboxConfig is review.sandbox in config.yaml.
+type ReviewSandboxConfig struct {
+	Network string `yaml:"network,omitempty"`
 }
 
 // ConsultTimeoutOrDefault is ConsultTimeout, or DefaultReviewConsultTimeout
