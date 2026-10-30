@@ -148,11 +148,35 @@ func (f File) Missing() []string {
 		}
 	}
 	for _, fd := range f.Findings {
-		if fd.Call == "" {
-			out = append(out, fd.ID+": no call (agree or disagree)")
+		out = append(out, fd.missing()...)
+	}
+	if f.Summary == "" {
+		out = append(out, "summary is empty")
+	}
+	return out
+}
+
+// missing lists what a finding still needs before it can be posted.
+func (fd Finding) missing() []string {
+	var out []string
+	add := func(msg string) { out = append(out, fd.ID+": "+msg) }
+	if fd.Call == "" {
+		add("no call (agree or disagree)")
+	} else if fd.Quote == "" {
+		add("call needs the operator's quote")
+	}
+	if !fd.Verified && fd.Label != "question" {
+		add(fmt.Sprintf("unverified %s finding (verify it or make it a question)", fd.Label))
+	}
+	if fd.Verified && fd.Evidence == "" {
+		add("verified finding needs evidence")
+	}
+	if fd.Call == "agree" {
+		if fd.Path == "" || fd.Line <= 0 {
+			add("agreed finding needs path:line")
 		}
-		if !fd.Verified && fd.Label != "question" {
-			out = append(out, fmt.Sprintf("%s: unverified %s finding (verify it or make it a question)", fd.ID, fd.Label))
+		if fd.Body == "" {
+			add("agreed finding needs a comment body")
 		}
 	}
 	return out

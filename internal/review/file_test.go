@@ -155,3 +155,53 @@ func TestPostRefusesIncomplete(t *testing.T) {
 		t.Fatal("incomplete review posted")
 	}
 }
+
+func missingFor(t *testing.T, md string) string {
+	t.Helper()
+	f, err := ParseFile(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(f.Missing(), "\n")
+}
+
+const answersOnly = "## Answers\n\n### What, why, how\n> a\n\n### Blast radius\n> b\n\n### Less code\n> c\n\n## Findings\n\n"
+
+func TestMissingAgreedNeedsLocation(t *testing.T) {
+	agreed := answersOnly + "### F1 nit\nVerified: yes (ran)\nCall: agree \"ok\"\n\nbody\n\n## Summary\n\ns\n"
+	if got := missingFor(t, agreed); !strings.Contains(got, "F1: agreed finding needs path:line") {
+		t.Fatalf("got %q", got)
+	}
+	zero := strings.Replace(agreed, "F1 nit", "F1 nit a.go:0", 1)
+	if got := missingFor(t, zero); !strings.Contains(got, "F1: agreed finding needs path:line") {
+		t.Fatalf("line 0: %q", got)
+	}
+	disagreed := strings.Replace(agreed, "Call: agree", "Call: disagree", 1)
+	if got := missingFor(t, disagreed); got != "" {
+		t.Fatalf("disagreed flagged: %q", got)
+	}
+}
+
+func TestMissingCallNeedsQuote(t *testing.T) {
+	for _, call := range []string{"agree", "disagree"} {
+		md := answersOnly + "### F1 nit a.go:1\nVerified: yes (ran)\nCall: " + call + "\n\nbody\n\n## Summary\n\ns\n"
+		if got := missingFor(t, md); !strings.Contains(got, "F1: call needs the operator's quote") {
+			t.Errorf("%s: %q", call, got)
+		}
+	}
+}
+
+func TestMissingEvidenceBodySummary(t *testing.T) {
+	noEvidence := answersOnly + "### F1 nit a.go:1\nVerified: yes\nCall: agree \"ok\"\n\nbody\n\n## Summary\n\ns\n"
+	if got := missingFor(t, noEvidence); !strings.Contains(got, "F1: verified finding needs evidence") {
+		t.Errorf("evidence: %q", got)
+	}
+	noBody := answersOnly + "### F1 nit a.go:1\nVerified: yes (ran)\nCall: agree \"ok\"\n\n## Summary\n\ns\n"
+	if got := missingFor(t, noBody); !strings.Contains(got, "F1: agreed finding needs a comment body") {
+		t.Errorf("body: %q", got)
+	}
+	noSummary := answersOnly + "## Summary\n\n"
+	if got := missingFor(t, noSummary); got != "summary is empty" {
+		t.Errorf("summary: %q", got)
+	}
+}
