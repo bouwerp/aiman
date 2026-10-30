@@ -32,7 +32,8 @@ func (c *createRemote) WriteFile(_ context.Context, path string, content []byte)
 	return nil
 }
 
-const okCreateResponse = `{"result":{"type":"session","session":{"id":"abc-123","name":"impl","group":"WTB-1","branch":"WTB-1-thing","repo_name":"realfi","tmux_session":"WTB-1-thing","worktree_path":"/home/code/repos/x","working_directory":"/home/code/repos/x","agent_name":"Claude Code"}}}`
+// okCreateResponse is what `aiman session create` prints: the bare RPC result.
+const okCreateResponse = `{"type":"session","session":{"id":"abc-123","name":"impl","group":"WTB-1","branch":"WTB-1-thing","repo_name":"realfi","tmux_session":"WTB-1-thing","worktree_path":"/home/code/repos/x","working_directory":"/home/code/repos/x","agent_name":"Claude Code"}}`
 
 // The params must never reach a shell: a prompt can contain anything.
 func TestCreateSessionOnRemoteSendsParamsAsAFile(t *testing.T) {
@@ -131,7 +132,7 @@ func TestCreateSessionOnRemoteSendsTier(t *testing.T) {
 }
 
 func TestParseRemoteCreateResultCarriesTier(t *testing.T) {
-	sess, err := parseRemoteCreateResult(`{"result":{"session":{"id":"a1","tier":"smart","launch_model":"kimi-k3"}}}`)
+	sess, err := parseRemoteCreateResult(`{"type":"session","session":{"id":"a1","tier":"smart","launch_model":"kimi-k3"}}`)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestParseRemoteCreateResultCarriesTier(t *testing.T) {
 }
 
 func TestParseRemoteCreateResultCarriesReview(t *testing.T) {
-	sess, err := parseRemoteCreateResult(`{"result":{"session":{"id":"a1","review_pr":"o/r#7"}}}`)
+	sess, err := parseRemoteCreateResult(`{"type":"session","session":{"id":"a1","review_pr":"o/r#7"}}`)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestParseRemoteCreateResult(t *testing.T) {
 		t.Errorf("error should carry the reason: %v", err)
 	}
 	// A success with no id is not a success.
-	if _, err := parseRemoteCreateResult(`{"result":{"session":{"name":"x"}}}`); err == nil {
+	if _, err := parseRemoteCreateResult(`{"type":"session","session":{"name":"x"}}`); err == nil {
 		t.Error("a response with no session id is an error")
 	}
 	sess, err := parseRemoteCreateResult(okCreateResponse)

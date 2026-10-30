@@ -35,6 +35,9 @@ func TestNewCreatingPlaceholderUsesReviewPR(t *testing.T) {
 	if s.ReviewPR != "owner/repo#7" {
 		t.Fatalf("ReviewPR = %q", s.ReviewPR)
 	}
+	if s.Group != "repo" {
+		t.Fatalf("Group = %q, want the repo group serve files the review under", s.Group)
+	}
 }
 
 func TestStartBackgroundCreate_InsertsPlaceholderAndReturnsToMain(t *testing.T) {

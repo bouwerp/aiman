@@ -118,6 +118,9 @@ func TestCreateReviewSession(t *testing.T) {
 	if info.ReviewPR != "o/r#7" {
 		t.Fatalf("info review_pr %q", info.ReviewPR)
 	}
+	if info.Name != "pr-7" {
+		t.Fatalf("name %q, want pr-7", info.Name)
+	}
 	cfg := r.creator.cfg
 	if cfg.ReviewPR != "o/r#7" || !cfg.PromptFree || cfg.InitialPrompt != review.Prompt {
 		t.Fatalf("cfg review=%q promptFree=%v prompt=%q", cfg.ReviewPR, cfg.PromptFree, cfg.InitialPrompt)
@@ -257,7 +260,13 @@ func TestCreateReviewExists(t *testing.T) {
 	if err := r.srv.repo.Save(context.Background(), sess); err != nil {
 		t.Fatal(err)
 	}
-	rpcOK(t, r.srv, "", "session.create", map[string]any{"review": "o/r#7"}, nil)
+	var res struct {
+		Session SessionInfo `json:"session"`
+	}
+	rpcOK(t, r.srv, "", "session.create", map[string]any{"review": "o/r#7"}, &res)
+	if res.Session.Name != "pr-7-2" {
+		t.Fatalf("second review name %q, want pr-7-2", res.Session.Name)
+	}
 }
 
 // A second create that starts while the first is inside CreateSession waits

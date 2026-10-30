@@ -168,28 +168,27 @@ func RegisterSessionsOnRemote(ctx context.Context, remote TerminalExecutor, sess
 	return err
 }
 
-// remoteCreateResult is the shape session.create answers with.
+// remoteCreateResult is what `aiman session create` prints: the bare
+// session.create result on success, or the {"error":…} line on failure.
 type remoteCreateResult struct {
-	Result struct {
-		Session struct {
-			ID               string `json:"id"`
-			Name             string `json:"name"`
-			Group            string `json:"group"`
-			IssueKey         string `json:"issue_key"`
-			Branch           string `json:"branch"`
-			BaseBranch       string `json:"base_branch"`
-			RepoName         string `json:"repo_name"`
-			TerminalName     string `json:"tmux_session"`
-			Backend          string `json:"backend"`
-			WorktreePath     string `json:"worktree_path"`
-			WorkingDirectory string `json:"working_directory"`
-			AgentName        string `json:"agent_name"`
-			LaunchModel      string `json:"launch_model"`
-			LaunchEffort     string `json:"launch_effort"`
-			Tier             string `json:"tier"`
-			ReviewPR         string `json:"review_pr"`
-		} `json:"session"`
-	} `json:"result"`
+	Session struct {
+		ID               string `json:"id"`
+		Name             string `json:"name"`
+		Group            string `json:"group"`
+		IssueKey         string `json:"issue_key"`
+		Branch           string `json:"branch"`
+		BaseBranch       string `json:"base_branch"`
+		RepoName         string `json:"repo_name"`
+		TerminalName     string `json:"tmux_session"`
+		Backend          string `json:"backend"`
+		WorktreePath     string `json:"worktree_path"`
+		WorkingDirectory string `json:"working_directory"`
+		AgentName        string `json:"agent_name"`
+		LaunchModel      string `json:"launch_model"`
+		LaunchEffort     string `json:"launch_effort"`
+		Tier             string `json:"tier"`
+		ReviewPR         string `json:"review_pr"`
+	} `json:"session"`
 	Error *struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
@@ -208,7 +207,7 @@ func parseRemoteCreateResult(out string) (*domain.Session, error) {
 	if res.Error != nil {
 		return nil, fmt.Errorf("remote create: %s", res.Error.Message)
 	}
-	s := res.Result.Session
+	s := res.Session
 	if strings.TrimSpace(s.ID) == "" {
 		return nil, fmt.Errorf("remote create: response carried no session id")
 	}

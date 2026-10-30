@@ -353,9 +353,12 @@ func reviewName(requested string, existing []domain.Session, ref review.Ref) (st
 		}
 		return requested, "", nil
 	}
-	name, err := domain.AssignSessionName(existing, fmt.Sprintf("pr-%d", ref.Number), false)
-	if err != nil {
-		return "", CodeInvalidParams, err
+	// Not AssignSessionName: that hands out "impl" first, which would hide
+	// which PR the session reviews.
+	base := fmt.Sprintf("pr-%d", ref.Number)
+	name := base
+	for n := 2; domain.NameTaken(existing, name); n++ {
+		name = fmt.Sprintf("%s-%d", base, n)
 	}
 	return name, "", nil
 }

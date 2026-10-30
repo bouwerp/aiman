@@ -41,11 +41,17 @@ func newCreatingPlaceholder(cfg domain.SessionConfig, remote config.Remote) doma
 	if cfg.Agent != nil {
 		agentName = cfg.Agent.Name
 	}
+	group := cfg.Group
+	if cfg.ReviewPR != "" {
+		// serve files a review under its repo's group; the placeholder sits
+		// there too so it does not hop groups when the session lands.
+		group = domain.AssignSessionGroup(cfg.Group, "", cfg.Repo.Name, false)
+	}
 	now := time.Now()
 	return domain.Session{
 		ID:           fmt.Sprintf("%s%d", domain.EphemeralSessionIDPrefix, now.UnixNano()),
 		Name:         cfg.Name,
-		Group:        cfg.Group,
+		Group:        group,
 		IssueKey:     cfg.IssueKey,
 		Branch:       cfg.Branch,
 		ReviewPR:     cfg.ReviewPR,
