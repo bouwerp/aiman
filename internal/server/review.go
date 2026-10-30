@@ -37,7 +37,7 @@ var reviewTodos = []domain.TodoItem{
 	{Text: "Informed pass", Ref: reviewInformedRef},
 	{Text: "Verify findings"},
 	{Text: "Publish the brief"},
-	{Text: "Ask the three questions"},
+	{Text: "Ask open questions"},
 	{Text: "Post the review", Ref: reviewPostRef},
 }
 

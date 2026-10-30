@@ -172,28 +172,18 @@ Publish the brief with `aiman design publish --key pr-<n>` (n is the PR number).
 4. **Most far-reaching changes**: changed contracts and their callers (the blast radius), with counts.
 5. **Reading order**: files or chunks in the order to read them, plus the coverage totals.
 
-Then ask the operator these three questions in the terminal, one at a time, and wait for each answer before the next:
+Then ask the operator only what you could not settle from the code, the PR and its history: an intent you cannot infer, a caller outside the repository, a trade-off only a person can weigh. Never ask what the brief already states (what the PR does, why, how, its blast radius). Ask one question at a time in the terminal and wait for each answer before the next. With nothing open, ask nothing and leave `## Questions` out.
 
-- What is the PR doing, why, and how does the change achieve it?
-- Where is the functionality used: what is the blast radius?
-- Can the outcome be achieved with less code or less complexity?
-
-Record the operator's words as quotes in the review file. Add the agents' answers and the findings only in a second publish, after those answers: findings grouped `blocking` / `suggestion` / `question` / `nit`, each with source and evidence. The operator then agrees or disagrees with each finding; record that call as a quoted `Call:` in the file.
+Record the operator's words as quotes in the review file. Add the findings only in a second publish, after those answers: findings grouped `blocking` / `suggestion` / `question` / `nit`, each with source and evidence. The operator then agrees or disagrees with each finding; record that call as a quoted `Call:` in the file.
 
 The review file is:
 
 ```
 # Review: owner/repo#123
 
-## Answers
+## Questions
 
-### What, why, how
-> <operator's words>
-
-### Blast radius
-> <operator's words>
-
-### Less code
+### <a point you could not settle>
 > <operator's words>
 
 ## Findings
@@ -229,7 +219,7 @@ aiman review post .aiman_review.md --request-changes
 
 Default event is `COMMENT`; `--request-changes` is `REQUEST_CHANGES`. Never `APPROVE`. Only findings with `Call: agree` become inline comments; bodies start with `blocking:`, `suggestion:`, `question:` or `nit:`.
 
-Post refuses: `gate_needs_operator` while the gate is open; `review_already_posted` after a successful post until a refresh; `review_not_ready` before reveal; `review_incomplete` when an answer or a finding call is missing, or a non-question finding is unverified; `review_head_moved` when the PR head is no longer the staged SHA. `review.coverage` refuses with `review_no_coverage` when no coverage method applies. Tell the operator the error.
+Post refuses: `gate_needs_operator` while the gate is open; `review_already_posted` after a successful post until a refresh; `review_not_ready` before reveal; `review_incomplete` when a question under `## Questions` has no answer, a finding call is missing, or a non-question finding is unverified; `review_head_moved` when the PR head is no longer the staged SHA. `review.coverage` refuses with `review_no_coverage` when no coverage method applies. Tell the operator the error.
 
 ## Escalating (children too)
 

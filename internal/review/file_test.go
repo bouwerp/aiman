@@ -1,22 +1,17 @@
 package review
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
 
 const sample = `# Review: owner/repo#123
 
-## Answers
+## Questions
 
-### What, why, how
-> adds a retry
-
-### Blast radius
-> only the client
-
-### Less code
-> drop the helper
+### Does the retry cover the batch path too?
+> yes, through the shared client
 
 ## Findings
 
@@ -44,8 +39,9 @@ func TestParseFileFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Answers["What, why, how"] != "adds a retry" || f.Answers["Less code"] != "drop the helper" || len(f.Answers) != 3 {
-		t.Fatalf("answers: %v", f.Answers)
+	want := []Question{{Text: "Does the retry cover the batch path too?", Answer: "yes, through the shared client"}}
+	if !slices.Equal(f.Questions, want) {
+		t.Fatalf("questions: %+v", f.Questions)
 	}
 	if len(f.Findings) != 2 {
 		t.Fatalf("findings: %+v", f.Findings)
@@ -71,13 +67,12 @@ func TestParseFileFormat(t *testing.T) {
 func TestMissing(t *testing.T) {
 	md := `# Review: o/r#1
 
-## Answers
+## Questions
 
-### What, why, how
-> x
+### Is the old endpoint still called?
+> no
 
-### Blast radius
-> y
+### Should the cache be per tenant?
 
 ## Findings
 
@@ -98,7 +93,7 @@ body
 		t.Fatal(err)
 	}
 	got := strings.Join(f.Missing(), "\n")
-	for _, want := range []string{"Less code", "F1: no call", "F2: no call", "F1: unverified blocking"} {
+	for _, want := range []string{`question "Should the cache be per tenant?" has no answer`, "F1: no call", "F2: no call", "F1: unverified blocking"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing list lacks %q:\n%s", want, got)
 		}
@@ -165,7 +160,7 @@ func missingFor(t *testing.T, md string) string {
 	return strings.Join(f.Missing(), "\n")
 }
 
-const answersOnly = "## Answers\n\n### What, why, how\n> a\n\n### Blast radius\n> b\n\n### Less code\n> c\n\n## Findings\n\n"
+const answersOnly = "## Findings\n\n"
 
 func TestMissingAgreedNeedsLocation(t *testing.T) {
 	agreed := answersOnly + "### F1 nit\nVerified: yes (ran)\nCall: agree \"ok\"\n\nbody\n\n## Summary\n\ns\n"
@@ -203,5 +198,14 @@ func TestMissingEvidenceBodySummary(t *testing.T) {
 	noSummary := answersOnly + "## Summary\n\n"
 	if got := missingFor(t, noSummary); got != "summary is empty" {
 		t.Errorf("summary: %q", got)
+	}
+}
+
+// The agent asks only what it could not settle, so a file with no questions
+// is complete.
+func TestNoQuestionsIsComplete(t *testing.T) {
+	md := "# Review: o/r#1\n\n## Findings\n\n### F1 nit a.go:1\nVerified: yes (ran)\nSource: primary\nCall: agree \"ok\"\n\nbody\n\n## Summary\n\ns\n"
+	if got := missingFor(t, md); got != "" {
+		t.Fatalf("missing: %q", got)
 	}
 }

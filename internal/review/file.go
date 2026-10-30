@@ -8,9 +8,6 @@ import (
 	"strings"
 )
 
-// RequiredAnswers are the three questions the operator answers before posting.
-var RequiredAnswers = []string{"What, why, how", "Blast radius", "Less code"}
-
 // SingleReviewerNote is added to the review body when only one agent reviewed.
 const SingleReviewerNote = "Reviewed by one agent; the second reviewer was unavailable."
 
@@ -28,11 +25,17 @@ type Finding struct {
 	Body     string
 }
 
+// Question is one point the agent could not settle and asked the operator.
+type Question struct {
+	Text   string
+	Answer string // the operator's words
+}
+
 // File is a parsed review file.
 type File struct {
-	Answers  map[string]string
-	Findings []Finding
-	Summary  string
+	Questions []Question
+	Findings  []Finding
+	Summary   string
 }
 
 var (
@@ -45,18 +48,18 @@ var (
 // ParseFile parses the review file format. It checks the structure of each
 // finding but leaves completeness to Missing.
 func ParseFile(md string) (File, error) {
-	f := File{Answers: map[string]string{}}
-	var section string // "answers", "findings", "summary"
-	var answerTitle string
+	var f File
+	var section string // "questions", "findings", "summary"
+	var question string
 	var answerLines, summary []string
 	var cur *Finding
 	var bodyLines []string
 
 	flushAnswer := func() {
-		if answerTitle != "" {
-			f.Answers[answerTitle] = strings.TrimSpace(strings.Join(answerLines, "\n"))
+		if question != "" {
+			f.Questions = append(f.Questions, Question{Text: question, Answer: strings.TrimSpace(strings.Join(answerLines, "\n"))})
 		}
-		answerTitle, answerLines = "", nil
+		question, answerLines = "", nil
 	}
 	flushFinding := func() {
 		if cur != nil {
@@ -75,11 +78,11 @@ func ParseFile(md string) (File, error) {
 			continue
 		}
 		switch section {
-		case "answers":
+		case "questions", "answers":
 			if strings.HasPrefix(line, "### ") {
 				flushAnswer()
-				answerTitle = strings.TrimSpace(line[4:])
-			} else if answerTitle != "" {
+				question = strings.TrimSpace(line[4:])
+			} else if question != "" {
 				answerLines = append(answerLines, strings.TrimPrefix(strings.TrimPrefix(line, ">"), " "))
 			}
 		case "findings":
@@ -140,11 +143,13 @@ func (fd *Finding) takeField(line string, beforeBody bool) bool {
 
 // Missing lists what keeps the file from being posted: unanswered questions,
 // findings without a call, and unverified findings that are not questions.
+// A file with no questions is complete: the agent asks only what it could
+// not settle from the code and the PR.
 func (f File) Missing() []string {
 	var out []string
-	for _, title := range RequiredAnswers {
-		if strings.TrimSpace(f.Answers[title]) == "" {
-			out = append(out, fmt.Sprintf("answer %q", title))
+	for _, q := range f.Questions {
+		if q.Answer == "" {
+			out = append(out, fmt.Sprintf("question %q has no answer", q.Text))
 		}
 	}
 	for _, fd := range f.Findings {

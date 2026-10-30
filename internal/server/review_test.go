@@ -202,7 +202,7 @@ func TestCreateReviewSession(t *testing.T) {
 		texts = append(texts, it.Text)
 		refs[it.Text] = it.Ref
 	}
-	want := []string{"Blind review", "Informed pass", "Verify findings", "Publish the brief", "Ask the three questions", "Post the review"}
+	want := []string{"Blind review", "Informed pass", "Verify findings", "Publish the brief", "Ask open questions", "Post the review"}
 	if !slices.Equal(texts, want) {
 		t.Fatalf("to-dos %q", texts)
 	}

@@ -14,16 +14,10 @@ import (
 
 const postableReview = `# Review: o/r#7
 
-## Answers
+## Questions
 
-### What, why, how
-> adds a parser
-
-### Blast radius
-> only the cli
-
-### Less code
-> nothing to drop
+### Is the parser used outside the cli?
+> no
 
 ## Findings
 
@@ -186,7 +180,7 @@ func CaseReviewIncomplete() Case {
 		code, msg := postCode(h, id)
 		return append(out,
 			score("post_refused_incomplete", code == "review_incomplete", "code "+code),
-			score("gaps_named", strings.Contains(msg, "What, why, how") && strings.Contains(msg, "F1"), msg),
+			score("gaps_named", strings.Contains(msg, "F1"), msg),
 			score("nothing_posted_incomplete", len(gh.Posts()) == 0, "posted an incomplete review"))
 	}}
 }

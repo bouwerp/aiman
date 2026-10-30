@@ -15,16 +15,10 @@ import (
 
 const completeReview = `# Review: o/r#7
 
-## Answers
+## Questions
 
-### What, why, how
-> adds a parser
-
-### Blast radius
-> only the cli
-
-### Less code
-> none to drop
+### Is the parser used outside the cli?
+> no
 
 ## Findings
 
@@ -165,7 +159,7 @@ func TestPostRefusals(t *testing.T) {
 				return nil
 			})
 		}},
-		{name: "incomplete", body: "# Review: o/r#7\n\n## Summary\n\nx\n", code: CodeReviewIncomplete},
+		{name: "incomplete", body: "# Review: o/r#7\n\n## Questions\n\n### Is it used elsewhere?\n\n## Summary\n\nx\n", code: CodeReviewIncomplete},
 		{name: "not revealed", body: completeReview, code: CodeReviewNotReady},
 		{name: "head moved", body: completeReview, code: CodeReviewHeadMoved, mutate: func(t *testing.T, p postRig) {
 			revealReview(t, p)

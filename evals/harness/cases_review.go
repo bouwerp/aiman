@@ -111,7 +111,7 @@ func reviewRecordMetrics(h *Harness, id string) []MetricResult {
 			texts = append(texts, it.Text)
 		}
 	}
-	want := []string{"Blind review", "Informed pass", "Verify findings", "Publish the brief", "Ask the three questions", "Post the review"}
+	want := []string{"Blind review", "Informed pass", "Verify findings", "Publish the brief", "Ask open questions", "Post the review"}
 	started := slices.ContainsFunc(h.Events(id), func(ev domain.SessionEvent) bool { return ev.Kind == domain.EventReviewStarted })
 	return []MetricResult{
 		score("state_has_head", stateOK, "state missing or wrong"),
