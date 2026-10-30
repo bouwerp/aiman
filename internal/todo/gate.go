@@ -30,6 +30,13 @@ var gateTexts = map[string]string{
 // edit an open gate. It wraps ErrInvalid.
 var ErrGateLocked = fmt.Errorf("%w: a gate is open and only the operator can change it", ErrInvalid)
 
+// GateText returns the fixed item text of the gate for ref and whether ref
+// names a gate.
+func GateText(ref string) (string, bool) {
+	text, ok := gateTexts[ref]
+	return text, ok
+}
+
 // AddGate inserts the open gate item for ref before the Done-when item, or at
 // the end when there is none. It reports whether it added one; an unknown ref
 // or a list that already holds the gate adds nothing.

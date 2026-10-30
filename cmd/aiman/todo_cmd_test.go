@@ -285,14 +285,22 @@ func TestTodoParamsGateCommands(t *testing.T) {
 	}
 }
 
-func TestTodoParamsReviewGate(t *testing.T) {
-	flags, rest := takeFlags([]string{"--review"})
-	method, params, err := todoParams("gate", rest, flags)
-	if err != nil || method != "todo.gate" || params["ref"] != "gate:review" {
-		t.Fatalf("gate --review = %s %v %v", method, params, err)
+func TestTodoGateReviewFlag(t *testing.T) {
+	for _, args := range [][]string{
+		{"gate", "--session", "s1", "--review"},
+		{"gate", "--review", "--session", "s1"},
+	} {
+		body, _ := captureTodoRequest(t, func() error {
+			return runTodo(args, strings.NewReader(""), func(string) string { return "" })
+		})
+		if !strings.Contains(body, `"method":"todo.gate"`) || !strings.Contains(body, `"ref":"gate:review"`) {
+			t.Fatalf("%v sent %s", args, body)
+		}
 	}
-	method, params, err = todoParams("approve-review", nil, map[string]string{"quote": "lgtm"})
-	if err != nil || method != "todo.approve_review" || params["quote"] != "lgtm" {
-		t.Fatalf("approve-review = %s %v %v", method, params, err)
+	body, _ := captureTodoRequest(t, func() error {
+		return runTodo([]string{"approve-review", "--session", "s1", "--quote", "lgtm"}, strings.NewReader(""), func(string) string { return "" })
+	})
+	if !strings.Contains(body, `"method":"todo.approve_review"`) || !strings.Contains(body, `"quote":"lgtm"`) {
+		t.Fatalf("approve-review sent %s", body)
 	}
 }

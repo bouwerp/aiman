@@ -78,7 +78,7 @@ func todoParams(cmd string, rest []string, flags map[string]string) (string, map
 			return "", nil, errUsage
 		}
 		if flags["review"] != "" {
-			return "todo.gate", map[string]any{"ref": "gate:review"}, nil
+			return "todo.gate", map[string]any{"ref": todo.ReviewGateRef}, nil
 		}
 		return "todo.gate", map[string]any{}, nil
 	case "approve-design":

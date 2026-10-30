@@ -255,7 +255,7 @@ func sessionCreateParams(flags map[string]string) (map[string]any, error) {
 
 var boolSessionFlags = map[string]bool{
 	"wait": true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true, "dry-run": true, "if-enabled": true, "gate": true,
-	"existing-branch": true, "orphan": true, "json": true, "consult": true, "review": true,
+	"existing-branch": true, "orphan": true, "json": true, "consult": true,
 }
 
 func takeFlags(args []string) (map[string]string, []string) {

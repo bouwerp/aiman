@@ -650,7 +650,7 @@ func (s *Server) handleTodoGate(req Request, sess domain.Session) Response {
 	if gp.Ref == "" {
 		gp.Ref = todo.DesignGateRef
 	}
-	if gp.Ref != todo.DesignGateRef && gp.Ref != todo.ReviewGateRef {
+	if _, ok := todo.GateText(gp.Ref); !ok {
 		return errResp(req.ID, CodeInvalidParams, "unknown gate ref "+gp.Ref)
 	}
 	added := false
