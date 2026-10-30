@@ -2,6 +2,7 @@ package review
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -42,6 +43,32 @@ func TestLaunchConfigNode(t *testing.T) {
 	}
 	if got, _ := cfg["remoteRoot"].(string); got != "/src" {
 		t.Fatalf("remoteRoot = %v, want /src", cfg["remoteRoot"])
+	}
+}
+
+func TestLaunchConfigReact(t *testing.T) {
+	const wt = "/tmp/pr-worktree"
+	ports := DebugPorts{Debug: 9229, App: 3000, DevTools: 8097}
+	raw, err := LaunchConfig("react", ports, wt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := findAttach(t, raw, "aiman: attach react")
+	if got, _ := cfg["request"].(string); got != "attach" && got != "launch" {
+		t.Fatalf("request = %v, want attach or launch", cfg["request"])
+	}
+	port := jsonInt(cfg["port"])
+	if port == ports.Debug {
+		t.Fatalf("react attach used inspect port %d as chrome target", port)
+	}
+	url, _ := cfg["url"].(string)
+	hitsApp := port == ports.App || strings.Contains(url, fmt.Sprintf(":%d", ports.App))
+	hitsDevTools := port == ports.DevTools || strings.Contains(url, fmt.Sprintf(":%d", ports.DevTools))
+	if !hitsApp && !hitsDevTools {
+		t.Fatalf("react attach port=%d url=%q, want app %d or devtools %d", port, url, ports.App, ports.DevTools)
+	}
+	if typ, _ := cfg["type"].(string); typ == "chrome" && port == ports.Debug {
+		t.Fatalf("chrome attach on inspect port %d", ports.Debug)
 	}
 }
 

@@ -91,6 +91,7 @@ type attachCfg struct {
 	LocalRoot      string    `json:"localRoot,omitempty"`
 	RemoteRoot     string    `json:"remoteRoot,omitempty"`
 	WebRoot        string    `json:"webRoot,omitempty"`
+	URL            string    `json:"url,omitempty"`
 	Description    string    `json:"description,omitempty"`
 }
 
@@ -116,7 +117,8 @@ func attachConfig(lang string, ports DebugPorts, worktree string, order []string
 	case "react":
 		return attachCfg{
 			Name: name, Type: "chrome", Request: "attach",
-			Port: ports.Debug, Host: "127.0.0.1",
+			Port: ports.App, Host: "127.0.0.1",
+			URL:     fmt.Sprintf("http://127.0.0.1:%d", ports.App),
 			WebRoot: worktree, Description: desc,
 		}, nil
 	default:

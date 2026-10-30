@@ -1025,6 +1025,7 @@ func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
 		s.removeReviewFiles(sess.ID)
 	}
 	if s.pty != nil {
+		s.stopDebugPTY(sess.ID)
 		_ = s.pty.Kill(sess.ID)
 		_ = s.pty.Forget(sess.ID)
 	}

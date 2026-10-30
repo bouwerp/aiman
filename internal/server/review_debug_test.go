@@ -71,4 +71,59 @@ func TestDebugRegistersTunnels(t *testing.T) {
 	if _, err := os.Stat(launch); err != nil {
 		t.Fatalf("launch.json: %v", err)
 	}
+
+	debugID := "debug-" + info.ID
+	if _, err := pty.Get(debugID); err != nil {
+		t.Fatalf("debug helper missing after review.debug: %v", err)
+	}
+	killsBefore := countID(pty.Kills(), debugID)
+	forgetsBefore := countID(pty.Forgets(), debugID)
+	rpcOK(t, r.srv, info.ID, "session.forget", map[string]any{"id": info.ID}, nil)
+	if _, err := pty.Get(debugID); err == nil {
+		t.Fatal("debug helper still live after session.forget")
+	}
+	if countID(pty.Kills(), debugID) <= killsBefore {
+		t.Fatalf("drop did not Kill %s: %v", debugID, pty.Kills())
+	}
+	if countID(pty.Forgets(), debugID) <= forgetsBefore {
+		t.Fatalf("drop did not Forget %s: %v", debugID, pty.Forgets())
+	}
+}
+
+func TestDebugLaunchJSONFailureLeavesNoHelper(t *testing.T) {
+	r := newReviewRig(t)
+	pty := ptyfake.New()
+	r.srv.pty = pty
+	r.srv.SetReviewRunner(review.Runner{Docker: (&fakeDocker{out: "ok\n"}).run, UID: 1000, GID: 1000})
+	r.srv.SetReviewConfig(config.ReviewConfig{}, map[string]config.RepoBootstrap{
+		"o/r": {Review: config.RepoReview{Image: "golang:1.26"}},
+	})
+	info := createReview(t, r.srv)
+	vscode := filepath.Join(info.WorktreePath, ".vscode")
+	if err := os.MkdirAll(vscode, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	jsonc := []byte("{\n  // comment\n  \"version\": \"0.2.0\",\n  \"configurations\": []\n}\n")
+	if err := os.WriteFile(filepath.Join(vscode, "launch.json"), jsonc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := rpc(t, r.srv, info.ID, "review.debug", map[string]any{"lang": "go"})
+	if resp.Error == nil || resp.Error.Code != CodeCreateFailed {
+		t.Fatalf("want create_failed, got %+v", resp.Error)
+	}
+	debugID := "debug-" + info.ID
+	if _, err := pty.Get(debugID); err == nil {
+		t.Fatal("debug helper still live after launch.json failure")
+	}
+}
+
+func countID(ids []string, want string) int {
+	n := 0
+	for _, id := range ids {
+		if id == want {
+			n++
+		}
+	}
+	return n
 }

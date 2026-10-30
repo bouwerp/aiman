@@ -63,17 +63,18 @@ func (s *Server) handleReviewDebug(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
 	order := s.readingOrder(t.sess.ID)
-	if err := s.startDebugPTY(t.sess, sb, composePath, inner); err != nil {
-		return errResp(req.ID, CodeCreateFailed, err.Error())
-	}
 	if wt := strings.TrimSpace(t.sess.WorktreePath); wt != "" {
 		if err := review.WriteLaunchJSON(wt, lang, ports, order); err != nil {
 			return errResp(req.ID, CodeCreateFailed, err.Error())
 		}
 	}
+	if err := s.startDebugPTY(t.sess, sb, composePath, inner); err != nil {
+		return errResp(req.ID, CodeCreateFailed, err.Error())
+	}
 	t.sess.Tunnels = debugTunnels(lang, ports)
 	if s.repo != nil {
 		if err := s.repo.Save(ctx, &t.sess); err != nil {
+			s.stopDebugPTY(t.sess.ID)
 			return errResp(req.ID, CodeCreateFailed, err.Error())
 		}
 	}
@@ -100,6 +101,15 @@ func (s *Server) startDebugPTY(sess domain.Session, sb review.Sandbox, composePa
 
 func debugPTYID(sessionID string) string {
 	return "debug-" + sessionID
+}
+
+func (s *Server) stopDebugPTY(sessionID string) {
+	if s.pty == nil {
+		return
+	}
+	id := debugPTYID(sessionID)
+	_ = s.pty.Kill(id)
+	_ = s.pty.Forget(id)
 }
 
 func (s *Server) readingOrder(id string) []string {
