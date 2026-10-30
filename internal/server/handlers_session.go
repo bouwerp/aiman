@@ -207,6 +207,8 @@ func (s *Server) liveSessions(context.Context) []domain.Session {
 			TerminalName:     info.Name,
 			Backend:          domain.BackendPTY,
 			WorkingDirectory: info.Dir,
+			ParentID:         info.ParentID,
+			Role:             domain.SessionRole(info.Role),
 			Status:           domain.SessionStatusActive,
 		})
 	}
@@ -237,6 +239,12 @@ func mergeLiveSessions(stored, live []domain.Session) []domain.Session {
 			}
 			if l.Backend != "" {
 				out[i].Backend = l.Backend
+			}
+			if out[i].Role == "" {
+				out[i].Role = l.Role
+			}
+			if out[i].ParentID == "" {
+				out[i].ParentID = l.ParentID
 			}
 			out[i].Status = l.Status
 			continue
@@ -1108,40 +1116,8 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 		return errResp(req.ID, CodeInvalidParams, "id plus agent_session_id, state, title, or ended is required")
 	}
 	if s.repo != nil {
-		sess, err := s.repo.Get(ctx, sessionID)
-		if err != nil {
-			sess = s.liveSessionByID(ctx, sessionID)
-		}
-		if sess != nil {
-			wasEnded := sess.AgentEnded
-			agenthook.ApplyReport(sess, rep, time.Now())
-			if err := s.repo.Save(ctx, sess); err != nil {
-				return errResp(req.ID, CodeInvalidParams, err.Error())
-			}
-			s.notifyObserve(ctx, *sess)
-			if clr, ok := s.repo.(agentEndedClearer); ok && wasEnded && !sess.AgentEnded {
-				if err := clr.ClearAgentEnded(ctx, sess.ID); err != nil {
-					return errResp(req.ID, CodeInvalidParams, err.Error())
-				}
-			}
-			// Compaction waits on this hook, so the file is the pre-compact pane.
-			// SessionEnd does not write a handover.
-			if strings.EqualFold(rep.Event, agenthook.EventPreCompact) {
-				s.notePreCompactHandover(ctx, *sess)
-			}
-			// A new state may open the delivery gate for held notes.
-			s.steer.Kick(sess.ID)
-			// Kick only asks for a scan. A transcript error stays in that scan.
-			s.kickUsage()
-			s.appendEvent(ctx, sess.ID, domain.EventActorAgent, domain.EventHookReported, map[string]any{
-				"event": rep.Event, "state": string(rep.State), "source": rep.Source,
-				"message": rep.Message, "title": rep.Title, "seq": rep.Seq, "ended": rep.Ended,
-			})
-			if rep.Ended {
-				s.appendEvent(ctx, sess.ID, domain.EventActorAgent, domain.EventSessionEnded, map[string]any{
-					"reason": "session_end", "event": rep.Event,
-				})
-			}
+		if err := s.applyAgentReport(ctx, sessionID, rep); err != nil {
+			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
 	}
 	return Response{ID: req.ID, Result: map[string]any{
@@ -1153,6 +1129,59 @@ func (s *Server) handleReportAgentSession(ctx context.Context, req Request) Resp
 		"title":              rep.Title,
 		"ended":              rep.Ended,
 	}}
+}
+
+// applyAgentReport folds a hook report into the session it names.
+//
+// A session with no row that is running here is stored from its live record,
+// except a hidden helper (reviewer, handover, consult): its agent reports a
+// few seconds before the creator saves the row, and a row saved from the live
+// record first would be named after its terminal. That report reaches the
+// recorder, the steerer and the ledger but is not saved; the creator's save
+// is the first identity write. The helper's row therefore has no agent
+// session id until its second report.
+func (s *Server) applyAgentReport(ctx context.Context, sessionID string, rep agenthook.Report) error {
+	sess, err := s.repo.Get(ctx, sessionID)
+	persist := true
+	if err != nil {
+		sess = s.liveSessionByID(ctx, sessionID)
+		persist = sess != nil && !sess.Role.Hidden()
+	}
+	if sess == nil {
+		return nil
+	}
+	wasEnded := sess.AgentEnded
+	agenthook.ApplyReport(sess, rep, time.Now())
+	if persist {
+		if err := s.repo.Save(ctx, sess); err != nil {
+			return err
+		}
+	}
+	s.notifyObserve(ctx, *sess)
+	if clr, ok := s.repo.(agentEndedClearer); ok && persist && wasEnded && !sess.AgentEnded {
+		if err := clr.ClearAgentEnded(ctx, sess.ID); err != nil {
+			return err
+		}
+	}
+	// Compaction waits on this hook, so the file is the pre-compact pane.
+	// SessionEnd does not write a handover.
+	if strings.EqualFold(rep.Event, agenthook.EventPreCompact) {
+		s.notePreCompactHandover(ctx, *sess)
+	}
+	// A new state may open the delivery gate for held notes.
+	s.steer.Kick(sess.ID)
+	// Kick only asks for a scan. A transcript error stays in that scan.
+	s.kickUsage()
+	s.appendEvent(ctx, sess.ID, domain.EventActorAgent, domain.EventHookReported, map[string]any{
+		"event": rep.Event, "state": string(rep.State), "source": rep.Source,
+		"message": rep.Message, "title": rep.Title, "seq": rep.Seq, "ended": rep.Ended,
+	})
+	if rep.Ended {
+		s.appendEvent(ctx, sess.ID, domain.EventActorAgent, domain.EventSessionEnded, map[string]any{
+			"reason": "session_end", "event": rep.Event,
+		})
+	}
+	return nil
 }
 
 func resolveSession(list []domain.Session, target string) (domain.Session, bool) {

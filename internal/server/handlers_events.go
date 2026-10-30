@@ -10,13 +10,14 @@ import (
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
-// eventPollInterval is how often serve looks for activity changes.
+// EventPollInterval is how often serve looks for activity changes and new
+// rows to announce.
 //
 // This is a local stat of a handful of small files, so it can be far tighter
 // than anything the dashboard could do over SSH — which is the point: the
 // dashboard used to make an SSH round trip per session per poll to learn the
 // same thing.
-const eventPollInterval = 300 * time.Millisecond
+const EventPollInterval = 300 * time.Millisecond
 
 // eventKeepalive bounds how long the stream can stay silent. A reader blocked on
 // a dead connection learns nothing from silence; a periodic empty event lets it
@@ -99,8 +100,8 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 
 	enc := json.NewEncoder(conn)
 	seen := map[string]SessionEvent{}
-	announced := map[string]struct{}{}
-	ticker := time.NewTicker(eventPollInterval)
+	announced := map[string]string{}
+	ticker := time.NewTicker(EventPollInterval)
 	defer ticker.Stop()
 	lastSent := time.Now()
 
@@ -188,16 +189,20 @@ func collectSessionEvents(pty ptyLister, seen map[string]SessionEvent) []Session
 
 // collectRepoCreatedEvents announces each session the first time it appears in
 // serve's store so a CLI create reaches event-stream clients without a scan.
-func collectRepoCreatedEvents(sessions []domain.Session, announced map[string]struct{}) []SessionEvent {
+// announced keeps an identity fingerprint per id, and a row whose role, parent
+// or name changed is announced again: a helper first stored without its role
+// must still reach the dashboard as hidden.
+func collectRepoCreatedEvents(sessions []domain.Session, announced map[string]string) []SessionEvent {
 	var out []SessionEvent
 	for _, s := range sessions {
 		if s.ID == "" {
 			continue
 		}
-		if _, ok := announced[s.ID]; ok {
+		fp := string(s.Role) + "\x00" + s.ParentID + "\x00" + s.Name
+		if prev, ok := announced[s.ID]; ok && prev == fp {
 			continue
 		}
-		announced[s.ID] = struct{}{}
+		announced[s.ID] = fp
 		info := sessionInfo(s, "")
 		out = append(out, SessionEvent{
 			Type:    "session_created",

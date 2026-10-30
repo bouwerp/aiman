@@ -108,10 +108,14 @@ func (r *FakeRemote) Execs() []string {
 }
 
 // FakeCreator returns a session without cloning a repo or starting an agent.
-// With PTY set, the session's terminal is added to that runtime.
+// With PTY set, the session's terminal is added to that runtime with the role
+// and parent the real creator records in the holder. OnTerminal runs once the
+// terminal exists and before the session is returned, which is where a real
+// agent's first hook report lands.
 type FakeCreator struct {
-	Dir string
-	PTY *ptyfake.FakePTY
+	Dir        string
+	PTY        *ptyfake.FakePTY
+	OnTerminal func(id string)
 }
 
 func (c FakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) (*domain.Session, error) {
@@ -151,7 +155,13 @@ func (c FakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) 
 		CreatedAt:        time.Now().UTC(),
 	}
 	if c.PTY != nil {
-		c.PTY.Add(ptyruntime.SessionInfo{ID: id, Name: sess.TerminalName, Dir: dir, Command: agent})
+		c.PTY.Add(ptyruntime.SessionInfo{
+			ID: id, Name: sess.TerminalName, Dir: dir, Command: agent,
+			Role: string(cfg.Role), ParentID: cfg.ParentID,
+		})
+	}
+	if c.OnTerminal != nil {
+		c.OnTerminal(id)
 	}
 	return sess, nil
 }

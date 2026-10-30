@@ -189,6 +189,12 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		m.upsertLiveSession(sessionFromInfo(msg.host, *msg.event.Session))
 		return follow(nil)
 	}
+	// serve sends session_gone once a holder leaves its pty list. A helper or
+	// child row has nothing left to show; a worker stays until a scan decides.
+	if msg.event.Type == "session_gone" {
+		m.dropGoneHelperRow(msg.event.ID)
+		return follow(nil)
+	}
 	if m.eventSeen == nil {
 		m.eventSeen = map[string]sessionEventState{}
 	}
