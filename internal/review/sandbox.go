@@ -128,6 +128,7 @@ func nodeTag(s string) string {
 }
 
 type composeFile struct {
+	Name     string                    `yaml:"name"`
 	Services map[string]composeService `yaml:"services"`
 	Volumes  map[string]map[string]any `yaml:"volumes"`
 }
@@ -184,6 +185,7 @@ func Compose(sb Sandbox, uid, gid int) ([]byte, error) {
 		svc.Ports = append(svc.Ports, fmt.Sprintf("127.0.0.1:%d:%d", p.Host, p.Container))
 	}
 	doc := composeFile{
+		Name:     sb.ID,
 		Services: map[string]composeService{"sandbox": svc},
 		Volumes: map[string]map[string]any{
 			gomod:   {},

@@ -151,10 +151,35 @@ func TestComposeHardening(t *testing.T) {
 			t.Errorf("named volume %s missing: %v", name, doc.Volumes)
 		}
 	}
+	if doc.Name != "rev1" {
+		t.Fatalf("compose project name %q, want the review id", doc.Name)
+	}
+}
+
+func TestComposeProjectNameIsolatesReviews(t *testing.T) {
+	names := map[string]bool{}
+	for _, id := range []string{"rev-a", "rev-b"} {
+		raw, err := Compose(Sandbox{ID: id, Src: "/src", Out: "/out", Image: "golang:1.26"}, 1000, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc composeDoc
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if doc.Name != id {
+			t.Fatalf("id %s: name %q", id, doc.Name)
+		}
+		if names[doc.Name] {
+			t.Fatalf("shared compose project %q", doc.Name)
+		}
+		names[doc.Name] = true
+	}
 }
 
 // composeDoc is the subset TestComposeHardening reads back from the generated YAML.
 type composeDoc struct {
+	Name     string                       `yaml:"name"`
 	Services map[string]composeServiceDoc `yaml:"services"`
 	Volumes  map[string]any               `yaml:"volumes"`
 }
