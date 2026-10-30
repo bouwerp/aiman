@@ -633,7 +633,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeInvalidParams, perr.Error())
 	}
 	if strings.TrimSpace(params.Review) != "" {
-		return s.handleReview(ctx, req, params, parentID, existing)
+		return s.handleReview(ctx, req, params, parentID)
 	}
 	if params.Consult {
 		return s.handleConsult(ctx, req, params, parentID, existing)

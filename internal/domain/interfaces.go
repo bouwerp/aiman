@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -11,6 +12,10 @@ type IssueProvider interface {
 	GetIssue(ctx context.Context, key string) (Issue, error)
 	TransitionIssue(ctx context.Context, key string, status string) error
 }
+
+// ErrOriginMismatch is returned when a clone's origin is not the repository
+// an operation was asked to fetch from.
+var ErrOriginMismatch = errors.New("origin does not match the repository")
 
 // RepositoryManager manages git repositories and worktrees.
 type RepositoryManager interface {

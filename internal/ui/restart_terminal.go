@@ -25,6 +25,17 @@ type restartTerminalSpec struct {
 	LegacyStopped bool
 }
 
+// restartRoot is the directory a restart ignores aiman files in and trusts
+// beside the working directory: the worktree, else the working directory. A
+// review session uses its scratch working directory, so the PR checkout's
+// .gitignore and trust stay untouched.
+func restartRoot(s domain.Session, workingDir string) string {
+	if s.WorktreePath == "" || s.ReviewPR != "" {
+		return workingDir
+	}
+	return s.WorktreePath
+}
+
 // legacyRestartBlocked refuses a restart of a legacy tmux row the user has not
 // confirmed as stopped.
 func legacyRestartBlocked(s domain.Session, stopped bool) error {
@@ -41,7 +52,13 @@ func restartTerminal(ctx context.Context, remote usecase.TerminalExecutor, s *do
 	if err := legacyRestartBlocked(*s, spec.LegacyStopped); err != nil {
 		return err
 	}
-	usecase.TrustWorkspacePaths(ctx, remote, spec.WorkingDir, spec.WorktreeRoot)
+	root := spec.WorktreeRoot
+	if s.ReviewPR != "" {
+		// A review's worktree is the untrusted PR checkout; only its scratch
+		// working directory is ever trusted.
+		root = ""
+	}
+	usecase.TrustWorkspacePaths(ctx, remote, spec.WorkingDir, root)
 
 	env := make(map[string]string, len(spec.Env)+len(spec.Secrets))
 	for k, v := range spec.Env {

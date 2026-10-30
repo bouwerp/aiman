@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+
+	"github.com/google/uuid"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -16,10 +21,10 @@ import (
 )
 
 // reviewFilesDir is the directory serve writes a review's inputs into, inside
-// the review worktree. It matches the .aiman_* exclude glob.
+// the review's scratch directory. It matches the .aiman_* exclude glob.
 const reviewFilesDir = ".aiman_review"
 
-// Ledger refs of the review to-dos the later review steps find by ref.
+// Refs of the review to-dos the later review steps find by ref.
 const (
 	reviewBlindRef    = "review:blind"
 	reviewInformedRef = "review:informed"
@@ -52,14 +57,15 @@ func (s *Server) SetReviewWorktrees(w ReviewWorktrees) {
 	s.reviewWT = w
 }
 
-// SetReviewDir sets the directory review state files are kept in. Empty is
-// ~/.aiman/reviews.
+// SetReviewDir sets the directory holding each review's state file
+// (<id>.json) and scratch directory (<id>/work). Empty is ~/.aiman/pr-reviews.
 func (s *Server) SetReviewDir(dir string) {
 	s.reviewDir = dir
 }
 
-// reviewStateDir is the directory holding every review's state file.
-func (s *Server) reviewStateDir() string {
+// reviewBase is the directory holding every review's state and scratch
+// directory.
+func (s *Server) reviewBase() string {
 	if s.reviewDir != "" {
 		return s.reviewDir
 	}
@@ -67,34 +73,72 @@ func (s *Server) reviewStateDir() string {
 	if home == "" {
 		return ""
 	}
-	return filepath.Join(home, config.DirName, "reviews")
+	return filepath.Join(home, config.DirName, "pr-reviews")
+}
+
+// lockReview serialises review creates of one PR, so the live-review check
+// and the save of the new row cannot interleave with another create's.
+func (s *Server) lockReview(ref string) func() {
+	v, _ := s.reviewLocks.LoadOrStore(ref, &sync.Mutex{})
+	mu, _ := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // reviewMeta is .aiman_review/meta.json. It leaves out the description on
-// purpose: the first pass is blind to it.
+// purpose: the first pass is blind to it. Worktree is the PR checkout, which
+// the agent reads by path.
 type reviewMeta struct {
-	Ref     string `json:"ref"`
-	Number  int    `json:"number"`
-	Base    string `json:"base"`
-	HeadSHA string `json:"head_sha"`
-	Title   string `json:"title"`
-	Author  string `json:"author"`
+	Ref      string `json:"ref"`
+	Number   int    `json:"number"`
+	Base     string `json:"base"`
+	HeadSHA  string `json:"head_sha"`
+	Title    string `json:"title"`
+	Author   string `json:"author"`
+	Worktree string `json:"worktree"`
 }
 
-// handleReview starts an interactive session reviewing params.Review: a
-// worktree <repo>@pr-<n> at the PR head, staged against its merge base, with
-// the diff, the changed files and the PR's metadata written for the agent.
-// The agent comes from the smart tier unless one is named.
-func (s *Server) handleReview(ctx context.Context, req Request, p createParams, parentID string, existing []domain.Session) Response {
+// reviewOnlyParams are create parameters a review sets itself.
+var reviewOnlyParams = []struct {
+	name string
+	set  func(createParams) bool
+}{
+	{"consult", func(p createParams) bool { return p.Consult }},
+	{"quick", func(p createParams) bool { return p.Quick }},
+	{"for", func(p createParams) bool { return strings.TrimSpace(p.For) != "" }},
+	{"repo", func(p createParams) bool { return strings.TrimSpace(p.Repo) != "" }},
+	{"branch", func(p createParams) bool { return strings.TrimSpace(p.Branch) != "" }},
+	{"dir", func(p createParams) bool { return strings.TrimSpace(p.Dir) != "" }},
+	{"prompt", func(p createParams) bool { return strings.TrimSpace(p.Prompt) != "" }},
+	{"issue", func(p createParams) bool { return strings.TrimSpace(p.Issue) != "" }},
+	{"brief", func(p createParams) bool { return strings.TrimSpace(p.Brief) != "" }},
+	{"brief_file", func(p createParams) bool { return strings.TrimSpace(p.BriefFile) != "" }},
+}
+
+// handleReview starts an interactive session reviewing p.Review. The PR is
+// checked out at <repo>@pr-<n>, staged against its merge base, for the
+// operator's editor. The agent runs in an aiman-owned scratch directory
+// holding the diff, the changed files and the PR's metadata, and reads the
+// PR worktree by path, so it never loads project config from the PR. The
+// agent comes from the smart tier unless one is named.
+func (s *Server) handleReview(ctx context.Context, req Request, p createParams, parentID string) Response {
 	ref, err := review.ParseRef(strings.TrimSpace(p.Review))
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	if p.Consult || p.Quick || strings.TrimSpace(p.For) != "" {
-		return errResp(req.ID, CodeInvalidParams, "a review takes none of consult, quick and for")
+	for _, rp := range reviewOnlyParams {
+		if rp.set(p) {
+			return errResp(req.ID, CodeInvalidParams, "a review takes no "+rp.name)
+		}
 	}
-	if s.reviewGH == nil || s.reviewWT == nil || s.create == nil {
+	if s.reviewGH == nil || s.reviewWT == nil || s.create == nil || s.reviewBase() == "" {
 		return errResp(req.ID, CodeCreateFailed, "review not configured")
+	}
+	defer s.lockReview(ref.String())()
+	// Read under the lock, so a create that saved meanwhile is seen.
+	existing, err := s.loadSessions(ctx)
+	if err != nil {
+		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
 	if other, ok := liveReview(existing, ref.String()); ok {
 		return errResp(req.ID, CodeReviewExists, fmt.Sprintf("session %s already reviews %s", other.Name, ref))
@@ -107,77 +151,160 @@ func (s *Server) handleReview(ctx context.Context, req Request, p createParams, 
 	if err != nil {
 		return errResp(req.ID, code, err.Error())
 	}
-	pr, err := s.reviewGH.PR(ctx, ref)
+	plan := reviewPlan{ref: ref, name: name, parentID: parentID, group: p.Group, budget: p.BudgetTokens, launch: launch}
+	return s.startReview(ctx, req, plan, existing)
+}
+
+// reviewPlan is a validated review create.
+type reviewPlan struct {
+	ref                   review.Ref
+	name, parentID, group string
+	budget                int64
+	launch                launchPick
+}
+
+// startReview makes the PR worktree and the scratch directory, starts the
+// agent and stores the session's row, state and to-dos.
+func (s *Server) startReview(ctx context.Context, req Request, plan reviewPlan, existing []domain.Session) Response {
+	pr, err := s.reviewGH.PR(ctx, plan.ref)
 	if err != nil {
-		return errResp(req.ID, CodeCreateFailed, fmt.Sprintf("read %s: %v", ref, err))
+		return errResp(req.ID, CodeCreateFailed, fmt.Sprintf("read %s: %v", plan.ref, err))
 	}
 	remote := s.reviewRemote(req.Caller, existing)
 	if remote == nil {
 		return errResp(req.ID, CodeCreateFailed, "no remote to make the review worktree on")
 	}
-	repo := domain.Repo{Name: ref.Slug()}
-	wt, err := s.reviewWT.SetupRemotePRWorktree(ctx, remote, repo, ref.Number, pr.BaseRef)
+	repo := domain.Repo{Name: plan.ref.Slug()}
+	wt, err := s.reviewWT.SetupRemotePRWorktree(ctx, remote, repo, plan.ref.Number, pr.BaseRef)
+	if errors.Is(err, domain.ErrOriginMismatch) {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
 	if err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
 	wt.Path = filepath.Clean(wt.Path)
-	meta := reviewMeta{Ref: ref.String(), Number: ref.Number, Base: pr.BaseRef, HeadSHA: stagedHead(ctx, remote, wt.Path, pr.HeadSHA), Title: pr.Title, Author: pr.Author}
-	if err := writeReviewFiles(ctx, remote, wt.Path, meta); err != nil {
+	id := uuid.NewString()
+	meta := reviewMeta{
+		Ref: plan.ref.String(), Number: plan.ref.Number, Base: pr.BaseRef, HeadSHA: stagedHead(ctx, remote, wt.Path, pr.HeadSHA),
+		Title: pr.Title, Author: pr.Author, Worktree: wt.Path,
+	}
+	scratch, err := s.prepareReviewScratch(ctx, remote, id, meta)
+	if err != nil {
+		s.removeReviewFiles(id)
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
-	group := domain.AssignSessionGroup(p.Group, "", repo.Name, false)
-	agentName := launch.agentName
-	if strings.TrimSpace(agentName) == "" {
-		agentName = launch.agent
+	sess, err := s.launchReview(ctx, plan, id, scratch, wt.Path, pr.BaseRef, remote)
+	if err != nil {
+		s.removeReviewFiles(id)
+		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
+	if err := s.storeReview(ctx, &sess, meta); err != nil {
+		s.abandonReview(ctx, sess)
+		return errResp(req.ID, CodeCreateFailed, err.Error())
+	}
+	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionCreated, map[string]any{
+		"name": sess.Name, "group": sess.Group, "repo": repo.Name, "review": plan.ref.String(),
+		"agent": plan.launch.agent, "tier": plan.launch.tier, "requested_tier": plan.launch.requested,
+		"model": plan.launch.model, "effort": plan.launch.effort, "tier_fallback": plan.launch.fellBack,
+	})
+	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventReviewStarted, map[string]any{
+		"ref": plan.ref.String(), "base": meta.Base, "head_sha": meta.HeadSHA,
+	})
+	return Response{ID: req.ID, Result: map[string]any{
+		"type": "session", "session": sessionInfo(sess, req.Caller),
+		"tier_fallback": plan.launch.fellBack, "requested_tier": plan.launch.requested,
+	}}
+}
+
+// launchReview creates the review session with id in scratch, and returns
+// its row with WorktreePath naming the PR worktree.
+func (s *Server) launchReview(ctx context.Context, plan reviewPlan, id, scratch, worktree, base string, remote domain.RemoteExecutor) (domain.Session, error) {
+	agentName := plan.launch.agentName
+	if strings.TrimSpace(agentName) == "" {
+		agentName = plan.launch.agent
+	}
+	repo := domain.Repo{Name: plan.ref.Slug()}
+	group := domain.AssignSessionGroup(plan.group, "", repo.Name, false)
 	cfg := domain.SessionConfig{
-		Name:             name,
-		Group:            group,
-		ParentID:         parentID,
-		PromptFree:       true,
-		InitialPrompt:    review.Prompt,
-		BaseBranch:       pr.BaseRef,
-		Agent:            &domain.Agent{Name: agentName, Command: launch.agent, LaunchModel: launch.model, LaunchEffort: launch.effort},
-		Tier:             launch.tier,
-		BudgetTokens:     p.BudgetTokens,
-		Repo:             repo,
-		PreparedWorktree: wt.Path,
-		ReviewPR:         ref.String(),
+		SessionID:     id,
+		Name:          plan.name,
+		Group:         group,
+		ParentID:      plan.parentID,
+		PromptFree:    true,
+		InitialPrompt: review.Prompt,
+		BaseBranch:    base,
+		Agent: &domain.Agent{
+			Name: agentName, Command: plan.launch.agent,
+			LaunchModel: plan.launch.model, LaunchEffort: plan.launch.effort,
+		},
+		Tier:         plan.launch.tier,
+		BudgetTokens: plan.budget,
+		Repo:         repo,
+		// The agent's cwd, and the only directory create trusts, is the
+		// scratch directory; the PR worktree is never handed to the creator.
+		PreparedWorktree: scratch,
+		ReviewPR:         plan.ref.String(),
 		SSHManager:       remote,
 	}
 	created, err := s.create.CreateSession(ctx, cfg)
 	if err != nil {
-		return errResp(req.ID, CodeCreateFailed, err.Error())
+		return domain.Session{}, err
 	}
 	sess := *created
-	sess.Name, sess.Group, sess.ParentID, sess.Tier, sess.ReviewPR = name, group, parentID, launch.tier, ref.String()
-	sess.WorktreePath, sess.WorkingDirectory = wt.Path, wt.Path
+	sess.Name, sess.Group, sess.ParentID, sess.Tier, sess.ReviewPR = plan.name, group, plan.parentID, plan.launch.tier, plan.ref.String()
+	sess.WorktreePath, sess.WorkingDirectory = worktree, scratch
 	if sess.LaunchModel == "" {
-		sess.LaunchModel = launch.model
+		sess.LaunchModel = plan.launch.model
 	}
 	if sess.LaunchEffort == "" {
-		sess.LaunchEffort = launch.effort
+		sess.LaunchEffort = plan.launch.effort
 	}
+	return sess, nil
+}
+
+// storeReview saves the row, the review state and the review to-dos.
+func (s *Server) storeReview(ctx context.Context, sess *domain.Session, meta reviewMeta) error {
 	if s.repo != nil {
-		if err := s.repo.Save(ctx, &sess); err != nil {
-			return errResp(req.ID, CodeCreateFailed, err.Error())
+		if err := s.repo.Save(ctx, sess); err != nil {
+			return err
 		}
 	}
-	if err := s.startReviewRecords(ctx, sess.ID, meta); err != nil {
-		return errResp(req.ID, CodeCreateFailed, err.Error())
+	if err := review.SaveState(s.reviewBase(), sess.ID, review.State{Ref: meta.Ref, HeadSHA: meta.HeadSHA}); err != nil {
+		return err
 	}
-	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionCreated, map[string]any{
-		"name": name, "group": group, "repo": repo.Name, "review": ref.String(),
-		"agent": launch.agent, "tier": launch.tier, "requested_tier": launch.requested,
-		"model": launch.model, "effort": launch.effort, "tier_fallback": launch.fellBack,
+	return s.TodoAccess().Mutate(ctx, sess.ID, domain.AuthorAiman, func(l *domain.TodoList) error {
+		for _, it := range reviewTodos {
+			it.State = domain.TodoPending
+			l.Items = append(l.Items, it)
+		}
+		return nil
 	})
-	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventReviewStarted, map[string]any{
-		"ref": ref.String(), "base": meta.Base, "head_sha": meta.HeadSHA,
-	})
-	return Response{ID: req.ID, Result: map[string]any{
-		"type": "session", "session": sessionInfo(sess, req.Caller),
-		"tier_fallback": launch.fellBack, "requested_tier": launch.requested,
-	}}
+}
+
+// abandonReview stops and forgets a review session whose records could not
+// be stored, and removes its scratch directory and state file. The PR
+// worktree stays for a retry to reuse.
+func (s *Server) abandonReview(ctx context.Context, sess domain.Session) {
+	if err := (serverTerminal{s}).Stop(ctx, sess); err != nil {
+		log.Printf("review: stop %s: %v", sess.ID, err)
+	}
+	if err := s.dropSession(ctx, sess); err != nil {
+		log.Printf("review: forget %s: %v", sess.ID, err)
+	}
+	s.removeReviewFiles(sess.ID)
+}
+
+// removeReviewFiles removes review id's scratch directory and state file.
+func (s *Server) removeReviewFiles(id string) {
+	base := s.reviewBase()
+	if base == "" || id == "" || id != filepath.Base(id) {
+		return
+	}
+	for _, path := range []string{filepath.Join(base, id), filepath.Join(base, id+".json")} {
+		if err := os.RemoveAll(path); err != nil {
+			log.Printf("review: remove %s: %v", path, err)
+		}
+	}
 }
 
 // liveReview finds a session reviewing ref that has not ended.
@@ -240,25 +367,30 @@ func isObjectID(s string) bool {
 	return strings.Trim(s, "0123456789abcdef") == ""
 }
 
-// writeReviewFiles writes diff.patch (the staged diff), files.txt (its
-// numstat) and meta.json into the worktree's .aiman_review directory.
-func writeReviewFiles(ctx context.Context, remote domain.RemoteExecutor, worktree string, meta reviewMeta) error {
-	wt := quoteArg(worktree)
+// prepareReviewScratch makes <base>/<id>/work a fresh git repository (agents
+// that need one are content) and writes .aiman_review into it: diff.patch
+// (the PR worktree's staged diff), files.txt (its numstat) and meta.json.
+func (s *Server) prepareReviewScratch(ctx context.Context, remote domain.RemoteExecutor, id string, meta reviewMeta) (string, error) {
+	wt := quoteArg(meta.Worktree)
 	diff, err := remote.Execute(ctx, "git -C "+wt+" diff --cached")
 	if err != nil {
-		return fmt.Errorf("diff the PR: %w", err)
+		return "", fmt.Errorf("diff the PR: %w", err)
 	}
 	numstat, err := remote.Execute(ctx, "git -C "+wt+" diff --cached --numstat")
 	if err != nil {
-		return fmt.Errorf("list the PR's files: %w", err)
+		return "", fmt.Errorf("list the PR's files: %w", err)
 	}
 	rawMeta, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		return err
+		return "", err
 	}
-	dir := filepath.Join(worktree, reviewFilesDir)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return err
+	scratch := filepath.Join(s.reviewBase(), id, "work")
+	dir := filepath.Join(scratch, reviewFilesDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	if out, err := exec.CommandContext(ctx, "git", "-C", scratch, "init", "-q").CombinedOutput(); err != nil { //nolint:gosec // scratch is under the review base with a generated id
+		return "", fmt.Errorf("git init %s: %w: %s", scratch, err, strings.TrimSpace(string(out)))
 	}
 	for name, body := range map[string][]byte{
 		"diff.patch": []byte(diff),
@@ -266,26 +398,8 @@ func writeReviewFiles(ctx context.Context, remote domain.RemoteExecutor, worktre
 		"meta.json":  append(rawMeta, '\n'),
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
-}
-
-// startReviewRecords saves the review state and seeds the review to-dos.
-func (s *Server) startReviewRecords(ctx context.Context, sessionID string, meta reviewMeta) error {
-	dir := s.reviewStateDir()
-	if dir == "" {
-		return errors.New("no home directory for review state")
-	}
-	if err := review.SaveState(dir, sessionID, review.State{Ref: meta.Ref, HeadSHA: meta.HeadSHA}); err != nil {
-		return err
-	}
-	return s.TodoAccess().Mutate(ctx, sessionID, domain.AuthorAiman, func(l *domain.TodoList) error {
-		for _, it := range reviewTodos {
-			it.State = domain.TodoPending
-			l.Items = append(l.Items, it)
-		}
-		return nil
-	})
+	return scratch, nil
 }

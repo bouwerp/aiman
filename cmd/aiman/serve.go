@@ -207,7 +207,7 @@ func runServe() error {
 	srv.SetConsultDir(filepath.Join(dir, "consults"))
 	srv.SetReviewGitHub(&review.GHCLI{Run: review.ExecRun, RunInput: review.ExecRunInput})
 	srv.SetReviewWorktrees(gitManager)
-	srv.SetReviewDir(filepath.Join(dir, "reviews"))
+	srv.SetReviewDir(filepath.Join(dir, "pr-reviews"))
 	verifyDeps := srv.VerifyDeps(verify.NewStore(filepath.Join(dir, "reviews")), func(command string) bool {
 		return scanner.Installed(ctx, command)
 	})
@@ -279,9 +279,7 @@ func ensureAimanSkill(ctx context.Context, db domain.SessionRepository) {
 		if err != nil {
 			log.Printf("aiman skill: list sessions: %v", err)
 		} else {
-			for _, s := range sessions {
-				roots = append(roots, s.WorktreePath, s.WorkingDirectory)
-			}
+			roots = skillRoots(sessions)
 		}
 	}
 	results, err := aimanskill.EnsureOnHost(home, roots)
@@ -289,6 +287,20 @@ func ensureAimanSkill(ctx context.Context, db domain.SessionRepository) {
 		log.Printf("aiman skill: %v", err)
 	}
 	log.Printf("aiman skill: %s", aimanskill.Summarize(results))
+}
+
+// skillRoots are the session directories the bundled skill is copied into. A
+// review's worktree is the untrusted PR checkout and gets no copy; its agent
+// runs in the scratch working directory.
+func skillRoots(sessions []domain.Session) []string {
+	var roots []string
+	for _, s := range sessions {
+		if s.ReviewPR == "" {
+			roots = append(roots, s.WorktreePath)
+		}
+		roots = append(roots, s.WorkingDirectory)
+	}
+	return roots
 }
 
 func ensureAgentHooks(beforePR bool) {

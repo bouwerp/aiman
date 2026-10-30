@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -42,29 +43,40 @@ func startReview(h *Harness) (string, []MetricResult) {
 	return res.Session.ID, []MetricResult{score("review_created", res.Session.ReviewPR == reviewRef, "review_pr "+res.Session.ReviewPR)}
 }
 
-// reviewFilesMetrics checks the blind inputs serve wrote: diff, files and meta
-// present, the description absent.
+// reviewFilesMetrics checks the blind inputs serve wrote into the scratch
+// directory the agent runs in: diff, files and meta present, meta naming the
+// PR worktree, the description absent, and nothing written into the PR
+// worktree.
 func reviewFilesMetrics(h *Harness, id string) []MetricResult {
-	wt := h.RepoDir(id)
+	sess, err := h.Repo.Get(context.Background(), id)
+	if err != nil {
+		return []MetricResult{score("review_row", false, err.Error())}
+	}
+	wt, work := sess.WorktreePath, sess.WorkingDirectory
 	present := true
 	for _, name := range []string{"diff.patch", "files.txt", "meta.json"} {
-		if _, err := os.Stat(filepath.Join(wt, ".aiman_review", name)); err != nil {
+		if _, err := os.Stat(filepath.Join(work, ".aiman_review", name)); err != nil {
 			present = false
 		}
 	}
 	var meta struct {
-		Number  int    `json:"number"`
-		HeadSHA string `json:"head_sha"`
+		Number   int    `json:"number"`
+		HeadSHA  string `json:"head_sha"`
+		Worktree string `json:"worktree"`
 	}
-	raw, _ := os.ReadFile(filepath.Join(wt, ".aiman_review", "meta.json"))
+	raw, _ := os.ReadFile(filepath.Join(work, ".aiman_review", "meta.json"))
 	_ = json.Unmarshal(raw, &meta)
-	_, descErr := os.Stat(filepath.Join(wt, ".aiman_pr_description.md"))
+	_, descErr := os.Stat(filepath.Join(work, ".aiman_pr_description.md"))
+	_, inPR := os.Stat(filepath.Join(wt, ".aiman_review"))
 	return []MetricResult{
 		score("worktree_named_for_pr", filepath.Base(wt) == "r@pr-7", "worktree "+wt),
+		score("agent_runs_in_scratch", work == filepath.Join(h.ReviewDir(), id, "work"), "working directory "+work),
 		score("review_files_present", present, "missing a file under .aiman_review"),
 		score("meta_has_head", meta.Number == 7 && meta.HeadSHA == reviewHead, "meta "+string(raw)),
+		score("meta_names_worktree", meta.Worktree == wt, "meta worktree "+meta.Worktree),
 		score("meta_has_no_description", !strings.Contains(string(raw), "PROJ-1"), "meta carries the description"),
 		score("description_absent", os.IsNotExist(descErr), "description written before reveal"),
+		score("pr_worktree_untouched", os.IsNotExist(inPR), "review files written into the PR worktree"),
 	}
 }
 

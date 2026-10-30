@@ -54,8 +54,12 @@ func (f *fakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig)
 	if cfg.Agent != nil {
 		agent = cfg.Agent.Name
 	}
+	id := "new-id"
+	if cfg.SessionID != "" {
+		id = cfg.SessionID
+	}
 	return &domain.Session{
-		ID: "new-id", Name: cfg.Name, Group: cfg.Group, Branch: cfg.Branch,
+		ID: id, Name: cfg.Name, Group: cfg.Group, Branch: cfg.Branch,
 		BaseBranch: cfg.BaseBranch, AgentName: agent, Status: domain.SessionStatusActive,
 		TerminalName: cfg.Branch,
 	}, nil

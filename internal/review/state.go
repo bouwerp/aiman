@@ -9,7 +9,7 @@ import (
 )
 
 // State is serve's record of one review session, kept in
-// <dir>/<session id>.json (dir is ~/.aiman/reviews on a host).
+// <dir>/<session id>.json (dir is ~/.aiman/pr-reviews on a host).
 type State struct {
 	// Ref is the PR under review, "owner/repo#n".
 	Ref string `json:"ref"`

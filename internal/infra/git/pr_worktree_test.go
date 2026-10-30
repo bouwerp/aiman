@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ func TestSetupRemotePRWorktreeFork(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/r": true},
 		outputs: map[string]string{
+			`git -C '/home/dev/r' remote get-url origin`:                    "https://github.com/O/R.git",
 			`git -C "/home/dev/r" rev-parse --git-dir`:                      ".git",
 			`git -C "/home/dev/r" rev-parse HEAD 2>/dev/null || echo EMPTY`: "abc",
 		},
@@ -63,7 +65,11 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 // a main commit after the PR's fork point, and a clone of it at root/r.
 func prUpstream(t *testing.T) (upstream, root string) {
 	t.Helper()
-	upstream, root = t.TempDir(), t.TempDir()
+	// The origin path ends in o/r, so it names the repository under review.
+	upstream, root = filepath.Join(t.TempDir(), "o", "r"), t.TempDir()
+	if err := os.MkdirAll(upstream, 0o750); err != nil {
+		t.Fatal(err)
+	}
 	runGit(t, upstream, "init", "-q", "-b", "main")
 	runGit(t, upstream, "config", "user.name", "Aiman Test")
 	runGit(t, upstream, "config", "user.email", "aiman@example.com")
@@ -132,5 +138,42 @@ func TestSetupRemotePRWorktreeStagesThePR(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(wt.Path, "old.txt")); !os.IsNotExist(err) {
 		t.Fatalf("old.txt left behind: %v", err)
+	}
+}
+
+func TestOriginNamesRepo(t *testing.T) {
+	for url, want := range map[string]bool{
+		"https://github.com/o/r.git":      true,
+		"https://github.com/O/R":          true,
+		"https://x@github.com/o/r.git/":   true,
+		"git@github.com:o/r.git":          true,
+		"ssh://git@github.com/o/r.git":    true,
+		"git@github.com:evil/r.git":       false,
+		"https://github.com/o/r-fork.git": false,
+		"":                                false,
+	} {
+		if got := originNamesRepo(url, "o/r"); got != want {
+			t.Errorf("originNamesRepo(%q) = %v, want %v", url, got, want)
+		}
+	}
+}
+
+// A clone whose origin is another repository is refused before any fetch.
+func TestSetupRemotePRWorktreeRefusesForeignOrigin(t *testing.T) {
+	remote := &commandRecorderRemote{mockRemote: mockRemote{
+		root: "/home/dev",
+		dirs: map[string]bool{"/home/dev/r": true},
+		outputs: map[string]string{
+			`git -C '/home/dev/r' remote get-url origin`: "git@github.com:evil/r.git",
+		},
+	}}
+	_, err := NewManager(nil).SetupRemotePRWorktree(context.Background(), remote, domain.Repo{Name: "o/r"}, 7, "main")
+	if !errors.Is(err, domain.ErrOriginMismatch) || !strings.Contains(err.Error(), "evil/r") || !strings.Contains(err.Error(), "o/r") {
+		t.Fatalf("err %v, want an origin mismatch naming both", err)
+	}
+	for _, cmd := range remote.commandsRun {
+		if strings.Contains(cmd, "fetch") {
+			t.Fatalf("fetched despite the mismatch: %q", cmd)
+		}
 	}
 }

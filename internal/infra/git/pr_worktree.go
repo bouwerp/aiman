@@ -28,6 +28,9 @@ func (m *Manager) SetupRemotePRWorktree(ctx context.Context, remote domain.Remot
 		return domain.Worktree{}, errors.New("remote root not configured")
 	}
 	repoPath := computeMainRepoPath(root, repo.Name)
+	if err := checkOrigin(ctx, remote, repoPath, repo.Name); err != nil {
+		return domain.Worktree{}, err
+	}
 	if err := ensureHealthyRepo(ctx, remote, repoPath, repo.URL); err != nil {
 		return domain.Worktree{}, err
 	}
@@ -53,6 +56,42 @@ func (m *Manager) SetupRemotePRWorktree(ctx context.Context, remote domain.Remot
 		return domain.Worktree{}, err
 	}
 	return domain.Worktree{Path: resolved, Base: base}, nil
+}
+
+// checkOrigin refuses a main clone whose origin is not slug, before anything
+// is fetched from it: a PR number means nothing in another repository.
+func checkOrigin(ctx context.Context, remote domain.RemoteExecutor, repoPath, slug string) error {
+	out, _ := remote.Execute(ctx, "git -C "+shellQuote(repoPath)+" remote get-url origin")
+	origin := strings.TrimSpace(out)
+	if !originNamesRepo(origin, slug) {
+		return fmt.Errorf("%w: the clone at %s has origin %q, not %s", domain.ErrOriginMismatch, repoPath, origin, slug)
+	}
+	return nil
+}
+
+// originNamesRepo reports whether a git remote URL (https, ssh:// or
+// scp-like git@host:owner/repo) names owner/repo, ignoring case, a .git
+// suffix and a trailing slash.
+func originNamesRepo(origin, slug string) bool {
+	origin = strings.ToLower(strings.TrimSpace(origin))
+	if origin == "" {
+		return false
+	}
+	path := origin
+	if i := strings.Index(path, "://"); i >= 0 {
+		path = path[i+3:]
+		if j := strings.Index(path, "/"); j >= 0 {
+			path = path[j+1:]
+		}
+	} else if i := strings.Index(path, ":"); i >= 0 {
+		path = path[i+1:]
+	}
+	path = strings.TrimSuffix(strings.TrimSuffix(path, "/"), ".git")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	return parts[len(parts)-2]+"/"+parts[len(parts)-1] == strings.ToLower(slug)
 }
 
 // checkoutPRHead leaves worktreePath detached at pull/<number>/head. A healthy

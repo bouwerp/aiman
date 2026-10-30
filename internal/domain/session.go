@@ -277,6 +277,9 @@ type SessionRepository interface {
 
 // SessionConfig holds the configuration for creating a new session.
 type SessionConfig struct {
+	// SessionID is the id the new session gets; empty means a fresh one.
+	// A caller sets it when it prepares files keyed by the id before create.
+	SessionID string
 	Name      string
 	Group     string
 	ParentID  string // session that spawned this one; empty is a root

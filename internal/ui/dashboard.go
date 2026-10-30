@@ -7657,10 +7657,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		logf("session=%s remote=%s@%s workingDir=%s agent=%s", s.TerminalName, remote.User, remote.Host, workingDir, sessionCfg.Agent.Command)
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
-		gitignoreRoot := s.WorktreePath
-		if gitignoreRoot == "" {
-			gitignoreRoot = workingDir
-		}
+		gitignoreRoot := restartRoot(*s, workingDir)
 		if err := git.NewManager(&cfg.Git).EnsureAimanSessionFilesGitignored(ctx, mgr, gitignoreRoot); err != nil {
 			logf("gitignore update skipped: %v", err)
 		}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,8 +28,31 @@ type FakeRemote struct {
 	Dir string
 	PTY *ptyfake.FakePTY
 
-	mu    sync.Mutex
-	execs []string
+	mu      sync.Mutex
+	execs   []string
+	replies map[string]string
+}
+
+// Reply makes every command containing substr answer with out.
+func (r *FakeRemote) Reply(substr, out string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.replies == nil {
+		r.replies = map[string]string{}
+	}
+	r.replies[substr] = out
+}
+
+// reply is the canned answer for cmd, if one matches.
+func (r *FakeRemote) reply(cmd string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for substr, out := range r.replies {
+		if strings.Contains(cmd, substr) {
+			return out, true
+		}
+	}
+	return "", false
 }
 
 func NewFakeRemote(dir string, pty *ptyfake.FakePTY) *FakeRemote {
@@ -43,6 +67,9 @@ func (r *FakeRemote) Execute(_ context.Context, cmd string) (string, error) {
 	r.mu.Lock()
 	r.execs = append(r.execs, cmd)
 	r.mu.Unlock()
+	if out, ok := r.reply(cmd); ok {
+		return out, nil
+	}
 	m := ptyCLI.FindStringSubmatch(cmd)
 	if m == nil || r.PTY == nil {
 		return "", nil
@@ -88,7 +115,10 @@ type FakeCreator struct {
 }
 
 func (c FakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) (*domain.Session, error) {
-	id := uuid.NewString()
+	id := cfg.SessionID
+	if id == "" {
+		id = uuid.NewString()
+	}
 	dir := filepath.Join(c.Dir, "sessions", id)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err

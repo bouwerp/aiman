@@ -144,11 +144,13 @@ type Server struct {
 	consultDir string
 
 	// reviewGH reads PRs and reviewWT makes their worktrees; review creates
-	// fail until both are set. reviewDir holds review state files; empty is
-	// ~/.aiman/reviews.
-	reviewGH  review.GitHub
-	reviewWT  ReviewWorktrees
-	reviewDir string
+	// fail until both are set. reviewDir holds each review's state file and
+	// scratch directory; empty is ~/.aiman/pr-reviews. reviewLocks holds one
+	// *sync.Mutex per PR ref around a review create.
+	reviewGH    review.GitHub
+	reviewWT    ReviewWorktrees
+	reviewDir   string
+	reviewLocks sync.Map
 
 	// agentUpdates reports and applies agent CLI updates; nil until
 	// SetAgentUpdates. agentHost names this host in its replies.

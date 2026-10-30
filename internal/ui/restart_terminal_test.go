@@ -128,3 +128,30 @@ func TestRestartSetsBackendPTY(t *testing.T) {
 		}
 	}
 }
+
+// A review session's worktree is the untrusted PR checkout: a restart trusts
+// only its scratch working directory and never edits the PR's .gitignore.
+func TestRestartReviewNeverTrustsPRWorktree(t *testing.T) {
+	remote := &recordingTerminal{}
+	s := &domain.Session{
+		ID: "sess-3", TerminalName: "pr-7", Backend: domain.BackendPTY, ReviewPR: "o/r#7",
+		WorktreePath: "/work/r@pr-7", WorkingDirectory: "/home/u/.aiman/pr-reviews/sess-3/work",
+	}
+	if got := restartRoot(*s, s.WorkingDirectory); got != s.WorkingDirectory {
+		t.Fatalf("restart root %q, want the scratch directory", got)
+	}
+	if got := restartRoot(domain.Session{WorktreePath: "/work/r@x"}, "/work/r@x/sub"); got != "/work/r@x" {
+		t.Fatalf("ordinary restart root %q", got)
+	}
+	err := restartTerminal(context.Background(), remote, s, restartTerminalSpec{
+		WorkingDir:   s.WorkingDirectory,
+		WorktreeRoot: s.WorktreePath,
+		AgentCmd:     "claude",
+	})
+	if err != nil {
+		t.Fatalf("restartTerminal: %v", err)
+	}
+	if got := remote.all(); strings.Contains(got, "r@pr-7") {
+		t.Fatalf("restart touched the PR worktree:\n%s", got)
+	}
+}

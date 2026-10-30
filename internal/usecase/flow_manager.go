@@ -371,8 +371,12 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		mode = domain.SessionModeInteractive
 	}
 
+	id := config.SessionID
+	if id == "" {
+		id = uuid.New().String()
+	}
 	session := &domain.Session{
-		ID:             uuid.New().String(),
+		ID:             id,
 		Name:           config.Name,
 		Group:          config.Group,
 		ParentID:       config.ParentID,

@@ -69,17 +69,20 @@ func (g *FakeGitHub) Posts() []review.Post {
 // EnableReview makes review creates work: claude is the installed smart and
 // worker tier, PRs come from the returned FakeGitHub, the production git
 // manager makes the worktree through the fake remote (which records its
-// commands and runs none), and review state goes under the harness dir.
+// commands, runs none and reports origin as o/r), and review state and
+// scratch directories go under the harness dir.
 func (h *Harness) EnableReview() *FakeGitHub {
 	h.EnableCoordinator()
 	gh := &FakeGitHub{}
 	h.srv.SetReviewGitHub(gh)
+	h.remote.Reply("remote get-url origin", "git@github.com:o/r.git\n")
 	h.srv.SetReviewWorktrees(git.NewManager(nil))
 	h.srv.SetReviewDir(h.ReviewDir())
 	return gh
 }
 
-// ReviewDir is where serve keeps review state files in a case.
+// ReviewDir is where serve keeps review state files and scratch directories
+// in a case.
 func (h *Harness) ReviewDir() string {
-	return filepath.Join(h.Dir, "reviews")
+	return filepath.Join(h.Dir, "pr-reviews")
 }
