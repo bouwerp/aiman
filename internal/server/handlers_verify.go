@@ -115,10 +115,11 @@ func (s *Server) handleVerifyStatus(ctx context.Context, req Request) Response {
 }
 
 // verifyStatusForTree answers the before-PR gate: a disabled review when
-// before_pr is off, else the latest review of exactly this tree. When the
-// gate asks and the answer is not a pass, the denial goes to the ledger.
+// before_pr is off or the session reviews a PR (it never opens one), else the
+// latest review of exactly this tree. When the gate asks and the answer is
+// not a pass, the denial goes to the ledger.
 func (s *Server) verifyStatusForTree(ctx context.Context, id string, sess domain.Session, tree string, gate bool) Response {
-	if !s.verifier.BeforePR() {
+	if !s.verifier.BeforePR() || sess.ReviewPR != "" {
 		return reviewResponse(id, verify.Review{WorkerID: sess.ID, Tree: tree, Status: verify.StatusDisabled})
 	}
 	r, ok := s.verifier.ForTree(sess.ID, tree)

@@ -22,6 +22,7 @@ import (
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/review"
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usage"
 	"github.com/bouwerp/aiman/internal/verify"
@@ -141,6 +142,13 @@ type Server struct {
 	// consultDir holds consult scratch directories; empty is
 	// ~/.aiman/consults (SetConsultDir).
 	consultDir string
+
+	// reviewGH reads PRs and reviewWT makes their worktrees; review creates
+	// fail until both are set. reviewDir holds review state files; empty is
+	// ~/.aiman/reviews.
+	reviewGH  review.GitHub
+	reviewWT  ReviewWorktrees
+	reviewDir string
 
 	// agentUpdates reports and applies agent CLI updates; nil until
 	// SetAgentUpdates. agentHost names this host in its replies.

@@ -106,7 +106,11 @@ type Session struct {
 	BudgetTokens     int64      // per-session token budget; 0 means none
 	// WatchPR is the PR-watch override: WatchPROn, WatchPROff, or empty to
 	// follow the mode default (see WatchesPR).
-	WatchPR   string
+	WatchPR string
+	// ReviewPR is "owner/repo#n" for a session reviewing that pull request,
+	// empty otherwise. A review session is interactive; code that treats it
+	// differently checks ReviewPR != "".
+	ReviewPR  string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -299,10 +303,14 @@ type SessionConfig struct {
 	// PreparedWorktree is an existing directory used as the worktree as is,
 	// with no clone, fetch or worktree add (a verifier's detached snapshot).
 	PreparedWorktree string
-	ReuseWorkspace   bool           // bypass git worktree and execute directly in the main clone
-	AdHoc            bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
-	SSHManager       RemoteExecutor // remote to create the session on; uses FlowManager default if nil
-	RemoteHost       string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
+	// ReviewPR is "owner/repo#n" when the session reviews that pull request.
+	// It skips the design-first prompt suffix; CreateSession copies it onto
+	// the session.
+	ReviewPR       string
+	ReuseWorkspace bool           // bypass git worktree and execute directly in the main clone
+	AdHoc          bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
+	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
+	RemoteHost     string         // host identifier to tag the session with (e.g. "mydevbox.example.com")
 	// PriorSnapshot is an optional snapshot from a previous session on the same branch/issue.
 	// When set, its summary and next steps are injected into the agent task file so the
 	// new session can continue from where the prior one left off.

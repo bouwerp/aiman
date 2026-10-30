@@ -283,3 +283,21 @@ func TestAutonomousSessionGetsNoSuffix(t *testing.T) {
 		t.Fatalf("prompt = %q, want it unchanged", got)
 	}
 }
+
+func TestDesignFirstSkipsReview(t *testing.T) {
+	cfg := domain.SessionConfig{ReviewPR: "o/r#7"}
+	if got := designFirstPrompt("review the PR", cfg); got != "review the PR" {
+		t.Fatalf("prompt = %q, want it unchanged", got)
+	}
+}
+
+// A review worktree excludes aiman's files through info/exclude, so its
+// .gitignore, a file the PR may change, is never edited.
+func TestReviewLeavesGitignoreAlone(t *testing.T) {
+	if editsGitignore(domain.SessionConfig{ReviewPR: "o/r#7"}) {
+		t.Fatal("review session edits .gitignore")
+	}
+	if !editsGitignore(domain.SessionConfig{}) {
+		t.Fatal("ordinary session no longer ignores aiman files")
+	}
+}

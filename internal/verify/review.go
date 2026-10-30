@@ -132,6 +132,11 @@ func (s *Store) Get(id string) (Review, error) {
 	if err := json.Unmarshal(body, &r); err != nil {
 		return Review{}, fmt.Errorf("decode review %s: %w", id, err)
 	}
+	// The directory also holds PR-review state files; a record whose id is
+	// not its file name is not a verifier review.
+	if r.ID != id {
+		return Review{}, ErrNotFound
+	}
 	return r, nil
 }
 

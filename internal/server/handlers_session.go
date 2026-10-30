@@ -46,7 +46,9 @@ type SessionInfo struct {
 	LaunchModel  string `json:"launch_model,omitempty"`
 	LaunchEffort string `json:"launch_effort,omitempty"`
 	// Tier is the model tier the session was created from, after fallback.
-	Tier             string `json:"tier,omitempty"`
+	Tier string `json:"tier,omitempty"`
+	// ReviewPR is "owner/repo#n" for a session reviewing that pull request.
+	ReviewPR         string `json:"review_pr,omitempty"`
 	AgentSessionID   string `json:"agent_session_id,omitempty"`
 	AgentSessionPath string `json:"agent_session_path,omitempty"`
 	Title            string `json:"title,omitempty"`
@@ -81,6 +83,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		LaunchModel:      s.LaunchModel,
 		LaunchEffort:     s.LaunchEffort,
 		Tier:             s.Tier,
+		ReviewPR:         s.ReviewPR,
 		AgentSessionID:   s.AgentSessionID,
 		AgentSessionPath: s.AgentSessionPath,
 		Title:            s.AgentTitle,
@@ -106,7 +109,7 @@ func (s *Server) decorateState(ctx context.Context, info *SessionInfo, sess doma
 	live := s.liveSession(ctx, sess)
 	info.Title = live.AgentTitle
 	info.Ended = live.AgentEnded
-	info.Unprotected = s.verifier != nil && s.verifier.BeforePR() && !agenthook.GuardsPRCreate(live.AgentName)
+	info.Unprotected = s.verifier != nil && s.verifier.BeforePR() && live.ReviewPR == "" && !agenthook.GuardsPRCreate(live.AgentName)
 	st, conf := s.classify(ctx, live)
 	info.State = string(st)
 	switch conf {
@@ -611,6 +614,9 @@ type createParams struct {
 	// reviews the parent's design read-only. It needs a brief and is allowed
 	// while the parent's design gate is open.
 	Consult bool `json:"consult"`
+	// Review is "owner/repo#n": the new session reviews that pull request
+	// in a worktree at its head.
+	Review string `json:"review"`
 }
 
 func (s *Server) handleCreate(ctx context.Context, req Request) Response {
@@ -625,6 +631,9 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	parentID, perr := domain.ResolveCreateParent(params.Orphan, params.Parent, req.Caller, "", existing)
 	if perr != nil {
 		return errResp(req.ID, CodeInvalidParams, perr.Error())
+	}
+	if strings.TrimSpace(params.Review) != "" {
+		return s.handleReview(ctx, req, params, parentID, existing)
 	}
 	if params.Consult {
 		return s.handleConsult(ctx, req, params, parentID, existing)
@@ -644,29 +653,14 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if berr != nil {
 		return errResp(req.ID, CodeInvalidParams, berr.Error())
 	}
-	tier, model, effort, terr := s.tierChoice(params)
-	if terr != nil {
-		return errResp(req.ID, CodeInvalidParams, terr.Error())
+	// A user-started session defaults to smart, a child to worker.
+	launch, code, lerr := s.launchFor(ctx, params, defaultTier(parentID))
+	if lerr != nil {
+		return errResp(req.ID, code, lerr.Error())
 	}
-	var launchModel, launchEffort, sessionTier, requestedTier string
-	tierFallback := false
-	if strings.TrimSpace(params.Agent) == "" {
-		// An explicit agent always wins; only an empty one reads the tiers. A
-		// user-started session defaults to smart, a child to worker.
-		want := tier
-		if want == "" {
-			want = defaultTier(parentID)
-		}
-		picked, perr := s.pickAgent(ctx, want)
-		if perr != nil {
-			return errResp(req.ID, CodeNoPreferredAgent, perr.Error())
-		}
-		params.Agent, params.AgentName = picked.Entry.Agent, ""
-		launchModel, launchEffort = picked.Entry.Model, picked.Entry.Effort
-		sessionTier, requestedTier, tierFallback = picked.Tier, picked.Requested, picked.FellBack
-	} else {
-		launchModel, launchEffort = model, effort
-	}
+	params.Agent, params.AgentName = launch.agent, launch.agentName
+	launchModel, launchEffort := launch.model, launch.effort
+	sessionTier, requestedTier, tierFallback := launch.tier, launch.requested, launch.fellBack
 	name := params.Name
 	if name == "" {
 		var aerr error
@@ -786,6 +780,41 @@ func (s *Server) tierChoice(params createParams) (tier, model, effort string, er
 		return "", "", "", errors.New("model and effort need an explicit agent")
 	}
 	return tier, model, effort, nil
+}
+
+// launchPick is the agent a create launches and where it came from: an
+// explicit agent, or the first installed entry of a tier.
+type launchPick struct {
+	agent, agentName, model, effort string
+	// tier is the tier the agent was picked from after fallback, requested
+	// the one asked for; both are empty for an explicit agent.
+	tier, requested string
+	fellBack        bool
+}
+
+// launchFor validates the tier, model and effort parameters and picks the
+// agent. An explicit agent always wins; only an empty one reads the tiers,
+// starting from the requested tier or else fallback. The returned code is
+// the error's response code.
+func (s *Server) launchFor(ctx context.Context, params createParams, fallback string) (launchPick, string, error) {
+	tier, model, effort, err := s.tierChoice(params)
+	if err != nil {
+		return launchPick{}, CodeInvalidParams, err
+	}
+	if strings.TrimSpace(params.Agent) != "" {
+		return launchPick{agent: params.Agent, agentName: params.AgentName, model: model, effort: effort}, "", nil
+	}
+	if tier == "" {
+		tier = fallback
+	}
+	picked, err := s.pickAgent(ctx, tier)
+	if err != nil {
+		return launchPick{}, CodeNoPreferredAgent, err
+	}
+	return launchPick{
+		agent: picked.Entry.Agent, model: picked.Entry.Model, effort: picked.Entry.Effort,
+		tier: picked.Tier, requested: picked.Requested, fellBack: picked.FellBack,
+	}, "", nil
 }
 
 // defaultTier is the tier a create starts from when none was asked for: the

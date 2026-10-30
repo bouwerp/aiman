@@ -113,3 +113,27 @@ func TestStoreListSkipsCorruptFile(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 }
+
+// ~/.aiman/reviews also holds PR-review state files, keyed by session id.
+// They are not verifier reviews and must not be listed as ones.
+func TestStoreListSkipsForeignRecords(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Put(Review{ID: "good", Status: StatusComplete}); err != nil {
+		t.Fatal(err)
+	}
+	state := []byte(`{"ref":"o/r#7","head_sha":"abc123","revealed":false,"single":false}`)
+	if err := os.WriteFile(filepath.Join(dir, "sess-1.json"), state, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != "good" {
+		t.Fatalf("list = %+v", list)
+	}
+	if _, err := s.Get("sess-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get foreign record err = %v, want ErrNotFound", err)
+	}
+}

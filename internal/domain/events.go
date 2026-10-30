@@ -40,6 +40,9 @@ const (
 	// EventConsultFinished records a consult's report on its parent's ledger:
 	// objection counts by severity and the verdict.
 	EventConsultFinished EventKind = "consult.finished"
+	// EventReviewStarted records a review session's start: the PR, its base
+	// and the head SHA the worktree was staged from.
+	EventReviewStarted EventKind = "review.started"
 )
 
 // EventActor is who caused the event. `unknown` exists for rows imported from a

@@ -140,7 +140,7 @@ field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 
 **Why this matters:** The session discoverer (`Discover`) builds sessions from live remote state — it can only know what the PTY runtime and mutagen report. Fields like `Branch`, `AgentName`, `WorktreePath`, and `WorkingDirectory` will often be empty in discovered sessions. Before this fix, discovery was silently overwriting the DB with empty strings on every scan cycle, causing restart to fail with "session has no working directory".
 
-**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `base_branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `backend`, `mutagen_sync_id`, `local_path`, `agent_name`, `agent_model`, `launch_model`, `launch_effort`, `agent_session_id`, `agent_session_path`, `agent_title`, `agent_ended`, `hook_state`, `hook_state_message`, `hook_state_source`, `watch_pr`, `role`, `issue_type`.
+**Fields protected by COALESCE:** `name`, `group_name`, `issue_key`, `branch`, `base_branch`, `repo_name`, `remote_host`, `worktree_path`, `working_directory`, `tmux_session`, `backend`, `mutagen_sync_id`, `local_path`, `agent_name`, `agent_model`, `launch_model`, `launch_effort`, `agent_session_id`, `agent_session_path`, `agent_title`, `agent_ended`, `hook_state`, `hook_state_message`, `hook_state_source`, `watch_pr`, `review_pr`, `role`, `issue_type`.
 
 **Fields always overwritten:** `status`, `updated_at`.
 

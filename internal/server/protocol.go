@@ -32,6 +32,9 @@ const (
 	// CodeConsultNeedsSmart refuses a consult when the smart tier has no
 	// installed agent; a consult never falls back to the worker tier.
 	CodeConsultNeedsSmart = "consult_needs_smart"
+	// CodeReviewExists refuses a review create while a live session already
+	// reviews that pull request.
+	CodeReviewExists = "review_exists"
 )
 
 type Request struct {

@@ -152,3 +152,14 @@ func TestSessionCreateConsultFlag(t *testing.T) {
 		t.Fatalf("params = %v, want consult true for t3", params)
 	}
 }
+
+func TestSessionCreateReviewFlag(t *testing.T) {
+	flags, _ := takeFlags([]string{"--review", "o/r#7", "--agent", "claude"})
+	params, err := sessionCreateParams(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["review"] != "o/r#7" || params["agent"] != "claude" {
+		t.Fatalf("params = %v, want review o/r#7", params)
+	}
+}

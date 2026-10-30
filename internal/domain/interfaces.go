@@ -20,6 +20,9 @@ type RepositoryManager interface {
 	SetupRemoteWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, branch string, baseBranch string) (Worktree, error)
 	SetupRemoteWorktreeFromBranch(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
 	SetupSharedWorkspace(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)
+	// SetupRemotePRWorktree makes <repo>@pr-<n> detached at the PR head and
+	// soft-reset to its merge base with origin/<base>, so the PR is staged.
+	SetupRemotePRWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, number int, base string) (Worktree, error)
 	// FindExistingWorktree returns the path to an already-registered healthy worktree
 	// without creating a new one. Used when the user explicitly attaches to an existing worktree.
 	FindExistingWorktree(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (Worktree, error)

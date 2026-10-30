@@ -228,13 +228,21 @@ func WriteTaskBrief(ctx context.Context, remote remotefile.Writer, dir, brief st
 }
 
 // designFirstPrompt appends skills.DesignFirstSuffix to a non-empty initial
-// prompt. Hidden roles, briefed children and autonomous sessions skip it: a
-// brief is the child's design, and the autonomous prompt carries its own.
+// prompt. Hidden roles, briefed children, autonomous sessions and PR reviews
+// skip it: a brief is the child's design, the autonomous prompt carries its
+// own, and a review designs nothing.
 func designFirstPrompt(prompt string, cfg domain.SessionConfig) string {
-	if strings.TrimSpace(prompt) == "" || cfg.Role.Hidden() || cfg.Brief != "" || cfg.Mode == domain.SessionModeAutonomous {
+	if strings.TrimSpace(prompt) == "" || cfg.Role.Hidden() || cfg.Brief != "" || cfg.Mode == domain.SessionModeAutonomous || cfg.ReviewPR != "" {
 		return prompt
 	}
 	return joinPrompt(prompt, skills.DesignFirstSuffix)
+}
+
+// editsGitignore reports whether create adds the aiman ignore rule to the
+// worktree's .gitignore. A review worktree has it in info/exclude instead,
+// so the PR's own .gitignore shows no change of aiman's.
+func editsGitignore(cfg domain.SessionConfig) bool {
+	return cfg.ReviewPR == ""
 }
 
 func joinTaskSections(first, rest string) string {
@@ -383,6 +391,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		TriggerSource:  config.TriggerSource,
 		TriggerEventID: config.TriggerEventID,
 		BudgetTokens:   config.BudgetTokens,
+		ReviewPR:       config.ReviewPR,
 		CreatedAt:      time.Now(),
 	}
 
@@ -397,7 +406,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 
 	if !config.AdHoc {
 		// Ignore session-local task stub so it is not committed from the worktree.
-		_ = m.gitManager.EnsureAimanSessionFilesGitignored(ctx, sshMgr, session.WorktreePath)
+		if editsGitignore(config) {
+			_ = m.gitManager.EnsureAimanSessionFilesGitignored(ctx, sshMgr, session.WorktreePath)
+		}
 
 		// Step 6.1: Persist Session ID in git metadata (safe from git status/commits)
 		if _, err = sshMgr.Execute(ctx, fmt.Sprintf("id_file=$(git -C %q rev-parse --git-dir)/aiman-id && echo %q > \"$id_file\"", session.WorktreePath, session.ID)); err != nil {

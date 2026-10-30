@@ -32,6 +32,7 @@ import (
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/review"
 	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usage"
@@ -204,6 +205,9 @@ func runServe() error {
 	scanner := agent.NewScanner(localExec)
 	srv.SetAgentChoice(cfg.Agents, scanner.Installed)
 	srv.SetConsultDir(filepath.Join(dir, "consults"))
+	srv.SetReviewGitHub(&review.GHCLI{Run: review.ExecRun, RunInput: review.ExecRunInput})
+	srv.SetReviewWorktrees(gitManager)
+	srv.SetReviewDir(filepath.Join(dir, "reviews"))
 	verifyDeps := srv.VerifyDeps(verify.NewStore(filepath.Join(dir, "reviews")), func(command string) bool {
 		return scanner.Installed(ctx, command)
 	})

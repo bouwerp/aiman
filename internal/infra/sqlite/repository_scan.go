@@ -8,7 +8,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 )
 
-const sessionSelectCols = `id, name, group_name, parent_id, issue_key, branch, base_branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, backend, mutagen_sync_id, local_path, agent_name, agent_model, launch_model, launch_effort, tier, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, budget_tokens, watch_pr, role, issue_type, created_at, updated_at`
+const sessionSelectCols = `id, name, group_name, parent_id, issue_key, branch, base_branch, repo_name, remote_host, worktree_path, working_directory, tmux_session, backend, mutagen_sync_id, local_path, agent_name, agent_model, launch_model, launch_effort, tier, status, mode, trigger_source, trigger_event_id, autonomous_config_json, tunnels_json, aws_config_json, agent_session_id, agent_session_path, agent_title, agent_ended, hook_state, hook_state_message, hook_state_source, hook_state_seq, hook_state_at, budget_tokens, watch_pr, review_pr, role, issue_type, created_at, updated_at`
 
 type sessionRowScanner interface {
 	Scan(dest ...any) error
@@ -20,11 +20,11 @@ func scanSession(scanner sessionRowScanner) (domain.Session, error) {
 	// NULL, and scanning NULL into a string fails the entire query. In List that
 	// meant one such row returned zero sessions and an empty dashboard.
 	var statusStr, modeStr sql.NullString
-	var name, groupName, parentID, issueKey, branch, baseBranch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, backend, mutagenSyncID, localPath, agentName, agentModel, launchModel, launchEffort, tier, triggerSource, triggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, agentSessionID, agentSessionPath, agentTitle, agentEnded, hookState, hookStateMessage, hookStateSource, watchPR, role, issueType sql.NullString
+	var name, groupName, parentID, issueKey, branch, baseBranch, repoName, remoteHost, worktreePath, workingDir, tmuxSession, backend, mutagenSyncID, localPath, agentName, agentModel, launchModel, launchEffort, tier, triggerSource, triggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, agentSessionID, agentSessionPath, agentTitle, agentEnded, hookState, hookStateMessage, hookStateSource, watchPR, reviewPR, role, issueType sql.NullString
 	var hookStateSeq, budgetTokens sql.NullInt64
 	var createdAt, updatedAt, hookStateAt sql.NullTime
 	err := scanner.Scan(
-		&s.ID, &name, &groupName, &parentID, &issueKey, &branch, &baseBranch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &backend, &mutagenSyncID, &localPath, &agentName, &agentModel, &launchModel, &launchEffort, &tier, &statusStr, &modeStr, &triggerSource, &triggerEventID, &autonomousConfigJSON, &tunnelsJSON, &awsConfigJSON, &agentSessionID, &agentSessionPath, &agentTitle, &agentEnded, &hookState, &hookStateMessage, &hookStateSource, &hookStateSeq, &hookStateAt, &budgetTokens, &watchPR, &role, &issueType, &createdAt, &updatedAt)
+		&s.ID, &name, &groupName, &parentID, &issueKey, &branch, &baseBranch, &repoName, &remoteHost, &worktreePath, &workingDir, &tmuxSession, &backend, &mutagenSyncID, &localPath, &agentName, &agentModel, &launchModel, &launchEffort, &tier, &statusStr, &modeStr, &triggerSource, &triggerEventID, &autonomousConfigJSON, &tunnelsJSON, &awsConfigJSON, &agentSessionID, &agentSessionPath, &agentTitle, &agentEnded, &hookState, &hookStateMessage, &hookStateSource, &hookStateSeq, &hookStateAt, &budgetTokens, &watchPR, &reviewPR, &role, &issueType, &createdAt, &updatedAt)
 	if err != nil {
 		return s, err
 	}
@@ -33,6 +33,7 @@ func scanSession(scanner sessionRowScanner) (domain.Session, error) {
 	s.Group = groupName.String
 	s.ParentID = parentID.String
 	s.WatchPR = watchPR.String
+	s.ReviewPR = reviewPR.String
 	s.Role = domain.SessionRole(role.String)
 	s.IssueType = issueType.String
 	s.IssueKey = issueKey.String
