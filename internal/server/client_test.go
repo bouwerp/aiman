@@ -129,3 +129,10 @@ func TestCallDeadline(t *testing.T) {
 		t.Fatalf("session.list deadline %v, want 30s", got)
 	}
 }
+
+// review.post outlives its own 3 minute limit on the client side too.
+func TestCallDeadlineReviewPost(t *testing.T) {
+	if got := callDeadline("review.post"); got <= ReviewPostTimeout {
+		t.Fatalf("review.post deadline %v, want more than %v", got, ReviewPostTimeout)
+	}
+}

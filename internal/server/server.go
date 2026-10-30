@@ -389,10 +389,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleAgentsMovePrefix(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)
-	case "review.reveal":
-		return s.handleReviewReveal(ctx, req)
-	case "review.refresh":
-		return s.handleReviewRefresh(ctx, req)
+	case "review.reveal", "review.post", "review.refresh":
+		return s.dispatchReview(ctx, req)
 	case "handover.write":
 		return s.handleHandoverWrite(ctx, req)
 	case "handover.point":

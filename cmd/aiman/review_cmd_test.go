@@ -27,6 +27,9 @@ func TestReviewParams(t *testing.T) {
 		{"reveal named", []string{"reveal", "--session", "pr-7"}, "", "review.reveal", map[string]any{"session": "pr-7"}},
 		{"refresh", []string{"refresh"}, "s1", "review.refresh", map[string]any{"session": "s1"}},
 		{"refresh forced", []string{"refresh", "--force"}, "s1", "review.refresh", map[string]any{"session": "s1", "force": true}},
+		{"post", []string{"post", "review.md"}, "s1", "review.post", map[string]any{"session": "s1", "file": "review.md", "event": "COMMENT"}},
+		{"post request changes", []string{"post", "review.md", "--request-changes"}, "s1", "review.post", map[string]any{"session": "s1", "file": "review.md", "event": "REQUEST_CHANGES"}},
+		{"post flag first", []string{"post", "--request-changes", "--session", "s2", "r.md"}, "", "review.post", map[string]any{"session": "s2", "file": "r.md", "event": "REQUEST_CHANGES"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,7 +44,10 @@ func TestReviewParams(t *testing.T) {
 	}
 	for name, args := range map[string][]string{
 		"no verb":        nil,
-		"unknown verb":   {"post"},
+		"unknown verb":   {"approve"},
+		"post no file":   {"post"},
+		"post two files": {"post", "a.md", "b.md"},
+		"reveal request": {"reveal", "--request-changes", "--session", "s1"},
 		"no session":     {"reveal"},
 		"refresh single": {"refresh", "--single", "--session", "s1"},
 		"extra argument": {"reveal", "x", "--session", "s1"},

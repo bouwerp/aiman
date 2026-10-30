@@ -21,20 +21,26 @@ func runReview(args []string, getenv func(string) string) error {
 func reviewUsage() error {
 	fmt.Fprintf(os.Stderr, "Usage: aiman review reveal [--single] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review refresh [--force] [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman review post <file> [--request-changes] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
 	return errUsage
 }
 
 // reviewRPC maps the CLI arguments onto review.reveal or review.refresh.
-// Only reveal takes --single and only refresh takes --force.
+// Only reveal takes --single, only refresh takes --force, and only post takes
+// a file and --request-changes (the default event is COMMENT).
 func reviewRPC(args []string, getenv func(string) string) (string, map[string]any, error) {
-	if len(args) == 0 || (args[0] != "reveal" && args[0] != "refresh") {
+	if len(args) == 0 || (args[0] != "reveal" && args[0] != "refresh" && args[0] != "post") {
 		return "", nil, reviewUsage()
 	}
 	verb := args[0]
-	session, single, force := "", false, false
+	session, file, single, force, changes := "", "", false, false, false
 	for i := 1; i < len(args); i++ {
 		switch {
+		case args[i] == "--request-changes" && verb == "post":
+			changes = true
+		case verb == "post" && file == "" && !strings.HasPrefix(args[i], "-"):
+			file = args[i]
 		case args[i] == "--single" && verb == "reveal":
 			single = true
 		case args[i] == "--force" && verb == "refresh":
@@ -49,7 +55,7 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 	if session == "" {
 		session = strings.TrimSpace(getenv("AIMAN_ID"))
 	}
-	if session == "" {
+	if session == "" || (verb == "post") != (file != "") {
 		return "", nil, reviewUsage()
 	}
 	params := map[string]any{"session": session}
@@ -58,6 +64,13 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 	}
 	if force {
 		params["force"] = true
+	}
+	if verb == "post" {
+		params["file"] = file
+		params["event"] = "COMMENT"
+		if changes {
+			params["event"] = "REQUEST_CHANGES"
+		}
 	}
 	return "review." + verb, params, nil
 }

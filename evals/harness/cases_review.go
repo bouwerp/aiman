@@ -21,6 +21,12 @@ const (
 // startReview enables review mode with PR o/r#7 at reviewHead and creates the
 // review session, returning its id.
 func startReview(h *Harness) (string, []MetricResult) {
+	id, _, out := startReviewGH(h)
+	return id, out
+}
+
+// startReviewGH is startReview that also returns the fake GitHub.
+func startReviewGH(h *Harness) (string, *FakeGitHub, []MetricResult) {
 	gh := h.EnableReview()
 	ref, _ := review.ParseRef(reviewRef)
 	gh.SetPR(ref, review.PR{
@@ -29,7 +35,7 @@ func startReview(h *Harness) (string, []MetricResult) {
 	})
 	resp, err := h.Call("session.create", map[string]any{"review": reviewRef})
 	if err != nil {
-		return "", []MetricResult{score("review_created", false, err.Error())}
+		return "", gh, []MetricResult{score("review_created", false, err.Error())}
 	}
 	var res struct {
 		Session struct {
@@ -39,9 +45,9 @@ func startReview(h *Harness) (string, []MetricResult) {
 	}
 	raw, _ := json.Marshal(resp.Result)
 	if err := json.Unmarshal(raw, &res); err != nil || res.Session.ID == "" {
-		return "", []MetricResult{score("review_created", false, "create returned no session id")}
+		return "", gh, []MetricResult{score("review_created", false, "create returned no session id")}
 	}
-	return res.Session.ID, []MetricResult{score("review_created", res.Session.ReviewPR == reviewRef, "review_pr "+res.Session.ReviewPR)}
+	return res.Session.ID, gh, []MetricResult{score("review_created", res.Session.ReviewPR == reviewRef, "review_pr "+res.Session.ReviewPR)}
 }
 
 // reviewFilesMetrics checks the blind inputs serve wrote into the scratch

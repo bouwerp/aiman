@@ -62,6 +62,9 @@ func (s *Server) handleDesignPublish(ctx context.Context, req Request) Response 
 	key := strings.TrimSpace(p.Key)
 	if key == "" {
 		key = design.Key(sess.IssueKey, sess.Branch)
+		if sess.ReviewPR != "" {
+			key = reviewBriefKey(sess.ReviewPR)
+		}
 	}
 	res, err := s.designer.PublishBytes(ctx, md, gitDirOf(wd), repoBase(sess.RepoName), key)
 	if errors.Is(err, design.ErrInvalid) {
@@ -69,6 +72,11 @@ func (s *Server) handleDesignPublish(ctx context.Context, req Request) Response 
 	}
 	if err != nil {
 		return errResp(req.ID, CodePublishFailed, err.Error())
+	}
+	if sess.ReviewPR != "" {
+		if err := s.addReviewGate(sess.ID); err != nil {
+			return errResp(req.ID, CodeCreateFailed, err.Error())
+		}
 	}
 	accepted, rejected, deferred := design.CountTriage(string(md))
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventDesignPublished, map[string]any{

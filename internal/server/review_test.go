@@ -26,7 +26,8 @@ import (
 
 // fakeGitHub serves fixed PRs by number.
 type fakeGitHub struct {
-	prs map[int]review.PR
+	prs   map[int]review.PR
+	posts []review.Post
 }
 
 func (f *fakeGitHub) ListPRs(context.Context, string) ([]review.PR, error) { return nil, nil }
@@ -39,7 +40,10 @@ func (f *fakeGitHub) PR(_ context.Context, ref review.Ref) (review.PR, error) {
 	return pr, nil
 }
 
-func (f *fakeGitHub) PostReview(context.Context, review.Ref, review.Post) error { return nil }
+func (f *fakeGitHub) PostReview(_ context.Context, _ review.Ref, p review.Post) error {
+	f.posts = append(f.posts, p)
+	return nil
+}
 
 // fakePRWorktrees makes the PR worktree as a git repository under dir, or
 // fails with err.

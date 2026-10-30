@@ -28,6 +28,7 @@ const reviewFilesDir = ".aiman_review"
 const (
 	reviewBlindRef    = "review:blind"
 	reviewInformedRef = "review:informed"
+	reviewPostRef     = "review:post"
 )
 
 // reviewTodos are the to-dos every review session starts with, in order.
@@ -37,7 +38,7 @@ var reviewTodos = []domain.TodoItem{
 	{Text: "Verify findings"},
 	{Text: "Publish the brief"},
 	{Text: "Ask the three questions"},
-	{Text: "Post the review"},
+	{Text: "Post the review", Ref: reviewPostRef},
 }
 
 // ReviewWorktrees makes the detached, staged worktree of a pull request.

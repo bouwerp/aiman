@@ -37,6 +37,12 @@ const (
 	CodeReviewExists = "review_exists"
 	// CodeReviewNotReady refuses a reveal before the blind passes are done.
 	CodeReviewNotReady = "review_not_ready"
+	// CodeReviewIncomplete refuses a post while the review file lacks the
+	// operator's answers or a call on every finding.
+	CodeReviewIncomplete = "review_incomplete"
+	// CodeReviewHeadMoved refuses a post when the PR head is no longer the
+	// one the review was staged from.
+	CodeReviewHeadMoved = "review_head_moved"
 )
 
 type Request struct {

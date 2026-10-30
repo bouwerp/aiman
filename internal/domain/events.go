@@ -50,6 +50,10 @@ const (
 	// EventReviewRefreshed records a review restaged at a new PR head: from
 	// and to are the old and new head SHAs.
 	EventReviewRefreshed EventKind = "review.refreshed"
+	// EventReviewPosted records the one GitHub review posted for a review
+	// session: the event, comment counts per label and whether one agent
+	// reviewed alone.
+	EventReviewPosted EventKind = "review.posted"
 	// EventConsultAbandoned records on the parent's ledger a consult that
 	// ended without a usable report: the child and the to-do it was for.
 	EventConsultAbandoned EventKind = "consult.abandoned"

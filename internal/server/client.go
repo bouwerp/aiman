@@ -280,8 +280,11 @@ func (e *EventsConn) Close() error { return e.conn.Close() }
 // callDeadline is how long CallRaw waits for method's answer: 30s, or a
 // little past the server's own limit for design.publish.
 func callDeadline(method string) time.Duration {
-	if method == "design.publish" {
+	switch method {
+	case "design.publish":
 		return DesignPublishTimeout + 15*time.Second
+	case "review.post":
+		return ReviewPostTimeout + 15*time.Second
 	}
 	return 30 * time.Second
 }
