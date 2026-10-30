@@ -39,6 +39,7 @@ type Run struct {
 	SessionID string `json:"session_id"` // the worker
 	ChildID   string `json:"child_id,omitempty"`
 	Agent     string `json:"agent,omitempty"`
+	Preferred string `json:"preferred,omitempty"` // target agent on agent_switch
 	Reason    string `json:"reason"`
 	// LaterReasons are triggers that arrived while this run was active.
 	LaterReasons []string `json:"later_reasons,omitempty"`

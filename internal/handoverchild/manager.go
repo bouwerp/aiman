@@ -110,6 +110,7 @@ type Deps struct {
 type StartRequest struct {
 	Worker        domain.Session
 	Reason        string
+	Agent         string // preferred child agent; the switch target on agent_switch
 	Mechanical    []byte // the mechanical render just written to the worker
 	MechanicalSHA string // sha256 of Mechanical, for LastMechanicalSHA
 	Label         string // note title suffix, as handover.Input.Label
@@ -161,8 +162,9 @@ func (m *Manager) goBG(fn func(ctx context.Context)) {
 }
 
 // Start records a starting run and launches the child in the background. A
-// worker that already has an active run gets that run's id with started
-// false; the new reason is recorded on it.
+// worker that already has an active or uncleaned run gets that run's id with
+// started false; the new reason is recorded on it, so a stuck child cannot
+// stack another.
 func (m *Manager) Start(_ context.Context, req StartRequest) (runID string, started bool, err error) {
 	w := req.Worker
 	if strings.TrimSpace(w.ID) == "" {
@@ -174,25 +176,22 @@ func (m *Manager) Start(_ context.Context, req StartRequest) (runID string, star
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if id, ok := m.active[w.ID]; ok {
-		r, err := m.d.Store.Get(id)
-		if err != nil {
-			return "", false, err
+		id, err := m.joinLocked(id, req, w)
+		return id, false, err
+	}
+	if r, ok := m.uncleanedLocked(w.ID); ok {
+		id, err := m.joinLocked(r.ID, req, w)
+		if err == nil && !r.Status.Active() {
+			m.goBG(func(ctx context.Context) { m.cleanup(ctx, r.ID) })
 		}
-		r.LaterReasons = append(r.LaterReasons, req.Reason)
-		// The newest render is the fallback if this child fails.
-		if len(req.Mechanical) > 0 {
-			r.Mechanical, r.MechanicalSHA = string(req.Mechanical), req.MechanicalSHA
-			r.Label, r.Abstract = req.Label, req.Abstract
-			r.Group, r.IssueKey, r.Repo = w.Group, w.IssueKey, w.RepoName
-		}
-		m.saveLocked(r)
-		return id, false, nil
+		return id, false, err
 	}
 	id := uuid.NewString()
 	r := Run{
 		ID:            id,
 		SessionID:     w.ID,
 		Reason:        req.Reason,
+		Preferred:     strings.TrimSpace(req.Agent),
 		Dir:           filepath.Join(m.d.BaseDir, id),
 		Transcript:    w.AgentSessionPath,
 		Worktree:      w.WorktreePath,
@@ -212,6 +211,42 @@ func (m *Manager) Start(_ context.Context, req StartRequest) (runID string, star
 	m.active[w.ID] = id
 	m.goBG(func(ctx context.Context) { m.launch(ctx, r, w) })
 	return id, true, nil
+}
+
+// joinLocked records a later trigger on an existing run. The caller holds m.mu.
+func (m *Manager) joinLocked(id string, req StartRequest, w domain.Session) (string, error) {
+	r, err := m.d.Store.Get(id)
+	if err != nil {
+		return "", err
+	}
+	r.LaterReasons = append(r.LaterReasons, req.Reason)
+	// The newest render is the fallback if this child fails.
+	if len(req.Mechanical) > 0 {
+		r.Mechanical, r.MechanicalSHA = string(req.Mechanical), req.MechanicalSHA
+		r.Label, r.Abstract = req.Label, req.Abstract
+		r.Group, r.IssueKey, r.Repo = w.Group, w.IssueKey, w.RepoName
+	}
+	m.saveLocked(r)
+	return id, nil
+}
+
+// uncleanedLocked is the worker's newest run that has not finished cleanup.
+func (m *Manager) uncleanedLocked(workerID string) (Run, bool) {
+	all, err := m.d.Store.List()
+	if err != nil {
+		return Run{}, false
+	}
+	var found Run
+	ok := false
+	for _, r := range all {
+		if r.SessionID != workerID || r.CleanedUp {
+			continue
+		}
+		if !ok || r.StartedAt.After(found.StartedAt) {
+			found, ok = r, true
+		}
+	}
+	return found, ok
 }
 
 // Active reports whether the worker has a starting or running child.
@@ -273,6 +308,7 @@ func (m *Manager) Resume(context.Context) {
 		return
 	}
 	m.prune(all)
+	m.dropStaleChildren(all)
 	for _, r := range all {
 		switch {
 		case r.Status == StatusRunning:
@@ -385,7 +421,7 @@ func (m *Manager) launch(ctx context.Context, r Run, worker domain.Session) {
 }
 
 func (m *Manager) prepare(ctx context.Context, r Run, worker domain.Session) (domain.Session, config.PreferredAgent, error) {
-	pick := m.pickAgent(worker.AgentName)
+	pick := m.pickAgent(worker.AgentName, r.Preferred)
 	agentName := pick.Agent
 	if agentName == "" {
 		return domain.Session{}, config.PreferredAgent{}, errors.New("no handover agent is installed")
@@ -432,21 +468,87 @@ func (m *Manager) prepare(ctx context.Context, r Run, worker domain.Session) (do
 }
 
 // pickAgent is the first installed candidate for the worker's agent, with the
-// model and effort its tier entry names.
-func (m *Manager) pickAgent(workerAgent string) config.PreferredAgent {
+// model and effort its tier entry names. preferred, when set, is the switch
+// target and wins if it is installed, so a usage-limit switch does not launch
+// the exhausted source.
+func (m *Manager) pickAgent(workerAgent string, preferred ...string) config.PreferredAgent {
 	var entries []config.PreferredAgent
 	if m.d.Candidates != nil {
 		entries = m.d.Candidates(workerAgent)
 	} else if workerAgent != "" {
 		entries = []config.PreferredAgent{{Agent: workerAgent}}
 	}
-	for _, entry := range entries {
-		if name := entry.Command(); name != "" && m.d.Installed != nil && m.d.Installed(name) {
-			entry.Agent = name
-			return entry
+	want := ""
+	if len(preferred) > 0 {
+		want = agentCommand(preferred[0])
+	}
+	source := agentCommand(workerAgent)
+	if want != "" {
+		if pick := m.firstInstalledMatching(entries, want); pick.Agent != "" {
+			return pick
+		}
+		if m.agentInstalled(want) {
+			return config.PreferredAgent{Agent: want}
+		}
+		var rest []config.PreferredAgent
+		for _, e := range entries {
+			if agentCommand(e.Command()) == source {
+				continue
+			}
+			rest = append(rest, e)
+		}
+		if pick := m.firstInstalled(rest); pick.Agent != "" {
+			return pick
 		}
 	}
+	return m.firstInstalled(entries)
+}
+
+func (m *Manager) firstInstalledMatching(entries []config.PreferredAgent, command string) config.PreferredAgent {
+	var match []config.PreferredAgent
+	for _, e := range entries {
+		if agentCommand(e.Command()) == command {
+			match = append(match, e)
+		}
+	}
+	return m.firstInstalled(match)
+}
+
+func (m *Manager) firstInstalled(entries []config.PreferredAgent) config.PreferredAgent {
+	for _, e := range entries {
+		name := e.Command()
+		if name == "" || !m.agentInstalled(name) {
+			continue
+		}
+		e.Agent = agentCommand(name)
+		if e.Agent == "" {
+			e.Agent = name
+		}
+		return e
+	}
 	return config.PreferredAgent{}
+}
+
+func (m *Manager) agentInstalled(name string) bool {
+	if m.d.Installed == nil {
+		return false
+	}
+	cmd := agentCommand(name)
+	if cmd != "" && m.d.Installed(cmd) {
+		return true
+	}
+	return name != cmd && m.d.Installed(name)
+}
+
+func agentCommand(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if known, ok := agent.FindKnown(name); ok {
+		return known.Command
+	}
+	return name
 }
 
 // watch follows a running child until it finishes.
@@ -742,15 +844,61 @@ func (m *Manager) prune(all []Run) {
 	}
 }
 
+// dropStaleChildren retires leftover handover children of workers whose
+// newest run is already cleaned up. Stacked children from earlier runs stay
+// listed until this runs, at Resume and at each cleanup.
+func (m *Manager) dropStaleChildren(all []Run) {
+	newest := map[string]Run{}
+	for _, r := range all {
+		if _, ok := newest[r.SessionID]; !ok {
+			newest[r.SessionID] = r
+		}
+	}
+	for _, r := range newest {
+		if r.Status.Active() || !r.CleanedUp {
+			continue
+		}
+		m.dropExtraChildren(m.bg, r.SessionID, "")
+	}
+}
+
+// dropExtraChildren stops and forgets handover-role children of workerID
+// other than keep. Consult-style: Stop then Forget with no waitGone, so a
+// stuck sibling cannot hold the others.
+func (m *Manager) dropExtraChildren(ctx context.Context, workerID, keep string) {
+	lister, ok := m.d.Sessions.(ChildLister)
+	if !ok || workerID == "" {
+		return
+	}
+	kids, err := lister.Children(ctx, workerID)
+	if err != nil {
+		log.Printf("handoverchild: list children of %s: %v", workerID, err)
+		return
+	}
+	for _, k := range kids {
+		if k.Role != domain.SessionRoleHandover || k.ID == "" || k.ID == keep {
+			continue
+		}
+		if err := m.d.Terminal.Stop(ctx, k); err != nil {
+			log.Printf("handoverchild: stop child %s: %v", k.ID, err)
+		}
+		if err := m.d.Sessions.Forget(ctx, k.ID); err != nil {
+			log.Printf("handoverchild: forget child %s: %v", k.ID, err)
+		}
+	}
+}
+
 // cleanup stops the child, waits for its process to go, forgets it and
 // removes the scratch directory. If the process outlives cleanupWait, or the
 // registry cannot say whether the child exists, the run stays uncleaned so
-// Resume retries.
+// Resume retries. Extra handover siblings of the same worker are retired
+// first so a stuck child cannot leave a stack behind.
 func (m *Manager) cleanup(ctx context.Context, id string) {
 	r, err := m.d.Store.Get(id)
 	if err != nil {
 		return
 	}
+	m.dropExtraChildren(ctx, r.SessionID, r.ChildID)
 	if r.ChildID != "" {
 		child, present, err := m.session(ctx, r.ChildID)
 		if err != nil {

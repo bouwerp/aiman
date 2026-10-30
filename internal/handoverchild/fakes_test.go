@@ -116,6 +116,7 @@ type fakeTerminal struct {
 	mu      sync.Mutex
 	dead    map[string]bool
 	stopped []string
+	sticky  bool // Stop records the call but leaves the process alive
 }
 
 func (f *fakeTerminal) Alive(_ context.Context, s domain.Session) bool {
@@ -128,7 +129,9 @@ func (f *fakeTerminal) Stop(_ context.Context, s domain.Session) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, s.ID)
-	f.dead[s.ID] = true
+	if !f.sticky {
+		f.dead[s.ID] = true
+	}
 	return nil
 }
 

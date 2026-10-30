@@ -93,6 +93,7 @@ func handoverNoteID(sessionID string) string {
 type handoverCall struct {
 	Session string `json:"session"`
 	Reason  string `json:"reason"`
+	Agent   string `json:"agent,omitempty"`
 }
 
 func decodeHandoverCall(req Request) (handoverCall, *Response) {
@@ -151,7 +152,7 @@ func (s *Server) handleHandoverWrite(ctx context.Context, req Request) Response 
 	// and git diff, and an unknown session has already returned.
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	res, err := s.writeHandover(ctx, sess, p.Reason)
+	res, err := s.writeHandover(ctx, sess, p.Reason, p.Agent)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
@@ -267,7 +268,7 @@ func (s *Server) noteForgetHandover(ctx context.Context, sess domain.Session) {
 // the active one), and the run enqueues the memory job and stores the final
 // note when it ends. A render whose sha256 matches the run that last rewrote
 // the file leaves that rewrite in place and starts nothing.
-func (s *Server) writeHandover(ctx context.Context, sess domain.Session, reason string) (handoverResult, error) {
+func (s *Server) writeHandover(ctx context.Context, sess domain.Session, reason string, preferred ...string) (handoverResult, error) {
 	if sess.Role.Hidden() {
 		return handoverResult{}, nil
 	}
@@ -295,7 +296,11 @@ func (s *Server) writeHandover(ctx context.Context, sess domain.Session, reason 
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventHandoverWritten, map[string]any{
 		"path": path, "written": changed, "reason": reason,
 	})
-	child := s.startHandoverChild(ctx, sess, reason, in, rendered, sha)
+	agent := ""
+	if len(preferred) > 0 {
+		agent = preferred[0]
+	}
+	child := s.startHandoverChild(ctx, sess, reason, in, rendered, sha, agent)
 	if child == "" && changed && s.memoryJobs != nil {
 		if err := s.memoryJobs.Enqueue(ctx, memoryjob.Job{
 			SessionID: sess.ID,
@@ -332,7 +337,7 @@ func (s *Server) childRewroteSameState(sessionID, sha, path string) bool {
 // startHandoverChild starts a handover child, or joins the active one, and
 // returns its run id. A refused start returns "" so the caller enqueues the
 // memory job itself.
-func (s *Server) startHandoverChild(ctx context.Context, sess domain.Session, reason string, in handover.Input, rendered []byte, sha string) string {
+func (s *Server) startHandoverChild(ctx context.Context, sess domain.Session, reason string, in handover.Input, rendered []byte, sha, preferred string) string {
 	// A terminal with no agent (a shell an agent opened with pty create) has
 	// no conversation to read; a child would spend an agent run on nothing.
 	if s.handovers == nil || strings.TrimSpace(sess.AgentName) == "" {
@@ -341,6 +346,7 @@ func (s *Server) startHandoverChild(ctx context.Context, sess domain.Session, re
 	run, _, err := s.handovers.Start(ctx, handoverchild.StartRequest{
 		Worker:        sess,
 		Reason:        reason,
+		Agent:         preferred,
 		Mechanical:    rendered,
 		MechanicalSHA: sha,
 		Label:         in.Label,

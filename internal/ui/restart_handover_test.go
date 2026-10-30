@@ -16,6 +16,19 @@ func TestRestartHandoverReason(t *testing.T) {
 	}
 }
 
+func TestRestartHandoverAgent(t *testing.T) {
+	target := &domain.Agent{Name: "Grok Build CLI", Command: "grok"}
+	if got := restartHandoverAgent(domain.SessionConfig{FreshAgent: true, Agent: target}); got != "grok" {
+		t.Fatalf("switch: got %q, want grok", got)
+	}
+	if got := restartHandoverAgent(domain.SessionConfig{Agent: target}); got != "" {
+		t.Fatalf("same-agent restart: got %q, want empty", got)
+	}
+	if got := restartHandoverAgent(domain.SessionConfig{FreshAgent: true}); got != "" {
+		t.Fatalf("switch with no agent: got %q, want empty", got)
+	}
+}
+
 func TestRestartPromptAddsHandover(t *testing.T) {
 	prepared := "Read .aiman_task.md and continue."
 	cases := []struct {

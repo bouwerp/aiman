@@ -233,11 +233,22 @@ func TestResumeStartingCleansOrphanChild(t *testing.T) {
 	if done.ChildID != "child-orphan" || done.Status != StatusFailed {
 		t.Fatalf("run %+v", done)
 	}
-	if got := r.sessions.forgottenIDs(); len(got) != 1 || got[0] != "child-orphan" {
-		t.Fatalf("forgotten %v", got)
+	got := map[string]bool{}
+	for _, id := range r.sessions.forgottenIDs() {
+		got[id] = true
 	}
-	if got := r.term.stoppedIDs(); len(got) != 1 || got[0] != "child-orphan" {
-		t.Fatalf("stopped %v", got)
+	if !got["child-orphan"] || !got["child-other"] {
+		t.Fatalf("forgotten %v, want child-orphan and leftover child-other", r.sessions.forgottenIDs())
+	}
+	if got["worker-child"] {
+		t.Fatalf("forgot a non-handover child %v", r.sessions.forgottenIDs())
+	}
+	stopped := map[string]bool{}
+	for _, id := range r.term.stoppedIDs() {
+		stopped[id] = true
+	}
+	if !stopped["child-orphan"] || !stopped["child-other"] {
+		t.Fatalf("stopped %v", r.term.stoppedIDs())
 	}
 }
 

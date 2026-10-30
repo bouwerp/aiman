@@ -16,6 +16,16 @@ func restartHandoverReason(cfg domain.SessionConfig) string {
 	return "restart"
 }
 
+// restartHandoverAgent is the switch target. Serve launches the handover
+// child as this agent so a usage-limit switch does not reuse the exhausted
+// source.
+func restartHandoverAgent(cfg domain.SessionConfig) string {
+	if !cfg.FreshAgent || cfg.Agent == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.Agent.Command)
+}
+
 // restartPrompt appends the handover instruction only when serve left that
 // file. A summary or a missing handoff keeps the prepared prompt. One space
 // joins the parts because send-keys submits on newline.

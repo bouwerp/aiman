@@ -39,6 +39,22 @@ func TestWriteHandoverOnRemoteDecodesAndDoesNotDelete(t *testing.T) {
 	if params["session"] != "s1" || params["reason"] != "restart" {
 		t.Fatalf("params = %#v", params)
 	}
+	if _, ok := params["agent"]; ok {
+		t.Fatalf("empty agent must be omitted: %#v", params)
+	}
+}
+
+func TestWriteHandoverOnRemotePassesTargetAgent(t *testing.T) {
+	remote := &restartRemote{rpcOut: map[string]string{
+		"handover.write": `{"result":{"type":"handover","path":"/w/.aiman_handover.md","written":true,"exists":true}}`,
+	}}
+	if _, err := WriteHandoverOnRemote(context.Background(), remote, "s1", "agent_switch", "grok"); err != nil {
+		t.Fatal(err)
+	}
+	params := decodeRPCParams(t, commandContaining(t, remote.commands, "aiman rpc handover.write"))
+	if params["session"] != "s1" || params["reason"] != "agent_switch" || params["agent"] != "grok" {
+		t.Fatalf("params = %#v", params)
+	}
 }
 
 func TestPrepareRestartHandoffUsesServeHandover(t *testing.T) {
@@ -186,6 +202,21 @@ func TestPrepareRestartHandoffPassesReason(t *testing.T) {
 	}
 	params := decodeRPCParams(t, commandContaining(t, remote.commands, "aiman rpc handover.write"))
 	if params["reason"] != "agent_switch" || params["session"] != "s1" {
+		t.Fatalf("params = %#v", params)
+	}
+}
+
+func TestPrepareRestartHandoffPassesTargetAgent(t *testing.T) {
+	remote := &restartRemote{rpcOut: map[string]string{
+		"handover.write": `{"result":{"path":"/w/.aiman_handover.md","written":true,"exists":true}}`,
+	}}
+	s := domain.Session{ID: "s1", TerminalName: "sess"}
+	mode, _ := PrepareRestartHandoff(context.Background(), remote, s, "/w", "agent_switch", time.Second, "grok")
+	if mode != HandoffHandover {
+		t.Fatalf("mode = %v", mode)
+	}
+	params := decodeRPCParams(t, commandContaining(t, remote.commands, "aiman rpc handover.write"))
+	if params["reason"] != "agent_switch" || params["agent"] != "grok" {
 		t.Fatalf("params = %#v", params)
 	}
 }

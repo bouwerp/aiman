@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -33,11 +34,15 @@ const (
 // WriteHandoverOnRemote asks serve to write the handover. It does not remove
 // the session summary; PrepareRestartHandoff does that only after it accepts
 // the file.
-func WriteHandoverOnRemote(ctx context.Context, remote TerminalExecutor, sessionID, reason string) (HandoverResult, error) {
-	raw, err := ServeRPC(ctx, remote, "handover.write", map[string]string{
+func WriteHandoverOnRemote(ctx context.Context, remote TerminalExecutor, sessionID, reason string, agent ...string) (HandoverResult, error) {
+	params := map[string]string{
 		"session": sessionID,
 		"reason":  reason,
-	})
+	}
+	if len(agent) > 0 && strings.TrimSpace(agent[0]) != "" {
+		params["agent"] = strings.TrimSpace(agent[0])
+	}
+	raw, err := ServeRPC(ctx, remote, "handover.write", params)
 	if err != nil {
 		return HandoverResult{}, err
 	}
@@ -51,8 +56,8 @@ func WriteHandoverOnRemote(ctx context.Context, remote TerminalExecutor, session
 // PrepareRestartHandoff prefers a serve handover. When that file is not
 // available it asks the running agent for a session summary, bounded by
 // summaryTimeout, and returns that attempt's note. Restart is not failed.
-func PrepareRestartHandoff(ctx context.Context, remote domain.RemoteExecutor, s domain.Session, workingDir, reason string, summaryTimeout time.Duration) (HandoffMode, string) {
-	res, err := WriteHandoverOnRemote(ctx, remote, s.ID, reason)
+func PrepareRestartHandoff(ctx context.Context, remote domain.RemoteExecutor, s domain.Session, workingDir, reason string, summaryTimeout time.Duration, agent ...string) (HandoffMode, string) {
+	res, err := WriteHandoverOnRemote(ctx, remote, s.ID, reason, agent...)
 	if err == nil && res.Exists {
 		return HandoffHandover, removeStaleSessionSummary(ctx, remote, workingDir)
 	}

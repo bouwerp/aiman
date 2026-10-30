@@ -7722,7 +7722,7 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		m.sendStatusFor(placeholderID, "Writing handover...")
 		logf("step1: writing handover")
 		summaryCtx, summaryCancel := context.WithTimeout(ctx, 90*time.Second)
-		mode, note := usecase.PrepareRestartHandoff(summaryCtx, mgr, *s, workingDir, restartHandoverReason(sessionCfg), 90*time.Second)
+		mode, note := usecase.PrepareRestartHandoff(summaryCtx, mgr, *s, workingDir, restartHandoverReason(sessionCfg), 90*time.Second, restartHandoverAgent(sessionCfg))
 		summaryCancel()
 		if note != "" {
 			logf("step1: %s", note)
