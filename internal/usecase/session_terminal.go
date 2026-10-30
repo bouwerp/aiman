@@ -78,6 +78,9 @@ func ApplyKiloAllowEnv(ctx context.Context, remote TerminalExecutor, agentCmd st
 // CreatePTYSession launches a session inside the remote serve daemon's PTY
 // runtime. Params travel as a JSON file to keep secrets out of argv.
 func CreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec) error {
+	if err := domain.CheckLaunchDir(spec.Dir); err != nil {
+		return err
+	}
 	params := map[string]any{
 		"id":      spec.ID,
 		"name":    spec.Name,
@@ -499,6 +502,10 @@ func KillPTYSession(ctx context.Context, remote TerminalExecutor, id string) err
 // fails with "already exists" and leaves a dead pane. A stale "already exists"
 // after get reports gone is killed once more and retried.
 func RecreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec) error {
+	// Refuse before the old process is stopped, not only at create.
+	if err := domain.CheckLaunchDir(spec.Dir); err != nil {
+		return err
+	}
 	if err := waitPTYGone(ctx, remote, spec.ID); err != nil {
 		return err
 	}

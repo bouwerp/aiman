@@ -358,3 +358,16 @@ func TestBeforePRSkipsReview(t *testing.T) {
 		t.Fatalf("gate recorded %+v", events)
 	}
 }
+
+// GitHub names are case-insensitive: O/R#7 is the same review as o/r#7.
+func TestCreateReviewExistsIgnoresCase(t *testing.T) {
+	r := newReviewRig(t)
+	createReview(t, r.srv)
+	resp := rpc(t, r.srv, "", "session.create", map[string]any{"review": "O/R#7"})
+	if resp.Error == nil || resp.Error.Code != CodeReviewExists {
+		t.Fatalf("create O/R#7: %+v", resp.Error)
+	}
+	if got := reviewLockKey(review.Ref{Owner: "O", Repo: "R", Number: 7}); got != "o/r#7" {
+		t.Fatalf("lock key %q", got)
+	}
+}

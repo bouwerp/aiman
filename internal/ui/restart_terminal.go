@@ -52,6 +52,9 @@ func restartTerminal(ctx context.Context, remote usecase.TerminalExecutor, s *do
 	if err := legacyRestartBlocked(*s, spec.LegacyStopped); err != nil {
 		return err
 	}
+	if err := domain.CheckLaunchDir(spec.WorkingDir); err != nil {
+		return err
+	}
 	root := spec.WorktreeRoot
 	if s.ReviewPR != "" {
 		// A review's worktree is the untrusted PR checkout; only its scratch

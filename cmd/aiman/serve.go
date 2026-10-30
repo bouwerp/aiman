@@ -93,6 +93,7 @@ func runServe() error {
 	flow.SetRepoBootstrap(cfg.Repos)
 	flow.SetRoles(cfg.Roles)
 	flow.SetUpdateGuards(cfg.AgentUpdateGuards())
+	flow.SetSessionStore(db)
 
 	dir, err := config.GetDir()
 	if err != nil {

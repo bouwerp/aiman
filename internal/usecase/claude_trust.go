@@ -7,6 +7,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/bouwerp/aiman/internal/domain"
 )
 
 // workspaceTrustTimeout bounds pre-launch trust. Claude's ~/.claude.json write
@@ -127,7 +129,14 @@ func TrustWorkspacePaths(ctx context.Context, remote workspaceTrustRemote, worki
 	ctx, cancel := context.WithTimeout(ctx, workspaceTrustTimeout)
 	defer cancel()
 
-	paths := uniqueNonEmpty([]string{workingDir, worktreePath})
+	var paths []string
+	for _, p := range uniqueNonEmpty([]string{workingDir, worktreePath}) {
+		// A pull request checkout's project config is untrusted: it is never
+		// trusted, whichever launch path asks.
+		if !domain.InPRWorktree(p) {
+			paths = append(paths, p)
+		}
+	}
 	for _, p := range paths {
 		_, _ = remote.Execute(ctx, fmt.Sprintf("git config --global --add safe.directory %q", p))
 	}

@@ -238,3 +238,29 @@ func TestStableSessionIDIsDeterministicAndDistinct(t *testing.T) {
 		t.Error("empty id")
 	}
 }
+
+// A review's PR checkout is never offered as a place to launch an agent,
+// whether or not its review still runs.
+func TestPRWorktreesAreNeverOrphans(t *testing.T) {
+	remote := &batchRemote{
+		wtRecords: []domain.WorktreeRecord{
+			{RepoPath: "/repos/app", WorktreePath: "/repos/app@pr-7", State: domain.WorktreeOK, AimanID: "review-id"},
+			{RepoPath: "/repos/app", WorktreePath: "/repos/app@pr-8", State: domain.WorktreeOK},
+			{RepoPath: "/repos/app", WorktreePath: "/repos/app@feat", State: domain.WorktreeOK},
+		},
+	}
+	d := NewSessionDiscoverer(remote, &recordingSyncEngine{})
+	orphans, err := d.OrphanWorktreeSessions(context.Background(), "regent0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovered, err := d.Discover(context.Background(), "regent0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, list := range map[string][]domain.Session{"orphans": orphans, "discover": discovered} {
+		if len(list) != 1 || list[0].WorktreePath != "/repos/app@feat" {
+			t.Errorf("%s = %+v, want only /repos/app@feat", name, list)
+		}
+	}
+}

@@ -5306,6 +5306,9 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	if msg.String() == "c" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
+			if s.ReviewPR != "" {
+				return m, m.showToast(reviewChangeDirRefusal, true, 5*time.Second), true
+			}
 			if remote, ok := resolveRemote(m.cfg, s); ok {
 				m.selectedRemote = remote
 				m.sessionCfg.RemoteHost = remote.Host
@@ -7754,10 +7757,20 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 	}
 }
 
+// reviewChangeDirRefusal is the toast for c on a review session. Its agent
+// runs in an aiman-owned scratch directory and must never run under the PR
+// checkout.
+const reviewChangeDirRefusal = "⚠️  review sessions run in their own directory; c does not apply"
+
 func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y":
+			if m.changingDirSession != nil && m.changingDirSession.ReviewPR != "" {
+				m.state = viewStateMain
+				m.changingDirSession = nil
+				return m, m.showToast(reviewChangeDirRefusal, true, 5*time.Second)
+			}
 			// We need to update the session's WorkingDirectory
 			m.changingDirSession.WorkingDirectory = m.sessionCfg.Directory
 			if !strings.HasPrefix(m.changingDirSession.WorkingDirectory, m.changingDirSession.WorktreePath) {

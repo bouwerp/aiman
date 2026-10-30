@@ -155,3 +155,17 @@ func TestRestartReviewNeverTrustsPRWorktree(t *testing.T) {
 		t.Fatalf("restart touched the PR worktree:\n%s", got)
 	}
 }
+
+// A restart whose working directory lies in a PR checkout (a discovered
+// orphan, or a changed directory) runs nothing at all.
+func TestRestartRefusesPRWorktreeDir(t *testing.T) {
+	remote := &recordingTerminal{}
+	s := &domain.Session{ID: "sess-4", TerminalName: "app@pr-7", Backend: domain.BackendPTY, WorkingDirectory: "/w/app@pr-7"}
+	err := restartTerminal(context.Background(), remote, s, restartTerminalSpec{WorkingDir: s.WorkingDirectory, AgentCmd: "claude"})
+	if !errors.Is(err, domain.ErrPRWorktreeLaunch) {
+		t.Fatalf("err %v, want ErrPRWorktreeLaunch", err)
+	}
+	if got := remote.all(); got != "" {
+		t.Fatalf("ran:\n%s", got)
+	}
+}

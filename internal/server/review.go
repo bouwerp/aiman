@@ -76,6 +76,12 @@ func (s *Server) reviewBase() string {
 	return filepath.Join(home, config.DirName, "pr-reviews")
 }
 
+// reviewLockKey is ref lower-cased: GitHub owner and repository names are
+// case-insensitive, so O/R#7 and o/r#7 are one review.
+func reviewLockKey(ref review.Ref) string {
+	return strings.ToLower(ref.String())
+}
+
 // lockReview serialises review creates of one PR, so the live-review check
 // and the save of the new row cannot interleave with another create's.
 func (s *Server) lockReview(ref string) func() {
@@ -134,7 +140,7 @@ func (s *Server) handleReview(ctx context.Context, req Request, p createParams, 
 	if s.reviewGH == nil || s.reviewWT == nil || s.create == nil || s.reviewBase() == "" {
 		return errResp(req.ID, CodeCreateFailed, "review not configured")
 	}
-	defer s.lockReview(ref.String())()
+	defer s.lockReview(reviewLockKey(ref))()
 	// Read under the lock, so a create that saved meanwhile is seen.
 	existing, err := s.loadSessions(ctx)
 	if err != nil {
@@ -307,10 +313,11 @@ func (s *Server) removeReviewFiles(id string) {
 	}
 }
 
-// liveReview finds a session reviewing ref that has not ended.
+// liveReview finds a session reviewing ref, in any letter case, that has not
+// ended.
 func liveReview(existing []domain.Session, ref string) (domain.Session, bool) {
 	for _, sess := range existing {
-		if sess.ReviewPR == ref && liveForUpdate(sess) {
+		if strings.EqualFold(sess.ReviewPR, ref) && liveForUpdate(sess) {
 			return sess, true
 		}
 	}

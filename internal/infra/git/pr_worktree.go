@@ -28,10 +28,22 @@ func (m *Manager) SetupRemotePRWorktree(ctx context.Context, remote domain.Remot
 		return domain.Worktree{}, errors.New("remote root not configured")
 	}
 	repoPath := computeMainRepoPath(root, repo.Name)
-	if err := checkOrigin(ctx, remote, repoPath, repo.Name); err != nil {
-		return domain.Worktree{}, err
+	// Before ensureHealthyRepo fetches anything, refuse a clone of another
+	// repository. A clone whose origin cannot be read yet is left to its
+	// recovery, and checked strictly once that is done.
+	if origin, err := readOrigin(ctx, remote, repoPath); err == nil {
+		if err := matchOrigin(origin, repoPath, repo.Name); err != nil {
+			return domain.Worktree{}, err
+		}
 	}
 	if err := ensureHealthyRepo(ctx, remote, repoPath, repo.URL); err != nil {
+		return domain.Worktree{}, err
+	}
+	origin, err := readOrigin(ctx, remote, repoPath)
+	if err != nil {
+		return domain.Worktree{}, fmt.Errorf("read the origin of %s: %w", repoPath, err)
+	}
+	if err := matchOrigin(origin, repoPath, repo.Name); err != nil {
 		return domain.Worktree{}, err
 	}
 	dir, err := scopedWorktreeDir(repo.Name, fmt.Sprintf("pr-%d", number))
@@ -58,40 +70,63 @@ func (m *Manager) SetupRemotePRWorktree(ctx context.Context, remote domain.Remot
 	return domain.Worktree{Path: resolved, Base: base}, nil
 }
 
-// checkOrigin refuses a main clone whose origin is not slug, before anything
-// is fetched from it: a PR number means nothing in another repository.
-func checkOrigin(ctx context.Context, remote domain.RemoteExecutor, repoPath, slug string) error {
-	out, _ := remote.Execute(ctx, "git -C "+shellQuote(repoPath)+" remote get-url origin")
-	origin := strings.TrimSpace(out)
+// readOrigin returns the clone's configured origin URL, as written in its
+// config rather than after url.<base>.insteadOf rewriting.
+func readOrigin(ctx context.Context, remote domain.RemoteExecutor, repoPath string) (string, error) {
+	out, err := remote.Execute(ctx, "git -C "+shellQuote(repoPath)+" config --get remote.origin.url")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// matchOrigin refuses an origin that is not github.com/<slug>: a PR number
+// means nothing in another repository.
+func matchOrigin(origin, repoPath, slug string) error {
 	if !originNamesRepo(origin, slug) {
-		return fmt.Errorf("%w: the clone at %s has origin %q, not %s", domain.ErrOriginMismatch, repoPath, origin, slug)
+		return fmt.Errorf("%w: the clone at %s has origin %q, not github.com/%s", domain.ErrOriginMismatch, repoPath, origin, slug)
 	}
 	return nil
 }
 
-// originNamesRepo reports whether a git remote URL (https, ssh:// or
-// scp-like git@host:owner/repo) names owner/repo, ignoring case, a .git
-// suffix and a trailing slash.
+// originNamesRepo reports whether a git remote URL is github.com/<slug>:
+// https or ssh:// (optional user and port) or scp-like git@github.com:owner/repo,
+// ignoring case, a .git suffix and a trailing slash. Any other host, a local
+// path or a file URL is not.
 func originNamesRepo(origin, slug string) bool {
-	origin = strings.ToLower(strings.TrimSpace(origin))
-	if origin == "" {
+	host, path, ok := splitRemoteURL(strings.ToLower(strings.TrimSpace(origin)))
+	if !ok || host != "github.com" {
 		return false
 	}
-	path := origin
-	if i := strings.Index(path, "://"); i >= 0 {
-		path = path[i+3:]
-		if j := strings.Index(path, "/"); j >= 0 {
-			path = path[j+1:]
+	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
+	return path == strings.ToLower(slug)
+}
+
+// splitRemoteURL splits a scheme URL or an scp-like address into its host
+// (without user or port) and path.
+func splitRemoteURL(u string) (host, path string, ok bool) {
+	if scheme, rest, found := strings.Cut(u, "://"); found {
+		if scheme != "https" && scheme != "http" && scheme != "ssh" && scheme != "git+ssh" {
+			return "", "", false
 		}
-	} else if i := strings.Index(path, ":"); i >= 0 {
-		path = path[i+1:]
+		authority, p, _ := strings.Cut(rest, "/")
+		if i := strings.LastIndex(authority, "@"); i >= 0 {
+			authority = authority[i+1:]
+		}
+		h, _, _ := strings.Cut(authority, ":")
+		return h, p, h != ""
 	}
-	path = strings.TrimSuffix(strings.TrimSuffix(path, "/"), ".git")
-	parts := strings.Split(path, "/")
-	if len(parts) < 2 {
-		return false
+	if strings.HasPrefix(u, "/") || strings.HasPrefix(u, ".") {
+		return "", "", false
 	}
-	return parts[len(parts)-2]+"/"+parts[len(parts)-1] == strings.ToLower(slug)
+	authority, p, found := strings.Cut(u, ":")
+	if !found || strings.Contains(authority, "/") {
+		return "", "", false
+	}
+	if i := strings.LastIndex(authority, "@"); i >= 0 {
+		authority = authority[i+1:]
+	}
+	return authority, p, authority != ""
 }
 
 // checkoutPRHead leaves worktreePath detached at pull/<number>/head. A healthy

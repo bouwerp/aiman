@@ -75,7 +75,7 @@ func (h *Harness) EnableReview() *FakeGitHub {
 	h.EnableCoordinator()
 	gh := &FakeGitHub{}
 	h.srv.SetReviewGitHub(gh)
-	h.remote.Reply("remote get-url origin", "git@github.com:o/r.git\n")
+	h.remote.Reply("config --get remote.origin.url", "git@github.com:o/r.git\n")
 	h.srv.SetReviewWorktrees(git.NewManager(nil))
 	h.srv.SetReviewDir(h.ReviewDir())
 	return gh

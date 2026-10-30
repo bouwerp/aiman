@@ -40,6 +40,37 @@ type FlowManager struct {
 	doneItems DoneItems
 	// noUpdateGuard launches agents with their own updaters left on.
 	noUpdateGuard bool
+	// sessions finds stored sessions, so a caller-chosen id cannot reuse one;
+	// nil skips that check.
+	sessions sessionGetter
+}
+
+// sessionGetter reads one stored session.
+type sessionGetter interface {
+	Get(ctx context.Context, id string) (*domain.Session, error)
+}
+
+// SetSessionStore sets the store a caller-chosen SessionID is checked
+// against.
+func (m *FlowManager) SetSessionStore(s sessionGetter) {
+	m.sessions = s
+}
+
+// checkSessionID accepts an empty id (create picks one) or a UUID no stored
+// session has.
+func (m *FlowManager) checkSessionID(ctx context.Context, id string) error {
+	if id == "" {
+		return nil
+	}
+	if parsed, err := uuid.Parse(id); err != nil || parsed.String() != id {
+		return fmt.Errorf("session id %q is not a UUID", id)
+	}
+	if m.sessions != nil {
+		if _, err := m.sessions.Get(ctx, id); err == nil {
+			return fmt.Errorf("session id %s is already in use", id)
+		}
+	}
+	return nil
 }
 
 func NewFlowManager(
@@ -323,6 +354,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	if config.Agent == nil {
 		return nil, errors.New("agent is required")
 	}
+	if err := m.checkSessionID(ctx, config.SessionID); err != nil {
+		return nil, err
+	}
 
 	// Resolve which SSH manager to use (per-session remote overrides the default)
 	sshMgr := m.sshManager
@@ -405,6 +439,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		return nil, err
 	}
 	session.WorktreePath = wt.Path
+	if err := domain.CheckLaunchDir(wt.Path); err != nil {
+		return nil, err
+	}
 	session.BaseBranch = sessionBaseBranch(config.BaseBranch, wt.Base)
 	setup, setupLog := m.applyBootstrap(ctx, sshMgr, config, session.WorktreePath)
 
@@ -428,6 +465,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		workingDir = fmt.Sprintf("%s/%s", session.WorktreePath, cleanDir)
 	}
 	session.WorkingDirectory = workingDir
+	if err := domain.CheckLaunchDir(workingDir); err != nil {
+		return nil, err
+	}
 
 	// Ensure working directory exists (it might be a new folder defined by user)
 	if _, err := sshMgr.Execute(ctx, fmt.Sprintf("mkdir -p %q", workingDir)); err != nil {

@@ -88,7 +88,7 @@ func (d *SessionDiscoverer) Discover(ctx context.Context, host string) ([]domain
 		return nil, err
 	}
 	for _, rec := range worktreeRecords {
-		if rec.State != domain.WorktreeOK || isMainWorktree(rec) {
+		if !offerableWorktree(rec) {
 			continue
 		}
 		normalizedWT := normalizePath(rec.WorktreePath)
@@ -244,6 +244,14 @@ func (d *SessionDiscoverer) orphanSessionFromWorktreeRecord(host string, rec dom
 	return session
 }
 
+// offerableWorktree reports whether a worktree record may become an orphan
+// session an agent can be launched in: a live linked worktree that is not a
+// review's <repo>@pr-<n> checkout. A PR checkout is never offered, while its
+// review runs (the agent runs in a scratch directory) or after it ends.
+func offerableWorktree(rec domain.WorktreeRecord) bool {
+	return rec.State == domain.WorktreeOK && !isMainWorktree(rec) && !domain.InPRWorktree(rec.WorktreePath)
+}
+
 // OrphanWorktreeSessions scans the whole configured repo root for every
 // worktree not backed by a live session (Discover's step 2, run
 // standalone) — including ones aiman has never tracked before, which
@@ -260,7 +268,7 @@ func (d *SessionDiscoverer) OrphanWorktreeSessions(ctx context.Context, host str
 	}
 	var sessions []domain.Session
 	for _, rec := range worktreeRecords {
-		if rec.State != domain.WorktreeOK || isMainWorktree(rec) {
+		if !offerableWorktree(rec) {
 			continue
 		}
 		sessions = append(sessions, d.orphanSessionFromWorktreeRecord(host, rec, mutagenSessions, seenMutagenIDs))

@@ -20,7 +20,7 @@ func TestSetupRemotePRWorktreeFork(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/r": true},
 		outputs: map[string]string{
-			`git -C '/home/dev/r' remote get-url origin`:                    "https://github.com/O/R.git",
+			`git -C '/home/dev/r' config --get remote.origin.url`:           "https://github.com/O/R.git",
 			`git -C "/home/dev/r" rev-parse --git-dir`:                      ".git",
 			`git -C "/home/dev/r" rev-parse HEAD 2>/dev/null || echo EMPTY`: "abc",
 		},
@@ -89,6 +89,11 @@ func prUpstream(t *testing.T) (upstream, root string) {
 	runGit(t, upstream, "branch", "-q", "-D", "fork")
 	write("main.txt", "later\n")
 	runGit(t, root, "clone", "-q", upstream, "r")
+	// origin reads as the GitHub repository; git rewrites it to the local
+	// upstream when it fetches.
+	clone := filepath.Join(root, "r")
+	runGit(t, clone, "remote", "set-url", "origin", "https://github.com/o/r.git")
+	runGit(t, clone, "config", "url."+upstream+".insteadOf", "https://github.com/o/r.git")
 	return upstream, root
 }
 
@@ -96,7 +101,7 @@ func TestSetupRemotePRWorktreeStagesThePR(t *testing.T) {
 	upstream, root := prUpstream(t)
 	mgr := NewManager(nil)
 	ex := local.NewExecutor(root)
-	repo := domain.Repo{Name: "o/r", URL: upstream}
+	repo := domain.Repo{Name: "o/r"}
 	wt, err := mgr.SetupRemotePRWorktree(context.Background(), ex, repo, 7, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -144,16 +149,42 @@ func TestSetupRemotePRWorktreeStagesThePR(t *testing.T) {
 func TestOriginNamesRepo(t *testing.T) {
 	for url, want := range map[string]bool{
 		"https://github.com/o/r.git":      true,
-		"https://github.com/O/R":          true,
+		"https://GitHub.com/O/R":          true,
 		"https://x@github.com/o/r.git/":   true,
 		"git@github.com:o/r.git":          true,
 		"ssh://git@github.com/o/r.git":    true,
+		"ssh://git@github.com:22/o/r.git": true,
 		"git@github.com:evil/r.git":       false,
 		"https://github.com/o/r-fork.git": false,
+		"https://gitlab.com/o/r.git":      false,
+		"git@github.com.evil.io:o/r.git":  false,
+		"https://evil.io/github.com/o/r":  false,
+		"/srv/mirrors/o/r":                false,
+		"file:///srv/o/r":                 false,
 		"":                                false,
 	} {
 		if got := originNamesRepo(url, "o/r"); got != want {
 			t.Errorf("originNamesRepo(%q) = %v, want %v", url, got, want)
+		}
+	}
+}
+
+// A clone whose origin cannot be read is a broken or missing clone, not an
+// origin mismatch.
+func TestSetupRemotePRWorktreeUnreadableOrigin(t *testing.T) {
+	cmd := `git -C '/home/dev/r' config --get remote.origin.url`
+	remote := &commandRecorderRemote{mockRemote: mockRemote{
+		root:   "/home/dev",
+		dirs:   map[string]bool{"/home/dev/r": true},
+		errors: map[string]error{cmd: errors.New("exit status 1")},
+	}}
+	_, err := NewManager(nil).SetupRemotePRWorktree(context.Background(), remote, domain.Repo{Name: "o/r"}, 7, "main")
+	if err == nil || errors.Is(err, domain.ErrOriginMismatch) {
+		t.Fatalf("err %v, want a non-mismatch failure", err)
+	}
+	for _, c := range remote.commandsRun {
+		if strings.Contains(c, "pull/7/head") {
+			t.Fatalf("fetched the PR with no readable origin: %q", c)
 		}
 	}
 }
@@ -164,7 +195,7 @@ func TestSetupRemotePRWorktreeRefusesForeignOrigin(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/r": true},
 		outputs: map[string]string{
-			`git -C '/home/dev/r' remote get-url origin`: "git@github.com:evil/r.git",
+			`git -C '/home/dev/r' config --get remote.origin.url`: "git@github.com:evil/r.git",
 		},
 	}}
 	_, err := NewManager(nil).SetupRemotePRWorktree(context.Background(), remote, domain.Repo{Name: "o/r"}, 7, "main")
