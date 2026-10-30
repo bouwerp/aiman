@@ -249,8 +249,19 @@ func (r Runner) Run(ctx context.Context, sb Sandbox, cmd []string, timeout time.
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	if err := os.MkdirAll(sb.Dir, 0o700); err != nil {
+	composePath, err := r.WriteCompose(sb)
+	if err != nil {
 		return "", 0, err
+	}
+	args := []string{"compose", "-f", composePath, "run", "--rm", "sandbox"}
+	args = append(args, cmd...)
+	return r.Docker(ctx, sb.Dir, args...)
+}
+
+// WriteCompose writes compose.yaml for sb and returns its path.
+func (r Runner) WriteCompose(sb Sandbox) (string, error) {
+	if err := os.MkdirAll(sb.Dir, 0o700); err != nil {
+		return "", err
 	}
 	uid, gid := r.UID, r.GID
 	if uid == 0 && gid == 0 {
@@ -258,15 +269,13 @@ func (r Runner) Run(ctx context.Context, sb Sandbox, cmd []string, timeout time.
 	}
 	raw, err := Compose(sb, uid, gid)
 	if err != nil {
-		return "", 0, err
+		return "", err
 	}
-	composePath := filepath.Join(sb.Dir, "compose.yaml")
-	if err := os.WriteFile(composePath, raw, 0o600); err != nil {
-		return "", 0, err
+	path := filepath.Join(sb.Dir, "compose.yaml")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		return "", err
 	}
-	args := []string{"compose", "-f", composePath, "run", "--rm", "sandbox"}
-	args = append(args, cmd...)
-	return r.Docker(ctx, sb.Dir, args...)
+	return path, nil
 }
 
 // Down stops the sandbox compose project and removes its volumes.

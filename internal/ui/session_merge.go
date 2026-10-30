@@ -162,6 +162,9 @@ func overlayPersistedSessionFields(live, stored domain.Session) domain.Session {
 	if live.MutagenSyncID == "" {
 		live.MutagenSyncID = stored.MutagenSyncID
 	}
+	if len(live.Tunnels) == 0 {
+		live.Tunnels = stored.Tunnels
+	}
 	sameAgent := live.AgentName == "" || stored.AgentName == "" ||
 		strings.EqualFold(live.AgentName, stored.AgentName)
 	if sameAgent {

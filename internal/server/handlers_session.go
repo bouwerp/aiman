@@ -61,7 +61,10 @@ type SessionInfo struct {
 	// Unprotected means before_pr is on but the agent has no pre-tool hook
 	// to block gh pr create, so the gate is advisory only.
 	Unprotected bool `json:"unprotected,omitempty"`
-	Self        bool `json:"self"`
+	// Tunnels are laptop↔remote forwards; review.debug fills them with the
+	// host-published debug ports so the TUI can forward them.
+	Tunnels []domain.Tunnel `json:"tunnels,omitempty"`
+	Self    bool            `json:"self"`
 }
 
 func sessionInfo(s domain.Session, callerID string) SessionInfo {
@@ -90,6 +93,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		Status:           string(s.Status),
 		State:            string(domain.AgentStateUnknown),
 		Ended:            s.AgentEnded,
+		Tunnels:          s.Tunnels,
 		Self:             callerID != "" && callerID == s.ID,
 	}
 }

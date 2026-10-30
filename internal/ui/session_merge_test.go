@@ -156,6 +156,15 @@ func TestOverlayPersistedSessionFieldsKeepsNameAndGroup(t *testing.T) {
 	}
 }
 
+func TestOverlayPersistedSessionFieldsKeepsTunnels(t *testing.T) {
+	live := domain.Session{ID: "s1", RemoteHost: "regent0", TerminalName: "rev"}
+	stored := domain.Session{ID: "s1", Tunnels: []domain.Tunnel{{LocalPort: 2345, RemotePort: 2345}}}
+	got := overlayPersistedSessionFields(live, stored)
+	if len(got.Tunnels) != 1 || got.Tunnels[0].LocalPort != 2345 {
+		t.Fatalf("tunnels %+v", got.Tunnels)
+	}
+}
+
 func TestOverlayPersistedSessionFieldsKeepsParentID(t *testing.T) {
 	live := domain.Session{ID: "child", RemoteHost: "regent0", TerminalName: "rev"}
 	stored := domain.Session{ID: "child", ParentID: "parent", TerminalName: "rev"}

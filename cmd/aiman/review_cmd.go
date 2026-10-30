@@ -27,6 +27,7 @@ func reviewUsage() error {
 	fmt.Fprintf(os.Stderr, "       aiman review refresh [--force] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review post <file> [--request-changes] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review run [--timeout 10m] [--session NAME] -- <cmd...>\n")
+	fmt.Fprintf(os.Stderr, "       aiman review debug [--lang go|node|react] [--target <package, script or dev command>] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
 	return errUsage
 }
@@ -48,6 +49,9 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 	}
 	if args[0] == "run" {
 		return reviewRunRPC(args[1:], getenv)
+	}
+	if args[0] == "debug" {
+		return reviewDebugRPC(args[1:], getenv)
 	}
 	if args[0] != "reveal" && args[0] != "refresh" && args[0] != "post" {
 		return "", nil, reviewUsage()
@@ -124,6 +128,36 @@ func reviewRunRPC(args []string, getenv func(string) string) (string, map[string
 		}
 	}
 	return "", nil, reviewUsage()
+}
+
+func reviewDebugRPC(args []string, getenv func(string) string) (string, map[string]any, error) {
+	session, lang, target := "", "", ""
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--lang" && i+1 < len(args):
+			lang = strings.TrimSpace(args[i+1])
+			i++
+		case args[i] == "--target" && i+1 < len(args):
+			target = strings.TrimSpace(args[i+1])
+			i++
+		case args[i] == "--session" && i+1 < len(args):
+			session = strings.TrimSpace(args[i+1])
+			i++
+		default:
+			return "", nil, reviewUsage()
+		}
+	}
+	if session == "" {
+		session = strings.TrimSpace(getenv("AIMAN_ID"))
+	}
+	if session == "" || lang == "" {
+		return "", nil, reviewUsage()
+	}
+	params := map[string]any{"session": session, "lang": lang}
+	if target != "" {
+		params["target"] = target
+	}
+	return "review.debug", params, nil
 }
 
 func callReviewRun(params map[string]any) error {

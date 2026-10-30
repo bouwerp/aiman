@@ -351,6 +351,7 @@ func sessionFromInfo(host string, info server.SessionInfo) domain.Session {
 		Backend:          info.Backend,
 		WorktreePath:     info.WorktreePath,
 		WorkingDirectory: info.WorkingDirectory,
+		Tunnels:          info.Tunnels,
 		AgentName:        info.AgentName,
 		LaunchModel:      info.LaunchModel,
 		LaunchEffort:     info.LaunchEffort,
