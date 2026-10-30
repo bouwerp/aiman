@@ -1,0 +1,33 @@
+diff --git a/pkg/a.go b/pkg/a.go
+index 1111111..2222222 100644
+--- a/pkg/a.go
++++ b/pkg/a.go
+@@ -1,5 +1,6 @@
+ package a
+ 
+-func Old() {}
++func New() {}
++func Extra() {}
+ 
+ func Keep() {}
+diff --git a/old.js b/new.js
+similarity index 80%
+rename from old.js
+rename to new.js
+index 1111111..2222222 100644
+--- a/old.js
++++ b/new.js
+@@ -1,3 +1,4 @@
+ export function f() {
++  return 1
+   return 0
+ }
+diff --git a/gone.go b/gone.go
+deleted file mode 100644
+index 1111111..0000000
+--- a/gone.go
++++ /dev/null
+@@ -1,3 +0,0 @@
+-package gone
+-
+-func X() {}

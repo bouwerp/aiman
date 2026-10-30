@@ -25,9 +25,11 @@ type RepoBootstrap struct {
 	Review RepoReview `yaml:"review,omitempty"`
 }
 
-// RepoReview is repos.<slug>.review: the sandbox image override.
+// RepoReview is repos.<slug>.review: the sandbox image override and the
+// command that writes Istanbul coverage-final.json for a non-Go tree.
 type RepoReview struct {
-	Image string `yaml:"image,omitempty"`
+	Image    string `yaml:"image,omitempty"`
+	Coverage string `yaml:"coverage,omitempty"`
 }
 
 // RepoBootstrapFor returns the bootstrap for an owner/name repo slug,

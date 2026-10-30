@@ -28,6 +28,8 @@ func (s *Server) dispatchReview(ctx context.Context, req Request) Response {
 		return s.handleReviewRun(ctx, req)
 	case "review.debug":
 		return s.handleReviewDebug(ctx, req)
+	case "review.coverage":
+		return s.handleReviewCoverage(ctx, req)
 	default:
 		return s.handleReviewRefresh(ctx, req)
 	}

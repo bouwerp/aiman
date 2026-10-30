@@ -293,7 +293,7 @@ func callDeadline(method string) time.Duration {
 		return DesignPublishTimeout + 15*time.Second
 	case "review.post":
 		return ReviewPostTimeout + 15*time.Second
-	case "review.run":
+	case "review.run", "review.coverage":
 		return ReviewRunTimeout + 15*time.Second
 	}
 	return 30 * time.Second

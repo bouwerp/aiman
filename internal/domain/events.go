@@ -57,6 +57,9 @@ const (
 	// EventReviewRun records one sandbox command: n is the run log number
 	// and exit is the command's exit code.
 	EventReviewRun EventKind = "review.run"
+	// EventReviewCoverage records changed-line coverage: ran and missed
+	// counts for the lines the PR added or modified.
+	EventReviewCoverage EventKind = "review.coverage"
 	// EventConsultAbandoned records on the parent's ledger a consult that
 	// ended without a usable report: the child and the to-do it was for.
 	EventConsultAbandoned EventKind = "consult.abandoned"

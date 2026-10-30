@@ -28,6 +28,7 @@ func reviewUsage() error {
 	fmt.Fprintf(os.Stderr, "       aiman review post <file> [--request-changes] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review run [--timeout 10m] [--session NAME] -- <cmd...>\n")
 	fmt.Fprintf(os.Stderr, "       aiman review debug [--lang go|node|react] [--target <package, script or dev command>] [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman review coverage [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
 	return errUsage
 }
@@ -53,7 +54,7 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 	if args[0] == "debug" {
 		return reviewDebugRPC(args[1:], getenv)
 	}
-	if args[0] != "reveal" && args[0] != "refresh" && args[0] != "post" {
+	if args[0] != "reveal" && args[0] != "refresh" && args[0] != "post" && args[0] != "coverage" {
 		return "", nil, reviewUsage()
 	}
 	verb := args[0]

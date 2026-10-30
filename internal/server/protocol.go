@@ -47,6 +47,9 @@ const (
 	// CodeReviewAlreadyPosted refuses a second post until a refresh reopens
 	// the Post the review to-do.
 	CodeReviewAlreadyPosted = "review_already_posted"
+	// CodeReviewNoCoverage refuses review.coverage when the tree has no
+	// go.mod and the repository has no review.coverage command.
+	CodeReviewNoCoverage = "review_no_coverage"
 )
 
 type Request struct {

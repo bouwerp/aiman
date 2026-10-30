@@ -34,6 +34,8 @@ func TestReviewParams(t *testing.T) {
 		{"run named timeout", []string{"run", "--timeout", "5m", "--session", "pr-7", "--", "go", "version"}, "", "review.run", map[string]any{"session": "pr-7", "cmd": []string{"go", "version"}, "timeout_seconds": 300}},
 		{"debug go", []string{"debug", "--lang", "go"}, "s1", "review.debug", map[string]any{"session": "s1", "lang": "go"}},
 		{"debug node target", []string{"debug", "--lang", "node", "--target", "server.js", "--session", "pr-7"}, "", "review.debug", map[string]any{"session": "pr-7", "lang": "node", "target": "server.js"}},
+		{"coverage from env", []string{"coverage"}, "s1", "review.coverage", map[string]any{"session": "s1"}},
+		{"coverage named", []string{"coverage", "--session", "pr-7"}, "", "review.coverage", map[string]any{"session": "pr-7"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -47,20 +49,22 @@ func TestReviewParams(t *testing.T) {
 		})
 	}
 	for name, args := range map[string][]string{
-		"no verb":          nil,
-		"unknown verb":     {"approve"},
-		"post no file":     {"post"},
-		"post two files":   {"post", "a.md", "b.md"},
-		"reveal request":   {"reveal", "--request-changes", "--session", "s1"},
-		"no session":       {"reveal"},
-		"refresh single":   {"refresh", "--single", "--session", "s1"},
-		"extra argument":   {"reveal", "x", "--session", "s1"},
-		"unknown flag":     {"reveal", "--force", "--session", "s1"},
-		"bogus flag":       {"refresh", "--bogus", "--session", "s1"},
-		"run no cmd":       {"run", "--session", "s1"},
-		"run no dash":      {"run", "--session", "s1", "go", "test"},
-		"debug no lang":    {"debug", "--session", "s1"},
-		"debug no session": {"debug", "--lang", "go"},
+		"no verb":             nil,
+		"unknown verb":        {"approve"},
+		"post no file":        {"post"},
+		"post two files":      {"post", "a.md", "b.md"},
+		"reveal request":      {"reveal", "--request-changes", "--session", "s1"},
+		"no session":          {"reveal"},
+		"refresh single":      {"refresh", "--single", "--session", "s1"},
+		"extra argument":      {"reveal", "x", "--session", "s1"},
+		"unknown flag":        {"reveal", "--force", "--session", "s1"},
+		"bogus flag":          {"refresh", "--bogus", "--session", "s1"},
+		"run no cmd":          {"run", "--session", "s1"},
+		"run no dash":         {"run", "--session", "s1", "go", "test"},
+		"debug no lang":       {"debug", "--session", "s1"},
+		"debug no session":    {"debug", "--lang", "go"},
+		"coverage no session": {"coverage"},
+		"coverage extra":      {"coverage", "x", "--session", "s1"},
 	} {
 		if _, _, err := reviewRPC(args, env("")); !errors.Is(err, errUsage) {
 			t.Errorf("%s: err %v, want usage", name, err)
