@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 	"github.com/bouwerp/aiman/internal/review"
 )
@@ -115,6 +116,59 @@ func TestDebugLaunchJSONFailureLeavesNoHelper(t *testing.T) {
 	debugID := "debug-" + info.ID
 	if _, err := pty.Get(debugID); err == nil {
 		t.Fatal("debug helper still live after launch.json failure")
+	}
+}
+
+func TestStopAndPTYKillTearDownDebug(t *testing.T) {
+	r := newReviewRig(t)
+	pty := ptyfake.New()
+	r.srv.pty = pty
+	r.srv.SetReviewRunner(review.Runner{Docker: (&fakeDocker{out: "ok\n"}).run, UID: 1000, GID: 1000})
+	r.srv.SetReviewConfig(config.ReviewConfig{}, map[string]config.RepoBootstrap{
+		"o/r": {Review: config.RepoReview{Image: "golang:1.26"}},
+	})
+	info := createReview(t, r.srv)
+	pty.Add(ptyruntime.SessionInfo{ID: info.ID})
+	rpcOK(t, r.srv, info.ID, "review.debug", map[string]any{"lang": "go"}, nil)
+	debugID := "debug-" + info.ID
+	if _, err := pty.Get(debugID); err != nil {
+		t.Fatalf("debug helper missing after review.debug: %v", err)
+	}
+
+	sess, err := r.srv.repo.Get(context.Background(), info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	killsBefore := countID(pty.Kills(), debugID)
+	forgetsBefore := countID(pty.Forgets(), debugID)
+	if err := (serverTerminal{r.srv}).Stop(context.Background(), *sess); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pty.Get(debugID); err == nil {
+		t.Fatal("debug helper still live after Stop")
+	}
+	if countID(pty.Kills(), debugID) <= killsBefore {
+		t.Fatalf("Stop did not Kill %s: %v", debugID, pty.Kills())
+	}
+	if countID(pty.Forgets(), debugID) <= forgetsBefore {
+		t.Fatalf("Stop did not Forget %s: %v", debugID, pty.Forgets())
+	}
+
+	rpcOK(t, r.srv, info.ID, "review.debug", map[string]any{"lang": "go"}, nil)
+	if _, err := pty.Get(debugID); err != nil {
+		t.Fatalf("debug helper missing after second review.debug: %v", err)
+	}
+	killsBefore = countID(pty.Kills(), debugID)
+	forgetsBefore = countID(pty.Forgets(), debugID)
+	rpcOK(t, r.srv, info.ID, "pty.kill", map[string]any{"id": info.ID}, nil)
+	if _, err := pty.Get(debugID); err == nil {
+		t.Fatal("debug helper still live after pty.kill")
+	}
+	if countID(pty.Kills(), debugID) <= killsBefore {
+		t.Fatalf("pty.kill did not Kill %s: %v", debugID, pty.Kills())
+	}
+	if countID(pty.Forgets(), debugID) <= forgetsBefore {
+		t.Fatalf("pty.kill did not Forget %s: %v", debugID, pty.Forgets())
 	}
 }
 

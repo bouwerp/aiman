@@ -35,9 +35,10 @@ const (
 )
 
 var (
-	goVersionRe   = regexp.MustCompile(`(?m)^go\s+([0-9]+)\.([0-9]+)`)
-	nodeMajorRe   = regexp.MustCompile(`([0-9]+)`)
-	errNoLanguage = errors.New("review sandbox: no go.mod or package.json, and no image override")
+	goVersionRe = regexp.MustCompile(`(?m)^go\s+([0-9]+)\.([0-9]+)`)
+	nodeMajorRe = regexp.MustCompile(`([0-9]+)`)
+	// ErrNoLanguage is returned by Image when src has no go.mod, package.json, or override.
+	ErrNoLanguage = errors.New("review sandbox: no go.mod or package.json, and no image override")
 )
 
 // Image picks the container image for src. override wins. A go.mod `go`
@@ -58,7 +59,7 @@ func Image(src, override string) (string, error) {
 	} else if img != "" {
 		return img, nil
 	}
-	return "", errNoLanguage
+	return "", ErrNoLanguage
 }
 
 func imageFromGoMod(src string) (string, error) {

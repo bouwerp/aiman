@@ -348,6 +348,7 @@ func (s *Server) handlePTYKill(ctx context.Context, req Request) Response {
 	if !ok {
 		return fail
 	}
+	s.stopDebugPTY(id)
 	if err := s.pty.Kill(id); err != nil {
 		return s.ptyErrResp(req.ID, err)
 	}

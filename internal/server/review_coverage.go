@@ -42,6 +42,9 @@ func (s *Server) handleReviewCoverage(ctx context.Context, req Request) Response
 	}
 	sb, err := s.sandboxFor(t.sess)
 	if err != nil {
+		if errors.Is(err, review.ErrNoLanguage) {
+			return errResp(req.ID, CodeReviewNoCoverage, err.Error())
+		}
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	diff, err := os.ReadFile(filepath.Join(s.reviewScratch(t.sess.ID), reviewFilesDir, "diff.patch")) //nolint:gosec // path is under the review scratch

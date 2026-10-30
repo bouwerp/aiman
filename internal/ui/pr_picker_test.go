@@ -92,3 +92,36 @@ func TestPRPickerSetsReview(t *testing.T) {
 		t.Fatal("want a fetch-agents command")
 	}
 }
+
+// Esc from the agent picker returns to the PR picker. A leftover selected
+// pointer would treat the next key as another pick and fetch agents again.
+func TestPRPickerEscDoesNotReenterAgentPicker(t *testing.T) {
+	m := &Model{
+		state: viewStatePRPicker,
+		sessionCfg: domain.SessionConfig{
+			Repo: domain.Repo{Name: "o/r"},
+		},
+		width:  80,
+		height: 24,
+		prPicker: NewPRPickerModel([]review.PR{
+			{Number: 7, Title: "fix login", Author: "bob", Additions: 12, Deletions: 3},
+		}),
+	}
+	m.prPicker.SetSize(80, 24)
+
+	next, _ := m.handlePRPickerUpdate(pressKey("enter"))
+	got := next.(*Model)
+	if got.sessionCfg.ReviewPR != "o/r#7" {
+		t.Fatalf("ReviewPR = %q, want o/r#7", got.sessionCfg.ReviewPR)
+	}
+	if got.prPicker.selected != nil {
+		t.Fatal("selected still set after consuming the pick")
+	}
+
+	got.state = viewStatePRPicker
+	next, _ = got.handlePRPickerUpdate(pressKey("down"))
+	got = next.(*Model)
+	if got.state != viewStatePRPicker {
+		t.Fatalf("state=%v, want PR picker (re-entered agent fetch)", got.state)
+	}
+}

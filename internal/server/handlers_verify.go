@@ -237,6 +237,7 @@ func (a serverTerminal) Alive(_ context.Context, sess domain.Session) bool {
 // never runs tmux, so the user stops it on the host.
 func (a serverTerminal) Stop(ctx context.Context, sess domain.Session) error {
 	a.s.downReviewSandbox(ctx, sess)
+	a.s.stopDebugPTY(sess.ID)
 	if sess.IsLegacyTmux() {
 		return domain.NewLegacyTmuxError(sess)
 	}

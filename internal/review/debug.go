@@ -116,10 +116,11 @@ func attachConfig(lang string, ports DebugPorts, worktree string, order []string
 		}, nil
 	case "react":
 		return attachCfg{
-			Name: name, Type: "chrome", Request: "attach",
-			Port: ports.App, Host: "127.0.0.1",
-			URL:     fmt.Sprintf("http://127.0.0.1:%d", ports.App),
-			WebRoot: worktree, Description: desc,
+			Name: name, Type: "node", Request: "attach",
+			Port: ports.Debug, Address: "127.0.0.1",
+			LocalRoot: worktree, RemoteRoot: "/src",
+			URL: fmt.Sprintf("http://127.0.0.1:%d", ports.App), WebRoot: worktree,
+			Description: desc,
 		}, nil
 	default:
 		return attachCfg{}, fmt.Errorf("review debug: unknown lang %q", lang)

@@ -112,7 +112,14 @@ func CreateSessionOnRemote(ctx context.Context, remote TerminalExecutor, spec Re
 	if err != nil {
 		return nil, fmt.Errorf("remote create: %s: %w", strings.TrimSpace(out), err)
 	}
-	return parseRemoteCreateResult(out)
+	sess, err := parseRemoteCreateResult(out)
+	if err != nil {
+		return nil, err
+	}
+	if sess.ReviewPR == "" {
+		sess.ReviewPR = spec.Review
+	}
+	return sess, nil
 }
 
 // ForgetSessionOnRemote removes the session from the remote serve's own
@@ -180,6 +187,7 @@ type remoteCreateResult struct {
 			LaunchModel      string `json:"launch_model"`
 			LaunchEffort     string `json:"launch_effort"`
 			Tier             string `json:"tier"`
+			ReviewPR         string `json:"review_pr"`
 		} `json:"session"`
 	} `json:"result"`
 	Error *struct {
@@ -221,6 +229,7 @@ func parseRemoteCreateResult(out string) (*domain.Session, error) {
 		LaunchModel:      s.LaunchModel,
 		LaunchEffort:     s.LaunchEffort,
 		Tier:             s.Tier,
+		ReviewPR:         s.ReviewPR,
 		Status:           domain.SessionStatusActive,
 	}, nil
 }

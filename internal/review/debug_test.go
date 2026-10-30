@@ -2,7 +2,6 @@ package review
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -54,21 +53,14 @@ func TestLaunchConfigReact(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := findAttach(t, raw, "aiman: attach react")
-	if got, _ := cfg["request"].(string); got != "attach" && got != "launch" {
-		t.Fatalf("request = %v, want attach or launch", cfg["request"])
+	if got, _ := cfg["request"].(string); got != "attach" {
+		t.Fatalf("request = %v, want attach", cfg["request"])
 	}
-	port := jsonInt(cfg["port"])
-	if port == ports.Debug {
-		t.Fatalf("react attach used inspect port %d as chrome target", port)
+	if port := jsonInt(cfg["port"]); port != ports.Debug {
+		t.Fatalf("port = %v, want inspect/CDP %d", port, ports.Debug)
 	}
-	url, _ := cfg["url"].(string)
-	hitsApp := port == ports.App || strings.Contains(url, fmt.Sprintf(":%d", ports.App))
-	hitsDevTools := port == ports.DevTools || strings.Contains(url, fmt.Sprintf(":%d", ports.DevTools))
-	if !hitsApp && !hitsDevTools {
-		t.Fatalf("react attach port=%d url=%q, want app %d or devtools %d", port, url, ports.App, ports.DevTools)
-	}
-	if typ, _ := cfg["type"].(string); typ == "chrome" && port == ports.Debug {
-		t.Fatalf("chrome attach on inspect port %d", ports.Debug)
+	if port := jsonInt(cfg["port"]); port == ports.App {
+		t.Fatalf("react attach used HTTP app port %d, not CDP", ports.App)
 	}
 }
 

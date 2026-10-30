@@ -140,6 +140,28 @@ func TestParseRemoteCreateResultCarriesTier(t *testing.T) {
 	}
 }
 
+func TestParseRemoteCreateResultCarriesReview(t *testing.T) {
+	sess, err := parseRemoteCreateResult(`{"result":{"session":{"id":"a1","review_pr":"o/r#7"}}}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if sess.ReviewPR != "o/r#7" {
+		t.Fatalf("ReviewPR = %q, want o/r#7", sess.ReviewPR)
+	}
+}
+
+func TestCreateSessionOnRemoteStampsReviewWhenWireOmitsIt(t *testing.T) {
+	r := &createRemote{out: okCreateResponse}
+	sess, err := CreateSessionOnRemote(context.Background(), r,
+		RemoteCreateSpec{Agent: "claude", Review: "o/r#7", PromptFree: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if sess.ReviewPR != "o/r#7" {
+		t.Fatalf("ReviewPR = %q, want o/r#7 stamped from the spec", sess.ReviewPR)
+	}
+}
+
 // An empty agent is left off the params so serve picks from the model tiers.
 func TestCreateSessionOnRemoteLeavesEmptyAgentToServe(t *testing.T) {
 	r := &createRemote{out: okCreateResponse}

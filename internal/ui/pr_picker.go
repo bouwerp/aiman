@@ -115,6 +115,7 @@ func (m *Model) handlePRPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.prPicker = subModel.(PRPickerModel)
 	if m.prPicker.selected != nil {
 		pr := m.prPicker.selected
+		m.prPicker.selected = nil
 		m.sessionCfg.ReviewPR = fmt.Sprintf("%s#%d", m.sessionCfg.Repo.Name, pr.Number)
 		m.loadingMsg = "Scanning available agents..."
 		m.loadingNext = viewStateAgentPicker

@@ -108,6 +108,9 @@ func (s *Server) stopDebugPTY(sessionID string) {
 		return
 	}
 	id := debugPTYID(sessionID)
+	if _, err := s.pty.Get(id); err != nil {
+		return
+	}
 	_ = s.pty.Kill(id)
 	_ = s.pty.Forget(id)
 }
