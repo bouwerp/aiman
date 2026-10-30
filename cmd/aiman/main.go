@@ -62,9 +62,9 @@ func run() error {
 	}
 	os.Args = append([]string{os.Args[0]}, parsed.Rest...)
 
-	// `pty`, `session`, `rpc`, `todo`, `usage` and `agents` talk only to the agent API
-	// socket (and `pty hold` not even to that: it is the detached holder,
-	// handed an explicit --root and --id). `slack` talks to the Slack Web API
+	// `pty`, `session`, `rpc`, `todo`, `usage`, `agents`, `design`, `verify`
+	// and `review` talk only to the agent API socket (and `pty hold` not even
+	// to that: it is the detached holder, handed an explicit --root and --id). `slack` talks to the Slack Web API
 	// with the host user token.
 	// Everything below exists for the TUI: loading config, opening the
 	// SQLite file and running its migrations, building the JIRA, git, SSH and
@@ -91,6 +91,8 @@ func run() error {
 			return runAgents(parsed.Rest[1:], os.Stdout)
 		case "design":
 			return runDesign(parsed.Rest[1:], os.Getenv)
+		case "review":
+			return runReview(parsed.Rest[1:], os.Getenv)
 		case "verify":
 			return runVerify(parsed.Rest[1:])
 		case "slack":

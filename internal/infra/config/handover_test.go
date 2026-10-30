@@ -128,3 +128,27 @@ func TestResolveLaunchDefaultsHandoverRole(t *testing.T) {
 		t.Fatalf("For(handover) = %+v", got)
 	}
 }
+
+func TestReviewConfigConsultTimeout(t *testing.T) {
+	if got := (ReviewConfig{}).ConsultTimeoutOrDefault(); got != 30*time.Minute {
+		t.Fatalf("default review consult timeout = %v, want 30m", got)
+	}
+	var cfg Config
+	if err := yaml.Unmarshal([]byte("review:\n  consult_timeout: 45m\n"), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Review.ConsultTimeoutOrDefault(); got != 45*time.Minute {
+		t.Fatalf("configured review consult timeout = %v", got)
+	}
+	body, err := cfg.MarshalServeConfig("h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back ServeConfig
+	if err := yaml.Unmarshal(body, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Review.ConsultTimeout != 45*time.Minute {
+		t.Fatalf("serve config lost review.consult_timeout: %s", body)
+	}
+}

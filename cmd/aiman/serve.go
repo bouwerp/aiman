@@ -258,6 +258,8 @@ func runServe() error {
 		KeepReport:     srv.KeepConsultReport,
 		Alive:          srv.ConsultAlive,
 		ConsultTimeout: cfg.Handover.ChildTimeout(),
+		// A review session's consults get review.consult_timeout instead.
+		ConsultTimeoutFor: coordinator.ConsultTimeouts(cfg.Review.ConsultTimeoutOrDefault(), cfg.Handover.ChildTimeout()),
 	}
 	if rec := srv.NotifyRecorder(); rec != nil {
 		childTracker.Notify = rec

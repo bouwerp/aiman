@@ -70,6 +70,9 @@ type Tracker struct {
 	// ConsultTimeout is how long a consult may run without a report. Zero
 	// waits for ever.
 	ConsultTimeout time.Duration
+	// ConsultTimeoutFor, when set, replaces ConsultTimeout with a limit
+	// chosen by the consult's parent (ConsultTimeouts).
+	ConsultTimeoutFor func(parent domain.Session) time.Duration
 	// Now is the clock. nil is time.Now.
 	Now func() time.Time
 

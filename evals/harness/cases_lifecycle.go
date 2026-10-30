@@ -517,6 +517,7 @@ func LifecycleCases() []Case {
 		CaseBriefStructure(),
 		CaseChildPromptNoWait(),
 		CaseReviewBlind(),
+		CaseReviewSingle(),
 	}
 }
 

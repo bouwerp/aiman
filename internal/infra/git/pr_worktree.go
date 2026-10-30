@@ -14,7 +14,8 @@ import (
 // base with origin/<base> so the PR's changes are staged and every editor's
 // gutter marks them. The head is fetched as pull/<n>/head from origin, which
 // also reaches a PR from a fork. An existing worktree of that name is reused:
-// it fetches the head itself and is checked out there by force.
+// it fetches the head itself and is reset hard to it, which is how a review
+// refresh restages a moved head.
 func (m *Manager) SetupRemotePRWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, number int, base string) (domain.Worktree, error) {
 	base = strings.TrimSpace(base)
 	if base == "" {
@@ -144,7 +145,9 @@ func checkoutPRHead(ctx context.Context, remote domain.RemoteExecutor, repoPath,
 		if out, err := remote.Execute(ctx, "git -C "+wt+" fetch -q origin "+pull+" 2>&1"); err != nil {
 			return fmt.Errorf("fetch %s: %w: %s", pull, err, strings.TrimSpace(out))
 		}
-		if out, err := remote.Execute(ctx, "git -C "+wt+" checkout -q --force --detach FETCH_HEAD 2>&1"); err != nil {
+		// The worktree is detached, so the hard reset moves no branch; it drops
+		// the files staged from the previous head before the new soft reset.
+		if out, err := remote.Execute(ctx, "git -C "+wt+" checkout -q --detach && git -C "+wt+" reset -q --hard FETCH_HEAD 2>&1"); err != nil {
 			return fmt.Errorf("check out %s: %w: %s", pull, err, strings.TrimSpace(out))
 		}
 		return nil

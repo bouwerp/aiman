@@ -38,7 +38,7 @@ func (t *Tracker) trackConsult(ctx context.Context, parent domain.Session, it do
 	switch {
 	case parseErr == nil:
 		t.finishConsult(ctx, parent, it, child, r, md)
-	case t.consultGone(ctx, child):
+	case t.consultGone(ctx, parent, child):
 		t.abandonConsult(ctx, parent, it, child)
 	case !errors.Is(parseErr, errEmptyReport):
 		t.askConsult(parent, it, child, parseErr)
@@ -80,20 +80,44 @@ func (t *Tracker) finishConsult(ctx context.Context, parent domain.Session, it d
 }
 
 // consultGone reports whether a consult without a usable report will never
-// write one: its agent ended, its terminal is gone, or it ran past
-// ConsultTimeout.
-func (t *Tracker) consultGone(ctx context.Context, child domain.Session) bool {
+// write one: its agent ended, its terminal is gone, or it ran past its
+// parent's consult timeout.
+func (t *Tracker) consultGone(ctx context.Context, parent, child domain.Session) bool {
 	if child.AgentEnded || (t.Alive != nil && !t.Alive(ctx, child)) {
 		return true
 	}
-	return t.ConsultTimeout > 0 && !child.CreatedAt.IsZero() && t.now().Sub(child.CreatedAt) > t.ConsultTimeout
+	limit := t.consultTimeout(parent)
+	return limit > 0 && !child.CreatedAt.IsZero() && t.now().Sub(child.CreatedAt) > limit
 }
 
-// abandonConsult unlinks the item, which stays pending, retires the consult
-// and tells the coordinator.
+// consultTimeout is how long a consult of parent may run without a report.
+func (t *Tracker) consultTimeout(parent domain.Session) time.Duration {
+	if t.ConsultTimeoutFor != nil {
+		return t.ConsultTimeoutFor(parent)
+	}
+	return t.ConsultTimeout
+}
+
+// ConsultTimeouts gives a review session's consults the review limit and
+// every other parent's the other limit.
+func ConsultTimeouts(review, other time.Duration) func(parent domain.Session) time.Duration {
+	return func(parent domain.Session) time.Duration {
+		if parent.ReviewPR != "" {
+			return review
+		}
+		return other
+	}
+}
+
+// abandonConsult unlinks the item, which stays pending, records
+// consult.abandoned on the parent's ledger, retires the consult and tells the
+// coordinator.
 func (t *Tracker) abandonConsult(ctx context.Context, parent domain.Session, it domain.TodoItem, child domain.Session) {
 	if !t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.Ref = "" }) {
 		return
+	}
+	if t.Ledger != nil {
+		t.Ledger(ctx, parent.ID, domain.EventConsultAbandoned, map[string]any{"child": child.ID, "todo": it.ID})
 	}
 	if t.Retire != nil {
 		t.Retire(ctx, child)

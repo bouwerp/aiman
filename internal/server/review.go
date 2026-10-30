@@ -374,30 +374,47 @@ func isObjectID(s string) bool {
 	return strings.Trim(s, "0123456789abcdef") == ""
 }
 
+// reviewScratch is review id's scratch directory, the agent's working
+// directory.
+func (s *Server) reviewScratch(id string) string {
+	return filepath.Join(s.reviewBase(), id, "work")
+}
+
 // prepareReviewScratch makes <base>/<id>/work a fresh git repository (agents
-// that need one are content) and writes .aiman_review into it: diff.patch
-// (the PR worktree's staged diff), files.txt (its numstat) and meta.json.
+// that need one are content) and writes .aiman_review into it.
 func (s *Server) prepareReviewScratch(ctx context.Context, remote domain.RemoteExecutor, id string, meta reviewMeta) (string, error) {
-	wt := quoteArg(meta.Worktree)
-	diff, err := remote.Execute(ctx, "git -C "+wt+" diff --cached")
-	if err != nil {
-		return "", fmt.Errorf("diff the PR: %w", err)
-	}
-	numstat, err := remote.Execute(ctx, "git -C "+wt+" diff --cached --numstat")
-	if err != nil {
-		return "", fmt.Errorf("list the PR's files: %w", err)
-	}
-	rawMeta, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	scratch := filepath.Join(s.reviewBase(), id, "work")
-	dir := filepath.Join(scratch, reviewFilesDir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	scratch := s.reviewScratch(id)
+	if err := os.MkdirAll(filepath.Join(scratch, reviewFilesDir), 0o700); err != nil {
 		return "", err
 	}
 	if out, err := exec.CommandContext(ctx, "git", "-C", scratch, "init", "-q").CombinedOutput(); err != nil { //nolint:gosec // scratch is under the review base with a generated id
 		return "", fmt.Errorf("git init %s: %w: %s", scratch, err, strings.TrimSpace(string(out)))
+	}
+	if err := writeReviewFiles(ctx, remote, scratch, meta); err != nil {
+		return "", err
+	}
+	return scratch, nil
+}
+
+// writeReviewFiles writes scratch/.aiman_review: diff.patch (the PR
+// worktree's staged diff), files.txt (its numstat) and meta.json.
+func writeReviewFiles(ctx context.Context, remote domain.RemoteExecutor, scratch string, meta reviewMeta) error {
+	wt := quoteArg(meta.Worktree)
+	diff, err := remote.Execute(ctx, "git -C "+wt+" diff --cached")
+	if err != nil {
+		return fmt.Errorf("diff the PR: %w", err)
+	}
+	numstat, err := remote.Execute(ctx, "git -C "+wt+" diff --cached --numstat")
+	if err != nil {
+		return fmt.Errorf("list the PR's files: %w", err)
+	}
+	rawMeta, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(scratch, reviewFilesDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
 	}
 	for name, body := range map[string][]byte{
 		"diff.patch": []byte(diff),
@@ -405,8 +422,8 @@ func (s *Server) prepareReviewScratch(ctx context.Context, remote domain.RemoteE
 		"meta.json":  append(rawMeta, '\n'),
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
-			return "", err
+			return err
 		}
 	}
-	return scratch, nil
+	return nil
 }

@@ -15,9 +15,12 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/git"
+	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/infra/skills"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/review"
+	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/verify"
 )
 
@@ -370,4 +373,355 @@ func TestCreateReviewExistsIgnoresCase(t *testing.T) {
 	if got := reviewLockKey(review.Ref{Owner: "O", Repo: "R", Number: 7}); got != "o/r#7" {
 		t.Fatalf("lock key %q", got)
 	}
+}
+
+// tickTodo marks the review session's item with ref done.
+func tickTodo(t *testing.T, srv *Server, id, ref string) {
+	t.Helper()
+	err := srv.TodoAccess().Mutate(context.Background(), id, domain.AuthorAiman, func(l *domain.TodoList) error {
+		for i := range l.Items {
+			if l.Items[i].Ref == ref {
+				l.Items[i].State = domain.TodoDone
+				return nil
+			}
+		}
+		return fmt.Errorf("no item %s", ref)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// todoStates maps each ref of the session's list to its state.
+func todoStates(t *testing.T, srv *Server, id string) map[string]domain.TodoState {
+	t.Helper()
+	list, err := srv.TodoAccess().Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]domain.TodoState{}
+	for _, it := range list.Items {
+		if it.Ref != "" {
+			out[it.Ref] = it.State
+		}
+	}
+	return out
+}
+
+// startConsult stores a running consult of parent, linked from a to-do.
+func startConsult(t *testing.T, srv *Server, parent, id string) {
+	t.Helper()
+	c := domain.Session{ID: id, Name: "consult-" + id, ParentID: parent, Role: domain.SessionRoleConsult, Status: domain.SessionStatusActive, CreatedAt: time.Now()}
+	if err := srv.repo.Save(context.Background(), &c); err != nil {
+		t.Fatal(err)
+	}
+	err := srv.TodoAccess().Mutate(context.Background(), parent, domain.AuthorAgent, func(l *domain.TodoList) error {
+		l.Items = append(l.Items, domain.TodoItem{Text: "Blind consult", State: domain.TodoPending, Ref: "child:" + id})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// endConsult records how the tracker settled a consult and forgets its row,
+// as RetireConsult does.
+func endConsult(t *testing.T, srv *Server, parent, id string, kind domain.EventKind) {
+	t.Helper()
+	srv.AppendLedger(context.Background(), parent, kind, map[string]any{"child": id, "todo": "t7"})
+	if err := srv.repo.Delete(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// revealCode is the error code of a review.reveal, or "" when it succeeded.
+func revealCode(t *testing.T, srv *Server, params map[string]any) string {
+	t.Helper()
+	resp := rpc(t, srv, "", "review.reveal", params)
+	if resp.Error == nil {
+		return ""
+	}
+	return resp.Error.Code
+}
+
+func TestRevealRefusesBeforeBlind(t *testing.T) {
+	r := newReviewRig(t)
+	info := createReview(t, r.srv)
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID, "single": true}); code != CodeReviewNotReady {
+		t.Fatalf("reveal before the blind pass: code %q, want review_not_ready", code)
+	}
+	if _, err := os.Stat(filepath.Join(r.stateDir, info.ID, "work", ".aiman_pr_description.md")); !os.IsNotExist(err) {
+		t.Fatalf("description written: %v", err)
+	}
+	// A session that is not a review has nothing to reveal.
+	other := domain.Session{ID: "plain", Name: "plain", Status: domain.SessionStatusActive}
+	if err := r.srv.repo.Save(context.Background(), &other); err != nil {
+		t.Fatal(err)
+	}
+	if code := revealCode(t, r.srv, map[string]any{"session": "plain"}); code != CodeInvalidParams {
+		t.Fatalf("reveal of a plain session: code %q", code)
+	}
+}
+
+func TestRevealWaitsForBlindConsult(t *testing.T) {
+	r := newReviewRig(t)
+	info := createReview(t, r.srv)
+	tickTodo(t, r.srv, info.ID, reviewBlindRef)
+	startConsult(t, r.srv, info.ID, "c1")
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID}); code != CodeReviewNotReady {
+		t.Fatalf("reveal while the consult runs: code %q", code)
+	}
+	// single does not skip a consult that is still running.
+	if code := revealCode(t, r.srv, map[string]any{"session": info.ID, "single": true}); code != CodeReviewNotReady {
+		t.Fatalf("single reveal while the consult runs: code %q", code)
+	}
+	endConsult(t, r.srv, info.ID, "c1", domain.EventConsultFinished)
+	rpcOK(t, r.srv, info.ID, "review.reveal", map[string]any{}, nil)
+	st, err := review.LoadState(r.stateDir, info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Revealed || st.Single {
+		t.Fatalf("state %+v, want revealed with two reviewers", st)
+	}
+}
+
+func TestRevealSingle(t *testing.T) {
+	for _, name := range []string{"no consult", "consult abandoned"} {
+		t.Run(name, func(t *testing.T) {
+			r := newReviewRig(t)
+			info := createReview(t, r.srv)
+			tickTodo(t, r.srv, info.ID, reviewBlindRef)
+			if name == "consult abandoned" {
+				startConsult(t, r.srv, info.ID, "c1")
+				endConsult(t, r.srv, info.ID, "c1", domain.EventConsultAbandoned)
+			}
+			if code := revealCode(t, r.srv, map[string]any{"session": info.ID}); code != CodeReviewNotReady {
+				t.Fatalf("reveal without a second reviewer: code %q", code)
+			}
+			rpcOK(t, r.srv, "", "review.reveal", map[string]any{"session": info.ID, "single": true}, nil)
+			st, err := review.LoadState(r.stateDir, info.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !st.Revealed || !st.Single {
+				t.Fatalf("state %+v, want revealed single", st)
+			}
+			var single any
+			for _, ev := range ledger(t, r.srv, info.ID) {
+				if ev.Kind == domain.EventReviewRevealed {
+					var p map[string]any
+					_ = json.Unmarshal(ev.Payload, &p)
+					single = p["single"]
+				}
+			}
+			if single != true {
+				t.Fatalf("review.revealed single = %v", single)
+			}
+		})
+	}
+}
+
+func ledger(t *testing.T, srv *Server, id string) []domain.SessionEvent {
+	t.Helper()
+	events, err := srv.repo.(*sqlite.Repository).ListSessionEvents(context.Background(), id, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return events
+}
+
+func TestRevealWritesDescription(t *testing.T) {
+	r := newReviewRig(t)
+	r.srv.SetReviewGitHub(&fakeGitHub{prs: map[int]review.PR{7: {
+		Number: 7, Title: "Add the parser", Author: "alice", BaseRef: "main", HeadSHA: "abc123",
+		Body: "Parses nested lists.\n\nCloses #12 and fixes PROJ-1; see other/repo#3.",
+	}}})
+	info := createReview(t, r.srv)
+	tickTodo(t, r.srv, info.ID, reviewBlindRef)
+	rpcOK(t, r.srv, info.ID, "review.reveal", map[string]any{"single": true}, nil)
+	scratch := filepath.Join(r.stateDir, info.ID, "work")
+	raw, err := os.ReadFile(filepath.Join(scratch, ".aiman_pr_description.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := string(raw)
+	for _, want := range []string{"# Add the parser", "Base: main", "Parses nested lists.", "#12", "PROJ-1", "other/repo#3"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("description lacks %q:\n%s", want, md)
+		}
+	}
+	if !strings.Contains(md, "Linked issues: #12, PROJ-1, other/repo#3") {
+		t.Errorf("linked issues line missing:\n%s", md)
+	}
+	wt := filepath.Join(r.worktrees.dir, "r@pr-7")
+	if _, err := os.Stat(filepath.Join(wt, ".aiman_pr_description.md")); !os.IsNotExist(err) {
+		t.Fatalf("description written into the PR worktree: %v", err)
+	}
+	if !slices.ContainsFunc(ledger(t, r.srv, info.ID), func(ev domain.SessionEvent) bool { return ev.Kind == domain.EventReviewRevealed }) {
+		t.Fatal("no review.revealed row")
+	}
+}
+
+// refreshUpstream makes an origin o/r whose PR 7 adds pr.txt and old.txt
+// after main's first commit, then moves main on, and clones it at root/r with
+// a github.com origin rewritten to the local upstream.
+func refreshUpstream(t *testing.T) (upstream, root string) {
+	t.Helper()
+	upstream, root = filepath.Join(t.TempDir(), "o", "r"), t.TempDir()
+	if err := os.MkdirAll(upstream, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, upstream, "init", "-q", "-b", "main")
+	gitIn(t, upstream, "config", "user.name", "Aiman Test")
+	gitIn(t, upstream, "config", "user.email", "aiman@example.com")
+	commitFile(t, upstream, "main.txt", "base\n")
+	gitIn(t, upstream, "checkout", "-q", "-b", "fork")
+	commitFile(t, upstream, "pr.txt", "pr\n")
+	commitFile(t, upstream, "old.txt", "old\n")
+	gitIn(t, upstream, "update-ref", "refs/pull/7/head", "fork")
+	gitIn(t, upstream, "checkout", "-q", "main")
+	gitIn(t, upstream, "branch", "-q", "-D", "fork")
+	commitFile(t, upstream, "main.txt", "later\n")
+	gitIn(t, root, "clone", "-q", upstream, "r")
+	clone := filepath.Join(root, "r")
+	gitIn(t, clone, "remote", "set-url", "origin", "https://github.com/o/r.git")
+	gitIn(t, clone, "config", "url."+upstream+".insteadOf", "https://github.com/o/r.git")
+	return upstream, root
+}
+
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func commitFile(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", name)
+	gitIn(t, dir, "commit", "-q", "-m", name)
+}
+
+// TestRefreshResets moves the PR head (rebased onto a newer main, dropping
+// old.txt) and refreshes: the worktree is staged against the new merge base
+// with nothing left from the old head, the review files and state name the
+// new head, the description is withdrawn, the phase and gate reopen and the
+// ledger records the move.
+func TestRefreshResets(t *testing.T) {
+	upstream, root := refreshUpstream(t)
+	r := newReviewRig(t)
+	r.srv.remote = local.NewExecutor(root)
+	r.srv.SetReviewWorktrees(git.NewManager(nil))
+	info := createReview(t, r.srv)
+	sess, err := r.srv.repo.Get(context.Background(), info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt := sess.WorktreePath
+	if got := gitIn(t, wt, "diff", "--cached", "--name-only"); got != "old.txt\npr.txt" {
+		t.Fatalf("staged at create %q", got)
+	}
+	before, err := review.LoadState(r.stateDir, info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tickTodo(t, r.srv, info.ID, reviewBlindRef)
+	tickTodo(t, r.srv, info.ID, reviewInformedRef)
+	err = r.srv.TodoAccess().Mutate(context.Background(), info.ID, domain.AuthorAiman, func(l *domain.TodoList) error {
+		todo.AddGate(l, todo.ReviewGateRef)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpcOK(t, r.srv, "", "todo.update", map[string]any{"session": info.ID, "id": reviewGateID(t, r.srv, info.ID), "state": "done"}, nil)
+	rpcOK(t, r.srv, "", "review.reveal", map[string]any{"session": info.ID, "single": true}, nil)
+	scratch := sess.WorkingDirectory
+
+	// main moves on and the PR is rebased onto it without old.txt.
+	commitFile(t, upstream, "main2.txt", "newer\n")
+	gitIn(t, upstream, "checkout", "-q", "-b", "rebased")
+	commitFile(t, upstream, "pr.txt", "pr v2\n")
+	newHead := gitIn(t, upstream, "rev-parse", "HEAD")
+	gitIn(t, upstream, "update-ref", "refs/pull/7/head", "rebased")
+	gitIn(t, upstream, "checkout", "-q", "main")
+	newBase := gitIn(t, upstream, "rev-parse", "main")
+
+	rpcOK(t, r.srv, info.ID, "review.refresh", map[string]any{}, nil)
+
+	if got := gitIn(t, wt, "rev-parse", "HEAD"); got != newBase {
+		t.Fatalf("HEAD %s, want the new merge base %s", got, newBase)
+	}
+	if got := gitIn(t, wt, "diff", "--cached", "--name-only"); got != "pr.txt" {
+		t.Fatalf("staged after refresh %q, want pr.txt", got)
+	}
+	if got := gitIn(t, wt, "status", "--porcelain", "--untracked-files=all"); got != "A  pr.txt" {
+		t.Fatalf("status after refresh %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "old.txt")); !os.IsNotExist(err) {
+		t.Fatalf("old.txt left from the old head: %v", err)
+	}
+	st, err := review.LoadState(r.stateDir, info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.HeadSHA != newHead || st.Revealed || st.Single {
+		t.Fatalf("state %+v, want head %s, not revealed, not single", st, newHead)
+	}
+	var meta reviewMeta
+	raw, err := os.ReadFile(filepath.Join(scratch, reviewFilesDir, "meta.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil || meta.HeadSHA != newHead {
+		t.Fatalf("meta %s (%v), want head %s", raw, err, newHead)
+	}
+	diff, err := os.ReadFile(filepath.Join(scratch, reviewFilesDir, "diff.patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(diff), "old.txt") || !strings.Contains(string(diff), "pr v2") {
+		t.Fatalf("diff.patch not rewritten:\n%s", diff)
+	}
+	if _, err := os.Stat(filepath.Join(scratch, ".aiman_pr_description.md")); !os.IsNotExist(err) {
+		t.Fatalf("description not withdrawn: %v", err)
+	}
+	states := todoStates(t, r.srv, info.ID)
+	for _, ref := range []string{reviewBlindRef, reviewInformedRef, todo.ReviewGateRef} {
+		if states[ref] != domain.TodoPending {
+			t.Errorf("%s is %s, want pending", ref, states[ref])
+		}
+	}
+	var from, to any
+	for _, ev := range ledger(t, r.srv, info.ID) {
+		if ev.Kind == domain.EventReviewRefreshed {
+			var p map[string]any
+			_ = json.Unmarshal(ev.Payload, &p)
+			from, to = p["from"], p["to"]
+		}
+	}
+	if from != before.HeadSHA || to != newHead {
+		t.Fatalf("review.refreshed from %v to %v, want %s to %s", from, to, before.HeadSHA, newHead)
+	}
+}
+
+func reviewGateID(t *testing.T, srv *Server, id string) string {
+	t.Helper()
+	list, err := srv.TodoAccess().Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range list.Items {
+		if it.Ref == todo.ReviewGateRef {
+			return it.ID
+		}
+	}
+	t.Fatal("no review gate")
+	return ""
 }

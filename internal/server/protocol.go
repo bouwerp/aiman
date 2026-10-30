@@ -35,6 +35,8 @@ const (
 	// CodeReviewExists refuses a review create while a live session already
 	// reviews that pull request.
 	CodeReviewExists = "review_exists"
+	// CodeReviewNotReady refuses a reveal before the blind passes are done.
+	CodeReviewNotReady = "review_not_ready"
 )
 
 type Request struct {

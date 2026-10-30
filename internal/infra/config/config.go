@@ -38,6 +38,8 @@ type Config struct {
 	Handover HandoverConfig `yaml:"handover,omitempty"`
 	// Design configures where coordinator design pages are published.
 	Design DesignConfig `yaml:"design,omitempty"`
+	// Review configures PR review sessions.
+	Review ReviewConfig `yaml:"review,omitempty"`
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
@@ -75,6 +77,8 @@ type ServeConfig struct {
 	Handover HandoverConfig `yaml:"handover,omitempty"`
 	// Design configures where coordinator design pages are published.
 	Design DesignConfig `yaml:"design,omitempty"`
+	// Review configures PR review sessions.
+	Review ReviewConfig `yaml:"review,omitempty"`
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
@@ -228,6 +232,27 @@ func (h HandoverConfig) ChildTimeout() time.Duration {
 	return DefaultHandoverTimeout
 }
 
+// DefaultReviewConsultTimeout bounds a review session's consult when
+// review.consult_timeout is unset. A chunked review takes longer than a design
+// consult.
+const DefaultReviewConsultTimeout = 30 * time.Minute
+
+// ReviewConfig configures PR review sessions.
+type ReviewConfig struct {
+	// ConsultTimeout is how long a review session's consult may run without a
+	// report; zero means DefaultReviewConsultTimeout.
+	ConsultTimeout time.Duration `yaml:"consult_timeout,omitempty"`
+}
+
+// ConsultTimeoutOrDefault is ConsultTimeout, or DefaultReviewConsultTimeout
+// when unset.
+func (r ReviewConfig) ConsultTimeoutOrDefault() time.Duration {
+	if r.ConsultTimeout > 0 {
+		return r.ConsultTimeout
+	}
+	return DefaultReviewConsultTimeout
+}
+
 // DefaultDesignDir is the directory design pages live in when design.dir is
 // unset.
 const DefaultDesignDir = "docs/designs"
@@ -268,6 +293,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Verify:        c.Verify,
 		Handover:      c.Handover,
 		Design:        c.Design,
+		Review:        c.Review,
 		Repos:         c.Repos,
 		Roles:         c.Roles,
 	})

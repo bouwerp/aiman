@@ -65,12 +65,13 @@ func (h *Harness) EnableCoordinator() {
 		Steer: func(id, text string) {
 			h.srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: domain.AuthorAiman, Text: text})
 		},
-		Notify:         c,
-		Ledger:         h.srv.AppendLedger,
-		Retire:         h.srv.RetireConsult,
-		KeepReport:     h.srv.KeepConsultReport,
-		Alive:          h.srv.ConsultAlive,
-		ConsultTimeout: config.DefaultHandoverTimeout,
+		Notify:            c,
+		Ledger:            h.srv.AppendLedger,
+		Retire:            h.srv.RetireConsult,
+		KeepReport:        h.srv.KeepConsultReport,
+		Alive:             h.srv.ConsultAlive,
+		ConsultTimeout:    config.DefaultHandoverTimeout,
+		ConsultTimeoutFor: coordinator.ConsultTimeouts(config.DefaultReviewConsultTimeout, config.DefaultHandoverTimeout),
 	}
 	h.coord = c
 }

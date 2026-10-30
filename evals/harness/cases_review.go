@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -128,6 +129,115 @@ func CaseReviewBlind() Case {
 		out = append(out, reviewRecordMetrics(h, id)...)
 		resp, err := h.Call("session.create", map[string]any{"review": reviewRef})
 		refused := err != nil && resp.Error != nil && resp.Error.Code == "review_exists"
-		return append(out, score("second_review_refused", refused, errText(err)))
+		out = append(out, score("second_review_refused", refused, errText(err)))
+		return append(out, revealAfterConsult(h, id)...)
+	}}
+}
+
+// revealCode is the error code of a review.reveal by caller, or "" when it
+// succeeded.
+func revealCode(h *Harness, caller string, params map[string]any) string {
+	resp, err := h.CallAs(caller, "review.reveal", params)
+	if err == nil || resp.Error == nil {
+		return ""
+	}
+	return resp.Error.Code
+}
+
+// tickBlind marks the review's Blind review to-do done as its agent.
+func tickBlind(h *Harness, id string) error {
+	return h.srv.TodoAccess().Mutate(context.Background(), id, domain.AuthorAgent, func(l *domain.TodoList) error {
+		for i := range l.Items {
+			if l.Items[i].Ref == "review:blind" {
+				l.Items[i].State = domain.TodoDone
+			}
+		}
+		return nil
+	})
+}
+
+// revealedState scores the state file and the review.revealed row after a
+// reveal.
+func revealedState(h *Harness, id string, single bool) []MetricResult {
+	st, err := review.LoadState(h.ReviewDir(), id)
+	var payload map[string]any
+	for _, ev := range h.Events(id) {
+		if ev.Kind == domain.EventReviewRevealed {
+			payload = map[string]any{}
+			_ = json.Unmarshal(ev.Payload, &payload)
+		}
+	}
+	return []MetricResult{
+		score("state_revealed", err == nil && st.Revealed && st.Single == single, fmt.Sprintf("state %+v err %v", st, err)),
+		score("revealed_in_ledger", payload != nil && payload["single"] == single, fmt.Sprintf("review.revealed %v", payload)),
+	}
+}
+
+// revealAfterConsult runs the blind consult: reveal is refused before the
+// blind to-do is done and while the consult runs, and allowed once its report
+// settles. The description lands in the scratch directory, never in the PR
+// worktree.
+func revealAfterConsult(h *Harness, id string) []MetricResult {
+	out := []MetricResult{score("reveal_refused_before_blind",
+		revealCode(h, id, map[string]any{}) == "review_not_ready", "reveal before the blind to-do")}
+	if err := tickBlind(h, id); err != nil {
+		return append(out, score("blind_ticked", false, err.Error()))
+	}
+	if err := h.SeedTodos(id, domain.TodoItem{ID: "bc", Text: "Blind consult", State: domain.TodoPending}); err != nil {
+		return append(out, score("consult_todo", false, err.Error()))
+	}
+	resp, err := h.CallAs(id, "session.create", map[string]any{"for": "bc", "consult": true, "brief": consultBriefText})
+	if err != nil {
+		return append(out, score("consult_created", false, err.Error()))
+	}
+	var res struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}
+	raw, _ := json.Marshal(resp.Result)
+	_ = json.Unmarshal(raw, &res)
+	consult, err := h.Repo.Get(context.Background(), res.Session.ID)
+	if err != nil {
+		return append(out, score("consult_created", false, err.Error()))
+	}
+	out = append(out, score("reveal_waits_for_consult",
+		revealCode(h, id, map[string]any{"single": true}) == "review_not_ready", "reveal while the consult runs"))
+	if err := os.WriteFile(filepath.Join(consult.WorkingDirectory, domain.AimanReportFileName), []byte(consultReportText), 0o600); err != nil {
+		return append(out, score("consult_report", false, err.Error()))
+	}
+	h.TrackOnce()
+	out = append(out, score("reveal_after_consult", revealCode(h, id, map[string]any{}) == "", "reveal after consult.finished"))
+	sess, err := h.Repo.Get(context.Background(), id)
+	if err != nil {
+		return append(out, score("review_row", false, err.Error()))
+	}
+	desc, descErr := os.ReadFile(filepath.Join(sess.WorkingDirectory, review.DescriptionFileName))
+	_, inPR := os.Stat(filepath.Join(sess.WorktreePath, review.DescriptionFileName))
+	out = append(out,
+		score("description_written", descErr == nil && strings.Contains(string(desc), "# Add the parser") && strings.Contains(string(desc), "Linked issues: PROJ-1"),
+			fmt.Sprintf("description %q err %v", desc, descErr)),
+		score("description_not_in_pr_worktree", os.IsNotExist(inPR), "description written into the PR worktree"),
+	)
+	return append(out, revealedState(h, id, false)...)
+}
+
+// CaseReviewSingle reveals a review no consult took part in: refused without
+// single, allowed with it, and recorded as a one-reviewer review in the state
+// file and the ledger.
+func CaseReviewSingle() Case {
+	return Case{Name: "review-single", Assert: func(h *Harness) []MetricResult {
+		id, out := startReview(h)
+		if id == "" {
+			return out
+		}
+		if err := tickBlind(h, id); err != nil {
+			return append(out, score("blind_ticked", false, err.Error()))
+		}
+		out = append(out,
+			score("reveal_needs_single", revealCode(h, id, map[string]any{}) == "review_not_ready", "reveal without a consult or single"),
+			score("reveal_single", revealCode(h, id, map[string]any{"single": true}) == "", "reveal with single"),
+		)
+		return append(out, revealedState(h, id, true)...)
 	}}
 }

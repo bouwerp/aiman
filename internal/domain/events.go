@@ -43,6 +43,16 @@ const (
 	// EventReviewStarted records a review session's start: the PR, its base
 	// and the head SHA the worktree was staged from.
 	EventReviewStarted EventKind = "review.started"
+	// EventReviewRevealed records that the PR description was written for a
+	// review session; single is set when the review went ahead with one
+	// reviewer.
+	EventReviewRevealed EventKind = "review.revealed"
+	// EventReviewRefreshed records a review restaged at a new PR head: from
+	// and to are the old and new head SHAs.
+	EventReviewRefreshed EventKind = "review.refreshed"
+	// EventConsultAbandoned records on the parent's ledger a consult that
+	// ended without a usable report: the child and the to-do it was for.
+	EventConsultAbandoned EventKind = "consult.abandoned"
 )
 
 // EventActor is who caused the event. `unknown` exists for rows imported from a

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
 type mutation struct {
@@ -531,8 +532,59 @@ func TestConsultGivesUp(t *testing.T) {
 			if len(f.steered) != 1 || f.steered[0].session != "p" || f.steered[0].text != note {
 				t.Fatalf("steered %+v, want one note %q", f.steered, note)
 			}
-			if len(*rows) != 0 {
-				t.Fatalf("ledger %v, want none", *rows)
+			if len(*rows) != 1 || (*rows)[0].kind != domain.EventConsultAbandoned {
+				t.Fatalf("ledger %v, want one consult.abandoned", *rows)
+			}
+		})
+	}
+}
+
+// TestAbandonRecordsLedger records consult.abandoned with the child and the
+// to-do on the parent's ledger, so review reveal can tell the consult ended.
+func TestAbandonRecordsLedger(t *testing.T) {
+	f, rows, _ := consultFixture("")
+	f.sessions[1].AgentEnded = true
+	f.tracker.TrackOnce(context.Background())
+	if len(*rows) != 1 {
+		t.Fatalf("ledger %+v, want one row", *rows)
+	}
+	row := (*rows)[0]
+	if row.session != "p" || row.kind != domain.EventConsultAbandoned || row.payload["child"] != "c1" || row.payload["todo"] != "t3" {
+		t.Fatalf("row %+v, want consult.abandoned {child c1, todo t3} on p", row)
+	}
+}
+
+// TestConsultTimeoutForReview gives a review parent's consult
+// review.consult_timeout (30 minutes by default) and any other parent's the
+// handover timeout.
+func TestConsultTimeoutForReview(t *testing.T) {
+	timeouts := ConsultTimeouts(config.ReviewConfig{}.ConsultTimeoutOrDefault(), config.HandoverConfig{}.ChildTimeout())
+	if got := timeouts(domain.Session{ReviewPR: "o/r#7"}); got != 30*time.Minute {
+		t.Fatalf("review parent timeout %v, want 30m", got)
+	}
+	if got := timeouts(domain.Session{}); got != config.DefaultHandoverTimeout {
+		t.Fatalf("other parent timeout %v, want the handover timeout", got)
+	}
+	cases := []struct {
+		name    string
+		review  string
+		age     time.Duration
+		abandon bool
+	}{
+		{"review consult within 30m", "o/r#7", 20 * time.Minute, false},
+		{"review consult past 30m", "o/r#7", 31 * time.Minute, true},
+		{"other consult past 10m", "", 11 * time.Minute, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _, retired := consultFixture("")
+			f.sessions[0].ReviewPR = tc.review
+			f.sessions[1].CreatedAt = consultNow.Add(-tc.age)
+			f.tracker.ConsultTimeout = 0
+			f.tracker.ConsultTimeoutFor = timeouts
+			f.tracker.TrackOnce(context.Background())
+			if got := len(*retired) == 1; got != tc.abandon {
+				t.Fatalf("retired %v, want abandoned=%v", *retired, tc.abandon)
 			}
 		})
 	}
