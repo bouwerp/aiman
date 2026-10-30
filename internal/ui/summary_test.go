@@ -59,6 +59,15 @@ func TestSummaryModelEnterConfirmsWithAgent(t *testing.T) {
 	}
 }
 
+func TestSummaryShowsLaunchModel(t *testing.T) {
+	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "repo"}, "")
+	m.SetAgent(&domain.Agent{Name: "Pi", LaunchModel: "openrouter/qwen/qwen3-coder"})
+	out := ansi.Strip(m.viewString())
+	if !strings.Contains(out, "openrouter/qwen/qwen3-coder") {
+		t.Fatalf("summary missing launch model:\n%s", out)
+	}
+}
+
 func TestSummaryModelAdHocGetSessionConfigReturnsPrompt(t *testing.T) {
 	m := NewAdHocSummaryModel("my-label")
 	m.SetAgent(&domain.Agent{Name: "Claude"})

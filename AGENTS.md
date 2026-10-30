@@ -297,9 +297,11 @@ State captured at goroutine dispatch time (before the goroutine starts) to avoid
 
 The TUI wizard (`n` key) drives the user through:
 
-1. Run-target picker (`viewStateRunTargetPicker`) → a configured remote server. Shown for
-   any remote count, including zero, so a fresh install still has somewhere actionable to go.
-   Number selects; `enter` confirms.
+1. Run-target picker (`viewStateRunTargetPicker`) → a configured remote server. Shown when
+   there are zero remotes (a fresh install still has somewhere to add one) or two or more.
+   One configured remote is selected automatically and the wizard goes to the mode picker.
+   Number selects; `enter` confirms. A review create always goes to serve (`session.create
+   --review`); the laptop never falls back to local CreateSession, which has no branch.
 2. Mode picker → JIRA issue / new branch / existing branch / ad-hoc / autonomous trigger / `[6] Review a PR`. Review a PR goes repo picker then `viewStatePRPicker` (`usecase.ListOpenPRs`, `gh pr list` open PRs newest first, rows `#<n> <title> · <author> · +<add> -<del>`, type-to-filter). Enter sets `sessionCfg.ReviewPR = "<slug>#<n>"` and `RemoteCreateSpec.Review` the same, then the agent picker. The detail pane shows `review #<n>` for a review session.
 3. JIRA issue picker → `m.sessionCfg.IssueKey` / `m.sessionCfg.Issue`. Only issues assigned
    to the current user in `integrations.jira.issue_statuses` (default:
@@ -308,9 +310,13 @@ The TUI wizard (`n` key) drives the user through:
 5. Repo picker (via `gh repo list`)
 6. Directory picker (remote subdirectory of repo)
 7. Agent picker (scans the remote for installed agents). It lists only those agents; there
-   are no tier rows. Enter on an agent sends that agent and no tier. With no agents listed,
-   enter lets serve pick (smart tier for a session the user starts). The role agent is
-   preselected. The restart and agent-switch picker lists agents only as well.
+   are no tier rows. Each row shows the agent's default model (from `agent_defaults`, else
+   the first catalog model, else `host default` for Pi). Enter on an agent that has more
+   than one model opens a model step: Default, then the catalog; Pi lists providers from
+   `pi --list-models` (OpenRouter, Ollama, OpenCode, …) then type-to-filter models. The
+   chosen model is `Agent.LaunchModel` and is sent as `model` on `session.create`. With no
+   agents listed, enter lets serve pick (smart tier for a session the user starts). The
+   role agent is preselected. The restart and agent-switch picker uses the same flow.
 8. Summary + AWS override screen
 9. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine
 

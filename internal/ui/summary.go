@@ -209,7 +209,11 @@ func (m SummaryModel) viewString() string {
 
 	// Agent
 	if m.agent != nil {
-		b.WriteString(fmt.Sprintf("%-15s %s\n", "Agent:", successStyle.Render(m.agent.Name)))
+		agentLabel := m.agent.Name
+		if m.agent.LaunchModel != "" {
+			agentLabel += " (" + m.agent.LaunchModel + ")"
+		}
+		b.WriteString(fmt.Sprintf("%-15s %s\n", "Agent:", successStyle.Render(agentLabel)))
 	} else {
 		b.WriteString(fmt.Sprintf("%-15s %s\n", "Agent:", failStyle.Render("None selected")))
 	}

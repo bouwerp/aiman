@@ -3,6 +3,9 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -40,6 +43,8 @@ func remoteCreateSpecFrom(cfg domain.SessionConfig) usecase.RemoteCreateSpec {
 	if cfg.Agent != nil && !isPreferredAgentChoice(cfg.Agent) {
 		spec.Agent = cfg.Agent.Command
 		spec.AgentName = cfg.Agent.Name
+		spec.Model = cfg.Agent.LaunchModel
+		spec.Effort = cfg.Agent.LaunchEffort
 	}
 	return spec
 }
@@ -56,7 +61,17 @@ var errPreferredNeedsServe = errors.New("no agent chosen: only the remote agent 
 // this machine, an autonomous-trigger config, a prior snapshot to resume from —
 // is created locally instead, because handing it over would silently drop that
 // state.
+// mustCreateRemotely reports a create that has no laptop fallback. A
+// review's PR worktree, scratch directory and to-dos live in serve; the
+// local FlowManager has no branch and would name an empty worktree.
+func mustCreateRemotely(cfg domain.SessionConfig) bool {
+	return strings.TrimSpace(cfg.ReviewPR) != ""
+}
+
 func canCreateRemotely(cfg domain.SessionConfig) (bool, string) {
+	if mustCreateRemotely(cfg) {
+		return true, ""
+	}
 	switch {
 	case cfg.Agent == nil:
 		return false, "no agent chosen"
@@ -95,6 +110,33 @@ func createSessionRemotely(ctx context.Context, mgr *ssh.Manager, cfg domain.Ses
 		session.Backend = domain.BackendPTY
 	}
 	return session, nil
+}
+
+// createReviewRemotely asks serve to start the review. There is no laptop
+// fallback: local CreateSession has no branch and cannot make the PR worktree.
+func (m *Model) createReviewRemotely(ctx context.Context, sessionCfg domain.SessionConfig, placeholderID string, sendStatus func(string)) sessionCreateMsg {
+	mgr, ok := sessionCfg.SSHManager.(*ssh.Manager)
+	if !ok {
+		return sessionCreateMsg{err: errors.New("review needs a remote host"), placeholderID: placeholderID}
+	}
+	if !usecase.ServeAvailable(ctx, mgr) {
+		return sessionCreateMsg{err: fmt.Errorf("review needs the agent API on %s", sessionCfg.RemoteHost), placeholderID: placeholderID}
+	}
+	sendStatus("Handing creation to the remote...")
+	session, err := createSessionRemotely(ctx, mgr, sessionCfg, sessionCfg.RemoteHost)
+	if err != nil {
+		m.logPersistent("remote review create failed for %q: %v", sessionCfg.ReviewPR, err)
+		return sessionCreateMsg{err: err, placeholderID: placeholderID}
+	}
+	m.logPersistent("remote created session %s (%s) on %s; sync and credentials reconcile locally",
+		session.TerminalName, session.ID, sessionCfg.RemoteHost)
+	if m.db != nil {
+		session.UpdatedAt = time.Now()
+		if serr := m.db.Save(ctx, session); serr != nil {
+			m.logPersistent("failed to save remotely-created session %s: %v", session.ID, serr)
+		}
+	}
+	return sessionCreateMsg{session: *session, placeholderID: placeholderID}
 }
 
 // reconcileMissingSyncs is a no-op: mutagen sync is created only by ctrl+y.

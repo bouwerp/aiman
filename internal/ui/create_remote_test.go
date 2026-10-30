@@ -57,6 +57,20 @@ func TestRemoteCreateSpecCarriesReview(t *testing.T) {
 	}
 }
 
+func TestRemoteCreateSpecCarriesLaunchModel(t *testing.T) {
+	spec := remoteCreateSpecFrom(domain.SessionConfig{
+		Agent: &domain.Agent{
+			Name: "Pi", Command: "pi",
+			LaunchModel: "openrouter/qwen/qwen3-coder", LaunchEffort: "high",
+		},
+		Repo:   domain.Repo{Name: "r"},
+		Branch: "b",
+	})
+	if spec.Agent != "pi" || spec.Model != "openrouter/qwen/qwen3-coder" || spec.Effort != "high" {
+		t.Fatalf("spec agent/model/effort = %q/%q/%q", spec.Agent, spec.Model, spec.Effort)
+	}
+}
+
 func TestCanCreateRemotelyRefusesLocalOnlyState(t *testing.T) {
 	base := func() domain.SessionConfig {
 		return domain.SessionConfig{Agent: &domain.Agent{Name: "Claude Code", Command: "claude"}}
@@ -91,6 +105,28 @@ func TestCanCreateRemotelyRefusesLocalOnlyState(t *testing.T) {
 	noAgent.Agent = nil
 	if ok, _ := canCreateRemotely(noAgent); ok {
 		t.Error("a session with no agent cannot be created remotely")
+	}
+}
+
+// A review's PR worktree and scratch live in serve. Laptop-only state
+// (AWS minted here, skills, secrets) must not send it down the local
+// CreateSession path, which has no branch and fails with an empty worktree name.
+func TestCanCreateRemotelyHandsReviewDespiteLaptopState(t *testing.T) {
+	cfg := domain.SessionConfig{
+		Agent:     &domain.Agent{Name: "Claude Code", Command: "claude"},
+		ReviewPR:  "o/r#7",
+		AWSConfig: &domain.AWSConfig{RoleName: "dev"},
+	}
+	ok, why := canCreateRemotely(cfg)
+	if !ok {
+		t.Fatalf("review with AWS must go to serve, refused because: %s", why)
+	}
+	if !mustCreateRemotely(cfg) {
+		t.Fatal("a review must not fall back to local CreateSession")
+	}
+	plain := domain.SessionConfig{Agent: cfg.Agent, Branch: "feat"}
+	if mustCreateRemotely(plain) {
+		t.Fatal("a plain create may fall back locally")
 	}
 }
 

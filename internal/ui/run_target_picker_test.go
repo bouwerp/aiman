@@ -24,15 +24,14 @@ func pressMainKey(m *Model, r rune) *Model {
 	return m
 }
 
-// The run-target picker must be reachable no matter how many remotes are
-// configured, so a fresh install with zero remotes still has somewhere obvious to go.
+// The run-target picker is for choosing among remotes, or for a fresh install
+// with none. One configured remote is already the target.
 func TestNewSessionAlwaysOpensRunTargetPicker(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		cfg  *config.Config
 	}{
 		{"two remotes", twoRemoteCfg()},
-		{"one remote", &config.Config{Remotes: twoRemoteCfg().Remotes[:1]}},
 		{"no remotes", &config.Config{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,6 +43,29 @@ func TestNewSessionAlwaysOpensRunTargetPicker(t *testing.T) {
 				t.Fatalf("no remotes is not an error any more, got %q", m.lastError)
 			}
 		})
+	}
+}
+
+func TestNewSessionWithOneRemoteSkipsHostPicker(t *testing.T) {
+	cfg := &config.Config{Remotes: twoRemoteCfg().Remotes[:1]}
+	m := pressMainKey(&Model{cfg: cfg, state: viewStateMain}, 'n')
+	if m.state != viewStateModePicker {
+		t.Fatalf("one remote must skip the host picker, got state %v", m.state)
+	}
+	if m.selectedRemote.Host != "10.0.1.5" {
+		t.Fatalf("selected remote = %q, want 10.0.1.5", m.selectedRemote.Host)
+	}
+	if m.sessionCfg.RemoteHost != "10.0.1.5" {
+		t.Fatalf("RemoteHost = %q, want 10.0.1.5", m.sessionCfg.RemoteHost)
+	}
+}
+
+func TestEscFromModePickerWithOneRemoteReturnsToMain(t *testing.T) {
+	cfg := &config.Config{Remotes: twoRemoteCfg().Remotes[:1]}
+	m := &Model{cfg: cfg, state: viewStateModePicker, selectedRemote: cfg.Remotes[0]}
+	updated, _ := m.handleModePickerUpdate(pressKey("esc"))
+	if got := updated.(*Model); got.state != viewStateMain {
+		t.Fatalf("esc with one remote must return to the dashboard, got %v", got.state)
 	}
 }
 

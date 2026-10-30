@@ -354,6 +354,9 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	if config.Agent == nil {
 		return nil, errors.New("agent is required")
 	}
+	if strings.TrimSpace(config.ReviewPR) != "" && strings.TrimSpace(config.PreparedWorktree) == "" {
+		return nil, errors.New("a review session must be created through the agent API")
+	}
 	if err := m.checkSessionID(ctx, config.SessionID); err != nil {
 		return nil, err
 	}

@@ -17,6 +17,18 @@ func TestCreateSessionRequiresAgent(t *testing.T) {
 	}
 }
 
+func TestCreateSessionReviewNeedsPreparedWorktree(t *testing.T) {
+	manager := &FlowManager{}
+	_, err := manager.CreateSession(context.Background(), domain.SessionConfig{
+		Agent:    &domain.Agent{Name: "Claude Code", Command: "claude"},
+		ReviewPR: "o/r#7",
+		Repo:     domain.Repo{Name: "o/r"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "agent API") {
+		t.Fatalf("CreateSession() error = %v, want a review-must-use-serve error", err)
+	}
+}
+
 // A prepared worktree is used as is: nil git manager and executor prove no
 // git call is made.
 func TestResolveWorktreePrepared(t *testing.T) {

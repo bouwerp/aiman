@@ -8,15 +8,36 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
 type agentItem struct {
-	agent domain.Agent
+	agent        domain.Agent
+	defaultModel string
 }
 
-func (i agentItem) Title() string       { return i.agent.Name }
-func (i agentItem) Description() string { return i.agent.Description }
+func (i agentItem) Title() string { return i.agent.Name }
+func (i agentItem) Description() string {
+	if i.defaultModel == "" {
+		return i.agent.Description
+	}
+	if i.agent.Description == "" {
+		return i.defaultModel
+	}
+	return i.agent.Description + "  [" + i.defaultModel + "]"
+}
 func (i agentItem) FilterValue() string { return i.agent.Name }
+
+type agentPickStep int
+
+const (
+	agentPickList agentPickStep = iota
+	agentPickModelLoading
+	agentPickProvider
+	agentPickModel
+	agentPickModelTyping
+)
 
 type AgentPickerModel struct {
 	list     list.Model
@@ -25,12 +46,26 @@ type AgentPickerModel struct {
 	// agents.preferred choice. Only a new session sets it; a restart needs a
 	// real agent.
 	allowPreferred bool
+
+	host     string
+	lister   modelLister
+	defaults map[string]string
+
+	step     agentPickStep
+	pending  *domain.Agent
+	models   []agent.ModelOption
+	dynamic  bool
+	provider string
+	filter   string
+	pick     int
+	input    string
+	loadErr  error
 }
 
 func NewAgentPickerModel(agents []domain.Agent) AgentPickerModel {
 	items := make([]list.Item, len(agents))
 	for i, a := range agents {
-		items[i] = agentItem{agent: a}
+		items[i] = agentItem{agent: a, defaultModel: agentListDefault(nil, a.Command)}
 	}
 
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
@@ -57,6 +92,51 @@ func (m AgentPickerModel) Init() tea.Cmd {
 func (m *AgentPickerModel) SetSize(width, height int) {
 	h, v := docStyle.GetFrameSize()
 	m.list.SetSize(width-h, height-v)
+}
+
+// SetModelSource records where models are listed from and refreshes each
+// row's default-model label from defaults (config agent_defaults) or the
+// catalog.
+func (m *AgentPickerModel) SetModelSource(host string, lister modelLister, defaults map[string]string) {
+	m.host, m.lister, m.defaults = host, lister, defaults
+	items := m.list.Items()
+	for i, it := range items {
+		ai, ok := it.(agentItem)
+		if !ok {
+			continue
+		}
+		ai.defaultModel = agentListDefault(defaults, ai.agent.Command)
+		items[i] = ai
+	}
+	m.list.SetItems(items)
+}
+
+func agentListDefault(defaults map[string]string, command string) string {
+	base := agent.CommandBase(command)
+	if m := strings.TrimSpace(defaults[base]); m != "" {
+		return m
+	}
+	if agent.HasDynamicModels(command) {
+		return "host default"
+	}
+	cat := agent.LaunchCatalogFor(base)
+	if len(cat.Models) > 0 {
+		return cat.Models[0]
+	}
+	return ""
+}
+
+func agentDefaultModels(cfg *config.Config) map[string]string {
+	if cfg == nil || cfg.AgentDefaults == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for k, d := range cfg.AgentDefaults {
+		if m := strings.TrimSpace(d.Model); m != "" {
+			out[k] = m
+		}
+	}
+	return out
 }
 
 // Preselect moves the cursor to the agent whose command's binary is command
@@ -92,12 +172,25 @@ func isPreferredAgentChoice(a *domain.Agent) bool {
 	return a != nil && strings.TrimSpace(a.Command) == ""
 }
 
+func (m AgentPickerModel) inModelFlow() bool {
+	return m.step != agentPickList
+}
+
 func (m AgentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if lm, ok := msg.(preferredModelsMsg); ok {
+		return m.applyModels(lm), nil
+	}
+	if m.inModelFlow() {
+		km, ok := msg.(tea.KeyPressMsg)
+		if !ok {
+			return m, nil
+		}
+		return m.updateModelPick(km)
+	}
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		if msg.String() == "enter" {
 			if i, ok := m.list.SelectedItem().(agentItem); ok {
-				m.selected = &i.agent
-				return m, nil
+				return m.chooseAgent(i.agent)
 			}
 			if m.allowPreferred && len(m.list.Items()) == 0 {
 				m.selected = preferredAgentChoice()
@@ -111,7 +204,17 @@ func (m AgentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m AgentPickerModel) chooseAgent(a domain.Agent) (tea.Model, tea.Cmd) {
+	if !needsModelPick(a.Command) {
+		return m.confirm(a, ""), nil
+	}
+	return m.startModelPick(a)
+}
+
 func (m AgentPickerModel) viewString() string {
+	if m.inModelFlow() {
+		return m.viewModelPick()
+	}
 	if len(m.list.Items()) == 0 {
 		msg := "\n  No AI agents found on the remote server.\n  Please install at least one of: Claude Code, Antigravity CLI, Cursor, Kilo Code, or GitHub Copilot CLI.\n\n"
 		if m.allowPreferred {

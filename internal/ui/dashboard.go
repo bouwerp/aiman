@@ -2067,6 +2067,10 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 			}
 		}
 
+		if mustCreateRemotely(sessionCfg) {
+			return m.createReviewRemotely(ctx, sessionCfg, placeholderID, sendStatus)
+		}
+
 		// Hand the whole create to the remote when it can take it: serve builds
 		// its own FlowManager over a local executor, and the flow is not tied to
 		// the connection that asked for it, so aiman can be closed the moment
@@ -4871,12 +4875,7 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 	if msg.String() == "n" {
-		// The run-target picker is shown even with zero remotes so the user lands
-		// somewhere actionable instead of failing silently later.
-		m.sessionCfg = domain.SessionConfig{}
-		m.selectedRemote = config.Remote{}
-		m.runTargetSelected = 0
-		m.state = viewStateRunTargetPicker
+		m.beginNewSession()
 		return m, nil, true
 	}
 	if msg.String() == "N" {
@@ -6123,6 +6122,23 @@ func (m *Model) handleAWSCredentialsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// beginNewSession starts the n-key wizard. One configured remote is already
+// the target, so the host picker is skipped. Zero remotes still open it so a
+// fresh install has somewhere to add one.
+func (m *Model) beginNewSession() {
+	m.sessionCfg = domain.SessionConfig{}
+	m.selectedRemote = config.Remote{}
+	m.runTargetSelected = 0
+	if m.cfg != nil && len(m.cfg.Remotes) == 1 {
+		r := m.cfg.Remotes[0]
+		m.selectedRemote = r
+		m.sessionCfg.RemoteHost = r.Host
+		m.state = viewStateModePicker
+		return
+	}
+	m.state = viewStateRunTargetPicker
+}
+
 // handleRunTargetPickerUpdate handles the first screen of the new-session flow: which
 // configured remote server the work should run on.
 func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:unparam // Cmd stays nil by design: selection is pure state, no commands to fire
@@ -6167,6 +6183,10 @@ func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "esc":
+			if m.cfg != nil && len(m.cfg.Remotes) == 1 {
+				m.state = viewStateMain
+				return m, nil
+			}
 			m.state = viewStateRunTargetPicker
 			return m, nil
 		case "1":
@@ -6559,7 +6579,7 @@ func (m *Model) handleChangeDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
-		if m.agentPicker.list.FilterState() != list.Filtering {
+		if !m.agentPicker.inModelFlow() && m.agentPicker.list.FilterState() != list.Filtering {
 			if m.sessionCfg.Quick {
 				m.state = viewStateMain
 				return m, nil
@@ -6592,16 +6612,18 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Populate AWS override fields when the remote has SyncCredentials enabled.
 		// AllDelegations covers both the singular aws_delegation and the plural
 		// aws_delegations form, so a remote configured either way gets the section.
-		if d := firstSyncingDelegation(m.selectedRemote); d != nil {
-			_, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
-			m.summary.SetAWSDefaults(&domain.AWSConfig{
-				RoleName:        d.RoleName,
-				AccountID:       d.AccountID,
-				Region:          region,
-				Regions:         d.Regions,
-				SessionPolicy:   d.SessionPolicy,
-				DurationSeconds: d.DurationSeconds,
-			})
+		if m.sessionCfg.ReviewPR == "" {
+			if d := firstSyncingDelegation(m.selectedRemote); d != nil {
+				_, region := m.cfg.ResolveAWSSessionDefaults(m.selectedRemote, d)
+				m.summary.SetAWSDefaults(&domain.AWSConfig{
+					RoleName:        d.RoleName,
+					AccountID:       d.AccountID,
+					Region:          region,
+					Regions:         d.Regions,
+					SessionPolicy:   d.SessionPolicy,
+					DurationSeconds: d.DurationSeconds,
+				})
+			}
 		}
 		if m.sessionCfg.ReviewPR == "" && m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
 			m.loadingMsg = "Checking workspace..."
@@ -7237,6 +7259,7 @@ func (m *Model) applyScanAgents(msg agent.ScanAgentsMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.agentPicker = NewAgentPickerModel(msg.Agents)
+	m.agentPicker.SetModelSource(m.selectedRemote.Host, remoteModelLister(m.selectedRemote), agentDefaultModels(m.cfg))
 	// Only the create wizard scans into viewStateAgentPicker; a restart has
 	// its own picker state.
 	if m.loadingNext == viewStateAgentPicker {
@@ -7604,7 +7627,7 @@ func (m *Model) renderAWSCredExpiryBanner() string {
 
 func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
-		if m.agentPicker.list.FilterState() != list.Filtering {
+		if !m.agentPicker.inModelFlow() && m.agentPicker.list.FilterState() != list.Filtering {
 			m.state = viewStateMain
 			m.restartingSession = nil
 			return m, nil

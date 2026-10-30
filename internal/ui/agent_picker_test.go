@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
@@ -32,12 +35,32 @@ func TestAgentPickerWithoutPreferredSelectsNothing(t *testing.T) {
 }
 
 func TestAgentPickerEnterSelectsListedAgent(t *testing.T) {
-	m := NewAgentPickerModel([]domain.Agent{{Name: "Grok", Command: "grok"}})
-	next, _ := m.Update(pressKey("enter"))
-	got := next.(AgentPickerModel).selected
-	if got == nil || got.Command != "grok" {
-		t.Fatalf("selected = %+v, want grok", got)
+	m := sendPicker(t, NewAgentPickerModel([]domain.Agent{{Name: "Grok", Command: "grok"}}), pressKey("enter"))
+	if m.selected != nil {
+		t.Fatalf("enter on grok selected %+v before a model was chosen", m.selected)
 	}
+	if !m.inModelFlow() {
+		t.Fatal("enter on grok must open the model step")
+	}
+	m = sendPicker(t, m, pressKey("enter"))
+	if m.selected == nil || m.selected.Command != "grok" || m.selected.LaunchModel != "" {
+		t.Fatalf("default model pick = %+v, want grok with empty launch model", m.selected)
+	}
+}
+
+func sendPicker(t *testing.T, m AgentPickerModel, msg tea.Msg) AgentPickerModel {
+	t.Helper()
+	next, cmd := m.Update(msg)
+	m = next.(AgentPickerModel)
+	if cmd == nil {
+		return m
+	}
+	if out := cmd(); out != nil {
+		if _, quit := out.(tea.QuitMsg); !quit {
+			return sendPicker(t, m, out)
+		}
+	}
+	return m
 }
 
 func TestPreferredChoiceIsHandedToServe(t *testing.T) {
@@ -114,11 +137,14 @@ func TestAgentPickerListsOnlyAgents(t *testing.T) {
 			t.Fatalf("item %d = %T, want agentItem", i, it)
 		}
 	}
-	next, _ := m.Update(pressKey("down"))
-	next, _ = next.(AgentPickerModel).Update(pressKey("enter"))
-	got := next.(AgentPickerModel).selected
-	if got == nil || got.Command != "codex" {
-		t.Fatalf("selected = %+v, want codex", got)
+	m = sendPicker(t, m, pressKey("down"))
+	m = sendPicker(t, m, pressKey("enter"))
+	if m.selected != nil {
+		t.Fatalf("enter on codex selected %+v before a model was chosen", m.selected)
+	}
+	m = sendPicker(t, m, pressKey("enter"))
+	if m.selected == nil || m.selected.Command != "codex" {
+		t.Fatalf("selected = %+v, want codex", m.selected)
 	}
 }
 
@@ -134,4 +160,107 @@ func TestTierChoiceIsSentToServe(t *testing.T) {
 	if spec.Agent != "" || spec.Tier != config.TierSmart {
 		t.Fatalf("spec = %+v, want tier smart and no agent", spec)
 	}
+}
+
+func TestAgentPickerShowsDefaultModelInList(t *testing.T) {
+	claude := domain.Agent{Name: "Claude Code", Command: "claude", Description: "Anthropic's Claude Code CLI"}
+	pi := domain.Agent{Name: "Pi", Command: "pi", Description: "Pi coding agent (pi.dev)"}
+	m := NewAgentPickerModel([]domain.Agent{claude, pi})
+	m.SetModelSource("", nil, map[string]string{"claude": "opus"})
+	items := m.list.Items()
+	got := items[0].(agentItem).Description()
+	if !strings.Contains(got, "opus") {
+		t.Fatalf("claude description %q, want the configured default model", got)
+	}
+	got = items[1].(agentItem).Description()
+	if !strings.Contains(got, "host default") {
+		t.Fatalf("pi description %q, want host default when none is configured", got)
+	}
+}
+
+func TestAgentPickerPicksCatalogModel(t *testing.T) {
+	m := sendPicker(t, NewAgentPickerModel([]domain.Agent{{Name: "Grok", Command: "grok"}}), pressKey("enter"))
+	m = pickPickerRow(t, m, "grok-4.5")
+	if m.selected == nil || m.selected.Command != "grok" || m.selected.LaunchModel != "grok-4.5" {
+		t.Fatalf("selected = %+v, want grok / grok-4.5", m.selected)
+	}
+}
+
+func TestAgentPickerPiPicksOpenRouterModel(t *testing.T) {
+	m := NewAgentPickerModel([]domain.Agent{{Name: "Pi", Command: "pi"}})
+	m.SetModelSource("dev-box", fakeLister(piModels, nil), nil)
+	m = sendPicker(t, m, pressKey("enter"))
+	if !m.inModelFlow() {
+		t.Fatal("pi must open the model step so OpenRouter and Ollama models can be chosen")
+	}
+	m = pickPickerRow(t, m, "openrouter")
+	m = pickPickerRow(t, m, "qwen/qwen3-coder  ")
+	if m.selected == nil || m.selected.Command != "pi" || m.selected.LaunchModel != "openrouter/qwen/qwen3-coder" {
+		t.Fatalf("selected = %+v, want pi / openrouter/qwen/qwen3-coder", m.selected)
+	}
+}
+
+func TestAgentPickerSkipsModelWhenAgentHasNone(t *testing.T) {
+	m := sendPicker(t, NewAgentPickerModel([]domain.Agent{{Name: "Ageni", Command: "ageni"}}), pressKey("enter"))
+	if m.inModelFlow() {
+		t.Fatal("an agent with no catalog must not open the model step")
+	}
+	if m.selected == nil || m.selected.Command != "ageni" {
+		t.Fatalf("selected = %+v, want ageni", m.selected)
+	}
+}
+
+func TestAgentPickerEscFromModelReturnsToAgentList(t *testing.T) {
+	m := sendPicker(t, NewAgentPickerModel([]domain.Agent{{Name: "Grok", Command: "grok"}}), pressKey("enter"))
+	m = sendPicker(t, m, pressKey("esc"))
+	if m.inModelFlow() {
+		t.Fatal("esc must leave the model step")
+	}
+	if m.selected != nil {
+		t.Fatalf("esc selected %+v", m.selected)
+	}
+}
+
+func TestHandleAgentPickerEscDuringModelStaysOnPicker(t *testing.T) {
+	cfg := twoRemoteCfg()
+	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.state = viewStateAgentPicker
+	m.agentPicker = NewAgentPickerModel([]domain.Agent{{Name: "Grok", Command: "grok"}})
+	got, _ := m.handleAgentPickerUpdate(pressKey("enter"))
+	m = got.(*Model)
+	if m.state != viewStateAgentPicker || m.sessionCfg.Agent != nil {
+		t.Fatalf("state=%v agent=%v after choosing grok, want still on the picker", m.state, m.sessionCfg.Agent)
+	}
+	got, _ = m.handleAgentPickerUpdate(pressKey("esc"))
+	m = got.(*Model)
+	if m.state != viewStateAgentPicker {
+		t.Fatalf("esc from the model step left the picker: state=%v", m.state)
+	}
+	got, _ = m.handleAgentPickerUpdate(pressKey("esc"))
+	m = got.(*Model)
+	if m.state != viewStateDirPicker {
+		t.Fatalf("esc from the agent list = %v, want dir picker", m.state)
+	}
+}
+
+func pickPickerRow(t *testing.T, m AgentPickerModel, prefix string) AgentPickerModel {
+	t.Helper()
+	rows := m.modelRows()
+	i := -1
+	for j, r := range rows {
+		if strings.HasPrefix(r.label, prefix) {
+			i = j
+			break
+		}
+	}
+	if i < 0 {
+		t.Fatalf("no row %q in %+v", prefix, rows)
+	}
+	for m.pick < i {
+		m = sendPicker(t, m, pressKey("down"))
+	}
+	for m.pick > i {
+		m = sendPicker(t, m, pressKey("up"))
+	}
+	return sendPicker(t, m, pressKey("enter"))
 }
