@@ -145,6 +145,15 @@ func TestSessionFromInfoKeepsTheBackend(t *testing.T) {
 	}
 }
 
+func TestSessionFromInfoCopiesReviewPR(t *testing.T) {
+	s := sessionFromInfo("regent0", server.SessionInfo{
+		ID: "rv-1", ReviewPR: "o/r#7",
+	})
+	if s.ReviewPR != "o/r#7" {
+		t.Fatalf("ReviewPR = %q, want o/r#7", s.ReviewPR)
+	}
+}
+
 // A notify event whose kind needs the user raises a toast naming the session.
 func TestNotifyEventToastsWhenNeedsYou(t *testing.T) {
 	m := eventModel(domain.Session{ID: "s1", IssueKey: "PROJ-1", RemoteHost: "regent0"})

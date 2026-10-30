@@ -36,6 +36,10 @@ type RemoteCreateSpec struct {
 	// issue. serve resolves the issue from its key itself, so a task-driven
 	// session needs only this flag and the key.
 	PromptFree bool
+	// Review is "owner/repo#n": the session reviews that pull request. When
+	// set, repo, branch, dir, prompt, issue and base are omitted; serve
+	// refuses those together with review.
+	Review string
 }
 
 // CreateSessionOnRemote asks the remote's own aiman serve to create the session.
@@ -61,23 +65,32 @@ func CreateSessionOnRemote(ctx context.Context, remote TerminalExecutor, spec Re
 		"effort":     spec.Effort,
 		"name":       spec.Name,
 		"group":      spec.Group,
-		"repo":       spec.Repo,
-		"branch":     spec.Branch,
-		"dir":        spec.Dir,
-		"prompt":     spec.Prompt,
-		"issue":      spec.Issue,
-		"base":       spec.BaseBranch,
 		"agent_name": spec.AgentName,
+		"review":     spec.Review,
 	} {
 		if strings.TrimSpace(val) != "" {
 			params[key] = val
 		}
 	}
-	if spec.Quick {
-		params["quick"] = true
-	}
-	if spec.ExistingBranch {
-		params["existing_branch"] = true
+	if strings.TrimSpace(spec.Review) == "" {
+		for key, val := range map[string]string{
+			"repo":   spec.Repo,
+			"branch": spec.Branch,
+			"dir":    spec.Dir,
+			"prompt": spec.Prompt,
+			"issue":  spec.Issue,
+			"base":   spec.BaseBranch,
+		} {
+			if strings.TrimSpace(val) != "" {
+				params[key] = val
+			}
+		}
+		if spec.Quick {
+			params["quick"] = true
+		}
+		if spec.ExistingBranch {
+			params["existing_branch"] = true
+		}
 	}
 	// Always explicit: absent means "true" on the wire, and a task-driven session
 	// needs it false.

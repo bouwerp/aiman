@@ -137,6 +137,7 @@ const (
 	viewStateTerminateConfirm
 	viewStateWorktreeExists
 	viewStateBranchPicker
+	viewStatePRPicker
 	viewStateModePicker
 	viewStateRestartAgentPicker
 	viewStateRestartConfirm
@@ -381,6 +382,8 @@ type Model struct {
 	branchInput          BranchInputModel
 	genericInput         TextInputModel
 	branchPicker         BranchPickerModel
+	prPicker             PRPickerModel
+	reviewMode           bool // new-session wizard is reviewing a PR
 	dirPicker            DirPickerModel
 	agentPicker          AgentPickerModel
 	summary              SummaryModel
@@ -3213,6 +3216,10 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		model, cmd := m.handleBranchPickerUpdate(msg)
 		return model, cmd, true
 
+	case viewStatePRPicker:
+		model, cmd := m.handlePRPickerUpdate(msg)
+		return model, cmd, true
+
 	case viewStateRunTargetPicker:
 		model, cmd := m.handleRunTargetPickerUpdate(msg)
 		return model, cmd, true
@@ -3640,6 +3647,9 @@ func (m *Model) renderView() string {
 	case viewStateBranchPicker:
 		return docStyle.Render(m.branchPicker.viewString())
 
+	case viewStatePRPicker:
+		return docStyle.Render(m.prPicker.viewString())
+
 	case viewStateRunTargetPicker:
 		return m.renderRunTargetPicker()
 	case viewStateModePicker:
@@ -3991,6 +4001,7 @@ func (m *Model) renderModePicker() string {
 	b.WriteString(activeStyle.Render("[3]") + "  Existing Branch      — check out an existing remote branch\n")
 	b.WriteString(activeStyle.Render("[4]") + "  Ad-hoc               — no git repo, no JIRA ticket\n")
 	b.WriteString(activeStyle.Render("[5]") + "  Autonomous Trigger   — configure a remote polling rule\n")
+	b.WriteString(activeStyle.Render("[6]") + "  Review a PR          — start a review session on an open pull request\n")
 	b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("esc: back"))
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -6147,6 +6158,7 @@ func (m *Model) handleRunTargetPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) { 
 func (m *Model) resetSessionCfg(cfg domain.SessionConfig) {
 	cfg.RemoteHost = m.selectedRemote.Host
 	m.sessionCfg = cfg
+	m.reviewMode = false
 }
 
 // handleModePickerUpdate handles the second screen of the new-session flow: what kind of
@@ -6190,6 +6202,14 @@ func (m *Model) handleModePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 			m.state = viewStateAutonomousTriggerPicker
 			return m, nil
+		case "6":
+			m.resetSessionCfg(domain.SessionConfig{})
+			m.reviewMode = true
+			m.loadingMsg = "Loading repositories..."
+			m.loadingNext = viewStateRepoPicker
+			m.state = viewStateLoading
+			m.picker = NewRepoPickerModel(nil, &m.cfg.Git)
+			return m, m.fetchRepos()
 		}
 	}
 	return m, nil
@@ -6384,7 +6404,7 @@ func (m *Model) handleBranchInputUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
 		if m.picker.list.FilterState() != list.Filtering {
-			if m.sessionCfg.ExistingBranch {
+			if m.sessionCfg.ExistingBranch || m.reviewMode {
 				m.state = viewStateModePicker
 			} else {
 				m.state = viewStateBranchInput
@@ -6408,6 +6428,10 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	subModel, cmd = m.picker.Update(msg)
 	m.picker = subModel.(RepoPickerModel)
 	if m.picker.Skip {
+		if m.reviewMode {
+			m.picker.Skip = false
+			return m, cmd
+		}
 		m.sessionCfg.Repo = domain.Repo{Name: "No Repository", URL: ""}
 		m.loadingMsg = "Scanning remote root..."
 		m.loadingNext = viewStateDirPicker
@@ -6417,6 +6441,13 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.picker.selected != nil {
 		// Repo selected, now fetch directories (or branches for existing branch mode)
 		m.sessionCfg.Repo = *m.picker.selected
+
+		if m.reviewMode {
+			m.loadingMsg = "Loading pull requests..."
+			m.loadingNext = viewStatePRPicker
+			m.state = viewStateLoading
+			return m, m.fetchPRs(m.sessionCfg.Repo.Name)
+		}
 
 		if m.sessionCfg.ExistingBranch {
 			m.loadingMsg = "Loading remote branches..."
@@ -6533,6 +6564,10 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = viewStateMain
 				return m, nil
 			}
+			if m.sessionCfg.ReviewPR != "" {
+				m.state = viewStatePRPicker
+				return m, nil
+			}
 			m.state = viewStateDirPicker
 			return m, nil
 		}
@@ -6568,7 +6603,7 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				DurationSeconds: d.DurationSeconds,
 			})
 		}
-		if m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
+		if m.sessionCfg.ReviewPR == "" && m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
 			m.loadingMsg = "Checking workspace..."
 			m.loadingNext = viewStateSummary
 			m.state = viewStateLoading
@@ -6891,6 +6926,17 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.branchPicker = NewBranchPickerModel(msg.branches)
 		h, v := docStyle.GetFrameSize()
 		m.branchPicker.SetSize(m.width-h, m.height-v)
+		m.state = m.loadingNext
+		return m, nil
+	case prsMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Failed to fetch pull requests: %v", msg.err)
+			m.state = viewStateError
+			return m, nil
+		}
+		m.prPicker = NewPRPickerModel(msg.prs)
+		h, v := docStyle.GetFrameSize()
+		m.prPicker.SetSize(m.width-h, m.height-v)
 		m.state = m.loadingNext
 		return m, nil
 	case dirsMsg:

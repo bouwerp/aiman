@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/review"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -67,6 +68,9 @@ func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width i
 		add(shortElapsed(now.Sub(s.CreatedAt)))
 	}
 	add(s.Branch)
+	if ref, err := review.ParseRef(s.ReviewPR); err == nil {
+		add(fmt.Sprintf("review #%d", ref.Number))
+	}
 	if x.HasCost {
 		add(fmt.Sprintf("~$%.2f", x.CostUSD))
 	} else if x.Tokens > 0 {
@@ -209,7 +213,7 @@ func gitRightParts(pr *domain.PullRequest) []string {
 	if ci := renderCI(pr); ci != "" {
 		parts = append(parts, ci)
 	}
-	return append(parts, renderPRActions())
+	return parts
 }
 
 func renderPRIdentity(pr *domain.PullRequest) string {
@@ -266,13 +270,6 @@ func checksColor(status string) color.Color {
 	default:
 		return lipgloss.Color("#7D7D7D")
 	}
-}
-
-func renderPRActions() string {
-	review := lipgloss.NewStyle().Foreground(a1Dim).Render("Review PR")
-	approved := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Render("Approved")
-	changes := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Render("Request Changes")
-	return review + "  " + approved + "  " + changes
 }
 
 func renderTodoLines(v todoView, width int) []string {

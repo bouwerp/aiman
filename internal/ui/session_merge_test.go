@@ -217,3 +217,12 @@ func TestSessionFromInfoMapsRole(t *testing.T) {
 		t.Fatalf("role=%q", got.Role)
 	}
 }
+
+func TestOverlayPersistedSessionFieldsKeepsReviewPR(t *testing.T) {
+	live := domain.Session{ID: "rv", RemoteHost: "regent0", TerminalName: "pr-7"}
+	stored := domain.Session{ID: "rv", ReviewPR: "o/r#7", TerminalName: "pr-7"}
+	got := overlayPersistedSessionFields(live, stored)
+	if got.ReviewPR != "o/r#7" {
+		t.Fatalf("ReviewPR = %q, want o/r#7", got.ReviewPR)
+	}
+}

@@ -32,6 +32,7 @@ func renderModelForAllStates(t *testing.T) *Model {
 	m.picker = NewRepoPickerModel(nil, &cfg.Git)
 	m.issuePicker = NewIssuePickerModel(nil)
 	m.branchPicker = NewBranchPickerModel([]string{"main"})
+	m.prPicker = NewPRPickerModel(nil)
 	m.restartingSession = &s
 	m.changingDirSession = &s
 	m.agentDefaults = NewAgentDefaultsModel(cfg)

@@ -19,18 +19,23 @@ import (
 // "Claude Code" rather than "claude".
 func remoteCreateSpecFrom(cfg domain.SessionConfig) usecase.RemoteCreateSpec {
 	spec := usecase.RemoteCreateSpec{
-		Name:           cfg.Name,
-		Group:          cfg.Group,
-		Repo:           cfg.Repo.Name,
-		Branch:         cfg.Branch,
-		Dir:            cfg.Directory,
-		Prompt:         cfg.InitialPrompt,
-		Issue:          cfg.IssueKey,
-		BaseBranch:     cfg.BaseBranch,
-		Quick:          cfg.Quick,
-		ExistingBranch: cfg.ExistingBranch,
-		PromptFree:     cfg.PromptFree,
-		Tier:           cfg.Tier,
+		Name:       cfg.Name,
+		Group:      cfg.Group,
+		Review:     cfg.ReviewPR,
+		PromptFree: cfg.PromptFree,
+		Tier:       cfg.Tier,
+	}
+	if cfg.ReviewPR == "" {
+		spec.Repo = cfg.Repo.Name
+		spec.Branch = cfg.Branch
+		spec.Dir = cfg.Directory
+		spec.Prompt = cfg.InitialPrompt
+		spec.Issue = cfg.IssueKey
+		spec.BaseBranch = cfg.BaseBranch
+		spec.Quick = cfg.Quick
+		spec.ExistingBranch = cfg.ExistingBranch
+	} else {
+		spec.PromptFree = true
 	}
 	if cfg.Agent != nil && !isPreferredAgentChoice(cfg.Agent) {
 		spec.Agent = cfg.Agent.Command

@@ -86,6 +86,30 @@ func TestMetaLineContextGauge(t *testing.T) {
 	}
 }
 
+func TestDetailNoStaticPRActions(t *testing.T) {
+	st := domain.GitStatus{
+		Ahead: 2,
+		PullRequest: &domain.PullRequest{
+			Number:        12,
+			State:         "OPEN",
+			ReviewStatus:  "approved",
+			ChecksStatus:  "success",
+			ChecksSummary: "3/3",
+		},
+	}
+	line := ansi.Strip(renderGitPRLine(st, 160))
+	for _, ban := range []string{"Review PR", "Approved", "Request Changes"} {
+		if strings.Contains(line, ban) {
+			t.Errorf("static PR action %q still shown in %q", ban, line)
+		}
+	}
+	s := domain.Session{ReviewPR: "o/r#7", AgentName: "claude"}
+	meta := ansi.Strip(renderMetaLine(s, detailMetaExtras{}, time.Now(), 200))
+	if !strings.Contains(meta, "review #7") {
+		t.Fatalf("meta %q, want review #7", meta)
+	}
+}
+
 func TestGitPRLineCompact(t *testing.T) {
 	st := domain.GitStatus{
 		Ahead:          2,
@@ -106,7 +130,7 @@ func TestGitPRLineCompact(t *testing.T) {
 		t.Fatalf("git/PR line wrapped:\n%s", line)
 	}
 	plain := ansi.Strip(line)
-	for _, want := range []string{"↑2↓0", "3 changed", "PR #12", "CI:3/3", "Review PR"} {
+	for _, want := range []string{"↑2↓0", "3 changed", "PR #12", "CI:3/3"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("missing %q in %q", want, plain)
 		}

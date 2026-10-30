@@ -156,6 +156,27 @@ func TestCreateSessionOnRemoteLeavesEmptyAgentToServe(t *testing.T) {
 	}
 }
 
+func TestCreateSessionOnRemoteSendsReview(t *testing.T) {
+	r := &createRemote{out: okCreateResponse}
+	_, err := CreateSessionOnRemote(context.Background(), r,
+		RemoteCreateSpec{Agent: "claude", Review: "o/r#7", PromptFree: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var body string
+	for _, v := range r.written {
+		body = string(v)
+	}
+	if !strings.Contains(body, `"review":"o/r#7"`) {
+		t.Errorf("review not sent: %s", body)
+	}
+	for _, ban := range []string{`"repo":`, `"branch":`, `"dir":`, `"prompt":`, `"issue":`} {
+		if strings.Contains(body, ban) {
+			t.Errorf("review params still contain %s: %s", ban, body)
+		}
+	}
+}
+
 func TestParseRemoteCreateResult(t *testing.T) {
 	if _, err := parseRemoteCreateResult(""); err == nil {
 		t.Error("empty output is an error")

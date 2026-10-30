@@ -24,6 +24,9 @@ func TestRemoteCreateSpecCarriesCommandAndName(t *testing.T) {
 	if spec.AgentName != "Claude Code" {
 		t.Errorf("display name lost: %q", spec.AgentName)
 	}
+	if spec.Review != "" {
+		t.Errorf("plain create must not send review, got %q", spec.Review)
+	}
 	for _, pair := range [][2]string{
 		{spec.Repo, "realfi"}, {spec.Branch, "WTB-1-thing"},
 		{spec.Issue, "WTB-1"},
@@ -37,6 +40,23 @@ func TestRemoteCreateSpecCarriesCommandAndName(t *testing.T) {
 
 // Handing over a session whose state only exists on this machine would silently
 // drop that state, so those are created locally.
+func TestRemoteCreateSpecCarriesReview(t *testing.T) {
+	spec := remoteCreateSpecFrom(domain.SessionConfig{
+		Agent:    &domain.Agent{Name: "Claude Code", Command: "claude"},
+		Repo:     domain.Repo{Name: "o/r"},
+		ReviewPR: "o/r#7",
+	})
+	if spec.Review != "o/r#7" {
+		t.Fatalf("Review = %q, want o/r#7", spec.Review)
+	}
+	if spec.Repo != "" || spec.Branch != "" || spec.Dir != "" || spec.Prompt != "" || spec.Issue != "" {
+		t.Fatalf("review create must not send exclusive fields: %+v", spec)
+	}
+	if spec.Agent != "claude" {
+		t.Errorf("agent command dropped: %q", spec.Agent)
+	}
+}
+
 func TestCanCreateRemotelyRefusesLocalOnlyState(t *testing.T) {
 	base := func() domain.SessionConfig {
 		return domain.SessionConfig{Agent: &domain.Agent{Name: "Claude Code", Command: "claude"}}
