@@ -25,6 +25,7 @@ var rpcMethods = map[string]bool{
 	"todo.ensure_done":    true,
 	"todo.gate":           true,
 	"todo.approve_design": true,
+	"todo.approve_review": true,
 	"steer.send":          true,
 	"handover.write":      true,
 	"handover.point":      true,

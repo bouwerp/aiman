@@ -48,8 +48,9 @@ func runTodo(args []string, stdin io.Reader, getenv func(string) string) error {
 }
 
 func todoUsage() error {
-	fmt.Fprintf(os.Stderr, "Usage: aiman todo <list|add|start|done|drop|edit|move|rm|gate|approve-design|report> [--session NAME] [--as USER] [--json]\n")
+	fmt.Fprintf(os.Stderr, "Usage: aiman todo <list|add|start|done|drop|edit|move|rm|gate|approve-design|approve-review|report> [--session NAME] [--as USER] [--json]\n")
 	fmt.Fprintf(os.Stderr, "approve-design --quote \"<operator's words>\" closes the design gate that gate added.\n")
+	fmt.Fprintf(os.Stderr, "gate --review adds the review gate; approve-review --quote \"<operator's words>\" closes it.\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
 	return errUsage
 }
@@ -76,6 +77,9 @@ func todoParams(cmd string, rest []string, flags map[string]string) (string, map
 		if len(rest) != 0 {
 			return "", nil, errUsage
 		}
+		if flags["review"] != "" {
+			return "todo.gate", map[string]any{"ref": "gate:review"}, nil
+		}
 		return "todo.gate", map[string]any{}, nil
 	case "approve-design":
 		quote := strings.TrimSpace(flags["quote"])
@@ -83,6 +87,12 @@ func todoParams(cmd string, rest []string, flags map[string]string) (string, map
 			return "", nil, errUsage
 		}
 		return "todo.approve_design", map[string]any{"quote": quote}, nil
+	case "approve-review":
+		quote := strings.TrimSpace(flags["quote"])
+		if len(rest) != 0 || quote == "" {
+			return "", nil, errUsage
+		}
+		return "todo.approve_review", map[string]any{"quote": quote}, nil
 	case "rm":
 		if len(rest) != 1 || rest[0] == "" {
 			return "", nil, errUsage

@@ -21,16 +21,16 @@ func TestAddGateOnce(t *testing.T) {
 		{Text: "a", State: domain.TodoPending},
 		{Text: DoneItemText, State: domain.TodoPending, Ref: DoneRef},
 	}}
-	if !AddGate(&l) {
+	if !AddGate(&l, DesignGateRef) {
 		t.Fatal("first call must add")
 	}
-	if AddGate(&l) {
+	if AddGate(&l, DesignGateRef) {
 		t.Fatal("second call must not add")
 	}
 	if len(l.Items) != 3 || l.Items[1].Ref != DesignGateRef || l.Items[2].Ref != DoneRef {
 		t.Fatalf("items = %+v", l.Items)
 	}
-	if !GateOpen(l) {
+	if !GateOpen(l, DesignGateRef) {
 		t.Fatal("gate must be open")
 	}
 }
@@ -72,7 +72,7 @@ func TestMirrorClampsOpenGate(t *testing.T) {
 	s := NewFiles(t.TempDir())
 	if _, _, err := s.Mutate("s1", domain.AuthorAiman, func(l *domain.TodoList) error {
 		l.Items = append(l.Items, domain.TodoItem{Text: "Write docs", State: domain.TodoPending})
-		AddGate(l)
+		AddGate(l, DesignGateRef)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestMirrorClampsOpenGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mirror: %v", err)
 	}
-	if !GateOpen(l) {
+	if !GateOpen(l, DesignGateRef) {
 		t.Fatalf("gate closed by the snapshot: %+v", l.Items)
 	}
 	states := map[string]domain.TodoState{}
@@ -107,5 +107,56 @@ func TestClampGateErrorsWhenGateGone(t *testing.T) {
 	next.Items = append(next.Items[:1], next.Items[2:]...)
 	if err := ClampGate(prev, &next); !errors.Is(err, ErrGateLocked) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAddGateReview(t *testing.T) {
+	l := domain.TodoList{Items: []domain.TodoItem{
+		{Text: "a", State: domain.TodoPending},
+		{Text: DoneItemText, State: domain.TodoPending, Ref: DoneRef},
+	}}
+	if !AddGate(&l, ReviewGateRef) {
+		t.Fatal("first call must add")
+	}
+	if AddGate(&l, ReviewGateRef) {
+		t.Fatal("second call must not add")
+	}
+	if l.Items[1].Text != "Review approved" || l.Items[1].Ref != "gate:review" {
+		t.Fatalf("items = %+v", l.Items)
+	}
+	if !GateOpen(l, ReviewGateRef) || GateOpen(l, DesignGateRef) {
+		t.Fatal("only the review gate is open")
+	}
+	if AddGate(&l, "gate:nope") {
+		t.Fatal("an unknown ref must not add a gate")
+	}
+}
+
+func TestGuardGateCoversReviewGate(t *testing.T) {
+	list := func() domain.TodoList {
+		return domain.TodoList{Items: []domain.TodoItem{
+			{ID: "t1", Text: "a", State: domain.TodoPending},
+			{ID: "g", Text: ReviewGateText, State: domain.TodoPending, Ref: ReviewGateRef},
+		}}
+	}
+	tests := []struct {
+		name string
+		edit func(l *domain.TodoList)
+		bad  bool
+	}{
+		{"tick", func(l *domain.TodoList) { l.Items[1].State = domain.TodoDone }, true},
+		{"drop", func(l *domain.TodoList) { l.Items[1].State = domain.TodoDropped }, true},
+		{"rename", func(l *domain.TodoList) { l.Items[1].Text = "ok" }, true},
+		{"reorder", func(l *domain.TodoList) { l.Items[0], l.Items[1] = l.Items[1], l.Items[0] }, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			next := list()
+			tc.edit(&next)
+			err := GuardGate(list(), next)
+			if tc.bad != errors.Is(err, ErrGateLocked) {
+				t.Fatalf("err = %v", err)
+			}
+		})
 	}
 }

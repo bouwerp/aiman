@@ -92,7 +92,7 @@ func TestCreateConsultNeedsSmart(t *testing.T) {
 func TestCreateConsultAllowedBeforeApproval(t *testing.T) {
 	srv, _, _ := consultServer(t, []config.PreferredAgent{{Agent: "codex"}})
 	err := srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAiman, func(l *domain.TodoList) error {
-		todo.AddGate(l)
+		todo.AddGate(l, todo.DesignGateRef)
 		for i := range l.Items {
 			if l.Items[i].Ref == todo.DesignGateRef {
 				l.Items[i].ID = "g1"

@@ -218,6 +218,11 @@ type todoParams struct {
 	Quote   string           `json:"quote"`
 }
 
+// gateParams carries the gate ref of todo.gate.
+type gateParams struct {
+	Ref string `json:"ref"`
+}
+
 type todoMirrorItem struct {
 	Text   string `json:"text"`
 	Status string `json:"status"`
@@ -305,7 +310,9 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 	case "todo.gate":
 		return s.handleTodoGate(req, sess)
 	case "todo.approve_design":
-		return s.handleApproveDesign(ctx, req, p, sess)
+		return s.approveGate(ctx, req, p, sess, todo.DesignGateRef, domain.EventDesignApproved)
+	case "todo.approve_review":
+		return s.approveGate(ctx, req, p, sess, todo.ReviewGateRef, domain.EventReviewApproved)
 	case "steer.send":
 		return s.handleSteerSend(ctx, req, p, sess, author)
 	case "todo.mirror":
@@ -595,7 +602,7 @@ func (s *Server) handleTodoSummary(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "todo_summary", "sessions": out}}
 }
 
-// guardGate wraps fn so a session call cannot change an open design gate.
+// guardGate wraps fn so a session call cannot change an open gate.
 // Anything else is the operator, who may.
 func guardGate(fromSession bool, fn func(*domain.TodoList) error) func(*domain.TodoList) error {
 	if !fromSession {
@@ -631,11 +638,24 @@ func (s *Server) mutateQuiet(sess domain.Session, fn func(*domain.TodoList) erro
 	return list, nil
 }
 
-// handleTodoGate adds the open design gate to the session's list.
+// handleTodoGate adds the open gate named by params.ref (default the design
+// gate) to the session's list.
 func (s *Server) handleTodoGate(req Request, sess domain.Session) Response {
+	var gp gateParams
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &gp); err != nil {
+			return errResp(req.ID, CodeInvalidParams, err.Error())
+		}
+	}
+	if gp.Ref == "" {
+		gp.Ref = todo.DesignGateRef
+	}
+	if gp.Ref != todo.DesignGateRef && gp.Ref != todo.ReviewGateRef {
+		return errResp(req.ID, CodeInvalidParams, "unknown gate ref "+gp.Ref)
+	}
 	added := false
 	list, err := s.mutateQuiet(sess, func(l *domain.TodoList) error {
-		added = todo.AddGate(l)
+		added = todo.AddGate(l, gp.Ref)
 		return nil
 	})
 	if err != nil {
@@ -644,21 +664,22 @@ func (s *Server) handleTodoGate(req Request, sess domain.Session) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "todo_list", "list": list, "added": added}}
 }
 
-// handleApproveDesign closes the session's design gate on the strength of the
-// operator's quote. Only the session itself may call it: the quote is the
-// operator's words relayed by the session, recorded in the ledger.
-func (s *Server) handleApproveDesign(ctx context.Context, req Request, p todoParams, sess domain.Session) Response {
+// approveGate closes the session's gate for ref on the strength of the
+// operator's quote and records kind. Only the session itself may call it: the
+// quote is the operator's words relayed by the session, recorded in the ledger.
+func (s *Server) approveGate(ctx context.Context, req Request, p todoParams, sess domain.Session, ref string, kind domain.EventKind) Response {
+	name := strings.TrimPrefix(ref, "gate:")
 	if req.Caller != sess.ID {
-		return errResp(req.ID, CodeGateNeedsOperator, "only the session itself can record its design approval")
+		return errResp(req.ID, CodeGateNeedsOperator, "only the session itself can record its "+name+" approval")
 	}
 	quote := strings.TrimSpace(p.Quote)
 	if quote == "" {
-		return errResp(req.ID, CodeInvalidParams, "quote is required: the operator's words approving the design")
+		return errResp(req.ID, CodeInvalidParams, "quote is required: the operator's words approving the "+name)
 	}
 	closed, found := false, false
 	list, err := s.mutateQuiet(sess, func(l *domain.TodoList) error {
 		for i := range l.Items {
-			if l.Items[i].Ref != todo.DesignGateRef {
+			if l.Items[i].Ref != ref {
 				continue
 			}
 			found = true
@@ -673,10 +694,10 @@ func (s *Server) handleApproveDesign(ctx context.Context, req Request, p todoPar
 		return todoErrResp(req.ID, err)
 	}
 	if !found {
-		return errResp(req.ID, CodeInvalidParams, "session has no design gate")
+		return errResp(req.ID, CodeInvalidParams, "session has no "+name+" gate")
 	}
 	if closed {
-		s.appendEvent(ctx, sess.ID, domain.EventActorAgent, domain.EventDesignApproved, map[string]any{"quote": quote})
+		s.appendEvent(ctx, sess.ID, domain.EventActorAgent, kind, map[string]any{"quote": quote})
 	}
 	return Response{ID: req.ID, Result: map[string]any{"type": "todo_list", "list": list, "approved": closed}}
 }

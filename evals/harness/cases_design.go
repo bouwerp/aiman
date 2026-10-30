@@ -25,7 +25,7 @@ const (
 // seedGate gives sessionID an open design gate with an explicit id.
 func seedGate(h *Harness, sessionID string) error {
 	return h.srv.TodoAccess().Mutate(context.Background(), sessionID, domain.AuthorAiman, func(l *domain.TodoList) error {
-		todo.AddGate(l)
+		todo.AddGate(l, todo.DesignGateRef)
 		for i := range l.Items {
 			if l.Items[i].Ref == todo.DesignGateRef {
 				l.Items[i].ID = gateItemID

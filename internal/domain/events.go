@@ -31,6 +31,9 @@ const (
 	// EventDesignApproved records the operator's approval that closed a
 	// session's design gate; its payload carries the approving quote.
 	EventDesignApproved EventKind = "design.approved"
+	// EventReviewApproved records the operator's approval that closed a
+	// session's review gate; its payload carries the approving quote.
+	EventReviewApproved EventKind = "review.approved"
 	// EventDesignPublished records a design page push: revision, url and the
 	// Decisions-table triage counts.
 	EventDesignPublished EventKind = "design.published"

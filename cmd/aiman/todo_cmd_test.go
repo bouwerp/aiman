@@ -284,3 +284,15 @@ func TestTodoParamsGateCommands(t *testing.T) {
 		t.Fatal("approve-design without a quote must fail")
 	}
 }
+
+func TestTodoParamsReviewGate(t *testing.T) {
+	flags, rest := takeFlags([]string{"--review"})
+	method, params, err := todoParams("gate", rest, flags)
+	if err != nil || method != "todo.gate" || params["ref"] != "gate:review" {
+		t.Fatalf("gate --review = %s %v %v", method, params, err)
+	}
+	method, params, err = todoParams("approve-review", nil, map[string]string{"quote": "lgtm"})
+	if err != nil || method != "todo.approve_review" || params["quote"] != "lgtm" {
+		t.Fatalf("approve-review = %s %v %v", method, params, err)
+	}
+}

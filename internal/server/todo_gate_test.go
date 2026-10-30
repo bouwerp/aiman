@@ -93,7 +93,7 @@ func TestForBlockedByOpenGate(t *testing.T) {
 	}
 	// The seeded items carry explicit ids, so give the gate one too.
 	err := srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAiman, func(l *domain.TodoList) error {
-		todo.AddGate(l)
+		todo.AddGate(l, todo.DesignGateRef)
 		for i := range l.Items {
 			if l.Items[i].Ref == todo.DesignGateRef {
 				l.Items[i].ID = "g1"
@@ -131,7 +131,7 @@ func TestMirrorCannotCloseGate(t *testing.T) {
 		t.Fatalf("mirror: %+v", resp.Error)
 	}
 	list, _ := srv.todos.Get("own")
-	if !todo.GateOpen(list) {
+	if !todo.GateOpen(list, todo.DesignGateRef) {
 		t.Fatalf("mirror closed the gate: %+v", list.Items)
 	}
 	found := false
@@ -167,5 +167,75 @@ func TestDescendsFrom(t *testing.T) {
 	}
 	if descendsFrom(50, roots, parent) || descendsFrom(99, roots, parent) {
 		t.Fatal("unrelated process matched")
+	}
+}
+
+func reviewGateServer(t *testing.T) *Server {
+	t.Helper()
+	srv, _, _ := todoServer(t, todoSession("own"), todoSession("other"))
+	rpcOK(t, srv, "", "todo.gate", map[string]any{"session": "own", "ref": "gate:review"}, nil)
+	return srv
+}
+
+func TestApproveReview(t *testing.T) {
+	srv := reviewGateServer(t)
+	wantCode(t, rpc(t, srv, "other", "todo.approve_review", map[string]any{"session": "own", "quote": "lgtm"}), CodeGateNeedsOperator)
+	wantCode(t, rpc(t, srv, "own", "todo.approve_review", map[string]any{"session": "own", "quote": " "}), CodeInvalidParams)
+	rpcOK(t, srv, "own", "todo.approve_review", map[string]any{"session": "own", "quote": "lgtm"}, nil)
+	list, _ := srv.todos.Get("own")
+	for _, it := range list.Items {
+		if it.Ref == "gate:review" && it.State != domain.TodoDone {
+			t.Fatalf("gate state %s", it.State)
+		}
+	}
+	rows, err := srv.repo.(sessionEventLister).ListSessionEvents(context.Background(), "own", 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range rows {
+		if r.Kind == domain.EventReviewApproved {
+			n++
+			if string(r.Payload) != `{"quote":"lgtm"}` {
+				t.Fatalf("payload %s", r.Payload)
+			}
+		}
+		if r.Kind == domain.EventDesignApproved {
+			t.Fatal("a review approval must not record design.approved")
+		}
+	}
+	if n != 1 {
+		t.Fatalf("review.approved rows = %d", n)
+	}
+}
+
+func TestReviewGateRefusesSessionCallers(t *testing.T) {
+	srv := reviewGateServer(t)
+	list, _ := srv.todos.Get("own")
+	id := ""
+	for _, it := range list.Items {
+		if it.Ref == "gate:review" {
+			id = it.ID
+		}
+	}
+	wantCode(t, rpc(t, srv, "own", "todo.update", map[string]any{"session": "own", "id": id, "state": "done"}), CodeGateNeedsOperator)
+}
+
+func TestReviewGateDoesNotBlockFor(t *testing.T) {
+	srv, _ := forServer(t, "")
+	err := srv.TodoAccess().Mutate(context.Background(), "p", domain.AuthorAiman, func(l *domain.TodoList) error {
+		todo.AddGate(l, todo.ReviewGateRef)
+		for i := range l.Items {
+			if l.Items[i].Ref == todo.ReviewGateRef {
+				l.Items[i].ID = "g2"
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp := rpc(t, srv, "", "session.create", map[string]any{"for": "t3", "parent": "p"}); resp.Error != nil {
+		t.Fatalf("create with an open review gate: %+v", resp.Error)
 	}
 }

@@ -821,7 +821,7 @@ func (s *Server) applyFor(params *createParams, parentID string, existing []doma
 	if err != nil {
 		return domain.Session{}, CodeNotFound, fmt.Errorf("%w in session %s", err, parent.Name)
 	}
-	if todo.GateOpen(list) {
+	if todo.GateOpen(list, todo.DesignGateRef) {
 		return domain.Session{}, CodeDesignNotApproved, fmt.Errorf("session %s has an open design gate: get the operator's approval, then run aiman todo approve-design", parent.Name)
 	}
 	item := list.Items[i]
