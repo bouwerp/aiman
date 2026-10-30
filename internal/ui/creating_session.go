@@ -32,6 +32,9 @@ func newCreatingPlaceholder(cfg domain.SessionConfig, remote config.Remote) doma
 		label = cfg.IssueKey
 	}
 	if label == "" {
+		label = cfg.ReviewPR
+	}
+	if label == "" {
 		label = "new session"
 	}
 	agentName := ""
@@ -45,6 +48,7 @@ func newCreatingPlaceholder(cfg domain.SessionConfig, remote config.Remote) doma
 		Group:        cfg.Group,
 		IssueKey:     cfg.IssueKey,
 		Branch:       cfg.Branch,
+		ReviewPR:     cfg.ReviewPR,
 		RepoName:     cfg.Repo.Name,
 		RemoteHost:   remote.Host,
 		TerminalName: label,

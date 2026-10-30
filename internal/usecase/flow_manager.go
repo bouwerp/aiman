@@ -454,8 +454,10 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 			_ = m.gitManager.EnsureAimanSessionFilesGitignored(ctx, sshMgr, session.WorktreePath)
 		}
 
-		// Step 6.1: Persist Session ID in git metadata (safe from git status/commits)
-		if _, err = sshMgr.Execute(ctx, fmt.Sprintf("id_file=$(git -C %q rev-parse --git-dir)/aiman-id && echo %q > \"$id_file\"", session.WorktreePath, session.ID)); err != nil {
+		// Step 6.1: Persist Session ID in git metadata (safe from git status/commits).
+		// --absolute-git-dir because the executor's cwd is serve's and
+		// --git-dir is often the relative ".git".
+		if _, err = sshMgr.Execute(ctx, fmt.Sprintf("id_file=$(git -C %q rev-parse --absolute-git-dir)/aiman-id && echo %q > \"$id_file\"", session.WorktreePath, session.ID)); err != nil {
 			return nil, fmt.Errorf("failed to write session ID: %w", err)
 		}
 	}

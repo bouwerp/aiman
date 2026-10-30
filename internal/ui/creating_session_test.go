@@ -23,6 +23,20 @@ func newTestModelWithSummaryConfirmed(t *testing.T) *Model {
 	return model
 }
 
+func TestNewCreatingPlaceholderUsesReviewPR(t *testing.T) {
+	s := newCreatingPlaceholder(domain.SessionConfig{
+		ReviewPR: "owner/repo#7",
+		Repo:     domain.Repo{Name: "owner/repo"},
+		Agent:    &domain.Agent{Name: "claude"},
+	}, config.Remote{Host: "devbox"})
+	if s.TerminalName != "owner/repo#7" {
+		t.Fatalf("TerminalName = %q, want the review ref", s.TerminalName)
+	}
+	if s.ReviewPR != "owner/repo#7" {
+		t.Fatalf("ReviewPR = %q", s.ReviewPR)
+	}
+}
+
 func TestStartBackgroundCreate_InsertsPlaceholderAndReturnsToMain(t *testing.T) {
 	model := newTestModelWithSummaryConfirmed(t)
 	model.state = viewStateSummary
