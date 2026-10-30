@@ -4,7 +4,7 @@
 
 **Goal:** Let the operator start a review session from a GitHub PR, have two smart reviewers review it blind and then informed, read a terse brief, answer three questions before seeing the agents' view, and post one operator-approved GitHub review.
 
-**Architecture:** A review session is an interactive session with `ReviewPR` set, created by serve in a detached worktree at the PR head with the description withheld. serve holds the review state (`~/.aiman/reviews/<session>.json`), gates the reveal of the description and the posting of the review, and reuses the consult role for the second reviewer, the design publisher for the brief, and the operator-only gate (generalised to `gate:review`).
+**Architecture:** A review session is an interactive session with `ReviewPR` set, created by serve in a detached worktree at the PR head with the description withheld. serve holds the review state (`~/.aiman/pr-reviews/<session>.json`), gates the reveal of the description and the posting of the review, and reuses the consult role for the second reviewer, the design publisher for the brief, and the operator-only gate (generalised to `gate:review`).
 
 **Tech Stack:** Go 1.26, aiman serve JSON RPC, sqlite, `git` and `gh` on the host, Bubble Tea v2 TUI.
 
@@ -21,7 +21,8 @@
 - Ledger kinds (exact): `review.started`, `review.revealed`, `review.refreshed`, `review.approved`, `review.posted`, `consult.abandoned`.
 - Config: `review.consult_timeout`, default 30 minutes; pushed to serve by `MarshalServeConfig`.
 - Posting: event `COMMENT` or `REQUEST_CHANGES`, never `APPROVE`; only findings with `Call: agree` become inline comments; comment bodies start with `blocking:`, `suggestion:`, `question:` or `nit:`.
-- Review state file: `~/.aiman/reviews/<session id>.json`.
+- Review state file: `~/.aiman/pr-reviews/<session id>.json`.
+- PR code runs only in the sandbox: aiman's own `~/.aiman/pr-reviews/<id>/sandbox/compose.yaml` (never the PR's), the staged tree exported without `.git` to `~/.aiman/pr-reviews/<id>/src` mounted at `/src`, outputs at `/out` (`~/.aiman/pr-reviews/<id>/out`). Hardening: host uid/gid, `cap_drop: [ALL]`, `no-new-privileges:true`, `read_only: true` with tmpfs `/tmp`, memory/CPU/pid limits, no env passthrough, no Docker socket, no SSH agent, no host network, per-review cache volumes. Ports published on `127.0.0.1` only. Config `review.sandbox.network` (`bridge` default, or `none`) and `repos.<slug>.review.image`.
 - After the detached checkout the worktree is soft-reset to the merge base (`git reset --soft <merge-base>`), so the PR's changes are staged and every editor's gutter marks them. Agents never commit, stash or reset there.
 - Debug and coverage outputs: `.vscode/launch.json`, `.aiman_review/coverage.md`; config `repos.<slug>.review.coverage` (a command writing Istanbul `coverage-final.json`) for non-Go repositories. Error code `review_no_coverage` when no coverage method applies.
 - Source comments describe current code; no em-dashes in prose. `make ci` and `make eval` green before each commit; ignore `TestOllamaIntelligenceSummariseSession`. Every commit ends with `Claude-Session: https://claude.ai/code/session_01F6CrCm8V8STTLdz1JfXXzc`.
@@ -167,7 +168,26 @@ Post order: file confined to the worktree (reuse `readConfined`); `gate:review` 
 - [ ] **Step 5: Run** `go test ./... && make eval`; expect PASS.
 - [ ] **Step 6: Commit** `feat(review): post one operator-approved GitHub review`.
 
-### Task 6: Debug setup
+### Task 6: Sandbox runner
+
+**Files:**
+- Create: `internal/review/sandbox.go`, `internal/review/sandbox_test.go`, `internal/review/testdata/sandbox/` (go.mod, package.json, .nvmrc fixtures)
+- Modify: `internal/server/review.go` (export on create and refresh, cleanup on stop and forget), `cmd/aiman/review_cmd.go`, `internal/server/server.go`, `internal/infra/config/config.go` (`ReviewConfig.Sandbox.Network`, `RepoConfig.Review.Image`), `internal/domain/events.go` (`review.run`)
+
+**Interfaces:**
+- Consumes: `review.State` (Task 3), the review worktree and scratch paths.
+- Produces: `type review.Sandbox struct{ ID, Dir, Src, Out, Image, Network string; Ports []PortMap }`, `type review.PortMap struct{ Host, Container int }`; `func review.Image(src string, override string) (string, error)` (Go from the `go` line of go.mod, Node from `.nvmrc`, else `engines.node`, else `lts`; refuse when neither go.mod nor package.json exists and no override); `func review.Compose(sb Sandbox, uid, gid int) ([]byte, error)`; `func review.Export(ctx context.Context, run func(ctx context.Context, dir, name string, args ...string) (string, error), worktree, dst string) error` (export the staged tree with `git checkout-index -a --prefix=<dst>/` from the index, after clearing `dst`); `type review.Runner struct{ Docker func(ctx context.Context, dir string, args ...string) (string, int, error) }` with `func (r Runner) Run(ctx context.Context, sb Sandbox, cmd []string, timeout time.Duration) (out string, exit int, err error)` (`docker compose -f <dir>/compose.yaml run --rm sandbox <cmd>`) and `func (r Runner) Down(ctx context.Context, sb Sandbox) error`; RPC `review.run {session, cmd: []string, timeout_seconds}`; CLI `aiman review run [--timeout 10m] -- <cmd...>` printing the output and exiting with the command's code; each run logged to `<scratch>/.aiman_review/runs/<n>.log` (command, exit code, output) and ledger `review.run {n, exit}`.
+
+The compose service is named `sandbox`; `working_dir: /src`; mounts `src` to `/src` (read-write; it is a copy) and `out` to `/out`; named volumes `gomod`, `gocache`, `npm` prefixed with the review id; `user: "<uid>:<gid>"`; `environment: {HOME: /tmp, GOMODCACHE: /cache/gomod, GOCACHE: /cache/gocache, npm_config_cache: /cache/npm}` and nothing else.
+
+- [ ] **Step 1: Failing tests:** `TestImageFromGoMod` (`go 1.26` → `golang:1.26`); `TestImageFromNode` (.nvmrc `20` → `node:20`; engines `>=22` → `node:22`; neither → `node:lts`); `TestImageOverride`; `TestImageUnknown` (error); `TestComposeHardening` (parse the YAML: cap_drop ALL, no-new-privileges, read_only, tmpfs /tmp, user uid:gid, no `privileged`, no `network_mode: host`, no volume mounting `/var/run/docker.sock` or any host path other than the review's src and out, env exactly as above, limits set, ports bound to 127.0.0.1, network none when configured); `TestExportExcludesGit` (real temp repo with a staged change: dst has the staged content and no `.git`); `TestRunnerArgs` (fake Docker records `compose -f .../compose.yaml run --rm sandbox go test ./...`, returns exit 3, Run reports 3); server `TestReviewRunLogs` (log file and ledger row); `TestStopReviewDownsSandbox`.
+- [ ] **Step 2: Run** `go test ./internal/review/ ./internal/server/ -run 'Image|Compose|Export|Runner|ReviewRun|Sandbox'`; expect FAIL.
+- [ ] **Step 3: Implement.** Generate the YAML with a struct and `yaml.Marshal`, not string templates. Export on create and refresh after the soft reset. Wire `review.Runner{Docker: exec docker}` in `serve.go`. Append to `review.Prompt`: `Run PR code (tests, builds, scripts) only with aiman review run, which uses a sandbox; never run it directly on this host.`
+- [ ] **Step 4: Smoke check** (manual, record in the report): on this host, `aiman review run -- go version` in a review of a Go repository prints the version from the container.
+- [ ] **Step 5: Run** `make ci && make eval`; expect PASS.
+- [ ] **Step 6: Commit** `feat(review): run PR code in a hardened sandbox`.
+
+### Task 7: Debug setup
 
 **Files:**
 - Create: `internal/review/debug.go`, `internal/review/debug_test.go`
@@ -177,7 +197,7 @@ Post order: file confined to the worktree (reuse `readConfined`); `gate:review` 
 - Consumes: `review.State`; `.aiman_review/reading-order.txt` (one `path:line` per line, written by the agent with the brief; Task 9 tells it to).
 - Produces: RPC `review.debug {session, lang, target}`; CLI `aiman review debug [--lang go|node|react] [--target <package, script or dev command>]`; `func review.LaunchConfig(lang string, ports DebugPorts, worktree string, existing []byte) ([]byte, error)`; `type review.DebugPorts struct{ Debug, App, DevTools int }`; the session's `Tunnels` gain the debug ports (plus the app port and 8097 for react).
 
-Behaviour: `go` runs `dlv dap --listen=127.0.0.1:<port>` in the worktree with an `--init` script of breakpoints from `reading-order.txt`; `node` runs `node --inspect=127.0.0.1:<port> <target>`; `react` runs the target dev command, `npx react-devtools` on 8097, and `node --inspect` when the dev server is Node. The processes run in a pty helper (`pty create` with the review session as parent) so they live and die with the session. Ports come from a free-port probe. `.vscode/launch.json` gets attach configurations named `aiman: attach <lang>`; an existing file is merged, never overwritten.
+Behaviour: everything runs in the Task 6 sandbox, started with the debug ports published on `127.0.0.1` (`Sandbox.Ports`; a long-running `docker compose run --rm --service-ports` in a pty helper with the review session as parent, so it lives and dies with the session). `go` runs `dlv dap --listen=0.0.0.0:<port>` inside the container (installing Delve into the per-review Go cache volume with `go install github.com/go-delve/delve/cmd/dlv@latest` on first use) with an `--init` script of breakpoints from `reading-order.txt`; `node` runs `node --inspect=0.0.0.0:<port> <target>`; `react` runs the target dev command and `npx react-devtools` on 8097 in the container. Host ports come from a free-port probe. `LaunchConfig` maps `/src` to the PR worktree path (`substitutePath` for Go, `localRoot`/`remoteRoot` for Node), so breakpoints set in the editor on the staged PR worktree hit inside the container. `.vscode/launch.json` gets attach configurations named `aiman: attach <lang>`; an existing file is merged, never overwritten.
 
 - [ ] **Step 1: Spike** (no commit): attach VS Code or `dlv connect` to a `dlv dap` started with `--init` breakpoints and record whether the client keeps the server-side breakpoints. If not, `LaunchConfig` lists the reading order in each configuration's `name`/description and the brief carries `path:line` links instead; record the result in the report.
 - [ ] **Step 2: Failing tests:** `TestLaunchConfigGo` and `TestLaunchConfigNode` (attach request, port, worktree path mapping); `TestLaunchConfigMerges` (existing configurations kept); `TestDebugRegistersTunnels` (server test with a fake pty: ports appear in the session's `Tunnels`); `TestDebugInitFromReadingOrder` (one `break` per line, in order).
@@ -186,7 +206,7 @@ Behaviour: `go` runs `dlv dap --listen=127.0.0.1:<port>` in the worktree with an
 - [ ] **Step 5: Run** `make ci`; expect PASS.
 - [ ] **Step 6: Commit** `feat(review): debug a PR from the laptop`.
 
-### Task 7: Changed-line coverage
+### Task 8: Changed-line coverage
 
 **Files:**
 - Create: `internal/review/coverage.go`, `internal/review/coverage_test.go`, `internal/review/testdata/` (a cover profile, an Istanbul `coverage-final.json`, a diff)
@@ -195,7 +215,7 @@ Behaviour: `go` runs `dlv dap --listen=127.0.0.1:<port>` in the worktree with an
 **Interfaces:**
 - Produces: `type review.Hunk struct{ Path string; Lines []int }`; `func review.ChangedLines(diff string) []Hunk`; `func review.GoCoverage(profile string) (map[string]map[int]bool, error)`; `func review.IstanbulCoverage(data []byte, root string) (map[string]map[int]bool, error)`; `func review.CoverageReport(h []Hunk, cov map[string]map[int]bool) (md string, ran, missed int)`; RPC `review.coverage {session}`; CLI `aiman review coverage`.
 
-Behaviour: a worktree with `go.mod` runs `go test -coverprofile=.aiman_review/cover.out` over the packages holding changed `.go` files; otherwise the repository's `review.coverage` command runs and `coverage/coverage-final.json` is read; neither gives `review_no_coverage`. `coverage.md` lists each hunk with ran and missed lines, then totals. Ledger `review.coverage {ran, missed}`. The run has a 10-minute context.
+Behaviour: coverage runs in the Task 6 sandbox. A worktree with `go.mod` runs `go test -coverprofile=/out/cover.out` over the packages holding changed `.go` files; otherwise the repository's `review.coverage` command runs and `/out/coverage-final.json` (or `/src/coverage/coverage-final.json`) is read; paths in the profiles are mapped from `/src` to repository-relative paths; neither gives `review_no_coverage`. `coverage.md` lists each hunk with ran and missed lines, then totals. Ledger `review.coverage {ran, missed}`. The run has a 10-minute context.
 
 - [ ] **Step 1: Failing tests:** `TestChangedLines` (added and modified lines only, deletions ignored, renames use the new path); `TestGoCoverage` and `TestIstanbulCoverage` against testdata; `TestCoverageReport` (a hunk with one missed line reports it; totals); server `TestCoverageNoMethod` (`review_no_coverage`).
 - [ ] **Step 2: Run** `go test ./internal/review/ ./internal/server/ -run Coverage`; expect FAIL.
@@ -203,7 +223,7 @@ Behaviour: a worktree with `go.mod` runs `go test -coverprofile=.aiman_review/co
 - [ ] **Step 4: Run** `make ci`; expect PASS.
 - [ ] **Step 5: Commit** `feat(review): report which changed lines the tests ran`.
 
-### Task 8: TUI
+### Task 9: TUI
 
 **Files:**
 - Create: `internal/ui/pr_picker.go`, `internal/ui/pr_picker_test.go`
@@ -221,16 +241,16 @@ The PR list is fetched over SSH with `gh pr list` (same JSON fields as Task 2) t
 - [ ] **Step 4: Run** `make ci`; expect PASS.
 - [ ] **Step 5: Commit** `feat(ui): start a review from a PR`.
 
-### Task 9: Skill and docs
+### Task 10: Skill and docs
 
 **Files:**
 - Modify: `internal/aimanskill/SKILL.md`, `internal/aimanskill/install_test.go`, `AGENTS.md`
 
 **Interfaces:**
-- Consumes: every command, code and format above (Tasks 1-8).
+- Consumes: every command, code and format above (Tasks 1-9).
 
 - [ ] **Step 1: Failing test** `TestSkillDescribesReviewMode` (SKILL.md contains `## Review mode`, `aiman review reveal`, `aiman review post`, `approve-review`, and the four labels).
-- [ ] **Step 2: Write SKILL.md `## Review mode`:** the phases (blind primary pass and blind consult, reveal or `--single`, informed pass and informed consult, merge and dedupe, verify each finding or relabel it `question`, chunking above 400 changed lines with an explicit reading order); the consult briefs for both passes (the blind one says "do not read the PR description"); the brief page via `aiman design publish --key pr-<n>` with its five sections; the three questions asked one at a time, before the agents' answers and findings are added in a second revision; recording the operator's words as quotes in the review file; the review file format exactly as in this plan; the gate and `approve-review`; `aiman review post` and its refusals; `aiman review refresh`; `aiman review coverage` (run it before the brief; changed lines no test ran become `question` findings; the brief shows the totals); writing `.aiman_review/reading-order.txt` with the brief and offering `aiman review debug` to the operator; the staged-changes rule; never approve, never push. Children-style escalation does not apply.
+- [ ] **Step 2: Write SKILL.md `## Review mode`:** the phases (blind primary pass and blind consult, reveal or `--single`, informed pass and informed consult, merge and dedupe, verify each finding or relabel it `question`, chunking above 400 changed lines with an explicit reading order); the consult briefs for both passes (the blind one says "do not read the PR description"); the brief page via `aiman design publish --key pr-<n>` with its five sections; the three questions asked one at a time, before the agents' answers and findings are added in a second revision; recording the operator's words as quotes in the review file; the review file format exactly as in this plan; the gate and `approve-review`; `aiman review post` and its refusals; `aiman review refresh`; `aiman review coverage` (run it before the brief; changed lines no test ran become `question` findings; the brief shows the totals); writing `.aiman_review/reading-order.txt` with the brief and offering `aiman review debug` to the operator; the staged-changes rule; run PR code (tests, scripts, builds) only through `aiman review run`, never directly on the host; never approve, never push. Children-style escalation does not apply.
 - [ ] **Step 3: AGENTS.md:** `ReviewPR` in the session table and COALESCE list, the review RPCs and refusals, the review gate, `review.consult_timeout`, the ledger kinds, the TUI mode and PR picker.
 - [ ] **Step 4: Run** `make ci`, `make eval`, `graphify update .`; expect PASS.
 - [ ] **Step 5: Commit** `docs: review mode in the skill and AGENTS.md`.

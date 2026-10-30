@@ -259,7 +259,7 @@ to add these three.
   purpose and forbids commit, stash and reset. Refresh resets hard to the
   new head, then soft to the new merge base.
 - **Debugging from the laptop.** `aiman review debug` starts a headless
-  debugger in the worktree on the host (`dlv dap` for Go, `node --inspect`
+  debugger in the sandbox (`dlv dap` for Go, `node --inspect`
   for a Node or TypeScript entry point, plus the dev server and React
   DevTools port 8097 for a React app), records the ports as the session's
   `Tunnels` so the TUI's existing port forwarding carries them, and writes
@@ -267,12 +267,49 @@ to add these three.
   Remote-SSH or the forwarded ports. Breakpoints are placed on the brief's
   most critical changes in reading order, so "continue" walks the change.
 - **Changed-line coverage.** `aiman review coverage` runs the PR's tests
-  with coverage in the worktree and writes `.aiman_review/coverage.md`:
+  with coverage in the sandbox and writes `.aiman_review/coverage.md`:
   per changed hunk, which changed lines ran and which did not. Go uses
   `go test -coverprofile` on the changed packages; other languages use
   the repository's `repos.<slug>.review.coverage` command, which must
   write Istanbul `coverage-final.json`. Changed lines no test ran become
   `question` findings, and the brief shows the totals.
+
+### Sandbox for PR code
+
+The operator decided that PR code runs in a sandbox, not on the host. Every
+command that executes PR code (the agents' verification runs, coverage,
+debugging, a React dev server) goes through `aiman review run`, which runs
+it in a Docker Compose service that aiman generates. Docker 29 and Compose
+v5 are on the host. The details are my calls:
+
+- **aiman's compose file, never the PR's.** serve writes
+  `~/.aiman/pr-reviews/<id>/sandbox/compose.yaml`. A compose file or
+  Dockerfile in the PR is never used, because it could mount the host.
+- **A copy, not the checkout.** serve exports the staged PR tree (no
+  `.git`) to `~/.aiman/pr-reviews/<id>/src` and mounts it at `/src`, so
+  the container never sees the main clone's git directory or any host
+  path beyond the review's own directories. Outputs go to `/out`
+  (`~/.aiman/pr-reviews/<id>/out`). Refresh re-exports.
+- **Image by language.** Go: `golang:<version from go.mod>`. Node,
+  TypeScript, React: `node:<version from .nvmrc, else engines.node, else
+  lts>`. `repos.<slug>.review.image` overrides.
+- **Hardening.** Runs as the host user's uid and gid, `cap_drop: [ALL]`,
+  `no-new-privileges`, read-only root filesystem with tmpfs `/tmp`,
+  memory, CPU and pid limits, no environment passed through, no Docker
+  socket, no SSH agent, no host network. Per-review volumes for the Go
+  module and npm caches, so one PR cannot poison another's cache.
+- **Network.** The default bridge network, so dependencies download;
+  `review.sandbox.network: none` turns it off for an offline repository.
+- **Ports.** Debug, app and React DevTools ports are published on
+  `127.0.0.1` only and recorded as the session's `Tunnels`.
+- **Logs.** Each run writes `.aiman_review/runs/<n>.log` with the command
+  and exit code, which a finding can cite as evidence.
+- **Cleanup.** `docker compose down -v` when the review session is
+  stopped or forgotten.
+
+Agents still have a shell on the host, so the rule "run PR code only
+through `aiman review run`" is prompt-level; their working directory is
+the scratch directory, so a stray `go test` there runs nothing from the PR.
 
 Agent-driven debugger servers (MCP over DAP) are a later step: they can
 read secrets and the PR is untrusted code.
