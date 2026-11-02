@@ -947,6 +947,7 @@ func TestPrepareSession_CodexAlwaysTrustsWorkspaceAndSkipsUpgrade(t *testing.T) 
 		"--dangerously-bypass-approvals-and-sandbox",
 		"--dangerously-bypass-hook-trust",
 		"--disable in_app_updates",
+		"--no-daemon",
 		"--cd /home/user/code/myrepo",
 	} {
 		if !strings.Contains(result.Command, want) {

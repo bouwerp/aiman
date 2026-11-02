@@ -173,11 +173,14 @@ func effortIsBakedIntoModel(base, model string) bool {
 // withCodexInteractiveFlags is the flag set a PTY Codex session needs so
 // the TUI stays up: skip approval, sandbox, hook-trust, and in-app update
 // prompts. A trust or update dialog in this environment exits Codex and the
-// holder drops to a bare shell.
+// holder drops to a bare shell. --no-daemon keeps the session off the shared
+// background server: since 0.165 Codex refuses to join it with in_app_updates
+// disabled, exiting before the composer ever comes up.
 func withCodexInteractiveFlags(cmd, worktree string) string {
 	cmd = ensureFlag(cmd, "--dangerously-bypass-approvals-and-sandbox")
 	cmd = ensureFlag(cmd, "--dangerously-bypass-hook-trust")
 	cmd = ensureFlag(cmd, "--disable in_app_updates")
+	cmd = ensureFlag(cmd, "--no-daemon")
 	if strings.TrimSpace(worktree) != "" {
 		cmd = ensureKeyedFlag(cmd, "--cd", worktree)
 	}
