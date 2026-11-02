@@ -57,6 +57,18 @@ type TodoItem struct {
 	// "child:<id>", "check:<name>", "review:<comment id>", "finding:<review id>/<id>",
 	// "done".
 	Ref string `json:"ref,omitempty"`
+	// Seen is what the last applied task-list snapshot said about this item.
+	// Written only by a mirror merge and carried over every other write;
+	// nil means the agent's own list never reported the item. It is the merge
+	// base: a snapshot entry that equals Seen is stale and changes nothing,
+	// and one that differs is something the agent did in its own list.
+	Seen *SnapshotView `json:"seen,omitempty"`
+}
+
+// SnapshotView is an item as the last applied snapshot reported it.
+type SnapshotView struct {
+	Text  string    `json:"text"`
+	State TodoState `json:"state"`
 }
 
 // TodoList is a session's ordered to-do list.
@@ -83,6 +95,8 @@ func NormalizeVendorTodoStatus(s string) TodoState {
 		return TodoActive
 	case "completed":
 		return TodoDone
+	case "cancelled":
+		return TodoDropped
 	}
 	if st := TodoState(s); st.Valid() {
 		return st

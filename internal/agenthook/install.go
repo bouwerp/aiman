@@ -16,6 +16,10 @@ const (
 // Tasks stay available from Claude; aiman does not set CLAUDE_CODE_ENABLE_TASKS.
 const claudeTodoMatcher = "TodoWrite|TaskCreate|TaskUpdate"
 
+// grokTodoMatcher selects grok's todo_write; the Claude alias name stays in
+// case a grok release starts reporting it.
+const grokTodoMatcher = "todo_write|TodoWrite"
+
 // InstallResult is one path after EnsureOnHost.
 type InstallResult struct {
 	Path   string
@@ -52,7 +56,7 @@ func EnsureOnHost(home string, beforePR ...bool) ([]InstallResult, error) {
 	}
 	record(ensureDeepcodeLauncher(home))
 	record(ensureClaude(home, script, policy))
-	record(ensureGrok(home, script))
+	record(ensureGrok(home, script, todoReporterPath(home)))
 	record(ensureCursor(home, script))
 	record(ensureCodex(home, script))
 	record(ensureCopilot(home, script))
@@ -84,11 +88,13 @@ func ensureClaude(home, command string, beforePR bool) (InstallResult, error) {
 	})
 }
 
-func ensureGrok(home, command string) (InstallResult, error) {
+func ensureGrok(home, command, todoReporter string) (InstallResult, error) {
 	if !isDir(filepath.Join(home, ".grok")) {
 		return InstallResult{}, nil
 	}
-	return writeJSONFile(filepath.Join(home, ".grok", "hooks", "aiman.json"), claudeOwnedDoc(command))
+	root := claudeOwnedDoc(command)
+	upsertTodoHook(root, todoReporter, grokTodoMatcher)
+	return writeJSONFile(filepath.Join(home, ".grok", "hooks", "aiman.json"), root)
 }
 
 func ensureCursor(home, command string) (InstallResult, error) {

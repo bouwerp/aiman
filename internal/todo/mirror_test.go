@@ -76,8 +76,13 @@ func TestMergeExactAndFuzzyMatch(t *testing.T) {
 				}
 				return
 			}
-			if len(got.Items) != 2 || got.Items[0].State != domain.TodoDropped || got.Items[1].ID != "" {
+			// The old item was never reported by a snapshot (no merge base), so
+			// it is kept and flagged rather than dropped.
+			if len(got.Items) != 2 || got.Items[0].State != domain.TodoPending || got.Items[1].ID != "" {
 				t.Fatalf("items = %+v", got.Items)
+			}
+			if !reflect.DeepEqual(got.NotInAgent, []string{"t1"}) {
+				t.Fatalf("NotInAgent = %v", got.NotInAgent)
 			}
 		})
 	}
@@ -130,8 +135,8 @@ func TestMergeKeepsUndeliveredUserState(t *testing.T) {
 
 func TestMergeDropsUnmatchedAgentItems(t *testing.T) {
 	list := domain.TodoList{Items: []domain.TodoItem{
-		item("t1", "Write code", domain.TodoPending, domain.AuthorAgent, before),
-		item("t2", "Old plan step", domain.TodoPending, domain.AuthorAgent, before),
+		seen(item("t1", "Write code", domain.TodoPending, domain.AuthorAgent, before), "Write code", domain.TodoPending),
+		seen(item("t2", "Old plan step", domain.TodoPending, domain.AuthorAgent, before), "Old plan step", domain.TodoPending),
 	}}
 	got := Merge(list, nil, []domain.TodoSnapshotItem{snapItem("Write code", domain.TodoActive)}, delivered, mergeNow)
 	if len(got.Items) != 2 || byID(t, got, "t2").State != domain.TodoDropped {
@@ -144,7 +149,7 @@ func TestMergeDropsUnmatchedAgentItems(t *testing.T) {
 
 func TestMergeEmptySnapshotDropsAgentItemsVisibly(t *testing.T) {
 	list := domain.TodoList{Items: []domain.TodoItem{
-		item("t1", "Write code", domain.TodoActive, domain.AuthorAgent, before),
+		seen(item("t1", "Write code", domain.TodoActive, domain.AuthorAgent, before), "Write code", domain.TodoActive),
 	}}
 	got := Merge(list, nil, []domain.TodoSnapshotItem{{Text: "  ?! ", Status: "bogus"}}, delivered, mergeNow)
 	if len(got.Items) != 1 || got.Items[0].ID != "t1" || got.Items[0].State != domain.TodoDropped {
@@ -378,11 +383,16 @@ func TestMirrorMatchesUndeliveredRetext(t *testing.T) {
 	}
 }
 
-func TestMergeRetextRecordOnlyWhileUndelivered(t *testing.T) {
+// A retext matches until a snapshot has seen the new text; delivery does not
+// end it, so the old-text snapshot entry does not duplicate the item.
+func TestMergeMatchesDeliveredRetext(t *testing.T) {
 	list := domain.TodoList{Items: []domain.TodoItem{item("t1", "Run preprod --check --dry", domain.TodoPending, domain.AuthorUser, before)}}
 	rec := []Retext{{ID: "t1", OldText: Normalize("Run preprod --check"), At: before}}
 	got := MergeWithRetexts(list, nil, rec, []domain.TodoSnapshotItem{snapItem("Run preprod --check", domain.TodoActive)}, delivered, mergeNow)
-	if len(got.Items) != 2 {
-		t.Fatalf("delivered retext should not match: %+v", got.Items)
+	if len(got.Items) != 1 || got.Items[0].ID != "t1" {
+		t.Fatalf("retext duplicated the item: %+v", got.Items)
+	}
+	if got.Items[0].Text != "Run preprod --check --dry" {
+		t.Fatalf("user's text replaced: %+v", got.Items[0])
 	}
 }

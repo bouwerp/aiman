@@ -34,11 +34,17 @@ type Tombstone struct {
 	RemovedAt time.Time `json:"removed_at"`
 }
 
+// mirrorVersionCurrent is the on-disk merge-base format. Version 1 seeds
+// every pre-upgrade item with a Seen built from its stored values, so the
+// first mirror under the new format treats the stored list as the base.
+const mirrorVersionCurrent = 1
+
 type fileData struct {
-	List       domain.TodoList `json:"list"`
-	NextID     int             `json:"next_id"`
-	Tombstones []Tombstone     `json:"tombstones,omitempty"`
-	Retexts    []Retext        `json:"retexts,omitempty"`
+	List          domain.TodoList `json:"list"`
+	NextID        int             `json:"next_id"`
+	Tombstones    []Tombstone     `json:"tombstones,omitempty"`
+	Retexts       []Retext        `json:"retexts,omitempty"`
+	MirrorVersion int             `json:"mirror_version,omitempty"`
 }
 
 // Files stores each list as <root>/<session id>.json.
@@ -92,7 +98,26 @@ func (f *Files) load(sessionID, path string) (fileData, error) {
 	if d.NextID < 1 {
 		d.NextID = 1
 	}
+	if d.MirrorVersion < mirrorVersionCurrent {
+		migrateMirrorBase(&d)
+	}
 	return d, nil
+}
+
+// migrateMirrorBase seeds a merge base on every item of a pre-version list
+// and stamps the current version. Seeding from the stored values makes the
+// first mirror under the new format treat the stored list as the base: a
+// stale snapshot changes nothing. The accepted one-time cost is that an
+// agent's pre-upgrade CLI items count as snapshot-reported, so a snapshot
+// that differs from them is read as the agent acting.
+func migrateMirrorBase(d *fileData) {
+	for i := range d.List.Items {
+		it := &d.List.Items[i]
+		if it.Seen == nil {
+			it.Seen = &domain.SnapshotView{Text: it.Text, State: it.State}
+		}
+	}
+	d.MirrorVersion = mirrorVersionCurrent
 }
 
 // Get returns the session's list, or an empty list when none exists.
@@ -108,10 +133,20 @@ func (f *Files) Get(sessionID string) (domain.TodoList, error) {
 	return d.List, err
 }
 
+// writeSource distinguishes a mirror write from every other. Merge owns
+// Seen; any other write carries it over by item ID so a rebuilt item does
+// not lose its merge base.
+type writeSource bool
+
+const (
+	sourceCLI    writeSource = false
+	sourceMirror writeSource = true
+)
+
 // Mutate applies fn to a copy of the list, normalises and stamps the result,
 // and writes it when anything changed.
 func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*domain.TodoList) error) (domain.TodoList, Change, error) {
-	return f.update(sessionID, author, false, func(l *domain.TodoList, _ fileData, _ time.Time) error {
+	return f.update(sessionID, author, sourceCLI, func(l *domain.TodoList, _ fileData, _ time.Time) error {
 		return fn(l)
 	})
 }
@@ -120,7 +155,7 @@ func (f *Files) Mutate(sessionID string, author domain.TodoAuthor, fn func(*doma
 // (see Merge) and writes it as an agent change. deliveredAt is when the last
 // steering note reached the agent.
 func (f *Files) Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliveredAt time.Time) (domain.TodoList, Change, error) {
-	return f.update(sessionID, domain.AuthorAgent, true, func(l *domain.TodoList, d fileData, now time.Time) error {
+	return f.update(sessionID, domain.AuthorAgent, sourceMirror, func(l *domain.TodoList, d fileData, now time.Time) error {
 		prev := *l
 		*l = MergeWithRetexts(*l, d.Tombstones, d.Retexts, snap, deliveredAt, now)
 		return ClampGate(prev, l)
@@ -128,8 +163,9 @@ func (f *Files) Mirror(sessionID string, snap []domain.TodoSnapshotItem, deliver
 }
 
 // update is the shared write path of Mutate and Mirror. A change that only
-// alters NotInAgent is written and bumps Rev but carries no ops.
-func (f *Files) update(sessionID string, author domain.TodoAuthor, allowDoneTick bool, fn func(*domain.TodoList, fileData, time.Time) error) (domain.TodoList, Change, error) {
+// alters NotInAgent or Seen is written and bumps Rev but carries no ops.
+func (f *Files) update(sessionID string, author domain.TodoAuthor, source writeSource, fn func(*domain.TodoList, fileData, time.Time) error) (domain.TodoList, Change, error) {
+	allowDoneTick := source == sourceMirror
 	id, path, err := f.path(sessionID)
 	if err != nil {
 		return domain.TodoList{}, Change{}, err
@@ -149,6 +185,9 @@ func (f *Files) update(sessionID string, author domain.TodoAuthor, allowDoneTick
 	now := f.now()
 	if err := fn(&next, d, now); err != nil {
 		return prev, Change{}, err
+	}
+	if source == sourceCLI {
+		carrySeen(prev, &next)
 	}
 	pinDoneLast(&next)
 	if !allowDoneTick && author == domain.AuthorAgent {
@@ -176,11 +215,11 @@ func (f *Files) update(sessionID string, author domain.TodoAuthor, allowDoneTick
 	next.NotInAgent = presentIDs(next, next.NotInAgent)
 	ops := Diff(prev, next)
 	stamp(prev, &next, ops, author, now)
-	if len(ops) == 0 && slices.Equal(prev.NotInAgent, next.NotInAgent) {
+	if len(ops) == 0 && slices.Equal(prev.NotInAgent, next.NotInAgent) && seenEqual(prev, next) {
 		return prev, Change{Author: author, Rev: prev.Rev}, nil
 	}
 	d.Tombstones = addTombstones(d.Tombstones, prev, next, now)
-	if author != domain.AuthorAgent {
+	if source == sourceCLI {
 		d.Retexts = addRetexts(d.Retexts, prev, next, now)
 	}
 	next.Rev = prev.Rev + 1
@@ -190,6 +229,40 @@ func (f *Files) update(sessionID string, author domain.TodoAuthor, allowDoneTick
 		return prev, Change{}, err
 	}
 	return next, Change{Author: author, Ops: ops, Rev: next.Rev}, nil
+}
+
+// carrySeen copies each item's merge base from prev by ID: Seen belongs to
+// the mirror, and no other write may set or lose it.
+func carrySeen(prev domain.TodoList, next *domain.TodoList) {
+	old := make(map[string]*domain.SnapshotView, len(prev.Items))
+	for _, it := range prev.Items {
+		old[it.ID] = it.Seen
+	}
+	for i := range next.Items {
+		if seen, ok := old[next.Items[i].ID]; ok {
+			next.Items[i].Seen = seen
+		}
+	}
+}
+
+// seenEqual reports whether both lists carry the same merge bases, by value.
+func seenEqual(a, b domain.TodoList) bool {
+	byID := make(map[string]domain.SnapshotView, len(a.Items))
+	for _, it := range a.Items {
+		if it.Seen != nil {
+			byID[it.ID] = *it.Seen
+		}
+	}
+	for _, it := range b.Items {
+		prev, ok := byID[it.ID]
+		switch {
+		case it.Seen == nil && !ok:
+		case it.Seen != nil && ok && *it.Seen == prev:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // presentIDs returns the ids that still name an item of l, in their given order.

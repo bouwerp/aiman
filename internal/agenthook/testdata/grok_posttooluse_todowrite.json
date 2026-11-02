@@ -1,0 +1,22 @@
+{
+  "hookEventName": "post_tool_use",
+  "hook_event_name": "PostToolUse",
+  "sessionId": "01a061da-2966-7ac1-82f3-d36302a0796a",
+  "cwd": "/home/code/repos/realfi",
+  "workspaceRoot": "/home/code/repos/realfi",
+  "permissionMode": "bypassPermissions",
+  "toolName": "todo_write",
+  "toolInput": {
+    "todos": [
+      {"id": "1", "content": "Auth + fresh clone of ux/wtb-2024-prototype-kit", "status": "in_progress"},
+      {"id": "2", "content": "Review PR diff: eligibility, lazy boundary, store/validate, tests", "status": "pending"},
+      {"id": "3", "content": "Run frontend typecheck/lint/unit tests", "status": "pending"},
+      {"id": "4", "content": "Fix only confirmed issues with tests", "status": "completed"},
+      {"id": "5", "content": "Rebase, re-verify, commit, push, PR comment", "status": "cancelled"}
+    ],
+    "merge": false
+  },
+  "toolUseId": "call-e12d6fc5-9382-4586-9cb6-98b5aeda3862-17",
+  "toolInputTruncated": false,
+  "timestamp": "2026-09-02T13:21:43Z"
+}

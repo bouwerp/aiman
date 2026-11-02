@@ -74,13 +74,21 @@ func TestMergeKeepsDoneItemLastWithoutMarker(t *testing.T) {
 	}
 }
 
-func TestMergeTicksDoneItemFromSnapshot(t *testing.T) {
-	l := domain.TodoList{Items: []domain.TodoItem{
-		{ID: "done", Text: DoneItemText, State: domain.TodoPending, Ref: DoneRef},
-	}}
-	got := Merge(l, nil, []domain.TodoSnapshotItem{{Text: DoneItemText, Status: domain.TodoDone}}, time.Time{}, time.Now())
-	if len(got.Items) != 1 || got.Items[0].State != domain.TodoDone || got.Items[0].Text != DoneItemText {
-		t.Fatalf("done item = %+v", got.Items)
+// The Done-when item is evidence-backed: a snapshot can neither tick it nor
+// reopen it; only aiman verify moves it.
+func TestMergeNeverTicksDoneItemFromSnapshot(t *testing.T) {
+	for _, st := range []domain.TodoState{domain.TodoPending, domain.TodoDone} {
+		l := domain.TodoList{Items: []domain.TodoItem{
+			{ID: "done", Text: DoneItemText, State: st, Ref: DoneRef},
+		}}
+		snap := []domain.TodoSnapshotItem{{Text: DoneItemText, Status: domain.TodoDone}}
+		if st == domain.TodoDone {
+			snap[0].Status = domain.TodoPending
+		}
+		got := Merge(l, nil, snap, time.Time{}, time.Now())
+		if len(got.Items) != 1 || got.Items[0].State != st || got.Items[0].Text != DoneItemText {
+			t.Fatalf("done item %q = %+v", st, got.Items)
+		}
 	}
 }
 

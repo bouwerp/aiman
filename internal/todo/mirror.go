@@ -55,8 +55,8 @@ type snapEntry struct {
 	state domain.TodoState
 }
 
-// Retext records the text a non-agent author replaced, so a snapshot that
-// still carries the old text is recognised as the same item.
+// Retext records the text a write replaced, so a snapshot that still carries
+// the old text is recognised as the same item.
 type Retext struct {
 	ID string `json:"id"`
 	// OldText is the replaced text, normalised.
@@ -64,16 +64,20 @@ type Retext struct {
 	At      time.Time `json:"at"`
 }
 
-// Merge folds an agent's task-list snapshot into list. Items the user, aiman
-// or a verifier changed after deliveredAt are "undelivered": the agent cannot
-// have seen that change yet, so the snapshot must not override it. The
-// result's NotInAgent is recomputed; added items have an empty ID.
+// Merge folds an agent's task-list snapshot into list. The merge base is each
+// item's Seen: an entry that equals it is stale — the agent did nothing since
+// the last report and the stored item, whoever last wrote it, stands — and an
+// entry that differs is something the agent did in its own list and applies.
+// Items the user, aiman or a verifier changed after deliveredAt are
+// "undelivered": the agent cannot have seen that change yet, so the snapshot
+// must not override it. The result's NotInAgent is recomputed; added items
+// have an empty ID.
 func Merge(list domain.TodoList, tombs []Tombstone, snap []domain.TodoSnapshotItem, deliveredAt, now time.Time) domain.TodoList {
 	return MergeWithRetexts(list, tombs, nil, snap, deliveredAt, now)
 }
 
 // MergeWithRetexts is Merge that also matches an unmatched snapshot item to
-// an item whose undelivered retext replaced the snapshot item's text.
+// an item whose recorded retext replaced the snapshot item's text.
 func MergeWithRetexts(list domain.TodoList, tombs []Tombstone, retexts []Retext, snap []domain.TodoSnapshotItem, deliveredAt, now time.Time) domain.TodoList {
 	undelivered := func(it domain.TodoItem) bool {
 		return it.UpdatedBy != domain.AuthorAgent && it.UpdatedAt.After(deliveredAt)
@@ -100,20 +104,42 @@ func MergeWithRetexts(list domain.TodoList, tombs []Tombstone, retexts []Retext,
 			matched[ei] = true
 		}
 	}
-	matchRetexts(list.Items, entries, retexts, deliveredAt, match, matched)
+	matchRetexts(list.Items, entries, retexts, match, matched)
 
 	items := append([]domain.TodoItem(nil), list.Items...)
-	// An undelivered active item stays the one active item: the snapshot's
-	// active marker cannot outrank a choice the agent has not seen.
-	anyUndelivered, userActive := false, false
-	for _, it := range items {
-		if undelivered(it) {
-			anyUndelivered = true
-			userActive = userActive || it.State == domain.TodoActive
+
+	// Decide per existing item whether the snapshot rewrites it. A kept item
+	// anchors in place; only rewritten and added items follow snapshot order.
+	apply := make([]bool, len(items))
+	for i := range items {
+		it := &items[i]
+		if !matched[i] {
+			continue
+		}
+		e := entries[indexOfEntry(match, i)]
+		switch {
+		case protectedFromSnapshot(*it):
+			// Gates and the Done-when item answer to the operator and to
+			// verify evidence, never to the agent's own list.
+		case it.Seen != nil && Normalize(it.Seen.Text) == e.norm && it.Seen.State == e.state:
+			// Stale: the agent did nothing since the last report.
+		case undelivered(*it):
+			// The agent cannot have seen the last change yet.
+		default:
+			apply[i] = true
+		}
+	}
+
+	// An active item the snapshot leaves alone stays the one active item:
+	// the snapshot's active marker cannot outrank a choice it does not change.
+	keptActive := false
+	for i, it := range items {
+		if !apply[i] && it.State == domain.TodoActive {
+			keptActive = true
 		}
 	}
 	snapState := func(st domain.TodoState) domain.TodoState {
-		if userActive && st == domain.TodoActive {
+		if keptActive && st == domain.TodoActive {
 			return domain.TodoPending
 		}
 		return st
@@ -127,7 +153,7 @@ func MergeWithRetexts(list domain.TodoList, tombs []Tombstone, retexts []Retext,
 		case it.Ref == DoneRef:
 			// The Done-when item is aiman's; the agent's task list not
 			// mentioning it is normal and must not mark it missing or drop it.
-		case it.UpdatedBy == domain.AuthorAgent:
+		case agentRemovedUntouched(*it):
 			it.State = domain.TodoDropped
 		case !undelivered(*it):
 			notInAgent = append(notInAgent, it.ID)
@@ -141,7 +167,7 @@ func MergeWithRetexts(list domain.TodoList, tombs []Tombstone, retexts []Retext,
 		}
 	}
 
-	// ordered holds the matched and new items in snapshot order, as indices
+	// ordered holds the rewritten and new items in snapshot order, as indices
 	// into items (existing) or into added (offset by len(items)).
 	var added []domain.TodoItem
 	var ordered []int
@@ -151,48 +177,87 @@ func MergeWithRetexts(list domain.TodoList, tombs []Tombstone, retexts []Retext,
 			if removed[e.norm] {
 				continue
 			}
-			added = append(added, domain.TodoItem{Text: e.text, State: snapState(e.state), UpdatedBy: domain.AuthorAgent, UpdatedAt: now})
+			added = append(added, domain.TodoItem{
+				Text: e.text, State: snapState(e.state),
+				UpdatedBy: domain.AuthorAgent, UpdatedAt: now,
+				Seen: &domain.SnapshotView{Text: e.text, State: e.state},
+			})
 			ordered = append(ordered, len(items)+len(added)-1)
+			continue
+		}
+		if !apply[ei] {
 			continue
 		}
 		it := &items[ei]
 		if it.UpdatedBy == domain.AuthorAgent {
-			it.Text, it.State = e.text, snapState(e.state)
-		} else if !undelivered(*it) {
-			it.State = snapState(e.state)
+			it.Text = e.text
 		}
+		it.State = snapState(e.state)
+		it.Seen = &domain.SnapshotView{Text: e.text, State: e.state}
 		ordered = append(ordered, ei)
 	}
 
 	out := list
 	out.NotInAgent = notInAgent
-	if anyUndelivered {
-		items = append(items, added...)
-		out.Items = items
-		pinDoneLast(&out)
-		return out
+	// anchor marks items the snapshot rewrites; kept items stay where they are.
+	anchor := make([]bool, len(items))
+	for i := range items {
+		anchor[i] = apply[i]
 	}
-	out.Items = snapshotOrder(items, added, matched, ordered)
+	out.Items = snapshotOrder(items, added, anchor, ordered)
 	pinDoneLast(&out)
 	return out
 }
 
+// indexOfEntry returns the snapshot index matched to existing item ei.
+func indexOfEntry(match []int, ei int) int {
+	for si, m := range match {
+		if m == ei {
+			return si
+		}
+	}
+	return -1
+}
+
+// protectedFromSnapshot reports whether the item answers to someone other
+// than the agent's own list: a gate (open or closed) or the Done-when item.
+func protectedFromSnapshot(it domain.TodoItem) bool {
+	if it.Ref == DoneRef {
+		return true
+	}
+	_, isGate := gateTexts[it.Ref]
+	return isGate
+}
+
+// agentRemovedUntouched reports whether an unmatched item is the agent's own
+// and unchanged since the last snapshot reported it: the agent dropped it
+// from its list and nobody else has touched it since.
+func agentRemovedUntouched(it domain.TodoItem) bool {
+	return it.UpdatedBy == domain.AuthorAgent && it.Seen != nil &&
+		it.Text == it.Seen.Text && it.State == it.Seen.State
+}
+
 // matchSnapshot pairs snapshot entries with existing items: exact normalised
-// text first, then the highest similarity at or above matchThreshold. Each
-// existing item matches at most once.
+// stored text first, then the exact last-snapshot text, then the highest
+// similarity at or above matchThreshold over both. Each existing item matches
+// at most once.
 func matchSnapshot(existing []domain.TodoItem, entries []snapEntry) []int {
 	match := make([]int, len(entries))
 	for i := range match {
 		match[i] = -1
 	}
 	norms := make([]string, len(existing))
+	seenNorms := make([]string, len(existing))
 	for i, it := range existing {
 		norms[i] = Normalize(it.Text)
+		if it.Seen != nil {
+			seenNorms[i] = Normalize(it.Seen.Text)
+		}
 	}
 	taken := make([]bool, len(existing))
 	for si, e := range entries {
 		for ei, n := range norms {
-			if !taken[ei] && n == e.norm {
+			if !taken[ei] && (n == e.norm || (seenNorms[ei] != "" && seenNorms[ei] == e.norm)) {
 				match[si], taken[ei] = ei, true
 				break
 			}
@@ -213,7 +278,13 @@ func matchSnapshot(existing []domain.TodoItem, entries []snapEntry) []int {
 			if taken[ei] {
 				continue
 			}
-			if score := jaccard(st, tokens(n)); score >= matchThreshold {
+			score := jaccard(st, tokens(n))
+			if seenNorms[ei] != "" {
+				if s := jaccard(st, tokens(seenNorms[ei])); s > score {
+					score = s
+				}
+			}
+			if score >= matchThreshold {
 				pairs = append(pairs, pair{si, ei, score})
 			}
 		}
@@ -228,8 +299,8 @@ func matchSnapshot(existing []domain.TodoItem, entries []snapEntry) []int {
 }
 
 // matchRetexts matches each still-unmatched snapshot entry whose text equals
-// the old text of a retext made after deliveredAt to the retexted item.
-func matchRetexts(existing []domain.TodoItem, entries []snapEntry, retexts []Retext, deliveredAt time.Time, match []int, matched []bool) {
+// the old text of a recorded retext to the retexted item.
+func matchRetexts(existing []domain.TodoItem, entries []snapEntry, retexts []Retext, match []int, matched []bool) {
 	index := make(map[string]int, len(existing))
 	for i, it := range existing {
 		index[it.ID] = i
@@ -240,7 +311,7 @@ func matchRetexts(existing []domain.TodoItem, entries []snapEntry, retexts []Ret
 		}
 		for _, r := range retexts {
 			ei, ok := index[r.ID]
-			if ok && !matched[ei] && r.At.After(deliveredAt) && r.OldText == e.norm {
+			if ok && !matched[ei] && r.OldText == e.norm {
 				match[si], matched[ei] = ei, true
 				break
 			}
@@ -248,18 +319,18 @@ func matchRetexts(existing []domain.TodoItem, entries []snapEntry, retexts []Ret
 	}
 }
 
-// snapshotOrder lays out matched and new items in snapshot order and places
-// each unmatched existing item right after the item that matched its nearest
-// matched predecessor in the old list (or first, when it had none).
-func snapshotOrder(items, added []domain.TodoItem, matched []bool, ordered []int) []domain.TodoItem {
-	after := map[int][]int{} // existing index of anchor (-1 = start) -> unmatched existing indices
-	anchor := -1
+// snapshotOrder lays out rewritten and new items in snapshot order and places
+// each kept existing item right after the item that anchored its nearest
+// rewritten predecessor in the old list (or first, when it had none).
+func snapshotOrder(items, added []domain.TodoItem, anchor []bool, ordered []int) []domain.TodoItem {
+	after := map[int][]int{} // existing index of anchor (-1 = start) -> kept existing indices
+	cur := -1
 	for i := range items {
-		if matched[i] {
-			anchor = i
+		if anchor[i] {
+			cur = i
 			continue
 		}
-		after[anchor] = append(after[anchor], i)
+		after[cur] = append(after[cur], i)
 	}
 	at := func(k int) domain.TodoItem {
 		if k < len(items) {

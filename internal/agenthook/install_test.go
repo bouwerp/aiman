@@ -381,6 +381,9 @@ func TestEnsureOnHostWritesGrokOwnedFile(t *testing.T) {
 	if !strings.Contains(string(raw), "idle_prompt") || !strings.Contains(string(raw), Marker) {
 		t.Fatalf("%s", raw)
 	}
+	if !strings.Contains(string(raw), "PostToolUse") || !strings.Contains(string(raw), "todo_write") || !strings.Contains(string(raw), TodoMarker) {
+		t.Fatalf("grok to-do hook missing: %s", raw)
+	}
 }
 
 func TestEnsureOnHostWritesKiloPlugin(t *testing.T) {

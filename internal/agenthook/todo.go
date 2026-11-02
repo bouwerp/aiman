@@ -13,10 +13,12 @@ import (
 )
 
 // ExtractTodoSnapshot returns the agent's whole task list from a hook payload.
-// ok is false unless the payload is a full list: TodoWrite's todos array, or
-// a Claude TaskCreate/TaskUpdate whose list readTasks can read. A Tasks
-// payload without that list is not ok, so a mirror never replaces the list
-// with the single task the hook named. update_plan is not a full list.
+// ok is false unless the payload is a full list: TodoWrite's todos array, a
+// grok todo_write call with merge false or absent, or a Claude
+// TaskCreate/TaskUpdate whose list readTasks can read. A Tasks payload
+// without that list is not ok, so a mirror never replaces the list with the
+// single task the hook named. A grok merge:true call is a partial update and
+// is not ok either. update_plan is not a full list.
 // An empty TodoWrite array is ok: the agent cleared its list.
 //
 // readTasks is given the Claude session id. The files live in
@@ -30,6 +32,9 @@ func ExtractTodoSnapshot(raw []byte, readTasks func(listRef string) ([]domain.To
 		ToolName  string          `json:"tool_name"`
 		SessionID string          `json:"session_id"`
 		ToolInput json.RawMessage `json:"tool_input"`
+		// Grok's envelope is camelCase where Claude's is snake_case.
+		GrokToolName  string          `json:"toolName"`
+		GrokToolInput json.RawMessage `json:"toolInput"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, false
@@ -39,9 +44,31 @@ func ExtractTodoSnapshot(raw []byte, readTasks func(listRef string) ([]domain.To
 		return todoWriteSnapshot(payload.ToolInput)
 	case "TaskCreate", "TaskUpdate":
 		return claudeTasksSnapshot(payload.SessionID, readTasks)
-	default:
+	}
+	if payload.GrokToolName == "todo_write" {
+		return grokTodoWriteSnapshot(payload.GrokToolInput)
+	}
+	return nil, false
+}
+
+// grokTodoWriteSnapshot is the full list of a grok todo_write call, ok only
+// when merge is false or absent: a merge:true call carries just the tasks it
+// changes.
+func grokTodoWriteSnapshot(toolInput json.RawMessage) ([]domain.TodoSnapshotItem, bool) {
+	if len(bytes.TrimSpace(toolInput)) == 0 {
 		return nil, false
 	}
+	var input struct {
+		Todos json.RawMessage `json:"todos"`
+		Merge bool            `json:"merge"`
+	}
+	if err := json.Unmarshal(toolInput, &input); err != nil {
+		return nil, false
+	}
+	if input.Merge {
+		return nil, false
+	}
+	return todoWriteSnapshot(toolInput)
 }
 
 func todoWriteSnapshot(toolInput json.RawMessage) ([]domain.TodoSnapshotItem, bool) {
