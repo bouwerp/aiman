@@ -63,11 +63,18 @@ Restarting from saved state, `Up` returns within 25 ms, before the gateway has
 the node's new path, and the first dial then hangs for 2m15s (2 of 3 runs). With
 `Start` waiting for a TSMP ping to the gateway, 5 of 5 restarts were ready in
 1.3 to 1.7 s, with the first byte in 3 to 4 ms. A stripped Linux build of the
-bridge is about 21 MB; the iOS framework size, suspend and resume, and running
-beside a work VPN are still to be measured on the iPhone.
+bridge is about 21 MB.
 
-Recommendation: ship on A, with B as the no-VPN fallback once the gateway is
-hardened. If the Phase 1 spike proves D, it replaces A and B for daily use. Keep the app's transport behind one interface (`services/api.ts`,
+On the iPhone (same day, Tailscale app off, Expo dev build): `Start` was up in
+20 ms, `GET /v1/health` through the bridge returned `200 {"ok":true}` with the
+first byte in 35 ms, and after a minute in the background the check passed
+again on resume. The node joined with an untagged auth key, so the gateway sees
+the owner's login. Not measured: the framework's share of the app size, and
+coexistence with another VPN (none on this phone). D works and needs no VPN
+slot, so it is the planned daily path; A stays as a fallback.
+
+Recommendation: D for daily use (proven on the iPhone, see below), A as the
+fallback, B only once the gateway is hardened. Keep the app's transport behind one interface (`services/api.ts`,
 `services/events.ts`) so C can be added later without touching screens. Build C
 only if a VPN on the phone is a deal-breaker, or if cross-host aggregation and
 offline history become needs. Push needs no AWS in any option: the gateway
@@ -77,26 +84,60 @@ calls Expo directly.
 
 ### Phase 0: gateway hardening (this repo)
 
-1. WebSocket auth: accept the token from `Sec-WebSocket-Protocol` (and the
-   `access_token` query for the existing app), constant-time compared like the
-   header. Tests in `internal/gateway`.
-2. Per-device tokens: `POST /v1/pair` exchanges a short-lived pairing code for
-   a device token stored hashed in `~/.aiman/gateway-devices.json`; `GET/DELETE
-   /v1/devices` lists and revokes. The host token stays for the TUI.
-3. RPC allowlist for device tokens: read methods, `session.prompt`,
-   `steer.send`, `todo.*` (operator gate closes included), `notify.since`,
-   `usage.get`, `session.create`. Destructive methods (`pty.kill`,
-   `session.forget`, `review.post`) need an explicit `allow_destructive` on
-   the device.
-4. Host id in push `data` and the deep link: `aimanphone://h/<host>/s/<id>`.
-5. Expo receipts: poll `getReceipts`, drop `DeviceNotRegistered` tokens, return
-   a real error on non-2xx.
-6. Pairing in the TUI: Agent API page gains `p`, which starts the gateway if
-   needed, mints a pairing code (5 minutes) and draws a QR of
-   `{url, code, host}` in the terminal.
-7. Refresh `api/openapi.yaml` from serve's handler table, with a test that
-   fails when a handled method or event type is missing from the spec.
-8. AGENTS.md, README.
+Contract shared by the gateway, the TUI and the app:
+
+- Node name: `--hostname` defaults to `aiman-gateway-<host>`, `<host>` being
+  the OS hostname lowercased to `[a-z0-9-]`, so several remotes on one
+  tailnet do not collide. The app's tsnet target is `<node name>:<port>`.
+- `aiman-gateway pair [--name <device>] [--json]` (runs on the host, beside the
+  service) mints a pairing code: 10 random base32 characters, single use, valid
+  5 minutes, stored as a sha256 in `~/.aiman/gateway-pair-codes.json` (0600,
+  written atomically). `--json` prints
+  `{"target","host","code","expires_at","uri"}` where `uri` is
+  `aimanphone://pair?target=<t>&host=<h>&code=<c>`, the QR payload.
+- `POST /v1/pair {code, device_name}` needs no bearer token but still the
+  tailnet identity check. It consumes the code and returns
+  `{device_id, token}`. Tokens are 32 random bytes as hex, stored only as a
+  sha256 in `~/.aiman/gateway-devices.json` (0600) with name, created_at,
+  last_seen, login and `allow_destructive` (false). More than 5 failed codes
+  in a minute locks pairing for that minute.
+- Auth: `Authorization: Bearer` with the host token (full access, the TUI) or a
+  device token. The two WebSocket routes also accept `access_token` in the
+  query; URLs with it are never logged.
+- `GET /v1/devices` lists devices (no hashes); `DELETE /v1/devices/{id}`
+  revokes. `aiman-gateway devices [list|revoke <id>|allow-destructive <id>
+  on|off]` does the same on the host.
+- Device tokens pass a method allowlist on `/v1/rpc`, derived from serve's
+  handler table, deny by default. Allowed: reads (`session.list/get/read/
+  wait/log`, `pty.capture`, `todo.get/summary`, `notify.since`, `usage.get`,
+  `ci.get`, `agents.status`, `ping`), and writes (`session.prompt`,
+  `session.create`, `steer.send`, every `todo.*` including gate approval,
+  `ci.watch`, `pty.input`, `push.register/unregister`). Destructive
+  (`pty.kill`, `pty.forget`, `session.forget`, `review.post`, `agents.update`,
+  `agents.move_prefix`) need `allow_destructive`. A device acts as the
+  operator.
+- Push `data`: `{session, host, url}` with `url`
+  `aimanphone://h/<host>/s/<session>`.
+
+Steps:
+
+1. Gateway (`cmd/aiman-gateway`, `internal/gateway`): node name, pairing codes
+   and `/v1/pair`, device store and auth, allowlist, `/v1/devices`, WebSocket
+   query token, push `data`, Expo errors (per-ticket `DeviceNotRegistered`
+   drops the token at send time; receipts polled every 15 minutes for tickets
+   older than 15 minutes; a non-2xx reply is a real error).
+2. TUI: Agent API page `p` runs `aiman-gateway pair --json` on the selected
+   remote over SSH (starting the gateway service first when it is not
+   running) and draws `uri` as a QR in the terminal with the code and expiry
+   beside it.
+3. `api/openapi.yaml`: the new routes and every serve method and event type,
+   with a test that fails when a handled method or published event type is
+   missing from the spec.
+4. AGENTS.md, README.
+
+The app learns to join the tailnet from the QR in Phase 1: it signs in to
+Tailscale in the app (tsnet's login URL opened in the browser), then redeems
+the code over the tailnet.
 
 ### Phase 1: on a device (aiman-phone)
 
@@ -145,9 +186,6 @@ Drop: tokens in AsyncStorage (SecureStore only), config values committed in
 `eas.json` (EAS environment variables instead), committed build artifacts, no
 `expo-updates` (add it with a `runtimeVersion` policy for OTA).
 
-## Open questions
+## Decisions
 
-1. Does the phone already run a VPN that would block Tailscale (decides A vs B
-   for daily use until the D spike reports)?
-2. iPhone only, or Android too?
-3. Should a device token be able to create sessions, or only answer and steer?
+Settled 2026-11-03: iPhone only; a device may create sessions.
