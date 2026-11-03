@@ -100,7 +100,10 @@ type UpdateDialog struct {
 
 // UpdateDialogs lists the startup update prompts the boot wait and the steer
 // gate recognise. Enter or a digit would pick "Update now" or "Install" in
-// these menus, so every Key skips instead.
+// these menus, so every Key skips instead. It also holds Codex's hook-review
+// menu, a startup modal of the same kind: aiman trusts its own hooks
+// (agenthook), so this menu only comes up for hooks someone else added, and
+// aiman must not trust those.
 var UpdateDialogs = []UpdateDialog{
 	// The modal reads "Update available · A → B" over "› 1. Update now",
 	// "2. Skip", "3. Skip until next version". Codex also prints a
@@ -110,6 +113,10 @@ var UpdateDialogs = []UpdateDialog{
 	// "Deep Code latest version has been released: A -> B" over a numbered
 	// menu and "Esc to ignore once".
 	{Agent: "deepcode", Re: `latest version has been released`, Key: "esc"},
+	// Codex 0.166+: "Hooks need review" over "› 1. Review hooks", "2. Trust
+	// all and continue", "3. Continue without trusting". Esc continues
+	// without trusting; the default row opens the review screen.
+	{Agent: "codex", Re: `Hooks need review`, Key: "esc"},
 }
 
 // UpdateDialogTailLines is how many rows at the bottom of a rendered screen
@@ -122,7 +129,7 @@ const UpdateDialogTailLines = 12
 func MatchUpdateDialog(screen string) (UpdateDialog, bool) {
 	tail := screenTail(screen, UpdateDialogTailLines)
 	for _, d := range UpdateDialogs {
-		if updateDialogRes[d.Agent].MatchString(tail) {
+		if updateDialogRes[d.Re].MatchString(tail) {
 			return d, true
 		}
 	}
@@ -132,7 +139,7 @@ func MatchUpdateDialog(screen string) (UpdateDialog, bool) {
 var updateDialogRes = func() map[string]*regexp.Regexp {
 	out := make(map[string]*regexp.Regexp, len(UpdateDialogs))
 	for _, d := range UpdateDialogs {
-		out[d.Agent] = regexp.MustCompile(d.Re)
+		out[d.Re] = regexp.MustCompile(d.Re)
 	}
 	return out
 }()

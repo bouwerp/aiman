@@ -15,7 +15,10 @@ import (
 // The fixtures under testdata/bootdialogs are real screens: Codex 0.164.0 with
 // a throwaway CODEX_HOME whose version.json named a newer release, and Deep
 // Code 0.4.3 with a throwaway HOME whose update-check.json held a pending
-// release. Only Esc was pressed to produce the *_after_esc screens.
+// release. Only Esc was pressed to produce the *_after_esc screens. The
+// codex_splash, codex_hooks_review, codex_ready, codex_typed and
+// codex_submitted screens are Codex 0.166.0 in a fresh repository with three
+// untrusted hooks, ANSI stripped and the directory renamed.
 func bootFixture(t *testing.T, name string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", "bootdialogs", name+".txt"))
@@ -243,40 +246,81 @@ func TestUpdateDialogPatternsWithGrep(t *testing.T) {
 		return cmd.Run() == nil
 	}
 	cases := []struct {
-		agent, live, gone string
+		re, live, gone string
 	}{
-		{"codex", "codex_update", "codex_after_esc"},
-		{"deepcode", "deepcode_update", "deepcode_after_esc"},
+		{"Skip until next version", "codex_update", "codex_after_esc"},
+		{"latest version has been released", "deepcode_update", "deepcode_after_esc"},
+		{"Hooks need review", "codex_hooks_review", "codex_ready"},
 	}
 	for _, c := range cases {
 		var d infraAgent.UpdateDialog
 		for _, x := range infraAgent.UpdateDialogs {
-			if x.Agent == c.agent {
+			if x.Re == c.re {
 				d = x
 			}
 		}
 		if d.Re == "" {
-			t.Fatalf("no dialog for %s", c.agent)
+			t.Fatalf("no dialog %q", c.re)
 		}
 		live := bootFixture(t, c.live)
 		gone := bootFixture(t, c.gone)
 		n := infraAgent.UpdateDialogTailLines
 		if !grep(d.Re, captureJSON(t, tailRows(live, n))) {
-			t.Errorf("%s: grep -E %q misses the live dialog", c.agent, d.Re)
+			t.Errorf("%s: grep -E %q misses the live dialog", c.live, d.Re)
 		}
 		if grep(d.Re, captureJSON(t, tailRows(gone, n))) {
-			t.Errorf("%s: grep -E %q matches the screen after esc", c.agent, d.Re)
+			t.Errorf("%s: grep -E %q matches the screen after esc", c.gone, d.Re)
 		}
 		for _, other := range infraAgent.UpdateDialogs {
-			if other.Agent != c.agent && grep(other.Re, []byte(live)) {
-				t.Errorf("%s pattern matches the %s dialog", other.Agent, c.agent)
+			if other.Re != d.Re && grep(other.Re, []byte(live)) {
+				t.Errorf("pattern %q matches the %s dialog", other.Re, c.live)
 			}
 		}
-		if got, ok := infraAgent.MatchUpdateDialog(live); !ok || got.Agent != c.agent {
+		if got, ok := infraAgent.MatchUpdateDialog(live); !ok || got.Re != d.Re {
 			t.Errorf("MatchUpdateDialog(%s) = %v, %v", c.live, got, ok)
 		}
 		if got, ok := infraAgent.MatchUpdateDialog(gone); ok {
 			t.Errorf("MatchUpdateDialog(%s) = %v after esc", c.gone, got)
 		}
+	}
+}
+
+// Codex 0.166 asks to review new hooks before its input box comes up. Its
+// rows start with "›", so a boot wait that reads it as ready types the first
+// prompt into the menu. Esc continues without trusting anything.
+func TestBootWaitSkipsCodexHookReviewWithEsc(t *testing.T) {
+	f := newFakeBoot(t)
+	f.screen["hooks"] = bootFixture(t, "codex_hooks_review")
+	f.screen["ready"] = bootFixture(t, "codex_ready")
+	f.next["hooks/esc"] = "ready"
+	out, keys := f.run("hooks")
+	if strings.Join(keys, ",") != "esc" {
+		t.Fatalf("keys = %v, want exactly one esc", keys)
+	}
+	assertNoConfirmKey(t, keys)
+	if got := bootOutcome(out); strings.HasPrefix(got, "timeout:") || got == "" {
+		t.Fatalf("outcome = %q, want the ready composer after esc\n%s", got, out)
+	}
+}
+
+// Codex draws "› Ask Codex to do anything" on its splash, before any trust
+// or hook-review dialog and before the model footer. Taking the splash for a
+// ready composer types the prompt into whichever dialog follows it.
+func TestCodexSplashIsNotReady(t *testing.T) {
+	f := newFakeBoot(t)
+	f.screen["splash"] = bootFixture(t, "codex_splash") // never goes away
+	out, keys := f.run("splash")
+	if len(keys) != 0 {
+		t.Fatalf("the splash got keys %v", keys)
+	}
+	if got := bootOutcome(out); got != "timeout:20" {
+		t.Fatalf("outcome = %q, want timeout:20: the splash is not ready", got)
+	}
+
+	f = newFakeBoot(t)
+	f.screen["ready"] = bootFixture(t, "codex_ready")
+	out, _ = f.run("ready")
+	if got := bootOutcome(out); got != "ready:0" {
+		t.Fatalf("outcome = %q, want ready:0 for the composer with its footer", got)
 	}
 }

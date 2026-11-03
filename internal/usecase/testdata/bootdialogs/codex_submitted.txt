@@ -1,0 +1,50 @@
+
+  >_ OpenAI Codex (v0.166.0)
+     /home/code/repos/demo
+
+
+› Review the staged pull request in this worktree blind. Review the staged pull request in this worktree blind. Review the staged pull request in this worktree blind. Review the staged pull request
+  in this worktree blind. Review the staged pull request in this worktree blind. Review the staged pull request in this worktree blind. Finish by writing the final review file when done.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  GPT-5.6-Terra medium · /home/code/repos/demo
+  ? for shortcuts

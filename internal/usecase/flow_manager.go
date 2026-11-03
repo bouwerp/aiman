@@ -711,6 +711,15 @@ const workspaceTrustRe = `[Dd]o you trust|[Tt]rust this folder|[Tt]rust the cont
 // composer is up.
 const composerReadyRe = `[›❯]|Ask Codex|Ask Grok|\? for shortcuts|[0-9]%/[0-9.]+[kKM]`
 
+// codexSplashRe and codexFooterRe tell Codex's splash from its ready
+// composer. The splash already shows "› Ask Codex to do anything", for about
+// two seconds before a trust or hook-review dialog replaces it; only the
+// ready composer has the model footer ("gpt-5.6 medium · ~/repo") under it.
+const (
+	codexSplashRe = `Ask Codex`
+	codexFooterRe = ` · `
+)
+
 // bootWaitBudget is how many polls the PTY boot wait makes before it gives up.
 const bootWaitBudget = 20
 
@@ -725,7 +734,8 @@ const bootWaitBudget = 20
 // asks. An update dialog's default is "Update now" or "Install", so it gets
 // its skip key instead (bootUpdateDialogBranch) and the loop keeps polling.
 // Update dialogs are checked first because Codex's menu rows start with "›",
-// which composerReadyRe would read as a ready composer.
+// which composerReadyRe would read as a ready composer. Codex's splash is
+// skipped for the same reason (codexSplashRe).
 //
 // It polls rather than sleeping a fixed time because the dialogs only appear
 // once the agent has finished booting, and gives up silently: an agent that
@@ -747,12 +757,16 @@ func acceptWorkspaceTrustPTY(sessionID string) string {
 			"if printf '%%s' \"$pane\" | grep -qE %[2]q; then "+
 			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 2; reason=trust; break; "+
 			"fi; "+
+			"if printf '%%s' \"$pane\" | grep -qE %[6]q && ! printf '%%s' \"$pane\" | grep -qE %[7]q; then "+
+			"attempt=$((attempt+1)); sleep 1; continue; "+
+			"fi; "+
 			"if printf '%%s' \"$pane\" | grep -qE %[3]q; then reason=ready; break; fi; "+
 			"attempt=$((attempt+1)); sleep 1; "+
 			"done; "+
 			"if [ $upd = 1 ]; then reason=update; fi; "+
 			"echo \"AIMAN_BOOTWAIT:$reason:$attempt\"; ",
 		id, workspaceTrustRe, composerReadyRe, bootWaitBudget, bootUpdateDialogBranch(id),
+		codexSplashRe, codexFooterRe,
 	)
 }
 

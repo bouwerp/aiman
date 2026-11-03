@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -445,14 +446,18 @@ func submitMarker(prompt string) string {
 	return strings.TrimSpace(string(r))
 }
 
-// composerStillHolds reports whether marker is still sitting on the composer
-// line at the bottom of the pane, not merely present in scrollback.
+// composerStillHolds reports whether marker is still sitting in the input box
+// at the bottom of the pane, not merely present in scrollback.
 // Codex/Grok echo the submitted prompt into the transcript above an empty
 // input box; a whole-pane match would look stuck forever and keep pressing
-// Return into the next turn. The check is the last non-empty line only: that
-// is the composer after submit (› / ❯) or the end of a wrapped unsent prompt.
+// Return into the next turn. So the check starts at the last row that opens
+// with a prompt glyph (› or ❯, inside Grok's │ frame too), the input box, and
+// reads it with the rows below: a wrapped prompt continues there, and Codex's
+// model footer and Claude's status line sit there without the marker.
+// Whitespace and frame bars are ignored, since agents wrap long prompts
+// mid-word. A pane with no glyph row falls back to its last non-empty row.
 func composerStillHolds(rawPane, marker string) bool {
-	marker = strings.TrimSpace(marker)
+	marker = squashComposerText(marker)
 	if marker == "" {
 		return false
 	}
@@ -462,13 +467,28 @@ func composerStillHolds(rawPane, marker string) bool {
 	}
 	lines := strings.Split(text, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
+		row := strings.TrimLeft(lines[i], " \t│")
+		if strings.HasPrefix(row, "›") || strings.HasPrefix(row, "❯") {
+			return strings.Contains(squashComposerText(strings.Join(lines[i:], "\n")), marker)
 		}
-		return strings.Contains(line, marker)
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return strings.Contains(squashComposerText(line), marker)
+		}
 	}
 	return false
+}
+
+// squashComposerText drops whitespace and frame bars, so text wrapped over
+// several rows of an input box compares equal to the prompt it came from.
+func squashComposerText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || r == '│' {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // sleepCtx waits for d, or returns early when the context ends.

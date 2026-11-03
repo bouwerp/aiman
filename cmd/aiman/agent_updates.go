@@ -130,13 +130,19 @@ func (p pathExec) Run(ctx context.Context, c agentupdate.Command) (string, error
 		for k, v := range c.Env {
 			env[k] = v
 		}
-		dirs := []string{filepath.Join(p.home, agentupdate.UserPrefixDir, "bin"), os.Getenv("PATH")}
-		for _, d := range agentPathDirs {
-			dirs = append(dirs, filepath.Join(p.home, d))
-		}
-		dirs = append(dirs, "/usr/local/bin")
-		env["PATH"] = strings.Trim(strings.Join(dirs, ":"), ":")
+		env["PATH"] = agentPATH(p.home)
 		c.Env = env
 	}
 	return p.base.Run(ctx, c)
+}
+
+// agentPATH is serve's PATH with the agent install prefixes under home, the
+// user npm prefix first.
+func agentPATH(home string) string {
+	dirs := []string{filepath.Join(home, agentupdate.UserPrefixDir, "bin"), os.Getenv("PATH")}
+	for _, d := range agentPathDirs {
+		dirs = append(dirs, filepath.Join(home, d))
+	}
+	dirs = append(dirs, "/usr/local/bin")
+	return strings.Trim(strings.Join(dirs, ":"), ":")
 }

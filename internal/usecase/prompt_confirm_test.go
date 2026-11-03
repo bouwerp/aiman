@@ -270,3 +270,46 @@ func TestTypeAndSubmitCancelAfterTypingStillPressesReturn(t *testing.T) {
 		t.Fatal("a canceled confirm counted as success")
 	}
 }
+
+// codexFixturePrompt is the text typed into the codex_typed and
+// codex_submitted fixtures.
+const codexFixturePrompt = "Review the staged pull request in this worktree blind. Review the staged pull request in this worktree blind. Review the staged pull request in this worktree blind. Review the staged pull request in this worktree blind. Review the staged pull request in this worktree blind. Review the staged pull request in this worktree blind. Finish by writing the final review file when done."
+
+// Codex 0.166 draws a model footer under its input box, and Claude a status
+// line and mode row under its own. The last non-empty row is the footer, so a
+// check of that row alone reads a prompt still in the box as submitted.
+func TestComposerStillHoldsLooksAboveTheFooter(t *testing.T) {
+	marker := submitMarker(codexFixturePrompt)
+	if !composerStillHolds(bootFixture(t, "codex_typed"), marker) {
+		t.Fatal("codex: a prompt in the input box above the model footer must count as held")
+	}
+	if composerStillHolds(bootFixture(t, "codex_submitted"), marker) {
+		t.Fatal("codex: an echoed prompt above an empty input box must not count as held")
+	}
+
+	prompt := "Review PR 439 and report what you find"
+	claudeFooter := "\n" + strings.Repeat("─", 40) + "\n  code@host:/repo  $1.20 · 2h · [██░░] 19% ctx\n  -- INSERT -- ⏵⏵ bypass permissions on · ← 2 agents"
+	rule := strings.Repeat("─", 40)
+	stuck := "● Done.\n" + rule + "\n❯ " + prompt + claudeFooter
+	if !composerStillHolds(stuck, submitMarker(prompt)) {
+		t.Fatal("claude: a prompt in the input box above the status line must count as held")
+	}
+	sent := "❯ " + prompt + "\n● Working\n" + rule + "\n❯ " + claudeFooter
+	if composerStillHolds(sent, submitMarker(prompt)) {
+		t.Fatal("claude: an echoed prompt above an empty input box must not count as held")
+	}
+}
+
+// Grok draws its input box inside a frame, and every agent wraps a long
+// prompt over several rows, sometimes in the middle of the marker.
+func TestComposerStillHoldsAcrossWrappedAndFramedRows(t *testing.T) {
+	prompt := "Please look at the failing integration test in the payments module"
+	grok := "  ╭──────────╮\n  │ ❯ Please look at the failing integration test in the paym │\n  │ ents module │\n  ╰──────────╯\n  Space:prompt  │  Enter:open"
+	if !composerStillHolds(grok, submitMarker(prompt)) {
+		t.Fatal("a framed prompt wrapped mid-word must count as held")
+	}
+	empty := "  ╭──────────╮\n  │ ❯ Build anything │\n  ╰──────────╯\n  Space:prompt  │  Enter:open"
+	if composerStillHolds(empty, submitMarker(prompt)) {
+		t.Fatal("an empty framed input box must not count as held")
+	}
+}

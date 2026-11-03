@@ -319,6 +319,21 @@ func ensureAgentHooks(beforePR bool) {
 		log.Printf("aiman hooks: %v", err)
 	}
 	log.Printf("aiman hooks: %s", agenthook.Summarize(results))
+	// Codex app-server can take seconds to start; serve does not wait for it.
+	go trustCodexHooks(home)
+}
+
+// trustCodexHooks marks aiman's Codex hooks trusted. A failure only costs the
+// user Codex's review prompt, so it is logged.
+func trustCodexHooks(home string) {
+	keys, err := agenthook.TrustCodexHooks(context.Background(), home, agentPATH(home))
+	if err != nil {
+		log.Printf("aiman hooks: codex trust: %v", err)
+		return
+	}
+	if len(keys) > 0 {
+		log.Printf("aiman hooks: codex trusted %d aiman hooks", len(keys))
+	}
 }
 
 func serveWantsHelp(args []string) bool {
