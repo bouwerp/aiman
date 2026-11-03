@@ -176,6 +176,7 @@ const (
 	viewStateReviveAgentPick    // short pick-list when a worktree has 2+ agent candidates
 	viewStateMemoryCandidates   // review memory notes proposed from handovers
 	viewStateAgentUpdates       // "Agents on <host>": versions and updates of agent CLIs
+	viewStateGatewayPair        // pairing QR for the phone gateway on a remote
 )
 
 type mainTab int
@@ -356,6 +357,7 @@ type Model struct {
 	agentAPICursor  int                      // selected remote on the Agent API settings page
 	agentAPIProbing map[string]bool          // host → probe SSH call in flight
 	agentUpdates    *agentUpdatesView        // "Agents on <host>" page state
+	gatewayPair     *gatewayPairView         // phone pairing page state
 	currentTab      mainTab
 	menu            list.Model
 	remotes         RemotesModel
@@ -3033,7 +3035,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applySyncHealthMsg(msg, cmds)
 	case sessionCreateMsg:
 		return m.applySessionCreateMsg(msg, cmds)
-	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg, agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg:
+	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg, agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg,
+		gatewayPairMsg, gatewayPairTickMsg:
 		return m.routeRemoteServiceMsg(msg)
 	case discoveryResultMsg:
 		// Startup and refresh both deliver this after the dashboard is already
@@ -3081,6 +3084,9 @@ func (m *Model) dispatchSettingsUpdate(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case viewStateReviveAgentPick:
 		model, cmd := m.handleReviveAgentPickUpdate(msg)
 		return model, cmd, true
+	case viewStateGatewayPair:
+		m.handleGatewayPairUpdate(msg)
+		return m, nil, true
 	default:
 		return m, nil, false
 	}
@@ -3527,6 +3533,8 @@ func (m *Model) renderSettingsView() (string, bool) {
 		return docStyle.Render(m.revive.list.View()), true
 	case viewStateReviveAgentPick:
 		return m.renderReviveAgentPick(), true
+	case viewStateGatewayPair:
+		return m.renderGatewayPairView(), true
 	default:
 		return "", false
 	}

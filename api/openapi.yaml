@@ -1,11 +1,16 @@
 openapi: 3.1.0
 info:
   title: aiman gateway
-  version: 0.1.0
+  version: 0.2.0
   description: >
-    HTTP and WebSocket surface in front of `aiman serve`. Bearer token on every
-    request except GET /v1/health. POST /v1/rpc is the whole API; REST reads
-    are conveniences over the same socket methods.
+    HTTP and WebSocket surface in front of `aiman serve`. Every request needs
+    a bearer token except GET /v1/health and POST /v1/pair. The token is the
+    host token (full access, used by the TUI) or a device token minted by
+    POST /v1/pair. Device tokens pass a method allowlist on /v1/rpc, deny by
+    default; destructive methods also need the device's allow_destructive
+    flag. Every request also passes the tailnet identity check. POST /v1/rpc
+    is the whole API; REST reads are conveniences over the same socket
+    methods.
 servers:
   - url: /
 security:
@@ -16,6 +21,8 @@ tags:
   - name: sessions
   - name: events
   - name: terminal
+  - name: pairing
+  - name: devices
 paths:
   /v1/health:
     get:
@@ -30,6 +37,106 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+  /v1/pair:
+    post:
+      tags: [pairing]
+      security: []
+      operationId: pair
+      summary: >
+        Redeem a pairing code from `aiman-gateway pair` for a device token.
+        Needs no bearer token but still the tailnet identity check. The code
+        is single use and valid 5 minutes. More than 5 failed codes in a
+        minute lock pairing for the rest of that minute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairRequest"
+      responses:
+        "200":
+          description: Code consumed; the token is shown only here
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairResponse"
+        "400":
+          description: Invalid JSON (invalid_params)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+        "401":
+          description: Unknown, used or expired code (invalid_code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+        "403":
+          description: No tailnet identity, or login not on the allow-list (forbidden)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+        "429":
+          description: Pairing locked after too many failed codes (locked)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+        "503":
+          description: Pairing is not configured on this gateway (unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+  /v1/devices:
+    get:
+      tags: [devices]
+      operationId: listDevices
+      summary: Paired devices. Token hashes are never returned.
+      responses:
+        "200":
+          description: Device list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceList"
+        "401":
+          description: unauthorized
+        "403":
+          description: forbidden
+  /v1/devices/{id}:
+    delete:
+      tags: [devices]
+      operationId: revokeDevice
+      summary: >
+        Revoke a device; its token stops working at once. A device token may
+        revoke itself; revoking another device takes the host token or
+        allow_destructive.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Revoked
+        "401":
+          description: unauthorized
+        "403":
+          description: Revoking another device without allow_destructive (forbidden)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
+        "404":
+          description: No such device (not_found)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RpcResponse"
   /v1/rpc:
     post:
       tags: [rpc]
@@ -57,13 +164,16 @@ paths:
         "401":
           description: Missing or wrong bearer token
         "403":
-          description: Tailnet WhoIs failed or login not on the allow-list
+          description: >
+            Tailnet WhoIs failed, login not on the allow-list, or a device
+            token calling a method outside its allowlist
         "502":
           description: Unix socket call failed
   /v1/sessions:
     get:
       tags: [sessions]
       operationId: listSessions
+      summary: session.list over GET.
       parameters:
         - in: query
           name: group
@@ -84,6 +194,7 @@ paths:
     get:
       tags: [sessions]
       operationId: getSession
+      summary: session.get over GET.
       parameters:
         - $ref: "#/components/parameters/SessionId"
       responses:
@@ -112,6 +223,7 @@ paths:
           schema:
             type: integer
             default: 24
+        - $ref: "#/components/parameters/AccessToken"
       responses:
         "101":
           description: Switching protocols
@@ -124,6 +236,8 @@ paths:
       summary: >
         WebSocket of SessionEvent objects, one JSON text frame per event.
         Events are changes, not snapshots. Expect a keepalive roughly every 20s.
+      parameters:
+        - $ref: "#/components/parameters/AccessToken"
       responses:
         "101":
           description: Switching protocols
@@ -135,6 +249,15 @@ components:
       type: http
       scheme: bearer
   parameters:
+    AccessToken:
+      in: query
+      name: access_token
+      required: false
+      description: >
+        Bearer token for WebSocket clients that cannot set a header. URLs
+        carrying it are never logged.
+      schema:
+        type: string
     SessionId:
       in: path
       name: id
@@ -213,6 +336,9 @@ components:
       properties:
         code:
           type: string
+          description: >
+            Serve's codes, plus invalid_code, locked, forbidden, unavailable
+            and internal, which the gateway returns itself.
           enum:
             - invalid_params
             - not_found
@@ -222,8 +348,26 @@ components:
             - agent_blocked
             - timeout
             - create_failed
+            - publish_failed
             - jira_unavailable
             - protocol_mismatch
+            - no_reviewer_agent
+            - no_preferred_agent
+            - legacy_terminal
+            - gate_needs_operator
+            - design_not_approved
+            - consult_needs_smart
+            - review_exists
+            - review_not_ready
+            - review_incomplete
+            - review_head_moved
+            - review_already_posted
+            - review_no_coverage
+            - invalid_code
+            - locked
+            - forbidden
+            - unavailable
+            - internal
         message:
           type: string
     RpcRequest:
@@ -234,16 +378,88 @@ components:
           type: string
         method:
           type: string
+          description: >
+            Every method serve answers on its socket, plus push.register and
+            push.unregister, which the gateway answers itself. Device tokens
+            reach only the allowlisted subset; the rest return 403.
           enum:
             - ping
             - session.list
             - session.get
             - session.read
+            - session.log
+            - session.replay
             - session.prompt
+            - session.wait
+            - session.create
+            - session.rename
+            - session.move
+            - session.forget
+            - session.register
+            - session.report_agent_session
+            - notify.since
+            - verify.start
+            - verify.status
+            - ci.get
+            - ci.watch
+            - context.put
+            - context.get
+            - context.list
+            - context.find
+            - context.pack
+            - context.stats
+            - context.verify
+            - usage.get
+            - agents.status
+            - agents.update
+            - agents.move_prefix
+            - design.publish
+            - review.reveal
+            - review.post
+            - review.refresh
+            - review.run
+            - review.debug
+            - review.coverage
+            - handover.write
+            - handover.point
+            - memory.jobs
+            - memory.done
+            - todo.get
+            - todo.summary
+            - todo.add
+            - todo.update
+            - todo.move
+            - todo.remove
+            - todo.mirror
+            - todo.ensure_done
+            - todo.mark_met
+            - todo.gate
+            - todo.approve_design
+            - todo.approve_review
+            - steer.send
+            - pty.create
+            - pty.list
+            - pty.get
+            - pty.input
+            - pty.run
+            - pty.wait-output
+            - pty.capture
+            - pty.resize
+            - pty.kill
+            - pty.forget
             - push.register
             - push.unregister
         params:
           $ref: "#/components/schemas/RpcParams"
+    StreamMethod:
+      type: string
+      description: >
+        Socket methods that take over the connection instead of answering
+        once. /v1/rpc refuses them; pty.attach is reached through
+        /v1/sessions/{id}/terminal and session.events through /v1/events.
+      enum:
+        - pty.attach
+        - session.events
     RpcParams:
       type: object
       additionalProperties: true
@@ -362,7 +578,22 @@ components:
       properties:
         type:
           type: string
-          enum: [session_activity, session_gone, keepalive]
+          description: >
+            session_activity, session_gone and session_created come from the
+            stream's own poll; todo_changed, steer, usage, usage.budget,
+            notify and verify are published by request handlers; keepalive
+            is sent when nothing else was.
+          enum:
+            - session_activity
+            - session_gone
+            - session_created
+            - todo_changed
+            - steer
+            - usage
+            - usage.budget
+            - notify
+            - verify
+            - keepalive
         id:
           type: string
         title:
@@ -381,8 +612,108 @@ components:
         state:
           $ref: "#/components/schemas/AgentState"
           description: >
-            Classifier state when the gateway knows it. Live serve events
-            currently omit this; the phone merges it when present and
-            otherwise keeps the last list/get value.
+            Hook-reported agent state on session_activity, the review status
+            on verify, and the budget state on usage.budget. The phone merges
+            it when present and otherwise keeps the last list/get value.
         state_confidence:
           $ref: "#/components/schemas/StateConfidence"
+        session:
+          $ref: "#/components/schemas/Session"
+          description: The new or changed session on session_created.
+        rev:
+          type: integer
+          format: int64
+          description: To-do list revision on todo_changed.
+        queued:
+          type: integer
+          description: Steering notes still waiting on steer.
+        delivered_at:
+          type: string
+          format: date-time
+          description: Set on steer once a note reached the agent.
+        kind:
+          type: string
+          description: Notification kind on notify.
+    PairRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: The 10-character code from the pairing QR. Never log it.
+        device_name:
+          type: string
+    PairResponse:
+      type: object
+      required: [device_id, token]
+      properties:
+        device_id:
+          type: string
+        token:
+          type: string
+          description: >
+            Device bearer token, 32 random bytes as hex. The gateway keeps
+            only its sha256. Never log this value.
+    Device:
+      type: object
+      required: [id, name, created_at, allow_destructive]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+        login:
+          type: string
+          description: Tailnet login that paired the device.
+        allow_destructive:
+          type: boolean
+          description: >
+            Lets the device call pty.kill, pty.forget, session.forget,
+            review.post, agents.update and agents.move_prefix.
+    DeviceList:
+      type: object
+      required: [devices]
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: "#/components/schemas/Device"
+    PairingQR:
+      type: object
+      description: >
+        Output of `aiman-gateway pair --json` on the host. Not served over
+        HTTP; `uri` is the QR payload the phone scans.
+      required: [target, host, code, expires_at, uri]
+      properties:
+        target:
+          type: string
+          description: tsnet target, `<node name>:<port>`.
+        host:
+          type: string
+        code:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        uri:
+          type: string
+          description: "`aimanphone://pair?target=<t>&host=<h>&code=<c>`"
+    PushData:
+      type: object
+      description: The `data` object of every push notification.
+      required: [session, host, url]
+      properties:
+        session:
+          type: string
+        host:
+          type: string
+        url:
+          type: string
+          description: "Deep link `aimanphone://h/<host>/s/<session>`."
+

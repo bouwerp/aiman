@@ -4,22 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
+	"net/url"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/server"
 )
 
-const (
-	expoPushURL          = "https://exp.host/--/api/v2/push/send"
-	deepLinkScheme       = "aimanphone://session/"
-	NotifyCursorFileName = "gateway-notify-cursor"
-)
+// NotifyCursorFileName is the gateway's notify.since cursor.
+const NotifyCursorFileName = "gateway-notify-cursor"
 
 type expoMessage struct {
 	To    string            `json:"to"`
@@ -81,17 +74,20 @@ func (s SocketSource) Since(ctx context.Context, after int64, limit int) ([]doma
 	return out, res.LastSeq, nil
 }
 
-// NewPhoneSink creates a phone push sink.
-func NewPhoneSink(store *PushStore, sender func([]expoMessage) error) notify.Sink {
-	if sender == nil {
-		sender = sendExpo
-	}
-	return &phoneSink{store: store, sender: sender}
+// ExpoSender delivers a batch of push messages.
+type ExpoSender func(ctx context.Context, msgs []expoMessage) error
+
+// NewPhoneSink creates a phone push sink for the gateway on host (the OS
+// hostname, the same one `aiman-gateway pair` reports). send is usually
+// (*ExpoClient).Send.
+func NewPhoneSink(store *PushStore, host string, send ExpoSender) notify.Sink {
+	return &phoneSink{store: store, host: host, send: send}
 }
 
 type phoneSink struct {
-	store  *PushStore
-	sender func([]expoMessage) error
+	store *PushStore
+	host  string
+	send  ExpoSender
 }
 
 func (p *phoneSink) Name() string { return "phone" }
@@ -134,13 +130,23 @@ func (p *phoneSink) Send(ctx context.Context, n domain.Notification) error {
 			Title: title,
 			Body:  n.Text,
 			Sound: "default",
-			Data:  map[string]string{"url": deepLinkScheme + n.SessionID},
+			Data:  pushData(p.host, n.SessionID),
 		})
 	}
-	if len(msgs) == 0 {
+	if len(msgs) == 0 || p.send == nil {
 		return nil
 	}
-	return p.sender(msgs)
+	return p.send(ctx, msgs)
+}
+
+// pushData is what the app reads when a push is opened: the host and
+// session, and the deep link that opens them.
+func pushData(host, session string) map[string]string {
+	return map[string]string{
+		"session": session,
+		"host":    host,
+		"url":     "aimanphone://h/" + url.PathEscape(host) + "/s/" + url.PathEscape(session),
+	}
 }
 
 func notifyTitle(state string) string {
@@ -154,144 +160,4 @@ func notifyTitle(state string) string {
 	default:
 		return "Aiman session update"
 	}
-}
-
-func sendExpo(msgs []expoMessage) error {
-	if len(msgs) == 0 {
-		return nil
-	}
-	payload, err := json.Marshal(msgs)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodPost, expoPushURL, strings.NewReader(string(payload)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return strconv.ErrSyntax
-	}
-	return nil
-}
-
-// Legacy types for compatibility with old tests.
-type Notifier struct {
-	store  *PushStore
-	sender func([]expoMessage) error
-	now    func() time.Time
-	mu     sync.Mutex
-	last   map[string]string
-	sentAt map[string]time.Time
-	known  map[string]bool
-}
-
-func NewNotifier(store *PushStore, sender func([]expoMessage) error) *Notifier {
-	if sender == nil {
-		sender = sendExpo
-	}
-	n := &Notifier{store: store, sender: sender, now: time.Now, last: map[string]string{}, sentAt: map[string]time.Time{}, known: map[string]bool{}}
-	return n
-}
-
-func (n *Notifier) anyWants(state string) bool {
-	if n == nil || n.store == nil {
-		return false
-	}
-	for _, d := range n.store.Devices() {
-		if wantsState(d, state) {
-			return true
-		}
-	}
-	return false
-}
-
-func (n *Notifier) Observe(id, state, message string) {
-	if n == nil || n.store == nil || id == "" {
-		return
-	}
-	ps := state
-	if ps == "idle" {
-		ps = stateExited
-	}
-	switch ps {
-	case "exited":
-		ps = stateExited
-	case "errored":
-		ps = stateErrored
-	case "waiting_input":
-		ps = stateWaitingInput
-	case "working":
-		ps = stateWorking
-	}
-	n.mu.Lock()
-	prev := n.last[id]
-	n.known[id] = true
-	now := n.now()
-	lastSent, hasSent := n.sentAt[id]
-	recently := hasSent
-	n.mu.Unlock()
-	if prev == ps {
-		if !hasSent && n.anyWants(ps) {
-			// allow
-		} else {
-			return
-		}
-	}
-	if !n.anyWants(ps) {
-		n.mu.Lock()
-		n.last[id] = ps
-		n.mu.Unlock()
-		return
-	}
-	if prev == "" {
-		// first observation - old behavior notified on first transition if wants it
-	} else if recently && now.Sub(lastSent) < 30*time.Second {
-		n.mu.Lock()
-		n.last[id] = ps
-		n.mu.Unlock()
-		return
-	}
-	// proceed
-	n.mu.Lock()
-	n.last[id] = ps
-	n.mu.Unlock()
-	if recently && now.Sub(lastSent) < 30*time.Second {
-		return
-	}
-	msgs := []expoMessage{}
-	title := notifyTitle(ps)
-	body := message
-	if body == "" {
-		body = id
-	}
-	for _, d := range n.store.Devices() {
-		if !wantsState(d, ps) {
-			continue
-		}
-		msgs = append(msgs, expoMessage{
-			To:    d.Token,
-			Title: title,
-			Body:  body,
-			Sound: "default",
-			Data:  map[string]string{"url": deepLinkScheme + id},
-		})
-	}
-	if len(msgs) == 0 {
-		return
-	}
-	if err := n.sender(msgs); err != nil {
-		return
-	}
-	n.mu.Lock()
-	n.sentAt[id] = now
-	n.mu.Unlock()
 }

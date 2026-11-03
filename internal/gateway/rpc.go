@@ -24,6 +24,10 @@ func (s *Server) rpc(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing method", http.StatusBadRequest)
 		return
 	}
+	if p := principalFrom(r.Context()); !p.host && !deviceMayCall(body.Method, p.device.AllowDestructive) {
+		writeJSONError(w, http.StatusForbidden, body.ID, "forbidden", "method "+body.Method+" is not allowed for device tokens")
+		return
+	}
 	if body.Method == "pty.attach" || body.Method == "session.events" {
 		http.Error(w, body.Method+" is a websocket method", http.StatusBadRequest)
 		return

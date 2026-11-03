@@ -135,17 +135,32 @@ Steps:
    missing from the spec.
 4. AGENTS.md, README.
 
-The app learns to join the tailnet from the QR in Phase 1: it signs in to
-Tailscale in the app (tsnet's login URL opened in the browser), then redeems
-the code over the tailnet.
+The QR carries no Tailscale key. The app joins the tailnet itself in Phase 1
+(see Phase 1 step 3).
 
 ### Phase 1: on a device (aiman-phone)
 
 1. EAS project and `projectId`, development build, install on the iPhone.
 2. Regenerate types from the new spec; align the mock and `promptPolicy` with
    live serve.
-3. QR pairing with `expo-camera` against the `/v1/pair` flow; device token in
-   SecureStore.
+3. QR pairing with `expo-camera`, signing in to Tailscale through the browser:
+   - The app scans `aimanphone://pair?target&host&code` and starts tsnet with
+     no auth key. The module exposes the login URL tsnet reports (from the IPN
+     bus `BrowseToURL`) and the node state.
+   - The app opens that URL in an in-app browser sheet; the user signs in with
+     their Tailscale identity provider and approves the device.
+   - Tailscale's login page does not redirect to a custom scheme, so the app
+     watches the node state and closes the sheet itself once it is `Running`.
+   - It then redeems the code with `POST /v1/pair` over the tailnet and keeps
+     the device token in SecureStore. tsnet state stays in the app container,
+     so later launches skip the sign-in.
+   - The node is owned by the user's login, so `WhoIs` and
+     `gateway.allow_logins` work. When the node key expires (180 days by
+     default) the same sheet appears again; key expiry can be disabled for the
+     phone in the admin console.
+   - No auth key is minted or stored anywhere: Tailscale only mints keys
+     through an API client, and those must be tagged, which breaks the login
+     check.
 4. Deep link by host and session; reconnect refetches the list (events can be
    dropped, there is no replay).
 5. End-to-end check against this host's gateway over the tailnet.

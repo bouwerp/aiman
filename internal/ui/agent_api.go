@@ -102,6 +102,8 @@ func (m *Model) handleAgentAPIUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.runSelectedRTKInstall()
 	case "a":
 		return m, m.enterAgentUpdates()
+	case "p":
+		return m, m.enterGatewayPair()
 	case "r":
 		if d, ok := m.selectedAgentAPIDaemon(); ok {
 			m.markAgentAPIProbing(d.RemoteHost)
@@ -201,7 +203,7 @@ func (m *Model) renderAgentAPIView() string {
 		}
 	}
 
-	b.WriteString("\n  " + dimStyle.Render("i install/enable  s restart  c reload  u update  t install RTK  a agents  r probe  ctrl+k stop  esc back") + "\n")
+	b.WriteString("\n  " + dimStyle.Render("i install/enable  s restart  c reload  u update  t install RTK  a agents  p pair phone  r probe  ctrl+k stop  esc back") + "\n")
 	return docStyle.Render(b.String())
 }
 

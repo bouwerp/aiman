@@ -34,6 +34,9 @@ func main() {
 }
 
 func run(args []string) error {
+	if isCLI(args) {
+		return runCLI(args, os.Stdout)
+	}
 	opts, err := parseFlags(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -94,7 +97,8 @@ func run(args []string) error {
 	}
 	defer ln.Close()
 
-	auth := gateway.Auth{Token: token, Allow: allow, Funnel: opts.funnel}
+	devices := gateway.NewDeviceStore(filepath.Join(dir, gateway.DevicesFileName))
+	auth := gateway.Auth{Token: token, Devices: devices, Allow: allow, Funnel: opts.funnel}
 	if !opts.funnel {
 		who, err := tailnetWhoIs(ts)
 		if err != nil {
@@ -110,10 +114,19 @@ func run(args []string) error {
 		return err
 	}
 	if cfg.Notifications.PhoneEnabled() {
-		go notify.NewDispatcher(gateway.SocketSource{Socket: sock}, notify.FileCursor{Path: filepath.Join(dir, gateway.NotifyCursorFileName)}, gateway.NewPhoneSink(pushStore, nil)).Run(ctx, 2*time.Second)
+		expo := gateway.NewExpoClient(pushStore)
+		go expo.RunReceipts(ctx, gateway.ReceiptInterval)
+		sink := gateway.NewPhoneSink(pushStore, hostName(), expo.Send)
+		go notify.NewDispatcher(gateway.SocketSource{Socket: sock}, notify.FileCursor{Path: filepath.Join(dir, gateway.NotifyCursorFileName)}, sink).Run(ctx, 2*time.Second)
+	}
+	gw := &gateway.Server{
+		Socket:    sock,
+		Auth:      auth,
+		Push:      pushStore,
+		PairCodes: gateway.NewPairCodes(filepath.Join(dir, gateway.PairCodesFileName)),
 	}
 	httpSrv := &http.Server{
-		Handler:           (&gateway.Server{Socket: sock, Auth: auth, Push: pushStore}).Handler(),
+		Handler:           gw.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -123,7 +136,7 @@ func run(args []string) error {
 
 	logToken(tokenPath, created)
 	if opts.funnel {
-		log.Printf("WARNING: Funnel is public and anonymous. The bearer token is the only thing between the internet and a shell on this box.")
+		log.Printf("WARNING: Funnel is public and anonymous. Bearer tokens (host and paired devices) are the only thing between the internet and a shell on this box.")
 	}
 	logListen(ts, opts.hostname, addr)
 
@@ -152,9 +165,11 @@ func parseFlags(args []string) (options, error) {
 	var opts options
 	fs := flag.NewFlagSet("aiman-gateway", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	fs.BoolVar(&opts.funnel, "funnel", false, "listen on Funnel (public internet); token is then the only auth")
-	fs.StringVar(&opts.hostname, "hostname", "aiman-gateway", "MagicDNS hostname for this node")
-	fs.IntVar(&opts.port, "port", 0, "listen port (default 8080 tailnet, 443 Funnel)")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage:\n  aiman-gateway [flags]\n  aiman-gateway pair [--name <device>] [--json] [--hostname h] [--port n]\n  aiman-gateway devices [list [--json] | revoke <id> | allow-destructive <id> on|off]\n\nFlags:")
+		fs.PrintDefaults()
+	}
+	addServiceFlags(fs, &opts)
 	fs.StringVar(&opts.socket, "socket", "", "aiman serve unix socket (default ~/.aiman/aiman.sock)")
 	fs.Func("allow-login", "Tailscale login allowed on the tailnet path (repeatable)", func(v string) error {
 		opts.allow = append(opts.allow, v)
@@ -163,13 +178,28 @@ func parseFlags(args []string) (options, error) {
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
+	resolveServiceDefaults(&opts)
+	return opts, nil
+}
+
+// addServiceFlags registers the flags that decide the node name and port,
+// shared by the service and `pair` so both compute the same target.
+func addServiceFlags(fs *flag.FlagSet, opts *options) {
+	fs.BoolVar(&opts.funnel, "funnel", false, "listen on Funnel (public internet); token is then the only auth")
+	fs.StringVar(&opts.hostname, "hostname", "", "MagicDNS hostname for this node (default aiman-gateway-<OS hostname>)")
+	fs.IntVar(&opts.port, "port", 0, "listen port (default 8080 tailnet, 443 Funnel)")
+}
+
+func resolveServiceDefaults(opts *options) {
+	if opts.hostname == "" {
+		opts.hostname = gateway.NodeName(hostName())
+	}
 	if opts.port == 0 {
 		opts.port = 8080
 		if opts.funnel {
 			opts.port = 443
 		}
 	}
-	return opts, nil
 }
 
 func tailnetWhoIs(ts *tsnet.Server) (gateway.WhoIs, error) {

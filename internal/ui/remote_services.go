@@ -234,6 +234,8 @@ func (m *Model) routeRemoteServiceMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyRTKInstall(msg)
 	case agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg:
 		return m.routeAgentUpdatesMsg(msg)
+	case gatewayPairMsg, gatewayPairTickMsg:
+		return m.routeGatewayPairMsg(msg)
 	}
 	return m, nil
 }

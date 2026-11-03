@@ -838,12 +838,23 @@ Prints MagicDNS name, `100.x` IPv4, SSH user, and Termius fields.
 Runs on the remote, next to `aiman serve`. It is a proxy: HTTP and WebSocket to the phone, the existing line protocol to `~/.aiman/aiman.sock`. It has no database and no flow manager.
 
 ```bash
-aiman-gateway                         # tailnet only, :8080
+aiman-gateway                         # tailnet only, :8080, node aiman-gateway-<host>
 aiman-gateway --funnel                # public Funnel on :443; token is then the only auth
 aiman-gateway --allow-login you@x.ts.net
+aiman-gateway pair --json             # one-time pairing code and its QR payload
+aiman-gateway devices list            # paired phones; also revoke <id>, allow-destructive <id> on|off
 ```
 
-Auth is `Authorization: Bearer <token>` on every request except `GET /v1/health`. The token is created at `~/.aiman/gateway-token` (0600) and never printed. On the tailnet path, `WhoIs` must also succeed and match `gateway.allow_logins` when that list is set. Funnel supplies no identity; `--funnel` logs a warning and can be refused with `gateway.funnel: false`.
+The node name defaults to `aiman-gateway-<host>` (the OS hostname, lowercased), so several remotes share one tailnet.
+
+Auth is `Authorization: Bearer <token>` on every request except `GET /v1/health` and `POST /v1/pair`. Two kinds of token work:
+
+- **Host token**: created at `~/.aiman/gateway-token` (0600), never printed, full access. The TUI uses it.
+- **Device token**: one per phone, from pairing. Stored only as a sha256 in `~/.aiman/gateway-devices.json`. A device token passes a method allowlist on `/v1/rpc` (deny by default): reads, `session.prompt`, `session.create`, `steer.send`, the to-do and gate methods, `ci.watch`, `pty.input` and push registration. `pty.kill`, `pty.forget`, `session.forget`, `review.post`, `agents.update` and `agents.move_prefix` also need `allow-destructive` on that device. A device acts as the operator.
+
+The WebSocket routes also take the token as `access_token` in the query; no URL is logged. On the tailnet path, `WhoIs` must also succeed and match `gateway.allow_logins` when that list is set. Funnel supplies no identity; `--funnel` logs a warning and can be refused with `gateway.funnel: false`.
+
+Pairing: `p` on the TUI's Agent API page starts the gateway if needed, runs `aiman-gateway pair --json` on the selected remote and draws the QR. The code is single use and expires after 5 minutes. The phone redeems it with `POST /v1/pair {code, device_name}` over the tailnet and gets `{device_id, token}`. Pairing is refused on Funnel, and more than 5 bad codes in a minute lock it for the rest of that minute.
 
 Install from the TUI daemons tab (phone gateway row) or:
 
@@ -851,7 +862,7 @@ Install from the TUI daemons tab (phone gateway row) or:
 curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | BINARY_NAME=aiman-gateway sh
 ```
 
-The phone contract is `api/openapi.yaml`. Endpoints: `POST /v1/rpc`, `GET /v1/sessions`, `GET /v1/sessions/{id}`, `GET /v1/events` (WebSocket), `GET /v1/sessions/{id}/terminal` (WebSocket). Gateway-owned RPC: `push.register` / `push.unregister` (Expo tokens in `~/.aiman/gateway-push.json`, never logged). The gateway does not infer state. It reads serve's notification log through `notify.since` and pushes each entry to the devices subscribed to it (see [Notifications](#notifications)). A device's default subscription is `waiting_input`; `exited`/`errored` are opt-in; `working` is never sent. `ci_escalation` and `review_done` ride the `waiting_input` subscription. Phone push is off when `notifications.phone` is `false`. `cmd/aiman` does not import `tailscale.com`.
+The phone contract is `api/openapi.yaml`. Endpoints: `POST /v1/rpc`, `GET /v1/sessions`, `GET /v1/sessions/{id}`, `GET /v1/events` (WebSocket), `GET /v1/sessions/{id}/terminal` (WebSocket), `POST /v1/pair`, `GET /v1/devices`, `DELETE /v1/devices/{id}` (a device may revoke itself; revoking another needs `allow-destructive`). `internal/server/openapi_spec_test.go` fails when serve handles a method or publishes an event type the spec lacks. Gateway-owned RPC: `push.register` / `push.unregister` (Expo tokens in `~/.aiman/gateway-push.json`, never logged). The gateway does not infer state. It reads serve's notification log through `notify.since` and pushes each entry to the devices subscribed to it (see [Notifications](#notifications)). A device's default subscription is `waiting_input`; `exited`/`errored` are opt-in; `working` is never sent. `ci_escalation` and `review_done` ride the `waiting_input` subscription. A push carries `data` `{session, host, url}` with `url` `aimanphone://h/<host>/s/<session>`. A token Expo reports as `DeviceNotRegistered`, at send time or in receipts checked every 15 minutes, is dropped. Phone push is off when `notifications.phone` is `false`. `cmd/aiman` does not import `tailscale.com`.
 
 Bare `aiman` starts the TUI. With `AIMAN_ENV=1` or no TTY, bare `aiman` is refused: use `aiman session …`.
 

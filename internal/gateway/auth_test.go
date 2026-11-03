@@ -10,11 +10,11 @@ import (
 func TestAuthorizeRequiresBearer(t *testing.T) {
 	a := Auth{Token: "secret", Funnel: true}
 	r := httptestRequest(t, "")
-	if err := a.authorize(r); !errors.Is(err, errUnauthorized) {
+	if err := authErr(a, r); !errors.Is(err, errUnauthorized) {
 		t.Fatalf("got %v", err)
 	}
 	r.Header.Set("Authorization", "Bearer secret")
-	if err := a.authorize(r); err != nil {
+	if err := authErr(a, r); err != nil {
 		t.Fatalf("funnel+token: %v", err)
 	}
 }
@@ -22,21 +22,21 @@ func TestAuthorizeRequiresBearer(t *testing.T) {
 func TestAuthorizeWhoIsRequiredOnTailnet(t *testing.T) {
 	a := Auth{Token: "secret"}
 	r := httptestRequest(t, "secret")
-	if err := a.authorize(r); !errors.Is(err, errForbidden) {
+	if err := authErr(a, r); !errors.Is(err, errForbidden) {
 		t.Fatalf("no WhoIs: %v", err)
 	}
 	a.WhoIs = func(context.Context, string) (string, error) {
 		return "me@example.com", nil
 	}
-	if err := a.authorize(r); err != nil {
+	if err := authErr(a, r); err != nil {
 		t.Fatalf("any login: %v", err)
 	}
 	a.Allow = []string{"other@example.com"}
-	if err := a.authorize(r); !errors.Is(err, errForbidden) {
+	if err := authErr(a, r); !errors.Is(err, errForbidden) {
 		t.Fatalf("allow miss: %v", err)
 	}
 	a.Allow = []string{"me@example.com"}
-	if err := a.authorize(r); err != nil {
+	if err := authErr(a, r); err != nil {
 		t.Fatalf("allow hit: %v", err)
 	}
 }
@@ -48,7 +48,7 @@ func TestAuthorizeWhoIsErrorIsForbidden(t *testing.T) {
 			return "", errors.New("no node")
 		},
 	}
-	if err := a.authorize(httptestRequest(t, "secret")); !errors.Is(err, errForbidden) {
+	if err := authErr(a, httptestRequest(t, "secret")); !errors.Is(err, errForbidden) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -64,4 +64,9 @@ func httptestRequest(t *testing.T, token string) *http.Request {
 		r.Header.Set("Authorization", "Bearer "+token)
 	}
 	return r
+}
+
+func authErr(a Auth, r *http.Request) error {
+	_, err := a.authorize(r, requestToken(r, false))
+	return err
 }

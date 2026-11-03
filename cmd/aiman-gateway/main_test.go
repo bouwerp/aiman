@@ -3,11 +3,12 @@ package main
 import "testing"
 
 func TestParseFlagsDefaults(t *testing.T) {
+	fakeHost(t, "devbox")
 	opts, err := parseFlags(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.funnel || opts.port != 8080 || opts.hostname != "aiman-gateway" {
+	if opts.funnel || opts.port != 8080 || opts.hostname != "aiman-gateway-devbox" {
 		t.Fatalf("%+v", opts)
 	}
 }

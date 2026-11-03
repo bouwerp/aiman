@@ -93,7 +93,7 @@ func TestPhoneSinkMapsKindsToDeviceStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sent []expoMessage
-	sink := NewPhoneSink(store, func(m []expoMessage) error { sent = append(sent, m...); return nil })
+	sink := NewPhoneSink(store, "devbox", func(_ context.Context, m []expoMessage) error { sent = append(sent, m...); return nil })
 	if err := sink.Send(context.Background(), domain.Notification{SessionID: "s1", Kind: domain.NotifyReviewDone, Text: "x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -116,14 +116,14 @@ func TestPhoneSinkMapsKindsToDeviceStates(t *testing.T) {
 	sent = nil
 	store2, _ := OpenPushStore(filepath.Join(dir, "p2.json"))
 	_ = store2.Register(PushDevice{Token: "t2", DeviceID: "d2", States: []string{"exited"}})
-	sink2 := NewPhoneSink(store2, func(m []expoMessage) error { sent = append(sent, m...); return nil })
+	sink2 := NewPhoneSink(store2, "devbox", func(_ context.Context, m []expoMessage) error { sent = append(sent, m...); return nil })
 	if err := sink2.Send(context.Background(), domain.Notification{SessionID: "s1", Kind: domain.NotifyEnded, Text: "bye"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(sent) != 1 {
 		t.Fatalf("sent %d", len(sent))
 	}
-	if sent[0].Data["url"] != "aimanphone://session/s1" {
+	if sent[0].Data["url"] != "aimanphone://h/devbox/s/s1" {
 		t.Fatalf("url %v", sent[0].Data)
 	}
 }
@@ -143,7 +143,7 @@ func TestGatewayDoesNotDoublePush(t *testing.T) {
 	curPath := filepath.Join(dir, "c")
 	os.WriteFile(curPath, []byte("0"), 0o600)
 	cur := notify.FileCursor{Path: curPath}
-	d := notify.NewDispatcher(src, cur, NewPhoneSink(store, func([]expoMessage) error { mu.Lock(); sent++; mu.Unlock(); return nil }))
+	d := notify.NewDispatcher(src, cur, NewPhoneSink(store, "devbox", func(context.Context, []expoMessage) error { mu.Lock(); sent++; mu.Unlock(); return nil }))
 	ctx := context.Background()
 	if err := d.Tick(ctx); err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestGatewayDoesNotDoublePush(t *testing.T) {
 	if sent != 2 {
 		t.Fatalf("sent %d", sent)
 	}
-	d2 := notify.NewDispatcher(src, cur, NewPhoneSink(store, func([]expoMessage) error { mu.Lock(); sent++; mu.Unlock(); return nil }))
+	d2 := notify.NewDispatcher(src, cur, NewPhoneSink(store, "devbox", func(context.Context, []expoMessage) error { mu.Lock(); sent++; mu.Unlock(); return nil }))
 	if err := d2.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
