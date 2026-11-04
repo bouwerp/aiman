@@ -218,7 +218,7 @@ func (m *Manager) SetupWorktree(ctx context.Context, repo domain.Repo, branch st
 }
 
 const aimanTaskIgnoreLine = domain.AimanGeneratedFileGlob
-const aimanTaskIgnoreComment = "# Aiman: generated session scaffolding (do not commit)"
+const aimanTaskIgnoreComment = domain.AimanGeneratedIgnoreComment
 
 func aimanTaskGitignoreBashScript(worktreePath string) string {
 	return fmt.Sprintf(`wt=%s

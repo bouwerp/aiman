@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/design"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handoverchild"
+	"github.com/bouwerp/aiman/internal/hoststats"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/notify"
@@ -155,6 +156,16 @@ type Server struct {
 	reviewCfg    config.ReviewConfig
 	reviewRepos  map[string]config.RepoBootstrap
 
+	// repos caches repo.list; empty until SetRepoLister.
+	repos repoCache
+	// restart is what session.restart needs beyond the session; empty until
+	// SetRestartDeps, and a restart then launches the bare agent command.
+	restart RestartDeps
+	// hostStats samples /proc for host.stats, on its first call.
+	hostStats *hoststats.Sampler
+	// holderHeld overrides heldByHolder, so tests can fake a holder.
+	holderHeld func(pid int) bool
+
 	// agentUpdates reports and applies agent CLI updates; nil until
 	// SetAgentUpdates. agentHost names this host in its replies.
 	agentUpdates *agentupdate.Manager
@@ -244,6 +255,8 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 		sessMu:   map[string]*sync.Mutex{},
 		attaches: map[string]int{},
 		hub:      newEventHub(),
+
+		hostStats: hoststats.New(),
 	}
 	s.target = s
 	return s
@@ -354,6 +367,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleMove(ctx, req)
 	case "session.forget":
 		return s.handleForget(ctx, req)
+	case "session.restart", "session.terminate", "repo.list", "host.stats":
+		return s.dispatchLifecycle(ctx, req)
 	case "session.register":
 		return s.handleRegister(ctx, req)
 	case "session.report_agent_session":

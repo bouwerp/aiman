@@ -10,17 +10,18 @@ import (
 type EventKind string
 
 const (
-	EventSessionCreated  EventKind = "session.created"
-	EventPromptQueued    EventKind = "prompt.queued"
-	EventPromptSubmitted EventKind = "prompt.submitted"
-	EventHookReported    EventKind = "hook.reported"
-	EventTodoChanged     EventKind = "todo.changed"
-	EventSteerQueued     EventKind = "steer.queued"
-	EventSteerDelivered  EventKind = "steer.delivered"
-	EventHandoverWritten EventKind = "handover.written"
-	EventVerifyRecorded  EventKind = "verify.recorded"
-	EventUsageBudget     EventKind = "usage.budget"
-	EventSessionEnded    EventKind = "session.ended"
+	EventSessionCreated   EventKind = "session.created"
+	EventPromptQueued     EventKind = "prompt.queued"
+	EventPromptSubmitted  EventKind = "prompt.submitted"
+	EventHookReported     EventKind = "hook.reported"
+	EventTodoChanged      EventKind = "todo.changed"
+	EventSteerQueued      EventKind = "steer.queued"
+	EventSteerDelivered   EventKind = "steer.delivered"
+	EventHandoverWritten  EventKind = "handover.written"
+	EventVerifyRecorded   EventKind = "verify.recorded"
+	EventUsageBudget      EventKind = "usage.budget"
+	EventSessionEnded     EventKind = "session.ended"
+	EventSessionRestarted EventKind = "session.restarted"
 	// EventHandoverChildStarted and EventHandoverChildFinished bracket one
 	// handover child run on the worker's ledger.
 	EventHandoverChildStarted  EventKind = "handover.child_started"

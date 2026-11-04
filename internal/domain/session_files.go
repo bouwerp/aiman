@@ -16,6 +16,8 @@ const (
 	// as a variable.
 	AimanSessionIDFileName = ".aiman_session_id"
 	AimanGeneratedFileGlob = ".aiman_*"
+	// AimanGeneratedIgnoreComment heads the rule aiman appends to .gitignore.
+	AimanGeneratedIgnoreComment = "# Aiman: generated session scaffolding (do not commit)"
 )
 
 // AimanScaffoldHeader opens every generated .aiman_* file in a worktree.

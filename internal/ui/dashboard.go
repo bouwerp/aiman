@@ -7658,7 +7658,7 @@ func (m *Model) handleRestartAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd)
 		m.priorSnapshotCandidate = nil
 		m.sessionCfg.PriorSnapshot = nil
 		if m.restartingSession != nil && m.sessionCfg.Agent != nil {
-			if adoptRestartAgent(m.restartingSession, m.sessionCfg.Agent.Name) {
+			if usecase.AdoptRestartAgent(m.restartingSession, m.sessionCfg.Agent.Name) {
 				m.sessionCfg.FreshAgent = true
 			}
 		}
@@ -7717,120 +7717,44 @@ func (m *Model) restartSession(placeholderID string) tea.Cmd {
 		if s.ID == "" {
 			return sessionCreateMsg{err: fmt.Errorf("session ID is empty"), placeholderID: placeholderID}
 		}
-		if err := legacyRestartBlocked(*s, legacyStopped); err != nil {
-			return sessionCreateMsg{err: err, placeholderID: placeholderID}
-		}
-
 		if sessionCfg.Agent == nil {
 			return sessionCreateMsg{err: fmt.Errorf("no agent selected for restart"), placeholderID: placeholderID}
 		}
-		s.AgentName = sessionCfg.Agent.Name
 
 		remote, ok := resolveRemote(cfg, *s)
 		if !ok {
 			return sessionCreateMsg{err: fmt.Errorf("no active remote configured"), placeholderID: placeholderID}
 		}
 
-		workingDir := s.WorkingDirectory
-		if workingDir == "" {
-			workingDir = s.WorktreePath
-		}
-		if workingDir == "" {
-			return sessionCreateMsg{err: fmt.Errorf("session has no working directory"), placeholderID: placeholderID}
-		}
-
-		logf("session=%s remote=%s@%s workingDir=%s agent=%s", s.TerminalName, remote.User, remote.Host, workingDir, sessionCfg.Agent.Command)
+		logf("session=%s remote=%s@%s agent=%s", s.TerminalName, remote.User, remote.Host, sessionCfg.Agent.Command)
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
-		gitignoreRoot := restartRoot(*s, workingDir)
-		if err := git.NewManager(&cfg.Git).EnsureAimanSessionFilesGitignored(ctx, mgr, gitignoreRoot); err != nil {
-			logf("gitignore update skipped: %v", err)
+		var engine domain.SkillEngine
+		if flowManager != nil {
+			engine = flowManager.SkillEngine
 		}
-
-		// Step 1: ask serve to write the handover before replacing the agent.
-		// A missing file falls back to the agent-written summary inside
-		// PrepareRestartHandoff. Either failure still lets the restart continue.
-		m.sendStatusFor(placeholderID, "Writing handover...")
-		logf("step1: writing handover")
-		summaryCtx, summaryCancel := context.WithTimeout(ctx, 90*time.Second)
-		mode, note := usecase.PrepareRestartHandoff(summaryCtx, mgr, *s, workingDir, restartHandoverReason(sessionCfg), 90*time.Second, restartHandoverAgent(sessionCfg))
-		summaryCancel()
-		if note != "" {
-			logf("step1: %s", note)
-			m.sendStatusFor(placeholderID, note)
-		}
-		logf("step1 ok: mode=%d", mode)
-
-		// Step 2: build the new agent command after the handover attempt.
-		m.sendStatusFor(placeholderID, fmt.Sprintf("Preparing %s command...", sessionCfg.Agent.Name))
-		logf("step2: preparing agent command")
-		agentCmd := sessionCfg.Agent.Command
-		var sendKeysPrompt string
-		resumeSnapshot := sessionCfg.PriorSnapshot
-		if mode != usecase.HandoffNone {
-			resumeSnapshot = nil
-		}
-		if flowManager != nil && flowManager.SkillEngine != nil {
-			prepared, notes, err := prepareRestartSession(ctx, mgr, flowManager.SkillEngine, restartPrep{
-				Cfg:          cfg,
-				Session:      *s,
-				WorkingDir:   workingDir,
-				SessionCfg:   sessionCfg,
-				Snapshot:     resumeSnapshot,
-				ChecklistDir: checklistDir,
-			})
-			for _, n := range notes {
-				logf("step2: %s", n)
-				m.sendStatusFor(placeholderID, n)
-			}
-			if err == nil {
-				agentCmd = prepared.Command
-				sendKeysPrompt = prepared.InitialPrompt
-			}
-		}
-		sendKeysPrompt = restartPrompt(sendKeysPrompt, mode)
-		sendKeysPrompt = usecase.InjectSharedContext(ctx, mgr, workingDir, s.Group, s.RepoName, sendKeysPrompt)
-		usecase.WriteMuseSessionID(ctx, mgr, workingDir, agentCmd, s.ID)
-		if sessionCfg.FreshAgent {
-			clearRemoteNativeSidecar(ctx, mgr, s.ID)
-			if clearer, ok := db.(interface {
-				ClearNativeAgentIdentity(context.Context, string) error
-			}); ok {
-				_ = clearer.ClearNativeAgentIdentity(ctx, s.ID)
-			}
-		}
-		agentCmd = withRemoteNativeResume(ctx, mgr, s, agentCmd, sessionCfg.FreshAgent)
-
-		env := map[string]string{}
-		awsCfg := s.AWSConfig
-		if sessionCfg.AWSConfig != nil {
-			awsCfg = sessionCfg.AWSConfig
-		}
-		if awsCfg != nil {
-			env = usecase.SharedSessionAWSEnv(awsCfg.SourceProfile, awsCfg.Region)
-			s.AWSConfig = awsCfg
-		}
-		for k, v := range usecase.SessionRuntimeEnv(s) {
-			env[k] = v
-		}
-
-		// Step 3: replace the agent process in the remote PTY runtime.
-		m.sendStatusFor(placeholderID, fmt.Sprintf("Restarting agent in %s...", s.TerminalName))
-		logf("step3: restarting agent")
-		if err := restartTerminal(ctx, mgr, s, restartTerminalSpec{
-			WorkingDir:    workingDir,
-			WorktreeRoot:  gitignoreRoot,
-			AgentCmd:      agentCmd,
-			Env:           env,
-			Secrets:       sessionCfg.EnvSecrets,
-			Prompt:        sendKeysPrompt,
-			NoUpdateGuard: !cfg.AgentUpdateGuards(),
+		req := usecase.RestartRequest{
+			Cfg:           cfg,
+			Session:       s,
+			SessionCfg:    sessionCfg,
+			ChecklistDir:  checklistDir,
 			LegacyStopped: legacyStopped,
-		}); err != nil {
-			logf("step3 FAILED: %v", err)
+			NoUpdateGuard: !cfg.AgentUpdateGuards(),
+			EnsureIgnored: func(ctx context.Context, root string) error {
+				return git.NewManager(&cfg.Git).EnsureAimanSessionFilesGitignored(ctx, mgr, root)
+			},
+			Status: func(msg string) { m.sendStatusFor(placeholderID, msg) },
+			Log:    func(format string, args ...any) { logf(format, args...) },
+		}
+		if clearer, ok := db.(interface {
+			ClearNativeAgentIdentity(context.Context, string) error
+		}); ok {
+			req.ClearIdentity = clearer.ClearNativeAgentIdentity
+		}
+		if err := usecase.RestartSession(ctx, mgr, engine, req); err != nil {
+			logf("restart FAILED: %v", err)
 			return sessionCreateMsg{err: err, placeholderID: placeholderID}
 		}
-		logf("step3 ok")
 
 		if db != nil {
 			_ = db.Save(ctx, s)

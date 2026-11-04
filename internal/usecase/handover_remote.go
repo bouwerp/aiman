@@ -57,7 +57,13 @@ func WriteHandoverOnRemote(ctx context.Context, remote TerminalExecutor, session
 // available it asks the running agent for a session summary, bounded by
 // summaryTimeout, and returns that attempt's note. Restart is not failed.
 func PrepareRestartHandoff(ctx context.Context, remote domain.RemoteExecutor, s domain.Session, workingDir, reason string, summaryTimeout time.Duration, agent ...string) (HandoffMode, string) {
-	res, err := WriteHandoverOnRemote(ctx, remote, s.ID, reason, agent...)
+	return prepareRestartHandoff(ctx, remote, s, workingDir, summaryTimeout, func(ctx context.Context) (HandoverResult, error) {
+		return WriteHandoverOnRemote(ctx, remote, s.ID, reason, agent...)
+	})
+}
+
+func prepareRestartHandoff(ctx context.Context, remote domain.RemoteExecutor, s domain.Session, workingDir string, summaryTimeout time.Duration, write func(context.Context) (HandoverResult, error)) (HandoffMode, string) {
+	res, err := write(ctx)
 	if err == nil && res.Exists {
 		return HandoffHandover, removeStaleSessionSummary(ctx, remote, workingDir)
 	}

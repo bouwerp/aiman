@@ -14,12 +14,16 @@ var (
 		"usage.get",
 		"ci.get",
 		"agents.status",
+		"repo.list", "host.stats",
 	}
-	// deviceWriteMethods change state but cannot stop work or publish
-	// outside the host. todo.mirror is left out: it stands for the agent's
-	// own task list, which a phone does not have.
+	// deviceWriteMethods change state but cannot publish outside the host.
+	// todo.mirror is left out: it stands for the agent's own task list, which
+	// a phone does not have. session.restart and session.terminate stop an
+	// agent, but any paired phone may call them: the app confirms, and
+	// session.terminate refuses work it would lose without an explicit discard.
 	deviceWriteMethods = []string{
-		"session.prompt", "session.create",
+		"session.prompt", "session.create", "session.rename", "session.move",
+		"session.restart", "session.terminate",
 		"steer.send",
 		"todo.add", "todo.update", "todo.move", "todo.remove",
 		"todo.ensure_done", "todo.mark_met", "todo.gate",

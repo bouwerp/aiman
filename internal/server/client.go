@@ -286,9 +286,17 @@ func (e *EventsConn) Next() (SessionEvent, error) {
 func (e *EventsConn) Close() error { return e.conn.Close() }
 
 // callDeadline is how long CallRaw waits for method's answer: 30s, or a
-// little past the server's own limit for design.publish.
+// little past the server's own limit for the slow methods.
 func callDeadline(method string) time.Duration {
 	switch method {
+	case "session.create":
+		return SessionCreateWait
+	case "session.restart":
+		return SessionRestartTimeout + 15*time.Second
+	case "session.terminate":
+		return SessionTerminateTimeout + 15*time.Second
+	case "repo.list":
+		return RepoListTimeout + 15*time.Second
 	case "design.publish":
 		return DesignPublishTimeout + 15*time.Second
 	case "review.post":

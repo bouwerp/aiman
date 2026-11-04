@@ -82,6 +82,9 @@ func (s *Server) handleAgentsStatus(ctx context.Context, req Request) Response {
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
+	for i := range list {
+		list[i].Models = agent.LaunchCatalogFor(agent.BaseOf(list[i].Agent)).Models
+	}
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":   "agents",
 		"host":   s.agentHost,

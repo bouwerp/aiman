@@ -1,4 +1,4 @@
-package ui
+package usecase
 
 import (
 	"context"
@@ -42,7 +42,7 @@ func restartAgent(t *testing.T, s domain.Session, agent domain.Agent) domain.Age
 
 func TestSameAgentRestartKeepsLaunchModel(t *testing.T) {
 	s := piLaunchSession()
-	if adoptRestartAgent(s, "pi") {
+	if AdoptRestartAgent(s, "pi") {
 		t.Fatal("same agent reported as a switch")
 	}
 	a := restartAgent(t, *s, domain.Agent{Name: "pi", Command: "pi"})
@@ -53,7 +53,7 @@ func TestSameAgentRestartKeepsLaunchModel(t *testing.T) {
 
 func TestAgentSwitchDropsLaunchModel(t *testing.T) {
 	s := piLaunchSession()
-	if !adoptRestartAgent(s, "claude") {
+	if !AdoptRestartAgent(s, "claude") {
 		t.Fatal("switch not reported")
 	}
 	if s.LaunchModel != "" || s.LaunchEffort != "" {

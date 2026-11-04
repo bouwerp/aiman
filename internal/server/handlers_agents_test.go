@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/bouwerp/aiman/internal/infra/agent"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +110,9 @@ func TestAgentsStatusAndUpdateRoundTrip(t *testing.T) {
 	a := st.Agents[0]
 	if a.Agent != "claude" || a.Installed != "2.1.312" || a.Latest != "2.1.315" || a.Method != agentupdate.MethodNative || a.Status != agentupdate.StatusAvailable {
 		t.Fatalf("claude %+v", a)
+	}
+	if !slices.Contains(a.Models, agent.LaunchCatalogFor("claude").Models[0]) {
+		t.Fatalf("no launch catalog: %+v", a.Models)
 	}
 
 	var up agentsUpdateResult

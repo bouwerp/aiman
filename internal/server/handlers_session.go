@@ -407,18 +407,31 @@ func (s *Server) handleGet(ctx context.Context, req Request) Response {
 	}}
 }
 
-func (s *Server) resolveReq(ctx context.Context, req Request) (domain.Session, Response, bool) {
+// sessionTarget reads a request's target: id, else session. Clients may send both.
+func sessionTarget(raw json.RawMessage) string {
 	var params struct {
-		ID string `json:"id"`
+		ID      string `json:"id"`
+		Session string `json:"session"`
 	}
-	if err := json.Unmarshal(req.Params, &params); err != nil || strings.TrimSpace(params.ID) == "" {
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return ""
+	}
+	if id := strings.TrimSpace(params.ID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(params.Session)
+}
+
+func (s *Server) resolveReq(ctx context.Context, req Request) (domain.Session, Response, bool) {
+	target := sessionTarget(req.Params)
+	if target == "" {
 		return domain.Session{}, errResp(req.ID, CodeInvalidParams, "id is required"), false
 	}
 	list, err := s.loadSessions(ctx)
 	if err != nil {
 		return domain.Session{}, errResp(req.ID, CodeInvalidParams, err.Error()), false
 	}
-	sess, ok := resolveSession(list, params.ID)
+	sess, ok := resolveSession(list, target)
 	if !ok {
 		return domain.Session{}, errResp(req.ID, CodeNotFound, "session not found"), false
 	}

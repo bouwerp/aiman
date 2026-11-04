@@ -93,6 +93,8 @@ func run() error {
 			return runUsage(parsed.Rest[1:], os.Stdout)
 		case "agents":
 			return runAgents(parsed.Rest[1:], os.Stdout)
+		case "host":
+			return runHost(parsed.Rest[1:])
 		case "design":
 			return runDesign(parsed.Rest[1:], os.Getenv)
 		case "review":

@@ -1,11 +1,10 @@
-package ui
+package usecase
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/bouwerp/aiman/internal/usecase"
 )
 
 // restartTerminalSpec is what the terminal step of a restart needs once the
@@ -48,7 +47,7 @@ func legacyRestartBlocked(s domain.Session, stopped bool) error {
 // restartTerminal replaces the session's agent process in the PTY runtime of
 // the remote serve daemon and delivers the restart prompt. On success the
 // session is a pty session (a confirmed legacy row moves over) and active.
-func restartTerminal(ctx context.Context, remote usecase.TerminalExecutor, s *domain.Session, spec restartTerminalSpec) error {
+func restartTerminal(ctx context.Context, remote TerminalExecutor, s *domain.Session, spec restartTerminalSpec) error {
 	if err := legacyRestartBlocked(*s, spec.LegacyStopped); err != nil {
 		return err
 	}
@@ -61,7 +60,7 @@ func restartTerminal(ctx context.Context, remote usecase.TerminalExecutor, s *do
 		// working directory is ever trusted.
 		root = ""
 	}
-	usecase.TrustWorkspacePaths(ctx, remote, spec.WorkingDir, root)
+	TrustWorkspacePaths(ctx, remote, spec.WorkingDir, root)
 
 	env := make(map[string]string, len(spec.Env)+len(spec.Secrets))
 	for k, v := range spec.Env {
@@ -70,18 +69,20 @@ func restartTerminal(ctx context.Context, remote usecase.TerminalExecutor, s *do
 	for _, secret := range spec.Secrets {
 		env[secret.Key] = secret.Value
 	}
-	usecase.ApplyKiloAllowEnv(ctx, remote, spec.AgentCmd, env)
-	if err := usecase.RecreatePTYSession(ctx, remote, usecase.PTYSpec{
+	ApplyKiloAllowEnv(ctx, remote, spec.AgentCmd, env)
+	if err := RecreatePTYSession(ctx, remote, PTYSpec{
 		ID:            s.ID,
 		Name:          s.TerminalName,
 		Dir:           spec.WorkingDir,
 		Command:       spec.AgentCmd,
 		Env:           env,
 		NoUpdateGuard: spec.NoUpdateGuard,
+		Role:          s.Role,
+		ParentID:      s.ParentID,
 	}); err != nil {
 		return fmt.Errorf("failed to restart PTY session: %w", err)
 	}
-	usecase.DeliverInitialPromptPTY(ctx, remote, s.ID, spec.Prompt)
+	DeliverInitialPromptPTY(ctx, remote, s.ID, spec.Prompt)
 
 	s.Backend = domain.BackendPTY
 	s.Status = domain.SessionStatusActive

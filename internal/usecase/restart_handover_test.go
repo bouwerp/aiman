@@ -1,10 +1,9 @@
-package ui
+package usecase
 
 import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/bouwerp/aiman/internal/usecase"
 )
 
 func TestRestartHandoverReason(t *testing.T) {
@@ -34,30 +33,30 @@ func TestRestartPromptAddsHandover(t *testing.T) {
 	cases := []struct {
 		name     string
 		prepared string
-		mode     usecase.HandoffMode
+		mode     HandoffMode
 		want     string
 	}{
 		{
 			name: "empty handover",
-			mode: usecase.HandoffHandover,
-			want: usecase.HandoverPrompt,
+			mode: HandoffHandover,
+			want: HandoverPrompt,
 		},
 		{
 			name:     "prepared handover",
 			prepared: prepared,
-			mode:     usecase.HandoffHandover,
-			want:     prepared + " " + usecase.HandoverPrompt,
+			mode:     HandoffHandover,
+			want:     prepared + " " + HandoverPrompt,
 		},
 		{
 			name:     "summary unchanged",
 			prepared: "x",
-			mode:     usecase.HandoffSummary,
+			mode:     HandoffSummary,
 			want:     "x",
 		},
 		{
 			name:     "none unchanged",
 			prepared: "x",
-			mode:     usecase.HandoffNone,
+			mode:     HandoffNone,
 			want:     "x",
 		},
 	}

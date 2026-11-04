@@ -63,6 +63,21 @@ func ProjectSkillFiles(root string) []string {
 	}
 }
 
+// IsProjectSkillPath reports whether a worktree-relative path is a file of the
+// bundled skill in one of ProjectSkillFiles' directories.
+func IsProjectSkillPath(rel string) bool {
+	rel = "/" + strings.TrimLeft(rel, "/")
+	for _, skill := range ProjectSkillFiles("root") {
+		skill = strings.TrimPrefix(skill, "root")
+		for _, f := range Bundle() {
+			if strings.HasSuffix(rel, Sibling(skill, f.Name)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // BundleFile is one file of the skill, installed in every aiman skill dir.
 type BundleFile struct {
 	Name    string

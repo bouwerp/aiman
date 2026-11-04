@@ -26,6 +26,9 @@ var (
 	buildTime = ""
 )
 
+// instanceLockWait covers an old gateway shutting down during a restart.
+const instanceLockWait = 15 * time.Second
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -64,6 +67,13 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	lockCtx, cancelLock := context.WithTimeout(context.Background(), instanceLockWait)
+	release, err := gateway.LockInstance(lockCtx, dir)
+	cancelLock()
+	if err != nil {
+		return err
+	}
+	defer release()
 	sock := opts.socket
 	if sock == "" {
 		sock = server.SocketPath(dir)

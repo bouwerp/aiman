@@ -163,3 +163,10 @@ func TestSessionCreateReviewFlag(t *testing.T) {
 		t.Fatalf("params = %v, want review o/r#7", params)
 	}
 }
+
+func TestTakeFlagsDiscardIsBoolean(t *testing.T) {
+	flags, rest := takeFlags([]string{"--discard", "sol"})
+	if flags["discard"] != "1" || len(rest) != 1 || rest[0] != "sol" {
+		t.Fatalf("flags %v rest %v", flags, rest)
+	}
+}

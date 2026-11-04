@@ -522,6 +522,8 @@ func LifecycleCases() []Case {
 		CaseReviewHeadMoved(),
 		CaseReviewIncomplete(),
 		CaseHandoverChildEarlyReport(),
+		CaseTerminateWorktree(),
+		CaseRestartSwitch(),
 	}
 }
 

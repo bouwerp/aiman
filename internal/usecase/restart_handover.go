@@ -1,10 +1,9 @@
-package ui
+package usecase
 
 import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
-	"github.com/bouwerp/aiman/internal/usecase"
 )
 
 // restartHandoverReason is the serve reason for this restart. An agent
@@ -29,13 +28,13 @@ func restartHandoverAgent(cfg domain.SessionConfig) string {
 // restartPrompt appends the handover instruction only when serve left that
 // file. A summary or a missing handoff keeps the prepared prompt. One space
 // joins the parts because send-keys submits on newline.
-func restartPrompt(prepared string, mode usecase.HandoffMode) string {
-	if mode != usecase.HandoffHandover {
+func restartPrompt(prepared string, mode HandoffMode) string {
+	if mode != HandoffHandover {
 		return prepared
 	}
 	prepared = strings.TrimSpace(prepared)
 	if prepared == "" {
-		return usecase.HandoverPrompt
+		return HandoverPrompt
 	}
-	return prepared + " " + usecase.HandoverPrompt
+	return prepared + " " + HandoverPrompt
 }

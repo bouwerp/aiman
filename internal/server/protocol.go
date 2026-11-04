@@ -50,6 +50,15 @@ const (
 	// CodeReviewNoCoverage refuses review.coverage when the tree has no
 	// go.mod and the repository has no review.coverage command.
 	CodeReviewNoCoverage = "review_no_coverage"
+	// CodeWorktreeDirty refuses session.terminate while removing the worktree
+	// would lose work. Error.Data is a WorktreeDirtyData.
+	CodeWorktreeDirty = "worktree_dirty"
+	// CodeNeedsOperator refuses a session's call to a method only the operator
+	// may use, such as terminating or restarting a session.
+	CodeNeedsOperator = "needs_operator"
+	// CodeUnavailable means serve could not get what was asked for and has
+	// nothing stale to offer. The gateway returns it too.
+	CodeUnavailable = "unavailable"
 )
 
 type Request struct {
@@ -68,6 +77,8 @@ type Response struct {
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Data is the refusal's structured detail, for the codes that have one.
+	Data any `json:"data,omitempty"`
 }
 
 func (e *Error) Error() string {

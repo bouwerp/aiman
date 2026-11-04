@@ -36,6 +36,7 @@ func TestSocketOnlyCommandsSkipTheDatabase(t *testing.T) {
 		{"todo", "list"},
 		{"usage"},
 		{"agents", "status"},
+		{"host", "stats"},
 		{"verify", "--wait"},
 		{"review", "reveal"},
 		{"review", "refresh"},

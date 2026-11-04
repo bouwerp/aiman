@@ -29,6 +29,13 @@ The current suite covers:
   pointer is released.
 - `terminate-keeps-pane`: the terminal is stopped, but the row and the last
   capture survive until archive or forget.
+- `terminate-worktree`: in a real git repository, a session may not call
+  `session.terminate`, a dirty linked worktree is refused with nothing stopped,
+  discard removes it and keeps the branch, and a session on the main checkout
+  never loses it.
+- `restart-switch`: `session.restart` to another agent writes the handover,
+  wipes the vendor identity and launch model, and recreates the terminal under
+  the same id; an agent that is not installed and a session caller are refused.
 - `usage-context`: a two-turn Claude transcript reports the last turn's
   input + cache_read against the explicit context window.
 - `usage-budget`: crossing 70% and 100% emits one `usage.budget` event per

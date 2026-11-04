@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: aiman gateway
-  version: 0.2.0
+  version: 0.3.0
   description: >
     HTTP and WebSocket surface in front of `aiman serve`. Every request needs
     a bearer token except GET /v1/health and POST /v1/pair. The token is the
@@ -294,10 +294,22 @@ components:
           type: string
         group:
           type: string
+        parent_id:
+          type: string
+          description: The session that created this one; empty for a top-level session.
+        role:
+          type: string
+          description: >
+            Empty for an ordinary session. reviewer, handover and consult are
+            aiman's hidden helpers: session.restart and session.terminate
+            refuse them.
         issue_key:
           type: string
         branch:
           type: string
+        base_branch:
+          type: string
+          description: The ref the session's branch was cut from.
         repo_name:
           type: string
         tmux_session:
@@ -308,6 +320,11 @@ components:
         working_directory:
           type: string
         agent_name:
+          type: string
+        launch_model:
+          type: string
+          description: Model this session launches with; empty is the agent's default.
+        launch_effort:
           type: string
         agent_session_id:
           type: string
@@ -337,8 +354,17 @@ components:
         code:
           type: string
           description: >
-            Serve's codes, plus invalid_code, locked, forbidden, unavailable
-            and internal, which the gateway returns itself.
+            Serve's codes, plus invalid_code, locked, forbidden and internal,
+            which the gateway returns itself. unavailable comes from either;
+            from serve it means repo.list failed with nothing cached.
+            worktree_dirty refuses session.terminate while removing the
+            worktree would lose work, and data says what. needs_operator
+            refuses a session's call to session.restart or session.terminate.
+            legacy_terminal refuses both on a legacy tmux row. A serve older
+            than this spec answers a method it does not have with
+            invalid_params and the message "unknown method <name>"; an older
+            gateway answers a method missing from its allowlist with
+            forbidden.
           enum:
             - invalid_params
             - not_found
@@ -363,6 +389,8 @@ components:
             - review_head_moved
             - review_already_posted
             - review_no_coverage
+            - worktree_dirty
+            - needs_operator
             - invalid_code
             - locked
             - forbidden
@@ -370,6 +398,31 @@ components:
             - internal
         message:
           type: string
+        data:
+          description: The refusal's detail, for the codes that have one.
+          oneOf:
+            - $ref: "#/components/schemas/WorktreeDirtyData"
+    WorktreeDirtyData:
+      type: object
+      description: >
+        What removing the worktree would lose. aiman's own scaffolding
+        (.aiman_* files, the bundled skill, graphify-out, its .gitignore rule)
+        does not count, and neither do files the repository ignores, which
+        removal also deletes.
+      required: [changed_files, paths, unpushed_commits]
+      properties:
+        changed_files:
+          type: integer
+          description: Uncommitted and untracked files, all of them.
+        paths:
+          type: array
+          maxItems: 20
+          description: Up to 20 of the changed files.
+          items:
+            type: string
+        unpushed_commits:
+          type: integer
+          description: Commits on HEAD that no remote-tracking ref contains.
     RpcRequest:
       type: object
       required: [method]
@@ -395,6 +448,10 @@ components:
             - session.rename
             - session.move
             - session.forget
+            - session.restart
+            - session.terminate
+            - repo.list
+            - host.stats
             - session.register
             - session.report_agent_session
             - notify.since
@@ -481,6 +538,64 @@ components:
         token:
           type: string
           description: Expo push token. Never log this value.
+        session:
+          type: string
+          description: >
+            Target of session.restart and session.terminate (id or name). Every
+            method that takes id also takes session; id wins when both are sent.
+        discard:
+          type: boolean
+          description: >
+            session.terminate: remove a linked worktree even though it holds
+            uncommitted changes or unpushed commits (git worktree remove
+            --force). The branch is never deleted. Send it only after showing
+            the worktree_dirty data and confirming.
+        agent:
+          type: string
+          description: >
+            session.create: agent command from agents.status; empty picks from
+            the model tiers. session.restart: required; a different agent than
+            the session's is a switch, which clears the launch model, effort and
+            vendor identity, and an agent not installed is invalid_params.
+        model:
+          type: string
+          description: >
+            Launch model for session.create and session.restart. Needs agent on
+            create. On a same-agent restart, empty keeps the session's model.
+        effort:
+          type: string
+          description: Launch effort, with the same rules as model.
+        repo:
+          type: string
+          description: session.create, owner/name from repo.list. Required unless quick.
+        branch:
+          type: string
+          description: session.create. Required unless quick.
+        existing_branch:
+          type: boolean
+          description: session.create starts from this existing branch instead of cutting one.
+        base:
+          type: string
+          description: session.create, the ref to cut the branch from.
+        quick:
+          type: boolean
+          description: session.create, an ad-hoc session with no repository or worktree.
+        prompt:
+          type: string
+          description: session.create, the agent's first prompt, delivered before create answers.
+        name:
+          type: string
+          description: session.create or session.rename; session.create assigns one when empty.
+        tier:
+          type: string
+          enum: [smart, worker]
+          description: session.create, exclusive with agent. A session the user starts defaults to smart.
+        dir:
+          type: string
+          description: session.create, the subdirectory the agent starts in.
+        issue:
+          type: string
+          description: session.create, the JIRA key.
         device_id:
           type: string
         states:
@@ -501,6 +616,10 @@ components:
             - $ref: "#/components/schemas/PromptResult"
             - $ref: "#/components/schemas/PushRegisterResult"
             - $ref: "#/components/schemas/PushUnregisterResult"
+            - $ref: "#/components/schemas/RepoListResult"
+            - $ref: "#/components/schemas/SessionTerminatedResult"
+            - $ref: "#/components/schemas/HostStatsResult"
+            - $ref: "#/components/schemas/AgentsStatusResult"
         error:
           $ref: "#/components/schemas/RpcError"
     PongResult:
@@ -525,6 +644,187 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Session"
+    AgentsStatusResult:
+      type: object
+      required: [type, host, mode, window, agents]
+      properties:
+        type:
+          type: string
+          const: agents
+        host:
+          type: string
+        mode:
+          type: string
+        window:
+          type: string
+        agents:
+          type: array
+          items:
+            type: object
+            required: [agent, status]
+            properties:
+              agent:
+                type: string
+                description: The command session.create and session.restart take.
+              status:
+                type: string
+              models:
+                type: array
+                description: >
+                  The agent's launch catalog. Absent for an agent with no fixed
+                  list, such as Pi, which lists its models at run time.
+                items:
+                  type: string
+    RepoListResult:
+      type: object
+      description: >
+        Cached for 5 minutes. A failed refresh serves the last list; a failure
+        with nothing cached is unavailable.
+      required: [type, repos]
+      properties:
+        type:
+          type: string
+          const: repos
+        repos:
+          type: array
+          items:
+            type: object
+            required: [slug, last_activity_at]
+            properties:
+              slug:
+                type: string
+                description: owner/name
+              last_activity_at:
+                type: string
+                description: RFC3339, or empty when unknown.
+    SessionTerminatedResult:
+      type: object
+      required: [type, session, worktree_removed, branch]
+      properties:
+        type:
+          type: string
+          const: session_terminated
+        session:
+          type: string
+        worktree_removed:
+          type: boolean
+          description: >
+            True only for the session's own linked worktree. A main checkout, a
+            worktree another session uses, or no worktree stays and is false.
+        branch:
+          type: string
+          description: The branch, which is never deleted; empty on a detached HEAD with no recorded branch.
+        worktree_note:
+          type: string
+          description: Why the worktree stayed, when it did.
+        children_left:
+          type: array
+          description: >
+            Running child sessions, which keep running with no parent. Warn
+            before confirming; session.list has parent_id.
+          items:
+            type: string
+    HostStatsResult:
+      type: object
+      description: >
+        Read-only. Every size is in bytes and every CPU value is a percent.
+        Linux reads /proc; elsewhere the fields are empty. Refresh every few
+        seconds.
+      required: [type, host, uptime_seconds, load, cpu_count, cpu_percent, memory, swap, disks, processes, sessions]
+      properties:
+        type:
+          type: string
+          const: host_stats
+        host:
+          type: string
+        uptime_seconds:
+          type: integer
+        load:
+          type: array
+          description: 1, 5 and 15 minute load averages.
+          minItems: 3
+          maxItems: 3
+          items:
+            type: number
+        cpu_count:
+          type: integer
+        cpu_percent:
+          type: number
+          description: The whole host, 0 to 100.
+        memory:
+          type: object
+          description: Bytes.
+          required: [total, used, available]
+          properties:
+            total:
+              type: integer
+            used:
+              type: integer
+            available:
+              type: integer
+        swap:
+          type: object
+          description: Bytes.
+          required: [total, used]
+          properties:
+            total:
+              type: integer
+            used:
+              type: integer
+        disks:
+          type: array
+          description: Real local filesystems, one per device. Sizes in bytes.
+          items:
+            type: object
+            required: [mount, total, used]
+            properties:
+              mount:
+                type: string
+              total:
+                type: integer
+              used:
+                type: integer
+        processes:
+          type: array
+          description: Top 15 by CPU and top 15 by RSS, merged, busiest first. Names only, never arguments.
+          items:
+            type: object
+            required: [pid, user, name, cpu_percent, rss]
+            properties:
+              pid:
+                type: integer
+              user:
+                type: string
+              name:
+                type: string
+              cpu_percent:
+                type: number
+                description: Of one core, so it can pass 100.
+              rss:
+                type: integer
+                description: Bytes.
+        sessions:
+          type: array
+          description: >
+            Each running session with its agent's process tree. aiman's hidden
+            helpers are left out. A session whose process cannot be confirmed
+            reports zeros.
+          items:
+            type: object
+            required: [session, name, cpu_percent, rss, processes]
+            properties:
+              session:
+                type: string
+              name:
+                type: string
+              cpu_percent:
+                type: number
+                description: Of one core, across the tree.
+              rss:
+                type: integer
+                description: Bytes.
+              processes:
+                type: integer
     SessionGetResult:
       type: object
       required: [type, session]

@@ -44,6 +44,9 @@ type AgentStatus struct {
 	// RootOwned is true for a package-manager install whose files root owns,
 	// so updating it needs root. The agents page then offers MovePrefix.
 	RootOwned bool `json:"root_owned,omitempty"`
+	// Models is the agent's launch catalog, filled by agents.status. Empty for
+	// an agent with no fixed list (Pi lists its models at run time).
+	Models []string `json:"models,omitempty"`
 }
 
 // Outcome answers one agents.update target.

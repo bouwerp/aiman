@@ -71,7 +71,7 @@ func writeCLIError(code, msg string) {
 
 func runSession(args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|prompt|wait|read|log|replay|report-agent-session|deepcode-watch> …\n")
+		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|restart|terminate|prompt|wait|read|log|replay|report-agent-session|deepcode-watch> …\n")
 		fmt.Fprintf(os.Stderr, "Are you an AI? Run: aiman --skill\n")
 		return errUsage
 	}
@@ -194,6 +194,27 @@ func runSession(args []string) error {
 			return errUsage
 		}
 		return callAndPrint(sock, "session.forget", map[string]any{"id": args[1]})
+	case "restart":
+		flags, rest := takeFlags(args[1:])
+		if len(rest) < 1 || flags["agent"] == "" {
+			writeCLIError(server.CodeInvalidParams, "session restart <target> --agent AGENT [--model M] [--effort E]")
+			return errUsage
+		}
+		params := map[string]any{"session": rest[0], "agent": flags["agent"]}
+		if flags["model"] != "" {
+			params["model"] = flags["model"]
+		}
+		if flags["effort"] != "" {
+			params["effort"] = flags["effort"]
+		}
+		return callAndPrint(sock, "session.restart", params)
+	case "terminate":
+		flags, rest := takeFlags(args[1:])
+		if len(rest) < 1 {
+			writeCLIError(server.CodeInvalidParams, "session terminate <target> [--discard]")
+			return errUsage
+		}
+		return callAndPrint(sock, "session.terminate", map[string]any{"session": rest[0], "discard": flags["discard"] != ""})
 	case "move":
 		flags, rest := takeFlags(args[1:])
 		target := ""
@@ -254,7 +275,8 @@ func sessionCreateParams(flags map[string]string) (map[string]any, error) {
 }
 
 var boolSessionFlags = map[string]bool{
-	"wait": true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true, "dry-run": true, "if-enabled": true, "gate": true,
+	"discard": true,
+	"wait":    true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true, "dry-run": true, "if-enabled": true, "gate": true,
 	"existing-branch": true, "orphan": true, "json": true, "consult": true,
 }
 
@@ -417,10 +439,15 @@ func callAndPrint(sock, method string, params any) error {
 		return err
 	}
 	if resp.Error != nil {
-		writeCLIError(resp.Error.Code, resp.Error.Message)
+		writeCLIResponseError(resp.Error)
 		return errors.New(resp.Error.Message)
 	}
 	return writeJSON(resp.Result)
+}
+
+// writeCLIResponseError is writeCLIError with the refusal's structured detail.
+func writeCLIResponseError(e *server.Error) {
+	_ = json.NewEncoder(os.Stderr).Encode(map[string]any{"error": e})
 }
 
 // callSessionLog prints one line per event unless --json is set.

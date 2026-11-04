@@ -337,3 +337,26 @@ func TestDevicesRoutes(t *testing.T) {
 		t.Fatalf("left %+v", devs)
 	}
 }
+
+// The app reads error.data to show what a terminate would lose.
+func TestRPCPassesRefusalDataThrough(t *testing.T) {
+	rig := newDeviceRig(t, nil)
+	rig.srv.Socket = startEchoUnix(t, func(conn net.Conn, line []byte) {
+		var req server.Request
+		_ = json.Unmarshal(line, &req)
+		out, _ := server.EncodeResponse(server.Response{ID: req.ID, Error: &server.Error{
+			Code: server.CodeWorktreeDirty, Message: "dirty",
+			Data: server.WorktreeDirtyData{ChangedFiles: 1, Paths: []string{"a.txt"}, UnpushedCommits: 2},
+		}})
+		_, _ = conn.Write(out)
+	})
+	_, tok := rig.device(t, false)
+	rec := rig.do(http.MethodPost, "/v1/rpc", tok, `{"method":"session.terminate","params":{"session":"s1"}}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d body %s", rec.Code, rec.Body.String())
+	}
+	want := `"data":{"changed_files":1,"paths":["a.txt"],"unpushed_commits":2}`
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("body %s lacks %s", rec.Body.String(), want)
+	}
+}

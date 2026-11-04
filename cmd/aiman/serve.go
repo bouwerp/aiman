@@ -205,6 +205,8 @@ func runServe() error {
 
 	scanner := agent.NewScanner(localExec)
 	srv.SetAgentChoice(cfg.Agents, scanner.Installed)
+	srv.SetRepoLister(gitManager)
+	srv.SetRestartDeps(server.RestartDeps{Config: cfg, Engine: flow.SkillEngine, Ignorer: gitManager})
 	srv.SetConsultDir(filepath.Join(dir, "consults"))
 	srv.SetReviewGitHub(&review.GHCLI{Run: review.ExecRun, RunInput: review.ExecRunInput})
 	srv.SetReviewWorktrees(gitManager)

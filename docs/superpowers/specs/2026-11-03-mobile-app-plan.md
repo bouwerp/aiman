@@ -110,8 +110,9 @@ Contract shared by the gateway, the TUI and the app:
 - Device tokens pass a method allowlist on `/v1/rpc`, derived from serve's
   handler table, deny by default. Allowed: reads (`session.list/get/read/
   wait/log`, `pty.capture`, `todo.get/summary`, `notify.since`, `usage.get`,
-  `ci.get`, `agents.status`, `ping`), and writes (`session.prompt`,
-  `session.create`, `steer.send`, every `todo.*` including gate approval,
+  `ci.get`, `agents.status`, `repo.list`, `host.stats`, `ping`), and writes (`session.prompt`,
+  `session.create`, `session.rename`, `session.move`, `session.restart`,
+  `session.terminate`, `steer.send`, every `todo.*` including gate approval,
   `ci.watch`, `pty.input`, `push.register/unregister`). Destructive
   (`pty.kill`, `pty.forget`, `session.forget`, `review.post`, `agents.update`,
   `agents.move_prefix`) need `allow_destructive`. A device acts as the
@@ -185,6 +186,32 @@ The QR carries no Tailscale key. The app joins the tailnet itself in Phase 1
 5. Usage: `usage.get by:issue` for the last 30 days.
 6. Terminal attach: xterm.js in a WebView over the terminal socket.
 
+### Phase 2b: run sessions and the host from the phone
+
+serve today, for each need:
+
+| Need | serve today | Work |
+|---|---|---|
+| New session | `session.create` exists; agents from `agents.status` | New `repo.list` (the `git.Manager.ListRepos` result, cached; `gh` is slow) for the picker |
+| Rename, group | `session.rename`, `session.move` exist | Add both to the device allowlist |
+| Restart with another agent | None: the flow lives in the TUI (`restartTerminal`, `RecreatePTYSession`) | New `session.restart {session, agent, model, effort}` that writes the handover with the target agent, recreates the PTY and delivers the handoff prompt. The TUI keeps its flow for now |
+| Terminate | None: teardown lives in the TUI; `pty.kill` and `session.forget` alone leave the worktree behind | New `session.terminate {session, discard}`: forget handover, stop the terminal, remove a clean worktree, forget the row. Refuses with `worktree_dirty` (listing what is dirty or unpushed) unless `discard` is true. Laptop-only steps (mutagen, snapshot) stay in the TUI |
+| Host overview | None | New read-only `host.stats`: uptime, load, CPU, memory, swap, disk, top processes by CPU and memory, and each session's agent process tree mapped to its session. Reads `/proc` on Linux and reports only what it has elsewhere |
+
+Each new method lands in `api/openapi.yaml` and the allowlist. The app then gets
+a New session flow (repo, branch or ad hoc, agent and model, prompt), a session
+actions sheet (rename, move to group, restart with agent, terminate) and a Host
+tab refreshing every few seconds while visible. Phone actions need a serve
+release first, so the app says "update serve" when serve answers
+`invalid_params` with `unknown method <name>`, or an older gateway answers
+`forbidden`. There is no `method_not_found` code, and an old serve could not send
+one.
+
+`session.create` already takes what the New session flow sends: `repo`
+(`owner/name` from `repo.list`), `branch` (with `existing_branch` and `base`),
+or `quick`; `agent` with `model` and `effort`, or `tier`; `prompt`; `name`,
+`group`, `dir`, `issue`. `api/openapi.yaml` documents each.
+
 ### Phase 3 (only if chosen): AWS relay
 
 Hosts open an outbound WebSocket to an API Gateway WebSocket API; Lambda routes
@@ -204,3 +231,8 @@ Drop: tokens in AsyncStorage (SecureStore only), config values committed in
 ## Decisions
 
 Settled 2026-11-03: iPhone only; a device may create sessions.
+
+Settled 2026-11-04: any paired phone may terminate a session, with confirmation
+in the app and no `allow_destructive`. Dirty work needs an explicit discard:
+`session.terminate` refuses with `worktree_dirty` until `discard` is true. The
+host view is read-only.
