@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>aiman</title>
+  <rect width="1024" height="1024" fill="#0a0a0a"/>
+  <path d="M232 568C232 372 352 232 512 232C672 232 792 372 792 568Z" fill="#f5c518"/>
+  <rect x="452" y="186" width="120" height="250" rx="34" fill="#f5c518" stroke="#0a0a0a" stroke-width="26"/>
+  <rect x="150" y="588" width="724" height="84" rx="42" fill="#f5c518"/>
+  <polyline points="392,738 476,802 392,866" fill="none" stroke="#f5f5f5" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="534" y1="866" x2="640" y2="866" stroke="#f5f5f5" stroke-width="48" stroke-linecap="round"/>
+</svg>

@@ -1,3 +1,5 @@
+<img src="assets/icon.png" alt="" width="96">
+
 # Aiman
 
 **Aiman** is a high-performance terminal UI (TUI) orchestrator built in Go. It manages the lifecycle of remote, agent-assisted coding sessions, turning a JIRA ticket into a ready-to-code environment in seconds.
