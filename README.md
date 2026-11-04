@@ -337,7 +337,7 @@ child agent in `~/.aiman/handovers/<run-id>/` that reads the transcript, rewrite
 handover, and proposes memory candidates. The child agent is the first installed of
 `roles.handover.agent`, the worker tier (`agents.preferred`, with each entry's model),
 then the worker's own agent. With no role model and no entry model it runs a cheap model:
-`haiku` for Claude, `gpt-5.4-mini` for Codex, `gpt-5-mini` for Copilot,
+`haiku` for Claude, `gpt-6-luna` for Codex, `gpt-5-mini` for Copilot,
 `gemini-3.7-flash-low` for agy. The child runs
 prompt-free and is only told not to edit, commit or push. A failed, incomplete or
 timed-out child (`handover.timeout`, default 10m) leaves the mechanical handover in place.

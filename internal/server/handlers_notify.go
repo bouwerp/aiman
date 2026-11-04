@@ -8,6 +8,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/notify"
+	"github.com/bouwerp/aiman/internal/pane"
 )
 
 // observeSession builds an observation for a session.
@@ -25,8 +26,9 @@ func (s *Server) observeSession(_ context.Context, sess domain.Session) notify.O
 	return obs
 }
 
-// lastScreenLine is the last non-empty line of the session's PTY screen, or
-// empty when serve cannot read it.
+// lastScreenLine is the last non-empty line of the session's PTY screen as
+// plain text, because it goes into notification text, or empty when serve
+// cannot read it.
 func (s *Server) lastScreenLine(sess domain.Session) string {
 	if sess.IsLegacyTmux() || s.pty == nil {
 		return ""
@@ -35,7 +37,7 @@ func (s *Server) lastScreenLine(sess domain.Session) string {
 	if err != nil {
 		return ""
 	}
-	return lastNonEmptyLine(screen)
+	return lastNonEmptyLine(pane.StripANSI(screen))
 }
 
 func lastNonEmptyLine(s string) string {

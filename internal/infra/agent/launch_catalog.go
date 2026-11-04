@@ -97,11 +97,13 @@ var agyCatalog = LaunchCatalog{
 var codexCatalog = LaunchCatalog{
 	Models: []string{
 		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-		"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "o3",
+		"gpt-5.5", "gpt-5.4", "gpt-6-luna", "gpt-5.3-codex", "o3",
 	},
 	Efforts:      []string{"minimal", "low", "medium", "high", "xhigh"},
 	EffortConfig: "model_reasoning_effort",
-	Cheap:        "gpt-5.4-mini",
+	// Must be an id `codex debug models` lists. Launching a retired id draws a
+	// blocking "no longer available" notice (UpdateDialogs).
+	Cheap: "gpt-6-luna",
 }
 
 // kilo models: provider/model IDs from `kilo models`. --variant is reasoning effort.

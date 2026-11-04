@@ -18,6 +18,7 @@ const (
 	attrItalic
 	attrBlink
 	attrWrap
+	attrDim
 )
 
 const (
@@ -67,6 +68,9 @@ type Glyph struct {
 	Mode   int16
 	FG, BG Color
 }
+
+// Dim reports whether the cell was drawn with SGR 2 (faint).
+func (g Glyph) Dim() bool { return g.Mode&attrDim != 0 }
 
 type line []Glyph
 
@@ -625,11 +629,13 @@ func (t *State) setAttr(attr []int) {
 		a := attr[i]
 		switch a {
 		case 0:
-			t.cur.Attr.Mode &^= attrReverse | attrUnderline | attrBold | attrItalic | attrBlink
+			t.cur.Attr.Mode &^= attrReverse | attrUnderline | attrBold | attrDim | attrItalic | attrBlink
 			t.cur.Attr.FG = DefaultFG
 			t.cur.Attr.BG = DefaultBG
 		case 1:
 			t.cur.Attr.Mode |= attrBold
+		case 2:
+			t.cur.Attr.Mode |= attrDim
 		case 3:
 			t.cur.Attr.Mode |= attrItalic
 		case 4:
@@ -638,8 +644,10 @@ func (t *State) setAttr(attr []int) {
 			t.cur.Attr.Mode |= attrBlink
 		case 7:
 			t.cur.Attr.Mode |= attrReverse
-		case 21, 22:
+		case 21:
 			t.cur.Attr.Mode &^= attrBold
+		case 22: // normal intensity ends both bold and dim
+			t.cur.Attr.Mode &^= attrBold | attrDim
 		case 23:
 			t.cur.Attr.Mode &^= attrItalic
 		case 24:

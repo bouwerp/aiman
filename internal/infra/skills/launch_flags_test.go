@@ -82,10 +82,11 @@ func TestLaunchFlagsHandoverRoleUsesCheap(t *testing.T) {
 			notWant: []string{"o3"},
 		},
 		{
-			name: "codex gets its mini model",
+			// Pins Codex's LaunchCatalog.Cheap, a vendor id that gets retired.
+			name: "codex gets its cheap model",
 			cfg:  &config.Config{},
 			ag:   domain.Agent{Name: "Codex", Command: "codex"}, role: handover,
-			want: []string{"--model gpt-5.4-mini"},
+			want: []string{"--model gpt-6-luna"},
 		},
 		{
 			name: "no Cheap means no flag",

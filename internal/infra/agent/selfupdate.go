@@ -4,6 +4,8 @@ import (
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/bouwerp/aiman/internal/pane"
 )
 
 // SelfUpdateGuard is what keeps one agent CLI from updating itself inside an
@@ -103,7 +105,8 @@ type UpdateDialog struct {
 // these menus, so every Key skips instead. It also holds Codex's hook-review
 // menu, a startup modal of the same kind: aiman trusts its own hooks
 // (agenthook), so this menu only comes up for hooks someone else added, and
-// aiman must not trust those.
+// aiman must not trust those. Codex's retired-model notice is the third kind:
+// it has no choice to make, and the session continues on the replacement.
 var UpdateDialogs = []UpdateDialog{
 	// The modal reads "Update available · A → B" over "› 1. Update now",
 	// "2. Skip", "3. Skip until next version". Codex also prints a
@@ -117,6 +120,11 @@ var UpdateDialogs = []UpdateDialog{
 	// all and continue", "3. Continue without trusting". Esc continues
 	// without trusting; the default row opens the review screen.
 	{Agent: "codex", Re: `Hooks need review`, Key: "esc"},
+	// Codex launched on a retired model: "GPT-5.4 Mini is no longer available"
+	// over "Switch to GPT-6 Luna to continue." and "enter/esc continue · ^c
+	// quit". Both keys accept the replacement. Only the hint row identifies it:
+	// a transcript can say "no longer available", and steering holds on a match.
+	{Agent: "codex", Re: `enter/esc continue`, Key: "esc"},
 }
 
 // UpdateDialogTailLines is how many rows at the bottom of a rendered screen
@@ -126,8 +134,9 @@ var UpdateDialogs = []UpdateDialog{
 const UpdateDialogTailLines = 12
 
 // MatchUpdateDialog reports the update dialog drawn at the bottom of screen.
+// The screen is styled, and a style change can fall inside a phrase.
 func MatchUpdateDialog(screen string) (UpdateDialog, bool) {
-	tail := screenTail(screen, UpdateDialogTailLines)
+	tail := screenTail(pane.StripANSI(screen), UpdateDialogTailLines)
 	for _, d := range UpdateDialogs {
 		if updateDialogRes[d.Re].MatchString(tail) {
 			return d, true

@@ -723,6 +723,11 @@ const (
 // bootWaitBudget is how many polls the PTY boot wait makes before it gives up.
 const bootWaitBudget = 20
 
+// bootWaitAfterTrust is how many more polls follow a trust answer. Codex can
+// draw another dialog after trust, so the prompt must not be typed at once, and
+// an agent whose composer the patterns do not recognise waits only this long.
+const bootWaitAfterTrust = 6
+
 // acceptWorkspaceTrustPTY is the shell fragment that clears startup dialogs
 // before anything is typed at the agent: first an update dialog, then a
 // workspace-trust dialog.
@@ -735,7 +740,9 @@ const bootWaitBudget = 20
 // its skip key instead (bootUpdateDialogBranch) and the loop keeps polling.
 // Update dialogs are checked first because Codex's menu rows start with "›",
 // which composerReadyRe would read as a ready composer. Codex's splash is
-// skipped for the same reason (codexSplashRe).
+// skipped for the same reason (codexSplashRe). Trust is answered once: its text
+// can stay in the captured history, and a second Enter would reach whatever
+// comes next.
 //
 // It polls rather than sleeping a fixed time because the dialogs only appear
 // once the agent has finished booting, and gives up silently: an agent that
@@ -750,12 +757,12 @@ func acceptWorkspaceTrustPTY(sessionID string) string {
 	// means an update dialog was skipped on the way.
 	id := strings.TrimSpace(sessionID)
 	return fmt.Sprintf(
-		"attempt=0; reason=timeout; upd=0; "+
-			"while [ $attempt -lt %[4]d ]; do "+
+		"attempt=0; budget=%[4]d; reason=timeout; upd=0; trusted=0; "+
+			"while [ $attempt -lt $budget ]; do "+
 			"%[5]s"+
-			"pane=$(aiman pty capture %[1]q --lines 0 2>/dev/null || true); "+
-			"if printf '%%s' \"$pane\" | grep -qE %[2]q; then "+
-			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 2; reason=trust; break; "+
+			"pane=$(aiman pty capture %[1]q --lines 0 2>/dev/null | %[9]s || true); "+
+			"if [ $trusted = 0 ] && printf '%%s' \"$pane\" | grep -qE %[2]q; then "+
+			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 2; trusted=1; budget=$((attempt+%[8]d)); continue; "+
 			"fi; "+
 			"if printf '%%s' \"$pane\" | grep -qE %[6]q && ! printf '%%s' \"$pane\" | grep -qE %[7]q; then "+
 			"attempt=$((attempt+1)); sleep 1; continue; "+
@@ -763,10 +770,11 @@ func acceptWorkspaceTrustPTY(sessionID string) string {
 			"if printf '%%s' \"$pane\" | grep -qE %[3]q; then reason=ready; break; fi; "+
 			"attempt=$((attempt+1)); sleep 1; "+
 			"done; "+
+			"if [ $trusted = 1 ]; then reason=trust; fi; "+
 			"if [ $upd = 1 ]; then reason=update; fi; "+
 			"echo \"AIMAN_BOOTWAIT:$reason:$attempt\"; ",
 		id, workspaceTrustRe, composerReadyRe, bootWaitBudget, bootUpdateDialogBranch(id),
-		codexSplashRe, codexFooterRe,
+		codexSplashRe, codexFooterRe, bootWaitAfterTrust, captureSGRFilter,
 	)
 }
 

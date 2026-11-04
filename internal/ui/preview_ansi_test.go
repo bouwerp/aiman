@@ -49,6 +49,7 @@ func TestSealPreviewLinesLeavesClosedLinesAlone(t *testing.T) {
 		"\x1b[31mred\x1b[m",      // bare CSI m is a full reset
 		"\x1b[38;5;9mfg\x1b[39m", // channel returned to default
 		"\x1b[31m\x1b[41mboth\x1b[0m",
+		"❯\u00a0\x1b[2msuggestion\x1b[22m", // dim as the PTY renderer emits it
 	} {
 		if got := sealPreviewLines(in); got != in {
 			t.Errorf("sealPreviewLines(%q) = %q, want unchanged", in, got)

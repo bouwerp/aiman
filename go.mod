@@ -84,7 +84,8 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-// Scrollback hook: lines that leave a top-anchored region are kept so
-// full-screen attach can place them in the terminal scrollback. Upstream
-// vt10x drops them.
+// Local patches. Scrollback hook: lines that leave a top-anchored region are
+// kept so full-screen attach can place them in the terminal scrollback.
+// Upstream vt10x drops them. Dim: SGR 2 is tracked on the glyph (Glyph.Dim) so
+// pane captures can keep it. Upstream vt10x ignores it.
 replace github.com/hinshun/vt10x => ./third_party/vt10x

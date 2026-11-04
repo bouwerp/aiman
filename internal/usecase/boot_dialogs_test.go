@@ -3,6 +3,7 @@ package usecase
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +19,8 @@ import (
 // release. Only Esc was pressed to produce the *_after_esc screens. The
 // codex_splash, codex_hooks_review, codex_ready, codex_typed and
 // codex_submitted screens are Codex 0.166.0 in a fresh repository with three
-// untrusted hooks, ANSI stripped and the directory renamed.
+// untrusted hooks, ANSI stripped and the directory renamed. codex_model_gone is
+// Codex 0.166.0 launched with --model gpt-5.4-mini after that id was retired.
 func bootFixture(t *testing.T, name string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", "bootdialogs", name+".txt"))
@@ -251,6 +253,7 @@ func TestUpdateDialogPatternsWithGrep(t *testing.T) {
 		{"Skip until next version", "codex_update", "codex_after_esc"},
 		{"latest version has been released", "deepcode_update", "deepcode_after_esc"},
 		{"Hooks need review", "codex_hooks_review", "codex_ready"},
+		{"enter/esc continue", "codex_model_gone", "codex_ready"},
 	}
 	for _, c := range cases {
 		var d infraAgent.UpdateDialog
@@ -322,5 +325,93 @@ func TestCodexSplashIsNotReady(t *testing.T) {
 	out, _ = f.run("ready")
 	if got := bootOutcome(out); got != "ready:0" {
 		t.Fatalf("outcome = %q, want ready:0 for the composer with its footer", got)
+	}
+}
+
+// Codex launched on a retired model blocks on a notice. A prompt typed there
+// is lost: the text is ignored and its Return only dismisses the notice. The
+// notice offers no choice, and esc continues on the replacement model.
+func TestBootWaitSkipsCodexModelGoneWithEsc(t *testing.T) {
+	f := newFakeBoot(t)
+	f.screen["gone"] = bootFixture(t, "codex_model_gone")
+	f.screen["ready"] = bootFixture(t, "codex_ready")
+	f.next["gone/esc"] = "ready"
+	out, keys := f.run("gone")
+	if strings.Join(keys, ",") != "esc" {
+		t.Fatalf("keys = %v, want exactly one esc", keys)
+	}
+	assertNoConfirmKey(t, keys)
+	if got := bootOutcome(out); got != "update:1" {
+		t.Fatalf("outcome = %q, want update:1", got)
+	}
+}
+
+// The recorded order in an untrusted directory: trust, then the retired-model
+// notice about four seconds later. The wait has to outlast the trust answer, or
+// the prompt goes into the notice.
+func TestBootWaitKeepsPollingAfterTrust(t *testing.T) {
+	f := newFakeBoot(t)
+	f.screen["trust"] = codexTrustScreen
+	f.screen["gone"] = bootFixture(t, "codex_model_gone")
+	f.screen["ready"] = bootFixture(t, "codex_ready")
+	f.next["trust/enter"] = "gone"
+	f.next["gone/esc"] = "ready"
+	out, keys := f.run("trust")
+	if strings.Join(keys, ",") != "enter,esc" {
+		t.Fatalf("keys = %v, want enter then esc", keys)
+	}
+	if got := bootOutcome(out); got != "update:1" {
+		t.Fatalf("outcome = %q, want update:1", got)
+	}
+}
+
+// Trust text that stays on screen after the answer must not earn another Enter,
+// and the post-trust wait is short.
+func TestBootWaitAnswersTrustOnce(t *testing.T) {
+	f := newFakeBoot(t)
+	f.screen["stuck"] = "  Trust this folder?\n"
+	out, keys := f.run("stuck")
+	if strings.Join(keys, ",") != "enter" {
+		t.Fatalf("keys = %v, want one enter", keys)
+	}
+	if got := bootOutcome(out); got != fmt.Sprintf("trust:%d", bootWaitAfterTrust) {
+		t.Fatalf("outcome = %q, want trust:%d", got, bootWaitAfterTrust)
+	}
+}
+
+// A style change inside a phrase must not hide it from the boot wait. Each
+// screen has dim and colour changes inside the words a pattern looks for.
+func TestBootWaitReadsThroughStyling(t *testing.T) {
+	dim := func(s string) string { return "\x1b[2m" + s + "\x1b[22m" }
+	cases := []struct {
+		name, screen, wantKeys, wantOutcome string
+	}{
+		{"ready hint", "\n  " + dim("?") + " for " + "\x1b[38;5;8;49m" + "shortcuts\x1b[0m\n", "", "ready:0"},
+		{"trust", "\n  Do " + dim("you") + " trust this?\n", "enter", "trust:" + fmt.Sprint(bootWaitAfterTrust)},
+		{"retired model", "\n  " + dim("enter/esc") + " continue · ^c quit\n", "esc", "update:20"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeBoot(t)
+			f.screen["s"] = c.screen
+			out, keys := f.run("s")
+			got := strings.Join(keys, ",")
+			if c.wantKeys == "esc" {
+				got = strings.Split(got, ",")[0] // the fake screen never clears
+			}
+			if got != c.wantKeys {
+				t.Fatalf("keys = %v, want %q", keys, c.wantKeys)
+			}
+			if outcome := bootOutcome(out); outcome != c.wantOutcome {
+				t.Fatalf("outcome = %q, want %q", outcome, c.wantOutcome)
+			}
+		})
+	}
+}
+
+func TestMatchUpdateDialogReadsThroughStyling(t *testing.T) {
+	styled := "\n  \x1b[2menter/esc\x1b[22m continue · ^c quit"
+	if got, ok := infraAgent.MatchUpdateDialog(styled); !ok || got.Key != "esc" {
+		t.Fatalf("MatchUpdateDialog = %+v, %v", got, ok)
 	}
 }

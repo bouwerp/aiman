@@ -405,3 +405,65 @@ func ansiStrip(s string) string {
 	}
 	return b.String()
 }
+
+// Dim is how an agent marks text as not typed, so a client needs its exact
+// bytes: it opens with ESC[2m, closes with ESC[22m, and each is its own sequence.
+func TestRenderScreenKeepsDim(t *testing.T) {
+	cases := []struct {
+		name, input, want string
+	}{
+		{"part of a row", "ab\x1b[2mcd\x1b[22mef", "ab\x1b[2mcd\x1b[22mef"},
+		{"run reaching the end of a row is sealed", "ab\x1b[2mcd", "ab\x1b[2mcd\x1b[22m"},
+		{"closed by a full reset", "\x1b[2mab\x1b[0mcd", "\x1b[2mab\x1b[22mcd"},
+		{"trailing dim blanks are padding", "\x1b[2mab  \x1b[K", "\x1b[2mab\x1b[22m"},
+		{"bold and italic stay unstyled", "\x1b[1ma\x1b[22;3mb\x1b[0mc", "abc"},
+		{
+			"colour change inside a run",
+			"\x1b[2;31ma\x1b[32mb\x1b[0m",
+			"\x1b[38;5;1;49m\x1b[2ma\x1b[38;5;2;49mb\x1b[22m\x1b[0m",
+		},
+		{
+			"dim ends where a colour starts",
+			"\x1b[2ma\x1b[22;31mb\x1b[0m",
+			"\x1b[2ma\x1b[22m\x1b[38;5;1;49mb\x1b[0m",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderScreen([]byte(c.input), 40, 3); got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRenderScreenDimDoesNotLeakToTheNextRow(t *testing.T) {
+	got := RenderScreen([]byte("\x1b[2mone\r\ntwo\x1b[22m\r\nthree"), 40, 3)
+	want := "\x1b[2mone\x1b[22m\n\x1b[2mtwo\x1b[22m\nthree"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestRenderScreenKeepsDimInScrollback(t *testing.T) {
+	got := RenderScreen([]byte("\x1b[2mold\x1b[22m\r\ntwo\r\nthree"), 40, 2)
+	if !strings.HasPrefix(got, "\x1b[2mold\x1b[22m\n") {
+		t.Fatalf("scrollback lost dim: %q", got)
+	}
+}
+
+// The bytes Claude Code writes for its idle prompt suggestion, recorded from a
+// spool: pointer, NBSP, dim on, text, a cursor move with dim still on, dim off.
+func TestRenderScreenClaudeSuggestionKeepsDim(t *testing.T) {
+	suggestion := "❯\u00a0\x1b[2mTry \"fix lint errors\"\r\x1b[1B\x1b[22m"
+	got := RenderScreen([]byte(suggestion), 60, 3)
+	want := "❯\u00a0\x1b[2mTry \"fix lint errors\"\x1b[22m"
+	if got != want {
+		t.Fatalf("suggestion: got %q, want %q", got, want)
+	}
+
+	typed := "❯\u00a0fix lint errors\r\x1b[1B"
+	if got := RenderScreen([]byte(typed), 60, 3); got != "❯\u00a0fix lint errors" {
+		t.Fatalf("typed text must carry no styling: got %q", got)
+	}
+}

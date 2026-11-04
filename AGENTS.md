@@ -406,7 +406,7 @@ Key config fields:
   - serve's `session.create` with no `--agent` picks a tier: smart for a session the user starts, worker for one created inside a session (`--tier` overrides). Its model/effort land on `domain.Agent.LaunchModel/LaunchEffort`, which `ResolveLaunchDefaultsWith` layers as `agent_defaults` < repo `agent_overrides` < tier entry < role. `--tier` with `--agent`, or `--model`/`--effort` without `--agent`, is `invalid_params`.
   - Menu → Model tiers (`internal/ui/agent_preferred.go`) edits both: tabs smart/worker (tab and shift+tab in the list step), each with its own "Used for" guidance and empty-tab fallback hint; `a` agent → model (Pi: provider then type-to-filter model, listed by `pi --list-models` on the default remote via `agent.ModelCache`; others: `LaunchCatalog` plus Other) → effort; `e` edits an entry's model/effort; a listing error falls back to typing the model; `enter` saves both tiers, `esc` discards both.
 - `agents.update.mode` — `off`, `notify` or `auto` (default). Unless `off`, every launch disables the agent's own updater: `infraAgent.GuardFor` flags are added in `PrepareSession` and `skills.InteractiveLaunch(cmd, worktree, guard)`, and its env is merged in `CreatePTYSession` without overwriting keys the caller set (`PTYSpec.NoUpdateGuard` skips it). Revive takes `usecase.ReviveOptions{NoUpdateGuard}`; the dashboard passes `!cfg.AgentUpdateGuards()`, so mode off adds neither guard flags nor guard env on revive. Codex keeps `--disable in_app_updates` in every mode, because its update dialog exits the holder, and always launches with `--no-daemon`: since 0.165 Codex refuses to join the shared background server with in_app_updates disabled and exits before the composer comes up.
-- `roles.handover`: handover child agent/model/effort. `HandoverCandidates(worker)` returns entries: `roles.handover` (with its model/effort), then the worker tier entries with their models, then the worker's own agent. On `agent_switch`, `handover.write`'s `agent` (the target command) is tried first. The picked entry's model and effort reach the child's `domain.Agent`, so a worker-tier model runs the handover child. The role model and effort apply only when the role names no agent or names the one picked. With no role model and no entry model the child runs the agent's `LaunchCatalog.Cheap` model (claude `haiku`, codex `gpt-5.4-mini`, copilot `gpt-5-mini`, agy `gemini-3.7-flash-low`).
+- `roles.handover`: handover child agent/model/effort. `HandoverCandidates(worker)` returns entries: `roles.handover` (with its model/effort), then the worker tier entries with their models, then the worker's own agent. On `agent_switch`, `handover.write`'s `agent` (the target command) is tried first. The picked entry's model and effort reach the child's `domain.Agent`, so a worker-tier model runs the handover child. The role model and effort apply only when the role names no agent or names the one picked. With no role model and no entry model the child runs the agent's `LaunchCatalog.Cheap` model (claude `haiku`, codex `gpt-6-luna`, copilot `gpt-5-mini`, agy `gemini-3.7-flash-low`).
 - `review.consult_timeout`: how long a review session's consult may run without a report; default 30m (`config.DefaultReviewConsultTimeout`). Other parents' consults use `handover.timeout` (`coordinator.ConsultTimeouts`). `MarshalServeConfig` pushes it. `review.reveal {session, single}` writes `.aiman_pr_description.md` into the review's scratch directory once `review:blind` is done and every stored consult of the session has a `consult.finished` or `consult.abandoned` row; with no consult finished since the last `review.refreshed` it needs `single`. `review.refresh {session, force}` (the review session itself or the operator only) is a no-op while the PR head is unchanged unless `force`; otherwise it removes the description first, retires every running consult (`consult.abandoned` with `reason: refresh`), restages the PR worktree at the new head and reopens the blind, informed, post and gate to-dos. `review.post` refuses while `gate:review` is open, after a successful post (`review_already_posted`) until that refresh, before reveal (`review_not_ready`), while the file is incomplete (`review_incomplete`), or when the PR head moved (`review_head_moved`). APPROVE is `invalid_params` after those checks. `review.run` runs the command in the review sandbox; `review.debug` attaches editor debug ports; `review.coverage` reports changed-line coverage or `review_no_coverage`. CLI: `aiman review reveal [--single]`, `aiman review refresh [--force]`, `aiman review post <file> [--request-changes]`, `aiman review run`, `aiman review debug`, `aiman review coverage`.
 - `handover.child`: start a handover child on each handover write; unset means on. `handover.timeout`: limit for one child run; default 10m. `MarshalServeConfig` pushes both to serve.
 - `design`: `repo` (owner/name, git URL or local path of the docs repository; empty keeps pages in the session's git dir), `dir` (default `config.DefaultDesignDir`, `docs/designs`) and `site` (base URL of the rendered pages; empty asks GitHub Pages). `MarshalServeConfig` pushes it to serve.
@@ -466,6 +466,16 @@ once then takes over the connection: output streams out as raw bytes, client
 messages are framed (`internal/server/attach_framing.go`, `[len BE][kind][payload]`,
 kinds 0x01 input, 0x02 resize), which is what makes live window resize possible.
 
+**Capture attributes**: `RenderScreen` and scrollback rows carry colour and dim
+and no other text attribute. `third_party/vt10x` is a local fork (see the
+`replace` note in `go.mod`) that tracks SGR 2 on the glyph (`Glyph.Dim`); SGR 22 and
+SGR 0 clear it. `writeCells` opens a run with its own `\x1b[2m` and closes it with
+`\x1b[22m`, at the latest at the row's last cell (before any `\x1b[0m`), so dim never
+crosses a line. Claude's idle suggestion captures as `❯` NBSP
+`\x1b[2m<text>\x1b[22m`, while typed text has no SGR. Text readers go through
+`pane.StripANSI` (`Clean`, `Classify`, the composer check, notification text), so
+dim changes only the screen hash (`ScreenHash`), which costs a client one full copy.
+
 **Revive**: when a session's holder is gone (the agent exited or the host
 rebooted), attaching revives it via `usecase.ReviveIfNeeded`. The agent
 relaunches with its stored `LaunchModel`/`LaunchEffort` and its native resume
@@ -480,8 +490,15 @@ from `infraAgent.UpdateDialogs` in the bottom `UpdateDialogTailLines` rows
 `AIMAN_BOOTWAIT:<timeout|trust|ready|update>:<attempts>`. Codex's update menu
 rows start with `›`, so the update check must stay ahead of `composerReadyRe`.
 `UpdateDialogs` also holds Codex's "Hooks need review" menu, skipped with esc
-(continue without trusting). Codex's splash shows `› Ask Codex` before any
-dialog, so a Codex screen without its ` · ` model footer is not ready yet.
+(continue without trusting), and Codex's retired-model notice (`enter/esc
+continue`, with no choice to make), skipped with esc so the session continues on
+the replacement. Codex's splash shows `› Ask Codex` before any dialog, so a Codex
+screen without its ` · ` model footer is not ready yet. A trust answer is sent
+once and the loop keeps polling for up to `bootWaitAfterTrust` more rounds,
+because Codex can draw that notice after trust; the outcome stays `trust` unless
+a dialog was skipped. The shell matches the capture JSON with SGR removed
+(`captureSGRFilter`) and `MatchUpdateDialog` strips it, because a style change can
+fall inside a phrase.
 After the first Return, the submit check reads the input box (the last row
 starting with `›` or `❯`) and the rows under it, ignoring whitespace and `│`,
 because Codex and Claude draw footer rows below the box.

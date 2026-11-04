@@ -112,11 +112,13 @@ func TestCommandBase(t *testing.T) {
 	}
 }
 
+// The ids here are vendor model names that get retired. Refresh a pin from the
+// agent's own listing (`codex debug models` for Codex).
 func TestLaunchCatalogCheap(t *testing.T) {
 	cases := map[string]string{
 		"claude":       "haiku",
 		"claude-code":  "haiku",
-		"codex":        "gpt-5.4-mini",
+		"codex":        "gpt-6-luna",
 		"copilot":      "gpt-5-mini",
 		"agy":          "gemini-3.7-flash-low",
 		"grok":         "",

@@ -1,0 +1,5 @@
+
+  GPT-5.4 Mini is no longer available
+
+  Codex now uses GPT-6 Luna in place of GPT-5.4 Mini. Switch to GPT-6 Luna to continue.
+  enter/esc continue · ^c quit

@@ -125,3 +125,20 @@ func TestApplyScrollRejectsADropPastTheEnd(t *testing.T) {
 		t.Fatal("expected a drop past the end to fail")
 	}
 }
+
+// A dim change is a row change like a colour change: the hash moves and the
+// client gets that row with its styling.
+func TestReplyForPatchesADimRow(t *testing.T) {
+	prev := "one\ntwo\nthree"
+	cur := "one\n\x1b[2mtwo\x1b[22m\nthree"
+	reply := ReplyFor(prev, cur, ScreenHash(prev))
+	if reply.Hash != ScreenHash(cur) || reply.Hash == ScreenHash(prev) {
+		t.Fatalf("hash = %q", reply.Hash)
+	}
+	if len(reply.Rows) != 1 || reply.Rows[0].Index != 1 || reply.Rows[0].Line != "\x1b[2mtwo\x1b[22m" {
+		t.Fatalf("rows = %+v", reply.Rows)
+	}
+	if got, ok := ApplyScreen(prev, reply.Text, reply.Rows); !ok || got != cur {
+		t.Fatalf("applied = %q, %v", got, ok)
+	}
+}

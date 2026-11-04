@@ -15,7 +15,8 @@ const (
 )
 
 // RenderScreen replays raw PTY output through a terminal emulator and returns
-// the resulting screen as text with SGR colour, each line's styling terminated.
+// the resulting screen as text with SGR colour and dim, each line's styling
+// terminated.
 //
 // This is what makes PTY sessions comparable to tmux ones. `tmux capture-pane`
 // hands back a *rendered* screen, because tmux is itself a terminal emulator.
@@ -143,25 +144,46 @@ func renderRow(term vt10x.Terminal, y, cols int) string {
 	return b.String()
 }
 
-// writeCells emits columns 0..last with SGR colour changes, and seals the row
-// when a colour is still active.
+// SGR sequences around a dim run. A dim run is always its own sequence, never a
+// parameter of a colour sequence.
+const (
+	sgrDimOn  = "\x1b[2m"
+	sgrDimOff = "\x1b[22m"
+)
+
+// writeCells emits columns 0..last with SGR colour and dim changes, and seals
+// the row when either is still active.
 //
-// An unterminated run leaks the colour into whatever is drawn next: the rest
+// An unterminated run leaks the style into whatever is drawn next: the rest
 // of the row, the following line, or the surrounding UI when the screen is
-// embedded in a panel.
+// embedded in a panel. Dim is the only text attribute kept: it is how an agent
+// marks a composer suggestion as not typed, and a client cannot tell the two
+// apart without it.
 func writeCells(b *strings.Builder, cellAt func(int) vt10x.Glyph, last int) {
 	fg, bg := vt10x.DefaultFG, vt10x.DefaultBG
+	dim := false
 	for x := 0; x <= last; x++ {
 		cell := cellAt(x)
+		cellDim := cell.Dim()
+		if dim && !cellDim {
+			b.WriteString(sgrDimOff)
+		}
 		if cell.FG != fg || cell.BG != bg {
 			fg, bg = cell.FG, cell.BG
 			b.WriteString("\x1b[" + fgParam(fg) + ";" + bgParam(bg) + "m")
 		}
+		if cellDim && !dim {
+			b.WriteString(sgrDimOn)
+		}
+		dim = cellDim
 		ch := cell.Char
 		if ch == 0 {
 			ch = ' '
 		}
 		b.WriteRune(ch)
+	}
+	if dim {
+		b.WriteString(sgrDimOff)
 	}
 	if fg != vt10x.DefaultFG || bg != vt10x.DefaultBG {
 		b.WriteString("\x1b[0m")
