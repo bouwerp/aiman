@@ -675,7 +675,7 @@ Creating a session also starts it if `~/.aiman/aiman.sock` is missing. `aiman se
 | `i` | Install the binary if missing, enable linger, write the systemd `--user` unit, start it |
 | `s` | Start or restart |
 | `c` | Reload (restart; serve re-reads remote `~/.aiman/config.yaml`) |
-| `u` | Reinstall the latest GitHub release, then restart |
+| `u` | Reinstall the latest GitHub release, then restart. On serve this also updates `aiman-gateway` when it is installed on that host, restarting it only if it was running |
 | `ctrl+k` | Stop |
 | `t` | Install [RTK](https://github.com/rtk-ai/rtk) and register its agent hooks |
 | `a` | Open **Agents on &lt;host&gt;**: agent CLI versions and updates |
@@ -854,7 +854,7 @@ Auth is `Authorization: Bearer <token>` on every request except `GET /v1/health`
 
 The WebSocket routes also take the token as `access_token` in the query; no URL is logged. On the tailnet path, `WhoIs` must also succeed and match `gateway.allow_logins` when that list is set. Funnel supplies no identity; `--funnel` logs a warning and can be refused with `gateway.funnel: false`.
 
-Pairing: `p` on the TUI's Agent API page starts the gateway if needed, runs `aiman-gateway pair --json` on the selected remote and draws the QR. The code is single use and expires after 5 minutes. The phone redeems it with `POST /v1/pair {code, device_name}` over the tailnet and gets `{device_id, token}`. Pairing is refused on Funnel, and more than 5 bad codes in a minute lock it for the rest of that minute.
+Pairing: `p` on the TUI's Agent API page updates a gateway older than v0.25.0, starts it if needed, runs `aiman-gateway pair --json` on the selected remote and draws the QR. The code is single use and expires after 5 minutes. The phone redeems it with `POST /v1/pair {code, device_name}` over the tailnet and gets `{device_id, token}`. Pairing is refused on Funnel, and more than 5 bad codes in a minute lock it for the rest of that minute.
 
 Install from the TUI daemons tab (phone gateway row) or:
 

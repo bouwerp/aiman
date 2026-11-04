@@ -2,6 +2,9 @@ package ui
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -119,7 +122,7 @@ func fakePairRunner(t *testing.T, active, pairOut string, pairErr error) *[]pair
 		calls = append(calls, pairCall{host: host, script: script})
 		switch {
 		case strings.Contains(script, "---LOGS---"):
-			ver := "aiman-gateway v0.24.2"
+			ver := "aiman-gateway v0.25.0 (built x)"
 			if active == "missing" {
 				return "DRIVER=none\nACTIVE=inactive\nVERSION=missing\n---LOGS---\n", nil
 			}
@@ -260,5 +263,232 @@ func TestAgentAPIHelpLineListsPair(t *testing.T) {
 	m.state = viewStateAgentAPI
 	if !strings.Contains(m.renderAgentAPIView(), "p pair phone") {
 		t.Fatal("help line does not list p")
+	}
+}
+
+func TestGatewayNeedsUpdate(t *testing.T) {
+	cases := []struct {
+		version string
+		want    bool
+	}{
+		{"aiman-gateway v0.24.7 (built 2026-10-01T00:00:00Z)", true},
+		{"aiman-gateway v0.24.99", true},
+		{"aiman-gateway v0.9.0", true},
+		{"aiman-gateway v0.25.0 (built x)", false},
+		{"aiman-gateway v0.25.1", false},
+		{"aiman-gateway v1.0.0", false},
+		{"aiman-gateway dev", true},
+		{"", true},
+		{"missing", false},
+	}
+	for _, c := range cases {
+		if got := gatewayNeedsUpdate(c.version); got != c.want {
+			t.Errorf("gatewayNeedsUpdate(%q) = %v, want %v", c.version, got, c.want)
+		}
+	}
+}
+
+// fakeGatewayHost answers by script content. Each probe reports the head of
+// versions; an update moves to the next one.
+func fakeGatewayHost(t *testing.T, active string, versions []string, pairOut string) *[]string {
+	t.Helper()
+	var steps []string
+	prev := gatewayScriptRunner
+	gatewayScriptRunner = func(_ *config.Config, _, script string) (string, error) {
+		switch {
+		case strings.Contains(script, "---LOGS---"):
+			steps = append(steps, "probe")
+			return "DRIVER=systemd\nACTIVE=" + active + "\nVERSION=" + versions[0] + "\n---LOGS---\n", nil
+		case strings.Contains(script, "BINARY_NAME=aiman-gateway"):
+			steps = append(steps, "update")
+			versions = versions[1:]
+			active = "active"
+			return "", nil
+		case strings.Contains(script, "pair --json"):
+			steps = append(steps, "pair")
+			return pairOut, nil
+		default:
+			steps = append(steps, "start")
+			active = "active"
+			return "", nil
+		}
+	}
+	t.Cleanup(func() { gatewayScriptRunner = prev })
+	return &steps
+}
+
+func TestGatewayPairVersionGate(t *testing.T) {
+	const old = "aiman-gateway v0.24.7 (built x)"
+	const current = "aiman-gateway v0.25.1 (built x)"
+	cases := []struct {
+		name     string
+		active   string
+		versions []string
+		steps    string
+		wants    []string
+		rejects  []string
+	}{
+		{
+			name: "current gateway pairs directly", active: "active", versions: []string{current},
+			steps: "probe pair", wants: []string{"ABCDEFGHJK"}, rejects: []string{"Updated", "started"},
+		},
+		{
+			name: "old running gateway updates then pairs", active: "active", versions: []string{old, current},
+			steps:   "probe update probe pair",
+			wants:   []string{"ABCDEFGHJK", "Updated aiman-gateway to v0.25.1 on 10.0.1.5."},
+			rejects: []string{"Gateway started."},
+		},
+		{
+			name: "old stopped gateway reports update and start", active: "inactive", versions: []string{old, current},
+			steps: "probe update probe pair",
+			wants: []string{"ABCDEFGHJK", "Updated aiman-gateway to v0.25.1", "Gateway started."},
+		},
+		{
+			name: "unparseable version updates", active: "active", versions: []string{"aiman-gateway dev", current},
+			steps: "probe update probe pair", wants: []string{"ABCDEFGHJK", "Updated aiman-gateway to v0.25.1"},
+		},
+		{
+			name: "update that changed nothing never pairs", active: "active", versions: []string{old, old},
+			steps: "probe update probe", wants: []string{"still v0.24.7", "v0.25.0 or newer"}, rejects: []string{"Updated"},
+		},
+		{
+			name: "unparseable after update still pairs", active: "active", versions: []string{old, "aiman-gateway dev"},
+			steps: "probe update probe pair", wants: []string{"ABCDEFGHJK", "Updated aiman-gateway to the latest release"},
+		},
+		{
+			name: "missing is an install message, not an update", active: "inactive", versions: []string{"missing"},
+			steps: "probe", wants: []string{"not installed"}, rejects: []string{"Updated"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			steps := fakeGatewayHost(t, c.active, c.versions, samplePairJSON)
+			withPairClock(t, time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC))
+			m, cmd := pairPage(t)
+			m.routeRemoteServiceMsg(cmd())
+			if got := strings.Join(*steps, " "); got != c.steps {
+				t.Fatalf("steps %q, want %q", got, c.steps)
+			}
+			out := m.renderGatewayPairView()
+			for _, want := range c.wants {
+				if !strings.Contains(out, want) {
+					t.Errorf("missing %q in:\n%s", want, out)
+				}
+			}
+			for _, reject := range c.rejects {
+				if strings.Contains(out, reject) {
+					t.Errorf("unexpected %q in:\n%s", reject, out)
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayPairReportsTimeoutWithoutTheOutput(t *testing.T) {
+	out := "gateway log line ABCDEFGHJK\n" + gatewayPairTimeoutMarker + "\n"
+	fakePairRunner(t, "active", out, nil)
+	m, cmd := pairPage(t)
+	m.routeRemoteServiceMsg(cmd())
+	view := m.renderGatewayPairView()
+	if !strings.Contains(view, "aiman-gateway pair did not answer; update the gateway (u on its Daemons row)") {
+		t.Fatalf("view:\n%s", view)
+	}
+	if strings.Contains(view, "ABCDEFGHJK") {
+		t.Fatalf("view leaks pair output:\n%s", view)
+	}
+}
+
+func TestGatewayPairScriptText(t *testing.T) {
+	s := gatewayPairScript()
+	for _, want := range []string{
+		`timeout -k 5 30 "$HOME/.local/bin/aiman-gateway" pair --json --name 'phone'`,
+		"command -v timeout",
+		"124|137|143",
+		"echo " + gatewayPairTimeoutMarker,
+		"echo " + gatewayMissingMarker,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("script missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "%!") {
+		t.Fatalf("fmt error in script:\n%s", s)
+	}
+}
+
+// TestGatewayPairScriptExits runs the script under bash with a stub gateway and,
+// where the case has one, a stub timeout that takes the place of GNU timeout.
+func TestGatewayPairScriptExits(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	const pairing = "#!/bin/sh\necho '" + samplePairJSON + "'\n"
+	const runThenExit = "#!/bin/sh\nshift 3\n\"$@\"\nexit %s\n"
+	cases := []struct {
+		name     string
+		gateway  string
+		timeout  string
+		wantExit int
+		wantOut  string
+		noOut    string
+	}{
+		{name: "no gateway", wantOut: gatewayMissingMarker},
+		{name: "pair succeeds", gateway: pairing, timeout: "#!/bin/sh\nshift 3\nexec \"$@\"\n", wantOut: "ABCDEFGHJK"},
+		{name: "no timeout on the host", gateway: pairing, wantOut: "ABCDEFGHJK"},
+		{name: "timed out", gateway: pairing, timeout: strings.ReplaceAll(runThenExit, "%s", "124"), wantOut: gatewayPairTimeoutMarker, noOut: "ABCDEFGHJK"},
+		{name: "killed after timeout", gateway: pairing, timeout: strings.ReplaceAll(runThenExit, "%s", "137"), wantOut: gatewayPairTimeoutMarker, noOut: "ABCDEFGHJK"},
+		{name: "busybox timeout", gateway: pairing, timeout: strings.ReplaceAll(runThenExit, "%s", "143"), wantOut: gatewayPairTimeoutMarker, noOut: "ABCDEFGHJK"},
+		{name: "pair fails", gateway: pairing, timeout: strings.ReplaceAll(runThenExit, "%s", "3"), wantExit: 3, noOut: "ABCDEFGHJK"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			home, pathDir := t.TempDir(), t.TempDir()
+			if c.gateway != "" {
+				writeStub(t, filepath.Join(home, ".local", "bin", "aiman-gateway"), c.gateway)
+			}
+			if c.timeout != "" {
+				writeStub(t, filepath.Join(pathDir, "timeout"), c.timeout)
+			}
+			cmd := exec.Command(bash, "-c", gatewayPairScript())
+			cmd.Env = []string{"HOME=" + home, "PATH=" + pathDir}
+			out, runErr := cmd.CombinedOutput()
+			exit := 0
+			var exitErr *exec.ExitError
+			if errors.As(runErr, &exitErr) {
+				exit = exitErr.ExitCode()
+			} else if runErr != nil {
+				t.Fatalf("run: %v", runErr)
+			}
+			if exit != c.wantExit {
+				t.Fatalf("exit %d, want %d; output:\n%s", exit, c.wantExit, out)
+			}
+			if c.wantOut != "" && !strings.Contains(string(out), c.wantOut) {
+				t.Fatalf("output missing %q:\n%s", c.wantOut, out)
+			}
+			if c.noOut != "" && strings.Contains(string(out), c.noOut) {
+				t.Fatalf("output must not hold %q:\n%s", c.noOut, out)
+			}
+		})
+	}
+}
+
+func writeStub(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoteScriptPathIsUniquePerRun(t *testing.T) {
+	a, b := remoteScriptPath("user/host"), remoteScriptPath("user/host")
+	if a == b {
+		t.Fatalf("two runs share %q", a)
+	}
+	if !strings.HasPrefix(a, "/tmp/aiman-user-host-") || !strings.HasSuffix(a, ".sh") {
+		t.Fatalf("path %q", a)
 	}
 }

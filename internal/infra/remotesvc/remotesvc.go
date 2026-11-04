@@ -226,8 +226,33 @@ true
 `, unit, unit, pid, pid, pid, k.procPattern())
 }
 
+// UpdateScript installs the latest release of k and restarts it. Updating serve
+// also updates an installed aiman-gateway, so the two stay on one release.
 func UpdateScript(k Kind) string {
-	return k.InstallPipe() + "\n" + StartScript(k)
+	script := k.InstallPipe() + "\n" + StartScript(k)
+	if k == KindServe {
+		script += gatewayLockstep()
+	}
+	return script
+}
+
+// gatewayLockstep runs after serve's start, under its set -e, so a failed
+// gateway install fails the update visibly. A stopped gateway gets the new
+// binary and stays stopped. The subshell keeps the start script's exports and
+// set -e to itself.
+func gatewayLockstep() string {
+	k := KindGateway
+	return fmt.Sprintf(`if [ -x "$HOME/.local/bin/%s" ] || command -v %s >/dev/null 2>&1; then
+  gateway_running=0
+  if pgrep -f '%s' >/dev/null; then gateway_running=1; fi
+  %s
+  if [ "$gateway_running" = 1 ]; then
+    (
+%s
+    )
+  fi
+fi
+`, k.Binary(), k.Binary(), k.procPattern(), k.InstallPipe(), StartScript(k))
 }
 
 func ProbeScript(k Kind) string {
@@ -284,6 +309,9 @@ else
   echo RTK=missing
 fi`
 
+// nohupStart also kills by pattern, like leftoverCleanup: a process the pid file
+// does not name (such as a server started by a `pair` an old gateway binary did
+// not understand) would otherwise keep running the old binary.
 func nohupStart(k Kind) string {
 	bin := "$HOME/.local/bin/" + k.Binary()
 	cmd := bin
@@ -292,8 +320,9 @@ func nohupStart(k Kind) string {
 	}
 	return fmt.Sprintf(`mkdir -p "$HOME/.aiman"
 if [ -f %s ]; then kill "$(cat %s)" 2>/dev/null || true; fi
+pkill -f '%s' >/dev/null 2>&1 || true
 nohup %s >> %s 2>&1 & echo $! > %s
-`, k.PidFile(), k.PidFile(), cmd, k.LogFile(), k.PidFile())
+`, k.PidFile(), k.PidFile(), k.procPattern(), cmd, k.LogFile(), k.PidFile())
 }
 
 func ParseProbe(kind Kind, host, stdout string) domain.Daemon {

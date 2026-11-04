@@ -125,3 +125,19 @@ func TestAutoUpdateRespectsTheConfigFlag(t *testing.T) {
 		t.Error("explicitly on should update")
 	}
 }
+
+// A serve update carries the gateway, so a gateway probe landing while it runs
+// must not start a second install of the same binary.
+func TestAutoUpdateGatewayDefersToServeUpdate(t *testing.T) {
+	m := autoUpdateModel("v0.20.0")
+	m.serveUpdateAt["regent0\x00"+string(remotesvc.KindServe)] = time.Now()
+	d := runningServe("aiman-gateway v0.19.4")
+	d.Kind = string(remotesvc.KindGateway)
+	if cmd := m.maybeAutoUpdateServe(d); cmd != nil {
+		t.Fatal("gateway auto-update ran during a serve update")
+	}
+	m.serveUpdateAt["regent0\x00"+string(remotesvc.KindServe)] = time.Now().Add(-remotesvc.OpTimeout - time.Minute)
+	if cmd := m.maybeAutoUpdateServe(d); cmd == nil {
+		t.Fatal("gateway auto-update stayed blocked after the serve update window")
+	}
+}

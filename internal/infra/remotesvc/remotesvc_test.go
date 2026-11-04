@@ -1,6 +1,9 @@
 package remotesvc
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -419,5 +422,129 @@ func TestProbeServeReportsRTK(t *testing.T) {
 	st = ParseProbe(KindServe, "h", "DRIVER=systemd\nACTIVE=active\nRTK=missing\n---LOGS---\n")
 	if st.RTKVersion != "" {
 		t.Fatalf("RTK=missing gave %q", st.RTKVersion)
+	}
+}
+
+func TestUpdateScriptGatewayLockstep(t *testing.T) {
+	cases := []struct {
+		kind          Kind
+		gatewayPipes  int
+		gatewayStarts int
+	}{
+		{KindServe, 1, 1},
+		{KindGateway, 1, 1},
+		{KindTrigger, 0, 0},
+	}
+	for _, c := range cases {
+		t.Run(string(c.kind), func(t *testing.T) {
+			s := UpdateScript(c.kind)
+			if got := strings.Count(s, KindGateway.InstallPipe()); got != c.gatewayPipes {
+				t.Fatalf("%d gateway installs, want %d:\n%s", got, c.gatewayPipes, s)
+			}
+			if got := strings.Count(s, "systemctl --user start aiman-gateway.service"); got != c.gatewayStarts {
+				t.Fatalf("%d gateway starts, want %d:\n%s", got, c.gatewayStarts, s)
+			}
+		})
+	}
+	// serve is running on the new release before the gateway step can fail.
+	s := UpdateScript(KindServe)
+	if strings.Index(s, "systemctl --user start aiman-serve.service") > strings.Index(s, KindGateway.InstallPipe()) {
+		t.Fatalf("gateway step must follow serve's start:\n%s", s)
+	}
+}
+
+func TestNohupStartKillsStrayProcesses(t *testing.T) {
+	for _, k := range []Kind{KindServe, KindTrigger, KindGateway} {
+		if s := nohupStart(k); !strings.Contains(s, "pkill -f '"+k.procPattern()+"' >/dev/null 2>&1 || true") {
+			t.Fatalf("%s: nohup start leaves strays:\n%s", k, s)
+		}
+	}
+}
+
+// TestUpdateScriptsParse runs bash -n, since the lockstep nests a start script
+// with a heredoc inside a subshell.
+func TestUpdateScriptsParse(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	for _, k := range []Kind{KindServe, KindTrigger, KindGateway} {
+		if out, err := exec.Command(bash, "-n", "-c", UpdateScript(k)).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", k, err, out)
+		}
+	}
+}
+
+// TestServeUpdateRunsGatewayLockstep runs the serve update under bash with a
+// throwaway HOME. curl, pkill and pgrep are stubs, so no real process is touched
+// and nothing is downloaded. An empty HOME has no unit file, which picks the
+// nohup branch.
+func TestServeUpdateRunsGatewayLockstep(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	cases := []struct {
+		name        string
+		installed   bool
+		pgrepExit   string
+		wantInstall string
+		wantStarted bool
+	}{
+		{name: "running gateway is updated and restarted", installed: true, pgrepExit: "0", wantInstall: "aiman\naiman-gateway\n", wantStarted: true},
+		{name: "stopped gateway is updated and stays stopped", installed: true, pgrepExit: "1", wantInstall: "aiman\naiman-gateway\n"},
+		{name: "host without a gateway gets none", pgrepExit: "1", wantInstall: "aiman\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			home, stubs := t.TempDir(), t.TempDir()
+			bin := filepath.Join(home, ".local", "bin")
+			writeExe(t, filepath.Join(bin, "aiman"), "#!/bin/sh\nexit 0\n")
+			if c.installed {
+				writeExe(t, filepath.Join(bin, "aiman-gateway"), "#!/bin/sh\nexit 0\n")
+			}
+			installs := filepath.Join(home, "installs")
+			writeExe(t, filepath.Join(stubs, "curl"), "#!/bin/sh\necho 'echo \"${BINARY_NAME:-aiman}\" >> "+installs+"'\n")
+			writeExe(t, filepath.Join(stubs, "pkill"), "#!/bin/sh\nexit 0\n")
+			writeExe(t, filepath.Join(stubs, "pgrep"), "#!/bin/sh\nexit "+c.pgrepExit+"\n")
+
+			// PATH holds only what the script needs, so a real aiman-gateway on
+			// this machine cannot count as installed.
+			for _, tool := range []string{"sh", "id", "mkdir", "cat", "nohup"} {
+				real, err := exec.LookPath(tool)
+				if err != nil {
+					t.Skipf("%s not available", tool)
+				}
+				if err := os.Symlink(real, filepath.Join(stubs, tool)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(bash, "-c", UpdateScript(KindServe))
+			cmd.Env = []string{"HOME=" + home, "PATH=" + stubs}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("update: %v\n%s", err, out)
+			}
+			got, err := os.ReadFile(installs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.wantInstall {
+				t.Fatalf("installs %q, want %q", got, c.wantInstall)
+			}
+			_, statErr := os.Stat(filepath.Join(home, ".aiman", "gateway.pid"))
+			if started := statErr == nil; started != c.wantStarted {
+				t.Fatalf("gateway started = %v, want %v", started, c.wantStarted)
+			}
+		})
+	}
+}
+
+func writeExe(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }

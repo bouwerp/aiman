@@ -23,6 +23,17 @@ const gatewayPairDevice = "phone"
 // is absent, so a missing binary is told apart from a failed pair.
 const gatewayMissingMarker = "AIMAN_GATEWAY_MISSING"
 
+// gatewayPairTimeoutMarker is printed by the pair script when the pair command
+// outlives gatewayPairTimeoutSeconds.
+const gatewayPairTimeoutMarker = "AIMAN_GATEWAY_PAIR_TIMEOUT"
+
+// gatewayPairTimeoutSeconds bounds the pair command. A real pair only writes a
+// file; a binary that does not know `pair` starts a server and never returns.
+const gatewayPairTimeoutSeconds = 30
+
+// gatewayPairMinVersion is the first release with the `pair` subcommand.
+var gatewayPairMinVersion = remotesvc.Version{Major: 0, Minor: 25, Patch: 0}
+
 const (
 	// qrLevel L keeps a pairing URI at 37 modules. A screen is not damaged
 	// the way print is, so the extra recovery of M buys nothing here.
@@ -39,7 +50,10 @@ var gatewayScriptRunner = runRemoteScript
 // gatewayPairNow is the clock of the expiry countdown. Tests replace it.
 var gatewayPairNow = time.Now
 
-var errGatewayMissing = errors.New("aiman-gateway is not installed")
+var (
+	errGatewayMissing     = errors.New("aiman-gateway is not installed")
+	errGatewayPairTimeout = errors.New("aiman-gateway pair did not answer; update the gateway (u on its Daemons row)")
+)
 
 // gatewayPairResult is the output of `aiman-gateway pair --json`.
 type gatewayPairResult struct {
@@ -57,19 +71,23 @@ type gatewayPairView struct {
 	host    string
 	loading bool
 	started bool
-	result  gatewayPairResult
-	qr      []string
-	err     string
+	// updatedTo is the release the gateway was updated to before pairing, or
+	// empty when it was already current.
+	updatedTo string
+	result    gatewayPairResult
+	qr        []string
+	err       string
 	// tickQueued is set while a countdown tick is pending, so reopening the
 	// page never starts a second tick chain.
 	tickQueued bool
 }
 
 type gatewayPairMsg struct {
-	host    string
-	started bool
-	result  gatewayPairResult
-	err     error
+	host      string
+	started   bool
+	updatedTo string
+	result    gatewayPairResult
+	err       error
 }
 
 type gatewayPairTickMsg struct{}
@@ -96,49 +114,120 @@ func parseGatewayPair(out string) (gatewayPairResult, error) {
 }
 
 // gatewayPairScript mints a code. The JSON is printed only on success, so a
-// failing pair cannot put a code into an SSH error message.
+// failing pair cannot put a code into an SSH error message. timeout reports 124,
+// or 137 after -k; busybox's reports the 143 of its SIGTERM. A host without
+// timeout runs the pair unbounded, with the version gate as its only guard.
 func gatewayPairScript() string {
+	pair := fmt.Sprintf(`"$HOME/.local/bin/aiman-gateway" pair --json --name '%s'`, gatewayPairDevice)
 	return fmt.Sprintf(`bin="$HOME/.local/bin/aiman-gateway"
 if [ ! -x "$bin" ]; then echo %s; exit 0; fi
-out=$("$HOME/.local/bin/aiman-gateway" pair --json --name '%s') || exit $?
+if command -v timeout >/dev/null 2>&1; then
+  out=$(timeout -k 5 %d %s) || {
+    rc=$?
+    case "$rc" in 124|137|143) echo %s; exit 0 ;; esac
+    exit "$rc"
+  }
+else
+  out=$(%s) || exit $?
+fi
 printf '%%s\n' "$out"
-`, gatewayMissingMarker, gatewayPairDevice)
+`, gatewayMissingMarker, gatewayPairTimeoutSeconds, pair, gatewayPairTimeoutMarker, pair)
 }
 
-// gatewayPairCmd starts the gateway service on host when it is not running,
-// then mints a pairing code.
+// gatewayNeedsUpdate reports whether a probed version may lack `pair`. A version
+// with no release number is updated too, since nothing says it has the command.
+func gatewayNeedsUpdate(version string) bool {
+	if version == "missing" {
+		return false
+	}
+	v, ok := remotesvc.ParseVersion(version)
+	return !ok || v.Less(gatewayPairMinVersion)
+}
+
+func probeGateway(cfg *config.Config, host string) (domain.Daemon, error) {
+	out, err := gatewayScriptRunner(cfg, host, remotesvc.ProbeScript(remotesvc.KindGateway))
+	if err != nil {
+		return domain.Daemon{}, fmt.Errorf("probe gateway: %w", err)
+	}
+	d := remotesvc.ParseProbe(remotesvc.KindGateway, host, out)
+	if d.Version == "missing" {
+		return d, errGatewayMissing
+	}
+	return d, nil
+}
+
+// updateGateway installs the latest release and probes again, because the
+// install pipe can fail with exit 0 (curl failing into sh) and leave the old
+// binary restarted. Unparseable text after an update still goes on to the pair,
+// which the script bounds. The returned string is the release for the page.
+func updateGateway(cfg *config.Config, host string) (domain.Daemon, string, error) {
+	if _, err := gatewayScriptRunner(cfg, host, remotesvc.UpdateScript(remotesvc.KindGateway)); err != nil {
+		return domain.Daemon{}, "", fmt.Errorf("update gateway: %w", err)
+	}
+	d, err := probeGateway(cfg, host)
+	if err != nil {
+		return d, "", err
+	}
+	v, ok := remotesvc.ParseVersion(d.Version)
+	if !ok {
+		return d, "the latest release", nil
+	}
+	if v.Less(gatewayPairMinVersion) {
+		return d, "", fmt.Errorf("aiman-gateway on %s is still %s after updating; pairing needs %s or newer",
+			host, v, gatewayPairMinVersion)
+	}
+	return d, v.String(), nil
+}
+
+// prepareGateway leaves a gateway that knows `pair` running on host and records
+// on msg what it had to do.
+func prepareGateway(cfg *config.Config, host string, msg *gatewayPairMsg) error {
+	d, err := probeGateway(cfg, host)
+	if err != nil {
+		return err
+	}
+	wasRunning := d.Status == domain.DaemonStatusRunning
+	if gatewayNeedsUpdate(d.Version) {
+		d, msg.updatedTo, err = updateGateway(cfg, host)
+		if err != nil {
+			return err
+		}
+	}
+	if d.Status != domain.DaemonStatusRunning {
+		if _, err := gatewayScriptRunner(cfg, host, remotesvc.StartScript(remotesvc.KindGateway)); err != nil {
+			return fmt.Errorf("start gateway: %w", err)
+		}
+	}
+	msg.started = !wasRunning
+	return nil
+}
+
+func mintGatewayPair(cfg *config.Config, host string) (gatewayPairResult, error) {
+	out, err := gatewayScriptRunner(cfg, host, gatewayPairScript())
+	switch {
+	case err != nil:
+		return gatewayPairResult{}, fmt.Errorf("pair failed: %w", err)
+	case strings.Contains(out, gatewayMissingMarker):
+		return gatewayPairResult{}, errGatewayMissing
+	case strings.Contains(out, gatewayPairTimeoutMarker):
+		return gatewayPairResult{}, errGatewayPairTimeout
+	}
+	res, err := parseGatewayPair(out)
+	if err != nil {
+		return gatewayPairResult{}, fmt.Errorf("pair failed: %w", err)
+	}
+	return res, nil
+}
+
+// gatewayPairCmd brings the gateway on host up to a release that knows `pair`,
+// starts it when it is not running, then mints a pairing code.
 func gatewayPairCmd(cfg *config.Config, host string) tea.Cmd {
 	return func() tea.Msg {
 		msg := gatewayPairMsg{host: host}
-		out, err := gatewayScriptRunner(cfg, host, remotesvc.ProbeScript(remotesvc.KindGateway))
-		if err != nil {
-			msg.err = fmt.Errorf("probe gateway: %w", err)
+		if msg.err = prepareGateway(cfg, host, &msg); msg.err != nil {
 			return msg
 		}
-		d := remotesvc.ParseProbe(remotesvc.KindGateway, host, out)
-		if d.Version == "missing" {
-			msg.err = errGatewayMissing
-			return msg
-		}
-		if d.Status != domain.DaemonStatusRunning {
-			if _, err := gatewayScriptRunner(cfg, host, remotesvc.StartScript(remotesvc.KindGateway)); err != nil {
-				msg.err = fmt.Errorf("start gateway: %w", err)
-				return msg
-			}
-			msg.started = true
-		}
-		out, err = gatewayScriptRunner(cfg, host, gatewayPairScript())
-		switch {
-		case err != nil:
-			msg.err = fmt.Errorf("pair failed: %w", err)
-		case strings.Contains(out, gatewayMissingMarker):
-			msg.err = errGatewayMissing
-		default:
-			msg.result, msg.err = parseGatewayPair(out)
-			if msg.err != nil {
-				msg.err = fmt.Errorf("pair failed: %w", msg.err)
-			}
-		}
+		msg.result, msg.err = mintGatewayPair(cfg, host)
 		return msg
 	}
 }
@@ -207,6 +296,7 @@ func (m *Model) applyGatewayPair(msg gatewayPairMsg) (tea.Model, tea.Cmd) {
 	}
 	v.loading = false
 	v.started = msg.started
+	v.updatedTo = msg.updatedTo
 	if msg.err == nil {
 		v.qr, msg.err = qrHalfBlock(msg.result.URI)
 	}
@@ -254,6 +344,18 @@ func gatewayPairExpiry(now, expires time.Time) string {
 	return fmt.Sprintf("expires in %d:%02d", secs/60, secs%60)
 }
 
+// notes says what pairing did to the gateway on the way.
+func (v *gatewayPairView) notes() []string {
+	var notes []string
+	if v.updatedTo != "" {
+		notes = append(notes, "Updated aiman-gateway to "+v.updatedTo+" on "+v.host+".")
+	}
+	if v.started {
+		notes = append(notes, "Gateway started.")
+	}
+	return notes
+}
+
 func (m *Model) renderGatewayPairView() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
@@ -271,6 +373,9 @@ func (m *Model) renderGatewayPairView() string {
 		for _, line := range strings.Split(v.err, "\n") {
 			b.WriteString("  " + badStyle.Render(line) + "\n")
 		}
+		for _, note := range v.notes() {
+			b.WriteString("\n  " + dimStyle.Render(note) + "\n")
+		}
 	default:
 		info := []string{
 			"Scan with aiman-phone.",
@@ -283,8 +388,8 @@ func (m *Model) renderGatewayPairView() string {
 			"",
 			gatewayPairExpiry(gatewayPairNow(), v.result.ExpiresAt),
 		}
-		if v.started {
-			info = append(info, "", dimStyle.Render("Gateway started."))
+		for _, note := range v.notes() {
+			info = append(info, "", dimStyle.Render(note))
 		}
 		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, renderPairQR(v.qr), "   ", strings.Join(info, "\n")) + "\n")
 	}

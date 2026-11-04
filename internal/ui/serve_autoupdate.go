@@ -52,6 +52,13 @@ func (m *Model) maybeAutoUpdateServe(d domain.Daemon) tea.Cmd {
 	if m.serveUpdateAt == nil {
 		m.serveUpdateAt = map[string]time.Time{}
 	}
+	// A serve update in flight already carries the gateway with it.
+	if d.Kind == string(remotesvc.KindGateway) {
+		last, tried := m.serveUpdateAt[d.RemoteHost+"\x00"+string(remotesvc.KindServe)]
+		if tried && time.Since(last) < remotesvc.OpTimeout {
+			return nil
+		}
+	}
 	key := d.RemoteHost + "\x00" + d.Kind
 	if last, tried := m.serveUpdateAt[key]; tried && time.Since(last) < autoUpdateRetryAfter {
 		return nil

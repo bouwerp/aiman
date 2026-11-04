@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strings"
 	"time"
@@ -112,8 +113,14 @@ func runRemoteScript(cfg *config.Config, host, script string) (string, error) {
 	mgr := ssh.NewManager(ssh.Config{Host: r.Host, User: r.User, Root: r.Root})
 	ctx, cancel := context.WithTimeout(context.Background(), remotesvc.OpTimeout)
 	defer cancel()
-	path := fmt.Sprintf("/tmp/aiman-%s.sh", strings.ReplaceAll(r.Host, "/", "-"))
-	return execRemoteScript(mgr, ctx, path, script)
+	return execRemoteScript(mgr, ctx, remoteScriptPath(r.Host), script)
+}
+
+// remoteScriptPath is unique per run. WriteFile truncates in place and bash
+// reads a script as it runs, so a shared path would let a probe rewrite an update
+// that is still running.
+func remoteScriptPath(host string) string {
+	return fmt.Sprintf("/tmp/aiman-%s-%s.sh", strings.ReplaceAll(host, "/", "-"), rand.Text())
 }
 
 func probeRemoteServiceCmd(cfg *config.Config, host string, kind remotesvc.Kind) tea.Cmd {
@@ -273,7 +280,7 @@ func (m *Model) applyServiceOp(msg serviceOpMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(
 			m.showToast("✓  agent API updated on "+msg.host, false, 5*time.Second),
-			probeRemoteServiceCmd(m.cfg, msg.host, msg.kind),
+			m.probeAfterServiceOp(msg),
 		)
 	}
 	m.state = m.loadingNext
@@ -285,8 +292,18 @@ func (m *Model) applyServiceOp(msg serviceOpMsg) (tea.Model, tea.Cmd) {
 	toast := fmt.Sprintf("%s %s on %s", msg.op, msg.kind, msg.host)
 	return m, tea.Batch(
 		m.showToast("✓  "+toast, false, 4*time.Second),
-		probeRemoteServiceCmd(m.cfg, msg.host, msg.kind),
+		m.probeAfterServiceOp(msg),
 	)
+}
+
+// probeAfterServiceOp re-probes what the op changed. Updating serve changes the
+// gateway too (remotesvc.UpdateScript).
+func (m *Model) probeAfterServiceOp(msg serviceOpMsg) tea.Cmd {
+	probe := probeRemoteServiceCmd(m.cfg, msg.host, msg.kind)
+	if msg.kind == remotesvc.KindServe && msg.op == "update" {
+		return tea.Batch(probe, probeRemoteServiceCmd(m.cfg, msg.host, remotesvc.KindGateway))
+	}
+	return probe
 }
 
 func (m *Model) runSelectedServiceOp(op, loading string) (tea.Model, tea.Cmd, bool) {

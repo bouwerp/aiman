@@ -208,10 +208,10 @@ Admin Menu (`m`) → **Agent API** is the settings page for `aiman serve` (one r
 | `i` | Install/enable (linger first, then the unit) |
 | `s` | Start or restart |
 | `c` | Reload (restart; serve re-reads remote `~/.aiman/config.yaml`) |
-| `u` | Update binary from GitHub, then restart |
+| `u` | Update binary from GitHub, then restart. Updating serve (`u` or auto-update) also updates `aiman-gateway` when it is installed on that host, restarting it only if it was running |
 | `ctrl+k` | Stop |
 | `t` | Install RTK and register its agent hooks (`internal/infra/rtk`) |
-| `p` | Pair a phone: start `aiman-gateway` if needed, run `aiman-gateway pair --json`, draw the QR (`internal/ui/gateway_pair.go`) |
+| `p` | Pair a phone: update `aiman-gateway` first when it is older than v0.25.0 (no `pair` subcommand) or reports no release number, start it if needed, run `aiman-gateway pair --json` under `timeout 30`, draw the QR (`internal/ui/gateway_pair.go`) |
 | `r` | Probe driver/status/version/socket/logs |
 
 `t` runs `rtk.InstallScript` under `remotesvc.OpTimeout` and reports an `rtkInstallMsg`, routed in `Update` next to `serviceOpMsg`; the model then re-probes serve. The serve probe prints `RTK=<version>` into `Daemon.RTKVersion`, which the page shows as `RTK: <version>` or `RTK: not installed (t to install)`. Hooks are registered only for `rtk.HookTargets` (Claude, Codex, Cursor, Gemini, Copilot, Pi). The `$` usage view runs `rtk.FetchGain` per host and appends `rtkGainLine` to `usageHost.extra`. Never run plain `rtk gain`: without `--format json` it can open a live dashboard. Never export `RTK_VERSION` into the install script's environment; RTK's `install.sh` reads it as a version pin.
