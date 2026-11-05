@@ -1,6 +1,7 @@
 package agenthook
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,12 +27,24 @@ type InstallResult struct {
 	Action string
 }
 
-// EnsureOnHost writes the session reporter and the to-do reporter and, when an
-// agent config directory already exists, registers that agent's hooks. Missing
-// agent dirs are skipped so unused tools are not given a config file. Ageni is
-// not installed: it has no hook system.
+// Options selects the optional parts of EnsureOnHostWith.
+type Options struct {
+	// BeforePR installs the verify gate on Claude's PR creation.
+	BeforePR bool
+	// ClaudeStatusline wraps Claude's status line; off restores it.
+	ClaudeStatusline bool
+}
+
+// EnsureOnHost is EnsureOnHostWith with only the before-PR option.
 func EnsureOnHost(home string, beforePR ...bool) ([]InstallResult, error) {
-	policy := len(beforePR) > 0 && beforePR[0]
+	return EnsureOnHostWith(home, Options{BeforePR: len(beforePR) > 0 && beforePR[0]})
+}
+
+// EnsureOnHostWith writes the session reporter and the to-do reporter and, when
+// an agent config directory already exists, registers that agent's hooks.
+// Missing agent dirs are skipped so unused tools are not given a config file.
+// Ageni is not installed: it has no hook system.
+func EnsureOnHostWith(home string, opts Options) ([]InstallResult, error) {
 	var out []InstallResult
 	var first error
 	record := func(res InstallResult, err error) {
@@ -49,13 +62,13 @@ func EnsureOnHost(home string, beforePR ...bool) ([]InstallResult, error) {
 	script := reporterPath(home)
 	record(ensureHookScript(script, reporterScript))
 	record(ensureHookScript(todoReporterPath(home), hookScript("todo report --from-stdin")))
-	if policy {
+	if opts.BeforePR {
 		record(ensureHookScript(gatePath(home), verifyGateScript))
 	} else if err := os.Remove(gatePath(home)); err != nil && !os.IsNotExist(err) {
 		record(InstallResult{}, err)
 	}
 	record(ensureDeepcodeLauncher(home))
-	record(ensureClaude(home, script, policy))
+	record(ensureClaude(home, script, opts))
 	record(ensureGrok(home, script, todoReporterPath(home)))
 	record(ensureCursor(home, script))
 	record(ensureCodex(home, script))
@@ -67,25 +80,58 @@ func EnsureOnHost(home string, beforePR ...bool) ([]InstallResult, error) {
 	return out, first
 }
 
-func ensureClaude(home, command string, beforePR bool) (InstallResult, error) {
+// aimanBin is the binary the status line wrapper records through: the running
+// one while its path still exists, else the install path.
+func aimanBin(home string) string {
+	if exe, err := os.Executable(); err == nil {
+		if _, err := os.Stat(exe); err == nil {
+			return exe
+		}
+	}
+	return filepath.Join(home, ".local", "bin", "aiman")
+}
+
+// ensureClaude folds the hook and status line edits into one settings write. A
+// status line failure is returned after the other hook changes are written.
+func ensureClaude(home, command string, opts Options) (InstallResult, error) {
 	dir := filepath.Join(home, ".claude")
 	if !isDir(dir) {
 		return InstallResult{}, nil
 	}
 	todo := todoReporterPath(home)
-	return upsertJSONFile(filepath.Join(dir, "settings.json"), func(root map[string]any) bool {
+	var statusErr error
+	editStatusLine := UnwrapStatusLine
+	if opts.ClaudeStatusline {
+		editStatusLine = WrapStatusLine
+		if _, err := WriteStatusLineWrapper(home, aimanBin(home)); err != nil {
+			statusErr = err
+			editStatusLine = nil
+		}
+	}
+	res, err := upsertJSONFile(filepath.Join(dir, "settings.json"), func(root map[string]any) bool {
 		identity := upsertIdentityHooks(root, command)
 		compact := upsertCompactHook(root, command)
 		turns := upsertTurnHooks(root, command)
 		todos := upsertTodoHook(root, todo, claudeTodoMatcher)
 		gate := false
-		if beforePR {
+		if opts.BeforePR {
 			gate = upsertPreToolUseHook(root, gatePath(home))
 		} else {
 			gate = removePreToolUseHook(root)
 		}
-		return identity || compact || turns || todos || gate
+		status := false
+		if editStatusLine != nil {
+			status, statusErr = editStatusLine(home, root)
+		}
+		return identity || compact || turns || todos || gate || status
 	})
+	// On any error settings may still point at the script, so it stays.
+	if !opts.ClaudeStatusline && err == nil && statusErr == nil {
+		if rerr := os.Remove(statusLineScriptPath(home)); rerr != nil && !os.IsNotExist(rerr) {
+			statusErr = rerr
+		}
+	}
+	return res, errors.Join(err, statusErr)
 }
 
 func ensureGrok(home, command, todoReporter string) (InstallResult, error) {

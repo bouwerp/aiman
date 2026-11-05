@@ -60,8 +60,6 @@ type Config struct {
 	Warnings []string `yaml:"-"`
 }
 
-// ServeConfig is the subset of settings used by aiman serve on a remote host.
-// It excludes remotes because they describe the machine that runs the TUI.
 // LimitsConfig configures how serve reads provider limits.
 type LimitsConfig struct {
 	// ClaudeStatusline wraps the user's Claude Code status line so its rate limits
@@ -69,6 +67,8 @@ type LimitsConfig struct {
 	ClaudeStatusline bool `yaml:"claude_statusline,omitempty"`
 }
 
+// ServeConfig is the subset of settings used by aiman serve on a remote host.
+// It excludes remotes because they describe the machine that runs the TUI.
 type ServeConfig struct {
 	Limits        LimitsConfig             `yaml:"limits,omitempty"`
 	Integrations  Integrations             `yaml:"integrations"`
@@ -314,6 +314,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		return yaml.Marshal(ServeConfig{})
 	}
 	return yaml.Marshal(ServeConfig{
+		Limits:        c.Limits,
 		Integrations:  c.Integrations,
 		Git:           c.Git,
 		Skills:        c.Skills,
