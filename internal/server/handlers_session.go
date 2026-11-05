@@ -159,6 +159,13 @@ func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.Agen
 		}
 	}
 	r := pane.Classify(obs)
+	// The rules saw recent output and nothing they recognise. With a turn still
+	// open that is the turn running; when the output stops, the rules' silence
+	// check answers instead, so an agent that died without a stop hook still
+	// settles.
+	if r.State == domain.AgentStateUnknown && obs.SinceOutput >= 0 && agenthook.TurnOpen(live) {
+		return domain.AgentStateWorking, pane.High
+	}
 	s.recordUncertainPane(ctx, live, screen, r)
 	return r.State, r.Confidence
 }

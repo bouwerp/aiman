@@ -249,6 +249,14 @@ func ResolveHookState(s domain.Session, now time.Time) (domain.AgentState, bool)
 	}
 }
 
+// TurnOpen reports that the last lifecycle report started a turn and nothing has
+// ended it. Hooks fire only at the start and end of a turn, so this stays true
+// past hookTTL during a long one. It says nothing about whether the agent is
+// still alive; the caller has to supply that evidence.
+func TurnOpen(s domain.Session) bool {
+	return !s.AgentEnded && s.HookState == domain.AgentStateWorking && s.HookStateSource == SourceLifecycle
+}
+
 func (r Report) empty() bool {
 	return r.ID == "" && r.Path == "" && r.State == "" && r.Title == "" && !r.Ended
 }

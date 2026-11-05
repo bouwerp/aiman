@@ -7,9 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/pane"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/ptyruntime/ptyfake"
 )
 
 func logRepo(t *testing.T) *sqlite.Repository {
@@ -291,5 +294,59 @@ func TestUncertainPaneRecordedOncePerPane(t *testing.T) {
 	}
 	if _, ok := p["pane"]; ok {
 		t.Fatal("payload must not carry pane text")
+	}
+}
+
+// A long turn outlives its hook report: hooks fire only at the start and end of
+// a turn. Output still arriving with no stop reported means the turn is running,
+// whatever the screen looks like.
+func TestClassifyOpenTurnPastHookTTL(t *testing.T) {
+	stale := time.Now().Add(-10 * time.Minute)
+	recently := time.Now().Add(-time.Second)
+	silentAgo := time.Now().Add(-time.Hour)
+	const noMarker = "reading the repository\nsome output with no recognisable marker"
+	for _, tc := range []struct {
+		name       string
+		hookState  domain.AgentState
+		source     string
+		screen     string
+		lastOutput time.Time
+		want       domain.AgentState
+		wantConf   pane.Confidence
+		wantLogged int
+	}{
+		{name: "open turn, output arriving", hookState: domain.AgentStateWorking, source: agenthook.SourceLifecycle,
+			screen: noMarker, lastOutput: recently, want: domain.AgentStateWorking, wantConf: pane.High},
+		{name: "open turn gone silent is idle, as a crash without a stop hook must be", hookState: domain.AgentStateWorking, source: agenthook.SourceLifecycle,
+			screen: noMarker, lastOutput: silentAgo, want: domain.AgentStateIdle, wantConf: pane.High},
+		{name: "a question outranks the open turn", hookState: domain.AgentStateWorking, source: agenthook.SourceLifecycle,
+			screen: "Do you want to proceed?\n❯ 1. Yes\n  2. No", lastOutput: recently, want: domain.AgentStateWaitingInput, wantConf: pane.High},
+		{name: "last report was idle, so output proves nothing", hookState: domain.AgentStateIdle, source: agenthook.SourceLifecycle,
+			screen: noMarker, lastOutput: recently, want: domain.AgentStateUnknown, wantConf: pane.Low, wantLogged: 1},
+		{name: "no hook ever", screen: noMarker, lastOutput: recently, want: domain.AgentStateUnknown, wantConf: pane.Low, wantLogged: 1},
+		{name: "output time unknown", hookState: domain.AgentStateWorking, source: agenthook.SourceLifecycle,
+			screen: noMarker, want: domain.AgentStateUnknown, wantConf: pane.Low, wantLogged: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := logRepo(t)
+			pty := ptyfake.New()
+			pty.Add(ptyruntime.SessionInfo{ID: "s1", Name: "s1", LastOutput: tc.lastOutput})
+			pty.SetScreen("s1", tc.screen)
+			s := &Server{repo: repo, pty: pty}
+			sess := domain.Session{ID: "s1", AgentName: "grok", Backend: domain.BackendPTY,
+				HookState: tc.hookState, HookStateSource: tc.source, HookStateAt: stale}
+			got, conf := s.classify(ctx, sess)
+			if got != tc.want || conf != tc.wantConf {
+				t.Fatalf("classify = %s/%v, want %s/%v", got, conf, tc.want, tc.wantConf)
+			}
+			events, err := repo.ListSessionEvents(ctx, "s1", 0, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != tc.wantLogged {
+				t.Fatalf("logged %d uncertain panes, want %d", len(events), tc.wantLogged)
+			}
+		})
 	}
 }
