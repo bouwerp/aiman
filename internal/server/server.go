@@ -20,6 +20,7 @@ import (
 	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/hoststats"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/limits"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
@@ -163,6 +164,8 @@ type Server struct {
 	restart RestartDeps
 	// hostStats samples /proc for host.stats, on its first call.
 	hostStats *hoststats.Sampler
+	// limits caches each provider's remaining allowance; nil until SetLimits.
+	limits *limits.Manager
 	// holderHeld overrides heldByHolder, so tests can fake a holder.
 	holderHeld func(pid int) bool
 
@@ -397,8 +400,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleContextStats(ctx, req)
 	case "context.verify":
 		return s.handleContextVerify(ctx, req)
-	case "usage.get":
-		return s.handleUsageGet(ctx, req)
+	case "usage.get", "limits.get":
+		return s.dispatchUsage(ctx, req)
 	case "agents.status":
 		return s.handleAgentsStatus(ctx, req)
 	case "agents.update":

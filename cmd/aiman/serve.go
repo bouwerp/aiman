@@ -29,6 +29,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/skills"
 	"github.com/bouwerp/aiman/internal/infra/slack"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
+	"github.com/bouwerp/aiman/internal/limits"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
@@ -146,6 +147,9 @@ func runServe() error {
 		Now:    time.Now,
 	}
 	srv.EnableUsage(ctx, tracker, rep)
+	limitsManager := limits.NewManager(limits.DefaultSources(limits.HostEnv(), cfg.Limits.ClaudeStatusline), time.Now)
+	defer limitsManager.Close()
+	srv.SetLimits(limitsManager)
 
 	// notifications
 	n := cfg.Notifications
@@ -396,6 +400,7 @@ aiman session deepcode-watch. Resume is deepcode --resume <uuid>.
 Model and effort are DEEPCODE_MODEL and DEEPCODE_REASONING_EFFORT.
 Permissions stay the user's defaultMode. Ageni is not hooked.
 usage.get reports token totals from Claude and Codex transcripts.
+limits.get reports what each provider's allowance or balance has left.
 It watches the PR of each session with watch_pr on (the default for
 autonomous sessions) and steers failed checks and review comments.
 verify.start runs a hidden reviewer from a different agent on a snapshot
