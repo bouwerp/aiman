@@ -72,7 +72,7 @@ func fakeGrok(t *testing.T, dir, body string) string {
 	script := fmt.Sprintf(`#!/bin/bash
 stty raw -echo 2>/dev/null
 draw() { printf '\033[2J\033[H'; sed 's/$/\r/' "$1"; }
-key() { IFS= read -r -n1 -d '' c || exit 0; printf '%%s' "$c" >> %q/input.log; }
+key() { c=$(dd bs=1 count=1 2>/dev/null; printf x); c=${c%%x}; [ -n "$c" ] || exit 0; printf '%%s' "$c" >> %q/input.log; }
 until_enter() { while key; do [ "$c" = $'\r' ] && return; done; }
 TRUST=%q; COMPOSER=%q; USAGE=%q
 env > %q/env.log
@@ -139,9 +139,10 @@ func pidAlive(pid int) bool {
 	if err := syscall.Kill(pid, 0); err != nil {
 		return false
 	}
+	// A process vanishing mid-read gives ESRCH, not ENOENT: both mean it is gone.
 	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
-		return err != nil && !os.IsNotExist(err)
+		return false
 	}
 	f := strings.Fields(string(raw))
 	return len(f) > 2 && f[2] != "Z"
