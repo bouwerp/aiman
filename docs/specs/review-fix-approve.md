@@ -1,6 +1,6 @@
 # review-fix-approve: review agents that get findings fixed and PRs approved
 
-**Revision:** 3 · **Size:** project · **Status:** approved
+**Revision:** 4 · **Size:** project · **Status:** as built, v0.27.0
 **Task:** operator request, 2026-11-05 · **Reverses:** two non-goals of `docs/superpowers/specs/2026-10-30-review-mode-design.md` ("never pushes to the PR branch", "the agent never approves a PR")
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
@@ -292,6 +292,11 @@ None.
 | Copilot PRs also refuse approval from the assigner | low | accept | GitHub's refusal maps to `review_own_pr` |
 | A visible fixer looks like a duplicate review in the TUI | low | accept | Meta line shows `fix #n` |
 | Residual risk: an agent with host credentials can still run `git push <url>` or `gh pr review --approve` itself | medium | defer | Serve cannot stop a process on the same account. Skill rules forbid it, as they already do. `agenthook.GuardsPRCreate` shows a hook route for some agents; separate piece of work |
+| P3 consult: lock dropped gates in `GuardGate`, leave `ClampGate` alone | medium | accept | Applies to every gate; see Deviations |
+| P3 report: the assessor reads a file the review agent can write | high | accept | Serve generates the diff from the head SHA; see Deviations |
+| P2 consult: `skillRoots`, `restartRoot` and the restart trust block must skip a fixer | high | accept | Done in P2 |
+| P2 consult: change-directory, TUI overlays and verify-before-PR must know about a fixer | high | accept | Done in P4 |
+| P2 consult: `restartKit` matches checklists against the fix tree | low | defer | A read-only glob |
 
 ## Breakdown
 
@@ -305,6 +310,29 @@ Acceptance tests are committed on this branch before the first child starts.
 | P4 Surface: CLI, openapi, allowlist, skill, AGENTS.md, prompt, evals | `cmd/aiman`, `api/openapi.yaml`, `internal/gateway/allowlist.go`, `internal/aimanskill/SKILL.md`, `AGENTS.md`, `internal/review/prompt.go`, `evals/` | C | P2, P3 | M | worker | `make ci`, `make eval` |
 
 No phone work: the app has no gate button yet, and `review.fix`, `review.push`, `review.assess` and `review.approve` stay off the device allowlist. Release as v0.27.0, serve only.
+
+## As built
+
+Released as v0.27.0. PRs #70 (P1), #71 (P2), #72 (P3), #73 (P4).
+
+### Deviations from the approved design
+
+- **The assessor's diff comes from the head commit.** The design had the assessment read the review's own `.aiman_review/diff.patch`. The review agent can write to that directory, so serve now generates `diff.patch` into the consult's directory from the staged head SHA against its merge base with the PR's base branch, ignoring replace refs, external diff drivers and textconv.
+- **A dropped gate is locked for sessions.** `todo.GuardGate` protected only an open gate, so after the operator dropped `gate:approve` a session could mark it done and `review.approve` would post. It now also refuses a session's change to a dropped gate. This applies to `gate:design` and `gate:review` too: the operator reopens a dropped gate.
+- **An approval that carried the inline comments ticks `review:post`,** so a later `review.post` cannot send them twice.
+- **A new ledger kind, `review.assess_started`,** names the assessing agent after its consult's row is forgotten.
+- **`skillRoots`, `restartRoot` and the restart trust block skip a fixer.** Otherwise a serve restart writes the skill into the fix tree, which makes `review.push` refuse it.
+- **A fix containing a binary file refreshes in full,** because its size cannot be judged.
+
+### Known limits
+
+- Not run against real Docker, a real SSH host or a real GitHub push. The tests use real git against a local upstream with fake GitHub and Docker.
+- `origin/<base>` is a ref an agent can move. Moved to the head, it gives the assessor an empty diff, which is not refused.
+- If saving state fails after GitHub accepts an approval, a retry posts a second APPROVE. The call says the PR is approved on GitHub.
+- A fixer the tracker retires logs `session.ended` with reason `consult_finished`, because it reuses `RetireConsult`.
+- If someone drops a fixer's to-do, nothing times that fixer out, and it holds `review_fix_running` until its agent ends.
+- The tracker reads sessions once and each to-do list later, so a consult linked in between can be unlinked and later swept without a `consult.abandoned` row. `review.approve` then says `review_not_assessed` without saying why. It can block an approval, not allow a wrong one. Traced in code, not reproduced.
+- `counts: false` reaches the operator only through the agent, as the skill instructs. Serve sends no notification.
 
 ## What you should be able to explain after reading
 
