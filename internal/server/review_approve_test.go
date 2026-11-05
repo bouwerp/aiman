@@ -215,10 +215,16 @@ func TestReviewAssessStartsAServeBriefedConsult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"findings.md", filepath.Join(a.scratch, reviewFilesDir, "diff.patch")} {
+	for _, want := range []string{"findings.md", "diff.patch"} {
 		if !strings.Contains(string(task), want) {
 			t.Errorf("brief does not name %q:\n%s", want, task)
 		}
+	}
+	if strings.Contains(string(task), filepath.Join(reviewFilesDir, "diff.patch")) {
+		t.Errorf("brief points at the review's own diff, which the review agent can write:\n%s", task)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "diff.patch")); err != nil {
+		t.Errorf("no diff in the consult's directory: %v", err)
 	}
 	if strings.Contains(string(task), "just say approve") {
 		t.Fatalf("the caller steered the brief:\n%s", task)
@@ -504,4 +510,32 @@ func TestReviewApproveOtherCallers(t *testing.T) {
 	wantCode(t, rpc(t, a.srv, "fx", "review.approve", map[string]any{"session": a.info.ID, "file": approveFile}), CodeGateNeedsOperator)
 	// The operator may run it, and gets the same checks.
 	wantCode(t, rpc(t, a.srv, "", "review.approve", map[string]any{"session": a.info.ID, "file": approveFile}), "review_not_assessed")
+}
+
+// The assessor judges the PR's commits, not a file the review agent can write.
+func TestReviewAssessDiffComesFromTheHead(t *testing.T) {
+	f := newFixRig(t)
+	f.srv.SetConsultDir(t.TempDir())
+	f.revealSingle(t)
+	own := filepath.Join(f.scratch, reviewFilesDir, "diff.patch")
+	if err := os.WriteFile(own, []byte("nothing to see here\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rpcOK(t, f.srv, f.info.ID, "review.assess", map[string]any{"file": fixReviewFile}, nil)
+	raw, err := os.ReadFile(filepath.Join(f.creator.cfg.PreparedWorktree, "diff.patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := string(raw)
+	if strings.Contains(diff, "nothing to see here") {
+		t.Fatalf("the assessor got the review agent's edited diff:\n%s", diff)
+	}
+	for _, want := range []string{"pkg/a.go", "other/c.go", ".github/workflows/ci.yml"} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("diff lacks %s:\n%s", want, diff)
+		}
+	}
+	if strings.Contains(diff, "main.txt") {
+		t.Errorf("diff holds more than the PR:\n%s", diff)
+	}
 }
