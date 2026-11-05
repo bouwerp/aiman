@@ -8,26 +8,39 @@ import (
 	"testing"
 )
 
-func TestKeysPiCommandIsNeverSentOrRun(t *testing.T) {
-	for _, value := range []string{"!cat ~/.secret", "!", "   "} {
-		env := testEnv(t)
+func openRouterEnvKey(k string) string {
+	if k == "OPENROUTER_API_KEY" {
+		return "sk-or-FROMENV"
+	}
+	return ""
+}
+
+func TestKeysPiCommandIsNeverRunSentOrReplacedByEnv(t *testing.T) {
+	const command = "!cat ~/.secret"
+	for _, value := range []string{command, "  " + command, "!"} {
+		env := testEnv(t) // Its Run and Transport fail the test if touched.
+		env.Getenv = openRouterEnvKey
 		writeFile(t, filepath.Join(env.Home, ".pi/agent/auth.json"),
 			`{"openrouter":{"type":"api_key","key":"`+value+`"}}`)
-		if r := NewOpenRouterSource(env).Read(context.Background()); r.State != StateUnavailable {
+		r := NewOpenRouterSource(env).Read(context.Background())
+		if r.State != StateUnknown || r.Reason != "key is a command" {
 			t.Fatalf("key %q: %+v", value, r)
 		}
-		env.Getenv = func(k string) string {
-			if k == "OPENROUTER_API_KEY" {
-				return "sk-or-FROMENV"
-			}
-			return ""
-		}
-		rt := &recordTransport{fn: func(*http.Request) (int, http.Header, string) { return 200, nil, `{"data":{"limit_remaining":1}}` }}
-		env.Transport = rt
-		NewOpenRouterSource(env).Read(context.Background())
-		if len(rt.reqs) != 1 || rt.reqs[0].Header.Get("Authorization") != "Bearer sk-or-FROMENV" {
-			t.Fatalf("key %q: environment fallback not used", value)
-		}
+	}
+}
+
+func TestKeysBlankPiKeyFallsBackToEnv(t *testing.T) {
+	env := testEnv(t)
+	writeFile(t, filepath.Join(env.Home, ".pi/agent/auth.json"), `{"openrouter":{"type":"api_key","key":"   "}}`)
+	if r := NewOpenRouterSource(env).Read(context.Background()); r.State != StateUnavailable {
+		t.Fatalf("no env: %+v", r)
+	}
+	env.Getenv = openRouterEnvKey
+	rt := &recordTransport{fn: func(*http.Request) (int, http.Header, string) { return 200, nil, `{"data":{"limit_remaining":1}}` }}
+	env.Transport = rt
+	NewOpenRouterSource(env).Read(context.Background())
+	if len(rt.reqs) != 1 || rt.reqs[0].Header.Get("Authorization") != "Bearer sk-or-FROMENV" {
+		t.Fatal("environment fallback not used")
 	}
 }
 

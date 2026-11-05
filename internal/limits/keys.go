@@ -31,6 +31,10 @@ const (
 // run commands from a settings file.
 const piCommandPrefix = "!"
 
+// errKeyIsCommand is a configured key serve refuses to resolve. The environment
+// is not tried, because its key may be a different account from the one Pi spends.
+var errKeyIsCommand = errors.New("key is a command")
+
 // source is the shared shape of the sources in this file's group.
 type source struct {
 	name    string
@@ -145,9 +149,9 @@ func readKeyFile(path string, out any) bool {
 }
 
 // openRouterKey reads .openrouter.key from Pi's auth file only for an api_key
-// entry holding a literal key, else OPENROUTER_API_KEY. No other entry in that
-// file is ever decoded, so another vendor's key cannot be picked.
-func openRouterKey(env Env) string {
+// entry, else OPENROUTER_API_KEY. No other entry in that file is ever decoded, so
+// another vendor's key cannot be picked.
+func openRouterKey(env Env) (string, error) {
 	var auth struct {
 		OpenRouter struct {
 			Type string `json:"type"`
@@ -156,11 +160,14 @@ func openRouterKey(env Env) string {
 	}
 	if readKeyFile(filepath.Join(env.Home, ".pi", "agent", "auth.json"), &auth) && auth.OpenRouter.Type == "api_key" {
 		key := strings.TrimSpace(auth.OpenRouter.Key)
-		if key != "" && !strings.HasPrefix(key, piCommandPrefix) {
-			return key
+		if strings.HasPrefix(key, piCommandPrefix) {
+			return "", errKeyIsCommand
+		}
+		if key != "" {
+			return key, nil
 		}
 	}
-	return strings.TrimSpace(env.Getenv("OPENROUTER_API_KEY"))
+	return strings.TrimSpace(env.Getenv("OPENROUTER_API_KEY")), nil
 }
 
 // deepSeekKey reads .env.API_KEY from Deep Code's settings only when .env.BASE_URL

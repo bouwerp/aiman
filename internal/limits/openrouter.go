@@ -26,7 +26,10 @@ func NewOpenRouterSource(env Env) Source {
 }
 
 func readOpenRouter(ctx context.Context, env Env) Reading {
-	key := openRouterKey(env)
+	key, err := openRouterKey(env)
+	if err != nil {
+		return unknownReading(openRouterName, err.Error())
+	}
 	if key == "" {
 		return unavailableReading(openRouterName)
 	}
