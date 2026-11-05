@@ -17,6 +17,10 @@ type IssueProvider interface {
 // an operation was asked to fetch from.
 var ErrOriginMismatch = errors.New("origin does not match the repository")
 
+// ErrPushRejected is returned when git refuses a plain push because the branch
+// holds commits the pushed commit does not contain.
+var ErrPushRejected = errors.New("push rejected: the branch moved")
+
 // RepositoryManager manages git repositories and worktrees.
 type RepositoryManager interface {
 	ListRepos(ctx context.Context) ([]Repo, error)

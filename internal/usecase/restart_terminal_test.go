@@ -156,6 +156,28 @@ func TestRestartReviewNeverTrustsPRWorktree(t *testing.T) {
 	}
 }
 
+func TestRestartFixerNeverTrustsFixTree(t *testing.T) {
+	remote := &recordingTerminal{}
+	s := &domain.Session{
+		ID: "sess-5", TerminalName: "pr-7-fix", Backend: domain.BackendPTY, FixPR: "o/r#7",
+		WorktreePath: "/home/u/.aiman/pr-reviews/sess-5/tree", WorkingDirectory: "/home/u/.aiman/pr-reviews/sess-5/work",
+	}
+	if got := restartRoot(*s, s.WorkingDirectory); got != s.WorkingDirectory {
+		t.Fatalf("restart root %q, want the scratch directory", got)
+	}
+	err := restartTerminal(context.Background(), remote, s, restartTerminalSpec{
+		WorkingDir:   s.WorkingDirectory,
+		WorktreeRoot: s.WorktreePath,
+		AgentCmd:     "claude",
+	})
+	if err != nil {
+		t.Fatalf("restartTerminal: %v", err)
+	}
+	if got := remote.all(); strings.Contains(got, "sess-5/tree") {
+		t.Fatalf("restart touched the fix tree:\n%s", got)
+	}
+}
+
 // A restart whose working directory lies in a PR checkout (a discovered
 // orphan, or a changed directory) runs nothing at all.
 func TestRestartRefusesPRWorktreeDir(t *testing.T) {

@@ -69,6 +69,14 @@ func (f *fakePRWorktrees) SetupRemotePRWorktree(_ context.Context, _ domain.Remo
 	return domain.Worktree{Path: path, Base: base}, nil
 }
 
+func (f *fakePRWorktrees) SetupFixTree(context.Context, domain.RemoteExecutor, domain.Repo, int, string, string) error {
+	return f.err
+}
+
+func (f *fakePRWorktrees) PushFixTree(context.Context, domain.RemoteExecutor, domain.Repo, string, string, string) error {
+	return f.err
+}
+
 type reviewRig struct {
 	srv       *Server
 	creator   *fakeCreator

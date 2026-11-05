@@ -44,10 +44,7 @@ func (s *Server) handleReviewRun(ctx context.Context, req Request) Response {
 	if p.TimeoutSeconds < 0 {
 		return errResp(req.ID, CodeInvalidParams, "timeout_seconds must be >= 0")
 	}
-	rp := reviewCall{Session: p.Session}
-	raw, _ := json.Marshal(rp)
-	req.Params = raw
-	t, fail := s.resolveReview(ctx, req)
+	sess, fail := s.resolveReviewRun(ctx, req, p.Session)
 	if fail != nil {
 		return *fail
 	}
@@ -56,7 +53,12 @@ func (s *Server) handleReviewRun(ctx context.Context, req Request) Response {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	sb, err := s.sandboxFor(t.sess)
+	if sess.FixPR != "" {
+		if err := s.exportFixTree(ctx, sess); err != nil {
+			return errResp(req.ID, CodeCreateFailed, err.Error())
+		}
+	}
+	sb, err := s.sandboxFor(sess)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
@@ -64,21 +66,46 @@ func (s *Server) handleReviewRun(ctx context.Context, req Request) Response {
 	if err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
-	n, err := s.logReviewRun(t.sess, p.Cmd, exit, out)
+	n, err := s.logReviewRun(sess, p.Cmd, exit, out)
 	if err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
-	s.appendEvent(ctx, t.sess.ID, domain.EventActorAiman, domain.EventReviewRun, map[string]any{"n": n, "exit": exit})
+	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventReviewRun, map[string]any{"n": n, "exit": exit})
 	return Response{ID: req.ID, Result: map[string]any{
 		"type": "review_run", "output": out, "exit": exit, "n": n,
 	}}
+}
+
+// resolveReviewRun finds the session a run is for: a fixer, or a review.
+// Session defaults to the caller.
+func (s *Server) resolveReviewRun(ctx context.Context, req Request, session string) (domain.Session, *Response) {
+	target := strings.TrimSpace(session)
+	if target == "" {
+		target = req.Caller
+	}
+	if target != "" && s.reviewBase() != "" {
+		if sess, ok := s.findSession(ctx, target); ok && sess.Role == domain.SessionRoleFixer && sess.FixPR != "" {
+			return sess, nil
+		}
+	}
+	raw, _ := json.Marshal(reviewCall{Session: session})
+	req.Params = raw
+	t, fail := s.resolveReview(ctx, req)
+	if fail != nil {
+		return domain.Session{}, fail
+	}
+	return t.sess, nil
 }
 
 func (s *Server) sandboxFor(sess domain.Session) (review.Sandbox, error) {
 	sb := s.reviewSandbox(sess.ID)
 	sb.Network = s.reviewCfg.Sandbox.Network
 	override := ""
-	if ref, err := review.ParseRef(sess.ReviewPR); err == nil {
+	pr := sess.ReviewPR
+	if pr == "" {
+		pr = sess.FixPR
+	}
+	if ref, err := review.ParseRef(pr); err == nil {
 		if b, ok := config.LookupRepo(s.reviewRepos, ref.Slug()); ok {
 			override = b.Review.Image
 		}
@@ -157,7 +184,7 @@ func nextRunN(dir string) (int, error) {
 }
 
 func (s *Server) downReviewSandbox(ctx context.Context, sess domain.Session) {
-	if sess.ReviewPR == "" || s.reviewRunner.Docker == nil {
+	if (sess.ReviewPR == "" && sess.FixPR == "") || s.reviewRunner.Docker == nil {
 		return
 	}
 	if err := s.reviewRunner.Down(ctx, s.reviewSandbox(sess.ID)); err != nil {

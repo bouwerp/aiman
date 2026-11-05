@@ -195,3 +195,73 @@ func StagePR(ctx context.Context, remote domain.RemoteExecutor, path, base strin
 	}
 	return nil
 }
+
+// SetupFixTree makes path a standalone clone of the main clone, detached at
+// sha, with no remote: a plain git push from it has nowhere to go and its
+// config is its own. The commit is pinned with a temporary ref for the copy,
+// because a PR head may be reachable from no branch and clone copies only
+// branches and tags. The parent directory of path must exist.
+func (m *Manager) SetupFixTree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, number int, sha, path string) error {
+	root := remote.GetRoot()
+	if root == "" {
+		return errors.New("remote root not configured")
+	}
+	repoPath := computeMainRepoPath(root, repo.Name)
+	main, tree, commit := shellQuote(repoPath), shellQuote(path), shellQuote(sha)
+	pin := "refs/aiman/fix-tree/" + sha
+	has := "git -C " + main + " cat-file -e " + shellQuote(sha+"^{commit}") + " 2>/dev/null || git -C " + main + fmt.Sprintf(" fetch -q origin pull/%d/head 2>&1", number)
+	if out, err := remote.Execute(ctx, has); err != nil {
+		return fmt.Errorf("fetch PR head %s: %w: %s", sha, err, strings.TrimSpace(out))
+	}
+	if out, err := remote.Execute(ctx, "git -C "+main+" update-ref "+shellQuote(pin)+" "+commit+" 2>&1"); err != nil {
+		return fmt.Errorf("pin %s: %w: %s", sha, err, strings.TrimSpace(out))
+	}
+	defer func() {
+		// The caller's context may be over by now; a stale pin only keeps a commit alive.
+		_, _ = remote.Execute(context.WithoutCancel(ctx), "git -C "+main+" update-ref -d "+shellQuote(pin))
+	}()
+	steps := []string{
+		"git clone -q --no-checkout " + main + " " + tree,
+		"git -C " + tree + " fetch -q --no-tags " + main + " " + shellQuote(pin),
+		"git -C " + tree + " remote remove origin",
+		"git -C " + tree + " checkout -q --detach " + commit,
+	}
+	for _, step := range steps {
+		if out, err := remote.Execute(ctx, step+" 2>&1"); err != nil {
+			return fmt.Errorf("make fix tree %s: %w: %s", path, err, strings.TrimSpace(out))
+		}
+	}
+	return excludeAimanFiles(ctx, remote, path)
+}
+
+// PushFixTree fetches sha from the fix tree into the main clone and pushes it
+// from there to the PR's branch, never forced and with the main clone's hooks
+// off. A push git rejects because the branch moved is domain.ErrPushRejected.
+func (m *Manager) PushFixTree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, tree, sha, headRef string) error {
+	root := remote.GetRoot()
+	if root == "" {
+		return errors.New("remote root not configured")
+	}
+	repoPath := computeMainRepoPath(root, repo.Name)
+	origin, err := readOrigin(ctx, remote, repoPath)
+	if err != nil {
+		return fmt.Errorf("read the origin of %s: %w", repoPath, err)
+	}
+	if err := matchOrigin(origin, repoPath, repo.Name); err != nil {
+		return err
+	}
+	main := shellQuote(repoPath)
+	if out, err := remote.Execute(ctx, "git -C "+main+" fetch -q --no-tags "+shellQuote(tree)+" "+shellQuote(sha)+" 2>&1"); err != nil {
+		return fmt.Errorf("fetch %s from the fix tree: %w: %s", sha, err, strings.TrimSpace(out))
+	}
+	// LC_ALL keeps git's "[rejected]" readable whatever the host's locale.
+	refspec := shellQuote(sha + ":refs/heads/" + headRef)
+	out, err := remote.Execute(ctx, "LC_ALL=C git -C "+main+" -c core.hooksPath=/dev/null push origin "+refspec+" 2>&1")
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(out, "[rejected]") {
+		return fmt.Errorf("%w: %s", domain.ErrPushRejected, strings.TrimSpace(out))
+	}
+	return fmt.Errorf("push %s: %w: %s", headRef, err, strings.TrimSpace(out))
+}
