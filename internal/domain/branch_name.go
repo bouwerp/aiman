@@ -39,6 +39,20 @@ func SanitizeBranchName(s string) string {
 	return s
 }
 
+// maxBranchFromName bounds a branch derived from a session name, which can be
+// far longer than a path component should be.
+const maxBranchFromName = 63
+
+// BranchFromSessionName is the Git-safe identifier for a free-text session name.
+// It is empty when the name holds nothing usable in a branch.
+func BranchFromSessionName(name string) string {
+	s := SanitizeBranchName(name)
+	if len(s) > maxBranchFromName {
+		s = SanitizeBranchName(s[:maxBranchFromName])
+	}
+	return s
+}
+
 // TerminalNameFromBranch maps a branch name onto the session's terminal name.
 //
 // "/" becomes "-", and "." and ":" become "_". The mapping matches the names

@@ -28,7 +28,7 @@ Do not call `aiman session report-agent-session`. Aiman installs a SessionStart 
 
 ## Names and groups
 
-Every session has a short unique `name` (`impl`, `reviewer`, `q1`) and a `group` (issue key, repo, or `quick`). A create from inside a session nests under the caller on the operator's list. Spawn helpers in the caller's group:
+Every session has a short unique `name` (`fix-login`, `reviewer`, `q1`) and a `group` (issue key, repo, or `quick`). A create from inside a session nests under the caller on the operator's list. Spawn helpers in the caller's group:
 
 ```bash
 aiman session create --repo owner/repo --branch BRANCH --agent claude \

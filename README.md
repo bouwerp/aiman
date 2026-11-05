@@ -882,7 +882,7 @@ Stdout is indented JSON. Server errors are JSON on stderr, exit 1. Usage errors 
   "sessions": [
     {
       "id": "uuid",
-      "name": "impl",
+      "name": "Fix auth",
       "group": "WTB-1925",
       "issue_key": "PROJ-123",
       "branch": "proj-123-fix-auth",
@@ -947,10 +947,11 @@ Empty group is stored as `ungrouped` so discovery cannot blank it.
 
 | | Name | Group |
 |---|---|---|
-| TUI `n` (full wizard) | `impl` if free, else from branch | issue key, else repo short name, else `ungrouped` |
+| TUI `n` (full wizard) | as typed; the branch is derived from it | issue key, else repo short name, else `ungrouped` |
 | TUI `N` (quick) | `q1`, `q2`, … | `quick` |
 | CLI `--quick` | same as `N` | `quick` |
-| CLI `--name` / `--group` | as given, if unique | as given |
+| CLI `--name` / `--group` | as given, if unique; with no `--branch`, the branch is derived from it | as given |
+| CLI or phone with no name | the branch, suffixed if taken | issue key, else repo short name, else `ungrouped` |
 
 ### Environment (inside a pane)
 

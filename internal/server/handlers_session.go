@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -671,8 +672,8 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		}
 		forParent = &parent
 	}
-	if !params.Quick && (params.Repo == "" || params.Branch == "") {
-		return errResp(req.ID, CodeInvalidParams, "repo and branch are required (or --quick)")
+	if !params.Quick && (params.Repo == "" || (params.Branch == "" && (params.Name == "" || params.ExistingBranch))) {
+		return errResp(req.ID, CodeInvalidParams, "repo and a name or branch are required (or --quick)")
 	}
 	brief, berr := readBrief(params.Brief, params.BriefFile, false)
 	if berr != nil {
@@ -697,6 +698,10 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	} else if domain.NameTaken(existing, name) {
 		return errResp(req.ID, CodeNameTaken, "name already in use")
+	}
+	branchDerived := !params.Quick && params.Branch == ""
+	if branchDerived {
+		params.Branch = branchForName(name)
 	}
 	group := domain.AssignSessionGroup(params.Group, params.Issue, params.Repo, params.Quick)
 	promptFree := true
@@ -743,10 +748,11 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if root := createGitRoot(caller, existing, hostHome()); root != "" {
 		cfg.SSHManager = local.NewExecutor(root)
 	}
-	sess, err := s.create.CreateSession(ctx, cfg)
+	sess, err := s.createOnFreeBranch(ctx, cfg, branchDerived)
 	if err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
+	params.Branch = sess.Branch
 	sess.Name = name
 	sess.Group = group
 	sess.ParentID = parentID
@@ -785,6 +791,42 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		"type": "session", "session": info,
 		"tier_fallback": tierFallback, "requested_tier": requestedTier,
 	}}
+}
+
+// worktreeExistsError is the text git.Manager.SetupRemoteWorktree fails with when
+// the branch's worktree directory is already there.
+const worktreeExistsError = "WORKTREE_EXISTS"
+
+// maxBranchSuffix bounds the search for a free worktree under a derived branch.
+const maxBranchSuffix = 20
+
+// branchForName derives a branch from a session name. A name with nothing usable
+// in a branch, such as one in another alphabet, gets a generated identifier.
+func branchForName(name string) string {
+	if branch := domain.BranchFromSessionName(name); branch != "" {
+		return branch
+	}
+	return domain.AdHocLabel("session-", time.Now(), rand.Reader)
+}
+
+// createOnFreeBranch runs the create. A derived branch whose worktree already
+// exists takes the next suffix, so a new session never lands in the files of an
+// old one. A branch the caller named is that branch, and its collision is
+// reported.
+func (s *Server) createOnFreeBranch(ctx context.Context, cfg domain.SessionConfig, derived bool) (*domain.Session, error) {
+	sess, err := s.create.CreateSession(ctx, cfg)
+	base := cfg.Branch
+	for n := 2; derived && n <= maxBranchSuffix && err != nil && strings.Contains(err.Error(), worktreeExistsError); n++ {
+		cfg.Branch = fmt.Sprintf("%s-%d", base, n)
+		sess, err = s.create.CreateSession(ctx, cfg)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if sess.Branch == "" {
+		sess.Branch = cfg.Branch
+	}
+	return sess, nil
 }
 
 // tierChoice validates the tier, model and effort parameters. A tier is

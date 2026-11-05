@@ -65,19 +65,6 @@ func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// sanitizeInput normalizes the display name for Git identifiers.
-func (m BranchInputModel) sanitizeInput(s string) string {
-	s = domain.SanitizeBranchName(s)
-	if s == "" {
-		return ""
-	}
-	const maxLen = 63
-	if len(s) > maxLen {
-		s = s[:maxLen]
-	}
-	return strings.TrimRight(s, "-")
-}
-
 func (m BranchInputModel) viewString() string {
 	style := lipgloss.NewStyle().Padding(1, 2).Border(lipgloss.RoundedBorder())
 
@@ -107,7 +94,7 @@ func (m BranchInputModel) Name() string {
 
 // BranchName returns the Git-safe identifier derived from the session name.
 func (m BranchInputModel) BranchName() string {
-	return m.sanitizeInput(m.Name())
+	return domain.BranchFromSessionName(m.Name())
 }
 
 func (m BranchInputModel) Value() string {

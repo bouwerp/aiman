@@ -111,3 +111,24 @@ func TestAdHocLabelFallsBackOnReaderError(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// The same cases hold for branchFromName in the phone app.
+func TestBranchFromSessionName(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]string{
+		"Deploy API: phase 2!":         "Deploy-API-phase-2",
+		"fix_the login":                "fix-the-login",
+		"feat/my change":               "feat/my-change",
+		"a..b":                         "a.b",
+		"  -a-  ":                      "a",
+		"a//b/":                        "a/b",
+		"release.lock":                 "release-lock",
+		"日本語":                          "",
+		"日本語 fix":                      "fix",
+		strings.Repeat("x", 62) + " y": strings.Repeat("x", 62),
+	} {
+		if got := BranchFromSessionName(name); got != want {
+			t.Errorf("BranchFromSessionName(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

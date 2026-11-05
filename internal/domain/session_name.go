@@ -71,25 +71,16 @@ func NameTaken(existing []Session, name string) bool {
 	return false
 }
 
-// AssignSessionName picks a unique name. Quick mode uses q1, q2, … and
-// ignores preferred. Otherwise impl is tried first, then preferred, then
-// suffixed variants.
+// AssignSessionName picks a unique name. Quick mode uses q1, q2, … and ignores
+// preferred. Otherwise it is preferred, normally the branch, suffixed if taken.
 func AssignSessionName(existing []Session, preferred string, quick bool) (string, error) {
 	if quick {
 		return nextQuickName(existing), nil
 	}
-	if !NameTaken(existing, "impl") {
-		return "impl", nil
+	if ValidateSessionName(preferred) == nil {
+		return nextSuffixed(existing, preferred), nil
 	}
-	if preferred != "" {
-		if err := ValidateSessionName(preferred); err == nil && !NameTaken(existing, preferred) {
-			return preferred, nil
-		}
-		if err := ValidateSessionName(preferred); err == nil {
-			return nextSuffixed(existing, preferred), nil
-		}
-	}
-	return nextSuffixed(existing, "impl"), nil
+	return nextSuffixed(existing, "session"), nil
 }
 
 func AssignSessionGroup(explicit, issueKey, repoName string, quick bool) string {

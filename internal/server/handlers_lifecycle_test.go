@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -946,6 +947,110 @@ func TestSessionCreateTakesWhatThePhoneSends(t *testing.T) {
 	}
 	if c.Agent.Command != "codex" || c.Agent.LaunchModel != "gpt-5" || c.Agent.LaunchEffort != "high" {
 		t.Fatalf("%+v", c.Agent)
+	}
+}
+
+func createOnFakeCreator(t *testing.T, creator *fakeCreator, params map[string]any) Response {
+	t.Helper()
+	repo := testRepo(t)
+	ln, err := Listen(shortTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	srv := New(ln, repo, &fakeRemote{}, creator, nil, nil, "test")
+	b, _ := json.Marshal(params)
+	line, _ := json.Marshal(Request{ID: "1", Method: "session.create", Params: b})
+	return srv.dispatch(context.Background(), line)
+}
+
+// A name is free text; the branch comes from it, as in the TUI's wizard.
+func TestSessionCreateDerivesBranchFromName(t *testing.T) {
+	creator := &fakeCreator{}
+	resp := createOnFakeCreator(t, creator, map[string]any{
+		"repo": "o/r", "name": "Deploy API: phase 2!", "agent": "codex",
+	})
+	if resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	if creator.cfg.Name != "Deploy API: phase 2!" || creator.cfg.Branch != "Deploy-API-phase-2" {
+		t.Fatalf("name %q branch %q", creator.cfg.Name, creator.cfg.Branch)
+	}
+}
+
+func TestSessionCreateNameWithNoBranchCharactersStillGetsABranch(t *testing.T) {
+	creator := &fakeCreator{}
+	resp := createOnFakeCreator(t, creator, map[string]any{"repo": "o/r", "name": "日本語", "agent": "codex"})
+	if resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	if creator.cfg.Name != "日本語" || !strings.HasPrefix(creator.cfg.Branch, "session-") {
+		t.Fatalf("name %q branch %q", creator.cfg.Name, creator.cfg.Branch)
+	}
+}
+
+// A derived branch whose worktree exists takes a suffix: a new session must not
+// land in an old session's files.
+func TestSessionCreateDerivedBranchAvoidsAnExistingWorktree(t *testing.T) {
+	creator := &fakeCreator{failWith: func(cfg domain.SessionConfig) error {
+		if cfg.Branch == "fix-login" || cfg.Branch == "fix-login-2" {
+			return fmt.Errorf("worktree: %w", errors.New("WORKTREE_EXISTS"))
+		}
+		return nil
+	}}
+	resp := createOnFakeCreator(t, creator, map[string]any{"repo": "o/r", "name": "fix login", "agent": "codex"})
+	if resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	if got := strings.Join(creator.branches, " "); got != "fix-login fix-login-2 fix-login-3" {
+		t.Fatalf("branches tried: %s", got)
+	}
+}
+
+func TestSessionCreateDerivedBranchGivesUpOnOtherFailures(t *testing.T) {
+	creator := &fakeCreator{failWith: func(domain.SessionConfig) error { return errors.New("no such repo") }}
+	resp := createOnFakeCreator(t, creator, map[string]any{"repo": "o/r", "name": "fix login", "agent": "codex"})
+	wantCode(t, resp, CodeCreateFailed)
+	if creator.calls != 1 {
+		t.Fatalf("calls = %d", creator.calls)
+	}
+}
+
+// A branch the caller named means that branch, so a collision is its to resolve.
+func TestSessionCreateExplicitBranchIsNotSuffixed(t *testing.T) {
+	creator := &fakeCreator{failWith: func(domain.SessionConfig) error { return errors.New("WORKTREE_EXISTS") }}
+	resp := createOnFakeCreator(t, creator, map[string]any{"repo": "o/r", "branch": "feature", "agent": "codex"})
+	wantCode(t, resp, CodeCreateFailed)
+	if creator.calls != 1 {
+		t.Fatalf("calls = %d", creator.calls)
+	}
+}
+
+func TestSessionCreateRefusesWhatItCannotName(t *testing.T) {
+	for _, params := range []map[string]any{
+		{"repo": "o/r", "agent": "codex"},
+		{"name": "x", "agent": "codex"},
+		{"repo": "o/r", "name": "x", "existing_branch": true, "agent": "codex"},
+	} {
+		creator := &fakeCreator{}
+		resp := createOnFakeCreator(t, creator, params)
+		wantCode(t, resp, CodeInvalidParams)
+		if creator.calls != 0 {
+			t.Fatalf("%v: created", params)
+		}
+	}
+}
+
+// With no name, a create from a branch is named after it, whoever asked. The
+// first session on a host used to be called impl, children included.
+func TestSessionCreateWithNoNameUsesTheBranch(t *testing.T) {
+	creator := &fakeCreator{}
+	resp := createOnFakeCreator(t, creator, map[string]any{"repo": "o/r", "branch": "feat--t3", "agent": "codex"})
+	if resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	if creator.cfg.Name != "feat--t3" {
+		t.Fatalf("name %q", creator.cfg.Name)
 	}
 }
 

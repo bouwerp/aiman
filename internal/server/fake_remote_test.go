@@ -39,11 +39,21 @@ type fakeCreator struct {
 	// onCreate runs inside CreateSession, standing in for whatever happens on
 	// the host while a create is in flight.
 	onCreate func()
+	// failWith, when set, can fail a create for the config it was given.
+	failWith func(domain.SessionConfig) error
+	// branches lists the branch of every create attempted.
+	branches []string
 }
 
 func (f *fakeCreator) CreateSession(_ context.Context, cfg domain.SessionConfig) (*domain.Session, error) {
 	f.cfg = cfg
 	f.calls++
+	f.branches = append(f.branches, cfg.Branch)
+	if f.failWith != nil {
+		if err := f.failWith(cfg); err != nil {
+			return nil, err
+		}
+	}
 	if f.onCreate != nil {
 		f.onCreate()
 	}

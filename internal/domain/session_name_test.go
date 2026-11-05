@@ -74,22 +74,27 @@ func TestAssignSessionNameQuickSequence(t *testing.T) {
 	}
 }
 
-func TestAssignSessionNamePrefersImpl(t *testing.T) {
+func TestAssignSessionNameComesFromTheBranch(t *testing.T) {
 	t.Parallel()
-	got, err := AssignSessionName(nil, "wtb-1925-auth", false)
-	if err != nil {
-		t.Fatalf("AssignSessionName: %v", err)
-	}
-	if got != "impl" {
-		t.Fatalf("got %q, want impl", got)
-	}
-	existing := []Session{{Name: "impl"}}
-	got, err = AssignSessionName(existing, "wtb-1925-auth", false)
-	if err != nil {
-		t.Fatalf("AssignSessionName: %v", err)
-	}
-	if got != "wtb-1925-auth" {
-		t.Fatalf("got %q, want wtb-1925-auth", got)
+	for _, tc := range []struct {
+		name      string
+		existing  []Session
+		preferred string
+		want      string
+	}{
+		{"first session", nil, "wtb-1925-auth", "wtb-1925-auth"},
+		{"impl is free", []Session{{Name: "other"}}, "feat--t3", "feat--t3"},
+		{"taken", []Session{{Name: "wtb-1925-auth"}}, "wtb-1925-auth", "wtb-1925-auth-2"},
+		{"nothing to go on", nil, "", "session"},
+		{"unusable", []Session{{Name: "session"}}, " padded ", "session-2"},
+	} {
+		got, err := AssignSessionName(tc.existing, tc.preferred, false)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

@@ -570,7 +570,7 @@ components:
           description: session.create, owner/name from repo.list. Required unless quick.
         branch:
           type: string
-          description: session.create. Required unless quick.
+          description: session.create. Empty derives it from name, adding a suffix if that worktree exists. A branch or a name is required unless quick.
         existing_branch:
           type: boolean
           description: session.create starts from this existing branch instead of cutting one.
@@ -585,7 +585,7 @@ components:
           description: session.create, the agent's first prompt, delivered before create answers.
         name:
           type: string
-          description: session.create or session.rename; session.create assigns one when empty.
+          description: Free text. session.create or session.rename; session.create uses the branch when empty, and q1, q2 and so on for quick.
         tier:
           type: string
           enum: [smart, worker]
