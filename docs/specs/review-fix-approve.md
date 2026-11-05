@@ -338,3 +338,53 @@ Later pieces build on exactly these names.
 `internal/server`: `handleTodoGate` refuses a serve-only ref with `invalid_params`.
 
 `internal/domain`: `SessionRoleFixer SessionRole = "fixer"`, not `Hidden()`. `Session.FixPR string`, stored in a new COALESCE-protected `fix_pr` column, and carried on `SessionConfig.FixPR` and `SessionInfo` as `fix_pr`.
+
+## Contract for pieces P2 and P3
+
+Routes and empty handlers are already on this branch (`review_fix.go`, `review_approve.go`), so P2 and P3 share no file. The acceptance tests drive everything through RPC and use these literals.
+
+### P2: fixing
+
+`review.fix {session, file, findings?}`, from the review session or the operator; another session gets `gate_needs_operator`. `findings` omitted means every finding not `Call: disagree`. Naming a disagreed or unknown finding is `invalid_params`.
+
+Result: `{"type":"review_fix","session":<review id>,"fixer":<SessionInfo>,"findings":[...],"start_sha":<staged head>,"round":<n>}`.
+
+The fixer's row has `Role` `fixer`, `FixPR` the ref, no `ReviewPR`, `ParentID` the review, and the review's `AgentName`, model and effort. Everything it owns lives under `<review base>/<fixer id>/`, laid out like a review: `work` (`WorkingDirectory`, a fresh repository, the agent's cwd), `tree` (`WorktreePath`, the fix tree), and `sandbox`, `src`, `out` (`reviewSandbox(fixer id)`). `work/findings.md` holds the assigned findings verbatim. The initial prompt names the tree path.
+
+A round is appended to `State.Fixes` at start. A pending to-do with `Ref` `fixer:<id>` goes on the review's list. Ledger on the review: `review.fix_started`.
+
+A round without a `PushedSHA` still counts toward the limit of 3, so a fixer that keeps dying cannot run for ever.
+
+`review.push {}`, from a fixer only, reads its own row. Any other caller gets an error and nothing is pushed.
+
+Result: `{"type":"review_push","sha":<pushed sha>}`.
+
+| Refusal | When |
+|---|---|
+| `review_fix_incomplete` | No commits, a dirty tree, `StartSHA` not an ancestor, a report that does not parse, or one that misses an assigned finding |
+| `review_fix_scope` | A changed path, either side of a rename, is outside the assigned findings' files and their exact directories (not subdirectories), or under `.github/` without a finding's file there |
+| `review_head_moved` | GitHub's head differs from `StartSHA`, or the plain push is rejected as non-fast-forward |
+
+A refusal leaves the fixer and tree alone. On success: `Fixes[n].PushedSHA` and `Fixed` are set from the report, ledger `review.fix_pushed {fixer, sha, findings, fixed}`, the `fixer:<id>` to-do is done, a steer note containing the sha and `aiman review refresh` goes to the review, and the fixer's row and tree go. The main clone's hooks do not run on the push.
+
+`review.refresh` result gains `"delta": bool`. A delta writes `.aiman_review/fix.patch` (`StartSHA..PushedSHA` of the newest round) and rewrites the other review files. Both paths set `Assessment`, `ApproveGate` and `ApprovedHead` empty, keep `Fixes`, and reopen `gate:approve` when present. The delta `review.refreshed` row has `delta: true`.
+
+`review.run` accepts a fixer: `session` defaults to the caller, the source is exported from the fix tree's working files at each run, including uncommitted edits, and the log is `<fixer work>/.aiman_review/runs/<n>.log`.
+
+`Tracker.FixTimeout time.Duration` (`review.fix_timeout`, default 60m, wired in `cmd/aiman/serve.go`). A `fixer:<id>` item is never probed for a PR. With the agent ended, the terminal gone (`Alive`) or the timeout passed, the tracker clears the item's `Ref`, leaves it pending, appends `review.fix_failed {fixer, todo}` on the parent, steers a note naming the fixer, and calls `Retire`, which must not delete the tree. A row that is gone unlinks the item the same way, without `Retire`.
+
+The next `review.fix` removes the directories of earlier fixers that are no longer running. `dropSession` of a review removes every directory `State.Fixes` names. A review that is dropped stops its running fixer.
+
+`internal/ui/a1_detail.go`: `renderMetaLine` shows `fix #n` for a session with `FixPR`.
+
+### P3: approving
+
+`review.assess {session, file}` and `review.approve {session, file}`, from the review session or the operator; another session, a fixer included, gets `gate_needs_operator`.
+
+`review.assess` result: `{"type":"review_assess","session":<review id>,"consult":<SessionInfo>,"head_sha":<head>}`. It accepts no brief: a `brief` param is ignored. It refuses `review_own_pr`, then `review_not_ready`, `review_head_moved`. The brief is written by serve into the consult's `.aiman_task.md` through the usual consult path, and names `.aiman_review/diff.patch` of the review's scratch directory and `findings.md`. `findings.md`, in the consult's directory, is a copy of the review file's `## Findings` section. The consult is linked from a new pending to-do with `Ref` `child:<id>`, so the tracker settles it. `State.Assessment` is set, replacing any earlier one, and the earlier consult's verdict stops counting.
+
+`review.approve` runs the checks in the table under Approving, in that order. A verdict is read from the `consult.finished` ledger row whose `child` is `State.Assessment.Consult`; no row is `review_not_assessed`, and `high > 0` or a verdict other than `approve` is `review_assessment_rejected`. `gate:approve` is added by serve with `todo.AddGate` as `domain.AuthorAiman`, recording `State.ApproveGate`. When a closed gate's binding differs from the current assessment, serve sets the item pending, rebinds and refuses.
+
+`posted` for `File.Approval` is true when `review:post` is done. The note names the assessing agent's model family (`agent.Family`), says whether it differs from the review's, and contains the words `signed off`.
+
+Result: `{"type":"review_approved","session":<id>,"head_sha":<head>,"decision":<reviewDecision>,"counts":<bool>}`. `counts` is true only for `APPROVED`. `counts: false` is not an error. Ledger: `review.pr_approved {head, consult, decision, counts}`. `State.ApprovedHead` is set after GitHub accepts. `ErrOwnPR` from `PostReview` is `review_own_pr`; any other post failure is `create_failed`. In both cases `ApprovedHead` stays empty.

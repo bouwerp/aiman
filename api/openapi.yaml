@@ -477,6 +477,10 @@ components:
             - review.run
             - review.debug
             - review.coverage
+            - review.fix
+            - review.push
+            - review.assess
+            - review.approve
             - handover.write
             - handover.point
             - memory.jobs

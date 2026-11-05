@@ -30,6 +30,14 @@ func (s *Server) dispatchReview(ctx context.Context, req Request) Response {
 		return s.handleReviewDebug(ctx, req)
 	case "review.coverage":
 		return s.handleReviewCoverage(ctx, req)
+	case "review.fix":
+		return s.handleReviewFix(ctx, req)
+	case "review.push":
+		return s.handleReviewPush(ctx, req)
+	case "review.assess":
+		return s.handleReviewAssess(ctx, req)
+	case "review.approve":
+		return s.handleReviewApprove(ctx, req)
 	default:
 		return s.handleReviewRefresh(ctx, req)
 	}

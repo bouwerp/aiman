@@ -299,7 +299,9 @@ func callDeadline(method string) time.Duration {
 		return RepoListTimeout + 15*time.Second
 	case "design.publish":
 		return DesignPublishTimeout + 15*time.Second
-	case "review.post":
+	case "review.fix", "review.assess":
+		return SessionCreateWait
+	case "review.post", "review.push", "review.approve":
 		return ReviewPostTimeout + 15*time.Second
 	case "review.run", "review.coverage":
 		return ReviewRunTimeout + 15*time.Second
