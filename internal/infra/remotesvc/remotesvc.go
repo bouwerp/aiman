@@ -86,12 +86,15 @@ func (k Kind) InstallPipe() string {
 	}
 }
 
+// procPattern is the pgrep -f and pkill -f pattern for k's process. The
+// gateway's is anchored to the executable, so it cannot match another command
+// that names the binary, such as an installer's cp or mv.
 func (k Kind) procPattern() string {
 	switch k {
 	case KindTrigger:
 		return "[a]iman-trigger"
 	case KindGateway:
-		return "[a]iman-gateway"
+		return "^([^ ]*/)?aiman-gateway( |$)"
 	default:
 		return "[a]iman serve"
 	}

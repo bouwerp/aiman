@@ -317,8 +317,21 @@ func TestGatewayKindIdentity(t *testing.T) {
 	if k.PidFile() != "$HOME/.aiman/gateway.pid" {
 		t.Fatalf("pid %q", k.PidFile())
 	}
-	if k.procPattern() != "[a]iman-gateway" {
-		t.Fatalf("proc %q", k.procPattern())
+	re := regexp.MustCompile(k.procPattern())
+	for _, cmd := range []string{"/home/u/.local/bin/aiman-gateway", "aiman-gateway", "/home/u/.local/bin/aiman-gateway pair --json"} {
+		if !re.MatchString(cmd) {
+			t.Errorf("proc pattern misses %q", cmd)
+		}
+	}
+	for _, cmd := range []string{
+		"mv aiman-gateway /home/u/.local/bin/",
+		"cp aiman-gateway /home/u/.local/bin/.aiman-gateway.new.1",
+		"bash -c pkill -f aiman-gateway",
+		"tail -f /home/u/.aiman/aiman-gateway.log",
+	} {
+		if re.MatchString(cmd) {
+			t.Errorf("proc pattern matches %q", cmd)
+		}
 	}
 	pipe := k.InstallPipe()
 	if !strings.Contains(pipe, "BINARY_NAME=aiman-gateway") {
@@ -346,7 +359,7 @@ func TestStopGatewayDoesNotKillServe(t *testing.T) {
 	if strings.Contains(stop, "[a]iman serve") {
 		t.Fatalf("gateway stop must not pkill serve:\n%s", stop)
 	}
-	if !strings.Contains(stop, "[a]iman-gateway") {
+	if !strings.Contains(stop, KindGateway.procPattern()) {
 		t.Fatalf("gateway stop missing pkill pattern:\n%s", stop)
 	}
 }

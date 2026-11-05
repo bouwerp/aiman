@@ -244,15 +244,23 @@ install_binary() {
     # Ensure install directory exists
     mkdir -p "$INSTALL_DIR"
 
-    # Check if we need sudo
-    if [ -w "$INSTALL_DIR" ]; then
-        mv "${BINARY_NAME}" "$INSTALL_DIR/"
-    else
+    # Copy beside the target, then rename: the download may be on another
+    # filesystem, and a copy killed part way must not leave a broken binary
+    # under the real name.
+    tmp_binary="$INSTALL_DIR/.$BINARY_NAME.new.$$"
+    run_install=""
+    if [ ! -w "$INSTALL_DIR" ]; then
         echo -e "${YELLOW}Requesting sudo access to install to $INSTALL_DIR${NC}"
-        sudo mv "${BINARY_NAME}" "$INSTALL_DIR/"
+        run_install="sudo"
     fi
-
-    chmod +x "$INSTALL_DIR/$BINARY_NAME"
+    if ! $run_install cp "$BINARY_NAME" "$tmp_binary"; then
+        $run_install rm -f "$tmp_binary"
+        echo "Failed to copy $BINARY_NAME to $INSTALL_DIR" >&2
+        exit 1
+    fi
+    $run_install chmod +x "$tmp_binary"
+    $run_install mv -f "$tmp_binary" "$INSTALL_DIR/$BINARY_NAME"
+    rm -f "$BINARY_NAME"
 
     # Ensure INSTALL_DIR is on PATH, adding a line to the shell profile if needed
     ensure_path
