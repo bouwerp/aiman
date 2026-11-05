@@ -154,15 +154,19 @@ func (s *Server) buildReviewPost(ctx context.Context, t reviewTarget, md []byte,
 	if err != nil {
 		return builtPost{}, CodeReviewIncomplete, fmt.Errorf("review file: %w", err)
 	}
-	if m := f.Missing(); len(m) > 0 {
-		return builtPost{}, CodeReviewIncomplete, fmt.Errorf("review is incomplete: %s", strings.Join(m, "; "))
-	}
 	st, err := review.LoadState(s.reviewBase(), t.sess.ID)
 	if err != nil {
 		return builtPost{}, CodeInvalidParams, fmt.Errorf("review state of %s: %w", t.sess.Name, err)
 	}
+	fixed := st.FixedMap()
+	if m := f.MissingWith(fixed); len(m) > 0 {
+		return builtPost{}, CodeReviewIncomplete, fmt.Errorf("review is incomplete: %s", strings.Join(m, "; "))
+	}
 	if !st.Revealed {
 		return builtPost{}, CodeReviewNotReady, errors.New("the PR description has not been revealed: run aiman review reveal first")
+	}
+	if err := s.checkDeltaConsult(ctx, t.sess.ID, st); err != nil {
+		return builtPost{}, CodeReviewNotReady, err
 	}
 	pr, err := s.reviewGH.PR(ctx, t.ref)
 	if err != nil {
@@ -171,11 +175,30 @@ func (s *Server) buildReviewPost(ctx context.Context, t reviewTarget, md []byte,
 	if pr.HeadSHA != st.HeadSHA {
 		return builtPost{}, CodeReviewHeadMoved, fmt.Errorf("%s moved from %s to %s: run aiman review refresh and review again", t.ref, st.HeadSHA, pr.HeadSHA)
 	}
-	post, err := f.Post(event, st.HeadSHA, st.Single)
+	post, err := f.PostFixed(event, st.HeadSHA, st.Single, fixed)
 	if err != nil {
 		return builtPost{}, CodeInvalidParams, err
 	}
 	return builtPost{post: post, findings: f.Findings, single: st.Single}, "", nil
+}
+
+// checkDeltaConsult refuses a post at a head aiman's own fixer pushed until a
+// second agent has looked at it: a consult has finished since the last refresh,
+// unless the review runs with one reviewer. A full refresh's reveal already
+// demands that consult, so this bites only after a delta.
+func (s *Server) checkDeltaConsult(ctx context.Context, id string, st review.State) error {
+	round := newestPushedRound(st)
+	if st.Single || round == nil || round.PushedSHA != st.HeadSHA {
+		return nil
+	}
+	finished, _, err := s.consultOutcomes(ctx, id)
+	if err != nil {
+		return err
+	}
+	if finished == 0 {
+		return errors.New("no consult has finished since the fix was refreshed: have a second agent check it first")
+	}
+	return nil
 }
 
 // completeReviewPost ticks the Post the review to-do.

@@ -13,8 +13,9 @@ func TestSkillRootsSkipReviewWorktree(t *testing.T) {
 	got := skillRoots([]domain.Session{
 		{WorktreePath: "/w/r@x", WorkingDirectory: "/w/r@x/sub"},
 		{WorktreePath: "/w/r@pr-7", WorkingDirectory: "/h/.aiman/pr-reviews/s/work", ReviewPR: "o/r#7"},
+		{WorktreePath: "/h/.aiman/pr-reviews/f/tree", WorkingDirectory: "/h/.aiman/pr-reviews/f/work", FixPR: "o/r#7"},
 	})
-	want := []string{"/w/r@x", "/w/r@x/sub", "/h/.aiman/pr-reviews/s/work"}
+	want := []string{"/w/r@x", "/w/r@x/sub", "/h/.aiman/pr-reviews/s/work", "/h/.aiman/pr-reviews/f/work"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("roots %v, want %v", got, want)
 	}

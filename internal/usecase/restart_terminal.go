@@ -26,10 +26,10 @@ type restartTerminalSpec struct {
 
 // restartRoot is the directory a restart ignores aiman files in and trusts
 // beside the working directory: the worktree, else the working directory. A
-// review session uses its scratch working directory, so the PR checkout's
-// .gitignore and trust stay untouched.
+// review session or fixer uses its scratch working directory, so the PR
+// checkout's .gitignore and trust stay untouched.
 func restartRoot(s domain.Session, workingDir string) string {
-	if s.WorktreePath == "" || s.ReviewPR != "" {
+	if s.WorktreePath == "" || s.ReviewPR != "" || s.FixPR != "" {
 		return workingDir
 	}
 	return s.WorktreePath
@@ -55,9 +55,9 @@ func restartTerminal(ctx context.Context, remote TerminalExecutor, s *domain.Ses
 		return err
 	}
 	root := spec.WorktreeRoot
-	if s.ReviewPR != "" {
-		// A review's worktree is the untrusted PR checkout; only its scratch
-		// working directory is ever trusted.
+	if s.ReviewPR != "" || s.FixPR != "" {
+		// A review's worktree or a fixer's fix tree is an untrusted PR checkout;
+		// only the scratch working directory is ever trusted.
 		root = ""
 	}
 	TrustWorkspacePaths(ctx, remote, spec.WorkingDir, root)

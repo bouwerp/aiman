@@ -70,6 +70,9 @@ type Tracker struct {
 	// ConsultTimeout is how long a consult may run without a report. Zero
 	// waits for ever.
 	ConsultTimeout time.Duration
+	// FixTimeout is how long a fixer may run without pushing. Zero waits for
+	// ever.
+	FixTimeout time.Duration
 	// ConsultTimeoutFor, when set, replaces ConsultTimeout with a limit
 	// chosen by the consult's parent (ConsultTimeouts).
 	ConsultTimeoutFor func(parent domain.Session) time.Duration
@@ -122,8 +125,15 @@ func (t *Tracker) TrackOnce(ctx context.Context) {
 		}
 		listed[parent.ID] = true
 		for _, it := range list.Items {
+			if it.State == domain.TodoDone || it.State == domain.TodoDropped {
+				continue
+			}
+			if fixerID, ok := FixerID(it.Ref); ok {
+				t.trackFixer(ctx, parent, it, fixerID, byID)
+				continue
+			}
 			childID, ok := ChildID(it.Ref)
-			if !ok || it.State == domain.TodoDone || it.State == domain.TodoDropped {
+			if !ok {
 				continue
 			}
 			child, ok := byID[childID]

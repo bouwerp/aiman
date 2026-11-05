@@ -71,6 +71,9 @@ func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width i
 	if ref, err := review.ParseRef(s.ReviewPR); err == nil {
 		add(fmt.Sprintf("review #%d", ref.Number))
 	}
+	if ref, err := review.ParseRef(s.FixPR); err == nil {
+		add(fmt.Sprintf("fix #%d", ref.Number))
+	}
 	if x.HasCost {
 		add(fmt.Sprintf("~$%.2f", x.CostUSD))
 	} else if x.Tokens > 0 {

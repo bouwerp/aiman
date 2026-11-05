@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/coordinator"
@@ -187,14 +189,26 @@ func (s *Server) consultOutcomes(ctx context.Context, id string) (int, map[strin
 	}
 }
 
-// handleReviewRefresh restages the review at the PR's current head. It first
-// withdraws the description, so a refresh that fails part-way leaves the
-// review blind. It then retires every consult still running (each reviewed
-// the old head), restages the PR worktree (fetched, reset hard to the new head
-// and soft to the new merge base), rewrites .aiman_review, returns the state
-// to blind and reopens the blind, informed, post and gate to-dos. A head that has
-// not moved is a no-op unless force is set. Only the review session itself or
-// the operator may refresh it.
+// maxDeltaLines is the largest fix a refresh treats as a delta, in added plus
+// deleted lines. A larger fix goes back to the blind pass.
+const maxDeltaLines = 400
+
+// fixPatchFile holds the newest fix's diff after a delta refresh, in the review
+// files directory.
+const fixPatchFile = "fix.patch"
+
+// handleReviewRefresh restages the review at the PR's current head. A full
+// refresh first withdraws the description, so a refresh that fails part-way
+// leaves the review blind. It then retires every consult still running (each
+// reviewed the old head), restages the PR worktree (fetched, reset hard to the
+// new head and soft to the new merge base), rewrites .aiman_review, returns the
+// state to blind and reopens the blind, informed, post and gate to-dos. A head
+// that has not moved is a no-op unless force is set. A head aiman's own fixer
+// pushed onto the reviewed head, with a small enough fix, is a delta: the
+// description, the blind to-do and the reveal stay, and fix.patch holds the
+// fix. Either way the fix rounds stay, so the round limit holds, and any
+// assessment or approval is dropped. Only the review session itself or the
+// operator may refresh it.
 func (s *Server) handleReviewRefresh(ctx context.Context, req Request) Response {
 	t, fail := s.resolveReview(ctx, req)
 	if fail != nil {
@@ -218,11 +232,13 @@ func (s *Server) handleReviewRefresh(ctx context.Context, req Request) Response 
 		return errResp(req.ID, CodeCreateFailed, fmt.Sprintf("read %s: %v", t.ref, err))
 	}
 	if pr.HeadSHA != "" && pr.HeadSHA == st.HeadSHA && !t.call.Force {
-		return Response{ID: req.ID, Result: map[string]any{"type": "review", "session": t.sess.ID, "refreshed": false, "state": st}}
+		return Response{ID: req.ID, Result: map[string]any{"type": "review", "session": t.sess.ID, "refreshed": false, "delta": false, "state": st}}
 	}
-	desc := filepath.Join(s.reviewScratch(t.sess.ID), review.DescriptionFileName)
-	if err := os.Remove(desc); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return errResp(req.ID, CodeCreateFailed, err.Error())
+	round := s.deltaRound(ctx, t, st, pr.HeadSHA)
+	if round == nil {
+		if err := s.withdrawDescription(t.sess.ID); err != nil {
+			return errResp(req.ID, CodeCreateFailed, err.Error())
+		}
 	}
 	if err := s.retireReviewConsults(ctx, t.sess.ID); err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
@@ -231,16 +247,126 @@ func (s *Server) handleReviewRefresh(ctx context.Context, req Request) Response 
 	if err != nil {
 		return errResp(req.ID, code, err.Error())
 	}
+	if round != nil {
+		if err := s.writeFixPatch(ctx, t, *round); err != nil {
+			return errResp(req.ID, CodeCreateFailed, err.Error())
+		}
+	}
 	from := st.HeadSHA
-	st = review.State{Ref: st.Ref, HeadSHA: meta.HeadSHA}
-	if err := review.SaveState(s.reviewBase(), t.sess.ID, st); err != nil {
+	next := review.State{Ref: st.Ref, HeadSHA: meta.HeadSHA, Fixes: st.Fixes}
+	if round != nil {
+		next.Revealed, next.Single = st.Revealed, st.Single
+	}
+	if err := review.SaveState(s.reviewBase(), t.sess.ID, next); err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
-	if err := s.reopenReviewTodos(ctx, t.sess.ID); err != nil {
+	delta := round != nil
+	reopen := s.reopenReviewTodos
+	if delta {
+		reopen = s.reopenDeltaTodos
+	}
+	if err := reopen(ctx, t.sess.ID); err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
-	s.appendEvent(ctx, t.sess.ID, domain.EventActorAiman, domain.EventReviewRefreshed, map[string]any{"from": from, "to": meta.HeadSHA})
-	return Response{ID: req.ID, Result: map[string]any{"type": "review", "session": t.sess.ID, "refreshed": true, "state": st}}
+	s.appendEvent(ctx, t.sess.ID, domain.EventActorAiman, domain.EventReviewRefreshed, map[string]any{"from": from, "to": meta.HeadSHA, "delta": delta})
+	return Response{ID: req.ID, Result: map[string]any{"type": "review", "session": t.sess.ID, "refreshed": true, "delta": delta, "state": next}}
+}
+
+// withdrawDescription removes the description and any earlier fix.patch, which
+// a return to the blind pass must not leave readable.
+func (s *Server) withdrawDescription(id string) error {
+	scratch := s.reviewScratch(id)
+	for _, path := range []string{
+		filepath.Join(scratch, review.DescriptionFileName),
+		filepath.Join(scratch, reviewFilesDir, fixPatchFile),
+	} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+// newestPushedRound is the last round that pushed, or nil.
+func newestPushedRound(st review.State) *review.FixRound {
+	for i := len(st.Fixes) - 1; i >= 0; i-- {
+		if st.Fixes[i].PushedSHA != "" {
+			return &st.Fixes[i]
+		}
+	}
+	return nil
+}
+
+// deltaRound is the round this refresh is a delta of, or nil for a full
+// refresh. The PR head must be what the newest round pushed, on top of the head
+// this review last covered, and the fix small. A size that cannot be read counts
+// as too large.
+func (s *Server) deltaRound(ctx context.Context, t reviewTarget, st review.State, head string) *review.FixRound {
+	round := newestPushedRound(st)
+	if round == nil || round.PushedSHA != head || round.StartSHA != st.HeadSHA {
+		return nil
+	}
+	remote, err := s.reviewHostRemote(ctx, t.sess.ID)
+	if err != nil {
+		return nil
+	}
+	cmd := "git -C " + quoteArg(t.sess.WorktreePath) + " diff --no-renames --numstat " + quoteArg(round.StartSHA) + " " + quoteArg(round.PushedSHA)
+	out, err := remote.Execute(ctx, cmd)
+	if err != nil {
+		return nil
+	}
+	if lines, ok := numstatLines(out); !ok || lines > maxDeltaLines {
+		return nil
+	}
+	return round
+}
+
+// numstatLines sums git diff --numstat's added and deleted lines. A binary file
+// has no count and reports false: its size cannot be judged.
+func numstatLines(numstat string) (int, bool) {
+	total := 0
+	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) < 2 {
+			return 0, false
+		}
+		added, err1 := strconv.Atoi(fields[0])
+		deleted, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil {
+			return 0, false
+		}
+		total += added + deleted
+	}
+	return total, true
+}
+
+// writeFixPatch writes the round's diff into the review files.
+func (s *Server) writeFixPatch(ctx context.Context, t reviewTarget, round review.FixRound) error {
+	remote, err := s.reviewHostRemote(ctx, t.sess.ID)
+	if err != nil {
+		return err
+	}
+	out, err := remote.Execute(ctx, "git -C "+quoteArg(t.sess.WorktreePath)+" diff "+quoteArg(round.StartSHA)+" "+quoteArg(round.PushedSHA))
+	if err != nil {
+		return fmt.Errorf("diff the fix: %w: %s", err, strings.TrimSpace(out))
+	}
+	return os.WriteFile(filepath.Join(s.reviewScratch(t.sess.ID), reviewFilesDir, fixPatchFile), []byte(out), 0o600)
+}
+
+// reviewHostRemote is the executor review id's git work runs on.
+func (s *Server) reviewHostRemote(ctx context.Context, id string) (domain.RemoteExecutor, error) {
+	existing, err := s.loadSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	remote := s.reviewRemote(id, existing)
+	if remote == nil {
+		return nil, errors.New("no remote to run the review's git commands on")
+	}
+	return remote, nil
 }
 
 // retireReviewConsults unlinks, records abandoned and retires every consult of
@@ -307,13 +433,22 @@ func (s *Server) restageReview(ctx context.Context, t reviewTarget, pr review.PR
 	return meta, "", nil
 }
 
-// reopenReviewTodos sets the blind, informed and post to-dos and the review
-// gate back to pending, as aiman.
+// reopenReviewTodos sets the blind to-do, and everything a delta reopens, back
+// to pending, as aiman.
 func (s *Server) reopenReviewTodos(ctx context.Context, id string) error {
-	reopen := map[string]bool{reviewBlindRef: true, reviewInformedRef: true, todo.ReviewGateRef: true, reviewPostRef: true}
+	return s.reopenTodos(ctx, id, reviewBlindRef, reviewInformedRef, reviewPostRef, todo.ReviewGateRef, todo.ApproveGateRef)
+}
+
+// reopenDeltaTodos sets the informed and post to-dos and the gates back to
+// pending, as aiman. The blind pass still holds after a delta.
+func (s *Server) reopenDeltaTodos(ctx context.Context, id string) error {
+	return s.reopenTodos(ctx, id, reviewInformedRef, reviewPostRef, todo.ReviewGateRef, todo.ApproveGateRef)
+}
+
+func (s *Server) reopenTodos(ctx context.Context, id string, refs ...string) error {
 	return s.TodoAccess().Mutate(ctx, id, domain.AuthorAiman, func(l *domain.TodoList) error {
 		for i := range l.Items {
-			if reopen[l.Items[i].Ref] {
+			if slices.Contains(refs, l.Items[i].Ref) {
 				l.Items[i].State = domain.TodoPending
 			}
 		}

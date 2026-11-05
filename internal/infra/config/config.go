@@ -237,11 +237,18 @@ func (h HandoverConfig) ChildTimeout() time.Duration {
 // consult.
 const DefaultReviewConsultTimeout = 30 * time.Minute
 
+// DefaultReviewFixTimeout bounds a review's fixer when review.fix_timeout is
+// unset.
+const DefaultReviewFixTimeout = 60 * time.Minute
+
 // ReviewConfig configures PR review sessions.
 type ReviewConfig struct {
 	// ConsultTimeout is how long a review session's consult may run without a
 	// report; zero means DefaultReviewConsultTimeout.
 	ConsultTimeout time.Duration `yaml:"consult_timeout,omitempty"`
+	// FixTimeout is how long a review's fixer may run without pushing; zero
+	// means DefaultReviewFixTimeout.
+	FixTimeout time.Duration `yaml:"fix_timeout,omitempty"`
 	// Sandbox holds the compose network for review.run. Empty is compose's
 	// default (bridge); "none" is offline.
 	Sandbox ReviewSandboxConfig `yaml:"sandbox,omitempty"`
@@ -259,6 +266,14 @@ func (r ReviewConfig) ConsultTimeoutOrDefault() time.Duration {
 		return r.ConsultTimeout
 	}
 	return DefaultReviewConsultTimeout
+}
+
+// FixTimeoutOrDefault is FixTimeout, or DefaultReviewFixTimeout when unset.
+func (r ReviewConfig) FixTimeoutOrDefault() time.Duration {
+	if r.FixTimeout > 0 {
+		return r.FixTimeout
+	}
+	return DefaultReviewFixTimeout
 }
 
 // DefaultDesignDir is the directory design pages live in when design.dir is
