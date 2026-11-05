@@ -49,7 +49,9 @@ type SessionInfo struct {
 	// Tier is the model tier the session was created from, after fallback.
 	Tier string `json:"tier,omitempty"`
 	// ReviewPR is "owner/repo#n" for a session reviewing that pull request.
-	ReviewPR         string `json:"review_pr,omitempty"`
+	ReviewPR string `json:"review_pr,omitempty"`
+	// FixPR is "owner/repo#n" for a fixer session pushing to that PR.
+	FixPR            string `json:"fix_pr,omitempty"`
 	AgentSessionID   string `json:"agent_session_id,omitempty"`
 	AgentSessionPath string `json:"agent_session_path,omitempty"`
 	Title            string `json:"title,omitempty"`
@@ -88,6 +90,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		LaunchEffort:     s.LaunchEffort,
 		Tier:             s.Tier,
 		ReviewPR:         s.ReviewPR,
+		FixPR:            s.FixPR,
 		AgentSessionID:   s.AgentSessionID,
 		AgentSessionPath: s.AgentSessionPath,
 		Title:            s.AgentTitle,

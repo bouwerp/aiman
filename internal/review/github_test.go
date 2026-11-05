@@ -50,7 +50,7 @@ func TestGHCLIArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = []string{"pr", "view", "7", "--repo", "o/r", "--json", "number,title,author,body,baseRefName,headRefName,headRefOid,additions,deletions"}
+	want = []string{"pr", "view", "7", "--repo", "o/r", "--json", "number,title,author,body,baseRefName,headRefName,headRefOid,additions,deletions,isCrossRepository"}
 	if !reflect.DeepEqual(calls[0].args, want) {
 		t.Fatalf("view args: %v", calls[0].args)
 	}

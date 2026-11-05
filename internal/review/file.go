@@ -22,6 +22,7 @@ type Finding struct {
 	Source   string // primary, secondary or both
 	Call     string // agree or disagree; empty until the operator decides
 	Quote    string // the operator's words behind the call
+	Fixed    string // sha of the commit that fixed it; counts only when State.Fixes records it
 	Body     string
 }
 
@@ -41,6 +42,7 @@ type File struct {
 var (
 	findingHead = regexp.MustCompile(`^###\s+(\S+)\s+(\S+)(?:\s+(.+?)(?::(\d+))?)?\s*$`)
 	verifiedRe  = regexp.MustCompile(`^Verified:\s*(yes|no)\b\s*(?:\((.*)\))?\s*$`)
+	fixedRe     = regexp.MustCompile(`^Fixed:\s*(\S+)\s*$`)
 	callRe      = regexp.MustCompile(`^Call:\s*(agree|disagree)\b\s*(?:"(.*)")?\s*$`)
 	labels      = map[string]bool{"blocking": true, "suggestion": true, "question": true, "nit": true}
 )
@@ -134,6 +136,10 @@ func (fd *Finding) takeField(line string, beforeBody bool) bool {
 		fd.Call, fd.Quote = m[1], m[2]
 		return true
 	}
+	if m := fixedRe.FindStringSubmatch(line); m != nil {
+		fd.Fixed = m[1]
+		return true
+	}
 	if v, ok := strings.CutPrefix(line, "Source:"); ok {
 		fd.Source = strings.TrimSpace(v)
 		return true
@@ -145,7 +151,12 @@ func (fd *Finding) takeField(line string, beforeBody bool) bool {
 // findings without a call, and unverified findings that are not questions.
 // A file with no questions is complete: the agent asks only what it could
 // not settle from the code and the PR.
-func (f File) Missing() []string {
+func (f File) Missing() []string { return f.MissingWith(nil) }
+
+// MissingWith is Missing for a file whose findings may be fixed. fixed maps a
+// finding id to the sha State.Fixes records; a finding whose Fixed line equals
+// its entry needs no call or verification. Any other Fixed value is ignored.
+func (f File) MissingWith(fixed map[string]string) []string {
 	var out []string
 	for _, q := range f.Questions {
 		if q.Answer == "" {
@@ -153,10 +164,31 @@ func (f File) Missing() []string {
 		}
 	}
 	for _, fd := range f.Findings {
+		if fd.isFixed(fixed) {
+			continue
+		}
 		out = append(out, fd.missing()...)
 	}
 	if f.Summary == "" {
 		out = append(out, "summary is empty")
+	}
+	return out
+}
+
+// isFixed reports whether the finding's Fixed line matches a recorded fix.
+func (fd Finding) isFixed(fixed map[string]string) bool {
+	sha, ok := fixed[fd.ID]
+	return ok && sha != "" && fd.Fixed == sha
+}
+
+// OpenBlocking lists the ids of blocking findings that are neither recorded as
+// fixed nor answered with Call: disagree.
+func (f File) OpenBlocking(fixed map[string]string) []string {
+	var out []string
+	for _, fd := range f.Findings {
+		if fd.Label == "blocking" && !fd.isFixed(fixed) && fd.Call != "disagree" {
+			out = append(out, fd.ID)
+		}
 	}
 	return out
 }
@@ -187,10 +219,16 @@ func (fd Finding) missing() []string {
 	return out
 }
 
-// Post builds the review to send: the summary as the body and one inline
-// comment per agreed finding, each prefixed with its label. Approval is never
-// posted, and an incomplete file is refused.
+// Post builds the review to send with no recorded fixes; see PostFixed.
 func (f File) Post(event, commit string, single bool) (Post, error) {
+	return f.PostFixed(event, commit, single, nil)
+}
+
+// PostFixed builds the review to send: the summary as the body and one inline
+// comment per agreed finding, each prefixed with its label. Findings recorded
+// as fixed get no comment; the body lists each as "Fixed in <sha>: <id> <path>".
+// Approval is never posted here, and an incomplete file is refused.
+func (f File) PostFixed(event, commit string, single bool, fixed map[string]string) (Post, error) {
 	switch event {
 	case "COMMENT", "REQUEST_CHANGES":
 	case "APPROVE":
@@ -198,18 +236,49 @@ func (f File) Post(event, commit string, single bool) (Post, error) {
 	default:
 		return Post{}, fmt.Errorf("review event %q: want COMMENT or REQUEST_CHANGES", event)
 	}
-	if m := f.Missing(); len(m) > 0 {
+	return f.build(event, commit, single, fixed, false, "")
+}
+
+// Approval builds the APPROVE review. Incomplete files and open blocking
+// findings are refused. The body is the summary, the single-reviewer note, the
+// fixed lines and note; with posted true it carries no inline comments.
+func (f File) Approval(commit string, single bool, fixed map[string]string, posted bool, note string) (Post, error) {
+	if open := f.OpenBlocking(fixed); len(open) > 0 {
+		return Post{}, fmt.Errorf("blocking findings are still open: %s", strings.Join(open, ", "))
+	}
+	return f.build("APPROVE", commit, single, fixed, posted, note)
+}
+
+func (f File) build(event, commit string, single bool, fixed map[string]string, noComments bool, note string) (Post, error) {
+	if m := f.MissingWith(fixed); len(m) > 0 {
 		return Post{}, fmt.Errorf("review is incomplete: %s", strings.Join(m, "; "))
 	}
 	p := Post{Event: event, CommitID: commit, Body: f.Summary}
-	if single {
+	add := func(s string) {
+		if s == "" {
+			return
+		}
 		if p.Body != "" {
 			p.Body += "\n\n"
 		}
-		p.Body += SingleReviewerNote
+		p.Body += s
+	}
+	if single {
+		add(SingleReviewerNote)
+	}
+	var lines []string
+	for _, fd := range f.Findings {
+		if fd.isFixed(fixed) {
+			lines = append(lines, fmt.Sprintf("Fixed in %s: %s %s", fd.Fixed, fd.ID, fd.Path))
+		}
+	}
+	add(strings.Join(lines, "\n"))
+	add(strings.TrimSpace(note))
+	if noComments {
+		return p, nil
 	}
 	for _, fd := range f.Findings {
-		if fd.Call != "agree" {
+		if fd.Call != "agree" || fd.isFixed(fixed) {
 			continue
 		}
 		p.Comments = append(p.Comments, Comment{Path: fd.Path, Line: fd.Line, Body: fd.Label + ": " + fd.Body})

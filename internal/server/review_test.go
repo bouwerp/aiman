@@ -902,3 +902,7 @@ func TestRefreshRefusesOtherSession(t *testing.T) {
 	refreshResult(t, r.srv, info.ID, map[string]any{})
 	refreshResult(t, r.srv, "", map[string]any{"session": info.ID})
 }
+
+func (f *fakeGitHub) Viewer(context.Context) (string, error) { return "tester", nil }
+
+func (f *fakeGitHub) ReviewDecision(context.Context, review.Ref) (string, error) { return "", nil }

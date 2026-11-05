@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // PR is the part of a pull request a review needs.
@@ -17,6 +18,7 @@ type PR struct {
 	BaseRef   string
 	HeadRef   string
 	HeadSHA   string
+	Fork      bool // the head branch lives in a fork
 	Additions int
 	Deletions int
 }
@@ -41,7 +43,15 @@ type GitHub interface {
 	ListPRs(ctx context.Context, slug string) ([]PR, error)
 	PR(ctx context.Context, ref Ref) (PR, error)
 	PostReview(ctx context.Context, ref Ref, post Post) error
+	// Viewer is the login gh is authenticated as.
+	Viewer(ctx context.Context) (string, error)
+	// ReviewDecision is the PR's reviewDecision, empty when none applies.
+	ReviewDecision(ctx context.Context, ref Ref) (string, error)
 }
+
+// ErrOwnPR is returned by PostReview when GitHub refuses to let the viewer
+// approve their own pull request.
+var ErrOwnPR = errors.New("cannot approve your own pull request")
 
 // GHCLI implements GitHub with the gh CLI. Run executes a command and returns
 // its output; RunInput does the same with input on stdin and is required only
@@ -62,6 +72,7 @@ type ghPR struct {
 	HeadRefOid  string `json:"headRefOid"`
 	Additions   int    `json:"additions"`
 	Deletions   int    `json:"deletions"`
+	IsFork      bool   `json:"isCrossRepository"`
 	Author      struct {
 		Login string `json:"login"`
 	} `json:"author"`
@@ -71,7 +82,7 @@ func (g ghPR) pr() PR {
 	return PR{
 		Number: g.Number, Title: g.Title, Author: g.Author.Login, Body: g.Body,
 		BaseRef: g.BaseRefName, HeadRef: g.HeadRefName, HeadSHA: g.HeadRefOid,
-		Additions: g.Additions, Deletions: g.Deletions,
+		Additions: g.Additions, Deletions: g.Deletions, Fork: g.IsFork,
 	}
 }
 
@@ -96,7 +107,7 @@ func (c *GHCLI) ListPRs(ctx context.Context, slug string) ([]PR, error) {
 // PR reads one pull request, including its body and head SHA.
 func (c *GHCLI) PR(ctx context.Context, ref Ref) (PR, error) {
 	out, err := c.Run(ctx, "gh", "pr", "view", strconv.Itoa(ref.Number), "--repo", ref.Slug(),
-		"--json", "number,title,author,body,baseRefName,headRefName,headRefOid,additions,deletions")
+		"--json", "number,title,author,body,baseRefName,headRefName,headRefOid,additions,deletions,isCrossRepository")
 	if err != nil {
 		return PR{}, fmt.Errorf("gh pr view %s: %w", ref, err)
 	}
@@ -137,7 +148,34 @@ func (c *GHCLI) PostReview(ctx context.Context, ref Ref, post Post) error {
 	_, err = c.RunInput(ctx, string(data), "gh", "api", "--method", "POST",
 		fmt.Sprintf("repos/%s/pulls/%d/reviews", ref.Slug(), ref.Number), "--input", "-")
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "can not approve your own pull request") {
+			return fmt.Errorf("post review on %s: %w: %v", ref, ErrOwnPR, err)
+		}
 		return fmt.Errorf("post review on %s: %w", ref, err)
 	}
 	return nil
+}
+
+// Viewer returns the login gh is authenticated as.
+func (c *GHCLI) Viewer(ctx context.Context) (string, error) {
+	out, err := c.Run(ctx, "gh", "api", "user", "-q", ".login")
+	if err != nil {
+		return "", fmt.Errorf("gh api user: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// ReviewDecision returns the PR's reviewDecision.
+func (c *GHCLI) ReviewDecision(ctx context.Context, ref Ref) (string, error) {
+	out, err := c.Run(ctx, "gh", "pr", "view", strconv.Itoa(ref.Number), "--repo", ref.Slug(), "--json", "reviewDecision")
+	if err != nil {
+		return "", fmt.Errorf("gh pr view %s: %w", ref, err)
+	}
+	var raw struct {
+		ReviewDecision string `json:"reviewDecision"`
+	}
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		return "", fmt.Errorf("parse gh pr view: %w", err)
+	}
+	return raw.ReviewDecision, nil
 }
