@@ -27,6 +27,8 @@ jobs:
         run: go mod verify
 
       - name: Run tests
+        env:
+          AIMAN_TEST_DOCKER: "1"
         run: go test -v -race -coverprofile=coverage.out ./...
 
       - name: Upload coverage

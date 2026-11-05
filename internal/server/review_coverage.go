@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -102,12 +103,17 @@ func repoCoverageCmd(repos map[string]config.RepoBootstrap, reviewPR string) str
 func (s *Server) goCoverage(ctx context.Context, sb review.Sandbox, hunks []review.Hunk) (map[string]map[int]bool, error) {
 	pkgs := goCoverPackages(hunks)
 	cmd := append([]string{"go", "test", "-coverprofile=/out/cover.out"}, pkgs...)
-	if _, _, err := s.reviewRunner.Run(ctx, sb, cmd, 0); err != nil {
+	profile := filepath.Join(sb.Out, "cover.out")
+	if err := os.Remove(profile); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	cov, err := review.GoCoverage(filepath.Join(sb.Out, "cover.out"))
+	out, code, err := s.reviewRunner.Run(ctx, sb, cmd, 0)
 	if err != nil {
 		return nil, err
+	}
+	cov, err := review.GoCoverage(profile)
+	if err != nil {
+		return nil, coverageRunError(code, out, err)
 	}
 	return review.RelocateCoverage(cov, review.ModulePath(sb.Src)), nil
 }
@@ -138,7 +144,8 @@ func goCoverPackages(hunks []review.Hunk) []string {
 }
 
 func (s *Server) istanbulCoverage(ctx context.Context, sb review.Sandbox, cmd string) (map[string]map[int]bool, error) {
-	if _, _, err := s.reviewRunner.Run(ctx, sb, []string{"sh", "-c", cmd}, 0); err != nil {
+	out, code, err := s.reviewRunner.Run(ctx, sb, []string{"sh", "-c", cmd}, 0)
+	if err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(filepath.Join(sb.Out, "coverage-final.json")) //nolint:gosec // path is the sandbox /out mount
@@ -146,7 +153,23 @@ func (s *Server) istanbulCoverage(ctx context.Context, sb review.Sandbox, cmd st
 		data, err = os.ReadFile(filepath.Join(sb.Src, "coverage", "coverage-final.json")) //nolint:gosec // path is the sandbox /src mount
 	}
 	if err != nil {
-		return nil, err
+		return nil, coverageRunError(code, out, err)
 	}
 	return review.IstanbulCoverage(data, "/src")
+}
+
+// coverageTailBytes bounds how much command output a coverage error carries.
+const coverageTailBytes = 2000
+
+// coverageRunError explains a missing coverage file. A test run that failed
+// before writing one says why in its output, not in the file's absence.
+func coverageRunError(code int, out string, err error) error {
+	if code == 0 {
+		return err
+	}
+	tail := strings.TrimSpace(out)
+	if len(tail) > coverageTailBytes {
+		tail = tail[len(tail)-coverageTailBytes:]
+	}
+	return fmt.Errorf("the coverage command exited %d and wrote no coverage file: %s", code, tail)
 }

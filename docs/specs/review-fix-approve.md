@@ -326,7 +326,7 @@ Released as v0.27.0. PRs #70 (P1), #71 (P2), #72 (P3), #73 (P4).
 
 ### Known limits
 
-- Not run against real Docker, a real SSH host or a real GitHub push. The tests use real git against a local upstream with fake GitHub and Docker.
+- The fix flow ran against real GitHub and Docker on a throwaway PR (bouwerp/aiman#74, 2026-11-05): `review.fix`, `review.push`, the delta refresh and the `review_own_pr` refusal. An own PR cannot reach the rest of `review.approve`, so `gate:approve`, the posted `APPROVE` and `reviewDecision` have still only met fakes. Nothing has run across a real SSH host.
 - `origin/<base>` is a ref an agent can move. Moved to the head, it gives the assessor an empty diff, which is not refused.
 - If saving state fails after GitHub accepts an approval, a retry posts a second APPROVE. The call says the PR is approved on GitHub.
 - A fixer the tracker retires logs `session.ended` with reason `consult_finished`, because it reuses `RetireConsult`.

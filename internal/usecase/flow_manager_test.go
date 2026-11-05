@@ -23,6 +23,13 @@ func TestTerminalNameForCreateUsesBranchNotDisplayName(t *testing.T) {
 	}
 }
 
+func TestTerminalNameForCreateWithNoBranchUsesDisplayName(t *testing.T) {
+	got := terminalNameForCreate("", "fixtest-74")
+	if want := domain.TerminalNameFromBranch("fixtest-74"); got != want || got == "" {
+		t.Fatalf("terminalNameForCreate = %q, want %q", got, want)
+	}
+}
+
 func TestJoinPrompt(t *testing.T) {
 	cases := []struct {
 		name       string

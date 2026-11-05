@@ -113,7 +113,7 @@ func TestComposeHardening(t *testing.T) {
 	if !reflect.DeepEqual(svc.SecurityOpt, []string{"no-new-privileges:true"}) {
 		t.Fatalf("security_opt %v", svc.SecurityOpt)
 	}
-	if !reflect.DeepEqual(svc.Tmpfs, []string{"/tmp"}) {
+	if !reflect.DeepEqual(svc.Tmpfs, []string{"/tmp:exec"}) {
 		t.Fatalf("tmpfs %v", svc.Tmpfs)
 	}
 	wantEnv := map[string]string{
@@ -153,6 +153,46 @@ func TestComposeHardening(t *testing.T) {
 	}
 	if doc.Name != "rev1" {
 		t.Fatalf("compose project name %q, want the review id", doc.Name)
+	}
+	if got := svc.DependsOn[cacheInitService].Condition; got != "service_completed_successfully" {
+		t.Fatalf("sandbox depends_on %v", svc.DependsOn)
+	}
+}
+
+// The init service is the only one that runs as root, so nothing but chown may
+// be reachable from it: no PR tree, no network, one capability, a fixed command.
+func TestComposeCacheInitIsConfined(t *testing.T) {
+	sb := Sandbox{ID: "rev1", Src: "/r/src", Out: "/r/out", Image: "golang:1.26"}
+	raw, err := Compose(sb, 1000, 2000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc composeDoc
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	init, ok := doc.Services[cacheInitService]
+	if !ok {
+		t.Fatalf("no %s service: %s", cacheInitService, raw)
+	}
+	if init.Image != sb.Image || !init.ReadOnly || init.NetworkMode != "none" {
+		t.Fatalf("init service %+v", init)
+	}
+	if !reflect.DeepEqual(init.CapDrop, []string{"ALL"}) || !reflect.DeepEqual(init.CapAdd, []string{"CHOWN"}) {
+		t.Fatalf("capabilities drop %v add %v", init.CapDrop, init.CapAdd)
+	}
+	if !reflect.DeepEqual(init.SecurityOpt, []string{"no-new-privileges:true"}) {
+		t.Fatalf("security_opt %v", init.SecurityOpt)
+	}
+	wantCmd := []string{"chown", "1000:2000", "/cache/gomod", "/cache/gocache", "/cache/npm"}
+	if !reflect.DeepEqual(init.Command, wantCmd) {
+		t.Fatalf("command %v, want %v", init.Command, wantCmd)
+	}
+	for _, v := range init.Volumes {
+		host, _, _ := strings.Cut(v, ":")
+		if strings.HasPrefix(host, "/") {
+			t.Fatalf("init service mounts host path %q", v)
+		}
 	}
 }
 
@@ -200,6 +240,11 @@ type composeServiceDoc struct {
 	CPUs        float64           `yaml:"cpus"`
 	PidsLimit   int               `yaml:"pids_limit"`
 	Ports       []string          `yaml:"ports"`
+	CapAdd      []string          `yaml:"cap_add"`
+	Command     []string          `yaml:"command"`
+	DependsOn   map[string]struct {
+		Condition string `yaml:"condition"`
+	} `yaml:"depends_on"`
 }
 
 func TestExportExcludesGit(t *testing.T) {

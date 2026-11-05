@@ -135,21 +135,35 @@ type composeFile struct {
 }
 
 type composeService struct {
-	Image       string            `yaml:"image"`
-	WorkingDir  string            `yaml:"working_dir"`
-	User        string            `yaml:"user"`
-	ReadOnly    bool              `yaml:"read_only"`
-	CapDrop     []string          `yaml:"cap_drop"`
-	SecurityOpt []string          `yaml:"security_opt"`
-	Tmpfs       []string          `yaml:"tmpfs"`
-	Environment map[string]string `yaml:"environment"`
-	Volumes     []string          `yaml:"volumes"`
-	MemLimit    string            `yaml:"mem_limit"`
-	CPUs        float64           `yaml:"cpus"`
-	PidsLimit   int               `yaml:"pids_limit"`
-	Ports       []string          `yaml:"ports,omitempty"`
-	NetworkMode string            `yaml:"network_mode,omitempty"`
+	Image       string                      `yaml:"image"`
+	WorkingDir  string                      `yaml:"working_dir,omitempty"`
+	User        string                      `yaml:"user"`
+	ReadOnly    bool                        `yaml:"read_only"`
+	CapDrop     []string                    `yaml:"cap_drop"`
+	CapAdd      []string                    `yaml:"cap_add,omitempty"`
+	SecurityOpt []string                    `yaml:"security_opt"`
+	Tmpfs       []string                    `yaml:"tmpfs,omitempty"`
+	Environment map[string]string           `yaml:"environment,omitempty"`
+	Volumes     []string                    `yaml:"volumes"`
+	MemLimit    string                      `yaml:"mem_limit"`
+	CPUs        float64                     `yaml:"cpus"`
+	PidsLimit   int                         `yaml:"pids_limit"`
+	Ports       []string                    `yaml:"ports,omitempty"`
+	NetworkMode string                      `yaml:"network_mode,omitempty"`
+	Command     []string                    `yaml:"command,omitempty"`
+	DependsOn   map[string]composeCondition `yaml:"depends_on,omitempty"`
 }
+
+type composeCondition struct {
+	Condition string `yaml:"condition"`
+}
+
+// cacheInitService is the compose service that hands the cache volumes to the
+// sandbox user. Docker creates a named volume owned by root, and the sandbox
+// runs unprivileged with no capabilities, so it cannot do this itself. This
+// service runs only chown, as root with CHOWN alone, with no network and
+// without the PR's tree mounted.
+const cacheInitService = "cache-init"
 
 // Compose marshals aiman's sandbox compose file. It is never taken from the PR.
 func Compose(sb Sandbox, uid, gid int) ([]byte, error) {
@@ -161,7 +175,10 @@ func Compose(sb Sandbox, uid, gid int) ([]byte, error) {
 		ReadOnly:    true,
 		CapDrop:     []string{"ALL"},
 		SecurityOpt: []string{"no-new-privileges:true"},
-		Tmpfs:       []string{"/tmp"},
+		// Docker mounts a tmpfs noexec by default, and go test runs the binary it
+		// builds under the temp directory. /src is already writable and executable,
+		// so this gives PR code nothing new.
+		Tmpfs: []string{"/tmp:exec"},
 		Environment: map[string]string{
 			"HOME":             "/tmp",
 			"GOMODCACHE":       "/cache/gomod",
@@ -178,6 +195,9 @@ func Compose(sb Sandbox, uid, gid int) ([]byte, error) {
 		MemLimit:  sandboxMemory,
 		CPUs:      sandboxCPUs,
 		PidsLimit: sandboxPIDs,
+		DependsOn: map[string]composeCondition{
+			cacheInitService: {Condition: "service_completed_successfully"},
+		},
 	}
 	if sb.Network == "none" {
 		svc.NetworkMode = "none"
@@ -186,8 +206,11 @@ func Compose(sb Sandbox, uid, gid int) ([]byte, error) {
 		svc.Ports = append(svc.Ports, fmt.Sprintf("127.0.0.1:%d:%d", p.Host, p.Container))
 	}
 	doc := composeFile{
-		Name:     sb.ID,
-		Services: map[string]composeService{"sandbox": svc},
+		Name: sb.ID,
+		Services: map[string]composeService{
+			"sandbox":        svc,
+			cacheInitService: cacheInit(sb.Image, uid, gid, gomod, gocache, npm),
+		},
 		Volumes: map[string]map[string]any{
 			gomod:   {},
 			gocache: {},
@@ -195,6 +218,27 @@ func Compose(sb Sandbox, uid, gid int) ([]byte, error) {
 		},
 	}
 	return yaml.Marshal(doc)
+}
+
+func cacheInit(image string, uid, gid int, gomod, gocache, npm string) composeService {
+	return composeService{
+		Image:       image,
+		User:        "0:0",
+		ReadOnly:    true,
+		CapDrop:     []string{"ALL"},
+		CapAdd:      []string{"CHOWN"},
+		SecurityOpt: []string{"no-new-privileges:true"},
+		NetworkMode: "none",
+		Volumes: []string{
+			gomod + ":/cache/gomod",
+			gocache + ":/cache/gocache",
+			npm + ":/cache/npm",
+		},
+		MemLimit:  sandboxMemory,
+		CPUs:      sandboxCPUs,
+		PidsLimit: sandboxPIDs,
+		Command:   []string{"chown", fmt.Sprintf("%d:%d", uid, gid), "/cache/gomod", "/cache/gocache", "/cache/npm"},
+	}
 }
 
 // Export writes the staged tree at worktree into dst with no .git, using

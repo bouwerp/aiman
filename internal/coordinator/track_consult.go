@@ -71,8 +71,8 @@ func (t *Tracker) finishConsult(ctx context.Context, parent domain.Session, it d
 		})
 	}
 	if t.Steer != nil {
-		t.Steer(parent.ID, fmt.Sprintf("[aiman] consult %s for %s: verdict %s, %d high, %d medium, %d low. Report: %s. Triage every objection in the design's Decisions table.",
-			child.ID, it.ID, r.Verdict, r.High, r.Medium, r.Low, path))
+		t.Steer(parent.ID, fmt.Sprintf("[aiman] consult %s for %s: verdict %s, %d high, %d medium, %d low. Report: %s. %s",
+			child.ID, it.ID, r.Verdict, r.High, r.Medium, r.Low, path, consultTriage(parent)))
 	}
 	if t.Retire != nil {
 		t.Retire(ctx, child)
@@ -166,4 +166,13 @@ func (t *Tracker) now() time.Time {
 		return t.Now()
 	}
 	return time.Now()
+}
+
+// consultTriage says where the parent records its call on each objection. A
+// review session has no design page; its calls become findings.
+func consultTriage(parent domain.Session) string {
+	if parent.ReviewPR != "" {
+		return "Verify each objection and merge the ones that hold into your review findings."
+	}
+	return "Triage every objection in the design's Decisions table."
 }

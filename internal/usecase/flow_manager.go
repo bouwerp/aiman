@@ -654,11 +654,16 @@ func SharedSessionAWSEnv(profileName, region string) map[string]string {
 	return env
 }
 
-// terminalNameForCreate is the terminal name for a new Aiman session.
-// displayName is ignored: renaming the session must not imply renaming the
-// terminal or the worktree, so create never seeds the name from the alias.
-func terminalNameForCreate(branch, _ string) string {
-	return domain.TerminalNameFromBranch(branch)
+// terminalNameForCreate is the terminal name for a new Aiman session. It comes
+// from the branch, because a later rename must not imply renaming the terminal
+// or the worktree. A session with no branch (a review or fixer, on a detached
+// head) takes it from displayName: a row the laptop has no stored name for shows
+// the terminal name, and with none it would show the session's UUID.
+func terminalNameForCreate(branch, displayName string) string {
+	if name := domain.TerminalNameFromBranch(branch); name != "" {
+		return name
+	}
+	return domain.TerminalNameFromBranch(displayName)
 }
 
 // SessionRuntimeEnv is the AIMAN_* environment for a session. Secrets must not
