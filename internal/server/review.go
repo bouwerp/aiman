@@ -44,6 +44,12 @@ var reviewTodos = []domain.TodoItem{
 // ReviewWorktrees makes the detached, staged worktree of a pull request.
 type ReviewWorktrees interface {
 	SetupRemotePRWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, number int, base string) (domain.Worktree, error)
+	// SetupFixTree makes path a remote-less clone of the main clone, detached
+	// at sha.
+	SetupFixTree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, number int, sha, path string) error
+	// PushFixTree pushes sha from the fix tree to the PR's branch through the
+	// main clone, never forced.
+	PushFixTree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, tree, sha, headRef string) error
 }
 
 // SetReviewGitHub sets the GitHub client review sessions read PRs through.

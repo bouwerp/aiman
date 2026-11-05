@@ -64,6 +64,15 @@ const (
 	// EventConsultAbandoned records on the parent's ledger a consult that
 	// ended without a usable report: the child and the to-do it was for.
 	EventConsultAbandoned EventKind = "consult.abandoned"
+	// EventReviewFixStarted records a fixer's start on the review's ledger:
+	// the fixer, its findings, the start head and the round.
+	EventReviewFixStarted EventKind = "review.fix_started"
+	// EventReviewFixPushed records a fixer's push on the review's ledger: the
+	// fixer, the pushed sha, the assigned findings and those it fixed.
+	EventReviewFixPushed EventKind = "review.fix_pushed"
+	// EventReviewFixFailed records on the review's ledger a fixer that ended
+	// without pushing: the fixer and its to-do.
+	EventReviewFixFailed EventKind = "review.fix_failed"
 )
 
 // EventActor is who caused the event. `unknown` exists for rows imported from a

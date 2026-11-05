@@ -1087,6 +1087,7 @@ git -C "$main" worktree remove --force "$wt"
 func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
 	s.downReviewSandbox(ctx, sess)
 	if sess.ReviewPR != "" {
+		s.dropReviewFixers(ctx, sess.ID)
 		s.removeReviewFiles(sess.ID)
 	}
 	if s.pty != nil {

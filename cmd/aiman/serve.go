@@ -264,6 +264,7 @@ func runServe() error {
 		ConsultTimeout: cfg.Handover.ChildTimeout(),
 		// A review session's consults get review.consult_timeout instead.
 		ConsultTimeoutFor: coordinator.ConsultTimeouts(cfg.Review.ConsultTimeoutOrDefault(), cfg.Handover.ChildTimeout()),
+		FixTimeout:        cfg.Review.FixTimeoutOrDefault(),
 	}
 	if rec := srv.NotifyRecorder(); rec != nil {
 		childTracker.Notify = rec
@@ -297,12 +298,13 @@ func ensureAimanSkill(ctx context.Context, db domain.SessionRepository) {
 }
 
 // skillRoots are the session directories the bundled skill is copied into. A
-// review's worktree is the untrusted PR checkout and gets no copy; its agent
-// runs in the scratch working directory.
+// review's worktree and a fixer's fix tree are untrusted PR checkouts and get
+// no copy; their agents run in the scratch working directory. A copy in a fix
+// tree would also dirty it, which review.push refuses.
 func skillRoots(sessions []domain.Session) []string {
 	var roots []string
 	for _, s := range sessions {
-		if s.ReviewPR == "" {
+		if s.ReviewPR == "" && s.FixPR == "" {
 			roots = append(roots, s.WorktreePath)
 		}
 		roots = append(roots, s.WorkingDirectory)
