@@ -36,8 +36,8 @@ var gateTexts = map[string]string{
 func ServeOnlyGate(ref string) bool { return ref == ApproveGateRef }
 
 // ErrGateLocked wraps a change that would let a session close, drop, remove or
-// edit an open gate. It wraps ErrInvalid.
-var ErrGateLocked = fmt.Errorf("%w: a gate is open and only the operator can change it", ErrInvalid)
+// edit an open gate, or change or remove a dropped one. It wraps ErrInvalid.
+var ErrGateLocked = fmt.Errorf("%w: only the operator can change this gate", ErrInvalid)
 
 // GateText returns the fixed item text of the gate for ref and whether ref
 // names a gate.
@@ -79,10 +79,14 @@ func GateOpen(l domain.TodoList, ref string) bool {
 }
 
 // GuardGate returns an error wrapping ErrGateLocked when prev holds an open
-// gate that next drops, closes, or renames. Moving the item is allowed.
+// gate that next drops, closes, or renames, or a dropped gate that next changes
+// in any way or removes. A drop is the operator's decision, so a session cannot
+// undo it. Moving the item is allowed.
 func GuardGate(prev, next domain.TodoList) error {
 	for _, was := range prev.Items {
-		if !gateIsOpen(was) {
+		_, isGate := gateTexts[was.Ref]
+		dropped := isGate && was.State == domain.TodoDropped
+		if !gateIsOpen(was) && !dropped {
 			continue
 		}
 		i := slices.IndexFunc(next.Items, func(it domain.TodoItem) bool { return it.ID == was.ID })
@@ -90,7 +94,11 @@ func GuardGate(prev, next domain.TodoList) error {
 			return fmt.Errorf("%w: item %s was removed", ErrGateLocked, was.ID)
 		}
 		now := next.Items[i]
-		if !gateIsOpen(now) || now.Text != was.Text || now.Ref != was.Ref {
+		stateKept := gateIsOpen(now)
+		if dropped {
+			stateKept = now.State == domain.TodoDropped
+		}
+		if !stateKept || now.Text != was.Text || now.Ref != was.Ref {
 			return fmt.Errorf("%w: item %s was changed", ErrGateLocked, was.ID)
 		}
 	}
