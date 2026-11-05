@@ -864,7 +864,7 @@ func TestReviewRefreshDeltaLargeFixIsFull(t *testing.T) {
 func fixedBody(sha string) string {
 	body := strings.Replace(fixReviewBody, "Verified: yes (go test fails)\n", "Verified: yes (go test fails)\nFixed: "+sha+"\n", 1)
 	body = strings.Replace(body, "Verified: no\nSource: secondary\n", "Verified: yes (read it)\nSource: secondary\n", 1)
-	body = strings.Replace(body, "### F3 question\n", "### F3 question pkg/a.go:1\n", 1)
+	body = strings.Replace(body, "### F3 question\n", "### F3 question pkg/b.go:1\n", 1)
 	return strings.Replace(body, "Source: both\n", "Source: both\nCall: agree \"ask it\"\n", 1)
 }
 
