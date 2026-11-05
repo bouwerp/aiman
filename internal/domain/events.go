@@ -73,6 +73,13 @@ const (
 	// EventReviewFixFailed records on the review's ledger a fixer that ended
 	// without pushing: the fixer and its to-do.
 	EventReviewFixFailed EventKind = "review.fix_failed"
+	// EventReviewAssessStarted records an assessment's consult on the review's
+	// ledger: consult, head, agent, model. The consult's row is forgotten when
+	// it retires, so this row is what names the assessing agent afterwards.
+	EventReviewAssessStarted EventKind = "review.assess_started"
+	// EventReviewPRApproved records an APPROVE accepted by GitHub: head,
+	// consult, decision, counts.
+	EventReviewPRApproved EventKind = "review.pr_approved"
 )
 
 // EventActor is who caused the event. `unknown` exists for rows imported from a

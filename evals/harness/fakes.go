@@ -63,7 +63,7 @@ func NewFakeRemote(dir string, pty *ptyfake.FakePTY) *FakeRemote {
 // id is Go-quoted.
 var ptyCLI = regexp.MustCompile(`aiman pty (kill|forget) ("(?:[^"\\]|\\.)*")`)
 
-func (r *FakeRemote) Execute(_ context.Context, cmd string) (string, error) {
+func (r *FakeRemote) Execute(ctx context.Context, cmd string) (string, error) {
 	r.mu.Lock()
 	r.execs = append(r.execs, cmd)
 	r.mu.Unlock()
@@ -71,6 +71,9 @@ func (r *FakeRemote) Execute(_ context.Context, cmd string) (string, error) {
 		return out, nil
 	}
 	m := ptyCLI.FindStringSubmatch(cmd)
+	if m == nil && r.RemoteExecutor != nil {
+		return r.RemoteExecutor.Execute(ctx, cmd)
+	}
 	if m == nil || r.PTY == nil {
 		return "", nil
 	}

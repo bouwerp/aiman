@@ -5312,7 +5312,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	if msg.String() == "c" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			s := sel.(item).session
-			if s.ReviewPR != "" {
+			if s.ReviewPR != "" || s.FixPR != "" {
 				return m, m.showToast(reviewChangeDirRefusal, true, 5*time.Second), true
 			}
 			if remote, ok := resolveRemote(m.cfg, s); ok {
@@ -7760,7 +7760,7 @@ func (m *Model) handleChangeDirConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		switch km.String() {
 		case "y":
-			if m.changingDirSession != nil && m.changingDirSession.ReviewPR != "" {
+			if m.changingDirSession != nil && (m.changingDirSession.ReviewPR != "" || m.changingDirSession.FixPR != "") {
 				m.state = viewStateMain
 				m.changingDirSession = nil
 				return m, m.showToast(reviewChangeDirRefusal, true, 5*time.Second)

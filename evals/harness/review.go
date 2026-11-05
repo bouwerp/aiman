@@ -15,6 +15,8 @@ type FakeGitHub struct {
 	mu    sync.Mutex
 	prs   map[string]review.PR
 	posts []review.Post
+
+	viewer, decision string
 }
 
 // SetPR makes ref answer with pr.
@@ -87,8 +89,33 @@ func (h *Harness) ReviewDir() string {
 	return filepath.Join(h.Dir, "pr-reviews")
 }
 
-// Viewer returns a fixed login.
-func (g *FakeGitHub) Viewer(context.Context) (string, error) { return "aiman-eval", nil }
+// Viewer returns the login set with SetViewer, else a fixed one.
+func (g *FakeGitHub) Viewer(context.Context) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.viewer != "" {
+		return g.viewer, nil
+	}
+	return "aiman-eval", nil
+}
 
-// ReviewDecision reports no decision.
-func (g *FakeGitHub) ReviewDecision(context.Context, review.Ref) (string, error) { return "", nil }
+// SetViewer sets the login Viewer reports.
+func (g *FakeGitHub) SetViewer(login string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.viewer = login
+}
+
+// ReviewDecision reports the decision set with SetDecision.
+func (g *FakeGitHub) ReviewDecision(context.Context, review.Ref) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.decision, nil
+}
+
+// SetDecision sets the reviewDecision GitHub reports after a post.
+func (g *FakeGitHub) SetDecision(decision string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.decision = decision
+}

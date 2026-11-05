@@ -75,6 +75,16 @@ func TestAllowlistDestructiveSet(t *testing.T) {
 	}
 }
 
+func TestAllowlistKeepsReviewFixAndApproveOff(t *testing.T) {
+	for _, m := range []string{"review.fix", "review.push", "review.assess", "review.approve"} {
+		for _, destructive := range []bool{false, true} {
+			if deviceMayCall(m, destructive) {
+				t.Errorf("%s must stay off the device allowlist (destructive=%v)", m, destructive)
+			}
+		}
+	}
+}
+
 func TestDeviceMayCall(t *testing.T) {
 	tests := []struct {
 		method      string
