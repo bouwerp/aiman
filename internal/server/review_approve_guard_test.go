@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -171,4 +173,93 @@ func TestReviewApproveClosesThePost(t *testing.T) {
 	a.assessedAndSigned(t)
 	rpcOK(t, a.srv, a.info.ID, "review.approve", map[string]any{"file": approveFile}, nil)
 	wantCode(t, rpc(t, a.srv, a.info.ID, "review.post", map[string]any{"file": approveFile}), CodeReviewAlreadyPosted)
+}
+
+// Nothing the review agent can write in the shared clone or the worktree may
+// change what the assessor reads.
+func TestReviewAssessDiffIgnoresWhatTheAgentCanWrite(t *testing.T) {
+	assessedDiff := func(t *testing.T, f *fixRig) string {
+		t.Helper()
+		rpcOK(t, f.srv, f.info.ID, "review.assess", map[string]any{"file": fixReviewFile}, nil)
+		raw, err := os.ReadFile(filepath.Join(f.creator.cfg.PreparedWorktree, assessDiffFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	worktree := func(t *testing.T, f *fixRig) string {
+		t.Helper()
+		row, err := f.srv.repo.Get(context.Background(), f.info.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return row.WorktreePath
+	}
+	t.Run("a replacement of the head", func(t *testing.T) {
+		f := newFixRig(t)
+		f.revealSingle(t)
+		f.srv.SetConsultDir(t.TempDir())
+		base := gitIn(t, f.clone, "rev-parse", "origin/main")
+		gitIn(t, f.clone, "replace", f.head, base)
+		if diff := assessedDiff(t, f); !strings.Contains(diff, "pkg/a.go") {
+			t.Fatalf("refs/replace hid the PR:\n%s", diff)
+		}
+	})
+	t.Run("an edited worktree and a .gitattributes hiding the code", func(t *testing.T) {
+		f := newFixRig(t)
+		f.revealSingle(t)
+		f.srv.SetConsultDir(t.TempDir())
+		wt := worktree(t, f)
+		if err := os.WriteFile(filepath.Join(wt, ".gitattributes"), []byte("* -diff\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wt, "pkg", "a.go"), []byte("package edited\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		diff := assessedDiff(t, f)
+		if !strings.Contains(diff, "+package pkg") || strings.Contains(diff, "package edited") {
+			t.Fatalf("diff:\n%s", diff)
+		}
+	})
+	t.Run("an external diff driver", func(t *testing.T) {
+		f := newFixRig(t)
+		f.revealSingle(t)
+		f.srv.SetConsultDir(t.TempDir())
+		gitIn(t, f.clone, "config", "diff.external", "true")
+		if diff := assessedDiff(t, f); !strings.Contains(diff, "+package pkg") {
+			t.Fatalf("the driver replaced the diff:\n%s", diff)
+		}
+	})
+}
+
+// A diff that cannot be generated starts nothing.
+func TestReviewAssessFailedDiffLeavesNothing(t *testing.T) {
+	f := newFixRig(t)
+	f.revealSingle(t)
+	f.srv.SetConsultDir(t.TempDir())
+	gh := f.gh.prs[7]
+	gh.BaseRef = "no-such-branch"
+	f.gh.prs[7] = gh
+	calls := f.creator.calls
+	wantCode(t, rpc(t, f.srv, f.info.ID, "review.assess", map[string]any{"file": fixReviewFile}), CodeCreateFailed)
+	if f.creator.calls != calls {
+		t.Fatal("a consult started with no diff")
+	}
+}
+
+// A head that moves away is refused, and a head back at the assessed commit is
+// the commit the verdict and the sign-off were for.
+func TestReviewApproveHeadBackAtTheAssessedCommit(t *testing.T) {
+	a := newApproveRig(t)
+	consult := a.assessedAndSigned(t)
+	a.moveHead("def")
+	wantCode(t, a.approve(t), CodeReviewHeadMoved)
+	a.moveHead("abc123")
+	rpcOK(t, a.srv, a.info.ID, "review.approve", map[string]any{"file": approveFile}, nil)
+	if st := a.state(t); st.ApproveGate == nil || st.ApproveGate.Consult != consult || st.ApprovedHead != "abc123" {
+		t.Fatalf("state %+v", st)
+	}
+	if post := a.gh.posts[len(a.gh.posts)-1]; post.CommitID != "abc123" {
+		t.Fatalf("post %+v", post)
+	}
 }
