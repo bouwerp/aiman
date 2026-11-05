@@ -10,11 +10,7 @@ import (
 	"time"
 )
 
-const (
-	museTimeout = 15 * time.Second
-	// maxReasonRunes keeps text a CLI printed to one short line.
-	maxReasonRunes = 200
-)
+const museTimeout = 15 * time.Second
 
 // NewMuseSource reads `muse usage --json`.
 func NewMuseSource(env Env) Source { return museSource{run: env.Run} }

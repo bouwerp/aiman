@@ -110,7 +110,7 @@ func runServe() error {
 	defer stop()
 	extendServePath()
 	ensureAimanSkill(ctx, db)
-	ensureAgentHooks(cfg.Verify.BeforePR)
+	ensureAgentHooks(agentHookOptions(cfg))
 	store := contextstore.NewFiles(contextstore.Root(dir))
 	if ix, err := contextstore.OpenIndex(db.DB()); err != nil {
 		log.Printf("context index unavailable: %v", err)
@@ -181,7 +181,7 @@ func runServe() error {
 	agentUpdates := newAgentUpdates(cfg.Agents.Update, dir, agentUpdateDeps{
 		Exec:        pathExec{base: agentupdate.LocalExec{}, home: home},
 		HTTP:        agentupdate.HTTPFetcher{},
-		EnsureHooks: func() { ensureAgentHooks(cfg.Verify.BeforePR) },
+		EnsureHooks: func() { ensureAgentHooks(agentHookOptions(cfg)) },
 		Home:        home,
 	})
 	agentUpdates.Sessions = srv.LiveAgentSessions
@@ -316,13 +316,18 @@ func skillRoots(sessions []domain.Session) []string {
 	return roots
 }
 
-func ensureAgentHooks(beforePR bool) {
+// agentHookOptions is what serve's config asks of the agent hooks.
+func agentHookOptions(cfg *config.Config) agenthook.Options {
+	return agenthook.Options{BeforePR: cfg.Verify.BeforePR, ClaudeStatusline: cfg.Limits.ClaudeStatusline}
+}
+
+func ensureAgentHooks(opts agenthook.Options) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		log.Printf("aiman hooks: home: %v", err)
 		return
 	}
-	results, err := agenthook.EnsureOnHost(home, beforePR)
+	results, err := agenthook.EnsureOnHostWith(home, opts)
 	if err != nil {
 		log.Printf("aiman hooks: %v", err)
 	}

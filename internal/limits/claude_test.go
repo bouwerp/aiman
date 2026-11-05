@@ -1,6 +1,7 @@
 package limits
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -52,7 +53,7 @@ func TestClaudeRecordKeepsThePreviousFile(t *testing.T) {
 	for _, in := range []string{`{"session_id":"x"}`, `{not json`, ``, `{"rate_limits":{}}`} {
 		_ = RecordClaude([]byte(in), home, testNow.Add(time.Hour))
 		after, _ := os.ReadFile(claudeFile(home))
-		if string(after) != string(before) {
+		if !bytes.Equal(after, before) {
 			t.Fatalf("input %q replaced the file with %s", in, after)
 		}
 	}

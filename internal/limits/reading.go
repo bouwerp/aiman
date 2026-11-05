@@ -80,13 +80,3 @@ type Env struct {
 	// Transport replaces the HTTP transport. Nil means the real one.
 	Transport http.RoundTripper
 }
-
-// stubSource backs sources whose piece has not landed.
-type stubSource struct{ name string }
-
-func (s stubSource) Name() string           { return s.name }
-func (s stubSource) MinAge() time.Duration  { return time.Minute }
-func (s stubSource) Timeout() time.Duration { return time.Second }
-func (s stubSource) Read(context.Context) Reading {
-	return Reading{Provider: s.name, State: StateUnknown, Reason: "not implemented"}
-}

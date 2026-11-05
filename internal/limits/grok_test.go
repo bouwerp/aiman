@@ -145,7 +145,8 @@ func pidAlive(pid int) bool {
 		return false
 	}
 	f := strings.Fields(string(raw))
-	return len(f) > 2 && f[2] != "Z"
+	// A zombie shows Z, then X for an instant while its parent reaps it.
+	return len(f) > 2 && f[2] != "Z" && f[2] != "X"
 }
 
 func TestProbeKillsTheWholeTreeOnTimeout(t *testing.T) {

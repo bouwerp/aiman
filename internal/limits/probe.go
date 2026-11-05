@@ -108,6 +108,31 @@ func startProbe(cfg ProbeConfig) (*probeRun, error) {
 			return nil, fmt.Errorf("probe: create %s: %w", dir, err)
 		}
 	}
+	run, err := launchProbe(cfg)
+	if errors.Is(err, syscall.EPERM) {
+		run, err = launchProbe(cfg)
+	}
+	if err != nil {
+		return nil, err
+	}
+	cmd := run.cmd
+	go run.read()
+	go func() {
+		defer close(run.waited)
+		_ = cmd.Wait()
+	}()
+	if err := os.WriteFile(cfg.PIDFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
+		run.stop()
+		return nil, fmt.Errorf("probe: record pid: %w", err)
+	}
+	return run, nil
+}
+
+// launchProbe starts the CLI once, on a fresh terminal. Under heavy process churn
+// the start occasionally fails with EPERM, about once in 800 starts when tests
+// ran in parallel. The step that refuses is not known, and a second attempt is
+// why it does not cost a reading.
+func launchProbe(cfg ProbeConfig) (*probeRun, error) {
 	//nolint:gosec // G204: the command is the agent binary serve resolved itself
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 	cmd.Dir = cfg.Dir
@@ -121,15 +146,6 @@ func startProbe(cfg ProbeConfig) (*probeRun, error) {
 	}
 	if err := run.startLocked(); err != nil {
 		return nil, err
-	}
-	go run.read()
-	go func() {
-		defer close(run.waited)
-		_ = cmd.Wait()
-	}()
-	if err := os.WriteFile(cfg.PIDFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
-		run.stop()
-		return nil, fmt.Errorf("probe: record pid: %w", err)
 	}
 	return run, nil
 }

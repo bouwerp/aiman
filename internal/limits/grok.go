@@ -23,6 +23,7 @@ const (
 	grokTrustNo       = "No, quit"
 	grokUsageCommand  = "/usage"
 
+	// maxReasonRunes keeps text a CLI printed to one short line.
 	maxReasonRunes = 200
 )
 

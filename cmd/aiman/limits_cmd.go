@@ -20,8 +20,6 @@ const (
 	limitsPollEvery = 2 * time.Second
 	// limitsWaitFor outlasts the slowest source, the 30-second Grok probe.
 	limitsWaitFor = 40 * time.Second
-	// claudeStatusInputMax bounds what record-claude reads from a status line.
-	claudeStatusInputMax = 4 << 20
 )
 
 // runLimits is `aiman limits`, the limits.get call, plus the record-claude step
@@ -50,22 +48,6 @@ func runLimits(args []string, stdin io.Reader, out io.Writer) error {
 		return writeJSON(snap)
 	}
 	return formatLimits(out, snap, time.Now())
-}
-
-// runLimitsRecordClaude stores the rate limits from status line JSON on stdin.
-func runLimitsRecordClaude(stdin io.Reader) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("home directory: %w", err)
-	}
-	input, err := io.ReadAll(io.LimitReader(stdin, claudeStatusInputMax))
-	if err != nil {
-		return fmt.Errorf("read status line input: %w", err)
-	}
-	if err := limits.RecordClaude(input, home, time.Now()); err != nil {
-		return fmt.Errorf("record claude limits: %w", err)
-	}
-	return nil
 }
 
 // waitForLimits asks once, with refresh as given, then polls until serve has
