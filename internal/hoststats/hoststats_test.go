@@ -262,8 +262,16 @@ func TestReportAfterFirstSampleIsFast(t *testing.T) {
 	if took := time.Since(start); took > 100*time.Millisecond {
 		t.Fatalf("second report took %s", took)
 	}
-	if rep.Memory.Total == 0 || len(rep.Processes) == 0 || len(rep.Disks) == 0 {
+	if rep.Memory.Total == 0 || len(rep.Processes) == 0 {
 		t.Fatalf("real /proc gave %+v", rep)
+	}
+	// Report does not wait for filesystems: they load on their own goroutine,
+	// which can outlast the first sample on a busy host.
+	for deadline := time.Now().Add(10 * time.Second); len(rep.Disks) == 0; rep = s.Report(context.Background(), nil) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no filesystems after waiting: %+v", rep)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
