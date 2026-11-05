@@ -76,3 +76,35 @@ func TestProbeNudgesTheTerminalSize(t *testing.T) {
 		t.Fatalf("size after the nudge = %q, want it back at 40 120", got)
 	}
 }
+
+// grokTypedScreen is the real CLI's screen with /usage typed: a suggestion row
+// above the box and Enter:send in the footer.
+const grokTypedScreen = `
+  ~/.a/limits/grok-probe                                                  1.8K / 256K │ [Dashboard]
+
+  ─────────────────────────────────────────
+    ❯ /usage View usage
+  ─────────────────────────────────────────
+  ╭────────────────────────────────────────
+  │ ❯ /usage                                                                                  │
+  ╰────────────────────────────────────────
+
+  Enter:send  │  Alt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+x:shortcuts
+`
+
+func TestGrokReadyForEnterOnTheTypedComposer(t *testing.T) {
+	if !grokReadyForEnter(grokTypedScreen) {
+		t.Fatal("the composer's own Enter:send hint must not read as a dialog")
+	}
+}
+
+func TestGrokNotReadyForEnterWhenADialogShowsAboveTheHints(t *testing.T) {
+	for _, row := range []string{"  Update available", "  Press enter to continue", "  Enter:confirm"} {
+		if grokReadyForEnter(row + "\n" + grokTypedScreen) {
+			t.Fatalf("Enter allowed with %q on screen", row)
+		}
+	}
+	if grokReadyForEnter(strings.Replace(grokTypedScreen, "Enter:send", "Enter:install", 1)) {
+		t.Fatal("only the send hint is exempt")
+	}
+}

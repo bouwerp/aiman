@@ -60,6 +60,9 @@ var (
 	grokPlan        = regexp.MustCompile(`Weekly limit \(([^)\n]+)\)`)
 	grokPercent     = regexp.MustCompile(`[█░▓▒]+\s+(\d{1,3})%`)
 	grokResets      = regexp.MustCompile(`(?m)Resets:[ \t]*([^│\n]*)`)
+	// grokComposerHints is the footer under a composer holding text. Its Enter
+	// submits the composer, which is not a dialog asking anything.
+	grokComposerHints = regexp.MustCompile(`^Enter:send(\s+│\s+\S+:\S+)+$`)
 	// grokDialogWords marks a screen that may be asking something. A false match
 	// costs one unknown reading; a miss could type /usage into a dialog, so the
 	// list is broad. Footer words on the plain composer (always-approve, Quit,
@@ -99,12 +102,12 @@ func isGrokTrust(text string, rows []string) bool {
 	return !grokDialogShowing(rest)
 }
 
-// grokDialogShowing reports dialog text outside the folder path row and the
-// rotating tip, whose wording says nothing about the screen.
+// grokDialogShowing reports dialog text outside the folder path row, the rotating
+// tip and the composer's key hints, whose wording says nothing about the screen.
 func grokDialogShowing(rows []string) bool {
 	for _, row := range rows {
 		trimmed := strings.TrimSpace(row)
-		if strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "Tip:") {
+		if strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "Tip:") || grokComposerHints.MatchString(trimmed) {
 			continue
 		}
 		if grokDialogWords.MatchString(trimmed) {
