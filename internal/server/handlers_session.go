@@ -117,7 +117,7 @@ func (s *Server) decorateState(ctx context.Context, info *SessionInfo, sess doma
 	live := s.liveSession(ctx, sess)
 	info.Title = live.AgentTitle
 	info.Ended = live.AgentEnded
-	info.Unprotected = s.verifier != nil && s.verifier.BeforePR() && live.ReviewPR == "" && !agenthook.GuardsPRCreate(live.AgentName)
+	info.Unprotected = s.verifier != nil && s.verifier.BeforePR() && live.ReviewPR == "" && live.FixPR == "" && !agenthook.GuardsPRCreate(live.AgentName)
 	st, conf := s.classify(ctx, live)
 	info.State = string(st)
 	switch conf {

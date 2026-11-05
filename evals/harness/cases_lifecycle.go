@@ -521,6 +521,8 @@ func LifecycleCases() []Case {
 		CaseReviewGate(),
 		CaseReviewHeadMoved(),
 		CaseReviewIncomplete(),
+		CaseReviewFixPush(),
+		CaseReviewApprove(),
 		CaseHandoverChildEarlyReport(),
 		CaseTerminateWorktree(),
 		CaseRestartSwitch(),

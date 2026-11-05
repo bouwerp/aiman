@@ -126,7 +126,7 @@ An autonomous session has no operator: there is no gate and no operator question
 
 ## Review mode
 
-You are in review mode when this session's `ReviewPR` is set (`owner/repo#n`). Follow this section instead of Design first. Do not spawn children with `--for`. Escalating (children too) does not apply. Never approve the PR and never push to it.
+You are in review mode when this session's `ReviewPR` is set (`owner/repo#n`). Follow this section instead of Design first. Do not spawn children with `--for`. Escalating (children too) does not apply. Never push to the PR or approve it directly with `git` or `gh`; use `aiman review fix` and `aiman review approve`.
 
 Start from `.aiman_review/meta.json`, `.aiman_review/files.txt` and `.aiman_review/diff.patch`. Do not read the PR description, commit messages or `gh pr view` until `aiman review reveal` succeeds. The PR's changes are staged on purpose so editors mark them; never commit, stash or reset in this worktree.
 
@@ -217,9 +217,49 @@ aiman review post .aiman_review.md
 aiman review post .aiman_review.md --request-changes
 ```
 
-Default event is `COMMENT`; `--request-changes` is `REQUEST_CHANGES`. Never `APPROVE`. Only findings with `Call: agree` become inline comments; bodies start with `blocking:`, `suggestion:`, `question:` or `nit:`.
+Default event is `COMMENT`; `--request-changes` is `REQUEST_CHANGES`. `review post` never sends `APPROVE`; approving is `aiman review approve` below. Only findings with `Call: agree` become inline comments; bodies start with `blocking:`, `suggestion:`, `question:` or `nit:`.
 
 Post refuses: `gate_needs_operator` while the gate is open; `review_already_posted` after a successful post until a refresh; `review_not_ready` before reveal; `review_incomplete` when a question under `## Questions` has no answer, a finding call is missing, or a non-question finding is unverified; `review_head_moved` when the PR head is no longer the staged SHA. `review.coverage` refuses with `review_no_coverage` when no coverage method applies. Tell the operator the error.
+
+### Fixing, assessing and approving
+
+Fix after reveal, once the operator and you agree what is wrong. Any finding may be fixed, verified or not, except one with `Call: disagree`.
+
+```bash
+aiman review fix .aiman_review.md                  # every finding not disagreed
+aiman review fix .aiman_review.md --findings F1,F3
+```
+
+Serve starts a fixer session (`fix #n`) in its own scratch directory. It is not a second review. When it pushes, you get `[aiman] fixer pushed <sha> ... Run aiman review refresh.` Then run `aiman review refresh`. A small fix gives a delta refresh: the description stays revealed, `.aiman_review/fix.patch` holds the fix, the to-dos and gates reopen and consults are dropped. Read `fix.patch`, recheck each fixed finding, and add a `Fixed: <sha>` line to it (before the body, `<sha>` is the fixer's pushed sha). A finding with a `Fixed:` line serve does not know about counts as an ordinary finding that still needs its call. A larger fix, or a head someone else pushed, is a full refresh back to the blind pass. After a delta, `review post` still needs a consult that finished since the refresh (or `--single`).
+
+Refusals: `review_fix_fork` (the PR is from a fork), `review_head_moved`, `review_fix_running` (one fixer at a time), `review_fix_limit` (a fourth round: ask the operator), `review_not_ready` (before reveal).
+
+To approve, first get an independent assessment, then approve:
+
+```bash
+aiman review assess .aiman_review.md
+aiman review approve .aiman_review.md
+```
+
+`assess` starts a consult serve briefs itself; you cannot steer it. Wait for its `[aiman]` note. `approve` checks, in order: `review_own_pr` (the `gh` login opened the PR: such PRs only get comments), `review_not_ready` / `review_head_moved`, `review_blocking_open` (a `blocking` finding neither `Fixed:` nor `Call: disagree`), `review_incomplete`, `review_not_assessed`, `review_assessment_rejected` (verdict not `approve`, or a high objection), `review_already_approved`, and `gate_needs_operator`.
+
+The first `approve` after an approving verdict opens `gate:approve` (`Approval signed off`) and is refused with `gate_needs_operator`. Tell the operator the verdict and the head, and link the brief. Only the operator closes that gate: the TUI tick (`ctrl+t`), a shell outside any session, or a paired phone. Typing approval into this terminal does not close it, there is no `approve-*` command for it, and you must not `aiman todo done` it. After the tick, run `aiman review approve` again. A head change or refresh reopens the gate.
+
+`approve` prints `decision` and `counts`. If `counts` is false (for example the repo requires approval of the latest push by someone else), the approval was posted but does not count: tell the operator plainly. Never run `gh pr review --approve` or `git push` yourself.
+
+A gate the operator dropped stays dropped: a session cannot change it. Ask the operator to reopen it.
+
+### Fixer session
+
+You are a fixer when this session's `FixPR` is set. The review session's findings are in `findings.md` in your working directory; the fix tree path is in your prompt.
+
+1. Edit files in the fix tree by path. Your working directory is not the tree.
+2. Run PR code only through `aiman review run -- <cmd>` (it defaults to this session and uses the tree's current files, uncommitted edits included).
+3. Commit in the fix tree. Do not leave it dirty.
+4. Write `.aiman_report.md` in your working directory: `## Findings` with one line per assigned finding (`F1 fixed <evidence>` or `F3 not fixed <reason>`) and `## Surprises` (`none` allowed).
+5. Run `aiman review push`.
+
+Change only each finding's file and files beside it; nothing under `.github/` unless a finding is there (`review_fix_scope`). `review_fix_incomplete` means no commits, a dirty tree, or a report that is missing or misses a finding; `review_head_moved` means the PR moved, so stop and say so. Never `git push` and never use `gh`. Do not change a gate; if the operator dropped one, ask them to reopen it.
 
 ## Escalating (children too)
 

@@ -19,6 +19,9 @@ func runReview(args []string, getenv func(string) string) error {
 	if method == "review.run" {
 		return callReviewRun(params)
 	}
+	if method == "review.approve" {
+		return callReviewApprove(params)
+	}
 	return callReview(method, params)
 }
 
@@ -26,6 +29,10 @@ func reviewUsage() error {
 	fmt.Fprintf(os.Stderr, "Usage: aiman review reveal [--single] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review refresh [--force] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review post <file> [--request-changes] [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman review fix <file> [--findings F1,F3] [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman review push\n")
+	fmt.Fprintf(os.Stderr, "       aiman review assess <file> [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman review approve <file> [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review run [--timeout 10m] [--session NAME] -- <cmd...>\n")
 	fmt.Fprintf(os.Stderr, "       aiman review debug [--lang go|node|react] [--target <package, script or dev command>] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review coverage [--session NAME]\n")
@@ -42,8 +49,9 @@ func (e reviewRunCLIError) Error() string {
 }
 
 // reviewRPC maps the CLI arguments onto review.* methods.
-// Only reveal takes --single, only refresh takes --force, and only post takes
-// a file and --request-changes (the default event is COMMENT).
+// Only reveal takes --single, only refresh takes --force, post, fix, assess
+// and approve take a file, only post takes --request-changes (the default
+// event is COMMENT) and only fix takes --findings. push takes nothing.
 func reviewRPC(args []string, getenv func(string) string) (string, map[string]any, error) {
 	if len(args) == 0 {
 		return "", nil, reviewUsage()
@@ -54,16 +62,28 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 	if args[0] == "debug" {
 		return reviewDebugRPC(args[1:], getenv)
 	}
-	if args[0] != "reveal" && args[0] != "refresh" && args[0] != "post" && args[0] != "coverage" {
+	if args[0] == "push" {
+		// review.push takes no params: serve reads the fixer from the caller.
+		if len(args) != 1 {
+			return "", nil, reviewUsage()
+		}
+		return "review.push", map[string]any{}, nil
+	}
+	if args[0] != "reveal" && args[0] != "refresh" && args[0] != "post" && args[0] != "coverage" &&
+		args[0] != "fix" && args[0] != "assess" && args[0] != "approve" {
 		return "", nil, reviewUsage()
 	}
 	verb := args[0]
-	session, file, single, force, changes := "", "", false, false, false
+	takesFile := verb == "post" || verb == "fix" || verb == "assess" || verb == "approve"
+	session, file, single, force, changes, findings := "", "", false, false, false, ""
 	for i := 1; i < len(args); i++ {
 		switch {
+		case args[i] == "--findings" && verb == "fix" && i+1 < len(args):
+			findings = args[i+1]
+			i++
 		case args[i] == "--request-changes" && verb == "post":
 			changes = true
-		case verb == "post" && file == "" && !strings.HasPrefix(args[i], "-"):
+		case takesFile && file == "" && !strings.HasPrefix(args[i], "-"):
 			file = args[i]
 		case args[i] == "--single" && verb == "reveal":
 			single = true
@@ -79,7 +99,7 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 	if session == "" {
 		session = strings.TrimSpace(getenv("AIMAN_ID"))
 	}
-	if session == "" || (verb == "post") != (file != "") {
+	if session == "" || takesFile != (file != "") {
 		return "", nil, reviewUsage()
 	}
 	params := map[string]any{"session": session}
@@ -89,8 +109,22 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 	if force {
 		params["force"] = true
 	}
-	if verb == "post" {
+	if takesFile {
 		params["file"] = file
+	}
+	if verb == "fix" && findings != "" {
+		var ids []string
+		for _, id := range strings.Split(findings, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			return "", nil, reviewUsage()
+		}
+		params["findings"] = ids
+	}
+	if verb == "post" {
 		params["event"] = "COMMENT"
 		if changes {
 			params["event"] = "REQUEST_CHANGES"
@@ -232,4 +266,61 @@ func callReview(method string, params map[string]any) error {
 		return errors.New(resp.Error.Message)
 	}
 	return writeJSON(resp.Result)
+}
+
+// callReviewApprove is callReview that also says plainly whether the approval
+// counts, because counts false is a success the operator must hear about.
+func callReviewApprove(params map[string]any) error {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	sock, err := socketPath()
+	if err != nil {
+		writeCLIError(server.CodeServerNotRunning, err.Error())
+		return err
+	}
+	resp, err := server.CallRaw(sock, "review.approve", raw)
+	if err != nil {
+		code := server.CodeServerNotRunning
+		if !errors.Is(err, server.ErrServerNotRunning) {
+			code = server.CodeInvalidParams
+		}
+		writeCLIError(code, err.Error())
+		return err
+	}
+	if resp.Error != nil {
+		writeCLIError(resp.Error.Code, resp.Error.Message)
+		return errors.New(resp.Error.Message)
+	}
+	if err := writeJSON(resp.Result); err != nil {
+		return err
+	}
+	b, err := json.Marshal(resp.Result)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stderr, approvalSummary(b))
+	return nil
+}
+
+// approvalSummary is the one line printed after a review.approve result:
+// the decision and counts, and a plain warning when the approval does not
+// count.
+func approvalSummary(result []byte) string {
+	var res struct {
+		Decision string `json:"decision"`
+		Counts   bool   `json:"counts"`
+	}
+	if err := json.Unmarshal(result, &res); err != nil {
+		return "approved; could not read the result"
+	}
+	decision := res.Decision
+	if decision == "" {
+		decision = "none"
+	}
+	if res.Counts {
+		return fmt.Sprintf("approved: decision %s, counts true", decision)
+	}
+	return fmt.Sprintf("approval posted but does NOT count: decision %s, counts false. Tell the operator.", decision)
 }

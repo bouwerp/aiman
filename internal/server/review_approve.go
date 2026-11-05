@@ -39,16 +39,6 @@ const (
 )
 
 const (
-	// EventReviewAssessStarted records an assessment's consult on the review's
-	// ledger: consult, head, agent, model. The consult's row is forgotten when
-	// it retires, so this row is what names the assessing agent afterwards.
-	EventReviewAssessStarted domain.EventKind = "review.assess_started"
-	// EventReviewPRApproved records an APPROVE accepted by GitHub: head,
-	// consult, decision, counts.
-	EventReviewPRApproved domain.EventKind = "review.pr_approved"
-)
-
-const (
 	assessFindingsFile = "findings.md"
 	assessDiffFile     = "diff.patch"
 	assessTodoText     = "Assess the PR for approval"
@@ -169,7 +159,7 @@ func (s *Server) handleReviewAssess(ctx context.Context, req Request) Response {
 		"agent": pick.Agent, "tier": config.TierSmart, "requested_tier": config.TierSmart,
 		"model": pick.Model, "effort": pick.Effort, "tier_fallback": false,
 	})
-	s.appendEvent(ctx, t.sess.ID, domain.EventActorAiman, EventReviewAssessStarted, map[string]any{
+	s.appendEvent(ctx, t.sess.ID, domain.EventActorAiman, domain.EventReviewAssessStarted, map[string]any{
 		"consult": consult.ID, "head": st.HeadSHA, "agent": pick.Agent, "model": pick.Model,
 	})
 	return Response{ID: req.ID, Result: map[string]any{
@@ -371,7 +361,7 @@ func (r *assessmentRecord) apply(ev domain.SessionEvent, consult string) {
 		if json.Unmarshal(ev.Payload, &p) == nil && p.Child == consult {
 			r.finished, r.verdict, r.high = true, p.Verdict, p.High
 		}
-	case EventReviewAssessStarted:
+	case domain.EventReviewAssessStarted:
 		var p struct {
 			Consult string `json:"consult"`
 			Agent   string `json:"agent"`
@@ -585,7 +575,7 @@ func (s *Server) postApproval(ctx context.Context, req Request, t reviewTarget, 
 	}
 	counts := decision == decisionApproved
 	// The approval exists on GitHub even if this call's deadline has passed.
-	s.appendEvent(context.WithoutCancel(ctx), t.sess.ID, domain.EventActorAiman, EventReviewPRApproved, map[string]any{
+	s.appendEvent(context.WithoutCancel(ctx), t.sess.ID, domain.EventActorAiman, domain.EventReviewPRApproved, map[string]any{
 		"head": c.st.HeadSHA, "consult": c.st.Assessment.Consult, "decision": decision, "counts": counts,
 	})
 	if saveErr != nil {

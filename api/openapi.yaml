@@ -302,7 +302,10 @@ components:
           description: >
             Empty for an ordinary session. reviewer, handover and consult are
             aiman's hidden helpers: session.restart and session.terminate
-            refuse them.
+            refuse them. fixer is visible: it pushes fixes to a PR.
+        fix_pr:
+          type: string
+          description: owner/repo#n for a fixer session; empty otherwise.
         issue_key:
           type: string
         branch:
@@ -364,7 +367,18 @@ components:
             than this spec answers a method it does not have with
             invalid_params and the message "unknown method <name>"; an older
             gateway answers a method missing from its allowlist with
-            forbidden.
+            forbidden. The review.fix, review.push, review.assess and
+            review.approve methods are not on the device allowlist. Their
+            refusals: review_fix_fork (the PR is from a fork),
+            review_fix_running (a fixer is running), review_fix_limit (three
+            rounds used), review_fix_incomplete and review_fix_scope
+            (review.push: missing commits, report or a path outside the
+            findings' files), review_own_pr (the gh login opened the PR),
+            review_blocking_open, review_not_assessed,
+            review_assessment_rejected and review_already_approved
+            (review.approve), plus review_not_ready, review_incomplete,
+            review_head_moved and gate_needs_operator (gate:approve is closed
+            only by an operator todo.update).
           enum:
             - invalid_params
             - not_found
@@ -389,6 +403,16 @@ components:
             - review_head_moved
             - review_already_posted
             - review_no_coverage
+            - review_fix_fork
+            - review_fix_running
+            - review_fix_limit
+            - review_fix_incomplete
+            - review_fix_scope
+            - review_own_pr
+            - review_blocking_open
+            - review_not_assessed
+            - review_assessment_rejected
+            - review_already_approved
             - worktree_dirty
             - needs_operator
             - invalid_code
@@ -624,6 +648,10 @@ components:
             - $ref: "#/components/schemas/SessionTerminatedResult"
             - $ref: "#/components/schemas/HostStatsResult"
             - $ref: "#/components/schemas/AgentsStatusResult"
+            - $ref: "#/components/schemas/ReviewFixResult"
+            - $ref: "#/components/schemas/ReviewPushResult"
+            - $ref: "#/components/schemas/ReviewAssessResult"
+            - $ref: "#/components/schemas/ReviewApprovedResult"
         error:
           $ref: "#/components/schemas/RpcError"
     PongResult:
@@ -701,6 +729,87 @@ components:
               last_activity_at:
                 type: string
                 description: RFC3339, or empty when unknown.
+    ReviewFixResult:
+      type: object
+      description: >
+        review.fix {session, file, findings?}, from the review session or the
+        operator. Starts a fixer for the findings (all that are not
+        Call: disagree when findings is omitted).
+      required: [type, session, fixer, findings, start_sha, round]
+      properties:
+        type:
+          type: string
+          const: review_fix
+        session:
+          type: string
+          description: The review session's id.
+        fixer:
+          $ref: "#/components/schemas/Session"
+        findings:
+          type: array
+          items:
+            type: string
+        start_sha:
+          type: string
+          description: The staged PR head the fixer starts from.
+        round:
+          type: integer
+          description: 1 to 3.
+    ReviewPushResult:
+      type: object
+      description: >
+        review.push {}, from a fixer only; it takes no params. Serve checks
+        the commits, the report and the scope, pushes without force, then
+        stops the fixer.
+      required: [type, sha]
+      properties:
+        type:
+          type: string
+          const: review_push
+        sha:
+          type: string
+          description: The pushed commit.
+    ReviewAssessResult:
+      type: object
+      description: >
+        review.assess {session, file}. Starts a consult that serve briefs
+        itself; a brief param is ignored.
+      required: [type, session, consult, head_sha]
+      properties:
+        type:
+          type: string
+          const: review_assess
+        session:
+          type: string
+        consult:
+          $ref: "#/components/schemas/Session"
+        head_sha:
+          type: string
+    ReviewApprovedResult:
+      type: object
+      description: >
+        review.approve {session, file}. The first call after an approving
+        assessment opens gate:approve and is refused with
+        gate_needs_operator; the operator closes it, then a second call
+        submits APPROVE at the assessed head.
+      required: [type, session, head_sha, decision, counts]
+      properties:
+        type:
+          type: string
+          const: review_approved
+        session:
+          type: string
+        head_sha:
+          type: string
+        decision:
+          type: string
+          description: GitHub's reviewDecision after the post, for example APPROVED.
+        counts:
+          type: boolean
+          description: >
+            True only when the decision is APPROVED. False is not an error:
+            the approval was posted but does not count, and the operator must
+            be told.
     SessionTerminatedResult:
       type: object
       required: [type, session, worktree_removed, branch]

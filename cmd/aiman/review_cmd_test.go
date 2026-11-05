@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,11 @@ func TestReviewParams(t *testing.T) {
 		{"debug go", []string{"debug", "--lang", "go"}, "s1", "review.debug", map[string]any{"session": "s1", "lang": "go"}},
 		{"debug node target", []string{"debug", "--lang", "node", "--target", "server.js", "--session", "pr-7"}, "", "review.debug", map[string]any{"session": "pr-7", "lang": "node", "target": "server.js"}},
 		{"coverage from env", []string{"coverage"}, "s1", "review.coverage", map[string]any{"session": "s1"}},
+		{"fix all", []string{"fix", "r.md"}, "s1", "review.fix", map[string]any{"session": "s1", "file": "r.md"}},
+		{"fix named", []string{"fix", "r.md", "--findings", "F1, F3", "--session", "pr-7"}, "", "review.fix", map[string]any{"session": "pr-7", "file": "r.md", "findings": []string{"F1", "F3"}}},
+		{"push", []string{"push"}, "fx", "review.push", map[string]any{}},
+		{"assess", []string{"assess", "r.md"}, "s1", "review.assess", map[string]any{"session": "s1", "file": "r.md"}},
+		{"approve", []string{"approve", "--session", "s2", "r.md"}, "", "review.approve", map[string]any{"session": "s2", "file": "r.md"}},
 		{"coverage named", []string{"coverage", "--session", "pr-7"}, "", "review.coverage", map[string]any{"session": "pr-7"}},
 	}
 	for _, tc := range cases {
@@ -50,7 +56,11 @@ func TestReviewParams(t *testing.T) {
 	}
 	for name, args := range map[string][]string{
 		"no verb":             nil,
-		"unknown verb":        {"approve"},
+		"unknown verb":        {"bless"},
+		"approve no file":     {"approve", "--session", "s1"},
+		"push with session":   {"push", "--session", "s1"},
+		"findings on post":    {"post", "r.md", "--findings", "F1", "--session", "s1"},
+		"empty findings":      {"fix", "r.md", "--findings", ",", "--session", "s1"},
 		"post no file":        {"post"},
 		"post two files":      {"post", "a.md", "b.md"},
 		"reveal request":      {"reveal", "--request-changes", "--session", "s1"},
@@ -69,5 +79,15 @@ func TestReviewParams(t *testing.T) {
 		if _, _, err := reviewRPC(args, env("")); !errors.Is(err, errUsage) {
 			t.Errorf("%s: err %v, want usage", name, err)
 		}
+	}
+}
+
+func TestApprovalSummary(t *testing.T) {
+	if got := approvalSummary([]byte(`{"decision":"APPROVED","counts":true}`)); !strings.Contains(got, "counts true") {
+		t.Fatal(got)
+	}
+	got := approvalSummary([]byte(`{"decision":"REVIEW_REQUIRED","counts":false}`))
+	if !strings.Contains(got, "does NOT count") || !strings.Contains(got, "counts false") {
+		t.Fatal(got)
 	}
 }

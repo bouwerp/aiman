@@ -168,6 +168,9 @@ func overlayPersistedSessionFields(live, stored domain.Session) domain.Session {
 	if live.ReviewPR == "" {
 		live.ReviewPR = stored.ReviewPR
 	}
+	if live.FixPR == "" {
+		live.FixPR = stored.FixPR
+	}
 	sameAgent := live.AgentName == "" || stored.AgentName == "" ||
 		strings.EqualFold(live.AgentName, stored.AgentName)
 	if sameAgent {
