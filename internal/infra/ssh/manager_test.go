@@ -1,8 +1,12 @@
 package ssh
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBulkSSHArgsCompressesWithoutX11(t *testing.T) {
@@ -34,5 +38,27 @@ func TestAttachPTYSessionRunsOverSSH(t *testing.T) {
 	args := strings.Join(cmd.Args, " ")
 	if cmd.Args[0] != "ssh" || !strings.Contains(args, "pty attach") {
 		t.Fatalf("pty attach must run aiman pty attach over ssh: %s", args)
+	}
+}
+
+// A multiplexed ssh client hands its output pipe to the control master, which
+// holds it until the remote command ends. The fake client leaves the pipe with
+// a background process the same way.
+func TestExecuteTimeoutReturnsWhileSomethingHoldsTheOutputPipe(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nsleep 30 &\nwait\n"), 0o700); err != nil { //nolint:gosec // an executable test double
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", dir)
+	m := NewManager(Config{Host: "h", User: "u", Root: "/r"})
+	start := time.Now()
+	_, err := m.ExecuteWithTimeout(context.Background(), "slow", 200*time.Millisecond)
+	if err == nil {
+		t.Fatal("want a timeout error")
+	}
+	if took := time.Since(start); took > 15*time.Second {
+		t.Fatalf("returned after %s: the timeout did not hold", took)
 	}
 }

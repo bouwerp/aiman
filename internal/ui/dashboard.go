@@ -2307,6 +2307,10 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 	return m, tea.Batch(cmds...)
 }
 
+// terminateDeleteTimeout bounds one remote delete during teardown. A worktree
+// can hold tens of thousands of files, more than the default SSH limit allows.
+const terminateDeleteTimeout = 5 * time.Minute
+
 func (m *Model) runTerminateStepCmd(s domain.Session, forced bool, index int) tea.Cmd {
 	return func() tea.Msg {
 		return terminateStepMsg{sessionID: s.ID, index: index, err: m.runTerminateStep(index, s, forced)}
@@ -2479,7 +2483,7 @@ func (m *Model) terminateDiscardChanges(ctx context.Context, s domain.Session) e
 		return skipReason(fmt.Sprintf("changes in %s left intact (main repository)", s.WorktreePath))
 	}
 
-	_, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q reset --hard HEAD && git -C %q clean -fd'", s.WorktreePath, s.WorktreePath))
+	_, err := mgr.ExecuteWithTimeout(ctx, fmt.Sprintf("bash -c 'git -C %q reset --hard HEAD && git -C %q clean -fd'", s.WorktreePath, s.WorktreePath), terminateDeleteTimeout)
 	return err
 }
 
@@ -2503,7 +2507,7 @@ func (m *Model) terminateStopTerminal(ctx context.Context, s domain.Session) err
 }
 
 // terminateRemoveWorktree deletes the session's worktree, refusing to touch the remote root
-// or a main repository and taking a compressed backup to /tmp first.
+// or a main repository.
 func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) error {
 	if s.WorktreePath == "" || s.RepoName == "" {
 		// Ad-hoc sessions have no worktree; skip removal.
@@ -2596,28 +2600,12 @@ func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) e
 
 	m.log("Terminating session: removing worktree %s", s.WorktreePath)
 
-	// Safety backup: tar the worktree into /tmp before deleting it.
-	// Uses maximum xz compression and a timestamped filename so it can be
-	// recovered if the deletion was a mistake.
-	wtBase := path.Base(strings.TrimSpace(resolvedWorktree))
-	if wtBase == "" || wtBase == "." || wtBase == "/" {
-		wtBase = path.Base(s.WorktreePath)
-	}
-	timestamp := time.Now().UTC().Format("20060102-150405")
-	tarName := fmt.Sprintf("/tmp/aiman-wt-%s-%s.tar.xz", wtBase, timestamp)
-	tarCmd := fmt.Sprintf("tar -C %q -cJf %q . 2>/dev/null && echo OK", s.WorktreePath, tarName)
-	if out, tarErr := mgr.Execute(ctx, tarCmd); tarErr != nil || strings.TrimSpace(out) != "OK" {
-		m.log("Warning: failed to backup worktree to %s: %v", tarName, tarErr)
-	} else {
-		m.log("Worktree backed up to %s on remote before deletion", tarName)
-	}
-
 	// Unlock the worktree before removal — a stale lock file prevents git from pruning it.
 	_, _ = mgr.Execute(ctx, fmt.Sprintf("git -C %q worktree unlock %q 2>/dev/null || true", mainRepoPath, s.WorktreePath))
 
 	// Try to remove via git worktree (needs to run from main repo).
 	// git itself refuses to remove the main worktree, providing an extra layer of safety.
-	out, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath))
+	out, err := mgr.ExecuteWithTimeout(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath), terminateDeleteTimeout)
 	if err != nil {
 		m.log("Warning: git worktree remove failed: %v, output: %s", err, out)
 	}
@@ -2628,7 +2616,7 @@ func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) e
 	if resolveErr != nil || rmPath == "" {
 		rmPath = cleanWorktree
 	}
-	out, err = mgr.Execute(ctx, fmt.Sprintf("rm -rf %q", rmPath))
+	out, err = mgr.ExecuteWithTimeout(ctx, fmt.Sprintf("rm -rf %q", rmPath), terminateDeleteTimeout)
 	if err != nil {
 		m.log("Error: rm -rf worktree failed: %v, output: %s", err, out)
 	}

@@ -82,6 +82,12 @@ func (m *Manager) GetRoot() string {
 // This prevents a single hung command from blocking the entire restart for minutes.
 const sshCommandTimeout = 30 * time.Second
 
+// sshWaitDelay bounds the wait for an ssh client's output after its context
+// ends. A multiplexed client hands its pipes to the control master, which holds
+// them until the remote command exits, so without this a timeout only takes
+// effect when the remote command finishes. The remote command keeps running.
+const sshWaitDelay = 5 * time.Second
+
 // remotePathPreamble prepends well-known tool directories to PATH before
 // every remote command. SSH non-interactive sessions do not source login
 // profiles, so Homebrew binaries (/opt/homebrew/bin on Apple Silicon,
@@ -139,6 +145,7 @@ func (m *Manager) executeWithTimeout(ctx context.Context, cmdStr string, timeout
 		// and negotiating it on every exec costs a round trip.
 		//nolint:gosec // G204: options are fixed; target and command are the operator's remote
 		cmd := exec.CommandContext(callCtx, "ssh", append(bulkSSHArgs(cp, true), "-A", target, fullCmd)...)
+		cmd.WaitDelay = sshWaitDelay
 
 		output, err := cmd.CombinedOutput()
 		outStr := strings.TrimSpace(string(output))
@@ -155,6 +162,7 @@ func (m *Manager) executeWithTimeout(ctx context.Context, cmdStr string, timeout
 		// socket/session is flaky but direct SSH still works.
 		//nolint:gosec // G204: options are fixed; target and command are the operator's remote
 		cmd := exec.CommandContext(callCtx, "ssh", append(bulkSSHArgs(cp, false), "-A", target, fullCmd)...)
+		cmd.WaitDelay = sshWaitDelay
 
 		output, err := cmd.CombinedOutput()
 		outStr := strings.TrimSpace(string(output))
@@ -217,6 +225,7 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		args := append(bulkSSHArgs(cp, useControlMaster), "-A", target, fmt.Sprintf("cat > %q", path))
 
 		cmd := exec.CommandContext(callCtx, "ssh", args...)
+		cmd.WaitDelay = sshWaitDelay
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return fmt.Errorf("failed to get stdin pipe for ssh: %w", err)
