@@ -66,8 +66,8 @@ func run() error {
 	}
 	os.Args = append([]string{os.Args[0]}, parsed.Rest...)
 
-	// `pty`, `session`, `rpc`, `todo`, `usage`, `agents`, `design`, `verify`
-	// and `review` talk only to the agent API socket (and `pty hold` not even
+	// `pty`, `session`, `rpc`, `todo`, `usage`, `limits`, `agents`, `design`,
+	// `verify` and `review` talk only to the agent API socket (and `pty hold` not even
 	// to that: it is the detached holder, handed an explicit --root and --id).
 	// `slack` talks to the Slack Web API with the host user token.
 	// Everything below exists for the TUI: loading config, opening the
@@ -91,6 +91,8 @@ func run() error {
 			return runTodo(parsed.Rest[1:], os.Stdin, os.Getenv)
 		case "usage":
 			return runUsage(parsed.Rest[1:], os.Stdout)
+		case "limits":
+			return runLimits(parsed.Rest[1:], os.Stdin, os.Stdout)
 		case "agents":
 			return runAgents(parsed.Rest[1:], os.Stdout)
 		case "host":
@@ -244,6 +246,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  serve            agent API on this host (install remotes from TUI: m → Agent API → i)\n")
 			fmt.Fprintf(os.Stderr, "  session          list/get/create/prompt sessions (JSON; needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  usage            token totals and ~$ cost (needs serve)\n")
+			fmt.Fprintf(os.Stderr, "  limits           each provider's allowance or balance left (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  agents           agent CLI versions and updates (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  pty              manage built-in PTY sessions (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  context          ls/find/get/put/pack shared notes (JSON; files if serve is down)\n")

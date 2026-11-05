@@ -20,6 +20,7 @@ func TestRPCParams(t *testing.T) {
 		{"handover.point ok", "handover.point", `{"session":"s1"}`, ""},
 		{"session.log ok", "session.log", `{"session":"s1"}`, ""},
 		{"usage.get ok", "usage.get", `{"session":"s1"}`, ""},
+		{"limits.get ok", "limits.get", `{"refresh":true}`, ""},
 		{"context.put ok", "context.put", `{"title":"T","body":"b"}`, ""},
 		{"memory.jobs ok", "memory.jobs", `{}`, ""},
 		{"memory.done ok", "memory.done", `{"id":"j1"}`, ""},

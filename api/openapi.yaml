@@ -491,6 +491,7 @@ components:
             - context.stats
             - context.verify
             - usage.get
+            - limits.get
             - agents.status
             - agents.update
             - agents.move_prefix
@@ -647,6 +648,7 @@ components:
             - $ref: "#/components/schemas/RepoListResult"
             - $ref: "#/components/schemas/SessionTerminatedResult"
             - $ref: "#/components/schemas/HostStatsResult"
+            - $ref: "#/components/schemas/LimitsResult"
             - $ref: "#/components/schemas/AgentsStatusResult"
             - $ref: "#/components/schemas/ReviewFixResult"
             - $ref: "#/components/schemas/ReviewPushResult"
@@ -837,6 +839,80 @@ components:
             before confirming; session.list has parent_id.
           items:
             type: string
+    LimitsResult:
+      type: object
+      description: >
+        limits.get {refresh}. Answers from the cache at once and starts whatever
+        is due; refresh skips the age check. Poll while refreshing is true. Device
+        tokens cannot call it. A serve with no limits manager answers unavailable.
+      required: [type, readings, refreshing]
+      properties:
+        type:
+          type: string
+          const: limits
+        readings:
+          type: array
+          description: One per source that has finished a run; empty on a fresh serve.
+          items:
+            $ref: "#/components/schemas/LimitsReading"
+        refreshing:
+          type: boolean
+    LimitsReading:
+      type: object
+      required: [provider, state]
+      properties:
+        provider:
+          type: string
+        plan:
+          type: string
+        windows:
+          type: array
+          items:
+            type: object
+            required: [label, used_percent]
+            properties:
+              label:
+                type: string
+              used_percent:
+                type: number
+                description: Zero once reset is true.
+              resets_at:
+                type: string
+                format: date-time
+              resets_text:
+                type: string
+                description: A reset the provider shows without a year or zone, as printed.
+              reset:
+                type: boolean
+                description: resets_at has passed, so the old percent no longer applies.
+        balances:
+          type: array
+          items:
+            type: object
+            required: [amount, currency]
+            properties:
+              amount:
+                type: string
+              currency:
+                type: string
+        spend:
+          type: string
+          description: Money spent, not a limit.
+        state:
+          type: string
+          enum: [ok, unknown, unavailable]
+          description: >
+            unknown means the source ran and could not read the answer; any numbers
+            are from the last good read, aged by observed_at. unavailable means it
+            does not apply on this host; an empty reason means the tool is not installed.
+        reason:
+          type: string
+        observed_at:
+          type: string
+          format: date-time
+          description: When the provider said it, not when serve asked.
+        source:
+          type: string
     HostStatsResult:
       type: object
       description: >
