@@ -650,6 +650,9 @@ func (s *Server) handleTodoGate(req Request, sess domain.Session) Response {
 	if gp.Ref == "" {
 		gp.Ref = todo.DesignGateRef
 	}
+	if todo.ServeOnlyGate(gp.Ref) {
+		return errResp(req.ID, CodeInvalidParams, "gate "+gp.Ref+" is opened by serve only")
+	}
 	if _, ok := todo.GateText(gp.Ref); !ok {
 		return errResp(req.ID, CodeInvalidParams, "unknown gate ref "+gp.Ref)
 	}

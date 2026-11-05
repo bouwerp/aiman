@@ -18,13 +18,22 @@ const (
 	ReviewGateRef = "gate:review"
 	// ReviewGateText is the fixed text of the review gate item.
 	ReviewGateText = "Review approved"
+	// ApproveGateRef marks the approval sign-off gate of a review. It is
+	// serve-only: no session or route opens it through todo.gate.
+	ApproveGateRef = "gate:approve"
+	// ApproveGateText is the fixed text of the approval gate item.
+	ApproveGateText = "Approval signed off"
 )
 
 // gateTexts maps each gate ref to its fixed item text.
 var gateTexts = map[string]string{
-	DesignGateRef: DesignGateText,
-	ReviewGateRef: ReviewGateText,
+	DesignGateRef:  DesignGateText,
+	ReviewGateRef:  ReviewGateText,
+	ApproveGateRef: ApproveGateText,
 }
+
+// ServeOnlyGate reports whether ref is a gate only serve may add.
+func ServeOnlyGate(ref string) bool { return ref == ApproveGateRef }
 
 // ErrGateLocked wraps a change that would let a session close, drop, remove or
 // edit an open gate. It wraps ErrInvalid.

@@ -86,3 +86,9 @@ func (h *Harness) EnableReview() *FakeGitHub {
 func (h *Harness) ReviewDir() string {
 	return filepath.Join(h.Dir, "pr-reviews")
 }
+
+// Viewer returns a fixed login.
+func (g *FakeGitHub) Viewer(context.Context) (string, error) { return "aiman-eval", nil }
+
+// ReviewDecision reports no decision.
+func (g *FakeGitHub) ReviewDecision(context.Context, review.Ref) (string, error) { return "", nil }

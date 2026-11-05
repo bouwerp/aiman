@@ -110,7 +110,9 @@ type Session struct {
 	// ReviewPR is "owner/repo#n" for a session reviewing that pull request,
 	// empty otherwise. A review session is interactive; code that treats it
 	// differently checks ReviewPR != "".
-	ReviewPR  string
+	ReviewPR string
+	// FixPR is "owner/repo#n" for a fixer session pushing to that PR's branch.
+	FixPR     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -124,6 +126,9 @@ const SessionRoleReviewer SessionRole = "reviewer"
 // SessionRoleHandover is a hidden child session that rewrites a worker's
 // handover from its transcript and proposes memory candidates.
 const SessionRoleHandover SessionRole = "handover"
+
+// SessionRoleFixer is a visible child that fixes a review's findings.
+const SessionRoleFixer SessionRole = "fixer"
 
 // SessionRoleConsult is a hidden smart-tier child that challenges its
 // parent's design read-only and reports objections and a verdict.
@@ -309,7 +314,9 @@ type SessionConfig struct {
 	// ReviewPR is "owner/repo#n" when the session reviews that pull request.
 	// It skips the design-first prompt suffix; CreateSession copies it onto
 	// the session.
-	ReviewPR       string
+	ReviewPR string
+	// FixPR is "owner/repo#n" when the session fixes that pull request.
+	FixPR          string
 	ReuseWorkspace bool           // bypass git worktree and execute directly in the main clone
 	AdHoc          bool           // ad-hoc session: no git repo, no JIRA; Branch is used as the session label
 	SSHManager     RemoteExecutor // remote to create the session on; uses FlowManager default if nil
