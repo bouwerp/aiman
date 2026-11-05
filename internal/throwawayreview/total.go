@@ -4,8 +4,8 @@ package throwawayreview
 // Total returns the sum of every value in xs.
 func Total(xs []int) int {
 	sum := 0
-	for i := 0; i < len(xs)-1; i++ {
-		sum += xs[i]
+	for _, x := range xs {
+		sum += x
 	}
 	return sum
 }
