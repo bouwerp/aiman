@@ -20,15 +20,20 @@ func claudeStatuslineOffPath(home string) string {
 	return filepath.Join(home, ".aiman", "limits", "claude-statusline.off")
 }
 
-// agentProviders names the source behind each agent that has one provider.
+// agentProviders names the source behind each agent that has one provider. A
+// session's agent name can be the command or the display name, whose first word
+// is what agent.BaseOf returns: "GitHub Copilot CLI" is github, "Deep Code" deep.
 var agentProviders = map[string]string{
 	"claude":   claudeProvider,
 	"codex":    "codex",
 	"grok":     grokProvider,
 	"muse":     "muse",
 	"copilot":  copilotName,
+	"gh":       copilotName,
+	"github":   copilotName,
 	"opencode": openCodeName,
 	"deepcode": deepSeekName,
+	"deep":     deepSeekName,
 }
 
 // piProviders names the source behind a Pi model's provider segment. Pi reports

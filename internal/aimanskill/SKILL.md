@@ -26,6 +26,10 @@ Commands return JSON. Parse `name`, `group`, and `id` from the result. Prefer na
 
 Do not call `aiman session report-agent-session`. Aiman installs a SessionStart hook that reports the vendor conversation id automatically.
 
+## Writing to the operator
+
+Be terse: the result first, then only what changes what they do next. No recap of what you did or what they said. Put any question last, as the final line of the message, so it is the last thing they read on any screen.
+
 ## Names and groups
 
 Every session has a short unique `name` (`fix-login`, `reviewer`, `q1`) and a `group` (issue key, repo, or `quick`). A create from inside a session nests under the caller on the operator's list. Spawn helpers in the caller's group:
