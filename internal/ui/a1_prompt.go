@@ -40,6 +40,8 @@ func (m *Model) applyTrackedSessionMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case usageRollupMsg:
 		m.applyUsageRollup(msg)
 		return m, nil
+	case usageLimitsMsg:
+		return m, m.applyUsageLimits(msg)
 	case ciStatusMsg:
 		return m, m.applyCIStatus(msg)
 	case verifyStartedMsg:
