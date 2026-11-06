@@ -2916,7 +2916,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.startSessionStream(remote)
 		}
 		return m, nil
-	case todoLoadedMsg, promptSentMsg, todoMutatedMsg, usageMsg, usageRollupMsg,
+	case todoLoadedMsg, promptSentMsg, todoMutatedMsg, usageMsg, usageRollupMsg, usageLimitsMsg,
 		memoryJobsMsg, memoryProposalMsg, memorySavedMsg, memoryJobDoneMsg, ciStatusMsg, verifyStartedMsg:
 		// These results are global: a fetch, a reply, a failed to-do
 		// write, a usage report or a PR watch answer can finish after the user has left

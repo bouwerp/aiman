@@ -16,6 +16,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/rtk"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/bouwerp/aiman/internal/limits"
 	"github.com/bouwerp/aiman/internal/usage"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
@@ -28,7 +29,7 @@ const (
 	usageByDay
 )
 
-const usageViewFooter = "tab by ticket/day  r refresh  esc back"
+const usageViewFooter = "tab by ticket/day  r refresh  esc back  l limits"
 
 // usageHost is one remote's rollup. extra is the dim text on the host line:
 // tool-call health and RTK savings. unpriced is the visible mode's model ids.
@@ -43,6 +44,8 @@ type usageHost struct {
 	busy       bool
 	extra      string
 	health     usage.Health
+	limits     []limits.Reading
+	limitsErr  string
 }
 
 // UsageViewModel is the $ screen: per-ticket or per-day cost across remotes.
@@ -160,7 +163,10 @@ func fetchUsageRollups(cfg *config.Config, hosts []usageHost, mode usageViewMode
 func (m *Model) enterUsageView() tea.Cmd {
 	m.usageView = newUsageView(m.cfg)
 	m.state = viewStateUsage
-	return fetchUsageRollups(m.cfg, m.usageView.hosts, usageByIssue)
+	return tea.Batch(
+		fetchUsageRollups(m.cfg, m.usageView.hosts, usageByIssue),
+		fetchUsageLimitsAll(m.cfg, m.usageView.hosts, false),
+	)
 }
 
 func (m *Model) applyUsageRollup(msg usageRollupMsg) {
@@ -230,6 +236,8 @@ func (m *Model) handleUsageViewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.toggleUsageMode()
 	case "r":
 		return m, m.refreshUsageView()
+	case "l":
+		return m, fetchUsageLimitsAll(m.cfg, m.usageView.hosts, true)
 	case "up", "k", "left":
 		m.moveUsageCursor(-1)
 	case "down", "j", "right":
@@ -381,8 +389,15 @@ func (m UsageViewModel) viewString() string {
 		b.WriteString(usageRowLine(row, i == m.cursor))
 	}
 	b.WriteString("\n")
+	now := time.Now()
 	for _, host := range m.hosts {
 		b.WriteString(host.statusLine(dim, m.mode))
+		for _, row := range limitRows(host.limits, now) {
+			b.WriteString(dim.Render("    "+row) + "\n")
+		}
+		if host.limitsErr != "" {
+			b.WriteString(dim.Render("    limits: "+truncateRunes(host.limitsErr, 70)) + "\n")
+		}
 	}
 	if ids := usageUnpricedIDs(m.hosts); len(ids) > 0 {
 		b.WriteString(dim.Render("  ~ estimates · unpriced: "+strings.Join(ids, ", ")) + "\n")
