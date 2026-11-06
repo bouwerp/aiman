@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/bouwerp/aiman/internal/limits"
 )
 
 const (
@@ -31,8 +33,6 @@ type InstallResult struct {
 type Options struct {
 	// BeforePR installs the verify gate on Claude's PR creation.
 	BeforePR bool
-	// ClaudeStatusline wraps Claude's status line; off restores it.
-	ClaudeStatusline bool
 }
 
 // EnsureOnHost is EnsureOnHostWith with only the before-PR option.
@@ -100,8 +100,9 @@ func ensureClaude(home, command string, opts Options) (InstallResult, error) {
 	}
 	todo := todoReporterPath(home)
 	var statusErr error
+	wrapStatusLine := !limits.ClaudeStatuslineOff(home)
 	editStatusLine := UnwrapStatusLine
-	if opts.ClaudeStatusline {
+	if wrapStatusLine {
 		editStatusLine = WrapStatusLine
 		if _, err := WriteStatusLineWrapper(home, aimanBin(home)); err != nil {
 			statusErr = err
@@ -126,7 +127,7 @@ func ensureClaude(home, command string, opts Options) (InstallResult, error) {
 		return identity || compact || turns || todos || gate || status
 	})
 	// On any error settings may still point at the script, so it stays.
-	if !opts.ClaudeStatusline && err == nil && statusErr == nil {
+	if !wrapStatusLine && err == nil && statusErr == nil {
 		if rerr := os.Remove(statusLineScriptPath(home)); rerr != nil && !os.IsNotExist(rerr) {
 			statusErr = rerr
 		}

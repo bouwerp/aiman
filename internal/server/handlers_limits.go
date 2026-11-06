@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/limits"
 )
 
@@ -16,6 +17,22 @@ func (s *Server) dispatchUsage(ctx context.Context, req Request) Response {
 		return s.handleLimitsGet(ctx, req)
 	}
 	return s.handleUsageGet(ctx, req)
+}
+
+// sessionLimits is the reading of the provider behind a session's agent.
+func (s *Server) sessionLimits(sess domain.Session) *limits.Reading {
+	if s.limits == nil {
+		return nil
+	}
+	model := sess.LaunchModel
+	if model == "" {
+		model = sess.AgentModel
+	}
+	reading, ok := s.limits.Reading(limits.ProviderFor(sess.AgentName, model))
+	if !ok {
+		return nil
+	}
+	return &reading
 }
 
 // handleLimitsGet answers from the cache and never waits on a provider: the

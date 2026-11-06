@@ -1,6 +1,6 @@
 # provider-limits: See how much of each provider's allowance is left
 
-**Revision:** 3 · **Size:** project · **Status:** as built, see "Deviations from the approved design"
+**Revision:** 4 · **Size:** project · **Status:** as built, see "Deviations from the approved design"
 **Task:** operator request, 2026-11-05: "yes build all that are possible" · **Spec:** this page
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
@@ -62,7 +62,7 @@ Every figure was checked on this host unless marked.
 |---|---|---|---|---|
 | Muse | `muse usage --json` | Allowance | Nothing new | Documented command. **Only a null allowance seen so far** (`server_sent_no_usage`); see open question 2. |
 | Codex | Tail of the newest `~/.codex/sessions/**/*.jsonl` | 5-hour and weekly percent, reset times, plan | Nothing new | Seen here. Only as fresh as the last Codex turn on this host. |
-| Claude Code | Status line wrapper, **off until you turn it on** | 5-hour and weekly percent, reset times | One edit to `~/.claude/settings.json` | Documented. Only for subscribers, after the first response, only as fresh as the last Claude turn. A project-level `statusLine` overrides it. |
+| Claude Code | Status line wrapper, on unless the host opts out | 5-hour and weekly percent, reset times | One edit to `~/.claude/settings.json` | Documented. Only for subscribers, after the first response, only as fresh as the last Claude turn. A project-level `statusLine` overrides it. |
 | Grok | Probe of `/usage` | Weekly percent, plan, reset text | Nothing new | Read off a screen. Tried once by hand here. |
 | OpenRouter | `GET /api/v1/key` | Credits left, daily and weekly use | `.openrouter.key` in `~/.pi/agent/auth.json` when `.openrouter.type` is `api_key`, else `OPENROUTER_API_KEY` | Documented. |
 | DeepSeek | `GET /user/balance` | Balance per currency | `.env.API_KEY` in `~/.deepcode/settings.json` when `.env.BASE_URL` has the exact host `api.deepseek.com`, else `DEEPSEEK_API_KEY` | Documented by the provider; checked only through mirrors. |
@@ -205,7 +205,7 @@ The probe avoids all of them by **not using a holder**. Serve starts `grok` dire
 
 ### The Claude status line wrapper
 
-The status line's stdin is the only documented source (`https://code.claude.com/docs/en/statusline.md`). Claude Code takes one `statusLine` object, and reacts to a change immediately by cancelling the running command. So this is **off by default** and you turn it on with `limits.claude_statusline: true`. Until then Claude shows `off: set limits.claude_statusline`.
+The status line's stdin is the only documented source (`https://code.claude.com/docs/en/statusline.md`). Claude Code takes one `statusLine` object, and reacts to a change immediately by cancelling the running command. Serve applies it on every host with Claude, because clients hold no configuration for limits. A host opts out with the marker file `~/.aiman/limits/claude-statusline.off`, and Claude then shows `off: ~/.aiman/limits/claude-statusline.off exists`.
 
 Your settings today are `{"type":"command","command":"bash ~/.claude/statusline-command.sh"}`, and that script is already heavy: it reads the full transcript with `jq`.
 
@@ -214,7 +214,7 @@ Your settings today are `{"type":"command","command":"bash ~/.claude/statusline-
 - **What gets stored.** `record-claude` parses the JSON and atomically writes only `{rate_limits, observed_at}` at 0600. The working directory, transcript path, session id and cost never reach disk. A cancelled write leaves the previous file intact.
 - **Detecting itself.** The wrapper is recognised by a marker in the command, not by its path. Already wrapped means no write at all, so a serve restart cannot make your status line flicker. A different command means you changed it, which becomes the new original.
 - **One write.** The edit folds into the existing `ensureClaude` settings update (`internal/agenthook/install.go:76`), so serve rewrites settings once.
-- **Turning it off** restores the saved object. Only user settings are touched; a project-level `statusLine` wins and Claude then shows no reading.
+- **Opting out** restores the saved object at the next serve start. Only user settings are touched; a project-level `statusLine` wins and Claude then shows no reading.
 
 ### API keys
 
@@ -260,7 +260,7 @@ Copilot and OpenCode follow when they have something to report. Pressing `l` for
 
 Both are settled.
 
-1. **Should the Claude wrapper start on?** Yes for your remotes, by adding `limits.claude_statusline: true` to the laptop's `~/.aiman/config.yaml`. It stays off by default in the code.
+1. **Should the Claude wrapper start on?** Yes, and with no client setting at all. See revision 4 below.
 2. **May I spend one Muse turn to see a populated `muse usage --json`?** Yes. The parser was tested against the real shape, and this host now reads `5h 0%, week 30%`.
 
 ## Deviations from the approved design
@@ -297,6 +297,16 @@ Both are settled.
 - Turning it off restores the object saved when it was wrapped, so an edit to `padding` made while wrapped is lost.
 - A missing or corrupt saved file is an error, and the wrapper stays in place and working.
 - A `statusLine` that is not an object is refused and left alone.
+
+**Revision 4: no client config, limits in session info** (operator: "There should be no config on clients - it should be available in the session info")
+
+- `limits.claude_statusline` is gone from the laptop config and the pushed serve config. The opt-out is a marker file on the host, so nothing about limits lives on a client.
+- `session.get` carries `limits`: the reading of the provider behind that session's agent (`limits.ProviderFor`). Pi maps through the model's provider segment, so `openrouter/…` reads OpenRouter and `ollama/…` has none.
+- The phone shows it as a `Limits` row in Session details. It needs no new device permission, because `session.get` was already allowed. `limits.get` stays off the device allowlist and no forced-refresh limit was needed.
+- `Manager.Reading` starts only that one source and never forces it, so the source's minimum age bounds its runs however often a client polls. Reading a Grok session starts at most one probe every 10 minutes. This is the first thing other than opening `$` that can start a source.
+- `session.list` does not carry it, since a list would touch every source.
+- A host with no `statusLine` gets one wrapping nothing, so Claude has a status line entry that prints nothing. That is the price of reading its figures there.
+- This revision had no consult. It narrows the surface the consult reviewed, but putting the wrapper on by default reverses the consult's "default off" advice, at the operator's request.
 
 **View (P5)**
 

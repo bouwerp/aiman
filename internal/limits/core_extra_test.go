@@ -115,7 +115,7 @@ func TestManagerCloseStopsRunsAndRefusesNewOnes(t *testing.T) {
 
 func TestDefaultSourcesListsEveryProvider(t *testing.T) {
 	want := map[string]bool{"codex": true, "claude": true, "grok": true, "openrouter": true, "deepseek": true, "muse": true, "copilot": true, "opencode": true}
-	for _, s := range DefaultSources(testEnv(t), false) {
+	for _, s := range DefaultSources(testEnv(t)) {
 		if !want[s.Name()] {
 			t.Errorf("unexpected or repeated source %q", s.Name())
 		}

@@ -87,15 +87,13 @@ func RecordClaude(input []byte, home string, now time.Time) error {
 	return nil
 }
 
-// NewClaudeSource reads what the status line wrapper recorded. Disabled means
-// limits.claude_statusline is off.
-func NewClaudeSource(env Env, enabled bool) Source {
-	return claudeSource{home: env.Home, enabled: enabled}
+// NewClaudeSource reads what the status line wrapper recorded.
+func NewClaudeSource(env Env) Source {
+	return claudeSource{home: env.Home}
 }
 
 type claudeSource struct {
-	home    string
-	enabled bool
+	home string
 }
 
 func (s claudeSource) Name() string           { return claudeProvider }
@@ -105,8 +103,8 @@ func (s claudeSource) Timeout() time.Duration { return 5 * time.Second }
 // Read reports the file as recorded. The Manager applies the reset rule. Reasons
 // are fixed strings, so nothing from the file can reach them.
 func (s claudeSource) Read(context.Context) Reading {
-	if !s.enabled {
-		return Reading{Provider: claudeProvider, State: StateUnavailable, Reason: "off: set limits.claude_statusline"}
+	if ClaudeStatuslineOff(s.home) {
+		return Reading{Provider: claudeProvider, State: StateUnavailable, Reason: "off: " + claudeStatuslineOffPath("~") + " exists"}
 	}
 	body, err := os.ReadFile(claudeRecordPath(s.home))
 	if errors.Is(err, os.ErrNotExist) {

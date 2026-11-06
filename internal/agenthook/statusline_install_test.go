@@ -45,9 +45,21 @@ func exists(path string) bool {
 	return err == nil
 }
 
+// statusLineOff opts this host out of the wrapper, as an operator would.
+func statusLineOff(t *testing.T, home string) {
+	t.Helper()
+	off := filepath.Join(home, ".aiman", "limits", "claude-statusline.off")
+	if err := os.MkdirAll(filepath.Dir(off), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(off, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEnsureOnHostWithWrapsOnceAndRestores(t *testing.T) {
 	home, settings := claudeHome(t)
-	if _, err := EnsureOnHostWith(home, Options{ClaudeStatusline: true}); err != nil {
+	if _, err := EnsureOnHostWith(home, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	line, _ := settingsStatusLine(t, settings).(map[string]any)
@@ -65,7 +77,7 @@ func TestEnsureOnHostWithWrapsOnceAndRestores(t *testing.T) {
 	if err := os.Chtimes(settings, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := EnsureOnHostWith(home, Options{ClaudeStatusline: true}); err != nil {
+	if _, err := EnsureOnHostWith(home, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := os.ReadFile(settings)
@@ -74,6 +86,7 @@ func TestEnsureOnHostWithWrapsOnceAndRestores(t *testing.T) {
 		t.Fatalf("second run rewrote settings: mtime %v\n%s", st.ModTime(), after)
 	}
 
+	statusLineOff(t, home)
 	if _, err := EnsureOnHostWith(home, Options{}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +101,8 @@ func TestEnsureOnHostWithWrapsOnceAndRestores(t *testing.T) {
 
 func TestEnsureOnHostOffLeavesUnwrappedSettingsAlone(t *testing.T) {
 	home, settings := claudeHome(t)
-	if _, err := EnsureOnHost(home); err != nil {
+	statusLineOff(t, home)
+	if _, err := EnsureOnHostWith(home, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(settings)
@@ -99,6 +113,7 @@ func TestEnsureOnHostOffLeavesUnwrappedSettingsAlone(t *testing.T) {
 	if err := os.WriteFile(stale, []byte(`{"existed":true,"statusLine":{"command":"stale"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	statusLineOff(t, home)
 	if _, err := EnsureOnHostWith(home, Options{}); err != nil {
 		t.Fatal(err)
 	}
@@ -109,12 +124,13 @@ func TestEnsureOnHostOffLeavesUnwrappedSettingsAlone(t *testing.T) {
 
 func TestEnsureOnHostOffCorruptSavedFileKeepsTheWrapper(t *testing.T) {
 	home, settings := claudeHome(t)
-	if _, err := EnsureOnHostWith(home, Options{ClaudeStatusline: true}); err != nil {
+	if _, err := EnsureOnHostWith(home, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(statusLineSavedPath(home), []byte("{nope"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	statusLineOff(t, home)
 	if _, err := EnsureOnHostWith(home, Options{}); err == nil {
 		t.Fatal("want an error for a corrupt saved file")
 	}
@@ -133,7 +149,7 @@ func TestEnsureOnHostScriptFailureSkipsTheWrapButWritesHooks(t *testing.T) {
 	if err := os.MkdirAll(statusLineScriptPath(home), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := EnsureOnHostWith(home, Options{ClaudeStatusline: true}); err == nil {
+	if _, err := EnsureOnHostWith(home, Options{}); err == nil {
 		t.Fatal("want the script error")
 	}
 	line, _ := settingsStatusLine(t, settings).(map[string]any)

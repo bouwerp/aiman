@@ -150,3 +150,53 @@ func TestManagerReportsPassedWindowAsReset(t *testing.T) {
 		t.Fatalf("a live window must be untouched: %+v", w[1])
 	}
 }
+
+func TestManagerReadingRunsOnlyThatSourceWithinItsMinAge(t *testing.T) {
+	now := testNow
+	a := &fakeSource{name: "a", age: time.Minute}
+	b := &fakeSource{name: "b", age: time.Minute}
+	m := NewManager([]Source{a, b}, func() time.Time { return now })
+	defer m.Close()
+	waitRuns := func(want int32) Reading {
+		t.Helper()
+		for range 500 {
+			if r, ok := m.Reading("a"); ok && a.runs.Load() == want {
+				return r
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("a ran %d times, want %d", a.runs.Load(), want)
+		return Reading{}
+	}
+	if r := waitRuns(1); r.Provider != "a" {
+		t.Fatalf("reading %+v", r)
+	}
+	for range 20 {
+		m.Reading("a")
+	}
+	if got := a.runs.Load(); got != 1 {
+		t.Fatalf("runs within min age = %d, want 1", got)
+	}
+	if got := b.runs.Load(); got != 0 {
+		t.Fatalf("other source ran %d times", got)
+	}
+	now = now.Add(2 * time.Minute)
+	m.Reading("a")
+	waitRuns(2)
+}
+
+func TestManagerReadingHidesAnUninstalledSource(t *testing.T) {
+	f := &fakeSource{name: "a", age: time.Hour, read: func() Reading {
+		return Reading{Provider: "a", State: StateUnavailable}
+	}}
+	m := NewManager([]Source{f}, func() time.Time { return testNow })
+	defer m.Close()
+	m.Reading("a")
+	settle(t, m)
+	if r, ok := m.Reading("a"); ok {
+		t.Fatalf("reading %+v", r)
+	}
+	if _, ok := m.Reading("nothing"); ok {
+		t.Fatal("reading for a provider with no source")
+	}
+}

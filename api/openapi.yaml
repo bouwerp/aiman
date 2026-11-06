@@ -288,6 +288,12 @@ components:
       type: object
       required: [id, name, group, self]
       properties:
+        limits:
+          $ref: "#/components/schemas/LimitsReading"
+          description: >
+            What is left at the provider behind this session's agent. Only
+            session.get fills it. Absent when the agent has no source, or until
+            its source finishes a first run; ask again on the next poll.
         id:
           type: string
         name:
@@ -844,7 +850,8 @@ components:
       description: >
         limits.get {refresh}. Answers from the cache at once and starts whatever
         is due; refresh skips the age check. Poll while refreshing is true. Device
-        tokens cannot call it. A serve with no limits manager answers unavailable.
+        tokens cannot call it; they read a session's own provider from Session.limits.
+        A serve with no limits manager answers unavailable.
       required: [type, readings, refreshing]
       properties:
         type:

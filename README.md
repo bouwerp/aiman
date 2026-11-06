@@ -759,14 +759,9 @@ from `rtk gain --all --format json` to its host line.
 
 Open `$` on the sessions tab and each host lists what is left of every provider's allowance under its name, in dim text: percent used per window with when it resets (`week 30% (resets in 2d)`), balances, spend, and how old the reading is. A window past its reset shows `reset`. Press `l` to refresh; the rows fill in as serve finishes each source. `aiman limits [--refresh] [--json]` prints the same on a host. A line such as `unknown: no usage yet in this window` means the source ran and could not read a number.
 
-Claude Code reports its limits only through the status line, so that source is off until you turn it on. In `~/.aiman/config.yaml`:
+A session's own provider also appears in `aiman session get` and on the phone under Session details.
 
-```yaml
-limits:
-  claude_statusline: true   # false (or remove) to turn it off
-```
-
-Then reload serve (`c` on the Agent API page) so it applies. Serve changes only the `command` of the `statusLine` in the host's `~/.claude/settings.json`; your original command still runs with the same input, and only the rate limits are recorded. Setting it back to `false` and reloading serve restores your original `statusLine` from `~/.aiman/limits/claude-statusline.original.json` (or removes it if you had none). A project-level `statusLine` overrides the wrapper, and Claude then shows no reading. Until it is on, Claude shows `off: set limits.claude_statusline`.
+There is nothing to configure on the laptop or the phone. Claude Code reports its limits only through the status line, so serve changes the `command` of the `statusLine` in the host's `~/.claude/settings.json` when it starts; your original command still runs with the same input, and only the rate limits are recorded. To opt a host out, run `touch ~/.aiman/limits/claude-statusline.off` on it and reload serve (`c` on the Agent API page), which restores your original `statusLine` from `~/.aiman/limits/claude-statusline.original.json` (or removes it if you had none). A project-level `statusLine` overrides the wrapper, and Claude then shows no reading.
 
 Linger is enabled *before* `systemctl --user` so the first SSH to a host with no lingering user instance can still install. Scripts set `XDG_RUNTIME_DIR` and the session bus so `systemctl --user` works over SSH. If user systemd is still unavailable, Aiman falls back to `nohup` plus `~/.aiman/serve.pid` (or `trigger.pid`).
 

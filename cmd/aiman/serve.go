@@ -147,7 +147,7 @@ func runServe() error {
 		Now:    time.Now,
 	}
 	srv.EnableUsage(ctx, tracker, rep)
-	limitsManager := limits.NewManager(limits.DefaultSources(limits.HostEnv(), cfg.Limits.ClaudeStatusline), time.Now)
+	limitsManager := limits.NewManager(limits.DefaultSources(limits.HostEnv()), time.Now)
 	defer limitsManager.Close()
 	srv.SetLimits(limitsManager)
 
@@ -318,7 +318,7 @@ func skillRoots(sessions []domain.Session) []string {
 
 // agentHookOptions is what serve's config asks of the agent hooks.
 func agentHookOptions(cfg *config.Config) agenthook.Options {
-	return agenthook.Options{BeforePR: cfg.Verify.BeforePR, ClaudeStatusline: cfg.Limits.ClaudeStatusline}
+	return agenthook.Options{BeforePR: cfg.Verify.BeforePR}
 }
 
 func ensureAgentHooks(opts agenthook.Options) {

@@ -68,7 +68,7 @@ func TestClaudeSourceReadsWindows(t *testing.T) {
 	if err := RecordClaude([]byte(statusInput), env.Home, testNow.Add(-4*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	r := NewClaudeSource(env, true).Read(context.Background())
+	r := NewClaudeSource(env).Read(context.Background())
 	if r.State != StateOK || len(r.Windows) != 2 {
 		t.Fatalf("reading %+v", r)
 	}
@@ -83,11 +83,18 @@ func TestClaudeSourceReadsWindows(t *testing.T) {
 
 func TestClaudeSourceStates(t *testing.T) {
 	env := testEnv(t)
-	r := NewClaudeSource(env, false).Read(context.Background())
-	if r.State != StateUnavailable || !strings.Contains(r.Reason, "limits.claude_statusline") {
-		t.Fatalf("off: %+v", r)
-	}
-	if r := NewClaudeSource(env, true).Read(context.Background()); r.State != StateUnknown {
+	if r := NewClaudeSource(env).Read(context.Background()); r.State != StateUnknown {
 		t.Fatalf("on with nothing recorded: %+v", r)
+	}
+	off := claudeStatuslineOffPath(env.Home)
+	if err := os.MkdirAll(filepath.Dir(off), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(off, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := NewClaudeSource(env).Read(context.Background())
+	if r.State != StateUnavailable || !strings.Contains(r.Reason, "claude-statusline.off") {
+		t.Fatalf("off: %+v", r)
 	}
 }

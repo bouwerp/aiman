@@ -19,6 +19,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/local"
+	"github.com/bouwerp/aiman/internal/limits"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/todo"
@@ -67,7 +68,11 @@ type SessionInfo struct {
 	// Tunnels are laptop↔remote forwards; review.debug fills them with the
 	// host-published debug ports so the TUI can forward them.
 	Tunnels []domain.Tunnel `json:"tunnels,omitempty"`
-	Self    bool            `json:"self"`
+	// Limits is what is left of the allowance of the provider this session's
+	// agent runs on. Only session.get fills it, and it is absent when the agent
+	// has no source or the source has not finished its first run.
+	Limits *limits.Reading `json:"limits,omitempty"`
+	Self   bool            `json:"self"`
 }
 
 func sessionInfo(s domain.Session, callerID string) SessionInfo {
@@ -412,6 +417,7 @@ func (s *Server) handleGet(ctx context.Context, req Request) Response {
 	}
 	info := sessionInfo(sess, req.Caller)
 	s.decorateState(ctx, &info, sess)
+	info.Limits = s.sessionLimits(sess)
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":    "session",
 		"session": info,

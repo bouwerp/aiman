@@ -62,9 +62,7 @@ func (m *Manager) Snapshot(force bool) Snapshot {
 	for i := range m.slots {
 		sl := &m.slots[i]
 		if m.due(i, force, now) {
-			sl.running = true
-			m.wg.Add(1)
-			go m.run(i)
+			m.start(i)
 		}
 		out.Refreshing = out.Refreshing || sl.running
 		if sl.has {
@@ -72,6 +70,38 @@ func (m *Manager) Snapshot(force bool) Snapshot {
 		}
 	}
 	return out
+}
+
+// Reading returns one provider's cached reading and starts its source when due,
+// never forced and never waiting. Session reads call this as often as clients
+// poll, so the source's minimum age is what bounds its runs. ok is false until
+// the first run finishes, and for a source that does not apply here and says
+// nothing.
+func (m *Manager) Reading(provider string) (reading Reading, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	for i := range m.slots {
+		if m.sources[i].Name() != provider {
+			continue
+		}
+		if m.due(i, false, now) {
+			m.start(i)
+		}
+		sl := &m.slots[i]
+		if !sl.has || (sl.reading.State == StateUnavailable && sl.reading.Reason == "") {
+			return Reading{}, false
+		}
+		return asOf(sl.reading, now), true
+	}
+	return Reading{}, false
+}
+
+// start runs source i in the background. The caller holds mu.
+func (m *Manager) start(i int) {
+	m.slots[i].running = true
+	m.wg.Add(1)
+	go m.run(i)
 }
 
 // due reports whether source i should start now. The caller holds mu.
@@ -138,12 +168,11 @@ func asOf(r Reading, now time.Time) Reading {
 	return r
 }
 
-// DefaultSources lists every provider's source. claudeStatusline is the
-// limits.claude_statusline setting.
-func DefaultSources(env Env, claudeStatusline bool) []Source {
+// DefaultSources lists every provider's source.
+func DefaultSources(env Env) []Source {
 	return []Source{
 		NewCodexSource(env),
-		NewClaudeSource(env, claudeStatusline),
+		NewClaudeSource(env),
 		NewGrokSource(env),
 		NewOpenRouterSource(env),
 		NewDeepSeekSource(env),

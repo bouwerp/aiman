@@ -18,13 +18,13 @@ func TestUsageLimitsRows(t *testing.T) {
 		{Provider: "deepseek", State: limits.StateOK, ObservedAt: now, Balances: []limits.Balance{{Amount: "12.10", Currency: "USD"}}},
 		{Provider: "opencode", State: limits.StateOK, ObservedAt: now, Spend: "$3.00 in 7 days"},
 		{Provider: "muse", State: limits.StateUnknown, Reason: "no usage yet in this window"},
-		{Provider: "claude", State: limits.StateUnavailable, Reason: "off: set limits.claude_statusline"},
+		{Provider: "claude", State: limits.StateUnavailable, Reason: "off: ~/.aiman/limits/claude-statusline.off exists"},
 		{Provider: "kept", State: limits.StateUnknown, Reason: "screen changed", ObservedAt: now.Add(-3 * time.Hour), Windows: []limits.Window{{Label: "week", UsedPercent: 5}}},
 	}, now)
 	all := strings.Join(rows, "\n")
 	for _, want := range []string{
 		"30%", "2h", "November 11, 13:44", "19%", "SuperGrok Plus", "12.10", "USD", "$3.00 in 7 days",
-		"no usage yet in this window", "limits.claude_statusline", "screen changed", "3h", "5%",
+		"no usage yet in this window", "claude-statusline.off", "screen changed", "3h", "5%",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("rows missing %q:\n%s", want, all)

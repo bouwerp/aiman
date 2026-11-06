@@ -40,10 +40,9 @@ func TestServeConfigTurnsTheClaudeWrapperOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{}
-	cfg.Limits.ClaudeStatusline = true
 	cfg.Verify.BeforePR = true
 	opts := agentHookOptions(cfg)
-	if !opts.BeforePR || !opts.ClaudeStatusline {
+	if !opts.BeforePR {
 		t.Fatalf("options %+v", opts)
 	}
 	if _, err := agenthook.EnsureOnHostWith(home, opts); err != nil {
