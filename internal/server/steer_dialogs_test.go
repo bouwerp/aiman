@@ -10,6 +10,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
@@ -71,7 +72,7 @@ func TestSteerHoldsOnRetiredModelNotice(t *testing.T) {
 }
 
 // The real path: bytes through a holder's spool into serve's capture. The
-// capture keeps dim for the phone, and notification text stays plain.
+// capture keeps dim for the phone, and text readers see plain text.
 func TestCaptureKeepsDimThroughTheHolder(t *testing.T) {
 	const id = "sd4"
 	mgr := ptyruntime.NewManagerWithRoot(shortTempDir(t), append([]string(nil), holderBin...))
@@ -86,11 +87,11 @@ func TestCaptureKeepsDimThroughTheHolder(t *testing.T) {
 		screen, err := mgr.CaptureScreen(id)
 		return err == nil && strings.Contains(screen, want)
 	})
-	sess := hookedSession(id, domain.AgentStateIdle, agenthook.SourceLifecycle, time.Now())
-	sess.Backend = domain.BackendPTY
-	srv := steerGateServer(t, sess)
-	srv.pty = mgr
-	if got := srv.lastScreenLine(sess); got != "❯\u00a0Try it" {
-		t.Fatalf("lastScreenLine = %q", got)
+	screen, err := mgr.CaptureScreen(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain := pane.StripANSI(screen); !strings.Contains(plain, "❯\u00a0Try it") {
+		t.Fatalf("plain screen = %q", plain)
 	}
 }

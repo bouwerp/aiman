@@ -20,6 +20,14 @@ type Settings struct {
 	Host        string
 }
 
+// The fixed reasons a waiting_input notification may give. Notifications go
+// through third-party push services, so raw terminal text is never one of them.
+const (
+	ReasonMenuOpen      = "a menu is open"
+	ReasonAskedQuestion = "asked a question"
+	ReasonConfirmation  = "waiting for confirmation"
+)
+
 // Observation is one session state sample.
 type Observation struct {
 	SessionID string
@@ -27,8 +35,13 @@ type Observation struct {
 	State     domain.AgentState
 	Confident bool
 	Ended     bool
-	Question  string
-	LastLine  func() string
+	// Asking is an idle session whose turn ended in a question. The state stays
+	// idle, so the operator's reply is accepted, and it still notifies.
+	Asking bool
+	// Reason is the fixed text for a waiting_input with no hook message.
+	Reason string
+	// Question is the hook's own message for a reported waiting_input.
+	Question string
 }
 
 // Recorder tracks state transitions and emits notifications.
@@ -90,12 +103,6 @@ func (r *Recorder) Observe(ctx context.Context, o Observation) error {
 	label := o.Label
 	r.mu.Unlock()
 
-	if detail == "" && kind == domain.NotifyWaitingInput && o.LastLine != nil {
-		detail = o.LastLine()
-	}
-	if detail == "" && (kind == domain.NotifyEnded || kind == domain.NotifyError) && o.LastLine != nil {
-		detail = o.LastLine()
-	}
 	text := Format(label, r.settings.Host, kind, detail)
 	n := domain.Notification{
 		SessionID: o.SessionID,
@@ -171,7 +178,15 @@ func (r *Recorder) derive(o Observation) (domain.NotifyKind, string) {
 	case domain.AgentStateErrored:
 		return domain.NotifyError, ""
 	case domain.AgentStateWaitingInput:
-		return domain.NotifyWaitingInput, o.Question
+		if o.Question != "" {
+			return domain.NotifyWaitingInput, o.Question
+		}
+		return domain.NotifyWaitingInput, o.Reason
+	case domain.AgentStateIdle:
+		if o.Asking {
+			return domain.NotifyWaitingInput, ReasonAskedQuestion
+		}
+		return "", ""
 	default:
 		return "", ""
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/limits"
+	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/todo"
@@ -125,12 +126,7 @@ func (s *Server) decorateState(ctx context.Context, info *SessionInfo, sess doma
 	info.Unprotected = s.verifier != nil && s.verifier.BeforePR() && live.ReviewPR == "" && live.FixPR == "" && !agenthook.GuardsPRCreate(live.AgentName)
 	st, conf := s.classify(ctx, live)
 	info.State = string(st)
-	switch conf {
-	case pane.High:
-		info.StateConfidence = "high"
-	default:
-		info.StateConfidence = "low"
-	}
+	info.StateConfidence = confidenceName(conf)
 	if live.HookStateMessage != "" && st == domain.AgentStateWaitingInput {
 		info.StateMessage = live.HookStateMessage
 	}
@@ -139,19 +135,84 @@ func (s *Server) decorateState(ctx context.Context, info *SessionInfo, sess doma
 	}
 }
 
+// classify answers what a session is doing, and records a pane the rules could
+// not read. The sweep calls sampleState instead, which writes nothing.
 func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.AgentState, pane.Confidence) {
+	sample := s.sampleState(ctx, sess)
+	if sample.uncertain != nil {
+		s.recordUncertainPane(ctx, sample.live, sample.screen, *sample.uncertain)
+	}
+	return sample.State, sample.Confidence
+}
+
+// stateSample is one reading of a session, with no side effects behind it.
+type stateSample struct {
+	State      domain.AgentState
+	Confidence pane.Confidence
+	// Reason is one of the notify package's fixed reasons on a waiting_input, so
+	// it is safe to send anywhere.
+	Reason string
+
+	// live is the session the sample read, and screen its capture when one was
+	// taken. uncertain is the rules' low-confidence verdict for classify to record.
+	live      domain.Session
+	screen    string
+	uncertain *pane.Result
+}
+
+// sampleState reads a session's state: an ended agent first, then a fresh hook
+// report, then the screen rules. A fresh working report still loses to a menu on
+// screen, because an agent asks for permission in the middle of a turn. A fresh
+// idle report is never overruled, which shields ordinary text from a false match.
+func (s *Server) sampleState(ctx context.Context, sess domain.Session) stateSample {
 	live := s.liveSession(ctx, sess)
+	sample := stateSample{live: live}
 	if st, ok := agenthook.ResolveHookState(live, time.Now()); ok {
-		return st, pane.High
+		sample.State, sample.Confidence = st, pane.High
+		switch {
+		case live.AgentEnded:
+		case st == domain.AgentStateWaitingInput:
+			sample.Reason = notify.ReasonConfirmation
+		case st == domain.AgentStateWorking:
+			s.applyMenuOverride(&sample)
+		}
+		return sample
 	}
-	if s.pty == nil || live.IsLegacyTmux() {
-		return domain.AgentStateUnknown, pane.Low
+	s.sampleRules(&sample)
+	return sample
+}
+
+// applyMenuOverride turns a working sample into waiting_input when a menu is on
+// screen. With no screen to read, the hook's answer stands.
+func (s *Server) applyMenuOverride(sample *stateSample) {
+	screen, ok := s.captureLive(sample.live)
+	if !ok {
+		return
 	}
-	// The PTY runtime lives in this process. pane.Classify reads a rendered
-	// screen, not the raw spool.
-	screen, cerr := s.pty.CaptureScreen(live.ID)
-	if cerr != nil {
-		return domain.AgentStateUnknown, pane.Low
+	sample.screen = screen
+	if reason, open := pane.MenuOpen(screen); open {
+		sample.State, sample.Reason = domain.AgentStateWaitingInput, notifyReason(reason)
+	}
+}
+
+// sampleRules answers from the screen rules, for a session with no fresh hook
+// report.
+func (s *Server) sampleRules(sample *stateSample) {
+	sample.State, sample.Confidence = domain.AgentStateUnknown, pane.Low
+	live := sample.live
+	// pane.Classify reads a rendered screen, not the raw spool.
+	screen, ok := s.captureLive(live)
+	if !ok {
+		return
+	}
+	sample.screen = screen
+	// A turn outlasts the hook's TTL, so a menu in a long turn has only the stale
+	// working report above it, and can sit above the rules' tail.
+	if agenthook.TurnOpen(live) {
+		if reason, open := pane.MenuOpen(screen); open {
+			sample.State, sample.Confidence, sample.Reason = domain.AgentStateWaitingInput, pane.High, notifyReason(reason)
+			return
+		}
 	}
 	obs := pane.Observation{Pane: screen, SinceOutput: -1, SinceTitleChange: -1}
 	// The holder publishes when output last arrived and when the agent last
@@ -172,10 +233,36 @@ func (s *Server) classify(ctx context.Context, sess domain.Session) (domain.Agen
 	// check answers instead, so an agent that died without a stop hook still
 	// settles.
 	if r.State == domain.AgentStateUnknown && obs.SinceOutput >= 0 && agenthook.TurnOpen(live) {
-		return domain.AgentStateWorking, pane.High
+		sample.State, sample.Confidence = domain.AgentStateWorking, pane.High
+		return
 	}
-	s.recordUncertainPane(ctx, live, screen, r)
-	return r.State, r.Confidence
+	sample.State, sample.Confidence = r.State, r.Confidence
+	if r.State == domain.AgentStateWaitingInput {
+		sample.Reason = notifyReason(r.Reason)
+	}
+	if r.Confidence != pane.High {
+		sample.uncertain = &r
+	}
+}
+
+// captureLive renders a session's screen from the PTY runtime in this process.
+func (s *Server) captureLive(sess domain.Session) (string, bool) {
+	if s.pty == nil || sess.IsLegacyTmux() {
+		return "", false
+	}
+	screen, err := s.pty.CaptureScreen(sess.ID)
+	if err != nil {
+		return "", false
+	}
+	return screen, true
+}
+
+// confidenceName is a confidence as the API spells it.
+func confidenceName(c pane.Confidence) string {
+	if c == pane.High {
+		return "high"
+	}
+	return "low"
 }
 
 // recordUncertainPane appends pane.uncertain when the rules classified a
@@ -1103,6 +1190,7 @@ func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
 	}
 	s.steer.Forget(sess.ID)
 	s.uncertainPanes.Delete(sess.ID)
+	s.sessionStates.Delete(sess.ID)
 	if rec := s.NotifyRecorder(); rec != nil {
 		rec.Forget(sess.ID)
 	}
@@ -1239,7 +1327,7 @@ func (s *Server) applyAgentReport(ctx context.Context, sessionID string, rep age
 			return err
 		}
 	}
-	s.notifyObserve(ctx, *sess)
+	s.observeState(ctx, *sess)
 	if clr, ok := s.repo.(agentEndedClearer); ok && persist && wasEnded && !sess.AgentEnded {
 		if err := clr.ClearAgentEnded(ctx, sess.ID); err != nil {
 			return err

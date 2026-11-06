@@ -1108,11 +1108,14 @@ components:
         state:
           $ref: "#/components/schemas/AgentState"
           description: >
-            Hook-reported agent state on session_activity, the review status
-            on verify, and the budget state on usage.budget. The phone merges
-            it when present and otherwise keeps the last list/get value.
+            On session_activity, the agent state serve last sampled every 2s,
+            from a fresh hook report or the screen rules, and absent until the
+            first sample and for hidden helper sessions. The review status on
+            verify, and the budget state on usage.budget. The phone merges it
+            when present and otherwise keeps the last list/get value.
         state_confidence:
           $ref: "#/components/schemas/StateConfidence"
+          description: Sent beside state on session_activity.
         session:
           $ref: "#/components/schemas/Session"
           description: The new or changed session on session_created.

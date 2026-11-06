@@ -15,6 +15,8 @@ type fakeLister struct{ sessions []ptyruntime.SessionInfo }
 
 func (f *fakeLister) List() []ptyruntime.SessionInfo { return f.sessions }
 
+func noCachedState(string) (cachedState, bool) { return cachedState{}, false }
+
 // The stream is a series of changes, so an unchanged session must produce
 // nothing — otherwise a reader is woken several times a second for no reason,
 // which is the polling this replaces.
@@ -24,17 +26,17 @@ func TestCollectSessionEventsOnlyReportsChanges(t *testing.T) {
 	}}
 	seen := map[string]SessionEvent{}
 
-	first := collectSessionEvents(l, seen)
+	first := collectSessionEvents(l, seen, noCachedState)
 	if len(first) != 1 || first[0].ID != "a" || first[0].Type != "session_activity" {
 		t.Fatalf("first pass should report the session: %+v", first)
 	}
-	if again := collectSessionEvents(l, seen); len(again) != 0 {
+	if again := collectSessionEvents(l, seen, noCachedState); len(again) != 0 {
 		t.Fatalf("an unchanged session must not be reported again: %+v", again)
 	}
 
 	// A moving title is the signal worth pushing.
 	l.sessions[0].Title = "◑ task"
-	changed := collectSessionEvents(l, seen)
+	changed := collectSessionEvents(l, seen, noCachedState)
 	if len(changed) != 1 || changed[0].Title != "◑ task" {
 		t.Fatalf("a changed title should be reported: %+v", changed)
 	}
@@ -46,7 +48,7 @@ func TestCollectSessionEventsCarriesActivityTimes(t *testing.T) {
 	l := &fakeLister{sessions: []ptyruntime.SessionInfo{
 		{ID: "a", Status: ptyruntime.StatusRunning, LastOutput: out, TitleChanged: title},
 	}}
-	ev := collectSessionEvents(l, map[string]SessionEvent{})
+	ev := collectSessionEvents(l, map[string]SessionEvent{}, noCachedState)
 	if len(ev) != 1 {
 		t.Fatalf("expected one event, got %d", len(ev))
 	}
@@ -67,15 +69,15 @@ func TestCollectSessionEventsCarriesActivityTimes(t *testing.T) {
 func TestCollectSessionEventsReportsSessionsGoingAway(t *testing.T) {
 	l := &fakeLister{sessions: []ptyruntime.SessionInfo{{ID: "a", Status: ptyruntime.StatusRunning}}}
 	seen := map[string]SessionEvent{}
-	collectSessionEvents(l, seen)
+	collectSessionEvents(l, seen, noCachedState)
 
 	l.sessions = nil
-	gone := collectSessionEvents(l, seen)
+	gone := collectSessionEvents(l, seen, noCachedState)
 	if len(gone) != 1 || gone[0].Type != "session_gone" || gone[0].ID != "a" {
 		t.Fatalf("expected a session_gone event, got %+v", gone)
 	}
 	// Reported once, not on every tick.
-	if again := collectSessionEvents(l, seen); len(again) != 0 {
+	if again := collectSessionEvents(l, seen, noCachedState); len(again) != 0 {
 		t.Fatalf("session_gone must not repeat: %+v", again)
 	}
 }
@@ -101,10 +103,10 @@ func TestCollectRepoCreatedEventsEmitsOnce(t *testing.T) {
 func TestCollectSessionEventsReportsStatusChanges(t *testing.T) {
 	l := &fakeLister{sessions: []ptyruntime.SessionInfo{{ID: "a", Status: ptyruntime.StatusRunning}}}
 	seen := map[string]SessionEvent{}
-	collectSessionEvents(l, seen)
+	collectSessionEvents(l, seen, noCachedState)
 
 	l.sessions[0].Status = ptyruntime.StatusExited
-	ev := collectSessionEvents(l, seen)
+	ev := collectSessionEvents(l, seen, noCachedState)
 	if len(ev) != 1 || ev[0].Status != string(ptyruntime.StatusExited) {
 		t.Fatalf("expected the status change to be reported: %+v", ev)
 	}

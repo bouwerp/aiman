@@ -96,6 +96,14 @@ var (
 	// A numbered or arrow-marked choice list is a question, not output.
 	menuChoiceRe = regexp.MustCompile(`(?m)^\s*[❯>]\s*\d+[.)]\s+\S`)
 
+	// MenuOpen's rows, read with NBSP already turned into a space. A selected
+	// row carries the marker and an unselected one does not. Either may sit in a
+	// box.
+	menuSelectedRe = regexp.MustCompile(`^\s*(?:│\s*)?[❯›]\s*\d+[.)]\s+\S`)
+	menuOtherRe    = regexp.MustCompile(`^\s*(?:│\s*)?\d+[.)]\s+\S`)
+	// An option's description, indented under it.
+	menuDescriptionRe = regexp.MustCompile(`^(?:\s+|│\s+)\S`)
+
 	// Yes/no confirmations, in the shapes agents and shells actually emit.
 	yesNoRe = regexp.MustCompile(`(?i)[\[(](?:y/n|y/N|yes/no)[\])]\s*[:?]?\s*$`)
 
@@ -224,7 +232,7 @@ func needsInput(tail string) (string, bool) {
 	}
 
 	if menuChoiceRe.MatchString(tail) {
-		return "numbered choice list", true
+		return MenuReason, true
 	}
 
 	// Anchor the remaining patterns to the last couple of lines: a question two
@@ -237,10 +245,65 @@ func needsInput(tail string) (string, bool) {
 		case blockingPromptRe.MatchString(trimmed):
 			return "blocking prompt", true
 		case questionRe.MatchString(trimmed) && strings.HasSuffix(trimmed, "?"):
-			return "question awaiting an answer", true
+			return QuestionReason, true
 		}
 	}
 	return "", false
+}
+
+// MenuReason is what MenuOpen and the rules' choice-list check report, so a
+// caller can recognise a menu without matching on either.
+const MenuReason = "numbered choice list"
+
+// MenuOpen reports a choice dialog on screen: a selected row with another numbered
+// row in the same list, where only indented description rows may lie between
+// them. It is stricter than needsInput because it can overrule a fresh hook report:
+// `❯ 1. foo` is text in a composer until a second option belongs to it, and a
+// `> 1. item` blockquote is never a selected row. A dialog replaces the agent's
+// input chrome, so a composer or its footer below the selected row means the list
+// is typed or quoted text.
+func MenuOpen(screen string) (string, bool) {
+	rows := strings.Split(Tail(strings.ReplaceAll(StripANSI(screen), "\u00a0", " "), StatusLines), "\n")
+	for i, row := range rows {
+		if !menuSelectedRe.MatchString(row) || composerBelow(rows[i+1:]) {
+			continue
+		}
+		if numberedRowInList(rows[:i], -1) || numberedRowInList(rows[i+1:], 1) {
+			return MenuReason, true
+		}
+	}
+	return "", false
+}
+
+// composerBelow reports an input box or its footer among the rows under a
+// selected row.
+func composerBelow(rows []string) bool {
+	for _, row := range rows {
+		if composerRowRe.MatchString(row) || agentReadyRe.MatchString(row) {
+			return true
+		}
+	}
+	return false
+}
+
+// numberedRowInList walks rows away from a selected row, last to first for a step
+// of -1, and reports a numbered row before the list ends. A blank row or an
+// unindented one ends it.
+func numberedRowInList(rows []string, step int) bool {
+	i := 0
+	if step < 0 {
+		i = len(rows) - 1
+	}
+	for ; i >= 0 && i < len(rows); i += step {
+		row := rows[i]
+		if menuOtherRe.MatchString(row) {
+			return true
+		}
+		if strings.Trim(row, " \t│") == "" || !menuDescriptionRe.MatchString(row) {
+			return false
+		}
+	}
+	return false
 }
 
 // Tail returns the last n non-trailing-blank lines of s.

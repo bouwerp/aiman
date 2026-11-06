@@ -122,6 +122,9 @@ type Server struct {
 	// uncertainPanes holds the hash of the last low-confidence pane recorded
 	// per session id, so a pane that does not change is recorded once.
 	uncertainPanes sync.Map
+	// sessionStates holds one cachedState per session id, written by the state
+	// sweep and read by the event stream.
+	sessionStates sync.Map
 
 	// memoryJobs queues handover-derived memory candidates for the laptop.
 	memoryJobs *memoryjob.Queue
@@ -174,11 +177,9 @@ type Server struct {
 	agentUpdates *agentupdate.Manager
 	agentHost    string
 
-	notifyRec  *notify.Recorder
-	notifyLog  NotifyLog
-	notifyMu   sync.RWMutex
-	notifyStop context.CancelFunc
-	notifyDone chan struct{}
+	notifyRec *notify.Recorder
+	notifyLog NotifyLog
+	notifyMu  sync.RWMutex
 }
 
 // SetMemoryJobs attaches the memory-candidate queue. It stays nil when serve
@@ -269,19 +270,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	if s.steer != nil {
 		go s.steer.Run(ctx)
 	}
-	if rec := s.NotifyRecorder(); rec != nil {
-		nctx, cancel := context.WithCancel(ctx)
-		s.notifyMu.Lock()
-		s.notifyStop = cancel
-		s.notifyDone = make(chan struct{})
-		done := s.notifyDone
-		s.notifyMu.Unlock()
-		go func() {
-			defer close(done)
-			defer cancel()
-			s.runNotifySweep(nctx)
-		}()
-	}
+	go s.runStateSweep(ctx)
 	go func() {
 		<-ctx.Done()
 		_ = s.ln.Close()

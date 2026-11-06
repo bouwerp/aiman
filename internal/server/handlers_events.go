@@ -43,9 +43,11 @@ type SessionEvent struct {
 	// Session is filled on session_created so the dashboard can upsert without
 	// a second round trip.
 	Session *SessionInfo `json:"session,omitempty"`
-	// State is the hook-reported agent state on session_activity, or the
-	// review status on verify.
+	// State is the agent state the stateSweep last sampled on session_activity,
+	// absent until it has sampled the session, or the review status on verify.
 	State string `json:"state,omitempty"`
+	// StateConfidence is high or low, beside State on session_activity.
+	StateConfidence string `json:"state_confidence,omitempty"`
 	// Rev is the todo list revision on todo_changed.
 	Rev int64 `json:"rev,omitempty"`
 	// Queued is how many steer messages are still waiting on steer.
@@ -122,7 +124,7 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 
 		var changed []SessionEvent
 		if s.pty != nil {
-			changed = collectSessionEvents(s.pty, seen)
+			changed = collectSessionEvents(s.pty, seen, s.cachedSessionState)
 		}
 		if s.repo != nil {
 			if listed, lerr := s.repo.List(ctx); lerr == nil {
@@ -150,8 +152,10 @@ type ptyLister interface {
 }
 
 // collectSessionEvents returns an event per session whose activity moved, and
-// updates seen in place. Sessions that have gone are reported once.
-func collectSessionEvents(pty ptyLister, seen map[string]SessionEvent) []SessionEvent {
+// updates seen in place. Sessions that have gone are reported once. State comes
+// from states, the sweep's cache: this runs every EventPollInterval per
+// subscriber, so it never captures a screen itself.
+func collectSessionEvents(pty ptyLister, seen map[string]SessionEvent, states func(string) (cachedState, bool)) []SessionEvent {
 	var out []SessionEvent
 	live := map[string]struct{}{}
 
@@ -169,6 +173,9 @@ func collectSessionEvents(pty ptyLister, seen map[string]SessionEvent) []Session
 		}
 		if !info.TitleChanged.IsZero() {
 			ev.TitleChanged = info.TitleChanged.UTC().Format(time.RFC3339Nano)
+		}
+		if st, ok := states(info.ID); ok {
+			ev.State, ev.StateConfidence = st.State, st.Confidence
 		}
 		if prev, ok := seen[info.ID]; ok && prev == ev {
 			continue

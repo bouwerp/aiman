@@ -83,8 +83,7 @@ func TestRecorderEndedWithoutConfidence(t *testing.T) {
 	if err := r.Observe(context.Background(), Observation{SessionID: "s1", Label: "PROJ-1", State: domain.AgentStateIdle}); err != nil {
 		t.Fatal(err)
 	}
-	lines := 0
-	if err := r.Observe(context.Background(), Observation{SessionID: "s1", Label: "PROJ-1", Ended: true, LastLine: func() string { lines++; return "done" }}); err != nil {
+	if err := r.Observe(context.Background(), Observation{SessionID: "s1", Label: "PROJ-1", Ended: true}); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.rows) != 1 {
@@ -101,28 +100,11 @@ func TestRecorderRespectsEventsFilter(t *testing.T) {
 	if err := r.Observe(context.Background(), Observation{SessionID: "s1", Label: "PROJ-1", State: domain.AgentStateIdle}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Observe(context.Background(), Observation{SessionID: "s1", Label: "PROJ-1", Ended: true, LastLine: func() string { return "done" }}); err != nil {
+	if err := r.Observe(context.Background(), Observation{SessionID: "s1", Label: "PROJ-1", Ended: true}); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.rows) != 0 {
 		t.Fatalf("rows = %d", len(s.rows))
-	}
-}
-
-func TestRecorderLastLineOnlyWhenNotifying(t *testing.T) {
-	s := &fakeStore{}
-	r := NewRecorder(s, Settings{Events: map[domain.NotifyKind]bool{domain.NotifyWaitingInput: true}, MinInterval: time.Minute, Host: "h"}, nil)
-	if err := r.Observe(context.Background(), Observation{SessionID: "s1", Label: "PROJ-1", State: domain.AgentStateIdle}); err != nil {
-		t.Fatal(err)
-	}
-	calls := 0
-	for i := 0; i < 5; i++ {
-		if err := r.Observe(context.Background(), Observation{SessionID: "s1", Label: "PROJ-1", State: domain.AgentStateWorking, LastLine: func() string { calls++; return "x" }}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if calls != 0 {
-		t.Fatalf("LastLine calls = %d", calls)
 	}
 }
 
@@ -165,4 +147,113 @@ func TestNilRecorderIsNoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Forget("s1")
+}
+
+func waitingInputRecorder(minInterval time.Duration) (*Recorder, *fakeStore) {
+	s := &fakeStore{}
+	return NewRecorder(s, Settings{Events: map[domain.NotifyKind]bool{domain.NotifyWaitingInput: true}, MinInterval: minInterval, Host: "h"}, nil), s
+}
+
+func observeAll(t *testing.T, r *Recorder, obs ...Observation) {
+	t.Helper()
+	for _, o := range obs {
+		o.SessionID, o.Label = "s1", "fix-login"
+		if err := r.Observe(context.Background(), o); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRecorderDeriveWaitingInputDetail(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		obs  Observation
+		want string
+	}{
+		{"hook message wins", Observation{State: domain.AgentStateWaitingInput, Confident: true, Question: "Allow Bash?", Reason: ReasonMenuOpen},
+			"fix-login on h: waiting for input · Allow Bash?"},
+		{"reason when the hook has none", Observation{State: domain.AgentStateWaitingInput, Confident: true, Reason: ReasonMenuOpen},
+			"fix-login on h: waiting for input · a menu is open"},
+		{"confirmation reason", Observation{State: domain.AgentStateWaitingInput, Confident: true, Reason: ReasonConfirmation},
+			"fix-login on h: waiting for input · waiting for confirmation"},
+		{"idle and asking", Observation{State: domain.AgentStateIdle, Confident: true, Asking: true},
+			"fix-login on h: waiting for input · asked a question"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, s := waitingInputRecorder(0)
+			observeAll(t, r, Observation{State: domain.AgentStateWorking, Confident: true}, tc.obs)
+			if len(s.rows) != 1 || s.rows[0].Kind != domain.NotifyWaitingInput {
+				t.Fatalf("rows = %+v", s.rows)
+			}
+			if s.rows[0].Text != tc.want {
+				t.Fatalf("text = %q, want %q", s.rows[0].Text, tc.want)
+			}
+		})
+	}
+}
+
+func TestRecorderAskingNeedsConfidentIdle(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		obs  Observation
+	}{
+		{"low confidence idle", Observation{State: domain.AgentStateIdle, Confident: false, Asking: true}},
+		{"working", Observation{State: domain.AgentStateWorking, Confident: true, Asking: true}},
+		{"unknown", Observation{State: domain.AgentStateUnknown, Confident: true, Asking: true}},
+		{"idle, not asking", Observation{State: domain.AgentStateIdle, Confident: true, Reason: ReasonMenuOpen}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, s := waitingInputRecorder(0)
+			observeAll(t, r, Observation{State: domain.AgentStateWorking, Confident: true}, tc.obs)
+			if len(s.rows) != 0 {
+				t.Fatalf("rows = %+v", s.rows)
+			}
+		})
+	}
+}
+
+// An ended session reports ended even when its screen still shows a question,
+// and carries no detail at all.
+func TestRecorderEndedOutranksAsking(t *testing.T) {
+	s := &fakeStore{}
+	r := NewRecorder(s, Settings{Events: map[domain.NotifyKind]bool{domain.NotifyEnded: true, domain.NotifyWaitingInput: true}, Host: "h"}, nil)
+	observeAll(t, r, Observation{State: domain.AgentStateWorking, Confident: true},
+		Observation{State: domain.AgentStateIdle, Confident: true, Ended: true, Asking: true, Reason: ReasonAskedQuestion})
+	if len(s.rows) != 1 || s.rows[0].Kind != domain.NotifyEnded || s.rows[0].Text != "fix-login on h: ended" {
+		t.Fatalf("rows = %+v", s.rows)
+	}
+}
+
+// Each question alerts once: an agent that goes back to work clears the kind,
+// and the next question is news again.
+func TestRecorderEachQuestionAlertsOnce(t *testing.T) {
+	r, s := waitingInputRecorder(0)
+	working := Observation{State: domain.AgentStateWorking, Confident: true}
+	asked := Observation{State: domain.AgentStateIdle, Confident: true, Asking: true}
+	observeAll(t, r, working, asked, asked, asked)
+	if len(s.rows) != 1 {
+		t.Fatalf("after the first question rows = %d, want 1", len(s.rows))
+	}
+	observeAll(t, r, working, asked, asked)
+	if len(s.rows) != 2 {
+		t.Fatalf("after the second question rows = %d, want 2", len(s.rows))
+	}
+}
+
+func TestRecorderMinIntervalStillAppliesToQuestions(t *testing.T) {
+	r, s := waitingInputRecorder(time.Hour)
+	working := Observation{State: domain.AgentStateWorking, Confident: true}
+	asked := Observation{State: domain.AgentStateIdle, Confident: true, Asking: true}
+	observeAll(t, r, working, asked, working, asked)
+	if len(s.rows) != 1 {
+		t.Fatalf("rows = %d, want 1 inside min_interval", len(s.rows))
+	}
+}
+
+func TestRecorderFirstObservationOfAQuestionPrimes(t *testing.T) {
+	r, s := waitingInputRecorder(0)
+	observeAll(t, r, Observation{State: domain.AgentStateIdle, Confident: true, Asking: true})
+	if len(s.rows) != 0 {
+		t.Fatalf("rows = %+v", s.rows)
+	}
 }

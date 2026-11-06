@@ -1,0 +1,22 @@
+[38;2;255;255;255;49m●[39;49m ok
+
+[38;2;153;153;153;49m✻[39;49m [38;2;153;153;153;49mBaked for 2s · done 13:45[0m
+
+[38;2;153;153;153;48;2;55;55;55m❯ [38;2;255;255;255;48;2;55;55;55mThis is a deliberately long prompt that has to wrap across several rows of the terminal[39;48;2;55;55;55m [0m
+[39;48;2;55;55;55m  [38;2;255;255;255;48;2;55;55;55mcomposer so we can see how it looks while being sent, and the only thing you need to [39;48;2;55;55;55m   [0m
+[39;48;2;55;55;55m  [38;2;255;255;255;48;2;55;55;55mdo with it is run the shell command sleep 20 and then reply with just the word done.[39;48;2;55;55;55m    [0m
+
+  [38;2;153;153;153;49mRan 1 shell command[0m
+
+[38;2;153;153;153;48;2;55;55;55m❯ [38;2;255;255;255;48;2;55;55;55mWhile you are busy, this second message is queued. Reply with just the word queued.[39;48;2;55;55;55m     [0m
+
+[38;2;255;255;255;49m●[39;49m queued
+
+[38;2;153;153;153;49m✻[39;49m [38;2;153;153;153;49mBrewed for 24s · done 13:46[0m
+
+                                                  [38;2;78;186;101;49m✔ Update installed · Restart to update[0m
+[38;2;136;136;136;49m──────────────────────────────────────────────────────────────────────────────────────────[0m
+❯
+[38;2;136;136;136;49m──────────────────────────────────────────────────────────────────────────────────────────[0m
+  [38;5;10;49mcode@regent0[38;2;153;153;153;49m:[38;5;12;49m/home/code/repos/app[0m
+  [38;2;153;153;153;49m-- INSERT --[39;49m [38;2;255;107;128;49m⏵⏵ bypass permissions on[38;2;153;153;153;49m (shift+tab to cycle) · ← 2 agents[0m

@@ -1,0 +1,22 @@
+[38;2;255;255;255;49m●[39;49m ok
+
+[38;2;153;153;153;49m✻[39;49m [38;2;153;153;153;49mBaked for 2s · done 13:45[0m
+
+
+
+
+
+
+
+
+
+
+
+[38;2;136;136;136;49m──────────────────────────────────────────────────────────────────────────────────────────[0m
+❯ This is a deliberately long prompt that has to wrap across several rows of the
+  terminal composer so we can see how it looks while being sent, and the only thing you
+  need to do with it is run the shell command sleep 20 and then reply with just the word
+  done.
+[38;2;136;136;136;49m──────────────────────────────────────────────────────────────────────────────────────────[0m
+  [38;5;10;49mcode@regent0[38;2;153;153;153;49m:[38;5;12;49m/home/code/repos/app[0m
+  [38;2;153;153;153;49m-- INSERT --[39;49m [38;2;255;107;128;49m⏵⏵ bypass permissions on[38;2;153;153;153;49m (shift+tab to cycle)[0m
