@@ -1,6 +1,6 @@
 # provider-limits: See how much of each provider's allowance is left
 
-**Revision:** 2 · **Size:** project · **Status:** approved
+**Revision:** 3 · **Size:** project · **Status:** as built, see "Deviations from the approved design"
 **Task:** operator request, 2026-11-05: "yes build all that are possible" · **Spec:** this page
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
@@ -224,6 +224,7 @@ Keys stay where the agents already keep them. Serve reads them at refresh time, 
 - **One hard-coded HTTPS host per provider.** The client refuses redirects, ignores proxy settings (`Proxy: nil`, since Go's default would send the header through `HTTP_PROXY`), and sends the key only in the header, never a query string.
 - A DeepSeek key from Deep Code's settings is used only when `BASE_URL`'s host is exactly `api.deepseek.com`, because that key may belong to some other provider.
 - Errors carry the status code only. The URL, headers and body are never logged or returned.
+- A Pi key written as a `!command` is never run, and the environment is not tried in its place. OpenRouter reads `unknown: key is a command`. Serve running a command from a credentials file would be a new way to execute code, and the environment fallback could send a different key from the one you configured.
 
 ## A scenario, end to end
 
@@ -257,8 +258,52 @@ Copilot and OpenCode follow when they have something to report. Pressing `l` for
 
 ## Open questions
 
-1. **Should the Claude wrapper start on?** It is the only documented route to Claude's figures, and it changes which command your status line runs, though not what it shows. It is off by default on every host. Saying yes means I set `limits.claude_statusline: true` for your remotes as part of this work, so Claude appears straight away. Saying no leaves your settings untouched and shows Claude as off until you set it. I recommend yes: your status line keeps working even if recording fails, and turning it off restores your settings exactly.
-2. **May I spend one Muse turn on a trivial prompt to see a populated `muse usage --json`?** We have only seen a null allowance, so the parser would be written blind. One short turn costs very little and lets me test against the real shape. Without it, Muse ships reporting `unknown` for anything it cannot parse, and the shape gets confirmed on first real use. I recommend yes.
+Both are settled.
+
+1. **Should the Claude wrapper start on?** Yes for your remotes, by adding `limits.claude_statusline: true` to the laptop's `~/.aiman/config.yaml`. It stays off by default in the code.
+2. **May I spend one Muse turn to see a populated `muse usage --json`?** Yes. The parser was tested against the real shape, and this host now reads `5h 0%, week 30%`.
+
+## Deviations from the approved design
+
+**Core (P1)**
+
+- Codex accepts only a rate-limit block whose `limit_id` is `codex`, or one with no id and a usable window. A transcript can hold blocks for other limits, and those would read as your Codex allowance.
+- Codex searches up to 8 transcripts from the newest 3 date folders, not only the newest file, because the newest may have no rate limits yet.
+- A window with no percent is left out, not shown as 0%.
+- A failed source keeps its old numbers only when it is `unknown`. An `unavailable` reading replaces them, because the source no longer applies here.
+- `Manager.Close` was added so serve shutdown can stop running sources.
+- `Window` gained a `Reset` flag, set once `ResetsAt` has passed. The view shows `reset` and the percent reads 0.
+
+**Keys and HTTP (P2)**
+
+- A Pi `!command` key is not run. See "API keys" and the consult table below.
+- OpenRouter with no `limit_remaining` reads `unknown`. It is not shown as an empty allowance. A key with no limit is reported as unlimited.
+- A malformed DeepSeek balance list reads `unknown`.
+- `gh` exit status 4 (not logged in) reads `unavailable`.
+
+**Grok probe (P3)**
+
+- Grok leaves files the design did not list: a memory folder at `~/.grok/memory-v2/workspaces/grok-probe-443e023a` (one 348K folder, reused), `~/.grok/slash-mru.json`, `~/.grok/logs/unified.jsonl` and a trust entry for the probe folder. The probe removes its session folder but not these.
+- The stale-process backstop uses `/proc/<pid>/cwd` on Linux and `lsof` on macOS. Windows reads `unavailable`.
+- The composer check exempts Grok's footer (`Enter:send │ …`), whose word `enter` otherwise looks like a dialog. Without this the probe never pressed Enter and timed out against the real CLI. Unit tests with the fake CLI did not catch it. The real probe then succeeded 3 of 3 times, about 2 seconds each.
+- Starting the process retries once on `EPERM` (`launchProbe`). The test suite hit `fork/exec: operation not permitted` in 2 of 84 runs under load. **The cause is not confirmed**, so this retry treats a symptom. 144 later runs passed.
+- **The probe reads a screen, so it is fragile by nature.** A changed layout or a different default tab reads `unknown`, never a wrong number. Grok releases can break it.
+
+**Claude wrapper (P4)**
+
+- The script does not start your command. The wrapped command is `: aiman-claude-statusline-wrapper; sh '<script>' | { <original>` then a newline and `}`. Your command stays inline, so it runs in Claude Code's own shell and needs no quoting. The newline keeps an original ending in a comment or heredoc valid.
+- With no original command, the wrapper sends its output to `/dev/null`, because an empty brace group is a syntax error.
+- The saved file is `{existed, statusLine}` and stays after a restore. The next wrap overwrites it.
+- Turning it off restores the object saved when it was wrapped, so an edit to `padding` made while wrapped is lost.
+- A missing or corrupt saved file is an error, and the wrapper stays in place and working.
+- A `statusLine` that is not an object is refused and left alone.
+
+**View (P5)**
+
+- The first paint shows nothing for a host with no readings. The `limits: checking…` line in the scenario was not built.
+- The footer is `tab by ticket/day  r refresh  esc back  l limits`, with `l` last because an existing test pins the rest.
+
+**Not verified at release:** `aiman limits` through a real serve, since updating serve is yours to do, and the wrapper under a real Claude Code.
 
 ## Decisions
 
@@ -279,6 +324,23 @@ Consult 7a1a16db, verdict `revise`, 7 high, 4 medium, 2 low. No second consult: 
 | Status line edit applies live | medium | accept | Default off, and no write when already wrapped. |
 | Session cleanup encoding unspecified | low | accept, changed | Decode names and match exactly. Rejected "watch the tree": another Grok session starting at the same moment would be deleted. |
 | Stay off the allowlist and off `rpc_cmd.go` | low | accept in part | Stays off the device allowlist. Rejected for `rpcMethods`: the TUI calls through `ServeRPC`, which requires it. |
+
+Child consult 719e3c1a (P2, `!` command keys):
+
+| Objection | Severity | Triage | Reason |
+|---|---|---|---|
+| Falling back to the environment on a command key could send a different key | high | accept | A command key reads `unknown` and tries nothing else. |
+| `unavailable` would hide the provider | medium | accept | It reads `unknown: key is a command`, so the row stays visible. |
+| The spec should state the rule | low | accept | Added under "API keys". |
+
+Child consult f0b2c4bd (P3, probe tests):
+
+| Objection | Severity | Triage | Reason |
+|---|---|---|---|
+| A dialog during typing was not tested | medium | accept | `TestProbeSendsNoEnterWhenADialogAppearsWhileTyping`. |
+| No cancel case | low | accept | `TestProbeKillsTheTreeOnCancel`. |
+| The resize nudge was never observed | low | accept | `TestProbeNudgesTheTerminalSize`. |
+| The `printf x` sentinel in the fake | low | accept | Changed in the fake CLI. |
 
 ## Breakdown
 

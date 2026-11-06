@@ -15,7 +15,7 @@ Aiman is a **terminal UI (TUI) orchestrator** written in Go. It manages the full
 Binary: `aiman` — built from `./cmd/aiman/main.go`  
 Module: `github.com/bouwerp/aiman`  
 Go: 1.26  
-Current release: **v0.27.1**
+Current release: **v0.28.0**
 
 ---
 
@@ -538,7 +538,6 @@ one anywhere else, and on any literal naming mosh.
 ## Remaining TODOs (from PLAN.md)
 
 - **Remote VM Bootstrapper**: Connect to a new VM and install baseline tooling (git, go, node, claude, cursor, agy, kilo, acli), configure SSH keys, and authenticate agents.
-- **AI Compute Monitoring**: Provider subscription/usage monitoring (Anthropic, Google, OpenAI) — credit balances and usage tracking.
 - **Agentic Patterns**: Robust orchestrator-worker-validator patterns; translate for each supported coding tool.
 
 ---
