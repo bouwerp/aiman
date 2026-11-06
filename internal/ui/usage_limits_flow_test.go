@@ -33,7 +33,7 @@ func oneReading() limits.Snapshot {
 func TestUsageLimitsShownUnderTheirHost(t *testing.T) {
 	m, host := usageLimitsModel(t)
 	m.applyUsageLimits(usageLimitsMsg{host: host, snap: oneReading()})
-	if view := m.usageView.viewString(); !strings.Contains(view, "37%") || !strings.Contains(view, "muse") {
+	if view := m.usageView.viewString(); !strings.Contains(view, "63% left") || !strings.Contains(view, "muse") {
 		t.Fatalf("view has no limits row:\n%s", view)
 	}
 }
@@ -80,7 +80,7 @@ func TestUsageLimitsErrorKeepsCostAndLastRows(t *testing.T) {
 	if cmd := m.applyUsageLimits(usageLimitsMsg{host: host, err: errors.New("ssh: gone")}); cmd != nil {
 		t.Fatal("a failed call must not be polled")
 	}
-	if view := m.usageView.viewString(); !strings.Contains(view, "37%") {
+	if view := m.usageView.viewString(); !strings.Contains(view, "63% left") {
 		t.Fatalf("a failed call dropped the last rows:\n%s", view)
 	}
 }
@@ -107,7 +107,7 @@ func TestUsageLimitsResultReachesTheViewFromAnyScreen(t *testing.T) {
 	updated, _ = m.Update(usageLimitsMsg{host: host, snap: oneReading()})
 	m = updated.(*Model)
 	m.state = viewStateUsage
-	if view := m.usageView.viewString(); !strings.Contains(view, "37%") {
+	if view := m.usageView.viewString(); !strings.Contains(view, "63% left") {
 		t.Fatalf("a result that landed off the screen was dropped:\n%s", view)
 	}
 }

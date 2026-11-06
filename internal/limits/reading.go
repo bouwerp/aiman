@@ -4,7 +4,9 @@ package limits
 
 import (
 	"context"
+	"math"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -31,6 +33,12 @@ type Window struct {
 	ResetsText string `json:"resets_text,omitempty"`
 	// Reset is true once ResetsAt has passed; UsedPercent is then zero.
 	Reset bool `json:"reset,omitempty"`
+}
+
+// LeftText is what remains of the window, such as "70% left".
+func (w Window) LeftText() string {
+	left := max(0, math.Round((100-w.UsedPercent)*10)/10)
+	return strconv.FormatFloat(left, 'f', -1, 64) + "% left"
 }
 
 // Balance is money or credits left.

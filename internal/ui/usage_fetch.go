@@ -11,6 +11,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/bouwerp/aiman/internal/limits"
 	"github.com/bouwerp/aiman/internal/usage"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
@@ -24,6 +25,7 @@ type usageMsg struct {
 	sessionID string
 	rep       usage.Report
 	budget    usage.Budget
+	limits    *limits.Reading
 	err       error
 }
 
@@ -56,8 +58,26 @@ func fetchSessionUsageCmd(cfg *config.Config, s domain.Session) tea.Cmd {
 		if err := json.Unmarshal(raw, &body); err != nil {
 			return usageMsg{sessionID: s.ID, err: fmt.Errorf("decode usage: %w", err)}
 		}
-		return usageMsg{sessionID: s.ID, rep: body.Usage, budget: body.Budget}
+		return usageMsg{sessionID: s.ID, rep: body.Usage, budget: body.Budget, limits: fetchSessionLimits(ctx, mgr, s.ID)}
 	}
+}
+
+// fetchSessionLimits reads the session's provider limits from session.get. An
+// older serve has no such field, so any failure just shows no line.
+func fetchSessionLimits(ctx context.Context, mgr *ssh.Manager, id string) *limits.Reading {
+	raw, err := usecase.ServeRPC(ctx, mgr, "session.get", map[string]string{"id": id})
+	if err != nil {
+		return nil
+	}
+	var body struct {
+		Session struct {
+			Limits *limits.Reading `json:"limits"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil
+	}
+	return body.Session.Limits
 }
 
 func usageRemote(cfg *config.Config, s domain.Session) (config.Remote, bool) {
@@ -156,7 +176,9 @@ func (m *Model) applyUsageMsg(msg usageMsg) tea.Cmd {
 		m.metaExtras = map[string]detailMetaExtras{}
 	}
 	prev := m.metaExtras[msg.sessionID]
-	m.metaExtras[msg.sessionID] = applyUsageToExtras(prev, msg.rep, msg.budget)
+	next := applyUsageToExtras(prev, msg.rep, msg.budget)
+	next.Limits = msg.limits
+	m.metaExtras[msg.sessionID] = next
 	if msg.budget.State == "over" && prev.BudgetState != "over" {
 		return m.showToast("token budget exceeded", true, 4*time.Second)
 	}

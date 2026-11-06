@@ -32,9 +32,9 @@ func TestFormatLimits(t *testing.T) {
 	}
 	out := b.String()
 	for _, want := range []string{
-		"5h reset, week 30.5% (resets November 11, 13:44)",
+		"5h reset, week 69.5% left (resets November 11, 13:44)",
 		"2h ago",
-		"week 19%, unknown: screen changed",
+		"week 81% left, unknown: screen changed",
 		"5m ago",
 		"12.10 USD",
 		"unavailable: needs a login",

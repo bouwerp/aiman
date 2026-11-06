@@ -131,7 +131,7 @@ func limitsWindow(win limits.Window) string {
 	if win.Reset {
 		return win.Label + " reset"
 	}
-	text := win.Label + " " + strconv.FormatFloat(win.UsedPercent, 'f', -1, 64) + "%"
+	text := win.Label + " " + win.LeftText()
 	switch {
 	case !win.ResetsAt.IsZero():
 		return text + " (resets " + win.ResetsAt.Local().Format("Jan 2 15:04") + ")"

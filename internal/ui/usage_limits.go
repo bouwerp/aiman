@@ -55,7 +55,7 @@ func limitWindowText(w limits.Window, now time.Time) string {
 	if w.Reset {
 		return w.Label + " reset"
 	}
-	text := w.Label + " " + strconv.FormatFloat(w.UsedPercent, 'f', -1, 64) + "%"
+	text := w.Label + " " + w.LeftText()
 	switch {
 	case !w.ResetsAt.IsZero():
 		return text + " (resets in " + limitSpan(w.ResetsAt.Sub(now)) + ")"

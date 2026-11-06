@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/limits"
 	"github.com/bouwerp/aiman/internal/review"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -30,6 +31,7 @@ type detailMetaExtras struct {
 	Reviewing      bool
 	VerifyAdvisory bool
 	WatchingPR     int
+	Limits         *limits.Reading // what is left at the session's provider
 }
 
 // todoView is one session's to-do list as the detail pane draws it.
@@ -101,6 +103,18 @@ func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width i
 		return ""
 	}
 	return truncateToWidth(joinParts(parts), width)
+}
+
+// renderLimitsLine is what is left at the session's provider, under the meta line.
+func renderLimitsLine(reading *limits.Reading, now time.Time, width int) string {
+	if reading == nil {
+		return ""
+	}
+	rows := limitRows([]limits.Reading{*reading}, now)
+	if len(rows) == 0 {
+		return ""
+	}
+	return truncateToWidth(dimText(rows[0]), width)
 }
 
 // budgetMarker is a dim budget percentage on the meta line.
@@ -646,6 +660,9 @@ func (m *Model) renderSessionDetail(it item, width int) string {
 	extras.VerifyAdvisory = it.session.Unprotected
 	if meta := renderMetaLine(it.session, extras, time.Now(), width); meta != "" {
 		head = append(head, meta)
+	}
+	if line := renderLimitsLine(extras.Limits, time.Now(), width); line != "" {
+		head = append(head, line)
 	}
 	if git := renderGitPRLine(m.gitStatus, width); git != "" {
 		head = append(head, git)

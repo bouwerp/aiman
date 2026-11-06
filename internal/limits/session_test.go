@@ -51,3 +51,15 @@ func TestEveryProviderHasASource(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowLeftText(t *testing.T) {
+	tests := []struct {
+		used float64
+		want string
+	}{{30, "70% left"}, {66.7, "33.3% left"}, {0, "100% left"}, {100, "0% left"}, {120, "0% left"}}
+	for _, tt := range tests {
+		if got := (Window{UsedPercent: tt.used}).LeftText(); got != tt.want {
+			t.Errorf("used %v: %q, want %q", tt.used, got, tt.want)
+		}
+	}
+}

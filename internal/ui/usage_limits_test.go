@@ -23,8 +23,8 @@ func TestUsageLimitsRows(t *testing.T) {
 	}, now)
 	all := strings.Join(rows, "\n")
 	for _, want := range []string{
-		"30%", "2h", "November 11, 13:44", "19%", "SuperGrok Plus", "12.10", "USD", "$3.00 in 7 days",
-		"no usage yet in this window", "claude-statusline.off", "screen changed", "3h", "5%",
+		"70% left", "2h", "November 11, 13:44", "81% left", "SuperGrok Plus", "12.10", "USD", "$3.00 in 7 days",
+		"no usage yet in this window", "claude-statusline.off", "screen changed", "3h", "95% left",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("rows missing %q:\n%s", want, all)
@@ -44,5 +44,21 @@ func TestUsageLimitsRowsDropUnavailableWithNoReason(t *testing.T) {
 	rows := limitRows([]limits.Reading{{Provider: "copilot", State: limits.StateUnavailable}}, time.Now())
 	if len(rows) != 0 {
 		t.Fatalf("a provider that does not apply here is noise: %v", rows)
+	}
+}
+
+func TestUsageLimitsLineShowsWhatIsLeftForTheSession(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	if got := renderLimitsLine(nil, now, 80); got != "" {
+		t.Fatalf("no reading drew %q", got)
+	}
+	line := renderLimitsLine(&limits.Reading{
+		Provider: "claude", State: limits.StateOK, ObservedAt: now,
+		Windows: []limits.Window{{Label: "week", UsedPercent: 12.5, ResetsAt: now.Add(72 * time.Hour)}},
+	}, now, 80)
+	for _, want := range []string{"claude", "week 87.5% left", "resets in 3d"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("line missing %q: %q", want, line)
+		}
 	}
 }
