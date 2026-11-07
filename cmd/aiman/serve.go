@@ -282,6 +282,7 @@ func runServe() error {
 	}
 
 	srv.SetDesignPublisher(&design.Publisher{Cfg: cfg.Design, Home: home, Run: design.ExecRun})
+	srv.SetTranscripts(server.NewTranscriptSource(home))
 
 	childTracker := &coordinator.Tracker{
 		Todos:    srv.TodoAccess(),

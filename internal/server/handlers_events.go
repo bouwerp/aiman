@@ -108,6 +108,7 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 	ticker := time.NewTicker(EventPollInterval)
 	defer ticker.Stop()
 	lastSent := time.Now()
+	trWatch := newTranscriptWatch()
 
 	for {
 		select {
@@ -128,8 +129,10 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 		if s.pty != nil {
 			changed = collectSessionEvents(s.pty, seen, s.cachedSessionState)
 		}
+		var listed []domain.Session
 		if s.repo != nil {
-			if listed, lerr := s.repo.List(ctx); lerr == nil {
+			if l, lerr := s.repo.List(ctx); lerr == nil {
+				listed = l
 				changed = append(changed, collectRepoCreatedEvents(listed, announced)...)
 			}
 		}
@@ -139,7 +142,20 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 			}
 			lastSent = time.Now()
 		}
-		if len(changed) == 0 && time.Since(lastSent) >= eventKeepalive {
+		// A transcript event is marked seen only once encoded, so a failed
+		// write never swallows a change.
+		var trPending []transcriptPending
+		if s.transcripts != nil {
+			trPending = s.collectTranscriptEvents(listed, trWatch, time.Now())
+		}
+		for _, p := range trPending {
+			if err := enc.Encode(p.ev); err != nil {
+				return
+			}
+			lastSent = time.Now()
+			trWatch.commit(p, lastSent)
+		}
+		if len(changed) == 0 && len(trPending) == 0 && time.Since(lastSent) >= eventKeepalive {
 			if err := enc.Encode(SessionEvent{Type: "keepalive"}); err != nil {
 				return
 			}
