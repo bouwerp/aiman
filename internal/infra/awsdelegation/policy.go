@@ -107,6 +107,18 @@ var usEast1EdgeActions = []string{
 	"dynamodb:BatchGetItem",
 	"dynamodb:PutItem",
 	"dynamodb:DeleteItem",
+	// Bedrock reads and invocation, and CloudWatch Logs reads, in us-east-1.
+	// The region lock otherwise denies them when the session is locked to
+	// another region. Get* and List* cover foundation models and inference
+	// profiles; InvokeModel* covers the streaming verb. Model access is
+	// enabled per account in the Bedrock console, which no session policy
+	// can grant.
+	"bedrock:Get*",
+	"bedrock:List*",
+	"bedrock:InvokeModel*",
+	"logs:Describe*",
+	"logs:Get*",
+	"logs:FilterLogEvents",
 }
 
 // anyRegionMutations are table and Lambda configuration writes. Action *

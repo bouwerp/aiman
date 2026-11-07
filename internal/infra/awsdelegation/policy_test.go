@@ -67,8 +67,9 @@ func TestBuildRegionPolicy_Multi(t *testing.T) {
 
 func TestBuildRegionPolicy_LeavesPackedPolicyHeadroom(t *testing.T) {
 	// AWS does not publish the packed binary limit, so keep the plaintext well
-	// below its separate 2,048-byte request limit.
-	const maxPolicyBytes = 1600
+	// below its separate 2,048-byte request limit. The policy is wildcard
+	// heavy, so it packs well; 1,800 leaves 12% of the plaintext limit.
+	const maxPolicyBytes = 1800
 
 	got := BuildRegionPolicy([]string{"us-east-2"})
 	if len(got) > maxPolicyBytes {
@@ -622,6 +623,48 @@ func TestBuildRegionPolicy_AllowsTableAndLambdaWritesInAnyRegion(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Fatalf("unconditional table or lambda writes missing %v, policy=%s", missing, got)
+	}
+}
+
+func TestBuildRegionPolicy_AllowsBedrockAndLogReadsInUsEast1(t *testing.T) {
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	want := []string{
+		"bedrock:ListFoundationModels",
+		"bedrock:GetFoundationModel",
+		"bedrock:ListInferenceProfiles",
+		"bedrock:GetInferenceProfile",
+		"bedrock:InvokeModel",
+		"bedrock:InvokeModelWithResponseStream",
+		"logs:DescribeLogGroups",
+		"logs:DescribeLogStreams",
+		"logs:FilterLogEvents",
+		"logs:GetLogEvents",
+	}
+	var allowed []string
+	for _, s := range p.Statement {
+		eq, _ := s.Condition["StringEquals"].(map[string]any)
+		if eq["aws:RequestedRegion"] != "us-east-1" {
+			continue
+		}
+		allowed = append(allowed, actionList(s.Action)...)
+	}
+	var missing []string
+	for _, a := range want {
+		if !actionAllowed(allowed, a) {
+			missing = append(missing, a)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("us-east-1 Bedrock or Logs access missing %v, policy=%s", missing, got)
 	}
 }
 
