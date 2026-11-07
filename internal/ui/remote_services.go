@@ -133,29 +133,48 @@ func probeRemoteServiceCmd(cfg *config.Config, host string, kind remotesvc.Kind)
 	}
 }
 
-func remoteServiceOpCmd(cfg *config.Config, host string, kind remotesvc.Kind, op string, auto bool) tea.Cmd {
-	var script string
+// serviceOpScript builds the script for op. An install takes this client's
+// release. A manual update takes the latest release, so it cannot move a host
+// backwards; an auto-update (auto) takes version, which is the release it decided
+// to move to. Both lookups may reach GitHub, so this runs inside the command.
+func serviceOpScript(ctx context.Context, kind remotesvc.Kind, op, version string, auto bool) (string, error) {
 	switch op {
 	case "install":
-		script = remotesvc.InstallEnableScript(kind)
-	case "start", "restart", "reload":
-		script = remotesvc.StartScript(kind)
-	case "stop":
-		script = remotesvc.StopScript(kind)
-	case "update":
-		script = remotesvc.UpdateScript(kind)
-	default:
-		return func() tea.Msg {
-			return serviceOpMsg{host: host, kind: kind, op: op, auto: auto, err: fmt.Errorf("unknown op %s", op)}
+		tag, err := remotesvc.InstallTag(ctx, version)
+		if err != nil {
+			return "", err
 		}
+		return remotesvc.InstallEnableScript(kind, tag), nil
+	case "start", "restart", "reload":
+		return remotesvc.StartScript(kind), nil
+	case "stop":
+		return remotesvc.StopScript(kind), nil
+	case "update":
+		if auto {
+			return remotesvc.UpdateScript(kind, version), nil
+		}
+		tag, err := remotesvc.LatestReleaseTag(ctx)
+		if err != nil {
+			return "", err
+		}
+		return remotesvc.UpdateScript(kind, tag), nil
+	default:
+		return "", fmt.Errorf("unknown op %s", op)
 	}
+}
+
+func remoteServiceOpCmd(cfg *config.Config, host string, kind remotesvc.Kind, op, version string, auto bool) tea.Cmd {
 	return func() tea.Msg {
+		script, err := serviceOpScript(context.Background(), kind, op, version, auto)
+		if err != nil {
+			return serviceOpMsg{host: host, kind: kind, op: op, auto: auto, err: err}
+		}
 		if kind == remotesvc.KindServe && op != "stop" {
 			if err := syncRemoteServeConfig(cfg, host); err != nil {
 				return serviceOpMsg{host: host, kind: kind, op: op, auto: auto, err: err}
 			}
 		}
-		_, err := runRemoteScript(cfg, host, script)
+		_, err = runRemoteScript(cfg, host, script)
 		return serviceOpMsg{host: host, kind: kind, op: op, auto: auto, err: err}
 	}
 }
@@ -322,5 +341,5 @@ func (m *Model) runSelectedServiceOp(op, loading string) (tea.Model, tea.Cmd, bo
 		m.loadingNext = viewStateMain
 	}
 	m.state = viewStateLoading
-	return m, remoteServiceOpCmd(m.cfg, d.RemoteHost, kind, op, false), true
+	return m, remoteServiceOpCmd(m.cfg, d.RemoteHost, kind, op, m.version, false), true
 }

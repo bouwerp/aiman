@@ -138,8 +138,10 @@ The default file is `~/.aiman/debug.log`. The TUI also keeps traces in `/tmp/aim
 If it will not start, reinstall a known-good tag with the installer (the flag must be on the `bash` side of the pipe):
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --version v0.9.1
+curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --version <tag>
 ```
+
+The installer verifies the download against the release's `checksums.txt`, so a release published without one cannot be installed.
 
 ### Manual Build
 

@@ -114,7 +114,8 @@ func parseDowngradeTag(args []string) (string, error) {
 		fmt.Fprintf(os.Stderr, "Replace this binary with an older GitHub release.\n")
 		fmt.Fprintf(os.Stderr, "With no tag, installs the previous stable release.\n\n")
 		fmt.Fprintf(os.Stderr, "If this binary will not start, reinstall a tag with:\n")
-		fmt.Fprintf(os.Stderr, "  curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --version v0.9.1\n")
+		fmt.Fprintf(os.Stderr, "  curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --version <tag>\n")
+		fmt.Fprintf(os.Stderr, "A release published without checksums.txt cannot be installed.\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -138,13 +139,9 @@ func parseDowngradeTag(args []string) (string, error) {
 
 func installRelease(release *githubRelease) error {
 	assetName := platformAssetName()
-	downloadURL, err := release.assetURL(assetName)
-	if err != nil {
-		return err
-	}
 
 	fmt.Printf("Downloading %s...\n", assetName)
-	newBinary, err := downloadBinary(downloadURL, assetName)
+	newBinary, err := downloadRelease(release, assetName)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
@@ -280,21 +277,9 @@ func platformAssetName() string {
 	return fmt.Sprintf("aiman-%s-%s", os, arch)
 }
 
-// downloadBinary downloads a .tar.gz asset and extracts the named binary to a temp file.
-func downloadBinary(url, assetName string) (string, error) {
-	// #nosec G107 -- url is the browser_download_url taken from the GitHub release API
-	// response for this repository, not caller-supplied input.
-	resp, err := http.Get(url) //nolint:noctx
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned %d", resp.StatusCode)
-	}
-
-	gz, err := gzip.NewReader(resp.Body)
+// extractBinary extracts the named binary from a .tar.gz stream to a temp file.
+func extractBinary(archive io.Reader, assetName string) (string, error) {
+	gz, err := gzip.NewReader(archive)
 	if err != nil {
 		return "", fmt.Errorf("gzip open: %w", err)
 	}

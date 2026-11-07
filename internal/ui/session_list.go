@@ -530,7 +530,11 @@ func (m *Model) ensureRemoteServer(ctx context.Context, sshMgr *ssh.Manager) err
 	if _, err := sshMgr.Execute(ctx, "test -S ~/.aiman/aiman.sock"); err == nil {
 		return nil
 	}
-	script := remotesvc.InstallEnableScript(remotesvc.KindServe)
+	tag, err := remotesvc.InstallTag(ctx, m.version)
+	if err != nil {
+		return fmt.Errorf("installing aiman serve: %w", err)
+	}
+	script := remotesvc.InstallEnableScript(remotesvc.KindServe, tag)
 	if _, err := execRemoteScript(sshMgr, ctx, "/tmp/aiman-install-serve.sh", script); err != nil {
 		return fmt.Errorf("installing aiman serve: %w", err)
 	}
