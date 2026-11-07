@@ -84,6 +84,28 @@ type ServeConfig struct {
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
 	// Roles overrides agent, model and effort for sessions with a role.
 	Roles RolesConfig `yaml:"roles,omitempty"`
+	// AWS carries this host's delegations for the phone's AWS sign-in.
+	AWS ServeAWSConfig `yaml:"aws,omitempty"`
+}
+
+// ServeAWSConfig is the AWS section of the serve config.
+type ServeAWSConfig struct {
+	Delegations []ServeAWSDelegation `yaml:"delegations,omitempty"`
+}
+
+// ServeAWSDelegation is the non-secret part of one delegation serve needs to
+// mint credentials through Identity Center.
+type ServeAWSDelegation struct {
+	Profile         string   `yaml:"profile,omitempty"`
+	AccountID       string   `yaml:"account_id,omitempty"`
+	RoleName        string   `yaml:"role_name,omitempty"`
+	Regions         []string `yaml:"regions,omitempty"`
+	SessionPolicy   string   `yaml:"session_policy,omitempty"`
+	DurationSeconds int      `yaml:"duration_seconds,omitempty"`
+	SSOStartURL     string   `yaml:"sso_start_url,omitempty"`
+	SSORegion       string   `yaml:"sso_region,omitempty"`
+	SSOAccountID    string   `yaml:"sso_account_id,omitempty"`
+	SSORoleName     string   `yaml:"sso_role_name,omitempty"`
 }
 
 // AgentsConfig configures agent selection shared by coordinator sessions and
@@ -249,8 +271,8 @@ type ReviewConfig struct {
 	// FixTimeout is how long a review's fixer may run without pushing; zero
 	// means DefaultReviewFixTimeout.
 	FixTimeout time.Duration `yaml:"fix_timeout,omitempty"`
-	// Sandbox holds the compose network for review.run. Empty is compose's
-	// default (bridge); "none" is offline.
+	// Sandbox holds the compose network for the review sandbox. Empty and
+	// "none" are offline; any other value uses compose's default network.
 	Sandbox ReviewSandboxConfig `yaml:"sandbox,omitempty"`
 }
 
@@ -601,6 +623,13 @@ type AWSDelegation struct {
 	Regions         []string `yaml:"regions,omitempty"`          // restrict credentials via aws:RequestedRegion condition policy; default ["us-east-2"] in UI
 	SessionPolicy   string   `yaml:"session_policy,omitempty"`   // inline JSON IAM policy passed to sts assume-role --policy
 	DurationSeconds int      `yaml:"duration_seconds,omitempty"` // credential lifetime 900–43200; 0 = DefaultDurationSeconds (43200)
+	// Identity Center facts serve uses for the phone's device-flow sign-in.
+	SSOStartURL  string `yaml:"sso_start_url,omitempty"`
+	SSORegion    string `yaml:"sso_region,omitempty"`
+	SSOAccountID string `yaml:"sso_account_id,omitempty"`
+	// SSORoleName names the delegated permission set, never the operator's
+	// own portal role.
+	SSORoleName string `yaml:"sso_role_name,omitempty"`
 }
 
 // AllDelegations returns all AWSDelegation entries for the remote, combining

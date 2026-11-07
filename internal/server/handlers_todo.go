@@ -298,6 +298,11 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 		}
 		return Response{ID: req.ID, Result: map[string]any{"type": "todo_list", "list": list, "steer": s.steer.Status(sess.ID)}}
 	}
+	if req.Method == "steer.send" {
+		if refused, out := s.refuseOutOfScope(ctx, req, sess.ID); out {
+			return refused
+		}
+	}
 	author, err := deriveAuthor(req.Method, req.Caller, sess.ID, p.As)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())

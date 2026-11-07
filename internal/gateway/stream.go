@@ -18,7 +18,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	stream, err := server.EventsDial(s.Socket)
+	stream, err := serveClient(s.Socket).EventsDial()
 	if err != nil {
 		_ = conn.Close(websocket.StatusTryAgainLater, err.Error())
 		return
@@ -41,7 +41,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// terminal bridges pty.attach, which is raw keystrokes into the session, so a
+// device needs allow_destructive before anything is dialled.
 func (s *Server) terminal(w http.ResponseWriter, r *http.Request) {
+	if p := principalFrom(r.Context()); !p.host && !p.device.AllowDestructive {
+		writeJSONError(w, http.StatusForbidden, "", "forbidden", "the terminal needs allow_destructive")
+		return
+	}
 	id := r.PathValue("id")
 	if id == "" {
 		http.Error(w, "missing id", http.StatusBadRequest)
@@ -56,7 +62,7 @@ func (s *Server) terminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
-	att, err := server.AttachDial(s.Socket, id, cols, rows)
+	att, err := serveClient(s.Socket).AttachDial(id, cols, rows)
 	if err != nil {
 		_ = ws.Close(websocket.StatusTryAgainLater, err.Error())
 		return

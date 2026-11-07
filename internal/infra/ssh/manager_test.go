@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,30 @@ func TestAttachPTYSessionSkipsX11(t *testing.T) {
 	}
 	if !strings.Contains(args, "-tty") {
 		t.Fatalf("pty attach should use its own tty master: %s", args)
+	}
+}
+
+// A session on a connection that forwards the agent can reach the agent even
+// when its own client did not ask for it, so bulk calls must never share the
+// attach master, and must override a ForwardAgent line in the user's ssh config.
+func TestBulkConnectionsStayApartFromAgentForwarding(t *testing.T) {
+	mgr := NewManager(Config{Host: "example.com", User: "code"})
+
+	attach := mgr.AttachPTYSession("sess").Args
+	bulk := mgr.controlPath()
+	if slices.Contains(attach, bulk) {
+		t.Fatalf("attach must not use the bulk master %s: %q", bulk, attach)
+	}
+
+	shapes := map[string][]string{
+		"bulk multiplexed": bulkSSHArgs(bulk, true),
+		"bulk direct":      bulkSSHArgs(bulk, false),
+		"events stream":    mgr.SessionEventsCommand(context.Background()).Args,
+	}
+	for name, args := range shapes {
+		if !slices.Contains(args, noAgentForwarding) {
+			t.Errorf("%s must set %s: %q", name, noAgentForwarding, args)
+		}
 	}
 }
 

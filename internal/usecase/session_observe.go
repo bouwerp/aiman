@@ -9,6 +9,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/pane"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // ObserveSession gathers everything the classifier needs about a session in a
@@ -39,7 +40,7 @@ type ptyCaptureResult struct {
 
 func observePTYSession(ctx context.Context, remote TerminalExecutor, s domain.Session) (pane.Observation, error) {
 	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-		"aiman pty capture %q --lines 0", terminalID(s)))
+		"aiman pty capture %s --lines 0", shellx.Quote(terminalID(s))))
 	if err != nil {
 		return pane.Observation{}, fmt.Errorf("pty capture: %w", err)
 	}

@@ -81,8 +81,8 @@ func TestPrepareRestartHandoffUsesServeHandover(t *testing.T) {
 	}
 	rm := remote.commands[rmAt]
 	for _, path := range []string{
-		`"/w/.aiman_session_summary.md"`,
-		`"/w/.aiman_session_summary.md.tmp"`,
+		`'/w/.aiman_session_summary.md'`,
+		`'/w/.aiman_session_summary.md.tmp'`,
 	} {
 		if !strings.Contains(rm, path) {
 			t.Fatalf("rm command %q missing %s", rm, path)
@@ -101,7 +101,7 @@ func TestPrepareRestartHandoffUsesServeHandover(t *testing.T) {
 		if remote.summaryPrompted() {
 			t.Fatal("summary prompt was sent for an existing handover")
 		}
-		if !strings.Contains(joined, `"/w/.aiman_session_summary.md"`) || !strings.Contains(joined, `"/w/.aiman_session_summary.md.tmp"`) {
+		if !strings.Contains(joined, `'/w/.aiman_session_summary.md'`) || !strings.Contains(joined, `'/w/.aiman_session_summary.md.tmp'`) {
 			t.Fatalf("stale summary was not removed:\n%s", joined)
 		}
 	})

@@ -166,7 +166,7 @@ func TestCreateSessionLaunchesPTY(t *testing.T) {
 	requireNoTmux(t, remote.commands)
 	var created bool
 	for path := range remote.written {
-		if strings.HasPrefix(path, "/tmp/aiman-pty-"+sess.ID) {
+		if strings.HasPrefix(path, "$HOME/.aiman/tmp/aiman-pty-"+sess.ID) {
 			created = true
 		}
 	}

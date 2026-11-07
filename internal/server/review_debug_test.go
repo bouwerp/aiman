@@ -13,13 +13,39 @@ import (
 	"github.com/bouwerp/aiman/internal/review"
 )
 
+// Debug ports only publish with a network, so these tests configure one.
+var debugReviewConfig = config.ReviewConfig{Sandbox: config.ReviewSandboxConfig{Network: "bridge"}}
+
+func TestDebugRefusedWithDefaultNetwork(t *testing.T) {
+	r := newReviewRig(t)
+	pty := ptyfake.New()
+	r.srv.pty = pty
+	r.srv.SetReviewRunner(review.Runner{Docker: (&fakeDocker{out: "ok\n"}).run, UID: 1000, GID: 1000})
+	r.srv.SetReviewConfig(config.ReviewConfig{}, map[string]config.RepoBootstrap{
+		"o/r": {Review: config.RepoReview{Image: "golang:1.26"}},
+	})
+	info := createReview(t, r.srv)
+
+	resp := rpc(t, r.srv, info.ID, "review.debug", map[string]any{"lang": "go"})
+	if resp.Error == nil || resp.Error.Code != CodeCreateFailed || !strings.Contains(resp.Error.Message, "review.sandbox.network") {
+		t.Fatalf("want a refusal naming review.sandbox.network, got %+v", resp.Error)
+	}
+	if _, err := pty.Get("debug-" + info.ID); err == nil {
+		t.Fatal("debug helper started with no network to attach through")
+	}
+	launch := filepath.Join(r.stateDir, info.ID, "work", ".vscode", "launch.json")
+	if _, err := os.Stat(launch); err == nil {
+		t.Fatal("launch.json written for a refused debug session")
+	}
+}
+
 func TestDebugRegistersTunnels(t *testing.T) {
 	r := newReviewRig(t)
 	pty := ptyfake.New()
 	r.srv.pty = pty
 	dock := &fakeDocker{out: "ok\n"}
 	r.srv.SetReviewRunner(review.Runner{Docker: dock.run, UID: 1000, GID: 1000})
-	r.srv.SetReviewConfig(config.ReviewConfig{}, map[string]config.RepoBootstrap{
+	r.srv.SetReviewConfig(debugReviewConfig, map[string]config.RepoBootstrap{
 		"o/r": {Review: config.RepoReview{Image: "golang:1.26"}},
 	})
 	info := createReview(t, r.srv)
@@ -96,7 +122,7 @@ func TestDebugLaunchJSONFailureLeavesNoHelper(t *testing.T) {
 	pty := ptyfake.New()
 	r.srv.pty = pty
 	r.srv.SetReviewRunner(review.Runner{Docker: (&fakeDocker{out: "ok\n"}).run, UID: 1000, GID: 1000})
-	r.srv.SetReviewConfig(config.ReviewConfig{}, map[string]config.RepoBootstrap{
+	r.srv.SetReviewConfig(debugReviewConfig, map[string]config.RepoBootstrap{
 		"o/r": {Review: config.RepoReview{Image: "golang:1.26"}},
 	})
 	info := createReview(t, r.srv)
@@ -124,7 +150,7 @@ func TestStopAndPTYKillTearDownDebug(t *testing.T) {
 	pty := ptyfake.New()
 	r.srv.pty = pty
 	r.srv.SetReviewRunner(review.Runner{Docker: (&fakeDocker{out: "ok\n"}).run, UID: 1000, GID: 1000})
-	r.srv.SetReviewConfig(config.ReviewConfig{}, map[string]config.RepoBootstrap{
+	r.srv.SetReviewConfig(debugReviewConfig, map[string]config.RepoBootstrap{
 		"o/r": {Review: config.RepoReview{Image: "golang:1.26"}},
 	})
 	info := createReview(t, r.srv)

@@ -8,7 +8,8 @@ REPO_URL="https://github.com/bouwerp/aiman"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="${BINARY_NAME:-aiman}"
 GITHUB_API="https://api.github.com/repos/bouwerp/aiman/releases/latest"
-# Pin a release tag with --version or VERSION= (e.g. VERSION=v0.9.1 ./install.sh).
+RELEASES_URL="https://github.com/bouwerp/aiman/releases/download"
+# Pin a release tag with --version or VERSION= (e.g. VERSION=v0.30.0 ./install.sh).
 PINNED_VERSION="${VERSION:-}"
 
 # Colors
@@ -76,65 +77,100 @@ normalize_pin() {
         echo -e "${RED}Error: empty release tag${NC}" >&2
         exit 1
     fi
+    case "$v" in
+        *[!A-Za-z0-9._-]*)
+            echo -e "${RED}Error: invalid release tag: $1${NC}" >&2
+            exit 1
+            ;;
+    esac
     printf 'v%s\n' "$v"
 }
 
-# Download pre-built binary from GitHub releases
+# refuse stops the whole install. It exits rather than returns because
+# download_binary runs as an if condition, where set -e does not apply, and a
+# return there would fall through to the source build.
+refuse() {
+    echo -e "${RED}Refusing to install: $*${NC}" >&2
+    exit 1
+}
+
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        return 1
+    fi
+}
+
+# verify_checksum checks a file in the current directory against the
+# checksums.txt beside it (`<sha256>  <asset>` per line, exact asset name).
+verify_checksum() {
+    want=$(awk -v f="$1" '$2 == f { print $1; exit }' checksums.txt)
+    [ -n "$want" ] || refuse "$1 is not listed in checksums.txt of $RELEASE_TAG"
+    got=$(sha256_of "$1") || refuse "verifying the download needs sha256sum or shasum"
+    [ "$got" = "$want" ] || refuse "checksum mismatch for $1 (expected $want, got $got)"
+}
+
+# resolve_latest_release sets RELEASE_TAG for an unpinned install. It returns 1
+# only when no prebuilt asset can be found, which is the source build's cue.
+resolve_latest_release() {
+    if ! RELEASE_DATA=$(curl -sf "$GITHUB_API" 2>/dev/null); then
+        echo -e "${YELLOW}No release found, will build from source${NC}"
+        return 1
+    fi
+    if ! echo "$RELEASE_DATA" | grep -q "browser_download_url.*${RELEASE_NAME}.${ARCHIVE_EXT}\""; then
+        echo -e "${YELLOW}Pre-built binary not available for $PLATFORM, will build from source${NC}"
+        return 1
+    fi
+    RELEASE_TAG=$(echo "$RELEASE_DATA" | grep '"tag_name"' | cut -d '"' -f 4)
+    [ -n "$RELEASE_TAG" ] || return 1
+}
+
+# Download the pre-built binary of a GitHub release and verify it against that
+# release's checksums.txt. Once a release is chosen every failure refuses: a
+# pinned install or an unverifiable release never falls back to a source build.
 download_binary() {
     echo "Checking for pre-built binary..."
 
     get_binary_name
 
-    local api="$GITHUB_API"
     if [ -n "${PINNED_VERSION:-}" ]; then
-        api="https://api.github.com/repos/bouwerp/aiman/releases/tags/${PINNED_VERSION}"
-        echo "Pinning release: ${PINNED_VERSION}"
-    fi
-
-    if ! RELEASE_DATA=$(curl -sf "$api" 2>/dev/null); then
-        if [ -n "${PINNED_VERSION:-}" ]; then
-            echo -e "${YELLOW}Pinned release ${PINNED_VERSION} not found as a GitHub release, will build from that tag${NC}"
-        else
-            echo -e "${YELLOW}No release found, will build from source${NC}"
-        fi
+        RELEASE_TAG="$PINNED_VERSION"
+        echo "Pinning release: ${RELEASE_TAG}"
+    elif ! resolve_latest_release; then
         return 1
     fi
 
-    # Extract download URL for the correct architecture
-    DOWNLOAD_URL=$(echo "$RELEASE_DATA" | grep "browser_download_url.*${RELEASE_NAME}.${ARCHIVE_EXT}\"" | cut -d '"' -f 4)
-
-    if [ -z "$DOWNLOAD_URL" ]; then
-        echo -e "${YELLOW}Pre-built binary not available for $PLATFORM, will build from source${NC}"
-        return 1
-    fi
-
-    VERSION=$(echo "$RELEASE_DATA" | grep '"tag_name"' | cut -d '"' -f 4)
-    echo -e "${GREEN}Found release: $VERSION${NC}"
+    local archive="${RELEASE_NAME}.${ARCHIVE_EXT}"
+    local base="${RELEASES_URL}/${RELEASE_TAG}"
+    echo -e "${GREEN}Found release: $RELEASE_TAG${NC}"
     echo "Downloading $RELEASE_NAME..."
 
     TEMP_DIR=$(mktemp -d)
     cd "$TEMP_DIR"
 
-    if ! curl -sfL "$DOWNLOAD_URL" -o "${RELEASE_NAME}.${ARCHIVE_EXT}"; then
-        echo -e "${RED}Download failed${NC}"
-        return 1
-    fi
+    curl -sfL "$base/checksums.txt" -o checksums.txt ||
+        refuse "could not download checksums.txt of $RELEASE_TAG (releases published without one cannot be installed)"
+    curl -sfL "$base/$archive" -o "$archive" ||
+        refuse "could not download $archive from $RELEASE_TAG"
+
+    verify_checksum "$archive"
+    echo -e "${GREEN}Checksum verified${NC}"
 
     # Extract archive
     echo "Extracting binary..."
     case "$ARCHIVE_EXT" in
         tar.gz)
-            tar -xzf "${RELEASE_NAME}.${ARCHIVE_EXT}"
+            tar -xzf "$archive"
             ;;
         zip)
-            unzip -q "${RELEASE_NAME}.${ARCHIVE_EXT}"
+            unzip -q "$archive"
             ;;
     esac
 
-    if [ ! -f "$RELEASE_NAME" ]; then
-        echo -e "${RED}Binary not found in archive${NC}"
-        return 1
-    fi
+    [ -f "$RELEASE_NAME" ] || refuse "binary not found in $archive"
 
     # Rename to standard binary name
     mv "$RELEASE_NAME" "$BINARY_NAME"
@@ -148,13 +184,13 @@ download_binary() {
 check_prerequisites() {
     echo "Checking prerequisites..."
     
-    if ! command -v git &> /dev/null; then
+    if ! command -v git >/dev/null 2>&1; then
         echo -e "${RED}Error: git is required but not installed.${NC}"
         echo "Please install git first."
         exit 1
     fi
     
-    if ! command -v go &> /dev/null; then
+    if ! command -v go >/dev/null 2>&1; then
         echo -e "${YELLOW}Warning: Go is not installed. Attempting to install...${NC}"
         install_go
     else
@@ -169,11 +205,11 @@ install_go() {
     
     case "$OS" in
         linux)
-            if command -v apt-get &> /dev/null; then
+            if command -v apt-get >/dev/null 2>&1; then
                 sudo apt-get update && sudo apt-get install -y golang-go
-            elif command -v yum &> /dev/null; then
+            elif command -v yum >/dev/null 2>&1; then
                 sudo yum install -y golang
-            elif command -v pacman &> /dev/null; then
+            elif command -v pacman >/dev/null 2>&1; then
                 sudo pacman -S go
             else
                 echo -e "${RED}Could not install Go automatically. Please install Go 1.26+ manually.${NC}"
@@ -181,7 +217,7 @@ install_go() {
             fi
             ;;
         darwin)
-            if command -v brew &> /dev/null; then
+            if command -v brew >/dev/null 2>&1; then
                 brew install go
             else
                 echo -e "${YELLOW}Homebrew not found. Installing Homebrew first...${NC}"
@@ -197,11 +233,7 @@ clone_repo() {
     echo "Cloning repository..."
     TEMP_DIR=$(mktemp -d)
     cd "$TEMP_DIR"
-    if [ -n "${PINNED_VERSION:-}" ]; then
-        git clone --depth 1 --branch "$PINNED_VERSION" "$REPO_URL" aiman-src
-    else
-        git clone --depth 1 "$REPO_URL" aiman-src
-    fi
+    git clone --depth 1 "$REPO_URL" aiman-src
     cd aiman-src
 }
 
@@ -225,11 +257,9 @@ build_binary() {
         exit 1
     fi
 
-    go build -ldflags "-X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
+    if ! go build -ldflags "-X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
         -o "${BINARY_NAME}" \
-        "./cmd/${BINARY_NAME}"
-    
-    if [ $? -ne 0 ]; then
+        "./cmd/${BINARY_NAME}"; then
         echo -e "${RED}Build failed!${NC}"
         exit 1
     fi
@@ -266,7 +296,7 @@ install_binary() {
     ensure_path
 
     # Verify installation
-    if command -v aiman &> /dev/null || [ -x "$INSTALL_DIR/$BINARY_NAME" ]; then
+    if command -v aiman >/dev/null 2>&1 || [ -x "$INSTALL_DIR/$BINARY_NAME" ]; then
         echo -e "${GREEN}Installation successful!${NC}"
         echo ""
         echo "aiman is now installed at: $INSTALL_DIR/$BINARY_NAME"
@@ -311,9 +341,11 @@ ensure_path() {
         return
     fi
 
-    echo "" >> "$PROFILE"
-    echo "# Added by aiman installer" >> "$PROFILE"
-    echo "$PATH_LINE" >> "$PROFILE"
+    {
+        echo ""
+        echo "# Added by aiman installer"
+        echo "$PATH_LINE"
+    } >> "$PROFILE"
     echo -e "${GREEN}Added $INSTALL_DIR to PATH in $PROFILE${NC}"
     echo -e "${YELLOW}Restart your shell or run: source $PROFILE${NC}"
 
@@ -368,7 +400,7 @@ main() {
 }
 
 # Check for user-specified install directory
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
     case $1 in
         --prefix)
             INSTALL_DIR="$2"
@@ -380,7 +412,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --version)
             if [ -z "${2:-}" ]; then
-                echo "Error: --version requires a tag (e.g. v0.9.1)"
+                echo "Error: --version requires a tag (e.g. v0.30.0)"
                 exit 1
             fi
             PINNED_VERSION="$2"
@@ -392,11 +424,14 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --prefix DIR    Install to custom directory (default: ~/.local/bin)"
             echo "  --system        Install to /usr/local/bin (requires sudo)"
-            echo "  --version TAG   Install a specific release tag (also: VERSION=v0.9.1)"
+            echo "  --version TAG   Install a specific release tag (also: VERSION=v0.30.0)"
             echo "  -h, --help      Show this help message"
             echo ""
+            echo "Every install is verified against the release's checksums.txt, so a"
+            echo "release published without one cannot be installed."
+            echo ""
             echo "Recover a broken install:"
-            echo "  curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --version v0.9.1"
+            echo "  curl -sSL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | bash -s -- --version <tag>"
             exit 0
             ;;
         *)

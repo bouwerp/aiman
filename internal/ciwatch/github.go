@@ -53,13 +53,16 @@ type PRView struct {
 
 // ReviewComment is one inline PR review comment.
 type ReviewComment struct {
-	ID        int64
-	Body      string
-	Path      string
-	Line      int // line, else original_line, else 0
-	Author    string
-	InReplyTo int64
-	CreatedAt time.Time
+	ID     int64
+	Body   string
+	Path   string
+	Line   int // line, else original_line, else 0
+	Author string
+	// Association is GitHub's author_association for the comment: the author's
+	// relationship to the repository, such as OWNER or NONE.
+	Association string
+	InReplyTo   int64
+	CreatedAt   time.Time
 }
 
 // GitHub is everything the watcher asks of GitHub. GHCLI is the real one.
@@ -124,7 +127,7 @@ func (g GHCLI) FailedJobLog(ctx context.Context, dir string, jobID int64) (strin
 // ReviewComments lists every inline review comment on the PR.
 func (g GHCLI) ReviewComments(ctx context.Context, dir string, pr int) ([]ReviewComment, error) {
 	out, err := g.run(ctx, dir, "api", fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/comments", pr), "--paginate",
-		"--jq", ".[] | {id, body, path, line, original_line, in_reply_to_id, created_at, user: .user.login}")
+		"--jq", ".[] | {id, body, path, line, original_line, in_reply_to_id, created_at, author_association, user: .user.login}")
 	if err != nil {
 		return nil, err
 	}
@@ -229,11 +232,12 @@ func ParseReviewComments(ndjson []byte) ([]ReviewComment, error) {
 			InReplyTo    *int64    `json:"in_reply_to_id"`
 			CreatedAt    time.Time `json:"created_at"`
 			User         string    `json:"user"`
+			Association  string    `json:"author_association"`
 		}
 		if err := json.Unmarshal(line, &c); err != nil {
 			return nil, fmt.Errorf("parse review comment: %w", err)
 		}
-		rc := ReviewComment{ID: c.ID, Body: c.Body, Path: c.Path, Author: c.User, CreatedAt: c.CreatedAt}
+		rc := ReviewComment{ID: c.ID, Body: c.Body, Path: c.Path, Author: c.User, Association: c.Association, CreatedAt: c.CreatedAt}
 		switch {
 		case c.Line != nil:
 			rc.Line = *c.Line

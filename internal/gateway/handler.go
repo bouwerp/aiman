@@ -68,6 +68,13 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
+// serveClient is how the gateway reaches serve. It sends no caller: a phone is
+// never a session, even when the gateway was started from a session's terminal
+// and inherited its AIMAN_ID.
+func serveClient(socket string) server.Client {
+	return server.Client{Socket: socket}
+}
+
 func writeSocketResponse(w http.ResponseWriter, resp server.Response, err error) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)

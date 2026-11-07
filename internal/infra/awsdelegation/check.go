@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // Sentinel errors returned by CheckCredentials.
@@ -21,7 +23,7 @@ var (
 // Returns ErrProfileNotFound if the profile doesn't exist on the remote.
 // Returns ErrSSHFailure if the SSH connection itself could not be established.
 func CheckCredentials(ctx context.Context, r RemoteRunner, profileName string) error {
-	out, err := r.Execute(ctx, "aws sts get-caller-identity --profile "+shellQuote(profileName)+" --output text 2>&1")
+	out, err := r.Execute(ctx, "aws sts get-caller-identity --profile "+shellx.Quote(profileName)+" --output text 2>&1")
 	lower := strings.ToLower(out)
 
 	// SSH-level failures produce no useful AWS output — detect them first.
@@ -76,8 +78,4 @@ func ListCredentialProfiles(ctx context.Context, r RemoteRunner) ([]string, erro
 		}
 	}
 	return profiles, nil
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // RemoteCreateSpec is what the wizard decided, in the form serve's
@@ -108,7 +109,7 @@ func CreateSessionOnRemote(ctx context.Context, remote TerminalExecutor, spec Re
 	}
 
 	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-		"aiman session create --params-file %q; rm -f %q", path, path))
+		"aiman session create --params-file %s; rm -f %s", shellx.Quote(path), shellx.Quote(path)))
 	if err != nil {
 		return nil, fmt.Errorf("remote create: %s: %w", strings.TrimSpace(out), err)
 	}
@@ -137,7 +138,7 @@ func ForgetSessionOnRemote(ctx context.Context, remote TerminalExecutor, session
 	if sessionID == "" {
 		return nil
 	}
-	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman session forget %q", sessionID))
+	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman session forget %s", shellx.Quote(sessionID)))
 	if err == nil {
 		return nil
 	}

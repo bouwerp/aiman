@@ -14,6 +14,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/graphify"
 	"github.com/bouwerp/aiman/internal/quality"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // KitInput is what BuildQualityKit needs to know about one session.
@@ -113,7 +114,7 @@ func mcpConfigFor(worktree, agentCommand string) (mcpConfig, bool) {
 	base := path.Base(strings.Trim(fields[0], `"'`))
 	switch {
 	case strings.Contains(base, "claude"):
-		return mcpConfig{files: []string{`"$HOME"/.claude.json`, shellQuote(filepath.Join(worktree, ".mcp.json"))}, keyRE: jsonKeyRE}, true
+		return mcpConfig{files: []string{`"$HOME"/.claude.json`, shellx.Quote(filepath.Join(worktree, ".mcp.json"))}, keyRE: jsonKeyRE}, true
 	case base == "codex":
 		return mcpConfig{files: []string{`"$HOME"/.codex/config.toml`}, keyRE: tomlTableRE}, true
 	case strings.Contains(base, "cursor"):
@@ -137,19 +138,19 @@ func CheckRequires(ctx context.Context, remote domain.RemoteExecutor, worktree, 
 		if entry == "" {
 			continue
 		}
-		report := fmt.Sprintf("printf '%s%%s\\n' %s", missingPrefix, shellQuote(entry))
+		report := fmt.Sprintf("printf '%s%%s\\n' %s", missingPrefix, shellx.Quote(entry))
 		if name, ok := strings.CutPrefix(entry, "mcp:"); ok {
 			if !mcpKnown {
 				continue
 			}
 			var greps []string
 			for _, f := range mcp.files {
-				greps = append(greps, fmt.Sprintf("grep -qE %s %s 2>/dev/null", shellQuote(mcp.keyRE(name)), f))
+				greps = append(greps, fmt.Sprintf("grep -qE %s %s 2>/dev/null", shellx.Quote(mcp.keyRE(name)), f))
 			}
 			fmt.Fprintf(&sb, "{ %s; } || %s\n", strings.Join(greps, " || "), report)
 			continue
 		}
-		fmt.Fprintf(&sb, "command -v %s >/dev/null 2>&1 || %s\n", shellQuote(entry), report)
+		fmt.Fprintf(&sb, "command -v %s >/dev/null 2>&1 || %s\n", shellx.Quote(entry), report)
 	}
 
 	missingSet := map[string]bool{}

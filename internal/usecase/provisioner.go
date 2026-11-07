@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // claudeInstallCommand installs Claude Code with the official native
@@ -72,7 +73,7 @@ func (p *Provisioner) GetStepsWithLocalSSHKey() ([]domain.ProvisionStep, error) 
 		{
 			ID:      "local-ssh-key",
 			Name:    "Authorize Local SSH Public Key",
-			Command: fmt.Sprintf("mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && (grep -qxF %q ~/.ssh/authorized_keys || printf '%%s\\n' %q >> ~/.ssh/authorized_keys)", pubKey, pubKey),
+			Command: fmt.Sprintf("mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && (grep -qxF %s ~/.ssh/authorized_keys || printf '%%s\\n' %s >> ~/.ssh/authorized_keys)", shellx.Quote(pubKey), shellx.Quote(pubKey)),
 		},
 	}
 	steps = append(steps, p.GetSteps()...)

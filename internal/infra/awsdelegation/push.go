@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // RemoteRunner runs commands and writes files on the remote host (e.g. *ssh.Manager).
@@ -22,7 +24,7 @@ func ApplyDelegatedProfile(ctx context.Context, r RemoteRunner, profileName, rol
 	}
 
 	configPath := fmt.Sprintf("%s/.aws/config", trimHome)
-	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/config && cat %q/.aws/config || true`, home, home))
+	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %s/.aws/config && cat %s/.aws/config || true`, shellx.Quote(home), shellx.Quote(home)))
 	if err != nil {
 		return fmt.Errorf("read remote ~/.aws/config: %w", err)
 	}
@@ -31,7 +33,7 @@ func ApplyDelegatedProfile(ctx context.Context, r RemoteRunner, profileName, rol
 	if err := r.WriteFile(ctx, configPath, []byte(merged)); err != nil {
 		return fmt.Errorf("write remote ~/.aws/config: %w", err)
 	}
-	if _, err := r.Execute(ctx, fmt.Sprintf(`chmod 600 %q`, configPath)); err != nil {
+	if _, err := r.Execute(ctx, fmt.Sprintf(`chmod 600 %s`, shellx.Quote(configPath))); err != nil {
 		return fmt.Errorf("chmod remote ~/.aws/config: %w", err)
 	}
 	return nil
@@ -45,7 +47,7 @@ func ApplyDelegatedCredentials(ctx context.Context, r RemoteRunner, profileName 
 	}
 
 	credsPath := fmt.Sprintf("%s/.aws/credentials", trimHome)
-	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/credentials && cat %q/.aws/credentials || true`, home, home))
+	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %s/.aws/credentials && cat %s/.aws/credentials || true`, shellx.Quote(home), shellx.Quote(home)))
 	if err != nil {
 		return fmt.Errorf("read remote ~/.aws/credentials: %w", err)
 	}
@@ -54,7 +56,7 @@ func ApplyDelegatedCredentials(ctx context.Context, r RemoteRunner, profileName 
 	if err := r.WriteFile(ctx, credsPath, []byte(merged)); err != nil {
 		return fmt.Errorf("write remote ~/.aws/credentials: %w", err)
 	}
-	if _, err := r.Execute(ctx, fmt.Sprintf(`chmod 600 %q`, credsPath)); err != nil {
+	if _, err := r.Execute(ctx, fmt.Sprintf(`chmod 600 %s`, shellx.Quote(credsPath))); err != nil {
 		return fmt.Errorf("chmod remote ~/.aws/credentials: %w", err)
 	}
 	return nil
@@ -81,7 +83,7 @@ func ensureRemoteAWSDir(ctx context.Context, r RemoteRunner) (home string, trimH
 	if home == "" || home == "/" {
 		return "", "", fmt.Errorf("refusing to write to suspicious home directory: %q", home)
 	}
-	if _, err := r.Execute(ctx, fmt.Sprintf(`mkdir -p %q/.aws && chmod 700 %q/.aws`, home, home)); err != nil {
+	if _, err := r.Execute(ctx, fmt.Sprintf(`mkdir -p %s/.aws && chmod 700 %s/.aws`, shellx.Quote(home), shellx.Quote(home))); err != nil {
 		return "", "", fmt.Errorf("remote mkdir .aws: %w", err)
 	}
 	return home, strings.TrimRight(home, "/"), nil
@@ -103,7 +105,7 @@ func RemoveSessionProfile(ctx context.Context, r RemoteRunner, profileName strin
 
 	// Remove from ~/.aws/credentials
 	credsPath := fmt.Sprintf("%s/.aws/credentials", trimHome)
-	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/credentials && cat %q/.aws/credentials || true`, home, home))
+	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %s/.aws/credentials && cat %s/.aws/credentials || true`, shellx.Quote(home), shellx.Quote(home)))
 	if err == nil && strings.TrimSpace(existing) != "" {
 		cleaned := MergeCredentialsIntoConfig(existing, profileName, nil)
 		_ = r.WriteFile(ctx, credsPath, []byte(cleaned))
@@ -111,7 +113,7 @@ func RemoveSessionProfile(ctx context.Context, r RemoteRunner, profileName strin
 
 	// Remove from ~/.aws/config
 	configPath := fmt.Sprintf("%s/.aws/config", trimHome)
-	existing, err = r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/config && cat %q/.aws/config || true`, home, home))
+	existing, err = r.Execute(ctx, fmt.Sprintf(`test -f %s/.aws/config && cat %s/.aws/config || true`, shellx.Quote(home), shellx.Quote(home)))
 	if err == nil && strings.TrimSpace(existing) != "" {
 		cleaned := MergeProfileIntoConfig(existing, profileName, "", "", "")
 		_ = r.WriteFile(ctx, configPath, []byte(cleaned))
@@ -145,7 +147,7 @@ func RenameSessionProfile(ctx context.Context, r RemoteRunner, oldProfileName, n
 	credsPath := fmt.Sprintf("%s/.aws/credentials", trimHome)
 	configPath := fmt.Sprintf("%s/.aws/config", trimHome)
 
-	existingCreds, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/credentials && cat %q/.aws/credentials || true`, home, home))
+	existingCreds, err := r.Execute(ctx, fmt.Sprintf(`test -f %s/.aws/credentials && cat %s/.aws/credentials || true`, shellx.Quote(home), shellx.Quote(home)))
 	if err != nil {
 		return fmt.Errorf("read remote ~/.aws/credentials: %w", err)
 	}
@@ -154,7 +156,7 @@ func RenameSessionProfile(ctx context.Context, r RemoteRunner, oldProfileName, n
 		return err
 	}
 
-	existingConfig, err := r.Execute(ctx, fmt.Sprintf(`test -f %q/.aws/config && cat %q/.aws/config || true`, home, home))
+	existingConfig, err := r.Execute(ctx, fmt.Sprintf(`test -f %s/.aws/config && cat %s/.aws/config || true`, shellx.Quote(home), shellx.Quote(home)))
 	if err != nil {
 		return fmt.Errorf("read remote ~/.aws/config: %w", err)
 	}
@@ -212,7 +214,7 @@ func RemoveSessionCredentialFiles(ctx context.Context, r RemoteRunner, sessionID
 	}
 
 	dir := fmt.Sprintf("%s/.aiman/aws/%s", strings.TrimRight(home, "/"), sessionID)
-	_, err = r.Execute(ctx, fmt.Sprintf(`rm -rf %q`, dir))
+	_, err = r.Execute(ctx, fmt.Sprintf(`rm -rf %s`, shellx.Quote(dir)))
 	return err
 }
 
@@ -228,6 +230,6 @@ func RemoveAllSessionCredentialFiles(ctx context.Context, r RemoteRunner) error 
 	}
 
 	dir := fmt.Sprintf("%s/.aiman/aws", strings.TrimRight(home, "/"))
-	_, err = r.Execute(ctx, fmt.Sprintf(`rm -rf %q`, dir))
+	_, err = r.Execute(ctx, fmt.Sprintf(`rm -rf %s`, shellx.Quote(dir)))
 	return err
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/fsutil"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // statusLineMarker identifies a wrapped command. Detection looks for it in the
@@ -25,18 +26,13 @@ func statusLineSavedPath(home string) string {
 	return filepath.Join(home, ".aiman", "limits", "claude-statusline.original.json")
 }
 
-// shellSingleQuote quotes s as one POSIX shell word.
-func shellSingleQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // statusLineScript copies stdin to the recorder in the background and to
 // stdout for the original command. stdin stays in a shell variable and never
 // reaches a temp file: the working directory, transcript path, session id and
 // cost it carries must not reach disk.
 func statusLineScript(aimanBin string) string {
 	return `#!/bin/sh
-bin=` + shellSingleQuote(aimanBin) + `
+bin=` + shellx.Quote(aimanBin) + `
 # The trailing x keeps trailing newlines through the substitution.
 input=$(cat; printf x)
 input=${input%x}
@@ -63,7 +59,7 @@ func WriteStatusLineWrapper(home, aimanBin string) (string, error) {
 // missing script still lets the original paint. The newline before the closing
 // brace keeps a trailing comment or heredoc in the original valid.
 func wrappedStatusLineCommand(home, original string) string {
-	head := ": " + statusLineMarker + "; sh " + shellSingleQuote(statusLineScriptPath(home))
+	head := ": " + statusLineMarker + "; sh " + shellx.Quote(statusLineScriptPath(home))
 	// An empty brace group is a syntax error, so a blank original gets no pipe.
 	if strings.TrimSpace(original) == "" {
 		return head + " >/dev/null"

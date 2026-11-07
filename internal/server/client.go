@@ -16,6 +16,21 @@ import (
 	"github.com/google/uuid"
 )
 
+// Client calls one serve socket under a fixed caller. The zero Caller sends
+// none, whatever the process environment holds, so a process that speaks for
+// someone other than the session it may have been started from (the gateway,
+// for the phone) uses a Client instead of the package functions below, which
+// take the caller from AIMAN_ID.
+type Client struct {
+	Socket string
+	Caller string
+}
+
+// envCaller is the caller of a process running as a session's own CLI.
+func envCaller() string {
+	return strings.TrimSpace(os.Getenv("AIMAN_ID"))
+}
+
 func Call(socketPath, method string, params any) (Response, error) {
 	if _, err := os.Stat(socketPath); err != nil {
 		return Response{}, fmt.Errorf("%w: %s", ErrServerNotRunning, socketPath)
@@ -32,7 +47,7 @@ func Call(socketPath, method string, params any) (Response, error) {
 		ID:     uuid.NewString(),
 		Method: method,
 		Params: rawParams,
-		Caller: strings.TrimSpace(os.Getenv("AIMAN_ID")),
+		Caller: envCaller(),
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -72,10 +87,15 @@ type AttachConn struct {
 // AttachDial opens an attach stream to a PTY session. After the single
 // confirmation line the connection carries raw terminal bytes only.
 func AttachDial(socketPath, id string, cols, rows int) (*AttachConn, error) {
-	if _, err := os.Stat(socketPath); err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrServerNotRunning, socketPath)
+	return Client{Socket: socketPath, Caller: envCaller()}.AttachDial(id, cols, rows)
+}
+
+// AttachDial opens an attach stream under c's caller.
+func (c Client) AttachDial(id string, cols, rows int) (*AttachConn, error) {
+	if _, err := os.Stat(c.Socket); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrServerNotRunning, c.Socket)
 	}
-	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	conn, err := net.DialTimeout("unix", c.Socket, 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrServerNotRunning, err)
 	}
@@ -83,7 +103,7 @@ func AttachDial(socketPath, id string, cols, rows int) (*AttachConn, error) {
 		ID:     uuid.NewString(),
 		Method: "pty.attach",
 		Params: []byte(fmt.Sprintf(`{"id":%q,"cols":%d,"rows":%d}`, id, cols, rows)),
-		Caller: strings.TrimSpace(os.Getenv("AIMAN_ID")),
+		Caller: c.Caller,
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -186,6 +206,15 @@ func CallRaw(socketPath, method string, rawParams json.RawMessage) (Response, er
 
 // CallRawWait is CallRaw with an explicit wait. wait <= 0 uses callDeadline.
 func CallRawWait(socketPath, method string, rawParams json.RawMessage, wait time.Duration) (Response, error) {
+	return Client{Socket: socketPath, Caller: envCaller()}.callRawWait(method, rawParams, wait)
+}
+
+// CallRaw calls method under c's caller, waiting callDeadline for the answer.
+func (c Client) CallRaw(method string, rawParams json.RawMessage) (Response, error) {
+	return c.callRawWait(method, rawParams, callDeadline(method))
+}
+
+func (c Client) callRawWait(method string, rawParams json.RawMessage, wait time.Duration) (Response, error) {
 	if wait <= 0 {
 		wait = callDeadline(method)
 	}
@@ -193,13 +222,13 @@ func CallRawWait(socketPath, method string, rawParams json.RawMessage, wait time
 		ID:     uuid.NewString(),
 		Method: method,
 		Params: rawParams,
-		Caller: strings.TrimSpace(os.Getenv("AIMAN_ID")),
+		Caller: c.Caller,
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return Response{}, err
 	}
-	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	conn, err := net.DialTimeout("unix", c.Socket, 2*time.Second)
 	if err != nil {
 		return Response{}, fmt.Errorf("%w: %v", ErrServerNotRunning, err)
 	}
@@ -229,17 +258,22 @@ type EventsConn struct {
 // carries one JSON event per line, so a reader learns what a session is doing
 // when it happens rather than by asking twice a second.
 func EventsDial(socketPath string) (*EventsConn, error) {
-	if _, err := os.Stat(socketPath); err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrServerNotRunning, socketPath)
+	return Client{Socket: socketPath, Caller: envCaller()}.EventsDial()
+}
+
+// EventsDial opens the session event stream under c's caller.
+func (c Client) EventsDial() (*EventsConn, error) {
+	if _, err := os.Stat(c.Socket); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrServerNotRunning, c.Socket)
 	}
-	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	conn, err := net.DialTimeout("unix", c.Socket, 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrServerNotRunning, err)
 	}
 	req := Request{
 		ID:     uuid.NewString(),
 		Method: "session.events",
-		Caller: strings.TrimSpace(os.Getenv("AIMAN_ID")),
+		Caller: c.Caller,
 	}
 	body, err := json.Marshal(req)
 	if err != nil {

@@ -75,17 +75,6 @@ func (k Kind) PidFile() string {
 	}
 }
 
-func (k Kind) InstallPipe() string {
-	switch k {
-	case KindTrigger:
-		return "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | BINARY_NAME=aiman-trigger sh"
-	case KindGateway:
-		return "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | BINARY_NAME=aiman-gateway sh"
-	default:
-		return "curl -sSfL https://raw.githubusercontent.com/bouwerp/aiman/main/install.sh | sh"
-	}
-}
-
 // procPattern is the pgrep -f and pkill -f pattern for k's process. The
 // gateway's is anchored to the executable, so it cannot match another command
 // that names the binary, such as an installer's cp or mv.
@@ -148,7 +137,9 @@ export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUN
 `
 }
 
-func InstallEnableScript(k Kind) string {
+// InstallEnableScript installs release tag of k when it is missing, then
+// enables and starts its unit.
+func InstallEnableScript(k Kind, tag string) string {
 	unit := k.Unit()
 	fallback := nohupStart(k)
 	return "set -e\n" + userRuntimeEnv() + fmt.Sprintf(`mkdir -p "$HOME/.aiman" "$HOME/.config/systemd/user" "$HOME/.local/bin"
@@ -177,7 +168,7 @@ UNIT
 else
   %s
 fi
-`, k.Binary(), k.Binary(), k.InstallPipe(), unit, UnitFile(k), leftoverCleanup(k), unit, fallback, fallback)
+`, k.Binary(), k.Binary(), k.InstallPipeAt(tag), unit, UnitFile(k), leftoverCleanup(k), unit, fallback, fallback)
 }
 
 func StartScript(k Kind) string {
@@ -229,12 +220,14 @@ true
 `, unit, unit, pid, pid, pid, k.procPattern())
 }
 
-// UpdateScript installs the latest release of k and restarts it. Updating serve
-// also updates an installed aiman-gateway, so the two stay on one release.
-func UpdateScript(k Kind) string {
-	script := k.InstallPipe() + "\n" + StartScript(k)
+// UpdateScript installs release tag of k and restarts it. Updating serve also
+// updates an installed aiman-gateway, so the two stay on one release. The set -e
+// covers the install: a refused download must fail the update, not restart the
+// old binary and report success.
+func UpdateScript(k Kind, tag string) string {
+	script := "set -e\n" + k.InstallPipeAt(tag) + "\n" + StartScript(k)
 	if k == KindServe {
-		script += gatewayLockstep()
+		script += gatewayLockstep(tag)
 	}
 	return script
 }
@@ -243,7 +236,7 @@ func UpdateScript(k Kind) string {
 // gateway install fails the update visibly. A stopped gateway gets the new
 // binary and stays stopped. The subshell keeps the start script's exports and
 // set -e to itself.
-func gatewayLockstep() string {
+func gatewayLockstep(tag string) string {
 	k := KindGateway
 	return fmt.Sprintf(`if [ -x "$HOME/.local/bin/%s" ] || command -v %s >/dev/null 2>&1; then
   gateway_running=0
@@ -255,7 +248,7 @@ func gatewayLockstep() string {
     )
   fi
 fi
-`, k.Binary(), k.Binary(), k.procPattern(), k.InstallPipe(), StartScript(k))
+`, k.Binary(), k.Binary(), k.procPattern(), k.InstallPipeAt(tag), StartScript(k))
 }
 
 func ProbeScript(k Kind) string {

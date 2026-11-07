@@ -37,6 +37,10 @@ func main() {
 }
 
 func run(args []string) error {
+	// This process never acts as a session; see gateway.serveClient.
+	if err := os.Unsetenv("AIMAN_ID"); err != nil {
+		return fmt.Errorf("clear AIMAN_ID: %w", err)
+	}
 	if isCLI(args) {
 		return runCLI(args, os.Stdout)
 	}

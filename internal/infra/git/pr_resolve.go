@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // ghJSONCmdSuffix hides stderr so SSH CombinedOutput (stdout+stderr) stays valid JSON.
@@ -107,9 +108,9 @@ func resolvePullRequestForBranch(ctx context.Context, remote domain.RemoteExecut
 	tryView := func(extraArgs string) (*ghPRViewJSON, bool) {
 		var cmd string
 		if extraArgs != "" {
-			cmd = fmt.Sprintf("cd %q && gh pr view %s --json %s%s", repoPath, extraArgs, prViewJSONFields, ghJSONCmdSuffix)
+			cmd = fmt.Sprintf("cd %s && gh pr view %s --json %s%s", shellx.Quote(repoPath), extraArgs, prViewJSONFields, ghJSONCmdSuffix)
 		} else {
-			cmd = fmt.Sprintf("cd %q && gh pr view --json %s%s", repoPath, prViewJSONFields, ghJSONCmdSuffix)
+			cmd = fmt.Sprintf("cd %s && gh pr view --json %s%s", shellx.Quote(repoPath), prViewJSONFields, ghJSONCmdSuffix)
 		}
 		// Ignore Execute error: gh may exit non-zero while still printing JSON; SSH also merges stderr into output.
 		out, _ := remote.Execute(ctx, cmd)
@@ -129,16 +130,16 @@ func resolvePullRequestForBranch(ctx context.Context, remote domain.RemoteExecut
 		data = v
 	} else if hasRepo && owner != "" && repo != "" {
 		repoSlug := owner + "/" + repo
-		repoFlag := "--repo " + strconv.Quote(repoSlug)
+		repoFlag := "--repo " + shellx.Quote(repoSlug)
 		if v, ok := tryView(repoFlag); ok {
 			data = v
-		} else if v, ok := tryView(fmt.Sprintf("%s %s", strconv.Quote(branch), repoFlag)); ok {
+		} else if v, ok := tryView(fmt.Sprintf("%s %s", shellx.Quote(branch), repoFlag)); ok {
 			// Explicit branch + repo (works when gh's default remote/repo guess is wrong).
 			data = v
 		} else {
 			head := owner + ":" + branch
-			listCmd := fmt.Sprintf("cd %q && gh pr list %s --head %q --state all --limit 1 --json number%s",
-				repoPath, repoFlag, head, ghJSONCmdSuffix)
+			listCmd := fmt.Sprintf("cd %s && gh pr list %s --head %s --state all --limit 1 --json number%s",
+				shellx.Quote(repoPath), repoFlag, shellx.Quote(head), ghJSONCmdSuffix)
 			listOut, _ := remote.Execute(ctx, listCmd)
 			listOut = strings.TrimSpace(listOut)
 			if listOut != "" && json.Valid([]byte(listOut)) {
@@ -156,9 +157,9 @@ func resolvePullRequestForBranch(ctx context.Context, remote domain.RemoteExecut
 	if data == nil && hasRepo && owner != "" && repo != "" {
 		// Case mismatch vs GitHub head ref, fork heads, or --head filter quirks: scan open/merged PRs by branch name.
 		repoSlug := owner + "/" + repo
-		repoFlag := "--repo " + strconv.Quote(repoSlug)
-		scanCmd := fmt.Sprintf("cd %q && gh pr list %s --state all --limit 50 --json number,headRefName,state%s",
-			repoPath, repoFlag, ghJSONCmdSuffix)
+		repoFlag := "--repo " + shellx.Quote(repoSlug)
+		scanCmd := fmt.Sprintf("cd %s && gh pr list %s --state all --limit 50 --json number,headRefName,state%s",
+			shellx.Quote(repoPath), repoFlag, ghJSONCmdSuffix)
 		scanOut, _ := remote.Execute(ctx, scanCmd)
 		scanOut = strings.TrimSpace(scanOut)
 		if scanOut != "" && json.Valid([]byte(scanOut)) {
@@ -317,8 +318,8 @@ func countUnresolvedReviewThreads(ctx context.Context, remote domain.RemoteExecu
 	}
 	q := `query($owner:String!,$name:String!,$num:Int!){repository(owner:$owner,name:$name){pullRequest(number:$num){reviewThreads(first:100){nodes{isResolved}}}}}`
 	// Single-quote the GraphQL document so bash does not expand $variables in the query.
-	cmd := fmt.Sprintf("cd %q && gh api graphql -f query=%s -f owner=%q -f name=%q -F num=%d%s",
-		repoPath, shellSingleQuote(q), owner, repo, prNumber, ghJSONCmdSuffix)
+	cmd := fmt.Sprintf("cd %s && gh api graphql -f query=%s -f owner=%s -f name=%s -F num=%d%s",
+		shellx.Quote(repoPath), shellx.Quote(q), shellx.Quote(owner), shellx.Quote(repo), prNumber, ghJSONCmdSuffix)
 	out, err := remote.Execute(ctx, cmd)
 	if err != nil {
 		return -1
@@ -335,8 +336,4 @@ func countUnresolvedReviewThreads(ctx context.Context, remote domain.RemoteExecu
 		}
 	}
 	return unresolved
-}
-
-func shellSingleQuote(s string) string {
-	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
 }

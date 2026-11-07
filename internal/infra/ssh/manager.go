@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 type Config struct {
@@ -42,11 +43,21 @@ func (m *Manager) target() string {
 	return m.config.Host
 }
 
+// controlPath is the master for bulk calls. The "-noagent" in the name keeps a
+// persisted master that forwards the agent from being reused: a session on such
+// a connection can reach the agent whatever its own client asked for.
 func (m *Manager) controlPath() string {
 	home, _ := os.UserHomeDir()
 	// Keep unix socket path short to avoid OS length limits.
 	targetHash := shortTargetHash(m.target())
-	return filepath.Join(home, ".aiman", "sockets", "ssh-"+targetHash+".sock")
+	return filepath.Join(home, ".aiman", "sockets", "ssh-"+targetHash+"-noagent.sock")
+}
+
+// ttyControlPath is the master for interactive attach, the only connection that
+// forwards the agent. It must never be the bulk socket.
+func (m *Manager) ttyControlPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".aiman", "sockets", "ssh-"+shortTargetHash(m.target())+".sock-tty")
 }
 
 // shortTargetHash derives a short, filesystem-safe name for an SSH target so the
@@ -94,11 +105,18 @@ const sshWaitDelay = 5 * time.Second
 // /usr/local/bin on Intel) and ~/.local/bin are not in PATH by default.
 const remotePathPreamble = `export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:${HOME}/.local/bin:${PATH}"; `
 
+// noAgentForwarding overrides a ForwardAgent line in the user's ssh config. A
+// non-interactive connection stays up unattended, and while it forwards, every
+// process of that uid on the remote can use the laptop's keys.
+const noAgentForwarding = "ForwardAgent=no"
+
 // bulkSSHArgs is the option set for non-interactive exec and file copy.
-// Alive interval matches the events stream (30s). Compression is on. X11 is not.
+// Alive interval matches the events stream (30s). Compression is on. X11 and
+// agent forwarding are not.
 func bulkSSHArgs(controlPath string, multiplex bool) []string {
 	args := []string{
 		"-o", "BatchMode=yes",
+		"-o", noAgentForwarding,
 		"-o", "ConnectTimeout=10",
 		"-o", "Compression=yes",
 		"-o", "ServerAliveInterval=30",
@@ -144,7 +162,7 @@ func (m *Manager) executeWithTimeout(ctx context.Context, cmdStr string, timeout
 		// X11 forwarding does not: it is only useful on an interactive attach,
 		// and negotiating it on every exec costs a round trip.
 		//nolint:gosec // G204: options are fixed; target and command are the operator's remote
-		cmd := exec.CommandContext(callCtx, "ssh", append(bulkSSHArgs(cp, true), "-A", target, fullCmd)...)
+		cmd := exec.CommandContext(callCtx, "ssh", append(bulkSSHArgs(cp, true), target, fullCmd)...)
 		cmd.WaitDelay = sshWaitDelay
 
 		output, err := cmd.CombinedOutput()
@@ -161,7 +179,7 @@ func (m *Manager) executeWithTimeout(ctx context.Context, cmdStr string, timeout
 		// Final fallback without SSH multiplexing, for cases where the control
 		// socket/session is flaky but direct SSH still works.
 		//nolint:gosec // G204: options are fixed; target and command are the operator's remote
-		cmd := exec.CommandContext(callCtx, "ssh", append(bulkSSHArgs(cp, false), "-A", target, fullCmd)...)
+		cmd := exec.CommandContext(callCtx, "ssh", append(bulkSSHArgs(cp, false), target, fullCmd)...)
 		cmd.WaitDelay = sshWaitDelay
 
 		output, err := cmd.CombinedOutput()
@@ -222,7 +240,7 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
 		defer cancel()
 
-		args := append(bulkSSHArgs(cp, useControlMaster), "-A", target, fmt.Sprintf("cat > %q", path))
+		args := append(bulkSSHArgs(cp, useControlMaster), target, "cat > "+shellx.QuoteHomePath(path))
 
 		cmd := exec.CommandContext(callCtx, "ssh", args...)
 		cmd.WaitDelay = sshWaitDelay
@@ -277,7 +295,7 @@ func (m *Manager) ResetControlSocket() {
 
 func (m *Manager) ValidateDir(ctx context.Context, path string) error {
 	// Use 'test -d' which is more standard. Quote the path to handle spaces.
-	cmd := fmt.Sprintf("test -d %q", path)
+	cmd := "test -d " + shellx.Quote(path)
 	_, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("directory %s not found or not accessible: %w", path, err)
@@ -292,7 +310,7 @@ func (m *Manager) ScanGitRepos(ctx context.Context) ([]string, error) {
 
 	// Use find to look for .git directories up to 2 levels deep
 	// This will find repos at <root>/repo or <root>/org/repo
-	cmd := fmt.Sprintf("find %q -maxdepth 3 -name .git -type d -prune", m.config.Root)
+	cmd := "find " + shellx.Quote(m.config.Root) + " -maxdepth 3 -name .git -type d -prune"
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan for git repos: %w", err)
@@ -312,8 +330,8 @@ func (m *Manager) ScanGitRepos(ctx context.Context) ([]string, error) {
 
 func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string, error) {
 	cmd := fmt.Sprintf(
-		"bash -lc %q",
-		fmt.Sprintf("git -C %q worktree prune --expire=now >/dev/null 2>&1 || true; git -C %q worktree list --porcelain", repoPath, repoPath),
+		"bash -lc %s",
+		shellx.Quote(fmt.Sprintf("git -C %[1]s worktree prune --expire=now >/dev/null 2>&1 || true; git -C %[1]s worktree list --porcelain", shellx.Quote(repoPath))),
 	)
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {
@@ -360,7 +378,7 @@ func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string,
 
 func (m *Manager) GetGitRoot(ctx context.Context, path string) (string, error) {
 	// git -C <path> rev-parse --show-toplevel
-	cmd := fmt.Sprintf("git -C %q rev-parse --show-toplevel", path)
+	cmd := "git -C " + shellx.Quote(path) + " rev-parse --show-toplevel"
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to get git root for %s: %w", path, err)
@@ -371,22 +389,20 @@ func (m *Manager) GetGitRoot(ctx context.Context, path string) (string, error) {
 // ptyAttachRemoteCommand hands the terminal to the serve daemon's PTY runtime.
 // ctrl+q detaches without touching the session.
 func ptyAttachRemoteCommand(sessionID string) string {
-	return remotePathPreamble + fmt.Sprintf(
-		`exec aiman pty attach %q`,
-		sessionID,
-	)
+	return remotePathPreamble + "exec aiman pty attach " + shellx.Quote(sessionID)
 }
 
 // AttachPTYSession returns the ssh command that interactively attaches to a
 // built-in-PTY session. The remote command is a raw byte relay (aiman pty
 // attach). The socket is the uncompressed tty master, separate from the
-// compressed exec master, so keystrokes do not wait on bulk captures.
+// compressed exec master, so keystrokes do not wait on bulk captures. It is the
+// one call that forwards the agent, because a person is at the keyboard.
 func (m *Manager) AttachPTYSession(sessionID string) *exec.Cmd {
 	return m.sshAttach(context.Background(), ptyAttachRemoteCommand(sessionID))
 }
 
 func (m *Manager) sshAttach(ctx context.Context, remoteCmd string) *exec.Cmd {
-	cp := m.controlPath() + "-tty"
+	cp := m.ttyControlPath()
 	_ = os.MkdirAll(filepath.Dir(cp), 0700)
 	args := []string{"-t", "-A", "-o", "BatchMode=yes",
 		"-o", "ControlMaster=auto",
@@ -435,6 +451,7 @@ func (m *Manager) StartTunnel(ctx context.Context, localPort, remotePort int) er
 	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
 	cmd := exec.CommandContext(ctx, "ssh",
 		"-o", "BatchMode=yes",
+		"-o", noAgentForwarding,
 		"-o", "ConnectTimeout=10",
 		"-o", "ExitOnForwardFailure=yes",
 		"-o", "ServerAliveInterval=30",
@@ -506,14 +523,14 @@ func (m *Manager) ScanDirectories(ctx context.Context, rootPath string, maxDepth
 		if pruneExpr != "" {
 			pruneExpr += " -o "
 		}
-		pruneExpr += fmt.Sprintf("-name %q -prune", dir)
+		pruneExpr += "-name " + shellx.Quote(dir) + " -prune"
 	}
 
 	var cmdStr string
 	if pruneExpr != "" {
-		cmdStr = fmt.Sprintf("find %q -maxdepth %d -type d \\( %s \\) -o -type d -print", rootPath, maxDepth, pruneExpr)
+		cmdStr = fmt.Sprintf("find %s -maxdepth %d -type d \\( %s \\) -o -type d -print", shellx.Quote(rootPath), maxDepth, pruneExpr)
 	} else {
-		cmdStr = fmt.Sprintf("find %q -maxdepth %d -type d", rootPath, maxDepth)
+		cmdStr = fmt.Sprintf("find %s -maxdepth %d -type d", shellx.Quote(rootPath), maxDepth)
 	}
 
 	output, err := m.Execute(ctx, cmdStr)
@@ -558,7 +575,7 @@ func (m *Manager) Close() error {
 // the caller end it.
 func (m *Manager) SessionEventsCommand(ctx context.Context) *exec.Cmd {
 	//nolint:gosec // G204: the target comes from the operator's own remote config, as with every other ssh call here
-	return exec.CommandContext(ctx, "ssh", "-A", "-o", "BatchMode=yes",
+	return exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", noAgentForwarding,
 		"-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
 		m.target(), remotePathPreamble+"exec aiman pty events")
 }

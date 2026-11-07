@@ -80,6 +80,10 @@ const (
 	// EventReviewPRApproved records an APPROVE accepted by GitHub: head,
 	// consult, decision, counts.
 	EventReviewPRApproved EventKind = "review.pr_approved"
+	// EventReviewCommentIgnored records a PR review comment the watcher refused
+	// to steer because of its author: comment id, author, association. The body
+	// is never recorded.
+	EventReviewCommentIgnored EventKind = "review.comment_ignored"
 )
 
 // EventActor is who caused the event. `unknown` exists for rows imported from a

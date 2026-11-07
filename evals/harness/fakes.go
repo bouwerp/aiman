@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,8 +59,8 @@ func NewFakeRemote(dir string, pty *ptyfake.FakePTY) *FakeRemote {
 }
 
 // ptyCLI matches the runtime calls KillPTYSession makes through the CLI. The
-// id is Go-quoted.
-var ptyCLI = regexp.MustCompile(`aiman pty (kill|forget) ("(?:[^"\\]|\\.)*")`)
+// id is one single-quoted shell word.
+var ptyCLI = regexp.MustCompile(`aiman pty (kill|forget) '([^']*)'`)
 
 func (r *FakeRemote) Execute(ctx context.Context, cmd string) (string, error) {
 	r.mu.Lock()
@@ -77,19 +76,23 @@ func (r *FakeRemote) Execute(ctx context.Context, cmd string) (string, error) {
 	if m == nil || r.PTY == nil {
 		return "", nil
 	}
-	id, err := strconv.Unquote(m[2])
-	if err != nil {
-		return "", err
-	}
 	if m[1] == "kill" {
-		return "", r.PTY.Kill(id)
+		return "", r.PTY.Kill(m[2])
 	}
-	return "", r.PTY.Forget(id)
+	return "", r.PTY.Forget(m[2])
 }
 
 func (r *FakeRemote) GetRoot() string { return r.Dir }
 
+// WriteFile resolves a leading $HOME, as the real executors do, to the fake's
+// own directory so a case never writes into the real home.
 func (r *FakeRemote) WriteFile(_ context.Context, path string, content []byte) error {
+	if rest, ok := strings.CutPrefix(path, "$HOME/"); ok {
+		path = filepath.Join(r.Dir, rest)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+	}
 	return os.WriteFile(path, content, 0o600)
 }
 

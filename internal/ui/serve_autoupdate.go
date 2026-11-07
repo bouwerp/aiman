@@ -70,6 +70,6 @@ func (m *Model) maybeAutoUpdateServe(d domain.Daemon) tea.Cmd {
 	label := daemonKindLabel(d.Kind)
 	return tea.Batch(
 		m.showToast("updating "+label+" on "+d.RemoteHost+" ("+remote.String()+" → "+local.String()+")", false, 8*time.Second),
-		remoteServiceOpCmd(m.cfg, d.RemoteHost, kind, "update", true),
+		remoteServiceOpCmd(m.cfg, d.RemoteHost, kind, "update", local.String(), true),
 	)
 }

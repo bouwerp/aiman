@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // batchScanTimeout budgets a whole-remote scan. One batch call replaces roughly
@@ -19,13 +20,6 @@ const batchScanTimeout = 2 * time.Minute
 // the parsers immune to stderr noise folded in by Execute's CombinedOutput.
 const worktreeRecordTag = "WT"
 
-// shellQuote wraps s in single quotes for POSIX sh, escaping any single quote
-// it contains. Unlike %q this produces shell syntax rather than Go syntax, so
-// it is safe for paths containing backslashes or double quotes.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // worktreeScanScript walks every repo under root and reports each registered
 // worktree with its liveness and aiman id resolved on the remote.
 //
@@ -35,7 +29,7 @@ func shellQuote(s string) string {
 // main worktree, so an aiman-id lookup built on it would resolve against the
 // SSH login directory instead of the repo.
 func worktreeScanScript(root string) string {
-	return `root=` + shellQuote(root) + `
+	return `root=` + shellx.Quote(root) + `
 find "$root" -maxdepth 3 -name .git -type d -prune 2>/dev/null | while IFS= read -r gd; do
   repo=${gd%/.git}
   [ -n "$repo" ] || continue

@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // Writer is the part of domain.RemoteExecutor that WriteIfChanged needs.
@@ -23,7 +25,7 @@ type Writer interface {
 func WriteIfChanged(ctx context.Context, w Writer, path string, content []byte) (changed bool, err error) {
 	sum := sha256.Sum256(content)
 	want := hex.EncodeToString(sum[:])
-	out, execErr := w.Execute(ctx, "sha256sum -- "+shellQuote(path)+" 2>/dev/null || true")
+	out, execErr := w.Execute(ctx, "sha256sum -- "+shellx.Quote(path)+" 2>/dev/null || true")
 	if execErr == nil && remoteHash(out) == want {
 		return false, nil
 	}
@@ -42,10 +44,4 @@ func remoteHash(out string) string {
 		return ""
 	}
 	return fields[0]
-}
-
-// shellQuote wraps s in single quotes for POSIX sh, escaping any single quote
-// it contains.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
