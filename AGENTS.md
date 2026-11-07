@@ -410,6 +410,7 @@ Key config fields:
 - `git` — include_personal, include_orgs, include_patterns, exclude_patterns
 - `agent_defaults` — per-binary `model` and `effort` applied at session launch
 - `aws.include_profiles` — local `~/.aws` profiles aiman may use (omit = all)
+- `remotes[].aws_delegation` — `sso_start_url`, `sso_region`, `sso_account_id` and `sso_role_name` are the Identity Center facts pushed to serve in `aws.delegations` (the push fills an empty start URL, region or account id from the laptop's `~/.aws/config`), and serve defaults `sso_role_name` to `aiman-delegated`.
 - `skills.repo` — git URL for skills repository
 - `repos` — per-repo worktree bootstrap keyed by `owner/name`: `copy` and `symlink` (paths relative to the repo root, taken from the main checkout, never overwriting) and `setup` (runs detached; log `aiman-setup.log` in the worktree's git dir). The same block carries the session quality kit: `done_when` (default Done-when conditions), `requires` (tools or `mcp:<name>` entries), and `agent_overrides` (per-agent model/effort). `CreateSession` applies it after the worktree is resolved, only for worktrees that create made (not attach, reuse, ad-hoc, no-repo or prepared). `MarshalServeConfig` copies it so serve-side creates see it.
 - `integrations.jira.acceptance_criteria_field` — optional JIRA custom field id whose values become acceptance criteria; otherwise the list under the description's acceptance-criteria heading is used.
