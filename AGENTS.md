@@ -189,7 +189,7 @@ Startup also prunes DB sessions whose explicit `RemoteHost` no longer matches an
 **File:** `internal/infra/ssh/manager.go`
 
 Key behaviours:
-- Uses `ControlMaster=auto` + `ControlPersist=10m` — all calls to the same host share one socket
+- Uses `ControlMaster=auto` + `ControlPersist=10m` — bulk calls to the same host share one socket, and the interactive attach has its own
 - Socket path: `~/.aiman/sockets/ssh-<sha256(user@host)[:16]>-noagent.sock` for bulk calls, `ssh-<hash>.sock-tty` for interactive attach
 - Only `AttachPTYSession` forwards the laptop's agent (`-A`, on its own master); every other call passes `ForwardAgent=no`, so a remote needs its own GitHub credentials for `git fetch`, `clone` and `push`.
 - Per-call timeout: **30 seconds** (`Execute`). `ExecuteWithTimeout` is for work that exceeds that (remote install/update uses `remotesvc.OpTimeout`, 3 minutes).
