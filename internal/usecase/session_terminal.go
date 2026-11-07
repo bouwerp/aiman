@@ -109,13 +109,38 @@ func CreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec
 	if err != nil {
 		return fmt.Errorf("pty params: %w", err)
 	}
-	path := fmt.Sprintf("/tmp/aiman-pty-%s.json", spec.ID)
+	path := ptyParamsPath(spec.ID)
+	if err := preparePTYParams(ctx, remote, path); err != nil {
+		return err
+	}
 	if err := remote.WriteFile(ctx, path, raw); err != nil {
+		// A partial write can hold secrets. Best effort: the write error is the one to report.
+		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %q", path))
 		return fmt.Errorf("write pty params: %w", err)
 	}
 	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty create --params-file %s; rm -f %s", shellx.Quote(path), shellx.Quote(path)))
 	if err != nil {
 		return fmt.Errorf("pty create: %s: %w", strings.TrimSpace(out), err)
+	}
+	return nil
+}
+
+// ptyParamsDir holds pty params files, which carry the session's environment
+// and secrets. It is left for the remote to expand: both executors' WriteFile
+// resolve a leading $HOME.
+const ptyParamsDir = "$HOME/.aiman/tmp"
+
+func ptyParamsPath(id string) string {
+	return ptyParamsDir + "/aiman-pty-" + id + ".json"
+}
+
+// preparePTYParams creates the file empty and private before any content goes
+// in, because WriteFile keeps an existing file's mode and otherwise creates under
+// the remote's default umask.
+func preparePTYParams(ctx context.Context, remote TerminalExecutor, path string) error {
+	prepare := fmt.Sprintf("umask 077 && mkdir -p %[1]q && chmod 700 %[1]q && : > %[2]q && chmod 600 %[2]q", ptyParamsDir, path)
+	if out, err := remote.Execute(ctx, prepare); err != nil {
+		return fmt.Errorf("prepare pty params: %s: %w", strings.TrimSpace(out), err)
 	}
 	return nil
 }

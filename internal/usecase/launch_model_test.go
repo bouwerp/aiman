@@ -44,7 +44,7 @@ func TestReviveRelaunchesWithStoredLaunchModel(t *testing.T) {
 	}
 	var payload string
 	for path, body := range r.written {
-		if strings.HasPrefix(path, "/tmp/aiman-pty-p") {
+		if strings.HasPrefix(path, "$HOME/.aiman/tmp/aiman-pty-p") {
 			payload += string(body)
 		}
 	}

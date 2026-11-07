@@ -542,6 +542,19 @@ func (s *Server) resolveReq(ctx context.Context, req Request) (domain.Session, R
 	return sess, Response{}, true
 }
 
+// resolveScopedReq is resolveReq for a method that acts on the session: a session
+// caller must have it in scope.
+func (s *Server) resolveScopedReq(ctx context.Context, req Request) (domain.Session, Response, bool) {
+	sess, fail, ok := s.resolveReq(ctx, req)
+	if !ok {
+		return domain.Session{}, fail, false
+	}
+	if refused, out := s.refuseOutOfScope(ctx, req, sess.ID); out {
+		return domain.Session{}, refused, false
+	}
+	return sess, Response{}, true
+}
+
 func (s *Server) handleRead(ctx context.Context, req Request) Response {
 	sess, fail, ok := s.resolveReq(ctx, req)
 	if !ok {
@@ -586,7 +599,7 @@ func legacyTerminalResp(id string, sess domain.Session) Response {
 }
 
 func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
-	sess, fail, ok := s.resolveReq(ctx, req)
+	sess, fail, ok := s.resolveScopedReq(ctx, req)
 	if !ok {
 		return fail
 	}
@@ -1213,7 +1226,7 @@ func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
 }
 
 func (s *Server) handleForget(ctx context.Context, req Request) Response {
-	sess, fail, ok := s.resolveReq(ctx, req)
+	sess, fail, ok := s.resolveScopedReq(ctx, req)
 	if !ok {
 		return fail
 	}

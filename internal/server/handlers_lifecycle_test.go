@@ -695,7 +695,7 @@ func TestRestartSwitchClearsIdentityAndModel(t *testing.T) {
 	if !r.remote.ran("native-sessions") || !r.remote.ran("aiman pty create") {
 		t.Fatal("sidecar not cleared or terminal not recreated")
 	}
-	params := r.remote.file("/tmp/aiman-pty-s1.json")
+	params := r.remote.file("$HOME/.aiman/tmp/aiman-pty-s1.json")
 	if !strings.Contains(params, `"id":"s1"`) || strings.Contains(params, "resume") {
 		t.Fatalf("pty params %s", params)
 	}
@@ -735,8 +735,8 @@ func TestRestartSameAgentKeepsIdentityAndModel(t *testing.T) {
 		if row.AgentSessionID != "vendor-1" || row.LaunchModel != "old-model" {
 			t.Fatalf("stored %q: row %+v", stored, row)
 		}
-		if !strings.Contains(r.remote.file("/tmp/aiman-pty-s1.json"), "--resume vendor-1") {
-			t.Fatalf("stored %q: not resumed: %s", stored, r.remote.file("/tmp/aiman-pty-s1.json"))
+		if !strings.Contains(r.remote.file("$HOME/.aiman/tmp/aiman-pty-s1.json"), "--resume vendor-1") {
+			t.Fatalf("stored %q: not resumed: %s", stored, r.remote.file("$HOME/.aiman/tmp/aiman-pty-s1.json"))
 		}
 	}
 }

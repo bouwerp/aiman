@@ -59,6 +59,54 @@ func TestImageUnknown(t *testing.T) {
 	}
 }
 
+func TestComposePublishesPortsOnLoopbackWithNetwork(t *testing.T) {
+	sb := Sandbox{
+		ID: "rev1", Dir: "/r/sandbox", Src: "/r/src", Out: "/r/out", Image: "golang:1.26",
+		Network: "bridge",
+		Ports:   []PortMap{{Host: 2345, Container: 2345}},
+	}
+	raw, err := Compose(sb, 1000, 2000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc composeDoc
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse compose: %v\n%s", err, raw)
+	}
+	svc := doc.Services["sandbox"]
+	if !reflect.DeepEqual(svc.Ports, []string{"127.0.0.1:2345:2345"}) {
+		t.Fatalf("ports %v", svc.Ports)
+	}
+	if svc.NetworkMode != "" {
+		t.Fatalf("network_mode %q, want compose's default network", svc.NetworkMode)
+	}
+}
+
+func TestComposeNeverPassesNetworkThrough(t *testing.T) {
+	sb := Sandbox{ID: "rev1", Dir: "/r/sandbox", Src: "/r/src", Out: "/r/out", Image: "golang:1.26", Network: "host"}
+	raw, err := Compose(sb, 1000, 2000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "network_mode: host") {
+		t.Fatalf("host network reached compose:\n%s", raw)
+	}
+}
+
+func TestComposeRefusesPortsWithoutNetwork(t *testing.T) {
+	for _, network := range []string{"", "none"} {
+		sb := Sandbox{
+			ID: "rev1", Dir: "/r/sandbox", Src: "/r/src", Out: "/r/out", Image: "golang:1.26",
+			Network: network,
+			Ports:   []PortMap{{Host: 2345, Container: 2345}},
+		}
+		_, err := Compose(sb, 1000, 2000)
+		if err == nil || !strings.Contains(err.Error(), "review.sandbox.network") {
+			t.Errorf("network %q: err %v, want a refusal naming review.sandbox.network", network, err)
+		}
+	}
+}
+
 func TestComposeHardening(t *testing.T) {
 	sb := Sandbox{
 		ID:      "rev1",
@@ -67,7 +115,6 @@ func TestComposeHardening(t *testing.T) {
 		Out:     "/reviews/rev1/out",
 		Image:   "golang:1.26",
 		Network: "none",
-		Ports:   []PortMap{{Host: 2345, Container: 2345}},
 	}
 	raw, err := Compose(sb, 1000, 2000)
 	if err != nil {
@@ -126,7 +173,7 @@ func TestComposeHardening(t *testing.T) {
 	if svc.MemLimit != "2g" || svc.CPUs != 2 || svc.PidsLimit != 256 {
 		t.Fatalf("limits mem=%q cpus=%v pids=%d", svc.MemLimit, svc.CPUs, svc.PidsLimit)
 	}
-	if !reflect.DeepEqual(svc.Ports, []string{"127.0.0.1:2345:2345"}) {
+	if len(svc.Ports) != 0 {
 		t.Fatalf("ports %v", svc.Ports)
 	}
 	gotSrc, gotOut := false, false

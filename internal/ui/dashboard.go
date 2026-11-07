@@ -6693,7 +6693,11 @@ func (m *Model) ensureRemoteDaemon(ctx context.Context, sshMgr *ssh.Manager) err
 		return nil
 	}
 	m.loadingMsg = "Installing aiman-trigger service on remote..."
-	script := remotesvc.InstallEnableScript(remotesvc.KindTrigger)
+	tag, err := remotesvc.InstallTag(ctx, m.version)
+	if err != nil {
+		return fmt.Errorf("failed to install aiman-trigger on remote: %w", err)
+	}
+	script := remotesvc.InstallEnableScript(remotesvc.KindTrigger, tag)
 	if _, err := execRemoteScript(sshMgr, ctx, "/tmp/aiman-install-trigger.sh", script); err != nil {
 		return fmt.Errorf("failed to install aiman-trigger on remote: %w", err)
 	}
