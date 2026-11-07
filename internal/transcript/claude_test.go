@@ -89,6 +89,12 @@ func TestClaudeForksThatAreNotRewinds(t *testing.T) {
 			claudeResult("r1", "a1", "t1"),
 			claudeUser("p2", "x1", "next"),
 		}},
+		{"prompt behind a mid-file null-parent attachment", []claudeJSON{
+			claudeUser("p1", "", "go"),
+			claudeAssistant("a1", "p1", claudeText("reply")),
+			claudeAttachment("x1", ""),
+			claudeUser("p2", "x1", "next"),
+		}},
 		{"prompt off a line kept across a compaction", []claudeJSON{
 			claudeUser("p1", "", "go"),
 			claudeAssistant("a1", "p1", claudeText("kept")),
@@ -168,6 +174,28 @@ func TestClaudeRewindForgetsTheBranch(t *testing.T) {
 		if d.Update != nil {
 			t.Errorf("result for an abandoned call updated %+v", d.Update)
 		}
+	}
+}
+
+func TestClaudeResolvedCallsAreNotRetained(t *testing.T) {
+	n := NewClaude()
+	feedClaude(t, n,
+		claudeUser("p1", "", "go"),
+		claudeAssistant("a1", "p1", claudeBash("t1"), claudeBash("t2")),
+		claudeResult("r1", "a1", "t1"),
+	)
+	calls := n.(*claude).calls
+	if _, ok := calls["t1"]; ok || len(calls) != 1 {
+		t.Errorf("tracked calls = %v, want only the unresolved t2", calls)
+	}
+}
+
+func TestClaudeNotificationForUnknownTaskRecordsNoOutput(t *testing.T) {
+	note := "<task-notification>\n<task-id>abc</task-id>\n<output-file>/tmp/abc.output</output-file>\n<status>completed</status>\n<summary>x</summary>\n</task-notification>"
+	n := NewClaude()
+	feedClaude(t, n, claudeUser("n1", "", note))
+	if path, ok := n.(ProcessOutputs).ProcessOutput("abc"); ok {
+		t.Errorf("ProcessOutput(abc) = %q for a task the transcript never started", path)
 	}
 }
 

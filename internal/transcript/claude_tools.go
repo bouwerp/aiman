@@ -43,8 +43,9 @@ func claudeToolSummary(input json.RawMessage) string {
 	return ""
 }
 
-// toolResult updates the call the result names. A result for a call never
-// seen, or one on an abandoned branch, changes nothing.
+// toolResult updates the call the result names and stops tracking it, since
+// only a process or sub-agent can change it later. A result for a call never
+// seen, already resolved, or on an abandoned branch changes nothing.
 func (c *claude) toolResult(e *claudeEvent, b *claudeBlock) {
 	it, ok := c.calls[b.ToolUseID]
 	if !ok {
@@ -65,6 +66,7 @@ func (c *claude) toolResult(e *claudeEvent, b *claudeBlock) {
 	}
 	tc.SubagentID = res.AgentID
 	c.updateItem(e, it)
+	delete(c.calls, b.ToolUseID)
 	if res.AgentID != "" {
 		c.startSubagent(e, it, res)
 	}

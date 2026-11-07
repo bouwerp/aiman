@@ -12,7 +12,9 @@ type claudeNode struct {
 // starts no new conversation, so it stays off the root: nothing after it can
 // fork from before it. Lines kept across a compaction keep their old parents,
 // and a prompt following one of them is therefore not a fork. A parent not
-// seen (or dropped by a rewind) leaves the line detached in the same way.
+// seen (or dropped by a rewind) leaves the line detached in the same way, as
+// does a null parent on a line that opens no turn: only a prompt can replace
+// the file's first prompt, and an attachment must not look like that fork.
 func (c *claude) link(e *claudeEvent) {
 	n := &claudeNode{turn: e.opensTurn() || e.isNotification()}
 	if parent := c.parentOf(e); parent != nil {
@@ -24,13 +26,13 @@ func (c *claude) link(e *claudeEvent) {
 }
 
 func (c *claude) parentOf(e *claudeEvent) *claudeNode {
-	if e.Subtype == claudeCompactBoundary {
-		return nil
+	if e.ParentUUID != "" {
+		return c.nodes[e.ParentUUID]
 	}
-	if e.ParentUUID == "" {
+	if e.opensTurn() {
 		return c.root
 	}
-	return c.nodes[e.ParentUUID]
+	return nil
 }
 
 // rewind removes the branch a new prompt abandons. The tree forks for other

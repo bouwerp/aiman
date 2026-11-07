@@ -61,7 +61,7 @@ func (c *claude) notification(e *claudeEvent) {
 	proc := c.processes[n.taskID]
 	sub := c.subagents[n.taskID]
 	c.addItem(e, Item{Kind: KindSystem, Text: claudeNotificationText(n, proc != nil, sub != nil)})
-	if n.taskID != "" {
+	if proc != nil || sub != nil {
 		if _, known := c.outputs[n.taskID]; !known {
 			c.recordOutput(n.taskID, n.outputFile)
 		}
