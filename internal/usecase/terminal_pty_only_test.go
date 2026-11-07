@@ -51,7 +51,7 @@ func TestSendSessionPromptGoesToPTY(t *testing.T) {
 			t.Fatalf("backend %q: %v", backend, err)
 		}
 		joined := strings.Join(r.commands, "\n")
-		if !strings.Contains(joined, `aiman pty input "pid" --file`) {
+		if !strings.Contains(joined, `aiman pty input 'pid' --file`) {
 			t.Fatalf("backend %q: no pty input: %s", backend, joined)
 		}
 		requireNoTmux(t, r.commands)
@@ -143,7 +143,7 @@ func TestResizeSessionTerminalGoesToPTY(t *testing.T) {
 		if err != nil || !applied {
 			t.Fatalf("backend %q: %v / %v", backend, applied, err)
 		}
-		if !strings.Contains(strings.Join(r.commands, "\n"), `aiman pty resize "pid" --cols 120 --rows 40`) {
+		if !strings.Contains(strings.Join(r.commands, "\n"), `aiman pty resize 'pid' --cols 120 --rows 40`) {
 			t.Fatalf("backend %q: %v", backend, r.commands)
 		}
 		requireNoTmux(t, r.commands)

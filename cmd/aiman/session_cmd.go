@@ -234,6 +234,11 @@ func runSession(args []string) error {
 
 // sessionCreateParams maps `session create` flags to session.create params.
 func sessionCreateParams(flags map[string]string) (map[string]any, error) {
+	if b := flags["branch"]; b != "" {
+		if err := domain.ValidBranchName(b); err != nil {
+			return nil, err
+		}
+	}
 	params := map[string]any{}
 	for _, k := range []string{"name", "group", "parent", "for", "repo", "branch", "agent", "tier", "model", "effort", "dir", "prompt", "issue", "base", "review"} {
 		if flags[k] != "" {

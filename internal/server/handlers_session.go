@@ -542,6 +542,19 @@ func (s *Server) resolveReq(ctx context.Context, req Request) (domain.Session, R
 	return sess, Response{}, true
 }
 
+// resolveScopedReq is resolveReq for a method that acts on the session: a session
+// caller must have it in scope.
+func (s *Server) resolveScopedReq(ctx context.Context, req Request) (domain.Session, Response, bool) {
+	sess, fail, ok := s.resolveReq(ctx, req)
+	if !ok {
+		return domain.Session{}, fail, false
+	}
+	if refused, out := s.refuseOutOfScope(ctx, req, sess.ID); out {
+		return domain.Session{}, refused, false
+	}
+	return sess, Response{}, true
+}
+
 func (s *Server) handleRead(ctx context.Context, req Request) Response {
 	sess, fail, ok := s.resolveReq(ctx, req)
 	if !ok {
@@ -586,7 +599,7 @@ func legacyTerminalResp(id string, sess domain.Session) Response {
 }
 
 func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
-	sess, fail, ok := s.resolveReq(ctx, req)
+	sess, fail, ok := s.resolveScopedReq(ctx, req)
 	if !ok {
 		return fail
 	}
@@ -753,6 +766,11 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
+	if params.Branch != "" {
+		if err := domain.ValidBranchName(params.Branch); err != nil {
+			return errResp(req.ID, CodeInvalidParams, err.Error())
+		}
+	}
 	existing, err := s.loadSessions(ctx)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
@@ -904,9 +922,10 @@ const worktreeExistsError = "WORKTREE_EXISTS"
 const maxBranchSuffix = 20
 
 // branchForName derives a branch from a session name. A name with nothing usable
-// in a branch, such as one in another alphabet, gets a generated identifier.
+// in a branch, such as one in another alphabet, or a derived name git would
+// refuse gets a generated identifier.
 func branchForName(name string) string {
-	if branch := domain.BranchFromSessionName(name); branch != "" {
+	if branch := domain.BranchFromSessionName(name); domain.ValidBranchName(branch) == nil {
 		return branch
 	}
 	return domain.AdHocLabel("session-", time.Now(), rand.Reader)
@@ -1207,7 +1226,7 @@ func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
 }
 
 func (s *Server) handleForget(ctx context.Context, req Request) Response {
-	sess, fail, ok := s.resolveReq(ctx, req)
+	sess, fail, ok := s.resolveScopedReq(ctx, req)
 	if !ok {
 		return fail
 	}

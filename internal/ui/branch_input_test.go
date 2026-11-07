@@ -24,3 +24,18 @@ func TestBranchInputKeepsSessionNameAndPreviewsIdentifiers(t *testing.T) {
 		}
 	}
 }
+
+// The wizard derives the branch from the name; a derived name git refuses does
+// not confirm.
+func TestBranchInputRefusesBranchGitRefuses(t *testing.T) {
+	m := NewBranchInputModel("HEAD")
+	next, _ := m.Update(pressKey("enter"))
+	if next.(BranchInputModel).Confirmed {
+		t.Fatalf("confirmed branch %q", m.BranchName())
+	}
+	m = NewBranchInputModel("topic")
+	next, _ = m.Update(pressKey("enter"))
+	if !next.(BranchInputModel).Confirmed {
+		t.Fatal("ordinary name did not confirm")
+	}
+}

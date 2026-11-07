@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // HandoverPrompt tells the next agent to continue from the handover file.
@@ -81,7 +82,7 @@ func prepareRestartHandoff(ctx context.Context, remote domain.RemoteExecutor, s 
 // hand to the next agent. The handover file is the handoff now.
 func removeStaleSessionSummary(ctx context.Context, remote domain.RemoteExecutor, workingDir string) string {
 	summaryPath := filepath.Join(workingDir, domain.AimanSessionSummaryFileName)
-	if _, err := remote.Execute(ctx, fmt.Sprintf("rm -f %q %q", summaryPath, summaryPath+".tmp")); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf("rm -f %s %s", shellx.Quote(summaryPath), shellx.Quote(summaryPath+".tmp"))); err != nil {
 		return fmt.Sprintf("stale session summary not removed: %v", err)
 	}
 	return ""

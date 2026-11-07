@@ -8,6 +8,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/infra/remotefile"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // remoteWriter is the slice of a remote that can drop the Deep Code launcher
@@ -37,7 +38,7 @@ func InstallDeepcodeLauncher(ctx context.Context, remote remoteWriter) error {
 		return fmt.Errorf("deepcode launcher: empty home")
 	}
 	path := filepath.Join(home, ".aiman", "hooks", "deepcode-launch.sh")
-	if _, err := remote.Execute(ctx, fmt.Sprintf("mkdir -p %q", filepath.Dir(path))); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf("mkdir -p %s", shellx.Quote(filepath.Dir(path)))); err != nil {
 		return fmt.Errorf("deepcode launcher dir: %w", err)
 	}
 	changed, err := remotefile.WriteIfChanged(ctx, remote, path, []byte(agenthook.DeepcodeLaunchScript))
@@ -47,7 +48,7 @@ func InstallDeepcodeLauncher(ctx context.Context, remote remoteWriter) error {
 	if !changed {
 		return nil
 	}
-	if _, err := remote.Execute(ctx, fmt.Sprintf("chmod 700 %q", path)); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf("chmod 700 %s", shellx.Quote(path))); err != nil {
 		return fmt.Errorf("deepcode launcher mode: %w", err)
 	}
 	return nil

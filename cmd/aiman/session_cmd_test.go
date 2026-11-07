@@ -170,3 +170,13 @@ func TestTakeFlagsDiscardIsBoolean(t *testing.T) {
 		t.Fatalf("flags %v rest %v", flags, rest)
 	}
 }
+
+func TestSessionCreateRefusesInvalidBranchFlag(t *testing.T) {
+	if _, err := sessionCreateParams(map[string]string{"branch": "a b"}); err == nil {
+		t.Fatal("invalid branch accepted")
+	}
+	params, err := sessionCreateParams(map[string]string{"branch": "feat/x-1"})
+	if err != nil || params["branch"] != "feat/x-1" {
+		t.Fatalf("params %v, err %v", params, err)
+	}
+}

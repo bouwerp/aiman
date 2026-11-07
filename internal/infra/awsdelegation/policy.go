@@ -159,6 +159,20 @@ var resourceDiscoveryActions = []string{
 // locked region).
 // Returns an empty string when regions is nil or empty.
 func BuildRegionPolicy(regions []string) string {
+	doc := regionPolicyDocument(regions)
+	if doc == nil {
+		return ""
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// regionPolicyDocument builds the statements BuildRegionPolicy describes. It
+// returns nil when no region remains after trimming.
+func regionPolicyDocument(regions []string) *regionPolicy {
 	trimmed := make([]string, 0, len(regions))
 	for _, r := range regions {
 		if r := strings.TrimSpace(r); r != "" {
@@ -166,7 +180,7 @@ func BuildRegionPolicy(regions []string) string {
 		}
 	}
 	if len(trimmed) == 0 {
-		return ""
+		return nil
 	}
 
 	var condition any
@@ -176,7 +190,7 @@ func BuildRegionPolicy(regions []string) string {
 		condition = trimmed
 	}
 
-	p := regionPolicy{
+	return &regionPolicy{
 		Version: "2012-10-17",
 		Statement: []regionPolicyStatement{
 			{
@@ -246,9 +260,4 @@ func BuildRegionPolicy(regions []string) string {
 			},
 		},
 	}
-	b, err := json.Marshal(p)
-	if err != nil {
-		return ""
-	}
-	return string(b)
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // Output markers. Each script prints its own marker lines so login-shell
@@ -38,8 +39,8 @@ func (r RawChecklist) Name() string {
 func ListScript(worktree string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "printf '%s%s %%s\\n' \"$HOME\"\n", headerPrefix, homeSource)
-	writeListLoop(&sb, SourceRepo, shellQuote(worktree)+"/"+shellQuote(RepoChecklistDir))
-	writeListLoop(&sb, SourceUser, `"$HOME"/`+shellQuote(UserChecklistDir))
+	writeListLoop(&sb, SourceRepo, shellx.Quote(worktree)+"/"+shellx.Quote(RepoChecklistDir))
+	writeListLoop(&sb, SourceUser, `"$HOME"/`+shellx.Quote(UserChecklistDir))
 	return sb.String()
 }
 
@@ -102,10 +103,10 @@ func MatchScript(worktree string, lists []domain.Checklist) string {
 		}
 		var specs []string
 		for _, p := range PathspecsFor(c.AppliesTo) {
-			specs = append(specs, shellQuote(p))
+			specs = append(specs, shellx.Quote(p))
 		}
 		fmt.Fprintf(&sb, "if [ -n \"$(git -C %s ls-files --cached --others --exclude-standard -- %s 2>/dev/null | head -n1)\" ]; then printf '%s%%s\\n' %s; fi\n",
-			shellQuote(worktree), strings.Join(specs, " "), matchPrefix, shellQuote(c.Name))
+			shellx.Quote(worktree), strings.Join(specs, " "), matchPrefix, shellx.Quote(c.Name))
 	}
 	return sb.String()
 }
@@ -124,7 +125,7 @@ func ParseMatchOutput(out string) map[string]bool {
 // RemoteSumsScript creates the user checklist directory, prints
 // "==> home $HOME", then "SUM <sha256> <file name>" for each *.md in it.
 func RemoteSumsScript() string {
-	dir := `"$HOME"/` + shellQuote(UserChecklistDir)
+	dir := `"$HOME"/` + shellx.Quote(UserChecklistDir)
 	return fmt.Sprintf("mkdir -p %s || exit 1\n", dir) +
 		fmt.Sprintf("printf '%s%s %%s\\n' \"$HOME\"\n", headerPrefix, homeSource) +
 		fmt.Sprintf("for f in %s/*.md; do [ -f \"$f\" ] || continue; s=$(sha256sum < \"$f\") || continue; printf '%s%%s %%s\\n' \"${s%%%% *}\" \"${f##*/}\"; done\n", dir, sumPrefix)
@@ -162,8 +163,4 @@ func PushPlan(local map[string][]byte, remoteSums map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

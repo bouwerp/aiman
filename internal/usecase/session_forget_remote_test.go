@@ -12,7 +12,7 @@ func TestForgetSessionOnRemoteCallsServe(t *testing.T) {
 	if err := ForgetSessionOnRemote(context.Background(), r, "abc"); err != nil {
 		t.Fatalf("forget: %v", err)
 	}
-	if !strings.Contains(r.joined(), `aiman session forget "abc"`) {
+	if !strings.Contains(r.joined(), `aiman session forget 'abc'`) {
 		t.Errorf("wrong command: %s", r.joined())
 	}
 }

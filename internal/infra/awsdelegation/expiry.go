@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // ExpiryKey is the credentials-file key that records when a set of temporary tokens
@@ -52,7 +54,7 @@ func ReadCredentialExpirations(ctx context.Context, r RemoteRunner) (RemoteCrede
 	// One round trip: mtime on the first line (GNU stat, then BSD stat), then the body.
 	cmd := fmt.Sprintf(
 		`f="$HOME/.aws/credentials"; stat -c %%Y "$f" 2>/dev/null || stat -f %%m "$f" 2>/dev/null || true; `+
-			`printf '%%s\n' %q; cat "$f" 2>/dev/null || true`, credentialsPayloadMarker)
+			`printf '%%s\n' %s; cat "$f" 2>/dev/null || true`, shellx.Quote(credentialsPayloadMarker))
 	out, err := r.Execute(ctx, cmd)
 	if err != nil && !strings.Contains(out, credentialsPayloadMarker) {
 		return RemoteCredentialExpiry{}, fmt.Errorf("%w: %v", ErrSSHFailure, err)

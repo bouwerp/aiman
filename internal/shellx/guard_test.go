@@ -1,5 +1,3 @@
-//go:build acceptance
-
 package shellx
 
 import (
@@ -19,6 +17,10 @@ import (
 
 // shellDashC matches a literal that hands the rest of itself to a shell.
 var shellDashC = regexp.MustCompile(`\b(bash|sh)\s+-l?c\b`)
+
+// shellCommandStart matches a literal that is itself a remote command line,
+// the kind Execute and WriteFile hand to the login shell on the host.
+var shellCommandStart = regexp.MustCompile(`^(cat >|test -|find |git -C|exec |mkdir -p|rm -rf|ls |cd )`)
 
 // TestOneShellQuoter fails when a non-test Go file outside internal/shellx
 // declares its own shellQuote, or quotes for a shell with Go's %q: a literal
@@ -83,8 +85,12 @@ func shellQuoteOffences(t *testing.T, path, rel string) []string {
 				at(x.Pos(), "declares shellQuote")
 			}
 		case *ast.BasicLit:
-			if v := literal(x); strings.Contains(v, "%q") && shellDashC.MatchString(v) {
+			v := literal(x)
+			if strings.Contains(v, "%q") && shellDashC.MatchString(v) {
 				at(x.Pos(), "%q inside a shell -c string: "+x.Value)
+			}
+			if strings.Contains(v, "%q") && shellCommandStart.MatchString(v) {
+				at(x.Pos(), "%q in a remote command line: "+x.Value)
 			}
 		case *ast.CallExpr:
 			if lit := dashCFormatArg(x); lit != nil {

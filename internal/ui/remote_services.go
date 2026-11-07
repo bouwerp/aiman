@@ -4,11 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/bouwerp/aiman/internal/debuglog"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/remotesvc"
 	"github.com/bouwerp/aiman/internal/infra/rtk"
@@ -37,7 +42,7 @@ type serveConfigWriter interface {
 }
 
 func writeServeConfig(ctx context.Context, cfg *config.Config, host string, remote serveConfigWriter) error {
-	raw, err := cfg.MarshalServeConfig(host)
+	raw, err := configWithSSOFacts(cfg, host).MarshalServeConfig(host)
 	if err != nil {
 		return fmt.Errorf("serializing Agent API settings: %w", err)
 	}
@@ -51,6 +56,60 @@ func writeServeConfig(ctx context.Context, cfg *config.Config, host string, remo
 		return fmt.Errorf("protecting remote Agent API settings: %w", err)
 	}
 	return nil
+}
+
+// configWithSSOFacts returns cfg with host's synced delegations completed from
+// the laptop's ~/.aws/config. It fills copies: cfg is the config the TUI saves,
+// and a fact written back there would count as explicit and outlive a change in
+// ~/.aws/config.
+func configWithSSOFacts(cfg *config.Config, host string) *config.Config {
+	if cfg == nil {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		logSSOFactsSkipped(host, err)
+		return cfg
+	}
+	awsConfig := filepath.Join(home, ".aws", "config")
+
+	out := *cfg
+	out.Remotes = slices.Clone(cfg.Remotes)
+	for i := range out.Remotes {
+		r := &out.Remotes[i]
+		if r.Host != host {
+			continue
+		}
+		r.AWSDelegation = delegationWithSSOFacts(r.AWSDelegation, awsConfig, host)
+		r.AWSDelegations = slices.Clone(r.AWSDelegations)
+		for j, d := range r.AWSDelegations {
+			r.AWSDelegations[j] = delegationWithSSOFacts(d, awsConfig, host)
+		}
+		break
+	}
+	return &out
+}
+
+// delegationWithSSOFacts copies d with its SSO facts filled. A delegation whose
+// profile cannot be read still goes out, without the facts.
+func delegationWithSSOFacts(d *config.AWSDelegation, awsConfig, host string) *config.AWSDelegation {
+	if d == nil || !d.SyncCredentials {
+		return d
+	}
+	profile, err := awsdelegation.ReadSSOProfile(awsConfig, d.LocalSourceProfile())
+	if err != nil {
+		logSSOFactsSkipped(host, err)
+		return d
+	}
+	filled := *d
+	config.FillSSOFacts(&filled, profile)
+	return &filled
+}
+
+func logSSOFactsSkipped(host string, err error) {
+	if debuglog.Enabled() {
+		_ = debuglog.Write(fmt.Sprintf("serve config %s: no SSO facts: %v\n", host, err))
+	}
 }
 
 func syncRemoteServeConfig(cfg *config.Config, host string) error {
