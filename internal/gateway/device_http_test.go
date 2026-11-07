@@ -162,7 +162,7 @@ func TestAuthTokens(t *testing.T) {
 
 func TestQueryTokenOnlyOnWebSockets(t *testing.T) {
 	rig := newDeviceRig(t, nil)
-	_, tok := rig.device(t, false)
+	_, tok := rig.device(t, true)
 	rec := rig.do(http.MethodPost, "/v1/rpc?access_token="+tok, "", `{"method":"ping"}`)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("rpc must ignore access_token: %d", rec.Code)

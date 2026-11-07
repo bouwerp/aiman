@@ -41,7 +41,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// terminal bridges pty.attach, which is raw keystrokes into the session, so a
+// device needs allow_destructive before anything is dialled.
 func (s *Server) terminal(w http.ResponseWriter, r *http.Request) {
+	if p := principalFrom(r.Context()); !p.host && !p.device.AllowDestructive {
+		writeJSONError(w, http.StatusForbidden, "", "forbidden", "the terminal needs allow_destructive")
+		return
+	}
 	id := r.PathValue("id")
 	if id == "" {
 		http.Error(w, "missing id", http.StatusBadRequest)
