@@ -1,5 +1,3 @@
-//go:build acceptance
-
 package transcript_test
 
 import (
