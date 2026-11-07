@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-
-	"github.com/bouwerp/aiman/internal/server"
 )
 
 type rpcBody struct {
@@ -40,7 +38,7 @@ func (s *Server) rpc(w http.ResponseWriter, r *http.Request) {
 	if len(params) == 0 {
 		params = json.RawMessage("{}")
 	}
-	resp, err := server.CallRaw(s.Socket, body.Method, params)
+	resp, err := serveClient(s.Socket).CallRaw(body.Method, params)
 	writeSocketResponse(w, resp, err)
 }
 
@@ -54,7 +52,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		params = b
 	}
-	resp, err := server.CallRaw(s.Socket, "session.list", params)
+	resp, err := serveClient(s.Socket).CallRaw("session.list", params)
 	writeSocketResponse(w, resp, err)
 }
 
@@ -69,6 +67,6 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	resp, err := server.CallRaw(s.Socket, "session.get", params)
+	resp, err := serveClient(s.Socket).CallRaw("session.get", params)
 	writeSocketResponse(w, resp, err)
 }
