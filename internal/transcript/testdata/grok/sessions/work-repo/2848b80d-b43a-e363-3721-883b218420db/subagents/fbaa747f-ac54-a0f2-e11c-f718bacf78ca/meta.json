@@ -1,0 +1,18 @@
+{
+  "subagent_id": "fbaa747f-ac54-a0f2-e11c-f718bacf78ca",
+  "attempt_id": "0fb94579-d923-e770-9921-385903a3b0cf",
+  "parent_session_id": "2848b80d-b43a-e363-3721-883b218420db",
+  "child_session_id": "fbaa747f-ac54-a0f2-e11c-f718bacf78ca",
+  "subagent_type": "general-purpose",
+  "description": "v656384d5c1",
+  "prompt": "v033e50868e",
+  "status": "completed",
+  "started_at": "vf6d407a39c",
+  "completed_at": "v6999d7c760",
+  "duration_ms": 201576,
+  "tool_calls": 36,
+  "turns": 1,
+  "effective_context_source": "vd1d7060ddb",
+  "child_cwd": "v4a566e5e30",
+  "effective_model_id": "v2070d1111a"
+}
