@@ -240,7 +240,7 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
 		defer cancel()
 
-		args := append(bulkSSHArgs(cp, useControlMaster), target, fmt.Sprintf("cat > %q", path))
+		args := append(bulkSSHArgs(cp, useControlMaster), target, "cat > "+shellx.Quote(path))
 
 		cmd := exec.CommandContext(callCtx, "ssh", args...)
 		cmd.WaitDelay = sshWaitDelay
@@ -295,7 +295,7 @@ func (m *Manager) ResetControlSocket() {
 
 func (m *Manager) ValidateDir(ctx context.Context, path string) error {
 	// Use 'test -d' which is more standard. Quote the path to handle spaces.
-	cmd := fmt.Sprintf("test -d %q", path)
+	cmd := "test -d " + shellx.Quote(path)
 	_, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("directory %s not found or not accessible: %w", path, err)
@@ -310,7 +310,7 @@ func (m *Manager) ScanGitRepos(ctx context.Context) ([]string, error) {
 
 	// Use find to look for .git directories up to 2 levels deep
 	// This will find repos at <root>/repo or <root>/org/repo
-	cmd := fmt.Sprintf("find %q -maxdepth 3 -name .git -type d -prune", m.config.Root)
+	cmd := "find " + shellx.Quote(m.config.Root) + " -maxdepth 3 -name .git -type d -prune"
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan for git repos: %w", err)
@@ -378,7 +378,7 @@ func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string,
 
 func (m *Manager) GetGitRoot(ctx context.Context, path string) (string, error) {
 	// git -C <path> rev-parse --show-toplevel
-	cmd := fmt.Sprintf("git -C %q rev-parse --show-toplevel", path)
+	cmd := "git -C " + shellx.Quote(path) + " rev-parse --show-toplevel"
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to get git root for %s: %w", path, err)
@@ -389,10 +389,7 @@ func (m *Manager) GetGitRoot(ctx context.Context, path string) (string, error) {
 // ptyAttachRemoteCommand hands the terminal to the serve daemon's PTY runtime.
 // ctrl+q detaches without touching the session.
 func ptyAttachRemoteCommand(sessionID string) string {
-	return remotePathPreamble + fmt.Sprintf(
-		`exec aiman pty attach %q`,
-		sessionID,
-	)
+	return remotePathPreamble + "exec aiman pty attach " + shellx.Quote(sessionID)
 }
 
 // AttachPTYSession returns the ssh command that interactively attaches to a
@@ -526,14 +523,14 @@ func (m *Manager) ScanDirectories(ctx context.Context, rootPath string, maxDepth
 		if pruneExpr != "" {
 			pruneExpr += " -o "
 		}
-		pruneExpr += fmt.Sprintf("-name %q -prune", dir)
+		pruneExpr += "-name " + shellx.Quote(dir) + " -prune"
 	}
 
 	var cmdStr string
 	if pruneExpr != "" {
-		cmdStr = fmt.Sprintf("find %q -maxdepth %d -type d \\( %s \\) -o -type d -print", rootPath, maxDepth, pruneExpr)
+		cmdStr = fmt.Sprintf("find %s -maxdepth %d -type d \\( %s \\) -o -type d -print", shellx.Quote(rootPath), maxDepth, pruneExpr)
 	} else {
-		cmdStr = fmt.Sprintf("find %q -maxdepth %d -type d", rootPath, maxDepth)
+		cmdStr = fmt.Sprintf("find %s -maxdepth %d -type d", shellx.Quote(rootPath), maxDepth)
 	}
 
 	output, err := m.Execute(ctx, cmdStr)
