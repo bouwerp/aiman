@@ -240,7 +240,7 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 		callCtx, cancel := context.WithTimeout(ctx, sshCommandTimeout)
 		defer cancel()
 
-		args := append(bulkSSHArgs(cp, useControlMaster), target, "cat > "+shellx.Quote(path))
+		args := append(bulkSSHArgs(cp, useControlMaster), target, "cat > "+shellx.QuoteHomePath(path))
 
 		cmd := exec.CommandContext(callCtx, "ssh", args...)
 		cmd.WaitDelay = sshWaitDelay

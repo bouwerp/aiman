@@ -118,7 +118,7 @@ func CreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec
 		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %q", path))
 		return fmt.Errorf("write pty params: %w", err)
 	}
-	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty create --params-file %s; rm -f %s", shellx.Quote(path), shellx.Quote(path)))
+	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty create --params-file %s; rm -f %s", shellx.QuoteHomePath(path), shellx.QuoteHomePath(path)))
 	if err != nil {
 		return fmt.Errorf("pty create: %s: %w", strings.TrimSpace(out), err)
 	}
@@ -127,7 +127,7 @@ func CreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec
 
 // ptyParamsDir holds pty params files, which carry the session's environment
 // and secrets. It is left for the remote to expand: both executors' WriteFile
-// resolve a leading $HOME.
+// resolve a leading $HOME, and shell commands quote it with shellx.QuoteHomePath.
 const ptyParamsDir = "$HOME/.aiman/tmp"
 
 func ptyParamsPath(id string) string {
@@ -138,7 +138,7 @@ func ptyParamsPath(id string) string {
 // in, because WriteFile keeps an existing file's mode and otherwise creates under
 // the remote's default umask.
 func preparePTYParams(ctx context.Context, remote TerminalExecutor, path string) error {
-	prepare := fmt.Sprintf("umask 077 && mkdir -p %[1]q && chmod 700 %[1]q && : > %[2]q && chmod 600 %[2]q", ptyParamsDir, path)
+	prepare := fmt.Sprintf("umask 077 && mkdir -p %[1]s && chmod 700 %[1]s && : > %[2]s && chmod 600 %[2]s", shellx.QuoteHomePath(ptyParamsDir), shellx.QuoteHomePath(path))
 	if out, err := remote.Execute(ctx, prepare); err != nil {
 		return fmt.Errorf("prepare pty params: %s: %w", strings.TrimSpace(out), err)
 	}
@@ -637,7 +637,7 @@ func SendSessionPrompt(ctx context.Context, remote TerminalExecutor, s domain.Se
 	if err := SendPTYFileConfirmed(ctx, remote, terminalID(s), path, prompt); err != nil {
 		return err
 	}
-	_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %s", shellx.Quote(path)))
+	_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %s", shellx.QuoteHomePath(path)))
 	return nil
 }
 

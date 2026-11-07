@@ -9,3 +9,15 @@ import "strings"
 func Quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
+
+// QuoteHomePath quotes a remote path like Quote, except that a leading "$HOME/"
+// or "~/" stays unquoted as "$HOME"/ so the remote shell expands the home
+// directory. Everything after it is a quoted word, so nothing else expands.
+func QuoteHomePath(p string) string {
+	for _, prefix := range []string{"$HOME/", "~/"} {
+		if rest, ok := strings.CutPrefix(p, prefix); ok {
+			return `"$HOME"/` + Quote(rest)
+		}
+	}
+	return Quote(p)
+}
