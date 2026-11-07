@@ -8,8 +8,9 @@ import (
 )
 
 // grokLine is one parsed session update. Only the fields items show are
-// decoded; everything else on the line, _meta included, is never read into
-// an item.
+// decoded. Of the two _meta objects, the line's gives the event id, prompt
+// id and timestamp, and the update's gives only the tool name; nothing else
+// in either reaches an item.
 type grokLine struct {
 	pos  int64
 	at   time.Time

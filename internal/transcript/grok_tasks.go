@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,8 +12,22 @@ import (
 	"time"
 )
 
-// grokMetaMaxBytes caps a sub-agent meta.json read.
-const grokMetaMaxBytes = 1 << 20
+const (
+	// grokMetaMaxBytes caps a sub-agent meta.json read.
+	grokMetaMaxBytes = 1 << 20
+	// grokChildMaxBytes caps the child file normalised for an item count;
+	// a larger child is counted by its newlines instead.
+	grokChildMaxBytes = 8 << 20
+	// grokChildMaxLine caps one child line; a longer line is skipped.
+	grokChildMaxLine = 1 << 20
+)
+
+// grokChildKey identifies one version of a child updates.jsonl.
+type grokChildKey struct {
+	path  string
+	size  int64
+	mtime int64
+}
 
 // subagentSpawned adds a running subagent item. The description and type
 // come from the line, else from subagents/<id>/meta.json.
@@ -29,7 +44,6 @@ func (g *grokNormaliser) subagentSpawned(l *grokLine) []Delta {
 	if sa.Name == "" || sa.Description == "" {
 		g.applyGrokMeta(sa)
 	}
-	sa.ItemCount = g.childItemCount(l.upd.ChildSessionID)
 	it := &Item{ID: "subagent:" + id, Kind: KindSubagent, Text: sa.Description, Subagent: sa}
 	g.subagents[id] = it
 	return g.add(l, it)
@@ -97,7 +111,9 @@ func (g *grokNormaliser) applyGrokMeta(sa *Subagent) {
 }
 
 // childItemCount counts the items in the child session's updates.jsonl,
-// the sibling folder of SessionDir. A missing child file is 0.
+// the sibling folder of SessionDir. It runs when the sub-agent finishes,
+// never at spawn, and is cached by path, size and mtime. A missing child
+// file is 0.
 func (g *grokNormaliser) childItemCount(child string) int {
 	if g.opts.SessionDir == "" || !grokPlainName(child) {
 		return 0
@@ -107,31 +123,71 @@ func (g *grokNormaliser) childItemCount(child string) int {
 	if err != nil || !info.Mode().IsRegular() {
 		return 0
 	}
+	key := grokChildKey{path: path, size: info.Size(), mtime: info.ModTime().UnixNano()}
+	if n, ok := g.childCounts[key]; ok {
+		return n
+	}
 	f, err := os.Open(path) // #nosec G304 -- child is a plain name under SessionDir's parent
 	if err != nil {
 		return 0
 	}
 	defer func() { _ = f.Close() }()
-	return countGrokItems(f)
+	var n int
+	if info.Size() > grokChildMaxBytes {
+		n = countNewlines(f)
+	} else {
+		n = countGrokItems(io.LimitReader(f, grokChildMaxBytes))
+	}
+	g.childCounts[key] = n
+	return n
 }
 
 // countGrokItems runs a lookup-free normaliser over r and counts its Adds.
 func countGrokItems(r io.Reader) int {
 	n := NewGrok()
-	br := bufio.NewReader(r)
 	var pos int64
 	count := 0
+	readCappedLines(r, grokChildMaxLine, func(line []byte, end int64) {
+		pos = end
+		count += countAdds(n.Feed(pos, line))
+	})
+	return count + countAdds(n.Flush())
+}
+
+// readCappedLines calls fn with each complete line of at most maxLine
+// bytes and the offset just past it. Longer lines are skipped whole.
+func readCappedLines(r io.Reader, maxLine int, fn func(line []byte, end int64)) {
+	br := bufio.NewReaderSize(r, maxLine)
+	var pos int64
+	skipping := false
 	for {
-		line, err := br.ReadBytes('\n')
-		if len(line) > 0 && err == nil {
-			pos += int64(len(line))
-			count += countAdds(n.Feed(pos, line))
+		frag, err := br.ReadSlice('\n')
+		pos += int64(len(frag))
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull):
+			skipping = true
+			continue
+		case err != nil:
+			return
+		case skipping:
+			skipping = false
+			continue
 		}
+		fn(frag, pos)
+	}
+}
+
+// countNewlines counts the lines of r.
+func countNewlines(r io.Reader) int {
+	buf := make([]byte, 64<<10)
+	n := 0
+	for {
+		k, err := r.Read(buf)
+		n += bytes.Count(buf[:k], []byte{'\n'})
 		if err != nil {
-			break
+			return n
 		}
 	}
-	return count + countAdds(n.Flush())
 }
 
 func countAdds(ds []Delta) int {

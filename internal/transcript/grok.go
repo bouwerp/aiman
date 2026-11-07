@@ -27,7 +27,7 @@ func NewGrok() Normaliser {
 
 // NewGrokWith returns the Grok normaliser with options.
 func NewGrokWith(opts GrokOptions) Normaliser {
-	g := &grokNormaliser{opts: opts}
+	g := &grokNormaliser{opts: opts, childCounts: map[grokChildKey]int{}}
 	g.Reset()
 	return g
 }
@@ -35,18 +35,27 @@ func NewGrokWith(opts GrokOptions) Normaliser {
 // grokNormaliser turns Grok's ACP session updates into items. Stored items
 // are mutated in place; every delta carries a copy. Chunk groups emit their
 // Add on the first chunk and one Update per Flush, so a long streamed reply
-// costs one copy per read rather than one per chunk.
+// costs one copy per read rather than one per chunk. Chunk groups are
+// dropped when their turn completes and tool calls when they finish, so
+// held state stays bounded by the open turn; closed keeps their ids so a
+// late line cannot add the same id twice.
 type grokNormaliser struct {
 	opts GrokOptions
 
-	groups    map[string]*grokGroup // chunk groups by item id
+	groups    map[string]*grokGroup // open chunk groups by item id
+	turn      []string              // ids of the groups opened this turn
 	open      map[ItemKind]string   // open group key per chunk kind
 	dirty     []*grokGroup          // groups changed since the last Flush
+	closed    map[string]bool       // ids of closed groups and finished calls
 	user      *Item                 // open user message, joined across chunks
-	calls     map[string]*Item      // tool_call items by toolCallId
+	calls     map[string]*Item      // running tool_call items by toolCallId
 	subagents map[string]*Item      // subagent items by subagent_id
 	processes map[string]*Item      // process items by task_id
 	outputs   map[string]string     // output_file by task_id
+
+	// childCounts caches child item counts by file identity. It survives
+	// Reset, so rereading the parent does not reread unchanged children.
+	childCounts map[grokChildKey]int
 }
 
 func (g *grokNormaliser) Kind() string { return "grok" }
@@ -66,6 +75,8 @@ func (g *grokNormaliser) PositionKind() string { return PositionOffset }
 
 func (g *grokNormaliser) Reset() {
 	g.groups = map[string]*grokGroup{}
+	g.turn = nil
+	g.closed = map[string]bool{}
 	g.open = map[ItemKind]string{}
 	g.dirty = nil
 	g.user = nil
@@ -98,7 +109,7 @@ func (g *grokNormaliser) Feed(pos int64, line []byte) []Delta {
 	case "agent_thought_chunk":
 		return g.chunk(l, KindThinking)
 	case "turn_completed":
-		g.open = map[ItemKind]string{}
+		g.closeTurn()
 		return nil
 	}
 	return g.event(l)
@@ -168,6 +179,17 @@ func (g *grokNormaliser) update(l *grokLine, it *Item) []Delta {
 	return []Delta{{Update: cloneClaudeItem(it)}}
 }
 
+// closeTurn forgets the turn's chunk groups. A group with a pending Update
+// stays reachable through g.dirty until the next Flush.
+func (g *grokNormaliser) closeTurn() {
+	for _, id := range g.turn {
+		delete(g.groups, id)
+		g.closed[id] = true
+	}
+	g.turn = nil
+	g.open = map[ItemKind]string{}
+}
+
 // grokGroup is one joined run of message or thought chunks.
 type grokGroup struct {
 	item  Item
@@ -188,6 +210,9 @@ func (g *grokNormaliser) chunk(l *grokLine, kind ItemKind) []Delta {
 	}
 	g.open[kind] = key
 	id := grokChunkPrefix(kind) + key
+	if g.closed[id] {
+		return nil
+	}
 	text := l.upd.chunkText()
 	if gr, ok := g.groups[id]; ok {
 		gr.text.WriteString(text)
@@ -201,6 +226,7 @@ func (g *grokNormaliser) chunk(l *grokLine, kind ItemKind) []Delta {
 	gr := &grokGroup{item: Item{ID: id, Kind: kind, At: l.at, Rev: l.pos, Text: text}}
 	gr.text.WriteString(text)
 	g.groups[id] = gr
+	g.turn = append(g.turn, id)
 	return []Delta{{Add: cloneClaudeItem(&gr.item)}}
 }
 

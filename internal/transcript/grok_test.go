@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type grokJSON = map[string]any
@@ -131,7 +132,7 @@ func TestGrokChildLookupStaysInSessionsDir(t *testing.T) {
 	}
 	spawn := func(childID string) int {
 		items := feedGrokLines(NewGrokWith(GrokOptions{SessionDir: dir}),
-			grokUpd(grokJSON{"sessionUpdate": "subagent_spawned", "subagent_id": "s", "child_session_id": childID}, grokJSON{}))
+			grokUpd(grokJSON{"sessionUpdate": "subagent_finished", "subagent_id": "s", "child_session_id": childID, "status": "completed"}, grokJSON{}))
 		return items["subagent:s"].Subagent.ItemCount
 	}
 	if got := spawn("child"); got != 2 {
@@ -166,5 +167,115 @@ func TestGrokMalformedLines(t *testing.T) {
 		if ds := NewGrok().Feed(1, []byte(l)); len(ds) != 0 {
 			t.Errorf("%q gave %d deltas", l, len(ds))
 		}
+	}
+}
+
+func TestGrokTurnCompletedDropsGroups(t *testing.T) {
+	n := NewGrok()
+	g := n.(*grokNormaliser)
+	n.Feed(1, grokChunk("agent_message_chunk", "a", "p", "e1"))
+	n.Feed(2, grokChunk("agent_thought_chunk", "t", "p", "e2"))
+	n.Feed(3, grokChunk("agent_message_chunk", "b", "p", "e3"))
+	n.Feed(4, grokUpd(grokJSON{"sessionUpdate": "turn_completed"}, grokJSON{}))
+	if len(g.groups) != 0 || len(g.turn) != 0 {
+		t.Fatalf("after turn_completed: %d groups, %d turn ids held", len(g.groups), len(g.turn))
+	}
+	ds := n.Flush()
+	if len(ds) != 1 || ds[0].Update == nil || ds[0].Update.Text != "ab" || ds[0].Update.Rev != 3 {
+		t.Fatalf("Flush after turn_completed gave %+v, want the pending Update ab rev 3", ds)
+	}
+	if ds := append(n.Feed(5, grokChunk("agent_message_chunk", "late", "p", "e5")), n.Flush()...); len(ds) != 0 {
+		t.Errorf("a chunk for a closed promptId gave %+v, want nothing", ds)
+	}
+	if ds := n.Feed(6, grokChunk("agent_message_chunk", "new", "q", "e6")); len(ds) != 1 || ds[0].Add == nil {
+		t.Errorf("a chunk for a new promptId gave %+v, want an Add", ds)
+	}
+}
+
+func TestGrokFinishedCallsAreNotRetained(t *testing.T) {
+	n := NewGrok()
+	g := n.(*grokNormaliser)
+	items := feedGrokLines(n,
+		grokUpd(grokJSON{"sessionUpdate": "tool_call", "toolCallId": "t", "title": "bash"}, grokJSON{}),
+		grokUpd(grokJSON{"sessionUpdate": "task_backgrounded", "task_id": "k", "tool_call_id": "t", "command": "make"}, grokJSON{}),
+		grokUpd(grokJSON{"sessionUpdate": "tool_call_update", "toolCallId": "t", "status": "completed"}, grokJSON{}),
+	)
+	if len(g.calls) != 0 {
+		t.Fatalf("%d calls held after the terminal update", len(g.calls))
+	}
+	if tc := items["tool:t"].ToolCall; tc.Status != ToolOK || tc.ProcessID != "k" {
+		t.Errorf("tool call = %+v, want ok linked to process k", tc)
+	}
+	for _, kind := range []string{"tool_call", "tool_call_update"} {
+		if ds := n.Feed(9, grokUpd(grokJSON{"sessionUpdate": kind, "toolCallId": "t", "status": "failed"}, grokJSON{})); len(ds) != 0 {
+			t.Errorf("%s for a finished call gave %+v, want nothing", kind, ds)
+		}
+	}
+}
+
+// grokChildRig is a parent session dir and the path of its child file "c".
+func grokChildRig(t *testing.T, body string) (dir, child string) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "c"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	child = filepath.Join(root, "c", "updates.jsonl")
+	if err := os.WriteFile(child, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(root, "parent"), child
+}
+
+func grokSubagentCount(n Normaliser, line string) int {
+	items := feedGrokLines(n, grokUpd(grokJSON{"sessionUpdate": line, "subagent_id": "s", "child_session_id": "c", "status": "completed"}, grokJSON{}))
+	return items["subagent:s"].Subagent.ItemCount
+}
+
+func TestGrokChildCountIsCachedAndSkippedAtSpawn(t *testing.T) {
+	body := string(grokChunk("agent_message_chunk", "a", "p", "e1")) + "\n"
+	dir, child := grokChildRig(t, body)
+	n := NewGrokWith(GrokOptions{SessionDir: dir})
+	if got := grokSubagentCount(n, "subagent_spawned"); got != 0 {
+		t.Errorf("count at spawn = %d, want 0 (not read)", got)
+	}
+	if got := grokSubagentCount(n, "subagent_finished"); got != 1 {
+		t.Fatalf("count at finish = %d, want 1", got)
+	}
+	info, err := os.Stat(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same size and mtime: the cache answers without reading the new bytes.
+	if err := os.WriteFile(child, []byte(strings.Repeat("x", len(body)-1)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(child, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	n.Reset()
+	if got := grokSubagentCount(n, "subagent_finished"); got != 1 {
+		t.Errorf("count after Reset = %d, want the cached 1", got)
+	}
+	if err := os.Chtimes(child, info.ModTime().Add(time.Second), info.ModTime().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	n.Reset()
+	if got := grokSubagentCount(n, "subagent_finished"); got != 0 {
+		t.Errorf("count after a change = %d, want 0 (reread)", got)
+	}
+}
+
+func TestGrokChildCountCaps(t *testing.T) {
+	chunk := string(grokChunk("agent_message_chunk", "a", "p", "e1")) + "\n"
+	long := string(grokChunk("agent_message_chunk", strings.Repeat("z", grokChildMaxLine), "q", "e2")) + "\n"
+	dir, _ := grokChildRig(t, long+chunk)
+	if got := grokSubagentCount(NewGrokWith(GrokOptions{SessionDir: dir}), "subagent_finished"); got != 1 {
+		t.Errorf("count with an over-long line = %d, want 1 (long line skipped)", got)
+	}
+	lines := grokChildMaxBytes/len(chunk) + 10
+	dir, _ = grokChildRig(t, strings.Repeat(chunk, lines))
+	if got := grokSubagentCount(NewGrokWith(GrokOptions{SessionDir: dir}), "subagent_finished"); got != lines {
+		t.Errorf("count of a file over the cap = %d, want its %d newlines", got, lines)
 	}
 }

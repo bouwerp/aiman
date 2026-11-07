@@ -8,7 +8,7 @@ import (
 // toolCall starts a running tool call keyed by toolCallId.
 func (g *grokNormaliser) toolCall(l *grokLine) []Delta {
 	id := l.upd.ToolCallID
-	if id == "" {
+	if id == "" || g.closed["tool:"+id] {
 		return nil
 	}
 	if it, ok := g.calls[id]; ok {
@@ -28,9 +28,10 @@ func (g *grokNormaliser) newCall(l *grokLine) *Item {
 }
 
 // toolUpdate moves a tool call's status and result. An update for a call
-// the file never started adds the call.
+// the file never started adds the call. A call that reaches a terminal
+// status is forgotten; later lines for it are dropped.
 func (g *grokNormaliser) toolUpdate(l *grokLine) []Delta {
-	if l.upd.ToolCallID == "" {
+	if l.upd.ToolCallID == "" || g.closed["tool:"+l.upd.ToolCallID] {
 		return nil
 	}
 	it, known := g.calls[l.upd.ToolCallID]
@@ -51,6 +52,8 @@ func (g *grokNormaliser) toolUpdate(l *grokLine) []Delta {
 		if !it.At.IsZero() && l.at.After(it.At) {
 			tc.DurationMS = l.at.Sub(it.At).Milliseconds()
 		}
+		delete(g.calls, l.upd.ToolCallID)
+		g.closed[it.ID] = true
 	}
 	if !known {
 		return g.add(l, it)
