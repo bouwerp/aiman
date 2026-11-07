@@ -179,6 +179,37 @@ func TestCodexCompactionListedOnce(t *testing.T) {
 	}
 }
 
+func TestCodexSeenIsBoundedToTurn(t *testing.T) {
+	n := NewCodex()
+	cn, ok := n.(*codexNormaliser)
+	if !ok {
+		t.Fatal("NewCodex is not a *codexNormaliser")
+	}
+	started := `{"timestamp":"2026-11-07T10:00:00.000Z","ordinal":0,"type":"event_msg","payload":{"type":"task_started"}}`
+	var lines []string
+	for turn := range 50 {
+		id := fmt.Sprintf("m-%d", turn)
+		lines = append(lines,
+			started,
+			codexEventLine(0, fmt.Sprintf(`{"type":"AgentMessage","id":%q,"content":[{"text":"hi"}]}`, id)),
+			codexResponseLine(0, fmt.Sprintf(`{"type":"message","role":"assistant","id":%q,"content":[{"text":"hi"}]}`, id)),
+		)
+	}
+	// A call still open across a UserMessage keeps its id.
+	lines = append(lines,
+		codexResponseLine(0, codexCallA),
+		codexEventLine(0, `{"type":"UserMessage","id":"u-1","content":[{"text":"go"}]}`),
+		codexResponseLine(0, codexCallA),
+	)
+	items := codexTestFeed(t, n, lines...)
+	if len(items) != 52 {
+		t.Fatalf("items = %d, want 50 messages, one call, one user turn", len(items))
+	}
+	if len(cn.seen) != 2 {
+		t.Errorf("seen holds %d ids, want the open call and this turn's user message", len(cn.seen))
+	}
+}
+
 func TestCodexCollabAgentToolCallIsSystem(t *testing.T) {
 	items := codexTestFeed(t, NewCodex(),
 		codexEventLine(0, `{"type":"CollabAgentToolCall","id":"c-1","tool":"wait","status":"completed","agents_states":{"a":"x"}}`),

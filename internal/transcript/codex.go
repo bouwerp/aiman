@@ -14,7 +14,10 @@ import (
 // developer messages, turn_context, base_instructions, world_state,
 // encrypted_content and rate_limits are never decoded into an item.
 type codexNormaliser struct {
-	seen  map[string]bool // item ids already listed
+	// seen holds the ids listed this turn plus the open call ids. It exists to
+	// drop an AgentMessage or Reasoning event's twin response_item line, which
+	// sits in the same turn, so newTurn clears it and its size stays bounded.
+	seen  map[string]bool
 	calls map[string]*Item
 	open  []string // call ids with no output yet, oldest first
 	// compactionListed is set by a compacted line, which the ContextCompaction
@@ -150,8 +153,19 @@ func (n *codexNormaliser) feedEvent(pos int64, at time.Time, raw json.RawMessage
 		return n.feedItem(pos, at, ev.Item)
 	case "turn_aborted":
 		return n.abortCalls(pos)
+	case "task_started":
+		n.newTurn()
 	}
 	return nil
+}
+
+// newTurn forgets the previous turn's ids. Open calls keep theirs, so a
+// repeated call line still adds nothing.
+func (n *codexNormaliser) newTurn() {
+	n.seen = make(map[string]bool, len(n.open))
+	for _, id := range n.open {
+		n.seen[id] = true
+	}
 }
 
 func (n *codexNormaliser) feedItem(pos int64, at time.Time, raw json.RawMessage) []Delta {
@@ -173,6 +187,7 @@ func (n *codexNormaliser) feedItem(pos int64, at time.Time, raw json.RawMessage)
 	switch it.Type {
 	case "UserMessage":
 		n.compactionListed = false
+		n.newTurn()
 		return n.addText(it.ID, "user", KindUser, pos, at, codexJoin(it.Content, ""))
 	case "AgentMessage":
 		return n.addText(it.ID, "assistant", KindAssistant, pos, at, codexJoin(it.Content, ""))
@@ -243,7 +258,7 @@ func (n *codexNormaliser) finishCall(pos int64, p codexResponse) []Delta {
 	}
 	it.Rev = pos
 	n.closeCall(p.CallID)
-	return []Delta{{Update: it}}
+	return []Delta{{Update: codexClone(it)}}
 }
 
 func (n *codexNormaliser) closeCall(id string) {
@@ -264,7 +279,7 @@ func (n *codexNormaliser) abortCalls(pos int64) []Delta {
 		it := n.calls[id]
 		it.ToolCall.Status = ToolError
 		it.Rev = pos
-		deltas = append(deltas, Delta{Update: it})
+		deltas = append(deltas, Delta{Update: codexClone(it)})
 		delete(n.calls, id)
 	}
 	n.open = nil
