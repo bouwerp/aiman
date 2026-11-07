@@ -62,7 +62,12 @@ func TestAllowlistMethodsExist(t *testing.T) {
 }
 
 func TestAllowlistDestructiveSet(t *testing.T) {
-	want := []string{"agents.move_prefix", "agents.update", "pty.forget", "pty.kill", "review.post", "session.forget"}
+	want := []string{
+		"agents.move_prefix", "agents.update",
+		"pty.create", "pty.forget", "pty.input", "pty.kill", "pty.run",
+		"review.post",
+		"session.create", "session.forget", "session.restart",
+	}
 	got := slices.Clone(deviceDestructiveMethods)
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
@@ -94,15 +99,20 @@ func TestDeviceMayCall(t *testing.T) {
 		{"ping", false, true},
 		{"session.list", false, true},
 		{"pty.capture", false, true},
-		{"session.create", false, true},
+		{"session.create", false, false},
+		{"session.create", true, true},
+		{"session.prompt", false, true},
+		{"steer.send", false, true},
 		{"session.rename", false, true},
 		{"session.move", false, true},
-		{"session.restart", false, true},
+		{"session.restart", false, false},
+		{"session.restart", true, true},
 		{"session.terminate", false, true},
 		{"repo.list", false, true},
 		{"host.stats", false, true},
 		{"todo.approve_design", false, true},
-		{"pty.input", false, true},
+		{"pty.input", false, false},
+		{"pty.input", true, true},
 		{"push.register", false, true},
 		{"pty.kill", false, false},
 		{"pty.kill", true, true},
@@ -113,8 +123,10 @@ func TestDeviceMayCall(t *testing.T) {
 		{"todo.mirror", true, false},
 		{"context.put", true, false},
 		{"session.register", true, false},
-		{"pty.create", true, false},
-		{"pty.run", true, false},
+		{"pty.create", false, false},
+		{"pty.create", true, true},
+		{"pty.run", false, false},
+		{"pty.run", true, true},
 		{"design.publish", true, false},
 		{"handover.write", true, false},
 		{"pty.attach", true, false},

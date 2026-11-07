@@ -7,8 +7,9 @@ info:
     a bearer token except GET /v1/health and POST /v1/pair. The token is the
     host token (full access, used by the TUI) or a device token minted by
     POST /v1/pair. Device tokens pass a method allowlist on /v1/rpc, deny by
-    default; destructive methods also need the device's allow_destructive
-    flag. Every request also passes the tailnet identity check. POST /v1/rpc
+    default; destructive methods, the terminal WebSocket and to-do edits that
+    close, drop, rename or remove a gate item also need the device's
+    allow_destructive flag. Every request also passes the tailnet identity check. POST /v1/rpc
     is the whole API; REST reads are conveniences over the same socket
     methods.
 servers:
@@ -165,8 +166,10 @@ paths:
           description: Missing or wrong bearer token
         "403":
           description: >
-            Tailnet WhoIs failed, login not on the allow-list, or a device
-            token calling a method outside its allowlist
+            Tailnet WhoIs failed, login not on the allow-list, a device token
+            calling a method outside its allowlist, or a device without
+            allow_destructive closing, dropping, renaming or removing a gate
+            to-do through todo.update or todo.remove
         "502":
           description: Unix socket call failed
   /v1/sessions:
@@ -210,7 +213,9 @@ paths:
     get:
       tags: [terminal]
       operationId: attachTerminal
-      summary: WebSocket bridge of pty.attach. Phone UI is deferred.
+      summary: >
+        WebSocket bridge of pty.attach. A device token needs allow_destructive.
+        Phone UI is deferred.
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - in: query
@@ -229,6 +234,8 @@ paths:
           description: Switching protocols
         "401":
           description: unauthorized
+        "403":
+          description: Tailnet identity check failed, or a device without allow_destructive (forbidden)
   /v1/events:
     get:
       tags: [events]
@@ -1173,8 +1180,12 @@ components:
         allow_destructive:
           type: boolean
           description: >
-            Lets the device call pty.kill, pty.forget, session.forget,
-            review.post, agents.update and agents.move_prefix.
+            Lets the device call pty.input, pty.create, pty.run, pty.kill,
+            pty.forget, session.create, session.restart, session.forget,
+            review.post, agents.update and agents.move_prefix, open the
+            terminal WebSocket, and close, drop, rename or remove a to-do whose
+            ref starts with gate:. Other to-do edits, session.prompt and
+            steer.send do not need it.
     DeviceList:
       type: object
       required: [devices]
