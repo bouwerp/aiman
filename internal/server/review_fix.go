@@ -19,6 +19,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/review"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // Refusal codes of review.fix and review.push.
@@ -605,7 +606,7 @@ func (s *Server) checkFix(ctx context.Context, remote domain.RemoteExecutor, t f
 // controls the tree, so its replace refs are ignored: they could show serve a
 // different commit from the one that gets pushed.
 func fixTreeGit(tree string) string {
-	return "git --no-replace-objects -C " + quoteArg(tree)
+	return "git --no-replace-objects -C " + shellx.Quote(tree)
 }
 
 // checkFixTree returns the tree's HEAD once it has commits past start, is clean
@@ -630,7 +631,7 @@ func checkFixTree(ctx context.Context, remote domain.RemoteExecutor, tree, start
 	if dirty := strings.TrimSpace(out); dirty != "" {
 		return "", fmt.Errorf("the fix tree is not clean: commit or remove:\n%s", dirty)
 	}
-	if _, err := remote.Execute(ctx, git+" merge-base --is-ancestor "+quoteArg(start)+" "+quoteArg(sha)); err != nil {
+	if _, err := remote.Execute(ctx, git+" merge-base --is-ancestor "+shellx.Quote(start)+" "+shellx.Quote(sha)); err != nil {
 		return "", fmt.Errorf("%s is not an ancestor of HEAD: do not rewrite history below your start", start)
 	}
 	return sha, nil
@@ -665,7 +666,7 @@ func readFixReport(fixer domain.Session, assigned []string) ([]string, error) {
 // fixChangedPaths lists the paths differing between start and sha. With renames
 // off, both sides of a rename are listed.
 func fixChangedPaths(ctx context.Context, remote domain.RemoteExecutor, tree, start, sha string) ([]string, error) {
-	out, err := remote.Execute(ctx, fixTreeGit(tree)+" diff --no-renames --name-only -z "+quoteArg(start)+" "+quoteArg(sha))
+	out, err := remote.Execute(ctx, fixTreeGit(tree)+" diff --no-renames --name-only -z "+shellx.Quote(start)+" "+shellx.Quote(sha))
 	if err != nil {
 		return nil, fmt.Errorf("diff the fix tree: %w: %s", err, strings.TrimSpace(out))
 	}
@@ -779,8 +780,8 @@ func (s *Server) exportFixTree(ctx context.Context, sess domain.Session) error {
 	}
 	index := filepath.Join(sb.Dir, "export.index")
 	defer func() { _ = os.Remove(index) }()
-	git := "GIT_INDEX_FILE=" + quoteArg(index) + " git -C " + quoteArg(sess.WorktreePath)
-	cmd := git + " add -A 2>&1 && " + git + " checkout-index -a --prefix=" + quoteArg(sb.Src+string(filepath.Separator)) + " 2>&1"
+	git := "GIT_INDEX_FILE=" + shellx.Quote(index) + " git -C " + shellx.Quote(sess.WorktreePath)
+	cmd := git + " add -A 2>&1 && " + git + " checkout-index -a --prefix=" + shellx.Quote(sb.Src+string(filepath.Separator)) + " 2>&1"
 	if out, err := remote.Execute(ctx, cmd); err != nil {
 		return fmt.Errorf("export the fix tree: %w: %s", err, strings.TrimSpace(out))
 	}

@@ -247,11 +247,6 @@ func (a serverTerminal) Stop(ctx context.Context, sess domain.Session) error {
 	return a.s.pty.Kill(sess.ID)
 }
 
-// quoteArg single-quotes s for a POSIX shell.
-func quoteArg(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // serveNotifier publishes every finished review on the hub and raises
 // review_done only when there is something for the user to act on.
 type serveNotifier struct{ s *Server }

@@ -171,6 +171,16 @@ func TestTakeFlagsDiscardIsBoolean(t *testing.T) {
 	}
 }
 
+func TestSessionCreateRefusesInvalidBaseFlag(t *testing.T) {
+	if _, err := sessionCreateParams(map[string]string{"base": "--upload-pack=x"}); err == nil {
+		t.Fatal("invalid base accepted")
+	}
+	params, err := sessionCreateParams(map[string]string{"base": "origin/main"})
+	if err != nil || params["base"] != "origin/main" {
+		t.Fatalf("params %v, err %v", params, err)
+	}
+}
+
 func TestSessionCreateRefusesInvalidBranchFlag(t *testing.T) {
 	if _, err := sessionCreateParams(map[string]string{"branch": "a b"}); err == nil {
 		t.Fatal("invalid branch accepted")

@@ -12,6 +12,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/review"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 type reviewDebugParams struct {
@@ -84,8 +85,8 @@ func (s *Server) handleReviewDebug(ctx context.Context, req Request) Response {
 }
 
 func (s *Server) startDebugPTY(sess domain.Session, sb review.Sandbox, composePath, inner string) error {
-	cmd := "docker compose -f " + quoteArg(composePath) +
-		" run --rm --service-ports sandbox sh -c " + quoteArg(inner)
+	cmd := "docker compose -f " + shellx.Quote(composePath) +
+		" run --rm --service-ports sandbox sh -c " + shellx.Quote(inner)
 	id := debugPTYID(sess.ID)
 	_ = s.pty.Kill(id)
 	_ = s.pty.Forget(id)

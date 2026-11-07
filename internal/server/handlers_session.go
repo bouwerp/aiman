@@ -23,6 +23,7 @@ import (
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
+	"github.com/bouwerp/aiman/internal/shellx"
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
@@ -758,6 +759,11 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
 	}
+	if params.Base != "" {
+		if err := domain.ValidBaseRef(params.Base); err != nil {
+			return errResp(req.ID, CodeInvalidParams, err.Error())
+		}
+	}
 	existing, err := s.loadSessions(ctx)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
@@ -1169,13 +1175,13 @@ func (s *Server) discardChild(ctx context.Context, sess domain.Session) error {
 // checkout is found through the common git dir. A path that is not a linked
 // worktree is left alone.
 func discardWorktreeScript(worktree, branch string) string {
-	script := "wt=" + quoteArg(worktree) + `
+	script := "wt=" + shellx.Quote(worktree) + `
 main="$(cd "$wt" 2>/dev/null && cd "$(git rev-parse --git-common-dir)/.." && pwd)" || exit 0
 [ -n "$main" ] && [ "$main" != "$(cd "$wt" && pwd)" ] || exit 0
 git -C "$main" worktree remove --force "$wt"
 `
 	if branch != "" {
-		script += `git -C "$main" branch -D ` + quoteArg(branch) + " >/dev/null 2>&1 || true\n"
+		script += `git -C "$main" branch -D ` + shellx.Quote(branch) + " >/dev/null 2>&1 || true\n"
 	}
 	return script
 }

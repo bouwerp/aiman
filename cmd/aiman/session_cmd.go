@@ -239,6 +239,11 @@ func sessionCreateParams(flags map[string]string) (map[string]any, error) {
 			return nil, err
 		}
 	}
+	if b := flags["base"]; b != "" {
+		if err := domain.ValidBaseRef(b); err != nil {
+			return nil, err
+		}
+	}
 	params := map[string]any{}
 	for _, k := range []string{"name", "group", "parent", "for", "repo", "branch", "agent", "tier", "model", "effort", "dir", "prompt", "issue", "base", "review"} {
 		if flags[k] != "" {

@@ -14,6 +14,7 @@ import (
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/review"
+	"github.com/bouwerp/aiman/internal/shellx"
 	"github.com/bouwerp/aiman/internal/todo"
 )
 
@@ -310,7 +311,7 @@ func (s *Server) deltaRound(ctx context.Context, t reviewTarget, st review.State
 	if err != nil {
 		return nil
 	}
-	cmd := "git -C " + quoteArg(t.sess.WorktreePath) + " diff --no-renames --numstat " + quoteArg(round.StartSHA) + " " + quoteArg(round.PushedSHA)
+	cmd := "git -C " + shellx.Quote(t.sess.WorktreePath) + " diff --no-renames --numstat " + shellx.Quote(round.StartSHA) + " " + shellx.Quote(round.PushedSHA)
 	out, err := remote.Execute(ctx, cmd)
 	if err != nil {
 		return nil
@@ -349,7 +350,7 @@ func (s *Server) writeFixPatch(ctx context.Context, t reviewTarget, round review
 	if err != nil {
 		return err
 	}
-	out, err := remote.Execute(ctx, "git -C "+quoteArg(t.sess.WorktreePath)+" diff "+quoteArg(round.StartSHA)+" "+quoteArg(round.PushedSHA))
+	out, err := remote.Execute(ctx, "git -C "+shellx.Quote(t.sess.WorktreePath)+" diff "+shellx.Quote(round.StartSHA)+" "+shellx.Quote(round.PushedSHA))
 	if err != nil {
 		return fmt.Errorf("diff the fix: %w: %s", err, strings.TrimSpace(out))
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/review"
+	"github.com/bouwerp/aiman/internal/shellx"
 	"github.com/bouwerp/aiman/internal/todo"
 )
 
@@ -231,9 +232,9 @@ func (s *Server) assessmentDiff(ctx context.Context, t reviewTarget, head, base 
 	if s.remote == nil {
 		return "", errors.New("no remote to read the PR's diff on")
 	}
-	git := "git --no-replace-objects -C " + quoteArg(t.sess.WorktreePath)
-	cmd := "mb=$(" + git + " merge-base " + quoteArg(head) + " " + quoteArg("origin/"+base) + ") && " +
-		git + ` diff --no-color --no-ext-diff --no-textconv --text "$mb" ` + quoteArg(head)
+	git := "git --no-replace-objects -C " + shellx.Quote(t.sess.WorktreePath)
+	cmd := "mb=$(" + git + " merge-base " + shellx.Quote(head) + " " + shellx.Quote("origin/"+base) + ") && " +
+		git + ` diff --no-color --no-ext-diff --no-textconv --text "$mb" ` + shellx.Quote(head)
 	out, err := s.remote.Execute(ctx, cmd)
 	if err != nil {
 		return "", fmt.Errorf("diff %s against origin/%s: %w", head, base, err)

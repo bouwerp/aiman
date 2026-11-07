@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/pane"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // HandoverRestartNote is the steer text queued when a handover file is already
@@ -529,7 +529,7 @@ func diffStat(ctx context.Context, ex interface {
 		"base=%s; [ -n \"$base\" ] || base=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null) || exit 0\n"+
 		"mb=$(git merge-base \"$base\" HEAD 2>/dev/null) || exit 0\n"+
 		"git diff --stat \"$mb\"",
-		strconv.Quote(dir), strconv.Quote(base))
+		shellx.Quote(dir), shellx.Quote(base))
 	out, err := ex.Execute(ctx, cmd)
 	if err != nil {
 		return ""

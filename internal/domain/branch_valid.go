@@ -6,6 +6,26 @@ import (
 	"strings"
 )
 
+// ValidBaseRef reports whether ref can name one commit to branch from: a branch,
+// tag, sha or revision such as HEAD~1 that cannot be read as an option. Git
+// resolves it; this refuses only what no single revision holds.
+func ValidBaseRef(ref string) error {
+	switch {
+	case ref == "":
+		return errors.New("base ref is empty")
+	case strings.HasPrefix(ref, "-"):
+		return fmt.Errorf("base ref %q starts with '-'", ref)
+	case strings.Contains(ref, ".."):
+		return fmt.Errorf("base ref %q is a range", ref)
+	}
+	for i := range len(ref) {
+		if c := ref[i]; c < 0x20 || c == 0x7f || strings.IndexByte(" :?*[\\", c) >= 0 {
+			return fmt.Errorf("base ref %q contains the forbidden character %q", ref, c)
+		}
+	}
+	return nil
+}
+
 // ValidBranchName reports whether name is a branch name git's
 // `check-ref-format --branch` accepts and that cannot be read as an option.
 // The lone "@" is refused too: git reads it as HEAD, not as a name.

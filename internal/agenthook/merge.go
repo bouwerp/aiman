@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 func isDir(path string) bool {
@@ -244,7 +245,7 @@ func upsertTodoHook(root map[string]any, command, matcher string) bool {
 func museHookCommand(reporter string) string {
 	return fmt.Sprintf(
 		`id="${AIMAN_ID:-}"; if [ -z "$id" ]; then d="${PWD:-}"; while [ -n "$d" ] && [ "$d" != / ]; do if [ -f "$d/.aiman_session_id" ]; then id=$(tr -d '[:space:]' < "$d/.aiman_session_id"); break; fi; d=$(dirname "$d"); done; fi; [ -n "$id" ] || exit 0; AIMAN_ENV=1 AIMAN_ID="$id" exec %s`,
-		strconv.Quote(reporter),
+		shellx.Quote(reporter),
 	)
 }
 

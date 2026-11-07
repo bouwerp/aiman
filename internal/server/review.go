@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/local"
 	"github.com/bouwerp/aiman/internal/review"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // reviewFilesDir is the directory serve writes a review's inputs into, inside
@@ -386,7 +387,7 @@ func (s *Server) reviewRemote(caller string, existing []domain.Session) domain.R
 // (ORIG_HEAD), falling back to the head GitHub reported. The fetch can see a
 // newer head than the PR read a moment earlier.
 func stagedHead(ctx context.Context, remote domain.RemoteExecutor, worktree, reported string) string {
-	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --verify -q ORIG_HEAD", quoteArg(worktree)))
+	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --verify -q ORIG_HEAD", shellx.Quote(worktree)))
 	if sha := strings.TrimSpace(out); err == nil && isObjectID(sha) {
 		return sha
 	}
@@ -426,7 +427,7 @@ func (s *Server) prepareReviewScratch(ctx context.Context, remote domain.RemoteE
 // writeReviewFiles writes scratch/.aiman_review: diff.patch (the PR
 // worktree's staged diff), files.txt (its numstat) and meta.json.
 func writeReviewFiles(ctx context.Context, remote domain.RemoteExecutor, scratch string, meta reviewMeta) error {
-	wt := quoteArg(meta.Worktree)
+	wt := shellx.Quote(meta.Worktree)
 	diff, err := remote.Execute(ctx, "git -C "+wt+" diff --cached")
 	if err != nil {
 		return fmt.Errorf("diff the PR: %w", err)

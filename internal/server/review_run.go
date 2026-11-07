@@ -14,6 +14,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/review"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // ReviewRunTimeout is the default bound of one review.run. CallRaw waits a
@@ -138,12 +139,12 @@ func (s *Server) exportReviewTree(ctx context.Context, remote domain.RemoteExecu
 		run = func(ctx context.Context, dir, name string, args ...string) (string, error) {
 			parts := make([]string, 0, 3+len(args))
 			if name == "git" {
-				parts = append(parts, "git", "-C", quoteArg(dir))
+				parts = append(parts, "git", "-C", shellx.Quote(dir))
 			} else {
-				parts = append(parts, quoteArg(name))
+				parts = append(parts, shellx.Quote(name))
 			}
 			for _, a := range args {
-				parts = append(parts, quoteArg(a))
+				parts = append(parts, shellx.Quote(a))
 			}
 			return remote.Execute(ctx, strings.Join(parts, " "))
 		}
