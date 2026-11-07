@@ -138,6 +138,8 @@ type Server struct {
 	handovers *handoverchild.Manager
 	// designer publishes design pages; nil until SetDesignPublisher.
 	designer *design.Publisher
+	// transcripts opens vendor transcripts; nil until SetTranscripts.
+	transcripts TranscriptSource
 
 	// agents is the model tiers from this host's config; agentInstalled
 	// reports whether a command resolves on this host. session.create with no
