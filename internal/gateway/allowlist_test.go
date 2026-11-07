@@ -64,6 +64,7 @@ func TestAllowlistMethodsExist(t *testing.T) {
 func TestAllowlistDestructiveSet(t *testing.T) {
 	want := []string{
 		"agents.move_prefix", "agents.update",
+		"aws.login_start",
 		"pty.create", "pty.forget", "pty.input", "pty.kill", "pty.run",
 		"review.post",
 		"session.create", "session.forget", "session.restart",
@@ -119,6 +120,10 @@ func TestDeviceMayCall(t *testing.T) {
 		{"session.forget", false, false},
 		{"review.post", true, true},
 		{"agents.update", false, false},
+		{"aws.status", false, true},
+		{"aws.login_status", false, true},
+		{"aws.login_start", false, false},
+		{"aws.login_start", true, true},
 		{"todo.mirror", false, false},
 		{"todo.mirror", true, false},
 		{"context.put", true, false},

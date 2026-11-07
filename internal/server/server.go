@@ -391,12 +391,10 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleContextVerify(ctx, req)
 	case "usage.get", "limits.get":
 		return s.dispatchUsage(ctx, req)
-	case "agents.status":
-		return s.handleAgentsStatus(ctx, req)
-	case "agents.update":
-		return s.handleAgentsUpdate(ctx, req)
-	case "agents.move_prefix":
-		return s.handleAgentsMovePrefix(ctx, req)
+	case "aws.status", "aws.login_start", "aws.login_status":
+		return errResp(req.ID, CodeUnavailable, "aws: not implemented")
+	case "agents.status", "agents.update", "agents.move_prefix":
+		return s.dispatchAgents(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)
 	case "review.reveal", "review.post", "review.refresh", "review.run", "review.debug", "review.coverage",
@@ -455,6 +453,18 @@ func (s *Server) lockSession(id string) func() {
 	s.mu.Unlock()
 	m.Lock()
 	return m.Unlock
+}
+
+// dispatchAgents routes the agents.* methods.
+func (s *Server) dispatchAgents(ctx context.Context, req Request) Response {
+	switch req.Method {
+	case "agents.update":
+		return s.handleAgentsUpdate(ctx, req)
+	case "agents.move_prefix":
+		return s.handleAgentsMovePrefix(ctx, req)
+	default:
+		return s.handleAgentsStatus(ctx, req)
+	}
 }
 
 func errResp(id, code, msg string) Response {
