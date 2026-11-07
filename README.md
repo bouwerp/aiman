@@ -1249,6 +1249,23 @@ resolve independently, so setting only one leaves the other inheriting.
 
 The profile and region can differ per session; all other settings (role, account, session policy, duration) inherit from the remote config.
 
+#### Phone sign-in: the delegated permission set
+
+Phone sign-in reads credentials from a dedicated Identity Center permission set. Its inline policy is the same region-locked policy the laptop generates, so print it instead of writing it by hand:
+
+```bash
+aiman aws permission-set-policy --regions us-east-2,eu-west-1
+aiman aws permission-set-policy --account 123456789012 --steps
+```
+
+With no `--regions`, the command uses the first delegation in your config that has regions. `--name` replaces the default name, `aiman-delegated`. Then, once, in IAM Identity Center:
+
+1. Create a permission set named `aiman-delegated`, with session duration `PT12H`.
+2. Paste the printed JSON as its inline policy.
+3. Assign it to your user for the account.
+
+Finally, set `sso_role_name: aiman-delegated` in that account's aiman delegation.
+
 ### Session activity
 
 The dashboard reports whether each session is **working**, **needs input**, or
