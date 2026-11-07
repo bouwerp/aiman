@@ -74,7 +74,7 @@ func (s *Server) readTodoList(w http.ResponseWriter, id, session string) (domain
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return domain.TodoList{}, false
 	}
-	resp, err := server.CallRaw(s.Socket, "todo.get", params)
+	resp, err := serveClient(s.Socket).CallRaw("todo.get", params)
 	if err != nil || resp.Error != nil {
 		resp.ID = id
 		writeSocketResponse(w, resp, err)
