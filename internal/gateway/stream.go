@@ -18,7 +18,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	stream, err := server.EventsDial(s.Socket)
+	stream, err := serveClient(s.Socket).EventsDial()
 	if err != nil {
 		_ = conn.Close(websocket.StatusTryAgainLater, err.Error())
 		return
@@ -56,7 +56,7 @@ func (s *Server) terminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
-	att, err := server.AttachDial(s.Socket, id, cols, rows)
+	att, err := serveClient(s.Socket).AttachDial(id, cols, rows)
 	if err != nil {
 		_ = ws.Close(websocket.StatusTryAgainLater, err.Error())
 		return

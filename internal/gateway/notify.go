@@ -8,7 +8,6 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/notify"
-	"github.com/bouwerp/aiman/internal/server"
 )
 
 // NotifyCursorFileName is the gateway's notify.since cursor.
@@ -33,7 +32,7 @@ func (s SocketSource) Since(ctx context.Context, after int64, limit int) ([]doma
 	if err != nil {
 		return nil, 0, err
 	}
-	resp, err := server.CallRaw(s.Socket, "notify.since", raw)
+	resp, err := serveClient(s.Socket).CallRaw("notify.since", raw)
 	if err != nil {
 		return nil, 0, err
 	}
