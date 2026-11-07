@@ -137,9 +137,14 @@ func fakePairRunner(t *testing.T, active, pairOut string, pairErr error) *[]pair
 	return &calls
 }
 
+// pairTestVersion is a real release, so an update in these tests never asks
+// GitHub for a tag.
+const pairTestVersion = "v0.29.3"
+
 func pairPage(t *testing.T) (*Model, tea.Cmd) {
 	t.Helper()
 	m := NewModel(twoRemoteCfg(), nil, nil, &mockSessionRepo{}, nil, nil, nil)
+	m.version = pairTestVersion
 	m.state = viewStateAgentAPI
 	_, cmd := m.handleAgentAPIUpdate(pressRune('p'))
 	if m.state != viewStateGatewayPair || cmd == nil {
@@ -353,7 +358,7 @@ func TestGatewayPairVersionGate(t *testing.T) {
 		},
 		{
 			name: "unparseable after update still pairs", active: "active", versions: []string{old, "aiman-gateway dev"},
-			steps: "probe update probe pair", wants: []string{"ABCDEFGHJK", "Updated aiman-gateway to the latest release"},
+			steps: "probe update probe pair", wants: []string{"ABCDEFGHJK", "Updated aiman-gateway to " + pairTestVersion},
 		},
 		{
 			name: "missing is an install message, not an update", active: "inactive", versions: []string{"missing"},
