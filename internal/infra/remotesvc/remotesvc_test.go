@@ -111,7 +111,7 @@ func TestServeUnitFileIsUserService(t *testing.T) {
 }
 
 func TestInstallScriptEnablesLingerAndUnit(t *testing.T) {
-	s := InstallEnableScript(KindServe)
+	s := InstallEnableScript(KindServe, testTag)
 	for _, want := range []string{
 		"systemctl --user daemon-reload",
 		"systemctl --user enable --now aiman-serve.service",
@@ -137,7 +137,7 @@ func TestStartStopUpdateScripts(t *testing.T) {
 	if !strings.Contains(stop, "systemctl --user stop aiman-serve") {
 		t.Fatalf("stop:\n%s", stop)
 	}
-	upd := UpdateScript(KindServe)
+	upd := UpdateScript(KindServe, testTag)
 	if !strings.Contains(upd, "install.sh") {
 		t.Fatalf("update:\n%s", upd)
 	}
@@ -148,7 +148,7 @@ func TestStartStopUpdateScripts(t *testing.T) {
 }
 
 func TestInstallEnablesLingerBeforeUserSystemd(t *testing.T) {
-	s := InstallEnableScript(KindServe)
+	s := InstallEnableScript(KindServe, testTag)
 	linger := strings.Index(s, "loginctl enable-linger")
 	show := strings.Index(s, "systemctl --user show-environment")
 	if linger < 0 || show < 0 || linger > show {
@@ -171,7 +171,7 @@ func TestStopTriggerDoesNotKillServe(t *testing.T) {
 
 func TestLifecycleScriptsSetRuntimeDir(t *testing.T) {
 	for _, s := range []string{
-		InstallEnableScript(KindServe),
+		InstallEnableScript(KindServe, testTag),
 		StartScript(KindServe),
 		StopScript(KindServe),
 		ProbeScript(KindServe),
@@ -240,7 +240,7 @@ func TestStartScriptResetsFailedAndClearsLeftovers(t *testing.T) {
 }
 
 func TestInstallScriptResetsFailedAndClearsLeftovers(t *testing.T) {
-	s := InstallEnableScript(KindServe)
+	s := InstallEnableScript(KindServe, testTag)
 	for _, want := range []string{
 		"reset-failed",
 		"[a]iman serve",
@@ -264,11 +264,11 @@ func TestServeUnitFileRaisesStartLimit(t *testing.T) {
 func TestScriptsHaveNoFmtLeftovers(t *testing.T) {
 	for _, k := range []Kind{KindServe, KindTrigger, KindGateway} {
 		scripts := map[string]string{
-			"install": InstallEnableScript(k),
+			"install": InstallEnableScript(k, testTag),
 			"start":   StartScript(k),
 			"stop":    StopScript(k),
 			"probe":   ProbeScript(k),
-			"update":  UpdateScript(k),
+			"update":  UpdateScript(k, testTag),
 			"unit":    UnitFile(k),
 		}
 		for name, s := range scripts {
@@ -333,7 +333,7 @@ func TestGatewayKindIdentity(t *testing.T) {
 			t.Errorf("proc pattern matches %q", cmd)
 		}
 	}
-	pipe := k.InstallPipe()
+	pipe := k.InstallPipeAt(testTag)
 	if !strings.Contains(pipe, "BINARY_NAME=aiman-gateway") {
 		t.Fatalf("install pipe %q", pipe)
 	}
@@ -371,8 +371,8 @@ func TestStopGatewayDoesNotKillServe(t *testing.T) {
 func TestStartRewritesUnitBeforeStopping(t *testing.T) {
 	for name, s := range map[string]string{
 		"start":   StartScript(KindServe),
-		"install": InstallEnableScript(KindServe),
-		"update":  UpdateScript(KindServe),
+		"install": InstallEnableScript(KindServe, testTag),
+		"update":  UpdateScript(KindServe, testTag),
 	} {
 		reload := strings.Index(s, "systemctl --user daemon-reload")
 		stop := strings.Index(s, "systemctl --user stop")
@@ -392,7 +392,7 @@ func TestStopScriptsSpareHolderProcesses(t *testing.T) {
 	for name, s := range map[string]string{
 		"stop":   StopScript(KindServe),
 		"start":  StartScript(KindServe),
-		"update": UpdateScript(KindServe),
+		"update": UpdateScript(KindServe, testTag),
 	} {
 		for _, line := range strings.Split(s, "\n") {
 			line = strings.TrimSpace(line)
@@ -450,8 +450,8 @@ func TestUpdateScriptGatewayLockstep(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(string(c.kind), func(t *testing.T) {
-			s := UpdateScript(c.kind)
-			if got := strings.Count(s, KindGateway.InstallPipe()); got != c.gatewayPipes {
+			s := UpdateScript(c.kind, testTag)
+			if got := strings.Count(s, KindGateway.InstallPipeAt(testTag)); got != c.gatewayPipes {
 				t.Fatalf("%d gateway installs, want %d:\n%s", got, c.gatewayPipes, s)
 			}
 			if got := strings.Count(s, "systemctl --user start aiman-gateway.service"); got != c.gatewayStarts {
@@ -460,8 +460,8 @@ func TestUpdateScriptGatewayLockstep(t *testing.T) {
 		})
 	}
 	// serve is running on the new release before the gateway step can fail.
-	s := UpdateScript(KindServe)
-	if strings.Index(s, "systemctl --user start aiman-serve.service") > strings.Index(s, KindGateway.InstallPipe()) {
+	s := UpdateScript(KindServe, testTag)
+	if strings.Index(s, "systemctl --user start aiman-serve.service") > strings.Index(s, KindGateway.InstallPipeAt(testTag)) {
 		t.Fatalf("gateway step must follow serve's start:\n%s", s)
 	}
 }
@@ -482,7 +482,7 @@ func TestUpdateScriptsParse(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	for _, k := range []Kind{KindServe, KindTrigger, KindGateway} {
-		if out, err := exec.Command(bash, "-n", "-c", UpdateScript(k)).CombinedOutput(); err != nil {
+		if out, err := exec.Command(bash, "-n", "-c", UpdateScript(k, testTag)).CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v\n%s", k, err, out)
 		}
 	}
@@ -532,7 +532,7 @@ func TestServeUpdateRunsGatewayLockstep(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cmd := exec.Command(bash, "-c", UpdateScript(KindServe))
+			cmd := exec.Command(bash, "-c", UpdateScript(KindServe, testTag))
 			cmd.Env = []string{"HOME=" + home, "PATH=" + stubs}
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("update: %v\n%s", err, out)

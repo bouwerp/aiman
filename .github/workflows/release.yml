@@ -102,3 +102,32 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Runs once every build job has uploaded, so checksums.txt covers all assets.
+  # It hashes what the release serves, not what a runner built. Until this job
+  # finishes install.sh and `aiman update` refuse the new tag.
+  checksums:
+    name: Publish checksums.txt and install.sh
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          # Five platforms times three binaries in the build matrix.
+          EXPECTED_ASSETS: 15
+        run: |
+          mkdir release-assets
+          gh release download "$TAG" --dir release-assets \
+            --pattern 'aiman-*.tar.gz' --pattern 'aiman-*.zip'
+          (cd release-assets && sha256sum aiman-*.tar.gz aiman-*.zip) > checksums.txt
+          count="$(wc -l < checksums.txt)"
+          if [ "$count" -ne "$EXPECTED_ASSETS" ]; then
+            echo "checksums.txt has $count assets, want $EXPECTED_ASSETS" >&2
+            exit 1
+          fi
+          gh release upload "$TAG" checksums.txt install.sh --clobber

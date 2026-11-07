@@ -44,7 +44,9 @@ and that track is nightly, cost-capped and never part of CI.
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
-GitHub Actions builds cross-platform binaries and creates the release automatically.
+GitHub Actions builds cross-platform binaries and creates the release automatically. A final job then hashes the uploaded archives into `checksums.txt` (one `<sha256>  <asset>` line per `.tar.gz` / `.zip`; unsigned) and publishes it with `install.sh` as release assets. Installs refuse a tag until that job finishes.
+
+Installs are pinned and verified. `Kind.InstallPipeAt(tag)` takes `install.sh` from that release and passes `VERSION=<tag>`; `install.sh` verifies the archive against that release's `checksums.txt` and exits non-zero with nothing installed on a mismatch or a missing file, and a pinned install never falls back to a source build. `aiman update` and `aiman downgrade` verify the same way (`downloadRelease`). The tag is the laptop's release for an install, the release it is moving to for an auto-update, the latest release for a manual `u`, and the latest release when a local build has no release of its own. **Releases published without `checksums.txt` cannot be installed by this code**, by `aiman downgrade` or by a pinned `install.sh`.
 
 ---
 

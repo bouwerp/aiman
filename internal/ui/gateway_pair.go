@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -156,12 +157,16 @@ func probeGateway(cfg *config.Config, host string) (domain.Daemon, error) {
 	return d, nil
 }
 
-// updateGateway installs the latest release and probes again, because the
-// install pipe can fail with exit 0 (curl failing into sh) and leave the old
-// binary restarted. Unparseable text after an update still goes on to the pair,
-// which the script bounds. The returned string is the release for the page.
-func updateGateway(cfg *config.Config, host string) (domain.Daemon, string, error) {
-	if _, err := gatewayScriptRunner(cfg, host, remotesvc.UpdateScript(remotesvc.KindGateway)); err != nil {
+// updateGateway installs this client's release (the latest for a local build)
+// and probes again, because the binary that answers may still be too old to pair.
+// Unparseable text after an update still goes on to the pair, which the script
+// bounds. The returned string is the release for the page.
+func updateGateway(cfg *config.Config, host, version string) (domain.Daemon, string, error) {
+	tag, err := remotesvc.InstallTag(context.Background(), version)
+	if err != nil {
+		return domain.Daemon{}, "", fmt.Errorf("update gateway: %w", err)
+	}
+	if _, err := gatewayScriptRunner(cfg, host, remotesvc.UpdateScript(remotesvc.KindGateway, tag)); err != nil {
 		return domain.Daemon{}, "", fmt.Errorf("update gateway: %w", err)
 	}
 	d, err := probeGateway(cfg, host)
@@ -170,7 +175,7 @@ func updateGateway(cfg *config.Config, host string) (domain.Daemon, string, erro
 	}
 	v, ok := remotesvc.ParseVersion(d.Version)
 	if !ok {
-		return d, "the latest release", nil
+		return d, tag, nil
 	}
 	if v.Less(gatewayPairMinVersion) {
 		return d, "", fmt.Errorf("aiman-gateway on %s is still %s after updating; pairing needs %s or newer",
@@ -181,14 +186,14 @@ func updateGateway(cfg *config.Config, host string) (domain.Daemon, string, erro
 
 // prepareGateway leaves a gateway that knows `pair` running on host and records
 // on msg what it had to do.
-func prepareGateway(cfg *config.Config, host string, msg *gatewayPairMsg) error {
+func prepareGateway(cfg *config.Config, host, version string, msg *gatewayPairMsg) error {
 	d, err := probeGateway(cfg, host)
 	if err != nil {
 		return err
 	}
 	wasRunning := d.Status == domain.DaemonStatusRunning
 	if gatewayNeedsUpdate(d.Version) {
-		d, msg.updatedTo, err = updateGateway(cfg, host)
+		d, msg.updatedTo, err = updateGateway(cfg, host, version)
 		if err != nil {
 			return err
 		}
@@ -221,10 +226,10 @@ func mintGatewayPair(cfg *config.Config, host string) (gatewayPairResult, error)
 
 // gatewayPairCmd brings the gateway on host up to a release that knows `pair`,
 // starts it when it is not running, then mints a pairing code.
-func gatewayPairCmd(cfg *config.Config, host string) tea.Cmd {
+func gatewayPairCmd(cfg *config.Config, host, version string) tea.Cmd {
 	return func() tea.Msg {
 		msg := gatewayPairMsg{host: host}
-		if msg.err = prepareGateway(cfg, host, &msg); msg.err != nil {
+		if msg.err = prepareGateway(cfg, host, version, &msg); msg.err != nil {
 			return msg
 		}
 		msg.result, msg.err = mintGatewayPair(cfg, host)
@@ -250,7 +255,7 @@ func (m *Model) enterGatewayPair() tea.Cmd {
 	}
 	m.gatewayPair = &gatewayPairView{host: d.RemoteHost, loading: true}
 	m.state = viewStateGatewayPair
-	return gatewayPairCmd(m.cfg, d.RemoteHost)
+	return gatewayPairCmd(m.cfg, d.RemoteHost, m.version)
 }
 
 func (v *gatewayPairView) reusable(now time.Time) bool {
@@ -301,7 +306,7 @@ func (m *Model) applyGatewayPair(msg gatewayPairMsg) (tea.Model, tea.Cmd) {
 		v.qr, msg.err = qrHalfBlock(msg.result.URI)
 	}
 	if msg.err != nil {
-		v.err = gatewayPairError(msg.host, msg.err)
+		v.err = gatewayPairError(msg.host, m.version, msg.err)
 		if m.state != viewStateGatewayPair {
 			return m, m.showToast("⚠️  phone pairing on "+msg.host+" failed", true, 6*time.Second)
 		}
@@ -314,10 +319,13 @@ func (m *Model) applyGatewayPair(msg gatewayPairMsg) (tea.Model, tea.Cmd) {
 	return m, m.queueGatewayPairTick()
 }
 
-func gatewayPairError(host string, err error) string {
+func gatewayPairError(host, version string, err error) string {
 	if errors.Is(err, errGatewayMissing) {
-		return "aiman-gateway is not installed on " + host + ". Install it with:\n" +
-			remotesvc.KindGateway.InstallPipe()
+		missing := "aiman-gateway is not installed on " + host + "."
+		if tag, ok := remotesvc.ReleaseTag(version); ok {
+			return missing + " Install it with:\n" + remotesvc.KindGateway.InstallPipeAt(tag)
+		}
+		return missing + " Install it from the phone gateway row on the daemons tab."
 	}
 	return err.Error()
 }
