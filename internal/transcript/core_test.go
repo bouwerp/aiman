@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -434,6 +435,20 @@ func TestRedactFixture(t *testing.T) {
 	}
 	if transcript.Redact([]byte("not json")) != nil {
 		t.Error("a line that is not JSON came through")
+	}
+}
+
+func TestRedactKeepsOrderAndNumbers(t *testing.T) {
+	in := `{"z":"a","a":1.50,"m":[true,null,{"y":"b","b":"","n":12345678901234567890}],"type":"t","kind":["x"],"state":{"v":"c"}}`
+	got := regexp.MustCompile(`"r[0-9a-f]{16}"`).ReplaceAllString(string(transcript.Redact([]byte(in))), `"S"`)
+	want := `{"z":"S","a":1.50,"m":[true,null,{"y":"S","b":"","n":12345678901234567890}],"type":"t","kind":["S"],"state":{"v":"S"}}`
+	if got != want {
+		t.Errorf("redacted\n got %s\nwant %s", got, want)
+	}
+	for _, bad := range []string{`{"a":"secret"} trailing`, `{"a":"secret"`, `["secret"`, `{"a"}`} {
+		if out := transcript.Redact([]byte(bad)); out != nil {
+			t.Errorf("Redact(%q) = %q, want nil", bad, out)
+		}
 	}
 }
 

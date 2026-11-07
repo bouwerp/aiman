@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 )
@@ -38,41 +40,99 @@ var redactSalt = sync.OnceValue(func() []byte {
 // Redact returns one JSON line with every string value replaced, except the
 // values of the enum-like keys type, role, name, status, subtype,
 // sessionUpdate, kind, state and method. Equal strings map to equal
-// replacements within one process, so ids still pair. Keys, numbers, booleans
-// and structure are kept; object keys come back sorted. Empty strings stay
-// empty. Fixtures under testdata are passed through it. A line that is not
-// JSON returns nil: nothing unredacted comes out.
+// replacements within one process, so ids still pair. Keys, numbers, booleans,
+// structure and key order are kept. Empty strings stay empty. Fixtures under
+// testdata are passed through it. A line that is not one JSON value returns
+// nil: nothing unredacted comes out.
 func Redact(line []byte) []byte {
 	dec := json.NewDecoder(bytes.NewReader(line))
 	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
+	var out bytes.Buffer
+	if err := redactValue(dec, &out, false); err != nil {
 		return nil
 	}
-	out, err := json.Marshal(redactValue(v))
-	if err != nil {
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil
 	}
-	return out
+	return out.Bytes()
 }
 
-func redactValue(v any) any {
-	switch t := v.(type) {
-	case string:
-		return redactString(t)
-	case []any:
-		for i := range t {
-			t[i] = redactValue(t[i])
+// redactValue copies one value from dec to out. keep says the value sits
+// directly under an enum key, which spares a string and nothing nested deeper.
+// It walks tokens, because decoding into a map would lose the key order.
+func redactValue(dec *json.Decoder, out *bytes.Buffer, keep bool) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch t := tok.(type) {
+	case json.Delim:
+		if t == '{' {
+			return redactObject(dec, out)
 		}
-	case map[string]any:
-		for k, val := range t {
-			if _, isString := val.(string); isString && enumKeys[k] {
-				continue
-			}
-			t[k] = redactValue(val)
+		return redactArray(dec, out)
+	case string:
+		if !keep {
+			t = redactString(t)
+		}
+		return writeJSON(out, t)
+	case json.Number:
+		out.WriteString(t.String())
+		return nil
+	default:
+		return writeJSON(out, t)
+	}
+}
+
+func redactObject(dec *json.Decoder, out *bytes.Buffer) error {
+	out.WriteByte('{')
+	for i := 0; dec.More(); i++ {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return errors.New("object key is not a string")
+		}
+		if err := writeJSON(out, key); err != nil {
+			return err
+		}
+		out.WriteByte(':')
+		if err := redactValue(dec, out, enumKeys[key]); err != nil {
+			return err
 		}
 	}
-	return v
+	out.WriteByte('}')
+	_, err := dec.Token() // the closing brace
+	return err
+}
+
+func redactArray(dec *json.Decoder, out *bytes.Buffer) error {
+	out.WriteByte('[')
+	for i := 0; dec.More(); i++ {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		if err := redactValue(dec, out, false); err != nil {
+			return err
+		}
+	}
+	out.WriteByte(']')
+	_, err := dec.Token() // the closing bracket
+	return err
+}
+
+func writeJSON(out *bytes.Buffer, v any) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	out.Write(raw)
+	return nil
 }
 
 func redactString(s string) string {
