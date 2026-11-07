@@ -18,25 +18,30 @@ var (
 	}
 	// deviceWriteMethods change state but cannot publish outside the host.
 	// todo.mirror is left out: it stands for the agent's own task list, which
-	// a phone does not have. session.restart and session.terminate stop an
-	// agent, but any paired phone may call them: the app confirms, and
-	// session.terminate refuses work it would lose without an explicit discard.
+	// a phone does not have. session.terminate stops an agent, but any paired
+	// phone may call it: the app confirms, and it refuses work it would lose
+	// without an explicit discard. todo.update and todo.remove on a gate item
+	// also need allow_destructive (gate_todo.go). todo.approve_design and
+	// todo.approve_review stay here because serve accepts them only from the
+	// list's own session, and a device has no caller.
 	deviceWriteMethods = []string{
-		"session.prompt", "session.create", "session.rename", "session.move",
-		"session.restart", "session.terminate",
+		"session.prompt", "session.rename", "session.move",
+		"session.terminate",
 		"steer.send",
 		"todo.add", "todo.update", "todo.move", "todo.remove",
 		"todo.ensure_done", "todo.mark_met", "todo.gate",
 		"todo.approve_design", "todo.approve_review",
 		"ci.watch",
-		"pty.input",
 		"push.register", "push.unregister",
 	}
-	// deviceDestructiveMethods kill terminals, drop sessions, post to
-	// GitHub or replace agent installs. A device needs allow_destructive.
+	// deviceDestructiveMethods kill terminals, drop sessions, post to GitHub,
+	// replace agent installs, or amount to a shell on the host: raw terminal
+	// input and starting an agent or a command. A device needs allow_destructive,
+	// as it does for the terminal WebSocket. session.prompt and steer.send are
+	// not here: they reach the agent's composer or its open dialog, not a shell.
 	deviceDestructiveMethods = []string{
-		"pty.kill", "pty.forget",
-		"session.forget",
+		"pty.input", "pty.create", "pty.run", "pty.kill", "pty.forget",
+		"session.create", "session.restart", "session.forget",
 		"review.post",
 		"agents.update", "agents.move_prefix",
 	}

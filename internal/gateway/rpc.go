@@ -22,8 +22,7 @@ func (s *Server) rpc(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing method", http.StatusBadRequest)
 		return
 	}
-	if p := principalFrom(r.Context()); !p.host && !deviceMayCall(body.Method, p.device.AllowDestructive) {
-		writeJSONError(w, http.StatusForbidden, body.ID, "forbidden", "method "+body.Method+" is not allowed for device tokens")
+	if !s.admitDevice(w, r, body) {
 		return
 	}
 	if body.Method == "pty.attach" || body.Method == "session.events" {
@@ -40,6 +39,23 @@ func (s *Server) rpc(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := serveClient(s.Socket).CallRaw(body.Method, params)
 	writeSocketResponse(w, resp, err)
+}
+
+// admitDevice applies a device token's limits and answers the request when they
+// refuse it. The host token is not limited.
+func (s *Server) admitDevice(w http.ResponseWriter, r *http.Request, body rpcBody) bool {
+	p := principalFrom(r.Context())
+	if p.host {
+		return true
+	}
+	if !deviceMayCall(body.Method, p.device.AllowDestructive) {
+		writeJSONError(w, http.StatusForbidden, body.ID, "forbidden", "method "+body.Method+" is not allowed for device tokens")
+		return false
+	}
+	if p.device.AllowDestructive || !gateCheckedMethod(body.Method) {
+		return true
+	}
+	return s.admitTodoEdit(w, body)
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
