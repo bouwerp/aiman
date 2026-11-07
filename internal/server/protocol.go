@@ -62,6 +62,11 @@ const (
 	// CodeUnavailable means serve could not get what was asked for and has
 	// nothing stale to offer. The gateway returns it too.
 	CodeUnavailable = "unavailable"
+	// CodeAWSNoSSO refuses aws.login_start for a delegation with no SSO facts.
+	CodeAWSNoSSO = "aws_no_sso"
+	// CodeAWSRateLimited refuses aws.login_start over the pending-login or
+	// start-rate limit.
+	CodeAWSRateLimited = "aws_rate_limited"
 )
 
 type Request struct {

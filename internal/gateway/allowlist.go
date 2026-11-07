@@ -15,6 +15,7 @@ var (
 		"ci.get",
 		"agents.status",
 		"repo.list", "host.stats",
+		"aws.status", "aws.login_status",
 	}
 	// deviceWriteMethods change state but cannot publish outside the host.
 	// todo.mirror is left out: it stands for the agent's own task list, which
@@ -39,11 +40,14 @@ var (
 	// input and starting an agent or a command. A device needs allow_destructive,
 	// as it does for the terminal WebSocket. session.prompt and steer.send are
 	// not here: they reach the agent's composer or its open dialog, not a shell.
+	// aws.login_start is here because approval is often one tap in a browser
+	// that already holds the portal session, so it can mint a host credential.
 	deviceDestructiveMethods = []string{
 		"pty.input", "pty.create", "pty.run", "pty.kill", "pty.forget",
 		"session.create", "session.restart", "session.forget",
 		"review.post",
 		"agents.update", "agents.move_prefix",
+		"aws.login_start",
 	}
 	// gatewayMethods are answered by the gateway itself, not serve.
 	gatewayMethods = []string{"push.register", "push.unregister"}
