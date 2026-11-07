@@ -72,6 +72,9 @@ func (f *flow) execute(ctx context.Context) outcome {
 		}
 		return failedOther(err)
 	}
+	if f.m.o.Writer == nil {
+		return outcome{state: StateFailed, failure: FailureWriteFailed, detail: "no writer"}
+	}
 	if err := f.m.o.Writer.WriteHostCredentials(f.d.Profile, creds); err != nil {
 		return outcome{state: StateFailed, failure: FailureWriteFailed}
 	}

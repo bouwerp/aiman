@@ -301,6 +301,9 @@ func (m *Manager) finish(id string, out outcome) {
 	if r, ok := m.logins[id]; ok {
 		r.login.State = out.state
 		r.login.Failure = out.failure
+		// The code and URL are only useful while approval is pending.
+		r.login.UserCode = ""
+		r.login.VerificationURIComplete = ""
 		r.finished = m.o.Now()
 	}
 	m.mu.Unlock()
