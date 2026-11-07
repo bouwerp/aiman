@@ -14,6 +14,7 @@ import (
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/agentupdate"
 	"github.com/bouwerp/aiman/internal/aimanskill"
+	"github.com/bouwerp/aiman/internal/awslogin"
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/contextstore"
 	"github.com/bouwerp/aiman/internal/coordinator"
@@ -22,6 +23,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/jira"
@@ -40,6 +42,37 @@ import (
 	"github.com/bouwerp/aiman/internal/usecase"
 	"github.com/bouwerp/aiman/internal/verify"
 )
+
+// awsCredentialsWriter writes the device flow's credentials into the host file.
+type awsCredentialsWriter struct {
+	path, lockPath string
+}
+
+func (w awsCredentialsWriter) WriteHostCredentials(profile string, creds *awsdelegation.SessionCredentials) error {
+	return awsdelegation.WriteHostCredentials(w.path, w.lockPath, profile, creds)
+}
+
+// wireAWSLogin starts the device-flow engine when this host has delegations and
+// returns the call that stops it, else nil and the aws.* methods stay unavailable.
+func wireAWSLogin(srv *server.Server, delegations []config.ServeAWSDelegation, home string) func() {
+	if len(delegations) == 0 {
+		return nil
+	}
+	if home == "" {
+		log.Printf("aws sign-in unavailable: no home directory")
+		return nil
+	}
+	credentials := filepath.Join(home, ".aws", "credentials")
+	engine := awslogin.New(awslogin.Options{
+		Home: home,
+		Writer: awsCredentialsWriter{
+			path:     credentials,
+			lockPath: filepath.Join(home, config.DirName, "aws-credentials.lock"),
+		},
+	})
+	srv.SetAWS(config.ServeAWSConfig{Delegations: delegations}, credentials, engine)
+	return engine.Close
+}
 
 func runServe() error {
 	if serveWantsHelp(os.Args[2:]) {
@@ -150,6 +183,9 @@ func runServe() error {
 	limitsManager := limits.NewManager(limits.DefaultSources(limits.HostEnv()), time.Now)
 	defer limitsManager.Close()
 	srv.SetLimits(limitsManager)
+	if closeAWS := wireAWSLogin(srv, cfg.AWS.Delegations, home); closeAWS != nil {
+		defer closeAWS()
+	}
 
 	// notifications
 	n := cfg.Notifications

@@ -169,6 +169,7 @@ type Server struct {
 	hostStats *hoststats.Sampler
 	// limits caches each provider's remaining allowance; nil until SetLimits.
 	limits *limits.Manager
+	aws    *awsState
 	// holderHeld overrides heldByHolder, so tests can fake a holder.
 	holderHeld func(pid int) bool
 
@@ -392,7 +393,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 	case "usage.get", "limits.get":
 		return s.dispatchUsage(ctx, req)
 	case "aws.status", "aws.login_start", "aws.login_status":
-		return errResp(req.ID, CodeUnavailable, "aws: not implemented")
+		return s.dispatchAWS(ctx, req)
 	case "agents.status", "agents.update", "agents.move_prefix":
 		return s.dispatchAgents(ctx, req)
 	case "design.publish":

@@ -84,7 +84,16 @@ const (
 	// to steer because of its author: comment id, author, association. The body
 	// is never recorded.
 	EventReviewCommentIgnored EventKind = "review.comment_ignored"
+	// EventAWSLoginStarted records a phone AWS sign-in's start: profile and
+	// state. Codes, urls, tokens and the login id are never recorded.
+	EventAWSLoginStarted EventKind = "aws.login_started"
+	// EventAWSLoginFinished records a sign-in's end: profile, state and failure.
+	EventAWSLoginFinished EventKind = "aws.login_finished"
 )
+
+// AWSLoginLedger is the ledger id of the aws.login_* rows. A sign-in belongs to
+// the host and only the operator may start one, so it has no session of its own.
+const AWSLoginLedger = "aws-login"
 
 // EventActor is who caused the event. `unknown` exists for rows imported from a
 // source that did not record an author; writers should not use it.
