@@ -190,7 +190,8 @@ Startup also prunes DB sessions whose explicit `RemoteHost` no longer matches an
 
 Key behaviours:
 - Uses `ControlMaster=auto` + `ControlPersist=10m` — all calls to the same host share one socket
-- Socket path: `~/.aiman/sockets/ssh-<sha1(user@host)[:16]>.sock`
+- Socket path: `~/.aiman/sockets/ssh-<sha256(user@host)[:16]>-noagent.sock` for bulk calls, `ssh-<hash>.sock-tty` for interactive attach
+- Only `AttachPTYSession` forwards the laptop's agent (`-A`, on its own master); every other call passes `ForwardAgent=no`, so a remote needs its own GitHub credentials for `git fetch`, `clone` and `push`.
 - Per-call timeout: **30 seconds** (`Execute`). `ExecuteWithTimeout` is for work that exceeds that (remote install/update uses `remotesvc.OpTimeout`, 3 minutes).
 - On transport errors: clears socket, retries up to 2×, then falls back to `ControlMaster=no`
 - `ResetControlSocket()`: sends `ssh -O exit` to gracefully stop the master, then removes the socket file. Call this before disruptive remote operations (e.g. stopping a session) to ensure a clean connection for the next call.
