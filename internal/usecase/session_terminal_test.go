@@ -3,11 +3,15 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/local"
 )
 
 // terminalRemote records Execute commands and hands back canned output.
@@ -251,7 +255,7 @@ func ptyCreateEnv(t *testing.T, spec PTYSpec) map[string]string {
 		t.Fatalf("create: %v", err)
 	}
 	for path, body := range r.written {
-		if !strings.HasPrefix(path, "/tmp/aiman-pty-") {
+		if !strings.HasPrefix(path, "$HOME/.aiman/tmp/aiman-pty-") {
 			continue
 		}
 		var params struct {
@@ -305,7 +309,7 @@ func TestCreatePTYSessionWritesParamsFile(t *testing.T) {
 	}
 	found := false
 	for path, body := range r.written {
-		if strings.HasPrefix(path, "/tmp/aiman-pty-") && strings.Contains(string(body), `"AWS_PROFILE":"prod"`) {
+		if strings.HasPrefix(path, "$HOME/.aiman/tmp/aiman-pty-") && strings.Contains(string(body), `"AWS_PROFILE":"prod"`) {
 			found = true
 		}
 	}
@@ -327,7 +331,7 @@ func TestCreatePTYSessionSendsRoleAndParent(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	for path, body := range r.written {
-		if !strings.HasPrefix(path, "/tmp/aiman-pty-") {
+		if !strings.HasPrefix(path, "$HOME/.aiman/tmp/aiman-pty-") {
 			continue
 		}
 		var params struct {
@@ -382,7 +386,7 @@ func TestReviveIfNeededRoutesAndRefuses(t *testing.T) {
 	}
 	var created bool
 	for path, body := range r.written {
-		if strings.HasPrefix(path, "/tmp/aiman-pty-dead") && strings.Contains(string(body), `"claude --resume conv-42"`) {
+		if strings.HasPrefix(path, "$HOME/.aiman/tmp/aiman-pty-dead") && strings.Contains(string(body), `"claude --resume conv-42"`) {
 			created = true
 		}
 	}
@@ -445,7 +449,7 @@ func TestReviveHonoursUpdateGuardSetting(t *testing.T) {
 		}
 		var payload string
 		for path, body := range r.written {
-			if strings.HasPrefix(path, "/tmp/aiman-pty-g") {
+			if strings.HasPrefix(path, "$HOME/.aiman/tmp/aiman-pty-g") {
 				payload += string(body)
 			}
 		}
@@ -498,5 +502,91 @@ func TestNativeSessionIDRejectsCrossAgentSidecar(t *testing.T) {
 	}
 	if got := NativeSessionID(context.Background(), r, &s); got != "stored-grok" {
 		t.Fatalf("claude sidecar into grok must fall back to stored grok id, got %q", got)
+	}
+}
+
+// Serve creates sessions through local.Executor, whose WriteFile has no shell,
+// so the writer and the `aiman pty create` shell must resolve the same file.
+func TestCreatePTYSessionParamsFileThroughLocalExecutor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fake := "#!/bin/sh\nprintf '%s' \"$4\" > \"$HOME/seen.path\"\ncp -p \"$4\" \"$HOME/seen.json\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "aiman"), []byte(fake), 0o700); err != nil { //nolint:gosec // an executable test double
+		t.Fatal(err)
+	}
+	spec := PTYSpec{ID: "sid", Dir: "/d", Command: "bash", Env: map[string]string{"TOKEN": "x"}}
+	if err := CreatePTYSession(context.Background(), local.NewExecutor(""), spec); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	seen, err := os.ReadFile(filepath.Join(home, "seen.path")) //nolint:gosec // the test's own temp dir
+	if err != nil {
+		t.Fatalf("aiman pty create never ran: %v", err)
+	}
+	want := filepath.Join(home, ".aiman", "tmp", "aiman-pty-sid.json")
+	if string(seen) != want {
+		t.Fatalf("params path %q, want %q", seen, want)
+	}
+	copied, err := os.ReadFile(filepath.Join(home, "seen.json")) //nolint:gosec // the test's own temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(copied), `"TOKEN":"x"`) {
+		t.Fatalf("params content: %s", copied)
+	}
+	fi, err := os.Stat(filepath.Join(home, "seen.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %#o, want 0600", fi.Mode().Perm())
+	}
+	if _, err := os.Stat(want); !os.IsNotExist(err) {
+		t.Fatalf("params file left behind: %v", err)
+	}
+}
+
+type failingParamsRemote struct {
+	terminalRemote
+	failPrepare, failWrite bool
+}
+
+func (r *failingParamsRemote) Execute(ctx context.Context, cmd string) (string, error) {
+	if r.failPrepare && strings.Contains(cmd, "umask 077") {
+		return "denied", errors.New("exit 1")
+	}
+	return r.terminalRemote.Execute(ctx, cmd)
+}
+
+func (r *failingParamsRemote) WriteFile(ctx context.Context, path string, content []byte) error {
+	if r.failWrite {
+		return errors.New("broken pipe")
+	}
+	return r.terminalRemote.WriteFile(ctx, path, content)
+}
+
+func TestCreatePTYSessionPrepareFailureWritesNothing(t *testing.T) {
+	r := &failingParamsRemote{failPrepare: true}
+	err := CreatePTYSession(context.Background(), r, PTYSpec{ID: "sid", Dir: "/d", Command: "bash"})
+	if err == nil || !strings.Contains(err.Error(), "prepare pty params") {
+		t.Fatalf("err %v", err)
+	}
+	if len(r.written) != 0 {
+		t.Fatalf("wrote secrets into an unprepared path: %v", r.written)
+	}
+}
+
+func TestCreatePTYSessionWriteFailureRemovesPartialFile(t *testing.T) {
+	r := &failingParamsRemote{failWrite: true}
+	err := CreatePTYSession(context.Background(), r, PTYSpec{ID: "sid", Dir: "/d", Command: "bash"})
+	if err == nil || !strings.Contains(err.Error(), "write pty params") {
+		t.Fatalf("err %v", err)
+	}
+	last := r.commands[len(r.commands)-1]
+	if !strings.HasPrefix(last, "rm -f ") || !strings.Contains(last, "aiman-pty-sid.json") {
+		t.Fatalf("no cleanup: %q", last)
 	}
 }

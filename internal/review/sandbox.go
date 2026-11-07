@@ -165,8 +165,21 @@ type composeCondition struct {
 // without the PR's tree mounted.
 const cacheInitService = "cache-init"
 
+// offline reports whether PR code runs with no network, the default. Any other
+// value leaves network_mode unset rather than passing the string through, so
+// configuration cannot reach network_mode: host.
+func (sb Sandbox) offline() bool {
+	return sb.Network == "" || sb.Network == "none"
+}
+
 // Compose marshals aiman's sandbox compose file. It is never taken from the PR.
+// Compose accepts network_mode none beside ports and publishes nothing, so a
+// debug session would start with no way to attach; that pairing is refused.
 func Compose(sb Sandbox, uid, gid int) ([]byte, error) {
+	if sb.offline() && len(sb.Ports) > 0 {
+		return nil, errors.New("the review sandbox has no network, so it cannot publish debug ports or fetch a debugger; " +
+			"set review.sandbox.network: bridge, which also gives review run and review coverage network")
+	}
 	gomod, gocache, npm := sb.ID+"-gomod", sb.ID+"-gocache", sb.ID+"-npm"
 	svc := composeService{
 		Image:       sb.Image,
@@ -199,7 +212,7 @@ func Compose(sb Sandbox, uid, gid int) ([]byte, error) {
 			cacheInitService: {Condition: "service_completed_successfully"},
 		},
 	}
-	if sb.Network == "none" {
+	if sb.offline() {
 		svc.NetworkMode = "none"
 	}
 	for _, p := range sb.Ports {
