@@ -89,7 +89,15 @@ func (r *FakeRemote) Execute(ctx context.Context, cmd string) (string, error) {
 
 func (r *FakeRemote) GetRoot() string { return r.Dir }
 
+// WriteFile resolves a leading $HOME, as the real executors do, to the fake's
+// own directory so a case never writes into the real home.
 func (r *FakeRemote) WriteFile(_ context.Context, path string, content []byte) error {
+	if rest, ok := strings.CutPrefix(path, "$HOME/"); ok {
+		path = filepath.Join(r.Dir, rest)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+	}
 	return os.WriteFile(path, content, 0o600)
 }
 

@@ -184,7 +184,7 @@ func TestReviveIfNeededRevivesEmptyBackend(t *testing.T) {
 	}
 	var created bool
 	for path, body := range r.written {
-		if strings.HasPrefix(path, "/tmp/aiman-pty-dead") && strings.Contains(string(body), `"claude --resume conv-42"`) {
+		if strings.HasPrefix(path, "$HOME/.aiman/tmp/aiman-pty-dead") && strings.Contains(string(body), `"claude --resume conv-42"`) {
 			created = true
 		}
 	}
