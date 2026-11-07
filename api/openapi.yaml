@@ -950,7 +950,7 @@ components:
         expires_at:
           type: string
           format: date-time
-          description: When the device code expires. aws.login_status only.
+          description: When the device code expires. aws.login_start and aws.login_status.
         user_code:
           type: string
           description: aws.login_start only; aws.login_status never returns it.

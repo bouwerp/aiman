@@ -1,5 +1,3 @@
-//go:build acceptance
-
 package awslogin_test
 
 import (
