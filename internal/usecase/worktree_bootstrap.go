@@ -8,6 +8,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // BootstrapResult reports what ApplyWorktreeBootstrap did. SetupLog is the
@@ -23,11 +24,11 @@ type BootstrapResult struct {
 func bootstrapScript(mainRepo, worktree string, b config.RepoBootstrap) string {
 	var sb strings.Builder
 	sb.WriteString("set -e\n")
-	fmt.Fprintf(&sb, "m=%s\nw=%s\n", shellQuote(mainRepo), shellQuote(worktree))
+	fmt.Fprintf(&sb, "m=%s\nw=%s\n", shellx.Quote(mainRepo), shellx.Quote(worktree))
 
 	for _, p := range b.Copy {
 		p = filepath.Clean(p)
-		q := shellQuote(p)
+		q := shellx.Quote(p)
 		fmt.Fprintf(&sb, `if [ -e "$m"/%[1]s ] && [ ! -e "$w"/%[1]s ] && [ ! -L "$w"/%[1]s ]; then
   mkdir -p "$(dirname "$w"/%[1]s)" && cp -a "$m"/%[1]s "$w"/%[1]s
   printf 'COPIED %%s\n' %[1]s
@@ -47,7 +48,7 @@ mkdir -p "$(dirname "$ex")"
 	}
 	for _, p := range b.Symlink {
 		p = filepath.Clean(p)
-		q := shellQuote(p)
+		q := shellx.Quote(p)
 		fmt.Fprintf(&sb, `if [ -e "$m"/%[1]s ] && [ ! -e "$w"/%[1]s ] && [ ! -L "$w"/%[1]s ]; then
   mkdir -p "$(dirname "$w"/%[1]s)" && ln -s "$m"/%[1]s "$w"/%[1]s
   grep -qxF %[2]s "$ex" 2>/dev/null || printf '%%s\n' %[2]s >>"$ex"
@@ -55,7 +56,7 @@ mkdir -p "$(dirname "$ex")"
 else
   printf 'SKIPPED %%s\n' %[1]s
 fi
-`, q, shellQuote("/"+filepath.ToSlash(p)))
+`, q, shellx.Quote("/"+filepath.ToSlash(p)))
 	}
 
 	if strings.TrimSpace(b.Setup) != "" {
@@ -66,7 +67,7 @@ fi
 		fmt.Fprintf(&sb, `log="$(git -C "$w" rev-parse --absolute-git-dir)/aiman-setup.log"
 (cd "$w" && exec nohup setsid bash -lc %s) >"$log" 2>&1 </dev/null &
 printf 'SETUP_LOG %%s\n' "$log"
-`, shellQuote(b.Setup))
+`, shellx.Quote(b.Setup))
 	}
 	return sb.String()
 }

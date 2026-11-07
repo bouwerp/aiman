@@ -109,7 +109,7 @@ func TestApplyDelegatedCredentials_ChmodsFile(t *testing.T) {
 	if !m.execOK {
 		t.Fatal("expected .aws dir creation")
 	}
-	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `chmod 600 "/home/dev/.aws/credentials"`) {
+	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `chmod 600 '/home/dev/.aws/credentials'`) {
 		t.Fatalf("expected chmod 600 for ~/.aws/credentials, got:\n%s", joined)
 	}
 }
@@ -120,7 +120,7 @@ func TestApplyDelegatedProfile_ChmodsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `chmod 600 "/home/dev/.aws/config"`) {
+	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `chmod 600 '/home/dev/.aws/config'`) {
 		t.Fatalf("expected chmod 600 for ~/.aws/config, got:\n%s", joined)
 	}
 }
@@ -130,7 +130,7 @@ func TestRemoveSessionCredentialFiles(t *testing.T) {
 	if err := RemoveSessionCredentialFiles(context.Background(), m, "sess-1"); err != nil {
 		t.Fatal(err)
 	}
-	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `rm -rf "/home/dev/.aiman/aws/sess-1"`) {
+	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `rm -rf '/home/dev/.aiman/aws/sess-1'`) {
 		t.Fatalf("expected session AWS dir removal, got:\n%s", joined)
 	}
 }
@@ -140,7 +140,7 @@ func TestRemoveAllSessionCredentialFiles(t *testing.T) {
 	if err := RemoveAllSessionCredentialFiles(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
-	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `rm -rf "/home/dev/.aiman/aws"`) {
+	if joined := strings.Join(m.cmds, "\n"); !strings.Contains(joined, `rm -rf '/home/dev/.aiman/aws'`) {
 		t.Fatalf("expected all session AWS dirs removal, got:\n%s", joined)
 	}
 }

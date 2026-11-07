@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 type Config struct {
@@ -329,8 +330,8 @@ func (m *Manager) ScanGitRepos(ctx context.Context) ([]string, error) {
 
 func (m *Manager) ScanWorktrees(ctx context.Context, repoPath string) ([]string, error) {
 	cmd := fmt.Sprintf(
-		"bash -lc %q",
-		fmt.Sprintf("git -C %q worktree prune --expire=now >/dev/null 2>&1 || true; git -C %q worktree list --porcelain", repoPath, repoPath),
+		"bash -lc %s",
+		shellx.Quote(fmt.Sprintf("git -C %[1]s worktree prune --expire=now >/dev/null 2>&1 || true; git -C %[1]s worktree list --porcelain", shellx.Quote(repoPath))),
 	)
 	output, err := m.Execute(ctx, cmd)
 	if err != nil {

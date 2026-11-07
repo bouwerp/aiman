@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // pathPrefix puts the usual user-local install dirs on PATH; non-login SSH
@@ -52,9 +54,5 @@ if ! git -C "$wt" check-ignore -q graphify-out/ 2>/dev/null; then
 fi
 log="$(git -C "$wt" rev-parse --absolute-git-dir)/aiman-graphify.log"
 (cd "$wt" && exec nohup nice graphify update .) >"$log" 2>&1 </dev/null &
-`, shellQuote(worktree))
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+`, shellx.Quote(worktree))
 }

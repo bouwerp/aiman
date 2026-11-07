@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/remotefile"
 	"github.com/bouwerp/aiman/internal/infra/skills"
 	"github.com/bouwerp/aiman/internal/pane"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // TerminalExecutor is the slice of RemoteExecutor the terminal-routing helpers
@@ -112,7 +113,7 @@ func CreatePTYSession(ctx context.Context, remote TerminalExecutor, spec PTYSpec
 	if err := remote.WriteFile(ctx, path, raw); err != nil {
 		return fmt.Errorf("write pty params: %w", err)
 	}
-	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty create --params-file %q; rm -f %q", path, path))
+	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty create --params-file %s; rm -f %s", shellx.Quote(path), shellx.Quote(path)))
 	if err != nil {
 		return fmt.Errorf("pty create: %s: %w", strings.TrimSpace(out), err)
 	}
@@ -132,7 +133,7 @@ func mergeUpdateGuardEnv(env map[string]string, command string) {
 
 // CapturePTYPane returns recent output from a remote PTY session.
 func CapturePTYPane(ctx context.Context, remote TerminalExecutor, id string, lines int) (string, error) {
-	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty capture %q --lines %d", id, lines))
+	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty capture %s --lines %d", shellx.Quote(id), lines))
 	if err != nil {
 		return "", fmt.Errorf("pty capture: %w", err)
 	}
@@ -181,7 +182,7 @@ func ResizeSessionTerminal(ctx context.Context, remote TerminalExecutor, s domai
 // operator.
 func ResizePTYSession(ctx context.Context, remote TerminalExecutor, id string, cols, rows int) (bool, error) {
 	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-		"aiman pty resize %q --cols %d --rows %d", id, cols, rows))
+		"aiman pty resize %s --cols %d --rows %d", shellx.Quote(id), cols, rows))
 	if err != nil {
 		return false, fmt.Errorf("pty resize: %s: %w", strings.TrimSpace(out), err)
 	}
@@ -261,8 +262,8 @@ func formatSleepSeconds(d time.Duration) string {
 func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remotePath, marker string) error {
 	start := time.Now()
 	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-		"aiman pty input %[1]q --file %[2]q && sleep %[3]s && aiman pty input %[1]q --key enter",
-		id, remotePath, formatSleepSeconds(initialSettle))); err != nil {
+		"aiman pty input %[1]s --file %[2]s && sleep %[3]s && aiman pty input %[1]s --key enter",
+		shellx.Quote(id), shellx.Quote(remotePath), formatSleepSeconds(initialSettle))); err != nil {
 		log.Printf("prompt-deliver session=%s send failed after %s: %v", id, time.Since(start), err)
 		return err
 	}
@@ -274,7 +275,7 @@ func SendPTYFileConfirmed(ctx context.Context, remote TerminalExecutor, id, remo
 	_ = confirmSubmit(ctx, label, start, marker, DefaultSubmitTiming(),
 		func(ctx context.Context) (string, error) { return CapturePTYPane(ctx, remote, id, 0) },
 		func(ctx context.Context) error {
-			_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty input %q --key enter", id))
+			_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty input %s --key enter", shellx.Quote(id)))
 			return err
 		})
 	return nil
@@ -509,8 +510,8 @@ func KillPTYSession(ctx context.Context, remote TerminalExecutor, id string) err
 	if strings.TrimSpace(id) == "" {
 		return nil
 	}
-	_, _ = remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty kill %q", id))
-	_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty forget %q", id))
+	_, _ = remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty kill %s", shellx.Quote(id)))
+	_, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty forget %s", shellx.Quote(id)))
 	if err != nil && !strings.Contains(err.Error(), "not_found") && !strings.Contains(err.Error(), "has exited") {
 		return err
 	}
@@ -611,7 +612,7 @@ func SendSessionPrompt(ctx context.Context, remote TerminalExecutor, s domain.Se
 	if err := SendPTYFileConfirmed(ctx, remote, terminalID(s), path, prompt); err != nil {
 		return err
 	}
-	_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %q", path))
+	_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %s", shellx.Quote(path)))
 	return nil
 }
 
@@ -692,7 +693,7 @@ func ScanPTYSessions(ctx context.Context, remote TerminalExecutor) ([]PTYRecord,
 // PTYSessionExists reports whether the remote runtime currently holds a live
 // session with this id.
 func PTYSessionExists(ctx context.Context, remote TerminalExecutor, id string) bool {
-	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty get %q 2>/dev/null", id))
+	out, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf("aiman pty get %s 2>/dev/null", shellx.Quote(id)))
 	if err != nil {
 		return false
 	}

@@ -47,7 +47,7 @@ func TestDeliverInitialPromptPTYClearsWorkspaceTrustWithoutAPrompt(t *testing.T)
 // accepts it. Anything else is menu input.
 func TestAcceptWorkspaceTrustPTYPressesReturn(t *testing.T) {
 	script := acceptWorkspaceTrustPTY("sess-1")
-	if !strings.Contains(script, `aiman pty input "sess-1" --key enter`) {
+	if !strings.Contains(script, `aiman pty input 'sess-1' --key enter`) {
 		t.Errorf("trust acceptance must press Return: %s", script)
 	}
 	if strings.Contains(script, "--data") {

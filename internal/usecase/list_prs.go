@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/review"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // ListOpenPRs lists a repository's open pull requests via gh on the remote,
@@ -18,7 +18,7 @@ func ListOpenPRs(ctx context.Context, remote TerminalExecutor, slug string) ([]r
 			parts := make([]string, 0, 1+len(args))
 			parts = append(parts, name)
 			for _, a := range args {
-				parts = append(parts, strconv.Quote(a))
+				parts = append(parts, shellx.Quote(a))
 			}
 			// Hide stderr so SSH CombinedOutput stays valid JSON.
 			return remote.Execute(ctx, strings.Join(parts, " ")+" 2>/dev/null")

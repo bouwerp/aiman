@@ -17,6 +17,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/graphify"
 	"github.com/bouwerp/aiman/internal/infra/remotefile"
 	"github.com/bouwerp/aiman/internal/quality"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 type Engine struct {
@@ -92,7 +93,7 @@ func installBundledAimanSkill(ctx context.Context, remote domain.RemoteExecutor,
 	}
 	var first error
 	for _, p := range aimanskill.ProjectSkillFiles(worktreePath) {
-		_, _ = remote.Execute(ctx, fmt.Sprintf("mkdir -p %q", path.Dir(p)))
+		_, _ = remote.Execute(ctx, fmt.Sprintf("mkdir -p %s", shellx.Quote(path.Dir(p))))
 		for _, f := range aimanskill.Bundle() {
 			dst := aimanskill.Sibling(p, f.Name)
 			if _, err := remotefile.WriteIfChanged(ctx, remote, dst, []byte(f.Content)); err != nil && first == nil {
@@ -348,7 +349,7 @@ const remoteFileMarker = "__AIMAN_FILE__"
 // body travels as base64 because SSH output is whitespace-trimmed, which
 // would change the trailing newline and force a rewrite on every start.
 func readRemoteFile(ctx context.Context, remote domain.RemoteExecutor, p string) (string, bool, error) {
-	q := shellQuote(p)
+	q := shellx.Quote(p)
 	out, err := remote.Execute(ctx, "test -f "+q+" && printf '%s\\n' "+remoteFileMarker+" && base64 < "+q+" || true")
 	if err != nil {
 		return "", false, err
@@ -362,11 +363,6 @@ func readRemoteFile(ctx context.Context, remote domain.RemoteExecutor, p string)
 		return "", false, fmt.Errorf("decode %s: %w", p, err)
 	}
 	return string(raw), true, nil
-}
-
-// shellQuote wraps s in single quotes for POSIX sh.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func appendPrompt(existing, extra string) string {
@@ -401,7 +397,7 @@ func ensureSessionSummaryFile(ctx context.Context, remote domain.RemoteExecutor,
 }
 
 func remoteFileExists(ctx context.Context, remote domain.RemoteExecutor, path string) (bool, error) {
-	out, err := remote.Execute(ctx, fmt.Sprintf("if [ -f %q ]; then printf 1; fi", path))
+	out, err := remote.Execute(ctx, fmt.Sprintf("if [ -f %s ]; then printf 1; fi", shellx.Quote(path)))
 	if err != nil {
 		return false, err
 	}

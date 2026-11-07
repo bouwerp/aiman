@@ -12,6 +12,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/local"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // mockRemote implements domain.RemoteExecutor for testing
@@ -60,7 +61,7 @@ func TestListRemoteBranches_Success(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			`git -C "/home/dev/myrepo" branch -r --sort=-committerdate`: branchOutput,
+			`git -C '/home/dev/myrepo' branch -r --sort=-committerdate`: branchOutput,
 		},
 	}
 
@@ -107,7 +108,7 @@ func TestSetupRemoteWorktreeFromBranch_WorktreeAlreadyExists(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			`git -C "/home/dev/myrepo" worktree list --porcelain`: worktreeListOutput,
+			`git -C '/home/dev/myrepo' worktree list --porcelain`: worktreeListOutput,
 		},
 	}
 
@@ -128,20 +129,20 @@ func TestSetupRemoteWorktreeFromBranch_LocalBranchAlreadyExists_FallsBack(t *tes
 	}
 
 	// Simulate git worktree add -b failing with "already exists"
-	createWithBCmd := fmt.Sprintf("git -C /home/dev/myrepo worktree add -b feature-x ../%s origin/feature-x", worktreeDir)
-	createDirectCmd := fmt.Sprintf("git -C /home/dev/myrepo worktree add ../%s feature-x", worktreeDir)
+	createWithBCmd := fmt.Sprintf("git -C '/home/dev/myrepo' worktree add -b 'feature-x' -- '../%s' 'origin/feature-x'", worktreeDir)
+	createDirectCmd := fmt.Sprintf("git -C '/home/dev/myrepo' worktree add -- '../%s' 'feature-x'", worktreeDir)
 
 	remote := &mockRemote{
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin":                                                         "",
-			"git -C /home/dev/myrepo worktree list --porcelain":                                            "",
-			fmt.Sprintf(`bash -c 'if [ -d "/home/dev/myrepo/../%s" ]; then echo EXISTS; fi'`, worktreeDir): "",
-			`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`:                    "",
+			"git -C /home/dev/myrepo fetch origin":                                                               "",
+			"git -C /home/dev/myrepo worktree list --porcelain":                                                  "",
+			fmt.Sprintf(`bash -c 'if [ -d '\''/home/dev/myrepo/../%s'\'' ]; then echo EXISTS; fi'`, worktreeDir): "",
+			`bash -c 'if [ -d '\''/home/dev/myrepo/../feature-x'\'' ]; then echo EXISTS; fi'`:                    "",
 			createWithBCmd:  "fatal: a branch named 'feature-x' already exists",
 			createDirectCmd: "",
-			fmt.Sprintf(`realpath "/home/dev/myrepo/../%s"`, worktreeDir): fmt.Sprintf("/home/dev/%s", worktreeDir),
+			fmt.Sprintf(`realpath '/home/dev/myrepo/../%s'`, worktreeDir): fmt.Sprintf("/home/dev/%s", worktreeDir),
 		},
 		errors: map[string]error{
 			createWithBCmd: fmt.Errorf("exit status 128"),
@@ -168,9 +169,9 @@ func TestSetupRemoteWorktreeFromBranch_DirectoryAlreadyExists(t *testing.T) {
 		root: "/home/dev",
 		dirs: map[string]bool{"/home/dev/myrepo": true},
 		outputs: map[string]string{
-			"git -C /home/dev/myrepo fetch origin":                                                         "",
-			"git -C /home/dev/myrepo worktree list --porcelain":                                            "",
-			fmt.Sprintf(`bash -c 'if [ -d "/home/dev/myrepo/../%s" ]; then echo EXISTS; fi'`, worktreeDir): "EXISTS",
+			"git -C /home/dev/myrepo fetch origin":                                                               "",
+			"git -C /home/dev/myrepo worktree list --porcelain":                                                  "",
+			fmt.Sprintf(`bash -c 'if [ -d '\''/home/dev/myrepo/../%s'\'' ]; then echo EXISTS; fi'`, worktreeDir): "EXISTS",
 		},
 	}
 
@@ -231,17 +232,17 @@ func TestFindExistingWorktree_FallsBackToLegacyPathForSameRepo(t *testing.T) {
 			root: "/home/dev",
 			dirs: map[string]bool{"/home/dev/myrepo": true},
 			outputs: map[string]string{
-				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                                  "git@github.com:owner/myrepo.git",
-				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                                ".git",
-				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                                  "",
-				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:                           "abc1234",
-				`git -C "/home/dev/myrepo" worktree list --porcelain`:                                          "",
-				fmt.Sprintf(`bash -c 'if [ -d "/home/dev/myrepo/../%s" ]; then echo EXISTS; fi'`, worktreeDir): "",
-				`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`:                    "EXISTS",
-				`git -C "/home/dev/myrepo/../feature-x" rev-parse --git-dir 2>/dev/null || echo BROKEN`:        ".git/worktrees/feature-x",
-				`git -C "/home/dev/myrepo/../feature-x" rev-parse --git-common-dir 2>/dev/null || echo BROKEN`: "/home/dev/myrepo/.git",
-				`realpath "/home/dev/myrepo/../feature-x"`:                                                     "/home/dev/feature-x",
-				`git -C "/home/dev/feature-x" config --bool core.sparseCheckout 2>/dev/null || echo false`:     "false",
+				`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`:                                        "git@github.com:owner/myrepo.git",
+				`git -C '/home/dev/myrepo' rev-parse --git-dir`:                                                      ".git",
+				`git -C '/home/dev/myrepo' fetch origin 2>&1`:                                                        "",
+				`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null || echo EMPTY`:                                 "abc1234",
+				`git -C '/home/dev/myrepo' worktree list --porcelain`:                                                "",
+				fmt.Sprintf(`bash -c 'if [ -d '\''/home/dev/myrepo/../%s'\'' ]; then echo EXISTS; fi'`, worktreeDir): "",
+				`bash -c 'if [ -d '\''/home/dev/myrepo/../feature-x'\'' ]; then echo EXISTS; fi'`:                    "EXISTS",
+				`git -C '/home/dev/myrepo/../feature-x' rev-parse --git-dir 2>/dev/null || echo BROKEN`:              ".git/worktrees/feature-x",
+				`git -C '/home/dev/myrepo/../feature-x' rev-parse --git-common-dir 2>/dev/null || echo BROKEN`:       "/home/dev/myrepo/.git",
+				`realpath '/home/dev/myrepo/../feature-x'`:                                                           "/home/dev/feature-x",
+				`git -C '/home/dev/feature-x' config --bool core.sparseCheckout 2>/dev/null || echo false`:           "false",
 			},
 		},
 	}
@@ -367,10 +368,10 @@ func TestEnsureHealthyRepo_HealthyRepo(t *testing.T) {
 			root: "/home/dev",
 			dirs: map[string]bool{"/home/dev/myrepo": true},
 			outputs: map[string]string{
-				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:        "git@github.com:owner/myrepo.git",
-				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                      ".git",
-				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                        "",
-				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`: "abc1234",
+				`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`:        "git@github.com:owner/myrepo.git",
+				`git -C '/home/dev/myrepo' rev-parse --git-dir`:                      ".git",
+				`git -C '/home/dev/myrepo' fetch origin 2>&1`:                        "",
+				`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null || echo EMPTY`: "abc1234",
 			},
 		},
 	}
@@ -396,13 +397,13 @@ func TestEnsureHealthyRepo_MissingOriginRemote(t *testing.T) {
 			root: "/home/dev",
 			dirs: map[string]bool{"/home/dev/myrepo": true},
 			outputs: map[string]string{
-				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                 ".git",
-				`git -C "/home/dev/myrepo" remote add origin "git@github.com:owner/myrepo.git"`: "",
-				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                   "",
-				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:            "abc1234",
+				`git -C '/home/dev/myrepo' rev-parse --git-dir`:                                 ".git",
+				`git -C '/home/dev/myrepo' remote add origin 'git@github.com:owner/myrepo.git'`: "",
+				`git -C '/home/dev/myrepo' fetch origin 2>&1`:                                   "",
+				`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null || echo EMPTY`:            "abc1234",
 			},
 			errors: map[string]error{
-				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`: fmt.Errorf("exit status 1"),
+				`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`: fmt.Errorf("exit status 1"),
 			},
 		},
 	}
@@ -433,11 +434,11 @@ func TestEnsureHealthyRepo_MismatchedRemoteURL(t *testing.T) {
 			root: "/home/dev",
 			dirs: map[string]bool{"/home/dev/myrepo": true},
 			outputs: map[string]string{
-				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                     "git@github.com:old/myrepo.git",
-				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                   ".git",
-				`git -C "/home/dev/myrepo" remote set-url origin "git@github.com:new/myrepo.git"`: "",
-				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                     "",
-				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:              "abc1234",
+				`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`:                     "git@github.com:old/myrepo.git",
+				`git -C '/home/dev/myrepo' rev-parse --git-dir`:                                   ".git",
+				`git -C '/home/dev/myrepo' remote set-url origin 'git@github.com:new/myrepo.git'`: "",
+				`git -C '/home/dev/myrepo' fetch origin 2>&1`:                                     "",
+				`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null || echo EMPTY`:              "abc1234",
 			},
 		},
 	}
@@ -468,12 +469,12 @@ func TestEnsureHealthyRepo_FetchFailure(t *testing.T) {
 			root: "/home/dev",
 			dirs: map[string]bool{"/home/dev/myrepo": true},
 			outputs: map[string]string{
-				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`: "git@github.com:owner/myrepo.git",
-				`git -C "/home/dev/myrepo" rev-parse --git-dir`:               ".git",
-				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                 "fatal: Could not read from remote repository.",
+				`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`: "git@github.com:owner/myrepo.git",
+				`git -C '/home/dev/myrepo' rev-parse --git-dir`:               ".git",
+				`git -C '/home/dev/myrepo' fetch origin 2>&1`:                 "fatal: Could not read from remote repository.",
 			},
 			errors: map[string]error{
-				`git -C "/home/dev/myrepo" fetch origin 2>&1`: fmt.Errorf("exit status 128"),
+				`git -C '/home/dev/myrepo' fetch origin 2>&1`: fmt.Errorf("exit status 128"),
 			},
 		},
 	}
@@ -498,7 +499,7 @@ func TestEnsureHealthyRepo_FetchFailure(t *testing.T) {
 func TestEnsureHealthyRepo_MissingRepoWithLinkedWorktrees_BlocksClone(t *testing.T) {
 	mgr := NewManager(nil)
 	repoPath := "/home/dev/myrepo"
-	scanCmd := "bash -ce " + shellSingleQuote(linkedWorktreeScanScript(repoPath))
+	scanCmd := "bash -ce " + shellx.Quote(linkedWorktreeScanScript(repoPath))
 	remote := &commandRecorderRemote{
 		mockRemote: mockRemote{
 			root: "/home/dev",
@@ -527,17 +528,17 @@ func TestEnsureHealthyRepo_MissingRepoWithLinkedWorktrees_BlocksClone(t *testing
 func TestEnsureHealthyRepo_InvalidGitDirWithLinkedWorktrees_BlocksRecovery(t *testing.T) {
 	mgr := NewManager(nil)
 	repoPath := "/home/dev/myrepo"
-	scanCmd := "bash -ce " + shellSingleQuote(linkedWorktreeScanScript(repoPath))
+	scanCmd := "bash -ce " + shellx.Quote(linkedWorktreeScanScript(repoPath))
 	remote := &commandRecorderRemote{
 		mockRemote: mockRemote{
 			root: "/home/dev",
 			dirs: map[string]bool{repoPath: true},
 			outputs: map[string]string{
-				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`: "git@github.com:owner/myrepo.git",
+				`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`: "git@github.com:owner/myrepo.git",
 				scanCmd: "/home/dev/feature-x\n",
 			},
 			errors: map[string]error{
-				`git -C "/home/dev/myrepo" rev-parse --git-dir`: fmt.Errorf("exit status 128"),
+				`git -C '/home/dev/myrepo' rev-parse --git-dir`: fmt.Errorf("exit status 128"),
 			},
 		},
 	}
@@ -568,18 +569,18 @@ func TestSetupRemoteWorktree_DisablesSparseCheckoutPerWorktree(t *testing.T) {
 			root: "/home/dev",
 			dirs: map[string]bool{"/home/dev/myrepo": true},
 			outputs: map[string]string{
-				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                                                 "git@github.com:owner/myrepo.git",
-				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                                               ".git",
-				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                                                 "",
-				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:                                          "abc1234",
-				fmt.Sprintf(`bash -c 'if [ -d "/home/dev/myrepo/../%s" ]; then echo EXISTS; fi'`, worktreeDir):                "",
-				`bash -c 'if [ -d "/home/dev/myrepo/../feature-x" ]; then echo EXISTS; fi'`:                                   "",
-				`git -C "/home/dev/myrepo" rev-parse --verify origin/main`:                                                    "abc1234",
-				fmt.Sprintf(`git -C "/home/dev/myrepo" worktree add -B feature-x ../%s origin/main`, worktreeDir):             "",
-				fmt.Sprintf(`realpath "/home/dev/myrepo/../%s"`, worktreeDir):                                                 fmt.Sprintf("/home/dev/%s", worktreeDir),
-				fmt.Sprintf(`git -C "/home/dev/%s" config --bool core.sparseCheckout 2>/dev/null || echo false`, worktreeDir): "true",
-				`git -C "/home/dev/myrepo" config extensions.worktreeConfig true`:                                             "",
-				fmt.Sprintf(`git -C "/home/dev/%s" sparse-checkout disable`, worktreeDir):                                     "",
+				`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`:                                                 "git@github.com:owner/myrepo.git",
+				`git -C '/home/dev/myrepo' rev-parse --git-dir`:                                                               ".git",
+				`git -C '/home/dev/myrepo' fetch origin 2>&1`:                                                                 "",
+				`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null || echo EMPTY`:                                          "abc1234",
+				fmt.Sprintf(`bash -c 'if [ -d '\''/home/dev/myrepo/../%s'\'' ]; then echo EXISTS; fi'`, worktreeDir):          "",
+				`bash -c 'if [ -d '\''/home/dev/myrepo/../feature-x'\'' ]; then echo EXISTS; fi'`:                             "",
+				`git -C '/home/dev/myrepo' rev-parse --verify origin/main`:                                                    "abc1234",
+				fmt.Sprintf(`git -C '/home/dev/myrepo' worktree add -B 'feature-x' -- '../%s' 'origin/main'`, worktreeDir):    "",
+				fmt.Sprintf(`realpath '/home/dev/myrepo/../%s'`, worktreeDir):                                                 fmt.Sprintf("/home/dev/%s", worktreeDir),
+				fmt.Sprintf(`git -C '/home/dev/%s' config --bool core.sparseCheckout 2>/dev/null || echo false`, worktreeDir): "true",
+				`git -C '/home/dev/myrepo' config extensions.worktreeConfig true`:                                             "",
+				fmt.Sprintf(`git -C '/home/dev/%s' sparse-checkout disable`, worktreeDir):                                     "",
 			},
 		},
 	}
@@ -593,10 +594,10 @@ func TestSetupRemoteWorktree_DisablesSparseCheckoutPerWorktree(t *testing.T) {
 	}
 
 	joined := strings.Join(remote.commandsRun, "\n")
-	if !strings.Contains(joined, `git -C "/home/dev/myrepo" config extensions.worktreeConfig true`) {
+	if !strings.Contains(joined, `git -C '/home/dev/myrepo' config extensions.worktreeConfig true`) {
 		t.Fatalf("expected worktreeConfig enable command, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, fmt.Sprintf(`git -C "/home/dev/%s" sparse-checkout disable`, worktreeDir)) {
+	if !strings.Contains(joined, fmt.Sprintf(`git -C '/home/dev/%s' sparse-checkout disable`, worktreeDir)) {
 		t.Fatalf("expected sparse-checkout disable command, got:\n%s", joined)
 	}
 }
@@ -608,16 +609,16 @@ func TestFindExistingWorktree_DisablesSparseCheckoutForSparseWorktree(t *testing
 			root: "/home/dev",
 			dirs: map[string]bool{"/home/dev/myrepo": true},
 			outputs: map[string]string{
-				`git -C "/home/dev/myrepo" remote get-url origin 2>/dev/null`:                              "git@github.com:owner/myrepo.git",
-				`git -C "/home/dev/myrepo" rev-parse --git-dir`:                                            ".git",
-				`git -C "/home/dev/myrepo" fetch origin 2>&1`:                                              "",
-				`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null || echo EMPTY`:                       "abc1234",
-				`git -C "/home/dev/myrepo" worktree list --porcelain`:                                      "worktree /home/dev/feature-x\nHEAD abc123\nbranch refs/heads/feature-x\n\n",
-				`git -C "/home/dev/feature-x" rev-parse --git-dir 2>/dev/null || echo BROKEN`:              ".git/worktrees/feature-x",
-				`realpath "/home/dev/feature-x"`:                                                           "/home/dev/feature-x",
-				`git -C "/home/dev/feature-x" config --bool core.sparseCheckout 2>/dev/null || echo false`: "true",
-				`git -C "/home/dev/myrepo" config extensions.worktreeConfig true`:                          "",
-				`git -C "/home/dev/feature-x" sparse-checkout disable`:                                     "",
+				`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`:                              "git@github.com:owner/myrepo.git",
+				`git -C '/home/dev/myrepo' rev-parse --git-dir`:                                            ".git",
+				`git -C '/home/dev/myrepo' fetch origin 2>&1`:                                              "",
+				`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null || echo EMPTY`:                       "abc1234",
+				`git -C '/home/dev/myrepo' worktree list --porcelain`:                                      "worktree /home/dev/feature-x\nHEAD abc123\nbranch refs/heads/feature-x\n\n",
+				`git -C '/home/dev/feature-x' rev-parse --git-dir 2>/dev/null || echo BROKEN`:              ".git/worktrees/feature-x",
+				`realpath '/home/dev/feature-x'`:                                                           "/home/dev/feature-x",
+				`git -C '/home/dev/feature-x' config --bool core.sparseCheckout 2>/dev/null || echo false`: "true",
+				`git -C '/home/dev/myrepo' config extensions.worktreeConfig true`:                          "",
+				`git -C '/home/dev/feature-x' sparse-checkout disable`:                                     "",
 			},
 		},
 	}
@@ -631,7 +632,7 @@ func TestFindExistingWorktree_DisablesSparseCheckoutForSparseWorktree(t *testing
 	}
 
 	joined := strings.Join(remote.commandsRun, "\n")
-	if !strings.Contains(joined, `git -C "/home/dev/feature-x" sparse-checkout disable`) {
+	if !strings.Contains(joined, `git -C '/home/dev/feature-x' sparse-checkout disable`) {
 		t.Fatalf("expected sparse-checkout disable command, got:\n%s", joined)
 	}
 }
@@ -711,7 +712,7 @@ func TestDetectBaseBranch_UsesOriginHEAD(t *testing.T) {
 	remote := &mockRemote{
 		root: "/home/dev",
 		outputs: map[string]string{
-			`git -C "/home/dev/myrepo" rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: "origin/develop",
+			`git -C '/home/dev/myrepo' rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: "origin/develop",
 		},
 	}
 	got := detectBaseBranch(context.Background(), remote, "/home/dev/myrepo")
@@ -725,11 +726,11 @@ func TestDetectBaseBranch_FallsBackToWellKnownNames(t *testing.T) {
 		root: "/home/dev",
 		outputs: map[string]string{
 			// origin/HEAD not set, origin/main not present, origin/master present
-			`git -C "/home/dev/myrepo" rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: "refs/remotes/origin/HEAD",
-			`git -C "/home/dev/myrepo" rev-parse --verify origin/master 2>/dev/null`:                "abc1234",
+			`git -C '/home/dev/myrepo' rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: "refs/remotes/origin/HEAD",
+			`git -C '/home/dev/myrepo' rev-parse --verify origin/master 2>/dev/null`:                "abc1234",
 		},
 		errors: map[string]error{
-			`git -C "/home/dev/myrepo" rev-parse --verify origin/main 2>/dev/null`: fmt.Errorf("exit 128"),
+			`git -C '/home/dev/myrepo' rev-parse --verify origin/main 2>/dev/null`: fmt.Errorf("exit 128"),
 		},
 	}
 	got := detectBaseBranch(context.Background(), remote, "/home/dev/myrepo")
@@ -742,14 +743,14 @@ func TestDetectBaseBranch_FallsBackToHEAD(t *testing.T) {
 	remote := &mockRemote{
 		root: "/home/dev",
 		errors: map[string]error{
-			`git -C "/home/dev/myrepo" rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: fmt.Errorf("exit 128"),
-			`git -C "/home/dev/myrepo" rev-parse --verify origin/main 2>/dev/null`:                  fmt.Errorf("exit 128"),
-			`git -C "/home/dev/myrepo" rev-parse --verify origin/master 2>/dev/null`:                fmt.Errorf("exit 128"),
-			`git -C "/home/dev/myrepo" rev-parse --verify main 2>/dev/null`:                         fmt.Errorf("exit 128"),
-			`git -C "/home/dev/myrepo" rev-parse --verify master 2>/dev/null`:                       fmt.Errorf("exit 128"),
+			`git -C '/home/dev/myrepo' rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: fmt.Errorf("exit 128"),
+			`git -C '/home/dev/myrepo' rev-parse --verify origin/main 2>/dev/null`:                  fmt.Errorf("exit 128"),
+			`git -C '/home/dev/myrepo' rev-parse --verify origin/master 2>/dev/null`:                fmt.Errorf("exit 128"),
+			`git -C '/home/dev/myrepo' rev-parse --verify main 2>/dev/null`:                         fmt.Errorf("exit 128"),
+			`git -C '/home/dev/myrepo' rev-parse --verify master 2>/dev/null`:                       fmt.Errorf("exit 128"),
 		},
 		outputs: map[string]string{
-			`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null`: "abc1234",
+			`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null`: "abc1234",
 		},
 	}
 	got := detectBaseBranch(context.Background(), remote, "/home/dev/myrepo")
@@ -760,12 +761,12 @@ func TestDetectBaseBranch_FallsBackToHEAD(t *testing.T) {
 
 func TestDetectBaseBranch_EmptyRepoReturnsEmpty(t *testing.T) {
 	remote := &mockRemote{root: "/home/dev", errors: map[string]error{
-		`git -C "/home/dev/myrepo" rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: fmt.Errorf("exit 128"),
-		`git -C "/home/dev/myrepo" rev-parse --verify origin/main 2>/dev/null`:                  fmt.Errorf("exit 128"),
-		`git -C "/home/dev/myrepo" rev-parse --verify origin/master 2>/dev/null`:                fmt.Errorf("exit 128"),
-		`git -C "/home/dev/myrepo" rev-parse --verify main 2>/dev/null`:                         fmt.Errorf("exit 128"),
-		`git -C "/home/dev/myrepo" rev-parse --verify master 2>/dev/null`:                       fmt.Errorf("exit 128"),
-		`git -C "/home/dev/myrepo" rev-parse HEAD 2>/dev/null`:                                  fmt.Errorf("exit 128"),
+		`git -C '/home/dev/myrepo' rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null`: fmt.Errorf("exit 128"),
+		`git -C '/home/dev/myrepo' rev-parse --verify origin/main 2>/dev/null`:                  fmt.Errorf("exit 128"),
+		`git -C '/home/dev/myrepo' rev-parse --verify origin/master 2>/dev/null`:                fmt.Errorf("exit 128"),
+		`git -C '/home/dev/myrepo' rev-parse --verify main 2>/dev/null`:                         fmt.Errorf("exit 128"),
+		`git -C '/home/dev/myrepo' rev-parse --verify master 2>/dev/null`:                       fmt.Errorf("exit 128"),
+		`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null`:                                  fmt.Errorf("exit 128"),
 	}}
 	got := detectBaseBranch(context.Background(), remote, "/home/dev/myrepo")
 	if got != "" {
@@ -840,5 +841,41 @@ func TestCommitsAheadOfBaseQuotesBaseAndPath(t *testing.T) {
 	}
 	if n, err := m.CommitsAheadOfBase(context.Background(), ex, repo, "main~1"); err != nil || n != 1 {
 		t.Fatalf("path with $ and a space: ahead = %d, %v; want 1", n, err)
+	}
+}
+
+type recordingRemote struct {
+	*mockRemote
+	cmds []string
+}
+
+func (r *recordingRemote) Execute(ctx context.Context, cmd string) (string, error) {
+	r.cmds = append(r.cmds, cmd)
+	return r.mockRemote.Execute(ctx, cmd)
+}
+
+// A name git accepts can still hold $(...): the shell must get it as one literal
+// word, with the positionals behind --.
+func TestSetupRemoteWorktreeQuotesBranchForTheShell(t *testing.T) {
+	const branch = "feat$(touch x)"
+	remote := &recordingRemote{mockRemote: &mockRemote{
+		root: "/home/dev",
+		dirs: map[string]bool{"/home/dev/myrepo": true},
+		outputs: map[string]string{
+			`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`:        "git@github.com:owner/myrepo.git",
+			`git -C '/home/dev/myrepo' rev-parse --git-dir`:                      ".git",
+			`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null || echo EMPTY`: "abc1234",
+		},
+	}}
+	_, _ = NewManager(nil).SetupRemoteWorktree(context.Background(), remote,
+		domain.Repo{Name: "owner/myrepo", URL: "git@github.com:owner/myrepo.git"}, branch, "origin/main")
+	var add string
+	for _, cmd := range remote.cmds {
+		if strings.Contains(cmd, "worktree add") {
+			add = cmd
+		}
+	}
+	if !strings.Contains(add, "worktree add -B '"+branch+"' -- ") || !strings.HasSuffix(add, " 'origin/main'") {
+		t.Fatalf("worktree add = %q (all: %q)", add, remote.cmds)
 	}
 }

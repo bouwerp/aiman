@@ -92,7 +92,7 @@ func TestDiscoverFallsBackWhenBatchFails(t *testing.T) {
 	remote.repoPaths = []string{"/repos/app"}
 	remote.worktreesByRepo = map[string][]string{"/repos/app": {"/repos/app@feat"}}
 	remote.validDirs = map[string]bool{"/repos/app@feat": true}
-	remote.outputs = map[string]string{`git -C "/repos/app@feat" rev-parse --git-dir 2>/dev/null || echo BROKEN`: ".git"}
+	remote.outputs = map[string]string{`git -C '/repos/app@feat' rev-parse --git-dir 2>/dev/null || echo BROKEN`: ".git"}
 
 	sessions, err := NewSessionDiscoverer(remote, &recordingSyncEngine{}).Discover(context.Background(), "regent0")
 	if err != nil {

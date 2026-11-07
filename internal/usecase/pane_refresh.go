@@ -9,6 +9,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/pane"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // PaneCache is the last screen the client applied for one session. Hash is
@@ -48,9 +49,9 @@ func RefreshPreview(ctx context.Context, remote TerminalExecutor, s domain.Sessi
 const previewTailLines = 200
 
 func refreshPTYPreview(ctx context.Context, remote TerminalExecutor, s domain.Session, cache PaneCache) (PreviewUpdate, error) {
-	cmd := fmt.Sprintf("aiman pty capture %q --lines %d", terminalID(s), previewTailLines)
+	cmd := fmt.Sprintf("aiman pty capture %s --lines %d", shellx.Quote(terminalID(s)), previewTailLines)
 	if cache.Hash != "" {
-		cmd += fmt.Sprintf(" --have-hash %q", cache.Hash)
+		cmd += fmt.Sprintf(" --have-hash %s", shellx.Quote(cache.Hash))
 	}
 	out, err := remote.Execute(ctx, remoteAimanPreamble+cmd)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // SetupRemotePRWorktree puts pull request number of repo in the worktree
@@ -56,7 +57,7 @@ func (m *Manager) SetupRemotePRWorktree(ctx context.Context, remote domain.Remot
 		return domain.Worktree{}, err
 	}
 	resolved := worktreePath
-	if out, err := remote.Execute(ctx, "realpath "+shellQuote(worktreePath)); err == nil && strings.TrimSpace(out) != "" {
+	if out, err := remote.Execute(ctx, "realpath "+shellx.Quote(worktreePath)); err == nil && strings.TrimSpace(out) != "" {
 		resolved = strings.TrimSpace(out)
 	}
 	if err := StagePR(ctx, remote, resolved, base); err != nil {
@@ -74,7 +75,7 @@ func (m *Manager) SetupRemotePRWorktree(ctx context.Context, remote domain.Remot
 // readOrigin returns the clone's configured origin URL, as written in its
 // config rather than after url.<base>.insteadOf rewriting.
 func readOrigin(ctx context.Context, remote domain.RemoteExecutor, repoPath string) (string, error) {
-	out, err := remote.Execute(ctx, "git -C "+shellQuote(repoPath)+" config --get remote.origin.url")
+	out, err := remote.Execute(ctx, "git -C "+shellx.Quote(repoPath)+" config --get remote.origin.url")
 	if err != nil {
 		return "", err
 	}
@@ -141,7 +142,7 @@ func checkoutPRHead(ctx context.Context, remote domain.RemoteExecutor, repoPath,
 	}
 	if owned && healthy {
 		// FETCH_HEAD is per worktree, so the reused worktree fetches for itself.
-		wt := shellQuote(worktreePath)
+		wt := shellx.Quote(worktreePath)
 		if out, err := remote.Execute(ctx, "git -C "+wt+" fetch -q origin "+pull+" 2>&1"); err != nil {
 			return fmt.Errorf("fetch %s: %w: %s", pull, err, strings.TrimSpace(out))
 		}
@@ -155,18 +156,18 @@ func checkoutPRHead(ctx context.Context, remote domain.RemoteExecutor, repoPath,
 	if healthy {
 		return fmt.Errorf("%s is a worktree of another repository", worktreePath)
 	}
-	exists, _ := remote.Execute(ctx, fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath))
+	exists, _ := remote.Execute(ctx, "bash -c "+shellx.Quote(fmt.Sprintf("if [ -d %s ]; then echo EXISTS; fi", shellx.Quote(worktreePath))))
 	if strings.Contains(exists, "EXISTS") {
 		if err := safeRmWorktree(ctx, remote, worktreePath, repoPath); err != nil {
 			return fmt.Errorf("remove broken PR worktree: %w", err)
 		}
 	}
-	repoQ := shellQuote(repoPath)
+	repoQ := shellx.Quote(repoPath)
 	_, _ = remote.Execute(ctx, "git -C "+repoQ+" worktree prune --expire=now 2>/dev/null || true")
 	if out, err := remote.Execute(ctx, "git -C "+repoQ+" fetch -q origin "+pull+" 2>&1"); err != nil {
 		return fmt.Errorf("fetch %s: %w: %s", pull, err, strings.TrimSpace(out))
 	}
-	if out, err := remote.Execute(ctx, "git -C "+repoQ+" worktree add -q --detach "+shellQuote(worktreePath)+" FETCH_HEAD 2>&1"); err != nil {
+	if out, err := remote.Execute(ctx, "git -C "+repoQ+" worktree add -q --detach "+shellx.Quote(worktreePath)+" FETCH_HEAD 2>&1"); err != nil {
 		return fmt.Errorf("add PR worktree: %w: %s", err, strings.TrimSpace(out))
 	}
 	return nil
@@ -176,8 +177,8 @@ func checkoutPRHead(ctx context.Context, remote domain.RemoteExecutor, repoPath,
 // so serve's files stay out of git status while .gitignore, a file the PR
 // may change, stays untouched.
 func excludeAimanFiles(ctx context.Context, remote domain.RemoteExecutor, path string) error {
-	line := shellQuote(domain.AimanGeneratedFileGlob)
-	cmd := "ex=$(git -C " + shellQuote(path) + " rev-parse --path-format=absolute --git-path info/exclude) && " +
+	line := shellx.Quote(domain.AimanGeneratedFileGlob)
+	cmd := "ex=$(git -C " + shellx.Quote(path) + " rev-parse --path-format=absolute --git-path info/exclude) && " +
 		`mkdir -p "$(dirname "$ex")" && { grep -qxF ` + line + ` "$ex" 2>/dev/null || echo ` + line + ` >> "$ex"; }`
 	if out, err := remote.Execute(ctx, cmd); err != nil {
 		return fmt.Errorf("exclude aiman files: %w: %s", err, strings.TrimSpace(out))
@@ -188,8 +189,8 @@ func excludeAimanFiles(ctx context.Context, remote domain.RemoteExecutor, path s
 // StagePR soft-resets the worktree at path to its merge base with
 // origin/<base>, so HEAD is the base and the index and files are the PR head.
 func StagePR(ctx context.Context, remote domain.RemoteExecutor, path, base string) error {
-	wt := shellQuote(path)
-	cmd := "mb=$(git -C " + wt + " merge-base HEAD " + shellQuote("origin/"+base) + ") && git -C " + wt + ` reset -q --soft "$mb" 2>&1`
+	wt := shellx.Quote(path)
+	cmd := "mb=$(git -C " + wt + " merge-base HEAD " + shellx.Quote("origin/"+base) + ") && git -C " + wt + ` reset -q --soft "$mb" 2>&1`
 	if out, err := remote.Execute(ctx, cmd); err != nil {
 		return fmt.Errorf("stage the PR against origin/%s: %w: %s", base, err, strings.TrimSpace(out))
 	}
@@ -207,22 +208,22 @@ func (m *Manager) SetupFixTree(ctx context.Context, remote domain.RemoteExecutor
 		return errors.New("remote root not configured")
 	}
 	repoPath := computeMainRepoPath(root, repo.Name)
-	main, tree, commit := shellQuote(repoPath), shellQuote(path), shellQuote(sha)
+	main, tree, commit := shellx.Quote(repoPath), shellx.Quote(path), shellx.Quote(sha)
 	pin := "refs/aiman/fix-tree/" + sha
-	has := "git -C " + main + " cat-file -e " + shellQuote(sha+"^{commit}") + " 2>/dev/null || git -C " + main + fmt.Sprintf(" fetch -q origin pull/%d/head 2>&1", number)
+	has := "git -C " + main + " cat-file -e " + shellx.Quote(sha+"^{commit}") + " 2>/dev/null || git -C " + main + fmt.Sprintf(" fetch -q origin pull/%d/head 2>&1", number)
 	if out, err := remote.Execute(ctx, has); err != nil {
 		return fmt.Errorf("fetch PR head %s: %w: %s", sha, err, strings.TrimSpace(out))
 	}
-	if out, err := remote.Execute(ctx, "git -C "+main+" update-ref "+shellQuote(pin)+" "+commit+" 2>&1"); err != nil {
+	if out, err := remote.Execute(ctx, "git -C "+main+" update-ref "+shellx.Quote(pin)+" "+commit+" 2>&1"); err != nil {
 		return fmt.Errorf("pin %s: %w: %s", sha, err, strings.TrimSpace(out))
 	}
 	defer func() {
 		// The caller's context may be over by now; a stale pin only keeps a commit alive.
-		_, _ = remote.Execute(context.WithoutCancel(ctx), "git -C "+main+" update-ref -d "+shellQuote(pin))
+		_, _ = remote.Execute(context.WithoutCancel(ctx), "git -C "+main+" update-ref -d "+shellx.Quote(pin))
 	}()
 	steps := []string{
 		"git clone -q --no-checkout " + main + " " + tree,
-		"git -C " + tree + " fetch -q --no-tags " + main + " " + shellQuote(pin),
+		"git -C " + tree + " fetch -q --no-tags " + main + " " + shellx.Quote(pin),
 		"git -C " + tree + " remote remove origin",
 		"git -C " + tree + " checkout -q --detach " + commit,
 	}
@@ -250,12 +251,12 @@ func (m *Manager) PushFixTree(ctx context.Context, remote domain.RemoteExecutor,
 	if err := matchOrigin(origin, repoPath, repo.Name); err != nil {
 		return err
 	}
-	main := shellQuote(repoPath)
-	if out, err := remote.Execute(ctx, "git -C "+main+" fetch -q --no-tags "+shellQuote(tree)+" "+shellQuote(sha)+" 2>&1"); err != nil {
+	main := shellx.Quote(repoPath)
+	if out, err := remote.Execute(ctx, "git -C "+main+" fetch -q --no-tags "+shellx.Quote(tree)+" "+shellx.Quote(sha)+" 2>&1"); err != nil {
 		return fmt.Errorf("fetch %s from the fix tree: %w: %s", sha, err, strings.TrimSpace(out))
 	}
 	// LC_ALL keeps git's "[rejected]" readable whatever the host's locale.
-	refspec := shellQuote(sha + ":refs/heads/" + headRef)
+	refspec := shellx.Quote(sha + ":refs/heads/" + headRef)
 	out, err := remote.Execute(ctx, "LC_ALL=C git -C "+main+" -c core.hooksPath=/dev/null push origin "+refspec+" 2>&1")
 	if err == nil {
 		return nil

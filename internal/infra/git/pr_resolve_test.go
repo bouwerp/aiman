@@ -3,8 +3,9 @@ package git
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"testing"
+
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 func TestParseGitHubOwnerRepo(t *testing.T) {
@@ -50,19 +51,19 @@ func TestResolvePullRequestForBranch_headRefNameFallback(t *testing.T) {
 	branch := "FeatureZ"
 	owner, repo := "acme", "widget"
 	repoSlug := owner + "/" + repo
-	repoFlag := "--repo " + strconv.Quote(repoSlug)
+	repoFlag := "--repo " + shellx.Quote(repoSlug)
 
 	viewBody := `{"number":77,"title":"fix","state":"OPEN","isDraft":false,"mergedAt":"","url":"https://example/pr/77","reviewDecision":"","mergeable":"UNKNOWN","mergeStateStatus":"","reviews":[],"comments":[],"statusCheckRollup":[]}`
 
-	cmdView0 := fmt.Sprintf("cd %q && gh pr view --json %s%s", repoPath, prViewJSONFields, ghJSONCmdSuffix)
-	cmdViewRepo := fmt.Sprintf("cd %q && gh pr view %s --json %s%s", repoPath, repoFlag, prViewJSONFields, ghJSONCmdSuffix)
-	cmdViewBranch := fmt.Sprintf("cd %q && gh pr view %s %s --json %s%s", repoPath, strconv.Quote(branch), repoFlag, prViewJSONFields, ghJSONCmdSuffix)
+	cmdView0 := fmt.Sprintf("cd %s && gh pr view --json %s%s", shellx.Quote(repoPath), prViewJSONFields, ghJSONCmdSuffix)
+	cmdViewRepo := fmt.Sprintf("cd %s && gh pr view %s --json %s%s", shellx.Quote(repoPath), repoFlag, prViewJSONFields, ghJSONCmdSuffix)
+	cmdViewBranch := fmt.Sprintf("cd %s && gh pr view %s %s --json %s%s", repoPath, shellx.Quote(branch), repoFlag, prViewJSONFields, ghJSONCmdSuffix)
 	head := owner + ":" + branch
-	cmdListHead := fmt.Sprintf("cd %q && gh pr list %s --head %q --state all --limit 1 --json number%s",
-		repoPath, repoFlag, head, ghJSONCmdSuffix)
-	cmdScan := fmt.Sprintf("cd %q && gh pr list %s --state all --limit 50 --json number,headRefName,state%s",
-		repoPath, repoFlag, ghJSONCmdSuffix)
-	cmdViewNum := fmt.Sprintf("cd %q && gh pr view 77 --json %s%s", repoPath, prViewJSONFields, ghJSONCmdSuffix)
+	cmdListHead := fmt.Sprintf("cd %s && gh pr list %s --head %s --state all --limit 1 --json number%s",
+		shellx.Quote(repoPath), repoFlag, shellx.Quote(head), ghJSONCmdSuffix)
+	cmdScan := fmt.Sprintf("cd %s && gh pr list %s --state all --limit 50 --json number,headRefName,state%s",
+		shellx.Quote(repoPath), repoFlag, ghJSONCmdSuffix)
+	cmdViewNum := fmt.Sprintf("cd %s && gh pr view 77 --json %s%s", shellx.Quote(repoPath), prViewJSONFields, ghJSONCmdSuffix)
 
 	r := &mockRemote{
 		outputs: map[string]string{

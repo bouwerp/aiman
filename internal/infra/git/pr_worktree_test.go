@@ -21,8 +21,8 @@ func TestSetupRemotePRWorktreeFork(t *testing.T) {
 		dirs: map[string]bool{"/home/dev/r": true},
 		outputs: map[string]string{
 			`git -C '/home/dev/r' config --get remote.origin.url`:           "https://github.com/O/R.git",
-			`git -C "/home/dev/r" rev-parse --git-dir`:                      ".git",
-			`git -C "/home/dev/r" rev-parse HEAD 2>/dev/null || echo EMPTY`: "abc",
+			`git -C '/home/dev/r' rev-parse --git-dir`:                      ".git",
+			`git -C '/home/dev/r' rev-parse HEAD 2>/dev/null || echo EMPTY`: "abc",
 		},
 	}}
 	wt, err := mgr.SetupRemotePRWorktree(context.Background(), remote, domain.Repo{Name: "o/r"}, 7, "main")

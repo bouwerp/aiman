@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // hintRecordTag tags a co-author-hint line in WorktreeCoAuthorHintsCmd's output.
@@ -25,7 +27,7 @@ func WorktreeCoAuthorHintsCmd(paths []string) string {
 	}
 	quoted := make([]string, len(paths))
 	for i, p := range paths {
-		quoted[i] = shellQuote(p)
+		quoted[i] = shellx.Quote(p)
 	}
 	return `for wt in ` + strings.Join(quoted, " ") + `; do
   git -C "$wt" log --all -50 --format='%(trailers:key=Co-authored-by,valueonly)' 2>/dev/null | grep -v '^$' | sort -u | while IFS= read -r line; do

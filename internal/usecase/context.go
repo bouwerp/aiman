@@ -11,6 +11,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/remotefile"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 const ContextPackPrompt = `Read ` + domain.AimanContextFileName + ` — it contains notes from earlier sessions on this host. Use aiman context get ID for the full note.`
@@ -28,11 +29,11 @@ func FetchContextPack(ctx context.Context, remote contextRemote, group, repo str
 	b.WriteString(`PATH="$HOME/.local/bin:$PATH" aiman context pack`)
 	if g := strings.TrimSpace(group); g != "" {
 		b.WriteString(" --group ")
-		b.WriteString(posixQuote(g))
+		b.WriteString(shellx.Quote(g))
 	}
 	if r := strings.TrimSpace(repo); r != "" {
 		b.WriteString(" --repo ")
-		b.WriteString(posixQuote(r))
+		b.WriteString(shellx.Quote(r))
 	}
 	out, err := remote.Execute(ctx, b.String())
 	if err != nil {
@@ -99,13 +100,9 @@ func PutSnapshotContext(ctx context.Context, remote contextRemote, snap *domain.
 	if err != nil {
 		return err
 	}
-	if _, err := remote.Execute(ctx, "mkdir -p "+posixQuote(filepath.Dir(p))); err != nil {
+	if _, err := remote.Execute(ctx, "mkdir -p "+shellx.Quote(filepath.Dir(p))); err != nil {
 		return fmt.Errorf("creating context dir: %w", err)
 	}
 	_, err = remotefile.WriteIfChanged(ctx, remote, p, body)
 	return err
-}
-
-func posixQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

@@ -184,6 +184,10 @@ Startup also prunes DB sessions whose explicit `RemoteHost` no longer matches an
 
 ---
 
+## Shell quoting
+
+`shellx.Quote` (`internal/shellx`) is the only shell quoter: never `%q` (Go syntax, `$` and backticks stay live) and no private copy; `internal/shellx/guard_test.go` enforces it.
+
 ## SSH Manager
 
 **File:** `internal/infra/ssh/manager.go`

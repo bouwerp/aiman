@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,8 +59,8 @@ func NewFakeRemote(dir string, pty *ptyfake.FakePTY) *FakeRemote {
 }
 
 // ptyCLI matches the runtime calls KillPTYSession makes through the CLI. The
-// id is Go-quoted.
-var ptyCLI = regexp.MustCompile(`aiman pty (kill|forget) ("(?:[^"\\]|\\.)*")`)
+// id is one single-quoted shell word.
+var ptyCLI = regexp.MustCompile(`aiman pty (kill|forget) '([^']*)'`)
 
 func (r *FakeRemote) Execute(ctx context.Context, cmd string) (string, error) {
 	r.mu.Lock()
@@ -77,14 +76,10 @@ func (r *FakeRemote) Execute(ctx context.Context, cmd string) (string, error) {
 	if m == nil || r.PTY == nil {
 		return "", nil
 	}
-	id, err := strconv.Unquote(m[2])
-	if err != nil {
-		return "", err
-	}
 	if m[1] == "kill" {
-		return "", r.PTY.Kill(id)
+		return "", r.PTY.Kill(m[2])
 	}
-	return "", r.PTY.Forget(id)
+	return "", r.PTY.Forget(m[2])
 }
 
 func (r *FakeRemote) GetRoot() string { return r.Dir }
