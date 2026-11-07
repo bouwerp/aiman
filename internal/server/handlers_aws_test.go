@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/awslogin"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
@@ -270,5 +273,150 @@ func TestAWSLoginLedger(t *testing.T) {
 	}
 	if engine.starts != 2 {
 		t.Errorf("engine starts = %d, want 2", engine.starts)
+	}
+}
+
+// awsFileWriter is serve's Writer adapter, for a real engine under test.
+type awsFileWriter struct{ path string }
+
+func (w awsFileWriter) WriteHostCredentials(profile string, creds *awsdelegation.SessionCredentials) error {
+	return awsdelegation.WriteHostCredentials(w.path, w.path+".lock", profile, creds)
+}
+
+// fakeIdentityCenter serves the engine's four calls. The portal call waits for
+// release, which holds a login in minting.
+func fakeIdentityCenter(t *testing.T, code string, expires time.Time, release <-chan struct{}) *httptest.Server {
+	t.Helper()
+	answer := func(w http.ResponseWriter, body map[string]any) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			t.Error(err)
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/client/register", func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, map[string]any{
+			"clientId": "client", "clientSecret": "client-secret",
+			"clientSecretExpiresAt": time.Now().Add(24 * 90 * time.Hour).Unix(),
+		})
+	})
+	mux.HandleFunc("/device_authorization", func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, map[string]any{
+			"deviceCode": "device-code", "userCode": code,
+			"verificationUriComplete": "https://device.example/?user_code=" + code,
+			"expiresIn":               600, "interval": 1,
+		})
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, map[string]any{"accessToken": "access-token"})
+	})
+	mux.HandleFunc("/federation/credentials", func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		answer(w, map[string]any{"roleCredentials": map[string]any{
+			"accessKeyId": "ASIAREALENGINE000001", "secretAccessKey": "engine-secret",
+			"sessionToken": "engine-session-token", "expiration": expires.UnixMilli(),
+		}})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+type awsLoginReply struct {
+	Login struct {
+		LoginID   string `json:"login_id"`
+		State     string `json:"state"`
+		UserCode  string `json:"user_code"`
+		ExpiresAt string `json:"expires_at"`
+	} `json:"login"`
+}
+
+func waitAWSLoginState(t *testing.T, srv *Server, id, code, want string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp := rpc(t, srv, "", "aws.login_status", map[string]any{"login_id": id})
+		raw, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), code) || strings.Contains(string(raw), "verification_uri") {
+			t.Fatalf("login_status leaks the code or url: %s", raw)
+		}
+		if strings.Contains(string(raw), `"state":"`+want+`"`) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("login never reached %s: %s", want, raw)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestAWSHandlersDriveRealEngine runs a sign-in from start to the file, including
+// a second start while the first is minting, which returns that login.
+func TestAWSHandlersDriveRealEngine(t *testing.T) {
+	const code = "REAL-CODE"
+	path := filepath.Join(t.TempDir(), "credentials")
+	expires := time.Now().UTC().Add(12 * time.Hour).Truncate(time.Second)
+	release := make(chan struct{})
+	ic := fakeIdentityCenter(t, code, expires, release)
+	engine := awslogin.New(awslogin.Options{
+		Home:      t.TempDir(),
+		Writer:    awsFileWriter{path: path},
+		Endpoints: awslogin.Endpoints{OIDC: func(string) string { return ic.URL }, Portal: func(string) string { return ic.URL }},
+		After: func(time.Duration) <-chan time.Time {
+			fired := make(chan time.Time, 1)
+			fired <- time.Now()
+			return fired
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	srv, _, _ := ptyServer(t)
+	srv.SetAWS(config.ServeAWSConfig{Delegations: []config.ServeAWSDelegation{{
+		Profile: "dev", SSOStartURL: "https://x.awsapps.com/start", SSORegion: "eu-west-1", SSOAccountID: "222222222222",
+	}}}, path, engine)
+	srv.aws.watchEvery = time.Millisecond
+
+	var first awsLoginReply
+	rpcOK(t, srv, "", "aws.login_start", map[string]any{"profile": "dev"}, &first)
+	if first.Login.UserCode != code || first.Login.LoginID == "" || first.Login.ExpiresAt == "" {
+		t.Fatalf("start = %+v", first.Login)
+	}
+	id := first.Login.LoginID
+	waitAWSLoginState(t, srv, id, code, awslogin.StateMinting)
+
+	var again awsLoginReply
+	rpcOK(t, srv, "", "aws.login_start", map[string]any{"profile": "dev"}, &again)
+	if again.Login.LoginID != id || again.Login.State != awslogin.StateMinting {
+		t.Errorf("second start = %+v, want the minting login %s", again.Login, id)
+	}
+
+	close(release)
+	waitAWSLoginState(t, srv, id, code, awslogin.StateDone)
+
+	if got := awsRowStatuses(t, rpc(t, srv, "", "aws.status", nil)); got["dev"] != awsStatusValid {
+		t.Errorf("dev after sign-in = %q, want valid", got["dev"])
+	}
+	profiles, err := awsdelegation.ReadHostCredentialProfiles(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || !profiles[0].ExpiresAt.Equal(expires) {
+		t.Errorf("file profiles = %+v, want dev expiring %s", profiles, expires)
+	}
+
+	var rows []domain.SessionEvent
+	deadline := time.Now().Add(5 * time.Second)
+	for len(rows) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+		rows = awsLedgerRows(t, srv)
+	}
+	if len(rows) != 2 || rows[0].Kind != domain.EventAWSLoginStarted || rows[1].Kind != domain.EventAWSLoginFinished {
+		t.Fatalf("ledger = %+v, want one started and one finished", rows)
+	}
+	if !strings.Contains(string(rows[1].Payload), `"state":"done"`) {
+		t.Errorf("finished payload = %s", rows[1].Payload)
 	}
 }
