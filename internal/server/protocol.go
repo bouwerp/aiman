@@ -56,6 +56,9 @@ const (
 	// CodeNeedsOperator refuses a session's call to a method only the operator
 	// may use, such as terminating or restarting a session.
 	CodeNeedsOperator = "needs_operator"
+	// CodeSessionScope refuses a session's call that targets a session other
+	// than itself or one of its descendants.
+	CodeSessionScope = "session_scope"
 	// CodeUnavailable means serve could not get what was asked for and has
 	// nothing stale to offer. The gateway returns it too.
 	CodeUnavailable = "unavailable"
