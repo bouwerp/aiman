@@ -41,3 +41,4 @@ graphify-out/
 
 # opt-in real-agent eval bundles
 evals/out/
+.cache/
