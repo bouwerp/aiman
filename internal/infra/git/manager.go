@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 type Manager struct {
@@ -199,7 +199,7 @@ func (m *Manager) SetupWorktree(ctx context.Context, repo domain.Repo, branch st
 	}
 	worktreePath := fmt.Sprintf("../%s", worktreeDir)
 
-	cmd := exec.CommandContext(ctx, "git", "worktree", "add", worktreePath, branch)
+	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "--", worktreePath, branch)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return domain.Worktree{}, fmt.Errorf("failed to setup worktree: %w, output: %s", err, string(output))
@@ -231,7 +231,7 @@ if [ ! -f "$ign" ]; then
   { echo "$com"; echo "$line"; } > "$ign"
 else
   { echo ""; echo "$com"; echo "$line"; } >> "$ign"
-fi`, strconv.Quote(worktreePath), strconv.Quote(aimanTaskIgnoreComment), strconv.Quote(aimanTaskIgnoreLine))
+fi`, shellx.Quote(worktreePath), shellx.Quote(aimanTaskIgnoreComment), shellx.Quote(aimanTaskIgnoreLine))
 }
 
 // EnsureAimanSessionFilesGitignored appends Aiman's generated session scaffolding ignore rule to the worktree's .gitignore when absent.
@@ -240,7 +240,7 @@ func (m *Manager) EnsureAimanSessionFilesGitignored(ctx context.Context, remote 
 		return nil
 	}
 	script := aimanTaskGitignoreBashScript(worktreePath)
-	_, err := remote.Execute(ctx, "bash -ce "+shellSingleQuote(script))
+	_, err := remote.Execute(ctx, "bash -ce "+shellx.Quote(script))
 	return err
 }
 
@@ -272,12 +272,12 @@ func (m *Manager) SetupSharedWorkspace(ctx context.Context, remote domain.Remote
 	// We checkout the branch directly in the main clone directory.
 	script := fmt.Sprintf(`
 set -e
-cd %q
+cd %s
 git checkout main || git checkout master || git checkout -
 git pull
-git branch -D %q || true
-git checkout -b %q
-`, repoPath, branch, branch)
+git branch -D -- %s || true
+git checkout -b %s
+`, shellx.Quote(repoPath), shellx.Quote(branch), shellx.Quote(branch))
 
 	if _, err := remote.Execute(ctx, script); err != nil {
 		return domain.Worktree{}, fmt.Errorf("failed to prepare shared workspace branch %s: %w", branch, err)
@@ -335,12 +335,12 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 	}
 
 	// Check if the new namespaced worktree directory already exists.
-	if exists, _ := remote.Execute(ctx, fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath)); strings.Contains(exists, "EXISTS") {
-		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
+	if exists, _ := remote.Execute(ctx, "bash -c "+shellx.Quote(fmt.Sprintf("if [ -d %s ]; then echo EXISTS; fi", shellx.Quote(worktreePath)))); strings.Contains(exists, "EXISTS") {
+		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-dir 2>/dev/null || echo BROKEN", shellx.Quote(worktreePath)))
 		if strings.TrimSpace(gitCheck) != "BROKEN" {
 			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
 		}
-		_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q worktree unlock %q 2>/dev/null || true", repoPath, worktreePath))
+		_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree unlock %s 2>/dev/null || true", shellx.Quote(repoPath), shellx.Quote(worktreePath)))
 		if rmErr := safeRmWorktree(ctx, remote, worktreePath, repoPath); rmErr != nil {
 			return domain.Worktree{}, fmt.Errorf("failed to remove broken worktree directory: %w", rmErr)
 		}
@@ -360,7 +360,7 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 
 	// Prune stale worktree metadata before adding — ensures git worktree add succeeds
 	// even if a previous termination left stale entries behind.
-	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q worktree prune --expire=now 2>/dev/null || true", repoPath))
+	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree prune --expire=now 2>/dev/null || true", shellx.Quote(repoPath)))
 
 	// Determine base branch. Try origin/HEAD first (set by git clone and always
 	// reflects the remote's actual default), then fall back to well-known names,
@@ -374,7 +374,7 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 
 	// Create worktree
 	reportProgress(ctx, fmt.Sprintf("Creating worktree %s...", worktreeDir))
-	worktreeCmd := fmt.Sprintf("git -C %q worktree add -B %s ../%s %s", repoPath, branch, worktreeDir, baseBranch)
+	worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s -- %s %s", shellx.Quote(repoPath), shellx.Quote(branch), shellx.Quote("../"+worktreeDir), shellx.Quote(baseBranch))
 	_, worktreeErr := remote.Execute(ctx, worktreeCmd)
 	if worktreeErr != nil {
 		return domain.Worktree{}, fmt.Errorf("failed to create worktree: %w", worktreeErr)
@@ -382,7 +382,7 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 
 	// Resolve worktree path
 	resolvedPath := worktreePath
-	if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
+	if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %s", shellx.Quote(worktreePath))); err == nil {
 		resolvedPath = strings.TrimSpace(out)
 	}
 	if err := prepareWorktreeForSession(ctx, remote, repoPath, resolvedPath); err != nil {
@@ -415,7 +415,7 @@ func (m *Manager) ListRemoteBranches(ctx context.Context, remote domain.RemoteEx
 		return nil, err
 	}
 
-	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q branch -r --sort=-committerdate", repoPath))
+	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %s branch -r --sort=-committerdate", shellx.Quote(repoPath)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list remote branches: %w", err)
 	}
@@ -476,7 +476,7 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 
 	// Check for existing worktree for this branch via git worktree list.
 	// Parse the porcelain output to find the registered path so we can validate its health.
-	listOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q worktree list --porcelain", repoPath))
+	listOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s worktree list --porcelain", shellx.Quote(repoPath)))
 	var registeredWTPath string
 	var currentWTPath string
 	for _, line := range strings.Split(listOut, "\n") {
@@ -489,22 +489,22 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 	}
 	if registeredWTPath != "" {
 		// Branch is registered — check if git is healthy at that path.
-		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", registeredWTPath))
+		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-dir 2>/dev/null || echo BROKEN", shellx.Quote(registeredWTPath)))
 		if strings.TrimSpace(gitCheck) != "BROKEN" {
 			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
 		}
 		// Stale/broken worktree — unlock so prune can remove it.
-		_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q worktree unlock %q 2>/dev/null || true", repoPath, registeredWTPath))
+		_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree unlock %s 2>/dev/null || true", shellx.Quote(repoPath), shellx.Quote(registeredWTPath)))
 		if rmErr := safeRmWorktree(ctx, remote, registeredWTPath, repoPath); rmErr != nil {
 			return domain.Worktree{}, fmt.Errorf("failed to remove stale worktree directory: %w", rmErr)
 		}
 	}
 
 	// Check if worktree directory already exists (not registered in git, but the dir is there)
-	checkOut, _ := remote.Execute(ctx, fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath))
+	checkOut, _ := remote.Execute(ctx, "bash -c "+shellx.Quote(fmt.Sprintf("if [ -d %s ]; then echo EXISTS; fi", shellx.Quote(worktreePath))))
 	if strings.Contains(checkOut, "EXISTS") {
 		// Validate git health
-		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
+		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-dir 2>/dev/null || echo BROKEN", shellx.Quote(worktreePath)))
 		if strings.TrimSpace(gitCheck) != "BROKEN" {
 			return domain.Worktree{}, fmt.Errorf("WORKTREE_EXISTS")
 		}
@@ -524,19 +524,19 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 	}
 
 	// Prune stale worktree metadata before adding.
-	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q worktree prune --expire=now 2>/dev/null || true", repoPath))
+	_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s worktree prune --expire=now 2>/dev/null || true", shellx.Quote(repoPath)))
 
 	// Create worktree from existing remote branch.
 	// First try creating a new local branch tracking the remote (-b). If the local
 	// branch already exists (was fetched previously), fall back to checking it out
 	// directly without -b.
-	worktreeCmd := fmt.Sprintf("git -C %q worktree add -b %s ../%s origin/%s", repoPath, branch, worktreeDir, branch)
+	worktreeCmd := fmt.Sprintf("git -C %s worktree add -b %s -- %s %s", shellx.Quote(repoPath), shellx.Quote(branch), shellx.Quote("../"+worktreeDir), shellx.Quote("origin/"+branch))
 	if out, err := remote.Execute(ctx, worktreeCmd); err != nil {
 		if !strings.Contains(out, "already exists") {
 			return domain.Worktree{}, fmt.Errorf("failed to create worktree from branch %s: %w", branch, err)
 		}
 		// Local branch exists — check it out into the worktree directly
-		worktreeCmd = fmt.Sprintf("git -C %q worktree add ../%s %s", repoPath, worktreeDir, branch)
+		worktreeCmd = fmt.Sprintf("git -C %s worktree add -- %s %s", shellx.Quote(repoPath), shellx.Quote("../"+worktreeDir), shellx.Quote(branch))
 		if _, err2 := remote.Execute(ctx, worktreeCmd); err2 != nil {
 			return domain.Worktree{}, fmt.Errorf("failed to create worktree from branch %s: %w", branch, err2)
 		}
@@ -544,7 +544,7 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 
 	// Resolve worktree path
 	resolvedPath := worktreePath
-	if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", worktreePath)); err == nil {
+	if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %s", shellx.Quote(worktreePath))); err == nil {
 		resolvedPath = strings.TrimSpace(out)
 	}
 	if err := prepareWorktreeForSession(ctx, remote, repoPath, resolvedPath); err != nil {
@@ -607,20 +607,20 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 	reportProgress(ctx, fmt.Sprintf("Checking repository %s...", repoName))
 	effectiveURL := repoURL
 	if effectiveURL == "" {
-		if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath)); err == nil && strings.TrimSpace(out) != "" {
+		if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %s remote get-url origin 2>/dev/null", shellx.Quote(repoPath))); err == nil && strings.TrimSpace(out) != "" {
 			effectiveURL = strings.TrimSpace(out)
 		}
 		if effectiveURL == "" {
 			if out, _ := remote.Execute(ctx, fmt.Sprintf(
-				`awk '/\[remote "origin"\]/{f=1} f && /url/{print $3; exit}' %q/.git/config 2>/dev/null`,
-				repoPath)); strings.TrimSpace(out) != "" {
+				`awk '/\[remote "origin"\]/{f=1} f && /url/{print $3; exit}' %s/.git/config 2>/dev/null`,
+				shellx.Quote(repoPath))); strings.TrimSpace(out) != "" {
 				effectiveURL = strings.TrimSpace(out)
 			}
 		}
 	}
 
 	// Must be a valid git repo.
-	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir", repoPath)); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-dir", shellx.Quote(repoPath))); err != nil {
 		if err := blockWhenLinkedWorktreesExist(ctx, remote, repoPath, "recovered"); err != nil {
 			return err
 		}
@@ -629,11 +629,11 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 	}
 
 	// Ensure the repository has the correct origin remote.
-	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath)); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %s remote get-url origin 2>/dev/null", shellx.Quote(repoPath))); err != nil {
 		// Origin remote is missing. Try to add it if we have a URL.
 		if effectiveURL != "" {
 			reportProgress(ctx, fmt.Sprintf("Adding origin remote for %s...", repoName))
-			if _, addErr := remote.Execute(ctx, fmt.Sprintf("git -C %q remote add origin %q", repoPath, effectiveURL)); addErr != nil {
+			if _, addErr := remote.Execute(ctx, fmt.Sprintf("git -C %s remote add origin %s", shellx.Quote(repoPath), shellx.Quote(effectiveURL))); addErr != nil {
 				return fmt.Errorf("repository %s has no origin remote and failed to add it: %w", repoPath, addErr)
 			}
 		} else {
@@ -641,14 +641,14 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 		}
 	} else if repoURL != "" {
 		// Origin exists but check if URL matches repoURL, if not update it.
-		currentURLOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath))
+		currentURLOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s remote get-url origin 2>/dev/null", shellx.Quote(repoPath)))
 		currentURL := strings.TrimSpace(currentURLOut)
 		if currentURL != "" && currentURL != repoURL {
 			reportProgress(ctx, fmt.Sprintf("Updating origin remote URL for %s...", repoName))
-			if _, setErr := remote.Execute(ctx, fmt.Sprintf("git -C %q remote set-url origin %q", repoPath, repoURL)); setErr != nil {
+			if _, setErr := remote.Execute(ctx, fmt.Sprintf("git -C %s remote set-url origin %s", shellx.Quote(repoPath), shellx.Quote(repoURL))); setErr != nil {
 				// Fallback: remove and add
-				_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %q remote remove origin 2>/dev/null", repoPath))
-				if _, addErr := remote.Execute(ctx, fmt.Sprintf("git -C %q remote add origin %q", repoPath, repoURL)); addErr != nil {
+				_, _ = remote.Execute(ctx, fmt.Sprintf("git -C %s remote remove origin 2>/dev/null", shellx.Quote(repoPath)))
+				if _, addErr := remote.Execute(ctx, fmt.Sprintf("git -C %s remote add origin %s", shellx.Quote(repoPath), shellx.Quote(repoURL))); addErr != nil {
 					return fmt.Errorf("failed to update remote URL for %s: %w", repoName, addErr)
 				}
 			}
@@ -657,13 +657,13 @@ func ensureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repoPa
 
 	// Fetch must succeed.
 	reportProgress(ctx, fmt.Sprintf("Fetching latest changes for %s...", repoName))
-	if fetchOut, err := remote.Execute(ctx, fmt.Sprintf("git -C %q fetch origin 2>&1", repoPath)); err != nil {
+	if fetchOut, err := remote.Execute(ctx, fmt.Sprintf("git -C %s fetch origin 2>&1", shellx.Quote(repoPath))); err != nil {
 		return fmt.Errorf("failed to fetch from origin remote for %s (check network and SSH credentials):\n%s: %w", repoName, strings.TrimSpace(fetchOut), err)
 	}
 
 	// HEAD must be a valid commit (empty/re-init'd repos have no commits).
 	headOut, _ := remote.Execute(ctx, fmt.Sprintf(
-		`git -C %q rev-parse HEAD 2>/dev/null || echo EMPTY`, repoPath))
+		`git -C %s rev-parse HEAD 2>/dev/null || echo EMPTY`, shellx.Quote(repoPath)))
 	if strings.TrimSpace(headOut) == "EMPTY" {
 		if err := blockWhenLinkedWorktreesExist(ctx, remote, repoPath, "recovered"); err != nil {
 			return err
@@ -681,7 +681,7 @@ func cloneRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repo
 	parentDir := filepath.Dir(cleanedRepo)
 	repoName := filepath.Base(cleanedRepo)
 	reportProgress(ctx, fmt.Sprintf("Cloning %s...", repoName))
-	if _, err := remote.Execute(ctx, fmt.Sprintf("mkdir -p %q && git -C %q clone %q %q", parentDir, parentDir, repoURL, repoName)); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf("mkdir -p %s && git -C %s clone %s %s", shellx.Quote(parentDir), shellx.Quote(parentDir), shellx.Quote(repoURL), shellx.Quote(repoName))); err != nil {
 		return fmt.Errorf("failed to clone %s from %s: %w", repoName, repoURL, err)
 	}
 	reportProgress(ctx, fmt.Sprintf("Cloned %s ✓", repoName))
@@ -693,13 +693,13 @@ func cloneRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repo
 func recoverRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, repoURL string) error {
 	url := strings.TrimSpace(repoURL)
 	if url == "" {
-		if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin 2>/dev/null", repoPath)); err == nil {
+		if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %s remote get-url origin 2>/dev/null", shellx.Quote(repoPath))); err == nil {
 			url = strings.TrimSpace(out)
 		}
 		if url == "" {
 			if out, _ := remote.Execute(ctx, fmt.Sprintf(
-				`awk '/\[remote "origin"\]/{f=1} f && /url/{print $3; exit}' %q/.git/config 2>/dev/null`,
-				repoPath)); strings.TrimSpace(out) != "" {
+				`awk '/\[remote "origin"\]/{f=1} f && /url/{print $3; exit}' %s/.git/config 2>/dev/null`,
+				shellx.Quote(repoPath))); strings.TrimSpace(out) != "" {
 				url = strings.TrimSpace(out)
 			}
 		}
@@ -719,23 +719,23 @@ func recoverRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, re
 	timestamp := time.Now().UTC().Format("20060102-150405")
 	backupPath := fmt.Sprintf("/tmp/aiman-repo-backup-%s-%s.tar.gz", repoName, timestamp)
 	reportProgress(ctx, fmt.Sprintf("Backing up %s to %s...", repoName, backupPath))
-	backupCmd := fmt.Sprintf("tar -C %q -czf %q %q 2>/dev/null && echo OK", parentDir, backupPath, repoName)
+	backupCmd := fmt.Sprintf("tar -C %s -czf %s %s 2>/dev/null && echo OK", shellx.Quote(parentDir), shellx.Quote(backupPath), shellx.Quote(repoName))
 	if out, tarErr := remote.Execute(ctx, backupCmd); tarErr != nil || strings.TrimSpace(out) != "OK" {
 		return fmt.Errorf("repository at %s is unhealthy and backup to %s failed — aborting reclone to avoid data loss", repoPath, backupPath)
 	}
 
 	reportProgress(ctx, fmt.Sprintf("Removing corrupt %s...", repoName))
-	if _, rmErr := remote.Execute(ctx, fmt.Sprintf("rm -rf %q", cleanedRepo)); rmErr != nil {
+	if _, rmErr := remote.Execute(ctx, fmt.Sprintf("rm -rf %s", shellx.Quote(cleanedRepo))); rmErr != nil {
 		return fmt.Errorf("failed to remove unhealthy repository %s (backed up to %s): %w", repoPath, backupPath, rmErr)
 	}
 
 	reportProgress(ctx, fmt.Sprintf("Recloning %s from %s...", repoName, url))
-	if cloneOut, cloneErr := remote.Execute(ctx, fmt.Sprintf("git -C %q clone %q %q 2>&1", parentDir, url, repoName)); cloneErr != nil {
+	if cloneOut, cloneErr := remote.Execute(ctx, fmt.Sprintf("git -C %s clone %s %s 2>&1", shellx.Quote(parentDir), shellx.Quote(url), shellx.Quote(repoName))); cloneErr != nil {
 		// Clone failed — restore from backup so the directory isn't left empty.
 		reportProgress(ctx, fmt.Sprintf("Clone failed for %s: %s", repoName, strings.TrimSpace(cloneOut)))
 		reportProgress(ctx, fmt.Sprintf("Attempting to restore %s from backup...", repoName))
 		if restoreOut, restoreErr := remote.Execute(ctx, fmt.Sprintf(
-			`tar -C %q -xzf %q 2>&1 && echo OK`, parentDir, backupPath)); restoreErr != nil || !strings.Contains(restoreOut, "OK") {
+			`tar -C %s -xzf %s 2>&1 && echo OK`, shellx.Quote(parentDir), shellx.Quote(backupPath))); restoreErr != nil || !strings.Contains(restoreOut, "OK") {
 			return fmt.Errorf("failed to reclone %s from %s and backup restore also failed (backup at %s): %w", repoName, url, backupPath, cloneErr)
 		}
 		return fmt.Errorf("failed to reclone %s from %s — restored from backup at %s; check network/SSH access and try again: %w", repoName, url, backupPath, cloneErr)
@@ -767,7 +767,7 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 	}
 
 	// Search registered worktrees for this branch.
-	listOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q worktree list --porcelain", repoPath))
+	listOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s worktree list --porcelain", shellx.Quote(repoPath)))
 	var registeredWTPath string
 	var currentWTPath string
 	for _, line := range strings.Split(listOut, "\n") {
@@ -779,10 +779,10 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 		}
 	}
 	if registeredWTPath != "" {
-		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", registeredWTPath))
+		gitCheck, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-dir 2>/dev/null || echo BROKEN", shellx.Quote(registeredWTPath)))
 		if strings.TrimSpace(gitCheck) != "BROKEN" {
 			resolvedPath := registeredWTPath
-			if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", registeredWTPath)); err == nil {
+			if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %s", shellx.Quote(registeredWTPath))); err == nil {
 				resolvedPath = strings.TrimSpace(out)
 			}
 			// Never return the main repo itself as a worktree.
@@ -821,7 +821,7 @@ func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.Remote
 			continue
 		}
 		resolvedPath := candidate
-		if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %q", candidate)); err == nil {
+		if out, err := remote.Execute(ctx, fmt.Sprintf("realpath %s", shellx.Quote(candidate))); err == nil {
 			resolvedPath = strings.TrimSpace(out)
 		}
 		if filepath.Clean(resolvedPath) == filepath.Clean(repoPath) {
@@ -923,22 +923,22 @@ func safeRmWorktree(ctx context.Context, remote domain.RemoteExecutor, path, rep
 	if cleaned == filepath.Clean(repoPath) {
 		return fmt.Errorf("refusing to rm -rf %q: path is the main repository — manual cleanup required", path)
 	}
-	_, err := remote.Execute(ctx, fmt.Sprintf("rm -rf %q", path))
+	_, err := remote.Execute(ctx, fmt.Sprintf("rm -rf %s", shellx.Quote(path)))
 	return err
 }
 
 func worktreePathBelongsToRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, worktreePath string) (owned bool, healthy bool, err error) {
-	existsOut, err := remote.Execute(ctx, fmt.Sprintf("bash -c 'if [ -d %q ]; then echo EXISTS; fi'", worktreePath))
+	existsOut, err := remote.Execute(ctx, "bash -c "+shellx.Quote(fmt.Sprintf("if [ -d %s ]; then echo EXISTS; fi", shellx.Quote(worktreePath))))
 	if err != nil || !strings.Contains(existsOut, "EXISTS") {
 		return false, false, nil
 	}
 
-	gitDirOut, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
+	gitDirOut, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-dir 2>/dev/null || echo BROKEN", shellx.Quote(worktreePath)))
 	if err != nil || strings.TrimSpace(gitDirOut) == "BROKEN" {
 		return false, false, nil
 	}
 
-	commonDirOut, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-common-dir 2>/dev/null || echo BROKEN", worktreePath))
+	commonDirOut, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-common-dir 2>/dev/null || echo BROKEN", shellx.Quote(worktreePath)))
 	if err != nil {
 		return false, false, fmt.Errorf("failed to inspect git common dir for worktree %s: %w", worktreePath, err)
 	}
@@ -953,17 +953,17 @@ func worktreePathBelongsToRepo(ctx context.Context, remote domain.RemoteExecutor
 }
 
 func prepareWorktreeForSession(ctx context.Context, remote domain.RemoteExecutor, repoPath, worktreePath string) error {
-	sparseOut, err := remote.Execute(ctx, fmt.Sprintf(`git -C %q config --bool core.sparseCheckout 2>/dev/null || echo false`, worktreePath))
+	sparseOut, err := remote.Execute(ctx, fmt.Sprintf(`git -C %s config --bool core.sparseCheckout 2>/dev/null || echo false`, shellx.Quote(worktreePath)))
 	if err != nil {
 		return fmt.Errorf("failed to inspect sparse-checkout state for worktree %s: %w", worktreePath, err)
 	}
 	if strings.TrimSpace(sparseOut) != "true" {
 		return nil
 	}
-	if _, err := remote.Execute(ctx, fmt.Sprintf(`git -C %q config extensions.worktreeConfig true`, repoPath)); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf(`git -C %s config extensions.worktreeConfig true`, shellx.Quote(repoPath))); err != nil {
 		return fmt.Errorf("failed to enable per-worktree git config for %s: %w", repoPath, err)
 	}
-	if _, err := remote.Execute(ctx, fmt.Sprintf(`git -C %q sparse-checkout disable`, worktreePath)); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf(`git -C %s sparse-checkout disable`, shellx.Quote(worktreePath))); err != nil {
 		return fmt.Errorf("failed to disable sparse-checkout for worktree %s: %w", worktreePath, err)
 	}
 	return nil
@@ -1012,7 +1012,7 @@ func blockWhenLinkedWorktreesExist(ctx context.Context, remote domain.RemoteExec
 
 func findLinkedWorktrees(ctx context.Context, remote domain.RemoteExecutor, repoPath string) ([]string, error) {
 	script := linkedWorktreeScanScript(repoPath)
-	out, err := remote.Execute(ctx, "bash -ce "+shellSingleQuote(script))
+	out, err := remote.Execute(ctx, "bash -ce "+shellx.Quote(script))
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan for linked worktrees for %s: %w", repoPath, err)
 	}
@@ -1032,20 +1032,20 @@ func findLinkedWorktrees(ctx context.Context, remote domain.RemoteExecutor, repo
 func detectBaseBranch(ctx context.Context, remote domain.RemoteExecutor, repoPath string) string {
 	// origin/HEAD is set automatically by git clone and always points to the
 	// remote's real default branch — most reliable source.
-	if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null", repoPath)); err == nil {
+	if out, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --abbrev-ref refs/remotes/origin/HEAD 2>/dev/null", shellx.Quote(repoPath))); err == nil {
 		if ref := strings.TrimSpace(out); ref != "" && ref != "refs/remotes/origin/HEAD" && strings.HasPrefix(ref, "origin/") {
 			return ref
 		}
 	}
 	// Well-known names as fallback for repos where origin/HEAD is unset.
 	for _, b := range []string{"origin/main", "origin/master", "main", "master"} {
-		if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --verify %s 2>/dev/null", repoPath, b)); err == nil {
+		if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --verify %s 2>/dev/null", shellx.Quote(repoPath), b)); err == nil {
 			return b
 		}
 	}
 	// Last resort: use whatever HEAD points to — works for any non-empty repo
 	// regardless of branch naming convention.
-	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %q rev-parse HEAD 2>/dev/null", repoPath)); err == nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse HEAD 2>/dev/null", shellx.Quote(repoPath))); err == nil {
 		return "HEAD"
 	}
 	return ""
@@ -1058,7 +1058,7 @@ prefix="$repo/.git/worktrees/"
 if [ ! -d "$parent" ]; then exit 0; fi
 find "$parent" -mindepth 2 -maxdepth 2 -type f -name .git 2>/dev/null | while read -r gitfile; do
   if grep -Fq "$prefix" "$gitfile"; then dirname "$gitfile"; fi
-done | sort -u`, strconv.Quote(filepath.Clean(repoPath)))
+done | sort -u`, shellx.Quote(filepath.Clean(repoPath)))
 }
 
 // FetchOrganizations returns a list of organizations the user has access to
@@ -1093,9 +1093,9 @@ func (m *Manager) CommitsAheadOfBase(ctx context.Context, remote domain.RemoteEx
 	// HEAD..HEAD is intentionally zero: without a known base there is no
 	// meaningful ahead count, so the V offer stays off.
 	// base and path come from stored session fields, so both are quoted for
-	// the remote shell; Go's %q would leave $ and backticks live.
-	dir, ref := shellQuote(path), shellQuote("origin/"+base)
-	cmd := fmt.Sprintf(`git -C %s rev-list --count "$(git -C %s rev-parse -q --verify %s || printf '%%s' %s)..HEAD"`, dir, dir, ref, shellQuote(base))
+	// the remote shell.
+	dir, ref := shellx.Quote(path), shellx.Quote("origin/"+base)
+	cmd := fmt.Sprintf(`git -C %s rev-list --count "$(git -C %s rev-parse -q --verify %s || printf '%%s' %s)..HEAD"`, dir, dir, ref, shellx.Quote(base))
 	out, err := remote.Execute(ctx, cmd)
 	if err != nil {
 		return 0, fmt.Errorf("count commits ahead of %s: %w", base, err)
@@ -1112,7 +1112,7 @@ func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor
 
 	// 1. Get branch and counts via git status --porcelain=v2 --branch
 	// v2 is easier to parse for these specific requirements
-	cmd := fmt.Sprintf("git -C %q status --porcelain=v2 --branch", path)
+	cmd := fmt.Sprintf("git -C %s status --porcelain=v2 --branch", shellx.Quote(path))
 	output, err := remote.Execute(ctx, cmd)
 	if err != nil {
 		return status, fmt.Errorf("failed to get git status: %w", err)
@@ -1153,7 +1153,7 @@ func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor
 
 	// 2. Get unpushed commits count (more reliable than porcelain if multiple remotes involved)
 	if status.HasUpstream {
-		cmd = fmt.Sprintf("git -C %q rev-list --count @{u}..HEAD", path)
+		cmd = fmt.Sprintf("git -C %s rev-list --count @{u}..HEAD", shellx.Quote(path))
 		out, err := remote.Execute(ctx, cmd)
 		if err == nil {
 			_, _ = fmt.Sscanf(strings.TrimSpace(out), "%d", &status.UnpushedCommits)
@@ -1161,15 +1161,9 @@ func (m *Manager) GetGitStatus(ctx context.Context, remote domain.RemoteExecutor
 	}
 
 	// 3. Pull request via gh (current branch, with --repo/--head fallback)
-	originOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %q remote get-url origin", path))
+	originOut, _ := remote.Execute(ctx, fmt.Sprintf("git -C %s remote get-url origin", shellx.Quote(path)))
 	owner, repo, ok := parseGitHubOwnerRepo(strings.TrimSpace(originOut))
 	status.PullRequest = resolvePullRequestForBranch(ctx, remote, path, owner, repo, ok, status.Branch)
 
 	return status, nil
-}
-
-// shellQuote wraps s in single quotes for a POSIX shell, escaping any single
-// quote it contains.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

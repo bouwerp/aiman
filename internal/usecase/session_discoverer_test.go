@@ -102,7 +102,7 @@ func TestDiscover_SkipsMissingOrphanWorktreeAndPrunesMetadata(t *testing.T) {
 	}
 
 	joined := strings.Join(remote.commands, "\n")
-	if !strings.Contains(joined, `git -C "/home/dev/myrepo" worktree prune --expire=now 2>/dev/null || true`) {
+	if !strings.Contains(joined, `git -C '/home/dev/myrepo' worktree prune --expire=now 2>/dev/null || true`) {
 		t.Fatalf("expected stale metadata prune, got commands:\n%s", joined)
 	}
 }
@@ -115,9 +115,9 @@ func TestDiscover_KeepsHealthyOrphanWorktree(t *testing.T) {
 		},
 		validDirs: map[string]bool{"/home/dev/feature-x": true},
 		outputs: map[string]string{
-			`git -C "/home/dev/feature-x" rev-parse --git-dir 2>/dev/null || echo BROKEN`: ".git/worktrees/feature-x",
-			`git_dir=$(git -C "/home/dev/feature-x" rev-parse --git-dir 2>/dev/null) && if [ -f "$git_dir/aiman-id" ]; then cat "$git_dir/aiman-id"; elif [ -f "/home/dev/feature-x"/.aiman-id ]; then cat "/home/dev/feature-x"/.aiman-id; fi`: "",
-			`git -C "/home/dev/feature-x" remote get-url origin 2>/dev/null`: "git@github.com:owner/myrepo.git",
+			`git -C '/home/dev/feature-x' rev-parse --git-dir 2>/dev/null || echo BROKEN`: ".git/worktrees/feature-x",
+			`git_dir=$(git -C '/home/dev/feature-x' rev-parse --git-dir 2>/dev/null) && if [ -f "$git_dir/aiman-id" ]; then cat "$git_dir/aiman-id"; elif [ -f "/home/dev/feature-x"/.aiman-id ]; then cat "/home/dev/feature-x"/.aiman-id; fi`: "",
+			`git -C '/home/dev/feature-x' remote get-url origin 2>/dev/null`: "git@github.com:owner/myrepo.git",
 		},
 	}
 	rec := &recordingSyncEngine{}

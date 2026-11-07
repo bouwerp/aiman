@@ -36,7 +36,7 @@ func TestResizeSessionTerminalPTYUsesTheRuntime(t *testing.T) {
 	if !applied {
 		t.Error("an unattached PTY resize should apply")
 	}
-	if !strings.Contains(r.joined(), `aiman pty resize "abc" --cols 154 --rows 40`) {
+	if !strings.Contains(r.joined(), `aiman pty resize 'abc' --cols 154 --rows 40`) {
 		t.Errorf("unexpected command: %s", r.joined())
 	}
 }

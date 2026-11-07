@@ -19,6 +19,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/graphify"
 	"github.com/bouwerp/aiman/internal/infra/remotefile"
 	"github.com/bouwerp/aiman/internal/infra/skills"
+	"github.com/bouwerp/aiman/internal/shellx"
 	"github.com/google/uuid"
 )
 
@@ -241,7 +242,7 @@ const taskBriefMarker = "__AIMAN_TASK__"
 // starts with the marked brief is left as it is.
 func WriteTaskBrief(ctx context.Context, remote remotefile.Writer, dir, brief string) error {
 	path := filepath.Join(dir, domain.AimanTaskFileName)
-	out, err := remote.Execute(ctx, fmt.Sprintf("echo %s; cat -- %q 2>/dev/null || true", taskBriefMarker, path))
+	out, err := remote.Execute(ctx, fmt.Sprintf("echo %s; cat -- %s 2>/dev/null || true", taskBriefMarker, shellx.Quote(path)))
 	if err != nil {
 		return fmt.Errorf("read %s: %w", domain.AimanTaskFileName, err)
 	}
@@ -457,7 +458,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		// Step 6.1: Persist Session ID in git metadata (safe from git status/commits).
 		// --absolute-git-dir because the executor's cwd is serve's and
 		// --git-dir is often the relative ".git".
-		if _, err = sshMgr.Execute(ctx, fmt.Sprintf("id_file=$(git -C %q rev-parse --absolute-git-dir)/aiman-id && echo %q > \"$id_file\"", session.WorktreePath, session.ID)); err != nil {
+		if _, err = sshMgr.Execute(ctx, fmt.Sprintf("id_file=$(git -C %s rev-parse --absolute-git-dir)/aiman-id && echo %s > \"$id_file\"", shellx.Quote(session.WorktreePath), shellx.Quote(session.ID))); err != nil {
 			return nil, fmt.Errorf("failed to write session ID: %w", err)
 		}
 	}
@@ -475,7 +476,7 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 	}
 
 	// Ensure working directory exists (it might be a new folder defined by user)
-	if _, err := sshMgr.Execute(ctx, fmt.Sprintf("mkdir -p %q", workingDir)); err != nil {
+	if _, err := sshMgr.Execute(ctx, fmt.Sprintf("mkdir -p %s", shellx.Quote(workingDir))); err != nil {
 		return nil, fmt.Errorf("failed to create working directory: %w", err)
 	}
 
@@ -765,21 +766,21 @@ func acceptWorkspaceTrustPTY(sessionID string) string {
 		"attempt=0; budget=%[4]d; reason=timeout; upd=0; trusted=0; "+
 			"while [ $attempt -lt $budget ]; do "+
 			"%[5]s"+
-			"pane=$(aiman pty capture %[1]q --lines 0 2>/dev/null | %[9]s || true); "+
-			"if [ $trusted = 0 ] && printf '%%s' \"$pane\" | grep -qE %[2]q; then "+
-			"aiman pty input %[1]q --key enter >/dev/null 2>&1; sleep 2; trusted=1; budget=$((attempt+%[8]d)); continue; "+
+			"pane=$(aiman pty capture %[1]s --lines 0 2>/dev/null | %[9]s || true); "+
+			"if [ $trusted = 0 ] && printf '%%s' \"$pane\" | grep -qE %[2]s; then "+
+			"aiman pty input %[1]s --key enter >/dev/null 2>&1; sleep 2; trusted=1; budget=$((attempt+%[8]d)); continue; "+
 			"fi; "+
-			"if printf '%%s' \"$pane\" | grep -qE %[6]q && ! printf '%%s' \"$pane\" | grep -qE %[7]q; then "+
+			"if printf '%%s' \"$pane\" | grep -qE %[6]s && ! printf '%%s' \"$pane\" | grep -qE %[7]s; then "+
 			"attempt=$((attempt+1)); sleep 1; continue; "+
 			"fi; "+
-			"if printf '%%s' \"$pane\" | grep -qE %[3]q; then reason=ready; break; fi; "+
+			"if printf '%%s' \"$pane\" | grep -qE %[3]s; then reason=ready; break; fi; "+
 			"attempt=$((attempt+1)); sleep 1; "+
 			"done; "+
 			"if [ $trusted = 1 ]; then reason=trust; fi; "+
 			"if [ $upd = 1 ]; then reason=update; fi; "+
 			"echo \"AIMAN_BOOTWAIT:$reason:$attempt\"; ",
-		id, workspaceTrustRe, composerReadyRe, bootWaitBudget, bootUpdateDialogBranch(id),
-		codexSplashRe, codexFooterRe, bootWaitAfterTrust, captureSGRFilter,
+		shellx.Quote(id), shellx.Quote(workspaceTrustRe), shellx.Quote(composerReadyRe), bootWaitBudget, bootUpdateDialogBranch(id),
+		shellx.Quote(codexSplashRe), shellx.Quote(codexFooterRe), bootWaitAfterTrust, captureSGRFilter,
 	)
 }
 
@@ -829,15 +830,15 @@ func DeliverInitialPromptPTY(ctx context.Context, remote promptDeliverer, sessio
 		return
 	}
 	defer func() {
-		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %q", promptPath))
+		_, _ = remote.Execute(ctx, fmt.Sprintf("rm -f %s", shellx.Quote(promptPath)))
 	}()
 
 	te, ok := remote.(TerminalExecutor)
 	if !ok {
 		// Tests that only stub promptDeliverer still get a single typed Enter.
 		_, _ = remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-			"aiman pty input %[1]q --file %[2]q && sleep 1 && aiman pty input %[1]q --key enter",
-			sessionID, promptPath))
+			"aiman pty input %[1]s --file %[2]s && sleep 1 && aiman pty input %[1]s --key enter",
+			shellx.Quote(sessionID), shellx.Quote(promptPath)))
 		return
 	}
 	_ = SendPTYFileConfirmed(ctx, te, sessionID, promptPath, prompt)
@@ -895,10 +896,4 @@ func issueType(issue *domain.Issue) string {
 		return ""
 	}
 	return issue.Type
-}
-
-// shellQuote wraps s for POSIX sh so a value containing spaces or shell
-// metacharacters survives as a single argument.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

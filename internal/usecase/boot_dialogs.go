@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	infraAgent "github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // captureSGRFilter removes SGR from the JSON `aiman pty capture` prints, where
@@ -27,12 +28,12 @@ func bootUpdateDialogBranch(sessionID string) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "tail=$(aiman pty capture %q --lines %d 2>/dev/null | %s || true); ",
-		sessionID, infraAgent.UpdateDialogTailLines, captureSGRFilter)
+	fmt.Fprintf(&b, "tail=$(aiman pty capture %s --lines %d 2>/dev/null | %s || true); ",
+		shellx.Quote(sessionID), infraAgent.UpdateDialogTailLines, captureSGRFilter)
 	for _, d := range infraAgent.UpdateDialogs {
 		fmt.Fprintf(&b, "if printf '%%s' \"$tail\" | grep -qE %s; then "+
-			"aiman pty input %q --key %s >/dev/null 2>&1; upd=1; sleep 2; attempt=$((attempt+1)); continue; "+
-			"fi; ", shellQuote(d.Re), sessionID, d.Key)
+			"aiman pty input %s --key %s >/dev/null 2>&1; upd=1; sleep 2; attempt=$((attempt+1)); continue; "+
+			"fi; ", shellx.Quote(d.Re), shellx.Quote(sessionID), d.Key)
 	}
 	return b.String()
 }

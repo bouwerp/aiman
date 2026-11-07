@@ -420,7 +420,7 @@ func TestPrepareSession_DeepCodeUsesLauncherAndEnvDefaults(t *testing.T) {
 	if !strings.Contains(string(script), "session deepcode-watch") || !strings.Contains(string(script), `deepcode "$@"`) {
 		t.Fatalf("launcher script was not installed on the remote: %q", script)
 	}
-	if !strings.Contains(strings.Join(remote.cmds, "\n"), `chmod 700 "/home/user/.aiman/hooks/deepcode-launch.sh"`) {
+	if !strings.Contains(strings.Join(remote.cmds, "\n"), `chmod 700 '/home/user/.aiman/hooks/deepcode-launch.sh'`) {
 		t.Fatalf("launcher must be executable, cmds:\n%s", strings.Join(remote.cmds, "\n"))
 	}
 }

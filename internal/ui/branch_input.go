@@ -53,7 +53,7 @@ func (m BranchInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
 		value := m.Name()
 		m.textInput.SetValue(value)
-		if domain.ValidateSessionName(value) == nil && m.BranchName() != "" {
+		if domain.ValidateSessionName(value) == nil && domain.ValidBranchName(m.BranchName()) == nil {
 			m.Confirmed = true
 			return m, nil
 		}

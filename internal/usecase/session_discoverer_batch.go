@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 	"github.com/google/uuid"
 )
 
@@ -27,8 +28,8 @@ func stableSessionID(host, key string) string {
 // the legacy dot-file at the worktree root and migrating it when found.
 func aimanIDReadCmd(worktreePath string) string {
 	return fmt.Sprintf(
-		"git_dir=$(git -C %q rev-parse --absolute-git-dir 2>/dev/null) && if [ -f \"$git_dir/aiman-id\" ]; then cat \"$git_dir/aiman-id\"; elif [ -f %q/.aiman-id ]; then cat %q/.aiman-id; fi",
-		worktreePath, worktreePath, worktreePath)
+		"git_dir=$(git -C %s rev-parse --absolute-git-dir 2>/dev/null) && if [ -f \"$git_dir/aiman-id\" ]; then cat \"$git_dir/aiman-id\"; elif [ -f %s/.aiman-id ]; then cat %s/.aiman-id; fi",
+		shellx.Quote(worktreePath), shellx.Quote(worktreePath), shellx.Quote(worktreePath))
 }
 
 // gatherWorktreeRecords collects every registered worktree under the remote's

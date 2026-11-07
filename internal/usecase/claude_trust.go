@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // workspaceTrustTimeout bounds pre-launch trust. Claude's ~/.claude.json write
@@ -138,7 +139,7 @@ func TrustWorkspacePaths(ctx context.Context, remote workspaceTrustRemote, worki
 		}
 	}
 	for _, p := range paths {
-		_, _ = remote.Execute(ctx, fmt.Sprintf("git config --global --add safe.directory %q", p))
+		_, _ = remote.Execute(ctx, fmt.Sprintf("git config --global --add safe.directory %s", shellx.Quote(p)))
 	}
 	// Claude first: its trust dialog is what blocks a fresh PTY session, and the
 	// fix is a JSON write rather than a CLI that no longer exists.
@@ -147,9 +148,9 @@ func TrustWorkspacePaths(ctx context.Context, remote workspaceTrustRemote, worki
 
 	for _, p := range paths {
 		_, _ = remote.Execute(ctx, fmt.Sprintf(
-			"cd %q && if command -v copilot >/dev/null; then copilot trust . >/dev/null 2>&1 || copilot trust add . >/dev/null 2>&1; fi", p))
+			"cd %s && if command -v copilot >/dev/null; then copilot trust . >/dev/null 2>&1 || copilot trust add . >/dev/null 2>&1; fi", shellx.Quote(p)))
 		_, _ = remote.Execute(ctx, fmt.Sprintf(
-			"cd %q && if command -v gh >/dev/null; then gh copilot trust . >/dev/null 2>&1 || gh copilot trust add . >/dev/null 2>&1; fi", p))
+			"cd %s && if command -v gh >/dev/null; then gh copilot trust . >/dev/null 2>&1 || gh copilot trust add . >/dev/null 2>&1; fi", shellx.Quote(p)))
 	}
 }
 

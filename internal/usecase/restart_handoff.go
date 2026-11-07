@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 var restartSummaryPollInterval = 2 * time.Second
@@ -48,7 +49,7 @@ func waitForRemoteFile(ctx context.Context, remote TerminalExecutor, path string
 }
 
 func remoteFileExists(ctx context.Context, remote TerminalExecutor, path string) (bool, error) {
-	out, err := remote.Execute(ctx, fmt.Sprintf("if [ -f %q ]; then printf 1; fi", path))
+	out, err := remote.Execute(ctx, fmt.Sprintf("if [ -f %s ]; then printf 1; fi", shellx.Quote(path)))
 	if err != nil {
 		return false, err
 	}
@@ -68,7 +69,7 @@ func restartSummaryPrompt(summaryPath, tempPath string) string {
 // Prompt and interrupt go through `aiman pty input`.
 func CaptureRestartSessionSummaryPTY(ctx context.Context, remote TerminalExecutor, sessionID, summaryPath string) (bool, error) {
 	tempPath := summaryPath + ".tmp"
-	if _, err := remote.Execute(ctx, fmt.Sprintf("rm -f %q %q", summaryPath, tempPath)); err != nil {
+	if _, err := remote.Execute(ctx, fmt.Sprintf("rm -f %s %s", shellx.Quote(summaryPath), shellx.Quote(tempPath))); err != nil {
 		return false, err
 	}
 
@@ -84,22 +85,22 @@ func CaptureRestartSessionSummaryPTY(ctx context.Context, remote TerminalExecuto
 		return false, err
 	}
 	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-		"sleep 1; aiman pty input %q --file %q >/dev/null 2>&1 && sleep 1 && aiman pty input %q --key enter",
-		strings.TrimSpace(sessionID), promptPath, strings.TrimSpace(sessionID))); err != nil {
+		"sleep 1; aiman pty input %s --file %s >/dev/null 2>&1 && sleep 1 && aiman pty input %s --key enter",
+		shellx.Quote(strings.TrimSpace(sessionID)), shellx.Quote(promptPath), shellx.Quote(strings.TrimSpace(sessionID)))); err != nil {
 		return false, err
 	}
 
 	written, err := waitForRemoteFile(ctx, remote, summaryPath, restartSummaryPollInterval)
 	if ctx.Err() != nil {
 		_, _ = remote.Execute(context.Background(), remoteAimanPreamble+fmt.Sprintf(
-			"aiman pty input %q --key ctrl-c", strings.TrimSpace(sessionID)))
+			"aiman pty input %s --key ctrl-c", shellx.Quote(strings.TrimSpace(sessionID))))
 		return false, nil
 	}
 	if err != nil || !written {
 		return false, err
 	}
 	if _, err := remote.Execute(ctx, remoteAimanPreamble+fmt.Sprintf(
-		"aiman pty input %q --key ctrl-c", strings.TrimSpace(sessionID))); err != nil {
+		"aiman pty input %s --key ctrl-c", shellx.Quote(strings.TrimSpace(sessionID)))); err != nil {
 		return true, err
 	}
 	return true, nil

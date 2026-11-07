@@ -11,6 +11,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 type SessionDiscoverer struct {
@@ -327,12 +328,12 @@ func (d *SessionDiscoverer) isDiscoverableOrphanWorktree(ctx context.Context, re
 		return false
 	}
 	if err := d.remoteExecutor.ValidateDir(ctx, worktreePath); err != nil {
-		_, _ = d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %q worktree prune --expire=now 2>/dev/null || true", repoPath))
+		_, _ = d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %s worktree prune --expire=now 2>/dev/null || true", shellx.Quote(repoPath)))
 		return false
 	}
-	gitCheck, err := d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo BROKEN", worktreePath))
+	gitCheck, err := d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-dir 2>/dev/null || echo BROKEN", shellx.Quote(worktreePath)))
 	if err != nil || strings.TrimSpace(gitCheck) == "BROKEN" {
-		_, _ = d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %q worktree prune --expire=now 2>/dev/null || true", repoPath))
+		_, _ = d.remoteExecutor.Execute(ctx, fmt.Sprintf("git -C %s worktree prune --expire=now 2>/dev/null || true", shellx.Quote(repoPath)))
 		return false
 	}
 	return true

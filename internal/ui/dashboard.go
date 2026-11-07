@@ -35,6 +35,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/remotesvc"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
 	"github.com/bouwerp/aiman/internal/pane"
+	"github.com/bouwerp/aiman/internal/shellx"
 	"github.com/bouwerp/aiman/internal/usecase"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
@@ -1169,7 +1170,7 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 	ctx := context.Background()
 
-	statusOut, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q status --porcelain --untracked-files=no'", s.WorktreePath))
+	statusOut, err := mgr.Execute(ctx, "bash -c "+shellx.Quote(fmt.Sprintf("git -C %s status --porcelain --untracked-files=no", shellx.Quote(s.WorktreePath))))
 	if err != nil {
 		// If git is broken/corrupted (exit 128), allow cleanup to proceed
 		// Check if error indicates corrupted repo
@@ -1186,7 +1187,7 @@ func (m *Model) validateTerminationPreconditions(s domain.Session) error {
 		return fmt.Errorf("session has uncommitted changes; commit or stash before terminating")
 	}
 
-	aheadOut, err := mgr.Execute(ctx, fmt.Sprintf("bash -c 'if git -C %q rev-parse --abbrev-ref --symbolic-full-name @{upstream} >/dev/null 2>&1; then git -C %q rev-list --count @{upstream}..HEAD; else echo NO_UPSTREAM; fi'", s.WorktreePath, s.WorktreePath))
+	aheadOut, err := mgr.Execute(ctx, "bash -c "+shellx.Quote(fmt.Sprintf("if git -C %s rev-parse --abbrev-ref --symbolic-full-name @{upstream} >/dev/null 2>&1; then git -C %s rev-list --count @{upstream}..HEAD; else echo NO_UPSTREAM; fi", shellx.Quote(s.WorktreePath), shellx.Quote(s.WorktreePath))))
 	if err != nil {
 		// If git is broken/corrupted, allow cleanup to proceed
 		errMsg := err.Error()
@@ -1692,7 +1693,7 @@ func (m *Model) fetchWorkspaceStatus(remote *config.Remote, repoName string) tea
 // nothing missing: the summary warning is advisory.
 func workspaceStatus(ctx context.Context, remote domain.RemoteExecutor, root, repoName string, requires []string, agentCmd string) workspaceStatusMsg {
 	mainRepoPath := git.ComputeMainRepoPath(root, repoName)
-	_, err := remote.Execute(ctx, fmt.Sprintf("test -d %q", mainRepoPath))
+	_, err := remote.Execute(ctx, fmt.Sprintf("test -d %s", shellx.Quote(mainRepoPath)))
 	msg := workspaceStatusMsg{path: mainRepoPath, exists: err == nil}
 	if len(requires) > 0 {
 		missing, err := usecase.CheckRequires(ctx, remote, mainRepoPath, agentCmd, requires)
@@ -2477,13 +2478,13 @@ func (m *Model) terminateDiscardChanges(ctx context.Context, s domain.Session) e
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 
 	// Safety: never reset/clean the main repository itself.
-	gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
+	gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-dir 2>/dev/null || echo NOT_GIT", shellx.Quote(s.WorktreePath)))
 	if strings.TrimSpace(gitDirOut) == ".git" {
 		m.log("Skipping forced discard in %s — it is the main git repository", s.WorktreePath)
 		return skipReason(fmt.Sprintf("changes in %s left intact (main repository)", s.WorktreePath))
 	}
 
-	_, err := mgr.ExecuteWithTimeout(ctx, fmt.Sprintf("bash -c 'git -C %q reset --hard HEAD && git -C %q clean -fd'", s.WorktreePath, s.WorktreePath), terminateDeleteTimeout)
+	_, err := mgr.ExecuteWithTimeout(ctx, "bash -c "+shellx.Quote(fmt.Sprintf("git -C %s reset --hard HEAD && git -C %s clean -fd", shellx.Quote(s.WorktreePath), shellx.Quote(s.WorktreePath))), terminateDeleteTimeout)
 	return err
 }
 
@@ -2563,8 +2564,8 @@ func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) e
 	}
 
 	// Secondary check: resolve both paths on the remote to catch symlinks.
-	resolvedWorktree, resolveErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", s.WorktreePath, s.WorktreePath, s.WorktreePath))
-	resolvedMain, resolveMainErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %q 2>/dev/null || realpath %q 2>/dev/null || echo %q", mainRepoPath, mainRepoPath, mainRepoPath))
+	resolvedWorktree, resolveErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %s 2>/dev/null || realpath %s 2>/dev/null || echo %s", shellx.Quote(s.WorktreePath), shellx.Quote(s.WorktreePath), shellx.Quote(s.WorktreePath)))
+	resolvedMain, resolveMainErr := mgr.Execute(ctx, fmt.Sprintf("readlink -f %s 2>/dev/null || realpath %s 2>/dev/null || echo %s", shellx.Quote(mainRepoPath), shellx.Quote(mainRepoPath), shellx.Quote(mainRepoPath)))
 
 	if resolveErr == nil && resolveMainErr == nil {
 		cleanResolvedWT := path.Clean(strings.TrimSpace(resolvedWorktree))
@@ -2579,7 +2580,7 @@ func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) e
 	// git rev-parse --git-dir returns ".git" (relative) for main repos and an
 	// absolute path containing "/worktrees/" for linked worktrees. This is reliable
 	// regardless of how mainRepoPath was computed from config.
-	gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
+	gitDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-dir 2>/dev/null || echo NOT_GIT", shellx.Quote(s.WorktreePath)))
 	gitDir := strings.TrimSpace(gitDirOut)
 	if gitDir == ".git" {
 		m.log("Skipping worktree removal: git identifies %s as a main repository", s.WorktreePath)
@@ -2590,7 +2591,7 @@ func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) e
 	// wrong when repos live in a subdirectory that isn't reflected in remote.Root.
 	// git rev-parse --git-common-dir returns ".git" (relative) for the main worktree and
 	// an absolute path like "/path/to/repo/.git" for linked worktrees.
-	gitCommonDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %q rev-parse --git-common-dir 2>/dev/null || echo NOT_GIT", s.WorktreePath))
+	gitCommonDirOut, _ := mgr.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --git-common-dir 2>/dev/null || echo NOT_GIT", shellx.Quote(s.WorktreePath)))
 	gitCommonDir := strings.TrimSpace(gitCommonDirOut)
 	if path.IsAbs(gitCommonDir) && strings.HasSuffix(gitCommonDir, "/.git") {
 		derived := path.Dir(gitCommonDir)
@@ -2601,11 +2602,11 @@ func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) e
 	m.log("Terminating session: removing worktree %s", s.WorktreePath)
 
 	// Unlock the worktree before removal — a stale lock file prevents git from pruning it.
-	_, _ = mgr.Execute(ctx, fmt.Sprintf("git -C %q worktree unlock %q 2>/dev/null || true", mainRepoPath, s.WorktreePath))
+	_, _ = mgr.Execute(ctx, fmt.Sprintf("git -C %s worktree unlock %s 2>/dev/null || true", shellx.Quote(mainRepoPath), shellx.Quote(s.WorktreePath)))
 
 	// Try to remove via git worktree (needs to run from main repo).
 	// git itself refuses to remove the main worktree, providing an extra layer of safety.
-	out, err := mgr.ExecuteWithTimeout(ctx, fmt.Sprintf("bash -c 'git -C %q worktree remove --force %q'", mainRepoPath, s.WorktreePath), terminateDeleteTimeout)
+	out, err := mgr.ExecuteWithTimeout(ctx, "bash -c "+shellx.Quote(fmt.Sprintf("git -C %s worktree remove --force %s", shellx.Quote(mainRepoPath), shellx.Quote(s.WorktreePath))), terminateDeleteTimeout)
 	if err != nil {
 		m.log("Warning: git worktree remove failed: %v, output: %s", err, out)
 	}
@@ -2616,14 +2617,14 @@ func (m *Model) terminateRemoveWorktree(ctx context.Context, s domain.Session) e
 	if resolveErr != nil || rmPath == "" {
 		rmPath = cleanWorktree
 	}
-	out, err = mgr.ExecuteWithTimeout(ctx, fmt.Sprintf("rm -rf %q", rmPath), terminateDeleteTimeout)
+	out, err = mgr.ExecuteWithTimeout(ctx, fmt.Sprintf("rm -rf %s", shellx.Quote(rmPath)), terminateDeleteTimeout)
 	if err != nil {
 		m.log("Error: rm -rf worktree failed: %v, output: %s", err, out)
 	}
 
 	// Always prune stale metadata from the main repo after deletion. This ensures git's
 	// bookkeeping is clean so future `git worktree add` for the same branch succeeds.
-	if pruneOut, pruneErr := mgr.Execute(ctx, fmt.Sprintf("bash -c 'git -C %q worktree prune --expire=now 2>&1 || true'", mainRepoPath)); pruneErr != nil {
+	if pruneOut, pruneErr := mgr.Execute(ctx, "bash -c "+shellx.Quote(fmt.Sprintf("git -C %s worktree prune --expire=now 2>&1 || true", shellx.Quote(mainRepoPath)))); pruneErr != nil {
 		m.log("Warning: git worktree prune failed: %v, output: %s", pruneErr, pruneOut)
 	} else {
 		m.log("git worktree prune completed: %s", pruneOut)
@@ -5062,7 +5063,7 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			switch termProgram {
 			case "iTerm.app":
 				// iTerm2
-				cmd := fmt.Sprintf("cd %q && clear", s.LocalPath)
+				cmd := fmt.Sprintf("cd %s && clear", shellx.Quote(s.LocalPath))
 				script = fmt.Sprintf(`tell application "iTerm"
 	create window with default profile
 	tell current session of current window
@@ -5074,7 +5075,7 @@ end tell`, cmd)
 				script = `display notification "Local path copied to clipboard" with title "Aiman"`
 			case "Apple_Terminal":
 				// Terminal.app
-				cmd := fmt.Sprintf("cd %q && clear", s.LocalPath)
+				cmd := fmt.Sprintf("cd %s && clear", shellx.Quote(s.LocalPath))
 				script = fmt.Sprintf(`tell application "Terminal"
 	do script %q
 	activate

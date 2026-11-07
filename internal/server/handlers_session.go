@@ -766,6 +766,11 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
+	if params.Branch != "" {
+		if err := domain.ValidBranchName(params.Branch); err != nil {
+			return errResp(req.ID, CodeInvalidParams, err.Error())
+		}
+	}
 	existing, err := s.loadSessions(ctx)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
@@ -917,9 +922,10 @@ const worktreeExistsError = "WORKTREE_EXISTS"
 const maxBranchSuffix = 20
 
 // branchForName derives a branch from a session name. A name with nothing usable
-// in a branch, such as one in another alphabet, gets a generated identifier.
+// in a branch, such as one in another alphabet, or a derived name git would
+// refuse gets a generated identifier.
 func branchForName(name string) string {
-	if branch := domain.BranchFromSessionName(name); branch != "" {
+	if branch := domain.BranchFromSessionName(name); domain.ValidBranchName(branch) == nil {
 		return branch
 	}
 	return domain.AdHocLabel("session-", time.Now(), rand.Reader)
