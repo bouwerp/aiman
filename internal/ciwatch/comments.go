@@ -2,7 +2,9 @@ package ciwatch
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -34,9 +36,28 @@ func (w *Watcher) viewerLogin(ctx context.Context) string {
 	return w.viewer
 }
 
-// reactToComments turns each unseen review comment into a to-do and a note.
-// The agent's own replies and comments older than the watch are marked seen
-// without steering.
+// eventAppender is the session ledger. *sqlite.Repository, the watcher's usual
+// Store, provides it.
+type eventAppender interface {
+	AppendSessionEvent(ctx context.Context, ev domain.SessionEvent) (int64, error)
+}
+
+// trustedAssociation reports whether a comment's author has write access to the
+// repository. A steered comment is typed into an agent that can push, so anyone
+// else, and a missing association, is refused.
+func trustedAssociation(association string) bool {
+	switch association {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	default:
+		return false
+	}
+}
+
+// reactToComments turns each unseen review comment from a trusted author into a
+// to-do and a note. The agent's own replies and comments older than the watch
+// are marked seen without steering; an untrusted author's comment is marked seen
+// and recorded, also without steering.
 func (w *Watcher) reactToComments(ctx context.Context, s domain.Session, st domain.PRWatchState, pr PRView) error {
 	// Without the viewer the agent's own replies cannot be told apart, so
 	// nothing is processed until it is known.
@@ -58,12 +79,17 @@ func (w *Watcher) reactToComments(ctx context.Context, s domain.Session, st doma
 	}
 
 	var processed []int64
+	var ignored []ReviewComment
 	for _, c := range comments {
 		if seen[c.ID] {
 			continue
 		}
 		processed = append(processed, c.ID)
 		if (c.InReplyTo != 0 && c.Author == viewer) || c.CreatedAt.Before(since) {
+			continue
+		}
+		if !trustedAssociation(c.Association) {
+			ignored = append(ignored, c)
 			continue
 		}
 		if err := w.addReviewTodo(ctx, s, pr, c); err != nil {
@@ -75,7 +101,45 @@ func (w *Watcher) reactToComments(ctx context.Context, s domain.Session, st doma
 	}
 	// Seen is written after the to-dos: a crash in between re-reads at most
 	// this batch, and the open-Ref check keeps that from duplicating.
-	return w.d.State.MarkCommentsSeen(ctx, s.ID, processed)
+	if err := w.d.State.MarkCommentsSeen(ctx, s.ID, processed); err != nil {
+		return err
+	}
+	// Recorded only once seen, so a failed to-do later in the batch cannot
+	// repeat these rows on every retry.
+	for _, c := range ignored {
+		w.recordIgnoredComment(ctx, s.ID, c)
+	}
+	return nil
+}
+
+// recordIgnoredComment notes a comment that was refused for its author. The
+// body is attacker-controlled and stays out of both the ledger and the log.
+// Failing to record never fails the poll.
+func (w *Watcher) recordIgnoredComment(ctx context.Context, sessionID string, c ReviewComment) {
+	ledger, ok := w.d.State.(eventAppender)
+	if !ok {
+		logIgnoredComment(sessionID, c, "no ledger")
+		return
+	}
+	payload, err := json.Marshal(map[string]any{"comment_id": c.ID, "author": c.Author, "association": c.Association})
+	if err != nil {
+		logIgnoredComment(sessionID, c, err.Error())
+		return
+	}
+	_, err = ledger.AppendSessionEvent(ctx, domain.SessionEvent{
+		SessionID: sessionID,
+		At:        w.d.Now().UTC(),
+		Actor:     domain.EventActorAiman,
+		Kind:      domain.EventReviewCommentIgnored,
+		Payload:   payload,
+	})
+	if err != nil {
+		logIgnoredComment(sessionID, c, err.Error())
+	}
+}
+
+func logIgnoredComment(sessionID string, c ReviewComment, why string) {
+	log.Printf("ciwatch: session %s ignored review comment %d by %q (association %q): not on the ledger: %s", sessionID, c.ID, c.Author, c.Association, why)
 }
 
 func (w *Watcher) addReviewTodo(ctx context.Context, s domain.Session, pr PRView, c ReviewComment) error {

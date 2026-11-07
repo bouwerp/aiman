@@ -83,13 +83,13 @@ func TestParseReviewComments(t *testing.T) {
 		t.Fatalf("comments %+v", got)
 	}
 	first, reply := got[0], got[1]
-	if first.ID != 5 || first.Line != 17 || first.Author != "alice" || first.Path != "internal/a.go" || first.Body != "Rename this." || first.InReplyTo != 0 {
+	if first.ID != 5 || first.Line != 17 || first.Author != "alice" || first.Path != "internal/a.go" || first.Body != "Rename this." || first.InReplyTo != 0 || first.Association != "MEMBER" {
 		t.Fatalf("first %+v", first)
 	}
 	if !first.CreatedAt.Equal(time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("created %v", first.CreatedAt)
 	}
-	if reply.ID != 6 || reply.Line != 20 || reply.InReplyTo != 5 || reply.Author != "bob" {
+	if reply.ID != 6 || reply.Line != 20 || reply.InReplyTo != 5 || reply.Author != "bob" || reply.Association != "NONE" {
 		t.Fatalf("reply %+v", reply)
 	}
 }
