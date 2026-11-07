@@ -2,13 +2,7 @@
 // normalised items for the phone (docs/specs/phone-transcript.md).
 package transcript
 
-import (
-	"errors"
-	"time"
-)
-
-// errNotImplemented marks stub behaviour that P1 replaces.
-var errNotImplemented = errors.New("not implemented")
+import "time"
 
 // ItemKind is the kind of one normalised entry.
 type ItemKind string
