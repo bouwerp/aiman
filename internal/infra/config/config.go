@@ -249,8 +249,8 @@ type ReviewConfig struct {
 	// FixTimeout is how long a review's fixer may run without pushing; zero
 	// means DefaultReviewFixTimeout.
 	FixTimeout time.Duration `yaml:"fix_timeout,omitempty"`
-	// Sandbox holds the compose network for review.run. Empty is compose's
-	// default (bridge); "none" is offline.
+	// Sandbox holds the compose network for the review sandbox. Empty and
+	// "none" are offline; any other value uses compose's default network.
 	Sandbox ReviewSandboxConfig `yaml:"sandbox,omitempty"`
 }
 

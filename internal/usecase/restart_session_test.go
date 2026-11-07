@@ -214,7 +214,7 @@ func TestRestartSessionSwitchOrder(t *testing.T) {
 	if s.Backend != domain.BackendPTY || s.Status != domain.SessionStatusActive {
 		t.Fatalf("session %+v", s)
 	}
-	params := remote.files["/tmp/aiman-pty-"+s.ID+".json"]
+	params := remote.files["$HOME/.aiman/tmp/aiman-pty-"+s.ID+".json"]
 	for _, want := range []string{`"command":"codex"`, `"K":"v"`} {
 		if !strings.Contains(params, want) {
 			t.Fatalf("pty params %s lack %s", params, want)
