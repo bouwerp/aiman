@@ -56,6 +56,8 @@ type SessionEvent struct {
 	DeliveredAt string `json:"delivered_at,omitempty"`
 	// Kind classifies a notify event.
 	Kind string `json:"kind,omitempty"`
+	// Subagent names the sub-agent whose transcript moved on transcript.
+	Subagent string `json:"subagent,omitempty"`
 }
 
 // isSessionEvents reports whether a request opens the event stream, which like

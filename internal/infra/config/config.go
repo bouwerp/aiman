@@ -341,7 +341,38 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Review:        c.Review,
 		Repos:         c.Repos,
 		Roles:         c.Roles,
+		AWS:           c.serveAWSFor(host),
 	})
+}
+
+// serveAWSFor lists the synced delegations of host's remote, field by field so
+// the laptop's source profile name stays on the laptop.
+func (c *Config) serveAWSFor(host string) ServeAWSConfig {
+	var out ServeAWSConfig
+	for _, r := range c.Remotes {
+		if r.Host != host {
+			continue
+		}
+		for _, d := range r.AllDelegations() {
+			if d == nil || !d.SyncCredentials {
+				continue
+			}
+			out.Delegations = append(out.Delegations, ServeAWSDelegation{
+				Profile:         d.Profile,
+				AccountID:       d.AccountID,
+				RoleName:        d.RoleName,
+				Regions:         d.Regions,
+				SessionPolicy:   d.SessionPolicy,
+				DurationSeconds: d.DurationSeconds,
+				SSOStartURL:     d.SSOStartURL,
+				SSORegion:       d.SSORegion,
+				SSOAccountID:    d.SSOAccountID,
+				SSORoleName:     d.SSORoleName,
+			})
+		}
+		break
+	}
+	return out
 }
 
 // NotificationsFor returns notifications config merged with remote overrides.
@@ -412,6 +443,10 @@ type AWSDefaults struct {
 	// IncludeProfiles is the local ~/.aws profile names aiman will use. nil
 	// (omitted) means every local profile; an empty list means none.
 	IncludeProfiles *[]string `yaml:"include_profiles,omitempty"`
+	// Delegations is what serve reads back of the aws.delegations section the
+	// laptop pushes (ServeConfig.AWS). A laptop's own delegations live under
+	// remotes; this list is never pushed.
+	Delegations []ServeAWSDelegation `yaml:"delegations,omitempty"`
 }
 
 // AgentDefaults is the launch model and reasoning effort for one agent binary

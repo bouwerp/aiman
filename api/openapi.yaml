@@ -394,7 +394,13 @@ components:
             review_assessment_rejected and review_already_approved
             (review.approve), plus review_not_ready, review_incomplete,
             review_head_moved and gate_needs_operator (gate:approve is closed
-            only by an operator todo.update).
+            only by an operator todo.update). aws.login_start refuses with
+            aws_no_sso (the delegation has no SSO facts), aws_rate_limited
+            (too many pending logins or recent starts), invalid_params (the
+            profile is not delegated) and needs_operator (a session caller).
+            aws.login_status answers not_found for a login id serve no longer
+            holds. Until their handlers land, the aws.* methods answer
+            unavailable.
           enum:
             - invalid_params
             - not_found
@@ -432,6 +438,8 @@ components:
             - worktree_dirty
             - needs_operator
             - session_scope
+            - aws_no_sso
+            - aws_rate_limited
             - invalid_code
             - locked
             - forbidden
@@ -509,6 +517,9 @@ components:
             - context.verify
             - usage.get
             - limits.get
+            - aws.status
+            - aws.login_start
+            - aws.login_status
             - agents.status
             - agents.update
             - agents.move_prefix
@@ -642,6 +653,17 @@ components:
         issue:
           type: string
           description: session.create, the JIRA key.
+        check:
+          type: boolean
+          description: >
+            aws.status: also confirm each credential works with
+            get-caller-identity.
+        profile:
+          type: string
+          description: aws.login_start, required. The delegated AWS profile to sign in.
+        login_id:
+          type: string
+          description: aws.login_status, required. From the aws.login_start result.
         device_id:
           type: string
         states:
@@ -666,6 +688,8 @@ components:
             - $ref: "#/components/schemas/SessionTerminatedResult"
             - $ref: "#/components/schemas/HostStatsResult"
             - $ref: "#/components/schemas/LimitsResult"
+            - $ref: "#/components/schemas/AWSStatusResult"
+            - $ref: "#/components/schemas/AWSLoginResult"
             - $ref: "#/components/schemas/AgentsStatusResult"
             - $ref: "#/components/schemas/ReviewFixResult"
             - $ref: "#/components/schemas/ReviewPushResult"
@@ -856,6 +880,86 @@ components:
             before confirming; session.list has parent_id.
           items:
             type: string
+    AWSStatusResult:
+      type: object
+      description: >
+        aws.status {check?}. One row per profile in the union of this host's
+        delegations and the sections of its ~/.aws/credentials. Credential
+        values never appear here. A device token may call it; a session may too.
+      required: [type, profiles]
+      properties:
+        type:
+          type: string
+          const: aws_status
+        profiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/AWSProfileStatus"
+    AWSProfileStatus:
+      type: object
+      required: [profile, status, sso_ready]
+      properties:
+        profile:
+          type: string
+        status:
+          type: string
+          description: >
+            not_pushed is a delegated profile with no section on the host;
+            unmanaged is a section with no delegation and no recorded expiry.
+          enum: [valid, expired, not_pushed, unmanaged]
+        expires_at:
+          type: string
+          format: date-time
+        expiry_approx:
+          type: boolean
+          description: expires_at is estimated from the file's age; do not show it as exact.
+        sso_ready:
+          type: boolean
+          description: >
+            False when the profile has no delegation or its delegation lacks
+            SSO facts. aws.login_start answers invalid_params for the first and
+            aws_no_sso for the second.
+    AWSLoginResult:
+      type: object
+      description: >
+        aws.login_start {profile} needs allow_destructive on a device token and
+        is refused for a session caller. aws.login_status {login_id} is a read.
+        A start for a profile with a pending login returns that login.
+      required: [type, login]
+      properties:
+        type:
+          type: string
+          const: aws_login
+        login:
+          $ref: "#/components/schemas/AWSLogin"
+    AWSLogin:
+      type: object
+      required: [login_id, profile, state]
+      properties:
+        login_id:
+          type: string
+        profile:
+          type: string
+        state:
+          type: string
+          enum: [pending, approved, minting, done, denied, expired, failed]
+        failure:
+          type: string
+          description: Set when state is failed.
+          enum: [sso_role_denied, write_failed, other]
+        expires_at:
+          type: string
+          format: date-time
+          description: When the device code expires. aws.login_start and aws.login_status.
+        user_code:
+          type: string
+          description: aws.login_start only; aws.login_status never returns it.
+        verification_uri_complete:
+          type: string
+          description: The approval URL. aws.login_start only; aws.login_status never returns it.
+        expires_in:
+          type: integer
+          description: Seconds until the device code expires. aws.login_start only.
     LimitsResult:
       type: object
       description: >
@@ -1186,8 +1290,9 @@ components:
           description: >
             Lets the device call pty.input, pty.create, pty.run, pty.kill,
             pty.forget, session.create, session.restart, session.forget,
-            review.post, agents.update and agents.move_prefix, open the
-            terminal WebSocket, and close, drop, rename or remove a to-do whose
+            review.post, agents.update, agents.move_prefix and
+            aws.login_start, open the terminal WebSocket, and close, drop,
+            rename or remove a to-do whose
             ref starts with gate:. Other to-do edits, session.prompt and
             steer.send do not need it.
     DeviceList:

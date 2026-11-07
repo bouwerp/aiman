@@ -1,7 +1,7 @@
 # phone-aws-login: Sign in to AWS from the phone
 
-**Revision:** 4 · **Size:** project · **Status:** approved by the operator on 2026-11-07 ("Drop the relay, approved, go ahead") (rev 2: dedicated permission set instead of role chaining, decided by the operator, who needs sessions of at least 8 hours; rev 3: consult objections triaged, see Decisions)
-**Task:** none yet · **Spec:** replaces the refresh half of `docs/superpowers/specs/2026-11-04-phone-aws-credentials-design.md` (parked)
+**Revision:** 5 · **Size:** project · **Status:** approved by the operator on 2026-11-07 ("Drop the relay, approved, go ahead") (rev 2: dedicated permission set instead of role chaining, decided by the operator, who needs sessions of at least 8 hours; rev 3: consult objections triaged, see Decisions)
+**Task:** none yet · **Spec:** replaces the refresh half of `docs/specs/phone-aws-credentials-parked.md` (parked; its status table is inlined below)
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
 
@@ -136,7 +136,18 @@ flowchart LR
 | `aws.login_start` | `{profile}` | `{"type":"aws_login","login":{login_id, profile, user_code, verification_uri_complete, expires_in, state}}` |
 | `aws.login_status` | `{login_id}` | `{"type":"aws_login","login":{login_id, profile, state, failure, expires_at}}` |
 
-`aws.status` uses the parked row table unchanged, with the delegated list now read from serve's config. Values never leave `ReadHostCredentialProfiles`, and the planted-secret test from the parked design stays. `check: true` keeps the parked `get-caller-identity` guard. `sso_ready` is false when a delegation lacks SSO facts, so the phone can explain before a tap.
+`aws.status` rows are the union of the configured delegations (serve's `aws.delegations`) and the sections of the host's `~/.aws/credentials`:
+
+| Row | `status` | `expires_at` |
+|---|---|---|
+| Delegated, section on host, recorded expiry in the future | `valid` | recorded |
+| Delegated, section on host, recorded expiry past | `expired` | recorded |
+| Delegated, section on host, no recorded expiry | `valid` or `expired` from mtime plus `duration_seconds`, `expiry_approx: true` | estimated |
+| Delegated, no section on host | `not_pushed` | none |
+| Not delegated, section with a recorded expiry | `valid` or `expired` from the recorded value | recorded |
+| Not delegated, no recorded expiry | `unmanaged` | none |
+
+The delegated list is serve's config, so the rows work with the laptop off. Values never leave `ReadHostCredentialProfiles`, and the planted-secret test from the parked design stays. `check: true` keeps the parked `get-caller-identity` guard. `sso_ready` is false when a delegation lacks SSO facts, so the phone can explain before a tap.
 
 `aws.login_start` refusals: `invalid_params` (profile not delegated), `aws_no_sso` (delegation has no SSO facts), `aws_rate_limited`, `needs_operator`. A start for a profile that already has a pending login returns that login and does not count against the limit. `login_id` is 128 random bits, and `aws.login_status` never returns the user code or the approval URL, so a session caller watching logins learns only states.
 
@@ -156,7 +167,7 @@ flowchart LR
 
 **Secrets never enter a child process.** Serve talks to `oidc.<sso_region>.amazonaws.com` (`RegisterClient`, `StartDeviceAuthorization`, `CreateToken`) and `portal.sso.<sso_region>.amazonaws.com` (`GetRoleCredentials`, bearer token header) with Go's `net/http` and a 30s timeout per call. The client secret, device code, access token and role credentials exist only in serve's memory until the write, never in argv, a child's environment, CLI history or a log. Errors are codes; response bodies are parsed for an error code and discarded. The engine's test plants recognisable fake secrets in a fake Identity Center and asserts they appear in no error string, log line or RPC result. The host `aws` CLI is used only by `aws.status {check:true}` (`get-caller-identity`, no secret in argv), as in the parked design.
 
-**Write.** `GetRoleCredentials` returns the permission set's credentials with their expiry (12 hours with the recommended session duration; whatever the permission set says otherwise). Serve merges the section with the existing `MergeCredentialsIntoConfig` and `FormatCredentialsSection`, so `x_security_token_expires` is recorded exactly as today. It writes locally (temp file, 0600, rename) under `~/.aiman/aws-credentials.lock`. It never runs `EnsureRole` or `assume-role`: no IAM change and no chaining from the phone. `duration_seconds` does not apply to this path; the permission set's session duration decides.
+**Write.** `GetRoleCredentials` returns the permission set's credentials with their expiry (12 hours with the recommended session duration; whatever the permission set says otherwise). Serve formats the section with the existing `FormatCredentialsSection`, so `x_security_token_expires` is recorded exactly as today, and splices it into the file in place: an exact section-name match, raw bytes elsewhere, the next section's comment kept. (`MergeCredentialsIntoConfig` folds case, normalises line endings and drops comments, so it is not used here; consult e9a79ed2 approved the splice.) It writes locally (temp file, 0600, rename) under `~/.aiman/aws-credentials.lock`. It never runs `EnsureRole` or `assume-role`: no IAM change and no chaining from the phone. `duration_seconds` does not apply to this path; the permission set's session duration decides.
 
 ### Behaviour
 

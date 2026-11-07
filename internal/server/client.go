@@ -333,6 +333,10 @@ func callDeadline(method string) time.Duration {
 		return RepoListTimeout + 15*time.Second
 	case "design.publish":
 		return DesignPublishTimeout + 15*time.Second
+	case "aws.status":
+		return AWSStatusTimeout + 15*time.Second
+	case "aws.login_start":
+		return AWSLoginStartTimeout + 15*time.Second
 	case "review.fix", "review.assess":
 		return SessionCreateWait
 	case "review.post", "review.push", "review.approve":
