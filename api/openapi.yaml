@@ -376,6 +376,9 @@ components:
             worktree_dirty refuses session.terminate while removing the
             worktree would lose work, and data says what. needs_operator
             refuses a session's call to session.restart or session.terminate.
+            session_scope refuses a session's pty.create, pty.input, pty.run,
+            pty.kill, pty.forget, session.prompt, session.forget or steer.send
+            on anything but itself, a descendant or its own helper pty.
             legacy_terminal refuses both on a legacy tmux row. A serve older
             than this spec answers a method it does not have with
             invalid_params and the message "unknown method <name>"; an older
@@ -428,6 +431,7 @@ components:
             - review_already_approved
             - worktree_dirty
             - needs_operator
+            - session_scope
             - invalid_code
             - locked
             - forbidden

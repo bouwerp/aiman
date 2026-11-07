@@ -30,6 +30,11 @@ import (
 var holderBin []string
 
 func TestMain(m *testing.M) {
+	// The client sends AIMAN_ID as the caller. Inside an aiman session that would
+	// turn every operator call in these tests into a call from an unknown session.
+	if err := os.Unsetenv("AIMAN_ID"); err != nil {
+		panic(err)
+	}
 	tmp, err := os.MkdirTemp("", "aiman-server-test-*")
 	if err != nil {
 		panic(err)

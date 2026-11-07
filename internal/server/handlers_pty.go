@@ -41,6 +41,9 @@ func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 	if params.ID == "" || params.Command == "" {
 		return errResp(req.ID, CodeInvalidParams, "id and command are required")
 	}
+	if refused, ok := s.refuseCreateOutOfScope(ctx, req, params.ID, params.ParentID); ok {
+		return refused
+	}
 	info, err := s.pty.Create(ptyruntime.Spec{
 		ID:      params.ID,
 		Name:    params.Name,
@@ -98,6 +101,19 @@ func (s *Server) resolvePTYID(req Request) (string, Response, bool) {
 	return params.ID, Response{}, true
 }
 
+// resolvePTYTarget is resolvePTYID for a method that acts on the pty: a session
+// caller must have it in scope.
+func (s *Server) resolvePTYTarget(ctx context.Context, req Request) (string, Response, bool) {
+	id, fail, ok := s.resolvePTYID(req)
+	if !ok {
+		return "", fail, false
+	}
+	if refused, out := s.refuseOutOfScope(ctx, req, id); out {
+		return "", refused, false
+	}
+	return id, Response{}, true
+}
+
 func (s *Server) handlePTYGet(ctx context.Context, req Request) Response {
 	id, fail, ok := s.resolvePTYID(req)
 	if !ok {
@@ -111,7 +127,7 @@ func (s *Server) handlePTYGet(ctx context.Context, req Request) Response {
 }
 
 func (s *Server) handlePTYInput(ctx context.Context, req Request) Response {
-	id, fail, ok := s.resolvePTYID(req)
+	id, fail, ok := s.resolvePTYTarget(ctx, req)
 	if !ok {
 		return fail
 	}
@@ -140,7 +156,7 @@ func appendRunEnter(command string) string {
 }
 
 func (s *Server) handlePTYRun(ctx context.Context, req Request) Response {
-	id, fail, ok := s.resolvePTYID(req)
+	id, fail, ok := s.resolvePTYTarget(ctx, req)
 	if !ok {
 		return fail
 	}
@@ -344,7 +360,7 @@ func (s *Server) dropPaneMemory(id string) {
 }
 
 func (s *Server) handlePTYKill(ctx context.Context, req Request) Response {
-	id, fail, ok := s.resolvePTYID(req)
+	id, fail, ok := s.resolvePTYTarget(ctx, req)
 	if !ok {
 		return fail
 	}
@@ -360,7 +376,7 @@ func (s *Server) handlePTYKill(ctx context.Context, req Request) Response {
 }
 
 func (s *Server) handlePTYForget(ctx context.Context, req Request) Response {
-	id, fail, ok := s.resolvePTYID(req)
+	id, fail, ok := s.resolvePTYTarget(ctx, req)
 	if !ok {
 		return fail
 	}
