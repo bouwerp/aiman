@@ -186,7 +186,7 @@ func TestRedact(t *testing.T) {
 			t.Fatalf("line %d: redacted output is not JSON: %v (%q)", i, err, r)
 		}
 	}
-	if len(out[0]) != 6 || out[0]["n"] != float64(3) || out[0]["ok"] != true {
+	if len(out[0]) != 7 || out[0]["n"] != float64(3) || out[0]["ok"] != true {
 		t.Errorf("structure, numbers or booleans changed: %v", out[0])
 	}
 	if out[0]["type"] != "assistant" || out[0]["uuid"] == "" || out[0]["uuid"] == nil {
