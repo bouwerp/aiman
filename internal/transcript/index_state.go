@@ -1,6 +1,9 @@
 package transcript
 
-import "sort"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // posKey orders every change an index applies. sub counts the changes applied
 // at one position, from 1, because one line can produce several.
@@ -106,33 +109,60 @@ func (s *state) compact() {
 	s.entries = live
 }
 
-// pageBudget stops a reply at its item limit and byte cap. The first item is
-// always taken, so a reply makes progress.
+// pageBudget stops a reply at its item limit and byte cap. The limit counts
+// Items and Changed; the byte cap counts the whole reply, Removed ids and the
+// envelope included. The first entry is always taken, so a reply makes
+// progress.
 type pageBudget struct {
 	limit, maxBytes int
-	count, bytes    int
+	count, taken    int
+	bytes           int
 }
 
-func newPageBudget(limit, maxBytes int) *pageBudget {
+func newPageBudget(limit, maxBytes, envelope int) *pageBudget {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
 	if limit > MaxLimit {
 		limit = MaxLimit
 	}
-	// Two JSON arrays' brackets, for Items and Changed.
-	return &pageBudget{limit: limit, maxBytes: maxBytes, bytes: 4}
+	return &pageBudget{limit: limit, maxBytes: maxBytes, bytes: envelope}
 }
 
 func (b *pageBudget) take(it Item) bool {
 	if b.count >= b.limit {
 		return false
 	}
-	size := encodedSize(it) + 1 // the comma
-	if b.count > 0 && b.bytes+size > b.maxBytes {
+	if !b.fits(encodedSize(it) + 1) { // the comma
 		return false
 	}
 	b.count++
+	return true
+}
+
+// takeEvent charges one After event: a removal by its id, anything else by
+// its item.
+func (b *pageBudget) takeEvent(ev event) bool {
+	if ev.kind == eventRemoved {
+		return b.takeID(ev.id)
+	}
+	return b.take(ev.item)
+}
+
+// takeID charges one Removed id: its quoted JSON form and a comma.
+func (b *pageBudget) takeID(id string) bool {
+	raw, err := json.Marshal(id)
+	if err != nil {
+		return false
+	}
+	return b.fits(len(raw) + 1)
+}
+
+func (b *pageBudget) fits(size int) bool {
+	if b.taken > 0 && b.bytes+size > b.maxBytes {
+		return false
+	}
+	b.taken++
 	b.bytes += size
 	return true
 }

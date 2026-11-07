@@ -478,3 +478,53 @@ func mapShape(m map[string]any) map[string]string {
 	}
 	return out
 }
+
+// A large rewind is many Removed ids; they count toward the byte cap, so the
+// whole reply stays under it and the ids drain over several calls.
+func TestAfterRemovedCountsBytes(t *testing.T) {
+	const capBytes, n = 4096, 300
+	var adds, removes strings.Builder
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("%040d", i)
+		fmt.Fprintf(&adds, "+%s\n", id)
+		fmt.Fprintf(&removes, "-%s\n", id)
+	}
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(path, []byte(adds.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ix := transcript.NewIndex(path, &scriptNorm{}, transcript.IndexOptions{MaxPageBytes: capBytes})
+	p, err := ix.Page(nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addLines(t, path, removes.String())
+	removed := map[string]bool{}
+	c := p.After
+	for calls := 0; ; calls++ {
+		if calls > n {
+			t.Fatal("After never drained")
+		}
+		a, err := ix.After(c, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) > capBytes {
+			t.Fatalf("reply %d is %d bytes, cap %d", calls, len(raw), capBytes)
+		}
+		if len(a.Items)+len(a.Changed)+len(a.Removed) == 0 {
+			break
+		}
+		for _, id := range a.Removed {
+			removed[id] = true
+		}
+		c = a.After
+	}
+	if len(removed) != n {
+		t.Errorf("removed %d ids, want %d", len(removed), n)
+	}
+}

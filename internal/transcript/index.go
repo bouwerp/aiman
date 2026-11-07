@@ -23,7 +23,7 @@ type IndexOptions struct {
 	// MaxFieldBytes caps Item.Text, ToolCall.Input and ToolCall.Result,
 	// setting Item.Truncated when cut.
 	MaxFieldBytes int
-	// MaxPageBytes caps the JSON encoding of a page's Items plus Changed.
+	// MaxPageBytes caps the JSON encoding of a whole page reply.
 	// A page always holds at least one item when any remain.
 	MaxPageBytes int
 }
@@ -60,11 +60,20 @@ type Index struct {
 }
 
 // lastRecord is how a rewrite that keeps the head of the file shows: the bytes
-// at the last indexed position are no longer the line read there.
+// at the last indexed position are no longer the line read there. The sum
+// covers only the line's last tailBytes, so an idle poll reads a bounded tail
+// however long the line is.
 type lastRecord struct {
 	start  int64
 	length int64 // includes the newline; zero when nothing is indexed
 	sum    uint32
+}
+
+const tailBytes = 4 << 10
+
+func newLastRecord(start int64, line []byte) lastRecord {
+	tail := line[max(0, len(line)-tailBytes):]
+	return lastRecord{start: start, length: int64(len(line)) + 1, sum: crc32.ChecksumIEEE(tail)}
 }
 
 // NewIndex returns an index over path. Nothing is read until Refresh.
@@ -152,8 +161,9 @@ func (r lastRecord) matches(f io.ReaderAt) (bool, error) {
 	if r.length == 0 {
 		return true, nil
 	}
-	buf := make([]byte, r.length)
-	if _, err := f.ReadAt(buf, r.start); err != nil {
+	n := min(r.length, tailBytes+1) // the tail and its newline
+	buf := make([]byte, n)
+	if _, err := f.ReadAt(buf, r.start+r.length-n); err != nil {
 		if errors.Is(err, io.EOF) {
 			return false, nil
 		}
@@ -236,9 +246,8 @@ func (ix *Index) readLinesFrom(f *os.File, info os.FileInfo, emit func(int64, []
 	read := false
 	err := readLines(io.NewSectionReader(f, ix.offset, info.Size()-ix.offset), func(line []byte) error {
 		read = true
-		length := int64(len(line)) + 1
-		ix.last = lastRecord{start: ix.offset, length: length, sum: crc32.ChecksumIEEE(line)}
-		ix.offset += length
+		ix.last = newLastRecord(ix.offset, line)
+		ix.offset += ix.last.length
 		if len(line) == 0 {
 			return nil
 		}
@@ -328,6 +337,20 @@ func (ix *Index) capItem(it Item) Item {
 	return it
 }
 
+// envelopeSlack covers the fields the server fills in after the index
+// (session, subagent ids).
+const envelopeSlack = 1024
+
+// newBudget starts a budget charged with the reply's envelope: the header as
+// it stands, the Changed and Removed keys, a Before cursor and envelopeSlack.
+func (ix *Index) newBudget(header Page, limit int) *pageBudget {
+	envelope := envelopeSlack + 2*len(`,"changed":[]`) + len(EncodeCursor(header.After)) + 2
+	if raw, err := json.Marshal(header); err == nil {
+		envelope += len(raw)
+	}
+	return newPageBudget(limit, ix.opts.MaxPageBytes, envelope)
+}
+
 func encodedSize(it Item) int {
 	raw, err := json.Marshal(it)
 	if err != nil {
@@ -344,7 +367,7 @@ func encodedSize(it Item) int {
 func (ix *Index) Page(before *Cursor, limit int) (Page, error) {
 	reset, err := ix.Refresh()
 	if err != nil {
-		return ix.header(ix.current()), err
+		return ix.currentHeader(), err
 	}
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
@@ -359,7 +382,7 @@ func (ix *Index) Page(before *Cursor, limit int) (Page, error) {
 			end = s.above(*before)
 		}
 	}
-	budget := newPageBudget(limit, ix.opts.MaxPageBytes)
+	budget := ix.newBudget(page, limit)
 	page.Items, page.Before = s.newest(end, budget, page.After)
 	return page, nil
 }
@@ -371,13 +394,13 @@ func (ix *Index) Page(before *Cursor, limit int) (Page, error) {
 // Items and Changed together.
 func (ix *Index) After(c Cursor, limit int) (Page, error) {
 	if _, err := ix.Refresh(); err != nil {
-		return ix.header(ix.current()), err
+		return ix.currentHeader(), err
 	}
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	s := ix.s
 	page := ix.header(s)
-	budget := newPageBudget(limit, ix.opts.MaxPageBytes)
+	budget := ix.newBudget(page, limit)
 	if ix.staleCursor(s, c) {
 		page.Reset = true
 		page.Items, page.Before = s.newest(len(s.entries), budget, page.After)
@@ -395,7 +418,7 @@ func (ix *Index) After(c Cursor, limit int) (Page, error) {
 // undelivered new item into a Changed item the reader ignores.
 func fillAfter(page *Page, events []event, budget *pageBudget) {
 	for i, ev := range events {
-		if ev.kind != eventRemoved && !budget.take(ev.item) {
+		if !budget.takeEvent(ev) {
 			page.After.Position, page.After.sub = events[i-1].key.pos, events[i-1].key.sub
 			return
 		}
@@ -410,10 +433,12 @@ func fillAfter(page *Page, events []event, budget *pageBudget) {
 	}
 }
 
-func (ix *Index) current() *state {
+// currentHeader builds the header under the read lock: a concurrent
+// readAppended writes the state's file id and end under the write lock.
+func (ix *Index) currentHeader() Page {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
-	return ix.s
+	return ix.header(ix.s)
 }
 
 func (ix *Index) header(s *state) Page {
