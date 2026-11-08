@@ -34,7 +34,7 @@ func TestTranscriptSourceAgentSessionPathConfined(t *testing.T) {
 	}
 	src := NewTranscriptSource(home)
 
-	r, err := src.Open(domain.Session{ID: "a", AgentName: "claude", AgentSessionPath: inside}, "")
+	r, err := src.Open(domain.Session{ID: "a", AgentName: "claude", AgentSessionPath: inside, WorkingDirectory: "/w"}, "")
 	if err != nil {
 		t.Fatalf("inside the vendor root: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestTranscriptSourceAgentSessionPathConfined(t *testing.T) {
 		t.Fatalf("page = %+v, %v", p.Items, err)
 	}
 	for _, path := range []string{outside, link} {
-		if _, err := src.Open(domain.Session{ID: "b", AgentName: "claude", AgentSessionPath: path}, ""); !errors.Is(err, transcript.ErrNoTranscript) {
+		if _, err := src.Open(domain.Session{ID: "b", AgentName: "claude", AgentSessionPath: path, WorkingDirectory: "/w"}, ""); !errors.Is(err, transcript.ErrNoTranscript) {
 			t.Errorf("%s: err = %v, want ErrNoTranscript", path, err)
 		}
 	}

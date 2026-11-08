@@ -93,7 +93,7 @@ func vendorPattern(home, agent, id, cwd string) (pattern string, known bool) {
 	base, id := globEscape(home), globEscape(id)
 	switch agent {
 	case "claude":
-		return filepath.Join(base, ".claude/projects", claudeSlug(cwd), id+".jsonl"), true
+		return filepath.Join(base, ".claude/projects", ClaudeSlug(cwd), id+".jsonl"), true
 	case "codex":
 		return filepath.Join(base, ".codex/sessions/*/*/*", "rollout-*-"+id+".jsonl"), true
 	case "pi":
@@ -104,9 +104,10 @@ func vendorPattern(home, agent, id, cwd string) (pattern string, known bool) {
 	}
 }
 
-// claudeSlug writes every byte of cwd that is not an ASCII letter or digit as
-// '-', byte by byte, so a multi-byte rune becomes several.
-func claudeSlug(cwd string) string {
+// ClaudeSlug is the ~/.claude/projects directory name for cwd: every byte
+// of cwd that is not an ASCII letter or digit becomes '-', byte by byte, so a
+// multi-byte rune becomes several.
+func ClaudeSlug(cwd string) string {
 	out := []byte(cwd)
 	for i, c := range out {
 		alnum := c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'

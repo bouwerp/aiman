@@ -154,17 +154,11 @@ func (s *Server) handleTranscript(ctx context.Context, req Request) Response {
 
 	reader, err := s.transcripts.Open(sess, params.Subagent)
 	if err != nil {
-		if errors.Is(err, transcript.ErrNoTranscript) {
-			return s.paneTranscript(ctx, req, sess, params.Subagent)
-		}
-		return errResp(req.ID, CodeUnavailable, err.Error())
+		return s.transcriptFallback(ctx, req, sess, params.Subagent, err)
 	}
 	page, err := readTranscriptPage(reader, before, after, limit)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return s.paneTranscript(ctx, req, sess, params.Subagent)
-		}
-		return errResp(req.ID, CodeUnavailable, err.Error())
+		return s.transcriptFallback(ctx, req, sess, params.Subagent, err)
 	}
 	s.pinTranscript(sess.ID, params.Subagent, reader)
 	page.Session, page.Subagent = sess.ID, params.Subagent
@@ -172,6 +166,19 @@ func (s *Server) handleTranscript(ctx context.Context, req Request) Response {
 		page.Items = []transcript.Item{}
 	}
 	return Response{ID: req.ID, Result: page}
+}
+
+// transcriptFallback answers a failed open or read. A missing transcript or
+// deleted file falls back to the pane for the parent conversation; for a
+// sub-agent it is not_found, never the parent's pane.
+func (s *Server) transcriptFallback(ctx context.Context, req Request, sess domain.Session, subagent string, err error) Response {
+	if !errors.Is(err, transcript.ErrNoTranscript) && !errors.Is(err, fs.ErrNotExist) {
+		return errResp(req.ID, CodeUnavailable, err.Error())
+	}
+	if subagent != "" {
+		return errResp(req.ID, CodeNotFound, "no sub-agent "+subagent)
+	}
+	return s.paneTranscript(ctx, req, sess)
 }
 
 // readTranscriptPage reads one page and shortens it under
@@ -278,7 +285,7 @@ func trimOldest(p transcript.Page, budget int) transcript.Page {
 
 // paneTranscript answers session.transcript for a session with no transcript:
 // one pane item holding the current screen.
-func (s *Server) paneTranscript(ctx context.Context, req Request, sess domain.Session, subagent string) Response {
+func (s *Server) paneTranscript(ctx context.Context, req Request, sess domain.Session) Response {
 	if sess.IsLegacyTmux() {
 		return legacyTerminalResp(req.ID, sess)
 	}
@@ -299,10 +306,9 @@ func (s *Server) paneTranscript(ctx context.Context, req Request, sess domain.Se
 	}
 	text, cut := transcript.Truncate(text, TranscriptItemMaxFieldBytes)
 	return Response{ID: req.ID, Result: transcript.Page{
-		Type:     transcript.PageType,
-		Session:  sess.ID,
-		Subagent: subagent,
-		Source:   transcript.SourcePane,
+		Type:    transcript.PageType,
+		Session: sess.ID,
+		Source:  transcript.SourcePane,
 		Capabilities: transcript.Capabilities{
 			Agent:      agent.BaseOf(sess.AgentName),
 			Scrollback: transcript.ScrollbackPane,
@@ -423,7 +429,11 @@ func (s *Server) handleProcessOutput(ctx context.Context, req Request) Response 
 		return errResp(req.ID, CodeForbidden, "process output is not in this session's directories")
 	}
 	if !exists {
-		out.State = transcript.ProcessRunning
+		// Nothing written yet: the item's state stands, and an unknown one is
+		// taken as still starting.
+		if out.State == "" || out.State == transcript.ProcessUnknown {
+			out.State = transcript.ProcessRunning
+		}
 		return Response{ID: req.ID, Result: out}
 	}
 	if err := out.readFile(resolved, params.Since); err != nil {
@@ -452,7 +462,17 @@ func (o *processOutputResult) fill(data []byte, since *int64) {
 	o.Data = string(data[start : start+n])
 }
 
+// readFile reads the window of a confined output file. The path is checked
+// with Lstat before opening and the opened file must be that same regular
+// file, so a symlink swapped in after confinement is refused.
 func (o *processOutputResult) readFile(path string, since *int64) error {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !before.Mode().IsRegular() {
+		return errors.New("not a regular file")
+	}
 	f, err := os.Open(path) //nolint:gosec // G304: confined to the session's directories by confineOutputPath
 	if err != nil {
 		return err
@@ -462,8 +482,8 @@ func (o *processOutputResult) readFile(path string, since *int64) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() {
-		return errors.New("not a regular file")
+	if !info.Mode().IsRegular() || !os.SameFile(before, info) {
+		return errors.New("output file changed while opening")
 	}
 	start, n := o.window(info.Size(), since)
 	buf := make([]byte, n)
@@ -617,8 +637,16 @@ func (w *transcriptWatch) commit(p transcriptPending, now time.Time) {
 	w.sent[p.key] = now
 }
 
+// transcriptPathWatcher is a TranscriptSource that can vouch for a stored
+// AgentSessionPath without opening it: WatchPath applies Open's checks and
+// returns the resolved path when the file exists.
+type transcriptPathWatcher interface {
+	WatchPath(sess domain.Session) (string, bool)
+}
+
 // collectTranscriptEvents stats the files of each pinned reader, and the
-// AgentSessionPath of every other listed session, and returns a transcript
+// AgentSessionPath of every other listed session when the source's
+// WatchPath accepts it, and returns a transcript
 // event per reader whose files moved in size or mtime, at most one per
 // TranscriptEventDebounce. A file seen for the first time is recorded quietly.
 func (s *Server) collectTranscriptEvents(listed []domain.Session, w *transcriptWatch, now time.Time) []transcriptPending {
@@ -626,10 +654,15 @@ func (s *Server) collectTranscriptEvents(listed []domain.Session, w *transcriptW
 	for k, r := range s.livePins(now) {
 		watched[k] = r.Files()
 	}
-	for _, sess := range listed {
-		k := trReaderKey{session: sess.ID}
-		if _, pinned := watched[k]; !pinned && sess.AgentSessionPath != "" {
-			watched[k] = []string{sess.AgentSessionPath}
+	if pw, ok := s.transcripts.(transcriptPathWatcher); ok {
+		for _, sess := range listed {
+			k := trReaderKey{session: sess.ID}
+			if _, pinned := watched[k]; pinned || sess.AgentSessionPath == "" {
+				continue
+			}
+			if p, ok := pw.WatchPath(sess); ok {
+				watched[k] = []string{p}
+			}
 		}
 	}
 	visited := map[trFileKey]struct{}{}
