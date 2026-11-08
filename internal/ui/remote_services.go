@@ -306,9 +306,9 @@ func (m *Model) runSelectedRTKInstall() (tea.Model, tea.Cmd) {
 	return m, rtkInstallCmd(m.cfg, d.RemoteHost)
 }
 
-// routeRemoteServiceMsg handles probe and op results on every view: an op
-// started on the Agent API page or the Daemons tab finishes after the user
-// may have moved on.
+// routeRemoteServiceMsg handles probe, op and GitHub release results on every
+// view: an op started on the Agent API page or the Daemons tab finishes after
+// the user may have moved on, and the release check's timer must keep running.
 func (m *Model) routeRemoteServiceMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case daemonProbeMsg:
@@ -321,6 +321,10 @@ func (m *Model) routeRemoteServiceMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.routeAgentUpdatesMsg(msg)
 	case gatewayPairMsg, gatewayPairTickMsg:
 		return m.routeGatewayPairMsg(msg)
+	case githubReleaseMsg:
+		return m, m.applyGitHubRelease(msg)
+	case githubReleaseDueMsg:
+		return m, checkGitHubRelease()
 	}
 	return m, nil
 }
@@ -337,7 +341,9 @@ func (m *Model) applyDaemonProbe(msg daemonProbeMsg) (tea.Model, tea.Cmd) {
 	m.applyRemoteFilter()
 	// The probe carries the remote's version, so this is where a remote running
 	// behind the client is noticed.
-	autoUpdate := m.maybeAutoUpdateServe(d)
+	// The hint goes first so an auto-update's toast, set after it, is the one shown.
+	hint := m.refreshReleaseHint()
+	autoUpdate := tea.Batch(hint, m.maybeAutoUpdateServe(d))
 	if sel, ok := m.selectedDaemon(); ok && sel.RemoteHost == d.RemoteHost && sel.Kind == d.Kind {
 		m.paneOutput = d.Logs
 		if d.Logs == "" {

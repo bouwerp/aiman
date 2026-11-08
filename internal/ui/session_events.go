@@ -225,10 +225,19 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 	return follow(nil)
 }
 
-// notifyToast raises a toast for a notification that needs the user and
-// returns nil for any other kind, so ended stays quiet in the TUI.
+// notifyToast raises a toast for a notification that needs the user, or a
+// host_update with its text, and returns nil for any other kind, so ended
+// stays quiet in the TUI.
 func (m *Model) notifyToast(ev server.SessionEvent) tea.Cmd {
 	kind := domain.NotifyKind(ev.Kind)
+	if kind == domain.NotifyHostUpdate {
+		// No session and nothing to answer, but it is the laptop's notice that
+		// a host moved to a new release.
+		if ev.Text == "" {
+			return nil
+		}
+		return m.showToast("● "+ev.Text, false, notifyToastDelay)
+	}
 	if !domain.NeedsYou(kind) {
 		return nil
 	}
