@@ -97,6 +97,9 @@ func run() error {
 		case "agents":
 			return runAgents(parsed.Rest[1:], os.Stdout)
 		case "aws":
+			if len(parsed.Rest) > 1 && parsed.Rest[1] == "log" {
+				return runAWSLog(parsed.Rest[2:], callAWSLog, os.Stdout)
+			}
 			return runAWS(parsed.Rest[1:], loadAWSCommandConfig(), os.Stdout)
 		case "host":
 			return runHost(parsed.Rest[1:])

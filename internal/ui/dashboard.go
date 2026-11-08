@@ -1724,10 +1724,15 @@ type sessionCreateMsg struct {
 
 type attachMsg struct {
 	cmd *exec.Cmd
+	// closeMaster ends the attach command's ssh master once it returns. That
+	// master forwards the laptop's agent; nil when there is none to close.
+	closeMaster func(context.Context) error
 }
 
 type attachDoneMsg struct {
 	err error
+	// masterClosed delivers closeMaster's result; nil when nothing was closed.
+	masterClosed <-chan error
 }
 
 func attachFailure(msg attachDoneMsg) string {
@@ -2937,6 +2942,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Archive progress messages are handled globally so they reach the handler
 	// regardless of which sub-state is active during the pipeline.
 	switch msg := msg.(type) {
+	case attachMasterClosedMsg:
+		if msg.err != nil {
+			m.log("close attach master: %v", msg.err)
+		}
+		return m, nil
 	case archiveStepMsg:
 		if msg.idx < len(m.archiveSteps) {
 			if msg.idx > 0 {
@@ -4238,9 +4248,7 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case attachMsg:
-		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-			return attachDoneMsg{err: err}
-		})
+		return m, execAttach(msg)
 	case attachDoneMsg:
 		return m.applyAttachDone(msg, cmds)
 	case paneTickMsg:
@@ -4500,12 +4508,47 @@ func (m *Model) applyInputHint(msg inputHintMsg, cmds []tea.Cmd) (tea.Model, tea
 	return m.forwardToFocused(msg, cmds)
 }
 
+// attachMasterCloseTimeout bounds closing the attach master after a detach.
+const attachMasterCloseTimeout = 10 * time.Second
+
+// attachMasterClosedMsg carries the result of closing the attach master.
+type attachMasterClosedMsg struct{ err error }
+
+// execAttach runs the attach command and, once it returns, closes its ssh
+// master in the background so the laptop's agent is unreachable from the host
+// after a detach. The UI never waits on the close.
+func execAttach(msg attachMsg) tea.Cmd {
+	return tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
+		done := attachDoneMsg{err: err}
+		if msg.closeMaster != nil {
+			ch := make(chan error, 1)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), attachMasterCloseTimeout)
+				defer cancel()
+				ch <- msg.closeMaster(ctx)
+			}()
+			done.masterClosed = ch
+		}
+		return done
+	})
+}
+
+// waitAttachMasterClosed reports closeMaster's result as a message.
+func waitAttachMasterClosed(ch <-chan error) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg { return attachMasterClosedMsg{err: <-ch} }
+}
+
 func (m *Model) applyAttachDone(msg attachDoneMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	closed := waitAttachMasterClosed(msg.masterClosed)
 	if msg.err != nil {
 		m.lastError = attachFailure(msg)
 		m.state = viewStateError
-		return m, nil
+		return m, closed
 	}
+	cmds = append(cmds, closed)
 	m.state = viewStateMain
 	if sel := m.list.SelectedItem(); sel != nil {
 		s := sel.(item).session
@@ -5001,7 +5044,7 @@ func (m *Model) handleSessionActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			m.state = viewStateLoading
 			return m, tea.Sequence(
 				tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
-					return attachMsg{cmd: c}
+					return attachMsg{cmd: c, closeMaster: mgr.CloseAttachMaster}
 				}),
 			), true
 		}
@@ -6920,9 +6963,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case discoveryResultMsg:
 		return m.applyDiscoveryResult(msg)
 	case attachMsg:
-		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-			return attachDoneMsg{err: err}
-		})
+		return m, execAttach(msg)
 	case attachDoneMsg:
 		return m.applyAttachDone(msg, nil)
 	case reposMsg:

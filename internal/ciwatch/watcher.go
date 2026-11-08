@@ -59,6 +59,9 @@ type Deps struct {
 	Notify   Notifier
 	State    Store
 	Now      func() time.Time // nil means time.Now
+	// TrustedLogins are GitHub logins whose comments are steered whatever
+	// their author association; matched ignoring case.
+	TrustedLogins []string
 }
 
 // Watcher polls watched sessions' PRs and turns failed checks and new review

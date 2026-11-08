@@ -54,6 +54,20 @@ func trustedAssociation(association string) bool {
 	}
 }
 
+// trustedLogin reports whether author is one of Deps.TrustedLogins, ignoring
+// case as GitHub logins do. An empty author never matches.
+func (w *Watcher) trustedLogin(author string) bool {
+	if author == "" {
+		return false
+	}
+	for _, login := range w.d.TrustedLogins {
+		if strings.EqualFold(strings.TrimSpace(login), author) {
+			return true
+		}
+	}
+	return false
+}
+
 // reactToComments turns each unseen review comment from a trusted author into a
 // to-do and a note. The agent's own replies and comments older than the watch
 // are marked seen without steering; an untrusted author's comment is marked seen
@@ -88,7 +102,7 @@ func (w *Watcher) reactToComments(ctx context.Context, s domain.Session, st doma
 		if (c.InReplyTo != 0 && c.Author == viewer) || c.CreatedAt.Before(since) {
 			continue
 		}
-		if !trustedAssociation(c.Association) {
+		if !trustedAssociation(c.Association) && !w.trustedLogin(c.Author) {
 			ignored = append(ignored, c)
 			continue
 		}

@@ -12,7 +12,8 @@ import (
 // fakeSSHScript records each invocation's argv, one argument per line with a
 // "---" line after each call, and drains stdin so WriteFile completes. With
 // FAKE_SSH_FAIL set it fails like a dropped transport, which drives Execute
-// through its retries and the unmultiplexed fallback.
+// through its retries and the unmultiplexed fallback. FAKE_SSH_STDERR is
+// printed to stderr and FAKE_SSH_EXIT, when set, is the exit status.
 const fakeSSHScript = `#!/bin/sh
 for a in "$@"; do printf '%s\n' "$a" >> "$FAKE_SSH_LOG"; done
 printf -- '---\n' >> "$FAKE_SSH_LOG"
@@ -20,6 +21,12 @@ cat > /dev/null
 if [ -n "$FAKE_SSH_FAIL" ]; then
 	echo "Connection reset by peer" >&2
 	exit 255
+fi
+if [ -n "$FAKE_SSH_STDERR" ]; then
+	printf '%s\n' "$FAKE_SSH_STDERR" >&2
+fi
+if [ -n "$FAKE_SSH_EXIT" ]; then
+	exit "$FAKE_SSH_EXIT"
 fi
 exit 0
 `

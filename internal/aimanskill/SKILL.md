@@ -40,6 +40,7 @@ aiman session create --repo owner/repo --branch BRANCH --agent claude \
 ```
 
 `--orphan` makes a root instead of a child. `--parent ID` nests under a different session.
+A child made with `--orphan`, or with `--parent` naming another session, is outside your tree: you cannot prompt, steer, read or forget it afterwards (`session_scope`). Helpers you will drive stay your own children.
 
 Quick ad-hoc session:
 
@@ -289,6 +290,7 @@ You are the coordinator of this session. Before editing, assess the scope as Des
 - If your task file starts with a brief, you are a child. Before opening your PR, write `.aiman_report.md` with `## What changed`, `## Files`, `## Evidence` (each command and its exit code) and `## Surprises` (anything that affects other pieces, or "none"). Do not commit it.
 - When more than one child needs a shared contract, commit `docs/specs/<ISSUE>.md` on this branch before the first `session create`. One child can start from its to-do text alone.
 - Each child opens its PR into this session's branch. You open the final PR to the default branch.
+- Once a child's work has landed, end it with `aiman session terminate <child>`. Its worktree is removed unless it holds uncommitted or unpushed work; `--discard` removes it anyway. You may terminate your own descendants, never yourself.
 - If create returns `no_preferred_agent`, leave the to-dos unassigned and tell the user the names in the error. Do not pick a different agent or tier.
 
 ## Your to-do list

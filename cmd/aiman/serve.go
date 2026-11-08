@@ -71,7 +71,12 @@ func wireAWSLogin(srv *server.Server, delegations []config.ServeAWSDelegation, h
 		},
 	})
 	srv.SetAWS(config.ServeAWSConfig{Delegations: delegations}, credentials, engine)
-	return engine.Close
+	// The watchers stop first so none reads the engine while it closes and
+	// writes a finished row for a login serve is abandoning.
+	return func() {
+		srv.CloseAWSLogin()
+		engine.Close()
+	}
 }
 
 func runServe() error {
@@ -233,7 +238,8 @@ func runServe() error {
 		Steer: func(id string, author domain.TodoAuthor, text string) {
 			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: author, Text: text})
 		},
-		State: db,
+		State:         db,
+		TrustedLogins: cfg.CI.TrustedLogins,
 	}
 	// A nil *Recorder in the interface would not compare equal to nil.
 	if rec := srv.NotifyRecorder(); rec != nil {

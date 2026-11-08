@@ -387,14 +387,11 @@ func (s *Server) handlePTYForget(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "pty_forget", "forgotten": true}}
 }
 
-// handlePTYResize sets a session's window size outside an attach stream.
-//
-// Resizing was previously reachable only from inside pty.attach, which left no
-// way to fit a session to a viewer that is not attached — the dashboard shows a
-// preview panel far narrower than the terminal that last sized the session, so
-// without this the agent renders wider than anything can display.
-func (s *Server) handlePTYResize(_ context.Context, req Request) Response {
-	id, fail, ok := s.resolvePTYID(req)
+// handlePTYResize sets a session's window size outside an attach stream. The
+// dashboard's preview panel is far narrower than the terminal that last sized
+// the session, and a viewer that is not attached has no other way to fit it.
+func (s *Server) handlePTYResize(ctx context.Context, req Request) Response {
+	id, fail, ok := s.resolvePTYTarget(ctx, req)
 	if !ok {
 		return fail
 	}
@@ -465,6 +462,12 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil || params.ID == "" {
 		writeResponse(conn, errResp(req.ID, CodeInvalidParams, "id is required"))
+		return
+	}
+	// Attaching reads the screen and types into it, so a session caller needs
+	// the target in its tree. The refusal is the only line on the connection.
+	if refused, out := s.refuseOutOfScope(ctx, req, params.ID); out {
+		writeResponse(conn, refused)
 		return
 	}
 	_, live, unsub, err := s.pty.Subscribe(params.ID)

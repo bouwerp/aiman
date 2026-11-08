@@ -39,8 +39,15 @@ func ApplyDelegatedProfile(ctx context.Context, r RemoteRunner, profileName, rol
 	return nil
 }
 
-// ApplyDelegatedCredentials merges temporary tokens into $HOME/.aws/credentials on the remote.
+// ApplyDelegatedCredentials writes temporary tokens into $HOME/.aws/credentials on the
+// remote. It splices the profile's section in place, as WriteHostCredentials does, so
+// other sections, comments, line endings and profiles differing only in case keep
+// their bytes.
 func ApplyDelegatedCredentials(ctx context.Context, r RemoteRunner, profileName string, creds *SessionCredentials) error {
+	if creds == nil {
+		return fmt.Errorf("no credentials for profile %q", profileName)
+	}
+	profileName = normalizeProfileName(profileName)
 	home, trimHome, err := ensureRemoteAWSDir(ctx, r)
 	if err != nil {
 		return err
@@ -52,7 +59,7 @@ func ApplyDelegatedCredentials(ctx context.Context, r RemoteRunner, profileName 
 		return fmt.Errorf("read remote ~/.aws/credentials: %w", err)
 	}
 
-	merged := MergeCredentialsIntoConfig(existing, profileName, creds)
+	merged := spliceCredentialsSection(existing, profileName, FormatCredentialsSection(profileName, creds))
 	if err := r.WriteFile(ctx, credsPath, []byte(merged)); err != nil {
 		return fmt.Errorf("write remote ~/.aws/credentials: %w", err)
 	}
@@ -107,8 +114,9 @@ func RemoveSessionProfile(ctx context.Context, r RemoteRunner, profileName strin
 	credsPath := fmt.Sprintf("%s/.aws/credentials", trimHome)
 	existing, err := r.Execute(ctx, fmt.Sprintf(`test -f %s/.aws/credentials && cat %s/.aws/credentials || true`, shellx.Quote(home), shellx.Quote(home)))
 	if err == nil && strings.TrimSpace(existing) != "" {
-		cleaned := MergeCredentialsIntoConfig(existing, profileName, nil)
-		_ = r.WriteFile(ctx, credsPath, []byte(cleaned))
+		if cleaned := removeCredentialsSection(existing, profileName); cleaned != existing {
+			_ = r.WriteFile(ctx, credsPath, []byte(cleaned))
+		}
 	}
 
 	// Remove from ~/.aws/config

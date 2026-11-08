@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -209,7 +210,13 @@ func (m *Manager) executeWithTimeout(ctx context.Context, cmdStr string, timeout
 	return runDirect()
 }
 
+// isRetriableSSHTransportError reports a dropped or refused SSH transport. A
+// denial printed by the remote git (IsRemoteGitAuthDenial) is the command's
+// own failure, so retrying it only repeats the refusal.
 func isRetriableSSHTransportError(errText string) bool {
+	if IsRemoteGitAuthDenial(errText) {
+		return false
+	}
 	s := strings.ToLower(errText)
 	return strings.Contains(s, "permission denied") ||
 		strings.Contains(s, "connection closed by") ||
@@ -219,6 +226,23 @@ func isRetriableSSHTransportError(errText string) bool {
 		strings.Contains(s, "control socket connect") ||
 		strings.Contains(s, "connect to new control master") ||
 		strings.Contains(s, "broken pipe")
+}
+
+// gitHostDenialRe matches a denial a git server printed through the remote
+// git, as in "git@github.com: Permission denied (publickey).".
+var gitHostDenialRe = regexp.MustCompile(`git@[^\s:]+: Permission denied`)
+
+// gitRemoteFatal is the line git prints after any failed remote read.
+const gitRemoteFatal = "fatal: Could not read from remote repository"
+
+// IsRemoteGitAuthDenial reports whether text holds an auth denial that came
+// from git on the remote rather than from the SSH client. git's fatal line
+// alone means a missing repository, not a denial.
+func IsRemoteGitAuthDenial(text string) bool {
+	if !strings.Contains(text, "Permission denied") {
+		return false
+	}
+	return gitHostDenialRe.MatchString(text) || strings.Contains(text, gitRemoteFatal)
 }
 
 func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) error {
@@ -291,6 +315,24 @@ func (m *Manager) ResetControlSocket() {
 	defer cancel()
 	_ = exec.CommandContext(ctx, "ssh", "-O", "exit", "-S", cp, target).Run()
 	_ = os.Remove(cp)
+}
+
+// CloseAttachMaster asks the attach master to exit and removes its socket.
+// That master forwards the laptop's agent and would otherwise persist for
+// ControlPersist after a detach. A master that is already gone is not an error.
+func (m *Manager) CloseAttachMaster(ctx context.Context) error {
+	cp := m.ttyControlPath()
+	//nolint:gosec // G204: options are fixed; target is the operator's remote
+	out, err := exec.CommandContext(ctx, "ssh", "-O", "exit", "-S", cp, m.target()).CombinedOutput()
+	_ = os.Remove(cp)
+	if err == nil {
+		return nil
+	}
+	text := strings.TrimSpace(string(out))
+	if strings.Contains(text, "No such file") || strings.Contains(text, "Control socket connect") {
+		return nil
+	}
+	return fmt.Errorf("close attach master on %s: %w\nOutput: %s", m.target(), err, text)
 }
 
 func (m *Manager) ValidateDir(ctx context.Context, path string) error {
