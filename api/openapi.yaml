@@ -399,7 +399,7 @@ components:
             (too many pending logins or recent starts), invalid_params (the
             profile is not delegated) and needs_operator (a session caller).
             aws.login_status answers not_found for a login id serve no longer
-            holds. Until their handlers land, the aws.* methods answer
+            holds. aws.log answers needs_operator for a session caller. Until their handlers land, the aws.* methods answer
             unavailable. session.transcript, session.transcript_item and
             session.process_output answer unavailable on a serve with no
             transcript reader, not_found for an unknown session, item or
@@ -528,6 +528,7 @@ components:
             - aws.status
             - aws.login_start
             - aws.login_status
+            - aws.log
             - agents.status
             - agents.update
             - agents.move_prefix
@@ -630,7 +631,13 @@ components:
             its after until a reply is empty.
         limit:
           type: integer
-          description: session.transcript page size; default 50, maximum 200.
+          description: >
+            session.transcript page size; default 50, maximum 200. aws.log:
+            the most rows to return; 0 or absent is the ledger's default.
+        since_seq:
+          type: integer
+          format: int64
+          description: aws.log, the rows after this ledger seq; absent starts at the first.
         since:
           type: integer
           format: int64
@@ -730,6 +737,7 @@ components:
             - $ref: "#/components/schemas/LimitsResult"
             - $ref: "#/components/schemas/AWSStatusResult"
             - $ref: "#/components/schemas/AWSLoginResult"
+            - $ref: "#/components/schemas/AWSLogResult"
             - $ref: "#/components/schemas/AgentsStatusResult"
             - $ref: "#/components/schemas/ReviewFixResult"
             - $ref: "#/components/schemas/ReviewPushResult"
@@ -1000,6 +1008,55 @@ components:
         expires_in:
           type: integer
           description: Seconds until the device code expires. aws.login_start only.
+    AWSLogResult:
+      type: object
+      description: >
+        aws.log {since_seq?, limit?}. The AWS sign-in ledger, oldest first: an
+        aws.login_started row per started login and an aws.login_finished row
+        per login that ended while serve ran. Rows hold the profile, state and
+        failure, never a login id, code, URL or token. A device token may call
+        it; a session caller gets needs_operator.
+      required: [type, events]
+      properties:
+        type:
+          type: string
+          const: aws_log
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AWSLogEvent"
+    AWSLogEvent:
+      type: object
+      required: [session_id, seq, at, actor, kind]
+      properties:
+        session_id:
+          type: string
+          description: Always aws-login, the ledger id no session owns.
+        seq:
+          type: integer
+          format: int64
+          description: Ledger sequence; pass the last one as since_seq to read on.
+        at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        kind:
+          type: string
+          enum: [aws.login_started, aws.login_finished]
+        payload:
+          type: object
+          description: '{profile, state} plus failure when the login failed.'
+          properties:
+            profile:
+              type: string
+            state:
+              type: string
+            failure:
+              type: string
+        hash:
+          type: string
+          description: sha256 of the payload.
     LimitsResult:
       type: object
       description: >
