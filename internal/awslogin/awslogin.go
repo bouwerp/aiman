@@ -271,6 +271,24 @@ func (m *Manager) Status(id string) (Login, bool) {
 	return r.login, true
 }
 
+// Pending counts logins still in pending, approved or minting. A nil Manager
+// has none.
+func (m *Manager) Pending() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, r := range m.logins {
+		switch r.login.State {
+		case StatePending, StateApproved, StateMinting:
+			n++
+		}
+	}
+	return n
+}
+
 // Close stops every poll and waits for them. A login still running ends failed.
 func (m *Manager) Close() {
 	m.mu.Lock()

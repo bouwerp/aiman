@@ -21,8 +21,8 @@ func Label(issueKey, name, id string) string {
 	return id
 }
 
-// Format builds the notification text. An agent_update detail is the whole
-// text, since it already names the agent, the versions and the host.
+// Format builds the notification text. An agent_update or host_update detail
+// is the whole text, since it already names what changed and the host.
 func Format(label, host string, kind domain.NotifyKind, detail string) string {
 	d := detail
 	if d != "" {
@@ -39,7 +39,7 @@ func Format(label, host string, kind domain.NotifyKind, detail string) string {
 			detail = d
 		}
 	}
-	if kind == domain.NotifyAgentUpdate && detail != "" {
+	if (kind == domain.NotifyAgentUpdate || kind == domain.NotifyHostUpdate) && detail != "" {
 		return detail
 	}
 	base := label + " on " + host + ": " + domain.EventLabel(kind)

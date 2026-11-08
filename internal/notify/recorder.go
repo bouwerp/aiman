@@ -48,13 +48,14 @@ type Observation struct {
 type Recorder struct {
 	store    Store
 	settings Settings
-	publish  func(sessionID string, kind domain.NotifyKind)
+	publish  func(n domain.Notification)
 	mu       sync.Mutex
 	last     map[string]domain.NotifyKind
 }
 
-// NewRecorder creates a recorder.
-func NewRecorder(store Store, s Settings, publish func(sessionID string, kind domain.NotifyKind)) *Recorder {
+// NewRecorder creates a recorder. publish, when set, gets each notification
+// the store accepted.
+func NewRecorder(store Store, s Settings, publish func(n domain.Notification)) *Recorder {
 	return &Recorder{
 		store:    store,
 		settings: s,
@@ -123,7 +124,7 @@ func (r *Recorder) Observe(ctx context.Context, o Observation) error {
 	r.last[o.SessionID] = kind
 	r.mu.Unlock()
 	if r.publish != nil {
-		r.publish(o.SessionID, nn.Kind)
+		r.publish(nn)
 	}
 	return nil
 }
@@ -160,7 +161,7 @@ func (r *Recorder) Emit(ctx context.Context, sessionID, label string, kind domai
 		return nil
 	}
 	if r.publish != nil {
-		r.publish(sessionID, nn.Kind)
+		r.publish(nn)
 	}
 	return nil
 }

@@ -91,6 +91,19 @@ type phoneSink struct {
 
 func (p *phoneSink) Name() string { return "phone" }
 
+// pushKinds are the notification kinds the phone sink pushes, each one about a
+// session the push opens. Host-level kinds (agent and host updates) and kinds
+// a newer serve adds are not pushed.
+var pushKinds = map[domain.NotifyKind]bool{
+	domain.NotifyWaitingInput: true,
+	domain.NotifyCIEscalation: true,
+	domain.NotifyReviewDone:   true,
+	domain.NotifyEnded:        true,
+	domain.NotifyError:        true,
+}
+
+// phoneStateFor maps a kind in pushKinds to the phone state a device
+// subscribes to.
 func phoneStateFor(k domain.NotifyKind) string {
 	switch k {
 	case domain.NotifyWaitingInput, domain.NotifyCIEscalation, domain.NotifyReviewDone:
@@ -105,8 +118,7 @@ func phoneStateFor(k domain.NotifyKind) string {
 }
 
 func (p *phoneSink) Send(ctx context.Context, n domain.Notification) error {
-	// Phone pushes open a session; an agent update belongs to no session.
-	if p == nil || p.store == nil || n.Kind == domain.NotifyAgentUpdate {
+	if p == nil || p.store == nil || !pushKinds[n.Kind] {
 		return nil
 	}
 	ps := phoneStateFor(n.Kind)

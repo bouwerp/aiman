@@ -58,6 +58,8 @@ type SessionEvent struct {
 	Kind string `json:"kind,omitempty"`
 	// Subagent names the sub-agent whose transcript moved on transcript.
 	Subagent string `json:"subagent,omitempty"`
+	// Text is a notify event's formatted text, which never holds terminal text.
+	Text string `json:"text,omitempty"`
 }
 
 // isSessionEvents reports whether a request opens the event stream, which like

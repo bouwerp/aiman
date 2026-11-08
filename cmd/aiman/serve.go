@@ -54,13 +54,13 @@ func (w awsCredentialsWriter) WriteHostCredentials(profile string, creds *awsdel
 
 // wireAWSLogin starts the device-flow engine when this host has delegations and
 // returns the call that stops it, else nil and the aws.* methods stay unavailable.
-func wireAWSLogin(srv *server.Server, delegations []config.ServeAWSDelegation, home string) func() {
+func wireAWSLogin(srv *server.Server, delegations []config.ServeAWSDelegation, home string) (func(), *awslogin.Manager) {
 	if len(delegations) == 0 {
-		return nil
+		return nil, nil
 	}
 	if home == "" {
 		log.Printf("aws sign-in unavailable: no home directory")
-		return nil
+		return nil, nil
 	}
 	credentials := filepath.Join(home, ".aws", "credentials")
 	engine := awslogin.New(awslogin.Options{
@@ -76,7 +76,7 @@ func wireAWSLogin(srv *server.Server, delegations []config.ServeAWSDelegation, h
 	return func() {
 		srv.CloseAWSLogin()
 		engine.Close()
-	}
+	}, engine
 }
 
 func runServe() error {
@@ -188,15 +188,16 @@ func runServe() error {
 	limitsManager := limits.NewManager(limits.DefaultSources(limits.HostEnv()), time.Now)
 	defer limitsManager.Close()
 	srv.SetLimits(limitsManager)
-	if closeAWS := wireAWSLogin(srv, cfg.AWS.Delegations, home); closeAWS != nil {
+	closeAWS, awsEngine := wireAWSLogin(srv, cfg.AWS.Delegations, home)
+	if closeAWS != nil {
 		defer closeAWS()
 	}
 
 	// notifications
 	n := cfg.Notifications
 	host, _ := os.Hostname()
-	publish := func(sessID string, kind domain.NotifyKind) {
-		srv.HubPublish(server.SessionEvent{Type: "notify", ID: sessID, Kind: string(kind)})
+	publish := func(nt domain.Notification) {
+		srv.HubPublish(server.SessionEvent{Type: "notify", ID: nt.SessionID, Kind: string(nt.Kind), Text: nt.Text})
 	}
 	events := map[domain.NotifyKind]bool{}
 	for _, k := range n.EventKinds() {
@@ -272,6 +273,7 @@ func runServe() error {
 	verifier.Resume(ctx)
 	defer verifier.Close()
 
+	var handovers *handoverchild.Manager
 	if cfg.Handover.ChildEnabled() {
 		handoverDeps := srv.HandoverDeps(handoverchild.NewStore(filepath.Join(dir, "handover-runs")), func(command string) bool {
 			return scanner.Installed(ctx, command)
@@ -279,13 +281,18 @@ func runServe() error {
 		handoverDeps.Candidates = cfg.HandoverCandidates
 		handoverDeps.BaseDir = filepath.Join(dir, "handovers")
 		handoverDeps.Timeout = cfg.Handover.ChildTimeout()
-		handovers := handoverchild.NewManager(handoverDeps)
+		handovers = handoverchild.NewManager(handoverDeps)
 		// Resume first so a run left active by the last serve absorbs new
 		// triggers instead of starting a second child.
 		handovers.Resume(ctx)
 		srv.SetHandovers(handovers)
 		defer handovers.Close()
 	}
+
+	hostUpdates := newHostUpdates(cfg.Host.Update, dir, version, hostUpdateDeps{
+		Busy: []func() int{srv.Inflight, awsEngine.Pending, handovers.Starting, agentUpdates.Updating},
+	})
+	startHostUpdates(ctx, srv, hostUpdates, host)
 
 	srv.SetDesignPublisher(&design.Publisher{Cfg: cfg.Design, Home: home, Run: design.ExecRun})
 	srv.SetTranscripts(server.NewTranscriptSource(home))

@@ -401,4 +401,5 @@ Do not run `aiman verify` from a reviewer session.
 - Use `--name` / `--group "$AIMAN_GROUP"` for helpers. They nest under you unless you pass `--orphan`. Do not steal focus from the user's TUI (there is none on this host).
 - Do not kill sessions you did not create unless the user asked.
 - Never run `aiman serve` to stop it.
+- The host updates aiman itself when a release appears; `aiman host version` shows the running release and the update state. Do not run `aiman host update` yourself: it is the operator's.
 - CLI server errors are JSON on stderr, exit 1. Usage errors exit 2.
