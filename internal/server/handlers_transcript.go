@@ -78,13 +78,16 @@ const transcriptPinTTL = 2 * time.Minute
 // TranscriptMaxReplyBytes.
 const transcriptReplyMargin = 4 << 10
 
-// dispatchTranscript routes the transcript read methods.
+// dispatchTranscript routes the transcript read methods and session.file,
+// the confined worktree read beside them.
 func (s *Server) dispatchTranscript(ctx context.Context, req Request) Response {
 	switch req.Method {
 	case "session.transcript_item":
 		return s.handleTranscriptItem(ctx, req)
 	case "session.process_output":
 		return s.handleProcessOutput(ctx, req)
+	case "session.file":
+		return s.handleSessionFile(ctx, req)
 	default:
 		return s.handleTranscript(ctx, req)
 	}
@@ -96,6 +99,12 @@ func (s *Server) resolveTranscriptReq(ctx context.Context, req Request, session 
 	if s.transcripts == nil {
 		return domain.Session{}, errResp(req.ID, CodeUnavailable, "transcripts are not enabled on this serve"), false
 	}
+	return s.resolveScopedSession(ctx, req, session)
+}
+
+// resolveScopedSession resolves a session named in params and refuses a
+// session caller out of scope.
+func (s *Server) resolveScopedSession(ctx context.Context, req Request, session string) (domain.Session, Response, bool) {
 	target := strings.TrimSpace(session)
 	if target == "" {
 		return domain.Session{}, errResp(req.ID, CodeInvalidParams, "session is required"), false

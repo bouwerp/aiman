@@ -8,7 +8,7 @@ var (
 	deviceReadMethods = []string{
 		"ping",
 		"session.list", "session.get", "session.read", "session.wait", "session.log",
-		"session.transcript", "session.transcript_item", "session.process_output",
+		"session.transcript", "session.transcript_item", "session.process_output", "session.file",
 		"pty.capture",
 		"todo.get", "todo.summary",
 		"notify.since",
