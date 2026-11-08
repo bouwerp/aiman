@@ -217,6 +217,28 @@ func spliceCredentialsSection(existing, profile, block string) string {
 	return appendCredentialsBlock(existing, block)
 }
 
+// removeCredentialsSection drops every section whose header names profile exactly
+// (case preserved) and copies every other byte. Without such a section it returns
+// existing unchanged.
+func removeCredentialsSection(existing, profile string) string {
+	lines := strings.SplitAfter(existing, "\n")
+	var out strings.Builder
+	removed := false
+	for i := 0; i < len(lines); {
+		if name, ok := sectionName(lines[i]); !ok || name != profile {
+			out.WriteString(lines[i])
+			i++
+			continue
+		}
+		removed = true
+		i = sectionEnd(lines, i+1)
+	}
+	if !removed {
+		return existing
+	}
+	return out.String()
+}
+
 // sectionEnd returns where the section whose body starts at start stops: before the
 // blank and comment lines leading up to the next header, since those sit on that
 // header rather than on the section being replaced.

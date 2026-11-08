@@ -40,6 +40,8 @@ type Config struct {
 	Design DesignConfig `yaml:"design,omitempty"`
 	// Review configures PR review sessions.
 	Review ReviewConfig `yaml:"review,omitempty"`
+	// CI configures serve's PR watcher.
+	CI CIConfig `yaml:"ci,omitempty"`
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
@@ -79,6 +81,8 @@ type ServeConfig struct {
 	Design DesignConfig `yaml:"design,omitempty"`
 	// Review configures PR review sessions.
 	Review ReviewConfig `yaml:"review,omitempty"`
+	// CI configures serve's PR watcher.
+	CI CIConfig `yaml:"ci,omitempty"`
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
@@ -339,6 +343,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Handover:      c.Handover,
 		Design:        c.Design,
 		Review:        c.Review,
+		CI:            c.CI,
 		Repos:         c.Repos,
 		Roles:         c.Roles,
 		AWS:           c.serveAWSFor(host),

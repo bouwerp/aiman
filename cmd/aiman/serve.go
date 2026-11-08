@@ -233,7 +233,8 @@ func runServe() error {
 		Steer: func(id string, author domain.TodoAuthor, text string) {
 			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: author, Text: text})
 		},
-		State: db,
+		State:         db,
+		TrustedLogins: cfg.CI.TrustedLogins,
 	}
 	// A nil *Recorder in the interface would not compare equal to nil.
 	if rec := srv.NotifyRecorder(); rec != nil {
