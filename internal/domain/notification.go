@@ -14,11 +14,14 @@ const (
 	// NotifyAgentUpdate is a host-level event with no session: a new agent
 	// version, or the result of an automatic update.
 	NotifyAgentUpdate NotifyKind = "agent_update"
+	// NotifyHostUpdate is a host-level event with no session: serve installed
+	// a new aiman release on its host, or the install failed.
+	NotifyHostUpdate NotifyKind = "host_update"
 )
 
 // AllNotifyKinds returns the supported notification kinds in order.
 func AllNotifyKinds() []NotifyKind {
-	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate}
+	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate, NotifyHostUpdate}
 }
 
 // NeedsYou reports whether the user must act.
@@ -46,6 +49,8 @@ func EventLabel(k NotifyKind) string {
 		return "review done"
 	case NotifyAgentUpdate:
 		return "agent update"
+	case NotifyHostUpdate:
+		return "host update"
 	default:
 		return string(k)
 	}

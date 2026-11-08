@@ -515,6 +515,8 @@ components:
             - session.terminate
             - repo.list
             - host.stats
+            - host.version
+            - host.update
             - session.register
             - session.report_agent_session
             - notify.since
@@ -758,6 +760,8 @@ components:
             - $ref: "#/components/schemas/RepoListResult"
             - $ref: "#/components/schemas/SessionTerminatedResult"
             - $ref: "#/components/schemas/HostStatsResult"
+            - $ref: "#/components/schemas/HostVersionResult"
+            - $ref: "#/components/schemas/HostUpdateResult"
             - $ref: "#/components/schemas/LimitsResult"
             - $ref: "#/components/schemas/AWSStatusResult"
             - $ref: "#/components/schemas/AWSLoginResult"
@@ -1156,6 +1160,86 @@ components:
           description: When the provider said it, not when serve asked.
         source:
           type: string
+    HostVersionResult:
+      type: object
+      description: >
+        host.version: the aiman release this host's serve runs and what its
+        self-update knows. Any caller may read it. With updates off, mode is
+        off, status held and latest empty.
+      required: [type, host, version, protocol, latest, latest_ready, mode, status, checked_at, attempt]
+      properties:
+        type:
+          type: string
+          const: host_version
+        host:
+          type: string
+        version:
+          type: string
+          description: The running serve's release, or dev for a local build.
+        protocol:
+          type: integer
+          description: ProtocolVersion, the same integer ping returns.
+        latest:
+          type: string
+          description: Latest GitHub release tag serve has seen; empty when none.
+        latest_ready:
+          type: boolean
+          description: The latest release has checksums.txt and can be installed.
+        mode:
+          type: string
+          enum: ["off", notify, auto]
+        status:
+          type: string
+          enum: [current, available, not_ready, deferred, updating, failed, held, unknown]
+        checked_at:
+          type: string
+          description: RFC3339 time of the last poll, or empty when never polled.
+        attempt:
+          description: The last install attempt, or null when there is none.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/HostUpdateAttempt"
+    HostUpdateAttempt:
+      type: object
+      required: [at, from, to, status, exit, error]
+      properties:
+        at:
+          type: string
+          description: RFC3339 time the attempt started.
+        from:
+          type: string
+        to:
+          type: string
+        status:
+          type: string
+          enum: [started, ok, failed]
+        exit:
+          type: integer
+          description: The update script's exit code once it ended.
+        error:
+          type: string
+          description: Why a failed attempt failed; empty otherwise.
+    HostUpdateResult:
+      type: object
+      description: >
+        host.update: an operator request to install the latest ready release
+        now. The install runs in the background and restarts serve and the
+        gateway; host.version and the host_update notification report the
+        outcome. Needs allow_destructive on a device token; a session caller
+        gets needs_operator.
+      required: [type, accepted, reason, target]
+      properties:
+        type:
+          type: string
+          const: host_update
+        accepted:
+          type: boolean
+        reason:
+          type: string
+          description: Why the request was refused; empty when accepted.
+        target:
+          type: string
+          description: The release tag being installed when accepted.
     HostStatsResult:
       type: object
       description: >
@@ -1610,6 +1694,12 @@ components:
         kind:
           type: string
           description: Notification kind on notify.
+        text:
+          type: string
+          description: >
+            The notification's formatted text on notify, for example
+            "serve updated v0.34.0 → v0.35.0 on remote1". It never holds
+            terminal text.
     PairRequest:
       type: object
       required: [code]

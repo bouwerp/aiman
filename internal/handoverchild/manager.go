@@ -153,6 +153,27 @@ func (m *Manager) Close() {
 	m.wg.Wait()
 }
 
+// Starting counts runs in StatusStarting that started less than Timeout ago.
+// An older starting run is one a stopped serve left behind, which Resume
+// fails. A nil Manager, or one whose store cannot be listed, has none.
+func (m *Manager) Starting() int {
+	if m == nil || m.d.Store == nil {
+		return 0
+	}
+	all, err := m.d.Store.List()
+	if err != nil {
+		return 0
+	}
+	now := m.d.Now()
+	n := 0
+	for _, r := range all {
+		if r.Status == StatusStarting && now.Sub(r.StartedAt) < m.d.Timeout {
+			n++
+		}
+	}
+	return n
+}
+
 func (m *Manager) goBG(fn func(ctx context.Context)) {
 	m.wg.Add(1)
 	go func() {

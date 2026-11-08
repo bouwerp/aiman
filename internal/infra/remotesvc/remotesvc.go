@@ -1,6 +1,7 @@
 package remotesvc
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -260,7 +261,7 @@ func ProbeScript(k Kind) string {
 	if k == KindServe {
 		// A leftover sock after a crash is not a live listener.
 		sockCheck = `if [ "$ACTIVE" = active ] && [ -S "$HOME/.aiman/aiman.sock" ]; then echo SOCKET=1; else echo SOCKET=0; fi`
-		sockCheck += "\n" + rtkCheck
+		sockCheck += "\n" + rtkCheck + "\n" + selfUpdateCheck
 	}
 	procCheck := fmt.Sprintf("pgrep -f '%s' >/dev/null", k.procPattern())
 	return userRuntimeEnv() + fmt.Sprintf(`
@@ -303,6 +304,14 @@ elif [ -x "$HOME/.local/bin/rtk" ]; then
   echo RTK=$("$HOME/.local/bin/rtk" --version 2>/dev/null | head -1)
 else
   echo RTK=missing
+fi`
+
+// selfUpdateCheck prints serve's host-update state file on one line, so the
+// laptop can see an install the host is running on itself.
+const selfUpdateCheck = `if [ -f "$HOME/.aiman/host-update.json" ]; then
+  echo "SELFUPDATE=$(tr -d '\n' < "$HOME/.aiman/host-update.json" 2>/dev/null)"
+else
+  echo SELFUPDATE=
 fi`
 
 // nohupStart also kills by pattern, like leftoverCleanup: a process the pid file
@@ -356,6 +365,8 @@ func ParseProbe(kind Kind, host, stdout string) domain.Daemon {
 			if val != "missing" {
 				d.RTKVersion = val
 			}
+		case "SELFUPDATE":
+			d.SelfUpdate = parseSelfUpdate(val)
 		}
 	}
 	d.Logs = strings.TrimRight(logs, "\n")
@@ -363,6 +374,25 @@ func ParseProbe(kind Kind, host, stdout string) domain.Daemon {
 		d.SocketOK = false
 	}
 	return d
+}
+
+// parseSelfUpdate reads the attempt from serve's host-update state file. It is
+// nil for an empty line, a file with no attempt, or one that does not parse.
+func parseSelfUpdate(val string) *domain.SelfUpdateAttempt {
+	if strings.TrimSpace(val) == "" {
+		return nil
+	}
+	var doc struct {
+		Attempt *struct {
+			Status string    `json:"status"`
+			To     string    `json:"to"`
+			At     time.Time `json:"at"`
+		} `json:"attempt"`
+	}
+	if json.Unmarshal([]byte(val), &doc) != nil || doc.Attempt == nil {
+		return nil
+	}
+	return &domain.SelfUpdateAttempt{Status: doc.Attempt.Status, To: doc.Attempt.To, At: doc.Attempt.At}
 }
 
 func parseActiveState(val string) domain.DaemonStatus {

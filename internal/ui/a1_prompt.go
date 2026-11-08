@@ -397,7 +397,7 @@ func (m *Model) hintLine(width int) string {
 			text = "V verify · " + text
 		}
 	}
-	return lipgloss.NewStyle().Foreground(a1Dim).Render(alignRight(text, m.version, width))
+	return lipgloss.NewStyle().Foreground(a1Dim).Render(alignRight(text, m.versionSlot(), width))
 }
 
 // offerVerify is the quiet hint for a worker that has commits to review.
@@ -436,7 +436,7 @@ func (m *Model) helpWraps() bool {
 	if width < 1 {
 		width = 1
 	}
-	_, second := splitHelp(sessionKeysHelp, helpRoom(width, m.version))
+	_, second := splitHelp(sessionKeysHelp, helpRoom(width, m.versionSlot()))
 	return second != ""
 }
 
@@ -459,7 +459,7 @@ func (m *Model) previewHeight(mainHeight, detailBudget int) int {
 // when the key list wraps.
 func (m *Model) mainFooter(width int) string {
 	if m.currentTab == tabDaemons {
-		line := alignRight(daemonKeysHelp, m.version, width)
+		line := alignRight(daemonKeysHelp, m.versionSlot(), width)
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginTop(1).Render(line)
 	}
 	below := m.hintLine(width)
@@ -479,15 +479,15 @@ func helpRoom(width int, version string) int {
 
 func (m *Model) keysHelp(width int) string {
 	style := lipgloss.NewStyle().Foreground(a1Dim)
-	room := helpRoom(width, m.version)
+	room := helpRoom(width, m.versionSlot())
 	first, second := splitHelp(sessionKeysHelp, room)
 	if second == "" {
-		return style.Render(alignRight(first, m.version, width))
+		return style.Render(alignRight(first, m.versionSlot(), width))
 	}
 	if lipgloss.Width(second) > room {
 		second = ansi.Truncate(second, max(1, room), "…")
 	}
-	return style.Render(first) + "\n" + style.Render(alignRight(second, m.version, width))
+	return style.Render(first) + "\n" + style.Render(alignRight(second, m.versionSlot(), width))
 }
 
 func splitHelp(text string, width int) (string, string) {

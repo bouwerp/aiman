@@ -54,6 +54,12 @@ linters:
           - gocyclo
           - errcheck
           - gosec
+      # Acceptance tests are written before the code and children may not edit
+      # them; a style suggestion there is not worth a churn on a pinned file.
+      - path: _acceptance_test\.go
+        linters:
+          - gocritic
+        text: "stringXbytes:"
       # Interface implementations often cannot use every parameter.
       - linters:
           - unparam
