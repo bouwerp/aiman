@@ -2,11 +2,8 @@ package remotesvc
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"regexp"
-	"time"
 )
 
 const releaseDownloadBase = "https://github.com/bouwerp/aiman/releases/download/"
@@ -57,33 +54,11 @@ func InstallTag(ctx context.Context, version string) (string, error) {
 	return LatestReleaseTag(ctx)
 }
 
-// LatestReleaseTag asks GitHub for the newest published release.
+// LatestReleaseTag asks GitHub for the newest published release, ready or not.
 func LatestReleaseTag(ctx context.Context) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleaseURL, nil)
+	rel, _, err := LatestRelease(ctx, "")
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "aiman-cli")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("look up latest release: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("look up latest release: GitHub API returned %d", resp.StatusCode)
-	}
-	var release struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", fmt.Errorf("look up latest release: %w", err)
-	}
-	tag, ok := ReleaseTag(release.TagName)
-	if !ok {
-		return "", fmt.Errorf("look up latest release: unexpected tag %q", release.TagName)
-	}
-	return tag, nil
+	return rel.Tag, nil
 }
