@@ -16,6 +16,7 @@ import (
 	"github.com/bouwerp/aiman/internal/gateway"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/notify"
+	"github.com/bouwerp/aiman/internal/procwalk"
 	"github.com/bouwerp/aiman/internal/server"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tsnet"
@@ -69,6 +70,9 @@ func run(args []string) error {
 
 	dir, err := config.GetDir()
 	if err != nil {
+		return err
+	}
+	if err := gateway.RefuseInsideSession(procwalk.Self); err != nil {
 		return err
 	}
 	lockCtx, cancelLock := context.WithTimeout(context.Background(), instanceLockWait)
