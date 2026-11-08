@@ -250,7 +250,8 @@ func (m *Manager) ensureAimanTaskGitignoredLocal(ctx context.Context, worktreePa
 	_, err := cmd.CombinedOutput()
 	return err
 }
-func (m *Manager) SetupSharedWorkspace(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
+func (m *Manager) SetupSharedWorkspace(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (_ domain.Worktree, err error) {
+	defer func() { err = WrapRemoteError(err) }()
 	repoName := extractRepoName(repo.Name)
 	remoteRoot := remote.GetRoot()
 	if remoteRoot == "" {
@@ -289,7 +290,8 @@ git checkout -b %s
 	}, nil
 }
 
-func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string, baseBranch string) (domain.Worktree, error) {
+func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string, baseBranch string) (_ domain.Worktree, err error) {
+	defer func() { err = WrapRemoteError(err) }()
 	repoName := extractRepoName(repo.Name)
 	remoteRoot := remote.GetRoot()
 	if remoteRoot == "" {
@@ -432,7 +434,8 @@ func (m *Manager) ListRemoteBranches(ctx context.Context, remote domain.RemoteEx
 	return branches, nil
 }
 
-func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
+func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (_ domain.Worktree, err error) {
+	defer func() { err = WrapRemoteError(err) }()
 	repoName := extractRepoName(repo.Name)
 	remoteRoot := remote.GetRoot()
 	if remoteRoot == "" {
@@ -560,7 +563,8 @@ func (m *Manager) SetupRemoteWorktreeFromBranch(ctx context.Context, remote doma
 // EnsureHealthyRepo is the exported wrapper around ensureHealthyRepo. It
 // computes the repo path from the remote root and repo name, then calls
 // the full health check: clone-if-missing, verify-or-recover.
-func (m *Manager) EnsureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo) error {
+func (m *Manager) EnsureHealthyRepo(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo) (err error) {
+	defer func() { err = WrapRemoteError(err) }()
 	repoName := extractRepoName(repo.Name)
 	remoteRoot := remote.GetRoot()
 	if remoteRoot == "" {
@@ -748,7 +752,8 @@ func recoverRepo(ctx context.Context, remote domain.RemoteExecutor, repoPath, re
 // FindExistingWorktree returns the path to an already-registered, healthy worktree
 // for the given branch without creating a new one. Used when the user explicitly
 // chooses to attach to an existing worktree from the "Worktree Already Exists" dialog.
-func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (domain.Worktree, error) {
+func (m *Manager) FindExistingWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, branch string) (_ domain.Worktree, err error) {
+	defer func() { err = WrapRemoteError(err) }()
 	repoName := extractRepoName(repo.Name)
 	remoteRoot := remote.GetRoot()
 	if remoteRoot == "" {

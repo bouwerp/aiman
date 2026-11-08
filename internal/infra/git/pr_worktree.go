@@ -17,7 +17,8 @@ import (
 // also reaches a PR from a fork. An existing worktree of that name is reused:
 // it fetches the head itself and is reset hard to it, which is how a review
 // refresh restages a moved head.
-func (m *Manager) SetupRemotePRWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, number int, base string) (domain.Worktree, error) {
+func (m *Manager) SetupRemotePRWorktree(ctx context.Context, remote domain.RemoteExecutor, repo domain.Repo, number int, base string) (_ domain.Worktree, err error) {
+	defer func() { err = WrapRemoteError(err) }()
 	base = strings.TrimSpace(base)
 	if base == "" {
 		return domain.Worktree{}, errors.New("a PR worktree needs the PR's base branch")

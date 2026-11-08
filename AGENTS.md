@@ -202,6 +202,8 @@ Key behaviours:
 - Per-call timeout: **30 seconds** (`Execute`). `ExecuteWithTimeout` is for work that exceeds that (remote install/update uses `remotesvc.OpTimeout`, 3 minutes).
 - On transport errors: clears socket, retries up to 2×, then falls back to `ControlMaster=no`
 - `ResetControlSocket()`: sends `ssh -O exit` to gracefully stop the master, then removes the socket file. Call this before disruptive remote operations (e.g. stopping a session) to ensure a clean connection for the next call.
+- `CloseAttachMaster(ctx)` sends `ssh -O exit` to the attach (`-sock-tty`) master and removes its socket; the dashboard calls it in the background once an attach returns, so the forwarded agent is unreachable from the host after a detach. A missing master is not an error.
+- A denial printed by the remote git (`ssh.IsRemoteGitAuthDenial`: `git@<host>: Permission denied`, or `Permission denied` with git's `fatal: Could not read from remote repository`) is not retried; `git.WrapRemoteError` turns it into `git.ErrHostAuthDenied`, whose message tells the operator to give the host its own GitHub credentials. The fetch, clone and pull paths in `internal/infra/git` wrap their errors with it.
 
 **Do not** add "permission denied" removal from `isRetriableSSHTransportError` without testing — it causes 4× retries on auth failures which wastes 120s.
 
@@ -446,7 +448,7 @@ Key config fields:
 
 4. **`COALESCE` in Save**: Do not remove the `NULLIF(excluded.field, '')` guards from `repository.go` — the discovery cycle runs every few seconds and will silently blank out session fields if those guards are removed.
 
-5. **`isRetriableSSHTransportError` includes "permission denied"**: This is intentional (handles intermittent SSH auth glitches) but means auth failures retry 4× at 30s each. Do not change without testing.
+5. **`isRetriableSSHTransportError` includes "permission denied"**: This is intentional (handles intermittent SSH auth glitches) but means auth failures retry 4× at 30s each. A remote git denial (`IsRemoteGitAuthDenial`) is excluded. Do not change without testing.
 
 6. **mutagen sync naming**: The canonical sync name is `aiman-sync-<session-ID>`. A pull-only transient sync uses `aiman-sync-<session-ID>-pull`. Older sessions may have `MutagenSyncID` set to something else — always terminate `s.MutagenSyncID` in addition to the computed name.
 
