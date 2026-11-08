@@ -339,6 +339,132 @@ Acceptance tests are committed on `aiman-next-level` (Go, behind `//go:build acc
 
 Group A runs first (P1, P3, P5 in parallel). Group B (P2, P4) starts when P1 has merged. The coordinator writes the as-built page and the release notes.
 
+## Contracts
+
+Exact names the acceptance tests pin. Children implement these; anything else inside a piece is the child's call.
+
+### `internal/selfupdate` (P1)
+
+```go
+type Release struct { Tag string; Ready bool; ETag string; PublishedAt time.Time }
+
+// Fetcher asks GitHub for the latest release. changed is false on a 304 (the
+// stored etag still holds); rel is then zero.
+type Fetcher interface { Latest(ctx context.Context, etag string) (rel Release, changed bool, err error) }
+
+// Runner starts the update script detached and makes sure a Result is written
+// when it ends. It returns once the script is started.
+type Runner interface { Start(tag, script string) error }
+
+type Mode string
+const ( ModeOff Mode = "off"; ModeNotify Mode = "notify"; ModeAuto Mode = "auto" )
+type Policy struct { Mode Mode; CheckEvery time.Duration; RetryAfter time.Duration }
+const ( DefaultCheckEvery = 10 * time.Minute; MinCheckEvery = time.Minute; DefaultRetryAfter = time.Hour
+        DefaultFirstProbeDelay = 2 * time.Minute; DefaultDeferRetry = 30 * time.Second; ResultWait = 3 * time.Minute )
+
+type AttemptStatus string
+const ( AttemptStarted AttemptStatus = "started"; AttemptOK AttemptStatus = "ok"; AttemptFailed AttemptStatus = "failed" )
+type Attempt struct { At time.Time; From, To string; Status AttemptStatus; Exit int; Error string }
+type Result struct { Tag string; Exit int; At time.Time }
+type State struct { CheckedAt time.Time; ETag string; Latest Release; Notified string; Attempt *Attempt }
+func LoadState(path string) (State, error)   // missing file is a zero State, nil error
+func (s State) Save(path string) error       // temp file, fsync, rename
+func ReadResult(path string) (Result, bool, error) // false when absent or unparsable
+
+const ( StatusCurrent = "current"; StatusAvailable = "available"; StatusNotReady = "not_ready"; StatusDeferred = "deferred"
+        StatusUpdating = "updating"; StatusFailed = "failed"; StatusHeld = "held"; StatusUnknown = "unknown" )
+type Status struct { Version string; Latest string; LatestReady bool; Mode Mode; Status string; CheckedAt time.Time; Attempt *Attempt }
+type Outcome struct { Accepted bool; Reason string; Target string }
+
+type Manager struct {
+    Version string; Fetcher Fetcher; Runner Runner
+    Script func(tag string) string   // nil means remotesvc.UpdateScript(remotesvc.KindServe, tag)
+    StatePath, ResultPath string; Policy Policy
+    Busy []func() int
+    OnNewVersion func(Release); OnApplied func(Attempt)
+    Logf func(string, ...any); Now func() time.Time
+    FirstProbeDelay, DeferRetry time.Duration // zero means the defaults
+}
+func (m *Manager) Status() Status
+func (m *Manager) Poll(ctx context.Context) Status            // one check and apply decision; never blocks on the gate
+func (m *Manager) Request(ctx context.Context) Outcome        // forced poll and apply through the gate
+func (m *Manager) Run(ctx context.Context)                    // FirstProbeDelay, then CheckEvery; deferred retries every DeferRetry
+func (m *Manager) Finish(ctx context.Context)                 // settles a started attempt from the Result file, waits up to ResultWait after Attempt.At
+
+// ScriptRunner is the production Runner.
+func NewScriptRunner(tmpDir, logPath, resultPath string) *ScriptRunner
+// Command is the process factory, exec.Command by default; tests replace it.
+type ScriptRunner struct { Command func(name string, args ...string) *exec.Cmd /* unexported fields */ }
+func (r *ScriptRunner) Start(tag, script string) error
+// Argv returns the argv Start uses, for the pkill test: setsid nohup bash <wrapper path>.
+func (r *ScriptRunner) Argv(tag string) []string
+```
+
+Rules the tests check: `Poll` on a `dev` version is `unknown` and calls nothing; `Policy.Mode == off` is `held` and `Fetcher` is never called; a newer unready release is `not_ready` with no `OnNewVersion`; a newer ready release in `notify` is `available` and `OnNewVersion` fires once per tag across polls; in `auto` with `Busy` summing to zero the runner starts with the tag and a `started` attempt is saved first; with `Busy` non-zero the status is `deferred` and nothing starts; a `started` attempt younger than `ResultWait` defers; a `failed` attempt for the same tag younger than `RetryAfter` skips; older than `RetryAfter` re-applies even when `Version == Latest.Tag`; a `failed` attempt for an older tag is ignored when a newer tag appears. `Finish`: result exit 0 and `Version == To` is `ok` and `OnApplied` fires once; exit non-zero with `Version == To` is `failed` with `Exit` set and `OnApplied` fires; no result within `ResultWait` is `failed`; with no `started` attempt it returns without touching the state. `ScriptRunner.Start` writes the script with mode 0600 under `tmpDir`, writes a wrapper that runs it and then writes the `Result` JSON, and starts `Command("setsid", "nohup", "bash", <wrapper>)` with stdout and stderr on the log; when `setsid` is a fake on PATH, the wrapper writes a `Result` with the script's exit code.
+
+### `internal/infra/remotesvc` (P1)
+
+```go
+type Release struct { Tag string; Assets []string; ETag string; PublishedAt time.Time }
+func (r Release) Ready() bool     // Assets holds "checksums.txt"
+// LatestRelease GETs releases/latest with If-None-Match when etag is set.
+// A 304 returns (Release{}, false, nil). A tag that fails releaseTagRe is an error.
+func LatestRelease(ctx context.Context, etag string) (Release, bool, error)
+```
+
+`LatestReleaseTag` keeps its signature and calls `LatestRelease`. The existing test variable `latestReleaseURL` keeps working for both.
+
+### `internal/server` and `cmd/aiman` (P2)
+
+- `host.version {}` → `{"type":"host_version","host":string,"version":string,"protocol":1,"latest":string,"latest_ready":bool,"mode":string,"status":string,"checked_at":RFC3339 or "","attempt":{"at","from","to","status","exit","error"} or null}`. Any caller. With no manager set: `mode` `off`, `status` `held`, `latest` empty.
+- `host.update {}` → `{"type":"host_update","accepted":bool,"reason":string,"target":string}`. A session caller (`isSessionCall`) is `needs_operator`. With no manager, `invalid_params` "host updates are off on this host". Both join `dispatchLifecycle`.
+- `Server.Inflight() int`; `longCall(method string) bool` true for exactly the `callDeadline` cases except `repo.list` and `aws.status`, plus `handover.write`.
+- `internal/awslogin`: `func (e *Engine) Pending() int`. `internal/handoverchild`: `func (m *Manager) Starting() int`.
+- `config`: `type HostUpdateConfig struct { Mode string; CheckEvery time.Duration }` with YAML `host: {update: {mode, check_every}}`; `type HostConfig struct { Update HostUpdateConfig }`; `Config.Host HostConfig`; `ServeConfig.Host`; `(HostUpdateConfig) ModeOrDefault() string` (`auto`; an unknown mode is `notify`), `CheckEveryOrDefault() time.Duration` (10m default, 1m floor). `MarshalServeConfig` carries it.
+- `internal/gateway/notify.go`: `var pushKinds = map[domain.NotifyKind]bool{...}`; `phoneSink.Send` returns nil without sending for any kind not in it; `host_update` and `agent_update` are not in it.
+- `internal/gateway/allowlist.go`: `host.version` in `deviceReadMethods`, `host.update` in `deviceDestructiveMethods`.
+- `internal/domain/notification.go` (P1 adds it): `NotifyHostUpdate NotifyKind = "host_update"`, in `AllNotifyKinds`, `NeedsYou` false, `EventLabel` `host update`.
+- CLI: `aiman host version [--json]` prints `v0.34.0 · latest v0.35.0 (ready) · auto · available · checked <time>` and the attempt line when there is one; `aiman host update [--json]` prints `accepted: <target>` or `refused: <reason>`.
+
+### `internal/apicompat` (P3)
+
+```go
+// Problems are human-readable lines; empty means compatible.
+func CompareSpecs(oldYAML, newYAML []byte) []string          // methods, event types, error codes, schemas, properties, request required
+func CompareAllowlists(oldGo, newGo []byte) []string        // each device set a superset
+func CompareJSONNames(oldGo, newGo []byte, types []string) []string // every json name of the named structs still present with the same type
+func PreviousTag(dir string) (tag string, ok bool)          // git describe --tags --abbrev=0 HEAD^ (the previous release, not HEAD's own tag)
+func ShowAtTag(dir, tag, path string) ([]byte, error)       // git show <tag>:<path>
+```
+
+`internal/server/openapi_compat_test.go` runs the three comparisons against `PreviousTag` and skips with a notice when there is none. `.github/workflows/ci.yml` checks out with tags (`fetch-depth: 0` or `fetch-tags: true`).
+
+### `internal/ui` (P4)
+
+```go
+type ReleaseHint struct { Tag string; Source string } // Source "remote" or "github"
+// releaseHint: the newest of remotes and github that is strictly newer than self; false for a dev self or nothing newer.
+func releaseHint(self string, remotes []string, github string) (ReleaseHint, bool)
+func (h ReleaseHint) Line(self string) string  // "v0.34.0 · v0.35.0 available: aiman update"
+```
+
+`notifyToast` returns a toast for `host_update` with the notification text. The help line's version slot shows `Line` when a hint exists. A GitHub check runs at startup and every 6 hours; errors are ignored.
+
+### aiman-phone (P5)
+
+```ts
+// lib/serveVersion.ts
+export const SUPPORTED_PROTOCOL = 1;
+export type ServeVersion = { version: string; protocol: number; seenAt: string };
+export function parsePong(pong: { version?: string; protocol?: number }, now: Date): ServeVersion | null; // null when version is missing
+export function describeServeVersion(v: ServeVersion | undefined): string;   // "serve v0.35.0" or "serve: unknown"
+export function versionChangeToast(prev: ServeVersion | undefined, next: ServeVersion, nickname: string): string | null; // null on first sight or no change
+export function protocolTooNew(v: ServeVersion | undefined): boolean;        // protocol > SUPPORTED_PROTOCOL
+export function protocolBannerText(nickname: string): string;                 // "This app is too old for <nickname>. Update the app."
+```
+
+`hooks/useServeVersion.ts` pings the active server on activation and on foreground and stores the result per server (`lib/servers.ts` gains `serve?: ServeVersion`). Settings shows `describeServeVersion` on each server card. `components/ProtocolBanner.tsx` is mounted in `app/_layout.tsx`.
+
 ## What you should be able to explain after reading
 
 1. Why a host could not update itself before, and the three conditions the laptop path still needs.
