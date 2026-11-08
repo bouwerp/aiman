@@ -140,6 +140,9 @@ type Server struct {
 	designer *design.Publisher
 	// transcripts opens vendor transcripts; nil until SetTranscripts.
 	transcripts TranscriptSource
+	// trPins are the readers session.transcript opened lately, which the
+	// event poll watches.
+	trPins transcriptPins
 
 	// agents is the model tiers from this host's config; agentInstalled
 	// reports whether a command resolves on this host. session.create with no
@@ -398,6 +401,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.dispatchAWS(ctx, req)
 	case "agents.status", "agents.update", "agents.move_prefix":
 		return s.dispatchAgents(ctx, req)
+	case "session.transcript", "session.transcript_item", "session.process_output":
+		return s.dispatchTranscript(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)
 	case "review.reveal", "review.post", "review.refresh", "review.run", "review.debug", "review.coverage",

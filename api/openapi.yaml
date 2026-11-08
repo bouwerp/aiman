@@ -400,7 +400,12 @@ components:
             profile is not delegated) and needs_operator (a session caller).
             aws.login_status answers not_found for a login id serve no longer
             holds. Until their handlers land, the aws.* methods answer
-            unavailable.
+            unavailable. session.transcript, session.transcript_item and
+            session.process_output answer unavailable on a serve with no
+            transcript reader, not_found for an unknown session, item or
+            process, session_scope for a session caller outside its own tree,
+            and serve's own forbidden when a process output path resolves
+            outside the session's directories.
           enum:
             - invalid_params
             - not_found
@@ -440,10 +445,10 @@ components:
             - session_scope
             - aws_no_sso
             - aws_rate_limited
+            - unavailable
             - invalid_code
             - locked
             - forbidden
-            - unavailable
             - internal
         message:
           type: string
@@ -489,6 +494,9 @@ components:
             - session.list
             - session.get
             - session.read
+            - session.transcript
+            - session.transcript_item
+            - session.process_output
             - session.log
             - session.replay
             - session.prompt
@@ -599,7 +607,36 @@ components:
           type: string
           description: >
             Target of session.restart and session.terminate (id or name). Every
-            method that takes id also takes session; id wins when both are sent.
+            method that takes id also takes session; id wins when both are sent,
+            except on session.transcript_item and session.process_output, where
+            session names the session and id the item or process.
+        subagent:
+          type: string
+          description: >
+            session.transcript, session.transcript_item and
+            session.process_output: a sub-agent id from a subagent item; empty
+            reads the parent conversation.
+        before:
+          type: string
+          description: >
+            session.transcript: an opaque cursor from a reply's before; returns
+            the page above it. Exclusive with after (invalid_params).
+        after:
+          type: string
+          description: >
+            session.transcript: an opaque cursor from a reply's after; returns
+            new items, changed items and removed ids past it. A reply cut by
+            the limit or the 2 MiB cap stops short of the end: call again with
+            its after until a reply is empty.
+        limit:
+          type: integer
+          description: session.transcript page size; default 50, maximum 200.
+        since:
+          type: integer
+          format: int64
+          description: >
+            session.process_output: byte offset to read from; absent reads the
+            last 256 KiB.
         discard:
           type: boolean
           description: >
@@ -681,6 +718,9 @@ components:
             - $ref: "#/components/schemas/SessionListResult"
             - $ref: "#/components/schemas/SessionGetResult"
             - $ref: "#/components/schemas/PaneReadResult"
+            - $ref: "#/components/schemas/TranscriptPage"
+            - $ref: "#/components/schemas/TranscriptItemResult"
+            - $ref: "#/components/schemas/ProcessOutputResult"
             - $ref: "#/components/schemas/PromptResult"
             - $ref: "#/components/schemas/PushRegisterResult"
             - $ref: "#/components/schemas/PushUnregisterResult"
@@ -1156,6 +1196,204 @@ components:
           $ref: "#/components/schemas/Session"
         text:
           type: string
+    TranscriptPage:
+      type: object
+      description: >
+        One page of session.transcript. Items are newest-last. On a call with
+        after, items are new (append), changed are items first seen at or
+        before the cursor whose rev moved (replace by id only when loaded),
+        and removed are ids that left the active branch; apply removed before
+        items. reset means drop the cache: the file was replaced or
+        rewritten. A session with no transcript answers source pane with one
+        pane item holding the current screen.
+      required: [type, session, source, capabilities, items, before, after, reset]
+      properties:
+        type:
+          type: string
+          const: transcript
+        session:
+          type: string
+        subagent:
+          type: string
+        source:
+          type: string
+          enum: [transcript, pane]
+        capabilities:
+          $ref: "#/components/schemas/TranscriptCapabilities"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TranscriptItem"
+        changed:
+          type: array
+          items:
+            $ref: "#/components/schemas/TranscriptItem"
+        removed:
+          type: array
+          items:
+            type: string
+        before:
+          type: [string, "null"]
+          description: Opaque cursor for the page above; null at the top.
+        after:
+          type: string
+          description: >
+            Opaque cursor to resume from. A reply to a before call carries the
+            end of the file: keep the after of the newest page instead.
+        reset:
+          type: boolean
+    TranscriptCapabilities:
+      type: object
+      required: [agent, scrollback, tool_results, thinking, subagents, processes]
+      properties:
+        agent:
+          type: string
+        scrollback:
+          type: string
+          enum: [transcript, pane]
+        tool_results:
+          type: boolean
+        thinking:
+          type: string
+          enum: [full, summary, none]
+        subagents:
+          type: boolean
+        processes:
+          type: string
+          enum: [file, inline, none]
+    TranscriptItem:
+      type: object
+      description: >
+        One normalised transcript entry. rev is the position of the last line
+        that changed it. text, tool_call.input and tool_call.result are cut at
+        64 KiB in a page and 1 MiB in session.transcript_item, with truncated
+        set.
+      required: [id, kind, at, rev, text, truncated]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [user, assistant, thinking, tool_call, subagent, process, system, pane]
+        at:
+          type: string
+          format: date-time
+        rev:
+          type: integer
+          format: int64
+        text:
+          type: string
+        truncated:
+          type: boolean
+        hidden:
+          type: boolean
+          description: A thinking block whose text the vendor redacted.
+        tool_call:
+          $ref: "#/components/schemas/TranscriptToolCall"
+        subagent:
+          $ref: "#/components/schemas/TranscriptSubagent"
+        process:
+          $ref: "#/components/schemas/TranscriptProcess"
+    TranscriptToolCall:
+      type: object
+      required: [tool_id, name, summary, input, result, status]
+      properties:
+        tool_id:
+          type: string
+        name:
+          type: string
+        summary:
+          type: string
+        input:
+          type: string
+        result:
+          type: string
+        status:
+          type: string
+          enum: [running, ok, error, denied]
+        duration_ms:
+          type: integer
+          format: int64
+        subagent_id:
+          type: string
+        process_id:
+          type: string
+    TranscriptSubagent:
+      type: object
+      required: [id, name, description, state, item_count]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        state:
+          type: string
+          enum: [running, done, failed, unknown]
+        item_count:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+    TranscriptProcess:
+      type: object
+      required: [id, command, state, output]
+      properties:
+        id:
+          type: string
+          description: The process id session.process_output takes.
+        command:
+          type: string
+        state:
+          type: string
+          enum: [running, exited, unknown]
+        exit_code:
+          type: integer
+        output:
+          type: string
+          enum: [file, inline]
+    TranscriptItemResult:
+      type: object
+      required: [type, item]
+      properties:
+        type:
+          type: string
+          const: transcript_item
+        item:
+          $ref: "#/components/schemas/TranscriptItem"
+    ProcessOutputResult:
+      type: object
+      description: >
+        At most 256 KiB of a background process's output, from since or the
+        tail. A file not created yet answers empty data and state running.
+        Codex output is inline: data comes from the process item.
+      required: [type, data, offset, size, state, exit_code, truncated]
+      properties:
+        type:
+          type: string
+          const: process_output
+        data:
+          type: string
+        offset:
+          type: integer
+          format: int64
+          description: Byte offset of data in the output.
+        size:
+          type: integer
+          format: int64
+          description: The output's size when read.
+        state:
+          type: string
+          enum: [running, exited, unknown]
+        exit_code:
+          type: [integer, "null"]
+        truncated:
+          type: boolean
+          description: More output lies before or after data.
     PromptResult:
       type: object
       required: [type, sent]
@@ -1192,7 +1430,11 @@ components:
           description: >
             session_activity, session_gone and session_created come from the
             stream's own poll; todo_changed, steer, usage, usage.budget,
-            notify and verify are published by request handlers; keepalive
+            notify and verify are published by request handlers; transcript
+            comes from the stream's poll when a transcript file read within
+            the last 2 minutes (or a session's recorded transcript path)
+            changes size or mtime, at most once a second per session and
+            sub-agent, and means call session.transcript with after; keepalive
             is sent when nothing else was.
           enum:
             - session_activity
@@ -1204,6 +1446,7 @@ components:
             - usage.budget
             - notify
             - verify
+            - transcript
             - keepalive
         id:
           type: string
@@ -1237,7 +1480,12 @@ components:
         rev:
           type: integer
           format: int64
-          description: To-do list revision on todo_changed.
+          description: >
+            To-do list revision on todo_changed; on transcript, the changed
+            file's size, a hint only (compare nothing to it).
+        subagent:
+          type: string
+          description: On transcript, the sub-agent whose file moved; absent for the parent.
         queued:
           type: integer
           description: Steering notes still waiting on steer.
