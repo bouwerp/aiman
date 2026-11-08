@@ -3,12 +3,10 @@ package server
 import (
 	"context"
 	"log"
-	"os"
-	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/procwalk"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
@@ -22,29 +20,11 @@ func withPeerPID(ctx context.Context, pid int, ok bool) context.Context {
 	return context.WithValue(ctx, peerPIDKey{}, pid)
 }
 
-// maxProcDepth bounds the ancestor walk.
-const maxProcDepth = 64
+// maxProcDepth bounds the ancestor walk and the session parent walk.
+const maxProcDepth = procwalk.MaxDepth
 
 // parentPID reads pid's parent from /proc/<pid>/stat.
-func parentPID(pid int) (int, bool) {
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return 0, false
-	}
-	// The command name sits in parentheses and may hold spaces; the state and
-	// parent PID follow the last ')'.
-	s := string(raw)
-	i := strings.LastIndexByte(s, ')')
-	if i < 0 {
-		return 0, false
-	}
-	f := strings.Fields(s[i+1:])
-	if len(f) < 2 {
-		return 0, false
-	}
-	pp, err := strconv.Atoi(f[1])
-	return pp, err == nil
-}
+func parentPID(pid int) (int, bool) { return procwalk.ParentPID(pid) }
 
 // descendsFrom reports whether pid is one of roots or has one as an ancestor.
 func descendsFrom(pid int, roots map[int]bool, parent func(int) (int, bool)) bool {
@@ -97,17 +77,12 @@ func heldByHolder(pid int) bool {
 // isHolderProc reports whether pid is a live `aiman pty hold` process, from
 // /proc/<pid>/cmdline.
 func isHolderProc(pid int) bool {
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
-	return err == nil && isHolderCmdline(raw)
+	raw, ok := procwalk.Cmdline(pid)
+	return ok && isHolderCmdline(raw)
 }
 
-// isHolderCmdline reports whether a NUL-separated command line is a holder's:
-// `<binary> pty hold ... --id <id>`, as ptyhold.Spawn starts it. The binary's
-// name is not checked, so a renamed aiman still counts.
-func isHolderCmdline(raw []byte) bool {
-	args := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
-	return len(args) >= 3 && args[1] == "pty" && args[2] == "hold" && slices.Contains(args[3:], "--id")
-}
+// isHolderCmdline reports whether a NUL-separated command line is a holder's.
+func isHolderCmdline(raw []byte) bool { return procwalk.IsHolderCmdline(raw) }
 
 // isSessionCall reports whether req came from a session. A request naming a
 // caller is one; so is a request with no caller made by a process inside a pty
