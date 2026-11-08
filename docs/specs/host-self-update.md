@@ -223,7 +223,7 @@ Changed files:
 - `internal/infra/config/config.go`: `HostConfig{Update HostUpdateConfig}` under the YAML key `host`; `ServeConfig` carries it; `MarshalServeConfig` pushes it.
 - `internal/domain/notification.go`: `NotifyHostUpdate = "host_update"`, in `AllNotifyKinds`, `NeedsYou` false, label `host update`.
 - `internal/gateway/allowlist.go`: `host.version` read, `host.update` destructive.
-- `internal/gateway/notify.go`: the phone sink pushes only kinds on an explicit allowlist (`waiting_input`, `error`, `ci_escalation`, `review_done`, `ended`, `idle`: the kinds `phoneStateFor` maps today) and drops every other kind, `host_update` and `agent_update` included. Today an unknown kind becomes `waiting_input` and is pushed as "Aiman needs input" with an empty session link; after this change a kind a future serve adds is silent on an old gateway.
+- `internal/gateway/notify.go`: the phone sink pushes only kinds on an explicit allowlist (`waiting_input`, `error`, `ci_escalation`, `review_done`, `ended`: the kinds `phoneStateFor` maps today) and drops every other kind, `host_update` and `agent_update` included. Today an unknown kind becomes `waiting_input` and is pushed as "Aiman needs input" with an empty session link; after this change a kind a future serve adds is silent on an old gateway.
 - `internal/ui/session_events.go`: `notifyToast` toasts `host_update` although `NeedsYou` is false, because the toast is the laptop's release hint.
 - `api/openapi.yaml`: both methods, `HostVersionResult`, `HostUpdateResult`; the phone copies the spec and regenerates types.
 - `AGENTS.md`, `internal/aimanskill/SKILL.md` (one line: a host updates itself; `aiman host version` shows it).
