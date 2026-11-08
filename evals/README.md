@@ -59,6 +59,15 @@ The current suite covers:
   tracker passes ask the parent for the report once.
 - `child-vanished`: a forgotten child clears t1's link, keeps it open, and
   raises one notification.
+- `transcript` (`evals/transcript/`): an in-process serve wired with
+  `server.NewTranscriptSource` over redacted Claude transcripts under a temp
+  HOME. `session.transcript` paging by the vendor rule and its `after` cursor
+  on the `AgentSessionPath` route, `session.transcript_item` (`not_found` for
+  an unknown id), `session.process_output` (refused outside the session
+  directory, empty and running until written), the pane fallback, session
+  scope, the `transcript` event (within 3 s of an append, at most one a
+  second), and a docs check that AGENTS.md, `api/openapi.yaml` and the spec
+  cover the feature.
 
 `restart-preserves-worktree` is added with the restart harness.
 

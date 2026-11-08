@@ -1,5 +1,3 @@
-//go:build acceptance
-
 // Package transcripteval is the P6 eval for the phone transcript
 // (docs/specs/phone-transcript.md): an in-process serve wired the way
 // cmd/aiman/serve.go wires it, with server.NewTranscriptSource locating real
