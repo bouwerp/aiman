@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/selfupdate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,9 +47,11 @@ type Config struct {
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
 	// Roles overrides agent, model and effort for sessions with a role.
-	Roles        RolesConfig `yaml:"roles,omitempty"`
-	Remotes      []Remote    `yaml:"remotes"`
-	ActiveRemote string      `yaml:"active_remote"`
+	Roles RolesConfig `yaml:"roles,omitempty"`
+	// Host configures how serve keeps the host's aiman binaries current.
+	Host         HostConfig `yaml:"host,omitempty"`
+	Remotes      []Remote   `yaml:"remotes"`
+	ActiveRemote string     `yaml:"active_remote"`
 
 	// PermissionsTightened records that Load had to remove group/other access
 	// from the config file, meaning the API token in it had been readable by
@@ -90,6 +93,8 @@ type ServeConfig struct {
 	Roles RolesConfig `yaml:"roles,omitempty"`
 	// AWS carries this host's delegations for the phone's AWS sign-in.
 	AWS ServeAWSConfig `yaml:"aws,omitempty"`
+	// Host configures how serve keeps the host's aiman binaries current.
+	Host HostConfig `yaml:"host,omitempty"`
 }
 
 // ServeAWSConfig is the AWS section of the serve config.
@@ -204,6 +209,48 @@ func (u AgentUpdateConfig) CheckEveryOrDefault() time.Duration {
 		return u.CheckEvery
 	}
 	return DefaultAgentUpdateCheckEvery
+}
+
+// HostConfig is the host block: settings for the aiman install on a host.
+type HostConfig struct {
+	// Update is host.update.
+	Update HostUpdateConfig `yaml:"update,omitempty"`
+}
+
+// HostUpdateConfig is host.update: how serve polls for a new aiman release
+// and whether it installs one itself.
+type HostUpdateConfig struct {
+	// Mode is off, notify or auto. Empty is auto; any other value is notify.
+	Mode string `yaml:"mode,omitempty"`
+	// CheckEvery is the poll interval. Zero is selfupdate.DefaultCheckEvery;
+	// a value below selfupdate.MinCheckEvery is raised to it.
+	CheckEvery time.Duration `yaml:"check_every,omitempty"`
+}
+
+// ModeOrDefault is the configured mode: auto when empty, notify when the
+// value is not off, notify or auto.
+func (u HostUpdateConfig) ModeOrDefault() string {
+	switch m := selfupdate.Mode(strings.TrimSpace(u.Mode)); m {
+	case "":
+		return string(selfupdate.ModeAuto)
+	case selfupdate.ModeOff, selfupdate.ModeNotify, selfupdate.ModeAuto:
+		return string(m)
+	default:
+		return string(selfupdate.ModeNotify)
+	}
+}
+
+// CheckEveryOrDefault is the configured interval, selfupdate.DefaultCheckEvery
+// when unset, and never below selfupdate.MinCheckEvery.
+func (u HostUpdateConfig) CheckEveryOrDefault() time.Duration {
+	switch {
+	case u.CheckEvery <= 0:
+		return selfupdate.DefaultCheckEvery
+	case u.CheckEvery < selfupdate.MinCheckEvery:
+		return selfupdate.MinCheckEvery
+	default:
+		return u.CheckEvery
+	}
 }
 
 // AgentUpdateGuards reports whether aiman launches agents with their
@@ -347,6 +394,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Repos:         c.Repos,
 		Roles:         c.Roles,
 		AWS:           c.serveAWSFor(host),
+		Host:          c.Host,
 	})
 }
 

@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -32,5 +33,27 @@ func TestLabelPrefersIssueThenNameThenShortID(t *testing.T) {
 	}
 	if Label("", "", "12345678") != "1234567" {
 		t.Fatal("short id")
+	}
+}
+
+func TestFormatHostLevelDetailIsWholeText(t *testing.T) {
+	for _, kind := range []domain.NotifyKind{domain.NotifyHostUpdate, domain.NotifyAgentUpdate} {
+		const want = "serve updated v0.34.0 → v0.35.0 on remote1"
+		if got := Format("x", "h", kind, want); got != want {
+			t.Errorf("Format(%s) = %q, want %q", kind, got, want)
+		}
+	}
+}
+
+func TestEmitPublishesFormattedText(t *testing.T) {
+	s := &fakeStore{}
+	var got []domain.Notification
+	r := NewRecorder(s, Settings{Events: map[domain.NotifyKind]bool{domain.NotifyHostUpdate: true}, Host: "h"},
+		func(n domain.Notification) { got = append(got, n) })
+	if err := r.Emit(context.Background(), "", "", domain.NotifyHostUpdate, "serve updated v1 → v2 on h"); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Text != "serve updated v1 → v2 on h" || got[0].Kind != domain.NotifyHostUpdate {
+		t.Fatalf("published %+v", got)
 	}
 }

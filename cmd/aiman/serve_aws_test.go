@@ -38,7 +38,7 @@ func TestAWSCredentialsWriterWritesSection(t *testing.T) {
 }
 
 func TestWireAWSLoginNeedsDelegations(t *testing.T) {
-	if closeAWS := wireAWSLogin(nil, nil, t.TempDir()); closeAWS != nil {
+	if closeAWS, _ := wireAWSLogin(nil, nil, t.TempDir()); closeAWS != nil {
 		t.Error("no delegations must leave the aws methods unwired")
 	}
 }

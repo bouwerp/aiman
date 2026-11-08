@@ -65,6 +65,7 @@ func TestAllowlistDestructiveSet(t *testing.T) {
 	want := []string{
 		"agents.move_prefix", "agents.update",
 		"aws.login_start",
+		"host.update",
 		"pty.create", "pty.forget", "pty.input", "pty.kill", "pty.run",
 		"review.post",
 		"session.create", "session.forget", "session.restart",

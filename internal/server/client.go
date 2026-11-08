@@ -322,27 +322,43 @@ func (e *EventsConn) Close() error { return e.conn.Close() }
 // callDeadline is how long CallRaw waits for method's answer: 30s, or a
 // little past the server's own limit for the slow methods.
 func callDeadline(method string) time.Duration {
+	d, _ := slowCall(method)
+	return d
+}
+
+// longCall reports whether method is a long call the host update gate waits
+// for: a slow method that changes state midway, so not the read-only repo.list
+// and aws.status.
+func longCall(method string) bool {
+	_, long := slowCall(method)
+	return long
+}
+
+// slowCall is the one list of slow methods: the client deadline for method and
+// whether a restart in the middle of it would leave half-written state.
+// handover.write keeps the default deadline and is listed for the gate.
+func slowCall(method string) (time.Duration, bool) {
 	switch method {
-	case "session.create":
-		return SessionCreateWait
+	case "session.create", "review.fix", "review.assess":
+		return SessionCreateWait, true
 	case "session.restart":
-		return SessionRestartTimeout + 15*time.Second
+		return SessionRestartTimeout + 15*time.Second, true
 	case "session.terminate":
-		return SessionTerminateTimeout + 15*time.Second
+		return SessionTerminateTimeout + 15*time.Second, true
 	case "repo.list":
-		return RepoListTimeout + 15*time.Second
+		return RepoListTimeout + 15*time.Second, false
 	case "design.publish":
-		return DesignPublishTimeout + 15*time.Second
+		return DesignPublishTimeout + 15*time.Second, true
 	case "aws.status":
-		return AWSStatusTimeout + 15*time.Second
+		return AWSStatusTimeout + 15*time.Second, false
 	case "aws.login_start":
-		return AWSLoginStartTimeout + 15*time.Second
-	case "review.fix", "review.assess":
-		return SessionCreateWait
+		return AWSLoginStartTimeout + 15*time.Second, true
 	case "review.post", "review.push", "review.approve":
-		return ReviewPostTimeout + 15*time.Second
+		return ReviewPostTimeout + 15*time.Second, true
 	case "review.run", "review.coverage":
-		return ReviewRunTimeout + 15*time.Second
+		return ReviewRunTimeout + 15*time.Second, true
+	case "handover.write":
+		return 30 * time.Second, true
 	}
-	return 30 * time.Second
+	return 30 * time.Second, false
 }

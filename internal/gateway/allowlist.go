@@ -15,7 +15,7 @@ var (
 		"usage.get",
 		"ci.get",
 		"agents.status",
-		"repo.list", "host.stats",
+		"repo.list", "host.stats", "host.version",
 		"aws.status", "aws.login_status", "aws.log",
 	}
 	// deviceWriteMethods change state but cannot publish outside the host.
@@ -43,12 +43,14 @@ var (
 	// not here: they reach the agent's composer or its open dialog, not a shell.
 	// aws.login_start is here because approval is often one tap in a browser
 	// that already holds the portal session, so it can mint a host credential.
+	// host.update is here because it restarts serve and the gateway.
 	deviceDestructiveMethods = []string{
 		"pty.input", "pty.create", "pty.run", "pty.kill", "pty.forget",
 		"session.create", "session.restart", "session.forget",
 		"review.post",
 		"agents.update", "agents.move_prefix",
 		"aws.login_start",
+		"host.update",
 	}
 	// gatewayMethods are answered by the gateway itself, not serve.
 	gatewayMethods = []string{"push.register", "push.unregister"}
