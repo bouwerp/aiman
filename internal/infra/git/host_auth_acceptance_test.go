@@ -1,5 +1,3 @@
-//go:build acceptance
-
 package git
 
 import (
