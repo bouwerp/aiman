@@ -401,7 +401,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.dispatchAWS(ctx, req)
 	case "agents.status", "agents.update", "agents.move_prefix":
 		return s.dispatchAgents(ctx, req)
-	case "session.transcript", "session.transcript_item", "session.process_output":
+	case "session.transcript", "session.transcript_item", "session.process_output", "session.file":
 		return s.dispatchTranscript(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)

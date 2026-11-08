@@ -405,7 +405,12 @@ components:
             transcript reader, not_found for an unknown session, item or
             process, session_scope for a session caller outside its own tree,
             and serve's own forbidden when a process output path resolves
-            outside the session's directories.
+            outside the session's directories. session.file answers
+            unavailable for a session with no worktree or working directory,
+            forbidden for a path outside them, under a .git directory or
+            named like a secret, not_found for a missing file,
+            invalid_params for a directory, and session_scope for a session
+            caller outside its own tree.
           enum:
             - invalid_params
             - not_found
@@ -497,6 +502,7 @@ components:
             - session.transcript
             - session.transcript_item
             - session.process_output
+            - session.file
             - session.log
             - session.replay
             - session.prompt
@@ -634,6 +640,23 @@ components:
           description: >
             session.transcript page size; default 50, maximum 200. aws.log:
             the most rows to return; 0 or absent is the ledger's default.
+            session.file: the most bytes of data; default 65536, capped at
+            262144.
+        path:
+          type: string
+          description: >
+            session.file, required. Absolute, or relative to the session's
+            working directory. Served only inside the session's worktree or
+            working directory after symlinks; never a path with a .git
+            element or a base name .env, .env.*, *.pem, *.key, id_rsa*,
+            id_ed25519* or credentials (forbidden).
+        offset:
+          type: integer
+          format: int64
+          description: >
+            session.file: byte offset to read from; default 0. Past the end
+            answers empty data with eof true. The next page starts at the
+            reply's offset plus the byte length of its data.
         since_seq:
           type: integer
           format: int64
@@ -728,6 +751,7 @@ components:
             - $ref: "#/components/schemas/TranscriptPage"
             - $ref: "#/components/schemas/TranscriptItemResult"
             - $ref: "#/components/schemas/ProcessOutputResult"
+            - $ref: "#/components/schemas/FileResult"
             - $ref: "#/components/schemas/PromptResult"
             - $ref: "#/components/schemas/PushRegisterResult"
             - $ref: "#/components/schemas/PushUnregisterResult"
@@ -1451,6 +1475,39 @@ components:
         truncated:
           type: boolean
           description: More output lies before or after data.
+    FileResult:
+      type: object
+      description: >
+        session.file {session, path, offset?, limit?}: one page of a file in
+        the session's worktree or working directory. Data is cut on a UTF-8
+        boundary, so a client appends pages. A file whose first 8 KiB holds a
+        NUL is binary: data is empty and eof true.
+      required: [type, session, path, size, offset, data, eof, binary]
+      properties:
+        type:
+          type: string
+          const: file
+        session:
+          type: string
+          description: The session id.
+        path:
+          type: string
+          description: The absolute path read, after symlinks.
+        size:
+          type: integer
+          format: int64
+          description: The file's size in bytes when read.
+        offset:
+          type: integer
+          format: int64
+          description: Byte offset this page starts at.
+        data:
+          type: string
+        eof:
+          type: boolean
+          description: Data runs to the end of the file.
+        binary:
+          type: boolean
     PromptResult:
       type: object
       required: [type, sent]
