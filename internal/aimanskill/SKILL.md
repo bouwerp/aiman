@@ -40,6 +40,7 @@ aiman session create --repo owner/repo --branch BRANCH --agent claude \
 ```
 
 `--orphan` makes a root instead of a child. `--parent ID` nests under a different session.
+A child made with `--orphan`, or with `--parent` naming another session, is outside your tree: you cannot prompt, steer, read or forget it afterwards (`session_scope`). Helpers you will drive stay your own children.
 
 Quick ad-hoc session:
 
