@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agentupdate"
@@ -25,6 +26,7 @@ import (
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 	"github.com/bouwerp/aiman/internal/review"
+	"github.com/bouwerp/aiman/internal/selfupdate"
 	"github.com/bouwerp/aiman/internal/todo"
 	"github.com/bouwerp/aiman/internal/usage"
 	"github.com/bouwerp/aiman/internal/verify"
@@ -183,6 +185,16 @@ type Server struct {
 	agentUpdates *agentupdate.Manager
 	agentHost    string
 
+	// hostUpdates keeps serve on the latest release; nil until SetHostUpdates,
+	// which means updates are off. hostName names this host in host.version.
+	hostUpdates   *selfupdate.Manager
+	hostName      string
+	hostUpdatesMu sync.RWMutex
+
+	// inflight counts long calls running over the socket; the host update
+	// gate waits for it to reach zero.
+	inflight atomic.Int64
+
 	notifyRec *notify.Recorder
 	notifyLog NotifyLog
 	notifyMu  sync.RWMutex
@@ -331,11 +343,27 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 }
 
+// Inflight is the number of long calls running now.
+func (s *Server) Inflight() int {
+	return int(s.inflight.Load())
+}
+
+// track counts method in Inflight while it runs when it is a long call; the
+// returned func ends the count.
+func (s *Server) track(method string) func() {
+	if !longCall(method) {
+		return func() {}
+	}
+	s.inflight.Add(1)
+	return func() { s.inflight.Add(-1) }
+}
+
 func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 	var req Request
 	if err := json.Unmarshal(line, &req); err != nil {
 		return Response{ID: "", Error: &Error{Code: CodeInvalidParams, Message: err.Error()}}
 	}
+	defer s.track(req.Method)()
 	switch req.Method {
 	case "ping":
 		return Response{ID: req.ID, Result: map[string]any{
@@ -365,7 +393,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleMove(ctx, req)
 	case "session.forget":
 		return s.handleForget(ctx, req)
-	case "session.restart", "session.terminate", "repo.list", "host.stats":
+	case "session.restart", "session.terminate", "repo.list", "host.stats", "host.version", "host.update":
 		return s.dispatchLifecycle(ctx, req)
 	case "session.register":
 		return s.handleRegister(ctx, req)

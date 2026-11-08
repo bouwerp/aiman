@@ -67,6 +67,10 @@ func (s *Server) dispatchLifecycle(ctx context.Context, req Request) Response {
 		return s.handleSessionTerminate(ctx, req)
 	case "repo.list":
 		return s.handleRepoList(ctx, req)
+	case "host.version":
+		return s.handleHostVersion(ctx, req)
+	case "host.update":
+		return s.handleHostUpdate(ctx, req)
 	default:
 		return s.handleHostStats(ctx, req)
 	}

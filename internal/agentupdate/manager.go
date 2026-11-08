@@ -164,6 +164,23 @@ func (m *Manager) loadLocked() *State {
 	return st
 }
 
+// Updating counts agents whose update is running, including one queued
+// behind another on the apply lock. A nil Manager has none.
+func (m *Manager) Updating() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, on := range m.updating {
+		if on {
+			n++
+		}
+	}
+	return n
+}
+
 func (m *Manager) saveLocked() {
 	if m.StatePath == "" {
 		return

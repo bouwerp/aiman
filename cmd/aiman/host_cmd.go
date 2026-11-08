@@ -7,10 +7,13 @@ import (
 	"github.com/bouwerp/aiman/internal/server"
 )
 
-// runHost is `aiman host stats`, the host.stats call.
+// runHost is `aiman host stats|version|update`.
 func runHost(args []string) error {
+	if len(args) > 0 && (args[0] == "version" || args[0] == "update") {
+		return runHostUpdateCmd(args, os.Stdout)
+	}
 	if len(args) != 1 || args[0] != "stats" {
-		fmt.Fprintf(os.Stderr, "Usage: aiman host stats\n")
+		fmt.Fprint(os.Stderr, hostUsage)
 		return errUsage
 	}
 	sock, err := socketPath()

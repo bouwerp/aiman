@@ -1,5 +1,3 @@
-//go:build acceptance
-
 package server
 
 import (
@@ -34,11 +32,11 @@ type hostRunner struct {
 	tags []string
 }
 
-func (r *hostRunner) Start(tag, _ string) error {
+func (r *hostRunner) Start(tag, _ string) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tags = append(r.tags, tag)
-	return nil
+	return 0, nil
 }
 
 func (r *hostRunner) started() []string {

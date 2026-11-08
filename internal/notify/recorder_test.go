@@ -45,7 +45,7 @@ func TestRecorderFirstObservationPrimes(t *testing.T) {
 func TestRecorderNotifiesOnTransition(t *testing.T) {
 	s := &fakeStore{}
 	var pub [][2]string
-	r := NewRecorder(s, Settings{Events: map[domain.NotifyKind]bool{domain.NotifyWaitingInput: true}, MinInterval: time.Minute, Host: "h"}, func(id string, k domain.NotifyKind) { pub = append(pub, [2]string{id, string(k)}) })
+	r := NewRecorder(s, Settings{Events: map[domain.NotifyKind]bool{domain.NotifyWaitingInput: true}, MinInterval: time.Minute, Host: "h"}, func(n domain.Notification) { pub = append(pub, [2]string{n.SessionID, string(n.Kind)}) })
 	if err := r.Observe(context.Background(), Observation{SessionID: "s1", Label: "PROJ-1", State: domain.AgentStateIdle}); err != nil {
 		t.Fatal(err)
 	}
