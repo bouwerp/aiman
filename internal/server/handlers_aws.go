@@ -60,6 +60,14 @@ type awsState struct {
 	watchMu  sync.Mutex
 	watching map[string]struct{}
 
+	// stop ends every watcher without a finished row; watchers counts the
+	// running ones so CloseAWSLogin can wait for them. stopped guards Add
+	// against a close that has already begun, under watchMu.
+	stop     chan struct{}
+	stopOnce sync.Once
+	stopped  bool
+	watchers sync.WaitGroup
+
 	// checking admits one get-caller-identity pass at a time; a call that loses
 	// answers from the cache instead of waiting for the CLI.
 	checking atomic.Bool
@@ -110,6 +118,7 @@ func (s *Server) SetAWS(cfg config.ServeAWSConfig, credentialsPath string, login
 		login:           login,
 		watchEvery:      awsLoginWatchEvery,
 		watching:        map[string]struct{}{},
+		stop:            make(chan struct{}),
 		checks:          map[string]awsCheckResult{},
 	}
 }
@@ -121,6 +130,8 @@ func (s *Server) dispatchAWS(ctx context.Context, req Request) Response {
 		return s.handleAWSStatus(ctx, req)
 	case "aws.login_start":
 		return s.handleAWSLoginStart(ctx, req)
+	case "aws.log":
+		return s.handleAWSLog(ctx, req)
 	default:
 		return s.handleAWSLoginStatus(req)
 	}
@@ -408,7 +419,11 @@ func (s *Server) recordAWSLoginStart(login awslogin.Login) {
 	_, dup := a.watching[login.ID]
 	if !dup {
 		a.watching[login.ID] = struct{}{}
+		if !a.stopped {
+			a.watchers.Add(1)
+		}
 	}
+	stopped := a.stopped
 	a.watchMu.Unlock()
 	if dup {
 		return
@@ -417,13 +432,35 @@ func (s *Server) recordAWSLoginStart(login awslogin.Login) {
 		"profile": login.Profile,
 		"state":   login.State,
 	})
+	if stopped {
+		return
+	}
 	go s.watchAWSLogin(login.ID)
+}
+
+// CloseAWSLogin stops every login watcher and waits for them to return, so a
+// watcher never reads an engine that is closing. Call it before the engine's
+// Close. A second call returns once the first has finished waiting.
+func (s *Server) CloseAWSLogin() {
+	a := s.aws
+	if a == nil {
+		return
+	}
+	a.stopOnce.Do(func() {
+		a.watchMu.Lock()
+		a.stopped = true
+		a.watchMu.Unlock()
+		close(a.stop)
+	})
+	a.watchers.Wait()
 }
 
 // watchAWSLogin polls the engine, which has no finish callback, and records the
 // end state once. A serve that exits first ends the login with no finished row.
+// A stop from CloseAWSLogin returns without writing.
 func (s *Server) watchAWSLogin(id string) {
 	a := s.aws
+	defer a.watchers.Done()
 	defer func() {
 		a.watchMu.Lock()
 		delete(a.watching, id)
@@ -438,6 +475,8 @@ func (s *Server) watchAWSLogin(id string) {
 		case <-limit.C:
 			log.Printf("aws login watcher: gave up after %s", awsLoginWatchLimit)
 			return
+		case <-a.stop:
+			return
 		case <-tick.C:
 		}
 		login, ok := a.login.Status(id)
@@ -446,6 +485,13 @@ func (s *Server) watchAWSLogin(id string) {
 		}
 		if !awsLoginEnded(login.State) {
 			continue
+		}
+		// A stop that raced the tick or the read wins: the engine may be
+		// answering from a shutdown.
+		select {
+		case <-a.stop:
+			return
+		default:
 		}
 		payload := map[string]any{"profile": login.Profile, "state": login.State}
 		if login.Failure != "" {

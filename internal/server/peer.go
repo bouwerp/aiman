@@ -186,8 +186,15 @@ func (c sessionScope) covers(target string) bool {
 	if c.caller == "" || !plainID(target) {
 		return false
 	}
-	if target == c.caller || c.isHelperID(target) {
-		return true
+	return target == c.caller || c.isHelperID(target) || c.descends(target)
+}
+
+// descends reports whether target is a strict descendant of the caller, by row
+// ParentID or the holder's recorded parent. Helper ptys do not count: they are
+// named after the caller, not parented to it.
+func (c sessionScope) descends(target string) bool {
+	if c.caller == "" || !plainID(target) || target == c.caller {
+		return false
 	}
 	// A depth bound, because a corrupt row could form a cycle.
 	cur := target

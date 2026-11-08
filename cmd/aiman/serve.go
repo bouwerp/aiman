@@ -71,7 +71,12 @@ func wireAWSLogin(srv *server.Server, delegations []config.ServeAWSDelegation, h
 		},
 	})
 	srv.SetAWS(config.ServeAWSConfig{Delegations: delegations}, credentials, engine)
-	return engine.Close
+	// The watchers stop first so none reads the engine while it closes and
+	// writes a finished row for a login serve is abandoning.
+	return func() {
+		srv.CloseAWSLogin()
+		engine.Close()
+	}
 }
 
 func runServe() error {

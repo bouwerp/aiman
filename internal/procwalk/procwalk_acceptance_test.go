@@ -1,5 +1,3 @@
-//go:build acceptance
-
 package procwalk_test
 
 import (
@@ -106,9 +104,11 @@ func TestIsHolderCmdline(t *testing.T) {
 // not normally run under a holder, so it is false here; the check pins the
 // signature and that it does not panic on a real /proc.
 func TestSelfOutsideAHolder(t *testing.T) {
-	var self func() bool = procwalk.Self
-	var _ func(int) (int, bool) = procwalk.ParentPID
-	var _ func(int) ([]byte, bool) = procwalk.Cmdline
+	var self func() bool
+	var parentPID func(int) (int, bool)
+	var cmdline func(int) ([]byte, bool)
+	self, parentPID, cmdline = procwalk.Self, procwalk.ParentPID, procwalk.Cmdline
+	_, _ = parentPID, cmdline
 	if os.Getenv("AIMAN_ID") != "" {
 		t.Skip("running inside an aiman session: Self is expected to be true here")
 	}

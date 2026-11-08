@@ -83,7 +83,7 @@ func fileExists(path string) bool {
 }
 
 // CaseTerminateWorktree walks session.terminate through a real repository: a
-// session cannot call it, a dirty linked worktree is refused with nothing
+// session cannot end itself or a session outside its tree, a dirty linked worktree is refused with nothing
 // stopped, discard removes it and keeps the branch, and a session on the main
 // checkout never loses it.
 func CaseTerminateWorktree() Case {
@@ -103,6 +103,7 @@ func CaseTerminateWorktree() Case {
 			return []MetricResult{score("fixture", false, err.Error())}
 		}
 
+		_, asSelf := h.CallAs("s1", "session.terminate", map[string]any{"session": "s1", "discard": true})
 		_, asSession := h.CallAs("s2", "session.terminate", map[string]any{"session": "s1", "discard": true})
 		_, refused := h.CallAs("", "session.terminate", map[string]any{"session": "s1"})
 		stillThere := fileExists(dirty) && !slices.Contains(h.Kills(), "s1")
@@ -115,7 +116,8 @@ func CaseTerminateWorktree() Case {
 		mainResp, merr := h.CallAs("", "session.terminate", map[string]any{"session": "s2", "discard": true})
 		mainKept := merr == nil && !removedFlag(resultOf(mainResp.Result)) && fileExists(mainDirty) && fileExists(filepath.Join(mainDir, ".git"))
 		return []MetricResult{
-			score("terminate_needs_operator", errorCode(asSession) == "needs_operator", "session call: "+errString(asSession)),
+			score("terminate_needs_operator", errorCode(asSelf) == "needs_operator", "self: "+errString(asSelf)),
+			score("terminate_outside_tree", errorCode(asSession) == "session_scope", "unrelated session: "+errString(asSession)),
 			score("terminate_refuses_dirty", errorCode(refused) == "worktree_dirty", "dirty: "+errString(refused)),
 			score("terminate_refusal_stops_nothing", stillThere, "the refusal touched the session"),
 			score("terminate_discard_removes", discarded, "discard: "+errString(derr)),

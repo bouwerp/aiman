@@ -1049,11 +1049,18 @@ func (s *Server) applyFor(params *createParams, parentID string, existing []doma
 	if params.Branch == "" {
 		params.Branch = coordinator.ChildBranch(parent.Branch, item.ID)
 	}
+	// The parent's branch exists only in the parent's repository; a child in
+	// another one starts from that repository's default branch.
+	repo := strings.TrimSpace(params.Repo)
+	if repo == "" || strings.EqualFold(repo, parent.RepoName) {
+		if strings.TrimSpace(params.Base) == "" {
+			params.Base = parent.Branch
+		}
+	}
 	defaults := []struct {
 		dst *string
 		src string
 	}{
-		{&params.Base, parent.Branch},
 		{&params.Repo, parent.RepoName},
 		{&params.Issue, parent.IssueKey},
 		{&params.Group, parent.Group},
@@ -1469,6 +1476,11 @@ func (s *Server) dropSwitchedLaunchModel(ctx context.Context, row domain.Session
 }
 
 func (s *Server) handleRegister(ctx context.Context, req Request) Response {
+	// Registering writes identity, parent_id included, so a session could
+	// adopt any other session and widen its own scope.
+	if s.isSessionCall(ctx, req) {
+		return errResp(req.ID, CodeNeedsOperator, "only the operator may register sessions")
+	}
 	var params struct {
 		Sessions []domain.Session `json:"sessions"`
 	}
