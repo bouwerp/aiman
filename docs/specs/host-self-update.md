@@ -1,6 +1,6 @@
 # host-self-update: serve and the gateway update themselves on release
 
-**Revision:** 1 · **Size:** project · **Status:** draft, awaiting consult and operator approval
+**Revision:** 2 · **Size:** project · **Status:** consult 0028f072 (Grok, rev 1: revise, 2 high, 4 medium, 3 low) triaged, all accepted; second consult running; awaiting operator approval
 **Task:** operator request on 2026-11-08 ("ideal if aiman serve and gateway could update automatically when a new version is available ... as soon as a new release appears. TUI and mobile app should be backwards compatible but notify of new release") · **Spec:** `docs/specs/host-self-update.md` (this page)
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
@@ -93,7 +93,13 @@ classDiagram
         From string
         To string
         Status started|ok|failed
+        Exit int
         Error string
+    }
+    class Result {
+        Tag string
+        Exit int
+        At time
     }
     class State {
         CheckedAt time
@@ -106,13 +112,13 @@ classDiagram
         Version string
         Fetcher
         Runner
-        Busy func() int
+        Busy []func() int
         OnNewVersion func(Release)
         OnApplied func(Attempt)
         Status() HostUpdateStatus
         Request(ctx) Outcome
         Run(ctx)
-        Reconcile()
+        Finish(ctx)
     }
     class HostUpdateStatus {
         Version string
@@ -133,6 +139,7 @@ classDiagram
     }
     Manager --> State
     Manager --> Policy
+    Manager --> Result
     State --> Release
     State --> Attempt
     Manager --> HostUpdateStatus
@@ -140,6 +147,7 @@ classDiagram
     class Release:::new
     class Policy:::new
     class Attempt:::new
+    class Result:::new
     class State:::new
     class Manager:::new
     class HostUpdateStatus:::new
@@ -149,9 +157,10 @@ classDiagram
 
 - `Release` is what one poll learns. `Ready` is true when the release's asset list holds `checksums.txt`. `ETag` lets the next poll send `If-None-Match`, so an unchanged answer is a 304 that GitHub does not count against the unauthenticated rate limit.
 - `Policy` is the config: `host.update.mode` (`off`, `notify`, `auto`; default `auto`), `host.update.check_every` (default 10 minutes, floor 1 minute), and the fixed `RetryAfter` of one hour for a failed install of the same tag. There is no window: the operator asked for updates as soon as a release appears.
-- `Attempt` records one install: who started it, from which version to which tag, and how it ended. `started` is written before the script runs, so the next serve can tell whether the install took.
+- `Attempt` records one install: from which version to which tag, and how it ended. `started` is written before the script runs, so the next serve can tell whether the install took. `Exit` is the script's exit code once known.
+- `Result` is what the detached runner writes when the script ends: `~/.aiman/host-update.result.json` with the tag, the exit code and the time. It is the only evidence that the gateway lockstep, which runs after serve has already restarted, succeeded.
 - `State` is `~/.aiman/host-update.json`, written atomically like `agent-versions.json`.
-- `Manager` is `internal/selfupdate.Manager`. `Busy` is serve's count of long calls in flight. `Reconcile` runs once at serve start.
+- `Manager` is `internal/selfupdate.Manager`. `Busy` is a list of counters serve registers (long calls in flight, pending AWS logins, starting handover runs); the gate waits while any is non-zero. `Finish` runs in a goroutine from serve start and settles a `started` attempt from the `Result` file.
 
 ### Structure
 
@@ -165,9 +174,9 @@ flowchart LR
     subgraph host
         Mgr[internal/selfupdate.Manager<br/>poll every check_every,<br/>ready and newer, gate on long calls]:::new
         Fetch[remotesvc.LatestRelease<br/>tag, ready, etag]:::new
-        Run[detached script runner<br/>setsid nohup bash, log<br/>~/.aiman/logs/host-update.log]:::new
+        Run[detached script runner<br/>setsid nohup bash file, log<br/>~/.aiman/logs/host-update.log,<br/>writes host-update.result.json]:::new
         Script[remotesvc.UpdateScript<br/>unchanged: install.sh VERSION=tag,<br/>systemctl restart, gateway lockstep]
-        Serve[aiman serve<br/>inflight long-call counter,<br/>Reconcile at start]:::changed
+        Serve[aiman serve<br/>busy counters,<br/>Finish after start]:::changed
         GW[aiman-gateway]
         StateF[(~/.aiman/host-update.json)]:::new
         RPC[host.version, host.update<br/>dispatchLifecycle]:::new
@@ -205,12 +214,14 @@ New files:
 
 Changed files:
 
-- `internal/server/server.go`: `inflight` counter around long calls (`Call` path and the stream path for `pty.attach` is not counted; see Behaviour); `ping` unchanged.
-- `internal/server/client.go`: `longCall(method) bool`, derived from the same switch `callDeadline` uses, so the two lists cannot drift.
+- `internal/server/server.go`: `inflight` counter around long calls (the `pty.attach` stream is not counted; see Behaviour); `Server.Inflight() int`; `ping` unchanged.
+- `internal/server/client.go`: `longCall(method) bool`, derived from the same switch `callDeadline` uses, so the two lists cannot drift; `handover.write` joins that switch (its deadline stays 30s, it is listed for the gate).
+- `internal/awslogin`: `Engine.Pending() int`, the device flows not yet ended. `internal/handoverchild`: `Manager.Starting() int`, runs in `StatusStarting`.
+- `internal/infra/remotesvc/remotesvc.go`: a unit test that the `pkill -f` pattern of `leftoverCleanup` does not match the runner's argv.
 - `internal/infra/config/config.go`: `HostConfig{Update HostUpdateConfig}` under the YAML key `host`; `ServeConfig` carries it; `MarshalServeConfig` pushes it.
 - `internal/domain/notification.go`: `NotifyHostUpdate = "host_update"`, in `AllNotifyKinds`, `NeedsYou` false, label `host update`.
 - `internal/gateway/allowlist.go`: `host.version` read, `host.update` destructive.
-- `internal/gateway/notify.go`: the phone sink skips `host_update` like `agent_update`.
+- `internal/gateway/notify.go`: the phone sink pushes only kinds on an explicit allowlist (`waiting_input`, `error`, `ci_escalation`, `review_done`, `ended`, `idle`: the kinds `phoneStateFor` maps today) and drops every other kind, `host_update` and `agent_update` included. Today an unknown kind becomes `waiting_input` and is pushed as "Aiman needs input" with an empty session link; after this change a kind a future serve adds is silent on an old gateway.
 - `internal/ui/session_events.go`: `notifyToast` toasts `host_update` although `NeedsYou` is false, because the toast is the laptop's release hint.
 - `api/openapi.yaml`: both methods, `HostVersionResult`, `HostUpdateResult`; the phone copies the spec and regenerates types.
 - `AGENTS.md`, `internal/aimanskill/SKILL.md` (one line: a host updates itself; `aiman host version` shows it).
@@ -226,15 +237,22 @@ Changed files:
 5. Newer and ready, mode `auto`: apply, below.
 6. Mode `off`: no polling at all, status `held`.
 
-**Gate.** Before applying, the manager asks `Busy()`. A non-zero count defers: status `deferred`, retry every 30 seconds for up to `check_every`, then the next poll takes over. The count covers long calls only. Open attach streams (TUI `pty.attach` over SSH, the phone's terminal WebSocket) do not defer the restart: the holder keeps the terminal, the TUI shows the detach and reattaches on the next key, the phone reconnects as it does after any network blip. Plain RPCs that lose their connection during the two or three seconds of restart get `server_not_running` and the CLI's existing retry behaviour. A `started` attempt for the same tag that is younger than `OpTimeout` (3 minutes) also defers, so two serve processes cannot both run the script.
+**Gate.** Before applying, the manager sums its `Busy` counters. A non-zero sum defers: status `deferred`, retry every 30 seconds for up to `check_every`, then the next poll takes over. Serve registers three counters:
 
-**Apply.** The manager writes `Attempt{Status: started, From: Version, To: tag}` to the state file, then runs `remotesvc.UpdateScript(KindServe, tag)` through the runner: `setsid nohup bash <script file> >> ~/.aiman/logs/host-update.log 2>&1 &`, the script file written under `~/.aiman/tmp/` with mode 0600. The script is the one the laptop runs today, unchanged: it verifies the archive against `checksums.txt`, swaps the binary, stops and starts the serve unit, and installs and restarts the gateway in lockstep. Detaching matters: `StartScript` stops the unit serve is the main process of. With `KillMode=process` only serve is killed, and `setsid` keeps the script out of serve's process group so a non-systemd host (nohup fallback) does not take the script down with it. The runner records the script's exit code in the log; the manager process is gone by then, so the outcome is read at the next start.
+1. Long calls in flight (`Server.Inflight`), from the `callDeadline` switch plus `handover.write`: a restart in the middle of a create, restart, terminate, publish, review step or handover write would leave half-written state.
+2. Pending AWS device logins (`awslogin.Engine.Pending`): serve's `Close` fails every pending login, so a restart while the operator has a code on screen would drop the flow.
+3. Handover runs still `StatusStarting` (`handoverchild.Manager.Starting`): `Resume` fails those with "serve restarted before the child started".
 
-**Reconcile.** On start, `Reconcile` reads the state file. An attempt in `started`:
+Everything else survives a restart through disk plus `Resume` or `Load` at the next start, and gets no counter: children and consults live in holders; the consult tracker, ciwatch, review fixers, verify runs, the steering queue and memory jobs are sqlite or files whose loops are rebuilt at start (the tracker's `firstAsk` is per process, so one steer note may repeat; that is not corruption). Open attach streams (TUI `pty.attach` over SSH, the phone's terminal WebSocket) do not defer the restart: the holder keeps the terminal, the TUI shows the detach and reattaches on the next key, the phone reconnects as it does after any network blip. Plain RPCs that lose their connection during the two or three seconds of restart get `server_not_running` and the CLI's existing retry behaviour. A `started` attempt younger than `OpTimeout` (3 minutes) also defers, so two serve processes cannot both run the script.
 
-- with `To == Version`: `Status: ok`, `OnApplied`, which emits `host_update` with text `serve updated v0.34.0 → v0.35.0 on <host>` under an empty session id (the recorder's path for host-wide events, `min_interval` skipped).
-- with `To != Version` and `At` older than `OpTimeout`: `Status: failed`, error `install did not take (running <Version>)`; `OnApplied` emits `serve update to v0.35.0 failed on <host>: <first log line>`. The same tag is not retried before `RetryAfter`.
-- with `To != Version` and `At` younger than `OpTimeout`: left alone, the script may still be running (serve restarted for another reason). The first poll reconsiders it.
+**Apply.** The manager writes `Attempt{Status: started, From: Version, To: tag}` to the state file, removes any stale `Result` file, then runs `remotesvc.UpdateScript(KindServe, tag)` through the runner. The runner writes the script to `~/.aiman/tmp/host-update-<tag>.sh` (mode 0600) and a two-line wrapper beside it that runs `bash <script>` and then writes `Result{tag, exit, at}` to `~/.aiman/host-update.result.json`, and starts the wrapper as `exec.Command("setsid", "nohup", "bash", <wrapper path>)` with stdout and stderr appended to `~/.aiman/logs/host-update.log`. The script body is never passed through `bash -c` or argv: `leftoverCleanup` runs `pkill -f '[a]iman serve'`, and the body contains that phrase in the unit heredoc, while `bash ~/.aiman/tmp/host-update-v0.35.0.sh` does not; a `remotesvc` test pins that the pattern does not match the runner's argv. The script is the one the laptop runs today, unchanged: it verifies the archive against `checksums.txt`, swaps the binary, stops and starts the serve unit, and installs and restarts the gateway in lockstep. Detaching matters: `StartScript` stops the unit serve is the main process of. With `KillMode=process` only serve is killed; on a nohup host `setsid` keeps the wrapper out of serve's process group, so `kill <pid>` of serve leaves it alone. Cgroup membership cannot be shed, which is exactly the holder contract (`internal/ptyhold/detach_unix.go`), and a `selfupdate` test starts a process the way the runner does and checks it is alive after a fake `systemctl stop` plus the leftover `pkill`.
+
+**Finish.** On start, serve runs `Finish` in a goroutine. It reads the state file; with no `started` attempt it returns. Otherwise it polls for the `Result` file every 2 seconds until `Attempt.At + OpTimeout`:
+
+- `Result.Tag == Attempt.To`, `Exit == 0`, `Version == To`: `Status: ok`. `OnApplied` emits `host_update` with text `serve updated v0.34.0 → v0.35.0 on <host>` under an empty session id (the recorder's path for host-wide events, `min_interval` skipped). The emit happens only now, after the script has ended, so the old gateway, which would have pushed an unknown kind as "Aiman needs input", has already been replaced by the new one (or was not running).
+- `Result.Exit != 0` with `Version == To`: serve took the update but the gateway lockstep failed. `Status: failed`, `Exit` recorded, error `gateway lockstep failed (exit N): <last log line>`; `OnApplied` emits `serve update to v0.35.0 on <host>: gateway install failed`. The next poll sees `Latest == Version` but a `failed` attempt whose `To` is `Latest.Tag`: after `RetryAfter` it re-applies the same tag, which reinstalls serve at its own version (a no-op swap), restarts it and runs the lockstep again. Serve and gateway therefore do not stay skewed until the next release.
+- `Result.Exit != 0` with `Version != To`: the install itself failed. `Status: failed`, error from the last log line; `OnApplied` emits the failure. Retried after `RetryAfter`.
+- No `Result` by the deadline: `Status: failed`, error `no result within 3m (running <Version>)`. Retried after `RetryAfter`.
 
 A `failed` attempt for `Latest.Tag` younger than `RetryAfter` leaves status `failed` and skips apply. A newer tag resets it.
 
@@ -246,7 +264,14 @@ A `failed` attempt for `Latest.Tag` younger than `RetryAfter` leaves status `fai
 
 **Laptop fallback.** `maybeAutoUpdateServe` is unchanged. With self-updating hosts its condition (remote strictly older than the TUI) is rarely true, but it still covers a host that cannot reach GitHub while the laptop can push the installer over SSH.
 
-**Compatibility contract.** `ProtocolVersion` stays 1. Within protocol 1 serve may add methods, result fields, event types and error codes, and may never remove or rename one or change the meaning of an existing field. A client built for protocol 1 therefore works against every later protocol-1 serve, and only needs to tolerate what it does not know, which the phone's cast types and the TUI's `json.Unmarshal` into structs already do. The contract is pinned by a test: `internal/apicompat` compares `api/openapi.yaml` with the copy at the previous release tag (`git show <tag>:api/openapi.yaml`, tag from `git describe --tags --abbrev=0`) and fails when a method, event type, result schema or schema property of the old spec is missing from the new one, or when `info.version` moved backwards. CI fetches tags for it. A deliberate break bumps `ProtocolVersion`, and clients that see a protocol above the one they know show a banner instead of guessing (phone below; the TUI and serve ship in one release, so the TUI's hint already says to update).
+**Compatibility contract.** `ProtocolVersion` stays 1. Within protocol 1 serve only adds. The rule has four parts, each pinned by `internal/apicompat`, which reads the previous release's files with `git show <tag>:<path>` (tag from `git describe --tags --abbrev=0`; CI fetches tags; a checkout with no tag skips the test with a notice):
+
+1. **Wire.** `api/openapi.yaml` is a superset of the previous copy: every method, event type, error code, result schema and schema property still exists; no request property becomes required and no new required request property appears; `info.version` does not move backwards. The TUI's `json.Unmarshal` into structs and the phone's cast types already ignore what they do not know.
+2. **Gateway allowlist.** `internal/gateway/allowlist.go`'s device read, write and destructive sets are supersets of the previous tag's (parsed from the Go source at both revisions), so a method an older phone calls is never refused by a newer gateway.
+3. **Holder files.** `internal/ptyhold` `request.json`, `meta.json` and `activity.json` only gain fields: every JSON name in the previous tag's `Spec`, `Meta` and `Activity` structs still exists with the same type. Holders keep running the old `aiman` inode until they exit, so a new serve reads files an older holder writes for days.
+4. **Database.** sqlite migrations are additive: `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ADD COLUMN` with a default, never `DROP`, a type change or a new `NOT NULL` without default. An older serve ignores columns it does not select. Installing an older serve onto a newer database is unsupported (`remotesvc.Outdated` never downgrades, and `aiman downgrade` is a laptop command). This part is a documented rule, checked in review, not by the test.
+
+A deliberate break bumps `ProtocolVersion`, and clients that see a protocol above the one they know show a banner instead of guessing (phone below; the TUI and serve ship in one release, so the TUI's hint already says to update). The window during which a new serve runs beside the old gateway lasts the lockstep's few seconds and is covered by the same rule: the old gateway forwards methods it knows, and the phone sink's allowlist keeps an unknown notification kind silent.
 
 **TUI hint.** `release_hint.go` computes one `Hint{Tag, Source}` from two inputs: the newest serve version among probed remotes, and the latest GitHub release tag fetched once at startup and every 6 hours (`remotesvc.LatestReleaseTag`, failures ignored). When either is strictly newer than `m.version` (and `m.version` parses; a dev TUI gets no hint), the help line's version slot reads `v0.34.0 · v0.35.0 available: aiman update` and a toast fires once per tag. A `host_update` notification event toasts `serve on <host> updated to v0.35.0` through `notifyToast`. The TUI does not update itself: `aiman update` replaces the running binary and the operator should choose the moment.
 
@@ -259,7 +284,7 @@ A `failed` attempt for `Latest.Tag` younger than `RetryAfter` leaves status `fai
 3. 10:15. Poll: 200, `checksums.txt` present. Newer, ready, mode `auto`. `Busy()` is 1: a `session.create` for a child is running. Status `deferred`, retry in 30s.
 4. 10:15:30. `Busy()` is 0. State: `Attempt{started, from v0.34.0, to v0.35.0}`. Runner writes `~/.aiman/tmp/host-update-v0.35.0.sh` and starts it with `setsid nohup`. Log: `host-update: installing v0.35.0`.
 5. The script downloads `install.sh` for v0.35.0, runs it with `VERSION=v0.35.0`, which verifies `aiman-linux-amd64.tar.gz` against `checksums.txt` and swaps `~/.local/bin/aiman`. `StartScript` stops `aiman-serve.service` (serve exits, the five holders keep running), rewrites the unit and starts it. `gatewayLockstep` installs `aiman-gateway` v0.35.0 and restarts it because it was running.
-6. 10:15:36. The new serve starts, `Reconcile` finds `started → v0.35.0` and `Version == v0.35.0`: `Status: ok`. `OnApplied` emits `host_update`: `serve updated v0.34.0 → v0.35.0 on remote1`. The ledger has no session for it; the notification log does.
+6. 10:15:36. The new serve starts; `Finish` finds `started → v0.35.0` and waits for the result. 10:15:52: the wrapper writes `Result{v0.35.0, exit 0}` after the gateway restarted. `Finish` sets `Status: ok` and `OnApplied` emits `host_update`: `serve updated v0.34.0 → v0.35.0 on remote1`. The ledger has no session for it; the notification log does. The new gateway reads it from `notify.since` and drops it (not on its push allowlist).
 7. The child whose `aiman todo done` hit the restart saw `server_not_running` and retried a second later. The operator's attach dropped; the TUI shows the detach and the next key reattaches to the same holder.
 8. The TUI (v0.34.0) receives the `notify` event and toasts `serve on remote1 updated to v0.35.0`. Its next probe reads `VERSION=v0.35.0`, newer than itself: the help line reads `v0.34.0 · v0.35.0 available: aiman update`. The operator runs `aiman update` when convenient.
 9. The phone comes to the foreground at 10:40. `useAppUpdates` applies the OTA bundle published from aiman-phone `main` earlier (if any). `useServeVersion` pings: `version v0.35.0, protocol 1`. The server card shows `serve v0.35.0`; a toast says `remote1 now runs aiman v0.35.0`. Protocol 1 is supported, no banner. Every RPC the app makes exists on the new serve by contract.
@@ -272,6 +297,7 @@ A `failed` attempt for `Latest.Tag` younger than `RetryAfter` leaves status `fai
 - **A GitHub webhook or Actions step that pushes to hosts.** Needs an inbound path to every host or SSH credentials in CI. Rejected.
 - **Poll through `gh api` for the 5000/h authenticated limit.** `gh` is on hosts for ciwatch, but its absence or an expired login would silently stop updates. The ETag makes unchanged polls free; 10 minutes is 6 counted requests per hour per host at most. Rejected; may be revisited if hosts share a NAT and hit the 60/h limit.
 - **`systemd-run --user` for the update script instead of `setsid nohup`.** Cleaner cgroup separation, but it needs systemd and the nohup hosts would need a second path. `setsid nohup` works on both. Rejected.
+- **Restart the gateway before serve so the new gateway is in place when `host_update` is emitted.** Would put a new gateway in front of an old serve for the install's duration and change the laptop path too. Rejected; emitting only after the script's exit is read (`Finish`) closes the window without reordering.
 - **Let the TUI update itself when it sees a newer release.** The operator asked for notification; replacing a running binary under the operator is a surprise. Rejected; `aiman update` is one command and the hint names it.
 - **Defer the restart while an attach is open.** An attach can stay open all day, which would make "as soon as a release appears" false for exactly the hosts the operator uses most. Rejected; the holder keeps the terminal and reattach is one key.
 - **Bump `ProtocolVersion` per release so clients can detect every skew.** Would make every client refuse every newer serve, the opposite of backwards compatibility. Rejected; the protocol number marks breaks, the compat test prevents accidental ones.
@@ -289,6 +315,15 @@ Each has a default; the design proceeds with it unless the operator says otherwi
 
 | Objection | Severity | Triage | Reason |
 |---|---|---|---|
+| Consult 0028f072: Reconcile marks `ok` as soon as the new serve runs, but the gateway lockstep runs after that under `set -e`; a failed gateway install is never seen and the next poll never retries | high | accept | The runner now writes `Result{tag, exit}` when the script ends; `Finish` settles the attempt from it; a non-zero exit with serve already on `To` is `failed` and re-applies the same tag after `RetryAfter` |
+| Consult 0028f072: `host_update` emitted at serve start reaches the old gateway, whose sink maps an unknown kind to `waiting_input` and pushes "Aiman needs input" with an empty session link | high | accept | Emit moves to `Finish`, after the script's exit, when the old gateway is gone; the phone sink gets an explicit allowlist of pushed kinds so a future kind is silent on an old gateway |
+| Consult 0028f072: `pkill -f '[a]iman serve'` in `leftoverCleanup` would hit the script if its body ever went through `bash -c` or argv | medium | accept | Runner is pinned to `exec.Command("setsid","nohup","bash",<file>)`; a `remotesvc` test checks the pattern against that argv |
+| Consult 0028f072: add a test that a process started like the runner survives `StartScript(KindServe)`'s stop and pkill | low | accept | In P1's acceptance tests with a fake `systemctl` on PATH |
+| Consult 0028f072: `aws.login_start` is busy only during the RPC; the device flow keeps polling in serve and `Close` fails pending logins | medium | accept | `awslogin.Engine.Pending` is a busy counter |
+| Consult 0028f072: `handover.write` is a 20s mutating call not in `callDeadline`; `Resume` fails `StatusStarting` runs after a restart | medium | accept | `handover.write` joins the long-call switch and `handoverchild.Manager.Starting` is a busy counter |
+| Consult 0028f072: list the in-process work that survives through disk plus `Resume` so P2 adds no extra counters | low | accept | Listed under Gate |
+| Consult 0028f072: an openapi superset misses new required request fields, a dropped allowlist method and the holder file contract | medium | accept | Compatibility contract now has four parts; `apicompat` checks request `required`, the allowlist sets and the `ptyhold` JSON names at the previous tag |
+| Consult 0028f072: write the protocol-1 sqlite rule and that downgrade onto a newer database is unsupported | low | accept | Part 4 of the compatibility contract |
 
 ## Breakdown
 
@@ -296,9 +331,9 @@ Acceptance tests are committed on `aiman-next-level` (Go, behind `//go:build acc
 
 | Piece | Owns files | Parallel group | Depends on | Complexity | Tier | Acceptance tests |
 |---|---|---|---|---|---|---|
-| P1 self-update core | `internal/selfupdate/*`, `internal/infra/remotesvc/release.go`, `internal/domain/notification.go` (kind only) | A | – | L | smart | `internal/selfupdate/manager_acceptance_test.go`, `internal/infra/remotesvc/release_acceptance_test.go`; `go test ./internal/selfupdate/ ./internal/infra/remotesvc/` |
-| P2 serve wiring, config, RPCs, CLI | `internal/server/handlers_host_update.go`, `internal/server/server.go` (inflight counter), `internal/server/client.go` (`longCall`), `internal/server/handlers_lifecycle.go` (cases), `internal/infra/config/config.go`, `cmd/aiman/host_update.go`, `cmd/aiman/main.go`, `cmd/aiman/serve.go`, `internal/gateway/allowlist.go`, `internal/gateway/notify.go`, `api/openapi.yaml`, `AGENTS.md`, `internal/aimanskill/SKILL.md` | B | P1 | M | smart | `internal/server/host_update_acceptance_test.go`, `internal/infra/config/host_update_config_acceptance_test.go`; `go test ./internal/server/ ./internal/infra/config/ ./internal/gateway/ ./cmd/aiman/` |
-| P3 compat guard | `internal/apicompat/*`, `internal/server/openapi_compat_test.go`, `.github/workflows/ci.yml` (fetch tags) | A | – | M | worker | `internal/apicompat/superset_acceptance_test.go`; `go test ./internal/apicompat/` |
+| P1 self-update core | `internal/selfupdate/*`, `internal/infra/remotesvc/release.go`, `internal/infra/remotesvc/remotesvc_test.go` (pkill argv test), `internal/domain/notification.go` (kind only) | A | – | L | smart | `internal/selfupdate/manager_acceptance_test.go`, `internal/selfupdate/runner_acceptance_test.go`, `internal/infra/remotesvc/release_acceptance_test.go`; `go test ./internal/selfupdate/ ./internal/infra/remotesvc/` |
+| P2 serve wiring, config, RPCs, CLI, busy counters | `internal/server/handlers_host_update.go`, `internal/server/server.go` (inflight counter), `internal/server/client.go` (`longCall`, `handover.write`), `internal/server/handlers_lifecycle.go` (cases), `internal/awslogin` (`Pending`), `internal/handoverchild` (`Starting`), `internal/infra/config/config.go`, `cmd/aiman/host_update.go`, `cmd/aiman/main.go`, `cmd/aiman/serve.go`, `internal/gateway/allowlist.go`, `internal/gateway/notify.go` (push allowlist), `api/openapi.yaml`, `AGENTS.md`, `internal/aimanskill/SKILL.md` | B | P1 | M | smart | `internal/server/host_update_acceptance_test.go`, `internal/infra/config/host_update_config_acceptance_test.go`, `internal/gateway/notify_allowlist_acceptance_test.go`; `go test ./internal/server/ ./internal/infra/config/ ./internal/gateway/ ./internal/awslogin/ ./internal/handoverchild/ ./cmd/aiman/` |
+| P3 compat guard | `internal/apicompat/*`, `internal/server/openapi_compat_test.go`, `.github/workflows/ci.yml` (fetch tags) | A | – | M | smart | `internal/apicompat/compat_acceptance_test.go`; `go test ./internal/apicompat/` |
 | P4 TUI hint and toast | `internal/ui/release_hint.go`, `internal/ui/a1_prompt.go` (version slot), `internal/ui/session_events.go` (`notifyToast`), `internal/ui/startup.go` or `dashboard.go` (GitHub check timer) | B | P1 (notification kind) | M | smart | `internal/ui/release_hint_acceptance_test.go`; `go test ./internal/ui/ -run 'ReleaseHint|NotifyToast'` |
 | P5 phone version, toast, banner | aiman-phone: `lib/serveVersion.ts`, `hooks/useServeVersion.ts`, `components/ProtocolBanner.tsx`, `app/_layout.tsx`, `app/(tabs)/settings.tsx`, `lib/servers.ts` (stored version), `constants/protocol.ts`, `api/openapi.yaml` copy and `api/types.generated.ts` | A | – (spec copy lands with P2; the piece's own fields come from `ping`, which exists) | M | smart | `tests/unit/serveVersion.acceptance.test.ts`; `ACCEPTANCE=1 npx jest --runInBand tests/unit/serveVersion.acceptance.test.ts`, `npm run check` |
 
@@ -308,6 +343,6 @@ Group A runs first (P1, P3, P5 in parallel). Group B (P2, P4) starts when P1 has
 
 1. Why a host could not update itself before, and the three conditions the laptop path still needs.
 2. What "ready" means for a release and why serve waits for `checksums.txt` instead of installing at the first sight of a tag.
-3. Why the update script is started with `setsid nohup` and how serve survives being stopped by a script it started (`KillMode=process`, the holders, `Reconcile` at start).
-4. What the long-call gate defers and what it deliberately does not (attaches), and where the two lists come from (`callDeadline`).
-5. What "protocol 1" promises, how the compat test enforces it, and what the TUI and the phone do when they see a newer serve or a newer protocol.
+3. Why the update script is started with `setsid nohup bash <file>` and how the attempt is settled by a serve that was not running when the script ended (`KillMode=process`, the `Result` file, `Finish`), including why the gateway lockstep's failure is only visible that way.
+4. What the gate defers (long calls, pending AWS logins, starting handover runs), what it deliberately does not (attaches, holders, anything rebuilt from disk), and where the long-call list comes from (`callDeadline`).
+5. What "protocol 1" promises in its four parts, how `apicompat` enforces three of them against the previous release tag, and what the TUI and the phone do when they see a newer serve or a newer protocol.
