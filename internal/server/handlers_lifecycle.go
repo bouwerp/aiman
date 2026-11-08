@@ -245,8 +245,9 @@ func (s *Server) restartSession(ctx context.Context, before domain.Session, comm
 func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Response {
 	ctx, cancel := context.WithTimeout(ctx, SessionTerminateTimeout)
 	defer cancel()
-	if s.isSessionCall(ctx, req) {
-		return errResp(req.ID, CodeNeedsOperator, "only the operator may terminate a session")
+	scope, isSession := s.sessionScopeOf(ctx, req)
+	if isSession && scope.caller == "" {
+		return errResp(req.ID, CodeNeedsOperator, "only the operator or a session's parent may terminate a session")
 	}
 	var p struct {
 		Discard bool `json:"discard"`
@@ -259,6 +260,16 @@ func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Respon
 		return *bad
 	}
 	defer unlock()
+	// A session may end its own descendants, never itself: the call would
+	// stop the agent that is waiting for the answer.
+	if isSession {
+		if sess.ID == scope.caller {
+			return errResp(req.ID, CodeNeedsOperator, "a session cannot terminate itself")
+		}
+		if !scope.descends(sess.ID) {
+			return scopeRefusal(req.ID, scope, "session "+sess.ID)
+		}
+	}
 	if sess.Role.Hidden() {
 		return errResp(req.ID, CodeInvalidParams, "aiman manages this helper session itself")
 	}
