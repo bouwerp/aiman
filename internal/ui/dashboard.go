@@ -555,6 +555,11 @@ type Model struct {
 	// serveUpdateAt records when each remote's agent API was last auto-updated,
 	// so a failing update is not retried on every probe (see serve_autoupdate.go).
 	serveUpdateAt map[string]time.Time
+	// githubLatest is the latest GitHub release tag, hint the release newer
+	// than this TUI (nil when none), hintToasted the tags already toasted.
+	githubLatest string
+	hint         *ReleaseHint
+	hintToasted  map[string]bool
 	// syncReconciled marks sessions this run has already tried to build a local
 	// sync for, so a failure is not retried in a loop (see create_remote.go).
 	syncReconciled    map[string]bool
@@ -2705,6 +2710,7 @@ func (m *Model) Init() tea.Cmd {
 		tickAWSCredExpiry(),
 		pollAWSCredExpiryCmd(m.cfg),
 		tickAWSCredTable(),
+		checkGitHubRelease(),
 	)
 }
 
@@ -3035,7 +3041,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionCreateMsg:
 		return m.applySessionCreateMsg(msg, cmds)
 	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg, agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg,
-		gatewayPairMsg, gatewayPairTickMsg:
+		gatewayPairMsg, gatewayPairTickMsg, githubReleaseMsg, githubReleaseDueMsg:
 		return m.routeRemoteServiceMsg(msg)
 	case discoveryResultMsg:
 		// Startup and refresh both deliver this after the dashboard is already
