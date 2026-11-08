@@ -1,4 +1,4 @@
-//go:build acceptance && unix
+//go:build unix
 
 package selfupdate_test
 
