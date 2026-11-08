@@ -16,7 +16,7 @@ var (
 		"ci.get",
 		"agents.status",
 		"repo.list", "host.stats",
-		"aws.status", "aws.login_status",
+		"aws.status", "aws.login_status", "aws.log",
 	}
 	// deviceWriteMethods change state but cannot publish outside the host.
 	// todo.mirror is left out: it stands for the agent's own task list, which
