@@ -1,6 +1,6 @@
 # phone-transcript: The phone reads the agent's own transcript
 
-**Revision:** 7, as built · **Size:** project · **Status:** approved by the operator on 2026-11-07 ("Approved, go ahead"); rev 7 records the design as built through P5 (PRs #96, #97, #98, #99, #101) and lists what differs under "Deviations from the approved design" (no behaviour the operator approved changes); rev 6 records the as-built reader contract from P1 to P3 and the reviews of #96 and #98 (no behaviour the operator approved changes); rev 5 triages consult fc680ee4 (3 high, 5 medium, 2 low, all accepted); two consult rounds complete (b29eae39, fc680ee4); open questions resolved with their defaults (operator: "go with the defaults", 2026-11-07); awaiting operator approval
+**Revision:** 8, as built · **Size:** project · **Status:** approved by the operator on 2026-11-07 ("Approved, go ahead"); rev 8 adds the phone as built (aiman-phone #8, #9, #10); rev 7 records the design as built through P5 (PRs #96, #97, #98, #99, #101) and lists what differs under "Deviations from the approved design" (no behaviour the operator approved changes); rev 6 records the as-built reader contract from P1 to P3 and the reviews of #96 and #98 (no behaviour the operator approved changes); rev 5 triages consult fc680ee4 (3 high, 5 medium, 2 low, all accepted); two consult rounds complete (b29eae39, fc680ee4); open questions resolved with their defaults (operator: "go with the defaults", 2026-11-07); awaiting operator approval
 **Task:** architecture review finding E4 (`docs/reviews/2026-11-07-architecture-review.md`) · **Spec:** `docs/specs/phone-transcript.md` (this page)
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
@@ -434,6 +434,13 @@ What the built code (PRs #96, #97, #98, #99, #101) does differently from rev 5 a
 - **Claude rewinds.** A fork is a rewind only when a new prompt abandons a branch holding a prompt or notification; parallel tool results and attachments remove nothing. A `compact_boundary` links to no parent. Notification system items are built from structured fields only.
 - **Reset on a first-prompt rewind.** Rule 2's "root changed" reset was dropped: the normaliser reports it as `removed[]` ids (rev 6).
 - **Fallback for a stub or unknown agent.** An agent with no normaliser, a deleted file and `ErrNoTranscript` all answer one `pane` item with `source: pane`.
+
+Phone (PRs aiman-phone #8, #9, #10), as built:
+
+- **Pending prompts after the live item.** A prompt sent from the app renders below the live item until its `user` item arrives, and settles only against user items from the first page's oldest item to the newest end, never against a page `loadOlder` prepends.
+- **Process output gaps.** The process screen polls with `since` set to the last reply's `size`; a reply that does not cover the whole range shows a `[… N bytes of output skipped …]` marker where the gap is.
+- **Path taps copy with a toast.** Tapping a path copies it and shows "Copied" (`components/Toast.tsx`, new); `http(s)` links open in the browser and `javascript:` or `file:` hrefs never open.
+- **Wire types from the spec.** `services/api.ts` aliases the generated `api/types.generated.ts` schemas (`api/openapi.yaml` copied from v0.33.0); `changed` and `removed` are kept required on the client because `sessionTranscript` fills them.
 
 ## Breakdown
 
