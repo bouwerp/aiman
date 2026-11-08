@@ -1,6 +1,6 @@
 # host-self-update: serve and the gateway update themselves on release
 
-**Revision:** 3 · **Size:** project · **Status:** two consult rounds complete (0028f072 on rev 1: revise, 2 high, 4 medium, 3 low; c383a8f0 on rev 2: revise, 3 high, 4 medium, 4 low), all 20 objections accepted and folded in; awaiting operator approval
+**Revision:** 3 · **Size:** project · **Status:** approved by the operator on 2026-11-08 ("Approved, go ahead"); two consult rounds complete (0028f072 on rev 1: revise, 2 high, 4 medium, 3 low; c383a8f0 on rev 2: revise, 3 high, 4 medium, 4 low), all 20 objections accepted and folded in
 **Task:** operator request on 2026-11-08 ("ideal if aiman serve and gateway could update automatically when a new version is available ... as soon as a new release appears. TUI and mobile app should be backwards compatible but notify of new release") · **Spec:** `docs/specs/host-self-update.md` (this page)
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
