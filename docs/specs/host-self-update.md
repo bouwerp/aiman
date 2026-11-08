@@ -1,6 +1,6 @@
 # host-self-update: serve and the gateway update themselves on release
 
-**Revision:** 3 · **Size:** project · **Status:** approved by the operator on 2026-11-08 ("Approved, go ahead"); two consult rounds complete (0028f072 on rev 1: revise, 2 high, 4 medium, 3 low; c383a8f0 on rev 2: revise, 3 high, 4 medium, 4 low), all 20 objections accepted and folded in
+**Revision:** 4, as built · **Size:** project · **Status:** built and merged on 2026-11-08 (aiman PRs #111 P3, #112 P1, #114 P2, #113 P4; aiman-phone PRs #12 P5, #13 spec copy), see "Deviations from the approved design"; approved by the operator on 2026-11-08 ("Approved, go ahead"); two consult rounds complete (0028f072 on rev 1: revise, 2 high, 4 medium, 3 low; c383a8f0 on rev 2: revise, 3 high, 4 medium, 4 low), all 20 objections accepted and folded in
 **Task:** operator request on 2026-11-08 ("ideal if aiman serve and gateway could update automatically when a new version is available ... as soon as a new release appears. TUI and mobile app should be backwards compatible but notify of new release") · **Spec:** `docs/specs/host-self-update.md` (this page)
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
@@ -512,3 +512,49 @@ export function protocolBannerText(nickname: string): string;                 //
 3. Why the update script is started as `nohup bash <wrapper>` in its own session, why the wrapper renames the `Result` into place whatever happened, and how one `settle` path lets either the old serve (install failed) or the new serve (install took, lockstep ran) record the outcome.
 4. What the gate defers (long calls, pending AWS logins, starting handover runs, agent updates), what it deliberately does not (attaches, holders, anything rebuilt from disk), how `MaxDefer` keeps a stuck counter from holding a host back, and how the laptop stays out of a host's own install.
 5. What "protocol 1" promises in its five parts, how `apicompat` enforces three of them against the previous release tag (and why not `git describe`), and what the TUI and the phone do when they see a newer serve or a newer protocol.
+
+## Deviations from the approved design
+
+Where the shipped code differs from the page above. No behaviour the operator approved changed.
+
+**P1 core (#112)**
+
+- `Manager.LogPath` is an extra field: the runner's log, whose last non-empty line goes into a failed attempt's `Error`. Serve sets it to the path given to `NewScriptRunner`.
+- `Policy.Mode` empty means `auto`; an unknown value means `notify`. A dev build is any version failing `remotesvc.ReleaseTag`, so a git-describe build (`v0.34.0-3-gabc`) never self-updates.
+- `ScriptRunner.Start` refuses a tag that is not `vX.Y.Z` and reaps the wrapper in a goroutine so `Alive` never sees a zombie. `Alive` is `kill(pid, 0) == nil`; EPERM counts as gone.
+- Settle compares the result's `at` against `Attempt.At` truncated to the second (the wrapper's `date` has whole seconds). `Finish` polls every 500 ms, not 2 s, and returns once `ResultWait` has passed with the PID alive; later polls settle it.
+- `Request` reasons are free text. `Outcome.Target` is set even on refusal when a tag is known. Status `deferred` is in memory only: a fresh `Manager` reports `available` until its first gated poll.
+- `.golangci.yml` excludes gocritic `stringXbytes` for `_acceptance_test.go` files, which children may not edit.
+
+**P2 wiring (#114)**
+
+- `awslogin` has no `Engine` type; the counter is `(*awslogin.Manager).Pending`, and `wireAWSLogin` also returns the manager.
+- `longCall` and `callDeadline` share one switch, `slowCall(method) (time.Duration, bool)`; `handover.write` is listed with the default 30 s deadline. `Inflight` is counted in `dispatch` through `defer s.track(method)()`, so `dispatch` gains no branch.
+- Notification texts: notify mode sends `aiman <tag> available on <host> (aiman host update)`; a settled install sends `serve updated <from> → <to> on <host>`, `serve update to <tag> on <host>: gateway install failed`, or `serve update to <tag> on <host> failed: <error>`.
+- `notify.NewRecorder`'s publish callback now takes `domain.Notification`, so `SessionEvent.Text` can carry `notify.Format`'s text; `Format` returns a `host_update` detail as the whole text, like `agent_update`.
+- `host_update` is in `config.Notifications.EventKinds()` defaults, so webhook and Slack sinks send it like `agent_update`.
+- `internal/infra/config` imports `internal/selfupdate` for the mode names and interval constants; `selfupdate` must never import `config`.
+- The OpenAPI schema for the attempt is `HostUpdateAttempt`; the Go type is `server.HostUpdateTried`. `aiman host version` prints `<version> · latest <tag> (ready|not ready) · <mode> · <status> · checked <local time>` plus an `attempt` line when there is one.
+
+**P3 compat guard (#111)**
+
+- `oneOf`, `anyOf` and `allOf` branches compare as a set by `$ref` (an index comparison flagged 14 false changes when `FileResult` and `AWSLogResult` were inserted mid-list).
+- The first real comparison ran against `v0.33.0`, because `v0.34.0` has no tag on origin yet, and found no removals.
+- `ci.yml` runs on PRs to `main` and pushes to `main`, so the guard does not run on PRs into `aiman-next-level`; it first runs when that branch merges.
+
+**P4 TUI (#113, branch `su-tui-p4`)**
+
+- The `host_update` toast shows the event's `Text` with a `●` prefix (the contract's text, `serve updated v0.34.0 → v0.35.0 on remote1`), not the `serve on <host> updated to …` phrasing in Behaviour. The hint toast reads `<tag> available: aiman update`.
+- `Model.Update` was at the gocyclo limit, so `githubReleaseMsg` and `githubReleaseDueMsg` route through `routeRemoteServiceMsg`. The hint is recomputed on every serve probe and on each GitHub answer.
+- A remote wins a tie with GitHub as the hint's source, because the host already runs that release.
+
+**P5 phone (aiman-phone #12) and spec copy (#13)**
+
+- The phone has no single active server: `useServeVersion` pings every paired server on open, when the paired set changes and on each foreground; toast and banner work per server. The hook runs from `app/_layout.tsx` inside the root `ToastHost`, which now wraps the root stack (screens with their own `ToastHost` still shadow it).
+- A stored record is read back through `readServeVersion`; `lib/servers.ts` keeps `serve?: ServeVersion` on both server kinds.
+- The mock gateway takes `MOCK_SERVE_VERSION` and `MOCK_SERVE_PROTOCOL` (`MockOptions.pong`) so `MOCK_SERVE_PROTOCOL=2 npm run mock` shows the banner; its default pong version `mock` renders as `serve vmock`.
+- `api/openapi.yaml` and the generated types were copied in #13 after P2 landed; no app code reads `host.*` yet.
+
+**Process**
+
+- The running serve on this host was v0.32.0, which lacks the t54 fix; the phone child was created with `--base origin/main` and its branch is `su-phone`.
