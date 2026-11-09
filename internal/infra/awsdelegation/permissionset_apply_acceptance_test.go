@@ -173,7 +173,16 @@ func (w *world) handle(args []string) (string, error) {
 			st = w.statuses[w.statusCalls]
 		}
 		w.statusCalls++
-		fields := map[string]string{"RequestId": flagValue(args, "--account-assignment-creation-request-id"), "Status": st}
+		// The real answer always names the assignment the request creates.
+		fields := map[string]string{
+			"RequestId": flagValue(args, "--account-assignment-creation-request-id"), "Status": st,
+			"TargetId": w.callerAccount, "TargetType": "AWS_ACCOUNT", "PrincipalType": "USER", "PrincipalId": "u-1",
+		}
+		for arn, ps := range w.permissionSets {
+			if ps["Name"] != "Other" {
+				fields["PermissionSetArn"] = arn
+			}
+		}
 		if st == "FAILED" {
 			fields["FailureReason"] = w.failureReason
 		}
