@@ -753,6 +753,16 @@ inherits it, so those can miss short timeouts on a loaded host. Running agents k
 priority until their session restarts. The wrapper runs `nice` (coreutils), so the host needs
 it on PATH; `agent_nice: 0` disables the wrapper.
 
+#### Serve diagnostics
+
+`aiman host stats` on the host prints the load average, CPU and the last minute of agent API
+calls (`--json` for the whole result). When serve seems stuck, `aiman host dump` sends it
+SIGUSR1 (the `aiman-serve` unit's main process, else the pid in `~/.aiman/serve.pid`) and
+prints the file it writes: `~/.aiman/logs/serve-dump-<unix>.txt`, holding the call stats, the
+load average, the calls in flight (method, caller, age) and every goroutine's stack, capped at
+64 MiB. Serve writes the same file on its own, at most once per 10 minutes, when every
+in-flight slot has been taken for 30 seconds.
+
 #### RTK
 
 [RTK](https://github.com/rtk-ai/rtk) is a CLI proxy that shrinks command output before it

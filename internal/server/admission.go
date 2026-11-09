@@ -94,6 +94,10 @@ type admission struct {
 	warnedAt    time.Time
 	owners      map[int]string
 	ownersAt    time.Time
+	// calls are the admitted requests still running, by admission number,
+	// for InflightCalls.
+	calls  map[uint64]inflightEntry
+	callNo uint64
 	// rebuildMu lets one request rebuild a stale owner map while the others
 	// wait for it instead of each rebuilding their own.
 	rebuildMu sync.Mutex
@@ -103,7 +107,7 @@ type admission struct {
 }
 
 func newAdmission() *admission {
-	a := &admission{buckets: map[string]*tokenBucket{}, logged: map[string]time.Time{}}
+	a := &admission{buckets: map[string]*tokenBucket{}, logged: map[string]time.Time{}, calls: map[uint64]inflightEntry{}}
 	a.configure(config.HostLoadConfig{})
 	return a
 }
@@ -513,14 +517,70 @@ func (s *Server) admit(ctx context.Context, req Request) (context.Context, func(
 		return ctx, nil, &r
 	}
 	a.warnInflight(start)
+	no := a.trackCall(req.Method, key, start)
 	var once sync.Once
 	sl.end = func() {
 		once.Do(func() {
+			a.untrackCall(no)
 			sl.done()
 			a.record(req.Method, key, time.Since(start), outcomeServed, time.Now())
 		})
 	}
 	return context.WithValue(ctx, slotKey{}, sl), sl.end, nil
+}
+
+// inflightEntry is one admitted request still running.
+type inflightEntry struct {
+	method, caller string
+	start          time.Time
+}
+
+// InflightCall is an admitted request still running, as the dump lists it.
+type InflightCall struct {
+	Method, Caller string
+	Age            time.Duration
+}
+
+// trackCall records an admitted request and returns its number.
+func (a *admission) trackCall(method, caller string, start time.Time) uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.callNo++
+	a.calls[a.callNo] = inflightEntry{method: method, caller: caller, start: start}
+	return a.callNo
+}
+
+func (a *admission) untrackCall(no uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.calls, no)
+}
+
+// atCap reports whether every in-flight slot is taken.
+func (a *admission) atCap() bool {
+	a.mu.Lock()
+	limit := a.maxInflight
+	a.mu.Unlock()
+	return a.inflight.Load() >= int64(limit)
+}
+
+// InflightCalls lists the admitted calls still running, oldest first. A call
+// paused while it waits is still listed.
+func (s *Server) InflightCalls() []InflightCall {
+	a := s.admission()
+	now := time.Now()
+	a.mu.Lock()
+	entries := make([]inflightEntry, 0, len(a.calls))
+	for _, e := range a.calls {
+		entries = append(entries, e)
+	}
+	a.mu.Unlock()
+	sort.Slice(entries, func(i, j int) bool { return entries[i].start.Before(entries[j].start) })
+	out := make([]InflightCall, len(entries))
+	for i, e := range entries {
+		out[i] = InflightCall{Method: e.method, Caller: e.caller, Age: max(0, now.Sub(e.start))}
+	}
+	return out
 }
 
 func (a *admission) perMinuteNow() int {
