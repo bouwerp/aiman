@@ -178,7 +178,7 @@ func runPermissionSetApply(args []string, cfg *config.Config, out, progress io.W
 		fmt.Fprint(os.Stderr, awsUsage)
 		return errUsage
 	}
-	regions := strings.Split(*regionsFlag, ",")
+	regions := splitRegions(*regionsFlag)
 	if awsdelegation.PermissionSetPolicy(regions) == "" {
 		regions = delegationRegions(cfg)
 	}
@@ -282,7 +282,7 @@ func (t *delegationTarget) write(spec awsdelegation.ApplySpec, hint awsdelegatio
 		return "", err
 	}
 	if err := t.cfg.Save(); err != nil {
-		return "", err
+		return "", fmt.Errorf("the Identity Center setup is done, but writing the delegation failed; rerunning with --remote is safe: %w", err)
 	}
 	return config.GetConfigPath()
 }
@@ -377,6 +377,18 @@ func planQuote(s string) string {
 		return s
 	}
 	return shellx.Quote(s)
+}
+
+// splitRegions splits a --regions value on commas, trimming each region and
+// dropping empty ones, so the policy and the saved delegation use one list.
+func splitRegions(v string) []string {
+	var out []string
+	for _, r := range strings.Split(v, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // delegationRegions returns the regions of the first delegation that has any,
