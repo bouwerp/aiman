@@ -1171,6 +1171,20 @@ remotes:
     # `aiman aws permission-set-apply --profile <admin> --remote devbox` sets up
     # the Identity Center permission set and writes an aws_delegations entry
     # here with sso_start_url, sso_region, sso_account_id and sso_role_name.
+    # An admin profile that is plain IAM credentials works too: the command
+    # discovers the Identity Center region and instance and derives and
+    # verifies the access portal URL (--sso-region and --start-url override).
+    # It cannot do the console steps, once per account:
+    #   1. A stand-alone account first becomes an organization
+    #      (aws organizations create-organization --feature-set ALL).
+    #   2. Enable IAM Identity Center as an organization instance from the
+    #      management account and note its region. An account instance (one
+    #      enabled before the organization existed) cannot hold permission sets.
+    #   3. Users -> Add user, with an email invitation; set the password from
+    #      that email. A user created through the API has no password.
+    # The admin profile also needs sso:DescribeInstance,
+    # organizations:DescribeOrganization and account:ListRegions (all in
+    # AdministratorAccess).
 
 # Per-repo worktree bootstrap, keyed by owner/name. See
 # "Worktree bootstrap and code graph".

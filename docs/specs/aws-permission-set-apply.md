@@ -1,6 +1,6 @@
 # `aiman aws permission-set-apply`: set up the delegated permission set with the AWS CLI
 
-**Revision:** 5 (as built, PRs #116 and #117 merged 2026-11-09) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted); rev 4 adds P2, writing the delegation into the laptop config, at the operator's request the same day ("is there no way we can do this through the aws cli and set these values automatically?", "yes")
+**Revision:** 9 (as built: P3 merged in PR #119 on 2026-11-09; rev 8 approved by the operator the same day ("yes" to "Approve the rev 8 design and I start building?"); rev 5 is as built, PRs #116 and #117 merged 2026-11-09) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted); rev 4 adds P2, writing the delegation into the laptop config, at the operator's request the same day ("is there no way we can do this through the aws cli and set these values automatically?", "yes"); rev 6 to 8 add P3 after the operator hit `Missing the following required SSO configuration values: sso_start_url, sso_region` on `aws sso login`: their three admin profiles are plain IAM credentials, and they have no start URL ("can we not have an aiman command that configures this through the aws cli", "yes design it")
 **Task:** operator request on 2026-11-09 ("Can we have scripts in the aiman repo that sets that up through the AWS cli?") · **Spec:** extends `docs/specs/phone-aws-login.md` (the permission set it needs)
 
 ## Problem
@@ -114,6 +114,53 @@ Permissions the admin profile needs: `sso:ListInstances`, `sso:ListPermissionSet
 - Text output ends with `Wrote aws_delegations entry <profile> on remote <name> in <path>. Press c on the Agent API page to push it to the host.` instead of the `Put this in remotes[].aws_delegation` block. `--json` output is the `ApplyResult` object plus `"config": {"remote","profile","path"}`.
 - Pushing stays the TUI's: `c` on the Agent API page runs `MarshalServeConfig`, which also fills any SSO fact still empty from the laptop's `~/.aws/config`.
 
+### P3: admin profiles without SSO (rev 8, built in PR #119)
+
+The operator's laptop profiles `dev`, `lab` and `prod` are IAM credentials, not Identity Center sessions, so `ReadSSOProfile` is `ErrNoSSO` for them, step 0 passes no `--region`, step 1 finds zero instances in the profile's working region, and even a lucky region leaves the delegation hint without a start URL, so the phone's `aws.login_start` answers `aws_no_sso`. The operator also does not know the start URL. P3 lets the command find both itself. **This replaces rev 5's behaviour for such a profile** (acceptance test `TestApplyWithoutSSORegionUsesProfileDefault`: no `--region`, empty hint, apply succeeds), which was never useful: the hint it produced could not sign a phone in. That test is removed and replaced by the discovery tests.
+
+What the command cannot do, and says so: Identity Center itself. An **organization instance** is enabled only in the console, from the management account ([enable Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/enable-identity-center.html)); there is no API for it. `aws sso-admin create-instance` makes an **account instance**, which holds no permission sets ([instance types](https://docs.aws.amazon.com/singlesignon/latest/userguide/identity-center-instances.html)) and is useless here. A stand-alone account must first become an organization (`aws organizations create-organization --feature-set ALL`, which the CLI can do but the command does not run: it makes the account a management account, which is not undone by deleting the organization while member accounts exist). The Identity Center user needs a password: a user created through `identitystore create-user` has none and no API sends the invitation ([users created with API or CLI](https://docs.aws.amazon.com/singlesignon/latest/userguide/userswithoutpwd.html); the console's "Send email OTP" setting is not an invitation API), so the user is added in the console with an email invitation. The console steps per account are: enable IAM Identity Center (organization instance) and note its region; Users → Add user → send an email invitation; set the password from that email. Everything after is the command.
+
+Legend: **new**, *changed*.
+
+- **new** `ApplySpec.SSORegion string`, `ApplySpec.StartURL string` (from `--sso-region`, `--start-url`) and `ApplySpec.VerifyStartURL func(ctx context.Context, region, startURL string) error` (nil skips verification; the CLI passes `awslogin.VerifyStartURL`). `SSORegion` and `StartURL` are ignored with a `warning:` line when the profile has SSO keys: the profile is the source of truth then, as today.
+- *changed* step 0 reads the profile once into `(SSOProfile, noSSO bool)`: `noSSO` is true only for `errors.Is(err, ErrNoSSO)`. Any other read failure (no home, unreadable `~/.aws/config`) keeps rev 5's `warning:` line and rev 5's behaviour (no `--region`, no discovery, no derived start URL): an unreadable config is never mistaken for a plain IAM profile. A profile with SSO keys keeps rev 5's call order exactly (`list-instances` first; `TestApplyRefusesZeroOrManyInstances` and the other rev 5 tests stand).
+- *changed* order **on the `noSSO` path only**: step 2 (**Account**, `sts get-caller-identity`) runs before step 1, because discovery needs the partition from the caller ARN (`arn:aws:` → home region `us-east-1`; `partitionHome(arn)`). Its output and log line are unchanged. A caller in another partition (`aws-cn`, `aws-us-gov`) is the error `phone sign-in supports the aws partition only (caller <arn>)`: the access portal URL shape and the host's OIDC client (`oidc.<region>.amazonaws.com`, `internal/awslogin/client.go`) are commercial-only, so nothing downstream could use the result.
+- *changed* step 0 and 1, **Identity Center region and instance**, on the `noSSO` path:
+  - `spec.SSORegion` set: `sso-admin list-instances --region <r>` as rev 5, region `<r>`.
+  - Else **`ALL_REGIONS`**: `sso-admin list-instances --region-scope ALL_REGIONS --region <partition home>` ([ListInstances](https://docs.aws.amazon.com/singlesignon/latest/APIReference/API_ListInstances.html): `ALL_REGIONS` lists the instances the caller owns or that are shared with it across all Regions; `InstanceMetadata.PrimaryRegion` is the Region the instance was enabled in). The one-instance rule applies to the answer; the region is `PrimaryRegion`, else the `Regions[]` entry whose `IsPrimaryRegion` is true (`RegionName`), else, when an older payload carries neither, the fallback scan below finds the region of the instance already identified. The answer is reused as step 1.
+  - **Fallback scan**, only when the CLI rejects the flag (stderr holds `Unknown options` and `region-scope`: the operator's AWS CLI predates the parameter; the installed 2.23.6 does): `account list-regions --region-opt-status-contains ENABLED ENABLED_BY_DEFAULT --region <partition home>`, `.Regions[].RegionName` decoded like every other answer (no `--query`); a failure is the error `cannot list the account's regions (<first line>); pass --sso-region <region of the Identity Center instance>, or update the AWS CLI`. Then `sso-admin list-instances --region <r>` for every region returned (never stopping early, so a member account's account instance in one region and the organization instance in another both surface and the one-instance rule reports them); a failing region counts as empty and its first error line is kept. The union of the answers is step 1's instance list. Zero everywhere is the error `no Identity Center instance in any of <n> regions for profile <p>; enable IAM Identity Center (an organization instance) in the console, add your user with an email invitation, then rerun; or pass --sso-region if the instance is in a region this profile cannot list`, plus the kept line.
+  - Logged `Identity Center region <r> (<all regions|scanned n regions|--sso-region>)`; `<r>` goes on every later `sso-admin` and `identitystore` call. A profile with SSO keys behaves exactly as rev 5.
+- **new** step 1b, **instance type**, after discovery (`noSSO` path only): an account instance passes the one-instance rule and then fails step 3 with a raw API error, so the command checks first. (a) `sso-admin describe-instance --instance-arn <arn> --region <r>` ([DescribeInstance](https://docs.aws.amazon.com/singlesignon/latest/APIReference/API_DescribeInstance.html)): `PermissionSetsEnabled`, decoded as `*bool` so a payload without the field is not read as false, present and false is the error `instance <arn> has permission sets disabled: it is an account instance, or an organization instance with multi-account permissions turned off, so it cannot hold aiman-delegated; enable IAM Identity Center as an organization instance from the management account (an account that enabled Identity Center before creating its organization keeps an account instance), add your user with an email invitation, then rerun`. (b) `organizations describe-organization` (no `--region`; Organizations is global): `AWSOrganizationsNotInUseException` is the error `account <id> is not in an organization, so <instance arn> is an account instance, which cannot hold permission sets; run aws organizations create-organization --feature-set ALL --profile <p> to make it a management account, enable IAM Identity Center (organization instance) in the console, add your user with an email invitation, then rerun`; success with `.Organization.MasterAccountId` different from the instance's `OwnerAccountId` is the error `instance <arn> is owned by account <owner>, not the organization's management account <master>: an account instance cannot hold permission sets; enable the organization instance from the management account`; `AccessDeniedException` is a `warning:` line and (b) is skipped (a delegated administrator passes: `DescribeOrganization` is allowed from any account in the organization and the org instance's owner is the management account). Any other failure of (a) or (b) is the CLI error.
+- *changed* step 5. The error texts for a caller that is not an `AWSReservedSSO_*` session and for `ResourceNotFoundException` add the console path: `...; pass --user <Identity Center user name> (Users → Add user in the IAM Identity Center console, with an email invitation, when it does not exist yet)`. No `create-user`.
+- *changed* step 8, **Hint**, for an `ErrNoSSO` profile: `Delegation.Region` is the discovered or given region; `Delegation.StartURL` is `spec.StartURL`, else **derived** `https://<IdentityStoreId>.awsapps.com/start`, the default access portal URL (`https://[Identity Store ID].awsapps.com/start`, [customizing the access portal URL](https://docs.aws.amazon.com/singlesignon/latest/userguide/howtochangeURL.html)). A customized portal is not visible through the API, so the derived or given URL is **verified** with `spec.VerifyStartURL(ctx, region, url)` when set. **new** `awslogin.VerifyStartURL(ctx, region, startURL) error` (`internal/awslogin/verify.go`) runs the same two unauthenticated calls serve's sign-in makes, in process with `net/http` and a 30s timeout each: `RegisterClient` (`clientName aiman-permission-set-apply`, `clientType public`, the only allowed type) then `StartDeviceAuthorization` against `oidc.<region>.amazonaws.com`. A `deviceCode` in the answer means the regional OIDC endpoint accepts the URL as an access portal; the authorization is never completed and expires on its own. The client secret lives in memory for the one call and is never written to the registration file, argv, a log or an error (the phone-aws-login rule "secrets never enter a child process" holds here too). On `StartDeviceAuthorization` only (RegisterClient takes no start URL), a 400 whose `x-amzn-ErrorType` header is `InvalidRequestException` or whose body `error` is `invalid_request` is `awslogin.ErrStartURLRejected` (`errorCode` learns `invalid_request`; today `oauthCodes` lacks it); `verify.go` builds no `Manager` and touches no registration file (`newRegistration` would write `~/.aiman/aws-sso-client.json`). Apply turns `ErrStartURLRejected` into the error `OIDC rejected start URL <url>; pass --start-url from the IAM Identity Center dashboard` (the API error is generic, so the message does not claim the portal was customized). Any other failure is a `warning:` line and the URL is kept, because the apply is done and a transient OIDC failure must not fail it. `Delegation.AccountID` and `RoleName` as before. With `--remote`, P2 writes the facts into the entry, so the phone's `aws.login_start` finds `sso_ready` true after `c`.
+- *changed* `callArgs`: `--region <sso region>` on `sso-admin` and `identitystore` as today, `--region <partition home>` on `account`, none on `sts` and `organizations`.
+- *changed* `Plan`, for an `ErrNoSSO` profile: `sts get-caller-identity` first, then `sso-admin list-instances --region-scope ALL_REGIONS --region <partition home>`, `account list-regions ... --region <partition home>`, `sso-admin list-instances --region <region>`, `sso-admin describe-instance --instance-arn <instance-arn> --region <region>`, `organizations describe-organization`, then the rev 5 steps with `--region <region>` (or the given `--sso-region`), and a final line `start URL verification: RegisterClient and StartDeviceAuthorization against oidc.<region>.amazonaws.com in process (no aws call)`. `--dry-run` makes none of them.
+- *changed* CLI: `--sso-region <r>` (skip discovery) and `--start-url <url>` (skip the derivation; still verified). Help text says both are for admin profiles that are not Identity Center sessions. The `Done.` block is unchanged; `access portal <url> verified` precedes it on stderr. `--dry-run --remote` for an `ErrNoSSO` profile prints `sso_start_url: <derived from the identity store id and verified>` and `sso_region: <discovered>` in the YAML, with the comment line saying both come from the apply.
+- Permissions added for the admin profile: `sso:DescribeInstance`, `organizations:DescribeOrganization` and, on the fallback, `account:ListRegions` (all in `AdministratorAccess`). The OIDC calls are unauthenticated.
+
+```mermaid
+flowchart LR
+  classDef new fill:#dcfce7,stroke:#16a34a,color:#14532d
+  classDef changed fill:#fef9c3,stroke:#ca8a04,color:#713f12
+  prof[admin profile: IAM keys, no sso_* keys] --> sts[sts get-caller-identity: account, partition]:::changed
+  sts --> r0[ReadSSOProfile = ErrNoSSO]:::changed
+  r0 -->|--sso-region| r1[list-instances --region r]:::changed
+  r0 -->|else| all[list-instances --region-scope ALL_REGIONS, PrimaryRegion]:::new
+  all -->|CLI too old| scan[account list-regions, list-instances per region]:::new
+  all --> typ[describe-instance PermissionSetsEnabled, describe-organization owner]:::new
+  scan --> typ
+  r1 --> typ
+  typ --> rest[steps 3 to 7 as rev 5, --region r]
+  rest --> hint[step 8: start URL = --start-url or https://IdentityStoreId.awsapps.com/start]:::changed
+  hint --> verify[awslogin.VerifyStartURL: OIDC in process]:::new
+  verify -->|deviceCode| done[Done. four facts, --remote writes them]
+  verify -->|ErrStartURLRejected| err[error: pass --start-url from the dashboard]:::new
+```
+
+Scenario, rev 8: the operator runs `aws organizations create-organization --feature-set ALL --profile dev`, enables Identity Center in `dev` from the console (organization instance in eu-west-1), invites user `pieter` by email and sets the password, then runs `aiman aws permission-set-apply --profile dev --user pieter --remote devbox --delegation-profile dev`. The profile has no SSO keys, so the command asks `list-instances --region-scope ALL_REGIONS` in us-east-1, gets one instance with primary region eu-west-1, confirms through `describe-instance` that permission sets are enabled and through `describe-organization` that the management account owns it, creates the permission set, puts the policy, resolves `pieter`, creates the assignment, derives `https://d-9367abc123.awsapps.com/start`, verifies it through OIDC, and writes the `dev` entry with the four facts over the existing `dev` delegation on `devbox`. `c` on the Agent API page pushes it; the phone's Host tab shows `dev` as sign-in ready. Same for `lab` and `prod`. On a laptop with AWS CLI 2.23 the `--region-scope` flag is unknown, so the command lists the account's regions and asks every one; only eu-west-1 answers. Had the operator enabled Identity Center before creating the organization, `describe-instance` would report permission sets disabled and the command would stop with the console path instead of a raw error in step 3.
+
+Alternatives for P3: writing an SSO admin profile into the laptop's `~/.aws/config` lost because nothing needs it: the laptop's TUI pushes credentials from the IAM profile as today, the host's phone login only needs the four facts in the delegation, and P2 already writes them. Creating the user with `identitystore create-user` lost for the password reason above. Scanning every region as the primary path lost to `ALL_REGIONS` with `PrimaryRegion` (round 3); the scan stays as the fallback for an older CLI. A built-in list of Identity Center regions lost to `account list-regions`. Running the OIDC verification through the CLI lost because it would put the client secret in argv (round 3). Skipping the verification lost because a customized portal would break the phone sign-in silently and the two OIDC calls are cheap and unauthenticated.
+
 ## Scenario
 
 The operator runs `aws sso login --profile acme-admin`, then `aiman aws permission-set-apply --profile acme-admin` on the laptop. aiman reads `sso_region = eu-west-1` from that profile and asks Identity Center there: one instance, account `123456789012` from the caller, no `aiman-delegated` yet, so it creates it with PT12H and puts the eu-west-1 policy. The caller ARN is an `AWSReservedSSO_AdministratorAccess_…/pieter@acme.io` session, so the user name is `pieter@acme.io`; `get-user-id` gives the principal id, the assignment is created and polled for 20 seconds until `SUCCEEDED`, and no provisioning call is needed because the create provisioned the role. It prints the four delegation lines. The operator copies them into `remotes[].aws_delegation`, reloads serve, opens the phone's Host tab and signs in; `aws.login_start` now finds the role. They repeat the command twice with the other two admin profiles. A month later they add `af-south-1` to the regions and rerun: the permission set and assignment exist, the policy is put again, and because the assignment was already there the command provisions the permission set to the account and waits for `SUCCEEDED`, so the live role has the new region. For a dedicated sign-in user they pass `--user aiman-phone`.
@@ -163,16 +210,43 @@ P2 build consult (report `~/.aiman/consults/f58eca0c-0c02-4bef-8cfc-36dc3b766f51
 | The rerun subtest in `cmd/aiman/aws_apply_config_acceptance_test.go` set `args[5]` (the `--remote` flag) instead of `args[4]` (the `--regions` value), so the second run got a stray argument and `errUsage` | high | accept | The test now sets `args[4]`; the CLI keeps refusing leftover positional arguments |
 | Mutating a magic index on a shared argv slice is fragile | low | defer | The one-character fix is enough for this test; rebuilding the argv is a test-style change outside P2 |
 
+Consult round 3 (Grok, report `~/.aiman/consults/8c826a33-fac4-4e4a-8408-b2986ad010a1.report.md`, against rev 6 P3): verdict revise, 3 high, 4 medium, 2 low. All accepted in rev 7. It confirmed the "CLI cannot do" list (organization instance console-only, `create-instance` is an account instance, no invitation API).
+
+| Objection | Severity | Triage | Reason |
+|---|---|---|---|
+| `callArgs` adds `--region` only for `sso-admin` and `identitystore`; the OIDC and Account calls would inherit the profile's working region | high | accept | OIDC moved in process with the discovered region; `account` gets the partition home region; `sts` and `organizations` none |
+| The region scan reinvents `ListInstances RegionScope=ALL_REGIONS`, whose `PrimaryRegion` is the `sso_region` | high | accept | `ALL_REGIONS` from the partition home region is the primary path; the scan runs only when the CLI rejects the flag (CLI 2.23.6 does) |
+| `TestApplyWithoutSSORegionUsesProfileDefault` pins the rev 5 behaviour P3 replaces | high | accept | Named as a behaviour break in P3 and Deviations; the test is removed and replaced by discovery tests |
+| `list-instances` can return an account instance, which cannot hold permission sets; step 3 would then fail with a raw error | medium | accept | Step 1b: `organizations describe-organization`; `NotInUse` or an owner other than the management account is an error with the console path |
+| A `deviceCode` proves the endpoint accepts the URL as a portal, not that it is this instance's; `InvalidRequestException` is generic | medium | accept | Error text says `OIDC rejected start URL`, never "customized"; derivation kept |
+| `--client-secret` on the CLI's argv contradicts phone-aws-login's "secrets never enter a child process" | medium | accept | `awslogin.VerifyStartURL` does both calls in process with `net/http`; `ApplySpec.VerifyStartURL` keeps `awsdelegation` free of the import |
+| `--dry-run --remote` YAML shows empty `sso_start_url` and `sso_region` for an `ErrNoSSO` profile | medium | accept | Placeholders `<derived from the identity store id and verified>` and `<discovered>` with the comment line |
+| Contracts lack `SSORegion` and `StartURL` | low | accept | Contracts list the three new `ApplySpec` fields |
+| `--query` is a different parse path from the other calls | low | accept | `list-regions` decoded from JSON like every other answer |
+
+Consult round 4 (Grok, report `~/.aiman/consults/e85dd42b-bbd1-4aa5-b233-b9610f91a34d.report.md`, against rev 7): verdict revise, 2 high, 3 medium, 2 low. All accepted in rev 8. It confirmed `ALL_REGIONS` from the partition home, `PrimaryRegion` as `sso_region`, the `Unknown options` detection, the in-process OIDC and that `awsSSOReady` is satisfied by the hint.
+
+| Objection | Severity | Triage | Reason |
+|---|---|---|---|
+| `Owner != Master` misses an account instance owned by the management account (Identity Center enabled before `create-organization`, the operator's likely path) | high | accept | Step 1b(a): `describe-instance`, `PermissionSetsEnabled` as `*bool`, present and false refused with the console path; the owner check stays for member accounts |
+| sts-first was written as a global reorder, breaking `TestApplyRefusesZeroOrManyInstances` and the rev 5 call order | high | accept | sts-first, discovery and step 1b run on the `noSSO` path only; SSO profiles keep rev 5 exactly |
+| `ssoRegion` returns empty for both `ErrNoSSO` and an unreadable config, so discovery could scan a profile with SSO keys | medium | accept | Step 0 branches on `errors.Is(err, ErrNoSSO)`; other failures keep the warning and rev 5 behaviour |
+| Older `ListInstances` payloads omit `PrimaryRegion`; demanding `--sso-region` wastes a found instance | medium | accept | `PrimaryRegion`, else `Regions[].IsPrimaryRegion`, else the scan locates the instance's region |
+| `oauthCodes` lacks `invalid_request`, so a body-only 400 would be a warning that keeps a bad URL; a `Manager` would write the registration file | medium | accept | `ErrStartURLRejected` from the header type or the body code, on `StartDeviceAuthorization` only; no `Manager`, no file |
+| Derivation and OIDC host are commercial-only while partition home names `aws-cn` and `aws-us-gov` | low | accept | A non-`aws` partition is an error naming the limit; the host's client is commercial-only too |
+| The fallback scan stopped at the first non-empty region and could pick an account instance ahead of the org instance | low | accept | The scan asks every region and applies the one-instance rule to the union |
+
 ## Breakdown
 
 | Piece | Owns files | Parallel group | Depends on | Complexity | Tier | Acceptance tests |
 |---|---|---|---|---|---|---|
 | P1 apply + CLI | `internal/infra/awsdelegation/permissionset_apply.go`, `cmd/aiman/aws_cmd.go`, `permissionset.go` (steps line), `AGENTS.md` | 1 | none | M | smart | `internal/infra/awsdelegation/permissionset_apply_acceptance_test.go`, `cmd/aiman/aws_apply_acceptance_test.go`; `go test ./internal/infra/awsdelegation/ ./cmd/aiman/` |
 | P2 write the delegation (`--remote`) | `internal/infra/config/config.go` (`UpsertAWSDelegation`), `cmd/aiman/aws_cmd.go` (flags, write, output), `AGENTS.md`, `README.md` (config example) | 2 | P1 | S | worker | `internal/infra/config/aws_delegation_upsert_acceptance_test.go`, `cmd/aiman/aws_apply_config_acceptance_test.go`; `go test ./internal/infra/config/ ./cmd/aiman/` |
+| P3 admin profiles without SSO (rev 8) | `internal/infra/awsdelegation/permissionset_apply.go` (order, discovery, instance type, derived and verified start URL, Plan), `internal/awslogin/verify.go` (`VerifyStartURL`), `cmd/aiman/aws_cmd.go` (`--sso-region`, `--start-url`, help, dry-run YAML), `permissionset_apply_acceptance_test.go` (remove `TestApplyWithoutSSORegionUsesProfileDefault` only), `AGENTS.md`, `README.md` (console prerequisites) | 3 | P1, P2 (merged) | M | smart | `internal/infra/awsdelegation/permissionset_apply_discovery_acceptance_test.go`, `internal/awslogin/verify_acceptance_test.go`, `cmd/aiman/aws_apply_discovery_acceptance_test.go`; `go test ./internal/infra/awsdelegation/ ./internal/awslogin/ ./cmd/aiman/` |
 
 ## Contracts
 
-Exact signatures the acceptance tests compile against (`internal/infra/awsdelegation/permissionset_apply_acceptance_test.go`, `cmd/aiman/aws_apply_acceptance_test.go`, both behind `//go:build acceptance` until the child removes the tag).
+Exact signatures the acceptance tests compile against (`internal/infra/awsdelegation/permissionset_apply_acceptance_test.go`, `cmd/aiman/aws_apply_acceptance_test.go`; for P3 `permissionset_apply_discovery_acceptance_test.go`, `internal/awslogin/verify_acceptance_test.go` and `cmd/aiman/aws_apply_discovery_acceptance_test.go`, behind `//go:build acceptance` until the child removes the tag).
 
 ```go
 // internal/infra/awsdelegation/permissionset_apply.go
@@ -194,7 +268,28 @@ type ApplySpec struct {
     Regions                        []string
     AWSConfigPath                  string        // empty: ~/.aws/config (os.UserHomeDir)
     PollInterval, PollTimeout      time.Duration // zero: 2s and 2m
+    SSORegion, StartURL            string        // P3: overrides for a profile without SSO keys
+    VerifyStartURL                 func(ctx context.Context, region, startURL string) error // P3: nil skips
 }
+
+// internal/infra/awsdelegation (P3): the sentinel lives here so Apply can match it
+// without importing awslogin (which imports awsdelegation).
+var ErrStartURLRejected = errors.New("oidc rejected the start url")
+
+// internal/awslogin/verify.go (P3)
+var ErrStartURLRejected = awsdelegation.ErrStartURLRejected
+// Verifier runs the two OIDC calls in process. Zero values: a 30s http.Client and
+// https://oidc.<region>.amazonaws.com. It never builds a Manager or touches the
+// registration file.
+type Verifier struct {
+    HTTP *http.Client
+    OIDC func(region string) string
+}
+func (v Verifier) VerifyStartURL(ctx context.Context, region, startURL string) error
+func VerifyStartURL(ctx context.Context, region, startURL string) error // Verifier{}.VerifyStartURL
+
+// cmd/aiman/aws_cmd.go (P3): the hook tests replace; the command sets ApplySpec.VerifyStartURL to it.
+var verifyStartURL = awslogin.VerifyStartURL
 
 type DelegationHint struct {
     StartURL  string `json:"sso_start_url"`
@@ -246,6 +341,17 @@ P2 CLI flags: `--remote <name>`, `--delegation-profile <name>` (meaningful only 
 
 ## Deviations from the approved design
 
+As built in PR #119 (P3), compared with rev 8:
+
+- **`Unknown options` detection**: the real AWS CLI prints its usage text above the `Unknown options:` line, so `ExecAWSCLI` errors now prefer that line from stderr over the first line. With first-line-only errors the old-CLI fallback would never have triggered. Rev 8 said "first line of stderr".
+- **Missing config file**: a laptop with only `~/.aws/credentials` has no `~/.aws/config`; `ReadSSOProfile` then returns `os.ErrNotExist`, not `ErrNoSSO`. A missing file inside an existing `~/.aws` directory now counts as `noSSO`; a missing directory, a permission error or no HOME keeps the warning and rev 5 behaviour. Found in review.
+- **Region-less `ALL_REGIONS` answer**: the scan locates that exact instance ARN's region and keeps the `ALL_REGIONS` record instead of rerunning discovery over the union; an ARN found nowhere is the error `pass --sso-region`. Rev 8 said the scan "finds the region of the instance already identified" without saying how.
+- **Zero instances with `--sso-region`**: the error names `--sso-region <r>`, not the profile's `sso_region`.
+- **OIDC rejection**: `invalid_request` in the body counts even when the header names another error type, as the design's "header or body" intended.
+- **Identity store id check**: the derived URL is built only when the id matches `^d-[0-9a-f]+$`; otherwise a warning, no derived URL and no verification. With `--remote`, a hint without a start URL keeps the entry's existing `sso_start_url` and the output says the entry still lacks one and to rerun with `--start-url`; the `Done.` block prints `<pass --start-url; see warning above>` in its place.
+- **Config read twice for SSO profiles**: the rev 5 test `TestApplyHintFailureIsAWarning` needs the config read again at the hint step, so "read the profile once" holds only for the no-SSO path.
+- **No instance through `ALL_REGIONS`**: the error reads `no Identity Center instance visible to profile <p> in any region; ...` followed by the console steps.
+
 As built in PR #116 (P1) and PR #117 (P2), compared with rev 4:
 
 - **In-flight conflict path** (Behaviour step 6): `list-account-assignment-creation-status` rows carry no target, so each in-flight request is described once and only one whose `TargetId`, `PermissionSetArn` and `PrincipalId` all equal ours is waited on; an empty field is not ours. Rev 3 only said "poll the in-flight request". Found in the review of #116; acceptance test `permissionset_apply_inflight_acceptance_test.go`.
@@ -260,5 +366,6 @@ As built in PR #116 (P1) and PR #117 (P2), compared with rev 4:
 
 1. Why the permission set lives in each account's Identity Center and why its session duration is PT12H.
 2. Which `aws` calls the command makes, in order, and why each is safe to repeat.
-3. Where the delegation hint's start URL comes from and why aiman never touches credentials.
+3. Where the delegation hint's start URL comes from (the profile's SSO keys, or the identity store id verified through `sso-oidc`) and why aiman never touches credentials.
 4. Why the account assignment needs polling and what a timeout means.
+5. Why enabling Identity Center and inviting the user stay console steps, and why the command refuses to guess past them.
