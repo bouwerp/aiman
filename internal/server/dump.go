@@ -75,21 +75,35 @@ func (s *Server) WriteDump(dir string) (string, error) {
 	b.WriteString("\ngoroutines:\n")
 	stack, cut := captureStacks()
 
-	f, path, err := createDumpFile(dir, time.Now().Unix())
+	return writeDumpFile(dir, time.Now().Unix(), []byte(b.String()), stack, cut)
+}
+
+// writeDumpFile writes the dump to serve-dump-<unix>.txt.tmp, syncs it and
+// renames it into place, so a reader never sees a half-written dump.
+func writeDumpFile(dir string, unix int64, head, stack []byte, cut bool) (string, error) {
+	f, path, err := createDumpFile(dir, unix)
 	if err != nil {
 		return "", err
 	}
-	_, err = f.WriteString(b.String())
+	tmp := f.Name()
+	_, err = f.Write(head)
 	if err == nil {
 		_, err = f.Write(stack)
 	}
 	if err == nil && cut {
 		_, err = fmt.Fprintf(f, "\n... goroutine stacks truncated at %d bytes\n", len(stack))
 	}
+	if err == nil {
+		err = f.Sync()
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
 	if err != nil {
+		_ = os.Remove(tmp)
 		return "", err
 	}
 	return path, nil
@@ -112,12 +126,17 @@ func captureStacks() ([]byte, bool) {
 	}
 }
 
-// createDumpFile opens serve-dump-<unix>.txt for writing, moving to the next
-// second's name when a dump of that second already exists.
+// createDumpFile opens serve-dump-<unix>.txt.tmp (0600, O_EXCL) and returns
+// it with the final name, moving to the next second's name when a dump of
+// that second already exists.
 func createDumpFile(dir string, unix int64) (*os.File, string, error) {
 	for i := int64(0); ; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("serve-dump-%d.txt", unix+i))
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		_, statErr := os.Lstat(path)
+		if statErr == nil && i < 60 {
+			continue
+		}
+		f, err := os.OpenFile(path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
 			return f, path, nil
 		}
@@ -155,7 +174,8 @@ func (d *autoDump) due(now time.Time, atCap bool) bool {
 
 // HandleDumpSignals writes a dump into dir on every SIGUSR1 until ctx ends,
 // and on its own when in flight sits at the cap (autoDump). A signal that
-// arrives during a dump is dropped.
+// arrives during a dump is dropped; one that lands during an auto dump makes
+// aiman host dump report the auto dump's file.
 func (s *Server) HandleDumpSignals(ctx context.Context, dir string) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGUSR1)
