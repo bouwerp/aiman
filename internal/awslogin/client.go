@@ -32,9 +32,10 @@ const (
 	codeAccessDenied  = "AccessDeniedException"
 	codeExpiredToken  = "ExpiredTokenException"
 	codeInvalidClient = "InvalidClientException"
+	codeInvalidReq    = "InvalidRequestException"
 )
 
-// oauthCodes maps the OAuth error field Identity Center sends in CreateToken
+// oauthCodes maps the OAuth error field Identity Center sends in OIDC error
 // bodies to its exception names.
 var oauthCodes = map[string]string{
 	"authorization_pending": codePending,
@@ -42,6 +43,7 @@ var oauthCodes = map[string]string{
 	"access_denied":         codeAccessDenied,
 	"expired_token":         codeExpiredToken,
 	"invalid_client":        codeInvalidClient,
+	"invalid_request":       codeInvalidReq,
 }
 
 // safeCode rejects anything that does not look like an error name, because the
@@ -55,6 +57,9 @@ type apiError struct {
 	op     string
 	status int
 	code   string
+	// oauth is the body's OAuth error code when the header named another
+	// type; normalized like code.
+	oauth string
 }
 
 func (e *apiError) Error() string {
@@ -104,6 +109,15 @@ func (m *Manager) portalURL(region, path string) string {
 }
 
 func (m *Manager) postJSON(ctx context.Context, op, target string, in, out any) error {
+	return postJSON(ctx, m.http, op, target, in, out)
+}
+
+func (m *Manager) do(req *http.Request, op string, out any) error {
+	return doJSON(m.http, req, op, out)
+}
+
+// postJSON posts in as JSON to target with client and decodes the answer into out.
+func postJSON(ctx context.Context, client *http.Client, op, target string, in, out any) error {
 	body, err := json.Marshal(in)
 	if err != nil {
 		return &apiError{op: op, code: codeParse}
@@ -113,11 +127,13 @@ func (m *Manager) postJSON(ctx context.Context, op, target string, in, out any) 
 		return &apiError{op: op, code: codeTransport}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	return m.do(req, op, out)
+	return doJSON(client, req, op, out)
 }
 
-func (m *Manager) do(req *http.Request, op string, out any) error {
-	resp, err := m.http.Do(req)
+// doJSON sends req and decodes a 2xx JSON answer into out. Any failure is an
+// apiError carrying the operation, status and error code only.
+func doJSON(client *http.Client, req *http.Request, op string, out any) error {
+	resp, err := client.Do(req)
 	if err != nil {
 		return &apiError{op: op, code: codeTransport}
 	}
@@ -127,12 +143,24 @@ func (m *Manager) do(req *http.Request, op string, out any) error {
 		return &apiError{op: op, status: resp.StatusCode, code: codeTransport}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &apiError{op: op, status: resp.StatusCode, code: errorCode(resp.Header, body)}
+		return &apiError{op: op, status: resp.StatusCode, code: errorCode(resp.Header, body), oauth: oauthErrorCode(body)}
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return &apiError{op: op, status: resp.StatusCode, code: codeParse}
 	}
 	return nil
+}
+
+// oauthErrorCode is the body's OAuth error field mapped like errorCode, or
+// empty when the body has none.
+func oauthErrorCode(body []byte) string {
+	var parsed struct {
+		OAuth string `json:"error"`
+	}
+	if json.Unmarshal(body, &parsed) != nil || parsed.OAuth == "" {
+		return ""
+	}
+	return normalizeCode(parsed.OAuth)
 }
 
 // errorCode reads the error name from x-amzn-ErrorType, then the body's __type,

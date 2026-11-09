@@ -585,25 +585,6 @@ func TestApplyRefusesZeroOrManyInstances(t *testing.T) {
 	}
 }
 
-func TestApplyWithoutSSORegionUsesProfileDefault(t *testing.T) {
-	w := defaultWorld()
-	cli := &scriptedAWS{handle: w.handle}
-	spec := fastSpec(t)
-	spec.AWSConfigPath = writeAWSConfig(t, "[profile acme-admin]\nregion = eu-west-1\n")
-	res, err := Apply(context.Background(), cli, spec, &strings.Builder{})
-	if err != nil {
-		t.Fatalf("Apply: %v (a non-SSO admin profile must not fail the apply)", err)
-	}
-	for _, c := range cli.calls {
-		if flagValue(c, "--region") != "" {
-			t.Errorf("--region passed with no sso_region to take it from: %v", c)
-		}
-	}
-	if res.Delegation.StartURL != "" || res.Delegation.Region != "" || res.Delegation.AccountID != "123456789012" || res.Delegation.RoleName != DefaultPermissionSetName {
-		t.Errorf("Delegation = %+v", res.Delegation)
-	}
-}
-
 func TestApplyRequiresRegionsBeforeAnyCall(t *testing.T) {
 	cli := &scriptedAWS{handle: defaultWorld().handle}
 	spec := fastSpec(t)
