@@ -41,7 +41,9 @@ func PermissionSetSteps(name, accountID string, regions []string) string {
 	if policy == "" {
 		policy = "(print it with: aiman aws permission-set-policy --regions <regions>)"
 	}
-	return fmt.Sprintf(`Set this up once, in IAM Identity Center:
+	return fmt.Sprintf(`Or run: aiman aws permission-set-apply --profile <admin profile> --account <id>
+
+Set this up once, in IAM Identity Center:
 
 1. Create a custom permission set named %[1]s, with session duration PT12H.
 2. Give it this inline policy:
