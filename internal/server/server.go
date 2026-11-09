@@ -140,6 +140,14 @@ type Server struct {
 	// counts ticks lost to a running or overlong sweep.
 	sweepMu      sync.Mutex
 	sweepSkipped atomic.Int64
+	// sweepMemos holds, per session id, the hook state the last pass saw and
+	// the pass that last captured it; sweepPass counts passes. Both are guarded
+	// by sweepMu. A pass drops the memo of every session no longer active.
+	sweepMemos map[string]*sweepMemo
+	sweepPass  uint64
+	// sweepEvery is the sweep's current period in nanoseconds; zero is
+	// notifySweepEvery.
+	sweepEvery atomic.Int64
 
 	// memoryJobs queues handover-derived memory candidates for the laptop.
 	memoryJobs *memoryjob.Queue
