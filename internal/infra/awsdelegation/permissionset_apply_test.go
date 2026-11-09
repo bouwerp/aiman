@@ -2,6 +2,7 @@ package awsdelegation
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -115,5 +116,30 @@ func TestApplyUnreadableConfigWarns(t *testing.T) {
 	}
 	if !strings.HasPrefix(log.String(), "warning: cannot read sso_region") {
 		t.Errorf("log does not start with the region warning:\n%s", log.String())
+	}
+}
+
+func TestRunErrorKeepsUnknownOptionsLine(t *testing.T) {
+	stderr := "\nusage: aws [options] <command> <subcommand> [<subcommand> ...] [parameters]\n" +
+		"To see help text, you can run:\n\n  aws help\n\nUnknown options: --region-scope, ALL_REGIONS\n"
+	err := runError([]string{"--profile", "p", "sso-admin", "list-instances", "--region-scope", "ALL_REGIONS"}, "", stderr, errors.New("exit status 252"))
+	if got, want := err.Error(), "aws sso-admin list-instances: Unknown options: --region-scope, ALL_REGIONS"; got != want {
+		t.Fatalf("err = %q, want %q", got, want)
+	}
+	if !isUnknownRegionScope(err) {
+		t.Error("isUnknownRegionScope = false for the CLI's unknown-option answer")
+	}
+}
+
+func TestPartitionHome(t *testing.T) {
+	for arn, want := range map[string]string{
+		"arn:aws:iam::123456789012:user/admin":        awsPartitionHome,
+		"arn:aws-cn:iam::123456789012:user/admin":     "",
+		"arn:aws-us-gov:iam::123456789012:user/admin": "",
+		"": "",
+	} {
+		if got, _ := partitionHome(arn); got != want {
+			t.Errorf("partitionHome(%q) = %q, want %q", arn, got, want)
+		}
 	}
 }

@@ -65,9 +65,13 @@ func (e ExecAWSCLI) stripProfile(args []string) []string {
 }
 
 // runError is a failed call's error: the first line of stderr, else of stdout,
-// else err itself.
+// else err itself. An "Unknown options:" line wins over the usage text the CLI
+// prints above it, so a caller can tell a flag the CLI predates.
 func runError(args []string, stdout, stderr string, err error) error {
-	msg := firstLine(stderr)
+	msg := unknownOptionsLine(stderr)
+	if msg == "" {
+		msg = firstLine(stderr)
+	}
 	if msg == "" {
 		msg = firstLine(stdout)
 	}
@@ -75,6 +79,16 @@ func runError(args []string, stdout, stderr string, err error) error {
 		msg = err.Error()
 	}
 	return fmt.Errorf("aws %s: %s", awsOperation(args), msg)
+}
+
+// unknownOptionsLine is the CLI's "Unknown options: ..." line, or empty.
+func unknownOptionsLine(stderr string) string {
+	for _, line := range strings.Split(stderr, "\n") {
+		if line = strings.TrimSpace(line); strings.HasPrefix(line, "Unknown options:") {
+			return line
+		}
+	}
+	return ""
 }
 
 // command builds aws --profile <p> --output json <args...>.
@@ -89,7 +103,18 @@ type ApplySpec struct {
 	Regions                        []string
 	AWSConfigPath                  string        // empty: ~/.aws/config (os.UserHomeDir)
 	PollInterval, PollTimeout      time.Duration // zero: 2s and 2m
+	// SSORegion and StartURL override discovery and the derived access portal
+	// URL for an admin profile without SSO keys; a profile with SSO keys
+	// ignores them with a warning.
+	SSORegion, StartURL string
+	// VerifyStartURL checks the start URL of a profile without SSO keys
+	// against the regional OIDC endpoint; nil skips the check.
+	VerifyStartURL func(ctx context.Context, region, startURL string) error
 }
+
+// ErrStartURLRejected is a VerifyStartURL answer: the OIDC endpoint refused
+// the start URL. awslogin returns this value.
+var ErrStartURLRejected = errors.New("oidc rejected the start url")
 
 // DelegationHint is the remotes[].aws_delegation lines for the account.
 type DelegationHint struct {
@@ -126,6 +151,16 @@ type applyRun struct {
 	log    io.Writer
 	region string
 	res    ApplyResult
+	// profile is the admin profile's SSO section when it has one; noSSO is
+	// true only when ReadSSOProfile answered ErrNoSSO.
+	profile SSOProfile
+	noSSO   bool
+	// home is the partition's home region, for calls that need one before
+	// the Identity Center region is known.
+	home string
+	// owner is the instance's OwnerAccountId; callerAccount is the admin
+	// profile's own account from get-caller-identity.
+	owner, callerAccount string
 	// callerARN is the caller's ARN from get-caller-identity; its UserId is
 	// never kept.
 	callerARN string
@@ -155,23 +190,26 @@ func normalizeSpec(spec ApplySpec) (ApplySpec, error) {
 	return spec, nil
 }
 
-// ssoRegion is the admin profile's sso_region, or empty when the profile has
-// no SSO keys or the config cannot be read. Any failure other than a profile
-// without SSO keys is a warning line on log, so an unreadable config is not
-// mistaken for a non-SSO profile.
-func ssoRegion(spec ApplySpec, log io.Writer) string {
+// readProfile is step 0: the admin profile's SSO section, and noSSO when the
+// profile has no SSO keys. Any other failure is a warning line on log and
+// neither: an unreadable config is never mistaken for a plain IAM profile.
+func readProfile(spec ApplySpec, log io.Writer) (p SSOProfile, noSSO bool) {
 	if spec.AWSConfigPath == "" {
 		_, _ = fmt.Fprintf(log, "warning: no home directory to find ~/.aws/config; Identity Center calls use the profile's default region\n")
-		return ""
+		return SSOProfile{}, false
 	}
 	p, err := ReadSSOProfile(spec.AWSConfigPath, spec.Profile)
-	if err != nil {
-		if !errors.Is(err, ErrNoSSO) {
-			_, _ = fmt.Fprintf(log, "warning: cannot read sso_region of profile %s: %v; Identity Center calls use the profile's default region\n", spec.Profile, err)
-		}
-		return ""
+	if errors.Is(err, ErrNoSSO) {
+		return SSOProfile{}, true
 	}
-	return p.Region
+	if err != nil {
+		_, _ = fmt.Fprintf(log, "warning: cannot read sso_region of profile %s: %v; Identity Center calls use the profile's default region\n", spec.Profile, err)
+		return SSOProfile{}, false
+	}
+	if spec.SSORegion != "" || spec.StartURL != "" {
+		_, _ = fmt.Fprintf(log, "warning: profile %s has SSO keys; --sso-region and --start-url are ignored\n", spec.Profile)
+	}
+	return p, false
 }
 
 // Apply creates or updates the delegated permission set, puts its inline
@@ -182,22 +220,25 @@ func Apply(ctx context.Context, cli AWSCLI, spec ApplySpec, log io.Writer) (Appl
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	r := &applyRun{ctx: ctx, cli: cli, spec: spec, log: log, region: ssoRegion(spec, log)}
-	for _, step := range []func() error{
-		r.instance,
-		r.account,
-		r.permissionSet,
-		r.policy,
-		r.principal,
-		r.assignment,
-		r.provision,
-	} {
+	r := &applyRun{ctx: ctx, cli: cli, spec: spec, log: log}
+	r.profile, r.noSSO = readProfile(spec, log)
+	r.region = r.profile.Region
+	for _, step := range r.steps() {
 		if err := step(); err != nil {
 			return r.res, err
 		}
 	}
-	r.hint()
 	return r.res, nil
+}
+
+// steps is the step order. A profile without SSO keys asks sts first, for the
+// partition discovery needs, then discovers the instance and checks its type.
+func (r *applyRun) steps() []func() error {
+	rest := []func() error{r.permissionSet, r.policy, r.principal, r.assignment, r.provision}
+	if !r.noSSO {
+		return append(append([]func() error{r.instance, r.account}, rest...), r.hint)
+	}
+	return append(append([]func() error{r.account, r.partition, r.discover, r.instanceType, r.organization}, rest...), r.discoveredHint)
 }
 
 // logf writes one progress line.
@@ -205,23 +246,36 @@ func (r *applyRun) logf(format string, a ...any) {
 	_, _ = fmt.Fprintf(r.log, format+"\n", a...)
 }
 
-// args builds an aws argument list: --profile, --region for Identity Center
-// calls when the admin profile has an sso_region, then the operation.
-func (r *applyRun) args(op ...string) []string {
-	return callArgs(r.spec.Profile, r.region, op...)
-}
-
-func callArgs(profile, region string, op ...string) []string {
+// callArgs builds an aws argument list: --profile, then --region <region> on
+// Identity Center calls (sso-admin, identitystore) and --region <home> on
+// account calls when those are set, then the operation. sts and organizations
+// get none.
+func callArgs(profile, region, home string, op ...string) []string {
 	out := []string{"--profile", profile}
-	if region != "" && len(op) > 0 && (op[0] == "sso-admin" || op[0] == "identitystore") {
-		out = append(out, "--region", region)
+	if len(op) > 0 {
+		switch op[0] {
+		case "sso-admin", "identitystore":
+			if region != "" {
+				out = append(out, "--region", region)
+			}
+		case "account":
+			if home != "" {
+				out = append(out, "--region", home)
+			}
+		}
 	}
 	return append(out, op...)
 }
 
-// call runs one aws invocation and decodes its JSON into v when v is not nil.
+// call runs one aws invocation in the run's Identity Center region and
+// decodes its JSON into v when v is not nil.
 func (r *applyRun) call(v any, op ...string) error {
-	args := r.args(op...)
+	return r.callIn(r.region, v, op...)
+}
+
+// callIn is call with an explicit Identity Center region.
+func (r *applyRun) callIn(region string, v any, op ...string) error {
+	args := callArgs(r.spec.Profile, region, r.home, op...)
 	out, err := r.cli.Run(r.ctx, args...)
 	if err != nil {
 		return wrapCLIError(args, err)
@@ -265,35 +319,79 @@ func awsOperation(args []string) string {
 	return strings.Join(words, " ")
 }
 
-// instance is step 1: exactly one Identity Center instance.
-func (r *applyRun) instance() error {
-	var out struct {
-		Instances []struct {
-			InstanceArn     string `json:"InstanceArn"`
-			IdentityStoreID string `json:"IdentityStoreId"`
-		} `json:"Instances"`
+// instanceRecord is one ListInstances or DescribeInstance row.
+type instanceRecord struct {
+	InstanceArn     string `json:"InstanceArn"`
+	IdentityStoreID string `json:"IdentityStoreId"`
+	OwnerAccountID  string `json:"OwnerAccountId"`
+	PrimaryRegion   string `json:"PrimaryRegion"`
+	Regions         []struct {
+		RegionName      string `json:"RegionName"`
+		IsPrimaryRegion bool   `json:"IsPrimaryRegion"`
+	} `json:"Regions"`
+}
+
+// primary is the Region the instance was enabled in: PrimaryRegion, else the
+// Regions[] entry marked primary, else empty.
+func (in instanceRecord) primary() string {
+	if in.PrimaryRegion != "" {
+		return in.PrimaryRegion
 	}
-	if err := r.call(&out, "sso-admin", "list-instances"); err != nil {
+	for _, reg := range in.Regions {
+		if reg.IsPrimaryRegion && reg.RegionName != "" {
+			return reg.RegionName
+		}
+	}
+	return ""
+}
+
+// listInstances runs sso-admin list-instances in region with extra flags.
+func (r *applyRun) listInstances(region string, extra ...string) ([]instanceRecord, error) {
+	var out struct {
+		Instances []instanceRecord `json:"Instances"`
+	}
+	err := r.callIn(region, &out, append([]string{"sso-admin", "list-instances"}, extra...)...)
+	return out.Instances, err
+}
+
+// oneInstance applies the one-instance rule to a non-empty list.
+func (r *applyRun) oneInstance(ins []instanceRecord) (instanceRecord, error) {
+	if len(ins) == 1 {
+		return ins[0], nil
+	}
+	arns := make([]string, 0, len(ins))
+	for _, in := range ins {
+		arns = append(arns, in.InstanceArn)
+	}
+	return instanceRecord{}, fmt.Errorf("profile %s sees %d Identity Center instances (%s); expected one", r.spec.Profile, len(arns), strings.Join(arns, ", "))
+}
+
+// useInstance records the instance the rest of the run works on.
+func (r *applyRun) useInstance(in instanceRecord) {
+	r.res.InstanceARN = in.InstanceArn
+	r.res.IdentityStoreID = in.IdentityStoreID
+	r.owner = in.OwnerAccountID
+	r.logf("instance %s (identity store %s)", r.res.InstanceARN, r.res.IdentityStoreID)
+}
+
+// instance is step 1: exactly one Identity Center instance in r.region.
+func (r *applyRun) instance() error {
+	ins, err := r.listInstances(r.region)
+	if err != nil {
 		return err
 	}
-	switch len(out.Instances) {
-	case 0:
+	if len(ins) == 0 {
 		region := r.region
 		if region == "" {
 			region = "the profile's default region"
 		}
 		return fmt.Errorf("no Identity Center instance visible to profile %s in %s; check the profile's sso_region", r.spec.Profile, region)
-	case 1:
-	default:
-		arns := make([]string, 0, len(out.Instances))
-		for _, in := range out.Instances {
-			arns = append(arns, in.InstanceArn)
-		}
-		return fmt.Errorf("profile %s sees %d Identity Center instances (%s); expected one", r.spec.Profile, len(arns), strings.Join(arns, ", "))
 	}
-	r.res.InstanceARN = out.Instances[0].InstanceArn
-	r.res.IdentityStoreID = out.Instances[0].IdentityStoreID
-	r.logf("instance %s (identity store %s)", r.res.InstanceARN, r.res.IdentityStoreID)
+	in, err := r.oneInstance(ins)
+	if err != nil {
+		return err
+	}
+	r.useInstance(in)
 	return nil
 }
 
@@ -307,6 +405,7 @@ func (r *applyRun) account() error {
 		return err
 	}
 	r.callerARN = out.Arn
+	r.callerAccount = out.Account
 	if r.spec.AccountID != "" {
 		r.res.AccountID = r.spec.AccountID
 		r.logf("account %s", r.res.AccountID)
@@ -317,6 +416,191 @@ func (r *applyRun) account() error {
 	}
 	r.res.AccountID = out.Account
 	r.logf("account %s (the admin profile's own account)", r.res.AccountID)
+	return nil
+}
+
+// awsPartitionHome is the aws partition's home region, where ListInstances
+// with ALL_REGIONS and account list-regions are asked.
+const awsPartitionHome = "us-east-1"
+
+// partitionHome is the home region of the caller ARN's partition. Only the aws
+// partition is supported: the access portal URL shape and the OIDC endpoint
+// the host signs in through are commercial-only.
+func partitionHome(arn string) (string, bool) {
+	if strings.HasPrefix(arn, "arn:aws:") {
+		return awsPartitionHome, true
+	}
+	return "", false
+}
+
+// partition is the check after step 2 for a profile without SSO keys.
+func (r *applyRun) partition() error {
+	home, ok := partitionHome(r.callerARN)
+	if !ok {
+		return fmt.Errorf("phone sign-in supports the aws partition only (caller %s)", r.callerARN)
+	}
+	r.home = home
+	return nil
+}
+
+// discover is steps 0 and 1 for a profile without SSO keys: the Identity
+// Center region and instance, from --sso-region, else ListInstances with
+// ALL_REGIONS, else the region scan when the CLI predates --region-scope or
+// the answer names no region.
+func (r *applyRun) discover() error {
+	if r.spec.SSORegion != "" {
+		r.region = r.spec.SSORegion
+		if err := r.instance(); err != nil {
+			return err
+		}
+		r.logf("Identity Center region %s (--sso-region)", r.region)
+		return nil
+	}
+	ins, err := r.listInstances(r.home, "--region-scope", "ALL_REGIONS")
+	if isUnknownRegionScope(err) {
+		return r.scan()
+	}
+	if err != nil {
+		return err
+	}
+	if len(ins) == 0 {
+		return fmt.Errorf("no Identity Center instance visible to profile %s in any region; %s", r.spec.Profile, enableInstanceHint)
+	}
+	in, err := r.oneInstance(ins)
+	if err != nil {
+		return err
+	}
+	if in.primary() == "" {
+		return r.scan()
+	}
+	r.region = in.primary()
+	r.useInstance(in)
+	r.logf("Identity Center region %s (all regions)", r.region)
+	return nil
+}
+
+// enableInstanceHint is the console path to an organization instance.
+const enableInstanceHint = "enable IAM Identity Center (an organization instance) in the console, add your user with an email invitation, then rerun"
+
+// isUnknownRegionScope reports the CLI rejecting --region-scope as an
+// unknown option, which an AWS CLI older than the parameter does.
+func isUnknownRegionScope(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Unknown options") && strings.Contains(err.Error(), "region-scope")
+}
+
+// scan asks list-instances in every region the account has enabled, never
+// stopping early, and applies the one-instance rule to the union. A failing
+// region counts as empty; the first failure's line is kept for the error.
+func (r *applyRun) scan() error {
+	regions, err := r.accountRegions()
+	if err != nil {
+		return fmt.Errorf("cannot list the account's regions (%s); pass --sso-region <region of the Identity Center instance>, or update the AWS CLI", firstLine(err.Error()))
+	}
+	var found []instanceRecord
+	regionOf := map[string]string{}
+	var kept string
+	for _, region := range regions {
+		ins, err := r.listInstances(region)
+		if err != nil {
+			if kept == "" {
+				kept = firstLine(err.Error())
+			}
+			continue
+		}
+		for _, in := range ins {
+			if _, seen := regionOf[in.InstanceArn]; !seen {
+				regionOf[in.InstanceArn] = region
+				found = append(found, in)
+			}
+		}
+	}
+	if len(found) == 0 {
+		msg := fmt.Sprintf("no Identity Center instance in any of %d regions for profile %s; %s; or pass --sso-region if the instance is in a region this profile cannot list", len(regions), r.spec.Profile, enableInstanceHint)
+		if kept != "" {
+			msg += " (" + kept + ")"
+		}
+		return errors.New(msg)
+	}
+	in, err := r.oneInstance(found)
+	if err != nil {
+		return err
+	}
+	r.region = in.primary()
+	if r.region == "" {
+		r.region = regionOf[in.InstanceArn]
+	}
+	r.useInstance(in)
+	r.logf("Identity Center region %s (scanned %d regions)", r.region, len(regions))
+	return nil
+}
+
+// accountRegions is the account's enabled regions from account list-regions.
+func (r *applyRun) accountRegions() ([]string, error) {
+	var out struct {
+		Regions []struct {
+			RegionName string `json:"RegionName"`
+		} `json:"Regions"`
+	}
+	if err := r.call(&out, "account", "list-regions", "--region-opt-status-contains", "ENABLED", "ENABLED_BY_DEFAULT"); err != nil {
+		return nil, err
+	}
+	regions := make([]string, 0, len(out.Regions))
+	for _, reg := range out.Regions {
+		if reg.RegionName != "" {
+			regions = append(regions, reg.RegionName)
+		}
+	}
+	return regions, nil
+}
+
+// instanceType is step 1b(a): an instance with permission sets disabled
+// cannot hold the set. A payload without PermissionSetsEnabled passes.
+func (r *applyRun) instanceType() error {
+	var out struct {
+		OwnerAccountID        string `json:"OwnerAccountId"`
+		PermissionSetsEnabled *bool  `json:"PermissionSetsEnabled"`
+	}
+	if err := r.call(&out, "sso-admin", "describe-instance", "--instance-arn", r.res.InstanceARN); err != nil {
+		return err
+	}
+	if out.PermissionSetsEnabled != nil && !*out.PermissionSetsEnabled {
+		return fmt.Errorf("instance %s has permission sets disabled: it is an account instance, or an organization instance with multi-account permissions turned off, "+
+			"so it cannot hold %s; enable IAM Identity Center as an organization instance from the management account "+
+			"(an account that enabled Identity Center before creating its organization keeps an account instance), add your user with an email invitation, then rerun",
+			r.res.InstanceARN, r.spec.Name)
+	}
+	if r.owner == "" {
+		r.owner = out.OwnerAccountID
+	}
+	return nil
+}
+
+// organization is step 1b(b): the instance must belong to the organization's
+// management account. AccessDenied skips the check with a warning.
+func (r *applyRun) organization() error {
+	var out struct {
+		Organization struct {
+			MasterAccountID string `json:"MasterAccountId"`
+		} `json:"Organization"`
+	}
+	err := r.call(&out, "organizations", "describe-organization")
+	switch {
+	case err != nil && strings.Contains(err.Error(), "AWSOrganizationsNotInUseException"):
+		return fmt.Errorf("account %s is not in an organization, so %s is an account instance, which cannot hold permission sets; "+
+			"run aws organizations create-organization --feature-set ALL --profile %s to make it a management account, "+
+			"enable IAM Identity Center (organization instance) in the console, add your user with an email invitation, then rerun",
+			r.callerAccount, r.res.InstanceARN, r.spec.Profile)
+	case err != nil && strings.Contains(err.Error(), "AccessDeniedException"):
+		r.logf("warning: cannot describe the organization (%s); skipping the instance owner check", firstLine(err.Error()))
+		return nil
+	case err != nil:
+		return err
+	}
+	master := out.Organization.MasterAccountID
+	if r.owner != "" && master != "" && r.owner != master {
+		return fmt.Errorf("instance %s is owned by account %s, not the organization's management account %s: an account instance cannot hold permission sets; "+
+			"enable the organization instance from the management account", r.res.InstanceARN, r.owner, master)
+	}
 	return nil
 }
 
@@ -407,13 +691,16 @@ func ssoSessionUser(callerARN string) (string, bool) {
 	return res[2], true
 }
 
+// addUserHint ends the step 5 errors with the console path to a new user.
+const addUserHint = " (Users → Add user in the IAM Identity Center console, with an email invitation, when it does not exist yet)"
+
 // principal is step 5: the Identity Center user id of spec.User or the caller.
 func (r *applyRun) principal() error {
 	user := strings.TrimSpace(r.spec.User)
 	if user == "" {
 		u, ok := ssoSessionUser(r.callerARN)
 		if !ok {
-			return fmt.Errorf("cannot infer your Identity Center user name from %s; pass --user <Identity Center user name>", r.callerARN)
+			return fmt.Errorf("cannot infer your Identity Center user name from %s; pass --user <Identity Center user name>%s", r.callerARN, addUserHint)
 		}
 		user = u
 	}
@@ -427,7 +714,7 @@ func (r *applyRun) principal() error {
 	err = r.call(&out, "identitystore", "get-user-id", "--identity-store-id", r.res.IdentityStoreID, "--alternate-identifier", string(alt))
 	if err != nil {
 		if strings.Contains(err.Error(), "ResourceNotFoundException") {
-			return fmt.Errorf("no user %s in identity store %s; pass --user with the Identity Center user name", user, r.res.IdentityStoreID)
+			return fmt.Errorf("no user %s in identity store %s; pass --user <Identity Center user name>%s", user, r.res.IdentityStoreID, addUserHint)
 		}
 		return err
 	}
@@ -673,29 +960,113 @@ func (r *applyRun) wait() error {
 	}
 }
 
-// hint is step 8: the delegation lines. The admin profile's own sso_role_name
-// is never copied; a read failure is only a warning.
-func (r *applyRun) hint() {
+// hint is step 8: the delegation lines, rereading the admin profile's SSO
+// start URL and region. The admin profile's own sso_role_name is never
+// copied; a read failure is only a warning.
+func (r *applyRun) hint() error {
 	r.res.Delegation = DelegationHint{AccountID: r.res.AccountID, RoleName: r.spec.Name}
 	p, err := ReadSSOProfile(r.spec.AWSConfigPath, r.spec.Profile)
 	if err != nil {
 		if !errors.Is(err, ErrNoSSO) {
 			r.logf("warning: cannot read the SSO start URL and region of profile %s: %v", r.spec.Profile, err)
 		}
-		return
+		return nil
 	}
 	r.res.Delegation.StartURL = p.StartURL
 	r.res.Delegation.Region = p.Region
+	return nil
+}
+
+// discoveredHint is step 8 for a profile without SSO keys: the discovered or
+// given region, and --start-url else the default access portal URL of the
+// identity store, verified through spec.VerifyStartURL when it is set.
+func (r *applyRun) discoveredHint() error {
+	url := r.spec.StartURL
+	if url == "" {
+		if r.res.IdentityStoreID == "" {
+			return fmt.Errorf("instance %s has no identity store id to derive the start URL from; pass --start-url from the IAM Identity Center dashboard", r.res.InstanceARN)
+		}
+		url = "https://" + r.res.IdentityStoreID + ".awsapps.com/start"
+	}
+	r.res.Delegation = DelegationHint{StartURL: url, Region: r.region, AccountID: r.res.AccountID, RoleName: r.spec.Name}
+	return r.verifyStartURL(url)
+}
+
+// verifyStartURL turns ErrStartURLRejected into an error and any other
+// failure into a warning: the apply is done, and a transient OIDC failure
+// must not fail it.
+func (r *applyRun) verifyStartURL(url string) error {
+	if r.spec.VerifyStartURL == nil {
+		r.logf("access portal %s (not verified)", url)
+		return nil
+	}
+	err := r.spec.VerifyStartURL(r.ctx, r.region, url)
+	switch {
+	case errors.Is(err, ErrStartURLRejected):
+		return fmt.Errorf("OIDC rejected start URL %s; pass --start-url from the IAM Identity Center dashboard", url)
+	case err != nil:
+		r.logf("warning: cannot verify start URL %s (%v); keeping it", url, err)
+	default:
+		r.logf("access portal %s verified", url)
+	}
+	return nil
 }
 
 // Plan returns every aws call Apply can make, with placeholders for values an
 // earlier call supplies. A run skips the calls its lookups make unnecessary.
+// For a profile without SSO keys it starts with sts and discovery and ends
+// with the in-process start URL verification, a step with no Args.
 func Plan(spec ApplySpec) ([]ApplyStep, error) {
 	spec, err := normalizeSpec(spec)
 	if err != nil {
 		return nil, err
 	}
-	region := ssoRegion(spec, io.Discard)
+	p, noSSO := readProfile(spec, io.Discard)
+	if !noSSO {
+		steps, err := planRest(spec, p.Region)
+		if err != nil {
+			return nil, err
+		}
+		return append([]ApplyStep{
+			{Name: "instance", Args: callArgs(spec.Profile, p.Region, "", "sso-admin", "list-instances")},
+			{Name: "account", Args: callArgs(spec.Profile, "", "", "sts", "get-caller-identity")},
+		}, steps...), nil
+	}
+	region := spec.SSORegion
+	if region == "" {
+		region = "<region>"
+	}
+	steps, err := planRest(spec, region)
+	if err != nil {
+		return nil, err
+	}
+	out := append(planDiscovery(spec, region), steps...)
+	return append(out, ApplyStep{Name: "start URL verification: RegisterClient and StartDeviceAuthorization against oidc." + region +
+		".amazonaws.com in process (no aws call)"}), nil
+}
+
+// planDiscovery is the sts call and the discovery and instance type calls of
+// a profile without SSO keys. Only the aws partition gets this far, so the
+// home region is us-east-1.
+func planDiscovery(spec ApplySpec, region string) []ApplyStep {
+	home := awsPartitionHome
+	step := func(name, region string, op ...string) ApplyStep {
+		return ApplyStep{Name: name, Args: callArgs(spec.Profile, region, home, op...)}
+	}
+	out := []ApplyStep{step("account", "", "sts", "get-caller-identity")}
+	if spec.SSORegion == "" {
+		out = append(out,
+			step("instance in all regions", home, "sso-admin", "list-instances", "--region-scope", "ALL_REGIONS"),
+			step("account regions (CLI without --region-scope)", "", "account", "list-regions", "--region-opt-status-contains", "ENABLED", "ENABLED_BY_DEFAULT"))
+	}
+	return append(out,
+		step("instance in one region", region, "sso-admin", "list-instances"),
+		step("instance type", region, "sso-admin", "describe-instance", "--instance-arn", "<instance-arn>"),
+		step("organization", "", "organizations", "describe-organization"))
+}
+
+// planRest is the calls from step 3 on, in region.
+func planRest(spec ApplySpec, region string) ([]ApplyStep, error) {
 	const (
 		inst  = "<instance-arn>"
 		store = "<identity-store-id>"
@@ -717,11 +1088,9 @@ func Plan(spec ApplySpec) ([]ApplyStep, error) {
 		return nil, err
 	}
 	step := func(name string, op ...string) ApplyStep {
-		return ApplyStep{Name: name, Args: callArgs(spec.Profile, region, op...)}
+		return ApplyStep{Name: name, Args: callArgs(spec.Profile, region, "", op...)}
 	}
 	return []ApplyStep{
-		step("instance", "sso-admin", "list-instances"),
-		step("account", "sts", "get-caller-identity"),
 		step("find permission set", "sso-admin", "list-permission-sets", "--instance-arn", inst),
 		step("find permission set", "sso-admin", "describe-permission-set", "--instance-arn", inst, "--permission-set-arn", ps),
 		step("create permission set", "sso-admin", "create-permission-set", "--instance-arn", inst, "--name", spec.Name,

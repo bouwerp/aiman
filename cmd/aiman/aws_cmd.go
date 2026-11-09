@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/awslogin"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -22,7 +23,7 @@ import (
 
 const awsUsage = "Usage: aiman aws permission-set-policy [--regions a,b] [--name NAME] [--account ID] [--steps]\n" +
 	"       aiman aws permission-set-apply --profile ADMIN_PROFILE [--account ID] [--regions a,b] [--name NAME] [--user USER]\n" +
-	"         [--remote NAME [--delegation-profile NAME]] [--dry-run] [--json]\n" +
+	"         [--sso-region REGION] [--start-url URL] [--remote NAME [--delegation-profile NAME]] [--dry-run] [--json]\n" +
 	"       aiman aws log [--since SEQ] [--limit N] [--json]\n" +
 	"\n" +
 	"permission-set-apply creates the delegated permission set in IAM Identity Center with the\n" +
@@ -31,10 +32,18 @@ const awsUsage = "Usage: aiman aws permission-set-policy [--regions a,b] [--name
 	"aiman-delegated; without it the admin's own user is assigned when the admin profile is an\n" +
 	"Identity Center session. --remote writes the aws_delegations entry (named by\n" +
 	"--delegation-profile, else the admin profile) into ~/.aiman/config.yaml after a successful\n" +
-	"apply. --dry-run prints the aws calls and makes none.\n"
+	"apply. --dry-run prints the aws calls and makes none.\n" +
+	"\n" +
+	"An admin profile that is not an Identity Center session (plain IAM credentials) has its\n" +
+	"Identity Center region and instance discovered, and the access portal URL derived from the\n" +
+	"identity store id and verified against the OIDC endpoint. --sso-region skips the discovery\n" +
+	"and --start-url the derivation (it is still verified); both are only for such profiles.\n"
 
 // newAWSCLI builds the aws runner for permission-set-apply; tests replace it.
 var newAWSCLI = func(profile string) awsdelegation.AWSCLI { return awsdelegation.ExecAWSCLI{Profile: profile} }
+
+// verifyStartURL checks a derived or given access portal URL; tests replace it.
+var verifyStartURL = awslogin.VerifyStartURL
 
 const awsLogUsage = "Usage: aiman aws log [--since SEQ] [--limit N] [--json]\n"
 
@@ -170,6 +179,8 @@ func runPermissionSetApply(args []string, cfg *config.Config, out, progress io.W
 	regionsFlag := fs.String("regions", "", "comma-separated regions")
 	name := fs.String("name", awsdelegation.DefaultPermissionSetName, "permission set name")
 	user := fs.String("user", "", "Identity Center user name to assign")
+	ssoRegion := fs.String("sso-region", "", "Identity Center region, for an admin profile without SSO keys")
+	startURL := fs.String("start-url", "", "access portal URL, for an admin profile without SSO keys")
 	remote := fs.String("remote", "", "remote in ~/.aiman/config.yaml to write the delegation to")
 	delegationProfile := fs.String("delegation-profile", "", "profile name of the written delegation; default the admin profile")
 	dryRun := fs.Bool("dry-run", false, "print the aws calls and make none")
@@ -183,11 +194,14 @@ func runPermissionSetApply(args []string, cfg *config.Config, out, progress io.W
 		regions = delegationRegions(cfg)
 	}
 	spec := awsdelegation.ApplySpec{
-		Profile:   strings.TrimSpace(*profile),
-		AccountID: strings.TrimSpace(*account),
-		Name:      *name,
-		User:      strings.TrimSpace(*user),
-		Regions:   regions,
+		Profile:        strings.TrimSpace(*profile),
+		AccountID:      strings.TrimSpace(*account),
+		Name:           *name,
+		User:           strings.TrimSpace(*user),
+		Regions:        regions,
+		SSORegion:      strings.TrimSpace(*ssoRegion),
+		StartURL:       strings.TrimSpace(*startURL),
+		VerifyStartURL: verifyStartURL,
 	}
 	target, err := newDelegationTarget(cfg, strings.TrimSpace(*remote), strings.TrimSpace(*delegationProfile), spec.Profile)
 	if err != nil {
@@ -289,24 +303,44 @@ func (t *delegationTarget) write(spec awsdelegation.ApplySpec, hint awsdelegatio
 
 // printPlanned prints, for --dry-run, the entry a run would write. Its SSO
 // facts are what is known without calling aws: the admin profile's start URL
-// and region, --account and the permission set name. A nil target prints
-// nothing.
+// and region, --account and the permission set name. For an admin profile
+// without SSO keys the start URL and region are placeholders unless
+// --start-url and --sso-region give them. A nil target prints nothing.
 func (t *delegationTarget) printPlanned(spec awsdelegation.ApplySpec, out io.Writer) error {
 	if t == nil {
 		return nil
 	}
 	hint := awsdelegation.DelegationHint{AccountID: spec.AccountID, RoleName: spec.Name}
+	comment := "# aws_delegations entry this command would write; the account id comes from the apply when --account is not given.\n"
 	if home, err := os.UserHomeDir(); err == nil {
-		if sso, err := awsdelegation.ReadSSOProfile(filepath.Join(home, ".aws", "config"), spec.Profile); err == nil {
+		sso, err := awsdelegation.ReadSSOProfile(filepath.Join(home, ".aws", "config"), spec.Profile)
+		switch {
+		case err == nil:
 			hint.StartURL, hint.Region = sso.StartURL, sso.Region
+		case errors.Is(err, awsdelegation.ErrNoSSO):
+			hint.StartURL, hint.Region = plannedDiscovery(spec)
+			comment += "# sso_start_url and sso_region come from the apply: the admin profile has no SSO keys.\n"
 		}
 	}
 	data, err := yaml.Marshal(t.entry(spec, hint))
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "# aws_delegations entry this command would write; the account id comes from the apply when --account is not given.\nremote %s:\n%s", t.remote, indentLines(string(data), "  "))
+	_, err = fmt.Fprintf(out, "%sremote %s:\n%s", comment, t.remote, indentLines(string(data), "  "))
 	return err
+}
+
+// plannedDiscovery is the dry-run start URL and region of an admin profile
+// without SSO keys: the overrides, else placeholders.
+func plannedDiscovery(spec awsdelegation.ApplySpec) (startURL, region string) {
+	startURL, region = spec.StartURL, spec.SSORegion
+	if startURL == "" {
+		startURL = "<derived from the identity store id and verified>"
+	}
+	if region == "" {
+		region = "<discovered>"
+	}
+	return startURL, region
 }
 
 // writtenDelegation names the entry --remote wrote, for --json.
@@ -359,6 +393,12 @@ func printApplyPlan(spec awsdelegation.ApplySpec, out io.Writer) error {
 		return err
 	}
 	for _, s := range steps {
+		if len(s.Args) == 0 {
+			if _, err := fmt.Fprintf(out, "# %s\n", s.Name); err != nil {
+				return err
+			}
+			continue
+		}
 		quoted := make([]string, len(s.Args))
 		for i, a := range s.Args {
 			quoted[i] = planQuote(a)
