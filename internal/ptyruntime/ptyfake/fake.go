@@ -30,6 +30,7 @@ type FakePTY struct {
 	creates      []ptyruntime.Spec
 	captureDelay time.Duration
 	captures     int
+	capturesBy   map[string]int
 	inflight     int
 	maxInflight  int
 }
@@ -162,6 +163,10 @@ func (f *FakePTY) CaptureScreen(id string) (string, error) {
 		return "", ptyruntime.ErrNotFound
 	}
 	f.captures++
+	if f.capturesBy == nil {
+		f.capturesBy = map[string]int{}
+	}
+	f.capturesBy[id]++
 	f.inflight++
 	if f.inflight > f.maxInflight {
 		f.maxInflight = f.inflight
@@ -194,6 +199,13 @@ func (f *FakePTY) Captures() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.captures
+}
+
+// CapturesOf is how many captures of one session ran so far.
+func (f *FakePTY) CapturesOf(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.capturesBy[id]
 }
 
 // MaxConcurrentCaptures is the largest number of captures that ran at once.

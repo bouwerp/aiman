@@ -177,6 +177,7 @@ func runServe() error {
 	todos := todo.NewFiles(filepath.Join(dir, "todos"))
 	srv.EnableTodos(todos, db)
 	srv.SetPeerNotes(cfg.Sessions.PeerNotesOn())
+	srv.SetAgentNice(cfg.Host.Load.AgentNiceOrDefault())
 	tracker := usage.NewTracker(db, db, srv.PublishUsage)
 	tracker.SetContextWindow(cfg.Usage.ContextWindowTokens)
 	tracker.SetTestCommands(cfg.Usage.TestCommands)
