@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -730,6 +731,45 @@ func (r Remote) AllDelegations() []*AWSDelegation {
 	}
 	out = append(out, r.AWSDelegations...)
 	return out
+}
+
+// UpsertAWSDelegation adds d to the named remote's aws_delegations, or updates
+// the entry (singular or listed) whose Profile equals d.Profile. The remote name
+// is matched ignoring case. An unknown remote or an empty d.Profile is an error
+// and changes nothing. An update replaces SourceProfile, SyncCredentials,
+// Regions and the four SSO facts and keeps the entry's other fields.
+func (c *Config) UpsertAWSDelegation(remote string, d AWSDelegation) error {
+	if strings.TrimSpace(d.Profile) == "" {
+		return errors.New("aws delegation needs a profile name")
+	}
+	var r *Remote
+	names := make([]string, 0, len(c.Remotes))
+	for i := range c.Remotes {
+		names = append(names, c.Remotes[i].Name)
+		if r == nil && strings.EqualFold(c.Remotes[i].Name, remote) {
+			r = &c.Remotes[i]
+		}
+	}
+	if r == nil {
+		return fmt.Errorf("no remote %s in the config; remotes: %s", remote, strings.Join(names, ", "))
+	}
+	for _, existing := range r.AllDelegations() {
+		if existing == nil || existing.Profile != d.Profile {
+			continue
+		}
+		existing.SourceProfile = d.SourceProfile
+		existing.SyncCredentials = d.SyncCredentials
+		existing.Regions = append([]string(nil), d.Regions...)
+		existing.SSOStartURL = d.SSOStartURL
+		existing.SSORegion = d.SSORegion
+		existing.SSOAccountID = d.SSOAccountID
+		existing.SSORoleName = d.SSORoleName
+		return nil
+	}
+	entry := d
+	entry.Regions = append([]string(nil), d.Regions...)
+	r.AWSDelegations = append(r.AWSDelegations, &entry)
+	return nil
 }
 
 // UniqueRemotes returns remotes with duplicate SSH targets (same host, user, root) removed.
