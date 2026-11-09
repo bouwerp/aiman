@@ -694,6 +694,10 @@ func (s *Server) handlePeerPrompt(ctx context.Context, req Request, scope sessio
 // was typed.
 var errPeerNotDelivered = errors.New("peer note not delivered yet")
 
+// errPeerNotSettled is a peer prompt's wait that ran out after the note was
+// typed but before the target showed it had picked it up.
+var errPeerNotSettled = errors.New("peer note delivered, target not settled")
+
 // peerWaitTick is how often a peer prompt's wait polls delivery and the hook.
 const peerWaitTick = 50 * time.Millisecond
 
@@ -719,7 +723,7 @@ func (s *Server) waitPeerNote(ctx context.Context, sess domain.Session, id int64
 		return cur, ok && peerNoteSeen(cur, at, time.Now())
 	})
 	if err != nil {
-		return "", err
+		return "", errPeerNotSettled
 	}
 	rest := 0
 	if deadline, ok := waitCtx.Deadline(); ok {

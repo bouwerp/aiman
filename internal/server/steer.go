@@ -125,11 +125,10 @@ type steerer struct {
 	now     func() time.Time
 
 	kick chan struct{}
-	// running is set while Run's loop runs; before Run, Kick runs one pass.
-	running atomic.Bool
-	// stopped is set once Run returns, after which Kick never delivers, so
-	// shutdown types nothing.
-	stopped atomic.Bool
+	// loop is steerLoopIdle before Run, steerLoopRunning while it runs and
+	// steerLoopStopped once it returned. One value, so Kick never reads a
+	// half-finished shutdown.
+	loop atomic.Int32
 	// deliverMu keeps delivery passes from overlapping, so a note is never
 	// typed twice.
 	deliverMu sync.Mutex
@@ -143,6 +142,13 @@ type steerer struct {
 }
 
 var _ Steerer = (*steerer)(nil)
+
+// Delivery loop states for steerer.loop.
+const (
+	steerLoopIdle int32 = iota
+	steerLoopRunning
+	steerLoopStopped
+)
 
 func newSteerer(store SteerStore, target steerTarget, publish func(SessionEvent), window time.Duration) *steerer {
 	if publish == nil {
@@ -368,10 +374,13 @@ func (s *steerer) Status(sessionID string) SteerStatus {
 // Run starts, Kick runs one delivery pass of its own; after Run returns it
 // does nothing.
 func (s *steerer) Kick(string) {
-	if s == nil || s.stopped.Load() {
+	if s == nil {
 		return
 	}
-	if !s.running.Load() {
+	switch s.loop.Load() {
+	case steerLoopStopped:
+		return
+	case steerLoopIdle:
 		go s.deliverAll(context.Background())
 		return
 	}
@@ -436,11 +445,8 @@ func (s *steerer) Load(ctx context.Context) error {
 
 // Run delivers queued notes until ctx is done, waking on Kick and on a tick.
 func (s *steerer) Run(ctx context.Context) {
-	s.running.Store(true)
-	defer func() {
-		s.stopped.Store(true)
-		s.running.Store(false)
-	}()
+	s.loop.Store(steerLoopRunning)
+	defer s.loop.Store(steerLoopStopped)
 	t := time.NewTicker(s.tick)
 	defer t.Stop()
 	for {
