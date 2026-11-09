@@ -1,6 +1,6 @@
 # `aiman aws permission-set-apply`: set up the delegated permission set with the AWS CLI
 
-**Revision:** 4 · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted); rev 4 adds P2, writing the delegation into the laptop config, at the operator's request the same day ("is there no way we can do this through the aws cli and set these values automatically?", "yes")
+**Revision:** 5 (as built, PRs #116 and #117 merged 2026-11-09) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted); rev 4 adds P2, writing the delegation into the laptop config, at the operator's request the same day ("is there no way we can do this through the aws cli and set these values automatically?", "yes")
 **Task:** operator request on 2026-11-09 ("Can we have scripts in the aiman repo that sets that up through the AWS cli?") · **Spec:** extends `docs/specs/phone-aws-login.md` (the permission set it needs)
 
 ## Problem
@@ -243,6 +243,18 @@ func (c *Config) UpsertAWSDelegation(remote string, d AWSDelegation) error
 P2 CLI flags: `--remote <name>`, `--delegation-profile <name>` (meaningful only with `--remote`). JSON with `--remote`: the `ApplyResult` fields plus `"config": {"remote": ..., "profile": ..., "path": ...}` where `path` is `config.GetConfigPath()`. The acceptance tests are `internal/infra/config/aws_delegation_upsert_acceptance_test.go` and `cmd/aiman/aws_apply_config_acceptance_test.go`.
 
 `runAWS(args, cfg, out)` keeps its signature and dispatches `permission-set-apply`. `--dry-run` prints each planned step as one line `aws --profile <p> ...` and never calls `newAWSCLI`'s result. `--json` prints `ApplyResult` as one object. Text output ends with the `Done.` block in "CLI" and never prints `Done.` on failure. `awsUsage` names both subcommands and `--dry-run`.
+
+## Deviations from the approved design
+
+As built in PR #116 (P1) and PR #117 (P2), compared with rev 4:
+
+- **In-flight conflict path** (Behaviour step 6): `list-account-assignment-creation-status` rows carry no target, so each in-flight request is described once and only one whose `TargetId`, `PermissionSetArn` and `PrincipalId` all equal ours is waited on; an empty field is not ours. Rev 3 only said "poll the in-flight request". Found in the review of #116; acceptance test `permissionset_apply_inflight_acceptance_test.go`.
+- **`ExecAWSCLI.Run`** keeps stdout and stderr in separate buffers and returns stdout alone on success, so a CLI warning cannot break the JSON; the error's first line comes from stderr, else stdout. Rev 3 said `CombinedOutput`. It also drops a leading `--profile <same profile>` from the arguments, because `Apply` passes it on every call and `command` prepends it.
+- **Guards added in review**: an empty `RequestId` where one is expected is an immediate error, never a poll on an empty id; a failure to read `~/.aws/config` while looking for the Identity Center region logs a `warning:` line instead of silently passing no `--region`.
+- **`--regions` parsing**: values are trimmed and empties dropped once after the split, so the policy and the saved `aws_delegations` entry hold the same list (`--regions "eu-west-1, af-south-1"` saves `af-south-1`).
+- **Config write failure** after a successful apply wraps the error to say the Identity Center side is done and a rerun with `--remote` is safe.
+- **Acceptance test fix**: the P2 rerun subtest indexed the wrong argument (`args[5]` for `args[4]`); the child escalated through a consult and made the one-character fix, recorded in Decisions.
+- **Test duration**: the CLI acceptance happy path takes about 6 seconds, because the CLI exposes no poll interval and the fake answers `IN_PROGRESS` once.
 
 ## What the reader should be able to explain
 
