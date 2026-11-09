@@ -66,7 +66,7 @@ func (r *Repository) AppendIfDue(ctx context.Context, n domain.Notification, min
 		n.SessionID, string(n.Kind), n.At.UTC()); err != nil {
 		return domain.Notification{}, false, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := r.commit(tx); err != nil {
 		return domain.Notification{}, false, err
 	}
 	return n, true, nil
@@ -77,7 +77,7 @@ func (r *Repository) NotificationsSince(ctx context.Context, after int64, limit 
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT seq,session_id,kind,label,host,text,created_at FROM notifications WHERE seq > ? ORDER BY seq ASC LIMIT ?`, after, limit)
+	rows, err := r.rd.QueryContext(ctx, `SELECT seq,session_id,kind,label,host,text,created_at FROM notifications WHERE seq > ? ORDER BY seq ASC LIMIT ?`, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func (r *Repository) NotificationsSince(ctx context.Context, after int64, limit 
 // LastNotificationSeq returns the highest seq in notifications.
 func (r *Repository) LastNotificationSeq(ctx context.Context) (int64, error) {
 	var seq sql.NullInt64
-	if err := r.db.QueryRowContext(ctx, `SELECT MAX(seq) FROM notifications`).Scan(&seq); err != nil {
+	if err := r.rd.QueryRowContext(ctx, `SELECT MAX(seq) FROM notifications`).Scan(&seq); err != nil {
 		return 0, err
 	}
 	if !seq.Valid {
@@ -112,7 +112,7 @@ func (r *Repository) LastNotificationSeq(ctx context.Context) (int64, error) {
 // NotifyCursor loads a named cursor.
 func (r *Repository) NotifyCursor(ctx context.Context, name string) (int64, bool, error) {
 	var seq int64
-	err := r.db.QueryRowContext(ctx, `SELECT seq FROM notify_cursors WHERE name=?`, name).Scan(&seq)
+	err := r.rd.QueryRowContext(ctx, `SELECT seq FROM notify_cursors WHERE name=?`, name).Scan(&seq)
 	if err == sql.ErrNoRows {
 		return 0, false, nil
 	}
@@ -124,12 +124,12 @@ func (r *Repository) NotifyCursor(ctx context.Context, name string) (int64, bool
 
 // SetNotifyCursor stores a named cursor.
 func (r *Repository) SetNotifyCursor(ctx context.Context, name string, seq int64) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO notify_cursors(name,seq) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET seq=excluded.seq`, name, seq)
+	_, err := r.exec(ctx, `INSERT INTO notify_cursors(name,seq) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET seq=excluded.seq`, name, seq)
 	return err
 }
 
 // PruneNotifications deletes notifications older than before.
 func (r *Repository) PruneNotifications(ctx context.Context, before time.Time) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM notifications WHERE created_at < ?`, before.UTC())
+	_, err := r.exec(ctx, `DELETE FROM notifications WHERE created_at < ?`, before.UTC())
 	return err
 }

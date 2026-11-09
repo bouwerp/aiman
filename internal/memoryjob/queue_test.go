@@ -20,7 +20,7 @@ func openQueue(t *testing.T) *Queue {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	q, err := Open(db)
+	q, err := Open(db, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +112,11 @@ func TestOpenMigratesTableWithoutCandidates(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO memory_jobs(id, session_id, reason, group_name, repo_name, label, source, created, done) VALUES('old', 's0', '', '', '', '', 'legacy', 1, 0)`); err != nil {
 		t.Fatal(err)
 	}
-	q, err := Open(db)
+	q, err := Open(db, db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(db); err != nil {
+	if _, err := Open(db, db); err != nil {
 		t.Fatalf("second open: %v", err)
 	}
 	ctx := context.Background()

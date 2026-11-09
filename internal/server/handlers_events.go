@@ -133,7 +133,7 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 		}
 		var listed []domain.Session
 		if s.repo != nil {
-			if l, lerr := s.repo.List(ctx); lerr == nil {
+			if l, lerr := s.storedSessions(ctx); lerr == nil {
 				listed = l
 				changed = append(changed, collectRepoCreatedEvents(listed, announced)...)
 			}

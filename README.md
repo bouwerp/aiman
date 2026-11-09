@@ -1027,7 +1027,9 @@ All data is stored in `~/.aiman/`:
 ```
 ~/.aiman/
 ├── config.yaml          # Main configuration
-├── aiman.db             # SQLite database (sessions + snapshots)
+├── aiman.db             # SQLite database (sessions + snapshots), WAL mode
+├── aiman.db-wal         # its write-ahead log, while a process has it open
+├── aiman.db-shm         # its shared-memory index, likewise
 ├── aiman.log            # TUI log — background goroutines write here, never to the screen
 ├── aiman.sock           # Remote: `aiman serve` Unix socket (`0o600`)
 ├── aiman.sock.lock      # Remote: serve singleton lock
@@ -1044,6 +1046,8 @@ All data is stored in `~/.aiman/`:
 ├── sockets/             # SSH ControlMaster sockets (hashed filenames)
 └── work/                # Local mutagen sync roots — one subdirectory per session ID
 ```
+
+The database runs in WAL mode. A clean stop folds `aiman.db-wal` back into `aiman.db`, so a copy taken then is the file alone. A copy, rsync or backup taken while serve (or the TUI, or `aiman-trigger`) runs must take `aiman.db`, `aiman.db-wal` and `aiman.db-shm` together; the main file alone can miss recent writes.
 
 ### Example Config
 

@@ -73,6 +73,7 @@ func isNilPTY(p PTYRuntime) bool {
 type Server struct {
 	ln       *Listener
 	repo     domain.SessionRepository
+	sessList sessionListCache
 	remote   domain.RemoteExecutor
 	create   sessionCreator
 	ctxStore domain.ContextStore
@@ -286,6 +287,7 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 		hostStats: hoststats.New(),
 	}
 	s.target = s
+	s.watchSessionList(repo)
 	return s
 }
 

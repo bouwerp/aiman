@@ -29,11 +29,13 @@ type Job struct {
 }
 
 // Queue stores memory-candidate jobs in serve's SQLite file.
-type Queue struct{ db *sql.DB }
+// db is the writer; rd runs Pending.
+type Queue struct{ db, rd *sql.DB }
 
 // Open creates the job table when it is absent and adds columns that a
-// table created by an older schema lacks.
-func Open(db *sql.DB) (*Queue, error) {
+// table created by an older schema lacks. db is the writer and rd the reader
+// pool; a caller with one handle passes it twice.
+func Open(db, rd *sql.DB) (*Queue, error) {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS memory_jobs(
 		id TEXT PRIMARY KEY,
 		session_id TEXT NOT NULL,
@@ -53,7 +55,7 @@ func Open(db *sql.DB) (*Queue, error) {
 	if _, err := db.Exec(`ALTER TABLE memory_jobs ADD COLUMN candidates TEXT`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return nil, fmt.Errorf("adding memory job candidates: %w", err)
 	}
-	return &Queue{db: db}, nil
+	return &Queue{db: db, rd: rd}, nil
 }
 
 // Enqueue replaces any unfinished job for the same session. A job whose id is
@@ -99,7 +101,7 @@ func (q *Queue) Enqueue(ctx context.Context, j Job) error {
 
 // Pending returns unfinished jobs oldest first.
 func (q *Queue) Pending(ctx context.Context) ([]Job, error) {
-	rows, err := q.db.QueryContext(ctx,
+	rows, err := q.rd.QueryContext(ctx,
 		`SELECT id, session_id, reason, group_name, repo_name, label, source, created, candidates
 		 FROM memory_jobs WHERE done = 0 ORDER BY created ASC, id ASC`)
 	if err != nil {

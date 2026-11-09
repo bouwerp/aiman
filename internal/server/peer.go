@@ -393,6 +393,8 @@ func (s *Server) admitPeer(ctx context.Context, req Request, scope sessionScope,
 	if refused != nil {
 		return domain.Session{}, "", refused
 	}
+	// The cached list can still say ended right after a restart.
+	target = s.freshHookFields(ctx, target)
 	if refused := s.peerAllowed(req, scope, from, target); refused != nil {
 		return domain.Session{}, "", refused
 	}

@@ -28,7 +28,7 @@ const (
 // FindLegacyAWSProfiles lists every session record still carrying a legacy
 // session-scoped AWS profile name, without changing anything.
 func (r *Repository) FindLegacyAWSProfiles(ctx context.Context) ([]LegacyAWSProfileRef, error) {
-	return findLegacyAWSProfiles(ctx, r.db)
+	return findLegacyAWSProfiles(ctx, r.rd)
 }
 
 // LegacyAWSProfilesClearedOnOpen returns the legacy profile references the open-time
@@ -90,6 +90,7 @@ func (r *Repository) ClearLegacyAWSProfiles(ctx context.Context) ([]LegacyAWSPro
 	if err := clearLegacyAWSProfiles(r.db); err != nil {
 		return nil, err
 	}
+	r.changed(ChangeOther)
 	return refs, nil
 }
 
