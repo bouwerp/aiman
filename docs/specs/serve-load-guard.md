@@ -1,6 +1,6 @@
 # Serve load guard: stay answerable when the host is swamped
 
-**Revision:** 3 (after consult rounds 1 and 2) · **Size:** project · **Status:** approved by the operator on 2026-11-09 ("Approve")
+**Revision:** 4 (as built) · **Size:** project · **Status:** approved by the operator on 2026-11-09 ("Approve"); built in PRs #124, #123, #126, #125, #127, #128 and released in v0.39.0
 **Task:** operator report on 2026-11-09: "The serve got inundated with rpc requests and completely failed now - we need to guard against that"; "The rpc flood was on the host, and it seemed to lock up the db".
 
 ## Problem
@@ -253,6 +253,26 @@ func (s *Server) HandleDumpSignals(ctx context.Context, dir string) // SIGUSR1 �
 func serveMainPID(run func(args ...string) (string, error), pidFile string) (int, error) // `systemctl --user show -p MainPID --value aiman-serve`, else the pid file, else an error naming both
 func newestDumpSince(dir string, since time.Time) (string, bool)                        // the serve-dump-*.txt `aiman host dump` prints
 ```
+
+## Deviations from the approved design
+
+Where the code that landed differs from the behaviour above, with the reason.
+
+- **Problem cause 2 was wrong in one detail (P0).** `runStateSweep` calls `sweepStates` from one goroutine and `time.Ticker` drops ticks while its receiver is busy, so sweeps never stacked; the slow captures stacked with `session.wait` classifiers, which P2's capture semaphore bounds. The `TryLock` stays as a guard for other callers, and `SweepSkipped` counts the ticks a slow sweep made the ticker drop (`countOverrun`, `elapsed / notifySweepEvery`), so `RPCStats.SweepSkipped` is non-zero under load as the scenario describes.
+- **No table read after a hub event (P0).** The event stream reads the stored rows once a second through the session list cache and forwards hub events at once; a row created beside a hub event is announced on the next tick, not immediately.
+- **Hook-field gates re-read (P1).** Beyond `steerSession`, `liveReview`, `checkFixRounds` and `admitPeer` branch on hook fields and read them fresh (`freshRows`, `freshHookFields`); `lockedTarget` overlays the row by id after taking the session lock so a queued `session.restart` sees the launch model and vendor id the previous call wrote. `pty.list` and `sessionRoots` read the cache. The backfill is exported as `BackfillNames` for `cmd/aiman`, runs for any re-registered row missing a name or group, and a failed save no longer aborts the pass. `storedSessions` returns a shallow copy: callers must not mutate pointer, slice or map fields in place.
+- **`session.events` announces stored rows only (P1).** It reads the cached stored rows, not the merged `loadSessions` list, so a discovered pty with no database row is still not announced as `session_created`.
+- **`HostLoadConfig.MaxCaptures` (P2).** The capture budget is configurable (`host.load.max_captures`, 0 is 4); the approved Contracts block lacked it. Field order is `MaxInflight`, `PerCallerPerMinute`, `MaxCaptures`, `AgentNice`.
+- **`aiman host stats` prints text (P2).** Without `--json` it prints a host line and the rpc block instead of the raw JSON result; nothing in the repository parsed the old output.
+- **`session.prompt --wait` after a prompt (P2).** `cachedState` carries its sample time; `session.wait` reads the cache as approved, but a wait that follows a prompt ignores an entry sampled before the submit and classifies itself (through the capture semaphore) until the sweep has sampled the session again, so a hook-less agent is not read as idle from before the prompt. The peer-note wait applies the same rule from the delivery time. A session the sweep skips (hidden or not active) has no cache entry, so its waiter still classifies each tick under the semaphore.
+- **Lock order (P2).** The prompt's wait runs outside `lockSession`: a paused waiter must not depend on slot holders queued on the same session's lock.
+- **Admission details (P2).** A `server_busy` refusal refunds the token it spent; full buckets untouched for a minute are pruned; the pid-to-holder map is rebuilt by one request while the others wait; `dispatch` decodes through `decodeAdmit` so its complexity stays under the linter's cap. Every capture serve makes for itself (sweep, waiters, steer dialogs, `session.read`, hook reports) goes through `captureScreen`.
+- **Every pty serve creates is niced (P3)**, including the `review.debug` pty, not only agent ptys. The wrapper needs `nice` (coreutils) on PATH and `agent_nice: 0` disables it. `.golangci.yml` excludes `SA1019` (`parser.ParseDir`) and `unparam` for the pinned acceptance tests only.
+
+- **Recorder idle group (P4).** With a notification recorder configured, a fresh `idle` report still needs one capture for `pane.AsksQuestion`, so it forms a fourth capture group after transitions, stale and working, and counts toward the 16. Without a recorder (and in the acceptance tests) idle rows are sampled without a capture as approved. The sweep reads each row once (`sampleLive`) so the group and the sample cannot disagree, and `countOverrun` measures against the current period.
+- **Transition captures (P4).** A fresh `ended` or `waiting_input` report needs no screen to be classified, so the transition capture only refines a `waiting_input` notification reason when a menu is on screen; an `ended` transition captures a screen nothing reads (kept as approved, a candidate to drop). A session's first pass is never a transition, so a session first seen ended or waiting takes no capture.
+- **`aiman host dump` checks the pid (P5).** Before `SIGUSR1`, whose default action terminates a process, the CLI refuses its own pid and, on Linux, any pid whose `/proc/<pid>/cmdline` is not `aiman serve`, so a stale `~/.aiman/serve.pid` after a crash or reboot cannot signal a reused pid. `serveMainPID` stays as pinned; `findServePID` adds the source for the message.
+- **Atomic dump file (P5).** The dump is written to `serve-dump-<unix>.txt.tmp`, synced and renamed, so `newestDumpSince` never returns a half-written file. A `SIGUSR1` that lands during an auto dump is dropped and `aiman host dump` reports the auto dump's file.
 
 ## What the reader should be able to explain
 
