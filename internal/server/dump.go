@@ -1,0 +1,205 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
+)
+
+// dumpStackCap bounds the goroutine stack section of a dump; a cut dump ends
+// with a line saying it was truncated.
+var dumpStackCap = 64 << 20
+
+// dumpStack is runtime.Stack; tests swap it.
+var dumpStack = runtime.Stack
+
+// dumpStackStart is the first stack buffer size; it doubles up to the cap.
+const dumpStackStart = 1 << 20
+
+// ErrDumpInProgress is WriteDump's answer while another dump is running.
+var ErrDumpInProgress = errors.New("dump in progress")
+
+const (
+	// autoDumpAfter is how long in flight must sit at the cap before serve
+	// dumps on its own.
+	autoDumpAfter = 30 * time.Second
+	// autoDumpEvery spaces automatic dumps.
+	autoDumpEvery = 10 * time.Minute
+	// autoDumpCheck is how often the automatic dump reads in flight.
+	autoDumpCheck = 2 * time.Second
+)
+
+// dumping guards WriteDump across every Server in the process: the stacks are
+// the process's, and one dump at a time is the point.
+var dumping atomic.Bool
+
+// WriteDump writes <dir>/serve-dump-<unix>.txt (0600): RPCStats as JSON, the
+// load average, the in-flight calls, then every goroutine's stack up to
+// dumpStackCap. A call while another dump runs returns ErrDumpInProgress and
+// writes nothing.
+func (s *Server) WriteDump(dir string) (string, error) {
+	if !dumping.CompareAndSwap(false, true) {
+		return "", ErrDumpInProgress
+	}
+	defer dumping.Store(false)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	stats, err := json.MarshalIndent(s.RPCStats(), "", "  ")
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "aiman serve dump %s pid %d\n\nrpc stats:\n%s\n\n", time.Now().UTC().Format(time.RFC3339), os.Getpid(), stats)
+	if load, ok := loadAverage(); ok {
+		fmt.Fprintf(&b, "load average: %.2f\n\n", load)
+	} else {
+		b.WriteString("load average: unavailable\n\n")
+	}
+	calls := s.InflightCalls()
+	fmt.Fprintf(&b, "in-flight calls: %d\n", len(calls))
+	for _, c := range calls {
+		fmt.Fprintf(&b, "  %s\t%s\t%s\n", c.Method, c.Caller, c.Age.Round(time.Millisecond))
+	}
+	b.WriteString("\ngoroutines:\n")
+	stack, cut := captureStacks()
+
+	f, path, err := createDumpFile(dir, time.Now().Unix())
+	if err != nil {
+		return "", err
+	}
+	_, err = f.WriteString(b.String())
+	if err == nil {
+		_, err = f.Write(stack)
+	}
+	if err == nil && cut {
+		_, err = fmt.Fprintf(f, "\n... goroutine stacks truncated at %d bytes\n", len(stack))
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// captureStacks is every goroutine's stack, growing the buffer up to
+// dumpStackCap; cut reports a stack that did not fit.
+func captureStacks() ([]byte, bool) {
+	size := min(dumpStackStart, dumpStackCap)
+	for {
+		buf := make([]byte, size)
+		n := dumpStack(buf, true)
+		if n < len(buf) {
+			return buf[:n], false
+		}
+		if size >= dumpStackCap {
+			return buf[:n], true
+		}
+		size = min(size*2, dumpStackCap)
+	}
+}
+
+// createDumpFile opens serve-dump-<unix>.txt for writing, moving to the next
+// second's name when a dump of that second already exists.
+func createDumpFile(dir string, unix int64) (*os.File, string, error) {
+	for i := int64(0); ; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("serve-dump-%d.txt", unix+i))
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			return f, path, nil
+		}
+		if !errors.Is(err, fs.ErrExist) || i >= 60 {
+			return nil, "", err
+		}
+	}
+}
+
+// autoDump decides when in flight has sat at the cap long enough to dump.
+type autoDump struct {
+	capSince time.Time // when the current run at the cap began; zero below it
+	lastDump time.Time
+}
+
+// due is true once in flight has been at the cap for autoDumpAfter, then not
+// again for autoDumpEvery. A reading below the cap restarts the clock.
+func (d *autoDump) due(now time.Time, atCap bool) bool {
+	if !atCap {
+		d.capSince = time.Time{}
+		return false
+	}
+	if d.capSince.IsZero() {
+		d.capSince = now
+	}
+	if now.Sub(d.capSince) < autoDumpAfter {
+		return false
+	}
+	if !d.lastDump.IsZero() && now.Sub(d.lastDump) < autoDumpEvery {
+		return false
+	}
+	d.lastDump = now
+	return true
+}
+
+// HandleDumpSignals writes a dump into dir on every SIGUSR1 until ctx ends,
+// and on its own when in flight sits at the cap (autoDump). A signal that
+// arrives during a dump is dropped.
+func (s *Server) HandleDumpSignals(ctx context.Context, dir string) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGUSR1)
+	defer signal.Stop(sig)
+	go s.runAutoDump(ctx, dir)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sig:
+			s.logDump("SIGUSR1", dir)
+			select {
+			case <-sig:
+			default:
+			}
+		}
+	}
+}
+
+// runAutoDump checks in flight against the cap every autoDumpCheck.
+func (s *Server) runAutoDump(ctx context.Context, dir string) {
+	t := time.NewTicker(autoDumpCheck)
+	defer t.Stop()
+	var d autoDump
+	a := s.admission()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if d.due(now, a.atCap()) {
+				s.logDump("in flight at the cap", dir)
+			}
+		}
+	}
+}
+
+func (s *Server) logDump(why, dir string) {
+	path, err := s.WriteDump(dir)
+	switch {
+	case errors.Is(err, ErrDumpInProgress):
+	case err != nil:
+		log.Printf("serve dump (%s): %v", why, err)
+	default:
+		log.Printf("serve dump (%s): %s", why, path)
+	}
+}

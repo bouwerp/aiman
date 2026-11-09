@@ -179,6 +179,9 @@ func runServe() error {
 	srv.SetPeerNotes(cfg.Sessions.PeerNotesOn())
 	srv.SetHostLoad(cfg.Host.Load)
 	srv.SetAgentNice(cfg.Host.Load.AgentNiceOrDefault())
+	// SIGUSR1 (aiman host dump) and a run at the in-flight cap write a dump
+	// here, where the journal cannot drop it.
+	go srv.HandleDumpSignals(ctx, filepath.Join(dir, "logs"))
 	tracker := usage.NewTracker(db, db, srv.PublishUsage)
 	tracker.SetContextWindow(cfg.Usage.ContextWindowTokens)
 	tracker.SetTestCommands(cfg.Usage.TestCommands)
