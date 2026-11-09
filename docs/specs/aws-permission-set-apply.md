@@ -1,6 +1,6 @@
 # `aiman aws permission-set-apply`: set up the delegated permission set with the AWS CLI
 
-**Revision:** 8 (P3, admin profiles without SSO, after consult rounds 3 and 4; approved by the operator on 2026-11-09 ("yes" to "Approve the rev 8 design and I start building?"); rev 5 is as built, PRs #116 and #117 merged 2026-11-09) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted); rev 4 adds P2, writing the delegation into the laptop config, at the operator's request the same day ("is there no way we can do this through the aws cli and set these values automatically?", "yes"); rev 6 to 8 add P3 after the operator hit `Missing the following required SSO configuration values: sso_start_url, sso_region` on `aws sso login`: their three admin profiles are plain IAM credentials, and they have no start URL ("can we not have an aiman command that configures this through the aws cli", "yes design it")
+**Revision:** 9 (as built: P3 merged in PR #119 on 2026-11-09; rev 8 approved by the operator the same day ("yes" to "Approve the rev 8 design and I start building?"); rev 5 is as built, PRs #116 and #117 merged 2026-11-09) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted); rev 4 adds P2, writing the delegation into the laptop config, at the operator's request the same day ("is there no way we can do this through the aws cli and set these values automatically?", "yes"); rev 6 to 8 add P3 after the operator hit `Missing the following required SSO configuration values: sso_start_url, sso_region` on `aws sso login`: their three admin profiles are plain IAM credentials, and they have no start URL ("can we not have an aiman command that configures this through the aws cli", "yes design it")
 **Task:** operator request on 2026-11-09 ("Can we have scripts in the aiman repo that sets that up through the AWS cli?") · **Spec:** extends `docs/specs/phone-aws-login.md` (the permission set it needs)
 
 ## Problem
@@ -114,7 +114,7 @@ Permissions the admin profile needs: `sso:ListInstances`, `sso:ListPermissionSet
 - Text output ends with `Wrote aws_delegations entry <profile> on remote <name> in <path>. Press c on the Agent API page to push it to the host.` instead of the `Put this in remotes[].aws_delegation` block. `--json` output is the `ApplyResult` object plus `"config": {"remote","profile","path"}`.
 - Pushing stays the TUI's: `c` on the Agent API page runs `MarshalServeConfig`, which also fills any SSO fact still empty from the laptop's `~/.aws/config`.
 
-### P3: admin profiles without SSO (rev 8, proposed)
+### P3: admin profiles without SSO (rev 8, built in PR #119)
 
 The operator's laptop profiles `dev`, `lab` and `prod` are IAM credentials, not Identity Center sessions, so `ReadSSOProfile` is `ErrNoSSO` for them, step 0 passes no `--region`, step 1 finds zero instances in the profile's working region, and even a lucky region leaves the delegation hint without a start URL, so the phone's `aws.login_start` answers `aws_no_sso`. The operator also does not know the start URL. P3 lets the command find both itself. **This replaces rev 5's behaviour for such a profile** (acceptance test `TestApplyWithoutSSORegionUsesProfileDefault`: no `--region`, empty hint, apply succeeds), which was never useful: the hint it produced could not sign a phone in. That test is removed and replaced by the discovery tests.
 
@@ -340,6 +340,17 @@ P2 CLI flags: `--remote <name>`, `--delegation-profile <name>` (meaningful only 
 `runAWS(args, cfg, out)` keeps its signature and dispatches `permission-set-apply`. `--dry-run` prints each planned step as one line `aws --profile <p> ...` and never calls `newAWSCLI`'s result. `--json` prints `ApplyResult` as one object. Text output ends with the `Done.` block in "CLI" and never prints `Done.` on failure. `awsUsage` names both subcommands and `--dry-run`.
 
 ## Deviations from the approved design
+
+As built in PR #119 (P3), compared with rev 8:
+
+- **`Unknown options` detection**: the real AWS CLI prints its usage text above the `Unknown options:` line, so `ExecAWSCLI` errors now prefer that line from stderr over the first line. With first-line-only errors the old-CLI fallback would never have triggered. Rev 8 said "first line of stderr".
+- **Missing config file**: a laptop with only `~/.aws/credentials` has no `~/.aws/config`; `ReadSSOProfile` then returns `os.ErrNotExist`, not `ErrNoSSO`. A missing file inside an existing `~/.aws` directory now counts as `noSSO`; a missing directory, a permission error or no HOME keeps the warning and rev 5 behaviour. Found in review.
+- **Region-less `ALL_REGIONS` answer**: the scan locates that exact instance ARN's region and keeps the `ALL_REGIONS` record instead of rerunning discovery over the union; an ARN found nowhere is the error `pass --sso-region`. Rev 8 said the scan "finds the region of the instance already identified" without saying how.
+- **Zero instances with `--sso-region`**: the error names `--sso-region <r>`, not the profile's `sso_region`.
+- **OIDC rejection**: `invalid_request` in the body counts even when the header names another error type, as the design's "header or body" intended.
+- **Identity store id check**: the derived URL is built only when the id matches `^d-[0-9a-f]+$`; otherwise a warning, no derived URL and no verification. With `--remote`, a hint without a start URL keeps the entry's existing `sso_start_url` and the output says the entry still lacks one and to rerun with `--start-url`; the `Done.` block prints `<pass --start-url; see warning above>` in its place.
+- **Config read twice for SSO profiles**: the rev 5 test `TestApplyHintFailureIsAWarning` needs the config read again at the hint step, so "read the profile once" holds only for the no-SSO path.
+- **No instance through `ALL_REGIONS`**: the error reads `no Identity Center instance visible to profile <p> in any region; ...` followed by the console steps.
 
 As built in PR #116 (P1) and PR #117 (P2), compared with rev 4:
 
