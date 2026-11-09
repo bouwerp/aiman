@@ -16,6 +16,8 @@ import (
 type cachedState struct {
 	State      string
 	Confidence string
+	// At is when the sample that produced it started.
+	At time.Time
 }
 
 // cachedSessionState reads the state the sweep last stored for a session.
@@ -66,10 +68,12 @@ func (s *Server) observeState(ctx context.Context, sess domain.Session) {
 	if s.hiddenSession(sess) {
 		return
 	}
+	at := time.Now()
 	sample := s.sampleState(ctx, sess)
 	s.sessionStates.Store(sess.ID, cachedState{
 		State:      string(sample.State),
 		Confidence: confidenceName(sample.Confidence),
+		At:         at,
 	})
 	rec := s.NotifyRecorder()
 	if rec == nil {

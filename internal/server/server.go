@@ -208,6 +208,10 @@ type Server struct {
 	// gate waits for it to reach zero.
 	inflight atomic.Int64
 
+	// adm is the admission gate and request accounting; admission() makes it.
+	adm     *admission
+	admOnce sync.Once
+
 	notifyRec *notify.Recorder
 	notifyLog NotifyLog
 	notifyMu  sync.RWMutex
@@ -372,11 +376,24 @@ func (s *Server) track(method string) func() {
 	return func() { s.inflight.Add(-1) }
 }
 
-func (s *Server) dispatch(ctx context.Context, line []byte) Response {
+// decodeAdmit decodes a request line and passes it through admission. It
+// returns the request, its context and the func that ends it, or the answer
+// to send instead.
+func (s *Server) decodeAdmit(ctx context.Context, line []byte) (Request, context.Context, func(), *Response) {
 	var req Request
 	if err := json.Unmarshal(line, &req); err != nil {
-		return Response{ID: "", Error: &Error{Code: CodeInvalidParams, Message: err.Error()}}
+		return req, ctx, nil, &Response{ID: "", Error: &Error{Code: CodeInvalidParams, Message: err.Error()}}
 	}
+	ctx, done, refused := s.admit(ctx, req)
+	return req, ctx, done, refused
+}
+
+func (s *Server) dispatch(ctx context.Context, line []byte) Response {
+	req, ctx, done, refused := s.decodeAdmit(ctx, line)
+	if refused != nil {
+		return *refused
+	}
+	defer done()
 	defer s.track(req.Method)()
 	switch req.Method {
 	case "ping":

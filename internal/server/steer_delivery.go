@@ -175,7 +175,7 @@ func (s *Server) deliverPTYSteer(ctx context.Context, sess domain.Session, text 
 	}
 	return usecase.TypeAndSubmit(ctx, text, steerSubmitTiming, s.steerProgress(sess.ID, text),
 		write(text), write("\r"),
-		func(context.Context) (string, error) { return s.pty.CaptureScreen(sess.ID) })
+		func(context.Context) (string, error) { return s.captureScreen(sess.ID) })
 }
 
 // steerFlight is one session's unfinished type. text is the one-line payload.

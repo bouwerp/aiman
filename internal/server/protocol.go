@@ -71,6 +71,12 @@ const (
 	// CodeAWSRateLimited refuses aws.login_start over the pending-login or
 	// start-rate limit.
 	CodeAWSRateLimited = "aws_rate_limited"
+	// CodeServerBusy refuses a request that found no free slot within 50ms.
+	// Error.Data is a RetryAfterData.
+	CodeServerBusy = "server_busy"
+	// CodeRateLimited refuses a session's request over its per-minute budget.
+	// Error.Data is a RetryAfterData.
+	CodeRateLimited = "rate_limited"
 )
 
 type Request struct {

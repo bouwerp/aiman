@@ -487,6 +487,7 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	defer s.endAttach(params.ID)
 
 	writeResponse(conn, Response{ID: req.ID, Result: map[string]any{"type": "pty_attached"}})
+	endSetup(ctx)
 
 	// An agent on the alternate screen scrolls that buffer itself, and the
 	// attaching terminal has to be on it too. The emulator is consulted as
@@ -773,5 +774,13 @@ func (s *Server) handlePTYAttachConn(ctx context.Context, conn net.Conn, line []
 		writeResponse(conn, errResp("", CodeInvalidParams, err.Error()))
 		return
 	}
+	// The stream holds an admission slot only while it is set up:
+	// handlePTYAttach ends the hold once it has answered.
+	ctx, admitted, refused := s.admit(ctx, req)
+	if refused != nil {
+		writeResponse(conn, *refused)
+		return
+	}
+	defer admitted()
 	s.handlePTYAttach(ctx, conn, req)
 }

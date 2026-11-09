@@ -238,8 +238,16 @@ type HostConfig struct {
 // host.load.agent_nice is unset.
 const DefaultAgentNice = 10
 
-// HostLoadConfig is host.load: how serve keeps the host responsive under load.
+// HostLoadConfig is host.load: how serve keeps the host responsive under
+// load. A zero field keeps its default.
 type HostLoadConfig struct {
+	// MaxInflight caps requests served at once; 0 is 64.
+	MaxInflight int `yaml:"max_inflight,omitempty"`
+	// PerCallerPerMinute is each session's request budget, with a burst of
+	// 60; 0 is 300.
+	PerCallerPerMinute int `yaml:"per_caller_per_minute,omitempty"`
+	// MaxCaptures caps the pane captures serve makes for itself at once; 0 is 4.
+	MaxCaptures int `yaml:"max_captures,omitempty"`
 	// AgentNice is the nice increment every agent pty starts at, so the
 	// agent and its builds yield to serve and the pty holders. Nil is
 	// DefaultAgentNice; 0 runs agents at the holder's priority.
