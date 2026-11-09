@@ -443,7 +443,10 @@ func (s *Server) watchSessionList(repo any) {
 }
 
 // storedSessions returns a copy of the stored rows, from the cache while it is
-// younger than sessionListTTL and no identity change has landed since.
+// younger than sessionListTTL and no identity change has landed since. The
+// copy is shallow: pointer, slice and map fields (Tunnels, AWSConfig,
+// AutonomousConfig) are shared with the cache, so callers must not mutate
+// them in place; assigning a new value to a field is fine.
 func (s *Server) storedSessions(ctx context.Context) ([]domain.Session, error) {
 	c := &s.sessList
 	c.mu.Lock()
@@ -501,8 +504,9 @@ func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 	return list, nil
 }
 
-// BackfillNames names and groups every stored row that has neither, once at
-// startup, so the read path never has to.
+// BackfillNames names and groups every stored row missing either, once at
+// startup, so the read path never has to. A failed save is logged and the pass
+// goes on; the first error is returned.
 func (s *Server) BackfillNames(ctx context.Context) error {
 	if s.repo == nil {
 		return nil
@@ -511,16 +515,20 @@ func (s *Server) BackfillNames(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var first error
 	for i := range list {
 		if list[i].Name != "" && list[i].Group != "" {
 			continue
 		}
 		s.backfill(&list[i], list)
 		if err := s.repo.Save(ctx, &list[i]); err != nil {
-			return err
+			log.Printf("backfill names: %s: %v", list[i].ID, err)
+			if first == nil {
+				first = err
+			}
 		}
 	}
-	return nil
+	return first
 }
 
 // backfillNew names and groups a row about to be created, against the rows
@@ -1743,9 +1751,17 @@ func (s *Server) handleRegister(ctx context.Context, req Request) Response {
 				existing = nil
 			}
 			row := registrableSession(in, existing)
-			if existing == nil {
-				s.backfillNew(ctx, &row)
+			if existing != nil {
+				// Save keeps a stored name or group for an empty incoming one;
+				// carry them so the backfill does not invent a new one.
+				if row.Name == "" {
+					row.Name = existing.Name
+				}
+				if row.Group == "" {
+					row.Group = existing.Group
+				}
 			}
+			s.backfillNew(ctx, &row)
 			if err := s.repo.Save(ctx, &row); err != nil {
 				return errResp(req.ID, CodeInvalidParams, err.Error())
 			}

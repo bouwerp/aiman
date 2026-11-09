@@ -55,6 +55,12 @@ var _ steerTarget = (*Server)(nil)
 // steerSession reads the row by id, with the live pty record folded in, so
 // the delivery gate never sees a cached hook state.
 func (s *Server) steerSession(ctx context.Context, id string) (domain.Session, bool) {
+	return s.sessionByID(ctx, id)
+}
+
+// sessionByID is the stored row read by id, bypassing the session list cache,
+// with the live pty record folded in as loadSessions folds it.
+func (s *Server) sessionByID(ctx context.Context, id string) (domain.Session, bool) {
 	if s.repo == nil {
 		return domain.Session{}, false
 	}

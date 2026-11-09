@@ -70,7 +70,7 @@ func (s *Server) handlePTYList(ctx context.Context, req Request) Response {
 	list := s.pty.List()
 	rows := map[string]domain.Session{}
 	if s.repo != nil {
-		stored, err := s.repo.List(ctx)
+		stored, err := s.storedSessions(ctx)
 		if err != nil {
 			// The runtime list is still right; only the annotation is missing.
 			log.Printf("pty.list: sessions: %v", err)

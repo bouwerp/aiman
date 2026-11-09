@@ -101,10 +101,17 @@ func (s *Server) lockedTarget(ctx context.Context, req Request, target string) (
 		unlock()
 		return fail(CodeInvalidParams, err.Error())
 	}
-	for _, sess := range list {
-		if sess.ID == first.ID {
-			return sess, list, unlock, nil
+	for i, sess := range list {
+		if sess.ID != first.ID {
+			continue
 		}
+		// The list is cached for identity only; a restart the previous call
+		// made (launch model, effort, vendor id, ended) is in the row.
+		if fresh, ok := s.sessionByID(ctx, sess.ID); ok {
+			sess = fresh
+			list[i] = fresh
+		}
+		return sess, list, unlock, nil
 	}
 	unlock()
 	return fail(CodeNotFound, "session not found")
