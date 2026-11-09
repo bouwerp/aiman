@@ -88,11 +88,15 @@ type admission struct {
 	maxInflight int
 	perMinute   int
 	buckets     map[string]*tokenBucket
+	prunedAt    time.Time
 	ring        [statsWindow]statSecond
 	logged      map[string]time.Time
 	warnedAt    time.Time
 	owners      map[int]string
 	ownersAt    time.Time
+	// rebuildMu lets one request rebuild a stale owner map while the others
+	// wait for it instead of each rebuilding their own.
+	rebuildMu sync.Mutex
 
 	inflight atomic.Int64
 	waiting  atomic.Int64
@@ -261,11 +265,41 @@ type tokenBucket struct {
 	at     time.Time
 }
 
+// bucketIdle is how long a full bucket stays untouched before it is dropped;
+// a new one starts full, so dropping it changes nothing for the caller.
+const bucketIdle = time.Minute
+
+// refund gives back the token a request spent before it was refused for
+// want of a slot, so server_busy and its retry cost one token.
+func (a *admission) refund(key string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if b := a.buckets[key]; b != nil {
+		b.tokens = math.Min(callerBurst, b.tokens+1)
+	}
+}
+
+// pruneBuckets drops buckets that are full and untouched for bucketIdle.
+// The caller holds a.mu.
+func (a *admission) pruneBuckets(now time.Time, rate float64) {
+	if now.Sub(a.prunedAt) < bucketIdle {
+		return
+	}
+	a.prunedAt = now
+	for key, b := range a.buckets {
+		idle := now.Sub(b.at)
+		if idle >= bucketIdle && b.tokens+idle.Seconds()*rate >= callerBurst {
+			delete(a.buckets, key)
+		}
+	}
+}
+
 // take spends one token, or returns how long until one is there.
 func (a *admission) take(key string, now time.Time) (time.Duration, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	rate := float64(a.perMinute) / 60
+	a.pruneBuckets(now, rate)
 	b := a.buckets[key]
 	if b == nil {
 		b = &tokenBucket{tokens: callerBurst, at: now}
@@ -433,18 +467,26 @@ func (s *Server) admitKey(ctx context.Context, req Request) (key string, limited
 // entries per request.
 func (s *Server) cachedHolderSessionOf(pid int) (string, bool) {
 	a := s.admission()
-	now := time.Now()
-	a.mu.Lock()
-	owners := a.owners
-	stale := owners == nil || now.Sub(a.ownersAt) > ownerTTL
-	a.mu.Unlock()
-	if stale {
-		owners = s.holderOwners()
-		a.mu.Lock()
-		a.owners, a.ownersAt = owners, now
-		a.mu.Unlock()
+	owners, fresh := a.ownerMap(time.Now())
+	if !fresh {
+		a.rebuildMu.Lock()
+		owners, fresh = a.ownerMap(time.Now())
+		if !fresh {
+			owners = s.holderOwners()
+			a.mu.Lock()
+			a.owners, a.ownersAt = owners, time.Now()
+			a.mu.Unlock()
+		}
+		a.rebuildMu.Unlock()
 	}
 	return ownerOf(pid, owners, parentPID)
+}
+
+// ownerMap returns the cached pid-to-session map and whether it is fresh.
+func (a *admission) ownerMap(now time.Time) (map[int]string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.owners, a.owners != nil && now.Sub(a.ownersAt) <= ownerTTL
 }
 
 // admit runs the gate for req: the caller's budget, then a slot. It returns
@@ -465,6 +507,9 @@ func (s *Server) admit(ctx context.Context, req Request) (context.Context, func(
 	}
 	sl, ok := a.acquire(ctx)
 	if !ok {
+		if limited && !unlimitedMethods[req.Method] {
+			a.refund(key)
+		}
 		a.record(req.Method, key, time.Since(start), outcomeRejected, start)
 		a.logRefusal(key, fmt.Sprintf("rpc: caller %s rejected: %d in flight, method %s", key, a.inflight.Load(), req.Method), start)
 		r := retryResp(req.ID, CodeServerBusy, "server busy: too many requests in flight", busyRetryMS*time.Millisecond)

@@ -246,19 +246,23 @@ func (s *Server) sampleRules(sample *stateSample) {
 }
 
 // captureLive renders a session's screen from the PTY runtime in this process,
-// inside the capture semaphore so waiters, hook reports and the sweep cannot
-// capture more than MaxCaptures panes at once.
+// through captureScreen.
 func (s *Server) captureLive(sess domain.Session) (string, bool) {
 	if s.pty == nil || sess.IsLegacyTmux() {
 		return "", false
 	}
-	release := s.admission().captureSlot()
-	screen, err := s.pty.CaptureScreen(sess.ID)
-	release()
+	screen, err := s.captureScreen(sess.ID)
 	if err != nil {
 		return "", false
 	}
 	return screen, true
+}
+
+// captureScreen is CaptureScreen inside the capture semaphore. Every capture
+// serve makes for itself goes through it.
+func (s *Server) captureScreen(id string) (string, error) {
+	defer s.admission().captureSlot()()
+	return s.pty.CaptureScreen(id)
 }
 
 // confidenceName is a confidence as the API spells it.
@@ -574,7 +578,7 @@ func (s *Server) handleRead(ctx context.Context, req Request) Response {
 	var text string
 	switch {
 	case s.pty != nil:
-		screen, cerr := s.pty.CaptureScreen(sess.ID)
+		screen, cerr := s.captureScreen(sess.ID)
 		if cerr != nil {
 			return errResp(req.ID, CodeInvalidParams, cerr.Error())
 		}
@@ -627,21 +631,52 @@ func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
 	if sess.IsLegacyTmux() {
 		return legacyTerminalResp(req.ID, sess)
 	}
+	submitted, refused := s.submitPrompt(ctx, req, sess, params)
+	if refused != nil {
+		return *refused
+	}
+	result := map[string]any{"type": "prompt_result", "sent": true}
+	if params.Wait {
+		until := parseUntil(params.Until)
+		if until == "" {
+			until = "settled"
+		}
+		// The wait runs outside the session lock: it gives its admission slot
+		// back between ticks, and a prompt holding a slot while it queues on
+		// the lock must not keep the waiter from taking one again.
+		st, err := s.waitState(ctx, sess, until, params.Timeout, submitted)
+		if err != nil {
+			return errResp(req.ID, CodeTimeout, err.Error())
+		}
+		result["state"] = string(st)
+	}
+	return Response{ID: req.ID, Result: result}
+}
+
+// submitPrompt types a prompt into the session under its lock and returns
+// when the typing finished, so a wait after it can tell a state sampled
+// before the prompt from one sampled after.
+func (s *Server) submitPrompt(ctx context.Context, req Request, sess domain.Session, params promptParams) (time.Time, *Response) {
 	unlock := s.lockSession(sess.ID)
 	defer unlock()
 	st, _ := s.classify(ctx, sess)
 	if st == domain.AgentStateWaitingInput && !params.Force {
-		return errResp(req.ID, CodeAgentBlocked, "session is waiting for input")
+		r := errResp(req.ID, CodeAgentBlocked, "session is waiting for input")
+		return time.Time{}, &r
 	}
 	if s.remote == nil {
-		return errResp(req.ID, CodeInvalidParams, "no remote executor")
+		r := errResp(req.ID, CodeInvalidParams, "no remote executor")
+		return time.Time{}, &r
 	}
 	if err := usecase.SendSessionPrompt(ctx, s.remote, sess, params.Text); err != nil {
+		code := CodeInvalidParams
 		if errors.Is(err, domain.ErrLegacyTmuxSession) {
-			return errResp(req.ID, CodeLegacyTerminal, err.Error())
+			code = CodeLegacyTerminal
 		}
-		return errResp(req.ID, CodeInvalidParams, err.Error())
+		r := errResp(req.ID, code, err.Error())
+		return time.Time{}, &r
 	}
+	submitted := time.Now()
 	actor := domain.EventActorUser
 	if req.Caller != "" && req.Caller == sess.ID {
 		actor = domain.EventActorAgent
@@ -649,19 +684,7 @@ func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
 	s.appendEvent(ctx, sess.ID, actor, domain.EventPromptSubmitted, map[string]any{
 		"chars": len(params.Text), "force": params.Force, "wait": params.Wait,
 	})
-	result := map[string]any{"type": "prompt_result", "sent": true}
-	if params.Wait {
-		until := parseUntil(params.Until)
-		if until == "" {
-			until = "settled"
-		}
-		st, err := s.waitState(ctx, sess, until, params.Timeout)
-		if err != nil {
-			return errResp(req.ID, CodeTimeout, err.Error())
-		}
-		result["state"] = string(st)
-	}
-	return Response{ID: req.ID, Result: result}
+	return submitted, nil
 }
 
 // handlePeerPrompt queues session.prompt from outside the target's tree as a
@@ -733,7 +756,7 @@ func (s *Server) waitPeerNote(ctx context.Context, sess domain.Session, id int64
 	if deadline, ok := waitCtx.Deadline(); ok {
 		rest = max(1, int(time.Until(deadline).Milliseconds()))
 	}
-	return s.waitState(waitCtx, cur, until, &rest)
+	return s.waitState(waitCtx, cur, until, &rest, at)
 }
 
 // peerWaitQuiet is how long after the submit a target without hook reports
@@ -785,7 +808,7 @@ func (s *Server) handleWait(ctx context.Context, req Request) Response {
 	if until == "" {
 		until = "settled"
 	}
-	st, err := s.waitState(ctx, sess, until, params.TimeoutMS)
+	st, err := s.waitState(ctx, sess, until, params.TimeoutMS, time.Time{})
 	if err != nil {
 		return errResp(req.ID, CodeTimeout, err.Error())
 	}
@@ -799,7 +822,10 @@ func settled(st domain.AgentState) bool {
 	return st == domain.AgentStateIdle || st == domain.AgentStateWaitingInput || st == domain.AgentStateErrored
 }
 
-func (s *Server) waitState(ctx context.Context, sess domain.Session, until domain.AgentState, timeoutMS *int) (domain.AgentState, error) {
+// waitState polls a session until it reaches until or the timeout ends. A
+// cached state sampled before since is ignored, so a wait after a prompt does
+// not read the state the session had before it.
+func (s *Server) waitState(ctx context.Context, sess domain.Session, until domain.AgentState, timeoutMS *int, since time.Time) (domain.AgentState, error) {
 	waitCtx := ctx
 	cancel := func() {}
 	ms := 120000
@@ -814,7 +840,7 @@ func (s *Server) waitState(ctx context.Context, sess domain.Session, until domai
 	defer ticker.Stop()
 	sl := slotFrom(ctx)
 	for {
-		st := s.waitSample(waitCtx, sess)
+		st := s.waitSample(waitCtx, sess, since)
 		if until == "settled" && settled(st) {
 			return st, nil
 		}
@@ -833,9 +859,9 @@ func (s *Server) waitState(ctx context.Context, sess domain.Session, until domai
 
 // waitSample is a waiter's reading of a session: the state the sweep or the
 // last hook report cached, else a classify of its own while nothing has been
-// sampled, so waiters do not add captures to the sweep's.
-func (s *Server) waitSample(ctx context.Context, sess domain.Session) domain.AgentState {
-	if c, ok := s.cachedSessionState(sess.ID); ok && c.State != "" {
+// sampled since since, so waiters do not add captures to the sweep's.
+func (s *Server) waitSample(ctx context.Context, sess domain.Session, since time.Time) domain.AgentState {
+	if c, ok := s.cachedSessionState(sess.ID); ok && c.State != "" && !c.At.Before(since) {
 		return domain.AgentState(c.State)
 	}
 	st, _ := s.classify(ctx, sess)

@@ -92,6 +92,7 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 		writeResponse(conn, *refused)
 		return
 	}
+	defer admitted()
 	// Subscribe before replying so nothing published after the attach is lost.
 	hubCh, unsubscribe := s.hub.Subscribe()
 	defer unsubscribe()

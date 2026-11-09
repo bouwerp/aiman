@@ -473,7 +473,7 @@ func (s *Server) captureHandoverPane(ctx context.Context, sess domain.Session) (
 	if sess.IsLegacyTmux() || s.pty == nil {
 		return "", nil
 	}
-	return s.pty.CaptureScreen(sess.ID)
+	return s.captureScreen(sess.ID)
 }
 
 // paneTail keeps the last handover.PaneLines of a cleaned capture. Trailing

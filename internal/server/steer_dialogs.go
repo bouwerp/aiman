@@ -14,7 +14,7 @@ func (s *Server) updateDialogShowing(sess domain.Session) bool {
 	if sess.IsLegacyTmux() || s.pty == nil {
 		return false
 	}
-	screen, err := s.pty.CaptureScreen(sess.ID)
+	screen, err := s.captureScreen(sess.ID)
 	if err != nil {
 		return false
 	}
