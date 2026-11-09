@@ -72,11 +72,8 @@ func isSessionEvents(line []byte) bool {
 }
 
 // handleSessionEventsConn streams activity changes until the client goes away.
-//
-// The dashboard previously learned what a session was doing by polling it over
-// SSH twice a second, per session. Everything it was asking for is known here
-// the moment it happens, so this inverts the flow: serve watches the holders'
-// activity files locally and pushes what changed.
+// Serve watches the holders' activity files locally and pushes what changed,
+// so clients need no per-session poll over SSH.
 func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, line []byte) {
 	var req Request
 	if err := json.Unmarshal(line, &req); err != nil {
