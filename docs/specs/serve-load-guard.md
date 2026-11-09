@@ -1,6 +1,6 @@
 # Serve load guard: stay answerable when the host is swamped
 
-**Revision:** 3 (after consult rounds 1 and 2) · **Size:** project · **Status:** proposed
+**Revision:** 3 (after consult rounds 1 and 2) · **Size:** project · **Status:** approved by the operator on 2026-11-09 ("Approve")
 **Task:** operator report on 2026-11-09: "The serve got inundated with rpc requests and completely failed now - we need to guard against that"; "The rpc flood was on the host, and it seemed to lock up the db".
 
 ## Problem
@@ -182,6 +182,13 @@ const (
     CodeRateLimited = "rate_limited"
 )
 func (s *Server) RPCStats() RPCStats
+func (s *Server) SweepSkipped() int // P0: sweeps skipped because the previous one was still running; RPCStats.SweepSkipped reads it
+// P0: EventPollInterval becomes 1s; the stream also reads the session list at once after a hub event.
+
+// internal/ptyruntime/ptyfake (test infrastructure the acceptance tests use)
+func (f *FakePTY) SetCaptureDelay(d time.Duration)
+func (f *FakePTY) Captures() int
+func (f *FakePTY) MaxConcurrentCaptures() int
 
 // internal/infra/config
 type HostLoadConfig struct {
