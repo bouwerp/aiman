@@ -1,6 +1,7 @@
 package awsdelegation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -39,24 +39,42 @@ type AWSCLI interface {
 // ExecAWSCLI runs the aws binary under one profile with JSON output.
 type ExecAWSCLI struct{ Profile string }
 
-// Run executes the command and returns its combined output, because the CLI
-// writes "An error occurred (...)" to stderr. On a non-zero exit the error is
-// "aws <service> <subcommand>: <first line of that output>".
+// Run executes the command and returns its stdout alone, so a warning the CLI
+// prints on stderr cannot break the JSON. On a non-zero exit the error is
+// "aws <service> <subcommand>: <first line of stderr, else of stdout>", since
+// the CLI writes "An error occurred (...)" to stderr.
 func (e ExecAWSCLI) Run(ctx context.Context, args ...string) ([]byte, error) {
-	// Apply passes --profile on every call so a fake can check it; command
-	// already adds it, so a leading duplicate is dropped.
+	args = e.stripProfile(args)
+	cmd := e.command(ctx, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, runError(args, stdout.String(), stderr.String(), err)
+	}
+	return stdout.Bytes(), nil
+}
+
+// stripProfile drops a leading --profile <e.Profile>: Apply passes it on every
+// call so a fake can check it, and command already adds it.
+func (e ExecAWSCLI) stripProfile(args []string) []string {
 	if len(args) >= 2 && args[0] == "--profile" && args[1] == e.Profile {
-		args = args[2:]
+		return args[2:]
 	}
-	out, err := e.command(ctx, args...).CombinedOutput()
-	if err != nil {
-		msg := firstLine(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		return nil, fmt.Errorf("aws %s: %s", awsOperation(args), msg)
+	return args
+}
+
+// runError is a failed call's error: the first line of stderr, else of stdout,
+// else err itself.
+func runError(args []string, stdout, stderr string, err error) error {
+	msg := firstLine(stderr)
+	if msg == "" {
+		msg = firstLine(stdout)
 	}
-	return out, nil
+	if msg == "" {
+		msg = err.Error()
+	}
+	return fmt.Errorf("aws %s: %s", awsOperation(args), msg)
 }
 
 // command builds aws --profile <p> --output json <args...>.
@@ -138,13 +156,19 @@ func normalizeSpec(spec ApplySpec) (ApplySpec, error) {
 }
 
 // ssoRegion is the admin profile's sso_region, or empty when the profile has
-// no SSO keys or the config cannot be read.
-func ssoRegion(spec ApplySpec) string {
+// no SSO keys or the config cannot be read. Any failure other than a profile
+// without SSO keys is a warning line on log, so an unreadable config is not
+// mistaken for a non-SSO profile.
+func ssoRegion(spec ApplySpec, log io.Writer) string {
 	if spec.AWSConfigPath == "" {
+		_, _ = fmt.Fprintf(log, "warning: no home directory to find ~/.aws/config; Identity Center calls use the profile's default region\n")
 		return ""
 	}
 	p, err := ReadSSOProfile(spec.AWSConfigPath, spec.Profile)
 	if err != nil {
+		if !errors.Is(err, ErrNoSSO) {
+			_, _ = fmt.Fprintf(log, "warning: cannot read sso_region of profile %s: %v; Identity Center calls use the profile's default region\n", spec.Profile, err)
+		}
 		return ""
 	}
 	return p.Region
@@ -158,7 +182,7 @@ func Apply(ctx context.Context, cli AWSCLI, spec ApplySpec, log io.Writer) (Appl
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	r := &applyRun{ctx: ctx, cli: cli, spec: spec, log: log, region: ssoRegion(spec)}
+	r := &applyRun{ctx: ctx, cli: cli, spec: spec, log: log, region: ssoRegion(spec, log)}
 	for _, step := range []func() error{
 		r.instance,
 		r.account,
@@ -437,6 +461,11 @@ type requestStatus struct {
 	RequestID     string `json:"RequestId"`
 	Status        string `json:"Status"`
 	FailureReason string `json:"FailureReason"`
+	// TargetID, PermissionSetARN and PrincipalID are set on an assignment
+	// creation status only.
+	TargetID         string `json:"TargetId"`
+	PermissionSetARN string `json:"PermissionSetArn"`
+	PrincipalID      string `json:"PrincipalId"`
 }
 
 // assignment is step 6: assign the set to the principal for the account.
@@ -502,25 +531,15 @@ func (r *applyRun) resolveConflict(conflictErr error) error {
 		r.logf("assignment for %s in account %s exists (create answered ConflictException)", r.res.UserName, r.res.AccountID)
 		return nil
 	}
-	var out struct {
-		Rows []struct {
-			RequestID   string `json:"RequestId"`
-			CreatedDate string `json:"CreatedDate"`
-		} `json:"AccountAssignmentsCreationStatus"`
-	}
-	if err := r.call(&out, "sso-admin", "list-account-assignment-creation-status", "--instance-arn", r.res.InstanceARN,
-		"--filter", "Status="+statusInProgress); err != nil {
+	st, found, err := r.ourInFlightCreate()
+	if err != nil {
 		return err
 	}
-	if len(out.Rows) == 0 {
+	if !found {
 		return conflictErr
 	}
-	// The listing carries no target, so the newest in-flight create is the one
-	// most likely to be this assignment's.
-	sort.SliceStable(out.Rows, func(a, b int) bool { return out.Rows[a].CreatedDate > out.Rows[b].CreatedDate })
-	id := out.Rows[0].RequestID
-	r.logf("waiting for in-flight assignment request %s", id)
-	if err := r.settleAssignment(requestStatus{RequestID: id, Status: statusInProgress}); err != nil {
+	r.logf("waiting for in-flight assignment request %s", st.RequestID)
+	if err := r.settleAssignment(st); err != nil {
 		return err
 	}
 	r.res.CreatedAssignment = true
@@ -528,16 +547,62 @@ func (r *applyRun) resolveConflict(conflictErr error) error {
 	return nil
 }
 
+// ourInFlightCreate finds an IN_PROGRESS assignment creation for this
+// account, permission set and principal. The listing's rows carry no target,
+// so each is described once; the first matching status is returned.
+func (r *applyRun) ourInFlightCreate() (requestStatus, bool, error) {
+	var out struct {
+		Rows []struct {
+			RequestID string `json:"RequestId"`
+		} `json:"AccountAssignmentsCreationStatus"`
+	}
+	if err := r.call(&out, "sso-admin", "list-account-assignment-creation-status", "--instance-arn", r.res.InstanceARN,
+		"--filter", "Status="+statusInProgress); err != nil {
+		return requestStatus{}, false, err
+	}
+	for _, row := range out.Rows {
+		if row.RequestID == "" {
+			continue
+		}
+		st, err := r.describeAssignment(row.RequestID)
+		if err != nil {
+			return requestStatus{}, false, err
+		}
+		if r.isOurAssignment(st) {
+			if st.RequestID == "" {
+				st.RequestID = row.RequestID
+			}
+			return st, true, nil
+		}
+	}
+	return requestStatus{}, false, nil
+}
+
+// isOurAssignment reports whether a creation status is for this account,
+// permission set and principal. Each field the status carries must match; the
+// API sets all three.
+func (r *applyRun) isOurAssignment(st requestStatus) bool {
+	matches := func(got, want string) bool { return got == "" || got == want }
+	return matches(st.TargetID, r.res.AccountID) &&
+		matches(st.PermissionSetARN, r.res.PermissionSetARN) &&
+		matches(st.PrincipalID, r.res.PrincipalID)
+}
+
+// describeAssignment reads one assignment creation status.
+func (r *applyRun) describeAssignment(id string) (requestStatus, error) {
+	var out struct {
+		Status requestStatus `json:"AccountAssignmentCreationStatus"`
+	}
+	err := r.call(&out, "sso-admin", "describe-account-assignment-creation-status", "--instance-arn", r.res.InstanceARN,
+		"--account-assignment-creation-request-id", id)
+	return out.Status, err
+}
+
 // settleAssignment turns an assignment creation status into done or an error,
 // polling while it is IN_PROGRESS.
 func (r *applyRun) settleAssignment(st requestStatus) error {
 	return r.settle("assignment", st, func() (requestStatus, error) {
-		var out struct {
-			Status requestStatus `json:"AccountAssignmentCreationStatus"`
-		}
-		err := r.call(&out, "sso-admin", "describe-account-assignment-creation-status", "--instance-arn", r.res.InstanceARN,
-			"--account-assignment-creation-request-id", st.RequestID)
-		return out.Status, err
+		return r.describeAssignment(st.RequestID)
 	})
 }
 
@@ -567,7 +632,8 @@ func (r *applyRun) provision() error {
 }
 
 // settle reads a request status: SUCCEEDED is done, FAILED is the error with
-// its reason, and IN_PROGRESS polls every PollInterval up to PollTimeout.
+// its reason, and IN_PROGRESS polls every PollInterval up to PollTimeout. A
+// status that needs polling but has no RequestId is an error at once.
 func (r *applyRun) settle(what string, st requestStatus, poll func() (requestStatus, error)) error {
 	id := st.RequestID
 	deadline := time.Now().Add(r.spec.PollTimeout)
@@ -578,6 +644,9 @@ func (r *applyRun) settle(what string, st requestStatus, poll func() (requestSta
 			return nil
 		case statusFailed:
 			return fmt.Errorf("%s %s failed: %s", what, id, st.FailureReason)
+		}
+		if id == "" {
+			return fmt.Errorf("%s response has status %q and no RequestId to poll", what, st.Status)
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("%s request %s still %s after %s; it may still complete, rerun to check", what, id, st.Status, r.spec.PollTimeout)
@@ -627,7 +696,7 @@ func Plan(spec ApplySpec) ([]ApplyStep, error) {
 	if err != nil {
 		return nil, err
 	}
-	region := ssoRegion(spec)
+	region := ssoRegion(spec, io.Discard)
 	const (
 		inst  = "<instance-arn>"
 		store = "<identity-store-id>"
