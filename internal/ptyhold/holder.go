@@ -14,6 +14,8 @@ import (
 	"time"
 
 	pty "github.com/creack/pty/v2"
+
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // controlPollInterval is how often the holder checks the resize/kill marker
@@ -68,7 +70,7 @@ func Run(root, id string) (err error) {
 	}
 
 	//nolint:gosec // G204: running the operator-configured agent command is the purpose of this program
-	cmd := exec.Command("bash", "-l", "-c", childShell(spec.Command))
+	cmd := exec.Command("bash", "-l", "-c", childShell(spec.Command, spec.AgentNice))
 	cmd.Dir = spec.Dir
 	// The holder allocates a real PTY, so the child is entitled to a terminal
 	// type — but the holder is spawned by aiman serve, a daemon with no tty and
@@ -400,11 +402,24 @@ const defaultTERM = "xterm-256color"
 // presenting an empty pane. The user npm prefix comes before the system PATH
 // so an agent reinstalled there (agents.move_prefix) wins over a root-owned
 // copy; the other user prefixes come after it.
-func childShell(command string) string {
+//
+// nice (host.load.agent_nice, clamped to [0,19]) is the increment the agent
+// is born with: the command runs under `exec nice -n <n> bash -c <command>`,
+// so compound shell text still works and everything the agent spawns
+// inherits the lower priority while the holder keeps its own. 0 adds nothing.
+func childShell(command string, nice int) string {
+	if n := clampNice(nice); n > 0 {
+		command = fmt.Sprintf("exec nice -n %d bash -c %s", n, shellx.Quote(command))
+	}
 	return fmt.Sprintf(
 		"export PATH=\"$HOME/.npm-global/bin:$PATH:$HOME/.local/bin:$HOME/.kilo/bin:$HOME/bin:$HOME/.bun/bin:$HOME/.local/share/pnpm:$HOME/.pnpm:$HOME/.yarn/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin\"; export TERM=%s COLORTERM=truecolor LANG=\"${LANG:-%s}\"; %s",
 		defaultTERM, defaultUTF8Locale, command,
 	)
+}
+
+// clampNice bounds a nice increment to what nice(1) accepts without root.
+func clampNice(n int) int {
+	return min(max(n, 0), 19)
 }
 
 // withTerminalEnv ensures TERM, COLORTERM, and a UTF-8 locale are present,

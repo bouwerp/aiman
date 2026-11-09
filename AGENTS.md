@@ -438,6 +438,7 @@ Key config fields:
 - `ci.trusted_logins`: GitHub logins whose PR review comments the watcher steers whatever their `author_association` (review bots show `NONE`, private organisation members `CONTRIBUTOR`). `MarshalServeConfig` pushes it.
 - `review.consult_timeout`: how long a review session's consult may run without a report; default 30m (`config.DefaultReviewConsultTimeout`). Other parents' consults use `handover.timeout` (`coordinator.ConsultTimeouts`). `MarshalServeConfig` pushes it. `review.reveal {session, single}` writes `.aiman_pr_description.md` into the review's scratch directory once `review:blind` is done and every stored consult of the session has a `consult.finished` or `consult.abandoned` row; with no consult finished since the last `review.refreshed` it needs `single`. `review.refresh {session, force}` (the review session itself or the operator only) is a no-op while the PR head is unchanged unless `force`; otherwise it removes the description first, retires every running consult (`consult.abandoned` with `reason: refresh`), restages the PR worktree at the new head and reopens the blind, informed, post and gate to-dos. `review.post` refuses while `gate:review` is open, after a successful post (`review_already_posted`) until that refresh, before reveal (`review_not_ready`), while the file is incomplete (`review_incomplete`), or when the PR head moved (`review_head_moved`). APPROVE is `invalid_params` after those checks; `review.approve` is the only route to one. `review.run` runs the command in the review sandbox (`review.Compose`: no network unless `review.sandbox.network` names one, read-only root, no capabilities, an executable `/tmp` tmpfs, and named cache volumes that a `cache-init` service chowns to the session's user before each run; host paths other than `src` and `out` are never mounted, and `AIMAN_TEST_DOCKER=1` runs `TestSandboxRunsGoTestInDocker` against real Docker, as CI does); `review.debug` attaches editor debug ports and is refused (`create_failed`, naming the key) while the sandbox has no network, because compose then publishes nothing and `dlv`/`react-devtools` cannot be fetched; `review.coverage` reports changed-line coverage or `review_no_coverage`. `review.fix_timeout` (default 60m) bounds a fixer. CLI: `aiman review reveal [--single]`, `aiman review refresh [--force]`, `aiman review post <file> [--request-changes]`, `aiman review run`, `aiman review debug`, `aiman review coverage`, and the fix and approve commands above.
 - `review.sandbox.network`: unset or `none` is offline. Any other value uses compose's default network (`network_mode` stays unset, so `host` is not reachable from config) and applies to `review.run`, `review.coverage` and `review.debug` alike. Offline, `review.debug` is refused, and a PR with module or npm dependencies fails its first run: the cache volumes start empty and `compose down -v` deletes them.
+- `host.load.agent_nice`: nice increment for every agent pty serve creates (default 10, 0 disables, clamped to [0,19]); see Terminal runtime. `MarshalServeConfig` pushes it with `host`.
 - `host.update`: `mode` (`off`, `notify` or `auto`; default auto, an unknown value is notify) and `check_every` (default 10m, floor 1m) for the host's own release updates. `MarshalServeConfig` pushes it.
 - `handover.child`: start a handover child on each handover write; unset means on. `handover.timeout`: limit for one child run; default 10m. `MarshalServeConfig` pushes both to serve.
 - `design`: `repo` (owner/name, git URL or local path of the docs repository; empty keeps pages in the session's git dir), `dir` (default `config.DefaultDesignDir`, `docs/designs`) and `site` (base URL of the rendered pages; empty asks GitHub Pages). `MarshalServeConfig` pushes it to serve.
@@ -490,6 +491,16 @@ updating serve leaves holders and their agents running; the next serve finds
 them again by scanning `~/.aiman/pty/`. Sessions also survive laptop
 disconnects. A holder ends when its agent exits, on `pty.kill`, or on a host
 reboot.
+
+**Agent priority**: agents start at `nice 10` from `host.load.agent_nice`
+(`config.HostLoadConfig.AgentNiceOrDefault`: nil is 10, 0 disables, clamped to
+[0,19]). serve passes it to every pty it creates (`Server.SetAgentNice`): each
+`pty.create`, including helper ptys a session creates, and the `review.debug` pty; `ptyruntime.Spec.AgentNice` reaches the holder as
+`agent_nice` in `request.json`, and `childShell` runs the command as
+`exec nice -n <n> bash -c <quoted command>` after the PATH and TERM exports. Builds,
+tests, `git` and `ssh` inside a session inherit it. The holder itself is never
+reniced, nor is a running agent; a request without `agent_nice` (an older serve)
+runs the agent at the holder's niceness.
 
 Socket API (`internal/server/handlers_pty.go`): `pty.create/list/get/input/
 capture/resize/run/kill/forget` are plain JSON methods; `pty.attach` answers
