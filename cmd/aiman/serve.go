@@ -150,7 +150,7 @@ func runServe() error {
 	ensureAimanSkill(ctx, db)
 	ensureAgentHooks(agentHookOptions(cfg))
 	store := contextstore.NewFiles(contextstore.Root(dir))
-	if ix, err := contextstore.OpenIndex(db.DB()); err != nil {
+	if ix, err := contextstore.OpenIndex(db.DB(), db.Reader()); err != nil {
 		log.Printf("context index unavailable: %v", err)
 	} else {
 		reindexStart := time.Now()
@@ -165,8 +165,11 @@ func runServe() error {
 	ptyMgr := ptyruntime.NewManager()
 	defer ptyMgr.CloseAll()
 	srv := server.New(ln, db, localExec, flow, store, ptyMgr, version)
+	if err := srv.BackfillNames(ctx); err != nil {
+		log.Printf("session name backfill: %v", err)
+	}
 	flow.SetDoneItems(srv.DoneItems())
-	if jobs, err := memoryjob.Open(db.DB()); err != nil {
+	if jobs, err := memoryjob.Open(db.DB(), db.Reader()); err != nil {
 		log.Printf("memory jobs unavailable: %v", err)
 	} else {
 		srv.SetMemoryJobs(jobs)
@@ -174,6 +177,11 @@ func runServe() error {
 	todos := todo.NewFiles(filepath.Join(dir, "todos"))
 	srv.EnableTodos(todos, db)
 	srv.SetPeerNotes(cfg.Sessions.PeerNotesOn())
+	srv.SetHostLoad(cfg.Host.Load)
+	srv.SetAgentNice(cfg.Host.Load.AgentNiceOrDefault())
+	// SIGUSR1 (aiman host dump) and a run at the in-flight cap write a dump
+	// here, where the journal cannot drop it.
+	go srv.HandleDumpSignals(ctx, filepath.Join(dir, "logs"))
 	tracker := usage.NewTracker(db, db, srv.PublishUsage)
 	tracker.SetContextWindow(cfg.Usage.ContextWindowTokens)
 	tracker.SetTestCommands(cfg.Usage.TestCommands)

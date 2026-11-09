@@ -166,7 +166,9 @@ func (s *Server) handleReview(ctx context.Context, req Request, p createParams, 
 	if err != nil {
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
-	if other, ok := liveReview(existing, ref.String()); ok {
+	if other, ok := liveReview(s.freshRows(ctx, existing, func(c domain.Session) bool {
+		return strings.EqualFold(c.ReviewPR, ref.String())
+	}), ref.String()); ok {
 		return errResp(req.ID, CodeReviewExists, fmt.Sprintf("session %s already reviews %s", other.Name, ref))
 	}
 	name, code, err := reviewName(p.Name, existing, ref)

@@ -1,6 +1,6 @@
 # Serve load guard: stay answerable when the host is swamped
 
-**Revision:** 3 (after consult rounds 1 and 2) · **Size:** project · **Status:** approved by the operator on 2026-11-09 ("Approve")
+**Revision:** 4 (as built) · **Size:** project · **Status:** approved by the operator on 2026-11-09 ("Approve"); built in PRs #124, #123, #126, #125, #127, #128 and released in v0.39.0
 **Task:** operator report on 2026-11-09: "The serve got inundated with rpc requests and completely failed now - we need to guard against that"; "The rpc flood was on the host, and it seemed to lock up the db".
 
 ## Problem
@@ -80,7 +80,7 @@ flowchart LR
 
 ### Behaviour
 
-0. **Stop the stacking first** (P0, smallest change, ships alone if needed). `sweepStates` takes a `TryLock`; while the previous sweep runs the tick is skipped and `SweepSkipped` counts it. `session.events` reads the session list from the cache in Behaviour 2 (until that lands, no more often than once a second) and otherwise only when a hub event arrived since the last read.
+0. **Stop the stacking first** (P0, smallest change, ships alone if needed). `sweepStates` takes a `TryLock`; while the previous sweep runs the tick is skipped and `SweepSkipped` counts it. `session.events` reads the session list no more often than once a second (and from the cache in Behaviour 2 once that lands, so a new row reaches the stream through the cache's invalidation, not by polling the table); a hub event is forwarded at once and does not itself trigger a table read.
 1. **Database** (`internal/infra/sqlite/repository.go`, P1). `NewRepository` opens two `*sql.DB` on the same file. Both DSNs carry `_pragma=busy_timeout(5000)`, `_pragma=journal_mode(WAL)` (the mode persists in the file; saying it on every connection costs nothing and covers a file created by an older binary) and `_pragma=synchronous(NORMAL)` (per connection, so it has to be in the DSN, as the `busy_timeout` comment already explains). The writer DSN adds `_txlock=immediate` (valid for `modernc.org/sqlite`; it applies to `Begin`/`BeginTx`, which `ApplyUsage` and `AppendIfDue` use; autocommit `Save` is unaffected) and `SetMaxOpenConns(1)`. The reader has `SetMaxOpenConns(8)` and `SetConnMaxIdleTime(1m)`, so idle readers do not pin the WAL for ever. Every read-only method (`List`, `Get`, the `ListUndelivered*`, the usage and notify reads) queries the reader; every mutating method uses the writer. `DB()` returns the writer and **new** `Reader()` returns the reader; `contextstore.OpenIndex` and `memoryjob.Open` take both and run their `SELECT`s (`Search`, `Paths`, `Reindex`'s walk, `Pending`) on the reader, so a context search or a startup reindex never holds the single writer connection while a hook `Save` waits. `aiman-trigger` is a second process on the same file; WAL makes its writes and serve's coexist without the five-second holds, and nothing in this design assumes a single process. A `PRAGMA wal_checkpoint(PASSIVE)` runs on the writer every 5 minutes. `Close` closes the reader pool first, then runs `wal_checkpoint(TRUNCATE)` on the writer, then closes it; when `aiman-trigger` still holds the file the checkpoint answers busy, which is logged and does not fail the close. A copy of `aiman.db` taken after a clean stop is consistent without its `-wal` and `-shm` sidecars (an rsync or backup while serve runs must take all three files; the README says so). `aiman downgrade` swaps the binary only and opens a WAL file fine. The laptop's own database gets the same settings on its own file.
 2. **Session list cache** (`handlers_session.go`, P1). `loadSessions` reads the stored list from a cache keyed by nothing (one host, one table): a read-through copy with a 2-second TTL, invalidated through `Repository.OnChange(ChangeIdentity)` on every `INSERT` and `DELETE` (so `session_created`, which the event stream polls from this list, is never late) and on an `UPDATE` whose **old and new values** differ in an identity or lifecycle column: `name`, `group_name`, `parent_id`, `role`, `status`, `backend`, `branch`, `working_directory`, `review_pr`, `fix_pr`, plus `ClearNativeAgentIdentity`. `Save` updates every column with `COALESCE`, so the repository decides by reading the row's identity columns by primary key before the write and comparing, never by which columns the statement names. A hook report's `Save` changes `hook_state`, `hook_state_at`, `agent_title`, `agent_ended`: those are `ChangeOther` and do not invalidate. Every handler that needs a fresh hook field reads the row by id: `classify` and `applyAgentReport` already do (`repo.Get`); *changed* `steerSession` (the delivery gate's lookup) also reads by id (`liveSession`/`repo.Get`) instead of `loadSessions`, because a two-second-old idle row must never let a note into a permission menu. `session.list` and `session.get` keep `decorateState`'s per-row `Get`; the event stream's activity state comes from `sessionStates`; the usage tracker and ciwatch call `repo.List` and are not on this cache. The name and group backfill moves out of `loadSessions` into a startup pass and the two write paths that can create a nameless row (`session.register`, `handleReportAgentSession`). The live merge (`mergeLiveSessions`) stays per call; the pty list is in memory. `session.events` uses the same cache. Net effect: a hook storm costs one `Save` each and zero list reads.
 3. **Admission** (`internal/server/admission.go`, P2). Every request passes `admit` before `dispatch`:
@@ -146,6 +146,17 @@ Consult round 2 (Grok, report `~/.aiman/consults/54610ced-697e-4c17-a41e-0c3d6ef
 | Releasing the wait slot does not cut the capture storm: 25 waiters still classify every 500 ms and every hook report captures | medium | accept | Behaviour 3: global capture semaphore of 4; `waitState` reads `sessionStates` instead of capturing |
 | A 2-second admission wait keeps client processes piled up | low | accept | Behaviour 3: 50 ms, then `server_busy`; the CLI retries once |
 
+P1 consult (report `~/.aiman/consults/08f9af65-877d-44e1-8640-231a5353d94c.report.md`): verdict revise, 2 high, 2 medium, 2 low. Behaviour 2 assumed only `steerSession` reads a hook field through `loadSessions`; `liveReview` (review create) and `checkFixRounds` (`review.fix`) also branch on `AgentEnded`.
+
+| Objection | Severity | Triage | Reason |
+|---|---|---|---|
+| Do not add `agent_ended` to the identity columns: every SessionEnd and `ClearAgentEnded` would miss the cache, and title, path and hook state would stay stale | high | accept | `OnChange` kinds unchanged |
+| Do not `repo.Get` on every `resolveReq`-style lookup: it misses the list scans and taxes identity-only calls | high | accept | Only the gates re-read, through `freshRows` |
+| The gates are `liveReview` and `checkFixRounds`; terminate's `children_left` is warning copy | medium | accept | `freshRows` narrows by identity (`review_pr`; fixer role and `parent_id`) and re-reads those rows' hook fields by id; `children_left` stays on the cache |
+| `ClearAgentEnded` is `ChangeOther`, so the gates must re-read even when the cached row says ended | medium | accept | `freshRows` re-reads every matching row, ended or not |
+| A one-row re-read on the peer target and the handover lookup is fine; not every resolve | low | accept in part | `admitPeer` re-reads the target's hook fields (a restart's false refusal); the handover render keeps the cache, its title and state are copy |
+| Keep `TestCreateReviewExists` as the test of the gate re-read | low | accept | Unchanged; it passes through `freshRows` |
+
 ## Breakdown
 
 | Piece | Owns files | Parallel group | Depends on | Complexity | Tier | Acceptance tests |
@@ -182,8 +193,14 @@ const (
     CodeRateLimited = "rate_limited"
 )
 func (s *Server) RPCStats() RPCStats
+func (s *Server) SetHostLoad(c config.HostLoadConfig) // zero fields keep defaults (64, 300, 4 captures); serve calls it from the pushed host.load
+// Admission runs inside dispatch, after the request is decoded, so a direct dispatch call is counted, capped and limited.
+// The bucket and by_caller key come from the holder the peer pid descends from (sessionOfPID, else the holder map), never from req.Caller;
+// a process outside every holder with no caller is keyed "operator" (never limited); one outside every holder naming a caller is counted under it and not limited.
+// The capture budget (default 4) wraps every CaptureScreen made through captureLive. The CLI retries server_busy and rate_limited exactly once;
+// a second rate_limited fails with an error whose text contains "rate limited". `aiman host stats --json` prints the rpc object.
 func (s *Server) SweepSkipped() int // P0: sweeps skipped because the previous one was still running; RPCStats.SweepSkipped reads it
-// P0: EventPollInterval becomes 1s; the stream also reads the session list at once after a hub event.
+// P0: EventPollInterval becomes 1s. P1: var sessionListTTL = 2 * time.Second (the cache TTL; tests shorten it); serve subscribes to OnChange in New through an interface assertion on its repository, never a concrete type.
 
 // internal/ptyhold (P3)
 func childShell(command string, nice int) string // nice clamped to [0,19]; 0 emits no wrapper; the command runs as `exec nice -n <n> bash -c <quoted command>` after the TERM/PATH exports
@@ -210,7 +227,54 @@ func (r *Repository) OnChange(fn func(ChangeKind))     // after every mutating m
 func (r *Repository) DB() *sql.DB                      // the writer
 func (r *Repository) Reader() *sql.DB                  // the bounded reader pool
 func (r *Repository) Close() error                     // wal_checkpoint(TRUNCATE), then both pools
+
+// internal/server (P4, load-aware sweep)
+var sweepPeriodLow, sweepPeriodHigh = 2 * time.Second, 5 * time.Second
+const sweepCaptureBudget = 16
+var readLoadAvg func() (float64, bool)                  // /proc/loadavg on Linux; false elsewhere (tests swap it)
+func parseLoadAvg(s string) (float64, bool)             // the first field
+func sweepPeriod(load float64, ok bool, ncpu int) time.Duration // high when ok && load >= ncpu, else low; runStateSweep re-reads it every tick
+// A session needs a capture when its hook report moved to ended or waiting_input since the last pass (a transition), when
+// the report is stale or missing, or when it is a fresh working report (the menu check). A fresh idle, ended or waiting_input
+// report that did not just transition is sampled without a capture and does not count toward the budget. Order: transitions,
+// then stale or missing, then fresh working, round robin inside each group; sessions past the budget keep their cached state.
+// ptyfake.FakePTY gains CapturesOf(id string) int.
+
+// internal/server (P5, diagnostics)
+var dumpStackCap = 64 << 20                              // bytes of goroutine stack; a cut dump ends with a line saying "truncated"
+var dumpStack = runtime.Stack                            // the seam tests swap
+var ErrDumpInProgress = errors.New("dump in progress")
+type InflightCall struct{ Method, Caller string; Age time.Duration }
+func (s *Server) InflightCalls() []InflightCall          // admitted calls still running, oldest first (P2's slots gain method, caller and start)
+func (s *Server) WriteDump(dir string) (string, error)   // <dir>/serve-dump-<unix>.txt, 0600: RPCStats JSON, "load average", "in-flight" list, then the stacks; one at a time
+type autoDump struct{ ... }; func (d *autoDump) due(now time.Time, atCap bool) bool // true once at the cap for autoDumpAfter (30s), then not for autoDumpEvery (10m); below the cap resets
+func (s *Server) HandleDumpSignals(ctx context.Context, dir string) // SIGUSR1 → WriteDump(~/.aiman/logs); a signal during a dump is ignored
+// cmd/aiman/host_cmd.go
+func serveMainPID(run func(args ...string) (string, error), pidFile string) (int, error) // `systemctl --user show -p MainPID --value aiman-serve`, else the pid file, else an error naming both
+func newestDumpSince(dir string, since time.Time) (string, bool)                        // the serve-dump-*.txt `aiman host dump` prints
 ```
+
+## Deviations from the approved design
+
+Where the code that landed differs from the behaviour above, with the reason.
+
+- **Problem cause 2 was wrong in one detail (P0).** `runStateSweep` calls `sweepStates` from one goroutine and `time.Ticker` drops ticks while its receiver is busy, so sweeps never stacked; the slow captures stacked with `session.wait` classifiers, which P2's capture semaphore bounds. The `TryLock` stays as a guard for other callers, and `SweepSkipped` counts the ticks a slow sweep made the ticker drop (`countOverrun`, `elapsed / notifySweepEvery`), so `RPCStats.SweepSkipped` is non-zero under load as the scenario describes.
+- **No table read after a hub event (P0).** The event stream reads the stored rows once a second through the session list cache and forwards hub events at once; a row created beside a hub event is announced on the next tick, not immediately.
+- **Hook-field gates re-read (P1).** Beyond `steerSession`, `liveReview`, `checkFixRounds` and `admitPeer` branch on hook fields and read them fresh (`freshRows`, `freshHookFields`); `lockedTarget` overlays the row by id after taking the session lock so a queued `session.restart` sees the launch model and vendor id the previous call wrote. `pty.list` and `sessionRoots` read the cache. The backfill is exported as `BackfillNames` for `cmd/aiman`, runs for any re-registered row missing a name or group, and a failed save no longer aborts the pass. `storedSessions` returns a shallow copy: callers must not mutate pointer, slice or map fields in place.
+- **`session.events` announces stored rows only (P1).** It reads the cached stored rows, not the merged `loadSessions` list, so a discovered pty with no database row is still not announced as `session_created`.
+- **`HostLoadConfig.MaxCaptures` (P2).** The capture budget is configurable (`host.load.max_captures`, 0 is 4); the approved Contracts block lacked it. Field order is `MaxInflight`, `PerCallerPerMinute`, `MaxCaptures`, `AgentNice`.
+- **`aiman host stats` prints text (P2).** Without `--json` it prints a host line and the rpc block instead of the raw JSON result; nothing in the repository parsed the old output.
+- **`session.prompt --wait` after a prompt (P2).** `cachedState` carries its sample time; `session.wait` reads the cache as approved, but a wait that follows a prompt ignores an entry sampled before the submit and classifies itself (through the capture semaphore) until the sweep has sampled the session again, so a hook-less agent is not read as idle from before the prompt. The peer-note wait applies the same rule from the delivery time. A session the sweep skips (hidden or not active) has no cache entry, so its waiter still classifies each tick under the semaphore.
+- **Lock order (P2).** The prompt's wait runs outside `lockSession`: a paused waiter must not depend on slot holders queued on the same session's lock.
+- **Admission details (P2).** A `server_busy` refusal refunds the token it spent; full buckets untouched for a minute are pruned; the pid-to-holder map is rebuilt by one request while the others wait; `dispatch` decodes through `decodeAdmit` so its complexity stays under the linter's cap. Every capture serve makes for itself (sweep, waiters, steer dialogs, `session.read`, hook reports) goes through `captureScreen`.
+- **Every pty serve creates is niced (P3)**, including the `review.debug` pty, not only agent ptys. The wrapper needs `nice` (coreutils) on PATH and `agent_nice: 0` disables it. `.golangci.yml` excludes `SA1019` (`parser.ParseDir`) and `unparam` for the pinned acceptance tests only.
+
+- **Recorder idle group (P4).** With a notification recorder configured, a fresh `idle` report still needs one capture for `pane.AsksQuestion`, so it forms a fourth capture group after transitions, stale and working, and counts toward the 16. Without a recorder (and in the acceptance tests) idle rows are sampled without a capture as approved. The sweep reads each row once (`sampleLive`) so the group and the sample cannot disagree, and `countOverrun` measures against the current period.
+- **Transition captures (P4).** A fresh `ended` or `waiting_input` report needs no screen to be classified, so the transition capture only refines a `waiting_input` notification reason when a menu is on screen; an `ended` transition captures a screen nothing reads (kept as approved, a candidate to drop). A session's first pass is never a transition, so a session first seen ended or waiting takes no capture.
+- **`aiman host dump` checks the pid (P5).** Before `SIGUSR1`, whose default action terminates a process, the CLI refuses its own pid and, on Linux, any pid whose `/proc/<pid>/cmdline` is not `aiman serve`, so a stale `~/.aiman/serve.pid` after a crash or reboot cannot signal a reused pid. `serveMainPID` stays as pinned; `findServePID` adds the source for the message.
+- **Atomic dump file (P5).** The dump is written to `serve-dump-<unix>.txt.tmp`, synced and renamed, so `newestDumpSince` never returns a half-written file. A `SIGUSR1` that lands during an auto dump is dropped and `aiman host dump` reports the auto dump's file.
+
+- **No SIGUSR1 on Windows (P5).** `dumpSignals` is empty there, so only the auto dump runs, and `aiman host dump` explains that it needs a signal Windows lacks. The release build cross-compiles for Windows, which the Linux-only CI runs of the piece did not catch.
 
 ## What the reader should be able to explain
 

@@ -20,7 +20,7 @@ import (
 // child counts as alive until cleanup stops it, so only the done marker or
 // timeout ends a run.
 func (h *Harness) EnableHandovers(timeout time.Duration) error {
-	jobs, err := memoryjob.Open(h.Repo.DB())
+	jobs, err := memoryjob.Open(h.Repo.DB(), h.Repo.Reader())
 	if err != nil {
 		return err
 	}

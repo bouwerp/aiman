@@ -73,6 +73,10 @@ type Spec struct {
 	// tell a hidden helper from its first moment, before serve has a row.
 	Role     string `json:"role,omitempty"`
 	ParentID string `json:"parent_id,omitempty"`
+	// AgentNice is the nice increment the agent starts at (clamped to
+	// [0,19]); the holder keeps its own priority. Absent or 0 runs the agent
+	// at the holder's niceness.
+	AgentNice int `json:"agent_nice,omitempty"`
 }
 
 // Dir returns the session directory for id under root.

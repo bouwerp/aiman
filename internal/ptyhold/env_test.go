@@ -20,7 +20,7 @@ func TestWithTerminalEnvAddsUTF8WhenMissing(t *testing.T) {
 }
 
 func TestChildShellPutsUserNpmPrefixFirst(t *testing.T) {
-	got := childShell("deepcode")
+	got := childShell("deepcode", 0)
 	if !strings.HasPrefix(got, `export PATH="$HOME/.npm-global/bin:$PATH:`) {
 		t.Fatalf("user npm prefix must precede the system PATH: %s", got)
 	}
@@ -70,7 +70,7 @@ func TestResizeNudgeWhenSizeUnchanged(t *testing.T) {
 }
 
 func TestChildShellForcesTERMAfterLoginProfile(t *testing.T) {
-	got := childShell("codex --dangerously-bypass-approvals-and-sandbox")
+	got := childShell("codex --dangerously-bypass-approvals-and-sandbox", 0)
 	// bash -l sources the profile before this script. Codex 0.150 refuses
 	// to start its TUI when TERM is still dumb, then the holder drops to
 	// `exec bash -i` — which is the bare terminal operators attach to.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -14,7 +15,18 @@ import (
 )
 
 type Repository struct {
+	// db is the writer (one connection); rd is the bounded reader pool. Both
+	// are open on the same file in WAL mode.
 	db *sql.DB
+	rd *sql.DB
+
+	subMu sync.Mutex
+	subs  []func(ChangeKind)
+
+	stop      chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+
 	// clearedOnOpen records the legacy session-scoped AWS profiles the open-time
 	// migration removed, so callers can report them.
 	clearedOnOpen []LegacyAWSProfileRef
@@ -30,25 +42,33 @@ type Repository struct {
 // small.
 const busyTimeout = 5 * time.Second
 
-// dsn builds the driver connection string for a database path.
-//
-// The pragma is passed in the DSN rather than executed after opening because
-// busy_timeout is per-connection: database/sql pools connections and opens more
-// on demand, so a PRAGMA issued once would apply only to whichever connection
-// happened to run it. The driver strips the query from the filename itself, so a
-// plain path needs no URI escaping.
-func dsn(dbPath string) string {
-	if strings.ContainsRune(dbPath, '?') {
-		return dbPath // a '?' in the path would be read as the query separator
+// NewRepository opens the file in WAL mode with one writer connection and a
+// bounded reader pool, creates or migrates the schema on the writer and starts
+// the periodic checkpoint.
+func NewRepository(dbPath string) (*Repository, error) {
+	db, err := openWriter(dbPath)
+	if err != nil {
+		return nil, err
 	}
-	return fmt.Sprintf("%s?_pragma=busy_timeout(%d)", dbPath, busyTimeout.Milliseconds())
+	r, err := migrate(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	rd, err := openReader(dbPath)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	r.rd = rd
+	r.stop = make(chan struct{})
+	r.done = make(chan struct{})
+	go r.checkpointLoop()
+	return r, nil
 }
 
-func NewRepository(dbPath string) (*Repository, error) {
-	db, err := sql.Open("sqlite", dsn(dbPath))
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
+// migrate creates the tables, adds missing columns and normalises old rows.
+func migrate(db *sql.DB) (*Repository, error) {
 
 	// Create sessions table if not exists
 	query := `
@@ -322,11 +342,28 @@ func (r *Repository) Save(ctx context.Context, s *domain.Session) error {
 	if !s.HookStateAt.IsZero() {
 		hookAt = s.HookStateAt
 	}
-	_, err := r.db.ExecContext(ctx, query,
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to save session: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	before, found, err := readIdentity(ctx, tx, s.ID)
+	if err != nil {
+		return fmt.Errorf("failed to save session: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, query,
 		s.ID, s.Name, s.Group, s.ParentID, s.IssueKey, s.Branch, s.BaseBranch, s.RepoName, s.RemoteHost, s.WorktreePath, s.WorkingDirectory, s.TerminalName, s.Backend, s.MutagenSyncID, s.LocalPath, s.AgentName, s.AgentModel, s.LaunchModel, s.LaunchEffort, s.Tier, string(s.Status), string(s.Mode), s.TriggerSource, s.TriggerEventID, autonomousConfigJSON, tunnelsJSON, awsConfigJSON, s.AgentSessionID, s.AgentSessionPath, s.AgentTitle, ended, string(s.HookState), s.HookStateMessage, s.HookStateSource, s.HookStateSeq, hookAt, s.BudgetTokens, s.WatchPR, s.ReviewPR, s.FixPR, string(s.Role), s.IssueType, s.CreatedAt, updatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to save session: %w", err)
+	}
+	kind := ChangeOther
+	if !found || before.changedBy(s) {
+		kind = ChangeIdentity
+	}
+	r.changed(kind)
 	return nil
 }
 
@@ -340,7 +377,7 @@ func (r *Repository) ClearNativeAgentIdentity(ctx context.Context, id string) er
 	if id == "" {
 		return nil
 	}
-	_, err := r.db.ExecContext(ctx, `
+	err := r.changedIf(ChangeIdentity, execErr(r.db.ExecContext(ctx, `
 		UPDATE sessions SET
 			agent_session_id = '',
 			agent_session_path = '',
@@ -355,7 +392,7 @@ func (r *Repository) ClearNativeAgentIdentity(ctx context.Context, id string) er
 			hook_state_seq = 0,
 			hook_state_at = NULL,
 			updated_at = ?
-		WHERE id = ?;`, time.Now(), id)
+		WHERE id = ?;`, time.Now(), id)))
 	if err != nil {
 		return fmt.Errorf("clearing native agent identity: %w", err)
 	}
@@ -366,8 +403,8 @@ func (r *Repository) ClearNativeAgentIdentity(ctx context.Context, id string) er
 // cannot clear. serve calls it when a registered session names a different
 // agent than its row.
 func (r *Repository) ClearLaunchModel(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET launch_model = '', launch_effort = '', tier = '', updated_at = ? WHERE id = ?;`,
-		time.Now(), strings.TrimSpace(id))
+	err := r.changedIf(ChangeOther, execErr(r.db.ExecContext(ctx, `UPDATE sessions SET launch_model = '', launch_effort = '', tier = '', updated_at = ? WHERE id = ?;`,
+		time.Now(), strings.TrimSpace(id))))
 	if err != nil {
 		return fmt.Errorf("clearing launch model: %w", err)
 	}
@@ -382,7 +419,7 @@ func (r *Repository) ClearAgentEnded(ctx context.Context, id string) error {
 	if id == "" {
 		return nil
 	}
-	if _, err := r.db.ExecContext(ctx, `UPDATE sessions SET agent_ended = '' WHERE id = ?;`, id); err != nil {
+	if err := r.changedIf(ChangeOther, execErr(r.db.ExecContext(ctx, `UPDATE sessions SET agent_ended = '' WHERE id = ?;`, id))); err != nil {
 		return fmt.Errorf("clearing agent ended: %w", err)
 	}
 	return nil
@@ -390,7 +427,7 @@ func (r *Repository) ClearAgentEnded(ctx context.Context, id string) error {
 
 func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error) {
 	query := "SELECT " + sessionSelectCols + " FROM sessions WHERE id = ?;"
-	s, err := scanSession(r.db.QueryRowContext(ctx, query, id))
+	s, err := scanSession(r.rd.QueryRowContext(ctx, query, id))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("session not found: %w", err)
@@ -403,7 +440,7 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 	query := "SELECT " + sessionSelectCols + " FROM sessions ORDER BY updated_at DESC;"
 
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.rd.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sessions: %w", err)
 	}
@@ -423,21 +460,10 @@ func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 
 func (r *Repository) Delete(ctx context.Context, id string) error {
 	query := "DELETE FROM sessions WHERE id = ?;"
-	_, err := r.db.ExecContext(ctx, query, id)
-	if err != nil {
+	if err := r.changedIf(ChangeIdentity, execErr(r.db.ExecContext(ctx, query, id))); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 	return nil
-}
-
-func (r *Repository) Close() error {
-	return r.db.Close()
-}
-
-// DB exposes the underlying handle for packages that own their own tables in
-// the same file, such as the context index.
-func (r *Repository) DB() *sql.DB {
-	return r.db
 }
 
 // SaveSnapshot creates or replaces a session snapshot.
@@ -460,7 +486,7 @@ func (r *Repository) SaveSnapshot(ctx context.Context, s *domain.SessionSnapshot
 		 summary, overview_json, details_json, actions_json, next_steps_json,
 		 agent_state, pane_content, injected_at, created_at)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
-	_, err = r.db.ExecContext(ctx, query,
+	_, err = r.exec(ctx, query,
 		s.ID, s.SessionID, s.IssueKey, s.Branch, s.RepoName, s.AgentName, s.WorktreePath,
 		s.Summary, string(overviewJSON), string(detailsJSON), string(actionsJSON), string(stepsJSON),
 		string(s.AgentState), s.PaneContent, injectedAt, s.CreatedAt,
@@ -478,7 +504,7 @@ const snapshotSelectCols = `id, session_id, issue_key, branch, repo_name, agent_
 // GetLatestSnapshot returns the most recent snapshot for a session, or nil.
 func (r *Repository) GetLatestSnapshot(ctx context.Context, sessionID string) (*domain.SessionSnapshot, error) {
 	query := `SELECT ` + snapshotSelectCols + ` FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC LIMIT 1;`
-	row := r.db.QueryRowContext(ctx, query, sessionID)
+	row := r.rd.QueryRowContext(ctx, query, sessionID)
 	s, err := scanSnapshot(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -492,7 +518,7 @@ func (r *Repository) GetLatestSnapshot(ctx context.Context, sessionID string) (*
 // ListSnapshots returns all snapshots for a session, newest first.
 func (r *Repository) ListSnapshots(ctx context.Context, sessionID string) ([]domain.SessionSnapshot, error) {
 	query := `SELECT ` + snapshotSelectCols + ` FROM session_snapshots WHERE session_id = ? ORDER BY created_at DESC;`
-	rows, err := r.db.QueryContext(ctx, query, sessionID)
+	rows, err := r.rd.QueryContext(ctx, query, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list snapshots: %w", err)
 	}
@@ -503,7 +529,7 @@ func (r *Repository) ListSnapshots(ctx context.Context, sessionID string) ([]dom
 // ListAllSnapshots returns all snapshots across sessions, newest first.
 func (r *Repository) ListAllSnapshots(ctx context.Context) ([]domain.SessionSnapshot, error) {
 	query := `SELECT ` + snapshotSelectCols + ` FROM session_snapshots ORDER BY created_at DESC;`
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.rd.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list all snapshots: %w", err)
 	}
@@ -513,7 +539,7 @@ func (r *Repository) ListAllSnapshots(ctx context.Context) ([]domain.SessionSnap
 
 // MarkSnapshotInjected records the time a snapshot was injected for resume.
 func (r *Repository) MarkSnapshotInjected(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, "UPDATE session_snapshots SET injected_at = ? WHERE id = ?;", time.Now(), id)
+	_, err := r.exec(ctx, "UPDATE session_snapshots SET injected_at = ? WHERE id = ?;", time.Now(), id)
 	if err != nil {
 		return fmt.Errorf("failed to mark snapshot injected: %w", err)
 	}
@@ -522,7 +548,7 @@ func (r *Repository) MarkSnapshotInjected(ctx context.Context, id string) error 
 
 // DeleteSnapshot removes a snapshot by ID.
 func (r *Repository) DeleteSnapshot(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, "DELETE FROM session_snapshots WHERE id = ?;", id)
+	_, err := r.exec(ctx, "DELETE FROM session_snapshots WHERE id = ?;", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete snapshot: %w", err)
 	}
@@ -579,7 +605,7 @@ func scanSnapshots(rows *sql.Rows) ([]domain.SessionSnapshot, error) {
 
 // ListSecrets returns all globally stored secrets.
 func (r *Repository) ListSecrets(ctx context.Context) ([]domain.Secret, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT key, value, description FROM secrets ORDER BY key;")
+	rows, err := r.rd.QueryContext(ctx, "SELECT key, value, description FROM secrets ORDER BY key;")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list secrets: %w", err)
 	}
@@ -597,7 +623,7 @@ func (r *Repository) ListSecrets(ctx context.Context) ([]domain.Secret, error) {
 
 // SaveSecret upserts a secret by key.
 func (r *Repository) SaveSecret(ctx context.Context, s domain.Secret) error {
-	_, err := r.db.ExecContext(ctx,
+	_, err := r.exec(ctx,
 		"INSERT INTO secrets (key, value, description) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, description = excluded.description;",
 		s.Key, s.Value, s.Description)
 	if err != nil {
@@ -608,7 +634,7 @@ func (r *Repository) SaveSecret(ctx context.Context, s domain.Secret) error {
 
 // DeleteSecret removes a secret by key.
 func (r *Repository) DeleteSecret(ctx context.Context, key string) error {
-	_, err := r.db.ExecContext(ctx, "DELETE FROM secrets WHERE key = ?;", key)
+	_, err := r.exec(ctx, "DELETE FROM secrets WHERE key = ?;", key)
 	if err != nil {
 		return fmt.Errorf("failed to delete secret: %w", err)
 	}
@@ -633,7 +659,7 @@ func (r *Repository) SaveScheduledPrompt(ctx context.Context, sp *domain.Schedul
 	if sp.CreatedAt.IsZero() {
 		sp.CreatedAt = time.Now()
 	}
-	_, err = r.db.ExecContext(ctx, query, sp.ID, sp.CronExpr, sp.Prompt, string(idsJSON), sp.CreatedAt, sp.LastRunAt)
+	_, err = r.exec(ctx, query, sp.ID, sp.CronExpr, sp.Prompt, string(idsJSON), sp.CreatedAt, sp.LastRunAt)
 	if err != nil {
 		return fmt.Errorf("failed to save scheduled prompt: %w", err)
 	}
@@ -642,13 +668,13 @@ func (r *Repository) SaveScheduledPrompt(ctx context.Context, sp *domain.Schedul
 
 func (r *Repository) GetScheduledPrompt(ctx context.Context, id string) (*domain.ScheduledPrompt, error) {
 	query := `SELECT id, cron_expr, prompt, session_ids_json, created_at, last_run_at FROM scheduled_prompts WHERE id = ?;`
-	row := r.db.QueryRowContext(ctx, query, id)
+	row := r.rd.QueryRowContext(ctx, query, id)
 	return scanScheduledPrompt(row)
 }
 
 func (r *Repository) ListScheduledPrompts(ctx context.Context) ([]domain.ScheduledPrompt, error) {
 	query := `SELECT id, cron_expr, prompt, session_ids_json, created_at, last_run_at FROM scheduled_prompts ORDER BY created_at DESC;`
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.rd.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list scheduled prompts: %w", err)
 	}
@@ -665,7 +691,7 @@ func (r *Repository) ListScheduledPrompts(ctx context.Context) ([]domain.Schedul
 }
 
 func (r *Repository) DeleteScheduledPrompt(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, "DELETE FROM scheduled_prompts WHERE id = ?;", id)
+	_, err := r.exec(ctx, "DELETE FROM scheduled_prompts WHERE id = ?;", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete scheduled prompt: %w", err)
 	}

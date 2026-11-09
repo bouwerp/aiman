@@ -12,7 +12,7 @@ import (
 )
 
 func TestDSNCarriesBusyTimeout(t *testing.T) {
-	got := dsn("/home/code/.aiman/aiman.db")
+	got := dsn("/home/code/.aiman/aiman.db", true)
 	if !strings.Contains(got, "_pragma=busy_timeout(5000)") {
 		t.Fatalf("dsn missing busy_timeout: %q", got)
 	}
@@ -21,8 +21,8 @@ func TestDSNCarriesBusyTimeout(t *testing.T) {
 	}
 	// A '?' in the path would be read as the query separator, so it is left be.
 	odd := "/tmp/what?/aiman.db"
-	if dsn(odd) != odd {
-		t.Fatalf("a path containing '?' must be passed through: %q", dsn(odd))
+	if dsn(odd, true) != odd {
+		t.Fatalf("a path containing '?' must be passed through: %q", dsn(odd, true))
 	}
 }
 

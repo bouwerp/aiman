@@ -99,7 +99,7 @@ func benchmarkIndex1000(b *testing.B) *Index {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = db.Close() })
-	ix, err := OpenIndex(db)
+	ix, err := OpenIndex(db, db)
 	if err != nil {
 		b.Fatal(err)
 	}

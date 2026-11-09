@@ -60,12 +60,26 @@ linters:
         linters:
           - gocritic
         text: "stringXbytes:"
+      # A pinned acceptance helper may return a value only some tests read.
+      - path: _acceptance_test\.go
+        linters:
+          - unparam
       # Acceptance tests may hold invisible code points on purpose, as input
       # the code under test must strip.
       - path: _acceptance_test\.go
         linters:
           - staticcheck
         text: "ST1018:"
+      # The P3 acceptance test pins ptyruntime's plumbing from source with
+      # go/parser.ParseDir and keeps a helper result it does not read.
+      - path: internal/ptyhold/nice_acceptance_test\.go
+        linters:
+          - staticcheck
+        text: "SA1019: parser.ParseDir"
+      - path: internal/ptyhold/nice_acceptance_test\.go
+        linters:
+          - unparam
+        text: "is never used"
       # Interface implementations often cannot use every parameter.
       - linters:
           - unparam

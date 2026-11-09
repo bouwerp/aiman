@@ -12,11 +12,14 @@ import (
 )
 
 // Index keeps a searchable copy of the context notes in serve's SQLite file.
-type Index struct{ db *sql.DB }
+// db is the writer; rd runs the SELECTs so a search or a reindex walk never
+// holds the single writer connection.
+type Index struct{ db, rd *sql.DB }
 
 // OpenIndex creates the index tables when they are absent. It fails when the
-// SQLite build has no FTS5 support.
-func OpenIndex(db *sql.DB) (*Index, error) {
+// SQLite build has no FTS5 support. db is the writer and rd the reader pool;
+// a caller with one handle passes it twice.
+func OpenIndex(db, rd *sql.DB) (*Index, error) {
 	stmts := []string{
 		`CREATE VIRTUAL TABLE IF NOT EXISTS context_fts USING fts5(id UNINDEXED, title, abstract, body, tokenize='unicode61 remove_diacritics 2');`,
 		`CREATE TABLE IF NOT EXISTS context_index(
@@ -40,7 +43,7 @@ func OpenIndex(db *sql.DB) (*Index, error) {
 			return nil, fmt.Errorf("opening context index: %w", err)
 		}
 	}
-	return &Index{db: db}, nil
+	return &Index{db: db, rd: rd}, nil
 }
 
 // Upsert replaces one note in both the metadata and FTS tables.
@@ -99,7 +102,7 @@ func (ix *Index) Remove(ctx context.Context, id string) error {
 
 // Paths returns the indexed note id to file path mapping.
 func (ix *Index) Paths(ctx context.Context) (map[string]string, error) {
-	rows, err := ix.db.QueryContext(ctx, `SELECT id, path FROM context_index`)
+	rows, err := ix.rd.QueryContext(ctx, `SELECT id, path FROM context_index`)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +121,7 @@ func (ix *Index) Paths(ctx context.Context) (map[string]string, error) {
 // PathOf returns one indexed note's file path.
 func (ix *Index) PathOf(ctx context.Context, id string) (string, error) {
 	var path string
-	err := ix.db.QueryRowContext(ctx, `SELECT path FROM context_index WHERE id = ?`, id).Scan(&path)
+	err := ix.rd.QueryRowContext(ctx, `SELECT path FROM context_index WHERE id = ?`, id).Scan(&path)
 	return path, err
 }
 
@@ -164,7 +167,7 @@ func (ix *Index) Search(ctx context.Context, q domain.ContextQuery, live bool, n
 	query.WriteString(` ORDER BY CASE WHEN mi.type IN ('decision','pitfall','convention') THEN 0 ELSE 1 END,
 		mi.created DESC, mi.id DESC LIMIT ?`)
 	args = append(args, limit)
-	rows, err := ix.db.QueryContext(ctx, query.String(), args...)
+	rows, err := ix.rd.QueryContext(ctx, query.String(), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +202,7 @@ func (ix *Index) Search(ctx context.Context, q domain.ContextQuery, live bool, n
 // HighWater returns the newest file mtime the index has seen.
 func (ix *Index) HighWater(ctx context.Context) (time.Time, error) {
 	var raw string
-	err := ix.db.QueryRowContext(ctx, `SELECT v FROM context_index_meta WHERE k = 'high_water'`).Scan(&raw)
+	err := ix.rd.QueryRowContext(ctx, `SELECT v FROM context_index_meta WHERE k = 'high_water'`).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return time.Time{}, nil
 	}

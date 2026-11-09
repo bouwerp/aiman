@@ -22,6 +22,11 @@ import (
 // plain request/response except pty.attach, which switches the connection into
 // a raw bidirectional byte stream after a single confirmation line.
 
+// SetAgentNice sets host.load.agent_nice, the nice increment pty.create gives
+// every pty it starts (agents and the helper ptys sessions create). The holder
+// keeps its own priority. Unset is 0: commands run at the holder's niceness.
+func (s *Server) SetAgentNice(n int) { s.agentNice.Store(int32(min(max(n, 0), 19))) } //nolint:gosec // G115: clamped to [0,19]
+
 func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 	var params struct {
 		ID      string            `json:"id"`
@@ -55,6 +60,8 @@ func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 
 		Role:     params.Role,
 		ParentID: params.ParentID,
+
+		AgentNice: int(s.agentNice.Load()),
 	})
 	if err != nil {
 		return s.ptyErrResp(req.ID, err)
@@ -70,7 +77,7 @@ func (s *Server) handlePTYList(ctx context.Context, req Request) Response {
 	list := s.pty.List()
 	rows := map[string]domain.Session{}
 	if s.repo != nil {
-		stored, err := s.repo.List(ctx)
+		stored, err := s.storedSessions(ctx)
 		if err != nil {
 			// The runtime list is still right; only the annotation is missing.
 			log.Printf("pty.list: sessions: %v", err)
@@ -480,6 +487,7 @@ func (s *Server) handlePTYAttach(ctx context.Context, conn io.ReadWriter, req Re
 	defer s.endAttach(params.ID)
 
 	writeResponse(conn, Response{ID: req.ID, Result: map[string]any{"type": "pty_attached"}})
+	endSetup(ctx)
 
 	// An agent on the alternate screen scrolls that buffer itself, and the
 	// attaching terminal has to be on it too. The emulator is consulted as
@@ -766,5 +774,13 @@ func (s *Server) handlePTYAttachConn(ctx context.Context, conn net.Conn, line []
 		writeResponse(conn, errResp("", CodeInvalidParams, err.Error()))
 		return
 	}
+	// The stream holds an admission slot only while it is set up:
+	// handlePTYAttach ends the hold once it has answered.
+	ctx, admitted, refused := s.admit(ctx, req)
+	if refused != nil {
+		writeResponse(conn, *refused)
+		return
+	}
+	defer admitted()
 	s.handlePTYAttach(ctx, conn, req)
 }

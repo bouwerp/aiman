@@ -261,8 +261,13 @@ func scopeRefusal(reqID string, scope sessionScope, what string) Response {
 // holderSessionOf returns the session whose running holder owns pid: the
 // nearest ancestor of pid (or pid itself) that a confirmed holder runs.
 func (s *Server) holderSessionOf(pid int) (string, bool) {
+	return ownerOf(pid, s.holderOwners(), parentPID)
+}
+
+// holderOwners maps the PID each confirmed running holder runs to its session.
+func (s *Server) holderOwners() map[int]string {
 	if s.pty == nil {
-		return "", false
+		return nil
 	}
 	held := s.holderHeld
 	if held == nil {
@@ -276,6 +281,14 @@ func (s *Server) holderSessionOf(pid int) (string, bool) {
 			owner[info.PID] = info.ID
 		}
 	}
+	return owner
+}
+
+// ownerOf walks pid and its ancestors to the first one owner names.
+func ownerOf(pid int, owner map[int]string, parent func(int) (int, bool)) (string, bool) {
+	if len(owner) == 0 {
+		return "", false
+	}
 	for range maxProcDepth {
 		if pid <= 1 {
 			return "", false
@@ -283,7 +296,7 @@ func (s *Server) holderSessionOf(pid int) (string, bool) {
 		if id, ok := owner[pid]; ok {
 			return id, true
 		}
-		pp, ok := parentPID(pid)
+		pp, ok := parent(pid)
 		if !ok {
 			return "", false
 		}
@@ -393,6 +406,8 @@ func (s *Server) admitPeer(ctx context.Context, req Request, scope sessionScope,
 	if refused != nil {
 		return domain.Session{}, "", refused
 	}
+	// The cached list can still say ended right after a restart.
+	target = s.freshHookFields(ctx, target)
 	if refused := s.peerAllowed(req, scope, from, target); refused != nil {
 		return domain.Session{}, "", refused
 	}

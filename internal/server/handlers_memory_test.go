@@ -22,7 +22,7 @@ func testMemoryQueue(t *testing.T) *memoryjob.Queue {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	q, err := memoryjob.Open(db)
+	q, err := memoryjob.Open(db, db)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -73,6 +73,7 @@ func isNilPTY(p PTYRuntime) bool {
 type Server struct {
 	ln       *Listener
 	repo     domain.SessionRepository
+	sessList sessionListCache
 	remote   domain.RemoteExecutor
 	create   sessionCreator
 	ctxStore domain.ContextStore
@@ -84,7 +85,10 @@ type Server struct {
 	sessionOfPID func(pid int) (string, bool)
 	// peerNotesOff is sessions.peer_notes: false.
 	peerNotesOff atomic.Bool
-	version      string
+	// agentNice is host.load.agent_nice, the nice increment pty.create
+	// gives every agent pty.
+	agentNice atomic.Int32
+	version   string
 
 	// hub carries events published by handlers to session.events streams.
 	hub *eventHub
@@ -132,6 +136,18 @@ type Server struct {
 	// sessionStates holds one cachedState per session id, written by the state
 	// sweep and read by the event stream.
 	sessionStates sync.Map
+	// sweepMu is held while a sweep runs, so sweeps never stack. sweepSkipped
+	// counts ticks lost to a running or overlong sweep.
+	sweepMu      sync.Mutex
+	sweepSkipped atomic.Int64
+	// sweepMemos holds, per session id, the hook state the last pass saw and
+	// the pass that last captured it; sweepPass counts passes. Both are guarded
+	// by sweepMu. A pass drops the memo of every session no longer active.
+	sweepMemos map[string]*sweepMemo
+	sweepPass  uint64
+	// sweepEvery is the sweep's current period in nanoseconds; zero is
+	// notifySweepEvery.
+	sweepEvery atomic.Int64
 
 	// memoryJobs queues handover-derived memory candidates for the laptop.
 	memoryJobs *memoryjob.Queue
@@ -199,6 +215,10 @@ type Server struct {
 	// inflight counts long calls running over the socket; the host update
 	// gate waits for it to reach zero.
 	inflight atomic.Int64
+
+	// adm is the admission gate and request accounting; admission() makes it.
+	adm     *admission
+	admOnce sync.Once
 
 	notifyRec *notify.Recorder
 	notifyLog NotifyLog
@@ -286,6 +306,7 @@ func New(ln *Listener, repo domain.SessionRepository, remote domain.RemoteExecut
 		hostStats: hoststats.New(),
 	}
 	s.target = s
+	s.watchSessionList(repo)
 	return s
 }
 
@@ -363,11 +384,24 @@ func (s *Server) track(method string) func() {
 	return func() { s.inflight.Add(-1) }
 }
 
-func (s *Server) dispatch(ctx context.Context, line []byte) Response {
+// decodeAdmit decodes a request line and passes it through admission. It
+// returns the request, its context and the func that ends it, or the answer
+// to send instead.
+func (s *Server) decodeAdmit(ctx context.Context, line []byte) (Request, context.Context, func(), *Response) {
 	var req Request
 	if err := json.Unmarshal(line, &req); err != nil {
-		return Response{ID: "", Error: &Error{Code: CodeInvalidParams, Message: err.Error()}}
+		return req, ctx, nil, &Response{ID: "", Error: &Error{Code: CodeInvalidParams, Message: err.Error()}}
 	}
+	ctx, done, refused := s.admit(ctx, req)
+	return req, ctx, done, refused
+}
+
+func (s *Server) dispatch(ctx context.Context, line []byte) Response {
+	req, ctx, done, refused := s.decodeAdmit(ctx, line)
+	if refused != nil {
+		return *refused
+	}
+	defer done()
 	defer s.track(req.Method)()
 	switch req.Method {
 	case "ping":

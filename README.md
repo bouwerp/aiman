@@ -737,6 +737,32 @@ root-owned copy is never uninstalled; that needs root. The RPC is
 `agents.move_prefix {agent}`, answered with `{"type":"agents_move_prefix","host","result":{agent, accepted, reason}}`;
 serve re-probes the agent afterwards.
 
+#### Agent priority
+
+Every agent serve starts runs at a lower CPU priority than serve and the terminal holders,
+so a busy build cannot starve the TUI, the phone or attach.
+
+```yaml
+host:
+  load:
+    agent_nice: 10 # nice increment for agents (default 10, 0 to disable, max 19)
+```
+
+The agent is born at that niceness and everything it starts (builds, tests, `git`, `ssh`)
+inherits it, so those can miss short timeouts on a loaded host. Running agents keep their
+priority until their session restarts. The wrapper runs `nice` (coreutils), so the host needs
+it on PATH; `agent_nice: 0` disables the wrapper.
+
+#### Serve diagnostics
+
+`aiman host stats` on the host prints the load average, CPU and the last minute of agent API
+calls (`--json` for the whole result). When serve seems stuck, `aiman host dump` sends it
+SIGUSR1 (the `aiman-serve` unit's main process, else the pid in `~/.aiman/serve.pid`) and
+prints the file it writes: `~/.aiman/logs/serve-dump-<unix>.txt`, holding the call stats, the
+load average, the calls in flight (method, caller, age) and every goroutine's stack, capped at
+64 MiB. Serve writes the same file on its own, at most once per 10 minutes, when every
+in-flight slot has been taken for 30 seconds.
+
 #### RTK
 
 [RTK](https://github.com/rtk-ai/rtk) is a CLI proxy that shrinks command output before it
@@ -1027,7 +1053,9 @@ All data is stored in `~/.aiman/`:
 ```
 ~/.aiman/
 ├── config.yaml          # Main configuration
-├── aiman.db             # SQLite database (sessions + snapshots)
+├── aiman.db             # SQLite database (sessions + snapshots), WAL mode
+├── aiman.db-wal         # its write-ahead log, while a process has it open
+├── aiman.db-shm         # its shared-memory index, likewise
 ├── aiman.log            # TUI log — background goroutines write here, never to the screen
 ├── aiman.sock           # Remote: `aiman serve` Unix socket (`0o600`)
 ├── aiman.sock.lock      # Remote: serve singleton lock
@@ -1044,6 +1072,8 @@ All data is stored in `~/.aiman/`:
 ├── sockets/             # SSH ControlMaster sockets (hashed filenames)
 └── work/                # Local mutagen sync roots — one subdirectory per session ID
 ```
+
+The database runs in WAL mode. A clean stop folds `aiman.db-wal` back into `aiman.db`, so a copy taken then is the file alone. A copy, rsync or backup taken while serve (or the TUI, or `aiman-trigger`) runs must take `aiman.db`, `aiman.db-wal` and `aiman.db-shm` together; the main file alone can miss recent writes.
 
 ### Example Config
 
