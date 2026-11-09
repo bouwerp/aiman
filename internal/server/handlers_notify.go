@@ -171,7 +171,10 @@ func (s *Server) sweepGroup(key, prev string, known bool) int {
 }
 
 type sweepItem struct {
+	// sess is the listed row, live the same row read by id at at.
 	sess domain.Session
+	live domain.Session
+	at   time.Time
 	key  string
 	memo *sweepMemo
 }
@@ -199,7 +202,6 @@ func (s *Server) sweepStates(ctx context.Context) {
 		s.sweepMemos = map[string]*sweepMemo{}
 	}
 	s.sweepPass++
-	now := time.Now()
 	active := make(map[string]struct{}, len(list))
 	var groups [sweepGroups][]sweepItem
 	for _, sess := range list {
@@ -210,8 +212,9 @@ func (s *Server) sweepStates(ctx context.Context) {
 		if s.hiddenSession(sess) {
 			continue
 		}
-		sess = s.freshHookFields(ctx, sess)
-		key := sweepHookKey(sess, now)
+		at := time.Now()
+		live := s.liveSession(ctx, sess)
+		key := sweepHookKey(live, at)
 		memo, known := s.sweepMemos[sess.ID]
 		if !known {
 			memo = &sweepMemo{hook: key}
@@ -220,11 +223,10 @@ func (s *Server) sweepStates(ctx context.Context) {
 		g := s.sweepGroup(key, memo.hook, known)
 		if g == sweepNoCapture {
 			memo.hook = key
-			at := time.Now()
-			s.recordSample(ctx, sess, at, s.sampleState(ctx, sess))
+			s.recordSample(ctx, sess, at, s.sampleLive(live, at))
 			continue
 		}
-		groups[g] = append(groups[g], sweepItem{sess: sess, key: key, memo: memo})
+		groups[g] = append(groups[g], sweepItem{sess: sess, live: live, at: at, key: key, memo: memo})
 	}
 	budget := sweepCaptureBudget
 	for g := range groups {
@@ -240,12 +242,11 @@ func (s *Server) sweepStates(ctx context.Context) {
 			}
 			budget--
 			it.memo.hook, it.memo.captured = it.key, s.sweepPass
-			at := time.Now()
-			sample := s.sampleState(ctx, it.sess)
+			sample := s.sampleLive(it.live, it.at)
 			if g == sweepTransition {
 				s.captureTransition(&sample)
 			}
-			s.recordSample(ctx, it.sess, at, sample)
+			s.recordSample(ctx, it.sess, it.at, sample)
 		}
 	}
 	s.sessionStates.Range(func(id, _ any) bool {

@@ -199,9 +199,15 @@ type stateSample struct {
 // screen, because an agent asks for permission in the middle of a turn. A fresh
 // idle report is never overruled, which shields ordinary text from a false match.
 func (s *Server) sampleState(ctx context.Context, sess domain.Session) stateSample {
-	live := s.liveSession(ctx, sess)
+	return s.sampleLive(s.liveSession(ctx, sess), time.Now())
+}
+
+// sampleLive is sampleState for a row already read by id, judging the hook
+// report's freshness at now. The sweep reads each row once and uses it both to
+// pick the capture group and to sample, so the two cannot disagree.
+func (s *Server) sampleLive(live domain.Session, now time.Time) stateSample {
 	sample := stateSample{live: live}
-	if st, ok := agenthook.ResolveHookState(live, time.Now()); ok {
+	if st, ok := agenthook.ResolveHookState(live, now); ok {
 		sample.State, sample.Confidence = st, pane.High
 		switch {
 		case live.AgentEnded:
