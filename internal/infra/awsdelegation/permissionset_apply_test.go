@@ -110,7 +110,7 @@ func TestApplyUnreadableConfigWarns(t *testing.T) {
 	w := defaultWorld()
 	cli := &scriptedAWS{handle: w.handle}
 	spec := fastSpec(t)
-	spec.AWSConfigPath = filepath.Join(t.TempDir(), "missing", "config") // a missing file in an existing directory is noSSO
+	spec.AWSConfigPath = filepath.Join(t.TempDir(), "missing", "config") // a missing directory warns
 	var log strings.Builder
 	if _, err := Apply(context.Background(), cli, spec, &log); err != nil {
 		t.Fatalf("Apply: %v", err)

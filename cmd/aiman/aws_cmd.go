@@ -234,6 +234,9 @@ func printApplyResult(res awsdelegation.ApplyResult, asJSON bool, out io.Writer)
 		return json.NewEncoder(out).Encode(res)
 	}
 	d := res.Delegation
+	if d.StartURL == "" {
+		d.StartURL = "<pass --start-url; see warning above>"
+	}
 	_, err := fmt.Fprintf(out, "Done. Put this in remotes[].aws_delegation for that account:\n"+
 		"  sso_start_url: %s\n  sso_region: %s\n  sso_account_id: %s\n  sso_role_name: %s\n"+
 		"Then push the config to the host (Agent API page, c) and sign in from the phone.\n",
@@ -247,6 +250,8 @@ type delegationTarget struct {
 	cfg     *config.Config
 	remote  string
 	profile string
+	// startURL is the sso_start_url write left on the entry.
+	startURL string
 }
 
 // newDelegationTarget checks --remote against cfg. No --remote is a nil target
@@ -290,8 +295,14 @@ func (t *delegationTarget) entry(spec awsdelegation.ApplySpec, hint awsdelegatio
 	}
 }
 
-// write upserts the entry on the remote and saves the config, returning its path.
+// write upserts the entry on the remote and saves the config, returning its
+// path. A hint without a start URL keeps the entry's existing one, so a run
+// that could not derive it never blanks a URL a previous run wrote.
 func (t *delegationTarget) write(spec awsdelegation.ApplySpec, hint awsdelegation.DelegationHint) (string, error) {
+	if hint.StartURL == "" {
+		hint.StartURL = t.existingStartURL()
+	}
+	t.startURL = hint.StartURL
 	if err := t.cfg.UpsertAWSDelegation(t.remote, t.entry(spec, hint)); err != nil {
 		return "", err
 	}
@@ -299,6 +310,22 @@ func (t *delegationTarget) write(spec awsdelegation.ApplySpec, hint awsdelegatio
 		return "", fmt.Errorf("the Identity Center setup is done, but writing the delegation failed; rerunning with --remote is safe: %w", err)
 	}
 	return config.GetConfigPath()
+}
+
+// existingStartURL is the sso_start_url of the entry write would update, or
+// empty when there is none.
+func (t *delegationTarget) existingStartURL() string {
+	for _, r := range t.cfg.Remotes {
+		if r.Name != t.remote {
+			continue
+		}
+		for _, d := range r.AllDelegations() {
+			if d != nil && d.Profile == t.profile {
+				return d.SSOStartURL
+			}
+		}
+	}
+	return ""
 }
 
 // printPlanned prints, for --dry-run, the entry a run would write. Its SSO
@@ -366,7 +393,13 @@ func (t *delegationTarget) printWritten(res awsdelegation.ApplyResult, path stri
 			Config:      writtenDelegation{Remote: t.remote, Profile: t.profile, Path: path},
 		})
 	}
-	_, err := fmt.Fprintf(out, "Wrote aws_delegations entry %s on remote %s in %s. Press c on the Agent API page to push it to the host.\n", t.profile, t.remote, path)
+	if _, err := fmt.Fprintf(out, "Wrote aws_delegations entry %s on remote %s in %s. Press c on the Agent API page to push it to the host.\n", t.profile, t.remote, path); err != nil {
+		return err
+	}
+	if t.startURL != "" {
+		return nil
+	}
+	_, err := fmt.Fprintf(out, "sso_start_url is still missing on entry %s, so the phone cannot sign in yet; rerun with --start-url <access portal URL from the IAM Identity Center dashboard>.\n", t.profile)
 	return err
 }
 
