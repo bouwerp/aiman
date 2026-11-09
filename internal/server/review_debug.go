@@ -95,6 +95,8 @@ func (s *Server) startDebugPTY(sess domain.Session, sb review.Sandbox, composePa
 		Dir:      sb.Dir,
 		Command:  cmd,
 		ParentID: sess.ID,
+
+		AgentNice: int(s.agentNice.Load()),
 	})
 	return err
 }

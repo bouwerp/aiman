@@ -436,10 +436,7 @@ func topCounts(m map[string]*statAgg) []RPCCount {
 // RPCStats is the last minute of requests, plus what is in flight now.
 func (s *Server) RPCStats() RPCStats {
 	st := s.admission().snapshot(time.Now())
-	// The sweep guard's counter, when this build has one.
-	if sk, ok := any(s).(interface{ SweepSkipped() int }); ok {
-		st.SweepSkipped = sk.SweepSkipped()
-	}
+	st.SweepSkipped = s.SweepSkipped()
 	return st
 }
 

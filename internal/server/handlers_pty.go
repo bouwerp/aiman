@@ -22,6 +22,11 @@ import (
 // plain request/response except pty.attach, which switches the connection into
 // a raw bidirectional byte stream after a single confirmation line.
 
+// SetAgentNice sets host.load.agent_nice, the nice increment pty.create gives
+// every pty it starts (agents and the helper ptys sessions create). The holder
+// keeps its own priority. Unset is 0: commands run at the holder's niceness.
+func (s *Server) SetAgentNice(n int) { s.agentNice.Store(int32(min(max(n, 0), 19))) } //nolint:gosec // G115: clamped to [0,19]
+
 func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 	var params struct {
 		ID      string            `json:"id"`
@@ -55,6 +60,8 @@ func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 
 		Role:     params.Role,
 		ParentID: params.ParentID,
+
+		AgentNice: int(s.agentNice.Load()),
 	})
 	if err != nil {
 		return s.ptyErrResp(req.ID, err)

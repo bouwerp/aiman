@@ -115,8 +115,14 @@ func (s *Server) asksQuestion(sample stateSample) bool {
 }
 
 // sweepStates runs one pass of the stateSweep, and drops cached state for every
-// session that is gone, no longer active or hidden.
+// session that is gone, no longer active or hidden. A call made while another
+// pass is still running returns at once and counts as a skipped tick.
 func (s *Server) sweepStates(ctx context.Context) {
+	if !s.sweepMu.TryLock() {
+		s.sweepSkipped.Add(1)
+		return
+	}
+	defer s.sweepMu.Unlock()
 	list, err := s.loadSessions(ctx)
 	if err != nil {
 		return
@@ -137,6 +143,12 @@ func (s *Server) sweepStates(ctx context.Context) {
 		}
 		return true
 	})
+}
+
+// SweepSkipped returns how many sweep ticks were skipped because the previous
+// sweep was still running or ran past its period.
+func (s *Server) SweepSkipped() int {
+	return int(s.sweepSkipped.Load())
 }
 
 // pruneNotifications drops log rows past the retention window.
@@ -166,8 +178,19 @@ func (s *Server) runStateSweep(ctx context.Context) {
 				s.pruneNotifications(ctx)
 				lastPrune = time.Now()
 			}
+			start := time.Now()
 			s.sweepStates(ctx)
+			s.countOverrun(time.Since(start))
 		}
+	}
+}
+
+// countOverrun adds the ticks a sweep lasting elapsed made the ticker drop:
+// time.Ticker drops ticks while its receiver is busy, so they never reach the
+// TryLock in sweepStates.
+func (s *Server) countOverrun(elapsed time.Duration) {
+	if elapsed > notifySweepEvery {
+		s.sweepSkipped.Add(int64(elapsed / notifySweepEvery))
 	}
 }
 

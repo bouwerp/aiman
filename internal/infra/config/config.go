@@ -234,8 +234,12 @@ type HostConfig struct {
 	Load HostLoadConfig `yaml:"load,omitempty"`
 }
 
-// HostLoadConfig is host.load: how much serve admits and at what priority
-// agents run. A zero field keeps its default.
+// DefaultAgentNice is the nice increment agents start at when
+// host.load.agent_nice is unset.
+const DefaultAgentNice = 10
+
+// HostLoadConfig is host.load: how serve keeps the host responsive under
+// load. A zero field keeps its default.
 type HostLoadConfig struct {
 	// MaxInflight caps requests served at once; 0 is 64.
 	MaxInflight int `yaml:"max_inflight,omitempty"`
@@ -244,8 +248,19 @@ type HostLoadConfig struct {
 	PerCallerPerMinute int `yaml:"per_caller_per_minute,omitempty"`
 	// MaxCaptures caps the pane captures serve makes for itself at once; 0 is 4.
 	MaxCaptures int `yaml:"max_captures,omitempty"`
-	// AgentNice is the niceness agents are started at; nil is 10, 0 none.
+	// AgentNice is the nice increment every agent pty starts at, so the
+	// agent and its builds yield to serve and the pty holders. Nil is
+	// DefaultAgentNice; 0 runs agents at the holder's priority.
 	AgentNice *int `yaml:"agent_nice,omitempty"`
+}
+
+// AgentNiceOrDefault is the configured increment, DefaultAgentNice when
+// unset, clamped to [0,19].
+func (l HostLoadConfig) AgentNiceOrDefault() int {
+	if l.AgentNice == nil {
+		return DefaultAgentNice
+	}
+	return min(max(*l.AgentNice, 0), 19)
 }
 
 // HostUpdateConfig is host.update: how serve polls for a new aiman release

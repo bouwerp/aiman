@@ -216,6 +216,31 @@ func (r *Repository) OnChange(fn func(ChangeKind))     // after every mutating m
 func (r *Repository) DB() *sql.DB                      // the writer
 func (r *Repository) Reader() *sql.DB                  // the bounded reader pool
 func (r *Repository) Close() error                     // wal_checkpoint(TRUNCATE), then both pools
+
+// internal/server (P4, load-aware sweep)
+var sweepPeriodLow, sweepPeriodHigh = 2 * time.Second, 5 * time.Second
+const sweepCaptureBudget = 16
+var readLoadAvg func() (float64, bool)                  // /proc/loadavg on Linux; false elsewhere (tests swap it)
+func parseLoadAvg(s string) (float64, bool)             // the first field
+func sweepPeriod(load float64, ok bool, ncpu int) time.Duration // high when ok && load >= ncpu, else low; runStateSweep re-reads it every tick
+// A session needs a capture when its hook report moved to ended or waiting_input since the last pass (a transition), when
+// the report is stale or missing, or when it is a fresh working report (the menu check). A fresh idle, ended or waiting_input
+// report that did not just transition is sampled without a capture and does not count toward the budget. Order: transitions,
+// then stale or missing, then fresh working, round robin inside each group; sessions past the budget keep their cached state.
+// ptyfake.FakePTY gains CapturesOf(id string) int.
+
+// internal/server (P5, diagnostics)
+var dumpStackCap = 64 << 20                              // bytes of goroutine stack; a cut dump ends with a line saying "truncated"
+var dumpStack = runtime.Stack                            // the seam tests swap
+var ErrDumpInProgress = errors.New("dump in progress")
+type InflightCall struct{ Method, Caller string; Age time.Duration }
+func (s *Server) InflightCalls() []InflightCall          // admitted calls still running, oldest first (P2's slots gain method, caller and start)
+func (s *Server) WriteDump(dir string) (string, error)   // <dir>/serve-dump-<unix>.txt, 0600: RPCStats JSON, "load average", "in-flight" list, then the stacks; one at a time
+type autoDump struct{ ... }; func (d *autoDump) due(now time.Time, atCap bool) bool // true once at the cap for autoDumpAfter (30s), then not for autoDumpEvery (10m); below the cap resets
+func (s *Server) HandleDumpSignals(ctx context.Context, dir string) // SIGUSR1 → WriteDump(~/.aiman/logs); a signal during a dump is ignored
+// cmd/aiman/host_cmd.go
+func serveMainPID(run func(args ...string) (string, error), pidFile string) (int, error) // `systemctl --user show -p MainPID --value aiman-serve`, else the pid file, else an error naming both
+func newestDumpSince(dir string, since time.Time) (string, bool)                        // the serve-dump-*.txt `aiman host dump` prints
 ```
 
 ## What the reader should be able to explain
