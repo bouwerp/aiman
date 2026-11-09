@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -190,6 +191,18 @@ func normalizeSpec(spec ApplySpec) (ApplySpec, error) {
 	return spec, nil
 }
 
+// configMissingInAWSDir reports a config file that does not exist in a
+// directory that does: a laptop with only ~/.aws/credentials has no config,
+// and a missing file holds no SSO keys. A missing directory is left to the
+// warning, as is any other read failure.
+func configMissingInAWSDir(path string, err error) bool {
+	if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	info, statErr := os.Stat(filepath.Dir(path))
+	return statErr == nil && info.IsDir()
+}
+
 // readProfile is step 0: the admin profile's SSO section, and noSSO when the
 // profile has no SSO keys. Any other failure is a warning line on log and
 // neither: an unreadable config is never mistaken for a plain IAM profile.
@@ -199,7 +212,7 @@ func readProfile(spec ApplySpec, log io.Writer) (p SSOProfile, noSSO bool) {
 		return SSOProfile{}, false
 	}
 	p, err := ReadSSOProfile(spec.AWSConfigPath, spec.Profile)
-	if errors.Is(err, ErrNoSSO) {
+	if errors.Is(err, ErrNoSSO) || configMissingInAWSDir(spec.AWSConfigPath, err) {
 		return SSOProfile{}, true
 	}
 	if err != nil {
@@ -374,6 +387,20 @@ func (r *applyRun) useInstance(in instanceRecord) {
 	r.logf("instance %s (identity store %s)", r.res.InstanceARN, r.res.IdentityStoreID)
 }
 
+// noInstance is step 1's error for an empty list, naming where the region
+// came from: --sso-region on a profile without SSO keys, else the profile's
+// sso_region.
+func (r *applyRun) noInstance() error {
+	if r.noSSO && r.spec.SSORegion != "" {
+		return fmt.Errorf("no Identity Center instance visible to profile %s in %s; check --sso-region %s", r.spec.Profile, r.region, r.spec.SSORegion)
+	}
+	region := r.region
+	if region == "" {
+		region = "the profile's default region"
+	}
+	return fmt.Errorf("no Identity Center instance visible to profile %s in %s; check the profile's sso_region", r.spec.Profile, region)
+}
+
 // instance is step 1: exactly one Identity Center instance in r.region.
 func (r *applyRun) instance() error {
 	ins, err := r.listInstances(r.region)
@@ -381,11 +408,7 @@ func (r *applyRun) instance() error {
 		return err
 	}
 	if len(ins) == 0 {
-		region := r.region
-		if region == "" {
-			region = "the profile's default region"
-		}
-		return fmt.Errorf("no Identity Center instance visible to profile %s in %s; check the profile's sso_region", r.spec.Profile, region)
+		return r.noInstance()
 	}
 	in, err := r.oneInstance(ins)
 	if err != nil {
@@ -445,8 +468,8 @@ func (r *applyRun) partition() error {
 
 // discover is steps 0 and 1 for a profile without SSO keys: the Identity
 // Center region and instance, from --sso-region, else ListInstances with
-// ALL_REGIONS, else the region scan when the CLI predates --region-scope or
-// the answer names no region.
+// ALL_REGIONS, else the region scan when the CLI predates --region-scope.
+// An ALL_REGIONS instance with no region is located by the scan.
 func (r *applyRun) discover() error {
 	if r.spec.SSORegion != "" {
 		r.region = r.spec.SSORegion
@@ -471,7 +494,7 @@ func (r *applyRun) discover() error {
 		return err
 	}
 	if in.primary() == "" {
-		return r.scan()
+		return r.locate(in)
 	}
 	r.region = in.primary()
 	r.useInstance(in)
@@ -492,28 +515,11 @@ func isUnknownRegionScope(err error) bool {
 // stopping early, and applies the one-instance rule to the union. A failing
 // region counts as empty; the first failure's line is kept for the error.
 func (r *applyRun) scan() error {
-	regions, err := r.accountRegions()
+	regions, err := r.scanRegions()
 	if err != nil {
-		return fmt.Errorf("cannot list the account's regions (%s); pass --sso-region <region of the Identity Center instance>, or update the AWS CLI", firstLine(err.Error()))
+		return err
 	}
-	var found []instanceRecord
-	regionOf := map[string]string{}
-	var kept string
-	for _, region := range regions {
-		ins, err := r.listInstances(region)
-		if err != nil {
-			if kept == "" {
-				kept = firstLine(err.Error())
-			}
-			continue
-		}
-		for _, in := range ins {
-			if _, seen := regionOf[in.InstanceArn]; !seen {
-				regionOf[in.InstanceArn] = region
-				found = append(found, in)
-			}
-		}
-	}
+	found, regionOf, kept := r.instancesIn(regions)
 	if len(found) == 0 {
 		msg := fmt.Sprintf("no Identity Center instance in any of %d regions for profile %s; %s; or pass --sso-region if the instance is in a region this profile cannot list", len(regions), r.spec.Profile, enableInstanceHint)
 		if kept != "" {
@@ -532,6 +538,61 @@ func (r *applyRun) scan() error {
 	r.useInstance(in)
 	r.logf("Identity Center region %s (scanned %d regions)", r.region, len(regions))
 	return nil
+}
+
+// locate finds the region of the instance ALL_REGIONS identified without
+// naming one: the region whose list-instances holds its ARN. The ALL_REGIONS
+// record is kept; an ARN that appears nowhere needs --sso-region.
+func (r *applyRun) locate(in instanceRecord) error {
+	regions, err := r.scanRegions()
+	if err != nil {
+		return err
+	}
+	_, regionOf, kept := r.instancesIn(regions)
+	region, ok := regionOf[in.InstanceArn]
+	if !ok {
+		msg := fmt.Sprintf("instance %s names no region and is not listed in any of %d regions for profile %s; pass --sso-region <region of the Identity Center instance>", in.InstanceArn, len(regions), r.spec.Profile)
+		if kept != "" {
+			msg += " (" + kept + ")"
+		}
+		return errors.New(msg)
+	}
+	r.region = region
+	r.useInstance(in)
+	r.logf("Identity Center region %s (all regions, located by scanning %d regions)", r.region, len(regions))
+	return nil
+}
+
+// scanRegions is accountRegions with the error the scan reports.
+func (r *applyRun) scanRegions() ([]string, error) {
+	regions, err := r.accountRegions()
+	if err != nil {
+		return nil, fmt.Errorf("cannot list the account's regions (%s); pass --sso-region <region of the Identity Center instance>, or update the AWS CLI", firstLine(err.Error()))
+	}
+	return regions, nil
+}
+
+// instancesIn runs list-instances in every region: the instances in first
+// seen order, the first region each ARN appeared in, and the first failing
+// region's error line. A failing region counts as empty.
+func (r *applyRun) instancesIn(regions []string) (found []instanceRecord, regionOf map[string]string, kept string) {
+	regionOf = map[string]string{}
+	for _, region := range regions {
+		ins, err := r.listInstances(region)
+		if err != nil {
+			if kept == "" {
+				kept = firstLine(err.Error())
+			}
+			continue
+		}
+		for _, in := range ins {
+			if _, seen := regionOf[in.InstanceArn]; !seen {
+				regionOf[in.InstanceArn] = region
+				found = append(found, in)
+			}
+		}
+	}
+	return found, regionOf, kept
 }
 
 // accountRegions is the account's enabled regions from account list-regions.
@@ -977,14 +1038,21 @@ func (r *applyRun) hint() error {
 	return nil
 }
 
+// identityStoreID is the shape of an identity store id, checked before it
+// becomes a host name in the derived start URL.
+var identityStoreID = regexp.MustCompile(`^d-[0-9a-f]+$`)
+
 // discoveredHint is step 8 for a profile without SSO keys: the discovered or
 // given region, and --start-url else the default access portal URL of the
 // identity store, verified through spec.VerifyStartURL when it is set.
 func (r *applyRun) discoveredHint() error {
 	url := r.spec.StartURL
 	if url == "" {
-		if r.res.IdentityStoreID == "" {
-			return fmt.Errorf("instance %s has no identity store id to derive the start URL from; pass --start-url from the IAM Identity Center dashboard", r.res.InstanceARN)
+		if !identityStoreID.MatchString(r.res.IdentityStoreID) {
+			r.res.Delegation = DelegationHint{Region: r.region, AccountID: r.res.AccountID, RoleName: r.spec.Name}
+			r.logf("warning: identity store id %q of instance %s is not d-<hex>, so no start URL is derived; rerun with --start-url from the IAM Identity Center dashboard",
+				r.res.IdentityStoreID, r.res.InstanceARN)
+			return nil
 		}
 		url = "https://" + r.res.IdentityStoreID + ".awsapps.com/start"
 	}

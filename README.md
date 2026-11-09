@@ -1182,6 +1182,9 @@ remotes:
     #      enabled before the organization existed) cannot hold permission sets.
     #   3. Users -> Add user, with an email invitation; set the password from
     #      that email. A user created through the API has no password.
+    # The admin profile also needs sso:DescribeInstance,
+    # organizations:DescribeOrganization and account:ListRegions (all in
+    # AdministratorAccess).
 
 # Per-repo worktree bootstrap, keyed by owner/name. See
 # "Worktree bootstrap and code graph".

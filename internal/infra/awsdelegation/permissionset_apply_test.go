@@ -3,6 +3,7 @@ package awsdelegation
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -109,7 +110,7 @@ func TestApplyUnreadableConfigWarns(t *testing.T) {
 	w := defaultWorld()
 	cli := &scriptedAWS{handle: w.handle}
 	spec := fastSpec(t)
-	spec.AWSConfigPath = filepath.Join(t.TempDir(), "missing")
+	spec.AWSConfigPath = filepath.Join(t.TempDir(), "missing", "config") // a missing file in an existing directory is noSSO
 	var log strings.Builder
 	if _, err := Apply(context.Background(), cli, spec, &log); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -141,5 +142,104 @@ func TestPartitionHome(t *testing.T) {
 		if got, _ := partitionHome(arn); got != want {
 			t.Errorf("partitionHome(%q) = %q, want %q", arn, got, want)
 		}
+	}
+}
+
+// regionlessAWS answers ALL_REGIONS with one instance that names no region.
+func regionlessAWS(listed map[string]string, regionsErr error) func(args []string) (string, error) {
+	return func(args []string) (string, error) {
+		switch awsOperation(args) {
+		case "sso-admin list-instances":
+			for i := range args {
+				if args[i] == "--region-scope" {
+					return `{"Instances":[{"InstanceArn":"arn:x:found","IdentityStoreId":"d-123"}]}`, nil
+				}
+			}
+			region := ""
+			for i := 0; i+1 < len(args); i++ {
+				if args[i] == "--region" {
+					region = args[i+1]
+				}
+			}
+			return listed[region], nil
+		case "account list-regions":
+			return `{"Regions":[{"RegionName":"us-east-1"},{"RegionName":"eu-west-1"}]}`, regionsErr
+		}
+		return "", errors.New("unexpected " + strings.Join(args, " "))
+	}
+}
+
+type funcAWS func(args []string) (string, error)
+
+func (f funcAWS) Run(_ context.Context, args ...string) ([]byte, error) {
+	out, err := f(args)
+	return []byte(out), err
+}
+
+func TestDiscoverLocatesTheIdentifiedInstance(t *testing.T) {
+	newRun := func(handle func([]string) (string, error)) *applyRun {
+		return &applyRun{ctx: context.Background(), cli: funcAWS(handle), spec: ApplySpec{Profile: "p"}, log: &strings.Builder{}, noSSO: true, home: awsPartitionHome}
+	}
+	t.Run("keeps the ALL_REGIONS record in the region listing its ARN", func(t *testing.T) {
+		// eu-west-1 also lists another instance: the one-instance rule must not
+		// run over the union.
+		r := newRun(regionlessAWS(map[string]string{
+			"us-east-1": `{"Instances":[{"InstanceArn":"arn:x:other","IdentityStoreId":"d-999"}]}`,
+			"eu-west-1": `{"Instances":[{"InstanceArn":"arn:x:found","IdentityStoreId":"d-scan"},{"InstanceArn":"arn:x:other"}]}`,
+		}, nil))
+		if err := r.discover(); err != nil {
+			t.Fatal(err)
+		}
+		if r.region != "eu-west-1" || r.res.InstanceARN != "arn:x:found" || r.res.IdentityStoreID != "d-123" {
+			t.Errorf("region %q, instance %q, store %q; want eu-west-1, arn:x:found and the ALL_REGIONS record", r.region, r.res.InstanceARN, r.res.IdentityStoreID)
+		}
+	})
+	t.Run("an ARN listed nowhere needs --sso-region", func(t *testing.T) {
+		r := newRun(regionlessAWS(map[string]string{}, nil))
+		if err := r.discover(); err == nil || !strings.Contains(err.Error(), "--sso-region") || !strings.Contains(err.Error(), "arn:x:found") {
+			t.Fatalf("err = %v, want one naming the ARN and --sso-region", err)
+		}
+	})
+	t.Run("list-regions failure needs --sso-region", func(t *testing.T) {
+		r := newRun(regionlessAWS(nil, errors.New("denied")))
+		if err := r.discover(); err == nil || !strings.Contains(err.Error(), "--sso-region") {
+			t.Fatalf("err = %v, want one naming --sso-region", err)
+		}
+	})
+}
+
+func TestNoInstanceNamesTheGivenRegion(t *testing.T) {
+	r := &applyRun{spec: ApplySpec{Profile: "p", SSORegion: "af-south-1"}, noSSO: true, region: "af-south-1"}
+	if err := r.noInstance(); !strings.Contains(err.Error(), "--sso-region af-south-1") || strings.Contains(err.Error(), "sso_region") {
+		t.Errorf("err = %v, want it to name --sso-region af-south-1", err)
+	}
+	r = &applyRun{spec: ApplySpec{Profile: "p"}, region: "eu-west-1"}
+	if err := r.noInstance(); !strings.Contains(err.Error(), "the profile's sso_region") {
+		t.Errorf("err = %v, want the rev 5 text for an SSO profile", err)
+	}
+}
+
+func TestReadProfileMissingConfig(t *testing.T) {
+	dir := t.TempDir()
+	if _, noSSO := readProfile(ApplySpec{Profile: "p", AWSConfigPath: filepath.Join(dir, "config")}, io.Discard); !noSSO {
+		t.Error("a missing config in an existing ~/.aws is not noSSO")
+	}
+	var log strings.Builder
+	if _, noSSO := readProfile(ApplySpec{Profile: "p", AWSConfigPath: filepath.Join(dir, "missing", "config")}, &log); noSSO || !strings.Contains(log.String(), "warning:") {
+		t.Errorf("a missing directory: noSSO %v, log %q; want the warning and not noSSO", noSSO, log.String())
+	}
+}
+
+func TestDiscoveredHintRefusesAnOddIdentityStoreID(t *testing.T) {
+	var log strings.Builder
+	called := false
+	r := &applyRun{ctx: context.Background(), log: &log, region: "eu-west-1",
+		spec: ApplySpec{Name: DefaultPermissionSetName, VerifyStartURL: func(context.Context, string, string) error { called = true; return nil }}}
+	r.res.IdentityStoreID = "evil.example.com/x"
+	if err := r.discoveredHint(); err != nil {
+		t.Fatal(err)
+	}
+	if r.res.Delegation.StartURL != "" || r.res.Delegation.Region != "eu-west-1" || called || !strings.Contains(log.String(), "--start-url") {
+		t.Errorf("Delegation %+v, verified %v, log %q; want no URL, no verification and a warning naming --start-url", r.res.Delegation, called, log.String())
 	}
 }

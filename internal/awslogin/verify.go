@@ -77,8 +77,9 @@ func (v Verifier) oidcBase(region string) string {
 }
 
 // startURLRejected reports a 400 InvalidRequestException, from the
-// x-amzn-ErrorType header or the body's OAuth invalid_request.
+// x-amzn-ErrorType header or the body's OAuth invalid_request, whichever
+// names it.
 func startURLRejected(err error) bool {
 	var ae *apiError
-	return errors.As(err, &ae) && ae.status == http.StatusBadRequest && ae.code == codeInvalidReq
+	return errors.As(err, &ae) && ae.status == http.StatusBadRequest && (ae.code == codeInvalidReq || ae.oauth == codeInvalidReq)
 }

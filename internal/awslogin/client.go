@@ -57,6 +57,9 @@ type apiError struct {
 	op     string
 	status int
 	code   string
+	// oauth is the body's OAuth error code when the header named another
+	// type; normalized like code.
+	oauth string
 }
 
 func (e *apiError) Error() string {
@@ -140,12 +143,24 @@ func doJSON(client *http.Client, req *http.Request, op string, out any) error {
 		return &apiError{op: op, status: resp.StatusCode, code: codeTransport}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &apiError{op: op, status: resp.StatusCode, code: errorCode(resp.Header, body)}
+		return &apiError{op: op, status: resp.StatusCode, code: errorCode(resp.Header, body), oauth: oauthErrorCode(body)}
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return &apiError{op: op, status: resp.StatusCode, code: codeParse}
 	}
 	return nil
+}
+
+// oauthErrorCode is the body's OAuth error field mapped like errorCode, or
+// empty when the body has none.
+func oauthErrorCode(body []byte) string {
+	var parsed struct {
+		OAuth string `json:"error"`
+	}
+	if json.Unmarshal(body, &parsed) != nil || parsed.OAuth == "" {
+		return ""
+	}
+	return normalizeCode(parsed.OAuth)
 }
 
 // errorCode reads the error name from x-amzn-ErrorType, then the body's __type,
