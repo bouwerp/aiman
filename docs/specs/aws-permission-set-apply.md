@@ -1,6 +1,6 @@
 # `aiman aws permission-set-apply`: set up the delegated permission set with the AWS CLI
 
-**Revision:** 1 · **Size:** small · **Status:** draft, consult pending
+**Revision:** 2 · **Size:** small · **Status:** consult round 1 triaged (revise, all accepted), round 2 pending
 **Task:** operator request on 2026-11-09 ("Can we have scripts in the aiman repo that sets that up through the AWS cli?") · **Spec:** extends `docs/specs/phone-aws-login.md` (the permission set it needs)
 
 ## Problem
@@ -67,26 +67,28 @@ New file `internal/infra/awsdelegation/permissionset_apply.go`. *Changed* `cmd/a
 
 ### Behaviour
 
-`Apply(ctx, cli AWSCLI, spec ApplySpec, log io.Writer) (ApplyResult, error)` runs, in order, logging one line per step to `log`:
+`Apply(ctx, cli AWSCLI, spec ApplySpec, log io.Writer) (ApplyResult, error)` runs, in order, logging one line per step to `log`. Empty `spec.Regions` is an error before any call: `no regions: pass --regions a,b or set them on a delegation`.
 
-1. **Instance**: `sso-admin list-instances`. Exactly one instance is required; zero is the error `no Identity Center instance visible to profile <p>`; more than one is an error listing their ARNs (an `--instance` flag is not in scope; see Open questions).
+0. **Identity Center region**: `ReadSSOProfile(spec.AWSConfigPath, spec.Profile)` once. Its `Region` (the profile's `sso_region`, the `sso_session` form included) is passed as `--region <r>` on every `sso-admin` and `identitystore` call, because those APIs answer only in the instance's region and a profile's working `region` is usually another one. A profile with no SSO keys passes no `--region` and the CLI's default applies. `sts get-caller-identity` never gets it.
+1. **Instance**: `sso-admin list-instances`. Exactly one instance is required; zero is the error `no Identity Center instance visible to profile <p> in <region>; check the profile's sso_region`; more than one is an error listing their ARNs (an `--instance` flag is not in scope; see Open questions).
 2. **Account**: `spec.AccountID`, else `sts get-caller-identity` `Account`, logged as `account <id> (the admin profile's own account)`.
-3. **Permission set**: page through `sso-admin list-permission-sets` and `describe-permission-set` each until one has `Name == spec.Name`. Found: when `SessionDuration != PT12H`, `update-permission-set --session-duration PT12H`. Missing: `create-permission-set --name <name> --session-duration PT12H --description "aiman delegated sessions"`; `CreatedPermissionSet` true.
-4. **Policy**: `put-inline-policy-to-permission-set --inline-policy <PermissionSetPolicy(regions)>`, always, so a changed region list is applied. Empty regions is an error before any call: `no regions: pass --regions a,b or set them on a delegation`.
-5. **Principal**: `spec.User`, else the last `/` segment of the caller ARN (`assumed-role/AWSReservedSSO_x_y/<user>`; a plain IAM user ARN `user/<name>` works the same; a root ARN is an error asking for `--user`). `identitystore list-users --identity-store-id <id> --filters AttributePath=UserName,AttributeValue=<user>`; zero matches is an error naming the user and the store.
-6. **Assignment**: `sso-admin list-account-assignments --account-id <acct> --permission-set-arn <arn>` filtered by `PrincipalId`. Present: skip. Missing: `create-account-assignment --target-type AWS_ACCOUNT --target-id <acct> --principal-type USER --principal-id <id>`, then poll `describe-account-assignment-creation-status` every 2 seconds for up to 2 minutes until `SUCCEEDED` (`CreatedAssignment` true) or `FAILED` (error with `FailureReason`). Timeout is an error naming the request id; the assignment may still complete, and a rerun finds it.
-7. **Hint**: `ReadSSOProfile(defaultAWSConfigPath, spec.Profile)` fills `Delegation.StartURL` and `Delegation.Region`; `AccountID` and `RoleName` always.
+3. **Permission set**: `sso-admin list-permission-sets --instance-arn <i>` (one call; the CLI paginates on its own, no `--starting-token`), then `describe-permission-set --instance-arn <i> --permission-set-arn <arn>` for each until `.PermissionSet.Name == spec.Name`. Found: when `.PermissionSet.SessionDuration != PT12H`, `update-permission-set --instance-arn <i> --permission-set-arn <arn> --session-duration PT12H`. Missing: `create-permission-set --instance-arn <i> --name <name> --session-duration PT12H --description "aiman delegated sessions"`, ARN from `.PermissionSet.PermissionSetArn`; `CreatedPermissionSet` true.
+4. **Policy**: `put-inline-policy-to-permission-set --instance-arn <i> --permission-set-arn <arn> --inline-policy <PermissionSetPolicy(regions)>`, always, so a changed region list is applied.
+5. **Principal**: the user name is `spec.User`, else inferred from the caller ARN only when it is an Identity Center session, `assumed-role/AWSReservedSSO_<ps>_<hash>/<session>`, whose session name is the Identity Center user name. Any other caller (IAM user, another assumed role, root) is the error `cannot infer your Identity Center user name from <arn>; pass --user <Identity Center user name>`. The lookup is `identitystore get-user-id --identity-store-id <id> --alternate-identifier '{"UniqueAttribute":{"AttributePath":"userName","AttributeValue":"<user>"}}'`, principal id from `.UserId`; `ResourceNotFoundException` is the error `no user <name> in identity store <id>; pass --user with the Identity Center user name`. `list-users` is not used: it returns whole user records (emails, phones, addresses) that the log must not carry.
+6. **Assignment**: `sso-admin list-account-assignments --instance-arn <i> --account-id <acct> --permission-set-arn <arn>`, looking for `.AccountAssignments[].PrincipalId == <id>`. Present: skip, `CreatedAssignment` false. Missing: `create-account-assignment --instance-arn <i> --target-type AWS_ACCOUNT --target-id <acct> --permission-set-arn <arn> --principal-type USER --principal-id <id>`. A `ConflictException` means an assignment exists or is still being created: list again, treat present as present, else poll nothing and fail with the conflict. Otherwise read `.AccountAssignmentCreationStatus`: `SUCCEEDED` is done; `IN_PROGRESS` polls `describe-account-assignment-creation-status --instance-arn <i> --account-assignment-creation-request-id <RequestId>` every `PollInterval` (2s) for up to `PollTimeout` (2m) until `SUCCEEDED` (`CreatedAssignment` true) or `FAILED` (error with `.FailureReason`). Timeout is an error naming the request id; the assignment may still complete, and a rerun finds it. Creating an assignment provisions the role in the account.
+7. **Provision**: when the assignment already existed (step 6 skipped or hit the conflict), the role in the account still holds the old policy and duration, so `provision-permission-set --instance-arn <i> --permission-set-arn <arn> --target-type AWS_ACCOUNT --target-id <acct>` pushes steps 3 and 4 to it, then `describe-permission-set-provisioning-status --instance-arn <i> --provision-permission-set-request-id <RequestId>` is polled like step 6 until `SUCCEEDED` or `FAILED` (error with `.FailureReason`). Skipped when step 6 created the assignment in this run.
+8. **Hint**: `ReadSSOProfile` again fills `Delegation.StartURL` and `Delegation.Region`; `AccountID` and `RoleName` (`spec.Name`) always. The admin profile's `sso_role_name` is never copied: it is the admin's permission set. A read failure here, after the apply succeeded, is a `warning:` line in the log, not an error.
 
-Every step is idempotent, so a rerun after any failure finishes the setup. `Plan(spec ApplySpec) []ApplyStep` returns steps 1 to 6 with placeholders `<instance-arn>`, `<identity-store-id>`, `<permission-set-arn>`, `<principal-id>` where a value comes from an earlier call; `--dry-run` prints them as `aws --profile <p> ...` lines and makes no call.
+Every step is safe to repeat: lookups before creates, the policy and the provisioning re-applied each run, conflicts read as presence. `Plan(spec ApplySpec) ([]ApplyStep, error)` returns steps 1 to 7 with placeholders `<instance-arn>`, `<identity-store-id>`, `<permission-set-arn>`, `<principal-id>` and `<request-id>` where a value comes from an earlier call, with the same `--profile` and `--region` flags; `--dry-run` prints them as `aws --profile <p> ...` lines and makes no call.
 
-`aws` is run with `--output json` and errors carry the CLI's stderr first line. Outputs of `sso-admin`, `identitystore` and `sts get-caller-identity` hold ARNs, ids and names, never credentials; the command logs them. aiman never reads the admin profile's credentials, `~/.aws/credentials` or an SSO cache; it reads only the `sso_start_url` and `sso_region` keys of the admin profile's config section, which `ReadSSOProfile` already does.
+`aws` runs with `--output json`; an error reads `aws <service> <subcommand>: <first line of the CLI output>`. The outputs the command reads (`list-instances`, `get-caller-identity`, permission set records, `get-user-id`, assignment and provisioning statuses) hold ARNs, ids and names, never credentials; the log names the account, the permission set, the user name and the request ids, and never `UserId` from `get-caller-identity`. aiman never reads the admin profile's credentials, `~/.aws/credentials` or an SSO cache; it reads only the SSO keys of the admin profile's config section, which `ReadSSOProfile` already does. `--debug` is never passed to the CLI.
 
 ### CLI
 
 `aiman aws permission-set-apply --profile <admin profile> [--account <id>] [--regions a,b] [--name aiman-delegated] [--user <username>] [--dry-run] [--json]`
 
-- `--profile` is required (`errUsage` without it). `--regions` defaults to the first delegation with regions in the laptop config, as `permission-set-policy` does.
-- Progress goes to stdout as `Apply` logs it; the end prints:
+- `--profile` is required (`errUsage` without it). `--regions` defaults to the first delegation with regions in the laptop config, as `permission-set-policy` does. `--user` names the Identity Center user to assign; the help text says this is how to target a dedicated sign-in user that holds only `aiman-delegated` (the phone-aws-login design's recommendation), and that without it the admin's own user is assigned when the admin profile is an Identity Center session.
+- Progress lines go to stderr, so stdout holds only the result; on success stdout prints:
 
 ```
 Done. Put this in remotes[].aws_delegation for that account:
@@ -100,11 +102,11 @@ Then push the config to the host (Agent API page, c) and sign in from the phone.
 - `--json` prints `ApplyResult` as one JSON object instead of the text.
 - Exit 1 with the error on stderr when a step fails.
 
-Permissions the admin profile needs: `sso:ListInstances`, `sso:ListPermissionSets`, `sso:DescribePermissionSet`, `sso:CreatePermissionSet`, `sso:UpdatePermissionSet`, `sso:PutInlinePolicyToPermissionSet`, `sso:ListAccountAssignments`, `sso:CreateAccountAssignment`, `sso:DescribeAccountAssignmentCreationStatus`, `identitystore:ListUsers`, `sts:GetCallerIdentity`, plus `iam:CreateRole`, `iam:AttachRolePolicy`, `iam:PutRolePolicy`, `iam:GetRole`, `iam:ListRolePolicies`, `iam:DeleteRole`, `iam:DetachRolePolicy`, `iam:DeleteRolePolicy`, `iam:GetSAMLProvider`, `iam:CreateSAMLProvider`, `iam:UpdateSAMLProvider`, `iam:ListAttachedRolePolicies` on the target account, which Identity Center uses when it provisions the role (`AWSSSOMasterAccountAdministrator` covers them).
+Permissions the admin profile needs: `sso:ListInstances`, `sso:ListPermissionSets`, `sso:DescribePermissionSet`, `sso:CreatePermissionSet`, `sso:UpdatePermissionSet`, `sso:PutInlinePolicyToPermissionSet`, `sso:ListAccountAssignments`, `sso:CreateAccountAssignment`, `sso:DescribeAccountAssignmentCreationStatus`, `sso:ProvisionPermissionSet`, `sso:DescribePermissionSetProvisioningStatus`, `identitystore:GetUserId` and `sts:GetCallerIdentity`. The `AWSReservedSSO_*` role in the account is created by Identity Center's own service-linked role, not by the caller. For the operator's stand-alone accounts `AdministratorAccess` on the admin profile covers all of it; in an organisation the management account's `AWSSSOMasterAccountAdministrator` does.
 
 ## Scenario
 
-The operator runs `aiman aws permission-set-apply --profile acme-admin` on the laptop. The CLI signs in through the admin profile's own SSO if needed. aiman finds the single instance, reads account `123456789012` from the caller, finds no `aiman-delegated`, creates it with PT12H, puts the eu-west-1 policy, resolves `pieter@acme.io` from the caller ARN, finds the user id in the identity store, creates the assignment and polls for 20 seconds until `SUCCEEDED`. It prints the four delegation lines. The operator copies them into `remotes[].aws_delegation`, reloads serve, opens the phone's Host tab and signs in; `aws.login_start` now finds the role. They repeat the command twice with the other two admin profiles.
+The operator runs `aiman aws permission-set-apply --profile acme-admin` on the laptop. The CLI signs in through the admin profile's own SSO if needed. aiman reads `sso_region = eu-west-1` from that profile and asks Identity Center there: one instance, account `123456789012` from the caller, no `aiman-delegated` yet, so it creates it with PT12H and puts the eu-west-1 policy. The caller ARN is an `AWSReservedSSO_AdministratorAccess_…/pieter@acme.io` session, so the user name is `pieter@acme.io`; `get-user-id` gives the principal id, the assignment is created and polled for 20 seconds until `SUCCEEDED`, and no provisioning call is needed because the create provisioned the role. It prints the four delegation lines. The operator copies them into `remotes[].aws_delegation`, reloads serve, opens the phone's Host tab and signs in; `aws.login_start` now finds the role. They repeat the command twice with the other two admin profiles. A month later they add `af-south-1` to the regions and rerun: the permission set and assignment exist, the policy is put again, and because the assignment was already there the command provisions the permission set to the account and waits for `SUCCEEDED`, so the live role has the new region. For a dedicated sign-in user they pass `--user aiman-phone`.
 
 ## Alternatives
 
@@ -120,9 +122,18 @@ The operator runs `aiman aws permission-set-apply --profile acme-admin` on the l
 
 ## Decisions
 
+Consult round 1 (Grok 4.6, report `~/.aiman/consults/a0211239-5a60-4e16-ab24-327b405f6fb1.report.md`): verdict revise, 3 high, 4 medium, 1 low. All accepted in rev 2.
+
 | Objection | Severity | Triage | Reason |
 |---|---|---|---|
-| (consult pending) | | | |
+| A policy or duration change is not pushed to an already assigned account without `provision-permission-set`; a rerun left the live role stale | high | accept | Behaviour step 7: provision and poll `describe-permission-set-provisioning-status` whenever the assignment already existed; skipped only right after a create, which provisions |
+| `sso-admin` and `identitystore` answer only in the Identity Center region; `--profile` alone uses the profile's working region and finds zero instances | high | accept | Behaviour step 0: `--region <sso_region>` from `ReadSSOProfile` on every Identity Center call; the zero-instance error names the region |
+| Inferring the user from the caller ARN's last segment is wrong for IAM users, other assumed roles and external IdP session names, and can assign the set to the wrong user | high | accept | Step 5 infers only from an `AWSReservedSSO_*` role session; anything else requires `--user`; help text points `--user` at a dedicated sign-in user |
+| `list-users --filters` is deprecated and dumps whole user records (PII) into the log | medium | accept | Step 5 uses `get-user-id` with `UniqueAttribute userName`; `ResourceNotFoundException` is the not-found path |
+| Missing `--instance-arn` on every `sso-admin` call, wrong poll flag name, manual paging against the CLI's own pagination | medium | accept | Steps 3 to 7 spell out every flag; one `list-permission-sets` call, no paging flags; `--account-assignment-creation-request-id`; an immediate `SUCCEEDED` skips the poll |
+| `ConflictException` on `create-account-assignment` when one exists or is in progress; the idempotency sentence was false without provisioning | medium | accept | Step 6 lists again on a conflict and treats present as present; the idempotency paragraph now rests on provisioning |
+| The permissions list named IAM actions the service-linked role uses, not the caller, and an org-only managed policy | medium | accept | The CLI section lists the caller's `sso:*`, `identitystore:GetUserId` and `sts:GetCallerIdentity` actions and names `AdministratorAccess` for stand-alone accounts |
+| Progress on stdout breaks `--json`; the hint must not copy `sso_role_name`; a hint read failure must not fail a finished apply; keep `--debug` off | low | accept | Progress to stderr; step 8 warns instead of failing and never copies the admin role name; the CLI never passes `--debug` |
 
 ## Breakdown
 
@@ -182,7 +193,7 @@ func Plan(spec ApplySpec) ([]ApplyStep, error)
 func Apply(ctx context.Context, cli AWSCLI, spec ApplySpec, log io.Writer) (ApplyResult, error)
 ```
 
-Every `Run` call carries `--profile <spec.Profile>` (the fake checks it; `ExecAWSCLI` adds it with `--output json`). Errors from a call read `aws <service> <subcommand>: <first line of the CLI's output>`.
+Every `Run` call carries `--profile <spec.Profile>`, and Identity Center calls also `--region <sso_region>` when the admin profile has one; `ExecAWSCLI` prepends `--profile <p> --output json` and passes the rest through (the fake checks both). Errors from a call read `aws <service> <subcommand>: <first line of the CLI's output>`.
 
 ```go
 // cmd/aiman/aws_cmd.go

@@ -47,10 +47,12 @@ func (h *happyAWS) Run(_ context.Context, args ...string) ([]byte, error) {
 		"sso-admin list-permission-sets":                        `{"PermissionSets":[]}`,
 		"sso-admin create-permission-set":                       `{"PermissionSet":{"PermissionSetArn":"arn:aws:sso:::permissionSet/ssoins-1/ps-new","Name":"aiman-delegated","SessionDuration":"PT12H"}}`,
 		"sso-admin put-inline-policy-to-permission-set":         ``,
-		"identitystore list-users":                              `{"Users":[{"UserId":"u-1","UserName":"pieter@acme.io"}]}`,
+		"identitystore get-user-id":                             `{"UserId":"u-1","IdentityStoreId":"d-123"}`,
 		"sso-admin list-account-assignments":                    `{"AccountAssignments":[]}`,
 		"sso-admin create-account-assignment":                   `{"AccountAssignmentCreationStatus":{"RequestId":"req-1","Status":"IN_PROGRESS"}}`,
 		"sso-admin describe-account-assignment-creation-status": `{"AccountAssignmentCreationStatus":{"RequestId":"req-1","Status":"SUCCEEDED"}}`,
+		"sso-admin provision-permission-set":                    `{"PermissionSetProvisioningStatus":{"RequestId":"prov-1","Status":"SUCCEEDED"}}`,
+		"sso-admin describe-permission-set-provisioning-status": `{"PermissionSetProvisioningStatus":{"RequestId":"prov-1","Status":"SUCCEEDED"}}`,
 	}
 	out, ok := answers[o]
 	if !ok {
@@ -115,6 +117,11 @@ func TestAWSPermissionSetApplyCommand(t *testing.T) {
 		if len(fake.calls) < 8 {
 			t.Errorf("aws called %d times, want the full sequence", len(fake.calls))
 		}
+		for _, c := range fake.calls {
+			if strings.HasPrefix(awsOp(c), "sso-admin") && !strings.Contains(strings.Join(c, " "), "--region eu-west-1") {
+				t.Errorf("Identity Center call without the profile sso_region: %v", c)
+			}
+		}
 	})
 
 	t.Run("dry-run prints the aws commands and calls nothing", func(t *testing.T) {
@@ -136,7 +143,7 @@ func TestAWSPermissionSetApplyCommand(t *testing.T) {
 		if awsLines < 8 {
 			t.Errorf("dry-run printed %d aws lines, want the sequence:\n%s", awsLines, out.String())
 		}
-		for _, want := range []string{"sso-admin create-permission-set", "--session-duration PT12H", "identitystore list-users", "<permission-set-arn>"} {
+		for _, want := range []string{"sso-admin create-permission-set", "--session-duration PT12H", "identitystore get-user-id", "sso-admin provision-permission-set", "<permission-set-arn>"} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("dry-run lacks %q:\n%s", want, out.String())
 			}
