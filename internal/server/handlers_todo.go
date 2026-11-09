@@ -22,6 +22,8 @@ const msgTodosDisabled = "to-dos not enabled"
 
 var (
 	errTodosDisabled = errors.New(msgTodosDisabled)
+	// errSteeringDisabled refuses a peer note while no steerer runs.
+	errSteeringDisabled = errors.New("steering is not enabled on this host")
 	// errTodoNotFound marks an unknown item id; handlers answer not_found.
 	errTodoNotFound = errors.New("to-do item not found")
 )
@@ -44,8 +46,10 @@ func (s *Server) EnableTodos(store todoStore, notes SteerStore) {
 // noopSteerer stands in for the steerer while to-dos are disabled.
 type noopSteerer struct{}
 
-func (noopSteerer) Enqueue(SteerNote)         {}
-func (noopSteerer) Status(string) SteerStatus { return SteerStatus{} }
+func (noopSteerer) Enqueue(SteerNote)                    {}
+func (noopSteerer) Status(string) SteerStatus            { return SteerStatus{} }
+func (noopSteerer) Delivered(int64) (time.Time, bool)    { return time.Time{}, false }
+func (noopSteerer) EnqueuePeer(SteerNote) (int64, error) { return 0, errSteeringDisabled }
 
 // Steerer is the steering queue for in-process callers. It is a no-op until
 // EnableTodos runs.
@@ -62,7 +66,8 @@ func (s *Server) Steerer() Steerer {
 // A session acting on its own list is its agent, whatever it passes as "as",
 // and todo.mirror only ever carries the agent's own task list. Everyone else is
 // the user, except that aiman-trigger, which talks to the socket directly, may
-// steer as aiman. Serve-internal writers use MutateTodos with their author.
+// steer as aiman; a session caller never can. Serve-internal writers use
+// MutateTodos with their author.
 func deriveAuthor(method, callerID, targetID, as string) (domain.TodoAuthor, error) {
 	if method == "todo.mirror" {
 		return domain.AuthorAgent, nil
@@ -77,7 +82,7 @@ func deriveAuthor(method, callerID, targetID, as string) (domain.TodoAuthor, err
 	case "", string(domain.AuthorUser):
 		return domain.AuthorUser, nil
 	case string(domain.AuthorAiman):
-		if method == "steer.send" {
+		if method == "steer.send" && callerID == "" {
 			return domain.AuthorAiman, nil
 		}
 	}
@@ -299,8 +304,8 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 		return Response{ID: req.ID, Result: map[string]any{"type": "todo_list", "list": list, "steer": s.steer.Status(sess.ID)}}
 	}
 	if req.Method == "steer.send" {
-		if refused, out := s.refuseOutOfScope(ctx, req, sess.ID); out {
-			return refused
+		if scope, isSession := s.sessionScopeOf(ctx, req); isSession && !scope.covers(sess.ID) {
+			return s.handlePeerSteer(ctx, req, p, sess, scope)
 		}
 	}
 	author, err := deriveAuthor(req.Method, req.Caller, sess.ID, p.As)
@@ -539,6 +544,27 @@ func (s *Server) handleSteerSend(ctx context.Context, req Request, p todoParams,
 	default:
 		return errResp(req.ID, CodeInvalidParams, fmt.Sprintf("unknown mode %q", p.Mode))
 	}
+}
+
+// handlePeerSteer queues steer.send from outside the target's tree as a peer
+// note. The author is always peer, whatever "as" says, and answering a dialog
+// stays inside the tree.
+func (s *Server) handlePeerSteer(ctx context.Context, req Request, p todoParams, sess domain.Session, scope sessionScope) Response {
+	if p.Mode != "" && p.Mode != "note" {
+		return scopeRefusal(req.ID, scope, "target "+sess.ID)
+	}
+	text := ""
+	if p.Text != nil {
+		text = *p.Text
+	}
+	from, payload, refused := s.admitPeer(ctx, req, scope, sess, text)
+	if refused != nil {
+		return *refused
+	}
+	if _, refused := s.queuePeerNote(ctx, req, from, sess, payload); refused != nil {
+		return *refused
+	}
+	return Response{ID: req.ID, Result: map[string]any{"type": "steer_status", "steer": s.steer.Status(sess.ID)}}
 }
 
 // answerDialog types text at once when the agent is held on a permission or

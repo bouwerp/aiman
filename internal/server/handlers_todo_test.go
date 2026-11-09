@@ -324,6 +324,7 @@ func TestDeriveAuthor(t *testing.T) {
 		{"steer as aiman", "steer.send", "", "s1", "aiman", domain.AuthorAiman, false},
 		{"steer self", "steer.send", "s1", "s1", "", "", true},
 		{"steer user", "steer.send", "s2", "s1", "user", domain.AuthorUser, false},
+		{"session caller cannot obtain aiman", "steer.send", "s2", "s1", "aiman", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := deriveAuthor(tc.method, tc.caller, tc.tgt, tc.as)

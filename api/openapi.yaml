@@ -378,7 +378,12 @@ components:
             refuses a session's call to session.restart or session.terminate.
             session_scope refuses a session's pty.create, pty.input, pty.run,
             pty.kill, pty.forget, session.prompt, session.forget or steer.send
-            on anything but itself, a descendant or its own helper pty.
+            on anything but itself, a descendant or its own helper pty, except
+            that session.prompt and steer.send (mode note) to a visible session
+            outside the tree are queued as a peer note while
+            sessions.peer_notes is on; the ledger records session.peer_note on
+            both sessions. peer_queue_full refuses a peer note while the target
+            holds 8 undelivered peer notes from the sender or 16 from anyone.
             legacy_terminal refuses both on a legacy tmux row. A serve older
             than this spec answers a method it does not have with
             invalid_params and the message "unknown method <name>"; an older
@@ -1601,8 +1606,54 @@ components:
           const: prompt_result
         sent:
           type: boolean
+          description: >
+            False with delivered_as note is success: the text was queued as a
+            peer note, not typed.
         state:
           $ref: "#/components/schemas/AgentState"
+        queued:
+          type: boolean
+          description: True when the text was queued as a peer note.
+        delivered_as:
+          type: string
+          enum: [note]
+          description: >
+            note: a session outside the target's tree sent it; it arrives at
+            the target's next prompt as [peer session <id> <name>] <text>.
+        steer:
+          $ref: "#/components/schemas/SteerStatus"
+    SteerStatus:
+      type: object
+      required: [queued]
+      properties:
+        queued:
+          type: integer
+        last_delivered_at:
+          type: string
+          format: date-time
+        last_error:
+          type: string
+        held:
+          type: string
+          description: Why the last delivery waited (working, dialog, ended, unknown, legacy_terminal).
+        pending:
+          type: array
+          items:
+            $ref: "#/components/schemas/SteerNote"
+    SteerNote:
+      type: object
+      required: [session_id, author, text]
+      properties:
+        session_id:
+          type: string
+        author:
+          type: string
+          enum: [user, aiman, verifier, peer]
+        from:
+          type: string
+          description: The sending session of a peer note; absent otherwise.
+        text:
+          type: string
     PushRegisterResult:
       type: object
       required: [type, registered]

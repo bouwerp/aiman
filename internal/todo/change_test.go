@@ -47,6 +47,7 @@ func TestSteersAgent(t *testing.T) {
 		{Change{Author: domain.AuthorUser, Ops: ref}, false},
 		{Change{Author: domain.AuthorAgent, Ops: mixed}, false},
 		{Change{Author: domain.AuthorUser}, false},
+		{Change{Author: domain.AuthorPeer, Ops: mixed}, true},
 	}
 	for i, c := range cases {
 		if got := c.c.SteersAgent(); got != c.want {

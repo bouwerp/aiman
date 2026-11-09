@@ -60,6 +60,12 @@ linters:
         linters:
           - gocritic
         text: "stringXbytes:"
+      # Acceptance tests may hold invisible code points on purpose, as input
+      # the code under test must strip.
+      - path: _acceptance_test\.go
+        linters:
+          - staticcheck
+        text: "ST1018:"
       # Interface implementations often cannot use every parameter.
       - linters:
           - unparam

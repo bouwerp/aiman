@@ -22,6 +22,10 @@ const (
 	EventUsageBudget      EventKind = "usage.budget"
 	EventSessionEnded     EventKind = "session.ended"
 	EventSessionRestarted EventKind = "session.restarted"
+	// EventPeerNote records a peer note on both the sending and the receiving
+	// session: ids, names and length, never the text. Untyped, so it reads as
+	// a plain string too.
+	EventPeerNote = "session.peer_note"
 	// EventHandoverChildStarted and EventHandoverChildFinished bracket one
 	// handover child run on the worker's ledger.
 	EventHandoverChildStarted  EventKind = "handover.child_started"
