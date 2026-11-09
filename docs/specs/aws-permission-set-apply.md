@@ -1,6 +1,6 @@
 # `aiman aws permission-set-apply`: set up the delegated permission set with the AWS CLI
 
-**Revision:** 3 · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted)
+**Revision:** 4 · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted); rev 4 adds P2, writing the delegation into the laptop config, at the operator's request the same day ("is there no way we can do this through the aws cli and set these values automatically?", "yes")
 **Task:** operator request on 2026-11-09 ("Can we have scripts in the aiman repo that sets that up through the AWS cli?") · **Spec:** extends `docs/specs/phone-aws-login.md` (the permission set it needs)
 
 ## Problem
@@ -104,6 +104,16 @@ Then push the config to the host (Agent API page, c) and sign in from the phone.
 
 Permissions the admin profile needs: `sso:ListInstances`, `sso:ListPermissionSets`, `sso:DescribePermissionSet`, `sso:CreatePermissionSet`, `sso:UpdatePermissionSet`, `sso:PutInlinePolicyToPermissionSet`, `sso:ListAccountAssignments`, `sso:CreateAccountAssignment`, `sso:DescribeAccountAssignmentCreationStatus`, `sso:ProvisionPermissionSet`, `sso:DescribePermissionSetProvisioningStatus`, `identitystore:GetUserId` and `sts:GetCallerIdentity`. The `AWSReservedSSO_*` role in the account is created by Identity Center's own service-linked role, not by the caller. For the operator's stand-alone accounts `AdministratorAccess` on the admin profile covers all of it; in an organisation the management account's `AWSSSOMasterAccountAdministrator` does.
 
+### P2: write the delegation into the laptop config (`--remote`)
+
+`aiman aws permission-set-apply ... --remote <remote name> [--delegation-profile <name>]` writes the result into `~/.aiman/config.yaml` instead of asking the operator to copy the lines.
+
+- **Before any `aws` call**: the config must have loaded (a nil config with `--remote` is the error `--remote needs a readable config: <reason>`), and the remote must exist by `name`, compared ignoring case; an unknown name is the error `no remote <name> in the config; remotes: <names>`. Nothing is written or called on either error.
+- **After a successful apply** the command upserts one `config.AWSDelegation` on that remote: `Profile` is `--delegation-profile`, else the admin profile's name; `SourceProfile` is the admin profile; `SyncCredentials` true; `Regions` the regions the policy was built with; the four SSO facts from `ApplyResult.Delegation`. `(*Config).UpsertAWSDelegation(remote, d)` matches an existing entry by `Profile` across the remote's singular `aws_delegation` and its `aws_delegations` list, replaces those fields on it and keeps the entry's other fields (`duration_seconds`, `session_policy`, `role_name`, `region`, `managed_role`); with no match it appends to `aws_delegations`. Then `cfg.Save()` writes the file the way the TUI does (0600, whole config marshalled). Other remotes and other entries are untouched.
+- A failed apply writes nothing. `--dry-run` with `--remote` prints the entry it would write as YAML under a `remote <name>:` line and writes nothing.
+- Text output ends with `Wrote aws_delegations entry <profile> on remote <name> in <path>. Press c on the Agent API page to push it to the host.` instead of the `Put this in remotes[].aws_delegation` block. `--json` output is the `ApplyResult` object plus `"config": {"remote","profile","path"}`.
+- Pushing stays the TUI's: `c` on the Agent API page runs `MarshalServeConfig`, which also fills any SSO fact still empty from the laptop's `~/.aws/config`.
+
 ## Scenario
 
 The operator runs `aws sso login --profile acme-admin`, then `aiman aws permission-set-apply --profile acme-admin` on the laptop. aiman reads `sso_region = eu-west-1` from that profile and asks Identity Center there: one instance, account `123456789012` from the caller, no `aiman-delegated` yet, so it creates it with PT12H and puts the eu-west-1 policy. The caller ARN is an `AWSReservedSSO_AdministratorAccess_…/pieter@acme.io` session, so the user name is `pieter@acme.io`; `get-user-id` gives the principal id, the assignment is created and polled for 20 seconds until `SUCCEEDED`, and no provisioning call is needed because the create provisioned the role. It prints the four delegation lines. The operator copies them into `remotes[].aws_delegation`, reloads serve, opens the phone's Host tab and signs in; `aws.login_start` now finds the role. They repeat the command twice with the other two admin profiles. A month later they add `af-south-1` to the regions and rerun: the permission set and assignment exist, the policy is put again, and because the assignment was already there the command provisions the permission set to the account and waits for `SUCCEEDED`, so the live role has the new region. For a dedicated sign-in user they pass `--user aiman-phone`.
@@ -118,7 +128,7 @@ The operator runs `aws sso login --profile acme-admin`, then `aiman aws permissi
 ## Open questions
 
 1. Instance choice when `list-instances` returns more than one (an organisation with a delegated administrator sees one; an account-instance setup may see two). Default: error naming them; add `--instance <arn>` only when someone hits it.
-2. Should the command also write the delegation into `~/.aiman/config.yaml`? Default: no, print it; the config has per-remote structure and the operator decides which remote gets it.
+2. Should the command also write the delegation into `~/.aiman/config.yaml`? Rev 1 to 3 said no, print it. The operator asked for it to be set automatically, so rev 4 adds `--remote` (P2 below): the operator names the remote and the command writes the entry; without `--remote` the lines are still printed.
 
 ## Decisions
 
@@ -151,6 +161,7 @@ Consult round 2 (Grok 4.6, report `~/.aiman/consults/7ed0cba6-01a4-4a62-b269-29f
 | Piece | Owns files | Parallel group | Depends on | Complexity | Tier | Acceptance tests |
 |---|---|---|---|---|---|---|
 | P1 apply + CLI | `internal/infra/awsdelegation/permissionset_apply.go`, `cmd/aiman/aws_cmd.go`, `permissionset.go` (steps line), `AGENTS.md` | 1 | none | M | smart | `internal/infra/awsdelegation/permissionset_apply_acceptance_test.go`, `cmd/aiman/aws_apply_acceptance_test.go`; `go test ./internal/infra/awsdelegation/ ./cmd/aiman/` |
+| P2 write the delegation (`--remote`) | `internal/infra/config/config.go` (`UpsertAWSDelegation`), `cmd/aiman/aws_cmd.go` (flags, write, output), `AGENTS.md`, `README.md` (config example) | 2 | P1 | S | worker | `internal/infra/config/aws_delegation_upsert_acceptance_test.go`, `cmd/aiman/aws_apply_config_acceptance_test.go`; `go test ./internal/infra/config/ ./cmd/aiman/` |
 
 ## Contracts
 
@@ -212,6 +223,17 @@ Every `Run` call carries `--profile <spec.Profile>`, and Identity Center calls a
 // cmd/aiman/aws_cmd.go
 var newAWSCLI = func(profile string) awsdelegation.AWSCLI { return awsdelegation.ExecAWSCLI{Profile: profile} }
 ```
+
+```go
+// internal/infra/config/config.go (P2)
+// UpsertAWSDelegation adds d to the named remote's aws_delegations, or updates
+// the entry (singular or listed) whose Profile equals d.Profile. The remote name
+// is matched ignoring case. An unknown remote or an empty d.Profile is an error
+// and changes nothing.
+func (c *Config) UpsertAWSDelegation(remote string, d AWSDelegation) error
+```
+
+P2 CLI flags: `--remote <name>`, `--delegation-profile <name>` (meaningful only with `--remote`). JSON with `--remote`: the `ApplyResult` fields plus `"config": {"remote": ..., "profile": ..., "path": ...}` where `path` is `config.GetConfigPath()`. The acceptance tests are `internal/infra/config/aws_delegation_upsert_acceptance_test.go` and `cmd/aiman/aws_apply_config_acceptance_test.go`.
 
 `runAWS(args, cfg, out)` keeps its signature and dispatches `permission-set-apply`. `--dry-run` prints each planned step as one line `aws --profile <p> ...` and never calls `newAWSCLI`'s result. `--json` prints `ApplyResult` as one object. Text output ends with the `Done.` block in "CLI" and never prints `Done.` on failure. `awsUsage` names both subcommands and `--dry-run`.
 
