@@ -1,6 +1,6 @@
 # Peer notes: a session may message a session outside its tree
 
-**Revision:** 3 (after consult rounds 1 and 2) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("looks good - carry on", default stays on)
+**Revision:** 4 (as built, PR #120 merged 2026-11-09) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("looks good - carry on", default stays on) and built in PR #120
 **Task:** operator request on 2026-11-09: a session reported "Aiman's own prompt command refused it because that session is outside this one's tree" when it tried to send a message to another session; the operator said "this should be possible" and, asked what it was doing, "sending a message".
 
 ## Problem
@@ -178,6 +178,19 @@ func (c SessionsConfig) PeerNotesOn() bool
 ```
 
 Results: `session.prompt` from a peer answers `{"type":"prompt_result","sent":false,"queued":true,"delivered_as":"note","steer":{…}}` (plus `state` with `wait`, after the note was typed and handled); `steer.send` from a peer answers the usual `steer_status`. The queued note's `Author` is `peer`, its `From` the bound sender id, and its `Text` is `[peer session <from id> <sanitised name>] <payload>`. Refusals: `session_scope` (off, hidden or fixer caller or target, mode `answer`, no identity, a `caller` that is not the connection's holder), `invalid_params` (empty, over 4096 bytes, nested token after normalisation, steering not enabled, target agent ended), `peer_queue_full`, `legacy_terminal`, `timeout` with `peer note not delivered yet`.
+
+## Deviations from the approved design
+
+As built in PR #120, compared with rev 3:
+
+- **`--wait` on a target with no hook report**: rev 3's second phase (a hook state newer than the delivery) cannot end for an agent that never reports. As built, such a target is waited on until `steerClassifierQuiet` (3 s) has passed since the delivery, the steerer's own rule for trusting the pane classifier, before `waitState` runs; a deadline during that quiet period reads `peer note delivered, target not settled`.
+- **Exited holder**: a target whose holder is listed but not running (crashed agent without a `SessionEnd`) is refused like an ended one, so a note never holds a cap slot until a revive.
+- **Existing scope test**: `TestSessionCallerScopedToOwnTree` turns peer notes off for `session.prompt` only and keeps proving the tree rule for every other method; a new case proves the default-on `queued` answer for an unrelated session and for a child's coordinator.
+- **CLI wording**: there is no `aiman steer` command; the skill and `AGENTS.md` name `aiman rpc steer.send`.
+- **`Kick` after shutdown**: the steerer records that `Run` has stopped and `Kick` no longer starts a delivery pass afterwards, so a flush timer cannot type with a background context during shutdown.
+- **OpenAPI**: the spec gained steering-note schemas (`SteerNote` with `from`, `SteerStatus`), which it lacked; `PromptResult` carries the optional `queued`, `delivered_as` and `steer` fields.
+- **Migration test**: the sqlite `from` column has a test that opens a database created before the column existed.
+- **Lint**: one narrow exclusion lets the acceptance test keep the invisible code points it feeds the normaliser; `golang.org/x/text` became a direct dependency for the NFKC fold.
 
 ## What the reader should be able to explain
 
