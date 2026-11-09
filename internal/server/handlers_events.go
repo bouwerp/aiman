@@ -10,14 +10,11 @@ import (
 	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
-// EventPollInterval is how often serve looks for activity changes and new
-// rows to announce.
-//
-// This is a local stat of a handful of small files, so it can be far tighter
-// than anything the dashboard could do over SSH — which is the point: the
-// dashboard used to make an SSH round trip per session per poll to learn the
-// same thing.
-const EventPollInterval = 300 * time.Millisecond
+// EventPollInterval is how often each stream looks for activity changes and
+// new rows to announce. Hub events are forwarded as they arrive, not on this
+// tick. Every subscriber reads the session table on each tick, which is why
+// this stays at a second.
+const EventPollInterval = 1 * time.Second
 
 // eventKeepalive bounds how long the stream can stay silent. A reader blocked on
 // a dead connection learns nothing from silence; a periodic empty event lets it
@@ -104,66 +101,98 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 		}
 	}()
 
-	enc := json.NewEncoder(conn)
-	seen := map[string]SessionEvent{}
-	announced := map[string]string{}
+	st := &eventStream{
+		enc:       json.NewEncoder(conn),
+		seen:      map[string]SessionEvent{},
+		announced: map[string]string{},
+		lastSent:  time.Now(),
+		trWatch:   newTranscriptWatch(),
+	}
 	ticker := time.NewTicker(EventPollInterval)
 	defer ticker.Stop()
-	lastSent := time.Now()
-	trWatch := newTranscriptWatch()
 
 	for {
+		var err error
 		select {
 		case <-ctx.Done():
 			return
 		case <-closed:
 			return
 		case ev := <-hubCh:
-			if err := enc.Encode(ev); err != nil {
-				return
-			}
-			lastSent = time.Now()
-			continue
+			err = st.send(ev)
 		case <-ticker.C:
+			err = s.pollEvents(ctx, st)
 		}
-
-		var changed []SessionEvent
-		if s.pty != nil {
-			changed = collectSessionEvents(s.pty, seen, s.cachedSessionState)
-		}
-		var listed []domain.Session
-		if s.repo != nil {
-			if l, lerr := s.repo.List(ctx); lerr == nil {
-				listed = l
-				changed = append(changed, collectRepoCreatedEvents(listed, announced)...)
-			}
-		}
-		for _, ev := range changed {
-			if err := enc.Encode(ev); err != nil {
-				return
-			}
-			lastSent = time.Now()
-		}
-		// A transcript event is marked seen only once encoded, so a failed
-		// write never swallows a change.
-		var trPending []transcriptPending
-		if s.transcripts != nil {
-			trPending = s.collectTranscriptEvents(listed, trWatch, time.Now())
-		}
-		for _, p := range trPending {
-			if err := enc.Encode(p.ev); err != nil {
-				return
-			}
-			lastSent = time.Now()
-			trWatch.commit(p, lastSent)
-		}
-		if len(changed) == 0 && len(trPending) == 0 && time.Since(lastSent) >= eventKeepalive {
-			if err := enc.Encode(SessionEvent{Type: "keepalive"}); err != nil {
-				return
-			}
-			lastSent = time.Now()
+		if err != nil {
+			return
 		}
 	}
+}
+
+// eventStream is one subscriber's state: what it has been told so far.
+type eventStream struct {
+	enc       *json.Encoder
+	seen      map[string]SessionEvent
+	announced map[string]string
+	lastSent  time.Time
+	trWatch   *transcriptWatch
+}
+
+func (st *eventStream) send(ev SessionEvent) error {
+	if err := st.enc.Encode(ev); err != nil {
+		return err
+	}
+	st.lastSent = time.Now()
+	return nil
+}
+
+// announceRows reads the session table, sends session_created for new or
+// changed rows, and returns the rows it read (nil when the read failed).
+func (s *Server) announceRows(ctx context.Context, st *eventStream) ([]domain.Session, error) {
+	if s.repo == nil {
+		return nil, nil
+	}
+	listed, err := s.repo.List(ctx)
+	if err != nil {
+		return nil, nil
+	}
+	for _, ev := range collectRepoCreatedEvents(listed, st.announced) {
+		if err := st.send(ev); err != nil {
+			return nil, err
+		}
+	}
+	return listed, nil
+}
+
+// pollEvents is one EventPollInterval tick: activity changes from the holders,
+// new rows, transcript moves, and a keepalive after a long silence.
+func (s *Server) pollEvents(ctx context.Context, st *eventStream) error {
+	sentBefore := st.lastSent
+	if s.pty != nil {
+		for _, ev := range collectSessionEvents(s.pty, st.seen, s.cachedSessionState) {
+			if err := st.send(ev); err != nil {
+				return err
+			}
+		}
+	}
+	listed, err := s.announceRows(ctx, st)
+	if err != nil {
+		return err
+	}
+	// A transcript event is marked seen only once encoded, so a failed
+	// write never swallows a change.
+	if s.transcripts != nil {
+		for _, p := range s.collectTranscriptEvents(listed, st.trWatch, time.Now()) {
+			if err := st.send(p.ev); err != nil {
+				return err
+			}
+			st.trWatch.commit(p, st.lastSent)
+		}
+	}
+	if st.lastSent.Equal(sentBefore) && time.Since(st.lastSent) >= eventKeepalive {
+		return st.send(SessionEvent{Type: "keepalive"})
+	}
+	return nil
 }
 
 // ptyLister is the slice of the runtime the event stream needs.

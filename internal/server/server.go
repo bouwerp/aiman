@@ -132,6 +132,10 @@ type Server struct {
 	// sessionStates holds one cachedState per session id, written by the state
 	// sweep and read by the event stream.
 	sessionStates sync.Map
+	// sweepMu is held while a sweep runs; a sweep that cannot take it is
+	// skipped and counted in sweepSkipped, so sweeps never stack.
+	sweepMu      sync.Mutex
+	sweepSkipped atomic.Int64
 
 	// memoryJobs queues handover-derived memory candidates for the laptop.
 	memoryJobs *memoryjob.Queue
