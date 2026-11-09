@@ -185,6 +185,11 @@ func (s *Server) RPCStats() RPCStats
 func (s *Server) SweepSkipped() int // P0: sweeps skipped because the previous one was still running; RPCStats.SweepSkipped reads it
 // P0: EventPollInterval becomes 1s; the stream also reads the session list at once after a hub event.
 
+// internal/ptyhold (P3)
+func childShell(command string, nice int) string // nice clamped to [0,19]; 0 emits no wrapper; the command runs as `exec nice -n <n> bash -c <quoted command>` after the TERM/PATH exports
+// ptyhold.Spec gains AgentNice int `json:"agent_nice,omitempty"`; Run passes it to childShell; a request without it runs at the holder's niceness
+// ptyruntime.Spec gains AgentNice int, copied by Manager.Create into the holder's Spec; serve sets it from host.load.agent_nice (nil: 10)
+
 // internal/ptyruntime/ptyfake (test infrastructure the acceptance tests use)
 func (f *FakePTY) SetCaptureDelay(d time.Duration)
 func (f *FakePTY) Captures() int
