@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -322,10 +323,32 @@ func (s *Server) peerIdentity(ctx context.Context, req Request, scope sessionSco
 
 // peerAllowed checks a bound sender and a target outside its tree: peer
 // notes on, both visible and neither a fixer, not the same session, the
-// target's agent alive, and a steerer to queue the note.
+// target not a legacy tmux row, its agent alive, and a steerer to queue the
+// note.
 func (s *Server) peerAllowed(req Request, scope sessionScope, from string, target domain.Session) *Response {
-	refuse := func(code, msg string) *Response {
-		r := errResp(req.ID, code, msg)
+	if refused := s.peerScopeRefusal(req, scope, from, target); refused != nil {
+		return refused
+	}
+	if target.IsLegacyTmux() {
+		r := legacyTerminalResp(req.ID, target)
+		return &r
+	}
+	if target.AgentEnded || !s.ptyRunning(target.ID) {
+		r := errResp(req.ID, CodeInvalidParams, "target agent has ended")
+		return &r
+	}
+	if s.steer == nil {
+		r := errResp(req.ID, CodeInvalidParams, errSteeringDisabled.Error())
+		return &r
+	}
+	return nil
+}
+
+// peerScopeRefusal is the session_scope part of peerAllowed: the switch, the
+// sender's and target's visibility, and self.
+func (s *Server) peerScopeRefusal(req Request, scope sessionScope, from string, target domain.Session) *Response {
+	refuse := func(msg string) *Response {
+		r := errResp(req.ID, CodeSessionScope, msg)
 		return &r
 	}
 	if s.peerNotesOff.Load() {
@@ -335,19 +358,13 @@ func (s *Server) peerAllowed(req Request, scope sessionScope, from string, targe
 	}
 	sender, ok := scope.rows[from]
 	if !ok || !peerVisible(sender) {
-		return refuse(CodeSessionScope, "session "+from+" may not send peer notes")
+		return refuse("session " + from + " may not send peer notes")
 	}
 	if !peerVisible(target) {
-		return refuse(CodeSessionScope, "target "+target.ID+" does not take peer notes")
+		return refuse("target " + target.ID + " does not take peer notes")
 	}
 	if target.ID == from {
-		return refuse(CodeSessionScope, "a session cannot send a peer note to itself")
-	}
-	if target.AgentEnded || !s.ptyListed(target.ID) {
-		return refuse(CodeInvalidParams, "target agent has ended")
-	}
-	if s.steer == nil {
-		return refuse(CodeInvalidParams, errSteeringDisabled.Error())
+		return refuse("a session cannot send a peer note to itself")
 	}
 	return nil
 }
@@ -358,14 +375,14 @@ func peerVisible(sess domain.Session) bool {
 	return !sess.Role.Hidden() && sess.Role != domain.SessionRoleFixer
 }
 
-// ptyListed reports whether the pty runtime still lists id. With no runtime
-// there is nothing to compare against, so every session counts as listed.
-func (s *Server) ptyListed(id string) bool {
+// ptyRunning reports whether the pty runtime lists id as running. With no
+// runtime there is nothing to compare against, so every session counts.
+func (s *Server) ptyRunning(id string) bool {
 	if s.pty == nil {
 		return true
 	}
-	_, err := s.pty.Get(id)
-	return err == nil
+	info, err := s.pty.Get(id)
+	return err == nil && info.Status == ptyruntime.StatusRunning
 }
 
 // admitPeer decides a session call that targets a session outside the
@@ -402,7 +419,7 @@ func (s *Server) queuePeerNote(ctx context.Context, req Request, from, target do
 		r := errResp(req.ID, code, err.Error())
 		return 0, &r
 	}
-	chars := len(payload)
+	chars := utf8.RuneCountInString(payload)
 	s.appendEvent(ctx, target.ID, domain.EventActorAgent, domain.EventPeerNote, map[string]any{
 		"from": from.ID, "from_name": from.Name, "chars": chars,
 	})

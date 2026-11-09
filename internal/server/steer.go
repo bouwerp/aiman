@@ -125,8 +125,11 @@ type steerer struct {
 	now     func() time.Time
 
 	kick chan struct{}
-	// running is set while Run's loop runs; without it Kick runs one pass.
+	// running is set while Run's loop runs; before Run, Kick runs one pass.
 	running atomic.Bool
+	// stopped is set once Run returns, after which Kick never delivers, so
+	// shutdown types nothing.
+	stopped atomic.Bool
 	// deliverMu keeps delivery passes from overlapping, so a note is never
 	// typed twice.
 	deliverMu sync.Mutex
@@ -362,9 +365,10 @@ func (s *steerer) Status(sessionID string) SteerStatus {
 
 // Kick wakes the delivery loop, for example after a session reported idle.
 // The loop checks every session, so the id only documents the cause. Before
-// Run starts, Kick runs one delivery pass of its own.
+// Run starts, Kick runs one delivery pass of its own; after Run returns it
+// does nothing.
 func (s *steerer) Kick(string) {
-	if s == nil {
+	if s == nil || s.stopped.Load() {
 		return
 	}
 	if !s.running.Load() {
@@ -433,7 +437,10 @@ func (s *steerer) Load(ctx context.Context) error {
 // Run delivers queued notes until ctx is done, waking on Kick and on a tick.
 func (s *steerer) Run(ctx context.Context) {
 	s.running.Store(true)
-	defer s.running.Store(false)
+	defer func() {
+		s.stopped.Store(true)
+		s.running.Store(false)
+	}()
 	t := time.NewTicker(s.tick)
 	defer t.Stop()
 	for {

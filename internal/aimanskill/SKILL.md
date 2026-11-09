@@ -40,7 +40,7 @@ aiman session create --repo owner/repo --branch BRANCH --agent claude \
 ```
 
 `--orphan` makes a root instead of a child. `--parent ID` nests under a different session.
-A child made with `--orphan` or `--parent`, your own coordinator, and any other visible session are outside your tree. You can still message them (`session prompt`, `steer send`): the message arrives as a peer note at their next prompt, and the result says `delivered_as: note`. You can read and wait on them. You cannot type into them, kill, forget or restart them, or change their to-dos (`session_scope`). Consults, reviewers, handover children and fixers can be neither sender nor target. Helpers you will drive stay your own children.
+A child made with `--orphan` or `--parent`, your own coordinator, and any other visible session are outside your tree. You can still message them (`aiman session prompt`, or `aiman rpc steer.send --params-stdin` with `{"session":…,"text":…}`): the message arrives as a peer note at their next prompt, and the result says `delivered_as: note`. You can read and wait on them. You cannot type into them, kill, forget or restart them, or change their to-dos (`session_scope`). Consults, reviewers, handover children and fixers can be neither sender nor target. Helpers you will drive stay your own children.
 
 Quick ad-hoc session:
 

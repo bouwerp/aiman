@@ -668,9 +668,6 @@ func (s *Server) handlePeerPrompt(ctx context.Context, req Request, scope sessio
 	if refused != nil {
 		return *refused
 	}
-	if sess.IsLegacyTmux() {
-		return legacyTerminalResp(req.ID, sess)
-	}
 	id, refused := s.queuePeerNote(ctx, req, from, sess, payload)
 	if refused != nil {
 		return *refused
@@ -719,8 +716,7 @@ func (s *Server) waitPeerNote(ctx context.Context, sess domain.Session, id int64
 	}
 	cur, err := pollUntil(waitCtx, func() (domain.Session, bool) {
 		cur, ok := s.findSession(waitCtx, sess.ID)
-		// A session that never had a hook report has nothing newer to show.
-		return cur, ok && (cur.HookStateAt.IsZero() || cur.HookStateAt.After(at))
+		return cur, ok && peerNoteSeen(cur, at, time.Now())
 	})
 	if err != nil {
 		return "", err
@@ -730,6 +726,21 @@ func (s *Server) waitPeerNote(ctx context.Context, sess domain.Session, id int64
 		rest = max(1, int(time.Until(deadline).Milliseconds()))
 	}
 	return s.waitState(waitCtx, cur, until, &rest)
+}
+
+// peerWaitQuiet is how long after the submit a target without hook reports
+// is left before its screen is read. A variable so tests can shorten it.
+var peerWaitQuiet = steerClassifierQuiet
+
+// peerNoteSeen reports whether the target can have picked up a note typed at
+// at: a hook report newer than the submit, or, for a target that never sent
+// one, the classifier's quiet window passed, so the empty composer left
+// before the agent redrew is not read as handled.
+func peerNoteSeen(sess domain.Session, at, now time.Time) bool {
+	if sess.HookStateAt.IsZero() {
+		return now.Sub(at) > peerWaitQuiet
+	}
+	return sess.HookStateAt.After(at)
 }
 
 // pollUntil calls check every peerWaitTick until it reports done or ctx ends.

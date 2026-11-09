@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -79,5 +81,48 @@ func TestSteerNoteFromRoundTrips(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].From != "a" || got[0].Author != domain.AuthorPeer || got[1].From != "" {
 		t.Fatalf("notes = %+v, want the peer note from a and the user note with none", got)
+	}
+}
+
+// TestSteerNotesFromMigration opens a database whose steer_notes predates the
+// from column: the column is added and existing rows read with From empty.
+func TestSteerNotesFromMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aiman.db")
+	old, err := sql.Open("sqlite", dsn(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE steer_notes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL,
+		author TEXT NOT NULL,
+		text TEXT NOT NULL,
+		created_at DATETIME NOT NULL,
+		delivered_at DATETIME
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`INSERT INTO steer_notes (session_id, author, text, created_at) VALUES ('s1', 'user', 'old note', ?)`, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, err := NewRepository(path)
+	if err != nil {
+		t.Fatalf("NewRepository: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+	var n int
+	if err := repo.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('steer_notes') WHERE name = 'from'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("from column count = %d (%v), want 1", n, err)
+	}
+	got, err := repo.ListUndeliveredSteerNotes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Text != "old note" || got[0].From != "" {
+		t.Fatalf("notes = %+v, want the old note with From empty", got)
 	}
 }

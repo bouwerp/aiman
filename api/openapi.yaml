@@ -1635,7 +1635,7 @@ components:
           type: string
         held:
           type: string
-          description: Why the last delivery waited (working, dialog, ended, unknown).
+          description: Why the last delivery waited (working, dialog, ended, unknown, legacy_terminal).
         pending:
           type: array
           items:
