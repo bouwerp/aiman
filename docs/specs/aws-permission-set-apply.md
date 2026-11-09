@@ -1,6 +1,6 @@
 # `aiman aws permission-set-apply`: set up the delegated permission set with the AWS CLI
 
-**Revision:** 3 · **Size:** small · **Status:** two consult rounds triaged (both revise, every objection accepted); awaiting the operator's approval
+**Revision:** 3 · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted)
 **Task:** operator request on 2026-11-09 ("Can we have scripts in the aiman repo that sets that up through the AWS cli?") · **Spec:** extends `docs/specs/phone-aws-login.md` (the permission set it needs)
 
 ## Problem
