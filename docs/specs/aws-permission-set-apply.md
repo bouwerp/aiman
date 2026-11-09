@@ -1,6 +1,6 @@
 # `aiman aws permission-set-apply`: set up the delegated permission set with the AWS CLI
 
-**Revision:** 8 (proposed: P3, admin profiles without SSO, after consult rounds 3 and 4; rev 5 is as built, PRs #116 and #117 merged 2026-11-09) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted); rev 4 adds P2, writing the delegation into the laptop config, at the operator's request the same day ("is there no way we can do this through the aws cli and set these values automatically?", "yes"); rev 6 to 8 add P3 after the operator hit `Missing the following required SSO configuration values: sso_start_url, sso_region` on `aws sso login`: their three admin profiles are plain IAM credentials, and they have no start URL ("can we not have an aiman command that configures this through the aws cli", "yes design it")
+**Revision:** 8 (P3, admin profiles without SSO, after consult rounds 3 and 4; approved by the operator on 2026-11-09 ("yes" to "Approve the rev 8 design and I start building?"); rev 5 is as built, PRs #116 and #117 merged 2026-11-09) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("approve the permission-set-apply design") after two consult rounds (both revise, every objection accepted); rev 4 adds P2, writing the delegation into the laptop config, at the operator's request the same day ("is there no way we can do this through the aws cli and set these values automatically?", "yes"); rev 6 to 8 add P3 after the operator hit `Missing the following required SSO configuration values: sso_start_url, sso_region` on `aws sso login`: their three admin profiles are plain IAM credentials, and they have no start URL ("can we not have an aiman command that configures this through the aws cli", "yes design it")
 **Task:** operator request on 2026-11-09 ("Can we have scripts in the aiman repo that sets that up through the AWS cli?") · **Spec:** extends `docs/specs/phone-aws-login.md` (the permission set it needs)
 
 ## Problem
@@ -246,7 +246,7 @@ Consult round 4 (Grok, report `~/.aiman/consults/e85dd42b-bbd1-4aa5-b233-b9610f9
 
 ## Contracts
 
-Exact signatures the acceptance tests compile against (`internal/infra/awsdelegation/permissionset_apply_acceptance_test.go`, `cmd/aiman/aws_apply_acceptance_test.go`, both behind `//go:build acceptance` until the child removes the tag).
+Exact signatures the acceptance tests compile against (`internal/infra/awsdelegation/permissionset_apply_acceptance_test.go`, `cmd/aiman/aws_apply_acceptance_test.go`; for P3 `permissionset_apply_discovery_acceptance_test.go`, `internal/awslogin/verify_acceptance_test.go` and `cmd/aiman/aws_apply_discovery_acceptance_test.go`, behind `//go:build acceptance` until the child removes the tag).
 
 ```go
 // internal/infra/awsdelegation/permissionset_apply.go
@@ -272,9 +272,24 @@ type ApplySpec struct {
     VerifyStartURL                 func(ctx context.Context, region, startURL string) error // P3: nil skips
 }
 
-// internal/awslogin/verify.go (P3)
+// internal/infra/awsdelegation (P3): the sentinel lives here so Apply can match it
+// without importing awslogin (which imports awsdelegation).
 var ErrStartURLRejected = errors.New("oidc rejected the start url")
-func VerifyStartURL(ctx context.Context, region, startURL string) error
+
+// internal/awslogin/verify.go (P3)
+var ErrStartURLRejected = awsdelegation.ErrStartURLRejected
+// Verifier runs the two OIDC calls in process. Zero values: a 30s http.Client and
+// https://oidc.<region>.amazonaws.com. It never builds a Manager or touches the
+// registration file.
+type Verifier struct {
+    HTTP *http.Client
+    OIDC func(region string) string
+}
+func (v Verifier) VerifyStartURL(ctx context.Context, region, startURL string) error
+func VerifyStartURL(ctx context.Context, region, startURL string) error // Verifier{}.VerifyStartURL
+
+// cmd/aiman/aws_cmd.go (P3): the hook tests replace; the command sets ApplySpec.VerifyStartURL to it.
+var verifyStartURL = awslogin.VerifyStartURL
 
 type DelegationHint struct {
     StartURL  string `json:"sso_start_url"`
