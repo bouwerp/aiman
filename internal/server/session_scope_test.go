@@ -117,6 +117,9 @@ func TestSessionCallerScopedToOwnTree(t *testing.T) {
 		for _, c := range scopeTargetCases(m.ptyOnly) {
 			t.Run(m.method+"/"+c.name, func(t *testing.T) {
 				srv, pty := scopeServer(t)
+				// With peer notes on, a prompt outside the tree is queued as
+				// a peer note; this checks the tree rule itself.
+				srv.SetPeerNotes(false)
 				resp := scopeCall(t, srv, c.caller, c.pid, m.method, m.params(c.target))
 				checkScope(t, srv, pty, resp, c.allowed)
 			})

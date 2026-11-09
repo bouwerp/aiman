@@ -2,8 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"strings"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/procwalk"
@@ -250,4 +255,210 @@ func scopeRefusal(reqID string, scope sessionScope, what string) Response {
 		return errResp(reqID, CodeSessionScope, "this process has no session identity, so it may not act on "+what)
 	}
 	return errResp(reqID, CodeSessionScope, what+" is outside the tree of session "+scope.caller)
+}
+
+// holderSessionOf returns the session whose running holder owns pid: the
+// nearest ancestor of pid (or pid itself) that a confirmed holder runs.
+func (s *Server) holderSessionOf(pid int) (string, bool) {
+	if s.pty == nil {
+		return "", false
+	}
+	held := s.holderHeld
+	if held == nil {
+		held = heldByHolder
+	}
+	infos := s.pty.List()
+	roots := holderRoots(infos, held)
+	owner := make(map[int]string, len(roots))
+	for _, info := range infos {
+		if roots[info.PID] {
+			owner[info.PID] = info.ID
+		}
+	}
+	for range maxProcDepth {
+		if pid <= 1 {
+			return "", false
+		}
+		if id, ok := owner[pid]; ok {
+			return id, true
+		}
+		pp, ok := parentPID(pid)
+		if !ok {
+			return "", false
+		}
+		pid = pp
+	}
+	return "", false
+}
+
+// SetPeerNotes turns peer notes on or off, from the pushed
+// sessions.peer_notes. They are on until it is called.
+func (s *Server) SetPeerNotes(on bool) { s.peerNotesOff.Store(!on) }
+
+// peerIdentity binds the sender of a peer call to the process, not to the
+// caller string. A connection whose PID a holder owns is that holder's
+// session, and a caller naming anything but that session or one of its helper
+// ids is refused. A PID outside every holder keeps the scope's caller.
+func (s *Server) peerIdentity(ctx context.Context, req Request, scope sessionScope, target string) (string, *Response) {
+	if pid, ok := ctx.Value(peerPIDKey{}).(int); ok {
+		lookup := s.sessionOfPID
+		if lookup == nil {
+			lookup = s.holderSessionOf
+		}
+		if holder, found := lookup(pid); found {
+			if req.Caller != "" && req.Caller != holder && !strings.HasPrefix(req.Caller, holder+"-") {
+				r := errResp(req.ID, CodeSessionScope, "caller "+req.Caller+" is not this process's session")
+				return "", &r
+			}
+			return holder, nil
+		}
+	}
+	if scope.caller == "" {
+		r := scopeRefusal(req.ID, scope, "target "+target)
+		return "", &r
+	}
+	return scope.caller, nil
+}
+
+// peerAllowed checks a bound sender and a target outside its tree: peer
+// notes on, both visible and neither a fixer, not the same session, the
+// target's agent alive, and a steerer to queue the note.
+func (s *Server) peerAllowed(req Request, scope sessionScope, from string, target domain.Session) *Response {
+	refuse := func(code, msg string) *Response {
+		r := errResp(req.ID, code, msg)
+		return &r
+	}
+	if s.peerNotesOff.Load() {
+		r := scopeRefusal(req.ID, sessionScope{caller: from}, "target "+target.ID)
+		r.Error.Message += "; peer notes are off on this host (sessions.peer_notes)"
+		return &r
+	}
+	sender, ok := scope.rows[from]
+	if !ok || !peerVisible(sender) {
+		return refuse(CodeSessionScope, "session "+from+" may not send peer notes")
+	}
+	if !peerVisible(target) {
+		return refuse(CodeSessionScope, "target "+target.ID+" does not take peer notes")
+	}
+	if target.ID == from {
+		return refuse(CodeSessionScope, "a session cannot send a peer note to itself")
+	}
+	if target.AgentEnded || !s.ptyListed(target.ID) {
+		return refuse(CodeInvalidParams, "target agent has ended")
+	}
+	if s.steer == nil {
+		return refuse(CodeInvalidParams, errSteeringDisabled.Error())
+	}
+	return nil
+}
+
+// peerVisible reports whether a session may send or take peer notes: hidden
+// helpers run serve's briefs and fixers are told what to fix by their review.
+func peerVisible(sess domain.Session) bool {
+	return !sess.Role.Hidden() && sess.Role != domain.SessionRoleFixer
+}
+
+// ptyListed reports whether the pty runtime still lists id. With no runtime
+// there is nothing to compare against, so every session counts as listed.
+func (s *Server) ptyListed(id string) bool {
+	if s.pty == nil {
+		return true
+	}
+	_, err := s.pty.Get(id)
+	return err == nil
+}
+
+// admitPeer decides a session call that targets a session outside the
+// caller's tree. It returns the bound sender and the normalised payload, or
+// the refusal.
+func (s *Server) admitPeer(ctx context.Context, req Request, scope sessionScope, target domain.Session, text string) (domain.Session, string, *Response) {
+	from, refused := s.peerIdentity(ctx, req, scope, target.ID)
+	if refused != nil {
+		return domain.Session{}, "", refused
+	}
+	if refused := s.peerAllowed(req, scope, from, target); refused != nil {
+		return domain.Session{}, "", refused
+	}
+	payload, err := peerPayload(text)
+	if err != nil {
+		r := errResp(req.ID, CodeInvalidParams, err.Error())
+		return domain.Session{}, "", &r
+	}
+	return scope.rows[from], payload, nil
+}
+
+// queuePeerNote queues the labelled note for target and records it on both
+// ledgers. It returns the note's row id.
+func (s *Server) queuePeerNote(ctx context.Context, req Request, from, target domain.Session, payload string) (int64, *Response) {
+	id, err := s.Steerer().EnqueuePeer(SteerNote{
+		SessionID: target.ID, From: from.ID, Author: domain.AuthorPeer,
+		Text: peerNoteText(from, payload),
+	})
+	if err != nil {
+		code := CodeInvalidParams
+		if errors.Is(err, ErrPeerQueueFull) {
+			code = CodePeerQueueFull
+		}
+		r := errResp(req.ID, code, err.Error())
+		return 0, &r
+	}
+	chars := len(payload)
+	s.appendEvent(ctx, target.ID, domain.EventActorAgent, domain.EventPeerNote, map[string]any{
+		"from": from.ID, "from_name": from.Name, "chars": chars,
+	})
+	s.appendEvent(ctx, from.ID, domain.EventActorAgent, domain.EventPeerNote, map[string]any{
+		"to": target.ID, "to_name": target.Name, "chars": chars,
+	})
+	return id, nil
+}
+
+// peerNoteText is the note a peer's agent sees: the bound sender id first, so
+// a display name can never close the bracket, then the sanitised name.
+func peerNoteText(from domain.Session, payload string) string {
+	name := from.Name
+	if name == "" {
+		name = from.ID
+	}
+	return "[peer session " + from.ID + " " + peerName(name) + "] " + payload
+}
+
+// peerName replaces every rune outside [A-Za-z0-9._-] with an underscore.
+func peerName(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			return r
+		}
+		return '_'
+	}, name)
+}
+
+// peerReservedPrefixes are the tokens that carry authority in a typed note.
+var peerReservedPrefixes = []string{"[aiman]", "[peer session"}
+
+// peerPayload normalises a peer note's payload and refuses one that is empty,
+// over PeerNoteMaxBytes, or starts with a reserved token. Default-ignorable
+// and bidi code points go first and NFKC folds look-alikes, so neither a
+// zero-width space nor fullwidth brackets slip past the check.
+func peerPayload(text string) (string, error) {
+	text = strings.Map(func(r rune) rune {
+		if unicode.In(r, unicode.Cf, unicode.Bidi_Control, unicode.Other_Default_Ignorable_Code_Point, unicode.Variation_Selector) {
+			return -1
+		}
+		return r
+	}, text)
+	text = oneLine(norm.NFKC.String(text))
+	switch {
+	case text == "":
+		return "", errors.New("text is required")
+	case len(text) > PeerNoteMaxBytes:
+		return "", fmt.Errorf("peer note is over %d bytes", PeerNoteMaxBytes)
+	}
+	lower := strings.ToLower(text)
+	for _, p := range peerReservedPrefixes {
+		if strings.HasPrefix(lower, p) {
+			return "", fmt.Errorf("a peer note may not start with %s", p)
+		}
+	}
+	return text, nil
 }

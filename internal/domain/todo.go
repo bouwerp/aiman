@@ -43,6 +43,9 @@ const (
 	AuthorAgent    TodoAuthor = "agent"
 	AuthorAiman    TodoAuthor = "aiman"
 	AuthorVerifier TodoAuthor = "verifier"
+	// AuthorPeer is another session's agent sending a peer note. It is
+	// steer-only: no to-do change carries it and deriveAuthor never returns it.
+	AuthorPeer TodoAuthor = "peer"
 )
 
 // TodoItem is one entry of a session's to-do list.

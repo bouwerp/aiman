@@ -61,3 +61,23 @@ func TestSteerNotesRoundTrip(t *testing.T) {
 		t.Fatalf("last = %v", last)
 	}
 }
+
+func TestSteerNoteFromRoundTrips(t *testing.T) {
+	repo := newRepo(t)
+	ctx := context.Background()
+	now := time.Now()
+	peer := domain.SteerRecord{SessionID: "b", Author: domain.AuthorPeer, From: "a", Text: "[peer session a a] hi", CreatedAt: now}
+	user := domain.SteerRecord{SessionID: "b", Author: domain.AuthorUser, Text: "rebase", CreatedAt: now}
+	for _, r := range []*domain.SteerRecord{&peer, &user} {
+		if err := repo.AddSteerNote(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := repo.ListUndeliveredSteerNotes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].From != "a" || got[0].Author != domain.AuthorPeer || got[1].From != "" {
+		t.Fatalf("notes = %+v, want the peer note from a and the user note with none", got)
+	}
+}

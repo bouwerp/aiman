@@ -38,6 +38,8 @@ type Config struct {
 	Verify VerifyConfig `yaml:"verify,omitempty"`
 	// Handover configures the handover child agent.
 	Handover HandoverConfig `yaml:"handover,omitempty"`
+	// Sessions configures how sessions on a host may reach each other.
+	Sessions SessionsConfig `yaml:"sessions,omitempty"`
 	// Design configures where coordinator design pages are published.
 	Design DesignConfig `yaml:"design,omitempty"`
 	// Review configures PR review sessions.
@@ -81,6 +83,8 @@ type ServeConfig struct {
 	Verify VerifyConfig `yaml:"verify,omitempty"`
 	// Handover configures the handover child agent.
 	Handover HandoverConfig `yaml:"handover,omitempty"`
+	// Sessions configures how sessions on a host may reach each other.
+	Sessions SessionsConfig `yaml:"sessions,omitempty"`
 	// Design configures where coordinator design pages are published.
 	Design DesignConfig `yaml:"design,omitempty"`
 	// Review configures PR review sessions.
@@ -97,6 +101,16 @@ type ServeConfig struct {
 	// Host configures how serve keeps the host's aiman binaries current.
 	Host HostConfig `yaml:"host,omitempty"`
 }
+
+// SessionsConfig configures how sessions on a host may reach each other.
+type SessionsConfig struct {
+	// PeerNotes lets a session message a visible session outside its tree as
+	// a labelled steering note. Nil is on.
+	PeerNotes *bool `yaml:"peer_notes,omitempty"`
+}
+
+// PeerNotesOn reports whether peer notes are allowed; unset is on.
+func (c SessionsConfig) PeerNotesOn() bool { return c.PeerNotes == nil || *c.PeerNotes }
 
 // ServeAWSConfig is the AWS section of the serve config.
 type ServeAWSConfig struct {
@@ -389,6 +403,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Notifications: c.NotificationsFor(host),
 		Verify:        c.Verify,
 		Handover:      c.Handover,
+		Sessions:      c.Sessions,
 		Design:        c.Design,
 		Review:        c.Review,
 		CI:            c.CI,

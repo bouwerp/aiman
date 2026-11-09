@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -17,8 +18,28 @@ import (
 type SteerNote struct {
 	SessionID string            `json:"session_id"`
 	Author    domain.TodoAuthor `json:"author"`
-	Text      string            `json:"text"`
+	// From is the sending session of a peer note; empty otherwise.
+	From string `json:"from,omitempty"`
+	Text string `json:"text"`
 }
+
+// Peer note limits: the payload size, and the undelivered peer notes a target
+// may hold from one sender and from everyone.
+const (
+	PeerNoteMaxBytes   = 4096
+	PeerNotesPerPair   = 8
+	PeerNotesPerTarget = 16
+)
+
+// ErrPeerQueueFull refuses a peer note over PeerNotesPerPair or
+// PeerNotesPerTarget.
+var ErrPeerQueueFull = errors.New("peer queue full")
+
+// errSteerForgotten refuses a peer note for a session forgotten meanwhile.
+var errSteerForgotten = errors.New("session was forgotten")
+
+// peerDeliveredKeep is how long Delivered remembers a delivered peer note.
+const peerDeliveredKeep = time.Hour
 
 // SteerStatus is a session's steering queue as callers see it.
 type SteerStatus struct {
@@ -35,6 +56,10 @@ type SteerStatus struct {
 // Steerer queues notes for agents and reports on the queue.
 type Steerer interface {
 	Enqueue(n SteerNote)
+	// EnqueuePeer persists a peer note at once and returns its row id.
+	EnqueuePeer(n SteerNote) (int64, error)
+	// Delivered reports when a persisted peer note was typed.
+	Delivered(id int64) (time.Time, bool)
 	Status(sessionID string) SteerStatus
 }
 
@@ -100,10 +125,18 @@ type steerer struct {
 	now     func() time.Time
 
 	kick chan struct{}
+	// running is set while Run's loop runs; without it Kick runs one pass.
+	running atomic.Bool
+	// deliverMu keeps delivery passes from overlapping, so a note is never
+	// typed twice.
+	deliverMu sync.Mutex
 
 	mu       sync.Mutex
 	sessions map[string]*steerSession
 	seq      uint64
+	// delivered holds the submit time of delivered peer notes by row id, for
+	// Delivered; entries older than peerDeliveredKeep are dropped.
+	delivered map[int64]time.Time
 }
 
 var _ Steerer = (*steerer)(nil)
@@ -113,14 +146,15 @@ func newSteerer(store SteerStore, target steerTarget, publish func(SessionEvent)
 		publish = func(SessionEvent) {}
 	}
 	return &steerer{
-		store:    store,
-		target:   target,
-		publish:  publish,
-		window:   window,
-		tick:     time.Second,
-		now:      time.Now,
-		kick:     make(chan struct{}, 1),
-		sessions: map[string]*steerSession{},
+		store:     store,
+		target:    target,
+		publish:   publish,
+		window:    window,
+		tick:      time.Second,
+		now:       time.Now,
+		kick:      make(chan struct{}, 1),
+		sessions:  map[string]*steerSession{},
+		delivered: map[int64]time.Time{},
 	}
 }
 
@@ -136,7 +170,7 @@ func (s *steerer) sessionLocked(id string) *steerSession {
 
 // Enqueue buffers a free-text note. Notes from the agent itself are dropped.
 func (s *steerer) Enqueue(n SteerNote) {
-	if n.SessionID == "" || n.Author == domain.AuthorAgent || strings.TrimSpace(n.Text) == "" {
+	if n.SessionID == "" || n.Author == domain.AuthorAgent || n.Author == domain.AuthorPeer || strings.TrimSpace(n.Text) == "" {
 		return
 	}
 	s.mu.Lock()
@@ -149,10 +183,81 @@ func (s *steerer) Enqueue(n SteerNote) {
 	s.armLocked(n.SessionID, st)
 }
 
-// EnqueueTodo buffers a to-do change for the agent. Changes the agent made
-// and changes that only touch Ref links are dropped.
+// EnqueuePeer persists a peer note as its own record at once, outside the
+// coalescing window, and queues it for delivery. It never joins another note.
+// The session's flush lock keeps the cap check and the insert together.
+func (s *steerer) EnqueuePeer(n SteerNote) (int64, error) {
+	if n.SessionID == "" || n.From == "" || strings.TrimSpace(n.Text) == "" {
+		return 0, errors.New("peer note needs a target, a sender and text")
+	}
+	s.mu.Lock()
+	st := s.sessionLocked(n.SessionID)
+	s.mu.Unlock()
+
+	st.flushMu.Lock()
+	defer st.flushMu.Unlock()
+
+	s.mu.Lock()
+	err := peerCapErr(st, n.From)
+	s.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+
+	rec := domain.SteerRecord{SessionID: n.SessionID, Author: domain.AuthorPeer, From: n.From, Text: n.Text, CreatedAt: s.now()}
+	ctx, cancel := context.WithTimeout(context.Background(), steerOpTimeout)
+	defer cancel()
+	if err := s.store.AddSteerNote(ctx, &rec); err != nil {
+		return 0, err
+	}
+
+	s.mu.Lock()
+	if st.forgotten {
+		s.mu.Unlock()
+		_ = s.store.DeleteSteerNotes(ctx, n.SessionID)
+		return 0, errSteerForgotten
+	}
+	s.seq++
+	st.pending = append(st.pending, queuedNote{seq: s.seq, rec: rec})
+	queued := len(st.pending)
+	s.mu.Unlock()
+
+	s.publish(SessionEvent{Type: "steer", ID: n.SessionID, Queued: &queued})
+	s.Kick(n.SessionID)
+	return rec.ID, nil
+}
+
+// peerCapErr counts the session's undelivered peer notes. Callers hold s.mu.
+func peerCapErr(st *steerSession, from string) error {
+	var all, pair int
+	for _, q := range st.pending {
+		if q.rec.Author != domain.AuthorPeer {
+			continue
+		}
+		all++
+		if q.rec.From == from {
+			pair++
+		}
+	}
+	if pair >= PeerNotesPerPair || all >= PeerNotesPerTarget {
+		return ErrPeerQueueFull
+	}
+	return nil
+}
+
+// Delivered reports when the persisted note id was typed, for peer notes
+// delivered in the last hour.
+func (s *steerer) Delivered(id int64) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	at, ok := s.delivered[id]
+	return at, ok
+}
+
+// EnqueueTodo buffers a to-do change for the agent. Changes the agent made,
+// peer authors and changes that only touch Ref links are dropped.
 func (s *steerer) EnqueueTodo(sessionID string, author domain.TodoAuthor, ops []todo.Op) {
-	if sessionID == "" || !(todo.Change{Author: author, Ops: ops}).SteersAgent() {
+	if sessionID == "" || author == domain.AuthorPeer || !(todo.Change{Author: author, Ops: ops}).SteersAgent() {
 		return
 	}
 	s.mu.Lock()
@@ -250,15 +355,20 @@ func (s *steerer) Status(sessionID string) SteerStatus {
 		Held:            st.held,
 	}
 	for _, q := range st.pending {
-		out.Pending = append(out.Pending, SteerNote{SessionID: sessionID, Author: q.rec.Author, Text: q.rec.Text})
+		out.Pending = append(out.Pending, SteerNote{SessionID: sessionID, Author: q.rec.Author, From: q.rec.From, Text: q.rec.Text})
 	}
 	return out
 }
 
 // Kick wakes the delivery loop, for example after a session reported idle.
-// The loop checks every session, so the id only documents the cause.
+// The loop checks every session, so the id only documents the cause. Before
+// Run starts, Kick runs one delivery pass of its own.
 func (s *steerer) Kick(string) {
 	if s == nil {
+		return
+	}
+	if !s.running.Load() {
+		go s.deliverAll(context.Background())
 		return
 	}
 	select {
@@ -322,6 +432,8 @@ func (s *steerer) Load(ctx context.Context) error {
 
 // Run delivers queued notes until ctx is done, waking on Kick and on a tick.
 func (s *steerer) Run(ctx context.Context) {
+	s.running.Store(true)
+	defer s.running.Store(false)
 	t := time.NewTicker(s.tick)
 	defer t.Stop()
 	for {
@@ -336,6 +448,8 @@ func (s *steerer) Run(ctx context.Context) {
 }
 
 func (s *steerer) deliverAll(ctx context.Context) {
+	s.deliverMu.Lock()
+	defer s.deliverMu.Unlock()
 	s.mu.Lock()
 	var ids []string
 	for id, st := range s.sessions {
@@ -353,8 +467,8 @@ func (s *steerer) deliverAll(ctx context.Context) {
 	}
 }
 
-// deliver types every undelivered note for one session as a single message
-// once the target reports the agent ready.
+// deliver types the next batch for one session as a single message once the
+// target reports the agent ready.
 func (s *steerer) deliver(ctx context.Context, id string) {
 	s.mu.Lock()
 	st := s.sessions[id]
@@ -362,7 +476,7 @@ func (s *steerer) deliver(ctx context.Context, id string) {
 		s.mu.Unlock()
 		return
 	}
-	batch := slices.Clone(st.pending)
+	batch := nextBatch(st.pending)
 	lastDelivered := st.lastDelivered
 	s.mu.Unlock()
 
@@ -400,6 +514,20 @@ func (s *steerer) deliver(ctx context.Context, id string) {
 		return
 	}
 	s.finishDelivery(ctx, id, batch, at)
+}
+
+// nextBatch is the prefix of pending typed in one submit: a peer note alone,
+// or the run of other notes before the first peer note. A peer note is never
+// joined with other text, so its label stays the first thing typed.
+func nextBatch(pending []queuedNote) []queuedNote {
+	if pending[0].rec.Author == domain.AuthorPeer {
+		return slices.Clone(pending[:1])
+	}
+	end := slices.IndexFunc(pending, func(q queuedNote) bool { return q.rec.Author == domain.AuthorPeer })
+	if end < 0 {
+		end = len(pending)
+	}
+	return slices.Clone(pending[:end])
 }
 
 func submittedBatch(batch []queuedNote) ([]queuedNote, time.Time, bool) {
@@ -479,7 +607,29 @@ func (s *steerer) finishDelivery(ctx context.Context, id string, batch []queuedN
 	st.held = ""
 	st.lastError = ""
 	queued := len(st.pending)
+	s.rememberDeliveredLocked(batch, at)
 	s.mu.Unlock()
 
 	s.publish(SessionEvent{Type: "steer", ID: id, Queued: &queued, DeliveredAt: at.Format(time.RFC3339Nano)})
+	if queued > 0 {
+		// The next batch still passes the gate, which waits for a report
+		// newer than this delivery.
+		s.Kick(id)
+	}
+}
+
+// rememberDeliveredLocked records the submit time of delivered peer notes for
+// Delivered. Callers hold s.mu.
+func (s *steerer) rememberDeliveredLocked(batch []queuedNote, at time.Time) {
+	cutoff := s.now().Add(-peerDeliveredKeep)
+	for id, t := range s.delivered {
+		if t.Before(cutoff) {
+			delete(s.delivered, id)
+		}
+	}
+	for _, q := range batch {
+		if q.rec.Author == domain.AuthorPeer && q.rec.ID != 0 {
+			s.delivered[q.rec.ID] = at
+		}
+	}
 }

@@ -59,6 +59,10 @@ const (
 	// CodeSessionScope refuses a session's call that targets a session other
 	// than itself or one of its descendants, or a pty that is not its helper.
 	CodeSessionScope = "session_scope"
+	// CodePeerQueueFull refuses a peer note while the target already holds
+	// PeerNotesPerPair undelivered notes from the sender, or PeerNotesPerTarget
+	// from anyone.
+	CodePeerQueueFull = "peer_queue_full"
 	// CodeUnavailable means serve could not get what was asked for and has
 	// nothing stale to offer. The gateway returns it too.
 	CodeUnavailable = "unavailable"
