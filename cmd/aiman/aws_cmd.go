@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -14,10 +15,21 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/awsdelegation"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/server"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 const awsUsage = "Usage: aiman aws permission-set-policy [--regions a,b] [--name NAME] [--account ID] [--steps]\n" +
-	"       aiman aws log [--since SEQ] [--limit N] [--json]\n"
+	"       aiman aws permission-set-apply --profile ADMIN_PROFILE [--account ID] [--regions a,b] [--name NAME] [--user USER] [--dry-run] [--json]\n" +
+	"       aiman aws log [--since SEQ] [--limit N] [--json]\n" +
+	"\n" +
+	"permission-set-apply creates the delegated permission set in IAM Identity Center with the\n" +
+	"AWS CLI v2, puts its region-locked policy and assigns it for the account. --user names the\n" +
+	"Identity Center user to assign, such as a dedicated sign-in user that holds only\n" +
+	"aiman-delegated; without it the admin's own user is assigned when the admin profile is an\n" +
+	"Identity Center session. --dry-run prints the aws calls and makes none.\n"
+
+// newAWSCLI builds the aws runner for permission-set-apply; tests replace it.
+var newAWSCLI = func(profile string) awsdelegation.AWSCLI { return awsdelegation.ExecAWSCLI{Profile: profile} }
 
 const awsLogUsage = "Usage: aiman aws log [--since SEQ] [--limit N] [--json]\n"
 
@@ -107,6 +119,9 @@ func formatAWSLogLine(ev domain.SessionEvent) string {
 // runAWS prints the delegated permission set's policy, or its setup steps. A nil
 // cfg is allowed: --regions then has to name the regions.
 func runAWS(args []string, cfg *config.Config, out io.Writer) error {
+	if len(args) > 0 && args[0] == "permission-set-apply" {
+		return runPermissionSetApply(args[1:], cfg, out, os.Stderr)
+	}
 	if len(args) == 0 || args[0] != "permission-set-policy" {
 		fmt.Fprint(os.Stderr, awsUsage)
 		return errUsage
@@ -136,6 +151,83 @@ func runAWS(args []string, cfg *config.Config, out io.Writer) error {
 	}
 	_, err := fmt.Fprintln(out, policy)
 	return err
+}
+
+// runPermissionSetApply runs awsdelegation.Apply, or prints its Plan with
+// --dry-run. Progress goes to progress so out holds only the result.
+func runPermissionSetApply(args []string, cfg *config.Config, out, progress io.Writer) error {
+	fs := flag.NewFlagSet("aws permission-set-apply", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	profile := fs.String("profile", "", "admin profile in ~/.aws/config")
+	account := fs.String("account", "", "AWS account id; default the admin profile's own")
+	regionsFlag := fs.String("regions", "", "comma-separated regions")
+	name := fs.String("name", awsdelegation.DefaultPermissionSetName, "permission set name")
+	user := fs.String("user", "", "Identity Center user name to assign")
+	dryRun := fs.Bool("dry-run", false, "print the aws calls and make none")
+	asJSON := fs.Bool("json", false, "print the result as JSON")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || strings.TrimSpace(*profile) == "" {
+		fmt.Fprint(os.Stderr, awsUsage)
+		return errUsage
+	}
+	regions := strings.Split(*regionsFlag, ",")
+	if awsdelegation.PermissionSetPolicy(regions) == "" {
+		regions = delegationRegions(cfg)
+	}
+	spec := awsdelegation.ApplySpec{
+		Profile:   strings.TrimSpace(*profile),
+		AccountID: strings.TrimSpace(*account),
+		Name:      *name,
+		User:      strings.TrimSpace(*user),
+		Regions:   regions,
+	}
+	if *dryRun {
+		return printApplyPlan(spec, out)
+	}
+	res, err := awsdelegation.Apply(context.Background(), newAWSCLI(spec.Profile), spec, progress)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(out).Encode(res)
+	}
+	d := res.Delegation
+	_, err = fmt.Fprintf(out, "Done. Put this in remotes[].aws_delegation for that account:\n"+
+		"  sso_start_url: %s\n  sso_region: %s\n  sso_account_id: %s\n  sso_role_name: %s\n"+
+		"Then push the config to the host (Agent API page, c) and sign in from the phone.\n",
+		d.StartURL, d.Region, d.AccountID, d.RoleName)
+	return err
+}
+
+// printApplyPlan prints every aws call permission-set-apply may make, one
+// "aws --profile <p> ..." line each, with shell quoting for pasting.
+func printApplyPlan(spec awsdelegation.ApplySpec, out io.Writer) error {
+	steps, err := awsdelegation.Plan(spec)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out, "# Every aws call this command may make. A run skips the ones its lookups make unnecessary:\n"+
+		"# a first apply creates and never provisions; a rerun provisions and never creates."); err != nil {
+		return err
+	}
+	for _, s := range steps {
+		quoted := make([]string, len(s.Args))
+		for i, a := range s.Args {
+			quoted[i] = planQuote(a)
+		}
+		if _, err := fmt.Fprintf(out, "aws %s\n", strings.Join(quoted, " ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// planQuote leaves plain words and <placeholders> readable and shell-quotes the
+// rest, such as the policy and the alternate identifier.
+func planQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.=,:/@<>") == "" {
+		return s
+	}
+	return shellx.Quote(s)
 }
 
 // delegationRegions returns the regions of the first delegation that has any,
