@@ -67,7 +67,7 @@ func ensureCITables(db *sql.DB) error {
 func (r *Repository) LoadPRWatch(ctx context.Context, sessionID string) (domain.PRWatchState, error) {
 	st := domain.PRWatchState{SessionID: sessionID}
 	var since, polled sql.NullTime
-	err := r.db.QueryRowContext(ctx,
+	err := r.rd.QueryRowContext(ctx,
 		`SELECT pr_number, pr_state, head_sha, watch_since, last_polled_at, last_error FROM ci_watch WHERE session_id=?`, sessionID).
 		Scan(&st.PRNumber, &st.PRState, &st.HeadSHA, &since, &polled, &st.LastError)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -80,7 +80,7 @@ func (r *Repository) LoadPRWatch(ctx context.Context, sessionID string) (domain.
 		st.LastPolledAt = polled.Time
 	}
 
-	rows, err := r.db.QueryContext(ctx, `SELECT check_name FROM ci_escalations WHERE session_id=?`, sessionID)
+	rows, err := r.rd.QueryContext(ctx, `SELECT check_name FROM ci_escalations WHERE session_id=?`, sessionID)
 	if err != nil {
 		return st, err
 	}
@@ -102,7 +102,7 @@ func (r *Repository) LoadPRWatch(ctx context.Context, sessionID string) (domain.
 // SavePRWatch upserts the watcher state. Escalated is ignored: escalations
 // are written only by MarkCheckEscalated.
 func (r *Repository) SavePRWatch(ctx context.Context, st domain.PRWatchState) error {
-	_, err := r.db.ExecContext(ctx, `
+	_, err := r.exec(ctx, `
 		INSERT INTO ci_watch(session_id, pr_number, pr_state, head_sha, watch_since, last_polled_at, last_error)
 		VALUES(?,?,?,?,?,?,?)
 		ON CONFLICT(session_id) DO UPDATE SET
@@ -120,7 +120,7 @@ func (r *Repository) SavePRWatch(ctx context.Context, st domain.PRWatchState) er
 // distinct SHAs it has failed on. Re-polling the same SHA does not count as
 // another failed fix.
 func (r *Repository) RecordCheckFailure(ctx context.Context, sessionID, check, sha string) (int, error) {
-	if _, err := r.db.ExecContext(ctx,
+	if _, err := r.exec(ctx,
 		`INSERT OR IGNORE INTO ci_check_failures(session_id, check_name, head_sha, failed_at) VALUES(?,?,?,?)`,
 		sessionID, check, sha, time.Now().UTC()); err != nil {
 		return 0, err
@@ -134,7 +134,7 @@ func (r *Repository) RecordCheckFailure(ctx context.Context, sessionID, check, s
 // MarkCheckEscalated records an escalation and reports whether it is new, so
 // a check is escalated once until it is cleared.
 func (r *Repository) MarkCheckEscalated(ctx context.Context, sessionID, check string, at time.Time) (bool, error) {
-	res, err := r.db.ExecContext(ctx,
+	res, err := r.exec(ctx,
 		`INSERT OR IGNORE INTO ci_escalations(session_id, check_name, escalated_at) VALUES(?,?,?)`,
 		sessionID, check, at.UTC())
 	if err != nil {
@@ -156,12 +156,12 @@ func (r *Repository) ClearCheck(ctx context.Context, sessionID, check string) er
 			return err
 		}
 	}
-	return tx.Commit()
+	return r.commit(tx)
 }
 
 // SeenComments returns the review comment ids already handled for a session.
 func (r *Repository) SeenComments(ctx context.Context, sessionID string) (map[int64]bool, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT comment_id FROM ci_seen_comments WHERE session_id=?`, sessionID)
+	rows, err := r.rd.QueryContext(ctx, `SELECT comment_id FROM ci_seen_comments WHERE session_id=?`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func (r *Repository) MarkCommentsSeen(ctx context.Context, sessionID string, ids
 			return err
 		}
 	}
-	return tx.Commit()
+	return r.commit(tx)
 }
 
 // ResetPRWatch deletes every CI row for a session.
@@ -205,7 +205,7 @@ func (r *Repository) ResetPRWatch(ctx context.Context, sessionID string) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return r.commit(tx)
 }
 
 // nullTime stores a zero time as NULL so it reads back as zero.

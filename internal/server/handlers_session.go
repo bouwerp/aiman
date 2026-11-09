@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agenthook"
@@ -19,6 +21,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/local"
+	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/limits"
 	"github.com/bouwerp/aiman/internal/notify"
 	"github.com/bouwerp/aiman/internal/pane"
@@ -117,6 +120,37 @@ func (s *Server) liveSession(ctx context.Context, sess domain.Session) domain.Se
 		return sess
 	}
 	return *got
+}
+
+// freshRows is the rows of list that match, with their hook fields re-read
+// by id. The cached list is current for identity columns only; a caller that
+// branches on a hook field (AgentEnded) narrows by identity first and reads
+// those rows here.
+func (s *Server) freshRows(ctx context.Context, list []domain.Session, match func(domain.Session) bool) []domain.Session {
+	var out []domain.Session
+	for _, c := range list {
+		if match(c) {
+			out = append(out, s.freshHookFields(ctx, c))
+		}
+	}
+	return out
+}
+
+// freshHookFields is sess with the hook-written fields of its stored row,
+// which a hook report saves without invalidating the session list cache.
+// Identity and the live pty merge stay as given.
+func (s *Server) freshHookFields(ctx context.Context, sess domain.Session) domain.Session {
+	got := s.liveSession(ctx, sess)
+	sess.AgentEnded = got.AgentEnded
+	sess.AgentTitle = got.AgentTitle
+	sess.AgentSessionID = got.AgentSessionID
+	sess.AgentSessionPath = got.AgentSessionPath
+	sess.HookState = got.HookState
+	sess.HookStateMessage = got.HookStateMessage
+	sess.HookStateSource = got.HookStateSource
+	sess.HookStateSeq = got.HookStateSeq
+	sess.HookStateAt = got.HookStateAt
+	return sess
 }
 
 func (s *Server) decorateState(ctx context.Context, info *SessionInfo, sess domain.Session) {
@@ -362,34 +396,96 @@ func mergeLiveSessions(stored, live []domain.Session) []domain.Session {
 	return out
 }
 
-func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
-	if s.repo == nil {
-		return nil, nil
+// sessionListTTL bounds how long loadSessions serves the stored list from its
+// cache. Writes by this process invalidate it at once through the
+// repository's OnChange; the TTL is what brings in a write by another process
+// (aiman-trigger).
+var sessionListTTL = 2 * time.Second
+
+// changeNotifier is a repository that reports committed writes. serve finds it
+// by interface, so a wrapper embedding the sqlite repository still counts.
+type changeNotifier interface {
+	OnChange(func(sqlite.ChangeKind))
+}
+
+// sessionListCache is the stored session list, read through. It is used only
+// when the repository reports changes; without that a cached list could hide
+// this process's own writes.
+type sessionListCache struct {
+	mu      sync.Mutex
+	enabled bool
+	gen     uint64 // bumped by invalidate; a read started before it is not stored
+	ok      bool
+	at      time.Time
+	rows    []domain.Session
+}
+
+func (c *sessionListCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+	c.ok = false
+	c.rows = nil
+}
+
+// watchSessionList subscribes the cache to the repository's identity changes.
+func (s *Server) watchSessionList(repo any) {
+	n, ok := repo.(changeNotifier)
+	if !ok {
+		return
 	}
+	s.sessList.enabled = true
+	n.OnChange(func(k sqlite.ChangeKind) {
+		if k == sqlite.ChangeIdentity {
+			s.sessList.invalidate()
+		}
+	})
+}
+
+// storedSessions returns a copy of the stored rows, from the cache while it is
+// younger than sessionListTTL and no identity change has landed since. The
+// copy is shallow: pointer, slice and map fields (Tunnels, AWSConfig,
+// AutonomousConfig) are shared with the cache, so callers must not mutate
+// them in place; assigning a new value to a field is fine.
+func (s *Server) storedSessions(ctx context.Context) ([]domain.Session, error) {
+	c := &s.sessList
+	c.mu.Lock()
+	if !c.enabled {
+		c.mu.Unlock()
+		return s.repo.List(ctx)
+	}
+	if c.ok && time.Since(c.at) < sessionListTTL {
+		out := slices.Clone(c.rows)
+		c.mu.Unlock()
+		return out, nil
+	}
+	gen := c.gen
+	c.mu.Unlock()
 	list, err := s.repo.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// Backfill and persist names for rows this host actually owns, before
-	// anything discovered is folded in — the re-read below would discard it.
-	changed := false
-	for i := range list {
-		if list[i].Name == "" || list[i].Group == "" {
-			s.backfill(&list[i], list)
-			if err := s.repo.Save(ctx, &list[i]); err != nil {
-				return nil, err
-			}
-			changed = true
-		}
+	c.mu.Lock()
+	if c.gen == gen {
+		c.rows, c.at, c.ok = list, time.Now(), true
 	}
-	if changed {
-		list, err = s.repo.List(ctx)
-		if err != nil {
-			return nil, err
-		}
+	c.mu.Unlock()
+	return slices.Clone(list), nil
+}
+
+// loadSessions is the stored list with what runs here folded in. It never
+// writes: names and groups are backfilled at startup (backfillNames) and by
+// the paths that create rows.
+func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
+	if s.repo == nil {
+		return nil, nil
+	}
+	list, err := s.storedSessions(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	// Then fold in what is running here. Discovered sessions absent from the
+	// Fold in what is running here. Discovered sessions absent from the
 	// local database are labelled in memory only; they become rows when the
 	// laptop registers them (session.register) or an agent hook reports for
 	// them, so identity is never invented in two places.
@@ -406,6 +502,46 @@ func (s *Server) loadSessions(ctx context.Context) ([]domain.Session, error) {
 		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
 	})
 	return list, nil
+}
+
+// BackfillNames names and groups every stored row missing either, once at
+// startup, so the read path never has to. A failed save is logged and the pass
+// goes on; the first error is returned.
+func (s *Server) BackfillNames(ctx context.Context) error {
+	if s.repo == nil {
+		return nil
+	}
+	list, err := s.repo.List(ctx)
+	if err != nil {
+		return err
+	}
+	var first error
+	for i := range list {
+		if list[i].Name != "" && list[i].Group != "" {
+			continue
+		}
+		s.backfill(&list[i], list)
+		if err := s.repo.Save(ctx, &list[i]); err != nil {
+			log.Printf("backfill names: %s: %v", list[i].ID, err)
+			if first == nil {
+				first = err
+			}
+		}
+	}
+	return first
+}
+
+// backfillNew names and groups a row about to be created, against the rows
+// already stored.
+func (s *Server) backfillNew(ctx context.Context, sess *domain.Session) {
+	if sess.Name != "" && sess.Group != "" {
+		return
+	}
+	existing, err := s.storedSessions(ctx)
+	if err != nil {
+		existing = nil
+	}
+	s.backfill(sess, existing)
 }
 
 // labelDiscovered names a session found running on this host but absent from
@@ -1452,6 +1588,9 @@ func (s *Server) applyAgentReport(ctx context.Context, sessionID string, rep age
 	if err != nil {
 		sess = s.liveSessionByID(ctx, sessionID)
 		persist = sess != nil && !sess.Role.Hidden()
+		if persist {
+			s.backfillNew(ctx, sess)
+		}
 	}
 	if sess == nil {
 		return nil
@@ -1612,6 +1751,17 @@ func (s *Server) handleRegister(ctx context.Context, req Request) Response {
 				existing = nil
 			}
 			row := registrableSession(in, existing)
+			if existing != nil {
+				// Save keeps a stored name or group for an empty incoming one;
+				// carry them so the backfill does not invent a new one.
+				if row.Name == "" {
+					row.Name = existing.Name
+				}
+				if row.Group == "" {
+					row.Group = existing.Group
+				}
+			}
+			s.backfillNew(ctx, &row)
 			if err := s.repo.Save(ctx, &row); err != nil {
 				return errResp(req.ID, CodeInvalidParams, err.Error())
 			}

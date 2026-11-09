@@ -146,6 +146,17 @@ Consult round 2 (Grok, report `~/.aiman/consults/54610ced-697e-4c17-a41e-0c3d6ef
 | Releasing the wait slot does not cut the capture storm: 25 waiters still classify every 500 ms and every hook report captures | medium | accept | Behaviour 3: global capture semaphore of 4; `waitState` reads `sessionStates` instead of capturing |
 | A 2-second admission wait keeps client processes piled up | low | accept | Behaviour 3: 50 ms, then `server_busy`; the CLI retries once |
 
+P1 consult (report `~/.aiman/consults/08f9af65-877d-44e1-8640-231a5353d94c.report.md`): verdict revise, 2 high, 2 medium, 2 low. Behaviour 2 assumed only `steerSession` reads a hook field through `loadSessions`; `liveReview` (review create) and `checkFixRounds` (`review.fix`) also branch on `AgentEnded`.
+
+| Objection | Severity | Triage | Reason |
+|---|---|---|---|
+| Do not add `agent_ended` to the identity columns: every SessionEnd and `ClearAgentEnded` would miss the cache, and title, path and hook state would stay stale | high | accept | `OnChange` kinds unchanged |
+| Do not `repo.Get` on every `resolveReq`-style lookup: it misses the list scans and taxes identity-only calls | high | accept | Only the gates re-read, through `freshRows` |
+| The gates are `liveReview` and `checkFixRounds`; terminate's `children_left` is warning copy | medium | accept | `freshRows` narrows by identity (`review_pr`; fixer role and `parent_id`) and re-reads those rows' hook fields by id; `children_left` stays on the cache |
+| `ClearAgentEnded` is `ChangeOther`, so the gates must re-read even when the cached row says ended | medium | accept | `freshRows` re-reads every matching row, ended or not |
+| A one-row re-read on the peer target and the handover lookup is fine; not every resolve | low | accept in part | `admitPeer` re-reads the target's hook fields (a restart's false refusal); the handover render keeps the cache, its title and state are copy |
+| Keep `TestCreateReviewExists` as the test of the gate re-read | low | accept | Unchanged; it passes through `freshRows` |
+
 ## Breakdown
 
 | Piece | Owns files | Parallel group | Depends on | Complexity | Tier | Acceptance tests |

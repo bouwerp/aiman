@@ -143,13 +143,14 @@ func (st *eventStream) send(ev SessionEvent) error {
 	return nil
 }
 
-// announceRows reads the session table, sends session_created for new or
-// changed rows, and returns the rows it read (nil when the read failed).
+// announceRows reads the stored rows through the session list cache, sends
+// session_created for new or changed rows, and returns the rows it read (nil
+// when the read failed).
 func (s *Server) announceRows(ctx context.Context, st *eventStream) ([]domain.Session, error) {
 	if s.repo == nil {
 		return nil, nil
 	}
-	listed, err := s.repo.List(ctx)
+	listed, err := s.storedSessions(ctx)
 	if err != nil {
 		return nil, nil
 	}

@@ -31,7 +31,7 @@ func (s *Server) sessionRoots(ctx context.Context) []hoststats.SessionRoot {
 	names := map[string]string{}
 	hidden := map[string]bool{}
 	if s.repo != nil {
-		list, err := s.repo.List(ctx)
+		list, err := s.storedSessions(ctx)
 		if err != nil {
 			log.Printf("host.stats: list sessions: %v", err)
 		}

@@ -99,7 +99,7 @@ func ensureUsageContextColumns(db *sql.DB) error {
 
 // UsageCursors returns the stored parser positions for one session.
 func (r *Repository) UsageCursors(ctx context.Context, sessionID string) ([]domain.UsageCursor, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	rows, err := r.rd.QueryContext(ctx, `
 		SELECT session_id, path, byte_offset, fingerprint, size, mod_time, state_json
 		FROM usage_cursors WHERE session_id = ? ORDER BY path`, sessionID)
 	if err != nil {
@@ -149,7 +149,7 @@ func (r *Repository) ApplyUsage(ctx context.Context, cur domain.UsageCursor, rec
 	if err := upsertUsageCursor(ctx, tx, cur); err != nil {
 		return false, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := r.commit(tx); err != nil {
 		return false, fmt.Errorf("applying usage: %w", err)
 	}
 	return added, nil
@@ -240,7 +240,7 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 	if m.HasBudgetState {
 		hasBudget = 1
 	}
-	_, err := r.db.ExecContext(ctx, `
+	_, err := r.exec(ctx, `
 		INSERT INTO usage_sessions (
 			session_id, name, group_name, issue_key, agent_name,
 			last_input_tokens, context_window, context_source,
@@ -287,7 +287,7 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 // UsageSessions returns every stored usage label, including sessions that
 // have been deleted from the sessions table.
 func (r *Repository) UsageSessions(ctx context.Context) ([]domain.UsageSessionMeta, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	rows, err := r.rd.QueryContext(ctx, `
 		SELECT session_id, name, group_name, issue_key, agent_name,
 			last_input_tokens, context_window, context_source,
 			health_known, health_tool_calls, health_read_calls, health_edit_calls,
@@ -331,7 +331,7 @@ func (r *Repository) UsageBuckets(ctx context.Context, sessionIDs []string, sinc
 	if sessionIDs != nil && len(sessionIDs) == 0 {
 		return nil, nil
 	}
-	rows, err := r.db.QueryContext(ctx, `
+	rows, err := r.rd.QueryContext(ctx, `
 		SELECT session_id, hour, model, input, output, cache_read, cache_write_5m, cache_write_1h
 		FROM usage_buckets ORDER BY session_id, hour, model`)
 	if err != nil {

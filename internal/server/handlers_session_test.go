@@ -182,13 +182,17 @@ func TestSessionListMarksSelf(t *testing.T) {
 	}
 }
 
-func TestSessionListBackfillsName(t *testing.T) {
+// The startup pass names a stored row that has none; session.list then shows it.
+func TestBackfillNamesNamesStoredRow(t *testing.T) {
 	repo := testRepo(t)
 	ctx := context.Background()
 	if err := repo.Save(ctx, &domain.Session{
 		ID: "legacy", TerminalName: "old-tmux", IssueKey: "WTB-9",
 		Status: domain.SessionStatusActive, CreatedAt: time.Now(),
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(nil, repo, &fakeRemote{}, nil, nil, nil, "test").BackfillNames(ctx); err != nil {
 		t.Fatal(err)
 	}
 	sock := startTestServer(t, repo)

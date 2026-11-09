@@ -88,7 +88,7 @@ func TestSteerNoteFromRoundTrips(t *testing.T) {
 // from column: the column is added and existing rows read with From empty.
 func TestSteerNotesFromMigration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "aiman.db")
-	old, err := sql.Open("sqlite", dsn(path))
+	old, err := sql.Open("sqlite", dsn(path, true))
 	if err != nil {
 		t.Fatal(err)
 	}

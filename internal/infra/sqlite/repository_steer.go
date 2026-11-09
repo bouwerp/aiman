@@ -12,7 +12,7 @@ import (
 // AddSteerNote queues a steering note and sets n.ID. Times are stored in UTC
 // so MAX(delivered_at) orders correctly as text.
 func (r *Repository) AddSteerNote(ctx context.Context, n *domain.SteerRecord) error {
-	res, err := r.db.ExecContext(ctx,
+	res, err := r.exec(ctx,
 		`INSERT INTO steer_notes (session_id, author, "from", text, created_at) VALUES (?, ?, ?, ?, ?)`,
 		n.SessionID, string(n.Author), nullIfEmpty(n.From), n.Text, n.CreatedAt.UTC())
 	if err != nil {
@@ -28,7 +28,7 @@ func (r *Repository) AddSteerNote(ctx context.Context, n *domain.SteerRecord) er
 
 // ListUndeliveredSteerNotes returns every note not yet delivered, oldest first.
 func (r *Repository) ListUndeliveredSteerNotes(ctx context.Context) ([]domain.SteerRecord, error) {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.rd.QueryContext(ctx,
 		`SELECT id, session_id, author, COALESCE("from", ''), text, created_at FROM steer_notes WHERE delivered_at IS NULL ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list steer notes: %w", err)
@@ -62,7 +62,7 @@ func (r *Repository) MarkSteerNotesDelivered(ctx context.Context, ids []int64, a
 			return fmt.Errorf("failed to mark steer notes delivered: %w", err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := r.commit(tx); err != nil {
 		return fmt.Errorf("failed to mark steer notes delivered: %w", err)
 	}
 	return nil
@@ -70,7 +70,7 @@ func (r *Repository) MarkSteerNotesDelivered(ctx context.Context, ids []int64, a
 
 // DeleteSteerNotes removes every note for a session.
 func (r *Repository) DeleteSteerNotes(ctx context.Context, sessionID string) error {
-	if _, err := r.db.ExecContext(ctx, `DELETE FROM steer_notes WHERE session_id = ?`, sessionID); err != nil {
+	if _, err := r.exec(ctx, `DELETE FROM steer_notes WHERE session_id = ?`, sessionID); err != nil {
 		return fmt.Errorf("failed to delete steer notes: %w", err)
 	}
 	return nil
@@ -79,7 +79,7 @@ func (r *Repository) DeleteSteerNotes(ctx context.Context, sessionID string) err
 // LastSteerDelivery returns the latest delivery time per session. Sessions
 // with no delivered notes are absent.
 func (r *Repository) LastSteerDelivery(ctx context.Context) (map[string]time.Time, error) {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.rd.QueryContext(ctx,
 		`SELECT session_id, MAX(delivered_at) FROM steer_notes WHERE delivered_at IS NOT NULL GROUP BY session_id`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query steer deliveries: %w", err)

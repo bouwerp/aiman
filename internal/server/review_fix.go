@@ -159,8 +159,11 @@ func (s *Server) checkFixRounds(ctx context.Context, reviewID string, st review.
 	if err != nil {
 		return CodeCreateFailed, err
 	}
-	for _, c := range sessions {
-		if c.Role == domain.SessionRoleFixer && c.ParentID == reviewID && liveForUpdate(c) {
+	fixers := s.freshRows(ctx, sessions, func(c domain.Session) bool {
+		return c.Role == domain.SessionRoleFixer && c.ParentID == reviewID
+	})
+	for _, c := range fixers {
+		if liveForUpdate(c) {
 			return CodeReviewFixRunning, fmt.Errorf("fixer %s is still running", c.Name)
 		}
 	}

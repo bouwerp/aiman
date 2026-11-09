@@ -52,13 +52,33 @@ var steerSubmitTiming = usecase.DefaultSubmitTiming()
 
 var _ steerTarget = (*Server)(nil)
 
-// steerSession resolves id against the sessions this host knows.
+// steerSession reads the row by id, with the live pty record folded in, so
+// the delivery gate never sees a cached hook state.
 func (s *Server) steerSession(ctx context.Context, id string) (domain.Session, bool) {
-	sess := s.liveSessionByID(ctx, id)
-	if sess == nil {
+	return s.sessionByID(ctx, id)
+}
+
+// sessionByID is the stored row read by id, bypassing the session list cache,
+// with the live pty record folded in as loadSessions folds it.
+func (s *Server) sessionByID(ctx context.Context, id string) (domain.Session, bool) {
+	if s.repo == nil {
 		return domain.Session{}, false
 	}
-	return *sess, true
+	var stored []domain.Session
+	if got, err := s.repo.Get(ctx, id); err == nil {
+		stored = []domain.Session{*got}
+	}
+	var live []domain.Session
+	for _, l := range s.liveSessions(ctx) {
+		if l.ID == id {
+			live = append(live, l)
+		}
+	}
+	merged := mergeLiveSessions(stored, live)
+	if len(merged) == 0 {
+		return domain.Session{}, false
+	}
+	return merged[0], true
 }
 
 // steerReady is the delivery gate. A note goes in when the agent waits at its

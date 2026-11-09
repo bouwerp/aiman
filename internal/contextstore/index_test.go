@@ -20,7 +20,7 @@ func newTestIndex(t *testing.T) *Index {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	ix, err := OpenIndex(db)
+	ix, err := OpenIndex(db, db)
 	if err != nil {
 		t.Fatal(err)
 	}

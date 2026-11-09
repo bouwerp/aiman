@@ -74,6 +74,7 @@ func (r *Repository) AppendSessionEvent(ctx context.Context, ev domain.SessionEv
 	if err != nil {
 		return 0, fmt.Errorf("appending session event: %w", err)
 	}
+	r.changed(ChangeOther)
 	return seq, nil
 }
 
@@ -86,7 +87,7 @@ func (r *Repository) ListSessionEvents(ctx context.Context, sessionID string, si
 	if limit <= 0 {
 		limit = defaultSessionEventLimit
 	}
-	rows, err := r.db.QueryContext(ctx, `
+	rows, err := r.rd.QueryContext(ctx, `
 		SELECT session_id, seq, at, actor, kind, payload, hash
 		FROM session_events
 		WHERE session_id = ? AND seq > ?

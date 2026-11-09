@@ -13,7 +13,7 @@ func (r *Repository) HasActiveSessionForEvent(ctx context.Context, source string
 		  AND status NOT IN ('CLEANUP', 'ERROR', 'INACTIVE')
 	`
 	var count int
-	err := r.db.QueryRowContext(ctx, query, source, eventID).Scan(&count)
+	err := r.rd.QueryRowContext(ctx, query, source, eventID).Scan(&count)
 	if err != nil {
 		return false, err
 	}

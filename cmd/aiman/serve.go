@@ -150,7 +150,7 @@ func runServe() error {
 	ensureAimanSkill(ctx, db)
 	ensureAgentHooks(agentHookOptions(cfg))
 	store := contextstore.NewFiles(contextstore.Root(dir))
-	if ix, err := contextstore.OpenIndex(db.DB()); err != nil {
+	if ix, err := contextstore.OpenIndex(db.DB(), db.Reader()); err != nil {
 		log.Printf("context index unavailable: %v", err)
 	} else {
 		reindexStart := time.Now()
@@ -165,8 +165,11 @@ func runServe() error {
 	ptyMgr := ptyruntime.NewManager()
 	defer ptyMgr.CloseAll()
 	srv := server.New(ln, db, localExec, flow, store, ptyMgr, version)
+	if err := srv.BackfillNames(ctx); err != nil {
+		log.Printf("session name backfill: %v", err)
+	}
 	flow.SetDoneItems(srv.DoneItems())
-	if jobs, err := memoryjob.Open(db.DB()); err != nil {
+	if jobs, err := memoryjob.Open(db.DB(), db.Reader()); err != nil {
 		log.Printf("memory jobs unavailable: %v", err)
 	} else {
 		srv.SetMemoryJobs(jobs)
