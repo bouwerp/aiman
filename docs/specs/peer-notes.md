@@ -1,6 +1,6 @@
 # Peer notes: a session may message a session outside its tree
 
-**Revision:** 3 (after consult rounds 1 and 2) · **Size:** small · **Status:** proposed
+**Revision:** 3 (after consult rounds 1 and 2) · **Size:** small · **Status:** approved by the operator on 2026-11-09 ("looks good - carry on", default stays on)
 **Task:** operator request on 2026-11-09: a session reported "Aiman's own prompt command refused it because that session is outside this one's tree" when it tried to send a message to another session; the operator said "this should be possible" and, asked what it was doing, "sending a message".
 
 ## Problem
@@ -160,6 +160,11 @@ const (
 //   EnqueuePeer(n SteerNote) (id int64, err error) // persists at once; ErrPeerQueueFull
 //   Delivered(id int64) (time.Time, bool)          // DeliveredAt of a persisted row
 var ErrPeerQueueFull = errors.New("peer queue full")
+
+// internal/server (seams the acceptance tests set; defaults are the real lookups)
+//   Server.sessionOfPID func(pid int) (string, bool) // the session whose pty holder owns pid, via the holder roots
+//   func (s *Server) SetPeerNotes(on bool)            // from the pushed sessions.peer_notes; unset is on
+// The concrete steerer keeps Kick(id); tests reach it through Server.Steerer().
 
 // internal/domain/events.go
 const EventPeerNote = "session.peer_note"
