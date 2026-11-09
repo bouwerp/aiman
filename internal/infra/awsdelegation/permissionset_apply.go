@@ -579,13 +579,12 @@ func (r *applyRun) ourInFlightCreate() (requestStatus, bool, error) {
 }
 
 // isOurAssignment reports whether a creation status is for this account,
-// permission set and principal. Each field the status carries must match; the
-// API sets all three.
+// permission set and principal. All three must be set and equal ours; a status
+// that leaves one out is not ours.
 func (r *applyRun) isOurAssignment(st requestStatus) bool {
-	matches := func(got, want string) bool { return got == "" || got == want }
-	return matches(st.TargetID, r.res.AccountID) &&
-		matches(st.PermissionSetARN, r.res.PermissionSetARN) &&
-		matches(st.PrincipalID, r.res.PrincipalID)
+	return st.TargetID != "" && st.TargetID == r.res.AccountID &&
+		st.PermissionSetARN != "" && st.PermissionSetARN == r.res.PermissionSetARN &&
+		st.PrincipalID != "" && st.PrincipalID == r.res.PrincipalID
 }
 
 // describeAssignment reads one assignment creation status.
