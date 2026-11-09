@@ -15,7 +15,8 @@ func (s *Server) handleHostStats(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: struct {
 		Type string `json:"type"`
 		hoststats.Report
-	}{"host_stats", s.hostStats.Report(ctx, s.sessionRoots(ctx))}}
+		RPC RPCStats `json:"rpc"`
+	}{"host_stats", s.hostStats.Report(ctx, s.sessionRoots(ctx)), s.RPCStats()}}
 }
 
 // sessionRoots maps each live session to the PID its process tree hangs off.

@@ -245,12 +245,16 @@ func (s *Server) sampleRules(sample *stateSample) {
 	}
 }
 
-// captureLive renders a session's screen from the PTY runtime in this process.
+// captureLive renders a session's screen from the PTY runtime in this process,
+// inside the capture semaphore so waiters, hook reports and the sweep cannot
+// capture more than MaxCaptures panes at once.
 func (s *Server) captureLive(sess domain.Session) (string, bool) {
 	if s.pty == nil || sess.IsLegacyTmux() {
 		return "", false
 	}
+	release := s.admission().captureSlot()
 	screen, err := s.pty.CaptureScreen(sess.ID)
+	release()
 	if err != nil {
 		return "", false
 	}
@@ -751,16 +755,19 @@ func peerNoteSeen(sess domain.Session, at, now time.Time) bool {
 func pollUntil[T any](ctx context.Context, check func() (T, bool)) (T, error) {
 	t := time.NewTicker(peerWaitTick)
 	defer t.Stop()
+	sl := slotFrom(ctx)
 	for {
 		if v, ok := check(); ok {
 			return v, nil
 		}
+		sl.pause()
 		select {
 		case <-ctx.Done():
 			var zero T
 			return zero, ctx.Err()
 		case <-t.C:
 		}
+		sl.resume(ctx)
 	}
 }
 
@@ -805,20 +812,34 @@ func (s *Server) waitState(ctx context.Context, sess domain.Session, until domai
 	defer cancel()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	sl := slotFrom(ctx)
 	for {
-		st, _ := s.classify(waitCtx, sess)
+		st := s.waitSample(waitCtx, sess)
 		if until == "settled" && settled(st) {
 			return st, nil
 		}
 		if until != "settled" && st == until {
 			return st, nil
 		}
+		sl.pause()
 		select {
 		case <-waitCtx.Done():
 			return st, waitCtx.Err()
 		case <-ticker.C:
 		}
+		sl.resume(waitCtx)
 	}
+}
+
+// waitSample is a waiter's reading of a session: the state the sweep or the
+// last hook report cached, else a classify of its own while nothing has been
+// sampled, so waiters do not add captures to the sweep's.
+func (s *Server) waitSample(ctx context.Context, sess domain.Session) domain.AgentState {
+	if c, ok := s.cachedSessionState(sess.ID); ok && c.State != "" {
+		return domain.AgentState(c.State)
+	}
+	st, _ := s.classify(ctx, sess)
+	return st
 }
 
 // createParams are session.create's parameters.

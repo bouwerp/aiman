@@ -86,10 +86,17 @@ func (s *Server) handleSessionEventsConn(ctx context.Context, conn net.Conn, lin
 		writeResponse(conn, errResp("", CodeInvalidParams, "invalid request"))
 		return
 	}
+	// The stream holds an admission slot only while it is set up.
+	_, admitted, refused := s.admit(ctx, req)
+	if refused != nil {
+		writeResponse(conn, *refused)
+		return
+	}
 	// Subscribe before replying so nothing published after the attach is lost.
 	hubCh, unsubscribe := s.hub.Subscribe()
 	defer unsubscribe()
 	writeResponse(conn, Response{ID: req.ID, Result: map[string]any{"type": "events_attached"}})
+	admitted()
 
 	// A closed connection is only detectable on write, so the read side is
 	// drained in the background purely to notice EOF.

@@ -230,6 +230,22 @@ func (u AgentUpdateConfig) CheckEveryOrDefault() time.Duration {
 type HostConfig struct {
 	// Update is host.update.
 	Update HostUpdateConfig `yaml:"update,omitempty"`
+	// Load is host.load.
+	Load HostLoadConfig `yaml:"load,omitempty"`
+}
+
+// HostLoadConfig is host.load: how much serve admits and at what priority
+// agents run. A zero field keeps its default.
+type HostLoadConfig struct {
+	// MaxInflight caps requests served at once; 0 is 64.
+	MaxInflight int `yaml:"max_inflight,omitempty"`
+	// PerCallerPerMinute is each session's request budget, with a burst of
+	// 60; 0 is 300.
+	PerCallerPerMinute int `yaml:"per_caller_per_minute,omitempty"`
+	// MaxCaptures caps the pane captures serve makes for itself at once; 0 is 4.
+	MaxCaptures int `yaml:"max_captures,omitempty"`
+	// AgentNice is the niceness agents are started at; nil is 10, 0 none.
+	AgentNice *int `yaml:"agent_nice,omitempty"`
 }
 
 // HostUpdateConfig is host.update: how serve polls for a new aiman release

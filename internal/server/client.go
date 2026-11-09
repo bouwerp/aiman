@@ -43,34 +43,7 @@ func Call(socketPath, method string, params any) (Response, error) {
 		}
 		rawParams = b
 	}
-	req := Request{
-		ID:     uuid.NewString(),
-		Method: method,
-		Params: rawParams,
-		Caller: envCaller(),
-	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return Response{}, err
-	}
-	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
-	if err != nil {
-		return Response{}, fmt.Errorf("%w: %v", ErrServerNotRunning, err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(callDeadline(method)))
-	if _, err := conn.Write(append(body, '\n')); err != nil {
-		return Response{}, err
-	}
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
-	if err != nil {
-		return Response{}, err
-	}
-	var resp Response
-	if err := json.Unmarshal(line, &resp); err != nil {
-		return Response{}, err
-	}
-	return resp, nil
+	return Client{Socket: socketPath, Caller: envCaller()}.callRawWait(method, rawParams, callDeadline(method))
 }
 
 // AttachConn is a bidirectional channel to a PTY session: output arrives as
@@ -214,10 +187,57 @@ func (c Client) CallRaw(method string, rawParams json.RawMessage) (Response, err
 	return c.callRawWait(method, rawParams, callDeadline(method))
 }
 
+// maxRetryAfter bounds how long the client sleeps on a retry_after_ms.
+const maxRetryAfter = 5 * time.Second
+
+// callRawWait sends one request, and once more after retry_after_ms when serve
+// answers server_busy or rate_limited. A second refusal is returned with a
+// message that says which it was.
 func (c Client) callRawWait(method string, rawParams json.RawMessage, wait time.Duration) (Response, error) {
 	if wait <= 0 {
 		wait = callDeadline(method)
 	}
+	resp, err := c.callOnce(method, rawParams, wait)
+	if err != nil || !retryable(resp.Error) {
+		return resp, err
+	}
+	time.Sleep(retryAfter(resp.Error))
+	resp, err = c.callOnce(method, rawParams, wait)
+	if err == nil && retryable(resp.Error) {
+		resp.Error.Message = refusalMessage(resp.Error)
+	}
+	return resp, err
+}
+
+func retryable(e *Error) bool {
+	return e != nil && (e.Code == CodeServerBusy || e.Code == CodeRateLimited)
+}
+
+// retryAfter reads data.retry_after_ms, a second when it is missing.
+func retryAfter(e *Error) time.Duration {
+	d := time.Second
+	if b, err := json.Marshal(e.Data); err == nil {
+		var data RetryAfterData
+		if json.Unmarshal(b, &data) == nil && data.RetryAfterMS > 0 {
+			d = time.Duration(data.RetryAfterMS) * time.Millisecond
+		}
+	}
+	return min(d, maxRetryAfter)
+}
+
+// refusalMessage is the message of a refusal, led by what it was.
+func refusalMessage(e *Error) string {
+	lead := "rate limited"
+	if e.Code == CodeServerBusy {
+		lead = "server busy"
+	}
+	if strings.Contains(strings.ToLower(e.Message), lead) {
+		return e.Message
+	}
+	return lead + ": " + e.Message
+}
+
+func (c Client) callOnce(method string, rawParams json.RawMessage, wait time.Duration) (Response, error) {
 	req := Request{
 		ID:     uuid.NewString(),
 		Method: method,

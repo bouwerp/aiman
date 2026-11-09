@@ -119,7 +119,7 @@ func startHostUpdates(ctx context.Context, srv *server.Server, m *selfupdate.Man
 	go m.Run(ctx)
 }
 
-const hostUsage = "Usage: aiman host stats | version [--json] | update [--json]\n"
+const hostUsage = "Usage: aiman host stats [--json] | version [--json] | update [--json]\n"
 
 // runHostUpdateCmd is `aiman host version` and `aiman host update`.
 func runHostUpdateCmd(args []string, out io.Writer) error {

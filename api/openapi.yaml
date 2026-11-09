@@ -415,7 +415,10 @@ components:
             forbidden for a path outside them, under a .git directory or
             named like a secret, not_found for a missing file,
             invalid_params for a directory, and session_scope for a session
-            caller outside its own tree.
+            caller outside its own tree. Any method may answer server_busy
+            (no free slot within 50ms) or rate_limited (a session over its
+            per-minute budget); both carry data.retry_after_ms, and the CLI
+            retries once after it.
           enum:
             - invalid_params
             - not_found
@@ -455,6 +458,8 @@ components:
             - session_scope
             - aws_no_sso
             - aws_rate_limited
+            - server_busy
+            - rate_limited
             - unavailable
             - invalid_code
             - locked
@@ -466,6 +471,15 @@ components:
           description: The refusal's detail, for the codes that have one.
           oneOf:
             - $ref: "#/components/schemas/WorktreeDirtyData"
+            - $ref: "#/components/schemas/RetryAfterData"
+    RetryAfterData:
+      type: object
+      description: The detail of server_busy and rate_limited.
+      required: [retry_after_ms]
+      properties:
+        retry_after_ms:
+          type: integer
+          description: How long to wait before trying again.
     WorktreeDirtyData:
       type: object
       description: >
@@ -1245,17 +1259,66 @@ components:
         target:
           type: string
           description: The release tag being installed when accepted.
+    RPCCount:
+      type: object
+      required: [name, count, avg_us]
+      properties:
+        name:
+          type: string
+        count:
+          type: integer
+        avg_us:
+          type: integer
+          description: Mean duration in microseconds.
+    RPCStats:
+      type: object
+      description: >
+        serve's requests over the last window_seconds (60). inflight and
+        waiting are now; the rest are counts in the window. by_method and
+        by_caller list the top 10 by count. A caller is the session whose pty
+        holder runs the calling process, else the caller the request names,
+        else operator.
+      required: [window_seconds, total, inflight, waiting, rejected, limited, sweep_skipped, by_method, by_caller]
+      properties:
+        window_seconds:
+          type: integer
+        total:
+          type: integer
+        inflight:
+          type: integer
+          description: Requests holding a slot now.
+        waiting:
+          type: integer
+          description: Waits between their checks, holding no slot.
+        rejected:
+          type: integer
+          description: server_busy answers.
+        limited:
+          type: integer
+          description: rate_limited answers.
+        sweep_skipped:
+          type: integer
+        by_method:
+          type: array
+          items:
+            $ref: "#/components/schemas/RPCCount"
+        by_caller:
+          type: array
+          items:
+            $ref: "#/components/schemas/RPCCount"
     HostStatsResult:
       type: object
       description: >
         Read-only. Every size is in bytes and every CPU value is a percent.
         Linux reads /proc; elsewhere the fields are empty. Refresh every few
         seconds.
-      required: [type, host, uptime_seconds, load, cpu_count, cpu_percent, memory, swap, disks, processes, sessions]
+      required: [type, host, uptime_seconds, load, cpu_count, cpu_percent, memory, swap, disks, processes, sessions, rpc]
       properties:
         type:
           type: string
           const: host_stats
+        rpc:
+          $ref: "#/components/schemas/RPCStats"
         host:
           type: string
         uptime_seconds:
