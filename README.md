@@ -737,6 +737,21 @@ root-owned copy is never uninstalled; that needs root. The RPC is
 `agents.move_prefix {agent}`, answered with `{"type":"agents_move_prefix","host","result":{agent, accepted, reason}}`;
 serve re-probes the agent afterwards.
 
+#### Agent priority
+
+Every agent serve starts runs at a lower CPU priority than serve and the terminal holders,
+so a busy build cannot starve the TUI, the phone or attach.
+
+```yaml
+host:
+  load:
+    agent_nice: 10 # nice increment for agents (default 10, 0 to disable, max 19)
+```
+
+The agent is born at that niceness and everything it starts (builds, tests, `git`, `ssh`)
+inherits it, so those can miss short timeouts on a loaded host. Running agents keep their
+priority until their session restarts.
+
 #### RTK
 
 [RTK](https://github.com/rtk-ai/rtk) is a CLI proxy that shrinks command output before it

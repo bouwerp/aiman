@@ -230,6 +230,29 @@ func (u AgentUpdateConfig) CheckEveryOrDefault() time.Duration {
 type HostConfig struct {
 	// Update is host.update.
 	Update HostUpdateConfig `yaml:"update,omitempty"`
+	// Load is host.load.
+	Load HostLoadConfig `yaml:"load,omitempty"`
+}
+
+// DefaultAgentNice is the nice increment agents start at when
+// host.load.agent_nice is unset.
+const DefaultAgentNice = 10
+
+// HostLoadConfig is host.load: how serve keeps the host responsive under load.
+type HostLoadConfig struct {
+	// AgentNice is the nice increment every agent pty starts at, so the
+	// agent and its builds yield to serve and the pty holders. Nil is
+	// DefaultAgentNice; 0 runs agents at the holder's priority.
+	AgentNice *int `yaml:"agent_nice,omitempty"`
+}
+
+// AgentNiceOrDefault is the configured increment, DefaultAgentNice when
+// unset, clamped to [0,19].
+func (l HostLoadConfig) AgentNiceOrDefault() int {
+	if l.AgentNice == nil {
+		return DefaultAgentNice
+	}
+	return min(max(*l.AgentNice, 0), 19)
 }
 
 // HostUpdateConfig is host.update: how serve polls for a new aiman release

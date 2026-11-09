@@ -84,7 +84,10 @@ type Server struct {
 	sessionOfPID func(pid int) (string, bool)
 	// peerNotesOff is sessions.peer_notes: false.
 	peerNotesOff atomic.Bool
-	version      string
+	// agentNice is host.load.agent_nice, the nice increment pty.create
+	// gives every agent pty.
+	agentNice atomic.Int32
+	version   string
 
 	// hub carries events published by handlers to session.events streams.
 	hub *eventHub

@@ -1,5 +1,3 @@
-//go:build acceptance
-
 package ptyhold
 
 // Acceptance tests for P3 of docs/specs/serve-load-guard.md (Behaviour 4,

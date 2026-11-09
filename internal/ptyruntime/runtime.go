@@ -103,6 +103,9 @@ type Spec struct {
 	Cols, Rows int
 	// Role and ParentID are the aiman session's, recorded with the holder.
 	Role, ParentID string
+	// AgentNice is the nice increment the command starts at; see
+	// ptyhold.Spec.AgentNice.
+	AgentNice int
 }
 
 // Status describes the lifecycle state of a session.
@@ -239,6 +242,8 @@ func (m *Manager) Create(spec Spec) (*SessionInfo, error) {
 
 		Role:     spec.Role,
 		ParentID: spec.ParentID,
+
+		AgentNice: spec.AgentNice,
 	}, m.holderCmd()); err != nil {
 		return nil, fmt.Errorf("pty: start %q: %w", spec.Command, err)
 	}
