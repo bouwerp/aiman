@@ -121,6 +121,9 @@ func TestAWSPermissionSetApplyCommand(t *testing.T) {
 			if strings.HasPrefix(awsOp(c), "sso-admin") && !strings.Contains(strings.Join(c, " "), "--region eu-west-1") {
 				t.Errorf("Identity Center call without the profile sso_region: %v", c)
 			}
+			if awsOp(c) == "sso-admin provision-permission-set" {
+				t.Errorf("first apply provisioned after a create that already provisions: %v", c)
+			}
 		}
 	})
 

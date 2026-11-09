@@ -62,20 +62,23 @@ func (s *scriptedAWS) callsOf(name string) [][]string {
 
 // world is the Identity Center state a scripted fake answers from.
 type world struct {
-	instances        []map[string]string
-	callerARN        string
-	callerAccount    string
-	permissionSets   map[string]map[string]string // arn -> describe fields
-	users            map[string]string            // user name -> id
-	assignments      []map[string]string
-	createStatus     string   // status create-account-assignment answers; empty: IN_PROGRESS
-	createConflict   bool     // create-account-assignment answers ConflictException
-	statuses         []string // successive describe-account-assignment-creation-status answers
-	failureReason    string
-	statusCalls      int
-	provisionStatus  []string // successive describe-permission-set-provisioning-status answers
-	provisionCalls   int
-	provisionFailure string
+	instances             []map[string]string
+	callerARN             string
+	callerAccount         string
+	permissionSets        map[string]map[string]string // arn -> describe fields
+	users                 map[string]string            // user name -> id
+	assignments           []map[string]string
+	createStatus          string // status create-account-assignment answers; empty: IN_PROGRESS
+	createConflict        bool   // create-account-assignment answers ConflictException
+	createCalls           int
+	inFlight              []string // request ids list-account-assignment-creation-status reports IN_PROGRESS
+	statuses              []string // successive describe-account-assignment-creation-status answers
+	failureReason         string
+	statusCalls           int
+	provisionCreateStatus string   // status provision-permission-set answers; empty: IN_PROGRESS
+	provisionStatus       []string // successive describe-permission-set-provisioning-status answers
+	provisionCalls        int
+	provisionFailure      string
 }
 
 func defaultWorld() *world {
@@ -145,6 +148,7 @@ func (w *world) handle(args []string) (string, error) {
 	case "sso-admin list-account-assignments":
 		return j(map[string]any{"AccountAssignments": w.assignments})
 	case "sso-admin create-account-assignment":
+		w.createCalls++
 		if w.createConflict {
 			return "", errors.New("An error occurred (ConflictException) when calling the CreateAccountAssignment operation: Assignment already exists")
 		}
@@ -152,7 +156,17 @@ func (w *world) handle(args []string) (string, error) {
 		if st == "" {
 			st = "IN_PROGRESS"
 		}
-		return j(map[string]any{"AccountAssignmentCreationStatus": map[string]string{"RequestId": "req-1", "Status": st}})
+		fields := map[string]string{"RequestId": "req-1", "Status": st}
+		if st == "FAILED" {
+			fields["FailureReason"] = w.failureReason
+		}
+		return j(map[string]any{"AccountAssignmentCreationStatus": fields})
+	case "sso-admin list-account-assignment-creation-status":
+		var rows []map[string]string
+		for _, id := range w.inFlight {
+			rows = append(rows, map[string]string{"RequestId": id, "Status": "IN_PROGRESS", "CreatedDate": "2026-11-09T06:00:00+00:00"})
+		}
+		return j(map[string]any{"AccountAssignmentsCreationStatus": rows})
 	case "sso-admin describe-account-assignment-creation-status":
 		st := w.statuses[len(w.statuses)-1]
 		if w.statusCalls < len(w.statuses) {
@@ -165,7 +179,15 @@ func (w *world) handle(args []string) (string, error) {
 		}
 		return j(map[string]any{"AccountAssignmentCreationStatus": fields})
 	case "sso-admin provision-permission-set":
-		return j(map[string]any{"PermissionSetProvisioningStatus": map[string]string{"RequestId": "prov-1", "Status": "IN_PROGRESS"}})
+		st := w.provisionCreateStatus
+		if st == "" {
+			st = "IN_PROGRESS"
+		}
+		fields := map[string]string{"RequestId": "prov-1", "Status": st}
+		if st == "FAILED" {
+			fields["FailureReason"] = w.provisionFailure
+		}
+		return j(map[string]any{"PermissionSetProvisioningStatus": fields})
 	case "sso-admin describe-permission-set-provisioning-status":
 		st := w.provisionStatus[len(w.provisionStatus)-1]
 		if w.provisionCalls < len(w.provisionStatus) {
@@ -381,7 +403,8 @@ func TestApplyFixesSessionDuration(t *testing.T) {
 func TestApplyAssignmentConflictIsPresent(t *testing.T) {
 	w := defaultWorld()
 	existing := withExisting(w)
-	// The listing lags: the assignment exists but is not listed yet.
+	// The listing lags: the assignment exists but is not listed yet, and the
+	// create keeps answering ConflictException while the retries run.
 	w.assignments = nil
 	w.createConflict = true
 	calls := 0
@@ -402,8 +425,111 @@ func TestApplyAssignmentConflictIsPresent(t *testing.T) {
 	if res.CreatedAssignment {
 		t.Error("CreatedAssignment = true after a ConflictException")
 	}
+	if w.createCalls < 2 {
+		t.Errorf("create-account-assignment calls = %d, want retries before giving the conflict up", w.createCalls)
+	}
 	if n := len(cli.callsOf("sso-admin list-account-assignments")); n < 2 {
 		t.Errorf("list-account-assignments calls = %d, want a second look after the conflict", n)
+	}
+	// The assignment existed before this run, so the live role still holds
+	// the old policy until the permission set is provisioned to the account.
+	provs := cli.callsOf("sso-admin provision-permission-set")
+	if len(provs) != 1 || flagValue(provs[0], "--target-id") != "123456789012" || flagValue(provs[0], "--permission-set-arn") != existing || flagValue(provs[0], "--instance-arn") != res.InstanceARN {
+		t.Errorf("provision-permission-set calls = %v, want one for the pre-existing assignment", provs)
+	}
+	if n := len(cli.callsOf("sso-admin describe-permission-set-provisioning-status")); n != 2 {
+		t.Errorf("provisioning polls = %d, want 2", n)
+	}
+}
+
+func TestApplyConflictAttachesToInFlightCreate(t *testing.T) {
+	w := defaultWorld()
+	withExisting(w)
+	// An earlier run timed out: its create is still IN_PROGRESS, so the
+	// assignment is not listed and every create answers ConflictException.
+	w.assignments = nil
+	w.createConflict = true
+	w.inFlight = []string{"req-9"}
+	w.statuses = []string{"IN_PROGRESS", "SUCCEEDED"}
+	cli := &scriptedAWS{handle: w.handle}
+	res, err := Apply(context.Background(), cli, fastSpec(t), &strings.Builder{})
+	if err != nil {
+		t.Fatalf("Apply: %v (an in-flight create must be waited for, not failed)", err)
+	}
+	if !res.CreatedAssignment {
+		t.Error("CreatedAssignment = false after waiting for the in-flight create")
+	}
+	lists := cli.callsOf("sso-admin list-account-assignment-creation-status")
+	if len(lists) != 1 || !strings.Contains(strings.Join(lists[0], " "), "Status=IN_PROGRESS") || flagValue(lists[0], "--instance-arn") != res.InstanceARN {
+		t.Errorf("list-account-assignment-creation-status calls = %v, want one filtered to IN_PROGRESS", lists)
+	}
+	polls := cli.callsOf("sso-admin describe-account-assignment-creation-status")
+	if len(polls) != 2 || flagValue(polls[0], "--account-assignment-creation-request-id") != "req-9" {
+		t.Errorf("status polls = %v, want 2 on request req-9", polls)
+	}
+	if n := len(cli.callsOf("sso-admin provision-permission-set")); n != 0 {
+		t.Errorf("provision-permission-set called %d times after a create that provisions", n)
+	}
+}
+
+func TestApplyConflictWithNothingInFlightFails(t *testing.T) {
+	w := defaultWorld()
+	withExisting(w)
+	w.assignments = nil
+	w.createConflict = true
+	w.inFlight = nil
+	cli := &scriptedAWS{handle: w.handle}
+	_, err := Apply(context.Background(), cli, fastSpec(t), &strings.Builder{})
+	if err == nil || !strings.Contains(err.Error(), "ConflictException") {
+		t.Fatalf("err = %v, want the conflict when nothing is listed and nothing is in flight", err)
+	}
+	if n := len(cli.callsOf("sso-admin list-account-assignment-creation-status")); n != 1 {
+		t.Errorf("list-account-assignment-creation-status calls = %d, want 1 before giving up", n)
+	}
+	if n := len(cli.callsOf("sso-admin provision-permission-set")); n != 0 {
+		t.Errorf("provision-permission-set called %d times after a failed assignment", n)
+	}
+}
+
+func TestApplyImmediateFailedCreate(t *testing.T) {
+	w := defaultWorld()
+	w.createStatus = "FAILED"
+	w.failureReason = "Principal not found"
+	cli := &scriptedAWS{handle: w.handle}
+	_, err := Apply(context.Background(), cli, fastSpec(t), &strings.Builder{})
+	if err == nil || !strings.Contains(err.Error(), w.failureReason) {
+		t.Fatalf("err = %v, want the FailureReason from the create response", err)
+	}
+	if n := len(cli.callsOf("sso-admin describe-account-assignment-creation-status")); n != 0 {
+		t.Errorf("status polls = %d after an immediate FAILED, want 0", n)
+	}
+}
+
+func TestApplyImmediateFailedProvision(t *testing.T) {
+	w := defaultWorld()
+	withExisting(w)
+	w.provisionCreateStatus = "FAILED"
+	w.provisionFailure = "Permission set provisioning failed"
+	cli := &scriptedAWS{handle: w.handle}
+	_, err := Apply(context.Background(), cli, fastSpec(t), &strings.Builder{})
+	if err == nil || !strings.Contains(err.Error(), w.provisionFailure) {
+		t.Fatalf("err = %v, want the FailureReason from the provision response", err)
+	}
+	if n := len(cli.callsOf("sso-admin describe-permission-set-provisioning-status")); n != 0 {
+		t.Errorf("provisioning polls = %d after an immediate FAILED, want 0", n)
+	}
+}
+
+func TestApplyImmediateSucceededProvision(t *testing.T) {
+	w := defaultWorld()
+	withExisting(w)
+	w.provisionCreateStatus = "SUCCEEDED"
+	cli := &scriptedAWS{handle: w.handle}
+	if _, err := Apply(context.Background(), cli, fastSpec(t), &strings.Builder{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if n := len(cli.callsOf("sso-admin describe-permission-set-provisioning-status")); n != 0 {
+		t.Errorf("provisioning polls = %d after an immediate SUCCEEDED, want 0", n)
 	}
 }
 
@@ -659,6 +785,7 @@ func TestPlanListsCallsWithPlaceholders(t *testing.T) {
 		"identitystore get-user-id",
 		"sso-admin list-account-assignments",
 		"sso-admin create-account-assignment",
+		"sso-admin list-account-assignment-creation-status",
 		"sso-admin describe-account-assignment-creation-status",
 		"sso-admin provision-permission-set",
 		"sso-admin describe-permission-set-provisioning-status",
