@@ -156,6 +156,13 @@ Consult round 2 (Grok 4.6, report `~/.aiman/consults/7ed0cba6-01a4-4a62-b269-29f
 | `get-user-id` and auto-pagination need CLI v2; the scenario wrongly said the CLI signs in on its own | low | accept | Behaviour names the v2 requirement and a valid session; the scenario says the admin profile is signed in first |
 | `--dry-run` always lists `provision-permission-set`, which a first apply skips | low | accept | Behaviour: the plan is the union of possible calls and says so in its first line |
 
+P2 build consult (report `~/.aiman/consults/f58eca0c-0c02-4bef-8cfc-36dc3b766f51.report.md`, on an acceptance test that could not pass): verdict approve, 1 high, 0 medium, 1 low.
+
+| Objection | Severity | Triage | Reason |
+|---|---|---|---|
+| The rerun subtest in `cmd/aiman/aws_apply_config_acceptance_test.go` set `args[5]` (the `--remote` flag) instead of `args[4]` (the `--regions` value), so the second run got a stray argument and `errUsage` | high | accept | The test now sets `args[4]`; the CLI keeps refusing leftover positional arguments |
+| Mutating a magic index on a shared argv slice is fragile | low | defer | The one-character fix is enough for this test; rebuilding the argv is a test-style change outside P2 |
+
 ## Breakdown
 
 | Piece | Owns files | Parallel group | Depends on | Complexity | Tier | Acceptance tests |

@@ -1168,6 +1168,9 @@ remotes:
     #   - profile: prod
     #     source_profile: my-prod-profile
     #     account_id: "210987654321"
+    # `aiman aws permission-set-apply --profile <admin> --remote devbox` sets up
+    # the Identity Center permission set and writes an aws_delegations entry
+    # here with sso_start_url, sso_region, sso_account_id and sso_role_name.
 
 # Per-repo worktree bootstrap, keyed by owner/name. See
 # "Worktree bootstrap and code graph".

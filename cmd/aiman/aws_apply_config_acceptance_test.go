@@ -1,5 +1,3 @@
-//go:build acceptance
-
 package main
 
 import (
@@ -89,7 +87,7 @@ func TestAWSPermissionSetApplyWritesTheDelegation(t *testing.T) {
 			t.Fatalf("first run: %v", err)
 		}
 		cfg = reloadLaptopConfig(t)
-		args[5] = "eu-west-1,af-south-1"
+		args[4] = "eu-west-1,af-south-1"
 		if err := runAWS(args, cfg, &bytes.Buffer{}); err != nil {
 			t.Fatalf("second run: %v", err)
 		}
