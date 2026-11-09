@@ -598,21 +598,27 @@ func legacyTerminalResp(id string, sess domain.Session) Response {
 	return errResp(id, CodeLegacyTerminal, domain.NewLegacyTmuxError(sess).Error())
 }
 
+// promptParams are session.prompt's parameters.
+type promptParams struct {
+	ID      string `json:"id"`
+	Text    string `json:"text"`
+	Wait    bool   `json:"wait"`
+	Until   string `json:"until"`
+	Timeout *int   `json:"timeout_ms"`
+	Force   bool   `json:"force"`
+}
+
 func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
-	sess, fail, ok := s.resolveScopedReq(ctx, req)
+	sess, fail, ok := s.resolveReq(ctx, req)
 	if !ok {
 		return fail
 	}
-	var params struct {
-		ID      string `json:"id"`
-		Text    string `json:"text"`
-		Wait    bool   `json:"wait"`
-		Until   string `json:"until"`
-		Timeout *int   `json:"timeout_ms"`
-		Force   bool   `json:"force"`
-	}
+	var params promptParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	if scope, isSession := s.sessionScopeOf(ctx, req); isSession && !scope.covers(sess.ID) {
+		return s.handlePeerPrompt(ctx, req, scope, sess, params)
 	}
 	if sess.IsLegacyTmux() {
 		return legacyTerminalResp(req.ID, sess)
@@ -652,6 +658,110 @@ func (s *Server) handlePrompt(ctx context.Context, req Request) Response {
 		result["state"] = string(st)
 	}
 	return Response{ID: req.ID, Result: result}
+}
+
+// handlePeerPrompt queues session.prompt from outside the target's tree as a
+// peer note. Nothing is typed, so force and the waiting_input check do not
+// apply and the target is never locked.
+func (s *Server) handlePeerPrompt(ctx context.Context, req Request, scope sessionScope, sess domain.Session, params promptParams) Response {
+	from, payload, refused := s.admitPeer(ctx, req, scope, sess, params.Text)
+	if refused != nil {
+		return *refused
+	}
+	id, refused := s.queuePeerNote(ctx, req, from, sess, payload)
+	if refused != nil {
+		return *refused
+	}
+	result := map[string]any{
+		"type": "prompt_result", "sent": false, "queued": true,
+		"delivered_as": "note", "steer": s.steer.Status(sess.ID),
+	}
+	if params.Wait {
+		until := parseUntil(params.Until)
+		if until == "" {
+			until = "settled"
+		}
+		st, err := s.waitPeerNote(ctx, sess, id, until, params.Timeout)
+		if err != nil {
+			return errResp(req.ID, CodeTimeout, err.Error())
+		}
+		result["state"] = string(st)
+	}
+	return Response{ID: req.ID, Result: result}
+}
+
+// errPeerNotDelivered is a peer prompt's wait that ran out before the note
+// was typed.
+var errPeerNotDelivered = errors.New("peer note not delivered yet")
+
+// errPeerNotSettled is a peer prompt's wait that ran out after the note was
+// typed but before the target showed it had picked it up.
+var errPeerNotSettled = errors.New("peer note delivered, target not settled")
+
+// peerWaitTick is how often a peer prompt's wait polls delivery and the hook.
+const peerWaitTick = 50 * time.Millisecond
+
+// waitPeerNote waits, under one timeout, for the note to be typed, then for a
+// hook report newer than that submit, so a stale idle is not read as handled,
+// then for the target to reach until.
+func (s *Server) waitPeerNote(ctx context.Context, sess domain.Session, id int64, until domain.AgentState, timeoutMS *int) (domain.AgentState, error) {
+	ms := 120000
+	if timeoutMS != nil {
+		ms = *timeoutMS
+	}
+	waitCtx, cancel := ctx, context.CancelFunc(func() {})
+	if ms > 0 {
+		waitCtx, cancel = context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
+	}
+	defer cancel()
+	at, err := pollUntil(waitCtx, func() (time.Time, bool) { return s.Steerer().Delivered(id) })
+	if err != nil {
+		return "", errPeerNotDelivered
+	}
+	cur, err := pollUntil(waitCtx, func() (domain.Session, bool) {
+		cur, ok := s.findSession(waitCtx, sess.ID)
+		return cur, ok && peerNoteSeen(cur, at, time.Now())
+	})
+	if err != nil {
+		return "", errPeerNotSettled
+	}
+	rest := 0
+	if deadline, ok := waitCtx.Deadline(); ok {
+		rest = max(1, int(time.Until(deadline).Milliseconds()))
+	}
+	return s.waitState(waitCtx, cur, until, &rest)
+}
+
+// peerWaitQuiet is how long after the submit a target without hook reports
+// is left before its screen is read. A variable so tests can shorten it.
+var peerWaitQuiet = steerClassifierQuiet
+
+// peerNoteSeen reports whether the target can have picked up a note typed at
+// at: a hook report newer than the submit, or, for a target that never sent
+// one, the classifier's quiet window passed, so the empty composer left
+// before the agent redrew is not read as handled.
+func peerNoteSeen(sess domain.Session, at, now time.Time) bool {
+	if sess.HookStateAt.IsZero() {
+		return now.Sub(at) > peerWaitQuiet
+	}
+	return sess.HookStateAt.After(at)
+}
+
+// pollUntil calls check every peerWaitTick until it reports done or ctx ends.
+func pollUntil[T any](ctx context.Context, check func() (T, bool)) (T, error) {
+	t := time.NewTicker(peerWaitTick)
+	defer t.Stop()
+	for {
+		if v, ok := check(); ok {
+			return v, nil
+		}
+		select {
+		case <-ctx.Done():
+			var zero T
+			return zero, ctx.Err()
+		case <-t.C:
+		}
+	}
 }
 
 func (s *Server) handleWait(ctx context.Context, req Request) Response {

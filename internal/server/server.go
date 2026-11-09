@@ -79,7 +79,12 @@ type Server struct {
 	pty      PTYRuntime
 	// procInSession overrides inHolderTree, so tests can fake the ancestry check.
 	procInSession func(pid int) bool
-	version       string
+	// sessionOfPID overrides holderSessionOf, so tests can fake which
+	// holder owns a pid.
+	sessionOfPID func(pid int) (string, bool)
+	// peerNotesOff is sessions.peer_notes: false.
+	peerNotesOff atomic.Bool
+	version      string
 
 	// hub carries events published by handlers to session.events streams.
 	hub *eventHub

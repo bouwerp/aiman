@@ -20,14 +20,18 @@ type Write struct {
 
 // FakePTY implements server.PTYRuntime. The zero value is not usable; call New.
 type FakePTY struct {
-	mu       sync.Mutex
-	sessions map[string]ptyruntime.SessionInfo
-	screens  map[string]string
-	screen   string
-	writes   []Write
-	kills    []string
-	forgets  []string
-	creates  []ptyruntime.Spec
+	mu           sync.Mutex
+	sessions     map[string]ptyruntime.SessionInfo
+	screens      map[string]string
+	screen       string
+	writes       []Write
+	kills        []string
+	forgets      []string
+	creates      []ptyruntime.Spec
+	captureDelay time.Duration
+	captures     int
+	inflight     int
+	maxInflight  int
 }
 
 // New returns an empty runtime.
@@ -153,14 +157,50 @@ func (f *FakePTY) Capture(id string, _ int) ([]byte, error) {
 
 func (f *FakePTY) CaptureScreen(id string) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if _, ok := f.sessions[id]; !ok {
+		f.mu.Unlock()
 		return "", ptyruntime.ErrNotFound
 	}
-	if s, ok := f.screens[id]; ok {
-		return s, nil
+	f.captures++
+	f.inflight++
+	if f.inflight > f.maxInflight {
+		f.maxInflight = f.inflight
 	}
-	return f.screen, nil
+	delay := f.captureDelay
+	s, ok := f.screens[id]
+	if !ok {
+		s = f.screen
+	}
+	f.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	f.mu.Lock()
+	f.inflight--
+	f.mu.Unlock()
+	return s, nil
+}
+
+// SetCaptureDelay makes every capture take d, so tests can hold a capture
+// open and observe what overlaps it.
+func (f *FakePTY) SetCaptureDelay(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.captureDelay = d
+}
+
+// Captures is how many captures ran so far.
+func (f *FakePTY) Captures() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.captures
+}
+
+// MaxConcurrentCaptures is the largest number of captures that ran at once.
+func (f *FakePTY) MaxConcurrentCaptures() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxInflight
 }
 
 func (f *FakePTY) CaptureFrame(id string) (view, all string, err error) {

@@ -210,6 +210,8 @@ func NewRepository(dbPath string) (*Repository, error) {
 	if _, err := db.Exec(steerQuery); err != nil {
 		return nil, fmt.Errorf("failed to create steer_notes table: %w", err)
 	}
+	// "from" is the sender of a peer note; rows written before it stay NULL.
+	_, _ = db.Exec(`ALTER TABLE steer_notes ADD COLUMN "from" TEXT`)
 
 	if err := ensureUsageTables(db); err != nil {
 		return nil, fmt.Errorf("failed to create usage tables: %w", err)

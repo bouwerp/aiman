@@ -13,8 +13,8 @@ import (
 // so MAX(delivered_at) orders correctly as text.
 func (r *Repository) AddSteerNote(ctx context.Context, n *domain.SteerRecord) error {
 	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO steer_notes (session_id, author, text, created_at) VALUES (?, ?, ?, ?)`,
-		n.SessionID, string(n.Author), n.Text, n.CreatedAt.UTC())
+		`INSERT INTO steer_notes (session_id, author, "from", text, created_at) VALUES (?, ?, ?, ?, ?)`,
+		n.SessionID, string(n.Author), nullIfEmpty(n.From), n.Text, n.CreatedAt.UTC())
 	if err != nil {
 		return fmt.Errorf("failed to add steer note: %w", err)
 	}
@@ -29,7 +29,7 @@ func (r *Repository) AddSteerNote(ctx context.Context, n *domain.SteerRecord) er
 // ListUndeliveredSteerNotes returns every note not yet delivered, oldest first.
 func (r *Repository) ListUndeliveredSteerNotes(ctx context.Context) ([]domain.SteerRecord, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, session_id, author, text, created_at FROM steer_notes WHERE delivered_at IS NULL ORDER BY id`)
+		`SELECT id, session_id, author, COALESCE("from", ''), text, created_at FROM steer_notes WHERE delivered_at IS NULL ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list steer notes: %w", err)
 	}
@@ -38,7 +38,7 @@ func (r *Repository) ListUndeliveredSteerNotes(ctx context.Context) ([]domain.St
 	for rows.Next() {
 		var n domain.SteerRecord
 		var author string
-		if err := rows.Scan(&n.ID, &n.SessionID, &author, &n.Text, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.SessionID, &author, &n.From, &n.Text, &n.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan steer note: %w", err)
 		}
 		n.Author = domain.TodoAuthor(author)
@@ -116,4 +116,12 @@ func parseStoredTime(s string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("unrecognised stored time %q", s)
+}
+
+// nullIfEmpty stores an empty string as NULL.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
