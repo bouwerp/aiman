@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -34,7 +33,7 @@ func runHostDump(out io.Writer) error {
 	}
 	logs := filepath.Join(dir, "logs")
 	since := time.Now()
-	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
+	if err := signalServe(pid); err != nil {
 		return fmt.Errorf("signal serve (pid %d): %w", pid, err)
 	}
 	for deadline := time.Now().Add(hostDumpWait); ; {

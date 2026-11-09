@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -178,8 +177,12 @@ func (d *autoDump) due(now time.Time, atCap bool) bool {
 // aiman host dump report the auto dump's file.
 func (s *Server) HandleDumpSignals(ctx context.Context, dir string) {
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGUSR1)
-	defer signal.Stop(sig)
+	if len(dumpSignals) > 0 {
+		// Notify with no signals would relay every signal, so a platform
+		// without SIGUSR1 (Windows) gets the auto dump only.
+		signal.Notify(sig, dumpSignals...)
+		defer signal.Stop(sig)
+	}
 	go s.runAutoDump(ctx, dir)
 	for {
 		select {

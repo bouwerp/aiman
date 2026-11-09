@@ -274,6 +274,8 @@ Where the code that landed differs from the behaviour above, with the reason.
 - **`aiman host dump` checks the pid (P5).** Before `SIGUSR1`, whose default action terminates a process, the CLI refuses its own pid and, on Linux, any pid whose `/proc/<pid>/cmdline` is not `aiman serve`, so a stale `~/.aiman/serve.pid` after a crash or reboot cannot signal a reused pid. `serveMainPID` stays as pinned; `findServePID` adds the source for the message.
 - **Atomic dump file (P5).** The dump is written to `serve-dump-<unix>.txt.tmp`, synced and renamed, so `newestDumpSince` never returns a half-written file. A `SIGUSR1` that lands during an auto dump is dropped and `aiman host dump` reports the auto dump's file.
 
+- **No SIGUSR1 on Windows (P5).** `dumpSignals` is empty there, so only the auto dump runs, and `aiman host dump` explains that it needs a signal Windows lacks. The release build cross-compiles for Windows, which the Linux-only CI runs of the piece did not catch.
+
 ## What the reader should be able to explain
 
 1. The five links of the failure chain, in order, and which piece cuts each.
