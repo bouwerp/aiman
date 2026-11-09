@@ -494,8 +494,8 @@ reboot.
 
 **Agent priority**: agents start at `nice 10` from `host.load.agent_nice`
 (`config.HostLoadConfig.AgentNiceOrDefault`: nil is 10, 0 disables, clamped to
-[0,19]). serve passes it to every `pty.create` (`Server.SetAgentNice`), including
-helper ptys a session creates; `ptyruntime.Spec.AgentNice` reaches the holder as
+[0,19]). serve passes it to every pty it creates (`Server.SetAgentNice`): each
+`pty.create`, including helper ptys a session creates, and the `review.debug` pty; `ptyruntime.Spec.AgentNice` reaches the holder as
 `agent_nice` in `request.json`, and `childShell` runs the command as
 `exec nice -n <n> bash -c <quoted command>` after the PATH and TERM exports. Builds,
 tests, `git` and `ssh` inside a session inherit it. The holder itself is never

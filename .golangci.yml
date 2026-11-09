@@ -66,13 +66,13 @@ linters:
         linters:
           - staticcheck
         text: "ST1018:"
-      # Acceptance tests pin plumbing from source with go/parser.ParseDir and
-      # may keep helper results a later test uses.
-      - path: _acceptance_test\.go
+      # The P3 acceptance test pins ptyruntime's plumbing from source with
+      # go/parser.ParseDir and keeps a helper result it does not read.
+      - path: internal/ptyhold/nice_acceptance_test\.go
         linters:
           - staticcheck
         text: "SA1019: parser.ParseDir"
-      - path: _acceptance_test\.go
+      - path: internal/ptyhold/nice_acceptance_test\.go
         linters:
           - unparam
         text: "is never used"

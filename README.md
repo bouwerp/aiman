@@ -750,7 +750,8 @@ host:
 
 The agent is born at that niceness and everything it starts (builds, tests, `git`, `ssh`)
 inherits it, so those can miss short timeouts on a loaded host. Running agents keep their
-priority until their session restarts.
+priority until their session restarts. The wrapper runs `nice` (coreutils), so the host needs
+it on PATH; `agent_nice: 0` disables the wrapper.
 
 #### RTK
 
