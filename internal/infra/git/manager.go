@@ -374,9 +374,18 @@ func (m *Manager) SetupRemoteWorktree(ctx context.Context, remote domain.RemoteE
 		return domain.Worktree{}, fmt.Errorf("failed to create worktree: cannot determine default branch for %s — the repository may have no commits", repoPath)
 	}
 
+	// A branch origin already has starts at origin/<branch> and tracks it, so
+	// the session continues that work; -B resets a stale local branch of the
+	// same name. Any other branch is cut from the base. The base is still
+	// reported either way so diffs against it keep working.
+	startPoint, track := baseBranch, ""
+	if remoteBranchExists(ctx, remote, repoPath, branch) {
+		startPoint, track = "origin/"+branch, "--track "
+	}
+
 	// Create worktree
 	reportProgress(ctx, fmt.Sprintf("Creating worktree %s...", worktreeDir))
-	worktreeCmd := fmt.Sprintf("git -C %s worktree add -B %s -- %s %s", shellx.Quote(repoPath), shellx.Quote(branch), shellx.Quote("../"+worktreeDir), shellx.Quote(baseBranch))
+	worktreeCmd := fmt.Sprintf("git -C %s worktree add %s-B %s -- %s %s", shellx.Quote(repoPath), track, shellx.Quote(branch), shellx.Quote("../"+worktreeDir), shellx.Quote(startPoint))
 	_, worktreeErr := remote.Execute(ctx, worktreeCmd)
 	if worktreeErr != nil {
 		return domain.Worktree{}, fmt.Errorf("failed to create worktree: %w", worktreeErr)
@@ -1034,6 +1043,14 @@ func findLinkedWorktrees(ctx context.Context, remote domain.RemoteExecutor, repo
 // detectBaseBranch returns the best base ref to use for a new worktree.
 // It checks in order: origin/HEAD symbolic ref, well-known branch names,
 // then HEAD itself (useful for repos whose default branch has any name).
+// remoteBranchExists reports whether the last fetch saw branch on origin. It
+// reads the printed object id rather than the exit status, so an executor that
+// answers an unknown command with empty output reads as "absent".
+func remoteBranchExists(ctx context.Context, remote domain.RemoteExecutor, repoPath, branch string) bool {
+	out, err := remote.Execute(ctx, fmt.Sprintf("git -C %s rev-parse --verify --quiet %s 2>/dev/null", shellx.Quote(repoPath), shellx.Quote("refs/remotes/origin/"+branch+"^{commit}")))
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
 func detectBaseBranch(ctx context.Context, remote domain.RemoteExecutor, repoPath string) string {
 	// origin/HEAD is set automatically by git clone and always points to the
 	// remote's real default branch — most reliable source.
