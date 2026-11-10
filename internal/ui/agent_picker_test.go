@@ -238,8 +238,8 @@ func TestHandleAgentPickerEscDuringModelStaysOnPicker(t *testing.T) {
 	}
 	got, _ = m.handleAgentPickerUpdate(pressKey("esc"))
 	m = got.(*Model)
-	if m.state != viewStateDirPicker {
-		t.Fatalf("esc from the agent list = %v, want dir picker", m.state)
+	if m.state != viewStateRepoPicker {
+		t.Fatalf("esc from the agent list = %v, want repo picker", m.state)
 	}
 }
 

@@ -388,6 +388,10 @@ type Model struct {
 	prPicker             PRPickerModel
 	reviewMode           bool // new-session wizard is reviewing a PR
 	dirPicker            DirPickerModel
+	// dirPickerFromSummary marks the directory picker as opened from the
+	// new-session summary, so a pick or esc returns there. It holds until
+	// the user leaves the summary (create or esc).
+	dirPickerFromSummary bool
 	agentPicker          AgentPickerModel
 	summary              SummaryModel
 	doctorResults        []usecase.CheckResult
@@ -6427,10 +6431,11 @@ func (m *Model) handleBranchPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.sessionCfg.Branch = branch
-		m.loadingMsg = "Scanning directories..."
-		m.loadingNext = viewStateDirPicker
+		m.sessionCfg.Directory = ""
+		m.loadingMsg = "Scanning available agents..."
+		m.loadingNext = viewStateAgentPicker
 		m.state = viewStateLoading
-		return m, m.fetchRepoDirectories(&m.sessionCfg.Repo)
+		return m, m.fetchAgents()
 	}
 	return m, cmd
 }
@@ -6499,10 +6504,11 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		m.sessionCfg.Repo = domain.Repo{Name: "No Repository", URL: ""}
-		m.loadingMsg = "Scanning remote root..."
-		m.loadingNext = viewStateDirPicker
+		m.sessionCfg.Directory = ""
+		m.loadingMsg = "Scanning available agents..."
+		m.loadingNext = viewStateAgentPicker
 		m.state = viewStateLoading
-		return m, m.fetchRepoDirectories(nil)
+		return m, m.fetchAgents()
 	}
 	if m.picker.selected != nil {
 		// Repo selected, now fetch directories (or branches for existing branch mode)
@@ -6540,17 +6546,27 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fetchAgents()
 		}
 
-		m.loadingMsg = "Scanning directories..."
-		m.loadingNext = viewStateDirPicker
+		// The working directory is the repo root unless the user picks one
+		// on the summary.
+		m.sessionCfg.Directory = ""
+		m.loadingMsg = "Scanning available agents..."
+		m.loadingNext = viewStateAgentPicker
 		m.state = viewStateLoading
-		return m, m.fetchRepoDirectories(m.picker.selected)
+		return m, m.fetchAgents()
 	}
 	return m, cmd
 }
 
+// handleDirPickerUpdate drives the new-session directory picker. The summary
+// opens it (dirPickerFromSummary): a pick goes back onto the summary and esc
+// returns there unchanged.
 func (m *Model) handleDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
-		if m.dirPicker.list.FilterState() != list.Filtering {
+		if m.dirPicker.list.FilterState() != list.Filtering && !m.dirPicker.createMode {
+			if m.dirPickerFromSummary {
+				m.state = viewStateSummary
+				return m, nil
+			}
 			m.state = viewStateRepoPicker
 			return m, nil
 		}
@@ -6561,7 +6577,7 @@ func (m *Model) handleDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateError
 			return m, nil
 		}
-		m.dirPicker = NewDirPickerModel(msg.dirs, *m.picker.selected)
+		m.dirPicker = NewDirPickerModel(msg.dirs, m.sessionCfg.Repo)
 		h, v := docStyle.GetFrameSize()
 		m.dirPicker.SetSize(m.width-h, m.height-v)
 		return m, nil
@@ -6572,6 +6588,11 @@ func (m *Model) handleDirPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.dirPicker = subModel.(DirPickerModel)
 	if m.dirPicker.selected != "" {
 		m.sessionCfg.Directory = m.dirPicker.selected
+		if m.dirPickerFromSummary {
+			m.summary.SetDirectory(m.dirPicker.selected)
+			m.state = viewStateSummary
+			return m, nil
+		}
 		m.loadingMsg = "Scanning available agents..."
 		m.loadingNext = viewStateAgentPicker
 		m.state = viewStateLoading
@@ -6630,11 +6651,16 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = viewStateMain
 				return m, nil
 			}
-			if m.sessionCfg.ReviewPR != "" {
+			switch {
+			case m.sessionCfg.ReviewPR != "":
 				m.state = viewStatePRPicker
-				return m, nil
+			case m.sessionCfg.AdHoc:
+				m.state = viewStateBranchInput
+			case m.sessionCfg.ExistingBranch:
+				m.state = viewStateBranchPicker
+			default:
+				m.state = viewStateRepoPicker
 			}
-			m.state = viewStateDirPicker
 			return m, nil
 		}
 	}
@@ -6652,6 +6678,9 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.summary = NewAdHocSummaryModel(m.sessionCfg.Branch)
 		} else {
 			m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
+			if m.sessionCfg.ReviewPR != "" || m.sessionCfg.Mode == domain.SessionModeAutonomous {
+				m.summary.DisableDirectory()
+			}
 		}
 		m.summary.SetAgent(m.sessionCfg.Agent)
 		m.summary.SetSize(m.width, m.height)
@@ -6685,6 +6714,7 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyPressMsg); ok && km.String() == "esc" {
+		m.dirPickerFromSummary = false
 		m.state = viewStateAgentPicker
 		return m, nil
 	}
@@ -6692,11 +6722,25 @@ func (m *Model) handleSummaryUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	subModel, cmd = m.summary.Update(msg)
 	m.summary = subModel.(SummaryModel)
+	if m.summary.WantsDirectory() {
+		m.summary.ClearDirectoryRequest()
+		m.dirPickerFromSummary = true
+		var repo *domain.Repo
+		if m.sessionCfg.Repo.Name != "" && m.sessionCfg.Repo.Name != "No Repository" {
+			repo = &m.sessionCfg.Repo
+		}
+		m.loadingMsg = "Scanning directories..."
+		m.loadingNext = viewStateDirPicker
+		m.state = viewStateLoading
+		return m, m.fetchRepoDirectories(repo)
+	}
 	if m.summary.IsConfirmed() {
+		m.dirPickerFromSummary = false
 		// Merge the summary config (including per-session AWS overrides) into sessionCfg.
 		summaryCfg := m.summary.GetSessionConfig()
 		m.sessionCfg.Agent = summaryCfg.Agent
 		m.sessionCfg.PromptFree = summaryCfg.PromptFree
+		m.sessionCfg.Directory = summaryCfg.Directory
 		m.sessionCfg.AWSConfig = summaryCfg.AWSConfig
 		m.sessionCfg.InitialPrompt = summaryCfg.InitialPrompt
 
