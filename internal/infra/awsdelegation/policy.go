@@ -2,8 +2,13 @@ package awsdelegation
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 )
+
+// homeRegion is the region every delegated session may use, whatever its
+// configured regions.
+const homeRegion = "us-east-1"
 
 type regionPolicyStatement struct {
 	Effect    string         `json:"Effect"`
@@ -194,7 +199,7 @@ func unconditionalActions() []string {
 }
 
 // BuildRegionPolicy returns an inline IAM JSON policy that restricts all
-// actions to the given AWS regions via the aws:RequestedRegion condition,
+// actions to the given AWS regions plus us-east-1 via the aws:RequestedRegion condition,
 // plus unconditional Route53, IAM, S3, KMS key creation, resource-discovery
 // and account-monitoring access (those APIs are global or need to work
 // regardless of the session's locked region).
@@ -222,6 +227,12 @@ func regionPolicyDocument(regions []string) *regionPolicy {
 	}
 	if len(trimmed) == 0 {
 		return nil
+	}
+	// us-east-1 is always in the lock: Cost Explorer, Budgets, IAM, ACM for
+	// CloudFront and most account-wide tooling live there, so a session
+	// locked elsewhere would otherwise fail on everyday calls.
+	if !slices.Contains(trimmed, homeRegion) {
+		trimmed = append(trimmed, homeRegion)
 	}
 
 	var condition any
