@@ -106,8 +106,50 @@ func TestSummaryModelHasNoOpenRouterField(t *testing.T) {
 	}
 	updated, _ := m.Update(pressKey("tab"))
 	m = updated.(SummaryModel)
+	if m.focusIndex != dirFocusIndex {
+		t.Fatalf("tab from prompt should land on Directory, got %d", m.focusIndex)
+	}
+	updated, _ = m.Update(pressKey("tab"))
+	m = updated.(SummaryModel)
 	if m.focusIndex != m.buttonFocusIndex() {
-		t.Fatalf("tab from prompt should land on Create, got %d", m.focusIndex)
+		t.Fatalf("tab from Directory should land on Create, got %d", m.focusIndex)
+	}
+}
+
+func TestSummaryNoDirectoryStop(t *testing.T) {
+	cases := map[string]SummaryModel{
+		"ad-hoc":   NewAdHocSummaryModel("my-label"),
+		"new repo": NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "o/r", IsNew: true}, "."),
+	}
+	review := NewSummaryModel("", "", domain.Repo{Name: "o/r"}, "")
+	review.DisableDirectory()
+	cases["review"] = review
+	for name, m := range cases {
+		m.SetAgent(&domain.Agent{Name: "Claude"})
+		updated, _ := m.Update(pressKey("tab"))
+		m = updated.(SummaryModel)
+		if m.focusIndex != m.buttonFocusIndex() || m.buttonFocusIndex() != 1 {
+			t.Errorf("%s: tab from prompt = %d, want Create (1)", name, m.focusIndex)
+		}
+		updated, _ = m.Update(pressKey("enter"))
+		m = updated.(SummaryModel)
+		if m.WantsDirectory() || !m.IsConfirmed() {
+			t.Errorf("%s: enter on Create wants=%v confirmed=%v", name, m.WantsDirectory(), m.IsConfirmed())
+		}
+	}
+}
+
+func TestSummaryDirectoryShowsChoiceOrRoot(t *testing.T) {
+	m := NewSummaryModel("ABC-1", "feature/x", domain.Repo{Name: "o/r"}, "")
+	if got := ansi.Strip(m.viewString()); !strings.Contains(got, "repo root") {
+		t.Fatalf("no repo-root default in:\n%s", got)
+	}
+	m.SetDirectory("svc/api")
+	if got := ansi.Strip(m.viewString()); !strings.Contains(got, "svc/api") {
+		t.Fatalf("chosen directory missing in:\n%s", got)
+	}
+	if d := m.GetSessionConfig().Directory; d != "svc/api" {
+		t.Fatalf("directory = %q", d)
 	}
 }
 
@@ -132,5 +174,58 @@ func TestSummaryNoWarningWhenNothingMissing(t *testing.T) {
 	m.SetMissingTools(nil)
 	if got := m.viewString(); strings.Contains(got, "Missing on remote") {
 		t.Fatalf("unexpected warning in:\n%s", got)
+	}
+}
+
+func TestWizardBranchPickSkipsDirectoryStep(t *testing.T) {
+	m := wizardModel(t)
+	m.sessionCfg.ExistingBranch = true
+	m.sessionCfg.Repo = domain.Repo{Name: "org/repo"}
+	m.sessionCfg.Directory = "stale"
+	m.state = viewStateBranchPicker
+	m.branchPicker = NewBranchPickerModel([]string{"feature/x"})
+	got, _ := m.handleBranchPickerUpdate(pressKey("enter"))
+	m = got.(*Model)
+	if m.loadingNext != viewStateAgentPicker || m.sessionCfg.Directory != "" {
+		t.Fatalf("next=%v dir=%q, want agent picker at the repo root", m.loadingNext, m.sessionCfg.Directory)
+	}
+	m.state = viewStateAgentPicker
+	m.agentPicker = NewAgentPickerModel([]domain.Agent{{Name: "Claude", Command: "claude"}})
+	got, _ = m.handleAgentPickerUpdate(pressKey("esc"))
+	if s := got.(*Model).state; s != viewStateBranchPicker {
+		t.Fatalf("esc from agents = %v, want the branch picker", s)
+	}
+}
+
+func TestSummaryDirectoryRoundTripKeepsPrompt(t *testing.T) {
+	m := wizardModel(t)
+	m.sessionCfg.Repo = domain.Repo{Name: "No Repository"}
+	m.summary = NewSummaryModel("PB-1", "feature/pb-1", m.sessionCfg.Repo, "")
+	m.summary.SetAgent(&domain.Agent{Name: "Claude"})
+	m.state = viewStateSummary
+	got, _ := m.handleSummaryUpdate(pressKey("fix it"))
+	m = got.(*Model)
+	got, _ = m.handleSummaryUpdate(pressKey("tab"))
+	m = got.(*Model)
+	got, _ = m.handleSummaryUpdate(pressKey("enter"))
+	m = got.(*Model)
+	if m.loadingNext != viewStateDirPicker {
+		t.Fatalf("next = %v, want the directory picker", m.loadingNext)
+	}
+	m.state = viewStateDirPicker
+	m.dirPicker = NewDirPickerModel([]string{"scratch"}, m.sessionCfg.Repo)
+	got, _ = m.handleDirPickerUpdate(pressKey("enter"))
+	m = got.(*Model)
+	cfg := m.summary.GetSessionConfig()
+	if cfg.InitialPrompt != "fix it" || cfg.Directory != "scratch" {
+		t.Fatalf("after round trip prompt=%q dir=%q", cfg.InitialPrompt, cfg.Directory)
+	}
+	// Focus is still on Directory; shift+tab back to the prompt and create.
+	got, _ = m.handleSummaryUpdate(pressKey("shift+tab"))
+	m = got.(*Model)
+	got, cmd := m.handleSummaryUpdate(pressKey("enter"))
+	m = got.(*Model)
+	if cmd == nil || m.sessionCfg.Directory != "scratch" {
+		t.Fatalf("create did not carry the directory: %q", m.sessionCfg.Directory)
 	}
 }

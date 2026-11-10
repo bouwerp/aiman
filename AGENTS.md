@@ -363,8 +363,7 @@ The TUI wizard (`n` key) drives the user through:
    `jira.DefaultIssueStatuses`) are listed, and typed searches are scoped the same way.
 4. Branch name editor
 5. Repo picker (via `gh repo list`)
-6. Directory picker (remote subdirectory of repo)
-7. Agent picker (scans the remote for installed agents). It lists only those agents; there
+6. Agent picker (scans the remote for installed agents). It lists only those agents; there
    are no tier rows. Each row shows the agent's default model (from `agent_defaults`, else
    the first catalog model, else `host default` for Pi). Enter on an agent that has more
    than one model opens a model step: Default, then the catalog; Pi lists providers from
@@ -372,8 +371,16 @@ The TUI wizard (`n` key) drives the user through:
    chosen model is `Agent.LaunchModel` and is sent as `model` on `session.create`. With no
    agents listed, enter lets serve pick (smart tier for a session the user starts). The
    role agent is preselected. The restart and agent-switch picker uses the same flow.
-8. Summary + AWS override screen
-9. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine
+7. Summary + AWS override screen. Picking a repo (or a branch in existing-branch mode, or
+   `ctrl+a` No Repository) goes straight to the agent picker, so the working directory starts
+   empty: the repo root, or the remote root with no repository. The summary's `Directory`
+   field (focus 1, between the prompt and Create) opens the directory picker on enter
+   (`SummaryModel.WantsDirectory`, `fetchRepoDirectories`); a pick returns to the summary
+   through `SetDirectory` and esc returns unchanged (`dirPickerFromSummary`). Enter in the
+   prompt creates at once. Ad-hoc, review, autonomous and new-repo summaries have no
+   `Directory` stop. Esc from the agent picker goes to the PR picker (review), branch input
+   (ad-hoc), branch picker (existing branch) or repo picker.
+8. → `flowManager.CreateSession(ctx, sessionCfg)` in a goroutine
 
 `CreateSession` does:
 - git clone/fetch on remote
