@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
@@ -559,5 +560,71 @@ func writeExe(t *testing.T, path, body string) {
 	}
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestServeNohupSupervisorSparesHolders runs serve's nohup fallback in the
+// acceptance sandbox. The fake serve starts a setsid'd holder, the way serve
+// detaches a PTY holder; stopping serve must stop the supervisor and serve and
+// leave the holder running, and nothing may restart afterwards.
+func TestServeNohupSupervisorSparesHolders(t *testing.T) {
+	s := newSandbox(t)
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid not available")
+	}
+	writeExe(t, filepath.Join(s.home, ".local", "bin", "aiman"), `#!/bin/bash
+[ "$1" = serve ] || exit 0
+echo run >> "$HOME/runs"
+if [ ! -f "$HOME/holder.pid" ]; then
+  setsid sleep 60 </dev/null >/dev/null 2>&1 &
+  echo $! > "$HOME/holder.pid"
+fi
+exec sleep 60
+`)
+	t.Cleanup(func() {
+		if b, err := os.ReadFile(filepath.Join(s.home, "holder.pid")); err == nil {
+			_ = exec.Command("kill", strings.TrimSpace(string(b))).Run()
+		}
+	})
+
+	s.run(t, StartScript(KindServe))
+	waitFor(t, "serve to start its holder", func() bool { return s.read("holder.pid") != "" })
+
+	out := s.run(t, ProbeScript(KindServe))
+	if d := ParseProbe(KindServe, "h", out); d.Driver != "nohup" || d.Status != domain.DaemonStatusRunning {
+		t.Fatalf("probe of a supervised serve: driver %q status %q\n%s", d.Driver, d.Status, out)
+	}
+
+	s.run(t, StopScript(KindServe))
+	time.Sleep(3 * time.Second)
+	if n := lineCount(s.read("runs")); n != 1 || strings.Contains(s.read(".aiman/serve.log"), "restarting") {
+		t.Fatalf("serve ran %d times; the stop must end supervision\n%s", n, s.read(".aiman/serve.log"))
+	}
+	holder := strings.TrimSpace(s.read("holder.pid"))
+	if err := exec.Command("kill", "-0", holder).Run(); err != nil {
+		t.Fatalf("holder %s died with serve: %v", holder, err)
+	}
+	out = s.run(t, ProbeScript(KindServe))
+	if d := ParseProbe(KindServe, "h", out); d.Status == domain.DaemonStatusRunning {
+		t.Fatalf("probe after stop still running:\n%s", out)
+	}
+}
+
+// StartScript uses systemd whenever user systemd answers, even with no unit
+// file, and nohup only when it does not.
+func TestStartScriptNeedsNoUnitFileForSystemd(t *testing.T) {
+	for _, k := range []Kind{KindServe, KindTrigger, KindGateway} {
+		s := StartScript(k)
+		_, cond, ok := strings.Cut(s, "if command -v systemctl >/dev/null 2>&1 && ")
+		if !ok {
+			t.Fatalf("%s start has no systemd branch:\n%s", k, s)
+		}
+		cond, _, _ = strings.Cut(cond, "\n")
+		if strings.Contains(cond, ".service") {
+			t.Fatalf("%s start still requires the unit file: %s", k, cond)
+		}
+		if !strings.Contains(s, "systemctl --user enable "+k.Unit()+".service") {
+			t.Fatalf("%s start does not enable the unit:\n%s", k, s)
+		}
 	}
 }

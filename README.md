@@ -790,7 +790,7 @@ A session's own provider also appears under the TUI's meta line for that session
 
 There is nothing to configure on the laptop or the phone. Claude Code reports its limits only through the status line, so serve changes the `command` of the `statusLine` in the host's `~/.claude/settings.json` when it starts; your original command still runs with the same input, and only the rate limits are recorded. To opt a host out, run `touch ~/.aiman/limits/claude-statusline.off` on it and reload serve (`c` on the Agent API page), which restores your original `statusLine` from `~/.aiman/limits/claude-statusline.original.json` (or removes it if you had none). A project-level `statusLine` overrides the wrapper, and Claude then shows no reading.
 
-Linger is enabled *before* `systemctl --user` so the first SSH to a host with no lingering user instance can still install. Scripts set `XDG_RUNTIME_DIR` and the session bus so `systemctl --user` works over SSH. If user systemd is still unavailable, Aiman falls back to `nohup` plus `~/.aiman/serve.pid` (or `trigger.pid`).
+Linger is enabled *before* `systemctl --user` so the first SSH to a host with no lingering user instance can still install. Scripts set `XDG_RUNTIME_DIR` and the session bus so `systemctl --user` works over SSH. Starting, reloading or updating a daemon uses its systemd unit whenever user systemd answers, writing the unit if it is missing, so a daemon first started with nohup moves to systemd on its next start. If user systemd is still unavailable, Aiman falls back to a nohup supervisor (`~/.aiman/<unit>-supervise.sh`) that restarts the daemon 2 seconds after it exits; `~/.aiman/serve.pid` (or `trigger.pid`, `gateway.pid`) names the supervisor, and stopping kills it first so nothing restarts. A nohup log over 10 MiB is moved to `<log>.old` before each start.
 
 Foreground on the remote (debugging):
 
@@ -1059,7 +1059,7 @@ All data is stored in `~/.aiman/`:
 ├── aiman.sock           # Remote: `aiman serve` Unix socket (`0o600`)
 ├── aiman.sock.lock      # Remote: serve singleton lock
 ├── serve.log            # Remote: serve log
-├── serve.pid            # Remote: serve pid, when running under nohup instead of systemd
+├── serve.pid            # Remote: pid of the nohup supervisor of serve, when user systemd is unavailable
 ├── trigger.pid          # Remote: aiman-trigger pid, same fallback
 ├── debug.log            # `aiman --debug` dump (optional; the TUI otherwise
 │                        #   traces to /tmp/aiman-debug.log)
