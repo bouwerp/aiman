@@ -165,21 +165,31 @@ If the PR head moved, refresh and start again from the blind pass:
 aiman review refresh
 ```
 
-### Brief, questions, review file
+### Brief, findings, review file
+
+Run phases 1 to 5, coverage, the brief and the findings without pausing for the operator. Settle every open point yourself from the code, the PR, its history and the consults before you consider asking. Make each finding's call yourself: `Call: agree` to post it, `Call: disagree` to drop it. Give the reason in the finding body or the summary.
 
 Write `.aiman_review/reading-order.txt` (one `path:line` per line, the order to read) with the brief, and offer `aiman review debug` to the operator so they can step the staged worktree from the laptop.
 
-Publish the brief with `aiman design publish --key pr-<n>` (n is the PR number). First revision, in order:
+Publish the brief and the findings together, once, with `aiman design publish --key pr-<n>` (n is the PR number). The page holds, in order:
 
 1. **Why**: the problem the PR solves, in two or three sentences.
 2. **How**: the approach in a paragraph, with a small diagram when the change spans components.
 3. **Most critical fixes**: file:line links with one line each.
 4. **Most far-reaching changes**: changed contracts and their callers (the blast radius), with counts.
 5. **Reading order**: files or chunks in the order to read them, plus the coverage totals.
+6. **Findings**: grouped `blocking` / `suggestion` / `question` / `nit`, each with source, evidence and your call.
 
-Then ask the operator only what you could not settle from the code, the PR and its history: an intent you cannot infer, a caller outside the repository, a trade-off only a person can weigh. Never ask what the brief already states (what the PR does, why, how, its blast radius). Ask one question at a time in the terminal and wait for each answer before the next. With nothing open, ask nothing and leave `## Questions` out.
+### Final check with operator
 
-Record the operator's words as quotes in the review file. Add the findings only in a second publish, after those answers: findings grouped `blocking` / `suggestion` / `question` / `nit`, each with source and evidence. The operator then agrees or disagrees with each finding; record that call as a quoted `Call:` in the file.
+After the publish, run one round of questions. This is the only time you stop for the operator.
+
+- Ask only what changes what gets posted and what you could not settle: an intent you cannot infer, a caller outside the repository, a trade-off only a person can weigh. Never ask what the brief already states. With nothing open, ask no such question.
+- Every question is an interactive prompt with 2 to 4 concrete answers. Put the recommended answer first and mark it `(Recommended)`. Claude uses its `AskUserQuestion` tool. An agent without such a tool prints a numbered list of answers and asks for a number.
+- Record each answer as a quote under `## Questions` in the review file. Leave `## Questions` out when you asked nothing besides the post decision.
+- The last prompt is always the post decision, with answers such as `Post as comment`, `Post requesting changes`, `Drop some findings first` and `Hold`.
+
+The operator's choice is the approval. For `Post as comment` or `Post requesting changes`, run `aiman todo approve-review --quote "<their answer>"`, then post with the matching event. For `Drop some findings first`, ask which findings (multi-select), set each to `Call: disagree` with the operator's words as its quote, then ask the post decision again. For `Hold`, stop without posting.
 
 The review file is:
 
@@ -196,7 +206,7 @@ The review file is:
 ### F1 blocking internal/x/y.go:42
 Verified: yes (go test ./internal/x/ -run TestY fails)
 Source: primary
-Call: agree "<operator's words>"
+Call: agree
 
 <comment body>
 
@@ -205,14 +215,14 @@ Call: agree "<operator's words>"
 <review summary>
 ```
 
-`Verified:` is `yes (<evidence>)` or `no`; an unverified finding must be labelled `question`. `Source:` is `primary`, `secondary` or `both`. `Call:` is `agree` or `disagree`, each followed by a quoted operator answer.
+`Verified:` is `yes (<evidence>)` or `no`; an unverified finding must be labelled `question`. `Source:` is `primary`, `secondary` or `both`. `Call:` is `agree` or `disagree`, your call. An optional quote follows it (`Call: disagree "<operator's words>"`) when the operator overrode your call.
 
 ### Gate and post
 
-The first brief publish adds `gate:review` (`Review approved`). Only the operator closes it: they tick it, or type approval and you run:
+The first brief publish adds `gate:review` (`Review approved`). Only the operator closes it: they tick it, or they pick a post answer in the final check and you run:
 
 ```bash
-aiman todo approve-review --quote "approved, go ahead"
+aiman todo approve-review --quote "Post as comment"
 ```
 
 Never `aiman todo done` the gate. Then post:
@@ -224,11 +234,11 @@ aiman review post .aiman_review.md --request-changes
 
 Default event is `COMMENT`; `--request-changes` is `REQUEST_CHANGES`. `review post` never sends `APPROVE`; approving is `aiman review approve` below. Only findings with `Call: agree` become inline comments; bodies start with `blocking:`, `suggestion:`, `question:` or `nit:`.
 
-Post refuses: `gate_needs_operator` while the gate is open; `review_already_posted` after a successful post until a refresh; `review_not_ready` before reveal; `review_incomplete` when a question under `## Questions` has no answer, a finding call is missing, or a non-question finding is unverified; `review_head_moved` when the PR head is no longer the staged SHA. `review.coverage` refuses with `review_no_coverage` when no coverage method applies. Tell the operator the error.
+Post refuses: `gate_needs_operator` while the gate is open; `review_already_posted` after a successful post until a refresh; `review_not_ready` before reveal; `review_incomplete` when a question under `## Questions` has no answer, a finding has no call, or a non-question finding is unverified; `review_head_moved` when the PR head is no longer the staged SHA. `review.coverage` refuses with `review_no_coverage` when no coverage method applies. Tell the operator the error.
 
 ### Fixing, assessing and approving
 
-Fix after reveal, once the operator and you agree what is wrong. Any finding may be fixed, verified or not, except one with `Call: disagree`.
+Fix after reveal, once your findings name what is wrong. Any finding may be fixed, verified or not, except one with `Call: disagree`.
 
 ```bash
 aiman review fix .aiman_review.md                  # every finding not disagreed

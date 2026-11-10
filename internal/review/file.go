@@ -20,13 +20,14 @@ type Finding struct {
 	Verified bool
 	Evidence string
 	Source   string // primary, secondary or both
-	Call     string // agree or disagree; empty until the operator decides
-	Quote    string // the operator's words behind the call
+	Call     string // agree or disagree: the review agent's call; empty until made
+	Quote    string // optional: the operator's words when they overrode the agent's call
 	Fixed    string // sha of the commit that fixed it; counts only when State.Fixes records it
 	Body     string
 }
 
-// Question is one point the agent could not settle and asked the operator.
+// Question is one point the agent could not settle and asked the operator in
+// its final check.
 type Question struct {
 	Text   string
 	Answer string // the operator's words
@@ -199,8 +200,6 @@ func (fd Finding) missing() []string {
 	add := func(msg string) { out = append(out, fd.ID+": "+msg) }
 	if fd.Call == "" {
 		add("no call (agree or disagree)")
-	} else if fd.Quote == "" {
-		add("call needs the operator's quote")
 	}
 	if !fd.Verified && fd.Label != "question" {
 		add(fmt.Sprintf("unverified %s finding (verify it or make it a question)", fd.Label))

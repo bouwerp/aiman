@@ -177,10 +177,11 @@ func TestMissingAgreedNeedsLocation(t *testing.T) {
 	}
 }
 
-func TestMissingCallNeedsQuote(t *testing.T) {
+// The review agent makes each call itself, so a call needs no quote.
+func TestMissingCallNeedsNoQuote(t *testing.T) {
 	for _, call := range []string{"agree", "disagree"} {
 		md := answersOnly + "### F1 nit a.go:1\nVerified: yes (ran)\nCall: " + call + "\n\nbody\n\n## Summary\n\ns\n"
-		if got := missingFor(t, md); !strings.Contains(got, "F1: call needs the operator's quote") {
+		if got := missingFor(t, md); got != "" {
 			t.Errorf("%s: %q", call, got)
 		}
 	}
