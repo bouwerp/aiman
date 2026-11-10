@@ -3,6 +3,16 @@
 **Date:** 2026-10-30
 **Status:** Approved 2026-10-30
 
+> **Amended in v0.41.0 (2026-11-10).** The review agent now runs every phase
+> without stopping and makes each finding's call (`agree` or `disagree`)
+> itself; a `Call:` quote is optional, kept for an operator override. It
+> publishes the brief and findings once, then runs one `Final check with
+> operator`: interactive prompts with concrete answers, only for points it
+> could not settle, ending with the post decision whose answer closes
+> `gate:review`. Sections below that describe per-finding operator calls and
+> one-at-a-time questions describe the original flow. The skill's
+> `## Review mode` section is the current contract.
+
 ## Intent
 
 The operator picks a GitHub pull request and gets a structured review from
