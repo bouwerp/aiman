@@ -172,11 +172,18 @@ fi
 `, k.Binary(), k.Binary(), k.InstallPipeAt(tag), unit, UnitFile(k), leftoverCleanup(k), unit, fallback, fallback)
 }
 
+// StartScript (re)starts k. Whenever user systemd answers, k runs under its
+// unit, which is written (or rewritten) first, so a host whose daemon was
+// started with nohup moves to systemd at its next start or update. The nohup
+// supervisor is only for hosts without user systemd.
 func StartScript(k Kind) string {
 	unit := k.Unit()
 	return "set -e\n" + userRuntimeEnv() + fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "$HOME/.aiman" "$HOME/.config/systemd/user"
-if command -v systemctl >/dev/null 2>&1 && [ -f "$HOME/.config/systemd/user/%s.service" ] && systemctl --user show-environment >/dev/null 2>&1; then
+if command -v systemctl >/dev/null 2>&1; then
+  loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || true
+fi
+if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
   cat > "$HOME/.config/systemd/user/%s.service" <<'UNIT'
 %s
 UNIT
@@ -187,7 +194,7 @@ UNIT
 else
   %s
 fi
-`, unit, unit, UnitFile(k), leftoverCleanup(k), unit, unit, nohupStart(k))
+`, unit, UnitFile(k), leftoverCleanup(k), unit, unit, nohupStart(k))
 }
 
 // leftoverCleanup resets systemd start-limit, stops the user unit, and kills
@@ -273,7 +280,7 @@ if command -v systemctl >/dev/null 2>&1 && [ -f "$HOME/.config/systemd/user/%s.s
   ACTIVE=${ACTIVE:-inactive}
 elif [ -f %s ] && kill -0 "$(cat %s)" 2>/dev/null; then
   DRIVER=nohup
-  ACTIVE=active
+  if %s; then ACTIVE=active; else ACTIVE=activating; fi
 elif %s; then
   DRIVER=nohup
   ACTIVE=active
@@ -293,7 +300,7 @@ if [ "$DRIVER" = systemd ]; then
   journalctl --user -u %s.service -n 40 --no-pager 2>/dev/null || true
 fi
 tail -n 40 %s 2>/dev/null || true
-`, unit, unit, pid, pid, procCheck, bin, bin, bin, bin, sockCheck, unit, logf)
+`, unit, unit, pid, pid, procCheck, procCheck, bin, bin, bin, bin, sockCheck, unit, logf)
 }
 
 // rtkCheck reports the rtk version on the serve probe. The rtk installer puts
@@ -314,9 +321,53 @@ else
   echo SELFUPDATE=
 fi`
 
-// nohupStart also kills by pattern, like leftoverCleanup: a process the pid file
-// does not name (such as a server started by a `pair` an old gateway binary did
-// not understand) would otherwise keep running the old binary.
+// logRotateMax is the size past which a nohup log is moved to <log>.old before
+// a start. One older copy is kept.
+const logRotateMax = 10 << 20
+
+// rotateLog moves k's nohup log aside once it is over logRotateMax.
+func rotateLog(k Kind) string {
+	return fmt.Sprintf(`if [ -f %[1]s ] && [ "$(wc -c < %[1]s)" -gt %[2]d ]; then mv -f %[1]s %[1]s.old; fi`, k.LogFile(), logRotateMax)
+}
+
+// SupervisorFile is the nohup supervisor script nohupStart writes for k.
+func (k Kind) SupervisorFile() string {
+	return "$HOME/.aiman/" + k.Unit() + "-supervise.sh"
+}
+
+// supervisor is the body of k's nohup supervisor: it runs k, and 2 seconds
+// after k exits, for whatever reason, runs it again. TERM or INT stops k and
+// the loop together, so the pid file (which names the supervisor) is all a
+// stop needs. The log is rotated before each run, which the child opens
+// itself, so a crash loop cannot grow it without bound.
+//
+// For serve this keeps the holder contract: holders are setsid'd children of
+// serve, never of the supervisor, and the trap signals only serve's own pid,
+// exactly as `kill <serve pid>` did before the supervisor existed.
+func supervisor(k Kind, cmd string) string {
+	return fmt.Sprintf(`# aiman nohup supervisor for %[1]s: restarts it 2s after it exits.
+child=
+pause=
+trap 'kill $child $pause 2>/dev/null; exit 0' TERM INT
+while :; do
+  %[2]s
+  %[3]s >> %[4]s 2>&1 &
+  child=$!
+  wait "$child"
+  echo "aiman supervisor: %[1]s exited with status $?, restarting in 2s" >> %[4]s
+  child=
+  sleep 2 &
+  pause=$!
+  wait "$pause"
+  pause=
+done`, k.Unit(), rotateLog(k), cmd, k.LogFile())
+}
+
+// nohupStart stops what the pid file names (the supervisor, which takes its
+// child with it), then kills by pattern, like leftoverCleanup: a process the
+// pid file does not name (such as a server started by a `pair` an old gateway
+// binary did not understand, or one started before the supervisor existed)
+// would otherwise keep running the old binary.
 func nohupStart(k Kind) string {
 	bin := "$HOME/.local/bin/" + k.Binary()
 	cmd := bin
@@ -324,10 +375,14 @@ func nohupStart(k Kind) string {
 		cmd = bin + " serve"
 	}
 	return fmt.Sprintf(`mkdir -p "$HOME/.aiman"
-if [ -f %s ]; then kill "$(cat %s)" 2>/dev/null || true; fi
-pkill -f '%s' >/dev/null 2>&1 || true
-nohup %s >> %s 2>&1 & echo $! > %s
-`, k.PidFile(), k.PidFile(), k.procPattern(), cmd, k.LogFile(), k.PidFile())
+if [ -f %[1]s ]; then kill "$(cat %[1]s)" 2>/dev/null || true; fi
+pkill -f '%[2]s' >/dev/null 2>&1 || true
+%[3]s
+cat > %[4]s <<'SUPERVISOR'
+%[5]s
+SUPERVISOR
+nohup bash %[4]s >/dev/null 2>&1 & echo $! > %[1]s
+`, k.PidFile(), k.procPattern(), rotateLog(k), k.SupervisorFile(), supervisor(k, cmd))
 }
 
 func ParseProbe(kind Kind, host, stdout string) domain.Daemon {
