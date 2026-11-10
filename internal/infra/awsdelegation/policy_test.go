@@ -678,3 +678,49 @@ func TestBuildRegionPolicy_TrimsWhitespace(t *testing.T) {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 }
+
+func TestBuildRegionPolicy_AllowsAccountMonitoringWithoutRegion(t *testing.T) {
+	// A session locked to one region still monitors runs, spend, quotas and
+	// schedules account-wide: Cost Explorer and Budgets answer only from
+	// us-east-1, and a GPU job can run in a region the lock does not name.
+	got := BuildRegionPolicy([]string{"us-east-2"})
+	var p struct {
+		Statement []struct {
+			Action    any            `json:"Action"`
+			Condition map[string]any `json:"Condition"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(got), &p); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	var allowed []string
+	for _, s := range p.Statement {
+		if s.Condition != nil {
+			continue
+		}
+		allowed = append(allowed, actionList(s.Action)...)
+	}
+	for _, a := range []string{
+		"ec2:DescribeInstances",
+		"ce:GetCostAndUsage",
+		"ce:ListCostAllocationTags",
+		"ce:UpdateCostAllocationTagsStatus",
+		"budgets:ViewBudget",
+		"budgets:DescribeBudgets",
+		"servicequotas:GetServiceQuota",
+		"servicequotas:ListRequestedServiceQuotaChangeHistoryByQuota",
+		"servicequotas:RequestServiceQuotaIncrease",
+		"scheduler:GetSchedule",
+		"scheduler:ListSchedules",
+		"cloudformation:DescribeStacks",
+	} {
+		if !actionAllowed(allowed, a) {
+			t.Fatalf("unconditional account-monitoring access missing %s, policy=%s", a, got)
+		}
+	}
+	for _, a := range []string{"ec2:RunInstances", "ec2:TerminateInstances", "ce:CreateAnomalyMonitor", "budgets:ModifyBudget", "scheduler:CreateSchedule", "servicequotas:PutServiceQuotaIncreaseRequestIntoTemplate"} {
+		if actionAllowed(allowed, a) {
+			t.Fatalf("%s must stay behind the region lock, policy=%s", a, got)
+		}
+	}
+}
