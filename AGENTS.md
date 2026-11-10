@@ -384,7 +384,7 @@ The TUI wizard (`n` key) drives the user through:
 
 `CreateSession` does:
 - git clone/fetch on remote
-- `git worktree add`
+- `git worktree add`: a branch origin already has starts at `origin/<branch>` and tracks it (a stale local branch of that name is reset); any other branch is cut from the base, which `Worktree.Base` reports either way
 - places worktrees in repo-scoped sibling directories named `<repo>@<branch>` to avoid cross-repo path collisions
 - trust the working directory for the agent
 - write `.aiman_task.md` (JIRA description + prior snapshot context)

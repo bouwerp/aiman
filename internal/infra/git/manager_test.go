@@ -879,3 +879,36 @@ func TestSetupRemoteWorktreeQuotesBranchForTheShell(t *testing.T) {
 		t.Fatalf("worktree add = %q (all: %q)", add, remote.cmds)
 	}
 }
+
+// A branch origin already has is checked out from origin/<branch> with
+// tracking; the reported base stays the one the caller asked for.
+func TestSetupRemoteWorktree_ExistingRemoteBranchCommand(t *testing.T) {
+	worktreeDir, err := scopedWorktreeDir("myrepo", "feature-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &commandRecorderRemote{
+		mockRemote: mockRemote{
+			root: "/home/dev",
+			dirs: map[string]bool{"/home/dev/myrepo": true},
+			outputs: map[string]string{
+				`git -C '/home/dev/myrepo' remote get-url origin 2>/dev/null`:                                               "git@github.com:owner/myrepo.git",
+				`git -C '/home/dev/myrepo' rev-parse --git-dir`:                                                             ".git",
+				`git -C '/home/dev/myrepo' rev-parse HEAD 2>/dev/null || echo EMPTY`:                                        "abc1234",
+				`git -C '/home/dev/myrepo' rev-parse --verify --quiet 'refs/remotes/origin/feature-x^{commit}' 2>/dev/null`: "def5678",
+			},
+		},
+	}
+	wt, err := NewManager(nil).SetupRemoteWorktree(context.Background(), remote,
+		domain.Repo{Name: "myrepo", URL: "git@github.com:owner/myrepo.git"}, "feature-x", "origin/main")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := fmt.Sprintf(`git -C '/home/dev/myrepo' worktree add --track -B 'feature-x' -- '../%s' 'origin/feature-x'`, worktreeDir)
+	if !strings.Contains(strings.Join(remote.commandsRun, "\n"), want) {
+		t.Fatalf("want %q in:\n%s", want, strings.Join(remote.commandsRun, "\n"))
+	}
+	if wt.Base != "origin/main" {
+		t.Fatalf("Base = %q, want origin/main", wt.Base)
+	}
+}
