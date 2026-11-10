@@ -12,10 +12,9 @@ Aiman automates the entire development workflow:
 2. **Select a JIRA Issue** — Your issues in the statuses you actually work in
 3. **Generate Branch Name** — Auto-creates git-compatible branch names
 4. **Pick a Repository** — Browse your GitHub repos
-5. **Choose Subdirectory** — Pick a repo sub-folder (monorepo-friendly)
-6. **Scan Agents** — Detect available agents on the remote
-7. **Review Summary** — Confirm settings (and override AWS credentials) before creation
-8. **Create Session** — Worktree + terminal (the built-in PTY runtime) + agent launch + mutagen sync + AWS credentials
+5. **Scan Agents** — Detect available agents on the remote
+6. **Review Summary** — Confirm settings before creation; the working directory is the repo root unless you pick a sub-folder there (monorepo-friendly)
+7. **Create Session** — Worktree + terminal (the built-in PTY runtime) + agent launch + mutagen sync + AWS credentials
 
 Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 
@@ -24,7 +23,7 @@ Or use **Ad-hoc Sessions** to skip the JIRA/branch/repo steps entirely.
 ### Core Workflow
 - **JIRA Integration**: Real-time search with VSCode-style filtering
 - **Smart Branch Names**: Auto-sanitizes issue titles for git compatibility
-- **Repo & Directory Picker**: Choose repo + subdirectory from the remote
+- **Repo & Directory Picker**: Choose a repo; optionally pick a subdirectory on the summary
 - **Multi-Agent Support**: Scans the remote and offers whichever of these it finds — Claude Code, Antigravity CLI (`agy`), Grok Build CLI, Codex CLI, Kilo Code (`kilo`), GitHub Copilot CLI, Cursor (`cursor-agent`), Pi ([pi.dev](https://pi.dev)), Muse Code (`muse`), Deep Code (`deepcode`), Ageni
 - **Ad-hoc Sessions**: Create quick sessions without a JIRA issue, branch, or repo
 - **Quick start (`N`)**: Default remote, agent picker only, generated `q1`/`q2`/… in group `quick`
@@ -245,9 +244,9 @@ aiman
 5. **Confirm Branch Name**: Edit the auto-generated git-compatible branch name
    - Invalid characters are blocked; spaces automatically become dashes
 6. **Select Repository**: Pick from your GitHub repos
-7. **Select Subdirectory**: Choose a repo subdirectory (or `.` for root)
-8. **Agent Selection**: Choose your AI coding assistant (Claude Code, Antigravity CLI, Copilot, Kilo Code, Cursor, Muse Code, Deep Code)
-9. **Summary**: Review selected issue/branch/repo/dir/agent before creation
+7. **Agent Selection**: Choose your AI coding assistant (Claude Code, Antigravity CLI, Copilot, Kilo Code, Cursor, Muse Code, Deep Code)
+8. **Summary**: Review selected issue/branch/repo/agent before creation. Enter in the prompt creates the session at the repo root
+   - **Directory** is optional: tab to it and press enter to pick a repo subdirectory, then you return to the summary
    - If AWS credential delegation is configured for the remote, editable **Profile** and **Region** fields appear — pre-filled with remote defaults, overridable per session (Tab cycles between fields)
 
 #### Worktree bootstrap and code graph

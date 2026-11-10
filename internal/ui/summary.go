@@ -11,14 +11,20 @@ import (
 )
 
 type SummaryModel struct {
-	issueKey      string
-	branch        string
-	repo          domain.Repo
-	directory     string
-	agent         *domain.Agent
-	promptFree    bool
-	adHoc         bool
-	confirmed     bool
+	issueKey   string
+	branch     string
+	repo       domain.Repo
+	directory  string
+	agent      *domain.Agent
+	promptFree bool
+	adHoc      bool
+	confirmed  bool
+	// dirField says the summary has a focusable Directory stop. Ad-hoc,
+	// review, autonomous and new-repo summaries have none.
+	dirField bool
+	// wantsDir is set by enter on the Directory field; the dashboard opens
+	// the directory picker and calls SetDirectory with the choice.
+	wantsDir      bool
 	focusIndex    int
 	width, height int
 	// AWS override fields — populated when the remote has SyncCredentials enabled
@@ -48,11 +54,39 @@ func NewSummaryModel(issueKey, branch string, repo domain.Repo, directory string
 		branch:      branch,
 		repo:        repo,
 		directory:   directory,
+		dirField:    !repo.IsNew,
 		promptFree:  true,
 		promptInput: newPromptInput(),
 	}
 
 	return m
+}
+
+// DisableDirectory removes the Directory stop, for a summary whose working
+// directory is fixed (a review session or an autonomous trigger).
+func (m *SummaryModel) DisableDirectory() {
+	m.dirField = false
+	if m.focusIndex > m.buttonFocusIndex() {
+		m.focusIndex = m.buttonFocusIndex()
+	}
+}
+
+// WantsDirectory reports that enter on the Directory field asked for the
+// directory picker.
+func (m SummaryModel) WantsDirectory() bool {
+	return m.wantsDir
+}
+
+// SetDirectory records the directory chosen in the picker (empty is the
+// repository root) and clears the picker request.
+func (m *SummaryModel) SetDirectory(dir string) {
+	m.directory = dir
+	m.wantsDir = false
+}
+
+// ClearDirectoryRequest drops a picker request the user abandoned.
+func (m *SummaryModel) ClearDirectoryRequest() {
+	m.wantsDir = false
 }
 
 func NewAdHocSummaryModel(label string) SummaryModel {
@@ -98,8 +132,15 @@ func (m *SummaryModel) SetMissingTools(missing []string) {
 	m.missingTools = missing
 }
 
-// buttonFocusIndex is 1: focus 0 is the initial-prompt input, 1 is Create.
+// dirFocusIndex is the Directory field's stop, right after the prompt (0).
+const dirFocusIndex = 1
+
+// buttonFocusIndex is the Create button's stop: 2 with a Directory field,
+// else 1.
 func (m SummaryModel) buttonFocusIndex() int {
+	if m.dirField {
+		return 2
+	}
 	return 1
 }
 
@@ -137,7 +178,11 @@ func (m SummaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			// Always confirm immediately when an agent is selected.
+			if m.dirField && m.focusIndex == dirFocusIndex {
+				m.wantsDir = true
+				return m, nil
+			}
+			// Anywhere else, confirm immediately when an agent is selected.
 			if m.agent != nil {
 				m.confirmed = true
 				return m, nil
@@ -190,12 +235,28 @@ func (m SummaryModel) viewString() string {
 			b.WriteString(fmt.Sprintf("%-15s %s\n", "Repository:", failStyle.Render("None")))
 		}
 
-		// Directory
+		// Directory: a focusable field when the user may choose one.
 		dir := m.directory
-		if dir == "" {
-			dir = "."
+		if m.dirField {
+			if dir == "" || dir == "." {
+				root := "repo root"
+				if m.repo.Name == "" || m.repo.Name == "No Repository" {
+					root = "remote root"
+				}
+				dir = muted.Render(root)
+			}
+			label := fmt.Sprintf("%-15s", "Directory:")
+			if m.focusIndex == dirFocusIndex {
+				label = activeStyle.Render(label)
+			}
+			dir += muted.Render("  (tab here, enter to change)")
+			b.WriteString(label + " " + dir + "\n")
+		} else {
+			if dir == "" {
+				dir = "."
+			}
+			b.WriteString(fmt.Sprintf("%-15s %s\n", "Directory:", dir))
 		}
-		b.WriteString(fmt.Sprintf("%-15s %s\n", "Directory:", dir))
 
 		// Workspace Status
 		if m.workspacePath != "" {
