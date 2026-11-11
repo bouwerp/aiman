@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -24,6 +27,8 @@ type hostUpdateDeps struct {
 	Fetcher selfupdate.Fetcher
 	Busy    []func() int
 	Logf    func(string, ...any)
+	// ReadGateway reads the host's aiman-gateway; nil means readHostGateway.
+	ReadGateway func(context.Context) (selfupdate.Gateway, error)
 }
 
 // releaseFetcher asks GitHub for the latest release through remotesvc.
@@ -49,6 +54,10 @@ func newHostUpdates(cfg config.HostUpdateConfig, dir, version string, deps hostU
 	if fetcher == nil {
 		fetcher = releaseFetcher{}
 	}
+	readGateway := deps.ReadGateway
+	if readGateway == nil {
+		readGateway = readHostGateway
+	}
 	logPath := filepath.Join(dir, "logs", "host-update.log")
 	resultPath := filepath.Join(dir, "host-update.result.json")
 	return &selfupdate.Manager{
@@ -63,13 +72,61 @@ func newHostUpdates(cfg config.HostUpdateConfig, dir, version string, deps hostU
 			CheckEvery: cfg.CheckEveryOrDefault(),
 			RetryAfter: selfupdate.DefaultRetryAfter,
 		},
-		Busy: deps.Busy,
-		Logf: logf,
+		Busy:        deps.Busy,
+		Logf:        logf,
+		ReadGateway: readGateway,
 	}
 }
 
+// readHostGateway reads the gateway the update script installs:
+// $HOME/.local/bin/aiman-gateway, or the one on PATH only when that file is
+// missing. Version is "vX.Y.Z" when --version parses, else its raw first
+// line, which the manager reads as unknown.
+func readHostGateway(ctx context.Context) (selfupdate.Gateway, error) {
+	bin, err := hostGatewayBinary()
+	if err != nil || bin == "" {
+		return selfupdate.Gateway{}, err
+	}
+	gw := selfupdate.Gateway{Installed: true, Running: gatewayRunning(ctx)}
+	out, err := exec.CommandContext(ctx, bin, "--version").Output() //nolint:gosec // G204: the binary is the gateway install target
+	if err != nil {
+		return gw, fmt.Errorf("%s --version: %w", bin, err)
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	gw.Version = line
+	if v, ok := remotesvc.ParseVersion(line); ok {
+		gw.Version = v.String()
+	}
+	return gw, nil
+}
+
+// hostGatewayBinary returns the gateway's path, or "" when none is installed.
+func hostGatewayBinary() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	bin := filepath.Join(home, ".local", "bin", remotesvc.KindGateway.Binary())
+	if _, err := os.Stat(bin); err == nil {
+		return bin, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if p, err := exec.LookPath(remotesvc.KindGateway.Binary()); err == nil {
+		return p, nil
+	}
+	return "", nil
+}
+
+// gatewayRunning reports whether an aiman-gateway process runs; a pgrep that
+// cannot run counts as not running.
+func gatewayRunning(ctx context.Context) bool {
+	return exec.CommandContext(ctx, "pgrep", "-f", remotesvc.GatewayProcPattern()).Run() == nil //nolint:gosec // G204: fixed pattern from remotesvc
+}
+
 // wireHostUpdateNotify emits host_update with an empty session id: once per
-// newly available release in notify mode, and once per settled install.
+// newly available release and once per gateway drift in notify mode, and once
+// per settled install or gateway repair.
 func wireHostUpdateNotify(ctx context.Context, m *selfupdate.Manager, n agentNotifier, host string) {
 	emit := func(text string) {
 		if err := n.Emit(ctx, "", "", domain.NotifyHostUpdate, text); err != nil {
@@ -82,6 +139,20 @@ func wireHostUpdateNotify(ctx context.Context, m *selfupdate.Manager, n agentNot
 	m.OnApplied = func(a selfupdate.Attempt) {
 		emit(hostAppliedText(a, m.Version, host))
 	}
+	// The manager calls it once per gateway version and serve tag
+	// (State.NotifiedGateway).
+	m.OnGatewayBehind = func(from, to string) {
+		emit(gatewayBehindText(from, to, host))
+	}
+}
+
+// gatewayBehindText is the notification for a gateway older than serve on a
+// host in notify mode.
+func gatewayBehindText(from, to, host string) string {
+	if from == "" {
+		from = "unknown version"
+	}
+	return fmt.Sprintf("gateway %s behind serve %s on %s (aiman host update)", from, to, host)
 }
 
 // hostNewVersionText is the notification for a release this host has not
@@ -93,6 +164,9 @@ func hostNewVersionText(tag, host string) string {
 // hostAppliedText reports one settled install. running is the version of the
 // serve that settled it: equal to the target, serve took the update.
 func hostAppliedText(a selfupdate.Attempt, running, host string) string {
+	if a.IsGateway() {
+		return gatewayAppliedText(a, host)
+	}
 	switch {
 	case a.Status == selfupdate.AttemptOK:
 		return fmt.Sprintf("serve updated %s → %s on %s", a.From, a.To, host)
@@ -105,6 +179,22 @@ func hostAppliedText(a selfupdate.Attempt, running, host string) string {
 		}
 		return fmt.Sprintf("serve update to %s on %s failed: %s", a.To, host, msg)
 	}
+}
+
+// gatewayAppliedText reports one settled gateway repair.
+func gatewayAppliedText(a selfupdate.Attempt, host string) string {
+	if a.Status == selfupdate.AttemptOK {
+		from := a.From
+		if from == "" {
+			from = "unknown version"
+		}
+		return fmt.Sprintf("gateway updated %s → %s on %s", from, a.To, host)
+	}
+	msg := a.Error
+	if msg == "" {
+		msg = "install failed"
+	}
+	return fmt.Sprintf("gateway update failed: %s (to %s on %s)", msg, a.To, host)
 }
 
 // startHostUpdates wires the manager into serve and starts its loops unless
@@ -189,7 +279,13 @@ func formatHostVersion(v server.HostVersionResult) string {
 		checked = "checked " + localTime(v.CheckedAt)
 	}
 	s := fmt.Sprintf("%s · %s · %s · %s · %s\n", dash(v.Version), latest, dash(v.Mode), dash(v.Status), checked)
+	if g := v.Gateway; g != nil {
+		s += "gateway " + formatHostGateway(*g) + "\n"
+	}
 	if a := v.Attempt; a != nil {
+		if a.Kind == selfupdate.AttemptKindGateway {
+			s += "gateway "
+		}
 		s += fmt.Sprintf("attempt %s → %s %s at %s", dash(a.From), dash(a.To), dash(a.Status), localTime(a.At))
 		if a.Exit != 0 {
 			s += fmt.Sprintf(" (exit %d)", a.Exit)
@@ -202,7 +298,22 @@ func formatHostVersion(v server.HostVersionResult) string {
 	return s
 }
 
+// formatHostGateway is the gateway's version, status and whether it runs.
+func formatHostGateway(g server.HostGateway) string {
+	if !g.Installed && g.Status == selfupdate.GatewayNotInstalled {
+		return "not installed"
+	}
+	run := "stopped"
+	if g.Running {
+		run = "running"
+	}
+	return fmt.Sprintf("%s · %s · %s", dash(g.Version), dash(g.Status), run)
+}
+
 func formatHostUpdate(u server.HostUpdateResult) string {
+	if u.Accepted && u.Reason == selfupdate.ReasonGateway {
+		return "accepted: gateway " + u.Target + "\n"
+	}
 	if u.Accepted {
 		return "accepted: " + u.Target + "\n"
 	}

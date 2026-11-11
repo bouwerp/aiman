@@ -1184,7 +1184,8 @@ components:
       description: >
         host.version: the aiman release this host's serve runs and what its
         self-update knows. Any caller may read it. With updates off, mode is
-        off, status held and latest empty.
+        off, status held and latest empty. status describes serve only; the
+        gateway block describes the host's aiman-gateway.
       required: [type, host, version, protocol, latest, latest_ready, mode, status, checked_at, attempt]
       properties:
         type:
@@ -1218,10 +1219,38 @@ components:
           oneOf:
             - type: "null"
             - $ref: "#/components/schemas/HostUpdateAttempt"
+        gateway:
+          $ref: "#/components/schemas/HostGateway"
+    HostGateway:
+      type: object
+      description: >
+        The host's aiman-gateway against serve, read live with a 5 second
+        cache. Absent when the host has no self-update manager. behind means
+        strictly older than serve; a newer gateway is current. unknown is a
+        read that failed or a version that does not parse, never behind.
+      required: [installed, version, running, status]
+      properties:
+        installed:
+          type: boolean
+        version:
+          type: string
+          description: The gateway's version, empty when not installed or unread.
+        running:
+          type: boolean
+        status:
+          type: string
+          enum: [current, behind, updating, failed, unknown, not_installed]
     HostUpdateAttempt:
       type: object
-      required: [at, from, to, status, exit, error]
+      required: [at, from, to, status, exit, error, kind]
       properties:
+        kind:
+          type: string
+          enum: [serve, gateway]
+          description: >
+            serve is a serve install (its lockstep also updates the gateway);
+            gateway is a gateway-only repair, whose from is the gateway's
+            version and to serve's tag.
         at:
           type: string
           description: RFC3339 time the attempt started.
@@ -1244,7 +1273,10 @@ components:
         host.update: an operator request to install the latest ready release
         now. The install runs in the background and restarts serve and the
         gateway; host.version and the host_update notification report the
-        outcome. Needs allow_destructive on a device token; a session caller
+        outcome. When serve is already at the latest release and the gateway
+        is behind (or its last update failed), it repairs the gateway alone:
+        accepted with reason gateway and target serve's tag. While that
+        repair runs it is refused, saying the gateway update is running. Needs allow_destructive on a device token; a session caller
         gets needs_operator.
       required: [type, accepted, reason, target]
       properties:
@@ -1255,7 +1287,9 @@ components:
           type: boolean
         reason:
           type: string
-          description: Why the request was refused; empty when accepted.
+          description: >
+            Why the request was refused; empty when a serve install was
+            accepted, gateway when a gateway repair was accepted.
         target:
           type: string
           description: The release tag being installed when accepted.

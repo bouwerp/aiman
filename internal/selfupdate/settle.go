@@ -86,6 +86,9 @@ func (m *Manager) settleLocked(s *State) *Attempt {
 	switch {
 	case valid && res.Exit == 0 && atTarget:
 		a.Status, a.Exit, a.Error = AttemptOK, 0, ""
+	case valid && res.Exit != 0 && a.IsGateway():
+		a.Status, a.Exit = AttemptFailed, res.Exit
+		a.Error = withLogLine(fmt.Sprintf("gateway install failed (exit %d)", res.Exit), m.LogPath)
 	case valid && res.Exit != 0 && atTarget:
 		a.Status, a.Exit = AttemptFailed, res.Exit
 		a.Error = withLogLine(fmt.Sprintf("gateway lockstep failed (exit %d)", res.Exit), m.LogPath)

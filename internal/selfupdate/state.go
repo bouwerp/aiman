@@ -26,6 +26,12 @@ const (
 	AttemptFailed  AttemptStatus = "failed"
 )
 
+// Attempt kinds. An empty Kind reads as serve.
+const (
+	AttemptKindServe   = "serve"
+	AttemptKindGateway = "gateway"
+)
+
 // Attempt records one install. It is saved as started before the script runs,
 // so the serve process alive when the script ends can tell whether it took.
 type Attempt struct {
@@ -36,6 +42,21 @@ type Attempt struct {
 	Status AttemptStatus `json:"status"`
 	Exit   int           `json:"exit,omitempty"`
 	Error  string        `json:"error,omitempty"`
+	// Kind is AttemptKindGateway for a gateway repair, whose From is the
+	// gateway's version and To serve's tag; empty or AttemptKindServe is a
+	// serve install.
+	Kind string `json:"kind,omitempty"`
+}
+
+// IsGateway reports a gateway repair.
+func (a *Attempt) IsGateway() bool { return a != nil && a.Kind == AttemptKindGateway }
+
+// KindOrServe returns Kind, with empty read as AttemptKindServe.
+func (a Attempt) KindOrServe() string {
+	if a.Kind == "" {
+		return AttemptKindServe
+	}
+	return a.Kind
 }
 
 // Result is what the detached wrapper writes when the script ends, whatever
@@ -53,7 +74,10 @@ type State struct {
 	ETag      string    `json:"etag,omitempty"`
 	Latest    Release   `json:"latest,omitzero"`
 	Notified  string    `json:"notified,omitempty"`
-	Attempt   *Attempt  `json:"attempt"`
+	// NotifiedGateway is the "<gateway version>@<serve tag>" drift notify
+	// mode last reported.
+	NotifiedGateway string   `json:"notified_gateway,omitempty"`
+	Attempt         *Attempt `json:"attempt"`
 }
 
 // LoadState reads path. A missing file is a zero State and no error.
