@@ -270,6 +270,8 @@ func runServe() error {
 	srv.SetRepoLister(gitManager)
 	srv.SetRestartDeps(server.RestartDeps{Config: cfg, Engine: flow.SkillEngine, Ignorer: gitManager})
 	srv.SetConsultDir(filepath.Join(dir, "consults"))
+	// The local CI gate (internal/cigate) plugs in through srv.SetLandGate.
+	srv.SetLandDir(filepath.Join(dir, "land"))
 	srv.SetReviewGitHub(&review.GHCLI{Run: review.ExecRun, RunInput: review.ExecRunInput})
 	srv.SetReviewWorktrees(gitManager)
 	srv.SetReviewDir(filepath.Join(dir, "pr-reviews"))
@@ -322,7 +324,10 @@ func runServe() error {
 		},
 		// verify.before_pr does not gate child completion until nl-10.
 		BeforePR: func(string) bool { return false },
-		Report:   coordinator.ExecReport(localExec),
+		// coordinator.child_prs false lands children with aiman land.
+		ChildPRs:    func(domain.Session) bool { return cfg.CoordinatorChildPRs() },
+		LandedLocal: srv.LandedLocal,
+		Report:      coordinator.ExecReport(localExec),
 		Steer: func(id, text string) {
 			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: domain.AuthorAiman, Text: text})
 		},

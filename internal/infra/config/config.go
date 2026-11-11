@@ -49,10 +49,10 @@ type Config struct {
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
+	// Coordinator configures how children deliver work to their coordinator.
+	Coordinator CoordinatorConfig `yaml:"coordinator,omitempty"`
 	// Roles overrides agent, model and effort for sessions with a role.
 	Roles RolesConfig `yaml:"roles,omitempty"`
-	// Coordinator configures how coordinator children deliver their work.
-	Coordinator CoordinatorConfig `yaml:"coordinator,omitempty"`
 	// Host configures how serve keeps the host's aiman binaries current.
 	Host         HostConfig `yaml:"host,omitempty"`
 	Remotes      []Remote   `yaml:"remotes"`
@@ -96,10 +96,10 @@ type ServeConfig struct {
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
+	// Coordinator configures how children deliver work to their coordinator.
+	Coordinator CoordinatorConfig `yaml:"coordinator,omitempty"`
 	// Roles overrides agent, model and effort for sessions with a role.
 	Roles RolesConfig `yaml:"roles,omitempty"`
-	// Coordinator configures how coordinator children deliver their work.
-	Coordinator CoordinatorConfig `yaml:"coordinator,omitempty"`
 	// AWS carries this host's delegations for the phone's AWS sign-in.
 	AWS ServeAWSConfig `yaml:"aws,omitempty"`
 	// Host configures how serve keeps the host's aiman binaries current.
@@ -115,17 +115,6 @@ type SessionsConfig struct {
 
 // PeerNotesOn reports whether peer notes are allowed; unset is on.
 func (c SessionsConfig) PeerNotesOn() bool { return c.PeerNotes == nil || *c.PeerNotes }
-
-// CoordinatorConfig is the coordinator section.
-type CoordinatorConfig struct {
-	// ChildPRs keeps a PR per child into the coordinator's branch. False, the
-	// default, lands children with aiman land and no PR.
-	ChildPRs bool `yaml:"child_prs,omitempty"`
-}
-
-// CoordinatorChildPRs reports coordinator.child_prs; unset and a nil config
-// are false.
-func (c *Config) CoordinatorChildPRs() bool { return c != nil && c.Coordinator.ChildPRs }
 
 // ServeAWSConfig is the AWS section of the serve config.
 type ServeAWSConfig struct {
@@ -454,8 +443,8 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Review:        c.Review,
 		CI:            c.CI,
 		Repos:         c.Repos,
-		Roles:         c.Roles,
 		Coordinator:   c.Coordinator,
+		Roles:         c.Roles,
 		AWS:           c.serveAWSFor(host),
 		Host:          c.Host,
 	})
