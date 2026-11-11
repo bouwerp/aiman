@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/bouwerp/aiman/internal/cigate"
 	"io"
 	"log"
 	"os"
@@ -179,6 +180,11 @@ func runServe() error {
 	srv.SetPeerNotes(cfg.Sessions.PeerNotesOn())
 	srv.SetHostLoad(cfg.Host.Load)
 	srv.SetAgentNice(cfg.Host.Load.AgentNiceOrDefault())
+	srv.SetCILocal(server.CILocalDeps{
+		Runner:   &cigate.Runner{Dir: filepath.Join(dir, "ci-local"), MaxParallel: 2},
+		Repos:    cfg.Repos,
+		ChildPRs: cfg.CoordinatorChildPRs(),
+	})
 	// SIGUSR1 (aiman host dump) and a run at the in-flight cap write a dump
 	// here, where the journal cannot drop it.
 	go srv.HandleDumpSignals(ctx, filepath.Join(dir, "logs"))
@@ -243,7 +249,7 @@ func runServe() error {
 
 	ciDeps := ciwatch.Deps{
 		Sessions: db,
-		GitHub:   ciwatch.GHCLI{},
+		GitHub:   srv.PRCacheGitHub(ciwatch.GHCLI{}),
 		Todos:    srv.TodoAccess(),
 		Steer: func(id string, author domain.TodoAuthor, text string) {
 			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: author, Text: text})
@@ -264,6 +270,10 @@ func runServe() error {
 	srv.SetRepoLister(gitManager)
 	srv.SetRestartDeps(server.RestartDeps{Config: cfg, Engine: flow.SkillEngine, Ignorer: gitManager})
 	srv.SetConsultDir(filepath.Join(dir, "consults"))
+	if g := srv.CILandGate(); g != nil {
+		srv.SetLandGate(g)
+	}
+	srv.SetLandDir(filepath.Join(dir, "land"))
 	srv.SetReviewGitHub(&review.GHCLI{Run: review.ExecRun, RunInput: review.ExecRunInput})
 	srv.SetReviewWorktrees(gitManager)
 	srv.SetReviewDir(filepath.Join(dir, "pr-reviews"))
@@ -316,7 +326,10 @@ func runServe() error {
 		},
 		// verify.before_pr does not gate child completion until nl-10.
 		BeforePR: func(string) bool { return false },
-		Report:   coordinator.ExecReport(localExec),
+		// coordinator.child_prs false lands children with aiman land.
+		ChildPRs:    func(domain.Session) bool { return cfg.CoordinatorChildPRs() },
+		LandedLocal: srv.LandedLocal,
+		Report:      coordinator.ExecReport(localExec),
 		Steer: func(id, text string) {
 			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: domain.AuthorAiman, Text: text})
 		},
@@ -376,8 +389,19 @@ func skillRoots(sessions []domain.Session) []string {
 }
 
 // agentHookOptions is what serve's config asks of the agent hooks.
+// The CI gate hook goes in when children land locally or any repo has a
+// local gate list.
 func agentHookOptions(cfg *config.Config) agenthook.Options {
-	return agenthook.Options{BeforePR: cfg.Verify.BeforePR}
+	return agenthook.Options{BeforePR: cfg.Verify.BeforePR, CIGate: !cfg.CoordinatorChildPRs() || anyRepoCILocal(cfg.Repos)}
+}
+
+func anyRepoCILocal(repos map[string]config.RepoBootstrap) bool {
+	for _, r := range repos {
+		if len(r.CI.Local) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func ensureAgentHooks(opts agenthook.Options) {

@@ -376,6 +376,8 @@ components:
             worktree_dirty refuses session.terminate while removing the
             worktree would lose work, and data says what. needs_operator
             refuses a session's call to session.restart or session.terminate.
+            land_parent_diverged, land_conflict (data lists files) and
+            land_busy refuse session.land, which is not a device method.
             session_scope refuses a session's pty.create, pty.input, pty.run,
             pty.kill, pty.forget, session.prompt, session.forget or steer.send
             on anything but itself, a descendant or its own helper pty, except
@@ -404,7 +406,15 @@ components:
             (too many pending logins or recent starts), invalid_params (the
             profile is not delegated) and needs_operator (a session caller).
             aws.login_status answers not_found for a login id serve no longer
-            holds. aws.log answers needs_operator for a session caller. Until their handlers land, the aws.* methods answer
+            holds. aws.log answers needs_operator for a session caller.
+            ci.local, ci.status, ci.gate and ci.ready (the local CI gate) are not on the
+            device allowlist; they answer unavailable on a serve without the
+            gate, and ci.local refuses ci_running (a run for the session is
+            going), ci_dirty (uncommitted or untracked files) and ci_no_list
+            (no .aiman/ci-local.yaml at HEAD and no repos.<slug>.ci.local).
+            ci.ready refuses ci_not_ready until the tree is clean, HEAD is the
+            open PR's head, the gate passed for HEAD and verify passed when
+            before_pr is on; then serve runs gh pr ready. Until their handlers land, the aws.* methods answer
             unavailable. session.transcript, session.transcript_item and
             session.process_output answer unavailable on a serve with no
             transcript reader, not_found for an unknown session, item or
@@ -458,6 +468,9 @@ components:
             - session_scope
             - aws_no_sso
             - aws_rate_limited
+            - ci_running
+            - ci_dirty
+            - ci_no_list
             - server_busy
             - rate_limited
             - unavailable
@@ -532,6 +545,7 @@ components:
             - session.forget
             - session.restart
             - session.terminate
+            - session.land
             - repo.list
             - host.stats
             - host.version
@@ -543,6 +557,10 @@ components:
             - verify.status
             - ci.get
             - ci.watch
+            - ci.local
+            - ci.status
+            - ci.gate
+            - ci.ready
             - context.put
             - context.get
             - context.list

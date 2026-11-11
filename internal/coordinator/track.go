@@ -51,6 +51,13 @@ type Tracker struct {
 	Passed   func(childID string) bool  // nil means false; nl-7's LatestFor.Passed
 	BeforePR func(parentID string) bool // nil means false; nl-10 sets this from verify.before_pr
 	Notify   Notifier                   // nil drops the missing-child notification
+	// ChildPRs reports whether the parent's children land through a PR
+	// (coordinator.child_prs). nil, or true, keeps the PR path.
+	ChildPRs func(parent domain.Session) bool
+	// LandedLocal reports whether the child's latest aiman land reached the
+	// parent's branch. When ChildPRs returns false and LandedLocal is set,
+	// it is the only landed check and GitHub is never asked.
+	LandedLocal func(ctx context.Context, parent, child domain.Session) (bool, error)
 	// Report reads the child's .aiman_report.md. nil, or a read error, is no
 	// evidence.
 	Report func(ctx context.Context, child domain.Session) (string, error)
@@ -168,10 +175,19 @@ func (t *Tracker) trackChild(ctx context.Context, parent domain.Session, it doma
 	t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone })
 }
 
-// landed reports whether the child's PR targets the parent's branch and is
-// merged, or is open with a passing review when the parent verifies before
-// a PR.
+// landed reports whether the child landed on the parent's branch: through
+// aiman land when the parent's children do not open PRs, else through a PR
+// that targets the parent's branch and is merged, or is open with a passing
+// review when the parent verifies before a PR.
 func (t *Tracker) landed(ctx context.Context, parent, child domain.Session) bool {
+	if t.LandedLocal != nil && t.ChildPRs != nil && !t.ChildPRs(parent) {
+		ok, err := t.LandedLocal(ctx, parent, child)
+		if err != nil {
+			log.Printf("coordinator: land of %s: %v", child.ID, err)
+			return false
+		}
+		return ok
+	}
 	pr, err := t.PR(ctx, child)
 	if err != nil {
 		log.Printf("coordinator: PR of %s: %v", child.ID, err)

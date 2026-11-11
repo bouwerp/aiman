@@ -65,6 +65,8 @@ func (s *Server) dispatchLifecycle(ctx context.Context, req Request) Response {
 		return s.handleSessionRestart(ctx, req)
 	case "session.terminate":
 		return s.handleSessionTerminate(ctx, req)
+	case "session.land":
+		return s.handleSessionLand(ctx, req)
 	case "repo.list":
 		return s.handleRepoList(ctx, req)
 	case "host.version":

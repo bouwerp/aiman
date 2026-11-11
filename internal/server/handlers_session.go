@@ -1514,6 +1514,7 @@ func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
 		_ = s.pty.Forget(sess.ID)
 	}
 	s.steer.Forget(sess.ID)
+	s.forgetCILocal(sess.ID)
 	s.uncertainPanes.Delete(sess.ID)
 	s.sessionStates.Delete(sess.ID)
 	if rec := s.NotifyRecorder(); rec != nil {

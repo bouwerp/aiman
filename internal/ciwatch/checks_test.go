@@ -24,10 +24,14 @@ func TestFailedCheckAddsTodoAndSteersLog(t *testing.T) {
 		t.Fatalf("steers %q", notes)
 	}
 	note := notes[0]
-	if !strings.HasPrefix(note, `[aiman] CI check "lint" failed on aaaaaaa (PR #42), to-do t1.`+"\nLast 150 lines of `gh run view --job 222 --log-failed`:\n") {
+	if !strings.HasPrefix(note, "[aiman] CI run on aaaaaaa (PR #42) finished with 1 failed check(s).\n\n"+
+		`CI check "lint" failed, to-do t1.`+"\nLast 150 lines of `gh run view --job 222 --log-failed`:\n") {
 		t.Fatalf("note %q", note)
 	}
-	if !strings.Contains(note, "line 51\n") || !strings.HasSuffix(note, "line 200") || strings.Contains(note, "line 50\n") {
+	if !strings.HasSuffix(note, "line 200\n\n"+RunNoteEnd) {
+		t.Fatalf("note end %q", note)
+	}
+	if !strings.Contains(note, "line 51\n") || strings.Contains(note, "line 50\n") {
 		t.Fatalf("excerpt wrong: %q", note)
 	}
 }
@@ -121,7 +125,7 @@ func TestLogUnavailableNote(t *testing.T) {
 	}})
 	r.poll(t, testSession())
 	notes := r.steers.all()
-	if len(notes) != 1 || !strings.HasSuffix(notes[0], "to-do t1.\nLog unavailable: https://ci.example/9") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "to-do t1.\nLog unavailable: https://ci.example/9\n") {
 		t.Fatalf("notes %q", notes)
 	}
 }
@@ -132,7 +136,7 @@ func TestLogErrorFallsBackToURL(t *testing.T) {
 	r.gh.logErr = errors.New("run in progress")
 	r.poll(t, testSession())
 	notes := r.steers.all()
-	if len(notes) != 1 || !strings.HasSuffix(notes[0], "Log unavailable: https://github.com/o/r/actions/runs/111/job/222") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "Log unavailable: https://github.com/o/r/actions/runs/111/job/222\n") {
 		t.Fatalf("notes %q", notes)
 	}
 }
@@ -200,7 +204,26 @@ func TestBlankLogFallsBackToURL(t *testing.T) {
 	r.gh.logs[222] = "\n  \n"
 	r.poll(t, testSession())
 	notes := r.steers.all()
-	if len(notes) != 1 || !strings.HasSuffix(notes[0], "Log unavailable: https://github.com/o/r/actions/runs/111/job/222") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "Log unavailable: https://github.com/o/r/actions/runs/111/job/222\n") {
 		t.Fatalf("notes %q", notes)
+	}
+}
+
+func TestPendingRunAddsNoTodosButClosesPassed(t *testing.T) {
+	r := newRig(t)
+	r.gh.setPR(failingLint("aaaaaaa1"))
+	r.poll(t, testSession())
+	r.gh.setPR(PRView{Number: 42, HeadSHA: "bbbbbbb2", State: "OPEN", Checks: []Check{
+		{Name: "lint", Conclusion: ConclusionSuccess},
+		{Name: "unit", Conclusion: ConclusionFailure, DetailsURL: "https://ci.example/1"},
+		{Name: "e2e", Conclusion: ConclusionPending},
+	}})
+	r.poll(t, testSession())
+	items := r.todos.items()
+	if len(items) != 1 || items[0].Ref != "check:lint" || items[0].State != domain.TodoDone {
+		t.Fatalf("todos while pending %+v", items)
+	}
+	if n := len(r.steers.all()); n != 1 {
+		t.Fatalf("steers %d, want only the first run's", n)
 	}
 }

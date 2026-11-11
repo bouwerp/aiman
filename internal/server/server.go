@@ -154,8 +154,12 @@ type Server struct {
 
 	// ciWatch polls watched sessions' PRs; nil until SetCIWatcher.
 	ciWatch *ciwatch.Watcher
+	// ciLocal runs the local CI gate and answers ci.gate; nil until SetCILocal.
+	ciLocal *ciLocalState
 	// verifier runs reviewer sessions; nil until SetVerifier.
 	verifier *verify.Manager
+	// land holds session.land's lock directory and local gate.
+	land landDeps
 	// handovers runs handover child agents; nil until SetHandovers, and then
 	// writeHandover keeps the mechanical write and enqueues the memory job.
 	handovers *handoverchild.Manager
@@ -432,7 +436,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleMove(ctx, req)
 	case "session.forget":
 		return s.handleForget(ctx, req)
-	case "session.restart", "session.terminate", "repo.list", "host.stats", "host.version", "host.update":
+	case "session.restart", "session.terminate", "session.land", "repo.list", "host.stats", "host.version", "host.update":
 		return s.dispatchLifecycle(ctx, req)
 	case "session.register":
 		return s.handleRegister(ctx, req)
@@ -444,10 +448,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleVerifyStart(ctx, req)
 	case "verify.status":
 		return s.handleVerifyStatus(ctx, req)
-	case "ci.get":
-		return s.handleCIGet(ctx, req)
-	case "ci.watch":
-		return s.handleCIWatch(ctx, req)
+	case "ci.get", "ci.watch", "ci.local", "ci.status", "ci.gate", "ci.ready":
+		return s.dispatchCI(ctx, req)
 	case "context.put":
 		return s.handleContextPut(ctx, req)
 	case "context.get":

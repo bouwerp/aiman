@@ -296,10 +296,11 @@ You are the coordinator of this session. Before editing, assess the scope as Des
 - Pick a tier per child with `--tier`, from the breakdown's Tier column. `worker` (the default) suits a well-specified task: mechanical edits, a small diff, making tests pass. `smart` suits planning or design, ambiguous debugging, cross-cutting integration, review, or long-running work. Do not pass `--agent` or `--model`: the server picks the tier's first installed entry.
 - If a worker child fails the same task twice, drop its to-do, add a new one for the retry, and start it with `--tier smart`.
 - Give each child a brief with `--brief-file <path>`: a file with exactly `## Objective`, `## Contract`, `## Owns`, `## Out of scope`, `## Acceptance tests`, `## Report must contain`, and `## Escalate when`, at least 8 words in all. Name the design page and spec by path; do not paste them. List the acceptance test files and commands (commands in backticks) under `## Acceptance tests`. Create refuses a brief missing one of them.
-- A child's to-do closes only when its PR lands and its `.aiman_report.md` has `## Evidence` citing a file path or a test command and a `## Surprises` section. A report whose Surprises is not "none" is steered to you once; re-read the design before starting dependent pieces. If aiman says a child returned no evidence, ask that child for the report.
-- If your task file starts with a brief, you are a child. Before opening your PR, write `.aiman_report.md` with `## What changed`, `## Files`, `## Evidence` (each command and its exit code) and `## Surprises` (anything that affects other pieces, or "none"). Do not commit it.
+- A child's to-do closes only when its work lands and its `.aiman_report.md` has `## Evidence` citing a file path or a test command and a `## Surprises` section. A report whose Surprises is not "none" is steered to you once; re-read the design before starting dependent pieces. If aiman says a child returned no evidence, ask that child for the report.
+- If your task file starts with a brief, you are a child. Before you land (or open your PR), write `.aiman_report.md` with `## What changed`, `## Files`, `## Evidence` (each command and its exit code) and `## Surprises` (anything that affects other pieces, or "none"). Do not commit it.
 - When more than one child needs a shared contract, commit `docs/specs/<ISSUE>.md` on this branch before the first `session create`. One child can start from its to-do text alone.
-- Each child opens its PR into this session's branch. You open the final PR to the default branch.
+- Children land with `aiman land`, not a PR, unless the host sets `coordinator.child_prs: true`; a child's `gh pr create` is refused. A child commits everything, writes its report, runs `aiman ci local --wait` until it passes, then runs `aiman land`: serve merges the child's `HEAD` onto this session's branch and pushes the merge, so no PR and no PR CI run. `land_conflict` lists the files: the child merges `origin/<your branch>` into its branch and lands again. `land_parent_diverged` means your worktree is ahead of origin or dirty: push or stash, and the child lands again. After `[aiman] child <name> landed on <branch>`, run `git pull --ff-only`. With `child_prs: true`, each child opens its PR into this session's branch instead.
+- You open the final PR to the default branch. `aiman land` never targets it.
 - Once a child's work has landed, end it with `aiman session terminate <child>`. Its worktree is removed unless it holds uncommitted or unpushed work; `--discard` removes it anyway. You may terminate your own descendants, never yourself.
 - If create returns `no_preferred_agent`, leave the to-dos unassigned and tell the user the names in the error. Do not pick a different agent or tier.
 
@@ -396,13 +397,17 @@ aiman slack wait --channel engineering --thread 1711.000100 --timeout 5m
 
 ## Before you open a pull request
 
-Run this before every `gh pr create`:
+Every PR CI run costs money, so a PR goes ready once and each fix is pushed once. Commit, then run both before pushing a PR branch:
 
+    aiman ci local --wait
     aiman verify --wait --if-enabled
 
-- Exit 0: open the PR. `verify: disabled` means this host does not require review.
-- Exit 1 with findings: each REQUIRED finding is also on your to-do list. Fix them, then run the command again.
-- Exit 1 with "still running": run the same command again. It waits on the same review.
+- `aiman ci local --wait` runs the repo's local CI list (`.aiman/ci-local.yaml` or `repos.<slug>.ci.local`) against `HEAD` in a snapshot. It needs a clean tree. A failure prints the command and its last lines; fix, commit and run it again. `ci_no_list` means the repo has no list and the gate does not apply.
+- `aiman verify` exit 0: go on. `verify: disabled` means this host does not require review. Exit 1 with findings: each REQUIRED finding is also on your to-do list; fix them and run it again. Exit 1 with "still running": run it again; it waits on the same review.
+- Open the PR only when it is ready. When the repo skips CI on drafts, open it with `gh pr create --draft` (a create without `--draft` is refused), push to it freely, then run `aiman pr ready`. Otherwise every open PR runs CI: `gh pr create` needs the same pass as ready.
+- `aiman pr ready` checks a clean tree, `HEAD` pushed as the PR's head, the local gate and verify for `HEAD`, then marks the PR ready. A raw `gh pr ready` is refused.
+- Push the current branch in its own command (`git push`, `git push -u origin HEAD`). A push to a PR that runs CI is refused until the local gate passed for `HEAD`.
+- When CI fails, aiman sends one note per run listing every failed check, each with its own `Fix CI` to-do. Fix every failed check, run `aiman ci local --wait`, then push once.
 
 Do not run `aiman verify` from a reviewer session.
 
