@@ -421,7 +421,7 @@ func ParseProbe(kind Kind, host, stdout string) domain.Daemon {
 				d.RTKVersion = val
 			}
 		case "SELFUPDATE":
-			d.SelfUpdate = parseSelfUpdate(val)
+			d.SelfUpdate, d.HostManaged = parseSelfUpdate(val, time.Now())
 		}
 	}
 	d.Logs = strings.TrimRight(logs, "\n")
@@ -431,23 +431,33 @@ func ParseProbe(kind Kind, host, stdout string) domain.Daemon {
 	return d
 }
 
-// parseSelfUpdate reads the attempt from serve's host-update state file. It is
-// nil for an empty line, a file with no attempt, or one that does not parse.
-func parseSelfUpdate(val string) *domain.SelfUpdateAttempt {
+// hostManagedWithin is how recent the host manager's last release check must
+// be for the laptop to treat the host as updating itself.
+const hostManagedWithin = time.Hour
+
+// parseSelfUpdate reads serve's host-update state file: the attempt (nil for an
+// empty line, a file with no attempt, or one that does not parse) and whether
+// the host's manager checked for a release within hostManagedWithin of now.
+func parseSelfUpdate(val string, now time.Time) (*domain.SelfUpdateAttempt, bool) {
 	if strings.TrimSpace(val) == "" {
-		return nil
+		return nil, false
 	}
 	var doc struct {
-		Attempt *struct {
+		CheckedAt time.Time `json:"checked_at"`
+		Attempt   *struct {
 			Status string    `json:"status"`
 			To     string    `json:"to"`
 			At     time.Time `json:"at"`
 		} `json:"attempt"`
 	}
-	if json.Unmarshal([]byte(val), &doc) != nil || doc.Attempt == nil {
-		return nil
+	if json.Unmarshal([]byte(val), &doc) != nil {
+		return nil, false
 	}
-	return &domain.SelfUpdateAttempt{Status: doc.Attempt.Status, To: doc.Attempt.To, At: doc.Attempt.At}
+	managed := !doc.CheckedAt.IsZero() && now.Sub(doc.CheckedAt) < hostManagedWithin
+	if doc.Attempt == nil {
+		return nil, managed
+	}
+	return &domain.SelfUpdateAttempt{Status: doc.Attempt.Status, To: doc.Attempt.To, At: doc.Attempt.At}, managed
 }
 
 func parseActiveState(val string) domain.DaemonStatus {

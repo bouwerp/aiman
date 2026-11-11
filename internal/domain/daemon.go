@@ -23,6 +23,10 @@ type Daemon struct {
 	// SelfUpdate is the host's own update attempt from the serve probe's
 	// SELFUPDATE= line; nil when the host has recorded none.
 	SelfUpdate *SelfUpdateAttempt
+	// HostManaged is set from the serve probe when the host's own update
+	// manager checked for a release within the last hour. The laptop then
+	// leaves the gateway's updates to the host.
+	HostManaged bool
 }
 
 // SelfUpdateAttempt is the part of serve's host-update attempt the laptop
