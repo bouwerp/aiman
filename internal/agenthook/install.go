@@ -33,6 +33,9 @@ type InstallResult struct {
 type Options struct {
 	// BeforePR installs the verify gate on Claude's PR creation.
 	BeforePR bool
+	// CIGate installs the local CI gate on Claude's pushes, PR creates and
+	// PR readies.
+	CIGate bool
 }
 
 // EnsureOnHost is EnsureOnHostWith with only the before-PR option.
@@ -62,11 +65,8 @@ func EnsureOnHostWith(home string, opts Options) ([]InstallResult, error) {
 	script := reporterPath(home)
 	record(ensureHookScript(script, reporterScript))
 	record(ensureHookScript(todoReporterPath(home), hookScript("todo report --from-stdin")))
-	if opts.BeforePR {
-		record(ensureHookScript(gatePath(home), verifyGateScript))
-	} else if err := os.Remove(gatePath(home)); err != nil && !os.IsNotExist(err) {
-		record(InstallResult{}, err)
-	}
+	record(ensureOptionalScript(gatePath(home), verifyGateScript, opts.BeforePR))
+	record(ensureOptionalScript(ciGatePath(home), ciGateScript, opts.CIGate))
 	record(ensureDeepcodeLauncher(home))
 	record(ensureClaude(home, script, opts))
 	record(ensureGrok(home, script, todoReporterPath(home)))
@@ -78,6 +78,25 @@ func EnsureOnHostWith(home string, opts Options) ([]InstallResult, error) {
 	record(ensurePi(home))
 	record(ensureMuse(home))
 	return out, first
+}
+
+// ensureOptionalScript writes the script when on and removes it when off.
+func ensureOptionalScript(path, body string, on bool) (InstallResult, error) {
+	if on {
+		return ensureHookScript(path, body)
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return InstallResult{}, err
+	}
+	return InstallResult{}, nil
+}
+
+// togglePreToolUseHook installs or removes the Bash gate group marker owns.
+func togglePreToolUseHook(root map[string]any, command, marker string, on bool) bool {
+	if on {
+		return upsertPreToolUseHook(root, command, marker)
+	}
+	return removePreToolUseHook(root, marker)
 }
 
 // aimanBin is the binary the status line wrapper records through: the running
@@ -114,17 +133,13 @@ func ensureClaude(home, command string, opts Options) (InstallResult, error) {
 		compact := upsertCompactHook(root, command)
 		turns := upsertTurnHooks(root, command)
 		todos := upsertTodoHook(root, todo, claudeTodoMatcher)
-		gate := false
-		if opts.BeforePR {
-			gate = upsertPreToolUseHook(root, gatePath(home))
-		} else {
-			gate = removePreToolUseHook(root)
-		}
+		gate := togglePreToolUseHook(root, gatePath(home), GateMarker, opts.BeforePR)
+		ciGate := togglePreToolUseHook(root, ciGatePath(home), CIGateMarker, opts.CIGate)
 		status := false
 		if editStatusLine != nil {
 			status, statusErr = editStatusLine(home, root)
 		}
-		return identity || compact || turns || todos || gate || status
+		return identity || compact || turns || todos || gate || ciGate || status
 	})
 	// On any error settings may still point at the script, so it stays.
 	if !wrapStatusLine && err == nil && statusErr == nil {

@@ -407,11 +407,14 @@ components:
             profile is not delegated) and needs_operator (a session caller).
             aws.login_status answers not_found for a login id serve no longer
             holds. aws.log answers needs_operator for a session caller.
-            ci.local, ci.status and ci.gate (the local CI gate) are not on the
+            ci.local, ci.status, ci.gate and ci.ready (the local CI gate) are not on the
             device allowlist; they answer unavailable on a serve without the
             gate, and ci.local refuses ci_running (a run for the session is
             going), ci_dirty (uncommitted or untracked files) and ci_no_list
-            (no .aiman/ci-local.yaml at HEAD and no repos.<slug>.ci.local). Until their handlers land, the aws.* methods answer
+            (no .aiman/ci-local.yaml at HEAD and no repos.<slug>.ci.local).
+            ci.ready refuses ci_not_ready until the tree is clean, HEAD is the
+            open PR's head, the gate passed for HEAD and verify passed when
+            before_pr is on; then serve runs gh pr ready. Until their handlers land, the aws.* methods answer
             unavailable. session.transcript, session.transcript_item and
             session.process_output answer unavailable on a serve with no
             transcript reader, not_found for an unknown session, item or
@@ -557,6 +560,7 @@ components:
             - ci.local
             - ci.status
             - ci.gate
+            - ci.ready
             - context.put
             - context.get
             - context.list

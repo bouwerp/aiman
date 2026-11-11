@@ -448,7 +448,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleVerifyStart(ctx, req)
 	case "verify.status":
 		return s.handleVerifyStatus(ctx, req)
-	case "ci.get", "ci.watch", "ci.local", "ci.status", "ci.gate":
+	case "ci.get", "ci.watch", "ci.local", "ci.status", "ci.gate", "ci.ready":
 		return s.dispatchCI(ctx, req)
 	case "context.put":
 		return s.handleContextPut(ctx, req)

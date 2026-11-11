@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/verify"
 )
 
 const (
@@ -25,6 +28,8 @@ const (
 	CodeCIDirty = "ci_dirty"
 	// CodeCINoList refuses ci.local for a repository with no gate list.
 	CodeCINoList = "ci_no_list"
+	// CodeCINotReady refuses ci.ready until the PR may go ready.
+	CodeCINotReady = "ci_not_ready"
 )
 
 const (
@@ -38,7 +43,12 @@ const (
 	prCacheTTL = 30 * time.Second
 	// ciStatusTailLines is how much of a failed command's log ci.status sends.
 	ciStatusTailLines = 60
+	// prReadyBudget bounds ci.ready's own gh calls.
+	prReadyBudget = 20 * time.Second
 )
+
+// MarkReady marks PR number ready for review from the checkout dir.
+type MarkReady func(ctx context.Context, dir string, number int) error
 
 // PRLookup reads the PR of branch from the worktree dir. No PR is nil, nil.
 type PRLookup func(ctx context.Context, dir, branch string) (*cigate.PR, error)
@@ -53,6 +63,8 @@ type CILocalDeps struct {
 	ChildPRs bool
 	// LookupPR asks GitHub; nil uses gh pr view.
 	LookupPR PRLookup
+	// MarkReady takes a PR out of draft; nil runs gh pr ready.
+	MarkReady MarkReady
 }
 
 type ciLocalState struct {
@@ -65,6 +77,9 @@ type ciLocalState struct {
 func (s *Server) SetCILocal(d CILocalDeps) {
 	if d.LookupPR == nil {
 		d.LookupPR = GHPRLookup
+	}
+	if d.MarkReady == nil {
+		d.MarkReady = GHMarkReady
 	}
 	s.ciLocal = &ciLocalState{d: d, cache: newPRCache(time.Now)}
 }
@@ -100,6 +115,8 @@ func (s *Server) dispatchCILocal(ctx context.Context, req Request) Response {
 		return s.handleCILocal(ctx, req.ID, t, p.Wait)
 	case "ci.status":
 		return s.handleCIStatus(ctx, req.ID, t)
+	case "ci.ready":
+		return s.handleCIReady(ctx, req.ID, t)
 	default:
 		return s.handleCIGate(ctx, req.ID, t, p)
 	}
@@ -139,19 +156,60 @@ func (s *Server) ciLocalTarget(ctx context.Context, req Request, name string) (c
 	if r, refused := s.refuseOutOfScope(ctx, req, sess.ID); refused {
 		return ciTarget{}, &r
 	}
+	t, err := s.ciTargetFor(ctx, sess)
+	if err != nil {
+		return fail(CodeInvalidParams, err.Error())
+	}
+	return t, nil
+}
+
+// ciTargetFor finds the session's checkout root and repo settings.
+func (s *Server) ciTargetFor(ctx context.Context, sess domain.Session) (ciTarget, error) {
 	dir := sess.WorkingDirectory
 	if dir == "" {
 		dir = sess.WorktreePath
 	}
 	if dir == "" {
-		return fail(CodeInvalidParams, "session has no worktree")
+		return ciTarget{}, errors.New("session has no worktree")
 	}
 	top, err := gitLine(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return fail(CodeInvalidParams, err.Error())
+		return ciTarget{}, err
 	}
 	b, _ := config.LookupRepo(s.ciLocal.d.Repos, sess.RepoName)
 	return ciTarget{sess: sess, top: top, repo: b}, nil
+}
+
+// CILandGate is session.land's view of the local gate; nil when the gate is
+// not enabled.
+func (s *Server) CILandGate() LandGate {
+	if s.ciLocal == nil || s.ciLocal.d.Runner == nil {
+		return nil
+	}
+	return ciLandGate{s: s}
+}
+
+type ciLandGate struct{ s *Server }
+
+// PassedFor reports whether the child's repository has a gate list at sha
+// and, if so, whether the record for sha passed.
+func (g ciLandGate) PassedFor(ctx context.Context, child domain.Session, sha string) (applies, passed bool, err error) {
+	t, err := g.s.ciTargetFor(ctx, child)
+	if err != nil {
+		return false, false, err
+	}
+	opt, err := t.options(0)
+	if err != nil {
+		return true, false, err
+	}
+	if _, has, lerr := cigate.LoadList(ctx, t.top, sha, opt.Override); lerr == nil && !has {
+		return false, false, nil
+	}
+	rec, ok, err := g.s.ciLocal.d.Runner.Record(child.ID, sha)
+	if err != nil {
+		return true, false, err
+	}
+	return true, ok && rec.Status == cigate.StatusPass, nil
 }
 
 func (t ciTarget) options(nice int) (cigate.Options, error) {
@@ -388,6 +446,95 @@ func prKey(repo, top, branch string) string {
 		repo = top
 	}
 	return repo + "@" + branch
+}
+
+// handleCIReady marks the session's PR ready for review once nothing about
+// HEAD would waste a CI run: a clean tree, HEAD pushed as the open PR's head,
+// a pass record for HEAD when the repo has a gate list, and verify passed for
+// HEAD when the host verifies before a PR. The PR comes from GitHub, never
+// the cache; afterwards the cache knows the PR runs CI.
+func (s *Server) handleCIReady(ctx context.Context, id string, t ciTarget) Response {
+	rctx, cancel := context.WithTimeout(ctx, prReadyBudget)
+	defer cancel()
+	pr, err := s.ciReadyCheck(rctx, t)
+	if err != nil {
+		return errResp(id, CodeCINotReady, err.Error())
+	}
+	if err := s.ciLocal.d.MarkReady(rctx, t.top, pr.Number); err != nil {
+		return errResp(id, CodeCINotReady, err.Error())
+	}
+	branch, _ := gitLine(ctx, t.top, "symbolic-ref", "--short", "-q", "HEAD")
+	ready := *pr
+	ready.Draft = false
+	s.ciLocal.cache.put(prKey(t.sess.RepoName, t.top, branch), &ready)
+	return Response{ID: id, Result: map[string]any{"type": "ci_ready", "ready": true, "number": pr.Number}}
+}
+
+// ciReadyCheck returns the session's open PR when it may go ready, else why
+// not.
+func (s *Server) ciReadyCheck(ctx context.Context, t ciTarget) (*cigate.PR, error) {
+	st, err := s.ciStatus(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Clean {
+		return nil, errors.New("the worktree has uncommitted or untracked files; commit, push and run aiman ci local --wait first")
+	}
+	branch, err := gitLine(ctx, t.top, "symbolic-ref", "--short", "-q", "HEAD")
+	if err != nil || branch == "" {
+		return nil, errors.New("HEAD is not on a branch")
+	}
+	pr, err := s.ciLocal.d.LookupPR(ctx, t.top, branch)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("read the PR of %s: %w", branch, err)
+	case pr == nil || !strings.EqualFold(pr.State, "OPEN"):
+		return nil, fmt.Errorf("branch %s has no open PR; open it with gh pr create first", branch)
+	case pr.HeadSHA != st.SHA:
+		return nil, fmt.Errorf("PR #%d's head is %s, not HEAD %s; push first", pr.Number, shortSHA(pr.HeadSHA), shortSHA(st.SHA))
+	}
+	if st.HasList && (st.Record == nil || st.Record.Status != cigate.StatusPass) {
+		return nil, fmt.Errorf("no passing local gate for %s; run aiman ci local --wait", shortSHA(st.SHA))
+	}
+	if err := s.verifiedHead(ctx, t); err != nil {
+		return nil, err
+	}
+	return pr, nil
+}
+
+// verifiedHead applies the before-PR verify rule to the session's tree.
+func (s *Server) verifiedHead(ctx context.Context, t ciTarget) error {
+	if s.verifier == nil || !s.verifier.BeforePR() || t.sess.ReviewPR != "" || t.sess.FixPR != "" {
+		return nil
+	}
+	tree, err := verify.TreeHash(ctx, t.top)
+	if err != nil {
+		return fmt.Errorf("hash the tree: %w", err)
+	}
+	if r, ok := s.verifier.ForTree(t.sess.ID, tree); !ok || !r.Passed() {
+		return errors.New("verify has not passed for HEAD; run aiman verify --wait")
+	}
+	return nil
+}
+
+// forgetCILocal drops a session's gate records and logs.
+func (s *Server) forgetCILocal(id string) {
+	if s.ciLocal == nil || s.ciLocal.d.Runner == nil {
+		return
+	}
+	if err := s.ciLocal.d.Runner.Forget(id); err != nil {
+		log.Printf("ci local: forget %s: %v", id, err)
+	}
+}
+
+// GHMarkReady runs gh pr ready number in dir.
+func GHMarkReady(ctx context.Context, dir string, number int) error {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "ready", strconv.Itoa(number)) //nolint:gosec // G204: fixed gh subcommand and a PR number
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("gh pr ready %d: %w: %s", number, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // GHPRLookup runs gh pr view for branch in dir.
