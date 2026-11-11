@@ -334,7 +334,7 @@ func (m *Model) applyDaemonProbe(msg daemonProbeMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil && d.Status == "" {
 		d.Status = domain.DaemonStatusError
 	}
-	if m.agentAPIProbing != nil {
+	if m.agentAPIProbing != nil && (d.Kind == string(remotesvc.KindServe) || d.Kind == "") {
 		delete(m.agentAPIProbing, d.RemoteHost)
 	}
 	m.storeDaemon(d)

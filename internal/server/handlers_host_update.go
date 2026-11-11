@@ -38,6 +38,18 @@ type HostVersionResult struct {
 	Status      string           `json:"status"`
 	CheckedAt   string           `json:"checked_at"`
 	Attempt     *HostUpdateTried `json:"attempt"`
+	// Gateway is the host's aiman-gateway against serve, read live (5s
+	// cache); absent without a manager or a gateway reader.
+	Gateway *HostGateway `json:"gateway,omitempty"`
+}
+
+// HostGateway is the gateway block of host.version. Status is current,
+// behind, updating, failed, unknown or not_installed.
+type HostGateway struct {
+	Installed bool   `json:"installed"`
+	Version   string `json:"version"`
+	Running   bool   `json:"running"`
+	Status    string `json:"status"`
 }
 
 // HostUpdateTried is the last install attempt in host.version.
@@ -48,6 +60,9 @@ type HostUpdateTried struct {
 	Status string `json:"status"`
 	Exit   int    `json:"exit"`
 	Error  string `json:"error"`
+	// Kind is serve or gateway (a gateway repair: From is the gateway's
+	// version, To serve's tag).
+	Kind string `json:"kind"`
 }
 
 // HostUpdateResult is the host.update answer.
@@ -86,7 +101,11 @@ func (s *Server) handleHostVersion(_ context.Context, req Request) Response {
 			Status: string(a.Status),
 			Exit:   a.Exit,
 			Error:  a.Error,
+			Kind:   a.KindOrServe(),
 		}
+	}
+	if g := st.Gateway; g != nil {
+		out.Gateway = &HostGateway{Installed: g.Installed, Version: g.Version, Running: g.Running, Status: g.Status}
 	}
 	return Response{ID: req.ID, Result: out}
 }

@@ -25,7 +25,7 @@ func (m *Model) enterAgentAPI() tea.Cmd {
 	var cmds []tea.Cmd
 	for _, r := range remotes {
 		m.markAgentAPIProbing(r.Host)
-		cmds = append(cmds, probeRemoteServiceCmd(m.cfg, r.Host, remotesvc.KindServe))
+		cmds = append(cmds, probeRemoteServiceCmd(m.cfg, r.Host, remotesvc.KindServe), probeRemoteServiceCmd(m.cfg, r.Host, remotesvc.KindGateway))
 	}
 	return tea.Batch(cmds...)
 }
@@ -107,7 +107,7 @@ func (m *Model) handleAgentAPIUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "r":
 		if d, ok := m.selectedAgentAPIDaemon(); ok {
 			m.markAgentAPIProbing(d.RemoteHost)
-			return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, remotesvc.KindServe)
+			return m, tea.Batch(probeRemoteServiceCmd(m.cfg, d.RemoteHost, remotesvc.KindServe), probeRemoteServiceCmd(m.cfg, d.RemoteHost, remotesvc.KindGateway))
 		}
 		return m, nil
 	}
@@ -194,6 +194,11 @@ func (m *Model) renderAgentAPIView() string {
 				b.WriteString("  " + hint + "\n")
 			}
 			b.WriteString("  " + agentAPIRTKLine(d) + "\n")
+			if gw, ok := m.daemons[domain.DaemonKey(d.RemoteHost, string(remotesvc.KindGateway))]; ok {
+				if line := agentAPIGatewayLine(gw, d); line != "" {
+					b.WriteString("  " + line + "\n")
+				}
+			}
 		}
 		if logs := strings.TrimSpace(d.Logs); logs != "" {
 			b.WriteString("\n" + dimStyle.Render("  Logs") + "\n")
@@ -217,6 +222,30 @@ func agentAPIRTKLine(d domain.Daemon) string {
 
 // rtkGainLine is the per-host line on the $ view. A host without RTK shows
 // nothing.
+// agentAPIGatewayLine reports the phone gateway's version from its last probe
+// against serve's: "gateway v0.42.0", "gateway behind: v0.41.0", or "gateway
+// not installed". A failed probe shows nothing.
+func agentAPIGatewayLine(gw, serve domain.Daemon) string {
+	if gw.Version == "" || gw.Version == "missing" {
+		if gw.Status == domain.DaemonStatusRunning || gw.Status == domain.DaemonStatusError {
+			return ""
+		}
+		return "gateway not installed"
+	}
+	ver := gw.Version
+	if v, ok := remotesvc.ParseVersion(gw.Version); ok {
+		ver = v.String()
+	}
+	if _, _, behind := remotesvc.Outdated(gw.Version, serve.Version); behind {
+		return "gateway behind: " + ver
+	}
+	line := "gateway " + ver
+	if gw.Status != domain.DaemonStatusRunning {
+		line += " (stopped)"
+	}
+	return line
+}
+
 func rtkGainLine(g rtk.Gain, installed bool) string {
 	if !installed {
 		return ""

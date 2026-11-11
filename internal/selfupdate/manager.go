@@ -45,6 +45,9 @@ type Status struct {
 	Status      string
 	CheckedAt   time.Time
 	Attempt     *Attempt
+	// Gateway is the host's aiman-gateway against serve; nil when
+	// ReadGateway is unset.
+	Gateway *GatewayStatus
 }
 
 // Outcome answers Request.
@@ -76,6 +79,15 @@ type Manager struct {
 	Now          func() time.Time
 	// FirstProbeDelay and DeferRetry pace Run; zero means the defaults.
 	FirstProbeDelay, DeferRetry time.Duration
+	// ReadGateway reads the host's aiman-gateway. nil means no gateway
+	// handling: Status.Gateway stays nil and no repair runs.
+	ReadGateway func(context.Context) (Gateway, error)
+	// GatewayScript builds the gateway repair script; nil means
+	// remotesvc.GatewayRepairScript(tag).
+	GatewayScript func(tag string) string
+	// OnGatewayBehind reports, in notify mode, a gateway older than serve
+	// once per gateway version and serve tag.
+	OnGatewayBehind func(gatewayVersion, serveTag string)
 
 	// opMu serialises settle, poll and apply, so two scripts never start.
 	opMu sync.Mutex
@@ -83,6 +95,10 @@ type Manager struct {
 	mu         sync.Mutex
 	deferTag   string
 	deferSince time.Time
+	// gwMu guards the gateway read cache and the read in flight.
+	gwMu     sync.Mutex
+	gwCache  *gatewayRead
+	gwFlight chan struct{}
 }
 
 // events are the callbacks a locked operation queued; they run after the
@@ -90,11 +106,16 @@ type Manager struct {
 type events struct {
 	applied []Attempt
 	release *Release
+	// gatewayBehind is {gateway version, serve tag} for OnGatewayBehind.
+	gatewayBehind *[2]string
 }
 
 func (m *Manager) fire(ev events) {
 	if ev.release != nil && m.OnNewVersion != nil {
 		m.OnNewVersion(*ev.release)
+	}
+	if g := ev.gatewayBehind; g != nil && m.OnGatewayBehind != nil {
+		m.OnGatewayBehind(g[0], g[1])
 	}
 	if m.OnApplied != nil {
 		for _, a := range ev.applied {
@@ -143,13 +164,16 @@ func (m *Manager) save(s State) {
 	}
 }
 
-// Status reports the host's release state from the state file.
+// Status reports the host's release state from the state file, and the
+// gateway from a read at most gatewayCacheTTL old. It never waits for a read
+// already running.
 func (m *Manager) Status() Status {
-	return m.statusOf(m.load())
+	g := m.readGateway(context.Background(), false)
+	return m.statusOf(m.load(), g)
 }
 
-func (m *Manager) statusOf(s State) Status {
-	v := m.judge(s)
+func (m *Manager) statusOf(s State, g *gatewayRead) Status {
+	v := m.judge(s, g, false)
 	st := Status{
 		Version:     m.Version,
 		Latest:      s.Latest.Tag,
@@ -158,8 +182,9 @@ func (m *Manager) statusOf(s State) Status {
 		Status:      v.status,
 		CheckedAt:   s.CheckedAt,
 		Attempt:     s.Attempt,
+		Gateway:     m.gatewayStatus(s, g),
 	}
-	if v.apply && m.Policy.mode() == ModeAuto && m.deferring(v.tag) {
+	if v.apply && v.kind != AttemptKindGateway && m.Policy.mode() == ModeAuto && m.deferring(v.tag) {
 		st.Status = StatusDeferred
 	}
 	return st
@@ -170,9 +195,17 @@ type verdict struct {
 	status string
 	apply  bool // a ready release may be installed, subject to the gate
 	tag    string
+	// kind is AttemptKindGateway when apply means a gateway repair to tag.
+	kind string
+	// gatewayRunning marks a gateway repair still running.
+	gatewayRunning bool
 }
 
-func (m *Manager) judge(s State) verdict {
+// judge decides from the stored state and the gateway read g (nil without a
+// reader). forced is host.update, which repairs the gateway inside the retry
+// interval. A newer serve release always takes the serve path: its lockstep
+// carries the gateway.
+func (m *Manager) judge(s State, g *gatewayRead, forced bool) verdict {
 	switch {
 	case m.Policy.mode() == ModeOff:
 		return verdict{status: StatusHeld}
@@ -181,8 +214,31 @@ func (m *Manager) judge(s State) verdict {
 	}
 	a, lat := s.Attempt, s.Latest
 	if a != nil && a.Status == AttemptStarted {
-		return verdict{status: StatusUpdating, tag: a.To}
+		if !a.IsGateway() {
+			return verdict{status: StatusUpdating, tag: a.To}
+		}
+		v := m.judgeServe(lat, nil)
+		v.apply, v.gatewayRunning = false, true
+		return v
 	}
+	// Serve is judged without the gateway's failures: a failed repair, or
+	// (with a reader) a failed lockstep at serve's own version.
+	if a.IsGateway() || (g != nil && m.gatewayFailedAt(a)) {
+		a = nil
+	}
+	v := m.judgeServe(lat, a)
+	if g == nil {
+		return v
+	}
+	if _, _, newer := remotesvc.Outdated(m.Version, lat.Tag); newer {
+		return v
+	}
+	return m.judgeGateway(s, g, v, forced)
+}
+
+// judgeServe is serve's verdict against the latest release and its last
+// attempt, which is not running.
+func (m *Manager) judgeServe(lat Release, a *Attempt) verdict {
 	if lat.Tag == "" {
 		return verdict{status: StatusUnknown}
 	}
@@ -216,15 +272,24 @@ func (m *Manager) poll(ctx context.Context, fetch bool) Status {
 		return m.Status()
 	}
 	var ev events
+	g := m.readGateway(ctx, true)
 	m.opMu.Lock()
 	s := m.load()
 	ev.add(m.settleLocked(&s))
 	if fetch {
 		m.fetchLocked(ctx, &s)
 	}
-	v := m.judge(s)
+	v := m.judge(s, g, false)
+	gateway := v.kind == AttemptKindGateway
 	switch {
-	case m.Policy.mode() == ModeNotify && v.status == StatusAvailable && s.Notified != v.tag:
+	case m.Policy.mode() == ModeNotify && gateway && v.apply:
+		if key := gatewayKey(g, v.tag); s.NotifiedGateway != key {
+			s.NotifiedGateway = key
+			m.save(s)
+			ev.gatewayBehind = &[2]string{g.gw.Version, v.tag}
+			m.logf("host-update: gateway %s behind serve %s", g.gw.Version, v.tag)
+		}
+	case m.Policy.mode() == ModeNotify && !gateway && v.status == StatusAvailable && s.Notified != v.tag:
 		s.Notified = v.tag
 		m.save(s)
 		rel := s.Latest
@@ -234,10 +299,10 @@ func (m *Manager) poll(ctx context.Context, fetch bool) Status {
 		if n := m.gate(v.tag); n > 0 {
 			m.logf("host-update: %s deferred, %d busy", v.tag, n)
 		} else {
-			ev.add(m.applyLocked(&s, v.tag))
+			ev.add(m.applyLocked(&s, v, g))
 		}
 	}
-	st := m.statusOf(s)
+	st := m.statusOf(s, g)
 	m.opMu.Unlock()
 	m.fire(ev)
 	return st
@@ -259,11 +324,12 @@ func (m *Manager) Request(ctx context.Context) Outcome {
 		return Outcome{Reason: fmt.Sprintf("development build %q does not update itself", m.Version)}
 	}
 	var ev events
+	g := m.readGateway(ctx, true)
 	m.opMu.Lock()
 	s := m.load()
 	ev.add(m.settleLocked(&s))
 	m.fetchLocked(ctx, &s)
-	v := m.judge(s)
+	v := m.judge(s, g, true)
 	out := Outcome{Target: v.tag}
 	switch {
 	case !v.apply:
@@ -271,11 +337,14 @@ func (m *Manager) Request(ctx context.Context) Outcome {
 	default:
 		if n := m.gate(v.tag); n > 0 {
 			out.Reason = fmt.Sprintf("serve is busy (%d long calls, logins, handovers or agent updates); try again shortly", n)
-		} else if a := m.applyLocked(&s, v.tag); a != nil {
+		} else if a := m.applyLocked(&s, v, g); a != nil {
 			ev.add(a)
 			out.Reason = a.Error
 		} else {
 			out.Accepted = true
+			if v.kind == AttemptKindGateway {
+				out.Reason = ReasonGateway
+			}
 		}
 	}
 	m.opMu.Unlock()
@@ -284,6 +353,9 @@ func (m *Manager) Request(ctx context.Context) Outcome {
 }
 
 func (m *Manager) refusal(v verdict, s State) string {
+	if v.gatewayRunning {
+		return fmt.Sprintf("a gateway update to %s is already running", s.Attempt.To)
+	}
 	switch v.status {
 	case StatusCurrent:
 		return fmt.Sprintf("%s is the latest release", m.Version)
@@ -355,32 +427,42 @@ func (m *Manager) deferring(tag string) bool {
 	return m.deferTag == tag && !m.deferSince.IsZero()
 }
 
-// applyLocked saves a started attempt, starts the script and saves the PID.
-// It returns the attempt only when it failed to start, for OnApplied.
-func (m *Manager) applyLocked(s *State, tag string) *Attempt {
+// applyLocked saves a started attempt for verdict v, starts its script (the
+// serve update, or the gateway repair) and saves the PID. It returns the
+// attempt only when it failed to start, for OnApplied.
+func (m *Manager) applyLocked(s *State, v verdict, g *gatewayRead) *Attempt {
+	tag := v.tag
 	if err := os.Remove(m.ResultPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		m.logf("host-update: remove %s: %v", m.ResultPath, err)
 	}
 	a := &Attempt{At: m.now(), From: m.Version, To: tag, Status: AttemptStarted}
+	script := m.script
+	what := tag
+	if v.kind == AttemptKindGateway {
+		a.Kind, script, what = AttemptKindGateway, m.gatewayScript, "gateway "+tag
+		if g != nil {
+			a.From = g.gw.Version
+		}
+	}
 	s.Attempt = a
 	if err := s.Save(m.StatePath); err != nil {
 		// Without a saved attempt nothing could settle the install.
 		a.Status, a.Error = AttemptFailed, "save state: "+err.Error()
-		m.logf("host-update: %s not installed: %s", tag, a.Error)
+		m.logf("host-update: %s not installed: %s", what, a.Error)
 		out := *a
 		return &out
 	}
-	pid, err := m.Runner.Start(tag, m.script(tag))
+	pid, err := m.Runner.Start(tag, script(tag))
 	if err != nil {
 		a.Status, a.Error = AttemptFailed, "start update script: "+err.Error()
 		m.save(*s)
-		m.logf("host-update: %s not installed: %s", tag, a.Error)
+		m.logf("host-update: %s not installed: %s", what, a.Error)
 		out := *a
 		return &out
 	}
 	a.PID = pid
 	m.save(*s)
-	m.logf("host-update: installing %s (pid %d)", tag, pid)
+	m.logf("host-update: installing %s (pid %d)", what, pid)
 	go m.watch()
 	return nil
 }

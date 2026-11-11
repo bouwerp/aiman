@@ -33,6 +33,9 @@ const autoUpdateRetryAfter = 30 * time.Minute
 //     remotesvc.Outdated for why a dev build or a newer remote is left alone.
 //   - not while the host's own install (the probe's SELFUPDATE= line) is
 //     started and younger than remotesvc.OpTimeout.
+//   - not the gateway of a host whose own update manager runs (the serve
+//     probe's HostManaged); the host updates it. The Daemons tab's manual u
+//     still does.
 //   - once per remote per interval, so a repeatedly failing update does not
 //     retry on every probe.
 func (m *Model) maybeAutoUpdateServe(d domain.Daemon) tea.Cmd {
@@ -50,6 +53,9 @@ func (m *Model) maybeAutoUpdateServe(d domain.Daemon) tea.Cmd {
 	// The host's own install carries serve and the gateway; a second install
 	// from here would pkill the first.
 	if hostSelfUpdating(d.SelfUpdate) || hostSelfUpdating(m.daemons[domain.DaemonKey(d.RemoteHost, string(remotesvc.KindServe))].SelfUpdate) {
+		return nil
+	}
+	if d.Kind == string(remotesvc.KindGateway) && m.daemons[domain.DaemonKey(d.RemoteHost, string(remotesvc.KindServe))].HostManaged {
 		return nil
 	}
 	remote, local, outdated := remotesvc.Outdated(d.Version, m.version)
