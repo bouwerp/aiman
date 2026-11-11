@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/cigate"
 	"github.com/bouwerp/aiman/internal/server"
 )
@@ -20,13 +21,67 @@ const ciPollEvery = 5 * time.Second
 type ciCaller func(method string, params map[string]any) (json.RawMessage, error)
 
 func runCI(args []string, getenv func(string) string) error {
+	if len(args) == 2 && args[0] == "gate" && args[1] == "--hook" {
+		if code := ciGateHook(os.Stdin, getenv, callCIMethod, os.Stderr); code != 0 {
+			return cliExit{code: code}
+		}
+		return nil
+	}
 	return ciMain(args, getenv, callCIMethod, os.Stdout, time.Sleep)
+}
+
+// cliExit makes main exit with code and print nothing more.
+type cliExit struct{ code int }
+
+func (e cliExit) Error() string { return fmt.Sprintf("exit %d", e.code) }
+
+// ciGateHook is the Go half of the PreToolUse CI gate: it reads the hook
+// payload, asks serve's ci.gate about a push, PR create or PR ready, and
+// answers the hook's exit code. 2 blocks the call with stderr as the reason;
+// anything that is none of the three passes without asking serve.
+func ciGateHook(stdin io.Reader, getenv func(string) string, call ciCaller, stderr io.Writer) int {
+	payload, err := io.ReadAll(stdin)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "aiman ci gate: read the hook payload: %v\n", err)
+		return 2
+	}
+	q, ok := agenthook.GateQuestionFor(payload)
+	if !ok {
+		return 0
+	}
+	params := map[string]any{"session": strings.TrimSpace(getenv("AIMAN_ID")), "kind": q.Kind, "command": q.Command}
+	if q.Draft {
+		params["draft"] = true
+	}
+	raw, err := call("ci.gate", params)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "aiman ci gate: serve did not answer (%v); the %s is blocked until it does\n", err, q.Kind)
+		return 2
+	}
+	var res struct {
+		Allow  bool   `json:"allow"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		_, _ = fmt.Fprintf(stderr, "aiman ci gate: unreadable answer from serve: %v\n", err)
+		return 2
+	}
+	if res.Allow {
+		return 0
+	}
+	reason := res.Reason
+	if reason == "" {
+		reason = "aiman: the local CI gate refused this " + q.Kind
+	}
+	_, _ = fmt.Fprintln(stderr, reason)
+	return 2
 }
 
 func ciUsage() error {
 	fmt.Fprintf(os.Stderr, "Usage: aiman ci local [--wait] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman ci status [--json] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman ci gate --kind push|create|ready [--command CMD] [--draft] [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman ci gate --hook   (Claude PreToolUse payload on stdin; exit 2 blocks)\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
 	fmt.Fprintf(os.Stderr, "ci watch and ci get: aiman rpc ci.watch / ci.get.\n")
 	return errUsage

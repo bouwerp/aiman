@@ -54,8 +54,8 @@ else
 fi
 `
 
-// removePreToolUseHook drops marker-owned Bash gate groups.
-func removePreToolUseHook(root map[string]any) bool {
+// removePreToolUseHook drops the Bash gate groups that marker owns.
+func removePreToolUseHook(root map[string]any, marker string) bool {
 	hooks, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return false
@@ -64,7 +64,7 @@ func removePreToolUseHook(root map[string]any) bool {
 	kept := make([]any, 0, len(groups))
 	changed := false
 	for _, group := range groups {
-		if commandHasMarker(group, GateMarker) {
+		if commandHasMarker(group, marker) {
 			changed = true
 			continue
 		}
@@ -81,8 +81,8 @@ func removePreToolUseHook(root map[string]any) bool {
 	return true
 }
 
-// upsertPreToolUseHook installs one marker-owned Bash gate group.
-func upsertPreToolUseHook(root map[string]any, command string) bool {
+// upsertPreToolUseHook installs one Bash gate group that marker owns.
+func upsertPreToolUseHook(root map[string]any, command, marker string) bool {
 	hooks, ok := root["hooks"].(map[string]any)
 	if !ok {
 		hooks = map[string]any{}
@@ -90,7 +90,7 @@ func upsertPreToolUseHook(root map[string]any, command string) bool {
 	}
 	groups, _ := hooks["PreToolUse"].([]any)
 	if len(groups) > 0 {
-		found, changed := replaceMarkedCommand(groups, command, GateMarker)
+		found, changed := replaceMarkedCommand(groups, command, marker)
 		if found {
 			return changed
 		}

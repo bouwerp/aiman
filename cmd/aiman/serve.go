@@ -270,7 +270,9 @@ func runServe() error {
 	srv.SetRepoLister(gitManager)
 	srv.SetRestartDeps(server.RestartDeps{Config: cfg, Engine: flow.SkillEngine, Ignorer: gitManager})
 	srv.SetConsultDir(filepath.Join(dir, "consults"))
-	// The local CI gate (internal/cigate) plugs in through srv.SetLandGate.
+	if g := srv.CILandGate(); g != nil {
+		srv.SetLandGate(g)
+	}
 	srv.SetLandDir(filepath.Join(dir, "land"))
 	srv.SetReviewGitHub(&review.GHCLI{Run: review.ExecRun, RunInput: review.ExecRunInput})
 	srv.SetReviewWorktrees(gitManager)
@@ -387,8 +389,19 @@ func skillRoots(sessions []domain.Session) []string {
 }
 
 // agentHookOptions is what serve's config asks of the agent hooks.
+// The CI gate hook goes in when children land locally or any repo has a
+// local gate list.
 func agentHookOptions(cfg *config.Config) agenthook.Options {
-	return agenthook.Options{BeforePR: cfg.Verify.BeforePR}
+	return agenthook.Options{BeforePR: cfg.Verify.BeforePR, CIGate: !cfg.CoordinatorChildPRs() || anyRepoCILocal(cfg.Repos)}
+}
+
+func anyRepoCILocal(repos map[string]config.RepoBootstrap) bool {
+	for _, r := range repos {
+		if len(r.CI.Local) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func ensureAgentHooks(opts agenthook.Options) {
