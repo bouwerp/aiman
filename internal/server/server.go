@@ -154,6 +154,8 @@ type Server struct {
 
 	// ciWatch polls watched sessions' PRs; nil until SetCIWatcher.
 	ciWatch *ciwatch.Watcher
+	// ciLocal runs the local CI gate and answers ci.gate; nil until SetCILocal.
+	ciLocal *ciLocalState
 	// verifier runs reviewer sessions; nil until SetVerifier.
 	verifier *verify.Manager
 	// handovers runs handover child agents; nil until SetHandovers, and then
@@ -444,10 +446,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleVerifyStart(ctx, req)
 	case "verify.status":
 		return s.handleVerifyStatus(ctx, req)
-	case "ci.get":
-		return s.handleCIGet(ctx, req)
-	case "ci.watch":
-		return s.handleCIWatch(ctx, req)
+	case "ci.get", "ci.watch", "ci.local", "ci.status", "ci.gate":
+		return s.dispatchCI(ctx, req)
 	case "context.put":
 		return s.handleContextPut(ctx, req)
 	case "context.get":

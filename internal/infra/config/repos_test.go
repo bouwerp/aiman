@@ -85,3 +85,22 @@ func TestLookupRepoCaseInsensitive(t *testing.T) {
 		t.Fatal("nil map should find nothing")
 	}
 }
+
+func TestMarshalServeConfigCarriesRepoCIAndChildPRs(t *testing.T) {
+	cfg := &Config{
+		Repos:       map[string]RepoBootstrap{"o/n": {CI: RepoCI{DraftsSkipCI: true, Local: []RepoCICommand{{Name: "lint", Run: "make lint"}}}}},
+		Coordinator: CoordinatorConfig{ChildPRs: true},
+	}
+	body, err := cfg.MarshalServeConfig("h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ServeConfig
+	if err := yaml.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	ci := got.Repos["o/n"].CI
+	if !ci.DraftsSkipCI || len(ci.Local) != 1 || ci.Local[0].Run != "make lint" || !got.Coordinator.ChildPRs {
+		t.Fatalf("ci or child_prs not carried: %s", body)
+	}
+}

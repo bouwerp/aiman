@@ -67,7 +67,7 @@ func run() error {
 	os.Args = append([]string{os.Args[0]}, parsed.Rest...)
 
 	// `pty`, `session`, `rpc`, `todo`, `usage`, `limits`, `agents`, `design`,
-	// `verify` and `review` talk only to the agent API socket (and `pty hold` not even
+	// `verify`, `review` and `ci` talk only to the agent API socket (and `pty hold` not even
 	// to that: it is the detached holder, handed an explicit --root and --id).
 	// `slack` talks to the Slack Web API with the host user token.
 	// `aws` only prints text derived from the config file.
@@ -107,6 +107,8 @@ func run() error {
 			return runDesign(parsed.Rest[1:], os.Getenv)
 		case "review":
 			return runReview(parsed.Rest[1:], os.Getenv)
+		case "ci":
+			return runCI(parsed.Rest[1:], os.Getenv)
 		case "verify":
 			return runVerify(parsed.Rest[1:])
 		case "slack":
