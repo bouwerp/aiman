@@ -156,6 +156,8 @@ type Server struct {
 	ciWatch *ciwatch.Watcher
 	// verifier runs reviewer sessions; nil until SetVerifier.
 	verifier *verify.Manager
+	// land holds session.land's lock directory and local gate.
+	land landDeps
 	// handovers runs handover child agents; nil until SetHandovers, and then
 	// writeHandover keeps the mechanical write and enqueues the memory job.
 	handovers *handoverchild.Manager
@@ -432,7 +434,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleMove(ctx, req)
 	case "session.forget":
 		return s.handleForget(ctx, req)
-	case "session.restart", "session.terminate", "repo.list", "host.stats", "host.version", "host.update":
+	case "session.restart", "session.terminate", "session.land", "repo.list", "host.stats", "host.version", "host.update":
 		return s.dispatchLifecycle(ctx, req)
 	case "session.register":
 		return s.handleRegister(ctx, req)

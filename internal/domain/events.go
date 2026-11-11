@@ -88,6 +88,10 @@ const (
 	// to steer because of its author: comment id, author, association. The body
 	// is never recorded.
 	EventReviewCommentIgnored EventKind = "review.comment_ignored"
+	// EventChildLanded records on the child's and the parent's ledgers a
+	// child aiman land merged onto its parent's branch: child, parent
+	// branch and merge sha. It is written only after the push succeeded.
+	EventChildLanded EventKind = "child.landed"
 	// EventAWSLoginStarted records a phone AWS sign-in's start: profile and
 	// state. Codes, urls, tokens and the login id are never recorded.
 	EventAWSLoginStarted EventKind = "aws.login_started"

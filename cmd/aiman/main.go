@@ -66,7 +66,7 @@ func run() error {
 	}
 	os.Args = append([]string{os.Args[0]}, parsed.Rest...)
 
-	// `pty`, `session`, `rpc`, `todo`, `usage`, `limits`, `agents`, `design`,
+	// `pty`, `session`, `rpc`, `todo`, `usage`, `limits`, `agents`, `design`, `land`,
 	// `verify` and `review` talk only to the agent API socket (and `pty hold` not even
 	// to that: it is the detached holder, handed an explicit --root and --id).
 	// `slack` talks to the Slack Web API with the host user token.
@@ -105,6 +105,8 @@ func run() error {
 			return runHost(parsed.Rest[1:])
 		case "design":
 			return runDesign(parsed.Rest[1:], os.Getenv)
+		case "land":
+			return runLand(parsed.Rest[1:], os.Getenv)
 		case "review":
 			return runReview(parsed.Rest[1:], os.Getenv)
 		case "verify":

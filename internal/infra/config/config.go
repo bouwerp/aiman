@@ -49,6 +49,8 @@ type Config struct {
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
+	// Coordinator configures how children deliver work to their coordinator.
+	Coordinator CoordinatorConfig `yaml:"coordinator,omitempty"`
 	// Roles overrides agent, model and effort for sessions with a role.
 	Roles RolesConfig `yaml:"roles,omitempty"`
 	// Host configures how serve keeps the host's aiman binaries current.
@@ -94,6 +96,8 @@ type ServeConfig struct {
 	// Repos maps an owner/name slug to the bootstrap applied to its new
 	// worktrees.
 	Repos map[string]RepoBootstrap `yaml:"repos,omitempty"`
+	// Coordinator configures how children deliver work to their coordinator.
+	Coordinator CoordinatorConfig `yaml:"coordinator,omitempty"`
 	// Roles overrides agent, model and effort for sessions with a role.
 	Roles RolesConfig `yaml:"roles,omitempty"`
 	// AWS carries this host's delegations for the phone's AWS sign-in.
@@ -439,6 +443,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Review:        c.Review,
 		CI:            c.CI,
 		Repos:         c.Repos,
+		Coordinator:   c.Coordinator,
 		Roles:         c.Roles,
 		AWS:           c.serveAWSFor(host),
 		Host:          c.Host,

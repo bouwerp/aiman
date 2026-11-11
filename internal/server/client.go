@@ -365,6 +365,8 @@ func slowCall(method string) (time.Duration, bool) {
 		return SessionRestartTimeout + 15*time.Second, true
 	case "session.terminate":
 		return SessionTerminateTimeout + 15*time.Second, true
+	case "session.land":
+		return SessionLandTimeout + 15*time.Second, true
 	case "repo.list":
 		return RepoListTimeout + 15*time.Second, false
 	case "design.publish":

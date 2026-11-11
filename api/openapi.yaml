@@ -376,6 +376,8 @@ components:
             worktree_dirty refuses session.terminate while removing the
             worktree would lose work, and data says what. needs_operator
             refuses a session's call to session.restart or session.terminate.
+            land_parent_diverged, land_conflict (data lists files) and
+            land_busy refuse session.land, which is not a device method.
             session_scope refuses a session's pty.create, pty.input, pty.run,
             pty.kill, pty.forget, session.prompt, session.forget or steer.send
             on anything but itself, a descendant or its own helper pty, except
@@ -532,6 +534,7 @@ components:
             - session.forget
             - session.restart
             - session.terminate
+            - session.land
             - repo.list
             - host.stats
             - host.version
