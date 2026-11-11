@@ -332,6 +332,45 @@ still gets an independent reviewer. The `V verify` hint appears for a non-review
 with commits ahead of its base; `verify.test_command` supplies the evidence a passing
 review needs.
 
+#### Local CI gate
+
+A repository lists the checks its CI runs in `.aiman/ci-local.yaml`, read from the
+commit being checked; `repos.<slug>.ci.local` in the operator's config replaces it.
+
+```yaml
+# .aiman/ci-local.yaml
+setup: bun install --frozen-lockfile    # runs first in the snapshot
+commands:
+  - name: lint
+    run: bun run lint
+  - name: api
+    run: bunx vitest run
+    dir: api                            # relative to the repo root
+    timeout: 20m                        # default 45m
+```
+
+```yaml
+# ~/.aiman/config.yaml
+repos:
+  owner/name:
+    ci:
+      drafts_skip_ci: true   # the repo's workflows skip draft PRs; a draft is free
+      local:                 # overrides .aiman/ci-local.yaml
+        - {name: lint, run: npm run lint}
+coordinator:
+  child_prs: false           # default: children land with aiman land, not a PR
+```
+
+`aiman ci local [--wait]` needs a clean tree and runs the list against `HEAD` in a
+detached snapshot worktree on the host (only the `repos.<slug>.copy` files are copied, no
+symlinks), with `bash -lc` at the agent's nice level, stopping at the first failure. At
+most 2 runs go at once per host. `aiman ci status` prints the record for `HEAD` and the
+last 60 lines of a failed command's log. Records live in
+`~/.aiman/ci-local/<session>/<sha>.json`; a session keeps the newest 5 plus `HEAD`'s.
+`ci.gate` answers whether a push, PR create or ready may go out: a push to a branch with
+an open PR that runs CI needs a passing record for `HEAD`, and so does a PR create in a
+repo that does not skip drafts.
+
 Every handover (archive, forget, restart, agent switch, pre-compact) first writes a
 mechanical `.aiman_handover.md`. With `handover.child` on, serve then starts a hidden
 child agent in `~/.aiman/handovers/<run-id>/` that reads the transcript, rewrites the

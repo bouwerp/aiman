@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // RepoBootstrap prepares a fresh worktree of one repository. Copy and
@@ -23,6 +24,25 @@ type RepoBootstrap struct {
 	AgentOverrides map[string]AgentDefaults `yaml:"agent_overrides,omitempty"`
 	// Review is per-repo review sandbox settings.
 	Review RepoReview `yaml:"review,omitempty"`
+	// CI is the repo's local CI gate settings.
+	CI RepoCI `yaml:"ci,omitempty"`
+}
+
+// RepoCI is repos.<slug>.ci. Local, when set, replaces the repository's own
+// .aiman/ci-local.yaml. DraftsSkipCI says the repo's workflows skip draft PRs,
+// so aiman treats a draft PR as free.
+type RepoCI struct {
+	DraftsSkipCI bool            `yaml:"drafts_skip_ci,omitempty"`
+	Local        []RepoCICommand `yaml:"local,omitempty"`
+}
+
+// RepoCICommand is one local gate command. Dir is relative to the repository
+// root; Timeout is a duration string, 45m when empty.
+type RepoCICommand struct {
+	Name    string `yaml:"name"`
+	Run     string `yaml:"run"`
+	Dir     string `yaml:"dir,omitempty"`
+	Timeout string `yaml:"timeout,omitempty"`
 }
 
 // RepoReview is repos.<slug>.review: the sandbox image override and the
@@ -56,7 +76,8 @@ func LookupRepo(repos map[string]RepoBootstrap, slug string) (RepoBootstrap, boo
 }
 
 // Validate rejects Copy and Symlink entries that are empty, absolute, name
-// the repository root, or escape it with "..".
+// the repository root, or escape it with "..", and ci.local entries without a
+// name or run, or whose dir is absolute or escapes the repository.
 func (b RepoBootstrap) Validate() error {
 	for _, set := range []struct {
 		kind  string
@@ -65,6 +86,28 @@ func (b RepoBootstrap) Validate() error {
 		for _, p := range set.paths {
 			if err := validateRepoRelPath(p); err != nil {
 				return fmt.Errorf("repos %s entry %q: %w", set.kind, p, err)
+			}
+		}
+	}
+	return b.CI.validate()
+}
+
+func (c RepoCI) validate() error {
+	for i, cmd := range c.Local {
+		if strings.TrimSpace(cmd.Name) == "" {
+			return fmt.Errorf("repos ci.local entry %d: name is required", i+1)
+		}
+		if strings.TrimSpace(cmd.Run) == "" {
+			return fmt.Errorf("repos ci.local entry %q: run is required", cmd.Name)
+		}
+		if d := strings.TrimSpace(cmd.Dir); d != "" && filepath.Clean(d) != "." {
+			if err := validateRepoRelPath(d); err != nil {
+				return fmt.Errorf("repos ci.local entry %q dir %q: %w", cmd.Name, d, err)
+			}
+		}
+		if t := strings.TrimSpace(cmd.Timeout); t != "" {
+			if d, err := time.ParseDuration(t); err != nil || d <= 0 {
+				return fmt.Errorf("repos ci.local entry %q timeout %q is not a positive duration", cmd.Name, t)
 			}
 		}
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/bouwerp/aiman/internal/cigate"
 	"io"
 	"log"
 	"os"
@@ -179,6 +180,11 @@ func runServe() error {
 	srv.SetPeerNotes(cfg.Sessions.PeerNotesOn())
 	srv.SetHostLoad(cfg.Host.Load)
 	srv.SetAgentNice(cfg.Host.Load.AgentNiceOrDefault())
+	srv.SetCILocal(server.CILocalDeps{
+		Runner:   &cigate.Runner{Dir: filepath.Join(dir, "ci-local"), MaxParallel: 2},
+		Repos:    cfg.Repos,
+		ChildPRs: cfg.CoordinatorChildPRs(),
+	})
 	// SIGUSR1 (aiman host dump) and a run at the in-flight cap write a dump
 	// here, where the journal cannot drop it.
 	go srv.HandleDumpSignals(ctx, filepath.Join(dir, "logs"))
@@ -243,7 +249,7 @@ func runServe() error {
 
 	ciDeps := ciwatch.Deps{
 		Sessions: db,
-		GitHub:   ciwatch.GHCLI{},
+		GitHub:   srv.PRCacheGitHub(ciwatch.GHCLI{}),
 		Todos:    srv.TodoAccess(),
 		Steer: func(id string, author domain.TodoAuthor, text string) {
 			srv.Steerer().Enqueue(server.SteerNote{SessionID: id, Author: author, Text: text})
