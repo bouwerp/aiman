@@ -411,6 +411,24 @@ Every PR CI run costs money, so a PR goes ready once and each fix is pushed once
 
 Do not run `aiman verify` from a reviewer session.
 
+## Host resources
+
+Every session runs in its own systemd scope with a memory budget: 6G soft (`memory_high`) and 10G hard (`memory_max`) by default. Past the soft limit only your session is throttled; at the hard limit the kernel kills processes in it. Helper ptys you create with `aiman pty create` under your id count against the same budget. A host without user systemd sets no limits; the rules below still apply.
+
+```bash
+aiman resources --session "$AIMAN_ID"
+```
+
+That prints your actual limits and your memory, CPU and pressure. Check it before heavy work. Near the limit, stop and reduce parallelism; do not retry the same command.
+
+- Run one heavy job at a time, with low parallelism: `jest --maxWorkers=2`, `vitest --maxWorkers=2`, `go test -p 2`, PyTorch and Ultralytics `workers<=2`.
+- Never run `go test -race ./...` across a whole module, and never run a race or full-suite job beside another heavy job.
+- `$TMPDIR` is `~/.aiman/tmp/<session id>`, on disk. Put venvs, clones, datasets and other scratch there or in your worktree, never under `/tmp` directly: `/tmp` can be RAM. The directory is deleted when the session is terminated or forgotten, so keep nothing there that must outlive it.
+- Ask the operator before GPU work, training, or any job that needs several GB.
+- Only the operator raises a limit (`aiman session limits`). If the work needs more, say how much and why, then wait.
+- An `[aiman]` note saying this session is at X/Y memory and is being throttled means reduce parallelism now. Do not retry at the same size.
+- Do not relaunch a job the operator killed or the kernel OOM-killed without asking.
+
 ## Safety
 
 - Use `--name` / `--group "$AIMAN_GROUP"` for helpers. They nest under you unless you pass `--orphan`. Do not steal focus from the user's TUI (there is none on this host).
