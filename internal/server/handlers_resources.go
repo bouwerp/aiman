@@ -114,8 +114,8 @@ func (s *Server) raiseResourceAlert(ctx context.Context, a cgroup.Alert) {
 			"memory_pressure": a.Usage.MemoryPressure, "throttled": a.Throttled,
 		})
 		// A hidden helper runs serve's brief; its parent's operator was told.
-		if st := s.Steerer(); st != nil && !hidden {
-			st.Enqueue(SteerNote{SessionID: a.SessionID, Author: domain.AuthorAiman, Text: resourceAlertNote(a)})
+		if !hidden {
+			s.Steerer().Enqueue(SteerNote{SessionID: a.SessionID, Author: domain.AuthorAiman, Text: resourceAlertNote(a)})
 		}
 	default:
 		what := "all sessions together are"

@@ -28,7 +28,7 @@ func fakeScope(t *testing.T, dir string, files map[string]string) {
 
 // resourcesRig is a server whose sampler reads a fake cgroup tree holding a
 // scope for session "a".
-func resourcesRig(t *testing.T) (*Server, *cgroup.Systemd, *[][]string) {
+func resourcesRig(t *testing.T) (*Server, *[][]string) {
 	t.Helper()
 	srv, opts := resourceServer(t, rulesRow("a", ""), rulesRow("b", ""))
 	var calls [][]string
@@ -47,7 +47,7 @@ func resourcesRig(t *testing.T) (*Server, *cgroup.Systemd, *[][]string) {
 	sampler.Sessions = srv.resourceSessions
 	sampler.Sample(context.Background(), time.Now())
 	srv.sampler.Store(sampler)
-	return srv, sd, &calls
+	return srv, &calls
 }
 
 func resourcesOf(t *testing.T, resp Response) ResourcesReport {
@@ -67,7 +67,7 @@ func resourcesOf(t *testing.T, resp Response) ResourcesReport {
 }
 
 func TestResourcesGetReportsSessionsSliceAndHost(t *testing.T) {
-	srv, _, _ := resourcesRig(t)
+	srv, _ := resourcesRig(t)
 	r := resourcesOf(t, rulesCall(t, srv, "", "resources.get", nil))
 	if !r.Supported || len(r.Sessions) != 1 || r.Sessions[0].ID != "a" || r.Sessions[0].Name == "" {
 		t.Fatalf("sessions: %+v", r)
@@ -107,7 +107,7 @@ func TestResourcesGetUnsupported(t *testing.T) {
 }
 
 func TestSessionLimitsStoresAndAppliesForTheOperatorOnly(t *testing.T) {
-	srv, _, calls := resourcesRig(t)
+	srv, calls := resourcesRig(t)
 	if resp := rulesCall(t, srv, "b", "session.limits", map[string]any{"session": "a", "memory_high": "12G"}); resp.Error == nil || resp.Error.Code != CodeNeedsOperator {
 		t.Fatalf("session caller: %+v", resp)
 	}

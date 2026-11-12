@@ -14,6 +14,15 @@ import (
 
 const resourcesUsage = "Usage: aiman resources [--session NAME] [--json]\n"
 
+// runLimitsOrResources routes `aiman limits` (provider limits) and `aiman
+// resources` (session memory and CPU), the two read-only usage reports.
+func runLimitsOrResources(args []string, in io.Reader, out io.Writer) error {
+	if args[0] == "resources" {
+		return runResources(args[1:], out)
+	}
+	return runLimits(args[1:], in, out)
+}
+
 // runResources is `aiman resources`: each session's memory, CPU and
 // pressure against its limits, with the slice and host totals.
 func runResources(args []string, out io.Writer) error {

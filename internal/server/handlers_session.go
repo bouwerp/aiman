@@ -1173,7 +1173,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if root := createGitRoot(caller, existing, hostHome()); root != "" {
 		cfg.SSHManager = local.NewExecutor(root)
 	}
-	if !params.limitParams.empty() {
+	if !params.empty() {
 		// The override is stored under the id before the terminal starts.
 		cfg.SessionID = uuid.NewString()
 		if refused := s.createLimits(ctx, req, params.limitParams, cfg.SessionID); refused != nil {
