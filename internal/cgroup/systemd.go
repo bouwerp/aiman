@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,6 +143,21 @@ func RunArgv(id string, l Limits) []string {
 		argv = append(argv, "-p", p)
 	}
 	return append(argv, "--")
+}
+
+// Launch says how to put a new holder in the session id's scope: the
+// command prefix that starts it in a fresh scope, or, when the scope still
+// exists (a restart whose old processes linger, or a second terminal of the
+// same session), the directory the holder joins, with the limits applied to
+// the running scope. It implements ptyruntime.Scoper.
+func (s *Systemd) Launch(id string, l Limits) (prefix []string, join string) {
+	if !s.Active(id) {
+		return RunArgv(id, l), ""
+	}
+	if err := s.SetLimits(context.Background(), id, l); err != nil {
+		log.Printf("cgroup: %v", err)
+	}
+	return nil, s.ScopeDir(id)
 }
 
 // SetLimits applies l to the session id's running scope. The change is not
