@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"github.com/bouwerp/aiman/internal/cgroup"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/notify"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
 func fakeScope(t *testing.T, dir string, files map[string]string) {
@@ -203,5 +207,55 @@ func TestResourceAlertNotifiesAndSteers(t *testing.T) {
 	}
 	if n := store.rows[1]; n.SessionID != "" || n.Text != "on h this host's user slice is at 22G/24G memory: the whole host slows down past the limit" {
 		t.Fatalf("slice notification: %+v", n)
+	}
+}
+
+func TestSessionAdoptScopeRefusals(t *testing.T) {
+	srv, calls := resourcesRig(t)
+	if resp := rulesCall(t, srv, "b", "session.adopt_scope", map[string]any{"session": "a"}); resp.Error == nil || resp.Error.Code != CodeNeedsOperator {
+		t.Fatalf("session caller: %+v", resp)
+	}
+	// No running terminal: nothing to move, and systemd is not asked.
+	if resp := rulesCall(t, srv, "", "session.adopt_scope", map[string]any{"session": "a"}); resp.Error == nil || resp.Error.Code != CodeInvalidParams {
+		t.Fatalf("no terminal: %+v", resp)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("a refused call reached systemd: %v", *calls)
+	}
+
+	plain, _ := resourceServer(t, rulesRow("a", ""))
+	if resp := rulesCall(t, plain, "", "session.adopt_scope", map[string]any{"session": "a"}); resp.Error == nil || resp.Error.Code != CodeUnavailable {
+		t.Fatalf("no systemd: %+v", resp)
+	}
+}
+
+// A running session's holder child, its descendants and nothing of another
+// session are what adopt-scope moves.
+func TestScopeProcsListsTheSessionsTree(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs /proc")
+	}
+	child := exec.Command("tail", "-f", "/dev/null")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	other := exec.Command("tail", "-f", "/dev/null")
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Process.Kill(); _ = other.Wait() })
+
+	srv, _ := rulesServer(t, []domain.Session{rulesRow("a", ""), rulesRow("b", "")},
+		ptyruntime.SessionInfo{ID: "a", Status: ptyruntime.StatusRunning, PID: child.Process.Pid},
+		ptyruntime.SessionInfo{ID: "b", Status: ptyruntime.StatusRunning, PID: other.Process.Pid},
+	)
+	srv.holderHeld = func(int) bool { return true }
+	got := srv.scopeProcs(context.Background(), "a")
+	if !slices.Contains(got, child.Process.Pid) || slices.Contains(got, other.Process.Pid) {
+		t.Fatalf("scopeProcs(a) = %v; want %d and not %d", got, child.Process.Pid, other.Process.Pid)
+	}
+	if got := srv.scopeProcs(context.Background(), "nobody"); len(got) != 0 {
+		t.Fatalf("scopeProcs(nobody) = %v", got)
 	}
 }

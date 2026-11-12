@@ -79,7 +79,7 @@ func printResources(out io.Writer, result any) error {
 		fmt.Fprintf(out, "all sessions:  %s\n", memoryOfLimit(u.MemoryCurrent, u.MemoryHigh))
 	}
 	if r.Missing != "" {
-		fmt.Fprintf(out, "session %s has no scope: it runs without limits until its terminal is restarted\n", r.Missing)
+		fmt.Fprintf(out, "session %s has no scope: it runs without limits until its terminal is restarted or the operator runs aiman session adopt-scope\n", r.Missing)
 		return nil
 	}
 	if len(r.Sessions) == 0 {

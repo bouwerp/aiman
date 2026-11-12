@@ -226,19 +226,8 @@ func runSession(args []string) error {
 			return errUsage
 		}
 		return callAndPrint(sock, "session.move", map[string]any{"id": target, "group": flags["group"]})
-	case "limits":
-		flags, rest := takeFlags(args[1:])
-		if len(rest) != 1 {
-			writeCLIError(server.CodeInvalidParams, "session limits <target> [--memory-high SIZE] [--memory-max SIZE]")
-			return errUsage
-		}
-		params := map[string]any{"session": rest[0]}
-		for flag, param := range map[string]string{"memory-high": "memory_high", "memory-max": "memory_max"} {
-			if flags[flag] != "" {
-				params[param] = flags[flag]
-			}
-		}
-		return callAndPrint(sock, "session.limits", params)
+	case "limits", "adopt-scope":
+		return runSessionScope(sock, args)
 	default:
 		writeCLIError(server.CodeInvalidParams, "unknown session command "+args[0])
 		return errUsage
@@ -524,4 +513,29 @@ func formatSessionEvent(ev domain.SessionEvent) string {
 
 func blockBareTUI(aimanEnv string, tty bool) bool {
 	return strings.TrimSpace(aimanEnv) == "1" || !tty
+}
+
+// runSessionScope runs `session limits` and `session adopt-scope`, the two
+// commands that act on a session's cgroup scope.
+func runSessionScope(sock string, args []string) error {
+	if args[0] == "limits" {
+		flags, rest := takeFlags(args[1:])
+		if len(rest) != 1 {
+			writeCLIError(server.CodeInvalidParams, "session limits <target> [--memory-high SIZE] [--memory-max SIZE]")
+			return errUsage
+		}
+		params := map[string]any{"session": rest[0]}
+		for flag, param := range map[string]string{"memory-high": "memory_high", "memory-max": "memory_max"} {
+			if flags[flag] != "" {
+				params[param] = flags[flag]
+			}
+		}
+		return callAndPrint(sock, "session.limits", params)
+	}
+	_, rest := takeFlags(args[1:])
+	if len(rest) != 1 {
+		writeCLIError(server.CodeInvalidParams, "session adopt-scope <target>")
+		return errUsage
+	}
+	return callAndPrint(sock, "session.adopt_scope", map[string]any{"session": rest[0]})
 }

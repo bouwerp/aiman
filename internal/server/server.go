@@ -442,7 +442,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleMove(ctx, req)
 	case "session.forget":
 		return s.handleForget(ctx, req)
-	case "session.restart", "session.terminate", "session.land", "session.limits", "repo.list", "host.stats", "host.version", "host.update", "resources.get":
+	case "session.restart", "session.terminate", "session.land", "session.limits", "session.adopt_scope", "repo.list", "host.stats", "host.version", "host.update", "resources.get":
 		return s.dispatchLifecycle(ctx, req)
 	case "session.register":
 		return s.handleRegister(ctx, req)
