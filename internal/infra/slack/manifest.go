@@ -27,7 +27,10 @@ const Manifest = `{
         "im:read",
         "mpim:read",
         "users:read",
-        "reactions:write"
+        "reactions:write",
+        "canvases:read",
+        "canvases:write",
+        "files:read"
       ]
     },
     "pkce_enabled": true
