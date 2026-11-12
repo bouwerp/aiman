@@ -49,12 +49,14 @@ func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 	if refused, ok := s.refuseCreateOutOfScope(ctx, req, params.ID, params.ParentID); ok {
 		return refused
 	}
+	res := s.resourceOptions()
+	scope := s.scopeKey(ctx, params.ID)
 	info, err := s.pty.Create(ptyruntime.Spec{
 		ID:      params.ID,
 		Name:    params.Name,
 		Dir:     params.Dir,
 		Command: params.Command,
-		Env:     params.Env,
+		Env:     res.tmpEnv(scope, params.Env),
 		Cols:    params.Cols,
 		Rows:    params.Rows,
 
@@ -62,6 +64,8 @@ func (s *Server) handlePTYCreate(ctx context.Context, req Request) Response {
 		ParentID: params.ParentID,
 
 		AgentNice: int(s.agentNice.Load()),
+		ScopeKey:  scope,
+		Limits:    res.sessionLimits(scope),
 	})
 	if err != nil {
 		return s.ptyErrResp(req.ID, err)
@@ -391,6 +395,11 @@ func (s *Server) handlePTYForget(ctx context.Context, req Request) Response {
 		return s.ptyErrResp(req.ID, err)
 	}
 	s.dropPaneMemory(id)
+	// A terminal with no session row owns its scratch directory; a session's
+	// goes with the session, and a helper's belongs to its session.
+	if !s.hasRow(ctx, id) && s.scopeKey(ctx, id) == id {
+		s.forgetResources(id)
+	}
 	return Response{ID: req.ID, Result: map[string]any{"type": "pty_forget", "forgotten": true}}
 }
 

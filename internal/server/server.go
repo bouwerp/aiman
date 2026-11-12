@@ -88,6 +88,9 @@ type Server struct {
 	// agentNice is host.load.agent_nice, the nice increment pty.create
 	// gives every agent pty.
 	agentNice atomic.Int32
+	// resources is the resources block: per-session cgroup limits and
+	// scratch directories. Nil until SetResources.
+	resources atomic.Pointer[ResourceOptions]
 	version   string
 
 	// hub carries events published by handlers to session.events streams.

@@ -97,6 +97,8 @@ func (s *Server) startDebugPTY(sess domain.Session, sb review.Sandbox, composePa
 		ParentID: sess.ID,
 
 		AgentNice: int(s.agentNice.Load()),
+		ScopeKey:  sess.ID,
+		Limits:    s.resourceOptions().sessionLimits(sess.ID),
 	})
 	return err
 }
