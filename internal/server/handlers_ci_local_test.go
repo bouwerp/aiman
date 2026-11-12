@@ -204,3 +204,27 @@ type stubPRView struct {
 }
 
 func (s stubPRView) PRView(context.Context, string) (ciwatch.PRView, error) { return s.v, nil }
+
+// A release tag push is not a branch push: no local gate, no PR lookup.
+func TestCIGateAllowsAnExistingTagPush(t *testing.T) {
+	lookup := &fakePRLookup{pr: &cigate.PR{Number: 3, State: "OPEN"}}
+	srv, dir := ciLocalServer(t, "commands:\n  - name: ok\n    run: \"false\"\n", todoSession("s1"), lookup)
+	ciGit(t, dir, "tag", "v1.2.3")
+
+	var gate ciGateResult
+	for _, cmd := range []string{"git push origin v1.2.3", "git push origin refs/tags/v1.2.3", "git push -q origin v1.2.3"} {
+		rpcOK(t, srv, "", "ci.gate", map[string]any{"session": "s1", "kind": "push", "command": cmd}, &gate)
+		if !gate.Allow {
+			t.Fatalf("%q: %+v, want allowed", cmd, gate)
+		}
+	}
+	if lookup.calls != 0 {
+		t.Fatalf("a tag push asked gh %d times", lookup.calls)
+	}
+	for _, cmd := range []string{"git push origin v9.9.9", "git push --force origin v1.2.3", "git push origin v1.2.3 feat-x", "git push origin v1.2.3:v1.2.3x"} {
+		rpcOK(t, srv, "", "ci.gate", map[string]any{"session": "s1", "kind": "push", "command": cmd}, &gate)
+		if gate.Allow {
+			t.Fatalf("%q allowed, want refused", cmd)
+		}
+	}
+}

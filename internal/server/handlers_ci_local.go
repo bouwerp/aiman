@@ -341,6 +341,11 @@ func (s *Server) handleCIGate(ctx context.Context, id string, t ciTarget, p ciLo
 	key := prKey(t.sess.RepoName, t.top, branch)
 	switch kind {
 	case cigate.KindPush:
+		if tag, ok := cigate.TagPushName(p.Command); ok && isTagOnly(ctx, t.top, tag) {
+			// A release tag runs the release workflow, not the PR checks
+			// this gate stands in for.
+			return ciGateAnswer(id, true, "", st.SHA, nil)
+		}
 		if p.Command != "" && !cigate.PushCommandOK(p.Command, branch) {
 			return ciGateAnswer(id, false, cigate.PushRefusal, st.SHA, nil)
 		}
@@ -354,6 +359,15 @@ func (s *Server) handleCIGate(ctx context.Context, id string, t ciTarget, p ciLo
 	}
 	allow, reason := cigate.Decide(in)
 	return ciGateAnswer(id, allow, reason, st.SHA, in.PR)
+}
+
+// isTagOnly reports whether name is a tag in dir and not also a branch.
+func isTagOnly(ctx context.Context, dir, name string) bool {
+	if _, err := gitLine(ctx, dir, "show-ref", "--verify", "refs/tags/"+name); err != nil {
+		return false
+	}
+	_, err := gitLine(ctx, dir, "show-ref", "--verify", "refs/heads/"+name)
+	return err != nil
 }
 
 func ciGateAnswer(id string, allow bool, reason, sha string, pr *cigate.PR) Response {
