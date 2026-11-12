@@ -217,3 +217,17 @@ func TestSessionLandTargetsTheChildsBaseBranch(t *testing.T) {
 		t.Fatalf("LandedLocal = %v, %v", ok, err)
 	}
 }
+
+// The coordinator lands its child by name: the scope check runs on the
+// resolved id, not the name.
+func TestSessionLandByChildNameFromTheParent(t *testing.T) {
+	r := newLandRig(t)
+	var res struct {
+		Type    string `json:"type"`
+		Session string `json:"session"`
+	}
+	rpcOK(t, r.srv, "p", "session.land", map[string]any{"session": "api"}, &res)
+	if res.Type != "landed" || res.Session != "c" {
+		t.Fatalf("result = %+v", res)
+	}
+}

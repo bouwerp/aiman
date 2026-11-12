@@ -88,12 +88,14 @@ func (s *Server) handleSessionLand(ctx context.Context, req Request) Response {
 	if target == "" {
 		return errResp(req.ID, CodeInvalidParams, "session is required: aiman land runs from a child session")
 	}
-	if resp, refused := s.refuseOutOfScope(ctx, req, target); refused {
-		return resp
-	}
+	// The scope check runs on the resolved id, so a coordinator can land its
+	// child by name.
 	child, ok := s.findSession(ctx, target)
 	if !ok {
 		return errResp(req.ID, CodeNotFound, "session not found")
+	}
+	if resp, refused := s.refuseOutOfScope(ctx, req, child.ID); refused {
+		return resp
 	}
 	if child.ParentID == "" || child.Role.Hidden() || child.FixPR != "" {
 		return errResp(req.ID, CodeInvalidParams, "aiman land runs only from a child session")
