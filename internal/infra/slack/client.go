@@ -61,13 +61,6 @@ type Channel struct {
 	IsIM     bool   `json:"is_im"`
 }
 
-// Post is a chat.postMessage request.
-type Post struct {
-	Channel  string
-	Text     string
-	ThreadTS string
-}
-
 // Posted is the identity of a message the bot just sent.
 type Posted struct {
 	Channel string `json:"channel"`
@@ -259,17 +252,6 @@ func (c *Client) AuthTest(ctx context.Context) (Auth, error) {
 	}
 	err := c.call(ctx, "auth.test", map[string]string{}, &out)
 	return out.Auth, err
-}
-
-// Post sends a message as the member who owns the user token.
-func (c *Client) Post(ctx context.Context, p Post) (Posted, error) {
-	req := map[string]string{"channel": p.Channel, "text": p.Text}
-	if p.ThreadTS != "" {
-		req["thread_ts"] = p.ThreadTS
-	}
-	var out Posted
-	err := c.call(ctx, "chat.postMessage", req, &out)
-	return out, err
 }
 
 // ResolveChannel accepts a channel or member id, or a #name / name of a
