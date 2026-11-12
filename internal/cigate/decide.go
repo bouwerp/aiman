@@ -109,7 +109,8 @@ func needPass(r *Record) (bool, string) {
 const PushRefusal = "aiman: push the current branch in its own command after committing"
 
 // PushCommandOK reports whether cmd is a plain push of branch: git push,
-// git push origin, git push -u origin HEAD or git push origin <branch>.
+// git push origin, git push -u origin HEAD or git push origin <branch>,
+// with -u and -q allowed.
 // Compound commands, other refspecs and other flags are refused.
 func PushCommandOK(cmd, branch string) bool {
 	if strings.ContainsAny(cmd, ";&|`$<>()\n\r") {
@@ -122,7 +123,7 @@ func PushCommandOK(cmd, branch string) bool {
 	var args []string
 	for _, a := range f[2:] {
 		switch {
-		case a == "-u" || a == "--set-upstream":
+		case a == "-u" || a == "--set-upstream" || a == "-q" || a == "--quiet":
 		case strings.HasPrefix(a, "-"):
 			return false
 		default:
@@ -139,4 +140,36 @@ func PushCommandOK(cmd, branch string) bool {
 	default:
 		return false
 	}
+}
+
+// TagPushName returns the tag cmd pushes when it is git push [-q] origin
+// <tag> or git push [-q] origin refs/tags/<tag>. The caller still checks
+// that the name is an existing tag and not a branch: the shape alone does
+// not tell them apart.
+func TagPushName(cmd string) (string, bool) {
+	if strings.ContainsAny(cmd, ";&|`$<>()\n\r") {
+		return "", false
+	}
+	f := strings.Fields(cmd)
+	if len(f) < 2 || f[0] != "git" || f[1] != "push" {
+		return "", false
+	}
+	var args []string
+	for _, a := range f[2:] {
+		switch {
+		case a == "-q" || a == "--quiet":
+		case strings.HasPrefix(a, "-"):
+			return "", false
+		default:
+			args = append(args, a)
+		}
+	}
+	if len(args) != 2 || args[0] != "origin" {
+		return "", false
+	}
+	name := strings.TrimPrefix(args[1], "refs/tags/")
+	if name == "" || strings.ContainsAny(name, ":^~*?[\\") || name == "HEAD" {
+		return "", false
+	}
+	return name, true
 }
