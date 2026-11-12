@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agentupdate"
+	"github.com/bouwerp/aiman/internal/cgroup"
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/design"
@@ -91,7 +92,9 @@ type Server struct {
 	// resources is the resources block: per-session cgroup limits and
 	// scratch directories. Nil until SetResources.
 	resources atomic.Pointer[ResourceOptions]
-	version   string
+	// sampler holds the resource sampler once RunResources started it.
+	sampler atomic.Pointer[cgroup.Sampler]
+	version string
 
 	// hub carries events published by handlers to session.events streams.
 	hub *eventHub
@@ -441,6 +444,10 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleForget(ctx, req)
 	case "session.restart", "session.terminate", "session.land", "repo.list", "host.stats", "host.version", "host.update":
 		return s.dispatchLifecycle(ctx, req)
+	case "resources.get":
+		return s.handleResourcesGet(ctx, req)
+	case "session.limits":
+		return s.handleSessionLimits(ctx, req)
 	case "session.register":
 		return s.handleRegister(ctx, req)
 	case "session.report_agent_session":

@@ -65,6 +65,12 @@ const (
 	// EventReviewCoverage records changed-line coverage: ran and missed
 	// counts for the lines the PR added or modified.
 	EventReviewCoverage EventKind = "review.coverage"
+	// EventResourcesAlert records a session held near its memory limit or
+	// throttled at it: the usage, the limit and the pressure.
+	EventResourcesAlert EventKind = "resources.alert"
+	// EventResourcesLimits records an operator's change to a session's
+	// memory limits and whether it reached the running scope.
+	EventResourcesLimits EventKind = "resources.limits"
 	// EventConsultAbandoned records on the parent's ledger a consult that
 	// ended without a usable report: the child and the to-do it was for.
 	EventConsultAbandoned EventKind = "consult.abandoned"

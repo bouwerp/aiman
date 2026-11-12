@@ -17,17 +17,20 @@ const (
 	// NotifyHostUpdate is a host-level event with no session: serve installed
 	// a new aiman release on its host, or the install failed.
 	NotifyHostUpdate NotifyKind = "host_update"
+	// NotifyResources is a session held near its memory limit or throttled
+	// at it, or, with no session, the host's slice near its own limit.
+	NotifyResources NotifyKind = "resources"
 )
 
 // AllNotifyKinds returns the supported notification kinds in order.
 func AllNotifyKinds() []NotifyKind {
-	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate, NotifyHostUpdate}
+	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate, NotifyHostUpdate, NotifyResources}
 }
 
 // NeedsYou reports whether the user must act.
 func NeedsYou(k NotifyKind) bool {
 	switch k {
-	case NotifyWaitingInput, NotifyError, NotifyCIEscalation, NotifyReviewDone:
+	case NotifyWaitingInput, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyResources:
 		return true
 	default:
 		return false
@@ -51,6 +54,8 @@ func EventLabel(k NotifyKind) string {
 		return "agent update"
 	case NotifyHostUpdate:
 		return "host update"
+	case NotifyResources:
+		return "memory"
 	default:
 		return string(k)
 	}

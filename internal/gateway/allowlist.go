@@ -15,7 +15,7 @@ var (
 		"usage.get",
 		"ci.get",
 		"agents.status",
-		"repo.list", "host.stats", "host.version",
+		"repo.list", "host.stats", "host.version", "resources.get",
 		"aws.status", "aws.login_status", "aws.log",
 	}
 	// deviceWriteMethods change state but cannot publish outside the host.

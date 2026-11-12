@@ -550,6 +550,8 @@ components:
             - host.stats
             - host.version
             - host.update
+            - resources.get
+            - session.limits
             - session.register
             - session.report_agent_session
             - notify.since

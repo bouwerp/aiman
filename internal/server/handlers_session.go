@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -1058,6 +1060,9 @@ type createParams struct {
 	// Review is "owner/repo#n": the new session reviews that pull request
 	// in a worktree at its head.
 	Review string `json:"review"`
+	// MemoryHigh and MemoryMax override the session's memory limits
+	// ("12G", "infinity"). Operator only.
+	limitParams
 }
 
 func (s *Server) handleCreate(ctx context.Context, req Request) Response {
@@ -1168,8 +1173,18 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if root := createGitRoot(caller, existing, hostHome()); root != "" {
 		cfg.SSHManager = local.NewExecutor(root)
 	}
+	if !params.limitParams.empty() {
+		// The override is stored under the id before the terminal starts.
+		cfg.SessionID = uuid.NewString()
+		if refused := s.createLimits(ctx, req, params.limitParams, cfg.SessionID); refused != nil {
+			return *refused
+		}
+	}
 	sess, err := s.createOnFreeBranch(ctx, cfg, branchDerived)
 	if err != nil {
+		if cfg.SessionID != "" {
+			s.resourceOptions().Overrides.Remove(cfg.SessionID)
+		}
 		return errResp(req.ID, CodeCreateFailed, err.Error())
 	}
 	params.Branch = sess.Branch

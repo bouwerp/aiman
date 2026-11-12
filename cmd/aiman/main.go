@@ -98,6 +98,8 @@ func run() error {
 			return runUsage(parsed.Rest[1:], os.Stdout)
 		case "limits":
 			return runLimits(parsed.Rest[1:], os.Stdin, os.Stdout)
+		case "resources":
+			return runResources(parsed.Rest[1:], os.Stdout)
 		case "agents":
 			return runAgents(parsed.Rest[1:], os.Stdout)
 		case "aws":
