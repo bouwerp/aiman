@@ -876,7 +876,7 @@ const peerWaitTick = 50 * time.Millisecond
 // hook report newer than that submit, so a stale idle is not read as handled,
 // then for the target to reach until.
 func (s *Server) waitPeerNote(ctx context.Context, sess domain.Session, id int64, until domain.AgentState, timeoutMS *int) (domain.AgentState, error) {
-	ms := 120000
+	ms := int(DefaultWaitTimeout / time.Millisecond)
 	if timeoutMS != nil {
 		ms = *timeoutMS
 	}
@@ -972,7 +972,7 @@ func settled(st domain.AgentState) bool {
 func (s *Server) waitState(ctx context.Context, sess domain.Session, until domain.AgentState, timeoutMS *int, since time.Time) (domain.AgentState, error) {
 	waitCtx := ctx
 	cancel := func() {}
-	ms := 120000
+	ms := int(DefaultWaitTimeout / time.Millisecond)
 	if timeoutMS != nil {
 		ms = *timeoutMS
 	}

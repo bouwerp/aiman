@@ -43,7 +43,7 @@ func Call(socketPath, method string, params any) (Response, error) {
 		}
 		rawParams = b
 	}
-	return Client{Socket: socketPath, Caller: envCaller()}.callRawWait(method, rawParams, callDeadline(method))
+	return Client{Socket: socketPath, Caller: envCaller()}.callRawWait(method, rawParams, callDeadlineFor(method, rawParams))
 }
 
 // AttachConn is a bidirectional channel to a PTY session: output arrives as
@@ -174,17 +174,17 @@ func (a *AttachConn) Close() error { return a.conn.Close() }
 
 // CallRaw is Call with caller-provided params JSON.
 func CallRaw(socketPath, method string, rawParams json.RawMessage) (Response, error) {
-	return CallRawWait(socketPath, method, rawParams, callDeadline(method))
+	return CallRawWait(socketPath, method, rawParams, callDeadlineFor(method, rawParams))
 }
 
-// CallRawWait is CallRaw with an explicit wait. wait <= 0 uses callDeadline.
+// CallRawWait is CallRaw with an explicit wait. wait <= 0 uses callDeadlineFor.
 func CallRawWait(socketPath, method string, rawParams json.RawMessage, wait time.Duration) (Response, error) {
 	return Client{Socket: socketPath, Caller: envCaller()}.callRawWait(method, rawParams, wait)
 }
 
-// CallRaw calls method under c's caller, waiting callDeadline for the answer.
+// CallRaw calls method under c's caller, waiting callDeadlineFor for the answer.
 func (c Client) CallRaw(method string, rawParams json.RawMessage) (Response, error) {
-	return c.callRawWait(method, rawParams, callDeadline(method))
+	return c.callRawWait(method, rawParams, callDeadlineFor(method, rawParams))
 }
 
 // maxRetryAfter bounds how long the client sleeps on a retry_after_ms.
@@ -195,7 +195,7 @@ const maxRetryAfter = 5 * time.Second
 // message that says which it was.
 func (c Client) callRawWait(method string, rawParams json.RawMessage, wait time.Duration) (Response, error) {
 	if wait <= 0 {
-		wait = callDeadline(method)
+		wait = callDeadlineFor(method, rawParams)
 	}
 	resp, err := c.callOnce(method, rawParams, wait)
 	if err != nil || !retryable(resp.Error) {
@@ -338,6 +338,39 @@ func (e *EventsConn) Next() (SessionEvent, error) {
 
 // Close ends the stream.
 func (e *EventsConn) Close() error { return e.conn.Close() }
+
+// DefaultWaitTimeout is how long serve waits for a state when a wait names no
+// timeout_ms.
+const DefaultWaitTimeout = 120 * time.Second
+
+// unboundedWaitDeadline is the client deadline for a wait with timeout_ms <= 0,
+// which serve runs with no limit.
+const unboundedWaitDeadline = 7 * 24 * time.Hour
+
+// callDeadlineFor is callDeadline, except for a call that waits on a session
+// state (session.wait, and session.prompt with wait): its deadline follows
+// the wait asked for, 15s past it and never under 30s.
+func callDeadlineFor(method string, params json.RawMessage) time.Duration {
+	var p struct {
+		Wait      bool `json:"wait"`
+		TimeoutMS *int `json:"timeout_ms"`
+	}
+	parsed := json.Unmarshal(params, &p) == nil
+	switch {
+	case method == "session.wait":
+	case method == "session.prompt" && parsed && p.Wait:
+	default:
+		return callDeadline(method)
+	}
+	wait := DefaultWaitTimeout
+	if parsed && p.TimeoutMS != nil {
+		if *p.TimeoutMS <= 0 {
+			return unboundedWaitDeadline
+		}
+		wait = time.Duration(*p.TimeoutMS) * time.Millisecond
+	}
+	return max(30*time.Second, wait+15*time.Second)
+}
 
 // callDeadline is how long CallRaw waits for method's answer: 30s, or a
 // little past the server's own limit for the slow methods.

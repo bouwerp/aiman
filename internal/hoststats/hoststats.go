@@ -117,7 +117,7 @@ type Sampler struct {
 }
 
 // New returns a Sampler over /proc. It does no work until the first Report.
-func New() *Sampler { return NewAt("/proc") }
+func New() *Sampler { return NewAt(procRoot) }
 
 // NewAt returns a Sampler over a /proc tree at root.
 func NewAt(root string) *Sampler {

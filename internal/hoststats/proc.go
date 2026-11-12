@@ -51,7 +51,7 @@ func readSample(proc string) sample {
 	s := sample{at: time.Now()}
 	s.cpuTotal, s.cpuIdle = parseCPU(readText(proc, "stat"))
 	s.uptime = parseUptime(readText(proc, "uptime"))
-	s.load = parseLoad(readText(proc, "loadavg"))
+	s.load = parseLoad(readLoadAvgText(proc))
 	s.memory, s.swap = parseMeminfo(readText(proc, "meminfo"))
 	entries, err := os.ReadDir(proc)
 	if err != nil {
