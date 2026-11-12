@@ -22,7 +22,10 @@ func TestPostAndHistory(t *testing.T) {
 		case "/api/chat.postMessage":
 			var req map[string]string
 			_ = json.Unmarshal(body, &req)
-			sawChannel, sawText, sawThread = req["channel"], req["text"], req["thread_ts"]
+			if _, ok := req["text"]; ok {
+				t.Error("text sent with markdown_text")
+			}
+			sawChannel, sawText, sawThread = req["channel"], req["markdown_text"], req["thread_ts"]
 			_, _ = io.WriteString(w, `{"ok":true,"ts":"100.1","channel":"C1"}`)
 		case "/api/conversations.history":
 			_, _ = io.WriteString(w, `{"ok":true,"messages":[{"type":"message","user":"U1","text":"hi","ts":"90.1"}]}`)
