@@ -972,7 +972,7 @@ func settled(st domain.AgentState) bool {
 func (s *Server) waitState(ctx context.Context, sess domain.Session, until domain.AgentState, timeoutMS *int, since time.Time) (domain.AgentState, error) {
 	waitCtx := ctx
 	cancel := func() {}
-	ms := 120000
+	ms := int(DefaultWaitTimeout / time.Millisecond)
 	if timeoutMS != nil {
 		ms = *timeoutMS
 	}

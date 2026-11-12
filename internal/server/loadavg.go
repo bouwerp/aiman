@@ -1,12 +1,10 @@
 package server
 
 import (
-	"math"
-	"os"
 	"runtime"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/bouwerp/aiman/internal/hoststats"
 )
 
 // The state sweep runs every sweepPeriodLow while the 1-minute load average is
@@ -16,31 +14,9 @@ var sweepPeriodLow, sweepPeriodHigh = notifySweepEvery, 5 * time.Second
 
 const sweepCaptureBudget = 16
 
-// readLoadAvg reads the 1-minute load average from /proc/loadavg. Elsewhere
-// than Linux it answers false. Tests swap it.
-var readLoadAvg = func() (float64, bool) {
-	if runtime.GOOS != "linux" {
-		return 0, false
-	}
-	b, err := os.ReadFile("/proc/loadavg")
-	if err != nil {
-		return 0, false
-	}
-	return parseLoadAvg(string(b))
-}
-
-// parseLoadAvg reads the first field of a /proc/loadavg line.
-func parseLoadAvg(s string) (float64, bool) {
-	fields := strings.Fields(s)
-	if len(fields) == 0 {
-		return 0, false
-	}
-	v, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
-		return 0, false
-	}
-	return v, true
-}
+// readLoadAvg is the 1-minute load average (hoststats.ReadLoadAvg). Tests
+// swap it.
+var readLoadAvg = hoststats.ReadLoadAvg
 
 // sweepPeriod is sweepPeriodHigh when the load average is known and at or above
 // the CPU count, else sweepPeriodLow.
