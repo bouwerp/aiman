@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -22,6 +24,23 @@ type Client struct {
 	HTTP  *http.Client
 	// Poll is how often Wait re-reads a thread. Zero means 2s.
 	Poll time.Duration
+	// Sleep waits out a 429 Retry-After. Nil is a timer that honours ctx.
+	Sleep func(ctx context.Context, d time.Duration) error
+	// MaxBody caps a response in bytes. Zero means 8 MiB.
+	MaxBody int64
+}
+
+// Page is one page of a cursor-paged Slack listing.
+type Page[T any] struct {
+	Items      []T    `json:"items"`
+	NextCursor string `json:"next_cursor,omitempty"`
+}
+
+// cursorMeta is Slack's response_metadata for paged methods.
+type cursorMeta struct {
+	Meta struct {
+		NextCursor string `json:"next_cursor"`
+	} `json:"response_metadata"`
 }
 
 // Message is one Slack message the agent can read or wait for.
@@ -93,47 +112,144 @@ func (e *apiFailure) Error() string {
 	return e.Method + ": " + e.Code
 }
 
+// defaultMaxBody caps a Slack response when Client.MaxBody is zero.
+const defaultMaxBody = 8 << 20
+
+// maxRetries is how many times a call is repeated after HTTP 429.
+const maxRetries = 2
+
+// call POSTs payload as JSON.
 func (c *Client) call(ctx context.Context, method string, payload any, out any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("slack %s: %w", method, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base()+method, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("slack %s: %w", method, err)
+	return c.do(ctx, method, out, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base()+method, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		return req, nil
+	})
+}
+
+// callForm POSTs form as application/x-www-form-urlencoded, for methods
+// that do not accept JSON.
+func (c *Client) callForm(ctx context.Context, method string, form url.Values, out any) error {
+	body := form.Encode()
+	return c.do(ctx, method, out, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base()+method, strings.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return req, nil
+	})
+}
+
+// get calls method with GET and query as the query string, for methods
+// that take no request body.
+func (c *Client) get(ctx context.Context, method string, query url.Values, out any) error {
+	target := c.base() + method
+	if len(query) > 0 {
+		target += "?" + query.Encode()
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	return c.do(ctx, method, out, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	})
+}
+
+// do sends the request build makes, repeating it after HTTP 429 as Slack's
+// Retry-After asks, at most maxRetries times.
+func (c *Client) do(ctx context.Context, method string, out any, build func() (*http.Request, error)) error {
+	for attempt := 0; ; attempt++ {
+		req, err := build()
+		if err != nil {
+			return fmt.Errorf("slack %s: %w", method, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+		wait, err := c.send(req, method, out)
+		if wait < 0 || attempt >= maxRetries {
+			return err
+		}
+		if err := c.sleep(ctx, wait); err != nil {
+			return fmt.Errorf("slack %s: %w", method, err)
+		}
+	}
+}
+
+// send runs one request. A non-negative wait means Slack rate limited it and
+// asked for that pause; err is then the ratelimited failure.
+func (c *Client) send(req *http.Request, method string, out any) (time.Duration, error) {
 	resp, err := c.http().Do(req)
 	if err != nil {
-		return fmt.Errorf("slack %s: %w", method, err)
+		return -1, fmt.Errorf("slack %s: %w", method, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		return retryAfter(resp.Header.Get("Retry-After")), &apiFailure{Method: method, Code: "ratelimited"}
+	}
+	limit := c.maxBody()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return fmt.Errorf("slack %s: %w", method, err)
+		return -1, fmt.Errorf("slack %s: %w", method, err)
+	}
+	if int64(len(raw)) > limit {
+		return -1, fmt.Errorf("slack %s: response larger than %d bytes", method, limit)
 	}
 	var env struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("slack %s: bad response", method)
+		return -1, fmt.Errorf("slack %s: bad response", method)
 	}
 	if !env.OK {
 		code := env.Error
 		if code == "" {
 			code = fmt.Sprintf("http %d", resp.StatusCode)
 		}
-		return &apiFailure{Method: method, Code: code}
+		return -1, &apiFailure{Method: method, Code: code}
 	}
 	if out == nil {
-		return nil
+		return -1, nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("slack %s: %w", method, err)
+		return -1, fmt.Errorf("slack %s: %w", method, err)
 	}
-	return nil
+	return -1, nil
+}
+
+// retryAfter reads Slack's Retry-After seconds; missing or bad means 1s.
+func retryAfter(h string) time.Duration {
+	n, err := strconv.Atoi(strings.TrimSpace(h))
+	if err != nil || n < 0 {
+		return time.Second
+	}
+	return time.Duration(n) * time.Second
+}
+
+func (c *Client) maxBody() int64 {
+	if c.MaxBody > 0 {
+		return c.MaxBody
+	}
+	return defaultMaxBody
+}
+
+func (c *Client) sleep(ctx context.Context, d time.Duration) error {
+	if c.Sleep != nil {
+		return c.Sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // AuthTest checks the user token and returns who it is.
@@ -156,67 +272,11 @@ func (c *Client) Post(ctx context.Context, p Post) (Posted, error) {
 	return out, err
 }
 
-// History returns the latest messages in a channel. Slack lists them newest first.
-func (c *Client) History(ctx context.Context, channel string, limit int) ([]Message, error) {
-	return c.messages(ctx, "conversations.history", channel, "", limit)
-}
-
-// Replies returns messages in a thread, oldest first as Slack returns them.
-func (c *Client) Replies(ctx context.Context, channel, thread string, limit int) ([]Message, error) {
-	return c.messages(ctx, "conversations.replies", channel, thread, limit)
-}
-
-func (c *Client) messages(ctx context.Context, method, channel, thread string, limit int) ([]Message, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	req := map[string]any{"channel": channel, "limit": limit}
-	if thread != "" {
-		req["ts"] = thread
-	}
-	var out struct {
-		Messages []Message `json:"messages"`
-	}
-	if err := c.call(ctx, method, req, &out); err != nil {
-		return nil, err
-	}
-	return out.Messages, nil
-}
-
-// Channels lists conversations the bot can see.
-func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
-	var all []Channel
-	cursor := ""
-	for page := 0; page < 10; page++ {
-		req := map[string]any{
-			"types": "public_channel,private_channel,mpim,im",
-			"limit": 200,
-		}
-		if cursor != "" {
-			req["cursor"] = cursor
-		}
-		var out struct {
-			Channels []Channel `json:"channels"`
-			Meta     struct {
-				NextCursor string `json:"next_cursor"`
-			} `json:"response_metadata"`
-		}
-		if err := c.call(ctx, "conversations.list", req, &out); err != nil {
-			return nil, err
-		}
-		all = append(all, out.Channels...)
-		cursor = out.Meta.NextCursor
-		if cursor == "" {
-			break
-		}
-	}
-	return all, nil
-}
-
-// ResolveChannel accepts a Slack id or a #name / name of a channel the bot is in.
+// ResolveChannel accepts a channel or member id, or a #name / name of a
+// channel the member can see.
 func (c *Client) ResolveChannel(ctx context.Context, nameOrID string) (string, error) {
 	nameOrID = strings.TrimSpace(nameOrID)
-	if isChannelID(nameOrID) {
+	if isChannelID(nameOrID) || isUserID(nameOrID) {
 		return nameOrID, nil
 	}
 	want := strings.TrimPrefix(nameOrID, "#")
@@ -241,28 +301,16 @@ func isChannelID(s string) bool {
 	default:
 		return false
 	}
-	for _, r := range s[1:] {
+	return isUpperAlnum(s[1:])
+}
+
+func isUpperAlnum(s string) bool {
+	for _, r := range s {
 		if !unicode.IsUpper(r) && !unicode.IsDigit(r) {
 			return false
 		}
 	}
 	return true
-}
-
-// User is a Slack member the bot is allowed to see.
-type User struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	RealName string `json:"real_name"`
-}
-
-// User looks up one member by id.
-func (c *Client) User(ctx context.Context, id string) (User, error) {
-	var out struct {
-		User User `json:"user"`
-	}
-	err := c.call(ctx, "users.info", map[string]string{"user": id}, &out)
-	return out.User, err
 }
 
 // React adds an emoji reaction (without colons) to a message.
