@@ -54,9 +54,11 @@ type Config struct {
 	// Roles overrides agent, model and effort for sessions with a role.
 	Roles RolesConfig `yaml:"roles,omitempty"`
 	// Host configures how serve keeps the host's aiman binaries current.
-	Host         HostConfig `yaml:"host,omitempty"`
-	Remotes      []Remote   `yaml:"remotes"`
-	ActiveRemote string     `yaml:"active_remote"`
+	Host HostConfig `yaml:"host,omitempty"`
+	// Resources configures per-session cgroup limits and scratch directories.
+	Resources    ResourcesConfig `yaml:"resources,omitempty"`
+	Remotes      []Remote        `yaml:"remotes"`
+	ActiveRemote string          `yaml:"active_remote"`
 
 	// PermissionsTightened records that Load had to remove group/other access
 	// from the config file, meaning the API token in it had been readable by
@@ -104,6 +106,8 @@ type ServeConfig struct {
 	AWS ServeAWSConfig `yaml:"aws,omitempty"`
 	// Host configures how serve keeps the host's aiman binaries current.
 	Host HostConfig `yaml:"host,omitempty"`
+	// Resources configures per-session cgroup limits and scratch directories.
+	Resources ResourcesConfig `yaml:"resources,omitempty"`
 }
 
 // SessionsConfig configures how sessions on a host may reach each other.
@@ -447,6 +451,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Roles:         c.Roles,
 		AWS:           c.serveAWSFor(host),
 		Host:          c.Host,
+		Resources:     c.Resources,
 	})
 }
 
