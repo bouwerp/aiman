@@ -30,7 +30,19 @@ const Manifest = `{
         "reactions:write",
         "canvases:read",
         "canvases:write",
-        "files:read"
+        "files:read",
+        "reactions:read",
+        "search:read",
+        "emoji:read",
+        "users:read.email",
+        "users.profile:read",
+        "files:write",
+        "lists:read",
+        "lists:write",
+        "channels:write",
+        "groups:write",
+        "im:write",
+        "mpim:write"
       ]
     },
     "pkce_enabled": true
