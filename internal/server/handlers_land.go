@@ -114,9 +114,17 @@ func (s *Server) handleSessionLand(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":      "landed",
 		"session":   child.ID,
-		"branch":    parent.Branch,
+		"branch":    landTarget(child, parent),
 		"merge_sha": res.MergeSHA,
 	}}
+}
+
+// landTarget is the branch a child lands on: the base it was cut from,
+// else its coordinator's branch. A coordinator can move to a per-project
+// base branch after its own session was created, so its session branch is
+// not always where its children belong.
+func landTarget(child, parent domain.Session) string {
+	return cmp.Or(child.BaseBranch, parent.Branch)
 }
 
 // landSpec runs the checks before a land, in order: the report validates, the
@@ -124,7 +132,8 @@ func (s *Server) handleSessionLand(ctx context.Context, req Request) Response {
 // a PR, and the local gate passed for HEAD when the repository has one. On
 // failure it returns the response code.
 func (s *Server) landSpec(ctx context.Context, child, parent domain.Session) (git.LandSpec, string, error) {
-	if parent.Branch == "" || parent.WorktreePath == "" {
+	target := landTarget(child, parent)
+	if target == "" || parent.WorktreePath == "" {
 		return git.LandSpec{}, CodeInvalidParams, errors.New("the coordinator has no branch or worktree")
 	}
 	dir := cmp.Or(child.WorktreePath, child.WorkingDirectory)
@@ -140,7 +149,7 @@ func (s *Server) landSpec(ctx context.Context, child, parent domain.Session) (gi
 	if err != nil {
 		return git.LandSpec{}, CodeInvalidParams, err
 	}
-	if parent.Branch == def {
+	if target == def {
 		return git.LandSpec{}, CodeInvalidParams, fmt.Errorf("land never targets the default branch %s; open a PR instead", def)
 	}
 	if err := s.landReady(ctx, child, info); err != nil {
@@ -161,21 +170,21 @@ func (s *Server) landSpec(ctx context.Context, child, parent domain.Session) (gi
 	if repo == "" {
 		repo = filepath.Base(mainClone)
 	}
-	lockName, err := git.LandLockName(repo, parent.Branch)
+	lockName, err := git.LandLockName(repo, target)
 	if err != nil {
 		return git.LandSpec{}, CodeInvalidParams, err
 	}
 	return git.LandSpec{
 		MainClone:      mainClone,
 		ParentWorktree: parent.WorktreePath,
-		ParentBranch:   parent.Branch,
+		ParentBranch:   target,
 		DefaultBranch:  def,
 		ChildSHA:       sha,
 		ScratchDir:     filepath.Join(base, child.ID),
 		LockPath:       filepath.Join(base, lockName),
 		CommitterName:  "Aiman",
 		CommitterEmail: "aiman@localhost",
-		Message:        fmt.Sprintf("Land %s on %s", sessionLabel(child), parent.Branch),
+		Message:        fmt.Sprintf("Land %s on %s", sessionLabel(child), target),
 	}, "", nil
 }
 
@@ -233,11 +242,11 @@ func (s *Server) landRefusal(id string, child, parent domain.Session, err error)
 	switch {
 	case errors.As(err, &conflict):
 		return Response{ID: id, Error: &Error{Code: CodeLandConflict,
-			Message: err.Error() + "; merge origin/" + parent.Branch + " into your branch and land again",
+			Message: err.Error() + "; merge origin/" + landTarget(child, parent) + " into your branch and land again",
 			Data:    LandConflictData{Files: conflict.Files}}}
 	case errors.Is(err, git.ErrLandParentDiverged):
 		s.Steerer().Enqueue(SteerNote{SessionID: parent.ID, Author: domain.AuthorAiman,
-			Text: fmt.Sprintf("[aiman] child %s is waiting to land on %s: push or stash your changes.", sessionLabel(child), parent.Branch)})
+			Text: fmt.Sprintf("[aiman] child %s is waiting to land on %s: put your worktree on that branch, level with origin, with no tracked changes.", sessionLabel(child), landTarget(child, parent))})
 		return errResp(id, CodeLandParentDiverged, err.Error())
 	case errors.Is(err, git.ErrLandBusy):
 		return errResp(id, CodeLandBusy, err.Error())
@@ -252,26 +261,28 @@ func (s *Server) landRefusal(id string, child, parent domain.Session, err error)
 
 // recordLanded writes child.landed on both ledgers and tells the coordinator.
 func (s *Server) recordLanded(ctx context.Context, child, parent domain.Session, sha string) {
-	payload := map[string]any{"child": child.ID, "parent_branch": parent.Branch, "merge_sha": sha}
+	target := landTarget(child, parent)
+	payload := map[string]any{"child": child.ID, "parent_branch": target, "merge_sha": sha}
 	s.AppendLedger(ctx, child.ID, domain.EventChildLanded, payload)
 	s.AppendLedger(ctx, parent.ID, domain.EventChildLanded, payload)
 	s.Steerer().Enqueue(SteerNote{SessionID: parent.ID, Author: domain.AuthorAiman,
-		Text: fmt.Sprintf("[aiman] child %s landed on %s at %s. Run git pull --ff-only.", sessionLabel(child), parent.Branch, shortSHA(sha))})
+		Text: fmt.Sprintf("[aiman] child %s landed on %s at %s. Run git pull --ff-only.", sessionLabel(child), target, shortSHA(sha))})
 }
 
 // LandedLocal reports whether the child's latest child.landed merge is on
-// origin/<parent branch>, fetching in the parent's main clone first. It is
+// origin/<landTarget>, fetching in the parent's main clone first. It is
 // coordinator.Tracker.LandedLocal.
 func (s *Server) LandedLocal(ctx context.Context, parent, child domain.Session) (bool, error) {
 	sha, err := s.latestLanded(ctx, child.ID)
-	if err != nil || sha == "" || parent.Branch == "" {
+	target := landTarget(child, parent)
+	if err != nil || sha == "" || target == "" {
 		return false, err
 	}
 	info := worktree.Inspect(ctx, parent.WorktreePath)
 	if info.CommonDir == "" {
 		return false, fmt.Errorf("%s is not a git checkout", parent.WorktreePath)
 	}
-	return git.LandedOn(ctx, mainCloneOf(info.CommonDir), parent.Branch, sha)
+	return git.LandedOn(ctx, mainCloneOf(info.CommonDir), target, sha)
 }
 
 // latestLanded returns the merge sha of the child's newest child.landed row.
