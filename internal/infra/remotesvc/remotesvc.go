@@ -100,6 +100,9 @@ func (k Kind) procPattern() string {
 // serve therefore SIGTERMs every holder in its cgroup, killing the running
 // agents with it. KillMode=process signals only the main process and leaves the
 // rest of the cgroup alone, which is exactly the contract the holders assume.
+// A holder serve starts in its own session scope is outside this cgroup; the
+// setting covers every holder running outside a session scope (one started
+// with resources off, or on a host where the scope could not be created).
 //
 // The trigger daemon and the phone gateway own no such processes; the default
 // group cleanup is the right behaviour for their children.
@@ -108,6 +111,22 @@ func (k Kind) killMode() string {
 		return "KillMode=process\n"
 	}
 	return ""
+}
+
+// protection returns the unit's resource-control lines. serve and the phone
+// gateway are the control plane: MemoryLow keeps their pages from reclaim while
+// agent sessions are under memory pressure, and the weights give them twice a
+// session's share of CPU and IO when the host is contended. The trigger daemon
+// has none; a late scheduled prompt costs nothing.
+func (k Kind) protection() string {
+	switch k {
+	case KindServe:
+		return "MemoryLow=512M\nCPUWeight=200\nIOWeight=200\n"
+	case KindGateway:
+		return "MemoryLow=256M\nCPUWeight=200\nIOWeight=200\n"
+	default:
+		return ""
+	}
 }
 
 func UnitFile(k Kind) string {
@@ -122,12 +141,12 @@ Type=simple
 ExecStart=%s
 Restart=on-failure
 RestartSec=2
-%sWorkingDirectory=%%h
+%s%sWorkingDirectory=%%h
 Environment=HOME=%%h
 
 [Install]
 WantedBy=default.target
-`, k, k.ExecLine(), k.killMode())
+`, k, k.ExecLine(), k.killMode(), k.protection())
 }
 
 // userRuntimeEnv makes `systemctl --user` work over SSH: non-interactive

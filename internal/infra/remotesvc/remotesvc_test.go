@@ -628,3 +628,33 @@ func TestStartScriptNeedsNoUnitFileForSystemd(t *testing.T) {
 		}
 	}
 }
+
+// serve and the gateway must stay responsive while agent sessions are under
+// memory pressure; the trigger daemon gets no protection.
+func TestUnitFileProtectsControlPlane(t *testing.T) {
+	cases := []struct {
+		kind Kind
+		want []string
+	}{
+		{KindServe, []string{"MemoryLow=512M", "CPUWeight=200", "IOWeight=200"}},
+		{KindGateway, []string{"MemoryLow=256M", "CPUWeight=200", "IOWeight=200"}},
+	}
+	for _, c := range cases {
+		u := UnitFile(c.kind)
+		service := u[strings.Index(u, "[Service]"):strings.Index(u, "[Install]")]
+		for _, line := range c.want {
+			if !strings.Contains(service, "\n"+line+"\n") {
+				t.Fatalf("%s unit [Service] is missing %s:\n%s", c.kind, line, u)
+			}
+		}
+	}
+	tr := UnitFile(KindTrigger)
+	for _, key := range []string{"MemoryLow", "CPUWeight", "IOWeight"} {
+		if strings.Contains(tr, key) {
+			t.Fatalf("trigger unit must not set %s:\n%s", key, tr)
+		}
+	}
+	if !strings.Contains(UnitFile(KindServe), "KillMode=process") {
+		t.Fatal("serve unit lost KillMode=process")
+	}
+}
