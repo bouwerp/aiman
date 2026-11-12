@@ -506,6 +506,8 @@ Key config fields:
 
 14. **`MemoryLow` on the serve unit needs its ancestors**: `memory.low` only protects against reclaim started at or below the nearest ancestor that also sets it. The serve and gateway units sit in `app.slice` under `user@<uid>.service`, which is root's to configure, so reclaim caused by the user slice's own `MemoryHigh` ignores them. What keeps serve responsive is that sessions are bounded below that limit (per scope and by `aiman-sessions.slice`). The user manager is delegated only `cpu memory pids`, so `IOWeight` is accepted and has no effect.
 
+15. **The session TMPDIR lengthens socket paths**: `~/.aiman/tmp/<uuid>` is about 55 bytes longer than `/tmp`, and Linux caps a unix socket path at 108 bytes. Under it, tests that bind a socket below `t.TempDir()` fail with `bind: invalid argument` (in this repo: `cmd/aiman` todo tests, `internal/gateway` `TestSocketSourceReadsNotifySince`, `internal/ptyruntime` holders, and `internal/contextstore` `TestCollectAndImport`). Run them with `TMPDIR=/tmp`; new tests that bind sockets should use `shortTempDir`.
+
 ---
 
 ## Terminal runtime

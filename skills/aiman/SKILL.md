@@ -110,6 +110,7 @@ That prints your actual limits and your memory, CPU and pressure. Check it befor
 - Run one heavy job at a time, with low parallelism: `jest --maxWorkers=2`, `vitest --maxWorkers=2`, `go test -p 2`, PyTorch and Ultralytics `workers<=2`.
 - Never run `go test -race ./...` across a whole module, and never run a race or full-suite job beside another heavy job.
 - `$TMPDIR` is `~/.aiman/tmp/<session id>`, on disk. Put venvs, clones, datasets and other scratch there or in your worktree, never under `/tmp` directly: `/tmp` can be RAM. The directory is deleted when the session is terminated or forgotten, so keep nothing there that must outlive it.
+- A unix socket path holds at most 108 bytes, and `$TMPDIR` is longer than `/tmp`. If a test or tool fails with `bind: invalid argument` or `connect: invalid argument` on a socket under `$TMPDIR`, rerun that one command with `TMPDIR=/tmp` and keep its files small.
 - Ask the operator before GPU work, training, or any job that needs several GB.
 - Only the operator raises a limit (`aiman session limits`). If the work needs more, say how much and why, then wait.
 - An `[aiman]` note saying this session is at X/Y memory and is being throttled means reduce parallelism now. Do not retry at the same size.

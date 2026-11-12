@@ -835,6 +835,9 @@ session keeps what it started with until it is restarted (`s`).
 - Each session's `TMPDIR` (and `CLAUDE_CODE_TMPDIR`, which Claude Code reads first) is
   `~/.aiman/tmp/<session id>`, on disk, so scratch files are not charged as memory on a host
   whose `/tmp` is tmpfs. It is deleted when the session is terminated or forgotten.
+  The path is longer than `/tmp`, and a unix socket path holds at most 108 bytes: a test that
+  binds a socket deep under `t.TempDir()` can fail with `bind: invalid argument`. Run that
+  command with `TMPDIR=/tmp`, or set `resources.tmpdir: false` on the host.
 - The serve and gateway units carry `MemoryLow`, `CPUWeight=200` and `IOWeight=200`.
 
 Two things need root and are left to the host's administrator: the user slice's own limits
