@@ -25,6 +25,13 @@ type landRig struct {
 // valid report.
 func newLandRig(t *testing.T) landRig {
 	t.Helper()
+	return newLandRigWith(t, nil)
+}
+
+// newLandRigWith is newLandRig with edit applied to p and c before serve
+// stores them.
+func newLandRigWith(t *testing.T, edit func(p, c *domain.Session)) landRig {
+	t.Helper()
 	root := t.TempDir()
 	r := landRig{origin: filepath.Join(root, "origin.git"), parent: filepath.Join(root, "r@feat"), child: filepath.Join(root, "r@feat-t1")}
 	clone := filepath.Join(root, "r")
@@ -46,6 +53,9 @@ func newLandRig(t *testing.T) landRig {
 	p.Branch, p.WorktreePath, p.WorkingDirectory, p.RepoName = "feat", r.parent, r.parent, "o/r"
 	c := todoSession("c")
 	c.Name, c.ParentID, c.Branch, c.WorktreePath, c.WorkingDirectory, c.RepoName = "api", "p", "feat-t1", r.child, r.child, "o/r"
+	if edit != nil {
+		edit(&p, &c)
+	}
 	r.srv, _, r.notes = todoServer(t, p, c)
 	r.srv.SetLandDir(filepath.Join(root, "land"))
 	return r
@@ -141,7 +151,7 @@ func TestSessionLandRefusals(t *testing.T) {
 			}
 			switch tc.code {
 			case CodeLandParentDiverged:
-				r.steeredWith(t, "[aiman] child api is waiting to land on feat: push or stash your changes.")
+				r.steeredWith(t, "[aiman] child api is waiting to land on feat: put your worktree on that branch")
 			case CodeLandConflict:
 				raw, _ := json.Marshal(resp.Error.Data)
 				if !strings.Contains(string(raw), `"files":["b.txt"]`) {
@@ -183,4 +193,27 @@ func ledgerHas(t *testing.T, srv *Server, id string, kind domain.EventKind) bool
 		}
 	}
 	return false
+}
+
+// A coordinator whose session branch is not the one its children were cut
+// from (it moved to a per-project base) lands them on the child's base.
+func TestSessionLandTargetsTheChildsBaseBranch(t *testing.T) {
+	r := newLandRigWith(t, func(p, c *domain.Session) {
+		p.Branch = "coordinator-home"
+		c.BaseBranch = "feat"
+	})
+	var res struct {
+		Branch   string `json:"branch"`
+		MergeSHA string `json:"merge_sha"`
+	}
+	rpcOK(t, r.srv, "c", "session.land", map[string]any{}, &res)
+	if res.Branch != "feat" || res.MergeSHA != r.originFeat(t) {
+		t.Fatalf("result = %+v, origin/feat = %s", res, r.originFeat(t))
+	}
+	r.steeredWith(t, "[aiman] child api landed on feat at ")
+	p, _ := r.srv.findSession(context.Background(), "p")
+	c, _ := r.srv.findSession(context.Background(), "c")
+	if ok, err := r.srv.LandedLocal(context.Background(), p, c); err != nil || !ok {
+		t.Fatalf("LandedLocal = %v, %v", ok, err)
+	}
 }
