@@ -306,8 +306,8 @@ func (m *Model) runSelectedRTKInstall() (tea.Model, tea.Cmd) {
 	return m, rtkInstallCmd(m.cfg, d.RemoteHost)
 }
 
-// routeRemoteServiceMsg handles probe, op and GitHub release results on every
-// view: an op started on the Agent API page or the Daemons tab finishes after
+// routeRemoteServiceMsg handles probe, op, GitHub release and session
+// resource results on every view: an op started on the Agent API page or the Daemons tab finishes after
 // the user may have moved on, and the release check's timer must keep running.
 func (m *Model) routeRemoteServiceMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -325,6 +325,9 @@ func (m *Model) routeRemoteServiceMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.applyGitHubRelease(msg)
 	case githubReleaseDueMsg:
 		return m, checkGitHubRelease()
+	case resourcesMsg, resourcesTickMsg:
+		// A fetch can finish, and the poll must keep running, off the list.
+		return m, m.applyResourcesMsg(msg)
 	}
 	return m, nil
 }

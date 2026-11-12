@@ -658,7 +658,7 @@ func (m *Model) renderSessionDetail(it item, width int) string {
 	extras := m.metaFor(it.session.ID)
 	extras.Reviewing = reviewerRunning(it.session.ID, m.allSessions)
 	extras.VerifyAdvisory = it.session.Unprotected
-	if meta := renderMetaLine(it.session, extras, time.Now(), width); meta != "" {
+	if meta := m.withSessionResources(renderMetaLine(it.session, extras, time.Now(), width), it.session, width); meta != "" {
 		head = append(head, meta)
 	}
 	if line := renderLimitsLine(extras.Limits, time.Now(), width); line != "" {

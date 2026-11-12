@@ -621,6 +621,8 @@ Design: `docs/superpowers/specs/2026-11-12-session-resource-limits.md`. Linux wi
 
 **Alerts**: `cgroup.Alerter` (sampler goroutine only) fires for a session held at `memory.current >= 90%` of `memory.high` for 30s, or at once when pressure avg10 is over 50; it stays over until below 80% and 25, and repeats at most every 10 minutes. The user slice and the sessions slice fire on memory alone with no hold. `raiseResourceAlert` emits `domain.NotifyResources` (`resources`, NeedsYou true; with no session `notify.Format` gives `on <host> <text>`), records `resources.alert`, and enqueues `[aiman] this session is at <cur>/<high> memory[, pressure N%] and is being throttled|is close to its limit; reduce parallelism. Do not retry the same job.` through the steerer, except for a hidden helper. The phone sink does not push the kind.
 
+**TUI** (`internal/ui/resources.go`): after each discovery result and every 10s while the sessions tab shows, the dashboard calls `resources.get` once per host with sessions (`fetchResources`, one request in flight per host). `resourcesMsg` and `resourcesTickMsg` are routed globally through `routeRemoteServiceMsg`. The selected session's meta line gains `5.2G/6G 150%` (`withSessionResources`: memory over `memory_high`, CPU of one core; warning colour at 90% or pressure over 50) and the header a `mem 18G/24G` gauge for the user slice of the selected session's host (`renderA1HeaderGauge`, dropped first when the header is narrow, absent without a finite `memory_high`). An error, `usecase.ErrRPCUnsupported` or `supported:false` removes the host's entry, so nothing is drawn.
+
 ---
 
 ## Remaining TODOs (from PLAN.md)
