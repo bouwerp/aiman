@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/slack"
+	"golang.org/x/term"
 )
 
 func runSlack(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
@@ -140,16 +142,21 @@ func runSlackAuth(ctx context.Context, args []string, in io.Reader, out, errOut 
 	}
 }
 
+// runSlackAuthApp reads the client id from the first line of stdin, so a
+// paste followed by Enter is enough; a terminal gets a prompt first.
 func runSlackAuthApp(in io.Reader, out, errOut io.Writer) error {
-	body, err := io.ReadAll(in)
-	if err != nil {
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		_, _ = fmt.Fprint(errOut, "Paste the Slack app's Client ID and press Enter: ")
+	}
+	body, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
 	path, err := slackTokenPath()
 	if err != nil {
 		return err
 	}
-	if err := slack.SaveClientID(path, string(body)); err != nil {
+	if err := slack.SaveClientID(path, body); err != nil {
 		return slackFail(errOut, "slack_token", err.Error())
 	}
 	return slackWrite(out, map[string]any{"ok": true})

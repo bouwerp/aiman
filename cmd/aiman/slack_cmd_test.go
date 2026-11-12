@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/infra/slack"
 )
@@ -195,5 +196,31 @@ func TestRunSlackWaitTimeoutIsNotAnAPIError(t *testing.T) {
 	}
 	if strings.Contains(errOut.String(), `"code":"slack_api"`) {
 		t.Fatalf("timeout classified as api error: %s", errOut.String())
+	}
+}
+
+func TestRunSlackAuthAppReturnsAfterOneLine(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AIMAN_SLACK_TOKEN_FILE", filepath.Join(dir, "tok"))
+	t.Setenv("AIMAN_SLACK_USER_TOKEN", "")
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	go func() { _, _ = io.WriteString(pw, "123.456\n") }()
+	done := make(chan error, 1)
+	go func() {
+		var out, errOut bytes.Buffer
+		done <- runSlack(context.Background(), []string{"auth", "app"}, pr, &out, &errOut)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("auth app waited for end of input after the first line")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "tok"))
+	if err != nil || !strings.Contains(string(got), "123.456") {
+		t.Fatalf("file %q %v", got, err)
 	}
 }

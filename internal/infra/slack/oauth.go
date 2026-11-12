@@ -32,6 +32,21 @@ var UserScopes = []string{
 	"mpim:read",
 	"users:read",
 	"reactions:write",
+	"canvases:read",
+	"canvases:write",
+	"files:read",
+	"reactions:read",
+	"search:read",
+	"emoji:read",
+	"users:read.email",
+	"users.profile:read",
+	"files:write",
+	"lists:read",
+	"lists:write",
+	"channels:write",
+	"groups:write",
+	"im:write",
+	"mpim:write",
 }
 
 // DefaultRedirectURL is the loopback URL baked into Manifest. Slack redirects
