@@ -156,7 +156,7 @@ func runSlackAuthApp(in io.Reader, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := slack.SaveClientID(path, string(body)); err != nil {
+	if err := slack.SaveClientID(path, body); err != nil {
 		return slackFail(errOut, "slack_token", err.Error())
 	}
 	return slackWrite(out, map[string]any{"ok": true})
