@@ -61,7 +61,7 @@ func (s *Server) WriteDump(dir string) (string, error) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "aiman serve dump %s pid %d\n\nrpc stats:\n%s\n\n", time.Now().UTC().Format(time.RFC3339), os.Getpid(), stats)
-	if load, ok := loadAverage(); ok {
+	if load, ok := readLoadAvg(); ok {
 		fmt.Fprintf(&b, "load average: %.2f\n\n", load)
 	} else {
 		b.WriteString("load average: unavailable\n\n")

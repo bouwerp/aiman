@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"os"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -627,23 +624,9 @@ func (a *admission) warnInflight(now time.Time) {
 	if !due {
 		return
 	}
-	if load, ok := loadAverage(); ok {
+	if load, ok := readLoadAvg(); ok {
 		log.Printf("rpc: %d in flight, host load %.1f", n, load)
 		return
 	}
 	log.Printf("rpc: %d in flight", n)
-}
-
-// loadAverage is the one-minute load average from /proc/loadavg.
-func loadAverage() (float64, bool) {
-	raw, err := os.ReadFile("/proc/loadavg")
-	if err != nil {
-		return 0, false
-	}
-	fields := strings.Fields(string(raw))
-	if len(fields) == 0 {
-		return 0, false
-	}
-	v, err := strconv.ParseFloat(fields[0], 64)
-	return v, err == nil
 }

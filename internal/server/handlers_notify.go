@@ -131,7 +131,7 @@ type sweepMemo struct {
 
 // Capture groups, in the order a pass serves them.
 const (
-	sweepTransition = iota // the hook moved to ended or waiting_input since the last pass
+	sweepTransition = iota // the hook moved to waiting_input since the last pass
 	sweepStale             // no fresh hook report: the screen rules decide
 	sweepWorking           // a fresh working report: a menu shows only on screen
 	sweepQuestion          // a fresh idle report while a recorder listens for questions
@@ -152,11 +152,11 @@ func sweepHookKey(sess domain.Session, now time.Time) string {
 }
 
 // sweepGroup is the capture group of a session whose hook key is key; prev is
-// the key the last pass saw, and known says there was a last pass.
+// the key the last pass saw, and known says there was a last pass. Ended is
+// answered by the flag alone, so it never captures, transition or not.
 func (s *Server) sweepGroup(key, prev string, known bool) int {
-	transition := key == "ended" || key == string(domain.AgentStateWaitingInput)
 	switch {
-	case transition && known && key != prev:
+	case key == string(domain.AgentStateWaitingInput) && known && key != prev:
 		return sweepTransition
 	case key == "":
 		return sweepStale
@@ -183,7 +183,8 @@ type sweepItem struct {
 // session that is gone, no longer active or hidden. A call made while another
 // pass is still running returns at once and counts as a skipped tick.
 //
-// A pass captures at most sweepCaptureBudget sessions: transitions, then stale
+// A pass captures at most sweepCaptureBudget sessions: transitions to
+// waiting_input, then stale
 // or missing hook reports, then fresh working reports, then fresh idle reports
 // a recorder checks for a question, least recently captured first inside each
 // group. Sessions past the budget are not sampled and keep their cached state.
@@ -265,17 +266,13 @@ func (s *Server) sweepStates(ctx context.Context) {
 }
 
 // captureTransition reads the screen of a session whose hook just moved to
-// ended or waiting_input, which the report alone answers without one. A menu
-// behind a waiting_input report gives the notification its reason.
+// waiting_input: a menu behind the report gives the notification its reason.
 func (s *Server) captureTransition(sample *stateSample) {
 	screen, ok := s.captureLive(sample.live)
 	if !ok {
 		return
 	}
 	sample.screen = screen
-	if sample.State != domain.AgentStateWaitingInput {
-		return
-	}
 	if reason, open := pane.MenuOpen(screen); open {
 		sample.Reason = notifyReason(reason)
 	}

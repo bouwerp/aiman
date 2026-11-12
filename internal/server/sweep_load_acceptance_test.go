@@ -20,8 +20,8 @@ import (
 //   - var sweepPeriodLow = 2s, sweepPeriodHigh = 5s; const sweepCaptureBudget = 16.
 //   - sweepPeriod(load float64, ok bool, ncpu int) time.Duration is high when
 //     ok and load >= ncpu, else low; runStateSweep re-reads it every tick.
-//   - var readLoadAvg func() (float64, bool) reads /proc/loadavg on Linux and
-//     answers false elsewhere; parseLoadAvg(string) (float64, bool) parses it.
+//   - var readLoadAvg func() (float64, bool) is hoststats.ReadLoadAvg: the
+//     load average on Linux, false elsewhere (parsing is tested in hoststats).
 //   - A session needs a capture when its hook report went to ended or
 //     waiting_input since the last pass (a transition), when the report is
 //     stale or missing, or when it is a fresh working report. A fresh idle,
@@ -55,17 +55,8 @@ func TestSweepPeriodFollowsLoad(t *testing.T) {
 	}
 }
 
-func TestParseLoadAvg(t *testing.T) {
-	v, ok := parseLoadAvg("0.52 0.58 0.59 1/1234 5678\n")
-	if !ok || v != 0.52 {
-		t.Fatalf("parseLoadAvg = %v, %v; want 0.52, true", v, ok)
-	}
-	for _, bad := range []string{"", "garbage", "x 1 2"} {
-		if _, ok := parseLoadAvg(bad); ok {
-			t.Errorf("parseLoadAvg(%q) ok, want false", bad)
-		}
-	}
-	_, ok = readLoadAvg()
+func TestReadLoadAvgDefault(t *testing.T) {
+	_, ok := readLoadAvg()
 	if ok != (runtime.GOOS == "linux") {
 		t.Errorf("readLoadAvg ok = %v on %s", ok, runtime.GOOS)
 	}
