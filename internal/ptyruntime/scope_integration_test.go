@@ -73,6 +73,17 @@ func TestHolderRunsInSessionScope(t *testing.T) {
 		t.Errorf("pids.max = %s, want 512", got)
 	}
 
+	// A holder joins an existing scope by writing its own pid, which the
+	// kernel allows only inside the user manager's delegated subtree: serve
+	// under its systemd unit. A test runner started elsewhere (a system
+	// service, a login session scope) cannot, and the holder then stays put.
+	own, _ := os.ReadFile("/proc/self/cgroup")
+	if !strings.Contains(string(own), strings.TrimPrefix(sd.Root, "/sys/fs/cgroup")+"/") {
+		t.Logf("not under the user manager (%s): skipping the join and restart checks", strings.TrimSpace(string(own)))
+		_ = m.Kill(id)
+		return
+	}
+
 	// A helper terminal of the same session joins the scope and may carry
 	// new limits for it.
 	helper, err := m.Create(Spec{ID: id + "-run", Dir: root, Command: "sleep 300", ScopeKey: id,
