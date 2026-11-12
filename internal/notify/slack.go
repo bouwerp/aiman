@@ -56,6 +56,6 @@ func (s *SlackSink) Send(ctx context.Context, n domain.Notification) error {
 		return err
 	}
 	text := slackEscape(n.Text)
-	_, err = s.Client.Post(ctx, slackclient.Post{Channel: ch, Text: text})
+	_, err = s.Client.Post(ctx, slackclient.Post{Channel: ch, Text: text, Plain: true})
 	return err
 }

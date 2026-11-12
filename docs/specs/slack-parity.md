@@ -64,7 +64,7 @@ flowchart LR
 | create_canvas | `aiman slack canvas create --title T [--channel C] --text-file f.md` | `canvases.create` / `conversations.canvases.create` | new |
 | update_canvas | `aiman slack canvas edit <id> --op append\|prepend\|after\|before\|replace\|delete\|rename [--section S] [--all] --text-file f.md` | `canvases.edit`, one change per call: append→`insert_at_end`, prepend→`insert_at_start`, after/before→`insert_after`/`insert_before`. `replace` and `delete` need `--section`; replacing the whole canvas needs `--all` | new |
 | read_file | `aiman slack file read <id> [--out path]` | `files.info` + authenticated GET of `url_private` | new |
-| get_file_upload_url + complete_file_upload | `aiman slack upload <path> --channel C [--thread ts] [--comment text] [--title t]` | `files.getUploadURLExternal` (form POST, `filename`, `length`), PUT the bytes, `files.completeUploadExternal` | new |
+| get_file_upload_url + complete_file_upload | `aiman slack upload <path> --channel C [--thread ts] [--comment text] [--title t]` | `files.getUploadURLExternal` (form POST, `filename`, `length`), POST the bytes to `upload_url`, `files.completeUploadExternal` | new |
 | read_user_profile | `aiman slack user [U]` (self when omitted) | `users.info` + `users.profile.get` (GET only) | changed: profile, email |
 | list_user_channels | `aiman slack channels [--mine] [--types ...] [--prefix p] [--cursor]` | `users.conversations` / `conversations.list` | changed |
 | list_channel_members | `aiman slack members --channel C [--cursor]` | `conversations.members` + `users.info` | new |

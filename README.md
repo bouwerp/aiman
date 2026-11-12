@@ -1080,7 +1080,12 @@ aiman slack auth login              # browser approval; forward port 43127 if th
 aiman slack auth status
 aiman slack send --channel engineering --text "Build is green."
 aiman slack wait --channel engineering --thread 1711.000100 --timeout 5m
+aiman slack search "release freeze" --private
+aiman slack canvas read F012
+aiman slack list set F056 Rec012 --set Status=Done
 ```
+
+`aiman slack` covers what Claude's Slack tools do: search, channels, history, threads, members, profiles, reactions, emoji, canvases, files and uploads, Lists, scheduled messages, new channels and DMs. Drafts are the one gap (Slack has no API). Every command prints JSON; the full list is in the bundled skill's `## Slack` section. Set `slack.writes: off` in `~/.aiman/config.yaml` to make a host read-only.
 
 The credentials file is `~/.aiman/slack-oauth.json`, mode `0600`. `AIMAN_SLACK_USER_TOKEN` overrides the user token for one process. There is no bot user to invite.
 

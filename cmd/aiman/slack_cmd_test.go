@@ -147,7 +147,7 @@ func TestRunSlackSendResolvesName(t *testing.T) {
 		case "/api/chat.postMessage":
 			var req map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req["channel"] != "C9" || req["text"] != "shipped" {
+			if req["channel"] != "C9" || req["markdown_text"] != "shipped" {
 				t.Errorf("post %+v", req)
 			}
 			_, _ = io.WriteString(w, `{"ok":true,"channel":"C9","ts":"50.1"}`)

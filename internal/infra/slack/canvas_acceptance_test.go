@@ -1,5 +1,3 @@
-//go:build slackparity_c
-
 package slack
 
 import (

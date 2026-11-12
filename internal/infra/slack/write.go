@@ -23,11 +23,18 @@ type Post struct {
 	ThreadTS  string
 	Broadcast bool
 	NoUnfurl  bool
+	// Plain sends Text as mrkdwn `text` instead of `markdown_text`, for a
+	// caller that escapes &, < and > itself (Slack decodes those entities
+	// in `text`), such as the notification sink.
+	Plain bool
 }
 
 // Post sends a message as the member who owns the user token.
 func (c *Client) Post(ctx context.Context, p Post) (Posted, error) {
 	req := map[string]any{"channel": p.Channel, "markdown_text": p.Text}
+	if p.Plain {
+		req = map[string]any{"channel": p.Channel, "text": p.Text}
+	}
 	if p.ThreadTS != "" {
 		req["thread_ts"] = p.ThreadTS
 	}

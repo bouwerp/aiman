@@ -383,17 +383,51 @@ aiman slack auth status
 
 `auth check` reads an app configuration token from stdin and compares that existing app with the manifest: user scopes, PKCE, and the `127.0.0.1:43127` redirect. A mismatch exits `slack_app_settings`. Do not print the configuration token. `auth app` reads the client id from stdin. `auth login` opens Slack so that member can approve, and refuses to save a token that is missing a required user scope. If the browser is on another machine, forward port `43127` to this host first. Agents do not run `auth check` or `auth login`. If a command returns `slack_unconfigured` or `slack_app_settings`, tell the operator.
 
+Reads:
+
 ```bash
-aiman slack channels
-aiman slack history --channel engineering --limit 20
-aiman slack send --channel engineering --text "Build is green."
-aiman slack thread --channel C012 --ts 1711.000100
-aiman slack react --channel C012 --ts 1711.000100 --emoji eyes
-aiman slack user U012
+aiman slack search "release freeze" --private --in C012 --from U034 --after 2026-11-01
+aiman slack search "qa" --channels          # or --users, --files
+aiman slack history --channel engineering --limit 20 [--oldest ts] [--latest ts] [--cursor c]
+aiman slack history --channel U034          # a user id reads your DM with them
+aiman slack thread --channel C012 --ts 1711.000100 [--cursor c]
+aiman slack channels [--mine] [--prefix eng] [--cursor c]
+aiman slack members --channel C012
+aiman slack user [U012]                     # profile with email; yourself when omitted
+aiman slack reactions --channel C012 --ts 1711.000100
+aiman slack emoji ship
+aiman slack canvas read F012 [--sections h1,h2] [--contains Risks]
+aiman slack file read F034 [--out path]
+aiman slack list read F056 [--format json|csv|markdown] [--schema]
+aiman slack schedule list [--channel C012]
 aiman slack wait --channel engineering --thread 1711.000100 --timeout 5m
 ```
 
-`--channel` is a name or an id. `--thread` replies in that thread. `--text-file` or `--text -` sends a longer body. `send` posts as the approving member. `wait` returns the next message in the thread that is not from that member. If `--timeout` elapses it exits with `slack_timeout`. Commands print JSON.
+Writes (they post or change Slack as the approving member):
+
+```bash
+aiman slack send --channel engineering --text-file note.md [--thread ts] [--broadcast] [--no-unfurl]
+aiman slack react --channel C012 --ts 1711.000100 --emoji eyes
+aiman slack schedule --channel C012 --at +2h --text "Reminder"   # or --at 2026-11-20T09:00:00Z
+aiman slack schedule cancel Q012 --channel C012
+aiman slack upload report.pdf --channel C012 [--thread ts] [--comment text]
+aiman slack canvas create --title "Plan" --text-file plan.md [--channel C012]
+aiman slack canvas edit F012 --op append --text-file more.md
+aiman slack canvas edit F012 --op replace --section temp:C:abc --text-file s.md
+aiman slack list add F056 --set Item="New bug" --set Status="To do"
+aiman slack list set F056 Rec012 --set Status=Done
+aiman slack list create --name QA --columns-file cols.json
+aiman slack create-channel qa-nov [--private] [--invite U1,U2]
+aiman slack dm U1[,U2]
+```
+
+- `--channel` is a name or an id. Text is markdown; `--text-file` or `--text -` sends a longer body. Commands print JSON (`list read --format csv|markdown` prints text).
+- Anything that pages returns `next_cursor`; pass it back with `--cursor`. `search` returns one page per call: Slack allows about 10 searches a minute, so page only as far as you need. DM results need each member's consent in Slack first.
+- `canvas edit` makes one change per call: `append`, `prepend`, `after`/`before` (need `--section`), `replace` and `delete` (need `--section`; replacing the whole canvas needs `--all`), `rename`. Section ids come from `canvas read`.
+- `list set` and `list add` take column names and option labels as you see them in Slack; aiman maps them. Columns are fixed when a List is created.
+- Drafts are not possible: Slack has no API for them.
+- `wait` returns the next message in the thread that is not from the approving member, or exits `slack_timeout`.
+- A host can make agents read-only with `slack.writes: off` in `~/.aiman/config.yaml`; writes then fail with `slack_writes_off`. Tell the operator if you need one.
 
 ## Before you open a pull request
 

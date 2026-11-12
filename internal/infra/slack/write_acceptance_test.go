@@ -1,5 +1,3 @@
-//go:build slackparity_e
-
 package slack
 
 import (
@@ -41,12 +39,13 @@ func TestSendOptionsUseMarkdownTextAlone(t *testing.T) {
 
 func TestScheduleListAndCancel(t *testing.T) {
 	f, c := newFakeSlack(t)
-	f.on("chat.scheduleMessage", `{"ok":true,"channel":"C1","scheduled_message_id":"Q1","post_at":"1900000000"}`)
-	f.on("chat.scheduledMessages.list", `{"ok":true,"scheduled_messages":[{"id":"Q1","channel_id":"C1","post_at":1900000000,"text":"later"}],"response_metadata":{"next_cursor":""}}`)
+	at := time.Now().Add(2 * time.Hour).Truncate(time.Second)
+	unix := strconv.FormatInt(at.Unix(), 10)
+	f.on("chat.scheduleMessage", `{"ok":true,"channel":"C1","scheduled_message_id":"Q1","post_at":"`+unix+`"}`)
+	f.on("chat.scheduledMessages.list", `{"ok":true,"scheduled_messages":[{"id":"Q1","channel_id":"C1","post_at":`+unix+`,"text":"later"}],"response_metadata":{"next_cursor":""}}`)
 	f.on("chat.deleteScheduledMessage", `{"ok":true}`)
-	at := time.Unix(1900000000, 0)
 	s, err := c.Schedule(context.Background(), ScheduleRequest{Channel: "C1", Text: "later", At: at, Thread: "1.0"})
-	if err != nil || s.ID != "Q1" || s.Channel != "C1" || s.PostAt != 1900000000 {
+	if err != nil || s.ID != "Q1" || s.Channel != "C1" || s.PostAt != at.Unix() {
 		t.Fatalf("schedule %+v %v", s, err)
 	}
 	p := f.called("chat.scheduleMessage")[0].Params
