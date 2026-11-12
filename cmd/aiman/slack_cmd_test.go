@@ -147,7 +147,7 @@ func TestRunSlackSendResolvesName(t *testing.T) {
 		case "/api/chat.postMessage":
 			var req map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req["channel"] != "C9" || req["text"] != "shipped" {
+			if req["channel"] != "C9" || req["markdown_text"] != "shipped" {
 				t.Errorf("post %+v", req)
 			}
 			_, _ = io.WriteString(w, `{"ok":true,"channel":"C9","ts":"50.1"}`)
@@ -222,5 +222,36 @@ func TestRunSlackAuthAppReturnsAfterOneLine(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "tok"))
 	if err != nil || !strings.Contains(string(got), "123.456") {
 		t.Fatalf("file %q %v", got, err)
+	}
+}
+
+func TestSlackCommandTableMarksWrites(t *testing.T) {
+	for name, want := range map[string]bool{"send": true, "react": true, "wait": false, "history": false, "user": false, "auth": false} {
+		cmd, ok := slackCommands[name]
+		if !ok || cmd.isWrite(nil) != want {
+			t.Errorf("%s: registered %v, want write %v", name, ok, want)
+		}
+	}
+	mixed := slackCommand{write: slackWriteSubcommands("create", "edit", "")}
+	for args, want := range map[string]bool{"read X": false, "create --title t": true, "edit X": true, "": true, "--at +2h": true, "list": false} {
+		if got := mixed.isWrite(strings.Fields(args)); got != want {
+			t.Errorf("subcommand args %q: write %v, want %v", args, got, want)
+		}
+	}
+	if (slackCommand{write: slackNeverWrite}).isWrite([]string{"x"}) {
+		t.Error("slackNeverWrite reported a write")
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("duplicate registration must panic")
+		}
+	}()
+	registerSlack("send", slackCommand{})
+}
+
+func TestSlackFlagsBoolsAndEquals(t *testing.T) {
+	flags, rest := slackFlags([]string{"--mine", "eng", "--prefix=en", "--limit", "5"}, "mine")
+	if flags["mine"] != "1" || flags["prefix"] != "en" || flags["limit"] != "5" || len(rest) != 1 || rest[0] != "eng" {
+		t.Fatalf("flags %v rest %v", flags, rest)
 	}
 }

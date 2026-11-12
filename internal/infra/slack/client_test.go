@@ -22,7 +22,10 @@ func TestPostAndHistory(t *testing.T) {
 		case "/api/chat.postMessage":
 			var req map[string]string
 			_ = json.Unmarshal(body, &req)
-			sawChannel, sawText, sawThread = req["channel"], req["text"], req["thread_ts"]
+			if _, ok := req["text"]; ok {
+				t.Error("text sent with markdown_text")
+			}
+			sawChannel, sawText, sawThread = req["channel"], req["markdown_text"], req["thread_ts"]
 			_, _ = io.WriteString(w, `{"ok":true,"ts":"100.1","channel":"C1"}`)
 		case "/api/conversations.history":
 			_, _ = io.WriteString(w, `{"ok":true,"messages":[{"type":"message","user":"U1","text":"hi","ts":"90.1"}]}`)
@@ -125,5 +128,25 @@ func TestManifestIsUserOAuth(t *testing.T) {
 	raw, _ := json.Marshal(oauth["redirect_urls"])
 	if !strings.Contains(string(raw), DefaultRedirectURL) {
 		t.Fatalf("redirect %s", raw)
+	}
+}
+
+func TestPostPlainSendsText(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &got)
+		_, _ = io.WriteString(w, `{"ok":true,"ts":"1.0","channel":"C1"}`)
+	}))
+	defer srv.Close()
+	c := &Client{Token: "xoxp-test", Base: srv.URL + "/api/", HTTP: srv.Client()}
+	if _, err := c.Post(context.Background(), Post{Channel: "C1", Text: "a &lt;b&gt;", Plain: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got["text"] != "a &lt;b&gt;" {
+		t.Fatalf("text %v", got)
+	}
+	if _, ok := got["markdown_text"]; ok {
+		t.Fatalf("plain post sent markdown_text: %v", got)
 	}
 }
