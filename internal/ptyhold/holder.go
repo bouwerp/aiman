@@ -15,6 +15,7 @@ import (
 
 	pty "github.com/creack/pty/v2"
 
+	"github.com/bouwerp/aiman/internal/cgroup"
 	"github.com/bouwerp/aiman/internal/shellx"
 )
 
@@ -67,6 +68,11 @@ func Run(root, id string) (err error) {
 	}
 	if rows <= 0 {
 		rows = 24
+	}
+
+	if err := cgroup.Join(spec.JoinCgroup); err != nil {
+		// The command still runs, charged to wherever the holder started.
+		fmt.Fprintf(os.Stderr, "holder: join cgroup %s: %v\n", spec.JoinCgroup, err)
 	}
 
 	//nolint:gosec // G204: running the operator-configured agent command is the purpose of this program

@@ -7,6 +7,7 @@ package ptyruntime
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/cgroup"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/ptyhold"
 )
@@ -106,6 +108,19 @@ type Spec struct {
 	// AgentNice is the nice increment the command starts at; see
 	// ptyhold.Spec.AgentNice.
 	AgentNice int
+	// ScopeKey names the cgroup scope the holder runs in: the session the
+	// terminal belongs to. Empty is ID. Limits are that scope's limits.
+	// Both do nothing while the manager has no Scopes.
+	ScopeKey string
+	Limits   cgroup.Limits
+}
+
+// Scoper places a holder in a session's cgroup scope.
+type Scoper interface {
+	// Launch returns the command prefix that starts a holder in a new scope
+	// for key, or, when that scope already exists, the cgroup directory the
+	// holder joins.
+	Launch(key string, limits cgroup.Limits) (prefix []string, join string)
 }
 
 // Status describes the lifecycle state of a session.
@@ -154,6 +169,10 @@ type Manager struct {
 	// HolderCmd invokes the holder binary; default is this executable with
 	// "pty hold". Injectable for tests.
 	HolderCmd []string
+
+	// Scopes puts each holder in its session's cgroup scope. Nil spawns
+	// holders in the caller's own cgroup.
+	Scopes Scoper
 
 	mu    sync.Mutex
 	conns map[string]net.Conn // cached input connections per session id
@@ -231,7 +250,17 @@ func (m *Manager) Create(spec Spec) (*SessionInfo, error) {
 			return nil, fmt.Errorf("pty: clean stale session: %w", err)
 		}
 	}
-	if err := ptyhold.Spawn(m.root, ptyhold.Spec{
+	holderCmd := m.holderCmd()
+	var prefix []string
+	var join string
+	if m.Scopes != nil {
+		key := spec.ScopeKey
+		if key == "" {
+			key = spec.ID
+		}
+		prefix, join = m.Scopes.Launch(key, spec.Limits)
+	}
+	hspec := ptyhold.Spec{
 		ID:      spec.ID,
 		Name:    spec.Name,
 		Dir:     spec.Dir,
@@ -243,8 +272,19 @@ func (m *Manager) Create(spec Spec) (*SessionInfo, error) {
 		Role:     spec.Role,
 		ParentID: spec.ParentID,
 
-		AgentNice: spec.AgentNice,
-	}, m.holderCmd()); err != nil {
+		AgentNice:  spec.AgentNice,
+		JoinCgroup: join,
+	}
+	err := ptyhold.Spawn(m.root, hspec, append(append([]string(nil), prefix...), holderCmd...))
+	var launch *ptyhold.LaunchError
+	if len(prefix) > 0 && errors.As(err, &launch) {
+		// The scope could not be created. A session without its own limits
+		// beats no session.
+		log.Printf("pty: %s: no cgroup scope, starting the holder without one: %v", spec.ID, err)
+		_ = ptyhold.Cleanup(m.root, spec.ID)
+		err = ptyhold.Spawn(m.root, hspec, holderCmd)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("pty: start %q: %w", spec.Command, err)
 	}
 	return m.Get(spec.ID)

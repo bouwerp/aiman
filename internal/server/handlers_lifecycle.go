@@ -73,6 +73,10 @@ func (s *Server) dispatchLifecycle(ctx context.Context, req Request) Response {
 		return s.handleHostVersion(ctx, req)
 	case "host.update":
 		return s.handleHostUpdate(ctx, req)
+	case "resources.get":
+		return s.handleResourcesGet(ctx, req)
+	case "session.limits":
+		return s.handleSessionLimits(ctx, req)
 	default:
 		return s.handleHostStats(ctx, req)
 	}

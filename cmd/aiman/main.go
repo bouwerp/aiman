@@ -96,8 +96,8 @@ func run() error {
 			return runTodo(parsed.Rest[1:], os.Stdin, os.Getenv)
 		case "usage":
 			return runUsage(parsed.Rest[1:], os.Stdout)
-		case "limits":
-			return runLimits(parsed.Rest[1:], os.Stdin, os.Stdout)
+		case "limits", "resources":
+			return runLimitsOrResources(parsed.Rest, os.Stdin, os.Stdout)
 		case "agents":
 			return runAgents(parsed.Rest[1:], os.Stdout)
 		case "aws":

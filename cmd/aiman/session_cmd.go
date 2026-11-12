@@ -226,6 +226,19 @@ func runSession(args []string) error {
 			return errUsage
 		}
 		return callAndPrint(sock, "session.move", map[string]any{"id": target, "group": flags["group"]})
+	case "limits":
+		flags, rest := takeFlags(args[1:])
+		if len(rest) != 1 {
+			writeCLIError(server.CodeInvalidParams, "session limits <target> [--memory-high SIZE] [--memory-max SIZE]")
+			return errUsage
+		}
+		params := map[string]any{"session": rest[0]}
+		for flag, param := range map[string]string{"memory-high": "memory_high", "memory-max": "memory_max"} {
+			if flags[flag] != "" {
+				params[param] = flags[flag]
+			}
+		}
+		return callAndPrint(sock, "session.limits", params)
 	default:
 		writeCLIError(server.CodeInvalidParams, "unknown session command "+args[0])
 		return errUsage
@@ -243,6 +256,11 @@ func sessionCreateParams(flags map[string]string) (map[string]any, error) {
 	for _, k := range []string{"name", "group", "parent", "for", "repo", "branch", "agent", "tier", "model", "effort", "dir", "prompt", "issue", "base", "review"} {
 		if flags[k] != "" {
 			params[k] = flags[k]
+		}
+	}
+	for flag, param := range map[string]string{"memory-high": "memory_high", "memory-max": "memory_max"} {
+		if flags[flag] != "" {
+			params[param] = flags[flag]
 		}
 	}
 	if v := flags["budget-tokens"]; v != "" {

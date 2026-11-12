@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agentupdate"
+	"github.com/bouwerp/aiman/internal/cgroup"
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/design"
@@ -88,7 +89,12 @@ type Server struct {
 	// agentNice is host.load.agent_nice, the nice increment pty.create
 	// gives every agent pty.
 	agentNice atomic.Int32
-	version   string
+	// resources is the resources block: per-session cgroup limits and
+	// scratch directories. Nil until SetResources.
+	resources atomic.Pointer[ResourceOptions]
+	// sampler holds the resource sampler once RunResources started it.
+	sampler atomic.Pointer[cgroup.Sampler]
+	version string
 
 	// hub carries events published by handlers to session.events streams.
 	hub *eventHub
@@ -436,7 +442,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleMove(ctx, req)
 	case "session.forget":
 		return s.handleForget(ctx, req)
-	case "session.restart", "session.terminate", "session.land", "repo.list", "host.stats", "host.version", "host.update":
+	case "session.restart", "session.terminate", "session.land", "session.limits", "repo.list", "host.stats", "host.version", "host.update", "resources.get":
 		return s.dispatchLifecycle(ctx, req)
 	case "session.register":
 		return s.handleRegister(ctx, req)

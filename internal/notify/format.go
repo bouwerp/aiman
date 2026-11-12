@@ -42,6 +42,10 @@ func Format(label, host string, kind domain.NotifyKind, detail string) string {
 	if (kind == domain.NotifyAgentUpdate || kind == domain.NotifyHostUpdate) && detail != "" {
 		return detail
 	}
+	if kind == domain.NotifyResources && label == "" && detail != "" {
+		// A host-level alert: no session to name.
+		return "on " + host + " " + detail
+	}
 	base := label + " on " + host + ": " + domain.EventLabel(kind)
 	if detail == "" {
 		return base

@@ -563,7 +563,9 @@ type Model struct {
 	// than this TUI (nil when none), hintToasted the tags already toasted.
 	githubLatest string
 	hint         *ReleaseHint
-	hintToasted  map[string]bool
+	// res is each host's session resource usage (resources.go).
+	res         resourcesState
+	hintToasted map[string]bool
 	// syncReconciled marks sessions this run has already tried to build a local
 	// sync for, so a failure is not retried in a loop (see create_remote.go).
 	syncReconciled    map[string]bool
@@ -3045,13 +3047,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionCreateMsg:
 		return m.applySessionCreateMsg(msg, cmds)
 	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg, agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg,
-		gatewayPairMsg, gatewayPairTickMsg, githubReleaseMsg, githubReleaseDueMsg:
+		gatewayPairMsg, gatewayPairTickMsg, githubReleaseMsg, githubReleaseDueMsg, resourcesMsg, resourcesTickMsg:
 		return m.routeRemoteServiceMsg(msg)
 	case discoveryResultMsg:
 		// Startup and refresh both deliver this after the dashboard is already
 		// on the main list. Routing by view state drops the scan, so a create
 		// that races the first scan keeps a placeholder plus the live row.
-		return m.applyDiscoveryResult(msg)
+		model, cmd := m.applyDiscoveryResult(msg)
+		return model, tea.Batch(cmd, m.resourcesAfterDiscovery())
 	}
 
 	if model, cmd, handled := m.updateByState(msg); handled {
@@ -7447,7 +7450,7 @@ func (m *Model) renderMainView() string {
 		headerW = 1
 	}
 	sessions, needs := m.headerSessionCounts()
-	header := renderA1Header(m.a1HostLabel(), sessions, needs, m.discoveryPending, headerW)
+	header := renderA1HeaderGauge(m.a1HostLabel(), m.headerGauge(), sessions, needs, m.discoveryPending, headerW)
 
 	contentWidth := m.width - 4 // docStyle margins
 	if contentWidth < 1 {

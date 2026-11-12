@@ -67,8 +67,10 @@ func Spawn(root string, spec Spec, holderCmd []string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("ptyhold: spawn: %w", err)
 	}
-	// Do not wait on the holder; it outlives us by design.
-	go func() { _, _ = cmd.Process.Wait() }()
+	// Reap the holder without blocking on it; it outlives us by design. An
+	// exit is still worth knowing about while we wait for readiness.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
 
 	// Readiness means the live socket is bound, not merely that meta.json
 	// exists. The holder writes meta *before* binding, so a meta-only check
@@ -89,11 +91,34 @@ func Spawn(root string, spec Spec, holderCmd []string) error {
 		if socketReady(dir) {
 			return nil
 		}
+		select {
+		case werr := <-exited:
+			// The process is gone without an exit file: the holder never
+			// ran. That is what a launcher in front of it (systemd-run)
+			// looks like when it fails, and the caller can retry without it.
+			if _, serr := os.Stat(filepath.Join(dir, ExitFile)); serr != nil && werr != nil {
+				return &LaunchError{Err: werr, Output: holderLogSuffix(dir)}
+			}
+		default:
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	return fmt.Errorf("ptyhold: holder %s did not become ready in %s%s",
 		spec.ID, spawnReadyTimeout, holderLogSuffix(dir))
 }
+
+// LaunchError is Spawn's failure when the spawned process exited non-zero
+// before the holder left any trace of itself.
+type LaunchError struct {
+	Err    error
+	Output string
+}
+
+func (e *LaunchError) Error() string {
+	return fmt.Sprintf("ptyhold: holder did not start: %v%s", e.Err, e.Output)
+}
+
+func (e *LaunchError) Unwrap() error { return e.Err }
 
 // holderLogSuffix quotes what the holder printed, so a readiness timeout says
 // why instead of only that it happened.

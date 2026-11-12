@@ -77,6 +77,11 @@ type Spec struct {
 	// [0,19]); the holder keeps its own priority. Absent or 0 runs the agent
 	// at the holder's niceness.
 	AgentNice int `json:"agent_nice,omitempty"`
+	// JoinCgroup is a cgroup directory the holder moves itself into before
+	// it starts the command: the session's existing scope, when the holder
+	// could not be started in a new one. Absent leaves the holder where it
+	// was spawned.
+	JoinCgroup string `json:"join_cgroup,omitempty"`
 }
 
 // Dir returns the session directory for id under root.

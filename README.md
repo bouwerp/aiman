@@ -791,6 +791,61 @@ inherits it, so those can miss short timeouts on a loaded host. Running agents k
 priority until their session restarts. The wrapper runs `nice` (coreutils), so the host needs
 it on PATH; `agent_nice: 0` disables the wrapper.
 
+#### Session resource limits
+
+On a Linux host with a user systemd, every session's terminal runs in its own cgroup scope,
+`aiman-session-<id>.scope`, inside `aiman-sessions.slice`. A session that exhausts its memory
+budget is throttled alone; other sessions, serve and the gateway keep running. Helper
+terminals a session opens (`aiman pty create --id "$AIMAN_ID-run"`) are charged to that
+session. On macOS, or any host without a user systemd, sessions start as before and none of
+this applies.
+
+```yaml
+resources:
+  enabled: true # false: no scopes, sessions share serve's cgroup
+  session:
+    memory_high: 6G # throttled above this
+    memory_max: 10G # processes are killed above this
+    memory_swap_max: 1G
+    cpu_weight: 100
+    io_weight: 100
+    tasks_max: 4096
+  sessions_slice:
+    memory_high: 20G # all sessions together; unset: the user slice's MemoryHigh less a sixth (at least 2G)
+  tmpdir: true # TMPDIR=~/.aiman/tmp/<session id> per session
+```
+
+Sizes take `K`, `M`, `G` or `T`, or `infinity`. An unreadable value keeps its default and is
+logged at serve start. The block is pushed to each host with the rest of the serve config
+(`c` on the Agent API page), and applies to terminals started after serve restarts: a running
+session keeps what it started with until it is restarted (`s`).
+
+- `aiman resources [--session NAME] [--json]` (RPC `resources.get`) shows each session's
+  memory against its limit, anon and shmem, memory pressure, CPU, pids and OOM kills, with the
+  user slice, the sessions slice and host pressure. The dashboard shows the same per session
+  and a gauge for the user slice.
+- `aiman session create --memory-high 12G [--memory-max 16G]` starts a session with its own
+  limits, and `aiman session limits <session> --memory-high 12G` changes a running one at once.
+  The override is kept across restarts and deleted with the session. Only the operator may set
+  one; it does not raise the aggregate limit.
+- A session held at 90% of `memory_high` for 30 seconds, or stalled on memory more than half
+  the time, raises a `resources` notification and gets one `[aiman]` note in its pane telling it
+  to reduce parallelism, at most once per ten minutes. The user slice or the sessions slice at
+  90% raises a host-level notification.
+- Each session's `TMPDIR` (and `CLAUDE_CODE_TMPDIR`, which Claude Code reads first) is
+  `~/.aiman/tmp/<session id>`, on disk, so scratch files are not charged as memory on a host
+  whose `/tmp` is tmpfs. It is deleted when the session is terminated or forgotten.
+  The path is longer than `/tmp`, and a unix socket path holds at most 108 bytes: a test that
+  binds a socket deep under `t.TempDir()` can fail with `bind: invalid argument`. Run that
+  command with `TMPDIR=/tmp`, or set `resources.tmpdir: false` on the host.
+- The serve and gateway units carry `MemoryLow`, `CPUWeight=200` and `IOWeight=200`.
+
+Two things need root and are left to the host's administrator: the user slice's own limits
+(`/etc/systemd/system/user-<uid>.slice.d/`), and `MemoryLow` on `user@<uid>.service`, without
+which the units' `MemoryLow` protects serve only from reclaim inside the user manager. The
+user manager is delegated `cpu`, `memory` and `pids` by default, so `io_weight` has no effect
+unless `io` is delegated too.
+
 #### Serve diagnostics
 
 `aiman host stats` on the host prints the load average, CPU and the last minute of agent API

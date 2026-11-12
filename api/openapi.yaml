@@ -550,6 +550,8 @@ components:
             - host.stats
             - host.version
             - host.update
+            - resources.get
+            - session.limits
             - session.register
             - session.report_agent_session
             - notify.since
@@ -799,6 +801,8 @@ components:
             - $ref: "#/components/schemas/HostStatsResult"
             - $ref: "#/components/schemas/HostVersionResult"
             - $ref: "#/components/schemas/HostUpdateResult"
+            - $ref: "#/components/schemas/ResourcesResult"
+            - $ref: "#/components/schemas/SessionLimitsResult"
             - $ref: "#/components/schemas/LimitsResult"
             - $ref: "#/components/schemas/AWSStatusResult"
             - $ref: "#/components/schemas/AWSLoginResult"
@@ -1358,6 +1362,132 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RPCCount"
+    ResourceUsage:
+      type: object
+      description: >
+        One cgroup's use. Sizes are bytes; a limit of -1 is "no limit" and an
+        absent one was not read.
+      required: [memory_current, anon, shmem, memory_pressure, cpu_percent, pids]
+      properties:
+        memory_current:
+          type: integer
+        memory_high:
+          type: integer
+          description: Above this the cgroup is throttled.
+        memory_max:
+          type: integer
+          description: Above this the kernel kills processes in the cgroup.
+        anon:
+          type: integer
+        shmem:
+          type: integer
+          description: tmpfs files and shared memory, charged until deleted.
+        memory_pressure:
+          type: number
+          description: Percent of the last 10 seconds some task stalled on memory.
+        cpu_percent:
+          type: number
+          description: Percent of one core over the last sample interval.
+        pids:
+          type: integer
+        oom_kills:
+          type: integer
+    ResourceLimits:
+      type: object
+      description: Limits of one session scope; an absent field is unset.
+      properties:
+        memory_high:
+          type: integer
+        memory_max:
+          type: integer
+        memory_swap_max:
+          type: integer
+        cpu_weight:
+          type: integer
+        io_weight:
+          type: integer
+        tasks_max:
+          type: integer
+    ResourcesResult:
+      type: object
+      description: >
+        Read-only, from a sample serve takes every 10 seconds. Pass session to
+        get one session. A host without per-session scopes (no user systemd)
+        answers supported false with no sessions; hide the readout there.
+      required: [type, resources]
+      properties:
+        type:
+          type: string
+          const: resources
+        resources:
+          type: object
+          required: [supported, host, sessions, limits, tmpdir]
+          properties:
+            supported:
+              type: boolean
+            at:
+              type: string
+              format: date-time
+            host:
+              type: object
+              description: Percent of the last 10 seconds some task on the host stalled.
+              required: [memory, cpu, io]
+              properties:
+                memory:
+                  type: number
+                cpu:
+                  type: number
+                io:
+                  type: number
+            user_slice:
+              $ref: "#/components/schemas/ResourceUsage"
+            sessions_slice:
+              $ref: "#/components/schemas/ResourceUsage"
+            sessions:
+              type: array
+              items:
+                allOf:
+                  - $ref: "#/components/schemas/ResourceUsage"
+                  - type: object
+                    required: [id]
+                    properties:
+                      id:
+                        type: string
+                      name:
+                        type: string
+            limits:
+              $ref: "#/components/schemas/ResourceLimits"
+            slice_memory_high:
+              type: integer
+            tmpdir:
+              type: boolean
+            missing:
+              type: string
+              description: >
+                The session asked for, when it has no scope: it runs without
+                limits until its terminal is restarted.
+    SessionLimitsResult:
+      type: object
+      description: >
+        session.limits with memory_high or memory_max ("12G", "infinity")
+        stores the session's override and applies it to a running scope;
+        with neither it reports. Setting is the operator's (needs_operator
+        for a session) and is not a device method.
+      required: [type, session, limits, applied, scoped]
+      properties:
+        type:
+          type: string
+          const: session_limits
+        session:
+          type: string
+        name:
+          type: string
+        limits:
+          $ref: "#/components/schemas/ResourceLimits"
+        applied:
+          type: boolean
+        scoped:
+          type: boolean
     HostStatsResult:
       type: object
       description: >

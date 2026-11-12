@@ -238,6 +238,13 @@ func (m *Model) notifyToast(ev server.SessionEvent) tea.Cmd {
 		}
 		return m.showToast("● "+ev.Text, false, notifyToastDelay)
 	}
+	if kind == domain.NotifyResources && ev.ID == "" {
+		// The host's slice is near its limit: no session to name.
+		if ev.Text == "" {
+			return nil
+		}
+		return m.showToast("● "+ev.Text, false, notifyToastDelay)
+	}
 	if !domain.NeedsYou(kind) {
 		return nil
 	}

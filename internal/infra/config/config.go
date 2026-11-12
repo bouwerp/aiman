@@ -55,6 +55,8 @@ type Config struct {
 	Roles RolesConfig `yaml:"roles,omitempty"`
 	// Host configures how serve keeps the host's aiman binaries current.
 	Host HostConfig `yaml:"host,omitempty"`
+	// Resources configures per-session cgroup limits and scratch directories.
+	Resources ResourcesConfig `yaml:"resources,omitempty"`
 	// Slack configures the aiman slack CLI on this machine.
 	Slack        SlackConfig `yaml:"slack,omitempty"`
 	Remotes      []Remote    `yaml:"remotes"`
@@ -106,6 +108,8 @@ type ServeConfig struct {
 	AWS ServeAWSConfig `yaml:"aws,omitempty"`
 	// Host configures how serve keeps the host's aiman binaries current.
 	Host HostConfig `yaml:"host,omitempty"`
+	// Resources configures per-session cgroup limits and scratch directories.
+	Resources ResourcesConfig `yaml:"resources,omitempty"`
 }
 
 // SlackConfig configures the aiman slack CLI.
@@ -465,6 +469,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Roles:         c.Roles,
 		AWS:           c.serveAWSFor(host),
 		Host:          c.Host,
+		Resources:     c.Resources,
 	})
 }
 

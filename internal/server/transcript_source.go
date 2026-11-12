@@ -14,6 +14,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
+	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/transcript"
 )
 
@@ -240,6 +241,10 @@ func (f *fileTranscripts) sessionDirs(path, kind string) []string {
 		for _, tmp := range uniq("/tmp", os.TempDir()) {
 			dirs = append(dirs, filepath.Join(tmp, uid, slug, id))
 		}
+		// A session with its own TMPDIR (~/.aiman/tmp/<aiman session id>)
+		// has Claude's directory under it.
+		own, _ := filepath.Glob(filepath.Join(f.home, config.DirName, "tmp", "*", uid, slug, id))
+		dirs = append(dirs, own...)
 		return dirs
 	case "grok":
 		return []string{filepath.Dir(path)}

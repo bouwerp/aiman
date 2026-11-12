@@ -180,6 +180,8 @@ func runServe() error {
 	srv.SetPeerNotes(cfg.Sessions.PeerNotesOn())
 	srv.SetHostLoad(cfg.Host.Load)
 	srv.SetAgentNice(cfg.Host.Load.AgentNiceOrDefault())
+	wireResources(ctx, srv, ptyMgr, cfg.Resources, dir)
+	go srv.RunResources(ctx)
 	srv.SetCILocal(server.CILocalDeps{
 		Runner:   &cigate.Runner{Dir: filepath.Join(dir, "ci-local"), MaxParallel: 2},
 		Repos:    cfg.Repos,
