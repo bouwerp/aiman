@@ -78,10 +78,11 @@ func init() {
 	})
 	registerSlack("auth", slackCommand{
 		run: runSlackAuth,
-		usage: `<app|login|check|status> …
+		usage: `<app|login|check [--app A012]|status> …
 
   auth app                     read the app's client id from stdin
   auth login [--timeout 5m]    approve the app in a browser and store the user token
+  auth check                   check the stored user token (auth.test) and its granted scopes
   auth check --app A012        compare the app (configuration token on stdin) with the manifest
   auth status [--raw]          show who the stored token is`,
 		noRaw: func(args []string) bool { return len(args) == 0 || args[0] != "status" },
@@ -449,7 +450,7 @@ func runSlackAuthApp(in io.Reader, out, errOut io.Writer) error {
 func runSlackAuthCheck(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
 	flags, _ := slackFlags(args)
 	if flags["app"] == "" {
-		return slackFail(errOut, "slack_params", "check requires --app A012")
+		return runSlackAuthCheckToken(ctx, out, errOut)
 	}
 	body, err := io.ReadAll(in)
 	if err != nil {
@@ -467,6 +468,33 @@ func runSlackAuthCheck(ctx context.Context, args []string, in io.Reader, out, er
 		return slackFail(errOut, "slack_params", err.Error())
 	}
 	return slackAPI(errOut, err)
+}
+
+// slackAuthCheck is what auth check without --app prints.
+type slackAuthCheck struct {
+	OK            bool   `json:"ok"`
+	Team          string `json:"team"`
+	User          string `json:"user"`
+	UserID        string `json:"user_id"`
+	ScopesChecked bool   `json:"scopes_checked"`
+}
+
+// runSlackAuthCheckToken checks the stored user token with one auth.test and
+// compares the scopes Slack reports with slack.UserScopes. It never reads stdin.
+func runSlackAuthCheckToken(ctx context.Context, out, errOut io.Writer) error {
+	c, err := slackClient(ctx)
+	if err != nil {
+		return slackFail(errOut, "slack_unconfigured", err.Error())
+	}
+	auth, missing, checked, err := c.AuthCheck(ctx)
+	if err != nil {
+		return slackAPI(errOut, err)
+	}
+	if len(missing) > 0 {
+		return slackFail(errOut, "slack_app_settings", "the stored token lacks user scope "+
+			strings.Join(missing, ", ")+"; add them to the app (aiman slack manifest) and run aiman slack auth login again")
+	}
+	return slackWrite(out, slackAuthCheck{OK: true, Team: auth.Team, User: auth.User, UserID: auth.UserID, ScopesChecked: checked})
 }
 
 func runSlackAuthLogin(ctx context.Context, args []string, out, errOut io.Writer) error {

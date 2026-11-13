@@ -379,9 +379,10 @@ aiman slack auth check --app A012
 aiman slack auth app
 aiman slack auth login
 aiman slack auth status
+aiman slack auth check
 ```
 
-`auth check` reads an app configuration token from stdin and compares that existing app with the manifest: user scopes, PKCE, and the `127.0.0.1:43127` redirect. A mismatch exits `slack_app_settings`. Do not print the configuration token. `auth app` reads the client id from stdin. `auth login` opens Slack so that member can approve, and refuses to save a token that is missing a required user scope. If the browser is on another machine, forward port `43127` to this host first. Agents do not run `auth check` or `auth login`. If a command returns `slack_unconfigured` or `slack_app_settings`, tell the operator.
+`auth check` with no `--app` calls `auth.test` once with the stored user token and prints `{"ok":true,"team","user","user_id","scopes_checked"}`. When Slack names the granted scopes, a missing user scope exits `slack_app_settings` naming it; `scopes_checked` is false when Slack did not name them. `auth check --app A012` reads an app configuration token from stdin and compares that existing app with the manifest: user scopes, PKCE, and the `127.0.0.1:43127` redirect. A mismatch exits `slack_app_settings`. Do not print the configuration token. `auth app` reads the client id from stdin. `auth login` opens Slack so that member can approve, and refuses to save a token that is missing a required user scope. If the browser is on another machine, forward port `43127` to this host first. Agents do not run `auth check` or `auth login`. If a command returns `slack_unconfigured` or `slack_app_settings`, tell the operator.
 
 Reads:
 
