@@ -59,7 +59,7 @@ func (s *Server) admitTodoEdit(w http.ResponseWriter, body rpcBody) bool {
 	}
 	for _, it := range list.Items {
 		if it.ID == edit.ID && strings.HasPrefix(it.Ref, gateRefPrefix) {
-			writeJSONError(w, http.StatusForbidden, body.ID, "forbidden", "changing gate "+it.Ref+" needs allow_destructive")
+			writeJSONError(w, http.StatusForbidden, body.ID, "forbidden", "changing gate "+it.Ref+" needs allow_destructive", needsDestructiveData(body.Method))
 			return false
 		}
 	}

@@ -33,6 +33,10 @@ func (s *Server) rpc(w http.ResponseWriter, r *http.Request) {
 		s.handlePushRPC(w, body)
 		return
 	}
+	if body.Method == "gateway.restart_serve" {
+		s.handleRestartServe(w, body)
+		return
+	}
 	params := body.Params
 	if len(params) == 0 {
 		params = json.RawMessage("{}")
@@ -49,7 +53,12 @@ func (s *Server) admitDevice(w http.ResponseWriter, r *http.Request, body rpcBod
 		return true
 	}
 	if !deviceMayCall(body.Method, p.device.AllowDestructive) {
-		writeJSONError(w, http.StatusForbidden, body.ID, "forbidden", "method "+body.Method+" is not allowed for device tokens")
+		msg := "method " + body.Method + " is not allowed for device tokens"
+		if deviceDestructive[body.Method] {
+			writeJSONError(w, http.StatusForbidden, body.ID, "forbidden", msg, needsDestructiveData(body.Method))
+		} else {
+			writeJSONError(w, http.StatusForbidden, body.ID, "forbidden", msg)
+		}
 		return false
 	}
 	if p.device.AllowDestructive || !gateCheckedMethod(body.Method) {

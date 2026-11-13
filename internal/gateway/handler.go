@@ -17,10 +17,18 @@ type Server struct {
 	Push      *PushStore
 	PairCodes *PairCodes
 
-	// now is the clock for the pairing lockout; nil means time.Now.
+	// RestartServe restarts serve for gateway.restart_serve; nil runs
+	// remotesvc.RestartScript(serve) detached.
+	RestartServe func() error
+
+	// now is the clock for the pairing lockout and the restart cooldown; nil
+	// means time.Now.
 	now        func() time.Time
 	pairMu     sync.Mutex
 	pairFailed []time.Time
+
+	restartMu   sync.Mutex
+	lastRestart time.Time
 }
 
 // Handler serves the phone API. GET /v1/health is unauthenticated, and
@@ -87,11 +95,26 @@ func writeSocketResponse(w http.ResponseWriter, resp server.Response, err error)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// writeJSONError answers with status and a server.Response error body.
-func writeJSONError(w http.ResponseWriter, status int, id, code, msg string) {
+// writeJSONError answers with status and a server.Response error body. data,
+// when given, is the error's structured detail.
+func writeJSONError(w http.ResponseWriter, status int, id, code, msg string, data ...any) {
+	e := &server.Error{Code: code, Message: msg}
+	if len(data) > 0 {
+		e.Data = data[0]
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(server.Response{ID: id, Error: &server.Error{Code: code, Message: msg}})
+	_ = json.NewEncoder(w).Encode(server.Response{ID: id, Error: e})
+}
+
+// needsDestructive is the data of a refusal that allow_destructive would lift.
+type needsDestructive struct {
+	Method string `json:"method,omitempty"`
+	Needs  string `json:"needs"`
+}
+
+func needsDestructiveData(method string) needsDestructive {
+	return needsDestructive{Method: method, Needs: "allow_destructive"}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

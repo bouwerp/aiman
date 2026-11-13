@@ -485,6 +485,23 @@ components:
           oneOf:
             - $ref: "#/components/schemas/WorktreeDirtyData"
             - $ref: "#/components/schemas/RetryAfterData"
+            - $ref: "#/components/schemas/NeedsDestructiveData"
+    NeedsDestructiveData:
+      type: object
+      description: >
+        The detail of the gateway's 403 forbidden when a device token lacks
+        allow_destructive: for a method in the destructive set, the terminal
+        WebSocket (method pty.attach), a gate change through todo.update or
+        todo.remove, and revoking another device (no method). A method outside
+        the device allowlist entirely gets forbidden with no data, as does any
+        refusal from a gateway older than this field.
+      required: [needs]
+      properties:
+        method:
+          type: string
+        needs:
+          type: string
+          const: allow_destructive
     RetryAfterData:
       type: object
       description: The detail of server_busy and rate_limited.
@@ -523,8 +540,9 @@ components:
         method:
           type: string
           description: >
-            Every method serve answers on its socket, plus push.register and
-            push.unregister, which the gateway answers itself. Device tokens
+            Every method serve answers on its socket, plus push.register,
+            push.unregister and gateway.restart_serve, which the gateway
+            answers itself. Device tokens
             reach only the allowlisted subset; the rest return 403.
           enum:
             - ping
@@ -623,6 +641,7 @@ components:
             - pty.forget
             - push.register
             - push.unregister
+            - gateway.restart_serve
         params:
           $ref: "#/components/schemas/RpcParams"
     StreamMethod:
@@ -815,6 +834,7 @@ components:
             - $ref: "#/components/schemas/HostDaemonsResult"
             - $ref: "#/components/schemas/HostLogsResult"
             - $ref: "#/components/schemas/HostRestartResult"
+            - $ref: "#/components/schemas/GatewayRestartServeResult"
             - $ref: "#/components/schemas/ResourcesResult"
             - $ref: "#/components/schemas/SessionLimitsResult"
             - $ref: "#/components/schemas/SessionScopeResult"
@@ -2061,6 +2081,25 @@ components:
           description: The sending session of a peer note; absent otherwise.
         text:
           type: string
+    GatewayRestartServeResult:
+      type: object
+      description: >
+        gateway.restart_serve {}: answered by the gateway without calling
+        serve, for a serve that is alive but not answering. It runs serve's
+        in-place restart script detached (systemctl --user restart, or the
+        nohup supervisor). Refused with reason cooldown within 60s of the
+        last accepted call. A failure to start the script is an RPC error
+        (internal). Needs the host token or allow_destructive on a device.
+      required: [type, accepted]
+      properties:
+        type:
+          type: string
+          const: gateway_restart_serve
+        accepted:
+          type: boolean
+        reason:
+          type: string
+          description: Empty when accepted; cooldown otherwise.
     PushRegisterResult:
       type: object
       required: [type, registered]
