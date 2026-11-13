@@ -30,6 +30,9 @@ const (
 const (
 	AttemptKindServe   = "serve"
 	AttemptKindGateway = "gateway"
+	// AttemptKindRestart is a daemon restart operation (State.Operation),
+	// whose To is the operation name and From serve's version.
+	AttemptKindRestart = "restart"
 )
 
 // Attempt records one install. It is saved as started before the script runs,
@@ -78,6 +81,10 @@ type State struct {
 	// mode last reported.
 	NotifiedGateway string   `json:"notified_gateway,omitempty"`
 	Attempt         *Attempt `json:"attempt"`
+	// Operation is the last daemon restart (AttemptKindRestart). It is kept
+	// apart from Attempt, so host.version and the update verdict never read
+	// a restart as an install; a started one still blocks installs.
+	Operation *Attempt `json:"operation,omitempty"`
 }
 
 // LoadState reads path. A missing file is a zero State and no error.

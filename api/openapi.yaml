@@ -550,6 +550,9 @@ components:
             - host.stats
             - host.version
             - host.update
+            - host.daemons
+            - host.logs
+            - host.restart
             - resources.get
             - session.limits
             - session.register
@@ -640,6 +643,13 @@ components:
           type: string
         lines:
           type: integer
+        daemon:
+          type: string
+          enum: [serve, gateway, trigger]
+          description: Target of host.logs and host.restart.
+        refresh:
+          type: boolean
+          description: Read again instead of answering from a cache (host.daemons, limits.get, agents.status).
         text:
           type: string
         force:
@@ -801,6 +811,9 @@ components:
             - $ref: "#/components/schemas/HostStatsResult"
             - $ref: "#/components/schemas/HostVersionResult"
             - $ref: "#/components/schemas/HostUpdateResult"
+            - $ref: "#/components/schemas/HostDaemonsResult"
+            - $ref: "#/components/schemas/HostLogsResult"
+            - $ref: "#/components/schemas/HostRestartResult"
             - $ref: "#/components/schemas/ResourcesResult"
             - $ref: "#/components/schemas/SessionLimitsResult"
             - $ref: "#/components/schemas/LimitsResult"
@@ -1315,6 +1328,126 @@ components:
         target:
           type: string
           description: The release tag being installed when accepted.
+    HostDaemonsResult:
+      type: object
+      description: >
+        host.daemons {refresh?}: this host's aiman daemons (serve, gateway,
+        trigger), one row each. Any caller may read it. Rows are cached 5
+        seconds; refresh true reads again (the phone passes it on pull to
+        refresh and while polling after a restart). The restart block is read
+        fresh on every call.
+      required: [type, host, daemons]
+      properties:
+        type:
+          type: string
+          const: host_daemons
+        host:
+          type: string
+        daemons:
+          type: array
+          items:
+            $ref: "#/components/schemas/DaemonState"
+    DaemonState:
+      type: object
+      description: >
+        One daemon. A daemon that is not installed has installed false and
+        no pid, version or start time; that is not an error.
+      required: [kind, installed, driver, active, version, pid, rss_bytes]
+      properties:
+        kind:
+          type: string
+          enum: [serve, gateway, trigger]
+        installed:
+          type: boolean
+        driver:
+          type: string
+          enum: [systemd, nohup, none]
+        active:
+          type: string
+          description: systemd's ActiveState under systemd; active or activating under the nohup supervisor.
+        version:
+          type: string
+        pid:
+          type: integer
+          description: The daemon's own process, 0 when none runs.
+        started_at:
+          type: string
+          format: date-time
+          description: When the process started; absent when unknown.
+        rss_bytes:
+          type: integer
+        restart:
+          $ref: "#/components/schemas/DaemonRestart"
+    DaemonRestart:
+      type: object
+      description: The daemon's last restart through host.restart; absent when none.
+      required: [name, status, at, exit]
+      properties:
+        name:
+          type: string
+          enum: [restart-serve, restart-gateway, restart-trigger]
+        status:
+          type: string
+          enum: [started, ok, failed]
+        at:
+          type: string
+          format: date-time
+        exit:
+          type: integer
+          description: The restart script's exit code once it ended.
+    HostLogsResult:
+      type: object
+      description: >
+        host.logs {daemon, lines?}: the last lines (default 200, at most 1000)
+        of a daemon's user journal, or of its nohup log when it has no unit.
+        Every line passes serve's redaction (tokens, keys, webhook paths,
+        passwords, URL credentials, PEM blocks, the gateway token); each hit
+        reads [redacted] and redacted counts them. A line is cut at 2 KiB and
+        the oldest lines are dropped past 256 KiB. Needs allow_destructive on
+        a device token; a session caller gets needs_operator; daemon outside
+        serve, gateway and trigger is invalid_params.
+      required: [type, daemon, source, lines, redacted]
+      properties:
+        type:
+          type: string
+          const: host_logs
+        daemon:
+          type: string
+          enum: [serve, gateway, trigger]
+        source:
+          type: string
+          enum: [journal, file]
+        lines:
+          type: array
+          items:
+            type: string
+          description: Oldest first, newest at the end.
+        redacted:
+          type: integer
+    HostRestartResult:
+      type: object
+      description: >
+        host.restart {daemon, force?}: restart a daemon in place through a
+        detached script (systemctl --user restart, or the nohup supervisor),
+        which outlives serve. Refused with reason busy while long calls,
+        AWS logins, handover starts or agent updates run, unless force; with
+        reason running while another restart or a host update is running.
+        The outcome shows up in host.daemons' restart block. Needs
+        allow_destructive on a device token; a session caller gets
+        needs_operator.
+      required: [type, accepted, reason, daemon]
+      properties:
+        type:
+          type: string
+          const: host_restart
+        accepted:
+          type: boolean
+        reason:
+          type: string
+          description: Empty when accepted; busy, running, or a message otherwise.
+        daemon:
+          type: string
+          enum: [serve, gateway, trigger]
     RPCCount:
       type: object
       required: [name, count, avg_us]

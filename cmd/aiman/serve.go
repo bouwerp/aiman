@@ -314,6 +314,7 @@ func runServe() error {
 		Busy: []func() int{srv.Inflight, awsEngine.Pending, handovers.Starting, agentUpdates.Updating},
 	})
 	startHostUpdates(ctx, srv, hostUpdates, host)
+	srv.SetDaemonControl(newHostDaemons(hostUpdates, version, home))
 
 	srv.SetDesignPublisher(&design.Publisher{Cfg: cfg.Design, Home: home, Run: design.ExecRun})
 	srv.SetTranscripts(server.NewTranscriptSource(home))

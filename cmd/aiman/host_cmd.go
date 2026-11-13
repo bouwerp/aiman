@@ -11,7 +11,7 @@ import (
 	"github.com/bouwerp/aiman/internal/server"
 )
 
-// runHost is `aiman host stats|version|update|dump`.
+// runHost is `aiman host stats|version|update|daemons|logs|restart|dump`.
 func runHost(args []string) error {
 	if len(args) > 0 && args[0] == "dump" {
 		if len(args) > 1 {
@@ -22,6 +22,9 @@ func runHost(args []string) error {
 	}
 	if len(args) > 0 && (args[0] == "version" || args[0] == "update") {
 		return runHostUpdateCmd(args, os.Stdout)
+	}
+	if len(args) > 0 && (args[0] == "daemons" || args[0] == "logs" || args[0] == "restart") {
+		return runHostDaemonsCmd(args, os.Stdout)
 	}
 	asJSON, ok := hostStatsArgs(args)
 	if !ok {
