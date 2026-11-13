@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -21,9 +22,13 @@ import (
 // slackCommand is one aiman slack subcommand. write reports whether a call
 // with these args (the command name excluded) changes Slack; slack.writes
 // off refuses such a call before any API call. A nil write is a read.
+// usage is the text after "Usage: aiman slack <name> " that --help prints.
+// noRaw marks a call that makes no Slack read, so --raw has nothing to show.
 type slackCommand struct {
 	run   func(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error
 	write func(args []string) bool
+	usage string
+	noRaw func(args []string) bool
 }
 
 // slackAlwaysWrite marks a command that changes Slack whatever its args.
@@ -63,12 +68,31 @@ func registerSlack(name string, cmd slackCommand) {
 }
 
 func init() {
-	registerSlack("manifest", slackCommand{run: func(_ context.Context, _ []string, _ io.Reader, out, _ io.Writer) error {
-		_, err := io.WriteString(out, slack.Manifest)
-		return err
-	}})
-	registerSlack("auth", slackCommand{run: runSlackAuth})
+	registerSlack("manifest", slackCommand{
+		run: func(_ context.Context, _ []string, _ io.Reader, out, _ io.Writer) error {
+			_, err := io.WriteString(out, slack.Manifest)
+			return err
+		},
+		usage: "(no flags)\n\nPrints the Slack app manifest to paste into Slack's App Manifest JSON editor.",
+		noRaw: func([]string) bool { return true },
+	})
+	registerSlack("auth", slackCommand{
+		run: runSlackAuth,
+		usage: `<app|login|check|status> …
+
+  auth app                     read the app's client id from stdin
+  auth login [--timeout 5m]    approve the app in a browser and store the user token
+  auth check --app A012        compare the app (configuration token on stdin) with the manifest
+  auth status [--raw]          show who the stored token is`,
+		noRaw: func(args []string) bool { return len(args) == 0 || args[0] != "status" },
+	})
 }
+
+// slackLinkHelp ends the usage of a command that takes archive links.
+const slackLinkHelp = "\n\n  --channel, --ts and --thread also take a message link: https://<workspace>.slack.com/archives/C…/p…"
+
+// slackRawHelp is the --raw line of a read command's usage.
+const slackRawHelp = "\n  --raw                        print each Slack response body unchanged, one per line"
 
 func runSlack(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
 	if len(args) == 0 {
@@ -77,14 +101,189 @@ func runSlack(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 	if slackArgvToken(args) {
 		return slackFail(errOut, "slack_token_argv", "pass the client id on stdin: aiman slack auth app")
 	}
-	cmd, ok := slackCommands[args[0]]
+	name := args[0]
+	cmd, ok := slackCommands[name]
 	if !ok {
 		return slackUsage(errOut)
 	}
-	if cmd.isWrite(args[1:]) && !slackWritesOn() {
-		return slackFail(errOut, "slack_writes_off", "slack.writes is off in ~/.aiman/config.yaml; aiman slack "+args[0]+" changes Slack")
+	args = args[1:]
+	if slackWantsHelp(args) {
+		return slackCommandHelp(out, name, cmd)
 	}
-	return cmd.run(ctx, args[1:], in, out, errOut)
+	args, raw := slackTakeRaw(args)
+	if raw && (cmd.isWrite(args) || (cmd.noRaw != nil && cmd.noRaw(args))) {
+		return slackFail(errOut, "slack_params", "--raw is only for reads; this aiman slack "+name+" call is not one")
+	}
+	if cmd.isWrite(args) && !slackWritesOn() {
+		return slackFail(errOut, "slack_writes_off", "slack.writes is off in ~/.aiman/config.yaml; aiman slack "+name+" changes Slack")
+	}
+	args, err := slackLinkArgs(name, args)
+	if err != nil {
+		return slackFail(errOut, "slack_params", err.Error())
+	}
+	if !raw {
+		return cmd.run(ctx, args, in, out, errOut)
+	}
+	rec := &slackRawRecorder{}
+	err = cmd.run(context.WithValue(ctx, slackRawKey{}, rec), args, in, io.Discard, errOut)
+	if werr := rec.writeTo(out); err == nil {
+		err = werr
+	}
+	return err
+}
+
+// slackWantsHelp reports whether args ask for help: --help or -h anywhere,
+// except as the value of a flag that takes one (--text -h stays text).
+func slackWantsHelp(args []string) bool {
+	prev := ""
+	for _, a := range args {
+		if (a == "--help" || a == "-h") && !slackTakesValue(prev) {
+			return true
+		}
+		prev = a
+	}
+	return false
+}
+
+// slackTakesValue reports whether arg is a --flag that consumes the next
+// argument as its value.
+func slackTakesValue(arg string) bool {
+	if !strings.HasPrefix(arg, "--") || strings.Contains(arg, "=") || arg == "--help" {
+		return false
+	}
+	switch strings.TrimPrefix(arg, "--") {
+	case "raw", "mine", "exclude-archived", "private", "files", "channels", "users",
+		"broadcast", "no-unfurl", "all", "schema", "todo":
+		return false
+	}
+	return true
+}
+
+// slackCommandHelp prints one command's usage to out. A plain read gets the
+// --raw line added; a command with writes names --raw in its own usage.
+func slackCommandHelp(out io.Writer, name string, cmd slackCommand) error {
+	text := "Usage: aiman slack " + name + " " + cmd.usage
+	if cmd.write == nil && cmd.noRaw == nil {
+		text += "\n" + slackRawHelp
+	}
+	_, err := fmt.Fprintln(out, text)
+	return err
+}
+
+// slackTakeRaw removes --raw from args.
+func slackTakeRaw(args []string) ([]string, bool) {
+	raw := false
+	kept := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--raw" {
+			raw = true
+			continue
+		}
+		kept = append(kept, a)
+	}
+	return kept, raw
+}
+
+type slackRawKey struct{}
+
+// slackRawRecorder keeps every Slack response body of one command.
+type slackRawRecorder struct {
+	mu     sync.Mutex
+	bodies [][]byte
+}
+
+func (r *slackRawRecorder) record(_ string, body []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bodies = append(r.bodies, append([]byte(nil), body...))
+}
+
+// writeTo prints each body as Slack sent it, followed by a newline when it
+// has none.
+func (r *slackRawRecorder) writeTo(out io.Writer) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, b := range r.bodies {
+		if _, err := out.Write(b); err != nil {
+			return err
+		}
+		if len(b) == 0 || b[len(b)-1] != '\n' {
+			if _, err := io.WriteString(out, "\n"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// slackLinkFlags are the flags that take a Slack archive link.
+var slackLinkFlags = []string{"channel", "ts", "thread"}
+
+// slackLinkArgs turns archive links given to --channel, --ts or --thread into
+// ids. The ts of --thread, and of --ts on thread, is the link's parent
+// (thread_ts wins); any other --ts is the linked message. A link fills
+// --channel when it is absent; a different --channel is refused. Any other
+// URL in those flags is refused.
+func slackLinkArgs(name string, args []string) ([]string, error) {
+	out := make([]string, 0, len(args)+2)
+	channel, linkChannel := "", ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		key, val, inline := strings.Cut(strings.TrimPrefix(a, "--"), "=")
+		if !strings.HasPrefix(a, "--") || !slices.Contains(slackLinkFlags, key) {
+			out = append(out, a)
+			continue
+		}
+		if !inline {
+			next := ""
+			if i+1 < len(args) {
+				next = args[i+1]
+			}
+			if next == "" || strings.HasPrefix(next, "--") {
+				out = append(out, a)
+				continue
+			}
+			val = next
+			i++
+		}
+		if !slack.LooksLikeURL(val) {
+			if key == "channel" {
+				channel = val
+			}
+			out = append(out, "--"+key, val)
+			continue
+		}
+		link, err := slack.ParseArchiveLink(val)
+		if err != nil {
+			return nil, fmt.Errorf("--%s: %w", key, err)
+		}
+		if linkChannel != "" && linkChannel != link.Channel {
+			return nil, fmt.Errorf("--%s: link is in %s, another link is in %s", key, link.Channel, linkChannel)
+		}
+		linkChannel = link.Channel
+		switch {
+		case key == "channel":
+			channel = link.Channel
+			out = append(out, "--channel", link.Channel)
+			continue
+		case link.TS == "":
+			return nil, fmt.Errorf("--%s: %s links a channel, not a message", key, val)
+		case key == "thread" || name == "thread":
+			out = append(out, "--"+key, link.Parent())
+		default:
+			out = append(out, "--"+key, link.TS)
+		}
+	}
+	if linkChannel == "" {
+		return out, nil
+	}
+	if channel == "" {
+		return append(out, "--channel", linkChannel), nil
+	}
+	if channel != linkChannel {
+		return nil, fmt.Errorf("--channel %s conflicts with the link's channel %s; drop --channel", channel, linkChannel)
+	}
+	return out, nil
 }
 
 // slackWritesOn reads slack.writes; a missing or unreadable config is on.
@@ -177,7 +376,9 @@ func slackTokenPath() (string, error) {
 	return slack.TokenPath(dir), nil
 }
 
-func slackClient() (*slack.Client, error) {
+// slackClient builds a client from the stored token. Under --raw it hands
+// every response body to the command's recorder.
+func slackClient(ctx context.Context) (*slack.Client, error) {
 	path, err := slackTokenPath()
 	if err != nil {
 		return nil, err
@@ -186,7 +387,11 @@ func slackClient() (*slack.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &slack.Client{Token: tok}, nil
+	c := &slack.Client{Token: tok}
+	if rec, ok := ctx.Value(slackRawKey{}).(*slackRawRecorder); ok {
+		c.Raw = rec.record
+	}
+	return c, nil
 }
 
 func slackWrite(out io.Writer, v any) error {
@@ -207,7 +412,7 @@ func runSlackAuth(ctx context.Context, args []string, in io.Reader, out, errOut 
 	case "check":
 		return runSlackAuthCheck(ctx, args[1:], in, out, errOut)
 	case "status":
-		c, err := slackClient()
+		c, err := slackClient(ctx)
 		if err != nil {
 			return slackFail(errOut, "slack_unconfigured", err.Error())
 		}
@@ -309,7 +514,7 @@ func slackChannel(ctx context.Context, flags map[string]string, errOut io.Writer
 	if flags["channel"] == "" {
 		return nil, "", slackFail(errOut, "slack_params", "requires --channel")
 	}
-	c, err := slackClient()
+	c, err := slackClient(ctx)
 	if err != nil {
 		return nil, "", slackFail(errOut, "slack_unconfigured", err.Error())
 	}
@@ -321,8 +526,8 @@ func slackChannel(ctx context.Context, flags map[string]string, errOut io.Writer
 }
 
 // slackClientOrFail builds a client or prints slack_unconfigured.
-func slackClientOrFail(errOut io.Writer) (*slack.Client, error) {
-	c, err := slackClient()
+func slackClientOrFail(ctx context.Context, errOut io.Writer) (*slack.Client, error) {
+	c, err := slackClient(ctx)
 	if err != nil {
 		return nil, slackFail(errOut, "slack_unconfigured", err.Error())
 	}

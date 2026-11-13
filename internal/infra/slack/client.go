@@ -28,6 +28,10 @@ type Client struct {
 	Sleep func(ctx context.Context, d time.Duration) error
 	// MaxBody caps a response in bytes. Zero means 8 MiB.
 	MaxBody int64
+	// Raw, when set, receives every Slack response body that passed the size
+	// cap, ok or not, before it is decoded. A rate-limited answer that is
+	// retried is not passed on.
+	Raw func(method string, body []byte)
 }
 
 // Page is one page of a cursor-paged Slack listing.
@@ -43,14 +47,34 @@ type cursorMeta struct {
 	} `json:"response_metadata"`
 }
 
-// Message is one Slack message the agent can read or wait for.
+// Message is one Slack message the agent can read or wait for. Attachments
+// and blocks are kept as Slack sent them.
 type Message struct {
-	Type   string `json:"type"`
-	User   string `json:"user"`
-	BotID  string `json:"bot_id,omitempty"`
-	Text   string `json:"text"`
-	TS     string `json:"ts"`
-	Thread string `json:"thread_ts,omitempty"`
+	Type        string            `json:"type"`
+	Subtype     string            `json:"subtype,omitempty"`
+	User        string            `json:"user"`
+	BotID       string            `json:"bot_id,omitempty"`
+	Text        string            `json:"text"`
+	TS          string            `json:"ts"`
+	Thread      string            `json:"thread_ts,omitempty"`
+	ReplyCount  int               `json:"reply_count,omitempty"`
+	Reactions   []Reaction        `json:"reactions,omitempty"`
+	Files       []MessageFile     `json:"files,omitempty"`
+	Attachments []json.RawMessage `json:"attachments,omitempty"`
+	Blocks      []json.RawMessage `json:"blocks,omitempty"`
+}
+
+// MessageFile is a file shared in a message. Its id is what file read takes;
+// url_private needs the user token and is never downloaded on a read.
+type MessageFile struct {
+	ID         string `json:"id"`
+	Name       string `json:"name,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Mimetype   string `json:"mimetype,omitempty"`
+	Filetype   string `json:"filetype,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+	Permalink  string `json:"permalink,omitempty"`
+	URLPrivate string `json:"url_private,omitempty"`
 }
 
 // Channel is a conversation the bot can see.
@@ -191,6 +215,9 @@ func (c *Client) send(req *http.Request, method string, out any) (time.Duration,
 	}
 	if int64(len(raw)) > limit {
 		return -1, fmt.Errorf("slack %s: response larger than %d bytes", method, limit)
+	}
+	if c.Raw != nil {
+		c.Raw(method, raw)
 	}
 	var env struct {
 		OK    bool   `json:"ok"`

@@ -421,7 +421,10 @@ aiman slack create-channel qa-nov [--private] [--invite U1,U2]
 aiman slack dm U1[,U2]
 ```
 
-- `--channel` is a name or an id. Text is markdown; `--text-file` or `--text -` sends a longer body. Commands print JSON (`list read --format csv|markdown` prints text).
+- `--channel` is a name or an id. `--channel`, `--ts` and `--thread` also take a message link (`https://<ws>.slack.com/archives/C…/p…`): the link sets the channel, and a reply's link (`?thread_ts=…`) names its parent for `--thread` and `thread --ts`.
+- `history` and `thread` keep each message's `files`, `attachments`, `blocks`, `reactions` and `reply_count`. An image-only message shows up as `files`; read one with `file read <id>`.
+- Every command takes `--help`. Reads take `--raw` to print Slack's own response bodies, one per line; writes refuse it.
+- Text is markdown; `--text-file` or `--text -` sends a longer body. Commands print JSON (`list read --format csv|markdown` prints text).
 - Anything that pages returns `next_cursor`; pass it back with `--cursor`. `search` returns one page per call: Slack allows about 10 searches a minute, so page only as far as you need. DM results need each member's consent in Slack first.
 - `canvas edit` makes one change per call: `append`, `prepend`, `after`/`before` (need `--section`), `replace` and `delete` (need `--section`; replacing the whole canvas needs `--all`), `rename`. Section ids come from `canvas read`.
 - `list set` and `list add` take column names and option labels as you see them in Slack; aiman maps them. Columns are fixed when a List is created.

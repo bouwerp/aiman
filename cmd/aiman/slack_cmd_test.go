@@ -255,3 +255,29 @@ func TestSlackFlagsBoolsAndEquals(t *testing.T) {
 		t.Fatalf("flags %v rest %v", flags, rest)
 	}
 }
+
+func TestSlackLinkArgsConflictAndFill(t *testing.T) {
+	const link = "https://ws.slack.com/archives/C012/p1794563498596289"
+	if _, err := slackLinkArgs("react", []string{"--channel", "C999", "--ts", link}); err == nil {
+		t.Fatal("conflicting --channel accepted")
+	}
+	got, err := slackLinkArgs("react", []string{"--ts=" + link, "--emoji", "eyes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "--ts 1794563498.596289 --emoji eyes --channel C012"; strings.Join(got, " ") != want {
+		t.Fatalf("got %q want %q", strings.Join(got, " "), want)
+	}
+	if _, err := slackLinkArgs("thread", []string{"--ts", "https://ws.slack.com/archives/C012"}); err == nil {
+		t.Fatal("channel-only link accepted for --ts")
+	}
+}
+
+func TestSlackHelpSkipsFlagValues(t *testing.T) {
+	if slackWantsHelp([]string{"--text", "-h"}) {
+		t.Fatal("--text -h read as help")
+	}
+	if !slackWantsHelp([]string{"--raw", "-h"}) || !slackWantsHelp([]string{"--channel", "C1", "--help"}) {
+		t.Fatal("help not seen")
+	}
+}

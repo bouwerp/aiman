@@ -9,12 +9,16 @@ import (
 )
 
 func init() {
-	registerSlack("history", slackCommand{run: runSlackHistory})
-	registerSlack("thread", slackCommand{run: runSlackThread})
-	registerSlack("channels", slackCommand{run: runSlackChannels})
-	registerSlack("members", slackCommand{run: runSlackMembers})
-	registerSlack("user", slackCommand{run: runSlackUser})
-	registerSlack("reactions", slackCommand{run: runSlackReactions})
+	registerSlack("history", slackCommand{run: runSlackHistory, usage: `--channel <name|C…|U…|link> [--limit n] [--oldest ts] [--latest ts] [--cursor c]
+
+  A user id reads the DM with that member.` + slackLinkHelp})
+	registerSlack("thread", slackCommand{run: runSlackThread, usage: `--channel <name|C…> --ts <ts|link> [--limit n] [--oldest ts] [--latest ts] [--cursor c]
+
+  A reply's link reads its parent's thread.` + slackLinkHelp})
+	registerSlack("channels", slackCommand{run: runSlackChannels, usage: "[--mine] [--prefix p] [--types public_channel,…] [--exclude-archived] [--limit n] [--cursor c]"})
+	registerSlack("members", slackCommand{run: runSlackMembers, usage: "--channel <name|C…|link> [--limit n] [--cursor c]"})
+	registerSlack("user", slackCommand{run: runSlackUser, usage: "[U…]\n\n  Without an id, the member who owns the token."})
+	registerSlack("reactions", slackCommand{run: runSlackReactions, usage: "--channel <name|C…> --ts <ts|link>" + slackLinkHelp})
 }
 
 // slackMessages is the output of history and thread.
@@ -67,7 +71,7 @@ func runSlackThread(ctx context.Context, args []string, _ io.Reader, out, errOut
 
 func runSlackChannels(ctx context.Context, args []string, _ io.Reader, out, errOut io.Writer) error {
 	flags, _ := slackFlags(args, "mine", "exclude-archived")
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
@@ -110,7 +114,7 @@ func runSlackUser(ctx context.Context, args []string, _ io.Reader, out, errOut i
 	if len(rest) > 1 {
 		return slackFail(errOut, "slack_params", "user takes at most one user id")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
