@@ -75,3 +75,70 @@ func InHolderTree(pid int, parent func(int) (int, bool), cmdline func(int) ([]by
 func Self() bool {
 	return InHolderTree(os.Getpid(), ParentPID, Cmdline)
 }
+
+// Parents maps every live process to its parent, from /proc.
+func Parents() map[int]int {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	out := make(map[int]int, len(entries))
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		if pp, ok := ParentPID(pid); ok {
+			out[pid] = pp
+		}
+	}
+	return out
+}
+
+// Descendants returns the roots that parents lists and every process below
+// them, sorted.
+func Descendants(roots []int, parents map[int]int) []int {
+	children := make(map[int][]int, len(parents))
+	for pid, pp := range parents {
+		children[pp] = append(children[pp], pid)
+	}
+	seen := map[int]bool{}
+	queue := []int{}
+	for _, r := range roots {
+		if _, live := parents[r]; live && !seen[r] {
+			seen[r] = true
+			queue = append(queue, r)
+		}
+	}
+	for len(queue) > 0 {
+		pid := queue[0]
+		queue = queue[1:]
+		for _, c := range children[pid] {
+			if !seen[c] {
+				seen[c] = true
+				queue = append(queue, c)
+			}
+		}
+	}
+	out := make([]int, 0, len(seen))
+	for pid := range seen {
+		out = append(out, pid)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// EnvValue reads one variable from /proc/<pid>/environ: the environment the
+// process started with. Only that variable's value leaves the function.
+func EnvValue(pid int, name string) (string, bool) {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
+		return "", false
+	}
+	for _, kv := range strings.Split(string(raw), "\x00") {
+		if v, ok := strings.CutPrefix(kv, name+"="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}

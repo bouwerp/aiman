@@ -77,6 +77,8 @@ func (s *Server) dispatchLifecycle(ctx context.Context, req Request) Response {
 		return s.handleResourcesGet(ctx, req)
 	case "session.limits":
 		return s.handleSessionLimits(ctx, req)
+	case "session.adopt_scope":
+		return s.handleSessionAdoptScope(ctx, req)
 	default:
 		return s.handleHostStats(ctx, req)
 	}

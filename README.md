@@ -828,6 +828,9 @@ session keeps what it started with until it is restarted (`s`).
   limits, and `aiman session limits <session> --memory-high 12G` changes a running one at once.
   The override is kept across restarts and deleted with the session. Only the operator may set
   one; it does not raise the aggregate limit.
+- A session that was already running when its host got scopes has none until it restarts.
+  `aiman session adopt-scope <session>` (operator only) moves it into one without a restart; it
+  keeps its old `TMPDIR`.
 - A session held at 90% of `memory_high` for 30 seconds, or stalled on memory more than half
   the time, raises a `resources` notification and gets one `[aiman]` note in its pane telling it
   to reduce parallelism, at most once per ten minutes. The user slice or the sessions slice at
