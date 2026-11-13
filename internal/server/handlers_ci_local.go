@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -324,6 +325,16 @@ func (s *Server) handleCIGate(ctx context.Context, id string, t ciTarget, p ciLo
 	default:
 		return errResp(id, CodeInvalidParams, "kind must be push, create or ready")
 	}
+	if kind == cigate.KindPush {
+		if dir, rest, ok := cigate.SplitPushDir(p.Command); ok {
+			return s.ciGateDirPush(ctx, id, t, dir, rest)
+		}
+	}
+	return s.ciGateFor(ctx, id, t, kind, p.Command, p.Draft)
+}
+
+// ciGateFor judges a gate question for the session's checkout.
+func (s *Server) ciGateFor(ctx context.Context, id string, t ciTarget, kind cigate.Kind, command string, draft bool) Response {
 	st, err := s.ciStatus(ctx, t)
 	if err != nil {
 		return errResp(id, CodeInvalidParams, err.Error())
@@ -335,18 +346,18 @@ func (s *Server) handleCIGate(ctx context.Context, id string, t ciTarget, p ciLo
 		ChildPRs:     s.ciLocal.d.ChildPRs,
 		HasList:      st.HasList,
 		DraftsSkipCI: t.repo.CI.DraftsSkipCI,
-		Draft:        p.Draft,
+		Draft:        draft,
 		Record:       st.Record,
 	}
 	key := prKey(t.sess.RepoName, t.top, branch)
 	switch kind {
 	case cigate.KindPush:
-		if tag, ok := cigate.TagPushName(p.Command); ok && isTagOnly(ctx, t.top, tag) {
+		if tag, ok := cigate.TagPushName(command); ok && isTagOnly(ctx, t.top, tag) {
 			// A release tag runs the release workflow, not the PR checks
 			// this gate stands in for.
 			return ciGateAnswer(id, true, "", st.SHA, nil)
 		}
-		if p.Command != "" && !cigate.PushCommandOK(p.Command, branch) {
+		if command != "" && !cigate.PushCommandOK(command, branch) {
 			return ciGateAnswer(id, false, cigate.PushRefusal, st.SHA, nil)
 		}
 		if st.HasList {
@@ -359,6 +370,87 @@ func (s *Server) handleCIGate(ctx context.Context, id string, t ciTarget, p ciLo
 	}
 	allow, reason := cigate.Decide(in)
 	return ciGateAnswer(id, allow, reason, st.SHA, in.PR)
+}
+
+// ciGateDirPush judges git -C <dir> push for the checkout at dir: as the
+// caller's own push when dir is in its worktree, as the owning session's
+// push when dir is in another session's worktree, and otherwise allowed only
+// for a branch with no open PR.
+func (s *Server) ciGateDirPush(ctx context.Context, id string, t ciTarget, dir, rest string) Response {
+	if !filepath.IsAbs(dir) {
+		return ciGateAnswer(id, false, cigate.PushRefusal, "", nil)
+	}
+	top, err := checkoutTop(ctx, dir)
+	if err != nil {
+		return ciGateAnswer(id, false, fmt.Sprintf("aiman: %s is not a git checkout serve can read: %v", dir, err), "", nil)
+	}
+	if callerTop, err := filepath.EvalSymlinks(t.top); err == nil && callerTop == top {
+		return s.ciGateFor(ctx, id, t, cigate.KindPush, rest, false)
+	}
+	owner, found, err := s.ciOwnerOf(ctx, top)
+	if err != nil {
+		return errResp(id, CodeInvalidParams, err.Error())
+	}
+	if found {
+		return s.ciGateFor(ctx, id, owner, cigate.KindPush, rest, false)
+	}
+	return s.ciGateUnowned(ctx, id, top, rest)
+}
+
+// checkoutTop resolves dir and returns the root of the checkout holding it.
+func checkoutTop(ctx context.Context, dir string) (string, error) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", err
+	}
+	top, err := gitLine(ctx, real, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(top)
+}
+
+// ciOwnerOf finds the stored session whose checkout root is top.
+func (s *Server) ciOwnerOf(ctx context.Context, top string) (ciTarget, bool, error) {
+	list, err := s.loadSessions(ctx)
+	if err != nil {
+		return ciTarget{}, false, err
+	}
+	for _, sess := range list {
+		if !pathWithin(sess.WorkingDirectory, top) && !pathWithin(sess.WorktreePath, top) {
+			continue
+		}
+		ot, err := s.ciTargetFor(ctx, sess)
+		if err != nil {
+			continue
+		}
+		if otTop, err := filepath.EvalSymlinks(ot.top); err == nil && otTop == top {
+			return ot, true, nil
+		}
+	}
+	return ciTarget{}, false, nil
+}
+
+// ciGateUnowned judges a push from a checkout no session owns: a plain push
+// of its branch, allowed only while that branch has no open PR, because no
+// gate record can stand for it.
+func (s *Server) ciGateUnowned(ctx context.Context, id, top, rest string) Response {
+	sha, _ := gitLine(ctx, top, "rev-parse", "HEAD")
+	if tag, ok := cigate.TagPushName(rest); ok && isTagOnly(ctx, top, tag) {
+		return ciGateAnswer(id, true, "", sha, nil)
+	}
+	branch, _ := gitLine(ctx, top, "symbolic-ref", "--short", "-q", "HEAD")
+	if !cigate.PushCommandOK(rest, branch) {
+		return ciGateAnswer(id, false, cigate.PushRefusal, sha, nil)
+	}
+	pr, failed := s.lookupPR(ctx, prKey("", top, branch), top, branch)
+	switch {
+	case failed:
+		return ciGateAnswer(id, false, fmt.Sprintf("aiman: could not read the PR of %s in %s, which no session owns: retry, or push from a session", branch, top), sha, nil)
+	case pr != nil && strings.EqualFold(pr.State, "OPEN"):
+		return ciGateAnswer(id, false, fmt.Sprintf("aiman: %s in %s has open PR #%d and no session owns that checkout: push it from a session whose gate can pass", branch, top, pr.Number), sha, pr)
+	}
+	return ciGateAnswer(id, true, "", sha, pr)
 }
 
 // isTagOnly reports whether name is a tag in dir and not also a branch.

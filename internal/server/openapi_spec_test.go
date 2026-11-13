@@ -19,7 +19,7 @@ const openAPISpec = "../../api/openapi.yaml"
 
 // gatewayOwnedMethods are RPC methods the gateway answers itself; serve never
 // sees them.
-var gatewayOwnedMethods = []string{"push.register", "push.unregister"}
+var gatewayOwnedMethods = []string{"push.register", "push.unregister", "gateway.restart_serve"}
 
 // eventSources are the directories whose code publishes SessionEvents: serve's
 // handlers, and the serve command wiring the notify recorder to the hub.

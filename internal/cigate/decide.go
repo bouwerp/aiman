@@ -173,3 +173,18 @@ func TagPushName(cmd string) (string, bool) {
 	}
 	return name, true
 }
+
+// SplitPushDir splits git -C <dir> push … into dir and the same command
+// without -C <dir>. It reports false for anything else: another global flag,
+// a second -C, quotes, or a character PushCommandOK refuses. A relative dir
+// is returned as given; the caller decides whether to accept it.
+func SplitPushDir(cmd string) (dir, rest string, ok bool) {
+	if strings.ContainsAny(cmd, ";&|`$<>()\n\r'\"\\") {
+		return "", "", false
+	}
+	f := strings.Fields(cmd)
+	if len(f) < 4 || f[0] != "git" || f[1] != "-C" || f[3] != "push" {
+		return "", "", false
+	}
+	return f[2], strings.Join(append([]string{"git"}, f[3:]...), " "), true
+}

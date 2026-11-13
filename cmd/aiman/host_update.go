@@ -60,13 +60,17 @@ func newHostUpdates(cfg config.HostUpdateConfig, dir, version string, deps hostU
 	}
 	logPath := filepath.Join(dir, "logs", "host-update.log")
 	resultPath := filepath.Join(dir, "host-update.result.json")
+	opsDir := filepath.Join(dir, "ops")
+	runner := selfupdate.NewScriptRunner(filepath.Join(dir, "tmp"), logPath, resultPath)
+	runner.OpsDir = opsDir
 	return &selfupdate.Manager{
 		Version:    version,
 		Fetcher:    fetcher,
-		Runner:     selfupdate.NewScriptRunner(filepath.Join(dir, "tmp"), logPath, resultPath),
+		Runner:     runner,
 		StatePath:  filepath.Join(dir, "host-update.json"),
 		ResultPath: resultPath,
 		LogPath:    logPath,
+		OpsDir:     opsDir,
 		Policy: selfupdate.Policy{
 			Mode:       selfupdate.Mode(cfg.ModeOrDefault()),
 			CheckEvery: cfg.CheckEveryOrDefault(),
@@ -202,14 +206,16 @@ func gatewayAppliedText(a selfupdate.Attempt, host string) string {
 func startHostUpdates(ctx context.Context, srv *server.Server, m *selfupdate.Manager, host string) {
 	wireHostUpdateNotify(ctx, m, srv.NotifyRecorder(), host)
 	srv.SetHostUpdates(m, host)
+	// Finish also settles a restart this serve came back from, whatever the
+	// update mode.
+	go m.Finish(ctx)
 	if m.Policy.Mode == selfupdate.ModeOff {
 		return
 	}
-	go m.Finish(ctx)
 	go m.Run(ctx)
 }
 
-const hostUsage = "Usage: aiman host stats [--json] | version [--json] | update [--json] | dump\n"
+const hostUsage = "Usage: aiman host stats [--json] | version [--json] | update [--json] | daemons [--json] | logs <serve|gateway|trigger> [--lines N] | restart <serve|gateway|trigger> [--force] | dump\n"
 
 // runHostUpdateCmd is `aiman host version` and `aiman host update`.
 func runHostUpdateCmd(args []string, out io.Writer) error {

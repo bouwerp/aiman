@@ -18,13 +18,12 @@ const (
 	finishEvery = 500 * time.Millisecond
 )
 
-// Finish settles a started attempt from the Result file. It waits until the
-// attempt settles, ResultWait after Attempt.At passes, or ctx ends. serve runs
-// it once at start.
+// Finish settles a started attempt, and a started operation, from their
+// Result files. It waits until both settle, ResultWait after each start
+// passes, or ctx ends. serve runs it once at start.
 func (m *Manager) Finish(ctx context.Context) {
 	for {
-		pending, at := m.settleOnce()
-		if !pending || m.now().Sub(at) >= ResultWait {
+		if !m.settleOnce() {
 			return
 		}
 		select {
@@ -42,28 +41,30 @@ func (m *Manager) watch() {
 	t := time.NewTicker(watchEvery)
 	defer t.Stop()
 	for range t.C {
-		if pending, _ := m.settleOnce(); !pending || time.Now().After(deadline) {
+		if !m.settleOnce() || time.Now().After(deadline) {
 			return
 		}
 	}
 }
 
 // settleOnce settles under the operation lock and reports whether a started
-// attempt is still waiting, with its start time.
-func (m *Manager) settleOnce() (bool, time.Time) {
+// attempt or operation younger than ResultWait is still waiting.
+func (m *Manager) settleOnce() bool {
 	m.opMu.Lock()
 	s := m.load()
 	settled := m.settleLocked(&s)
-	pending := s.Attempt != nil && s.Attempt.Status == AttemptStarted
-	var at time.Time
-	if pending {
-		at = s.Attempt.At
+	m.settleOpLocked(&s)
+	waiting := false
+	for _, a := range []*Attempt{s.Attempt, s.Operation} {
+		if started(a) && m.now().Sub(a.At) < ResultWait {
+			waiting = true
+		}
 	}
 	m.opMu.Unlock()
 	var ev events
 	ev.add(settled)
 	m.fire(ev)
-	return pending, at
+	return waiting
 }
 
 // settleLocked decides a started attempt from the Result file and saves it.

@@ -221,6 +221,8 @@ type Server struct {
 	hostUpdates   *selfupdate.Manager
 	hostName      string
 	hostUpdatesMu sync.RWMutex
+	// daemons backs host.daemons, host.logs and host.restart.
+	daemons daemonControl
 
 	// inflight counts long calls running over the socket; the host update
 	// gate waits for it to reach zero.
@@ -444,6 +446,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleForget(ctx, req)
 	case "session.restart", "session.terminate", "session.land", "session.limits", "session.adopt_scope", "repo.list", "host.stats", "host.version", "host.update", "resources.get":
 		return s.dispatchLifecycle(ctx, req)
+	case "host.daemons", "host.logs", "host.restart":
+		return s.dispatchHostDaemons(ctx, req)
 	case "session.register":
 		return s.handleRegister(ctx, req)
 	case "session.report_agent_session":
