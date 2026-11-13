@@ -1,6 +1,6 @@
 # Client pile-up guard: close the gaps the load guard and session limits left open
 
-**Revision:** 2 (rev 1 checked against the code at v0.49.0, `b6c3f11`) · **Size:** project · **Status:** draft, not approved
+**Revision:** 3 (rev 1 checked against the code at v0.49.0, `b6c3f11`; consult round 1 triaged) · **Size:** project · **Status:** draft, not approved
 **Task:** operator, 2026-11-13: "aiman recently introduced updates to mitigate these kinds of things - how can it improve?" after a second swamp of `regent0` with v0.49.0 installed.
 **Builds on:** `docs/specs/serve-load-guard.md` (v0.39.0) and `docs/superpowers/specs/2026-11-12-session-resource-limits.md` (#152, #154). Read both first; this spec does not repeat them.
 
@@ -77,7 +77,7 @@ classDiagram
     closed bool
     since time
     memory_some, memory_full float
-    slice_over_high bool
+    slice_over_high bool (reported, never gates)
   }
   class HostBudget { slots 4 per remote; cooldown 60s after a timeout }
   class RPCStream { one ssh process per remote; requests by id }
@@ -103,7 +103,7 @@ flowchart LR
   budget --> stream[rpc stream: one ssh process per remote]:::new
   budget -.->|old remote binary only| exec[ssh exec per call]:::changed
   stream --> sock[serve socket, admission]
-  psi[user slice memory.pressure and memory.high, every 5s]:::new --> gate[pressure gate]:::new
+  psi[user slice memory.pressure full avg10, every 5s]:::new --> gate[pressure gate]:::new
   gate --> create[session.create, helper spawns, review.run]:::changed
   gate --> ciq[ci.local FIFO queue, runs in aiman-ci-ID.scope]:::changed
   gate --> sweep[sweep period]:::changed
@@ -117,8 +117,9 @@ flowchart LR
 **P0: adopt unscoped sessions automatically.** Safe to run unattended, with the conditions below; the check found no way for it to move the wrong process or to throttle a session on adoption.
 
 - **new** `Server.adoptSweep`, 30s after serve starts and every 5 minutes: for each running holder, read `cgroup.Of(holderPID)` (one file read); when it is not under the sessions slice, run the adopt path for that scope key with `resources.session` defaults merged with the session's override (the handler's body after its operator check, extracted so the sweep and `session.adopt_scope` share it). The ledger row `resources.adopted` carries actor `aiman`. Steady state costs one file read per holder and no exec.
-- The sweep does not run when `cgroup.Probe` failed or `resources.enabled` is false, and it checks once that serve itself is inside the user manager's subtree: under the nohup supervisor the kernel refuses the move, so serve logs one line and never tries. A session whose adoption fails is logged once and not retried until serve restarts.
-- Why it is safe: `Systemd.Adopt` is idempotent (`moved` 0 when all are inside), re-lists the tree for up to 5 passes against forks, and a later sweep takes stragglers. Helper ptys share their parent's key; helpers with a row get their own scope, as at create. The `AIMAN_ID` environ match reads only processes in serve's own cgroup that descend from no holder. The new scope starts near zero charge, so its limits cannot throttle the session at the moment of adoption.
+- The sweep does not run when `cgroup.Probe` failed or `resources.enabled` is false, and it checks once that serve itself is inside the user manager's subtree: under the nohup supervisor the kernel refuses the move, so serve logs one line and never tries. A session whose adoption fails is tried again on every 5-minute sweep (`StartTransientUnit` can time out on a host that is still slow, which is when the first sweep runs); serve logs the failure once per session and again only when the error text changes.
+- Why it is safe: `Systemd.Adopt` is idempotent (`moved` 0 when all are inside), re-lists the tree for up to 5 passes against forks, and a later sweep takes stragglers. Helper ptys share their parent's key; helpers with a row get their own scope, as at create. The `AIMAN_ID` environ match reads only processes in serve's own cgroup that descend from no holder. The new scope starts near zero memory charge, so `MemoryHigh` cannot throttle the session at the moment of adoption; `CPUWeight` and `TasksMax` apply at once.
+- The adopted scope gets the ordinary limits, not a reduced one. As the agent frees and allocates memory its charge moves from serve's unit to the scope, so a lower cap would throttle a session that is not growing. Until that churn or a restart, the leftover in `serve_unit` plus new growth in the scopes can exceed what the sessions slice alone allows; that is still tighter than today, where the same sessions have no limit at all.
 - What it does not do, said in the CLI and the docs: memory already charged stays with `aiman-serve.service`, and the session keeps its old `TMPDIR`. `aiman resources` prints, per adopted or unscoped legacy session, `restart to move its memory and scratch`.
 - *changed* `resources.get` gains `unscoped: [{id, name}]` (running holders outside a scope, including while adoption is impossible) and `serve_unit` (a `Usage` for serve's own cgroup, read like the slices), so the residue is visible. `aiman resources` prints both. The TUI header gauge turns to the warning colour while `unscoped` is not empty.
 - ~~`aiman update` prints a count of unscoped sessions~~: dropped. `aiman update` replaces the laptop binary and never talks to serve, and the sweep at serve start makes the message moot.
@@ -126,50 +127,52 @@ flowchart LR
 **P1: one RPC stream per remote, not a process per call.**
 
 - **new** `aiman rpc --stream` (`cmd/aiman/rpc_stream.go`): reads one `{"id","method","params"}` line at a time from stdin, checks the method against `rpcMethods`, runs each call in its own goroutine with `server.CallRaw` (a socket dial per call, inside the one process), and writes `{"id",…response}` lines to stdout under a mutex, so answers may come out of order. At most 8 calls in flight; a ninth answers `server_busy` at once. Its first line is `{"stream":1}`. EOF on stdin ends it. Serve's protocol and socket loop do not change.
-- **new** `usecase.rpcStream`, one per remote: a dedicated `ssh … exec aiman rpc --stream` started like the `session.events` stream (`ssh.Manager`, its own connection, not the ControlMaster, because `ResetControlSocket` ends every multiplexed channel), on first use. A call writes its line and waits for its id under the caller's deadline; a call that times out is forgotten on the laptop and its late answer dropped, and no process is left on the host. When the stream dies, pending calls fail and it restarts with backoff (1s, 2s, 5s, then 30s).
-- *changed* `ServeRPC` uses the stream. It falls back to the per-call exec only when the remote binary has no `--stream` (the process exits without the hello line and its output matches `rpcUnsupportedMarkers`), remembered per remote until a daemon probe shows another serve version. While the stream is down for any other reason calls fail fast with `ErrServeUnreachable`; they never fall back to exec, because that is the pile-up.
+- **new** `usecase.rpcStream`, one per remote: a dedicated `ssh … exec aiman rpc --stream` started like the `session.events` stream (`ssh.Manager`, its own connection with an explicit `ControlMaster=no` through `bulkSSHArgs(path, false)`, as `runDirect` does: `SessionEventsCommand` leaves the option unset, so a user's `ControlMaster auto` would multiplex it and `ResetControlSocket` would end it), on first use. A call writes its line and waits for its id under the caller's deadline; a call that times out is forgotten on the laptop and its late answer dropped. When the stream dies, pending calls fail and it restarts with backoff (1s, 2s, 5s, then 30s).
+- A stream that is stalled is not a live stream. When a call times out and the stream has written no line since that call was sent, the laptop kills the ssh client, marks the stream down and waits 60 seconds (P2's cooldown) before starting another. A remote `aiman rpc --stream` stuck in `D` cannot be killed until its page fault returns, so the bound is one live stream plus the stalled ones still draining, at most one new one per 60 seconds, never one per call.
+- *changed* `ServeRPC` uses the stream. It falls back to the per-call exec only when the remote binary has no `--stream`: the remote command exits (any exit status other than ssh's own 255) before printing the hello line. Today's binary answers `usage: aiman rpc METHOD --params-stdin`, which is in none of `rpcUnsupportedMarkers`, so the rule is the missing hello and not the text; that usage line is the test fixture. The answer is remembered per remote until a daemon probe shows another serve version. While the stream is down for any other reason calls fail fast with `ErrServeUnreachable`; they never fall back to exec, because that is the pile-up.
 - *changed* `rpcMethods` gains `resources.get` and every other method the TUI passes to `ServeRPC`; an acceptance test parses the `ServeRPC` call sites so a new one cannot be forgotten.
-- Result: polling costs no process on the host, and every laptop call passes admission, where `aiman host stats` counts it.
+- Result: RPC polling costs no new process on the host, and every laptop call passes admission, where `aiman host stats` counts it.
 
 **P2: a budget per remote on the laptop.** Replaces rev 1's single-flight per method and adaptive intervals with one mechanism that also covers calls that are not RPCs.
 
 - **new** `usecase.HostBudget`: 4 slots per remote for background calls. Background means started by a tick or an event, not by a key: `resources.get`, `todo.summary`, `todo.get`, `ci.get`, `usage.get` and its `session.get`, the `limits.get` and `agents.status` polls, git status, daemon probes and the preview capture. A background call that finds no slot is skipped (the next tick or event asks again); a call the operator made by pressing a key does not take a slot and is never skipped.
-- A call that ends in a local timeout keeps its slot for 60 more seconds, because its remote process may still be stalled. With 4 slots and a 30s timeout, a host that answers nothing gets at most 4 new processes every 90 seconds from one TUI, whatever the pollers do, and none once P1's stream is up.
+- A call that ends in a local timeout keeps its slot for 60 more seconds, because its remote process may still be stalled. With 4 slots and a 30s timeout, a host that answers nothing gets at most 4 new exec calls every 90 seconds from one TUI, whatever the pollers do. With P1 the RPCs leave that count, and what remains on exec is the preview capture, git status and the daemon probes: at most 4 leftover execs per TUI per remote per 90 seconds, plus the stream process. Each TUI process has its own budget.
 - *changed* `todo.summary` gets the per-session guard and trailing fetch `todo.get` already has, so a burst of `todo_changed` events costs one call per session.
 - The existing per-session and per-host guards stay; the budget sits under them.
 
 **P3: gate new heavy work on memory pressure.**
 
-- **new** `internal/cgroup/pressure.go`: `ReadPressure(dir)` parses the `some` and `full` lines of `memory.pressure`. **new** `Server.runPressure` reads the user slice (`user-<uid>.slice`, found from `/proc/self/cgroup`, so it works under the nohup supervisor and with `resources.enabled: false`) every 5 seconds: `memory.pressure`, `memory.current` and `memory.high`. Where there is no such cgroup it reads `/proc/pressure/memory`; elsewhere than Linux the gate is always open. It does not depend on the sampler.
-- The gate closes when `full avg10 >= 20`, or when `memory.current >= memory.high` (the slice is being throttled, which is what the incident was). It opens after 30 seconds in a row with `full avg10 < 10` and `memory.current < 95%` of `memory.high`. It is its own small state machine with a mutex; the `Alerter` is not reused. `some` is reported and never gates: one session held at its own `memory_high`, which is harmless by design, drives the slice's `some` up.
+- **new** `internal/cgroup/pressure.go`: `ReadPressure(dir)` parses the `some` and `full` lines of `memory.pressure`. **new** `Server.runPressure` reads the user slice (`user-<uid>.slice`, found from `/proc/self/cgroup`, so it works under the nohup supervisor and with `resources.enabled: false`) every 5 seconds: `memory.pressure`, plus `memory.current` and `memory.high` for the report. Where there is no such cgroup it reads `/proc/pressure/memory`; elsewhere than Linux the gate is always open. It does not depend on the sampler.
+- The gate closes when `full avg10 >= 20` and opens after 30 seconds in a row with `full avg10 < 10`. Nothing else closes it. It is its own small state machine with a mutex; the `Alerter` is not reused. `some` is reported and never gates: one session held at its own `memory_high`, which is harmless by design, drives the slice's `some` up. `slice_over_high` (`memory.current >= memory.high`) is reported and never gates either: `MemoryHigh` is the reclaim line, a well-used slice sits at it with `full` near 0, and a gate on it would not open again.
 - Config `host.load.pressure_gate`: `{enabled (unset is on), memory_full_avg10: 20, reopen_full_avg10: 10, hold: 30s}`, pushed with `host` by `MarshalServeConfig`.
 - While closed:
   - `session.create` (consults included) and every hidden-helper spawn through `serverSessions.CreateChild` (reviewers through `verify.start`, fixers, `review.assess`), `review.run` and `review.coverage` answer **new** `host_under_pressure` with `data: {retry_after_ms: 30000, memory_full_avg10, memory_some_avg10, since}`. The client does not retry it. `session.create {force: true}` and `review.run {force: true}` pass; `force` from a session caller is `needs_operator`.
   - A handover write still writes the mechanical file and starts no child; the run is recorded `failed` with error `host under pressure`, which is the existing fallback path.
   - `session.restart`, `session.terminate`, revive and `pty.create` are never gated: restarting or ending a session is how memory comes back.
   - The state sweep runs at its 5s period (the load average keeps doing the same).
-- On closing serve emits one notification `host_pressure` (NeedsYou true, empty session id, text `<host> is under memory pressure: full <n>%, slice <cur>/<high>; new sessions, reviews and CI runs wait`), at most once per 10 minutes, and logs opening and closing. The phone sink does not push the kind.
+- On closing serve emits one notification `host_pressure` (NeedsYou true, empty session id, text `<host> is under memory pressure: full <n>%; new sessions, reviews and CI runs wait`), at most once per 10 minutes, and logs opening and closing. The phone sink does not push the kind.
 - *changed* `host.stats` and `resources.get` carry `gate: {closed, since, memory_some_avg10, memory_full_avg10, slice_over_high}`; `aiman host stats` prints `pressure: memory some <n>% full <n>%` and `gate: open|closed since <t>`. The TUI header gauge reads `pressure` in the warning colour while the gate is closed.
 - Skill text: on `host_under_pressure`, do not retry in a loop; wait at least `retry_after_ms`, or for the next note.
 
 **P3b: CI and verify runs get a queue, a scope and a disk TMPDIR.**
 
 - *changed* `cigate.Runner`: a FIFO queue. `host.load.ci_parallel` (default 1) runs at a time per host; a run starts only while the gate is open. `Prepare` writes the record as **new** status `queued`; it turns `running` when its turn comes. `ci.status` gains `queue_position` (1 is next), and `aiman ci local --wait` prints `queued (position n)` while it polls. A `queued` record whose run is not in this serve reads as failed, like `running`. `ci_running` now also covers a queued run of the same session.
-- *changed* Each run, and the verify test command, starts through the scoper as `aiman-ci-<session id>.scope` in `aiman-sessions.slice` with the `resources.session` limits, and with `TMPDIR` set to the session's `~/.aiman/tmp/<scope key>`. The run stops being charged to serve, cannot take the host past the sessions slice's limit, and builds on disk. Without a user systemd it runs as today, with the `TMPDIR` only. The scope is the run's own, not the session's, so a CI run cannot throttle the agent that is waiting on it.
+- *changed* Each run, and the verify test command, starts under `systemd-run --user --scope --collect` in a unit of its own, `aiman-ci-<session id>-<sha, 12 hex>.scope` for a CI run and `aiman-verify-<review id>.scope` for the verify test command, in `aiman-sessions.slice` with the `resources.session` limits. A unit per run means a leaked scope or a verify overlapping a CI run of the same session cannot collide or be joined. `TMPDIR` is the session's `~/.aiman/tmp/<scope key>`, set on the command's own environment and never on serve's. The run stops being charged to serve, cannot take the host past the sessions slice's limit, and builds on disk. Without a user systemd it runs as today, with the `TMPDIR` only. The scope is the run's own, not the session's, so a CI run cannot throttle the agent that is waiting on it.
 
 **P4: scratch cleanup.**
 
 - *changed* `review.debug` passes `tmpEnv` like every other pty.
-- *changed* `forgetResources` (forget and terminate) also removes `/tmp/claude-<uid>/<slug>/<AgentSessionID>` when the row has an `AgentSessionID`, with the slug rule `transcript.Locate` uses; an empty slug directory left behind is removed. It covers sessions that started before the TMPDIR change.
+- *changed* `forgetResources` also removes `/tmp/claude-<uid>/*/<AgentSessionID>` when the row has an `AgentSessionID` (matched by the id under any slug directory; no slug is computed, because `ClaudeSlug` is documented only for `~/.claude/projects`); an empty slug directory left behind is removed. It runs only from `dropSession`, when the row itself goes (forget, and a terminate that completes), never for a stop that keeps the row. It covers sessions that started before the TMPDIR change.
 - **new** scratch janitor (`internal/server/scratch.go`), 10 minutes after serve starts and every hour, `resources.scratch_janitor` unset is on:
-  - `/tmp/claude-<uid>/<slug>/<id>`: removed when `<id>` is not the `AgentSessionID` of a session whose holder runs and nothing in its tree was modified in the last 24 hours (the walk stops at the first recent file); empty slug directories go too.
+  - `/tmp/claude-<uid>/<slug>/<id>`: removed when `<id>` is not the `AgentSessionID` of any stored session, running or stopped, and nothing in its tree was modified in the last 24 hours (the walk stops at the first recent file); empty slug directories go too.
   - `~/.aiman/tmp/<id>`: only directories, only when `<id>` is no stored session, no running pty and not a scope key, and nothing inside was modified in 24 hours. Files there (`aiman-pty-<id>.json`, `host-update-<tag>.sh`) are never touched.
+  - It reads the stored ids and the running ptys again immediately before each removal, so a session that started during the walk keeps its directory.
   - It never follows symlinks, never leaves those two roots, and logs one line per pass with the bytes freed, which `host.stats` reports as `scratch: {freed_bytes, last_run}`.
   - Known cost: a Claude process aiman does not run, idle for a day, loses its old task output. The operator's tmpfiles rule (2 days) already does the same.
 
 **P5: diagnostics that see client-side pile-ups.**
 
-- *changed* the auto dump also fires when the gate's `full avg10` has stayed at or above 50 for 30 seconds (`autoDump.due(now, atCap || psiHigh)`), under the same 10-minute spacing.
+- *changed* the auto dump also fires when the gate's `full avg10` has stayed at or above 50 for 30 seconds (`autoDump.due(now, atCap || psiHigh)`; `full` only, as for the gate), under the same 10-minute spacing.
 - **new** process census in `internal/hoststats`: from `/proc/<pid>/stat` only, the count of processes whose comm is `aiman`, by state (`R`, `S`, `D`) and by parent (comm and pid, top 5), leaving out serve and the holders. The dump and `host.stats` (`aiman_procs`) include it. Over 32 of them serve logs, at most once a minute, `procs: 169 aiman processes outside holders, 52 in D, parents: sshd-session 3834565 (26)`.
 - ~~by subcommand~~: dropped. The subcommand is in `/proc/<pid>/cmdline`, which `hoststats` never reads because arguments can hold secrets. State and parent already name the incident.
 
@@ -210,7 +213,9 @@ Serve restarts into this release on `regent0` with 12 legacy agents. Thirty seco
 - **Carry requests on the `session.events` channel**: lost; it is one-way, and mixing calls into it couples two failure modes.
 - **Single-flight per method plus adaptive poll intervals** (rev 1): lost to the host budget. The guards per session already exist, most of the listed calls are not on a timer, and a per-method rule does not bound a remote or cover git status and probes.
 - **A remote `timeout` around `aiman rpc`**: lost; it is one more exec under thrash, a process in `D` ignores the signal until it runs, and a running `aiman rpc` is already bounded at 32s.
-- **Gate on PSI `some`** (rev 1): lost; a single session at its own limit trips it. `full` and the slice's own `memory.high` are the host-wide signals.
+- **Gate on PSI `some`** (rev 1): lost; a single session at its own limit trips it.
+- **Close the gate when the slice reaches `memory.high`** (rev 2): lost in round 1; a healthy full slice sits there and the gate would stay closed. `full` is the host-wide signal.
+- **A lower `MemoryHigh` for adopted scopes until restart** (consult round 1): lost; charge moves to the scope as the agent churns memory, so the cap would throttle sessions that are not growing.
 - **Reuse the `Alerter` for the gate** (rev 1): lost; it clears at once, drops slice pressure and is not safe off the sampler goroutine.
 - **Gate `session.restart`** (rev 1): lost; restart is the remedy.
 - **Run CI inside the session's own scope**: lost; a `make ci` would throttle the agent waiting on it, and the run could not be told apart in `resources.get`.
@@ -219,7 +224,7 @@ Serve restarts into this release on `regent0` with 12 legacy agents. Thirty seco
 
 ## Open questions
 
-1. **Gate thresholds.** Close at `full avg10 >= 20` or slice at `memory.high`; open below 10 for 30s. The incident read 96 and, a minute after recovery, 33. There is no baseline for a normal busy day on `regent0`. Option: ship with these defaults and enforce (recommended; `force` and the config are the escape), or ship `enabled: false` for a week and read `host.stats` first.
+1. **Gate thresholds.** Close at `full avg10 >= 20`; open below 10 for 30s. The incident read 96 and, a minute after recovery, 33. There is no baseline for a normal busy day on `regent0`. Option: ship with these defaults and enforce (recommended; `force` and the config are the escape), or ship `enabled: false` for a week and read `host.stats` first.
 2. **`ci_parallel` default.** 1 (recommended; the operator's draft) or keep 2. With 1, four children landing in a row wait in line for `make ci`.
 3. **Should the preview capture and git status move onto the stream too?** They are not RPCs today. Default: no for this cut; the budget bounds them at 4 per remote.
 4. **Should the stream carry `session.events` and `pty.attach`?** Default: no.
@@ -243,35 +248,53 @@ Rev 1 to rev 2, from the code check (no consult yet):
 | `aiman update` prints the unscoped count | It never talks to serve | Dropped |
 | Find the vendor id through `native_agent_id` | The field is `AgentSessionID` | Corrected |
 
-Consult rounds: pending.
+Consult round 1 (Grok, report `~/.aiman/consults/6652d4f3-a4f4-4750-9a2e-68373f4f8382.report.md`, against rev 2): verdict revise, 5 high, 6 medium, 2 low. A first consult ended without a report.
+
+| Objection | Severity | Triage | Reason |
+|---|---|---|---|
+| Closing the gate on `memory.current >= memory.high` sticks it closed on a healthy host: `MemoryHigh` is the reclaim line | high | accept | P3 closes on `full avg10` only; `slice_over_high` is reported |
+| An old binary answers `aiman rpc --stream` with a usage line that matches no unsupported marker, so every TUI against an old host would go dark | high | accept | P1: unsupported means the remote command exits before the hello line; the usage line is a fixture |
+| A stream stalled in `D` still counts as up, and a restart after ServerAlive stacks a new one | high | accept | P1: a timeout with a silent stream kills the client, marks it down and waits 60s; bound stated as one live plus draining |
+| A failed adoption is never retried, and the first sweep runs when a recovering host is most likely to refuse | high | accept | P0 retries on every sweep, logging once per session and on a changed error |
+| Group 0 collides: A and B both write `internal/ui/resources.go`; D and G share `host_cmd.go` and `handlers_host.go` | high | accept | A owns `internal/ui/resources.go` whole (poll, unscoped colour, pressure banner, from the contract fields); F, D and G touch the host files in groups 0, 1 and 2 in turn, each brief says to start from the landed branch |
+| "None once the stream is up" is false for git status, probes and the preview; each TUI has its own budget | medium | accept | P2 states the bound as 4 leftover execs per TUI per remote per 90s plus the stream |
+| The events stream does not set `ControlMaster=no`, so copying it would still multiplex | medium | accept | P1 starts the stream with `bulkSSHArgs(path, false)` |
+| One unit name per session for CI and verify collides on overlap or a leaked scope; `TMPDIR` must not be set on serve | medium | accept | P3b: a unit per run, `--collect`, env on the command only |
+| The janitor deletes scratch of a stored but stopped session; a start can race the walk; the slug rule is not documented for `/tmp/claude`; terminate should not drop it while the row stays | medium | accept in part | Stored ids are protected in both roots, re-read before each removal, the id is matched under any slug. `forgetResources` runs only from `dropSession`, where the row is already going, so terminate needs no special case |
+| Adopted sessions can grow by a full limit each while their old charge stays on serve; cap them lower until restart; `CPUWeight` and `TasksMax` apply at once | medium | accept in part | The immediate limits and the overshoot are documented in P0. The lower cap is rejected: charge migrates with ordinary churn, so it would throttle sessions that are not growing, and adoption is already tighter than no limit |
+| The acceptance tests as described would pass the wrong implementations above | medium | accept | Test descriptions below now name the usage-line fixture, the stalled stream, no close on slice at high, a stored stopped session, the race re-check, and overlapping verify and CI |
+| The refused set is right; do not gate `pty.create` | low | accept | No change |
+| The census is right; the dump should fire on `full` only | low | accept | P5 says so |
 
 ## Breakdown
 
 | Piece | Owns files | Parallel group | Depends on | Complexity | Tier | Acceptance tests |
 |---|---|---|---|---|---|---|
-| A host budget and allowlist | `internal/usecase/host_budget.go` (new), `internal/ui/{resources,todo_fetch,pr_watch,usage_fetch,usage_limits,agent_updates,preview_refresh}.go`, the git status and probe commands in `internal/ui/dashboard.go`, `cmd/aiman/rpc_cmd.go` | 0 | none | M | worker | `internal/usecase/host_budget_acceptance_test.go`, `internal/ui/poll_budget_acceptance_test.go`, `cmd/aiman/rpc_allowlist_acceptance_test.go`; `go test ./internal/usecase/ ./internal/ui/ ./cmd/aiman/` |
-| B auto-adopt | `internal/server/handlers_adopt.go`, `internal/server/handlers_resources.go`, `internal/cgroup/sample.go` (`serve_unit`), `cmd/aiman/resources_cmd.go`, `cmd/aiman/resources_wire.go`, `internal/ui/resources.go` (gauge colour) | 0 | none | S | worker | `internal/server/adopt_sweep_acceptance_test.go`, `cmd/aiman/resources_unscoped_acceptance_test.go`; `go test ./internal/server/ ./cmd/aiman/` |
+| A host budget and allowlist | `internal/usecase/host_budget.go` (new), `internal/ui/{todo_fetch,pr_watch,usage_fetch,usage_limits,agent_updates,preview_refresh}.go`, `internal/ui/resources.go` whole (poll, the unscoped warning colour and the pressure banner, read from the contract's `unscoped` and `gate` fields), the git status and probe commands in `internal/ui/dashboard.go`, `cmd/aiman/rpc_cmd.go` | 0 | none | M | worker | `internal/usecase/host_budget_acceptance_test.go`, `internal/ui/poll_budget_acceptance_test.go`, `cmd/aiman/rpc_allowlist_acceptance_test.go`; `go test ./internal/usecase/ ./internal/ui/ ./cmd/aiman/` |
+| B auto-adopt | `internal/server/handlers_adopt.go`, `internal/server/handlers_resources.go`, `internal/cgroup/sample.go` (`serve_unit`), `cmd/aiman/resources_cmd.go`, `cmd/aiman/resources_wire.go` | 0 | none | S | worker | `internal/server/adopt_sweep_acceptance_test.go`, `cmd/aiman/resources_unscoped_acceptance_test.go`; `go test ./internal/server/ ./cmd/aiman/` |
 | F scratch cleanup | `internal/server/scratch.go` (new), `internal/server/resources.go` (`forgetResources`), `internal/server/review_debug.go`, `internal/server/handlers_host.go` (`scratch`), config | 0 | none | S | worker | `internal/server/scratch_janitor_acceptance_test.go`; `go test ./internal/server/` |
 | C rpc stream | `cmd/aiman/rpc_stream.go` (new), `internal/usecase/rpc_stream.go` (new), `internal/usecase/serve_rpc.go`, `internal/infra/ssh/manager.go` (stream start) | 1 | A | M | smart | `cmd/aiman/rpc_stream_acceptance_test.go`, `internal/usecase/rpc_stream_acceptance_test.go`; `go test ./cmd/aiman/ ./internal/usecase/` |
-| D pressure gate | `internal/cgroup/pressure.go` (new), `internal/server/pressure.go` (new), `internal/server/{loadavg,protocol,handover,review_run,handlers_verify,handlers_session,handlers_host,handlers_resources}.go`, `internal/infra/config/config.go`, `cmd/aiman/host_cmd.go`, `internal/ui/resources.go` (banner), `api/openapi.yaml`, skill text, `AGENTS.md` | 1 | B, F | M | smart | `internal/cgroup/pressure_acceptance_test.go`, `internal/server/pressure_gate_acceptance_test.go`; `go test ./internal/cgroup/ ./internal/server/` |
+| D pressure gate | `internal/cgroup/pressure.go` (new), `internal/server/pressure.go` (new), `internal/server/{loadavg,protocol,handover,review_run,handlers_verify,handlers_session,handlers_host,handlers_resources}.go`, `internal/infra/config/config.go`, `cmd/aiman/host_cmd.go`, `api/openapi.yaml`, skill text, `AGENTS.md` | 1 | B, F | M | smart | `internal/cgroup/pressure_acceptance_test.go`, `internal/server/pressure_gate_acceptance_test.go`; `go test ./internal/cgroup/ ./internal/server/` |
 | E CI queue and scopes | `internal/cigate/{runner,proc_unix}.go`, `internal/server/handlers_ci_local.go`, `cmd/aiman/ci_cmd.go`, `internal/verify/evidence.go`, `cmd/aiman/serve.go` (wiring) | 2 | D | M | smart | `internal/cigate/queue_acceptance_test.go`, `internal/server/ci_queue_acceptance_test.go`; `go test ./internal/cigate/ ./internal/server/` |
 | G diagnostics | `internal/hoststats/proc.go`, `internal/server/dump.go`, `internal/server/handlers_host.go` (`aiman_procs`), `cmd/aiman/host_cmd.go` | 2 | D | S | worker | `internal/hoststats/census_acceptance_test.go`, `internal/server/dump_pressure_acceptance_test.go`; `go test ./internal/hoststats/ ./internal/server/` |
 
 What each acceptance file proves:
 
 - `host_budget_acceptance_test.go`: with a fake executor that blocks, a fifth background call for one remote is skipped, another remote is unaffected, a timed-out call's slot stays taken for the cooldown, and a key-driven call is never skipped.
-- `poll_budget_acceptance_test.go`: a burst of `todo_changed` events for unselected sessions starts at most one `todo.summary` per session and at most 4 calls per remote.
+- `poll_budget_acceptance_test.go`: a burst of `todo_changed` events for unselected sessions starts at most one `todo.summary` per session and at most 4 calls per remote; the header shows the warning colour for a report with `unscoped` rows and `pressure` for one whose gate is closed.
 - `rpc_allowlist_acceptance_test.go`: every method literal passed to `usecase.ServeRPC` in non-test code is in `rpcMethods`.
-- `adopt_sweep_acceptance_test.go`: a holder whose pid is outside the sessions slice is adopted exactly once and recorded with actor `aiman`; `resources.get` lists it under `unscoped` before and not after; a serve outside the user manager never calls adopt and logs once; a failed adoption is not retried on the next pass.
+- `adopt_sweep_acceptance_test.go`: a holder whose pid is outside the sessions slice is adopted exactly once and recorded with actor `aiman`; `resources.get` lists it under `unscoped` before and not after; a serve outside the user manager never calls adopt and logs once; a failed adoption is tried again on the next pass and logged once.
 - `resources_unscoped_acceptance_test.go`: `aiman resources` prints the unscoped rows, the `serve_unit` line and the restart hint.
-- `scratch_janitor_acceptance_test.go`: old scratch of an unknown id is removed in both roots, a live session's and a recently modified one stay, files in `~/.aiman/tmp` stay, a symlink out of the root is not followed, forget removes the legacy `/tmp` directory by `AgentSessionID`, and `host.stats` reports the bytes.
+- `scratch_janitor_acceptance_test.go`: old scratch of an unknown id is removed in both roots; a running session's, a stored stopped session's and a recently modified one stay; an id stored during the walk stays; files in `~/.aiman/tmp` stay, a symlink out of the root is not followed, forget removes the legacy `/tmp` directory by `AgentSessionID` under any slug, and `host.stats` reports the bytes.
 - `rpc_stream_acceptance_test.go` (cmd): two requests on one stream answer by id, the slower one second; an unlisted method is refused without a dial; a ninth call in flight is `server_busy`; EOF ends the process.
-- `rpc_stream_acceptance_test.go` (usecase): 50 calls start one remote process; a timed-out call leaves the stream usable; a remote without `--stream` falls back to exec once and remembers it; a dead stream fails calls fast and never execs.
+- `rpc_stream_acceptance_test.go` (usecase): 50 calls start one remote process; a call that times out while other answers arrive leaves the stream up; a timeout on a silent stream kills it and no new one starts for 60s; a remote that prints today's `usage: aiman rpc METHOD --params-stdin` and exits falls back to exec and remembers it; an ssh failure (exit 255) fails calls fast and never execs.
 - `pressure_acceptance_test.go`: `ReadPressure` parses `some` and `full` and tolerates a file with no `full` line.
-- `pressure_gate_acceptance_test.go`: the gate closes on `full >= 20` and on current at high, stays closed until 30s under the reopen values, never closes on `some` alone; `session.create`, a helper spawn and `review.run` answer `host_under_pressure` with the data; `force` passes for the operator and is `needs_operator` for a session; `session.restart` is not gated; a handover writes the file and starts no child; one notification per closing.
-- `queue_acceptance_test.go` and `ci_queue_acceptance_test.go`: runs start in arrival order, one at a time; a queued record says `queued` with its position; nothing starts while the gate is closed and the head starts when it opens; the launcher receives the scope name and the `TMPDIR`.
+- `pressure_gate_acceptance_test.go`: the gate closes on `full >= 20`, stays closed until 30s under the reopen value, and never closes on `some` alone or on the slice at `memory.high`; `session.create`, a helper spawn and `review.run` answer `host_under_pressure` with the data; `force` passes for the operator and is `needs_operator` for a session; `session.restart` is not gated; a handover writes the file and starts no child; one notification per closing.
+- `queue_acceptance_test.go` and `ci_queue_acceptance_test.go`: runs start in arrival order, one at a time; a queued record says `queued` with its position; nothing starts while the gate is closed and the head starts when it opens; the launcher receives a unit name unique to the run and the `TMPDIR` on the command's environment; a verify run overlapping a CI run of the same session and a leftover scope both start cleanly.
 - `census_acceptance_test.go`: counts by state and parent from a fake `/proc`, with a planted `cmdline` never read.
 - `dump_pressure_acceptance_test.go`: the auto dump fires after 30s of `full >= 50`, respects the 10-minute spacing, and the dump holds the census.
+
+`internal/server/handlers_host.go` and `cmd/aiman/host_cmd.go` are written by F, then D, then G, one group apart; each later brief says to start from the landed branch.
 
 The acceptance tests are written and committed on this branch after the design is approved and before the first child starts.
 
