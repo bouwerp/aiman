@@ -45,6 +45,8 @@ type Status struct {
 	Status      string
 	CheckedAt   time.Time
 	Attempt     *Attempt
+	// Operation is the last daemon restart, apart from Attempt.
+	Operation *Attempt
 	// Gateway is the host's aiman-gateway against serve; nil when
 	// ReadGateway is unset.
 	Gateway *GatewayStatus
@@ -88,6 +90,11 @@ type Manager struct {
 	// OnGatewayBehind reports, in notify mode, a gateway older than serve
 	// once per gateway version and serve tag.
 	OnGatewayBehind func(gatewayVersion, serveTag string)
+	// OpsDir holds operation results; empty refuses StartOperation.
+	OpsDir string
+	// OpScript builds operation name's script; nil means
+	// remotesvc.RestartScript for the name's daemon.
+	OpScript func(name string) string
 
 	// opMu serialises settle, poll and apply, so two scripts never start.
 	opMu sync.Mutex
@@ -182,6 +189,7 @@ func (m *Manager) statusOf(s State, g *gatewayRead) Status {
 		Status:      v.status,
 		CheckedAt:   s.CheckedAt,
 		Attempt:     s.Attempt,
+		Operation:   s.Operation,
 		Gateway:     m.gatewayStatus(s, g),
 	}
 	if v.apply && v.kind != AttemptKindGateway && m.Policy.mode() == ModeAuto && m.deferring(v.tag) {
@@ -269,6 +277,7 @@ func (m *Manager) Poll(ctx context.Context) Status {
 
 func (m *Manager) poll(ctx context.Context, fetch bool) Status {
 	if m.Policy.mode() == ModeOff || m.dev() {
+		m.Operation()
 		return m.Status()
 	}
 	var ev events
@@ -276,6 +285,7 @@ func (m *Manager) poll(ctx context.Context, fetch bool) Status {
 	m.opMu.Lock()
 	s := m.load()
 	ev.add(m.settleLocked(&s))
+	m.settleOpLocked(&s)
 	if fetch {
 		m.fetchLocked(ctx, &s)
 	}
@@ -295,6 +305,8 @@ func (m *Manager) poll(ctx context.Context, fetch bool) Status {
 		rel := s.Latest
 		ev.release = &rel
 		m.logf("host-update: %s available", v.tag)
+	case m.Policy.mode() == ModeAuto && v.apply && started(s.Operation):
+		m.logf("host-update: %s waits for %s", v.tag, s.Operation.To)
 	case m.Policy.mode() == ModeAuto && v.apply:
 		if n := m.gate(v.tag); n > 0 {
 			m.logf("host-update: %s deferred, %d busy", v.tag, n)
@@ -328,10 +340,13 @@ func (m *Manager) Request(ctx context.Context) Outcome {
 	m.opMu.Lock()
 	s := m.load()
 	ev.add(m.settleLocked(&s))
+	m.settleOpLocked(&s)
 	m.fetchLocked(ctx, &s)
 	v := m.judge(s, g, true)
 	out := Outcome{Target: v.tag}
 	switch {
+	case v.apply && started(s.Operation):
+		out.Reason = fmt.Sprintf("%s is running; try again shortly", s.Operation.To)
 	case !v.apply:
 		out.Reason = m.refusal(v, s)
 	default:
