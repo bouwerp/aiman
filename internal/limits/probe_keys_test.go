@@ -64,7 +64,10 @@ func TestProbeKillsTheTreeOnCancel(t *testing.T) {
 
 func TestProbeNudgesTheTerminalSize(t *testing.T) {
 	dir := t.TempDir()
-	body := fmt.Sprintf(`trap 'stty size >> %q/winch.log' WINCH; draw "$COMPOSER"; while :; do sleep 0.05; done`, dir)
+	// The trap only sets a flag: bash can drop a SIGWINCH that arrives while
+	// a trap for it runs, so the loop records the size it ends at. The rename
+	// keeps the kill at the probe's end from leaving a truncated file.
+	body := fmt.Sprintf(`trap 'seen=1' WINCH; draw "$COMPOSER"; while :; do sleep 0.05; if [ -n "$seen" ]; then stty size > %[1]q/winch.tmp && mv %[1]q/winch.tmp %[1]q/winch.log; fi; done`, dir)
 	cfg, _ := probeConfig(t, fakeGrok(t, dir, body))
 	cfg.Timeout = 2 * time.Second
 	RunGrokProbe(context.Background(), cfg)
@@ -72,7 +75,7 @@ func TestProbeNudgesTheTerminalSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the CLI saw no size change: %v", err)
 	}
-	if got := string(raw); !strings.Contains(got, "40 120") {
+	if got := strings.TrimSpace(string(raw)); got != "40 120" {
 		t.Fatalf("size after the nudge = %q, want it back at 40 120", got)
 	}
 }
