@@ -71,6 +71,9 @@ const (
 	// EventResourcesLimits records an operator's change to a session's
 	// memory limits and whether it reached the running scope.
 	EventResourcesLimits EventKind = "resources.limits"
+	// EventResourcesAdopted records an operator moving a running session
+	// into its scope: the scope and how many processes moved.
+	EventResourcesAdopted EventKind = "resources.adopted"
 	// EventConsultAbandoned records on the parent's ledger a consult that
 	// ended without a usable report: the child and the to-do it was for.
 	EventConsultAbandoned EventKind = "consult.abandoned"

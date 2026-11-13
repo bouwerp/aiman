@@ -555,6 +555,7 @@ components:
             - host.restart
             - resources.get
             - session.limits
+            - session.adopt_scope
             - session.register
             - session.report_agent_session
             - notify.since
@@ -816,6 +817,7 @@ components:
             - $ref: "#/components/schemas/HostRestartResult"
             - $ref: "#/components/schemas/ResourcesResult"
             - $ref: "#/components/schemas/SessionLimitsResult"
+            - $ref: "#/components/schemas/SessionScopeResult"
             - $ref: "#/components/schemas/LimitsResult"
             - $ref: "#/components/schemas/AWSStatusResult"
             - $ref: "#/components/schemas/AWSLoginResult"
@@ -1621,6 +1623,33 @@ components:
           type: boolean
         scoped:
           type: boolean
+    SessionScopeResult:
+      type: object
+      description: >
+        session.adopt_scope {session} moves a running session that has no
+        scope into aiman-session-<id>.scope with its limits: its holders,
+        what they run and their descendants. moved is 0 when every process
+        was already inside. The session's TMPDIR does not change. It is the
+        operator's (needs_operator for a session), unavailable without a user
+        systemd, and not a device method.
+      required: [type, session, scope, moved, limits]
+      properties:
+        type:
+          type: string
+          const: session_scope
+        session:
+          type: string
+        name:
+          type: string
+        scope:
+          type: string
+        moved:
+          type: integer
+        limits:
+          $ref: "#/components/schemas/ResourceLimits"
+        warning:
+          type: string
+          description: Why some processes stayed outside the scope.
     HostStatsResult:
       type: object
       description: >
