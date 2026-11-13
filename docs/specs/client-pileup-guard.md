@@ -1,6 +1,6 @@
 # Client pile-up guard: close the gaps the load guard and session limits left open
 
-**Revision:** 4 (rev 1 checked against the code at v0.49.0, `b6c3f11`; consult rounds 1 and 2 triaged) · **Size:** project · **Status:** draft, not approved
+**Revision:** 5 (rev 1 checked against the code at v0.49.0, `b6c3f11`; consult rounds 1 and 2 triaged; open questions answered by the operator) · **Size:** project · **Status:** draft, not approved
 **Task:** operator, 2026-11-13: "aiman recently introduced updates to mitigate these kinds of things - how can it improve?" after a second swamp of `regent0` with v0.49.0 installed.
 **Builds on:** `docs/specs/serve-load-guard.md` (v0.39.0) and `docs/superpowers/specs/2026-11-12-session-resource-limits.md` (#152, #154). Read both first; this spec does not repeat them.
 
@@ -109,7 +109,7 @@ flowchart LR
   gate --> sweep[sweep period]:::changed
   gate --> dump[auto dump]:::changed
   adopt[adopt sweep: start and every 5 min]:::new --> scopes[session scopes]
-  janitor[scratch janitor, hourly]:::new --> tmp[/tmp/claude-uid and ~/.aiman/tmp/]
+  janitor[scratch janitor, hourly]:::new --> tmp[~/.aiman/tmp/]
 ```
 
 ### Behaviour
@@ -165,7 +165,7 @@ flowchart LR
 
 **P3b: CI and verify runs get a queue, a scope and a disk TMPDIR.**
 
-- *changed* `cigate.Runner`: a FIFO queue. `host.load.ci_parallel` (default 1) runs at a time per host; a run starts only while the gate is open. `Prepare` writes the record as **new** status `queued`; it turns `running` when its turn comes. `ci.status` gains `queue_position` (1 is next). `aiman ci local --wait` keeps polling while the status is `queued` or `running`, prints `queued (position n)` when the position changes, and returns only on pass, fail or a lost record. `ci_running` now also covers a queued run of the same session.
+- *changed* `cigate.Runner`: a FIFO queue. `host.load.ci_parallel` (default 2, today's cap) runs at a time per host; a run starts only while the gate is open. `Prepare` writes the record as **new** status `queued`; it turns `running` when its turn comes. `ci.status` gains `queue_position` (1 is next). `aiman ci local --wait` keeps polling while the status is `queued` or `running`, prints `queued (position n)` when the position changes, and returns only on pass, fail or a lost record. `ci_running` now also covers a queued run of the same session.
 - The queue lives in serve's memory. A `queued` record whose run is not in this serve reads as failed (`the run was interrupted (serve restarted)`), like `running` today, and the child runs `aiman ci local --wait` again; the queue is not persisted.
 - *changed* `dropSession` (forget and terminate) takes the session's run out of the queue, cancels its wait, fails the record with `session gone` and releases the session's claim and its slot before `Runner.Forget`. A queued run never starts for a session that is gone; a running one is stopped as on a timeout.
 - *changed* Each run, and the verify test command, starts under `systemd-run --user --scope --collect` in a unit of its own, `aiman-ci-<session id>-<sha, 12 hex>-<start, unix seconds>.scope` for a CI run and `aiman-verify-<review id>-<start>.scope` for the verify test command (through `cgroup.ScopeName`'s sanitising), in `aiman-sessions.slice` with the `resources.session` limits. A unit per run means a leaked scope or a verify overlapping a CI run of the same session cannot collide or be joined. `TMPDIR` is a directory of the run's own, `~/.aiman/tmp/ci-<session id, 8 hex>-<sha, 12 hex>` or `~/.aiman/tmp/verify-<review id, 8 hex>`, set on the command's own environment and never on serve's, and removed when the run ends. It is not the agent's directory: the agent and the run would write the same tree, and a forget would delete it under a run. The run stops being charged to serve, cannot take the host past the sessions slice's limit, and builds on disk. Without a user systemd it runs as today, with the `TMPDIR` only. The scope is the run's own, not the session's, so a CI run cannot throttle the agent that is waiting on it.
@@ -175,11 +175,10 @@ flowchart LR
 - *changed* `review.debug` passes `tmpEnv` like every other pty.
 - *changed* `forgetResources` also removes `/tmp/claude-<uid>/*/<AgentSessionID>` when the row has an `AgentSessionID` (matched by the id under any slug directory; no slug is computed, because `ClaudeSlug` is documented only for `~/.claude/projects`); an empty slug directory left behind is removed. It runs only from `dropSession`, when the row itself goes (forget, and a terminate that completes), never for a stop that keeps the row. It covers sessions that started before the TMPDIR change.
 - **new** scratch janitor (`internal/server/scratch.go`), 10 minutes after serve starts and every hour, `resources.scratch_janitor` unset is on:
-  - `/tmp/claude-<uid>/<slug>/<id>`: removed when `<id>` is not the `AgentSessionID` of any stored session, running or stopped, and nothing in its tree was modified in the last 24 hours (the walk stops at the first recent file); empty slug directories go too.
   - `~/.aiman/tmp/<id>`: only directories, only when `<id>` is no stored session, no running pty and not a scope key or the directory of a CI or verify run in progress, and nothing inside was modified in 24 hours. Files there (`aiman-pty-<id>.json`, `host-update-<tag>.sh`) are never touched.
   - It reads the stored ids and the running ptys again immediately before each removal, so a session that started during the walk keeps its directory.
-  - It never follows symlinks, never leaves those two roots, and logs one line per pass with the bytes freed, which `host.stats` reports as `scratch: {freed_bytes, last_run}`.
-  - Known cost: a Claude process aiman does not run, idle for a day, loses its old task output. The operator's tmpfiles rule (2 days) already does the same.
+  - It never follows symlinks, never leaves `~/.aiman/tmp`, and logs one line per pass with the bytes freed, which `host.stats` reports as `scratch: {freed_bytes, last_run, legacy_bytes}`.
+  - It never touches `/tmp/claude-<uid>`. A directory there whose session aiman has no row for may belong to a Claude process the operator runs by hand, and the janitor cannot tell that from a forgotten session's leftovers. `forgetResources` removes a known session's directory when its row goes; older leftovers are the operator's to delete (the tmpfiles rule, 2 days, already ages them). `host.stats.scratch` reports `legacy_bytes`, the size of `/tmp/claude-<uid>`, so the cost stays visible.
 
 **P5: diagnostics that see client-side pile-ups.**
 
@@ -215,7 +214,7 @@ func (b *HostBudget) TryAcquire(remote string) (release func(timedOut bool), ok 
 
 ## A scenario, end to end
 
-Serve restarts into this release on `regent0` with 12 legacy agents. Thirty seconds later the adopt sweep moves each into its own scope; `aiman resources` lists them with `restart to move its memory and scratch`, and `serve_unit` still shows the 13G they hold. Three children finish and run `aiman ci local --wait`: one runs in `aiman-ci-<id>.scope` with its build files in `~/.aiman/tmp`, the other two print `queued (position 1)` and `(position 2)`. A legacy agent starts a large build and the user slice passes its `MemoryHigh`. Within 5 seconds the gate closes: the queued CI runs stay queued, a coordinator's `session create --for` answers `host_under_pressure` and it waits, the operator gets one `host_pressure` notification, and the TUI header reads `pressure`. On the laptop every poll rides the one `aiman rpc --stream` process, so `aiman host stats` shows the operator's calls and the host gains no process; had the stream been down, the budget would have let 4 calls start and then held their slots. The operator restarts the big legacy session, which lands in a scope with its scratch on disk. Thirty seconds after pressure falls the gate opens and the next CI run starts.
+Serve restarts into this release on `regent0` with 12 legacy agents. Thirty seconds later the adopt sweep moves each into its own scope; `aiman resources` lists them with `restart to move its memory and scratch`, and `serve_unit` still shows the 13G they hold. Three children finish and run `aiman ci local --wait`: two run, each in its own `aiman-ci-…` scope with its build files in `~/.aiman/tmp`, and the third prints `queued (position 1)`. A legacy agent starts a large build and the user slice passes its `MemoryHigh`. Within 5 seconds the gate closes: the queued CI run stays queued, a coordinator's `session create --for` answers `host_under_pressure` and it waits, the operator gets one `host_pressure` notification, and the TUI header reads `pressure`. On the laptop every poll rides the one `aiman rpc --stream` process, so `aiman host stats` shows the operator's calls and the host gains no process; had the stream been down, the budget would have let 4 calls start and then held their slots. The operator restarts the big legacy session, which lands in a scope with its scratch on disk. Thirty seconds after pressure falls the gate opens and the next CI run starts.
 
 ## Alternatives considered
 
@@ -235,11 +234,7 @@ Serve restarts into this release on `regent0` with 12 legacy agents. Thirty seco
 
 ## Open questions
 
-1. **Gate thresholds.** Close at `full avg10 >= 20`; open below 10 for 30s. The incident read 96 and, a minute after recovery, 33. There is no baseline for a normal busy day on `regent0`. Option: ship with these defaults and enforce (recommended; `force` and the config are the escape), or ship `enabled: false` for a week and read `host.stats` first. With these values the gate would have stayed closed for a while after the documented recovery (33 is above 20), and the CI queue and every `--wait` stay blocked for as long as it is closed.
-2. **`ci_parallel` default.** 1 (recommended; the operator's draft) or keep 2. With 1, four children landing in a row wait in line for `make ci`.
-3. **Should the preview capture and git status move onto the stream too?** They are not RPCs today. Default: no for this cut; the budget bounds them at 4 per remote.
-4. **Should the stream carry `session.events` and `pty.attach`?** Default: no.
-5. **Janitor and Claude sessions aiman does not run.** Default: treat them like any other idle scratch (24h). Alternative: only delete ids aiman once knew, which leaves most of the 424 directories in place.
+None. The operator answered all five on 2026-11-13; see Decisions.
 
 ## Decisions
 
@@ -271,7 +266,7 @@ Consult round 1 (Grok, report `~/.aiman/consults/6652d4f3-a4f4-4750-9a2e-68373f4
 | "None once the stream is up" is false for git status, probes and the preview; each TUI has its own budget | medium | accept | P2 states the bound as 4 leftover execs per TUI per remote per 90s plus the stream |
 | The events stream does not set `ControlMaster=no`, so copying it would still multiplex | medium | accept | P1 starts the stream with `bulkSSHArgs(path, false)` |
 | One unit name per session for CI and verify collides on overlap or a leaked scope; `TMPDIR` must not be set on serve | medium | accept | P3b: a unit per run, `--collect`, env on the command only |
-| The janitor deletes scratch of a stored but stopped session; a start can race the walk; the slug rule is not documented for `/tmp/claude`; terminate should not drop it while the row stays | medium | accept in part | Stored ids are protected in both roots, re-read before each removal, the id is matched under any slug. `forgetResources` runs only from `dropSession`, where the row is already going, so terminate needs no special case |
+| The janitor deletes scratch of a stored but stopped session; a start can race the walk; the slug rule is not documented for `/tmp/claude`; terminate should not drop it while the row stays | medium | accept in part | Stored ids are protected, re-read before each removal, and forget matches the id under any slug (the janitor later lost the `/tmp/claude-<uid>` root, see the operator answers). `forgetResources` runs only from `dropSession`, where the row is already going, so terminate needs no special case |
 | Adopted sessions can grow by a full limit each while their old charge stays on serve; cap them lower until restart; `CPUWeight` and `TasksMax` apply at once | medium | accept in part | The immediate limits and the overshoot are documented in P0. The lower cap is rejected: charge migrates with ordinary churn, so it would throttle sessions that are not growing, and adoption is already tighter than no limit |
 | The acceptance tests as described would pass the wrong implementations above | medium | accept | Test descriptions below now name the usage-line fixture, the stalled stream, no close on slice at high, a stored stopped session, the race re-check, and overlapping verify and CI |
 | The refused set is right; do not gate `pty.create` | low | accept | No change |
@@ -293,9 +288,19 @@ Consult round 2 (Grok, report `~/.aiman/consults/8cae2d03-33c1-4f0a-90a5-35b7d9c
 | Git status has no in-flight guard | medium | accept | P2 adds one |
 | The hello must be flushed; no hello while the process runs is a stall, not an old binary | medium | accept | P1 says both |
 | Piece A does not own the selection and git tick call sites in `dashboard.go` | medium | accept | Breakdown: A owns them |
-| At close 20 / open 10 the gate would have stayed closed after the documented recovery | low | accept | Open question 1 says so, and that the queue waits meanwhile |
+| At close 20 / open 10 the gate would have stayed closed after the documented recovery | low | accept | The operator accepted it (operator answers below); the queue waits meanwhile |
 | The reduced `MemoryHigh` rejection is sound | low | accept | No change |
 | The terminate special case rejection is sound | low | accept | No change |
+
+Operator answers to the open questions, 2026-11-13:
+
+| Question | Answer | Effect |
+|---|---|---|
+| Ship the pressure gate enforcing at `full avg10 >= 20`, or off for a week | Enforcing | P3 as written; `force` and `host.load.pressure_gate` are the escape |
+| `ci_parallel` default 1 or 2 | 2 | P3b keeps today's cap of 2; the queue and the per-run units are unchanged |
+| Preview capture and git status on the stream | No, they stay exec calls | P1 and P2 as written; the budget bounds them |
+| `session.events` and `pty.attach` on the stream | No, separate connections | P1 as written |
+| Janitor and Claude scratch aiman has no row for | Leave it | P4: the janitor walks only `~/.aiman/tmp`; `/tmp/claude-<uid>` is removed only by `forgetResources` for a known id; `host.stats.scratch.legacy_bytes` reports its size |
 
 ## Breakdown
 
@@ -316,12 +321,12 @@ What each acceptance file proves:
 - `rpc_allowlist_acceptance_test.go`: every method literal passed to `usecase.ServeRPC` in non-test code is in `rpcMethods`.
 - `adopt_sweep_acceptance_test.go`: a holder whose pid is outside the sessions slice is adopted exactly once and recorded with actor `aiman`; `resources.get` lists it under `unscoped` before and not after; a serve outside the user manager never calls adopt and logs once; a failed adoption is tried again on the next pass and logged once.
 - `resources_unscoped_acceptance_test.go`: `aiman resources` prints the unscoped rows, the `serve_unit` line and the restart hint.
-- `scratch_janitor_acceptance_test.go`: old scratch of an unknown id is removed in both roots; a running session's, a stored stopped session's and a recently modified one stay; an id stored during the walk stays; files in `~/.aiman/tmp` stay, a symlink out of the root is not followed, forget removes the legacy `/tmp` directory by `AgentSessionID` under any slug, and `host.stats` reports the bytes.
+- `scratch_janitor_acceptance_test.go`: old scratch of an unknown id is removed in `~/.aiman/tmp` and a directory under `/tmp/claude-<uid>` with an unknown id stays however old; a running session's, a stored stopped session's and a recently modified one stay; an id stored during the walk stays; files in `~/.aiman/tmp` stay, a symlink out of the root is not followed, forget removes the legacy `/tmp` directory by `AgentSessionID` under any slug, and `host.stats` reports the bytes freed and `legacy_bytes`.
 - `rpc_stream_acceptance_test.go` (cmd): the hello line arrives before any request is sent; two requests on one stream answer by id, the slower one second; an unlisted method is refused without a dial; a ninth call in flight is `server_busy`; EOF ends the process.
 - `rpc_stream_acceptance_test.go` (usecase): 50 calls start one remote process; a call that times out while other answers arrive leaves the stream up; a timeout on a silent stream kills it and no new one starts for 60s; a remote that prints today's `usage: aiman rpc METHOD --params-stdin` and exits falls back to exec and remembers it; no hello from a remote that is still running is a stall with a cooldown and is not remembered as unsupported; an ssh failure (exit 255) fails calls fast and never execs.
 - `pressure_acceptance_test.go`: `ReadPressure` parses `some` and `full` and tolerates a file with no `full` line.
 - `pressure_gate_acceptance_test.go`: the gate closes on `full >= 20`, stays closed until 30s under the reopen value, and never closes on `some` alone or on the slice at `memory.high`; `session.create`, a helper spawn and `review.run` answer `host_under_pressure` with the data; `force` passes for the operator and is `needs_operator` for a session; `session.restart` is not gated; a handover writes the file and starts no child; one notification per closing.
-- `queue_acceptance_test.go` and `ci_queue_acceptance_test.go`: runs start in arrival order, one at a time; a queued record says `queued` with its position; nothing starts while the gate is closed and the head starts when it opens; the launcher receives a unit name unique to the run and the `TMPDIR` on the command's environment; a verify run overlapping a CI run of the same session and a leftover scope both start cleanly; the run's directory is gone when it ends; forgetting a session with a queued run fails the record `session gone` and the run never starts; `aiman ci local --wait` does not return while the record is `queued`.
+- `queue_acceptance_test.go` and `ci_queue_acceptance_test.go`: runs start in arrival order, at most `ci_parallel` at a time (2 by default, 1 when set); a queued record says `queued` with its position; nothing starts while the gate is closed and the head starts when it opens; the launcher receives a unit name unique to the run and the `TMPDIR` on the command's environment; a verify run overlapping a CI run of the same session and a leftover scope both start cleanly; the run's directory is gone when it ends; forgetting a session with a queued run fails the record `session gone` and the run never starts; `aiman ci local --wait` does not return while the record is `queued`.
 - `census_acceptance_test.go`: counts by state and parent from a fake `/proc`, with a planted `cmdline` never read.
 - `dump_pressure_acceptance_test.go`: the auto dump fires after 30s of `full >= 50`, respects the 10-minute spacing, and the dump holds the census.
 
