@@ -133,7 +133,7 @@ func TestRunSlackAuthCheckReportsGapsWithoutToken(t *testing.T) {
 		t.Fatalf("stderr %s", errOut.String())
 	}
 	errOut.Reset()
-	err = runSlack(context.Background(), []string{"auth", "check"}, strings.NewReader(secret), &out, &errOut)
+	err = runSlack(context.Background(), []string{"auth", "check", "--app", "bad"}, strings.NewReader(secret), &out, &errOut)
 	if err == nil || !strings.Contains(errOut.String(), `"code":"slack_params"`) || strings.Contains(errOut.String(), secret) {
 		t.Fatalf("app id stderr %s err %v", errOut.String(), err)
 	}

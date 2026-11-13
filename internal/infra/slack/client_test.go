@@ -150,3 +150,42 @@ func TestPostPlainSendsText(t *testing.T) {
 		t.Fatalf("plain post sent markdown_text: %v", got)
 	}
 }
+
+func TestAuthCheckReadsScopesAfterRetry(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("X-OAuth-Scopes", strings.Join(UserScopes, ","))
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("X-OAuth-Scopes", " "+strings.Join(UserScopes[1:], ", "))
+		_, _ = io.WriteString(w, `{"ok":true,"team":"t","user":"u","user_id":"U1"}`)
+	}))
+	defer srv.Close()
+	c := &Client{Token: "xoxp", Base: srv.URL + "/", Sleep: func(context.Context, time.Duration) error { return nil }}
+	auth, missing, checked, err := c.AuthCheck(context.Background())
+	if err != nil || !checked || auth.UserID != "U1" {
+		t.Fatalf("auth %v checked %v err %v", auth, checked, err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	if len(missing) != 1 || missing[0] != UserScopes[0] {
+		t.Fatalf("missing = %v, want [%s]", missing, UserScopes[0])
+	}
+}
+
+func TestAuthCheckWithoutHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"user_id":"U1"}`)
+	}))
+	defer srv.Close()
+	c := &Client{Token: "xoxp", Base: srv.URL + "/"}
+	_, missing, checked, err := c.AuthCheck(context.Background())
+	if err != nil || checked || missing != nil {
+		t.Fatalf("missing %v checked %v err %v", missing, checked, err)
+	}
+}
