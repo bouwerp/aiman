@@ -137,11 +137,18 @@ const maxRetries = 2
 
 // call POSTs payload as JSON.
 func (c *Client) call(ctx context.Context, method string, payload any, out any) error {
+	_, err := c.callHeader(ctx, method, payload, out)
+	return err
+}
+
+// callHeader is call that also returns the headers of the answer it decoded.
+func (c *Client) callHeader(ctx context.Context, method string, payload any, out any) (http.Header, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("slack %s: %w", method, err)
+		return nil, fmt.Errorf("slack %s: %w", method, err)
 	}
-	return c.do(ctx, method, out, func() (*http.Request, error) {
+	var hdr http.Header
+	err = c.do(ctx, method, out, &hdr, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base()+method, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
@@ -149,13 +156,14 @@ func (c *Client) call(ctx context.Context, method string, payload any, out any) 
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 		return req, nil
 	})
+	return hdr, err
 }
 
 // callForm POSTs form as application/x-www-form-urlencoded, for methods
 // that do not accept JSON.
 func (c *Client) callForm(ctx context.Context, method string, form url.Values, out any) error {
 	body := form.Encode()
-	return c.do(ctx, method, out, func() (*http.Request, error) {
+	return c.do(ctx, method, out, nil, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base()+method, strings.NewReader(body))
 		if err != nil {
 			return nil, err
@@ -172,21 +180,22 @@ func (c *Client) get(ctx context.Context, method string, query url.Values, out a
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
-	return c.do(ctx, method, out, func() (*http.Request, error) {
+	return c.do(ctx, method, out, nil, func() (*http.Request, error) {
 		return http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	})
 }
 
 // do sends the request build makes, repeating it after HTTP 429 as Slack's
-// Retry-After asks, at most maxRetries times.
-func (c *Client) do(ctx context.Context, method string, out any, build func() (*http.Request, error)) error {
+// Retry-After asks, at most maxRetries times. A non-nil hdr receives the
+// headers of the last answer that was not rate limited.
+func (c *Client) do(ctx context.Context, method string, out any, hdr *http.Header, build func() (*http.Request, error)) error {
 	for attempt := 0; ; attempt++ {
 		req, err := build()
 		if err != nil {
 			return fmt.Errorf("slack %s: %w", method, err)
 		}
 		req.Header.Set("Authorization", "Bearer "+c.Token)
-		wait, err := c.send(req, method, out)
+		wait, err := c.send(req, method, out, hdr)
 		if wait < 0 || attempt >= maxRetries {
 			return err
 		}
@@ -198,7 +207,7 @@ func (c *Client) do(ctx context.Context, method string, out any, build func() (*
 
 // send runs one request. A non-negative wait means Slack rate limited it and
 // asked for that pause; err is then the ratelimited failure.
-func (c *Client) send(req *http.Request, method string, out any) (time.Duration, error) {
+func (c *Client) send(req *http.Request, method string, out any, hdr *http.Header) (time.Duration, error) {
 	resp, err := c.http().Do(req)
 	if err != nil {
 		return -1, fmt.Errorf("slack %s: %w", method, err)
@@ -207,6 +216,9 @@ func (c *Client) send(req *http.Request, method string, out any) (time.Duration,
 	if resp.StatusCode == http.StatusTooManyRequests {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 		return retryAfter(resp.Header.Get("Retry-After")), &apiFailure{Method: method, Code: "ratelimited"}
+	}
+	if hdr != nil {
+		*hdr = resp.Header
 	}
 	limit := c.maxBody()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -279,6 +291,24 @@ func (c *Client) AuthTest(ctx context.Context) (Auth, error) {
 	}
 	err := c.call(ctx, "auth.test", map[string]string{}, &out)
 	return out.Auth, err
+}
+
+// AuthCheck runs auth.test once and returns who the token is and the
+// UserScopes entries Slack did not grant, read from the X-OAuth-Scopes header.
+// checked is false when Slack sent no such header.
+func (c *Client) AuthCheck(ctx context.Context) (auth Auth, missing []string, checked bool, err error) {
+	var out struct {
+		Auth
+	}
+	hdr, err := c.callHeader(ctx, "auth.test", map[string]string{}, &out)
+	if err != nil {
+		return Auth{}, nil, false, err
+	}
+	vals := hdr.Values("X-OAuth-Scopes")
+	if len(vals) == 0 {
+		return out.Auth, nil, false, nil
+	}
+	return out.Auth, missingScopes(splitScopes(strings.Join(vals, ","))), true, nil
 }
 
 // ResolveChannel accepts a channel or member id, or a #name / name of a
