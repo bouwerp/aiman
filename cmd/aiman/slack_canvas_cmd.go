@@ -13,9 +13,13 @@ import (
 )
 
 func init() {
-	registerSlack("canvas", slackCommand{run: runSlackCanvas, write: slackWriteSubcommands("create", "edit")})
-	registerSlack("file", slackCommand{run: runSlackFile})
-	registerSlack("upload", slackCommand{run: runSlackUpload, write: slackAlwaysWrite})
+	registerSlack("canvas", slackCommand{run: runSlackCanvas, write: slackWriteSubcommands("create", "edit"), usage: `read <F…> [--sections h1,h2] [--contains text] [--raw]
+       aiman slack canvas create --title T (--text t | --text-file f) [--channel C…]
+       aiman slack canvas edit <F…> --op append|prepend|after|before|replace|delete|rename [--section id] [--all] (--text t | --text-file f)`})
+	registerSlack("file", slackCommand{run: runSlackFile,
+		usage: "read <F…> [--out path]\n\n  File ids are in the files of history and thread messages."})
+	registerSlack("upload", slackCommand{run: runSlackUpload, write: slackAlwaysWrite,
+		usage: "<path> --channel <name|C…> [--thread <ts|link>] [--comment text] [--title T]" + slackLinkHelp})
 }
 
 func runSlackCanvas(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
@@ -49,7 +53,7 @@ func runSlackCanvasCreate(ctx context.Context, args []string, in io.Reader, out,
 	if flags["channel"] != "" {
 		c, channel, err = slackChannel(ctx, flags, errOut)
 	} else {
-		c, err = slackClientOrFail(errOut)
+		c, err = slackClientOrFail(ctx, errOut)
 	}
 	if err != nil {
 		return err
@@ -70,7 +74,7 @@ func runSlackCanvasRead(ctx context.Context, args []string, out, errOut io.Write
 	if s := flags["sections"]; s != "" {
 		types = strings.Split(s, ",")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
@@ -98,7 +102,7 @@ func runSlackCanvasEdit(ctx context.Context, args []string, in io.Reader, out, e
 	if _, err := e.Change(); err != nil {
 		return slackFail(errOut, "slack_params", err.Error())
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
@@ -118,7 +122,7 @@ func runSlackFile(ctx context.Context, args []string, _ io.Reader, out, errOut i
 	if len(rest) != 1 {
 		return slackFail(errOut, "slack_params", "file read requires one file id")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}

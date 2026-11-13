@@ -9,8 +9,9 @@ import (
 )
 
 func init() {
-	registerSlack("search", slackCommand{run: runSlackSearch})
-	registerSlack("emoji", slackCommand{run: runSlackEmoji})
+	registerSlack("search", slackCommand{run: runSlackSearch,
+		usage: "<query> [--private] [--in <channel>] [--from U…] [--after YYYY-MM-DD] [--before YYYY-MM-DD] [--files|--channels|--users] [--limit n] [--cursor c]"})
+	registerSlack("emoji", slackCommand{run: runSlackEmoji, usage: "[term[,term…]]"})
 }
 
 // slackSearchKinds are the content-type flags; none means messages.
@@ -24,7 +25,7 @@ func runSlackSearch(ctx context.Context, args []string, _ io.Reader, out, errOut
 	if query == "" {
 		return slackFail(errOut, "slack_params", "search requires a query")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
@@ -55,7 +56,7 @@ func runSlackSearch(ctx context.Context, args []string, _ io.Reader, out, errOut
 // comma-separated list of name substrings.
 func runSlackEmoji(ctx context.Context, args []string, _ io.Reader, out, errOut io.Writer) error {
 	_, rest := slackFlags(args)
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}

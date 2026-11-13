@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -43,6 +44,11 @@ type SearchHit struct {
 	User      string `json:"user,omitempty"`
 	Text      string `json:"text,omitempty"`
 	Permalink string `json:"permalink,omitempty"`
+	// Files, Attachments and Blocks are set only by the legacy engine, whose
+	// matches are whole messages.
+	Files       []MessageFile     `json:"files,omitempty"`
+	Attachments []json.RawMessage `json:"attachments,omitempty"`
+	Blocks      []json.RawMessage `json:"blocks,omitempty"`
 }
 
 // Emoji is one custom emoji; AliasOf names the emoji an alias points to.
@@ -176,10 +182,13 @@ func (c *Client) searchLegacy(ctx context.Context, q SearchQuery) (SearchResult,
 					ID   string `json:"id"`
 					Name string `json:"name"`
 				} `json:"channel"`
-				Permalink string `json:"permalink"`
-				Text      string `json:"text"`
-				TS        string `json:"ts"`
-				User      string `json:"user"`
+				Permalink   string            `json:"permalink"`
+				Text        string            `json:"text"`
+				TS          string            `json:"ts"`
+				User        string            `json:"user"`
+				Files       []MessageFile     `json:"files"`
+				Attachments []json.RawMessage `json:"attachments"`
+				Blocks      []json.RawMessage `json:"blocks"`
 			} `json:"matches"`
 		} `json:"messages"`
 		cursorMeta
@@ -189,7 +198,8 @@ func (c *Client) searchLegacy(ctx context.Context, q SearchQuery) (SearchResult,
 	}
 	hits := make([]SearchHit, 0, len(out.Messages.Matches))
 	for _, m := range out.Messages.Matches {
-		hits = append(hits, SearchHit{Kind: "message", Channel: m.Channel.ID, Name: m.Channel.Name, TS: m.TS, User: m.User, Text: m.Text, Permalink: m.Permalink})
+		hits = append(hits, SearchHit{Kind: "message", Channel: m.Channel.ID, Name: m.Channel.Name, TS: m.TS, User: m.User, Text: m.Text, Permalink: m.Permalink,
+			Files: m.Files, Attachments: m.Attachments, Blocks: m.Blocks})
 	}
 	return SearchResult{Engine: "legacy", Hits: hits, NextCursor: out.Meta.NextCursor}, nil
 }
