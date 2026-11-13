@@ -17,6 +17,11 @@ func init() {
 	registerSlack("list", slackCommand{
 		run:   runSlackList,
 		write: slackWriteSubcommands("set", "add", "create", "update"),
+		usage: `read <F…> [--format json|csv|markdown] [--schema] [--limit n] [--cursor c] [--raw]
+       aiman slack list set <F…> <Rec…> --set Col=Value …
+       aiman slack list add <F…> --set Col=Value …
+       aiman slack list create --name N --columns-file f.json [--todo]
+       aiman slack list update <F…> [--name N] [--description D] [--todo on|off]`,
 	})
 }
 
@@ -82,7 +87,7 @@ func runSlackListRead(ctx context.Context, args []string, out, errOut io.Writer)
 	if format != "json" && format != "csv" && format != "markdown" {
 		return slackFail(errOut, "slack_params", "format must be json, csv or markdown")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
@@ -179,7 +184,7 @@ func runSlackListSet(ctx context.Context, args []string, out, errOut io.Writer) 
 	if len(rest) != 2 || len(set) == 0 {
 		return slackFail(errOut, "slack_params", "usage: aiman slack list set <list id> <row id> --set Col=Value ...")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
@@ -197,7 +202,7 @@ func runSlackListAdd(ctx context.Context, args []string, out, errOut io.Writer) 
 	if len(rest) != 1 {
 		return slackFail(errOut, "slack_params", "usage: aiman slack list add <list id> --set Col=Value ...")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
@@ -220,7 +225,7 @@ func runSlackListCreate(ctx context.Context, args []string, out, errOut io.Write
 	if !json.Valid(schema) {
 		return slackFail(errOut, "slack_params", "columns file is not valid JSON")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
@@ -257,7 +262,7 @@ func runSlackListUpdate(ctx context.Context, args []string, out, errOut io.Write
 	if ch.Name == nil && ch.Description == nil && ch.Todo == nil {
 		return slackFail(errOut, "slack_params", "list update needs --name, --description or --todo")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}

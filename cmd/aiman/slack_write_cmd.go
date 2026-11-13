@@ -13,12 +13,18 @@ import (
 )
 
 func init() {
-	registerSlack("send", slackCommand{run: runSlackSend, write: slackAlwaysWrite})
-	registerSlack("react", slackCommand{run: runSlackReact, write: slackAlwaysWrite})
-	registerSlack("wait", slackCommand{run: runSlackWait})
-	registerSlack("schedule", slackCommand{run: runSlackSchedule, write: slackWriteSubcommands("", "cancel")})
-	registerSlack("create-channel", slackCommand{run: runSlackCreateChannel, write: slackAlwaysWrite})
-	registerSlack("dm", slackCommand{run: runSlackDM, write: slackAlwaysWrite})
+	registerSlack("send", slackCommand{run: runSlackSend, write: slackAlwaysWrite,
+		usage: "--channel <name|C…> (--text t | --text - | --text-file f) [--thread <ts|link>] [--broadcast] [--no-unfurl]" + slackLinkHelp})
+	registerSlack("react", slackCommand{run: runSlackReact, write: slackAlwaysWrite,
+		usage: "--channel <name|C…> --ts <ts|link> --emoji name" + slackLinkHelp})
+	registerSlack("wait", slackCommand{run: runSlackWait,
+		usage: "--channel <name|C…> --thread <ts|link> [--after ts] [--timeout 5m]" + slackLinkHelp})
+	registerSlack("schedule", slackCommand{run: runSlackSchedule, write: slackWriteSubcommands("", "cancel"), usage: `--channel <name|C…> --at <RFC3339|+2h> (--text t | --text-file f) [--thread <ts|link>]
+       aiman slack schedule list [--channel C…] [--raw]
+       aiman slack schedule cancel <id> --channel C…`})
+	registerSlack("create-channel", slackCommand{run: runSlackCreateChannel, write: slackAlwaysWrite,
+		usage: "<name> [--private] [--invite U1,U2]"})
+	registerSlack("dm", slackCommand{run: runSlackDM, write: slackAlwaysWrite, usage: "U1[,U2…]"})
 }
 
 func runSlackSend(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
@@ -137,7 +143,7 @@ func runSlackScheduleList(ctx context.Context, args []string, out, errOut io.Wri
 	if flags["channel"] != "" {
 		c, channel, err = slackChannel(ctx, flags, errOut)
 	} else {
-		c, err = slackClientOrFail(errOut)
+		c, err = slackClientOrFail(ctx, errOut)
 	}
 	if err != nil {
 		return err
@@ -188,7 +194,7 @@ func runSlackCreateChannel(ctx context.Context, args []string, _ io.Reader, out,
 	if len(rest) != 1 {
 		return slackFail(errOut, "slack_params", "create-channel takes one name: create-channel <name> [--private] [--invite U1,U2]")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
@@ -211,7 +217,7 @@ func runSlackDM(ctx context.Context, args []string, _ io.Reader, out, errOut io.
 	if len(users) == 0 {
 		return slackFail(errOut, "slack_params", "dm takes member ids: dm U1[,U2...]")
 	}
-	c, err := slackClientOrFail(errOut)
+	c, err := slackClientOrFail(ctx, errOut)
 	if err != nil {
 		return err
 	}
