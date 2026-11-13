@@ -116,7 +116,7 @@ func (s *Server) revokeDevice(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	p := principalFrom(r.Context())
 	if !p.host && p.device.ID != id && !p.device.AllowDestructive {
-		writeJSONError(w, http.StatusForbidden, "", "forbidden", "revoking another device needs allow_destructive")
+		writeJSONError(w, http.StatusForbidden, "", "forbidden", "revoking another device needs allow_destructive", needsDestructive{Needs: "allow_destructive"})
 		return
 	}
 	if s.Auth.Devices == nil {

@@ -45,7 +45,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 // device needs allow_destructive before anything is dialled.
 func (s *Server) terminal(w http.ResponseWriter, r *http.Request) {
 	if p := principalFrom(r.Context()); !p.host && !p.device.AllowDestructive {
-		writeJSONError(w, http.StatusForbidden, "", "forbidden", "the terminal needs allow_destructive")
+		writeJSONError(w, http.StatusForbidden, "", "forbidden", "the terminal needs allow_destructive", needsDestructiveData("pty.attach"))
 		return
 	}
 	id := r.PathValue("id")
