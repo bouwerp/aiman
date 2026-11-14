@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/slack"
@@ -81,7 +80,12 @@ func init() {
 		usage: `<app|login|check [--app A012]|status> …
 
   auth app                     read the app's client id from stdin
-  auth login [--timeout 5m]    approve the app in a browser and store the user token
+  auth login [--timeout 5m] [--client-id ID]
+                               approve the app in a browser and store the user token;
+                               --client-id saves the id first
+  auth login --remote NAME [--client-id ID] [--timeout 5m]
+                               log in on remote NAME: forward the redirect port over ssh,
+                               open the host's consent URL here; the token stays on the host
   auth check                   check the stored user token (auth.test) and its granted scopes
   auth check --app A012        compare the app (configuration token on stdin) with the manifest
   auth status [--raw]          show who the stored token is`,
@@ -333,9 +337,14 @@ func slackFlags(args []string, bools ...string) (map[string]string, []string) {
 	return flags, rest
 }
 
+// slackArgvToken reports a secret on argv. The client id is public, and auth
+// login takes it as --client-id; every other command reads it from stdin.
 func slackArgvToken(args []string) bool {
+	login := len(args) >= 2 && args[0] == "auth" && args[1] == "login"
 	for _, a := range args {
 		switch {
+		case login && (a == "--client-id" || strings.HasPrefix(a, "--client-id=")):
+			continue
 		case a == "--token" || strings.HasPrefix(a, "--token="):
 			return true
 		case a == "--client-id" || strings.HasPrefix(a, "--client-id="):
@@ -499,13 +508,12 @@ func runSlackAuthCheckToken(ctx context.Context, out, errOut io.Writer) error {
 
 func runSlackAuthLogin(ctx context.Context, args []string, out, errOut io.Writer) error {
 	flags, _ := slackFlags(args)
-	timeout := 5 * time.Minute
-	if flags["timeout"] != "" {
-		d, err := time.ParseDuration(flags["timeout"])
-		if err != nil {
-			return slackFail(errOut, "slack_params", "timeout must be a duration like 5m")
-		}
-		timeout = d
+	timeout, timeoutArg, err := slackLoginTimeout(flags)
+	if err != nil {
+		return slackFail(errOut, "slack_params", err.Error())
+	}
+	if flags["remote"] != "" {
+		return runSlackAuthLoginRemote(ctx, flags["remote"], flags["client-id"], timeout, timeoutArg, out, errOut)
 	}
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -513,6 +521,11 @@ func runSlackAuthLogin(ctx context.Context, args []string, out, errOut io.Writer
 	path, err := slackTokenPath()
 	if err != nil {
 		return err
+	}
+	if id := flags["client-id"]; id != "" {
+		if err := slack.SaveClientID(path, id); err != nil {
+			return slackFail(errOut, "slack_token", err.Error())
+		}
 	}
 	stored, err := slack.Load(path)
 	if err != nil && !os.IsNotExist(err) {
