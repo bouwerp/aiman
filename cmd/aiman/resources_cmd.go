@@ -78,6 +78,16 @@ func printResources(out io.Writer, result any) error {
 	if u := r.SessionsSlice; u != nil {
 		fmt.Fprintf(out, "all sessions:  %s\n", memoryOfLimit(u.MemoryCurrent, u.MemoryHigh))
 	}
+	if u := r.ServeUnit; u != nil {
+		fmt.Fprintf(out, "serve unit:    %s\n", memoryOfLimit(u.MemoryCurrent, u.MemoryHigh))
+	}
+	for _, u := range r.Unscoped {
+		name := u.Name
+		if name == "" {
+			name = u.ID
+		}
+		fmt.Fprintf(out, "unscoped:      %s runs without limits; restart to move its memory and scratch\n", name)
+	}
 	if r.Missing != "" {
 		fmt.Fprintf(out, "session %s has no scope: it runs without limits until its terminal is restarted or the operator runs aiman session adopt-scope\n", r.Missing)
 		return nil
