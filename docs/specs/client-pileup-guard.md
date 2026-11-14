@@ -81,7 +81,7 @@ classDiagram
   }
   class HostBudget { slots 4 per remote; cooldown 60s after a timeout }
   class RPCStream { one ssh process per remote; requests by id }
-  class CIQueue { FIFO; parallel 1; position }
+  class CIQueue { FIFO; parallel 2; position }
   class ResourcesReport { unscoped[]; serve_unit; gate }
   class ScratchJanitor { hourly; freed_bytes }
   PressureGate:::new
