@@ -34,14 +34,19 @@ func NewManager(config Config) *Manager {
 }
 
 func (m *Manager) target() string {
-	// If Host already contains @, use it as is
-	if strings.Contains(m.config.Host, "@") {
-		return m.config.Host
+	return Target(m.config.Host, m.config.User)
+}
+
+// Target is the ssh destination for a remote: host as is when it already
+// holds a user (contains @), else user@host, else host.
+func Target(host, user string) string {
+	if strings.Contains(host, "@") {
+		return host
 	}
-	if m.config.User != "" {
-		return fmt.Sprintf("%s@%s", m.config.User, m.config.Host)
+	if user != "" {
+		return fmt.Sprintf("%s@%s", user, host)
 	}
-	return m.config.Host
+	return host
 }
 
 // controlPath is the master for bulk calls. The "-noagent" in the name keeps a
