@@ -94,6 +94,8 @@ type Server struct {
 	resources atomic.Pointer[ResourceOptions]
 	// sampler holds the resource sampler once RunResources started it.
 	sampler atomic.Pointer[cgroup.Sampler]
+	// scratch is the last scratch janitor pass.
+	scratch atomic.Pointer[scratchPass]
 	version string
 
 	// hub carries events published by handlers to session.events streams.

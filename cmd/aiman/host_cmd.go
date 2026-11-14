@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"text/tabwriter"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/server"
 )
@@ -67,11 +68,12 @@ func hostStatsArgs(args []string) (asJSON, ok bool) {
 
 // hostStatsText is the part of host.stats the text form prints.
 type hostStatsText struct {
-	Host       string          `json:"host"`
-	Load       [3]float64      `json:"load"`
-	CPUCount   int             `json:"cpu_count"`
-	CPUPercent float64         `json:"cpu_percent"`
-	RPC        server.RPCStats `json:"rpc"`
+	Host       string               `json:"host"`
+	Load       [3]float64           `json:"load"`
+	CPUCount   int                  `json:"cpu_count"`
+	CPUPercent float64              `json:"cpu_percent"`
+	RPC        server.RPCStats      `json:"rpc"`
+	Scratch    server.ScratchReport `json:"scratch"`
 }
 
 // printHostStats writes the host line and the rpc block.
@@ -100,7 +102,16 @@ func printHostStats(w io.Writer, result any) error {
 	}
 	printRPCCounts(tw, "methods", r.ByMethod)
 	printRPCCounts(tw, "callers", r.ByCaller)
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	sc := st.Scratch
+	last := "never"
+	if !sc.LastRun.IsZero() {
+		last = sc.LastRun.Format(time.RFC3339)
+	}
+	fmt.Fprintf(w, "scratch · freed %d bytes (last run %s) · /tmp/claude legacy %d bytes\n", sc.FreedBytes, last, sc.LegacyBytes)
+	return nil
 }
 
 func printRPCCounts(w io.Writer, title string, counts []server.RPCCount) {

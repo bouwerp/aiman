@@ -29,6 +29,9 @@ type ResourcesConfig struct {
 	SessionsSlice SliceResources `yaml:"sessions_slice,omitempty"`
 	// Tmpdir gives each session TMPDIR=~/.aiman/tmp/<id>; unset is on.
 	Tmpdir *bool `yaml:"tmpdir,omitempty"`
+	// ScratchJanitor removes idle scratch of unknown sessions under
+	// ~/.aiman/tmp every hour; unset is on.
+	ScratchJanitor *bool `yaml:"scratch_janitor,omitempty"`
 }
 
 // SessionResources is resources.session. Sizes are numbers with a K, M, G or
@@ -54,6 +57,9 @@ func (r ResourcesConfig) On() bool { return r.Enabled == nil || *r.Enabled }
 
 // TmpdirOn reports whether sessions get their own TMPDIR.
 func (r ResourcesConfig) TmpdirOn() bool { return r.Tmpdir == nil || *r.Tmpdir }
+
+// ScratchJanitorOn reports whether the hourly scratch janitor runs.
+func (r ResourcesConfig) ScratchJanitorOn() bool { return r.ScratchJanitor == nil || *r.ScratchJanitor }
 
 // SessionLimits is the limit set for one session scope: the configured
 // values over the defaults. An unreadable size or an out-of-range number
