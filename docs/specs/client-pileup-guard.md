@@ -332,7 +332,7 @@ What each acceptance file proves:
 
 `internal/server/handlers_host.go` and `cmd/aiman/host_cmd.go` are written by F, then D, then G, one group apart; each later brief says to start from the landed branch.
 
-The acceptance tests are written and committed on this branch after the design is approved and before the first child starts.
+The acceptance tests are written and committed on this branch after the design is approved and before the first child starts. Each file carries a build tag, `pileup_a` to `pileup_g` by piece, so a package keeps compiling for the other pieces until its own lands; a piece's acceptance command is `go test -tags pileup_<x> …`, and the coordinator removes the tags once every piece is in. The Contract comment at the top of each file names the new symbols the piece must provide. The allowlist test found that `agents.status`, `agents.update` and `agents.move_prefix` are also missing from `rpcMethods` (the Agents page cannot work from a laptop today); piece A adds them with `resources.get`.
 
 ## What you should be able to explain after reading
 
