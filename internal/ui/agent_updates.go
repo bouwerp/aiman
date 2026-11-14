@@ -99,11 +99,37 @@ func movePrefixLines(agent string) []string {
 	return out
 }
 
-func agentsStatusCmd(r config.Remote, refresh bool) tea.Cmd {
+// agentsStatusCmd reads agents.status for a key (foreground): it waits for a
+// budget slot. agentsPollStatusCmd is the 2s poll (background).
+func (m *Model) agentsStatusCmd(r config.Remote, refresh bool) tea.Cmd {
+	return agentsStatusCmdWith(r, refresh, m.hostBudget, nil)
+}
+
+// agentsPollStatusCmd is the tick read. With no background slot it returns nil
+// and the caller asks again on the next poll.
+func (m *Model) agentsPollStatusCmd(r config.Remote) tea.Cmd {
+	release, ok := m.budgetTry(r.Host)
+	if !ok {
+		return nil
+	}
+	return agentsStatusCmdWith(r, false, m.hostBudget, release)
+}
+
+// agentsStatusCmdWith frees release when the call ends. A nil release means
+// a foreground read: it first waits for a slot on budget.
+func agentsStatusCmdWith(r config.Remote, refresh bool, budget *usecase.HostBudget, release func(bool)) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), agentsRPCTimeout)
 		defer cancel()
+		if release == nil {
+			rel, err := budgetAcquire(ctx, budget, r.Host)
+			if err != nil {
+				return agentsStatusMsg{host: r.Host, err: err}
+			}
+			release = rel
+		}
 		raw, err := agentsRPC(ctx, r, "agents.status", map[string]any{"refresh": refresh})
+		release(callTimedOut(err))
 		if err != nil {
 			return agentsStatusMsg{host: r.Host, err: err}
 		}
@@ -154,7 +180,7 @@ func (m *Model) enterAgentUpdates() tea.Cmd {
 	r := remotes[m.agentAPICursor]
 	m.agentUpdates = &agentUpdatesView{remote: r, loading: true}
 	m.state = viewStateAgentUpdates
-	return agentsStatusCmd(r, false)
+	return m.agentsStatusCmd(r, false)
 }
 
 func (v *agentUpdatesView) selected() (agentupdate.AgentStatus, bool) {
@@ -218,7 +244,7 @@ func (m *Model) handleAgentUpdatesUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "r":
 		v.loading = true
 		v.notice = ""
-		return m, agentsStatusCmd(v.remote, true)
+		return m, m.agentsStatusCmd(v.remote, true)
 	case "u":
 		row, ok := v.selected()
 		if !ok {
@@ -285,7 +311,11 @@ func (m *Model) routeAgentUpdatesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state != viewStateAgentUpdates || !v.anyUpdating() {
 			return m, nil
 		}
-		return m, agentsStatusCmd(v.remote, false)
+		if cmd := m.agentsPollStatusCmd(v.remote); cmd != nil {
+			return m, cmd
+		}
+		// No slot: keep the last rows and poll again in 2s.
+		return m, m.maybePollAgents()
 	case agentsUpdateMsg:
 		if v == nil || v.remote.Host != msg.host {
 			return m, nil
@@ -297,7 +327,7 @@ func (m *Model) routeAgentUpdatesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		v.err = ""
 		v.notice = agentsUpdateNotice(msg.results)
-		return m, agentsStatusCmd(v.remote, false)
+		return m, m.agentsStatusCmd(v.remote, false)
 	case agentsMoveMsg:
 		if v == nil || v.remote.Host != msg.host {
 			return m, nil
@@ -313,7 +343,7 @@ func (m *Model) routeAgentUpdatesMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			v.notice = msg.result.Agent + ": " + msg.result.Reason
 		}
-		return m, agentsStatusCmd(v.remote, false)
+		return m, m.agentsStatusCmd(v.remote, false)
 	}
 	return m, nil
 }

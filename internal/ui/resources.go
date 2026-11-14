@@ -44,6 +44,12 @@ type resourcesMsg struct {
 type resourcesTickMsg struct{}
 
 func fetchResources(cfg *config.Config, host string) (server.ResourcesReport, error) {
+	return fetchResourcesWith(cfg, host, nil)
+}
+
+// fetchResourcesWith is fetchResources that frees its budget slot as soon as
+// the call ends, timed out or not.
+func fetchResourcesWith(cfg *config.Config, host string, release func(bool)) (server.ResourcesReport, error) {
 	remote, ok := remoteForHost(cfg, host)
 	if !ok {
 		return server.ResourcesReport{}, errors.New("remote not found")
@@ -52,6 +58,9 @@ func fetchResources(cfg *config.Config, host string) (server.ResourcesReport, er
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	raw, err := usecase.ServeRPC(ctx, mgr, "resources.get", map[string]any{})
+	if release != nil {
+		release(callTimedOut(err))
+	}
 	if err != nil {
 		return server.ResourcesReport{}, err
 	}
@@ -80,7 +89,8 @@ func (m *Model) resourceHosts() []string {
 }
 
 // fetchResourcesAll asks every host with sessions, skipping one whose last
-// request has not answered.
+// request has not answered and one with no free background slot. A skipped
+// host is not marked in flight; the next tick asks again.
 func (m *Model) fetchResourcesAll() tea.Cmd {
 	if m.cfg == nil {
 		return nil
@@ -93,10 +103,14 @@ func (m *Model) fetchResourcesAll() tea.Cmd {
 		if m.res.inflight[host] {
 			continue
 		}
+		release, ok := m.budgetTry(host)
+		if !ok {
+			continue
+		}
 		m.res.inflight[host] = true
 		cfg := m.cfg
 		cmds = append(cmds, func() tea.Msg {
-			report, err := fetchResources(cfg, host)
+			report, err := fetchResourcesWith(cfg, host, release)
 			return resourcesMsg{host: host, report: report, err: err}
 		})
 	}
@@ -228,7 +242,24 @@ func (m *Model) headerGauge() string {
 	if !ok {
 		return ""
 	}
-	return renderHeaderGauge(report.UserSlice)
+	return renderHeaderGaugeFor(report)
+}
+
+// renderHeaderGaugeFor is the gauge for a host's report: the slice's memory,
+// in the warning colour near its limit or while sessions are unscoped, then
+// "pressure" in the warning colour while the host's gate is closed.
+func renderHeaderGaugeFor(report server.ResourcesReport) string {
+	u := report.UserSlice
+	var parts []string
+	if u != nil && u.MemoryHigh > 0 {
+		warn := memoryNearLimit(u.MemoryCurrent, u.MemoryHigh) || len(report.Unscoped) > 0
+		text := "mem " + cgroup.FormatSize(u.MemoryCurrent) + "/" + cgroup.FormatSize(u.MemoryHigh)
+		parts = append(parts, a1Text(text, resourceColor(warn), false, false))
+	}
+	if report.Gate != nil && report.Gate.Closed {
+		parts = append(parts, a1Text("pressure", resourceColor(true), false, false))
+	}
+	return strings.Join(parts, a1Text(" ", a1Dim, false, false))
 }
 
 func renderHeaderGauge(u *cgroup.Usage) string {

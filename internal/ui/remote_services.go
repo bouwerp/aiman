@@ -18,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/infra/remotesvc"
 	"github.com/bouwerp/aiman/internal/infra/rtk"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/bouwerp/aiman/internal/usecase"
 )
 
 type daemonProbeMsg struct {
@@ -183,8 +184,43 @@ func remoteScriptPath(host string) string {
 }
 
 func probeRemoteServiceCmd(cfg *config.Config, host string, kind remotesvc.Kind) tea.Cmd {
+	return probeRemoteServiceWith(cfg, host, kind, nil, nil)
+}
+
+// probeKey is a probe a key started (selecting a daemon, r, opening a page):
+// it waits for a foreground slot.
+func (m *Model) probeKey(host string, kind remotesvc.Kind) tea.Cmd {
+	return probeRemoteServiceWith(m.cfg, host, kind, m.hostBudget, nil)
+}
+
+// probeTick is a probe a timer or a discovery scan started: with no background
+// slot it returns nil and the next scan asks again.
+func (m *Model) probeTick(host string, kind remotesvc.Kind) tea.Cmd {
+	release, ok := m.budgetTry(host)
+	if !ok {
+		return nil
+	}
+	return probeRemoteServiceWith(m.cfg, host, kind, m.hostBudget, release)
+}
+
+// probeRemoteServiceWith frees release when the script ends. With a budget and
+// no release it first waits for a foreground slot; with neither it is
+// unbudgeted (an action's follow-up).
+func probeRemoteServiceWith(cfg *config.Config, host string, kind remotesvc.Kind, budget *usecase.HostBudget, release func(bool)) tea.Cmd {
 	return func() tea.Msg {
+		if release == nil && budget != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			rel, err := budgetAcquire(ctx, budget, host)
+			cancel()
+			if err != nil {
+				return daemonProbeMsg{daemon: domain.Daemon{RemoteHost: host, Kind: string(kind), Status: domain.DaemonStatusError, Logs: err.Error()}, err: err}
+			}
+			release = rel
+		}
 		out, err := runRemoteScript(cfg, host, remotesvc.ProbeScript(kind))
+		if release != nil {
+			release(callTimedOut(err))
+		}
 		if err != nil {
 			return daemonProbeMsg{daemon: domain.Daemon{RemoteHost: host, Kind: string(kind), Status: domain.DaemonStatusError, Logs: err.Error()}, err: err}
 		}
