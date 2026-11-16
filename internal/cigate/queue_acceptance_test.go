@@ -309,7 +309,9 @@ func TestAcceptanceQueueRunsOneAtATimeWhenCIParallelIsOne(t *testing.T) {
 }
 
 func TestAcceptanceQueueHoldsWhileTheGateIsClosed(t *testing.T) {
-	g := newQueueRig(t, 0)
+	// One slot, so "the head starts first" is the queue's order and not the
+	// order two commands spawned together happen to record themselves in.
+	g := newQueueRig(t, 1)
 	var open atomic.Bool
 	g.r.MayStart = open.Load
 	doneA := g.wait(g.prepare(sA))
