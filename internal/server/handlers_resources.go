@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -63,6 +64,8 @@ func (s *Server) RunResources(ctx context.Context) {
 	}
 	sampler := cgroup.NewSampler(sd)
 	sampler.Sessions = s.resourceSessions
+	sampler.OwnCgroup = func() string { return s.cgroupDir(os.Getpid()) }
+	go s.runAdoptSweep(ctx)
 	alerter := cgroup.NewAlerter()
 	sampler.OnSample = func(snap cgroup.Snapshot) {
 		for _, a := range alerter.Evaluate(snap, snap.At) {
@@ -163,6 +166,7 @@ func (s *Server) handleResourcesGet(ctx context.Context, req Request) Response {
 		Limits:          opts.Limits,
 		SliceMemoryHigh: opts.SliceMemoryHigh,
 		Tmpdir:          opts.TmpRoot != "",
+		Unscoped:        s.unscopedHolders(ctx),
 	}
 	if target := sessionTarget(req.Params); target != "" {
 		id := target
@@ -183,6 +187,13 @@ func (s *Server) handleResourcesGet(ctx context.Context, req Request) Response {
 			report.Missing = id
 		}
 		report.Limits = opts.sessionLimits(id)
+		only := []UnscopedSession{}
+		for _, u := range report.Unscoped {
+			if u.ID == id {
+				only = append(only, u)
+			}
+		}
+		report.Unscoped = only
 	}
 	return Response{ID: req.ID, Result: map[string]any{"type": "resources", "resources": report}}
 }
