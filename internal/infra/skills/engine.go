@@ -483,6 +483,7 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 	sb.WriteString("- When making a design decision with trade-offs, briefly explain the options and why you chose the one you did.\n")
 	sb.WriteString("- If the task description is ambiguous or incomplete, state your interpretation and assumptions before proceeding.\n")
 	sb.WriteString("- If you get stuck or discover a blocker, explain what you tried and what went wrong rather than silently switching approaches.\n")
+	sb.WriteString(STE100Line)
 
 	// --- Prior session context ---
 	if snapshot != nil && (snapshot.Summary != "" || len(snapshot.NextSteps) > 0) {
@@ -798,6 +799,11 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 // write through aiman slack. A slack_writes_off refusal is the operator's
 // switch, so it is not a failure that permits the agent's own integration.
 const SlackFirstLine = "- **Slack.** Use `aiman slack` (the aiman skill's Slack section) for every Slack read or write. Use your own Slack integration only when `aiman slack` is missing, not signed in, or fails; never to get around a `slack_writes_off` refusal.\n"
+
+// STE100Line is the task file rule that puts every human-facing text an agent
+// writes in ASD-STE100 Simplified Technical English. The skill's Writing style
+// section holds the rules, so every agent reads the same list.
+const STE100Line = "- Write all prose for people (messages, commits, PRs, design pages, reports, comments, Slack) in ASD-STE100 Simplified Technical English, as the aiman skill's Writing style section says. Keep code, commands, identifiers and quotes exactly as they are.\n"
 
 // DesignFirstSuffix is appended to the initial prompt of an ordinary
 // interactive session so the agent sizes the task and states its call before

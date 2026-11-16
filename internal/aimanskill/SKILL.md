@@ -30,6 +30,21 @@ Do not call `aiman session report-agent-session`. Aiman installs a SessionStart 
 
 Be terse: the result first, then only what changes what they do next. No recap of what you did or what they said. Put any question last, as the final line of the message, so it is the last thing they read on any screen.
 
+## Writing style: ASD-STE100
+
+Write all prose for people in ASD-STE100 Simplified Technical English: messages to the operator, commit and PR text, design pages, reports, review findings, docs, code comments and Slack posts.
+
+- Use one word for one meaning, and the same word for the same thing every time. Do not use synonyms for variety.
+- Use simple, common words. Do not use idioms, phrasal verbs (`install`, not `set up`) or slang.
+- Write instructions in the imperative, one instruction in each sentence. Put steps in a numbered list, in the order of work.
+- Keep a sentence to 20 words or fewer in instructions and 25 or fewer in descriptions.
+- Use the active voice and simple tenses (present, past, future). Do not use `-ing` words as nouns.
+- Keep `a`, `an` and `the`. Do not use more than three nouns in a row; break the cluster with a preposition.
+- Give a paragraph one topic and six sentences or fewer.
+- Put a warning or caution before the step it applies to. Start it with a clear command, then give the risk.
+
+Keep these exactly as they are: code, commands, identifiers, file paths, error strings, quoted operator words and the headings a brief, report or template requires.
+
 ## Names and groups
 
 Every session has a short unique `name` (`fix-login`, `reviewer`, `q1`) and a `group` (`ungrouped` until the operator moves it, or the `--group` it was created with). Shared context ignores `ungrouped`: a note put with `--group ungrouped` goes to `--repo`. A create from inside a session nests under the caller on the operator's list. Spawn helpers in the caller's group:
