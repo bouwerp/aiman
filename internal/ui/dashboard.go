@@ -3043,7 +3043,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionCreateMsg:
 		return m.applySessionCreateMsg(msg, cmds)
 	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg, agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg,
-		gatewayPairMsg, gatewayPairTickMsg, githubReleaseMsg, githubReleaseDueMsg, resourcesMsg, resourcesTickMsg:
+		gatewayPairMsg, gatewayPairTickMsg, githubReleaseMsg, githubReleaseDueMsg, resourcesMsg, resourcesTickMsg,
+		sessionIdentitySyncMsg:
 		return m.routeRemoteServiceMsg(msg)
 	case discoveryResultMsg:
 		// Startup and refresh both deliver this after the dashboard is already

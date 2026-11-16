@@ -189,7 +189,7 @@ Sessions merge by ID. Discovery keeps every live PTY session with an ID of its o
 
 A legacy tmux row is never discovered. It stays listed as inactive, in memory only, until the user stops it and restarts it into pty.
 
-`applyDiscoveryResult` overlays those DB fields onto live sessions (`overlayPersistedSessionFields`) so a scan cannot flatten names and groups in the TUI. Save still uses COALESCE so empty discovery writes do not wipe the DB.
+`applyDiscoveryResult` overlays those DB fields onto live sessions (`overlayPersistedSessionFields`) so a scan cannot flatten names and groups in the TUI. Save still uses COALESCE so empty discovery writes do not wipe the DB. Serve's non-empty name and group win over the laptop's in `session_created`, so the TUI's group assign, group rename and session rename save the laptop DB and also call `session.move` / `session.rename` on that session's serve (`syncIdentityToServe`, `internal/ui/session_identity_sync.go`); a failure toasts, an old serve or a `not_found` is silent.
 
 The `discoveryResultMsg` handler in `dashboard.go` saves discovered sessions to DB after each discovery cycle. Empty discovered fields are safe because of the COALESCE fix.
 

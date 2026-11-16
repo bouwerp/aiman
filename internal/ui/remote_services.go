@@ -328,6 +328,9 @@ func (m *Model) routeRemoteServiceMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resourcesMsg, resourcesTickMsg:
 		// A fetch can finish, and the poll must keep running, off the list.
 		return m, m.applyResourcesMsg(msg)
+	case sessionIdentitySyncMsg:
+		// The user has usually left the editor by the time serve answers.
+		return m, m.applyIdentitySync(msg)
 	}
 	return m, nil
 }
