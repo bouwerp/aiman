@@ -35,8 +35,8 @@ func TestNewCreatingPlaceholderUsesReviewPR(t *testing.T) {
 	if s.ReviewPR != "owner/repo#7" {
 		t.Fatalf("ReviewPR = %q", s.ReviewPR)
 	}
-	if s.Group != "repo" {
-		t.Fatalf("Group = %q, want the repo group serve files the review under", s.Group)
+	if s.Group != domain.GroupUngrouped {
+		t.Fatalf("Group = %q, want ungrouped, where serve files the review", s.Group)
 	}
 }
 

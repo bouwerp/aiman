@@ -283,7 +283,7 @@ func TestSessionCreateQuickAndRename(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("create: %+v", resp.Error)
 	}
-	if !creator.cfg.Quick || !creator.cfg.AdHoc || creator.cfg.Name != "q1" || creator.cfg.Group != "quick" {
+	if !creator.cfg.Quick || !creator.cfg.AdHoc || creator.cfg.Name != "q1" || creator.cfg.Group != domain.GroupUngrouped {
 		t.Fatalf("cfg = %+v", creator.cfg)
 	}
 	if creator.cfg.Branch == creator.cfg.Name {
@@ -693,9 +693,9 @@ func TestSessionListIncludesLiveSessionsMissingFromTheDB(t *testing.T) {
 	if got.Name != "treasury@WTB-1896" {
 		t.Errorf("Name = %q, want the terminal name", got.Name)
 	}
-	// And the issue key drives the group, so sessions bucket usefully.
-	if got.Group != "WTB-1896" {
-		t.Errorf("Group = %q, want WTB-1896 derived from the session name", got.Group)
+	// A discovered session starts ungrouped; the user files it.
+	if got.Group != domain.GroupUngrouped {
+		t.Errorf("Group = %q, want ungrouped", got.Group)
 	}
 
 	// And it is reachable by that name, which is the whole point.

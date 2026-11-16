@@ -10,7 +10,6 @@ import (
 
 const (
 	GroupUngrouped = "ungrouped"
-	GroupQuick     = "quick"
 )
 
 var groupNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,47}$`)
@@ -49,6 +48,17 @@ func GroupLabel(group string) string {
 	return g
 }
 
+// ContextGroup is the group a session's shared-context notes live under: its
+// group, or empty for ungrouped. Ungrouped holds unrelated sessions, so it is
+// never a shared namespace.
+func ContextGroup(group string) string {
+	g := strings.TrimSpace(group)
+	if strings.EqualFold(g, GroupUngrouped) {
+		return ""
+	}
+	return g
+}
+
 // NormalizeGroupName hyphenates spaces and accepts ungrouped. Empty becomes ungrouped.
 func NormalizeGroupName(name string) (string, error) {
 	name = strings.Join(strings.Fields(strings.TrimSpace(name)), "-")
@@ -83,21 +93,11 @@ func AssignSessionName(existing []Session, preferred string, quick bool) (string
 	return nextSuffixed(existing, "session"), nil
 }
 
-func AssignSessionGroup(explicit, issueKey, repoName string, quick bool) string {
-	if quick {
-		return GroupQuick
-	}
+// AssignSessionGroup returns the group a new session starts in: the one the
+// creator named, else ungrouped. The user files sessions by moving them.
+func AssignSessionGroup(explicit string) string {
 	if g := strings.TrimSpace(explicit); g != "" {
 		return g
-	}
-	if issueKey != "" {
-		return issueKey
-	}
-	if repoName != "" {
-		if i := strings.LastIndex(repoName, "/"); i >= 0 && i+1 < len(repoName) {
-			return repoName[i+1:]
-		}
-		return repoName
 	}
 	return GroupUngrouped
 }

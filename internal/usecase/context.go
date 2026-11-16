@@ -27,7 +27,7 @@ func FetchContextPack(ctx context.Context, remote contextRemote, group, repo str
 	}
 	var b strings.Builder
 	b.WriteString(`PATH="$HOME/.local/bin:$PATH" aiman context pack`)
-	if g := strings.TrimSpace(group); g != "" {
+	if g := domain.ContextGroup(group); g != "" {
 		b.WriteString(" --group ")
 		b.WriteString(shellx.Quote(g))
 	}

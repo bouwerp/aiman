@@ -280,3 +280,26 @@ func TestContextPutRejectsVerified(t *testing.T) {
 		t.Fatalf("want verified rejection, got %+v", resp.Error)
 	}
 }
+
+func TestContextPutUngroupedFallsBackToRepo(t *testing.T) {
+	sock := startContextServer(t)
+	put, err := Call(sock, "context.put", map[string]any{
+		"title": "Repo note", "group": "ungrouped", "repo": "owner/repo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if put.Error != nil {
+		t.Fatalf("put: %+v", put.Error)
+	}
+	var res struct {
+		Note ContextNote `json:"note"`
+	}
+	raw, _ := json.Marshal(put.Result)
+	if err := json.Unmarshal(raw, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Note.Namespace != domain.ContextNSRepo || res.Note.Key != "owner__repo" {
+		t.Fatalf("note filed under %s/%s, want repo/owner__repo", res.Note.Namespace, res.Note.Key)
+	}
+}

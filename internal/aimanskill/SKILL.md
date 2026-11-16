@@ -32,7 +32,7 @@ Be terse: the result first, then only what changes what they do next. No recap o
 
 ## Names and groups
 
-Every session has a short unique `name` (`fix-login`, `reviewer`, `q1`) and a `group` (issue key, repo, or `quick`). A create from inside a session nests under the caller on the operator's list. Spawn helpers in the caller's group:
+Every session has a short unique `name` (`fix-login`, `reviewer`, `q1`) and a `group` (`ungrouped` until the operator moves it, or the `--group` it was created with). Shared context ignores `ungrouped`: a note put with `--group ungrouped` goes to `--repo`. A create from inside a session nests under the caller on the operator's list. Spawn helpers in the caller's group:
 
 ```bash
 aiman session create --repo owner/repo --branch BRANCH --agent claude \

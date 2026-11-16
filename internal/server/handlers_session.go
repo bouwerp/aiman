@@ -574,7 +574,7 @@ func labelDiscovered(sess *domain.Session, others []domain.Session) {
 		sess.IssueKey = domain.ExtractKey(sess.TerminalName)
 	}
 	if sess.Group == "" {
-		sess.Group = domain.AssignSessionGroup("", sess.IssueKey, sess.RepoName, false)
+		sess.Group = domain.AssignSessionGroup("")
 	}
 	if sess.Name == "" {
 		sess.Name = terminalLabel(*sess, others)
@@ -604,7 +604,7 @@ func (s *Server) backfill(sess *domain.Session, existing []domain.Session) {
 		}
 	}
 	if sess.Group == "" {
-		sess.Group = domain.AssignSessionGroup("", sess.IssueKey, sess.RepoName, false)
+		sess.Group = domain.AssignSessionGroup("")
 	}
 	if sess.Name == "" {
 		// A stored row with no name was registered from the laptop or written
@@ -1128,7 +1128,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	if branchDerived {
 		params.Branch = branchForName(name)
 	}
-	group := domain.AssignSessionGroup(params.Group, params.Issue, params.Repo, params.Quick)
+	group := domain.AssignSessionGroup(params.Group)
 	promptFree := true
 	if params.PromptFree != nil {
 		promptFree = *params.PromptFree
