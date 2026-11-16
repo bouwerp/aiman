@@ -621,3 +621,17 @@ func (m *Manager) SessionEventsCommand(ctx context.Context) *exec.Cmd {
 		"-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
 		m.target(), remotePathPreamble+"exec aiman pty events")
 }
+
+// RPCStreamKey names the remote for usecase.RPCStreams: calls with the same key
+// share one `aiman rpc --stream` process.
+func (m *Manager) RPCStreamKey() string { return m.target() }
+
+// RPCStreamCommand returns the ssh command that runs the remote's
+// `aiman rpc --stream`. It uses its own connection with an explicit
+// ControlMaster=no, so a user's `ControlMaster auto` cannot multiplex it and
+// ResetControlSocket cannot end it. The caller owns the process and kills it.
+func (m *Manager) RPCStreamCommand() *exec.Cmd {
+	//nolint:gosec // G204: options are fixed; the target is the operator's remote
+	return exec.CommandContext(context.Background(), "ssh",
+		append(bulkSSHArgs("", false), m.target(), remotePathPreamble+`export PATH="$HOME/.npm-global/bin:$PATH"; exec aiman rpc --stream`)...)
+}
