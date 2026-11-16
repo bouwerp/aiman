@@ -396,3 +396,11 @@ func TestSkillSetsSTE100WritingStyle(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillSetsPRDescriptionShape(t *testing.T) {
+	for _, want := range []string{"## Pull request descriptions", "`autonumber`", "Start each bullet with the marker"} {
+		if !strings.Contains(Text, want) {
+			t.Fatalf("skill must describe PR descriptions: missing %q", want)
+		}
+	}
+}

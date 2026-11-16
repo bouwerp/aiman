@@ -45,6 +45,23 @@ Write all prose for people in ASD-STE100 Simplified Technical English: messages 
 
 Keep these exactly as they are: code, commands, identifiers, file paths, error strings, quoted operator words and the headings a brief, report or template requires.
 
+## Pull request descriptions
+
+Keep the PR description short. Use bullet points, not paragraphs. Use these sections in this order:
+
+1. `## Summary`: 1 to 3 bullets. Say what changed and why.
+2. `## Diagrams`: Mermaid diagrams for the architecture of the change. Leave this section out only for a trivial change.
+3. `## Test plan`: a checklist of the checks that you did.
+
+Diagrams:
+
+- Draw one **flow** diagram (a `sequenceDiagram` with `autonumber`, or a `flowchart`) that shows how a request or data moves through the change.
+- Draw one **structure** diagram (a `flowchart` of components, or a `classDiagram`) that shows the packages, types or services that the change adds or changes.
+- Give each node or step a clear marker that the text can refer to. Use `autonumber` numbers in a sequence diagram. Start node labels with `F1`, `F2` in a flow chart and `S1`, `S2` in a structure diagram, for example `S2["S2 sqlite: forgotten_sessions"]`.
+- Mark new and changed nodes with a `changed` class: `classDef changed fill:#d4f8d4,stroke:#2a7a2a,font-weight:bold`.
+- Under each diagram, write 2 to 5 terse bullets. Start each bullet with the marker that it explains, for example `- **S2**: the tombstone table. register skips these ids.`
+- Do not draw more than 3 diagrams. Do not draw a diagram that only repeats the diff.
+
 ## Names and groups
 
 Every session has a short unique `name` (`fix-login`, `reviewer`, `q1`) and a `group` (`ungrouped` until the operator moves it, or the `--group` it was created with). Shared context ignores `ungrouped`: a note put with `--group ungrouped` goes to `--repo`. A create from inside a session nests under the caller on the operator's list. Spawn helpers in the caller's group:
