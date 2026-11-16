@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/bouwerp/aiman/internal/cigate"
 )
 
 const (
@@ -71,7 +73,7 @@ func (s *Server) SweepScratch(ctx context.Context) int64 {
 			if ctx.Err() != nil {
 				break
 			}
-			if !e.IsDir() || e.Type()&fs.ModeSymlink != 0 || !plainID(e.Name()) || ownsScratch(known, e.Name()) {
+			if !e.IsDir() || e.Type()&fs.ModeSymlink != 0 || !plainID(e.Name()) || ownsScratch(known, e.Name()) || ciScratchInUse(root, e.Name()) {
 				continue
 			}
 			dir := filepath.Join(root, e.Name())
@@ -80,7 +82,7 @@ func (s *Server) SweepScratch(ctx context.Context) int64 {
 				continue
 			}
 			// A session saved since the first read keeps its directory.
-			if fresh, ok := s.scratchOwners(ctx); !ok || ownsScratch(fresh, e.Name()) {
+			if fresh, ok := s.scratchOwners(ctx); !ok || ownsScratch(fresh, e.Name()) || ciScratchInUse(root, e.Name()) {
 				continue
 			}
 			if err := os.RemoveAll(dir); err != nil {
@@ -119,7 +121,7 @@ func (s *Server) scratchOwners(ctx context.Context) (map[string]bool, bool) {
 // ownsScratch reports whether name is an owner or a helper terminal of one
 // ("<owner>-…", the scope key rule).
 func ownsScratch(owners map[string]bool, name string) bool {
-	if owners[name] || ciScratchName(name) {
+	if owners[name] {
 		return true
 	}
 	for id := range owners {
@@ -130,9 +132,15 @@ func ownsScratch(owners map[string]bool, name string) bool {
 	return false
 }
 
-// ciScratchName keeps the janitor off the ci-local runs' scratch names, which start
-// with "aiman-ci-" while a run is in progress.
-func ciScratchName(name string) bool { return strings.HasPrefix(name, "aiman-ci-") }
+// ciScratchInUse keeps the janitor off the TMPDIR of a CI run (ci-…) or a
+// verify test command (verify-…) still in progress. A leftover of a run that
+// ended without cleaning up ages out like any other directory.
+func ciScratchInUse(root, name string) bool {
+	if !strings.HasPrefix(name, "ci-") && !strings.HasPrefix(name, "verify-") {
+		return false
+	}
+	return cigate.TmpInUse(filepath.Join(root, name))
+}
 
 // scratchTreeInfo returns the bytes of regular files under dir and the newest
 // modification time of dir and everything in it. Symlinks are counted as

@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/bouwerp/aiman/internal/cigate"
 )
 
 const (
@@ -35,13 +38,20 @@ type Evidence struct {
 // snapshot commit, so nothing the reviewer did to its own worktree can make
 // the run pass. A non-zero exit is evidence; a command that cannot start is
 // an error.
-func runEvidence(ctx context.Context, r Review, command string, now func() time.Time) (Evidence, error) {
-	return runAt(ctx, r, r.Commit, "evidence", command, now)
+func runEvidence(ctx context.Context, r Review, command string, d Deps) (Evidence, error) {
+	return runAt(ctx, r, r.Commit, "evidence", command, d)
 }
 
 // runAt runs command in a throwaway detached worktree at commit, beside the
-// worker's as <repo>@<label>-<id8>, and removes it afterwards.
-func runAt(ctx context.Context, r Review, commit, label, command string, now func() time.Time) (Evidence, error) {
+// worker's as <repo>@<label>-<id8>, and removes it afterwards. With Deps.Launch
+// set the command runs in its own scope unit (cigate.VerifyUnit), and with
+// Deps.TmpDir set it gets TMPDIR=<TmpDir>/verify-<id8>, set on the command's
+// environment only and removed when it ends.
+func runAt(ctx context.Context, r Review, commit, label, command string, d Deps) (Evidence, error) {
+	now := d.Now
+	if now == nil {
+		now = time.Now
+	}
 	if strings.TrimSpace(command) == "" {
 		return Evidence{}, errNoTestCommand
 	}
@@ -59,7 +69,18 @@ func runAt(ctx context.Context, r Review, commit, label, command string, now fun
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+	if d.TmpDir != "" {
+		tmp, release, err := cigate.ClaimTmp(d.TmpDir, "verify-"+r.ID[:8])
+		if err != nil {
+			return Evidence{}, fmt.Errorf("tmpdir: %w", err)
+		}
+		defer release()
+		cmd.Env = append(os.Environ(), "TMPDIR="+tmp)
+	}
 	ev := Evidence{Command: command, RanAt: now(), TreeHash: r.Tree}
+	if d.Launch != nil {
+		d.Launch(cigate.VerifyUnit(r.ID, ev.RanAt), cmd)
+	}
 	err := cmd.Run()
 	ev.Output = lastLines(out.String(), evidenceLines)
 	var exit *exec.ExitError

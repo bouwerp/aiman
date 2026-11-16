@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bouwerp/aiman/internal/cigate"
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -97,6 +98,11 @@ type Deps struct {
 	Installed func(string) bool
 	Now       func() time.Time // nil means time.Now
 	Poll      time.Duration    // zero means 5s
+	// Launch puts each test command in its own scope unit; nil runs it
+	// plainly.
+	Launch cigate.Launcher
+	// TmpDir is the base of each test command's TMPDIR; empty leaves it.
+	TmpDir string
 }
 
 // StartRequest asks for a review of one worker session.
@@ -393,7 +399,7 @@ func (m *Manager) reproduce(ctx context.Context, r *Review) error {
 		log.Printf("verify: review %s: reproduce is on but verify.test_command is not set; skipping", r.ID)
 		return nil
 	}
-	ev, err := runAt(ctx, *r, r.BaseSHA, "repro", m.cfg.TestCommand, m.d.Now)
+	ev, err := runAt(ctx, *r, r.BaseSHA, "repro", m.cfg.TestCommand, m.d)
 	if err != nil {
 		return err
 	}
@@ -483,7 +489,7 @@ func (m *Manager) finish(ctx context.Context, r Review, status Status, text stri
 		worker = domain.Session{ID: r.WorkerID}
 	}
 	if status == StatusComplete {
-		ev, err := runEvidence(ctx, r, m.cfg.TestCommand, m.d.Now)
+		ev, err := runEvidence(ctx, r, m.cfg.TestCommand, m.d)
 		if err != nil {
 			status = StatusIncomplete
 			r.Error = err.Error()

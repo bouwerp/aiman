@@ -22,7 +22,8 @@ import (
 )
 
 const (
-	// CodeCIRunning refuses ci.local while a run for the session is going.
+	// CodeCIRunning refuses ci.local while a run for the session is queued
+	// or running.
 	CodeCIRunning = "ci_running"
 	// CodeCIDirty refuses ci.local while the worktree has uncommitted or
 	// untracked files.
@@ -264,14 +265,16 @@ func (s *Server) handleCILocal(ctx context.Context, id string, t ciTarget, wait 
 	return Response{ID: id, Result: map[string]any{"type": "ci_local", "record": rec, "done": finished}}
 }
 
-// CIStatus is ci.status's answer: the record for HEAD, if any, and the tail
-// of the failed command's log.
+// CIStatus is ci.status's answer: the record for HEAD, if any, the tail of
+// the failed command's log, and the run's place in the host queue while it
+// waits (1 is next).
 type CIStatus struct {
-	SHA     string         `json:"sha"`
-	Clean   bool           `json:"clean"`
-	HasList bool           `json:"has_list"`
-	Record  *cigate.Record `json:"record,omitempty"`
-	Tail    string         `json:"tail,omitempty"`
+	SHA           string         `json:"sha"`
+	Clean         bool           `json:"clean"`
+	HasList       bool           `json:"has_list"`
+	Record        *cigate.Record `json:"record,omitempty"`
+	Tail          string         `json:"tail,omitempty"`
+	QueuePosition int            `json:"queue_position,omitempty"`
 }
 
 func (s *Server) handleCIStatus(ctx context.Context, id string, t ciTarget) Response {
@@ -307,6 +310,9 @@ func (s *Server) ciStatus(ctx context.Context, t ciTarget) (CIStatus, error) {
 	}
 	if ok {
 		st.Record = &rec
+		if rec.Status == cigate.StatusQueued {
+			st.QueuePosition = s.ciLocal.d.Runner.QueuePosition(t.sess.ID)
+		}
 		if rec.Status == cigate.StatusFail && len(rec.Commands) > 0 {
 			last := rec.Commands[len(rec.Commands)-1]
 			st.Tail, _ = cigate.Tail(last.Log, ciStatusTailLines)
@@ -623,11 +629,13 @@ func (s *Server) verifiedHead(ctx context.Context, t ciTarget) error {
 	return nil
 }
 
-// forgetCILocal drops a session's gate records and logs.
+// forgetCILocal ends a session's queued or running gate run ("session
+// gone"), then drops its records and logs.
 func (s *Server) forgetCILocal(id string) {
 	if s.ciLocal == nil || s.ciLocal.d.Runner == nil {
 		return
 	}
+	s.ciLocal.d.Runner.Drop(id)
 	if err := s.ciLocal.d.Runner.Forget(id); err != nil {
 		log.Printf("ci local: forget %s: %v", id, err)
 	}
