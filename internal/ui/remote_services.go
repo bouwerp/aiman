@@ -378,6 +378,11 @@ func (m *Model) applyDaemonProbe(msg daemonProbeMsg) (tea.Model, tea.Cmd) {
 	}
 	m.storeDaemon(d)
 	m.applyRemoteFilter()
+	if d.Kind == string(remotesvc.KindServe) {
+		// A new serve release may bring `aiman rpc --stream` to a host
+		// remembered as having none.
+		usecase.NoteServeVersion(d.RemoteHost, d.Version)
+	}
 	// The probe carries the remote's version, so this is where a remote running
 	// behind the client is noticed.
 	// The hint goes first so an auto-update's toast, set after it, is the one shown.
