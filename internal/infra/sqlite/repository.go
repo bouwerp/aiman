@@ -249,6 +249,10 @@ func migrate(db *sql.DB) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create CI tables: %w", err)
 	}
 
+	if err := ensureForgottenSessions(db); err != nil {
+		return nil, fmt.Errorf("failed to create forgotten sessions table: %w", err)
+	}
+
 	return &Repository{
 		db:            db,
 		clearedOnOpen: clearedAWSProfiles,

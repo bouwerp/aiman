@@ -421,7 +421,7 @@ func TestForgetDropsCachedState(t *testing.T) {
 	ctx := context.Background()
 	sess := r.session(t, "s1", domain.AgentStateIdle, statementFrame)
 	r.srv.sweepStates(ctx)
-	if err := r.srv.dropSession(ctx, sess); err != nil {
+	if err := r.srv.dropSession(ctx, sess, "forget"); err != nil {
 		t.Fatal(err)
 	}
 	if st, ok := r.srv.cachedSessionState("s1"); ok {

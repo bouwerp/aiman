@@ -275,14 +275,26 @@ func TestSanitiseTempName(t *testing.T) {
 
 func TestRegisterSessionsOnRemoteToleratesOldServe(t *testing.T) {
 	rec := &rpcRecorder{out: "unknown command \"rpc\" for \"aiman\"", err: errors.New("exit status 1")}
-	if err := RegisterSessionsOnRemote(context.Background(), rec, []domain.Session{{ID: "a"}}); err != nil {
-		t.Fatalf("old serve must be tolerated: %v", err)
+	if forgotten, err := RegisterSessionsOnRemote(context.Background(), rec, []domain.Session{{ID: "a"}}); err != nil || len(forgotten) != 0 {
+		t.Fatalf("old serve must be tolerated: %v %v", forgotten, err)
 	}
 	if !strings.Contains(rec.cmd, "aiman rpc session.register") {
 		t.Fatalf("cmd = %q", rec.cmd)
 	}
+	// A serve without tombstones sends no forgotten list: nothing to prune.
 	rec = &rpcRecorder{out: `{"result":{"type":"sessions_registered","ids":["a"]}}`}
-	if err := RegisterSessionsOnRemote(context.Background(), rec, []domain.Session{{ID: "a"}}); err != nil {
+	if forgotten, err := RegisterSessionsOnRemote(context.Background(), rec, []domain.Session{{ID: "a"}}); err != nil || len(forgotten) != 0 {
+		t.Fatalf("forgotten %v err %v", forgotten, err)
+	}
+}
+
+func TestRegisterSessionsOnRemoteReturnsForgotten(t *testing.T) {
+	rec := &rpcRecorder{out: `{"result":{"type":"sessions_registered","ids":["a"],"forgotten":["b","c"]}}`}
+	forgotten, err := RegisterSessionsOnRemote(context.Background(), rec, []domain.Session{{ID: "a"}, {ID: "b"}, {ID: "c"}})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.Join(forgotten, ",") != "b,c" {
+		t.Fatalf("forgotten = %v", forgotten)
 	}
 }

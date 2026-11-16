@@ -21,7 +21,7 @@ type DoneItems interface {
 type RemoteDoneItems struct{}
 
 func (RemoteDoneItems) Ensure(ctx context.Context, remote domain.RemoteExecutor, s domain.Session) error {
-	if err := RegisterSessionsOnRemote(ctx, remote, []domain.Session{s}); err != nil {
+	if _, err := RegisterSessionsOnRemote(ctx, remote, []domain.Session{s}); err != nil {
 		return err
 	}
 	_, err := ServeRPC(ctx, remote, "todo.ensure_done", map[string]any{"session": s.ID})

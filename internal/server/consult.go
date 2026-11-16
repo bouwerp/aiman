@@ -216,7 +216,7 @@ func (s *Server) RetireConsult(ctx context.Context, child domain.Session) {
 	if err := (serverTerminal{s}).Stop(ctx, child); err != nil {
 		log.Printf("consult: stop %s: %v", child.ID, err)
 	}
-	if err := s.dropSession(ctx, child); err != nil {
+	if err := s.dropSession(ctx, child, consultEndedReason); err != nil {
 		log.Printf("consult: forget %s: %v", child.ID, err)
 	}
 	s.appendEvent(ctx, child.ID, domain.EventActorAiman, domain.EventSessionEnded, map[string]any{"reason": consultEndedReason})

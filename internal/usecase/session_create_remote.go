@@ -154,19 +154,30 @@ func ForgetSessionOnRemote(ctx context.Context, remote TerminalExecutor, session
 }
 
 // RegisterSessionsOnRemote hands sessions the laptop owns to the remote's serve
-// so it persists them and can accept their hook reports.
+// so it persists them and can accept their hook reports. It returns the ids
+// serve refused because they were terminated or forgotten there; the caller
+// drops its own copies of those.
 //
 // A remote whose serve is stopped or too old to know the method is not an
 // error: registration is retried the next time the dashboard syncs.
-func RegisterSessionsOnRemote(ctx context.Context, remote TerminalExecutor, sessions []domain.Session) error {
+func RegisterSessionsOnRemote(ctx context.Context, remote TerminalExecutor, sessions []domain.Session) ([]string, error) {
 	if len(sessions) == 0 {
-		return nil
+		return nil, nil
 	}
-	_, err := ServeRPC(ctx, remote, "session.register", map[string]any{"sessions": sessions})
+	raw, err := ServeRPC(ctx, remote, "session.register", map[string]any{"sessions": sessions})
 	if errors.Is(err, ErrRPCUnsupported) || errors.Is(err, ErrServeNotRunning) {
-		return nil
+		return nil, nil
 	}
-	return err
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Forgotten []string `json:"forgotten"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, fmt.Errorf("decode session.register result: %w", err)
+	}
+	return res.Forgotten, nil
 }
 
 // remoteCreateResult is what `aiman session create` prints: the bare

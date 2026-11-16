@@ -2170,7 +2170,7 @@ func (m *Model) createSession(placeholderID string) tea.Cmd {
 
 		if mgr, ok := sessionCfg.SSHManager.(*ssh.Manager); ok {
 			regCtx, regCancel := context.WithTimeout(ctx, registerTimeout)
-			err := usecase.RegisterSessionsOnRemote(regCtx, mgr, []domain.Session{*session})
+			_, err := usecase.RegisterSessionsOnRemote(regCtx, mgr, []domain.Session{*session})
 			regCancel()
 			if err != nil {
 				m.logPersistent("register session %s with serve failed: %v", session.ID, err)
@@ -2917,11 +2917,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// or the next poll never starts.
 		return m, m.applyPreviewRefresh(msg)
 	case sessionsRegisteredMsg:
-		if msg.err != nil {
-			m.logPersistent("register %d sessions with serve on %s failed: %v", msg.n, msg.host, msg.err)
-		} else {
-			m.log("registered %d sessions with serve on %s", msg.n, msg.host)
-		}
+		m.applySessionsRegistered(msg)
 		return m, nil
 	case sessionEventMsg:
 		// Handled globally: the stream must keep being consumed whatever screen
