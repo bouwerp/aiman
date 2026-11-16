@@ -72,6 +72,9 @@ func isNilPTY(p PTYRuntime) bool {
 }
 
 type Server struct {
+	procsLogMu sync.Mutex
+	procsLogAt time.Time // last "procs:" line, at most one a minute
+
 	ln       *Listener
 	repo     domain.SessionRepository
 	sessList sessionListCache

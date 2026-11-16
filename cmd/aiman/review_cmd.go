@@ -33,9 +33,9 @@ func reviewUsage() error {
 	fmt.Fprintf(os.Stderr, "       aiman review push\n")
 	fmt.Fprintf(os.Stderr, "       aiman review assess <file> [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman review approve <file> [--session NAME]\n")
-	fmt.Fprintf(os.Stderr, "       aiman review run [--timeout 10m] [--session NAME] -- <cmd...>\n")
+	fmt.Fprintf(os.Stderr, "       aiman review run [--force] [--timeout 10m] [--session NAME] -- <cmd...>\n")
 	fmt.Fprintf(os.Stderr, "       aiman review debug [--lang go|node|react] [--target <package, script or dev command>] [--session NAME]\n")
-	fmt.Fprintf(os.Stderr, "       aiman review coverage [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman review coverage [--force] [--session NAME]\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
 	return errUsage
 }
@@ -87,7 +87,7 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 			file = args[i]
 		case args[i] == "--single" && verb == "reveal":
 			single = true
-		case args[i] == "--force" && verb == "refresh":
+		case args[i] == "--force" && (verb == "refresh" || verb == "coverage"):
 			force = true
 		case args[i] == "--session" && i+1 < len(args):
 			session = strings.TrimSpace(args[i+1])
@@ -134,7 +134,7 @@ func reviewRPC(args []string, getenv func(string) string) (string, map[string]an
 }
 
 func reviewRunRPC(args []string, getenv func(string) string) (string, map[string]any, error) {
-	session, timeout := "", 10*time.Minute
+	session, timeout, force := "", 10*time.Minute, false
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--":
@@ -145,9 +145,15 @@ func reviewRunRPC(args []string, getenv func(string) string) (string, map[string
 			if session == "" || len(cmd) == 0 {
 				return "", nil, reviewUsage()
 			}
-			return "review.run", map[string]any{
+			params := map[string]any{
 				"session": session, "cmd": cmd, "timeout_seconds": int(timeout / time.Second),
-			}, nil
+			}
+			if force {
+				params["force"] = true
+			}
+			return "review.run", params, nil
+		case args[i] == "--force":
+			force = true
 		case args[i] == "--session" && i+1 < len(args):
 			session = strings.TrimSpace(args[i+1])
 			i++
