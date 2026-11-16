@@ -43,11 +43,7 @@ type resourcesMsg struct {
 // resourcesTickMsg is due every resourcesPollEvery.
 type resourcesTickMsg struct{}
 
-func fetchResources(cfg *config.Config, host string) (server.ResourcesReport, error) {
-	return fetchResourcesWith(cfg, host, nil)
-}
-
-// fetchResourcesWith is fetchResources that frees its budget slot as soon as
+// fetchResourcesWith fetches resources.get and frees its budget slot as soon as
 // the call ends, timed out or not.
 func fetchResourcesWith(cfg *config.Config, host string, release func(bool)) (server.ResourcesReport, error) {
 	remote, ok := remoteForHost(cfg, host)
