@@ -27,8 +27,12 @@ func sweepPeriod(load float64, ok bool, ncpu int) time.Duration {
 	return sweepPeriodLow
 }
 
-// currentSweepPeriod is the period for the host's load right now.
-func currentSweepPeriod() time.Duration {
+// currentSweepPeriod is the period for the host's load right now:
+// sweepPeriodHigh while the pressure gate is closed, else by load average.
+func (s *Server) currentSweepPeriod() time.Duration {
+	if s.Pressure().Closed {
+		return sweepPeriodHigh
+	}
 	load, ok := readLoadAvg()
 	return sweepPeriod(load, ok, runtime.NumCPU())
 }

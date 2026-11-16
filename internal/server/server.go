@@ -96,7 +96,10 @@ type Server struct {
 	sampler atomic.Pointer[cgroup.Sampler]
 	// scratch is the last scratch janitor pass.
 	scratch atomic.Pointer[scratchPass]
-	version string
+	// press is the host pressure gate, made on first use (pressure()).
+	pressOnce sync.Once
+	press     *pressureGate
+	version   string
 
 	// hub carries events published by handlers to session.events streams.
 	hub *eventHub
@@ -416,7 +419,15 @@ func (s *Server) decodeAdmit(ctx context.Context, line []byte) (Request, context
 		return req, ctx, nil, &Response{ID: "", Error: &Error{Code: CodeInvalidParams, Message: err.Error()}}
 	}
 	ctx, done, refused := s.admit(ctx, req)
-	return req, ctx, done, refused
+	if refused != nil {
+		return req, ctx, done, refused
+	}
+	// The pressure gate answers after admission, so its refusal is counted.
+	if gated := s.pressureRefusal(ctx, req); gated != nil {
+		done()
+		return req, ctx, nil, gated
+	}
+	return req, ctx, done, nil
 }
 
 func (s *Server) dispatch(ctx context.Context, line []byte) Response {

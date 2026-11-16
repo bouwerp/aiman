@@ -74,6 +74,7 @@ type hostStatsText struct {
 	CPUPercent float64              `json:"cpu_percent"`
 	RPC        server.RPCStats      `json:"rpc"`
 	Scratch    server.ScratchReport `json:"scratch"`
+	Gate       *server.PressureGate `json:"gate"`
 }
 
 // printHostStats writes the host line and the rpc block.
@@ -111,7 +112,30 @@ func printHostStats(w io.Writer, result any) error {
 		last = sc.LastRun.Format(time.RFC3339)
 	}
 	fmt.Fprintf(w, "scratch · freed %d bytes (last run %s) · /tmp/claude legacy %d bytes\n", sc.FreedBytes, last, sc.LegacyBytes)
+	printPressureGate(w, st.Gate)
 	return nil
+}
+
+// printPressureGate writes the pressure and gate lines; an older serve sends
+// no gate and gets none.
+func printPressureGate(w io.Writer, g *server.PressureGate) {
+	if g == nil {
+		return
+	}
+	fmt.Fprintf(w, "pressure: memory some %.1f%% full %.1f%%", g.MemorySomeAvg10, g.MemoryFullAvg10)
+	if g.SliceOverHigh {
+		fmt.Fprint(w, " · slice at memory.high")
+	}
+	fmt.Fprintln(w)
+	state := "open"
+	if g.Closed {
+		state = "closed"
+	}
+	if g.Since.IsZero() {
+		fmt.Fprintf(w, "gate: %s\n", state)
+		return
+	}
+	fmt.Fprintf(w, "gate: %s since %s\n", state, g.Since.Local().Format(time.RFC3339))
 }
 
 func printRPCCounts(w io.Writer, title string, counts []server.RPCCount) {

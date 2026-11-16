@@ -167,6 +167,7 @@ func (s *Server) handleResourcesGet(ctx context.Context, req Request) Response {
 		SliceMemoryHigh: opts.SliceMemoryHigh,
 		Tmpdir:          opts.TmpRoot != "",
 		Unscoped:        s.unscopedHolders(ctx),
+		Gate:            s.gateReport(),
 	}
 	if target := sessionTarget(req.Params); target != "" {
 		id := target

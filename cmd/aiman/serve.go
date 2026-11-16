@@ -179,6 +179,8 @@ func runServe() error {
 	srv.EnableTodos(todos, db)
 	srv.SetPeerNotes(cfg.Sessions.PeerNotesOn())
 	srv.SetHostLoad(cfg.Host.Load)
+	srv.SetPressureGate(cfg.Host.Load.PressureGate)
+	go srv.RunPressure(ctx)
 	srv.SetAgentNice(cfg.Host.Load.AgentNiceOrDefault())
 	wireResources(ctx, srv, ptyMgr, cfg.Resources, dir)
 	go srv.RunResources(ctx)

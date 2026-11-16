@@ -428,7 +428,12 @@ components:
             caller outside its own tree. Any method may answer server_busy
             (no free slot within 50ms) or rate_limited (a session over its
             per-minute budget); both carry data.retry_after_ms, and the CLI
-            retries once after it.
+            retries once after it. session.create, review.run,
+            review.coverage, review.fix and review.assess answer
+            host_under_pressure while the host pressure gate is closed, with
+            data.retry_after_ms (30000), memory_full_avg10, memory_some_avg10
+            and since; the CLI does not retry it, and a caller waits at least
+            retry_after_ms before trying again.
           enum:
             - invalid_params
             - not_found
@@ -473,6 +478,7 @@ components:
             - ci_no_list
             - server_busy
             - rate_limited
+            - host_under_pressure
             - unavailable
             - invalid_code
             - locked
@@ -486,6 +492,47 @@ components:
             - $ref: "#/components/schemas/WorktreeDirtyData"
             - $ref: "#/components/schemas/RetryAfterData"
             - $ref: "#/components/schemas/NeedsDestructiveData"
+            - $ref: "#/components/schemas/HostUnderPressureData"
+    HostUnderPressureData:
+      type: object
+      description: The detail of host_under_pressure, the gate when it answered.
+      required: [retry_after_ms, memory_full_avg10, memory_some_avg10, since]
+      properties:
+        retry_after_ms:
+          type: integer
+          description: Wait at least this long; 30000.
+        memory_full_avg10:
+          type: number
+        memory_some_avg10:
+          type: number
+        since:
+          type: string
+          format: date-time
+          description: When the gate closed.
+    PressureGate:
+      type: object
+      description: >
+        The host pressure gate. It closes when the user slice's memory full
+        avg10 reaches host.load.pressure_gate.memory_full_avg10 (default 20)
+        and opens after hold (30s) in a row below reopen_full_avg10 (10).
+        some and slice_over_high are reported and never close it. While
+        closed, serve refuses new sessions, helper spawns and review runs
+        with host_under_pressure and CI runs wait.
+      required: [closed, since, memory_some_avg10, memory_full_avg10, slice_over_high]
+      properties:
+        closed:
+          type: boolean
+        since:
+          type: string
+          format: date-time
+          description: When the gate last closed or opened; zero before the first change.
+        memory_some_avg10:
+          type: number
+        memory_full_avg10:
+          type: number
+        slice_over_high:
+          type: boolean
+          description: The user slice is at or above its memory.high.
     NeedsDestructiveData:
       type: object
       description: >
@@ -677,7 +724,10 @@ components:
           description: >
             Override the default refusal. Phone UX confirms before sending
             force true. Against today's unix socket, answering a
-            waiting_input session also requires force true.
+            waiting_input session also requires force true. On
+            session.create, review.run, review.coverage, review.fix and
+            review.assess it passes a closed pressure gate; only the
+            operator may send it there (a session gets needs_operator).
         token:
           type: string
           description: Expo push token. Never log this value.
@@ -1598,6 +1648,8 @@ components:
               $ref: "#/components/schemas/ResourceUsage"
             sessions_slice:
               $ref: "#/components/schemas/ResourceUsage"
+            gate:
+              $ref: "#/components/schemas/PressureGate"
             serve_unit:
               description: >
                 Serve's own cgroup. Memory an adopted session charged before
@@ -1696,11 +1748,13 @@ components:
         Read-only. Every size is in bytes and every CPU value is a percent.
         Linux reads /proc; elsewhere the fields are empty. Refresh every few
         seconds.
-      required: [type, host, uptime_seconds, load, cpu_count, cpu_percent, memory, swap, disks, processes, sessions, rpc, scratch]
+      required: [type, host, uptime_seconds, load, cpu_count, cpu_percent, memory, swap, disks, processes, sessions, rpc, scratch, gate]
       properties:
         type:
           type: string
           const: host_stats
+        gate:
+          $ref: "#/components/schemas/PressureGate"
         rpc:
           $ref: "#/components/schemas/RPCStats"
         scratch:
