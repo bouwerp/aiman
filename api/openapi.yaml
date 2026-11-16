@@ -1598,6 +1598,26 @@ components:
               $ref: "#/components/schemas/ResourceUsage"
             sessions_slice:
               $ref: "#/components/schemas/ResourceUsage"
+            serve_unit:
+              description: >
+                Serve's own cgroup. Memory an adopted session charged before
+                it moved stays here.
+              $ref: "#/components/schemas/ResourceUsage"
+            unscoped:
+              type: array
+              description: >
+                Running sessions whose holder is outside every session scope,
+                so they run without limits. Serve moves them in on its own
+                (30s after start, then every 5 minutes) unless it runs
+                outside the user manager.
+              items:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
             sessions:
               type: array
               items:

@@ -60,8 +60,11 @@ type Snapshot struct {
 	// UserSlice is the whole user: every session, serve and the gateway.
 	UserSlice *Usage `json:"user_slice,omitempty"`
 	// SessionsSlice is every session scope together.
-	SessionsSlice *Usage         `json:"sessions_slice,omitempty"`
-	Sessions      []SessionUsage `json:"sessions"`
+	SessionsSlice *Usage `json:"sessions_slice,omitempty"`
+	// ServeUnit is serve's own cgroup: memory adopted sessions have not
+	// yet moved out of it stays charged here.
+	ServeUnit *Usage         `json:"serve_unit,omitempty"`
+	Sessions  []SessionUsage `json:"sessions"`
 }
 
 // SessionRef names a session the sampler should look for.
@@ -77,6 +80,9 @@ type Sampler struct {
 	Sessions func(ctx context.Context) []SessionRef
 	// OnSample runs after each pass, on the sampler's goroutine.
 	OnSample func(Snapshot)
+	// OwnCgroup returns serve's cgroup directory; nil reads /proc/self.
+	OwnCgroup func() string
+
 	// procPressure is /proc/pressure; tests point it elsewhere.
 	procPressure string
 
@@ -160,6 +166,15 @@ func (s *Sampler) Sample(ctx context.Context, now time.Time) Snapshot {
 	}
 	if u, ok := read(s.sd.SliceDir()); ok {
 		snap.SessionsSlice = &u
+	}
+	own := Of(os.Getpid())
+	if s.OwnCgroup != nil {
+		own = s.OwnCgroup()
+	}
+	if own != "" {
+		if u, ok := read(own); ok {
+			snap.ServeUnit = &u
+		}
 	}
 	if s.Sessions != nil {
 		for _, ref := range s.Sessions(ctx) {

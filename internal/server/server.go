@@ -212,6 +212,15 @@ type Server struct {
 	aws    *awsState
 	// holderHeld overrides heldByHolder, so tests can fake a holder.
 	holderHeld func(pid int) bool
+	// cgroupOf overrides cgroup.Of, and adoptProcs the Systemd.Adopt call,
+	// so tests can fake a host's cgroups.
+	cgroupOf   func(pid int) string
+	adoptProcs func(ctx context.Context, key string, l cgroup.Limits, pids func() []int) (int, error)
+	// adoptOutside gates the one log line of a serve outside the user
+	// manager; adoptErrs holds the last failure logged per session.
+	adoptOutside sync.Once
+	adoptMu      sync.Mutex
+	adoptErrs    map[string]string
 
 	// agentUpdates reports and applies agent CLI updates; nil until
 	// SetAgentUpdates. agentHost names this host in its replies.
