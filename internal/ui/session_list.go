@@ -505,7 +505,7 @@ func (m *Model) handleRenameSessionUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.renamingSessionID = ""
 	m.applyRemoteFilter()
 	m.state = viewStateMain
-	return m, nil
+	return m, m.syncIdentityToServe(sess.RemoteHost, []identityChange{{method: "session.rename", id: sess.ID, value: name}})
 }
 
 func (m *Model) sessionForRename() (domain.Session, bool) {

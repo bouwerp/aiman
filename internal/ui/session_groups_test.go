@@ -103,7 +103,7 @@ func TestAssignGroupOnCreatingPlaceholderDoesNotPersist(t *testing.T) {
 	m.sessionCfg = domain.SessionConfig{Branch: "feature/pb-1", Repo: domain.Repo{Name: "org/repo"}}
 	_ = m.startBackgroundCreate()
 	id := m.allSessions[0].ID
-	if err := m.setSessionGroup(id, "spike"); err != nil {
+	if _, err := m.setSessionGroup(id, "spike"); err != nil {
 		t.Fatal(err)
 	}
 	if m.allSessions[0].Group != "spike" {
@@ -121,13 +121,13 @@ func TestAssignSessionToExistingAndUngrouped(t *testing.T) {
 		{ID: "b", Name: "q1", Group: "quick", RemoteHost: "10.0.1.5"},
 	}
 	m := NewModel(cfg, nil, sessions, &mockSessionRepo{}, nil, nil, nil)
-	if err := m.setSessionGroup("b", "WTB-1"); err != nil {
+	if _, err := m.setSessionGroup("b", "WTB-1"); err != nil {
 		t.Fatal(err)
 	}
 	if m.allSessions[1].Group != "WTB-1" {
 		t.Fatalf("assign existing got %q", m.allSessions[1].Group)
 	}
-	if err := m.setSessionGroup("b", domain.GroupUngrouped); err != nil {
+	if _, err := m.setSessionGroup("b", domain.GroupUngrouped); err != nil {
 		t.Fatal(err)
 	}
 	if m.allSessions[1].Group != domain.GroupUngrouped {

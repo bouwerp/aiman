@@ -129,7 +129,8 @@ func (m *Model) handleRenameGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	old := domain.GroupLabel(m.renamingGroup)
 	host := m.renamingGroupHost
-	if err := m.renameGroupOnHost(host, old, name); err != nil {
+	sync, err := m.renameGroupOnHost(host, old, name)
+	if err != nil {
 		m.genericInput.Confirmed = false
 		m.genericInput.Error = err.Error()
 		return m, nil
@@ -146,7 +147,7 @@ func (m *Model) handleRenameGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.renamingGroupHost = ""
 	m.applyRemoteFilter()
 	m.state = viewStateMain
-	return m, nil
+	return m, sync
 }
 
 func (m *Model) handleAssignGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -179,12 +180,13 @@ func (m *Model) handleAssignGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewStateNewGroup
 			return m, m.genericInput.Init()
 		}
-		if err := m.setSessionGroup(m.assigningSessionID, ch.group); err != nil {
+		sync, err := m.setSessionGroup(m.assigningSessionID, ch.group)
+		if err != nil {
 			m.log("assign group: %v", err)
 		}
 		m.applyRemoteFilter()
 		m.state = viewStateMain
-		return m, nil
+		return m, sync
 	}
 	return m, nil
 }
@@ -205,17 +207,21 @@ func (m *Model) handleNewGroupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.genericInput.Error = "Start with a letter; use letters, digits, _ or - (max 48)."
 		return m, nil
 	}
-	if err := m.setSessionGroup(m.assigningSessionID, name); err != nil {
+	sync, err := m.setSessionGroup(m.assigningSessionID, name)
+	if err != nil {
 		m.genericInput.Confirmed = false
 		m.genericInput.Error = err.Error()
 		return m, nil
 	}
 	m.applyRemoteFilter()
 	m.state = viewStateMain
-	return m, nil
+	return m, sync
 }
 
-func (m *Model) renameGroupOnHost(host, oldLabel, newLabel string) error {
+// renameGroupOnHost moves every session in oldLabel on host to newLabel in
+// memory and the laptop DB, and returns the command that tells serve.
+func (m *Model) renameGroupOnHost(host, oldLabel, newLabel string) (tea.Cmd, error) {
+	var changes []identityChange
 	for i, s := range m.allSessions {
 		if s.RemoteHost != host || domain.GroupLabel(s.Group) != oldLabel {
 			continue
@@ -223,18 +229,21 @@ func (m *Model) renameGroupOnHost(host, oldLabel, newLabel string) error {
 		s.Group = newLabel
 		if m.db != nil && !domain.IsEphemeralSessionID(s.ID) {
 			if err := m.db.Save(context.Background(), &s); err != nil {
-				return fmt.Errorf("could not save: %w", err)
+				return m.syncIdentityToServe(host, changes), fmt.Errorf("could not save: %w", err)
 			}
 		}
 		m.allSessions[i].Group = newLabel
 		if cs, ok := m.creatingSessions[s.ID]; ok {
 			cs.placeholder.Group = newLabel
 		}
+		changes = append(changes, identityChange{method: "session.move", id: s.ID, value: newLabel})
 	}
-	return nil
+	return m.syncIdentityToServe(host, changes), nil
 }
 
-func (m *Model) setSessionGroup(id, group string) error {
+// setSessionGroup moves one session to group in memory and the laptop DB, and
+// returns the command that tells serve.
+func (m *Model) setSessionGroup(id, group string) (tea.Cmd, error) {
 	for i, s := range m.allSessions {
 		if s.ID != id {
 			continue
@@ -242,16 +251,16 @@ func (m *Model) setSessionGroup(id, group string) error {
 		s.Group = group
 		if m.db != nil && !domain.IsEphemeralSessionID(id) {
 			if err := m.db.Save(context.Background(), &s); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		m.allSessions[i].Group = group
 		if cs, ok := m.creatingSessions[id]; ok {
 			cs.placeholder.Group = group
 		}
-		return nil
+		return m.syncIdentityToServe(s.RemoteHost, []identityChange{{method: "session.move", id: id, value: group}}), nil
 	}
-	return fmt.Errorf("session not found")
+	return nil, fmt.Errorf("session not found")
 }
 
 func (m *Model) renderAssignGroupView() string {

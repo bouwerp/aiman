@@ -290,7 +290,7 @@ func TestBackgroundCreate_AssignGroupDuringCreateKeepsOneSession(t *testing.T) {
 	_ = model.startBackgroundCreate()
 	id := model.allSessions[0].ID
 
-	if err := model.setSessionGroup(id, "spike"); err != nil {
+	if _, err := model.setSessionGroup(id, "spike"); err != nil {
 		t.Fatal(err)
 	}
 
