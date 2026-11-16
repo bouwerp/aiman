@@ -1531,6 +1531,7 @@ func (s *Server) dropSession(ctx context.Context, sess domain.Session, reason st
 		_ = s.pty.Forget(sess.ID)
 	}
 	s.forgetResources(sess.ID)
+	s.resourceOptions().forgetLegacyScratch(sess.AgentSessionID)
 	s.steer.Forget(sess.ID)
 	s.forgetCILocal(sess.ID)
 	s.uncertainPanes.Delete(sess.ID)

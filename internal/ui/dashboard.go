@@ -417,10 +417,19 @@ type Model struct {
 	// session host. todoPendingRev is a todo_changed rev skipped because a
 	// get for that session was already in flight. promptSent is when a steer
 	// note was sent, compared with Steer.LastDeliveredAt.
-	todoClient      todoClient
-	todos           map[string]todoSnapshot
-	todoSummaries   map[string]todoSummary
-	todoInFlight    map[string]bool
+	todoClient    todoClient
+	todos         map[string]todoSnapshot
+	todoSummaries map[string]todoSummary
+	todoInFlight  map[string]bool
+	// hostBudget caps this TUI's calls per remote (usecase.HostBudget).
+	hostBudget *usecase.HostBudget
+	// summaryInFlight guards todo.summary per session, or per host for a
+	// whole-host sweep ("host:<host>").
+	summaryInFlight map[string]bool
+	// pendingFetch holds event fetches that found no slot.
+	pendingFetch map[pendingKey]bool
+	// gitInFlight guards git status per session (previewKey).
+	gitInFlight     map[string]bool
 	todoPendingRev  map[string]int64
 	todoUnsupported map[string]bool
 	promptSent      map[string]time.Time
@@ -965,6 +974,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		syncHealth:          make(map[string]syncHealth),
 		paneCache:           make(map[string]usecase.PaneCache),
 		todoClient:          newSSHTodoClient(),
+		hostBudget:          usecase.NewHostBudget(time.Now),
 		todos:               make(map[string]todoSnapshot),
 		metaExtras:          make(map[string]detailMetaExtras),
 		usageFetchedAt:      make(map[string]time.Time),
@@ -1236,37 +1246,68 @@ func tickGit() tea.Cmd {
 	})
 }
 
-func fetchGitStatus(cfg *config.Config, s domain.Session) tea.Cmd {
-	return func() tea.Msg {
-		if s.WorktreePath == "" {
-			return gitStatusMsg{session: previewKey(s), err: fmt.Errorf("no worktree path")}
-		}
+// gitStatusFetch is the remote part of a git status fetch. Tests replace it.
+var gitStatusFetch = func(ctx context.Context, cfg *config.Config, s domain.Session) (domain.GitStatus, error) {
+	remote, ok := resolveRemote(cfg, s)
+	if !ok {
+		return domain.GitStatus{}, fmt.Errorf("no remote found")
+	}
+	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	if err := mgr.Connect(ctx); err != nil {
+		return domain.GitStatus{}, err
+	}
 
-		remote, ok := resolveRemote(cfg, s)
+	gitMgr := git.NewManager(&cfg.Git)
+	status, err := gitMgr.GetGitStatus(ctx, mgr, s.WorktreePath)
+	if err == nil && s.BaseBranch != "" {
+		if n, nerr := gitMgr.CommitsAheadOfBase(ctx, mgr, s.WorktreePath, s.BaseBranch); nerr == nil {
+			status.AheadOfBase = n
+		}
+	}
+	return status, err
+}
+
+// fetchGitStatus reads the session's git status. A selection (foreground)
+// waits for a slot; a tick (background) is skipped when none is free. At most
+// one fetch per session runs; it returns nil when one does.
+func (m *Model) fetchGitStatus(s domain.Session, class fetchClass) tea.Cmd {
+	key := previewKey(s)
+	if m.gitInFlight[key] {
+		return nil
+	}
+	if s.WorktreePath == "" {
+		return func() tea.Msg { return gitStatusMsg{session: key, err: fmt.Errorf("no worktree path")} }
+	}
+	remote, ok := resolveRemote(m.cfg, s)
+	if !ok {
+		return func() tea.Msg { return gitStatusMsg{session: key, err: fmt.Errorf("no remote found")} }
+	}
+	release := noRelease
+	if class == fetchBackground {
+		rel, ok := m.budgetTry(remote.Host)
 		if !ok {
-			return gitStatusMsg{session: previewKey(s), err: fmt.Errorf("no remote found")}
+			return nil
 		}
-
+		release = rel
+	}
+	if m.gitInFlight == nil {
+		m.gitInFlight = map[string]bool{}
+	}
+	m.gitInFlight[key] = true
+	cfg, budget := m.cfg, m.hostBudget
+	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-
-		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
-		if err := mgr.Connect(ctx); err != nil {
-			return gitStatusMsg{session: previewKey(s), err: err}
-		}
-
-		gitMgr := git.NewManager(&cfg.Git)
-		status, err := gitMgr.GetGitStatus(ctx, mgr, s.WorktreePath)
-		if err == nil && s.BaseBranch != "" {
-			if n, nerr := gitMgr.CommitsAheadOfBase(ctx, mgr, s.WorktreePath, s.BaseBranch); nerr == nil {
-				status.AheadOfBase = n
+		if class == fetchForeground {
+			rel, err := budgetAcquire(ctx, budget, remote.Host)
+			if err != nil {
+				return gitStatusMsg{session: key, err: err}
 			}
+			release = rel
 		}
-		return gitStatusMsg{
-			session: previewKey(s),
-			status:  status,
-			err:     err,
-		}
+		status, err := gitStatusFetch(ctx, cfg, s)
+		release(callTimedOut(err))
+		return gitStatusMsg{session: key, status: status, err: err}
 	}
 }
 
@@ -2319,7 +2360,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 		m.activeSession = previewKey(msg.session)
 		m.paneOutput = "Loading..."
 		m.setPreviewContent()
-		cmds = append(cmds, m.queuePreview(msg.session), fetchGitStatus(m.cfg, msg.session))
+		cmds = append(cmds, m.queuePreview(msg.session), m.fetchGitStatus(msg.session, fetchForeground))
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -2938,8 +2979,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// filled in after the user leaves that screen.
 		return m.applyTrackedSessionMsg(msg)
 	case todoSweepMsg:
-		m.applyTodoSweep(msg)
-		return m, nil
+		return m, m.applyTodoSweep(msg)
 	case previewFitTickMsg:
 		return m, m.applyPreviewFitTick(msg)
 	case previewFitDoneMsg:
@@ -4271,10 +4311,12 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if it, ok := m.selectedSessionItem(); ok {
 			s := it.session
 			if !m.skipSessionPolling(s.ID) {
-				cmds = append(cmds, fetchGitStatus(m.cfg, s))
+				cmds = append(cmds, m.fetchGitStatus(s, fetchBackground))
 			}
 		}
 	case gitStatusMsg:
+		delete(m.gitInFlight, msg.session)
+		cmds = append(cmds, m.drainPending())
 		if msg.session == m.activeSession {
 			if msg.err == nil {
 				m.gitStatus = msg.status
@@ -4392,7 +4434,7 @@ func (m *Model) applyPaneTick(msg paneTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 			if !m.skipSessionPolling(s.ID) {
 				usageCmd = m.maybeFetchUsage(s, false)
 			}
-			cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), m.fetchTodosCmd(s), m.fetchCIStatusCmd(s), usageCmd)
+			cmds = append(cmds, m.queuePreview(s), m.fetchGitStatus(s, fetchForeground), m.fetchTodosCmd(s), m.fetchCIStatusCmd(s), usageCmd)
 		}
 	} else if m.currentTab == tabSessions {
 		if it, ok := m.selectedSessionItem(); ok {
@@ -4404,7 +4446,7 @@ func (m *Model) applyPaneTick(msg paneTickMsg, cmds []tea.Cmd) (tea.Model, tea.C
 			// (terminal going away).
 			if !m.skipSessionPolling(s.ID) {
 				// Git/PR refresh is on a 30s ticker (gitTickMsg) and on session change, not every pane poll.
-				cmds = append(cmds, m.queuePreview(s))
+				cmds = append(cmds, m.queuePreviewTick(s))
 				// Open or close activity streams as the PTY session set changes.
 				if cmd := m.ensureSessionStreams(); cmd != nil {
 					cmds = append(cmds, cmd)
@@ -4694,7 +4736,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			// the preview panel shows that progress instead.
 			if !m.skipSessionPolling(s.ID) {
 				usageCmd := m.maybeFetchUsage(s, false)
-				cmds = append(cmds, m.queuePreview(s), fetchGitStatus(m.cfg, s), usageCmd)
+				cmds = append(cmds, m.queuePreview(s), m.fetchGitStatus(s, fetchForeground), usageCmd)
 			}
 			cmds = append(cmds, m.fetchTodosCmd(s), m.fetchCIStatusCmd(s))
 		}
@@ -4714,7 +4756,7 @@ func (m *Model) forwardToFocused(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cm
 			}
 			m.paneOutput = "Loading " + string(kind) + " logs..."
 			m.setPreviewContent()
-			cmds = append(cmds, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind))
+			cmds = append(cmds, m.probeKey(d.RemoteHost, kind))
 		}
 	}
 
@@ -4907,7 +4949,7 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 				}
 				m.paneOutput = "Loading " + string(kind) + " logs..."
 				m.setPreviewContent()
-				return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind), true
+				return m, m.probeKey(d.RemoteHost, kind), true
 			}
 		} else {
 			m.currentTab = tabSessions
@@ -5348,7 +5390,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 				}
 				m.paneOutput = "Refreshing..."
 				m.setPreviewContent()
-				return m, probeRemoteServiceCmd(m.cfg, d.RemoteHost, kind), true
+				return m, m.probeKey(d.RemoteHost, kind), true
 			}
 			return m, nil, true
 		}
@@ -7240,11 +7282,9 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 	// serve/trigger/gateway daemons checked (and, via maybeAutoUpdateServe,
 	// auto-updated if behind).
 	for host := range msg.reachableHosts {
-		probes = append(probes,
-			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindServe),
-			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindTrigger),
-			probeRemoteServiceCmd(m.cfg, host, remotesvc.KindGateway),
-		)
+		for _, kind := range []remotesvc.Kind{remotesvc.KindServe, remotesvc.KindTrigger, remotesvc.KindGateway} {
+			probes = append(probes, m.probeTick(host, kind))
+		}
 	}
 
 	m.applyRemoteFilter()

@@ -43,10 +43,17 @@ type rpcAnswer struct {
 	} `json:"error"`
 }
 
-// ServeRPC calls one agent API method on the remote in a single SSH round trip.
-// The params travel as base64 inside single quotes, so no shell ever parses
-// user text.
+// ServeRPC calls one agent API method on the remote. A remote with an RPC
+// stream (RPCStreamRemote) carries the call over its one long-lived
+// `aiman rpc --stream` process; any other remote, or one whose binary has no
+// --stream, gets one SSH exec per call.
 func ServeRPC(ctx context.Context, remote TerminalExecutor, method string, params any) (json.RawMessage, error) {
+	return defaultRPCStreams.Call(ctx, remote, method, params)
+}
+
+// execServeRPC calls one method in a single SSH round trip. The params travel
+// as base64 inside single quotes, so no shell ever parses user text.
+func execServeRPC(ctx context.Context, remote TerminalExecutor, method string, params any) (json.RawMessage, error) {
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("encode %s params: %w", method, err)
@@ -57,16 +64,7 @@ func ServeRPC(ctx context.Context, remote TerminalExecutor, method string, param
 
 	// A non-zero `aiman rpc` exit still prints the {"error":…} answer line.
 	if ans, ok := lastRPCAnswer(out); ok {
-		if ans.Error == nil {
-			return ans.Result, nil
-		}
-		switch {
-		case ans.Error.Code == "server_not_running":
-			return nil, ErrServeNotRunning
-		case rpcLooksUnsupported(ans.Error.Message):
-			return nil, ErrRPCUnsupported
-		}
-		return nil, &RPCError{Code: ans.Error.Code, Message: ans.Error.Message}
+		return rpcAnswerResult(ans)
 	}
 
 	detail := out
@@ -80,6 +78,20 @@ func ServeRPC(ctx context.Context, remote TerminalExecutor, method string, param
 		return nil, fmt.Errorf("rpc %s: %w", method, execErr)
 	}
 	return nil, fmt.Errorf("rpc %s: no answer from remote: %s", method, strings.TrimSpace(out))
+}
+
+// rpcAnswerResult turns serve's answer into a result or the matching error.
+func rpcAnswerResult(ans rpcAnswer) (json.RawMessage, error) {
+	if ans.Error == nil {
+		return ans.Result, nil
+	}
+	switch {
+	case ans.Error.Code == "server_not_running":
+		return nil, ErrServeNotRunning
+	case rpcLooksUnsupported(ans.Error.Message):
+		return nil, ErrRPCUnsupported
+	}
+	return nil, &RPCError{Code: ans.Error.Code, Message: ans.Error.Message}
 }
 
 func rpcLooksUnsupported(s string) bool {

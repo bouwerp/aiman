@@ -218,7 +218,7 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		if sess, found := m.sessionByID(msg.event.ID); found {
 			state.lastRefresh = time.Now()
 			m.eventSeen[msg.event.ID] = state
-			return follow(m.queuePreview(sess))
+			return follow(m.queuePreviewTick(sess))
 		}
 	}
 	m.eventSeen[msg.event.ID] = state
@@ -226,11 +226,11 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 }
 
 // notifyToast raises a toast for a notification that needs the user, or a
-// host_update with its text, and returns nil for any other kind, so ended
+// host_update or host_pressure with its text, and returns nil for any other kind, so ended
 // stays quiet in the TUI.
 func (m *Model) notifyToast(ev server.SessionEvent) tea.Cmd {
 	kind := domain.NotifyKind(ev.Kind)
-	if kind == domain.NotifyHostUpdate {
+	if kind == domain.NotifyHostUpdate || kind == domain.NotifyHostPressure {
 		// No session and nothing to answer, but it is the laptop's notice that
 		// a host moved to a new release.
 		if ev.Text == "" {

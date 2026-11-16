@@ -12,11 +12,15 @@ import (
 
 // handleHostStats answers host.stats. It only reads.
 func (s *Server) handleHostStats(ctx context.Context, req Request) Response {
+	procs := s.censusNow()
 	return Response{ID: req.ID, Result: struct {
 		Type string `json:"type"`
 		hoststats.Report
-		RPC RPCStats `json:"rpc"`
-	}{"host_stats", s.hostStats.Report(ctx, s.sessionRoots(ctx)), s.RPCStats()}}
+		RPC     RPCStats             `json:"rpc"`
+		Scratch ScratchReport        `json:"scratch"`
+		Gate    *PressureGate        `json:"gate"`
+		Procs   hoststats.AimanProcs `json:"aiman_procs"`
+	}{"host_stats", s.hostStats.Report(ctx, s.sessionRoots(ctx)), s.RPCStats(), s.scratchReport(), s.gateReport(), procs}}
 }
 
 // sessionRoots maps each live session to the PID its process tree hangs off.

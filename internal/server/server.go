@@ -72,6 +72,9 @@ func isNilPTY(p PTYRuntime) bool {
 }
 
 type Server struct {
+	procsLogMu sync.Mutex
+	procsLogAt time.Time // last "procs:" line, at most one a minute
+
 	ln       *Listener
 	repo     domain.SessionRepository
 	sessList sessionListCache
@@ -94,7 +97,12 @@ type Server struct {
 	resources atomic.Pointer[ResourceOptions]
 	// sampler holds the resource sampler once RunResources started it.
 	sampler atomic.Pointer[cgroup.Sampler]
-	version string
+	// scratch is the last scratch janitor pass.
+	scratch atomic.Pointer[scratchPass]
+	// press is the host pressure gate, made on first use (pressure()).
+	pressOnce sync.Once
+	press     *pressureGate
+	version   string
 
 	// hub carries events published by handlers to session.events streams.
 	hub *eventHub
@@ -210,6 +218,15 @@ type Server struct {
 	aws    *awsState
 	// holderHeld overrides heldByHolder, so tests can fake a holder.
 	holderHeld func(pid int) bool
+	// cgroupOf overrides cgroup.Of, and adoptProcs the Systemd.Adopt call,
+	// so tests can fake a host's cgroups.
+	cgroupOf   func(pid int) string
+	adoptProcs func(ctx context.Context, key string, l cgroup.Limits, pids func() []int) (int, error)
+	// adoptOutside gates the one log line of a serve outside the user
+	// manager; adoptErrs holds the last failure logged per session.
+	adoptOutside sync.Once
+	adoptMu      sync.Mutex
+	adoptErrs    map[string]string
 
 	// agentUpdates reports and applies agent CLI updates; nil until
 	// SetAgentUpdates. agentHost names this host in its replies.
@@ -405,7 +422,15 @@ func (s *Server) decodeAdmit(ctx context.Context, line []byte) (Request, context
 		return req, ctx, nil, &Response{ID: "", Error: &Error{Code: CodeInvalidParams, Message: err.Error()}}
 	}
 	ctx, done, refused := s.admit(ctx, req)
-	return req, ctx, done, refused
+	if refused != nil {
+		return req, ctx, done, refused
+	}
+	// The pressure gate answers after admission, so its refusal is counted.
+	if gated := s.pressureRefusal(ctx, req); gated != nil {
+		done()
+		return req, ctx, nil, gated
+	}
+	return req, ctx, done, nil
 }
 
 func (s *Server) dispatch(ctx context.Context, line []byte) Response {

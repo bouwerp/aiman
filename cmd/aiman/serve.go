@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/bouwerp/aiman/internal/cgroup"
 	"github.com/bouwerp/aiman/internal/cigate"
 	"io"
 	"log"
@@ -179,11 +180,22 @@ func runServe() error {
 	srv.EnableTodos(todos, db)
 	srv.SetPeerNotes(cfg.Sessions.PeerNotesOn())
 	srv.SetHostLoad(cfg.Host.Load)
+	srv.SetPressureGate(cfg.Host.Load.PressureGate)
+	go srv.RunPressure(ctx)
 	srv.SetAgentNice(cfg.Host.Load.AgentNiceOrDefault())
-	wireResources(ctx, srv, ptyMgr, cfg.Resources, dir)
+	sd := wireResources(ctx, srv, ptyMgr, cfg.Resources, dir)
 	go srv.RunResources(ctx)
+	runLaunch := runScopeLauncher(sd, cfg.Resources)
+	ciRunner := &cigate.Runner{
+		Dir:         filepath.Join(dir, "ci-local"),
+		MaxParallel: cfg.Host.Load.CIParallel,
+		MayStart:    srv.PressureOpen,
+		Launch:      runLaunch,
+		TmpDir:      filepath.Join(dir, "tmp"),
+	}
+	srv.OnPressureOpen(ciRunner.Kick)
 	srv.SetCILocal(server.CILocalDeps{
-		Runner:   &cigate.Runner{Dir: filepath.Join(dir, "ci-local"), MaxParallel: 2},
+		Runner:   ciRunner,
 		Repos:    cfg.Repos,
 		ChildPRs: cfg.CoordinatorChildPRs(),
 	})
@@ -286,6 +298,8 @@ func runServe() error {
 	})
 	// Only a passing review with evidence ticks Done-when met.
 	verifyDeps.Done = srv.DoneItems()
+	verifyDeps.Launch = runLaunch
+	verifyDeps.TmpDir = filepath.Join(dir, "tmp")
 	verifier := verify.NewManager(
 		verify.Config{Agents: cfg.ReviewerCandidates(), BeforePR: cfg.Verify.BeforePR, Timeout: cfg.Verify.Timeout, TestCommand: cfg.Verify.TestCommand, Reproduce: cfg.Verify.Reproduce},
 		verifyDeps,
@@ -497,4 +511,16 @@ autonomous sessions) and steers failed checks and review comments.
 verify.start runs a hidden reviewer from a different agent on a snapshot
 of a session's tree; REQUIRED findings become that session's to-dos.
 `)
+}
+
+// runScopeLauncher puts each CI run and verify test command in a transient
+// scope of its own under the sessions slice with the resources.session
+// limits. Without session scopes (no user systemd, or resources off) it is
+// nil and the commands run plainly.
+func runScopeLauncher(sd *cgroup.Systemd, cfg config.ResourcesConfig) cigate.Launcher {
+	if sd == nil {
+		return nil
+	}
+	limits, _ := cfg.SessionLimits()
+	return cigate.SystemdLauncher(cgroup.SessionsSlice, limits.Properties())
 }

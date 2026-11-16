@@ -25,7 +25,7 @@ func (m *Model) enterAgentAPI() tea.Cmd {
 	var cmds []tea.Cmd
 	for _, r := range remotes {
 		m.markAgentAPIProbing(r.Host)
-		cmds = append(cmds, probeRemoteServiceCmd(m.cfg, r.Host, remotesvc.KindServe), probeRemoteServiceCmd(m.cfg, r.Host, remotesvc.KindGateway))
+		cmds = append(cmds, m.probeKey(r.Host, remotesvc.KindServe), m.probeKey(r.Host, remotesvc.KindGateway))
 	}
 	return tea.Batch(cmds...)
 }
@@ -107,7 +107,7 @@ func (m *Model) handleAgentAPIUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "r":
 		if d, ok := m.selectedAgentAPIDaemon(); ok {
 			m.markAgentAPIProbing(d.RemoteHost)
-			return m, tea.Batch(probeRemoteServiceCmd(m.cfg, d.RemoteHost, remotesvc.KindServe), probeRemoteServiceCmd(m.cfg, d.RemoteHost, remotesvc.KindGateway))
+			return m, tea.Batch(m.probeKey(d.RemoteHost, remotesvc.KindServe), m.probeKey(d.RemoteHost, remotesvc.KindGateway))
 		}
 		return m, nil
 	}

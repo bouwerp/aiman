@@ -36,6 +36,17 @@ type previewRefreshMsg struct {
 // only honest when there is no frame yet: a skipped poll, or one still in
 // flight for another session, would otherwise leave it there for good.
 func (m *Model) queuePreview(s domain.Session) tea.Cmd {
+	return m.queuePreviewClass(s, fetchForeground)
+}
+
+// queuePreviewTick is queuePreview for a timer or stream event: with no
+// background slot it starts nothing, leaves previewBusy unset and keeps the
+// last frame, and the next tick asks again.
+func (m *Model) queuePreviewTick(s domain.Session) tea.Cmd {
+	return m.queuePreviewClass(s, fetchBackground)
+}
+
+func (m *Model) queuePreviewClass(s domain.Session, class fetchClass) tea.Cmd {
 	m.showCachedPreview(s)
 	if m.previewBusy {
 		return nil
@@ -44,8 +55,19 @@ func (m *Model) queuePreview(s domain.Session) tea.Cmd {
 		m.noteCachedActivity(s)
 		return nil
 	}
+	release := noRelease
+	if class == fetchBackground {
+		remote, ok := resolveRemote(m.cfg, s)
+		if ok {
+			rel, got := m.budgetTry(remote.Host)
+			if !got {
+				return nil
+			}
+			release = rel
+		}
+	}
 	m.previewBusy = true
-	return m.refreshPreview(s)
+	return m.refreshPreview(s, class, release)
 }
 
 // showCachedPreview puts the last capture back when the panel is still the
@@ -104,12 +126,12 @@ func (m *Model) noteCachedActivity(s domain.Session) {
 	_, _ = m.applyInputHint(inputHintMsg{session: s.TerminalName, id: s.ID, needsInput: needs, activity: activity}, nil)
 }
 
-func (m *Model) refreshPreview(session domain.Session) tea.Cmd {
+func (m *Model) refreshPreview(session domain.Session, class fetchClass, release func(bool)) tea.Cmd {
 	cache := usecase.PaneCache{}
 	if m.paneCache != nil {
 		cache = m.paneCache[session.ID]
 	}
-	cfg := m.cfg
+	cfg, budget := m.cfg, m.hostBudget
 	return func() tea.Msg {
 		msg := previewRefreshMsg{session: session.TerminalName, id: session.ID}
 		remote, ok := resolveRemote(cfg, session)
@@ -120,7 +142,16 @@ func (m *Model) refreshPreview(session domain.Session) tea.Cmd {
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
+		if class == fetchForeground {
+			rel, err := budgetAcquire(ctx, budget, remote.Host)
+			if err != nil {
+				msg.err = err
+				return msg
+			}
+			release = rel
+		}
 		upd, err := usecase.RefreshPreview(ctx, mgr, session, cache)
+		release(callTimedOut(err))
 		if err != nil {
 			msg.err = err
 			return msg

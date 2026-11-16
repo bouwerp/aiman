@@ -25,6 +25,9 @@ type ResourceOptions struct {
 	// TmpRoot is the directory holding each session's TMPDIR; empty leaves
 	// TMPDIR alone.
 	TmpRoot string
+	// LegacyTmpRoot is /tmp/claude-<uid>, where Claude Code kept scratch
+	// before sessions had a TMPDIR; empty skips it.
+	LegacyTmpRoot string
 }
 
 // SetResources applies the resources block. Terminals created before the

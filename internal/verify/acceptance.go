@@ -77,7 +77,7 @@ func (m *Manager) acceptanceFindings(ctx context.Context, r Review, runCommands 
 		return out
 	}
 	for _, c := range r.AcceptanceCommands {
-		ev, err := runAt(ctx, r, r.Commit, "accept", c, m.d.Now)
+		ev, err := runAt(ctx, r, r.Commit, "accept", c, m.d)
 		switch {
 		case err != nil:
 			log.Printf("verify: review %s: acceptance %q: %v", r.ID, c, err)

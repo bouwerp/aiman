@@ -168,6 +168,9 @@ func ciLocal(f ciFlags, call ciCaller, out io.Writer, sleep func(time.Duration))
 		return nil
 	}
 	sha := res.Record.SHA
+	// A queued or running record keeps the CLI polling; a finished or lost
+	// one ends it. The queue position is printed each time it changes.
+	position := 0
 	for !res.Done {
 		sleep(ciPollEvery)
 		st, err := fetchCIStatus(f.session, call)
@@ -177,8 +180,14 @@ func ciLocal(f ciFlags, call ciCaller, out io.Writer, sleep func(time.Duration))
 		if st.SHA != sha {
 			return fmt.Errorf("HEAD moved from %s to %s while the gate ran", short(sha), short(st.SHA))
 		}
-		if st.Record != nil && st.Record.Status != cigate.StatusRunning {
+		if st.Record == nil || st.Record.Status.Finished() {
 			return printCIStatus(out, st)
+		}
+		if st.QueuePosition != position {
+			position = st.QueuePosition
+			if position > 0 {
+				_, _ = fmt.Fprintf(out, "queued (position %d)\n", position)
+			}
 		}
 	}
 	st, err := fetchCIStatus(f.session, call)
@@ -249,7 +258,7 @@ func printCIStatus(out io.Writer, st server.CIStatus) error {
 	if st.Tail != "" {
 		_, _ = fmt.Fprintf(out, "--- last lines ---\n%s\n", st.Tail)
 	}
-	if r.Status == cigate.StatusRunning {
+	if !r.Status.Finished() {
 		return nil
 	}
 	return errCIFailed

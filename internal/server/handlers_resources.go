@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/bouwerp/aiman/internal/cgroup"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -27,6 +29,29 @@ type ResourcesReport struct {
 	// Missing names the session asked for when it has no scope: it runs
 	// without limits until its terminal is restarted.
 	Missing string `json:"missing,omitempty"`
+	// Unscoped lists running sessions whose holder is outside every
+	// session scope: they run without limits.
+	Unscoped []UnscopedSession `json:"unscoped"`
+	// Gate is the host pressure gate's state; absent on a serve that runs
+	// none.
+	Gate *PressureGate `json:"gate,omitempty"`
+}
+
+// UnscopedSession names one running session with no scope.
+type UnscopedSession struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// PressureGate is the host pressure gate as host.stats and resources.get
+// report it. While Closed, serve starts no new session, review run or CI
+// run. SliceOverHigh is reported and never closes the gate.
+type PressureGate struct {
+	Closed          bool      `json:"closed"`
+	Since           time.Time `json:"since"`
+	MemorySomeAvg10 float64   `json:"memory_some_avg10"`
+	MemoryFullAvg10 float64   `json:"memory_full_avg10"`
+	SliceOverHigh   bool      `json:"slice_over_high"`
 }
 
 // RunResources samples every session scope on a timer, keeps the snapshot
@@ -39,6 +64,8 @@ func (s *Server) RunResources(ctx context.Context) {
 	}
 	sampler := cgroup.NewSampler(sd)
 	sampler.Sessions = s.resourceSessions
+	sampler.OwnCgroup = func() string { return s.cgroupDir(os.Getpid()) }
+	go s.runAdoptSweep(ctx)
 	alerter := cgroup.NewAlerter()
 	sampler.OnSample = func(snap cgroup.Snapshot) {
 		for _, a := range alerter.Evaluate(snap, snap.At) {
@@ -139,6 +166,8 @@ func (s *Server) handleResourcesGet(ctx context.Context, req Request) Response {
 		Limits:          opts.Limits,
 		SliceMemoryHigh: opts.SliceMemoryHigh,
 		Tmpdir:          opts.TmpRoot != "",
+		Unscoped:        s.unscopedHolders(ctx),
+		Gate:            s.gateReport(),
 	}
 	if target := sessionTarget(req.Params); target != "" {
 		id := target
@@ -159,6 +188,13 @@ func (s *Server) handleResourcesGet(ctx context.Context, req Request) Response {
 			report.Missing = id
 		}
 		report.Limits = opts.sessionLimits(id)
+		only := []UnscopedSession{}
+		for _, u := range report.Unscoped {
+			if u.ID == id {
+				only = append(only, u)
+			}
+		}
+		report.Unscoped = only
 	}
 	return Response{ID: req.ID, Result: map[string]any{"type": "resources", "resources": report}}
 }

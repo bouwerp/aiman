@@ -278,6 +278,61 @@ type HostLoadConfig struct {
 	// agent and its builds yield to serve and the pty holders. Nil is
 	// DefaultAgentNice; 0 runs agents at the holder's priority.
 	AgentNice *int `yaml:"agent_nice,omitempty"`
+	// PressureGate is host.load.pressure_gate: when serve stops starting new
+	// sessions, helpers, review runs and CI runs on memory pressure.
+	PressureGate PressureGateConfig `yaml:"pressure_gate,omitempty"`
+	// CIParallel caps local CI runs at once on the host; more wait in a FIFO
+	// queue. 0 is 2.
+	CIParallel int `yaml:"ci_parallel,omitempty"`
+}
+
+// Pressure gate defaults: close at the user slice's memory full avg10 of 20,
+// open after 30 seconds in a row below 10.
+const (
+	DefaultPressureCloseFull  = 20.0
+	DefaultPressureReopenFull = 10.0
+	DefaultPressureHold       = 30 * time.Second
+)
+
+// PressureGateConfig is host.load.pressure_gate. A zero field keeps its
+// default; Enabled nil is on.
+type PressureGateConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// MemoryFullAvg10 closes the gate at or above it; 0 is 20.
+	MemoryFullAvg10 float64 `yaml:"memory_full_avg10,omitempty"`
+	// ReopenFullAvg10 is the value full avg10 stays below for Hold before
+	// the gate opens; 0 is 10.
+	ReopenFullAvg10 float64 `yaml:"reopen_full_avg10,omitempty"`
+	// Hold is how long full avg10 stays below ReopenFullAvg10; 0 is 30s.
+	Hold time.Duration `yaml:"hold,omitempty"`
+}
+
+// On reports whether the gate enforces: unset is on.
+func (g PressureGateConfig) On() bool { return g.Enabled == nil || *g.Enabled }
+
+// CloseOrDefault is the close threshold.
+func (g PressureGateConfig) CloseOrDefault() float64 {
+	if g.MemoryFullAvg10 > 0 {
+		return g.MemoryFullAvg10
+	}
+	return DefaultPressureCloseFull
+}
+
+// ReopenOrDefault is the reopen threshold, never above the close threshold.
+func (g PressureGateConfig) ReopenOrDefault() float64 {
+	v := DefaultPressureReopenFull
+	if g.ReopenFullAvg10 > 0 {
+		v = g.ReopenFullAvg10
+	}
+	return min(v, g.CloseOrDefault())
+}
+
+// HoldOrDefault is the reopen hold.
+func (g PressureGateConfig) HoldOrDefault() time.Duration {
+	if g.Hold > 0 {
+		return g.Hold
+	}
+	return DefaultPressureHold
 }
 
 // AgentNiceOrDefault is the configured increment, DefaultAgentNice when

@@ -20,17 +20,20 @@ const (
 	// NotifyResources is a session held near its memory limit or throttled
 	// at it, or, with no session, the host's slice near its own limit.
 	NotifyResources NotifyKind = "resources"
+	// NotifyHostPressure is a host-level event with no session: the pressure
+	// gate closed, so new sessions, reviews and CI runs wait.
+	NotifyHostPressure NotifyKind = "host_pressure"
 )
 
 // AllNotifyKinds returns the supported notification kinds in order.
 func AllNotifyKinds() []NotifyKind {
-	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate, NotifyHostUpdate, NotifyResources}
+	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate, NotifyHostUpdate, NotifyResources, NotifyHostPressure}
 }
 
 // NeedsYou reports whether the user must act.
 func NeedsYou(k NotifyKind) bool {
 	switch k {
-	case NotifyWaitingInput, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyResources:
+	case NotifyWaitingInput, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyResources, NotifyHostPressure:
 		return true
 	default:
 		return false
@@ -56,6 +59,8 @@ func EventLabel(k NotifyKind) string {
 		return "host update"
 	case NotifyResources:
 		return "memory"
+	case NotifyHostPressure:
+		return "host pressure"
 	default:
 		return string(k)
 	}

@@ -194,6 +194,9 @@ func (a serverSessions) CreateChild(ctx context.Context, cfg domain.SessionConfi
 	if a.s.create == nil {
 		return domain.Session{}, errors.New("session create is not available")
 	}
+	if a.s.Pressure().Closed {
+		return domain.Session{}, ErrHostUnderPressure
+	}
 	sess, err := a.s.create.CreateSession(ctx, cfg)
 	if err != nil {
 		return domain.Session{}, err

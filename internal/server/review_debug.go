@@ -86,6 +86,7 @@ func (s *Server) handleReviewDebug(ctx context.Context, req Request) Response {
 func (s *Server) startDebugPTY(sess domain.Session, sb review.Sandbox, composePath, inner string) error {
 	cmd := "docker compose -f " + quoteArg(composePath) +
 		" run --rm --service-ports sandbox sh -c " + quoteArg(inner)
+	res := s.resourceOptions()
 	id := debugPTYID(sess.ID)
 	_ = s.pty.Kill(id)
 	_ = s.pty.Forget(id)
@@ -98,7 +99,8 @@ func (s *Server) startDebugPTY(sess domain.Session, sb review.Sandbox, composePa
 
 		AgentNice: int(s.agentNice.Load()),
 		ScopeKey:  sess.ID,
-		Limits:    s.resourceOptions().sessionLimits(sess.ID),
+		Limits:    res.sessionLimits(sess.ID),
+		Env:       res.tmpEnv(sess.ID, nil),
 	})
 	return err
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/bouwerp/aiman/internal/server"
 )
@@ -40,6 +41,10 @@ var rpcMethods = map[string]bool{
 	"ci.watch":            true,
 	"verify.start":        true,
 	"verify.status":       true,
+	"resources.get":       true,
+	"agents.status":       true,
+	"agents.update":       true,
+	"agents.move_prefix":  true,
 }
 
 // rpcParams validates the method and params. It passes the bytes through
@@ -57,9 +62,12 @@ func rpcParams(method string, raw []byte) ([]byte, error) {
 
 // runRPC implements `aiman rpc METHOD --params-stdin`. It prints the whole
 // server response as one compact JSON line and fails when the answer is an
-// error.
+// error. `aiman rpc --stream` carries many calls over one process instead.
 func runRPC(args []string, stdin io.Reader, getenv func(string) string) error {
 	_ = getenv
+	if len(args) == 1 && args[0] == "--stream" {
+		return runRPCStream(stdin, os.Stdout)
+	}
 	if len(args) != 2 || args[1] != "--params-stdin" {
 		writeCLIError(server.CodeInvalidParams, "usage: aiman rpc METHOD --params-stdin")
 		return errUsage
