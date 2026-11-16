@@ -1,5 +1,3 @@
-//go:build pileup_g
-
 package hoststats
 
 // Contract:

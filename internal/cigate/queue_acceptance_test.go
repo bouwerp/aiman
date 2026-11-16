@@ -1,5 +1,3 @@
-//go:build pileup_e
-
 package cigate_test
 
 // Contract (client-pileup-guard P3b, piece E):
@@ -293,7 +291,7 @@ func TestAcceptanceQueueRunsOneAtATimeWhenCIParallelIsOne(t *testing.T) {
 		done = append(done, g.wait(g.prepare(s)))
 	}
 	for i, s := range sessions {
-		eventually(t, s+" starts", func() bool { return len(g.started()) >= i+1 })
+		eventually(t, s+" starts", func() bool { return len(g.started()) > i })
 		settle()
 		if got := g.started(); len(got) != i+1 || got[i] != s {
 			t.Fatalf("started %v, want %s alone as run %d", got, s, i+1)

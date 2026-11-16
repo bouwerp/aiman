@@ -1,5 +1,3 @@
-//go:build pileup_e
-
 package server
 
 // Contract (client-pileup-guard P3b, piece E), beyond the cigate symbols in

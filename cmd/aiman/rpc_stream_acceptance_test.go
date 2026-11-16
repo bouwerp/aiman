@@ -1,5 +1,3 @@
-//go:build pileup_c
-
 package main
 
 // Contract (docs/specs/client-pileup-guard.md, Behaviour P1, remote side):
@@ -178,7 +176,7 @@ func TestAcceptanceRPCStreamAnswersByIDOutOfOrder(t *testing.T) {
 		if strings.Contains(string(req.Params), `"slow"`) {
 			<-release
 		}
-		return server.Response{Result: map[string]any{"params": json.RawMessage(req.Params)}}
+		return server.Response{Result: map[string]any{"params": req.Params}}
 	})
 	r := startStream(t)
 	_ = r.next(t) // hello

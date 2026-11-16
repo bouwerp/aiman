@@ -1,5 +1,3 @@
-//go:build pileup_a
-
 package ui
 
 // Contract (docs/specs/client-pileup-guard.md, Behaviour P2, TUI side; the

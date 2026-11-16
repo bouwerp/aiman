@@ -1,5 +1,3 @@
-//go:build pileup_f
-
 package server
 
 // Contract:

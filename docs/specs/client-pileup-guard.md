@@ -1,6 +1,6 @@
 # Client pile-up guard: close the gaps the load guard and session limits left open
 
-**Revision:** 5 (rev 1 checked against the code at v0.49.0, `b6c3f11`; consult rounds 1 and 2 triaged; open questions answered by the operator) · **Size:** project · **Status:** draft, not approved
+**Revision:** 6, as built (rev 1 checked against the code at v0.49.0, `b6c3f11`; consult rounds 1 and 2 triaged; open questions answered by the operator) · **Size:** project · **Status:** approved 2026-11-14, built
 **Task:** operator, 2026-11-13: "aiman recently introduced updates to mitigate these kinds of things - how can it improve?" after a second swamp of `regent0` with v0.49.0 installed.
 **Builds on:** `docs/specs/serve-load-guard.md` (v0.39.0) and `docs/superpowers/specs/2026-11-12-session-resource-limits.md` (#152, #154). Read both first; this spec does not repeat them.
 
@@ -333,6 +333,20 @@ What each acceptance file proves:
 `internal/server/handlers_host.go` and `cmd/aiman/host_cmd.go` are written by F, then D, then G, one group apart; each later brief says to start from the landed branch.
 
 The acceptance tests are written and committed on this branch after the design is approved and before the first child starts. Each file carries a build tag, `pileup_a` to `pileup_g` by piece, so a package keeps compiling for the other pieces until its own lands; a piece's acceptance command is `go test -tags pileup_<x> …`, and the coordinator removes the tags once every piece is in. The Contract comment at the top of each file names the new symbols the piece must provide. The allowlist test found that `agents.status`, `agents.update` and `agents.move_prefix` are also missing from `rpcMethods` (the Agents page cannot work from a laptop today); piece A adds them with `resources.get`.
+
+## Deviations from the approved design
+
+- **Acceptance tests carried a build tag per piece** (`pileup_a` to `pileup_g`) while the pieces were built, so each package kept compiling; the tags were removed once all seven landed.
+- **`resources.get` contract types came first.** `ResourcesReport.Unscoped`, `UnscopedSession`, `ResourcesReport.Gate` and `PressureGate` were committed on the branch before any piece, because the TUI header (A) reads what B and D fill.
+- **Allowlist (A):** `agents.status`, `agents.update` and `agents.move_prefix` were missing from `rpcMethods` beside `resources.get`; all four were added.
+- **Budget (A):** a foreground fetch waiting for a slot is not dropped when the selection moves; its 15 to 30 second context bounds the wait. Follow-up reads after an action (probes after a service operation, the status read after `agents.update`) take a foreground slot, not none.
+- **Auto-adopt (B):** the sweep goroutine starts inside `RunResources`, so it does not run on a host without session scopes; `scopeProcs` reads cgroups through the same injectable reader.
+- **Stream (C):** the rule that a new serve version clears a remembered "no stream" is called from `applyDaemonProbe` (`internal/ui/remote_services.go`) and clears only once a probe has seen two different versions. `ErrServeUnreachable` reaches the TUI as a plain error.
+- **Gate (D):** the check sits at request admission (`decodeAdmit`), not in each handler. `review.fix` and `review.assess` are therefore gated too, and `force` is honoured on all five gated methods. A session's `force` is `needs_operator` even while the gate is open.
+- **Gate CLI and toast (built with G):** `--force` on `aiman session create`, `aiman review run` and `aiman review coverage`; the TUI toasts a `host_pressure` event's text.
+- **CI queue (E):** run starts are serialised up to the first command's spawn, so with two free slots the second run's snapshot waits for the first run to start. Every command of a run uses the run's one unit name in sequence. The launcher wrapper lives in `cmd/aiman/serve.go`; `internal/verify/manager.go` and `acceptance.go` pass it through. The janitor protects `ci-…` and `verify-…` directories of runs in progress.
+- **Scratch (F):** symlink mtimes are ignored when judging a directory idle.
+- **Not pinned by an acceptance test, checked by review:** the `queued (position n)` line of `aiman ci local --wait`, the verify command launching in its own unit, the hourly janitor loop and its config key, `host.load.pressure_gate` and `host.load.ci_parallel` config, the `aiman_procs` log line over 32.
 
 ## What you should be able to explain after reading
 

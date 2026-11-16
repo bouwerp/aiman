@@ -1,5 +1,3 @@
-//go:build pileup_d
-
 package cgroup
 
 // Contract (docs/specs/client-pileup-guard.md, Behaviour P3, Contracts):

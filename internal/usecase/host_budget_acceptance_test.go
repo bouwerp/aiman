@@ -1,5 +1,3 @@
-//go:build pileup_a
-
 package usecase
 
 // Contract (docs/specs/client-pileup-guard.md, Behaviour P2):

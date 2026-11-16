@@ -1,5 +1,3 @@
-//go:build pileup_a
-
 package main
 
 // Contract (docs/specs/client-pileup-guard.md, Behaviour P1, allowlist):
