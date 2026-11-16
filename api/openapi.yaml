@@ -1696,13 +1696,27 @@ components:
         Read-only. Every size is in bytes and every CPU value is a percent.
         Linux reads /proc; elsewhere the fields are empty. Refresh every few
         seconds.
-      required: [type, host, uptime_seconds, load, cpu_count, cpu_percent, memory, swap, disks, processes, sessions, rpc]
+      required: [type, host, uptime_seconds, load, cpu_count, cpu_percent, memory, swap, disks, processes, sessions, rpc, scratch]
       properties:
         type:
           type: string
           const: host_stats
         rpc:
           $ref: "#/components/schemas/RPCStats"
+        scratch:
+          type: object
+          description: >
+            The scratch janitor's last pass over ~/.aiman/tmp and the size of
+            /tmp/claude-<uid>, which the janitor never touches. Bytes.
+          required: [freed_bytes, last_run, legacy_bytes]
+          properties:
+            freed_bytes:
+              type: integer
+            last_run:
+              type: string
+              format: date-time
+            legacy_bytes:
+              type: integer
         host:
           type: string
         uptime_seconds:

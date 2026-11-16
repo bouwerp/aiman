@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 
 	"github.com/bouwerp/aiman/internal/cgroup"
@@ -28,6 +30,10 @@ func wireResources(ctx context.Context, srv *server.Server, mgr *ptyruntime.Mana
 	}
 	if cfg.TmpdirOn() {
 		opts.TmpRoot = filepath.Join(dir, "tmp")
+		opts.LegacyTmpRoot = fmt.Sprintf("/tmp/claude-%d", os.Getuid())
+		if cfg.ScratchJanitorOn() {
+			go srv.RunScratchJanitor(ctx)
+		}
 	}
 	if !cfg.On() {
 		log.Printf("resources: disabled; sessions run without their own limits")
