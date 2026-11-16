@@ -165,7 +165,7 @@ func (m *Model) enterUsageView() tea.Cmd {
 	m.state = viewStateUsage
 	return tea.Batch(
 		fetchUsageRollups(m.cfg, m.usageView.hosts, usageByIssue),
-		fetchUsageLimitsAll(m.cfg, m.usageView.hosts, false),
+		fetchUsageLimitsAll(m.cfg, m.usageView.hosts, false, m.hostBudget),
 	)
 }
 
@@ -237,7 +237,7 @@ func (m *Model) handleUsageViewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, m.refreshUsageView()
 	case "l":
-		return m, fetchUsageLimitsAll(m.cfg, m.usageView.hosts, true)
+		return m, fetchUsageLimitsAll(m.cfg, m.usageView.hosts, true, m.hostBudget)
 	case "up", "k", "left":
 		m.moveUsageCursor(-1)
 	case "down", "j", "right":

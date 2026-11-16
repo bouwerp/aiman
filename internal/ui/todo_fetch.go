@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -24,8 +25,114 @@ type todoLoadedMsg struct {
 // A nil summaries map with a nil error is an empty sweep, not a failure.
 type todoSweepMsg struct {
 	host      string
+	key       string
 	summaries map[string]todoSummary
 	err       error
+}
+
+// fetchClass is what started a fetch (docs/specs/client-pileup-guard.md,
+// Behaviour P2). A foreground fetch waits for a slot; a background one is
+// skipped when none is free.
+type fetchClass int
+
+const (
+	fetchForeground fetchClass = iota
+	fetchBackground
+)
+
+// pendingKey names a skipped event fetch: one per method and session, or per
+// host for a whole-host summary (id empty).
+type pendingKey struct {
+	method string
+	host   string
+	id     string
+}
+
+func noRelease(bool) {}
+
+// budgetTry takes a background slot on host. A model with no budget never
+// skips.
+func (m *Model) budgetTry(host string) (func(bool), bool) {
+	if m.hostBudget == nil {
+		return noRelease, true
+	}
+	return m.hostBudget.TryAcquire(host)
+}
+
+// budgetAcquire takes a foreground slot, waiting for one. It runs inside a
+// command, never on the Update goroutine.
+func budgetAcquire(ctx context.Context, b *usecase.HostBudget, host string) (func(bool), error) {
+	if b == nil {
+		return noRelease, nil
+	}
+	return b.Acquire(ctx, host)
+}
+
+// callTimedOut reports a local timeout, after which the slot stays taken.
+func callTimedOut(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+// markPending remembers an event fetch that found no slot, so it runs when
+// one frees.
+func (m *Model) markPending(method, host, id string) {
+	if m.pendingFetch == nil {
+		m.pendingFetch = map[pendingKey]bool{}
+	}
+	m.pendingFetch[pendingKey{method: method, host: host, id: id}] = true
+}
+
+// drainPending starts the skipped event fetches that now find a slot. A fetch
+// that is skipped again marks itself pending again. Result handlers call it,
+// because a result is what frees a slot.
+func (m *Model) drainPending() tea.Cmd {
+	if len(m.pendingFetch) == 0 {
+		return nil
+	}
+	keys := make([]pendingKey, 0, len(m.pendingFetch))
+	for k := range m.pendingFetch {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		if a.method != b.method {
+			return a.method < b.method
+		}
+		if a.host != b.host {
+			return a.host < b.host
+		}
+		return a.id < b.id
+	})
+	var cmds []tea.Cmd
+	for _, k := range keys {
+		delete(m.pendingFetch, k)
+		var cmd tea.Cmd
+		switch k.method {
+		case "todo.summary":
+			var ids []string
+			if k.id != "" {
+				ids = []string{k.id}
+			}
+			cmd = m.sweepTodosCmd(k.host, ids)
+		default:
+			s, ok := m.sessionByID(k.id)
+			if !ok {
+				continue
+			}
+			switch k.method {
+			case "todo.get":
+				cmd = m.fetchTodosCmdClass(s, fetchBackground)
+			case "ci.get":
+				cmd = m.fetchCIStatusCmdClass(s, fetchBackground)
+			case "usage.get":
+				cmd = m.maybeFetchUsageClass(s, true, fetchBackground)
+			}
+		}
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
 }
 
 // fetchTodosCmd loads the full list for one session.
@@ -35,6 +142,13 @@ type todoSweepMsg struct {
 // session host still falls back to the active remote, and that is the host
 // a restarted stream clears.
 func (m *Model) fetchTodosCmd(s domain.Session) tea.Cmd {
+	return m.fetchTodosCmdClass(s, fetchForeground)
+}
+
+// fetchTodosCmdClass is fetchTodosCmd for a fetch of the given class. A
+// background fetch that finds no slot returns nil, sets no flag and is marked
+// pending.
+func (m *Model) fetchTodosCmdClass(s domain.Session, class fetchClass) tea.Cmd {
 	if s.ID == "" || m.todoClient == nil {
 		return nil
 	}
@@ -45,17 +159,35 @@ func (m *Model) fetchTodosCmd(s domain.Session) tea.Cmd {
 	if !ok || m.todoUnsupported[remote.Host] {
 		return nil
 	}
+	release := noRelease
+	if class == fetchBackground {
+		rel, ok := m.budgetTry(remote.Host)
+		if !ok {
+			m.markPending("todo.get", remote.Host, s.ID)
+			return nil
+		}
+		release = rel
+	}
 	if m.todoInFlight == nil {
 		m.todoInFlight = map[string]bool{}
 	}
 	m.todoInFlight[s.ID] = true
 	client := m.todoClient
+	budget := m.hostBudget
 	host := remote.Host
 	id := s.ID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		if class == fetchForeground {
+			rel, err := budgetAcquire(ctx, budget, host)
+			if err != nil {
+				return todoLoadedMsg{host: host, sessionID: id, err: err}
+			}
+			release = rel
+		}
 		snap, err := client.Get(ctx, remote, id)
+		release(callTimedOut(err))
 		return todoLoadedMsg{host: host, sessionID: id, snap: snap, err: err}
 	}
 }
@@ -70,6 +202,26 @@ func (m *Model) sweepTodosCmd(host string, ids []string) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	// One summary in flight per session (or per host for a whole-host sweep);
+	// a request that arrives meanwhile is held and runs when the first lands.
+	key := "host:" + host
+	pendingID := ""
+	if len(ids) == 1 {
+		key, pendingID = ids[0], ids[0]
+	}
+	if m.summaryInFlight[key] {
+		m.markPending("todo.summary", host, pendingID)
+		return nil
+	}
+	release, ok := m.budgetTry(host)
+	if !ok {
+		m.markPending("todo.summary", host, pendingID)
+		return nil
+	}
+	if m.summaryInFlight == nil {
+		m.summaryInFlight = map[string]bool{}
+	}
+	m.summaryInFlight[key] = true
 	client := m.todoClient
 	var sessions []string
 	if ids != nil {
@@ -79,7 +231,8 @@ func (m *Model) sweepTodosCmd(host string, ids []string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		summaries, err := client.Summary(ctx, remote, sessions)
-		return todoSweepMsg{host: host, summaries: summaries, err: err}
+		release(callTimedOut(err))
+		return todoSweepMsg{host: host, key: key, summaries: summaries, err: err}
 	}
 }
 
@@ -127,12 +280,12 @@ func (m *Model) todoChangedCmd(host string, ev server.SessionEvent) tea.Cmd {
 		}
 		// The PR watcher changes the list when a check fails or a review
 		// lands, so the selected session's PR watch is read again too.
-		ci := m.fetchCIStatusCmd(s)
+		ci := m.fetchCIStatusCmdClass(s, fetchBackground)
 		if m.todoInFlight[ev.ID] {
 			m.noteTodoPending(ev.ID, ev.Rev)
 			return ci
 		}
-		return tea.Batch(m.fetchTodosCmd(s), ci)
+		return tea.Batch(m.fetchTodosCmdClass(s, fetchBackground), ci)
 	}
 	return m.sweepTodosCmd(host, []string{ev.ID})
 }
@@ -173,7 +326,7 @@ func (m *Model) fetchPendingTodo(id string, landed int64) tea.Cmd {
 		return nil
 	}
 	delete(m.todoPendingRev, id)
-	return m.fetchTodosCmd(s)
+	return m.fetchTodosCmdClass(s, fetchBackground)
 }
 
 func (m *Model) sessionIsSelected(id string) bool {
@@ -231,6 +384,10 @@ func mergeSteer(current, incoming server.SteerStatus) server.SteerStatus {
 }
 
 func (m *Model) applyTodoLoaded(msg todoLoadedMsg) tea.Cmd {
+	return tea.Batch(m.applyTodoLoadedResult(msg), m.drainPending())
+}
+
+func (m *Model) applyTodoLoadedResult(msg todoLoadedMsg) tea.Cmd {
 	follow := m.todoCursorFollowID(msg.sessionID)
 	if m.todoInFlight != nil {
 		delete(m.todoInFlight, msg.sessionID)
@@ -254,7 +411,13 @@ func (m *Model) applyTodoLoaded(msg todoLoadedMsg) tea.Cmd {
 	return m.fetchPendingTodo(msg.sessionID, msg.snap.List.Rev)
 }
 
-func (m *Model) applyTodoSweep(msg todoSweepMsg) {
+func (m *Model) applyTodoSweep(msg todoSweepMsg) tea.Cmd {
+	delete(m.summaryInFlight, msg.key)
+	m.applyTodoSweepResult(msg)
+	return m.drainPending()
+}
+
+func (m *Model) applyTodoSweepResult(msg todoSweepMsg) {
 	if msg.err != nil {
 		m.noteTodoRPCError(msg.host, msg.err)
 		return

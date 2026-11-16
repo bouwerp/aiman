@@ -72,6 +72,13 @@ func nextPRWatch(s domain.Session, st usecase.CIStatus, ok bool) bool {
 // no client, the host's serve cannot answer, a read is already in flight, or
 // the session is being created or terminated.
 func (m *Model) fetchCIStatusCmd(s domain.Session) tea.Cmd {
+	return m.fetchCIStatusCmdClass(s, fetchForeground)
+}
+
+// fetchCIStatusCmdClass is fetchCIStatusCmd for a fetch of the given class. A
+// background fetch with no free slot returns nil, sets no flag and is marked
+// pending.
+func (m *Model) fetchCIStatusCmdClass(s domain.Session, class fetchClass) tea.Cmd {
 	if s.ID == "" || m.ciClient == nil || m.ciInFlight[s.ID] || m.skipSessionPolling(s.ID) {
 		return nil
 	}
@@ -79,16 +86,34 @@ func (m *Model) fetchCIStatusCmd(s domain.Session) tea.Cmd {
 	if !ok || m.ciUnsupported[remote.Host] {
 		return nil
 	}
+	release := noRelease
+	if class == fetchBackground {
+		rel, ok := m.budgetTry(remote.Host)
+		if !ok {
+			m.markPending("ci.get", remote.Host, s.ID)
+			return nil
+		}
+		release = rel
+	}
 	if m.ciInFlight == nil {
 		m.ciInFlight = map[string]bool{}
 	}
 	m.ciInFlight[s.ID] = true
 	client := m.ciClient
+	budget := m.hostBudget
 	id := s.ID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		if class == fetchForeground {
+			rel, err := budgetAcquire(ctx, budget, remote.Host)
+			if err != nil {
+				return ciStatusMsg{id: id, host: remote.Host, err: err}
+			}
+			release = rel
+		}
 		st, err := client.Get(ctx, remote, id)
+		release(callTimedOut(err))
 		return ciStatusMsg{id: id, host: remote.Host, status: st, err: err}
 	}
 }
@@ -138,6 +163,10 @@ func (m *Model) handleWatchKey() tea.Cmd {
 // applyCIStatus caches a ci.get or ci.watch answer, fills the meta line and
 // the needs-you flag, and toasts the outcome of a toggle.
 func (m *Model) applyCIStatus(msg ciStatusMsg) tea.Cmd {
+	return tea.Batch(m.applyCIStatusResult(msg), m.drainPending())
+}
+
+func (m *Model) applyCIStatusResult(msg ciStatusMsg) tea.Cmd {
 	if msg.toggled {
 		delete(m.ciToggling, msg.id)
 	} else {

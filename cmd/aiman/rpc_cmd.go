@@ -40,6 +40,10 @@ var rpcMethods = map[string]bool{
 	"ci.watch":            true,
 	"verify.start":        true,
 	"verify.status":       true,
+	"resources.get":       true,
+	"agents.status":       true,
+	"agents.update":       true,
+	"agents.move_prefix":  true,
 }
 
 // rpcParams validates the method and params. It passes the bytes through

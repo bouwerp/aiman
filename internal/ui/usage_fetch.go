@@ -31,15 +31,30 @@ type usageMsg struct {
 
 // fetchSessionUsageCmd loads one session's priced rollup from aiman serve.
 // The laptop's current offset is the zone the day window is reported in.
-func fetchSessionUsageCmd(cfg *config.Config, s domain.Session) tea.Cmd {
+//
+// usage.get and its session.get share one slot: release is called once, after
+// both. A foreground fetch (budget set, release nil) waits for its slot first.
+func fetchSessionUsageCmd(cfg *config.Config, s domain.Session, budget *usecase.HostBudget, release func(bool)) tea.Cmd {
 	return func() tea.Msg {
 		remote, ok := usageRemote(cfg, s)
 		if !ok {
+			if release != nil {
+				release(false)
+			}
 			return usageMsg{sessionID: s.ID, err: fmt.Errorf("no remote found")}
 		}
 		mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		if release == nil {
+			rel, err := budgetAcquire(ctx, budget, remote.Host)
+			if err != nil {
+				return usageMsg{sessionID: s.ID, err: err}
+			}
+			release = rel
+		}
+		var callErr error
+		defer func() { release(callTimedOut(callErr)) }()
 		_, offsetSec := time.Now().Zone()
 		raw, err := usecase.ServeRPC(ctx, mgr, "usage.get", struct {
 			Session         string `json:"session"`
@@ -49,6 +64,7 @@ func fetchSessionUsageCmd(cfg *config.Config, s domain.Session) tea.Cmd {
 			TZOffsetMinutes: offsetSec / 60,
 		})
 		if err != nil {
+			callErr = err
 			return usageMsg{sessionID: s.ID, err: err}
 		}
 		var body struct {
@@ -90,6 +106,13 @@ func usageRemote(cfg *config.Config, s domain.Session) (config.Remote, bool) {
 // maybeFetchUsage starts usage.get unless one is already in flight.
 // force skips the interval. It does not skip a fetch that has not returned.
 func (m *Model) maybeFetchUsage(s domain.Session, force bool) tea.Cmd {
+	return m.maybeFetchUsageClass(s, force, fetchForeground)
+}
+
+// maybeFetchUsageClass is maybeFetchUsage for a fetch of the given class. A
+// background fetch with no free slot returns nil, sets no flag and is marked
+// pending.
+func (m *Model) maybeFetchUsageClass(s domain.Session, force bool, class fetchClass) tea.Cmd {
 	if s.ID == "" {
 		return nil
 	}
@@ -101,6 +124,19 @@ func (m *Model) maybeFetchUsage(s domain.Session, force bool) tea.Cmd {
 			return nil
 		}
 	}
+	var release func(bool)
+	if class == fetchBackground {
+		host := ""
+		if remote, ok := usageRemote(m.cfg, s); ok {
+			host = remote.Host
+		}
+		rel, ok := m.budgetTry(host)
+		if !ok {
+			m.markPending("usage.get", host, s.ID)
+			return nil
+		}
+		release = rel
+	}
 	if m.usageInFlight == nil {
 		m.usageInFlight = map[string]bool{}
 	}
@@ -109,7 +145,7 @@ func (m *Model) maybeFetchUsage(s domain.Session, force bool) tea.Cmd {
 	}
 	m.usageInFlight[s.ID] = true
 	m.usageFetchedAt[s.ID] = time.Now()
-	return fetchSessionUsageCmd(m.cfg, s)
+	return fetchSessionUsageCmd(m.cfg, s, m.hostBudget, release)
 }
 
 // usageEventFetch refreshes the selected session. For any other session
@@ -126,7 +162,7 @@ func (m *Model) usageEventFetch(id string) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	return m.maybeFetchUsage(s, true)
+	return m.maybeFetchUsageClass(s, true, fetchBackground)
 }
 
 // applyUsageToExtras copies a report onto the cost fields.
@@ -167,6 +203,10 @@ func applyUsageToExtras(x detailMetaExtras, rep usage.Report, budget ...usage.Bu
 }
 
 func (m *Model) applyUsageMsg(msg usageMsg) tea.Cmd {
+	return tea.Batch(m.applyUsageResult(msg), m.drainPending())
+}
+
+func (m *Model) applyUsageResult(msg usageMsg) tea.Cmd {
 	delete(m.usageInFlight, msg.sessionID)
 	if msg.err != nil {
 		m.log("usage %s: %v", msg.sessionID, msg.err)

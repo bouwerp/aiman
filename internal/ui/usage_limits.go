@@ -93,12 +93,36 @@ type usageLimitsMsg struct {
 	host string
 	snap limits.Snapshot
 	err  error
+	// skipped is a poll that found no background slot: nothing was asked, the
+	// rows stay and the next poll is scheduled.
+	skipped bool
 }
 
 // fetchUsageLimitsCmd asks one host for its limits.
-func fetchUsageLimitsCmd(cfg *config.Config, host string, refresh bool) tea.Cmd {
+// A key (opening $, l) waits for a foreground slot; the 2s poll takes a
+// background slot or is skipped.
+func fetchUsageLimitsCmd(cfg *config.Config, host string, refresh bool, budget *usecase.HostBudget, poll bool) tea.Cmd {
 	return func() tea.Msg {
+		var release func(bool)
+		if poll {
+			if budget == nil {
+				release = noRelease
+			} else if rel, ok := budget.TryAcquire(host); ok {
+				release = rel
+			} else {
+				return usageLimitsMsg{host: host, skipped: true}
+			}
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			rel, err := budgetAcquire(ctx, budget, host)
+			cancel()
+			if err != nil {
+				return usageLimitsMsg{host: host, err: err}
+			}
+			release = rel
+		}
 		snap, err := fetchUsageLimits(cfg, host, refresh)
+		release(callTimedOut(err))
 		return usageLimitsMsg{host: host, snap: snap, err: err}
 	}
 }
@@ -123,10 +147,10 @@ func fetchUsageLimits(cfg *config.Config, host string, refresh bool) (limits.Sna
 }
 
 // fetchUsageLimitsAll asks every host once.
-func fetchUsageLimitsAll(cfg *config.Config, hosts []usageHost, refresh bool) tea.Cmd {
+func fetchUsageLimitsAll(cfg *config.Config, hosts []usageHost, refresh bool, budget *usecase.HostBudget) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(hosts))
 	for _, h := range hosts {
-		cmds = append(cmds, fetchUsageLimitsCmd(cfg, h.host, refresh))
+		cmds = append(cmds, fetchUsageLimitsCmd(cfg, h.host, refresh, budget, false))
 	}
 	return tea.Batch(cmds...)
 }
@@ -141,6 +165,8 @@ func (m *Model) applyUsageLimits(msg usageLimitsMsg) tea.Cmd {
 			continue
 		}
 		switch {
+		case msg.skipped:
+			return m.nextLimitsPoll(msg.host)
 		case errors.Is(msg.err, usecase.ErrRPCUnsupported):
 			return nil
 		case msg.err != nil:
@@ -152,10 +178,19 @@ func (m *Model) applyUsageLimits(msg usageLimitsMsg) tea.Cmd {
 		if !msg.snap.Refreshing || m.state != viewStateUsage {
 			return nil
 		}
-		cfg, host := m.cfg, msg.host
-		return tea.Tick(usageLimitsPollEvery, func(time.Time) tea.Msg {
-			return fetchUsageLimitsCmd(cfg, host, false)()
-		})
+		return m.nextLimitsPoll(msg.host)
 	}
 	return nil
+}
+
+// nextLimitsPoll schedules the next 2s poll for a host that is refreshing,
+// while the $ view is open.
+func (m *Model) nextLimitsPoll(host string) tea.Cmd {
+	if m.state != viewStateUsage {
+		return nil
+	}
+	cfg, budget := m.cfg, m.hostBudget
+	return tea.Tick(usageLimitsPollEvery, func(time.Time) tea.Msg {
+		return fetchUsageLimitsCmd(cfg, host, false, budget, true)()
+	})
 }

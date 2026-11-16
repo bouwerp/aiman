@@ -218,7 +218,7 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		if sess, found := m.sessionByID(msg.event.ID); found {
 			state.lastRefresh = time.Now()
 			m.eventSeen[msg.event.ID] = state
-			return follow(m.queuePreview(sess))
+			return follow(m.queuePreviewTick(sess))
 		}
 	}
 	m.eventSeen[msg.event.ID] = state
