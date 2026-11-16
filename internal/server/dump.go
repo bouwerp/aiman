@@ -14,6 +14,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/bouwerp/aiman/internal/hoststats"
+	"github.com/bouwerp/aiman/internal/ptyruntime"
 )
 
 // dumpStackCap bounds the goroutine stack section of a dump; a cut dump ends
@@ -37,7 +40,18 @@ const (
 	autoDumpEvery = 10 * time.Minute
 	// autoDumpCheck is how often the automatic dump reads in flight.
 	autoDumpCheck = 2 * time.Second
+	// autoDumpFull is the memory `full` avg10 (percent) that, held for
+	// autoDumpAfter, also triggers a dump. `some` never counts.
+	autoDumpFull = 50.0
 )
+
+// dumpPressure is the memory pressure avg10 the auto dump reads. Nil reads the
+// pressure gate's last reading; tests swap it.
+var dumpPressure func() (some, full float64, ok bool)
+
+// dumpCensus is the aiman process census a dump includes, with serve and the
+// pty holders left out. Nil reads /proc; tests swap it.
+var dumpCensus func() hoststats.AimanProcs
 
 // dumping guards WriteDump across every Server in the process: the stacks are
 // the process's, and one dump at a time is the point.
@@ -71,6 +85,7 @@ func (s *Server) WriteDump(dir string) (string, error) {
 	for _, c := range calls {
 		fmt.Fprintf(&b, "  %s\t%s\t%s\n", c.Method, c.Caller, c.Age.Round(time.Millisecond))
 	}
+	fmt.Fprintf(&b, "\nprocs: %s\n", s.censusNow().Summary())
 	b.WriteString("\ngoroutines:\n")
 	stack, cut := captureStacks()
 
@@ -203,18 +218,77 @@ func (s *Server) runAutoDump(ctx context.Context, dir string) {
 	t := time.NewTicker(autoDumpCheck)
 	defer t.Stop()
 	var d autoDump
-	a := s.admission()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			if d.due(now, a.atCap()) {
-				s.logDump("in flight at the cap", dir)
-			}
+			s.autoDumpTick(&d, now, dir)
 		}
 	}
 }
+
+// autoDumpTick is one auto-dump check: a dump is due when in flight has sat at
+// the cap, or memory full avg10 has stayed at or above autoDumpFull, for
+// autoDumpAfter.
+func (s *Server) autoDumpTick(d *autoDump, now time.Time, dir string) {
+	atCap := s.admission().atCap()
+	read := dumpPressure
+	if read == nil {
+		read = s.LastPressure
+	}
+	_, full, ok := read()
+	high := ok && full >= autoDumpFull
+	if d.due(now, atCap || high) {
+		why := "in flight at the cap"
+		if !atCap {
+			why = "memory pressure"
+		}
+		s.logDump(why, dir)
+	}
+}
+
+// censusNow is the aiman process census, leaving out serve and the holders.
+func (s *Server) censusNow() hoststats.AimanProcs {
+	c := hoststats.Census(s.censusExclude())
+	if dumpCensus != nil {
+		c = dumpCensus()
+	}
+	s.logProcsIfOver(c)
+	return c
+}
+
+// censusExclude is serve's PID and the PID of every pty holder.
+func (s *Server) censusExclude() map[int]bool {
+	ex := map[int]bool{os.Getpid(): true}
+	if s.pty == nil {
+		return ex
+	}
+	for _, info := range s.pty.List() {
+		if info.Status != ptyruntime.StatusRunning || info.PID <= 1 {
+			continue
+		}
+		if pp, ok := parentPID(info.PID); ok && isHolderProc(pp) {
+			ex[pp] = true
+		}
+	}
+	return ex
+}
+
+// logProcsIfOver logs the census once a minute while it is over 32.
+func (s *Server) logProcsIfOver(c hoststats.AimanProcs) {
+	if c.Total <= censusLogOver {
+		return
+	}
+	s.procsLogMu.Lock()
+	defer s.procsLogMu.Unlock()
+	if now := time.Now(); now.Sub(s.procsLogAt) >= time.Minute {
+		s.procsLogAt = now
+		log.Printf("procs: %s", c.Summary())
+	}
+}
+
+const censusLogOver = 32
 
 func (s *Server) logDump(why, dir string) {
 	path, err := s.WriteDump(dir)

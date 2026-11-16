@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/hoststats"
 	"github.com/bouwerp/aiman/internal/server"
 )
 
@@ -75,6 +76,7 @@ type hostStatsText struct {
 	RPC        server.RPCStats      `json:"rpc"`
 	Scratch    server.ScratchReport `json:"scratch"`
 	Gate       *server.PressureGate `json:"gate"`
+	AimanProcs hoststats.AimanProcs `json:"aiman_procs"`
 }
 
 // printHostStats writes the host line and the rpc block.
@@ -113,6 +115,7 @@ func printHostStats(w io.Writer, result any) error {
 	}
 	fmt.Fprintf(w, "scratch · freed %d bytes (last run %s) · /tmp/claude legacy %d bytes\n", sc.FreedBytes, last, sc.LegacyBytes)
 	printPressureGate(w, st.Gate)
+	fmt.Fprintf(w, "procs: %s\n", st.AimanProcs.Summary())
 	return nil
 }
 

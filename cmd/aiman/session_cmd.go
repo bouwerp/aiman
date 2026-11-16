@@ -259,6 +259,9 @@ func sessionCreateParams(flags map[string]string) (map[string]any, error) {
 		}
 		params["budget_tokens"] = bt
 	}
+	if _, ok := flags["force"]; ok {
+		params["force"] = true
+	}
 	// The brief is sent as file content in the request, so a shell never
 	// parses it and serve validates the same text the caller read.
 	if bf := flags["brief-file"]; bf != "" {
