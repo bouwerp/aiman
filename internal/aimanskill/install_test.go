@@ -388,3 +388,19 @@ func TestSkillEscalationReachesChildren(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillSetsSTE100WritingStyle(t *testing.T) {
+	for _, want := range []string{"## Writing style: ASD-STE100", "20 words or fewer", "active voice"} {
+		if !strings.Contains(Text, want) {
+			t.Fatalf("skill must state the STE100 rule %q", want)
+		}
+	}
+}
+
+func TestSkillSetsPRDescriptionShape(t *testing.T) {
+	for _, want := range []string{"## Pull request descriptions", "`autonumber`", "Start each bullet with the marker"} {
+		if !strings.Contains(Text, want) {
+			t.Fatalf("skill must describe PR descriptions: missing %q", want)
+		}
+	}
+}

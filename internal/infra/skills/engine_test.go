@@ -607,6 +607,7 @@ func TestWriteTaskFile_Content(t *testing.T) {
 		"Shared context",
 		"Use `aiman slack`",
 		"never to get around a `slack_writes_off` refusal",
+		"ASD-STE100 Simplified Technical English",
 	}
 
 	for _, s := range expected {
