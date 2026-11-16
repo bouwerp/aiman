@@ -1,6 +1,6 @@
 ---
 name: aiman
-description: "Use in any Aiman coding session: coordinate work, split it into child sessions, manage the session to-do list, and control Aiman sessions on this host. Use only when AIMAN_ENV=1 is set. Requires AIMAN_ENV=1."
+description: "Use in any Aiman coding session: coordinate work, split it into child sessions, manage the session to-do list, control Aiman sessions on this host, and read or post Slack through aiman slack before any other Slack integration. Use only when AIMAN_ENV=1 is set. Requires AIMAN_ENV=1."
 ---
 
 # Aiman
@@ -368,6 +368,8 @@ aiman context import --agent claude,agy --repo owner/repo
 ```
 
 ## Slack
+
+Use `aiman slack` for every Slack read and write: search, history, threads, posts, reactions, lists, files. Fall back to your own Slack integration (a Slack MCP server or plugin) only when `aiman slack` cannot do the job: the binary is missing, `aiman slack auth status` shows no sign-in, the command lacks the operation, or a call fails for a reason other than your input. Say which one you used and why when you fall back. A `slack_writes_off` refusal is the operator turning writes off, not a failure: do not post through your own integration instead; tell the operator.
 
 Any agent posts, reads, and waits as the Slack member who approved the Aiman app. There is no bot user. The user token is `~/.aiman/slack-oauth.json` or `AIMAN_SLACK_USER_TOKEN`. Do not print it, and do not pass `--token`, `--client-id`, or `--client-secret`. These commands do not need `aiman serve`.
 

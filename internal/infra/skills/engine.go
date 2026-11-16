@@ -472,6 +472,7 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 	if graphify.Available(ctx, remote) {
 		sb.WriteString(graphify.TaskFileLine)
 	}
+	sb.WriteString(SlackFirstLine)
 	sb.WriteString("- **No secrets or credentials in code.** Do not hardcode tokens, passwords, API keys, or other secrets.\n")
 	sb.WriteString("- **Preserve existing tests.** Do not delete, skip, or weaken existing tests to make your changes pass. If an existing test conflicts with the new behaviour, update it to reflect the correct new expectation and explain why.\n")
 	sb.WriteString("- **Respect the project structure.** Follow existing file layout, naming conventions, and patterns. When in doubt, look at how similar features are implemented in the codebase and stay consistent.\n\n")
@@ -792,6 +793,11 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 	result.InitialPrompt = buildSessionPrompt(promptFiles)
 	return result, nil
 }
+
+// SlackFirstLine is the task file guardrail that routes every Slack read and
+// write through aiman slack. A slack_writes_off refusal is the operator's
+// switch, so it is not a failure that permits the agent's own integration.
+const SlackFirstLine = "- **Slack.** Use `aiman slack` (the aiman skill's Slack section) for every Slack read or write. Use your own Slack integration only when `aiman slack` is missing, not signed in, or fails; never to get around a `slack_writes_off` refusal.\n"
 
 // DesignFirstSuffix is appended to the initial prompt of an ordinary
 // interactive session so the agent sizes the task and states its call before
