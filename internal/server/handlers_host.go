@@ -17,7 +17,8 @@ func (s *Server) handleHostStats(ctx context.Context, req Request) Response {
 		hoststats.Report
 		RPC     RPCStats      `json:"rpc"`
 		Scratch ScratchReport `json:"scratch"`
-	}{"host_stats", s.hostStats.Report(ctx, s.sessionRoots(ctx)), s.RPCStats(), s.scratchReport()}}
+		Gate    *PressureGate `json:"gate"`
+	}{"host_stats", s.hostStats.Report(ctx, s.sessionRoots(ctx)), s.RPCStats(), s.scratchReport(), s.gateReport()}}
 }
 
 // sessionRoots maps each live session to the PID its process tree hangs off.

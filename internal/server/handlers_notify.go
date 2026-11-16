@@ -300,7 +300,7 @@ func (s *Server) runStateSweep(ctx context.Context) {
 	if s.NotifyRecorder() != nil {
 		s.pruneNotifications(ctx)
 	}
-	period := currentSweepPeriod()
+	period := s.currentSweepPeriod()
 	s.sweepEvery.Store(int64(period))
 	t := time.NewTicker(period)
 	defer t.Stop()
@@ -317,7 +317,7 @@ func (s *Server) runStateSweep(ctx context.Context) {
 			start := time.Now()
 			s.sweepStates(ctx)
 			s.countOverrun(time.Since(start))
-			if next := currentSweepPeriod(); next != period {
+			if next := s.currentSweepPeriod(); next != period {
 				period = next
 				s.sweepEvery.Store(int64(period))
 				t.Reset(period)
