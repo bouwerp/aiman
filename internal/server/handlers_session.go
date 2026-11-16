@@ -1495,7 +1495,7 @@ func (s *Server) discardChild(ctx context.Context, sess domain.Session) error {
 			log.Printf("session.create: remove worktree of %s: %v", sess.ID, err)
 		}
 	}
-	return s.dropSession(ctx, sess)
+	return s.dropSession(ctx, sess, "discard")
 }
 
 // discardWorktreeScript removes a linked worktree and its branch from the main
@@ -1516,8 +1516,10 @@ git -C "$main" worktree remove --force "$wt"
 
 // dropSession stops a session's pty and deletes everything serve holds for
 // it: steering queue, notification state, CI rows, the stored row, and a
-// review session's sandbox and scratch.
-func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
+// review session's sandbox and scratch. Once the row is gone it leaves a
+// tombstone with reason, so session.register cannot bring the id back from a
+// client's stale copy.
+func (s *Server) dropSession(ctx context.Context, sess domain.Session, reason string) error {
 	s.downReviewSandbox(ctx, sess)
 	if sess.ReviewPR != "" {
 		s.dropReviewFixers(ctx, sess.ID)
@@ -1542,10 +1544,27 @@ func (s *Server) dropSession(ctx context.Context, sess domain.Session) error {
 			log.Printf("ci: forget %s: %v", sess.ID, err)
 		}
 	}
-	if s.repo != nil {
-		return s.repo.Delete(ctx, sess.ID)
+	if s.repo == nil {
+		return nil
+	}
+	if err := s.repo.Delete(ctx, sess.ID); err != nil {
+		return err
+	}
+	if t, ok := s.repo.(tombstones); ok {
+		// A missing tombstone only lets a stale client re-register the row.
+		if err := t.MarkForgotten(ctx, sess.ID, reason); err != nil {
+			log.Printf("session %s: tombstone: %v", sess.ID, err)
+		}
 	}
 	return nil
+}
+
+// tombstones is the repository side of forgotten sessions. A repository
+// without it keeps no tombstones and register accepts every id.
+type tombstones interface {
+	MarkForgotten(ctx context.Context, id, reason string) error
+	IsForgotten(ctx context.Context, id string) (bool, error)
+	ClearForgotten(ctx context.Context, id string) error
 }
 
 func (s *Server) handleForget(ctx context.Context, req Request) Response {
@@ -1554,7 +1573,7 @@ func (s *Server) handleForget(ctx context.Context, req Request) Response {
 		return fail
 	}
 	s.noteForgetHandover(ctx, sess)
-	if err := s.dropSession(ctx, sess); err != nil {
+	if err := s.dropSession(ctx, sess, "forget"); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	s.appendEvent(ctx, sess.ID, domain.EventActorUser, domain.EventSessionEnded, map[string]any{"reason": "forget"})
@@ -1808,7 +1827,7 @@ func (s *Server) handleRegister(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeInvalidParams, "invalid params")
 		}
 	}
-	ids := []string{}
+	ids, forgotten := []string{}, []string{}
 	if s.repo != nil {
 		for _, in := range params.Sessions {
 			id := strings.TrimSpace(in.ID)
@@ -1819,6 +1838,10 @@ func (s *Server) handleRegister(ctx context.Context, req Request) Response {
 			existing, err := s.repo.Get(ctx, id)
 			if err != nil {
 				existing = nil
+			}
+			if s.registerForgotten(ctx, id, existing != nil) {
+				forgotten = append(forgotten, id)
+				continue
 			}
 			row := registrableSession(in, existing)
 			if existing != nil {
@@ -1846,5 +1869,31 @@ func (s *Server) handleRegister(ctx context.Context, req Request) Response {
 			ids = append(ids, id)
 		}
 	}
-	return Response{ID: req.ID, Result: map[string]any{"type": "sessions_registered", "ids": ids}}
+	return Response{ID: req.ID, Result: map[string]any{"type": "sessions_registered", "ids": ids, "forgotten": forgotten}}
+}
+
+// registerForgotten reports whether register must skip id because serve ended
+// it on purpose. A stored row or a running holder means the id is in use
+// again, so its tombstone is cleared instead. A failed lookup counts as not
+// forgotten: a stale row is a smaller loss than a live session left out.
+func (s *Server) registerForgotten(ctx context.Context, id string, stored bool) bool {
+	t, ok := s.repo.(tombstones)
+	if !ok {
+		return false
+	}
+	gone, err := t.IsForgotten(ctx, id)
+	if err != nil {
+		log.Printf("session.register %s: tombstone lookup: %v", id, err)
+		return false
+	}
+	if !gone {
+		return false
+	}
+	if !stored && !s.ptyRunning(id) {
+		return true
+	}
+	if err := t.ClearForgotten(ctx, id); err != nil {
+		log.Printf("session.register %s: clear tombstone: %v", id, err)
+	}
+	return false
 }

@@ -320,7 +320,7 @@ func (s *Server) abandonReview(ctx context.Context, sess domain.Session) {
 	if err := (serverTerminal{s}).Stop(ctx, sess); err != nil {
 		log.Printf("review: stop %s: %v", sess.ID, err)
 	}
-	if err := s.dropSession(ctx, sess); err != nil {
+	if err := s.dropSession(ctx, sess, "review_abandoned"); err != nil {
 		log.Printf("review: forget %s: %v", sess.ID, err)
 	}
 	s.removeReviewFiles(sess.ID)

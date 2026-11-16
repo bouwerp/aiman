@@ -450,7 +450,7 @@ func (s *Server) endFixer(ctx context.Context, sess domain.Session, reason strin
 	if err := (serverTerminal{s}).Stop(ctx, sess); err != nil {
 		log.Printf("review: stop fixer %s: %v", sess.ID, err)
 	}
-	if err := s.dropSession(ctx, sess); err != nil {
+	if err := s.dropSession(ctx, sess, reason); err != nil {
 		log.Printf("review: forget fixer %s: %v", sess.ID, err)
 	}
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionEnded, map[string]any{"reason": reason})

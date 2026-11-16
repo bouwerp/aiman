@@ -324,7 +324,7 @@ func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Respon
 	}
 
 	removed, note := s.removeWorktree(ctx, plan, p.Discard)
-	if err := s.dropSession(ctx, sess); err != nil {
+	if err := s.dropSession(ctx, sess, "terminate"); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
 	s.appendEvent(ctx, sess.ID, domain.EventActorUser, domain.EventSessionEnded, map[string]any{
@@ -458,7 +458,7 @@ func (s *Server) stopReviewer(ctx context.Context, reviewer domain.Session) {
 	if s.verifier != nil {
 		return
 	}
-	if err := s.dropSession(ctx, reviewer); err != nil {
+	if err := s.dropSession(ctx, reviewer, "reviewer_stopped"); err != nil {
 		log.Printf("session.terminate: forget reviewer %s: %v", reviewer.ID, err)
 	}
 }

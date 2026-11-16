@@ -215,7 +215,7 @@ func (a serverSessions) Forget(ctx context.Context, id string) error {
 	if !ok {
 		return nil // already gone
 	}
-	if err := a.s.dropSession(ctx, sess); err != nil {
+	if err := a.s.dropSession(ctx, sess, a.cleanupReason); err != nil {
 		return err
 	}
 	a.s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionEnded, map[string]any{"reason": a.cleanupReason})

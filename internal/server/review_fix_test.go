@@ -455,7 +455,7 @@ func TestReviewFixDirectoriesGoWithTheReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.srv.dropSession(context.Background(), *row); err != nil {
+	if err := f.srv.dropSession(context.Background(), *row, "forget"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(f.stateDir, fixer.id)); !os.IsNotExist(err) {
