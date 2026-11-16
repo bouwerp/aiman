@@ -281,6 +281,9 @@ type HostLoadConfig struct {
 	// PressureGate is host.load.pressure_gate: when serve stops starting new
 	// sessions, helpers, review runs and CI runs on memory pressure.
 	PressureGate PressureGateConfig `yaml:"pressure_gate,omitempty"`
+	// CIParallel caps local CI runs at once on the host; more wait in a FIFO
+	// queue. 0 is 2.
+	CIParallel int `yaml:"ci_parallel,omitempty"`
 }
 
 // Pressure gate defaults: close at the user slice's memory full avg10 of 20,

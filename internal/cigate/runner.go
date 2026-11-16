@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,14 +25,20 @@ const (
 	StatusPass    Status = "pass"
 	StatusFail    Status = "fail"
 	StatusRunning Status = "running"
+	// StatusQueued is a run waiting for a host slot or for the pressure gate.
+	StatusQueued Status = "queued"
 )
+
+// Finished reports whether the status is an outcome: pass or fail. A queued
+// or running record is still in progress.
+func (s Status) Finished() bool { return s == StatusPass || s == StatusFail }
 
 var (
 	// ErrDirty refuses a run while the worktree has tracked or untracked
 	// changes: the record is keyed by commit, so only a commit can be checked.
 	ErrDirty = errors.New("the worktree has uncommitted or untracked changes: commit first")
-	// ErrRunning refuses a second run for a session.
-	ErrRunning = errors.New("a local CI run is already running for this session")
+	// ErrRunning refuses a second run for a session, queued or running.
+	ErrRunning = errors.New("a local CI run is already queued or running for this session")
 	// ErrNoList means the commit has no gate list and no override applies.
 	ErrNoList = errors.New("this repository has no local CI list (" + ListPath + " or repos.<slug>.ci.local)")
 )
@@ -72,17 +79,38 @@ type Options struct {
 	Nice int
 }
 
-// Runner runs gate lists and keeps their records under Dir/<session>/.
+// Launcher puts one command in the transient scope unit. The runner calls it
+// last, after Dir, Env and stdio are set; it rewrites Path and Args only.
+type Launcher func(unit string, cmd *exec.Cmd)
+
+// Runner runs gate lists and keeps their records under Dir/<session>/. Runs
+// wait in one FIFO queue, in the order of Prepare calls.
 type Runner struct {
 	Dir string
-	// MaxParallel caps runs at once across sessions; more wait. Zero is 2.
+	// MaxParallel caps runs at once across sessions (host.load.ci_parallel);
+	// more wait in the queue. Zero is 2.
 	MaxParallel int
 	// Copy is the default Options.Copy for Run.
 	Copy []string
+	// MayStart is asked before a queued run starts; nil means always. Serve
+	// wires the pressure gate here and calls Kick when it opens.
+	MayStart func() bool
+	// Launch puts each command in a scope unit of its own run; nil runs the
+	// command plainly.
+	Launch Launcher
+	// Now is the clock for the unit's start time; nil means time.Now.
+	Now func() time.Time
+	// TmpDir is the base of each run's TMPDIR, TmpDir/ci-<session8>-<sha12>;
+	// empty leaves TMPDIR alone.
+	TmpDir string
 
-	mu      sync.Mutex
-	running map[string]bool
-	sem     chan struct{}
+	mu     sync.Mutex
+	claims map[string]*Pending
+	queue  []*Pending
+	active int
+	// starting is the run released last until it has spawned its first
+	// command, so runs start in arrival order even when two slots are free.
+	starting *Pending
 }
 
 var safeName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -108,8 +136,8 @@ func (r *Runner) RunWith(ctx context.Context, session, worktree string, opt Opti
 	return p.Wait(ctx), nil
 }
 
-// Pending is a run that passed its checks and holds the session's slot. Wait
-// must be called exactly once.
+// Pending is a run that passed its checks and holds the session's claim.
+// Wait must be called exactly once.
 type Pending struct {
 	r        *Runner
 	session  string
@@ -117,68 +145,232 @@ type Pending struct {
 	sha      string
 	list     List
 	opt      Options
-	// Record is the running record already written.
+	// Record is the queued record Prepare wrote.
 	Record Record
+
+	// Guarded by r.mu.
+	state   pendingState
+	rec     Record // the latest record written
+	gone    bool   // Drop was called
+	cancel  context.CancelFunc
+	started chan struct{} // closed when the run gets its turn
+	dropped chan struct{} // closed when Drop takes it out of the queue
+	done    chan struct{} // closed when Wait has finished
 }
 
-// Prepare checks the worktree, reads the list and writes a running record. The
-// commands run when Wait is called, so a caller can answer before they finish.
+type pendingState int
+
+const (
+	pendingQueued pendingState = iota
+	pendingRunning
+	pendingDone
+)
+
+// Prepare checks the worktree, reads the list, writes a queued record and
+// puts the run at the back of the queue. The commands run when its turn
+// comes and Wait is called, so a caller can answer before they finish.
 func (r *Runner) Prepare(ctx context.Context, session, worktree string, opt Options) (*Pending, error) {
 	if err := checkName("session", session); err != nil {
 		return nil, err
 	}
-	if !r.claim(session) {
+	p := &Pending{r: r, session: session, worktree: worktree, opt: opt,
+		started: make(chan struct{}), dropped: make(chan struct{}), done: make(chan struct{})}
+	if !r.claim(p) {
 		return nil, ErrRunning
 	}
-	p, err := r.prepare(ctx, session, worktree, opt)
-	if err != nil {
-		r.release(session)
+	if err := r.prepare(ctx, p); err != nil {
+		r.release(p)
 		return nil, err
 	}
+	r.mu.Lock()
+	r.queue = append(r.queue, p)
+	r.mu.Unlock()
+	r.Kick()
 	return p, nil
 }
 
-func (r *Runner) prepare(ctx context.Context, session, worktree string, opt Options) (*Pending, error) {
-	status, err := gitOut(ctx, worktree, "status", "--porcelain", "--untracked-files=all")
+func (r *Runner) prepare(ctx context.Context, p *Pending) error {
+	status, err := gitOut(ctx, p.worktree, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if strings.TrimSpace(status) != "" {
-		return nil, ErrDirty
+		return ErrDirty
 	}
-	sha, err := gitOut(ctx, worktree, "rev-parse", "HEAD")
+	sha, err := gitOut(ctx, p.worktree, "rev-parse", "HEAD")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	sha = strings.TrimSpace(sha)
-	list, ok, err := LoadList(ctx, worktree, sha, opt.Override)
+	list, ok, err := LoadList(ctx, p.worktree, sha, p.opt.Override)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if !ok {
-		return nil, ErrNoList
+		return ErrNoList
 	}
-	rec := Record{Session: session, SHA: sha, Status: StatusRunning, Commands: []CommandResult{}, StartedAt: time.Now().UTC()}
+	rec := Record{Session: p.session, SHA: sha, Status: StatusQueued, Commands: []CommandResult{}, StartedAt: time.Now().UTC()}
 	if err := r.write(rec); err != nil {
-		return nil, err
+		return err
 	}
-	return &Pending{r: r, session: session, worktree: worktree, sha: sha, list: list, opt: opt, Record: rec}, nil
+	p.sha, p.list, p.Record, p.rec = sha, list, rec, rec
+	return nil
 }
 
-// Wait queues for a host slot, runs the list and returns the final record.
+// Kick starts queued runs, head first, while a slot is free and MayStart
+// allows. The runner kicks itself on every Prepare and whenever a run ends.
+func (r *Runner) Kick() {
+	may := r.MayStart == nil || r.MayStart()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for may && r.starting == nil && r.active < r.maxParallel() && len(r.queue) > 0 {
+		p := r.queue[0]
+		r.queue = r.queue[1:]
+		r.active++
+		r.starting = p
+		p.state = pendingRunning
+		p.rec.Status = StatusRunning
+		_ = r.write(p.rec)
+		close(p.started)
+	}
+}
+
+func (r *Runner) maxParallel() int {
+	if r.MaxParallel <= 0 {
+		return 2
+	}
+	return r.MaxParallel
+}
+
+// QueuePosition is the session's place in the queue, 1 next; 0 when it has
+// no queued run.
+func (r *Runner) QueuePosition(session string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, p := range r.queue {
+		if p.session == session {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// dropWait bounds how long Drop waits for a stopped run to wind down.
+const dropWait = 30 * time.Second
+
+// Drop ends the session's run because the session is gone: a queued run
+// leaves the queue and never starts, a running one is stopped as on a
+// timeout. Either way the record is failed with "session gone", Wait returns
+// it, and the session's claim and slot are released.
+func (r *Runner) Drop(session string) {
+	r.mu.Lock()
+	p := r.claims[session]
+	if p == nil {
+		r.mu.Unlock()
+		return
+	}
+	p.gone = true
+	switch p.state {
+	case pendingQueued:
+		r.queue = slices.DeleteFunc(r.queue, func(q *Pending) bool { return q == p })
+		p.state = pendingDone
+		p.rec = finish(p.rec, StatusFail, "", "session gone")
+		_ = r.write(p.rec)
+		delete(r.claims, session)
+		close(p.dropped)
+		r.mu.Unlock()
+		r.Kick()
+		return
+	case pendingRunning:
+		if p.cancel != nil {
+			p.cancel()
+		}
+	}
+	r.mu.Unlock()
+	// A run whose Wait has not reached its commands sees gone and skips them.
+	select {
+	case <-p.done:
+	case <-time.After(dropWait):
+	}
+}
+
+// Wait waits for the run's turn, runs the list and returns the final record.
+// A run dropped while queued returns its failed record without running.
 func (p *Pending) Wait(ctx context.Context) Record {
 	r := p.r
-	defer r.release(p.session)
-	rec := p.Record
-	if err := r.acquire(ctx); err != nil {
-		rec = finish(rec, StatusFail, "", "cancelled while queued: "+err.Error())
-	} else {
-		rec = p.run(ctx, rec)
-		<-r.sem
+	defer close(p.done)
+	select {
+	case <-p.started:
+	case <-p.dropped:
+		return p.final()
+	case <-ctx.Done():
+		r.mu.Lock()
+		if p.state == pendingQueued {
+			r.queue = slices.DeleteFunc(r.queue, func(q *Pending) bool { return q == p })
+			p.state = pendingDone
+			p.rec = finish(p.rec, StatusFail, "", "cancelled while queued: "+ctx.Err().Error())
+			_ = r.write(p.rec)
+			if r.claims[p.session] == p {
+				delete(r.claims, p.session)
+			}
+			r.mu.Unlock()
+			r.Kick()
+			return p.final()
+		}
+		r.mu.Unlock()
+		select {
+		case <-p.started:
+		case <-p.dropped:
+			return p.final()
+		}
 	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	r.mu.Lock()
+	p.cancel = cancel
+	rec, gone := p.rec, p.gone
+	r.mu.Unlock()
+	if !gone {
+		rec = p.run(runCtx, rec)
+	}
+	p.launched()
+
+	r.mu.Lock()
+	if p.gone {
+		rec = finish(rec, StatusFail, rec.Failed, "session gone")
+	}
+	p.state, p.rec = pendingDone, rec
 	_ = r.write(rec)
+	r.active--
+	if r.claims[p.session] == p {
+		delete(r.claims, p.session)
+	}
+	r.mu.Unlock()
 	r.prune(p.session, p.sha)
+	r.Kick()
 	return rec
+}
+
+// launched lets the next queued run start: this one has spawned its first
+// command, or will not.
+func (p *Pending) launched() {
+	r := p.r
+	r.mu.Lock()
+	was := r.starting == p
+	if was {
+		r.starting = nil
+	}
+	r.mu.Unlock()
+	if was {
+		r.Kick()
+	}
+}
+
+func (p *Pending) final() Record {
+	p.r.mu.Lock()
+	defer p.r.mu.Unlock()
+	return p.rec
 }
 
 func finish(rec Record, st Status, failed, msg string) Record {
@@ -201,12 +393,22 @@ func (p *Pending) run(ctx context.Context, rec Record) Record {
 	if err := copyFiles(p.worktree, snap, p.opt.Copy); err != nil {
 		return finish(rec, StatusFail, "", "copy: "+err.Error())
 	}
+	env := append(os.Environ(), "CI=true", "AIMAN_CI_LOCAL=1")
+	if p.r.TmpDir != "" {
+		tmp, release, err := ClaimTmp(p.r.TmpDir, "ci-"+prefix(p.session, 8)+"-"+prefix(p.sha, 12))
+		if err != nil {
+			return finish(rec, StatusFail, "", "tmpdir: "+err.Error())
+		}
+		defer release()
+		env = append(env, "TMPDIR="+tmp)
+	}
+	unit := CIUnit(p.session, p.sha, p.r.now())
 	steps := p.list.Commands
 	if p.list.Setup != "" {
 		steps = append([]Command{{Name: "setup", Run: p.list.Setup, Timeout: DefaultTimeout}}, steps...)
 	}
 	for i, c := range steps {
-		res := p.runOne(ctx, snap, i, c)
+		res := p.runOne(ctx, snap, unit, env, i, c)
 		rec.Commands = append(rec.Commands, res)
 		_ = p.r.write(rec)
 		if res.Exit != 0 {
@@ -216,7 +418,7 @@ func (p *Pending) run(ctx context.Context, rec Record) Record {
 	return finish(rec, StatusPass, "", "")
 }
 
-func (p *Pending) runOne(ctx context.Context, snap string, i int, c Command) CommandResult {
+func (p *Pending) runOne(ctx context.Context, snap, unit string, env []string, i int, c Command) CommandResult {
 	logPath := filepath.Join(p.r.sessionDir(p.session), fmt.Sprintf("%s.%d-%s.log", p.sha, i, logSafe(c.Name)))
 	res := CommandResult{Name: c.Name, Log: logPath, Exit: -1}
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -231,8 +433,15 @@ func (p *Pending) runOne(ctx context.Context, snap string, i int, c Command) Com
 	cmd.Dir = filepath.Join(snap, c.Dir)
 	cmd.Stdout, cmd.Stderr = f, f
 	cmd.Stdin = nil
-	cmd.Env = append(os.Environ(), "CI=true", "AIMAN_CI_LOCAL=1")
-	err = cmd.Run()
+	cmd.Env = env
+	if p.r.Launch != nil {
+		p.r.Launch(unit, cmd)
+	}
+	err = cmd.Start()
+	p.launched()
+	if err == nil {
+		err = cmd.Wait()
+	}
 	res.Millis = time.Since(start).Milliseconds()
 	res.Exit = exitCode(err)
 	if errors.Is(cctx.Err(), context.DeadlineExceeded) {
@@ -351,49 +560,40 @@ func copyFile(from, to string) error {
 	return out.Close()
 }
 
-func (r *Runner) claim(session string) bool {
+func (r *Runner) claim(p *Pending) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.running == nil {
-		r.running = map[string]bool{}
+	if r.claims == nil {
+		r.claims = map[string]*Pending{}
 	}
-	if r.running[session] {
+	if r.claims[p.session] != nil {
 		return false
 	}
-	r.running[session] = true
+	r.claims[p.session] = p
 	return true
 }
 
-func (r *Runner) release(session string) {
+func (r *Runner) release(p *Pending) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.running, session)
+	if r.claims[p.session] == p {
+		delete(r.claims, p.session)
+	}
 }
 
-// Running reports whether a run for session is in progress in this runner.
+// Running reports whether a run for session is queued or running in this
+// runner.
 func (r *Runner) Running(session string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.running[session]
+	return r.claims[session] != nil
 }
 
-func (r *Runner) acquire(ctx context.Context) error {
-	r.mu.Lock()
-	if r.sem == nil {
-		n := r.MaxParallel
-		if n <= 0 {
-			n = 2
-		}
-		r.sem = make(chan struct{}, n)
+func (r *Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
 	}
-	sem := r.sem
-	r.mu.Unlock()
-	select {
-	case sem <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return time.Now()
 }
 
 func (r *Runner) sessionDir(session string) string { return filepath.Join(r.Dir, session) }
@@ -423,8 +623,8 @@ func (r *Runner) write(rec Record) error {
 	return os.Rename(tmp.Name(), filepath.Join(dir, rec.SHA+".json"))
 }
 
-// Record reads the record for session and sha. A running record whose run is
-// not in progress in this runner (serve restarted mid-run) reads as failed.
+// Record reads the record for session and sha. A queued or running record
+// whose run is not in this runner (serve restarted) reads as failed.
 func (r *Runner) Record(session, sha string) (Record, bool, error) {
 	if err := checkName("session", session); err != nil {
 		return Record{}, false, err
@@ -439,7 +639,7 @@ func (r *Runner) Record(session, sha string) (Record, bool, error) {
 	if err != nil {
 		return Record{}, false, err
 	}
-	if rec.Status == StatusRunning && !r.Running(session) {
+	if !rec.Status.Finished() && !r.Running(session) {
 		rec.Status = StatusFail
 		rec.Error = "the run was interrupted (serve restarted); run aiman ci local again"
 	}
