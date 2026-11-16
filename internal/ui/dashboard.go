@@ -4977,7 +4977,7 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		m.selectedRemote = r
-		m.resetSessionCfg(domain.SessionConfig{AdHoc: true, PromptFree: true, Quick: true, Group: domain.GroupQuick})
+		m.resetSessionCfg(domain.SessionConfig{AdHoc: true, PromptFree: true, Quick: true})
 		m.loadingMsg = "Scanning agents on " + r.Host + "..."
 		m.loadingNext = viewStateAgentPicker
 		m.state = viewStateLoading

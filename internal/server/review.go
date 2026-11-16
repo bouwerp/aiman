@@ -256,7 +256,7 @@ func (s *Server) launchReview(ctx context.Context, plan reviewPlan, id, scratch,
 		agentName = plan.launch.agent
 	}
 	repo := domain.Repo{Name: plan.ref.Slug()}
-	group := domain.AssignSessionGroup(plan.group, "", repo.Name, false)
+	group := domain.AssignSessionGroup(plan.group)
 	cfg := domain.SessionConfig{
 		SessionID:     id,
 		Name:          plan.name,

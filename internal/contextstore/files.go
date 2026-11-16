@@ -363,7 +363,7 @@ func (s *Files) packSessionIndexed(ctx context.Context, group, repo string) (str
 		return nil
 	}
 	for _, target := range [][2]string{
-		{domain.ContextNSGroup, group},
+		{domain.ContextNSGroup, domain.ContextGroup(group)},
 		{domain.ContextNSRepo, repo},
 		{domain.ContextNSHost, "host"},
 	} {
@@ -698,7 +698,7 @@ func packForSessionUnmetered(_ context.Context, s *Files, group, repo string) st
 			all = append(all, e)
 		}
 	}
-	add(domain.ContextNSGroup, group)
+	add(domain.ContextNSGroup, domain.ContextGroup(group))
 	add(domain.ContextNSRepo, repo)
 	add(domain.ContextNSHost, "host")
 	Rank(all)
@@ -728,7 +728,7 @@ func packFromLists(ctx context.Context, store domain.ContextStore, group, repo s
 			all = append(all, e)
 		}
 	}
-	add(domain.ContextNSGroup, group)
+	add(domain.ContextNSGroup, domain.ContextGroup(group))
 	add(domain.ContextNSRepo, repo)
 	add(domain.ContextNSHost, "host")
 	superseded := Superseded(all)
@@ -809,7 +809,7 @@ func EntryFromSnapshot(snap *domain.SessionSnapshot, group, sessionID string) do
 		}
 	}
 	e.Body = strings.TrimSpace(body.String())
-	group = strings.TrimSpace(group)
+	group = domain.ContextGroup(group)
 	if group == "" {
 		group = strings.TrimSpace(snap.IssueKey)
 	}

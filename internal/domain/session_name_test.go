@@ -98,21 +98,21 @@ func TestAssignSessionNameComesFromTheBranch(t *testing.T) {
 	}
 }
 
+func TestContextGroupSkipsUngrouped(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{"": "", " ungrouped ": "", "Ungrouped": "", " personal ": "personal"} {
+		if got := ContextGroup(in); got != want {
+			t.Errorf("ContextGroup(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestAssignSessionGroup(t *testing.T) {
 	t.Parallel()
-	if got := AssignSessionGroup("explicit", "WTB-1", "owner/realfi", false); got != "explicit" {
+	if got := AssignSessionGroup(" explicit "); got != "explicit" {
 		t.Fatalf("got %q", got)
 	}
-	if got := AssignSessionGroup("", "WTB-1", "owner/realfi", false); got != "WTB-1" {
-		t.Fatalf("got %q", got)
-	}
-	if got := AssignSessionGroup("", "", "owner/realfi", false); got != "realfi" {
-		t.Fatalf("got %q", got)
-	}
-	if got := AssignSessionGroup("", "", "", false); got != GroupUngrouped {
-		t.Fatalf("got %q", got)
-	}
-	if got := AssignSessionGroup("", "WTB-1", "owner/realfi", true); got != GroupQuick {
+	if got := AssignSessionGroup(""); got != GroupUngrouped {
 		t.Fatalf("got %q", got)
 	}
 }

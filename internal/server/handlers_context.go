@@ -137,9 +137,9 @@ func (p contextPutParams) entry(now time.Time) (domain.ContextEntry, error) {
 		return e, err
 	}
 	e.ValidUntil = validUntil
-	if e.Namespace == "" && strings.TrimSpace(p.Group) != "" {
+	if g := domain.ContextGroup(p.Group); e.Namespace == "" && g != "" {
 		e.Namespace = domain.ContextNSGroup
-		e.Key = p.Group
+		e.Key = g
 	}
 	if e.Namespace == "" && strings.TrimSpace(p.Repo) != "" {
 		e.Namespace = domain.ContextNSRepo

@@ -109,7 +109,7 @@ func Abstract(in Input) string {
 // else the repo, else the host note. Serve's mechanical write and the handover
 // child both use it, so they store one note.
 func NoteNamespace(group, issueKey, repo string) (string, string) {
-	if g := strings.TrimSpace(group); g != "" {
+	if g := domain.ContextGroup(group); g != "" {
 		return domain.ContextNSGroup, g
 	}
 	if issue := strings.TrimSpace(issueKey); issue != "" {

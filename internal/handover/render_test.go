@@ -249,3 +249,14 @@ func TestHandoverFileName(t *testing.T) {
 		t.Fatalf("file name %q", domain.AimanHandoverFileName)
 	}
 }
+
+func TestNoteNamespaceSkipsUngrouped(t *testing.T) {
+	ns, key := NoteNamespace("ungrouped", "WTB-7", "owner/repo")
+	if ns != domain.ContextNSGroup || key != "WTB-7" {
+		t.Errorf("issue session: got %s/%s, want group/WTB-7", ns, key)
+	}
+	ns, key = NoteNamespace("ungrouped", "", "owner/repo")
+	if ns != domain.ContextNSRepo || key != "owner/repo" {
+		t.Errorf("repo session: got %s/%s, want repo/owner/repo", ns, key)
+	}
+}
