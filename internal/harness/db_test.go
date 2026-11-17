@@ -64,13 +64,13 @@ func (f *fakePG) Read(_ context.Context, c PGConn, sql string, limit int) (*DBTa
 	return &t, nil
 }
 
-// fakeContainers runs the SQLite reader in process, with /db mapped to dir.
-type fakeContainers struct {
+// fakeSQLiteRunner runs the SQLite reader in process, with /db mapped to dir.
+type fakeSQLiteRunner struct {
 	dir  string
 	args [][]string
 }
 
-func (f *fakeContainers) RunContainer(_ context.Context, args []string, stdin io.Reader) (string, string, int, error) {
+func (f *fakeSQLiteRunner) RunContainer(_ context.Context, args []string, stdin io.Reader) (string, string, int, error) {
 	f.args = append(f.args, args)
 	var req sqliteRequest
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
@@ -87,7 +87,7 @@ func (f *fakeContainers) RunContainer(_ context.Context, args []string, stdin io
 
 func strp(s string) *string { return &s }
 
-func newDBManager(t *testing.T, pg *fakePG, c *fakeContainers) (*testManager, Run) {
+func newDBManager(t *testing.T, pg *fakePG, c *fakeSQLiteRunner) (*testManager, Run) {
 	t.Helper()
 	tm := newTestManager(t, func(o *Options) {
 		o.Postgres = pg
@@ -298,7 +298,7 @@ func TestDBRedactsColumns(t *testing.T) {
 	}
 
 	// SQLite cells pass the same redaction.
-	c := &fakeContainers{dir: filepath.Dir(sqliteFixture(t))}
+	c := &fakeSQLiteRunner{dir: filepath.Dir(sqliteFixture(t))}
 	tm2, run2 := newDBManager(t, &fakePG{}, c)
 	res, err = tm2.DB(context.Background(), DBRequest{Run: run2.ID, Service: "store", Op: DBOpRows, Table: "orders"})
 	if err != nil {
