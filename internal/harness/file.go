@@ -252,6 +252,9 @@ type Step struct {
 type Check struct {
 	Name string `yaml:"name" json:"name"`
 	Run  string `yaml:"run" json:"run"`
+	// Image runs the check instead of the app's image; it is vetted like
+	// every image and runs with the app's mounts, env and limits.
+	Image string `yaml:"image" json:"image,omitempty"`
 	// Debug runs the check under a debugger; parsed and validated here,
 	// run by harness.check {debug: true}.
 	Debug *Debug `yaml:"debug" json:"debug,omitempty"`

@@ -570,13 +570,66 @@ components:
           type: string
           format: date-time
           description: When the gate closed.
+        reason:
+          type: string
+          enum: [memory_full, harness_budget]
+          description: Why the gate closed.
+        harness_held_bytes:
+          type: integer
+          description: >
+            Memory the harness runs held when the gate closed; set only for
+            reason harness_budget.
+    HarnessGate:
+      type: object
+      description: >
+        Memory held (anon plus shmem) by the containers of every harness
+        run, grouped by compose project. The containers run under Docker,
+        outside the user slice, so the gate counts them against the slice's
+        memory.high: over_budget is true when slice_held_bytes plus
+        held_bytes reaches budget_bytes, and that closes the gate (reason
+        harness_budget) until the sum stays under 90% of it for the hold.
+        budget_bytes is absent when the slice has no finite memory.high;
+        the memory is then reported only.
+      required: [held_bytes, over_budget]
+      properties:
+        held_bytes:
+          type: integer
+        slice_held_bytes:
+          type: integer
+        budget_bytes:
+          type: integer
+        over_budget:
+          type: boolean
+        source:
+          type: string
+          enum: [cgroup, stats, mixed]
+          description: Where the values came from, cgroup files or docker stats.
+        error:
+          type: string
+          description: The last failed read; the values are then the last good read.
+        runs:
+          type: array
+          items:
+            type: object
+            required: [run, project, held_bytes, containers]
+            properties:
+              run:
+                type: string
+              project:
+                type: string
+                description: The compose project, harness-<run>.
+              held_bytes:
+                type: integer
+              containers:
+                type: integer
     PressureGate:
       type: object
       description: >
         The host pressure gate. It closes when the user slice's memory full
         avg10 reaches host.load.pressure_gate.memory_full_avg10 (default 20)
         and opens after hold (30s) in a row below reopen_full_avg10 (10).
-        some and slice_over_high are reported and never close it. While
+        some and slice_over_high are reported and never close it. Harness
+        memory also closes it (see HarnessGate). While
         closed, serve refuses new sessions, helper spawns and review runs
         with host_under_pressure and CI runs wait.
       required: [closed, since, memory_some_avg10, memory_full_avg10, slice_over_high]
@@ -594,6 +647,12 @@ components:
         slice_over_high:
           type: boolean
           description: The user slice is at or above its memory.high.
+        reason:
+          type: string
+          enum: [memory_full, harness_budget]
+          description: Why a closed gate closed; absent while open.
+        harness:
+          $ref: "#/components/schemas/HarnessGate"
     NeedsDestructiveData:
       type: object
       description: >
@@ -1759,6 +1818,11 @@ components:
         run:
           type: string
           description: The command, as the harness file has it.
+        image:
+          type: string
+          description: >
+            The check's own image ref (checks[].image); absent when it runs
+            in the app's image.
         exit:
           type: integer
         at:
@@ -2009,6 +2073,9 @@ components:
                 type: string
               run:
                 type: string
+              image:
+                type: string
+                description: An image the check runs in instead of the app's; vetted like every image.
         stubs:
           type: array
           items:
