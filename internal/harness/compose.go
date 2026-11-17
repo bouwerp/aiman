@@ -11,14 +11,14 @@ import (
 	"strconv"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/bouwerp/aiman/internal/sandbox"
 )
 
 // Compose service, network and mount names of a run's project.
 const (
 	ServiceApp       = "app"
 	ServiceEdge      = "edge"
-	ServiceCacheInit = "cache-init"
+	ServiceCacheInit = sandbox.CacheInitService
 	NetworkInner     = "inner"
 	NetworkOuter     = "outer"
 
@@ -48,12 +48,15 @@ const (
 	InitDBFile = "initdb/" + initDBFile
 )
 
-// Hardening constants, copied from internal/review/sandbox.go.
+// Hardening values from internal/sandbox.
 const (
-	noNewPrivileges = "no-new-privileges:true"
-	capDropAll      = "ALL"
-	pullNever       = "never"
+	noNewPrivileges = sandbox.NoNewPrivileges
+	capDropAll      = sandbox.CapDropAll
+	pullNever       = sandbox.PullNever
 )
+
+// appCaches are the app's cache volumes.
+var appCaches = sandbox.Caches{GoMod: "gomod", GoCache: "gocache", NPM: "npm"}
 
 //go:embed initdb/*.sql
 var initDB embed.FS
@@ -151,7 +154,7 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 			NetworkInner: network(spec.InnerSubnet, true),
 			NetworkOuter: network(spec.OuterSubnet, false),
 		},
-		Volumes: map[string]map[string]any{"gomod": {}, "gocache": {}, "npm": {}},
+		Volumes: appCaches.Volumes(),
 	}
 	app, edge := appService(f, spec), edgeService(spec, relays)
 	if spec.Debug != nil {
@@ -182,43 +185,13 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 		return nil, err
 	}
 	for name, svc := range doc.Services {
-		doc.Services[name] = escapeInterpolation(svc)
+		doc.Services[name] = sandbox.EscapeInterpolation(svc)
 	}
-	raw, err := yaml.Marshal(doc)
+	raw, err := sandbox.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}
 	return &Project{Name: doc.Name, YAML: raw, Relays: relays, Files: files}, nil
-}
-
-// escapeInterpolation doubles every $ in what a container runs or reads, so
-// compose passes it to the container's shell as written instead of filling
-// it from serve's own environment.
-func escapeInterpolation(s composeService) composeService {
-	esc := func(v string) string { return strings.ReplaceAll(v, "$", "$$") }
-	cmd := make([]string, len(s.Command))
-	for i, c := range s.Command {
-		cmd[i] = esc(c)
-	}
-	if s.Command != nil {
-		s.Command = cmd
-	}
-	if s.Environment != nil {
-		env := make(map[string]string, len(s.Environment))
-		for k, v := range s.Environment {
-			env[k] = esc(v)
-		}
-		s.Environment = env
-	}
-	if s.Healthcheck != nil {
-		hc := *s.Healthcheck
-		hc.Test = make([]string, len(s.Healthcheck.Test))
-		for i, c := range s.Healthcheck.Test {
-			hc.Test[i] = esc(c)
-		}
-		s.Healthcheck = &hc
-	}
-	return s
 }
 
 func checkSpec(f *File, spec RunSpec) (*Scenario, error) {
@@ -331,64 +304,25 @@ func isPostgres(s Service) bool {
 
 func dataVolume(service string) string { return "data-" + service }
 
-// disableIPv6 turns IPv6 off inside a container on top of the networks having
-// none, so no link-local address or route exists either.
-var disableIPv6 = map[string]string{
-	"net.ipv6.conf.all.disable_ipv6":     "1",
-	"net.ipv6.conf.default.disable_ipv6": "1",
-}
+// disableIPv6 is sandbox.DisableIPv6.
+var disableIPv6 = sandbox.DisableIPv6
 
+// network is the run network on subnet (sandbox.NetworkOf). The outer
+// network carries only the edge's published relays.
 func network(subnet netip.Prefix, internal bool) composeNetwork {
-	n := composeNetwork{
-		Internal:   internal,
-		EnableIPv6: false,
-		IPAM:       composeIPAM{Config: []composeSubnet{{Subnet: subnet.Masked().String()}}},
-	}
-	if !internal {
-		// The outer network carries only the edge's published relays; without
-		// masquerade the edge cannot reach the internet either.
-		n.DriverOpts = map[string]string{"com.docker.network.bridge.enable_ip_masquerade": "false"}
-	}
-	return n
+	return sandbox.NetworkOf(subnet, internal)
 }
 
 func limited(s *composeService, l ResolvedLimits) {
-	s.MemLimit = l.Memory
-	s.CPUs = l.CPUs
-	s.PidsLimit = l.PIDs
+	sandbox.Limit(s, sandbox.MemoryBytes(l.Memory), l.CPUs, l.PIDs)
 }
 
 func appService(f *File, spec RunSpec) composeService {
-	s := composeService{
-		Image:       spec.AppImage,
-		PullPolicy:  pullNever,
-		WorkingDir:  "/src",
-		User:        fmt.Sprintf("%d:%d", spec.UID, spec.GID),
-		ReadOnly:    true,
-		CapDrop:     []string{capDropAll},
-		SecurityOpt: []string{noNewPrivileges},
-		// Docker mounts a tmpfs noexec by default, and go test runs the binary
-		// it builds under the temp directory. /src is already writable and
-		// executable, so this gives the app nothing new.
-		Tmpfs: []string{"/tmp:exec"},
-		Environment: map[string]string{
-			"HOME":             "/tmp",
-			"GOMODCACHE":       "/cache/gomod",
-			"GOCACHE":          "/cache/gocache",
-			"npm_config_cache": "/cache/npm",
-		},
-		Volumes: []string{
-			spec.Src + ":/src",
-			spec.Out + ":/out",
-			"gomod:/cache/gomod",
-			"gocache:/cache/gocache",
-			"npm:/cache/npm",
-		},
-		Networks:  []string{NetworkInner},
-		Sysctls:   disableIPv6,
-		Command:   []string{"sh", "-c", f.App.Run},
-		DependsOn: map[string]composeCondition{ServiceCacheInit: {Condition: "service_completed_successfully"}},
-	}
+	s := sandbox.Workload(spec.AppImage, spec.UID, spec.GID, spec.Src, spec.Out, appCaches)
+	s.PullPolicy = pullNever
+	s.Networks = []string{NetworkInner}
+	s.Sysctls = disableIPv6
+	s.Command = []string{"sh", "-c", f.App.Run}
 	limited(&s, f.AppLimits())
 	return s
 }
@@ -413,23 +347,11 @@ func checkService(f *File, spec RunSpec, image string) composeService {
 	return s
 }
 
-// cacheInitService hands the cache volumes to the app's user. Docker creates
-// a named volume owned by root, and the app runs unprivileged with no
-// capabilities, so it cannot do this itself. It runs only chown, as root with
-// CHOWN alone, with no network and without the source mounted.
+// cacheInitService hands the cache volumes to the app's user
+// (sandbox.CacheInit).
 func cacheInitService(f *File, spec RunSpec) composeService {
-	s := composeService{
-		Image:       spec.AppImage,
-		PullPolicy:  pullNever,
-		User:        "0:0",
-		ReadOnly:    true,
-		CapDrop:     []string{capDropAll},
-		CapAdd:      []string{"CHOWN"},
-		SecurityOpt: []string{noNewPrivileges},
-		NetworkMode: "none",
-		Volumes:     []string{"gomod:/cache/gomod", "gocache:/cache/gocache", "npm:/cache/npm"},
-		Command:     []string{"chown", fmt.Sprintf("%d:%d", spec.UID, spec.GID), "/cache/gomod", "/cache/gocache", "/cache/npm"},
-	}
+	s := sandbox.CacheInit(spec.AppImage, spec.UID, spec.GID, appCaches)
+	s.PullPolicy = pullNever
 	limited(&s, f.AppLimits())
 	return s
 }
@@ -534,62 +456,12 @@ func edgeService(spec RunSpec, relays []Relay) composeService {
 	return s
 }
 
-type composeFile struct {
-	Name     string                    `yaml:"name"`
-	Services map[string]composeService `yaml:"services"`
-	Networks map[string]composeNetwork `yaml:"networks"`
-	Volumes  map[string]map[string]any `yaml:"volumes"`
-}
-
-type composeService struct {
-	Image       string            `yaml:"image"`
-	PullPolicy  string            `yaml:"pull_policy"`
-	WorkingDir  string            `yaml:"working_dir,omitempty"`
-	User        string            `yaml:"user,omitempty"`
-	ReadOnly    bool              `yaml:"read_only"`
-	CapDrop     []string          `yaml:"cap_drop"`
-	CapAdd      []string          `yaml:"cap_add,omitempty"`
-	SecurityOpt []string          `yaml:"security_opt,omitempty"`
-	Tmpfs       []string          `yaml:"tmpfs,omitempty"`
-	Environment map[string]string `yaml:"environment,omitempty"`
-	Volumes     []string          `yaml:"volumes,omitempty"`
-	MemLimit    int64             `yaml:"mem_limit"`
-	CPUs        float64           `yaml:"cpus"`
-	PidsLimit   int               `yaml:"pids_limit"`
-	Ports       []string          `yaml:"ports,omitempty"`
-	NetworkMode string            `yaml:"network_mode,omitempty"`
-	// Networks is a []string, or a map of network name to composeAttach
-	// when a network needs an alias.
-	Networks    any                         `yaml:"networks,omitempty"`
-	Sysctls     map[string]string           `yaml:"sysctls,omitempty"`
-	Healthcheck *composeHealthcheck         `yaml:"healthcheck,omitempty"`
-	Command     []string                    `yaml:"command,omitempty"`
-	DependsOn   map[string]composeCondition `yaml:"depends_on,omitempty"`
-	Profiles    []string                    `yaml:"profiles,omitempty"`
-}
-
-type composeCondition struct {
-	Condition string `yaml:"condition"`
-}
-
-type composeHealthcheck struct {
-	Test     []string `yaml:"test"`
-	Interval string   `yaml:"interval"`
-	Timeout  string   `yaml:"timeout"`
-	Retries  int      `yaml:"retries"`
-}
-
-type composeNetwork struct {
-	Internal   bool              `yaml:"internal"`
-	EnableIPv6 bool              `yaml:"enable_ipv6"`
-	DriverOpts map[string]string `yaml:"driver_opts,omitempty"`
-	IPAM       composeIPAM       `yaml:"ipam"`
-}
-
-type composeIPAM struct {
-	Config []composeSubnet `yaml:"config"`
-}
-
-type composeSubnet struct {
-	Subnet string `yaml:"subnet"`
-}
+// The compose document types are internal/sandbox's.
+type (
+	composeFile        = sandbox.File
+	composeService     = sandbox.Service
+	composeCondition   = sandbox.Condition
+	composeHealthcheck = sandbox.Healthcheck
+	composeNetwork     = sandbox.Network
+	composeAttach      = sandbox.Attach
+)

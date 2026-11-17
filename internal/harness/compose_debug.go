@@ -189,11 +189,6 @@ func dapTarget(spec RunSpec) (service, addr string) {
 	return ServiceApp, inspectAddr(spec)
 }
 
-// composeAttach is one network of a service in the map form.
-type composeAttach struct {
-	IPv4Address string `yaml:"ipv4_address,omitempty"`
-}
-
 // debugApp puts the app on the debug network at its fixed address, mounts
 // the adapter's tools read-only, adds its environment and AIMAN_INSPECT, and
 // replaces app.run.
