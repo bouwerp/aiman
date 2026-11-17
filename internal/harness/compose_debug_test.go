@@ -80,7 +80,7 @@ func TestDebugNetworkOnlyEdge(t *testing.T) {
 	}
 
 	cmd := strings.Join(strs(app["command"]), " ")
-	for _, want := range []string{DlvMount + " dap", `--listen="$AIMAN_INSPECT"`} {
+	for _, want := range []string{DlvMount + " dap", `--listen="$$AIMAN_INSPECT"`} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("app command %q lacks %q", cmd, want)
 		}

@@ -162,11 +162,44 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 			files[InitDBFile] = PostgresInitSQL()
 		}
 	}
+	for name, svc := range doc.Services {
+		doc.Services[name] = escapeInterpolation(svc)
+	}
 	raw, err := yaml.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}
 	return &Project{Name: doc.Name, YAML: raw, Relays: relays, Files: files}, nil
+}
+
+// escapeInterpolation doubles every $ in what a container runs or reads, so
+// compose passes it to the container's shell as written instead of filling
+// it from serve's own environment.
+func escapeInterpolation(s composeService) composeService {
+	esc := func(v string) string { return strings.ReplaceAll(v, "$", "$$") }
+	cmd := make([]string, len(s.Command))
+	for i, c := range s.Command {
+		cmd[i] = esc(c)
+	}
+	if s.Command != nil {
+		s.Command = cmd
+	}
+	if s.Environment != nil {
+		env := make(map[string]string, len(s.Environment))
+		for k, v := range s.Environment {
+			env[k] = esc(v)
+		}
+		s.Environment = env
+	}
+	if s.Healthcheck != nil {
+		hc := *s.Healthcheck
+		hc.Test = make([]string, len(s.Healthcheck.Test))
+		for i, c := range s.Healthcheck.Test {
+			hc.Test[i] = esc(c)
+		}
+		s.Healthcheck = &hc
+	}
+	return s
 }
 
 func checkSpec(f *File, spec RunSpec) (*Scenario, error) {
