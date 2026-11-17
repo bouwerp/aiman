@@ -137,6 +137,10 @@ type Result struct {
 var safeIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 // runDir is <Dir>/<session>/<run>.
+// RunDir is the directory of a run: src/, sandbox/ (compose.yaml), logs/,
+// run.json and result.json.
+func (m *Manager) RunDir(session, id string) string { return m.runDir(session, id) }
+
 func (m *Manager) runDir(session, id string) string {
 	return filepath.Join(m.opts.Dir, session, id)
 }

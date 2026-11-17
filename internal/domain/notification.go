@@ -23,17 +23,21 @@ const (
 	// NotifyHostPressure is a host-level event with no session: the pressure
 	// gate closed, so new sessions, reviews and CI runs wait.
 	NotifyHostPressure NotifyKind = "host_pressure"
+	// NotifyHarnessImage is a harness image that needs the operator: it waits
+	// for approval, is blocked, failed vetting, or (with no session) a
+	// re-scan marked it stale.
+	NotifyHarnessImage NotifyKind = "harness_image"
 )
 
 // AllNotifyKinds returns the supported notification kinds in order.
 func AllNotifyKinds() []NotifyKind {
-	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate, NotifyHostUpdate, NotifyResources, NotifyHostPressure}
+	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate, NotifyHostUpdate, NotifyResources, NotifyHostPressure, NotifyHarnessImage}
 }
 
 // NeedsYou reports whether the user must act.
 func NeedsYou(k NotifyKind) bool {
 	switch k {
-	case NotifyWaitingInput, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyResources, NotifyHostPressure:
+	case NotifyWaitingInput, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyResources, NotifyHostPressure, NotifyHarnessImage:
 		return true
 	default:
 		return false
@@ -61,6 +65,8 @@ func EventLabel(k NotifyKind) string {
 		return "memory"
 	case NotifyHostPressure:
 		return "host pressure"
+	case NotifyHarnessImage:
+		return "harness image"
 	default:
 		return string(k)
 	}

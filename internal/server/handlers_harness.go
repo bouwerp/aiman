@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/harness"
+	"github.com/bouwerp/aiman/internal/harness/images"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/redact"
 	"github.com/bouwerp/aiman/internal/review"
@@ -37,10 +39,15 @@ type HarnessDeps struct {
 	// Repos is the repos section of serve's config: repos.<slug>.harness
 	// overrides and the review image override.
 	Repos map[string]config.RepoBootstrap
+	// Images is the image vetter behind harness.image_status and
+	// harness.image_approve; the manager holds the same vetter for harness.up.
+	Images *images.Vetter
 }
 
 type harnessState struct {
 	d HarnessDeps
+	// bg tracks approvals started from closed image gates.
+	bg sync.WaitGroup
 }
 
 // SetHarness enables the harness.* methods. Without it they answer
@@ -86,6 +93,9 @@ type harnessParams struct {
 func (s *Server) dispatchHarness(ctx context.Context, req Request) Response {
 	if s.harness == nil {
 		return errResp(req.ID, CodeUnavailable, "the harness is not enabled on this serve (harness.enabled, or no docker)")
+	}
+	if strings.HasPrefix(req.Method, "harness.image_") {
+		return s.dispatchHarnessImage(ctx, req)
 	}
 	var p harnessParams
 	if len(req.Params) > 0 {

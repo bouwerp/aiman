@@ -3,6 +3,7 @@ package todo
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
 )
@@ -23,6 +24,11 @@ const (
 	ApproveGateRef = "gate:approve"
 	// ApproveGateText is the fixed text of the approval gate item.
 	ApproveGateText = "Approval signed off"
+	// ImageGatePrefix starts the ref of a harness image gate,
+	// gate:image:<digest>. Serve opens one per session that asked for a
+	// digest waiting for approval; its text names the image and is fixed per
+	// item. Only the operator closes it, which approves the digest.
+	ImageGatePrefix = "gate:image:"
 )
 
 // gateTexts maps each gate ref to its fixed item text.
@@ -33,7 +39,51 @@ var gateTexts = map[string]string{
 }
 
 // ServeOnlyGate reports whether ref is a gate only serve may add.
-func ServeOnlyGate(ref string) bool { return ref == ApproveGateRef }
+func ServeOnlyGate(ref string) bool {
+	return ref == ApproveGateRef || strings.HasPrefix(ref, ImageGatePrefix)
+}
+
+// ImageGateRef is the gate ref of an image digest.
+func ImageGateRef(digest string) string { return ImageGatePrefix + digest }
+
+// ImageGateDigest returns the digest of an image gate ref.
+func ImageGateDigest(ref string) (string, bool) {
+	d, ok := strings.CutPrefix(ref, ImageGatePrefix)
+	return d, ok && d != ""
+}
+
+// isGateRef reports whether ref names a gate: a fixed one or an image gate.
+func isGateRef(ref string) bool {
+	if _, ok := gateTexts[ref]; ok {
+		return true
+	}
+	_, ok := ImageGateDigest(ref)
+	return ok
+}
+
+// AddImageGate inserts the open image gate for digest with text before the
+// Done-when item, or at the end. It reports whether it added one; a list that
+// already holds the gate, open or not, gets none.
+func AddImageGate(l *domain.TodoList, digest, text string) bool {
+	return insertGate(l, ImageGateRef(digest), text)
+}
+
+// ClosedImageGates returns the digests whose image gate was open in prev and
+// is done in next.
+func ClosedImageGates(prev, next domain.TodoList) []string {
+	var out []string
+	for _, was := range prev.Items {
+		d, ok := ImageGateDigest(was.Ref)
+		if !ok || !gateIsOpen(was) {
+			continue
+		}
+		i := slices.IndexFunc(next.Items, func(it domain.TodoItem) bool { return it.ID == was.ID })
+		if i >= 0 && next.Items[i].State == domain.TodoDone && next.Items[i].Ref == was.Ref {
+			out = append(out, d)
+		}
+	}
+	return out
+}
 
 // ErrGateLocked wraps a change that would let a session close, drop, remove or
 // edit an open gate, or change or remove a dropped one. It wraps ErrInvalid.
@@ -54,6 +104,10 @@ func AddGate(l *domain.TodoList, ref string) bool {
 	if !ok {
 		return false
 	}
+	return insertGate(l, ref, text)
+}
+
+func insertGate(l *domain.TodoList, ref, text string) bool {
 	for _, it := range l.Items {
 		if it.Ref == ref {
 			return false
@@ -69,8 +123,7 @@ func AddGate(l *domain.TodoList, ref string) bool {
 }
 
 func gateIsOpen(it domain.TodoItem) bool {
-	_, isGate := gateTexts[it.Ref]
-	return isGate && (it.State == domain.TodoPending || it.State == domain.TodoActive)
+	return isGateRef(it.Ref) && (it.State == domain.TodoPending || it.State == domain.TodoActive)
 }
 
 // GateOpen reports whether the list holds the gate for ref, still pending or active.
@@ -84,8 +137,7 @@ func GateOpen(l domain.TodoList, ref string) bool {
 // undo it. Moving the item is allowed.
 func GuardGate(prev, next domain.TodoList) error {
 	for _, was := range prev.Items {
-		_, isGate := gateTexts[was.Ref]
-		dropped := isGate && was.State == domain.TodoDropped
+		dropped := isGateRef(was.Ref) && was.State == domain.TodoDropped
 		if !gateIsOpen(was) && !dropped {
 			continue
 		}

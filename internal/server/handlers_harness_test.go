@@ -67,11 +67,28 @@ type harnessSetup struct {
 	repos     map[string]config.RepoBootstrap
 	images    []string
 	runMemory int64
+	// vet wires image vetting with fakes; s2 then shares s1's checkout.
+	vet bool
 }
 
 // harnessServer is a server with sessions s1 (on a committed checkout holding
 // the harness file) and s2, and a manager over a fake Docker engine.
 func harnessServer(t *testing.T, setup harnessSetup) (*Server, string) {
+	t.Helper()
+	f := harnessFixtureOf(t, setup)
+	return f.srv, f.dir
+}
+
+// harnessFixture is a harness server with its parts.
+type harnessFixture struct {
+	srv   *Server
+	dir   string
+	notes *fakeSteerStore
+	// vet is set when the setup asked for image vetting.
+	vet *harnessVet
+}
+
+func harnessFixtureOf(t *testing.T, setup harnessSetup) *harnessFixture {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "wt")
 	if err := os.MkdirAll(filepath.Join(dir, ".aiman"), 0o750); err != nil {
@@ -90,7 +107,12 @@ func harnessServer(t *testing.T, setup harnessSetup) (*Server, string) {
 	ciGit(t, dir, "commit", "-q", "-m", "init")
 	s1 := todoSession("s1")
 	s1.WorktreePath, s1.RepoName = dir, "o/r"
-	srv, _, _ := todoServer(t, s1, todoSession("s2"))
+	s2 := todoSession("s2")
+	if setup.vet {
+		s2.WorktreePath, s2.RepoName = dir, "o/r"
+	}
+	srv, _, notes := todoServer(t, s1, s2)
+	fx := &harnessFixture{srv: srv, dir: dir, notes: notes}
 	images := setup.images
 	if images == nil {
 		images = []string{"golang:1.25", "postgres:16", harness.EdgeImage}
@@ -99,7 +121,13 @@ func harnessServer(t *testing.T, setup harnessSetup) (*Server, string) {
 	for i, ref := range images {
 		d.images[ref] = fmt.Sprintf("sha256:%064x", i+1)
 	}
+	var vetter harness.ImageVetter
+	if setup.vet {
+		fx.vet = newHarnessVet(t, srv)
+		vetter = fx.vet.v
+	}
 	m, err := harness.NewManager(harness.Options{
+		Images:   vetter,
 		Dir:      filepath.Join(t.TempDir(), "harness"),
 		AimanBin: "/usr/local/bin/aiman",
 		UID:      1000, GID: 1000,
@@ -113,8 +141,12 @@ func harnessServer(t *testing.T, setup harnessSetup) (*Server, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(m.Close)
-	srv.SetHarness(HarnessDeps{Manager: m, Repos: setup.repos})
-	return srv, dir
+	deps := HarnessDeps{Manager: m, Repos: setup.repos}
+	if fx.vet != nil {
+		deps.Images = fx.vet.v
+	}
+	srv.SetHarness(deps)
+	return fx
 }
 
 type harnessRunResult struct {

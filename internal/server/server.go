@@ -509,7 +509,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.dispatchAgents(ctx, req)
 	case "session.transcript", "session.transcript_item", "session.process_output", "session.file":
 		return s.dispatchTranscript(ctx, req)
-	case "harness.up", "harness.check", "harness.status", "harness.result", "harness.down", "harness.logs", "harness.verdict", "harness.list":
+	case "harness.up", "harness.check", "harness.status", "harness.result", "harness.down", "harness.logs", "harness.verdict", "harness.list",
+		"harness.image_status", "harness.image_approve":
 		return s.dispatchHarness(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)
