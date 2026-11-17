@@ -43,6 +43,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -257,6 +258,7 @@ input[type="text"], select {
   .bar, .apps, .layout { padding-left: 1rem; padding-right: 1rem; }
   .notice { margin-left: 1rem; margin-right: 1rem; }
   .verdict-row { grid-column: 1 / -1; }
+  .verdict-row input[type="text"] { flex-basis: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
