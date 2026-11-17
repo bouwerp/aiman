@@ -82,7 +82,8 @@ type ConsultReport struct {
 }
 
 // ParseConsultReport reads a consult's report. Bullets under `## Objections`
-// that start with `[high]`, `[medium]` or `[low]` (any case) are counted; other
+// that start with `[high]`, `[medium]` or `[low]` (any case, optionally in
+// backticks, bold or italics) are counted; other
 // lines are prose. `## Verdict` is required and its first word must be
 // approve, revise or reject.
 func ParseConsultReport(md string) (ConsultReport, error) {
@@ -125,7 +126,8 @@ func (r *ConsultReport) count(line string) {
 	if !ok {
 		return
 	}
-	tag := strings.ToLower(strings.TrimSpace(body))
+	// Agents often wrap the tag in markup: `[high]`, **[high]**, _[high]_.
+	tag := strings.ToLower(strings.TrimLeft(strings.TrimSpace(body), "`*_ "))
 	switch {
 	case strings.HasPrefix(tag, "[high]"):
 		r.High++
