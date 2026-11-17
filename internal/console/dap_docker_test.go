@@ -50,7 +50,7 @@ func TestDAPBreakpointHit(t *testing.T) {
 	rpc := &fakeRPC{answer: func(method string, _ map[string]any) (json.RawMessage, error) {
 		return json.Marshal(map[string]any{"type": "harness_run", "run": run})
 	}}
-	_, host := serveConsole(t, rpc, directForwarder{})
+	_, host := serveConsole(t, rpc)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	ws, _, err := dialBridge(ctx, host, testToken, "http://"+host)
@@ -93,7 +93,7 @@ func TestNodeBreakpointThroughEditorPort(t *testing.T) {
 		}
 		return json.Marshal(map[string]any{"type": "harness_run", "run": run})
 	}}
-	s, host := serveConsole(t, rpc, directForwarder{})
+	s, host := serveConsole(t, rpc)
 	t.Cleanup(s.closeEditor)
 	w := do(t, s, http.MethodGet, host, "/api/debug?run=r1", testToken, "", "")
 	var v struct {
