@@ -8,24 +8,26 @@ import (
 
 // Pinned tools. A pin is a release version and the sha256 of its archive.
 //
-//   - Node: the official linux tarball (.tar.gz) of the current LTS line.
-//     The sums are the release's SHASUMS256.txt lines
-//     (https://nodejs.org/dist/v26.13.1/SHASUMS256.txt), copied here so a
+//   - Node: the official linux tarball (.tar.gz) of the 24 LTS line. Node
+//     26 links libatomic.so.1, which minimal glibc images (the adapter's
+//     Debian slim among them) do not ship; 24 needs only libc, libstdc++
+//     and libgcc. The sums are the release's SHASUMS256.txt lines
+//     (https://nodejs.org/dist/v24.22.3/SHASUMS256.txt), copied here so a
 //     changed file on the mirror is refused.
 //   - js-debug: the standalone DAP server, GitHub release asset
 //     js-debug-dap-<v>.tar.gz of microsoft/vscode-js-debug. The release has
 //     no checksum file; the sum is the asset digest GitHub's release API
 //     lists (assets[].digest), which matches a download's sha256.
 const (
-	NodeVersion    = "v26.13.1"
+	NodeVersion    = "v24.22.3"
 	JSDebugVersion = "v1.140.1"
 	JSDebugSHA256  = "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf"
 )
 
 // nodeSHA256 is the pinned Node tarball per GOARCH.
 var nodeSHA256 = map[string]string{
-	"amd64": "518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778",
-	"arm64": "80a330b35415382878df18d41afbd106ea89bfb3be0087d6608e289a14c5cc7d",
+	"amd64": "061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2",
+	"arm64": "261af2af250dfd7e9f25cf151d1b2713a0adf8f10a9ad116c4947f68627affe8",
 }
 
 // nodeArch is Node's name for a GOARCH.

@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	testNodeDir    = "/home/u/.aiman/harness/tools/node-v26.13.1-linux-amd64"
+	testNodeDir    = "/home/u/.aiman/harness/tools/node-v24.22.3-linux-amd64"
 	testJSDebugDir = "/home/u/.aiman/harness/tools/js-debug-v1.140.1-linux-amd64"
 	nodeDebugBlock = "node, entry: dist/server.js, cwd: api, runtime_args: [--enable-source-maps]"
 )
