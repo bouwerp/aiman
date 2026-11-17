@@ -9,53 +9,66 @@ import (
 )
 
 // DebugAdapter is one language's debugger. The compose builder, the edge's
-// exclusive DAP relay, the console's DAP bridge and its Debug tab know only
-// this interface and the Debug Adapter Protocol; Go (Delve) is the one
-// implementation today.
+// DAP relay, the console's DAP bridge and its Debug tab know only this
+// interface and the Debug Adapter Protocol: Go runs Delve's DAP server in the
+// app container, Node runs js-debug's in a separate adapter container.
 type DebugAdapter interface {
 	// Lang is the app.debug.lang it serves.
 	Lang() string
+	// Check refuses a file it cannot debug, before anything starts.
+	Check(f *File) error
+	// AdapterImage is the image of a separate adapter container (vetted as a
+	// builtin image), empty when the DAP server runs in the app container.
+	AdapterImage() string
 	// Spec readies the adapter's tools on the host and says how the app
-	// container runs under it.
-	Spec(ctx context.Context) (*DebugSpec, error)
-	// Launch is the DAP launch request a client sends for the file's app.
-	Launch(f *File) (DebugLaunch, error)
+	// container (and the adapter container, if any) run under it.
+	Spec(ctx context.Context, f *File) (*DebugSpec, error)
+	// Launch is the DAP launch or attach request a client sends for the
+	// file's app on the run's debug network.
+	Launch(f *File, net DebugNet) (DebugLaunch, error)
 	// EditorConfig is a .vscode/launch.json configuration that connects an
 	// editor to the debugger forwarded to 127.0.0.1:port.
 	EditorConfig(l DebugLaunch, port int) map[string]any
 }
 
-// DebugLaunch is what a DAP client needs to start the app: the launch
-// request's arguments, sent as they are, and the container path of the run's
-// exported tree for mapping source paths.
+// DebugLaunch is what a DAP client needs to start the app: the request
+// (launch or attach) and its arguments, sent as they are, and the container
+// path of the run's exported tree for mapping source paths. Children is set
+// when the adapter opens child sessions with the startDebugging reverse
+// request.
 type DebugLaunch struct {
 	Lang       string         `json:"lang"`
 	Adapter    string         `json:"adapter"`
+	Request    string         `json:"request"`
 	Arguments  map[string]any `json:"arguments"`
 	SourceRoot string         `json:"source_root"`
+	Children   bool           `json:"children,omitempty"`
 }
 
 // CodeDebugUnsupported is a debug run for a language with no adapter yet.
 const CodeDebugUnsupported = "harness_debug_unsupported"
 
-// DebugAdapterFor picks the adapter for app.debug.lang among adapters.
+// DebugAdapterFor picks the adapter for app.debug.lang among adapters and
+// checks the file against it.
 func DebugAdapterFor(f *File, adapters []DebugAdapter) (DebugAdapter, error) {
 	if f.App.Debug == nil {
 		return nil, invalid("a debug run needs app.debug in the harness file (for example debug: {lang: go})")
 	}
 	lang := f.App.Debug.Lang
+	langs := make([]string, 0, len(adapters))
 	for _, a := range adapters {
 		if a.Lang() == lang {
-			return a, nil
+			return a, a.Check(f)
 		}
+		langs = append(langs, a.Lang())
 	}
-	return nil, &Error{Code: CodeDebugUnsupported, Msg: fmt.Sprintf("debugging app.debug.lang %q is not yet supported; only go is", lang)}
+	return nil, &Error{Code: CodeDebugUnsupported, Lang: lang, Msg: fmt.Sprintf("debugging app.debug.lang %q is not yet supported; this host debugs %s", lang, strings.Join(langs, ", "))}
 }
 
 // EditorConfig is the launch.json configuration for l at 127.0.0.1:port,
 // from the adapter of l's language.
 func EditorConfig(l DebugLaunch, port int) (map[string]any, error) {
-	for _, a := range []DebugAdapter{&GoDebug{}} {
+	for _, a := range []DebugAdapter{&GoDebug{}, &NodeDebug{}} {
 		if a.Lang() == l.Lang {
 			return a.EditorConfig(l, port), nil
 		}
@@ -81,8 +94,17 @@ const GoDebugFlags = "'-gcflags=all=-N -l'"
 // Lang is go.
 func (*GoDebug) Lang() string { return "go" }
 
-// Spec builds or verifies dlv and runs it on the debug alias.
-func (g *GoDebug) Spec(ctx context.Context) (*DebugSpec, error) {
+// Check refuses an app.run that cannot be started as a program.
+func (*GoDebug) Check(f *File) error {
+	_, _, err := debugProgram(f)
+	return err
+}
+
+// AdapterImage is empty: dlv dap runs in the app container.
+func (*GoDebug) AdapterImage() string { return "" }
+
+// Spec builds or verifies dlv and runs it on the app's debug address.
+func (g *GoDebug) Spec(ctx context.Context, _ *File) (*DebugSpec, error) {
 	if g.Tools == nil {
 		return nil, errors.New("the Go debugger has no tools directory")
 	}
@@ -116,13 +138,13 @@ func GoDebugSpec(dlv string) *DebugSpec {
 
 // Launch is mode exec of the built binary: app.debug.program and args when
 // set, else app.run split into words.
-func (*GoDebug) Launch(f *File) (DebugLaunch, error) {
+func (*GoDebug) Launch(f *File, _ DebugNet) (DebugLaunch, error) {
 	prog, args, err := debugProgram(f)
 	if err != nil {
 		return DebugLaunch{}, err
 	}
 	return DebugLaunch{
-		Lang: "go", Adapter: "dlv dap", SourceRoot: "/src",
+		Lang: "go", Adapter: "dlv dap", Request: "launch", SourceRoot: "/src",
 		Arguments: map[string]any{
 			"name": "aiman harness", "type": "go", "request": "launch", "mode": "exec",
 			"program": prog, "args": args, "cwd": "/src", "stopOnEntry": false,

@@ -20,7 +20,7 @@ type stubGoDebug struct {
 	err error
 }
 
-func (s *stubGoDebug) Spec(context.Context) (*DebugSpec, error) {
+func (s *stubGoDebug) Spec(context.Context, *File) (*DebugSpec, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -119,9 +119,9 @@ func TestManagerDebugRefusals(t *testing.T) {
 	if !errors.As(err, &he) || he.Code != CodeInvalid {
 		t.Fatalf("debug without app.debug: %v", err)
 	}
-	node := testRepo(t, strings.Replace(debugHarnessFile, "lang: go", "lang: node", 1))
-	if _, err := tm.Up(context.Background(), UpRequest{Session: "s1", Repo: node, Scenario: "plain", Debug: true}); !errors.As(err, &he) || he.Code != CodeDebugUnsupported {
-		t.Fatalf("node debug: %v", err)
+	bun := testRepo(t, strings.Replace(debugHarnessFile, "{lang: go}", "{lang: bun, entry: src/index.ts}", 1))
+	if _, err := tm.Up(context.Background(), UpRequest{Session: "s1", Repo: bun, Scenario: "plain", Debug: true}); !errors.As(err, &he) || he.Code != CodeDebugUnsupported || he.Data()["lang"] != "bun" {
+		t.Fatalf("bun debug: %v", err)
 	}
 	run := tm.upReady(t, plain, "plain")
 	if _, err := tm.Debug(context.Background(), run.ID, DebugStatus, domain.EventActorUser); !errors.Is(err, ErrParams) {

@@ -11,28 +11,38 @@ import (
 )
 
 // Debug runs. The app joins a third network, debug, beside inner. Only the
-// app and the edge are on it: a service cannot reach the debug port, so a
-// hostile service image cannot attach and evaluate code in the app. Every
-// container on it has a fixed address (DebugAddrs), because Node's inspector
-// refuses a Host header that is neither an IP address nor localhost; the
-// debug adapter listens on the app's debug address only, and the edge relays
-// it under a lease.
+// app, the edge and, for languages whose DAP server does not run in the app,
+// the adapter container are on it: a service cannot reach the debug port or
+// an inspector, so a hostile service image cannot attach and evaluate code in
+// the app. Every container on it has a fixed address (DebugAddrs), because
+// Node's inspector refuses a Host header that is neither an IP address nor
+// localhost. The edge relays the DAP server (in the app or the adapter) under
+// a lease.
 const (
 	NetworkDebug = "debug"
+	// ServiceAdapter is the adapter container of a debug run whose DAP
+	// server runs outside the app (js-debug for Node).
+	ServiceAdapter = "debug-adapter"
 	// RelayDAP names the debugger's relay and its forwarded port.
 	RelayDAP = "dap"
 	// RelayKindDAP marks a relay that holds DAP clients under a lease.
 	RelayKindDAP = "dap"
 	// ToolsMount is where debug tools are mounted read-only in the app.
 	ToolsMount = "/aiman-tools"
-	// InspectEnv carries the app's debug address and the adapter's port,
-	// <ip>:<port>, into the app container. A debug command listens on it.
+	// InspectEnv carries the app's debug address and the debugger's port in
+	// the app, <ip>:<port>, into the app container. A debug command listens
+	// on it.
 	InspectEnv = "AIMAN_INSPECT"
+	// AdapterHostEnv is the adapter container's own debug address, which its
+	// DAP server listens on.
+	AdapterHostEnv = "AIMAN_DAP_HOST"
 )
 
+// AdapterLimits are the adapter container's fixed limits.
+var AdapterLimits = ResolvedLimits{Memory: 512 << 20, CPUs: 1, PIDs: 128}
+
 // DebugAddrs are the fixed addresses on a debug subnet: .2 the app (the
-// debug target), .3 a separate adapter container (reserved for adapters that
-// do not run in the target), .4 the edge.
+// debug target), .3 the adapter container, .4 the edge.
 func DebugAddrs(subnet netip.Prefix) (app, adapter, edge netip.Addr) {
 	base := subnet.Masked().Addr()
 	app = base.Next().Next()
@@ -41,23 +51,48 @@ func DebugAddrs(subnet netip.Prefix) (app, adapter, edge netip.Addr) {
 	return app, adapter, edge
 }
 
+// DebugNet is a run's debug addresses.
+type DebugNet struct {
+	App, Adapter, Edge netip.Addr
+}
+
+// DebugNetOf is the debug addresses of subnet.
+func DebugNetOf(subnet netip.Prefix) DebugNet {
+	app, adapter, edge := DebugAddrs(subnet)
+	return DebugNet{App: app, Adapter: adapter, Edge: edge}
+}
+
 // DebugSpec is how one debug run starts its app. A DebugAdapter makes it;
 // Compose only places it, so the compose builder knows no debugger.
 type DebugSpec struct {
 	// Lang is the file's app.debug.lang the adapter serves.
 	Lang string
-	// Command replaces app.run. It must keep the adapter listening on
-	// $AIMAN_INSPECT, restarting it after each client leaves.
+	// Command replaces app.run. The debugger in the app (dlv, or the Node
+	// inspector) listens on $AIMAN_INSPECT.
 	Command []string
 	// Env joins the app's environment for the build and the app.
 	Env map[string]string
-	// Mounts are host files the adapter needs, mounted read-only.
+	// Mounts are host tools the app needs, mounted read-only.
 	Mounts []ToolMount
-	// Port is the DAP port on the app's debug address.
+	// Port is the debugger's port on the app's debug address: the DAP server
+	// itself, or the inspector the adapter attaches to.
 	Port int
+	// Adapter runs the DAP server in its own container; nil when the app
+	// runs it.
+	Adapter *AdapterSpec
 }
 
-// ToolMount is one read-only bind mount of a host file.
+// AdapterSpec is the adapter container of a debug run. It runs only on the
+// debug network at the adapter's address, with the app profile, the run's
+// src and out mounted read-only at the app's paths and its tools read-only.
+type AdapterSpec struct {
+	// Command runs the DAP server on $AIMAN_DAP_HOST:Port.
+	Command []string
+	Mounts  []ToolMount
+	Port    int
+}
+
+// ToolMount is one read-only bind mount of a host file or directory.
 type ToolMount struct {
 	Host      string
 	Container string
@@ -76,15 +111,22 @@ func checkDebug(f *File, spec RunSpec) error {
 	if f.App.Debug.Lang != d.Lang {
 		return fmt.Errorf("harness compose: the file's app.debug.lang is %q but the debugger is for %q", f.App.Debug.Lang, d.Lang)
 	}
-	if len(d.Command) == 0 || d.Port < 1 || d.Port > 65535 {
+	if len(d.Command) == 0 || !validPort(d.Port) {
 		return errors.New("harness compose: the debug spec needs a command and a port")
 	}
-	for _, m := range d.Mounts {
-		if !filepath.IsAbs(m.Host) || strings.ContainsAny(m.Host, ":,\n") {
-			return fmt.Errorf("harness compose: debug tool path %q must be absolute with no colon or comma", m.Host)
+	mounts := d.Mounts
+	if a := d.Adapter; a != nil {
+		if len(a.Command) == 0 || !validPort(a.Port) {
+			return errors.New("harness compose: the adapter needs a command and a port")
 		}
-		if !strings.HasPrefix(m.Container, ToolsMount+"/") || strings.ContainsAny(m.Container, ":,\n") {
-			return fmt.Errorf("harness compose: debug tool mount %q must lie under %s", m.Container, ToolsMount)
+		if spec.AdapterImage == "" {
+			return errors.New("harness compose: the debug adapter needs an image")
+		}
+		mounts = append(append([]ToolMount(nil), mounts...), a.Mounts...)
+	}
+	for _, m := range mounts {
+		if err := checkToolMount(m); err != nil {
+			return err
 		}
 	}
 	p := spec.DebugSubnet
@@ -97,10 +139,32 @@ func checkDebug(f *File, spec RunSpec) error {
 	return nil
 }
 
-// debugEndpoint is the app's debug address and the adapter's port.
-func debugEndpoint(spec RunSpec) string {
+func validPort(p int) bool { return p >= 1 && p <= 65535 }
+
+func checkToolMount(m ToolMount) error {
+	if !filepath.IsAbs(m.Host) || strings.ContainsAny(m.Host, ":,\n") {
+		return fmt.Errorf("harness compose: debug tool path %q must be absolute with no colon or comma", m.Host)
+	}
+	if !strings.HasPrefix(m.Container, ToolsMount+"/") || strings.ContainsAny(m.Container, ":,\n") {
+		return fmt.Errorf("harness compose: debug tool mount %q must lie under %s", m.Container, ToolsMount)
+	}
+	return nil
+}
+
+// inspectAddr is the app's debug address and the debugger's port there.
+func inspectAddr(spec RunSpec) string {
 	app, _, _ := DebugAddrs(spec.DebugSubnet)
 	return app.String() + ":" + strconv.Itoa(spec.Debug.Port)
+}
+
+// dapTarget is what the edge's DAP relay dials: the adapter container when
+// the run has one, else the DAP server in the app.
+func dapTarget(spec RunSpec) (service, addr string) {
+	if a := spec.Debug.Adapter; a != nil {
+		_, ad, _ := DebugAddrs(spec.DebugSubnet)
+		return ServiceAdapter, ad.String() + ":" + strconv.Itoa(a.Port)
+	}
+	return ServiceApp, inspectAddr(spec)
 }
 
 // composeAttach is one network of a service in the map form.
@@ -125,7 +189,7 @@ func debugApp(s *composeService, spec RunSpec) {
 		s.Environment = map[string]string{}
 	}
 	maps.Copy(s.Environment, d.Env)
-	s.Environment[InspectEnv] = debugEndpoint(spec)
+	s.Environment[InspectEnv] = inspectAddr(spec)
 	s.Command = append([]string(nil), d.Command...)
 }
 
@@ -137,4 +201,35 @@ func debugEdge(s *composeService, spec RunSpec) {
 		NetworkOuter: {},
 		NetworkDebug: {IPv4Address: edge.String()},
 	}
+}
+
+// adapterService is the adapter container: aiman's pinned glibc image with
+// the tools, src and out read-only, on the debug network alone, under the
+// app's hardening and small limits. It reaches the app's inspector and
+// nothing else; the edge reaches its DAP port.
+func adapterService(spec RunSpec) composeService {
+	_, ad, _ := DebugAddrs(spec.DebugSubnet)
+	a := spec.Debug.Adapter
+	vols := make([]string, 0, len(a.Mounts)+2)
+	for _, m := range a.Mounts {
+		vols = append(vols, m.Host+":"+m.Container+":ro")
+	}
+	vols = append(vols, spec.Src+":/src:ro", spec.Out+":/out:ro")
+	s := composeService{
+		Image:       spec.AdapterImage,
+		PullPolicy:  pullNever,
+		WorkingDir:  "/src",
+		User:        fmt.Sprintf("%d:%d", spec.UID, spec.GID),
+		ReadOnly:    true,
+		CapDrop:     []string{capDropAll},
+		SecurityOpt: []string{noNewPrivileges},
+		Tmpfs:       []string{"/tmp"},
+		Environment: map[string]string{"HOME": "/tmp", AdapterHostEnv: ad.String()},
+		Volumes:     vols,
+		Networks:    map[string]composeAttach{NetworkDebug: {IPv4Address: ad.String()}},
+		Sysctls:     disableIPv6,
+		Command:     append([]string(nil), a.Command...),
+	}
+	limited(&s, AdapterLimits)
+	return s
 }

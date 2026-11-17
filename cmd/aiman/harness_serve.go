@@ -10,6 +10,7 @@ import (
 	harnessscanner "github.com/bouwerp/aiman/build/harness-scanner"
 	"github.com/bouwerp/aiman/internal/harness"
 	"github.com/bouwerp/aiman/internal/harness/images"
+	"github.com/bouwerp/aiman/internal/harness/tools"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/review"
 	"github.com/bouwerp/aiman/internal/server"
@@ -57,6 +58,11 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 	m, err := harness.NewManager(harness.Options{
 		DebugAdapters: []harness.DebugAdapter{
 			&harness.GoDebug{Tools: &harness.DlvTools{Dir: filepath.Join(hdir, "tools"), Pin: pin}},
+			&harness.NodeDebug{
+				Tools:   &tools.Store{Dir: filepath.Join(hdir, "tools")},
+				Node:    toolPin(cfg.Harness.DebugTools["node"]),
+				JSDebug: toolPin(cfg.Harness.DebugTools["js-debug"]),
+			},
 		},
 		Images:        vetter,
 		Dir:           hdir,
@@ -144,4 +150,9 @@ func wireImageVetting(srv *server.Server, cfg *config.Config, dir, bin string) (
 		DBDir: dbDir, UID: os.Getuid(), GID: os.Getgid(), Docker: images.ExecDockerCLI,
 	}}
 	return v, mt, nil
+}
+
+// toolPin is a harness.debug_tools entry as the tools package takes it.
+func toolPin(p config.HarnessToolPin) tools.Pin {
+	return tools.Pin{Version: p.Version, SHA256: p.SHA256}
 }

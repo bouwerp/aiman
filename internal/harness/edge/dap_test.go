@@ -293,7 +293,7 @@ func dialLease(t *testing.T, addr, token string) *dapClient {
 	return d
 }
 
-func TestDAPExclusiveClientLease(t *testing.T) {
+func TestDAPLeaseAdmitsChildren(t *testing.T) {
 	e := newTestEdge(t)
 	srv := newFakeDAPServer(t)
 	st, err := e.Add(RelaySpec{Name: "dap", Target: srv.addr, Kind: KindDAP})
@@ -369,5 +369,31 @@ func TestDAPLeaseLineRefusesBadToken(t *testing.T) {
 	}
 	if statusOf(t, e, "dap").Holder != nil || srv.conns.Load() != 0 {
 		t.Fatal("a bad lease token reached the debugger")
+	}
+}
+
+func TestDAPLeaseRefusesOther(t *testing.T) {
+	e := newTestEdge(t)
+	srv := newFakeDAPServer(t)
+	st, err := e.Add(RelaySpec{Name: "dap", Target: srv.addr, Kind: KindDAP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := dialLease(t, st.Listen, "holder-token-0123456789")
+	if resp, err := holder.request(1, "initialize", initArgs("aiman harness console")); err != nil || resp["success"] != true {
+		t.Fatalf("holder: %v %v", resp, err)
+	}
+	before := srv.conns.Load()
+	for name, c := range map[string]*dapClient{
+		"another token": dialLease(t, st.Listen, "other-token-0123456789"),
+		"no lease line": dialDAP(t, st.Listen),
+	} {
+		resp, err := c.request(1, "initialize", initArgs("intruder"))
+		if err != nil || resp["success"] != false || !strings.Contains(resp["message"].(string), "aiman harness console") {
+			t.Fatalf("%s: %v %v", name, resp, err)
+		}
+	}
+	if srv.conns.Load() != before {
+		t.Fatal("a refused client reached the adapter")
 	}
 }

@@ -97,6 +97,8 @@ type RunSpec struct {
 	// a plain run. DebugSubnet is that network's IPv4 subnet.
 	Debug       *DebugSpec
 	DebugSubnet netip.Prefix
+	// AdapterImage runs the adapter container when Debug has an Adapter.
+	AdapterImage string
 }
 
 // Relay is one edge relay: the edge listens on Port on its outer address,
@@ -150,6 +152,9 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 		doc.Networks[NetworkDebug] = network(spec.DebugSubnet, true)
 		debugApp(&app, spec)
 		debugEdge(&edge, spec)
+		if spec.Debug.Adapter != nil {
+			doc.Services[ServiceAdapter] = adapterService(spec)
+		}
 	}
 	doc.Services[ServiceApp] = app
 	doc.Services[ServiceCacheInit] = cacheInitService(f, spec)
@@ -292,9 +297,10 @@ func relaysFor(f *File, sc *Scenario, spec RunSpec) ([]Relay, error) {
 		if slices.ContainsFunc(out, func(r Relay) bool { return r.Name == RelayDAP }) {
 			return nil, fmt.Errorf("harness compose: relay name %q is reserved for the debugger in a debug run", RelayDAP)
 		}
+		svc, target := dapTarget(spec)
 		out = append(out, Relay{
-			Name: RelayDAP, Service: ServiceApp, Port: FirstRelayPort + len(out),
-			Target: debugEndpoint(spec), Kind: RelayKindDAP,
+			Name: RelayDAP, Service: svc, Port: FirstRelayPort + len(out),
+			Target: target, Kind: RelayKindDAP,
 		})
 	}
 	return out, nil

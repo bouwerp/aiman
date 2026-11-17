@@ -2,7 +2,6 @@ package harness
 
 import (
 	"fmt"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -18,19 +17,18 @@ var AllowedCaps = []string{"CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER"
 
 // ReservedServiceNames are compose service and host names the harness itself
 // uses on the run's networks.
-var ReservedServiceNames = []string{"app", "edge", "app-debug", "cache-init"}
+var ReservedServiceNames = []string{"app", "edge", "app-debug", "cache-init", "debug-adapter"}
 
 var (
 	// A service name is a DNS label: it is a compose service and a host name.
-	serviceNameRe  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
-	portNameRe     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
-	scenarioIDRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
-	envNameRe      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	placeholderRe  = regexp.MustCompile(`\{\{\s*([^{}]*?)\s*\}\}`)
-	imageCharsRe   = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+$`)
-	stubHostRe     = regexp.MustCompile(`^[A-Za-z0-9.-]+(:\d+)?$`)
-	validDebugLang = []string{"go", "node"}
-	validDBKinds   = []string{"postgres", "sqlite"}
+	serviceNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
+	portNameRe    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
+	scenarioIDRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+	envNameRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	placeholderRe = regexp.MustCompile(`\{\{\s*([^{}]*?)\s*\}\}`)
+	imageCharsRe  = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+$`)
+	stubHostRe    = regexp.MustCompile(`^[A-Za-z0-9.-]+(:\d+)?$`)
+	validDBKinds  = []string{"postgres", "sqlite"}
 )
 
 // Validate returns every problem in f, in file order.
@@ -85,14 +83,11 @@ func (a *App) validate() []string {
 		}
 	}
 	errs = append(errs, validateLimits("app.limits", a.Limits)...)
-	if a.Debug != nil && !slices.Contains(validDebugLang, a.Debug.Lang) {
-		add("app.debug.lang %q must be one of %s", a.Debug.Lang, strings.Join(validDebugLang, ", "))
+	if a.Image != "" && !imageCharsRe.MatchString(a.Image) {
+		add("app.image %q must be a plain image reference", a.Image)
 	}
-	if a.Debug != nil && a.Debug.Program != "" && !path.IsAbs(a.Debug.Program) {
-		add("app.debug.program %q must be an absolute path in the app container (for example /out/app)", a.Debug.Program)
-	}
-	if a.Debug != nil && a.Debug.Program == "" && len(a.Debug.Args) > 0 {
-		add("app.debug.args needs app.debug.program")
+	if a.Debug != nil {
+		errs = append(errs, a.Debug.validate("app.debug", false)...)
 	}
 	return errs
 }
@@ -180,6 +175,11 @@ func (f *File) validateScenario(i int, sc *Scenario) []string {
 		checks[c.Name] = true
 		if strings.TrimSpace(c.Run) == "" {
 			add("checks[%d].run is required", j)
+		}
+		if c.Debug != nil {
+			for _, e := range c.Debug.validate(fmt.Sprintf("checks[%d].debug", j), true) {
+				add("%s", e)
+			}
 		}
 	}
 	for j, st := range sc.Stubs {

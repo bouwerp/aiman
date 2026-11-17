@@ -31,7 +31,7 @@ func TestGoDebugLaunch(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			l, err := (&GoDebug{}).Launch(appFile(t, c.app))
+			l, err := (&GoDebug{}).Launch(appFile(t, c.app), DebugNet{})
 			if c.bad {
 				var he *Error
 				if !errors.As(err, &he) || he.Code != CodeInvalid || !strings.Contains(err.Error(), "app.debug.program") {
@@ -58,7 +58,7 @@ func TestDebugAdapterFor(t *testing.T) {
 	if _, err := DebugAdapterFor(appFile(t, "  run: /out/app\n"), adapters); err == nil {
 		t.Fatal("a file without app.debug got an adapter")
 	}
-	_, err := DebugAdapterFor(appFile(t, "  run: node x.js\n  debug: {lang: node}\n"), adapters)
+	_, err := DebugAdapterFor(appFile(t, "  run: node x.js\n  debug: {lang: node, entry: x.js}\n"), adapters)
 	var he *Error
 	if !errors.As(err, &he) || he.Code != CodeDebugUnsupported || !strings.Contains(err.Error(), "not yet supported") {
 		t.Fatalf("node: %v", err)
@@ -70,7 +70,7 @@ func TestDebugAdapterFor(t *testing.T) {
 }
 
 func TestGoEditorConfig(t *testing.T) {
-	l, err := (&GoDebug{}).Launch(appFile(t, "  run: /out/app serve\n  debug: {lang: go}\n"))
+	l, err := (&GoDebug{}).Launch(appFile(t, "  run: /out/app serve\n  debug: {lang: go}\n"), DebugNet{})
 	if err != nil {
 		t.Fatal(err)
 	}
