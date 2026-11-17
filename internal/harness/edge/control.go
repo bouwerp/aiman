@@ -27,6 +27,8 @@ const (
 	OpRemove = "remove"
 	OpList   = "list"
 	OpHealth = "health"
+	// OpDAPDrop closes the client holding a DAP relay (take over, release).
+	OpDAPDrop = "dap_drop"
 )
 
 // Error codes in a control reply.
@@ -59,6 +61,8 @@ type Response struct {
 	Relay  *RelayStatus  `json:"relay,omitempty"`
 	Relays []RelayStatus `json:"relays,omitempty"`
 	Health *Health       `json:"health,omitempty"`
+	// Dropped is the DAP client a dap_drop closed.
+	Dropped *DAPHolder `json:"dropped,omitempty"`
 }
 
 // Error is a control failure with a stable code.
@@ -187,6 +191,12 @@ func (e *Edge) dispatch(req Request) Response {
 	case OpHealth:
 		h := e.Health()
 		return Response{OK: true, Health: &h}
+	case OpDAPDrop:
+		dropped, err := e.DropDAP(req.Name)
+		if err != nil {
+			return fail(err)
+		}
+		return Response{OK: true, Dropped: dropped}
 	default:
 		return fail(errorf(CodeInvalidParams, "unknown op %q", req.Op))
 	}

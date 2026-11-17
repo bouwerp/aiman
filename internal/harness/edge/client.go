@@ -55,6 +55,16 @@ func (c Client) Health(ctx context.Context) (Health, error) {
 	return *resp.Health, nil
 }
 
+// DAPDrop closes the client holding the DAP relay name and returns it, nil
+// when nobody held it.
+func (c Client) DAPDrop(ctx context.Context, name string) (*DAPHolder, error) {
+	resp, err := c.call(ctx, Request{Op: OpDAPDrop, Name: name})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Dropped, nil
+}
+
 // call returns an *Error for a refusal from the edge and a wrapped error for
 // a transport failure.
 func (c Client) call(ctx context.Context, req Request) (Response, error) {
