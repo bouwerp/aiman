@@ -109,8 +109,9 @@ func (m *Manager) readyRunOf(id string) (*liveRun, error) {
 	return lr, nil
 }
 
-// Check runs the run's checks, or only the one named, each in a fresh app
-// container on the inner network. Exit 0 is a pass.
+// Check runs the run's checks, or only the one named, each in a fresh
+// container on the inner network: the app's image, or the check's own image
+// when it names one. Exit 0 is a pass.
 func (m *Manager) Check(ctx context.Context, id, name string, actor domain.EventActor) ([]CheckRun, error) {
 	lr, err := m.readyRunOf(id)
 	if err != nil {
@@ -118,9 +119,11 @@ func (m *Manager) Check(ctx context.Context, id, name string, actor domain.Event
 	}
 	run := lr.snapshot()
 	var picked []CheckRun
-	for _, c := range run.Checks {
+	var services []string
+	for j, c := range run.Checks {
 		if name == "" || c.Name == name {
 			picked = append(picked, c)
+			services = append(services, checkContainer(run, j))
 		}
 	}
 	if len(picked) == 0 {
@@ -133,7 +136,7 @@ func (m *Manager) Check(ctx context.Context, id, name string, actor domain.Event
 	for i, c := range picked {
 		cctx, cancel := context.WithTimeout(ctx, CheckTimeout)
 		cc := call
-		cc.Args = []string{"run", "--rm", "--no-deps", ServiceApp, "sh", "-c", c.Run}
+		cc.Args = []string{"run", "--rm", "--no-deps", services[i], "sh", "-c", c.Run}
 		out, exit, err := m.opts.Docker.Compose(cctx, cc)
 		cancel()
 		if err != nil {
@@ -159,6 +162,14 @@ func (m *Manager) Check(ctx context.Context, id, name string, actor domain.Event
 		return nil, err
 	}
 	return picked, nil
+}
+
+// checkContainer is the compose service the run's check at index j runs in.
+func checkContainer(r Run, j int) string {
+	if _, ok := r.Images[CheckService(j)]; ok {
+		return CheckService(j)
+	}
+	return ServiceApp
 }
 
 // Verdict records a tester's result for step (1-based; 0 is the whole

@@ -27,21 +27,24 @@ scenarios:
     checks:
       - {name: built, run: test -f /out/built}
       - {name: offline, run: "! wget -q -T 3 -O- http://1.1.1.1/"}
+      - {name: own-image, image: "alpine:3.20", run: "test -f /etc/alpine-release && test -f /out/built && ! wget -q -T 3 -O- http://1.1.1.1/"}
 `
 
 // TestManagerDockerUpDown brings a busybox scenario up for real, reaches the
-// app through the edge relay, runs its checks and takes it down.
+// app through the edge relay, runs its checks (one in its own image, offline
+// with the run's mounts) and takes it down.
 func TestManagerDockerUpDown(t *testing.T) {
 	needDocker(t)
 	ensureImage(t, dockerTestImage)
 	ensureImage(t, EdgeImage)
+	ensureImage(t, "alpine:3.20")
 	repo := testRepo(t, dockerManagerFile)
 	rec := &recorder{}
 	m, err := NewManager(Options{
 		Dir:      filepath.Join(t.TempDir(), "harness"),
 		AimanBin: edgeBinary(t),
 		UID:      os.Getuid(), GID: os.Getgid(),
-		AllowedImages: []string{"busybox:*"},
+		AllowedImages: []string{"busybox:*", "alpine:*"},
 		Docker:        ExecDocker{},
 		AppImage:      func(string, string) (string, error) { return dockerTestImage, nil },
 		Record:        rec.record,
@@ -80,6 +83,9 @@ func TestManagerDockerUpDown(t *testing.T) {
 	checks, err := m.Check(context.Background(), run.ID, "", domain.EventActorAgent)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(checks) != 3 {
+		t.Fatalf("checks = %+v", checks)
 	}
 	for _, c := range checks {
 		if c.Exit == nil || *c.Exit != 0 {
