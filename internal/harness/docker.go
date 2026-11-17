@@ -18,8 +18,8 @@ import (
 // EdgeImage is the edge's base image: busybox 1.36, pinned by its Docker Hub
 // index digest. The edge runs aiman's own static binary, mounted read-only,
 // so the image only has to give it a root filesystem; busybox is small and
-// carries a shell for debugging the container. Serve never pulls it: an
-// operator loads it once with docker pull.
+// carries a shell for debugging the container. The image vetter fetches,
+// scans and loads it as a builtin image the first time a run needs it.
 const EdgeImage = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
 
 // ErrImageNotFound is Docker's answer for an image that is not on the host.

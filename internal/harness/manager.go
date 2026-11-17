@@ -53,8 +53,9 @@ type Options struct {
 	// IdleTimeout is harness.idle_timeout; zero is DefaultIdleTimeout.
 	IdleTimeout time.Duration
 	Docker      Docker
-	// Images vets every app and service image and answers its image ID; nil
-	// keeps the older rule: listed in AllowedImages and already on the host.
+	// Images vets every image of a run, the edge's as builtin, fetching what
+	// the host lacks, and answers its image ID; nil keeps the older rule:
+	// listed in AllowedImages (the edge excepted) and already on the host.
 	Images ImageVetter
 	// Edge reads the edge's control socket; nil is SocketEdge.
 	Edge EdgeControl
@@ -74,6 +75,10 @@ type ImageRequest struct {
 	// started the run.
 	Session  string
 	Operator bool
+	// Builtin marks an image aiman's own code pins by digest (the edge):
+	// the release is its approval, so a clean or high-only scan approves it
+	// without a gate; a block still refuses.
+	Builtin bool
 }
 
 // ImageVetter answers the engine's image ID of an approved image, or a
@@ -387,11 +392,11 @@ func checkRuns(sc *Scenario) []CheckRun {
 }
 
 // images resolves every image the run starts to its local image ID. With an
-// ImageVetter, the app and service images go through vetting: every one is
-// asked for, so each unknown digest starts vetting at once, and the first
-// refusal is returned. Without one, an image must match
-// harness.allowed_images and be on the host. The edge image is aiman's own
-// and must be on the host. Serve never pulls.
+// ImageVetter, every image goes through vetting, the edge image as builtin
+// (aiman's own, pinned by digest): every one is asked for, so each unknown
+// digest starts vetting at once, and the first refusal is returned. Without
+// one, an app or service image must match harness.allowed_images, and every
+// image must be on the host.
 func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenario, src string) (map[string]string, error) {
 	appRef, err := m.opts.AppImage(src, req.AppImageOverride)
 	if err != nil {
@@ -402,9 +407,10 @@ func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenar
 	for _, name := range sc.Services {
 		refs = append(refs, [2]string{name, f.Services[name].Image})
 	}
+	refs = append(refs, [2]string{ServiceEdge, m.opts.EdgeImage})
 	var first error
 	for _, r := range refs {
-		id, err := m.image(ctx, req, r[1])
+		id, err := m.image(ctx, req, r[1], r[0] == ServiceEdge)
 		if err != nil {
 			if first == nil {
 				first = err
@@ -416,26 +422,19 @@ func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenar
 	if first != nil {
 		return nil, first
 	}
-	if ids[ServiceEdge], err = m.localImage(ctx, m.opts.EdgeImage); err != nil {
-		return nil, err
-	}
 	return ids, nil
 }
 
-func (m *Manager) image(ctx context.Context, req UpRequest, ref string) (string, error) {
+func (m *Manager) image(ctx context.Context, req UpRequest, ref string, builtin bool) (string, error) {
 	if m.opts.Images != nil {
-		return m.opts.Images.Ensure(ctx, ImageRequest{Ref: ref, Session: req.Session, Operator: req.Actor != domain.EventActorAgent})
+		return m.opts.Images.Ensure(ctx, ImageRequest{Ref: ref, Session: req.Session, Operator: req.Actor != domain.EventActorAgent, Builtin: builtin})
 	}
-	if !ImageAllowed(ref, m.opts.AllowedImages) {
+	if !builtin && !ImageAllowed(ref, m.opts.AllowedImages) {
 		return "", imageMissing(ref, "is not in harness.allowed_images")
 	}
-	return m.localImage(ctx, ref)
-}
-
-func (m *Manager) localImage(ctx context.Context, ref string) (string, error) {
 	id, err := m.opts.Docker.ImageID(ctx, ref)
 	if errors.Is(err, ErrImageNotFound) {
-		return "", imageMissing(ref, "is not on this host; serve never pulls, so run docker pull "+ref+" on the host")
+		return "", imageMissing(ref, "is not on this host, and image vetting is off, so serve cannot fetch it; run docker pull "+ref+" on the host")
 	}
 	return id, err
 }

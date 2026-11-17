@@ -56,6 +56,9 @@ const (
 	ApprovedByConfig = "config"
 	// ApprovedByOperatorRun is clean scans on an operator-started run.
 	ApprovedByOperatorRun = "operator_run"
+	// ApprovedByBuiltin is a scan with no block of an image aiman's own code
+	// pins by digest; the release is its approval.
+	ApprovedByBuiltin = "builtin"
 )
 
 // Model verdicts of the image review (stage 3).
@@ -128,7 +131,10 @@ type Record struct {
 	State State `json:"state"`
 	Stage Stage `json:"stage,omitempty"`
 	// Allowed is set when the ref matched harness.allowed_images.
-	Allowed    bool        `json:"allowed,omitempty"`
+	Allowed bool `json:"allowed,omitempty"`
+	// Builtin is set when aiman's own code asked for the digest by a pinned
+	// ref (harness.ImageRequest.Builtin).
+	Builtin    bool        `json:"builtin,omitempty"`
 	Requesters []Requester `json:"requesters,omitempty"`
 	Scan       Scan        `json:"scan"`
 	Signature  string      `json:"signature,omitempty"`

@@ -392,3 +392,107 @@ func TestScannerFailureIsNotClean(t *testing.T) {
 		t.Fatalf("next ask = %v", err)
 	}
 }
+
+// edgeRef is a builtin ref pinned by an index digest, like harness.EdgeImage.
+const edgeRef = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+
+// countingReviewer counts reviews.
+type countingReviewer struct{ n *int }
+
+func (r countingReviewer) Review(context.Context, images.Record, string) (images.ReviewResult, error) {
+	*r.n++
+	return images.ReviewResult{Verdict: images.VerdictSuspicious, Agent: "fake", Independent: true}, nil
+}
+
+// ensureBuiltin asks for edgeRef as aiman's own image and vets what it queued.
+func (f *vetFixture) ensureBuiltin(t *testing.T, session string) (string, error) {
+	t.Helper()
+	id, err := f.v.Ensure(context.Background(), harness.ImageRequest{Ref: edgeRef, Session: session, Builtin: true})
+	f.v.Drain(context.Background())
+	f.v.Wait()
+	return id, err
+}
+
+func TestBuiltinCleanWithHighsApprovedAtOnce(t *testing.T) {
+	reviews := 0
+	f := newVetFixture(t, func(o *images.VetterOptions) { o.Reviewer = countingReviewer{&reviews} })
+	f.scanner.Set(images.ScanStageCVE, images.StageResult{High: []string{"CVE-2026-21"}})
+	img := imagestest.NewImage("busybox", imagestest.Layer(map[string]string{"bin/busybox": "bb"}))
+	f.reg.Pin(edgeRef, img)
+	if _, err := f.ensureBuiltin(t, "s1"); code(err) != harness.CodeImagePending {
+		t.Fatalf("first ask = %v, want harness_image_pending while it is vetted", err)
+	}
+	if len(f.scanner.Calls) != 2 {
+		t.Fatalf("a builtin image ran %d scan stages, want cve and static", len(f.scanner.Calls))
+	}
+	r := f.record(t, img)
+	if r.State != images.StateApproved || r.ApprovedBy != images.ApprovedByBuiltin || !r.Builtin {
+		t.Fatalf("record = %+v, want approved by builtin", r)
+	}
+	if !slices.Equal(r.Scan.High, []string{"CVE-2026-21"}) || !slices.Equal(r.AcceptedHighs, []string{"CVE-2026-21"}) {
+		t.Fatalf("highs = %v, accepted %v; the record must list them", r.Scan.High, r.AcceptedHighs)
+	}
+	if reviews != 0 {
+		t.Fatalf("a builtin image got %d model reviews", reviews)
+	}
+	if len(f.notes.Joined) != 0 || f.loader.Loads != 1 {
+		t.Fatalf("joined %v, loads %d", f.notes.Joined, f.loader.Loads)
+	}
+	// Approved and present: the next ask answers without fetching again.
+	gets := f.reg.BlobGets
+	if id, err := f.ensureBuiltin(t, "s2"); err != nil || id != img.Digest() {
+		t.Fatalf("next ask = %s, %v", id, err)
+	}
+	if f.reg.BlobGets != gets || f.loader.Loads != 1 {
+		t.Fatalf("an approved, present image was fetched (%d -> %d blobs) or loaded again (%d)", gets, f.reg.BlobGets, f.loader.Loads)
+	}
+}
+
+func TestBuiltinBlockedRefuses(t *testing.T) {
+	for name, res := range map[string]struct {
+		stage string
+		r     images.StageResult
+	}{
+		"critical": {images.ScanStageCVE, images.StageResult{Critical: []string{"CVE-2026-31"}}},
+		"static":   {images.ScanStageStatic, images.StageResult{StaticHits: []string{"clamav:Eicar layer 0/x"}}},
+		"mal":      {images.ScanStageStatic, images.StageResult{MalIDs: []string{"MAL-2026-3"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newVetFixture(t, nil)
+			f.scanner.Set(res.stage, res.r)
+			img := imagestest.NewImage("busybox", imagestest.Layer(map[string]string{"bin/busybox": "bb"}))
+			f.reg.Pin(edgeRef, img)
+			_, _ = f.ensureBuiltin(t, "s1")
+			if r := f.record(t, img); r.State != images.StateBlocked || f.loader.Loads != 0 {
+				t.Fatalf("record = %+v, loads %d; want blocked and never loaded", r, f.loader.Loads)
+			}
+			if _, err := f.ensureBuiltin(t, "s1"); code(err) != harness.CodeImageBlocked {
+				t.Fatalf("next ask = %v, want harness_image_blocked", err)
+			}
+		})
+	}
+}
+
+func TestBuiltinApprovesPendingDigest(t *testing.T) {
+	f := newVetFixture(t, nil)
+	img := imagestest.NewImage("busybox", imagestest.Layer(map[string]string{"bin/busybox": "bb"}))
+	f.reg.Pin(edgeRef, img)
+	f.reg.Tag("busybox:1.36", img)
+	// A session's own service named the same digest first: it waits.
+	_, _ = f.ensure(t, "busybox:1.36", "s1", false)
+	if r := f.record(t, img); r.State != images.StatePendingApproval {
+		t.Fatalf("state = %s", r.State)
+	}
+	_, _ = f.ensureBuiltin(t, "s1")
+	if r := f.record(t, img); r.State != images.StateApproved || r.ApprovedBy != images.ApprovedByBuiltin {
+		t.Fatalf("record = %+v, want approved by builtin", r)
+	}
+}
+
+func TestBuiltinUnknownPinnedDigestFails(t *testing.T) {
+	f := newVetFixture(t, nil)
+	f.reg.Tag("busybox:1.36", imagestest.NewImage("busybox", imagestest.Layer(map[string]string{"bin/busybox": "bb"})))
+	if _, err := f.ensureBuiltin(t, "s1"); code(err) != harness.CodeImageResolveFailed {
+		t.Fatalf("ask = %v, want harness_image_resolve_failed", err)
+	}
+}

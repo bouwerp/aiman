@@ -34,8 +34,8 @@ const (
 	// unless the caller asks for a dirty run.
 	CodeDirty = "harness_dirty"
 	// CodeImageMissing refuses an image that harness.allowed_images does not
-	// list or that is not on the host, when no image vetting is wired; serve
-	// never pulls.
+	// list or that is not on the host, when no image vetting is wired; without
+	// vetting nothing is pulled.
 	CodeImageMissing = "harness_image_missing"
 	// CodeImagePending refuses a run while one of its images is in vetting or
 	// waits for approval.

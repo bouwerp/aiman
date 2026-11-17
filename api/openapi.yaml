@@ -447,8 +447,8 @@ components:
             harness_too_large (the run's memory sum is over
             harness.run_memory; data.sum and data.limit in bytes),
             harness_dirty (uncommitted or untracked files without dirty;
-            data.paths), harness_image_missing (an image not in
-            harness.allowed_images or not on the host, which never pulls;
+            data.paths), harness_image_missing (only with image vetting off:
+            an image not in harness.allowed_images or not on the host;
             data.image), harness_running (the session already has a live
             run), harness_busy (harness.max_runs live runs on the host),
             harness_not_running (no run, or the run is not ready) and

@@ -19,12 +19,15 @@ type DecideInput struct {
 	Allowed bool
 	// Operator is set when the operator started the run.
 	Operator bool
+	// Builtin is set for an image aiman's own code pins by digest.
+	Builtin bool
 }
 
 // Decision is the outcome of a finished vetting.
 type Decision struct {
 	State State
-	// ApprovedBy is config or operator_run for an image approved at once.
+	// ApprovedBy is builtin, config or operator_run for an image approved at
+	// once.
 	ApprovedBy string
 	// Reasons say why the digest is blocked.
 	Reasons []string
@@ -34,7 +37,9 @@ type Decision struct {
 //
 //   - blocked: a CVE at or above CVEBlock, any static hit, any MAL- id, or the
 //     verdict malicious;
-//   - approved at once: no high CVE, no static hit, a clean verdict, and the
+//   - approved at once: a builtin image with no block and no suspicious
+//     verdict, high CVEs included (builtin: aiman's release pinned the
+//     digest); else no high CVE, no static hit, a clean verdict, and the
 //     image is listed (config) or the operator started the run (operator_run);
 //   - pending_approval otherwise.
 //
@@ -45,6 +50,9 @@ type Decision struct {
 func Decide(scan Scan, in DecideInput) Decision {
 	if reasons := blockReasons(scan, in.CVEBlock); len(reasons) > 0 {
 		return Decision{State: StateBlocked, Reasons: reasons}
+	}
+	if in.Builtin && scan.ModelVerdict != VerdictSuspicious {
+		return Decision{State: StateApproved, ApprovedBy: ApprovedByBuiltin}
 	}
 	verdictOK := scan.ModelVerdict == VerdictClean || (scan.ModelVerdict == "" && in.Operator)
 	if len(scan.High) == 0 && verdictOK {

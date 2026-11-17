@@ -96,6 +96,8 @@ type Registry struct {
 	mu    sync.Mutex
 	refs  map[string]Image
 	blobs map[string][]byte
+	// pinned are the index digests Pin set, by key.
+	pinned map[string]bool
 	// Corrupt serves other bytes for this blob digest.
 	Corrupt string
 	// BlobGets counts blob reads.
@@ -106,7 +108,7 @@ type Registry struct {
 
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry {
-	return &Registry{refs: map[string]Image{}, blobs: map[string][]byte{}, Signatures: map[string]bool{}}
+	return &Registry{refs: map[string]Image{}, blobs: map[string][]byte{}, pinned: map[string]bool{}, Signatures: map[string]bool{}}
 }
 
 // Tag points ref (as a harness file names it) at img.
@@ -125,6 +127,25 @@ func (r *Registry) Tag(ref string, img Image) {
 	}
 }
 
+// Pin serves img for ref, which pins an index digest (as harness.EdgeImage
+// does): Resolve answers img's platform digest through that index.
+func (r *Registry) Pin(ref string, img Image) {
+	pr, err := images.ParseReference(ref)
+	if err != nil || pr.Digest == "" {
+		panic(fmt.Sprintf("Pin needs a ref pinned by digest: %q", ref))
+	}
+	tag := pr.Tag
+	if tag == "" {
+		tag = "pinned"
+	}
+	r.Tag(pr.Registry+"/"+pr.Repo+":"+tag, img)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := pr.Registry + "/" + pr.Repo + "@" + pr.Digest
+	r.refs[key] = img
+	r.pinned[key] = true
+}
+
 // Resolve answers a tagged or pinned ref.
 func (r *Registry) Resolve(_ context.Context, ref string, p images.Platform) (images.Resolved, error) {
 	pr, err := images.ParseReference(ref)
@@ -137,6 +158,7 @@ func (r *Registry) Resolve(_ context.Context, ref string, p images.Platform) (im
 	}
 	r.mu.Lock()
 	img, ok := r.refs[key]
+	pinned := r.pinned[key]
 	r.mu.Unlock()
 	if !ok {
 		return images.Resolved{}, fmt.Errorf("%s: manifest unknown", ref)
@@ -146,8 +168,12 @@ func (r *Registry) Resolve(_ context.Context, ref string, p images.Platform) (im
 		Layers []images.Descriptor `json:"layers"`
 	}
 	_ = json.Unmarshal(img.Manifest, &doc)
-	return images.Resolved{Ref: pr, Digest: img.Digest(), MediaType: images.MediaOCIManifest, Manifest: img.Manifest,
-		Config: doc.Config, Layers: doc.Layers, Platform: p.String()}, nil
+	out := images.Resolved{Ref: pr, Digest: img.Digest(), MediaType: images.MediaOCIManifest, Manifest: img.Manifest,
+		Config: doc.Config, Layers: doc.Layers, Platform: p.String()}
+	if pinned {
+		out.IndexDigest = pr.Digest
+	}
+	return out, nil
 }
 
 // Blob serves a blob, corrupted when asked.
