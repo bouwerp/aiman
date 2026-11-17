@@ -105,6 +105,12 @@ func confineSessionFile(sess domain.Session, requested string) (path, code, msg 
 	if len(roots) == 0 {
 		return "", CodeUnavailable, "session has no worktree or working directory"
 	}
+	return confineFile(roots, base, requested, "this session's worktree")
+}
+
+// confineFile is confineSessionFile's rule over any roots; where names them in
+// a refusal.
+func confineFile(roots []string, base, requested, where string) (path, code, msg string) {
 	abs := filepath.Clean(requested)
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(base, abs)
@@ -114,7 +120,7 @@ func confineSessionFile(sess domain.Session, requested string) (path, code, msg 
 	}
 	resolved, exists, err := resolveExisting(abs)
 	if err != nil {
-		return "", CodeForbidden, "path is not in this session's worktree"
+		return "", CodeForbidden, "path is not in " + where
 	}
 	inside := false
 	for _, root := range roots {
@@ -126,7 +132,7 @@ func confineSessionFile(sess domain.Session, requested string) (path, code, msg 
 		}
 	}
 	if !inside {
-		return "", CodeForbidden, "path is not in this session's worktree"
+		return "", CodeForbidden, "path is not in " + where
 	}
 	if forbiddenFilePath(filepath.Base(resolved)) {
 		return "", CodeForbidden, "path is not served"

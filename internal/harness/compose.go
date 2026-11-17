@@ -132,7 +132,7 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	relays, err := relaysFor(f, sc, spec.Debug)
+	relays, err := relaysFor(f, sc, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -148,8 +148,8 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 	app, edge := appService(f, spec), edgeService(spec, relays)
 	if spec.Debug != nil {
 		doc.Networks[NetworkDebug] = network(spec.DebugSubnet, true)
-		debugApp(&app, spec.Debug)
-		edge.Networks = []string{NetworkInner, NetworkOuter, NetworkDebug}
+		debugApp(&app, spec)
+		debugEdge(&edge, spec)
 	}
 	doc.Services[ServiceApp] = app
 	doc.Services[ServiceCacheInit] = cacheInitService(f, spec)
@@ -234,7 +234,7 @@ func checkSubnets(inner, outer netip.Prefix) error {
 // relaysFor lists the edge relays: each app port in file order, then each
 // postgres service of the scenario in scenario order. A relay is named after
 // its port or its service, so the two must not share a name.
-func relaysFor(f *File, sc *Scenario, debug *DebugSpec) ([]Relay, error) {
+func relaysFor(f *File, sc *Scenario, spec RunSpec) ([]Relay, error) {
 	var out []Relay
 	add := func(name, svc string, port int) error {
 		if slices.ContainsFunc(out, func(r Relay) bool { return r.Name == name }) {
@@ -255,13 +255,13 @@ func relaysFor(f *File, sc *Scenario, debug *DebugSpec) ([]Relay, error) {
 			}
 		}
 	}
-	if debug != nil {
+	if spec.Debug != nil {
 		if slices.ContainsFunc(out, func(r Relay) bool { return r.Name == RelayDAP }) {
 			return nil, fmt.Errorf("harness compose: relay name %q is reserved for the debugger in a debug run", RelayDAP)
 		}
 		out = append(out, Relay{
 			Name: RelayDAP, Service: ServiceApp, Port: FirstRelayPort + len(out),
-			Target: DebugAlias + ":" + strconv.Itoa(debug.Port), Kind: RelayKindDAP,
+			Target: debugEndpoint(spec), Kind: RelayKindDAP,
 		})
 	}
 	return out, nil

@@ -123,6 +123,9 @@ const (
 	// EventHarnessStopped records a run taken down: run and reason (down,
 	// idle, session_gone, serve_restart).
 	EventHarnessStopped EventKind = "harness.stopped"
+	// EventHarnessDebug records a take over or release of a debug run's
+	// debugger: run, op and the client it closed.
+	EventHarnessDebug EventKind = "harness.debug"
 	// EventHarnessImageVetted records a finished vetting or re-scan: digest,
 	// ref, state, critical, high, static and MAL counts, the review verdict,
 	// the signature status, the report path and rescan.

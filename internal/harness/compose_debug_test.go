@@ -14,7 +14,7 @@ const testDlvPath = "/home/u/.aiman/harness/tools/dlv-v1.27.2-linux-amd64/dlv"
 func debugSpec() RunSpec {
 	spec := testSpec()
 	spec.Debug = GoDebugSpec(testDlvPath)
-	spec.DebugSubnet = netip.MustParsePrefix("10.232.1.0/28")
+	spec.DebugSubnet = netip.MustParsePrefix("10.232.1.0/29")
 	return spec
 }
 
@@ -71,16 +71,16 @@ func TestDebugNetworkOnlyEdge(t *testing.T) {
 	app := svcOf(t, doc, ServiceApp)
 	appNets, _ := app["networks"].(map[string]any)
 	dbg, _ := appNets[NetworkDebug].(map[string]any)
-	if got := strs(dbg["aliases"]); !slices.Equal(got, []string{DebugAlias}) {
-		t.Fatalf("app debug aliases %v, want [%s]", got, DebugAlias)
+	if dbg["ipv4_address"] != "10.232.1.2" {
+		t.Fatalf("app debug address %v, want 10.232.1.2", dbg["ipv4_address"])
 	}
-	inner, _ := appNets[NetworkInner].(map[string]any)
-	if len(strs(inner["aliases"])) != 0 {
-		t.Fatalf("app has aliases on the inner network: %v", inner)
+	edgeNets, _ := svcOf(t, doc, ServiceEdge)["networks"].(map[string]any)
+	if ed, _ := edgeNets[NetworkDebug].(map[string]any); ed["ipv4_address"] != "10.232.1.4" {
+		t.Fatalf("edge debug attach %v, want 10.232.1.4", edgeNets[NetworkDebug])
 	}
 
 	cmd := strings.Join(strs(app["command"]), " ")
-	for _, want := range []string{DlvMount + " dap", "--listen=" + DebugAlias + ":2345"} {
+	for _, want := range []string{DlvMount + " dap", `--listen="$AIMAN_INSPECT"`} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("app command %q lacks %q", cmd, want)
 		}
@@ -94,6 +94,9 @@ func TestDebugNetworkOnlyEdge(t *testing.T) {
 		t.Fatalf("app volumes %v lack the read-only dlv mount", app["volumes"])
 	}
 	env, _ := app["environment"].(map[string]any)
+	if env[InspectEnv] != "10.232.1.2:2345" {
+		t.Fatalf("app %s = %v", InspectEnv, env[InspectEnv])
+	}
 	if env["GOFLAGS"] != "'-gcflags=all=-N -l'" {
 		t.Fatalf("app GOFLAGS = %v", env["GOFLAGS"])
 	}
@@ -109,7 +112,7 @@ func TestDebugNetworkOnlyEdge(t *testing.T) {
 			dap = &p.Relays[i]
 		}
 	}
-	if dap == nil || dap.Name != RelayDAP || dap.Target != DebugAlias+":2345" || dap.Service != ServiceApp {
+	if dap == nil || dap.Name != RelayDAP || dap.Target != "10.232.1.2:2345" || dap.Service != ServiceApp {
 		t.Fatalf("dap relay %+v in %+v", dap, p.Relays)
 	}
 	edgeCmd := strings.Join(strs(svcOf(t, doc, ServiceEdge)["command"]), " ")

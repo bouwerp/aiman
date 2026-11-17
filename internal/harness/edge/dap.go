@@ -9,19 +9,31 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
-// KindDAP marks a relay that carries the Debug Adapter Protocol to one client
-// at a time. The edge reads the client's first message (the initialize
-// request) to learn who it is, holds the debugger for that client until it
-// leaves or serve drops it, and answers any other client with a DAP error
-// naming the holder. It knows no debugger: dlv, js-debug or debugpy are all
-// DAP servers behind the target address.
+// KindDAP marks a relay that carries the Debug Adapter Protocol under a
+// lease: one holder at a time. The edge reads each connection's first DAP
+// message (the initialize request) to learn who it is. The first connection
+// takes the lease; a connection that opens with the line
+// "aiman-dap-lease <token>" names a lease token, and later connections with
+// the same token join the holder's lease (up to MaxLeaseConns, for an
+// adapter's child sessions, as js-debug opens through startDebugging). Any
+// other client is answered with a DAP error naming the holder. The lease
+// ends when its last connection closes or serve drops it (take over,
+// release). The edge knows no debugger: dlv, js-debug or debugpy are all DAP
+// servers behind the target address.
 const KindDAP = "dap"
+
+// MaxLeaseConns caps the connections one lease holds at once.
+const MaxLeaseConns = 8
+
+// LeasePrefix opens the optional lease line a client sends before DAP bytes.
+const LeasePrefix = "aiman-dap-lease "
 
 // MaxDAPMessage bounds one DAP message the edge or the console reads.
 const MaxDAPMessage = 16 << 20
@@ -37,19 +49,48 @@ const (
 	maxDAPHeader  = 8 << 10
 )
 
-// DAPHolder is the client that holds a DAP relay.
+// DAPHolder is the client that holds a DAP relay's lease: the first
+// connection's identity and how many connections the lease holds now.
 type DAPHolder struct {
-	ClientID   string    `json:"client_id,omitempty"`
-	ClientName string    `json:"client_name,omitempty"`
-	Remote     string    `json:"remote"`
-	Since      time.Time `json:"since"`
+	ClientID    string    `json:"client_id,omitempty"`
+	ClientName  string    `json:"client_name,omitempty"`
+	Remote      string    `json:"remote"`
+	Since       time.Time `json:"since"`
+	Connections int       `json:"connections"`
 }
 
-// dapHold is the live holder and both of its connections.
-type dapHold struct {
-	info     DAPHolder
+// dapLease is the live holder: its token (empty for a client that sent no
+// lease line, which can hold one connection only) and its connections.
+type dapLease struct {
+	token string
+	info  DAPHolder
+	conns map[*dapConn]struct{}
+}
+
+// dapConn is one connection of a lease and the adapter connection behind it.
+type dapConn struct {
 	client   net.Conn
 	upstream net.Conn
+}
+
+var leaseTokenRe = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
+
+// readLease reads the optional lease line. A connection without one has an
+// empty token.
+func readLease(br *bufio.Reader) (string, error) {
+	head, err := br.Peek(len(LeasePrefix))
+	if err != nil || string(head) != LeasePrefix {
+		return "", nil //nolint:nilerr // too short for a lease line: plain DAP, ReadDAPMessage reports the error
+	}
+	line, err := br.ReadSlice('\n')
+	if err != nil {
+		return "", errors.New("dap: lease line too long or cut")
+	}
+	tok := strings.TrimSpace(strings.TrimPrefix(string(line), LeasePrefix))
+	if !leaseTokenRe.MatchString(tok) {
+		return "", errors.New("dap: bad lease token")
+	}
+	return tok, nil
 }
 
 // ReadDAPMessage reads one Content-Length framed message and returns its
@@ -124,12 +165,16 @@ type dapRequest struct {
 	} `json:"arguments"`
 }
 
-// handleDAP admits client when nobody holds the relay, else answers its
-// first request with an error naming the holder.
+// handleDAP admits client into the lease, or answers its first request with
+// an error naming the holder.
 func (r *relay) handleDAP(client net.Conn) {
 	br := bufio.NewReader(client)
 	_ = client.SetReadDeadline(time.Now().Add(dapHelloTimeout))
-	first, err := ReadDAPMessage(br, dapFirstMessage)
+	token, err := readLease(br)
+	var first []byte
+	if err == nil {
+		first, err = ReadDAPMessage(br, dapFirstMessage)
+	}
 	_ = client.SetReadDeadline(time.Time{})
 	if err != nil {
 		r.failed.Add(1)
@@ -140,18 +185,16 @@ func (r *relay) handleDAP(client net.Conn) {
 		r.failed.Add(1)
 		return
 	}
-	hold := &dapHold{
-		client: client,
-		info: DAPHolder{
-			ClientID: clip(req.Arguments.ClientID), ClientName: clip(req.Arguments.ClientName),
-			Remote: client.RemoteAddr().String(), Since: time.Now().UTC(),
-		},
+	dc := &dapConn{client: client}
+	info := DAPHolder{
+		ClientID: clip(req.Arguments.ClientID), ClientName: clip(req.Arguments.ClientName),
+		Remote: client.RemoteAddr().String(), Since: time.Now().UTC(),
 	}
-	if cur, ok := r.claim(hold); !ok {
+	if cur, ok := r.claim(token, info, dc); !ok {
 		r.refuse(client, req, cur)
 		return
 	}
-	defer r.unclaim(hold)
+	defer r.unclaim(dc)
 	upstream, err := r.dialAdapter()
 	if err != nil {
 		r.failed.Add(1)
@@ -159,7 +202,7 @@ func (r *relay) handleDAP(client net.Conn) {
 		_ = WriteDAPMessage(client, dapError(req, "the debugger did not answer: "+err.Error()))
 		return
 	}
-	if !r.track(upstream, false) || !r.setUpstream(hold, upstream) {
+	if !r.track(upstream, false) || !r.setUpstream(dc, upstream) {
 		_ = upstream.Close()
 		return
 	}
@@ -177,8 +220,8 @@ func (r *relay) handleDAP(client net.Conn) {
 		_, _ = io.Copy(client, upstream)
 		done <- struct{}{}
 	}()
-	// Either side ending ends the session: the adapter serves one client,
-	// and a client that left must free the debugger at once.
+	// Either side ending ends the connection: an adapter session serves one
+	// client, and a client that left must free its place at once.
 	<-done
 	_ = client.Close()
 	_ = upstream.Close()
@@ -206,59 +249,87 @@ func (r *relay) dialAdapter() (net.Conn, error) {
 	}
 }
 
-func (r *relay) claim(h *dapHold) (*DAPHolder, bool) {
+// claim admits dc: a new lease when nobody holds the relay, else a place in
+// the holder's lease when the token matches and the lease has room. It
+// returns the holder when it refuses.
+func (r *relay) claim(token string, info DAPHolder, dc *dapConn) (*DAPHolder, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.holder != nil {
-		cur := r.holder.info
-		return &cur, false
+	if r.lease == nil {
+		r.lease = &dapLease{token: token, info: info, conns: map[*dapConn]struct{}{dc: {}}}
+		return nil, true
 	}
-	r.holder = h
-	return nil, true
+	l := r.lease
+	if token != "" && token == l.token && len(l.conns) < MaxLeaseConns {
+		l.conns[dc] = struct{}{}
+		return nil, true
+	}
+	cur := l.info
+	cur.Connections = len(l.conns)
+	return &cur, false
 }
 
-func (r *relay) setUpstream(h *dapHold, up net.Conn) bool {
+func (r *relay) setUpstream(dc *dapConn, up net.Conn) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.holder != h {
+	if r.lease == nil {
 		return false
 	}
-	h.upstream = up
+	if _, ok := r.lease.conns[dc]; !ok {
+		return false
+	}
+	dc.upstream = up
 	return true
 }
 
-func (r *relay) unclaim(h *dapHold) {
+// unclaim takes dc out of its lease; the lease ends with its last
+// connection.
+func (r *relay) unclaim(dc *dapConn) {
 	r.mu.Lock()
-	if r.holder == h {
-		r.holder = nil
+	defer r.mu.Unlock()
+	if r.lease == nil {
+		return
 	}
-	r.mu.Unlock()
+	delete(r.lease.conns, dc)
+	if len(r.lease.conns) == 0 {
+		r.lease = nil
+	}
 }
 
-// drop ends the holder's connections and frees the relay at once.
+// drop revokes the lease and ends every connection it holds.
 func (r *relay) drop() *DAPHolder {
 	r.mu.Lock()
-	h := r.holder
-	r.holder = nil
+	l := r.lease
+	r.lease = nil
+	var conns []*dapConn
+	if l != nil {
+		for dc := range l.conns {
+			conns = append(conns, dc)
+		}
+	}
 	r.mu.Unlock()
-	if h == nil {
+	if l == nil {
 		return nil
 	}
-	_ = h.client.Close()
-	if h.upstream != nil {
-		_ = h.upstream.Close()
+	for _, dc := range conns {
+		_ = dc.client.Close()
+		if dc.upstream != nil {
+			_ = dc.upstream.Close()
+		}
 	}
-	info := h.info
+	info := l.info
+	info.Connections = len(conns)
 	return &info
 }
 
 func (r *relay) holderInfo() *DAPHolder {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.holder == nil {
+	if r.lease == nil {
 		return nil
 	}
-	info := r.holder.info
+	info := r.lease.info
+	info.Connections = len(r.lease.conns)
 	return &info
 }
 

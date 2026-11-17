@@ -45,6 +45,8 @@ type Docker interface {
 // EdgeControl reads a run's edge over its control socket.
 type EdgeControl interface {
 	Health(ctx context.Context, socket, token string) (edge.Health, error)
+	// DAPDrop closes the client holding the DAP relay and returns it.
+	DAPDrop(ctx context.Context, socket, token, relay string) (*edge.DAPHolder, error)
 }
 
 // ExecDocker runs the docker CLI.
@@ -120,4 +122,9 @@ func (e SocketEdge) Health(ctx context.Context, socket, token string) (edge.Heal
 		}
 	}
 	return edge.Client{Socket: socket, Token: token}.Health(ctx)
+}
+
+// DAPDrop asks the edge to close the DAP relay's holder.
+func (SocketEdge) DAPDrop(ctx context.Context, socket, token, relay string) (*edge.DAPHolder, error) {
+	return edge.Client{Socket: socket, Token: token}.DAPDrop(ctx, relay)
 }

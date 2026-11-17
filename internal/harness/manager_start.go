@@ -30,6 +30,13 @@ func subnets(n int) (inner, outer netip.Prefix) {
 		netip.MustParsePrefix(fmt.Sprintf("10.231.%d.128/25", n))
 }
 
+// debugSubnet is slot n's debug network: 10.232.<n>.0/29, room for the app,
+// an adapter container and the edge at fixed addresses.
+func debugSubnet(n int) netip.Prefix {
+	n = ((n % netSlots) + netSlots) % netSlots
+	return netip.MustParsePrefix(fmt.Sprintf("10.232.%d.0/29", n))
+}
+
 // stepError is a failed start step.
 type stepError struct {
 	step    string
@@ -58,6 +65,8 @@ type starter struct {
 	project string
 	relays  []Relay
 	logN    int
+	// debug is the debug adapter's spec; nil for a plain run.
+	debug *DebugSpec
 }
 
 // start brings the run up: networks, services and their ready probes,
@@ -67,7 +76,7 @@ func (m *Manager) start(ctx context.Context, lr *liveRun, f *File, sc *Scenario)
 	run := lr.snapshot()
 	dir := m.runDir(run.Session, run.ID)
 	s := &starter{m: m, lr: lr, f: f, sc: sc, run: run, dir: dir, sandbox: filepath.Join(dir, "sandbox"), project: "harness-" + run.ID}
-	steps := []func(context.Context) error{s.networks, s.services, s.fixtures, s.setup, s.build, s.app, s.edge}
+	steps := []func(context.Context) error{s.debugger, s.networks, s.services, s.fixtures, s.setup, s.build, s.app, s.edge}
 	for _, step := range steps {
 		if err := step(ctx); err != nil {
 			m.failRun(lr, err)
@@ -144,6 +153,7 @@ func (s *starter) writeProject() error {
 		AimanBin: s.m.opts.AimanBin, UID: s.m.opts.UID, GID: s.m.opts.GID,
 		AppImage: s.run.Images[ServiceApp], EdgeImage: s.run.Images[ServiceEdge], ServiceImages: services,
 		InnerSubnet: inner, OuterSubnet: outer, ReadPassword: readPassword, ServiceMemory: s.m.opts.ServiceMemory,
+		Debug: s.debug, DebugSubnet: debugSubnet(n),
 	})
 	if err != nil {
 		return err
@@ -167,6 +177,23 @@ func (s *starter) writeProject() error {
 	s.lr.mu.Lock()
 	s.lr.run.InnerSubnet, s.lr.run.OuterSubnet = s.run.InnerSubnet, s.run.OuterSubnet
 	s.lr.mu.Unlock()
+	return nil
+}
+
+// debugger readies a debug run's adapter tools on the host (the pinned
+// Delve build) before anything starts.
+func (s *starter) debugger(ctx context.Context) error {
+	s.lr.mu.Lock()
+	a := s.lr.debug
+	s.lr.mu.Unlock()
+	if a == nil {
+		return nil
+	}
+	spec, err := a.Spec(ctx)
+	if err != nil {
+		return &stepError{step: "debugger", err: err}
+	}
+	s.debug = spec
 	return nil
 }
 

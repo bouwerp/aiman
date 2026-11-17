@@ -83,6 +83,10 @@ func (fakeEdge) Health(context.Context, string, string) (edge.Health, error) {
 	return edge.Health{Outer: "10.0.0.2"}, nil
 }
 
+func (fakeEdge) DAPDrop(context.Context, string, string, string) (*edge.DAPHolder, error) {
+	return nil, nil
+}
+
 type recorded struct {
 	session string
 	kind    domain.EventKind

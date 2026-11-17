@@ -283,3 +283,92 @@ func waitNoHolder(t *testing.T, e *Edge, relay string) {
 	}
 	t.Fatal(fmt.Sprintf("holder stayed: %+v", statusOf(t, e, relay).Holder))
 }
+
+// dialLease opens a connection that names a lease token first.
+func dialLease(t *testing.T, addr, token string) *dapClient {
+	t.Helper()
+	d := dialDAP(t, addr)
+	if _, err := io.WriteString(d.c, LeasePrefix+token+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestDAPExclusiveClientLease(t *testing.T) {
+	e := newTestEdge(t)
+	srv := newFakeDAPServer(t)
+	st, err := e.Add(RelaySpec{Name: "dap", Target: srv.addr, Kind: KindDAP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const token = "lease-token-0123456789"
+	var held []*dapClient
+	for i := range MaxLeaseConns {
+		c := dialLease(t, st.Listen, token)
+		if resp, err := c.request(1, "initialize", initArgs("aiman console")); err != nil || resp["success"] != true {
+			t.Fatalf("lease connection %d: %v %v", i+1, resp, err)
+		}
+		held = append(held, c)
+	}
+	if h := statusOf(t, e, "dap").Holder; h == nil || h.Connections != MaxLeaseConns || h.ClientName != "aiman console" {
+		t.Fatalf("holder %+v", h)
+	}
+	for name, c := range map[string]*dapClient{
+		"ninth with the token": dialLease(t, st.Listen, token),
+		"another token":        dialLease(t, st.Listen, "other-token-0123456789"),
+		"no lease line":        dialDAP(t, st.Listen),
+	} {
+		resp, err := c.request(1, "initialize", initArgs("intruder"))
+		if err != nil || resp["success"] != false {
+			t.Fatalf("%s: %v %v", name, resp, err)
+		}
+	}
+	// A child session closing leaves the lease to the rest.
+	_ = held[1].c.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for statusOf(t, e, "dap").Holder.Connections != MaxLeaseConns-1 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if resp, err := held[0].request(2, "threads", nil); err != nil || resp["success"] != true {
+		t.Fatalf("lease after a child left: %v %v", resp, err)
+	}
+	// Take over revokes the lease and closes every connection.
+	dropped, err := e.DropDAP("dap")
+	if err != nil || dropped == nil || dropped.Connections != MaxLeaseConns-1 {
+		t.Fatalf("drop = %+v, %v", dropped, err)
+	}
+	for i, c := range held {
+		if i == 1 {
+			continue
+		}
+		if _, err := c.request(3, "threads", nil); err == nil {
+			t.Fatalf("connection %d survived the take over", i)
+		}
+	}
+	// A new client takes the free relay as a fresh lease, and the revoked
+	// token cannot join it.
+	c := dialLease(t, st.Listen, "fresh-token-0123456789")
+	if resp, err := c.request(1, "initialize", initArgs("vscode")); err != nil || resp["success"] != true {
+		t.Fatalf("after take over: %v %v", resp, err)
+	}
+	late := dialLease(t, st.Listen, token)
+	if resp, _ := late.request(1, "initialize", nil); resp["success"] == true {
+		t.Fatal("the revoked token joined the new lease")
+	}
+}
+
+func TestDAPLeaseLineRefusesBadToken(t *testing.T) {
+	e := newTestEdge(t)
+	srv := newFakeDAPServer(t)
+	st, err := e.Add(RelaySpec{Name: "dap", Target: srv.addr, Kind: KindDAP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := dialLease(t, st.Listen, "short")
+	if _, err := c.request(1, "initialize", nil); err == nil {
+		t.Fatal("a bad lease token was admitted")
+	}
+	if statusOf(t, e, "dap").Holder != nil || srv.conns.Load() != 0 {
+		t.Fatal("a bad lease token reached the debugger")
+	}
+}

@@ -468,8 +468,12 @@ components:
             gate_needs_operator for a session that holds no open gate for the
             digest, needs_operator for a session's accept_risk, and
             invalid_params for a session's empty quote or the operator's
-            accept_risk without a reason. harness.up with debug is
-            invalid_params. harness.verdict answers
+            accept_risk without a reason. harness.up with debug answers
+            harness_invalid when the file has no app.debug or app.run cannot
+            be started under the debugger, and harness_debug_unsupported for
+            an app.debug.lang with no adapter yet (only go has one).
+            harness.debug answers needs_operator for a session's take or
+            release. harness.verdict answers
             needs_operator for a session caller, and every harness method
             answers session_scope for a session outside the caller's tree.
           enum:
@@ -530,6 +534,7 @@ components:
             - harness_image_resolve_failed
             - harness_image_too_large
             - harness_image_not_pending
+            - harness_debug_unsupported
             - server_busy
             - rate_limited
             - host_under_pressure
@@ -713,6 +718,9 @@ components:
             - harness.list
             - harness.image_status
             - harness.image_approve
+            - harness.debug
+            - harness.files
+            - harness.file
             - design.publish
             - review.reveal
             - review.post
@@ -828,8 +836,8 @@ components:
           description: >
             session.transcript page size; default 50, maximum 200. aws.log:
             the most rows to return; 0 or absent is the ledger's default.
-            session.file: the most bytes of data; default 65536, capped at
-            262144.
+            session.file and harness.file: the most bytes of data; default
+            65536, capped at 262144.
         path:
           type: string
           description: >
@@ -837,12 +845,15 @@ components:
             working directory. Served only inside the session's worktree or
             working directory after symlinks; never a path with a .git
             element or a base name .env, .env.*, *.pem, *.key, id_rsa*,
-            id_ed25519* or credentials (forbidden).
+            id_ed25519* or credentials (forbidden). harness.file, required:
+            relative to the run's exported tree, or a container path under
+            /src as a debugger's stack frame names it; the same rules apply
+            inside that tree.
         offset:
           type: integer
           format: int64
           description: >
-            session.file: byte offset to read from; default 0. Past the end
+            session.file and harness.file: byte offset to read from; default 0. Past the end
             answers empty data with eof true. The next page starts at the
             reply's offset plus the byte length of its data.
         since_seq:
@@ -919,7 +930,16 @@ components:
             sha256 of the changes.
         debug:
           type: boolean
-          description: harness.up; refused with invalid_params until the debugger lands.
+          description: >
+            harness.up: run the app under the debug adapter of app.debug.lang
+            (go: dlv dap from the pinned, host-built Delve) on the run's debug
+            network; the edge relays it as the port named dap.
+        op:
+          type: string
+          enum: [status, take, release]
+          description: >
+            harness.debug; default status. take and release close every
+            connection of the current debugger lease, operator only.
         wait:
           type: boolean
           description: "harness.up: hold the call up to 20s for the run to leave starting."
@@ -1029,6 +1049,9 @@ components:
             - $ref: "#/components/schemas/HarnessCheckResult"
             - $ref: "#/components/schemas/HarnessLogsResult"
             - $ref: "#/components/schemas/HarnessVerdictResult"
+            - $ref: "#/components/schemas/HarnessDebugResult"
+            - $ref: "#/components/schemas/HarnessFilesResult"
+            - $ref: "#/components/schemas/HarnessFileResult"
             - $ref: "#/components/schemas/HarnessImageResult"
             - $ref: "#/components/schemas/HarnessImagesResult"
         error:
@@ -1796,6 +1819,8 @@ components:
           enum: [starting, ready, failed, stopped]
         debug:
           type: boolean
+        debug_launch:
+          $ref: "#/components/schemas/HarnessDebugLaunch"
         failed_step:
           type: string
         failed_service:
@@ -2051,6 +2076,129 @@ components:
         todo:
           type: string
           description: The to-do a fail opened or rewrote; absent for pass and skip, empty when the session is gone.
+    HarnessDebugLaunch:
+      type: object
+      description: >
+        A debug run's DAP launch request: a client sends arguments as the
+        launch request's arguments, unchanged. source_root is the container
+        path of the run's exported tree, for mapping stack frame paths.
+      required: [lang, adapter, arguments, source_root]
+      properties:
+        lang:
+          type: string
+        adapter:
+          type: string
+        arguments:
+          type: object
+          additionalProperties: true
+        source_root:
+          type: string
+    DAPHolder:
+      type: object
+      description: >
+        The client holding a debugger lease: the clientID and clientName its
+        first initialize request sent (labels, not proof of identity), when
+        it took the lease, and how many connections the lease holds (child
+        sessions join with the same lease token, at most 8).
+      required: [remote, since, connections]
+      properties:
+        client_id:
+          type: string
+        client_name:
+          type: string
+        remote:
+          type: string
+        since:
+          type: string
+          format: date-time
+        connections:
+          type: integer
+    HarnessDebugState:
+      type: object
+      required: [run, holder, launch, host_port, refused]
+      properties:
+        run:
+          type: string
+        holder:
+          oneOf:
+            - $ref: "#/components/schemas/DAPHolder"
+            - type: "null"
+        dropped:
+          $ref: "#/components/schemas/DAPHolder"
+        launch:
+          $ref: "#/components/schemas/HarnessDebugLaunch"
+        host_port:
+          type: integer
+          description: The host 127.0.0.1 port the edge publishes the dap relay on.
+        refused:
+          type: integer
+          description: DAP clients turned away while the lease was held.
+    HarnessDebugResult:
+      type: object
+      description: >
+        harness.debug {session? | run?, op?}: a ready debug run's debugger.
+        status is any in-scope caller's; take and release close every
+        connection of the current lease (the adapter then restarts for the
+        next client) and are the operator's: a session gets needs_operator.
+        take and release record harness.debug. A run that is not a debug run
+        is invalid_params. Off the device allowlist.
+      required: [type, debug]
+      properties:
+        type:
+          type: string
+          const: harness_debug
+        debug:
+          $ref: "#/components/schemas/HarnessDebugState"
+    HarnessFilesResult:
+      type: object
+      description: >
+        harness.files {session? | run?}: the regular files of the run's
+        exported tree, relative to it, at most 5000 (truncated then true),
+        never under .git or named like a secret. root is the tree's path in
+        the app container. A kept run whose tree serve pruned is
+        harness_not_running. Off the device allowlist.
+      required: [type, run, root, files, truncated]
+      properties:
+        type:
+          type: string
+          const: harness_files
+        run:
+          type: string
+        root:
+          type: string
+        files:
+          type: array
+          items:
+            type: string
+        truncated:
+          type: boolean
+    HarnessFileResult:
+      type: object
+      description: >
+        harness.file {session? | run?, path, offset?, limit?}: one page of a
+        file of the run's exported tree, under session.file's rules. path is
+        the file relative to the tree. Off the device allowlist.
+      required: [type, run, path, size, offset, data, eof, binary]
+      properties:
+        type:
+          type: string
+          const: harness_file
+        run:
+          type: string
+        path:
+          type: string
+        size:
+          type: integer
+          format: int64
+        offset:
+          type: integer
+          format: int64
+        data:
+          type: string
+        eof:
+          type: boolean
+        binary:
+          type: boolean
     HarnessImage:
       type: object
       description: >

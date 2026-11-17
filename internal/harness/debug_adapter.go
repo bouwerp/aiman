@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"strconv"
 	"strings"
 )
 
@@ -72,7 +71,7 @@ type GoDebug struct {
 // DlvMount is where the pinned dlv is mounted in the app container.
 const DlvMount = ToolsMount + "/dlv"
 
-// goDAPPort is dlv dap's port at DebugAlias.
+// goDAPPort is dlv dap's port on the app's debug address.
 const goDAPPort = 2345
 
 // GoDebugFlags are the go build flags of a debug run: no optimisation and no
@@ -94,16 +93,15 @@ func (g *GoDebug) Spec(ctx context.Context) (*DebugSpec, error) {
 	return GoDebugSpec(dlv), nil
 }
 
-// GoDebugSpec runs `dlv dap` on DebugAlias. It serves one client and exits
+// GoDebugSpec runs `dlv dap` on $AIMAN_INSPECT, the app's debug address. It serves one client and exits
 // when that client leaves, so a loop starts the next one; a take over
 // therefore restarts the debugger and the app for the new client. No
 // --accept-multiclient and no --api-version: those belong to Delve's JSON-RPC
 // API. GOFLAGS turns optimisation off for app.build.
 func GoDebugSpec(dlv string) *DebugSpec {
-	listen := DebugAlias + ":" + strconv.Itoa(goDAPPort)
 	script := "trap 'kill $p 2>/dev/null; exit 0' TERM INT\n" +
 		"while :; do\n" +
-		"  " + DlvMount + " dap --listen=" + listen + " --check-go-version=false & p=$!\n" +
+		"  " + DlvMount + " dap --listen=\"$" + InspectEnv + "\" --check-go-version=false & p=$!\n" +
 		"  wait $p\n" +
 		"  sleep 1\n" +
 		"done"

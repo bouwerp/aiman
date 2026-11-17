@@ -30,9 +30,9 @@ type relay struct {
 	lastErr string
 	conns   map[net.Conn]struct{}
 	closed  bool
-	// holder is the client of a KindDAP relay.
-	holder *dapHold
-	wg     sync.WaitGroup
+	// lease is the holder of a KindDAP relay.
+	lease *dapLease
+	wg    sync.WaitGroup
 }
 
 func newRelay(spec RelaySpec, ln net.Listener, dialTimeout time.Duration) *relay {
