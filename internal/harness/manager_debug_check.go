@@ -67,6 +67,7 @@ type debugCheckRun struct {
 	base    RunSpec
 	name    string
 	lang    string
+	index   int
 	actor   domain.EventActor
 	attach  time.Duration
 	started bool
@@ -104,7 +105,7 @@ func (m *Manager) DebugCheck(ctx context.Context, req DebugCheckRequest) (CheckR
 	if f == nil {
 		return CheckRun{}, fmt.Errorf("harness run %s has no compose project", run.ID)
 	}
-	check, err := scenarioCheck(f, run.Scenario, name)
+	check, j, err := scenarioCheck(f, run.Scenario, name)
 	if err != nil {
 		return CheckRun{}, err
 	}
@@ -115,7 +116,7 @@ func (m *Manager) DebugCheck(ctx context.Context, req DebugCheckRequest) (CheckR
 	}
 	dir := m.runDir(run.Session, run.ID)
 	w := &debugCheckRun{
-		lr: lr, run: run, token: token, base: base, name: name, lang: check.Debug.Lang, actor: req.Actor,
+		lr: lr, run: run, token: token, base: base, name: name, index: j, lang: check.Debug.Lang, actor: req.Actor,
 		sock:   filepath.Join(dir, "control", ControlSocketName),
 		call:   ComposeCall{Dir: filepath.Join(dir, "sandbox"), Project: "harness-" + run.ID},
 		attach: m.opts.DebugAttachTimeout,
@@ -189,6 +190,8 @@ func (m *Manager) claimDebugCheck(w *debugCheckRun) error {
 func (m *Manager) startDebugCheck(ctx context.Context, w *debugCheckRun, f *File, spec *DebugSpec, launch *DebugLaunch) (CheckRun, error) {
 	rs := w.base
 	rs.CheckDebug, rs.CheckAdapterImage = spec, w.run.Images[ServiceCheckAdapter]
+	// A check that names an image is debugged in that image.
+	rs.CheckDebugImage = w.run.Images[CheckService(w.index)]
 	if spec.Adapter != nil && rs.CheckAdapterImage == "" {
 		return CheckRun{}, fmt.Errorf("check %s needs the debug adapter image, which this run did not vet; take the run down and start it again", w.name)
 	}
@@ -428,21 +431,21 @@ func (m *Manager) compose(ctx context.Context, call ComposeCall, args ...string)
 
 // scenarioCheck finds check name of scenario in f, which needs a debug
 // block.
-func scenarioCheck(f *File, scenario, name string) (Check, error) {
+func scenarioCheck(f *File, scenario, name string) (Check, int, error) {
 	sc, ok := f.Scenario(scenario)
 	if !ok {
-		return Check{}, paramsError(fmt.Sprintf("no scenario %q in the run's harness file", scenario))
+		return Check{}, 0, paramsError(fmt.Sprintf("no scenario %q in the run's harness file", scenario))
 	}
-	for _, c := range sc.Checks {
+	for j, c := range sc.Checks {
 		if c.Name != name {
 			continue
 		}
 		if c.Debug == nil {
-			return Check{}, paramsError(fmt.Sprintf("check %q has no debug block; give it debug: {lang: node, run: ...} in the harness file", name))
+			return Check{}, 0, paramsError(fmt.Sprintf("check %q has no debug block; give it debug: {lang: node, run: ...} in the harness file", name))
 		}
-		return c, nil
+		return c, j, nil
 	}
-	return Check{}, paramsError(fmt.Sprintf("scenario %s has no check %q", scenario, name))
+	return Check{}, 0, paramsError(fmt.Sprintf("scenario %s has no check %q", scenario, name))
 }
 
 // hasDebugChecks reports whether sc has a check with a debug block.

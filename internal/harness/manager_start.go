@@ -145,6 +145,12 @@ func (s *starter) writeProject() error {
 	for _, name := range s.sc.Services {
 		services[name] = s.run.Images[name]
 	}
+	checks := map[string]string{}
+	for j, c := range s.sc.Checks {
+		if c.Image != "" {
+			checks[CheckService(j)] = s.run.Images[CheckService(j)]
+		}
+	}
 	readPassword, err := randomHex(16)
 	if err != nil {
 		return err
@@ -156,7 +162,7 @@ func (s *starter) writeProject() error {
 		AppImage: s.run.Images[ServiceApp], EdgeImage: s.run.Images[ServiceEdge], ServiceImages: services,
 		InnerSubnet: inner, OuterSubnet: outer, ReadPassword: readPassword, ServiceMemory: s.m.opts.ServiceMemory,
 		Debug: s.debug, DebugSubnet: debugSubnet(n), AdapterImage: s.run.Images[ServiceAdapter],
-		DebugChecks: s.run.DebugChecks,
+		DebugChecks: s.run.DebugChecks, CheckImages: checks,
 	}
 	p, err := Compose(s.f, spec)
 	if err != nil {

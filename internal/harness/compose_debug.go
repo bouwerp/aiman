@@ -312,9 +312,9 @@ func debugTarget(s *composeService, d *DebugSpec, addr netip.Addr) {
 	s.Command = append([]string(nil), d.Command...)
 }
 
-// checkService runs a debug run's plain checks: the app's container on the
+// appCheckService runs a debug run's plain checks: the app's container on the
 // inner network only, started only by name.
-func checkService(f *File, spec RunSpec) composeService {
+func appCheckService(f *File, spec RunSpec) composeService {
 	s := appService(f, spec)
 	s.Profiles = []string{profileCheck}
 	return s
@@ -325,6 +325,9 @@ func checkService(f *File, spec RunSpec) composeService {
 // removes it, so its exit code and output can be read.
 func debugCheckService(f *File, spec RunSpec) composeService {
 	s := appService(f, spec)
+	if spec.CheckDebugImage != "" {
+		s.Image = spec.CheckDebugImage
+	}
 	check, _ := DebugCheckAddrs(spec.DebugSubnet)
 	debugTarget(&s, spec.CheckDebug, check)
 	s.Profiles = []string{profileDebugCheck}
@@ -387,7 +390,7 @@ func addDebugServices(doc *composeFile, f *File, spec RunSpec, app, edge *compos
 			doc.Services[ServiceAdapter] = adapterService(spec, d.Adapter, spec.AdapterImage, ad)
 		}
 	}
-	doc.Services[ServiceCheck] = checkService(f, spec)
+	doc.Services[ServiceCheck] = appCheckService(f, spec)
 	if c := spec.CheckDebug; c != nil {
 		doc.Services[ServiceDebugCheck] = debugCheckService(f, spec)
 		if c.Adapter != nil {

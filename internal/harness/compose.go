@@ -107,6 +107,11 @@ type RunSpec struct {
 	// CheckAdapterImage when it has an Adapter).
 	CheckDebug        *DebugSpec
 	CheckAdapterImage string
+	// CheckImages runs each check that names an image, keyed by
+	// CheckService of the check's index (serve passes image IDs).
+	CheckImages map[string]string
+	// CheckDebugImage runs the debug check when its check names an image.
+	CheckDebugImage string
 }
 
 // Relay is one edge relay: the edge listens on Port on its outer address,
@@ -157,6 +162,11 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 	}
 	app, edge := appService(f, spec), edgeService(spec, relays)
 	addDebugServices(&doc, f, spec, &app, &edge)
+	for j, c := range sc.Checks {
+		if c.Image != "" {
+			doc.Services[CheckService(j)] = checkService(f, spec, spec.CheckImages[CheckService(j)])
+		}
+	}
 	doc.Services[ServiceApp] = app
 	doc.Services[ServiceCacheInit] = cacheInitService(f, spec)
 	doc.Services[ServiceEdge] = edge
@@ -237,6 +247,11 @@ func checkSpec(f *File, spec RunSpec) (*Scenario, error) {
 	for name := range spec.ServiceImages {
 		if !slices.Contains(sc.Services, name) {
 			return nil, fmt.Errorf("harness compose: image given for %q, which scenario %s does not start", name, sc.ID)
+		}
+	}
+	for j, c := range sc.Checks {
+		if c.Image != "" && spec.CheckImages[CheckService(j)] == "" {
+			return nil, fmt.Errorf("harness compose: check %q needs its image ID", c.Name)
 		}
 	}
 	for _, name := range sc.Services {
@@ -372,6 +387,26 @@ func appService(f *File, spec RunSpec) composeService {
 		DependsOn: map[string]composeCondition{ServiceCacheInit: {Condition: "service_completed_successfully"}},
 	}
 	limited(&s, f.AppLimits())
+	return s
+}
+
+// checksProfile holds the check image services, which only harness.check
+// starts.
+const checksProfile = "checks"
+
+// CheckService is the compose service of the scenario's check at index j
+// when that check names its own image. The underscore keeps it apart from
+// every service name a harness file may use.
+func CheckService(j int) string { return "check_" + strconv.Itoa(j) }
+
+// checkService runs a check in its own image: the app's hardening, mounts,
+// env, limits and inner network, with no command of its own (harness.check
+// passes the check's). The checks profile keeps compose up from starting it.
+func checkService(f *File, spec RunSpec, image string) composeService {
+	s := appService(f, spec)
+	s.Image = image
+	s.Command = nil
+	s.Profiles = []string{checksProfile}
 	return s
 }
 
