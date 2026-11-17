@@ -87,6 +87,10 @@ func (fakeEdge) DAPDrop(context.Context, string, string, string) (*edge.DAPHolde
 	return nil, nil
 }
 
+func (fakeEdge) DAPTarget(context.Context, string, string, string, string) (*edge.DAPHolder, error) {
+	return nil, nil
+}
+
 type recorded struct {
 	session string
 	kind    domain.EventKind
@@ -311,7 +315,7 @@ func TestManagerServiceFailed(t *testing.T) {
 	if got.State != StateFailed || got.FailedStep != "service db" || got.FailedService != "db" || !strings.Contains(got.Error, "FATAL: boom") {
 		t.Fatalf("run = %+v", got)
 	}
-	if tm.docker.called("down -v") != 1 {
+	if tm.docker.called("--profile * down -v") != 1 {
 		t.Fatalf("a failed run must be taken down; calls %q", tm.docker.calls)
 	}
 	p := tm.rec.last(domain.EventHarnessFailed)
@@ -563,7 +567,7 @@ func TestManagerCleanStale(t *testing.T) {
 	if got.State != StateStopped || got.StopReason != StopServeRestart {
 		t.Fatalf("stale run = %+v", got)
 	}
-	if tm.docker.called("down -v") != 1 {
+	if tm.docker.called("--profile * down -v") != 1 {
 		t.Fatalf("stale project not taken down; calls %q", tm.docker.calls)
 	}
 }

@@ -160,19 +160,22 @@ func (s *starter) writeProject() error {
 	if err != nil {
 		return err
 	}
-	p, err := Compose(s.f, RunSpec{
+	spec := RunSpec{
 		RunID: s.run.ID, Scenario: s.sc.ID,
 		Src: filepath.Join(s.dir, "src"), Out: filepath.Join(s.dir, "out"), ControlDir: filepath.Join(s.dir, "control"),
 		AimanBin: s.m.opts.AimanBin, UID: s.m.opts.UID, GID: s.m.opts.GID,
 		AppImage: s.run.Images[ServiceApp], EdgeImage: s.run.Images[ServiceEdge], ServiceImages: services,
 		InnerSubnet: inner, OuterSubnet: outer, ReadPassword: readPassword, ServiceMemory: s.m.opts.ServiceMemory,
 		Debug: s.debug, DebugSubnet: debugSubnet(n), AdapterImage: s.run.Images[ServiceAdapter],
-		Proxy:       proxy,
-		CheckImages: checks,
-	})
+		DebugChecks: s.run.DebugChecks, Proxy: proxy, CheckImages: checks,
+	}
+	p, err := Compose(s.f, spec)
 	if err != nil {
 		return err
 	}
+	s.lr.mu.Lock()
+	s.lr.file, s.lr.spec = s.f, spec
+	s.lr.mu.Unlock()
 	if err := s.placeLaunch(n); err != nil {
 		return err
 	}
@@ -194,6 +197,7 @@ func (s *starter) writeProject() error {
 	s.run.InnerSubnet, s.run.OuterSubnet = inner.String(), outer.String()
 	s.lr.mu.Lock()
 	s.lr.run.InnerSubnet, s.lr.run.OuterSubnet = s.run.InnerSubnet, s.run.OuterSubnet
+	s.lr.readPassword = readPassword
 	s.lr.mu.Unlock()
 	return nil
 }

@@ -54,6 +54,10 @@ func (harnessEdge) DAPDrop(context.Context, string, string, string) (*edge.DAPHo
 	return &edge.DAPHolder{ClientName: "vscode"}, nil
 }
 
+func (harnessEdge) DAPTarget(context.Context, string, string, string, string) (*edge.DAPHolder, error) {
+	return &edge.DAPHolder{ClientName: "vscode"}, nil
+}
+
 // stubDebug is the Go adapter with a fixed dlv path, so nothing is built.
 type stubDebug struct{ harness.GoDebug }
 
@@ -116,6 +120,7 @@ func harnessFixtureOf(t *testing.T, setup harnessSetup) *harnessFixture {
 	file := serverHarnessFile
 	if setup.debug {
 		file = strings.Replace(file, "  run: serve\n", "  run: /out/app serve\n  debug: {lang: go}\n", 1)
+		file = strings.Replace(file, "  - id: plain\n", "  - id: plain\n    checks:\n      - {name: fake, run: python3 t.py, debug: {lang: python, wrap_env: [PYTHON_BIN]}}\n", 1)
 	}
 	if err := os.WriteFile(filepath.Join(dir, harness.FilePath), []byte(file), 0o600); err != nil {
 		t.Fatal(err)

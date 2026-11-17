@@ -47,6 +47,9 @@ type EdgeControl interface {
 	Health(ctx context.Context, socket, token string) (edge.Health, error)
 	// DAPDrop closes the client holding the DAP relay and returns it.
 	DAPDrop(ctx context.Context, socket, token, relay string) (*edge.DAPHolder, error)
+	// DAPTarget points the DAP relay at target (empty for none), closing its
+	// holder, and returns who held it: the debug target switch.
+	DAPTarget(ctx context.Context, socket, token, relay, target string) (*edge.DAPHolder, error)
 }
 
 // ExecDocker runs the docker CLI.
@@ -127,4 +130,9 @@ func (e SocketEdge) Health(ctx context.Context, socket, token string) (edge.Heal
 // DAPDrop asks the edge to close the DAP relay's holder.
 func (SocketEdge) DAPDrop(ctx context.Context, socket, token, relay string) (*edge.DAPHolder, error) {
 	return edge.Client{Socket: socket, Token: token}.DAPDrop(ctx, relay)
+}
+
+// DAPTarget asks the edge to point the DAP relay at target.
+func (SocketEdge) DAPTarget(ctx context.Context, socket, token, relay, target string) (*edge.DAPHolder, error) {
+	return edge.Client{Socket: socket, Token: token}.DAPTarget(ctx, relay, target)
 }

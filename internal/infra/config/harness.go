@@ -51,6 +51,23 @@ type HarnessConfig struct {
 	Network string `yaml:"network,omitempty"`
 	// Capture configures the edge's capture proxy.
 	Capture HarnessCaptureConfig `yaml:"capture,omitempty"`
+	// DB configures the database browser.
+	DB HarnessDBConfig `yaml:"db,omitempty"`
+	// Debug configures debug checks.
+	Debug HarnessDebugConfig `yaml:"debug,omitempty"`
+}
+
+// HarnessDBConfig is harness.db.
+type HarnessDBConfig struct {
+	// RowLimit caps the rows one harness.db read returns; unset is 200.
+	RowLimit int `yaml:"row_limit,omitempty"`
+}
+
+// HarnessDebugConfig is harness.debug.
+type HarnessDebugConfig struct {
+	// AttachTimeout stops a debug check no debugger attached to within it
+	// (10m).
+	AttachTimeout time.Duration `yaml:"attach_timeout,omitempty"`
 }
 
 // HarnessToolPin is one harness.debug_tools entry.

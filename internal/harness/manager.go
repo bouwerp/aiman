@@ -25,6 +25,9 @@ const (
 	StartTimeout = 30 * time.Minute
 	// CheckTimeout bounds one check command.
 	CheckTimeout = 5 * time.Minute
+	// DefaultDebugAttachTimeout is how long a debug check waits for a
+	// debugger client.
+	DefaultDebugAttachTimeout = 10 * time.Minute
 	// stopTimeout bounds compose down.
 	stopTimeout = 2 * time.Minute
 )
@@ -67,9 +70,23 @@ type Options struct {
 	DebugAdapters []DebugAdapter
 	// Record writes ledger rows; nil records nothing.
 	Record Recorder
+	// DebugAttachTimeout is harness.debug.attach_timeout: a debug check
+	// with no debugger client by then is stopped; zero is
+	// DefaultDebugAttachTimeout.
+	DebugAttachTimeout time.Duration
+	// DebugPoll is how often a debug check's watcher asks the edge
+	// whether a client attached; zero is a second.
+	DebugPoll time.Duration
 	// Sourcemaps checks a ready run's frontend for source maps; nil is
 	// DetectSourcemaps with DefaultSourcemapLimits.
 	Sourcemaps func(ctx context.Context, src string, targets []SourcemapTarget) BrowserSourcemaps
+	// DBRowLimit is harness.db.row_limit; zero is DefaultDBRowLimit.
+	DBRowLimit int
+	// Postgres reads a run's postgres service through its edge relay; nil
+	// is PGReader.
+	Postgres PostgresReader
+	// Containers runs the SQLite reader container; nil is ExecDocker.
+	Containers ContainerRunner
 	// Network is NetworkOnline or NetworkOffline (anything else): online
 	// runs reach the outside through the edge proxy only.
 	Network string
@@ -126,8 +143,20 @@ type liveRun struct {
 	// stopping is set by the first of Down and a failed start; the other
 	// leaves the run alone.
 	stopping bool
-	// debug is the adapter of a debug run.
+	// debug is the adapter of a debug run's app; nil in a plain run and
+	// in one that debugs only its checks.
 	debug DebugAdapter
+	// readPassword is aiman_ro's password in the run's postgres services.
+	readPassword string
+	// checkAdapter is the adapter image a debug check may start, vetted
+	// at up; empty when no debug check needs one.
+	checkAdapter string
+	// file and spec are what the compose project was written from; a
+	// debug check writes it again with its own services.
+	file *File
+	spec RunSpec
+	// check is the debug check running now, nil when none.
+	check *debugCheck
 }
 
 // NewManager checks opts and returns a manager with no live runs.
@@ -150,8 +179,23 @@ func NewManager(opts Options) (*Manager, error) {
 	if opts.Edge == nil {
 		opts.Edge = SocketEdge{}
 	}
+	if opts.DebugAttachTimeout <= 0 {
+		opts.DebugAttachTimeout = DefaultDebugAttachTimeout
+	}
+	if opts.DebugPoll <= 0 {
+		opts.DebugPoll = time.Second
+	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.DBRowLimit <= 0 {
+		opts.DBRowLimit = DefaultDBRowLimit
+	}
+	if opts.Postgres == nil {
+		opts.Postgres = PGReader{}
+	}
+	if opts.Containers == nil {
+		opts.Containers = ExecDocker{}
 	}
 	if err := os.MkdirAll(opts.Dir, 0o700); err != nil {
 		return nil, err
@@ -168,6 +212,11 @@ func (m *Manager) Close() {
 		if lr.cancel != nil {
 			lr.cancel()
 		}
+		lr.mu.Lock()
+		if dc := lr.check; dc != nil && dc.cancel != nil {
+			dc.cancel()
+		}
+		lr.mu.Unlock()
 	}
 	m.mu.Unlock()
 	m.wg.Wait()
@@ -193,9 +242,14 @@ type UpRequest struct {
 	// repos.<slug>.review.image.
 	Override         []byte
 	AppImageOverride string
-	// Debug runs the app under the debug adapter of app.debug.lang.
+	// Debug runs the app under the debug adapter of app.debug.lang; with no
+	// app.debug it debugs only the scenario's checks.
 	Debug bool
-	Actor domain.EventActor
+	// DebugChecks gives the run the debugger for its checks only and runs
+	// the app plainly, whatever app.debug says: the fallback when the
+	// app's runtime cannot be debugged (a Bun of another minor version).
+	DebugChecks bool
+	Actor       domain.EventActor
 }
 
 // Up checks and reserves a run, exports its tree and starts it in the
@@ -221,12 +275,26 @@ func (m *Manager) Up(ctx context.Context, req UpRequest) (Run, error) {
 	}
 	var adapter DebugAdapter
 	limits := LimitOptions{ServiceMemory: m.opts.ServiceMemory, RunMemory: m.opts.RunMemory}
-	if req.Debug {
+	// A debug run with no app.debug, or one asked for with DebugChecks,
+	// debugs only its checks: the app runs plainly.
+	debugChecks := req.DebugChecks || (req.Debug && f.App.Debug == nil && hasDebugChecks(sc))
+	switch {
+	case debugChecks:
+		if !hasDebugChecks(sc) {
+			return Run{}, invalid(fmt.Sprintf("scenario %s has no check with a debug block to debug", sc.ID))
+		}
+	case req.Debug:
 		if adapter, err = DebugAdapterFor(f, m.opts.DebugAdapters); err != nil {
 			return Run{}, err
 		}
 		if adapter.AdapterImage() != "" {
 			limits.Extra = AdapterLimits.Memory
+		}
+	}
+	checkAdapter := ""
+	if req.Debug || debugChecks {
+		if checkAdapter = m.checkAdapterImage(sc); checkAdapter != "" {
+			limits.Extra += AdapterLimits.Memory
 		}
 	}
 	if err := f.CheckLimits(sc.ID, limits); err != nil {
@@ -239,6 +307,10 @@ func (m *Manager) Up(ctx context.Context, req UpRequest) (Run, error) {
 	if adapter != nil {
 		lr.debug, lr.run.Debug = adapter, true
 	}
+	if debugChecks {
+		lr.run.Debug, lr.run.DebugChecks = true, true
+	}
+	lr.checkAdapter = checkAdapter
 	run, err := m.prepare(ctx, req, loaded, sc, lr)
 	if err != nil {
 		m.release(lr)
@@ -251,7 +323,7 @@ func (m *Manager) Up(ctx context.Context, req UpRequest) (Run, error) {
 	})
 	startCtx, cancel := context.WithTimeout(context.Background(), StartTimeout)
 	lr.mu.Lock()
-	lr.cancel = cancel
+	lr.cancel, lr.file = cancel, f
 	lr.mu.Unlock()
 	m.wg.Add(1)
 	go func() {
@@ -370,6 +442,11 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	run.SHA, run.Dirty, run.DiffSHA256, run.Source = l.SHA, l.Dirty, l.DiffSHA256, l.Source
 	run.Network = m.network()
 	run.Services = append([]string(nil), sc.Services...)
+	for _, name := range sc.Services {
+		if db := l.File.Services[name].Database; db != nil {
+			run.Databases = append(run.Databases, RunDatabase{Service: name, Kind: db.Kind})
+		}
+	}
 	run.StartedAt, run.LastUsed = now, now
 	run.Ports, run.Steps, run.Checks = []RunPort{}, stepViews(sc), checkRuns(sc)
 	dir := m.runDir(req.Session, run.ID)
@@ -391,7 +468,7 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	if err := writeStubs(sc, src, filepath.Join(dir, "control")); err != nil {
 		return Run{}, err
 	}
-	if run.Images, err = m.images(ctx, req, l.File, sc, src, lr.debug); err != nil {
+	if run.Images, err = m.images(ctx, req, l.File, sc, src, lr.debug, lr.checkAdapter); err != nil {
 		return Run{}, err
 	}
 	token, err := randomHex(32)
@@ -421,7 +498,11 @@ func stepViews(sc *Scenario) []StepView {
 func checkRuns(sc *Scenario) []CheckRun {
 	out := make([]CheckRun, 0, len(sc.Checks))
 	for _, c := range sc.Checks {
-		out = append(out, CheckRun{Name: c.Name, Run: c.Run, Image: c.Image})
+		cr := CheckRun{Name: c.Name, Run: c.Run, Image: c.Image}
+		if c.Debug != nil {
+			cr.DebugLang = c.Debug.Lang
+		}
+		out = append(out, cr)
 	}
 	return out
 }
@@ -432,7 +513,7 @@ func checkRuns(sc *Scenario) []CheckRun {
 // digest starts vetting at once, and the first refusal is returned. Without
 // one, an app or service image must match harness.allowed_images, and every
 // image must be on the host.
-func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenario, src string, debug DebugAdapter) (map[string]string, error) {
+func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenario, src string, debug DebugAdapter, checkAdapter string) (map[string]string, error) {
 	appRef := f.App.Image
 	if appRef == "" {
 		var err error
@@ -454,9 +535,13 @@ func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenar
 	if debug != nil && debug.AdapterImage() != "" {
 		refs = append(refs, [2]string{ServiceAdapter, debug.AdapterImage()})
 	}
+	if checkAdapter != "" {
+		refs = append(refs, [2]string{ServiceCheckAdapter, checkAdapter})
+	}
 	var first error
 	for _, r := range refs {
-		id, err := m.image(ctx, req, r[1], r[0] == ServiceEdge || r[0] == ServiceAdapter)
+		builtin := r[0] == ServiceEdge || r[0] == ServiceAdapter || r[0] == ServiceCheckAdapter
+		id, err := m.image(ctx, req, r[1], builtin)
 		if err != nil {
 			if first == nil {
 				first = err

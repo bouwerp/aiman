@@ -201,6 +201,12 @@ func (s *Session) Start(command string, args any) int {
 // source as the client names it. It returns the top frame's source path.
 func HitTSBreakpoint(t *testing.T, dial func() Transport, request string, args map[string]any, tsPath string) (string, *Session) {
 	t.Helper()
+	return HitJSBreakpoint(t, dial, request, args, tsPath, TSBreakLine)
+}
+
+// HitJSBreakpoint is HitTSBreakpoint with a breakpoint on line of tsPath.
+func HitJSBreakpoint(t *testing.T, dial func() Transport, request string, args map[string]any, tsPath string, line int) (string, *Session) {
+	t.Helper()
 	init := map[string]any{
 		"clientID": "test", "clientName": "harness test", "adapterID": "pwa-node",
 		"pathFormat": "path", "linesStartAt1": true, "columnsStartAt1": true, "supportsStartDebuggingRequest": true,
@@ -223,7 +229,7 @@ func HitTSBreakpoint(t *testing.T, dial func() Transport, request string, args m
 	child.Event("initialized")
 	child.Must("setBreakpoints", map[string]any{
 		"source":      map[string]any{"path": tsPath},
-		"breakpoints": []map[string]any{{"line": TSBreakLine}},
+		"breakpoints": []map[string]any{{"line": line}},
 	})
 	child.Must("configurationDone", map[string]any{})
 	stopped := child.Event("stopped")
@@ -234,8 +240,8 @@ func HitTSBreakpoint(t *testing.T, dial func() Transport, request string, args m
 		t.Fatalf("no frames: %v", st)
 	}
 	top := frames[0].(map[string]any)
-	if line, _ := top["line"].(float64); int(line) != TSBreakLine {
-		t.Fatalf("top frame %v, want line %d of the .ts source (stopped %v)", top, TSBreakLine, body)
+	if got, _ := top["line"].(float64); int(got) != line {
+		t.Fatalf("top frame %v, want line %d of the .ts source (stopped %v)", top, line, body)
 	}
 	src, _ := top["source"].(map[string]any)
 	return fmt.Sprint(src["path"]), child

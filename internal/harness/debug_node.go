@@ -137,6 +137,20 @@ fi
 `
 }
 
+// toolFirstPath puts the mounted runtime first on PATH on glibc, so a debug
+// check's `bunx vitest` or `npx vitest` runs the tests on that runtime
+// whatever the image holds. On musl, where the mounted build cannot run,
+// the image's own stays first. Either way a cmd that is Bun under another
+// name stops the check: its tests would not run on the runtime the
+// debugger speaks to.
+func toolFirstPath(cmd, toolBin, name string) string {
+	return `if ls /lib/ld-musl-* >/dev/null 2>&1; then PATH="$PATH:` + toolBin + `"; else PATH="` + toolBin + `:$PATH"; fi; export PATH
+case "$(readlink -f "$(command -v ` + cmd + `)" 2>/dev/null)" in
+*/bun|*/bun-*) echo "aiman: ` + cmd + ` in this image is Bun; a ` + cmd + ` debug check runs on ` + name + `. Use a glibc image, or one with ` + name + ` installed." >&2; exit 1 ;;
+esac
+`
+}
+
 // nodeScript is the app command of a node debug run: the image's node
 // first, the mounted one as a fallback, in /src or app.debug.cwd, either the
 // file's own run or runtime --inspect-wait=$AIMAN_INSPECT runtime_args entry.
@@ -150,7 +164,11 @@ func nodeScript(d *Debug) (string, error) {
 // runtime --inspect-wait="$AIMAN_INSPECT" runtime_args entry.
 func inspectScript(d *Debug, cmd, toolBin, name string) (string, error) {
 	var b strings.Builder
-	b.WriteString(`PATH="$PATH:` + toolBin + `"; export PATH` + "\n")
+	if d.toolFirst {
+		b.WriteString(toolFirstPath(cmd, toolBin, name))
+	} else {
+		b.WriteString(`PATH="$PATH:` + toolBin + `"; export PATH` + "\n")
+	}
 	b.WriteString(muslGuard(cmd, toolBin+"/"+cmd, name))
 	b.WriteString("cd " + shellx.Quote(path.Join("/src", d.Cwd)) + " || exit 1\n")
 	if d.Run != "" {

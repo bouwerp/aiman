@@ -52,8 +52,12 @@ type Run struct {
 	Network    string `json:"network"`
 	State      string `json:"state"`
 	Debug      bool   `json:"debug"`
-	// DebugLaunch is the DAP launch request of a debug run.
+	// DebugLaunch is the DAP launch request of a debug run's app; nil in a
+	// run that debugs only its checks (DebugChecks).
 	DebugLaunch *DebugLaunch `json:"debug_launch,omitempty"`
+	DebugChecks bool         `json:"debug_checks,omitempty"`
+	// DebugCheck is the check the debugger targets while one runs under it.
+	DebugCheck *DebugCheck `json:"debug_check,omitempty"`
 	// FailedStep, FailedService and Error explain a failed run.
 	FailedStep    string `json:"failed_step,omitempty"`
 	FailedService string `json:"failed_service,omitempty"`
@@ -69,14 +73,16 @@ type Run struct {
 	Verdicts []Verdict `json:"verdicts,omitempty"`
 	// Services are the scenario's service names; Images maps each container
 	// to the image ID it runs.
-	Services    []string          `json:"services,omitempty"`
-	Images      map[string]string `json:"images,omitempty"`
-	InnerSubnet string            `json:"inner_subnet,omitempty"`
-	OuterSubnet string            `json:"outer_subnet,omitempty"`
-	StartedAt   time.Time         `json:"started_at"`
-	ReadyAt     *time.Time        `json:"ready_at,omitempty"`
-	StoppedAt   *time.Time        `json:"stopped_at,omitempty"`
-	StopReason  string            `json:"stop_reason,omitempty"`
+	Services []string          `json:"services,omitempty"`
+	Images   map[string]string `json:"images,omitempty"`
+	// Databases are the scenario's services the database browser reads.
+	Databases   []RunDatabase `json:"databases,omitempty"`
+	InnerSubnet string        `json:"inner_subnet,omitempty"`
+	OuterSubnet string        `json:"outer_subnet,omitempty"`
+	StartedAt   time.Time     `json:"started_at"`
+	ReadyAt     *time.Time    `json:"ready_at,omitempty"`
+	StoppedAt   *time.Time    `json:"stopped_at,omitempty"`
+	StopReason  string        `json:"stop_reason,omitempty"`
 	// LastUsed is the last RPC that touched the run; harness.idle_timeout
 	// counts from it.
 	LastUsed time.Time `json:"last_used"`
@@ -92,6 +98,13 @@ type RunPort struct {
 	Name     string `json:"name"`
 	Service  string `json:"service"`
 	HostPort int    `json:"host_port"`
+}
+
+// RunDatabase is a service of the run that holds a database: Kind is
+// postgres or sqlite.
+type RunDatabase struct {
+	Service string `json:"service"`
+	Kind    string `json:"kind"`
 }
 
 // StepView is one human step with its latest verdict. N counts from 1.
@@ -113,6 +126,46 @@ type CheckRun struct {
 	Exit   *int       `json:"exit,omitempty"`
 	At     *time.Time `json:"at,omitempty"`
 	Output string     `json:"output,omitempty"`
+	// DebugLang is the lang of the check's debug block, empty when it has
+	// none.
+	DebugLang string `json:"debug_lang,omitempty"`
+	// Debug marks a result of harness.check {debug: true}; Debugging is set
+	// while that check runs.
+	Debug     bool `json:"debug,omitempty"`
+	Debugging bool `json:"debugging,omitempty"`
+	// ErrorCode and Error say why a debug check ended without its own exit:
+	// CodeDebugTimeout when no debugger attached in time.
+	ErrorCode string `json:"error_code,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// DebugCheck is the check a debug run's debugger targets while it runs.
+// State is DebugCheckWaiting until a debugger client holds the relay, then
+// DebugCheckAttached. Launch is the DAP request a client sends for it;
+// AttachBy is when the check is stopped if nobody attached.
+type DebugCheck struct {
+	Name      string       `json:"name"`
+	Lang      string       `json:"lang"`
+	State     string       `json:"state"`
+	Launch    *DebugLaunch `json:"launch"`
+	StartedAt time.Time    `json:"started_at"`
+	AttachBy  time.Time    `json:"attach_by"`
+}
+
+// Debug check states.
+const (
+	DebugCheckWaiting  = "waiting"
+	DebugCheckAttached = "attached"
+)
+
+// TargetLaunch is the DAP request for the run's current debug target: the
+// check under the debugger, else the app's (nil in a run that debugs only
+// its checks while none runs).
+func (r Run) TargetLaunch() *DebugLaunch {
+	if r.DebugCheck != nil {
+		return r.DebugCheck.Launch
+	}
+	return r.DebugLaunch
 }
 
 // Verdict is a tester's pass, fail or skip for a step (0 for the scenario).

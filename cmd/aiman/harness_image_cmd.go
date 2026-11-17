@@ -17,6 +17,7 @@ import (
 const harnessImageUsageText = `Usage: aiman harness image status [<ref|digest>] [--json]
        aiman harness image approve <digest> [--accept-risk --reason TEXT] [--json]   (operator)
        aiman harness image db-install <trivy|clamav|osv|yara> <bundle.tar.gz> --sha256 HEX --built-at RFC3339   (host)
+       aiman harness image db-push [--remote NAME] [trivy|clamav|osv|yara ...]   (laptop)
        aiman harness approve-image <digest> --quote TEXT [--json]   (the session whose list holds the gate)
 `
 

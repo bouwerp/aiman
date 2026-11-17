@@ -49,6 +49,46 @@ services:
         depends_on:
             cache-init:
                 condition: service_completed_successfully
+    app-check:
+        image: golang:1.25
+        pull_policy: never
+        working_dir: /src
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp:exec
+        environment:
+            GOCACHE: /cache/gocache
+            GOMODCACHE: /cache/gomod
+            HOME: /tmp
+            npm_config_cache: /cache/npm
+        volumes:
+            - /home/u/.aiman/harness/s1/r1a2b3/src:/src
+            - /home/u/.aiman/harness/s1/r1a2b3/out:/out
+            - gomod:/cache/gomod
+            - gocache:/cache/gocache
+            - npm:/cache/npm
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - sh
+            - -c
+            - /out/app serve --addr :8080
+        depends_on:
+            cache-init:
+                condition: service_completed_successfully
+        profiles:
+            - check
     cache:
         image: redis:7
         pull_policy: never

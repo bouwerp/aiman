@@ -84,6 +84,11 @@ func (fakeEdge) DAPDrop(context.Context, string, string, string) (*edge.DAPHolde
 	return nil, nil
 }
 
+// DAPTarget accepts every switch: eval runs never debug a check.
+func (fakeEdge) DAPTarget(context.Context, string, string, string, string) (*edge.DAPHolder, error) {
+	return nil, nil
+}
+
 // FakeDockerImages are the images a scenario harness eval holds: the app's
 // image, a service image and the edge.
 var FakeDockerImages = []string{"golang:1.25", "postgres:16", scenario.EdgeImage}

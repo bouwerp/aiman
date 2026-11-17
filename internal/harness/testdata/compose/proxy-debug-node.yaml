@@ -60,6 +60,57 @@ services:
         depends_on:
             cache-init:
                 condition: service_completed_successfully
+    app-check:
+        image: golang:1.25
+        pull_policy: never
+        working_dir: /src
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp:exec
+        environment:
+            GOCACHE: /cache/gocache
+            GOMODCACHE: /cache/gomod
+            HOME: /tmp
+            HTTP_PROXY: http://edge:3128
+            HTTPS_PROXY: http://edge:3128
+            NO_PROXY: localhost,127.0.0.1,app,edge,db,cache,debug-adapter,10.231.1.0/24
+            NODE_EXTRA_CA_CERTS: /aiman-ca/ca.pem
+            NODE_USE_ENV_PROXY: "1"
+            REQUESTS_CA_BUNDLE: /aiman-ca/ca.pem
+            SSL_CERT_FILE: /aiman-ca/ca.pem
+            http_proxy: http://edge:3128
+            https_proxy: http://edge:3128
+            no_proxy: localhost,127.0.0.1,app,edge,db,cache,debug-adapter,10.231.1.0/24
+            npm_config_cache: /cache/npm
+        volumes:
+            - /home/u/.aiman/harness/s1/r1a2b3/src:/src
+            - /home/u/.aiman/harness/s1/r1a2b3/out:/out
+            - gomod:/cache/gomod
+            - gocache:/cache/gocache
+            - npm:/cache/npm
+            - aiman-ca:/aiman-ca:ro
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - sh
+            - -c
+            - /out/app serve --addr :8080
+        depends_on:
+            cache-init:
+                condition: service_completed_successfully
+        profiles:
+            - check
     cache:
         image: redis:7
         pull_policy: never

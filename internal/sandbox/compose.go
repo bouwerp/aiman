@@ -41,6 +41,7 @@ type Service struct {
 	Command     []string             `yaml:"command,omitempty"`
 	DependsOn   map[string]Condition `yaml:"depends_on,omitempty"`
 	Profiles    []string             `yaml:"profiles,omitempty"`
+	Restart     string               `yaml:"restart,omitempty"`
 }
 
 // Condition is a depends_on entry.

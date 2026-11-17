@@ -212,15 +212,31 @@
     for (const c of checks) {
       const head = el("div", { class: "check-head" }, el("span", { class: "check-name", text: c.name }));
       let badge = el("span", { class: "badge", text: "not run" });
-      if (c.exit !== undefined && c.exit !== null) {
-        badge = el("span", { class: "badge", "data-result": c.exit === 0 ? "pass" : "fail", text: "exit " + c.exit });
+      if (c.debugging) {
+        badge = el("span", { class: "badge", "data-result": "debugging", text: "under the debugger" });
+      } else if (c.exit !== undefined && c.exit !== null) {
+        badge = el("span", { class: "badge", "data-result": c.exit === 0 ? "pass" : "fail", text: "exit " + c.exit + (c.debug ? " (debugged)" : "") });
+      } else if (c.error_code) {
+        badge = el("span", { class: "badge", "data-result": "fail", text: c.error_code === "harness_debug_timeout" ? "no debugger attached" : c.error_code });
       }
+      const ready = !busy && !!run && run.state === "ready";
       const go = el("button", { type: "button", class: "btn", text: "Run" });
-      go.disabled = busy || !run || run.state !== "ready";
+      go.disabled = !ready || !!c.debugging;
       go.addEventListener("click", () => runCheck(c.name));
-      head.append(el("span", null, badge, " ", go));
+      const btns = el("span", null, badge, " ", go);
+      // A check with a debug block runs under the debugger on a debug run;
+      // a run debugs one target at a time.
+      if (c.debug_lang && run && run.debug) {
+        const dbg = el("button", { type: "button", class: "btn", text: "Debug check" });
+        dbg.disabled = !ready || !!run.debug_check;
+        dbg.title = "Runs this check in its own container under the " + c.debug_lang + " debugger and opens it in the Debug tab.";
+        dbg.addEventListener("click", () => debugCheck(c.name));
+        btns.append(" ", dbg);
+      }
+      head.append(btns);
       const item = el("li", { class: "check-item" }, head);
       if (c.run) item.append(el("p", { class: "check-cmd", text: c.run }));
+      if (c.error) item.append(el("p", { class: "check-cmd", text: c.error }));
       if (c.output) item.append(el("pre", { class: "log", text: c.output }));
       list.append(item);
     }
@@ -238,6 +254,37 @@
     } catch (e) { showError(e); }
     busy = false;
     renderChecks(state.run);
+  }
+
+  // debugCheck starts a check as the run's debug target and moves to the
+  // Debug tab, which connects to it. The page lets go of the app's debugger
+  // first and asks serve to take it over, since the page itself is the
+  // usual holder.
+  async function debugCheck(name) {
+    const run = state.run;
+    if (!run) return;
+    busy = true;
+    renderChecks(run);
+    notice("info", "Starting check " + name + " under the debugger…");
+    try {
+      if (window.aimanDebug) window.aimanDebug.leave();
+      await api("/api/check", { run: run.id, name: name, debug: true, take: true });
+      checkOutput = null;
+      notice("info", "Check " + name + " waits for the debugger. Its result shows here when it ends.");
+      selectTab("tab-debug");
+    } catch (e) { showError(e); }
+    busy = false;
+    renderChecks(state.run);
+  }
+
+  // upChecksOnly starts the scenario again as a run that debugs only its
+  // checks: the fallback when the app's runtime cannot be debugged.
+  async function upChecksOnly(scenario) {
+    try {
+      await api("/api/up", { scenario: scenario, debug_checks: true });
+      checkOutput = null;
+      notice("info", "Starting " + scenario + " for check debugging…");
+    } catch (e) { showError(e); }
   }
 
   // ---- logs ----
@@ -349,8 +396,9 @@
       $(t.getAttribute("aria-controls")).hidden = !on;
     }
     if (id === "tab-logs") pollLogs();
-    $("layout").dataset.focus = id === "tab-debug" ? "debug" : "";
+    $("layout").dataset.focus = id === "tab-debug" ? "debug" : id === "tab-db" ? "db" : "";
     if (window.aimanDebug) window.aimanDebug.shown(id === "tab-debug");
+    if (window.aimanDB) window.aimanDB.shown(id === "tab-db");
   }
 
   // ---- loop ----
@@ -365,6 +413,7 @@
     renderServices(run);
     if (window.aimanDebug) window.aimanDebug.update(state);
     if (window.aimanBrowser) window.aimanBrowser.update(state);
+    if (window.aimanDB) window.aimanDB.update(state);
     if (window.aimanNet) window.aimanNet.update(state);
   }
 
@@ -409,7 +458,7 @@
 
   // debug.js reads these; it sends the token only in the debugger WebSocket's
   // subprotocol offer, as the bridge expects.
-  window.aimanConsole = { api: api, el: el, $: $, notice: notice, showError: showError, token: token };
+  window.aimanConsole = { api: api, el: el, $: $, notice: notice, showError: showError, token: token, upChecksOnly: upChecksOnly };
 
   start();
 })();
