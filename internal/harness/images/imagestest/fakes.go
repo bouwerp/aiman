@@ -50,15 +50,35 @@ func (i Image) ConfigDigest() string { return digest(i.Config) }
 // NewImage builds an OCI image of layers; salt makes otherwise equal images
 // differ.
 func NewImage(salt string, layers ...[]byte) Image {
+	return NewImageWith(salt, nil, layers...)
+}
+
+// NewImageWith is NewImage with extra fields in the image config's "config"
+// object (Entrypoint, Cmd, Env, User, ...); the key "history" goes to the
+// config's top-level history list instead.
+func NewImageWith(salt string, extra map[string]any, layers ...[]byte) Image {
+	inner := map[string]any{"Labels": map[string]string{"salt": salt}}
+	var history any
+	for k, v := range extra {
+		if k == "history" {
+			history = v
+			continue
+		}
+		inner[k] = v
+	}
 	var diffIDs []string
 	for _, l := range layers {
 		diffIDs = append(diffIDs, digest(l))
 	}
-	cfg, _ := json.Marshal(map[string]any{
+	doc := map[string]any{
 		"architecture": images.HostPlatform().Architecture, "os": "linux",
-		"config": map[string]any{"Labels": map[string]string{"salt": salt}},
+		"config": inner,
 		"rootfs": map[string]any{"type": "layers", "diff_ids": diffIDs},
-	})
+	}
+	if history != nil {
+		doc["history"] = history
+	}
+	cfg, _ := json.Marshal(doc)
 	var ls []images.Descriptor
 	for _, l := range layers {
 		ls = append(ls, images.Descriptor{MediaType: "application/vnd.oci.image.layer.v1.tar", Digest: digest(l), Size: int64(len(l))})
@@ -271,10 +291,10 @@ func (w notifier) Stale(r images.Record, _ []string) {
 	w.n.mu.Unlock()
 }
 
-// Reviewer answers a fixed verdict.
+// Reviewer answers a fixed verdict from an independent reviewer.
 type Reviewer struct{ Verdict string }
 
 // Review answers the verdict.
-func (r Reviewer) Review(context.Context, images.Record, string) (string, string, error) {
-	return r.Verdict, "", nil
+func (r Reviewer) Review(context.Context, images.Record, string) (images.ReviewResult, error) {
+	return images.ReviewResult{Verdict: r.Verdict, Agent: "fake", Independent: true}, nil
 }

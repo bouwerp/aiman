@@ -24,12 +24,6 @@ const (
 	gatePoll = 5 * time.Second
 )
 
-// Reviewer is the model review of an image (stage 3). It returns the
-// verdict (clean, suspicious or malicious) and the report's path.
-type Reviewer interface {
-	Review(ctx context.Context, rec Record, quarantine string) (verdict, report string, err error)
-}
-
 // Notifier hears what the vetter decided. Serve adds gates, steers notes,
 // emits harness_image and writes the ledger.
 type Notifier interface {
@@ -53,8 +47,9 @@ type VetterOptions struct {
 	Registry Registry
 	Scanner  Scanner
 	Loader   Loader
-	// Reviewer is the model review; nil runs no review and leaves the
-	// verdict empty, which never counts as clean for a session's run.
+	// Reviewer is the model review (harness.images.review); nil runs no
+	// review and leaves the verdict empty, which never counts as clean for a
+	// session's run.
 	Reviewer Reviewer
 	Notify   Notifier
 	// AllowedImages is harness.allowed_images: a pre-approval list.
@@ -410,12 +405,17 @@ func (v *Vetter) vet(ctx context.Context, res Resolved) {
 	rec.Scan, rec.Signature = scan, sig
 	if v.o.Reviewer != nil {
 		v.setStage(d, StageReview)
-		verdict, _, err := v.o.Reviewer.Review(ctx, rec, q)
+		res, err := v.o.Reviewer.Review(ctx, rec, q)
 		if err != nil {
-			v.fail(d, "image review: "+err.Error())
+			// No usable report is never clean: the vetting fails. A host that
+			// cannot run a review fails retryably.
+			v.failWith(d, "image review: "+err.Error(), errors.Is(err, ErrReviewUnavailable))
 			return
 		}
-		scan.ModelVerdict = verdict
+		independent := res.Independent
+		scan.ModelVerdict, scan.ReviewAgent, scan.ReviewModel = res.Verdict, res.Agent, res.Model
+		scan.Independent, scan.ReviewReport = &independent, res.Report
+		scan.ReviewFindings = [3]int{res.High, res.Medium, res.Low}
 	}
 	scan.Report = v.ReportPath(d)
 	rec.Scan = scan

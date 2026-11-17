@@ -134,6 +134,24 @@ func (s *Server) sessionName(ctx context.Context, id string) string {
 	return id
 }
 
+// HarnessSessionAgent answers a session's agent and model, the family the
+// image review avoids.
+func (s *Server) HarnessSessionAgent(ctx context.Context, id string) (agentName, model string, ok bool) {
+	list, err := s.loadSessions(ctx)
+	if err != nil {
+		return "", "", false
+	}
+	sess, ok := resolveSession(list, id)
+	if !ok {
+		return "", "", false
+	}
+	model = sess.LaunchModel
+	if model == "" {
+		model = sess.AgentModel
+	}
+	return sess.AgentName, model, true
+}
+
 // approveClosedImageGates approves, as the operator, the digests whose gates
 // the operator closed in the TUI. It runs in the background: a load takes
 // longer than a to-do write.
@@ -224,12 +242,17 @@ func (n harnessImageNotifier) Stale(rec images.Record, newIDs []string) {
 }
 
 func vettedPayload(rec images.Record, rescan bool) map[string]any {
-	return map[string]any{
+	p := map[string]any{
 		"digest": rec.Digest, "ref": rec.Ref, "state": string(rec.State),
 		"critical": len(rec.Scan.Critical), "high": len(rec.Scan.High), "static_hits": len(rec.Scan.StaticHits),
 		"mal_ids": len(rec.Scan.MalIDs), "model_verdict": rec.Scan.ModelVerdict, "signature": rec.Signature,
 		"report": rec.Scan.Report, "rescan": rescan,
 	}
+	if rec.Scan.Independent != nil {
+		p["review_agent"], p["review_model"] = rec.Scan.ReviewAgent, rec.Scan.ReviewModel
+		p["independent"], p["review_report"] = *rec.Scan.Independent, rec.Scan.ReviewReport
+	}
+	return p
 }
 
 // ledger writes a row on the host-wide image ledger and on each requesting

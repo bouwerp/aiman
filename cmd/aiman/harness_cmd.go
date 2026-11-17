@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/harness"
+	"github.com/bouwerp/aiman/internal/harness/images"
 	"github.com/bouwerp/aiman/internal/server"
 )
 
@@ -52,6 +53,9 @@ func runHarness(args []string) error {
 			return runHarnessConsole(args[1:])
 		case "scan":
 			return runHarnessScan(args[1:])
+		case "review-proxy":
+			// Runs inside the image review's proxy container.
+			return images.ProxyMain(args[1:])
 		}
 	}
 	return harnessMain(args, harnessIO{

@@ -88,6 +88,16 @@ type Scan struct {
 	// ModelVerdict is clean, suspicious or malicious; empty when no review
 	// ran. An empty verdict is never clean for a session-started run.
 	ModelVerdict string `json:"model_verdict,omitempty"`
+	// ReviewAgent and ReviewModel ran the review.
+	ReviewAgent string `json:"review_agent,omitempty"`
+	ReviewModel string `json:"review_model,omitempty"`
+	// Independent is false when the review fell back to the requesting
+	// session's model family; nil when no review ran.
+	Independent *bool `json:"independent,omitempty"`
+	// ReviewReport is the kept review report on the host.
+	ReviewReport string `json:"review_report,omitempty"`
+	// ReviewFindings counts the review's high, medium and low findings.
+	ReviewFindings [3]int `json:"review_findings,omitzero"`
 	// Report is the path of the scan report on the host.
 	Report string `json:"report,omitempty"`
 	// SBOM is the path of the CycloneDX SBOM the re-scan reads.

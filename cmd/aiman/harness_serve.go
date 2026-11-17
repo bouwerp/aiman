@@ -100,11 +100,32 @@ func wireImageVetting(srv *server.Server, cfg *config.Config, dir, bin string) (
 	}
 	scannerImage := &images.ScannerImage{Docker: images.ExecDockerCLI, Dockerfile: harnessscanner.Dockerfile, BuildArgs: args, Dir: dir}
 	dbDir := filepath.Join(dir, "db")
+	var reviewer images.Reviewer
+	if ic.ReviewOn() {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, nil, err
+		}
+		// The review container reuses the scanner image (glibc and CA
+		// certificates); the agent binary and a credential copy are mounted
+		// read-only, and the proxy runs this binary.
+		rv, err := images.NewModelReviewer(images.ReviewOptions{
+			Dir: dir, Smart: func() []config.PreferredAgent { return cfg.Agents.Smart },
+			LookPath: exec.LookPath, SessionAgent: srv.HarnessSessionAgent,
+			Credentials: images.HostCredentials{Home: home}.For,
+			Runner:      images.DockerReviewRunner{}, Image: scannerImage.Ensure,
+			AimanBin: bin, UID: os.Getuid(), GID: os.Getgid(),
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		reviewer = rv
+	}
 	v, err := images.NewVetter(images.VetterOptions{
 		Dir: dir, Store: store, Registry: &images.HTTPRegistry{},
 		Scanner: images.DockerScanner{ImageFor: scannerImage.Ensure, AimanBin: bin, DBDir: dbDir,
 			ScratchDir: filepath.Join(dir, "scan"), UID: os.Getuid(), GID: os.Getgid()},
-		Loader: images.DockerLoader{}, Notify: srv.HarnessImageNotifier(),
+		Loader: images.DockerLoader{}, Notify: srv.HarnessImageNotifier(), Reviewer: reviewer,
 		AllowedImages: cfg.Harness.AllowedImages, CVEBlock: ic.CVEBlockOrDefault(),
 		MaxSize: maxSize, ScanTimeout: ic.ScanTimeoutOrDefault(), MayStart: srv.PressureOpen,
 	})

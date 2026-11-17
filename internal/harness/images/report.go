@@ -30,8 +30,26 @@ func writeReport(path string, rec Record) error {
 	section("High CVEs", rec.Scan.High)
 	section("Static malware hits (ClamAV, YARA)", rec.Scan.StaticHits)
 	section("Malicious packages (OSV MAL-)", rec.Scan.MalIDs)
-	fmt.Fprintf(&b, "## Image review\n\n%s\n", verdictText(rec.Scan.ModelVerdict))
+	fmt.Fprintf(&b, "## Image review\n\n- Verdict: %s\n", verdictText(rec.Scan.ModelVerdict))
+	if s := rec.Scan; s.Independent != nil {
+		f := s.ReviewFindings
+		fmt.Fprintf(&b, "- Reviewer: %s %s\n- independent: %v\n- Findings: %d high, %d medium, %d low\n- Report: %s\n",
+			s.ReviewAgent, orNone(s.ReviewModel), *s.Independent, f[0], f[1], f[2], orNone(s.ReviewReport))
+	}
 	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+// reviewText is the review in the one-line summary.
+func reviewText(s Scan) string {
+	t := "review " + verdictText(s.ModelVerdict)
+	if s.Independent == nil {
+		return t
+	}
+	t += fmt.Sprintf(" (%s; %d high, %d medium findings", s.ReviewAgent, s.ReviewFindings[0], s.ReviewFindings[1])
+	if !*s.Independent {
+		t += "; not independent: same model family as the session"
+	}
+	return t + ")"
 }
 
 func orNone(s string) string {
@@ -58,6 +76,6 @@ func Summary(rec Record) string {
 	if len(rec.Scan.High) > 0 {
 		highs = " (" + firstIDs(rec.Scan.High, 20) + ")"
 	}
-	return fmt.Sprintf("%d critical, %d high%s, %s, review %s, signature %s",
-		len(rec.Scan.Critical), len(rec.Scan.High), highs, static, verdictText(rec.Scan.ModelVerdict), orNone(rec.Signature))
+	return fmt.Sprintf("%d critical, %d high%s, %s, %s, signature %s",
+		len(rec.Scan.Critical), len(rec.Scan.High), highs, static, reviewText(rec.Scan), orNone(rec.Signature))
 }

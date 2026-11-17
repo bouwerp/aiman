@@ -2121,6 +2121,20 @@ components:
             model_verdict:
               type: string
               description: clean, suspicious or malicious; absent when no review ran.
+            review_agent:
+              type: string
+            review_model:
+              type: string
+            independent:
+              type: boolean
+              description: false when the review fell back to the asking session's model family; absent when no review ran.
+            review_report:
+              type: string
+            review_findings:
+              type: array
+              description: counts of high, medium and low review findings.
+              items:
+                type: integer
             report:
               type: string
             sbom:
