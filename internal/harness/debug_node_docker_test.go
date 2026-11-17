@@ -18,7 +18,8 @@ const testLease = "harness-test-lease-0123456789"
 
 func TestNodeBreakpointInTypeScript(t *testing.T) {
 	r := harnesstest.UpNodeDebugRun(t)
-	path, child := harnesstest.HitTSBreakpoint(t, r.HostPort, testLease, r.Launch)
+	dial := func() harnesstest.Transport { return harnesstest.DialLease(t, r.HostPort, testLease) }
+	path, child := harnesstest.HitTSBreakpoint(t, dial, r.Launch.Request, r.Launch.Arguments, "/src/src/app.ts")
 	if path != "/src/src/app.ts" {
 		t.Fatalf("frame source %q, want /src/src/app.ts\n%s", path, r.Logs())
 	}

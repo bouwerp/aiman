@@ -159,6 +159,33 @@ func (s *Server) doneBridge() {
 	s.mu.Unlock()
 }
 
+// ensureEditor opens the editor port once and returns it.
+func (s *Server) ensureEditor() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.editor == nil {
+		e, err := newEditorPort(func() int {
+			p, _ := s.dapForwardPort()
+			return p
+		})
+		if err != nil {
+			return 0, err
+		}
+		s.editor = e
+	}
+	return s.editor.port, nil
+}
+
+func (s *Server) closeEditor() {
+	s.mu.Lock()
+	e := s.editor
+	s.editor = nil
+	s.mu.Unlock()
+	if e != nil {
+		e.close()
+	}
+}
+
 // DebugOpPath takes over or releases the debugger; /api/debug reads it.
 const DebugOpPath = "/api/debug/op"
 
@@ -168,8 +195,11 @@ type debugView struct {
 	Debug     json.RawMessage `json:"debug"`
 	LocalPort int             `json:"local_port"`
 	Editor    map[string]any  `json:"editor,omitempty"`
-	Bridges   int             `json:"bridges"`
-	Client    string          `json:"client_name"`
+	// EditorPort is the console's lease-adding DAP port for an editor, set
+	// for an adapter with child sessions.
+	EditorPort int    `json:"editor_port,omitempty"`
+	Bridges    int    `json:"bridges"`
+	Client     string `json:"client_name"`
 }
 
 func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
@@ -209,8 +239,20 @@ func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
 	port, cur := s.dapForwardPort()
 	v := debugView{Debug: reply.Debug, LocalPort: port, Client: ConsoleClientName}
 	if port > 0 && cur != nil && cur.DebugLaunch != nil {
-		if cfg, err := harness.EditorConfig(*cur.DebugLaunch, port); err == nil {
-			v.Editor = cfg
+		editorPort := port
+		if cur.DebugLaunch.Children {
+			// An adapter with child sessions needs the editor port: it adds
+			// the lease line and points each child at itself.
+			if editorPort, err = s.ensureEditor(); err != nil {
+				s.logf("editor port: %v", err)
+				editorPort = 0
+			}
+			v.EditorPort = editorPort
+		}
+		if editorPort > 0 {
+			if cfg, err := harness.EditorConfig(*cur.DebugLaunch, editorPort); err == nil {
+				v.Editor = cfg
+			}
 		}
 	}
 	s.mu.Lock()

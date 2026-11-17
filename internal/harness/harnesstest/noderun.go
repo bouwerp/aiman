@@ -196,31 +196,33 @@ func (s *Session) Start(command string, args any) int {
 // HitTSBreakpoint runs the js-debug flow: the root session attaches, js-debug
 // asks for a child session with startDebugging, a second connection under
 // the same lease opens it, and the breakpoint in the .ts source stops tick.
-// It returns the top frame's source path.
-func HitTSBreakpoint(t *testing.T, port int, token string, launch harness.DebugLaunch) (string, *Session) {
+// dial opens each connection (with the lease line, or through the console's
+// editor port), args is the root's attach request and tsPath the .ts
+// source as the client names it. It returns the top frame's source path.
+func HitTSBreakpoint(t *testing.T, dial func() Transport, request string, args map[string]any, tsPath string) (string, *Session) {
 	t.Helper()
 	init := map[string]any{
 		"clientID": "test", "clientName": "harness test", "adapterID": "pwa-node",
 		"pathFormat": "path", "linesStartAt1": true, "columnsStartAt1": true, "supportsStartDebuggingRequest": true,
 	}
-	root := NewSession(t, DialLease(t, port, token))
+	root := NewSession(t, dial())
 	root.Must("initialize", init)
-	root.Start(launch.Request, launch.Arguments)
+	root.Start(request, args)
 	root.Event("initialized")
 	root.Start("configurationDone", map[string]any{})
 	sd := root.ReverseRequest("startDebugging")
-	args, _ := sd["arguments"].(map[string]any)
-	cfg, _ := args["configuration"].(map[string]any)
+	sdArgs, _ := sd["arguments"].(map[string]any)
+	cfg, _ := sdArgs["configuration"].(map[string]any)
 	if cfg["__pendingTargetId"] == nil {
 		t.Fatalf("startDebugging without a pending target: %v", sd)
 	}
 
-	child := NewSession(t, DialLease(t, port, token))
+	child := NewSession(t, dial())
 	child.Must("initialize", init)
-	child.Start(fmt.Sprint(args["request"]), cfg)
+	child.Start(fmt.Sprint(sdArgs["request"]), cfg)
 	child.Event("initialized")
 	child.Must("setBreakpoints", map[string]any{
-		"source":      map[string]any{"path": launch.SourceRoot + "/src/app.ts"},
+		"source":      map[string]any{"path": tsPath},
 		"breakpoints": []map[string]any{{"line": TSBreakLine}},
 	})
 	child.Must("configurationDone", map[string]any{})
