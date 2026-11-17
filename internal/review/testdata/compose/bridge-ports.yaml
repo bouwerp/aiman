@@ -1,0 +1,61 @@
+name: rev2
+services:
+    cache-init:
+        image: node:22
+        user: "0:0"
+        read_only: true
+        cap_drop:
+            - ALL
+        cap_add:
+            - CHOWN
+        security_opt:
+            - no-new-privileges:true
+        volumes:
+            - rev2-gomod:/cache/gomod
+            - rev2-gocache:/cache/gocache
+            - rev2-npm:/cache/npm
+        mem_limit: 2g
+        cpus: 2
+        pids_limit: 256
+        network_mode: none
+        command:
+            - chown
+            - 1004:1005
+            - /cache/gomod
+            - /cache/gocache
+            - /cache/npm
+    sandbox:
+        image: node:22
+        working_dir: /src
+        user: 1004:1005
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp:exec
+        environment:
+            GOCACHE: /cache/gocache
+            GOMODCACHE: /cache/gomod
+            HOME: /tmp
+            npm_config_cache: /cache/npm
+        volumes:
+            - /r/src:/src
+            - /r/out:/out
+            - rev2-gomod:/cache/gomod
+            - rev2-gocache:/cache/gocache
+            - rev2-npm:/cache/npm
+        mem_limit: 2g
+        cpus: 2
+        pids_limit: 256
+        ports:
+            - 127.0.0.1:40001:2345
+            - 127.0.0.1:40002:8097
+        depends_on:
+            cache-init:
+                condition: service_completed_successfully
+volumes:
+    rev2-gocache: {}
+    rev2-gomod: {}
+    rev2-npm: {}

@@ -1,0 +1,304 @@
+name: harness-r1a2b3
+services:
+    app:
+        image: golang:1.25
+        pull_policy: never
+        working_dir: /src
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp:exec
+        environment:
+            AIMAN_INSPECT: 10.232.1.2:9229
+            GOCACHE: /cache/gocache
+            GOMODCACHE: /cache/gomod
+            HOME: /tmp
+            HTTP_PROXY: http://edge:3128
+            HTTPS_PROXY: http://edge:3128
+            NO_PROXY: localhost,127.0.0.1,app,edge,db,cache,debug-adapter,10.231.1.0/24
+            NODE_EXTRA_CA_CERTS: /aiman-ca/ca.pem
+            NODE_USE_ENV_PROXY: "1"
+            REQUESTS_CA_BUNDLE: /aiman-ca/ca.pem
+            SSL_CERT_FILE: /aiman-ca/ca.pem
+            http_proxy: http://edge:3128
+            https_proxy: http://edge:3128
+            no_proxy: localhost,127.0.0.1,app,edge,db,cache,debug-adapter,10.231.1.0/24
+            npm_config_cache: /cache/npm
+        volumes:
+            - /home/u/.aiman/harness/s1/r1a2b3/src:/src
+            - /home/u/.aiman/harness/s1/r1a2b3/out:/out
+            - gomod:/cache/gomod
+            - gocache:/cache/gocache
+            - npm:/cache/npm
+            - /home/u/.aiman/harness/tools/node-v24.22.3-linux-amd64:/aiman-tools/node:ro
+            - aiman-ca:/aiman-ca:ro
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        networks:
+            debug:
+                ipv4_address: 10.232.1.2
+            inner: {}
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - sh
+            - -c
+            - |
+              PATH="$$PATH:/aiman-tools/node/bin"; export PATH
+              if [ "$$(command -v node)" = /aiman-tools/node/bin/node ] && ls /lib/ld-musl-* >/dev/null 2>&1; then
+                echo "aiman: this image uses musl libc (Alpine) and has no node of its own; the mounted Node needs glibc. Use an image with node installed, or a glibc image." >&2
+                exit 1
+              fi
+              cd '/src/api' || exit 1
+              exec 'node' --inspect-wait="$$AIMAN_INSPECT" '--enable-source-maps' '/src/dist/server.js'
+        depends_on:
+            cache-init:
+                condition: service_completed_successfully
+    cache:
+        image: redis:7
+        pull_policy: never
+        read_only: true
+        cap_drop:
+            - ALL
+        tmpfs:
+            - /run
+            - /tmp
+        environment:
+            HTTP_PROXY: http://edge:3128
+            HTTPS_PROXY: http://edge:3128
+            NO_PROXY: localhost,127.0.0.1,app,edge,db,cache,debug-adapter,10.231.1.0/24
+            NODE_EXTRA_CA_CERTS: /aiman-ca/ca.pem
+            NODE_USE_ENV_PROXY: "1"
+            REQUESTS_CA_BUNDLE: /aiman-ca/ca.pem
+            SSL_CERT_FILE: /aiman-ca/ca.pem
+            http_proxy: http://edge:3128
+            https_proxy: http://edge:3128
+            no_proxy: localhost,127.0.0.1,app,edge,db,cache,debug-adapter,10.231.1.0/24
+        volumes:
+            - aiman-ca:/aiman-ca:ro
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - redis-cli ping
+            interval: 1s
+            timeout: 5s
+            retries: 60
+    cache-init:
+        image: golang:1.25
+        pull_policy: never
+        user: "0:0"
+        read_only: true
+        cap_drop:
+            - ALL
+        cap_add:
+            - CHOWN
+        security_opt:
+            - no-new-privileges:true
+        volumes:
+            - gomod:/cache/gomod
+            - gocache:/cache/gocache
+            - npm:/cache/npm
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        network_mode: none
+        command:
+            - chown
+            - 1004:1004
+            - /cache/gomod
+            - /cache/gocache
+            - /cache/npm
+    db:
+        image: postgres:16
+        pull_policy: never
+        user: "0:0"
+        read_only: true
+        cap_drop:
+            - ALL
+        cap_add:
+            - CHOWN
+            - DAC_OVERRIDE
+            - FOWNER
+            - SETGID
+            - SETUID
+        tmpfs:
+            - /run
+            - /tmp
+        environment:
+            AIMAN_RO_PASSWORD: ro-secret
+            HTTP_PROXY: http://edge:3128
+            HTTPS_PROXY: http://edge:3128
+            NO_PROXY: localhost,127.0.0.1,app,edge,db,cache,debug-adapter,10.231.1.0/24
+            NODE_EXTRA_CA_CERTS: /aiman-ca/ca.pem
+            NODE_USE_ENV_PROXY: "1"
+            POSTGRES_DB: app
+            POSTGRES_PASSWORD: test
+            REQUESTS_CA_BUNDLE: /aiman-ca/ca.pem
+            SSL_CERT_FILE: /aiman-ca/ca.pem
+            http_proxy: http://edge:3128
+            https_proxy: http://edge:3128
+            no_proxy: localhost,127.0.0.1,app,edge,db,cache,debug-adapter,10.231.1.0/24
+        volumes:
+            - data-db:/var/lib/postgresql/data
+            - ./initdb/00-aiman-ro.sql:/docker-entrypoint-initdb.d/00-aiman-ro.sql:ro
+            - aiman-ca:/aiman-ca:ro
+        mem_limit: 1073741824
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - pg_isready -h db -U postgres
+            interval: 1s
+            timeout: 5s
+            retries: 60
+    debug-adapter:
+        image: sha256:adapter
+        pull_policy: never
+        working_dir: /src
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp
+        environment:
+            AIMAN_DAP_HOST: 10.232.1.3
+            HOME: /tmp
+        volumes:
+            - /home/u/.aiman/harness/tools/node-v24.22.3-linux-amd64:/aiman-tools/node:ro
+            - /home/u/.aiman/harness/tools/js-debug-v1.140.1-linux-amd64:/aiman-tools/js-debug:ro
+            - /home/u/.aiman/harness/s1/r1a2b3/src:/src:ro
+            - /home/u/.aiman/harness/s1/r1a2b3/out:/out:ro
+        mem_limit: 536870912
+        cpus: 1
+        pids_limit: 128
+        networks:
+            debug:
+                ipv4_address: 10.232.1.3
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - sh
+            - -c
+            - exec /aiman-tools/node/bin/node /aiman-tools/js-debug/src/dapDebugServer.js 8123 "$$AIMAN_DAP_HOST"
+    edge:
+        image: alpine:3.20
+        pull_policy: never
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp
+        volumes:
+            - /home/u/.local/bin/aiman:/aiman:ro
+            - /home/u/.aiman/harness/s1/r1a2b3/control:/control
+            - aiman-ca:/aiman-ca
+            - /etc/ssl/certs/ca-certificates.crt:/aiman-roots.pem:ro
+        mem_limit: 268435456
+        cpus: 0.5
+        pids_limit: 64
+        ports:
+            - 127.0.0.1::10001
+            - 127.0.0.1::10002
+            - 127.0.0.1::10003
+            - 127.0.0.1::10004
+        networks:
+            debug:
+                ipv4_address: 10.232.1.4
+            inner: {}
+            outer: {}
+        sysctls:
+            net.ipv4.ip_forward: "0"
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.all.forwarding: "0"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - /aiman
+            - harness
+            - edge
+            - --control
+            - /control/edge.sock
+            - --token-file
+            - /control/token
+            - --outer
+            - 10.231.2.0/24
+            - --inner
+            - 10.231.1.0/24
+            - --inner
+            - 10.232.1.0/29
+            - --relay
+            - web=10001=app:8080
+            - --relay
+            - admin=10002=app:9090
+            - --relay
+            - db=10003=db:5432
+            - --dap-relay
+            - dap=10004=10.232.1.3:8123
+            - --proxy
+            - 10.231.1.0/24
+            - --network
+            - online
+            - --ca-dir
+            - /aiman-ca
+            - --capture-body-bytes
+            - "4096"
+            - --stubs
+            - /control/stubs.json
+            - --upstream-roots
+            - /aiman-roots.pem
+networks:
+    debug:
+        internal: true
+        enable_ipv6: false
+        ipam:
+            config:
+                - subnet: 10.232.1.0/29
+    inner:
+        internal: true
+        enable_ipv6: false
+        ipam:
+            config:
+                - subnet: 10.231.1.0/24
+    outer:
+        internal: false
+        enable_ipv6: false
+        ipam:
+            config:
+                - subnet: 10.231.2.0/24
+volumes:
+    aiman-ca:
+        driver: local
+        driver_opts:
+            device: tmpfs
+            o: size=1m,uid=1004,gid=1004,mode=0755
+            type: tmpfs
+    data-db: {}
+    gocache: {}
+    gomod: {}
+    npm: {}

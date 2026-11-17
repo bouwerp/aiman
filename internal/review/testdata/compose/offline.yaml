@@ -1,0 +1,59 @@
+name: rev1
+services:
+    cache-init:
+        image: golang:1.26
+        user: "0:0"
+        read_only: true
+        cap_drop:
+            - ALL
+        cap_add:
+            - CHOWN
+        security_opt:
+            - no-new-privileges:true
+        volumes:
+            - rev1-gomod:/cache/gomod
+            - rev1-gocache:/cache/gocache
+            - rev1-npm:/cache/npm
+        mem_limit: 2g
+        cpus: 2
+        pids_limit: 256
+        network_mode: none
+        command:
+            - chown
+            - 1004:1005
+            - /cache/gomod
+            - /cache/gocache
+            - /cache/npm
+    sandbox:
+        image: golang:1.26
+        working_dir: /src
+        user: 1004:1005
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp:exec
+        environment:
+            GOCACHE: /cache/gocache
+            GOMODCACHE: /cache/gomod
+            HOME: /tmp
+            npm_config_cache: /cache/npm
+        volumes:
+            - /r/src:/src
+            - /r/out:/out
+            - rev1-gomod:/cache/gomod
+            - rev1-gocache:/cache/gocache
+            - rev1-npm:/cache/npm
+        mem_limit: 2g
+        cpus: 2
+        pids_limit: 256
+        network_mode: none
+        depends_on:
+            cache-init:
+                condition: service_completed_successfully
+volumes:
+    rev1-gocache: {}
+    rev1-gomod: {}
+    rev1-npm: {}

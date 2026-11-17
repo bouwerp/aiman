@@ -1,0 +1,194 @@
+name: harness-r1a2b3
+services:
+    app:
+        image: golang:1.25
+        pull_policy: never
+        working_dir: /src
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp:exec
+        environment:
+            GOCACHE: /cache/gocache
+            GOMODCACHE: /cache/gomod
+            HOME: /tmp
+            npm_config_cache: /cache/npm
+        volumes:
+            - /home/u/.aiman/harness/s1/r1a2b3/src:/src
+            - /home/u/.aiman/harness/s1/r1a2b3/out:/out
+            - gomod:/cache/gomod
+            - gocache:/cache/gocache
+            - npm:/cache/npm
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - sh
+            - -c
+            - /out/app serve --addr :8080
+        depends_on:
+            cache-init:
+                condition: service_completed_successfully
+    cache:
+        image: redis:7
+        pull_policy: never
+        read_only: true
+        cap_drop:
+            - ALL
+        tmpfs:
+            - /run
+            - /tmp
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - redis-cli ping
+            interval: 1s
+            timeout: 5s
+            retries: 60
+    cache-init:
+        image: golang:1.25
+        pull_policy: never
+        user: "0:0"
+        read_only: true
+        cap_drop:
+            - ALL
+        cap_add:
+            - CHOWN
+        security_opt:
+            - no-new-privileges:true
+        volumes:
+            - gomod:/cache/gomod
+            - gocache:/cache/gocache
+            - npm:/cache/npm
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        network_mode: none
+        command:
+            - chown
+            - 1004:1004
+            - /cache/gomod
+            - /cache/gocache
+            - /cache/npm
+    db:
+        image: postgres:16
+        pull_policy: never
+        user: "0:0"
+        read_only: true
+        cap_drop:
+            - ALL
+        cap_add:
+            - CHOWN
+            - DAC_OVERRIDE
+            - FOWNER
+            - SETGID
+            - SETUID
+        tmpfs:
+            - /run
+            - /tmp
+        environment:
+            AIMAN_RO_PASSWORD: ro-secret
+            POSTGRES_DB: app
+            POSTGRES_PASSWORD: test
+        volumes:
+            - data-db:/var/lib/postgresql/data
+            - ./initdb/00-aiman-ro.sql:/docker-entrypoint-initdb.d/00-aiman-ro.sql:ro
+        mem_limit: 1073741824
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - pg_isready -h db -U postgres
+            interval: 1s
+            timeout: 5s
+            retries: 60
+    edge:
+        image: alpine:3.20
+        pull_policy: never
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp
+        volumes:
+            - /home/u/.local/bin/aiman:/aiman:ro
+            - /home/u/.aiman/harness/s1/r1a2b3/control:/control
+        mem_limit: 268435456
+        cpus: 0.5
+        pids_limit: 64
+        ports:
+            - 127.0.0.1::10001
+            - 127.0.0.1::10002
+            - 127.0.0.1::10003
+        networks:
+            - inner
+            - outer
+        sysctls:
+            net.ipv4.ip_forward: "0"
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.all.forwarding: "0"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - /aiman
+            - harness
+            - edge
+            - --control
+            - /control/edge.sock
+            - --token-file
+            - /control/token
+            - --outer
+            - 10.231.2.0/24
+            - --inner
+            - 10.231.1.0/24
+            - --relay
+            - web=10001=app:8080
+            - --relay
+            - admin=10002=app:9090
+            - --relay
+            - db=10003=db:5432
+networks:
+    inner:
+        internal: true
+        enable_ipv6: false
+        ipam:
+            config:
+                - subnet: 10.231.1.0/24
+    outer:
+        internal: false
+        enable_ipv6: false
+        driver_opts:
+            com.docker.network.bridge.enable_ip_masquerade: "false"
+        ipam:
+            config:
+                - subnet: 10.231.2.0/24
+volumes:
+    data-db: {}
+    gocache: {}
+    gomod: {}
+    npm: {}
