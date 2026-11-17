@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/cgroup"
 	"github.com/bouwerp/aiman/internal/hoststats"
 	"github.com/bouwerp/aiman/internal/server"
 )
@@ -130,15 +131,41 @@ func printPressureGate(w io.Writer, g *server.PressureGate) {
 		fmt.Fprint(w, " · slice at memory.high")
 	}
 	fmt.Fprintln(w)
+	printHarnessGate(w, g.Harness)
 	state := "open"
 	if g.Closed {
 		state = "closed"
+		if g.Reason == server.GateReasonHarnessBudget {
+			state = "closed (harness budget)"
+		}
 	}
 	if g.Since.IsZero() {
 		fmt.Fprintf(w, "gate: %s\n", state)
 		return
 	}
 	fmt.Fprintf(w, "gate: %s since %s\n", state, g.Since.Local().Format(time.RFC3339))
+}
+
+// printHarnessGate writes the harness memory line: the total, the budget it
+// counts against when there is one, and each run.
+func printHarnessGate(w io.Writer, h *server.HarnessGate) {
+	if h == nil {
+		return
+	}
+	fmt.Fprintf(w, "harness: %s held", cgroup.FormatSize(h.HeldBytes))
+	if h.BudgetBytes > 0 {
+		fmt.Fprintf(w, " · with sessions %s of %s", cgroup.FormatSize(h.SliceHeldBytes+h.HeldBytes), cgroup.FormatSize(h.BudgetBytes))
+		if h.OverBudget {
+			fmt.Fprint(w, " · over budget")
+		}
+	}
+	if h.Error != "" {
+		fmt.Fprintf(w, " · read failed: %s", h.Error)
+	}
+	fmt.Fprintln(w)
+	for _, r := range h.Runs {
+		fmt.Fprintf(w, "  %s\t%s\t%d containers\n", r.Run, cgroup.FormatSize(r.HeldBytes), r.Containers)
+	}
 }
 
 func printRPCCounts(w io.Writer, title string, counts []server.RPCCount) {
