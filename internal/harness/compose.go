@@ -460,7 +460,6 @@ func edgeService(spec RunSpec, relays []Relay) composeService {
 type (
 	composeFile        = sandbox.File
 	composeService     = sandbox.Service
-	composeCondition   = sandbox.Condition
 	composeHealthcheck = sandbox.Healthcheck
 	composeNetwork     = sandbox.Network
 	composeAttach      = sandbox.Attach
