@@ -65,6 +65,16 @@ func (c Client) DAPDrop(ctx context.Context, name string) (*DAPHolder, error) {
 	return resp.Dropped, nil
 }
 
+// DAPTarget points the DAP relay name at target (empty for none), closing
+// its holder, and returns who held it.
+func (c Client) DAPTarget(ctx context.Context, name, target string) (*DAPHolder, error) {
+	resp, err := c.call(ctx, Request{Op: OpDAPTarget, Name: name, Target: target})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Dropped, nil
+}
+
 // call returns an *Error for a refusal from the edge and a wrapped error for
 // a transport failure.
 func (c Client) call(ctx context.Context, req Request) (Response, error) {

@@ -238,9 +238,16 @@ func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	port, cur := s.dapForwardPort()
 	v := debugView{Debug: reply.Debug, LocalPort: port, Client: ConsoleClientName}
-	if port > 0 && cur != nil && cur.DebugLaunch != nil {
+	// The launch is the current debug target's: the app's, or a debug
+	// check's while one runs.
+	var st harness.DebugState
+	_ = json.Unmarshal(reply.Debug, &st)
+	if st.Launch == nil && cur != nil {
+		st.Launch = cur.TargetLaunch()
+	}
+	if port > 0 && cur != nil && st.Launch != nil {
 		editorPort := port
-		if cur.DebugLaunch.EditorPort() {
+		if st.Launch.EditorPort() {
 			// The editor port adds the lease line, points each child session
 			// at itself and maps the editor's paths to /src.
 			if editorPort, err = s.ensureEditor(); err != nil {
@@ -250,7 +257,7 @@ func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
 			v.EditorPort = editorPort
 		}
 		if editorPort > 0 {
-			if cfg, err := harness.EditorConfig(*cur.DebugLaunch, editorPort); err == nil {
+			if cfg, err := harness.EditorConfig(*st.Launch, editorPort); err == nil {
 				v.Editor = cfg
 			}
 		}

@@ -84,9 +84,11 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 		RunMemory:     runMemory,
 		MaxRuns:       cfg.Harness.MaxRunsOrDefault(),
 		IdleTimeout:   cfg.Harness.IdleTimeoutOrDefault(),
-		Docker:        harness.ExecDocker{},
-		AppImage:      review.Image,
-		Record:        srv.HarnessRecorder(),
+		// Zero takes harness.DefaultDebugAttachTimeout.
+		DebugAttachTimeout: cfg.Harness.Debug.AttachTimeout,
+		Docker:             harness.ExecDocker{},
+		AppImage:           review.Image,
+		Record:             srv.HarnessRecorder(),
 	})
 	if err != nil {
 		log.Printf("harness unavailable: %v", err)

@@ -29,6 +29,10 @@ const (
 	OpHealth = "health"
 	// OpDAPDrop closes the client holding a DAP relay (take over, release).
 	OpDAPDrop = "dap_drop"
+	// OpDAPTarget points a DAP relay at another target (Request.Target),
+	// closing its holder: the debug target switch between the app and a
+	// debug check.
+	OpDAPTarget = "dap_target"
 )
 
 // Error codes in a control reply.
@@ -52,6 +56,8 @@ type Request struct {
 	Token string     `json:"token,omitempty"`
 	Relay *RelaySpec `json:"relay,omitempty"`
 	Name  string     `json:"name,omitempty"`
+	// Target is OpDAPTarget's new host:port, empty for none.
+	Target string `json:"target,omitempty"`
 }
 
 // Response is the edge's one-line answer to a Request.
@@ -193,6 +199,12 @@ func (e *Edge) dispatch(req Request) Response {
 		return Response{OK: true, Health: &h}
 	case OpDAPDrop:
 		dropped, err := e.DropDAP(req.Name)
+		if err != nil {
+			return fail(err)
+		}
+		return Response{OK: true, Dropped: dropped}
+	case OpDAPTarget:
+		dropped, err := e.SetDAPTarget(req.Name, req.Target)
 		if err != nil {
 			return fail(err)
 		}

@@ -46,6 +46,15 @@ type HarnessConfig struct {
 	// host's architecture, and optionally the url (https, or an absolute
 	// path on the host) it comes from. Unset is the pin in code.
 	DebugTools map[string]HarnessToolPin `yaml:"debug_tools,omitempty"`
+	// Debug configures debug checks.
+	Debug HarnessDebugConfig `yaml:"debug,omitempty"`
+}
+
+// HarnessDebugConfig is harness.debug.
+type HarnessDebugConfig struct {
+	// AttachTimeout stops a debug check no debugger attached to within it
+	// (10m).
+	AttachTimeout time.Duration `yaml:"attach_timeout,omitempty"`
 }
 
 // HarnessToolPin is one harness.debug_tools entry.

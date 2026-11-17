@@ -198,15 +198,25 @@ func (e *Edge) checkSpec(spec RelaySpec) error {
 	if spec.Port < 0 || spec.Port > 65535 {
 		return errorf(CodeInvalidParams, "relay port %d is out of range", spec.Port)
 	}
-	host, port, err := net.SplitHostPort(spec.Target)
+	if spec.Kind == KindDAP && spec.Target == "" {
+		// A run that debugs only its checks has no target until one starts.
+		return nil
+	}
+	return e.checkTarget(spec.Target)
+}
+
+// checkTarget refuses a target that is not host:port, or is the edge's own
+// outer address.
+func (e *Edge) checkTarget(target string) error {
+	host, port, err := net.SplitHostPort(target)
 	if err != nil || host == "" {
-		return errorf(CodeInvalidParams, "relay target %q must be host:port", spec.Target)
+		return errorf(CodeInvalidParams, "relay target %q must be host:port", target)
 	}
 	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
 		return errorf(CodeInvalidParams, "relay target port %q is out of range", port)
 	}
 	if a, err := netip.ParseAddr(host); err == nil && a.Unmap() == e.outer {
-		return errorf(CodeInvalidParams, "relay target %s is the edge's own outer address", spec.Target)
+		return errorf(CodeInvalidParams, "relay target %s is the edge's own outer address", target)
 	}
 	return nil
 }
@@ -261,6 +271,28 @@ func (e *Edge) DropDAP(name string) (*DAPHolder, error) {
 		return nil, errorf(CodeInvalidParams, "relay %q is not a debugger relay", name)
 	}
 	return r.drop(), nil
+}
+
+// SetDAPTarget points the DAP relay name at target (host:port, or empty for
+// none), ending the current holder's lease and connections first, and
+// returns who held it. Serve moves the relay to a debug check's debugger and
+// back to the app's.
+func (e *Edge) SetDAPTarget(name, target string) (*DAPHolder, error) {
+	if target != "" {
+		if err := e.checkTarget(target); err != nil {
+			return nil, err
+		}
+	}
+	e.mu.Lock()
+	r, ok := e.relays[name]
+	e.mu.Unlock()
+	if !ok {
+		return nil, errorf(CodeNotFound, "relay %q not found", name)
+	}
+	if r.spec.Kind != KindDAP {
+		return nil, errorf(CodeInvalidParams, "relay %q is not a debugger relay", name)
+	}
+	return r.retarget(&target), nil
 }
 
 // List returns every relay, sorted by name.
