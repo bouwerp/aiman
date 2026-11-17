@@ -13,7 +13,7 @@ import (
 // a forwarded app on another laptop port cannot read it) and sends it here.
 // It is never a cookie: a cookie for 127.0.0.1 would also go to every
 // forwarded app port.
-const TokenHeader = "X-Aiman-Console-Token"
+const TokenHeader = "X-Aiman-Console-Token" //nolint:gosec // G101: a header name, not a credential
 
 // pageCSP allows only the console's own embedded script and style, and the
 // API on the same origin.
@@ -41,8 +41,9 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 }
 
 // guard wraps every request: security headers, the Host check, and for the
-// API the token, then for writes the Origin and JSON checks. It logs the
-// method, a known path and the status, never headers or the query.
+// API the token, then for writes the Origin and JSON checks. It logs refusals
+// and failed requests by method, known path and status, never headers or the
+// query.
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sw := &statusWriter{ResponseWriter: w}
@@ -53,16 +54,16 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
 		h.Set("Cache-Control", "no-store")
-		reason := s.refusal(r)
-		switch {
-		case reason == "":
-			next.ServeHTTP(sw, r)
-		default:
-			code := refusalStatus[reason]
-			writeError(sw, code, &apiError{Code: reason, Message: refusalText[reason]})
+		if reason := s.refusal(r); reason != "" {
+			writeError(sw, refusalStatus[reason], &apiError{Code: reason, Message: refusalText[reason]})
 			s.logf("refused %s %s: %s", r.Method, logPath(r.URL.Path), reason)
+			return
 		}
-		s.logf("%s %s %d", r.Method, logPath(r.URL.Path), sw.status)
+		next.ServeHTTP(sw, r)
+		// The page polls every 2s; only failures are worth a line.
+		if sw.status >= http.StatusBadRequest {
+			s.logf("%s %s %d", r.Method, logPath(r.URL.Path), sw.status)
+		}
 	})
 }
 
@@ -75,7 +76,7 @@ var refusalStatus = map[string]int{
 	"unknown_path": http.StatusNotFound,
 }
 
-var refusalText = map[string]string{
+var refusalText = map[string]string{ //nolint:gosec // G101: user-facing messages, no credential
 	"bad_host":     "this console answers only on 127.0.0.1 or localhost at its own port",
 	"bad_token":    "open the URL the console printed; the token is missing or wrong",
 	"bad_origin":   "a change must come from the console page itself",

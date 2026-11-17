@@ -152,18 +152,27 @@ func (s *Server) Handler() http.Handler { return s.handler }
 
 // Serve polls serve and answers requests until ctx ends, then stops the HTTP
 // server and closes the forwards.
-func (s *Server) Serve(ctx context.Context) error {
+func (s *Server) Serve(parent context.Context) error {
+	ctx, stop := context.WithCancel(parent)
 	s.refreshMu.Lock()
 	s.fwCtx = ctx
 	s.refreshMu.Unlock()
-	defer s.closeForwards()
+	polled := make(chan struct{})
+	defer func() {
+		stop()
+		<-polled
+		s.closeForwards()
+	}()
 
 	hs := &http.Server{
 		Handler:           s.handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          stdlog.New(s.log, "console: ", 0),
 	}
-	go s.pollLoop(ctx)
+	go func() {
+		defer close(polled)
+		s.pollLoop(ctx)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- hs.Serve(s.ln) }()
 	select {
@@ -264,7 +273,7 @@ func (s *Server) syncForwards(run *harness.Run) ([]forwardView, string) {
 		default:
 		}
 	}
-	if run == nil || run.State != harness.StateReady || len(run.Ports) == 0 {
+	if run == nil || run.State != harness.StateReady || len(run.Ports) == 0 || s.fwCtx.Err() != nil {
 		s.dropForwards()
 		return nil, ""
 	}

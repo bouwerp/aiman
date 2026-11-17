@@ -7,15 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/console"
 	"github.com/bouwerp/aiman/internal/harness"
 	"github.com/bouwerp/aiman/internal/infra/config"
 	"github.com/bouwerp/aiman/internal/infra/ssh"
+	"github.com/bouwerp/aiman/internal/server"
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
@@ -40,6 +43,27 @@ func (r remoteHarnessRPC) Status(ctx context.Context, params map[string]any) (js
 	return usecase.ServeRPC(ctx, r.remote, "harness.status", params)
 }
 
+// Call sends any harness method, waiting as long as serve's own limit for it.
+func (r remoteHarnessRPC) Call(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, harnessConsoleTimeout(method))
+	defer cancel()
+	return usecase.ServeRPC(ctx, r.remote, method, params)
+}
+
+// harnessConsoleTimeout is serve's limit for the long harness calls plus a
+// margin, else harnessConsoleCallTimeout.
+func harnessConsoleTimeout(method string) time.Duration {
+	switch method {
+	case "harness.up":
+		return server.HarnessUpTimeout + 30*time.Second
+	case "harness.check":
+		return server.HarnessCheckTimeout + 30*time.Second
+	case "harness.down":
+		return server.HarnessDownTimeout + 30*time.Second
+	}
+	return harnessConsoleCallTimeout
+}
+
 func (r remoteHarnessRPC) Verdict(ctx context.Context, params map[string]any) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, harnessConsoleCallTimeout)
 	defer cancel()
@@ -54,8 +78,9 @@ type consoleDeps struct {
 	sleep     func(time.Duration)
 }
 
-const harnessConsoleUsage = "Usage: aiman harness console [--remote NAME] [--session NAME] [--run ID]\n" +
-	"Runs on the laptop: forwards the run's ports over ssh, prints the URLs and steps, and records verdicts as the operator.\n"
+const harnessConsoleUsage = "Usage: aiman harness console [--remote NAME] [--session NAME] [--run ID] [--text] [--no-browser]\n" +
+	"Runs on the laptop: forwards the run's ports over ssh and calls serve as the operator.\n" +
+	"By default it serves a web console on 127.0.0.1 and opens it in the browser; --text asks for verdicts in the terminal.\n"
 
 // runHarnessConsole is `aiman harness console` on the laptop.
 func runHarnessConsole(args []string) error {
@@ -79,9 +104,20 @@ func runHarnessConsole(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	mgr := ssh.NewManager(ssh.Config{Host: remote.Host, User: remote.User, Root: remote.Root})
+	forwarder := usecase.HarnessForwarder{Target: ssh.Target(remote.Host, remote.User)}
+	if !a.text {
+		return harnessWebConsole(ctx, a, webConsoleDeps{
+			rpc:       remoteHarnessRPC{remote: mgr},
+			forwarder: console.SSHForwarder{F: forwarder},
+			listen:    func() (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") },
+			open:      openBrowser,
+			out:       os.Stdout,
+			log:       os.Stderr,
+		})
+	}
 	return harnessConsole(ctx, a, consoleDeps{
 		rpc:       remoteHarnessRPC{remote: mgr},
-		forwarder: usecase.HarnessForwarder{Target: ssh.Target(remote.Host, remote.User)},
+		forwarder: forwarder,
 		in:        os.Stdin,
 		out:       os.Stdout,
 		sleep:     time.Sleep,

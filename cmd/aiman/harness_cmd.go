@@ -99,7 +99,7 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
        aiman harness down [--run ID] [--json]
-       aiman harness console [--remote NAME] [--session NAME] [--run ID]   (laptop)
+       aiman harness console [--remote NAME] [--session NAME] [--run ID] [--text] [--no-browser]   (laptop)
        aiman harness image status|approve|db-install ...   (see aiman harness image)
        aiman harness approve-image <digest> --quote TEXT   (the session that holds the gate)
 Every host command takes --session NAME, which defaults to $AIMAN_ID; --run ID names a run instead.
@@ -116,6 +116,7 @@ type harnessArgs struct {
 	quote, reason, sha256, builtAt       string
 	lines                                int
 	json, dirty, force, wait, acceptRisk bool
+	text, noBrowser                      bool
 	pos                                  []string
 }
 
@@ -135,7 +136,7 @@ func parseHarnessArgs(args []string) (harnessArgs, error) {
 					return a, fmt.Errorf("%s needs a value", name)
 				}
 				i++
-				val = args[i]
+				val = args[i] //nolint:gosec // G602: the check above keeps i+1 inside args
 			}
 			if err := a.setValue(name, val); err != nil {
 				return a, err
@@ -193,6 +194,10 @@ func (a *harnessArgs) setBool(arg string) bool {
 		a.wait = true
 	case "--accept-risk":
 		a.acceptRisk = true
+	case "--text":
+		a.text = true
+	case "--no-browser":
+		a.noBrowser = true
 	default:
 		return false
 	}
