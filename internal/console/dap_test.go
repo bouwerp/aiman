@@ -91,9 +91,9 @@ func (d *echoDAP) port() int {
 }
 
 // serveConsole runs the console's handler on its own listener and polls once.
-func serveConsole(t *testing.T, rpc RPC, fw Forwarder) (*Server, string) {
+func serveConsole(t *testing.T, rpc RPC) (*Server, string) {
 	t.Helper()
-	s, host := newTestServer(t, rpc, fw, nil)
+	s, host := newTestServer(t, rpc, directForwarder{}, nil)
 	hs := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = hs.Serve(s.ln) }()
 	t.Cleanup(func() { _ = hs.Close() })
@@ -124,7 +124,7 @@ func TestDAPBridge(t *testing.T) {
 		}
 		return nil, fmt.Errorf("unexpected %s", method)
 	}}
-	s, host := serveConsole(t, rpc, directForwarder{})
+	s, host := serveConsole(t, rpc)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	origin := "http://" + host

@@ -15,7 +15,7 @@ import (
 )
 
 // The editor port is a local DAP port for an editor (VS Code) on a debug run
-// whose adapter opens child sessions (js-debug). An editor cannot send the
+// whose adapter opens child sessions (js-debug, debugpy). An editor cannot send the
 // lease line, and VS Code starts a child session from the startDebugging
 // configuration alone, which names no server, so the console stands between
 // them:
@@ -28,7 +28,9 @@ import (
 //     here too;
 //   - source paths are mapped between the editor's workspace folder
 //     (harness.LocalRootKey in its launch or attach request) and /src, the
-//     tree js-debug reads in the adapter container.
+//     tree js-debug reads in the adapter container. An editor that maps
+//     paths itself (debugpy's pathMappings) sends no LocalRootKey, and no
+//     path is rewritten.
 type editorPort struct {
 	ln   net.Listener
 	port int
