@@ -137,7 +137,7 @@ func (s *Server) raiseResourceAlert(ctx context.Context, a cgroup.Alert) {
 			log.Printf("resources: notify %s: %v", a.SessionID, err)
 		}
 		s.appendEvent(ctx, a.SessionID, domain.EventActorAiman, domain.EventResourcesAlert, map[string]any{
-			"memory_current": a.Usage.MemoryCurrent, "memory_high": a.Usage.MemoryHigh,
+			"memory_current": a.Usage.MemoryCurrent, "memory_held": a.Usage.Held(), "memory_high": a.Usage.MemoryHigh,
 			"memory_pressure": a.Usage.MemoryPressure, "throttled": a.Throttled,
 		})
 		// A hidden helper runs serve's brief; its parent's operator was told.
