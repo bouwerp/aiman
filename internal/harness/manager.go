@@ -67,6 +67,9 @@ type Options struct {
 	DebugAdapters []DebugAdapter
 	// Record writes ledger rows; nil records nothing.
 	Record Recorder
+	// Sourcemaps checks a ready run's frontend for source maps; nil is
+	// DetectSourcemaps with DefaultSourcemapLimits.
+	Sourcemaps func(ctx context.Context, src string, targets []SourcemapTarget) BrowserSourcemaps
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 }

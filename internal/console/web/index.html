@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="/debug.css">
 <script src="/app.js" defer></script>
 <script src="/debug.js" defer></script>
+<link rel="stylesheet" href="/debug-browser.css">
+<script src="/debug-browser.js" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -78,6 +80,32 @@
     </div>
 
     <div class="panel" role="tabpanel" id="panel-debug" aria-labelledby="tab-debug" hidden>
+      <!-- Browser code (P6e): debugged in the tester's own DevTools, not over DAP. -->
+      <section class="brw" id="dbg-browser" aria-labelledby="brw-title" hidden>
+        <div class="brw-head">
+          <h3 id="brw-title">Browser code</h3>
+          <span class="brw-maps" id="brw-maps" data-maps="checking" role="status" aria-live="polite">Checking source maps</span>
+        </div>
+        <p class="brw-lede">Debug the frontend in your own browser. Breakpoints you set there live in your browser, not in this tab.</p>
+        <div class="brw-warn" id="brw-warn" role="alert" hidden>
+          <p id="brw-warn-text"></p>
+          <p class="brw-warn-lead">Likely fixes, then start the run again:</p>
+          <ul id="brw-fixes"></ul>
+        </div>
+        <p class="hint" id="brw-note" hidden></p>
+        <ol class="brw-steps">
+          <li>Open <a id="brw-url" target="_blank" rel="noopener noreferrer">the app</a> in Chrome, Edge or Firefox.</li>
+          <li>Open DevTools: F12, or Cmd+Option+I on a Mac.</li>
+          <li>Go to Sources (Debugger in Firefox) and press Ctrl+P (Cmd+P on a Mac) to find a file by name, such as <code>App.tsx</code>. The original files sit under the page's address in the file tree, in <code>src/</code>.</li>
+          <li>Click a line number to set a breakpoint, then use the app. DevTools pauses on that line with the variables in Scope.</li>
+        </ol>
+        <details class="brw-modes">
+          <summary>Dev server or built output</summary>
+          <p><strong>Vite dev server</strong> (app.run starts <code>vite</code>): every module comes with its map, so your files appear as written and edits reload.</p>
+          <p><strong>Built output</strong> (app.build runs <code>vite build</code> and the app serves <code>dist/</code>): maps exist only with <code>build.sourcemap: true</code>. The code is minified, so Scope may show short names; hover a variable in the source to read its value.</p>
+        </details>
+      </section>
+
       <p class="empty" id="dbg-empty">This run has no debugger. Start a run with "Start with the debugger" under Run.</p>
       <div id="dbg" hidden>
         <div class="dbg-holder" id="dbg-holder" data-held="free">

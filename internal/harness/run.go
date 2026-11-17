@@ -80,6 +80,8 @@ type Run struct {
 	// LastUsed is the last RPC that touched the run; harness.idle_timeout
 	// counts from it.
 	LastUsed time.Time `json:"last_used"`
+	// BrowserSourcemaps is set shortly after the run is ready (P6e).
+	BrowserSourcemaps *BrowserSourcemaps `json:"browser_sourcemaps,omitempty"`
 }
 
 // Live reports whether the run holds containers.

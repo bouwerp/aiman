@@ -413,6 +413,8 @@ Do these steps to test a scenario:
 
 A session has one live run at a time. Do not use `--force`; it is for the operator. Only the operator records a verdict (`aiman harness verdict`); a session gets `needs_operator`. A failed step comes to you as a to-do `Harness: <scenario> step <n>: <note>` and an `[aiman]` note. Fix it, commit, and tell the operator that the scenario is ready to run again.
 
+The tester debugs browser code in their own DevTools, which need source maps. When `aiman harness status --json` shows `browser_sourcemaps.state` `absent`, make the build write them (Vite: `build.sourcemap: true`, not `'hidden'`) and keep any plugin that deletes maps out of `app.build`.
+
 ### Debugger
 
 `aiman harness up <scenario> --debug` starts the app under a debugger that the operator drives from the console's Debug tab. Declare it in `app.debug`:
