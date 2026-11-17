@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -70,6 +71,9 @@ type Options struct {
 	// Sourcemaps checks a ready run's frontend for source maps; nil is
 	// DetectSourcemaps with DefaultSourcemapLimits.
 	Sourcemaps func(ctx context.Context, src string, targets []SourcemapTarget) BrowserSourcemaps
+	// EVMHTTP reads an EVM service's JSON-RPC through its edge relay; nil is
+	// a plain client with no proxy.
+	EVMHTTP *http.Client
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 }
@@ -361,6 +365,7 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	run.SHA, run.Dirty, run.DiffSHA256, run.Source = l.SHA, l.Dirty, l.DiffSHA256, l.Source
 	run.Network = "offline"
 	run.Services = append([]string(nil), sc.Services...)
+	run.EVM = l.File.EVMServices(sc)
 	run.StartedAt, run.LastUsed = now, now
 	run.Ports, run.Steps, run.Checks = []RunPort{}, stepViews(sc), checkRuns(sc)
 	dir := m.runDir(req.Session, run.ID)

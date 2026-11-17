@@ -722,6 +722,8 @@ components:
             - harness.debug
             - harness.files
             - harness.file
+            - harness.evm_txs
+            - harness.evm_trace
             - design.publish
             - review.reveal
             - review.post
@@ -946,7 +948,16 @@ components:
           description: "harness.up: hold the call up to 20s for the run to leave starting."
         service:
           type: string
-          description: harness.logs, required. app, edge or a service name of the scenario.
+          description: >
+            harness.logs, required. app, edge or a service name of the scenario.
+            harness.evm_txs and harness.evm_trace: an evm service of the run;
+            absent names the run's only one.
+        tx:
+          type: string
+          description: "harness.evm_trace, required: a transaction hash, 0x and 64 hex digits."
+        blocks:
+          type: integer
+          description: harness.evm_txs; how many recent blocks to scan, default 20, at most 64.
         step:
           type: integer
           description: harness.verdict; 0 or absent is the whole scenario, 1 and up a step.
@@ -1053,6 +1064,8 @@ components:
             - $ref: "#/components/schemas/HarnessDebugResult"
             - $ref: "#/components/schemas/HarnessFilesResult"
             - $ref: "#/components/schemas/HarnessFileResult"
+            - $ref: "#/components/schemas/HarnessEVMTxsResult"
+            - $ref: "#/components/schemas/HarnessEVMTraceResult"
             - $ref: "#/components/schemas/HarnessImageResult"
             - $ref: "#/components/schemas/HarnessImagesResult"
         error:
@@ -1888,6 +1901,11 @@ components:
           format: date-time
         browser_sourcemaps:
           $ref: "#/components/schemas/HarnessBrowserSourcemaps"
+        evm:
+          type: array
+          description: The scenario's evm services (services with evm set), which harness.evm_txs and harness.evm_trace read.
+          items:
+            type: string
     HarnessBrowserSourcemaps:
       type: object
       description: >
@@ -2370,6 +2388,175 @@ components:
         rescanned_at:
           type: string
           format: date-time
+    HarnessEVMTx:
+      type: object
+      required: [hash, block, index, from, status, gas_used]
+      properties:
+        hash:
+          type: string
+        block:
+          type: integer
+        index:
+          type: integer
+        from:
+          type: string
+        to:
+          type: string
+          description: Absent for a contract creation.
+        contract:
+          type: string
+          description: The address a creation made.
+        value:
+          type: string
+          description: Wei in decimal; absent for zero.
+        selector:
+          type: string
+          description: The first 4 bytes of a call's input.
+        status:
+          type: string
+          enum: [success, reverted, unknown]
+        gas_used:
+          type: integer
+    HarnessEVMTxsResult:
+      type: object
+      description: >
+        harness.evm_txs {session? | run?, service?, blocks?}: the newest
+        transactions (at most 100, newest first) of the last blocks blocks of
+        a ready run's evm service, with their receipts. Serve reads the node
+        through the edge's evm relay, which admits only eth_blockNumber,
+        eth_chainId, eth_getBlockByNumber, eth_getTransactionByHash,
+        eth_getTransactionReceipt and debug_traceTransaction; nothing signs,
+        sends or changes state. A run with no evm service, an unknown
+        service or a bad blocks is invalid_params; a run that is not ready is
+        harness_not_running. Any in-scope caller; off the device allowlist.
+      required: [type, evm]
+      properties:
+        type:
+          type: string
+          const: harness_evm_txs
+        evm:
+          type: object
+          required: [run, service, chain_id, head, blocks, txs, truncated]
+          properties:
+            run:
+              type: string
+            service:
+              type: string
+            chain_id:
+              type: integer
+            head:
+              type: integer
+            blocks:
+              type: integer
+            txs:
+              type: array
+              items:
+                $ref: "#/components/schemas/HarnessEVMTx"
+            truncated:
+              type: boolean
+    HarnessEVMRevert:
+      type: object
+      description: >
+        A decoded revert reason. kind is error (Error(string), message is
+        its text), panic (Panic(uint256): code and its meaning), custom (a
+        custom error: selector), raw (under 4 bytes) or empty (no data).
+        data is the raw revert data in hex, cut at 4096 bytes; bytes is its
+        full length.
+      required: [kind, bytes]
+      properties:
+        kind:
+          type: string
+          enum: [error, panic, custom, raw, empty]
+        message:
+          type: string
+        code:
+          type: string
+        selector:
+          type: string
+        data:
+          type: string
+        bytes:
+          type: integer
+    HarnessEVMCall:
+      type: object
+      description: >
+        One call frame from the node's callTracer. input and output are hex
+        cut at 4096 bytes (input_bytes and output_bytes are the full
+        lengths); error is the node's word for a failed frame and revert
+        decodes its output.
+      required: [type, from, gas, gas_used, input_bytes, output_bytes]
+      properties:
+        type:
+          type: string
+        from:
+          type: string
+        to:
+          type: string
+        value:
+          type: string
+        gas:
+          type: integer
+        gas_used:
+          type: integer
+        selector:
+          type: string
+        input:
+          type: string
+        input_bytes:
+          type: integer
+        output:
+          type: string
+        output_bytes:
+          type: integer
+        error:
+          type: string
+        revert:
+          $ref: "#/components/schemas/HarnessEVMRevert"
+        calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessEVMCall"
+    HarnessEVMTraceResult:
+      type: object
+      description: >
+        harness.evm_trace {session? | run?, service?, tx}: one mined
+        transaction replayed under the callTracer through the edge's
+        read-only evm relay: its receipt facts and call tree, at most 5000
+        frames (truncated then true), with revert reasons decoded. revert is
+        the top frame's. An unknown or malformed hash is invalid_params.
+        Any in-scope caller; off the device allowlist.
+      required: [type, trace]
+      properties:
+        type:
+          type: string
+          const: harness_evm_trace
+        trace:
+          type: object
+          required: [run, service, tx, block, status, gas_used, root, frames, truncated]
+          properties:
+            run:
+              type: string
+            service:
+              type: string
+            tx:
+              type: string
+            block:
+              type: integer
+            status:
+              type: string
+              enum: [success, reverted, unknown]
+            gas_used:
+              type: integer
+            contract:
+              type: string
+            root:
+              $ref: "#/components/schemas/HarnessEVMCall"
+            revert:
+              $ref: "#/components/schemas/HarnessEVMRevert"
+            frames:
+              type: integer
+            truncated:
+              type: boolean
     HarnessImageResult:
       type: object
       description: >

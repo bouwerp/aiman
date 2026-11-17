@@ -426,6 +426,21 @@ The tester debugs browser code in their own DevTools, which need source maps. Wh
 - The Bun debugger works only for the Bun minor version its adapter is built for (1.3 today). Another minor, or a musl (Alpine) image with no `bun` of its own, is refused with `harness_debug_unsupported`, at `harness up` when `app.image` names the version and otherwise when the run starts. Tell the operator; do not change the app's Bun to get around it. The fallback, debugging the code under Node as a Vitest check, arrives with `checks[].debug`.
 - `python` parses, but `harness up --debug` refuses it with `harness_debug_unsupported` until its debugger lands. `checks[].debug` is accepted but not run yet.
 
+### EVM traces
+
+Solidity has no debugger in the console. Instead, the operator reads transaction traces in the console's EVM tab. Declare an anvil node as a service with `evm`:
+
+```yaml
+services:
+  chain:
+    image: ghcr.io/foundry-rs/foundry:v1.8.1
+    evm: {kind: anvil, chain_id: 31337}
+```
+
+- aiman starts `anvil --host 0.0.0.0 --port 8545` on the run's offline network. The app and setup steps reach it at `http://chain:8545` and may send transactions. Add more anvil flags in `evm.args`.
+- The run is offline, so anvil cannot fork a public chain. `--fork-url` and the other fork flags are refused. Deploy the contracts in a setup step or fixture script.
+- `echo '{}' | aiman rpc harness.evm_txs --params-stdin` lists recent transactions, and `echo '{"tx":"0x…"}' | aiman rpc harness.evm_trace --params-stdin` returns one transaction's call tree with decoded revert reasons. Both only read. The edge admits only read methods, so you cannot send a transaction through these calls.
+
 ### Images
 
 Serve vets every image digest before the Docker engine sees it. It scans for known CVEs and for malicious code. Then the operator approves the digest once for the host.

@@ -292,6 +292,12 @@ func relaysFor(f *File, sc *Scenario, spec RunSpec) ([]Relay, error) {
 				return nil, err
 			}
 		}
+		if e := f.Services[name].EVM; e != nil {
+			if err := add(name, name, e.port()); err != nil {
+				return nil, err
+			}
+			out[len(out)-1].Kind = RelayKindEVM
+		}
 	}
 	if spec.Debug != nil {
 		if slices.ContainsFunc(out, func(r Relay) bool { return r.Name == RelayDAP }) {
@@ -441,6 +447,9 @@ func serviceService(f *File, spec RunSpec, name string) composeService {
 			"./" + InitDBFile + ":" + postgresInitDir + initDBFile + ":ro",
 		}
 	}
+	if svc.EVM != nil {
+		evmService(&s, svc)
+	}
 	if len(s.Environment) == 0 {
 		s.Environment = nil
 	}
@@ -464,8 +473,11 @@ func edgeService(spec RunSpec, relays []Relay) composeService {
 	ports := make([]string, 0, len(relays))
 	for _, r := range relays {
 		flag := "--relay"
-		if r.Kind == RelayKindDAP {
+		switch r.Kind {
+		case RelayKindDAP:
 			flag = "--dap-relay"
+		case RelayKindEVM:
+			flag = "--evm-relay"
 		}
 		cmd = append(cmd, flag, fmt.Sprintf("%s=%d=%s", r.Name, r.Port, r.Target))
 		ports = append(ports, fmt.Sprintf("127.0.0.1::%d", r.Port))
@@ -505,6 +517,7 @@ type composeFile struct {
 type composeService struct {
 	Image       string            `yaml:"image"`
 	PullPolicy  string            `yaml:"pull_policy"`
+	Entrypoint  []string          `yaml:"entrypoint,omitempty"`
 	WorkingDir  string            `yaml:"working_dir,omitempty"`
 	User        string            `yaml:"user,omitempty"`
 	ReadOnly    bool              `yaml:"read_only"`

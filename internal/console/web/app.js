@@ -176,6 +176,7 @@
     nav.replaceChildren();
     for (const f of state.forwards || []) {
       if (f.name === "dap" && state.run && state.run.debug) continue; // the debugger's port, used by the Debug tab
+      if (state.run && (state.run.evm || []).includes(f.name)) continue; // an EVM node's read-only relay, used by the EVM tab
       nav.append(el("a", { class: "app-link", href: f.url, target: "_blank", rel: "noopener noreferrer" },
         el("strong", { text: f.name }), f.url, el("span", { text: "host port " + f.host_port })));
     }
@@ -365,6 +366,7 @@
     renderServices(run);
     if (window.aimanDebug) window.aimanDebug.update(state);
     if (window.aimanBrowser) window.aimanBrowser.update(state);
+    if (window.aimanEVM) window.aimanEVM.update(state);
   }
 
   async function poll() {
