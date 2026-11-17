@@ -94,6 +94,7 @@ type harnessParams struct {
 	Table    string `json:"table"`
 	SQL      string `json:"sql"`
 	Write    bool   `json:"write"`
+	After    int64  `json:"after_id"`
 }
 
 // dispatchHarness routes the harness.* methods.
@@ -128,6 +129,8 @@ func (s *Server) dispatchHarness(ctx context.Context, req Request) Response {
 		return s.handleHarnessFile(ctx, req, p)
 	case "harness.db":
 		return s.handleHarnessDB(ctx, req, p)
+	case "harness.capture":
+		return s.handleHarnessCapture(ctx, req, p)
 	default:
 		return s.handleHarnessRunCall(ctx, req, p)
 	}

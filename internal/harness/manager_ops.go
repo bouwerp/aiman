@@ -64,6 +64,15 @@ func (m *Manager) composeDown(ctx context.Context, r Run) {
 	defer cancel()
 	dir := m.runDir(r.Session, r.ID)
 	call := ComposeCall{Dir: filepath.Join(dir, "sandbox"), Project: "harness-" + r.ID}
+	m.mu.Lock()
+	var token string
+	if lr := m.live[r.ID]; lr != nil {
+		lr.mu.Lock()
+		token = lr.token
+		lr.mu.Unlock()
+	}
+	m.mu.Unlock()
+	m.saveCapture(ctx, r, token)
 	logDir := filepath.Join(dir, "logs", "services")
 	if err := os.MkdirAll(logDir, 0o700); err == nil {
 		for _, svc := range r.containers() {

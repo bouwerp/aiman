@@ -59,6 +59,11 @@ func runHarness(args []string) error {
 		case "review-proxy":
 			// Runs inside the image review's proxy container.
 			return images.ProxyMain(args[1:])
+		case "image":
+			// db-push runs on the laptop and talks to the remote over ssh.
+			if len(args) > 1 && args[1] == "db-push" {
+				return runHarnessDBPush(args[2:])
+			}
 		}
 	}
 	return harnessMain(args, harnessIO{
@@ -101,6 +106,7 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness check [<name>] [--run ID] [--json]
        aiman harness logs <service> [--lines N] [--run ID] [--json]
        aiman harness db <service> tables|rows <table>|query <sql> [--limit N] [--write] [--run ID] [--json]   (--write: operator)
+       aiman harness capture [--after N] [--limit N] [--run ID] [--json]   (HTTP calls through the edge proxy)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
        aiman harness down [--run ID] [--json]
@@ -120,6 +126,7 @@ type harnessArgs struct {
 	session, run, note, remote           string
 	quote, reason, sha256, builtAt       string
 	lines, limit                         int
+	after                                int64
 	json, dirty, force, wait, acceptRisk bool
 	write                                bool
 	text, noBrowser, debug               bool
@@ -129,7 +136,7 @@ type harnessArgs struct {
 var harnessValueFlags = map[string]bool{
 	"--session": true, "--run": true, "--note": true, "--lines": true, "--remote": true,
 	"--quote": true, "--reason": true, "--sha256": true, "--built-at": true,
-	"--limit": true,
+	"--after": true, "--limit": true,
 }
 
 func parseHarnessArgs(args []string) (harnessArgs, error) {
@@ -191,6 +198,12 @@ func (a *harnessArgs) setValue(name, val string) error {
 			return errors.New("--limit must be a positive number")
 		}
 		a.limit = n
+	case "--after":
+		n, err := strconv.ParseInt(val, 10, 64)
+		if err != nil || n < 0 {
+			return errors.New("--after must be a flow id (0 or more)")
+		}
+		a.after = n
 	}
 	return nil
 }
@@ -246,6 +259,7 @@ var harnessSubs = map[string]harnessSub{
 	"status":  {0, 0, true, harnessStatus},
 	"check":   {0, 1, true, harnessCheck},
 	"logs":    {1, 1, true, harnessLogs},
+	"capture": {0, 0, true, harnessCapture},
 	"result":  {0, 1, true, harnessResult},
 	"verdict": {2, 2, true, harnessVerdict},
 	"down":    {0, 0, true, harnessDown},

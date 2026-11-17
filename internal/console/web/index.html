@@ -13,6 +13,8 @@
 <script src="/debug-browser.js" defer></script>
 <link rel="stylesheet" href="/db.css">
 <script src="/db.js" defer></script>
+<link rel="stylesheet" href="/net.css">
+<script src="/net.js" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -48,6 +50,7 @@
       <button type="button" role="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="false">Logs</button>
       <button type="button" role="tab" id="tab-debug" aria-controls="panel-debug" aria-selected="false">Debug</button>
       <button type="button" role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false">Database</button>
+      <button type="button" role="tab" id="tab-net" aria-controls="panel-net" aria-selected="false">Network</button>
     </div>
 
     <div class="panel" role="tabpanel" id="panel-run" aria-labelledby="tab-run">
@@ -80,6 +83,18 @@
       </div>
       <p class="hint" id="log-status"></p>
       <pre class="log" id="log" tabindex="0" aria-live="off"></pre>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-net" aria-labelledby="tab-net" hidden>
+      <div class="panel-actions">
+        <label for="net-filter">Filter</label>
+        <input type="search" id="net-filter" autocomplete="off" spellcheck="false" placeholder="host, path or status">
+        <button type="button" class="btn" id="net-pause" aria-pressed="false">Pause</button>
+        <button type="button" class="btn" id="net-clear">Clear</button>
+      </div>
+      <p class="hint" id="net-status"></p>
+      <p class="empty" id="net-empty">No HTTP calls yet. Calls the app makes through the edge proxy appear here.</p>
+      <ol class="net-list" id="net-list" aria-label="HTTP calls"></ol>
     </div>
 
     <div class="panel" role="tabpanel" id="panel-debug" aria-labelledby="tab-debug" hidden>

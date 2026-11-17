@@ -100,6 +100,9 @@ type RunSpec struct {
 	DebugSubnet netip.Prefix
 	// AdapterImage runs the adapter container when Debug has an Adapter.
 	AdapterImage string
+	// Proxy turns on the edge's capture proxy (compose_proxy.go); nil runs
+	// none.
+	Proxy *ProxySpec
 	// CheckImages runs each check that names an image, keyed by
 	// CheckService of the check's index (serve passes image IDs).
 	CheckImages map[string]string
@@ -178,6 +181,9 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 		if isSQLite(f.Services[name]) {
 			doc.Volumes[dataVolume(name)] = map[string]any{}
 		}
+	}
+	if err := withProxy(&doc, sc, spec); err != nil {
+		return nil, err
 	}
 	for name, svc := range doc.Services {
 		doc.Services[name] = escapeInterpolation(svc)
