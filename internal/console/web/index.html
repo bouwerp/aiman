@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Harness console</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <div class="bar-id">
+    <h1 id="scenario">Harness console</h1>
+    <p class="meta" id="meta"></p>
+  </div>
+  <div class="bar-state">
+    <span class="state" id="state" data-state="none">no run</span>
+    <button type="button" class="btn danger" id="down" hidden>Stop run</button>
+  </div>
+</header>
+
+<div class="notice" id="notice" role="alert" hidden></div>
+
+<nav class="apps" id="apps" aria-label="App links" hidden></nav>
+
+<main class="layout">
+  <section class="steps" aria-labelledby="steps-h">
+    <h2 id="steps-h">Steps</h2>
+    <p class="empty" id="steps-empty">No run to test yet. Start one under Run.</p>
+    <ol class="step-list" id="steps"></ol>
+    <div class="scenario-verdict" id="scenario-verdict" hidden>
+      <h3>Whole scenario</h3>
+      <div class="verdict-row" id="scenario-row"></div>
+    </div>
+  </section>
+
+  <section class="side" aria-label="Run tools">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" id="tab-run" aria-controls="panel-run" aria-selected="true">Run</button>
+      <button type="button" role="tab" id="tab-checks" aria-controls="panel-checks" aria-selected="false">Checks</button>
+      <button type="button" role="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="false">Logs</button>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-run" aria-labelledby="tab-run">
+      <dl class="facts" id="facts"></dl>
+      <form class="up" id="up-form">
+        <h3>Start a run</h3>
+        <label for="up-scenario">Scenario</label>
+        <select id="up-scenario" required></select>
+        <p class="hint" id="up-hint"></p>
+        <label class="check"><input type="checkbox" id="up-dirty"> Include uncommitted changes</label>
+        <label class="check"><input type="checkbox" id="up-force"> Start even when the host is under memory pressure</label>
+        <button type="submit" class="btn primary" id="up-go">Start run</button>
+      </form>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-checks" aria-labelledby="tab-checks" hidden>
+      <div class="panel-actions">
+        <button type="button" class="btn" id="check-all">Run all checks</button>
+      </div>
+      <p class="empty" id="checks-empty">This scenario has no checks.</p>
+      <ul class="check-list" id="checks"></ul>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-logs" aria-labelledby="tab-logs" hidden>
+      <div class="panel-actions">
+        <label for="log-service">Service</label>
+        <select id="log-service"></select>
+        <button type="button" class="btn" id="log-pause" aria-pressed="false">Pause</button>
+      </div>
+      <p class="hint" id="log-status"></p>
+      <pre class="log" id="log" tabindex="0" aria-live="off"></pre>
+    </div>
+  </section>
+</main>
+</body>
+</html>
