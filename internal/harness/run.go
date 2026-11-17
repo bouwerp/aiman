@@ -88,6 +88,9 @@ type Run struct {
 	LastUsed time.Time `json:"last_used"`
 	// BrowserSourcemaps is set shortly after the run is ready (P6e).
 	BrowserSourcemaps *BrowserSourcemaps `json:"browser_sourcemaps,omitempty"`
+	// EVM names the scenario's EVM services, whose traces harness.evm_txs
+	// and harness.evm_trace read (P9).
+	EVM []string `json:"evm,omitempty"`
 }
 
 // Live reports whether the run holds containers.

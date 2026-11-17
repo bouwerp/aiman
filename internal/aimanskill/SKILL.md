@@ -441,6 +441,21 @@ Use `aiman harness db <service> tables`, `aiman harness db <service> rows <table
 - Debugging a check is the operator's: they press Debug check under Checks in the console, or run `aiman harness check <name> --debug`. You get `needs_operator`; offer it to them instead. The run must be a debug run (`up --debug`, or `up --debug-checks` to debug only the checks). A run debugs one target at a time: a second debug check, or one while someone holds the app's debugger without `--take`, is refused with `harness_debug_busy`. A check no debugger attaches to within 10 minutes (`harness.debug.attach_timeout`) is stopped and its result says `harness_debug_timeout`.
 - When a Bun app is refused for its Bun version, debug the code through its Node debug checks instead: the console offers to start the scenario with `--debug-checks`.
 
+### EVM traces
+
+Solidity has no debugger in the console. Instead, the operator reads transaction traces in the console's EVM tab. Declare an anvil node as a service with `evm`:
+
+```yaml
+services:
+  chain:
+    image: ghcr.io/foundry-rs/foundry:v1.8.1
+    evm: {kind: anvil, chain_id: 31337}
+```
+
+- aiman starts `anvil --host 0.0.0.0 --port 8545` on the run's offline network. The app and setup steps reach it at `http://chain:8545` and may send transactions. Add more anvil flags in `evm.args`.
+- The run is offline, so anvil cannot fork a public chain. `--fork-url` and the other fork flags are refused. Deploy the contracts in a setup step or fixture script.
+- `echo '{}' | aiman rpc harness.evm_txs --params-stdin` lists recent transactions, and `echo '{"tx":"0x…"}' | aiman rpc harness.evm_trace --params-stdin` returns one transaction's call tree with decoded revert reasons. Both only read. The edge admits only read methods, so you cannot send a transaction through these calls.
+
 ### Network and capture
 
 The app and the services reach the outside only through the edge proxy at `http://edge:3128`. Serve sets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (the app, the edge and every service) in each container. The proxy reads HTTPS with a certificate authority that it makes for the run. `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and `REQUESTS_CA_BUNDLE` point at its certificate.
@@ -448,6 +463,7 @@ The app and the services reach the outside only through the edge proxy at `http:
 - A run is offline unless the operator sets `harness.network`. Offline, the proxy answers an external call with a scenario stub, or with `502` and the body `aiman: offline sandbox, no stub for <host><path>`.
 - Add a stub for each external API that a scenario calls: `stubs: [{host: api.stripe.com, path: /v1/refunds, status: 200, body_file: testdata/harness/stripe-refund.json}]`. Use `body` for a short answer. The path must match exactly. A stub answers online too.
 - An app that ignores the proxy variables cannot reach the outside, online or offline. A client that pins certificates fails its handshake. Make the HTTP client read the proxy variables and the CA file.
+- A client that ignores `NO_PROXY` (busybox `wget`, for one) sends its calls to the run's own services through the proxy too, and offline those get the 502. Turn its proxy off for those calls, for example `wget -Y off`.
 - Run `aiman harness capture` to see each call with its status and outcome (`stub`, `offline`, `upstream`, `refused`, `error`). Add `--json` for the headers and the bodies. Serve hides secrets in them.
 - An online run never reaches a private address or the host through the proxy. The proxy refuses such a call.
 

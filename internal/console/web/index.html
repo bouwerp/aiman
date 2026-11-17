@@ -11,6 +11,8 @@
 <script src="/debug.js" defer></script>
 <link rel="stylesheet" href="/debug-browser.css">
 <script src="/debug-browser.js" defer></script>
+<link rel="stylesheet" href="/evm.css">
+<script src="/evm.js" defer></script>
 <link rel="stylesheet" href="/db.css">
 <script src="/db.js" defer></script>
 <link rel="stylesheet" href="/net.css">
@@ -49,6 +51,7 @@
       <button type="button" role="tab" id="tab-checks" aria-controls="panel-checks" aria-selected="false">Checks</button>
       <button type="button" role="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="false">Logs</button>
       <button type="button" role="tab" id="tab-debug" aria-controls="panel-debug" aria-selected="false">Debug</button>
+      <button type="button" role="tab" id="tab-evm" aria-controls="panel-evm" aria-selected="false" hidden>EVM</button>
       <button type="button" role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false">Database</button>
       <button type="button" role="tab" id="tab-net" aria-controls="panel-net" aria-selected="false">Network</button>
     </div>
@@ -184,6 +187,35 @@
       </div>
     </div>
 
+    <div class="panel" role="tabpanel" id="panel-evm" aria-labelledby="tab-evm" hidden>
+      <p class="empty" id="evm-empty">This run has no EVM service.</p>
+      <div id="evm" hidden>
+        <p class="hint">Read only: the chain is read through a relay that admits only reads and traces. Nothing here signs, sends or changes state.</p>
+        <div class="panel-actions">
+          <span id="evm-service-row" hidden>
+            <label for="evm-service">Node</label>
+            <select id="evm-service"></select>
+          </span>
+          <label for="evm-blocks">Blocks</label>
+          <select id="evm-blocks">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="64">64</option>
+          </select>
+          <button type="button" class="btn" id="evm-refresh">Refresh</button>
+        </div>
+        <form class="evm-find" id="evm-find">
+          <label for="evm-hash">Trace a transaction</label>
+          <div class="evm-find-row">
+            <input type="text" id="evm-hash" autocomplete="off" spellcheck="false" placeholder="0x…">
+            <button type="submit" class="btn">Trace</button>
+          </div>
+        </form>
+        <p class="hint" id="evm-status" role="status" aria-live="polite"></p>
+        <ul class="evm-txs" id="evm-txs" aria-label="Recent transactions"></ul>
+        <section class="evm-trace" id="evm-trace" aria-label="Call tree"></section>
+      </div>
+    </div>
     <div class="panel" role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>
       <p class="empty" id="db-empty">No run yet.</p>
       <div id="db" hidden>

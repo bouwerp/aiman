@@ -29,7 +29,7 @@ func runHarnessEdge(args []string) error {
 	return serveEdge(opts)
 }
 
-const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]... [--dap-relay name=port=host:port]... [--proxy <inner prefix> --network offline|online --ca-dir <dir> [--stubs <file>] [--capture-body-bytes N] [--upstream-roots <file>]]"
+const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]... [--dap-relay name=port=host:port]... [--evm-relay name=port=host:port]... [--proxy <inner prefix> --network offline|online --ca-dir <dir> [--stubs <file>] [--capture-body-bytes N] [--upstream-roots <file>]]"
 
 type edgeOptions struct {
 	control   string
@@ -71,6 +71,15 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 			return err
 		}
 		spec.Kind = edge.KindDAP
+		opts.relays = append(opts.relays, spec)
+		return nil
+	})
+	fs.Func("evm-relay", "read-only EVM JSON-RPC relay as name=port=host:port (repeatable)", func(v string) error {
+		spec, err := parseEdgeRelay(v)
+		if err != nil {
+			return err
+		}
+		spec.Kind = edge.KindEVM
 		opts.relays = append(opts.relays, spec)
 		return nil
 	})

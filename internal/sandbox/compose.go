@@ -19,6 +19,7 @@ type File struct {
 type Service struct {
 	Image       string            `yaml:"image"`
 	PullPolicy  string            `yaml:"pull_policy,omitempty"`
+	Entrypoint  []string          `yaml:"entrypoint,omitempty"`
 	WorkingDir  string            `yaml:"working_dir,omitempty"`
 	User        string            `yaml:"user,omitempty"`
 	ReadOnly    bool              `yaml:"read_only"`

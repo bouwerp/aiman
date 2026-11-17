@@ -205,9 +205,11 @@ type Service struct {
 	Env      map[string]string `yaml:"env" json:"env,omitempty"`
 	Ready    string            `yaml:"ready" json:"ready,omitempty"`
 	Database *Database         `yaml:"database" json:"database,omitempty"`
-	Caps     []string          `yaml:"caps" json:"caps,omitempty"`
-	Root     bool              `yaml:"root" json:"root,omitempty"`
-	Limits   Limits            `yaml:"limits" json:"limits"`
+	// EVM marks an EVM node the console can read traces from (evm.go).
+	EVM    *EVM     `yaml:"evm" json:"evm,omitempty"`
+	Caps   []string `yaml:"caps" json:"caps,omitempty"`
+	Root   bool     `yaml:"root" json:"root,omitempty"`
+	Limits Limits   `yaml:"limits" json:"limits"`
 }
 
 // Database names the database a service holds. Kind is postgres or sqlite.
