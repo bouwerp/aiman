@@ -26,6 +26,9 @@ import (
 //     one file. The build is reproducible: build/bun-dap/build.sh prints
 //     BunDAPSHA256, CI checks it, and every aiman release carries the file
 //     as the asset bun-dap-<Bun version>.js, listed in its checksums.txt.
+//   - debugpy: the pure-Python wheel debugpy-<v>-py2.py3-none-any.whl from
+//     PyPI. The sum is the one PyPI lists for the file
+//     (https://pypi.org/pypi/debugpy/1.8.22/json, urls[].digests.sha256).
 const (
 	NodeVersion    = "v24.22.3"
 	JSDebugVersion = "v1.140.1"
@@ -34,6 +37,11 @@ const (
 	BunDAPSHA256   = "4f3db5296fee2b9b1b8e0d4e460ab8a6b7b2eae17da95ecfb772b378250708b0"
 	// BunDAPFile is the adapter's file name in its tool directory.
 	BunDAPFile = "bun-dap.js"
+	// DebugpyVersion and DebugpySHA256 pin the debugpy wheel.
+	DebugpyVersion = "v1.8.22"
+	DebugpySHA256  = "a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947"
+	// debugpyURL is the pinned wheel on PyPI's file host.
+	debugpyURL = "https://files.pythonhosted.org/packages/56/3d/c7dc9f35bc9e22cdb53679f844bee40fd5cff871862f60595869a433400d/debugpy-1.8.22-py2.py3-none-any.whl"
 	// aimanReleases is where aiman's release assets download from.
 	aimanReleases = "https://github.com/bouwerp/aiman/releases"
 )
@@ -191,4 +199,45 @@ func BunDAP(release string, p Pin) (Spec, error) {
 		Name: "bun-dap", Version: version, SHA256: sum, URL: url, Format: FormatFile, File: BunDAPFile,
 		Hint: "a build other than this release's needs build/bun-dap/build.sh and harness.debug_tools.bun-dap {version, sha256, url}",
 	}, nil
+}
+
+// Debugpy is the debugpy pure-Python wheel (py2.py3-none-any), unpacked at
+// the tool directory's root so the directory goes on PYTHONPATH as it is.
+// Its native helpers (attach by pid, Windows Cython builds) are left out: a
+// harness run starts the target under debugpy and never attaches to a
+// running pid. A version other than the pin needs the wheel's URL too,
+// because PyPI's file URLs carry a hash path.
+func Debugpy(p Pin) (Spec, error) {
+	version, sum, err := p.resolve("debugpy", DebugpyVersion, DebugpySHA256)
+	if err != nil {
+		return Spec{}, err
+	}
+	def := debugpyURL
+	if version != DebugpyVersion {
+		if p.URL == "" {
+			return Spec{}, fmt.Errorf("harness.debug_tools.debugpy %s needs url, the wheel's files.pythonhosted.org URL listed at https://pypi.org/project/debugpy/%s/#files", version, strings.TrimPrefix(version, "v"))
+		}
+		def = ""
+	}
+	url, err := p.url("debugpy", def)
+	if err != nil {
+		return Spec{}, err
+	}
+	return Spec{
+		Name: "debugpy", Version: version, SHA256: sum, URL: url, Format: FormatZip,
+		Keep: keepDebugpy,
+	}, nil
+}
+
+// keepDebugpy keeps the wheel's Python package and its license, without
+// native binaries.
+func keepDebugpy(rel string) bool {
+	if !strings.HasPrefix(rel, "debugpy/") {
+		return strings.HasSuffix(rel, ".dist-info/licenses/LICENSE")
+	}
+	switch strings.ToLower(filepath.Ext(rel)) {
+	case ".so", ".dll", ".dylib", ".exe", ".pyd", ".pdb":
+		return false
+	}
+	return true
 }
