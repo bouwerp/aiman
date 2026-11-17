@@ -474,7 +474,13 @@ components:
             (data.lang) for an app.debug.lang with no adapter on the host
             (go, node, bun and python have one).
             harness.debug answers needs_operator for a session's take or
-            release. harness.verdict answers
+            release. harness.check with debug answers needs_operator for a
+            session caller, invalid_params on a run that is not a debug run
+            or for a check with no debug block, harness_debug_unsupported
+            (reason check_lang) for a go check, and harness_debug_busy
+            (data.target app or check:<name>) while another debug check runs
+            or, without take, while a client holds the app's debugger.
+            harness.verdict answers
             needs_operator for a session caller, and every harness method
             answers session_scope for a session outside the caller's tree.
           enum:
@@ -536,6 +542,7 @@ components:
             - harness_image_too_large
             - harness_image_not_pending
             - harness_debug_unsupported
+            - harness_debug_busy
             - server_busy
             - rate_limited
             - host_under_pressure
@@ -980,6 +987,7 @@ components:
             Free text. session.create or session.rename; session.create uses
             the branch when empty, and q1, q2 and so on for quick.
             harness.check: the one check to run; empty runs every check.
+            Required with debug.
         run:
           type: string
           description: >
@@ -1001,7 +1009,21 @@ components:
           description: >
             harness.up: run the app under the debug adapter of app.debug.lang
             (go: dlv dap from the pinned, host-built Delve) on the run's debug
-            network; the edge relays it as the port named dap.
+            network; the edge relays it as the port named dap. With no
+            app.debug, a scenario with debug checks gets a run that debugs
+            only its checks. harness.check: run the named check as the run's
+            debug target (operator only; see HarnessCheckResult).
+        debug_checks:
+          type: boolean
+          description: >
+            harness.up: a debug run that debugs only the scenario's checks;
+            the app runs plainly whatever app.debug says (the fallback when
+            the app's runtime cannot be debugged).
+        take:
+          type: boolean
+          description: >
+            harness.check with debug: close a client holding the app's
+            debugger instead of answering harness_debug_busy.
         op:
           type: string
           enum: [status, take, release]
@@ -1754,8 +1776,9 @@ components:
         harness_too_large sum and limit (bytes), harness_dirty paths,
         harness_image_missing image, harness_service_failed service and
         tail (the end of the failed step's output), and
+        harness_debug_busy target (app, or check:<name>), and
         harness_debug_unsupported lang, plus reason when the language has an
-        adapter that cannot debug this app (musl, bun_version for a Bun of
+        adapter that cannot debug this app (check_lang for a go check, musl, bun_version for a Bun of
         another minor version than the host's Bun adapter, python_version
         for an image with no CPython 3.9 or later, or debugpy for an
         interpreter that cannot import the mounted debugpy).
@@ -1763,6 +1786,8 @@ components:
         lang:
           type: string
         reason:
+          type: string
+        target:
           type: string
         errors:
           type: array
@@ -1819,7 +1844,11 @@ components:
       type: object
       description: >
         One scenario check and its latest result. exit is absent until it
-        ran; 0 is a pass. output is the redacted tail (60 lines).
+        ran; 0 is a pass. output is the redacted tail (60 lines). debug_lang
+        is the lang of the check's debug block. debug marks a result of a
+        debug check and debugging is set while one runs; error_code
+        harness_debug_timeout (with error) is a debug check no debugger
+        attached to in time, which has no exit.
       required: [name, run]
       properties:
         name:
@@ -1839,6 +1868,40 @@ components:
           format: date-time
         output:
           type: string
+        debug_lang:
+          type: string
+        debug:
+          type: boolean
+        debugging:
+          type: boolean
+        error_code:
+          type: string
+        error:
+          type: string
+    HarnessDebugCheck:
+      type: object
+      description: >
+        The check a debug run's debugger targets while it runs. state is
+        waiting until a debugger client holds the dap relay, then attached;
+        launch is the DAP request for it; attach_by is when it is stopped if
+        nobody attached (harness.debug.attach_timeout, default 10m).
+      required: [name, lang, state, launch, started_at, attach_by]
+      properties:
+        name:
+          type: string
+        lang:
+          type: string
+        state:
+          type: string
+          enum: [waiting, attached]
+        launch:
+          $ref: "#/components/schemas/HarnessDebugLaunch"
+        started_at:
+          type: string
+          format: date-time
+        attach_by:
+          type: string
+          format: date-time
     HarnessVerdict:
       type: object
       description: >
@@ -1910,6 +1973,11 @@ components:
           type: boolean
         debug_launch:
           $ref: "#/components/schemas/HarnessDebugLaunch"
+        debug_checks:
+          type: boolean
+          description: The run debugs only its checks; it has no debug_launch.
+        debug_check:
+          $ref: "#/components/schemas/HarnessDebugCheck"
         failed_step:
           type: string
         failed_service:
@@ -2150,6 +2218,14 @@ components:
         only the one named, each in a fresh app container on the inner
         network, on a ready run (else harness_not_running). Up to 5 minutes
         per check and 10 in all. Off the device allowlist.
+        harness.check {run?, name, debug: true, take?} (operator only) runs
+        the named check as a ready debug run's debug target: a fresh app
+        container on the debug network at the check's own address, under its
+        debug block's adapter (a node check has the pinned Node first on
+        PATH), with the dap relay pointed at it. It answers once the check
+        started, with debug true, the check (debugging) and debug_check; the
+        result lands in the run's checks when the check ends, and the relay
+        points back at the app.
       required: [type, run, checks]
       properties:
         type:
@@ -2157,6 +2233,10 @@ components:
           const: harness_check
         run:
           type: string
+        debug:
+          type: boolean
+        debug_check:
+          $ref: "#/components/schemas/HarnessDebugCheck"
         checks:
           type: array
           items:
@@ -2264,6 +2344,14 @@ components:
             - type: "null"
         dropped:
           $ref: "#/components/schemas/DAPHolder"
+        target:
+          type: string
+          enum: [app, check, ""]
+          description: >
+            What the debugger serves now; empty in a run that debugs only
+            its checks while none runs. launch is that target's request.
+        check:
+          type: string
         launch:
           $ref: "#/components/schemas/HarnessDebugLaunch"
         host_port:

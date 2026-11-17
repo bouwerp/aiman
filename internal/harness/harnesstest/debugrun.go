@@ -9,9 +9,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -295,8 +297,17 @@ func edgeBinary(t *testing.T) string {
 			edgeErr = fmt.Errorf("build aiman: %w: %s", err, out)
 			return
 		}
-		edgePath = filepath.Join(dir, "aiman-edge")
+		// The name carries the binary's hash: test runs in other worktrees
+		// share this cache, and a fixed name let one run swap another's edge.
+		sum, err := fileSHA256(tmp.Name())
+		if err != nil {
+			_ = os.Remove(tmp.Name())
+			edgeErr = err
+			return
+		}
+		edgePath = filepath.Join(dir, "aiman-edge-"+sum[:16])
 		edgeErr = os.Rename(tmp.Name(), edgePath)
+		pruneEdgeBinaries(dir, edgePath)
 	})
 	if edgeErr != nil {
 		t.Fatal(edgeErr)
@@ -562,4 +573,31 @@ func HitBreakpoint(t *testing.T, s *Session, launch harness.DebugLaunch) string 
 	}
 	s.Must("continue", map[string]any{"threadId": tid})
 	return fmt.Sprint(src["path"])
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: the test's own build output
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// pruneEdgeBinaries removes edge builds other than keep that are over a day
+// old, so a binary another run may still mount is left alone.
+func pruneEdgeBinaries(dir, keep string) {
+	old, _ := filepath.Glob(filepath.Join(dir, "aiman-edge*"))
+	for _, p := range old {
+		if p == keep {
+			continue
+		}
+		if fi, err := os.Stat(p); err == nil && time.Since(fi.ModTime()) > 24*time.Hour {
+			_ = os.Remove(p)
+		}
+	}
 }

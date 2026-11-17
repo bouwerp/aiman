@@ -65,6 +65,16 @@ func (c Client) DAPDrop(ctx context.Context, name string) (*DAPHolder, error) {
 	return resp.Dropped, nil
 }
 
+// DAPTarget points the DAP relay name at target (empty for none), closing
+// its holder, and returns who held it.
+func (c Client) DAPTarget(ctx context.Context, name, target string) (*DAPHolder, error) {
+	resp, err := c.call(ctx, Request{Op: OpDAPTarget, Name: name, Target: target})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Dropped, nil
+}
+
 // Capture reads up to limit flows with an ID above after.
 func (c Client) Capture(ctx context.Context, after int64, limit int) ([]Flow, CaptureInfo, error) {
 	resp, err := c.call(ctx, Request{Op: OpCapture, After: after, Limit: limit})

@@ -237,7 +237,7 @@ func bunVersionError(what, minor string) *Error {
 		", but this host's Bun debug adapter (bun-dap) speaks the inspector protocol of Bun " + minor +
 		" only, and an adapter for another minor version misreads it. Run the app on Bun " + minor +
 		".x, or point harness.debug_tools.bun-dap at a build for its minor (build/bun-dap/build.sh). " +
-		"The fallback is to debug the code under Node as a Vitest check (checks[].debug with lang node, piece P6d)."}
+		"The fallback is to debug the code under Node as a Vitest check: give the check debug {lang: node, run: ...}, start the scenario with harness up --debug-checks, and debug the check with harness check <name> --debug."}
 }
 
 // bunMinor is the major.minor of a vX.Y.Z version.

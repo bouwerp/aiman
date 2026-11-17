@@ -85,13 +85,17 @@ type harnessParams struct {
 	Note     string `json:"note"`
 	Dirty    bool   `json:"dirty"`
 	Debug    bool   `json:"debug"`
-	Force    bool   `json:"force"`
-	Wait     bool   `json:"wait"`
-	Op       string `json:"op"`
-	Path     string `json:"path"`
-	Offset   int64  `json:"offset"`
-	Limit    int    `json:"limit"`
-	After    int64  `json:"after_id"`
+	// DebugChecks starts a run that debugs only its checks; Take lets a
+	// debug check close a client holding the app's debugger.
+	DebugChecks bool   `json:"debug_checks"`
+	Take        bool   `json:"take"`
+	Force       bool   `json:"force"`
+	Wait        bool   `json:"wait"`
+	Op          string `json:"op"`
+	Path        string `json:"path"`
+	Offset      int64  `json:"offset"`
+	Limit       int    `json:"limit"`
+	After       int64  `json:"after_id"`
 }
 
 // dispatchHarness routes the harness.* methods.
@@ -120,6 +124,11 @@ func (s *Server) dispatchHarness(ctx context.Context, req Request) Response {
 		return s.handleHarnessVerdict(ctx, req, p)
 	case "harness.debug":
 		return s.handleHarnessDebug(ctx, req, p)
+	case "harness.check":
+		if p.Debug {
+			return s.handleHarnessDebugCheck(ctx, req, p)
+		}
+		return s.handleHarnessRunCall(ctx, req, p)
 	case "harness.files":
 		return s.handleHarnessFiles(ctx, req, p)
 	case "harness.file":
@@ -240,7 +249,7 @@ func (s *Server) handleHarnessUp(ctx context.Context, req Request, p harnessPara
 	m := s.harness.d.Manager
 	run, err := m.Up(ctx, harness.UpRequest{
 		Session: sess.ID, Repo: src.repo, SHA: src.sha, Scenario: p.Scenario,
-		Dirty: p.Dirty, SkipCleanCheck: src.skipCleanCheck, Debug: p.Debug,
+		Dirty: p.Dirty, SkipCleanCheck: src.skipCleanCheck, Debug: p.Debug, DebugChecks: p.DebugChecks,
 		Override: src.override, AppImageOverride: src.appImage,
 		Actor: s.harnessActor(ctx, req),
 	})

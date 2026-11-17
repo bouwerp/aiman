@@ -42,6 +42,38 @@ func TestHarnessDebugOps(t *testing.T) {
 	wantHarnessCode(t, "other session", rpc(t, srv, "s2", "harness.debug", map[string]any{"run": run.ID}), CodeSessionScope)
 }
 
+// TestDebugCheckNeedsOperator: a debug check waits for a person's debugger
+// and can take the run's debugger lease, so a session caller is refused
+// before anything else; the operator reaches the manager.
+func TestDebugCheckNeedsOperator(t *testing.T) {
+	srv, _ := harnessServer(t, harnessSetup{debug: true})
+	run := harnessUp(t, srv, "s1", map[string]any{"session": "s1", "scenario": "plain", "debug": true, "wait": true})
+	for _, params := range []map[string]any{
+		{"run": run.ID, "name": "fake", "debug": true},
+		{"run": run.ID, "name": "fake", "debug": true, "take": true},
+		{"name": "fake", "debug": true},
+		{"run": "nope", "debug": true},
+	} {
+		wantHarnessCode(t, "session caller", rpc(t, srv, "s1", "harness.check", params), CodeNeedsOperator)
+	}
+	wantHarnessCode(t, "no name", rpc(t, srv, "", "harness.check", map[string]any{"run": run.ID, "debug": true}), CodeInvalidParams)
+	wantHarnessCode(t, "unknown check", rpc(t, srv, "", "harness.check", map[string]any{"run": run.ID, "name": "nope", "debug": true}), CodeInvalidParams)
+	// The operator's call reaches the adapter registry: this host has no
+	// python adapter.
+	data := wantHarnessCode(t, "python check", rpc(t, srv, "", "harness.check", map[string]any{"run": run.ID, "name": "fake", "debug": true}), harness.CodeDebugUnsupported)
+	if data["lang"] != "python" {
+		t.Fatalf("data = %v", data)
+	}
+	// A plain check of the same run still answers a session.
+	var out struct {
+		Checks []harness.CheckRun `json:"checks"`
+	}
+	rpcOK(t, srv, "s1", "harness.check", map[string]any{"run": run.ID, "name": "fake"}, &out)
+	if len(out.Checks) != 1 || out.Checks[0].DebugLang != "python" || out.Checks[0].Debug {
+		t.Fatalf("plain check = %+v", out)
+	}
+}
+
 func TestHarnessSourceFiles(t *testing.T) {
 	srv, dir := harnessServer(t, harnessSetup{})
 	if err := os.MkdirAll(filepath.Join(dir, "cmd"), 0o750); err != nil {

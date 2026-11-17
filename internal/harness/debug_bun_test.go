@@ -237,7 +237,7 @@ func TestBunMinorMismatch(t *testing.T) {
 	if !errors.As(err, &he) || he.Code != CodeDebugUnsupported || he.Reason != ReasonBunVersion || he.Data()["reason"] != ReasonBunVersion {
 		t.Fatalf("1.4.4 on a 1.3 adapter: %v", err)
 	}
-	for _, want := range []string{"Bun 1.4.4", "Bun 1.3", "Vitest", "Node", "P6d"} {
+	for _, want := range []string{"Bun 1.4.4", "Bun 1.3", "Vitest", "Node", "--debug-checks"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q does not name %q", err, want)
 		}

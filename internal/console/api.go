@@ -276,6 +276,10 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Run  string `json:"run"`
 		Name string `json:"name"`
+		// Debug runs the named check as the run's debug target; Take
+		// closes a client holding the app's debugger (the page's own).
+		Debug bool `json:"debug"`
+		Take  bool `json:"take"`
 	}
 	if !decodeBody(w, r, &b) || !s.sameRun(w, b.Run) {
 		return
@@ -284,7 +288,19 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	if n := strings.TrimSpace(b.Name); n != "" {
 		params["name"] = n
 	}
-	s.relay(w, r, "harness.check", params)
+	if b.Debug {
+		if params["name"] == nil {
+			badParams(w, "name the check to debug")
+			return
+		}
+		params["debug"] = true
+		if b.Take {
+			params["take"] = true
+		}
+	}
+	if _, ok := s.relay(w, r, "harness.check", params); ok && b.Debug {
+		s.refresh(r.Context())
+	}
 }
 
 func (s *Server) handleUp(w http.ResponseWriter, r *http.Request) {
@@ -293,6 +309,8 @@ func (s *Server) handleUp(w http.ResponseWriter, r *http.Request) {
 		Dirty    bool   `json:"dirty"`
 		Force    bool   `json:"force"`
 		Debug    bool   `json:"debug"`
+		// DebugChecks starts a run that debugs only its checks.
+		DebugChecks bool `json:"debug_checks"`
 	}
 	if !decodeBody(w, r, &b) {
 		return
@@ -315,6 +333,9 @@ func (s *Server) handleUp(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.Debug {
 		params["debug"] = true
+	}
+	if b.DebugChecks {
+		params["debug_checks"] = true
 	}
 	raw, ok := s.relay(w, r, "harness.up", params)
 	if !ok {

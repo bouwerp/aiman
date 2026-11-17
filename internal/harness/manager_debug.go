@@ -22,13 +22,25 @@ const (
 // DebugState is a debug run's debugger: who holds it, how to launch the app
 // and the host port the edge publishes it on.
 type DebugState struct {
-	Run      string          `json:"run"`
-	Holder   *edge.DAPHolder `json:"holder"`
-	Dropped  *edge.DAPHolder `json:"dropped,omitempty"`
-	Launch   *DebugLaunch    `json:"launch"`
-	HostPort int             `json:"host_port"`
-	Refused  int64           `json:"refused"`
+	Run    string          `json:"run"`
+	Holder *edge.DAPHolder `json:"holder"`
+	// Dropped is the client a take over or release closed.
+	Dropped *edge.DAPHolder `json:"dropped,omitempty"`
+	// Target is what the debugger serves now: TargetApp, TargetCheck (Check
+	// names it) or empty in a run that debugs only its checks while none
+	// runs. Launch is the target's DAP request.
+	Target   string       `json:"target"`
+	Check    string       `json:"check,omitempty"`
+	Launch   *DebugLaunch `json:"launch"`
+	HostPort int          `json:"host_port"`
+	Refused  int64        `json:"refused"`
 }
+
+// Debug targets of DebugState.Target.
+const (
+	TargetApp   = "app"
+	TargetCheck = "check"
+)
 
 // Debug answers a debug run's debugger state, or drops its client for take
 // over or release.
@@ -51,7 +63,13 @@ func (m *Manager) Debug(ctx context.Context, id, op string, actor domain.EventAc
 	if run.State != StateReady {
 		return DebugState{}, &Error{Code: CodeNotRunning, Msg: fmt.Sprintf("debug run %s is %s, not ready", id, run.State)}
 	}
-	st := DebugState{Run: id, Launch: run.DebugLaunch}
+	st := DebugState{Run: id, Launch: run.TargetLaunch()}
+	switch {
+	case run.DebugCheck != nil:
+		st.Target, st.Check = TargetCheck, run.DebugCheck.Name
+	case run.DebugLaunch != nil:
+		st.Target = TargetApp
+	}
 	for _, p := range run.Ports {
 		if p.Name == RelayDAP {
 			st.HostPort = p.HostPort
