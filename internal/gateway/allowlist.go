@@ -4,7 +4,10 @@ package gateway
 // refused. The host token (the TUI on the laptop) is not filtered. A device
 // acts as the operator: the gateway calls serve with no caller.
 var (
-	// deviceReadMethods only read state.
+	// deviceReadMethods only read state. harness.list, harness.status and
+	// harness.result are here because the phone only reads the harness: every
+	// other harness method starts, stops or judges a run, or reads its logs,
+	// and stays off the device list.
 	deviceReadMethods = []string{
 		"ping",
 		"session.list", "session.get", "session.read", "session.wait", "session.log",
@@ -17,6 +20,7 @@ var (
 		"agents.status",
 		"repo.list", "host.stats", "host.version", "host.daemons", "resources.get",
 		"aws.status", "aws.login_status", "aws.log",
+		"harness.list", "harness.status", "harness.result",
 	}
 	// deviceWriteMethods change state but cannot publish outside the host.
 	// todo.mirror is left out: it stands for the agent's own task list, which

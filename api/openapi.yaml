@@ -437,7 +437,25 @@ components:
             host_under_pressure while the host pressure gate is closed, with
             data.retry_after_ms (30000), memory_full_avg10, memory_some_avg10
             and since; the CLI does not retry it, and a caller waits at least
-            retry_after_ms before trying again.
+            retry_after_ms before trying again. harness.up joins them, and
+            force passes the gate for the operator only. The harness.*
+            methods answer unavailable on a serve without the harness
+            (harness.enabled false, or no docker). Their refusals:
+            harness_no_file (no .aiman/harness.yaml at the commit and no
+            repos.<slug>.harness), harness_invalid (data.errors),
+            harness_unknown_scenario, harness_submodule (data.path),
+            harness_too_large (the run's memory sum is over
+            harness.run_memory; data.sum and data.limit in bytes),
+            harness_dirty (uncommitted or untracked files without dirty;
+            data.paths), harness_image_missing (an image not in
+            harness.allowed_images or not on the host, which never pulls;
+            data.image), harness_running (the session already has a live
+            run), harness_busy (harness.max_runs live runs on the host),
+            harness_not_running (no run, or the run is not ready) and
+            harness_service_failed (data.service and data.tail). harness.up
+            with debug is invalid_params. harness.verdict answers
+            needs_operator for a session caller, and every harness method
+            answers session_scope for a session outside the caller's tree.
           enum:
             - invalid_params
             - not_found
@@ -480,6 +498,17 @@ components:
             - ci_running
             - ci_dirty
             - ci_no_list
+            - harness_no_file
+            - harness_invalid
+            - harness_unknown_scenario
+            - harness_submodule
+            - harness_too_large
+            - harness_dirty
+            - harness_image_missing
+            - harness_running
+            - harness_busy
+            - harness_not_running
+            - harness_service_failed
             - server_busy
             - rate_limited
             - host_under_pressure
@@ -497,6 +526,7 @@ components:
             - $ref: "#/components/schemas/RetryAfterData"
             - $ref: "#/components/schemas/NeedsDestructiveData"
             - $ref: "#/components/schemas/HostUnderPressureData"
+            - $ref: "#/components/schemas/HarnessRefusalData"
     HostUnderPressureData:
       type: object
       description: The detail of host_under_pressure, the gate when it answered.
@@ -722,6 +752,7 @@ components:
           type: string
         lines:
           type: integer
+          description: host.logs and harness.logs; default 200, at most 1000.
         daemon:
           type: string
           enum: [serve, gateway, trigger]
@@ -737,8 +768,8 @@ components:
             Override the default refusal. Phone UX confirms before sending
             force true. Against today's unix socket, answering a
             waiting_input session also requires force true. On
-            session.create, review.run, review.coverage, review.fix and
-            review.assess it passes a closed pressure gate; only the
+            session.create, review.run, review.coverage, review.fix,
+            review.assess and harness.up it passes a closed pressure gate; only the
             operator may send it there (a session gets needs_operator).
         token:
           type: string
@@ -749,7 +780,8 @@ components:
             Target of session.restart and session.terminate (id or name). Every
             method that takes id also takes session; id wins when both are sent,
             except on session.transcript_item and session.process_output, where
-            session names the session and id the item or process.
+            session names the session and id the item or process. The
+            harness.* methods take session (default: the caller) and run.
         subagent:
           type: string
           description: >
@@ -842,7 +874,45 @@ components:
           description: session.create, the agent's first prompt, delivered before create answers.
         name:
           type: string
-          description: Free text. session.create or session.rename; session.create uses the branch when empty, and q1, q2 and so on for quick.
+          description: >
+            Free text. session.create or session.rename; session.create uses
+            the branch when empty, and q1, q2 and so on for quick.
+            harness.check: the one check to run; empty runs every check.
+        run:
+          type: string
+          description: >
+            harness.status, harness.result, harness.check, harness.logs,
+            harness.down and harness.verdict: the run id. Absent takes the
+            session's live run, and for status, result, logs and verdict its
+            newest kept run when none is live.
+        scenario:
+          type: string
+          description: harness.up, required. A scenario id from harness.list.
+        dirty:
+          type: boolean
+          description: >
+            harness.up: run the working tree with its uncommitted and
+            untracked files. The run and its verdicts record HEAD plus a
+            sha256 of the changes.
+        debug:
+          type: boolean
+          description: harness.up; refused with invalid_params until the debugger lands.
+        wait:
+          type: boolean
+          description: "harness.up: hold the call up to 20s for the run to leave starting."
+        service:
+          type: string
+          description: harness.logs, required. app, edge or a service name of the scenario.
+        step:
+          type: integer
+          description: harness.verdict; 0 or absent is the whole scenario, 1 and up a step.
+        result:
+          type: string
+          enum: [pass, fail, skip]
+          description: harness.verdict, required.
+        note:
+          type: string
+          description: harness.verdict; the first line of a fail's note becomes the to-do text.
         tier:
           type: string
           enum: [smart, worker]
@@ -909,6 +979,12 @@ components:
             - $ref: "#/components/schemas/ReviewPushResult"
             - $ref: "#/components/schemas/ReviewAssessResult"
             - $ref: "#/components/schemas/ReviewApprovedResult"
+            - $ref: "#/components/schemas/HarnessRunResult"
+            - $ref: "#/components/schemas/HarnessListResult"
+            - $ref: "#/components/schemas/HarnessResultResult"
+            - $ref: "#/components/schemas/HarnessCheckResult"
+            - $ref: "#/components/schemas/HarnessLogsResult"
+            - $ref: "#/components/schemas/HarnessVerdictResult"
         error:
           $ref: "#/components/schemas/RpcError"
     PongResult:
@@ -1532,6 +1608,403 @@ components:
         daemon:
           type: string
           enum: [serve, gateway, trigger]
+    HarnessRefusalData:
+      type: object
+      description: >
+        The detail of a harness refusal. harness_invalid carries errors (every
+        problem in the harness file), harness_submodule path,
+        harness_too_large sum and limit (bytes), harness_dirty paths,
+        harness_image_missing image, and harness_service_failed service and
+        tail (the end of the failed step's output).
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+        path:
+          type: string
+        sum:
+          type: integer
+          format: int64
+        limit:
+          type: integer
+          format: int64
+        paths:
+          type: array
+          items:
+            type: string
+        image:
+          type: string
+        service:
+          type: string
+        tail:
+          type: string
+    HarnessRunPort:
+      type: object
+      description: >
+        A relayed app port. The edge publishes it on the host's 127.0.0.1 at
+        host_port; aiman harness console forwards it to the laptop.
+      required: [name, service, host_port]
+      properties:
+        name:
+          type: string
+        service:
+          type: string
+        host_port:
+          type: integer
+    HarnessStep:
+      type: object
+      description: One step for the tester, with its latest verdict. n counts from 1.
+      required: [n, do]
+      properties:
+        n:
+          type: integer
+        do:
+          type: string
+        expect:
+          type: string
+        result:
+          type: string
+          enum: [pass, fail, skip]
+        note:
+          type: string
+    HarnessCheck:
+      type: object
+      description: >
+        One scenario check and its latest result. exit is absent until it
+        ran; 0 is a pass. output is the redacted tail (60 lines).
+      required: [name, run]
+      properties:
+        name:
+          type: string
+        run:
+          type: string
+          description: The command, as the harness file has it.
+        exit:
+          type: integer
+        at:
+          type: string
+          format: date-time
+        output:
+          type: string
+    HarnessVerdict:
+      type: object
+      description: >
+        A tester's pass, fail or skip for a step (0 is the whole scenario).
+        sha, dirty and diff_sha256 name the tree it judged.
+      required: [run, step, result, sha, dirty, at]
+      properties:
+        run:
+          type: string
+        step:
+          type: integer
+        result:
+          type: string
+          enum: [pass, fail, skip]
+        note:
+          type: string
+        by:
+          type: string
+        sha:
+          type: string
+        dirty:
+          type: boolean
+        diff_sha256:
+          type: string
+        at:
+          type: string
+          format: date-time
+    HarnessRun:
+      type: object
+      description: >
+        One start of one scenario at one commit for one session. A dirty run
+        ran the working tree: sha is HEAD and diff_sha256 hashes the changes
+        and untracked files. source is config when repos.<slug>.harness
+        replaced the repository file. failed_step, failed_service and error
+        explain a failed run. last_used is the last call that touched the
+        run; harness.idle_timeout counts from it.
+      required: [id, session, scenario, sha, dirty, source, network, state, debug, ports, steps, checks, started_at, last_used]
+      properties:
+        id:
+          type: string
+        session:
+          type: string
+        scenario:
+          type: string
+        title:
+          type: string
+        sha:
+          type: string
+        dirty:
+          type: boolean
+        diff_sha256:
+          type: string
+        source:
+          type: string
+          enum: [file, config]
+        network:
+          type: string
+          enum: [offline]
+        state:
+          type: string
+          enum: [starting, ready, failed, stopped]
+        debug:
+          type: boolean
+        failed_step:
+          type: string
+        failed_service:
+          type: string
+        error:
+          type: string
+        ports:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessRunPort"
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessStep"
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessCheck"
+        result:
+          type: string
+          enum: [pass, fail, skip]
+          description: The verdict on the whole scenario (step 0).
+        verdicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessVerdict"
+        services:
+          type: array
+          items:
+            type: string
+        images:
+          type: object
+          additionalProperties:
+            type: string
+          description: Each container's image ID.
+        inner_subnet:
+          type: string
+        outer_subnet:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        ready_at:
+          type: string
+          format: date-time
+        stopped_at:
+          type: string
+          format: date-time
+        stop_reason:
+          type: string
+          enum: [down, idle, session_gone, serve_restart]
+        last_used:
+          type: string
+          format: date-time
+    HarnessRunResult:
+      type: object
+      description: >
+        harness.up {session?, scenario, dirty?, force?, wait?},
+        harness.status {session? | run?} and harness.down {session? | run?}.
+        session defaults to the caller. harness.up answers a starting run;
+        with wait it holds the call up to 20s for the run to leave starting
+        and answers harness_service_failed when a service did not become
+        ready. harness.status takes the run named, else the session's live
+        run, else its newest kept run. harness.down takes the live run down
+        and removes its volumes; the result files stay. harness.status is a
+        device read method; harness.up and harness.down are off the device
+        allowlist.
+      required: [type, run]
+      properties:
+        type:
+          type: string
+          const: harness_run
+        run:
+          $ref: "#/components/schemas/HarnessRun"
+    HarnessResultResult:
+      type: object
+      description: >
+        harness.result {session? | run?}: the run with its verdicts and
+        checks, live or kept (serve keeps the newest 5 runs per session). A
+        device read method.
+      required: [type, run]
+      properties:
+        type:
+          type: string
+          const: harness_result
+        run:
+          $ref: "#/components/schemas/HarnessRun"
+    HarnessScenario:
+      type: object
+      description: One scenario of the harness file.
+      required: [id]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        services:
+          type: array
+          items:
+            type: string
+        setup:
+          type: array
+          items:
+            type: object
+            properties:
+              run:
+                type: string
+        fixtures:
+          type: array
+          items:
+            type: object
+            properties:
+              sql:
+                type: string
+              sqlite:
+                type: string
+              script:
+                type: string
+              into:
+                type: string
+        steps:
+          type: array
+          items:
+            type: object
+            required: [do]
+            properties:
+              do:
+                type: string
+              expect:
+                type: string
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, run]
+            properties:
+              name:
+                type: string
+              run:
+                type: string
+        stubs:
+          type: array
+          items:
+            type: object
+            properties:
+              host:
+                type: string
+              path:
+                type: string
+              status:
+                type: integer
+              body:
+                type: string
+              body_file:
+                type: string
+    HarnessListResult:
+      type: object
+      description: >
+        harness.list {session?}: the scenarios of the session's harness at
+        HEAD (a review session's PR head) and the session's runs, newest
+        first. A missing or broken harness file leaves scenarios empty and
+        sets file_error; the runs are still listed. A device read method.
+      required: [type, session, runs, scenarios]
+      properties:
+        type:
+          type: string
+          const: harness_list
+        session:
+          type: string
+        source:
+          type: string
+          enum: [file, config]
+        sha:
+          type: string
+        scenarios:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessScenario"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessRun"
+        file_error:
+          type: object
+          required: [code, message]
+          description: Why the harness file could not be read; code is a harness refusal code or invalid_params.
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            data:
+              $ref: "#/components/schemas/HarnessRefusalData"
+    HarnessCheckResult:
+      type: object
+      description: >
+        harness.check {session? | run?, name?}: run the scenario's checks, or
+        only the one named, each in a fresh app container on the inner
+        network, on a ready run (else harness_not_running). Up to 5 minutes
+        per check and 10 in all. Off the device allowlist.
+      required: [type, run, checks]
+      properties:
+        type:
+          type: string
+          const: harness_check
+        run:
+          type: string
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessCheck"
+    HarnessLogsResult:
+      type: object
+      description: >
+        harness.logs {session? | run?, service, lines?}: the last lines
+        (default 200, at most 1000) of one container's output, live or saved
+        when the run stopped. Lines pass serve's redaction, as for host.logs.
+        Off the device allowlist.
+      required: [type, run, service, lines, redacted]
+      properties:
+        type:
+          type: string
+          const: harness_logs
+        run:
+          type: string
+        service:
+          type: string
+        lines:
+          type: array
+          items:
+            type: string
+        redacted:
+          type: integer
+    HarnessVerdictResult:
+      type: object
+      description: >
+        harness.verdict {session? | run?, step?, result, note?}: the
+        operator's verdict on a step (step 0 or absent is the whole scenario)
+        of a live or kept run. A session caller gets needs_operator. A fail
+        adds or rewrites the to-do "Harness: <scenario> step <n>: <first line
+        of note>" (Ref harness:<scenario>:<n>, or harness:<scenario>:all for
+        step 0) on the run's session, returns its id in todo, and steers a
+        note to its agent. Off the device allowlist.
+      required: [type, verdict, run]
+      properties:
+        type:
+          type: string
+          const: harness_verdict
+        verdict:
+          $ref: "#/components/schemas/HarnessVerdict"
+        run:
+          $ref: "#/components/schemas/HarnessRun"
+        todo:
+          type: string
+          description: The to-do a fail opened or rewrote; absent for pass and skip, empty when the session is gone.
     RPCCount:
       type: object
       required: [name, count, avg_us]
