@@ -37,6 +37,9 @@ type ScanRequest struct {
 	Timeout time.Duration
 }
 
+// ErrScannerUnavailable is a scanner image the host could not build or find.
+var ErrScannerUnavailable = errors.New("scanner image unavailable")
+
 // Scanner runs scan stages.
 type Scanner interface {
 	Scan(ctx context.Context, req ScanRequest) (StageResult, error)
@@ -164,7 +167,7 @@ func (s DockerScanner) Scan(ctx context.Context, req ScanRequest) (StageResult, 
 	image := s.Image
 	if s.ImageFor != nil {
 		if image, err = s.ImageFor(ctx); err != nil {
-			return StageResult{}, fmt.Errorf("scanner image: %w", err)
+			return StageResult{}, fmt.Errorf("%w: %w", ErrScannerUnavailable, err)
 		}
 	}
 	args := RunArgs(ContainerOptions{

@@ -123,7 +123,10 @@ type Record struct {
 	Scan       Scan        `json:"scan"`
 	Signature  string      `json:"signature,omitempty"`
 	// Reasons say why a digest is blocked, failed or stale.
-	Reasons       []string `json:"reasons,omitempty"`
+	Reasons []string `json:"reasons,omitempty"`
+	// Retryable marks a failure of the host, not of the image: the next
+	// caller starts the vetting again.
+	Retryable     bool     `json:"retryable,omitempty"`
 	ApprovedBy    string   `json:"approved_by,omitempty"`
 	Approver      string   `json:"approver,omitempty"`
 	Quote         string   `json:"quote,omitempty"`

@@ -361,12 +361,34 @@ func TestQueueWaitsForPressureGate(t *testing.T) {
 }
 
 func TestStaleDatabasesFailVetting(t *testing.T) {
+	fresh := images.ErrDBStale
 	f := newVetFixture(t, func(o *images.VetterOptions) {
-		o.DBFresh = func() error { return images.ErrDBStale }
+		o.DBFresh = func() error { return fresh }
 	})
 	img := f.push("redis:7", "a")
 	_, _ = f.ensure(t, "redis:7", "s1", false)
-	if r := f.record(t, img); r.State != images.StateFailed {
-		t.Fatalf("state = %s, want failed", r.State)
+	if r := f.record(t, img); r.State != images.StateFailed || !r.Retryable || len(f.scanner.Calls) != 0 {
+		t.Fatalf("record = %+v, want a retryable failure before any scan", r)
+	}
+	// Once the databases are fresh, the next ask vets the digest again.
+	fresh = nil
+	if _, err := f.ensure(t, "redis:7", "s1", false); code(err) != harness.CodeImagePending {
+		t.Fatalf("ask after the refresh = %v", err)
+	}
+	if r := f.record(t, img); r.State != images.StatePendingApproval {
+		t.Fatalf("state after the retry = %s", r.State)
+	}
+}
+
+func TestScannerFailureIsNotClean(t *testing.T) {
+	f := newVetFixture(t, nil)
+	f.scanner.Errs = map[string]error{images.ScanStageStatic: errors.New("static stage ran out of time")}
+	img := f.push("redis:7", "a")
+	_, _ = f.ensure(t, "redis:7", "s1", false)
+	if r := f.record(t, img); r.State != images.StateFailed || r.Retryable {
+		t.Fatalf("record = %+v, want a failure only the operator overrides", r)
+	}
+	if _, err := f.ensure(t, "redis:7", "s1", false); code(err) != harness.CodeImageBlocked {
+		t.Fatalf("next ask = %v", err)
 	}
 }

@@ -164,7 +164,7 @@ func (v *Vetter) Ensure(ctx context.Context, req harness.ImageRequest) (string, 
 	allowed := harness.ImageAllowed(req.Ref, v.o.AllowedImages)
 	var start, joined, approveNow bool
 	rec, err := v.o.Store.Update(res.Digest, func(r *Record, ok bool) error {
-		if !ok || r.State == "" {
+		if !ok || r.State == "" || (r.State == StateFailed && r.Retryable) {
 			if res.Size() > v.o.MaxSize {
 				return errTooLarge
 			}
@@ -361,10 +361,16 @@ func (v *Vetter) setStage(digest string, st Stage) {
 }
 
 // fail ends a vetting as failed and removes its quarantine.
-func (v *Vetter) fail(digest, reason string) {
+func (v *Vetter) fail(digest, reason string) { v.failWith(digest, reason, false) }
+
+// failWith ends a vetting as failed. A retryable failure is the host's
+// (scanner databases not fresh, no scanner image), not the image's: the next
+// caller that asks for the digest starts its vetting again.
+func (v *Vetter) failWith(digest, reason string, retryable bool) {
 	_ = os.RemoveAll(v.QuarantineDir(digest))
 	rec, err := v.o.Store.Update(digest, func(r *Record, _ bool) error {
 		r.State, r.Stage, r.Reasons, r.At = StateFailed, "", []string{reason}, v.o.Now()
+		r.Retryable = retryable
 		return nil
 	})
 	if err != nil {
@@ -382,7 +388,7 @@ func (v *Vetter) vet(ctx context.Context, res Resolved) {
 	d := res.Digest
 	defer func() { _ = os.RemoveAll(filepath.Join(v.o.Dir, "scan", ShortDigest(d))) }()
 	if err := v.o.DBFresh(); err != nil {
-		v.fail(d, err.Error())
+		v.failWith(d, err.Error(), true)
 		return
 	}
 	v.setStage(d, StageFetch)
@@ -393,7 +399,7 @@ func (v *Vetter) vet(ctx context.Context, res Resolved) {
 	}
 	scan, sig, err := v.scan(ctx, res, q)
 	if err != nil {
-		v.fail(d, err.Error())
+		v.failWith(d, err.Error(), errors.Is(err, ErrScannerUnavailable))
 		return
 	}
 	rec, err := v.o.Store.Get(d)

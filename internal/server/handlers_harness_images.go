@@ -188,6 +188,11 @@ func (n harnessImageNotifier) Decided(rec images.Record) {
 		n.tell(ctx, rec, fmt.Sprintf("[aiman] image %s (%s) is blocked: %s. Report: %s. Only the operator can override it from the laptop.",
 			rec.Ref, images.ShortDigest(rec.Digest), strings.Join(rec.Reasons, "; "), rec.Scan.Report))
 	case images.StateFailed:
+		if rec.Retryable {
+			n.tell(ctx, rec, fmt.Sprintf("[aiman] vetting image %s (%s) could not run on this host: %s. The next aiman harness up starts it again.",
+				rec.Ref, images.ShortDigest(rec.Digest), strings.Join(rec.Reasons, "; ")))
+			return
+		}
 		n.tell(ctx, rec, fmt.Sprintf("[aiman] vetting image %s (%s) failed: %s. Only the operator can override it from the laptop.",
 			rec.Ref, images.ShortDigest(rec.Digest), strings.Join(rec.Reasons, "; ")))
 	}
