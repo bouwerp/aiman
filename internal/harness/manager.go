@@ -70,6 +70,15 @@ type Options struct {
 	// Sourcemaps checks a ready run's frontend for source maps; nil is
 	// DetectSourcemaps with DefaultSourcemapLimits.
 	Sourcemaps func(ctx context.Context, src string, targets []SourcemapTarget) BrowserSourcemaps
+	// Network is NetworkOnline or NetworkOffline (anything else): online
+	// runs reach the outside through the edge proxy only.
+	Network string
+	// CaptureBodyBytes is harness.capture.body_bytes; zero is the edge's
+	// default.
+	CaptureBodyBytes int
+	// UpstreamRoots is the host CA bundle an online edge verifies upstreams
+	// with; empty finds it with FindUpstreamRoots.
+	UpstreamRoots string
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 }
@@ -359,7 +368,7 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	run := lr.run
 	run.Scenario, run.Title = sc.ID, sc.Title
 	run.SHA, run.Dirty, run.DiffSHA256, run.Source = l.SHA, l.Dirty, l.DiffSHA256, l.Source
-	run.Network = "offline"
+	run.Network = m.network()
 	run.Services = append([]string(nil), sc.Services...)
 	run.StartedAt, run.LastUsed = now, now
 	run.Ports, run.Steps, run.Checks = []RunPort{}, stepViews(sc), checkRuns(sc)
@@ -378,6 +387,9 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	}
 	if err != nil {
 		return Run{}, fmt.Errorf("export the tree: %w", err)
+	}
+	if err := writeStubs(sc, src, filepath.Join(dir, "control")); err != nil {
+		return Run{}, err
 	}
 	if run.Images, err = m.images(ctx, req, l.File, sc, src, lr.debug); err != nil {
 		return Run{}, err

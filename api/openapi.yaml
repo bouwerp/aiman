@@ -781,6 +781,7 @@ components:
             - harness.debug
             - harness.files
             - harness.file
+            - harness.capture
             - design.publish
             - review.reveal
             - review.post
@@ -891,13 +892,20 @@ components:
             new items, changed items and removed ids past it. A reply cut by
             the limit or the 2 MiB cap stops short of the end: call again with
             its after until a reply is empty.
+        after_id:
+          type: integer
+          format: int64
+          description: >
+            harness.capture: a flow id from a reply's next; returns the flows
+            above it. Default 0.
         limit:
           type: integer
           description: >
             session.transcript page size; default 50, maximum 200. aws.log:
             the most rows to return; 0 or absent is the ledger's default.
             session.file and harness.file: the most bytes of data; default
-            65536, capped at 262144.
+            65536, capped at 262144. harness.capture: the most flows; default
+            50, maximum 200.
         path:
           type: string
           description: >
@@ -975,9 +983,9 @@ components:
         run:
           type: string
           description: >
-            harness.status, harness.result, harness.check, harness.logs,
+            harness.status, harness.result, harness.check, harness.logs, harness.capture,
             harness.down and harness.verdict: the run id. Absent takes the
-            session's live run, and for status, result, logs and verdict its
+            session's live run, and for status, result, logs, capture and verdict its
             newest kept run when none is live.
         scenario:
           type: string
@@ -1112,6 +1120,7 @@ components:
             - $ref: "#/components/schemas/HarnessDebugResult"
             - $ref: "#/components/schemas/HarnessFilesResult"
             - $ref: "#/components/schemas/HarnessFileResult"
+            - $ref: "#/components/schemas/HarnessCaptureResult"
             - $ref: "#/components/schemas/HarnessImageResult"
             - $ref: "#/components/schemas/HarnessImagesResult"
         error:
@@ -1888,7 +1897,12 @@ components:
           enum: [file, config]
         network:
           type: string
-          enum: [offline]
+          enum: [offline, online]
+          description: >
+            offline (harness.network, else review.sandbox.network, unset,
+            none or offline): the edge proxy answers external calls from the
+            scenario's stubs or 502. online: it forwards them. Either way the
+            app and services reach the outside only through the proxy.
         state:
           type: string
           enum: [starting, ready, failed, stopped]
@@ -2324,6 +2338,130 @@ components:
           type: boolean
         binary:
           type: boolean
+    HarnessCaptureResult:
+      type: object
+      description: >
+        harness.capture {session? | run?, after_id?, limit?}: the HTTP calls
+        the run's app and services made through the edge proxy, oldest first,
+        with an id above after_id: from the edge's memory (the newest 1000)
+        while the run is live, else from the flows saved when it stopped
+        (harness_not_running when none were). A session caller is held to
+        its scope. Serve redacts every flow again before it answers:
+        Authorization, Cookie, Set-Cookie, Proxy-Authorization, X-Api-Key
+        and any header, query parameter or JSON key matching
+        password|secret|token|api_key. Each body keeps its first
+        harness.capture.body_bytes (64 KiB). Off the device allowlist.
+      required: [type, run, network, state, flows, next, more, total, dropped, redacted]
+      properties:
+        type:
+          type: string
+          const: harness_capture
+        run:
+          type: string
+        network:
+          type: string
+          enum: [offline, online]
+        state:
+          type: string
+          enum: [starting, ready, failed, stopped]
+        flows:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessFlow"
+        next:
+          type: integer
+          format: int64
+          description: The after_id of the next call. A pending flow holds it for a minute, so the next call returns that flow again once it ends.
+        more:
+          type: boolean
+          description: Flows past next exist already; call again at once.
+        total:
+          type: integer
+          format: int64
+          description: Calls since the edge started.
+        dropped:
+          type: integer
+          format: int64
+          description: Oldest calls that fell out of the edge's store.
+        redacted:
+          type: integer
+          description: Values serve replaced in this reply.
+    HarnessFlow:
+      type: object
+      description: One request through the edge proxy and its response.
+      required: [id, start, duration_ms, method, url, host, tls, outcome, request_body_bytes, response_body_bytes]
+      properties:
+        id:
+          type: integer
+          format: int64
+        start:
+          type: string
+          format: date-time
+        duration_ms:
+          type: number
+        client:
+          type: string
+          description: The container's inner address.
+        method:
+          type: string
+          description: CONNECT for a tunnel that never carried a request (a failed TLS handshake, a protocol other than TLS).
+        url:
+          type: string
+        host:
+          type: string
+        proto:
+          type: string
+        tls:
+          type: boolean
+          description: Read inside a CONNECT tunnel, with a leaf signed by the run CA.
+        status:
+          type: integer
+        outcome:
+          type: string
+          enum: [upstream, stub, offline, refused, error, pending]
+          description: >
+            upstream: an online run forwarded it. stub: a scenario stub
+            answered. offline: no stub, answered 502. refused: an address
+            that is not public, or a tunnel that did not start TLS. error:
+            the handshake (a client that does not trust the run CA, such as a
+            pinned one), the upstream or the body failed. pending: not
+            finished yet.
+        error:
+          type: string
+        request_headers:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        request_body:
+          type: string
+        request_body_bytes:
+          type: integer
+          format: int64
+        request_truncated:
+          type: boolean
+        request_binary:
+          type: boolean
+          description: The body is not UTF-8 text and is left out.
+        response_headers:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        response_body:
+          type: string
+          description: Decoded when the response was gzip or deflate.
+        response_body_bytes:
+          type: integer
+          format: int64
+        response_truncated:
+          type: boolean
+        response_binary:
+          type: boolean
+        redacted:
+          type: integer
     HarnessImage:
       type: object
       description: >

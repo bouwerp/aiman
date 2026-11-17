@@ -65,6 +65,33 @@ func (c Client) DAPDrop(ctx context.Context, name string) (*DAPHolder, error) {
 	return resp.Dropped, nil
 }
 
+// Capture reads up to limit flows with an ID above after.
+func (c Client) Capture(ctx context.Context, after int64, limit int) ([]Flow, CaptureInfo, error) {
+	resp, err := c.call(ctx, Request{Op: OpCapture, After: after, Limit: limit})
+	if err != nil {
+		return nil, CaptureInfo{}, err
+	}
+	if resp.Capture == nil {
+		return nil, CaptureInfo{}, fmt.Errorf("edge capture: reply has no capture")
+	}
+	if resp.Flows == nil {
+		resp.Flows = []Flow{}
+	}
+	return resp.Flows, *resp.Capture, nil
+}
+
+// CA reads the run CA's certificate.
+func (c Client) CA(ctx context.Context) ([]byte, error) {
+	resp, err := c.call(ctx, Request{Op: OpCA})
+	if err != nil {
+		return nil, err
+	}
+	if resp.CA == "" {
+		return nil, fmt.Errorf("edge ca: reply has no certificate")
+	}
+	return []byte(resp.CA), nil
+}
+
 // call returns an *Error for a refusal from the edge and a wrapped error for
 // a transport failure.
 func (c Client) call(ctx context.Context, req Request) (Response, error) {
