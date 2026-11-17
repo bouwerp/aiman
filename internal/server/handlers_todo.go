@@ -362,9 +362,15 @@ func (s *Server) handleTodo(ctx context.Context, req Request) Response {
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	list, err := s.MutateTodos(ctx, sess, author, guardGate(s.isSessionCall(ctx, req), fn))
+	fromSession := s.isSessionCall(ctx, req)
+	var closedImages []string
+	list, err := s.MutateTodos(ctx, sess, author, guardGate(fromSession, watchImageGates(fn, &closedImages)))
 	if err != nil {
 		return todoErrResp(req.ID, err)
+	}
+	if !fromSession {
+		// The operator closing gate:image:<digest> (TUI ctrl+t) approves it.
+		s.approveClosedImageGates(closedImages)
 	}
 	return todoListResp(req.ID, list)
 }
@@ -631,6 +637,19 @@ func (s *Server) handleTodoSummary(ctx context.Context, req Request) Response {
 		out[id] = e
 	}
 	return Response{ID: req.ID, Result: map[string]any{"type": "todo_summary", "sessions": out}}
+}
+
+// watchImageGates wraps fn and records the image gates it closes.
+func watchImageGates(fn func(*domain.TodoList) error, closed *[]string) func(*domain.TodoList) error {
+	return func(l *domain.TodoList) error {
+		prev := *l
+		prev.Items = append([]domain.TodoItem(nil), l.Items...)
+		if err := fn(l); err != nil {
+			return err
+		}
+		*closed = todo.ClosedImageGates(prev, *l)
+		return nil
+	}
 }
 
 // guardGate wraps fn so a session call cannot change an open gate.

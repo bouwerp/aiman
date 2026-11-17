@@ -50,6 +50,8 @@ func runHarness(args []string) error {
 			return runHarnessEdge(args[1:])
 		case "console":
 			return runHarnessConsole(args[1:])
+		case "scan":
+			return runHarnessScan(args[1:])
 		}
 	}
 	return harnessMain(args, harnessIO{
@@ -86,7 +88,7 @@ func callHarnessMethod(method string, params map[string]any) (json.RawMessage, e
 }
 
 const harnessUsageText = `Usage: aiman harness list [--json]
-       aiman harness up <scenario> [--dirty] [--force] [--wait] [--json]
+       aiman harness up <scenario> [--dirty] [--force] [--wait] [--json]   (--wait also waits while an image is vetted)
        aiman harness status [--run ID] [--json]
        aiman harness check [<name>] [--run ID] [--json]
        aiman harness logs <service> [--lines N] [--run ID] [--json]
@@ -94,6 +96,8 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
        aiman harness down [--run ID] [--json]
        aiman harness console [--remote NAME] [--session NAME] [--run ID]   (laptop)
+       aiman harness image status|approve|db-install ...   (see aiman harness image)
+       aiman harness approve-image <digest> --quote TEXT   (the session that holds the gate)
 Every host command takes --session NAME, which defaults to $AIMAN_ID; --run ID names a run instead.
 `
 
@@ -104,13 +108,17 @@ func harnessUsage(w io.Writer) error {
 
 // harnessArgs are the parsed flags and positional arguments of a subcommand.
 type harnessArgs struct {
-	session, run, note, remote string
-	lines                      int
-	json, dirty, force, wait   bool
-	pos                        []string
+	session, run, note, remote           string
+	quote, reason, sha256, builtAt       string
+	lines                                int
+	json, dirty, force, wait, acceptRisk bool
+	pos                                  []string
 }
 
-var harnessValueFlags = map[string]bool{"--session": true, "--run": true, "--note": true, "--lines": true, "--remote": true}
+var harnessValueFlags = map[string]bool{
+	"--session": true, "--run": true, "--note": true, "--lines": true, "--remote": true,
+	"--quote": true, "--reason": true, "--sha256": true, "--built-at": true,
+}
 
 func parseHarnessArgs(args []string) (harnessArgs, error) {
 	var a harnessArgs
@@ -151,6 +159,14 @@ func (a *harnessArgs) setValue(name, val string) error {
 		a.note = val
 	case "--remote":
 		a.remote = val
+	case "--quote":
+		a.quote = val
+	case "--reason":
+		a.reason = val
+	case "--sha256":
+		a.sha256 = val
+	case "--built-at":
+		a.builtAt = val
 	case "--lines":
 		n, err := strconv.Atoi(val)
 		if err != nil || n <= 0 {
@@ -171,6 +187,8 @@ func (a *harnessArgs) setBool(arg string) bool {
 		a.force = true
 	case "--wait":
 		a.wait = true
+	case "--accept-risk":
+		a.acceptRisk = true
 	default:
 		return false
 	}
@@ -212,6 +230,12 @@ func harnessMain(args []string, h harnessIO) error {
 	if len(args) == 0 {
 		return harnessUsage(h.errOut)
 	}
+	switch args[0] {
+	case "image":
+		return harnessImageMain(args[1:], h)
+	case "approve-image":
+		return harnessApproveImage(args[1:], h)
+	}
 	sub, ok := harnessSubs[args[0]]
 	if !ok {
 		return harnessUsage(h.errOut)
@@ -240,6 +264,11 @@ func harnessMain(args []string, h harnessIO) error {
 // non-zero exit.
 func harnessCallOut(h harnessIO, a harnessArgs, method string, params map[string]any) (json.RawMessage, error) {
 	raw, err := h.call(method, params)
+	return harnessCallOutResult(h, a, raw, err)
+}
+
+// harnessCallOutResult prints a refusal and turns it into a non-zero exit.
+func harnessCallOutResult(h harnessIO, a harnessArgs, raw json.RawMessage, err error) (json.RawMessage, error) {
 	if err == nil {
 		return raw, nil
 	}
@@ -311,7 +340,15 @@ var errHarnessRunFailed = errors.New("the harness run failed")
 
 func harnessUp(h harnessIO, a harnessArgs) error {
 	params := map[string]any{"session": a.session, "scenario": a.pos[0], "dirty": a.dirty, "force": a.force, "wait": a.wait}
-	raw, err := harnessCallOut(h, a, "harness.up", params)
+	var (
+		raw json.RawMessage
+		err error
+	)
+	if a.wait {
+		raw, err = harnessUpWaitImages(h, a, params)
+	} else {
+		raw, err = harnessCallOut(h, a, "harness.up", params)
+	}
 	if err != nil {
 		return err
 	}

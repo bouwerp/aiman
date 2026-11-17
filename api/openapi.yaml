@@ -452,8 +452,24 @@ components:
             data.image), harness_running (the session already has a live
             run), harness_busy (harness.max_runs live runs on the host),
             harness_not_running (no run, or the run is not ready) and
-            harness_service_failed (data.service and data.tail). harness.up
-            with debug is invalid_params. harness.verdict answers
+            harness_service_failed (data.service and data.tail). With image
+            vetting on, harness.up refuses a run whose image is not approved
+            yet with harness_image_pending (data.digest, data.ref, data.stage
+            of queued, fetch, cve, static, review, awaiting_approval or load,
+            and data.retry_after_ms 15000), a blocked, failed or stale image
+            with harness_image_blocked (data.digest, data.ref, data.state,
+            data.reasons, data.critical, data.static_hits, data.verdict), a
+            ref the registry does not resolve with
+            harness_image_resolve_failed (data.ref), and an image over
+            harness.images.max_size with harness_image_too_large (data.size,
+            data.limit, before any fetch). harness.image_approve answers
+            harness_image_not_pending (data.digest, data.state) for a digest
+            that is not pending_approval without accept_risk,
+            gate_needs_operator for a session that holds no open gate for the
+            digest, needs_operator for a session's accept_risk, and
+            invalid_params for a session's empty quote or the operator's
+            accept_risk without a reason. harness.up with debug is
+            invalid_params. harness.verdict answers
             needs_operator for a session caller, and every harness method
             answers session_scope for a session outside the caller's tree.
           enum:
@@ -509,6 +525,11 @@ components:
             - harness_busy
             - harness_not_running
             - harness_service_failed
+            - harness_image_pending
+            - harness_image_blocked
+            - harness_image_resolve_failed
+            - harness_image_too_large
+            - harness_image_not_pending
             - server_busy
             - rate_limited
             - host_under_pressure
@@ -690,6 +711,8 @@ components:
             - harness.logs
             - harness.verdict
             - harness.list
+            - harness.image_status
+            - harness.image_approve
             - design.publish
             - review.reveal
             - review.post
@@ -913,6 +936,27 @@ components:
         note:
           type: string
           description: harness.verdict; the first line of a fail's note becomes the to-do text.
+        digest:
+          type: string
+          description: >
+            harness.image_status (or ref) and harness.image_approve, required
+            for approve: the platform manifest digest, sha256:<hex>.
+        ref:
+          type: string
+          description: harness.image_status, an image ref; the newest record for it.
+        quote:
+          type: string
+          description: >
+            harness.image_approve from a session: the operator's words, as
+            todo.approve_design takes them. Required and non-empty.
+        accept_risk:
+          type: boolean
+          description: >
+            harness.image_approve, operator only: approve a blocked, failed or
+            stale digest. Needs reason.
+        reason:
+          type: string
+          description: harness.image_approve with accept_risk, required.
         tier:
           type: string
           enum: [smart, worker]
@@ -985,6 +1029,8 @@ components:
             - $ref: "#/components/schemas/HarnessCheckResult"
             - $ref: "#/components/schemas/HarnessLogsResult"
             - $ref: "#/components/schemas/HarnessVerdictResult"
+            - $ref: "#/components/schemas/HarnessImageResult"
+            - $ref: "#/components/schemas/HarnessImagesResult"
         error:
           $ref: "#/components/schemas/RpcError"
     PongResult:
@@ -2005,6 +2051,133 @@ components:
         todo:
           type: string
           description: The to-do a fail opened or rewrote; absent for pass and skip, empty when the session is gone.
+    HarnessImage:
+      type: object
+      description: >
+        One image digest in serve's host-wide image store. digest is the
+        platform manifest digest, the store key; index_digest the
+        multi-platform index the ref resolved through. state is vetting,
+        pending_approval, approved, blocked, failed or stale; stage tells
+        where a vetting is. approved_by is session, operator, config (a
+        clean listed image) or operator_run (clean scans on the operator's
+        own run). The quote and the override reason stay in the store and
+        the ledger and are never in this object.
+      required: [digest, ref, state, scan, at]
+      properties:
+        digest:
+          type: string
+        ref:
+          type: string
+        repo:
+          type: string
+        index_digest:
+          type: string
+        config_digest:
+          type: string
+        platform:
+          type: string
+        size:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [vetting, pending_approval, approved, blocked, failed, stale]
+        stage:
+          type: string
+          enum: [queued, fetch, cve, static, review, awaiting_approval, load]
+        allowed:
+          type: boolean
+          description: The ref matched harness.allowed_images.
+        requesters:
+          type: array
+          items:
+            type: object
+            properties:
+              session:
+                type: string
+              operator:
+                type: boolean
+        scan:
+          type: object
+          properties:
+            trivy_db:
+              type: string
+            critical:
+              type: array
+              items:
+                type: string
+            high:
+              type: array
+              items:
+                type: string
+            static_hits:
+              type: array
+              items:
+                type: string
+            mal_ids:
+              type: array
+              items:
+                type: string
+            model_verdict:
+              type: string
+              description: clean, suspicious or malicious; absent when no review ran.
+            report:
+              type: string
+            sbom:
+              type: string
+        signature:
+          type: string
+          enum: [absent, present, unknown]
+          description: A cosign signature in the registry. Shown only; it never skips a scan or blocks.
+        reasons:
+          type: array
+          items:
+            type: string
+        approved_by:
+          type: string
+        approver:
+          type: string
+        accepted_highs:
+          type: array
+          items:
+            type: string
+        accept_risk:
+          type: boolean
+        image_id:
+          type: string
+        local_name:
+          type: string
+        at:
+          type: string
+          format: date-time
+        rescanned_at:
+          type: string
+          format: date-time
+    HarnessImageResult:
+      type: object
+      description: >
+        harness.image_status {digest | ref} or harness.image_approve: one
+        image record. harness.image_status is a device read method;
+        harness.image_approve is off the device allowlist.
+      required: [type, image]
+      properties:
+        type:
+          type: string
+          const: harness_image
+        image:
+          $ref: "#/components/schemas/HarnessImage"
+    HarnessImagesResult:
+      type: object
+      description: harness.image_status with no digest or ref; every record, newest first.
+      required: [type, images]
+      properties:
+        type:
+          type: string
+          const: harness_images
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessImage"
     RPCCount:
       type: object
       required: [name, count, avg_us]

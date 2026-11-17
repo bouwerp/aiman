@@ -378,7 +378,7 @@ aiman pty forget "$wid"
 
 The harness starts the app and its services in an offline sandbox on this host, so that a person can test a scenario. The harness file is `.aiman/harness.yaml`. Serve reads it from the commit, not from the working tree.
 
-When your work changes behaviour that a person can test, add or update a scenario in that file and commit it. A scenario has an `id`, the `services` it uses, `steps` for the tester (`do` and `expect`) and `checks` (commands; exit 0 is a pass). Write `{{<port name>}}` in a step for the app URL. Use only images from `harness.allowed_images` (default `postgres:16`, `golang:*`, `node:*`). Serve does not pull images.
+When your work changes behaviour that a person can test, add or update a scenario in that file and commit it. A scenario has an `id`, the `services` it uses, `steps` for the tester (`do` and `expect`) and `checks` (commands; exit 0 is a pass). Write `{{<port name>}}` in a step for the app URL. You can name any image. Serve does not pull images: it vets each new image digest first (see Images below).
 
 ```yaml
 version: 1
@@ -412,6 +412,16 @@ Do these steps to test a scenario:
 4. Run `aiman harness down` when you are done.
 
 A session has one live run at a time. Do not use `--force`; it is for the operator. Only the operator records a verdict (`aiman harness verdict`); a session gets `needs_operator`. A failed step comes to you as a to-do `Harness: <scenario> step <n>: <note>` and an `[aiman]` note. Fix it, commit, and tell the operator that the scenario is ready to run again.
+
+### Images
+
+Serve vets every image digest before the Docker engine sees it. It scans for known CVEs and for malicious code. Then the operator approves the digest once for the host.
+
+- `aiman harness up` refuses with `harness_image_pending` while an image is vetted. `--wait` waits and prints the stage. Use `aiman harness image status <ref>` to see the state.
+- When the vetting is done, you get the to-do `Image approved: <ref> (<short digest>)` and an `[aiman]` note with the scan summary and the report path. Show the summary to the operator and ask for approval. Name each high CVE.
+- When the operator approves in this terminal, run `aiman harness approve-image <digest> --quote "<the operator's words>"`. Use their exact words. Do not approve an image yourself. Do not close the gate to-do.
+- Then run `aiman harness up` again.
+- `harness_image_blocked` means a critical CVE, a malware hit, a malicious package, or a failed vetting. Do not try to get around it. Tell the operator. Only the operator can override it from the laptop. You can also use another image tag.
 
 ## Shared context
 

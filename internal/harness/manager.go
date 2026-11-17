@@ -53,6 +53,9 @@ type Options struct {
 	// IdleTimeout is harness.idle_timeout; zero is DefaultIdleTimeout.
 	IdleTimeout time.Duration
 	Docker      Docker
+	// Images vets every app and service image and answers its image ID; nil
+	// keeps the older rule: listed in AllowedImages and already on the host.
+	Images ImageVetter
 	// Edge reads the edge's control socket; nil is SocketEdge.
 	Edge EdgeControl
 	// AppImage picks the app's image from the exported tree and the repo's
@@ -62,6 +65,22 @@ type Options struct {
 	Record Recorder
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+}
+
+// ImageRequest asks for one image of a run.
+type ImageRequest struct {
+	Ref string
+	// Session is the run's session; Operator is set when the operator
+	// started the run.
+	Session  string
+	Operator bool
+}
+
+// ImageVetter answers the engine's image ID of an approved image, or a
+// *Error with CodeImagePending, CodeImageBlocked, CodeImageResolveFailed or
+// CodeImageTooLarge. A ref it has not seen starts vetting.
+type ImageVetter interface {
+	Ensure(ctx context.Context, req ImageRequest) (string, error)
 }
 
 // Manager owns the harness runs of a host.
@@ -332,7 +351,7 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	if err != nil {
 		return Run{}, fmt.Errorf("export the tree: %w", err)
 	}
-	if run.Images, err = m.images(ctx, l.File, sc, src, req.AppImageOverride); err != nil {
+	if run.Images, err = m.images(ctx, req, l.File, sc, src); err != nil {
 		return Run{}, err
 	}
 	token, err := randomHex(32)
@@ -367,41 +386,58 @@ func checkRuns(sc *Scenario) []CheckRun {
 	return out
 }
 
-// images resolves every image the run starts to its local image ID. A service
-// or app image must match harness.allowed_images and be on the host; the edge
-// image must be on the host. Serve never pulls.
-func (m *Manager) images(ctx context.Context, f *File, sc *Scenario, src, override string) (map[string]string, error) {
-	appRef, err := m.opts.AppImage(src, override)
+// images resolves every image the run starts to its local image ID. With an
+// ImageVetter, the app and service images go through vetting: every one is
+// asked for, so each unknown digest starts vetting at once, and the first
+// refusal is returned. Without one, an image must match
+// harness.allowed_images and be on the host. The edge image is aiman's own
+// and must be on the host. Serve never pulls.
+func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenario, src string) (map[string]string, error) {
+	appRef, err := m.opts.AppImage(src, req.AppImageOverride)
 	if err != nil {
 		return nil, invalid(fmt.Sprintf("pick the app image: %v", err))
 	}
 	ids := map[string]string{}
-	resolve := func(container, ref string, listed bool) error {
-		if listed && !ImageAllowed(ref, m.opts.AllowedImages) {
-			return imageMissing(ref, "is not in harness.allowed_images")
-		}
-		id, err := m.opts.Docker.ImageID(ctx, ref)
-		if errors.Is(err, ErrImageNotFound) {
-			return imageMissing(ref, "is not on this host; serve never pulls, so run docker pull "+ref+" on the host")
-		}
-		if err != nil {
-			return err
-		}
-		ids[container] = id
-		return nil
-	}
-	if err := resolve(ServiceApp, appRef, true); err != nil {
-		return nil, err
-	}
+	refs := [][2]string{{ServiceApp, appRef}}
 	for _, name := range sc.Services {
-		if err := resolve(name, f.Services[name].Image, true); err != nil {
-			return nil, err
-		}
+		refs = append(refs, [2]string{name, f.Services[name].Image})
 	}
-	if err := resolve(ServiceEdge, m.opts.EdgeImage, false); err != nil {
+	var first error
+	for _, r := range refs {
+		id, err := m.image(ctx, req, r[1])
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			continue
+		}
+		ids[r[0]] = id
+	}
+	if first != nil {
+		return nil, first
+	}
+	if ids[ServiceEdge], err = m.localImage(ctx, m.opts.EdgeImage); err != nil {
 		return nil, err
 	}
 	return ids, nil
+}
+
+func (m *Manager) image(ctx context.Context, req UpRequest, ref string) (string, error) {
+	if m.opts.Images != nil {
+		return m.opts.Images.Ensure(ctx, ImageRequest{Ref: ref, Session: req.Session, Operator: req.Actor != domain.EventActorAgent})
+	}
+	if !ImageAllowed(ref, m.opts.AllowedImages) {
+		return "", imageMissing(ref, "is not in harness.allowed_images")
+	}
+	return m.localImage(ctx, ref)
+}
+
+func (m *Manager) localImage(ctx context.Context, ref string) (string, error) {
+	id, err := m.opts.Docker.ImageID(ctx, ref)
+	if errors.Is(err, ErrImageNotFound) {
+		return "", imageMissing(ref, "is not on this host; serve never pulls, so run docker pull "+ref+" on the host")
+	}
+	return id, err
 }
 
 func imageMissing(ref, why string) *Error {
