@@ -16,16 +16,6 @@ import (
 	"github.com/bouwerp/aiman/internal/harness/edge"
 )
 
-// runHarness dispatches `aiman harness`. Only the hidden edge subcommand
-// exists so far.
-func runHarness(args []string) error {
-	if len(args) > 0 && args[0] == "edge" {
-		return runHarnessEdge(args[1:])
-	}
-	fmt.Fprintln(os.Stderr, "Usage: aiman harness <subcommand>")
-	return errUsage
-}
-
 // runHarnessEdge is the hidden `aiman harness edge`: the relay process inside a
 // harness run's edge container. It is started by the run's compose file, never
 // by hand.

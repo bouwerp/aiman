@@ -47,6 +47,8 @@ var rpcMethods = map[string]bool{
 	"agents.status":       true,
 	"agents.update":       true,
 	"agents.move_prefix":  true,
+	"harness.status":      true,
+	"harness.verdict":     true,
 }
 
 // rpcParams validates the method and params. It passes the bytes through
