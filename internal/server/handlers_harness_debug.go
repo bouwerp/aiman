@@ -47,6 +47,36 @@ func (s *Server) handleHarnessDebug(ctx context.Context, req Request, p harnessP
 	return Response{ID: req.ID, Result: map[string]any{"type": "harness_debug", "debug": st}}
 }
 
+// handleHarnessDebugCheck answers harness.check {run|session, name, debug:
+// true, take?}: the check runs as the run's debug target and the call
+// returns once it started; its result arrives in the run's checks. A debug
+// target waits for a person's debugger and can hold the run's debugger
+// lease, so a session caller gets needs_operator.
+func (s *Server) handleHarnessDebugCheck(ctx context.Context, req Request, p harnessParams) Response {
+	if s.isSessionCall(ctx, req) {
+		return errResp(req.ID, CodeNeedsOperator, "only the operator debugs a check: the check waits for a debugger in the harness console")
+	}
+	if strings.TrimSpace(p.Name) == "" {
+		return errResp(req.ID, CodeInvalidParams, "name is required: the check to debug")
+	}
+	run, fail := s.harnessRun(ctx, req, p, false)
+	if fail != nil {
+		return *fail
+	}
+	m := s.harness.d.Manager
+	m.Touch(run.ID)
+	cctx, cancel := context.WithTimeout(ctx, HarnessCheckTimeout)
+	defer cancel()
+	check, err := m.DebugCheck(cctx, harness.DebugCheckRequest{Run: run.ID, Name: p.Name, Take: p.Take, Actor: s.harnessActor(ctx, req)})
+	if err != nil {
+		return harnessErr(req.ID, err, CodeUnavailable)
+	}
+	run, _ = m.Get(run.ID)
+	return Response{ID: req.ID, Result: map[string]any{
+		"type": "harness_check", "run": run.ID, "debug": true, "checks": []harness.CheckRun{check}, "debug_check": run.DebugCheck,
+	}}
+}
+
 // harnessSource resolves the run a source call names and its exported tree.
 func (s *Server) harnessSource(ctx context.Context, req Request, p harnessParams) (harness.Run, string, *Response) {
 	run, fail := s.harnessRun(ctx, req, p, true)

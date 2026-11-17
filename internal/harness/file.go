@@ -91,6 +91,9 @@ type Error struct {
 	// Reason says why a language with an adapter cannot be debugged
 	// (ReasonMusl, ReasonBunVersion); empty for a language with none.
 	Reason string
+	// Target is what holds the debugger in a CodeDebugBusy refusal: app,
+	// or check:<name>.
+	Target string
 	// ImageData is the RPC data of the image refusals.
 	ImageData map[string]any
 }
@@ -134,6 +137,8 @@ func (e *Error) Data() map[string]any {
 		return map[string]any{"lang": e.Lang}
 	case CodeDebugTool:
 		return map[string]any{"tool": e.Tool}
+	case CodeDebugBusy:
+		return map[string]any{"target": e.Target}
 	case CodeImagePending, CodeImageBlocked, CodeImageResolveFailed, CodeImageTooLarge, CodeImageNotPending:
 		return e.ImageData
 	}
@@ -187,6 +192,10 @@ type Debug struct {
 	RuntimeArgs []string `yaml:"runtime_args" json:"runtime_args,omitempty"`
 	Run         string   `yaml:"run" json:"run,omitempty"`
 	WrapEnv     []string `yaml:"wrap_env" json:"wrap_env,omitempty"`
+	// toolFirst puts the mounted runtime ahead of the image's on PATH: a
+	// node debug check runs its tests on Node, never on a Bun the image
+	// calls node. Serve sets it; the file cannot.
+	toolFirst bool
 }
 
 // Service is a container a scenario starts beside the app. Caps holds only

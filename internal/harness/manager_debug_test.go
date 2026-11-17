@@ -29,9 +29,10 @@ func (s *stubGoDebug) Spec(context.Context, *File) (*DebugSpec, error) {
 
 // holdingEdge is an edge whose DAP relay has a holder until dropped.
 type holdingEdge struct {
-	mu     sync.Mutex
-	holder *edge.DAPHolder
-	drops  []string
+	mu      sync.Mutex
+	holder  *edge.DAPHolder
+	drops   []string
+	targets []string
 }
 
 func (e *holdingEdge) Health(context.Context, string, string) (edge.Health, error) {
@@ -50,6 +51,27 @@ func (e *holdingEdge) DAPDrop(_ context.Context, _, _, relay string) (*edge.DAPH
 	h := e.holder
 	e.holder = nil
 	return h, nil
+}
+
+func (e *holdingEdge) DAPTarget(_ context.Context, _, _, _, target string) (*edge.DAPHolder, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.targets = append(e.targets, target)
+	h := e.holder
+	e.holder = nil
+	return h, nil
+}
+
+func (e *holdingEdge) setHolder(h *edge.DAPHolder) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.holder = h
+}
+
+func (e *holdingEdge) targetsSeen() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.targets...)
 }
 
 const debugHarnessFile = `version: 1

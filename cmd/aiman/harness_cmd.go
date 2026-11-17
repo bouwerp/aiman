@@ -100,10 +100,11 @@ func callHarnessMethod(method string, params map[string]any) (json.RawMessage, e
 }
 
 const harnessUsageText = `Usage: aiman harness list [--json]
-       aiman harness up <scenario> [--dirty] [--debug] [--force] [--wait] [--json]   (--wait also waits while an image is vetted)
+       aiman harness up <scenario> [--dirty] [--debug | --debug-checks] [--force] [--wait] [--json]   (--wait also waits while an image is vetted; --debug-checks debugs only the checks)
        aiman harness debug [status|take|release] [--run ID] [--json]   (take and release: operator)
        aiman harness status [--run ID] [--json]
        aiman harness check [<name>] [--run ID] [--json]
+       aiman harness check <name> --debug [--take] [--run ID] [--json]   (operator; waits for the check to end)
        aiman harness logs <service> [--lines N] [--run ID] [--json]
        aiman harness db <service> tables|rows <table>|query <sql> [--limit N] [--write] [--run ID] [--json]   (--write: operator)
        aiman harness capture [--after N] [--limit N] [--run ID] [--json]   (HTTP calls through the edge proxy)
@@ -130,6 +131,7 @@ type harnessArgs struct {
 	json, dirty, force, wait, acceptRisk bool
 	write                                bool
 	text, noBrowser, debug               bool
+	debugChecks, take                    bool
 	pos                                  []string
 }
 
@@ -228,6 +230,10 @@ func (a *harnessArgs) setBool(arg string) bool {
 		a.debug = true
 	case "--write":
 		a.write = true
+	case "--debug-checks":
+		a.debugChecks = true
+	case "--take":
+		a.take = true
 	default:
 		return false
 	}
@@ -385,6 +391,9 @@ func harnessUp(h harnessIO, a harnessArgs) error {
 	if a.debug {
 		params["debug"] = true
 	}
+	if a.debugChecks {
+		params["debug_checks"] = true
+	}
 	var (
 		raw json.RawMessage
 		err error
@@ -483,6 +492,9 @@ func harnessResult(h harnessIO, a harnessArgs) error {
 var errHarnessCheckFailed = errors.New("a harness check failed")
 
 func harnessCheck(h harnessIO, a harnessArgs) error {
+	if a.debug {
+		return harnessDebugCheck(h, a)
+	}
 	params := a.target()
 	if len(a.pos) == 1 {
 		params["name"] = a.pos[0]
@@ -686,8 +698,16 @@ func expandStepURLs(s string, urls map[string]string) string {
 func writeHarnessChecks(w io.Writer, checks []harness.CheckRun) {
 	for _, c := range checks {
 		status := "not run"
-		if c.Exit != nil {
+		switch {
+		case c.Debugging:
+			status = "under the debugger"
+		case c.Exit != nil:
 			status = "exit " + strconv.Itoa(*c.Exit)
+		case c.ErrorCode != "":
+			status = c.ErrorCode
+		}
+		if c.Debug && !c.Debugging {
+			status += " (debugged)"
 		}
 		_, _ = fmt.Fprintf(w, "  check %-20s %s\n", c.Name, status)
 		if c.Output != "" && c.Exit != nil && *c.Exit != 0 {

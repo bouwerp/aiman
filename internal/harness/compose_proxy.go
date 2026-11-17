@@ -124,9 +124,14 @@ func withProxy(doc *composeFile, sc *Scenario, spec RunSpec) error {
 	app.Volumes = append(app.Volumes, mount)
 	doc.Services[ServiceApp] = app
 
-	// A check in its own image runs as the app does: same proxy and CA.
+	// Checks run as the app does, with the same proxy and CA: a check in its
+	// own image, a debug run's plain checks and a debug check. A debug
+	// check's adapter only speaks to the check on the debug network, like
+	// the app's adapter, so it gets neither.
 	for name, s := range doc.Services {
-		if !slices.Contains(s.Profiles, checksProfile) {
+		if name == ServiceCheckAdapter || !slices.ContainsFunc(s.Profiles, func(p string) bool {
+			return p == checksProfile || p == profileCheck || p == profileDebugCheck
+		}) {
 			continue
 		}
 		if s.Environment == nil {

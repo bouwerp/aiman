@@ -86,6 +86,38 @@ func DebugAdapterFor(f *File, adapters []DebugAdapter) (DebugAdapter, error) {
 	return nil, &Error{Code: CodeDebugUnsupported, Lang: lang, Msg: fmt.Sprintf("debugging app.debug.lang %q is not yet supported; this host debugs %s", lang, strings.Join(langs, ", "))}
 }
 
+// ReasonCheckLang refuses a debug check in a language whose debugger only
+// starts an app (go: dlv execs the app's program).
+const ReasonCheckLang = "check_lang"
+
+// CheckDebugFile is f as a debug check's adapter sees it: the check's debug
+// block as app.debug and its run as app.run, which a python block with only
+// wrap_env runs as it is. A node check puts the mounted Node first on PATH.
+func CheckDebugFile(f *File, c Check) *File {
+	cf := *f
+	d := *c.Debug
+	d.toolFirst = d.Lang == "node"
+	cf.App.Debug = &d
+	cf.App.Run = c.Run
+	return &cf
+}
+
+// CheckAdapterFor picks the adapter for cf, a CheckDebugFile of check, and
+// checks the block against it.
+func CheckAdapterFor(cf *File, adapters []DebugAdapter, check string) (DebugAdapter, error) {
+	lang := cf.App.Debug.Lang
+	if lang == "go" {
+		return nil, &Error{Code: CodeDebugUnsupported, Lang: lang, Reason: ReasonCheckLang,
+			Msg: fmt.Sprintf("check %q: a go check cannot run under the debugger; debug the app with app.debug instead", check)}
+	}
+	a, err := DebugAdapterFor(cf, adapters)
+	var he *Error
+	if errors.As(err, &he) && he.Code == CodeDebugUnsupported && he.Reason == "" {
+		he.Msg = fmt.Sprintf("check %q: debugging lang %q is not supported on this host", check, lang)
+	}
+	return a, err
+}
+
 // EditorConfig is the launch.json configuration for l at 127.0.0.1:port,
 // from the adapter of l's language.
 func EditorConfig(l DebugLaunch, port int) (map[string]any, error) {

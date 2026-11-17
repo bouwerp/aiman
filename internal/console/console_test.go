@@ -361,13 +361,29 @@ func TestRunActions(t *testing.T) {
 	if w := do(t, s, "POST", host, "/api/check", testToken, origin, `{"run":"r1","name":"unit"}`); w.Code != http.StatusOK {
 		t.Fatalf("check %d %s", w.Code, w.Body)
 	}
-	if c := rpc.callsOf("harness.check"); len(c) != 1 || c[0]["run"] != "r1" || c[0]["name"] != "unit" {
+	if c := rpc.callsOf("harness.check"); len(c) != 1 || c[0]["run"] != "r1" || c[0]["name"] != "unit" || c[0]["debug"] != nil {
 		t.Fatalf("check params %v", c)
+	}
+	// Debug check: the page takes over its own hold on the app's debugger.
+	if w := do(t, s, "POST", host, "/api/check", testToken, origin, `{"run":"r1","name":"unit","debug":true,"take":true}`); w.Code != http.StatusOK {
+		t.Fatalf("debug check %d %s", w.Code, w.Body)
+	}
+	if c := rpc.callsOf("harness.check"); len(c) != 2 || c[1]["debug"] != true || c[1]["take"] != true || c[1]["name"] != "unit" {
+		t.Fatalf("debug check params %v", c)
+	}
+	if w := do(t, s, "POST", host, "/api/check", testToken, origin, `{"run":"r1","debug":true}`); w.Code != http.StatusBadRequest {
+		t.Errorf("debug check without a name: %d", w.Code)
+	}
+	if w := do(t, s, "POST", host, "/api/up", testToken, origin, `{"scenario":"refund","debug_checks":true}`); w.Code != http.StatusOK {
+		t.Fatalf("up for check debugging %d %s", w.Code, w.Body)
+	}
+	if c := rpc.callsOf("harness.up"); len(c) != 1 || c[0]["debug_checks"] != true {
+		t.Fatalf("up params %v", c)
 	}
 	if w := do(t, s, "POST", host, "/api/up", testToken, origin, `{"scenario":"refund","dirty":true}`); w.Code != http.StatusOK {
 		t.Fatalf("up %d %s", w.Code, w.Body)
 	}
-	if c := rpc.callsOf("harness.up"); len(c) != 1 || c[0]["session"] != "s1" || c[0]["scenario"] != "refund" || c[0]["dirty"] != true || c[0]["force"] != nil {
+	if c := rpc.callsOf("harness.up"); len(c) != 2 || c[1]["session"] != "s1" || c[1]["scenario"] != "refund" || c[1]["dirty"] != true || c[1]["force"] != nil {
 		t.Fatalf("up params %v", c)
 	}
 	if w := do(t, s, "POST", host, "/api/up", testToken, origin, `{"scenario":""}`); w.Code != http.StatusBadRequest {

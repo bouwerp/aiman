@@ -18,7 +18,7 @@ var AllowedCaps = []string{"CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER"
 
 // ReservedServiceNames are compose service and host names the harness itself
 // uses on the run's networks.
-var ReservedServiceNames = []string{"app", "edge", "app-debug", "cache-init", "debug-adapter"}
+var ReservedServiceNames = []string{"app", "edge", "app-debug", "cache-init", "debug-adapter", "app-check", "debug-check", "debug-check-adapter"}
 
 var (
 	// A service name is a DNS label: it is a compose service and a host name.

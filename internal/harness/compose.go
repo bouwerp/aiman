@@ -100,12 +100,22 @@ type RunSpec struct {
 	DebugSubnet netip.Prefix
 	// AdapterImage runs the adapter container when Debug has an Adapter.
 	AdapterImage string
+	// DebugChecks gives a run whose app runs plainly the debug network,
+	// so its checks can be debugged.
+	DebugChecks bool
+	// CheckDebug adds the services of one check under its debugger
+	// (ServiceDebugCheck, and ServiceCheckAdapter run by
+	// CheckAdapterImage when it has an Adapter).
+	CheckDebug        *DebugSpec
+	CheckAdapterImage string
 	// Proxy turns on the edge's capture proxy (compose_proxy.go); nil runs
 	// none.
 	Proxy *ProxySpec
 	// CheckImages runs each check that names an image, keyed by
 	// CheckService of the check's index (serve passes image IDs).
 	CheckImages map[string]string
+	// CheckDebugImage runs the debug check when its check names an image.
+	CheckDebugImage string
 }
 
 // Relay is one edge relay: the edge listens on Port on its outer address,
@@ -155,14 +165,7 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 		Volumes: map[string]map[string]any{"gomod": {}, "gocache": {}, "npm": {}},
 	}
 	app, edge := appService(f, spec), edgeService(spec, relays)
-	if spec.Debug != nil {
-		doc.Networks[NetworkDebug] = network(spec.DebugSubnet, true)
-		debugApp(&app, spec)
-		debugEdge(&edge, spec)
-		if spec.Debug.Adapter != nil {
-			doc.Services[ServiceAdapter] = adapterService(spec)
-		}
-	}
+	addDebugServices(&doc, f, spec, &app, &edge)
 	for j, c := range sc.Checks {
 		if c.Image != "" {
 			doc.Services[CheckService(j)] = checkService(f, spec, spec.CheckImages[CheckService(j)])
@@ -316,7 +319,7 @@ func relaysFor(f *File, sc *Scenario, spec RunSpec) ([]Relay, error) {
 			}
 		}
 	}
-	if spec.Debug != nil {
+	if spec.debugNet() {
 		if slices.ContainsFunc(out, func(r Relay) bool { return r.Name == RelayDAP }) {
 			return nil, fmt.Errorf("harness compose: relay name %q is reserved for the debugger in a debug run", RelayDAP)
 		}
@@ -517,7 +520,7 @@ func edgeService(spec RunSpec, relays []Relay) composeService {
 		"--outer", spec.OuterSubnet.Masked().String(),
 		"--inner", spec.InnerSubnet.Masked().String(),
 	}
-	if spec.Debug != nil {
+	if spec.debugNet() {
 		cmd = append(cmd, "--inner", spec.DebugSubnet.Masked().String())
 	}
 	ports := make([]string, 0, len(relays))
@@ -585,7 +588,9 @@ type composeService struct {
 	Healthcheck *composeHealthcheck         `yaml:"healthcheck,omitempty"`
 	Command     []string                    `yaml:"command,omitempty"`
 	DependsOn   map[string]composeCondition `yaml:"depends_on,omitempty"`
-	Profiles    []string                    `yaml:"profiles,omitempty"`
+	// Profiles keep a service out of a compose up that does not name it.
+	Profiles []string `yaml:"profiles,omitempty"`
+	Restart  string   `yaml:"restart,omitempty"`
 }
 
 type composeCondition struct {

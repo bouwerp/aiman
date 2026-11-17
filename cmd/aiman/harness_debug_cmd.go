@@ -67,3 +67,71 @@ func holderName(name, id string) string {
 	}
 	return "a client"
 }
+
+// harnessDebugCheck is `aiman harness check <name> --debug [--take]`: the
+// check runs as the run's debug target, and the command polls harness.status
+// until it ends, then prints its result as a plain check does. Interrupting
+// the command leaves the check running.
+func harnessDebugCheck(h harnessIO, a harnessArgs) error {
+	if len(a.pos) != 1 {
+		_, _ = fmt.Fprintln(h.errOut, "name the check to debug")
+		return harnessUsage(h.errOut)
+	}
+	params := a.target()
+	params["name"], params["debug"] = a.pos[0], true
+	if a.take {
+		params["take"] = true
+	}
+	raw, err := harnessCallOut(h, a, "harness.check", params)
+	if err != nil {
+		return err
+	}
+	var started struct {
+		Run        string              `json:"run"`
+		DebugCheck *harness.DebugCheck `json:"debug_check"`
+	}
+	if err := json.Unmarshal(raw, &started); err != nil {
+		return err
+	}
+	if !a.json {
+		msg := fmt.Sprintf("check %s waits for a debugger on run %s: open the Debug tab of aiman harness console", a.pos[0], started.Run)
+		if d := started.DebugCheck; d != nil {
+			msg += fmt.Sprintf(" before %s", d.AttachBy.Local().Format(time.Kitchen))
+		}
+		_, _ = fmt.Fprintln(h.out, msg+". Ctrl+C here leaves it running.")
+	}
+	var run harness.Run
+	for {
+		h.sleep(harnessPollEvery)
+		if raw, err = harnessCallOut(h, a, "harness.status", map[string]any{"run": started.Run}); err != nil {
+			return err
+		}
+		if run, err = decodeRun(raw); err != nil {
+			return err
+		}
+		if run.DebugCheck == nil || run.DebugCheck.Name != a.pos[0] || !run.Live() {
+			break
+		}
+	}
+	var c harness.CheckRun
+	for _, x := range run.Checks {
+		if x.Name == a.pos[0] {
+			c = x
+		}
+	}
+	if a.json {
+		b, err := json.Marshal(map[string]any{"type": "harness_check", "run": run.ID, "debug": true, "checks": []harness.CheckRun{c}})
+		if err != nil {
+			return err
+		}
+		return printHarnessJSON(h.out, b)
+	}
+	writeHarnessChecks(h.out, []harness.CheckRun{c})
+	if c.Error != "" {
+		_, _ = fmt.Fprintf(h.out, "    %s\n", c.Error)
+	}
+	if c.Exit == nil || *c.Exit != 0 {
+		return errHarnessCheckFailed
+	}
+	return nil
+}
