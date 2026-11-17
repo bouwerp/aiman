@@ -92,3 +92,26 @@ func TestAlerterSlicesAndForgetting(t *testing.T) {
 		t.Fatalf("unsupported snapshot alerted: %+v", got)
 	}
 }
+
+func TestAlerterIgnoresPageCache(t *testing.T) {
+	a := NewAlerter()
+	t0 := time.Unix(0, 0)
+	snap := func(anon, shmem int64) Snapshot {
+		return Snapshot{Supported: true, Sessions: []SessionUsage{{ID: "s1", Usage: Usage{
+			MemoryCurrent: 95, MemoryHigh: 100, Anon: anon, Shmem: shmem,
+		}}}}
+	}
+	// 95% of the limit, but 90 of it is page cache: no alert after the hold.
+	for _, sec := range []int{0, 30, 60} {
+		if got := a.Evaluate(snap(5, 0), t0.Add(time.Duration(sec)*time.Second)); len(got) != 0 {
+			t.Fatalf("page cache alerted at %ds: %+v", sec, got)
+		}
+	}
+	// Processes and tmpfs that hold 92% do alert, and the text says so.
+	a = NewAlerter()
+	a.Evaluate(snap(80, 12), t0)
+	got := a.Evaluate(snap(80, 12), t0.Add(30*time.Second))
+	if len(got) != 1 || got[0].Text() != "92/100 memory" {
+		t.Fatalf("held memory: %+v", got)
+	}
+}

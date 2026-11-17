@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// Alert thresholds. A session alerts when it has held at least 90% of its
-// MemoryHigh for AlertHold, or when its memory pressure passes 50%. Having
+// Alert thresholds. A session alerts when it has held (Usage.Held) at least
+// 90% of its MemoryHigh for AlertHold, or when its memory pressure passes 50%. Having
 // alerted it stays "over" until it is back under 80% and 25%, and it alerts
 // again at most once per AlertEvery while it stays over.
 const (
@@ -40,10 +40,22 @@ type Alert struct {
 	Throttled bool
 }
 
+// Held is the memory the cgroup's processes hold: anon plus shmem (tmpfs
+// files). memory.current also counts page cache, which a build or test run
+// fills to the limit and the kernel reclaims under MemoryHigh without harm;
+// alerting on it repeats while nothing is wrong. With no memory.stat reading
+// (both zero) it falls back to memory.current.
+func (u Usage) Held() int64 {
+	if h := u.Anon + u.Shmem; h > 0 {
+		return h
+	}
+	return u.MemoryCurrent
+}
+
 // Text is the alert in one line, without the session's name:
-// "5.8G/6G memory, pressure 61%".
+// "5.8G/6G memory, pressure 61%". The amount is Held.
 func (a Alert) Text() string {
-	s := FormatSize(a.Usage.MemoryCurrent) + "/" + FormatSize(a.Usage.MemoryHigh) + " memory"
+	s := FormatSize(a.Usage.Held()) + "/" + FormatSize(a.Usage.MemoryHigh) + " memory"
 	if a.Usage.MemoryPressure >= 1 {
 		s += fmt.Sprintf(", pressure %.0f%%", a.Usage.MemoryPressure)
 	}
@@ -111,7 +123,7 @@ func (a *Alerter) step(key string, u Usage, hold time.Duration, now time.Time) (
 	}
 	ratio := 0.0
 	if u.MemoryHigh > 0 {
-		ratio = float64(u.MemoryCurrent) / float64(u.MemoryHigh)
+		ratio = float64(u.Held()) / float64(u.MemoryHigh)
 	}
 	throttled = u.MemoryPressure > AlertPressure
 	switch {
