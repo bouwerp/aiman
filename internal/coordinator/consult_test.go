@@ -67,12 +67,13 @@ func TestPickConsultEmptySmart(t *testing.T) {
 func TestParseConsultReport(t *testing.T) {
 	md := "# Consult\n\n## Objections\n\n- [high] The store has no lock. Add one.\n" +
 		"- [HIGH] Two writers race on the file. Serialise them.\n" +
-		"* [low] Naming. Rename Foo.\n- not a severity line\n\n## Verdict\n\nRevise: fix the two races.\n"
+		"* [low] Naming. Rename Foo.\n- `[medium]` **Markup** around the tag.\n" +
+		"- **[low]** Bold tag.\n- not a severity line\n\n## Verdict\n\nRevise: fix the two races.\n"
 	got, err := ParseConsultReport(md)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ConsultReport{High: 2, Medium: 0, Low: 1, Verdict: "revise"}
+	want := ConsultReport{High: 2, Medium: 1, Low: 2, Verdict: "revise"}
 	if got != want {
 		t.Fatalf("report = %+v, want %+v", got, want)
 	}
