@@ -99,6 +99,11 @@ type Server struct {
 	fwErr  string
 	fwds   []forwardView
 	polled time.Time
+	// bridges counts open debugger WebSockets.
+	bridges int
+	// leaseToken is this console's debugger lease: every bridge sends it, so
+	// an adapter's child sessions join the holder's lease at the edge.
+	leaseToken string
 }
 
 // New makes a console that will serve on ln, which must listen on 127.0.0.1.
@@ -124,9 +129,13 @@ func New(o Options, ln net.Listener) (*Server, error) {
 	if log == nil {
 		log = io.Discard
 	}
+	lease, err := newToken()
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
 		rpc: o.RPC, fwd: o.Forwarder, token: tok, port: addr.Port, ln: ln, log: log,
-		session: o.Session, pinned: o.Run, fwCtx: context.Background(),
+		session: o.Session, pinned: o.Run, fwCtx: context.Background(), leaseToken: lease,
 	}
 	s.handler = s.routes()
 	return s, nil

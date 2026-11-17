@@ -6,7 +6,9 @@
 <meta name="referrer" content="no-referrer">
 <title>Harness console</title>
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/debug.css">
 <script src="/app.js" defer></script>
+<script src="/debug.js" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -24,7 +26,7 @@
 
 <nav class="apps" id="apps" aria-label="App links" hidden></nav>
 
-<main class="layout">
+<main class="layout" id="layout">
   <section class="steps" aria-labelledby="steps-h">
     <h2 id="steps-h">Steps</h2>
     <p class="empty" id="steps-empty">No run to test yet. Start one under Run.</p>
@@ -40,6 +42,7 @@
       <button type="button" role="tab" id="tab-run" aria-controls="panel-run" aria-selected="true">Run</button>
       <button type="button" role="tab" id="tab-checks" aria-controls="panel-checks" aria-selected="false">Checks</button>
       <button type="button" role="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="false">Logs</button>
+      <button type="button" role="tab" id="tab-debug" aria-controls="panel-debug" aria-selected="false">Debug</button>
     </div>
 
     <div class="panel" role="tabpanel" id="panel-run" aria-labelledby="tab-run">
@@ -50,6 +53,7 @@
         <select id="up-scenario" required></select>
         <p class="hint" id="up-hint"></p>
         <label class="check"><input type="checkbox" id="up-dirty"> Include uncommitted changes</label>
+        <label class="check"><input type="checkbox" id="up-debug"> Start with the debugger (the app runs while a debugger is connected)</label>
         <label class="check"><input type="checkbox" id="up-force"> Start even when the host is under memory pressure</label>
         <button type="submit" class="btn primary" id="up-go">Start run</button>
       </form>
@@ -71,6 +75,65 @@
       </div>
       <p class="hint" id="log-status"></p>
       <pre class="log" id="log" tabindex="0" aria-live="off"></pre>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-debug" aria-labelledby="tab-debug" hidden>
+      <p class="empty" id="dbg-empty">This run has no debugger. Start a run with "Start with the debugger" under Run.</p>
+      <div id="dbg" hidden>
+        <div class="dbg-holder" id="dbg-holder" data-held="free">
+          <p class="dbg-holder-text" id="dbg-holder-text" role="status">Debugger free</p>
+          <div class="dbg-holder-actions">
+            <button type="button" class="btn primary" id="dbg-connect">Connect</button>
+            <button type="button" class="btn" id="dbg-take" hidden>Take over</button>
+            <button type="button" class="btn" id="dbg-release" hidden>Release</button>
+          </div>
+        </div>
+
+        <div class="dbg-toolbar" role="toolbar" aria-label="Debugger controls">
+          <button type="button" class="btn" id="dbg-continue" title="Continue (F8)">Continue</button>
+          <button type="button" class="btn" id="dbg-pause" title="Pause (F8)">Pause</button>
+          <button type="button" class="btn" id="dbg-next" title="Step over (F10)">Step over</button>
+          <button type="button" class="btn" id="dbg-in" title="Step in (F11)">Step in</button>
+          <button type="button" class="btn" id="dbg-out" title="Step out (Shift+F11)">Step out</button>
+          <span class="dbg-status" id="dbg-status" role="status" aria-live="polite">Not connected</span>
+        </div>
+
+        <div class="dbg-grid">
+          <section class="dbg-source" aria-label="Source">
+            <div class="dbg-file">
+              <label for="dbg-file">File</label>
+              <input type="text" id="dbg-file" list="dbg-files" autocomplete="off" spellcheck="false" placeholder="Type to find a file">
+              <datalist id="dbg-files"></datalist>
+            </div>
+            <p class="hint" id="dbg-src-hint">Pick a file, then click a line number to set a breakpoint.</p>
+            <ol class="src" id="dbg-src"></ol>
+          </section>
+
+          <section class="dbg-inspect" aria-label="Program state">
+            <h3>Call stack</h3>
+            <ol class="stack" id="dbg-stack"></ol>
+            <h3>Variables</h3>
+            <div class="vars" id="dbg-vars" role="tree" aria-label="Variables"></div>
+            <h3>Breakpoints</h3>
+            <ul class="bps" id="dbg-bps"></ul>
+            <form class="dbg-eval" id="dbg-eval">
+              <label for="dbg-expr">Evaluate in the selected frame</label>
+              <div class="dbg-eval-row">
+                <input type="text" id="dbg-expr" autocomplete="off" spellcheck="false" placeholder="order.Total">
+                <button type="submit" class="btn">Evaluate</button>
+              </div>
+            </form>
+            <pre class="log dbg-out" id="dbg-out" aria-live="off"></pre>
+          </section>
+        </div>
+
+        <details class="dbg-editor" id="dbg-editor">
+          <summary>Use an editor instead</summary>
+          <p class="hint" id="dbg-editor-hint">Add this to .vscode/launch.json in your checkout of the same commit, release the debugger here, then start it in the editor.</p>
+          <pre class="log" id="dbg-launch"></pre>
+          <button type="button" class="btn" id="dbg-copy">Copy</button>
+        </details>
+      </div>
     </div>
   </section>
 </main>

@@ -1,0 +1,153 @@
+/* Debug tab. It reuses the console's tokens; the one new mark is the
+   breakpoint dot in the gutter and the paused line, which carry the tab. */
+:root {
+  --bp: #c2362b;
+  --bp-pending: #c98f87;
+  --here: #fff1c2;
+  --here-edge: #c99a1c;
+  --code-bg: #fbfcfd;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bp: #f07a6e;
+    --bp-pending: #8a4f49;
+    --here: #3b3216;
+    --here-edge: #d9b44a;
+    --code-bg: #10151b;
+  }
+}
+
+/* The side panel takes the width while the Debug tab is open; the steps
+   stay beside it for the tester. */
+@media (min-width: 960px) {
+  .layout[data-focus="debug"] { grid-template-columns: minmax(0, 2fr) minmax(0, 5fr); }
+}
+
+.dbg-holder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.55rem 0.8rem;
+  margin-bottom: 0.75rem;
+  border-radius: 6px;
+  border-left: 4px solid var(--line);
+  background: var(--log-bg);
+}
+.dbg-holder[data-held="you"] { border-left-color: var(--pass); background: var(--pass-bg); }
+.dbg-holder[data-held="other"] { border-left-color: var(--skip); background: var(--skip-bg); }
+.dbg-holder-text { margin: 0; font-size: 0.9rem; overflow-wrap: anywhere; }
+.dbg-holder-actions { display: flex; gap: 0.4rem; }
+
+.dbg-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  padding-bottom: 0.65rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.dbg-status { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
+
+.dbg-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+@media (min-width: 1180px) {
+  .dbg-grid { grid-template-columns: minmax(0, 3fr) minmax(15rem, 2fr); align-items: start; }
+}
+
+.dbg-file { display: flex; gap: 0.5rem; align-items: center; }
+.dbg-file input { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.35rem 0.55rem; }
+
+.src {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0.35rem 0;
+  max-height: 62vh;
+  overflow: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.src li { display: grid; grid-template-columns: 4.2rem minmax(0, 1fr); align-items: baseline; }
+.src li[data-current="true"] { background: var(--here); box-shadow: inset 3px 0 0 var(--here-edge); }
+.src code { white-space: pre; padding-right: 0.75rem; font: inherit; }
+
+.gutter {
+  position: relative;
+  font: inherit;
+  text-align: right;
+  padding: 0 0.7rem 0 1.4rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.gutter:hover { color: var(--ink); }
+.gutter::before {
+  content: "";
+  position: absolute;
+  left: 0.45rem;
+  top: 50%;
+  width: 0.6rem;
+  height: 0.6rem;
+  margin-top: -0.3rem;
+  border-radius: 50%;
+}
+.gutter:hover::before { background: var(--line); }
+.gutter[data-bp]::before { background: var(--bp); }
+.gutter[data-bp="pending"]::before,
+.gutter[data-bp="unverified"]::before { background: var(--bp-pending); }
+.gutter[data-bp] { color: var(--ink); font-weight: 600; }
+
+.dbg-inspect h3 { margin-top: 0.9rem; }
+.dbg-inspect h3:first-child { margin-top: 0; }
+
+.stack { list-style: none; margin: 0; padding: 0; max-height: 14rem; overflow: auto; }
+.frame {
+  display: grid;
+  width: 100%;
+  gap: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  border-left: 3px solid transparent;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+.frame[aria-current="true"] { border-left-color: var(--here-edge); background: var(--here); }
+.frame-name { font-weight: 600; overflow-wrap: anywhere; }
+.frame-where { color: var(--muted); font-size: 0.8rem; overflow-wrap: anywhere; }
+
+.vars { font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-height: 20rem; overflow: auto; }
+.var { padding-left: 0.2rem; overflow-wrap: anywhere; }
+.var-kids { padding-left: 1rem; border-left: 1px solid var(--line); margin-left: 0.35rem; }
+.var-name { color: var(--accent); }
+.var-type { color: var(--muted); }
+.var-toggle { font: inherit; border: 0; background: none; padding: 0; cursor: pointer; color: inherit; }
+.var-toggle::before { content: "\25B8"; display: inline-block; width: 1em; color: var(--muted); }
+.var-toggle[aria-expanded="true"]::before { content: "\25BE"; }
+
+.bps { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+.bps li { display: flex; justify-content: space-between; gap: 0.5rem; align-items: center; padding: 0.15rem 0; }
+.linkish { font: inherit; border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.btn.small { font-size: 0.8rem; padding: 0.1rem 0.5rem; }
+
+.dbg-eval { display: grid; gap: 0.3rem; margin-top: 0.9rem; font-size: 0.9rem; }
+.dbg-eval-row { display: flex; gap: 0.4rem; }
+.dbg-eval-row input { flex: 1; min-width: 0; }
+.dbg-out { margin-top: 0.5rem; max-height: 12rem; min-height: 3rem; }
+
+.dbg-editor { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
+.dbg-editor summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.dbg-editor .log { margin: 0.4rem 0; max-height: 18rem; }
+
+@media (max-width: 520px) {
+  .dbg-status { margin-left: 0; flex-basis: 100%; }
+  .src li { grid-template-columns: 3.4rem minmax(0, 1fr); }
+}

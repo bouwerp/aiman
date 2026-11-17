@@ -318,7 +318,7 @@
     $("up-go").disabled = true;
     notice("info", "Starting " + scenario + "…");
     try {
-      await api("/api/up", { scenario: scenario, dirty: $("up-dirty").checked, force: $("up-force").checked });
+      await api("/api/up", { scenario: scenario, dirty: $("up-dirty").checked, force: $("up-force").checked, debug: $("up-debug").checked });
       notice("info", "Run of " + scenario + " is starting. The app links appear once it is ready.");
       checkOutput = null;
       await poll();
@@ -348,6 +348,8 @@
       $(t.getAttribute("aria-controls")).hidden = !on;
     }
     if (id === "tab-logs") pollLogs();
+    $("layout").dataset.focus = id === "tab-debug" ? "debug" : "";
+    if (window.aimanDebug) window.aimanDebug.shown(id === "tab-debug");
   }
 
   // ---- loop ----
@@ -360,6 +362,7 @@
     renderFacts(run);
     renderChecks(run);
     renderServices(run);
+    if (window.aimanDebug) window.aimanDebug.update(state);
   }
 
   async function poll() {
@@ -400,6 +403,10 @@
     poll().then(loadScenarios);
     setInterval(poll, POLL_MS);
   }
+
+  // debug.js reads these; it sends the token only in the debugger WebSocket's
+  // subprotocol offer, as the bridge expects.
+  window.aimanConsole = { api: api, el: el, $: $, notice: notice, showError: showError, token: token };
 
   start();
 })();

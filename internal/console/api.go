@@ -28,9 +28,11 @@ var webFS embed.FS
 
 // staticFiles maps a served path to its embedded file and type.
 var staticFiles = map[string][2]string{
-	"/":        {"web/index.html", "text/html; charset=utf-8"},
-	"/app.js":  {"web/app.js", "text/javascript; charset=utf-8"},
-	"/app.css": {"web/app.css", "text/css; charset=utf-8"},
+	"/":          {"web/index.html", "text/html; charset=utf-8"},
+	"/app.js":    {"web/app.js", "text/javascript; charset=utf-8"},
+	"/app.css":   {"web/app.css", "text/css; charset=utf-8"},
+	"/debug.js":  {"web/debug.js", "text/javascript; charset=utf-8"},
+	"/debug.css": {"web/debug.css", "text/css; charset=utf-8"},
 }
 
 type apiRoute struct {
@@ -46,6 +48,11 @@ var apiRoutes = map[string]apiRoute{
 	"/api/check":   {http.MethodPost, (*Server).handleCheck},
 	"/api/up":      {http.MethodPost, (*Server).handleUp},
 	"/api/down":    {http.MethodPost, (*Server).handleDown},
+	"/api/debug":   {http.MethodGet, (*Server).handleDebug},
+	DebugOpPath:    {http.MethodPost, (*Server).handleDebug},
+	"/api/files":   {http.MethodGet, (*Server).handleFiles},
+	"/api/file":    {http.MethodGet, (*Server).handleFile},
+	DAPPath:        {http.MethodGet, (*Server).handleDAP},
 }
 
 func (s *Server) routes() http.Handler {
@@ -56,7 +63,9 @@ func (s *Server) routes() http.Handler {
 				writeError(w, http.StatusMethodNotAllowed, &apiError{Code: "bad_method", Message: refusalText["bad_method"]})
 				return
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+			if r.URL.Path != DAPPath {
+				r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+			}
 			route.h(s, w, r)
 			return
 		}
@@ -273,6 +282,7 @@ func (s *Server) handleUp(w http.ResponseWriter, r *http.Request) {
 		Scenario string `json:"scenario"`
 		Dirty    bool   `json:"dirty"`
 		Force    bool   `json:"force"`
+		Debug    bool   `json:"debug"`
 	}
 	if !decodeBody(w, r, &b) {
 		return
@@ -292,6 +302,9 @@ func (s *Server) handleUp(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.Force {
 		params["force"] = true
+	}
+	if b.Debug {
+		params["debug"] = true
 	}
 	raw, ok := s.relay(w, r, "harness.up", params)
 	if !ok {
