@@ -50,6 +50,8 @@ func runHarness(args []string) error {
 			return runHarnessEdge(args[1:])
 		case "console":
 			return runHarnessConsole(args[1:])
+		case "scan":
+			return runHarnessScan(args[1:])
 		}
 	}
 	return harnessMain(args, harnessIO{
