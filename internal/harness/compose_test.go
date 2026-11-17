@@ -470,10 +470,17 @@ func TestComposeRejectsBadSpec(t *testing.T) {
 	}
 }
 
+// Parse refuses a port named like a service; Compose still refuses a File
+// built some other way.
 func TestComposeRelayNameClash(t *testing.T) {
-	f, err := Parse([]byte(strings.Replace(composeFixture, "{name: admin, container: 9090}", "{name: db, container: 9090}", 1)))
+	f, err := Parse([]byte(composeFixture))
 	if err != nil {
 		t.Fatal(err)
+	}
+	for i := range f.App.Ports {
+		if f.App.Ports[i].Name == "admin" {
+			f.App.Ports[i].Name = "db"
+		}
 	}
 	if _, err := Compose(f, testSpec()); err == nil || !strings.Contains(err.Error(), "db") {
 		t.Fatalf("want a relay name clash error, got %v", err)

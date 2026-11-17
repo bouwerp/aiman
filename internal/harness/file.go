@@ -30,6 +30,20 @@ const (
 	CodeUnknownScenario = "harness_unknown_scenario"
 	CodeSubmodule       = "harness_submodule"
 	CodeTooLarge        = "harness_too_large"
+	// CodeDirty refuses a run of a tree with uncommitted or untracked files
+	// unless the caller asks for a dirty run.
+	CodeDirty = "harness_dirty"
+	// CodeImageMissing refuses an image that harness.allowed_images does not
+	// list or that is not on the host; serve never pulls.
+	CodeImageMissing = "harness_image_missing"
+	// CodeRunning refuses a second live run for one session.
+	CodeRunning = "harness_running"
+	// CodeBusy refuses a run over harness.max_runs live runs on the host.
+	CodeBusy = "harness_busy"
+	// CodeNotRunning refuses an action that needs a ready run, or names no run.
+	CodeNotRunning = "harness_not_running"
+	// CodeServiceFailed reports a service that did not become ready.
+	CodeServiceFailed = "harness_service_failed"
 )
 
 // Sentinels for errors.Is; an *Error matches the sentinel with its code.
@@ -42,14 +56,20 @@ var (
 )
 
 // Error is a harness refusal with a stable code. Errors is set for
-// CodeInvalid, Path for CodeSubmodule, Sum and Limit (bytes) for CodeTooLarge.
+// CodeInvalid, Path for CodeSubmodule, Sum and Limit (bytes) for CodeTooLarge,
+// Paths for CodeDirty, Image for CodeImageMissing, Service and Tail for
+// CodeServiceFailed.
 type Error struct {
-	Code   string
-	Msg    string
-	Errors []string
-	Path   string
-	Sum    int64
-	Limit  int64
+	Code    string
+	Msg     string
+	Errors  []string
+	Path    string
+	Sum     int64
+	Limit   int64
+	Paths   []string
+	Image   string
+	Service string
+	Tail    string
 }
 
 func (e *Error) Error() string {
@@ -78,6 +98,12 @@ func (e *Error) Data() map[string]any {
 		return map[string]any{"path": e.Path}
 	case CodeTooLarge:
 		return map[string]any{"sum": e.Sum, "limit": e.Limit}
+	case CodeDirty:
+		return map[string]any{"paths": e.Paths}
+	case CodeImageMissing:
+		return map[string]any{"image": e.Image}
+	case CodeServiceFailed:
+		return map[string]any{"service": e.Service, "tail": e.Tail}
 	}
 	return nil
 }

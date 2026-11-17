@@ -40,6 +40,12 @@ func (f *File) Validate() []string {
 		add("version must be %d, got %d", FileVersion, f.Version)
 	}
 	errs = append(errs, f.App.validate()...)
+	// Edge relays are named after app ports and services alike.
+	for i, p := range f.App.Ports {
+		if _, ok := f.Services[p.Name]; ok {
+			add("app.ports[%d]: name %q is also a service; relay names must be unique", i, p.Name)
+		}
+	}
 	for _, name := range sortedKeys(f.Services) {
 		errs = append(errs, validateService(name, f.Services[name])...)
 	}
