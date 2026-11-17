@@ -210,6 +210,9 @@ func (f *File) validateScenario(i int, sc *Scenario) []string {
 		if strings.TrimSpace(c.Run) == "" {
 			add("checks[%d].run is required", j)
 		}
+		if c.Image != "" && !imageCharsRe.MatchString(c.Image) {
+			add("checks[%d].image %q must be a plain image reference", j, c.Image)
+		}
 		if c.Debug != nil {
 			for _, e := range c.Debug.validate(fmt.Sprintf("checks[%d].debug", j), true) {
 				add("%s", e)

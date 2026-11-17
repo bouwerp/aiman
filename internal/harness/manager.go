@@ -434,7 +434,7 @@ func stepViews(sc *Scenario) []StepView {
 func checkRuns(sc *Scenario) []CheckRun {
 	out := make([]CheckRun, 0, len(sc.Checks))
 	for _, c := range sc.Checks {
-		out = append(out, CheckRun{Name: c.Name, Run: c.Run})
+		out = append(out, CheckRun{Name: c.Name, Run: c.Run, Image: c.Image})
 	}
 	return out
 }
@@ -457,6 +457,11 @@ func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenar
 	refs := [][2]string{{ServiceApp, appRef}}
 	for _, name := range sc.Services {
 		refs = append(refs, [2]string{name, f.Services[name].Image})
+	}
+	for j, c := range sc.Checks {
+		if c.Image != "" {
+			refs = append(refs, [2]string{CheckService(j), c.Image})
+		}
 	}
 	refs = append(refs, [2]string{ServiceEdge, m.opts.EdgeImage})
 	if debug != nil && debug.AdapterImage() != "" {

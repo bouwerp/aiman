@@ -1787,6 +1787,11 @@ components:
         run:
           type: string
           description: The command, as the harness file has it.
+        image:
+          type: string
+          description: >
+            The check's own image ref (checks[].image); absent when it runs
+            in the app's image.
         exit:
           type: integer
         at:
@@ -2049,6 +2054,9 @@ components:
                 type: string
               run:
                 type: string
+              image:
+                type: string
+                description: An image the check runs in instead of the app's; vetted like every image.
         stubs:
           type: array
           items:
