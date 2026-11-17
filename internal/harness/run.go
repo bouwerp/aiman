@@ -104,10 +104,12 @@ type StepView struct {
 }
 
 // CheckRun is one scenario check and its latest result; Exit is nil until it
-// ran. Output is the redacted tail of its output.
+// ran. Output is the redacted tail of its output. Image is the check's own
+// image ref, empty when it runs in the app's.
 type CheckRun struct {
 	Name   string     `json:"name"`
 	Run    string     `json:"run"`
+	Image  string     `json:"image,omitempty"`
 	Exit   *int       `json:"exit,omitempty"`
 	At     *time.Time `json:"at,omitempty"`
 	Output string     `json:"output,omitempty"`
