@@ -526,6 +526,8 @@ func LifecycleCases() []Case {
 		CaseHandoverChildEarlyReport(),
 		CaseTerminateWorktree(),
 		CaseRestartSwitch(),
+		CaseScenarioHarness(),
+		CaseScenarioHarnessDirty(),
 	}
 }
 

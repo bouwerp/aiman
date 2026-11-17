@@ -106,7 +106,37 @@ const (
 	EventAWSLoginStarted EventKind = "aws.login_started"
 	// EventAWSLoginFinished records a sign-in's end: profile, state and failure.
 	EventAWSLoginFinished EventKind = "aws.login_finished"
+	// EventHarnessStarted records a harness run's start: run, scenario, sha,
+	// dirty, diff_sha256, source, network and debug.
+	EventHarnessStarted EventKind = "harness.started"
+	// EventHarnessReady records a run whose app and edge are up: run and
+	// the relayed ports.
+	EventHarnessReady EventKind = "harness.ready"
+	// EventHarnessFailed records a run that failed to start: run, step and
+	// the step's exit code.
+	EventHarnessFailed EventKind = "harness.failed"
+	// EventHarnessCheck records one scenario check: run, name and exit.
+	EventHarnessCheck EventKind = "harness.check"
+	// EventHarnessVerdict records a tester's verdict: run, scenario, step,
+	// result, note, sha, dirty and diff_sha256.
+	EventHarnessVerdict EventKind = "harness.verdict"
+	// EventHarnessStopped records a run taken down: run and reason (down,
+	// idle, session_gone, serve_restart).
+	EventHarnessStopped EventKind = "harness.stopped"
+	// EventHarnessImageVetted records a finished vetting or re-scan: digest,
+	// ref, state, critical, high, static and MAL counts, the review verdict,
+	// the signature status, the report path and rescan.
+	EventHarnessImageVetted EventKind = "harness.image_vetted"
+	// EventHarnessImageApproved records an approval: digest, ref, approved_by,
+	// approver, quote, accepted_highs, accept_risk and reason.
+	EventHarnessImageApproved EventKind = "harness.image_approved"
+	// EventHarnessImageBlocked records a blocked digest: digest, ref and reasons.
+	EventHarnessImageBlocked EventKind = "harness.image_blocked"
 )
+
+// HarnessImageLedger is the ledger id of the harness image rows. An image
+// approval is host-wide, so every row also goes here, which no session owns.
+const HarnessImageLedger = "harness-images"
 
 // AWSLoginLedger is the ledger id of the aws.login_* rows. A sign-in belongs to
 // the host and only the operator may start one, so it has no session of its own.

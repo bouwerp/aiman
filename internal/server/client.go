@@ -414,6 +414,14 @@ func slowCall(method string) (time.Duration, bool) {
 		return ReviewRunTimeout + 15*time.Second, true
 	case "handover.write":
 		return 30 * time.Second, true
+	case "harness.up":
+		return HarnessUpTimeout + 15*time.Second, true
+	case "harness.check":
+		return HarnessCheckTimeout + 15*time.Second, true
+	case "harness.down":
+		return HarnessDownTimeout + 15*time.Second, true
+	case "harness.image_approve":
+		return HarnessImageApproveTimeout + 15*time.Second, true
 	}
 	return 30 * time.Second, false
 }

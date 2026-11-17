@@ -85,42 +85,8 @@ func run() error {
 	// file while serve or the dashboard holds it returns "database is locked",
 	// and a holder that cannot start is a session that cannot start.
 	if len(parsed.Rest) > 0 {
-		switch parsed.Rest[0] {
-		case "pty":
-			return runPTY(parsed.Rest[1:])
-		case "session":
-			return runSession(parsed.Rest[1:])
-		case "rpc":
-			return runRPC(parsed.Rest[1:], os.Stdin, os.Getenv)
-		case "todo":
-			return runTodo(parsed.Rest[1:], os.Stdin, os.Getenv)
-		case "usage":
-			return runUsage(parsed.Rest[1:], os.Stdout)
-		case "limits", "resources":
-			return runLimitsOrResources(parsed.Rest, os.Stdin, os.Stdout)
-		case "agents":
-			return runAgents(parsed.Rest[1:], os.Stdout)
-		case "aws":
-			if len(parsed.Rest) > 1 && parsed.Rest[1] == "log" {
-				return runAWSLog(parsed.Rest[2:], callAWSLog, os.Stdout)
-			}
-			return runAWS(parsed.Rest[1:], loadAWSCommandConfig(), os.Stdout)
-		case "host":
-			return runHost(parsed.Rest[1:])
-		case "design":
-			return runDesign(parsed.Rest[1:], os.Getenv)
-		case "land":
-			return runLand(parsed.Rest[1:], os.Getenv)
-		case "review":
-			return runReview(parsed.Rest[1:], os.Getenv)
-		case "ci":
-			return runCI(parsed.Rest[1:], os.Getenv)
-		case "pr":
-			return runPR(parsed.Rest[1:], os.Getenv)
-		case "verify":
-			return runVerify(parsed.Rest[1:])
-		case "slack":
-			return runSlack(context.Background(), parsed.Rest[1:], os.Stdin, os.Stdout, os.Stderr)
+		if handled, err := runSubcommand(parsed.Rest); handled {
+			return err
 		}
 	}
 
@@ -343,4 +309,49 @@ func startDebugLog(path string, origArgs []string) error {
 	log.Printf("aiman debug version=%s goos=%s goarch=%s args=%q", version, runtime.GOOS, runtime.GOARCH, origArgs)
 	fmt.Fprintf(os.Stderr, "aiman: debug log %s\n", path)
 	return nil
+}
+
+// runSubcommand runs the commands that skip the TUI setup in run. handled is
+// false for anything else.
+func runSubcommand(rest []string) (handled bool, err error) {
+	switch rest[0] {
+	case "pty":
+		return true, runPTY(rest[1:])
+	case "session":
+		return true, runSession(rest[1:])
+	case "rpc":
+		return true, runRPC(rest[1:], os.Stdin, os.Getenv)
+	case "todo":
+		return true, runTodo(rest[1:], os.Stdin, os.Getenv)
+	case "usage":
+		return true, runUsage(rest[1:], os.Stdout)
+	case "limits", "resources":
+		return true, runLimitsOrResources(rest, os.Stdin, os.Stdout)
+	case "agents":
+		return true, runAgents(rest[1:], os.Stdout)
+	case "aws":
+		if len(rest) > 1 && rest[1] == "log" {
+			return true, runAWSLog(rest[2:], callAWSLog, os.Stdout)
+		}
+		return true, runAWS(rest[1:], loadAWSCommandConfig(), os.Stdout)
+	case "host":
+		return true, runHost(rest[1:])
+	case "design":
+		return true, runDesign(rest[1:], os.Getenv)
+	case "land":
+		return true, runLand(rest[1:], os.Getenv)
+	case "review":
+		return true, runReview(rest[1:], os.Getenv)
+	case "ci":
+		return true, runCI(rest[1:], os.Getenv)
+	case "pr":
+		return true, runPR(rest[1:], os.Getenv)
+	case "verify":
+		return true, runVerify(rest[1:])
+	case "slack":
+		return true, runSlack(context.Background(), rest[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "harness":
+		return true, runHarness(rest[1:])
+	}
+	return false, nil
 }

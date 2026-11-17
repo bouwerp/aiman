@@ -374,6 +374,56 @@ aiman pty forget "$wid"
 
 `--match` is a literal substring; `--regex` is a Go regular expression. Output is matched after stripping ANSI. `pty capture` is the read. Do not attach. Only kill a PTY you created.
 
+## Harness
+
+The harness starts the app and its services in an offline sandbox on this host, so that a person can test a scenario. The harness file is `.aiman/harness.yaml`. Serve reads it from the commit, not from the working tree.
+
+When your work changes behaviour that a person can test, add or update a scenario in that file and commit it. A scenario has an `id`, the `services` it uses, `steps` for the tester (`do` and `expect`) and `checks` (commands; exit 0 is a pass). Write `{{<port name>}}` in a step for the app URL. You can name any image. Serve does not pull images: it vets each new image digest first (see Images below).
+
+```yaml
+version: 1
+app:
+  build: go build -o /out/app ./cmd/app
+  run: /out/app serve --addr :8080
+  ports: [{name: web, container: 8080}]
+services:
+  db:
+    image: postgres:16
+    env: {POSTGRES_PASSWORD: test}
+    ready: pg_isready -h db -U postgres
+    database: {kind: postgres, name: app}
+scenarios:
+  - id: refund-happy-path
+    title: Refund a paid order
+    services: [db]
+    fixtures: [{sql: testdata/harness/refund.sql, into: db}]
+    steps:
+      - do: "Open {{web}}/orders/42 and press Refund."
+        expect: "The order shows Refunded."
+    checks:
+      - {name: refund row, run: "scripts/harness/check-refund.sh 42"}
+```
+
+Do these steps to test a scenario:
+
+1. Run `aiman harness list` to see the scenarios and the runs.
+2. Run `aiman harness up <scenario> --wait`. Add `--dirty` to run uncommitted changes.
+3. Run `aiman harness check` to run the checks. Use `aiman harness logs <service>` to read the output of a container.
+4. Run `aiman harness down` when you are done.
+
+A session has one live run at a time. Do not use `--force`; it is for the operator. Only the operator records a verdict (`aiman harness verdict`); a session gets `needs_operator`. A failed step comes to you as a to-do `Harness: <scenario> step <n>: <note>` and an `[aiman]` note. Fix it, commit, and tell the operator that the scenario is ready to run again.
+
+### Images
+
+Serve vets every image digest before the Docker engine sees it. It scans for known CVEs and for malicious code. Then the operator approves the digest once for the host.
+
+- `aiman harness up` refuses with `harness_image_pending` while an image is vetted. `--wait` waits and prints the stage. Use `aiman harness image status <ref>` to see the state.
+- When the vetting is done, you get the to-do `Image approved: <ref> (<short digest>)` and an `[aiman]` note with the scan summary and the report path. Show the summary to the operator and ask for approval. Name each high CVE.
+- The summary has the model review: another agent read a text copy of the image in an isolated container and gave the verdict `clean`, `suspicious` or `malicious`. For `suspicious`, tell the operator the number of findings and point them to the review report path in the scan report. If the summary says `not independent`, tell the operator. It means the reviewer was from the same model family as you.
+- When the operator approves in this terminal, run `aiman harness approve-image <digest> --quote "<the operator's words>"`. Use their exact words. Do not approve an image yourself. Do not close the gate to-do.
+- Then run `aiman harness up` again.
+- `harness_image_blocked` means a critical CVE, a malware hit, a malicious package, a `malicious` review verdict, or a failed vetting. Do not try to get around it. Tell the operator. Only the operator can override it from the laptop. You can also use another image tag.
+
 ## Shared context
 
 This host keeps durable notes in `~/.aiman/context/` (markdown with YAML frontmatter). Prefer `aiman context` over inventing a sidecar. `find` returns ranked compact hits (`id`, `type`, `title`, `abstract`, `age`); `get` returns the full body. Session create injects a pack of abstracts into `.aiman_context.md`. `find` and packs hide superseded and expired notes. `aiman context stats` reports store size, op counts, and lookup times.

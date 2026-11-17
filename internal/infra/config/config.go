@@ -57,6 +57,8 @@ type Config struct {
 	Host HostConfig `yaml:"host,omitempty"`
 	// Resources configures per-session cgroup limits and scratch directories.
 	Resources ResourcesConfig `yaml:"resources,omitempty"`
+	// Harness configures scenario runs for human testers.
+	Harness HarnessConfig `yaml:"harness,omitempty"`
 	// Slack configures the aiman slack CLI on this machine.
 	Slack        SlackConfig `yaml:"slack,omitempty"`
 	Remotes      []Remote    `yaml:"remotes"`
@@ -110,6 +112,8 @@ type ServeConfig struct {
 	Host HostConfig `yaml:"host,omitempty"`
 	// Resources configures per-session cgroup limits and scratch directories.
 	Resources ResourcesConfig `yaml:"resources,omitempty"`
+	// Harness configures scenario runs for human testers.
+	Harness HarnessConfig `yaml:"harness,omitempty"`
 }
 
 // SlackConfig configures the aiman slack CLI.
@@ -525,6 +529,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		AWS:           c.serveAWSFor(host),
 		Host:          c.Host,
 		Resources:     c.Resources,
+		Harness:       c.Harness,
 	})
 }
 

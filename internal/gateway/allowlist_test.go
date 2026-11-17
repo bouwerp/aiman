@@ -93,6 +93,21 @@ func TestAllowlistKeepsReviewFixAndApproveOff(t *testing.T) {
 	}
 }
 
+func TestAllowlistHarnessReadOnly(t *testing.T) {
+	for _, m := range []string{"harness.list", "harness.status", "harness.result", "harness.image_status"} {
+		if !deviceMayCall(m, false) {
+			t.Errorf("%s must be a device read method", m)
+		}
+	}
+	for _, m := range []string{"harness.up", "harness.check", "harness.down", "harness.logs", "harness.verdict", "harness.image_approve"} {
+		for _, destructive := range []bool{false, true} {
+			if deviceMayCall(m, destructive) {
+				t.Errorf("%s must stay off the device allowlist (destructive=%v)", m, destructive)
+			}
+		}
+	}
+}
+
 func TestDeviceMayCall(t *testing.T) {
 	tests := []struct {
 		method      string

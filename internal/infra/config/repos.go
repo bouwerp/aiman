@@ -26,6 +26,10 @@ type RepoBootstrap struct {
 	Review RepoReview `yaml:"review,omitempty"`
 	// CI is the repo's local CI gate settings.
 	CI RepoCI `yaml:"ci,omitempty"`
+	// Harness, when set, is the repo's harness file in operator config. It
+	// wins over the repository's .aiman/harness.yaml; runs report source
+	// config.
+	Harness map[string]any `yaml:"harness,omitempty"`
 }
 
 // RepoCI is repos.<slug>.ci. Local, when set, replaces the repository's own

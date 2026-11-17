@@ -59,6 +59,18 @@ The current suite covers:
   tracker passes ask the parent for the report once.
 - `child-vanished`: a forgotten child clears t1's link, keeps it open, and
   raises one notification.
+- `scenario-harness`: the scenario harness (`harness.*`, `internal/harness`)
+  over `FakeDocker` (`evals/harness/scenario.go`, wired by
+  `Harness.EnableScenarioHarness` through `server.SetHarness`; it runs no
+  container). A session's committed `.aiman/harness.yaml` is listed, run, and
+  checked; an operator's failed step 2 adds the to-do
+  `Harness: refund step 2: <note>` with Ref `harness:refund:2` and queues a
+  steering note; the session's own verdict is `needs_operator`; down stops the
+  run, and the ledger holds `harness.started`, `ready`, `check`, `verdict` and
+  `stopped` in that order.
+- `scenario-harness-dirty`: an uncommitted file refuses `harness.up` with
+  `harness_dirty` naming it and starts nothing; `dirty: true` runs the tree and
+  records its diff hash.
 - `transcript` (`evals/transcript/`): an in-process serve wired with
   `server.NewTranscriptSource` over redacted Claude transcripts under a temp
   HOME. `session.transcript` paging by the vendor rule and its `after` cursor

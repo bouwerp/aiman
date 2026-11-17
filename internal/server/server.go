@@ -103,6 +103,8 @@ type Server struct {
 	pressOnce sync.Once
 	press     *pressureGate
 	version   string
+	// harness runs scenarios for testers; nil until SetHarness.
+	harness *harnessState
 
 	// hub carries events published by handlers to session.events streams.
 	hub *eventHub
@@ -507,6 +509,9 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.dispatchAgents(ctx, req)
 	case "session.transcript", "session.transcript_item", "session.process_output", "session.file":
 		return s.dispatchTranscript(ctx, req)
+	case "harness.up", "harness.check", "harness.status", "harness.result", "harness.down", "harness.logs", "harness.verdict", "harness.list",
+		"harness.image_status", "harness.image_approve":
+		return s.dispatchHarness(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)
 	case "review.reveal", "review.post", "review.refresh", "review.run", "review.debug", "review.coverage",
@@ -516,10 +521,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleHandoverWrite(ctx, req)
 	case "handover.point":
 		return s.handleHandoverPoint(ctx, req)
-	case "memory.jobs":
-		return s.handleMemoryJobs(ctx, req)
-	case "memory.done":
-		return s.handleMemoryDone(ctx, req)
+	case "memory.jobs", "memory.done":
+		return s.dispatchMemory(ctx, req)
 	case "todo.get", "todo.summary", "todo.add", "todo.update", "todo.move", "todo.remove", "todo.mirror", "todo.ensure_done", "todo.mark_met", "todo.gate", "todo.approve_design", "todo.approve_review", "steer.send":
 		return s.handleTodo(ctx, req)
 	case "pty.create":
@@ -565,6 +568,14 @@ func (s *Server) lockSession(id string) func() {
 	s.mu.Unlock()
 	m.Lock()
 	return m.Unlock
+}
+
+// dispatchMemory routes the memory.* methods.
+func (s *Server) dispatchMemory(ctx context.Context, req Request) Response {
+	if req.Method == "memory.done" {
+		return s.handleMemoryDone(ctx, req)
+	}
+	return s.handleMemoryJobs(ctx, req)
 }
 
 // dispatchAgents routes the agents.* methods.
