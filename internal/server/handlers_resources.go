@@ -52,6 +52,12 @@ type PressureGate struct {
 	MemorySomeAvg10 float64   `json:"memory_some_avg10"`
 	MemoryFullAvg10 float64   `json:"memory_full_avg10"`
 	SliceOverHigh   bool      `json:"slice_over_high"`
+	// Reason is why a closed gate closed: GateReasonMemoryFull or
+	// GateReasonHarnessBudget. Empty while open.
+	Reason string `json:"reason,omitempty"`
+	// Harness is the memory harness runs hold, outside the user slice;
+	// absent on a serve without the harness.
+	Harness *HarnessGate `json:"harness,omitempty"`
 }
 
 // RunResources samples every session scope on a timer, keeps the snapshot
