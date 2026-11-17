@@ -73,7 +73,7 @@ func fetchInto(ctx context.Context, reg Registry, res Resolved, dir string) erro
 	idx := layoutIndex{SchemaVersion: 2, MediaType: MediaOCIIndex, Manifests: []Descriptor{{
 		MediaType: res.MediaType, Digest: res.Digest, Size: int64(len(res.Manifest)),
 		Annotations: map[string]string{
-			"io.containerd.image.name":          "docker.io/" + LocalName(res.Digest),
+			"io.containerd.image.name":          LocalName(res.Digest),
 			"org.opencontainers.image.ref.name": strings.SplitN(LocalName(res.Digest), ":", 2)[1],
 		},
 	}}}

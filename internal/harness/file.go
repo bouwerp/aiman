@@ -34,8 +34,22 @@ const (
 	// unless the caller asks for a dirty run.
 	CodeDirty = "harness_dirty"
 	// CodeImageMissing refuses an image that harness.allowed_images does not
-	// list or that is not on the host; serve never pulls.
+	// list or that is not on the host, when no image vetting is wired; serve
+	// never pulls.
 	CodeImageMissing = "harness_image_missing"
+	// CodeImagePending refuses a run while one of its images is in vetting or
+	// waits for approval.
+	CodeImagePending = "harness_image_pending"
+	// CodeImageBlocked refuses a run with a blocked, failed or stale image.
+	CodeImageBlocked = "harness_image_blocked"
+	// CodeImageResolveFailed refuses a ref the registry did not resolve.
+	CodeImageResolveFailed = "harness_image_resolve_failed"
+	// CodeImageTooLarge refuses an image whose layers sum above
+	// harness.images.max_size, before anything is fetched.
+	CodeImageTooLarge = "harness_image_too_large"
+	// CodeImageNotPending refuses an approval of a digest that is not
+	// pending_approval, without accept_risk.
+	CodeImageNotPending = "harness_image_not_pending"
 	// CodeRunning refuses a second live run for one session.
 	CodeRunning = "harness_running"
 	// CodeBusy refuses a run over harness.max_runs live runs on the host.
@@ -58,7 +72,7 @@ var (
 // Error is a harness refusal with a stable code. Errors is set for
 // CodeInvalid, Path for CodeSubmodule, Sum and Limit (bytes) for CodeTooLarge,
 // Paths for CodeDirty, Image for CodeImageMissing, Service and Tail for
-// CodeServiceFailed.
+// CodeServiceFailed. The image codes carry their data in ImageData.
 type Error struct {
 	Code    string
 	Msg     string
@@ -70,6 +84,8 @@ type Error struct {
 	Image   string
 	Service string
 	Tail    string
+	// ImageData is the RPC data of the image refusals.
+	ImageData map[string]any
 }
 
 func (e *Error) Error() string {
@@ -104,6 +120,8 @@ func (e *Error) Data() map[string]any {
 		return map[string]any{"image": e.Image}
 	case CodeServiceFailed:
 		return map[string]any{"service": e.Service, "tail": e.Tail}
+	case CodeImagePending, CodeImageBlocked, CodeImageResolveFailed, CodeImageTooLarge, CodeImageNotPending:
+		return e.ImageData
 	}
 	return nil
 }
