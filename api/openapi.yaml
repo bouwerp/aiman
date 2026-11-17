@@ -1875,6 +1875,41 @@ components:
         last_used:
           type: string
           format: date-time
+        browser_sourcemaps:
+          $ref: "#/components/schemas/HarnessBrowserSourcemaps"
+    HarnessBrowserSourcemaps:
+      type: object
+      description: >
+        Whether the app's frontend JavaScript names source maps a browser can
+        load, for debugging in the tester's own DevTools through the
+        forwarded app port. Serve sets it shortly after the run turns ready
+        and leaves it out until then. It reads up to 4 app ports' page at /
+        through the edge and up to 4 same-origin scripts of each (a
+        SourceMap header, or a sourceMappingURL comment whose map answers 2xx
+        or is a data URL), never following a redirect or another origin;
+        when no page answers it reads the end of each .js file under a dist,
+        build or out directory of the exported tree. Every read is capped
+        and the whole check takes at most 20s. method is http or scan; port
+        is the app port read (http); hidden marks .map files no script
+        names; files are up to 3 scripts the answer rests on.
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [present, absent, unknown]
+        method:
+          type: string
+          enum: [http, scan]
+        port:
+          type: string
+        hidden:
+          type: boolean
+        files:
+          type: array
+          items:
+            type: string
+        detail:
+          type: string
     HarnessRunResult:
       type: object
       description: >

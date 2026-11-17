@@ -33,6 +33,9 @@ var staticFiles = map[string][2]string{
 	"/app.css":   {"web/app.css", "text/css; charset=utf-8"},
 	"/debug.js":  {"web/debug.js", "text/javascript; charset=utf-8"},
 	"/debug.css": {"web/debug.css", "text/css; charset=utf-8"},
+
+	"/debug-browser.js":  {"web/debug-browser.js", "text/javascript; charset=utf-8"},
+	"/debug-browser.css": {"web/debug-browser.css", "text/css; charset=utf-8"},
 }
 
 type apiRoute struct {
@@ -176,6 +179,8 @@ type stateView struct {
 	Forwards     []forwardView `json:"forwards"`
 	ForwardError string        `json:"forward_error,omitempty"`
 	PolledAt     *time.Time    `json:"polled_at,omitempty"`
+	// Browser is the Debug tab's Browser section (browser.go).
+	Browser *browserView `json:"browser,omitempty"`
 }
 
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
@@ -189,6 +194,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	if v.Forwards == nil {
 		v.Forwards = []forwardView{}
 	}
+	v.Browser = browserFor(v.Run, v.Forwards)
 	writeJSON(w, http.StatusOK, v)
 }
 
