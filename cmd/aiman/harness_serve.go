@@ -87,6 +87,7 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 		RunMemory:     runMemory,
 		MaxRuns:       cfg.Harness.MaxRunsOrDefault(),
 		IdleTimeout:   cfg.Harness.IdleTimeoutOrDefault(),
+		DBRowLimit:    cfg.Harness.DB.RowLimit,
 		// Zero takes harness.DefaultDebugAttachTimeout.
 		DebugAttachTimeout: cfg.Harness.Debug.AttachTimeout,
 		// harness.network, else review.sandbox.network: online runs reach

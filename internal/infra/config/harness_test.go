@@ -36,7 +36,7 @@ func TestHarnessRunMemoryClampsToSessionHigh(t *testing.T) {
 func TestMarshalServeConfigCarriesHarness(t *testing.T) {
 	off := false
 	c := &Config{
-		Harness: HarnessConfig{Enabled: &off, AllowedImages: []string{"redis:7"}, MaxRuns: 3},
+		Harness: HarnessConfig{Enabled: &off, AllowedImages: []string{"redis:7"}, MaxRuns: 3, DB: HarnessDBConfig{RowLimit: 50}},
 		Repos: map[string]RepoBootstrap{"o/r": {Harness: map[string]any{
 			"version": 1, "app": map[string]any{"run": "serve"},
 		}}},
@@ -49,7 +49,7 @@ func TestMarshalServeConfigCarriesHarness(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Harness.On() || got.Harness.MaxRuns != 3 || len(got.Harness.AllowedImages) != 1 {
+	if got.Harness.On() || got.Harness.MaxRuns != 3 || len(got.Harness.AllowedImages) != 1 || got.Harness.DB.RowLimit != 50 {
 		t.Fatalf("harness = %+v", got.Harness)
 	}
 	if got.Repos["o/r"].Harness["version"] != 1 {

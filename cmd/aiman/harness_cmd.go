@@ -53,6 +53,9 @@ func runHarness(args []string) error {
 			return runHarnessConsole(args[1:])
 		case "scan":
 			return runHarnessScan(args[1:])
+		case "db-read":
+			// Runs inside the database browser's SQLite reader container.
+			return harness.SQLiteReadMain(os.Stdin, os.Stdout)
 		case "review-proxy":
 			// Runs inside the image review's proxy container.
 			return images.ProxyMain(args[1:])
@@ -103,6 +106,7 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness check [<name>] [--run ID] [--json]
        aiman harness check <name> --debug [--take] [--run ID] [--json]   (operator; waits for the check to end)
        aiman harness logs <service> [--lines N] [--run ID] [--json]
+       aiman harness db <service> tables|rows <table>|query <sql> [--limit N] [--write] [--run ID] [--json]   (--write: operator)
        aiman harness capture [--after N] [--limit N] [--run ID] [--json]   (HTTP calls through the edge proxy)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
@@ -125,6 +129,7 @@ type harnessArgs struct {
 	lines, limit                         int
 	after                                int64
 	json, dirty, force, wait, acceptRisk bool
+	write                                bool
 	text, noBrowser, debug               bool
 	debugChecks, take                    bool
 	pos                                  []string
@@ -223,6 +228,8 @@ func (a *harnessArgs) setBool(arg string) bool {
 		a.noBrowser = true
 	case "--debug":
 		a.debug = true
+	case "--write":
+		a.write = true
 	case "--debug-checks":
 		a.debugChecks = true
 	case "--take":
@@ -263,6 +270,7 @@ var harnessSubs = map[string]harnessSub{
 	"verdict": {2, 2, true, harnessVerdict},
 	"down":    {0, 0, true, harnessDown},
 	"debug":   {0, 1, true, harnessDebug},
+	"db":      {2, 3, true, harnessDB},
 }
 
 // harnessMain runs a host subcommand against serve.

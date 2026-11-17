@@ -73,14 +73,16 @@ type Run struct {
 	Verdicts []Verdict `json:"verdicts,omitempty"`
 	// Services are the scenario's service names; Images maps each container
 	// to the image ID it runs.
-	Services    []string          `json:"services,omitempty"`
-	Images      map[string]string `json:"images,omitempty"`
-	InnerSubnet string            `json:"inner_subnet,omitempty"`
-	OuterSubnet string            `json:"outer_subnet,omitempty"`
-	StartedAt   time.Time         `json:"started_at"`
-	ReadyAt     *time.Time        `json:"ready_at,omitempty"`
-	StoppedAt   *time.Time        `json:"stopped_at,omitempty"`
-	StopReason  string            `json:"stop_reason,omitempty"`
+	Services []string          `json:"services,omitempty"`
+	Images   map[string]string `json:"images,omitempty"`
+	// Databases are the scenario's services the database browser reads.
+	Databases   []RunDatabase `json:"databases,omitempty"`
+	InnerSubnet string        `json:"inner_subnet,omitempty"`
+	OuterSubnet string        `json:"outer_subnet,omitempty"`
+	StartedAt   time.Time     `json:"started_at"`
+	ReadyAt     *time.Time    `json:"ready_at,omitempty"`
+	StoppedAt   *time.Time    `json:"stopped_at,omitempty"`
+	StopReason  string        `json:"stop_reason,omitempty"`
 	// LastUsed is the last RPC that touched the run; harness.idle_timeout
 	// counts from it.
 	LastUsed time.Time `json:"last_used"`
@@ -96,6 +98,13 @@ type RunPort struct {
 	Name     string `json:"name"`
 	Service  string `json:"service"`
 	HostPort int    `json:"host_port"`
+}
+
+// RunDatabase is a service of the run that holds a database: Kind is
+// postgres or sqlite.
+type RunDatabase struct {
+	Service string `json:"service"`
+	Kind    string `json:"kind"`
 }
 
 // StepView is one human step with its latest verdict. N counts from 1.

@@ -1,0 +1,70 @@
+/* Database tab. Results are read-only tables; the panel takes the width
+   while it is open, as the Debug tab does. */
+@media (min-width: 960px) {
+  .layout[data-focus="db"] { grid-template-columns: minmax(0, 2fr) minmax(0, 5fr); }
+}
+
+.db-role {
+  font-size: 0.85rem;
+  padding: 0.05rem 0.55rem;
+  border-radius: 999px;
+  color: var(--wait);
+  background: var(--wait-bg);
+}
+.db-role[data-role="owner"] { color: var(--fail); background: var(--fail-bg); }
+
+.db-tables {
+  list-style: none;
+  margin: 0 0 0.8rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.db-tables .btn { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.db-tables .btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+.db-query { display: grid; gap: 0.4rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
+.db-query textarea {
+  font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+  resize: vertical;
+  min-height: 4.5rem;
+  max-width: 100%;
+}
+.db-query-row { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; justify-content: space-between; }
+.db-query label.check { display: flex; gap: 0.5rem; align-items: baseline; font-size: 0.9rem; }
+.db-query label.check:has(input:checked) { color: var(--fail); }
+
+.db-result {
+  margin-top: 0.6rem;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--log-bg);
+}
+.db-result:empty { display: none; }
+.db-result table { min-width: 100%; border-collapse: collapse; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.db-result th, .db-result td {
+  padding: 0.25rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  max-width: 40ch;
+  overflow-wrap: anywhere;
+}
+.db-result th { position: sticky; top: 0; background: var(--panel); font-weight: 600; }
+.db-result td.null { color: var(--muted); font-style: italic; }
+.db-result td.redacted, .db-result th.redacted { color: var(--skip); }
+.db-result pre { margin: 0; padding: 0.6rem 0.75rem; white-space: pre-wrap; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.db-result:focus-visible, .db-tables .btn:focus-visible, .db-query textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

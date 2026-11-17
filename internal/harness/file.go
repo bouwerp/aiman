@@ -211,9 +211,13 @@ type Service struct {
 }
 
 // Database names the database a service holds. Kind is postgres or sqlite.
+// Name is a postgres database; Path is the SQLite file inside the service
+// container (absolute), whose directory becomes the service's data volume so
+// the database browser can read it.
 type Database struct {
 	Kind string `yaml:"kind" json:"kind"`
 	Name string `yaml:"name" json:"name,omitempty"`
+	Path string `yaml:"path" json:"path,omitempty"`
 }
 
 // Limits are a container's limits as the file spells them; zero values take

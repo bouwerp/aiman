@@ -197,6 +197,7 @@ func (s *starter) writeProject() error {
 	s.run.InnerSubnet, s.run.OuterSubnet = inner.String(), outer.String()
 	s.lr.mu.Lock()
 	s.lr.run.InnerSubnet, s.lr.run.OuterSubnet = s.run.InnerSubnet, s.run.OuterSubnet
+	s.lr.readPassword = readPassword
 	s.lr.mu.Unlock()
 	return nil
 }

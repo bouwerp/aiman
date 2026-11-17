@@ -415,6 +415,16 @@ A session has one live run at a time. Do not use `--force`; it is for the operat
 
 The tester debugs browser code in their own DevTools, which need source maps. When `aiman harness status --json` shows `browser_sourcemaps.state` `absent`, make the build write them (Vite: `build.sourcemap: true`, not `'hidden'`) and keep any plugin that deletes maps out of `app.build`.
 
+### Database
+
+Use `aiman harness db <service> tables`, `aiman harness db <service> rows <table>` and `aiman harness db <service> query "<sql>"` to read a running scenario's database. The service needs `database: {kind: postgres, name: app}`, or `database: {kind: sqlite, path: /data/app.db}` for a SQLite file inside the service.
+
+- A read runs one statement. A second statement, a `;` inside it, and the words `COPY`, `INTO` and `SET` are refused with `harness_db_refused`. SQLite also refuses `ATTACH`, `DETACH` and `PRAGMA`.
+- Postgres reads run as the read-only role `aiman_ro`. SQLite reads open the file read-only. A read cannot change data.
+- Values in columns named like `password`, `secret`, `token` or `api_key` show `[redacted]`. Other secrets in values are redacted too.
+- A read returns at most 200 rows. `--limit N` asks for fewer.
+- Only the operator writes (`--write`); a session gets `needs_operator`. Load test data with `fixtures` in the harness file instead.
+
 ### Debugger
 
 `aiman harness up <scenario> --debug` starts the app under a debugger that the operator drives from the console's Debug tab. Declare it in `app.debug`:

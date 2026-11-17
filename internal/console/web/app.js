@@ -396,8 +396,9 @@
       $(t.getAttribute("aria-controls")).hidden = !on;
     }
     if (id === "tab-logs") pollLogs();
-    $("layout").dataset.focus = id === "tab-debug" ? "debug" : "";
+    $("layout").dataset.focus = id === "tab-debug" ? "debug" : id === "tab-db" ? "db" : "";
     if (window.aimanDebug) window.aimanDebug.shown(id === "tab-debug");
+    if (window.aimanDB) window.aimanDB.shown(id === "tab-db");
   }
 
   // ---- loop ----
@@ -412,6 +413,7 @@
     renderServices(run);
     if (window.aimanDebug) window.aimanDebug.update(state);
     if (window.aimanBrowser) window.aimanBrowser.update(state);
+    if (window.aimanDB) window.aimanDB.update(state);
     if (window.aimanNet) window.aimanNet.update(state);
   }
 

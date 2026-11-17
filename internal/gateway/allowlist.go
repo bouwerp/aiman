@@ -7,7 +7,7 @@ var (
 	// deviceReadMethods only read state. harness.list, harness.status,
 	// harness.result and harness.image_status are here because the phone only
 	// reads the harness: every other harness method starts, stops or judges a
-	// run, reads its logs, or approves an image, and stays off the device
+	// run, reads its logs or database, or approves an image, and stays off the device
 	// list.
 	deviceReadMethods = []string{
 		"ping",

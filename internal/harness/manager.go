@@ -80,6 +80,13 @@ type Options struct {
 	// Sourcemaps checks a ready run's frontend for source maps; nil is
 	// DetectSourcemaps with DefaultSourcemapLimits.
 	Sourcemaps func(ctx context.Context, src string, targets []SourcemapTarget) BrowserSourcemaps
+	// DBRowLimit is harness.db.row_limit; zero is DefaultDBRowLimit.
+	DBRowLimit int
+	// Postgres reads a run's postgres service through its edge relay; nil
+	// is PGReader.
+	Postgres PostgresReader
+	// Containers runs the SQLite reader container; nil is ExecDocker.
+	Containers ContainerRunner
 	// Network is NetworkOnline or NetworkOffline (anything else): online
 	// runs reach the outside through the edge proxy only.
 	Network string
@@ -139,6 +146,8 @@ type liveRun struct {
 	// debug is the adapter of a debug run's app; nil in a plain run and
 	// in one that debugs only its checks.
 	debug DebugAdapter
+	// readPassword is aiman_ro's password in the run's postgres services.
+	readPassword string
 	// checkAdapter is the adapter image a debug check may start, vetted
 	// at up; empty when no debug check needs one.
 	checkAdapter string
@@ -178,6 +187,15 @@ func NewManager(opts Options) (*Manager, error) {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.DBRowLimit <= 0 {
+		opts.DBRowLimit = DefaultDBRowLimit
+	}
+	if opts.Postgres == nil {
+		opts.Postgres = PGReader{}
+	}
+	if opts.Containers == nil {
+		opts.Containers = ExecDocker{}
 	}
 	if err := os.MkdirAll(opts.Dir, 0o700); err != nil {
 		return nil, err
@@ -305,7 +323,7 @@ func (m *Manager) Up(ctx context.Context, req UpRequest) (Run, error) {
 	})
 	startCtx, cancel := context.WithTimeout(context.Background(), StartTimeout)
 	lr.mu.Lock()
-	lr.cancel = cancel
+	lr.cancel, lr.file = cancel, f
 	lr.mu.Unlock()
 	m.wg.Add(1)
 	go func() {
@@ -424,6 +442,11 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	run.SHA, run.Dirty, run.DiffSHA256, run.Source = l.SHA, l.Dirty, l.DiffSHA256, l.Source
 	run.Network = m.network()
 	run.Services = append([]string(nil), sc.Services...)
+	for _, name := range sc.Services {
+		if db := l.File.Services[name].Database; db != nil {
+			run.Databases = append(run.Databases, RunDatabase{Service: name, Kind: db.Kind})
+		}
+	}
 	run.StartedAt, run.LastUsed = now, now
 	run.Ports, run.Steps, run.Checks = []RunPort{}, stepViews(sc), checkRuns(sc)
 	dir := m.runDir(req.Session, run.ID)
