@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	harnessscanner "github.com/bouwerp/aiman/build/harness-scanner"
 	"github.com/bouwerp/aiman/internal/harness"
@@ -89,6 +90,13 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 		return nil
 	}
 	srv.SetHarness(server.HarnessDeps{Manager: m, Repos: cfg.Repos, Images: vetter})
+	rss := &harness.RSSReader{Docker: harness.ExecDocker{}}
+	srv.SetHarnessMemory(func(ctx context.Context) (harness.Memory, error) {
+		// The gate steps every 5s; a stuck docker CLI must not hold it.
+		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		defer cancel()
+		return rss.Read(ctx)
+	})
 	go m.CleanStale(ctx)
 	go m.RunIdle(ctx)
 	go func() {

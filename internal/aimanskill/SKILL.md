@@ -566,7 +566,7 @@ That prints your actual limits and your memory, CPU and pressure. Check it befor
 - Only the operator raises a limit (`aiman session limits`). If the work needs more, say how much and why, then wait.
 - An `[aiman]` note saying this session is at X/Y memory and is being throttled means reduce parallelism now. Do not retry at the same size.
 - Do not relaunch a job the operator killed or the kernel OOM-killed without asking.
-- `host_under_pressure` from `session create`, `review run`, `review coverage`, `review fix` or `review assess` means the whole host is stalled on memory and serve is holding new work. Do not retry in a loop: wait at least `retry_after_ms` (30s) or for the next `[aiman]` note, and meanwhile do lighter work. Forcing past the gate is the operator's, not yours.
+- `host_under_pressure` from `session create`, `review run`, `review coverage`, `review fix`, `review assess` or `harness up` means the whole host is stalled on memory, or the sessions and harness runs together have reached its memory budget (`reason: harness_budget`; `aiman harness down` on a run you no longer need frees it), and serve is holding new work. Do not retry in a loop: wait at least `retry_after_ms` (30s) or for the next `[aiman]` note, and meanwhile do lighter work. Forcing past the gate is the operator's, not yours.
 
 ## Safety
 
