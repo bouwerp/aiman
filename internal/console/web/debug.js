@@ -44,9 +44,9 @@
   // ---- DAP transport ----
   // One session is one WebSocket bridge, which is one DAP connection at the
   // edge under this console's lease. Go has one session. js-debug opens the
-  // Node process as a child session through the startDebugging reverse
-  // request; the page answers it with another bridge, so every session
-  // holds the same lease. Controls act on the active session: the one that
+  // Node process, and debugpy each Python subprocess, as a child session
+  // through the startDebugging reverse request; the page answers it with
+  // another bridge, so every session holds the same lease. Controls act on the active session: the one that
   // last stopped, else the newest child, else the first.
   function sessionOf(sess) {
     return sess || d.active || d.sessions[0] || null;
@@ -140,6 +140,7 @@
     if (s.parent) d.active = s;
     status(s.parent ? "Opening " + s.name + "…" : "Connecting…");
     ws.onmessage = (ev) => {
+      s.answered = true;
       let msg;
       try { msg = JSON.parse(ev.data); } catch (_) { return; }
       onMessage(s, msg);
@@ -182,13 +183,23 @@
       d.stopped = null;
       d.frames = [];
       d.current = 0;
-      status("Not connected");
+      status(s.answered ? "Not connected" : notListening());
       renderAll();
       refresh();
       return;
     }
     renderSessions();
     renderAll();
+  }
+
+  // notListening says why the first session closed before the debugger
+  // answered. A Python run with only wrap_env has no debugger until the app
+  // starts the wrapped interpreter.
+  function notListening() {
+    const hint = d.launch && d.launch.lang === "python"
+      ? " With wrap_env, debugpy listens only once the app starts the wrapped interpreter; connect again then."
+      : "";
+    return "The debugger did not answer." + hint;
   }
 
   function renderSessions() {
@@ -581,8 +592,8 @@
 
   // emptyText says why the tab has no debugger. A debug run refused because
   // this host cannot debug its runtime (harness_debug_unsupported: a Bun of
-  // another minor version, or musl) shows serve's reason, which names the
-  // fallback.
+  // another minor version, musl, or no CPython 3.9+) shows serve's reason,
+  // which names the fallback.
   function emptyText(run) {
     if (!run || !run.debug) return "This run has no debugger. Start a run with \"Start with the debugger\" under Run.";
     if (run.state === "failed" && run.error_code === "harness_debug_unsupported") {

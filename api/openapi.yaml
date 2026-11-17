@@ -471,8 +471,8 @@ components:
             accept_risk without a reason. harness.up with debug answers
             harness_invalid when the file has no app.debug or app.run cannot
             be started under the debugger, and harness_debug_unsupported
-            (data.lang) for an app.debug.lang with no adapter yet (go and
-            node have one; bun and python parse but are refused).
+            (data.lang) for an app.debug.lang with no adapter on the host
+            (go, node, bun and python have one).
             harness.debug answers needs_operator for a session's take or
             release. harness.verdict answers
             needs_operator for a session caller, and every harness method
@@ -1687,8 +1687,10 @@ components:
         harness_image_missing image, harness_service_failed service and
         tail (the end of the failed step's output), and
         harness_debug_unsupported lang, plus reason when the language has an
-        adapter that cannot debug this app (musl, or bun_version for a Bun
-        of another minor version than the host's Bun adapter).
+        adapter that cannot debug this app (musl, bun_version for a Bun of
+        another minor version than the host's Bun adapter, python_version
+        for an image with no CPython 3.9 or later, or debugpy for an
+        interpreter that cannot import the mounted debugpy).
       properties:
         lang:
           type: string
@@ -2134,10 +2136,11 @@ components:
       type: object
       description: >
         A debug run's DAP start request: a client sends request (launch for
-        go, attach for node and bun) with arguments, unchanged. source_root is the
+        go, attach for node, bun and python) with arguments, unchanged. source_root is the
         container path of the run's exported tree, for mapping stack frame
         paths. children is true when the adapter opens child sessions with
-        the startDebugging reverse request (js-debug): the client connects
+        the startDebugging reverse request (js-debug, debugpy for Python
+        subprocesses): the client connects
         again for each, under the same lease, and sends the request and
         configuration that startDebugging names.
       required: [lang, adapter, request, arguments, source_root]
