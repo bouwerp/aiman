@@ -29,7 +29,7 @@ func runHarnessEdge(args []string) error {
 	return serveEdge(opts)
 }
 
-const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]..."
+const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]... [--dap-relay name=port=host:port]..."
 
 type edgeOptions struct {
 	control   string
@@ -61,6 +61,15 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 		if err != nil {
 			return err
 		}
+		opts.relays = append(opts.relays, spec)
+		return nil
+	})
+	fs.Func("dap-relay", "debugger relay as name=port=host:port, one DAP client at a time (repeatable)", func(v string) error {
+		spec, err := parseEdgeRelay(v)
+		if err != nil {
+			return err
+		}
+		spec.Kind = edge.KindDAP
 		opts.relays = append(opts.relays, spec)
 		return nil
 	})

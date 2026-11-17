@@ -1,8 +1,11 @@
 package console
 
 import (
+	"bufio"
 	"crypto/subtle"
+	"errors"
 	"mime"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,9 +19,14 @@ import (
 const TokenHeader = "X-Aiman-Console-Token" //nolint:gosec // G101: a header name, not a credential
 
 // pageCSP allows only the console's own embedded script and style, and the
-// API on the same origin.
-const pageCSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; " +
-	"img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+// API and the debugger WebSocket on the same origin. The ws: sources are
+// spelled out: older browsers do not count a WebSocket as 'self'.
+func pageCSP(port int) string {
+	p := strconv.Itoa(port)
+	return "default-src 'none'; script-src 'self'; style-src 'self'; " +
+		"connect-src 'self' ws://127.0.0.1:" + p + " ws://localhost:" + p + "; " +
+		"img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+}
 
 // statusWriter records the status for the request log.
 type statusWriter struct {
@@ -32,6 +40,22 @@ func (w *statusWriter) WriteHeader(code int) {
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
+
+// Hijack hands the connection to the debugger WebSocket; the status of a
+// hijacked request is 101.
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("console: the connection cannot be hijacked")
+	}
+	if w.status == 0 {
+		w.status = http.StatusSwitchingProtocols
+	}
+	return h.Hijack()
+}
+
+// Unwrap lets http.ResponseController reach the server's writer.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *statusWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
@@ -48,7 +72,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sw := &statusWriter{ResponseWriter: w}
 		h := sw.Header()
-		h.Set("Content-Security-Policy", pageCSP)
+		h.Set("Content-Security-Policy", pageCSP(s.port))
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
@@ -91,6 +115,18 @@ func (s *Server) refusal(r *http.Request) string {
 		return "bad_host"
 	}
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
+		return ""
+	}
+	if r.URL.Path == DAPPath {
+		// A WebSocket handshake is a GET that a hostile page can start too:
+		// the token comes in the subprotocol offer and the Origin must be
+		// this console's.
+		if !s.tokenOK(wsToken(r)) {
+			return "bad_token"
+		}
+		if !s.originOK(r.Header.Get("Origin")) {
+			return "bad_origin"
+		}
 		return ""
 	}
 	if !s.tokenOK(r.Header.Get(TokenHeader)) {

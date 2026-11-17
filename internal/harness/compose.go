@@ -93,6 +93,10 @@ type RunSpec struct {
 	ReadPassword string
 	// ServiceMemory is harness.service_memory; 0 is DefaultServiceMemory.
 	ServiceMemory int64
+	// Debug runs the app under a debug adapter on the debug network; nil is
+	// a plain run. DebugSubnet is that network's IPv4 subnet.
+	Debug       *DebugSpec
+	DebugSubnet netip.Prefix
 }
 
 // Relay is one edge relay: the edge listens on Port on its outer address,
@@ -103,6 +107,9 @@ type Relay struct {
 	Service string
 	Port    int
 	Target  string
+	// Kind is empty for a plain TCP relay and RelayKindDAP for the debugger,
+	// which admits one client at a time.
+	Kind string
 }
 
 // Project is a run's compose project. Files are paths relative to the
@@ -125,7 +132,7 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	relays, err := relaysFor(f, sc)
+	relays, err := relaysFor(f, sc, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -138,9 +145,15 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 		},
 		Volumes: map[string]map[string]any{"gomod": {}, "gocache": {}, "npm": {}},
 	}
-	doc.Services[ServiceApp] = appService(f, spec)
+	app, edge := appService(f, spec), edgeService(spec, relays)
+	if spec.Debug != nil {
+		doc.Networks[NetworkDebug] = network(spec.DebugSubnet, true)
+		debugApp(&app, spec)
+		debugEdge(&edge, spec)
+	}
+	doc.Services[ServiceApp] = app
 	doc.Services[ServiceCacheInit] = cacheInitService(f, spec)
-	doc.Services[ServiceEdge] = edgeService(spec, relays)
+	doc.Services[ServiceEdge] = edge
 	files := map[string][]byte{}
 	for _, name := range sc.Services {
 		doc.Services[name] = serviceService(f, spec, name)
@@ -149,11 +162,44 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 			files[InitDBFile] = PostgresInitSQL()
 		}
 	}
+	for name, svc := range doc.Services {
+		doc.Services[name] = escapeInterpolation(svc)
+	}
 	raw, err := yaml.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}
 	return &Project{Name: doc.Name, YAML: raw, Relays: relays, Files: files}, nil
+}
+
+// escapeInterpolation doubles every $ in what a container runs or reads, so
+// compose passes it to the container's shell as written instead of filling
+// it from serve's own environment.
+func escapeInterpolation(s composeService) composeService {
+	esc := func(v string) string { return strings.ReplaceAll(v, "$", "$$") }
+	cmd := make([]string, len(s.Command))
+	for i, c := range s.Command {
+		cmd[i] = esc(c)
+	}
+	if s.Command != nil {
+		s.Command = cmd
+	}
+	if s.Environment != nil {
+		env := make(map[string]string, len(s.Environment))
+		for k, v := range s.Environment {
+			env[k] = esc(v)
+		}
+		s.Environment = env
+	}
+	if s.Healthcheck != nil {
+		hc := *s.Healthcheck
+		hc.Test = make([]string, len(s.Healthcheck.Test))
+		for i, c := range s.Healthcheck.Test {
+			hc.Test[i] = esc(c)
+		}
+		s.Healthcheck = &hc
+	}
+	return s
 }
 
 func checkSpec(f *File, spec RunSpec) (*Scenario, error) {
@@ -177,6 +223,9 @@ func checkSpec(f *File, spec RunSpec) (*Scenario, error) {
 		return nil, err
 	}
 	if err := checkSubnets(spec.InnerSubnet, spec.OuterSubnet); err != nil {
+		return nil, err
+	}
+	if err := checkDebug(f, spec); err != nil {
 		return nil, err
 	}
 	for name := range spec.ServiceImages {
@@ -218,7 +267,7 @@ func checkSubnets(inner, outer netip.Prefix) error {
 // relaysFor lists the edge relays: each app port in file order, then each
 // postgres service of the scenario in scenario order. A relay is named after
 // its port or its service, so the two must not share a name.
-func relaysFor(f *File, sc *Scenario) ([]Relay, error) {
+func relaysFor(f *File, sc *Scenario, spec RunSpec) ([]Relay, error) {
 	var out []Relay
 	add := func(name, svc string, port int) error {
 		if slices.ContainsFunc(out, func(r Relay) bool { return r.Name == name }) {
@@ -238,6 +287,15 @@ func relaysFor(f *File, sc *Scenario) ([]Relay, error) {
 				return nil, err
 			}
 		}
+	}
+	if spec.Debug != nil {
+		if slices.ContainsFunc(out, func(r Relay) bool { return r.Name == RelayDAP }) {
+			return nil, fmt.Errorf("harness compose: relay name %q is reserved for the debugger in a debug run", RelayDAP)
+		}
+		out = append(out, Relay{
+			Name: RelayDAP, Service: ServiceApp, Port: FirstRelayPort + len(out),
+			Target: debugEndpoint(spec), Kind: RelayKindDAP,
+		})
 	}
 	return out, nil
 }
@@ -394,9 +452,16 @@ func edgeService(spec RunSpec, relays []Relay) composeService {
 		"--outer", spec.OuterSubnet.Masked().String(),
 		"--inner", spec.InnerSubnet.Masked().String(),
 	}
+	if spec.Debug != nil {
+		cmd = append(cmd, "--inner", spec.DebugSubnet.Masked().String())
+	}
 	ports := make([]string, 0, len(relays))
 	for _, r := range relays {
-		cmd = append(cmd, "--relay", fmt.Sprintf("%s=%d=%s", r.Name, r.Port, r.Target))
+		flag := "--relay"
+		if r.Kind == RelayKindDAP {
+			flag = "--dap-relay"
+		}
+		cmd = append(cmd, flag, fmt.Sprintf("%s=%d=%s", r.Name, r.Port, r.Target))
 		ports = append(ports, fmt.Sprintf("127.0.0.1::%d", r.Port))
 	}
 	sysctls := map[string]string{
@@ -432,23 +497,25 @@ type composeFile struct {
 }
 
 type composeService struct {
-	Image       string                      `yaml:"image"`
-	PullPolicy  string                      `yaml:"pull_policy"`
-	WorkingDir  string                      `yaml:"working_dir,omitempty"`
-	User        string                      `yaml:"user,omitempty"`
-	ReadOnly    bool                        `yaml:"read_only"`
-	CapDrop     []string                    `yaml:"cap_drop"`
-	CapAdd      []string                    `yaml:"cap_add,omitempty"`
-	SecurityOpt []string                    `yaml:"security_opt,omitempty"`
-	Tmpfs       []string                    `yaml:"tmpfs,omitempty"`
-	Environment map[string]string           `yaml:"environment,omitempty"`
-	Volumes     []string                    `yaml:"volumes,omitempty"`
-	MemLimit    int64                       `yaml:"mem_limit"`
-	CPUs        float64                     `yaml:"cpus"`
-	PidsLimit   int                         `yaml:"pids_limit"`
-	Ports       []string                    `yaml:"ports,omitempty"`
-	NetworkMode string                      `yaml:"network_mode,omitempty"`
-	Networks    []string                    `yaml:"networks,omitempty"`
+	Image       string            `yaml:"image"`
+	PullPolicy  string            `yaml:"pull_policy"`
+	WorkingDir  string            `yaml:"working_dir,omitempty"`
+	User        string            `yaml:"user,omitempty"`
+	ReadOnly    bool              `yaml:"read_only"`
+	CapDrop     []string          `yaml:"cap_drop"`
+	CapAdd      []string          `yaml:"cap_add,omitempty"`
+	SecurityOpt []string          `yaml:"security_opt,omitempty"`
+	Tmpfs       []string          `yaml:"tmpfs,omitempty"`
+	Environment map[string]string `yaml:"environment,omitempty"`
+	Volumes     []string          `yaml:"volumes,omitempty"`
+	MemLimit    int64             `yaml:"mem_limit"`
+	CPUs        float64           `yaml:"cpus"`
+	PidsLimit   int               `yaml:"pids_limit"`
+	Ports       []string          `yaml:"ports,omitempty"`
+	NetworkMode string            `yaml:"network_mode,omitempty"`
+	// Networks is a []string, or a map of network name to composeAttach
+	// when a network needs an alias.
+	Networks    any                         `yaml:"networks,omitempty"`
 	Sysctls     map[string]string           `yaml:"sysctls,omitempty"`
 	Healthcheck *composeHealthcheck         `yaml:"healthcheck,omitempty"`
 	Command     []string                    `yaml:"command,omitempty"`

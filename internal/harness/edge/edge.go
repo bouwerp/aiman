@@ -160,16 +160,23 @@ type RelaySpec struct {
 	Name   string `json:"name"`
 	Port   int    `json:"port"`
 	Target string `json:"target"`
+	// Kind is empty for plain TCP, or KindDAP for one debugger client at a
+	// time.
+	Kind string `json:"kind,omitempty"`
 }
 
 // RelayStatus is a relay with its bound address and counters.
 type RelayStatus struct {
 	RelaySpec
-	Listen    string `json:"listen"`
-	Active    int64  `json:"active"`
-	Total     int64  `json:"total"`
-	Failed    int64  `json:"failed"`
+	Listen string `json:"listen"`
+	Active int64  `json:"active"`
+	Total  int64  `json:"total"`
+	Failed int64  `json:"failed"`
+	// Refused counts DAP clients turned away while another held the relay.
+	Refused   int64  `json:"refused,omitempty"`
 	LastError string `json:"last_error,omitempty"`
+	// Holder is the DAP client that holds a KindDAP relay, if any.
+	Holder *DAPHolder `json:"holder,omitempty"`
 }
 
 // Health is the edge's state for serve.
@@ -184,6 +191,9 @@ var relayName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$`)
 func (e *Edge) checkSpec(spec RelaySpec) error {
 	if !relayName.MatchString(spec.Name) {
 		return errorf(CodeInvalidParams, "relay name %q must be 1-32 letters, digits, - or _", spec.Name)
+	}
+	if spec.Kind != "" && spec.Kind != KindDAP {
+		return errorf(CodeInvalidParams, "relay kind %q must be empty or %s", spec.Kind, KindDAP)
 	}
 	if spec.Port < 0 || spec.Port > 65535 {
 		return errorf(CodeInvalidParams, "relay port %d is out of range", spec.Port)
@@ -236,6 +246,21 @@ func (e *Edge) Remove(name string) error {
 	}
 	r.close()
 	return nil
+}
+
+// DropDAP ends the session of the client holding the DAP relay name, so the
+// next client can take it, and returns who held it (nil for nobody).
+func (e *Edge) DropDAP(name string) (*DAPHolder, error) {
+	e.mu.Lock()
+	r, ok := e.relays[name]
+	e.mu.Unlock()
+	if !ok {
+		return nil, errorf(CodeNotFound, "relay %q not found", name)
+	}
+	if r.spec.Kind != KindDAP {
+		return nil, errorf(CodeInvalidParams, "relay %q is not a debugger relay", name)
+	}
+	return r.drop(), nil
 }
 
 // List returns every relay, sorted by name.

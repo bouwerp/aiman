@@ -44,7 +44,21 @@ func (d *harnessDocker) Compose(_ context.Context, call harness.ComposeCall) (st
 type harnessEdge struct{}
 
 func (harnessEdge) Health(context.Context, string, string) (edge.Health, error) {
-	return edge.Health{}, nil
+	return edge.Health{Relays: []edge.RelayStatus{{
+		RelaySpec: edge.RelaySpec{Name: harness.RelayDAP, Kind: edge.KindDAP},
+		Holder:    &edge.DAPHolder{ClientName: "vscode"},
+	}}}, nil
+}
+
+func (harnessEdge) DAPDrop(context.Context, string, string, string) (*edge.DAPHolder, error) {
+	return &edge.DAPHolder{ClientName: "vscode"}, nil
+}
+
+// stubDebug is the Go adapter with a fixed dlv path, so nothing is built.
+type stubDebug struct{ harness.GoDebug }
+
+func (*stubDebug) Spec(context.Context) (*harness.DebugSpec, error) {
+	return harness.GoDebugSpec("/opt/aiman-tools/dlv"), nil
 }
 
 const serverHarnessFile = `version: 1
@@ -69,6 +83,8 @@ type harnessSetup struct {
 	runMemory int64
 	// vet wires image vetting with fakes; s2 then shares s1's checkout.
 	vet bool
+	// debug adds app.debug {lang: go} to the file and a stub Go adapter.
+	debug bool
 }
 
 // harnessServer is a server with sessions s1 (on a committed checkout holding
@@ -97,7 +113,11 @@ func harnessFixtureOf(t *testing.T, setup harnessSetup) *harnessFixture {
 	ciGit(t, dir, "init", "-q", "-b", "feat")
 	ciGit(t, dir, "config", "user.name", "T")
 	ciGit(t, dir, "config", "user.email", "t@example.com")
-	if err := os.WriteFile(filepath.Join(dir, harness.FilePath), []byte(serverHarnessFile), 0o600); err != nil {
+	file := serverHarnessFile
+	if setup.debug {
+		file = strings.Replace(file, "  run: serve\n", "  run: /out/app serve\n  debug: {lang: go}\n", 1)
+	}
+	if err := os.WriteFile(filepath.Join(dir, harness.FilePath), []byte(file), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n\ngo 1.25\n"), 0o600); err != nil {
@@ -136,6 +156,8 @@ func harnessFixtureOf(t *testing.T, setup harnessSetup) *harnessFixture {
 		RunMemory: setup.runMemory,
 		AppImage:  func(string, string) (string, error) { return "golang:1.25", nil },
 		Record:    srv.HarnessRecorder(),
+
+		DebugAdapters: []harness.DebugAdapter{&stubDebug{}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -390,11 +412,11 @@ func TestHarnessForceNeedsOperator(t *testing.T) {
 	}
 }
 
-func TestHarnessDebugRefused(t *testing.T) {
+func TestHarnessDebugNeedsAppDebug(t *testing.T) {
 	srv, _ := harnessServer(t, harnessSetup{})
 	resp := rpc(t, srv, "", "harness.up", map[string]any{"session": "s1", "scenario": "plain", "debug": true})
-	wantHarnessCode(t, "debug up", resp, CodeInvalidParams)
-	if !strings.Contains(resp.Error.Message, "debug") {
+	wantHarnessCode(t, "debug up", resp, harness.CodeInvalid)
+	if !strings.Contains(resp.Error.Message, "app.debug") {
 		t.Fatalf("message = %q", resp.Error.Message)
 	}
 }

@@ -87,6 +87,10 @@ type harnessParams struct {
 	Debug    bool   `json:"debug"`
 	Force    bool   `json:"force"`
 	Wait     bool   `json:"wait"`
+	Op       string `json:"op"`
+	Path     string `json:"path"`
+	Offset   int64  `json:"offset"`
+	Limit    int    `json:"limit"`
 }
 
 // dispatchHarness routes the harness.* methods.
@@ -113,6 +117,12 @@ func (s *Server) dispatchHarness(ctx context.Context, req Request) Response {
 		return s.handleHarnessList(ctx, req, p)
 	case "harness.verdict":
 		return s.handleHarnessVerdict(ctx, req, p)
+	case "harness.debug":
+		return s.handleHarnessDebug(ctx, req, p)
+	case "harness.files":
+		return s.handleHarnessFiles(ctx, req, p)
+	case "harness.file":
+		return s.handleHarnessFile(ctx, req, p)
 	default:
 		return s.handleHarnessRunCall(ctx, req, p)
 	}
@@ -211,9 +221,6 @@ func (s *Server) harnessActor(ctx context.Context, req Request) domain.EventActo
 }
 
 func (s *Server) handleHarnessUp(ctx context.Context, req Request, p harnessParams) Response {
-	if p.Debug {
-		return errResp(req.ID, CodeInvalidParams, "debug runs are not available yet: the harness runs offline without a debugger")
-	}
 	if strings.TrimSpace(p.Scenario) == "" {
 		return errResp(req.ID, CodeInvalidParams, "scenario is required")
 	}
@@ -230,7 +237,7 @@ func (s *Server) handleHarnessUp(ctx context.Context, req Request, p harnessPara
 	m := s.harness.d.Manager
 	run, err := m.Up(ctx, harness.UpRequest{
 		Session: sess.ID, Repo: src.repo, SHA: src.sha, Scenario: p.Scenario,
-		Dirty: p.Dirty, SkipCleanCheck: src.skipCleanCheck,
+		Dirty: p.Dirty, SkipCleanCheck: src.skipCleanCheck, Debug: p.Debug,
 		Override: src.override, AppImageOverride: src.appImage,
 		Actor: s.harnessActor(ctx, req),
 	})

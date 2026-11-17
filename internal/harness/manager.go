@@ -62,6 +62,9 @@ type Options struct {
 	// AppImage picks the app's image from the exported tree and the repo's
 	// review.image override; it must be set.
 	AppImage func(src, override string) (string, error)
+	// DebugAdapters serve debug runs, one per app.debug.lang; a language
+	// without one is refused with CodeDebugUnsupported.
+	DebugAdapters []DebugAdapter
 	// Record writes ledger rows; nil records nothing.
 	Record Recorder
 	// Now is the clock; nil is time.Now.
@@ -111,6 +114,8 @@ type liveRun struct {
 	// stopping is set by the first of Down and a failed start; the other
 	// leaves the run alone.
 	stopping bool
+	// debug is the adapter of a debug run.
+	debug DebugAdapter
 }
 
 // NewManager checks opts and returns a manager with no live runs.
@@ -176,7 +181,9 @@ type UpRequest struct {
 	// repos.<slug>.review.image.
 	Override         []byte
 	AppImageOverride string
-	Actor            domain.EventActor
+	// Debug runs the app under the debug adapter of app.debug.lang.
+	Debug bool
+	Actor domain.EventActor
 }
 
 // Up checks and reserves a run, exports its tree and starts it in the
@@ -203,9 +210,22 @@ func (m *Manager) Up(ctx context.Context, req UpRequest) (Run, error) {
 	if err := f.CheckLimits(sc.ID, LimitOptions{ServiceMemory: m.opts.ServiceMemory, RunMemory: m.opts.RunMemory}); err != nil {
 		return Run{}, err
 	}
+	var adapter DebugAdapter
+	var launch DebugLaunch
+	if req.Debug {
+		if adapter, err = DebugAdapterFor(f, m.opts.DebugAdapters); err != nil {
+			return Run{}, err
+		}
+		if launch, err = adapter.Launch(f); err != nil {
+			return Run{}, err
+		}
+	}
 	lr, err := m.reserve(req.Session)
 	if err != nil {
 		return Run{}, err
+	}
+	if adapter != nil {
+		lr.debug, lr.run.Debug, lr.run.DebugLaunch = adapter, true, &launch
 	}
 	run, err := m.prepare(ctx, req, loaded, sc, lr)
 	if err != nil {

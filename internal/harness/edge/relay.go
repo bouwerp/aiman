@@ -21,15 +21,18 @@ type relay struct {
 	ctx         context.Context // ends at close, so a pending dial stops
 	cancel      context.CancelFunc
 
-	active atomic.Int64
-	total  atomic.Int64
-	failed atomic.Int64
+	active  atomic.Int64
+	total   atomic.Int64
+	failed  atomic.Int64
+	refused atomic.Int64
 
 	mu      sync.Mutex
 	lastErr string
 	conns   map[net.Conn]struct{}
 	closed  bool
-	wg      sync.WaitGroup
+	// lease is the holder of a KindDAP relay.
+	lease *dapLease
+	wg    sync.WaitGroup
 }
 
 func newRelay(spec RelaySpec, ln net.Listener, dialTimeout time.Duration) *relay {
@@ -50,7 +53,9 @@ func (r *relay) status() RelayStatus {
 		Active:    r.active.Load(),
 		Total:     r.total.Load(),
 		Failed:    r.failed.Load(),
+		Refused:   r.refused.Load(),
 		LastError: last,
+		Holder:    r.holderInfo(),
 	}
 }
 
@@ -108,6 +113,10 @@ func (r *relay) handle(client net.Conn) {
 	r.total.Add(1)
 	r.active.Add(1)
 	defer r.active.Add(-1)
+	if r.spec.Kind == KindDAP {
+		r.handleDAP(client)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.ctx, r.dialTimeout)
 	var d net.Dialer

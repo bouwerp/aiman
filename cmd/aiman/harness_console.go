@@ -60,6 +60,8 @@ func harnessConsoleTimeout(method string) time.Duration {
 		return server.HarnessCheckTimeout + 30*time.Second
 	case "harness.down":
 		return server.HarnessDownTimeout + 30*time.Second
+	case "harness.debug":
+		return server.HarnessDebugTimeout + 15*time.Second
 	}
 	return harnessConsoleCallTimeout
 }
