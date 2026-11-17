@@ -79,6 +79,11 @@ func (fakeEdge) Health(context.Context, string, string) (edge.Health, error) {
 	return edge.Health{}, nil
 }
 
+// DAPDrop finds no debugger holder: eval runs are never debug runs.
+func (fakeEdge) DAPDrop(context.Context, string, string, string) (*edge.DAPHolder, error) {
+	return nil, nil
+}
+
 // FakeDockerImages are the images a scenario harness eval holds: the app's
 // image, a service image and the edge.
 var FakeDockerImages = []string{"golang:1.25", "postgres:16", scenario.EdgeImage}

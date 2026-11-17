@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -281,7 +280,7 @@ func waitNoHolder(t *testing.T, e *Edge, relay string) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal(fmt.Sprintf("holder stayed: %+v", statusOf(t, e, relay).Holder))
+	t.Fatalf("holder stayed: %+v", statusOf(t, e, relay).Holder)
 }
 
 // dialLease opens a connection that names a lease token first.

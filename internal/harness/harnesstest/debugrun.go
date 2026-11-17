@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"net"
 	"net/netip"
 	"os"
@@ -346,18 +345,14 @@ func randomHex(t *testing.T, n int) string {
 // runs are unlikely to hold.
 func randomSubnets(t *testing.T) (inner, outer, debug netip.Prefix) {
 	t.Helper()
-	n, err := rand.Int(rand.Reader, big.NewInt(100))
-	if err != nil {
+	var r [2]byte
+	if _, err := rand.Read(r[:]); err != nil {
 		t.Fatal(err)
 	}
-	m, err := rand.Int(rand.Reader, big.NewInt(254))
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, c := byte(140+n.Int64()), byte(m.Int64())
+	b, c := 140+r[0]%100, r[1]%254
 	return netip.PrefixFrom(netip.AddrFrom4([4]byte{10, b, c, 0}), 25),
 		netip.PrefixFrom(netip.AddrFrom4([4]byte{10, b, c, 128}), 25),
-		netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 240 + byte(n.Int64()%10), c, 8}), 29)
+		netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 240 + r[0]%10, c, 8}), 29)
 }
 
 // Transport carries DAP messages as JSON objects, over TCP or the console's

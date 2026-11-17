@@ -175,6 +175,7 @@
     const nav = $("apps");
     nav.replaceChildren();
     for (const f of state.forwards || []) {
+      if (f.name === "dap" && state.run && state.run.debug) continue; // the debugger's port, used by the Debug tab
       nav.append(el("a", { class: "app-link", href: f.url, target: "_blank", rel: "noopener noreferrer" },
         el("strong", { text: f.name }), f.url, el("span", { text: "host port " + f.host_port })));
     }
