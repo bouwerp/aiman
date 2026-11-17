@@ -114,4 +114,4 @@ jobs:
       # equals tools.BunDAPSHA256, so a change to build/bun-dap needs a new pin
       # before a release builds the asset.
       - name: Build and check
-        run: build/bun-dap/check.sh
+        run: build/bun-dap/check.sh dist
