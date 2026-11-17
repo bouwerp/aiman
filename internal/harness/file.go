@@ -88,6 +88,9 @@ type Error struct {
 	// CodeDebugTool.
 	Lang string
 	Tool string
+	// Reason says why a language with an adapter cannot be debugged
+	// (ReasonMusl, ReasonBunVersion); empty for a language with none.
+	Reason string
 	// ImageData is the RPC data of the image refusals.
 	ImageData map[string]any
 }
@@ -125,6 +128,9 @@ func (e *Error) Data() map[string]any {
 	case CodeServiceFailed:
 		return map[string]any{"service": e.Service, "tail": e.Tail}
 	case CodeDebugUnsupported:
+		if e.Reason != "" {
+			return map[string]any{"lang": e.Lang, "reason": e.Reason}
+		}
 		return map[string]any{"lang": e.Lang}
 	case CodeDebugTool:
 		return map[string]any{"tool": e.Tool}

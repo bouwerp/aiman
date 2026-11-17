@@ -422,7 +422,9 @@ The tester debugs browser code in their own DevTools, which need source maps. Wh
 - Go: `debug: {lang: go}`. Serve builds with optimisation off and runs `dlv dap`.
 - Node or TypeScript on Node: `debug: {lang: node, entry: dist/server.js}`. Add `cwd` (relative to the repository), `runtime_args` (for example `["--import", "tsx"]` to run `.ts` through a loader) or give the whole command in `run`, which must contain `$AIMAN_INSPECT` once. For compiled TypeScript, build with source maps. Do not put `tsx` or `ts-node` in `runtime`, and do not add `--watch`, `--hot` or `--inspect=0.0.0.0`; the file is refused.
 - `app.image` names the image the app runs in, when the picked one is wrong (for example `node:24`). It is vetted like any image.
-- `bun` and `python` parse, but `harness up --debug` refuses them with `harness_debug_unsupported` until their debuggers land. `checks[].debug` is accepted but not run yet.
+- Bun or TypeScript on Bun: `debug: {lang: bun, entry: src/index.ts}`, with `app.image` an official Bun image such as `oven/bun:1.3-slim`. Bun runs the `.ts` file itself, so breakpoints land in the source. `cwd`, `runtime_args` and `run` work as for Node. Leave out `--watch` and `--hot`.
+- The Bun debugger works only for the Bun minor version its adapter is built for (1.3 today). Another minor, or a musl (Alpine) image with no `bun` of its own, is refused with `harness_debug_unsupported`, at `harness up` when `app.image` names the version and otherwise when the run starts. Tell the operator; do not change the app's Bun to get around it. The fallback, debugging the code under Node as a Vitest check, arrives with `checks[].debug`.
+- `python` parses, but `harness up --debug` refuses it with `harness_debug_unsupported` until its debugger lands. `checks[].debug` is accepted but not run yet.
 
 ### Images
 

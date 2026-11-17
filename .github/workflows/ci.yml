@@ -102,3 +102,16 @@ jobs:
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/aiman-windows.exe ./cmd/aiman
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/aiman-trigger-windows.exe ./cmd/aiman-trigger
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/aiman-gateway-windows.exe ./cmd/aiman-gateway
+
+  bun-dap:
+    name: bun-dap pin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Builds Bun's debug adapter with the pinned Bun and fails unless it
+      # equals tools.BunDAPSHA256, so a change to build/bun-dap needs a new pin
+      # before a release builds the asset.
+      - name: Build and check
+        run: build/bun-dap/check.sh

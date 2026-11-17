@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -273,12 +274,34 @@ func (s *starter) build(ctx context.Context) error {
 }
 
 func (s *starter) app(ctx context.Context) error {
+	if err := s.probe(ctx); err != nil {
+		return err
+	}
 	if s.debug != nil && s.debug.Adapter != nil {
 		if err := s.must(ctx, "debug adapter", "", nil, "up", "-d", ServiceAdapter); err != nil {
 			return err
 		}
 	}
 	return s.must(ctx, "app", "", nil, "up", "-d", ServiceApp)
+}
+
+// probe runs a debug run's probe in a one-off app container and refuses the
+// run when its check does.
+func (s *starter) probe(ctx context.Context) error {
+	if s.debug == nil || s.debug.Probe == nil {
+		return nil
+	}
+	p := s.debug.Probe
+	const step = "debug probe"
+	args := append([]string{"run", "--rm", "--no-deps", ServiceApp}, p.Command...)
+	out, exit, err := s.compose(ctx, step, nil, args...)
+	if err != nil || exit != 0 {
+		return &stepError{step: step, exit: exit, out: out, err: err}
+	}
+	if err := p.Check(out); err != nil {
+		return &stepError{step: step, err: err}
+	}
+	return nil
 }
 
 // placeLaunch records the debug run's DAP request for the debug subnet of
@@ -290,7 +313,7 @@ func (s *starter) placeLaunch(n int) error {
 	if a == nil {
 		return nil
 	}
-	l, err := a.Launch(s.f, DebugNetOf(debugSubnet(n)))
+	l, err := a.Launch(s.f, DebugNetOf(debugSubnet(n)), s.debug)
 	if err != nil {
 		return err
 	}
@@ -380,6 +403,10 @@ func (m *Manager) failRun(lr *liveRun, err error) {
 	m.composeDown(context.Background(), run)
 	now := m.opts.Now()
 	run.State, run.FailedStep, run.FailedService, run.Error, run.StoppedAt = StateFailed, se.step, se.service, msg, &now
+	var he *Error
+	if errors.As(se.err, &he) {
+		run.ErrorCode = he.Code
+	}
 	if err := m.writeRun(run); err != nil {
 		m.logf("write run %s: %v", run.ID, err)
 	}

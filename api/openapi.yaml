@@ -1686,9 +1686,13 @@ components:
         harness_too_large sum and limit (bytes), harness_dirty paths,
         harness_image_missing image, harness_service_failed service and
         tail (the end of the failed step's output), and
-        harness_debug_unsupported lang.
+        harness_debug_unsupported lang, plus reason when the language has an
+        adapter that cannot debug this app (musl, or bun_version for a Bun
+        of another minor version than the host's Bun adapter).
       properties:
         lang:
+          type: string
+        reason:
           type: string
         errors:
           type: array
@@ -1794,7 +1798,8 @@ components:
         ran the working tree: sha is HEAD and diff_sha256 hashes the changes
         and untracked files. source is config when repos.<slug>.harness
         replaced the repository file. failed_step, failed_service and error
-        explain a failed run. last_used is the last call that touched the
+        explain a failed run; error_code is the refusal code when a step
+        refused it (harness_debug_unsupported from the debug probe). last_used is the last call that touched the
         run; harness.idle_timeout counts from it.
       required: [id, session, scenario, sha, dirty, source, network, state, debug, ports, steps, checks, started_at, last_used]
       properties:
@@ -1830,6 +1835,8 @@ components:
         failed_service:
           type: string
         error:
+          type: string
+        error_code:
           type: string
         ports:
           type: array
@@ -2119,7 +2126,7 @@ components:
       type: object
       description: >
         A debug run's DAP start request: a client sends request (launch for
-        go, attach for node) with arguments, unchanged. source_root is the
+        go, attach for node and bun) with arguments, unchanged. source_root is the
         container path of the run's exported tree, for mapping stack frame
         paths. children is true when the adapter opens child sessions with
         the startDebugging reverse request (js-debug): the client connects

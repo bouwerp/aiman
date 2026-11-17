@@ -11,7 +11,8 @@ import (
 // DebugAdapter is one language's debugger. The compose builder, the edge's
 // DAP relay, the console's DAP bridge and its Debug tab know only this
 // interface and the Debug Adapter Protocol: Go runs Delve's DAP server in the
-// app container, Node runs js-debug's in a separate adapter container.
+// app container, Node runs js-debug's and Bun runs Bun's own adapter in a
+// separate adapter container.
 type DebugAdapter interface {
 	// Lang is the app.debug.lang it serves.
 	Lang() string
@@ -24,8 +25,9 @@ type DebugAdapter interface {
 	// container (and the adapter container, if any) run under it.
 	Spec(ctx context.Context, f *File) (*DebugSpec, error)
 	// Launch is the DAP launch or attach request a client sends for the
-	// file's app on the run's debug network.
-	Launch(f *File, net DebugNet) (DebugLaunch, error)
+	// file's app on the run's debug network, under spec, what Spec made for
+	// the run.
+	Launch(f *File, net DebugNet, spec *DebugSpec) (DebugLaunch, error)
 	// EditorConfig is a .vscode/launch.json configuration that connects an
 	// editor to the debugger forwarded to 127.0.0.1:port.
 	EditorConfig(l DebugLaunch, port int) map[string]any
@@ -45,8 +47,27 @@ type DebugLaunch struct {
 	Children   bool           `json:"children,omitempty"`
 }
 
-// CodeDebugUnsupported is a debug run for a language with no adapter yet.
+// CodeDebugUnsupported is a debug run for a language with no adapter yet,
+// or one this host's adapter cannot debug (Error.Reason says why).
 const CodeDebugUnsupported = "harness_debug_unsupported"
+
+// Reasons of a CodeDebugUnsupported refusal for a language that has an
+// adapter.
+const (
+	// ReasonMusl is an image on musl libc with no runtime of its own.
+	ReasonMusl = "musl"
+	// ReasonBunVersion is an app on a Bun minor version the host's Bun
+	// adapter is not built for.
+	ReasonBunVersion = "bun_version"
+)
+
+// EditorPort reports whether an editor reaches l's debugger through the
+// console's editor port rather than the forwarded port: an adapter with
+// child sessions needs it for the lease line, and one in the adapter
+// container (Node, Bun) for mapping the editor's paths to /src.
+func (l DebugLaunch) EditorPort() bool {
+	return l.Children || l.Lang == "bun"
+}
 
 // DebugAdapterFor picks the adapter for app.debug.lang among adapters and
 // checks the file against it.
@@ -68,7 +89,7 @@ func DebugAdapterFor(f *File, adapters []DebugAdapter) (DebugAdapter, error) {
 // EditorConfig is the launch.json configuration for l at 127.0.0.1:port,
 // from the adapter of l's language.
 func EditorConfig(l DebugLaunch, port int) (map[string]any, error) {
-	for _, a := range []DebugAdapter{&GoDebug{}, &NodeDebug{}} {
+	for _, a := range []DebugAdapter{&GoDebug{}, &NodeDebug{}, &BunDebug{}} {
 		if a.Lang() == l.Lang {
 			return a.EditorConfig(l, port), nil
 		}
@@ -138,7 +159,7 @@ func GoDebugSpec(dlv string) *DebugSpec {
 
 // Launch is mode exec of the built binary: app.debug.program and args when
 // set, else app.run split into words.
-func (*GoDebug) Launch(f *File, _ DebugNet) (DebugLaunch, error) {
+func (*GoDebug) Launch(f *File, _ DebugNet, _ *DebugSpec) (DebugLaunch, error) {
 	prog, args, err := debugProgram(f)
 	if err != nil {
 		return DebugLaunch{}, err

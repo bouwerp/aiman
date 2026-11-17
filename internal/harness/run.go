@@ -55,12 +55,15 @@ type Run struct {
 	// DebugLaunch is the DAP launch request of a debug run.
 	DebugLaunch *DebugLaunch `json:"debug_launch,omitempty"`
 	// FailedStep, FailedService and Error explain a failed run.
-	FailedStep    string     `json:"failed_step,omitempty"`
-	FailedService string     `json:"failed_service,omitempty"`
-	Error         string     `json:"error,omitempty"`
-	Ports         []RunPort  `json:"ports"`
-	Steps         []StepView `json:"steps"`
-	Checks        []CheckRun `json:"checks"`
+	FailedStep    string `json:"failed_step,omitempty"`
+	FailedService string `json:"failed_service,omitempty"`
+	Error         string `json:"error,omitempty"`
+	// ErrorCode is the refusal code of a failed run whose step refused it
+	// (harness_debug_unsupported from the debug probe, for example).
+	ErrorCode string     `json:"error_code,omitempty"`
+	Ports     []RunPort  `json:"ports"`
+	Steps     []StepView `json:"steps"`
+	Checks    []CheckRun `json:"checks"`
 	// Result is the tester's verdict on the whole scenario.
 	Result   string    `json:"result,omitempty"`
 	Verdicts []Verdict `json:"verdicts,omitempty"`

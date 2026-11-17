@@ -150,7 +150,7 @@ func UpNodeDebugRun(t *testing.T) *DebugRun {
 		t.Fatal(err)
 	}
 	inner, outer, dbg := randomSubnets(t)
-	launch, err := (&harness.NodeDebug{}).Launch(f, harness.DebugNetOf(dbg))
+	launch, err := (&harness.NodeDebug{}).Launch(f, harness.DebugNetOf(dbg), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/netip"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -30,8 +31,9 @@ const (
 	// ToolsMount is where debug tools are mounted read-only in the app.
 	ToolsMount = "/aiman-tools"
 	// InspectEnv carries the app's debug address and the debugger's port in
-	// the app, <ip>:<port>, into the app container. A debug command listens
-	// on it.
+	// the app, <ip>:<port>, into the app container, followed by
+	// /<DebugSpec.InspectPath> when the spec has one. A debug command
+	// listens on it.
 	InspectEnv = "AIMAN_INSPECT"
 	// AdapterHostEnv is the adapter container's own debug address, which its
 	// DAP server listens on.
@@ -80,6 +82,21 @@ type DebugSpec struct {
 	// Adapter runs the DAP server in its own container; nil when the app
 	// runs it.
 	Adapter *AdapterSpec
+	// InspectPath is the inspector's URL path in $AIMAN_INSPECT, without
+	// the leading slash: Bun's random per-run prefix. Empty for the others.
+	InspectPath string
+	// Probe, when set, runs in the app container after the build and
+	// before the app starts, and may refuse the run.
+	Probe *DebugProbe
+}
+
+// DebugProbe checks the app container before a debug run's app starts: the
+// runtime's version, for example. Command runs in the app container with
+// the run's mounts and environment; Check reads its output and refuses the
+// run with its error.
+type DebugProbe struct {
+	Command []string
+	Check   func(out string) error
 }
 
 // AdapterSpec is the adapter container of a debug run. It runs only on the
@@ -136,8 +153,13 @@ func checkDebug(f *File, spec RunSpec) error {
 	if p.Overlaps(spec.InnerSubnet) || p.Overlaps(spec.OuterSubnet) {
 		return fmt.Errorf("harness compose: debug subnet %s overlaps the inner or outer subnet", p)
 	}
+	if d.InspectPath != "" && !inspectPathRe.MatchString(d.InspectPath) {
+		return fmt.Errorf("harness compose: inspector path %q must be letters, digits, - and _", d.InspectPath)
+	}
 	return nil
 }
+
+var inspectPathRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 func validPort(p int) bool { return p >= 1 && p <= 65535 }
 
@@ -190,6 +212,9 @@ func debugApp(s *composeService, spec RunSpec) {
 	}
 	maps.Copy(s.Environment, d.Env)
 	s.Environment[InspectEnv] = inspectAddr(spec)
+	if d.InspectPath != "" {
+		s.Environment[InspectEnv] += "/" + d.InspectPath
+	}
 	s.Command = append([]string(nil), d.Command...)
 }
 

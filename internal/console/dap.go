@@ -240,9 +240,9 @@ func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
 	v := debugView{Debug: reply.Debug, LocalPort: port, Client: ConsoleClientName}
 	if port > 0 && cur != nil && cur.DebugLaunch != nil {
 		editorPort := port
-		if cur.DebugLaunch.Children {
-			// An adapter with child sessions needs the editor port: it adds
-			// the lease line and points each child at itself.
+		if cur.DebugLaunch.EditorPort() {
+			// The editor port adds the lease line, points each child session
+			// at itself and maps the editor's paths to /src.
 			if editorPort, err = s.ensureEditor(); err != nil {
 				s.logf("editor port: %v", err)
 				editorPort = 0

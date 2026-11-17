@@ -6,6 +6,7 @@ package tools
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -36,11 +37,29 @@ const (
 	manifestName = "tool.json"
 )
 
-// Spec is one pinned tool archive (a .tar.gz).
+// Archive formats of a Spec.
+const (
+	// FormatTarGz is a gzipped tar, the default.
+	FormatTarGz = ""
+	// FormatZip is a zip archive.
+	FormatZip = "zip"
+	// FormatFile is one file, kept as Spec.File.
+	FormatFile = "file"
+)
+
+// Spec is one pinned tool archive.
 type Spec struct {
 	Name    string
 	Version string
-	URL     string
+	// URL is an https URL, or an absolute path on the host.
+	URL string
+	// Format is FormatTarGz, FormatZip or FormatFile.
+	Format string
+	// File is the name a FormatFile download is kept as.
+	File string
+	// Hint ends a failed download's or checksum's message: what the
+	// operator can do about it.
+	Hint string
 	// SHA256 is the archive's hex sha256; a download with another is refused
 	// before it is unpacked.
 	SHA256 string
@@ -56,11 +75,18 @@ var ErrChecksum = errors.New("tool checksum mismatch")
 
 // ChecksumError names the tool whose download did not match.
 type ChecksumError struct {
-	Tool, Version, Want, Got string
+	Tool, Version, Want, Got, Hint string
 }
 
 func (e *ChecksumError) Error() string {
-	return fmt.Sprintf("%s %s: download sha256 %s, the pin is %s", e.Tool, e.Version, e.Got, e.Want)
+	return withHint(fmt.Sprintf("%s %s: download sha256 %s, the pin is %s", e.Tool, e.Version, e.Got, e.Want), e.Hint)
+}
+
+func withHint(msg, hint string) string {
+	if hint == "" {
+		return msg
+	}
+	return msg + " (" + hint + ")"
 }
 
 // Is matches ErrChecksum.
@@ -98,6 +124,15 @@ func (s *Store) Path(spec Spec) string {
 func (s *Store) Ensure(ctx context.Context, spec Spec) (string, error) {
 	if spec.Name == "" || spec.Version == "" || spec.URL == "" || len(spec.SHA256) != 64 {
 		return "", fmt.Errorf("tool %q: name, version, url and a sha256 are required", spec.Name)
+	}
+	switch spec.Format {
+	case FormatTarGz, FormatZip:
+	case FormatFile:
+		if spec.File == "" || spec.File != filepath.Base(spec.File) || spec.File == manifestName || strings.HasPrefix(spec.File, ".") {
+			return "", fmt.Errorf("tool %q: file name %q", spec.Name, spec.File)
+		}
+	default:
+		return "", fmt.Errorf("tool %q: unknown format %q", spec.Name, spec.Format)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -160,30 +195,49 @@ func (s *Store) intact(dir string, spec Spec) bool {
 	return err == nil && tree == m.Tree
 }
 
-// fetch downloads spec into a temporary file under Dir and checks its sha256.
-func (s *Store) fetch(ctx context.Context, spec Spec) (string, error) {
+// open is spec's archive: a file on the host for an absolute path, else an
+// https download.
+func (s *Store) open(ctx context.Context, spec Spec) (io.ReadCloser, error) {
+	if filepath.IsAbs(spec.URL) {
+		f, err := os.Open(spec.URL)
+		if err != nil {
+			return nil, fmt.Errorf("%s %s: %w", spec.Name, spec.Version, err)
+		}
+		return f, nil
+	}
 	client := s.Client
 	if client == nil {
 		client = &http.Client{Timeout: fetchTimeout}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.URL, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%s %s: download: %w", spec.Name, spec.Version, err)
+		return nil, fmt.Errorf("%s %s: download: %w", spec.Name, spec.Version, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s %s: download %s: %s", spec.Name, spec.Version, spec.URL, resp.Status)
+		_ = resp.Body.Close()
+		return nil, errors.New(withHint(fmt.Sprintf("%s %s: download %s: %s", spec.Name, spec.Version, spec.URL, resp.Status), spec.Hint))
 	}
+	return resp.Body, nil
+}
+
+// fetch copies spec's archive into a temporary file under Dir and checks its
+// sha256.
+func (s *Store) fetch(ctx context.Context, spec Spec) (string, error) {
+	body, err := s.open(ctx, spec)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = body.Close() }()
 	f, err := os.CreateTemp(s.Dir, ".dl-")
 	if err != nil {
 		return "", err
 	}
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxArchive+1))
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(body, maxArchive+1))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -192,7 +246,7 @@ func (s *Store) fetch(ctx context.Context, spec Spec) (string, error) {
 	}
 	if err == nil {
 		if got := hex.EncodeToString(h.Sum(nil)); got != spec.SHA256 {
-			err = &ChecksumError{Tool: spec.Name, Version: spec.Version, Want: spec.SHA256, Got: got}
+			err = &ChecksumError{Tool: spec.Name, Version: spec.Version, Want: spec.SHA256, Got: got, Hint: spec.Hint}
 		}
 	}
 	if err != nil {
@@ -206,6 +260,12 @@ func (s *Store) fetch(ctx context.Context, spec Spec) (string, error) {
 // dst. Links, devices and entries that would leave dst are skipped or
 // refused; nothing the archive names is followed.
 func unpack(archive, dst string, spec Spec) error {
+	switch spec.Format {
+	case FormatZip:
+		return unpackZip(archive, dst, spec)
+	case FormatFile:
+		return copyFile(archive, filepath.Join(dst, spec.File))
+	}
 	f, err := os.Open(archive) //nolint:gosec // G304: the file fetch just wrote
 	if err != nil {
 		return err
@@ -241,10 +301,84 @@ func unpack(archive, dst string, spec Spec) error {
 		if total += h.Size; total > maxUnpacked {
 			return fmt.Errorf("over %d bytes unpacked", maxUnpacked)
 		}
-		if err := writeEntry(dst, rel, h, tr); err != nil {
+		if h.Typeflag == tar.TypeDir {
+			err = makeDir(dst, rel)
+		} else {
+			err = writeFile(dst, rel, h.Mode&0o111 != 0, h.Size, tr)
+		}
+		if err != nil {
 			return err
 		}
 	}
+}
+
+// unpackZip is unpack for a zip archive, under the same rules: regular
+// files and directories only (a symlink entry is skipped), no absolute or
+// climbing names, and the entry, size and total limits. A file is copied
+// for its declared size only; the zip reader refuses one whose data or CRC
+// disagrees.
+func unpackZip(archive, dst string, spec Spec) error {
+	zr, err := zip.OpenReader(archive)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = zr.Close() }()
+	if len(zr.File) > maxEntries {
+		return fmt.Errorf("more than %d entries", maxEntries)
+	}
+	var total uint64
+	for _, zf := range zr.File {
+		rel, err := entryPath(zf.Name, spec.Strip)
+		if err != nil {
+			return err
+		}
+		mode := zf.Mode()
+		if rel == "" || (mode&fs.ModeType != 0 && !mode.IsDir()) {
+			continue
+		}
+		if mode.IsDir() {
+			if err := makeDir(dst, rel); err != nil {
+				return err
+			}
+			continue
+		}
+		if spec.Keep != nil && !spec.Keep(rel) {
+			continue
+		}
+		if zf.UncompressedSize64 > maxUnpacked {
+			return fmt.Errorf("over %d bytes unpacked", maxUnpacked)
+		}
+		if total += zf.UncompressedSize64; total > maxUnpacked {
+			return fmt.Errorf("over %d bytes unpacked", maxUnpacked)
+		}
+		if err := writeZipFile(dst, rel, zf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeZipFile(dst, rel string, zf *zip.File) error {
+	rc, err := zf.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rc.Close() }()
+	return writeFile(dst, rel, zf.Mode()&0o111 != 0, int64(zf.UncompressedSize64), rc) //nolint:gosec // G115: unpackZip bounds it by maxUnpacked
+}
+
+// copyFile copies the downloaded file to target.
+func copyFile(src, target string) error {
+	in, err := os.Open(src) //nolint:gosec // G304: the file fetch just wrote
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	fi, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	return writeFile(filepath.Dir(target), filepath.Base(target), false, fi.Size(), in)
 }
 
 // entryPath is name with strip components dropped, or an error for a name
@@ -266,23 +400,25 @@ func entryPath(name string, strip int) (string, error) {
 	return strings.Join(parts[strip:], "/"), nil
 }
 
-func writeEntry(dst, rel string, h *tar.Header, r io.Reader) error {
+func makeDir(dst, rel string) error {
+	return os.MkdirAll(filepath.Join(dst, filepath.FromSlash(rel)), 0o755) //nolint:gosec // G301: containers run as the host uid and read it
+}
+
+// writeFile writes size bytes of r to rel under dst, executable when exec.
+func writeFile(dst, rel string, exec bool, size int64, r io.Reader) error {
 	target := filepath.Join(dst, filepath.FromSlash(rel))
-	if h.Typeflag == tar.TypeDir {
-		return os.MkdirAll(target, 0o755) //nolint:gosec // G301: containers run as the host uid and read it
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil { //nolint:gosec // G301: as above
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil { //nolint:gosec // G301: containers run as the host uid and read it
 		return err
 	}
 	mode := os.FileMode(0o644)
-	if h.Mode&0o111 != 0 {
+	if exec {
 		mode = 0o755
 	}
 	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode) //nolint:gosec // G304: a checked path under the scratch directory
 	if err != nil {
 		return err
 	}
-	_, err = io.CopyN(out, r, h.Size)
+	_, err = io.CopyN(out, r, size)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}

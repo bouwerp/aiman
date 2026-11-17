@@ -126,36 +126,41 @@ func NodeDebugSpec(nodeDir, jsDebugDir string, f *File) (*DebugSpec, error) {
 	}, nil
 }
 
-// muslGuard stops a run whose image would start the mounted (glibc) Node on
-// a musl libc: it would fail with a loader error nobody reads.
-const muslGuard = `if [ "$(command -v node)" = ` + NodeToolMount + `/bin/node ] && ls /lib/ld-musl-* >/dev/null 2>&1; then
-  echo "aiman: this image uses musl libc (Alpine) and has no node of its own; the mounted Node needs glibc. Use an image with node installed, or a glibc image." >&2
+// muslGuard stops a run whose image would start the mounted (glibc) runtime
+// bin, named name, on a musl libc: it would fail with a loader error nobody
+// reads.
+func muslGuard(cmd, bin, name string) string {
+	return `if [ "$(command -v ` + cmd + `)" = ` + bin + ` ] && ls /lib/ld-musl-* >/dev/null 2>&1; then
+  echo "aiman: this image uses musl libc (Alpine) and has no ` + cmd + ` of its own; the mounted ` + name + ` needs glibc. Use an image with ` + cmd + ` installed, or a glibc image." >&2
   exit 1
 fi
 `
+}
 
 // nodeScript is the app command of a node debug run: the image's node
 // first, the mounted one as a fallback, in /src or app.debug.cwd, either the
 // file's own run or runtime --inspect-wait=$AIMAN_INSPECT runtime_args entry.
 func nodeScript(d *Debug) (string, error) {
+	return inspectScript(d, "node", NodeToolMount+"/bin", "Node")
+}
+
+// inspectScript is the app command of a node or bun debug run: the image's
+// runtime first and the mounted one (in toolBin) as a fallback, refused on
+// musl; then, in /src or app.debug.cwd, the file's own run or
+// runtime --inspect-wait="$AIMAN_INSPECT" runtime_args entry.
+func inspectScript(d *Debug, cmd, toolBin, name string) (string, error) {
 	var b strings.Builder
-	b.WriteString(`PATH="$PATH:` + NodeToolMount + `/bin"; export PATH` + "\n")
-	b.WriteString(muslGuard)
+	b.WriteString(`PATH="$PATH:` + toolBin + `"; export PATH` + "\n")
+	b.WriteString(muslGuard(cmd, toolBin+"/"+cmd, name))
 	b.WriteString("cd " + shellx.Quote(path.Join("/src", d.Cwd)) + " || exit 1\n")
 	if d.Run != "" {
 		b.WriteString(d.Run + "\n")
 		return b.String(), nil
 	}
 	if d.Entry == "" {
-		return "", invalid("app.debug: node needs entry or run")
+		return "", invalid("app.debug: " + d.Lang + " needs entry or run")
 	}
-	rt := d.Runtime
-	if rt == "" {
-		rt = "node"
-	}
-	if strings.Contains(rt, "/") {
-		rt = path.Join("/src", rt)
-	}
+	rt := debugRuntime(d, cmd)
 	words := []string{shellx.Quote(rt), `--inspect-wait="$` + InspectEnv + `"`}
 	for _, a := range d.RuntimeArgs {
 		words = append(words, shellx.Quote(a))
@@ -165,9 +170,22 @@ func nodeScript(d *Debug) (string, error) {
 	return b.String(), nil
 }
 
+// debugRuntime is the runtime a debug command starts: app.debug.runtime,
+// else def; a repository path is under /src.
+func debugRuntime(d *Debug, def string) string {
+	rt := d.Runtime
+	if rt == "" {
+		rt = def
+	}
+	if strings.Contains(rt, "/") {
+		rt = path.Join("/src", rt)
+	}
+	return rt
+}
+
 // Launch is js-debug's attach to the app's inspector. js-debug reads source
 // maps from the adapter's /src and /out, the same paths the app sees.
-func (*NodeDebug) Launch(f *File, net DebugNet) (DebugLaunch, error) {
+func (*NodeDebug) Launch(f *File, net DebugNet, _ *DebugSpec) (DebugLaunch, error) {
 	d := f.App.Debug
 	if d == nil {
 		return DebugLaunch{}, invalid("the node debugger needs app.debug")

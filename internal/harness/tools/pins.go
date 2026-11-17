@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -18,11 +19,33 @@ import (
 //     js-debug-dap-<v>.tar.gz of microsoft/vscode-js-debug. The release has
 //     no checksum file; the sum is the asset digest GitHub's release API
 //     lists (assets[].digest), which matches a download's sha256.
+//   - Bun: the official bun-linux-<arch>.zip of oven-sh/bun, release tag
+//     bun-<version>. The sums are the release's SHASUMS256.txt lines.
+//   - bun-dap: Bun's own debug adapter packages at the same Bun tag plus
+//     aiman's DAP-over-TCP entry (build/bun-dap), bundled by that Bun into
+//     one file. The build is reproducible: build/bun-dap/build.sh prints
+//     BunDAPSHA256, CI checks it, and every aiman release carries the file
+//     as the asset bun-dap-<Bun version>.js, listed in its checksums.txt.
 const (
 	NodeVersion    = "v24.22.3"
 	JSDebugVersion = "v1.140.1"
 	JSDebugSHA256  = "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf"
+	BunVersion     = "v1.3.14"
+	BunDAPSHA256   = "4f3db5296fee2b9b1b8e0d4e460ab8a6b7b2eae17da95ecfb772b378250708b0"
+	// BunDAPFile is the adapter's file name in its tool directory.
+	BunDAPFile = "bun-dap.js"
+	// aimanReleases is where aiman's release assets download from.
+	aimanReleases = "https://github.com/bouwerp/aiman/releases"
 )
+
+// bunSHA256 is the pinned Bun zip per GOARCH.
+var bunSHA256 = map[string]string{
+	"amd64": "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f",
+	"arm64": "a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b",
+}
+
+// bunArch is Bun's name for a GOARCH.
+var bunArch = map[string]string{"amd64": "x64", "arm64": "aarch64"}
 
 // nodeSHA256 is the pinned Node tarball per GOARCH.
 var nodeSHA256 = map[string]string{
@@ -34,11 +57,14 @@ var nodeSHA256 = map[string]string{
 var nodeArch = map[string]string{"amd64": "x64", "arm64": "arm64"}
 
 // Pin overrides a tool's version from config (harness.debug_tools); it needs
-// the archive's sha256 for this host's architecture. The zero Pin is the
-// version in code.
+// the archive's sha256 for this host's architecture. URL, when set, is where
+// the archive comes from instead: an https URL or an absolute path on the
+// host (a local build of bun-dap, for example). The zero Pin is the version
+// in code.
 type Pin struct {
 	Version string `yaml:"version" json:"version"`
 	SHA256  string `yaml:"sha256" json:"sha256"`
+	URL     string `yaml:"url" json:"url"`
 }
 
 var (
@@ -46,8 +72,24 @@ var (
 	sha256Re  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
+// url is the pin's own source, else def.
+func (p Pin) url(tool, def string) (string, error) {
+	switch {
+	case p.URL == "":
+		return def, nil
+	case strings.HasPrefix(p.URL, "https://") && !strings.ContainsAny(p.URL, " \n"):
+		return p.URL, nil
+	case filepath.IsAbs(p.URL) && filepath.Clean(p.URL) == p.URL:
+		return p.URL, nil
+	}
+	return "", fmt.Errorf("harness.debug_tools.%s.url %q must be an https URL or a clean absolute path", tool, p.URL)
+}
+
 func (p Pin) resolve(tool, version, sum string) (string, string, error) {
 	if p.Version == "" && p.SHA256 == "" {
+		if p.URL != "" {
+			return "", "", fmt.Errorf("harness.debug_tools.%s.url needs version and sha256", tool)
+		}
 		return version, sum, nil
 	}
 	if !versionRe.MatchString(p.Version) {
@@ -74,9 +116,12 @@ func Node(arch string, p Pin) (Spec, error) {
 	if err != nil {
 		return Spec{}, err
 	}
+	url, err := p.url("node", fmt.Sprintf("https://nodejs.org/dist/%s/node-%s-linux-%s.tar.gz", version, version, na))
+	if err != nil {
+		return Spec{}, err
+	}
 	return Spec{
-		Name: "node", Version: version, SHA256: sum, Strip: 1,
-		URL:  fmt.Sprintf("https://nodejs.org/dist/%s/node-%s-linux-%s.tar.gz", version, version, na),
+		Name: "node", Version: version, SHA256: sum, Strip: 1, URL: url,
 		Keep: func(rel string) bool { return rel == "bin/node" || rel == "LICENSE" },
 	}, nil
 }
@@ -88,9 +133,62 @@ func JSDebug(p Pin) (Spec, error) {
 	if err != nil {
 		return Spec{}, err
 	}
+	url, err := p.url("js-debug", fmt.Sprintf("https://github.com/microsoft/vscode-js-debug/releases/download/%s/js-debug-dap-%s.tar.gz", version, version))
+	if err != nil {
+		return Spec{}, err
+	}
 	return Spec{
-		Name: "js-debug", Version: version, SHA256: sum, Strip: 1,
-		URL:  fmt.Sprintf("https://github.com/microsoft/vscode-js-debug/releases/download/%s/js-debug-dap-%s.tar.gz", version, version),
+		Name: "js-debug", Version: version, SHA256: sum, Strip: 1, URL: url,
 		Keep: func(rel string) bool { return !strings.HasSuffix(rel, ".node") },
+	}, nil
+}
+
+// Bun is the Bun runtime for arch: the bun binary only. It runs bun-dap in
+// the adapter container and, when the app image has none, the app.
+func Bun(arch string, p Pin) (Spec, error) {
+	ba, ok := bunArch[arch]
+	if !ok {
+		return Spec{}, fmt.Errorf("bun: no pinned build for %s", arch)
+	}
+	version, sum, err := p.resolve("bun", BunVersion, bunSHA256[arch])
+	if err != nil {
+		return Spec{}, err
+	}
+	url, err := p.url("bun", fmt.Sprintf("https://github.com/oven-sh/bun/releases/download/bun-%s/bun-linux-%s.zip", version, ba))
+	if err != nil {
+		return Spec{}, err
+	}
+	return Spec{
+		Name: "bun", Version: version, SHA256: sum, Strip: 1, URL: url, Format: FormatZip,
+		Keep: func(rel string) bool { return rel == "bun" },
+	}, nil
+}
+
+// BunDAPAsset is the release asset name of the bun-dap build for a Bun
+// version.
+func BunDAPAsset(bunVersion string) string { return "bun-dap-" + bunVersion + ".js" }
+
+// BunDAP is Bun's debug adapter built for the Bun version of the pin (by
+// default BunVersion). It downloads from the aiman release named release
+// (serve's own version) and from the latest release when release is not a
+// vX.Y.Z tag (a dev build); the sha256 in code is what makes either safe.
+// A dev build whose build/bun-dap changed builds the file with
+// build/bun-dap/build.sh and names it in harness.debug_tools.bun-dap.
+func BunDAP(release string, p Pin) (Spec, error) {
+	version, sum, err := p.resolve("bun-dap", BunVersion, BunDAPSHA256)
+	if err != nil {
+		return Spec{}, err
+	}
+	def := aimanReleases + "/latest/download/" + BunDAPAsset(version)
+	if versionRe.MatchString(release) {
+		def = aimanReleases + "/download/" + release + "/" + BunDAPAsset(version)
+	}
+	url, err := p.url("bun-dap", def)
+	if err != nil {
+		return Spec{}, err
+	}
+	return Spec{
+		Name: "bun-dap", Version: version, SHA256: sum, URL: url, Format: FormatFile, File: BunDAPFile,
+		Hint: "a build other than this release's needs build/bun-dap/build.sh and harness.debug_tools.bun-dap {version, sha256, url}",
 	}, nil
 }
