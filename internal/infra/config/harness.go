@@ -20,8 +20,10 @@ const (
 type HarnessConfig struct {
 	// Enabled turns the harness RPCs on; unset is on.
 	Enabled *bool `yaml:"enabled,omitempty"`
-	// AllowedImages are the images a run may use (name:tag patterns, * within
-	// one path element). Unset is postgres:16, golang:* and node:*.
+	// AllowedImages pre-approves images (name:tag patterns, * within one
+	// path element): a listed image whose scans are clean is approved with no
+	// question. It never skips the scans. Unset is postgres:16, golang:* and
+	// node:*.
 	AllowedImages []string `yaml:"allowed_images,omitempty"`
 	// ServiceMemory is each service's default memory limit (2G).
 	ServiceMemory string `yaml:"service_memory,omitempty"`
@@ -32,6 +34,8 @@ type HarnessConfig struct {
 	MaxRuns int `yaml:"max_runs,omitempty"`
 	// IdleTimeout takes down a run no RPC touched for this long (2h).
 	IdleTimeout time.Duration `yaml:"idle_timeout,omitempty"`
+	// Images configures image vetting.
+	Images HarnessImagesConfig `yaml:"images,omitempty"`
 }
 
 // On reports whether the harness RPCs answer; unset is on.
