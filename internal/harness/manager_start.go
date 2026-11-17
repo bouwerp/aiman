@@ -25,9 +25,9 @@ const errorTailLines = 20
 // subnets are slot n's inner and outer networks: 10.231.<n>.0/25 and
 // 10.231.<n>.128/25.
 func subnets(n int) (inner, outer netip.Prefix) {
-	b := byte(n % netSlots)
-	return netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 231, b, 0}), 25),
-		netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 231, b, 128}), 25)
+	n = ((n % netSlots) + netSlots) % netSlots
+	return netip.MustParsePrefix(fmt.Sprintf("10.231.%d.0/25", n)),
+		netip.MustParsePrefix(fmt.Sprintf("10.231.%d.128/25", n))
 }
 
 // stepError is a failed start step.
@@ -156,7 +156,8 @@ func (s *starter) writeProject() error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		_ = os.Remove(path) // a retry rewrites a read-only file
+		// A retry rewrites a read-only file.
+		_ = os.Remove(path)
 		if err := os.WriteFile(path, b, 0o444); err != nil { //nolint:gosec // G306: postgres reads the init script as its own user
 			return err
 		}

@@ -1521,6 +1521,7 @@ git -C "$main" worktree remove --force "$wt"
 // client's stale copy.
 func (s *Server) dropSession(ctx context.Context, sess domain.Session, reason string) error {
 	s.downReviewSandbox(ctx, sess)
+	s.dropHarness(ctx, sess.ID)
 	if sess.ReviewPR != "" {
 		s.dropReviewFixers(ctx, sess.ID)
 		s.removeReviewFiles(sess.ID)

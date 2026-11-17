@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,12 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/redact"
 )
+
+// ErrParams marks a request the run cannot take: an unknown check, step,
+// result or service.
+var ErrParams = errors.New("invalid harness request")
+
+func paramsError(msg string) error { return fmt.Errorf("%w: %s", ErrParams, msg) }
 
 // checkOutputLines is how much of a check's output a result keeps.
 const checkOutputLines = 60
@@ -118,9 +125,9 @@ func (m *Manager) Check(ctx context.Context, id, name string, actor domain.Event
 	}
 	if len(picked) == 0 {
 		if name == "" {
-			return nil, invalid(fmt.Sprintf("scenario %s has no checks", run.Scenario))
+			return nil, paramsError(fmt.Sprintf("scenario %s has no checks", run.Scenario))
 		}
-		return nil, invalid(fmt.Sprintf("scenario %s has no check %q", run.Scenario, name))
+		return nil, paramsError(fmt.Sprintf("scenario %s has no check %q", run.Scenario, name))
 	}
 	call := ComposeCall{Dir: filepath.Join(m.runDir(run.Session, run.ID), "sandbox"), Project: "harness-" + run.ID}
 	for i, c := range picked {
@@ -159,7 +166,7 @@ func (m *Manager) Check(ctx context.Context, id, name string, actor domain.Event
 // flag and diff hash.
 func (m *Manager) Verdict(id string, step int, result, note, by string) (Verdict, Run, error) {
 	if !slices.Contains([]string{ResultPass, ResultFail, ResultSkip}, result) {
-		return Verdict{}, Run{}, invalid("result must be pass, fail or skip")
+		return Verdict{}, Run{}, paramsError("result must be pass, fail or skip")
 	}
 	m.mu.Lock()
 	lr := m.live[id]
@@ -177,7 +184,7 @@ func (m *Manager) Verdict(id string, step int, result, note, by string) (Verdict
 		run = r
 	}
 	if step < 0 || step > len(run.Steps) {
-		return Verdict{}, Run{}, invalid(fmt.Sprintf("step %d is not 0 (the scenario) or 1-%d", step, len(run.Steps)))
+		return Verdict{}, Run{}, paramsError(fmt.Sprintf("step %d is not 0 (the scenario) or 1-%d", step, len(run.Steps)))
 	}
 	now := m.opts.Now()
 	v := Verdict{RunID: run.ID, Step: step, Result: result, Note: strings.TrimSpace(note), By: by, SHA: run.SHA, Dirty: run.Dirty, DiffSHA256: run.DiffSHA256, At: now}
@@ -209,7 +216,7 @@ func (m *Manager) Logs(ctx context.Context, id, service string, lines int) ([]st
 		return nil, err
 	}
 	if !slices.Contains(run.containers(), service) {
-		return nil, invalid(fmt.Sprintf("run %s has no service %q; it has %s", id, service, strings.Join(run.containers(), ", ")))
+		return nil, paramsError(fmt.Sprintf("run %s has no service %q; it has %s", id, service, strings.Join(run.containers(), ", ")))
 	}
 	var out string
 	if run.Live() {
