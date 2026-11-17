@@ -563,3 +563,73 @@ func TestManagerCleanStale(t *testing.T) {
 		t.Fatalf("stale project not taken down; calls %q", tm.docker.calls)
 	}
 }
+
+// recordingVetter answers an ID for every image and records the requests.
+type recordingVetter struct {
+	mu   sync.Mutex
+	reqs []ImageRequest
+	// pending, when set, refuses this ref as harness_image_pending.
+	pending string
+}
+
+func (v *recordingVetter) Ensure(_ context.Context, req ImageRequest) (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.reqs = append(v.reqs, req)
+	if req.Ref == v.pending {
+		return "", &Error{Code: CodeImagePending, Image: req.Ref, Msg: "pending"}
+	}
+	return "sha256:" + strings.Repeat("e", 64), nil
+}
+
+func TestManagerEdgeImageVettedAsBuiltin(t *testing.T) {
+	v := &recordingVetter{}
+	tm := newTestManager(t, func(o *Options) { o.Images = v })
+	// The host holds no edge image: the vetter fetches it.
+	tm.docker.images = newFakeDocker("golang:1.25", "postgres:16").images
+	repo := testRepo(t, testHarnessFile)
+	run := tm.upReady(t, repo, "plain")
+	if run.Images[ServiceEdge] == "" {
+		t.Fatalf("images = %v", run.Images)
+	}
+	var edge, app *ImageRequest
+	for i := range v.reqs {
+		switch v.reqs[i].Ref {
+		case EdgeImage:
+			edge = &v.reqs[i]
+		case "golang:1.25":
+			app = &v.reqs[i]
+		}
+	}
+	if edge == nil || !edge.Builtin || edge.Session != "s1" {
+		t.Fatalf("edge request = %+v; want the pinned edge image asked for as builtin", edge)
+	}
+	if app == nil || app.Builtin {
+		t.Fatalf("app request = %+v; only aiman's own image is builtin", app)
+	}
+}
+
+func TestManagerEdgeImagePendingRefusesUp(t *testing.T) {
+	v := &recordingVetter{pending: EdgeImage}
+	tm := newTestManager(t, func(o *Options) { o.Images = v })
+	repo := testRepo(t, testHarnessFile)
+	_, err := tm.Up(context.Background(), UpRequest{Session: "s1", Repo: repo, Scenario: "plain"})
+	var he *Error
+	if !errors.As(err, &he) || he.Code != CodeImagePending || he.Image != EdgeImage {
+		t.Fatalf("err = %v, want harness_image_pending for the edge image", err)
+	}
+}
+
+func TestManagerEdgeMissingWithoutVetter(t *testing.T) {
+	tm := newTestManager(t)
+	tm.docker.images = newFakeDocker("golang:1.25", "postgres:16").images
+	repo := testRepo(t, testHarnessFile)
+	_, err := tm.Up(context.Background(), UpRequest{Session: "s1", Repo: repo, Scenario: "plain"})
+	var he *Error
+	if !errors.As(err, &he) || he.Code != CodeImageMissing || he.Image != EdgeImage {
+		t.Fatalf("err = %v, want harness_image_missing for the edge image", err)
+	}
+	if strings.Contains(he.Msg, "never pulls") || !strings.Contains(he.Msg, "image vetting") {
+		t.Fatalf("message = %q; it must say vetting is off, which is why nothing pulled it", he.Msg)
+	}
+}

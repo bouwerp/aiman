@@ -157,7 +157,8 @@ func (v *Vetter) Ensure(ctx context.Context, req harness.ImageRequest) (string, 
 	}
 	q := Requester{Session: req.Session, Operator: req.Operator}
 	allowed := harness.ImageAllowed(req.Ref, v.o.AllowedImages)
-	var start, joined, approveNow bool
+	var start, joined bool
+	var by string
 	rec, err := v.o.Store.Update(res.Digest, func(r *Record, ok bool) error {
 		if !ok || r.State == "" || (r.State == StateFailed && r.Retryable) {
 			if res.Size() > v.o.MaxSize {
@@ -165,19 +166,21 @@ func (v *Vetter) Ensure(ctx context.Context, req harness.ImageRequest) (string, 
 			}
 			*r = Record{Ref: req.Ref, Repo: res.Ref.Registry + "/" + res.Ref.Repo, IndexDigest: res.IndexDigest,
 				ConfigDigest: res.Config.Digest, Platform: res.Platform, Size: res.Size(),
-				State: StateVetting, Stage: StageQueued, Allowed: allowed, At: v.o.Now()}
+				State: StateVetting, Stage: StageQueued, Allowed: allowed, Builtin: req.Builtin, At: v.o.Now()}
 			r.addRequester(q)
 			start = true
 			return nil
 		}
 		r.Allowed = r.Allowed || allowed
+		r.Builtin = r.Builtin || req.Builtin
 		added := r.addRequester(q)
 		switch r.State {
 		case StateVetting:
 			return nil
 		case StatePendingApproval:
-			joined = added && q.Session != ""
-			approveNow = q.Operator && Decide(r.Scan, DecideInput{CVEBlock: v.o.CVEBlock, Operator: true}).State == StateApproved
+			by = approveAtOnce(r.Scan, v.o.CVEBlock, req)
+			// aiman's own image approves the digest rather than gate it.
+			joined = added && q.Session != "" && by != ApprovedByBuiltin
 			return nil
 		}
 		return errSkip
@@ -195,13 +198,38 @@ func (v *Vetter) Ensure(ctx context.Context, req harness.ImageRequest) (string, 
 		v.enqueue(job{res: res})
 	case joined:
 		v.o.Notify.Joined(rec, q.Session)
-	case approveNow:
-		v.goApprove(ApproveRequest{Digest: rec.Digest, By: ApprovedByOperatorRun, Approver: "operator"})
+	case by != "":
+		v.goApprove(ApproveRequest{Digest: rec.Digest, By: by, Approver: approverOf(by)})
 	}
 	return v.answer(ctx, rec, res)
 }
 
 var errTooLarge = errors.New("too large")
+
+// approveAtOnce is how a new request approves a digest that waits for
+// approval: builtin for aiman's own pinned image, operator_run for the
+// operator's run, or "" when it still waits.
+func approveAtOnce(scan Scan, cveBlock string, req harness.ImageRequest) string {
+	if !req.Builtin && !req.Operator {
+		return ""
+	}
+	d := Decide(scan, DecideInput{CVEBlock: cveBlock, Builtin: req.Builtin, Operator: req.Operator})
+	if d.State != StateApproved {
+		return ""
+	}
+	return d.ApprovedBy
+}
+
+// approverOf names who approved at once.
+func approverOf(by string) string {
+	switch by {
+	case ApprovedByOperatorRun:
+		return "operator"
+	case ApprovedByBuiltin:
+		return "aiman"
+	}
+	return "allowed_images"
+}
 
 // answer turns a record into the image ID or a refusal.
 func (v *Vetter) answer(ctx context.Context, rec Record, res Resolved) (string, error) {
@@ -403,7 +431,9 @@ func (v *Vetter) vet(ctx context.Context, res Resolved) {
 		return
 	}
 	rec.Scan, rec.Signature = scan, sig
-	if v.o.Reviewer != nil {
+	// A builtin image is pinned by aiman's release; its scans still decide,
+	// but no model review is needed.
+	if v.o.Reviewer != nil && !rec.Builtin {
 		v.setStage(d, StageReview)
 		res, err := v.o.Reviewer.Review(ctx, rec, q)
 		if err != nil {
@@ -480,7 +510,7 @@ func (v *Vetter) signature(ctx context.Context, res Resolved) string {
 // decide records the decision, loads an image approved at once, and tells
 // the notifier.
 func (v *Vetter) decide(ctx context.Context, rec Record) {
-	dec := Decide(rec.Scan, DecideInput{CVEBlock: v.o.CVEBlock, Allowed: rec.Allowed, Operator: rec.Operator()})
+	dec := Decide(rec.Scan, DecideInput{CVEBlock: v.o.CVEBlock, Allowed: rec.Allowed, Operator: rec.Operator(), Builtin: rec.Builtin})
 	saved, err := v.o.Store.Update(rec.Digest, func(r *Record, _ bool) error {
 		r.Scan, r.Signature, r.At = rec.Scan, rec.Signature, v.o.Now()
 		r.Reasons = dec.Reasons
@@ -505,11 +535,7 @@ func (v *Vetter) decide(ctx context.Context, rec Record) {
 		v.o.Notify.Decided(saved)
 		return
 	}
-	approver := "allowed_images"
-	if dec.ApprovedBy == ApprovedByOperatorRun {
-		approver = "operator"
-	}
-	approved, err := v.approve(ctx, saved, ApproveRequest{Digest: rec.Digest, By: dec.ApprovedBy, Approver: approver})
+	approved, err := v.approve(ctx, saved, ApproveRequest{Digest: rec.Digest, By: dec.ApprovedBy, Approver: approverOf(dec.ApprovedBy)})
 	if err != nil {
 		return // approve recorded the failure
 	}

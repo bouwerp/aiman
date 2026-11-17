@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +95,20 @@ func TestFetchVerifiesBlobs(t *testing.T) {
 	}
 	if _, err := os.Stat(dir2); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a failed fetch left the quarantine behind")
+	}
+}
+
+func TestPinnedDigestMismatchFails(t *testing.T) {
+	reg := newFakeRegistry(t)
+	host := newTestImage(t, layerTar(t, true, tarEntry{Name: "host.txt", Body: "host"}))
+	idx := reg.pushIndex("o/busybox", "1.36", []Platform{HostPlatform()}, []testImage{host})
+	other := newTestImage(t, layerTar(t, true, tarEntry{Name: "other.txt", Body: "other"}))
+	otherIdx := reg.pushIndex("o/busybox", "evil", []Platform{HostPlatform()}, []testImage{other})
+	// The registry answers the pinned index digest with other bytes.
+	reg.mu.Lock()
+	reg.manifests["o/busybox:"+idx] = reg.manifests["o/busybox:"+otherIdx]
+	reg.mu.Unlock()
+	if _, err := reg.registry().Resolve(context.Background(), reg.host()+"/o/busybox:1.36@"+idx, HostPlatform()); err == nil || !strings.Contains(err.Error(), "other bytes") {
+		t.Fatalf("resolve = %v, want a digest mismatch", err)
 	}
 }
