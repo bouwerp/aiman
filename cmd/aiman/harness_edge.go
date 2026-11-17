@@ -29,7 +29,7 @@ func runHarnessEdge(args []string) error {
 	return serveEdge(opts)
 }
 
-const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]... [--dap-relay name=port=host:port]..."
+const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]... [--dap-relay name=port=host:port]... [--proxy <inner prefix> --network offline|online --ca-dir <dir> [--stubs <file>] [--capture-body-bytes N] [--upstream-roots <file>]]"
 
 type edgeOptions struct {
 	control   string
@@ -37,6 +37,7 @@ type edgeOptions struct {
 	outer     string
 	inner     []netip.Prefix
 	relays    []edge.RelaySpec
+	proxy     proxyFlags
 }
 
 func parseEdgeFlags(args []string) (edgeOptions, error) {
@@ -73,6 +74,7 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 		opts.relays = append(opts.relays, spec)
 		return nil
 	})
+	opts.proxy.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return edgeOptions{}, err
 	}
@@ -81,6 +83,9 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 	}
 	if opts.control == "" || opts.tokenFile == "" || opts.outer == "" {
 		return edgeOptions{}, errors.New("--control, --token-file and --outer are required")
+	}
+	if err := opts.proxy.check(); err != nil {
+		return edgeOptions{}, err
 	}
 	return opts, nil
 }
@@ -118,6 +123,9 @@ func serveEdge(opts edgeOptions) error {
 		return err
 	}
 	defer func() { _ = e.Close() }()
+	if err := startEdgeProxy(e, opts.proxy); err != nil {
+		return err
+	}
 	for _, spec := range opts.relays {
 		st, err := e.Add(spec)
 		if err != nil {

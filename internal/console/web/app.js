@@ -412,6 +412,7 @@
     renderServices(run);
     if (window.aimanDebug) window.aimanDebug.update(state);
     if (window.aimanBrowser) window.aimanBrowser.update(state);
+    if (window.aimanNet) window.aimanNet.update(state);
   }
 
   async function poll() {

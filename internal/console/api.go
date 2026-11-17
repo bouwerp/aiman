@@ -36,6 +36,9 @@ var staticFiles = map[string][2]string{
 
 	"/debug-browser.js":  {"web/debug-browser.js", "text/javascript; charset=utf-8"},
 	"/debug-browser.css": {"web/debug-browser.css", "text/css; charset=utf-8"},
+
+	"/net.js":  {"web/net.js", "text/javascript; charset=utf-8"},
+	"/net.css": {"web/net.css", "text/css; charset=utf-8"},
 }
 
 type apiRoute struct {
@@ -55,6 +58,7 @@ var apiRoutes = map[string]apiRoute{
 	DebugOpPath:    {http.MethodPost, (*Server).handleDebug},
 	"/api/files":   {http.MethodGet, (*Server).handleFiles},
 	"/api/file":    {http.MethodGet, (*Server).handleFile},
+	"/api/capture": {http.MethodGet, (*Server).handleCapture},
 	DAPPath:        {http.MethodGet, (*Server).handleDAP},
 }
 

@@ -102,4 +102,23 @@ func TestManagerDockerUpDown(t *testing.T) {
 	if lines, err := m.Logs(context.Background(), run.ID, ServiceEdge, 50); err != nil || len(lines) == 0 {
 		t.Fatalf("saved edge log: %v %q", err, lines)
 	}
+	// The offline check's call went through the proxy, which answered 502;
+	// the flows outlive the edge in capture.json. Only the certificate of the
+	// run CA reached the host.
+	flows, _, err := m.Capture(context.Background(), run.ID, 0, 50)
+	if err != nil || len(flows) == 0 || flows[0].Host != "1.1.1.1" || flows[0].Outcome != "offline" {
+		t.Fatalf("saved capture: %v %+v", err, flows)
+	}
+	dir := filepath.Join(m.opts.Dir, "s1", run.ID)
+	if b, err := os.ReadFile(filepath.Join(dir, CAFile)); err != nil || !strings.Contains(string(b), "BEGIN CERTIFICATE") {
+		t.Fatalf("ca.pem: %v %q", err, b)
+	}
+	_ = filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
+		if err == nil && fi.Mode().IsRegular() {
+			if b, rerr := os.ReadFile(path); rerr == nil && strings.Contains(string(b), "PRIVATE KEY") {
+				t.Errorf("%s holds a private key", path)
+			}
+		}
+		return nil
+	})
 }

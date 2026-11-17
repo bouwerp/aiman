@@ -48,6 +48,22 @@ type Edge struct {
 	mu     sync.Mutex
 	relays map[string]*relay
 	closed bool
+	// proxy is the capture proxy, nil when the edge runs none.
+	proxy *Proxy
+}
+
+// SetProxy attaches the capture proxy, which the control socket reads and
+// Close stops.
+func (e *Edge) SetProxy(p *Proxy) {
+	e.mu.Lock()
+	e.proxy = p
+	e.mu.Unlock()
+}
+
+func (e *Edge) captureProxy() *Proxy {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.proxy
 }
 
 // New checks the configuration and returns an edge with no relays.
@@ -318,9 +334,13 @@ func (e *Edge) Close() error {
 	e.closed = true
 	relays := e.relays
 	e.relays = map[string]*relay{}
+	p := e.proxy
 	e.mu.Unlock()
 	for _, r := range relays {
 		r.close()
+	}
+	if p != nil {
+		_ = p.Close()
 	}
 	return nil
 }

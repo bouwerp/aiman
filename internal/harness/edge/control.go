@@ -33,6 +33,10 @@ const (
 	// closing its holder: the debug target switch between the app and a
 	// debug check.
 	OpDAPTarget = "dap_target"
+	// OpCapture reads the capture proxy's flows after a flow ID.
+	OpCapture = "capture"
+	// OpCA reads the run CA's certificate (never its key).
+	OpCA = "ca"
 )
 
 // Error codes in a control reply.
@@ -58,6 +62,9 @@ type Request struct {
 	Name  string     `json:"name,omitempty"`
 	// Target is OpDAPTarget's new host:port, empty for none.
 	Target string `json:"target,omitempty"`
+	// After and Limit page a capture read.
+	After int64 `json:"after,omitempty"`
+	Limit int   `json:"limit,omitempty"`
 }
 
 // Response is the edge's one-line answer to a Request.
@@ -69,6 +76,11 @@ type Response struct {
 	Health *Health       `json:"health,omitempty"`
 	// Dropped is the DAP client a dap_drop closed.
 	Dropped *DAPHolder `json:"dropped,omitempty"`
+	// Flows and Capture answer a capture read.
+	Flows   []Flow       `json:"flows,omitempty"`
+	Capture *CaptureInfo `json:"capture,omitempty"`
+	// CA is the run CA's certificate, PEM encoded.
+	CA string `json:"ca,omitempty"`
 }
 
 // Error is a control failure with a stable code.
@@ -209,6 +221,16 @@ func (e *Edge) dispatch(req Request) Response {
 			return fail(err)
 		}
 		return Response{OK: true, Dropped: dropped}
+	case OpCapture, OpCA:
+		p := e.captureProxy()
+		if p == nil {
+			return fail(errorf(CodeUnavailable, "this edge runs no capture proxy"))
+		}
+		if req.Op == OpCA {
+			return Response{OK: true, CA: string(p.CACertPEM())}
+		}
+		flows, info := p.Capture(req.After, req.Limit)
+		return Response{OK: true, Flows: flows, Capture: &info}
 	default:
 		return fail(errorf(CodeInvalidParams, "unknown op %q", req.Op))
 	}

@@ -98,6 +98,7 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness check [<name>] [--run ID] [--json]
        aiman harness check <name> --debug [--take] [--run ID] [--json]   (operator; waits for the check to end)
        aiman harness logs <service> [--lines N] [--run ID] [--json]
+       aiman harness capture [--after N] [--limit N] [--run ID] [--json]   (HTTP calls through the edge proxy)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
        aiman harness down [--run ID] [--json]
@@ -116,7 +117,8 @@ func harnessUsage(w io.Writer) error {
 type harnessArgs struct {
 	session, run, note, remote           string
 	quote, reason, sha256, builtAt       string
-	lines                                int
+	lines, limit                         int
+	after                                int64
 	json, dirty, force, wait, acceptRisk bool
 	text, noBrowser, debug               bool
 	debugChecks, take                    bool
@@ -126,6 +128,7 @@ type harnessArgs struct {
 var harnessValueFlags = map[string]bool{
 	"--session": true, "--run": true, "--note": true, "--lines": true, "--remote": true,
 	"--quote": true, "--reason": true, "--sha256": true, "--built-at": true,
+	"--after": true, "--limit": true,
 }
 
 func parseHarnessArgs(args []string) (harnessArgs, error) {
@@ -181,6 +184,18 @@ func (a *harnessArgs) setValue(name, val string) error {
 			return errors.New("--lines must be a positive number")
 		}
 		a.lines = n
+	case "--limit":
+		n, err := strconv.Atoi(val)
+		if err != nil || n <= 0 {
+			return errors.New("--limit must be a positive number")
+		}
+		a.limit = n
+	case "--after":
+		n, err := strconv.ParseInt(val, 10, 64)
+		if err != nil || n < 0 {
+			return errors.New("--after must be a flow id (0 or more)")
+		}
+		a.after = n
 	}
 	return nil
 }
@@ -238,6 +253,7 @@ var harnessSubs = map[string]harnessSub{
 	"status":  {0, 0, true, harnessStatus},
 	"check":   {0, 1, true, harnessCheck},
 	"logs":    {1, 1, true, harnessLogs},
+	"capture": {0, 0, true, harnessCapture},
 	"result":  {0, 1, true, harnessResult},
 	"verdict": {2, 2, true, harnessVerdict},
 	"down":    {0, 0, true, harnessDown},

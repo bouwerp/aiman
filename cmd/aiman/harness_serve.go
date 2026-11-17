@@ -42,6 +42,8 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 	sessionLimits, _ := cfg.Resources.SessionLimits()
 	runMemory, warns := cfg.Harness.RunMemoryBytes(sessionLimits.MemoryHigh)
 	serviceMemory, more := cfg.Harness.ServiceMemoryBytes()
+	warns = append(warns, more...)
+	bodyBytes, more := cfg.Harness.CaptureBodyBytes()
 	for _, w := range append(warns, more...) {
 		log.Printf("config: %s", w)
 	}
@@ -87,9 +89,13 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 		IdleTimeout:   cfg.Harness.IdleTimeoutOrDefault(),
 		// Zero takes harness.DefaultDebugAttachTimeout.
 		DebugAttachTimeout: cfg.Harness.Debug.AttachTimeout,
-		Docker:             harness.ExecDocker{},
-		AppImage:           review.Image,
-		Record:             srv.HarnessRecorder(),
+		// harness.network, else review.sandbox.network: online runs reach
+		// out only through the edge proxy.
+		Network:          cfg.Harness.NetworkMode(cfg.Review.Sandbox.Network),
+		CaptureBodyBytes: bodyBytes,
+		Docker:           harness.ExecDocker{},
+		AppImage:         review.Image,
+		Record:           srv.HarnessRecorder(),
 	})
 	if err != nil {
 		log.Printf("harness unavailable: %v", err)
