@@ -70,6 +70,10 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 				DAP:     toolPin(cfg.Harness.DebugTools["bun-dap"]),
 				Release: version,
 			},
+			&harness.PythonDebug{
+				Tools:   &tools.Store{Dir: filepath.Join(hdir, "tools")},
+				Debugpy: toolPin(cfg.Harness.DebugTools["debugpy"]),
+			},
 		},
 		Images:        vetter,
 		Dir:           hdir,
