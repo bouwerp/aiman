@@ -84,6 +84,7 @@ func (m *Manager) start(ctx context.Context, lr *liveRun, f *File, sc *Scenario)
 		}
 	}
 	m.readyRun(lr, s.run.Ports)
+	m.checkSourcemaps(ctx, lr, filepath.Join(dir, "src"))
 }
 
 // compose runs one compose command and logs its output under logs/.

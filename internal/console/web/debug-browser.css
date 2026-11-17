@@ -1,0 +1,56 @@
+/* Debug tab, Browser section. It sits above the server-side debugger and
+   reuses the console's tokens; the source-map badge is its one signal. */
+.brw {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--panel);
+}
+
+.brw-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  align-items: baseline;
+}
+.brw-head h3 { margin: 0; }
+
+.brw-maps {
+  font-size: 0.85rem;
+  padding: 0.05rem 0.55rem;
+  border-radius: 999px;
+  color: var(--wait);
+  background: var(--wait-bg);
+}
+.brw-maps[data-maps="present"] { color: var(--pass); background: var(--pass-bg); }
+.brw-maps[data-maps="absent"] { color: var(--fail); background: var(--fail-bg); }
+.brw-maps[data-maps="unknown"] { color: var(--skip); background: var(--skip-bg); }
+
+.brw-lede { margin: 0.4rem 0 0.6rem; color: var(--muted); font-size: 0.9rem; max-width: 70ch; }
+
+.brw-warn {
+  border-left: 4px solid var(--fail);
+  background: var(--fail-bg);
+  padding: 0.5rem 0.8rem;
+  margin: 0 0 0.75rem;
+  overflow-wrap: anywhere;
+}
+.brw-warn p { margin: 0 0 0.35rem; }
+.brw-warn-lead { font-weight: 600; }
+.brw-warn ul { margin: 0; padding-left: 1.2rem; }
+.brw-warn li + li { margin-top: 0.25rem; }
+
+.brw-steps { margin: 0 0 0.6rem; padding-left: 1.3rem; max-width: 75ch; }
+.brw-steps li + li { margin-top: 0.3rem; }
+.brw-steps a { color: var(--accent); overflow-wrap: anywhere; }
+.brw-steps a:not([href]) { color: var(--muted); }
+.brw code, .brw-modes code { font-size: 0.88em; }
+
+.brw-modes summary { cursor: pointer; color: var(--accent); }
+.brw-modes p { margin: 0.4rem 0 0; max-width: 75ch; font-size: 0.9rem; }
+
+.brw a:focus-visible, .brw-modes summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
