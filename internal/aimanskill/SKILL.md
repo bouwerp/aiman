@@ -374,6 +374,45 @@ aiman pty forget "$wid"
 
 `--match` is a literal substring; `--regex` is a Go regular expression. Output is matched after stripping ANSI. `pty capture` is the read. Do not attach. Only kill a PTY you created.
 
+## Harness
+
+The harness starts the app and its services in an offline sandbox on this host, so that a person can test a scenario. The harness file is `.aiman/harness.yaml`. Serve reads it from the commit, not from the working tree.
+
+When your work changes behaviour that a person can test, add or update a scenario in that file and commit it. A scenario has an `id`, the `services` it uses, `steps` for the tester (`do` and `expect`) and `checks` (commands; exit 0 is a pass). Write `{{<port name>}}` in a step for the app URL. Use only images from `harness.allowed_images` (default `postgres:16`, `golang:*`, `node:*`). Serve does not pull images.
+
+```yaml
+version: 1
+app:
+  build: go build -o /out/app ./cmd/app
+  run: /out/app serve --addr :8080
+  ports: [{name: web, container: 8080}]
+services:
+  db:
+    image: postgres:16
+    env: {POSTGRES_PASSWORD: test}
+    ready: pg_isready -h db -U postgres
+    database: {kind: postgres, name: app}
+scenarios:
+  - id: refund-happy-path
+    title: Refund a paid order
+    services: [db]
+    fixtures: [{sql: testdata/harness/refund.sql, into: db}]
+    steps:
+      - do: "Open {{web}}/orders/42 and press Refund."
+        expect: "The order shows Refunded."
+    checks:
+      - {name: refund row, run: "scripts/harness/check-refund.sh 42"}
+```
+
+Do these steps to test a scenario:
+
+1. Run `aiman harness list` to see the scenarios and the runs.
+2. Run `aiman harness up <scenario> --wait`. Add `--dirty` to run uncommitted changes.
+3. Run `aiman harness check` to run the checks. Use `aiman harness logs <service>` to read the output of a container.
+4. Run `aiman harness down` when you are done.
+
+A session has one live run at a time. Do not use `--force`; it is for the operator. Only the operator records a verdict (`aiman harness verdict`); a session gets `needs_operator`. A failed step comes to you as a to-do `Harness: <scenario> step <n>: <note>` and an `[aiman]` note. Fix it, commit, and tell the operator that the scenario is ready to run again.
+
 ## Shared context
 
 This host keeps durable notes in `~/.aiman/context/` (markdown with YAML frontmatter). Prefer `aiman context` over inventing a sidecar. `find` returns ranked compact hits (`id`, `type`, `title`, `abstract`, `age`); `get` returns the full body. Session create injects a pack of abstracts into `.aiman_context.md`. `find` and packs hide superseded and expired notes. `aiman context stats` reports store size, op counts, and lookup times.

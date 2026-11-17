@@ -404,3 +404,15 @@ func TestSkillSetsPRDescriptionShape(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillDescribesHarness(t *testing.T) {
+	h := section(t, "## Harness")
+	for _, want := range []string{
+		".aiman/harness.yaml", "aiman harness up", "aiman harness check", "aiman harness down",
+		"Only the operator records a verdict", "needs_operator", "Harness: <scenario> step <n>",
+	} {
+		if !strings.Contains(h, want) {
+			t.Fatalf("Harness section missing %q", want)
+		}
+	}
+}
