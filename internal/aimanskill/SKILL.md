@@ -419,9 +419,10 @@ Serve vets every image digest before the Docker engine sees it. It scans for kno
 
 - `aiman harness up` refuses with `harness_image_pending` while an image is vetted. `--wait` waits and prints the stage. Use `aiman harness image status <ref>` to see the state.
 - When the vetting is done, you get the to-do `Image approved: <ref> (<short digest>)` and an `[aiman]` note with the scan summary and the report path. Show the summary to the operator and ask for approval. Name each high CVE.
+- The summary has the model review: another agent read a text copy of the image in an isolated container and gave the verdict `clean`, `suspicious` or `malicious`. For `suspicious`, tell the operator the number of findings and point them to the review report path in the scan report. If the summary says `not independent`, tell the operator. It means the reviewer was from the same model family as you.
 - When the operator approves in this terminal, run `aiman harness approve-image <digest> --quote "<the operator's words>"`. Use their exact words. Do not approve an image yourself. Do not close the gate to-do.
 - Then run `aiman harness up` again.
-- `harness_image_blocked` means a critical CVE, a malware hit, a malicious package, or a failed vetting. Do not try to get around it. Tell the operator. Only the operator can override it from the laptop. You can also use another image tag.
+- `harness_image_blocked` means a critical CVE, a malware hit, a malicious package, a `malicious` review verdict, or a failed vetting. Do not try to get around it. Tell the operator. Only the operator can override it from the laptop. You can also use another image tag.
 
 ## Shared context
 
