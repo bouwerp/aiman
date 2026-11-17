@@ -413,6 +413,15 @@ Do these steps to test a scenario:
 
 A session has one live run at a time. Do not use `--force`; it is for the operator. Only the operator records a verdict (`aiman harness verdict`); a session gets `needs_operator`. A failed step comes to you as a to-do `Harness: <scenario> step <n>: <note>` and an `[aiman]` note. Fix it, commit, and tell the operator that the scenario is ready to run again.
 
+### Debugger
+
+`aiman harness up <scenario> --debug` starts the app under a debugger that the operator drives from the console's Debug tab. Declare it in `app.debug`:
+
+- Go: `debug: {lang: go}`. Serve builds with optimisation off and runs `dlv dap`.
+- Node or TypeScript on Node: `debug: {lang: node, entry: dist/server.js}`. Add `cwd` (relative to the repository), `runtime_args` (for example `["--import", "tsx"]` to run `.ts` through a loader) or give the whole command in `run`, which must contain `$AIMAN_INSPECT` once. For compiled TypeScript, build with source maps. Do not put `tsx` or `ts-node` in `runtime`, and do not add `--watch`, `--hot` or `--inspect=0.0.0.0`; the file is refused.
+- `app.image` names the image the app runs in, when the picked one is wrong (for example `node:24`). It is vetted like any image.
+- `bun` and `python` parse, but `harness up --debug` refuses them with `harness_debug_unsupported` until their debuggers land. `checks[].debug` is accepted but not run yet.
+
 ### Images
 
 Serve vets every image digest before the Docker engine sees it. It scans for known CVEs and for malicious code. Then the operator approves the digest once for the host.

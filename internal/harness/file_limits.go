@@ -34,6 +34,9 @@ var EdgeLimits = ResolvedLimits{Memory: 256 << 20, CPUs: 0.5, PIDs: 64}
 type LimitOptions struct {
 	ServiceMemory int64
 	RunMemory     int64
+	// Extra is memory the run adds beside the file's containers: the debug
+	// adapter container of a debug run.
+	Extra int64
 }
 
 func resolve(l Limits, memory int64) ResolvedLimits {
@@ -87,6 +90,7 @@ func (f *File) CheckLimits(scenarioID string, opts LimitOptions) error {
 	if err != nil {
 		return err
 	}
+	sum += opts.Extra
 	limit := opts.RunMemory
 	if limit <= 0 {
 		limit = DefaultRunMemory

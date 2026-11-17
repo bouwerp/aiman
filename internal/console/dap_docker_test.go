@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
 
@@ -73,5 +74,47 @@ func TestDAPBreakpointHit(t *testing.T) {
 	resp, err := editor.Request("initialize", map[string]any{"clientID": "vscode", "clientName": "Visual Studio Code"})
 	if err != nil || resp["success"] != false {
 		t.Fatalf("an editor got in while the console held the debugger: %v %v", resp, err)
+	}
+}
+
+// TestNodeBreakpointThroughEditorPort drives a real Node debug run the way
+// VS Code would with the shown launch.json: every connection goes to the
+// console's editor port, which adds the lease line, points js-debug's child
+// session at itself and maps the editor's workspace folder to /src.
+func TestNodeBreakpointThroughEditorPort(t *testing.T) {
+	r := harnesstest.UpNodeDebugRun(t)
+	run := harness.Run{
+		ID: "r1", Session: "s1", Scenario: "dbg", State: harness.StateReady, Debug: true, DebugLaunch: &r.Launch,
+		Ports: []harness.RunPort{{Name: harness.RelayDAP, Service: harness.ServiceAdapter, HostPort: r.HostPort}},
+	}
+	rpc := &fakeRPC{answer: func(method string, _ map[string]any) (json.RawMessage, error) {
+		if method == "harness.debug" {
+			return json.RawMessage(`{"type":"harness_debug","debug":{"run":"r1","holder":null,"host_port":1,"refused":0}}`), nil
+		}
+		return json.Marshal(map[string]any{"type": "harness_run", "run": run})
+	}}
+	s, host := serveConsole(t, rpc, directForwarder{})
+	t.Cleanup(s.closeEditor)
+	w := do(t, s, http.MethodGet, host, "/api/debug?run=r1", testToken, "", "")
+	var v struct {
+		EditorPort int            `json:"editor_port"`
+		Editor     map[string]any `json:"editor"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || v.EditorPort == 0 {
+		t.Fatalf("debug view %s: %v", w.Body, err)
+	}
+	// VS Code fills ${workspaceFolder} and drops debugServer from what it
+	// sends.
+	const ws = "/home/me/checkout"
+	args := map[string]any{}
+	for k, val := range v.Editor {
+		args[k] = val
+	}
+	args[harness.LocalRootKey] = ws
+	delete(args, "debugServer")
+	dial := func() harnesstest.Transport { return harnesstest.DialDAP(t, v.EditorPort) }
+	path, _ := harnesstest.HitTSBreakpoint(t, dial, "attach", args, ws+"/src/app.ts")
+	if path != ws+"/src/app.ts" {
+		t.Fatalf("frame source %q, want the editor's %s/src/app.ts", path, ws)
 	}
 }

@@ -84,6 +84,10 @@ type Error struct {
 	Image   string
 	Service string
 	Tail    string
+	// Lang is the language of CodeDebugUnsupported; Tool the tool of
+	// CodeDebugTool.
+	Lang string
+	Tool string
 	// ImageData is the RPC data of the image refusals.
 	ImageData map[string]any
 }
@@ -120,6 +124,10 @@ func (e *Error) Data() map[string]any {
 		return map[string]any{"image": e.Image}
 	case CodeServiceFailed:
 		return map[string]any{"service": e.Service, "tail": e.Tail}
+	case CodeDebugUnsupported:
+		return map[string]any{"lang": e.Lang}
+	case CodeDebugTool:
+		return map[string]any{"tool": e.Tool}
 	case CodeImagePending, CodeImageBlocked, CodeImageResolveFailed, CodeImageTooLarge, CodeImageNotPending:
 		return e.ImageData
 	}
@@ -141,6 +149,9 @@ type File struct {
 // App is the application under test. Build and Run are shell commands run in
 // the app container; Ports are the container ports the edge relays.
 type App struct {
+	// Image runs the app instead of the image picked from the exported tree;
+	// it is vetted like every image.
+	Image  string `yaml:"image" json:"image,omitempty"`
 	Build  string `yaml:"build" json:"build,omitempty"`
 	Run    string `yaml:"run" json:"run"`
 	Ports  []Port `yaml:"ports" json:"ports,omitempty"`
@@ -154,13 +165,22 @@ type Port struct {
 	Container int    `yaml:"container" json:"container"`
 }
 
-// Debug selects the debugger for debug runs. Lang is go or node. Program
-// and Args are what the debugger starts; empty takes app.run split into
-// words, which works for a plain command line.
+// Debug selects the debugger for debug runs. Lang is go, node, bun or
+// python. Program and Args are Go's: what dlv starts, empty taking app.run
+// split into words. The other languages start Entry (relative to /src) under
+// Runtime with RuntimeArgs in Cwd, or Run, a whole debug command that uses
+// $AIMAN_INSPECT. WrapEnv (python only) names variables that serve points at
+// a debugpy wrapper. A check's debug block uses Lang, Run and WrapEnv.
 type Debug struct {
-	Lang    string   `yaml:"lang" json:"lang"`
-	Program string   `yaml:"program" json:"program,omitempty"`
-	Args    []string `yaml:"args" json:"args,omitempty"`
+	Lang        string   `yaml:"lang" json:"lang"`
+	Program     string   `yaml:"program" json:"program,omitempty"`
+	Args        []string `yaml:"args" json:"args,omitempty"`
+	Entry       string   `yaml:"entry" json:"entry,omitempty"`
+	Cwd         string   `yaml:"cwd" json:"cwd,omitempty"`
+	Runtime     string   `yaml:"runtime" json:"runtime,omitempty"`
+	RuntimeArgs []string `yaml:"runtime_args" json:"runtime_args,omitempty"`
+	Run         string   `yaml:"run" json:"run,omitempty"`
+	WrapEnv     []string `yaml:"wrap_env" json:"wrap_env,omitempty"`
 }
 
 // Service is a container a scenario starts beside the app. Caps holds only
@@ -226,6 +246,9 @@ type Step struct {
 type Check struct {
 	Name string `yaml:"name" json:"name"`
 	Run  string `yaml:"run" json:"run"`
+	// Debug runs the check under a debugger; parsed and validated here,
+	// run by harness.check {debug: true}.
+	Debug *Debug `yaml:"debug" json:"debug,omitempty"`
 }
 
 // Stub is a fixed response the edge proxy gives for a host and path.

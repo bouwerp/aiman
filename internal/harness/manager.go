@@ -207,25 +207,25 @@ func (m *Manager) Up(ctx context.Context, req UpRequest) (Run, error) {
 	if err := checkFixtures(sc); err != nil {
 		return Run{}, err
 	}
-	if err := f.CheckLimits(sc.ID, LimitOptions{ServiceMemory: m.opts.ServiceMemory, RunMemory: m.opts.RunMemory}); err != nil {
-		return Run{}, err
-	}
 	var adapter DebugAdapter
-	var launch DebugLaunch
+	limits := LimitOptions{ServiceMemory: m.opts.ServiceMemory, RunMemory: m.opts.RunMemory}
 	if req.Debug {
 		if adapter, err = DebugAdapterFor(f, m.opts.DebugAdapters); err != nil {
 			return Run{}, err
 		}
-		if launch, err = adapter.Launch(f); err != nil {
-			return Run{}, err
+		if adapter.AdapterImage() != "" {
+			limits.Extra = AdapterLimits.Memory
 		}
+	}
+	if err := f.CheckLimits(sc.ID, limits); err != nil {
+		return Run{}, err
 	}
 	lr, err := m.reserve(req.Session)
 	if err != nil {
 		return Run{}, err
 	}
 	if adapter != nil {
-		lr.debug, lr.run.Debug, lr.run.DebugLaunch = adapter, true, &launch
+		lr.debug, lr.run.Debug = adapter, true
 	}
 	run, err := m.prepare(ctx, req, loaded, sc, lr)
 	if err != nil {
@@ -376,7 +376,7 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	if err != nil {
 		return Run{}, fmt.Errorf("export the tree: %w", err)
 	}
-	if run.Images, err = m.images(ctx, req, l.File, sc, src); err != nil {
+	if run.Images, err = m.images(ctx, req, l.File, sc, src, lr.debug); err != nil {
 		return Run{}, err
 	}
 	token, err := randomHex(32)
@@ -417,10 +417,13 @@ func checkRuns(sc *Scenario) []CheckRun {
 // digest starts vetting at once, and the first refusal is returned. Without
 // one, an app or service image must match harness.allowed_images, and every
 // image must be on the host.
-func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenario, src string) (map[string]string, error) {
-	appRef, err := m.opts.AppImage(src, req.AppImageOverride)
-	if err != nil {
-		return nil, invalid(fmt.Sprintf("pick the app image: %v", err))
+func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenario, src string, debug DebugAdapter) (map[string]string, error) {
+	appRef := f.App.Image
+	if appRef == "" {
+		var err error
+		if appRef, err = m.opts.AppImage(src, req.AppImageOverride); err != nil {
+			return nil, invalid(fmt.Sprintf("pick the app image: %v", err))
+		}
 	}
 	ids := map[string]string{}
 	refs := [][2]string{{ServiceApp, appRef}}
@@ -428,9 +431,12 @@ func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenar
 		refs = append(refs, [2]string{name, f.Services[name].Image})
 	}
 	refs = append(refs, [2]string{ServiceEdge, m.opts.EdgeImage})
+	if debug != nil && debug.AdapterImage() != "" {
+		refs = append(refs, [2]string{ServiceAdapter, debug.AdapterImage()})
+	}
 	var first error
 	for _, r := range refs {
-		id, err := m.image(ctx, req, r[1], r[0] == ServiceEdge)
+		id, err := m.image(ctx, req, r[1], r[0] == ServiceEdge || r[0] == ServiceAdapter)
 		if err != nil {
 			if first == nil {
 				first = err

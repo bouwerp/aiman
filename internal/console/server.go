@@ -104,6 +104,9 @@ type Server struct {
 	// leaseToken is this console's debugger lease: every bridge sends it, so
 	// an adapter's child sessions join the holder's lease at the edge.
 	leaseToken string
+	// editor is the editor port, opened for the first debug run whose
+	// adapter opens child sessions.
+	editor *editorPort
 }
 
 // New makes a console that will serve on ln, which must listen on 127.0.0.1.
@@ -171,6 +174,7 @@ func (s *Server) Serve(parent context.Context) error {
 		stop()
 		<-polled
 		s.closeForwards()
+		s.closeEditor()
 	}()
 
 	hs := &http.Server{

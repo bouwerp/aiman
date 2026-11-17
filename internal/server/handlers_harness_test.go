@@ -57,7 +57,7 @@ func (harnessEdge) DAPDrop(context.Context, string, string, string) (*edge.DAPHo
 // stubDebug is the Go adapter with a fixed dlv path, so nothing is built.
 type stubDebug struct{ harness.GoDebug }
 
-func (*stubDebug) Spec(context.Context) (*harness.DebugSpec, error) {
+func (*stubDebug) Spec(context.Context, *harness.File) (*harness.DebugSpec, error) {
 	return harness.GoDebugSpec("/opt/aiman-tools/dlv"), nil
 }
 
