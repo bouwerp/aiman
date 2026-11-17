@@ -56,6 +56,11 @@ func runHarness(args []string) error {
 		case "review-proxy":
 			// Runs inside the image review's proxy container.
 			return images.ProxyMain(args[1:])
+		case "image":
+			// db-push runs on the laptop and talks to the remote over ssh.
+			if len(args) > 1 && args[1] == "db-push" {
+				return runHarnessDBPush(args[2:])
+			}
 		}
 	}
 	return harnessMain(args, harnessIO{
