@@ -418,6 +418,7 @@ A session has one live run at a time. Do not use `--force`; it is for the operat
 Serve vets every image digest before the Docker engine sees it. It scans for known CVEs and for malicious code. Then the operator approves the digest once for the host.
 
 - `aiman harness up` refuses with `harness_image_pending` while an image is vetted. `--wait` waits and prints the stage. Use `aiman harness image status <ref>` to see the state.
+- The edge image (`busybox`, pinned by aiman) is vetted the same way the first time a host needs it. Unless a scan blocks it, it is approved without a question or a to-do, so a pending edge image clears by itself.
 - When the vetting is done, you get the to-do `Image approved: <ref> (<short digest>)` and an `[aiman]` note with the scan summary and the report path. Show the summary to the operator and ask for approval. Name each high CVE.
 - The summary has the model review: another agent read a text copy of the image in an isolated container and gave the verdict `clean`, `suspicious` or `malicious`. For `suspicious`, tell the operator the number of findings and point them to the review report path in the scan report. If the summary says `not independent`, tell the operator. It means the reviewer was from the same model family as you.
 - When the operator approves in this terminal, run `aiman harness approve-image <digest> --quote "<the operator's words>"`. Use their exact words. Do not approve an image yourself. Do not close the gate to-do.

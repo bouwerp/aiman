@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,6 +25,7 @@ type harnessVet struct {
 	loader  *imagestest.Loader
 	app     imagestest.Image
 	pg      imagestest.Image
+	edge    imagestest.Image
 }
 
 func newHarnessVet(t *testing.T, srv *Server) *harnessVet {
@@ -38,6 +40,8 @@ func newHarnessVet(t *testing.T, srv *Server) *harnessVet {
 	hv.pg = imagestest.NewImage("postgres", imagestest.Layer(map[string]string{"usr/lib/postgresql/16": "pg"}))
 	hv.reg.Tag("golang:1.25", hv.app)
 	hv.reg.Tag("postgres:16", hv.pg)
+	hv.edge = imagestest.NewImage("busybox", imagestest.Layer(map[string]string{"bin/busybox": "bb"}))
+	hv.reg.Pin(harness.EdgeImage, hv.edge)
 	hv.v, err = images.NewVetter(images.VetterOptions{
 		Dir: dir, Store: store, Registry: hv.reg, Scanner: hv.scanner, Loader: hv.loader,
 		Notify: srv.HarnessImageNotifier(), DBFresh: func() error { return nil },
@@ -122,7 +126,7 @@ func TestImageGateAdded(t *testing.T) {
 			t.Fatalf("steering note lacks %q:\n%s", want, note)
 		}
 	}
-	if rows := ledgerRows(t, f.srv, domain.EventHarnessImageVetted); len(rows) != 1 || rows[0]["state"] != "pending_approval" {
+	if rows := rowsOf(ledgerRows(t, f.srv, domain.EventHarnessImageVetted), d); len(rows) != 1 || rows[0]["state"] != "pending_approval" {
 		t.Fatalf("harness.image_vetted = %v", rows)
 	}
 	// A session cannot close the gate itself.
@@ -151,7 +155,7 @@ func TestApproveImageNeedsQuote(t *testing.T) {
 	if rec.State != images.StateApproved || rec.ApprovedBy != images.ApprovedBySession || rec.Approver != "s1" || rec.Quote != "" {
 		t.Fatalf("status view = %+v (the quote stays out of the reply)", rec)
 	}
-	rows := ledgerRows(t, f.srv, domain.EventHarnessImageApproved)
+	rows := rowsOf(ledgerRows(t, f.srv, domain.EventHarnessImageApproved), d)
 	if len(rows) != 1 || rows[0]["quote"] != "yes, run it, I accept CVE-2026-11" {
 		t.Fatalf("harness.image_approved = %v", rows)
 	}
@@ -229,7 +233,7 @@ func TestAcceptRiskNeedsOperator(t *testing.T) {
 	if rec := imageRecord(t, f.srv, d); rec.State != images.StateApproved || !rec.AcceptRisk || rec.Reason != "" {
 		t.Fatalf("after accept-risk: %+v", rec)
 	}
-	if rows := ledgerRows(t, f.srv, domain.EventHarnessImageBlocked); len(rows) != 1 {
+	if rows := rowsOf(ledgerRows(t, f.srv, domain.EventHarnessImageBlocked), d); len(rows) != 1 {
 		t.Fatalf("harness.image_blocked = %v", rows)
 	}
 }
@@ -287,11 +291,56 @@ func TestHarnessImageStatusList(t *testing.T) {
 	}
 	rpcOK(t, f.srv, "s2", "harness.image_status", nil, &res)
 	var list []images.Record
-	if err := json.Unmarshal(res.Images, &list); err != nil || res.Type != "harness_images" || len(list) != 1 {
+	// The app image and the edge image, which every run vets as builtin.
+	if err := json.Unmarshal(res.Images, &list); err != nil || res.Type != "harness_images" || len(list) != 2 {
 		t.Fatalf("status list = %s, %v", res.Images, err)
 	}
 	rec := imageRecord(t, f.srv, "golang:1.25")
 	if rec.Digest != f.vet.app.Digest() {
 		t.Fatalf("status by ref = %+v", rec)
+	}
+}
+
+// rowsOf keeps the ledger rows of one digest.
+func rowsOf(rows []map[string]any, digest string) []map[string]any {
+	var out []map[string]any
+	for _, r := range rows {
+		if r["digest"] == digest {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestEdgeImageApprovedAsBuiltin(t *testing.T) {
+	f := harnessFixtureOf(t, harnessSetup{vet: true})
+	f.vet.scanner.Set(images.ScanStageCVE, images.StageResult{High: []string{"CVE-2026-11"}})
+	f.upPending(t, "s1")
+	d := f.vet.edge.Digest()
+	rec := imageRecord(t, f.srv, d)
+	if rec.State != images.StateApproved || rec.ApprovedBy != images.ApprovedByBuiltin || !slices.Equal(rec.AcceptedHighs, []string{"CVE-2026-11"}) {
+		t.Fatalf("edge record = %+v, want approved by builtin with its high listed", rec)
+	}
+	if _, ok := gateItem(listOf(t, f.srv, "s1"), d); ok {
+		t.Fatal("the edge image got an approval gate")
+	}
+	if note := steerTexts(t, f.srv, f.notes, "s1"); strings.Contains(note, images.ShortDigest(d)) {
+		t.Fatalf("the session was steered about the edge image:\n%s", note)
+	}
+	if rows := rowsOf(ledgerRows(t, f.srv, domain.EventHarnessImageApproved), d); len(rows) != 1 || rows[0]["approved_by"] != images.ApprovedByBuiltin {
+		t.Fatalf("harness.image_approved = %v", rows)
+	}
+}
+
+func TestEdgeImageBlockedRefusesUp(t *testing.T) {
+	f := harnessFixtureOf(t, harnessSetup{vet: true})
+	f.vet.scanner.Set(images.ScanStageCVE, images.StageResult{Critical: []string{"CVE-2026-12"}})
+	wantHarnessCode(t, "up", rpc(t, f.srv, "", "harness.up", map[string]any{"session": "s1", "scenario": "plain"}), harness.CodeImagePending)
+	f.vet.drain(f.srv)
+	// The operator accepts the app's risk; the edge stays blocked.
+	rpcOK(t, f.srv, "", "harness.image_approve", map[string]any{"digest": f.vet.app.Digest(), "accept_risk": true, "reason": "test"}, nil)
+	data := wantHarnessCode(t, "up with a blocked edge", rpc(t, f.srv, "", "harness.up", map[string]any{"session": "s1", "scenario": "plain"}), harness.CodeImageBlocked)
+	if data["digest"] != f.vet.edge.Digest() {
+		t.Fatalf("blocked data = %v, want the edge digest", data)
 	}
 }
