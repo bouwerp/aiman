@@ -65,8 +65,8 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 		opts.relays = append(opts.relays, spec)
 		return nil
 	})
-	fs.Func("dap-relay", "debugger relay as name=port=host:port, one DAP client at a time (repeatable)", func(v string) error {
-		spec, err := parseEdgeRelay(v)
+	fs.Func("dap-relay", "debugger relay as name=port=host:port, one DAP client at a time; name=port= has no target until serve sets one (repeatable)", func(v string) error {
+		spec, err := parseRelaySpec(v, true)
 		if err != nil {
 			return err
 		}
@@ -101,8 +101,14 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 
 // parseEdgeRelay reads name=port=host:port. Port 0 picks a free port.
 func parseEdgeRelay(v string) (edge.RelaySpec, error) {
+	return parseRelaySpec(v, false)
+}
+
+// parseRelaySpec reads name=port=host:port; emptyTarget also takes
+// name=port=, a debugger relay with no target yet.
+func parseRelaySpec(v string, emptyTarget bool) (edge.RelaySpec, error) {
 	parts := strings.SplitN(v, "=", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
+	if len(parts) != 3 || parts[0] == "" || (parts[2] == "" && !emptyTarget) {
 		return edge.RelaySpec{}, fmt.Errorf("relay %q must be name=port=host:port", v)
 	}
 	port, err := strconv.Atoi(parts[1])

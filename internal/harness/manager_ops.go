@@ -43,12 +43,15 @@ func (m *Manager) Down(ctx context.Context, id, reason string) error {
 		return &Error{Code: CodeNotRunning, Msg: fmt.Sprintf("harness run %s is already stopping", id)}
 	}
 	lr.stopping = true
-	cancel := lr.cancel
+	cancel, dc := lr.cancel, lr.check
 	lr.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	<-lr.done
+	if dc != nil {
+		dc.stop()
+	}
 	run := lr.snapshot()
 	m.composeDown(ctx, run)
 	m.markStopped(run, reason)
@@ -83,7 +86,8 @@ func (m *Manager) composeDown(ctx context.Context, r Run) {
 			}
 		}
 	}
-	call.Args = []string{"down", "-v", "--remove-orphans", "-t", "5"}
+	// Every profile, so a check container started by name goes too.
+	call.Args = []string{"--profile", "*", "down", "-v", "--remove-orphans", "-t", "5"}
 	if out, exit, err := m.opts.Docker.Compose(ctx, call); err != nil || exit != 0 {
 		m.logf("compose down %s: exit %d %v: %s", call.Project, exit, err, tailLines(out, 5))
 	}
@@ -154,12 +158,16 @@ func (m *Manager) Check(ctx context.Context, id, name string, actor domain.Event
 		at := m.opts.Now()
 		lines, _ := redact.Lines(strings.Split(tailLines(out, checkOutputLines), "\n"), nil)
 		picked[i].Exit, picked[i].At, picked[i].Output = &exit, &at, strings.Join(lines, "\n")
-		m.record(run.Session, actor, domain.EventHarnessCheck, map[string]any{"run": run.ID, "name": c.Name, "exit": exit})
+		picked[i].Debug, picked[i].ErrorCode, picked[i].Error = false, "", ""
+		m.record(run.Session, actor, domain.EventHarnessCheck, map[string]any{"run": run.ID, "name": c.Name, "exit": exit, "debug": false})
 	}
 	lr.mu.Lock()
+	// A copy: snapshots of the run share the old slice.
+	lr.run.Checks = slices.Clone(lr.run.Checks)
 	for _, p := range picked {
 		for j := range lr.run.Checks {
-			if lr.run.Checks[j].Name == p.Name {
+			// A check under the debugger keeps its entry until it ends.
+			if lr.run.Checks[j].Name == p.Name && !lr.run.Checks[j].Debugging {
 				lr.run.Checks[j] = p
 			}
 		}
@@ -177,6 +185,11 @@ func (m *Manager) Check(ctx context.Context, id, name string, actor domain.Event
 func checkContainer(r Run, j int) string {
 	if _, ok := r.Images[CheckService(j)]; ok {
 		return CheckService(j)
+	}
+	// A debug run's app holds the debug network's fixed address, so its
+	// checks run in a copy of the app container without that network.
+	if r.Debug {
+		return ServiceCheck
 	}
 	return ServiceApp
 }

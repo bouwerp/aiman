@@ -15,6 +15,8 @@ import (
 // both ways with half-close, so a client that shuts its write side still reads
 // the reply.
 type relay struct {
+	// spec.Target of a KindDAP relay changes under mu (setTarget); read it
+	// with target().
 	spec        RelaySpec
 	ln          net.Listener
 	dialTimeout time.Duration
@@ -45,10 +47,10 @@ func newRelay(spec RelaySpec, ln net.Listener, dialTimeout time.Duration) *relay
 
 func (r *relay) status() RelayStatus {
 	r.mu.Lock()
-	last := r.lastErr
+	last, spec := r.lastErr, r.spec
 	r.mu.Unlock()
 	return RelayStatus{
-		RelaySpec: r.spec,
+		RelaySpec: spec,
 		Listen:    r.ln.Addr().String(),
 		Active:    r.active.Load(),
 		Total:     r.total.Load(),
@@ -100,6 +102,13 @@ func (r *relay) untrack(c net.Conn) {
 	r.mu.Unlock()
 }
 
+// target is the address the relay dials now.
+func (r *relay) target() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.spec.Target
+}
+
 func (r *relay) setErr(err error) {
 	r.mu.Lock()
 	r.lastErr = err.Error()
@@ -124,7 +133,7 @@ func (r *relay) handle(client net.Conn) {
 
 	ctx, cancel := context.WithTimeout(r.ctx, r.dialTimeout)
 	var d net.Dialer
-	upstream, err := d.DialContext(ctx, "tcp", r.spec.Target)
+	upstream, err := d.DialContext(ctx, "tcp", r.target())
 	cancel()
 	if err != nil {
 		r.failed.Add(1)

@@ -308,6 +308,52 @@ func (m *Manager) WriteFile(ctx context.Context, path string, content []byte) er
 	return doWrite(false)
 }
 
+// UploadFile streams the local file to path on the remote, through a
+// temporary name renamed into place once the copy is complete, under
+// timeout. It is WriteFile for files too large to hold in memory or to copy
+// within sshCommandTimeout; the file is opened again for each transport
+// retry. The remote file is created under umask 077.
+func (m *Manager) UploadFile(ctx context.Context, local, path string, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = sshCommandTimeout
+	}
+	target := m.target()
+	cp := m.controlPath()
+	if err := os.MkdirAll(filepath.Dir(cp), 0700); err != nil {
+		return fmt.Errorf("failed to create sockets directory: %w", err)
+	}
+	dst := shellx.QuoteHomePath(path)
+	part := shellx.QuoteHomePath(path + ".part")
+	script := "umask 077 && cat > " + part + " && mv -f " + part + " " + dst
+	upload := func(useControlMaster bool) error {
+		f, err := os.Open(local) //nolint:gosec // G304: a file the caller wrote
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		//nolint:gosec // G204: options are fixed; target and path are the operator's remote
+		cmd := exec.CommandContext(callCtx, "ssh", append(bulkSSHArgs(cp, useControlMaster), target, script)...)
+		cmd.WaitDelay = sshWaitDelay
+		cmd.Stdin = f
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("upload to %s:%s failed: %w\nOutput: %s", target, path, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	err := upload(true)
+	if err == nil || !isRetriableSSHTransportError(err.Error()) {
+		return err
+	}
+	_ = os.Remove(cp)
+	if err = upload(true); err == nil || !isRetriableSSHTransportError(err.Error()) {
+		return err
+	}
+	return upload(false)
+}
+
 // ResetControlSocket gracefully exits the existing ControlMaster (if any)
 // and removes the socket file. Call this after disruptive operations that
 // may leave the SSH master in a broken state.

@@ -123,6 +123,9 @@ const (
 	// EventHarnessStopped records a run taken down: run and reason (down,
 	// idle, session_gone, serve_restart).
 	EventHarnessStopped EventKind = "harness.stopped"
+	// EventHarnessDBWrite records the operator's write to a run's database:
+	// run, service and statement_sha256, never the statement.
+	EventHarnessDBWrite EventKind = "harness.db_write"
 	// EventHarnessDebug records a take over or release of a debug run's
 	// debugger: run, op and the client it closed.
 	EventHarnessDebug EventKind = "harness.debug"

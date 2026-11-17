@@ -61,6 +61,7 @@ var rpcMethods = map[string]bool{
 	"harness.file":          true,
 	"harness.evm_txs":       true,
 	"harness.evm_trace":     true,
+	"harness.db":            true,
 	"harness.image_status":  true,
 	"harness.image_approve": true,
 }

@@ -232,6 +232,8 @@ const (
 	defaultYARARelease = "https://api.github.com/repos/YARAHQ/yara-forge/releases/latest"
 	yaraCoreAsset      = "yara-forge-rules-core.zip"
 	refreshToolTimeout = 30 * time.Minute
+	// refreshScratch is the refresh tool's TMPDIR in its container.
+	refreshScratch = "/scratch"
 )
 
 func (r Refresher) now() time.Time {
@@ -281,11 +283,23 @@ func (r Refresher) runTool(ctx context.Context, name string, cmd ...string) erro
 	if err := os.MkdirAll(filepath.Join(r.DBDir, name), 0o700); err != nil {
 		return err
 	}
+	// The container's /tmp is a small tmpfs and Trivy stages its whole
+	// compressed download under TMPDIR, so the tool gets a scratch directory
+	// on disk beside the databases, removed when it ends.
+	scratch := filepath.Join(r.DBDir, ".scratch-"+name)
+	_ = os.RemoveAll(scratch)
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
 	args := RunArgs(ContainerOptions{
 		Name: "aiman-scan-refresh-" + name, Image: r.Image, UID: r.UID, GID: r.GID, Network: true,
-		Mounts: []Mount{{Host: filepath.Join(r.DBDir, name), Container: ContainerDB + "/" + name}},
-		Env:    []string{"HOME=/tmp"},
-		Cmd:    cmd,
+		Mounts: []Mount{
+			{Host: filepath.Join(r.DBDir, name), Container: ContainerDB + "/" + name},
+			{Host: scratch, Container: refreshScratch},
+		},
+		Env: []string{"HOME=/tmp", "TMPDIR=" + refreshScratch},
+		Cmd: cmd,
 	})
 	ctx, cancel := context.WithTimeout(ctx, refreshToolTimeout)
 	defer cancel()
@@ -324,10 +338,41 @@ func (r Refresher) osv(ctx context.Context) error {
 	return nil
 }
 
-// yara fetches the latest YARA Forge core bundle, checks it against the
-// sha256 GitHub publishes for the asset, and keeps the last bundle on any
-// failure.
+// Fetch updates one database's directory under DBDir (DBTrivy, DBClamAV,
+// DBOSV or DBYARA) without recording it in meta.json. The laptop's db-push
+// builds its bundles with it, so a pushed database is fetched exactly as the
+// host's own refresh fetches it.
+func (r Refresher) Fetch(ctx context.Context, name string) error {
+	if err := os.MkdirAll(r.DBDir, 0o700); err != nil {
+		return err
+	}
+	switch name {
+	case DBTrivy:
+		return r.trivy(ctx)
+	case DBClamAV:
+		return r.clamav(ctx)
+	case DBOSV:
+		return r.osv(ctx)
+	case DBYARA:
+		_, _, err := r.fetchYARA(ctx)
+		return err
+	}
+	return fmt.Errorf("unknown database %q", name)
+}
+
+// yara fetches the latest YARA Forge core bundle and records its release.
 func (r Refresher) yara(ctx context.Context) error {
+	sum, tag, err := r.fetchYARA(ctx)
+	if err != nil {
+		return err
+	}
+	return setDBMeta(r.DBDir, DBYARA, DBMeta{UpdatedAt: r.now(), Source: DBSourceRefresh, SHA256: sum, Release: tag})
+}
+
+// fetchYARA fetches the latest YARA Forge core bundle, checks it against the
+// sha256 GitHub publishes for the asset, and keeps the last bundle on any
+// failure. It answers the asset's sha256 and the release tag.
+func (r Refresher) fetchYARA(ctx context.Context) (string, string, error) {
 	url := r.YARARelease
 	if url == "" {
 		url = defaultYARARelease
@@ -341,7 +386,7 @@ func (r Refresher) yara(ctx context.Context) error {
 		} `json:"assets"`
 	}
 	if err := r.getJSON(ctx, url, &rel); err != nil {
-		return err
+		return "", "", err
 	}
 	for _, a := range rel.Assets {
 		if a.Name != yaraCoreAsset {
@@ -349,19 +394,19 @@ func (r Refresher) yara(ctx context.Context) error {
 		}
 		sum, ok := strings.CutPrefix(a.Digest, "sha256:")
 		if !ok || len(sum) != 64 {
-			return fmt.Errorf("release %s publishes no sha256 for %s", rel.TagName, a.Name)
+			return "", "", fmt.Errorf("release %s publishes no sha256 for %s", rel.TagName, a.Name)
 		}
 		zipPath := filepath.Join(r.DBDir, DBYARA+".zip.part")
 		defer func() { _ = os.Remove(zipPath) }()
 		if err := r.download(ctx, a.BrowserDownloadURL, zipPath, sum); err != nil {
-			return err
+			return "", "", err
 		}
 		if err := unzipRules(zipPath, filepath.Join(r.DBDir, DBYARA, "rules.yar")); err != nil {
-			return err
+			return "", "", err
 		}
-		return setDBMeta(r.DBDir, DBYARA, DBMeta{UpdatedAt: r.now(), Source: DBSourceRefresh, SHA256: sum, Release: rel.TagName})
+		return sum, rel.TagName, nil
 	}
-	return fmt.Errorf("release %s has no %s", rel.TagName, yaraCoreAsset)
+	return "", "", fmt.Errorf("release %s has no %s", rel.TagName, yaraCoreAsset)
 }
 
 func (r Refresher) getJSON(ctx context.Context, url string, v any) error {

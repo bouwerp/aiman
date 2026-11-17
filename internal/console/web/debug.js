@@ -20,6 +20,8 @@
     frames: [],
     frameId: 0,
     runId: "",
+    key: "", // run and debug target: the app, or one debug check
+    check: "", // the debug check's name while it is the target
     launch: null,
     info: null,
     shown: false,
@@ -502,9 +504,11 @@
 
   // The app starts when a debugger launches it, so the console connects by
   // itself once per run while nobody holds the debugger.
+  // A debug check waits for a debugger, so the console connects to it the
+  // same way, once per check.
   function maybeAutoConnect() {
-    if (d.autoTried === d.runId || mine() || !d.info || !d.info.debug || d.info.debug.holder) return;
-    d.autoTried = d.runId;
+    if (d.autoTried === d.key || mine() || !d.info || !d.info.debug || d.info.debug.holder) return;
+    d.autoTried = d.key;
     connect();
   }
 
@@ -512,9 +516,10 @@
     const h = d.info && d.info.debug && d.info.debug.holder;
     const box = $("dbg-holder");
     let text;
+    const what = d.check ? "check " + d.check : "the app";
     if (mine()) {
       box.dataset.held = "you";
-      text = "You hold the debugger. The app runs while this page stays connected.";
+      text = "You hold the debugger of " + what + ". It runs while this page stays connected.";
     } else if (h) {
       box.dataset.held = "other";
       const who = h.client_name || h.client_id || "another client";
@@ -522,7 +527,9 @@
       text = "Held by " + who + (since ? " since " + since : "") + (h.connections > 1 ? ", " + h.connections + " connections" : "") + ".";
     } else {
       box.dataset.held = "free";
-      text = "Debugger free. The app is not running until a debugger connects.";
+      text = d.check
+        ? "Debugger free. Check " + d.check + " waits for a debugger and stops if none attaches in time."
+        : "Debugger free. The app is not running until a debugger connects.";
     }
     $("dbg-holder-text").textContent = text;
     $("dbg-connect").hidden = mine() || !!h;
@@ -597,30 +604,68 @@
   function emptyText(run) {
     if (!run || !run.debug) return "This run has no debugger. Start a run with \"Start with the debugger\" under Run.";
     if (run.state === "failed" && run.error_code === "harness_debug_unsupported") {
-      return "The debugger cannot attach to this app. " + (run.error || "");
+      let text = "The debugger cannot attach to this app. " + (run.error || "");
+      if (nodeChecks(run).length) {
+        text += " This scenario's checks " + nodeChecks(run).join(", ") +
+          " can run under the Node debugger instead: start the scenario for check debugging, then use Debug check under Checks.";
+      }
+      return text;
+    }
+    if (run.state === "ready" && run.debug_checks) {
+      return "This run debugs its checks. Start one with \"Debug check\" under Checks; the Debug tab connects to it.";
     }
     return "The debug run is " + run.state + ".";
+  }
+
+  // nodeChecks are the run's checks that debug under Node: the fallback
+  // for an app whose Bun the host's adapter cannot debug.
+  function nodeChecks(run) {
+    return (run.checks || []).filter((c) => c.debug_lang === "node").map((c) => c.name);
+  }
+
+  function renderEmpty(run) {
+    const p = $("dbg-empty");
+    p.textContent = emptyText(run);
+    if (run && run.state === "failed" && run.error_code === "harness_debug_unsupported" && nodeChecks(run).length && C.upChecksOnly) {
+      const b = el("button", { type: "button", class: "btn", text: "Start for check debugging" });
+      b.addEventListener("click", () => C.upChecksOnly(run.scenario));
+      p.append(" ", b);
+    }
   }
 
   window.aimanDebug = {
     // update follows the console's poll: a new run resets the tab.
     update(state) {
       const run = state.run;
-      const debugRun = run && run.debug && run.state === "ready" && run.debug_launch;
+      // The target is a running debug check, else the app.
+      const dc = run && run.debug_check;
+      const launch = run && (dc ? dc.launch : run.debug_launch);
+      const debugRun = run && run.debug && run.state === "ready" && launch;
       $("dbg-empty").hidden = !!debugRun;
       $("dbg").hidden = !debugRun;
       if (!debugRun) {
-        $("dbg-empty").textContent = emptyText(run);
-        if (mine() && (!run || run.id !== d.runId)) disconnect();
+        renderEmpty(run);
+        if (mine()) disconnect();
+        d.key = "";
         return;
       }
-      if (run.id !== d.runId) {
+      const key = run.id + "/" + (dc ? "check:" + dc.name + "@" + dc.started_at : "app");
+      if (key !== d.key) {
         disconnect();
-        Object.assign(d, { runId: run.id, launch: run.debug_launch, file: "", lines: [], bps: new Map(), verified: new Map(), out: "", frames: [], stopped: null });
+        const newRun = run.id !== d.runId;
+        Object.assign(d, { key: key, check: dc ? dc.name : "", runId: run.id, launch: launch, frames: [], stopped: null });
+        if (newRun) Object.assign(d, { file: "", lines: [], bps: new Map(), verified: new Map(), out: "" });
+        status(dc ? "Check " + dc.name + " is the debug target." : "Not connected");
         renderAll();
-        loadFiles();
+        if (newRun) loadFiles();
         refresh();
       }
+    },
+    // leave drops this page's sessions before the target switches, so the
+    // page does not connect again to the target it is leaving.
+    leave() {
+      d.autoTried = d.key;
+      disconnect();
     },
     shown(on) {
       d.shown = on;

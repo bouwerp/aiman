@@ -29,6 +29,10 @@ const (
 	OpHealth = "health"
 	// OpDAPDrop closes the client holding a DAP relay (take over, release).
 	OpDAPDrop = "dap_drop"
+	// OpDAPTarget points a DAP relay at another target (Request.Target),
+	// closing its holder: the debug target switch between the app and a
+	// debug check.
+	OpDAPTarget = "dap_target"
 	// OpCapture reads the capture proxy's flows after a flow ID.
 	OpCapture = "capture"
 	// OpCA reads the run CA's certificate (never its key).
@@ -56,6 +60,8 @@ type Request struct {
 	Token string     `json:"token,omitempty"`
 	Relay *RelaySpec `json:"relay,omitempty"`
 	Name  string     `json:"name,omitempty"`
+	// Target is OpDAPTarget's new host:port, empty for none.
+	Target string `json:"target,omitempty"`
 	// After and Limit page a capture read.
 	After int64 `json:"after,omitempty"`
 	Limit int   `json:"limit,omitempty"`
@@ -205,6 +211,12 @@ func (e *Edge) dispatch(req Request) Response {
 		return Response{OK: true, Health: &h}
 	case OpDAPDrop:
 		dropped, err := e.DropDAP(req.Name)
+		if err != nil {
+			return fail(err)
+		}
+		return Response{OK: true, Dropped: dropped}
+	case OpDAPTarget:
+		dropped, err := e.SetDAPTarget(req.Name, req.Target)
 		if err != nil {
 			return fail(err)
 		}

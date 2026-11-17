@@ -190,6 +190,12 @@ func (r *relay) handleDAP(client net.Conn) {
 		ClientID: clip(req.Arguments.ClientID), ClientName: clip(req.Arguments.ClientName),
 		Remote: client.RemoteAddr().String(), Since: time.Now().UTC(),
 	}
+	if r.target() == "" {
+		r.failed.Add(1)
+		_ = client.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		_ = WriteDAPMessage(client, dapError(req, "nothing to debug yet: this run debugs its checks; start one with aiman harness check <name> --debug or the console's Debug check"))
+		return
+	}
 	if cur, ok := r.claim(token, info, dc); !ok {
 		r.refuse(client, req, cur)
 		return
@@ -229,14 +235,19 @@ func (r *relay) handleDAP(client net.Conn) {
 }
 
 // dialAdapter keeps dialling the target for dapDialWindow, because the
-// adapter restarts after each client.
+// adapter restarts after each client, and a debug check's debugger listens
+// only once the check container has started.
 func (r *relay) dialAdapter() (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(r.ctx, dapDialWindow)
 	defer cancel()
 	var d net.Dialer
 	for {
+		target := r.target()
+		if target == "" {
+			return nil, errors.New("the debug target went away")
+		}
 		dctx, dcancel := context.WithTimeout(ctx, r.dialTimeout)
-		c, err := d.DialContext(dctx, "tcp", r.spec.Target)
+		c, err := d.DialContext(dctx, "tcp", target)
 		dcancel()
 		if err == nil {
 			return c, nil
@@ -298,7 +309,17 @@ func (r *relay) unclaim(dc *dapConn) {
 
 // drop revokes the lease and ends every connection it holds.
 func (r *relay) drop() *DAPHolder {
+	return r.retarget(nil)
+}
+
+// retarget revokes the lease, ends every connection it holds and, when
+// target is set, points the relay at *target: a debug check's debugger, or
+// the app's again. An empty *target admits no client until it is set.
+func (r *relay) retarget(target *string) *DAPHolder {
 	r.mu.Lock()
+	if target != nil {
+		r.spec.Target = *target
+	}
 	l := r.lease
 	r.lease = nil
 	var conns []*dapConn
