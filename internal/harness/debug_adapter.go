@@ -10,9 +10,9 @@ import (
 
 // DebugAdapter is one language's debugger. The compose builder, the edge's
 // DAP relay, the console's DAP bridge and its Debug tab know only this
-// interface and the Debug Adapter Protocol: Go runs Delve's DAP server in the
-// app container, Node runs js-debug's and Bun runs Bun's own adapter in a
-// separate adapter container.
+// interface and the Debug Adapter Protocol: Go runs Delve's DAP server and
+// Python runs debugpy in the app container, Node runs js-debug's and Bun runs
+// Bun's own adapter in a separate adapter container.
 type DebugAdapter interface {
 	// Lang is the app.debug.lang it serves.
 	Lang() string
@@ -89,7 +89,7 @@ func DebugAdapterFor(f *File, adapters []DebugAdapter) (DebugAdapter, error) {
 // EditorConfig is the launch.json configuration for l at 127.0.0.1:port,
 // from the adapter of l's language.
 func EditorConfig(l DebugLaunch, port int) (map[string]any, error) {
-	for _, a := range []DebugAdapter{&GoDebug{}, &NodeDebug{}, &BunDebug{}} {
+	for _, a := range []DebugAdapter{&GoDebug{}, &NodeDebug{}, &BunDebug{}, &PythonDebug{}} {
 		if a.Lang() == l.Lang {
 			return a.EditorConfig(l, port), nil
 		}
