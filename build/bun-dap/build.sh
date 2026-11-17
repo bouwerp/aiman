@@ -17,6 +17,8 @@ BUN_COMMIT=0d9b296af33f2b851fcbf4df3e9ec89751734ba4 # tag bun-v1.3.14
 
 here=$(cd "$(dirname "$0")" && pwd)
 out=${1:-$here/dist}
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
 bun=${BUN:-bun}
 
 got=$("$bun" --version)

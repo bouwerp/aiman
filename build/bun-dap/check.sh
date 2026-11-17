@@ -11,6 +11,8 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 pins=$here/../../internal/harness/tools/pins.go
 out=${1:-$here/dist}
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
 
 pin() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$pins"; }
 version=$(pin BunVersion)
