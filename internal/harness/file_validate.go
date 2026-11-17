@@ -122,6 +122,7 @@ func validateService(name string, s Service) []string {
 		}
 	}
 	errs = append(errs, validateLimits(at+".limits", s.Limits)...)
+	errs = append(errs, validateEVM(at, s)...)
 	return errs
 }
 

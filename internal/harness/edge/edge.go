@@ -208,8 +208,8 @@ func (e *Edge) checkSpec(spec RelaySpec) error {
 	if !relayName.MatchString(spec.Name) {
 		return errorf(CodeInvalidParams, "relay name %q must be 1-32 letters, digits, - or _", spec.Name)
 	}
-	if spec.Kind != "" && spec.Kind != KindDAP {
-		return errorf(CodeInvalidParams, "relay kind %q must be empty or %s", spec.Kind, KindDAP)
+	if spec.Kind != "" && spec.Kind != KindDAP && spec.Kind != KindEVM {
+		return errorf(CodeInvalidParams, "relay kind %q must be empty, %s or %s", spec.Kind, KindDAP, KindEVM)
 	}
 	if spec.Port < 0 || spec.Port > 65535 {
 		return errorf(CodeInvalidParams, "relay port %d is out of range", spec.Port)

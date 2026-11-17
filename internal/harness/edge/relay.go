@@ -126,6 +126,10 @@ func (r *relay) handle(client net.Conn) {
 		r.handleDAP(client)
 		return
 	}
+	if r.spec.Kind == KindEVM {
+		r.handleEVM(client)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.ctx, r.dialTimeout)
 	var d net.Dialer

@@ -1,0 +1,33 @@
+/* EVM tab: transaction list and call tree. */
+.evm-find { margin: 0.5rem 0; }
+.evm-find label { display: block; font-size: 0.9rem; color: var(--muted); }
+.evm-find-row { display: flex; gap: 0.5rem; }
+.evm-find-row input { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.evm-txs { list-style: none; margin: 0 0 0.75rem; padding: 0; max-height: 18rem; overflow-y: auto; }
+.evm-tx {
+  display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: baseline; width: 100%;
+  padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 0.3rem;
+  background: var(--panel); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.evm-tx[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.evm-tx:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.evm-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; overflow-wrap: anywhere; }
+.evm-meta { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+
+.evm-badge { display: inline-block; padding: 0 0.4rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; }
+.evm-badge[data-status="success"] { background: var(--pass-bg); color: var(--pass); }
+.evm-badge[data-status="reverted"] { background: var(--fail-bg); color: var(--fail); }
+.evm-badge[data-status="unknown"] { background: var(--wait-bg); color: var(--wait); }
+
+.evm-trace-head { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: baseline; margin-bottom: 0.5rem; }
+.evm-revert { margin: 0 0 0.5rem; padding: 0.4rem 0.6rem; border-radius: 6px; background: var(--fail-bg); color: var(--fail); overflow-wrap: anywhere; }
+
+.evm-frame > summary { cursor: pointer; padding: 0.15rem 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; overflow-wrap: anywhere; }
+.evm-frame > summary[data-failed="true"] { color: var(--fail); }
+.evm-err { display: block; margin-left: 1rem; font-weight: 600; }
+.evm-calls { list-style: none; margin: 0; padding-left: 1rem; border-left: 1px solid var(--line); }
+.evm-io { display: grid; grid-template-columns: max-content 1fr; gap: 0.1rem 0.5rem; margin: 0.2rem 0 0.4rem 1rem; font-size: 0.8rem; }
+.evm-io dt { color: var(--muted); }
+.evm-io dd { margin: 0; overflow-wrap: anywhere; }
+.evm-io code { background: var(--log-bg); padding: 0 0.2rem; border-radius: 3px; }
