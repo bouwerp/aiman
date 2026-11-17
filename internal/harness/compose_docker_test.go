@@ -158,8 +158,9 @@ func (r *dockerRun) exec(service string, script string) (string, error) {
 }
 
 // upRun builds the project for the file and scenario, writes the control
-// token and starts every service. Cleanup always runs compose down -v.
-func upRun(t *testing.T, fileYAML, scenario string) *dockerRun {
+// token and starts every service; each mut may change the spec first, with
+// its directories made. Cleanup always runs compose down -v.
+func upRun(t *testing.T, fileYAML, scenario string, mut ...func(*RunSpec)) *dockerRun {
 	t.Helper()
 	needDocker(t)
 	ensureImage(t, dockerTestImage)
@@ -194,6 +195,9 @@ func upRun(t *testing.T, fileYAML, scenario string) *dockerRun {
 		AimanBin: edgeBinary(t), UID: os.Getuid(), GID: os.Getgid(),
 		AppImage: dockerTestImage, EdgeImage: dockerTestImage,
 		InnerSubnet: inner, OuterSubnet: outer, ReadPassword: "ro-" + hex.EncodeToString(id),
+	}
+	for _, m := range mut {
+		m(&spec)
 	}
 	p, err := Compose(f, spec)
 	if err != nil {
