@@ -52,6 +52,8 @@ type Run struct {
 	Network    string `json:"network"`
 	State      string `json:"state"`
 	Debug      bool   `json:"debug"`
+	// DebugLaunch is the DAP launch request of a debug run.
+	DebugLaunch *DebugLaunch `json:"debug_launch,omitempty"`
 	// FailedStep, FailedService and Error explain a failed run.
 	FailedStep    string     `json:"failed_step,omitempty"`
 	FailedService string     `json:"failed_service,omitempty"`

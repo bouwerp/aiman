@@ -154,9 +154,13 @@ type Port struct {
 	Container int    `yaml:"container" json:"container"`
 }
 
-// Debug selects the debugger for debug runs. Lang is go or node.
+// Debug selects the debugger for debug runs. Lang is go or node. Program
+// and Args are what the debugger starts; empty takes app.run split into
+// words, which works for a plain command line.
 type Debug struct {
-	Lang string `yaml:"lang" json:"lang"`
+	Lang    string   `yaml:"lang" json:"lang"`
+	Program string   `yaml:"program" json:"program,omitempty"`
+	Args    []string `yaml:"args" json:"args,omitempty"`
 }
 
 // Service is a container a scenario starts beside the app. Caps holds only

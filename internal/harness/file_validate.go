@@ -2,6 +2,7 @@ package harness
 
 import (
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -86,6 +87,12 @@ func (a *App) validate() []string {
 	errs = append(errs, validateLimits("app.limits", a.Limits)...)
 	if a.Debug != nil && !slices.Contains(validDebugLang, a.Debug.Lang) {
 		add("app.debug.lang %q must be one of %s", a.Debug.Lang, strings.Join(validDebugLang, ", "))
+	}
+	if a.Debug != nil && a.Debug.Program != "" && !path.IsAbs(a.Debug.Program) {
+		add("app.debug.program %q must be an absolute path in the app container (for example /out/app)", a.Debug.Program)
+	}
+	if a.Debug != nil && a.Debug.Program == "" && len(a.Debug.Args) > 0 {
+		add("app.debug.args needs app.debug.program")
 	}
 	return errs
 }
