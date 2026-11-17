@@ -49,7 +49,15 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 		log.Printf("harness unavailable: image vetting: %v", err)
 		return nil
 	}
+	pin, err := harness.NewDlvPin(cfg.Harness.DlvVersion, cfg.Harness.DlvModuleSum)
+	if err != nil {
+		log.Printf("config: %v; using Delve %s", err, harness.DefaultDlv.Version)
+		pin = harness.DefaultDlv
+	}
 	m, err := harness.NewManager(harness.Options{
+		DebugAdapters: []harness.DebugAdapter{
+			&harness.GoDebug{Tools: &harness.DlvTools{Dir: filepath.Join(hdir, "tools"), Pin: pin}},
+		},
 		Images:        vetter,
 		Dir:           hdir,
 		AimanBin:      bin,

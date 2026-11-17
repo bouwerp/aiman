@@ -36,6 +36,11 @@ type HarnessConfig struct {
 	IdleTimeout time.Duration `yaml:"idle_timeout,omitempty"`
 	// Images configures image vetting.
 	Images HarnessImagesConfig `yaml:"images,omitempty"`
+	// DlvVersion and DlvModuleSum pin the Delve debug runs build on the
+	// host: a version other than the one in code needs the h1: hash go.sum
+	// lists for its module. Unset is the pin in code.
+	DlvVersion   string `yaml:"dlv_version,omitempty"`
+	DlvModuleSum string `yaml:"dlv_module_sum,omitempty"`
 }
 
 // On reports whether the harness RPCs answer; unset is on.

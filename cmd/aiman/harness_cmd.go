@@ -92,7 +92,8 @@ func callHarnessMethod(method string, params map[string]any) (json.RawMessage, e
 }
 
 const harnessUsageText = `Usage: aiman harness list [--json]
-       aiman harness up <scenario> [--dirty] [--force] [--wait] [--json]   (--wait also waits while an image is vetted)
+       aiman harness up <scenario> [--dirty] [--debug] [--force] [--wait] [--json]   (--wait also waits while an image is vetted)
+       aiman harness debug [status|take|release] [--run ID] [--json]   (take and release: operator)
        aiman harness status [--run ID] [--json]
        aiman harness check [<name>] [--run ID] [--json]
        aiman harness logs <service> [--lines N] [--run ID] [--json]
@@ -116,7 +117,7 @@ type harnessArgs struct {
 	quote, reason, sha256, builtAt       string
 	lines                                int
 	json, dirty, force, wait, acceptRisk bool
-	text, noBrowser                      bool
+	text, noBrowser, debug               bool
 	pos                                  []string
 }
 
@@ -198,6 +199,8 @@ func (a *harnessArgs) setBool(arg string) bool {
 		a.text = true
 	case "--no-browser":
 		a.noBrowser = true
+	case "--debug":
+		a.debug = true
 	default:
 		return false
 	}
@@ -232,6 +235,7 @@ var harnessSubs = map[string]harnessSub{
 	"result":  {0, 1, true, harnessResult},
 	"verdict": {2, 2, true, harnessVerdict},
 	"down":    {0, 0, true, harnessDown},
+	"debug":   {0, 1, true, harnessDebug},
 }
 
 // harnessMain runs a host subcommand against serve.
@@ -349,6 +353,9 @@ var errHarnessRunFailed = errors.New("the harness run failed")
 
 func harnessUp(h harnessIO, a harnessArgs) error {
 	params := map[string]any{"session": a.session, "scenario": a.pos[0], "dirty": a.dirty, "force": a.force, "wait": a.wait}
+	if a.debug {
+		params["debug"] = true
+	}
 	var (
 		raw json.RawMessage
 		err error
