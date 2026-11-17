@@ -52,6 +52,7 @@ var rpcMethods = map[string]bool{
 	// The laptop's harness console calls these through the RPC stream.
 	"harness.list":          true,
 	"harness.logs":          true,
+	"harness.capture":       true,
 	"harness.check":         true,
 	"harness.up":            true,
 	"harness.down":          true,
