@@ -132,7 +132,7 @@ func TestDebugComposeRefusals(t *testing.T) {
 	if _, err := Compose(f, debugSpec()); err == nil || !strings.Contains(err.Error(), "debug") {
 		t.Fatalf("debug without app.debug: %v", err)
 	}
-	f, err = Parse([]byte(debugFixture("node")))
+	f, err = Parse([]byte(debugFixture("node, entry: a.js")))
 	if err != nil {
 		t.Fatal(err)
 	}

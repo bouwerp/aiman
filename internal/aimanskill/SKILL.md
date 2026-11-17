@@ -415,6 +415,15 @@ A session has one live run at a time. Do not use `--force`; it is for the operat
 
 The tester debugs browser code in their own DevTools, which need source maps. When `aiman harness status --json` shows `browser_sourcemaps.state` `absent`, make the build write them (Vite: `build.sourcemap: true`, not `'hidden'`) and keep any plugin that deletes maps out of `app.build`.
 
+### Debugger
+
+`aiman harness up <scenario> --debug` starts the app under a debugger that the operator drives from the console's Debug tab. Declare it in `app.debug`:
+
+- Go: `debug: {lang: go}`. Serve builds with optimisation off and runs `dlv dap`.
+- Node or TypeScript on Node: `debug: {lang: node, entry: dist/server.js}`. Add `cwd` (relative to the repository), `runtime_args` (for example `["--import", "tsx"]` to run `.ts` through a loader) or give the whole command in `run`, which must contain `$AIMAN_INSPECT` once. For compiled TypeScript, build with source maps. Do not put `tsx` or `ts-node` in `runtime`, and do not add `--watch`, `--hot` or `--inspect=0.0.0.0`; the file is refused.
+- `app.image` names the image the app runs in, when the picked one is wrong (for example `node:24`). It is vetted like any image.
+- `bun` and `python` parse, but `harness up --debug` refuses them with `harness_debug_unsupported` until their debuggers land. `checks[].debug` is accepted but not run yet.
+
 ### Images
 
 Serve vets every image digest before the Docker engine sees it. It scans for known CVEs and for malicious code. Then the operator approves the digest once for the host.

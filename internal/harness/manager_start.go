@@ -154,9 +154,12 @@ func (s *starter) writeProject() error {
 		AimanBin: s.m.opts.AimanBin, UID: s.m.opts.UID, GID: s.m.opts.GID,
 		AppImage: s.run.Images[ServiceApp], EdgeImage: s.run.Images[ServiceEdge], ServiceImages: services,
 		InnerSubnet: inner, OuterSubnet: outer, ReadPassword: readPassword, ServiceMemory: s.m.opts.ServiceMemory,
-		Debug: s.debug, DebugSubnet: debugSubnet(n),
+		Debug: s.debug, DebugSubnet: debugSubnet(n), AdapterImage: s.run.Images[ServiceAdapter],
 	})
 	if err != nil {
+		return err
+	}
+	if err := s.placeLaunch(n); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(s.sandbox, "compose.yaml"), p.YAML, 0o600); err != nil {
@@ -190,7 +193,7 @@ func (s *starter) debugger(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}
-	spec, err := a.Spec(ctx)
+	spec, err := a.Spec(ctx, s.f)
 	if err != nil {
 		return &stepError{step: "debugger", err: err}
 	}
@@ -270,7 +273,32 @@ func (s *starter) build(ctx context.Context) error {
 }
 
 func (s *starter) app(ctx context.Context) error {
+	if s.debug != nil && s.debug.Adapter != nil {
+		if err := s.must(ctx, "debug adapter", "", nil, "up", "-d", ServiceAdapter); err != nil {
+			return err
+		}
+	}
 	return s.must(ctx, "app", "", nil, "up", "-d", ServiceApp)
+}
+
+// placeLaunch records the debug run's DAP request for the debug subnet of
+// slot n; the subnet, and so the app's address, is known only here.
+func (s *starter) placeLaunch(n int) error {
+	s.lr.mu.Lock()
+	a := s.lr.debug
+	s.lr.mu.Unlock()
+	if a == nil {
+		return nil
+	}
+	l, err := a.Launch(s.f, DebugNetOf(debugSubnet(n)))
+	if err != nil {
+		return err
+	}
+	s.run.DebugLaunch = &l
+	s.lr.mu.Lock()
+	s.lr.run.DebugLaunch = &l
+	s.lr.mu.Unlock()
+	return nil
 }
 
 // edge starts the edge, checks it over its control socket, and reads the

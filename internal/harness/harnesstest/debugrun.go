@@ -98,6 +98,8 @@ type DebugRun struct {
 	Launch harness.DebugLaunch
 	// AppDebugIP is the app's address on the debug network.
 	AppDebugIP string
+	// AdapterDebugIP is the adapter container's, for a Node run.
+	AdapterDebugIP string
 }
 
 func (r *DebugRun) compose(ctx context.Context, args ...string) (string, error) {
@@ -146,7 +148,7 @@ func UpDebugRun(t *testing.T) *DebugRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	launch, err := (&harness.GoDebug{}).Launch(f)
+	launch, err := (&harness.GoDebug{}).Launch(f, harness.DebugNet{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +166,13 @@ func UpDebugRun(t *testing.T) *DebugRun {
 		t.Fatal(err)
 	}
 	app, _, _ := harness.DebugAddrs(dbg)
-	r := &DebugRun{t: t, Project: p, file: filepath.Join(dir, "compose.yaml"), Spec: spec, Launch: launch, AppDebugIP: app.String()}
+	return startRun(t, dir, p, spec, launch, app.String())
+}
+
+// startRun writes p into dir, starts it, and removes it at cleanup.
+func startRun(t *testing.T, dir string, p *harness.Project, spec harness.RunSpec, launch harness.DebugLaunch, appIP string) *DebugRun {
+	t.Helper()
+	r := &DebugRun{t: t, Project: p, file: filepath.Join(dir, "compose.yaml"), Spec: spec, Launch: launch, AppDebugIP: appIP}
 	if err := os.WriteFile(r.file, p.YAML, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -399,6 +407,8 @@ type Session struct {
 	tr     Transport
 	seq    int
 	events []map[string]any
+	// reverse holds reverse requests (startDebugging) the adapter sent.
+	reverse []map[string]any
 }
 
 // NewSession wraps tr.
@@ -420,6 +430,8 @@ func (s *Session) Request(command string, args any) (map[string]any, error) {
 		switch m["type"] {
 		case "event":
 			s.events = append(s.events, m)
+		case "request":
+			s.reverse = append(s.reverse, m)
 		case "response":
 			if rs, _ := m["request_seq"].(float64); int(rs) == seq {
 				return m, nil
@@ -458,6 +470,43 @@ func (s *Session) Event(name string) map[string]any {
 		if m["type"] == "event" && m["event"] == name {
 			return m
 		}
+		if m["type"] == "request" {
+			s.reverse = append(s.reverse, m)
+		}
+	}
+}
+
+// ReverseRequest waits for the adapter's reverse request command, taking it
+// from those already seen first, and answers it with success.
+func (s *Session) ReverseRequest(command string) map[string]any {
+	s.t.Helper()
+	for {
+		for i, r := range s.reverse {
+			if r["command"] == command {
+				s.reverse = append(s.reverse[:i], s.reverse[i+1:]...)
+				s.respond(r)
+				return r
+			}
+		}
+		m, err := s.tr.Recv()
+		if err != nil {
+			s.t.Fatalf("waiting for the %s request: %v", command, err)
+		}
+		switch m["type"] {
+		case "request":
+			s.reverse = append(s.reverse, m)
+		case "event":
+			s.events = append(s.events, m)
+		}
+	}
+}
+
+func (s *Session) respond(req map[string]any) {
+	s.t.Helper()
+	seq := s.seq
+	s.seq++
+	if err := s.tr.Send(map[string]any{"seq": seq, "type": "response", "request_seq": req["seq"], "command": req["command"], "success": true}); err != nil {
+		s.t.Fatalf("answer %v: %v", req["command"], err)
 	}
 }
 
