@@ -280,11 +280,19 @@ func firstLine(s string) string {
 
 // readyRun marks the run ready unless a Down got to it first.
 func (m *Manager) readyRun(lr *liveRun, ports []RunPort) {
+	names := make([]string, 0, len(ports))
+	for _, p := range ports {
+		names = append(names, p.Name)
+	}
 	lr.mu.Lock()
 	if lr.stopping {
 		lr.mu.Unlock()
 		return
 	}
+	// The ledger row goes in before the state turns ready: a caller that
+	// waits for ready may call harness.check at once, and its row must
+	// follow this one.
+	m.record(lr.run.Session, domain.EventActorAiman, domain.EventHarnessReady, map[string]any{"run": lr.run.ID, "ports": names})
 	now := m.opts.Now()
 	lr.run.State, lr.run.Ports, lr.run.ReadyAt, lr.run.LastUsed = StateReady, ports, &now, now
 	run := lr.run
@@ -292,11 +300,6 @@ func (m *Manager) readyRun(lr *liveRun, ports []RunPort) {
 	if err := m.writeRun(run); err != nil {
 		m.logf("write run %s: %v", run.ID, err)
 	}
-	names := make([]string, 0, len(ports))
-	for _, p := range ports {
-		names = append(names, p.Name)
-	}
-	m.record(run.Session, domain.EventActorAiman, domain.EventHarnessReady, map[string]any{"run": run.ID, "ports": names})
 }
 
 // failRun takes a failed start down and records the step, unless a Down got
