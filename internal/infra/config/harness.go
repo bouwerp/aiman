@@ -46,6 +46,14 @@ type HarnessConfig struct {
 	// host's architecture, and optionally the url (https, or an absolute
 	// path on the host) it comes from. Unset is the pin in code.
 	DebugTools map[string]HarnessToolPin `yaml:"debug_tools,omitempty"`
+	// DB configures the database browser.
+	DB HarnessDBConfig `yaml:"db,omitempty"`
+}
+
+// HarnessDBConfig is harness.db.
+type HarnessDBConfig struct {
+	// RowLimit caps the rows one harness.db read returns; unset is 200.
+	RowLimit int `yaml:"row_limit,omitempty"`
 }
 
 // HarnessToolPin is one harness.debug_tools entry.

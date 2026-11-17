@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -166,6 +167,9 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 			doc.Volumes[dataVolume(name)] = map[string]any{}
 			files[InitDBFile] = PostgresInitSQL()
 		}
+		if isSQLite(f.Services[name]) {
+			doc.Volumes[dataVolume(name)] = map[string]any{}
+		}
 	}
 	for name, svc := range doc.Services {
 		doc.Services[name] = escapeInterpolation(svc)
@@ -310,7 +314,17 @@ func isPostgres(s Service) bool {
 	return s.Database != nil && s.Database.Kind == "postgres"
 }
 
+func isSQLite(s Service) bool {
+	return s.Database != nil && s.Database.Kind == "sqlite"
+}
+
 func dataVolume(service string) string { return "data-" + service }
+
+// DataVolumeName is the Docker name of a service's data volume in run's
+// compose project: compose prefixes the project name.
+func DataVolumeName(run, service string) string {
+	return "harness-" + run + "_" + dataVolume(service)
+}
 
 // disableIPv6 turns IPv6 off inside a container on top of the networks having
 // none, so no link-local address or route exists either.
@@ -440,6 +454,12 @@ func serviceService(f *File, spec RunSpec, name string) composeService {
 			dataVolume(name) + ":" + postgresDataDir,
 			"./" + InitDBFile + ":" + postgresInitDir + initDBFile + ":ro",
 		}
+	}
+	if isSQLite(svc) {
+		// The file's directory is a named volume, writable under the
+		// read-only root, which the database browser mounts read-only into
+		// its reader container.
+		s.Volumes = []string{dataVolume(name) + ":" + path.Dir(svc.Database.Path)}
 	}
 	if len(s.Environment) == 0 {
 		s.Environment = nil

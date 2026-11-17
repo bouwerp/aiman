@@ -80,6 +80,7 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 		RunMemory:     runMemory,
 		MaxRuns:       cfg.Harness.MaxRunsOrDefault(),
 		IdleTimeout:   cfg.Harness.IdleTimeoutOrDefault(),
+		DBRowLimit:    cfg.Harness.DB.RowLimit,
 		Docker:        harness.ExecDocker{},
 		AppImage:      review.Image,
 		Record:        srv.HarnessRecorder(),

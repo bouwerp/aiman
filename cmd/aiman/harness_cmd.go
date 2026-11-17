@@ -53,6 +53,9 @@ func runHarness(args []string) error {
 			return runHarnessConsole(args[1:])
 		case "scan":
 			return runHarnessScan(args[1:])
+		case "db-read":
+			// Runs inside the database browser's SQLite reader container.
+			return harness.SQLiteReadMain(os.Stdin, os.Stdout)
 		case "review-proxy":
 			// Runs inside the image review's proxy container.
 			return images.ProxyMain(args[1:])
@@ -97,6 +100,7 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness status [--run ID] [--json]
        aiman harness check [<name>] [--run ID] [--json]
        aiman harness logs <service> [--lines N] [--run ID] [--json]
+       aiman harness db <service> tables|rows <table>|query <sql> [--limit N] [--write] [--run ID] [--json]   (--write: operator)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
        aiman harness down [--run ID] [--json]
@@ -115,8 +119,9 @@ func harnessUsage(w io.Writer) error {
 type harnessArgs struct {
 	session, run, note, remote           string
 	quote, reason, sha256, builtAt       string
-	lines                                int
+	lines, limit                         int
 	json, dirty, force, wait, acceptRisk bool
+	write                                bool
 	text, noBrowser, debug               bool
 	pos                                  []string
 }
@@ -124,6 +129,7 @@ type harnessArgs struct {
 var harnessValueFlags = map[string]bool{
 	"--session": true, "--run": true, "--note": true, "--lines": true, "--remote": true,
 	"--quote": true, "--reason": true, "--sha256": true, "--built-at": true,
+	"--limit": true,
 }
 
 func parseHarnessArgs(args []string) (harnessArgs, error) {
@@ -179,6 +185,12 @@ func (a *harnessArgs) setValue(name, val string) error {
 			return errors.New("--lines must be a positive number")
 		}
 		a.lines = n
+	case "--limit":
+		n, err := strconv.Atoi(val)
+		if err != nil || n <= 0 {
+			return errors.New("--limit must be a positive number")
+		}
+		a.limit = n
 	}
 	return nil
 }
@@ -201,6 +213,8 @@ func (a *harnessArgs) setBool(arg string) bool {
 		a.noBrowser = true
 	case "--debug":
 		a.debug = true
+	case "--write":
+		a.write = true
 	default:
 		return false
 	}
@@ -236,6 +250,7 @@ var harnessSubs = map[string]harnessSub{
 	"verdict": {2, 2, true, harnessVerdict},
 	"down":    {0, 0, true, harnessDown},
 	"debug":   {0, 1, true, harnessDebug},
+	"db":      {2, 3, true, harnessDB},
 }
 
 // harnessMain runs a host subcommand against serve.

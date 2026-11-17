@@ -2,6 +2,7 @@ package harness
 
 import (
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -110,8 +111,10 @@ func validateService(name string, s Service) []string {
 			add("env name %q is not a variable name", k)
 		}
 	}
-	if s.Database != nil && !slices.Contains(validDBKinds, s.Database.Kind) {
-		add("database.kind %q must be one of %s", s.Database.Kind, strings.Join(validDBKinds, ", "))
+	if s.Database != nil {
+		for _, e := range validateDatabase(*s.Database) {
+			add("%s", e)
+		}
 	}
 	for _, c := range s.Caps {
 		if !slices.Contains(AllowedCaps, c) {
@@ -120,6 +123,37 @@ func validateService(name string, s Service) []string {
 	}
 	errs = append(errs, validateLimits(at+".limits", s.Limits)...)
 	return errs
+}
+
+// sqliteDirsRefused are directories a SQLite database.path may not lie in:
+// the service's tmpfs mounts and the kernel's.
+var sqliteDirsRefused = []string{"run", "tmp", "proc", "sys", "dev"}
+
+// validateDatabase checks a service's database. A postgres one names no
+// path. A SQLite one names a clean absolute file below a directory of its
+// own, since that directory becomes the service's data volume.
+func validateDatabase(d Database) []string {
+	switch d.Kind {
+	case "postgres":
+		if d.Path != "" {
+			return []string{"database.path is for sqlite; postgres takes name"}
+		}
+	case "sqlite":
+		p := d.Path
+		switch {
+		case p == "":
+			return []string{"database.path is required for sqlite: the database file inside the service, such as /data/app.db"}
+		case !path.IsAbs(p) || path.Clean(p) != p || strings.ContainsAny(p, ":\\\n"):
+			return []string{fmt.Sprintf("database.path %q must be a clean absolute path", p)}
+		case path.Dir(p) == "/" || slices.Contains(sqliteDirsRefused, strings.Split(p, "/")[1]):
+			return []string{fmt.Sprintf("database.path %q must lie in a directory of its own, not / or /%s", p, strings.Join(sqliteDirsRefused, ", /"))}
+		case d.Name != "":
+			return []string{"database.name is for postgres; sqlite takes path"}
+		}
+	default:
+		return []string{fmt.Sprintf("database.kind %q must be one of %s", d.Kind, strings.Join(validDBKinds, ", "))}
+	}
+	return nil
 }
 
 func validateLimits(at string, l Limits) []string {

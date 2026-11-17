@@ -11,6 +11,8 @@
 <script src="/debug.js" defer></script>
 <link rel="stylesheet" href="/debug-browser.css">
 <script src="/debug-browser.js" defer></script>
+<link rel="stylesheet" href="/db.css">
+<script src="/db.js" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -45,6 +47,7 @@
       <button type="button" role="tab" id="tab-checks" aria-controls="panel-checks" aria-selected="false">Checks</button>
       <button type="button" role="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="false">Logs</button>
       <button type="button" role="tab" id="tab-debug" aria-controls="panel-debug" aria-selected="false">Debug</button>
+      <button type="button" role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false">Database</button>
     </div>
 
     <div class="panel" role="tabpanel" id="panel-run" aria-labelledby="tab-run">
@@ -163,6 +166,29 @@
           <pre class="log" id="dbg-launch"></pre>
           <button type="button" class="btn" id="dbg-copy">Copy</button>
         </details>
+      </div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>
+      <p class="empty" id="db-empty">No run yet.</p>
+      <div id="db" hidden>
+        <div class="panel-actions">
+          <label for="db-service">Database</label>
+          <select id="db-service"></select>
+          <button type="button" class="btn" id="db-refresh">Reload tables</button>
+          <span class="db-role" id="db-role" role="status" hidden></span>
+        </div>
+        <ul class="db-tables" id="db-tables" aria-label="Tables"></ul>
+        <form class="db-query" id="db-query">
+          <label for="db-sql">SQL, one statement (Ctrl+Enter runs it)</label>
+          <textarea id="db-sql" rows="3" spellcheck="false" autocomplete="off" placeholder="select * from orders where id = 42"></textarea>
+          <div class="db-query-row">
+            <label class="check"><input type="checkbox" id="db-write"> Write as the database owner</label>
+            <button type="submit" class="btn primary" id="db-run">Run</button>
+          </div>
+        </form>
+        <p class="hint" id="db-status" role="status" aria-live="polite"></p>
+        <div class="db-result" id="db-result" tabindex="0" aria-label="Result"></div>
       </div>
     </div>
   </section>
