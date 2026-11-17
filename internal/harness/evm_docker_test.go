@@ -53,7 +53,9 @@ func evmContracts(t *testing.T) (reverter, caller string) {
 }
 
 func sendTx(params string) string {
-	return fmt.Sprintf(`wget -q -O- --header 'Content-Type: application/json' --post-data '{"jsonrpc":"2.0","id":1,"method":"eth_sendTransaction","params":[%s]}' http://chain:8545/ && echo`, params)
+	// busybox wget ignores NO_PROXY, so -Y off keeps this call to the
+	// service off the run's capture proxy.
+	return fmt.Sprintf(`wget -Y off -q -O- --header 'Content-Type: application/json' --post-data '{"jsonrpc":"2.0","id":1,"method":"eth_sendTransaction","params":[%s]}' http://chain:8545/ && echo`, params)
 }
 
 // TestEVMDockerTrace runs a real anvil service on the offline inner network,

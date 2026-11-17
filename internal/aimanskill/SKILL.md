@@ -444,6 +444,17 @@ services:
 - The run is offline, so anvil cannot fork a public chain. `--fork-url` and the other fork flags are refused. Deploy the contracts in a setup step or fixture script.
 - `echo '{}' | aiman rpc harness.evm_txs --params-stdin` lists recent transactions, and `echo '{"tx":"0x…"}' | aiman rpc harness.evm_trace --params-stdin` returns one transaction's call tree with decoded revert reasons. Both only read. The edge admits only read methods, so you cannot send a transaction through these calls.
 
+### Network and capture
+
+The app and the services reach the outside only through the edge proxy at `http://edge:3128`. Serve sets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (the app, the edge and every service) in each container. The proxy reads HTTPS with a certificate authority that it makes for the run. `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and `REQUESTS_CA_BUNDLE` point at its certificate.
+
+- A run is offline unless the operator sets `harness.network`. Offline, the proxy answers an external call with a scenario stub, or with `502` and the body `aiman: offline sandbox, no stub for <host><path>`.
+- Add a stub for each external API that a scenario calls: `stubs: [{host: api.stripe.com, path: /v1/refunds, status: 200, body_file: testdata/harness/stripe-refund.json}]`. Use `body` for a short answer. The path must match exactly. A stub answers online too.
+- An app that ignores the proxy variables cannot reach the outside, online or offline. A client that pins certificates fails its handshake. Make the HTTP client read the proxy variables and the CA file.
+- A client that ignores `NO_PROXY` (busybox `wget`, for one) sends its calls to the run's own services through the proxy too, and offline those get the 502. Turn its proxy off for those calls, for example `wget -Y off`.
+- Run `aiman harness capture` to see each call with its status and outcome (`stub`, `offline`, `upstream`, `refused`, `error`). Add `--json` for the headers and the bodies. Serve hides secrets in them.
+- An online run never reaches a private address or the host through the proxy. The proxy refuses such a call.
+
 ### Images
 
 Serve vets every image digest before the Docker engine sees it. It scans for known CVEs and for malicious code. Then the operator approves the digest once for the host.

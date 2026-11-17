@@ -367,6 +367,7 @@
     if (window.aimanDebug) window.aimanDebug.update(state);
     if (window.aimanBrowser) window.aimanBrowser.update(state);
     if (window.aimanEVM) window.aimanEVM.update(state);
+    if (window.aimanNet) window.aimanNet.update(state);
   }
 
   async function poll() {

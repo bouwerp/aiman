@@ -46,6 +46,11 @@ type HarnessConfig struct {
 	// host's architecture, and optionally the url (https, or an absolute
 	// path on the host) it comes from. Unset is the pin in code.
 	DebugTools map[string]HarnessToolPin `yaml:"debug_tools,omitempty"`
+	// Network is offline (unset, none or offline) or online for harness
+	// runs; unset follows review.sandbox.network. See NetworkMode.
+	Network string `yaml:"network,omitempty"`
+	// Capture configures the edge's capture proxy.
+	Capture HarnessCaptureConfig `yaml:"capture,omitempty"`
 }
 
 // HarnessToolPin is one harness.debug_tools entry.

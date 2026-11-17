@@ -70,14 +70,15 @@ type starter struct {
 	debug *DebugSpec
 }
 
-// start brings the run up: networks, services and their ready probes,
-// fixtures, setup, build, the app, then the edge. A failure takes the project
-// down and leaves the run failed.
+// start brings the run up: networks, the edge (whose proxy the later steps
+// use), services and their ready probes, fixtures, setup, build, the app,
+// then the edge's published ports. A failure takes the project down and
+// leaves the run failed.
 func (m *Manager) start(ctx context.Context, lr *liveRun, f *File, sc *Scenario) {
 	run := lr.snapshot()
 	dir := m.runDir(run.Session, run.ID)
 	s := &starter{m: m, lr: lr, f: f, sc: sc, run: run, dir: dir, sandbox: filepath.Join(dir, "sandbox"), project: "harness-" + run.ID}
-	steps := []func(context.Context) error{s.debugger, s.networks, s.services, s.fixtures, s.setup, s.build, s.app, s.edge}
+	steps := []func(context.Context) error{s.debugger, s.networks, s.edge, s.services, s.fixtures, s.setup, s.build, s.app, s.ports}
 	for _, step := range steps {
 		if err := step(ctx); err != nil {
 			m.failRun(lr, err)
@@ -155,6 +156,10 @@ func (s *starter) writeProject() error {
 	if err != nil {
 		return err
 	}
+	proxy, err := s.m.proxySpec(s.sc)
+	if err != nil {
+		return err
+	}
 	p, err := Compose(s.f, RunSpec{
 		RunID: s.run.ID, Scenario: s.sc.ID,
 		Src: filepath.Join(s.dir, "src"), Out: filepath.Join(s.dir, "out"), ControlDir: filepath.Join(s.dir, "control"),
@@ -162,6 +167,7 @@ func (s *starter) writeProject() error {
 		AppImage: s.run.Images[ServiceApp], EdgeImage: s.run.Images[ServiceEdge], ServiceImages: services,
 		InnerSubnet: inner, OuterSubnet: outer, ReadPassword: readPassword, ServiceMemory: s.m.opts.ServiceMemory,
 		Debug: s.debug, DebugSubnet: debugSubnet(n), AdapterImage: s.run.Images[ServiceAdapter],
+		Proxy:       proxy,
 		CheckImages: checks,
 	})
 	if err != nil {
@@ -331,8 +337,8 @@ func (s *starter) placeLaunch(n int) error {
 	return nil
 }
 
-// edge starts the edge, checks it over its control socket, and reads the
-// host port Docker published for each relay.
+// edge starts the edge first, so its proxy serves every later step,
+// checks it over its control socket and stores the run CA's certificate.
 func (s *starter) edge(ctx context.Context) error {
 	if err := s.must(ctx, "edge", "", nil, "up", "-d", "--wait", ServiceEdge); err != nil {
 		return err
@@ -343,6 +349,12 @@ func (s *starter) edge(ctx context.Context) error {
 	if _, err := s.m.opts.Edge.Health(ctx, filepath.Join(s.dir, "control", ControlSocketName), token); err != nil {
 		return &stepError{step: "edge", err: err}
 	}
+	s.m.readCA(ctx, s.dir, token)
+	return nil
+}
+
+// ports reads the host port Docker published for each relay.
+func (s *starter) ports(ctx context.Context) error {
 	ports := make([]RunPort, 0, len(s.relays))
 	for _, r := range s.relays {
 		out, exit, err := s.compose(ctx, "port "+r.Name, nil, "port", ServiceEdge, strconv.Itoa(r.Port))

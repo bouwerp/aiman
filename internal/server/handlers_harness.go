@@ -91,6 +91,7 @@ type harnessParams struct {
 	Path     string `json:"path"`
 	Offset   int64  `json:"offset"`
 	Limit    int    `json:"limit"`
+	After    int64  `json:"after_id"`
 }
 
 // dispatchHarness routes the harness.* methods.
@@ -126,6 +127,8 @@ func (s *Server) dispatchHarness(ctx context.Context, req Request) Response {
 		return s.handleHarnessFiles(ctx, req, p)
 	case "harness.file":
 		return s.handleHarnessFile(ctx, req, p)
+	case "harness.capture":
+		return s.handleHarnessCapture(ctx, req, p)
 	default:
 		return s.handleHarnessRunCall(ctx, req, p)
 	}
