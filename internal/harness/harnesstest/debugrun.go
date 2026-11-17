@@ -148,7 +148,7 @@ func UpDebugRun(t *testing.T) *DebugRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	launch, err := (&harness.GoDebug{}).Launch(f, harness.DebugNet{})
+	launch, err := (&harness.GoDebug{}).Launch(f, harness.DebugNet{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

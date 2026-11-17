@@ -1,4 +1,4 @@
-.PHONY: help build test lint clean install run fmt vet eval
+.PHONY: help build test lint clean install run fmt vet eval bun-dap
 
 # Default target
 help:
@@ -9,6 +9,7 @@ help:
 	@echo "  fmt        - Format code with gofmt"
 	@echo "  vet        - Run go vet"
 	@echo "  eval       - Run the deterministic harness eval suite"
+	@echo "  bun-dap    - Build the Bun debug adapter and check it against its pin"
 	@echo "  clean      - Remove build artifacts"
 	@echo "  install    - Install aiman to GOPATH/bin"
 	@echo "  run        - Build and run aiman"
@@ -64,6 +65,12 @@ vet:
 eval:
 	@echo "Running harness evals..."
 	go test -v ./evals/... -count=1 -timeout=5m
+
+# Build build/bun-dap/dist/bun-dap-<Bun version>.js with the pinned Bun and
+# check it against tools.BunDAPSHA256. A dev host points
+# harness.debug_tools.bun-dap.url at the file when no release carries it.
+bun-dap:
+	build/bun-dap/check.sh
 
 # Clean build artifacts
 clean:

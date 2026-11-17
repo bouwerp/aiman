@@ -142,7 +142,7 @@ func TestNodeLaunchAttaches(t *testing.T) {
 		t.Fatal(err)
 	}
 	app, adapter, edge := DebugAddrs(netip.MustParsePrefix("10.232.7.0/29"))
-	l, err := (&NodeDebug{}).Launch(f, DebugNet{App: app, Adapter: adapter, Edge: edge})
+	l, err := (&NodeDebug{}).Launch(f, DebugNet{App: app, Adapter: adapter, Edge: edge}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

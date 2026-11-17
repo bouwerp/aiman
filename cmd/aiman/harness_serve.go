@@ -63,6 +63,12 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 				Node:    toolPin(cfg.Harness.DebugTools["node"]),
 				JSDebug: toolPin(cfg.Harness.DebugTools["js-debug"]),
 			},
+			&harness.BunDebug{
+				Tools:   &tools.Store{Dir: filepath.Join(hdir, "tools")},
+				Bun:     toolPin(cfg.Harness.DebugTools["bun"]),
+				DAP:     toolPin(cfg.Harness.DebugTools["bun-dap"]),
+				Release: version,
+			},
 		},
 		Images:        vetter,
 		Dir:           hdir,
@@ -154,5 +160,5 @@ func wireImageVetting(srv *server.Server, cfg *config.Config, dir, bin string) (
 
 // toolPin is a harness.debug_tools entry as the tools package takes it.
 func toolPin(p config.HarnessToolPin) tools.Pin {
-	return tools.Pin{Version: p.Version, SHA256: p.SHA256}
+	return tools.Pin{Version: p.Version, SHA256: p.SHA256, URL: p.URL}
 }

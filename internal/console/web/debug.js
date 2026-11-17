@@ -579,6 +579,18 @@
     if (cmd === "pause" || d.stopped) step(cmd);
   }
 
+  // emptyText says why the tab has no debugger. A debug run refused because
+  // this host cannot debug its runtime (harness_debug_unsupported: a Bun of
+  // another minor version, or musl) shows serve's reason, which names the
+  // fallback.
+  function emptyText(run) {
+    if (!run || !run.debug) return "This run has no debugger. Start a run with \"Start with the debugger\" under Run.";
+    if (run.state === "failed" && run.error_code === "harness_debug_unsupported") {
+      return "The debugger cannot attach to this app. " + (run.error || "");
+    }
+    return "The debug run is " + run.state + ".";
+  }
+
   window.aimanDebug = {
     // update follows the console's poll: a new run resets the tab.
     update(state) {
@@ -587,7 +599,7 @@
       $("dbg-empty").hidden = !!debugRun;
       $("dbg").hidden = !debugRun;
       if (!debugRun) {
-        $("dbg-empty").textContent = run && run.debug ? "The debug run is " + run.state + "." : "This run has no debugger. Start a run with \"Start with the debugger\" under Run.";
+        $("dbg-empty").textContent = emptyText(run);
         if (mine() && (!run || run.id !== d.runId)) disconnect();
         return;
       }

@@ -1,5 +1,6 @@
 # Binaries
 /aiman
+/build/bun-dap/dist/
 /aiman.exe
 *.test
 *.out

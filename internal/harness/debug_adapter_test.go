@@ -31,7 +31,7 @@ func TestGoDebugLaunch(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			l, err := (&GoDebug{}).Launch(appFile(t, c.app), DebugNet{})
+			l, err := (&GoDebug{}).Launch(appFile(t, c.app), DebugNet{}, nil)
 			if c.bad {
 				var he *Error
 				if !errors.As(err, &he) || he.Code != CodeInvalid || !strings.Contains(err.Error(), "app.debug.program") {
@@ -70,7 +70,7 @@ func TestDebugAdapterFor(t *testing.T) {
 }
 
 func TestGoEditorConfig(t *testing.T) {
-	l, err := (&GoDebug{}).Launch(appFile(t, "  run: /out/app serve\n  debug: {lang: go}\n"), DebugNet{})
+	l, err := (&GoDebug{}).Launch(appFile(t, "  run: /out/app serve\n  debug: {lang: go}\n"), DebugNet{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

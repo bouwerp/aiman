@@ -42,8 +42,9 @@ type HarnessConfig struct {
 	DlvVersion   string `yaml:"dlv_version,omitempty"`
 	DlvModuleSum string `yaml:"dlv_module_sum,omitempty"`
 	// DebugTools overrides the pinned download of a debug tool (node,
-	// js-debug): a version and its archive's sha256 for this host's
-	// architecture. Unset is the pin in code.
+	// js-debug, bun, bun-dap): a version and its archive's sha256 for this
+	// host's architecture, and optionally the url (https, or an absolute
+	// path on the host) it comes from. Unset is the pin in code.
 	DebugTools map[string]HarnessToolPin `yaml:"debug_tools,omitempty"`
 }
 
@@ -51,6 +52,7 @@ type HarnessConfig struct {
 type HarnessToolPin struct {
 	Version string `yaml:"version,omitempty"`
 	SHA256  string `yaml:"sha256,omitempty"`
+	URL     string `yaml:"url,omitempty"`
 }
 
 // On reports whether the harness RPCs answer; unset is on.

@@ -103,12 +103,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # bun-dap-<Bun version>.js: Bun's debug adapter built by build/bun-dap with
+  # the pinned Bun. check.sh fails unless the build equals the sha256 pinned
+  # in internal/harness/tools/pins.go, so the asset serve downloads is the
+  # one its code expects.
+  bun-dap:
+    name: Build bun-dap
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build and check
+        run: build/bun-dap/check.sh dist
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/bun-dap-*.js
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Runs once every build job has uploaded, so checksums.txt covers all assets.
   # It hashes what the release serves, not what a runner built. Until this job
   # finishes install.sh and `aiman update` refuse the new tag.
   checksums:
     name: Publish checksums.txt and install.sh
-    needs: build
+    needs: [build, bun-dap]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -118,13 +141,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-          # Five platforms times three binaries in the build matrix.
-          EXPECTED_ASSETS: 15
+          # Five platforms times three binaries in the build matrix, plus
+          # bun-dap.
+          EXPECTED_ASSETS: 16
         run: |
           mkdir release-assets
           gh release download "$TAG" --dir release-assets \
-            --pattern 'aiman-*.tar.gz' --pattern 'aiman-*.zip'
-          (cd release-assets && sha256sum aiman-*.tar.gz aiman-*.zip) > checksums.txt
+            --pattern 'aiman-*.tar.gz' --pattern 'aiman-*.zip' --pattern 'bun-dap-*.js'
+          (cd release-assets && sha256sum aiman-*.tar.gz aiman-*.zip bun-dap-*.js) > checksums.txt
           count="$(wc -l < checksums.txt)"
           if [ "$count" -ne "$EXPECTED_ASSETS" ]; then
             echo "checksums.txt has $count assets, want $EXPECTED_ASSETS" >&2
