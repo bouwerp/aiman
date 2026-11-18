@@ -354,6 +354,22 @@ func TestManagerDirty(t *testing.T) {
 	}
 }
 
+// aiman's own untracked files (.aiman_todo.md, which a failing verdict's
+// to-do renders into the working directory) do not make the tree dirty.
+func TestManagerCleanIgnoresAimanFiles(t *testing.T) {
+	tm := newTestManager(t)
+	repo := testRepo(t, testHarnessFile)
+	writeTestFile(t, filepath.Join(repo, ".aiman_todo.md"), "- [ ] Harness: plain step 1\n")
+	writeTestFile(t, filepath.Join(repo, ".aiman_task.md"), "task\n")
+	run, err := tm.Up(context.Background(), UpRequest{Session: "s1", Repo: repo, Scenario: "plain"})
+	if err != nil {
+		t.Fatalf("up with only aiman files untracked: %v", err)
+	}
+	if run.Dirty {
+		t.Fatalf("run = %+v, want a clean run", run)
+	}
+}
+
 func TestManagerReviewSkipsCleanCheck(t *testing.T) {
 	tm := newTestManager(t)
 	repo := testRepo(t, testHarnessFile)

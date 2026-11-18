@@ -10,15 +10,21 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/bouwerp/aiman/internal/domain"
 )
 
 // maxDirtyPaths caps the paths a harness_dirty refusal names.
 const maxDirtyPaths = 20
 
 // dirtyPaths lists the tracked and untracked changes of repoDir, as
-// `git status --porcelain` names them, at most maxDirtyPaths.
+// `git status --porcelain` names them, at most maxDirtyPaths. Untracked
+// files aiman writes into a session's directory (.aiman_*, such as the
+// .aiman_todo.md a failing verdict's to-do renders) are not changes: the
+// run exports the commit, which never holds them.
 func dirtyPaths(ctx context.Context, repoDir string) ([]string, error) {
 	out, err := gitOut(ctx, repoDir, "status", "--porcelain", "--untracked-files=all", "-z")
 	if err != nil {
@@ -31,6 +37,9 @@ func dirtyPaths(ctx context.Context, repoDir string) ([]string, error) {
 		if len(e) < 4 {
 			continue
 		}
+		if e[:2] == "??" && isAimanFile(e[3:]) {
+			continue
+		}
 		paths = append(paths, e[3:])
 		if e[0] == 'R' || e[0] == 'C' {
 			i++ // the rename's source path follows
@@ -40,6 +49,13 @@ func dirtyPaths(ctx context.Context, repoDir string) ([]string, error) {
 		}
 	}
 	return paths, nil
+}
+
+// isAimanFile reports a path whose base name matches aiman's generated
+// session files.
+func isAimanFile(p string) bool {
+	ok, err := path.Match(domain.AimanGeneratedFileGlob, path.Base(p))
+	return err == nil && ok
 }
 
 // exportCommit writes the tree of sha into dst with git archive. Entries that
