@@ -210,7 +210,15 @@ func (t *AWSTap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		c.Unsigned = true
 	}
-	go t.clients.resolve(c.clientIP) //nolint:gosec // G118: the lookup fills a cache later calls read, so it outlives this request
+	if c.label != "" {
+		// The applier (plan or operator write) is a one-shot container whose
+		// address the app or a check may take next: the calls already made
+		// from the address keep the name they had, and the next caller there
+		// is looked up afresh.
+		t.store.nameFrom(c.clientIP, t.clients.forget(c.clientIP))
+	} else {
+		go t.clients.resolve(c.clientIP) //nolint:gosec // G118: the lookup fills a cache later calls read, so it outlives this request
+	}
 	t.store.add(c)
 
 	for _, p := range awsTapRefused {
@@ -376,7 +384,9 @@ func durationMS(d time.Duration) float64 { return float64(d.Microseconds()) / 10
 func (t *AWSTap) Calls(after int64, limit int) ([]AWSCall, AWSCallsInfo) {
 	calls, info := t.store.read(after, limit, t.now())
 	for i := range calls {
-		calls[i].Client = t.clients.name(calls[i].clientIP, calls[i].label)
+		if calls[i].Client == "" {
+			calls[i].Client = t.clients.name(calls[i].clientIP, calls[i].label)
+		}
 	}
 	info.Service = t.name
 	return calls, info
@@ -544,6 +554,19 @@ func (c *clientNames) resolve(addr string) {
 	c.mu.Unlock()
 }
 
+// forget drops addr's cached name, so the next caller there is looked up
+// afresh, and returns the name it dropped.
+func (c *clientNames) forget(addr string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur, ok := c.names[addr]
+	if !ok || cur.busy {
+		return ""
+	}
+	delete(c.names, addr)
+	return cur.name
+}
+
 // name is addr's client name: the label a User-Agent named (aiman for the
 // applier, aiman/operator for an operator write), else the service from the
 // lookup, else the address.
@@ -592,6 +615,24 @@ func (s *awsCallStore) add(c *AWSCall) {
 	if len(s.calls) > MaxAWSCalls {
 		s.calls[0] = nil
 		s.calls = s.calls[1:]
+	}
+}
+
+// nameFrom fixes the client of every stored call from addr that has none:
+// name, else the address.
+func (s *awsCallStore) nameFrom(addr, name string) {
+	if addr == "" {
+		return
+	}
+	if name == "" {
+		name = addr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.calls {
+		if c.clientIP == addr && c.Client == "" && c.label == "" {
+			c.Client = name
+		}
 	}
 }
 
