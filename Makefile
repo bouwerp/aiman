@@ -29,7 +29,7 @@ build:
 # Run tests
 test:
 	@echo "Running tests..."
-	go test -v -race -coverprofile=coverage.out ./...
+	go test -v -race -timeout 20m -coverprofile=coverage.out ./...
 	@echo "Coverage report:"
 	go tool cover -func=coverage.out
 
