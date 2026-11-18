@@ -19,22 +19,22 @@ import (
 	"github.com/bouwerp/aiman/internal/harness/awssig"
 )
 
-// fakeEmulator answers like the emulator would, after checking each
+// relayEmulator answers like the emulator would, after checking each
 // request's signature against the test key; it records what reached it.
-type fakeEmulator struct {
+type relayEmulator struct {
 	mu   sync.Mutex
 	seen []string
 	bad  []string
 	big  int
 }
 
-func (f *fakeEmulator) log() ([]string, []string) {
+func (f *relayEmulator) log() ([]string, []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.seen...), append([]string(nil), f.bad...)
 }
 
-func (f *fakeEmulator) start(t *testing.T) string {
+func (f *relayEmulator) start(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.2:0")
 	if err != nil {
@@ -236,7 +236,7 @@ func TestFilterAWSRequestRebuildsJSON(t *testing.T) {
 // emulator re-signed with the test key, writes and smuggling attempts
 // never reach it, and object bodies stop at the download cap.
 func TestAWSRelayReadOnly(t *testing.T) {
-	emu := &fakeEmulator{}
+	emu := &relayEmulator{}
 	target := emu.start(t)
 	e := newTestEdge(t)
 	if _, err := e.Add(RelaySpec{Name: "aws", Target: target, Kind: KindAWS}); err == nil {

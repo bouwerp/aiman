@@ -89,6 +89,8 @@ type harnessSetup struct {
 	vet bool
 	// debug adds app.debug {lang: go} to the file and a stub Go adapter.
 	debug bool
+	// aws adds the aws service "aws" and the scenario "aws" running it.
+	aws bool
 }
 
 // harnessServer is a server with sessions s1 (on a committed checkout holding
@@ -122,6 +124,9 @@ func harnessFixtureOf(t *testing.T, setup harnessSetup) *harnessFixture {
 		file = strings.Replace(file, "  run: serve\n", "  run: /out/app serve\n  debug: {lang: go}\n", 1)
 		file = strings.Replace(file, "  - id: plain\n", "  - id: plain\n    checks:\n      - {name: fake, run: python3 t.py, debug: {lang: python, wrap_env: [PYTHON_BIN]}}\n", 1)
 	}
+	if setup.aws {
+		file = strings.Replace(file, "scenarios:\n", "  aws:\n    aws: {kind: ministack, services: [s3, dynamodb]}\nscenarios:\n  - id: aws\n    services: [aws]\n", 1)
+	}
 	if err := os.WriteFile(filepath.Join(dir, harness.FilePath), []byte(file), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +146,9 @@ func harnessFixtureOf(t *testing.T, setup harnessSetup) *harnessFixture {
 	images := setup.images
 	if images == nil {
 		images = []string{"golang:1.25", "postgres:16", harness.EdgeImage}
+	}
+	if setup.aws {
+		images = append(images, harness.MiniStackImage)
 	}
 	d := &harnessDocker{images: map[string]string{}}
 	for i, ref := range images {

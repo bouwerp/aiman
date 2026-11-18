@@ -15,7 +15,8 @@ import (
 	"github.com/bouwerp/aiman/internal/harness"
 )
 
-const harnessAWSUsageText = `Usage: aiman harness aws resources [--run ID] [--json]
+const harnessAWSUsageText = `Usage: aiman harness aws calls [--after N] [--limit N] [--run ID] [--json]
+       aiman harness aws resources [--run ID] [--json]
        aiman harness aws s3 ls [<bucket>[/<prefix>]] [--limit N] [--token T] [--run ID] [--json]
        aiman harness aws s3 versions <bucket>/<key> [--run ID] [--json]
        aiman harness aws s3 cat <bucket>/<key> [--version V] [--offset N] [--run ID] [--json]
@@ -29,12 +30,15 @@ const harnessAWSUsageText = `Usage: aiman harness aws resources [--run ID] [--js
 Every command takes --session NAME (default $AIMAN_ID) or --run ID, and --service NAME when a run has more than one aws service.
 `
 
-// harnessAWSCommands are the `aiman harness aws` subcommands, keyed by
-// their first word.
-var harnessAWSCommands = map[string]func(h harnessIO, args []string) error{
-	"resources": harnessAWSResources,
-	"s3":        harnessAWSS3,
-	"ddb":       harnessAWSDDB,
+// harnessAWSCommands are the `aiman harness aws <name>` subcommands,
+// keyed by name and given the arguments after it; each piece registers its
+// own in init.
+var harnessAWSCommands = map[string]func(h harnessIO, args []string) error{}
+
+func init() {
+	harnessAWSCommands["resources"] = harnessAWSResources
+	harnessAWSCommands["s3"] = harnessAWSS3
+	harnessAWSCommands["ddb"] = harnessAWSDDB
 }
 
 // harnessAWSMain is `aiman harness aws …`: the reads of a run's aws service

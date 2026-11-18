@@ -512,7 +512,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 	case "harness.up", "harness.check", "harness.status", "harness.result", "harness.down", "harness.logs", "harness.verdict", "harness.list",
 		"harness.image_status", "harness.image_approve", "harness.debug", "harness.files", "harness.file",
 		"harness.evm_txs", "harness.evm_trace", "harness.capture", "harness.db",
-		"harness.aws":
+		"harness.aws", "harness.aws_calls":
 		return s.dispatchHarness(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)

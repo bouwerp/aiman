@@ -99,7 +99,7 @@ func TestAllowlistHarnessReadOnly(t *testing.T) {
 			t.Errorf("%s must be a device read method", m)
 		}
 	}
-	for _, m := range []string{"harness.up", "harness.check", "harness.down", "harness.logs", "harness.capture", "harness.verdict", "harness.image_approve", "harness.evm_txs", "harness.evm_trace", "harness.db", "harness.aws"} {
+	for _, m := range []string{"harness.up", "harness.check", "harness.down", "harness.logs", "harness.capture", "harness.verdict", "harness.image_approve", "harness.evm_txs", "harness.evm_trace", "harness.db", "harness.aws", "harness.aws_calls"} {
 		for _, destructive := range []bool{false, true} {
 			if deviceMayCall(m, destructive) {
 				t.Errorf("%s must stay off the device allowlist (destructive=%v)", m, destructive)
