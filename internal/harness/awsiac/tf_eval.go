@@ -20,13 +20,19 @@ import (
 
 // A reference to a planned resource's attribute travels through
 // expressions as a marker inside a string: two private-use runes around
-// an index into tfEval.refs. String functions, templates and jsonencode
+// the reference's text (<stack>.<logical id>.<attr>), a key of
+// tfEval.refs. String functions, templates and jsonencode
 // keep it intact, so a policy built with jsonencode still names the ARN;
 // tfEval.value turns the markers back into Value references.
 const (
 	tfRefOpen  = ''
 	tfRefClose = ''
 )
+
+// tfRefEscape keeps a marker's text free of what JSON encoding rewrites
+// (quotes, backslashes and, with HTML escaping, < > &), so a reference
+// inside jsonencode comes out unchanged; url.PathUnescape reads it back.
+var tfRefEscape = strings.NewReplacer("%", "%25", "\"", "%22", "\\", "%5C", "<", "%3C", ">", "%3E", "&", "%26")
 
 // tfUnresolved marks a value aiman cannot know statically, with the
 // reason; marks follow the value through functions and templates.
@@ -143,8 +149,7 @@ type tfEval struct {
 	loader   *tfLoader
 	errs     []error
 	visiting map[string]bool
-	refs     []AttrRef
-	refIdx   map[AttrRef]int
+	refs     map[string]AttrRef
 	insts    []*tfInst
 	noted    map[string]bool
 
@@ -157,7 +162,7 @@ type tfEval struct {
 }
 
 func newTFEval(ctx context.Context, src StackSource, p *Plan, l *tfLoader) *tfEval {
-	return &tfEval{ctx: ctx, src: src, p: p, loader: l, visiting: map[string]bool{}, refIdx: map[AttrRef]int{}, noted: map[string]bool{}, origin: map[string]*tfRes{}}
+	return &tfEval{ctx: ctx, src: src, p: p, loader: l, visiting: map[string]bool{}, refs: map[string]AttrRef{}, noted: map[string]bool{}, origin: map[string]*tfRes{}}
 }
 
 func (ev *tfEval) fail(err error) { ev.errs = append(ev.errs, err) }
@@ -179,13 +184,9 @@ func (ev *tfEval) warn(w Warning) {
 
 // marker is the in-string form of a reference.
 func (ev *tfEval) marker(r AttrRef) string {
-	i, ok := ev.refIdx[r]
-	if !ok {
-		i = len(ev.refs)
-		ev.refs = append(ev.refs, r)
-		ev.refIdx[r] = i
-	}
-	return string(tfRefOpen) + strconv.Itoa(i) + string(tfRefClose)
+	text := tfRefEscape.Replace(r.String())
+	ev.refs[text] = r
+	return string(tfRefOpen) + text + string(tfRefClose)
 }
 
 // split turns a string holding markers into a Value.
@@ -206,11 +207,10 @@ func (ev *tfEval) split(s string) (Value, error) {
 		if j < 0 {
 			return nil, errors.New("a function cut a resource reference apart")
 		}
-		n, err := strconv.Atoi(s[i+len(string(tfRefOpen)) : i+j])
-		if err != nil || n < 0 || n >= len(ev.refs) || strings.ContainsRune(s[:i], tfRefClose) {
+		r, ok := ev.refs[s[i+len(string(tfRefOpen)):i+j]]
+		if !ok || strings.ContainsRune(s[:i], tfRefClose) {
 			return nil, errors.New("a function cut a resource reference apart")
 		}
-		r := ev.refs[n]
 		out = Concat(out, tfLit(s[:i]), Value{{Ref: &r}})
 		s = s[i+j+len(string(tfRefClose)):]
 	}
@@ -816,7 +816,7 @@ func (in *tfInst) instanceValue(typ, addr string, k tfKey) cty.Value {
 	attrs := map[string]cty.Value{}
 	for name := range attrNames[SourceTerraform][kind] {
 		if name != "" {
-			attrs[name] = cty.StringVal(in.ev.marker(AttrRef{Stack: in.ev.src.Name, LogicalID: id, Attr: name}))
+			attrs[name] = in.ev.tfRefString(AttrRef{Stack: in.ev.src.Name, LogicalID: id, Attr: name})
 		}
 	}
 	return cty.ObjectVal(attrs)

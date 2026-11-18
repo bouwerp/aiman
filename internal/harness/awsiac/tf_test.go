@@ -295,8 +295,8 @@ resource "aws_sqs_queue" "keys" {
 	for _, want := range [][]string{
 		{"aws_sqs_queue.a", "fifo_queue", "data source", "skipped"},
 		{"aws_sqs_queue.stream_named", "name", "skipped"},
-		{"aws_sqs_queue.cut", "name", "cut a resource reference", "skipped"},
-		{"aws_sqs_queue.keys", "for_each keys refer to resource attributes", "skipped"},
+		{"aws_sqs_queue.cut", "name", "substr() reads st.aws_dynamodb_table.t.arn", "skipped"},
+		{"aws_sqs_queue.keys", "toset() reads st.aws_dynamodb_table.t.arn", "skipped"},
 	} {
 		if !hasWarning(p.Warnings, want...) {
 			t.Errorf("no warning %v in %v", want, p.Warnings)
