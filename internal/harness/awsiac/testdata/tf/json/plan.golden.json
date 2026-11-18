@@ -1,0 +1,97 @@
+{
+  "service": "aws",
+  "region": "eu-west-1",
+  "endpoint": "http://aws:4566",
+  "services": [
+    "s3",
+    "dynamodb",
+    "sqs",
+    "sns"
+  ],
+  "resources": [
+    {
+      "stack": "infra",
+      "logical_id": "aws_sqs_queue.jobs",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name": "jobs-ci",
+      "file": "json/main.tf.json",
+      "line": 10,
+      "queue": {
+        "attributes": {
+          "MessageRetentionPeriod": [
+            {
+              "lit": "3600"
+            }
+          ]
+        },
+        "tags": {
+          "stage": "ci"
+        }
+      },
+      "physical": "jobs-ci",
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:jobs-ci",
+        "name": "jobs-ci",
+        "ref": "http://aws:4566/000000000000/jobs-ci",
+        "url": "http://aws:4566/000000000000/jobs-ci"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_dynamodb_table.state",
+      "type": "aws_dynamodb_table",
+      "source": "terraform",
+      "kind": "table",
+      "name": "state-ci",
+      "file": "json/main.tf.json",
+      "line": 17,
+      "table": {
+        "hash_key": "LockID",
+        "attributes": [
+          {
+            "name": "LockID",
+            "type": "S"
+          }
+        ],
+        "billing_mode": "PAY_PER_REQUEST"
+      },
+      "physical": "state-ci",
+      "attrs": {
+        "arn": "arn:aws:dynamodb:eu-west-1:000000000000:table/state-ci",
+        "name": "state-ci",
+        "ref": "state-ci"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "stack": "infra",
+      "name": "jobs_arn",
+      "value": [
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "aws_sqs_queue.jobs",
+            "attr": "arn"
+          }
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "resource": "infra.aws_sqs_queue.jobs",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    },
+    {
+      "n": 2,
+      "resource": "infra.aws_dynamodb_table.state",
+      "service": "dynamodb",
+      "operation": "CreateTable"
+    }
+  ]
+}

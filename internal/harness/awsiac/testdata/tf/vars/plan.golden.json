@@ -1,0 +1,113 @@
+{
+  "service": "aws",
+  "region": "eu-west-1",
+  "endpoint": "http://aws:4566",
+  "services": [
+    "s3",
+    "dynamodb",
+    "sqs",
+    "sns"
+  ],
+  "resources": [
+    {
+      "stack": "infra",
+      "logical_id": "aws_sqs_queue.q[0]",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name_prefix": "q0-",
+      "file": "vars/variables.tf",
+      "line": 43,
+      "queue": {},
+      "physical": "q0-h6n4s6sralm2",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:q0-h6n4s6sralm2",
+        "name": "q0-h6n4s6sralm2",
+        "ref": "http://aws:4566/000000000000/q0-h6n4s6sralm2",
+        "url": "http://aws:4566/000000000000/q0-h6n4s6sralm2"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sqs_queue.q[1]",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name_prefix": "q1-",
+      "file": "vars/variables.tf",
+      "line": 43,
+      "queue": {},
+      "physical": "q1-4pjktkjgt4mw",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:q1-4pjktkjgt4mw",
+        "name": "q1-4pjktkjgt4mw",
+        "ref": "http://aws:4566/000000000000/q1-4pjktkjgt4mw",
+        "url": "http://aws:4566/000000000000/q1-4pjktkjgt4mw"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "stack": "infra",
+      "name": "all",
+      "value": [
+        {
+          "lit": "default tfvars tfvars.json auto-a auto-b var-file vars"
+        }
+      ]
+    },
+    {
+      "stack": "infra",
+      "name": "secret",
+      "value": [
+        {
+          "lit": "token-s3cr3t"
+        }
+      ],
+      "sensitive": true
+    },
+    {
+      "stack": "infra",
+      "name": "leaks",
+      "value": [
+        {
+          "lit": "s3cr3t"
+        }
+      ],
+      "sensitive": true
+    },
+    {
+      "stack": "infra",
+      "name": "math",
+      "value": [
+        {
+          "lit": "8"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "stack": "infra",
+      "resource": "var.undeclared",
+      "file": "vars/terraform.tfvars",
+      "message": "the variable is not declared; the value is ignored"
+    }
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "resource": "infra.aws_sqs_queue.q[0]",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    },
+    {
+      "n": 2,
+      "resource": "infra.aws_sqs_queue.q[1]",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    }
+  ]
+}

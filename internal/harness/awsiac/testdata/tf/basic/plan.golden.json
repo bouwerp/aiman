@@ -1,0 +1,471 @@
+{
+  "service": "aws",
+  "region": "eu-west-1",
+  "endpoint": "http://aws:4566",
+  "services": [
+    "s3",
+    "dynamodb",
+    "sqs",
+    "sns"
+  ],
+  "resources": [
+    {
+      "stack": "infra",
+      "logical_id": "aws_dynamodb_table.orders",
+      "type": "aws_dynamodb_table",
+      "source": "terraform",
+      "kind": "table",
+      "name": "orders-dev-table",
+      "file": "basic/main.tf",
+      "line": 23,
+      "table": {
+        "hash_key": "pk",
+        "range_key": "sk",
+        "attributes": [
+          {
+            "name": "pk",
+            "type": "S"
+          },
+          {
+            "name": "sk",
+            "type": "S"
+          },
+          {
+            "name": "status",
+            "type": "S"
+          }
+        ],
+        "billing_mode": "PAY_PER_REQUEST",
+        "gsis": [
+          {
+            "name": "by-status",
+            "hash_key": "status",
+            "projection": "ALL"
+          }
+        ],
+        "lsis": [
+          {
+            "name": "by-pk-status",
+            "hash_key": "",
+            "range_key": "status",
+            "projection": "KEYS_ONLY"
+          }
+        ],
+        "stream_view_type": "NEW_AND_OLD_IMAGES",
+        "ttl_attribute": "expires",
+        "tags": {
+          "env": "dev",
+          "team": "orders"
+        }
+      },
+      "physical": "orders-dev-table",
+      "attrs": {
+        "arn": "arn:aws:dynamodb:eu-west-1:000000000000:table/orders-dev-table",
+        "name": "orders-dev-table",
+        "ref": "orders-dev-table"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sns_topic.orders",
+      "type": "aws_sns_topic",
+      "source": "terraform",
+      "kind": "topic",
+      "name": "orders-dev-topic",
+      "file": "basic/main.tf",
+      "line": 74,
+      "topic": {},
+      "physical": "orders-dev-topic",
+      "attrs": {
+        "arn": "arn:aws:sns:eu-west-1:000000000000:orders-dev-topic",
+        "name": "orders-dev-topic",
+        "ref": "arn:aws:sns:eu-west-1:000000000000:orders-dev-topic"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_s3_bucket.uploads",
+      "type": "aws_s3_bucket",
+      "source": "terraform",
+      "kind": "bucket",
+      "name": "orders-dev-uploads",
+      "file": "basic/main.tf",
+      "line": 91,
+      "bucket": {
+        "versioning": "Enabled",
+        "notifications": [
+          {
+            "destination": "queue",
+            "arn": [
+              {
+                "ref": {
+                  "stack": "infra",
+                  "logical_id": "module.events.aws_sqs_queue.main",
+                  "attr": "arn"
+                }
+              }
+            ],
+            "events": [
+              "s3:ObjectCreated:*"
+            ],
+            "prefix": "uploads/"
+          }
+        ],
+        "tags": {
+          "env": "dev",
+          "team": "orders"
+        }
+      },
+      "physical": "orders-dev-uploads",
+      "attrs": {
+        "arn": "arn:aws:s3:::orders-dev-uploads",
+        "domain_name": "orders-dev-uploads.s3.amazonaws.com",
+        "name": "orders-dev-uploads",
+        "ref": "orders-dev-uploads",
+        "regional_domain_name": "orders-dev-uploads.s3.eu-west-1.amazonaws.com"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "module.events.aws_sqs_queue.dlq",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name": "orders-dev-events-dlq",
+      "file": "basic/modules/queue/main.tf",
+      "line": 15,
+      "queue": {},
+      "physical": "orders-dev-events-dlq",
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:orders-dev-events-dlq",
+        "name": "orders-dev-events-dlq",
+        "ref": "http://aws:4566/000000000000/orders-dev-events-dlq",
+        "url": "http://aws:4566/000000000000/orders-dev-events-dlq"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "module.events.aws_sqs_queue.main",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name": "orders-dev-events",
+      "file": "basic/modules/queue/main.tf",
+      "line": 19,
+      "queue": {
+        "attributes": {
+          "RedrivePolicy": [
+            {
+              "lit": "{\"deadLetterTargetArn\":\""
+            },
+            {
+              "ref": {
+                "stack": "infra",
+                "logical_id": "module.events.aws_sqs_queue.dlq",
+                "attr": "arn"
+              }
+            },
+            {
+              "lit": "\",\"maxReceiveCount\":3}"
+            }
+          ],
+          "VisibilityTimeout": [
+            {
+              "lit": "60"
+            }
+          ]
+        },
+        "policy": [
+          {
+            "lit": "{\"Statement\":[{\"Action\":\"sqs:SendMessage\",\"Effect\":\"Allow\",\"Principal\":\"*\",\"Resource\":\""
+          },
+          {
+            "ref": {
+              "stack": "infra",
+              "logical_id": "module.events.aws_sqs_queue.main",
+              "attr": "arn"
+            }
+          },
+          {
+            "lit": "\"}],\"Version\":\"2012-10-17\"}"
+          }
+        ]
+      },
+      "physical": "orders-dev-events",
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:orders-dev-events",
+        "name": "orders-dev-events",
+        "ref": "http://aws:4566/000000000000/orders-dev-events",
+        "url": "http://aws:4566/000000000000/orders-dev-events"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sns_topic_subscription.events",
+      "type": "aws_sns_topic_subscription",
+      "source": "terraform",
+      "kind": "subscription",
+      "file": "basic/main.tf",
+      "line": 78,
+      "subscription": {
+        "topic": [
+          {
+            "ref": {
+              "stack": "infra",
+              "logical_id": "aws_sns_topic.orders",
+              "attr": "arn"
+            }
+          }
+        ],
+        "protocol": "sqs",
+        "endpoint": [
+          {
+            "ref": {
+              "stack": "infra",
+              "logical_id": "module.events.aws_sqs_queue.main",
+              "attr": "arn"
+            }
+          }
+        ],
+        "attributes": {
+          "RawMessageDelivery": [
+            {
+              "lit": "true"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "stack": "infra",
+      "name": "table_name",
+      "value": [
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "aws_dynamodb_table.orders",
+            "attr": "name"
+          }
+        }
+      ]
+    },
+    {
+      "stack": "infra",
+      "name": "stream_arn",
+      "value": [
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "aws_dynamodb_table.orders",
+            "attr": "stream_arn"
+          }
+        }
+      ]
+    },
+    {
+      "stack": "infra",
+      "name": "queue_url",
+      "value": [
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "module.events.aws_sqs_queue.main",
+            "attr": "url"
+          }
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "stack": "infra",
+      "logical_id": "aws_lambda_function.worker",
+      "vars": [
+        {
+          "name": "BUCKET",
+          "value": [
+            {
+              "ref": {
+                "stack": "infra",
+                "logical_id": "aws_s3_bucket.uploads",
+                "attr": "bucket"
+              }
+            }
+          ]
+        },
+        {
+          "name": "QUEUE_URL",
+          "value": [
+            {
+              "ref": {
+                "stack": "infra",
+                "logical_id": "module.events.aws_sqs_queue.main",
+                "attr": "url"
+              }
+            }
+          ]
+        },
+        {
+          "name": "STAGE",
+          "value": [
+            {
+              "lit": "DEV"
+            }
+          ]
+        },
+        {
+          "name": "TABLE",
+          "value": [
+            {
+              "ref": {
+                "stack": "infra",
+                "logical_id": "aws_dynamodb_table.orders",
+                "attr": "name"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": [
+    {
+      "stack": "infra",
+      "resource": "aws_s3_bucket_notification.uploads",
+      "attribute": "lambda_function",
+      "file": "basic/main.tf",
+      "line": 103,
+      "message": "no Lambda runs in the harness; the lambda_function notifications are left out"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_lambda_function.worker",
+      "attribute": "environment.variables.ACCOUNT",
+      "file": "basic/main.tf",
+      "line": 127,
+      "message": "data.aws_caller_identity.me is a data source, which aiman does not read; the variable is left out"
+    },
+    {
+      "stack": "infra",
+      "resource": "outputs.account",
+      "file": "basic/main.tf",
+      "line": 149,
+      "message": "data.aws_caller_identity.me is a data source, which aiman does not read; the output is left out"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_sns_topic_subscription.mail",
+      "attribute": "Protocol",
+      "file": "basic/main.tf",
+      "line": 85,
+      "message": "protocol \"email\" is not emulated; only sqs subscriptions are; the resource is skipped"
+    }
+  ],
+  "notes": [
+    {
+      "stack": "infra",
+      "resource": "module.events",
+      "file": "basic/modules/queue",
+      "message": "validation blocks are not checked: var.max_receive_count"
+    },
+    {
+      "stack": "infra",
+      "resource": "data.aws_caller_identity",
+      "message": "data sources are not read; references to them are unresolvable"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_dynamodb_table.orders",
+      "file": "basic/main.tf",
+      "line": 23,
+      "message": "not emulated, dropped: point_in_time_recovery"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_iam_role",
+      "message": "not emulated: aws_iam_role"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_lambda_function",
+      "message": "not emulated: aws_lambda_function (its environment is read for function_env)"
+    },
+    {
+      "stack": "infra",
+      "resource": "module.events.aws_sqs_queue.main",
+      "file": "basic/modules/queue/main.tf",
+      "line": 19,
+      "message": "not emulated, dropped: kms_master_key_id"
+    }
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "resource": "infra.aws_sns_topic.orders",
+      "service": "sns",
+      "operation": "CreateTopic"
+    },
+    {
+      "n": 2,
+      "resource": "infra.module.events.aws_sqs_queue.dlq",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    },
+    {
+      "n": 3,
+      "resource": "infra.module.events.aws_sqs_queue.main",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    },
+    {
+      "n": 4,
+      "resource": "infra.module.events.aws_sqs_queue.main",
+      "service": "sqs",
+      "operation": "SetQueueAttributes"
+    },
+    {
+      "n": 5,
+      "resource": "infra.aws_sns_topic_subscription.events",
+      "service": "sns",
+      "operation": "Subscribe"
+    },
+    {
+      "n": 6,
+      "resource": "infra.aws_dynamodb_table.orders",
+      "service": "dynamodb",
+      "operation": "CreateTable"
+    },
+    {
+      "n": 7,
+      "resource": "infra.aws_dynamodb_table.orders",
+      "service": "dynamodb",
+      "operation": "UpdateTimeToLive"
+    },
+    {
+      "n": 8,
+      "resource": "infra.aws_s3_bucket.uploads",
+      "service": "s3",
+      "operation": "CreateBucket"
+    },
+    {
+      "n": 9,
+      "resource": "infra.aws_s3_bucket.uploads",
+      "service": "s3",
+      "operation": "PutBucketTagging"
+    },
+    {
+      "n": 10,
+      "resource": "infra.aws_s3_bucket.uploads",
+      "service": "s3",
+      "operation": "PutBucketVersioning"
+    },
+    {
+      "n": 11,
+      "resource": "infra.aws_s3_bucket.uploads",
+      "service": "s3",
+      "operation": "PutBucketNotificationConfiguration"
+    }
+  ]
+}
