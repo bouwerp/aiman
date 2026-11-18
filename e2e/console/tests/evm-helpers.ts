@@ -7,6 +7,9 @@ import { type APIRequestContext, type Page, expect } from "@playwright/test";
 export const evmURL = process.env.E2E_CONSOLE_URL;
 export const otherURL = process.env.E2E_OTHER_CONSOLE_URL;
 export const runID = process.env.E2E_RUN;
+// E2E_EVM2_CONSOLE_URL is a console whose run uses the evm2 fixture: nodes
+// alpha (chain 1001) and beta (chain 1002).
+export const evm2URL = process.env.E2E_EVM2_CONSOLE_URL;
 
 // pause paces the recording for a human watching it.
 export const pause = (page: Page, ms = 1500) => page.waitForTimeout(ms);
@@ -45,7 +48,15 @@ export async function consoleAPI(request: APIRequestContext, url: string, path: 
 // reaches the chain service with full JSON-RPC, while the published relay is
 // read-only.
 export function sendFromApp(run: string, tx: object): string {
-  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_sendTransaction", params: [tx] });
+  return rpcFromApp(run, "eth_sendTransaction", [tx]);
+}
+
+export const DEV0 = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+
+// rpcFromApp makes one JSON-RPC call to the chain service from inside the
+// run (anvil_mine included, which the relay refuses).
+export function rpcFromApp(run: string, method: string, params: unknown[]): string {
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
   return execFileSync("docker", [
     "exec", `harness-${run}-app-1`, "wget", "-Y", "off", "-q", "-O-",
     "--header", "Content-Type: application/json", "--post-data", body, "http://chain:8545/",

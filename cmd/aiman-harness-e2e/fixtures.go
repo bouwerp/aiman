@@ -60,6 +60,9 @@ var fixtures = map[string]fixture{
 	"evm": {scenario: "chain", images: []string{plainAppImage, anvilImage}, write: files(map[string]string{
 		".aiman/harness.yaml": evmFile(),
 	})},
+	"evm2": {scenario: "chains", images: []string{plainAppImage, anvilImage}, write: files(map[string]string{
+		".aiman/harness.yaml": evm2File(),
+	})},
 	"net": {scenario: "refund", images: []string{goImage}, write: files(map[string]string{
 		".aiman/harness.yaml":  netFile,
 		"go.mod":               "module fixture\n\ngo 1.26\n",
@@ -272,23 +275,51 @@ const (
 // it, then calls the second, as the EVM Docker test does: three
 // transactions, the last reverted through a nested call.
 func evmFile() string {
-	reverter, caller := evmContracts()
-	from := `"from":"` + anvilDev0 + `"`
 	var b strings.Builder
 	b.WriteString("version: 1\napp:\n  run: exec sleep 86400\nservices:\n  chain:\n    image: " + anvilImage +
 		"\n    evm: {kind: anvil}\nscenarios:\n  - id: chain\n    title: Anvil with a reverted call\n    services: [chain]\n    setup:\n")
-	for _, tx := range []string{
-		`{` + from + `,"data":"` + reverter + `"}`,
-		`{` + from + `,"data":"` + caller + `"}`,
-		`{` + from + `,"to":"` + anvilSecond + `","gas":"0x100000","data":"0x12345678"}`,
-	} {
-		// busybox wget ignores NO_PROXY; -Y off keeps the call off the proxy.
-		b.WriteString("      - run: |\n          wget -Y off -q -O- --header 'Content-Type: application/json' --post-data '" +
-			`{"jsonrpc":"2.0","id":1,"method":"eth_sendTransaction","params":[` + tx + `]}` + "' http://chain:8545/ && echo\n")
-	}
+	writeEVMSends(&b, "chain", revertingTxs())
 	b.WriteString("    steps:\n      - do: Open the EVM tab\n        expect: Three transactions, the newest reverted\n" +
 		"      - do: Open the reverted transaction\n        expect: The call tree shows Error(string) nope\n")
 	return b.String()
+}
+
+// evm2File runs two anvil nodes with their own chain ids: alpha gets the
+// three transactions of evmFile, beta two plain transfers.
+func evm2File() string {
+	var b strings.Builder
+	b.WriteString("version: 1\napp:\n  run: exec sleep 86400\nservices:\n" +
+		"  alpha:\n    image: " + anvilImage + "\n    evm: {kind: anvil, chain_id: 1001}\n    limits: {memory: 1g}\n" +
+		"  beta:\n    image: " + anvilImage + "\n    evm: {kind: anvil, chain_id: 1002}\n    limits: {memory: 1g}\n" +
+		"scenarios:\n  - id: chains\n    title: Two anvil nodes\n    services: [alpha, beta]\n    setup:\n")
+	writeEVMSends(&b, "alpha", revertingTxs())
+	from := `"from":"` + anvilDev0 + `"`
+	writeEVMSends(&b, "beta", []string{
+		`{` + from + `,"to":"0x000000000000000000000000000000000000bEEF","value":"0x1"}`,
+		`{` + from + `,"to":"0x000000000000000000000000000000000000bEEF","value":"0x2"}`,
+	})
+	b.WriteString("    steps:\n      - do: Pick each node in the EVM tab\n        expect: alpha has three transactions, beta two\n")
+	return b.String()
+}
+
+// revertingTxs deploys the reverter and its caller, then calls the caller.
+func revertingTxs() []string {
+	reverter, caller := evmContracts()
+	from := `"from":"` + anvilDev0 + `"`
+	return []string{
+		`{` + from + `,"data":"` + reverter + `"}`,
+		`{` + from + `,"data":"` + caller + `"}`,
+		`{` + from + `,"to":"` + anvilSecond + `","gas":"0x100000","data":"0x12345678"}`,
+	}
+}
+
+// writeEVMSends adds one setup step per transaction, sent to service.
+func writeEVMSends(b *strings.Builder, service string, txs []string) {
+	for _, tx := range txs {
+		// busybox wget ignores NO_PROXY; -Y off keeps the call off the proxy.
+		b.WriteString("      - run: |\n          wget -Y off -q -O- --header 'Content-Type: application/json' --post-data '" +
+			`{"jsonrpc":"2.0","id":1,"method":"eth_sendTransaction","params":[` + tx + `]}` + "' http://" + service + ":8545/ && echo\n")
+	}
 }
 
 func evmContracts() (reverter, caller string) {
