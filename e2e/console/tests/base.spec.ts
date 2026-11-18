@@ -51,11 +51,14 @@ test("base console: header, steps, verdicts, checks, logs, down and up", async (
   await scen.locator("button.v-fail").click();
   await expect(page.locator("#notice")).toContainText("Recorded fail for the scenario");
   await expect(page.locator("#scenario-row button.v-fail")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#scenario-recorded")).toContainText("step 2 broken");
   await pause(page);
   await page.locator("#scenario-row").getByRole("textbox").fill("rechecked, fine");
   await page.locator("#scenario-row button.v-pass").click();
   await expect(page.locator("#notice")).toContainText("Recorded pass for the scenario");
   await expect(page.locator("#scenario-row button.v-pass")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#scenario-recorded .badge")).toHaveText("pass");
+  await expect(page.locator("#scenario-recorded")).toContainText("rechecked, fine");
   await page.screenshot({ path: test.info().outputPath("03-scenario-verdict.png") });
   await pause(page);
 
