@@ -169,7 +169,13 @@ func NewAWSTap(target string, opts ...AWSTapOption) (*AWSTap, error) {
 			pr.Out.Host = pr.In.Host
 		},
 		FlushInterval: -1,
-		ErrorLog:      log.New(io.Discard, "", 0),
+		ModifyResponse: func(resp *http.Response) error {
+			if rec, ok := resp.Request.Context().Value(awsRecorderKey{}).(*awsRecorder); ok {
+				resp.Body = &answerBody{ReadCloser: resp.Body, rec: rec}
+			}
+			return nil
+		},
+		ErrorLog: log.New(io.Discard, "", 0),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if rec, ok := w.(*awsRecorder); ok {
 				rec.err = err
@@ -206,11 +212,12 @@ func (t *AWSTap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.label != "" {
 		// The applier (plan or operator write) is a one-shot container whose
-		// address the app or a check may take next: the calls already made from the address keep
-		// the name they had, and the next caller there is looked up afresh.
+		// address the app or a check may take next: the calls already made
+		// from the address keep the name they had, and the next caller there
+		// is looked up afresh.
 		t.store.nameFrom(c.clientIP, t.clients.forget(c.clientIP))
 	} else {
-		go t.clients.resolve(c.clientIP)
+		go t.clients.resolve(c.clientIP) //nolint:gosec // G118: the lookup fills a cache later calls read, so it outlives this request
 	}
 	t.store.add(c)
 
@@ -230,14 +237,45 @@ func (t *AWSTap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		peek = &peekBody{rc: r.Body, keep: cl.protocol == AWSProtocolJSON || cl.protocol == AWSProtocolQuery}
 		r.Body = peek
 	}
+	// The transport sends the last byte of the body before it reads the
+	// body's EOF, so the emulator can answer first. By default the server
+	// drains and closes the body when the answer's headers go out; the
+	// transport's read of the closed body then fails, it closes the emulator
+	// connection under the answer, and the caller reads an unexpected EOF.
+	// Full duplex leaves the body to the transport.
+	_ = http.NewResponseController(w).EnableFullDuplex()
 	rec := &awsRecorder{ResponseWriter: w}
-	t.rp.ServeHTTP(rec, r)
+	defer func() {
+		// An answer cut off while it streams aborts the handler; the call
+		// still ends in the log, with what cut it off.
+		v := recover()
+		t.finish(c, r, cl, peek, rec, start, v != nil)
+		if v != nil {
+			panic(v)
+		}
+	}()
+	t.rp.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), awsRecorderKey{}, rec)))
+}
 
-	params, cl := t.params(r, cl, peek)
-	text, cut, n := finishParams(params)
+// finish records the call once the handler is done; aborted is a handler
+// that stopped while it streamed the answer.
+func (t *AWSTap) finish(c *AWSCall, r *http.Request, cl awsClassified, peek *peekBody, rec *awsRecorder, start time.Time, aborted bool) {
+	var body []byte
 	var reqBytes int64
+	over := false
 	if peek != nil {
-		reqBytes = peek.n
+		body, reqBytes, over = peek.snapshot()
+	}
+	params, cl := t.params(r, cl, body, peek != nil && !over)
+	text, cut, n := finishParams(params)
+	errText := ""
+	switch {
+	case rec.err != nil:
+		errText = rec.err.Error()
+	case aborted && rec.copyErr != nil:
+		errText = "answer cut off: " + rec.copyErr.Error()
+	case aborted:
+		errText = "answer cut off"
 	}
 	t.store.update(c, func(c *AWSCall) {
 		c.Pending = false
@@ -252,8 +290,8 @@ func (t *AWSTap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if c.Status >= 300 {
 			c.ErrorCode = awsErrorCode(rec.Header(), rec.head.Bytes())
 		}
-		if rec.err != nil {
-			c.Error, _ = redact.Line(rec.err.Error(), nil)
+		if errText != "" {
+			c.Error, _ = redact.Line(errText, nil)
 		}
 		c.Redacted += redactResource(&c.Resource)
 	})
@@ -263,13 +301,16 @@ func (t *AWSTap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // for JSON and query protocol, the query and some headers for S3) and
 // completes the classification with what the body names: the resource and,
 // for a query protocol POST, the action and service.
-func (t *AWSTap) params(r *http.Request, cl awsClassified, peek *peekBody) (map[string]any, awsClassified) {
+//
+// body is the kept head of the request body; kept is false when there was
+// none or it was over awsBodyPeek.
+func (t *AWSTap) params(r *http.Request, cl awsClassified, body []byte, kept bool) (map[string]any, awsClassified) {
 	switch cl.protocol {
 	case AWSProtocolJSON:
-		if peek == nil || peek.over {
+		if !kept {
 			return map[string]any{"body": "not read: over 64 KiB"}, cl
 		}
-		m, ok := jsonParams(peek.buf.Bytes())
+		m, ok := jsonParams(body)
 		if !ok {
 			return nil, cl
 		}
@@ -278,8 +319,8 @@ func (t *AWSTap) params(r *http.Request, cl awsClassified, peek *peekBody) (map[
 		return typed, cl
 	case AWSProtocolQuery:
 		q := r.URL.Query()
-		if peek != nil && !peek.over {
-			if form, err := url.ParseQuery(peek.buf.String()); err == nil {
+		if kept {
+			if form, err := url.ParseQuery(string(body)); err == nil {
 				for k, vs := range form {
 					q[k] = append(q[k], vs...)
 				}
@@ -364,17 +405,31 @@ func (t *AWSTap) Serve(ln net.Listener) error {
 func (t *AWSTap) Close() error { return t.srv.Close() }
 
 // peekBody counts a request body as it streams to the emulator and keeps
-// its first awsBodyPeek bytes when keep is set.
+// its first awsBodyPeek bytes when keep is set. The transport may still
+// read it for EOF after the answer is done, so the handler reads it through
+// snapshot.
 type peekBody struct {
 	rc   io.ReadCloser
 	keep bool
+
+	mu   sync.Mutex
 	buf  bytes.Buffer
 	n    int64
 	over bool
 }
 
+// snapshot copies what the body kept, its size so far, and whether it was
+// over awsBodyPeek.
+func (p *peekBody) snapshot() ([]byte, int64, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return bytes.Clone(p.buf.Bytes()), p.n, p.over
+}
+
 func (p *peekBody) Read(b []byte) (int, error) {
 	n, err := p.rc.Read(b)
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.n += int64(n)
 	if p.keep && n > 0 && !p.over {
 		if p.buf.Len()+n > awsBodyPeek {
@@ -395,7 +450,27 @@ type awsRecorder struct {
 	status int
 	n      int64
 	head   bytes.Buffer
-	err    error
+	// err is a transport failure before any answer; copyErr is a read error
+	// of the emulator's answer body.
+	err     error
+	copyErr error
+}
+
+// awsRecorderKey carries a call's recorder to ModifyResponse.
+type awsRecorderKey struct{}
+
+// answerBody keeps the emulator answer's read error for the call log.
+type answerBody struct {
+	io.ReadCloser
+	rec *awsRecorder
+}
+
+func (b *answerBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && err != io.EOF && b.rec.copyErr == nil {
+		b.rec.copyErr = err
+	}
+	return n, err
 }
 
 // WriteHeader keeps the first final status: an informational answer such
