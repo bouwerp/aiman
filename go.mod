@@ -11,8 +11,11 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/creack/pty/v2 v2.0.1
 	github.com/google/uuid v1.6.0
+	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/zclconf/go-cty v1.19.0
 	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.46.1
@@ -21,9 +24,14 @@ require (
 )
 
 require (
+	github.com/agext/levenshtein v1.2.1 // indirect
+	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
+	github.com/apparentlymart/go-textseg/v17 v17.0.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.9.2 // indirect
+	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
+	golang.org/x/mod v0.37.0 // indirect
+	golang.org/x/tools v0.47.0 // indirect
 )
 
 require (

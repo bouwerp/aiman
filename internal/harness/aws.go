@@ -95,6 +95,7 @@ var (
 	tfTypeRe       = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	tfNameRe       = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 	tfIndexRe      = regexp.MustCompile(`^\[(\d+|"[^"\\]*")\]$`)
+	tfLambdaRe     = regexp.MustCompile(`(^|\.)aws_lambda_function\.[A-Za-z_][A-Za-z0-9_-]*(\[[^]]*\])?$`)
 )
 
 // AWS declares a service as an AWS emulator. Kind is ministack. Services
@@ -414,8 +415,8 @@ func validateAWS(at string, s Service) []string {
 		case r.Output != "" || r.Attr != "":
 			add("aws.function_env[%d] %q must be <stack>.<logical id> of a function", i, fe)
 		default:
-			if st, _ := a.Stack(r.Stack); st.IsTerraform() {
-				add("aws.function_env[%d] %q: function_env reads CloudFormation functions only", i, fe)
+			if st, _ := a.Stack(r.Stack); st.IsTerraform() && !tfLambdaRe.MatchString(r.LogicalID) {
+				add("aws.function_env[%d] %q: a terraform function_env names an aws_lambda_function", i, fe)
 			}
 		}
 	}

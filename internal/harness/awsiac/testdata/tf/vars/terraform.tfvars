@@ -1,0 +1,8 @@
+from_tfvars      = "tfvars"
+from_tfvars_json = "tfvars"
+from_auto_a      = "tfvars"
+from_auto_b      = "tfvars"
+from_var_file    = "tfvars"
+from_vars        = "tfvars"
+secret           = "s3cr3t"
+undeclared       = "ignored"
