@@ -793,6 +793,7 @@ components:
             - harness.db
             - harness.capture
             - harness.aws_plan
+            - harness.aws_calls
             - design.publish
             - review.reveal
             - review.post

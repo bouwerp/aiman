@@ -145,6 +145,8 @@ func (s *Server) dispatchHarness(ctx context.Context, req Request) Response {
 		return s.handleHarnessCapture(ctx, req, p)
 	case "harness.aws_plan":
 		return s.handleHarnessAWSPlan(ctx, req, p)
+	case "harness.aws_calls":
+		return s.handleHarnessAWSCalls(ctx, req, p)
 	default:
 		return s.handleHarnessRunCall(ctx, req, p)
 	}

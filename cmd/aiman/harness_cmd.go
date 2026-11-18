@@ -111,6 +111,8 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness logs <service> [--lines N] [--run ID] [--json]
        aiman harness db <service> tables|rows <table>|query <sql> [--limit N] [--write] [--run ID] [--json]   (--write: operator)
        aiman harness capture [--after N] [--limit N] [--run ID] [--json]   (HTTP calls through the edge proxy)
+       aiman harness aws calls [--after N] [--limit N] [--run ID] [--json]   (AWS API calls through the edge tap)
+       aiman harness aws plan [<scenario>] [--json]   (the aws plan from the commit, no run)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
        aiman harness down [--run ID] [--json]

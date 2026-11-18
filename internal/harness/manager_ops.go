@@ -104,6 +104,7 @@ func (m *Manager) composeDown(ctx context.Context, r Run) {
 	}
 	m.mu.Unlock()
 	m.saveCapture(ctx, r, token)
+	m.saveAWSCalls(ctx, r, token)
 	logDir := filepath.Join(dir, "logs", "services")
 	if err := os.MkdirAll(logDir, 0o700); err == nil {
 		for _, svc := range r.containers() {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/harness/awsiac"
+	"github.com/bouwerp/aiman/internal/harness/edge"
 	"gopkg.in/yaml.v3"
 )
 
@@ -371,5 +372,13 @@ func TestAWSComposeApplier(t *testing.T) {
 	}
 	if _, err := Parse([]byte(strings.Replace(awsPlanFile, "services:\n  aws:", "services:\n  x-emu-apply:\n    image: postgres:16\n  aws:", 1))); err == nil {
 		t.Fatal("a service named like an applier was accepted")
+	}
+}
+
+// TestAWSApplierAgent keeps the applier's User-Agent one the tap names
+// client aiman.
+func TestAWSApplierAgent(t *testing.T) {
+	if !strings.Contains(awsiac.UserAgent, edge.AWSApplierAgent) {
+		t.Fatalf("%q does not hold %q", awsiac.UserAgent, edge.AWSApplierAgent)
 	}
 }
