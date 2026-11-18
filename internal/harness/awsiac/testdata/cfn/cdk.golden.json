@@ -1,0 +1,208 @@
+{
+  "resources": [
+    {
+      "stack": "app",
+      "logical_id": "OrdersTable315BB997",
+      "type": "AWS::DynamoDB::Table",
+      "source": "cloudformation",
+      "kind": "table",
+      "file": "OrdersStack.template.json",
+      "line": 3,
+      "table": {
+        "hash_key": "orderId",
+        "attributes": [
+          {
+            "name": "orderId",
+            "type": "S"
+          }
+        ],
+        "billing_mode": "PAY_PER_REQUEST",
+        "stream_view_type": "NEW_IMAGE"
+      },
+      "physical": "app-OrdersTable315BB997-mw4jeeg33ldd",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:dynamodb:eu-west-1:000000000000:table/app-OrdersTable315BB997-mw4jeeg33ldd",
+        "name": "app-OrdersTable315BB997-mw4jeeg33ldd",
+        "ref": "app-OrdersTable315BB997-mw4jeeg33ldd"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "EventsQueue9A6B3C2D",
+      "type": "AWS::SQS::Queue",
+      "source": "cloudformation",
+      "kind": "queue",
+      "file": "OrdersStack.template.json",
+      "line": 29,
+      "queue": {
+        "attributes": {
+          "VisibilityTimeout": [
+            {
+              "lit": "120"
+            }
+          ]
+        },
+        "policy": [
+          {
+            "lit": "{\"Statement\":[{\"Action\":[\"sqs:GetQueueAttributes\",\"sqs:GetQueueUrl\",\"sqs:SendMessage\"],\"Condition\":{\"ArnLike\":{\"aws:SourceArn\":\""
+          },
+          {
+            "ref": {
+              "stack": "app",
+              "logical_id": "UploadsBucket5E5E9B64",
+              "attr": "Arn"
+            }
+          },
+          {
+            "lit": "\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"s3.amazonaws.com\"},\"Resource\":\""
+          },
+          {
+            "ref": {
+              "stack": "app",
+              "logical_id": "EventsQueue9A6B3C2D",
+              "attr": "Arn"
+            }
+          },
+          {
+            "lit": "\"}],\"Version\":\"2012-10-17\"}"
+          }
+        ]
+      },
+      "physical": "app-EventsQueue9A6B3C2D-6i3pyibtzl32",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:app-EventsQueue9A6B3C2D-6i3pyibtzl32",
+        "name": "app-EventsQueue9A6B3C2D-6i3pyibtzl32",
+        "ref": "http://aws:4566/000000000000/app-EventsQueue9A6B3C2D-6i3pyibtzl32",
+        "url": "http://aws:4566/000000000000/app-EventsQueue9A6B3C2D-6i3pyibtzl32"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "UploadsBucket5E5E9B64",
+      "type": "AWS::S3::Bucket",
+      "source": "cloudformation",
+      "kind": "bucket",
+      "file": "OrdersStack.template.json",
+      "line": 85,
+      "bucket": {
+        "versioning": "Enabled",
+        "notifications": [
+          {
+            "destination": "queue",
+            "arn": [
+              {
+                "ref": {
+                  "stack": "app",
+                  "logical_id": "EventsQueue9A6B3C2D",
+                  "attr": "Arn"
+                }
+              }
+            ],
+            "events": [
+              "s3:ObjectCreated:*"
+            ],
+            "suffix": ".csv"
+          }
+        ],
+        "tags": {
+          "aws-cdk:auto-delete-objects": "true"
+        }
+      },
+      "physical": "app-uploadsbucket5e5e9b64-n4q5ahh5uhvd",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:s3:::app-uploadsbucket5e5e9b64-n4q5ahh5uhvd",
+        "domain_name": "app-uploadsbucket5e5e9b64-n4q5ahh5uhvd.s3.amazonaws.com",
+        "name": "app-uploadsbucket5e5e9b64-n4q5ahh5uhvd",
+        "ref": "app-uploadsbucket5e5e9b64-n4q5ahh5uhvd",
+        "regional_domain_name": "app-uploadsbucket5e5e9b64-n4q5ahh5uhvd.s3.eu-west-1.amazonaws.com"
+      }
+    }
+  ],
+  "outputs": {
+    "QueueUrl": "http://aws:4566/000000000000/app-EventsQueue9A6B3C2D-6i3pyibtzl32",
+    "TableName": "app-OrdersTable315BB997-mw4jeeg33ldd"
+  },
+  "functions": [
+    {
+      "stack": "app",
+      "logical_id": "Handler886CB40B",
+      "file": "OrdersStack.template.json",
+      "vars": [
+        {
+          "name": "TABLE_NAME",
+          "value": [
+            {
+              "ref": {
+                "stack": "app",
+                "logical_id": "OrdersTable315BB997"
+              }
+            }
+          ],
+          "line": 194
+        },
+        {
+          "name": "QUEUE_URL",
+          "value": [
+            {
+              "ref": {
+                "stack": "app",
+                "logical_id": "EventsQueue9A6B3C2D"
+              }
+            }
+          ],
+          "line": 197
+        },
+        {
+          "name": "BUCKET_ARN",
+          "value": [
+            {
+              "ref": {
+                "stack": "app",
+                "logical_id": "UploadsBucket5E5E9B64",
+                "attr": "Arn"
+              }
+            }
+          ],
+          "line": 200
+        },
+        {
+          "name": "STREAM_ARN",
+          "value": [
+            {
+              "ref": {
+                "stack": "app",
+                "logical_id": "OrdersTable315BB997",
+                "attr": "StreamArn"
+              }
+            }
+          ],
+          "line": 206
+        }
+      ]
+    }
+  ],
+  "env": {
+    "BUCKET_ARN": "arn:aws:s3:::app-uploadsbucket5e5e9b64-n4q5ahh5uhvd",
+    "QUEUE_URL": "http://aws:4566/000000000000/app-EventsQueue9A6B3C2D-6i3pyibtzl32",
+    "STREAM_ARN": "(pending) ${app.OrdersTable315BB997.StreamArn}",
+    "TABLE_NAME": "app-OrdersTable315BB997-mw4jeeg33ldd"
+  },
+  "steps": [
+    "sqs CreateQueue app.EventsQueue9A6B3C2D",
+    "sqs SetQueueAttributes app.EventsQueue9A6B3C2D",
+    "dynamodb CreateTable app.OrdersTable315BB997",
+    "s3 CreateBucket app.UploadsBucket5E5E9B64",
+    "s3 PutBucketTagging app.UploadsBucket5E5E9B64",
+    "s3 PutBucketVersioning app.UploadsBucket5E5E9B64",
+    "s3 PutBucketNotificationConfiguration app.UploadsBucket5E5E9B64"
+  ],
+  "warnings": null,
+  "notes": [
+    "app: not emulated: AWS::IAM::Role (HandlerServiceRoleFCDC14AE) (OrdersStack.template.json)",
+    "app: not emulated: AWS::Lambda::Function (Handler886CB40B) (OrdersStack.template.json)",
+    "app: not emulated: Custom::S3AutoDeleteObjects (UploadsBucketAutoDeleteObjectsCustomResource5E0BB6A1) (OrdersStack.template.json)"
+  ]
+}

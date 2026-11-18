@@ -758,6 +758,18 @@ Where the built code differs from the approved design, per piece.
 8. **No importer yet.** Until A5 and A6 register theirs, a stack is one warning (`this aiman cannot import <format> yet`) and adds nothing; a reference into it refuses the run.
 9. **Plan without a scenario.** `harness.aws_plan` with no scenario plans every aws service of the file without scenario overrides.
 
+**A5**
+
+1. **Account-typed parameters.** An `AWS::SSM::Parameter::*` or `AWS::EC2::*` parameter with no stack value is not an error at plan time: its `Ref` cannot be evaluated where it is used (a warning, or a skipped resource in an identity property), because templates often carry such parameters for resources that are never emulated. CDK's `BootstrapVersion` and `AssetParameters*` take their default, as the design says. Any other parameter with no value is an error.
+2. **Undeclared overrides and patterns.** A stack or scenario parameter the template does not declare is `harness_invalid` (CloudFormation refuses it too). An `AllowedPattern` Go's regexp cannot compile (a Java lookahead) is a note and the value is not checked against it.
+3. **Function variables that do not evaluate.** `EnvVar` gains `Unresolved` and `Line`, and `FunctionEnv` gains `File`: the importer records why a variable cannot be evaluated, and `BuildEnv` warns (with file and line) only when `function_env` names the function, so templates with many functions do not fill the plan with warnings nobody asked for.
+4. **CDK bucket notifications.** CDK writes bucket notifications as a `Custom::S3BucketNotifications` resource in the S3 API shape (`Events`, `QueueArn`, `Filter.Key.FilterRules`); the importer merges it into the bucket's notifications, so a `cdk.out` template gets the same wiring as plain CFN. Other custom resources are `not emulated` notes.
+5. **Inline topic subscriptions.** `AWS::SNS::Topic` `Subscription` entries are planned as subscriptions with the logical id `<topic>/Subscription[<i>]`; only `sqs` is planned, others are warnings.
+6. **Not applied yet.** `CorsConfiguration`, `LifecycleConfiguration` and `ObjectLockConfiguration` (retention) on a bucket are notes, since the plan model has no place for them (A4 deviation 1); `ObjectLockEnabled` is applied. Properties a type does not model (KMS settings, point-in-time recovery, …) are one note per resource listing them.
+7. **Policies.** A bucket, queue or topic policy is set on the resource it names by `Ref` (or a bucket's literal name); one that names anything else is a warning and left out. Two policies on one queue: the later wins.
+8. **Global tables.** A `PROVISIONED` `AWS::DynamoDB::GlobalTable` is created with the applier's default capacity, since its autoscaling settings have no emulator counterpart; tags, class and deletion protection come from the replica in the run's region.
+9. **Files.** As planned (`cfn_load.go`, `cfn_eval.go`, `cfn_resources.go`, `cfn_sam.go`, `testdata/cfn/`); the importer's tests are `cfn_test.go`, the plan-from-file test `internal/harness/aws_cfn_test.go`, and the Docker test `internal/harness/aws_cfn_docker_test.go`.
+
 ## What you should be able to explain after reading
 
 1. How the app reaches the emulator, and why it never holds or reaches real AWS credentials or hosts.

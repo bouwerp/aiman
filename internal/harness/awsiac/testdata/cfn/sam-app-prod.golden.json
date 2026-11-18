@@ -1,0 +1,303 @@
+{
+  "resources": [
+    {
+      "stack": "app",
+      "logical_id": "UploadsTable",
+      "type": "AWS::Serverless::SimpleTable",
+      "source": "cloudformation",
+      "kind": "table",
+      "file": "template.yaml",
+      "line": 37,
+      "table": {
+        "hash_key": "key",
+        "attributes": [
+          {
+            "name": "key",
+            "type": "S"
+          }
+        ],
+        "billing_mode": "PAY_PER_REQUEST",
+        "tags": {
+          "app": "uploads",
+          "stage": "prod"
+        }
+      },
+      "physical": "app-UploadsTable-ea3gjvcmrmp3",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:dynamodb:eu-west-1:000000000000:table/app-UploadsTable-ea3gjvcmrmp3",
+        "name": "app-UploadsTable-ea3gjvcmrmp3",
+        "ref": "app-UploadsTable-ea3gjvcmrmp3"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "CountersTable",
+      "type": "AWS::Serverless::SimpleTable",
+      "source": "cloudformation",
+      "kind": "table",
+      "name": "app-prod-counters",
+      "file": "template.yaml",
+      "line": 47,
+      "table": {
+        "hash_key": "id",
+        "attributes": [
+          {
+            "name": "id",
+            "type": "S"
+          }
+        ],
+        "billing_mode": "PAY_PER_REQUEST"
+      },
+      "physical": "app-prod-counters",
+      "attrs": {
+        "arn": "arn:aws:dynamodb:eu-west-1:000000000000:table/app-prod-counters",
+        "name": "app-prod-counters",
+        "ref": "app-prod-counters"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "UploadQueue",
+      "type": "AWS::SQS::Queue",
+      "source": "cloudformation",
+      "kind": "queue",
+      "file": "template.yaml",
+      "line": 52,
+      "queue": {
+        "attributes": {
+          "MessageRetentionPeriod": [
+            {
+              "lit": "400"
+            }
+          ],
+          "VisibilityTimeout": [
+            {
+              "lit": "60"
+            }
+          ]
+        },
+        "policy": [
+          {
+            "lit": "{\"Statement\":[{\"Action\":\"sqs:SendMessage\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"s3.amazonaws.com\"},\"Resource\":\""
+          },
+          {
+            "ref": {
+              "stack": "app",
+              "logical_id": "UploadQueue",
+              "attr": "Arn"
+            }
+          },
+          {
+            "lit": "\"}],\"Version\":\"2012-10-17\"}"
+          }
+        ]
+      },
+      "physical": "app-UploadQueue-7mt7ldhrya72",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:app-UploadQueue-7mt7ldhrya72",
+        "name": "app-UploadQueue-7mt7ldhrya72",
+        "ref": "http://aws:4566/000000000000/app-UploadQueue-7mt7ldhrya72",
+        "url": "http://aws:4566/000000000000/app-UploadQueue-7mt7ldhrya72"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "UploadBucket",
+      "type": "AWS::S3::Bucket",
+      "source": "cloudformation",
+      "kind": "bucket",
+      "name": "app-uploads-eu-west-1",
+      "file": "template.yaml",
+      "line": 71,
+      "bucket": {
+        "versioning": "Enabled",
+        "notifications": [
+          {
+            "destination": "queue",
+            "arn": [
+              {
+                "ref": {
+                  "stack": "app",
+                  "logical_id": "UploadQueue",
+                  "attr": "Arn"
+                }
+              }
+            ],
+            "events": [
+              "s3:ObjectCreated:*"
+            ],
+            "prefix": "incoming/"
+          }
+        ]
+      },
+      "physical": "app-uploads-eu-west-1",
+      "attrs": {
+        "arn": "arn:aws:s3:::app-uploads-eu-west-1",
+        "domain_name": "app-uploads-eu-west-1.s3.amazonaws.com",
+        "name": "app-uploads-eu-west-1",
+        "ref": "app-uploads-eu-west-1",
+        "regional_domain_name": "app-uploads-eu-west-1.s3.eu-west-1.amazonaws.com"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "ProdAlarmTopic",
+      "type": "AWS::SNS::Topic",
+      "source": "cloudformation",
+      "kind": "topic",
+      "file": "template.yaml",
+      "line": 114,
+      "topic": {},
+      "physical": "app-ProdAlarmTopic-l3nhcf33voxl",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:sns:eu-west-1:000000000000:app-ProdAlarmTopic-l3nhcf33voxl",
+        "name": "app-ProdAlarmTopic-l3nhcf33voxl",
+        "ref": "arn:aws:sns:eu-west-1:000000000000:app-ProdAlarmTopic-l3nhcf33voxl"
+      }
+    }
+  ],
+  "outputs": {
+    "AlarmTopic": "arn:aws:sns:eu-west-1:000000000000:app-ProdAlarmTopic-l3nhcf33voxl",
+    "QueueUrl": "http://aws:4566/000000000000/app-UploadQueue-7mt7ldhrya72",
+    "Token": "token-s3cret",
+    "UploadBucketName": "app-uploads-eu-west-1"
+  },
+  "functions": [
+    {
+      "stack": "app",
+      "logical_id": "RecordFunction",
+      "file": "template.yaml",
+      "vars": [
+        {
+          "name": "STAGE",
+          "value": [
+            {
+              "lit": "prod"
+            }
+          ],
+          "line": 29
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": [
+            {
+              "lit": "DEBUG"
+            }
+          ],
+          "line": 106
+        },
+        {
+          "name": "UPLOADS_TABLE",
+          "value": [
+            {
+              "ref": {
+                "stack": "app",
+                "logical_id": "UploadsTable"
+              }
+            }
+          ],
+          "line": 99
+        },
+        {
+          "name": "COUNTERS_TABLE",
+          "value": [
+            {
+              "ref": {
+                "stack": "app",
+                "logical_id": "CountersTable"
+              }
+            }
+          ],
+          "line": 100
+        },
+        {
+          "name": "QUEUE_URL",
+          "value": [
+            {
+              "ref": {
+                "stack": "app",
+                "logical_id": "UploadQueue"
+              }
+            }
+          ],
+          "line": 101
+        },
+        {
+          "name": "BUCKET",
+          "value": [
+            {
+              "ref": {
+                "stack": "app",
+                "logical_id": "UploadBucket"
+              }
+            }
+          ],
+          "line": 102
+        },
+        {
+          "name": "TOKEN",
+          "value": [
+            {
+              "lit": "s3cret"
+            }
+          ],
+          "sensitive": true,
+          "line": 103
+        },
+        {
+          "name": "SHARED_VPC",
+          "value": [
+            {
+              "lit": "vpc-0abc"
+            }
+          ],
+          "line": 104
+        },
+        {
+          "name": "ROLE",
+          "value": null,
+          "unresolved": "Fn::GetAtt RecordFunctionRole.Arn: RecordFunctionRole is not a parameter or resource of the template",
+          "line": 105
+        }
+      ]
+    }
+  ],
+  "env": {
+    "BUCKET": "app-uploads-eu-west-1",
+    "COUNTERS_TABLE": "app-prod-counters",
+    "LOG_LEVEL": "DEBUG",
+    "QUEUE_URL": "http://aws:4566/000000000000/app-UploadQueue-7mt7ldhrya72",
+    "SHARED_VPC": "vpc-0abc",
+    "STAGE": "prod",
+    "TOKEN": "s3cret",
+    "UPLOADS_TABLE": "app-UploadsTable-ea3gjvcmrmp3"
+  },
+  "sensitive_env": [
+    "TOKEN"
+  ],
+  "steps": [
+    "sqs CreateQueue app.UploadQueue",
+    "sns CreateTopic app.ProdAlarmTopic",
+    "sqs SetQueueAttributes app.UploadQueue",
+    "dynamodb CreateTable app.UploadsTable",
+    "dynamodb CreateTable app.CountersTable",
+    "s3 CreateBucket app.UploadBucket",
+    "s3 PutBucketVersioning app.UploadBucket",
+    "s3 PutBucketNotificationConfiguration app.UploadBucket"
+  ],
+  "warnings": [
+    "app.UploadBucket NotificationConfiguration.LambdaConfigurations: the run has no Lambda or EventBridge; these notifications are left out (template.yaml:86)",
+    "app.RecordFunction Environment.Variables.ROLE: Fn::GetAtt RecordFunctionRole.Arn: RecordFunctionRole is not a parameter or resource of the template; the variable is left out of the app's environment (template.yaml:105)"
+  ],
+  "notes": [
+    "app.UploadsTable SSESpecification: encryption settings are not emulated; left out (template.yaml:33)",
+    "app.CountersTable SSESpecification: encryption settings are not emulated; left out (template.yaml:33)",
+    "app.UploadQueue: not emulated: KmsMasterKeyId; left out (template.yaml:52)",
+    "app.UploadBucket CorsConfiguration: aiman does not apply this configuration in the emulator yet; left out (template.yaml:89)",
+    "app.RecordFunction Events.Uploads: not emulated: event source SQS for RecordFunction (template.yaml:109)",
+    "app: not emulated: AWS::Serverless::Function (RecordFunction) (template.yaml)"
+  ]
+}
