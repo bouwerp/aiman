@@ -129,6 +129,10 @@ const (
 	// EventHarnessAWSApplied records an applied aws plan: run, service,
 	// resources, calls and warnings (counts).
 	EventHarnessAWSApplied EventKind = "harness.aws_applied"
+	// EventHarnessAWSWrite records the operator's write to a run's aws
+	// service: run, service, op, the bucket, table or queue, key_sha256 and
+	// payload_sha256, never a key or value; a reset adds resources and calls.
+	EventHarnessAWSWrite EventKind = "harness.aws_write"
 	// EventHarnessDebug records a take over or release of a debug run's
 	// debugger: run, op and the client it closed.
 	EventHarnessDebug EventKind = "harness.debug"

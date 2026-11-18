@@ -64,13 +64,26 @@ func awsApplyService(spec RunSpec) composeService {
 // awsApplyReply is the applier's result line.
 type awsApplyReply struct {
 	Result *awsiac.ApplyResult `json:"result,omitempty"`
+	Write  *awsiac.WriteResult `json:"write,omitempty"`
 	Error  string              `json:"error,omitempty"`
 }
 
-// AWSApplyMain runs inside the applier container: the plan on stdin, the
-// result line on stdout.
-func AWSApplyMain(stdin io.Reader, stdout io.Writer) error {
-	reply := applyPlan(stdin, "/src")
+// awsApplyWriteArg makes the applier read one operator write instead of a
+// plan.
+const awsApplyWriteArg = "--write"
+
+// AWSApplyMain runs inside the applier container: the plan (or, with
+// --write, one operator write) on stdin, the result line on stdout.
+func AWSApplyMain(args []string, stdin io.Reader, stdout io.Writer) error {
+	var reply awsApplyReply
+	switch {
+	case len(args) == 0:
+		reply = applyPlan(stdin, "/src")
+	case len(args) == 1 && args[0] == awsApplyWriteArg:
+		reply = applyWrite(stdin, "/src")
+	default:
+		reply = awsApplyReply{Error: "usage: aiman harness aws-apply [--write]"}
+	}
 	b, err := json.Marshal(reply)
 	if err != nil {
 		return err
@@ -99,6 +112,33 @@ func applyPlan(stdin io.Reader, src string) awsApplyReply {
 	a := &awsiac.Applier{Key: AWSAccessKeyID, Secret: AWSSecretAccessKey, Root: root}
 	res, err := a.Apply(ctx, &p)
 	reply := awsApplyReply{Result: res}
+	if err != nil && res == nil {
+		reply.Error = err.Error()
+	}
+	return reply
+}
+
+// applyWrite runs one operator write; a reset applies its plan again, with
+// the seed read from src.
+func applyWrite(stdin io.Reader, src string) awsApplyReply {
+	var w awsiac.Write
+	dec := json.NewDecoder(io.LimitReader(stdin, awsApplyPlanMax))
+	if err := dec.Decode(&w); err != nil {
+		return awsApplyReply{Error: "read the write: " + err.Error()}
+	}
+	a := &awsiac.Applier{Key: AWSAccessKeyID, Secret: AWSSecretAccessKey}
+	if w.Plan != nil && w.Plan.Seed != nil {
+		r, err := os.OpenRoot(src)
+		if err != nil {
+			return awsApplyReply{Error: "open the tree: " + err.Error()}
+		}
+		defer r.Close()
+		a.Root = r
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), awsApplyTimeout)
+	defer cancel()
+	res, err := a.Write(ctx, &w)
+	reply := awsApplyReply{Write: res}
 	if err != nil && res == nil {
 		reply.Error = err.Error()
 	}
@@ -152,10 +192,10 @@ func (s *starter) aws(ctx context.Context) error {
 	if err != nil {
 		return &stepError{step: "aws env", service: p.Service, err: err}
 	}
-	if err := s.writeManifest(p); err != nil {
+	if err := writeAWSManifest(s.sandbox, p); err != nil {
 		return &stepError{step: "aws manifest", service: p.Service, err: err}
 	}
-	if err := s.rewriteCompose(env); err != nil {
+	if err := rewriteAWSCompose(s.sandbox, s.lr, env); err != nil {
 		return &stepError{step: "aws env", service: p.Service, err: err}
 	}
 	runAWS := runAWSOf(p)
@@ -198,14 +238,14 @@ func (s *starter) applyPlan(ctx context.Context, p *awsiac.Plan) (*awsiac.ApplyR
 	return reply.Result, nil
 }
 
-// writeManifest writes resources.json beside the config and credentials,
-// where every container reads it at AWSMount.
-func (s *starter) writeManifest(p *awsiac.Plan) error {
+// writeAWSManifest writes resources.json beside the config and
+// credentials, where every container reads it at AWSMount.
+func writeAWSManifest(sandbox string, p *awsiac.Plan) error {
 	b, err := json.MarshalIndent(p.Manifest(), "", "  ")
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(s.sandbox, AWSResourcesFile)
+	path := filepath.Join(sandbox, AWSResourcesFile)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -213,23 +253,23 @@ func (s *starter) writeManifest(p *awsiac.Plan) error {
 	return os.WriteFile(path, append(b, '\n'), 0o444) //nolint:gosec // G306: the app reads it as its own user through a read-only bind
 }
 
-// rewriteCompose writes the compose file again with the app's env from the
-// applied plan; the app and checks start from it. Running services keep
+// rewriteAWSCompose writes the compose file again with the app's env from
+// the applied plan; the app and checks start from it. Running services keep
 // their containers: their definitions do not change.
-func (s *starter) rewriteCompose(env map[string]string) error {
-	s.lr.mu.Lock()
-	spec := s.lr.spec
-	s.lr.mu.Unlock()
+func rewriteAWSCompose(sandbox string, lr *liveRun, env map[string]string) error {
+	lr.mu.Lock()
+	spec, f := lr.spec, lr.file
+	lr.mu.Unlock()
 	spec.AWSAppEnv = env
-	proj, err := Compose(s.f, spec)
+	proj, err := Compose(f, spec)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(s.sandbox, "compose.yaml"), proj.YAML, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sandbox, "compose.yaml"), proj.YAML, 0o600); err != nil {
 		return err
 	}
-	s.lr.mu.Lock()
-	s.lr.spec = spec
-	s.lr.mu.Unlock()
+	lr.mu.Lock()
+	lr.spec = spec
+	lr.mu.Unlock()
 	return nil
 }
