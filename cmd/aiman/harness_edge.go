@@ -30,7 +30,7 @@ func runHarnessEdge(args []string) error {
 	return serveEdge(opts)
 }
 
-const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]... [--dap-relay name=port=host:port]... [--evm-relay name=port=host:port]... [--aws-tap name=host:port] [--proxy <inner prefix> --network offline|online --ca-dir <dir> [--stubs <file>] [--capture-body-bytes N] [--upstream-roots <file>] [--block-host-suffix <suffix>]...]"
+const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]... [--dap-relay name=port=host:port]... [--evm-relay name=port=host:port]... [--aws-tap name=host:port] [--aws-relay name=port=host:port --aws-region <region> [--aws-download-max N]] [--proxy <inner prefix> --network offline|online --ca-dir <dir> [--stubs <file>] [--capture-body-bytes N] [--upstream-roots <file>] [--block-host-suffix <suffix>]...]"
 
 type edgeOptions struct {
 	control   string
@@ -41,6 +41,9 @@ type edgeOptions struct {
 	proxy     proxyFlags
 	// awsTaps are name=host:port taps to aws emulators.
 	awsTaps []edge.RelaySpec
+	// awsRegion and awsDownloadMax configure every aws read relay.
+	awsRegion      string
+	awsDownloadMax int64
 }
 
 func parseEdgeFlags(args []string) (edgeOptions, error) {
@@ -94,6 +97,17 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 		opts.awsTaps = append(opts.awsTaps, edge.RelaySpec{Name: name, Port: edge.AWSTapPort, Target: target})
 		return nil
 	})
+	fs.Func("aws-relay", "read-only AWS relay as name=port=host:port; needs --aws-region", func(v string) error {
+		spec, err := parseEdgeRelay(v)
+		if err != nil {
+			return err
+		}
+		spec.Kind = edge.KindAWS
+		opts.relays = append(opts.relays, spec)
+		return nil
+	})
+	fs.StringVar(&opts.awsRegion, "aws-region", "", "region the AWS read relay signs for")
+	fs.Int64Var(&opts.awsDownloadMax, "aws-download-max", 0, "cap on one S3 object body through the AWS read relay, in bytes")
 	opts.proxy.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return edgeOptions{}, err
@@ -106,6 +120,19 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 	}
 	if err := opts.proxy.check(); err != nil {
 		return edgeOptions{}, err
+	}
+	hasAWSRelay := false
+	for i := range opts.relays {
+		if opts.relays[i].Kind == edge.KindAWS {
+			hasAWSRelay = true
+			opts.relays[i].Region, opts.relays[i].DownloadMax = opts.awsRegion, opts.awsDownloadMax
+		}
+	}
+	if hasAWSRelay && opts.awsRegion == "" {
+		return edgeOptions{}, errors.New("--aws-relay needs --aws-region")
+	}
+	if opts.awsDownloadMax < 0 {
+		return edgeOptions{}, errors.New("--aws-download-max must not be negative")
 	}
 	if len(opts.awsTaps) > 1 {
 		return edgeOptions{}, errors.New("--aws-tap is given once: a run has at most one aws service")

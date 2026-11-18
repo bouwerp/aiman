@@ -171,6 +171,7 @@ func (s *starter) writeProject() error {
 		InnerSubnet: inner, OuterSubnet: outer, ReadPassword: readPassword, ServiceMemory: s.m.opts.ServiceMemory,
 		Debug: s.debug, DebugSubnet: debugSubnet(n), AdapterImage: s.run.Images[ServiceAdapter],
 		DebugChecks: s.run.DebugChecks, Proxy: proxy, CheckImages: checks,
+		AWSDownloadMax: s.m.opts.AWSDownloadMax,
 	}
 	p, err := Compose(s.f, spec)
 	if err != nil {

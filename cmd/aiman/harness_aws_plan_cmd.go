@@ -12,7 +12,9 @@ import (
 )
 
 func init() {
-	harnessAWSCommands["plan"] = harnessAWSPlan
+	harnessAWSCommands["plan"] = func(h harnessIO, args []string) error {
+		return runHarnessSub(h, "aws plan", harnessSub{0, 1, false, harnessAWSPlan}, args)
+	}
 }
 
 // harnessAWSPlan is `aiman harness aws plan [<scenario>] [--json]`: the

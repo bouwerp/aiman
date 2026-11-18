@@ -66,7 +66,7 @@ type HarnessAWSConfig struct {
 	// session's run asks for approval; unset runs the pin in code.
 	Images map[string]string `yaml:"images,omitempty"`
 	// DownloadMax caps one S3 object download through the read relay
-	// (64M); read by the relay (P10 A3).
+	// (64M).
 	DownloadMax string `yaml:"download_max,omitempty"`
 }
 
@@ -125,6 +125,15 @@ func (h HarnessConfig) RunMemoryBytes(sessionHigh int64) (int64, []string) {
 		v = sessionHigh
 	}
 	return v, warns
+}
+
+// DefaultHarnessAWSDownloadMax is harness.aws.download_max unset.
+const DefaultHarnessAWSDownloadMax = "64M"
+
+// AWSDownloadMaxBytes is aws.download_max in bytes: the cap on one S3
+// object body through an aws service's read relay.
+func (h HarnessConfig) AWSDownloadMaxBytes() (int64, []string) {
+	return harnessSize("aws.download_max", h.AWS.DownloadMax, DefaultHarnessAWSDownloadMax)
 }
 
 func harnessSize(key, val, def string) (int64, []string) {

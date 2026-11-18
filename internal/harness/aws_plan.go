@@ -22,10 +22,6 @@ type RunAWS struct {
 	Notes     []awsiac.Warning          `json:"notes,omitempty"`
 }
 
-// AWSResourcesFile is the manifest beside the config and credentials files,
-// read at AWSMount + "/resources.json" (AIMAN_AWS_RESOURCES).
-const AWSResourcesFile = awsFilesDir + "/resources.json"
-
 // awsReservedEnvPrefixes are names a plan's env may not set: aiman's own.
 var awsReservedEnvPrefixes = []string{"AWS_", "AIMAN_"}
 

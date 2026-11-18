@@ -204,6 +204,7 @@
     for (const f of state.forwards || []) {
       if (f.name === "dap" && state.run && state.run.debug) continue; // the debugger's port, used by the Debug tab
       if (state.run && (state.run.evm || []).includes(f.name)) continue; // an EVM node's read-only relay, used by the EVM tab
+      if (state.run && (state.run.aws_services || []).includes(f.name)) continue; // an AWS emulator's read relay, used by the AWS tab
       if (state.run && (state.run.databases || []).some((d) => d.service === f.name)) {
         // A postgres relay speaks the wire protocol, not HTTP: show where psql connects.
         nav.append(el("span", { class: "app-link db-link" },

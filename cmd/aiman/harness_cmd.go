@@ -112,6 +112,7 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness db <service> tables|rows <table>|query <sql> [--limit N] [--write] [--run ID] [--json]   (--write: operator)
        aiman harness capture [--after N] [--limit N] [--run ID] [--json]   (HTTP calls through the edge proxy)
        aiman harness aws calls [--after N] [--limit N] [--run ID] [--json]   (AWS API calls through the edge tap)
+       aiman harness aws resources|s3|ddb ...   (see aiman harness aws)
        aiman harness aws plan [<scenario>] [--json]   (the aws plan from the commit, no run)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
@@ -288,19 +289,27 @@ func harnessMain(args []string, h harnessIO) error {
 		return harnessImageMain(args[1:], h)
 	case "approve-image":
 		return harnessApproveImage(args[1:], h)
+	case "aws":
+		return harnessAWSMain(args[1:], h)
 	}
 	sub, ok := harnessSubs[args[0]]
 	if !ok {
 		return harnessUsage(h.errOut)
 	}
-	a, err := parseHarnessArgs(args[1:])
+	return runHarnessSub(h, args[0], sub, args[1:])
+}
+
+// runHarnessSub parses a subcommand's flags, checks its positional
+// arguments and the session or run, and runs it.
+func runHarnessSub(h harnessIO, name string, sub harnessSub, args []string) error {
+	a, err := parseHarnessArgs(args)
 	if err != nil || a.remote != "" || len(a.pos) < sub.minPos || len(a.pos) > sub.maxPos {
 		if err != nil {
 			_, _ = fmt.Fprintln(h.errOut, err)
 		}
 		return harnessUsage(h.errOut)
 	}
-	if args[0] == "result" && len(a.pos) == 1 {
+	if name == "result" && len(a.pos) == 1 {
 		a.run = a.pos[0]
 	}
 	if a.session == "" {

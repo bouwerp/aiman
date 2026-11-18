@@ -71,3 +71,25 @@ func TestParseEdgeFlagsAWS(t *testing.T) {
 		}
 	}
 }
+
+func TestParseEdgeFlagsAWSRelay(t *testing.T) {
+	base := []string{"--control", "/c/edge.sock", "--token-file", "/c/token", "--outer", "172.31.0.0/16", "--inner", "172.30.0.0/24"}
+	with := func(extra ...string) []string { return append(append([]string{}, base...), extra...) }
+	opts, err := parseEdgeFlags(with("--aws-region", "eu-west-1", "--aws-download-max", "1024", "--aws-relay", "aws=15000=aws-emu:4566"))
+	if err != nil {
+		t.Fatalf("parseEdgeFlags: %v", err)
+	}
+	want := edge.RelaySpec{Name: "aws", Port: 15000, Target: "aws-emu:4566", Kind: edge.KindAWS, Region: "eu-west-1", DownloadMax: 1024}
+	if len(opts.relays) != 1 || opts.relays[0] != want {
+		t.Fatalf("relays = %+v", opts.relays)
+	}
+	for _, bad := range [][]string{
+		with("--aws-relay", "aws=15000=aws-emu:4566"),
+		with("--aws-region", "eu-west-1", "--aws-relay", "aws"),
+		with("--aws-region", "eu-west-1", "--aws-download-max", "-1", "--aws-relay", "aws=15000=aws-emu:4566"),
+	} {
+		if _, err := parseEdgeFlags(bad); err == nil {
+			t.Errorf("parseEdgeFlags(%q) accepted", bad)
+		}
+	}
+}

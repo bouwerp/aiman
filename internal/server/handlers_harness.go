@@ -112,6 +112,9 @@ func (s *Server) dispatchHarness(ctx context.Context, req Request) Response {
 	if strings.HasPrefix(req.Method, "harness.evm_") {
 		return s.dispatchHarnessEVM(ctx, req)
 	}
+	if req.Method == "harness.aws" {
+		return s.handleHarnessAWS(ctx, req)
+	}
 	var p harnessParams
 	if len(req.Params) > 0 {
 		if err := json.Unmarshal(req.Params, &p); err != nil {

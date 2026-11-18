@@ -89,6 +89,12 @@ type Options struct {
 	// EVMHTTP reads an EVM service's JSON-RPC through its edge relay; nil is
 	// a plain client with no proxy.
 	EVMHTTP *http.Client
+	// AWSHTTP reads an aws service through its edge read relay; nil is a
+	// plain client with no proxy.
+	AWSHTTP *http.Client
+	// AWSDownloadMax is harness.aws.download_max in bytes; 0 is
+	// edge.DefaultAWSDownloadMax.
+	AWSDownloadMax int64
 	// DBRowLimit is harness.db.row_limit; zero is DefaultDBRowLimit.
 	DBRowLimit int
 	// Postgres reads a run's postgres service through its edge relay; nil
