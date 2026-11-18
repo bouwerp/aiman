@@ -1,0 +1,364 @@
+{
+  "resources": [
+    {
+      "stack": "app",
+      "logical_id": "OrdersTable",
+      "type": "AWS::DynamoDB::Table",
+      "source": "cloudformation",
+      "kind": "table",
+      "name": "orders-prod",
+      "file": "template.yaml",
+      "line": 28,
+      "table": {
+        "hash_key": "pk",
+        "range_key": "sk",
+        "attributes": [
+          {
+            "name": "pk",
+            "type": "S"
+          },
+          {
+            "name": "sk",
+            "type": "S"
+          },
+          {
+            "name": "status",
+            "type": "S"
+          },
+          {
+            "name": "createdAt",
+            "type": "N"
+          }
+        ],
+        "billing_mode": "PROVISIONED",
+        "read_capacity": 50,
+        "write_capacity": 20,
+        "gsis": [
+          {
+            "name": "by-status",
+            "hash_key": "status",
+            "range_key": "createdAt",
+            "projection": "INCLUDE",
+            "non_key_attributes": [
+              "total"
+            ],
+            "read_capacity": 2,
+            "write_capacity": 1
+          }
+        ],
+        "lsis": [
+          {
+            "name": "by-created",
+            "hash_key": "pk",
+            "range_key": "createdAt",
+            "projection": "KEYS_ONLY"
+          }
+        ],
+        "stream_view_type": "NEW_AND_OLD_IMAGES",
+        "ttl_attribute": "expiresAt",
+        "tags": {
+          "team": "orders",
+          "zone": "b"
+        }
+      },
+      "physical": "orders-prod",
+      "attrs": {
+        "arn": "arn:aws:dynamodb:eu-west-1:000000000000:table/orders-prod",
+        "name": "orders-prod",
+        "ref": "orders-prod"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "WorkDLQ",
+      "type": "AWS::SQS::Queue",
+      "source": "cloudformation",
+      "kind": "queue",
+      "name": "prod-work-dlq.fifo",
+      "file": "template.yaml",
+      "line": 71,
+      "queue": {
+        "fifo": true
+      },
+      "physical": "prod-work-dlq.fifo",
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:prod-work-dlq.fifo",
+        "name": "prod-work-dlq.fifo",
+        "ref": "http://aws:4566/000000000000/prod-work-dlq.fifo",
+        "url": "http://aws:4566/000000000000/prod-work-dlq.fifo"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "WorkQueue",
+      "type": "AWS::SQS::Queue",
+      "source": "cloudformation",
+      "kind": "queue",
+      "file": "template.yaml",
+      "line": 77,
+      "queue": {
+        "fifo": true,
+        "attributes": {
+          "ContentBasedDeduplication": [
+            {
+              "lit": "true"
+            }
+          ],
+          "RedrivePolicy": [
+            {
+              "lit": "{\"deadLetterTargetArn\":\""
+            },
+            {
+              "ref": {
+                "stack": "app",
+                "logical_id": "WorkDLQ",
+                "attr": "Arn"
+              }
+            },
+            {
+              "lit": "\",\"maxReceiveCount\":3}"
+            }
+          ]
+        },
+        "tags": {
+          "env": "prod"
+        }
+      },
+      "physical": "app-WorkQueue-izz6gzy267bn.fifo",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:app-WorkQueue-izz6gzy267bn.fifo",
+        "name": "app-WorkQueue-izz6gzy267bn.fifo",
+        "ref": "http://aws:4566/000000000000/app-WorkQueue-izz6gzy267bn.fifo",
+        "url": "http://aws:4566/000000000000/app-WorkQueue-izz6gzy267bn.fifo"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "OrderEvents",
+      "type": "AWS::SNS::Topic",
+      "source": "cloudformation",
+      "kind": "topic",
+      "file": "template.yaml",
+      "line": 88,
+      "topic": {
+        "attributes": {
+          "DisplayName": [
+            {
+              "lit": "Order events"
+            }
+          ]
+        },
+        "policy": [
+          {
+            "lit": "{\"Statement\":[{\"Action\":\"sns:Publish\",\"Effect\":\"Allow\",\"Principal\":\"*\",\"Resource\":\""
+          },
+          {
+            "ref": {
+              "stack": "app",
+              "logical_id": "OrderEvents"
+            }
+          },
+          {
+            "lit": "\"}]}"
+          }
+        ]
+      },
+      "physical": "app-OrderEvents-4rkabqj4x5fe",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:sns:eu-west-1:000000000000:app-OrderEvents-4rkabqj4x5fe",
+        "name": "app-OrderEvents-4rkabqj4x5fe",
+        "ref": "arn:aws:sns:eu-west-1:000000000000:app-OrderEvents-4rkabqj4x5fe"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "OrderEvents/Subscription[0]",
+      "type": "AWS::SNS::Topic.Subscription",
+      "source": "cloudformation",
+      "kind": "subscription",
+      "file": "template.yaml",
+      "line": 92,
+      "subscription": {
+        "topic": [
+          {
+            "ref": {
+              "stack": "app",
+              "logical_id": "OrderEvents"
+            }
+          }
+        ],
+        "protocol": "sqs",
+        "endpoint": [
+          {
+            "ref": {
+              "stack": "app",
+              "logical_id": "NotifyQueue",
+              "attr": "Arn"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "NotifyQueue",
+      "type": "AWS::SQS::Queue",
+      "source": "cloudformation",
+      "kind": "queue",
+      "file": "template.yaml",
+      "line": 98,
+      "queue": {},
+      "physical": "app-NotifyQueue-zfyn5vpqlv27",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:app-NotifyQueue-zfyn5vpqlv27",
+        "name": "app-NotifyQueue-zfyn5vpqlv27",
+        "ref": "http://aws:4566/000000000000/app-NotifyQueue-zfyn5vpqlv27",
+        "url": "http://aws:4566/000000000000/app-NotifyQueue-zfyn5vpqlv27"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "NotifySubscription",
+      "type": "AWS::SNS::Subscription",
+      "source": "cloudformation",
+      "kind": "subscription",
+      "file": "template.yaml",
+      "line": 101,
+      "subscription": {
+        "topic": [
+          {
+            "ref": {
+              "stack": "app",
+              "logical_id": "OrderEvents"
+            }
+          }
+        ],
+        "protocol": "sqs",
+        "endpoint": [
+          {
+            "ref": {
+              "stack": "app",
+              "logical_id": "WorkQueue",
+              "attr": "Arn"
+            }
+          }
+        ],
+        "attributes": {
+          "FilterPolicy": [
+            {
+              "lit": "{\"kind\":[\"order.created\"]}"
+            }
+          ],
+          "RawMessageDelivery": [
+            {
+              "lit": "true"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "ArchiveBucket",
+      "type": "AWS::S3::Bucket",
+      "source": "cloudformation",
+      "kind": "bucket",
+      "name": "orders-archive",
+      "file": "template.yaml",
+      "line": 122,
+      "bucket": {},
+      "physical": "orders-archive",
+      "attrs": {
+        "arn": "arn:aws:s3:::orders-archive",
+        "domain_name": "orders-archive.s3.amazonaws.com",
+        "name": "orders-archive",
+        "ref": "orders-archive",
+        "regional_domain_name": "orders-archive.s3.eu-west-1.amazonaws.com"
+      }
+    },
+    {
+      "stack": "app",
+      "logical_id": "ReportsBucket",
+      "type": "AWS::S3::Bucket",
+      "source": "cloudformation",
+      "kind": "bucket",
+      "file": "template.yaml",
+      "line": 128,
+      "bucket": {
+        "notifications": [
+          {
+            "destination": "topic",
+            "arn": [
+              {
+                "ref": {
+                  "stack": "app",
+                  "logical_id": "OrderEvents"
+                }
+              }
+            ],
+            "events": [
+              "s3:ObjectCreated:Put"
+            ]
+          }
+        ],
+        "policy": [
+          {
+            "lit": "{\"Statement\":[{\"Action\":\"s3:*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":\"arn:aws:s3:::"
+          },
+          {
+            "ref": {
+              "stack": "app",
+              "logical_id": "ReportsBucket"
+            }
+          },
+          {
+            "lit": "/*\"}]}"
+          }
+        ]
+      },
+      "physical": "app-reportsbucket-phqitat4krhk",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:s3:::app-reportsbucket-phqitat4krhk",
+        "domain_name": "app-reportsbucket-phqitat4krhk.s3.amazonaws.com",
+        "name": "app-reportsbucket-phqitat4krhk",
+        "ref": "app-reportsbucket-phqitat4krhk",
+        "regional_domain_name": "app-reportsbucket-phqitat4krhk.s3.eu-west-1.amazonaws.com"
+      }
+    }
+  ],
+  "outputs": {
+    "Encoded": "aGVsbG8=",
+    "StreamArn": "(pending) ${app.OrdersTable.StreamArn}",
+    "TableName": "orders-prod",
+    "WorkQueueUrl": "http://aws:4566/000000000000/app-WorkQueue-izz6gzy267bn.fifo",
+    "Zones": "eu-west-1a,eu-west-1b,eu-west-1c"
+  },
+  "steps": [
+    "sqs CreateQueue app.WorkDLQ",
+    "sqs CreateQueue app.WorkQueue",
+    "sns CreateTopic app.OrderEvents",
+    "sqs CreateQueue app.NotifyQueue",
+    "sns SetTopicAttributes app.OrderEvents",
+    "sns Subscribe app.OrderEvents/Subscription[0]",
+    "sns Subscribe app.NotifySubscription",
+    "dynamodb CreateTable app.OrdersTable",
+    "dynamodb UpdateTimeToLive app.OrdersTable",
+    "s3 CreateBucket app.ArchiveBucket",
+    "s3 CreateBucket app.ReportsBucket",
+    "s3 PutBucketPolicy app.ReportsBucket",
+    "s3 PutBucketNotificationConfiguration app.ReportsBucket"
+  ],
+  "warnings": [
+    "app.OrdersTable Tags[2]: must be a literal string; the property is left out (template.yaml:68)",
+    "app.OrderEvents Subscription[1].Protocol: protocol \"email\" is not emulated; only sqs subscriptions are; the subscription is skipped (template.yaml:94)",
+    "app.outputs.RoleArn: Fn::GetAtt OrdersRole.Arn: OrdersRole is a AWS::IAM::Role, which is not emulated; the output is left out (template.yaml:165)"
+  ],
+  "notes": [
+    "app.OrdersTable: not emulated: PointInTimeRecoverySpecification; left out (template.yaml:28)",
+    "app: not emulated: AWS::IAM::Role (OrdersRole) (template.yaml)"
+  ]
+}

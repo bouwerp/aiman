@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Uploads land in a bucket that notifies a queue; a function records them in a table.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  ApiToken:
+    Type: String
+    NoEcho: true
+    Default: not-a-secret
+  RetentionDays:
+    Type: Number
+    Default: 4
+    MinValue: 1
+    MaxValue: 14
+
+Conditions:
+  IsProd: !Equals [!Ref Stage, prod]
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 30
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        LOG_LEVEL: INFO
+  SimpleTable:
+    SSESpecification:
+      SSEEnabled: true
+
+Resources:
+  UploadsTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: key
+        Type: String
+      Tags:
+        app: uploads
+        stage: !Ref Stage
+
+  CountersTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: !Sub "${AWS::StackName}-${Stage}-counters"
+
+  UploadQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: !Sub "${RetentionDays}00"
+      VisibilityTimeout: 60
+      KmsMasterKeyId: alias/aws/sqs
+
+  UploadQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref UploadQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: s3.amazonaws.com}
+            Action: sqs:SendMessage
+            Resource: !GetAtt UploadQueue.Arn
+
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: UploadQueuePolicy
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-uploads-${AWS::Region}"
+      VersioningConfiguration:
+        Status: !If [IsProd, Enabled, Suspended]
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: s3:ObjectCreated:*
+            Queue: !GetAtt UploadQueue.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - {Name: prefix, Value: incoming/}
+        LambdaConfigurations:
+          - Event: s3:ObjectRemoved:*
+            Function: !GetAtt RecordFunction.Arn
+      CorsConfiguration:
+        CorsRules:
+          - {AllowedMethods: [GET], AllowedOrigins: ["*"]}
+
+  RecordFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      CodeUri: src/
+      Environment:
+        Variables:
+          UPLOADS_TABLE: !Ref UploadsTable
+          COUNTERS_TABLE: !Ref CountersTable
+          QUEUE_URL: !Ref UploadQueue
+          BUCKET: !Ref UploadBucket
+          TOKEN: !Ref ApiToken
+          SHARED_VPC: !ImportValue shared-vpc-id
+          ROLE: !GetAtt RecordFunctionRole.Arn
+          LOG_LEVEL: DEBUG
+      Events:
+        Uploads:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt UploadQueue.Arn
+
+  ProdAlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: IsProd
+
+Outputs:
+  UploadBucketName:
+    Value: !Ref UploadBucket
+  QueueUrl:
+    Value: !Ref UploadQueue
+  Token:
+    Value: !Sub "token-${ApiToken}"
+  AlarmTopic:
+    Condition: IsProd
+    Value: !Ref ProdAlarmTopic

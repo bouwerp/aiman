@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Orders, with an event fan-out through SNS to a FIFO-free queue and a FIFO work queue.
+
+Parameters:
+  Env:
+    Type: String
+    Default: test
+    AllowedPattern: "[a-z]+"
+  Zones:
+    Type: CommaDelimitedList
+    Default: "a, b"
+  ArchiveBucketName:
+    Type: String
+    Default: ""
+
+Mappings:
+  Capacity:
+    test: {Read: 5, Write: 2}
+    prod: {Read: 50, Write: 20}
+
+Conditions:
+  HasArchive: !Not [!Equals [!Ref ArchiveBucketName, ""]]
+  IsTest: !Equals [!Ref Env, test]
+  TestWithoutArchive: !And [!Condition IsTest, !Not [!Condition HasArchive]]
+
+Resources:
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Join ["-", [orders, !Ref Env]]
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: !FindInMap [Capacity, !Ref Env, Read]
+        WriteCapacityUnits: !FindInMap [Capacity, !Ref Env, Write]
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+        - {AttributeName: status, AttributeType: S}
+        - {AttributeName: createdAt, AttributeType: N}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      GlobalSecondaryIndexes:
+        - IndexName: by-status
+          KeySchema:
+            - {AttributeName: status, KeyType: HASH}
+            - {AttributeName: createdAt, KeyType: RANGE}
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [total]
+          ProvisionedThroughput: {ReadCapacityUnits: 2, WriteCapacityUnits: 1}
+      LocalSecondaryIndexes:
+        - IndexName: by-created
+          KeySchema:
+            - {AttributeName: pk, KeyType: HASH}
+            - {AttributeName: createdAt, KeyType: RANGE}
+          Projection: {ProjectionType: KEYS_ONLY}
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - {Key: team, Value: orders}
+        - {Key: zone, Value: !Select [1, !Ref Zones]}
+        - {Key: arn, Value: !GetAtt OrderEvents.TopicArn}
+
+  WorkDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      FifoQueue: true
+      QueueName: !Sub "${Env}-work-dlq.fifo"
+
+  WorkQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt WorkDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - {Key: env, Value: !Ref Env}
+
+  OrderEvents:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Order events
+      Subscription:
+        - Protocol: sqs
+          Endpoint: !GetAtt NotifyQueue.Arn
+        - Protocol: email
+          Endpoint: ops@example.com
+
+  NotifyQueue:
+    Type: AWS::SQS::Queue
+
+  NotifySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OrderEvents
+      Protocol: sqs
+      Endpoint: !GetAtt WorkQueue.Arn
+      RawMessageDelivery: true
+      FilterPolicy:
+        kind: [order.created]
+
+  OrderEventsPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref OrderEvents]
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: sns:Publish
+            Resource: !Ref OrderEvents
+
+  ArchiveBucket:
+    Type: AWS::S3::Bucket
+    Condition: HasArchive
+    Properties:
+      BucketName: !Ref ArchiveBucketName
+
+  ReportsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      ObjectLockEnabled: !If [TestWithoutArchive, true, !Ref "AWS::NoValue"]
+      NotificationConfiguration:
+        TopicConfigurations:
+          - Event: s3:ObjectCreated:Put
+            Topic: !Ref OrderEvents
+
+  ReportsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReportsBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${ReportsBucket}/*"
+            Condition: {Bool: {"aws:SecureTransport": "false"}}
+
+  OrdersRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: {}
+
+Outputs:
+  TableName:
+    Value: !Ref OrdersTable
+  StreamArn:
+    Value: !GetAtt OrdersTable.StreamArn
+  WorkQueueUrl:
+    Value: !GetAtt WorkQueue.QueueUrl
+  Zones:
+    Value: !Join [",", !GetAZs ""]
+  Encoded:
+    Value: !Base64 hello
+  RoleArn:
+    Value: !GetAtt OrdersRole.Arn

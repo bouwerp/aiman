@@ -90,10 +90,15 @@ func (p *Plan) BuildEnv(req EnvRequest) error {
 			continue
 		}
 		for _, ev := range fn.Vars {
-			w := Warning{Stack: fn.Stack, Resource: fn.LogicalID, Attribute: "Environment.Variables." + ev.Name}
+			w := Warning{Stack: fn.Stack, Resource: fn.LogicalID, Attribute: "Environment.Variables." + ev.Name, File: fn.File, Line: ev.Line}
 			if hasAnyPrefix(ev.Name, req.ReservedPrefixes) {
 				w.Message = "the harness sets this variable itself; it is left out"
 				p.Note(w)
+				continue
+			}
+			if ev.Unresolved != "" {
+				w.Message = ev.Unresolved + "; the variable is left out of the app's environment"
+				p.Warn(w)
 				continue
 			}
 			if err := p.valueStatus(ev.Value); err != nil && !errors.Is(err, ErrPending) {
