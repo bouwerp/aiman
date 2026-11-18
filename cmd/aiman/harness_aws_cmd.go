@@ -16,7 +16,7 @@ import (
 )
 
 const harnessAWSUsageText = `Usage: aiman harness aws calls [--after N] [--limit N] [--run ID] [--json]
-       aiman harness aws plan [<scenario>] [--json]
+       aiman harness aws plan [<scenario>] [--dirty] [--json]
        aiman harness aws resources [--run ID] [--json]
        aiman harness aws s3 ls [<bucket>[/<prefix>]] [--limit N] [--token T] [--run ID] [--json]
        aiman harness aws s3 versions <bucket>/<key> [--run ID] [--json]

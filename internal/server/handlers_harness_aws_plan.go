@@ -19,11 +19,18 @@ func (s *Server) handleHarnessAWSPlan(ctx context.Context, req Request, p harnes
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
+	if p.Dirty && src.sha != "" {
+		return errResp(req.ID, CodeInvalidParams, errReviewDirty)
+	}
 	sha, plans, err := s.harness.d.Manager.AWSPlans(ctx, harness.AWSPlanRequest{
-		Repo: src.repo, SHA: src.sha, Override: src.override, Scenario: p.Scenario,
+		Repo: src.repo, SHA: src.sha, Override: src.override, Scenario: p.Scenario, Dirty: p.Dirty,
 	})
 	if err != nil {
 		return harnessErr(req.ID, err, CodeInvalidParams)
 	}
-	return Response{ID: req.ID, Result: map[string]any{"type": "harness_aws_plan", "session": sess.ID, "sha": sha, "plans": plans}}
+	out := map[string]any{"type": "harness_aws_plan", "session": sess.ID, "sha": sha, "plans": plans}
+	if p.Dirty {
+		out["dirty"] = true
+	}
+	return Response{ID: req.ID, Result: out}
 }

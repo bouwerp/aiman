@@ -2237,10 +2237,12 @@ components:
     HarnessListResult:
       type: object
       description: >
-        harness.list {session?}: the scenarios of the session's harness at
-        HEAD (a review session's PR head) and the session's runs, newest
-        first. A missing or broken harness file leaves scenarios empty and
-        sets file_error; the runs are still listed. A device read method.
+        harness.list {session?, dirty?}: the scenarios of the session's
+        harness at HEAD (a review session's PR head), or in the working tree
+        with dirty (then dirty and diff_sha256 are set; a review session
+        refuses dirty), and the session's runs, newest first. A missing or
+        broken harness file leaves scenarios empty and sets file_error; the
+        runs are still listed. A device read method.
       required: [type, session, runs, scenarios]
       properties:
         type:
@@ -2252,6 +2254,10 @@ components:
           type: string
           enum: [file, config]
         sha:
+          type: string
+        dirty:
+          type: boolean
+        diff_sha256:
           type: string
         scenarios:
           type: array
