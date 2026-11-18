@@ -792,6 +792,7 @@ components:
             - harness.evm_trace
             - harness.db
             - harness.capture
+            - harness.aws_calls
             - design.publish
             - review.reveal
             - review.post

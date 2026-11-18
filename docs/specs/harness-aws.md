@@ -725,6 +725,16 @@ Where the built code differs from the approved design, per piece.
 8. **Key-id refusal covers every string.** The access key id pattern is checked against every string in the parsed file (keys and values, commands, step text), not only env, parameter, var and import values; identity variable names are checked in service env, aws env and both `wrap_env` lists.
 9. **Override vetting.** `harness.aws.images.<kind>` is passed both as `Options.AWSImages` and appended to the allowed list given to the manager and the vetter (`harness.AllowedWithAWS`), which is what "vetted as a listed image" means in code.
 
+**A2**
+
+1. **Account field.** The call carries `access_key` (only the value `test`), `foreign_key` (any other key) and `unsigned` (no credential scope) plus `region`, instead of an `account`: the tap does not know how MiniStack derives an account from a key, and a key id is not something the log should keep.
+2. **Applier label.** The tap names the client `aiman` when the User-Agent holds `edge.AWSApplierAgent` (`aiman-harness-aws-apply`); A4's applier must send it. It is a label, not proof, like a DAP client name. Other clients are named by a cached reverse lookup on the inner network (Docker's PTR answer turned into the compose service; `compose run` containers drop their `-run-<hex>` suffix), else the address.
+3. **Extra fields.** A call also has `protocol` (`rest-xml`, `json`, `query`, `admin`), `method`, `pending`, `error` (transport failure), `params_truncated` and `redacted`. Refused admin paths are logged with status 403 and error code `AimanRefused`. Params are a compact JSON string, not an object, because they are cut at 4 KiB.
+4. **Store.** Only the 2000-call bound applies; there is no byte bound, since params are at most 4 KiB each. A read stops at 4 MiB.
+5. **RPC reply.** `harness.aws_calls` also returns `state` and `redacted`, as `harness.capture` does. A run with no aws service is `invalid_params`.
+6. **OpenAPI.** `harness.aws_calls` is added to `RpcRequest.method` in `api/openapi.yaml`, because `TestOpenAPIListsEveryMethodAndEvent` fails for any dispatched method missing there; it stays off the gateway device list.
+7. **Files.** The tap's tests are `internal/harness/edge/aws_tap_calls_test.go` and `aws_ops_test.go`; the Docker test is `internal/harness/aws_tap_docker_test.go`. `Edge` gains one field (`awsTap`) in `edge.go`; `SetAWSTap` and `Client.AWSCalls` live in `aws_tap.go`. `composeDown` (`manager_ops.go`) calls `saveAWSCalls`. The CLI adds `aws` to `harnessSubs` with a `harnessAWSCommands` map that A3 and A4 extend from their own `init`.
+
 ## What you should be able to explain after reading
 
 1. How the app reaches the emulator, and why it never holds or reaches real AWS credentials or hosts.

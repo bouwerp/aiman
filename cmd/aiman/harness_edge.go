@@ -153,7 +153,7 @@ func serveEdge(opts edgeOptions) error {
 		return err
 	}
 	for _, t := range opts.awsTaps {
-		stop, err := startAWSTap(opts.inner[0], t)
+		stop, err := startAWSTap(e, opts.inner[0], t)
 		if err != nil {
 			return fmt.Errorf("aws tap %s: %w", t.Name, err)
 		}
@@ -182,9 +182,10 @@ func serveEdge(opts edgeOptions) error {
 }
 
 // startAWSTap serves the tap on the edge's address in the inner prefix,
-// where the aws service's name points.
-func startAWSTap(inner netip.Prefix, spec edge.RelaySpec) (func(), error) {
-	tap, err := edge.NewAWSTap(spec.Target)
+// where the aws service's name points, and hands it to e so the control
+// socket reads its call log.
+func startAWSTap(e *edge.Edge, inner netip.Prefix, spec edge.RelaySpec) (func(), error) {
+	tap, err := edge.NewAWSTap(spec.Target, edge.WithAWSTapName(spec.Name))
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +202,7 @@ func startAWSTap(inner netip.Prefix, spec edge.RelaySpec) (func(), error) {
 			log.Printf("edge: aws tap %s stopped: %v", spec.Name, err)
 		}
 	}()
+	e.SetAWSTap(tap)
 	log.Printf("edge: aws tap %s %s -> %s", spec.Name, ln.Addr(), spec.Target)
 	return func() { _ = tap.Close() }, nil
 }
