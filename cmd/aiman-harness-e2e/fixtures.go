@@ -5,6 +5,8 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -57,6 +59,8 @@ var fixtures = map[string]fixture{
 			"create table customers (id int, name text, password text);\n" +
 			"insert into customers values (1, 'Ada', 'hunter2');\n",
 	})},
+	// sqliteImage is built by writeSQLite, never pulled.
+	"sqlite": {scenario: "lite", images: []string{plainAppImage}, write: writeSQLite},
 	"evm": {scenario: "chain", images: []string{plainAppImage, anvilImage}, write: files(map[string]string{
 		".aiman/harness.yaml": evmFile(),
 	})},
@@ -259,6 +263,54 @@ scenarios:
       - do: Open the Database tab and pick public.orders
         expect: Two rows, api_key shown as [redacted]
 `
+
+// sqliteImage ships a populated /data/app.db and sleeps. A harness file
+// cannot seed a SQLite database (sqlite fixtures are refused, and a service
+// takes no command), so the image carries the file and the service's data
+// volume at /data starts as a copy of it. Its tag matches the allowed
+// python:* so the run accepts it with vetting off.
+const sqliteImage = "python:3.13-slim-aimane2e-sqlite"
+
+const sqliteDockerfile = `FROM ` + harnesstest.PythonImage + `
+RUN mkdir /data && python3 -c "import sqlite3; c = sqlite3.connect('/data/app.db'); c.executescript('''` +
+	`create table notes (id integer primary key, body text, api_token text); ` +
+	`insert into notes values (1, 'first note', 't-111'), (2, 'second note', 't-222'); ` +
+	`create table users (id integer primary key, name text, password text); ` +
+	`insert into users values (1, 'Ada', 'hunter2');'''); c.commit()"
+CMD ["sleep", "86400"]
+`
+
+const sqliteFile = `version: 1
+app:
+  run: exec sleep 86400
+services:
+  lite:
+    image: ` + sqliteImage + `
+    ready: test -f /data/app.db
+    database: {kind: sqlite, path: /data/app.db}
+    limits: {memory: 256m}
+scenarios:
+  - id: lite
+    title: Notes in SQLite
+    services: [lite]
+    steps:
+      - do: Open the Database tab and pick notes
+        expect: Two rows, api_token shown as [redacted]
+`
+
+// writeSQLite builds sqliteImage from the Python image, then writes and
+// commits the repository.
+func writeSQLite(ctx context.Context, repo string) error {
+	if err := ensureImages(ctx, []string{harnesstest.PythonImage}); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "docker", "build", "-q", "-t", sqliteImage, "-")
+	cmd.Stdin = strings.NewReader(sqliteDockerfile)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("build %s: %w: %s", sqliteImage, err, out)
+	}
+	return files(map[string]string{".aiman/harness.yaml": sqliteFile})(ctx, repo)
+}
 
 // anvilDev0 is anvil's first dev account; anvilFirst and anvilSecond the
 // addresses its first two creations get.
