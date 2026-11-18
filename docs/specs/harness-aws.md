@@ -758,6 +758,18 @@ Where the built code differs from the approved design, per piece.
 8. **No importer yet.** Until A5 and A6 register theirs, a stack is one warning (`this aiman cannot import <format> yet`) and adds nothing; a reference into it refuses the run.
 9. **Plan without a scenario.** `harness.aws_plan` with no scenario plans every aws service of the file without scenario overrides.
 
+**A6**
+
+1. **function_env reads Terraform functions.** The design limited `function_env` to CloudFormation functions. A6 reads `aws_lambda_function` `environment.variables` as a function environment, so `function_env` may name `<stack>.aws_lambda_function.<name>` (validation accepts that address and nothing else for a Terraform stack).
+2. **Names that refer to other resources resolve.** A `name` or `bucket` built from another planned resource's name, URL or ARN (`"${aws_sqs_queue.main.name}-dlq"`) is worked out statically the way `Build` will name the target, instead of being unresolvable. A reference to a learned attribute (a stream ARN) in a name still skips the resource.
+3. **Not in the plan model.** `aws_s3_bucket_cors_configuration`, `aws_s3_bucket_lifecycle_configuration`, `aws_s3_bucket_object_lock_configuration` and inline object-lock rules are notes, as A4 deviation 1 foresaw; `object_lock_enabled` is planned.
+4. **Small additions.** `aws_sqs_queue_redrive_allow_policy`, `aws_sns_topic` `display_name`, provider v3 inline bucket `policy` and `object_lock_configuration`, `dynamic` blocks, `optional()` object attributes, `.tf.json` and `.tfvars.json` files. Override files (`override.tf`, `*_override.tf`) are not merged; each is a note.
+5. **Function semantics.** The table's functions are cty's stdlib, plus Terraform's own behaviour for `replace` (`/regex/`), `length` (strings and objects) and `coalesce` (skips empty strings). Others may differ from Terraform at the edges (for example `lookup` without a default on a missing key is an error, which becomes a warning).
+6. **Notes and warnings.** Arguments aiman does not read are one `not emulated, dropped: …` note per resource (HCL files only, since a JSON body cannot list them). Undeclared `vars` are a warning and undeclared tfvars entries a note. `validation` blocks are one note per module instance listing the variables.
+7. **Bounds.** 1 MiB per file, 16 MiB and 512 files per stack, 1000 instances per `count`/`for_each` block, 5000 resource instances per stack.
+8. **Known gap.** A reference to a planned resource's attribute compared in an expression (`aws_sqs_queue.q.name == "x"`) compares the reference, not the name, so the condition can come out differently from Terraform's.
+9. **Files.** Tests are `tf_test.go` and `tf_golden_test.go` (goldens `testdata/tf/*/plan.golden.json`, rewritten with `-update-tf`); the Docker test is `internal/harness/aws_tf_docker_test.go`. `internal/harness/aws.go` gains `tfLambdaRe`.
+
 ## What you should be able to explain after reading
 
 1. How the app reaches the emulator, and why it never holds or reaches real AWS credentials or hosts.

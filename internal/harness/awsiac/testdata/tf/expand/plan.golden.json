@@ -1,0 +1,418 @@
+{
+  "service": "aws",
+  "region": "eu-west-1",
+  "endpoint": "http://aws:4566",
+  "services": [
+    "s3",
+    "dynamodb",
+    "sqs",
+    "sns"
+  ],
+  "resources": [
+    {
+      "stack": "infra",
+      "logical_id": "aws_sqs_queue.work[0]",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name": "work-a",
+      "file": "expand/main.tf",
+      "line": 30,
+      "queue": {},
+      "physical": "work-a",
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:work-a",
+        "name": "work-a",
+        "ref": "http://aws:4566/000000000000/work-a",
+        "url": "http://aws:4566/000000000000/work-a"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sqs_queue.work[1]",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name": "work-b",
+      "file": "expand/main.tf",
+      "line": 30,
+      "queue": {},
+      "physical": "work-b",
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:work-b",
+        "name": "work-b",
+        "ref": "http://aws:4566/000000000000/work-b",
+        "url": "http://aws:4566/000000000000/work-b"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_dynamodb_table.t[\"events\"]",
+      "type": "aws_dynamodb_table",
+      "source": "terraform",
+      "kind": "table",
+      "name": "events",
+      "file": "expand/main.tf",
+      "line": 41,
+      "table": {
+        "hash_key": "stream",
+        "range_key": "at",
+        "attributes": [
+          {
+            "name": "stream",
+            "type": "S"
+          },
+          {
+            "name": "at",
+            "type": "S"
+          },
+          {
+            "name": "kind",
+            "type": "S"
+          },
+          {
+            "name": "owner",
+            "type": "S"
+          }
+        ],
+        "billing_mode": "PAY_PER_REQUEST",
+        "gsis": [
+          {
+            "name": "by-kind",
+            "hash_key": "kind",
+            "projection": "ALL"
+          },
+          {
+            "name": "by-owner",
+            "hash_key": "owner",
+            "projection": "ALL"
+          }
+        ]
+      },
+      "physical": "events",
+      "attrs": {
+        "arn": "arn:aws:dynamodb:eu-west-1:000000000000:table/events",
+        "name": "events",
+        "ref": "events"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_dynamodb_table.t[\"users\"]",
+      "type": "aws_dynamodb_table",
+      "source": "terraform",
+      "kind": "table",
+      "name": "users",
+      "file": "expand/main.tf",
+      "line": 41,
+      "table": {
+        "hash_key": "id",
+        "attributes": [
+          {
+            "name": "id",
+            "type": "S"
+          }
+        ],
+        "billing_mode": "PAY_PER_REQUEST"
+      },
+      "physical": "users",
+      "attrs": {
+        "arn": "arn:aws:dynamodb:eu-west-1:000000000000:table/users",
+        "name": "users",
+        "ref": "users"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sns_topic.fanout",
+      "type": "aws_sns_topic",
+      "source": "terraform",
+      "kind": "topic",
+      "name": "fanout",
+      "depends_on": [
+        "aws_sqs_queue.work[0]",
+        "aws_sqs_queue.work[1]"
+      ],
+      "file": "expand/main.tf",
+      "line": 67,
+      "topic": {},
+      "physical": "fanout",
+      "attrs": {
+        "arn": "arn:aws:sns:eu-west-1:000000000000:fanout",
+        "name": "fanout",
+        "ref": "arn:aws:sns:eu-west-1:000000000000:fanout"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "module.buckets[\"assets\"].aws_s3_bucket.this",
+      "type": "aws_s3_bucket",
+      "source": "terraform",
+      "kind": "bucket",
+      "name_prefix": "assets-",
+      "file": "expand/modules/bucket/main.tf",
+      "line": 9,
+      "bucket": {
+        "versioning": "Enabled"
+      },
+      "physical": "assets-eyamd2isny3p",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:s3:::assets-eyamd2isny3p",
+        "domain_name": "assets-eyamd2isny3p.s3.amazonaws.com",
+        "name": "assets-eyamd2isny3p",
+        "ref": "assets-eyamd2isny3p",
+        "regional_domain_name": "assets-eyamd2isny3p.s3.eu-west-1.amazonaws.com"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "module.buckets[\"logs\"].aws_s3_bucket.this",
+      "type": "aws_s3_bucket",
+      "source": "terraform",
+      "kind": "bucket",
+      "name_prefix": "logs-",
+      "file": "expand/modules/bucket/main.tf",
+      "line": 9,
+      "bucket": {
+        "versioning": "Suspended"
+      },
+      "physical": "logs-q7ys5jfqjae3",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:s3:::logs-q7ys5jfqjae3",
+        "domain_name": "logs-q7ys5jfqjae3.s3.amazonaws.com",
+        "name": "logs-q7ys5jfqjae3",
+        "ref": "logs-q7ys5jfqjae3",
+        "regional_domain_name": "logs-q7ys5jfqjae3.s3.eu-west-1.amazonaws.com"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sns_topic_subscription.work[0]",
+      "type": "aws_sns_topic_subscription",
+      "source": "terraform",
+      "kind": "subscription",
+      "file": "expand/main.tf",
+      "line": 72,
+      "subscription": {
+        "topic": [
+          {
+            "ref": {
+              "stack": "infra",
+              "logical_id": "aws_sns_topic.fanout",
+              "attr": "arn"
+            }
+          }
+        ],
+        "protocol": "sqs",
+        "endpoint": [
+          {
+            "ref": {
+              "stack": "infra",
+              "logical_id": "aws_sqs_queue.work[0]",
+              "attr": "arn"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sns_topic_subscription.work[1]",
+      "type": "aws_sns_topic_subscription",
+      "source": "terraform",
+      "kind": "subscription",
+      "file": "expand/main.tf",
+      "line": 72,
+      "subscription": {
+        "topic": [
+          {
+            "ref": {
+              "stack": "infra",
+              "logical_id": "aws_sns_topic.fanout",
+              "attr": "arn"
+            }
+          }
+        ],
+        "protocol": "sqs",
+        "endpoint": [
+          {
+            "ref": {
+              "stack": "infra",
+              "logical_id": "aws_sqs_queue.work[1]",
+              "attr": "arn"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "stack": "infra",
+      "name": "work_urls",
+      "value": [
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "aws_sqs_queue.work[0]",
+            "attr": "url"
+          }
+        },
+        {
+          "lit": ","
+        },
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "aws_sqs_queue.work[1]",
+            "attr": "url"
+          }
+        }
+      ]
+    },
+    {
+      "stack": "infra",
+      "name": "bucket_arns",
+      "value": [
+        {
+          "lit": "{\"assets\":\""
+        },
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "module.buckets[\"assets\"].aws_s3_bucket.this",
+            "attr": "arn"
+          }
+        },
+        {
+          "lit": "\",\"logs\":\""
+        },
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "module.buckets[\"logs\"].aws_s3_bucket.this",
+            "attr": "arn"
+          }
+        },
+        {
+          "lit": "\"}"
+        }
+      ]
+    },
+    {
+      "stack": "infra",
+      "name": "table_names",
+      "value": [
+        {
+          "lit": "[\""
+        },
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "aws_dynamodb_table.t[\"events\"]",
+            "attr": "name"
+          }
+        },
+        {
+          "lit": "\",\""
+        },
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "aws_dynamodb_table.t[\"users\"]",
+            "attr": "name"
+          }
+        },
+        {
+          "lit": "\"]"
+        }
+      ]
+    }
+  ],
+  "warnings": [
+    {
+      "stack": "infra",
+      "resource": "aws_sqs_queue.per_zone",
+      "file": "expand/main.tf",
+      "line": 36,
+      "message": "for_each data.aws_availability_zones.all is a data source, which aiman does not read; the resource is skipped"
+    }
+  ],
+  "notes": [
+    {
+      "stack": "infra",
+      "resource": "data.aws_availability_zones",
+      "message": "data sources are not read; references to them are unresolvable"
+    }
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "resource": "infra.aws_sqs_queue.work[0]",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    },
+    {
+      "n": 2,
+      "resource": "infra.aws_sqs_queue.work[1]",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    },
+    {
+      "n": 3,
+      "resource": "infra.aws_sns_topic.fanout",
+      "service": "sns",
+      "operation": "CreateTopic"
+    },
+    {
+      "n": 4,
+      "resource": "infra.aws_sns_topic_subscription.work[0]",
+      "service": "sns",
+      "operation": "Subscribe"
+    },
+    {
+      "n": 5,
+      "resource": "infra.aws_sns_topic_subscription.work[1]",
+      "service": "sns",
+      "operation": "Subscribe"
+    },
+    {
+      "n": 6,
+      "resource": "infra.aws_dynamodb_table.t[\"events\"]",
+      "service": "dynamodb",
+      "operation": "CreateTable"
+    },
+    {
+      "n": 7,
+      "resource": "infra.aws_dynamodb_table.t[\"users\"]",
+      "service": "dynamodb",
+      "operation": "CreateTable"
+    },
+    {
+      "n": 8,
+      "resource": "infra.module.buckets[\"assets\"].aws_s3_bucket.this",
+      "service": "s3",
+      "operation": "CreateBucket"
+    },
+    {
+      "n": 9,
+      "resource": "infra.module.buckets[\"logs\"].aws_s3_bucket.this",
+      "service": "s3",
+      "operation": "CreateBucket"
+    },
+    {
+      "n": 10,
+      "resource": "infra.module.buckets[\"assets\"].aws_s3_bucket.this",
+      "service": "s3",
+      "operation": "PutBucketVersioning"
+    },
+    {
+      "n": 11,
+      "resource": "infra.module.buckets[\"logs\"].aws_s3_bucket.this",
+      "service": "s3",
+      "operation": "PutBucketVersioning"
+    }
+  ]
+}
