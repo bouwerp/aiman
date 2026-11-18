@@ -20,8 +20,11 @@ const (
 	MaxLogLines     = 1000
 )
 
-// maxBody bounds a request body.
+// maxBody bounds a request body; routeMaxBody raises it for a route that
+// carries a file.
 const maxBody = 64 << 10
+
+var routeMaxBody = map[string]int64{}
 
 //go:embed web
 var webFS embed.FS
@@ -71,7 +74,11 @@ func (s *Server) routes() http.Handler {
 				return
 			}
 			if r.URL.Path != DAPPath {
-				r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+				limit := int64(maxBody)
+				if n, ok := routeMaxBody[r.URL.Path]; ok {
+					limit = n
+				}
+				r.Body = http.MaxBytesReader(w, r.Body, limit)
 			}
 			route.h(s, w, r)
 			return

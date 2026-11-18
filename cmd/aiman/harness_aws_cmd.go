@@ -28,6 +28,8 @@ const harnessAWSUsageText = `Usage: aiman harness aws calls [--after N] [--limit
        aiman harness aws ddb query <table> --pk NAME=VALUE [--sk 'OP V1 [V2]'] [--index I] [--desc] [--limit N] [--start TOKEN] [--run ID] [--json]
        aiman harness aws ddb get <table> '<key JSON>' [--run ID] [--json]
        aiman harness aws ddb stream <table> [--limit N] [--run ID] [--json]
+       aiman harness aws write s3-put|s3-delete|ddb-put|ddb-delete|sqs-send ...   (operator; aiman harness aws write)
+       aiman harness aws reset   (operator: wipe the emulator, apply the plan and seed again)
 Every command takes --session NAME (default $AIMAN_ID) or --run ID, and --service NAME when a run has more than one aws service.
 `
 

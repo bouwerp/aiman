@@ -1,0 +1,283 @@
+{
+  "service": "aws",
+  "region": "eu-west-1",
+  "endpoint": "http://aws:4566",
+  "services": [
+    "s3",
+    "dynamodb",
+    "sqs",
+    "sns"
+  ],
+  "resources": [
+    {
+      "stack": "infra",
+      "logical_id": "aws_sqs_queue.main",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name": "main-x",
+      "file": "unresolved/main.tf",
+      "line": 37,
+      "queue": {},
+      "physical": "main-x",
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:main-x",
+        "name": "main-x",
+        "ref": "http://aws:4566/000000000000/main-x",
+        "url": "http://aws:4566/000000000000/main-x"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sqs_queue.dlq",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name": "main-x-dlq",
+      "file": "unresolved/main.tf",
+      "line": 44,
+      "queue": {},
+      "physical": "main-x-dlq",
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:main-x-dlq",
+        "name": "main-x-dlq",
+        "ref": "http://aws:4566/000000000000/main-x-dlq",
+        "url": "http://aws:4566/000000000000/main-x-dlq"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sqs_queue.jobs",
+      "type": "aws_sqs_queue",
+      "source": "terraform",
+      "kind": "queue",
+      "name_prefix": "jobs-",
+      "file": "unresolved/main.tf",
+      "line": 49,
+      "queue": {
+        "fifo": true
+      },
+      "physical": "jobs-g4plel6qn4yj.fifo",
+      "generated": true,
+      "attrs": {
+        "arn": "arn:aws:sqs:eu-west-1:000000000000:jobs-g4plel6qn4yj.fifo",
+        "name": "jobs-g4plel6qn4yj.fifo",
+        "ref": "http://aws:4566/000000000000/jobs-g4plel6qn4yj.fifo",
+        "url": "http://aws:4566/000000000000/jobs-g4plel6qn4yj.fifo"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_s3_bucket.legacy",
+      "type": "aws_s3_bucket",
+      "source": "terraform",
+      "kind": "bucket",
+      "name": "legacy-bucket",
+      "file": "unresolved/main.tf",
+      "line": 63,
+      "bucket": {
+        "versioning": "Enabled",
+        "policy": [
+          {
+            "lit": "{\"Statement\":[{\"Effect\":\"Deny\",\"Resource\":\""
+          },
+          {
+            "ref": {
+              "stack": "infra",
+              "logical_id": "aws_s3_bucket.legacy",
+              "attr": "arn"
+            }
+          },
+          {
+            "lit": "/*\"}]}"
+          }
+        ]
+      },
+      "physical": "legacy-bucket",
+      "attrs": {
+        "arn": "arn:aws:s3:::legacy-bucket",
+        "domain_name": "legacy-bucket.s3.amazonaws.com",
+        "name": "legacy-bucket",
+        "ref": "legacy-bucket",
+        "regional_domain_name": "legacy-bucket.s3.eu-west-1.amazonaws.com"
+      }
+    },
+    {
+      "stack": "infra",
+      "logical_id": "aws_sns_topic.t",
+      "type": "aws_sns_topic",
+      "source": "terraform",
+      "kind": "topic",
+      "name": "events-x",
+      "file": "unresolved/main.tf",
+      "line": 84,
+      "topic": {},
+      "physical": "events-x",
+      "attrs": {
+        "arn": "arn:aws:sns:eu-west-1:000000000000:events-x",
+        "name": "events-x",
+        "ref": "arn:aws:sns:eu-west-1:000000000000:events-x"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "stack": "infra",
+      "name": "dlq_url",
+      "value": [
+        {
+          "ref": {
+            "stack": "infra",
+            "logical_id": "aws_sqs_queue.dlq",
+            "attr": "url"
+          }
+        }
+      ]
+    }
+  ],
+  "warnings": [
+    {
+      "stack": "infra",
+      "resource": "module.vpc",
+      "file": "unresolved/main.tf",
+      "line": 7,
+      "message": "module source \"terraform-aws-modules/vpc/aws\" is not a local path; its resources are not planned and its outputs are unresolvable"
+    },
+    {
+      "stack": "infra",
+      "resource": "module.remote_queue",
+      "file": "unresolved/main.tf",
+      "line": 12,
+      "message": "module source \"git::https://example.com/queue.git\" is not a local path; its resources are not planned and its outputs are unresolvable"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_dynamodb_table.regional",
+      "attribute": "name",
+      "file": "unresolved/main.tf",
+      "line": 18,
+      "message": "data.aws_region.current is a data source, which aiman does not read; the resource is skipped"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_dynamodb_table.stamped",
+      "attribute": "hash_key",
+      "file": "unresolved/main.tf",
+      "line": 29,
+      "message": "Call to unknown function: There is no function named \"uuid\". (unresolved/main.tf:29); the resource is skipped"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_sqs_queue.main",
+      "attribute": "visibility_timeout_seconds",
+      "file": "unresolved/main.tf",
+      "line": 39,
+      "message": "Call to unknown function: There is no function named \"timestamp\". (unresolved/main.tf:39); the property is left out"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_sqs_queue.main",
+      "attribute": "policy",
+      "file": "unresolved/main.tf",
+      "line": 40,
+      "message": "aws_iam_role.r is a resource of type aws_iam_role, which is not emulated; the property is left out"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_sqs_queue.remote_dlq",
+      "attribute": "name",
+      "file": "unresolved/main.tf",
+      "line": 55,
+      "message": "module.remote_queue has the remote source \"git::https://example.com/queue.git\", which aiman does not read; the resource is skipped"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_sns_topic.t",
+      "attribute": "display_name",
+      "file": "unresolved/main.tf",
+      "line": 87,
+      "message": "depends on a value aiman cannot know without running terraform; the property is left out"
+    },
+    {
+      "stack": "infra",
+      "resource": "outputs.vpc_id",
+      "file": "unresolved/main.tf",
+      "line": 94,
+      "message": "module.vpc has the remote source \"terraform-aws-modules/vpc/aws\", which aiman does not read; the output is left out"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_s3_bucket_policy.elsewhere",
+      "attribute": "bucket",
+      "file": "unresolved/main.tf",
+      "line": 75,
+      "message": "not-in-this-stack is not a planned bucket; the aws_s3_bucket_policy is left out"
+    }
+  ],
+  "notes": [
+    {
+      "stack": "infra",
+      "resource": "data.aws_region",
+      "message": "data sources are not read; references to them are unresolvable"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_iam_role",
+      "message": "not emulated: aws_iam_role"
+    },
+    {
+      "stack": "infra",
+      "resource": "aws_s3_bucket_cors_configuration",
+      "message": "not emulated: aws_s3_bucket_cors_configuration (bucket CORS configuration is not in the plan model yet)"
+    },
+    {
+      "stack": "infra",
+      "resource": "google_storage_bucket",
+      "message": "not emulated: google_storage_bucket"
+    }
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "resource": "infra.aws_sqs_queue.main",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    },
+    {
+      "n": 2,
+      "resource": "infra.aws_sqs_queue.dlq",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    },
+    {
+      "n": 3,
+      "resource": "infra.aws_sqs_queue.jobs",
+      "service": "sqs",
+      "operation": "CreateQueue"
+    },
+    {
+      "n": 4,
+      "resource": "infra.aws_sns_topic.t",
+      "service": "sns",
+      "operation": "CreateTopic"
+    },
+    {
+      "n": 5,
+      "resource": "infra.aws_s3_bucket.legacy",
+      "service": "s3",
+      "operation": "CreateBucket"
+    },
+    {
+      "n": 6,
+      "resource": "infra.aws_s3_bucket.legacy",
+      "service": "s3",
+      "operation": "PutBucketVersioning"
+    },
+    {
+      "n": 7,
+      "resource": "infra.aws_s3_bucket.legacy",
+      "service": "s3",
+      "operation": "PutBucketPolicy"
+    }
+  ]
+}
