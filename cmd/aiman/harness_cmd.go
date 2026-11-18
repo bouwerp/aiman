@@ -108,6 +108,7 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness logs <service> [--lines N] [--run ID] [--json]
        aiman harness db <service> tables|rows <table>|query <sql> [--limit N] [--write] [--run ID] [--json]   (--write: operator)
        aiman harness capture [--after N] [--limit N] [--run ID] [--json]   (HTTP calls through the edge proxy)
+       aiman harness aws resources|s3|ddb ...   (see aiman harness aws)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
        aiman harness down [--run ID] [--json]
@@ -283,6 +284,8 @@ func harnessMain(args []string, h harnessIO) error {
 		return harnessImageMain(args[1:], h)
 	case "approve-image":
 		return harnessApproveImage(args[1:], h)
+	case "aws":
+		return harnessAWSMain(args[1:], h)
 	}
 	sub, ok := harnessSubs[args[0]]
 	if !ok {

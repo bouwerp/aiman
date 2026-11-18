@@ -8,6 +8,10 @@ import (
 	"strings"
 )
 
+// RelayKindAWS marks an aws service's read relay: the edge admits only S3
+// and DynamoDB reads, rebuilds and re-signs them (edge.KindAWS).
+const RelayKindAWS = "aws"
+
 // awsInitLimits bound the one-shot container that hands the emulator's data
 // volume to the run's user.
 var awsInitLimits = ResolvedLimits{Memory: 64 << 20, CPUs: 0.5, PIDs: 16}

@@ -130,6 +130,10 @@ func (r *relay) handle(client net.Conn) {
 		r.handleEVM(client)
 		return
 	}
+	if r.spec.Kind == KindAWS {
+		r.handleAWS(client)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.ctx, r.dialTimeout)
 	var d net.Dialer

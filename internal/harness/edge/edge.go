@@ -179,6 +179,10 @@ type RelaySpec struct {
 	// Kind is empty for plain TCP, or KindDAP for one debugger client at a
 	// time.
 	Kind string `json:"kind,omitempty"`
+	// Region and DownloadMax configure a KindAWS relay: the region it signs
+	// for, and the cap on one S3 object body (0 is DefaultAWSDownloadMax).
+	Region      string `json:"region,omitempty"`
+	DownloadMax int64  `json:"download_max,omitempty"`
 }
 
 // RelayStatus is a relay with its bound address and counters.
@@ -208,8 +212,14 @@ func (e *Edge) checkSpec(spec RelaySpec) error {
 	if !relayName.MatchString(spec.Name) {
 		return errorf(CodeInvalidParams, "relay name %q must be 1-32 letters, digits, - or _", spec.Name)
 	}
-	if spec.Kind != "" && spec.Kind != KindDAP && spec.Kind != KindEVM {
-		return errorf(CodeInvalidParams, "relay kind %q must be empty, %s or %s", spec.Kind, KindDAP, KindEVM)
+	if spec.Kind != "" && spec.Kind != KindDAP && spec.Kind != KindEVM && spec.Kind != KindAWS {
+		return errorf(CodeInvalidParams, "relay kind %q must be empty, %s, %s or %s", spec.Kind, KindDAP, KindEVM, KindAWS)
+	}
+	if spec.Kind == KindAWS && !awsRegionRe.MatchString(spec.Region) {
+		return errorf(CodeInvalidParams, "aws relay region %q is not a region name", spec.Region)
+	}
+	if spec.DownloadMax < 0 {
+		return errorf(CodeInvalidParams, "aws relay download max %d is negative", spec.DownloadMax)
 	}
 	if spec.Port < 0 || spec.Port > 65535 {
 		return errorf(CodeInvalidParams, "relay port %d is out of range", spec.Port)

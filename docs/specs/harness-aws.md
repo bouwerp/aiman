@@ -725,6 +725,17 @@ Where the built code differs from the approved design, per piece.
 8. **Key-id refusal covers every string.** The access key id pattern is checked against every string in the parsed file (keys and values, commands, step text), not only env, parameter, var and import values; identity variable names are checked in service env, aws env and both `wrap_env` lists.
 9. **Override vetting.** `harness.aws.images.<kind>` is passed both as `Options.AWSImages` and appended to the allowed list given to the manager and the vetter (`harness.AllowedWithAWS`), which is what "vetted as a listed image" means in code.
 
+**A3**
+
+1. **Relay configuration travels as flags.** `RelaySpec` gains `Region` and `DownloadMax`; the edge takes `--aws-region <r>` and `--aws-download-max N` beside `--aws-relay name=port=host:port` and applies them to every aws relay. The relay is listed after the aws service's turn in scenario order, as postgres and EVM relays are.
+2. **Refused rather than dropped.** Beyond the listed rules the relay refuses (403) a request carrying a method override header (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`), a query key or allowed header given twice, a bucket that breaks S3's naming rule, an object key with a `.` or `..` segment or a control character, a body on an S3 read and `Content-Encoding` on a DynamoDB read. Unlisted headers are still dropped. Answer headers pass except hop-by-hop ones and `Set-Cookie`. DynamoDB Streams calls are signed with the signing name `dynamodb`.
+3. **`resources` passes the manifest through.** The op returns `<run>/sandbox/aws/resources.json` as A4 writes it, or a `note` when no plan was applied; A4 owns its shape and the `NoEcho`/`sensitive` redaction.
+4. **Paging token and key typing.** `last_key` is an opaque base64url token of the raw `LastEvaluatedKey` (so paging survives redaction), and `start` takes it back. `ddb_query`'s `pk`/`sk` values and `ddb_get`'s `key` values are plain JSON typed from `DescribeTable`'s attribute definitions; `pk.name` must be the table's or index's partition key, and the sort key's name comes from the schema.
+5. **Small additions.** `s3_download` answers `capped` when the object is larger than the cap and refuses an offset past it; `s3_object` sniffs the first 8 KiB with its own ranged GET when the page starts later; metadata keys and tags with secret-looking names are `[redacted]` too. An emulator 4xx is `invalid_params`, anything else `unavailable`.
+6. **CLI.** Besides the spec's commands there are `aws s3 versions`, `aws s3 cat`, `aws ddb tables|describe|stream`. `aiman harness aws` parses its own flags (`--service`, `--out`, `--pk`, `--sk`, `--desc`, `--index`, `--start`, `--token`, `--version`, `--offset`) and keeps its subcommands in `harnessAWSCommands`, where A2's `calls` and A4's `plan` register.
+7. **OpenAPI.** `harness.aws` joins `api/openapi.yaml`'s `RpcRequest.method` enum, because `TestOpenAPIListsEveryMethodAndEvent` requires every dispatched method there; it stays off the gateway device list, so the phone cannot call it.
+8. **Console.** One line in `web/app.js` hides the aws relay from the app links (`run.aws_services`), as the Compose section asks; the AWS tab stays A7's.
+
 ## What you should be able to explain after reading
 
 1. How the app reaches the emulator, and why it never holds or reaches real AWS credentials or hosts.
