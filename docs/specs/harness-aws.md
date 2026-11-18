@@ -758,6 +758,16 @@ Where the built code differs from the approved design, per piece.
 8. **No importer yet.** Until A5 and A6 register theirs, a stack is one warning (`this aiman cannot import <format> yet`) and adds nothing; a reference into it refuses the run.
 9. **Plan without a scenario.** `harness.aws_plan` with no scenario plans every aws service of the file without scenario overrides.
 
+**A7**
+
+1. **No write route.** A7 and A8 were built in parallel, so `internal/console/aws.go` registers only the two GET routes. `POST /api/aws/write` and its controls are A8's: the page leaves the hidden `#aws-write` section for them, `window.aimanAWS.context()` gives the selection (run, service, view, bucket, prefix, key, table, key schema, item), the `aiman-aws-context` document event fires when it changes, and `window.aimanAWS.reload()` rereads the view after a write.
+2. **Resources from the run, not the plan RPC.** The Resources view reads the warnings and notes from `run.aws` (in every `harness.status` answer) and the resources, env and outputs from the `resources` op, which is the applied manifest. It does not call `harness.aws_plan`: that needs the session's commit, not the run, and would show a plan the run may not have applied.
+3. **Query parameters.** `GET /api/aws` takes flat query parameters (`pk_name`, `pk_value`, `sk_op`, `sk_value` twice for `between`, and `ddb_get`'s `key` as a JSON object) and builds serve's `pk`, `sk` and `key`; values stay strings, which serve types from the table's attribute definitions.
+4. **Hints read the capture too.** The virtual-hosted S3 and real-AWS hints come from the capture (`/api/capture`), polled with the call log while the Calls view is shown, since neither request reaches the tap.
+5. **Calls poll only in the Calls view.** The log is polled every 2s while the tab and the Calls view are both shown, not whenever the tab is.
+6. **Tap client names (A2 fix).** The app often takes the address the one-shot applier container had, and the tap's name cache (a minute per address) then named the app's calls `aws-emu-apply`. An applier call now looks nothing up: it fixes the name on the calls already stored from its address and drops the cached entry (`clientNames.forget`, `awsCallStore.nameFrom`); `TestAWSTapApplierAddressReused` covers it.
+7. **E2E fixture now, not in A9.** The driver's `aws` fixture lives in its own file, `cmd/aiman-harness-e2e/fixture_aws.go`, registered from `init`. With A5 and A6 not merged it fills the plan from `Declared` JSON through `awsiac.DeclarativeImporter` (swapped in for CloudFormation for that driver process) and its app is stdlib Python on `python:3.13-slim` signing its own SigV4 calls, because the MiniStack image's entrypoint is `python -m ministack` and the app command is `sh -c`. A9 replaces the plan with the SAM and Terraform stacks.
+
 ## What you should be able to explain after reading
 
 1. How the app reaches the emulator, and why it never holds or reaches real AWS credentials or hosts.

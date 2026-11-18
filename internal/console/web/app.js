@@ -448,7 +448,7 @@
       $(t.getAttribute("aria-controls")).hidden = !on;
     }
     if (id === "tab-logs") pollLogs();
-    $("layout").dataset.focus = id === "tab-debug" ? "debug" : id === "tab-db" ? "db" : "";
+    $("layout").dataset.focus = id === "tab-debug" ? "debug" : id === "tab-db" ? "db" : id === "tab-aws" ? "aws" : "";
     if (window.aimanDebug) window.aimanDebug.shown(id === "tab-debug");
     if (window.aimanDB) window.aimanDB.shown(id === "tab-db");
   }
@@ -468,6 +468,7 @@
     if (window.aimanEVM) window.aimanEVM.update(state);
     if (window.aimanDB) window.aimanDB.update(state);
     if (window.aimanNet) window.aimanNet.update(state);
+    if (window.aimanAWS) window.aimanAWS.update(state);
   }
 
   async function poll() {

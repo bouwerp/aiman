@@ -17,6 +17,8 @@
 <script src="/db.js" defer></script>
 <link rel="stylesheet" href="/net.css">
 <script src="/net.js" defer></script>
+<link rel="stylesheet" href="/aws.css">
+<script src="/aws.js" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -53,6 +55,7 @@
       <button type="button" role="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="false">Logs</button>
       <button type="button" role="tab" id="tab-debug" aria-controls="panel-debug" aria-selected="false">Debug</button>
       <button type="button" role="tab" id="tab-evm" aria-controls="panel-evm" aria-selected="false" hidden>EVM</button>
+      <button type="button" role="tab" id="tab-aws" aria-controls="panel-aws" aria-selected="false" hidden>AWS</button>
       <button type="button" role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false">Database</button>
       <button type="button" role="tab" id="tab-net" aria-controls="panel-net" aria-selected="false">Network</button>
     </div>
@@ -215,6 +218,102 @@
         <p class="hint" id="evm-status" role="status" aria-live="polite"></p>
         <ul class="evm-txs" id="evm-txs" aria-label="Recent transactions"></ul>
         <section class="evm-trace" id="evm-trace" aria-label="Call tree"></section>
+      </div>
+    </div>
+    <div class="panel" role="tabpanel" id="panel-aws" aria-labelledby="tab-aws" hidden>
+      <p class="empty" id="aws-empty">This run has no AWS service.</p>
+      <div id="aws" hidden>
+        <p class="hint">Emulated AWS (MiniStack): behaviour can differ from AWS. Reads go through a relay that admits only reads.</p>
+        <div class="panel-actions">
+          <span id="aws-service-row" hidden>
+            <label for="aws-service">Service</label>
+            <select id="aws-service"></select>
+          </span>
+          <span class="aws-views" role="group" aria-label="AWS views">
+            <button type="button" class="btn" id="aws-v-resources" aria-pressed="true">Resources</button>
+            <button type="button" class="btn" id="aws-v-s3" aria-pressed="false">S3</button>
+            <button type="button" class="btn" id="aws-v-ddb" aria-pressed="false">DynamoDB</button>
+            <button type="button" class="btn" id="aws-v-calls" aria-pressed="false">Calls</button>
+          </span>
+        </div>
+        <p class="hint" id="aws-status" role="status" aria-live="polite"></p>
+
+        <section id="aws-resources" aria-label="Resources">
+          <ul class="aws-warnings" id="aws-warnings" aria-label="Plan warnings and notes"></ul>
+          <div class="aws-scroll" id="aws-res"></div>
+          <h4>Environment and outputs</h4>
+          <div id="aws-env"></div>
+        </section>
+
+        <section id="aws-s3" aria-label="S3" hidden>
+          <div class="panel-actions">
+            <ul class="aws-chips" id="aws-buckets" aria-label="Buckets"></ul>
+            <button type="button" class="btn" id="aws-buckets-reload">Reload buckets</button>
+          </div>
+          <nav class="aws-crumbs" id="aws-crumbs" aria-label="Prefix"></nav>
+          <ul class="aws-objects" id="aws-objects" aria-label="Objects"></ul>
+          <button type="button" class="btn" id="aws-objects-more" hidden>More objects</button>
+          <section class="aws-object" id="aws-object" aria-label="Object"></section>
+        </section>
+
+        <section id="aws-ddb" aria-label="DynamoDB" hidden>
+          <div class="panel-actions">
+            <ul class="aws-chips" id="aws-tables" aria-label="Tables"></ul>
+            <button type="button" class="btn" id="aws-tables-reload">Reload tables</button>
+          </div>
+          <div id="aws-describe"></div>
+          <form class="aws-query" id="aws-query" hidden>
+            <label for="aws-q-index">Read from</label>
+            <select id="aws-q-index"></select>
+            <label for="aws-q-pk" id="aws-q-pk-label">Partition key</label>
+            <input type="text" id="aws-q-pk" autocomplete="off" spellcheck="false" placeholder="empty: scan">
+            <span class="aws-q-sk" id="aws-q-sk-row" hidden>
+              <label for="aws-q-skop" id="aws-q-sk-label">Sort key</label>
+              <select id="aws-q-skop">
+                <option value="">any</option>
+                <option value="=">=</option>
+                <option value="&lt;">&lt;</option>
+                <option value="&lt;=">&lt;=</option>
+                <option value="&gt;">&gt;</option>
+                <option value="&gt;=">&gt;=</option>
+                <option value="begins_with">begins with</option>
+                <option value="between">between</option>
+              </select>
+              <input type="text" id="aws-q-sk1" autocomplete="off" spellcheck="false" aria-label="Sort key value">
+              <input type="text" id="aws-q-sk2" autocomplete="off" spellcheck="false" aria-label="Upper sort key value" hidden>
+            </span>
+            <label class="check"><input type="checkbox" id="aws-q-desc"> Newest sort key first</label>
+            <button type="submit" class="btn primary" id="aws-q-run">Scan or query</button>
+          </form>
+          <div class="aws-scroll" id="aws-items" tabindex="0" aria-label="Items"></div>
+          <div class="panel-actions">
+            <button type="button" class="btn" id="aws-items-first" hidden>First page</button>
+            <button type="button" class="btn" id="aws-items-more" hidden>Next page</button>
+            <button type="button" class="btn" id="aws-stream-load" hidden>Stream records</button>
+          </div>
+          <div id="aws-item"></div>
+          <ol class="aws-stream" id="aws-stream" aria-label="Stream records"></ol>
+        </section>
+
+        <section id="aws-calls" aria-label="Calls" hidden>
+          <div class="panel-actions">
+            <label for="aws-f-service">Service</label>
+            <select id="aws-f-service"><option value="">all</option></select>
+            <label for="aws-f-client">Client</label>
+            <select id="aws-f-client"><option value="">all</option></select>
+            <label class="check"><input type="checkbox" id="aws-f-errors"> Errors only</label>
+            <input type="search" id="aws-f-text" autocomplete="off" spellcheck="false" placeholder="operation, bucket, table" aria-label="Filter calls">
+            <button type="button" class="btn" id="aws-calls-pause" aria-pressed="false">Pause</button>
+          </div>
+          <ul class="aws-hints" id="aws-hints" aria-label="Hints"></ul>
+          <p class="hint" id="aws-calls-status"></p>
+          <p class="empty" id="aws-calls-empty">No AWS calls yet. Calls the app makes to the emulator appear here.</p>
+          <ol class="aws-call-list" id="aws-call-list" aria-label="AWS calls"></ol>
+        </section>
+
+        <!-- Operator writes (upload, delete, put item, send message, reset)
+             fill this area; the reads above never write. -->
+        <section class="aws-write" id="aws-write" aria-label="Operator writes" hidden></section>
       </div>
     </div>
     <div class="panel" role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>

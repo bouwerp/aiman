@@ -1,0 +1,104 @@
+/* AWS tab: resources, S3, DynamoDB and the call log. The panel takes the
+   width while it is open, as the Database tab does. */
+@media (min-width: 960px) {
+  .layout[data-focus="aws"] { grid-template-columns: minmax(0, 2fr) minmax(0, 5fr); }
+}
+
+.aws-views { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; }
+.aws-views .btn[aria-pressed="true"], .aws-chips .btn[aria-pressed="true"] {
+  border-color: var(--accent); color: var(--accent); font-weight: 600;
+}
+
+.aws-grid, .aws-kv code, .aws-obj, .aws-call, .aws-chips .btn {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.aws-warnings { list-style: none; margin: 0 0 0.6rem; padding: 0; display: grid; gap: 0.3rem; }
+.aws-warn { padding: 0.35rem 0.6rem; border-radius: 6px; overflow-wrap: anywhere; font-size: 0.9rem; }
+.aws-warn[data-kind="warning"] { background: var(--skip-bg); color: var(--skip); }
+.aws-warn[data-kind="note"] { background: var(--wait-bg); color: var(--wait); }
+.aws-warn code { font-size: 0.85rem; }
+
+.aws-scroll { max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--log-bg); }
+.aws-scroll:empty { display: none; }
+.aws-scroll > .hint { margin: 0.5rem 0.7rem; }
+.aws-grid { min-width: 100%; border-collapse: collapse; font-size: 12.5px; line-height: 1.45; }
+.aws-grid th, .aws-grid td {
+  padding: 0.25rem 0.6rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top;
+  white-space: pre-wrap; max-width: 40ch; overflow-wrap: anywhere;
+}
+.aws-grid th { position: sticky; top: 0; background: var(--panel); font-weight: 600; }
+.aws-grid .redacted { color: var(--skip); }
+.aws-item-row { cursor: pointer; }
+.aws-item-row:hover, .aws-item-row[aria-selected="true"] { background: var(--wait-bg); }
+.aws-item-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+.aws-tag { margin-left: 0.4rem; padding: 0 0.35rem; border-radius: 4px; font-size: 0.75rem; color: var(--muted); border: 1px solid var(--line); }
+
+.linkish {
+  padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; text-align: left;
+}
+.linkish:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+.linkish:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+.aws-kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 0.6rem; margin: 0.3rem 0 0.6rem; font-size: 0.85rem; }
+.aws-kv dt { color: var(--muted); }
+.aws-kv dd { margin: 0; overflow-wrap: anywhere; }
+
+.aws-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.aws-chips .btn { font-size: 0.82rem; }
+
+.aws-crumbs { margin: 0.5rem 0 0.3rem; font-size: 0.9rem; overflow-wrap: anywhere; }
+.aws-objects { list-style: none; margin: 0 0 0.5rem; padding: 0; max-height: 18rem; overflow-y: auto; }
+.aws-obj {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.2rem 0.6rem; width: 100%;
+  padding: 0.3rem 0.5rem; margin-bottom: 0.25rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink); font-size: 0.82rem; text-align: left; cursor: pointer;
+}
+.aws-obj[data-kind="prefix"] .aws-obj-key { color: var(--accent); }
+.aws-obj[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.aws-obj:focus-visible, .aws-call:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.aws-obj-key { overflow-wrap: anywhere; }
+.aws-obj-meta { color: var(--muted); }
+
+.aws-object:empty { display: none; }
+.aws-object { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--line); }
+.aws-object h4 { margin: 0.4rem 0; overflow-wrap: anywhere; }
+.aws-preview { max-height: 40vh; overflow: auto; }
+.aws-versions { margin: 0 0 0.5rem; padding-left: 1.2rem; font-size: 0.85rem; }
+.aws-versions li[aria-current="true"] { font-weight: 600; }
+
+.aws-query {
+  display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center;
+  margin: 0.6rem 0; padding: 0.6rem 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.aws-query input[type="text"] { min-width: 8rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.aws-q-sk { display: inline-flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.aws-query label.check { display: flex; gap: 0.4rem; align-items: baseline; font-size: 0.9rem; }
+
+.aws-stream { list-style: none; margin: 0.5rem 0; padding: 0; }
+.aws-rec > summary { cursor: pointer; padding: 0.2rem 0; font-size: 0.82rem; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.aws-rec h5, .aws-call-detail h5 { margin: 0.4rem 0 0.2rem; font-size: 0.85rem; }
+
+.aws-badge { display: inline-block; padding: 0 0.4rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; background: var(--pass-bg); color: var(--pass); }
+.aws-badge[data-failed="true"], .aws-badge[data-event="REMOVE"] { background: var(--fail-bg); color: var(--fail); }
+.aws-badge[data-event="MODIFY"] { background: var(--wait-bg); color: var(--wait); }
+
+.aws-hints { list-style: none; margin: 0 0 0.5rem; padding: 0; display: grid; gap: 0.3rem; }
+.aws-hint { padding: 0.4rem 0.6rem; border-radius: 6px; background: var(--skip-bg); color: var(--skip); overflow-wrap: anywhere; font-size: 0.9rem; }
+
+.aws-call-list { list-style: none; margin: 0; padding: 0; }
+.aws-call {
+  display: grid; grid-template-columns: 6rem minmax(0, 7rem) minmax(0, 1.2fr) minmax(0, 1.5fr) max-content max-content;
+  gap: 0.2rem 0.6rem; align-items: baseline; width: 100%; padding: 0.3rem 0.5rem; margin-bottom: 0.2rem;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink);
+  font-size: 0.8rem; text-align: left; cursor: pointer;
+}
+.aws-call[data-failed="true"] { border-left: 3px solid var(--fail); }
+.aws-call > span { overflow-wrap: anywhere; }
+.aws-call-time, .aws-call-client, .aws-call-dur { color: var(--muted); }
+.aws-call-detail { margin: 0 0 0.5rem 1rem; }
+@media (max-width: 700px) {
+  .aws-call { grid-template-columns: 1fr 1fr; }
+}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -258,5 +259,37 @@ func TestRedactAWSCall(t *testing.T) {
 	}
 	if again := RedactAWSCall(&c); again != 0 {
 		t.Fatalf("second pass replaced %d", again)
+	}
+}
+
+// TestAWSTapApplierAddressReused names the app after the applier left its
+// address: the applier's calls never cache a name for the address.
+func TestAWSTapApplierAddressReused(t *testing.T) {
+	emu := fakeEmulator(t)
+	var mu sync.Mutex
+	ptr := "harness-r1-aws-emu-apply-run-0a1b2c.harness-r1_inner."
+	resolver := func(_ context.Context, _ string) ([]string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return []string{ptr}, nil
+	}
+	tap, u := startTap(t, emu.Listener.Addr().String(), WithAWSTapName("aws"), WithAWSTapResolver(resolver))
+	sendAWS(t, "GET", u+"/", "", map[string]string{"User-Agent": "Go-http-client " + AWSApplierAgent, "Authorization": testAuth("s3")})
+	waitCalls(t, tap, 1)
+	time.Sleep(100 * time.Millisecond) // a lookup the applier started would have landed
+	mu.Lock()
+	ptr = "harness-r1-app-1.harness-r1_inner."
+	mu.Unlock()
+	sendAWS(t, "GET", u+"/", "", map[string]string{"Authorization": testAuth("s3")})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		calls := waitCalls(t, tap, 2)
+		if calls[0].Client == AWSClientAiman && calls[1].Client == "app" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("clients %q %q, want aiman and app", calls[0].Client, calls[1].Client)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
