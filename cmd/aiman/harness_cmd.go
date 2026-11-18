@@ -55,7 +55,7 @@ func runHarness(args []string) error {
 			return runHarnessScan(args[1:])
 		case "aws-apply":
 			// Runs inside an aws service's applier container.
-			return harness.AWSApplyMain(os.Stdin, os.Stdout)
+			return harness.AWSApplyMain(args[1:], os.Stdin, os.Stdout)
 		case "db-read":
 			// Runs inside the database browser's SQLite reader container.
 			return harness.SQLiteReadMain(os.Stdin, os.Stdout)
@@ -114,6 +114,7 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness aws calls [--after N] [--limit N] [--run ID] [--json]   (AWS API calls through the edge tap)
        aiman harness aws resources|s3|ddb ...   (see aiman harness aws)
        aiman harness aws plan [<scenario>] [--json]   (the aws plan from the commit, no run)
+       aiman harness aws write ...|reset   (operator writes to a run's aws service)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
        aiman harness down [--run ID] [--json]

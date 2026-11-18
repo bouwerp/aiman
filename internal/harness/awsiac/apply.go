@@ -35,6 +35,9 @@ type Applier struct {
 	Root *os.Root
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Agent is the User-Agent of every call; empty is UserAgent, which the
+	// edge tap logs as client aiman.
+	Agent string
 	// TableWait bounds the wait for a created table to turn ACTIVE; zero
 	// is 30 seconds.
 	TableWait time.Duration
@@ -54,6 +57,8 @@ type StepResult struct {
 	Code      string `json:"code,omitempty"`
 	Message   string `json:"message,omitempty"`
 	Count     int    `json:"count,omitempty"`
+	// header is the last answer's headers (an S3 ETag or version id).
+	header http.Header
 }
 
 // Label names the step as a run's failed step does:
@@ -77,15 +82,7 @@ type ApplyResult struct {
 // Apply runs every step of p in order. A step that fails ends the apply:
 // the result names it and Apply returns its error.
 func (a *Applier) Apply(ctx context.Context, p *Plan) (*ApplyResult, error) {
-	if a.Client == nil {
-		a.Client = &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 2 * time.Minute}
-	}
-	if a.Now == nil {
-		a.Now = time.Now
-	}
-	if a.Endpoint == "" {
-		a.Endpoint = p.Endpoint
-	}
+	a.defaults(p.Endpoint)
 	res := &ApplyResult{Steps: []StepResult{}, Learned: map[string]map[string]string{}}
 	for _, st := range p.Steps {
 		sr := StepResult{N: st.N, Resource: st.Resource, Service: st.Service, Operation: st.Operation}
@@ -101,6 +98,19 @@ func (a *Applier) Apply(ctx context.Context, p *Plan) (*ApplyResult, error) {
 		res.Steps = append(res.Steps, sr)
 	}
 	return res, nil
+}
+
+// defaults fills the client, clock and endpoint left unset.
+func (a *Applier) defaults(endpoint string) {
+	if a.Client == nil {
+		a.Client = &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 2 * time.Minute}
+	}
+	if a.Now == nil {
+		a.Now = time.Now
+	}
+	if a.Endpoint == "" {
+		a.Endpoint = endpoint
+	}
 }
 
 func (a *Applier) learn(p *Plan, res *ApplyResult, key, attr, value string) {
@@ -129,7 +139,7 @@ func (a *Applier) step(ctx context.Context, p *Plan, st Step, sr *StepResult, re
 	if err != nil {
 		return err
 	}
-	body, err := a.do(ctx, p, c, sr)
+	body, err := a.do(ctx, p.Region, c, sr)
 	if err != nil {
 		return err
 	}
@@ -179,7 +189,7 @@ func (a *Applier) waitActive(ctx context.Context, p *Plan, r *Resource, res *App
 			return err
 		}
 		var sr StepResult
-		body, err := a.do(ctx, p, c, &sr)
+		body, err := a.do(ctx, p.Region, c, &sr)
 		if err != nil {
 			return err
 		}
@@ -216,8 +226,8 @@ const maxAnswer = 4 << 20
 
 // do signs and sends one call. A non-2xx answer is an error whose code and
 // message come from the answer.
-func (a *Applier) do(ctx context.Context, p *Plan, c call, sr *StepResult) ([]byte, error) {
-	return a.send(ctx, p, c, bytes.NewReader(c.body), int64(len(c.body)), hashHex(c.body), sr)
+func (a *Applier) do(ctx context.Context, region string, c call, sr *StepResult) ([]byte, error) {
+	return a.send(ctx, region, c, bytes.NewReader(c.body), int64(len(c.body)), hashHex(c.body), sr)
 }
 
 func hashHex(b []byte) string {
@@ -225,9 +235,12 @@ func hashHex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (a *Applier) send(ctx context.Context, p *Plan, c call, body io.Reader, size int64, payloadHash string, sr *StepResult) ([]byte, error) {
+func (a *Applier) send(ctx context.Context, region string, c call, body io.Reader, size int64, payloadHash string, sr *StepResult) ([]byte, error) {
 	rawPath, plainPath := "/", "/"
-	if c.bucket != "" {
+	switch {
+	case c.path != "":
+		rawPath, plainPath = c.path, c.path
+	case c.bucket != "":
 		rawPath, plainPath = awsPath(c.bucket, c.key)
 	}
 	method := c.method
@@ -243,8 +256,20 @@ func (a *Applier) send(ctx context.Context, p *Plan, c call, body io.Reader, siz
 	for k, v := range c.header {
 		req.Header.Set(k, v)
 	}
-	req.Header.Set("User-Agent", UserAgent)
-	signV4(req, c.service, p.Region, a.Key, a.Secret, payloadHash, a.Now())
+	agent := a.Agent
+	if agent == "" {
+		agent = UserAgent
+	}
+	req.Header.Set("User-Agent", agent)
+	if c.unsigned {
+		return a.finish(req, sr)
+	}
+	signV4(req, c.service, region, a.Key, a.Secret, payloadHash, a.Now())
+	return a.finish(req, sr)
+}
+
+// finish sends req and reads its answer; a non-2xx answer is an error.
+func (a *Applier) finish(req *http.Request, sr *StepResult) ([]byte, error) {
 	resp, err := a.Client.Do(req)
 	if err != nil {
 		return nil, err
@@ -255,6 +280,7 @@ func (a *Applier) send(ctx context.Context, p *Plan, c call, body io.Reader, siz
 		return nil, err
 	}
 	sr.Status = resp.StatusCode
+	sr.header = resp.Header
 	if resp.StatusCode/100 != 2 {
 		sr.Code, sr.Message = errorOf(out)
 		if sr.Code == "" {
@@ -387,7 +413,7 @@ func (a *Applier) seedObjects(ctx context.Context, p *Plan, e SeedObjects, sr *S
 			}
 		}
 		c := call{service: "s3", method: "PUT", bucket: e.Physical, key: e.Prefix + rel, header: map[string]string{"Content-Type": ct}}
-		if _, err := a.send(ctx, p, c, f, size, unsignedPayload, sr); err != nil {
+		if _, err := a.send(ctx, p.Region, c, f, size, unsignedPayload, sr); err != nil {
 			return fmt.Errorf("%s: %w", rel, err)
 		}
 		sr.Count++
@@ -463,7 +489,7 @@ func (a *Applier) writeItems(ctx context.Context, p *Plan, table string, batch [
 		if err != nil {
 			return err
 		}
-		body, err := a.do(ctx, p, c, sr)
+		body, err := a.do(ctx, p.Region, c, sr)
 		if err != nil {
 			return err
 		}
@@ -494,7 +520,7 @@ func (a *Applier) seedMessages(ctx context.Context, p *Plan, e SeedMessages, sr 
 		if err != nil {
 			return err
 		}
-		body, err := a.do(ctx, p, c, sr)
+		body, err := a.do(ctx, p.Region, c, sr)
 		if err != nil {
 			return err
 		}

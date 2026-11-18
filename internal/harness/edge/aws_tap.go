@@ -46,6 +46,25 @@ const AWSApplierAgent = "aiman-harness-aws-apply"
 // AWSClientAiman is the client name of the applier's calls.
 const AWSClientAiman = "aiman"
 
+// AWSOperatorAgent marks an operator write (harness.aws_write): a request
+// whose User-Agent holds it is logged with client "aiman/operator". It is a
+// label, not proof.
+const AWSOperatorAgent = "aiman-harness-aws-write"
+
+// AWSClientOperator is the client name of an operator write's calls.
+const AWSClientOperator = "aiman/operator"
+
+// fixedClient is the client label a User-Agent claims, or empty.
+func fixedClient(agent string) string {
+	switch {
+	case strings.Contains(agent, AWSOperatorAgent):
+		return AWSClientOperator
+	case strings.Contains(agent, AWSApplierAgent):
+		return AWSClientAiman
+	}
+	return ""
+}
+
 // CodeAimanRefused is the error code of a call the tap refused.
 const CodeAimanRefused = "AimanRefused"
 
@@ -91,7 +110,8 @@ type AWSCall struct {
 	Redacted        int    `json:"redacted,omitempty"`
 
 	clientIP string
-	applier  bool
+	// label is the client a User-Agent named (aiman, aiman/operator).
+	label string
 }
 
 // AWSCallsInfo describes the call log a read came from.
@@ -172,7 +192,7 @@ func (t *AWSTap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c := &AWSCall{
 		Start: start, Protocol: cl.protocol, Service: cl.service, Operation: cl.operation, Method: r.Method,
 		Resource: cl.resource, Presigned: cl.presigned, Pending: true,
-		clientIP: clientIP(r.RemoteAddr), applier: strings.Contains(r.UserAgent(), AWSApplierAgent),
+		clientIP: clientIP(r.RemoteAddr), label: fixedClient(r.UserAgent()),
 	}
 	if cl.scoped {
 		c.Region = cl.scope.region
@@ -316,7 +336,7 @@ func durationMS(d time.Duration) float64 { return float64(d.Microseconds()) / 10
 func (t *AWSTap) Calls(after int64, limit int) ([]AWSCall, AWSCallsInfo) {
 	calls, info := t.store.read(after, limit, t.now())
 	for i := range calls {
-		calls[i].Client = t.clients.name(calls[i].clientIP, calls[i].applier)
+		calls[i].Client = t.clients.name(calls[i].clientIP, calls[i].label)
 	}
 	info.Service = t.name
 	return calls, info
@@ -450,11 +470,12 @@ func (c *clientNames) resolve(addr string) {
 	c.mu.Unlock()
 }
 
-// name is addr's client name: "aiman" for the applier, else the service
-// from the lookup, else the address.
-func (c *clientNames) name(addr string, applier bool) string {
-	if applier {
-		return AWSClientAiman
+// name is addr's client name: the label a User-Agent named (aiman for the
+// applier, aiman/operator for an operator write), else the service from the
+// lookup, else the address.
+func (c *clientNames) name(addr, label string) string {
+	if label != "" {
+		return label
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

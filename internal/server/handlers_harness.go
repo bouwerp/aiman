@@ -115,6 +115,9 @@ func (s *Server) dispatchHarness(ctx context.Context, req Request) Response {
 	if req.Method == "harness.aws" {
 		return s.handleHarnessAWS(ctx, req)
 	}
+	if req.Method == "harness.aws_write" {
+		return s.handleHarnessAWSWrite(ctx, req)
+	}
 	var p harnessParams
 	if len(req.Params) > 0 {
 		if err := json.Unmarshal(req.Params, &p); err != nil {

@@ -88,7 +88,7 @@ func TestApplyDockerMiniStack(t *testing.T) {
 	var sr StepResult
 	get := func(c call) string {
 		t.Helper()
-		b, err := check.do(context.Background(), p, c, &sr)
+		b, err := check.do(context.Background(), p.Region, c, &sr)
 		if err != nil {
 			t.Fatalf("%+v: %v", c, err)
 		}
