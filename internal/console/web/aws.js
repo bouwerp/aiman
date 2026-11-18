@@ -204,7 +204,7 @@
   }
 
   async function browse(prefix, more) {
-    if (!more) { a.prefix = prefix; a.objects = []; a.prefixes = []; a.token = ""; a.key = ""; $("aws-object").replaceChildren(); }
+    if (!more) { a.prefix = prefix; a.objects = []; a.prefixes = []; a.token = ""; a.key = ""; a.version = ""; $("aws-object").replaceChildren(); announce(); }
     status("Listing " + a.bucket + "/" + a.prefix);
     try {
       const res = await read("s3_objects", { bucket: a.bucket, prefix: a.prefix, delimiter: "/", token: more ? a.token : "" });
