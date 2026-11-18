@@ -65,3 +65,21 @@ func TestHarnessCapture(t *testing.T) {
 		t.Fatalf("capture after down = %s", raw)
 	}
 }
+
+// The reply's redacted counts the edge's replacements too: a flow the edge
+// already redacted finds nothing new in serve's pass.
+func TestRedactFlowsCountsEdgeRedactions(t *testing.T) {
+	flows := []edge.Flow{
+		{ID: 1, Redacted: 1, RequestHeaders: map[string][]string{"Authorization": {"[redacted]"}}},
+		{ID: 2, RequestHeaders: map[string][]string{"Authorization": {"Bearer live-token-123456"}}},
+	}
+	if got := redactFlows(flows); got != 2 {
+		t.Fatalf("redactFlows = %d, want 2", got)
+	}
+	if flows[0].Redacted != 1 || flows[1].Redacted != 1 {
+		t.Fatalf("per-flow redacted = %d, %d, want 1, 1", flows[0].Redacted, flows[1].Redacted)
+	}
+	if v := flows[1].RequestHeaders["Authorization"][0]; strings.Contains(v, "live-token") {
+		t.Fatalf("authorization kept: %q", v)
+	}
+}

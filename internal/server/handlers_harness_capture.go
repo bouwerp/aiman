@@ -28,10 +28,7 @@ func (s *Server) handleHarnessCapture(ctx context.Context, req Request, p harnes
 	if err != nil {
 		return harnessErr(req.ID, err, CodeUnavailable)
 	}
-	redacted := 0
-	for i := range flows {
-		redacted += edge.RedactFlow(&flows[i])
-	}
+	redacted := redactFlows(flows)
 	network := info.Network
 	if network == "" {
 		network = run.Network
@@ -41,4 +38,16 @@ func (s *Server) handleHarnessCapture(ctx context.Context, req Request, p harnes
 		"flows": flows, "next": info.Next, "more": info.More, "total": info.Total, "dropped": info.Dropped,
 		"redacted": redacted,
 	}}
+}
+
+// redactFlows redacts each flow again and returns the values replaced in
+// all: what the edge replaced (Flow.Redacted) plus what this pass found, so
+// the count covers values the edge already turned into [redacted].
+func redactFlows(flows []edge.Flow) int {
+	total := 0
+	for i := range flows {
+		flows[i].Redacted += edge.RedactFlow(&flows[i])
+		total += flows[i].Redacted
+	}
+	return total
 }
