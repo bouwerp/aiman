@@ -185,14 +185,19 @@ type Output struct {
 type FunctionEnv struct {
 	Stack     string   `json:"stack"`
 	LogicalID string   `json:"logical_id"`
+	File      string   `json:"file,omitempty"`
 	Vars      []EnvVar `json:"vars"`
 }
 
-// EnvVar is one variable of a function's environment.
+// EnvVar is one variable of a function's environment. Unresolved says why
+// the importer could not evaluate it (Line points at it); such a variable
+// is a warning and left out when function_env names the function.
 type EnvVar struct {
-	Name      string `json:"name"`
-	Value     Value  `json:"value"`
-	Sensitive bool   `json:"sensitive,omitempty"`
+	Name       string `json:"name"`
+	Value      Value  `json:"value"`
+	Sensitive  bool   `json:"sensitive,omitempty"`
+	Unresolved string `json:"unresolved,omitempty"`
+	Line       int    `json:"line,omitempty"`
 }
 
 // Warning is something the plan could not do as the IaC says: a value it
