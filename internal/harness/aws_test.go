@@ -225,8 +225,8 @@ scenarios:
 		"aws.a2.parameters.st names no cloudformation stack",
 		"aws.a2.vars.nope names no terraform stack",
 		`aws.a2.seed "/abs.yaml" must be relative`,
-		"services.db-emu: names ending -emu or -emu-init are reserved",
-		"services.db-emu-init: names ending -emu or -emu-init are reserved",
+		"services.db-emu: names ending -emu, -emu-init or -emu-apply are reserved",
+		"services.db-emu-init: names ending -emu, -emu-init or -emu-apply are reserved",
 	} {
 		wantErr(t, errs, want)
 	}

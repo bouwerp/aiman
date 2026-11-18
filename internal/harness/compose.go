@@ -119,6 +119,9 @@ type RunSpec struct {
 	CheckImages map[string]string
 	// CheckDebugImage runs the debug check when its check names an image.
 	CheckDebugImage string
+	// AWSAppEnv is the app's env from the applied aws plan (aws.env,
+	// function_env); the app and the checks get it.
+	AWSAppEnv map[string]string
 	// AWSDownloadMax caps one S3 object body through the aws read relay
 	// (harness.aws.download_max); 0 is edge.DefaultAWSDownloadMax.
 	AWSDownloadMax int64
@@ -200,7 +203,7 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 	if err := withProxy(&doc, f, sc, spec); err != nil {
 		return nil, err
 	}
-	withAWS(&doc, files, f, sc)
+	withAWS(&doc, files, f, sc, spec)
 	for name, svc := range doc.Services {
 		doc.Services[name] = sandbox.EscapeInterpolation(svc)
 	}

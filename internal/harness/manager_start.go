@@ -74,14 +74,14 @@ type starter struct {
 }
 
 // start brings the run up: networks, the edge (whose proxy the later steps
-// use), services and their ready probes, fixtures, setup, build, the app,
+// use), services and their ready probes, the aws plan, fixtures, setup, build, the app,
 // then the edge's published ports. A failure takes the project down and
 // leaves the run failed.
 func (m *Manager) start(ctx context.Context, lr *liveRun, f *File, sc *Scenario) {
 	run := lr.snapshot()
 	dir := m.runDir(run.Session, run.ID)
 	s := &starter{m: m, lr: lr, f: f, sc: sc, run: run, dir: dir, sandbox: filepath.Join(dir, "sandbox"), project: "harness-" + run.ID}
-	steps := []func(context.Context) error{s.debugger, s.networks, s.edge, s.services, s.fixtures, s.setup, s.build, s.app, s.ports}
+	steps := []func(context.Context) error{s.debugger, s.networks, s.edge, s.services, s.aws, s.fixtures, s.setup, s.build, s.app, s.ports}
 	for _, step := range steps {
 		if err := step(ctx); err != nil {
 			m.failRun(lr, err)

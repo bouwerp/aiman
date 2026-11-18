@@ -336,8 +336,9 @@ func TestAWSReadDynamoDB(t *testing.T) {
 func TestAWSReadResources(t *testing.T) {
 	tm, run, _ := awsReadSetup(t, 0)
 	res, err := tm.AWS(context.Background(), AWSReadRequest{Run: run.ID, Op: AWSOpResources})
-	if err != nil || res.Resources != nil || res.Note == "" {
-		t.Fatalf("no manifest: %+v %v", res, err)
+	// The aws step writes the manifest, empty for a service with no stacks.
+	if err != nil || !strings.Contains(string(res.Resources), `"service": "aws"`) {
+		t.Fatalf("applied manifest: %s %v", res.Resources, err)
 	}
 	path := filepath.Join(tm.runDir(run.Session, run.ID), "sandbox", AWSResourcesFile)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

@@ -13,6 +13,7 @@ services:
         tmpfs:
             - /tmp:exec
         environment:
+            AIMAN_AWS_RESOURCES: /aiman-aws/resources.json
             AWS_ACCESS_KEY_ID: test
             AWS_CONFIG_FILE: /aiman-aws/config
             AWS_DEFAULT_REGION: eu-west-1
@@ -112,6 +113,33 @@ services:
         depends_on:
             aws-emu-init:
                 condition: service_completed_successfully
+    aws-emu-apply:
+        image: alpine:3.20
+        pull_policy: never
+        entrypoint:
+            - /aiman
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        volumes:
+            - /home/u/.local/bin/aiman:/aiman:ro
+            - /home/u/.aiman/harness/s1/r1a2b3/src:/src:ro
+        mem_limit: 268435456
+        cpus: 1
+        pids_limit: 64
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - harness
+            - aws-apply
+        profiles:
+            - aws-apply
     aws-emu-init:
         image: ministackorg/ministack:1.5.41@sha256:aef90fec1a4581c5fa7b4f79d347898f8475111bac95bbab3736f4a44f5f8573
         pull_policy: never
@@ -169,6 +197,7 @@ services:
             - /run
             - /tmp
         environment:
+            AIMAN_AWS_RESOURCES: /aiman-aws/resources.json
             AIMAN_RO_PASSWORD: ro-secret
             AWS_ACCESS_KEY_ID: test
             AWS_CONFIG_FILE: /aiman-aws/config
