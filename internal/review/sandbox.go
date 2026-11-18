@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/bouwerp/aiman/internal/sandbox"
 )
 
 // Sandbox is one review's Docker Compose project. Dir holds compose.yaml;
@@ -28,10 +28,11 @@ type PortMap struct {
 	Host, Container int
 }
 
+var sandboxMemory = sandbox.MemorySize("2g")
+
 const (
-	sandboxMemory = "2g"
-	sandboxCPUs   = 2.0
-	sandboxPIDs   = 256
+	sandboxCPUs = 2.0
+	sandboxPIDs = 256
 )
 
 var (
@@ -128,42 +129,9 @@ func nodeTag(s string) string {
 	return m
 }
 
-type composeFile struct {
-	Name     string                    `yaml:"name"`
-	Services map[string]composeService `yaml:"services"`
-	Volumes  map[string]map[string]any `yaml:"volumes"`
-}
-
-type composeService struct {
-	Image       string                      `yaml:"image"`
-	WorkingDir  string                      `yaml:"working_dir,omitempty"`
-	User        string                      `yaml:"user"`
-	ReadOnly    bool                        `yaml:"read_only"`
-	CapDrop     []string                    `yaml:"cap_drop"`
-	CapAdd      []string                    `yaml:"cap_add,omitempty"`
-	SecurityOpt []string                    `yaml:"security_opt"`
-	Tmpfs       []string                    `yaml:"tmpfs,omitempty"`
-	Environment map[string]string           `yaml:"environment,omitempty"`
-	Volumes     []string                    `yaml:"volumes"`
-	MemLimit    string                      `yaml:"mem_limit"`
-	CPUs        float64                     `yaml:"cpus"`
-	PidsLimit   int                         `yaml:"pids_limit"`
-	Ports       []string                    `yaml:"ports,omitempty"`
-	NetworkMode string                      `yaml:"network_mode,omitempty"`
-	Command     []string                    `yaml:"command,omitempty"`
-	DependsOn   map[string]composeCondition `yaml:"depends_on,omitempty"`
-}
-
-type composeCondition struct {
-	Condition string `yaml:"condition"`
-}
-
-// cacheInitService is the compose service that hands the cache volumes to the
-// sandbox user. Docker creates a named volume owned by root, and the sandbox
-// runs unprivileged with no capabilities, so it cannot do this itself. This
-// service runs only chown, as root with CHOWN alone, with no network and
-// without the PR's tree mounted.
-const cacheInitService = "cache-init"
+// cacheInitService hands the cache volumes to the sandbox user
+// (sandbox.CacheInit).
+const cacheInitService = sandbox.CacheInitService
 
 // offline reports whether PR code runs with no network, the default. Any other
 // value leaves network_mode unset rather than passing the string through, so
@@ -180,78 +148,25 @@ func Compose(sb Sandbox, uid, gid int) ([]byte, error) {
 		return nil, errors.New("the review sandbox has no network, so it cannot publish debug ports or fetch a debugger; " +
 			"set review.sandbox.network: bridge, which also gives review run and review coverage network")
 	}
-	gomod, gocache, npm := sb.ID+"-gomod", sb.ID+"-gocache", sb.ID+"-npm"
-	svc := composeService{
-		Image:       sb.Image,
-		WorkingDir:  "/src",
-		User:        fmt.Sprintf("%d:%d", uid, gid),
-		ReadOnly:    true,
-		CapDrop:     []string{"ALL"},
-		SecurityOpt: []string{"no-new-privileges:true"},
-		// Docker mounts a tmpfs noexec by default, and go test runs the binary it
-		// builds under the temp directory. /src is already writable and executable,
-		// so this gives PR code nothing new.
-		Tmpfs: []string{"/tmp:exec"},
-		Environment: map[string]string{
-			"HOME":             "/tmp",
-			"GOMODCACHE":       "/cache/gomod",
-			"GOCACHE":          "/cache/gocache",
-			"npm_config_cache": "/cache/npm",
-		},
-		Volumes: []string{
-			sb.Src + ":/src",
-			sb.Out + ":/out",
-			gomod + ":/cache/gomod",
-			gocache + ":/cache/gocache",
-			npm + ":/cache/npm",
-		},
-		MemLimit:  sandboxMemory,
-		CPUs:      sandboxCPUs,
-		PidsLimit: sandboxPIDs,
-		DependsOn: map[string]composeCondition{
-			cacheInitService: {Condition: "service_completed_successfully"},
-		},
-	}
+	caches := sandbox.Caches{GoMod: sb.ID + "-gomod", GoCache: sb.ID + "-gocache", NPM: sb.ID + "-npm"}
+	svc := sandbox.Workload(sb.Image, uid, gid, sb.Src, sb.Out, caches)
+	sandbox.Limit(&svc, sandboxMemory, sandboxCPUs, sandboxPIDs)
 	if sb.offline() {
 		svc.NetworkMode = "none"
 	}
 	for _, p := range sb.Ports {
 		svc.Ports = append(svc.Ports, fmt.Sprintf("127.0.0.1:%d:%d", p.Host, p.Container))
 	}
-	doc := composeFile{
+	chown := sandbox.CacheInit(sb.Image, uid, gid, caches)
+	sandbox.Limit(&chown, sandboxMemory, sandboxCPUs, sandboxPIDs)
+	return sandbox.Marshal(sandbox.File{
 		Name: sb.ID,
-		Services: map[string]composeService{
+		Services: map[string]sandbox.Service{
 			"sandbox":        svc,
-			cacheInitService: cacheInit(sb.Image, uid, gid, gomod, gocache, npm),
+			cacheInitService: chown,
 		},
-		Volumes: map[string]map[string]any{
-			gomod:   {},
-			gocache: {},
-			npm:     {},
-		},
-	}
-	return yaml.Marshal(doc)
-}
-
-func cacheInit(image string, uid, gid int, gomod, gocache, npm string) composeService {
-	return composeService{
-		Image:       image,
-		User:        "0:0",
-		ReadOnly:    true,
-		CapDrop:     []string{"ALL"},
-		CapAdd:      []string{"CHOWN"},
-		SecurityOpt: []string{"no-new-privileges:true"},
-		NetworkMode: "none",
-		Volumes: []string{
-			gomod + ":/cache/gomod",
-			gocache + ":/cache/gocache",
-			npm + ":/cache/npm",
-		},
-		MemLimit:  sandboxMemory,
-		CPUs:      sandboxCPUs,
-		PidsLimit: sandboxPIDs,
-		Command:   []string{"chown", fmt.Sprintf("%d:%d", uid, gid), "/cache/gomod", "/cache/gocache", "/cache/npm"},
-	}
+		Volumes: caches.Volumes(),
+	})
 }
 
 // Export writes the staged tree at worktree into dst with no .git, using
