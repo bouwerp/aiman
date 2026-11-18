@@ -306,11 +306,19 @@ func (s *Server) handleHarnessList(ctx context.Context, req Request, p harnessPa
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
-	sha := src.sha
-	if sha == "" {
-		sha = "HEAD"
+	if p.Dirty && src.sha != "" {
+		return errResp(req.ID, CodeInvalidParams, errReviewDirty)
 	}
-	loaded, err := harness.LoadAtSHA(ctx, src.repo, sha, src.override)
+	var loaded *harness.Loaded
+	if p.Dirty {
+		loaded, err = harness.LoadDirty(ctx, src.repo, src.override)
+	} else {
+		sha := src.sha
+		if sha == "" {
+			sha = "HEAD"
+		}
+		loaded, err = harness.LoadAtSHA(ctx, src.repo, sha, src.override)
+	}
 	if err != nil {
 		var he *harness.Error
 		fe := map[string]any{"code": CodeInvalidParams, "message": err.Error()}
@@ -324,8 +332,15 @@ func (s *Server) handleHarnessList(ctx context.Context, req Request, p harnessPa
 		return Response{ID: req.ID, Result: out}
 	}
 	out["source"], out["sha"], out["scenarios"] = loaded.Source, loaded.SHA, loaded.File.Scenarios
+	if loaded.Dirty {
+		out["dirty"], out["diff_sha256"] = true, loaded.DiffSHA256
+	}
 	return Response{ID: req.ID, Result: out}
 }
+
+// errReviewDirty refuses dirty for a review session, which always runs the
+// PR head.
+const errReviewDirty = "a review session reads the PR head; dirty does not apply"
 
 // harnessRun finds the run a call names: run, else the session's live run,
 // else (when kept is set) its newest run. The caller's scope must cover the

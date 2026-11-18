@@ -84,9 +84,10 @@ type BundleFile struct {
 	Content string
 }
 
-// Bundle is the skill's file set: SKILL.md and the design page template.
+// Bundle is the skill's file set: SKILL.md, the design page template and
+// the harness reference.
 func Bundle() []BundleFile {
-	return []BundleFile{{Name: "SKILL.md", Content: Text}, {Name: TemplateName, Content: Template}}
+	return []BundleFile{{Name: "SKILL.md", Content: Text}, {Name: TemplateName, Content: Template}, {Name: HarnessName, Content: Harness}}
 }
 
 // Sibling replaces the file name of a skill path, keeping its separator, so

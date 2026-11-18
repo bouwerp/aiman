@@ -102,7 +102,7 @@ func callHarnessMethod(method string, params map[string]any) (json.RawMessage, e
 	return json.Marshal(resp.Result)
 }
 
-const harnessUsageText = `Usage: aiman harness list [--json]
+const harnessUsageText = `Usage: aiman harness list [--dirty] [--json]   (--dirty reads the harness file from the working tree)
        aiman harness up <scenario> [--dirty] [--debug | --debug-checks] [--force] [--wait] [--json]   (--wait also waits while an image is vetted; --debug-checks debugs only the checks)
        aiman harness debug [status|take|release] [--run ID] [--json]   (take and release: operator)
        aiman harness status [--run ID] [--json]
@@ -113,7 +113,7 @@ const harnessUsageText = `Usage: aiman harness list [--json]
        aiman harness capture [--after N] [--limit N] [--run ID] [--json]   (HTTP calls through the edge proxy)
        aiman harness aws calls [--after N] [--limit N] [--run ID] [--json]   (AWS API calls through the edge tap)
        aiman harness aws resources|s3|ddb ...   (see aiman harness aws)
-       aiman harness aws plan [<scenario>] [--json]   (the aws plan from the commit, no run)
+       aiman harness aws plan [<scenario>] [--dirty] [--json]   (the aws plan from the commit, or the working tree with --dirty; no run)
        aiman harness aws write ...|reset   (operator writes to a run's aws service)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
@@ -565,7 +565,11 @@ func harnessLogs(h harnessIO, a harnessArgs) error {
 }
 
 func harnessList(h harnessIO, a harnessArgs) error {
-	raw, err := harnessCallOut(h, a, "harness.list", map[string]any{"session": a.session})
+	params := map[string]any{"session": a.session}
+	if a.dirty {
+		params["dirty"] = true
+	}
+	raw, err := harnessCallOut(h, a, "harness.list", params)
 	if err != nil {
 		return err
 	}
@@ -575,6 +579,7 @@ func harnessList(h harnessIO, a harnessArgs) error {
 	var res struct {
 		Source    string             `json:"source"`
 		SHA       string             `json:"sha"`
+		Dirty     bool               `json:"dirty"`
 		Scenarios []harness.Scenario `json:"scenarios"`
 		Runs      []harness.Run      `json:"runs"`
 		FileError *struct {
@@ -588,7 +593,11 @@ func harnessList(h harnessIO, a harnessArgs) error {
 	if res.FileError != nil {
 		_, _ = fmt.Fprintf(h.out, "harness file: %s: %s\n", res.FileError.Code, res.FileError.Message)
 	} else {
-		_, _ = fmt.Fprintf(h.out, "scenarios (%s at %s):\n", res.Source, short(res.SHA))
+		at := short(res.SHA)
+		if res.Dirty {
+			at += " with uncommitted changes"
+		}
+		_, _ = fmt.Fprintf(h.out, "scenarios (%s at %s):\n", res.Source, at)
 	}
 	for _, sc := range res.Scenarios {
 		_, _ = fmt.Fprintf(h.out, "  %-24s %s  (%d steps, %d checks)\n", sc.ID, sc.Title, len(sc.Steps), len(sc.Checks))

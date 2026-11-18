@@ -17,8 +17,9 @@ func init() {
 	}
 }
 
-// harnessAWSPlan is `aiman harness aws plan [<scenario>] [--json]`: the
-// plan serve builds from the session's commit, with no run.
+// harnessAWSPlan is `aiman harness aws plan [<scenario>] [--dirty] [--json]`:
+// the plan serve builds from the session's commit, or its working tree with
+// --dirty, with no run.
 func harnessAWSPlan(h harnessIO, a harnessArgs) error {
 	if len(a.pos) > 1 || a.run != "" {
 		return harnessUsage(h.errOut)
@@ -26,6 +27,9 @@ func harnessAWSPlan(h harnessIO, a harnessArgs) error {
 	params := map[string]any{"session": a.session}
 	if len(a.pos) == 1 {
 		params["scenario"] = a.pos[0]
+	}
+	if a.dirty {
+		params["dirty"] = true
 	}
 	raw, err := harnessCallOut(h, a, "harness.aws_plan", params)
 	if err != nil {

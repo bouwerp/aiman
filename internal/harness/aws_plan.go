@@ -317,16 +317,15 @@ type AWSPlanRequest struct {
 	SHA      string
 	Override []byte
 	Scenario string
+	// Dirty builds the plans from the working tree instead of the commit.
+	Dirty bool
 }
 
-// AWSPlans builds plans from the commit without a run (harness.aws_plan):
-// the tree is exported into a scratch directory, read and removed.
+// AWSPlans builds plans from the commit, or the working tree with Dirty,
+// without a run (harness.aws_plan): the tree is exported into a scratch
+// directory, read and removed.
 func (m *Manager) AWSPlans(ctx context.Context, req AWSPlanRequest) (sha string, out []AWSPlanView, err error) {
-	commit := req.SHA
-	if commit == "" {
-		commit = "HEAD"
-	}
-	l, err := LoadAtSHA(ctx, req.Repo, commit, req.Override)
+	l, err := loadForPlan(ctx, req)
 	if err != nil {
 		return "", nil, err
 	}
@@ -361,7 +360,11 @@ func (m *Manager) AWSPlans(ctx context.Context, req AWSPlanRequest) (sha string,
 		return "", nil, err
 	}
 	defer os.RemoveAll(tmp)
-	if err := exportCommit(ctx, req.Repo, l.SHA, tmp); err != nil {
+	export := func() error { return exportCommit(ctx, req.Repo, l.SHA, tmp) }
+	if req.Dirty {
+		export = func() error { return exportWorkingTree(ctx, req.Repo, tmp) }
+	}
+	if err := export(); err != nil {
 		return "", nil, fmt.Errorf("export the tree: %w", err)
 	}
 	root, err := os.OpenRoot(tmp)
@@ -381,4 +384,16 @@ func (m *Manager) AWSPlans(ctx context.Context, req AWSPlanRequest) (sha string,
 		out = append(out, planView(p, id))
 	}
 	return l.SHA, out, nil
+}
+
+// loadForPlan reads the harness file AWSPlans works from.
+func loadForPlan(ctx context.Context, req AWSPlanRequest) (*Loaded, error) {
+	if req.Dirty {
+		return LoadDirty(ctx, req.Repo, req.Override)
+	}
+	commit := req.SHA
+	if commit == "" {
+		commit = "HEAD"
+	}
+	return LoadAtSHA(ctx, req.Repo, commit, req.Override)
 }

@@ -378,142 +378,16 @@ aiman pty forget "$wid"
 
 The harness starts the app and its services in an offline sandbox on this host, so that a person can test a scenario. The harness file is `.aiman/harness.yaml`. Serve reads it from the commit, not from the working tree.
 
-When your work changes behaviour that a person can test, add or update a scenario in that file and commit it. A scenario has an `id`, the `services` it uses, `steps` for the tester (`do` and `expect`) and `checks` (commands; exit 0 is a pass). Write `{{<port name>}}` in a step for the app URL. You can name any image. Serve does not pull images: it vets each new image digest first (see Images below).
+Read `harness.md` beside this file before you set up, change or run a harness. It has the file format, the setup steps, the run lifecycle and its refusals, AWS services, the database, the debugger, EVM traces, the network and stubs, image approval, and which host config keys belong to the operator.
 
-```yaml
-version: 1
-app:
-  build: go build -o /out/app ./cmd/app
-  run: /out/app serve --addr :8080
-  ports: [{name: web, container: 8080}]
-services:
-  db:
-    image: postgres:16
-    env: {POSTGRES_PASSWORD: test}
-    ready: pg_isready -h db -U postgres
-    database: {kind: postgres, name: app}
-scenarios:
-  - id: refund-happy-path
-    title: Refund a paid order
-    services: [db]
-    fixtures: [{sql: testdata/harness/refund.sql, into: db}]
-    steps:
-      - do: "Open {{web}}/orders/42 and press Refund."
-        expect: "The order shows Refunded."
-    checks:
-      - {name: refund row, run: "scripts/harness/check-refund.sh 42"}
-```
-
-Do these steps to test a scenario:
+When your work changes behaviour that a person can test, add or update a scenario and commit it with the change. Check an uncommitted file with `aiman harness list --dirty`; it starts no run.
 
 1. Run `aiman harness list` to see the scenarios and the runs.
 2. Run `aiman harness up <scenario> --wait`. Add `--dirty` to run uncommitted changes.
 3. Run `aiman harness check` to run the checks. Use `aiman harness logs <service>` to read the output of a container.
 4. Run `aiman harness down` when you are done.
 
-A session has one live run at a time. Do not use `--force`; it is for the operator. Only the operator records a verdict (`aiman harness verdict`); a session gets `needs_operator`. A failed step comes to you as a to-do `Harness: <scenario> step <n>: <note>` and an `[aiman]` note. Fix it, commit, and tell the operator that the scenario is ready to run again.
-
-The tester debugs browser code in their own DevTools, which need source maps. When `aiman harness status --json` shows `browser_sourcemaps.state` `absent`, make the build write them (Vite: `build.sourcemap: true`, not `'hidden'`) and keep any plugin that deletes maps out of `app.build`.
-
-### Database
-
-Use `aiman harness db <service> tables`, `aiman harness db <service> rows <table>` and `aiman harness db <service> query "<sql>"` to read a running scenario's database. The service needs `database: {kind: postgres, name: app}`, or `database: {kind: sqlite, path: /data/app.db}` for a SQLite file inside the service.
-
-- A read runs one statement. A second statement, a `;` inside it, and the words `COPY`, `INTO` and `SET` are refused with `harness_db_refused`. SQLite also refuses `ATTACH`, `DETACH` and `PRAGMA`.
-- Postgres reads run as the read-only role `aiman_ro`. SQLite reads open the file read-only. A read cannot change data.
-- Values in columns named like `password`, `secret`, `token` or `api_key` show `[redacted]`. Other secrets in values are redacted too.
-- A read returns at most 200 rows. `--limit N` asks for fewer.
-- Only the operator writes (`--write`); a session gets `needs_operator`. Load test data with `fixtures` in the harness file instead.
-
-### Debugger
-
-`aiman harness up <scenario> --debug` starts the app under a debugger that the operator drives from the console's Debug tab. Declare it in `app.debug`:
-
-- Go: `debug: {lang: go}`. Serve builds with optimisation off and runs `dlv dap`.
-- Node or TypeScript on Node: `debug: {lang: node, entry: dist/server.js}`. Add `cwd` (relative to the repository), `runtime_args` (for example `["--import", "tsx"]` to run `.ts` through a loader) or give the whole command in `run`, which must contain `$AIMAN_INSPECT` once. For compiled TypeScript, build with source maps. Do not put `tsx` or `ts-node` in `runtime`, and do not add `--watch`, `--hot` or `--inspect=0.0.0.0`; the file is refused.
-- `app.image` names the image the app runs in, when the picked one is wrong (for example `node:24`). It is vetted like any image.
-- `checks[].image` runs one check in another image, for a tool the app's image lacks (for example a Python image that holds `fakesnow`). The check keeps `/src`, `/out`, the app's limits and the offline network. It is vetted like any image, so `harness up` waits for its approval too.
-- Bun or TypeScript on Bun: `debug: {lang: bun, entry: src/index.ts}`, with `app.image` an official Bun image such as `oven/bun:1.3-slim`. Bun runs the `.ts` file itself, so breakpoints land in the source. `cwd`, `runtime_args` and `run` work as for Node. Leave out `--watch` and `--hot`.
-- The Bun debugger works only for the Bun minor version its adapter is built for (1.3 today). Another minor, or a musl (Alpine) image with no `bun` of its own, is refused with `harness_debug_unsupported`, at `harness up` when `app.image` names the version and otherwise when the run starts. Tell the operator; do not change the app's Bun to get around it. The fallback is debugging the code under Node as a Vitest check (below).
-- Python: `debug: {lang: python, entry: app/main.py}` runs `python3 -m debugpy` on it, waiting for the debugger. `cwd`, `runtime` (for example `.venv/bin/python`), `runtime_args` and `run` work as for Node; `run` must pass `$AIMAN_INSPECT` to `--listen`. The image needs CPython 3.9 or later (Alpine works); otherwise the run fails at its `debug probe` step with `harness_debug_unsupported`. Python subprocesses of the debugged interpreter appear as child sessions in the Debug tab.
-- Python started by something that is not Python (a test runner or a Node server that runs `$PYTHON_BIN`): `debug: {lang: python, wrap_env: [PYTHON_BIN]}`. `app.run` runs as it is, and the variable points at a wrapper that starts that interpreter under debugpy, waiting for the debugger; connect once the app has started it. Only one wrapped interpreter at a time holds the debugger; later ones run without it. `wrap_env` cannot name `PATH`, `PYTHONPATH` or an `AIMAN_` variable.
-- A check can run under the debugger too. Give it a `debug` block with `lang` and `run` (or, for Python, `wrap_env`). For Vitest, debug one file on Node: `debug: {lang: node, run: node node_modules/vitest/vitest.mjs run --inspect-brk=$AIMAN_INSPECT --no-file-parallelism --test-timeout=0 tests/x.test.ts}`. The pinned Node goes first on `PATH`, so the tests run on Node, never on Bun. A Python block with only `wrap_env` (for example `[PYTHON_BIN]`) runs the check's own `run` and debugs the interpreter it starts. Go checks cannot be debugged.
-- Debugging a check is the operator's: they press Debug check under Checks in the console, or run `aiman harness check <name> --debug`. You get `needs_operator`; offer it to them instead. The run must be a debug run (`up --debug`, or `up --debug-checks` to debug only the checks). A run debugs one target at a time: a second debug check, or one while someone holds the app's debugger without `--take`, is refused with `harness_debug_busy`. A check no debugger attaches to within 10 minutes (`harness.debug.attach_timeout`) is stopped and its result says `harness_debug_timeout`.
-- When a Bun app is refused for its Bun version, debug the code through its Node debug checks instead: the console offers to start the scenario with `--debug-checks`.
-
-### EVM traces
-
-Solidity has no debugger in the console. Instead, the operator reads transaction traces in the console's EVM tab. Declare an anvil node as a service with `evm`:
-
-```yaml
-services:
-  chain:
-    image: ghcr.io/foundry-rs/foundry:v1.8.1
-    evm: {kind: anvil, chain_id: 31337}
-```
-
-- aiman starts `anvil --host 0.0.0.0 --port 8545` on the run's offline network. The app and setup steps reach it at `http://chain:8545` and may send transactions. Add more anvil flags in `evm.args`.
-- The run is offline, so anvil cannot fork a public chain. `--fork-url` and the other fork flags are refused. Deploy the contracts in a setup step or fixture script.
-- `echo '{}' | aiman rpc harness.evm_txs --params-stdin` lists recent transactions, and `echo '{"tx":"0x…"}' | aiman rpc harness.evm_trace --params-stdin` returns one transaction's call tree with decoded revert reasons. Both only read. The edge admits only read methods, so you cannot send a transaction through these calls.
-
-### AWS services
-
-A service with `aws` runs a local AWS emulator (MiniStack) for S3, DynamoDB, SQS and SNS. Serve builds the resources from your CloudFormation, SAM or Terraform files before the app starts. Do not set `image`.
-
-```yaml
-services:
-  aws:
-    aws:
-      kind: ministack
-      services: [s3, dynamodb, sqs, sns]
-      region: eu-west-1
-      stacks:
-        - {name: orders, cloudformation: infra/template.yaml, parameters: {Stage: test}}
-        - {name: shared, terraform: infra/tf, var_files: [infra/tf/test.tfvars], vars: {env: test}}
-      env:
-        UPLOAD_BUCKET: orders.outputs.UploadBucketName
-        JOBS_QUEUE_URL: shared.module.jobs.aws_sqs_queue.main
-      function_env: [orders.OrdersFunction]
-      seed: .aiman/aws/seed.yaml
-scenarios:
-  - id: upload
-    services: [aws]
-    aws: {aws: {parameters: {orders: {Stage: e2e}}, vars: {shared: {env: e2e}}}}
-```
-
-- `cloudformation` takes a SAM or CloudFormation template (YAML or JSON) or `cdk.out/<Stack>.template.json`. `terraform` takes a directory. Serve reads them from the commit. It does not run `terraform` or `sam`.
-- The app learns names from the environment. Map them in `env` (`<stack>.<logical id>`, `<stack>.<logical id>.<attribute>`, `<stack>.outputs.<name>`; a Terraform logical id is its address). `function_env` copies a Lambda function's `Environment.Variables`. Names that the IaC does not give are generated. Do not hard-code them.
-- Serve sets `AWS_ENDPOINT_URL`, the region and the key pair `test`/`test` in every container. `AIMAN_AWS_RESOURCES` names a JSON file with every resource.
-- The seed file fills the resources: `objects` (`bucket`, `from` a directory, `prefix`), `items` (`table`, `file` with one JSON item per line) and `messages` (`queue`, `file`). A scenario can replace it with its own `seed`.
-- Run `aiman harness aws plan [<scenario>]` before `harness up`. It shows the resources, the names, the env, the warnings and the notes, with no run. A warning is a value serve could not resolve: it leaves out the property or the resource, and never guesses. A reference in `env` that does not resolve refuses the run.
-- On a ready run: `aiman harness aws resources`, `aiman harness aws calls` (every call the app made, with status and error code), `aiman harness aws s3 ls|cat|get|versions` and `aiman harness aws ddb tables|describe|scan|query|get|stream`. These only read.
-- `aiman harness aws write …` and `aiman harness aws reset` are the operator's. You get `needs_operator`. Load data with the seed file instead.
-- Refused: a harness file that sets an AWS identity variable (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_ROLE_ARN`, `AWS_CONFIG_FILE`, …) or holds a string like an access key id, in any harness file. In a run with an aws service, the proxy refuses every call to an AWS host (`*.amazonaws.com`, `*.api.aws`, `*.on.aws`), online too. Make the SDK read `AWS_ENDPOINT_URL`.
-- Limits: S3 is path-style only. Set `UsePathStyle` (Go v2) or `forcePathStyle` (JavaScript v3); botocore reads it from the config file. SDKs older than the endpoint variables (Go v1, JavaScript v2, boto3 before 1.28) need the endpoint in code. Lambda functions never run: a function's `Events` and bucket notifications to Lambda or EventBridge are dropped. SNS delivers only to SQS. Bucket CORS, lifecycle and object-lock retention are not applied.
-- A `.gitignore` rule `*.out` or `cdk.out` keeps `cdk.out/` out of the commit, so serve cannot find the template. Check with `git check-ignore -v cdk.out/<Stack>.template.json`. Add the file with `git add -f`, or synthesize it to another directory.
-
-### Network and capture
-
-The app and the services reach the outside only through the edge proxy at `http://edge:3128`. Serve sets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (the app, the edge and every service) in each container. The proxy reads HTTPS with a certificate authority that it makes for the run. `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and `REQUESTS_CA_BUNDLE` point at its certificate.
-
-- A run is offline unless the operator sets `harness.network`. Offline, the proxy answers an external call with a scenario stub, or with `502` and the body `aiman: offline sandbox, no stub for <host><path>`.
-- Add a stub for each external API that a scenario calls: `stubs: [{host: api.stripe.com, path: /v1/refunds, status: 200, body_file: testdata/harness/stripe-refund.json}]`. Use `body` for a short answer. The path must match exactly. A stub answers online too.
-- An app that ignores the proxy variables cannot reach the outside, online or offline. A client that pins certificates fails its handshake. Make the HTTP client read the proxy variables and the CA file.
-- A client that ignores `NO_PROXY` (busybox `wget`, for one) sends its calls to the run's own services through the proxy too, and offline those get the 502. Turn its proxy off for those calls, for example `wget -Y off`.
-- Run `aiman harness capture` to see each call with its status and outcome (`stub`, `offline`, `upstream`, `refused`, `error`). Add `--json` for the headers and the bodies. Serve hides secrets in them.
-- An online run never reaches a private address or the host through the proxy. The proxy refuses such a call.
-
-### Images
-
-Serve vets every image digest before the Docker engine sees it. It scans for known CVEs and for malicious code. Then the operator approves the digest once for the host.
-
-- `aiman harness up` refuses with `harness_image_pending` while an image is vetted. `--wait` waits and prints the stage. Use `aiman harness image status <ref>` to see the state.
-- The edge image (`busybox`, pinned by aiman) is vetted the same way the first time a host needs it. Unless a scan blocks it, it is approved without a question or a to-do, so a pending edge image clears by itself.
-- When the vetting is done, you get the to-do `Image approved: <ref> (<short digest>)` and an `[aiman]` note with the scan summary and the report path. Show the summary to the operator and ask for approval. Name each high CVE.
-- The summary has the model review: another agent read a text copy of the image in an isolated container and gave the verdict `clean`, `suspicious` or `malicious`. For `suspicious`, tell the operator the number of findings and point them to the review report path in the scan report. If the summary says `not independent`, tell the operator. It means the reviewer was from the same model family as you.
-- When the operator approves in this terminal, run `aiman harness approve-image <digest> --quote "<the operator's words>"`. Use their exact words. Do not approve an image yourself. Do not close the gate to-do.
-- Then run `aiman harness up` again.
-- `harness_image_blocked` means a critical CVE, a malware hit, a malicious package, a `malicious` review verdict, or a failed vetting. Do not try to get around it. Tell the operator. Only the operator can override it from the laptop. You can also use another image tag.
+A session has one live run at a time. Do not use `--force`; it is for the operator. Only the operator records a verdict (`aiman harness verdict`); a session gets `needs_operator`. Host config (`harness.*`, `repos.<slug>.harness`) is the operator's: ask for a change, do not work around it. A failed step comes to you as a to-do `Harness: <scenario> step <n>: <note>` and an `[aiman]` note. Fix it, commit, and tell the operator that the scenario is ready to run again.
 
 ## Shared context
 

@@ -274,7 +274,7 @@ func TestEnsureOnHostInstallsTemplate(t *testing.T) {
 		filepath.Join(home, ".claude", "skills", "aiman"),
 		filepath.Join(project, ".agents", "skills", "aiman"),
 	} {
-		for name, want := range map[string]string{"SKILL.md": Text, TemplateName: Template} {
+		for name, want := range map[string]string{"SKILL.md": Text, TemplateName: Template, HarnessName: Harness} {
 			got, err := os.ReadFile(filepath.Join(dir, name))
 			if err != nil {
 				t.Fatal(err)
@@ -293,7 +293,7 @@ func TestEnsureOnHostInstallsTemplate(t *testing.T) {
 			t.Fatalf("second run: %s %s", r.Path, r.Action)
 		}
 	}
-	if len(again) != 2*(len(UserSkillFiles(home))+len(ProjectSkillFiles(project))) {
+	if len(again) != len(Bundle())*(len(UserSkillFiles(home))+len(ProjectSkillFiles(project))) {
 		t.Fatalf("second run ensured %d files", len(again))
 	}
 }
@@ -410,9 +410,26 @@ func TestSkillDescribesHarness(t *testing.T) {
 	for _, want := range []string{
 		".aiman/harness.yaml", "aiman harness up", "aiman harness check", "aiman harness down",
 		"Only the operator records a verdict", "needs_operator", "Harness: <scenario> step <n>",
+		HarnessName, "aiman harness list --dirty",
 	} {
 		if !strings.Contains(h, want) {
 			t.Fatalf("Harness section missing %q", want)
+		}
+	}
+}
+
+// TestHarnessReferenceCoversLifecycleAndConfig keeps the harness reference's
+// setup, update, lifecycle, AWS and config parts, and its operator-only rules.
+func TestHarnessReferenceCoversLifecycleAndConfig(t *testing.T) {
+	for _, want := range []string{
+		"## What is yours and what is the operator's", "## Set up a harness", "## Update a harness",
+		"## Run lifecycle", "## AWS services", "## Database", "## Debugger", "## Network and capture", "## Images",
+		"aiman harness list --dirty", "aiman harness aws plan --dirty", "aiman harness up <scenario> --dirty --wait",
+		"aiman harness console --remote", "harness_running", "harness_invalid", "harness.network",
+		"repos.<slug>.harness", "aiman harness aws reset", "needs_operator", "Do not use `--force`",
+	} {
+		if !strings.Contains(Harness, want) {
+			t.Fatalf("harness reference missing %q", want)
 		}
 	}
 }
