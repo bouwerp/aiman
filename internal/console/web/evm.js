@@ -168,6 +168,9 @@
     $("evm-refresh").addEventListener("click", loadTxs);
     $("evm-service").addEventListener("change", () => { selected = ""; $("evm-trace").replaceChildren(); loadTxs(); });
     $("evm-blocks").addEventListener("change", loadTxs);
+    // A custom validity message blocks the form's submit event, so it is
+    // cleared on every edit, not in the submit handler.
+    $("evm-hash").addEventListener("input", () => $("evm-hash").setCustomValidity(""));
     $("evm-find").addEventListener("submit", (ev) => {
       ev.preventDefault();
       const h = $("evm-hash").value.trim();
