@@ -368,8 +368,13 @@ func TestAWSComposeEmulator(t *testing.T) {
 	if _, ok := vols["data-aws"]; !ok {
 		t.Errorf("volumes %v miss data-aws", keys(vols))
 	}
-	if len(p.Relays) != 2 || p.Relays[0].Name != "web" || p.Relays[1].Name != "db" {
-		t.Errorf("relays %+v: an aws service publishes nothing in A1", p.Relays)
+	if len(p.Relays) != 3 || p.Relays[0].Name != "web" || p.Relays[2].Name != "db" ||
+		p.Relays[1] != (Relay{Name: "aws", Service: "aws-emu", Port: FirstRelayPort + 1, Target: "aws-emu:4566", Kind: RelayKindAWS, Region: "eu-west-1"}) {
+		t.Errorf("relays %+v: the aws service publishes its read relay", p.Relays)
+	}
+	cmd := strs(svcOf(t, doc, ServiceEdge)["command"])
+	if i := slices.Index(cmd, "--aws-relay"); i < 2 || cmd[i+1] != "aws=10002=aws-emu:4566" || cmd[i-2] != "--aws-region" || cmd[i-1] != "eu-west-1" {
+		t.Errorf("edge command %v", cmd)
 	}
 }
 

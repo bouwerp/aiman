@@ -228,6 +228,7 @@ services:
         ports:
             - 127.0.0.1::10001
             - 127.0.0.1::10002
+            - 127.0.0.1::10003
         networks:
             inner:
                 aliases:
@@ -252,8 +253,12 @@ services:
             - 10.231.1.0/24
             - --relay
             - web=10001=app:8080
+            - --aws-region
+            - eu-west-1
+            - --aws-relay
+            - aws=10002=aws-emu:4566
             - --relay
-            - db=10002=db:5432
+            - db=10003=db:5432
             - --proxy
             - 10.231.1.0/24
             - --network

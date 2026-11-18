@@ -44,6 +44,8 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 	serviceMemory, more := cfg.Harness.ServiceMemoryBytes()
 	warns = append(warns, more...)
 	bodyBytes, more := cfg.Harness.CaptureBodyBytes()
+	warns = append(warns, more...)
+	awsDownloadMax, more := cfg.Harness.AWSDownloadMaxBytes()
 	for _, w := range append(warns, more...) {
 		log.Printf("config: %s", w)
 	}
@@ -84,11 +86,13 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 		GID:           os.Getgid(),
 		AllowedImages: harness.AllowedWithAWS(cfg.Harness.AllowedImages, cfg.Harness.AWS.Images),
 		AWSImages:     cfg.Harness.AWS.Images,
-		ServiceMemory: serviceMemory,
-		RunMemory:     runMemory,
-		MaxRuns:       cfg.Harness.MaxRunsOrDefault(),
-		IdleTimeout:   cfg.Harness.IdleTimeoutOrDefault(),
-		DBRowLimit:    cfg.Harness.DB.RowLimit,
+		// harness.aws.download_max: one S3 object body through the relay.
+		AWSDownloadMax: awsDownloadMax,
+		ServiceMemory:  serviceMemory,
+		RunMemory:      runMemory,
+		MaxRuns:        cfg.Harness.MaxRunsOrDefault(),
+		IdleTimeout:    cfg.Harness.IdleTimeoutOrDefault(),
+		DBRowLimit:     cfg.Harness.DB.RowLimit,
 		// Zero takes harness.DefaultDebugAttachTimeout.
 		DebugAttachTimeout: cfg.Harness.Debug.AttachTimeout,
 		// harness.network, else review.sandbox.network: online runs reach

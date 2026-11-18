@@ -119,6 +119,9 @@ type RunSpec struct {
 	CheckImages map[string]string
 	// CheckDebugImage runs the debug check when its check names an image.
 	CheckDebugImage string
+	// AWSDownloadMax caps one S3 object body through the aws read relay
+	// (harness.aws.download_max); 0 is edge.DefaultAWSDownloadMax.
+	AWSDownloadMax int64
 }
 
 // Relay is one edge relay: the edge listens on Port on its outer address,
@@ -132,6 +135,8 @@ type Relay struct {
 	// Kind is empty for a plain TCP relay and RelayKindDAP for the debugger,
 	// which admits one client at a time.
 	Kind string
+	// Region is the region a RelayKindAWS relay signs for.
+	Region string
 }
 
 // Project is a run's compose project. Files are paths relative to the
@@ -302,6 +307,12 @@ func relaysFor(f *File, sc *Scenario, spec RunSpec) ([]Relay, error) {
 			}
 			out[len(out)-1].Kind = RelayKindEVM
 		}
+		if a := f.Services[name].AWS; a != nil {
+			if err := add(name, AWSEmuService(name), AWSPort); err != nil {
+				return nil, err
+			}
+			out[len(out)-1].Kind, out[len(out)-1].Region = RelayKindAWS, a.RegionOrDefault()
+		}
 	}
 	if spec.debugNet() {
 		if slices.ContainsFunc(out, func(r Relay) bool { return r.Name == RelayDAP }) {
@@ -467,6 +478,12 @@ func edgeService(spec RunSpec, relays []Relay) composeService {
 			flag = "--dap-relay"
 		case RelayKindEVM:
 			flag = "--evm-relay"
+		case RelayKindAWS:
+			flag = "--aws-relay"
+			cmd = append(cmd, "--aws-region", r.Region)
+			if spec.AWSDownloadMax > 0 {
+				cmd = append(cmd, "--aws-download-max", strconv.FormatInt(spec.AWSDownloadMax, 10))
+			}
 		}
 		cmd = append(cmd, flag, fmt.Sprintf("%s=%d=%s", r.Name, r.Port, r.Target))
 		ports = append(ports, fmt.Sprintf("127.0.0.1::%d", r.Port))

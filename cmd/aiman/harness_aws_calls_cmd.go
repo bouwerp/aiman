@@ -4,37 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/harness/edge"
 )
 
-// harnessAWSCommands are the `aiman harness aws <name>` subcommands; each
-// piece registers its own in init.
-var harnessAWSCommands = map[string]func(h harnessIO, a harnessArgs) error{}
-
 func init() {
-	harnessAWSCommands["calls"] = harnessAWSCalls
-	harnessSubs["aws"] = harnessSub{1, 4, true, harnessAWS}
-}
-
-// harnessAWS runs `aiman harness aws <name> ...` with the name dropped from
-// the positional arguments.
-func harnessAWS(h harnessIO, a harnessArgs) error {
-	run, ok := harnessAWSCommands[a.pos[0]]
-	if !ok {
-		names := make([]string, 0, len(harnessAWSCommands))
-		for n := range harnessAWSCommands {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		_, _ = fmt.Fprintf(h.errOut, "harness aws: unknown command %q (have %s)\n", a.pos[0], strings.Join(names, ", "))
-		return harnessUsage(h.errOut)
+	harnessAWSCommands["calls"] = func(h harnessIO, args []string) error {
+		return runHarnessSub(h, "aws calls", harnessSub{0, 0, true, harnessAWSCalls}, args)
 	}
-	a.pos = a.pos[1:]
-	return run(h, a)
 }
 
 // harnessAWSCalls prints the run's AWS API calls through the tap, one line
