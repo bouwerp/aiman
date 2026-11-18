@@ -360,6 +360,10 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL,
 		p.finish(fc, http.StatusBadGateway, OutcomeOffline, h, body, "")
 		return
 	}
+	// Upstream can answer before the transport reads the request body's
+	// EOF; full duplex keeps the server from closing the body under the
+	// transport when the answer's headers go out (see AWSTap.ServeHTTP).
+	_ = http.NewResponseController(w).EnableFullDuplex()
 	p.rp.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), keyFlow, fc)))
 }
 
