@@ -50,6 +50,8 @@ type Edge struct {
 	closed bool
 	// proxy is the capture proxy, nil when the edge runs none.
 	proxy *Proxy
+	// awsTap is the AWS tap whose call log the control socket reads.
+	awsTap *AWSTap
 }
 
 // SetProxy attaches the capture proxy, which the control socket reads and

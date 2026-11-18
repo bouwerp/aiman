@@ -37,6 +37,8 @@ const (
 	OpCapture = "capture"
 	// OpCA reads the run CA's certificate (never its key).
 	OpCA = "ca"
+	// OpAWSCalls reads the AWS tap's call log after a call ID.
+	OpAWSCalls = "aws_calls"
 )
 
 // Error codes in a control reply.
@@ -81,6 +83,9 @@ type Response struct {
 	Capture *CaptureInfo `json:"capture,omitempty"`
 	// CA is the run CA's certificate, PEM encoded.
 	CA string `json:"ca,omitempty"`
+	// AWSCalls and AWSInfo answer an aws_calls read.
+	AWSCalls []AWSCall     `json:"aws_calls,omitempty"`
+	AWSInfo  *AWSCallsInfo `json:"aws_info,omitempty"`
 }
 
 // Error is a control failure with a stable code.
@@ -231,6 +236,13 @@ func (e *Edge) dispatch(req Request) Response {
 		}
 		flows, info := p.Capture(req.After, req.Limit)
 		return Response{OK: true, Flows: flows, Capture: &info}
+	case OpAWSCalls:
+		t := e.awsCallTap()
+		if t == nil {
+			return fail(errorf(CodeUnavailable, "this edge runs no aws tap"))
+		}
+		calls, info := t.Calls(req.After, req.Limit)
+		return Response{OK: true, AWSCalls: calls, AWSInfo: &info}
 	default:
 		return fail(errorf(CodeInvalidParams, "unknown op %q", req.Op))
 	}
