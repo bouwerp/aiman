@@ -18,6 +18,10 @@ const (
 	goImage   = "golang:1.26"
 	nodeImage = "node:24-slim"
 	// anvilImage is Foundry v1.8.1 pinned by digest, as the EVM Docker test.
+	// bun12Image is oven/bun:1.2-slim (Bun 1.2.23) by digest: a reference
+	// that names no minor, so only the debug probe in the app container
+	// finds the Bun the adapter cannot debug.
+	bun12Image = "oven/bun@sha256:9654aa08d4b7e778b84148921bab8edc1409c8d0a85707b8c801dd7cf1878971"
 	anvilImage = "ghcr.io/foundry-rs/foundry@sha256:0c00cb0bda1ab1b91c9a6bf60f4c76c09c1a8870824b6d4718afbabacf6f9a17"
 )
 
@@ -49,7 +53,8 @@ var fixtures = map[string]fixture{
 		".aiman/harness.yaml": pythonFile,
 		"app.py":              harnesstest.PythonSource,
 	})},
-	"vitest": {scenario: "smoke", images: []string{nodeImage, harness.AdapterImage}, write: writeVitest},
+	"vitest":       {scenario: "smoke", images: []string{nodeImage, harness.AdapterImage}, write: writeVitest},
+	"vitest-bun12": {scenario: "smoke", images: []string{bun12Image, harness.AdapterImage}, write: writeVitestBun12},
 	"db": {scenario: "pg", images: []string{plainAppImage, "postgres:16"}, write: files(map[string]string{
 		".aiman/harness.yaml": dbFile,
 		"testdata/orders.sql": "create table orders (id int, status text, api_key text);\n" +
@@ -226,6 +231,36 @@ scenarios:
           lang: node
           run: node node_modules/vitest/vitest.mjs run --inspect-brk=$AIMAN_INSPECT --no-file-parallelism --test-timeout=0 tests/sum.test.ts
 `
+
+// vitestBun12File runs the Vitest fixture's app on Bun 1.2 with the bun
+// debugger: a debug run fails its probe (harness_debug_unsupported) and the
+// Debug tab offers check debugging, where the check runs under Node.
+const vitestBun12File = `version: 1
+app:
+  image: ` + bun12Image + `
+  run: bun dist/app.js
+  debug: {lang: bun, entry: dist/app.js}
+scenarios:
+  - id: smoke
+    title: Bun 1.2 app with a Vitest check
+    steps:
+      - do: Start with the debugger and open the Debug tab
+        expect: It says the debugger cannot attach and offers check debugging
+    checks:
+      - name: sum
+        run: node node_modules/vitest/vitest.mjs run tests/sum.test.ts
+        debug:
+          lang: node
+          run: node node_modules/vitest/vitest.mjs run --inspect-brk=$AIMAN_INSPECT --no-file-parallelism --test-timeout=0 tests/sum.test.ts
+`
+
+func writeVitestBun12(_ context.Context, repo string) error {
+	pkgs, err := harnesstest.VitestPackages()
+	if err != nil {
+		return err
+	}
+	return harnesstest.WriteVitestRepo(repo, vitestBun12File, pkgs)
+}
 
 func writeVitest(_ context.Context, repo string) error {
 	pkgs, err := harnesstest.VitestPackages()

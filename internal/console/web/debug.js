@@ -607,7 +607,9 @@
   function emptyText(run) {
     if (!run || !run.debug) return "This run has no debugger. Start a run with \"Start with the debugger\" under Run.";
     if (run.state === "failed" && run.error_code === "harness_debug_unsupported") {
-      let text = "The debugger cannot attach to this app. " + (run.error || "");
+      // serve's reason is a Go error: it starts lower case.
+      const why = run.error || "";
+      let text = "The debugger cannot attach to this app. " + why.charAt(0).toUpperCase() + why.slice(1);
       if (nodeChecks(run).length) {
         text += " This scenario's checks " + nodeChecks(run).join(", ") +
           " can run under the Node debugger instead: start the scenario for check debugging, then use Debug check under Checks.";

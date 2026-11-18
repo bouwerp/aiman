@@ -204,7 +204,22 @@
 
   // ---- checks ----
   let checkOutput = null; // last harness.check answer, shown until the next
+  // waitNotice is the debug check whose "waits for the debugger" notice is
+  // shown. The notice goes once the run has shown that check as its debug
+  // target and then no longer does: the check ended.
+  let waitNotice = null;
+  function clearWaitNotice(run) {
+    if (!waitNotice) return;
+    const dc = run && run.debug_check;
+    if (dc && dc.name === waitNotice.name) {
+      waitNotice.seen = true;
+    } else if (waitNotice.seen || !run || run.id !== waitNotice.run) {
+      if ($("notice").textContent === waitNotice.text) notice("", "");
+      waitNotice = null;
+    }
+  }
   function renderChecks(run) {
+    clearWaitNotice(run);
     const list = $("checks");
     const checks = (checkOutput && run && checkOutput.run === run.id) ? checkOutput.checks : ((run && run.checks) || []);
     list.replaceChildren();
@@ -271,7 +286,9 @@
       if (window.aimanDebug) window.aimanDebug.leave();
       await api("/api/check", { run: run.id, name: name, debug: true, take: true });
       checkOutput = null;
-      notice("info", "Check " + name + " waits for the debugger. Its result shows here when it ends.");
+      const text = "Check " + name + " waits for the debugger. Its result shows here when it ends.";
+      notice("info", text);
+      waitNotice = { name: name, run: run.id, text: text, seen: false };
       selectTab("tab-debug");
     } catch (e) { showError(e); }
     busy = false;
