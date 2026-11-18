@@ -215,6 +215,7 @@ func newTestManager(t *testing.T, mut ...func(*Options)) *testManager {
 		Record:   rec.record,
 		AppImage: func(string, string) (string, error) { return "golang:1.25", nil },
 		Now:      func() time.Time { return *tm.now },
+		NetStart: func() int { return 0 },
 	}
 	for _, m := range mut {
 		m(&opts)
@@ -456,12 +457,46 @@ func TestManagerSubnetRetry(t *testing.T) {
 	}
 }
 
+func TestManagerSubnetStartWraps(t *testing.T) {
+	tm := newTestManager(t, func(o *Options) { o.NetStart = func() int { return netSlots - 1 } })
+	repo := testRepo(t, testHarnessFile)
+	first := tm.upReady(t, repo, "plain")
+	if first.InnerSubnet != "10.231.255.0/25" {
+		t.Fatalf("first run at %s, want the start slot 255", first.InnerSubnet)
+	}
+	run, err := tm.Up(context.Background(), UpRequest{Session: "s2", Repo: repo, Scenario: "plain"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := tm.Wait(context.Background(), run.ID, 5*time.Second)
+	if second.InnerSubnet != "10.231.0.0/25" {
+		t.Fatalf("second run at %s, want slot 0 after wrapping", second.InnerSubnet)
+	}
+}
+
+func TestRandomNetSlotSpreads(t *testing.T) {
+	seen := map[int]bool{}
+	for range 200 {
+		n := randomNetSlot()
+		if n < 0 || n >= netSlots {
+			t.Fatalf("slot %d out of range", n)
+		}
+		seen[n] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("200 draws gave one slot: %v", seen)
+	}
+}
+
 func TestManagerCheck(t *testing.T) {
 	tm := newTestManager(t)
 	tm.docker.answer = func(args []string) (string, int, bool) {
 		if strings.Join(args, " ") == "run --rm --no-deps app sh -c exit 3" {
-			// Test runners colour their output; the console shows it as text.
-			return "\x1b[1m\x1b[31mfailing\x1b[39m\x1b[22m\n", 3, true
+			// Compose reports its containers first; test runners colour
+			// their output. The console shows the check's own lines as text.
+			return " Container harness-x-edge-1  Creating\n Container harness-x-edge-1  Created\n" +
+				" Container harness-x-edge-1  Starting\n Container harness-x-edge-1  Started\n" +
+				"\x1b[1m\x1b[31mfailing\x1b[39m\x1b[22m\n", 3, true
 		}
 		return "", 0, false
 	}
@@ -483,6 +518,22 @@ func TestManagerCheck(t *testing.T) {
 	}
 	if p := tm.rec.last(domain.EventHarnessCheck); p["name"] != "bad" || p["exit"] != 3 {
 		t.Fatalf("harness.check = %v", p)
+	}
+}
+
+func TestDropComposeProgress(t *testing.T) {
+	in := strings.Join([]string{
+		"[+] Running 2/2",
+		" ✔ Network harness-x_inner  Created",
+		" Container harness-x-db-1  Waiting",
+		" Container harness-x-db-1  Healthy  0.5s",
+		"ok  example/pkg 0.01s",
+		"Container started at 12:00",
+		"--- FAIL: TestX",
+	}, "\n")
+	want := "ok  example/pkg 0.01s\nContainer started at 12:00\n--- FAIL: TestX"
+	if got := dropComposeProgress(in); got != want {
+		t.Fatalf("dropComposeProgress = %q, want %q", got, want)
 	}
 }
 
@@ -512,8 +563,13 @@ func TestManagerVerdict(t *testing.T) {
 	if err := tm.Down(context.Background(), run.ID, StopDown); err != nil {
 		t.Fatal(err)
 	}
-	if _, got, err = tm.Verdict(run.ID, 0, "pass", "", "operator"); err != nil || got.Result != "pass" {
+	if _, got, err = tm.Verdict(run.ID, 0, "pass", "rechecked, fine", "operator"); err != nil || got.Result != "pass" {
 		t.Fatalf("scenario verdict after down: %v %+v", err, got)
+	}
+	// The run the console reads carries the scenario note.
+	stored, _ := tm.Get(run.ID)
+	if n := len(stored.Verdicts); n == 0 || stored.Verdicts[n-1].Step != 0 || stored.Verdicts[n-1].Note != "rechecked, fine" {
+		t.Fatalf("stored verdicts = %+v", stored.Verdicts)
 	}
 }
 

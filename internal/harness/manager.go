@@ -102,6 +102,10 @@ type Options struct {
 	UpstreamRoots string
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// NetStart picks the subnet slot this manager's first run tries; nil is
+	// a random slot, so managers on one host (serve, Docker tests, e2e
+	// drivers) rarely start on each other's networks.
+	NetStart func() int
 }
 
 // ImageRequest asks for one image of a run.
@@ -131,9 +135,12 @@ type Manager struct {
 	mu   sync.Mutex
 	live map[string]*liveRun
 	// nets are the subnet slots live runs hold.
-	nets   map[int]bool
-	closed bool
-	wg     sync.WaitGroup
+	nets map[int]bool
+	// netStart is the slot a run takes first; later runs take the next
+	// free slot after it, wrapping.
+	netStart int
+	closed   bool
+	wg       sync.WaitGroup
 }
 
 // liveRun is a run that holds, or is starting, containers.
@@ -201,10 +208,14 @@ func NewManager(opts Options) (*Manager, error) {
 	if opts.Containers == nil {
 		opts.Containers = ExecDocker{}
 	}
+	if opts.NetStart == nil {
+		opts.NetStart = randomNetSlot
+	}
 	if err := os.MkdirAll(opts.Dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Manager{opts: opts, live: map[string]*liveRun{}, nets: map[int]bool{}}, nil
+	start := ((opts.NetStart() % netSlots) + netSlots) % netSlots
+	return &Manager{opts: opts, live: map[string]*liveRun{}, nets: map[int]bool{}, netStart: start}, nil
 }
 
 // Close stops every start in flight and waits for it. Running containers stay;
@@ -402,7 +413,7 @@ func (m *Manager) reserve(session string) (*liveRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	lr := &liveRun{run: Run{ID: id, Session: session, State: StateStarting}, net: m.takeNetLocked(-1), done: make(chan struct{})}
+	lr := &liveRun{run: Run{ID: id, Session: session, State: StateStarting}, net: m.takeNetLocked(m.netStart - 1), done: make(chan struct{})}
 	m.live[id] = lr
 	return lr, nil
 }
@@ -577,6 +588,15 @@ func (m *Manager) image(ctx context.Context, req UpRequest, ref string, builtin 
 
 func imageMissing(ref, why string) *Error {
 	return &Error{Code: CodeImageMissing, Image: ref, Msg: fmt.Sprintf("image %s %s", ref, why)}
+}
+
+// randomNetSlot is a random subnet slot; a failed read is slot 0.
+func randomNetSlot() int {
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0
+	}
+	return int(b[0]) % netSlots
 }
 
 func randomHex(n int) (string, error) {

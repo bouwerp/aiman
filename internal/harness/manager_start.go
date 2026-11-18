@@ -17,9 +17,10 @@ import (
 )
 
 // netAttempts is how often a start picks another subnet when Docker says the
-// one it picked overlaps an existing network. Every manager starts at slot 0,
-// so the slots other processes hold (another serve, the Docker tests, e2e
-// drivers) each cost a start one attempt.
+// one it picked overlaps an existing network. Each manager starts at a random
+// slot (Options.NetStart), so another process's networks seldom cost more than
+// an attempt or two; the bound keeps a host whose 10.231/16 is full from
+// looping.
 const netAttempts = 16
 
 // errorTailLines is how much of a failed step's output the run keeps.

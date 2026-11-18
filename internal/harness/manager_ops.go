@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,10 +28,28 @@ const checkOutputLines = 60
 
 // checkOutput is the tail a check result keeps: escape sequences removed,
 // since test runners colour their output and the console shows it as
-// text, then redacted.
+// text, docker compose's progress lines dropped, then redacted.
 func checkOutput(out string) string {
-	lines, _ := redact.Lines(strings.Split(tailLines(pane.StripANSI(out), checkOutputLines), "\n"), nil)
+	lines, _ := redact.Lines(strings.Split(tailLines(dropComposeProgress(pane.StripANSI(out)), checkOutputLines), "\n"), nil)
 	return strings.Join(lines, "\n")
+}
+
+// composeProgress matches the lines docker compose writes about its own
+// resources before a check's command runs (" Container x  Creating",
+// "[+] Running 2/2", " ✔ Network y  Created").
+var composeProgress = regexp.MustCompile(`^\s*(?:\[\+\]\s+\w+\s+\d+/\d+.*|(?:[✔✘⠿]\s+)?(?:Container|Network|Volume)\s+\S+\s+(?:Creating|Created|Recreate|Recreated|Starting|Started|Running|Waiting|Healthy|Stopping|Stopped|Removing|Removed)(?:\s+[\d.]+s)?)\s*$`)
+
+// dropComposeProgress removes compose's progress lines from out, keeping
+// every other line in order.
+func dropComposeProgress(out string) string {
+	lines := strings.Split(out, "\n")
+	kept := lines[:0]
+	for _, l := range lines {
+		if !composeProgress.MatchString(l) {
+			kept = append(kept, l)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 func (m *Manager) logf(format string, args ...any) {
