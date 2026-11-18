@@ -182,6 +182,8 @@ type liveRun struct {
 	// awsPlan is the plan of the scenario's aws service, built at up and
 	// applied by the aws step; nil when the scenario has none.
 	awsPlan *awsiac.Plan
+	// awsWrite serialises the operator's writes and resets of the run.
+	awsWrite sync.Mutex
 }
 
 // NewManager checks opts and returns a manager with no live runs.

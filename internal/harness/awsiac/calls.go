@@ -19,6 +19,10 @@ type call struct {
 	query       url.Values
 	header      map[string]string
 	body        []byte
+	// path is a literal path (an admin endpoint) in place of bucket and key.
+	path string
+	// unsigned sends the call without a signature.
+	unsigned bool
 }
 
 // Protocol constants.
