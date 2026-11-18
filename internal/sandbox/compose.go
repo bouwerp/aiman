@@ -60,7 +60,8 @@ type Healthcheck struct {
 
 // Attach is one network of a service in the map form.
 type Attach struct {
-	IPv4Address string `yaml:"ipv4_address,omitempty"`
+	IPv4Address string   `yaml:"ipv4_address,omitempty"`
+	Aliases     []string `yaml:"aliases,omitempty"`
 }
 
 // Memory is a service's mem_limit: a compose size such as "2g" when Size is

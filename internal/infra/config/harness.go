@@ -55,6 +55,19 @@ type HarnessConfig struct {
 	DB HarnessDBConfig `yaml:"db,omitempty"`
 	// Debug configures debug checks.
 	Debug HarnessDebugConfig `yaml:"debug,omitempty"`
+	// AWS configures aws services (AWS emulators).
+	AWS HarnessAWSConfig `yaml:"aws,omitempty"`
+}
+
+// HarnessAWSConfig is harness.aws.
+type HarnessAWSConfig struct {
+	// Images replaces the image aiman pins for an emulator kind
+	// (ministack). A replacement is vetted as a listed image, so a
+	// session's run asks for approval; unset runs the pin in code.
+	Images map[string]string `yaml:"images,omitempty"`
+	// DownloadMax caps one S3 object download through the read relay
+	// (64M); read by the relay (P10 A3).
+	DownloadMax string `yaml:"download_max,omitempty"`
 }
 
 // HarnessDBConfig is harness.db.

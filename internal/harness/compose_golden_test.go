@@ -39,6 +39,11 @@ func TestComposeGolden(t *testing.T) {
 		{"debug-node", nodeFile, func(t *testing.T) RunSpec { return nodeSpec(t, nodeFile) }},
 		{"proxy-offline", composeFixture, func(*testing.T) RunSpec { return proxySpec(false) }},
 		{"proxy-online", composeFixture, func(*testing.T) RunSpec { return proxySpec(true) }},
+		{"aws", awsFixture, func(*testing.T) RunSpec {
+			s := awsSpec()
+			s.Proxy = proxySpec(false).Proxy
+			return s
+		}},
 		{"proxy-debug-node", nodeFile, func(t *testing.T) RunSpec {
 			s := nodeSpec(t, nodeFile)
 			s.Proxy = proxySpec(true).Proxy

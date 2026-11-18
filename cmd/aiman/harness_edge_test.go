@@ -43,3 +43,31 @@ func TestParseEdgeFlagsNeedsControlTokenOuter(t *testing.T) {
 		t.Error("positional argument accepted")
 	}
 }
+
+func TestParseEdgeFlagsAWS(t *testing.T) {
+	base := []string{"--control", "/c/edge.sock", "--token-file", "/c/token", "--outer", "172.31.0.0/16", "--inner", "172.30.0.0/24"}
+	with := func(extra ...string) []string { return append(append([]string{}, base...), extra...) }
+	opts, err := parseEdgeFlags(with("--aws-tap", "aws=aws-emu:4566",
+		"--proxy", "172.30.0.0/24", "--ca-dir", "/ca", "--block-host-suffix", "amazonaws.com", "--block-host-suffix", "api.aws"))
+	if err != nil {
+		t.Fatalf("parseEdgeFlags: %v", err)
+	}
+	if len(opts.awsTaps) != 1 || opts.awsTaps[0] != (edge.RelaySpec{Name: "aws", Port: edge.AWSTapPort, Target: "aws-emu:4566"}) {
+		t.Fatalf("taps = %+v", opts.awsTaps)
+	}
+	if len(opts.proxy.blocks) != 2 || opts.proxy.blocks[1] != "api.aws" {
+		t.Fatalf("blocks = %v", opts.proxy.blocks)
+	}
+	for _, bad := range [][]string{
+		with("--aws-tap", "aws"),
+		with("--aws-tap", "=x:1"),
+		with("--aws-tap", "a=a-emu:4566", "--aws-tap", "b=b-emu:4566"),
+		{"--control", "/c", "--token-file", "/t", "--outer", "172.31.0.0/16", "--aws-tap", "aws=aws-emu:4566"},
+		with("--block-host-suffix", "amazonaws.com"),
+		with("--proxy", "172.30.0.0/24", "--ca-dir", "/ca", "--block-host-suffix", "a b"),
+	} {
+		if _, err := parseEdgeFlags(bad); err == nil {
+			t.Errorf("parseEdgeFlags(%q) accepted", bad)
+		}
+	}
+}

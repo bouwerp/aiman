@@ -179,6 +179,10 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 	doc.Services[ServiceEdge] = edge
 	files := map[string][]byte{}
 	for _, name := range sc.Services {
+		if f.Services[name].AWS != nil {
+			addAWSService(&doc, f, spec, name)
+			continue
+		}
 		doc.Services[name] = serviceService(f, spec, name)
 		if isPostgres(f.Services[name]) {
 			doc.Volumes[dataVolume(name)] = map[string]any{}
@@ -188,9 +192,10 @@ func Compose(f *File, spec RunSpec) (*Project, error) {
 			doc.Volumes[dataVolume(name)] = map[string]any{}
 		}
 	}
-	if err := withProxy(&doc, sc, spec); err != nil {
+	if err := withProxy(&doc, f, sc, spec); err != nil {
 		return nil, err
 	}
+	withAWS(&doc, files, f, sc)
 	for name, svc := range doc.Services {
 		doc.Services[name] = sandbox.EscapeInterpolation(svc)
 	}
@@ -498,4 +503,5 @@ type (
 	composeHealthcheck = sandbox.Healthcheck
 	composeNetwork     = sandbox.Network
 	composeAttach      = sandbox.Attach
+	composeCondition   = sandbox.Condition
 )

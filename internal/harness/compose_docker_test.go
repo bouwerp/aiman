@@ -168,8 +168,8 @@ func upRun(t *testing.T, fileYAML, scenario string, mut ...func(*RunSpec)) *dock
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range f.Services {
-		ensureImage(t, name.Image)
+	for name := range f.Services {
+		ensureImage(t, f.ServiceImageRef(name))
 	}
 	dir := t.TempDir()
 	for _, d := range []string{"src", "out", "control"} {

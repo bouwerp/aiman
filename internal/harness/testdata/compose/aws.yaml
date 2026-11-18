@@ -1,0 +1,303 @@
+name: harness-r1a2b3
+services:
+    app:
+        image: golang:1.25
+        pull_policy: never
+        working_dir: /src
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp:exec
+        environment:
+            AWS_ACCESS_KEY_ID: test
+            AWS_CONFIG_FILE: /aiman-aws/config
+            AWS_DEFAULT_REGION: eu-west-1
+            AWS_EC2_METADATA_DISABLED: "true"
+            AWS_ENDPOINT_URL: http://aws:4566
+            AWS_ENDPOINT_URL_DYNAMODB: http://aws:4566
+            AWS_ENDPOINT_URL_DYNAMODB_STREAMS: http://aws:4566
+            AWS_ENDPOINT_URL_S3: http://aws:4566
+            AWS_ENDPOINT_URL_SNS: http://aws:4566
+            AWS_ENDPOINT_URL_SQS: http://aws:4566
+            AWS_REGION: eu-west-1
+            AWS_SECRET_ACCESS_KEY: test
+            AWS_SHARED_CREDENTIALS_FILE: /aiman-aws/credentials
+            GOCACHE: /cache/gocache
+            GOMODCACHE: /cache/gomod
+            HOME: /tmp
+            HTTP_PROXY: http://edge:3128
+            HTTPS_PROXY: http://edge:3128
+            NO_PROXY: localhost,127.0.0.1,app,edge,aws,db,10.231.1.0/24
+            NODE_EXTRA_CA_CERTS: /aiman-ca/ca.pem
+            NODE_USE_ENV_PROXY: "1"
+            REQUESTS_CA_BUNDLE: /aiman-ca/ca.pem
+            SSL_CERT_FILE: /aiman-ca/ca.pem
+            http_proxy: http://edge:3128
+            https_proxy: http://edge:3128
+            no_proxy: localhost,127.0.0.1,app,edge,aws,db,10.231.1.0/24
+            npm_config_cache: /cache/npm
+        volumes:
+            - /home/u/.aiman/harness/s1/r1a2b3/src:/src
+            - /home/u/.aiman/harness/s1/r1a2b3/out:/out
+            - gomod:/cache/gomod
+            - gocache:/cache/gocache
+            - npm:/cache/npm
+            - aiman-ca:/aiman-ca:ro
+            - ./aws:/aiman-aws:ro
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - sh
+            - -c
+            - python3 /src/app.py
+        depends_on:
+            cache-init:
+                condition: service_completed_successfully
+    aws-emu:
+        image: ministackorg/ministack:1.5.41@sha256:aef90fec1a4581c5fa7b4f79d347898f8475111bac95bbab3736f4a44f5f8573
+        pull_policy: never
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp
+        environment:
+            AUTH: "true"
+            GATEWAY_PORT: "4566"
+            LOG_LEVEL: WARNING
+            MINISTACK_REGION: eu-west-1
+            S3_DATA_DIR: /data/s3
+            S3_PERSIST: "1"
+            SERVICES: s3,dynamodb,dynamodbstreams,sqs,sns
+        volumes:
+            - data-aws:/data
+        mem_limit: 805306368
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        healthcheck:
+            test:
+                - CMD
+                - python
+                - -c
+                - |-
+                  import json,sys,urllib.request as r
+                  s=json.load(r.urlopen("http://127.0.0.1:4566/_ministack/health",timeout=4)).get("services",{})
+                  sys.exit(0 if all(s.get(n)=="available" for n in sys.argv[1:]) else 1)
+                - s3
+                - dynamodb
+                - dynamodbstreams
+                - sqs
+                - sns
+            interval: 1s
+            timeout: 5s
+            retries: 60
+        depends_on:
+            aws-emu-init:
+                condition: service_completed_successfully
+    aws-emu-init:
+        image: ministackorg/ministack:1.5.41@sha256:aef90fec1a4581c5fa7b4f79d347898f8475111bac95bbab3736f4a44f5f8573
+        pull_policy: never
+        entrypoint:
+            - chown
+        user: "0:0"
+        read_only: true
+        cap_drop:
+            - ALL
+        cap_add:
+            - CHOWN
+        security_opt:
+            - no-new-privileges:true
+        volumes:
+            - data-aws:/data
+        mem_limit: 67108864
+        cpus: 0.5
+        pids_limit: 16
+        network_mode: none
+        command:
+            - 1004:1004
+            - /data
+    cache-init:
+        image: golang:1.25
+        pull_policy: never
+        user: "0:0"
+        read_only: true
+        cap_drop:
+            - ALL
+        cap_add:
+            - CHOWN
+        security_opt:
+            - no-new-privileges:true
+        volumes:
+            - gomod:/cache/gomod
+            - gocache:/cache/gocache
+            - npm:/cache/npm
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        network_mode: none
+        command:
+            - chown
+            - 1004:1004
+            - /cache/gomod
+            - /cache/gocache
+            - /cache/npm
+    db:
+        image: postgres:16
+        pull_policy: never
+        read_only: true
+        cap_drop:
+            - ALL
+        tmpfs:
+            - /run
+            - /tmp
+        environment:
+            AIMAN_RO_PASSWORD: ro-secret
+            AWS_ACCESS_KEY_ID: test
+            AWS_CONFIG_FILE: /aiman-aws/config
+            AWS_DEFAULT_REGION: eu-west-1
+            AWS_EC2_METADATA_DISABLED: "true"
+            AWS_ENDPOINT_URL: http://aws:4566
+            AWS_ENDPOINT_URL_DYNAMODB: http://aws:4566
+            AWS_ENDPOINT_URL_DYNAMODB_STREAMS: http://aws:4566
+            AWS_ENDPOINT_URL_S3: http://aws:4566
+            AWS_ENDPOINT_URL_SNS: http://aws:4566
+            AWS_ENDPOINT_URL_SQS: http://aws:4566
+            AWS_REGION: eu-west-1
+            AWS_SECRET_ACCESS_KEY: test
+            AWS_SHARED_CREDENTIALS_FILE: /aiman-aws/credentials
+            HTTP_PROXY: http://edge:3128
+            HTTPS_PROXY: http://edge:3128
+            NO_PROXY: localhost,127.0.0.1,app,edge,aws,db,10.231.1.0/24
+            NODE_EXTRA_CA_CERTS: /aiman-ca/ca.pem
+            NODE_USE_ENV_PROXY: "1"
+            POSTGRES_PASSWORD: test
+            REQUESTS_CA_BUNDLE: /aiman-ca/ca.pem
+            SSL_CERT_FILE: /aiman-ca/ca.pem
+            http_proxy: http://edge:3128
+            https_proxy: http://edge:3128
+            no_proxy: localhost,127.0.0.1,app,edge,aws,db,10.231.1.0/24
+        volumes:
+            - data-db:/var/lib/postgresql/data
+            - ./initdb/00-aiman-ro.sql:/docker-entrypoint-initdb.d/00-aiman-ro.sql:ro
+            - aiman-ca:/aiman-ca:ro
+            - ./aws:/aiman-aws:ro
+        mem_limit: 2147483648
+        cpus: 2
+        pids_limit: 256
+        networks:
+            - inner
+        sysctls:
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.default.disable_ipv6: "1"
+    edge:
+        image: alpine:3.20
+        pull_policy: never
+        user: 1004:1004
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        tmpfs:
+            - /tmp
+        volumes:
+            - /home/u/.local/bin/aiman:/aiman:ro
+            - /home/u/.aiman/harness/s1/r1a2b3/control:/control
+            - aiman-ca:/aiman-ca
+        mem_limit: 268435456
+        cpus: 0.5
+        pids_limit: 64
+        ports:
+            - 127.0.0.1::10001
+            - 127.0.0.1::10002
+        networks:
+            inner:
+                aliases:
+                    - aws
+            outer: {}
+        sysctls:
+            net.ipv4.ip_forward: "0"
+            net.ipv6.conf.all.disable_ipv6: "1"
+            net.ipv6.conf.all.forwarding: "0"
+            net.ipv6.conf.default.disable_ipv6: "1"
+        command:
+            - /aiman
+            - harness
+            - edge
+            - --control
+            - /control/edge.sock
+            - --token-file
+            - /control/token
+            - --outer
+            - 10.231.2.0/24
+            - --inner
+            - 10.231.1.0/24
+            - --relay
+            - web=10001=app:8080
+            - --relay
+            - db=10002=db:5432
+            - --proxy
+            - 10.231.1.0/24
+            - --network
+            - offline
+            - --ca-dir
+            - /aiman-ca
+            - --capture-body-bytes
+            - "4096"
+            - --stubs
+            - /control/stubs.json
+            - --block-host-suffix
+            - amazonaws.com
+            - --block-host-suffix
+            - amazonaws.com.cn
+            - --block-host-suffix
+            - api.aws
+            - --block-host-suffix
+            - on.aws
+            - --aws-tap
+            - aws=aws-emu:4566
+networks:
+    inner:
+        internal: true
+        enable_ipv6: false
+        ipam:
+            config:
+                - subnet: 10.231.1.0/24
+    outer:
+        internal: false
+        enable_ipv6: false
+        driver_opts:
+            com.docker.network.bridge.enable_ip_masquerade: "false"
+        ipam:
+            config:
+                - subnet: 10.231.2.0/24
+volumes:
+    aiman-ca:
+        driver: local
+        driver_opts:
+            device: tmpfs
+            o: size=1m,uid=1004,gid=1004,mode=0755
+            type: tmpfs
+    data-aws: {}
+    data-db: {}
+    gocache: {}
+    gomod: {}
+    npm: {}

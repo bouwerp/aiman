@@ -122,8 +122,17 @@ func (m *Manager) composeDown(ctx context.Context, r Run) {
 }
 
 // containers are the compose services of the run whose logs may be read.
+// containers are the run's long-running compose services: an aws service
+// is its emulator.
 func (r Run) containers() []string {
-	return append([]string{ServiceApp, ServiceEdge}, r.Services...)
+	out := []string{ServiceApp, ServiceEdge}
+	for _, name := range r.Services {
+		if slices.Contains(r.AWSServices, name) {
+			name = AWSEmuService(name)
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 func (m *Manager) markStopped(r Run, reason string) {
