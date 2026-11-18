@@ -12,7 +12,6 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/harness/edge"
-	"github.com/bouwerp/aiman/internal/redact"
 )
 
 // Debug check refusals and results.
@@ -350,9 +349,8 @@ func (m *Manager) finishDebugCheck(w *debugCheckRun, res waitResult, timedOut bo
 	out, _, _ := m.compose(ctx, w.call, "logs", "--no-color", "--no-log-prefix", ServiceDebugCheck)
 	m.removeDebugCheck(ctx, w)
 	m.debugTargetApp(w)
-	lines, _ := redact.Lines(strings.Split(tailLines(out, checkOutputLines), "\n"), nil)
 	at := m.opts.Now()
-	c := CheckRun{Output: strings.Join(lines, "\n"), At: &at, Debug: true}
+	c := CheckRun{Output: checkOutput(out), At: &at, Debug: true}
 	switch {
 	case timedOut:
 		c.ErrorCode = CodeDebugTimeout

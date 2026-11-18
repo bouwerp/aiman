@@ -444,7 +444,8 @@ func TestManagerCheck(t *testing.T) {
 	tm := newTestManager(t)
 	tm.docker.answer = func(args []string) (string, int, bool) {
 		if strings.Join(args, " ") == "run --rm --no-deps app sh -c exit 3" {
-			return "failing\n", 3, true
+			// Test runners colour their output; the console shows it as text.
+			return "\x1b[1m\x1b[31mfailing\x1b[39m\x1b[22m\n", 3, true
 		}
 		return "", 0, false
 	}
@@ -454,7 +455,7 @@ func TestManagerCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 2 || results[0].Name != "ok" || *results[0].Exit != 0 || results[1].Name != "bad" || *results[1].Exit != 3 || !strings.Contains(results[1].Output, "failing") {
+	if len(results) != 2 || results[0].Name != "ok" || *results[0].Exit != 0 || results[1].Name != "bad" || *results[1].Exit != 3 || results[1].Output != "failing" {
 		t.Fatalf("results = %+v", results)
 	}
 	if _, err := tm.Check(context.Background(), run.ID, "nope", domain.EventActorAgent); err == nil {
