@@ -407,6 +407,8 @@
     const idx = $("aws-q-index");
     idx.replaceChildren(el("option", { value: "", text: "table" }),
       ...(t.gsis || []).concat(t.lsis || []).map((i) => el("option", { value: i.name, text: i.name })));
+    // Key values typed for another table would query this one's keys.
+    for (const id of ["aws-q-pk", "aws-q-sk1", "aws-q-sk2", "aws-q-skop"]) $(id).value = "";
     syncQueryKeys();
   }
 

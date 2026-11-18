@@ -1,9 +1,13 @@
 import { readFileSync } from "node:fs";
 import { type APIRequestContext, type Page, expect, test } from "@playwright/test";
 
-// Run against the driver's aws fixture: --fixture aws --up. The run's app
-// answers /upload (PutObject and PutItem), /wrong-region, /foreign-key and
-// /real-aws on its web port.
+// Run against the driver's aws fixture: --fixture aws --up. The plan comes
+// from a SAM template (stack orders) and a Terraform stack with a local
+// module (stack shared), read through the importers with the upload
+// scenario's overrides (Stage e2e, env e2e). The run's app answers /upload
+// (PutObject and PutItem), /notified (the bucket's notification in the
+// upload queue), /publish (SNS to the subscribed queue), /env,
+// /wrong-region, /foreign-key and /real-aws on its web port.
 const url = process.env.E2E_CONSOLE_URL;
 
 const pause = (page: Page, ms = 1200) => page.waitForTimeout(ms);
@@ -40,21 +44,42 @@ test.beforeEach(() => {
   test.skip(!url, "set E2E_CONSOLE_URL to the driver's E2E_CONSOLE_URL line");
 });
 
-test("resources: manifest, env and the plan's warning", async ({ page }) => {
+test("resources: both stacks, env, outputs and the plan's warning", async ({ page, request }) => {
   await openAWS(page);
   // The read relay is the AWS tab's, not an app link.
   await expect(page.locator("#apps")).not.toContainText("aws");
+  // SHARED_VPC reads an export no stack provides: one warning, with its
+  // file and line, and the variable is left out.
   const warn = page.locator("#aws-warnings .aws-warn[data-kind=warning]");
   await expect(warn).toHaveCount(1);
   await expect(warn).toContainText("OrdersFunction");
-  await expect(warn).toContainText("NotHere");
+  await expect(warn).toContainText("shared-vpc-id");
+  await expect(warn).toContainText("infra/sam/template.yaml:");
+  await expect(page.locator("#aws-warnings")).toContainText("event source SQS for OrdersFunction");
   const rows = page.locator("#aws-res tbody tr");
-  await expect(rows).toHaveCount(3);
+  await expect(rows).toHaveCount(10);
+  // SAM: generated and parameter-built names, mapped by env and function_env.
   await expect(rows.filter({ hasText: "OrdersTable" })).toContainText("ORDERS_TABLE");
   await expect(rows.filter({ hasText: "OrdersTable" })).toContainText(/orders-OrdersTable-[a-z0-9]{12}/);
+  await expect(rows.filter({ hasText: "CountersTable" })).toContainText("orders-e2e-counters");
+  await expect(rows.filter({ hasText: "CountersTable" })).toContainText("COUNTERS_TABLE");
   await expect(rows.filter({ hasText: "UploadBucket" })).toContainText("UPLOAD_BUCKET");
+  await expect(rows.filter({ hasText: "EventsTopic" })).toContainText("EVENTS_TOPIC");
+  await expect(rows.filter({ hasText: "EventsSubscription" })).toHaveCount(1);
+  // Terraform: var.env from the scenario, a module's queue and its DLQ.
+  await expect(rows.filter({ hasText: "aws_dynamodb_table.customers" })).toContainText("shared-e2e-customers");
+  await expect(rows.filter({ hasText: "aws_dynamodb_table.customers" })).toContainText("CUSTOMERS_TABLE");
+  await expect(rows.filter({ hasText: "module.jobs.aws_sqs_queue.main" })).toContainText("JOBS_QUEUE_URL");
+  await expect(rows.filter({ hasText: "module.jobs.aws_sqs_queue.dlq" })).toContainText("shared-e2e-jobs-dlq");
   await expect(page.locator("#aws-res")).toContainText("eu-west-1");
   await expect(page.locator("#aws-env")).toContainText("ORDERS_TABLE");
+  await expect(page.locator("#aws-env")).toContainText("jobs_queue_url");
+  await expect(page.locator("#aws-env")).not.toContainText("SHARED_VPC");
+  // The app got the same values.
+  const env = await app(request, "/env");
+  expect(env).toContain("STAGE=e2e");
+  expect(env).toContain("CUSTOMERS_TABLE=shared-e2e-customers");
+  expect(env).toContain("SHARED_VPC=<unset>");
   await pause(page, 2000);
   await shot(page, "01-resources");
 });
@@ -95,7 +120,7 @@ test("calls: the app's calls live, filters, detail and hints", async ({ page, re
   await page.locator("#aws-v-calls").click();
   const list = page.locator("#aws-call-list .aws-call");
   // The applier's calls come first, from client aiman.
-  await expect(list.filter({ hasText: "CreateTable" }).locator(".aws-call-client")).toHaveText("aiman");
+  await expect(list.filter({ hasText: "CreateTable" }).filter({ hasText: "orders-OrdersTable-" }).locator(".aws-call-client")).toHaveText("aiman");
   await pause(page);
 
   expect(await app(request, "/upload")).toContain("PutObject 200, PutItem 200");
@@ -117,6 +142,16 @@ test("calls: the app's calls live, filters, detail and hints", async ({ page, re
   await pause(page, 1500);
   await shot(page, "03-calls");
   await list.nth(0).click();
+
+  // The template's wiring works in the emulator: the bucket notifies the
+  // upload queue, and the topic delivers to its subscribed queue.
+  expect(await app(request, "/notified")).toContain("upload notification: True");
+  expect(await app(request, "/publish")).toContain("Publish 200, delivered to the subscribed queue: True");
+  await expect(list.filter({ hasText: "sns Publish" }).first().locator(".aws-call-client")).toHaveText("app");
+  await expect(list.filter({ hasText: "sqs ReceiveMessage" }).first()).toBeVisible();
+  // The applier created the Terraform module's queue.
+  await expect(list.filter({ hasText: "CreateQueue" }).filter({ hasText: "shared-e2e-jobs" }).first().locator(".aws-call-client")).toHaveText("aiman");
+  await pause(page, 1500);
 
   await page.locator("#aws-f-service").selectOption("s3");
   await expect(list.filter({ hasText: "dynamodb" })).toHaveCount(0);
@@ -179,6 +214,15 @@ test("dynamodb: describe, scan, index query, item JSON and stream", async ({ pag
   await expect(recs.first()).toContainText("New image");
   await pause(page, 2000);
   await shot(page, "06-stream");
+
+  // The Terraform stack's table, seeded, with its secret column redacted.
+  await page.locator("#aws-tables button", { hasText: "shared-e2e-customers" }).click();
+  await expect(page.locator("#aws-describe")).toContainText("id (HASH)");
+  await expect(page.locator("#aws-items tbody tr").filter({ hasText: "Ada" })).toHaveCount(1);
+  await expect(page.locator("#aws-items th.redacted")).toHaveText("password");
+  await expect(page.locator("#aws-items")).not.toContainText("hunter2");
+  await pause(page, 1500);
+  await shot(page, "06b-customers");
 });
 
 test("writes: confirm first, upload, delete, put item, send, reset", async ({ page }) => {
@@ -192,10 +236,11 @@ test("writes: confirm first, upload, delete, put item, send, reset", async ({ pa
 
   // A message to the plan's queue, from the Resources view.
   await expect(page.locator("#aws-w-sqs")).toBeVisible();
-  await expect(page.locator("#aws-w-queue")).toHaveValue(/orders-Events-/);
+  await expect(page.locator("#aws-w-queue")).toHaveValue(/orders-UploadQueue-/);
+  await page.locator("#aws-w-queue").selectOption("shared-e2e-jobs");
   await page.locator("#aws-w-body").fill("hello from the console");
   await page.locator("#aws-w-send").click();
-  await expect(status).toContainText(/Sent message .* to orders-Events-/);
+  await expect(status).toContainText(/Sent message .* to shared-e2e-jobs/);
   expect(asked.pop()).toContain("hello from the console");
   await pause(page);
 
@@ -252,6 +297,9 @@ test("writes: confirm first, upload, delete, put item, send, reset", async ({ pa
   await page.locator("#aws-tables button", { hasText: "orders-OrdersTable-" }).click();
   await expect(page.locator("#aws-items tbody tr", { hasText: "received" })).toHaveCount(1);
   await expect(page.locator("#aws-items tbody tr", { hasText: "uploads/" })).toHaveCount(0);
+  await page.locator("#aws-tables button", { hasText: "shared-e2e-customers" }).click();
+  await expect(page.locator("#aws-items tbody tr", { hasText: "Ada" })).toHaveCount(1);
+  await page.locator("#aws-tables button", { hasText: "orders-OrdersTable-" }).click();
   await pause(page, 2000);
   await shot(page, "09-reset");
 });
