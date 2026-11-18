@@ -82,7 +82,7 @@ func bunTools(t *testing.T) (string, string, string) {
 	t.Helper()
 	bunToolsOnce.Do(func() {
 		bunToolsErr = func() error {
-			dir, err := cacheDir()
+			dir, err := CacheDir()
 			if err != nil {
 				return err
 			}
@@ -137,9 +137,9 @@ type buildError struct {
 
 func (e *buildError) Error() string { return "build bun-dap: " + e.err.Error() + ": " + e.out }
 
-// copyTree copies the regular files under src to dst, leaving out the tools
+// CopyTree copies the regular files under src to dst, leaving out the tools
 // store's manifest.
-func copyTree(src, dst string) error {
+func CopyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -158,6 +158,17 @@ func copyTree(src, dst string) error {
 		}
 		return os.WriteFile(target, b, 0o644) //nolint:gosec // G306: as above
 	})
+}
+
+// HonoPackage is the pinned Hono package the Bun fixture imports, fetched
+// and checked through the tools store in the user cache; the directory is
+// the unpacked package.
+func HonoPackage(ctx context.Context) (string, error) {
+	dir, err := CacheDir()
+	if err != nil {
+		return "", err
+	}
+	return (&tools.Store{Dir: filepath.Join(dir, "tools")}).Ensure(ctx, honoPin)
 }
 
 // UpBunDebugRun starts a Bun debug run of the Hono app in the official Bun
@@ -179,7 +190,7 @@ func UpBunDebugRun(t *testing.T) *DebugRun {
 	if err := os.WriteFile(filepath.Join(dir, "src", "src", "index.ts"), []byte(BunSource), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyTree(honoPath, filepath.Join(dir, "src", "node_modules", "hono")); err != nil {
+	if err := CopyTree(honoPath, filepath.Join(dir, "src", "node_modules", "hono")); err != nil {
 		t.Fatal(err)
 	}
 	token := randomHex(t, 32)

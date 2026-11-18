@@ -258,7 +258,9 @@ var (
 	dlvErr   error
 )
 
-func cacheDir() (string, error) {
+// CacheDir is the user cache directory the Docker tests share: the edge
+// binary, Delve and the tools store under tools/.
+func CacheDir() (string, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
@@ -267,13 +269,23 @@ func cacheDir() (string, error) {
 	return dir, os.MkdirAll(dir, 0o700)
 }
 
-// edgeBinary builds cmd/aiman without cgo for the busybox edge. It goes to
-// one fixed path in the user cache, renamed into place, so runs leave no
-// copies behind.
+// edgeBinary builds cmd/aiman without cgo for the busybox edge; see
+// EdgeBinary.
 func edgeBinary(t *testing.T) string {
 	t.Helper()
+	p, err := EdgeBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// EdgeBinary builds cmd/aiman of the module in the working directory without
+// cgo, once per process. It goes to the user cache under a name carrying its
+// hash, renamed into place, so runs leave no copies behind.
+func EdgeBinary() (string, error) {
 	edgeOnce.Do(func() {
-		dir, err := cacheDir()
+		dir, err := CacheDir()
 		if err != nil {
 			edgeErr = err
 			return
@@ -309,10 +321,7 @@ func edgeBinary(t *testing.T) string {
 		edgeErr = os.Rename(tmp.Name(), edgePath)
 		pruneEdgeBinaries(dir, edgePath)
 	})
-	if edgeErr != nil {
-		t.Fatal(edgeErr)
-	}
-	return edgePath
+	return edgePath, edgeErr
 }
 
 // dlvBinary is the pinned Delve, built on this host through the same
@@ -320,7 +329,7 @@ func edgeBinary(t *testing.T) string {
 func dlvBinary(t *testing.T) string {
 	t.Helper()
 	dlvOnce.Do(func() {
-		dir, err := cacheDir()
+		dir, err := CacheDir()
 		if err != nil {
 			dlvErr = err
 			return

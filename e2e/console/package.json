@@ -1,0 +1,11 @@
+{
+  "name": "aiman-harness-console-e2e",
+  "private": true,
+  "description": "Playwright scenarios for the harness web console, run against cmd/aiman-harness-e2e",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
+  }
+}

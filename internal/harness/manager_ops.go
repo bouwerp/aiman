@@ -7,11 +7,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/pane"
 	"github.com/bouwerp/aiman/internal/redact"
 )
 
@@ -23,6 +25,32 @@ func paramsError(msg string) error { return fmt.Errorf("%w: %s", ErrParams, msg)
 
 // checkOutputLines is how much of a check's output a result keeps.
 const checkOutputLines = 60
+
+// checkOutput is the tail a check result keeps: escape sequences removed,
+// since test runners colour their output and the console shows it as
+// text, docker compose's progress lines dropped, then redacted.
+func checkOutput(out string) string {
+	lines, _ := redact.Lines(strings.Split(tailLines(dropComposeProgress(pane.StripANSI(out)), checkOutputLines), "\n"), nil)
+	return strings.Join(lines, "\n")
+}
+
+// composeProgress matches the lines docker compose writes about its own
+// resources before a check's command runs (" Container x  Creating",
+// "[+] Running 2/2", " ✔ Network y  Created").
+var composeProgress = regexp.MustCompile(`^\s*(?:\[\+\]\s+\w+\s+\d+/\d+.*|(?:[✔✘⠿]\s+)?(?:Container|Network|Volume)\s+\S+\s+(?:Creating|Created|Recreate|Recreated|Starting|Started|Running|Waiting|Healthy|Stopping|Stopped|Removing|Removed)(?:\s+[\d.]+s)?)\s*$`)
+
+// dropComposeProgress removes compose's progress lines from out, keeping
+// every other line in order.
+func dropComposeProgress(out string) string {
+	lines := strings.Split(out, "\n")
+	kept := lines[:0]
+	for _, l := range lines {
+		if !composeProgress.MatchString(l) {
+			kept = append(kept, l)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
 
 func (m *Manager) logf(format string, args ...any) {
 	log.Printf("harness: "+format, args...)
@@ -156,8 +184,7 @@ func (m *Manager) Check(ctx context.Context, id, name string, actor domain.Event
 			return nil, fmt.Errorf("check %s: %w", c.Name, err)
 		}
 		at := m.opts.Now()
-		lines, _ := redact.Lines(strings.Split(tailLines(out, checkOutputLines), "\n"), nil)
-		picked[i].Exit, picked[i].At, picked[i].Output = &exit, &at, strings.Join(lines, "\n")
+		picked[i].Exit, picked[i].At, picked[i].Output = &exit, &at, checkOutput(out)
 		picked[i].Debug, picked[i].ErrorCode, picked[i].Error = false, "", ""
 		m.record(run.Session, actor, domain.EventHarnessCheck, map[string]any{"run": run.ID, "name": c.Name, "exit": exit, "debug": false})
 	}

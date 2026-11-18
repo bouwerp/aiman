@@ -104,7 +104,7 @@
   function verdictControls(step, current) {
     const row = el("div", { class: "verdict-row" });
     const label = step === 0 ? "Note on the whole scenario" : "Note on step " + step;
-    const note = el("input", { type: "text", placeholder: "Note (what you saw)", maxLength: 2000, "aria-label": label });
+    const note = el("input", { type: "text", class: "verdict-note", "data-step": String(step), placeholder: "Note (what you saw)", maxLength: 2000, "aria-label": label });
     note.value = notes[step] || "";
     note.addEventListener("input", () => { notes[step] = note.value; });
     row.append(note);
@@ -116,16 +116,36 @@
     return row;
   }
 
+  // scenarioVerdict is the latest verdict on the whole scenario, if any.
+  function scenarioVerdict(run) {
+    let last = null;
+    for (const v of run.verdicts || []) if (v.step === 0) last = v;
+    return last;
+  }
+
   function scenarioResult(run) {
     if (run.result) return run.result;
-    for (const v of run.verdicts || []) if (v.step === 0) return v.result;
-    return "";
+    const v = scenarioVerdict(run);
+    return v ? v.result : "";
   }
 
   function renderSteps(run) {
-    const sig = JSON.stringify([run && run.id, run && run.steps, run && scenarioResult(run), state.forwards]);
+    const sig = JSON.stringify([run && run.id, run && run.steps, run && scenarioResult(run), run && scenarioVerdict(run), state.forwards]);
     if (sig === stepsSig) return;
     stepsSig = sig;
+    // A poll can rebuild the list while a note is being typed: keep its
+    // focus and caret, or the rest of the typing goes nowhere.
+    const active = document.activeElement;
+    const typing = active && active.classList && active.classList.contains("verdict-note")
+      ? { step: active.dataset.step, start: active.selectionStart, end: active.selectionEnd } : null;
+    rebuildSteps(run);
+    if (typing) {
+      const again = document.querySelector('input.verdict-note[data-step="' + typing.step + '"]');
+      if (again) { again.focus(); again.setSelectionRange(typing.start, typing.end); }
+    }
+  }
+
+  function rebuildSteps(run) {
     const list = $("steps");
     list.replaceChildren();
     const steps = (run && run.steps) || [];
@@ -144,6 +164,13 @@
     }
     if (steps.length === 0) $("steps-empty").textContent = "This scenario has no human steps. Record a verdict on the whole scenario.";
     $("scenario-row").replaceWith(Object.assign(verdictControls(0, scenarioResult(run)), { id: "scenario-row" }));
+    const sv = scenarioVerdict(run);
+    const rec = $("scenario-recorded");
+    rec.hidden = !sv;
+    if (sv) {
+      rec.replaceChildren(el("span", { class: "badge", "data-result": sv.result, text: sv.result }));
+      if (sv.note) rec.append(" " + sv.note);
+    }
   }
 
   function renderHeader(run, err) {
@@ -177,6 +204,12 @@
     for (const f of state.forwards || []) {
       if (f.name === "dap" && state.run && state.run.debug) continue; // the debugger's port, used by the Debug tab
       if (state.run && (state.run.evm || []).includes(f.name)) continue; // an EVM node's read-only relay, used by the EVM tab
+      if (state.run && (state.run.databases || []).some((d) => d.service === f.name)) {
+        // A postgres relay speaks the wire protocol, not HTTP: show where psql connects.
+        nav.append(el("span", { class: "app-link db-link" },
+          el("strong", { text: f.name }), "postgres 127.0.0.1:" + f.local_port, el("span", { text: "host port " + f.host_port })));
+        continue;
+      }
       nav.append(el("a", { class: "app-link", href: f.url, target: "_blank", rel: "noopener noreferrer" },
         el("strong", { text: f.name }), f.url, el("span", { text: "host port " + f.host_port })));
     }
@@ -204,7 +237,22 @@
 
   // ---- checks ----
   let checkOutput = null; // last harness.check answer, shown until the next
+  // waitNotice is the debug check whose "waits for the debugger" notice is
+  // shown. The notice goes once the run has shown that check as its debug
+  // target and then no longer does: the check ended.
+  let waitNotice = null;
+  function clearWaitNotice(run) {
+    if (!waitNotice) return;
+    const dc = run && run.debug_check;
+    if (dc && dc.name === waitNotice.name) {
+      waitNotice.seen = true;
+    } else if (waitNotice.seen || !run || run.id !== waitNotice.run) {
+      if ($("notice").textContent === waitNotice.text) notice("", "");
+      waitNotice = null;
+    }
+  }
   function renderChecks(run) {
+    clearWaitNotice(run);
     const list = $("checks");
     const checks = (checkOutput && run && checkOutput.run === run.id) ? checkOutput.checks : ((run && run.checks) || []);
     list.replaceChildren();
@@ -271,7 +319,9 @@
       if (window.aimanDebug) window.aimanDebug.leave();
       await api("/api/check", { run: run.id, name: name, debug: true, take: true });
       checkOutput = null;
-      notice("info", "Check " + name + " waits for the debugger. Its result shows here when it ends.");
+      const text = "Check " + name + " waits for the debugger. Its result shows here when it ends.";
+      notice("info", text);
+      waitNotice = { name: name, run: run.id, text: text, seen: false };
       selectTab("tab-debug");
     } catch (e) { showError(e); }
     busy = false;
