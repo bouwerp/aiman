@@ -13,7 +13,9 @@ import (
 
 // awsTapScript makes the calls TestAWSDockerTapLogs looks for: a PutObject,
 // a presigned GET as signed and with its signature changed, and a
-// TransactWriteItems that fails its condition.
+// TransactWriteItems that fails its condition. Both GETs read their answer
+// to the end: a client that hangs up on the headers alone cuts the answer
+// off, and the tap logs it with that error and without the error code.
 const awsTapScript = `
 import boto3, re, urllib.request, urllib.error
 from botocore.config import Config
@@ -21,13 +23,16 @@ s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
 s3.create_bucket(Bucket="uploads", CreateBucketConfiguration={"LocationConstraint": "eu-west-1"})
 s3.put_object(Bucket="uploads", Key="a/b.txt", Body=b"tap-body-secret")
 url = s3.generate_presigned_url("get_object", Params={"Bucket": "uploads", "Key": "a/b.txt"}, ExpiresIn=300)
-print("GOOD", urllib.request.urlopen(url).status)
+with urllib.request.urlopen(url) as r:
+    r.read()
+    print("GOOD", r.status)
 sig = re.search(r"X-Amz-Signature=([0-9a-f]+)", url).group(1)
 bad = url.replace(sig, sig[:-1] + ("0" if sig[-1] != "0" else "1"))
 try:
     urllib.request.urlopen(bad)
     print("BAD 200")
 except urllib.error.HTTPError as e:
+    e.read()
     print("BAD", e.code)
 ddb = boto3.client("dynamodb")
 ddb.create_table(TableName="orders", KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
