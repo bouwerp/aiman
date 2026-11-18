@@ -456,6 +456,42 @@ services:
 - The run is offline, so anvil cannot fork a public chain. `--fork-url` and the other fork flags are refused. Deploy the contracts in a setup step or fixture script.
 - `echo '{}' | aiman rpc harness.evm_txs --params-stdin` lists recent transactions, and `echo '{"tx":"0x…"}' | aiman rpc harness.evm_trace --params-stdin` returns one transaction's call tree with decoded revert reasons. Both only read. The edge admits only read methods, so you cannot send a transaction through these calls.
 
+### AWS services
+
+A service with `aws` runs a local AWS emulator (MiniStack) for S3, DynamoDB, SQS and SNS. Serve builds the resources from your CloudFormation, SAM or Terraform files before the app starts. Do not set `image`.
+
+```yaml
+services:
+  aws:
+    aws:
+      kind: ministack
+      services: [s3, dynamodb, sqs, sns]
+      region: eu-west-1
+      stacks:
+        - {name: orders, cloudformation: infra/template.yaml, parameters: {Stage: test}}
+        - {name: shared, terraform: infra/tf, var_files: [infra/tf/test.tfvars], vars: {env: test}}
+      env:
+        UPLOAD_BUCKET: orders.outputs.UploadBucketName
+        JOBS_QUEUE_URL: shared.module.jobs.aws_sqs_queue.main
+      function_env: [orders.OrdersFunction]
+      seed: .aiman/aws/seed.yaml
+scenarios:
+  - id: upload
+    services: [aws]
+    aws: {aws: {parameters: {orders: {Stage: e2e}}, vars: {shared: {env: e2e}}}}
+```
+
+- `cloudformation` takes a SAM or CloudFormation template (YAML or JSON) or `cdk.out/<Stack>.template.json`. `terraform` takes a directory. Serve reads them from the commit. It does not run `terraform` or `sam`.
+- The app learns names from the environment. Map them in `env` (`<stack>.<logical id>`, `<stack>.<logical id>.<attribute>`, `<stack>.outputs.<name>`; a Terraform logical id is its address). `function_env` copies a Lambda function's `Environment.Variables`. Names that the IaC does not give are generated. Do not hard-code them.
+- Serve sets `AWS_ENDPOINT_URL`, the region and the key pair `test`/`test` in every container. `AIMAN_AWS_RESOURCES` names a JSON file with every resource.
+- The seed file fills the resources: `objects` (`bucket`, `from` a directory, `prefix`), `items` (`table`, `file` with one JSON item per line) and `messages` (`queue`, `file`). A scenario can replace it with its own `seed`.
+- Run `aiman harness aws plan [<scenario>]` before `harness up`. It shows the resources, the names, the env, the warnings and the notes, with no run. A warning is a value serve could not resolve: it leaves out the property or the resource, and never guesses. A reference in `env` that does not resolve refuses the run.
+- On a ready run: `aiman harness aws resources`, `aiman harness aws calls` (every call the app made, with status and error code), `aiman harness aws s3 ls|cat|get|versions` and `aiman harness aws ddb tables|describe|scan|query|get|stream`. These only read.
+- `aiman harness aws write …` and `aiman harness aws reset` are the operator's. You get `needs_operator`. Load data with the seed file instead.
+- Refused: a harness file that sets an AWS identity variable (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_ROLE_ARN`, `AWS_CONFIG_FILE`, …) or holds a string like an access key id, in any harness file. In a run with an aws service, the proxy refuses every call to an AWS host (`*.amazonaws.com`, `*.api.aws`, `*.on.aws`), online too. Make the SDK read `AWS_ENDPOINT_URL`.
+- Limits: S3 is path-style only. Set `UsePathStyle` (Go v2) or `forcePathStyle` (JavaScript v3); botocore reads it from the config file. SDKs older than the endpoint variables (Go v1, JavaScript v2, boto3 before 1.28) need the endpoint in code. Lambda functions never run: a function's `Events` and bucket notifications to Lambda or EventBridge are dropped. SNS delivers only to SQS. Bucket CORS, lifecycle and object-lock retention are not applied.
+- A `.gitignore` rule `*.out` or `cdk.out` keeps `cdk.out/` out of the commit, so serve cannot find the template. Check with `git check-ignore -v cdk.out/<Stack>.template.json`. Add the file with `git add -f`, or synthesize it to another directory.
+
 ### Network and capture
 
 The app and the services reach the outside only through the edge proxy at `http://edge:3128`. Serve sets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (the app, the edge and every service) in each container. The proxy reads HTTPS with a certificate authority that it makes for the run. `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and `REQUESTS_CA_BUNDLE` point at its certificate.
