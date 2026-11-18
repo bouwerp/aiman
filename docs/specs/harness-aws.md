@@ -709,6 +709,22 @@ Total: about the size of P4 (database browser) and P9 (EVM traces) together, plu
 | Large seeds or many objects | Memory or start time grows | Seed bounds; S3 bytes on a volume; 512m default limit counted in the run budget |
 | An app with Docker access edits the emulator directly | Bypasses operator-only writes | Same bound as today: vetting and the relay bound what the harness exposes, not what a session with Docker can do |
 
+## Deviations
+
+Where the built code differs from the approved design, per piece.
+
+**A1**
+
+1. **Data volume ownership.** A fresh named volume belongs to root and the emulator runs as the run's uid, so `S3_DATA_DIR` on `data-<name>` was not writable. A one-shot `<name>-emu-init` (MiniStack image, `user 0:0`, `cap_drop ALL` plus `CHOWN`, `no-new-privileges`, `network_mode: none`, 64m) chowns `/data` before the emulator starts (`depends_on: service_completed_successfully`), as `cache-init` does for the app's caches. Service names ending `-emu-init` are reserved beside `-emu`.
+2. **Tap without call log.** A1 ships a minimal `edge.AWSTap` (`internal/harness/edge/aws_tap.go`): an `httputil.ReverseProxy` on the edge's inner address at 4566 that forwards unchanged and refuses the admin paths. Without it the app could not reach `<name>:4566`. A2 adds the call log, the `aws_calls` control op and `aws_calls.json` to the same type.
+3. **No read relay yet.** `--aws-relay`, `harness.RelayKindAWS` and the aws relay in `relaysFor` belong to A3, which owns the filter; A1 publishes no port for the aws service, so an edge started by A1 never sees a flag it cannot parse.
+4. **`AIMAN_AWS_RESOURCES`, `env` and `function_env` are not set yet.** They need the plan's manifest and resolved references (A4). A1 parses and validates them only. A4 adds the variables to `AWSEnv`'s callers and writes `resources.json` into the same `aws/` directory.
+5. **`/aiman-aws` source.** The config and credentials files are `Project.Files` (`aws/config`, `aws/credentials`, mode 0444) beside the compose file, bound read-only from `<run>/sandbox/aws`, not `<run>/aws/`. A4 should write `resources.json` into `<run>/sandbox/aws/`.
+6. **Run field name.** `run.json` gains `aws_services` (the scenario's aws service names), leaving the key `aws` free for A4's `{service, resources, warnings, notes}` object.
+7. **Logs name the emulator.** `harness.logs` and the saved stop logs use `<name>-emu` for an aws service (`Run.containers`).
+8. **Key-id refusal covers every string.** The access key id pattern is checked against every string in the parsed file (keys and values, commands, step text), not only env, parameter, var and import values; identity variable names are checked in service env, aws env and both `wrap_env` lists.
+9. **Override vetting.** `harness.aws.images.<kind>` is passed both as `Options.AWSImages` and appended to the allowed list given to the manager and the vetter (`harness.AllowedWithAWS`), which is what "vetted as a listed image" means in code.
+
 ## What you should be able to explain after reading
 
 1. How the app reaches the emulator, and why it never holds or reaches real AWS credentials or hosts.

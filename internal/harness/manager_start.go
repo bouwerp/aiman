@@ -224,7 +224,7 @@ func (s *starter) debugger(ctx context.Context) error {
 func (s *starter) services(ctx context.Context) error {
 	wait := strconv.Itoa(int(ReadyTimeout.Seconds()))
 	for _, name := range s.sc.Services {
-		if err := s.must(ctx, "service "+name, name, nil, "up", "-d", "--wait", "--wait-timeout", wait, name); err != nil {
+		if err := s.must(ctx, "service "+name, name, nil, "up", "-d", "--wait", "--wait-timeout", wait, s.f.ComposeService(name)); err != nil {
 			return err
 		}
 	}

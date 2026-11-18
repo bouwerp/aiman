@@ -89,8 +89,9 @@ func proxyEnv(noProxy string) map[string]string {
 // CAVolume; the app gets the proxy variables and the certificate, and so
 // does every service unless its env sets a variable itself. Online, the
 // outer network masquerades so the edge, and only the edge, reaches the
-// internet; the inner network stays internal.
-func withProxy(doc *composeFile, sc *Scenario, spec RunSpec) error {
+// internet; the inner network stays internal. A scenario with an aws service
+// has the proxy refuse every AWSBlockSuffixes host, in either mode.
+func withProxy(doc *composeFile, f *File, sc *Scenario, spec RunSpec) error {
 	p := spec.Proxy
 	if p == nil {
 		return nil
@@ -145,6 +146,9 @@ func withProxy(doc *composeFile, sc *Scenario, spec RunSpec) error {
 	}
 
 	for _, name := range sc.Services {
+		if f.Services[name].AWS != nil {
+			continue // the emulator never goes out
+		}
 		s := doc.Services[name]
 		if s.Environment == nil {
 			s.Environment = map[string]string{}
@@ -169,6 +173,11 @@ func withProxy(doc *composeFile, sc *Scenario, spec RunSpec) error {
 	}
 	if p.Stubs {
 		e.Command = append(e.Command, "--stubs", ControlMount+"/"+StubsFile)
+	}
+	if len(f.AWSServices(sc)) > 0 {
+		for _, suffix := range AWSBlockSuffixes {
+			e.Command = append(e.Command, "--block-host-suffix", suffix)
+		}
 	}
 	e.Volumes = append(e.Volumes, CAVolume+":"+CAMount)
 	if p.Online {

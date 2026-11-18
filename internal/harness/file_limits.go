@@ -61,8 +61,12 @@ func (f *File) AppLimits() ResolvedLimits {
 }
 
 // ServiceLimits are the named service's limits; serviceMemory is the default
-// memory (harness.service_memory), 0 for DefaultServiceMemory.
+// memory (harness.service_memory), 0 for DefaultServiceMemory. An aws
+// service defaults to DefaultAWSMemory instead.
 func (f *File) ServiceLimits(name string, serviceMemory int64) ResolvedLimits {
+	if f.Services[name].AWS != nil {
+		serviceMemory = DefaultAWSMemory
+	}
 	if serviceMemory <= 0 {
 		serviceMemory = DefaultServiceMemory
 	}

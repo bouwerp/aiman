@@ -61,6 +61,7 @@ func (f *File) Validate() []string {
 		seen[sc.ID] = true
 		errs = append(errs, f.validateScenario(i, sc)...)
 	}
+	errs = append(errs, f.validateAWSIdentity()...)
 	return errs
 }
 
@@ -102,6 +103,12 @@ func validateService(name string, s Service) []string {
 	}
 	if slices.Contains(ReservedServiceNames, name) {
 		add("the name is reserved")
+	}
+	if strings.HasSuffix(name, awsEmuSuffix) || strings.HasSuffix(name, awsInitSuffix) {
+		add("names ending %s or %s are reserved for aws emulators", awsEmuSuffix, awsInitSuffix)
+	}
+	if s.AWS != nil {
+		return append(errs, validateAWS(at, s)...)
 	}
 	if s.Image == "" || !imageCharsRe.MatchString(s.Image) {
 		add("image %q must be a plain image reference", s.Image)
@@ -225,6 +232,9 @@ func (f *File) validateScenario(i int, sc *Scenario) []string {
 			add("stubs[%d]: %s", j, e)
 		}
 	}
+	for _, e := range f.validateScenarioAWS(sc) {
+		add("%s", e)
+	}
 	return errs
 }
 
@@ -298,7 +308,8 @@ func validateStub(st Stub) []string {
 
 // Paths returns the repository paths the file names: fixture and stub body
 // files, and the first word of each setup and check command when it is a
-// relative path with a directory (scripts/harness/migrate.sh). Duplicates are
+// relative path with a directory (scripts/harness/migrate.sh), and the aws
+// stacks, var files and seed files. Duplicates are
 // dropped; paths are cleaned.
 func (f *File) Paths() []string {
 	seen := map[string]bool{}
@@ -323,7 +334,24 @@ func (f *File) Paths() []string {
 			addPath(w)
 		}
 	}
+	for _, name := range sortedKeys(f.Services) {
+		a := f.Services[name].AWS
+		if a == nil {
+			continue
+		}
+		for _, st := range a.Stacks {
+			addPath(st.CloudFormation)
+			addPath(st.Terraform)
+			for _, v := range st.VarFiles {
+				addPath(v)
+			}
+		}
+		addPath(a.Seed)
+	}
 	for _, sc := range f.Scenarios {
+		for _, name := range sortedKeys(sc.AWS) {
+			addPath(sc.AWS[name].Seed)
+		}
 		for _, s := range sc.Setup {
 			addCmd(s.Run)
 		}

@@ -14,6 +14,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +51,10 @@ type ProxyConfig struct {
 	CA *CA
 	// Stubs answer matching requests in either mode.
 	Stubs []Stub
+	// BlockSuffixes are host suffixes refused in either mode, before any
+	// stub: a host equal to one or ending in "."+one. A run with an AWS
+	// emulator blocks real AWS this way.
+	BlockSuffixes []string
 	// BodyBytes is how much of each body a flow keeps; zero is
 	// DefaultBodyBytes.
 	BodyBytes int
@@ -99,6 +104,10 @@ func NewProxy(cfg ProxyConfig) (*Proxy, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	for i := range cfg.BlockSuffixes {
+		cfg.BlockSuffixes[i] = strings.Trim(strings.ToLower(cfg.BlockSuffixes[i]), ".")
+	}
+	cfg.BlockSuffixes = slices.DeleteFunc(cfg.BlockSuffixes, func(s string) bool { return s == "" })
 	for i := range cfg.Stubs {
 		cfg.Stubs[i].Host = strings.ToLower(cfg.Stubs[i].Host)
 		if cfg.Stubs[i].Status == 0 {
@@ -328,6 +337,14 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL,
 	if r.Body != nil && r.Body != http.NoBody {
 		r.Body = &captureReader{rc: r.Body, c: fc.req}
 	}
+	if p.blocked(f.Host) {
+		drain(r.Body)
+		body := []byte(BlockedAWSMessage + "\n")
+		h := http.Header{"Content-Type": {"text/plain; charset=utf-8"}}
+		writeFixed(w, h, http.StatusBadGateway, body)
+		p.finish(fc, http.StatusBadGateway, OutcomeRefused, h, body, BlockedAWSMessage)
+		return
+	}
 	if st := p.stub(f.Host, target.Path); st != nil {
 		drain(r.Body)
 		h := http.Header{"Content-Type": {stubContentType(st.Body)}, "X-Aiman-Stub": {"1"}}
@@ -344,6 +361,21 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL,
 		return
 	}
 	p.rp.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), keyFlow, fc)))
+}
+
+// BlockedAWSMessage answers a request to a blocked host.
+const BlockedAWSMessage = "aiman: real AWS is blocked in a run with an AWS emulator; use AWS_ENDPOINT_URL"
+
+// blocked reports whether host (lower case, no port) is a BlockSuffixes
+// host. A trailing dot is ignored.
+func (p *Proxy) blocked(host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	for _, s := range p.cfg.BlockSuffixes {
+		if host == s || strings.HasSuffix(host, "."+s) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Proxy) stub(host, path string) *Stub {

@@ -206,7 +206,9 @@ type Service struct {
 	Ready    string            `yaml:"ready" json:"ready,omitempty"`
 	Database *Database         `yaml:"database" json:"database,omitempty"`
 	// EVM marks an EVM node the console can read traces from (evm.go).
-	EVM    *EVM     `yaml:"evm" json:"evm,omitempty"`
+	EVM *EVM `yaml:"evm" json:"evm,omitempty"`
+	// AWS marks an AWS emulator (aws.go); such a service names no image.
+	AWS    *AWS     `yaml:"aws" json:"aws,omitempty"`
 	Caps   []string `yaml:"caps" json:"caps,omitempty"`
 	Root   bool     `yaml:"root" json:"root,omitempty"`
 	Limits Limits   `yaml:"limits" json:"limits"`
@@ -240,6 +242,9 @@ type Scenario struct {
 	Steps    []Step    `yaml:"steps" json:"steps,omitempty"`
 	Checks   []Check   `yaml:"checks" json:"checks,omitempty"`
 	Stubs    []Stub    `yaml:"stubs" json:"stubs,omitempty"`
+	// AWS overrides an aws service's stack inputs and seed, keyed by
+	// service name.
+	AWS map[string]ScenarioAWS `yaml:"aws" json:"aws,omitempty"`
 }
 
 // Script is a setup command run in the app container.

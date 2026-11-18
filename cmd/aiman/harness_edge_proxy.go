@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/harness/edge"
@@ -24,6 +25,8 @@ type proxyFlags struct {
 	stubs     string
 	roots     string
 	bodyBytes int
+	// blocks are host suffixes the proxy refuses in either mode.
+	blocks []string
 }
 
 func (p *proxyFlags) register(fs *flag.FlagSet) {
@@ -33,11 +36,18 @@ func (p *proxyFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&p.stubs, "stubs", "", "JSON file of the scenario's stubs")
 	fs.StringVar(&p.roots, "upstream-roots", "", "CA bundle that verifies upstream servers online")
 	fs.IntVar(&p.bodyBytes, "capture-body-bytes", 0, "bytes of each body a flow keeps")
+	fs.Func("block-host-suffix", "refuse hosts with this suffix in either mode (repeatable)", func(v string) error {
+		if v = strings.TrimSpace(v); v == "" || strings.ContainsAny(v, " /:") {
+			return fmt.Errorf("--block-host-suffix %q must be a host suffix", v)
+		}
+		p.blocks = append(p.blocks, v)
+		return nil
+	})
 }
 
 func (p proxyFlags) check() error {
 	if p.prefix == "" {
-		if p.caDir != "" || p.stubs != "" || p.roots != "" || p.bodyBytes != 0 || p.network != "offline" {
+		if p.caDir != "" || p.stubs != "" || p.roots != "" || p.bodyBytes != 0 || p.network != "offline" || len(p.blocks) > 0 {
 			return errors.New("proxy flags need --proxy")
 		}
 		return nil
@@ -81,7 +91,7 @@ func startEdgeProxy(e *edge.Edge, p proxyFlags) error {
 			return fmt.Errorf("parse stubs: %w", err)
 		}
 	}
-	cfg := edge.ProxyConfig{Online: p.network == "online", CA: ca, Stubs: stubs, BodyBytes: p.bodyBytes}
+	cfg := edge.ProxyConfig{Online: p.network == "online", CA: ca, Stubs: stubs, BodyBytes: p.bodyBytes, BlockSuffixes: p.blocks}
 	if cfg.Online {
 		pem, err := os.ReadFile(p.roots)
 		if err != nil {

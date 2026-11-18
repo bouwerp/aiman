@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -29,7 +30,7 @@ func runHarnessEdge(args []string) error {
 	return serveEdge(opts)
 }
 
-const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]... [--dap-relay name=port=host:port]... [--evm-relay name=port=host:port]... [--proxy <inner prefix> --network offline|online --ca-dir <dir> [--stubs <file>] [--capture-body-bytes N] [--upstream-roots <file>]]"
+const harnessEdgeUsage = "Usage: aiman harness edge --control <socket> --token-file <file> --outer <addr|prefix> [--inner <prefix>[,<prefix>]]... [--relay name=port=host:port]... [--dap-relay name=port=host:port]... [--evm-relay name=port=host:port]... [--aws-tap name=host:port] [--proxy <inner prefix> --network offline|online --ca-dir <dir> [--stubs <file>] [--capture-body-bytes N] [--upstream-roots <file>] [--block-host-suffix <suffix>]...]"
 
 type edgeOptions struct {
 	control   string
@@ -38,6 +39,8 @@ type edgeOptions struct {
 	inner     []netip.Prefix
 	relays    []edge.RelaySpec
 	proxy     proxyFlags
+	// awsTaps are name=host:port taps to aws emulators.
+	awsTaps []edge.RelaySpec
 }
 
 func parseEdgeFlags(args []string) (edgeOptions, error) {
@@ -83,6 +86,14 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 		opts.relays = append(opts.relays, spec)
 		return nil
 	})
+	fs.Func("aws-tap", "tap to an AWS emulator as name=host:port, on the edge's inner address at 4566", func(v string) error {
+		name, target, ok := strings.Cut(v, "=")
+		if !ok || name == "" || target == "" {
+			return fmt.Errorf("aws tap %q must be name=host:port", v)
+		}
+		opts.awsTaps = append(opts.awsTaps, edge.RelaySpec{Name: name, Port: edge.AWSTapPort, Target: target})
+		return nil
+	})
 	opts.proxy.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return edgeOptions{}, err
@@ -95,6 +106,12 @@ func parseEdgeFlags(args []string) (edgeOptions, error) {
 	}
 	if err := opts.proxy.check(); err != nil {
 		return edgeOptions{}, err
+	}
+	if len(opts.awsTaps) > 1 {
+		return edgeOptions{}, errors.New("--aws-tap is given once: a run has at most one aws service")
+	}
+	if len(opts.awsTaps) > 0 && len(opts.inner) == 0 {
+		return edgeOptions{}, errors.New("--aws-tap needs --inner")
 	}
 	return opts, nil
 }
@@ -135,6 +152,13 @@ func serveEdge(opts edgeOptions) error {
 	if err := startEdgeProxy(e, opts.proxy); err != nil {
 		return err
 	}
+	for _, t := range opts.awsTaps {
+		stop, err := startAWSTap(opts.inner[0], t)
+		if err != nil {
+			return fmt.Errorf("aws tap %s: %w", t.Name, err)
+		}
+		defer stop()
+	}
 	for _, spec := range opts.relays {
 		st, err := e.Add(spec)
 		if err != nil {
@@ -155,4 +179,28 @@ func serveEdge(opts edgeOptions) error {
 	}()
 	log.Printf("edge: outer %s, control %s", outer, opts.control)
 	return e.ServeControl(ln)
+}
+
+// startAWSTap serves the tap on the edge's address in the inner prefix,
+// where the aws service's name points.
+func startAWSTap(inner netip.Prefix, spec edge.RelaySpec) (func(), error) {
+	tap, err := edge.NewAWSTap(spec.Target)
+	if err != nil {
+		return nil, err
+	}
+	addr, err := edge.ResolveOuter(inner.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("tap address: %w", err)
+	}
+	ln, err := net.Listen("tcp4", net.JoinHostPort(addr.String(), strconv.Itoa(spec.Port)))
+	if err != nil {
+		return nil, fmt.Errorf("tap listen: %w", err)
+	}
+	go func() {
+		if err := tap.Serve(ln); err != nil {
+			log.Printf("edge: aws tap %s stopped: %v", spec.Name, err)
+		}
+	}()
+	log.Printf("edge: aws tap %s %s -> %s", spec.Name, ln.Addr(), spec.Target)
+	return func() { _ = tap.Close() }, nil
 }

@@ -91,6 +91,9 @@ type Run struct {
 	// EVM names the scenario's EVM services, whose traces harness.evm_txs
 	// and harness.evm_trace read (P9).
 	EVM []string `json:"evm,omitempty"`
+	// AWSServices names the scenario's aws services (P10); each runs as the
+	// compose service AWSEmuService(name).
+	AWSServices []string `json:"aws_services,omitempty"`
 }
 
 // Live reports whether the run holds containers.

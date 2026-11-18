@@ -46,6 +46,10 @@ type Options struct {
 	UID, GID int
 	// EdgeImage is the edge's base image; empty is EdgeImage.
 	EdgeImage string
+	// AWSImages replaces an aws kind's pinned image (harness.aws.images),
+	// keyed by kind; a replacement is vetted as a listed image, not as
+	// builtin.
+	AWSImages map[string]string
 	// AllowedImages is harness.allowed_images; nil is DefaultAllowedImages.
 	AllowedImages []string
 	// ServiceMemory and RunMemory are harness.service_memory and
@@ -447,6 +451,7 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	run.Network = m.network()
 	run.Services = append([]string(nil), sc.Services...)
 	run.EVM = l.File.EVMServices(sc)
+	run.AWSServices = l.File.AWSServices(sc)
 	for _, name := range sc.Services {
 		if db := l.File.Services[name].Database; db != nil {
 			run.Databases = append(run.Databases, RunDatabase{Service: name, Kind: db.Kind})
@@ -528,8 +533,18 @@ func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenar
 	}
 	ids := map[string]string{}
 	refs := [][2]string{{ServiceApp, appRef}}
+	// awsBuiltin are the aws services that run aiman's pinned image.
+	awsBuiltin := map[string]bool{}
 	for _, name := range sc.Services {
-		refs = append(refs, [2]string{name, f.Services[name].Image})
+		ref := f.ServiceImageRef(name)
+		if a := f.Services[name].AWS; a != nil {
+			if o := m.opts.AWSImages[a.Kind]; o != "" {
+				ref = o
+			} else {
+				awsBuiltin[name] = true
+			}
+		}
+		refs = append(refs, [2]string{name, ref})
 	}
 	for j, c := range sc.Checks {
 		if c.Image != "" {
@@ -545,7 +560,7 @@ func (m *Manager) images(ctx context.Context, req UpRequest, f *File, sc *Scenar
 	}
 	var first error
 	for _, r := range refs {
-		builtin := r[0] == ServiceEdge || r[0] == ServiceAdapter || r[0] == ServiceCheckAdapter
+		builtin := r[0] == ServiceEdge || r[0] == ServiceAdapter || r[0] == ServiceCheckAdapter || awsBuiltin[r[0]]
 		id, err := m.image(ctx, req, r[1], builtin)
 		if err != nil {
 			if first == nil {

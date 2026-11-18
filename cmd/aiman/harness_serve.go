@@ -82,7 +82,8 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 		AimanBin:      bin,
 		UID:           os.Getuid(),
 		GID:           os.Getgid(),
-		AllowedImages: cfg.Harness.AllowedImages,
+		AllowedImages: harness.AllowedWithAWS(cfg.Harness.AllowedImages, cfg.Harness.AWS.Images),
+		AWSImages:     cfg.Harness.AWS.Images,
 		ServiceMemory: serviceMemory,
 		RunMemory:     runMemory,
 		MaxRuns:       cfg.Harness.MaxRunsOrDefault(),
@@ -167,7 +168,7 @@ func wireImageVetting(srv *server.Server, cfg *config.Config, dir, bin string) (
 		Scanner: images.DockerScanner{ImageFor: scannerImage.Ensure, AimanBin: bin, DBDir: dbDir,
 			ScratchDir: filepath.Join(dir, "scan"), UID: os.Getuid(), GID: os.Getgid()},
 		Loader: images.DockerLoader{}, Notify: srv.HarnessImageNotifier(), Reviewer: reviewer,
-		AllowedImages: cfg.Harness.AllowedImages, CVEBlock: ic.CVEBlockOrDefault(),
+		AllowedImages: harness.AllowedWithAWS(cfg.Harness.AllowedImages, cfg.Harness.AWS.Images), CVEBlock: ic.CVEBlockOrDefault(),
 		MaxSize: maxSize, ScanTimeout: ic.ScanTimeoutOrDefault(), MayStart: srv.PressureOpen,
 	})
 	if err != nil {
