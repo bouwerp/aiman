@@ -58,13 +58,14 @@ const plainAppImage = "busybox:1.36"
 // fixture uses, the debug adapter's included.
 var allowedImages = []string{
 	"busybox:*", "postgres:16", "golang:*", "node:*", "python:*", "oven/bun:*",
-	anvilImage, harness.AdapterImage,
+	anvilImage, bun12Image, harness.AdapterImage,
 }
 
 type flags struct {
 	repo, fixture, scenario, network, urlFile, release, aimanBin, toolsDir string
 	port, maxRuns                                                          int
 	debug, debugChecks, up, keep                                           bool
+	attachTimeout                                                          time.Duration
 }
 
 func parseFlags() flags {
@@ -82,6 +83,7 @@ func parseFlags() flags {
 	flag.StringVar(&f.urlFile, "url-file", "", "also write the console URL to this file")
 	flag.StringVar(&f.release, "release", defaultRelease, "aiman release the Bun adapter takes bun-dap from")
 	flag.StringVar(&f.aimanBin, "aiman-bin", "", "static aiman binary for the edge (default: build ./cmd/aiman without cgo)")
+	flag.DurationVar(&f.attachTimeout, "attach-timeout", 0, "harness.debug.attach_timeout: how long a debug check waits for a debugger (0: the default, 10m)")
 	flag.StringVar(&f.toolsDir, "tools-dir", "", "debug tools store (default: the Docker tests' cache, shared)")
 	flag.Parse()
 	return f
@@ -237,12 +239,13 @@ func startStack(parent context.Context, f flags, dir string) (*stack, error) {
 		Dir:      filepath.Join(dir, "h"),
 		AimanBin: bin,
 		UID:      os.Getuid(), GID: os.Getgid(),
-		AllowedImages: allowedImages,
-		MaxRuns:       f.maxRuns,
-		Network:       f.network,
-		Docker:        harness.ExecDocker{},
-		AppImage:      appImage,
-		Record:        srv.HarnessRecorder(),
+		AllowedImages:      allowedImages,
+		MaxRuns:            f.maxRuns,
+		DebugAttachTimeout: f.attachTimeout,
+		Network:            f.network,
+		Docker:             harness.ExecDocker{},
+		AppImage:           appImage,
+		Record:             srv.HarnessRecorder(),
 	})
 	if err != nil {
 		_ = repo.Close()
