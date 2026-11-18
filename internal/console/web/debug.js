@@ -458,7 +458,7 @@
   // ---- evaluate and output ----
   function out(text) {
     d.out = (d.out + text).slice(-MAX_OUT);
-    const pre = $("dbg-out");
+    const pre = $("dbg-output");
     const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
     pre.textContent = d.out;
     if (atEnd) pre.scrollTop = pre.scrollHeight;
