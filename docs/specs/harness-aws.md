@@ -725,6 +725,18 @@ Where the built code differs from the approved design, per piece.
 8. **Key-id refusal covers every string.** The access key id pattern is checked against every string in the parsed file (keys and values, commands, step text), not only env, parameter, var and import values; identity variable names are checked in service env, aws env and both `wrap_env` lists.
 9. **Override vetting.** `harness.aws.images.<kind>` is passed both as `Options.AWSImages` and appended to the allowed list given to the manager and the vetter (`harness.AllowedWithAWS`), which is what "vetted as a listed image" means in code.
 
+**A4**
+
+1. **Plan model.** The design's `Plan.Calls []Call{Service, Operation, Request}` is `Plan.Steps []Step{N, Resource, Service, Operation, Seed}`; the applier builds each request from the plan's typed resources (`awsiac/calls.go`), so the plan JSON carries no wire format. Values that name another resource are `awsiac.Value` parts resolved after naming, and stream and subscription ARNs after the apply. Bucket CORS, lifecycle and object-lock retention configuration are not in the model yet (only `ObjectLockEnabled` at create); A5 and A6 note them.
+2. **Signer.** The applier signs with a small SigV4 signer private to `awsiac` (`sign.go`); `internal/harness/awssig` belongs to A3, which can replace it.
+3. **Applier container.** It is the compose service `<name>-emu-apply` (profile `aws-apply`) run with `compose run --rm -T --no-deps`, not a `docker run` built by `awsApplierArgs`: compose already knows the project's inner network and the edge's alias. Names ending `-emu-apply` are reserved. A plan with no steps runs no container.
+4. **Who gets the plan's env.** `aws.env` and `function_env` values are known only after the apply, which runs after the services start. The compose file is written again with them (`RunSpec.AWSAppEnv`) for the app and every check service (setup, build and script fixtures run in the app's container and see them); the other services keep the endpoint, key and `AIMAN_AWS_RESOURCES` variables without the plan's env.
+5. **function_env names.** A function variable starting `AWS_` or `AIMAN_` is left out with a note, since the harness sets those.
+6. **Manifest.** `resources.json` is `<run>/sandbox/aws/resources.json` (A1 deviation 5) with canonical attribute names (`ref`, `arn`, `name`, `url`, `stream_arn`, `stream_label`, `domain_name`, `regional_domain_name`), outputs per stack, the env and the sensitive names.
+7. **Seed.** A literal target must be the physical name of a planned resource of the right kind. Items go in `BatchWriteItem` batches of 25 (unprocessed items retried), messages in `SendMessageBatch` batches of 10 (FIFO defaults: group `seed`, dedup `seed-<line>`), objects streamed with `UNSIGNED-PAYLOAD`.
+8. **No importer yet.** Until A5 and A6 register theirs, a stack is one warning (`this aiman cannot import <format> yet`) and adds nothing; a reference into it refuses the run.
+9. **Plan without a scenario.** `harness.aws_plan` with no scenario plans every aws service of the file without scenario overrides.
+
 ## What you should be able to explain after reading
 
 1. How the app reaches the emulator, and why it never holds or reaches real AWS credentials or hosts.

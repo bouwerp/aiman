@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/harness/awsiac"
 )
 
 // Defaults of the manager's options.
@@ -172,6 +173,9 @@ type liveRun struct {
 	spec RunSpec
 	// check is the debug check running now, nil when none.
 	check *debugCheck
+	// awsPlan is the plan of the scenario's aws service, built at up and
+	// applied by the aws step; nil when the scenario has none.
+	awsPlan *awsiac.Plan
 }
 
 // NewManager checks opts and returns a manager with no live runs.
@@ -489,6 +493,15 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 	if err := writeStubs(sc, src, filepath.Join(dir, "control")); err != nil {
 		return Run{}, err
 	}
+	// The plan is pure Go over the exported tree: a reference that does
+	// not resolve refuses the run before any image is vetted.
+	awsPlan, err := scenarioAWSPlan(ctx, l.File, sc, src)
+	if err != nil {
+		return Run{}, err
+	}
+	if awsPlan != nil {
+		run.AWS = runAWSOf(awsPlan)
+	}
 	if run.Images, err = m.images(ctx, req, l.File, sc, src, lr.debug, lr.checkAdapter); err != nil {
 		return Run{}, err
 	}
@@ -500,7 +513,7 @@ func (m *Manager) prepare(ctx context.Context, req UpRequest, l *Loaded, sc *Sce
 		return Run{}, err
 	}
 	lr.mu.Lock()
-	lr.run, lr.token = run, token
+	lr.run, lr.token, lr.awsPlan = run, token, awsPlan
 	lr.mu.Unlock()
 	if err := m.writeRun(run); err != nil {
 		return Run{}, err

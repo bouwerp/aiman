@@ -53,6 +53,9 @@ func runHarness(args []string) error {
 			return runHarnessConsole(args[1:])
 		case "scan":
 			return runHarnessScan(args[1:])
+		case "aws-apply":
+			// Runs inside an aws service's applier container.
+			return harness.AWSApplyMain(os.Stdin, os.Stdout)
 		case "db-read":
 			// Runs inside the database browser's SQLite reader container.
 			return harness.SQLiteReadMain(os.Stdin, os.Stdout)

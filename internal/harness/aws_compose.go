@@ -93,7 +93,8 @@ func addAWSService(doc *composeFile, f *File, spec RunSpec, name string) {
 
 // AWSEnv is what every container of a run with the aws service name reads:
 // the endpoints of the edge tap, the region, the fixed test key, the config
-// and credentials files under AWSMount, and IMDS off.
+// and credentials files and the resource manifest under AWSMount, and IMDS
+// off.
 func AWSEnv(name string, a *AWS) map[string]string {
 	endpoint := awsEndpoint(name)
 	region := a.RegionOrDefault()
@@ -111,6 +112,7 @@ func AWSEnv(name string, a *AWS) map[string]string {
 		"AWS_CONFIG_FILE":                   AWSMount + "/config",
 		"AWS_SHARED_CREDENTIALS_FILE":       AWSMount + "/credentials",
 		"AWS_EC2_METADATA_DISABLED":         "true",
+		"AIMAN_AWS_RESOURCES":               AWSMount + "/resources.json",
 	}
 }
 
@@ -131,7 +133,7 @@ func awsFiles(name string, a *AWS) map[string][]byte {
 // it through to the emulator, and the app, the checks and the other
 // services get AWSEnv (aiman's values win over a service's own) and the
 // read-only AWSMount.
-func withAWS(doc *composeFile, files map[string][]byte, f *File, sc *Scenario) {
+func withAWS(doc *composeFile, files map[string][]byte, f *File, sc *Scenario, spec RunSpec) {
 	names := f.AWSServices(sc)
 	if len(names) == 0 {
 		return
@@ -141,28 +143,33 @@ func withAWS(doc *composeFile, files map[string][]byte, f *File, sc *Scenario) {
 	maps.Copy(files, awsFiles(name, a))
 	env := AWSEnv(name, a)
 	mount := "./" + awsFilesDir + ":" + AWSMount + ":ro"
-	apply := func(svc string) {
+	apply := func(svc string, planEnv map[string]string) {
 		s := doc.Services[svc]
 		if s.Environment == nil {
 			s.Environment = map[string]string{}
 		}
+		maps.Copy(s.Environment, planEnv)
 		maps.Copy(s.Environment, env)
 		s.Volumes = append(s.Volumes, mount)
 		doc.Services[svc] = s
 	}
-	apply(ServiceApp)
+	// The plan's env (aws.env, function_env) is known once the plan is
+	// applied, after the services started, so only the app and the checks
+	// take it.
+	apply(ServiceApp, spec.AWSAppEnv)
 	for svc, s := range doc.Services {
 		if svc != ServiceCheckAdapter && slices.ContainsFunc(s.Profiles, func(p string) bool {
 			return p == checksProfile || p == profileCheck || p == profileDebugCheck
 		}) {
-			apply(svc)
+			apply(svc, spec.AWSAppEnv)
 		}
 	}
 	for _, svc := range sc.Services {
 		if f.Services[svc].AWS == nil {
-			apply(svc)
+			apply(svc, nil)
 		}
 	}
+	doc.Services[AWSApplyService(name)] = awsApplyService(spec)
 	e := doc.Services[ServiceEdge]
 	e.Command = append(e.Command, "--aws-tap", fmt.Sprintf("%s=%s:%d", name, AWSEmuService(name), AWSPort))
 	e.Networks = withAlias(e.Networks, NetworkInner, name)

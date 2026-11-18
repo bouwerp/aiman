@@ -126,6 +126,9 @@ const (
 	// EventHarnessDBWrite records the operator's write to a run's database:
 	// run, service and statement_sha256, never the statement.
 	EventHarnessDBWrite EventKind = "harness.db_write"
+	// EventHarnessAWSApplied records an applied aws plan: run, service,
+	// resources, calls and warnings (counts).
+	EventHarnessAWSApplied EventKind = "harness.aws_applied"
 	// EventHarnessDebug records a take over or release of a debug run's
 	// debugger: run, op and the client it closed.
 	EventHarnessDebug EventKind = "harness.debug"

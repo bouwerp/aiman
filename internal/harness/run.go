@@ -94,6 +94,9 @@ type Run struct {
 	// AWSServices names the scenario's aws services (P10); each runs as the
 	// compose service AWSEmuService(name).
 	AWSServices []string `json:"aws_services,omitempty"`
+	// AWS is the aws service's plan: resources, warnings and notes; the
+	// resources gain the attributes the apply learned once it ran.
+	AWS *RunAWS `json:"aws,omitempty"`
 }
 
 // Live reports whether the run holds containers.

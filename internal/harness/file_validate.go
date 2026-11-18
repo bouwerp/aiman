@@ -104,8 +104,8 @@ func validateService(name string, s Service) []string {
 	if slices.Contains(ReservedServiceNames, name) {
 		add("the name is reserved")
 	}
-	if strings.HasSuffix(name, awsEmuSuffix) || strings.HasSuffix(name, awsInitSuffix) {
-		add("names ending %s or %s are reserved for aws emulators", awsEmuSuffix, awsInitSuffix)
+	if strings.HasSuffix(name, awsEmuSuffix) || strings.HasSuffix(name, awsInitSuffix) || strings.HasSuffix(name, awsApplySuffix) {
+		add("names ending %s, %s or %s are reserved for aws emulators", awsEmuSuffix, awsInitSuffix, awsApplySuffix)
 	}
 	if s.AWS != nil {
 		return append(errs, validateAWS(at, s)...)
