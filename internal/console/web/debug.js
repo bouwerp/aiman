@@ -129,8 +129,11 @@
   }
 
   // ---- sessions ----
+  // Any connect, by hand or by itself, uses up the target's one automatic
+  // try, so a Release leaves the debugger free instead of taking it back.
   function connect() {
     if (d.sessions.length || !d.launch) return;
+    d.autoTried = d.key;
     openSession({ name: "main", request: d.launch.request || "launch", args: d.launch.arguments, parent: null });
   }
 
