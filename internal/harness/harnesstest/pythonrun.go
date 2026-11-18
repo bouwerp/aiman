@@ -105,7 +105,7 @@ func pythonTools(t *testing.T) (string, string) {
 	t.Helper()
 	pyToolsOnce.Do(func() {
 		pyToolsErr = func() error {
-			dir, err := cacheDir()
+			dir, err := CacheDir()
 			if err != nil {
 				return err
 			}

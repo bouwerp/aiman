@@ -2,6 +2,8 @@ package harnesstest
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,16 +128,29 @@ var (
 	vitestErr  error
 )
 
-// vitestPackages fetches every pinned package through the tools store,
-// which checks its sha256 before it unpacks, and caches them in the user
-// cache. Nothing is installed in a container.
+// vitestPackages is VitestPackages for a test.
 func vitestPackages(t *testing.T) map[string]string {
 	t.Helper()
 	if runtime.GOARCH != "amd64" {
 		t.Skip("the Vitest fixture pins linux-x64 native packages")
 	}
+	pkgs, err := VitestPackages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pkgs
+}
+
+// VitestPackages fetches every pinned package through the tools store,
+// which checks its sha256 before it unpacks, and caches them in the user
+// cache. Nothing is installed in a container. The map is package name to
+// unpacked directory.
+func VitestPackages() (map[string]string, error) {
+	if runtime.GOARCH != "amd64" {
+		return nil, errors.New("the Vitest fixture pins linux-x64 native packages")
+	}
 	vitestOnce.Do(func() {
-		dir, err := cacheDir()
+		dir, err := CacheDir()
 		if err != nil {
 			vitestErr = err
 			return
@@ -153,10 +168,7 @@ func vitestPackages(t *testing.T) map[string]string {
 			vitestDirs[p.name] = d
 		}
 	})
-	if vitestErr != nil {
-		t.Fatal(vitestErr)
-	}
-	return vitestDirs
+	return vitestDirs, vitestErr
 }
 
 // VitestRepo is a git repository holding the node app, the Vitest test and
@@ -165,8 +177,18 @@ func VitestRepo(t *testing.T) string {
 	t.Helper()
 	pkgs := vitestPackages(t)
 	repo := filepath.Join(t.TempDir(), "repo")
+	if err := WriteVitestRepo(repo, VitestCheckFile, pkgs); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+// WriteVitestRepo writes the Vitest fixture with harness file file and the
+// packages from VitestPackages into a new git repository at repo, and
+// commits it.
+func WriteVitestRepo(repo, file string, pkgs map[string]string) error {
 	files := map[string]string{
-		".aiman/harness.yaml": VitestCheckFile,
+		".aiman/harness.yaml": file,
 		"package.json":        `{"name":"fixture","private":true,"type":"module"}` + "\n",
 		"src/app.ts":          TSSource,
 		"dist/app.js":         TSCompiled,
@@ -174,32 +196,46 @@ func VitestRepo(t *testing.T) string {
 		"src/sum.ts":          VitestSum,
 		"tests/sum.test.ts":   VitestTest,
 	}
-	for rel, body := range files {
-		p := filepath.Join(repo, rel)
-		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	if err := WriteFiles(repo, files); err != nil {
+		return err
 	}
 	for name, d := range pkgs {
-		if err := copyTree(d, filepath.Join(repo, "node_modules", filepath.FromSlash(name))); err != nil {
-			t.Fatal(err)
+		if err := CopyTree(d, filepath.Join(repo, "node_modules", filepath.FromSlash(name))); err != nil {
+			return err
 		}
 	}
+	return CommitRepo(repo)
+}
+
+// WriteFiles writes files, relative path to body, under dir.
+func WriteFiles(dir string, files map[string]string) error {
+	for rel, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CommitRepo makes dir a git repository on main and commits everything in
+// it as a fixed test author.
+func CommitRepo(dir string) error {
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
 		{"-c", "user.name=T", "-c", "user.email=t@example.com", "add", "-A"},
 		{"-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "fixture"},
 	} {
 		cmd := exec.Command("git", args...) //nolint:gosec // G204: fixed git arguments
-		cmd.Dir = repo
+		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
+			return fmt.Errorf("git %v: %w: %s", args, err, out)
 		}
 	}
-	return repo
+	return nil
 }
 
 // NewVitestManager is a harness manager on the host's Docker with the Node
@@ -213,7 +249,7 @@ func NewVitestManager(t *testing.T, attach time.Duration) *harness.Manager {
 		ensureImage(t, img)
 	}
 	nodeTools(t)
-	dir, err := cacheDir()
+	dir, err := CacheDir()
 	if err != nil {
 		t.Fatal(err)
 	}

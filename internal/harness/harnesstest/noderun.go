@@ -86,7 +86,7 @@ var (
 func nodeTools(t *testing.T) (string, string) {
 	t.Helper()
 	nodeToolsOnce.Do(func() {
-		dir, err := cacheDir()
+		dir, err := CacheDir()
 		if err != nil {
 			nodeToolsErr = err
 			return
