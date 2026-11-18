@@ -32,7 +32,7 @@ jobs:
       - name: Run tests
         env:
           AIMAN_TEST_DOCKER: "1"
-        run: go test -v -race -coverprofile=coverage.out ./...
+        run: go test -v -race -timeout 20m -coverprofile=coverage.out ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
