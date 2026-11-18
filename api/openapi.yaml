@@ -795,6 +795,7 @@ components:
             - harness.aws_plan
             - harness.aws
             - harness.aws_calls
+            - harness.aws_write
             - design.publish
             - review.reveal
             - review.post

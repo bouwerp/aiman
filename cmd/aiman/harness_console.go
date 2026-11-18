@@ -62,6 +62,8 @@ func harnessConsoleTimeout(method string) time.Duration {
 		return server.HarnessDownTimeout + 30*time.Second
 	case "harness.debug":
 		return server.HarnessDebugTimeout + 15*time.Second
+	case "harness.aws_write":
+		return server.HarnessAWSResetTimeout + 30*time.Second
 	}
 	return harnessConsoleCallTimeout
 }

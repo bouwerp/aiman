@@ -422,6 +422,8 @@ func slowCall(method string) (time.Duration, bool) {
 		return HarnessDownTimeout + 15*time.Second, true
 	case "harness.image_approve":
 		return HarnessImageApproveTimeout + 15*time.Second, true
+	case "harness.aws_write":
+		return HarnessAWSResetTimeout + 15*time.Second, true
 	}
 	return 30 * time.Second, false
 }
