@@ -121,6 +121,8 @@
         loadTables(true);
       }
     } catch (e) {
+      // The last result would read as this statement's.
+      $("db-result").replaceChildren();
       setStatus("");
       showError(e);
     }
