@@ -386,6 +386,7 @@ func main() {
 			call("POST", "https://api.stripe.com/v1/refunds")
 			call("GET", "https://api.example.com/ping")
 			call("GET", "https://example.com/")
+			call("GET", "http://169.254.169.254/latest/meta-data/")
 			time.Sleep(3 * time.Second)
 		}
 	}()
