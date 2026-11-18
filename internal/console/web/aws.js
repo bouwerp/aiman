@@ -2,9 +2,8 @@
 // manifest with its warnings; S3 and DynamoDB read the emulator through
 // serve (harness.aws), which goes through the edge's read-only relay; Calls
 // is the tap's call log (harness.aws_calls). Every value from serve is set
-// as text, never as HTML. Writes are not part of this file: #aws-write is
-// left for them, and window.aimanAWS.context() and .reload() are their
-// hooks.
+// as text, never as HTML. The operator's writes (harness.aws_write: upload,
+// delete, put and delete item, send message, reset) each ask for a confirm.
 "use strict";
 
 (function () {
@@ -12,6 +11,7 @@
   if (!C) return;
   const { api, el, $, showError } = C;
   const POLL_MS = 2000;
+  const WRITE_MAX = 5 << 20;
   const KEEP = 2000;
   const VIEWS = ["resources", "s3", "ddb", "calls"];
   const AWS_HOST_RE = /(^|\.)(amazonaws\.com|amazonaws\.com\.cn|api\.aws|on\.aws)$/i;
@@ -19,7 +19,7 @@
   const a = {
     run: "", services: [], shown: false, view: "resources",
     manifest: null, region: "",
-    bucket: "", prefix: "", objects: [], prefixes: [], token: "", key: "", obj: null,
+    bucket: "", prefix: "", objects: [], prefixes: [], token: "", key: "", version: "", obj: null,
     table: "", desc: null, items: [], lastKey: "", starts: [], item: null,
     calls: new Map(), after: 0, capAfter: 0, flows: new Map(), paused: false, open: new Set(),
     callsInfo: null, timer: null, callSig: "",
@@ -59,7 +59,7 @@
   function resetService() {
     a.manifest = null;
     a.region = "";
-    a.bucket = a.prefix = a.token = a.key = a.table = a.lastKey = "";
+    a.bucket = a.prefix = a.token = a.key = a.version = a.table = a.lastKey = "";
     a.objects = []; a.prefixes = []; a.obj = null; a.desc = null; a.items = []; a.starts = []; a.item = null;
     a.calls = new Map(); a.flows = new Map(); a.after = 0; a.capAfter = 0; a.open.clear(); a.callsInfo = null; a.callSig = "";
     for (const id of ["aws-res", "aws-env", "aws-buckets", "aws-crumbs", "aws-objects", "aws-object", "aws-tables",
@@ -86,6 +86,7 @@
     }
     status("");
     schedule();
+    renderWrite();
     loadView();
   }
 
@@ -122,6 +123,7 @@
       a.manifest = res.resources || null;
       a.region = (a.manifest && a.manifest.region) || "";
       renderResources(res);
+      renderWrite();
     } catch (e) {
       $("aws-res").replaceChildren(el("p", { class: "hint", text: (e.code ? e.code + ": " : "") + (e.message || "") }));
     }
@@ -246,6 +248,7 @@
 
   async function openObject(key, version) {
     a.key = key;
+    a.version = version || "";
     for (const b of $("aws-objects").querySelectorAll(".aws-obj[data-kind=object]")) b.setAttribute("aria-pressed", String(b.dataset.key === key));
     announce();
     const box = $("aws-object");
@@ -689,11 +692,145 @@
     }));
   }
 
-  // ---- seam for writes ----
+  // ---- operator writes ----
 
-  // announce tells listeners (the write area) what the tab shows.
+  // announce redraws the write area for what the tab shows and tells
+  // other listeners.
   function announce() {
+    renderWrite();
     document.dispatchEvent(new CustomEvent("aiman-aws-context", { detail: context() }));
+  }
+
+  const wstatus = (t) => { $("aws-w-status").textContent = t || ""; };
+  const queues = () => ((a.manifest && a.manifest.resources) || []).filter((r) => r.kind === "queue" && r.physical).map((r) => r.physical);
+
+  function renderWrite() {
+    $("aws-write").hidden = !a.run || a.services.length === 0;
+    const s3 = a.view === "s3" && !!a.bucket;
+    $("aws-w-s3").hidden = !s3;
+    $("aws-w-delobj").hidden = !(s3 && a.key);
+    $("aws-w-delobj").textContent = a.version ? "Delete this version" : "Delete object";
+    const ddb = a.view === "ddb" && !!a.table;
+    $("aws-w-ddb").hidden = !ddb;
+    $("aws-w-delitem").hidden = !(ddb && a.item);
+    if (ddb && a.item && $("aws-w-item").dataset.from !== JSON.stringify(a.item)) {
+      $("aws-w-item").dataset.from = JSON.stringify(a.item);
+      $("aws-w-item").value = JSON.stringify(a.item, null, 2);
+    }
+    const qs = queues();
+    $("aws-w-sqs").hidden = !(a.view === "resources" && qs.length);
+    const sel = $("aws-w-queue");
+    if (Array.from(sel.options).map((o) => o.value).join(",") !== qs.join(",")) {
+      sel.replaceChildren(...qs.map((n) => el("option", { value: n, text: n })));
+    }
+  }
+
+  // write sends one harness.aws_write after the tester confirms ask.
+  async function write(body, ask) {
+    if (!confirm(ask)) return null;
+    wstatus("Writing");
+    try {
+      return await api("/api/aws/write", Object.assign({ run: a.run, service: service() }, body));
+    } catch (e) {
+      wstatus("");
+      showError(e);
+      return null;
+    }
+  }
+
+  function readFile(f) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, ""));
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(f);
+    });
+  }
+
+  async function upload() {
+    const f = $("aws-w-file").files[0];
+    if (!f) { wstatus("Pick a file first."); return; }
+    const key = $("aws-w-key").value.trim() || a.prefix + f.name;
+    if (f.size > WRITE_MAX) { wstatus("The console uploads at most 5 MiB; use aiman harness aws write s3-put on the host."); return; }
+    const data = await readFile(f);
+    const res = await write({ op: "s3_put", bucket: a.bucket, key: key, data: data, content_type: f.type || "" },
+      "Upload " + f.name + " (" + fmtBytes(f.size) + ") to " + a.bucket + "/" + key + " on run " + a.run + "? It replaces an object with that key.");
+    if (!res) return;
+    wstatus("Uploaded " + a.bucket + "/" + key + (res.version_id ? ", version " + res.version_id : "") + ".");
+    $("aws-w-file").value = "";
+    $("aws-w-key").value = "";
+    await browse(a.prefix);
+    openObject(key, "");
+  }
+
+  async function deleteObject() {
+    const key = a.key, version = a.version;
+    const res = await write({ op: "s3_delete", bucket: a.bucket, key: key, version: version },
+      version ? "Delete version " + version + " of " + a.bucket + "/" + key + " for good?" :
+        "Delete " + a.bucket + "/" + key + "? In a versioned bucket this adds a delete marker.");
+    if (!res) return;
+    wstatus("Deleted " + a.bucket + "/" + key + (res.delete_marker ? " (delete marker " + (res.version_id || "") + ")" : "") + ".");
+    a.key = ""; a.version = ""; a.obj = null;
+    $("aws-object").replaceChildren();
+    await browse(a.prefix);
+    announce();
+  }
+
+  function itemFromForm() {
+    let v = null;
+    try { v = JSON.parse($("aws-w-item").value); } catch (_) { /* not JSON */ }
+    if (!v || typeof v !== "object" || Array.isArray(v)) { wstatus("The item must be a JSON object."); return null; }
+    return v;
+  }
+
+  async function putItem() {
+    const item = itemFromForm();
+    if (!item) return;
+    const res = await write({ op: "ddb_put", table: a.table, item: item },
+      "Put this item into " + a.table + " on run " + a.run + "? It replaces an item with the same key.\n\n" + JSON.stringify(item));
+    if (!res) return;
+    wstatus("Put an item into " + a.table + ".");
+    scan(true);
+  }
+
+  async function deleteItem() {
+    const key = {};
+    for (const k of (a.desc && a.desc.key_schema) || []) key[k.name] = a.item[k.name];
+    const res = await write({ op: "ddb_delete", table: a.table, key: key },
+      "Delete the item " + JSON.stringify(key) + " from " + a.table + " on run " + a.run + "?");
+    if (!res) return;
+    wstatus("Deleted " + JSON.stringify(key) + " from " + a.table + (res.found === false ? " (it was not there)" : "") + ".");
+    a.item = null;
+    $("aws-item").replaceChildren();
+    announce();
+    scan(true);
+  }
+
+  async function sendMessage() {
+    const queue = $("aws-w-queue").value, body = $("aws-w-body").value;
+    if (!queue || !body) { wstatus("Pick a queue and write a body."); return; }
+    const res = await write({ op: "sqs_send", queue: queue, body: body }, "Send this message to " + queue + " on run " + a.run + "?\n\n" + body);
+    if (!res) return;
+    wstatus("Sent message " + (res.message_id || "") + " to " + queue + ".");
+    $("aws-w-body").value = "";
+  }
+
+  async function reset() {
+    const res = await write({ op: "reset" },
+      "Reset " + service() + " on run " + a.run + "? This wipes every bucket, object, table, item, queue and message in the emulator, then applies the plan and the seed again. The app keeps running.");
+    if (!res) return;
+    let t = "Reset " + service() + ": " + (res.resources || 0) + " resources, " + (res.calls || 0) + " calls applied again.";
+    if (res.failed_step) t += " Failed at " + res.failed_step + ".";
+    if (res.note) t += " " + res.note;
+    if ((res.env_changed || []).length) {
+      t += " These env variables now have other values, and the running app still has the old ones: " +
+        res.env_changed.join(", ") + ". Start the run again to pass them.";
+    }
+    const view = a.view;
+    resetService();
+    a.view = view;
+    loadView();
+    wstatus(t);
   }
 
   function context() {
@@ -706,7 +843,7 @@
 
   // reload rereads what a write may have changed.
   function reload() {
-    if (a.view === "s3" && a.bucket) { browse(a.prefix); if (a.key) openObject(a.key, ""); }
+    if (a.view === "s3" && a.bucket) { browse(a.prefix); if (a.key) openObject(a.key, a.version); }
     if (a.view === "ddb" && a.table) scan(true);
     if (a.view === "resources") { a.manifest = null; loadResources(); }
   }
@@ -729,6 +866,12 @@
     $("aws-stream-load").addEventListener("click", loadStream);
     for (const id of ["aws-f-service", "aws-f-client", "aws-f-errors"]) $(id).addEventListener("change", renderCalls);
     $("aws-f-text").addEventListener("input", renderCalls);
+    $("aws-w-upload").addEventListener("click", upload);
+    $("aws-w-delobj").addEventListener("click", deleteObject);
+    $("aws-w-put").addEventListener("click", putItem);
+    $("aws-w-delitem").addEventListener("click", deleteItem);
+    $("aws-w-send").addEventListener("click", sendMessage);
+    $("aws-w-reset").addEventListener("click", reset);
     $("aws-calls-pause").addEventListener("click", () => {
       a.paused = !a.paused;
       $("aws-calls-pause").setAttribute("aria-pressed", String(a.paused));

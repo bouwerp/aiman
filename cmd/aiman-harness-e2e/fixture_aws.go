@@ -45,7 +45,7 @@ services:
   aws:
     aws:
       kind: ministack
-      services: [s3, dynamodb]
+      services: [s3, dynamodb, sqs]
       region: eu-west-1
       stacks:
         - {name: orders, cloudformation: infra/plan.json}
@@ -67,15 +67,16 @@ scenarios:
         expect: The uploaded order is there, and the stream has its INSERT
 `
 
-// awsFixturePlan is a table with a GSI and a stream, and a versioned
-// bucket. OrdersFunction's IMPORTED names a resource no stack has, so the
+// awsFixturePlan is a table with a GSI and a stream, a versioned bucket and
+// a queue. OrdersFunction's IMPORTED names a resource no stack has, so the
 // plan carries one warning.
 const awsFixturePlan = `{
   "resources": [
     {"logical_id": "OrdersTable", "type": "AWS::DynamoDB::Table", "kind": "table", "table": {
       "hash_key": "pk", "attributes": [{"name": "pk", "type": "S"}, {"name": "status", "type": "S"}],
       "gsis": [{"name": "by-status", "hash_key": "status"}], "stream_view_type": "NEW_AND_OLD_IMAGES"}},
-    {"logical_id": "UploadBucket", "type": "AWS::S3::Bucket", "kind": "bucket", "bucket": {"versioning": "Enabled"}}
+    {"logical_id": "UploadBucket", "type": "AWS::S3::Bucket", "kind": "bucket", "bucket": {"versioning": "Enabled"}},
+    {"logical_id": "Events", "type": "AWS::SQS::Queue", "kind": "queue", "queue": {}}
   ],
   "functions": [{"logical_id": "OrdersFunction", "vars": [
     {"name": "TABLE", "value": [{"ref": {"stack": "orders", "logical_id": "OrdersTable"}}]},

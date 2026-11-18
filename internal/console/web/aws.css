@@ -102,3 +102,15 @@
 @media (max-width: 700px) {
   .aws-call { grid-template-columns: 1fr 1fr; }
 }
+
+.aws-write { margin-top: 0.8rem; padding-top: 0.6rem; border-top: 1px solid var(--line); display: grid; gap: 0.5rem; }
+.aws-write h4 { margin: 0; }
+.aws-write .hint { margin: 0; }
+.aws-w-block { display: grid; gap: 0.3rem; }
+.aws-w-block label { font-size: 0.9rem; color: var(--muted); }
+.aws-w-block input[type="text"], .aws-w-block textarea {
+  font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  padding: 0.35rem 0.5rem; max-width: 100%;
+}
+.aws-w-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }

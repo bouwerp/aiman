@@ -49,7 +49,7 @@ test("resources: manifest, env and the plan's warning", async ({ page }) => {
   await expect(warn).toContainText("OrdersFunction");
   await expect(warn).toContainText("NotHere");
   const rows = page.locator("#aws-res tbody tr");
-  await expect(rows).toHaveCount(2);
+  await expect(rows).toHaveCount(3);
   await expect(rows.filter({ hasText: "OrdersTable" })).toContainText("ORDERS_TABLE");
   await expect(rows.filter({ hasText: "OrdersTable" })).toContainText(/orders-OrdersTable-[a-z0-9]{12}/);
   await expect(rows.filter({ hasText: "UploadBucket" })).toContainText("UPLOAD_BUCKET");
@@ -179,4 +179,79 @@ test("dynamodb: describe, scan, index query, item JSON and stream", async ({ pag
   await expect(recs.first()).toContainText("New image");
   await pause(page, 2000);
   await shot(page, "06-stream");
+});
+
+test("writes: confirm first, upload, delete, put item, send, reset", async ({ page }) => {
+  // Each write asks; the confirm text is checked and accepted, except
+  // where the test dismisses it.
+  const asked: string[] = [];
+  let answer = true;
+  page.on("dialog", (d) => { asked.push(d.message()); void (answer ? d.accept() : d.dismiss()); });
+  await openAWS(page);
+  const status = page.locator("#aws-w-status");
+
+  // A message to the plan's queue, from the Resources view.
+  await expect(page.locator("#aws-w-sqs")).toBeVisible();
+  await expect(page.locator("#aws-w-queue")).toHaveValue(/orders-Events-/);
+  await page.locator("#aws-w-body").fill("hello from the console");
+  await page.locator("#aws-w-send").click();
+  await expect(status).toContainText(/Sent message .* to orders-Events-/);
+  expect(asked.pop()).toContain("hello from the console");
+  await pause(page);
+
+  // Upload into the bucket, then delete it; a dismissed confirm writes nothing.
+  await page.locator("#aws-v-s3").click();
+  await page.locator("#aws-buckets button", { hasText: "orders-uploadbucket-" }).click();
+  await expect(page.locator("#aws-w-s3")).toBeVisible();
+  await page.locator("#aws-w-file").setInputFiles({ name: "console.txt", mimeType: "text/plain", buffer: Buffer.from("written from the console\n") });
+  await page.locator("#aws-w-key").fill("uploads/console.txt");
+  await pause(page, 600);
+  await page.locator("#aws-w-upload").click();
+  await expect(status).toContainText("Uploaded orders-uploadbucket-");
+  expect(asked.pop()).toContain("uploads/console.txt");
+  await expect(page.locator("#aws-preview")).toContainText("written from the console");
+  await pause(page, 1500);
+  await shot(page, "07-uploaded");
+
+  answer = false;
+  await page.locator("#aws-w-delobj").click();
+  await expect.poll(() => asked.length).toBe(1);
+  expect(asked.pop()).toContain("delete marker");
+  await expect(page.locator("#aws-preview")).toContainText("written from the console");
+  answer = true;
+  await page.locator("#aws-w-delobj").click();
+  await expect(status).toContainText("Deleted orders-uploadbucket-");
+  await expect(page.locator("#aws-object")).toBeEmpty();
+  await page.locator(".aws-obj[data-kind=prefix]", { hasText: "uploads/" }).click();
+  await expect(page.locator(".aws-obj[data-kind=object]", { hasText: "console.txt" })).toHaveCount(0);
+  await pause(page);
+
+  // Edit a seeded item, then delete it.
+  await page.locator("#aws-v-ddb").click();
+  await page.locator("#aws-tables button", { hasText: "orders-OrdersTable-" }).click();
+  await page.locator("#aws-items tbody tr", { hasText: "received" }).click();
+  await expect(page.locator("#aws-w-item")).toHaveValue(/"pk": "o1"/);
+  await page.locator("#aws-w-item").fill('{"pk": "o1", "status": "edited", "total": 13}');
+  await pause(page, 600);
+  await page.locator("#aws-w-put").click();
+  await expect(status).toContainText("Put an item into orders-OrdersTable-");
+  await expect(page.locator("#aws-items tbody tr", { hasText: "edited" })).toHaveCount(1);
+  await page.locator("#aws-items tbody tr", { hasText: "edited" }).click();
+  await page.locator("#aws-w-delitem").click();
+  await expect(status).toContainText('Deleted {"pk":"o1"}');
+  expect(asked.pop()).toContain('{"pk":"o1"}');
+  await expect(page.locator("#aws-items tbody tr", { hasText: "edited" })).toHaveCount(0);
+  await pause(page, 1500);
+  await shot(page, "08-item-deleted");
+
+  // Reset wipes the emulator and applies the plan and seed again.
+  await page.locator("#aws-w-reset").click();
+  await expect(status).toContainText(/Reset aws: \d+ resources, \d+ calls applied again\./, { timeout: 2 * 60 * 1000 });
+  expect(asked.pop()).toContain("wipes every bucket");
+  await expect(status).not.toContainText("now have other values");
+  await page.locator("#aws-tables button", { hasText: "orders-OrdersTable-" }).click();
+  await expect(page.locator("#aws-items tbody tr", { hasText: "received" })).toHaveCount(1);
+  await expect(page.locator("#aws-items tbody tr", { hasText: "uploads/" })).toHaveCount(0);
+  await pause(page, 2000);
+  await shot(page, "09-reset");
 });

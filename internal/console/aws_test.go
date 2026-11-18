@@ -81,8 +81,7 @@ func TestAWSConsoleReads(t *testing.T) {
 }
 
 // TestAWSConsoleRefusals checks that a bad request, another run, a missing
-// token or a write method never reaches serve, and that the console offers
-// no write route.
+// token or a POST to a read route never reaches serve.
 func TestAWSConsoleRefusals(t *testing.T) {
 	rpc := awsRPC()
 	s, host := newTestServer(t, rpc, directForwarder{}, nil)
@@ -111,7 +110,6 @@ func TestAWSConsoleRefusals(t *testing.T) {
 		{http.MethodGet, AWSCallsPath + "?run=r1", "nope", "", http.StatusUnauthorized},
 		{http.MethodPost, AWSPath + "?run=r1&op=resources", testToken, "application/json", http.StatusMethodNotAllowed},
 		{http.MethodPost, AWSCallsPath + "?run=r1", testToken, "application/json", http.StatusMethodNotAllowed},
-		{http.MethodPost, "/api/aws/write", testToken, "application/json", http.StatusNotFound},
 	} {
 		body := ""
 		if c.ctype != "" {

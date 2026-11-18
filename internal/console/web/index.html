@@ -311,9 +311,43 @@
           <ol class="aws-call-list" id="aws-call-list" aria-label="AWS calls"></ol>
         </section>
 
-        <!-- Operator writes (upload, delete, put item, send message, reset)
-             fill this area; the reads above never write. -->
-        <section class="aws-write" id="aws-write" aria-label="Operator writes" hidden></section>
+        <!-- Operator writes: each asks for a confirm first. The reads above
+             never write. -->
+        <section class="aws-write" id="aws-write" aria-labelledby="aws-w-title" hidden>
+          <h4 id="aws-w-title">Operator writes</h4>
+          <p class="hint">Writes go to the emulator as the operator, after you confirm, and show in Calls as aiman/operator.</p>
+          <div class="aws-w-block" id="aws-w-s3" hidden>
+            <label for="aws-w-file">Upload a file (at most 5 MiB)</label>
+            <input type="file" id="aws-w-file">
+            <label for="aws-w-key">Key</label>
+            <input type="text" id="aws-w-key" autocomplete="off" spellcheck="false">
+            <div class="aws-w-row">
+              <button type="button" class="btn" id="aws-w-upload">Upload</button>
+              <button type="button" class="btn danger" id="aws-w-delobj" hidden>Delete object</button>
+            </div>
+          </div>
+          <div class="aws-w-block" id="aws-w-ddb" hidden>
+            <label for="aws-w-item">Item, plain JSON (pick a row to start from it)</label>
+            <textarea id="aws-w-item" rows="5" spellcheck="false" autocomplete="off" placeholder='{"pk": "o3", "status": "new"}'></textarea>
+            <div class="aws-w-row">
+              <button type="button" class="btn" id="aws-w-put">Put item</button>
+              <button type="button" class="btn danger" id="aws-w-delitem" hidden>Delete item</button>
+            </div>
+          </div>
+          <div class="aws-w-block" id="aws-w-sqs" hidden>
+            <label for="aws-w-queue">Send a message to</label>
+            <select id="aws-w-queue"></select>
+            <label for="aws-w-body">Body</label>
+            <textarea id="aws-w-body" rows="3" spellcheck="false" autocomplete="off"></textarea>
+            <div class="aws-w-row">
+              <button type="button" class="btn" id="aws-w-send">Send message</button>
+            </div>
+          </div>
+          <div class="aws-w-row">
+            <button type="button" class="btn danger" id="aws-w-reset">Reset emulator</button>
+          </div>
+          <p class="hint" id="aws-w-status" role="status" aria-live="polite"></p>
+        </section>
       </div>
     </div>
     <div class="panel" role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>

@@ -14,9 +14,8 @@ import (
 
 // AWS tab (P10 A7): the console reads a run's emulated S3 and DynamoDB and
 // the AWS call log. Every read goes to serve as the operator, and serve reads
-// the emulator through the edge's read-only relay. This file registers no
-// write route: operator writes (POST /api/aws/write) register their own
-// route and fill the page's #aws-write area.
+// the emulator through the edge's read-only relay. The operator's writes go
+// through their own route, POST AWSWritePath (aws_write.go).
 
 // AWS API paths.
 const (
