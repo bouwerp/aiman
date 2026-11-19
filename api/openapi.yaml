@@ -691,8 +691,13 @@ components:
         (.aiman_* files, the bundled skill, graphify-out, its .gitignore rule)
         does not count, and neither do files the repository ignores, which
         removal also deletes.
-      required: [changed_files, paths, unpushed_commits]
+      required: [session, changed_files, paths, unpushed_commits]
       properties:
+        session:
+          type: string
+          description: >
+            The session whose worktree it is: the target, or a descendant that
+            would be terminated with it.
         changed_files:
           type: integer
           description: Uncommitted and untracked files, all of them.
@@ -1370,9 +1375,19 @@ components:
           description: Why the worktree stayed, when it did.
         children_left:
           type: array
+          deprecated: true
           description: >
-            Running child sessions, which keep running with no parent. Warn
-            before confirming; session.list has parent_id.
+            Never sent by this serve: every visible descendant is terminated
+            with its parent (children_terminated). An older serve listed the
+            children it left running here.
+          items:
+            type: string
+        children_terminated:
+          type: array
+          description: >
+            Descendant sessions terminated with this one, deepest first. Every
+            visible descendant goes with its parent; warn before confirming
+            (session.list has parent_id).
           items:
             type: string
     AWSStatusResult:

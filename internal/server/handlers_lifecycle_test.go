@@ -337,8 +337,8 @@ func TestWorktreeDirtyDataCrossesTheSocket(t *testing.T) {
 	if paths, _ := data["paths"].([]any); len(paths) != 1 || paths[0] != "new.txt" {
 		t.Fatalf("%v", data)
 	}
-	if len(data) != 3 {
-		t.Fatalf("the app reads exactly three fields: %v", data)
+	if data["session"] != "s1" || len(data) != 4 {
+		t.Fatalf("the app reads exactly four fields: %v", data)
 	}
 }
 
@@ -468,9 +468,6 @@ func TestTerminateKeepsWorktreeSharedWithAnotherSession(t *testing.T) {
 		"working inside it": func(l string) domain.Session {
 			return domain.Session{ID: "s2", WorkingDirectory: filepath.Join(l, "sub")}
 		},
-		"a child": func(l string) domain.Session {
-			return domain.Session{ID: "s2", ParentID: "s1", WorktreePath: l, WorkingDirectory: l}
-		},
 	}
 	for name, mk := range sharers {
 		t.Run(name, func(t *testing.T) {
@@ -548,8 +545,8 @@ func TestTerminateRefusesLegacyAndHiddenAndUnknown(t *testing.T) {
 	}
 }
 
-// The TUI asks with a tick box, off by default: left alone, children keep
-// running with no parent. Hidden helpers are aiman's own and go by their rules.
+// Every visible descendant goes with its parent, deepest first. Hidden helpers
+// are aiman's own and go by their rules.
 func TestTerminateChildrenAndHelpers(t *testing.T) {
 	r := newLifecycleRig(t)
 	f := newGitFixture(t)
@@ -560,30 +557,97 @@ func TestTerminateChildrenAndHelpers(t *testing.T) {
 	putFile(t, filepath.Join(consultDir, "brief"), "x")
 	s := r.session(domain.Session{ID: "s1", WorktreePath: f.linked, WorkingDirectory: f.linked})
 	r.session(domain.Session{ID: "kid", ParentID: "s1", WorkingDirectory: scratch})
+	r.session(domain.Session{ID: "grandkid", ParentID: "kid", WorkingDirectory: scratch})
 	r.session(domain.Session{ID: "ended", ParentID: "s1", WorkingDirectory: scratch, AgentEnded: true})
+	r.session(domain.Session{ID: "other", WorkingDirectory: scratch})
 	r.session(domain.Session{ID: "consult-1", ParentID: "s1", Role: domain.SessionRoleConsult, WorkingDirectory: consultDir})
 	r.session(domain.Session{ID: "handover-1", ParentID: "s1", Role: domain.SessionRoleHandover, WorkingDirectory: scratch})
 	r.session(domain.Session{ID: "rev-1", ParentID: "s1", Role: domain.SessionRoleReviewer, WorkingDirectory: scratch})
 
 	got := lifecycleResult(t, r.terminate(s.ID, false))
-	if got["worktree_removed"] != true {
+	if got["worktree_removed"] != true || got["children_left"] != nil {
 		t.Fatalf("%v", got)
 	}
-	left, _ := got["children_left"].([]any)
-	if len(left) != 1 || left[0] != "kid" {
-		t.Fatalf("children_left %v", got["children_left"])
+	ended, _ := got["children_terminated"].([]any)
+	var ids []string
+	for _, id := range ended {
+		ids = append(ids, id.(string))
 	}
-	if !r.rowExists("kid") || slices.Contains(r.pty.Kills(), "kid") {
-		t.Fatal("a visible child was stopped")
+	slices.Sort(ids)
+	if !slices.Equal(ids, []string{"ended", "grandkid", "kid"}) {
+		t.Fatalf("children_terminated %v", got["children_terminated"])
 	}
-	if r.rowExists("consult-1") || pathExists(consultDir) || !slices.Contains(r.pty.Kills(), "consult-1") {
+	for _, id := range []string{"kid", "grandkid", "ended"} {
+		if r.rowExists(id) || !slices.Contains(r.pty.Kills(), id) {
+			t.Fatalf("child %s was not terminated", id)
+		}
+	}
+	kills := r.pty.Kills()
+	if slices.Index(kills, "grandkid") > slices.Index(kills, "kid") || slices.Index(kills, "kid") > slices.Index(kills, "s1") {
+		t.Fatalf("not deepest first: %v", kills)
+	}
+	if !r.rowExists("other") || slices.Contains(kills, "other") {
+		t.Fatal("an unrelated session was stopped")
+	}
+	if r.rowExists("consult-1") || pathExists(consultDir) || !slices.Contains(kills, "consult-1") {
 		t.Fatal("consult not retired")
 	}
-	if !r.rowExists("handover-1") || slices.Contains(r.pty.Kills(), "handover-1") {
+	if !r.rowExists("handover-1") || slices.Contains(kills, "handover-1") {
 		t.Fatal("the handover child must finish on its own")
 	}
-	if !slices.Contains(r.pty.Kills(), "rev-1") {
+	if !slices.Contains(kills, "rev-1") {
 		t.Fatal("reviewer not stopped")
+	}
+}
+
+// A child's dirty worktree refuses the whole call before anything stops, and
+// discard takes it down with the rest.
+func TestTerminateRefusesADirtyChildWorktree(t *testing.T) {
+	r := newLifecycleRig(t)
+	f := newGitFixture(t)
+	s := r.session(domain.Session{ID: "s1", WorkingDirectory: t.TempDir()})
+	r.session(domain.Session{ID: "kid", Name: "kid-name", ParentID: "s1", WorktreePath: f.linked, WorkingDirectory: f.linked})
+	f.commitUnpushed(t)
+
+	resp := r.terminate(s.ID, false)
+	wantCode(t, resp, CodeWorktreeDirty)
+	if data, ok := resp.Error.Data.(WorktreeDirtyData); !ok || data.Session != "kid" || data.UnpushedCommits != 1 {
+		t.Fatalf("data %#v", resp.Error.Data)
+	}
+	if !strings.Contains(resp.Error.Message, "kid-name") {
+		t.Fatalf("message %q does not name the child", resp.Error.Message)
+	}
+	if len(r.pty.Kills()) != 0 || !r.rowExists("s1") || !r.rowExists("kid") || !pathExists(f.linked) {
+		t.Fatal("a refused call touched a session")
+	}
+
+	got := lifecycleResult(t, r.terminate(s.ID, true))
+	if r.rowExists("kid") || pathExists(f.linked) {
+		t.Fatalf("discard left the child: %v", got)
+	}
+}
+
+// A child sharing its parent's worktree does not keep it: the tree is removed
+// once, after both agents stopped.
+func TestTerminateRemovesASharedTreeOnce(t *testing.T) {
+	r := newLifecycleRig(t)
+	f := newGitFixture(t)
+	s := r.session(domain.Session{ID: "s1", WorktreePath: f.linked, WorkingDirectory: f.linked})
+	r.session(domain.Session{ID: "kid", ParentID: "s1", WorktreePath: f.linked, WorkingDirectory: f.linked})
+	got := lifecycleResult(t, r.terminate(s.ID, false))
+	if got["worktree_removed"] != true || pathExists(f.linked) || r.rowExists("kid") {
+		t.Fatalf("shared tree or child left: %v", got)
+	}
+}
+
+// A legacy tmux descendant refuses the cascade: aiman cannot stop it.
+func TestTerminateRefusesALegacyChild(t *testing.T) {
+	r := newLifecycleRig(t)
+	s := r.session(domain.Session{ID: "s1", WorkingDirectory: t.TempDir()})
+	r.session(domain.Session{ID: "old", ParentID: "s1", WorkingDirectory: t.TempDir(), Backend: domain.BackendLegacyTmux, TerminalName: "old"})
+	wantCode(t, r.terminate(s.ID, true), CodeLegacyTerminal)
+	if len(r.pty.Kills()) != 0 || !r.rowExists("s1") || !r.rowExists("old") {
+		t.Fatal("a refused call touched a session")
 	}
 }
 

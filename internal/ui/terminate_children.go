@@ -48,21 +48,18 @@ func (m *Model) terminationChildren(s domain.Session) []domain.Session {
 	return collect(s.ID)
 }
 
-// startTerminationBatch tears down the selected session, and its children too
-// when the confirm dialog's tick box was set.
+// startTerminationBatch tears down the selected session and every session
+// descended from it: a child never outlives its parent.
 //
 // Children run first for the same reason they are collected deepest-first: the
 // parent's teardown removes the record they hang off.
 func (m *Model) startTerminationBatch(s domain.Session, forced bool) tea.Cmd {
 	var cmds []tea.Cmd
-	if m.terminateWithChildren {
-		for _, kid := range m.terminationChildren(s) {
-			if cmd := m.startBackgroundTerminate(kid, forced); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+	for _, kid := range m.terminationChildren(s) {
+		if cmd := m.startBackgroundTerminate(kid, forced); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
-	m.terminateWithChildren = false
 	if cmd := m.startBackgroundTerminate(s, forced); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -97,14 +94,17 @@ func (m *Model) worktreeStillInUse(s domain.Session) (string, bool) {
 		if _, terminating := m.terminatingSessions[other.ID]; terminating {
 			continue
 		}
-		name := other.Name
-		if name == "" {
-			name = other.TerminalName
-		}
-		if name == "" {
-			name = other.ID
-		}
-		return name, true
+		return sessionDisplayName(other), true
 	}
 	return "", false
+}
+
+// sessionDisplayName is the name the dialogs show for s.
+func sessionDisplayName(s domain.Session) string {
+	for _, name := range []string{s.Name, s.TerminalName} {
+		if name != "" {
+			return name
+		}
+	}
+	return s.ID
 }

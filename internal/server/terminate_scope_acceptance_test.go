@@ -44,12 +44,15 @@ func TestF13ParentTerminatesChild(t *testing.T) {
 	if r.rowExists("c") {
 		t.Fatal("c's row survived")
 	}
-	left, _ := got["children_left"].([]any)
-	if len(left) != 1 || left[0] != "d" {
-		t.Fatalf("children_left = %v, want [d]", got["children_left"])
+	ended, _ := got["children_terminated"].([]any)
+	if len(ended) != 1 || ended[0] != "d" {
+		t.Fatalf("children_terminated = %v, want [d]", got["children_terminated"])
 	}
-	if !r.rowExists("d") {
-		t.Fatal("c's own child was dropped")
+	if r.rowExists("d") {
+		t.Fatal("c's own child survived")
+	}
+	if !r.rowExists("a") {
+		t.Fatal("the caller was dropped")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -25,7 +26,7 @@ const (
 	// SessionRestartTimeout bounds one session.restart.
 	SessionRestartTimeout = 2 * time.Minute
 	// SessionTerminateTimeout bounds one session.terminate.
-	SessionTerminateTimeout = 90 * time.Second
+	SessionTerminateTimeout = 3 * time.Minute
 	// restartHandoffTimeout leaves the rest of SessionRestartTimeout for the
 	// agent's boot and its prompt.
 	restartHandoffTimeout = 45 * time.Second
@@ -53,6 +54,9 @@ func (s *Server) SetRestartDeps(d RestartDeps) {
 // WorktreeDirtyData is the data of a worktree_dirty refusal: what removing the
 // worktree would lose.
 type WorktreeDirtyData struct {
+	// Session is the session whose worktree it is: the target or one of the
+	// descendants that would go with it.
+	Session         string   `json:"session"`
 	ChangedFiles    int      `json:"changed_files"`
 	Paths           []string `json:"paths"`
 	UnpushedCommits int      `json:"unpushed_commits"`
@@ -297,57 +301,178 @@ func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Respon
 	if sess.IsLegacyTmux() {
 		return legacyTerminalResp(req.ID, sess)
 	}
-	plan := s.planWorktreeRemoval(ctx, sess, list)
-	if plan.removable() && !p.Discard {
-		loss, err := worktree.Pending(ctx, plan.info)
-		if err != nil {
-			return errResp(req.ID, CodeInvalidParams, fmt.Sprintf("cannot read worktree %s: %v", plan.info.Root, err))
-		}
-		if !loss.Empty() {
-			return worktreeDirtyResp(req.ID, plan.info, loss)
+	kids, unlockKids := s.lockDescendants(ctx, sess, list)
+	defer unlockKids()
+	for _, kid := range kids {
+		if kid.IsLegacyTmux() {
+			return legacyTerminalResp(req.ID, kid)
 		}
 	}
-
-	hctx, hcancel := context.WithTimeout(ctx, handoverWriteTimeout)
-	if _, err := s.writeHandover(hctx, sess, "forget"); err != nil {
-		log.Printf("session.terminate %s: handover: %v", sess.ID, err)
+	// Deepest first: every descendant goes before the session it hangs off.
+	going := append(append([]domain.Session(nil), kids...), sess)
+	plans, bad := s.planTeardown(ctx, req.ID, going, list, p.Discard)
+	if bad != nil {
+		return *bad
 	}
-	hcancel()
 
-	s.retireHelpers(ctx, sess, list)
+	s.writeForgetHandovers(ctx, going)
 	term := serverTerminal{s}
-	if err := term.Stop(ctx, sess); err != nil {
-		log.Printf("session.terminate %s: stop: %v", sess.ID, err)
+	for _, g := range going {
+		s.retireHelpers(ctx, g, list)
+		if err := term.Stop(ctx, g); err != nil {
+			log.Printf("session.terminate %s: stop: %v", g.ID, err)
+		}
 	}
-	if term.Alive(ctx, sess) {
-		return errResp(req.ID, CodeTimeout, "the agent did not stop; nothing was removed")
+	for _, g := range going {
+		if term.Alive(ctx, g) {
+			return errResp(req.ID, CodeTimeout, fmt.Sprintf("the agent of session %s did not stop; nothing was removed", sessionLabel(g)))
+		}
 	}
 
-	removed, note := s.removeWorktree(ctx, plan, p.Discard)
-	if err := s.dropSession(ctx, sess, "terminate"); err != nil {
-		return errResp(req.ID, CodeInvalidParams, err.Error())
+	var result map[string]any
+	var ended []string
+	for i, g := range going {
+		removed, note := s.removeWorktree(ctx, plans[i], p.Discard)
+		if err := s.dropSession(ctx, g, "terminate"); err != nil {
+			return errResp(req.ID, CodeInvalidParams, fmt.Sprintf("session %s: %v", sessionLabel(g), err))
+		}
+		payload := map[string]any{"reason": "terminate", "worktree_removed": removed, "discard": p.Discard}
+		if g.ID != sess.ID {
+			payload["terminated_with"] = sess.ID
+			ended = append(ended, g.ID)
+		}
+		s.appendEvent(ctx, g.ID, domain.EventActorUser, domain.EventSessionEnded, payload)
+		if g.ID == sess.ID {
+			result = terminatedResult(sess, plans[i], removed, note)
+		}
 	}
-	s.appendEvent(ctx, sess.ID, domain.EventActorUser, domain.EventSessionEnded, map[string]any{
-		"reason": "terminate", "worktree_removed": removed, "discard": p.Discard,
-	})
-	return Response{ID: req.ID, Result: terminatedResult(sess, list, plan, removed, note)}
+	if len(ended) > 0 {
+		result["children_terminated"] = ended
+	}
+	return Response{ID: req.ID, Result: result}
 }
 
-func worktreeDirtyResp(id string, info worktree.Info, loss worktree.Loss) Response {
-	msg := fmt.Sprintf("worktree %s has %d changed files and %d unpushed commits", info.Root, loss.ChangedFiles, loss.UnpushedCommits)
+// lockDescendants returns every visible session below sess, deepest first, each
+// re-read under its own lock. Locks are taken parent before child, the order
+// every terminate takes them in, so two cascades cannot wait on each other.
+// Hidden helpers are not listed: retireHelpers ends them by their own rules.
+func (s *Server) lockDescendants(ctx context.Context, sess domain.Session, list []domain.Session) ([]domain.Session, func()) {
+	byParent := map[string][]domain.Session{}
+	for _, c := range list {
+		if c.ParentID != "" && c.ParentID != c.ID && !c.Role.Hidden() {
+			byParent[c.ParentID] = append(byParent[c.ParentID], c)
+		}
+	}
+	var unlocks []func()
+	seen := map[string]bool{sess.ID: true}
+	var walk func(id string) []domain.Session
+	walk = func(id string) []domain.Session {
+		var out []domain.Session
+		for _, kid := range byParent[id] {
+			if seen[kid.ID] {
+				continue
+			}
+			seen[kid.ID] = true
+			unlocks = append(unlocks, s.lockSession(kid.ID))
+			below := walk(kid.ID)
+			// A concurrent terminate may have ended it while this one waited.
+			fresh, ok := s.sessionByID(ctx, kid.ID)
+			if !ok {
+				out = append(out, below...)
+				continue
+			}
+			out = append(append(out, below...), fresh)
+		}
+		return out
+	}
+	kids := walk(sess.ID)
+	return kids, func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}
+}
+
+// planTeardown decides each session's worktree before anything stops, and
+// refuses the whole call when one removable worktree would lose work. Sessions
+// that go together do not keep each other's tree, and a tree they share is
+// removed once, by the highest session that has it.
+func (s *Server) planTeardown(ctx context.Context, reqID string, going, list []domain.Session, discard bool) ([]worktreePlan, *Response) {
+	gone := make(map[string]bool, len(going))
+	for _, g := range going {
+		gone[g.ID] = true
+	}
+	staying := make([]domain.Session, 0, len(list))
+	for _, c := range list {
+		// A going session's hidden helpers go with it.
+		if !gone[c.ID] && (!c.Role.Hidden() || !gone[c.ParentID]) {
+			staying = append(staying, c)
+		}
+	}
+	claimed := map[string]string{}
+	plans := make([]worktreePlan, len(going))
+	// The target is last in going and plans first, so it claims a tree it
+	// shares with a child.
+	for i := len(going) - 1; i >= 0; i-- {
+		g := going[i]
+		plan := s.planWorktreeRemoval(ctx, g, staying)
+		if plan.removable() {
+			if owner, dup := claimed[plan.info.Root]; dup {
+				plan.keep = "session " + owner + " removes it"
+			} else {
+				claimed[plan.info.Root] = sessionLabel(g)
+			}
+		}
+		plans[i] = plan
+		if !plan.removable() || discard {
+			continue
+		}
+		loss, err := worktree.Pending(ctx, plan.info)
+		if err != nil {
+			r := errResp(reqID, CodeInvalidParams, fmt.Sprintf("cannot read worktree %s: %v", plan.info.Root, err))
+			return nil, &r
+		}
+		if !loss.Empty() {
+			r := worktreeDirtyResp(reqID, g, plan.info, loss)
+			return nil, &r
+		}
+	}
+	return plans, nil
+}
+
+// writeForgetHandovers writes every going session's handover at once, under one
+// shared cap, so a deep tree does not spend the call's limit on handovers.
+func (s *Server) writeForgetHandovers(ctx context.Context, going []domain.Session) {
+	hctx, cancel := context.WithTimeout(ctx, handoverWriteTimeout)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, g := range going {
+		wg.Add(1)
+		go func(g domain.Session) {
+			defer wg.Done()
+			if _, err := s.writeHandover(hctx, g, "forget"); err != nil {
+				log.Printf("session.terminate %s: handover: %v", g.ID, err)
+			}
+		}(g)
+	}
+	wg.Wait()
+}
+
+func worktreeDirtyResp(id string, sess domain.Session, info worktree.Info, loss worktree.Loss) Response {
+	msg := fmt.Sprintf("worktree %s of session %s has %d changed files and %d unpushed commits",
+		info.Root, sessionLabel(sess), loss.ChangedFiles, loss.UnpushedCommits)
 	paths := loss.Paths
 	if paths == nil {
 		paths = []string{}
 	}
 	return Response{ID: id, Error: &Error{Code: CodeWorktreeDirty, Message: msg, Data: WorktreeDirtyData{
-		ChangedFiles: loss.ChangedFiles, Paths: paths, UnpushedCommits: loss.UnpushedCommits,
+		Session: sess.ID, ChangedFiles: loss.ChangedFiles, Paths: paths, UnpushedCommits: loss.UnpushedCommits,
 	}}}
 }
 
 // terminatedResult is the session_terminated answer. worktree_note says why a
-// worktree stayed, and children_left names the running children that now have
-// no parent, as the TUI's confirm dialog warns.
-func terminatedResult(sess domain.Session, list []domain.Session, plan worktreePlan, removed bool, note string) map[string]any {
+// worktree stayed.
+func terminatedResult(sess domain.Session, plan worktreePlan, removed bool, note string) map[string]any {
 	branch := plan.info.Branch
 	if branch == "" {
 		branch = sess.Branch
@@ -357,15 +482,6 @@ func terminatedResult(sess domain.Session, list []domain.Session, plan worktreeP
 	}
 	if note != "" {
 		result["worktree_note"] = note
-	}
-	var left []string
-	for _, c := range list {
-		if c.ParentID == sess.ID && !c.Role.Hidden() && !c.AgentEnded {
-			left = append(left, c.ID)
-		}
-	}
-	if len(left) > 0 {
-		result["children_left"] = left
 	}
 	return result
 }

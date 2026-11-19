@@ -95,6 +95,28 @@ func TestTerminateRemovesAWorktreeWhenEverySharerIsGoing(t *testing.T) {
 	}
 }
 
+// A child never outlives its parent: confirming the parent's teardown starts
+// every descendant's too, with no tick box to set.
+func TestTerminationBatchAlwaysTakesTheChildren(t *testing.T) {
+	m := childModel(
+		domain.Session{ID: "root", Name: "root"},
+		domain.Session{ID: "kid", Name: "kid", ParentID: "root"},
+		domain.Session{ID: "grandkid", Name: "grandkid", ParentID: "kid"},
+		domain.Session{ID: "unrelated", Name: "unrelated"},
+	)
+	if cmd := m.startTerminationBatch(domain.Session{ID: "root", Name: "root"}, false); cmd == nil {
+		t.Fatal("no teardown started")
+	}
+	for _, id := range []string{"root", "kid", "grandkid"} {
+		if _, ok := m.terminatingSessions[id]; !ok {
+			t.Errorf("%s is not terminating", id)
+		}
+	}
+	if _, ok := m.terminatingSessions["unrelated"]; ok {
+		t.Error("an unrelated session is terminating")
+	}
+}
+
 func TestPluralSessions(t *testing.T) {
 	if got := pluralSessions(1); got != "1 child session" {
 		t.Errorf("got %q", got)
