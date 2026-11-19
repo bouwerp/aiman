@@ -15,7 +15,7 @@ func TestEnsureOnHostWritesReporterOnlyWhenNoAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 3 {
+	if len(results) != 4 { // reporter, to-do reporter, Slack guard, Deep Code launcher
 		t.Fatalf("results=%d %+v", len(results), results)
 	}
 	if results[0].Action != ActionInstalled {

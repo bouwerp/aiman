@@ -67,6 +67,7 @@ func EnsureOnHostWith(home string, opts Options) ([]InstallResult, error) {
 	record(ensureHookScript(todoReporterPath(home), hookScript("todo report --from-stdin")))
 	record(ensureOptionalScript(gatePath(home), verifyGateScript, opts.BeforePR))
 	record(ensureOptionalScript(ciGatePath(home), ciGateScript, opts.CIGate))
+	record(ensureHookScript(slackGuardPath(home), slackGuardScript))
 	record(ensureDeepcodeLauncher(home))
 	record(ensureClaude(home, script, opts))
 	record(ensureGrok(home, script, todoReporterPath(home)))
@@ -135,11 +136,12 @@ func ensureClaude(home, command string, opts Options) (InstallResult, error) {
 		todos := upsertTodoHook(root, todo, claudeTodoMatcher)
 		gate := togglePreToolUseHook(root, gatePath(home), GateMarker, opts.BeforePR)
 		ciGate := togglePreToolUseHook(root, ciGatePath(home), CIGateMarker, opts.CIGate)
+		slack := upsertMatchedPreToolUseHook(root, slackGuardMatcher, slackGuardPath(home), SlackGuardMarker)
 		status := false
 		if editStatusLine != nil {
 			status, statusErr = editStatusLine(home, root)
 		}
-		return identity || compact || turns || todos || gate || ciGate || status
+		return identity || compact || turns || todos || gate || ciGate || slack || status
 	})
 	// On any error settings may still point at the script, so it stays.
 	if !wrapStatusLine && err == nil && statusErr == nil {

@@ -606,7 +606,7 @@ func TestWriteTaskFile_Content(t *testing.T) {
 		"Stay on scope",
 		"Shared context",
 		"Use `aiman slack`",
-		"never to get around a `slack_writes_off` refusal",
+		"Do not use any other Slack integration",
 		"ASD-STE100 Simplified Technical English",
 	}
 

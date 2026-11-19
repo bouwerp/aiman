@@ -173,7 +173,7 @@ func TestDraftGateScriptFailsClosedWithoutAiman(t *testing.T) {
 
 func claudeHookCommands(t *testing.T, home string) []string {
 	t.Helper()
-	groups, _ := readClaudeHooks(t, home)["PreToolUse"].([]any)
+	groups := gateGroups(readClaudeHooks(t, home))
 	var out []string
 	for _, g := range groups {
 		out = append(out, toString(g))
