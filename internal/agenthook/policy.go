@@ -83,20 +83,32 @@ func removePreToolUseHook(root map[string]any, marker string) bool {
 
 // upsertPreToolUseHook installs one Bash gate group that marker owns.
 func upsertPreToolUseHook(root map[string]any, command, marker string) bool {
+	return upsertMatchedPreToolUseHook(root, "Bash", command, marker)
+}
+
+// upsertMatchedPreToolUseHook installs one PreToolUse group that marker owns
+// for the tools matcher names, and keeps an existing group's matcher on it.
+func upsertMatchedPreToolUseHook(root map[string]any, matcher, command, marker string) bool {
 	hooks, ok := root["hooks"].(map[string]any)
 	if !ok {
 		hooks = map[string]any{}
 		root["hooks"] = hooks
 	}
 	groups, _ := hooks["PreToolUse"].([]any)
-	if len(groups) > 0 {
-		found, changed := replaceMarkedCommand(groups, command, marker)
-		if found {
-			return changed
+	for _, g := range groups {
+		group, ok := g.(map[string]any)
+		if !ok || !commandHasMarker(group, marker) {
+			continue
 		}
+		_, changed := replaceMarkedCommand(group, command, marker)
+		if m, _ := group["matcher"].(string); m != matcher {
+			group["matcher"] = matcher
+			changed = true
+		}
+		return changed
 	}
 	group := map[string]any{
-		"matcher": "Bash",
+		"matcher": matcher,
 		"hooks":   []any{map[string]any{"type": "command", "command": command}},
 	}
 	hooks["PreToolUse"] = append(groups, group)

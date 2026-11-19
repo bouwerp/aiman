@@ -33,7 +33,7 @@ func TestPreToolUseInstalledForClaude(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooks := readClaudeHooks(t, home)
-	groups, _ := hooks["PreToolUse"].([]any)
+	groups := gateGroups(hooks)
 	if len(groups) != 1 {
 		t.Fatalf("PreToolUse groups = %v", groups)
 	}
@@ -44,7 +44,7 @@ func TestPreToolUseInstalledForClaude(t *testing.T) {
 	if _, err := EnsureOnHost(home, true); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(readClaudeHooks(t, home)["PreToolUse"].([]any)); got != 1 {
+	if got := len(gateGroups(readClaudeHooks(t, home))); got != 1 {
 		t.Fatalf("duplicate PreToolUse groups = %d", got)
 	}
 }
@@ -57,7 +57,7 @@ func TestPreToolUseNotInstalledWithoutBeforePR(t *testing.T) {
 	if _, err := EnsureOnHost(home); err != nil {
 		t.Fatal(err)
 	}
-	if hooks := readClaudeHooks(t, home); hooks["PreToolUse"] != nil {
+	if hooks := readClaudeHooks(t, home); len(gateGroups(hooks)) != 0 {
 		t.Fatalf("PreToolUse installed without before_pr: %v", hooks["PreToolUse"])
 	}
 }
@@ -146,7 +146,7 @@ func TestBeforePROffRemovesGate(t *testing.T) {
 	if _, err := EnsureOnHost(home, false); err != nil {
 		t.Fatal(err)
 	}
-	if hooks := readClaudeHooks(t, home); hooks["PreToolUse"] != nil {
+	if hooks := readClaudeHooks(t, home); len(gateGroups(hooks)) != 0 {
 		t.Fatalf("gate hook survived before_pr off: %v", hooks["PreToolUse"])
 	}
 	if _, err := os.Stat(gatePath(home)); !os.IsNotExist(err) {

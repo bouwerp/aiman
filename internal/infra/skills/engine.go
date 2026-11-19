@@ -796,9 +796,10 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 }
 
 // SlackFirstLine is the task file guardrail that routes every Slack read and
-// write through aiman slack. A slack_writes_off refusal is the operator's
-// switch, so it is not a failure that permits the agent's own integration.
-const SlackFirstLine = "- **Slack.** Use `aiman slack` (the aiman skill's Slack section) for every Slack read or write. Use your own Slack integration only when `aiman slack` is missing, not signed in, or fails; never to get around a `slack_writes_off` refusal.\n"
+// write through aiman slack and rules out the agent's own Slack tools; a
+// failure goes to the operator. Claude's Slack MCP tools are also refused by
+// the slack-guard hook (agenthook).
+const SlackFirstLine = "- **Slack.** Use `aiman slack` (the aiman skill's Slack section) for every Slack read or write. Do not use any other Slack integration (a Slack MCP server, plugin or connector), even when your tools list one. If `aiman slack` is missing, not signed in, or fails, or answers `slack_writes_off`, stop and tell the operator the command and the error.\n"
 
 // STE100Line is the task file rule that puts every human-facing text an agent
 // writes in ASD-STE100 Simplified Technical English. The skill's Writing style
