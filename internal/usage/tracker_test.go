@@ -53,7 +53,7 @@ func TestTrackerScansClaudeAndSubagents(t *testing.T) {
 	}
 	wantMeta := domain.UsageSessionMeta{
 		SessionID: "s1", Name: "alpha", Group: "work", IssueKey: "PROJ-6", AgentName: "claude",
-		LastInputTokens: 2 + 71787, ContextWindow: 200_000, ContextSource: "fallback",
+		LastInputTokens: 2 + 71787, ContextWindow: 200_000, ContextSource: "fallback", LastModel: "claude-opus-5-5",
 	}
 	if got := env.store.meta("s1"); got != wantMeta {
 		t.Fatalf("meta = %+v, want %+v", got, wantMeta)
@@ -803,6 +803,7 @@ func (m *memStore) UpsertUsageSession(_ context.Context, meta domain.UsageSessio
 		meta.LastInputTokens = prev.LastInputTokens
 		meta.ContextWindow = prev.ContextWindow
 		meta.ContextSource = prev.ContextSource
+		meta.LastModel = prev.LastModel
 	}
 	if !meta.HasHealth {
 		meta.HealthKnown = prev.HealthKnown

@@ -51,6 +51,9 @@ type Report struct {
 	ContextWindow int64   `json:"context_window"`
 	ContextPct    float64 `json:"context_pct"`
 	ContextSource string  `json:"context_source"`
+	// Model is the model id of the latest counted turn, for a one-session
+	// query: what an alias such as "fable" resolved to.
+	Model string `json:"model,omitempty"`
 }
 
 // NoTicketKey is the issue row for a session whose issue is empty.
@@ -139,6 +142,7 @@ func attachContext(rep Report, metas map[string]domain.UsageSessionMeta, ids []s
 	rep.ContextTokens = meta.LastInputTokens
 	rep.ContextWindow = meta.ContextWindow
 	rep.ContextSource = meta.ContextSource
+	rep.Model = meta.LastModel
 	if meta.ContextWindow > 0 {
 		rep.ContextPct = float64(meta.LastInputTokens) / float64(meta.ContextWindow)
 	}

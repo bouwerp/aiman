@@ -67,8 +67,8 @@ func TestStaticModelsFromCatalog(t *testing.T) {
 	if len(got) == 0 || got[0].ID != claudeCatalog.Models[0] || got[0].Provider != "" {
 		t.Fatalf("claude = %+v", got)
 	}
-	if HasDynamicModels("claude") || !HasDynamicModels("pi") || !HasDynamicModels(" pi --foo") {
-		t.Fatal("only pi lists models from the host")
+	if HasDynamicModels("copilot") || !HasDynamicModels("pi") || !HasDynamicModels(" pi --foo") || AgentLister("claude") {
+		t.Fatal("copilot has no listing; claude is listed by serve, not its CLI")
 	}
 	if StaticModels("unknown-agent") != nil {
 		t.Fatal("unknown agents have no catalog")
@@ -101,7 +101,7 @@ func TestModelCacheListsPiOncePerHost(t *testing.T) {
 	if _, err := c.List(context.Background(), "h2", ex, "pi"); err != nil || len(ex.calls) != 2 {
 		t.Fatalf("second host must list again: %v %q", err, ex.calls)
 	}
-	static, err := c.List(context.Background(), "h1", ex, "codex")
+	static, err := c.List(context.Background(), "h1", ex, "copilot")
 	if err != nil || len(static) == 0 || len(ex.calls) != 2 {
 		t.Fatalf("static list ran a command: %v %q", err, ex.calls)
 	}

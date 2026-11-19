@@ -234,6 +234,9 @@ type Server struct {
 	// SetAgentUpdates. agentHost names this host in its replies.
 	agentUpdates *agentupdate.Manager
 	agentHost    string
+	// agentModels is what each agent's own listing printed on this host
+	// (agent_models.go).
+	agentModels hostModels
 
 	// hostUpdates keeps serve on the latest release; nil until SetHostUpdates,
 	// which means updates are off. hostName names this host in host.version.
@@ -505,7 +508,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.dispatchUsage(ctx, req)
 	case "aws.status", "aws.login_start", "aws.login_status", "aws.log":
 		return s.dispatchAWS(ctx, req)
-	case "agents.status", "agents.update", "agents.move_prefix":
+	case "agents.status", "agents.update", "agents.move_prefix", "agents.models":
 		return s.dispatchAgents(ctx, req)
 	case "session.transcript", "session.transcript_item", "session.process_output", "session.file":
 		return s.dispatchTranscript(ctx, req)
@@ -587,6 +590,8 @@ func (s *Server) dispatchAgents(ctx context.Context, req Request) Response {
 		return s.handleAgentsUpdate(ctx, req)
 	case "agents.move_prefix":
 		return s.handleAgentsMovePrefix(ctx, req)
+	case "agents.models":
+		return s.handleAgentsModels(ctx, req)
 	default:
 		return s.handleAgentsStatus(ctx, req)
 	}

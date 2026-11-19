@@ -11,7 +11,7 @@ import (
 	"github.com/bouwerp/aiman/internal/server"
 )
 
-const agentsUsage = "Usage: aiman agents status [--json] [--refresh]\n       aiman agents update <command>|--all [--json]\n"
+const agentsUsage = "Usage: aiman agents status [--json] [--refresh]\n       aiman agents models <command> [--json] [--refresh]\n       aiman agents update <command>|--all [--json]\n"
 
 // agentsCall is one parsed `aiman agents` invocation.
 type agentsCall struct {
@@ -47,6 +47,16 @@ func parseAgentsArgs(args []string) (agentsCall, error) {
 		if len(positional) != 0 {
 			return agentsCall{}, fmt.Errorf("status takes no arguments")
 		}
+	case "models":
+		call.method = "agents.models"
+		if flags["refresh"] {
+			call.params["refresh"] = true
+			delete(flags, "refresh")
+		}
+		if len(positional) != 1 {
+			return agentsCall{}, fmt.Errorf("models takes one agent command")
+		}
+		call.params["agent"] = positional[0]
 	case "update":
 		call.method = "agents.update"
 		all := flags["all"]
@@ -100,6 +110,9 @@ func runAgents(args []string, out io.Writer) error {
 	if call.method == "agents.status" {
 		return formatAgentsStatus(out, resp.Result)
 	}
+	if call.method == "agents.models" {
+		return formatAgentModels(out, resp.Result)
+	}
 	if n := formatAgentsUpdate(out, resp.Result); n > 0 {
 		return fmt.Errorf("%d update(s) not started", n)
 	}
@@ -116,6 +129,24 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// formatAgentModels prints one model id per line, which the TUI's model
+// picker reads over ssh (agent.ParseModelLines).
+func formatAgentModels(w io.Writer, result any) error {
+	m, ok := result.(map[string]any)
+	if !ok {
+		return errors.New("agent models result is not an object")
+	}
+	models, _ := m["models"].([]any)
+	for _, v := range models {
+		if id, ok := v.(string); ok {
+			if _, err := fmt.Fprintln(w, id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // formatAgentsStatus prints the agents.status result as a table.

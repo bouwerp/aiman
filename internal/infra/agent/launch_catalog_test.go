@@ -27,7 +27,7 @@ func TestLaunchCatalogForGrok(t *testing.T) {
 
 func TestLaunchCatalogForAgyEffort(t *testing.T) {
 	c := LaunchCatalogFor("agy")
-	if !c.SupportsEffort() || !contains(c.Models, "gemini-3.7-flash-high") {
+	if !c.SupportsEffort() || !contains(c.Models, "gemini-3.8-flash-high") {
 		t.Fatalf("%+v", c)
 	}
 }
@@ -120,7 +120,7 @@ func TestLaunchCatalogCheap(t *testing.T) {
 		"claude-code":  "haiku",
 		"codex":        "gpt-6-luna",
 		"copilot":      "gpt-5-mini",
-		"agy":          "gemini-3.7-flash-low",
+		"agy":          "gemini-3.8-flash-low",
 		"grok":         "",
 		"kilo":         "",
 		"cursor-agent": "",

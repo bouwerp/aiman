@@ -25,8 +25,15 @@ openrouter  qwen/qwen3-coder-flash             1M       65.5K    no        no
 openrouter  deepseek/deepseek-v3.2             163.8K   147.5K   yes       no
 `)
 
+// fakeLister answers every listing with models and err, except Claude's,
+// which it answers with the static catalog as a serve on the host would.
 func fakeLister(models []agent.ModelOption, err error) modelLister {
-	return func(context.Context, string) ([]agent.ModelOption, error) { return models, err }
+	return func(_ context.Context, command string) ([]agent.ModelOption, error) {
+		if agent.CommandBase(command) == "claude" {
+			return agent.StaticModels(command), nil
+		}
+		return models, err
+	}
 }
 
 // send feeds msg to the editor and runs any command it returns, feeding the

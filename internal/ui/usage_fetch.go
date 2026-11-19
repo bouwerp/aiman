@@ -176,6 +176,7 @@ func applyUsageToExtras(x detailMetaExtras, rep usage.Report, budget ...usage.Bu
 	x.CacheRatio = 0
 	x.ContextPct = 0
 	x.ContextWindow = 0
+	x.Model = ""
 	x.BudgetPct = 0
 	x.BudgetState = ""
 	if len(budget) > 0 {
@@ -199,6 +200,7 @@ func applyUsageToExtras(x detailMetaExtras, rep usage.Report, budget ...usage.Bu
 		x.ContextWindow = rep.ContextWindow
 		x.ContextPct = rep.ContextPct
 	}
+	x.Model = rep.Model
 	return x
 }
 

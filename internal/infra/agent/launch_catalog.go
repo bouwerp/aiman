@@ -61,45 +61,49 @@ func LaunchCatalogFor(base string) LaunchCatalog {
 	}
 }
 
-// claude --help / code.claude.com model-config aliases and --effort values.
+// claude --help / code.claude.com model-config aliases and --effort values,
+// then versioned ids Claude Code has used. Claude has no listing command:
+// serve adds the ids a host's transcripts used (agents.models).
 var claudeCatalog = LaunchCatalog{
 	Models: []string{
 		"sonnet", "opus", "haiku", "fable", "best", "opusplan",
-		"sonnet[1m]", "opus[1m]", "claude-fable-5",
+		"sonnet[1m]", "opus[1m]",
+		"claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-mythos-5-2",
 	},
 	Efforts:    []string{"low", "medium", "high", "xhigh", "max"},
 	EffortFlag: "--effort",
 	Cheap:      "haiku",
 }
 
-// grok models and grok --help --reasoning-effort (alias --effort).
+// `grok models` and grok --help --reasoning-effort (alias --effort). A host
+// lists its own (modelListers); this is the fallback.
 var grokCatalog = LaunchCatalog{
-	Models:     []string{"grok-4.6", "grok-4.5", "grok-build"},
+	Models:     []string{"grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"},
 	Efforts:    []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"},
 	EffortFlag: "--reasoning-effort",
 }
 
-// agy models and agy --help --effort.
+// `agy models` and agy --help --effort. A host lists its own
+// (modelListers); this is the fallback.
 var agyCatalog = LaunchCatalog{
 	Models: []string{
-		"gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
-		"gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
-		"gemini-3.5-flash-high", "gemini-3.5-flash-medium", "gemini-3.5-flash-low",
-		"gemini-3.1-pro-high", "gemini-3.1-pro-low",
+		"gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
 		"claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium",
 	},
 	Efforts:    []string{"low", "medium", "high"},
 	EffortFlag: "--effort",
-	Cheap:      "gemini-3.7-flash-low",
+	Cheap:      "gemini-3.8-flash-low",
 }
 
-// Codex --model plus -c model_reasoning_effort (docs: minimal|low|medium|high|xhigh).
+// Codex --model (the listed models of `codex debug models`; a host lists its
+// own, see modelListers) plus -c model_reasoning_effort.
 var codexCatalog = LaunchCatalog{
 	Models: []string{
+		"gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6.1-sol",
+		"gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
 		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-		"gpt-5.5", "gpt-5.4", "gpt-6-luna", "gpt-5.3-codex", "o3",
 	},
-	Efforts:      []string{"minimal", "low", "medium", "high", "xhigh"},
+	Efforts:      []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
 	EffortConfig: "model_reasoning_effort",
 	// Must be an id `codex debug models` lists. Launching a retired id draws a
 	// blocking "no longer available" notice (UpdateDialogs).

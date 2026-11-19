@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS usage_sessions (
 	last_input_tokens INTEGER NOT NULL DEFAULT 0,
 	context_window INTEGER NOT NULL DEFAULT 0,
 	context_source TEXT NOT NULL DEFAULT '',
+	last_model TEXT NOT NULL DEFAULT '',
 	health_known INTEGER NOT NULL DEFAULT 0,
 	health_tool_calls INTEGER NOT NULL DEFAULT 0,
 	health_read_calls INTEGER NOT NULL DEFAULT 0,
@@ -89,6 +90,7 @@ func ensureUsageContextColumns(db *sql.DB) error {
 		`ALTER TABLE usage_sessions ADD COLUMN budget_state TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE usage_sessions ADD COLUMN role TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE usage_sessions ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE usage_sessions ADD COLUMN last_model TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.ExecContext(context.Background(), stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("ensuring usage context columns: %w", err)
@@ -243,12 +245,12 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 	_, err := r.exec(ctx, `
 		INSERT INTO usage_sessions (
 			session_id, name, group_name, issue_key, agent_name,
-			last_input_tokens, context_window, context_source,
+			last_input_tokens, context_window, context_source, last_model,
 			health_known, health_tool_calls, health_read_calls, health_edit_calls,
 			health_edits_without_read, health_first_test_at, health_retries, health_reads,
 			budget_state, role, parent_id,
 			updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			name = COALESCE(NULLIF(excluded.name, ''), usage_sessions.name),
 			group_name = COALESCE(NULLIF(excluded.group_name, ''), usage_sessions.group_name),
@@ -259,6 +261,7 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 			last_input_tokens = CASE WHEN ? = 1 THEN excluded.last_input_tokens ELSE usage_sessions.last_input_tokens END,
 			context_window = CASE WHEN ? = 1 THEN excluded.context_window ELSE usage_sessions.context_window END,
 			context_source = CASE WHEN ? = 1 THEN excluded.context_source ELSE usage_sessions.context_source END,
+			last_model = CASE WHEN ? = 1 THEN excluded.last_model ELSE usage_sessions.last_model END,
 			health_known = CASE WHEN ? = 1 THEN excluded.health_known ELSE usage_sessions.health_known END,
 			health_tool_calls = CASE WHEN ? = 1 THEN excluded.health_tool_calls ELSE usage_sessions.health_tool_calls END,
 			health_read_calls = CASE WHEN ? = 1 THEN excluded.health_read_calls ELSE usage_sessions.health_read_calls END,
@@ -270,12 +273,12 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 			budget_state = CASE WHEN ? = 1 THEN excluded.budget_state ELSE usage_sessions.budget_state END,
 			updated_at = excluded.updated_at`,
 		m.SessionID, m.Name, m.Group, m.IssueKey, m.AgentName,
-		m.LastInputTokens, m.ContextWindow, m.ContextSource,
+		m.LastInputTokens, m.ContextWindow, m.ContextSource, m.LastModel,
 		known, m.HealthToolCalls, m.HealthReadCalls, m.HealthEditCalls,
 		m.HealthEditsWithoutRead, firstTest, m.HealthRetries, m.HealthReads,
 		m.BudgetState, m.Role, m.ParentID,
 		time.Now().UTC(),
-		has, has, has,
+		has, has, has, has,
 		hasHealth, hasHealth, hasHealth, hasHealth, hasHealth, hasHealth, hasHealth, hasHealth,
 		hasBudget)
 	if err != nil {
@@ -289,7 +292,7 @@ func (r *Repository) UpsertUsageSession(ctx context.Context, m domain.UsageSessi
 func (r *Repository) UsageSessions(ctx context.Context) ([]domain.UsageSessionMeta, error) {
 	rows, err := r.rd.QueryContext(ctx, `
 		SELECT session_id, name, group_name, issue_key, agent_name,
-			last_input_tokens, context_window, context_source,
+			last_input_tokens, context_window, context_source, last_model,
 			health_known, health_tool_calls, health_read_calls, health_edit_calls,
 			health_edits_without_read, health_first_test_at, health_retries, health_reads,
 			budget_state, role, parent_id
@@ -305,7 +308,7 @@ func (r *Repository) UsageSessions(ctx context.Context) ([]domain.UsageSessionMe
 		var firstTest sql.NullTime
 		if err := rows.Scan(
 			&m.SessionID, &m.Name, &m.Group, &m.IssueKey, &m.AgentName,
-			&m.LastInputTokens, &m.ContextWindow, &m.ContextSource,
+			&m.LastInputTokens, &m.ContextWindow, &m.ContextSource, &m.LastModel,
 			&known, &m.HealthToolCalls, &m.HealthReadCalls, &m.HealthEditCalls,
 			&m.HealthEditsWithoutRead, &firstTest, &m.HealthRetries, &m.HealthReads,
 			&m.BudgetState, &m.Role, &m.ParentID,

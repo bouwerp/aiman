@@ -18,7 +18,7 @@ var (
 		"notify.since",
 		"usage.get",
 		"ci.get",
-		"agents.status",
+		"agents.status", "agents.models",
 		"repo.list", "host.stats", "host.version", "host.daemons", "resources.get",
 		"aws.status", "aws.login_status", "aws.log",
 		"harness.list", "harness.status", "harness.result", "harness.image_status",
