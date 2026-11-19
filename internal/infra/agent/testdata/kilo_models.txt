@@ -1,0 +1,12 @@
+kilo/~anthropic/claude-fable-latest
+kilo/~anthropic/claude-haiku-latest
+kilo/~anthropic/claude-opus-latest
+kilo/~anthropic/claude-sonnet-latest
+kilo/~deepseek/deepseek-flash-latest
+kilo/~deepseek/deepseek-pro-latest
+kilo/~deepseek/deepseek-v4-flash-latest
+kilo/~google/gemini-flash-latest
+kilo/~google/gemini-pro-latest
+kilo/~moonshotai/kimi-latest
+kilo/~openai/gpt-astra-latest
+kilo/~openai/gpt-luna-latest

@@ -262,6 +262,13 @@ func runServe() error {
 	agentUpdates.Sessions = srv.LiveAgentSessions
 	agentUpdates.BaseCtx = ctx
 	wireAgentUpdateNotify(ctx, agentUpdates, srv.NotifyRecorder(), host)
+	if notify := agentUpdates.OnApplied; notify != nil {
+		// A new agent version can list other models.
+		agentUpdates.OnApplied = func(a agentupdate.Applied) {
+			srv.ResetAgentModels()
+			notify(a)
+		}
+	}
 	srv.SetAgentUpdates(agentUpdates, host)
 	go agentUpdates.Run(ctx)
 

@@ -263,7 +263,7 @@ func TestUsageContextRoundTrip(t *testing.T) {
 	}
 	if err := repo.UpsertUsageSession(ctx, domain.UsageSessionMeta{
 		SessionID: "s1", Name: "impl", Group: "alpha", IssueKey: "PROJ-1", AgentName: "claude",
-		LastInputTokens: 27, ContextWindow: 200_000, ContextSource: "fallback", HasContext: true,
+		LastInputTokens: 27, ContextWindow: 200_000, ContextSource: "fallback", LastModel: "claude-fable-5-1", HasContext: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -278,11 +278,11 @@ func TestUsageContextRoundTrip(t *testing.T) {
 		t.Fatalf("sessions = %+v", got)
 	}
 	m := got[0]
-	if m.Name != "rename" || m.LastInputTokens != 27 || m.ContextWindow != 200_000 || m.ContextSource != "fallback" || m.HasContext {
+	if m.Name != "rename" || m.LastInputTokens != 27 || m.ContextWindow != 200_000 || m.ContextSource != "fallback" || m.LastModel != "claude-fable-5-1" || m.HasContext {
 		t.Fatalf("label refresh wiped occupancy: %+v", m)
 	}
 	if err := repo.UpsertUsageSession(ctx, domain.UsageSessionMeta{
-		SessionID: "s1", LastInputTokens: 9, ContextWindow: 50_000, ContextSource: "explicit", HasContext: true,
+		SessionID: "s1", LastInputTokens: 9, ContextWindow: 50_000, ContextSource: "explicit", LastModel: "claude-fable-5-2", HasContext: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestUsageContextRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	m = got[0]
-	if m.Name != "rename" || m.Group != "alpha" || m.LastInputTokens != 9 || m.ContextWindow != 50_000 || m.ContextSource != "explicit" {
+	if m.Name != "rename" || m.Group != "alpha" || m.LastInputTokens != 9 || m.ContextWindow != 50_000 || m.ContextSource != "explicit" || m.LastModel != "claude-fable-5-2" {
 		t.Fatalf("smaller turn did not replace occupancy: %+v", m)
 	}
 }

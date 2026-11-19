@@ -89,6 +89,7 @@ type UsageSessionMeta struct {
 	LastInputTokens        int64
 	ContextWindow          int64
 	ContextSource          string
+	LastModel              string // model id of the latest counted turn
 	HasContext             bool
 	HealthKnown            bool
 	HealthToolCalls        int

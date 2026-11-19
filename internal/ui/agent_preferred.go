@@ -347,6 +347,10 @@ func (m AgentPreferredModel) startModelStep(draft config.PreferredAgent) (tea.Mo
 	}
 	m.models = nil
 	if m.list == nil {
+		if static := agent.FallbackModels(draft.Agent); len(static) > 0 {
+			m.models, m.dynamic, m.step = static, false, stepModel
+			return m, nil
+		}
 		m.loadErr = fmt.Errorf("no remote selected to list %s models", draft.Command())
 		m.step, m.input = stepModelTyping, draft.Model
 		return m, nil
@@ -370,10 +374,19 @@ func (m AgentPreferredModel) applyModels(msg preferredModelsMsg) AgentPreferredM
 		if m.loadErr == nil {
 			m.loadErr = fmt.Errorf("no models listed")
 		}
+		if static := agent.FallbackModels(m.draft.Agent); len(static) > 0 {
+			// aiman's own list, with the listing error above it.
+			m.models, m.dynamic, m.step, m.pick = static, false, stepModel, 0
+			return m
+		}
 		m.step, m.input = stepModelTyping, m.draft.Model
 		return m
 	}
+	m.loadErr = nil
 	m.models, m.step, m.pick = msg.models, stepProvider, 0
+	if !hasProviders(msg.models) {
+		m.dynamic, m.step = false, stepModel
+	}
 	return m
 }
 
@@ -639,6 +652,9 @@ func (m AgentPreferredModel) flowView(dim lipgloss.Style) string {
 		b.WriteString("  Provider:\n")
 		m.writeRows(&b, dim)
 	case stepModel:
+		if m.loadErr != nil {
+			b.WriteString(dim.Render(fmt.Sprintf("  Could not list models on %s (%v); showing aiman's list", m.host, m.loadErr)) + "\n")
+		}
 		label := "Model"
 		if m.provider != "" {
 			label += " (" + m.provider + ")"

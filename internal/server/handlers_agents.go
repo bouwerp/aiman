@@ -82,8 +82,11 @@ func (s *Server) handleAgentsStatus(ctx context.Context, req Request) Response {
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
+	if p.Refresh {
+		s.agentModels.Reset()
+	}
 	for i := range list {
-		list[i].Models = agent.LaunchCatalogFor(agent.BaseOf(list[i].Agent)).Models
+		list[i].Models = s.agentModelIDs(pctx, list[i].Agent)
 	}
 	return Response{ID: req.ID, Result: map[string]any{
 		"type":   "agents",

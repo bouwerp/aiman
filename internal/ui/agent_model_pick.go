@@ -31,6 +31,10 @@ func (m AgentPickerModel) startModelPick(a domain.Agent) (AgentPickerModel, tea.
 	}
 	m.models = nil
 	if m.lister == nil {
+		if static := agent.FallbackModels(a.Command); len(static) > 0 {
+			m.models, m.dynamic, m.step = static, false, agentPickModel
+			return m, nil
+		}
 		m.loadErr = fmt.Errorf("no remote selected to list %s models", agent.CommandBase(a.Command))
 		m.step, m.input = agentPickModelTyping, ""
 		return m, nil
@@ -54,11 +58,32 @@ func (m AgentPickerModel) applyModels(msg preferredModelsMsg) AgentPickerModel {
 		if m.loadErr == nil {
 			m.loadErr = fmt.Errorf("no models listed")
 		}
+		if static := agent.FallbackModels(m.pending.Command); len(static) > 0 {
+			// aiman's own list, with the listing error above it.
+			m.models, m.dynamic, m.step, m.pick = static, false, agentPickModel, 0
+			return m
+		}
 		m.step, m.input = agentPickModelTyping, ""
 		return m
 	}
+	m.loadErr = nil
 	m.models, m.step, m.pick = msg.models, agentPickProvider, 0
+	if !hasProviders(msg.models) {
+		// One flat list (Codex, Grok, agy): no provider step, and the rows
+		// keep Default and Other as a catalog does.
+		m.dynamic, m.step = false, agentPickModel
+	}
 	return m
+}
+
+// hasProviders reports whether a listing splits its models by provider.
+func hasProviders(models []agent.ModelOption) bool {
+	for _, o := range models {
+		if o.Provider != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m AgentPickerModel) confirm(a domain.Agent, model string) AgentPickerModel {
@@ -228,6 +253,9 @@ func (m AgentPickerModel) viewModelPick() string {
 		b.WriteString("  Provider:\n")
 		m.writeModelRows(&b, dim)
 	case agentPickModel:
+		if m.loadErr != nil {
+			b.WriteString(dim.Render(fmt.Sprintf("  Could not list models on %s (%v); showing aiman's list", m.host, m.loadErr)) + "\n")
+		}
 		label := "  Model"
 		if m.provider != "" {
 			label += " (" + m.provider + ")"

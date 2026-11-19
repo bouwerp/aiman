@@ -361,6 +361,7 @@ func (t *Tracker) storeContext(ctx context.Context, meta domain.UsageSessionMeta
 		meta.LastInputTokens = sample.Tokens
 		meta.ContextWindow = int64(window)
 		meta.ContextSource = source
+		meta.LastModel = strings.TrimSuffix(sample.Model, "@fast")
 	}
 	meta.HasContext = true
 	if err := t.store.UpsertUsageSession(ctx, meta); err != nil {

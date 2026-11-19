@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ModelOption is one model an agent can launch with. ID is the exact value
@@ -24,9 +25,20 @@ type ProviderCount struct {
 }
 
 // HasDynamicModels reports whether the agent's models are listed by running
-// the agent on the host rather than read from LaunchCatalog. Only Pi does.
+// the agent on the host (modelListers) rather than read from LaunchCatalog.
 func HasDynamicModels(command string) bool {
-	return CommandBase(command) == "pi"
+	_, ok := modelListers[CommandBase(command)]
+	return ok
+}
+
+// FallbackModels is what a picker shows when the host's listing is not
+// available: the static catalog, except for Pi, whose models depend on the
+// providers set up on that host, so a fixed list would mislead.
+func FallbackModels(command string) []ModelOption {
+	if CommandBase(command) == "pi" {
+		return nil
+	}
+	return StaticModels(command)
 }
 
 // StaticModels lists the agent's LaunchCatalog models. Unknown agents have none.
@@ -41,11 +53,6 @@ func StaticModels(command string) []ModelOption {
 	}
 	return out
 }
-
-// piListModelsCmd lists every Pi model on the host. It adds the usual user
-// bin directories so a non-login SSH shell still finds pi, and drops stderr
-// so warnings do not reach the parser.
-const piListModelsCmd = `bash -lc 'export PATH="$PATH:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin"; pi --list-models 2>/dev/null'`
 
 // ParsePiModels reads `pi --list-models` output: a header row
 // (provider model context max-out thinking images) and one row per model.
@@ -86,44 +93,76 @@ func ModelProviders(opts []ModelOption) []ProviderCount {
 }
 
 // ModelCache lists agent models per host and keeps each successful dynamic
-// listing for the life of the cache. Failures are not kept, so a retry runs
-// the command again.
+// listing for TTL (zero is the life of the cache). Failures are not kept, so
+// a retry runs the command again.
 type ModelCache struct {
+	// TTL is how long a listing stands; zero keeps it until Reset.
+	TTL time.Duration
+	// Now is the clock; nil is time.Now.
+	Now func() time.Time
+
 	mu    sync.Mutex
-	lists map[string][]ModelOption
+	lists map[string]cachedModels
+}
+
+type cachedModels struct {
+	opts []ModelOption
+	at   time.Time
 }
 
 // NewModelCache returns an empty cache.
 func NewModelCache() *ModelCache {
-	return &ModelCache{lists: map[string][]ModelOption{}}
+	return &ModelCache{lists: map[string]cachedModels{}}
 }
 
-// List returns the models for command on host: the static catalog, or for
-// Pi the host's `pi --list-models` output.
+func (c *ModelCache) now() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
+}
+
+// Reset drops every listing, so the next List runs the agents again (after
+// an agent update, or a status call that asks for a refresh).
+func (c *ModelCache) Reset() {
+	c.mu.Lock()
+	c.lists = map[string]cachedModels{}
+	c.mu.Unlock()
+}
+
+// List returns the models for command on host: what the agent's own listing
+// command prints there (modelListers), else the static catalog. A failed or
+// empty listing is an error, so the caller can say why and offer typing.
 func (c *ModelCache) List(ctx context.Context, host string, exec Executor, command string) ([]ModelOption, error) {
-	if !HasDynamicModels(command) {
+	base := CommandBase(command)
+	lister, ok := modelListers[base]
+	if !ok {
 		return StaticModels(command), nil
 	}
-	key := host + "\x00" + CommandBase(command)
+	key := host + "\x00" + base
 	c.mu.Lock()
 	cached, ok := c.lists[key]
 	c.mu.Unlock()
-	if ok {
-		return cached, nil
+	if ok && (c.TTL <= 0 || c.now().Sub(cached.at) < c.TTL) {
+		return cached.opts, nil
 	}
 	if exec == nil {
 		return nil, errors.New("no remote to list models on")
 	}
-	out, err := exec.Execute(ctx, piListModelsCmd)
-	if err != nil {
-		return nil, fmt.Errorf("pi --list-models on %s: %w", host, err)
+	bin := lister.bin
+	if bin == "" {
+		bin = base
 	}
-	opts := ParsePiModels(out)
+	out, err := exec.Execute(ctx, listModelsCmd(bin, lister.args))
+	if err != nil {
+		return nil, fmt.Errorf("%s %s on %s: %w", bin, lister.args, host, err)
+	}
+	opts := lister.parse(out)
 	if len(opts) == 0 {
-		return nil, fmt.Errorf("pi --list-models on %s listed no models", host)
+		return nil, fmt.Errorf("%s %s on %s listed no models", bin, lister.args, host)
 	}
 	c.mu.Lock()
-	c.lists[key] = opts
+	c.lists[key] = cachedModels{opts: opts, at: c.now()}
 	c.mu.Unlock()
 	return opts, nil
 }

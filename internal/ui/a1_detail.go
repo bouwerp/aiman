@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/limits"
 	"github.com/bouwerp/aiman/internal/review"
 	"github.com/charmbracelet/x/ansi"
@@ -19,13 +20,16 @@ import (
 // detailMetaExtras is cost, token, cache, and review state for one session.
 // usage.get fills the cost fields. Reviewing and WatchingPR are not part of that report.
 type detailMetaExtras struct {
-	CostUSD        float64
-	HasCost        bool
-	Tokens         int64
-	CacheRatio     float64
-	HasCache       bool
-	ContextPct     float64 // latest turn / window; 0 when the window is unset
-	ContextWindow  int64   // 0 hides the gauge
+	CostUSD       float64
+	HasCost       bool
+	Tokens        int64
+	CacheRatio    float64
+	HasCache      bool
+	ContextPct    float64 // latest turn / window; 0 when the window is unset
+	ContextWindow int64   // 0 hides the gauge
+	// Model is the model id of the latest turn (usage.get), what an alias
+	// such as "fable" resolved to; empty before the first turn.
+	Model          string
 	BudgetPct      float64 // used / budget; 0 hides the marker
 	BudgetState    string  // "", "warn", "over"
 	Reviewing      bool
@@ -64,7 +68,7 @@ func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width i
 			parts = append(parts, dimText(text))
 		}
 	}
-	add(metaAgent(s))
+	add(metaAgent(s, x.Model))
 	add(s.Tier)
 	if !s.CreatedAt.IsZero() {
 		add(shortElapsed(now.Sub(s.CreatedAt)))
@@ -152,8 +156,10 @@ func contextGaugeColor(pct float64) color.Color {
 	}
 }
 
-func metaAgent(s domain.Session) string {
-	return strings.TrimSpace(strings.TrimSpace(s.AgentName) + " " + strings.TrimSpace(s.AgentModel))
+// metaAgent is the agent and its model; resolved, when the transcript has
+// one, is shown beside the launch value: "Claude Code fable → Fable 5.2".
+func metaAgent(s domain.Session, resolved string) string {
+	return strings.TrimSpace(strings.TrimSpace(s.AgentName) + " " + agent.ModelLabel(s.AgentModel, resolved))
 }
 
 // shortElapsed is the age of a session on the meta line.

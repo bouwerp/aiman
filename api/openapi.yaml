@@ -775,6 +775,7 @@ components:
             - agents.status
             - agents.update
             - agents.move_prefix
+            - agents.models
             - harness.up
             - harness.check
             - harness.status

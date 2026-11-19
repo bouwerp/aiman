@@ -343,7 +343,8 @@ func (f usageFixture) UsageBuckets(_ context.Context, ids []string, _ time.Time)
 	}
 	var out []domain.UsageBucket
 	for _, b := range f.buckets {
-		if _, ok := want[b.SessionID]; ok {
+		// nil ids is every session, as in the sqlite store.
+		if _, ok := want[b.SessionID]; ok || ids == nil {
 			out = append(out, b)
 		}
 	}
