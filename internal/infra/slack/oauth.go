@@ -153,21 +153,7 @@ func apiJoin(method string) string {
 }
 
 func userTokenFromAccess(raw []byte) (Credentials, error) {
-	var out struct {
-		OK           bool   `json:"ok"`
-		Error        string `json:"error"`
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		AuthedUser   struct {
-			ID          string `json:"id"`
-			AccessToken string `json:"access_token"`
-			Scope       string `json:"scope"`
-		} `json:"authed_user"`
-		Team struct {
-			Name string `json:"name"`
-			ID   string `json:"id"`
-		} `json:"team"`
-	}
+	var out accessAnswer
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return Credentials{}, fmt.Errorf("slack oauth.v2.access: bad response")
 	}
@@ -178,26 +164,14 @@ func userTokenFromAccess(raw []byte) (Credentials, error) {
 		}
 		return Credentials{}, &apiFailure{Method: "oauth.v2.access", Code: code}
 	}
-	token := out.AuthedUser.AccessToken
-	if token == "" {
-		token = out.AccessToken
-	}
-	if err := requireUserToken(token); err != nil {
+	creds := out.credentials(time.Now())
+	if err := requireUserToken(creds.AccessToken); err != nil {
 		return Credentials{}, err
 	}
 	if err := scopeGap(out.AuthedUser.Scope); err != nil {
 		return Credentials{}, err
 	}
-	team := out.Team.Name
-	if team == "" {
-		team = out.Team.ID
-	}
-	return Credentials{
-		AccessToken:  token,
-		RefreshToken: out.RefreshToken,
-		UserID:       out.AuthedUser.ID,
-		Team:         team,
-	}, nil
+	return creds, nil
 }
 
 // CompleteLogin listens on the loopback redirect until the member approves,

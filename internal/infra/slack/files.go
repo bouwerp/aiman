@@ -61,7 +61,12 @@ func (c *Client) FileRead(ctx context.Context, id string, w io.Writer) (File, er
 	if err != nil {
 		return f, fmt.Errorf("slack file %s: %w", id, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	// FileInfo just renewed the token when it needed it.
+	token, err := c.token(ctx, "")
+	if err != nil {
+		return f, fmt.Errorf("slack file %s: %w", id, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := c.http().Do(req)
 	if err != nil {
 		return f, fmt.Errorf("slack file %s: %w", id, err)
