@@ -128,8 +128,9 @@ func runHarnessConsole(args []string) error {
 	})
 }
 
-// pickConsoleRemote takes --remote (ignoring case), else the active remote,
-// else the only one.
+// pickConsoleRemote takes --remote (a name ignoring case, else a unique
+// user@host; see config.FindRemote), else the active remote, else the only
+// one.
 func pickConsoleRemote(remotes []config.Remote, active, name string) (config.Remote, error) {
 	if name == "" {
 		name = active
@@ -138,14 +139,9 @@ func pickConsoleRemote(remotes []config.Remote, active, name string) (config.Rem
 		if len(remotes) == 1 {
 			return remotes[0], nil
 		}
-		return config.Remote{}, errors.New("name the remote with --remote NAME")
+		return config.Remote{}, fmt.Errorf("name the remote with --remote NAME; remotes: %s (aiman remotes lists them)", config.RemoteNames(remotes))
 	}
-	for _, r := range remotes {
-		if strings.EqualFold(r.Name, name) {
-			return r, nil
-		}
-	}
-	return config.Remote{}, fmt.Errorf("no remote named %s in ~/.aiman/config.yaml", name)
+	return config.FindRemote(remotes, name)
 }
 
 // errConsoleStopped ends the console after a forward died.

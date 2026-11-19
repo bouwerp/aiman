@@ -230,6 +230,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "  usage            token totals and ~$ cost (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  limits           each provider's allowance or balance left (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  agents           agent CLI versions and updates (needs serve)\n")
+			fmt.Fprintf(os.Stderr, "  remotes          the remotes in ~/.aiman/config.yaml, the names --remote takes\n")
 			fmt.Fprintf(os.Stderr, "  pty              manage built-in PTY sessions (needs serve)\n")
 			fmt.Fprintf(os.Stderr, "  context          ls/find/get/put/pack shared notes (JSON; files if serve is down)\n")
 			fmt.Fprintf(os.Stderr, "  slack            post, read, and wait on the Aiman Slack app (JSON)\n")
@@ -329,6 +330,8 @@ func runSubcommand(rest []string) (handled bool, err error) {
 		return true, runLimitsOrResources(rest, os.Stdin, os.Stdout)
 	case "agents":
 		return true, runAgents(rest[1:], os.Stdout)
+	case "remotes":
+		return true, runRemotes(rest[1:], os.Stdout)
 	case "aws":
 		if len(rest) > 1 && rest[1] == "log" {
 			return true, runAWSLog(rest[2:], callAWSLog, os.Stdout)
