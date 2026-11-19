@@ -48,18 +48,18 @@ func slackLoginTimeout(flags map[string]string) (time.Duration, string, error) {
 	return d, raw, nil
 }
 
-// slackRemoteTarget finds --remote in the laptop config, ignoring case.
+// slackRemoteTarget finds --remote in the laptop config (config.FindRemote:
+// a name ignoring case, else a unique user@host).
 func slackRemoteTarget(name string) (string, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return "", fmt.Errorf("cannot read the laptop config for remote %s: %v", name, err)
 	}
-	for _, r := range cfg.Remotes {
-		if strings.EqualFold(r.Name, name) {
-			return ssh.Target(r.Host, r.User), nil
-		}
+	r, err := config.FindRemote(cfg.Remotes, name)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("no remote named %s in ~/.aiman/config.yaml", name)
+	return ssh.Target(r.Host, r.User), nil
 }
 
 // runSlackAuthLoginRemote logs in on the host over one ssh process that
