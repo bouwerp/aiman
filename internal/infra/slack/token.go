@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Credentials is the host Slack OAuth file. The access token is a user
@@ -14,8 +16,11 @@ type Credentials struct {
 	ClientID     string `json:"client_id,omitempty"`
 	AccessToken  string `json:"access_token,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
-	UserID       string `json:"user_id,omitempty"`
-	Team         string `json:"team,omitempty"`
+	// ExpiresAt is when a rotating access token expires; zero is a token
+	// that does not expire.
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
+	UserID    string    `json:"user_id,omitempty"`
+	Team      string    `json:"team,omitempty"`
 }
 
 // ReadToken returns AIMAN_SLACK_USER_TOKEN when it is set, otherwise the
@@ -57,8 +62,8 @@ func Load(path string) (Credentials, error) {
 	return creds, nil
 }
 
-// Store writes credentials mode 0600. WriteFile keeps the mode of a file
-// that already exists, so the mode is set again after the write.
+// Store writes credentials mode 0600 to a temporary file and renames it over
+// path, so a reader never sees half a file.
 func Store(path string, creds Credentials) error {
 	if creds.AccessToken != "" {
 		if err := requireUserToken(creds.AccessToken); err != nil {
@@ -73,10 +78,23 @@ func Store(path string, creds Credentials) error {
 		return err
 	}
 	raw = append(raw, '\n')
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".slack-oauth-*.tmp")
+	if err != nil {
 		return fmt.Errorf("write slack credentials: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write slack credentials: %w", err)
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write slack credentials: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write slack credentials: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("write slack credentials: %w", err)
 	}
 	return nil

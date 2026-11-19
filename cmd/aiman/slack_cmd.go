@@ -375,6 +375,9 @@ func slackAPI(errOut io.Writer, err error) error {
 	if errors.As(err, &gap) {
 		return slackFail(errOut, "slack_app_settings", err.Error())
 	}
+	if errors.Is(err, slack.ErrTokenExpired) {
+		return slackFail(errOut, "slack_unconfigured", err.Error())
+	}
 	return slackFail(errOut, "slack_api", err.Error())
 }
 
@@ -393,11 +396,10 @@ func slackClient(ctx context.Context) (*slack.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	tok, err := slack.ReadToken(path)
-	if err != nil {
+	if _, err := slack.ReadToken(path); err != nil {
 		return nil, err
 	}
-	c := &slack.Client{Token: tok}
+	c := &slack.Client{Tokens: slack.Tokens(path)}
 	if rec, ok := ctx.Value(slackRawKey{}).(*slackRawRecorder); ok {
 		c.Raw = rec.record
 	}

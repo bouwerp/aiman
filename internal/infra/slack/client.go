@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,8 +21,11 @@ var APIBase = "https://slack.com/api/"
 // Client calls the Slack Web API as the Aiman bot.
 type Client struct {
 	Token string
-	Base  string
-	HTTP  *http.Client
+	// Tokens, when set, supplies the token for each call in place of Token
+	// and renews it once when Slack answers token_expired.
+	Tokens TokenSource
+	Base   string
+	HTTP   *http.Client
 	// Poll is how often Wait re-reads a thread. Zero means 2s.
 	Poll time.Duration
 	// Sleep waits out a 429 Retry-After. Nil is a timer that honours ctx.
@@ -189,13 +193,28 @@ func (c *Client) get(ctx context.Context, method string, query url.Values, out a
 // Retry-After asks, at most maxRetries times. A non-nil hdr receives the
 // headers of the last answer that was not rate limited.
 func (c *Client) do(ctx context.Context, method string, out any, hdr *http.Header, build func() (*http.Request, error)) error {
+	token, err := c.token(ctx, "")
+	if err != nil {
+		return fmt.Errorf("slack %s: %w", method, err)
+	}
+	renewed := false
 	for attempt := 0; ; attempt++ {
 		req, err := build()
 		if err != nil {
 			return fmt.Errorf("slack %s: %w", method, err)
 		}
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+		req.Header.Set("Authorization", "Bearer "+token)
 		wait, err := c.send(req, method, out, hdr)
+		var fail *apiFailure
+		if c.Tokens != nil && !renewed && errors.As(err, &fail) && fail.Code == "token_expired" {
+			// Slack refused the call before acting on it, so it is sent again
+			// with the renewed token.
+			renewed = true
+			if token, err = c.token(ctx, token); err != nil {
+				return fmt.Errorf("slack %s: %w", method, err)
+			}
+			continue
+		}
 		if wait < 0 || attempt >= maxRetries {
 			return err
 		}
@@ -261,6 +280,15 @@ func retryAfter(h string) time.Duration {
 		return time.Second
 	}
 	return time.Duration(n) * time.Second
+}
+
+// token is the token for a call: the source's, renewed when stale is the
+// token Slack just refused, else Token.
+func (c *Client) token(ctx context.Context, stale string) (string, error) {
+	if c.Tokens == nil {
+		return c.Token, nil
+	}
+	return c.Tokens.Token(ctx, stale)
 }
 
 func (c *Client) maxBody() int64 {

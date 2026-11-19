@@ -242,8 +242,9 @@ func runServe() error {
 		sinks = append(sinks, &notify.WebhookSink{URL: n.Webhook})
 	}
 	if n.SlackChannel != "" {
-		if tok, err := slack.ReadToken(slack.TokenPath(dir)); err == nil {
-			sinks = append(sinks, &notify.SlackSink{Client: &slack.Client{Token: tok}, Channel: n.SlackChannel})
+		path := slack.TokenPath(dir)
+		if _, err := slack.ReadToken(path); err == nil {
+			sinks = append(sinks, &notify.SlackSink{Client: &slack.Client{Tokens: slack.Tokens(path)}, Channel: n.SlackChannel})
 		} else {
 			log.Printf("notify: slack_channel set but no Slack user token; run aiman slack auth")
 		}
