@@ -140,6 +140,27 @@ func TestTerminationBatchKeepsChildrenWhenOptedOut(t *testing.T) {
 	}
 }
 
+// serve dropped the row for good: a visible child leaves the list too, unless
+// this TUI is tearing it down itself.
+func TestForgottenRowLeavesTheList(t *testing.T) {
+	m := childModel(
+		domain.Session{ID: "root", Name: "root"},
+		domain.Session{ID: "kid", Name: "kid", ParentID: "root"},
+		domain.Session{ID: "busy", Name: "busy", ParentID: "root"},
+	)
+	m.terminatingSessions["busy"] = &terminatingSession{session: domain.Session{ID: "busy"}}
+	m.dropForgottenRow("kid")
+	m.dropForgottenRow("busy")
+	m.dropForgottenRow("unknown")
+	var ids []string
+	for _, s := range m.allSessions {
+		ids = append(ids, s.ID)
+	}
+	if strings.Join(ids, ",") != "root,busy" {
+		t.Fatalf("rows %v, want [root busy]", ids)
+	}
+}
+
 func TestPluralSessions(t *testing.T) {
 	if got := pluralSessions(1); got != "1 child session" {
 		t.Errorf("got %q", got)

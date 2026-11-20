@@ -22,6 +22,32 @@ func staleHandoverRow(s domain.Session) bool {
 	return handoverChildTerminalRe.MatchString(s.Name) || handoverChildTerminalRe.MatchString(s.TerminalName)
 }
 
+// dropForgottenRow removes a row serve dropped for good (terminate, forget, a
+// landed child the tracker ended), in memory and in the laptop DB. A row this
+// TUI is tearing down itself is left to its own teardown.
+func (m *Model) dropForgottenRow(id string) {
+	if _, terminating := m.terminatingSessions[id]; terminating {
+		return
+	}
+	idx := -1
+	for i, s := range m.allSessions {
+		if s.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	m.allSessions = append(m.allSessions[:idx], m.allSessions[idx+1:]...)
+	if m.db != nil {
+		if err := m.db.Delete(context.Background(), id); err != nil {
+			m.log("session_forgotten: delete row %s: %v", id, err)
+		}
+	}
+	m.maybeRefreshSessionList()
+}
+
 // dropGoneHelperRow removes a hidden helper's row, in memory and in the
 // laptop DB, once serve reports its terminal gone. Any other row, a visible
 // child included, stays listed for a scan to judge: the user may revive it.
