@@ -26,6 +26,10 @@ const maxBody = 64 << 10
 
 var routeMaxBody = map[string]int64{}
 
+// CodeMethodNotAllowed refuses a call to a serve method outside
+// Options.Methods.
+const CodeMethodNotAllowed = "method_not_allowed"
+
 //go:embed web
 var webFS embed.FS
 
@@ -108,6 +112,8 @@ type apiError struct {
 func toAPIError(err error) *apiError {
 	var re *usecase.RPCError
 	switch {
+	case errors.Is(err, errMethodNotAllowed):
+		return &apiError{Code: CodeMethodNotAllowed, Message: err.Error()}
 	case errors.As(err, &re):
 		return &apiError{Code: re.Code, Message: re.Message}
 	case errors.Is(err, usecase.ErrServeNotRunning):
@@ -136,14 +142,24 @@ func writeError(w http.ResponseWriter, code int, e *apiError) {
 func (s *Server) relay(w http.ResponseWriter, r *http.Request, method string, params map[string]any) (json.RawMessage, bool) {
 	raw, err := s.call(r.Context(), method, params)
 	if err != nil {
-		e := toAPIError(err)
-		s.logf("%s refused: %s", method, e.Code)
-		writeError(w, http.StatusBadGateway, e)
+		s.writeCallError(w, method, err)
 		return nil, false
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(raw)
 	return raw, true
+}
+
+// writeCallError answers a failed call: 403 for a method outside the
+// console's set, else serve's refusal as 502.
+func (s *Server) writeCallError(w http.ResponseWriter, method string, err error) {
+	e := toAPIError(err)
+	s.logf("%s refused: %s", method, e.Code)
+	code := http.StatusBadGateway
+	if e.Code == CodeMethodNotAllowed {
+		code = http.StatusForbidden
+	}
+	writeError(w, code, e)
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -190,13 +206,16 @@ type stateView struct {
 	Forwards     []forwardView `json:"forwards"`
 	ForwardError string        `json:"forward_error,omitempty"`
 	PolledAt     *time.Time    `json:"polled_at,omitempty"`
+	// Shared is a console served to other machines (Options.Hosts): the
+	// page hides starting and stopping runs and the editor launch entry.
+	Shared bool `json:"shared,omitempty"`
 	// Browser is the Debug tab's Browser section (browser.go).
 	Browser *browserView `json:"browser,omitempty"`
 }
 
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
-	v := stateView{Session: s.session, Pinned: s.pinned, Run: s.run, Error: s.runErr, Forwards: s.fwds, ForwardError: s.fwErr}
+	v := stateView{Session: s.session, Pinned: s.pinned, Run: s.run, Error: s.runErr, Forwards: s.fwds, ForwardError: s.fwErr, Shared: s.shared()}
 	if !s.polled.IsZero() {
 		t := s.polled
 		v.PolledAt = &t

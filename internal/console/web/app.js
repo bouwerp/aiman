@@ -187,7 +187,8 @@
       );
       st.dataset.state = run.state;
       st.textContent = run.state;
-      $("down").hidden = !(run.state === "starting" || run.state === "ready");
+      // A shared console never starts or stops runs: the agent owns them.
+      $("down").hidden = state.shared || !(run.state === "starting" || run.state === "ready");
       document.title = run.scenario + " (" + run.state + ") - Harness console";
     } else {
       $("scenario").textContent = "Harness console";
@@ -457,6 +458,7 @@
   let lastErr = null;
   function render() {
     const run = state.run;
+    $("up-form").hidden = !!state.shared;
     renderHeader(run, state.error);
     renderApps();
     renderSteps(run);
