@@ -311,3 +311,123 @@ func TestClaudeMetaLookupRejectsBadFile(t *testing.T) {
 		}
 	}
 }
+
+func claudeNotify(uuid, parent, body string) claudeJSON {
+	l := claudeUser(uuid, parent, "<task-notification>\n"+body+"\n</task-notification>")
+	l["origin"] = claudeJSON{"kind": "task-notification"}
+	return l
+}
+
+// claudeQueuedNotify is a notification Claude queued while the agent was busy.
+func claudeQueuedNotify(uuid, parent, body string) claudeJSON {
+	l := claudeAttachment(uuid, parent)
+	l["attachment"] = claudeJSON{"type": "queued_command", "commandMode": "task-notification",
+		"prompt": "<task-notification>\n" + body + "\n</task-notification>", "origin": claudeJSON{"kind": "task-notification"}}
+	return l
+}
+
+func claudeAgentCall(uuid, parent, toolID, agentID string) []claudeJSON {
+	call := claudeAssistant(uuid, parent, claudeJSON{"type": "tool_use", "id": toolID, "name": "Agent",
+		"input": claudeJSON{"description": "fix it", "subagent_type": "general-purpose"}})
+	res := claudeResult(uuid+"r", uuid, toolID)
+	res["toolUseResult"] = claudeJSON{"agentId": agentID, "status": "async_launched"}
+	return []claudeJSON{call, res}
+}
+
+func lastAdd(all []Delta) *Item {
+	for i := len(all) - 1; i >= 0; i-- {
+		if all[i].Add != nil {
+			return all[i].Add
+		}
+	}
+	return nil
+}
+
+// lastItem is the newest item a feed added or changed.
+func lastItem(ds []Delta) *Item {
+	for i := len(ds) - 1; i >= 0; i-- {
+		if ds[i].Add != nil {
+			return ds[i].Add
+		}
+		if ds[i].Update != nil {
+			return ds[i].Update
+		}
+	}
+	return nil
+}
+
+// A reopened sub-agent runs again, and each notification is a copy of its
+// item where it came, so the newest one leads to the conversation. Reports
+// with nothing between them share one card.
+func TestClaudeSubagentResumedAndReported(t *testing.T) {
+	n := NewClaude()
+	lines := append([]claudeJSON{claudeUser("p1", "", "go")}, claudeAgentCall("a1", "p1", "t1", "ag1")...)
+	all, _ := feedClaude(t, n, lines...)
+	first := lastAdd(all)
+	if first == nil || first.Kind != KindSubagent {
+		t.Fatalf("no subagent item: %+v", first)
+	}
+	steps := []struct {
+		line    claudeJSON
+		text    string
+		state   string
+		newCard bool
+	}{
+		{claudeNotify("n1", "a1r", "<task-id>ag1</task-id>\n<status>completed</status>\n<summary>Agent \"fix it\" completed</summary>"), "Sub-agent ag1 completed", SubagentDone, true},
+		{claudeQueuedNotify("n2", "n1", "<task-id>ag1</task-id>\n<summary>Agent \"fix it\" was resumed by the user</summary>\n<note>The user resumed this agent.</note>"), "Sub-agent ag1 resumed", SubagentRunning, false},
+		{claudeAssistant("x1", "n2", claudeText("it is working again")), "", "", false},
+		{claudeNotify("n3", "x1", "<task-id>ag1</task-id>\n<status>completed</status>\n<summary>done</summary>"), "Sub-agent ag1 completed", SubagentDone, true},
+	}
+	seen := map[string]bool{first.ID: true}
+	prev := ""
+	for _, st := range steps {
+		ds, _ := feedClaude(t, n, st.line)
+		if st.text == "" {
+			continue
+		}
+		card := lastItem(ds)
+		if card == nil || card.Kind != KindSubagent || card.Text != st.text || card.Subagent.ID != "ag1" || card.Subagent.State != st.state {
+			t.Fatalf("after %q: card %+v", st.text, card)
+		}
+		if st.newCard == seen[card.ID] || (!st.newCard && card.ID != prev) {
+			t.Fatalf("after %q: card %s, new card wanted %v", st.text, card.ID, st.newCard)
+		}
+		seen[card.ID] = true
+		prev = card.ID
+		if st.state == SubagentRunning && card.Subagent.EndedAt != nil {
+			t.Errorf("a resumed sub-agent keeps its end time: %+v", card.Subagent)
+		}
+	}
+}
+
+// Words the person sent while the agent worked: a queued prompt shows as a
+// user item once even when Claude also writes it as a turn, and a message
+// relayed into a sub-agent loses Claude's wrapping.
+func TestClaudeMidTurnPrompts(t *testing.T) {
+	queued := claudeAttachment("q1", "a1")
+	queued["attachment"] = claudeJSON{"type": "queued_command", "prompt": " and then release ", "commandMode": "prompt", "origin": claudeJSON{"kind": "human"}}
+	note := claudeAttachment("q2", "q1")
+	note["attachment"] = claudeJSON{"type": "queued_command", "prompt": "<task-notification>x</task-notification>", "commandMode": "task-notification", "origin": claudeJSON{"kind": "task-notification"}}
+	relayed := claudeUser("m1", "q2", "The user sent a new message while you were working:\nKeep opt out\n\nThis is how Claude Code surfaces messages the user sends mid-turn, more text.")
+	relayed["isMeta"] = true
+	relayed["origin"] = claudeJSON{"kind": "human"}
+	otherMeta := claudeUser("m2", "m1", "Caveat: internal")
+	otherMeta["isMeta"] = true
+	all, _ := feedClaude(t, NewClaude(),
+		claudeUser("p1", "", "go"),
+		claudeAssistant("a1", "p1", claudeText("working")),
+		queued, note, relayed, otherMeta,
+		claudeUser("p2", "m2", "and then release"),
+		claudeUser("p3", "p2", "and then release"),
+	)
+	var users []string
+	for _, d := range all {
+		if d.Add != nil && d.Add.Kind == KindUser {
+			users = append(users, d.Add.Text)
+		}
+	}
+	want := []string{"go", "and then release", "Keep opt out", "and then release"}
+	if strings.Join(users, "|") != strings.Join(want, "|") {
+		t.Fatalf("user items %q, want %q", users, want)
+	}
+}

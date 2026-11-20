@@ -28,6 +28,14 @@ type claudeLine struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Attachment    struct {
+		Type        string          `json:"type"`
+		Prompt      json.RawMessage `json:"prompt"`
+		CommandMode string          `json:"commandMode"`
+		Origin      struct {
+			Kind string `json:"kind"`
+		} `json:"origin"`
+	} `json:"attachment"`
 }
 
 // claudeBlock is one message.content entry.
@@ -96,6 +104,59 @@ func (e *claudeEvent) isNotification() bool {
 		return e.Origin.Kind == claudeNotificationKind
 	}
 	return strings.HasPrefix(e.text, claudeNotificationTag)
+}
+
+// queuedNotification is the text of a task-notification Claude queued while
+// the agent was busy. Claude writes a sub-agent's "resumed by the user" notice
+// only this way.
+func (e *claudeEvent) queuedNotification() string {
+	a := e.Attachment
+	if e.Type != "attachment" || a.Type != "queued_command" || a.CommandMode != claudeNotificationKind {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(a.Prompt, &text) != nil || !strings.HasPrefix(text, claudeNotificationTag) {
+		return ""
+	}
+	return text
+}
+
+// queuedPrompt is the words of a prompt the person sent while the agent was
+// busy. Claude records it only as a queued_command attachment when the agent
+// takes it mid-turn.
+func (e *claudeEvent) queuedPrompt() string {
+	a := e.Attachment
+	if e.Type != "attachment" || a.Type != "queued_command" || a.CommandMode != "prompt" || a.Origin.Kind != "human" {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(a.Prompt, &text) != nil {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+// claudeMidTurnLead and claudeMidTurnTail wrap a message the person sent to an
+// agent that was working, as Claude delivers it to a sub-agent.
+const (
+	claudeMidTurnLead = "The user sent a new message while you were working:\n"
+	claudeMidTurnTail = "\n\nThis is how Claude Code surfaces messages the user sends mid-turn"
+)
+
+// midTurnMessage is the words of a person's message Claude wrapped and marked
+// meta, without the wrapping.
+func (e *claudeEvent) midTurnMessage() string {
+	if e.Type != "user" || !e.IsMeta || e.Origin.Kind != "human" {
+		return ""
+	}
+	text, ok := strings.CutPrefix(e.plainText(), claudeMidTurnLead)
+	if !ok {
+		return ""
+	}
+	if i := strings.LastIndex(text, claudeMidTurnTail); i >= 0 {
+		text = text[:i]
+	}
+	return strings.TrimSpace(text)
 }
 
 // opensTurn reports a line that holds words a person typed, and nothing the

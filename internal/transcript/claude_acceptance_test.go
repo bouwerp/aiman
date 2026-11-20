@@ -263,8 +263,10 @@ func TestClaudeItems(t *testing.T) {
 	var kinds []transcript.ItemKind
 	for i, f := range fed {
 		var got []transcript.ItemKind
+		subs := 0
 		for _, it := range adds(f.deltas) {
 			if it.Kind == transcript.KindSubagent {
+				subs++
 				continue
 			}
 			got = append(got, it.Kind)
@@ -286,6 +288,10 @@ func TestClaudeItems(t *testing.T) {
 			}
 		}
 		want := expectedKinds(f.raw)
+		// A sub-agent's notification is a copy of its item, not a system line.
+		if isNotification(f.raw) && subs > 0 {
+			want = nil
+		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("line %d (%s/%s): added %v, want %v", i+1, str(f.raw, "type"), str(f.raw, "subtype"), got, want)
 		}
@@ -525,6 +531,11 @@ func TestClaudeSubagents(t *testing.T) {
 				end := updateFor(ds, started.ID)
 				if end == nil || end.Subagent == nil || end.Subagent.State != transcript.SubagentDone || end.Rev != pos[i] {
 					t.Errorf("notification after meta.finished: update = %+v, want state done at rev %d", end, pos[i])
+				}
+				card := subagentItem(adds(ds), agentID)
+				if card == nil || card.ID == started.ID || card.Subagent.State != transcript.SubagentDone ||
+					!strings.HasPrefix(card.Text, "Sub-agent "+agentID+" ") {
+					t.Errorf("notification card = %+v, want a new done copy of %s", card, agentID)
 				}
 			}
 		}
