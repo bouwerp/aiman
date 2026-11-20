@@ -95,6 +95,51 @@ func TestTerminateRemovesAWorktreeWhenEverySharerIsGoing(t *testing.T) {
 	}
 }
 
+// A child never outlives its parent: confirming the parent's teardown starts
+// every descendant's too, with no tick box to set.
+func TestTerminationBatchAlwaysTakesTheChildren(t *testing.T) {
+	m := childModel(
+		domain.Session{ID: "root", Name: "root"},
+		domain.Session{ID: "kid", Name: "kid", ParentID: "root"},
+		domain.Session{ID: "grandkid", Name: "grandkid", ParentID: "kid"},
+		domain.Session{ID: "unrelated", Name: "unrelated"},
+	)
+	if cmd := m.startTerminationBatch(domain.Session{ID: "root", Name: "root"}, false); cmd == nil {
+		t.Fatal("no teardown started")
+	}
+	for _, id := range []string{"root", "kid", "grandkid"} {
+		if _, ok := m.terminatingSessions[id]; !ok {
+			t.Errorf("%s is not terminating", id)
+		}
+	}
+	if _, ok := m.terminatingSessions["unrelated"]; ok {
+		t.Error("an unrelated session is terminating")
+	}
+}
+
+// The tick box is an opt-out: cleared, only the session goes and the dialog
+// says what staying means. The next batch is back to the default.
+func TestTerminationBatchKeepsChildrenWhenOptedOut(t *testing.T) {
+	m := childModel(
+		domain.Session{ID: "root", Name: "root"},
+		domain.Session{ID: "kid", Name: "kid", ParentID: "root"},
+	)
+	m.terminateKeepChildren = true
+	if !strings.Contains(m.terminateChildrenLines(domain.Session{ID: "root"}), "keep running with no parent") {
+		t.Error("the dialog does not say the children stay")
+	}
+	m.startTerminationBatch(domain.Session{ID: "root", Name: "root"}, false)
+	if _, ok := m.terminatingSessions["kid"]; ok {
+		t.Error("an opted-out child is terminating")
+	}
+	if _, ok := m.terminatingSessions["root"]; !ok {
+		t.Error("root is not terminating")
+	}
+	if m.terminateKeepChildren {
+		t.Error("the opt-out outlived its batch")
+	}
+}
+
 func TestPluralSessions(t *testing.T) {
 	if got := pluralSessions(1); got != "1 child session" {
 		t.Errorf("got %q", got)

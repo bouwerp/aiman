@@ -346,7 +346,7 @@ func TestRPCPassesRefusalDataThrough(t *testing.T) {
 		_ = json.Unmarshal(line, &req)
 		out, _ := server.EncodeResponse(server.Response{ID: req.ID, Error: &server.Error{
 			Code: server.CodeWorktreeDirty, Message: "dirty",
-			Data: server.WorktreeDirtyData{ChangedFiles: 1, Paths: []string{"a.txt"}, UnpushedCommits: 2},
+			Data: server.WorktreeDirtyData{Session: "s1", ChangedFiles: 1, Paths: []string{"a.txt"}, UnpushedCommits: 2},
 		}})
 		_, _ = conn.Write(out)
 	})
@@ -355,7 +355,7 @@ func TestRPCPassesRefusalDataThrough(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("code %d body %s", rec.Code, rec.Body.String())
 	}
-	want := `"data":{"changed_files":1,"paths":["a.txt"],"unpushed_commits":2}`
+	want := `"data":{"changed_files":1,"paths":["a.txt"],"session":"s1","unpushed_commits":2}`
 	if !strings.Contains(rec.Body.String(), want) {
 		t.Fatalf("body %s lacks %s", rec.Body.String(), want)
 	}

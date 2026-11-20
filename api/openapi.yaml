@@ -691,8 +691,13 @@ components:
         (.aiman_* files, the bundled skill, graphify-out, its .gitignore rule)
         does not count, and neither do files the repository ignores, which
         removal also deletes.
-      required: [changed_files, paths, unpushed_commits]
+      required: [session, changed_files, paths, unpushed_commits]
       properties:
+        session:
+          type: string
+          description: >
+            The session whose worktree it is: the target, or a descendant that
+            would be terminated with it.
         changed_files:
           type: integer
           description: Uncommitted and untracked files, all of them.
@@ -957,6 +962,12 @@ components:
             uncommitted changes or unpushed commits (git worktree remove
             --force). The branch is never deleted. Send it only after showing
             the worktree_dirty data and confirming.
+        keep_children:
+          type: boolean
+          description: >
+            session.terminate: leave the session's visible descendants running
+            with no parent, listed in children_left. By default every
+            descendant is terminated with it.
         agent:
           type: string
           description: >
@@ -1371,8 +1382,17 @@ components:
         children_left:
           type: array
           description: >
-            Running child sessions, which keep running with no parent. Warn
-            before confirming; session.list has parent_id.
+            With keep_children, the running child sessions left with no
+            parent. Without it every visible descendant is terminated
+            (children_terminated) and this is absent.
+          items:
+            type: string
+        children_terminated:
+          type: array
+          description: >
+            Descendant sessions terminated with this one, deepest first. Every
+            visible descendant goes with its parent; warn before confirming
+            (session.list has parent_id).
           items:
             type: string
     AWSStatusResult:

@@ -48,21 +48,29 @@ func (m *Model) terminationChildren(s domain.Session) []domain.Session {
 	return collect(s.ID)
 }
 
-// startTerminationBatch tears down the selected session, and its children too
-// when the confirm dialog's tick box was set.
+// terminationBatchChildren is what goes with s: every descendant, unless the
+// confirm dialog's tick box was cleared.
+func (m *Model) terminationBatchChildren(s domain.Session) []domain.Session {
+	if m.terminateKeepChildren {
+		return nil
+	}
+	return m.terminationChildren(s)
+}
+
+// startTerminationBatch tears down the selected session and, unless the
+// confirm dialog opted out, every session descended from it.
 //
 // Children run first for the same reason they are collected deepest-first: the
 // parent's teardown removes the record they hang off.
 func (m *Model) startTerminationBatch(s domain.Session, forced bool) tea.Cmd {
 	var cmds []tea.Cmd
-	if m.terminateWithChildren {
-		for _, kid := range m.terminationChildren(s) {
-			if cmd := m.startBackgroundTerminate(kid, forced); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+	kids := m.terminationBatchChildren(s)
+	m.terminateKeepChildren = false
+	for _, kid := range kids {
+		if cmd := m.startBackgroundTerminate(kid, forced); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
-	m.terminateWithChildren = false
 	if cmd := m.startBackgroundTerminate(s, forced); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -70,6 +78,36 @@ func (m *Model) startTerminationBatch(s domain.Session, forced bool) tea.Cmd {
 		return nil
 	}
 	return tea.Batch(cmds...)
+}
+
+// terminateChildrenLines is the confirm dialog's part about s's descendants:
+// the tick box, then who goes or what staying means.
+func (m *Model) terminateChildrenLines(s domain.Session) string {
+	kids := m.terminationChildren(s)
+	if len(kids) == 0 {
+		return ""
+	}
+	box := "[x]"
+	if m.terminateKeepChildren {
+		box = "[ ]"
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("%s Also terminate %s  %s\n",
+		activeStyle.Render(box), pluralSessions(len(kids)), activeStyle.Render("[c]")+" toggle"))
+	if m.terminateKeepChildren {
+		b.WriteString(statusStyle.Render("Left alone they keep running with no parent.") + "\n\n")
+		return b.String()
+	}
+	const shown = 8
+	for i, kid := range kids {
+		if i == shown {
+			b.WriteString(fmt.Sprintf("  … and %d more\n", len(kids)-shown))
+			break
+		}
+		b.WriteString("  - " + sessionDisplayName(kid) + "\n")
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func pluralSessions(n int) string {
@@ -97,14 +135,17 @@ func (m *Model) worktreeStillInUse(s domain.Session) (string, bool) {
 		if _, terminating := m.terminatingSessions[other.ID]; terminating {
 			continue
 		}
-		name := other.Name
-		if name == "" {
-			name = other.TerminalName
-		}
-		if name == "" {
-			name = other.ID
-		}
-		return name, true
+		return sessionDisplayName(other), true
 	}
 	return "", false
+}
+
+// sessionDisplayName is the name the dialogs show for s.
+func sessionDisplayName(s domain.Session) string {
+	for _, name := range []string{s.Name, s.TerminalName} {
+		if name != "" {
+			return name
+		}
+	}
+	return s.ID
 }

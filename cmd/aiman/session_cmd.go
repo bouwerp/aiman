@@ -211,10 +211,12 @@ func runSession(args []string) error {
 	case "terminate":
 		flags, rest := takeFlags(args[1:])
 		if len(rest) < 1 {
-			writeCLIError(server.CodeInvalidParams, "session terminate <target> [--discard]")
+			writeCLIError(server.CodeInvalidParams, "session terminate <target> [--discard] [--keep-children]")
 			return errUsage
 		}
-		return callAndPrint(sock, "session.terminate", map[string]any{"session": rest[0], "discard": flags["discard"] != ""})
+		return callAndPrint(sock, "session.terminate", map[string]any{
+			"session": rest[0], "discard": flags["discard"] != "", "keep_children": flags["keep-children"] != "",
+		})
 	case "move":
 		flags, rest := takeFlags(args[1:])
 		target := ""
@@ -290,8 +292,8 @@ func sessionCreateParams(flags map[string]string) (map[string]any, error) {
 }
 
 var boolSessionFlags = map[string]bool{
-	"discard": true,
-	"wait":    true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true, "dry-run": true, "if-enabled": true, "gate": true,
+	"discard": true, "keep-children": true,
+	"wait": true, "force": true, "quick": true, "existing": true, "from-stdin": true, "ended": true, "dry-run": true, "if-enabled": true, "gate": true,
 	"existing-branch": true, "orphan": true, "json": true, "consult": true,
 }
 
