@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,6 +71,18 @@ type Options struct {
 	// Log receives one line per request and per refusal. It never holds the
 	// token, a header value or a query string.
 	Log io.Writer
+
+	// Hosts are the Host names, without port, a shared console answers on.
+	// With Hosts, New takes no listener and the console is served through
+	// Handler; without them it listens on 127.0.0.1 only.
+	Hosts []string
+	// Port is the public port the browser reaches a shared console on.
+	Port int
+	// HTTPS says the browser reaches a shared console over https (and wss).
+	HTTPS bool
+	// Methods are the serve methods the console may call; nil allows all.
+	// Any other method is refused with 403 method_not_allowed before serve.
+	Methods []string
 }
 
 // Server is one console.
@@ -81,6 +94,12 @@ type Server struct {
 	ln      net.Listener
 	log     io.Writer
 	handler http.Handler
+	// hosts, https and methods are a shared console's (Options.Hosts, HTTPS
+	// and Methods); hosts is empty for a loopback console, methods nil allows
+	// every method.
+	hosts   []string
+	https   bool
+	methods map[string]bool
 
 	// refreshMu serialises refresh, which owns fw.
 	refreshMu sync.Mutex
@@ -110,6 +129,7 @@ type Server struct {
 }
 
 // New makes a console that will serve on ln, which must listen on 127.0.0.1.
+// A shared console (o.Hosts set) takes no listener: Handler serves it.
 func New(o Options, ln net.Listener) (*Server, error) {
 	if o.RPC == nil || o.Forwarder == nil {
 		return nil, errors.New("console: RPC and Forwarder are required")
@@ -117,9 +137,9 @@ func New(o Options, ln net.Listener) (*Server, error) {
 	if o.Session == "" && o.Run == "" {
 		return nil, errors.New("console: name a session or a run")
 	}
-	addr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok || !addr.IP.Equal(net.IPv4(127, 0, 0, 1)) {
-		return nil, fmt.Errorf("console: listener %s is not on 127.0.0.1", ln.Addr())
+	port, err := consolePort(o, ln)
+	if err != nil {
+		return nil, err
 	}
 	tok := o.Token
 	if tok == "" {
@@ -137,11 +157,61 @@ func New(o Options, ln net.Listener) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		rpc: o.RPC, fwd: o.Forwarder, token: tok, port: addr.Port, ln: ln, log: log,
+		rpc: o.RPC, fwd: o.Forwarder, token: tok, port: port, ln: ln, log: log,
+		hosts: o.Hosts, https: o.HTTPS,
 		session: o.Session, pinned: o.Run, fwCtx: context.Background(), leaseToken: lease,
+	}
+	if o.Methods != nil {
+		s.methods = make(map[string]bool, len(o.Methods))
+		for _, m := range o.Methods {
+			s.methods[m] = true
+		}
 	}
 	s.handler = s.routes()
 	return s, nil
+}
+
+// consolePort is the port the browser reaches the console on: the loopback
+// listener's, or a shared console's public Options.Port.
+func consolePort(o Options, ln net.Listener) (int, error) {
+	if len(o.Hosts) > 0 {
+		if ln != nil {
+			return 0, errors.New("console: a shared console takes no listener; serve Handler")
+		}
+		for _, h := range o.Hosts {
+			if h == "" || strings.ContainsAny(h, ":/ ") && net.ParseIP(h) == nil {
+				return 0, fmt.Errorf("console: bad host %q", h)
+			}
+		}
+		if o.Port <= 0 || o.Port > 65535 {
+			return 0, fmt.Errorf("console: bad port %d", o.Port)
+		}
+		return o.Port, nil
+	}
+	if ln == nil {
+		return 0, errors.New("console: a listener on 127.0.0.1 is required")
+	}
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || !addr.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+		return 0, fmt.Errorf("console: listener %s is not on 127.0.0.1", ln.Addr())
+	}
+	return addr.Port, nil
+}
+
+// shared is true for a console served to other machines (Options.Hosts).
+func (s *Server) shared() bool { return len(s.hosts) > 0 }
+
+// scheme is the page's scheme as the browser sees it.
+func (s *Server) scheme() string {
+	if s.https {
+		return "https"
+	}
+	return "http"
+}
+
+// hostPort is how a URL names host h at the console's port.
+func (s *Server) hostPort(h string) string {
+	return net.JoinHostPort(h, strconv.Itoa(s.port))
 }
 
 // newToken is 32 random bytes, base64url without padding.
@@ -156,6 +226,9 @@ func newToken() (string, error) {
 // URL is the page with the token in the fragment, which the browser never
 // sends to a server.
 func (s *Server) URL() string {
+	if s.shared() {
+		return s.scheme() + "://" + s.hostPort(s.hosts[0]) + "/#token=" + s.token
+	}
 	return "http://127.0.0.1:" + strconv.Itoa(s.port) + "/#token=" + s.token
 }
 
@@ -177,15 +250,21 @@ func (s *Server) Serve(parent context.Context) error {
 		s.closeEditor()
 	}()
 
+	go func() {
+		defer close(polled)
+		s.pollLoop(ctx)
+	}()
+	if s.ln == nil {
+		// A shared console has no listener: its host serves Handler, and
+		// Serve only polls.
+		<-ctx.Done()
+		return nil
+	}
 	hs := &http.Server{
 		Handler:           s.handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          stdlog.New(s.log, "console: ", 0),
 	}
-	go func() {
-		defer close(polled)
-		s.pollLoop(ctx)
-	}()
 	errc := make(chan error, 1)
 	go func() { errc <- hs.Serve(s.ln) }()
 	select {
@@ -307,7 +386,14 @@ func (s *Server) syncForwards(run *harness.Run) ([]forwardView, string) {
 	}
 	out := make([]forwardView, 0, len(run.Ports))
 	for _, f := range s.fw.Forwards() {
-		out = append(out, forwardView{Name: f.Name, URL: f.URL(), LocalPort: f.LocalPort, HostPort: f.HostPort})
+		url := f.URL()
+		if s.shared() {
+			// The browser is on another machine: the app is reached on the
+			// console's first host at the host port (plain TCP to the edge,
+			// so http whatever the console's scheme).
+			url = "http://" + net.JoinHostPort(s.hosts[0], strconv.Itoa(f.LocalPort))
+		}
+		out = append(out, forwardView{Name: f.Name, URL: url, LocalPort: f.LocalPort, HostPort: f.HostPort})
 	}
 	return out, note
 }
@@ -341,7 +427,14 @@ func decodeRun(raw json.RawMessage) (harness.Run, error) {
 	return *r.Run, nil
 }
 
-// call sends one RPC; serve's refusals come back as *usecase.RPCError.
+// errMethodNotAllowed is a call to a method outside Options.Methods.
+var errMethodNotAllowed = errors.New("this console may not call that method")
+
+// call sends one RPC; serve's refusals come back as *usecase.RPCError. A
+// method outside the console's set never reaches serve.
 func (s *Server) call(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
+	if s.methods != nil && !s.methods[method] {
+		return nil, fmt.Errorf("%w: %s", errMethodNotAllowed, method)
+	}
 	return s.rpc.Call(ctx, method, params)
 }

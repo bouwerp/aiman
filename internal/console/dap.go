@@ -224,9 +224,7 @@ func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, err := s.call(r.Context(), "harness.debug", map[string]any{"run": s.currentRun(), "op": op})
 	if err != nil {
-		e := toAPIError(err)
-		s.logf("harness.debug refused: %s", e.Code)
-		writeError(w, http.StatusBadGateway, e)
+		s.writeCallError(w, "harness.debug", err)
 		return
 	}
 	var reply struct {
@@ -245,7 +243,9 @@ func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
 	if st.Launch == nil && cur != nil {
 		st.Launch = cur.TargetLaunch()
 	}
-	if port > 0 && cur != nil && st.Launch != nil {
+	// A shared console offers no editor entry: an editor on the tester's
+	// machine cannot reach the host's loopback ports.
+	if port > 0 && cur != nil && st.Launch != nil && !s.shared() {
 		editorPort := port
 		if st.Launch.EditorPort() {
 			// The editor port adds the lease line, points each child session

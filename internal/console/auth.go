@@ -21,10 +21,22 @@ const TokenHeader = "X-Aiman-Console-Token" //nolint:gosec // G101: a header nam
 // pageCSP allows only the console's own embedded script and style, and the
 // API and the debugger WebSocket on the same origin. The ws: sources are
 // spelled out: older browsers do not count a WebSocket as 'self'.
-func pageCSP(port int) string {
-	p := strconv.Itoa(port)
+func (s *Server) pageCSP() string {
+	var ws []string
+	if s.shared() {
+		scheme := "ws://"
+		if s.https {
+			scheme = "wss://"
+		}
+		for _, h := range s.hosts {
+			ws = append(ws, scheme+s.hostPort(h))
+		}
+	} else {
+		p := strconv.Itoa(s.port)
+		ws = []string{"ws://127.0.0.1:" + p, "ws://localhost:" + p}
+	}
 	return "default-src 'none'; script-src 'self'; style-src 'self'; " +
-		"connect-src 'self' ws://127.0.0.1:" + p + " ws://localhost:" + p + "; " +
+		"connect-src 'self' " + strings.Join(ws, " ") + "; " +
 		"img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 }
 
@@ -72,7 +84,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sw := &statusWriter{ResponseWriter: w}
 		h := sw.Header()
-		h.Set("Content-Security-Policy", pageCSP(s.port))
+		h.Set("Content-Security-Policy", s.pageCSP())
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
@@ -101,7 +113,7 @@ var refusalStatus = map[string]int{
 }
 
 var refusalText = map[string]string{ //nolint:gosec // G101: user-facing messages, no credential
-	"bad_host":     "this console answers only on 127.0.0.1 or localhost at its own port",
+	"bad_host":     "this console answers only on its own host names at its own port",
 	"bad_token":    "open the URL the console printed; the token is missing or wrong",
 	"bad_origin":   "a change must come from the console page itself",
 	"not_json":     "send application/json",
@@ -145,16 +157,44 @@ func (s *Server) refusal(r *http.Request) string {
 	return ""
 }
 
-// hostOK accepts exactly 127.0.0.1:<port> and localhost:<port>, which stops
-// DNS rebinding: a page on another name reaching this port has another Host.
+// hostOK accepts exactly the console's names at its port, which stops DNS
+// rebinding: a page on another name reaching this port has another Host. A
+// loopback console's names are 127.0.0.1 and localhost; a shared console's
+// are Options.Hosts, bare as well when the port is the scheme's default.
 func (s *Server) hostOK(host string) bool {
-	p := ":" + strconv.Itoa(s.port)
-	return host == "127.0.0.1"+p || strings.EqualFold(host, "localhost"+p)
+	if !s.shared() {
+		p := ":" + strconv.Itoa(s.port)
+		return host == "127.0.0.1"+p || strings.EqualFold(host, "localhost"+p)
+	}
+	bare := s.port == 443 && s.https || s.port == 80 && !s.https
+	for _, h := range s.hosts {
+		if strings.EqualFold(host, s.hostPort(h)) || bare && strings.EqualFold(host, bareHost(h)) {
+			return true
+		}
+	}
+	return false
 }
 
+// bareHost is how a Host header names h with no port: IPv6 in brackets.
+func bareHost(h string) string {
+	if strings.Contains(h, ":") {
+		return "[" + h + "]"
+	}
+	return h
+}
+
+// originOK accepts only the console page's own origin.
 func (s *Server) originOK(origin string) bool {
-	p := ":" + strconv.Itoa(s.port)
-	return origin == "http://127.0.0.1"+p || strings.EqualFold(origin, "http://localhost"+p)
+	if !s.shared() {
+		p := ":" + strconv.Itoa(s.port)
+		return origin == "http://127.0.0.1"+p || strings.EqualFold(origin, "http://localhost"+p)
+	}
+	for _, h := range s.hosts {
+		if strings.EqualFold(origin, s.scheme()+"://"+s.hostPort(h)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) tokenOK(got string) bool {
