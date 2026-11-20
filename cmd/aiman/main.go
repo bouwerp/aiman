@@ -332,6 +332,8 @@ func runSubcommand(rest []string) (handled bool, err error) {
 		return true, runAgents(rest[1:], os.Stdout)
 	case "remotes":
 		return true, runRemotes(rest[1:], os.Stdout)
+	case "overview":
+		return true, runOverview(rest[1:], os.Stdout)
 	case "aws":
 		if len(rest) > 1 && rest[1] == "log" {
 			return true, runAWSLog(rest[2:], callAWSLog, os.Stdout)

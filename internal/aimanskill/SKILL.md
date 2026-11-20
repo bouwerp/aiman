@@ -24,6 +24,8 @@ aiman session get "$AIMAN_SESSION_NAME"
 
 Commands return JSON. Parse `name`, `group`, and `id` from the result. Prefer names over UUIDs.
 
+`aiman overview --json` shows the newest overview of every session on this host (what is in progress, what needs the operator, what comes next), when the operator has run one. Read it to see what other sessions are doing; only the operator starts a run.
+
 Do not call `aiman session report-agent-session`. Aiman installs a SessionStart hook that reports the vendor conversation id automatically.
 
 ## Writing to the operator

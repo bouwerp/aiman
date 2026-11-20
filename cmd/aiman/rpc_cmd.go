@@ -48,6 +48,9 @@ var rpcMethods = map[string]bool{
 	"agents.update":       true,
 	"agents.move_prefix":  true,
 	"agents.models":       true,
+	"overview.get":        true,
+	"overview.list":       true,
+	"overview.run":        true,
 	"harness.status":      true,
 	"harness.verdict":     true,
 	// The laptop's harness console calls these through the RPC stream.

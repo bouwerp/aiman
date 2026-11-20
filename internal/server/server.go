@@ -195,6 +195,14 @@ type Server struct {
 	// consultDir holds consult scratch directories; empty is
 	// ~/.aiman/consults (SetConsultDir).
 	consultDir string
+	// overview is the running overview run; overviewDir holds runs (empty is
+	// ~/.aiman/overviews), overviewTimeout bounds one and overviewPoll is how
+	// often its watcher looks for the report (zero is the default).
+	overviewMu      sync.Mutex
+	overview        overviewState
+	overviewDir     string
+	overviewTimeout time.Duration
+	overviewPoll    time.Duration
 
 	// reviewGH reads PRs and reviewWT makes their worktrees; review creates
 	// fail until both are set. reviewDir holds each review's state file and
@@ -490,22 +498,12 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleVerifyStatus(ctx, req)
 	case "ci.get", "ci.watch", "ci.local", "ci.status", "ci.gate", "ci.ready":
 		return s.dispatchCI(ctx, req)
-	case "context.put":
-		return s.handleContextPut(ctx, req)
-	case "context.get":
-		return s.handleContextGet(ctx, req)
-	case "context.list":
-		return s.handleContextList(ctx, req)
-	case "context.find":
-		return s.handleContextFind(ctx, req)
-	case "context.pack":
-		return s.handleContextPack(ctx, req)
-	case "context.stats":
-		return s.handleContextStats(ctx, req)
-	case "context.verify":
-		return s.handleContextVerify(ctx, req)
+	case "context.put", "context.get", "context.list", "context.find", "context.pack", "context.stats", "context.verify":
+		return s.dispatchContext(ctx, req)
 	case "usage.get", "limits.get":
 		return s.dispatchUsage(ctx, req)
+	case "overview.run", "overview.get", "overview.list":
+		return s.dispatchOverview(ctx, req)
 	case "aws.status", "aws.login_start", "aws.login_status", "aws.log":
 		return s.dispatchAWS(ctx, req)
 	case "agents.status", "agents.update", "agents.move_prefix", "agents.models":
@@ -573,6 +571,26 @@ func (s *Server) lockSession(id string) func() {
 	s.mu.Unlock()
 	m.Lock()
 	return m.Unlock
+}
+
+// dispatchContext routes the context.* methods.
+func (s *Server) dispatchContext(ctx context.Context, req Request) Response {
+	switch req.Method {
+	case "context.put":
+		return s.handleContextPut(ctx, req)
+	case "context.get":
+		return s.handleContextGet(ctx, req)
+	case "context.list":
+		return s.handleContextList(ctx, req)
+	case "context.find":
+		return s.handleContextFind(ctx, req)
+	case "context.pack":
+		return s.handleContextPack(ctx, req)
+	case "context.stats":
+		return s.handleContextStats(ctx, req)
+	default:
+		return s.handleContextVerify(ctx, req)
+	}
 }
 
 // dispatchMemory routes the memory.* methods.

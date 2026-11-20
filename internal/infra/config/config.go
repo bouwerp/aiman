@@ -38,6 +38,8 @@ type Config struct {
 	Verify VerifyConfig `yaml:"verify,omitempty"`
 	// Handover configures the handover child agent.
 	Handover HandoverConfig `yaml:"handover,omitempty"`
+	// Overview configures overview runs.
+	Overview OverviewConfig `yaml:"overview,omitempty"`
 	// Sessions configures how sessions on a host may reach each other.
 	Sessions SessionsConfig `yaml:"sessions,omitempty"`
 	// Design configures where coordinator design pages are published.
@@ -91,6 +93,8 @@ type ServeConfig struct {
 	Verify VerifyConfig `yaml:"verify,omitempty"`
 	// Handover configures the handover child agent.
 	Handover HandoverConfig `yaml:"handover,omitempty"`
+	// Overview configures overview runs.
+	Overview OverviewConfig `yaml:"overview,omitempty"`
 	// Sessions configures how sessions on a host may reach each other.
 	Sessions SessionsConfig `yaml:"sessions,omitempty"`
 	// Design configures where coordinator design pages are published.
@@ -414,6 +418,24 @@ type VerifyConfig struct {
 // is unset.
 const DefaultHandoverTimeout = 10 * time.Minute
 
+// DefaultOverviewTimeout bounds one overview run when overview.timeout is
+// unset.
+const DefaultOverviewTimeout = 10 * time.Minute
+
+// OverviewConfig configures overview runs.
+type OverviewConfig struct {
+	// Timeout bounds one run; zero means DefaultOverviewTimeout.
+	Timeout time.Duration `yaml:"timeout,omitempty"`
+}
+
+// RunTimeout is the limit of one overview run.
+func (o OverviewConfig) RunTimeout() time.Duration {
+	if o.Timeout > 0 {
+		return o.Timeout
+	}
+	return DefaultOverviewTimeout
+}
+
 // HandoverConfig configures the child agent that rewrites a session's
 // handover and proposes memory candidates.
 type HandoverConfig struct {
@@ -519,6 +541,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Notifications: c.NotificationsFor(host),
 		Verify:        c.Verify,
 		Handover:      c.Handover,
+		Overview:      c.Overview,
 		Sessions:      c.Sessions,
 		Design:        c.Design,
 		Review:        c.Review,

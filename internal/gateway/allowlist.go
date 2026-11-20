@@ -19,6 +19,7 @@ var (
 		"usage.get",
 		"ci.get",
 		"agents.status", "agents.models",
+		"overview.get", "overview.list",
 		"repo.list", "host.stats", "host.version", "host.daemons", "resources.get",
 		"aws.status", "aws.login_status", "aws.log",
 		"harness.list", "harness.status", "harness.result", "harness.image_status",
@@ -57,6 +58,7 @@ var (
 		"review.post",
 		"agents.update", "agents.move_prefix",
 		"aws.login_start",
+		"overview.run",
 		"host.update", "host.restart", "host.logs",
 		"gateway.restart_serve",
 	}

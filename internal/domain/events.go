@@ -107,6 +107,12 @@ const (
 	// EventAWSLoginStarted records a phone AWS sign-in's start: profile and
 	// state. Codes, urls, tokens and the login id are never recorded.
 	EventAWSLoginStarted EventKind = "aws.login_started"
+	// EventOverviewStarted records an overview run's start on OverviewLedger:
+	// run, session, agent, model and how many sessions the bundle holds.
+	EventOverviewStarted EventKind = "overview.started"
+	// EventOverviewFinished records an overview run's end on OverviewLedger:
+	// run, state, error, and the needs-you count of a done run.
+	EventOverviewFinished EventKind = "overview.finished"
 	// EventAWSLoginFinished records a sign-in's end: profile, state and failure.
 	EventAWSLoginFinished EventKind = "aws.login_finished"
 	// EventHarnessStarted records a harness run's start: run, scenario, sha,
@@ -157,6 +163,10 @@ const HarnessImageLedger = "harness-images"
 // AWSLoginLedger is the ledger id of the aws.login_* rows. A sign-in belongs to
 // the host and only the operator may start one, so it has no session of its own.
 const AWSLoginLedger = "aws-login"
+
+// OverviewLedger is the ledger id of the overview.* rows. A run covers the
+// whole host, so it has no session of its own.
+const OverviewLedger = "overview"
 
 // EventActor is who caused the event. `unknown` exists for rows imported from a
 // source that did not record an author; writers should not use it.

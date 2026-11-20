@@ -295,6 +295,9 @@ func runServe() error {
 	srv.SetRepoLister(gitManager)
 	srv.SetRestartDeps(server.RestartDeps{Config: cfg, Engine: flow.SkillEngine, Ignorer: gitManager})
 	srv.SetConsultDir(filepath.Join(dir, "consults"))
+	srv.SetOverviewDir(filepath.Join(dir, "overviews"))
+	srv.SetOverviewTimeout(cfg.Overview.RunTimeout())
+	srv.CleanStaleOverviews(ctx)
 	if g := srv.CILandGate(); g != nil {
 		srv.SetLandGate(g)
 	}
