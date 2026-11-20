@@ -806,6 +806,10 @@ components:
             - harness.aws
             - harness.aws_calls
             - harness.aws_write
+            - harness.share
+            - harness.unshare
+            - harness.share_get
+            - gateway.announce
             - design.publish
             - review.reveal
             - review.post
@@ -1109,6 +1113,19 @@ components:
         note:
           type: string
           description: harness.verdict; the first line of a fail's note becomes the to-do text.
+        tester:
+          type: string
+          description: "harness.verdict; the login of a shared console's tester. The ledger actor becomes tester:<login>."
+        console_port:
+          type: integer
+          description: gateway.announce, required; the port the gateway's console listens on.
+        scheme:
+          type: string
+          enum: [http, https]
+          description: gateway.announce, required.
+        pid:
+          type: integer
+          description: gateway.announce; the gateway's process id.
         digest:
           type: string
           description: >
@@ -2530,6 +2547,31 @@ components:
         tag:
           type: string
           description: A write's last command tag, such as UPDATE 1.
+    HarnessShareResult:
+      type: object
+      description: >
+        harness.share {session? , run?}: a link for a tester to the session's
+        ready run through the gateway. It revokes the session's earlier shares
+        and records harness.shared. harness_not_running unless the run is
+        ready; unavailable ("gateway is not running") when the gateway's
+        announce is missing or older than 3 minutes. harness.unshare answers
+        {type: harness_unshared, revoked}; harness.share_get {id} (operator
+        only) answers {type: harness_share_state, share, session, run, state}
+        with state live or ended. gateway.announce {base, console_port,
+        scheme, pid} (operator only) answers {type: gateway_announced}. All
+        four are off the device allowlist.
+      required: [type, url, share, run]
+      properties:
+        type:
+          type: string
+          const: harness_share
+        url:
+          type: string
+        share:
+          type: string
+          description: The share id, 43 base64url characters.
+        run:
+          type: string
     HarnessVerdictResult:
       type: object
       description: >
@@ -3849,7 +3891,9 @@ components:
             stream's own poll; todo_changed, steer, usage, usage.budget,
             notify and verify are published by request handlers;
             overview is published when an overview run changes state, with
-            id the run and status its state;
+            id the run and status its state; harness_share is published
+            when a harness share becomes live or ends, with id the share
+            and state live or ended;
             session_forgotten is published when serve drops a session's row
             (terminate, forget, a landed child the coordinator tracker ended),
             and clients remove it from their lists; transcript
@@ -3863,6 +3907,7 @@ components:
             - session_gone
             - session_forgotten
             - overview
+            - harness_share
             - session_created
             - todo_changed
             - steer

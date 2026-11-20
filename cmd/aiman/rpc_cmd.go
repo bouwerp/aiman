@@ -70,6 +70,10 @@ var rpcMethods = map[string]bool{
 	"harness.aws_plan":      true,
 	"harness.aws":           true,
 	"harness.aws_write":     true,
+	"harness.share":         true,
+	"harness.unshare":       true,
+	"harness.share_get":     true,
+	"gateway.announce":      true,
 	"harness.image_status":  true,
 	"harness.image_approve": true,
 }
