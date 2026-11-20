@@ -237,6 +237,11 @@ func (s *Server) overviewInputs(ctx context.Context) ([]overview.Input, error) {
 			in.Todos = l
 		}
 		in.Items = s.overviewTranscript(sess)
+		if lister, ok := s.repo.(recentEventLister); ok {
+			if evs, err := lister.ListRecentSessionEvents(ctx, sess.ID, overview.LedgerEvents); err == nil {
+				in.Events = evs
+			}
+		}
 		out = append(out, in)
 	}
 	return out, nil

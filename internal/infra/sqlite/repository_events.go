@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -87,12 +88,38 @@ func (r *Repository) ListSessionEvents(ctx context.Context, sessionID string, si
 	if limit <= 0 {
 		limit = defaultSessionEventLimit
 	}
-	rows, err := r.rd.QueryContext(ctx, `
+	return r.querySessionEvents(ctx, `
 		SELECT session_id, seq, at, actor, kind, payload, hash
 		FROM session_events
 		WHERE session_id = ? AND seq > ?
 		ORDER BY seq ASC
 		LIMIT ?`, sessionID, since, limit)
+}
+
+// ListRecentSessionEvents returns a session's newest limit events, oldest of
+// them first. A limit <= 0 uses defaultSessionEventLimit.
+func (r *Repository) ListRecentSessionEvents(ctx context.Context, sessionID string, limit int) ([]domain.SessionEvent, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	if limit <= 0 {
+		limit = defaultSessionEventLimit
+	}
+	out, err := r.querySessionEvents(ctx, `
+		SELECT session_id, seq, at, actor, kind, payload, hash
+		FROM session_events
+		WHERE session_id = ?
+		ORDER BY seq DESC
+		LIMIT ?`, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	slices.Reverse(out)
+	return out, nil
+}
+
+func (r *Repository) querySessionEvents(ctx context.Context, query string, args ...any) ([]domain.SessionEvent, error) {
+	rows, err := r.rd.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing session events: %w", err)
 	}

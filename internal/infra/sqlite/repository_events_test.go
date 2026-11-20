@@ -199,3 +199,29 @@ func TestAppendSessionEventConcurrentSequences(t *testing.T) {
 		}
 	}
 }
+
+func TestListRecentSessionEventsNewestOldestFirst(t *testing.T) {
+	repo := eventRepo(t)
+	ctx := context.Background()
+	for _, id := range []string{"s1", "s1", "s2", "s1", "s1"} {
+		if _, err := repo.AppendSessionEvent(ctx, domain.SessionEvent{
+			SessionID: id, Actor: domain.EventActorUser, Kind: domain.EventTodoChanged,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := repo.ListRecentSessionEvents(ctx, "s1", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Seq != 3 || events[1].Seq != 4 || events[0].SessionID != "s1" {
+		t.Fatalf("events = %+v", events)
+	}
+	all, err := repo.ListRecentSessionEvents(ctx, "s1", 0)
+	if err != nil || len(all) != 4 || all[0].Seq != 1 {
+		t.Fatalf("all = %+v, %v", all, err)
+	}
+	if _, err := repo.ListRecentSessionEvents(ctx, "", 2); err == nil {
+		t.Fatal("no error for an empty session id")
+	}
+}

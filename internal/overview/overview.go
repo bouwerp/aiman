@@ -24,6 +24,9 @@ const (
 	BundleCap       = 2 << 20
 	TranscriptItems = 40
 	ItemCap         = 2 << 10
+	// LedgerEvents is how many of a session's newest ledger rows the bundle
+	// lists, by kind only.
+	LedgerEvents = 20
 )
 
 // File names inside a run's directory.
@@ -40,6 +43,9 @@ type Input struct {
 	Todos domain.TodoList
 	// Items are the newest transcript items, oldest first.
 	Items []transcript.Item
+	// Events are the newest ledger rows, oldest first. Only their time, actor
+	// and kind reach the bundle, never the payload.
+	Events []domain.SessionEvent
 }
 
 // Bundle is the bundle text and what it left out.
@@ -126,6 +132,18 @@ func sessionSection(in Input, exact []string) (string, int) {
 	}
 	for _, it := range in.Todos.Items {
 		add("- [%s] %s %s", it.State, it.ID, oneLine(it.Text))
+	}
+	add("")
+	add("### Recent events (oldest first)")
+	events := in.Events
+	if len(events) > LedgerEvents {
+		events = events[len(events)-LedgerEvents:]
+	}
+	if len(events) == 0 {
+		add("- none")
+	}
+	for _, ev := range events {
+		add("- %s %s %s", ev.At.UTC().Format("01-02 15:04"), oneLine(string(ev.Actor)), oneLine(string(ev.Kind)))
 	}
 	add("")
 	add("### Transcript tail (oldest first)")

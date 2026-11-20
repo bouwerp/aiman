@@ -68,6 +68,7 @@ func overviewWatchOf(srv *Server, base string, run OverviewRun) *overviewWatch {
 
 func TestOverviewRunWritesTheBundleAndStartsAHiddenSession(t *testing.T) {
 	srv, creator, _, base := overviewServer(t)
+	srv.appendEvent(context.Background(), "p", domain.EventActorAiman, domain.EventChildLanded, map[string]any{"secret": "payload-text"})
 	run := runOverview(t, srv)
 	if run.State != OverviewRunning || run.Agent != "codex" || run.Model != "gpt-5.4" || run.Sessions != 1 {
 		t.Fatalf("run %+v", run)
@@ -83,6 +84,9 @@ func TestOverviewRunWritesTheBundleAndStartsAHiddenSession(t *testing.T) {
 	bundle, err := os.ReadFile(filepath.Join(dir, overview.BundleFile))
 	if err != nil || !strings.Contains(string(bundle), "## Session parent (p)") || !strings.Contains(string(bundle), "t3 Add the parser") {
 		t.Fatalf("bundle %q, %v", bundle, err)
+	}
+	if !strings.Contains(string(bundle), "aiman child.landed") || strings.Contains(string(bundle), "payload-text") {
+		t.Fatalf("bundle events wrong:\n%s", bundle)
 	}
 	if strings.Contains(string(bundle), "overview-"+run.ID) {
 		t.Fatal("the run's own hidden session is in the bundle")
