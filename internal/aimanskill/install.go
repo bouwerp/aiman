@@ -19,63 +19,103 @@ type FileResult struct {
 	Action string
 }
 
-func skillRel() string {
-	return filepath.Join("skills", "aiman", "SKILL.md")
+// AimanSkillName is the aiman skill's directory name.
+const AimanSkillName = "aiman"
+
+// userAgentDirs are the agent dirs under $HOME, relative, holding skills/.
+var userAgentDirs = [][]string{
+	{".claude"},
+	{".agents"},
+	{".cursor"},
+	{".codex"},
+	{".grok"},
+	{".gemini"},
+	{".config", "kilo"},
+	{".config", "muse"},
+	{".kilo"},
+	{".deepcode"},
 }
 
-// UserSkillFiles are host-level skill paths agents scan under $HOME.
-func UserSkillFiles(home string) []string {
+// projectAgentDirs are the agent dirs in a worktree that hold skills/.
+var projectAgentDirs = []string{".agents", ".claude", ".cursor", ".codex", ".grok", ".gemini", ".kilo", ".deepcode"}
+
+// UserSkillDirs are the host-level directories of one skill under $HOME.
+func UserSkillDirs(home, skill string) []string {
 	home = strings.TrimRight(home, "/\\")
-	if home == "" {
+	if home == "" || skill == "" {
 		return nil
 	}
-	rel := skillRel()
-	return []string{
-		filepath.Join(home, ".claude", rel),
-		filepath.Join(home, ".agents", rel),
-		filepath.Join(home, ".cursor", rel),
-		filepath.Join(home, ".codex", rel),
-		filepath.Join(home, ".grok", rel),
-		filepath.Join(home, ".gemini", rel),
-		filepath.Join(home, ".config", "kilo", rel),
-		filepath.Join(home, ".config", "muse", rel),
-		filepath.Join(home, ".kilo", rel),
-		filepath.Join(home, ".deepcode", rel),
+	out := make([]string, 0, len(userAgentDirs))
+	for _, d := range userAgentDirs {
+		parts := append([]string{home}, d...)
+		parts = append(parts, "skills", skill)
+		out = append(out, filepath.Join(parts...))
 	}
+	return out
 }
 
-// ProjectSkillFiles are worktree-local skill paths. Slash-joined so a laptop
-// can write them onto a Unix remote.
-func ProjectSkillFiles(root string) []string {
+// ProjectSkillDirs are the worktree-local directories of one skill.
+// Slash-joined so a laptop can write them onto a Unix remote.
+func ProjectSkillDirs(root, skill string) []string {
 	root = strings.TrimRight(root, "/\\")
-	if root == "" {
+	if root == "" || skill == "" {
 		return nil
 	}
-	return []string{
-		root + "/.agents/skills/aiman/SKILL.md",
-		root + "/.claude/skills/aiman/SKILL.md",
-		root + "/.cursor/skills/aiman/SKILL.md",
-		root + "/.codex/skills/aiman/SKILL.md",
-		root + "/.grok/skills/aiman/SKILL.md",
-		root + "/.gemini/skills/aiman/SKILL.md",
-		root + "/.kilo/skills/aiman/SKILL.md",
-		root + "/.deepcode/skills/aiman/SKILL.md",
+	out := make([]string, 0, len(projectAgentDirs))
+	for _, d := range projectAgentDirs {
+		out = append(out, root+"/"+d+"/skills/"+skill)
 	}
+	return out
 }
 
-// IsProjectSkillPath reports whether a worktree-relative path is a file of the
-// bundled skill in one of ProjectSkillFiles' directories.
+// UserSkillFiles are the aiman skill's SKILL.md paths agents scan under $HOME.
+func UserSkillFiles(home string) []string {
+	dirs := UserSkillDirs(home, AimanSkillName)
+	for i, d := range dirs {
+		dirs[i] = filepath.Join(d, "SKILL.md")
+	}
+	return dirs
+}
+
+// ProjectSkillFiles are the aiman skill's worktree-local SKILL.md paths,
+// slash-joined.
+func ProjectSkillFiles(root string) []string {
+	dirs := ProjectSkillDirs(root, AimanSkillName)
+	for i, d := range dirs {
+		dirs[i] = d + "/SKILL.md"
+	}
+	return dirs
+}
+
+// IsProjectSkillPath reports whether a worktree-relative path is a file of a
+// bundled skill in one of the project agent dirs.
 func IsProjectSkillPath(rel string) bool {
-	rel = "/" + strings.TrimLeft(rel, "/")
-	for _, skill := range ProjectSkillFiles("root") {
-		skill = strings.TrimPrefix(skill, "root")
-		for _, f := range Bundle() {
-			if strings.HasSuffix(rel, Sibling(skill, f.Name)) {
-				return true
+	rel = "/" + strings.TrimLeft(filepath.ToSlash(rel), "/")
+	for _, s := range Skills() {
+		for _, dir := range ProjectSkillDirs("root", s.Name) {
+			dir = strings.TrimPrefix(dir, "root")
+			for _, f := range s.Files {
+				if strings.HasSuffix(rel, dir+"/"+f.Name) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// Skill is one bundled skill: its directory name and the files in it.
+type Skill struct {
+	Name  string
+	Files []BundleFile
+}
+
+// Skills lists every bundled skill, in install order.
+func Skills() []Skill {
+	return []Skill{
+		{Name: AimanSkillName, Files: Bundle()},
+		{Name: HarnessSkillName, Files: []BundleFile{{Name: "SKILL.md", Content: HarnessSkillText}, {Name: HarnessName, Content: Harness}}},
+	}
 }
 
 // BundleFile is one file of the skill, installed in every aiman skill dir.
@@ -101,12 +141,12 @@ func EnsureFile(path string) (FileResult, error) {
 	return ensureContent(path, Text)
 }
 
-// ensureBundle ensures every bundle file beside the skill path.
-func ensureBundle(skillPath string) ([]FileResult, error) {
+// ensureSkill ensures every file of a skill in its directory.
+func ensureSkill(dir string, files []BundleFile) ([]FileResult, error) {
 	var out []FileResult
 	var first error
-	for _, f := range Bundle() {
-		res, err := ensureContent(Sibling(skillPath, f.Name), f.Content)
+	for _, f := range files {
+		res, err := ensureContent(filepath.Join(dir, f.Name), f.Content)
 		if err != nil {
 			if first == nil {
 				first = err
@@ -144,20 +184,23 @@ func ensureContent(path, content string) (FileResult, error) {
 	return res, nil
 }
 
-// EnsureOnHost installs or updates the skill's file set in user-level agent
+// EnsureOnHost installs or updates every bundled skill in user-level agent
 // dirs and in each existing project root. Missing project roots are skipped.
 func EnsureOnHost(home string, projectRoots []string) ([]FileResult, error) {
 	var out []FileResult
 	var first error
-	ensure := func(skillPath string) {
-		res, err := ensureBundle(skillPath)
+	ensure := func(dir string, files []BundleFile) {
+		res, err := ensureSkill(dir, files)
 		out = append(out, res...)
 		if err != nil && first == nil {
 			first = err
 		}
 	}
-	for _, p := range UserSkillFiles(home) {
-		ensure(p)
+	skills := Skills()
+	for _, s := range skills {
+		for _, d := range UserSkillDirs(home, s.Name) {
+			ensure(d, s.Files)
+		}
 	}
 	seen := map[string]bool{}
 	for _, root := range projectRoots {
@@ -170,8 +213,10 @@ func EnsureOnHost(home string, projectRoots []string) ([]FileResult, error) {
 		if err != nil || !st.IsDir() {
 			continue
 		}
-		for _, p := range ProjectSkillFiles(root) {
-			ensure(p)
+		for _, s := range skills {
+			for _, d := range ProjectSkillDirs(root, s.Name) {
+				ensure(d, s.Files)
+			}
 		}
 	}
 	return out, first
