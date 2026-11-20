@@ -1,6 +1,6 @@
 # Harness
 
-This file is part of the aiman skill. Read it before you set up, change or run a harness. The harness starts the app and its services in an offline sandbox on this host, so that a person can test a scenario. Serve runs it; you control it with `aiman harness`.
+This file is part of the aiman and aiman-harness skills. Read it before you set up, change or run a harness. The harness starts the app and its services in an offline sandbox on this host, so that a person can test a scenario. Serve runs it; you control it with `aiman harness`.
 
 Every host command takes `--session NAME` (default `$AIMAN_ID`) or `--run ID`, and `--json`. Run `aiman harness` with no arguments for the full usage.
 

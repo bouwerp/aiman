@@ -380,7 +380,7 @@ aiman pty forget "$wid"
 
 The harness starts the app and its services in an offline sandbox on this host, so that a person can test a scenario. The harness file is `.aiman/harness.yaml`. Serve reads it from the commit, not from the working tree.
 
-Read `harness.md` beside this file before you set up, change or run a harness. It has the file format, the setup steps, the run lifecycle and its refusals, AWS services, the database, the debugger, EVM traces, the network and stubs, image approval, and which host config keys belong to the operator.
+To set up, add, fix or debug a harness, use the `aiman-harness` skill: it has the setup procedure, ending with `aiman harness share` to give the operator a console URL. Read `harness.md` beside this file before you set up, change or run a harness. It has the file format, the setup steps, the run lifecycle and its refusals, AWS services, the database, the debugger, EVM traces, the network and stubs, image approval, and which host config keys belong to the operator.
 
 When your work changes behaviour that a person can test, add or update a scenario and commit it with the change. Check an uncommitted file with `aiman harness list --dirty`; it starts no run.
 

@@ -177,6 +177,27 @@ func TestPrepareSession_InstallsBundledAimanSkill(t *testing.T) {
 	}
 }
 
+func TestPrepareSession_InstallsHarnessSkill(t *testing.T) {
+	engine := NewEngine(&config.Config{})
+	remote := newMockRemote()
+	agent := domain.Agent{Name: "Claude Code", Command: "claude"}
+	if _, err := engine.PrepareSession(context.Background(), remote, "/home/user/code/myrepo", agent, nil, true, nil, nil, domain.QualityKit{}); err != nil {
+		t.Fatal(err)
+	}
+	dirs := aimanskill.ProjectSkillDirs("/home/user/code/myrepo", aimanskill.HarnessSkillName)
+	if len(dirs) == 0 {
+		t.Fatal("no harness skill dirs")
+	}
+	for _, d := range dirs {
+		if string(remote.writtenFiles[d+"/SKILL.md"]) != aimanskill.HarnessSkillText {
+			t.Fatalf("%s/SKILL.md missing or differs", d)
+		}
+		if string(remote.writtenFiles[d+"/harness.md"]) != aimanskill.Harness {
+			t.Fatalf("%s/harness.md missing or differs", d)
+		}
+	}
+}
+
 func TestPrepareSession_ClaudeWithoutIssue(t *testing.T) {
 	cfg := &config.Config{}
 	engine := NewEngine(cfg)

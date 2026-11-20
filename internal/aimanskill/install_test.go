@@ -293,7 +293,11 @@ func TestEnsureOnHostInstallsTemplate(t *testing.T) {
 			t.Fatalf("second run: %s %s", r.Path, r.Action)
 		}
 	}
-	if len(again) != len(Bundle())*(len(UserSkillFiles(home))+len(ProjectSkillFiles(project))) {
+	var files int
+	for _, s := range Skills() {
+		files += len(s.Files)
+	}
+	if len(again) != files*(len(UserSkillFiles(home))+len(ProjectSkillFiles(project))) {
 		t.Fatalf("second run ensured %d files", len(again))
 	}
 }
