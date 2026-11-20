@@ -476,6 +476,9 @@ func callSessionLog(sock, target string, flags map[string]string) error {
 	if n := flags["limit"]; n != "" {
 		params["limit"] = atoi(n)
 	}
+	if n := flags["tail"]; n != "" {
+		params["tail"] = atoi(n)
+	}
 	resp, err := server.Call(sock, "session.log", params)
 	if err != nil {
 		code := server.CodeServerNotRunning

@@ -350,3 +350,47 @@ func TestClassifyOpenTurnPastHookTTL(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionLogTail(t *testing.T) {
+	ctx := context.Background()
+	repo := logRepo(t)
+	if err := repo.Save(ctx, &domain.Session{
+		ID: "s1", Name: "s1", Status: domain.SessionStatusActive, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []domain.EventKind{domain.EventSessionCreated, domain.EventTodoChanged, domain.EventHookReported} {
+		if _, err := repo.AppendSessionEvent(ctx, domain.SessionEvent{
+			SessionID: "s1", Actor: domain.EventActorUser, Kind: kind,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sock := startTestServer(t, repo)
+	resp, err := Call(sock, "session.log", map[string]any{"session": "s1", "tail": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, _ := resultMap(t, resp)["events"].([]any)
+	if len(events) != 2 {
+		t.Fatalf("events = %#v", events)
+	}
+	first, _ := events[0].(map[string]any)
+	last, _ := events[1].(map[string]any)
+	if first["seq"] != float64(2) || last["kind"] != "hook.reported" {
+		t.Fatalf("events = %#v", events)
+	}
+	for _, bad := range []map[string]any{
+		{"session": "s1", "tail": 2, "since_seq": 1},
+		{"session": "s1", "tail": 2, "limit": 5},
+		{"session": "s1", "tail": -1},
+	} {
+		resp, err := Call(sock, "session.log", bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Error == nil || resp.Error.Code != CodeInvalidParams {
+			t.Fatalf("%v: %+v", bad, resp)
+		}
+	}
+}

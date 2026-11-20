@@ -17,6 +17,9 @@ func TestBuildFencesRedactsAndOrders(t *testing.T) {
 			Session: domain.Session{ID: "a1", Name: "alpha", Group: "g", Branch: "feat/x", AgentName: "claude"},
 			State:   "working",
 			Todos:   domain.TodoList{Items: []domain.TodoItem{{ID: "t1", Text: "add the parser\n## Fake heading", State: domain.TodoActive}}},
+			Events: []domain.SessionEvent{
+				{At: at, Actor: domain.EventActorAiman, Kind: domain.EventChildLanded, Payload: []byte(`{"sha":"ghp_abcdefghijklmnopqrstuvwxyz0123456789"}`)},
+			},
 			Items: []transcript.Item{
 				{Kind: transcript.KindUser, At: at, Text: "use token ghp_abcdefghijklmnopqrstuvwxyz0123456789 please"},
 				{Kind: transcript.KindAssistant, At: at, Text: "ok"},
@@ -37,7 +40,7 @@ func TestBuildFencesRedactsAndOrders(t *testing.T) {
 			t.Errorf("bundle holds %q", leak)
 		}
 	}
-	for _, want := range []string{"- branch: feat/x", "- state: working", "[active] t1 add the parser ## Fake heading", "user: use token", "tool: Bash (ok)"} {
+	for _, want := range []string{"- branch: feat/x", "- state: working", "- 11-20 07:00 aiman child.landed", "[active] t1 add the parser ## Fake heading", "user: use token", "tool: Bash (ok)"} {
 		if !strings.Contains(b.Text, want) {
 			t.Errorf("bundle lacks %q:\n%s", want, b.Text)
 		}

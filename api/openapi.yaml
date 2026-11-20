@@ -953,6 +953,12 @@ components:
           type: integer
           format: int64
           description: aws.log, the rows after this ledger seq; absent starts at the first.
+        tail:
+          type: integer
+          description: >
+            session.log: read the newest tail events (oldest of them first)
+            instead of paging from since_seq; it goes without since_seq and
+            limit.
         since:
           type: integer
           format: int64
