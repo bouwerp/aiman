@@ -1558,6 +1558,11 @@ func (s *Server) dropSession(ctx context.Context, sess domain.Session, reason st
 			log.Printf("session %s: tombstone: %v", sess.ID, err)
 		}
 	}
+	// session_gone only says the terminal left; this says the row is gone
+	// for good, so clients drop it whatever its role.
+	if s.hub != nil {
+		s.hub.Publish(SessionEvent{Type: "session_forgotten", ID: sess.ID})
+	}
 	return nil
 }
 

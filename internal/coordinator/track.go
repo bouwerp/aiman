@@ -68,6 +68,11 @@ type Tracker struct {
 	// Retire stops and forgets a consult and removes its scratch directory.
 	// nil leaves the consult running.
 	Retire func(ctx context.Context, child domain.Session)
+	// Finish terminates a child whose item the tracker just marked done, with
+	// its own descendants; an error (unsaved work, an agent that will not
+	// stop) leaves it running and the coordinator is told once. nil leaves
+	// landed children running.
+	Finish func(ctx context.Context, child domain.Session) error
 	// KeepReport copies a consult's report outside the directory Retire
 	// removes and returns the copy's path. nil points the note at the
 	// consult's own report, which Retire removes.
@@ -172,7 +177,33 @@ func (t *Tracker) trackChild(ctx context.Context, parent domain.Session, it doma
 		return
 	}
 	t.steerSurprises(parent, child, md)
-	t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone })
+	if !t.settle(ctx, parent, it, func(item *domain.TodoItem) { item.State = domain.TodoDone }) {
+		return
+	}
+	t.finish(ctx, parent, child)
+}
+
+// finish ends a landed child so it leaves the session list.
+func (t *Tracker) finish(ctx context.Context, parent, child domain.Session) {
+	if t.Finish == nil {
+		return
+	}
+	err := t.Finish(ctx, child)
+	if err == nil {
+		if t.Ledger != nil {
+			t.Ledger(ctx, parent.ID, domain.EventChildFinished, map[string]any{"child": child.ID})
+		}
+		return
+	}
+	log.Printf("coordinator: terminate landed child %s: %v", child.ID, err)
+	if t.Steer == nil || !t.firstAsk("finish/"+child.ID) {
+		return
+	}
+	name := child.Name
+	if name == "" {
+		name = child.ID
+	}
+	t.Steer(parent.ID, fmt.Sprintf("[aiman] child %s landed, but aiman could not terminate it: %v. Check it, then run aiman session terminate %s.", name, err, name))
 }
 
 // landed reports whether the child landed on the parent's branch: through

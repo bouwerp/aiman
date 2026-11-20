@@ -298,25 +298,63 @@ func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Respon
 	if sess.Role.Hidden() {
 		return errResp(req.ID, CodeInvalidParams, "aiman manages this helper session itself")
 	}
+	return s.terminateTree(ctx, req.ID, sess, list, p.Discard, p.KeepChildren, domain.EventActorUser)
+}
+
+// TerminateLanded ends a child whose work landed on its coordinator's branch,
+// as an operator's session.terminate without discard would: its descendants
+// go too, and a worktree holding unsaved work refuses it. The coordinator
+// tracker calls it once it marks the child's item done.
+func (s *Server) TerminateLanded(ctx context.Context, childID string) error {
+	ctx, cancel := context.WithTimeout(ctx, SessionTerminateTimeout)
+	defer cancel()
+	unlock := s.lockSession(childID)
+	defer unlock()
+	list, err := s.loadSessions(ctx)
+	if err != nil {
+		return err
+	}
+	sess, ok := s.sessionByID(ctx, childID)
+	if !ok {
+		return nil
+	}
+	for i := range list {
+		if list[i].ID == sess.ID {
+			list[i] = sess
+		}
+	}
+	if sess.Role.Hidden() {
+		return fmt.Errorf("session %s is a helper", childID)
+	}
+	resp := s.terminateTree(ctx, "", sess, list, false, false, domain.EventActorAiman)
+	if resp.Error != nil {
+		return errors.New(resp.Error.Message)
+	}
+	return nil
+}
+
+// terminateTree is session.terminate after the caller is admitted and sess is
+// locked: sess and, unless keepChildren, every visible descendant.
+func (s *Server) terminateTree(ctx context.Context, reqID string, sess domain.Session, list []domain.Session, discard, keepChildren bool, actor domain.EventActor) Response {
 	// aiman never stops tmux, and removing a worktree under a tmux agent that
 	// may still run needs the TUI's explicit confirmation.
 	if sess.IsLegacyTmux() {
-		return legacyTerminalResp(req.ID, sess)
+		return legacyTerminalResp(reqID, sess)
 	}
 	var kids []domain.Session
-	if !p.KeepChildren {
+	if !keepChildren {
 		var unlockKids func()
 		kids, unlockKids = s.lockDescendants(ctx, sess, list)
 		defer unlockKids()
 	}
 	for _, kid := range kids {
 		if kid.IsLegacyTmux() {
-			return legacyTerminalResp(req.ID, kid)
+			return legacyTerminalResp(reqID, kid)
 		}
 	}
 	// Deepest first: every descendant goes before the session it hangs off.
 	going := append(append([]domain.Session(nil), kids...), sess)
-	plans, bad := s.planTeardown(ctx, req.ID, going, list, p.Discard)
+	plans, bad := s.planTeardown(ctx, reqID, going, list, discard)
 	if bad != nil {
 		return *bad
 	}
@@ -331,23 +369,23 @@ func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Respon
 	}
 	for _, g := range going {
 		if term.Alive(ctx, g) {
-			return errResp(req.ID, CodeTimeout, fmt.Sprintf("the agent of session %s did not stop; nothing was removed", sessionLabel(g)))
+			return errResp(reqID, CodeTimeout, fmt.Sprintf("the agent of session %s did not stop; nothing was removed", sessionLabel(g)))
 		}
 	}
 
 	var result map[string]any
 	var ended []string
 	for i, g := range going {
-		removed, note := s.removeWorktree(ctx, plans[i], p.Discard)
+		removed, note := s.removeWorktree(ctx, plans[i], discard)
 		if err := s.dropSession(ctx, g, "terminate"); err != nil {
-			return errResp(req.ID, CodeInvalidParams, fmt.Sprintf("session %s: %v", sessionLabel(g), err))
+			return errResp(reqID, CodeInvalidParams, fmt.Sprintf("session %s: %v", sessionLabel(g), err))
 		}
-		payload := map[string]any{"reason": "terminate", "worktree_removed": removed, "discard": p.Discard}
+		payload := map[string]any{"reason": "terminate", "worktree_removed": removed, "discard": discard}
 		if g.ID != sess.ID {
 			payload["terminated_with"] = sess.ID
 			ended = append(ended, g.ID)
 		}
-		s.appendEvent(ctx, g.ID, domain.EventActorUser, domain.EventSessionEnded, payload)
+		s.appendEvent(ctx, g.ID, actor, domain.EventSessionEnded, payload)
 		if g.ID == sess.ID {
 			result = terminatedResult(sess, plans[i], removed, note)
 		}
@@ -355,12 +393,12 @@ func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Respon
 	if len(ended) > 0 {
 		result["children_terminated"] = ended
 	}
-	if p.KeepChildren {
+	if keepChildren {
 		if left := runningChildren(sess, list); len(left) > 0 {
 			result["children_left"] = left
 		}
 	}
-	return Response{ID: req.ID, Result: result}
+	return Response{ID: reqID, Result: result}
 }
 
 // lockDescendants returns every visible session below sess, deepest first, each

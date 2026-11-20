@@ -363,6 +363,7 @@ func runServe() error {
 		},
 		Ledger:         srv.AppendLedger,
 		Retire:         srv.RetireConsult,
+		Finish:         landedChildFinisher(cfg, srv),
 		KeepReport:     srv.KeepConsultReport,
 		Alive:          srv.ConsultAlive,
 		ConsultTimeout: cfg.Handover.ChildTimeout(),
@@ -534,4 +535,15 @@ func runScopeLauncher(sd *cgroup.Systemd, cfg config.ResourcesConfig) cigate.Lau
 	}
 	limits, _ := cfg.SessionLimits()
 	return cigate.SystemdLauncher(cgroup.SessionsSlice, limits.Properties())
+}
+
+// landedChildFinisher terminates a child once the tracker marks its item done,
+// unless coordinator.keep_landed_children is set.
+func landedChildFinisher(cfg *config.Config, srv *server.Server) func(context.Context, domain.Session) error {
+	if cfg != nil && cfg.Coordinator.KeepLandedChildren {
+		return nil
+	}
+	return func(ctx context.Context, child domain.Session) error {
+		return srv.TerminateLanded(ctx, child.ID)
+	}
 }

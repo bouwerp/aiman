@@ -3744,7 +3744,10 @@ components:
           description: >
             session_activity, session_gone and session_created come from the
             stream's own poll; todo_changed, steer, usage, usage.budget,
-            notify and verify are published by request handlers; transcript
+            notify and verify are published by request handlers;
+            session_forgotten is published when serve drops a session's row
+            (terminate, forget, a landed child the coordinator tracker ended),
+            and clients remove it from their lists; transcript
             comes from the stream's poll when a transcript file read within
             the last 2 minutes (or a session's recorded transcript path)
             changes size or mtime, at most once a second per session and
@@ -3753,6 +3756,7 @@ components:
           enum:
             - session_activity
             - session_gone
+            - session_forgotten
             - session_created
             - todo_changed
             - steer

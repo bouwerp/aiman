@@ -101,6 +101,9 @@ const (
 	// child aiman land merged onto its parent's branch: child, parent
 	// branch and merge sha. It is written only after the push succeeded.
 	EventChildLanded EventKind = "child.landed"
+	// EventChildFinished records on the parent's ledger a landed child the
+	// coordinator tracker terminated once its item was done: child.
+	EventChildFinished EventKind = "child.finished"
 	// EventAWSLoginStarted records a phone AWS sign-in's start: profile and
 	// state. Codes, urls, tokens and the login id are never recorded.
 	EventAWSLoginStarted EventKind = "aws.login_started"
