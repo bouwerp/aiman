@@ -135,6 +135,11 @@ func (c *claude) forgetItems(removed map[string]bool) {
 			delete(c.outputs, id)
 		}
 	}
+	for id, it := range c.cards {
+		if removed[it.ID] {
+			delete(c.cards, id)
+		}
+	}
 	for id, it := range c.processes {
 		if removed[it.ID] {
 			delete(c.processes, id)

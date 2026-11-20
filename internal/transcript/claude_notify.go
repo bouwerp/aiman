@@ -15,6 +15,8 @@ var (
 	claudeOutputFileRe = regexp.MustCompile(`<output-file>([^<\n]*)</output-file>`)
 	claudeStatusRe     = regexp.MustCompile(`<status>([^<\n]*)</status>`)
 	claudeExitCodeRe   = regexp.MustCompile(`\(exit code (\d+)\)</summary>`)
+	// Claude's fixed wording when the person reopens a finished sub-agent.
+	claudeResumedRe    = regexp.MustCompile(`was resumed by the user</summary>\s*(<note>|</task-notification>)`)
 	claudeSafeIDRe     = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 	claudeSafeStatusRe = regexp.MustCompile(`^[a-z_]{1,32}$`)
 )
@@ -24,6 +26,7 @@ type claudeNotification struct {
 	outputFile string
 	status     string
 	exitCode   *int
+	resumed    bool
 }
 
 func parseClaudeNotification(text string) claudeNotification {
@@ -39,6 +42,7 @@ func parseClaudeNotification(text string) claudeNotification {
 	if !claudeSafeStatusRe.MatchString(n.status) {
 		n.status = ""
 	}
+	n.resumed = n.status == "" && claudeResumedRe.MatchString(tail)
 	if all := claudeExitCodeRe.FindAllStringSubmatch(tail, -1); len(all) > 0 {
 		if code, err := strconv.Atoi(all[len(all)-1][1]); err == nil {
 			n.exitCode = &code
@@ -54,13 +58,18 @@ func firstClaudeGroup(re *regexp.Regexp, s string) string {
 	return ""
 }
 
-// notification adds the system item and moves whatever the task id names to
-// its end state.
+// notification moves whatever the task id names to its new state. A
+// sub-agent's notification is a copy of its item, so the newest point in the
+// conversation where it reported (or was reopened) leads to it; anything else
+// is a system line.
 func (c *claude) notification(e *claudeEvent) {
 	n := parseClaudeNotification(e.plainText())
 	proc := c.processes[n.taskID]
 	sub := c.subagents[n.taskID]
-	c.addItem(e, Item{Kind: KindSystem, Text: claudeNotificationText(n, proc != nil, sub != nil)})
+	text := claudeNotificationText(n, proc != nil, sub != nil)
+	if sub == nil {
+		c.addItem(e, Item{Kind: KindSystem, Text: text})
+	}
 	if proc != nil || sub != nil {
 		if _, known := c.outputs[n.taskID]; !known {
 			c.recordOutput(n.taskID, n.outputFile)
@@ -73,7 +82,34 @@ func (c *claude) notification(e *claudeEvent) {
 	}
 	if sub != nil {
 		c.finishSubagent(e, sub, n)
+		c.subagentCard(e, sub, text)
 	}
+}
+
+// subagentCard adds a copy of the sub-agent's item where it reported. A report
+// right after its previous card, with nothing between, updates that card.
+func (c *claude) subagentCard(e *claudeEvent, sub *Item, text string) {
+	s := *sub.Subagent
+	if prev := c.cards[s.ID]; prev != nil && prev.ID == c.last {
+		prev.Text = text
+		prev.At = e.at
+		prev.Subagent = &s
+		c.updateItem(e, prev)
+		return
+	}
+	c.cards[s.ID] = c.addItem(e, Item{Kind: KindSubagent, Text: text, Subagent: &s})
+}
+
+// queuedResume applies a queued notice that a known sub-agent was reopened.
+// Other queued notifications are left to the line Claude writes for them.
+func (c *claude) queuedResume(e *claudeEvent, text string) {
+	n := parseClaudeNotification(text)
+	sub := c.subagents[n.taskID]
+	if !n.resumed || sub == nil {
+		return
+	}
+	c.finishSubagent(e, sub, n)
+	c.subagentCard(e, sub, claudeNotificationText(n, false, true))
 }
 
 // claudeNotificationText is built from validated fields only.
@@ -90,7 +126,10 @@ func claudeNotificationText(n claudeNotification, isProcess, isSubagent bool) st
 		parts = append(parts, n.taskID)
 	}
 	status := n.status
-	if status == "" {
+	switch {
+	case n.resumed:
+		status = "resumed"
+	case status == "":
 		status = "finished"
 	}
 	parts = append(parts, status)
@@ -110,6 +149,9 @@ func (c *claude) finishSubagent(e *claudeEvent, it *Item, n claudeNotification) 
 		applySubagentMeta(s, meta)
 	}
 	switch {
+	case n.resumed:
+		s.State = SubagentRunning
+		s.EndedAt = nil
 	case n.status == "completed":
 		endSubagent(s, SubagentDone, e.at)
 	case n.status != "":

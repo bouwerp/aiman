@@ -82,6 +82,14 @@ type claude struct {
 	subagents map[string]*Item // subagent items by agent id
 	processes map[string]*Item // tool_call items by background task id
 	outputs   map[string]string
+	// queued counts prompts shown from queued_command attachments by text.
+	// Claude sometimes also writes the prompt as a turn later; that line
+	// consumes one and adds nothing.
+	queued map[string]int
+	// cards holds each sub-agent's newest notification copy, and last the id
+	// of the newest item added, so back-to-back reports share one card.
+	cards map[string]*Item
+	last  string
 }
 
 func (c *claude) Kind() string { return "claude" }
@@ -110,6 +118,9 @@ func (c *claude) Reset() {
 	c.subagents = map[string]*Item{}
 	c.processes = map[string]*Item{}
 	c.outputs = map[string]string{}
+	c.queued = map[string]int{}
+	c.cards = map[string]*Item{}
+	c.last = ""
 }
 
 func (c *claude) ProcessOutput(id string) (string, bool) {
@@ -131,8 +142,11 @@ func (c *claude) Feed(pos int64, line []byte) []Delta {
 		c.rewind(e)
 	}
 	c.link(e)
-	if !e.IsMeta {
+	switch {
+	case !e.IsMeta:
 		c.apply(e)
+	case e.midTurnMessage() != "":
+		c.addItem(e, Item{Kind: KindUser, Text: e.midTurnMessage()})
 	}
 	if e.changed {
 		c.tip = e.node
@@ -150,6 +164,14 @@ func (c *claude) apply(e *claudeEvent) {
 		c.assistantLine(e)
 	case "user":
 		c.userLine(e)
+	case "attachment":
+		if text := e.queuedPrompt(); text != "" {
+			c.queued[text]++
+			c.addItem(e, Item{Kind: KindUser, Text: text})
+		}
+		if text := e.queuedNotification(); text != "" {
+			c.queuedResume(e, text)
+		}
 	}
 }
 
@@ -178,6 +200,9 @@ func (c *claude) userLine(e *claudeEvent) {
 	case e.isNotification():
 		c.notification(e)
 	case e.text != "":
+		if c.consumeQueued(e.text) {
+			return
+		}
 		c.addItem(e, Item{Kind: KindUser, Text: e.text})
 	default:
 		c.userBlocks(e)
@@ -198,6 +223,17 @@ func (c *claude) userBlocks(e *claudeEvent) {
 	}
 }
 
+// consumeQueued reports a prompt already shown from its queued_command
+// attachment, and forgets one copy of it.
+func (c *claude) consumeQueued(text string) bool {
+	key := strings.TrimSpace(text)
+	if c.queued[key] == 0 {
+		return false
+	}
+	c.queued[key]--
+	return true
+}
+
 // addItem appends it to the line's node. The id is the line's uuid plus the
 // item's place on that line, so a reread gives the same id.
 func (c *claude) addItem(e *claudeEvent, it Item) *Item {
@@ -205,6 +241,7 @@ func (c *claude) addItem(e *claudeEvent, it Item) *Item {
 	it.At = e.at
 	it.Rev = e.pos
 	e.node.items = append(e.node.items, it.ID)
+	c.last = it.ID
 	e.changed = true
 	e.deltas = append(e.deltas, Delta{Add: cloneClaudeItem(&it)})
 	return &it
