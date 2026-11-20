@@ -231,6 +231,10 @@ func checkContainer(r Run, j int) string {
 	return ServiceApp
 }
 
+// TesterPrefix starts the by of a verdict a shared console's tester gave:
+// "tester:<login>". It becomes the ledger actor as it is.
+const TesterPrefix = "tester:"
+
 // Verdict records a tester's result for step (1-based; 0 is the whole
 // scenario) of a live or kept run. The verdict carries the run's sha, dirty
 // flag and diff hash.
@@ -271,7 +275,11 @@ func (m *Manager) Verdict(id string, step int, result, note, by string) (Verdict
 	if lr != nil {
 		lr.run = run
 	}
-	m.record(run.Session, domain.EventActorUser, domain.EventHarnessVerdict, map[string]any{
+	actor := domain.EventActorUser
+	if strings.HasPrefix(by, TesterPrefix) {
+		actor = domain.EventActor(by)
+	}
+	m.record(run.Session, actor, domain.EventHarnessVerdict, map[string]any{
 		"run": run.ID, "scenario": run.Scenario, "step": step, "result": result, "note": v.Note,
 		"sha": run.SHA, "dirty": run.Dirty, "diff_sha256": run.DiffSHA256,
 	})

@@ -107,7 +107,7 @@ func wireHarness(ctx context.Context, srv *server.Server, cfg *config.Config, di
 		log.Printf("harness unavailable: %v", err)
 		return nil
 	}
-	srv.SetHarness(server.HarnessDeps{Manager: m, Repos: cfg.Repos, Images: vetter})
+	srv.SetHarness(server.HarnessDeps{Manager: m, Repos: cfg.Repos, Images: vetter, ShareTTL: cfg.Harness.ShareTTLOrDefault()})
 	rss := &harness.RSSReader{Docker: harness.ExecDocker{}}
 	srv.SetHarnessMemory(func(ctx context.Context) (harness.Memory, error) {
 		// The gate steps every 5s; a stuck docker CLI must not hold it.

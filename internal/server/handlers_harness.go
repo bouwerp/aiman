@@ -42,12 +42,17 @@ type HarnessDeps struct {
 	// Images is the image vetter behind harness.image_status and
 	// harness.image_approve; the manager holds the same vetter for harness.up.
 	Images *images.Vetter
+	// ShareTTL caps a harness share link's life; zero is
+	// config.DefaultHarnessShareTTL.
+	ShareTTL time.Duration
 }
 
 type harnessState struct {
 	d HarnessDeps
 	// bg tracks approvals started from closed image gates.
 	bg sync.WaitGroup
+	// shareEnded remembers shares whose end the hub already heard of.
+	shareEnded shareEnded
 }
 
 // SetHarness enables the harness.* methods. Without it they answer
@@ -99,6 +104,10 @@ type harnessParams struct {
 	Table       string `json:"table"`
 	SQL         string `json:"sql"`
 	Write       bool   `json:"write"`
+	// ID names a share on harness.share_get; Tester is the login a shared
+	// console's verdict came from.
+	ID     string `json:"id"`
+	Tester string `json:"tester"`
 }
 
 // dispatchHarness routes the harness.* methods.
@@ -446,7 +455,11 @@ func (s *Server) handleHarnessVerdict(ctx context.Context, req Request, p harnes
 	if p.Step != nil {
 		step = *p.Step
 	}
-	v, run, err := s.harness.d.Manager.Verdict(run.ID, step, strings.TrimSpace(p.Result), p.Note, "operator")
+	by := "operator"
+	if login := cleanTesterLogin(p.Tester); login != "" {
+		by = harness.TesterPrefix + login
+	}
+	v, run, err := s.harness.d.Manager.Verdict(run.ID, step, strings.TrimSpace(p.Result), p.Note, by)
 	if err != nil {
 		return harnessErr(req.ID, err, CodeInvalidParams)
 	}
@@ -524,6 +537,10 @@ func harnessFailNote(run harness.Run, v harness.Verdict, todoID string) string {
 	if note == "" {
 		note = "no note"
 	}
-	return fmt.Sprintf("[aiman] a tester marked harness scenario %s %s fail at %s: %s\nTo-do %s. Fix it, commit, and tell the operator the scenario is ready to run again.",
-		run.Scenario, what, tree, note, todoID)
+	who := "a tester"
+	if login, ok := strings.CutPrefix(v.By, harness.TesterPrefix); ok {
+		who = "tester " + login
+	}
+	return fmt.Sprintf("[aiman] %s marked harness scenario %s %s fail at %s: %s\nTo-do %s. Fix it, commit, and tell the operator the scenario is ready to run again.",
+		who, run.Scenario, what, tree, note, todoID)
 }
