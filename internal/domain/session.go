@@ -134,10 +134,14 @@ const SessionRoleFixer SessionRole = "fixer"
 // parent's design read-only and reports objections and a verdict.
 const SessionRoleConsult SessionRole = "consult"
 
+// SessionRoleOverview is a hidden smart-tier session that reads every visible
+// session on the host and writes an overview of the work.
+const SessionRoleOverview SessionRole = "overview"
+
 // Hidden reports whether sessions with this role are aiman's own helpers
-// (reviewer, handover, consult) rather than work the user steers.
+// (reviewer, handover, consult, overview) rather than work the user steers.
 func (r SessionRole) Hidden() bool {
-	return r == SessionRoleReviewer || r == SessionRoleHandover || r == SessionRoleConsult
+	return r == SessionRoleReviewer || r == SessionRoleHandover || r == SessionRoleConsult || r == SessionRoleOverview
 }
 
 // PR-watch overrides stored in Session.WatchPR.

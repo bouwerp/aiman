@@ -396,6 +396,7 @@ var pressureGated = map[string]bool{
 	"review.fix":      true,
 	"review.assess":   true,
 	"harness.up":      true,
+	"overview.run":    true,
 }
 
 // pressureRefusal answers a gated method while the gate is closed, and nil

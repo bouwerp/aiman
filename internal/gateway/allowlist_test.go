@@ -67,6 +67,7 @@ func TestAllowlistDestructiveSet(t *testing.T) {
 		"aws.login_start",
 		"gateway.restart_serve",
 		"host.logs", "host.restart", "host.update",
+		"overview.run",
 		"pty.create", "pty.forget", "pty.input", "pty.kill", "pty.run",
 		"review.post",
 		"session.create", "session.forget", "session.restart",

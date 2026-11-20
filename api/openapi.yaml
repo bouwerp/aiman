@@ -501,6 +501,7 @@ components:
             - gate_needs_operator
             - design_not_approved
             - consult_needs_smart
+            - overview_running
             - review_exists
             - review_not_ready
             - review_incomplete
@@ -781,6 +782,9 @@ components:
             - agents.update
             - agents.move_prefix
             - agents.models
+            - overview.run
+            - overview.get
+            - overview.list
             - harness.up
             - harness.check
             - harness.status
@@ -1182,6 +1186,8 @@ components:
             - $ref: "#/components/schemas/AWSLoginResult"
             - $ref: "#/components/schemas/AWSLogResult"
             - $ref: "#/components/schemas/AgentsStatusResult"
+            - $ref: "#/components/schemas/OverviewRunResult"
+            - $ref: "#/components/schemas/OverviewRunsResult"
             - $ref: "#/components/schemas/ReviewFixResult"
             - $ref: "#/components/schemas/ReviewPushResult"
             - $ref: "#/components/schemas/ReviewAssessResult"
@@ -1225,6 +1231,97 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Session"
+    OverviewRun:
+      type: object
+      description: >
+        One overview run: a hidden smart-tier agent that read every visible
+        session on the host (facts, to-do list, transcript tail) and wrote
+        what is in progress, what needs the operator, what comes next and the
+        risks. overview.list leaves markdown and report out.
+      required: [id, agent, state, started_at, sessions]
+      properties:
+        id:
+          type: string
+        session:
+          type: string
+          description: The hidden session that ran it; gone once the run ended.
+        agent:
+          type: string
+        model:
+          type: string
+        state:
+          type: string
+          enum: [starting, running, done, failed]
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        error:
+          type: string
+          description: Why a failed run failed.
+        sessions:
+          type: integer
+          description: Sessions the bundle held in full.
+        names_only:
+          type: array
+          description: Sessions past the bundle cap, listed by name only.
+          items:
+            type: string
+        markdown:
+          type: string
+          description: The report as written, on a done run.
+        report:
+          type: object
+          description: The report's four sections, one entry per bullet.
+          required: [in_progress, needs_you, next, risks]
+          properties:
+            in_progress:
+              type: array
+              items:
+                type: string
+            needs_you:
+              type: array
+              items:
+                type: string
+            next:
+              type: array
+              items:
+                type: string
+            risks:
+              type: array
+              items:
+                type: string
+    OverviewRunResult:
+      type: object
+      description: >
+        overview.run (the run just started) and overview.get (the named run,
+        else the running one, else the newest done run). overview.run needs
+        the operator, waits at the pressure gate, and answers overview_running
+        while a run is in progress; on the gateway it needs allow_destructive.
+      required: [type, run]
+      properties:
+        type:
+          type: string
+          const: overview_run
+        run:
+          $ref: "#/components/schemas/OverviewRun"
+        running:
+          type: string
+          description: The id of a run still in progress when overview.get answered an older one.
+    OverviewRunsResult:
+      type: object
+      description: overview.list, the kept runs newest first (at most 20 finished).
+      required: [type, runs]
+      properties:
+        type:
+          type: string
+          const: overview_runs
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OverviewRun"
     AgentsStatusResult:
       type: object
       required: [type, host, mode, window, agents]
@@ -3745,6 +3842,8 @@ components:
             session_activity, session_gone and session_created come from the
             stream's own poll; todo_changed, steer, usage, usage.budget,
             notify and verify are published by request handlers;
+            overview is published when an overview run changes state, with
+            id the run and status its state;
             session_forgotten is published when serve drops a session's row
             (terminate, forget, a landed child the coordinator tracker ended),
             and clients remove it from their lists; transcript
@@ -3757,6 +3856,7 @@ components:
             - session_activity
             - session_gone
             - session_forgotten
+            - overview
             - session_created
             - todo_changed
             - steer
