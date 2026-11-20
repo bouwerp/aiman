@@ -157,6 +157,7 @@ func run(args []string) error {
 		log.Printf("WARNING: Funnel is public and anonymous. Bearer tokens (host and paired devices) are the only thing between the internet and a shell on this box.")
 	}
 	logListen(ts, opts.hostname, addr)
+	startConsole(ctx, ts, opts.hostname, sock, cfg.Gateway.ConsoleLogins, opts.funnel)
 
 	err = httpSrv.Serve(ln)
 	if errors.Is(err, http.ErrServerClosed) {
